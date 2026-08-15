@@ -140,3 +140,34 @@ sources:
   usage_snapshot: "get_usage -> rate_limits{five_hour,seven_day,seven_day_opus,seven_day_sonnet,model_scoped[],extra_usage}"
   limit_classifier: "error result + (rate_limit_event.rejected | api_error.rate_limits!=null | cat==rate_limit) => LIMIT"
   autocompact_env: CLAUDE_CODE_AUTO_COMPACT_WINDOW   # highest precedence; set 500000 for cloud workers
+
+# ── orchestrator tier policy (wq#617, T3) — read by orchestrator/router.py + judgment.py ──
+verify_pass:            # archetype 8: adversarial re-check of a SHIPPED diff (FOREMAN_RESEARCH §15)
+  tuple: sonnet-5@high
+  escalate_on_contradiction: opus-5@high
+  distinct_model_alternate: opus-5@high   # used only when prefer_distinct_model AND author was sonnet-5
+  prefer_distinct_model: false            # doctrine: fresh INSTANCE always; distinct MODEL "where possible" —
+                                          # opus-5@high is the only ≠-sonnet verifier we trust, and paying opus
+                                          # for every sonnet diff is a CAL-1 question. Flip after calibration.
+  required_for: [rca-investigation, standard-engineering]   # every shipped diff of these archetypes
+  local_author_always: true               # T4 rung: any archetype authored on the local pool needs the gate
+  never_for: [verify-pass, research-synthesis, novel-design, long-horizon-campaign]
+  lane: build
+  pri: 2
+
+judgment:               # Fable-5@high orchestrator judgment sessions (BUILD_PLAN §T3)
+  tuple: fable-5@high
+  max_tuple: fable-5@max
+  max_reserved_until: CAL-1               # @max only for `hardest-investigation` triggers until routing rows carry measured[]
+  cadence_hours: 6                        # a judgment session is due this long after the last one ...
+  cadence_tickets_closed: 8               # ... or after this many tickets closed since, whichever first
+  burn_down_triggers:                     # any of these makes a session due NOW (checked by judgment.py due)
+    - ticket_blocked_twice                # a ticket hit 2 failed attempts (fworker wq block)
+    - verify_contradiction                # a verify-pass contradicted its author
+    - rca_cross_subsystem                 # an rca ticket escalated on cross-subsystem blast radius
+    - governor_floor_breach               # T1 state.json floor_breaches non-empty
+    - decompose_needed                    # router returned DECOMPOSE for a claimable ticket
+    - refusal_no_fallback                 # a worker turn ended in model_refusal_no_fallback
+  hardest_investigation_triggers: [rca_cross_subsystem]   # the only path to @max, and only once CAL-1 lands
+  min_gap_minutes: 60                     # never two judgment sessions closer than this
+  quiet_hours_pt: "05:00-11:00 weekdays"  # cadence sessions wait for off-peak; burn-down triggers do not

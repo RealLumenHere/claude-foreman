@@ -63,6 +63,10 @@ WORKTREES_ROOT = os.environ.get("FOREMAN_WORKTREES_ROOT", "/home/lumen/worktrees
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 LUMEN_PR_BIN = os.environ.get("FOREMAN_LUMEN_PR_BIN", "/home/lumen/bin/lumen-pr")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
+# wq#617 orchestrator tier: routing (tuple assignment) + verify-pass filing.
+ORCH_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "orchestrator"))
+ROUTER_CLI = os.environ.get("FOREMAN_ROUTER_CLI", os.path.join(ORCH_DIR, "router.py"))
+JUDGMENT_CLI = os.environ.get("FOREMAN_JUDGMENT_CLI", os.path.join(ORCH_DIR, "judgment.py"))
 
 # design §3: per-archetype --max-turns defaults (passed to the CLI; the supervisor
 # also backstops a few turns above this, see module docstring). Unlisted archetypes
@@ -512,6 +516,10 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "session_id": state.session_id, "resumed_from": resume_session,
         "saw_limit": state.saw_limit, "latest_resets_at": state.latest_resets_at,
         "compact_boundaries": state.compact_boundaries,
+        # wq#617 refusal awareness: where refused turns landed (§C), for the orchestrator
+        "refusal_fallbacks": state.refusal_fallbacks,
+        "refusal_no_fallback": state.saw_refusal_no_fallback,
+        "model_fallbacks": state.model_fallbacks, "api_retries": state.api_retries,
         "result_subtype": state.result_subtype, "elapsed_s": elapsed,
         "started_at": t0, "finished_at": time.time(),
     }
@@ -521,12 +529,58 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
                       worktree, state_path)
 
 
+def file_verify_pass(ticket_id, args):
+    """wq#617 (T3): a shipped diff gets its adversarial verify-pass ticket filed by the
+    orchestrator tier (orchestrator/judgment.py; policy in research/models.yaml
+    verify_pass:). Best-effort — a filing failure is logged, never a harness failure."""
+    if os.environ.get("FOREMAN_NO_VERIFY_PASS"):
+        return
+    cmd = [sys.executable, JUDGMENT_CLI, "verify-pass", "--for", str(ticket_id)]
+    if getattr(args, "model", None):
+        cmd += ["--author-model", args.model]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        log(f"verify-pass filing: rc={p.returncode} {p.stdout.strip()[:300]}")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"verify-pass filing skipped: {e}")
+
+
+def resolve_tuple_from_ticket(args):
+    """wq#617: --model/--effort/--archetype omitted -> read the tuple the orchestrator wrote
+    into the ticket (wq model/effort/archetype columns); if the ticket carries none, ask the
+    router to assign one now. Explicit flags always win."""
+    if args.model and args.archetype:
+        return
+    t = wq_show(args.ticket)
+    def col(k):
+        v = t.get(k)
+        return None if v in (None, "", "None") else v
+    model, effort, arch = col("model"), col("effort"), col("archetype")
+    if not model:
+        try:
+            p = subprocess.run([sys.executable, ROUTER_CLI, "assign", str(args.ticket)],
+                               capture_output=True, text=True, timeout=60)
+            d = json.loads(p.stdout or "{}")
+            if d.get("rung"):
+                model, effort, arch = d["rung"]["model"], d["rung"]["effort"], d["archetype"]
+                log(f"router assigned wq#{args.ticket}: {model}@{effort} ({arch})")
+        except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+            log(f"router assign failed ({e}); falling back to CLI defaults")
+    if not args.model and model:
+        args.model, args.effort = model, effort
+    if not args.archetype and arch:
+        args.archetype = arch
+    if not args.model:
+        args.model, args.effort = "claude-sonnet-5", args.effort or "high"
+
+
 def reconcile(args, ticket_id, attempt, classification, state, events, worktree, state_path):
     if classification == SUCCESS:
         cur = wq_show(ticket_id)
         status = cur.get("status", "")
         if status == "done":
             log("SUCCESS: worker already ran `wq done`.")
+            file_verify_pass(ticket_id, args)
             return EXIT_OK
         # worker finished cleanly but never closed the ticket: check whether the
         # branch actually landed before deciding this was a lie-at-the-finish-line.
@@ -536,6 +590,7 @@ def reconcile(args, ticket_id, attempt, classification, state, events, worktree,
             return handle_failure(args, ticket_id, attempt, "CRASH", state, events, worktree,
                                    note="success frame but ticket not closed / PR not landed")
         wq_done(ticket_id, f"fworker attempt {attempt}: {state_path}")
+        file_verify_pass(ticket_id, args)
         return EXIT_OK
 
     if classification == LIMIT:
@@ -631,6 +686,7 @@ def reconcile_on_resume(ticket_id):
 def cmd_run(args):
     if args.resume:
         reconcile_on_resume(args.ticket)
+    resolve_tuple_from_ticket(args)
 
     unmet = deps_unmet(args.ticket)
     if unmet:
@@ -668,9 +724,11 @@ def main():
     p_run = sub.add_parser("run", help="claim a ticket and drive it to completion")
     p_run.add_argument("--ticket", type=int, required=True)
     p_run.add_argument("--repo", required=True)
-    p_run.add_argument("--model", default="claude-sonnet-5")
-    p_run.add_argument("--effort", default="high")
-    p_run.add_argument("--archetype", default="standard-engineering")
+    # wq#617: defaults are None so the ticket's wq tuple (or the router) decides;
+    # explicit flags still win. See resolve_tuple_from_ticket().
+    p_run.add_argument("--model", default=None)
+    p_run.add_argument("--effort", default=None)
+    p_run.add_argument("--archetype", default=None)
     p_run.add_argument("--max-turns", type=int, default=None)
     p_run.add_argument("--wall-clock-timeout", type=int, default=None)
     p_run.add_argument("--worker-id", default=None)

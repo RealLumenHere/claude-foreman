@@ -32,6 +32,12 @@ Launch via `lumen-run` so the supervisor itself survives DC-gateway reaping:
       python3 /home/lumen/foreman/harness/fworker.py run --ticket <ID> --repo <path> \
         --model <id> --effort <name> --archetype <name>
 
+`--model/--effort/--archetype` may be omitted (wq#617): fworker then reads the tuple the
+orchestrator wrote onto the ticket (`wq` model/effort/archetype columns) or asks
+`../orchestrator/router.py assign` on the spot; explicit flags always win. On SUCCESS
+reconcile it calls `../orchestrator/judgment.py verify-pass --for <ID>` (best-effort;
+`FOREMAN_NO_VERIFY_PASS=1` disables).
+
 Exit codes: `0` success, `10` claim error, `11` deferred (governor/STOP gate), `12`
 blocked (2 failed attempts, ticket wq-blocked), `13` limit (ticket released, resets
 outside the resume window).

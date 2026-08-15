@@ -39,6 +39,12 @@ class RunState:
         self.saw_limit = False
         self.latest_resets_at = None
         self.saw_refusal_no_fallback = False
+        # wq#617 refusal awareness (CLAUDE_CLI_INTERNALS §C): every model-swap frame the
+        # CLI emits, so the orchestrator can see WHERE a refused turn landed (bio ->
+        # opus-5, cyber -> opus-4-8) even when the run still classifies SUCCESS.
+        self.refusal_fallbacks = []      # [{original_model, fallback_model, category}]
+        self.model_fallbacks = []        # [{reason, fallback_model}]
+        self.api_retries = 0
         self.compact_boundaries = 0
         self.result_subtype = None
         self.result_is_error = None
@@ -112,6 +118,19 @@ class RunState:
 
         if ftype in ("model_refusal_no_fallback",):
             self.saw_refusal_no_fallback = True
+        if ftype == "model_refusal_fallback":
+            self.refusal_fallbacks.append({
+                "original_model": frame.get("original_model") or frame.get("originalModel"),
+                "fallback_model": frame.get("fallback_model") or frame.get("fallbackModel"),
+                "category": frame.get("api_refusal_category") or frame.get("category"),
+            })
+        if ftype == "model_fallback":
+            self.model_fallbacks.append({
+                "reason": frame.get("reason") or frame.get("trigger"),
+                "fallback_model": frame.get("fallback_model") or frame.get("fallbackModel"),
+            })
+        if ftype == "api_retry":
+            self.api_retries += 1
 
         if ftype == "compact_boundary":
             self.compact_boundaries += 1
