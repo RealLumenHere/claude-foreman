@@ -1,0 +1,20 @@
+# runtime state / governor artifacts — not source
+/state.json
+/STOP
+/events.json
+
+# scratch from probe runs and interim dispatch spawns — not source
+/_probe/
+/_runs/
+*.bak.*
+*.bak
+
+# interim dispatch scaffolding, superseded once T2a lands
+/FOREMAN_DISPATCH.md
+/FOREMAN_DISPATCH.prompt
+/worker-settings-interim.json
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
