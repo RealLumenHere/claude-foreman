@@ -58,10 +58,25 @@ def main():
     ticket_id = os.environ.get("FAKE_CLAUDE_TICKET")
     session_id = resume or f"fake-session-{scenario}-{int(time.time())}"
 
+    # shim 3 (RELIABILITY_SPEC.md §F): instant death BEFORE the init frame — no
+    # stream-json at all, no hook lifecycle. LAUNCH_FAILURE evidence is precisely the
+    # absence of an init frame, so this must exit before emitting one.
+    if scenario == "no_init_instant_exit":
+        sys.exit(2)
+
     fire_lifecycle("start", session_id, effort)
 
     emit({"type": "system", "subtype": "init", "session_id": session_id, "model": model,
           "permissionMode": "acceptEdits"})
+
+    # shim 6/7: init observed, then the process dies with no result frame at all —
+    # mirrors a SIGTERM (143) or OOM SIGKILL (137) landing mid-turn. flush stdout
+    # first: emit() is already flush=True per line, but os._exit skips the normal
+    # interpreter teardown so nothing buffered downstream gets lost either way.
+    if scenario == "sigterm_no_result":
+        os._exit(143)
+    if scenario == "oom_no_result":
+        os._exit(137)
 
     if scenario == "success":
         # a real worker does some work then calls wq done itself.
@@ -114,6 +129,47 @@ def main():
                   "resetsAt": time.time() + 2, "utilization": 1.0})
             emit({"type": "result", "subtype": "error_during_execution", "is_error": True,
                   "errors": ["usage limit reached"]})
+
+    elif scenario == "turn_ceiling":
+        # shim 2: real turns then the CLI's own --max-turns enforcement (§A: NOT
+        # dropped in 2.1.233 — errors on ceiling with a real result:error_max_turns
+        # frame, PROBE_RESULTS.md live-confirmed). A handful of real turns, well under
+        # any archetype's ceiling, so this is unambiguously "the CLI stopped us", not
+        # the supervisor's backstop.
+        for _ in range(3):
+            emit({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "git status"}}]}})
+            rc = fire_hook("Bash", {"command": "git status"}, session_id, effort)
+            if rc != 0:
+                emit({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                      "errors": ["hook blocked expected-allow command"]})
+                fire_lifecycle("stop", session_id, effort)
+                sys.exit(1)
+        emit({"type": "result", "subtype": "error_max_turns", "is_error": True,
+              "errors": ["Reached maximum number of turns (3)"]})
+        fire_lifecycle("stop", session_id, effort)
+        fire_lifecycle("end", session_id, effort)
+        sys.exit(1)
+
+    elif scenario == "turn_setup_failed":
+        # shim 4: a launch failure BEFORE any model work — dead-turn terminal_reason
+        # per RELIABILITY_SPEC.md §A/§C3, never a genuine turn ceiling.
+        emit({"type": "result", "subtype": "error_during_execution", "is_error": True,
+              "terminal_reason": "turn_setup_failed",
+              "errors": ["turn setup failed before model work began"]})
+        fire_lifecycle("stop", session_id, effort)
+        fire_lifecycle("end", session_id, effort)
+        sys.exit(1)
+
+    elif scenario == "task_notification_last":
+        # shim 8: the #39632 drain-death race — task_notification/task_updated lands
+        # as the LAST frame, the result frame is dropped, and the process still exits
+        # 0. No wq done call: a real worker in this state never got to report back.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        emit({"type": "task_notification", "task_id": "bg-1", "status": "completed"})
+        fire_lifecycle("stop", session_id, effort)
+        fire_lifecycle("end", session_id, effort)
+        sys.exit(0)
 
     elif scenario == "crash":
         emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "oops"}]}})

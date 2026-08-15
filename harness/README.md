@@ -8,7 +8,9 @@ child at a time on the shared login (multi-worker auth is T2b, gated on T2b-gate
 ## Layout
 
     fworker.py              supervisor: spawn + parse + classify + wq lifecycle
-    classifier.py           the LIMIT/TURNS/BUDGET/CRASH/REFUSED decision table (§E)
+    classifier.py           RELIABILITY_SPEC.md §C/§D verdict engine (SUCCESS/TURNS/
+                             LAUNCH_FAILURE/LIMIT/KILLED/OOM/INDETERMINATE + REFUSED/
+                             BUDGET/CRASH/HANG)
     worker-settings.json    settings pack — replaces worker-settings-interim.json
     guard.sh                PreToolUse fail-closed guard (§5)
     prompts/worker.md       worker prompt template
@@ -36,16 +38,16 @@ outside the resume window).
 
 ## Build-time discovery vs the design (read before touching --max-turns)
 
-The design was probed against claude CLI 2.1.220; the box now runs 2.1.233, which
-**dropped the `--max-turns` flag**. `fworker.py` no longer passes it. Instead the
-supervisor counts `assistant` stream-json frames itself (`classifier.RunState.turns`)
-and SIGTERMs the child once the per-archetype ceiling is reached, then classifies the
-attempt TURNS exactly as if the CLI had enforced it server-side. See the module
-docstrings in `fworker.py` and `classifier.py`. If a future CLI reintroduces the flag
-(or the `--agents` JSON frontmatter `maxTurns` key proves to apply to `-p` sessions —
-unconfirmed this session, `strings` shows the key but only in skill/agent frontmatter
-contexts), passing it in addition to the supervisor-side cap is a safe belt-and-braces
-follow-up, not a required one.
+CORRECTED (wq#646, RELIABILITY_SPEC.md §A): claude CLI 2.1.233 did **not** drop
+`--max-turns` — that earlier belief, from a probe against 2.1.220, was wrong.
+`fworker.py` passes `--max-turns`; the CLI errors on ceiling with a real
+`result:error_max_turns` frame (PROBE_RESULTS.md live-confirmed), which is the
+evidence RELIABILITY_SPEC.md §C2 requires for a TURNS verdict ("never legal without a
+result frame"). The supervisor also counts `assistant` stream-json frames itself
+(`classifier.RunState.turns`) and SIGTERMs the child on a backstop ceiling a few turns
+above `--max-turns` (`fworker.TURN_BACKSTOP_BUFFER`) — defense-in-depth only; if that
+backstop has to fire, no result frame arrives and the attempt classifies KILLED, not
+TURNS. See the module docstrings in `fworker.py` and `classifier.py`.
 
 `claude agents --json` (confirmed working, no TTY needed) is used only as an advisory
 liveness signal during `--resume` reconciliation (design §8) — never the control channel.

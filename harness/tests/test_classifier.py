@@ -1,22 +1,25 @@
-"""Classifier unit tests — CLAUDE_CLI_INTERNALS.md §E / BUILD_PLAN.md §T2a adversarial
-verify item 1. Zero quota: canned stream-json fixtures, no claude invocation.
-The ticket's named requirement: 'a synthetic rejected-limit frame classifies LIMIT not
-CRASH' — see test_rejected_rate_limit_event_is_limit_not_crash below.
+"""Classifier unit tests — RELIABILITY_SPEC.md §C/§D verdict engine (wq#646, S1).
+Zero quota: canned stream-json fixtures + synthetic exit codes, no claude invocation.
+Shim-driven (subprocess) equivalents of these same taxonomy items live in
+tests/test_shim_matrix.py, numbered per RELIABILITY_SPEC.md §F.
 """
 import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from classifier import RunState, classify, SUCCESS, REFUSED, TURNS, BUDGET, LIMIT, CRASH, HANG
+from classifier import (
+    RunState, classify,
+    SUCCESS, REFUSED, TURNS, LAUNCH_FAILURE, BUDGET, LIMIT, KILLED, OOM,
+    INDETERMINATE, CRASH, HANG,
+)
 
 
-def run(frames, hung=False, reaped=False):
+def run(frames, exit_code=None, hung=False):
     st = RunState()
     for f in frames:
         st.observe(f)
     st.hung = hung
-    st.reaped = reaped
-    return classify(st)
+    return classify(st, exit_code)
 
 
 def test_clean_success():
@@ -25,13 +28,23 @@ def test_clean_success():
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}},
         {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.01},
     ]
-    assert run(frames) == SUCCESS
+    assert run(frames, exit_code=0) == SUCCESS
+
+
+def test_success_with_nonzero_exit_is_indeterminate_not_success():
+    # §D exit-code cross-check: a success result frame paired with a disagreeing exit
+    # code is never trusted as SUCCESS outright.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "result", "subtype": "success", "is_error": False},
+    ]
+    assert run(frames, exit_code=1) == INDETERMINATE
 
 
 def test_rejected_rate_limit_event_is_limit_not_crash():
     # the ticket's explicit adversarial requirement
     frames = [
-        {"type": "system", "subtype": "init", "session_id": "s1"},
+        {"type": "system", "subtype": "init"},
         {"type": "rate_limit_event", "status": "rejected", "rateLimitType": "five_hour",
          "resetsAt": 1234567890, "utilization": 1.0},
         {"type": "result", "subtype": "error_during_execution", "is_error": True,
@@ -48,7 +61,7 @@ def test_rejected_rate_limit_event_is_limit_not_crash():
 
 def test_api_error_rate_limits_nonnull_is_limit():
     frames = [
-        {"type": "system", "subtype": "init", "session_id": "s1"},
+        {"type": "system", "subtype": "init"},
         {"type": "api_error", "error": {"rate_limits": {"resets_at": 999, "rate_limit_type": "seven_day"}}},
         {"type": "result", "subtype": "error_during_execution", "is_error": True},
     ]
@@ -64,12 +77,36 @@ def test_rate_limit_category_is_limit():
     assert run(frames) == LIMIT
 
 
-def test_error_max_turns_is_turns():
+def test_bare_429_status_is_limit():
+    # RELIABILITY_SPEC.md §B: limits also manifest as a bare 429 with no category field.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "api_retry", "error_status": 429},
+        {"type": "result", "subtype": "error_during_execution", "is_error": True},
+    ]
+    assert run(frames) == LIMIT
+
+
+def test_error_max_turns_with_real_turns_is_turns():
+    # §C2/§D: TURNS requires evidence — a result frame AND >=1 real assistant turn.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}},
+        {"type": "result", "subtype": "error_max_turns", "is_error": True},
+    ]
+    assert run(frames) == TURNS
+
+
+def test_error_max_turns_with_zero_real_turns_is_not_turns():
+    # §D: "no verdict without evidence" — a ceiling result with zero real turns counted
+    # is not legal TURNS evidence (e.g. haiku tool-called on the very first raw frame
+    # before we'd count a completed turn; PROBE_RESULTS.md's --max-turns 1 case).
+    # Falls to the generic result-present bucket, not a guessed TURNS.
     frames = [
         {"type": "system", "subtype": "init"},
         {"type": "result", "subtype": "error_max_turns", "is_error": True},
     ]
-    assert run(frames) == TURNS
+    assert run(frames) != TURNS
 
 
 def test_error_max_budget_is_budget():
@@ -89,17 +126,53 @@ def test_bare_error_during_execution_no_limit_signal_is_crash():
     assert run(frames) == CRASH
 
 
-def test_no_result_frame_at_all_is_crash():
+def test_terminal_reason_turn_setup_failed_is_launch_failure_never_turns():
+    # §C3/§D: turn_setup_failed is a launch failure BEFORE model work — must never be
+    # conflated with a genuine turn ceiling, even if a result frame is present.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "result", "subtype": "error_during_execution", "is_error": True,
+         "terminal_reason": "turn_setup_failed"},
+    ]
+    assert run(frames) == LAUNCH_FAILURE
+    assert run(frames) != TURNS
+
+
+def test_no_init_at_all_is_launch_failure():
+    # §C3 shim 3: no init frame observed at all -> LAUNCH_FAILURE, never TURNS/CRASH.
+    assert run([]) == LAUNCH_FAILURE
+
+
+def test_no_result_frame_with_init_and_unknown_exit_is_indeterminate():
+    # §C7/§D: absent a result frame, absence-of-evidence must never resolve to a bare
+    # CRASH once the spec gives us a sharper answer. With init seen and no signal
+    # pinning it to a specific exit code, the conservative default is INDETERMINATE.
     frames = [
         {"type": "system", "subtype": "init", "session_id": "s1"},
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "working..."}]}},
     ]
-    assert run(frames) == CRASH
+    assert run(frames) == INDETERMINATE
 
 
-def test_killed_process_reaped_is_crash():
+def test_no_result_frame_exit_143_is_killed():
     frames = [{"type": "system", "subtype": "init"}]
-    assert run(frames, reaped=True) == CRASH
+    assert run(frames, exit_code=143) == KILLED
+
+
+def test_no_result_frame_exit_137_is_oom():
+    frames = [{"type": "system", "subtype": "init"}]
+    assert run(frames, exit_code=137) == OOM
+
+
+def test_task_notification_last_no_result_exit_0_is_indeterminate():
+    # the #39632 drain-death signature: task_notification/task_updated as the LAST
+    # frame, result frame dropped, process still exits 0.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}},
+        {"type": "task_notification", "task_id": "t1", "status": "done"},
+    ]
+    assert run(frames, exit_code=0) == INDETERMINATE
 
 
 def test_inactivity_watchdog_hang_is_distinct_from_crash():
@@ -143,16 +216,31 @@ def test_compact_boundary_is_tracked_not_a_classification_input():
     assert classify(st) == SUCCESS
 
 
-def test_supervisor_enforced_turn_ceiling_is_turns():
-    # claude 2.1.233 dropped the --max-turns CLI flag the design assumed (2.1.220);
-    # fworker counts "assistant" frames itself and SIGTERMs on ceiling.
+def test_cli_native_turn_ceiling_is_turns_with_evidence():
+    # --max-turns is passed to the CLI (RELIABILITY_SPEC.md §A — NOT dropped in
+    # 2.1.233, wq#645/PROBE_RESULTS.md live-confirmed); the CLI itself produces the
+    # result:error_max_turns frame this verdict requires as evidence.
     st = RunState()
     for _ in range(15):
         st.observe({"type": "assistant",
                      "message": {"content": [{"type": "tool_use", "name": "Bash"}]}})
+    st.observe({"type": "result", "subtype": "error_max_turns", "is_error": True})
     assert st.turns == 15
-    st.turns_exceeded = True
     assert classify(st) == TURNS
+
+
+def test_supervisor_backstop_kill_without_result_is_killed_not_turns():
+    # §D: "TURNS ... Never legal without a result frame." If the supervisor's own
+    # backstop (fworker.TURN_BACKSTOP_BUFFER turns above --max-turns) has to SIGTERM
+    # the child because the CLI didn't self-enforce, no result frame arrives — the
+    # verdict must be KILLED (exit 143), not a guessed TURNS.
+    st = RunState()
+    st.observe({"type": "system", "subtype": "init"})
+    for _ in range(20):
+        st.observe({"type": "assistant",
+                     "message": {"content": [{"type": "tool_use", "name": "Bash"}]}})
+    st.turns_exceeded = True
+    assert classify(st, exit_code=143) == KILLED
 
 
 def test_thinking_only_assistant_frame_does_not_count_as_a_turn():
@@ -183,9 +271,11 @@ def test_empty_content_assistant_frame_does_not_count():
     assert st.turns == 0
 
 
-def test_ambiguous_shape_fails_closed_to_limit():
+def test_ambiguous_result_present_shape_fails_closed_to_crash():
+    # S1 keeps the "result frame present, no sharper category" bucket coarse (CRASH);
+    # wq#647/wq#648 split AUTH/DEGRADED-SUCCESS/FALSE-COMPLETE out of it.
     frames = [
         {"type": "system", "subtype": "init"},
         {"type": "result", "subtype": "some_unforeseen_subtype", "is_error": False},
     ]
-    assert run(frames) == LIMIT
+    assert run(frames) == CRASH

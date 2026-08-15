@@ -4,15 +4,21 @@
 BUILD_PLAN.md §T2a / design/T2A_WORKER_HARNESS_DESIGN.md. Bespoke process tracking
 (native `claude --bg` was spiked and rejected — see the design doc §1): fworker spawns
 `claude -p` directly, parses its stream-json stdout, classifies the outcome
-(classifier.py, CLAUDE_CLI_INTERNALS.md §E) and drives the ticket through wq.
+(classifier.py, RELIABILITY_SPEC.md §C/§D) and drives the ticket through wq.
 
-BUILD-TIME DISCOVERY vs the design: the installed claude CLI (2.1.233) dropped the
---max-turns flag the design assumed (probed against 2.1.220). fworker enforces the
-turn ceiling itself by counting real agentic-loop turns in the stream and SIGTERMing
-the child — see classifier.py's RunState.observe()/turns/turns_exceeded and
-run_child() below. (wq#645: a real turn is not one "assistant" frame — extended
-thinking splits it into a thinking-only frame plus the tool_use/text frame; counting
-both double-counted turns and tripped this ceiling at ~half of max_turns.)
+CORRECTION (RELIABILITY_SPEC.md §A, wq#646): the installed claude CLI (2.1.233) did
+NOT drop --max-turns — that earlier belief was wrong. The flag is supported in print
+mode and the CLI errors on ceiling (PROBE_RESULTS.md live-confirmed: --max-turns 1 ->
+result:error_max_turns). fworker passes --max-turns so the CLI itself produces the
+result frame RELIABILITY_SPEC.md §C2 requires as TURNS evidence ("never legal without
+a result frame"). The supervisor ALSO counts real agentic-loop turns itself in the
+stream (classifier.py's RunState.observe()/turns) and SIGTERMs the child on a backstop
+ceiling set a few turns above --max-turns, purely as defense-in-depth for a CLI that
+doesn't self-enforce — see run_child() below. If that backstop has to fire, no result
+frame arrives and classify() correctly falls through to KILLED, not TURNS.
+(wq#645: a real turn is not one "assistant" frame — extended thinking splits it into a
+thinking-only frame plus the tool_use/text frame; counting both double-counted turns
+and tripped the backstop at ~half of max_turns.)
 
 Usage:
     fworker.py run --ticket ID --repo PATH [--model MODEL] [--effort NAME]
@@ -34,6 +40,12 @@ import queue
 sys.path.insert(0, os.path.dirname(__file__))
 from classifier import RunState, classify, SUCCESS, LIMIT
 
+# RELIABILITY_SPEC.md §A: --max-turns errors on ceiling with a real result frame, so
+# fworker passes it and lets the CLI self-enforce. The supervisor's own real-turn
+# count (classifier.RunState.turns) is a backstop watchdog only, set this many turns
+# above --max-turns so the CLI's own enforcement gets first say in the common case.
+TURN_BACKSTOP_BUFFER = 5
+
 # Every root below is overridable via env — the CAL-1 fixture (and this build's own
 # zero-quota integration test) exercises fworker against a scratch repo/wq db/events
 # dir, never the live foreman tree, same pattern as lumen-pr's LUMEN_PR_WORKTREE_ROOT.
@@ -52,8 +64,9 @@ WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 LUMEN_PR_BIN = os.environ.get("FOREMAN_LUMEN_PR_BIN", "/home/lumen/bin/lumen-pr")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 
-# design §3: per-archetype --max-turns defaults (enforced supervisor-side, see module
-# docstring). Unlisted archetypes fall back to standard-engineering's ceiling.
+# design §3: per-archetype --max-turns defaults (passed to the CLI; the supervisor
+# also backstops a few turns above this, see module docstring). Unlisted archetypes
+# fall back to standard-engineering's ceiling.
 ARCHETYPE_MAX_TURNS = {
     "mechanical-edit": 15,
     "probe-build": 25,
@@ -304,13 +317,15 @@ def build_env(worker_id, effort, worktree):
     return env
 
 
-def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, resume_session=None,
-                      claude_bin="claude"):
+def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=None,
+                      resume_session=None, claude_bin="claude"):
     cmd = [claude_bin, "-p", prompt]
     if model:
         cmd += ["--model", model]
     if effort:
         cmd += ["--effort", effort]
+    if max_turns:
+        cmd += ["--max-turns", str(max_turns)]
     cmd += ["--settings", settings_file]
     cmd += ["--permission-mode", "acceptEdits"]
     for d in add_dirs:
@@ -354,6 +369,7 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt):
     last_heartbeat = start
     deadline = start + wall_clock_s
     killed_reason = None
+    turn_backstop = max_turns + TURN_BACKSTOP_BUFFER
 
     while True:
         now = time.time()
@@ -388,7 +404,7 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt):
         state.observe(frame)
         if frame.get("type") == "rate_limit_event" and frame.get("status") == "rejected":
             report_limit_event(frame)
-        if state.turns >= max_turns:
+        if state.turns >= turn_backstop:
             killed_reason = "turns_exceeded"
             break
 
@@ -409,8 +425,12 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt):
         proc.wait()
 
     exit_code = proc.returncode
-    if killed_reason not in (None, "turns_exceeded") and state.result_subtype is None:
-        state.reaped = True
+    if exit_code is not None and exit_code < 0:
+        # POSIX: a signal-terminated child reports returncode as -signum. Normalize to
+        # the shell convention (128+signum) so RELIABILITY_SPEC.md §C5/§C6's exit
+        # 143/137 checks see the same numbers a `claude agents`/journal inspection
+        # would (SIGTERM=143, SIGKILL=137).
+        exit_code = 128 - exit_code
 
     return state, exit_code, raw_events, killed_reason
 
@@ -467,7 +487,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
 
     env = build_env(worker_id, args.effort, worktree)
     cmd = build_claude_cmd(prompt, args.model, args.effort, SETTINGS_FILE,
-                            add_dirs=["/home/lumen/agents/work-queue"],
+                            add_dirs=["/home/lumen/agents/work-queue"], max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin)
 
     log(f"attempt {attempt}: spawning {' '.join(shlex.quote(c) for c in cmd[:6])}... "
@@ -478,7 +498,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt)
     elapsed = time.time() - t0
 
-    classification = classify(state)
+    classification = classify(state, exit_code)
     log(f"attempt {attempt}: classification={classification} exit={exit_code} "
         f"killed_reason={killed_reason} turns={state.turns} elapsed={elapsed:.0f}s "
         f"session_id={state.session_id}")
@@ -521,7 +541,7 @@ def reconcile(args, ticket_id, attempt, classification, state, events, worktree,
     if classification == LIMIT:
         return handle_limit(args, ticket_id, attempt, state, worktree)
 
-    # REFUSED / TURNS / BUDGET / CRASH / HANG
+    # TURNS / LAUNCH_FAILURE / KILLED / OOM / INDETERMINATE / REFUSED / BUDGET / CRASH / HANG
     return handle_failure(args, ticket_id, attempt, classification, state, events, worktree)
 
 
