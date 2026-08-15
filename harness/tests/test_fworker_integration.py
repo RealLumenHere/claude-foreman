@@ -1,0 +1,170 @@
+"""fworker end-to-end integration tests, zero Anthropic quota.
+
+Exercises the full lifecycle plumbing (claim -> worktree -> spawn -> stream-parse ->
+classify -> wq lifecycle) against a scratch git repo + scratch wq DB + a fake `claude`
+shim (tests/fake_claude.py) that emits canned stream-json, per design
+T2A_WORKER_HARNESS_DESIGN.md §12 item 5 — substituting the shim for a real sonnet-5@low
+run so this build's probe gate costs no live quota. A real quota-costing smoke run
+(the design's literal item 5/6) is a follow-up the orchestrator can schedule off-peak.
+
+Covers the ticket's two named adversarial criteria end-to-end (not just at the unit
+level): a denied verb is blocked at the hook during a real spawn, and a synthetic
+rejected-limit frame drives fworker's real LIMIT path (release + exit code), not CRASH.
+"""
+import json
+import os
+import subprocess
+import sys
+
+HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+FWORKER = os.path.join(HARNESS_DIR, "fworker.py")
+FAKE_CLAUDE = os.path.join(TESTS_DIR, "fake_claude.py")
+FAKE_GOVERNOR = os.path.join(TESTS_DIR, "fake_governor.py")
+WQ_BIN = "/home/lumen/bin/wq"
+
+
+def make_scratch_repo(tmp_path):
+    repo = tmp_path / "scratch_repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@lumen"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+    (repo / "README.md").write_text("scratch\n")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    return str(repo)
+
+
+def make_scratch_env(tmp_path, ticket, scenario, extra=None):
+    wq_db = str(tmp_path / "scratch_wq.db")
+    events_dir = str(tmp_path / "events")
+    runs_root = str(tmp_path / "_runs")
+    worktrees_root = str(tmp_path / "worktrees")
+    os.makedirs(events_dir, exist_ok=True)
+    env = dict(os.environ)
+    env.update({
+        "WQ_DB": wq_db,
+        "WQ_AGENT": "test-fworker-agent",
+        "FOREMAN_EVENTS_DIR": events_dir,
+        "FOREMAN_RUNS_ROOT": runs_root,
+        "FOREMAN_WORKTREES_ROOT": worktrees_root,
+        "FOREMAN_STOP_FILE": str(tmp_path / "STOP_nonexistent"),
+        "FOREMAN_GOVERNOR_CLI": FAKE_GOVERNOR,
+        "FOREMAN_WQ_BIN": WQ_BIN,
+        "FOREMAN_LUMEN_PR_BIN": "/bin/false",  # unreachable on purpose; SUCCESS path shouldn't need it
+        "FOREMAN_NTFY_BIN": "/bin/true",
+        "FAKE_CLAUDE_SCENARIO": scenario,
+        "FAKE_CLAUDE_TICKET": str(ticket),
+        "FAKE_CLAUDE_GUARD_SH": os.path.join(HARNESS_DIR, "guard.sh"),
+        "FAKE_CLAUDE_WQ_BIN": WQ_BIN,
+    })
+    if extra:
+        env.update(extra)
+    return env, wq_db, events_dir, runs_root, worktrees_root
+
+
+def wq_add(env, title):
+    p = subprocess.run([WQ_BIN, "add", "--title", title], capture_output=True, text=True, env=env)
+    assert p.returncode == 0, p.stdout + p.stderr
+    # "added task 1 [auto]"
+    return int(p.stdout.strip().split()[2])
+
+
+def wq_status(env, ticket_id):
+    p = subprocess.run([WQ_BIN, "show", str(ticket_id)], capture_output=True, text=True, env=env)
+    for line in p.stdout.splitlines():
+        if line.strip().startswith("status"):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def run_fworker(env, ticket_id, repo, scenario, model="claude-sonnet-5", effort="high",
+                 archetype="mechanical-edit"):
+    cmd = [sys.executable, FWORKER, "run", "--ticket", str(ticket_id), "--repo", repo,
+           "--model", model, "--effort", effort, "--archetype", archetype,
+           "--claude-bin", FAKE_CLAUDE,
+           "--worker-id", f"test-fworker-wq{ticket_id}"]
+    return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=60)
+
+
+def test_success_end_to_end_closes_ticket_and_isolates_worktree(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    ticket_id = wq_add(env, "scratch mechanical-edit ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+
+    # worktree isolation: a dedicated dir was created, parent repo status is untouched.
+    wt = os.path.join(worktrees_root, f"wq{ticket_id}-a1")
+    assert os.path.isdir(wt)
+    parent_status = subprocess.run(["git", "-C", repo, "status", "--porcelain"],
+                                    capture_output=True, text=True)
+    assert parent_status.stdout.strip() == ""
+
+    # effort verification channel: guard.sh's lifecycle events carry $CLAUDE_EFFORT-
+    # equivalent (effort.level from the hook envelope) matching what was dispatched.
+    events_file = os.path.join(events_dir, f"test-fworker-wq{ticket_id}.jsonl")
+    assert os.path.exists(events_file)
+    lines = [json.loads(l) for l in open(events_file) if l.strip()]
+    assert any(l["event"] == "start" for l in lines)
+    assert all(l["effort"] == "high" for l in lines if l["event"] in ("start", "stop", "end"))
+
+
+def test_denied_verb_blocked_at_hook_during_real_spawn(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "denied_verb_blocked")
+    ticket_id = wq_add(env, "scratch denied-verb ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "denied_verb_blocked")
+    # both attempts CRASH (no rate-limit signal) -> blocked after MAX_ATTEMPTS
+    assert wq_status(env, ticket_id) == "blocked"
+
+    events_file = os.path.join(events_dir, f"test-fworker-wq{ticket_id}.jsonl")
+    lines = [json.loads(l) for l in open(events_file) if l.strip()]
+    blocked = [l for l in lines if l.get("event") == "blocked"]
+    assert blocked, "guard.sh should have logged a blocked event for --remove-orphans"
+    assert "remove-orphans" in blocked[0]["reason"]
+
+
+def test_rejected_limit_frame_drives_limit_path_not_crash(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "rejected_limit")
+    ticket_id = wq_add(env, "scratch rate-limit ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "rejected_limit")
+    # LIMIT with no boundable resets_at within window -> fworker releases the ticket
+    # and exits EXIT_LIMIT (13), NOT the blocked/crash path.
+    assert result.returncode == 13, result.stdout + result.stderr
+    status = wq_status(env, ticket_id)
+    assert status == "open", f"expected ticket released back to open, got {status}"
+
+    attempt_files = os.listdir(os.path.join(runs_root, f"wq{ticket_id}"))
+    assert any(f.startswith("attempt-") for f in attempt_files)
+    with open(os.path.join(runs_root, f"wq{ticket_id}", "attempt-1.json")) as f:
+        record = json.load(f)
+    assert record["classification"] == "LIMIT"
+    assert record["classification"] != "CRASH"
+
+
+def test_resume_after_near_term_limit_reuses_worktree_and_closes(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "rejected_limit_near")
+    ticket_id = wq_add(env, "scratch near-limit ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "rejected_limit_near")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+
+    # same worktree reused across the LIMIT->resume boundary, no attempt-2 worktree.
+    assert os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a1"))
+    assert not os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a2"))
