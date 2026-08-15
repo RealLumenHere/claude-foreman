@@ -1,0 +1,295 @@
+{
+  "source": "existing /home/lumen/foreman/_runs/*.jsonl, zero new Anthropic spend",
+  "files_analyzed": 8,
+  "per_file": {
+    "fbuild-613.jsonl": {
+      "path": "_runs/fbuild-613.jsonl",
+      "model": "claude-sonnet-5",
+      "mcp_servers_count": 0,
+      "num_turns_result": 81,
+      "turns_with_usage": 153,
+      "terminal_subtype": "error_max_turns",
+      "is_error": true,
+      "total_cost_usd": 3.3760427999999996,
+      "usage_totals": {
+        "input_tokens": 160,
+        "cache_creation_input_tokens": 112997,
+        "cache_read_input_tokens": 6720156,
+        "output_tokens": 45329,
+        "total_consumed_tokens": 158486
+      },
+      "derived": {
+        "cache_hit_rate": 0.9834,
+        "output_token_share": 0.0066,
+        "fixed_prefix_overhead_tokens": 4859,
+        "tokens_consumed_per_turn": 1035.9,
+        "thrash_turns": 0
+      }
+    },
+    "fbuild-613.land.jsonl": {
+      "path": "_runs/fbuild-613.land.jsonl",
+      "model": "claude-sonnet-5",
+      "mcp_servers_count": 0,
+      "num_turns_result": 19,
+      "turns_with_usage": 38,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 2.1490668,
+      "usage_totals": {
+        "input_tokens": 38,
+        "cache_creation_input_tokens": 171601,
+        "cache_read_input_tokens": 3411456,
+        "output_tokens": 6394,
+        "total_consumed_tokens": 178033
+      },
+      "derived": {
+        "cache_hit_rate": 0.9521,
+        "output_token_share": 0.0018,
+        "fixed_prefix_overhead_tokens": 156367,
+        "tokens_consumed_per_turn": 4685.1,
+        "thrash_turns": 0
+      }
+    },
+    "fbuild-613.resume.jsonl": {
+      "path": "_runs/fbuild-613.resume.jsonl",
+      "model": "claude-sonnet-5",
+      "mcp_servers_count": 0,
+      "num_turns_result": 54,
+      "turns_with_usage": 102,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 3.8121888,
+      "usage_totals": {
+        "input_tokens": 100,
+        "cache_creation_input_tokens": 161800,
+        "cache_read_input_tokens": 8063046,
+        "output_tokens": 28145,
+        "total_consumed_tokens": 190045
+      },
+      "derived": {
+        "cache_hit_rate": 0.9803,
+        "output_token_share": 0.0034,
+        "fixed_prefix_overhead_tokens": 120417,
+        "tokens_consumed_per_turn": 1863.2,
+        "thrash_turns": 0
+      }
+    },
+    "fbuild-613.wave1.jsonl": {
+      "path": "_runs/fbuild-613.wave1.jsonl",
+      "model": "claude-sonnet-5",
+      "mcp_servers_count": 8,
+      "num_turns_result": 3,
+      "turns_with_usage": 7,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 0.1530861,
+      "usage_totals": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 11639,
+        "cache_read_input_tokens": 93757,
+        "output_tokens": 3576,
+        "total_consumed_tokens": 15221
+      },
+      "derived": {
+        "cache_hit_rate": 0.8895,
+        "output_token_share": 0.0328,
+        "fixed_prefix_overhead_tokens": 10520,
+        "tokens_consumed_per_turn": 2174.4,
+        "thrash_turns": 0
+      }
+    },
+    "fbuild-614.jsonl": {
+      "path": "_runs/fbuild-614.jsonl",
+      "model": "claude-fable-5",
+      "mcp_servers_count": 0,
+      "num_turns_result": 50,
+      "turns_with_usage": 99,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 8.247326000000001,
+      "usage_totals": {
+        "input_tokens": 80,
+        "cache_creation_input_tokens": 122702,
+        "cache_read_input_tokens": 3822727,
+        "output_tokens": 39363,
+        "total_consumed_tokens": 162145
+      },
+      "derived": {
+        "cache_hit_rate": 0.9689,
+        "output_token_share": 0.0099,
+        "fixed_prefix_overhead_tokens": 8084,
+        "tokens_consumed_per_turn": 1637.8,
+        "thrash_turns": 0
+      }
+    },
+    "fbuild-614.wave1.jsonl": {
+      "path": "_runs/fbuild-614.wave1.jsonl",
+      "model": "claude-fable-5",
+      "mcp_servers_count": 0,
+      "num_turns_result": 12,
+      "turns_with_usage": 27,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 0.880112,
+      "usage_totals": {
+        "input_tokens": 21,
+        "cache_creation_input_tokens": 17874,
+        "cache_read_input_tokens": 309395,
+        "output_tokens": 4231,
+        "total_consumed_tokens": 22126
+      },
+      "derived": {
+        "cache_hit_rate": 0.9453,
+        "output_token_share": 0.0128,
+        "fixed_prefix_overhead_tokens": 7645,
+        "tokens_consumed_per_turn": 819.5,
+        "thrash_turns": 0
+      }
+    },
+    "fbuild-614.wave2.jsonl": {
+      "path": "_runs/fbuild-614.wave2.jsonl",
+      "model": "claude-fable-5",
+      "mcp_servers_count": 0,
+      "num_turns_result": 12,
+      "turns_with_usage": 28,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 1.4035089999999997,
+      "usage_totals": {
+        "input_tokens": 23,
+        "cache_creation_input_tokens": 29216,
+        "cache_read_input_tokens": 428410,
+        "output_tokens": 7779,
+        "total_consumed_tokens": 37018
+      },
+      "derived": {
+        "cache_hit_rate": 0.9361,
+        "output_token_share": 0.0167,
+        "fixed_prefix_overhead_tokens": 4734,
+        "tokens_consumed_per_turn": 1322.1,
+        "thrash_turns": 0
+      }
+    },
+    "fbuild-625.jsonl": {
+      "path": "_runs/fbuild-625.jsonl",
+      "model": "claude-sonnet-5",
+      "mcp_servers_count": 0,
+      "num_turns_result": 151,
+      "turns_with_usage": 276,
+      "terminal_subtype": "error_max_turns",
+      "is_error": true,
+      "total_cost_usd": 8.701142099999997,
+      "usage_totals": {
+        "input_tokens": 300,
+        "cache_creation_input_tokens": 187194,
+        "cache_read_input_tokens": 20771047,
+        "output_tokens": 89611,
+        "total_consumed_tokens": 277105
+      },
+      "derived": {
+        "cache_hit_rate": 0.9911,
+        "output_token_share": 0.0043,
+        "fixed_prefix_overhead_tokens": 10695,
+        "tokens_consumed_per_turn": 1004.0,
+        "thrash_turns": 0
+      }
+    }
+  },
+  "per_ticket_rollup": {
+    "613": {
+      "ticket": "wq#613",
+      "title": "T1 budget governor daemon",
+      "files": [
+        "fbuild-613.jsonl",
+        "fbuild-613.resume.jsonl",
+        "fbuild-613.land.jsonl"
+      ],
+      "sessions": 3,
+      "total_turns": 293,
+      "total_cost_usd": 9.3373,
+      "usage_totals": {
+        "input_tokens": 298,
+        "cache_creation_input_tokens": 446398,
+        "cache_read_input_tokens": 18194658,
+        "output_tokens": 79868,
+        "total_consumed_tokens": 526564
+      },
+      "cache_hit_rate": 0.976,
+      "tokens_per_turn": 1797.1
+    },
+    "613.wave1": {
+      "ticket": "wq#613 (early/contrast)",
+      "title": "T1 scouting session, MCP-inheriting",
+      "files": [
+        "fbuild-613.wave1.jsonl"
+      ],
+      "sessions": 1,
+      "total_turns": 7,
+      "total_cost_usd": 0.1531,
+      "usage_totals": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 11639,
+        "cache_read_input_tokens": 93757,
+        "output_tokens": 3576,
+        "total_consumed_tokens": 15221
+      },
+      "cache_hit_rate": 0.8895,
+      "tokens_per_turn": 2174.4
+    },
+    "614": {
+      "ticket": "wq#614",
+      "title": "T2a design doc (fable-5)",
+      "files": [
+        "fbuild-614.jsonl",
+        "fbuild-614.wave1.jsonl",
+        "fbuild-614.wave2.jsonl"
+      ],
+      "sessions": 3,
+      "total_turns": 154,
+      "total_cost_usd": 10.5309,
+      "usage_totals": {
+        "input_tokens": 124,
+        "cache_creation_input_tokens": 169792,
+        "cache_read_input_tokens": 4560532,
+        "output_tokens": 51373,
+        "total_consumed_tokens": 221289
+      },
+      "cache_hit_rate": 0.9641,
+      "tokens_per_turn": 1436.9
+    },
+    "625": {
+      "ticket": "wq#625",
+      "title": "T2a build (dep-preflight, PR#4)",
+      "files": [
+        "fbuild-625.jsonl"
+      ],
+      "sessions": 1,
+      "total_turns": 276,
+      "total_cost_usd": 8.7011,
+      "usage_totals": {
+        "input_tokens": 300,
+        "cache_creation_input_tokens": 187194,
+        "cache_read_input_tokens": 20771047,
+        "output_tokens": 89611,
+        "total_consumed_tokens": 277105
+      },
+      "cache_hit_rate": 0.9911,
+      "tokens_per_turn": 1004.0
+    }
+  },
+  "mcp_inheriting_vs_strict": {
+    "mcp_inheriting_files": [
+      "_runs/fbuild-613.wave1.jsonl"
+    ],
+    "mcp_inheriting_first_turn_cache_write_tokens": [
+      10520
+    ],
+    "strict_files_sample_first_turn_cache_write_tokens": [
+      4859,
+      156367,
+      120417,
+      8084,
+      7645
+    ]
+  }
+}

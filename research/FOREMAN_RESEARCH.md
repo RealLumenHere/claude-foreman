@@ -727,3 +727,52 @@ CORRECTIONS 2026-08-14 (post-ship, foreman-r1, source: Frank's Max-session picke
 using claude-3-opus-20240229 (dated ID from the binary's embedded docs table, retire-dated
 Jan 5 2026 — picker-presence vs retire-date conflict is exactly what P1 resolves).
 Lesson: the native binary's strings dump is NOT authoritative for UI label presence/absence.
+
+---
+## NOT-APPLICABLE — foreman-tok T0 ledger (wq#629, 2026-08-15, fbuild639-6ad3b8)
+Frank forwarded Fable-5 token-reduction research (2 docs, 2026-08-15). Premise filter applied:
+we run on Max 20x subscription auth, NO raw Anthropic API key (the one in
+/home/lumen/agent/.env is DEFUSED, never used). Every item below is raw Messages-API request/
+account surface, gated behind an API key or org-level contract setting — none of it is reachable
+through claude CLI's OAuth `-p` surface. Recorded so no future foreman-tok agent re-chases them:
+
+- **`cache_control` breakpoints** — explicit ephemeral-cache markers set in a raw Messages API
+  request body, to control which prefix segments get cached. Not exposed via the CLI; the CLI
+  manages prompt caching itself. TOKEN_BASELINE.md measured 89-99% cache hit rate across 8
+  real sessions with zero manual cache_control anywhere in this stack — nothing to configure.
+- **`context-management-2025-06-27` beta** (anthropic-beta header; automatic tool-result
+  clearing / context editing) — a raw API request-header opt-in. No equivalent CLI flag; would
+  require direct API access we don't have.
+- **`task_budget`** — raw Messages API param family for server-side per-request token/turn
+  caps. We already have our own budget gate (foreman-usaged, T1/wq#613) sitting in front of
+  every dispatch instead; redundant even if it were reachable.
+- **server-side model fallback / `fallback_credit_token`** — lets an overloaded primary model's
+  request draw from a separate fallback credit pool, billed via API key. Doesn't map onto a
+  flat-rate Max subscription (there is no credit pool to draw from). Note this is a DIFFERENT
+  mechanism from `--fallback-model` (§1 above), which IS available in -p and IS in use — that
+  one is a client-side retry-with-different-model flag, not a billing construct.
+- **Batch API** — async bulk-request endpoint (up to 50% API discount for non-interactive
+  batches), billed per-token via API key. Every foreman worker call is a live interactive
+  `claude -p` dispatch (fworker.py), not an async batchable job, and there's no API key to bill
+  against regardless.
+- **ZDR (Zero Data Retention)** — enterprise/API contractual data-handling mode, an org-level
+  setting tied to API billing agreements. Not applicable to a Max consumer OAuth login.
+
+What we ALREADY have that this research independently recommends (so: verify these keep
+working, don't rebuild them):
+- context isolation → fworker.py's per-attempt git worktree + wq claim/release lifecycle +
+  board line per ticket (BUILD_PLAN.md §T2a).
+- requirements ledger → wq ticket `detail` field is the spec; `/home/lumen/agents/work-queue/
+  reports/` holds the durable per-ticket writeup (see wq#612's report for the shape).
+- effort tiering → models.yaml archetype→(model,effort) routing table + CAL-1 calibration
+  (wq#619, scheduled after 2026-08-19) to move rows from estimated to measured.
+- resume-not-restart → fworker.py's `handle_limit()`: on a rate-limit hit with a boundable
+  reset window, sleeps and calls `--resume <session_id>` rather than re-spawning cold.
+- budget governor → foreman-usaged (T1/wq#613): polls `/api/oauth/usage`, reserve floors,
+  fail-closed on stale data, `can_dispatch(model)` gate every worker now calls before claiming
+  a ticket (wq#639 fixed the gate/claim ordering the same session this ledger was written).
+
+Baseline instrument + numbers for future foreman-tok tickets to diff against:
+TOKEN_BASELINE.md / `research/token_baseline.py` (re-run: `python3 token_baseline.py >
+token_baseline.json`) — parses the 8 existing `_runs/*.jsonl` real session transcripts
+(wq#613/614/625 bootstrap builds), zero new Anthropic spend.
