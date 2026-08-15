@@ -129,6 +129,29 @@ def main():
             time.sleep(0.01)
         emit({"type": "result", "subtype": "success", "is_error": False})
 
+    elif scenario == "thinking_paired_turns":
+        # wq#645 regression fixture: mirrors the real 2.1.233 shape (thinking block as
+        # its own assistant frame ahead of the tool_use/text frame for the same turn).
+        # 10 real turns = 20 raw assistant frames; mechanical-edit's max_turns=15 means
+        # the pre-fix double-count kills this at raw frame 15 (~7.5 real turns, TURNS);
+        # post-fix it completes all 10 real turns and succeeds.
+        for i in range(10):
+            emit({"type": "assistant", "message": {"content": [
+                {"type": "thinking", "thinking": f"step {i}"}]}})
+            emit({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "git status"}}]}})
+            rc = fire_hook("Bash", {"command": "git status"}, session_id, effort)
+            if rc != 0:
+                emit({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                      "errors": ["hook blocked expected-allow command"]})
+                fire_lifecycle("stop", session_id, effort)
+                sys.exit(1)
+        if ticket_id:
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+                            capture_output=True, text=True)
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "total_cost_usd": 0.002, "num_turns": 10})
+
     fire_lifecycle("stop", session_id, effort)
     fire_lifecycle("end", session_id, effort)
 

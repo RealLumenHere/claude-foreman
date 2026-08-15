@@ -8,8 +8,11 @@ BUILD_PLAN.md §T2a / design/T2A_WORKER_HARNESS_DESIGN.md. Bespoke process track
 
 BUILD-TIME DISCOVERY vs the design: the installed claude CLI (2.1.233) dropped the
 --max-turns flag the design assumed (probed against 2.1.220). fworker enforces the
-turn ceiling itself by counting "assistant" stream frames and SIGTERMing the child —
-see classifier.py's RunState.turns / turns_exceeded and _read_stream() below.
+turn ceiling itself by counting real agentic-loop turns in the stream and SIGTERMing
+the child — see classifier.py's RunState.observe()/turns/turns_exceeded and
+run_child() below. (wq#645: a real turn is not one "assistant" frame — extended
+thinking splits it into a thinking-only frame plus the tool_use/text frame; counting
+both double-counted turns and tripped this ceiling at ~half of max_turns.)
 
 Usage:
     fworker.py run --ticket ID --repo PATH [--model MODEL] [--effort NAME]

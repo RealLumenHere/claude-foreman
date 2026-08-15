@@ -148,10 +148,39 @@ def test_supervisor_enforced_turn_ceiling_is_turns():
     # fworker counts "assistant" frames itself and SIGTERMs on ceiling.
     st = RunState()
     for _ in range(15):
-        st.observe({"type": "assistant", "message": {"content": []}})
+        st.observe({"type": "assistant",
+                     "message": {"content": [{"type": "tool_use", "name": "Bash"}]}})
     assert st.turns == 15
     st.turns_exceeded = True
     assert classify(st) == TURNS
+
+
+def test_thinking_only_assistant_frame_does_not_count_as_a_turn():
+    # wq#645: with extended thinking on, the CLI emits the thinking block as its own
+    # assistant frame ahead of the real tool_use/text frame, both sharing one
+    # stop_reason. fworker was counting both -> real turns were double-counted,
+    # tripping its self-enforced ceiling at ~half of max_turns (live evidence:
+    # wq#626/wq#603 both hit turns==max_turns after only ~half that many real turns).
+    st = RunState()
+    for _ in range(20):
+        st.observe({"type": "assistant", "message": {"content": [{"type": "thinking",
+                                                                    "thinking": "hmm"}]}})
+        st.observe({"type": "assistant",
+                     "message": {"content": [{"type": "tool_use", "name": "Bash"}]}})
+    assert st.turns == 20
+
+
+def test_mixed_thinking_and_content_block_in_one_frame_counts_once():
+    st = RunState()
+    st.observe({"type": "assistant", "message": {"content": [
+        {"type": "thinking", "thinking": "hmm"}, {"type": "text", "text": "done"}]}})
+    assert st.turns == 1
+
+
+def test_empty_content_assistant_frame_does_not_count():
+    st = RunState()
+    st.observe({"type": "assistant", "message": {"content": []}})
+    assert st.turns == 0
 
 
 def test_ambiguous_shape_fails_closed_to_limit():

@@ -154,6 +154,28 @@ def test_rejected_limit_frame_drives_limit_path_not_crash(tmp_path):
     assert record["classification"] != "CRASH"
 
 
+def test_thinking_frames_dont_double_count_toward_turn_ceiling(tmp_path):
+    # wq#645 regression: 10 real turns shaped as (thinking-only frame, tool_use frame)
+    # pairs, same as the live 2.1.233 CLI. mechanical-edit's max_turns=15 means the
+    # pre-fix double-counting bug SIGTERMs this at raw frame 15 (~7.5 real turns) and
+    # misclassifies it TURNS; the fix must let it run all 10 real turns and succeed.
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "thinking_paired_turns")
+    ticket_id = wq_add(env, "scratch thinking-paired ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "thinking_paired_turns",
+                          archetype="mechanical-edit")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+
+    with open(os.path.join(runs_root, f"wq{ticket_id}", "attempt-1.json")) as f:
+        record = json.load(f)
+    assert record["classification"] == "SUCCESS"
+    assert record["turns"] == 10
+
+
 def test_dep_preflight_defers_without_claiming_or_spawning(tmp_path):
     repo = make_scratch_repo(tmp_path)
     env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")

@@ -46,10 +46,23 @@ class RunState:
         # claude 2.1.233 dropped the --max-turns CLI flag present in 2.1.220 (the version
         # BUILD_PLAN/design assumed) — `strings` on the installed binary still carries
         # maxTurns/resolvedMaxTurns as an --agents frontmatter key only, not a top-level
-        # print flag. fworker enforces the turn ceiling itself: one "assistant" frame ==
-        # one agentic-loop turn, counted here; the supervisor SIGTERMs on ceiling (fworker.py).
+        # print flag. fworker enforces the turn ceiling itself, counted here; the
+        # supervisor SIGTERMs on ceiling (fworker.py).
+        #
+        # wq#645: one agentic-loop turn is NOT one "assistant" frame. With extended
+        # thinking on, the CLI emits a *separate* assistant frame whose content is
+        # solely a "thinking" block, then a second assistant frame with the real
+        # tool_use/text block — both frames share one stop_reason. Counting every
+        # assistant frame double-counted real turns 2x, so fworker's self-enforced
+        # ceiling fired at ~half the intended max_turns and misclassified genuinely
+        # in-progress workers as TURNS (live evidence: wq#626/wq#603 attempts hit
+        # turns==max_turns after ~40 frames that were only ~20-22 real turns). Only
+        # count a frame that carries a non-thinking content block.
         if ftype == "assistant":
-            self.turns += 1
+            content = (frame.get("message") or {}).get("content") or []
+            block_types = {c.get("type") for c in content if isinstance(c, dict)}
+            if block_types - {"thinking"}:
+                self.turns += 1
 
         # rate_limit_event can arrive as its own frame type or nested in a system message
         rle = frame if ftype == "rate_limit_event" else frame.get("rate_limit_event")
