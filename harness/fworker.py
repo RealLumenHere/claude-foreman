@@ -438,7 +438,9 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
 
     allow, reason = can_dispatch(args.model)
     if not allow:
-        log(f"governor DEFERRED dispatch: {reason}")
+        log(f"governor DEFERRED dispatch: {reason} — releasing claim")
+        wq_release(ticket_id)
+        print("DEFERRED")
         return EXIT_DEFERRED
 
     archetype = args.archetype or "standard-engineering"
@@ -613,6 +615,17 @@ def cmd_run(args):
         log(f"DEFERRED: wq#{args.ticket} deps not met: {detail}")
         print("DEFERRED")
         return EXIT_DEPS_UNMET
+
+    # design §3 step 1: governor gate precedes claim (step 2). Checking here, same
+    # as deps_unmet above, means a denied dispatch never touches the claim at all —
+    # no lease to release, no churn. do_attempt() re-checks this per-attempt too
+    # (design's "per-attempt setup"), since a retry/resume can run long after this
+    # initial gate; that path releases the claim it's already holding on deny.
+    allow, reason = can_dispatch(args.model)
+    if not allow:
+        log(f"DEFERRED: wq#{args.ticket} governor denied dispatch before claim: {reason}")
+        print("DEFERRED")
+        return EXIT_DEFERRED
 
     claimed, msg = wq_claim(args.ticket)
     if not claimed:

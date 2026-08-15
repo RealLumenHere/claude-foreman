@@ -10,6 +10,13 @@ session cookie configured; see `CCC_SESSION_COOKIE_FILE` in
 `foreman_usaged.py`). Fails closed to local-rung-only if both sources are
 stale for more than 10 minutes.
 
+On consecutive primary failures the poll interval backs off (doubles per
+failure, capped at `poll_backoff_max_s`, default 600s) instead of retrying at
+the flat 60-90s cadence — wq#639 found a 2.5h+ continuous HTTP 429 streak on
+the usage endpoint where the un-backed-off daemon kept polling every ~70s the
+whole time, plausibly re-arming a sliding-window rate limit and extending the
+fail-closed (stale) window well past what the poll cadence should allow.
+
 ## State
 
 - `/home/lumen/foreman/state.json` — atomic snapshot of the last poll:

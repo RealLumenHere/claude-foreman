@@ -192,6 +192,46 @@ def test_dep_preflight_proceeds_once_dep_is_done(tmp_path):
     assert wq_status(env, ticket_id) == "done"
 
 
+def test_governor_deny_defers_without_claiming_or_spawning(tmp_path):
+    # wq#639: governor gate must precede claim (design §3 step 1), same as the
+    # dep-preflight above — a denied dispatch should never touch the claim.
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env["FAKE_GOVERNOR_DENY"] = "always"
+    ticket_id = wq_add(env, "scratch governor-deny ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success")
+    assert result.returncode == 11, result.stdout + result.stderr  # EXIT_DEFERRED
+    assert "DEFERRED" in result.stdout
+
+    assert wq_status(env, ticket_id) == "open"
+    assert not os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a1"))
+    run_dir = os.path.join(runs_root, f"wq{ticket_id}")
+    assert not os.path.isdir(run_dir) or not any(
+        f.startswith("attempt-") for f in os.listdir(run_dir))
+
+
+def test_governor_deny_after_claim_releases_ticket(tmp_path):
+    # wq#639 repro: governor allows the pre-claim gate (call 1) but denies the
+    # per-attempt gate inside do_attempt (call 2, now that the ticket is
+    # claimed) — the claim must not be left held (was: fworker exited DEFERRED
+    # holding the lease, wq#626 13:41:14Z).
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env["FAKE_GOVERNOR_DENY"] = "after:1"
+    env["FAKE_GOVERNOR_COUNTER_FILE"] = str(tmp_path / "governor_calls")
+    ticket_id = wq_add(env, "scratch governor-deny-after-claim ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success")
+    assert result.returncode == 11, result.stdout + result.stderr  # EXIT_DEFERRED
+    assert "DEFERRED" in result.stdout
+
+    assert wq_status(env, ticket_id) == "open", "claim must be released, not held, on deny"
+    assert not os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a1"))
+
+
 def test_resume_after_near_term_limit_reuses_worktree_and_closes(tmp_path):
     repo = make_scratch_repo(tmp_path)
     env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(

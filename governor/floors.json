@@ -5,6 +5,7 @@
   "stale_fail_closed_seconds": 600,
   "poll_interval_min_s": 60,
   "poll_interval_max_s": 90,
+  "poll_backoff_max_s": 600,
   "primary_fail_threshold": 2,
   "off_peak_days_pt": [0, 1, 2, 3, 4],
   "off_peak_start_hour_pt": 5,

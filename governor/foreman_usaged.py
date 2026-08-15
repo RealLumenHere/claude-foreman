@@ -255,8 +255,11 @@ def cmd_run(args):
             prev_state = poll_once(floors, prev_state)
         except Exception as e:  # noqa: BLE001 — daemon must never die on a bad poll
             log(f"ERROR: poll_once raised {e!r}, continuing")
-        interval = random.uniform(floors.get("poll_interval_min_s", 60), floors.get("poll_interval_max_s", 90))
-        time.sleep(interval)
+        fail_streak = (prev_state or {}).get("primary_fail_streak", 0)
+        lo, hi = core.poll_backoff_bounds(fail_streak, floors)
+        if fail_streak > 0:
+            log(f"backing off: fail_streak={fail_streak}, next poll in [{lo:.0f}, {hi:.0f})s")
+        time.sleep(random.uniform(lo, hi))
 
 
 def cmd_can_dispatch(args):

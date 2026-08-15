@@ -197,3 +197,25 @@ def test_is_fable_model_matches_case_insensitively():
     assert core.is_fable_model("Claude-Fable-5") is True
     assert core.is_fable_model("claude-sonnet-5") is False
     assert core.is_fable_model(None) is False
+
+
+# ---------- poll backoff (wq#639: no backoff let a 429 streak self-perpetuate) ----------
+
+def test_poll_backoff_is_base_cadence_when_healthy():
+    assert core.poll_backoff_bounds(0, FLOORS) == (60, 90)
+
+
+def test_poll_backoff_doubles_per_consecutive_failure():
+    assert core.poll_backoff_bounds(1, FLOORS) == (120, 180)
+    assert core.poll_backoff_bounds(2, FLOORS) == (240, 360)
+
+
+def test_poll_backoff_caps_at_poll_backoff_max_s():
+    lo, hi = core.poll_backoff_bounds(10, FLOORS)
+    assert lo == 600 and hi == 600
+
+
+def test_poll_backoff_respects_custom_floors():
+    floors = dict(FLOORS, poll_interval_min_s=10, poll_interval_max_s=20, poll_backoff_max_s=100)
+    assert core.poll_backoff_bounds(1, floors) == (20, 40)
+    assert core.poll_backoff_bounds(5, floors) == (100, 100)

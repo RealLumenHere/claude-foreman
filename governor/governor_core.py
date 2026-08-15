@@ -15,6 +15,7 @@ DEFAULT_FLOORS = {
     "stale_fail_closed_seconds": 600,
     "poll_interval_min_s": 60,
     "poll_interval_max_s": 90,
+    "poll_backoff_max_s": 600,
     "primary_fail_threshold": 2,
     "off_peak_days_pt": [0, 1, 2, 3, 4],
     "off_peak_start_hour_pt": 5,
@@ -51,6 +52,28 @@ def _slim(entry):
         "resets_at": entry.get("resets_at"),
         "severity": entry.get("severity"),
     }
+
+
+def poll_backoff_bounds(fail_streak, floors):
+    """[lo, hi) poll-interval bounds for the next sleep, given consecutive
+    primary-fetch failures. wq#639: the daemon hit a sustained HTTP 429 on
+    /api/oauth/usage (11:07-13:41+, 2.5h+) and kept polling at the flat 60-90s
+    base cadence the whole time — for a sliding-window rate limit, repeated
+    requests during the block plausibly keep re-arming it, turning a
+    transient limit into an hours-long one and extending the fail-closed
+    (stale) window that governs can-dispatch far past what it should be.
+    Doubles the interval per consecutive failure, capped at poll_backoff_max_s
+    (default 600s, matching stale_fail_closed_seconds — worst case we still
+    get roughly one retry per stale window). fail_streak<=0 (healthy or
+    still-CCC-covered) keeps the base cadence unchanged.
+    """
+    lo = floors.get("poll_interval_min_s", DEFAULT_FLOORS["poll_interval_min_s"])
+    hi = floors.get("poll_interval_max_s", DEFAULT_FLOORS["poll_interval_max_s"])
+    if fail_streak <= 0:
+        return lo, hi
+    cap = floors.get("poll_backoff_max_s", DEFAULT_FLOORS["poll_backoff_max_s"])
+    mult = 2 ** fail_streak
+    return min(lo * mult, cap), min(hi * mult, cap)
 
 
 def is_off_peak(now_utc, floors):
