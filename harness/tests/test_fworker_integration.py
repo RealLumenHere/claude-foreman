@@ -154,6 +154,44 @@ def test_rejected_limit_frame_drives_limit_path_not_crash(tmp_path):
     assert record["classification"] != "CRASH"
 
 
+def test_dep_preflight_defers_without_claiming_or_spawning(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    dep_id = wq_add(env, "scratch dep ticket, left open on purpose")
+    p = subprocess.run([WQ_BIN, "add", "--title", "scratch dependent ticket",
+                         "--deps", str(dep_id)], capture_output=True, text=True, env=env)
+    assert p.returncode == 0, p.stdout + p.stderr
+    ticket_id = int(p.stdout.strip().split()[2])
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success")
+    assert result.returncode == 14, result.stdout + result.stderr
+    assert "DEFERRED" in result.stdout
+
+    # never claimed (still open, no claimed_by) and no worktree/run-state was touched.
+    assert wq_status(env, ticket_id) == "open"
+    assert not os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a1"))
+    assert not os.path.isdir(os.path.join(runs_root, f"wq{ticket_id}"))
+
+
+def test_dep_preflight_proceeds_once_dep_is_done(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    dep_id = wq_add(env, "scratch dep ticket, closed immediately")
+    subprocess.run([WQ_BIN, "claim", "--id", str(dep_id)], capture_output=True, text=True, env=env)
+    subprocess.run([WQ_BIN, "done", str(dep_id), "--notes", "n/a"],
+                    capture_output=True, text=True, env=env)
+    p = subprocess.run([WQ_BIN, "add", "--title", "scratch dependent ticket, ready",
+                         "--deps", str(dep_id)], capture_output=True, text=True, env=env)
+    assert p.returncode == 0, p.stdout + p.stderr
+    ticket_id = int(p.stdout.strip().split()[2])
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+
+
 def test_resume_after_near_term_limit_reuses_worktree_and_closes(tmp_path):
     repo = make_scratch_repo(tmp_path)
     env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(

@@ -77,6 +77,7 @@ EXIT_CLAIM_ERROR = 10
 EXIT_DEFERRED = 11
 EXIT_BLOCKED = 12
 EXIT_LIMIT = 13
+EXIT_DEPS_UNMET = 14
 
 
 def log(msg):
@@ -135,6 +136,27 @@ def wq_show(ticket_id):
         k, v = line.split(":", 1)
         out[k.strip()] = v.strip()
     return out
+
+
+def deps_unmet(ticket_id):
+    """Read-only dep check ahead of claim/spawn (BUILD_PLAN.md §T2a: "dep-preflight
+    before spawn"). `wq claim --id` already refuses at the DB layer if deps aren't
+    done (deps_met() in /home/lumen/bin/wq), so this can't let an unready ticket
+    through either way — but routing it through that generic claim failure would
+    surface as CLAIM_ERROR, indistinguishable from a real claim race. Checking here
+    first gives an unmet dep its own clean DEFERRED outcome, with no claim attempt
+    and no worktree ever touched.  Returns a list of (dep_id, dep_status) for every
+    unmet dep; empty list means ready.
+    """
+    ticket = wq_show(ticket_id)
+    deps = ticket.get("deps", "")
+    unmet = []
+    for dep_id in [d.strip() for d in deps.split(",") if d.strip()]:
+        dep = wq_show(dep_id)
+        status = dep.get("status", "unknown")
+        if status != "done":
+            unmet.append((dep_id, status))
+    return unmet
 
 
 def wq_claim(ticket_id):
@@ -584,6 +606,13 @@ def reconcile_on_resume(ticket_id):
 def cmd_run(args):
     if args.resume:
         reconcile_on_resume(args.ticket)
+
+    unmet = deps_unmet(args.ticket)
+    if unmet:
+        detail = ", ".join(f"#{d} ({s})" for d, s in unmet)
+        log(f"DEFERRED: wq#{args.ticket} deps not met: {detail}")
+        print("DEFERRED")
+        return EXIT_DEPS_UNMET
 
     claimed, msg = wq_claim(args.ticket)
     if not claimed:
