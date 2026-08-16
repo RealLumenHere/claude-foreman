@@ -217,7 +217,7 @@ def poll_once(floors, prev_state):
     events = load_events()
     live_blocks = {k: v.get("resets_at") for k, v in events.items()}
 
-    breaches = core.floor_breaches(limits, floors) if limits else []
+    breaches = core.floor_breaches(limits, floors, now) if limits else []
     off_peak = core.is_off_peak(now, floors)
 
     state = {

@@ -163,14 +163,106 @@ def test_expired_live_block_does_not_block():
 # ---------- floor_breaches (for ntfy transition detection) ----------
 
 def test_floor_breaches_lists_only_breached_pools():
-    assert core.floor_breaches(limits_of(85, 10, 10), FLOORS) == ["session"]
-    assert core.floor_breaches(limits_of(10, 90, 10), FLOORS) == ["weekly_all"]
-    assert set(core.floor_breaches(limits_of(85, 90, 55), FLOORS)) == {"session", "weekly_all", "fable_weekly_scoped"}
-    assert core.floor_breaches(limits_of(10, 10, 10), FLOORS) == []
+    assert core.floor_breaches(limits_of(85, 10, 10), FLOORS, NOW) == ["session"]
+    assert core.floor_breaches(limits_of(10, 90, 10), FLOORS, NOW) == ["weekly_all"]
+    assert set(core.floor_breaches(limits_of(85, 90, 55), FLOORS, NOW)) == {"session", "weekly_all", "fable_weekly_scoped"}
+    assert core.floor_breaches(limits_of(10, 10, 10), FLOORS, NOW) == []
 
 
 def test_floor_breaches_empty_when_limits_none():
-    assert core.floor_breaches(None, FLOORS) == []
+    assert core.floor_breaches(None, FLOORS, NOW) == []
+
+
+# ---------- resolve_fable_floor / fable_floor_schedule (wq#644, Frank's 2026-08-15
+# ruling: fable_weekly_scoped reserve steps down on a schedule instead of one static
+# number) ----------
+
+FABLE_SCHEDULE = [
+    {"until_pt": "2026-08-19T20:30", "min_remaining_pct": 10},
+    {"until_pt": "2026-08-20T03:00", "min_remaining_pct": 0},
+]
+
+
+def test_resolve_fable_floor_falls_back_to_static_when_schedule_absent():
+    assert core.resolve_fable_floor(FLOORS, NOW) == FLOORS["fable_weekly_min_remaining_pct"]
+
+
+def test_resolve_fable_floor_falls_back_to_static_when_schedule_empty():
+    floors = dict(FLOORS, fable_floor_schedule=[])
+    assert core.resolve_fable_floor(floors, NOW) == FLOORS["fable_weekly_min_remaining_pct"]
+
+
+def test_resolve_fable_floor_picks_first_active_step():
+    floors = dict(FLOORS, fable_weekly_min_remaining_pct=50, fable_floor_schedule=FABLE_SCHEDULE)
+    # 2026-08-17 12:00 UTC = 2026-08-17 04:00 PT, well before the first step's until_pt.
+    before = dt.datetime(2026, 8, 17, 12, 0, 0, tzinfo=dt.timezone.utc)
+    assert core.resolve_fable_floor(floors, before) == 10
+
+
+def test_resolve_fable_floor_step_boundary_crossing():
+    floors = dict(FLOORS, fable_weekly_min_remaining_pct=50, fable_floor_schedule=FABLE_SCHEDULE)
+    # 2026-08-19T20:30 PT == 2026-08-20T04:30 UTC (PT_OFFSET_HOURS = -8).
+    just_before = dt.datetime(2026, 8, 20, 4, 29, 0, tzinfo=dt.timezone.utc)
+    at_boundary = dt.datetime(2026, 8, 20, 4, 30, 0, tzinfo=dt.timezone.utc)
+    just_after = dt.datetime(2026, 8, 20, 4, 31, 0, tzinfo=dt.timezone.utc)
+    assert core.resolve_fable_floor(floors, just_before) == 10
+    # at/after the first step's until_pt, that step is no longer active -> second step.
+    assert core.resolve_fable_floor(floors, at_boundary) == 0
+    assert core.resolve_fable_floor(floors, just_after) == 0
+
+
+def test_resolve_fable_floor_falls_back_to_static_once_schedule_exhausted():
+    floors = dict(FLOORS, fable_weekly_min_remaining_pct=50, fable_floor_schedule=FABLE_SCHEDULE)
+    # 2026-08-20T03:00 PT (weekly reset) == 2026-08-20T11:00 UTC — past both steps.
+    after_reset = dt.datetime(2026, 8, 20, 11, 1, 0, tzinfo=dt.timezone.utc)
+    assert core.resolve_fable_floor(floors, after_reset) == 50
+
+
+def test_resolve_fable_floor_malformed_schedule_shape_fails_closed_to_static():
+    floors = dict(FLOORS, fable_weekly_min_remaining_pct=50, fable_floor_schedule="not-a-list")
+    assert core.resolve_fable_floor(floors, NOW) == 50
+
+
+def test_resolve_fable_floor_malformed_step_fails_closed_to_static():
+    # bad until_pt format
+    floors = dict(FLOORS, fable_weekly_min_remaining_pct=50,
+                  fable_floor_schedule=[{"until_pt": "not-a-date", "min_remaining_pct": 10}])
+    assert core.resolve_fable_floor(floors, NOW) == 50
+    # missing min_remaining_pct
+    floors2 = dict(FLOORS, fable_weekly_min_remaining_pct=50,
+                   fable_floor_schedule=[{"until_pt": "2026-08-19T20:30"}])
+    assert core.resolve_fable_floor(floors2, NOW) == 50
+    # a non-dict entry anywhere in the list
+    floors3 = dict(FLOORS, fable_weekly_min_remaining_pct=50,
+                   fable_floor_schedule=[{"until_pt": "2026-08-19T20:30", "min_remaining_pct": 10}, "oops"])
+    assert core.resolve_fable_floor(floors3, NOW) == 50
+
+
+def test_evaluate_dispatch_honors_fable_floor_schedule():
+    floors = dict(FLOORS, fable_weekly_min_remaining_pct=50, fable_floor_schedule=FABLE_SCHEDULE)
+    before = dt.datetime(2026, 8, 17, 12, 0, 0, tzinfo=dt.timezone.utc)
+    # remaining=92 (percent=8) clears the scheduled 10% floor but would fail the
+    # static 50% floor — proves evaluate_dispatch is reading the schedule, not static.
+    d = core.evaluate_dispatch("claude-fable-5", limits=limits_of(10, 10, 8), floors=floors,
+                                now_utc=before, stop_active=False, stale=False)
+    assert d["allow"] is True
+
+    after_burn_window_start = dt.datetime(2026, 8, 20, 4, 30, 0, tzinfo=dt.timezone.utc)
+    # remaining=5 (percent=95) would fail BOTH the static 50% floor and the schedule's
+    # own first step (10%) — only advancing to the second step's 0% floor allows this.
+    d2 = core.evaluate_dispatch("claude-fable-5", limits=limits_of(10, 10, 95), floors=floors,
+                                 now_utc=after_burn_window_start, stop_active=False, stale=False)
+    assert d2["allow"] is True
+
+
+def test_floor_breaches_honors_fable_floor_schedule():
+    floors = dict(FLOORS, fable_weekly_min_remaining_pct=50, fable_floor_schedule=FABLE_SCHEDULE)
+    # percent=60 -> remaining=40: clears the scheduled 10% floor but not the static 50%.
+    before = dt.datetime(2026, 8, 17, 12, 0, 0, tzinfo=dt.timezone.utc)
+    assert core.floor_breaches(limits_of(10, 10, 60), floors, before) == []
+    after_reset = dt.datetime(2026, 8, 20, 11, 1, 0, tzinfo=dt.timezone.utc)
+    # schedule exhausted -> back to the static 50% floor -> 40% remaining breaches.
+    assert core.floor_breaches(limits_of(10, 10, 60), floors, after_reset) == ["fable_weekly_scoped"]
 
 
 # ---------- off-peak flag ----------

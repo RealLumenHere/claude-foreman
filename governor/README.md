@@ -53,6 +53,17 @@ Defaults in `floors.json` (session >=20% remaining, weekly_all >=15%
 remaining, Fable weekly_scoped >=50% remaining reserved for Frank's
 interactive use). Edit that file to tune; the daemon re-reads it every poll.
 
+`fable_weekly_min_remaining_pct` is a single static number. For a Frank-ruled
+time-stepped reserve (e.g. "keep >=10% through Tuesday, may burn to 0% from
+Wednesday evening"), add an optional `fable_floor_schedule`: an ordered list
+of `{until_pt, min_remaining_pct}` steps in Pacific wall-clock time
+(`"YYYY-MM-DDTHH:MM"`, no offset). The first step whose `until_pt` is still
+in the future is active; once every step has passed — or the key is absent,
+empty, or any step is malformed — `resolve_fable_floor()` falls back to the
+plain static key. `evaluate_dispatch` and `floor_breaches` both resolve
+through it, so a schedule change takes effect on the very next poll/dispatch
+without a daemon restart.
+
 ## Running
 
 Detached via lumen-run (survives the DC-gateway process-group reap):
@@ -70,9 +81,10 @@ lumen-run log <UNIT>      # daemon's stdout/stderr (structured log lines)
 cd /home/lumen/foreman/governor && python3 -m pytest test_governor_core.py -v
 ```
 
-23 cases covering floor logic (allow/deny/boundary), the Fable-only reserve
-gate, the STOP kill-switch, fail-closed behavior on stale/missing data, live
-`rate_limit_event` blocking, and the off-peak flag.
+36 cases covering floor logic (allow/deny/boundary), the Fable-only reserve
+gate and its optional time-stepped schedule, the STOP kill-switch,
+fail-closed behavior on stale/missing data, live `rate_limit_event`
+blocking, and the off-peak flag.
 
 ## Known gap
 

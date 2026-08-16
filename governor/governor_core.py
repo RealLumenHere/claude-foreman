@@ -106,6 +106,55 @@ def _parse_iso(ts):
         return None
 
 
+def _parse_pt_wallclock(s):
+    """Parse a fable_floor_schedule step's `until_pt`: naive 'YYYY-MM-DDTHH:MM' in
+    Pacific wall-clock time (same fixed PST offset as PT_OFFSET_HOURS elsewhere in
+    this module — no DST handling). Returns None on any non-conforming input."""
+    if not isinstance(s, str):
+        return None
+    try:
+        return _dt.datetime.strptime(s, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        return None
+
+
+def resolve_fable_floor(floors, now_utc):
+    """Frank's 2026-08-15 ruling (wq#644): the fable_weekly_scoped reserve steps down
+    on a schedule instead of holding one static number. `floors["fable_floor_schedule"]`
+    is an optional ordered list of {until_pt, min_remaining_pct} steps in Pacific
+    wall-clock time; the first step (in list order) whose until_pt is still in the
+    future is active, i.e. "the floor is min_remaining_pct until until_pt". Once every
+    step's until_pt has passed, or the key is absent/empty, or ANY step is malformed
+    (wrong shape, unparsable until_pt, non-numeric min_remaining_pct) — fail closed to
+    the plain static fable_weekly_min_remaining_pct key, same posture as a malformed
+    JSON floors file: never partially trust a broken schedule.
+    """
+    static_floor = floors.get("fable_weekly_min_remaining_pct",
+                               DEFAULT_FLOORS["fable_weekly_min_remaining_pct"])
+    schedule = floors.get("fable_floor_schedule")
+    if not schedule or not isinstance(schedule, list):
+        return static_floor
+    # naive to match _parse_pt_wallclock's naive strptime result (until_pt carries no
+    # tzinfo by construction — it's a plain "PT wall clock" string, not an ISO offset).
+    now_pt = (now_utc + _dt.timedelta(hours=PT_OFFSET_HOURS)).replace(tzinfo=None)
+    steps = []
+    for step in schedule:
+        if not isinstance(step, dict):
+            return static_floor
+        until = _parse_pt_wallclock(step.get("until_pt"))
+        pct = step.get("min_remaining_pct")
+        if until is None or not isinstance(pct, (int, float)) or isinstance(pct, bool):
+            return static_floor
+        steps.append((until, pct))
+    for until, pct in steps:
+        if now_pt < until:
+            return pct
+    # every step's until_pt has passed (schedule ran its course) — same fallback as
+    # missing/malformed, not a silent 0: the operator resets the static key for
+    # whatever comes after the scheduled window.
+    return static_floor
+
+
 def evaluate_dispatch(model, *, limits, floors, now_utc, stop_active, stale,
                        live_blocks=None):
     """Pure decision function. `limits` = parse_limits() output (or None if
@@ -143,7 +192,7 @@ def evaluate_dispatch(model, *, limits, floors, now_utc, stop_active, stale,
 
     if is_fable_model(model):
         fable_remaining = _remaining(limits.get("fable_weekly_scoped"))
-        fable_floor = floors.get("fable_weekly_min_remaining_pct", DEFAULT_FLOORS["fable_weekly_min_remaining_pct"])
+        fable_floor = resolve_fable_floor(floors, now_utc)
         if fable_remaining is None or fable_remaining < fable_floor:
             reasons.append(f"Fable weekly_scoped remaining {fable_remaining} < reserve floor {fable_floor}")
 
@@ -164,9 +213,11 @@ def classify_rate_limit_event(frame):
     return "allowed"
 
 
-def floor_breaches(limits, floors):
+def floor_breaches(limits, floors, now_utc):
     """Which floors are currently breached, for ntfy purposes. Returns a
-    sorted list of pool names."""
+    sorted list of pool names. `now_utc` picks the active fable_floor_schedule
+    step (wq#644) the same way evaluate_dispatch does — a breach here must
+    agree with what actually gated dispatch."""
     breached = []
     session_remaining = _remaining((limits or {}).get("session"))
     weekly_remaining = _remaining((limits or {}).get("weekly_all"))
@@ -177,7 +228,6 @@ def floor_breaches(limits, floors):
     if weekly_remaining is not None and weekly_remaining < floors.get(
             "weekly_all_min_remaining_pct", DEFAULT_FLOORS["weekly_all_min_remaining_pct"]):
         breached.append("weekly_all")
-    if fable_remaining is not None and fable_remaining < floors.get(
-            "fable_weekly_min_remaining_pct", DEFAULT_FLOORS["fable_weekly_min_remaining_pct"]):
+    if fable_remaining is not None and fable_remaining < resolve_fable_floor(floors, now_utc):
         breached.append("fable_weekly_scoped")
     return breached

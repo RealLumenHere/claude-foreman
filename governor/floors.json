@@ -1,7 +1,11 @@
 {
   "session_min_remaining_pct": 20,
   "weekly_all_min_remaining_pct": 15,
-  "fable_weekly_min_remaining_pct": 50,
+  "fable_weekly_min_remaining_pct": 10,
+  "fable_floor_schedule": [
+    {"until_pt": "2026-08-19T20:30", "min_remaining_pct": 10},
+    {"until_pt": "2026-08-20T03:00", "min_remaining_pct": 0}
+  ],
   "stale_fail_closed_seconds": 600,
   "poll_interval_min_s": 60,
   "poll_interval_max_s": 90,
