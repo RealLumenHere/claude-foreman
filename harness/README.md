@@ -11,6 +11,9 @@ child at a time on the shared login (multi-worker auth is T2b, gated on T2b-gate
     classifier.py           RELIABILITY_SPEC.md §C/§D verdict engine (SUCCESS/TURNS/
                              LAUNCH_FAILURE/LIMIT/KILLED/OOM/INDETERMINATE/AUTH/
                              DEGRADED_SUCCESS/FALSE_COMPLETE + REFUSED/BUDGET/CRASH/HANG)
+    oom_forensics.py         journal-based OOM corroboration (§E, wq#648) — best-effort,
+                             attached to attempt-N.json on an OOM verdict, never a
+                             classification input itself
     reaper.py                independent wq lease reaper (§E, wq#647) — `wq reap` +
                              an aq row per reap, decoupled from any worker's own exit path
     worker-settings.json    settings pack — replaces worker-settings-interim.json
@@ -68,6 +71,31 @@ independent process that sweeps ALL lanes on its own schedule:
 Every reclaim posts an `aq` row (source `foreman-reaper`) so a dangling claim is never
 silent again, then reverts the ticket to `open` via `wq reap` (a new lane-independent
 subcommand, same reclaim semantics `wq claim` already uses for its own lane).
+
+## Governor cache-on-429, NDJSON hardening, OOM forensics (wq#648, §B/§E, S3)
+
+- **Governor**: `governor/foreman_usaged.py` already cached last-good `limits[]` and
+  only fails closed on elapsed time (`cache_age_s`, new field on `state.json`) past
+  `stale_fail_closed_seconds` — never on one bad poll in isolation, 429 included (§B:
+  `/api/oauth/usage` is undocumented and 429s aggressively, #31021/#31637). A failed
+  poll now also stamps `reused_cache`/`reused_cache_reason` on the state so it's
+  visible which reads are live vs. reused. Fable/weekly bucket separation
+  (`session`/`weekly_all`/`fable_weekly_scoped`) was audited against §B and is correct
+  as built (T1) — `governor/test_governor_core.py`'s bucket tests already cover it.
+- **NDJSON reader**: `fworker._reader_thread` already did byte-buffer + newline-split +
+  partial-trailing-line-carry correctly (Python's `TextIOWrapper.readline()` never
+  returns a line until it sees `\n` or EOF, regardless of how the child chunks its
+  writes) and unknown frame types already fall through `RunState.observe()` untouched.
+  Shim 14-16 (`tests/test_shim_matrix.py`) lock this in: a buffered-pipe burst under
+  T_gap is NOT-A-FAILURE (#25670), a byte-split NDJSON line reassembles correctly, and
+  an unrecognized frame type never crashes the parser. All 16/16 §F shim items pass.
+- **systemd**: `orchestrator/router.py:dispatch_cmd()` now passes `--mem`/`--mem-high`/
+  `--cpu`/`--tasks-max`/`--oom-policy stop` to `lumen-run` for every `fworker-wq<ID>`
+  unit (lumen-run has supported these flags since wq#613; they just weren't wired in).
+- **OOM forensics**: `oom_forensics.py` best-effort-corroborates an OOM verdict (exit
+  137) against the persistent systemd journal (`journalctl -k`), attached to
+  `attempt-N.json` as `oom_journal` — never a classification input, same
+  corroboration-only status as `cpu_s`.
 
 ## Build-time discovery vs the design (read before touching --max-turns)
 

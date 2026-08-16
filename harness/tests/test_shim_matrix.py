@@ -1,8 +1,8 @@
 """RELIABILITY_SPEC.md §F fake-claude shim matrix.
 Items 1-8 (wq#646, S1 scope): SUCCESS/TURNS/LAUNCH_FAILURE/LIMIT/KILLED/OOM/INDETERMINATE.
 Items 9-13 (wq#647, S2 scope): STALL watchdog, SUCCESS-BUT-STUCK, FALSE-COMPLETE, AUTH,
-DEGRADED-SUCCESS. Items 14-16 (buffered-burst/partial-line/unknown-frame NDJSON parser
-hardening) are wq#648 (S3) — not built here.
+DEGRADED-SUCCESS. Items 14-16 (wq#648, S3 scope): buffered-burst is NOT-A-FAILURE (no
+false STALL), partial-line NDJSON reassembly, unknown-frame-type fallthrough.
 
 Each test drives fworker.py end-to-end against a real subprocess invocation of the
 fake `claude` shim (tests/fake_claude.py, canned NDJSON + real exit codes) — same
@@ -192,6 +192,55 @@ def test_shim_12_401_is_auth(tmp_path):
     assert wq_status(env, ticket_id) == "blocked"
     record = attempt_record(runs_root, ticket_id, n=2)
     assert record["classification"] == "AUTH"
+
+
+def test_shim_14_buffered_burst_is_not_a_false_stall(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "buffered_burst")
+    env["FAKE_CLAUDE_BURST_DELAY_S"] = "1"
+    ticket_id = wq_add(env, "shim 14: buffered-pipe burst is NOT-A-FAILURE")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    # gap (1s) stays well under frame-gap-timeout (5s) -> no false STALL/HANG.
+    result = run_fworker(env, ticket_id, repo, "buffered_burst",
+                          extra_args=["--frame-gap-timeout", "5"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+    record = attempt_record(runs_root, ticket_id)
+    assert record["classification"] == "SUCCESS"
+    assert record["killed_reason"] is None
+
+
+def test_shim_15_partial_line_ndjson_reassembly(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "partial_line_split")
+    ticket_id = wq_add(env, "shim 15: partial-line NDJSON reassembly")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "partial_line_split")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+    record = attempt_record(runs_root, ticket_id)
+    assert record["classification"] == "SUCCESS"
+    # 2 real turns emitted (the lead-in frame + the byte-split frame); a parser that
+    # mishandled the split would either crash, drop the frame, or double-count it.
+    assert record["turns"] == 2
+
+
+def test_shim_16_unknown_frame_type_falls_through_no_crash(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "unknown_frame_type")
+    ticket_id = wq_add(env, "shim 16: unknown frame type, raw fallthrough")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "unknown_frame_type")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+    record = attempt_record(runs_root, ticket_id)
+    assert record["classification"] == "SUCCESS"
 
 
 def test_shim_13_empty_result_text_is_degraded_success(tmp_path):

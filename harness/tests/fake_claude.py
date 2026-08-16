@@ -226,6 +226,52 @@ def main():
             time.sleep(0.01)
         emit({"type": "result", "subtype": "success", "is_error": False})
 
+    elif scenario == "buffered_burst":
+        # shim 14 (RELIABILITY_SPEC.md §C13 NOT-A-FAILURE, #25670): stdout is
+        # block-buffered when piped, so frames can sit unflushed for a few seconds
+        # then arrive as a burst — indistinguishable, from the reader's side, from a
+        # real silent gap of the same length. As long as that gap stays under the
+        # frame-gap watchdog's T_gap, this must complete SUCCESS, never HANG. The test
+        # drives a gap shorter than --frame-gap-timeout to prove no false stall fires.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        time.sleep(float(os.environ.get("FAKE_CLAUDE_BURST_DELAY_S", "1")))
+        for i in range(5):
+            emit({"type": "assistant", "message": {"content": [{"type": "text", "text": f"burst {i}"}]}})
+        if ticket_id:
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+                            capture_output=True, text=True)
+        emit({"type": "result", "subtype": "success", "is_error": False})
+
+    elif scenario == "partial_line_split":
+        # shim 15: NDJSON reassembly — one frame's bytes written in two separate
+        # writes/flushes with no trailing newline on the first, so the reader must
+        # carry the partial line forward and only parse once the newline lands. Bypasses
+        # emit() (always a single flush=True print) to control the raw byte-level split.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        frame = json.dumps({"type": "assistant",
+                             "message": {"content": [{"type": "text", "text": "split frame"}]}})
+        half = len(frame) // 2
+        sys.stdout.write(frame[:half])
+        sys.stdout.flush()
+        time.sleep(0.2)
+        sys.stdout.write(frame[half:] + "\n")
+        sys.stdout.flush()
+        if ticket_id:
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+                            capture_output=True, text=True)
+        emit({"type": "result", "subtype": "success", "is_error": False})
+
+    elif scenario == "unknown_frame_type":
+        # shim 16: a frame type this harness has never seen (future CLI version) must
+        # fall through untouched — no crash, no misclassification — while the rest of
+        # the stream still classifies normally.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        emit({"type": "some_future_frame_type_v99", "wat": "?", "nested": {"a": [1, 2, 3]}})
+        if ticket_id:
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+                            capture_output=True, text=True)
+        emit({"type": "result", "subtype": "success", "is_error": False})
+
     elif scenario == "thinking_paired_turns":
         # wq#645 regression fixture: mirrors the real 2.1.233 shape (thinking block as
         # its own assistant frame ahead of the tool_use/text frame for the same turn).

@@ -259,6 +259,23 @@ def test_governor_pressure_adapter(tmp_path):
     assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "tight"
 
 
+def test_dispatch_cmd_carries_systemd_resource_limits(monkeypatch):
+    # RELIABILITY_SPEC.md §E / wq#648 (S3): every fworker-wq<ID> unit gets MemoryMax +
+    # MemoryHigh + CPUQuota + TasksMax + OOMPolicy=stop, not just TimeoutStopSec.
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "model": "claude-sonnet-5", "effort": "high", "archetype": "standard-engineering",
+    })
+    cmd = router.dispatch_cmd(648, "/home/lumen/foreman")
+    assert cmd[:3] == ["lumen-run", "start", "--name"]
+    assert "--mem" in cmd and cmd[cmd.index("--mem") + 1] == router.WORKER_MEM_MAX
+    assert "--mem-high" in cmd and cmd[cmd.index("--mem-high") + 1] == router.WORKER_MEM_HIGH
+    assert "--cpu" in cmd and cmd[cmd.index("--cpu") + 1] == router.WORKER_CPU_QUOTA
+    assert "--tasks-max" in cmd and cmd[cmd.index("--tasks-max") + 1] == router.WORKER_TASKS_MAX
+    assert "--oom-policy" in cmd and cmd[cmd.index("--oom-policy") + 1] == "stop"
+    assert "--timeout-stop-sec" in cmd and cmd[cmd.index("--timeout-stop-sec") + 1] == "90"
+    assert cmd.index("--") < cmd.index("--model")  # resource flags precede the -- separator
+
+
 # ---- end-to-end against a scratch wq (needs a wq with the wq#617 columns) --------------
 
 def _wq_supports_tuple(wq_bin):

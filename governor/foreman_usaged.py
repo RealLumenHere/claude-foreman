@@ -172,8 +172,14 @@ def poll_once(floors, prev_state):
     now = dt.datetime.now(dt.timezone.utc)
     ok, payload, err = fetch_primary()
     source = "primary"
+    is_429 = (not ok) and err == "HTTP 429"
     if not ok:
         log(f"primary fetch failed: {err}")
+        if is_429:
+            # RELIABILITY_SPEC.md §B: /api/oauth/usage (#31021/#31637) 429s aggressively
+            # under polling and may not recover for hours — this is the expected steady
+            # state, not an incident. cache_age_s below is what we serve instead.
+            log("429 on /api/oauth/usage — reusing cached limits, not treating as an outage")
         fail_streak = (prev_state or {}).get("primary_fail_streak", 0) + 1
         if fail_streak >= floors.get("primary_fail_threshold", 2):
             ok_ccc, payload_ccc, err_ccc = fetch_ccc()
@@ -191,7 +197,12 @@ def poll_once(floors, prev_state):
     else:
         limits = (prev_state or {}).get("limits")
 
-    stale_seconds = None
+    # cache_age_s: how old the limits[] being served are (None until the first-ever good
+    # read). A single bad read (429 or otherwise) only ever raises this by one poll
+    # interval — `stale` (fail-closed) only trips once cache_age_s exceeds
+    # stale_fail_closed_seconds (default 600s), never on one stale read in isolation
+    # (RELIABILITY_SPEC.md §B, fworker bug 1: a lone poll failure must not fail-closed).
+    cache_age_s = None
     stale = True
     if last_good_at:
         try:
@@ -199,8 +210,8 @@ def poll_once(floors, prev_state):
         except ValueError:
             last_good_dt = None
         if last_good_dt:
-            stale_seconds = (now - last_good_dt).total_seconds()
-            stale = stale_seconds > floors.get("stale_fail_closed_seconds", 600)
+            cache_age_s = (now - last_good_dt).total_seconds()
+            stale = cache_age_s > floors.get("stale_fail_closed_seconds", 600)
 
     stop_active = os.path.exists(STOP_PATH)
     events = load_events()
@@ -214,7 +225,9 @@ def poll_once(floors, prev_state):
         "source": source if ok else (prev_state or {}).get("source", "none"),
         "primary_fail_streak": fail_streak,
         "last_good_at": last_good_at,
-        "stale_seconds": stale_seconds,
+        "cache_age_s": cache_age_s,
+        "reused_cache": (not ok) and limits is not None,
+        "reused_cache_reason": err if (not ok and limits is not None) else None,
         "stale": stale,
         "stop_active": stop_active,
         "off_peak": off_peak,
@@ -235,7 +248,7 @@ def poll_once(floors, prev_state):
     prev_stale = bool((prev_state or {}).get("stale"))
     if stale and not prev_stale:
         send_ntfy("urgent", "foreman: FAIL-CLOSED to local-rung-only",
-                   f"usage state stale ({stale_seconds}s since last good poll) — dispatching local rung only")
+                   f"usage state stale ({cache_age_s}s since last good poll) — dispatching local rung only")
     elif prev_stale and not stale:
         send_ntfy("default", "foreman: usage polling recovered", "primary/CCC usage poll is fresh again")
 

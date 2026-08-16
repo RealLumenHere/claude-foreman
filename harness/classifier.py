@@ -13,8 +13,9 @@ otherwise rest on absent evidence must fall to the most conservative reading —
 guessed as SUCCESS, never silently folded into a generic CRASH bucket once the spec
 gives us a sharper answer.
 
-REFUSED/BUDGET/CRASH remain coarse catch-alls for shapes neither S1 nor S2 has a
-sharper spec-mandated answer for yet (wq#648/S3: NDJSON parser hardening, shim 14-16).
+REFUSED/BUDGET/CRASH remain coarse catch-alls for shapes neither S1, S2 nor S3 (wq#648:
+NDJSON parser hardening — reader-level, not a new verdict; shim 14-16 all resolve to
+SUCCESS/HANG on the existing verdict set) has a sharper spec-mandated answer for yet.
 """
 
 SUCCESS = "SUCCESS"
@@ -222,8 +223,8 @@ def classify(state: RunState, exit_code=None) -> str:
         return BUDGET
 
     if subtype is not None:
-        # A result frame arrived but matched none of the shapes above. wq#648/S3 splits
-        # further sharper answers out of this bucket (NDJSON parser hardening, shim 14-16).
+        # A result frame arrived but matched none of the shapes above — still a coarse
+        # catch-all (wq#648/S3 hardened the NDJSON reader, not this bucket's boundary).
         return CRASH
 
     # No result frame at all past this point (§C: "no result frame can NEVER be

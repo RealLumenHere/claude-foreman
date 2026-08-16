@@ -41,8 +41,9 @@ import queue
 sys.path.insert(0, os.path.dirname(__file__))
 from classifier import (
     RunState, classify,
-    SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE,
+    SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
 )
+from oom_forensics import oom_journal_evidence
 
 # RELIABILITY_SPEC.md §A: --max-turns errors on ceiling with a real result frame, so
 # fworker passes it and lets the CLI self-enforce. The supervisor's own real-turn
@@ -364,6 +365,17 @@ def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=N
 # ---------------------------------------------------------------------------
 
 def _reader_thread(pipe, q):
+    """RELIABILITY_SPEC.md §A/§F (#25670, shim 14-15, wq#648/S3): `pipe` is a
+    `text=True, bufsize=1` TextIOWrapper over the child's stdout. Its readline() already
+    does exactly what the NDJSON contract needs — byte-level read + newline split, with
+    any partial trailing bytes (a line still in flight, no \\n yet) held in the
+    TextIOWrapper's own internal buffer and NOT handed back until either a full line or
+    EOF arrives. That's true regardless of how the child's own writes are chunked,
+    which is what makes block-buffered piped stdout (#25670: the child can batch several
+    KB before a flush) a NOT-A-FAILURE class rather than a parser bug — the frames just
+    arrive late in a burst, never malformed or missing. This thread only forwards
+    complete lines; run_child() below does the json.loads()+unparsed-fallthrough.
+    """
     try:
         for line in iter(pipe.readline, ""):
             q.put(("line", line))
@@ -376,7 +388,7 @@ def _reader_thread(pipe, q):
 def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
               frame_gap_s=None, post_result_grace_s=None):
     """Spawn, parse stream-json, enforce watchdogs. Returns (RunState, exit_code,
-    raw_events, killed_reason, cpu_s).
+    raw_events, killed_reason, cpu_s, pid).
 
     RELIABILITY_SPEC.md §E: the frame-gap watchdog (frame_gap_s, default
     INACTIVITY_TIMEOUT_S) is PRIMARY liveness — no frames for that long with the
@@ -488,7 +500,7 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     cpu_s = ((cpu_after.ru_utime + cpu_after.ru_stime)
              - (cpu_before.ru_utime + cpu_before.ru_stime))
 
-    return state, exit_code, raw_events, killed_reason, cpu_s
+    return state, exit_code, raw_events, killed_reason, cpu_s, proc.pid
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +562,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         f"cwd={worktree} max_turns={max_turns} wall_clock={wall_clock}s")
 
     t0 = time.time()
-    state, exit_code, events, killed_reason, cpu_s = run_child(
+    state, exit_code, events, killed_reason, cpu_s, child_pid = run_child(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
         frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace)
     elapsed = time.time() - t0
@@ -562,6 +574,13 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     effective_exit_code = 0 if killed_reason == "post_result_stuck" else exit_code
     raw_classification = classify(state, effective_exit_code)
     classification = raw_classification
+
+    # RELIABILITY_SPEC.md §E "persistent journal for OOM forensics": exit 137 is
+    # already sufficient evidence for the OOM verdict (classify() above) — this is
+    # corroboration only, same as cpu_s, attached to the attempt record so a human/
+    # orchestrator deciding "raise MemoryMax or shrink" (§C6) doesn't have to go
+    # run journalctl by hand. Best-effort; never raises, never changes classification.
+    oom_journal = oom_journal_evidence(t0, pid=child_pid) if classification == OOM else None
 
     # RELIABILITY_SPEC.md §C10: verify acceptance criteria against artifacts BEFORE
     # anything downstream (including the persisted attempt record) trusts a self-
@@ -585,6 +604,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "archetype": archetype, "max_turns": max_turns, "wall_clock_s": wall_clock,
         "classification": classification, "raw_classification": raw_classification,
         "exit_code": exit_code, "cpu_s": cpu_s,
+        "oom_journal": oom_journal,
         "killed_reason": killed_reason, "turns": state.turns,
         "session_id": state.session_id, "resumed_from": resume_session,
         "saw_limit": state.saw_limit, "latest_resets_at": state.latest_resets_at,

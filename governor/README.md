@@ -21,7 +21,13 @@ fail-closed (stale) window well past what the poll cadence should allow.
 
 - `/home/lumen/foreman/state.json` — atomic snapshot of the last poll:
   parsed `limits` (session / weekly_all / Fable weekly_scoped), staleness,
-  active floor breaches, off-peak flag.
+  active floor breaches, off-peak flag. `cache_age_s` is how old the served
+  `limits` are (seconds since the last *good* read) — on a 429 or any other
+  failed poll the last-good `limits` are served as-is, annotated with this
+  age (`reused_cache`/`reused_cache_reason`); `stale` (fail-closed to
+  local-rung-only) only trips once `cache_age_s` exceeds
+  `stale_fail_closed_seconds` (default 600s), never on one bad read alone
+  (wq#648 / RELIABILITY_SPEC.md §B — the fworker bug 1 root cause).
 - `/home/lumen/foreman/STOP` — kill-switch. Presence of this file (any
   content) halts all cloud dispatch immediately; delete it to resume.
 - `/home/lumen/foreman/events.json` — live rejected `rate_limit_event`

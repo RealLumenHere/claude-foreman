@@ -556,6 +556,25 @@ def assign(ticket_id, *, archetype=None, manifest=None, pressure=None, dry_run=F
     return decision
 
 
+# RELIABILITY_SPEC.md §E: "systemd-run units: MemoryMax + MemoryHigh + TasksMax +
+# CPUQuota; OOMPolicy=stop" on every fworker-wq<ID> unit (wq#648/S3 — none of these were
+# wired into dispatch_cmd before this; lumen-run has supported the flags since wq#613,
+# just unused here). Sized for the T5810 (44 cores/60G, governor/README.md §floors):
+# MemoryMax hard-kills a runaway child well before it can pressure the box; MemoryHigh
+# throttles a couple GB ahead of that; CPUQuota leaves the rest of the fleet's own
+# concurrent units headroom; TasksMax catches a fork-bomb-shaped tool loop.
+# OOMPolicy=stop (not lumen-run's "continue" default): on an OOM kill anywhere in the
+# unit's cgroup, cleanly terminate the WHOLE unit (fworker + child) via the normal
+# TimeoutStopSec-graced stop path below, rather than leave a supervisor alive over a
+# cgroup that just lost a process — §E prefers external verdict-aware supervision (the
+# lease reaper, wq#647) picking up a cleanly-stopped unit over relying on fworker's own
+# in-process OOM handling to always be the one still standing to do it.
+WORKER_MEM_MAX = "8G"
+WORKER_MEM_HIGH = "6G"
+WORKER_CPU_QUOTA = "400%"
+WORKER_TASKS_MAX = "512"
+
+
 def dispatch_cmd(ticket_id, repo, *, manifest=None):
     """The fworker command for a ticket whose tuple is already on the ticket (or gets
     assigned now). Mirrors design/T2A §2."""
@@ -572,7 +591,11 @@ def dispatch_cmd(ticket_id, repo, *, manifest=None):
     # run before systemd would otherwise escalate to SIGKILL itself — margin above the
     # spec floor so fworker's own 30s SIGTERM->SIGKILL wait always fits inside it.
     cmd = ["lumen-run", "start", "--name", f"fworker-wq{ticket_id}",
-           "--timeout-stop-sec", "90", "--",
+           "--timeout-stop-sec", "90",
+           "--mem", WORKER_MEM_MAX, "--mem-high", WORKER_MEM_HIGH,
+           "--cpu", WORKER_CPU_QUOTA, "--tasks-max", WORKER_TASKS_MAX,
+           "--oom-policy", "stop",
+           "--",
            "python3", FWORKER, "run", "--ticket", str(ticket_id), "--repo", repo,
            "--model", model]
     if effort and effort != "None":
