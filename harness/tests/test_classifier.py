@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from classifier import (
     RunState, classify,
     SUCCESS, REFUSED, TURNS, LAUNCH_FAILURE, BUDGET, LIMIT, KILLED, OOM,
-    INDETERMINATE, CRASH, HANG,
+    INDETERMINATE, CRASH, HANG, AUTH, DEGRADED_SUCCESS,
 )
 
 
@@ -269,6 +269,82 @@ def test_empty_content_assistant_frame_does_not_count():
     st = RunState()
     st.observe({"type": "assistant", "message": {"content": []}})
     assert st.turns == 0
+
+
+def test_api_retry_authentication_failed_is_auth():
+    # §C11 AUTH: system/api_retry error:authentication_failed.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "api_retry", "attempt": 1, "error": "authentication_failed"},
+        {"type": "result", "subtype": "error_during_execution", "is_error": True},
+    ]
+    assert run(frames) == AUTH
+
+
+def test_api_retry_bare_401_is_auth():
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "api_retry", "attempt": 1, "error_status": 401},
+        {"type": "result", "subtype": "error_during_execution", "is_error": True},
+    ]
+    assert run(frames) == AUTH
+
+
+def test_auth_never_wins_over_a_genuine_rate_limit():
+    # §C4 is checked first — a retry storm carrying both signals reads as LIMIT, the
+    # sharper of the two in that shape.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "api_retry", "attempt": 1, "error_status": 401},
+        {"type": "rate_limit_event", "status": "rejected", "rateLimitType": "five_hour",
+         "resetsAt": 123, "utilization": 1.0},
+        {"type": "result", "subtype": "error_during_execution", "is_error": True},
+    ]
+    assert run(frames) == LIMIT
+
+
+def test_success_with_empty_result_text_is_degraded_success():
+    # §C12 DEGRADED-SUCCESS (#7124): result:success but `result` is explicitly "".
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "result", "subtype": "success", "is_error": False, "result": ""},
+    ]
+    assert run(frames, exit_code=0) == DEGRADED_SUCCESS
+
+
+def test_success_with_missing_result_key_stays_plain_success():
+    # the DEGRADED-SUCCESS check must not fire on fixtures/real traffic that simply
+    # never populate `result` at all — only an explicit empty string is the #7124 shape.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "result", "subtype": "success", "is_error": False},
+    ]
+    assert run(frames, exit_code=0) == SUCCESS
+
+
+def test_success_with_nonempty_result_text_is_plain_success():
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "result", "subtype": "success", "is_error": False, "result": "done"},
+    ]
+    assert run(frames, exit_code=0) == SUCCESS
+
+
+def test_watchdog_kill_after_result_frame_is_not_hang():
+    # §C9 SUCCESS-BUT-STUCK: a watchdog kill AFTER a real terminal result already
+    # landed must not override that result with HANG — fworker.run_child only sets
+    # state.hung on a plain "inactivity" kill (no result ever seen), never on
+    # "post_result_stuck", but classify() itself must also not trust state.hung blindly
+    # once a result_subtype is on record.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "result", "subtype": "success", "is_error": False},
+    ]
+    st = RunState()
+    for f in frames:
+        st.observe(f)
+    st.hung = True
+    assert classify(st, exit_code=0) == SUCCESS
 
 
 def test_ambiguous_result_present_shape_fails_closed_to_crash():

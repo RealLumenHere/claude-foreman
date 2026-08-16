@@ -80,12 +80,12 @@ def wq_status(env, ticket_id):
 
 
 def run_fworker(env, ticket_id, repo, scenario, model="claude-sonnet-5", effort="high",
-                 archetype="mechanical-edit"):
+                 archetype="mechanical-edit", extra_args=None, timeout=60):
     cmd = [sys.executable, FWORKER, "run", "--ticket", str(ticket_id), "--repo", repo,
            "--model", model, "--effort", effort, "--archetype", archetype,
            "--claude-bin", FAKE_CLAUDE,
-           "--worker-id", f"test-fworker-wq{ticket_id}"]
-    return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=60)
+           "--worker-id", f"test-fworker-wq{ticket_id}"] + (extra_args or [])
+    return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout)
 
 
 def test_success_end_to_end_closes_ticket_and_isolates_worktree(tmp_path):

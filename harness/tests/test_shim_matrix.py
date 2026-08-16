@@ -1,11 +1,13 @@
-"""RELIABILITY_SPEC.md §F fake-claude shim matrix, items 1-8 (wq#646, S1 scope).
+"""RELIABILITY_SPEC.md §F fake-claude shim matrix.
+Items 1-8 (wq#646, S1 scope): SUCCESS/TURNS/LAUNCH_FAILURE/LIMIT/KILLED/OOM/INDETERMINATE.
+Items 9-13 (wq#647, S2 scope): STALL watchdog, SUCCESS-BUT-STUCK, FALSE-COMPLETE, AUTH,
+DEGRADED-SUCCESS. Items 14-16 (buffered-burst/partial-line/unknown-frame NDJSON parser
+hardening) are wq#648 (S3) — not built here.
 
 Each test drives fworker.py end-to-end against a real subprocess invocation of the
 fake `claude` shim (tests/fake_claude.py, canned NDJSON + real exit codes) — same
 zero-quota pattern as test_fworker_integration.py, whose scratch-repo/scratch-wq/
-scratch-env helpers this file reuses. Items 9-16 (STALL, SUCCESS-BUT-STUCK,
-FALSE-COMPLETE, AUTH, DEGRADED-SUCCESS, buffered-burst/partial-line/unknown-frame
-hardening) are wq#647/wq#648 (S2/S3) — not built here.
+scratch-env helpers this file reuses.
 """
 import json
 import os
@@ -132,3 +134,78 @@ def test_shim_8_task_notification_last_no_result_is_indeterminate(tmp_path):
     assert record["classification"] == "INDETERMINATE"
     assert record["exit_code"] == 0
     assert record["result_subtype"] is None
+
+
+def test_shim_9_mid_task_silence_triggers_frame_gap_watchdog(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "mid_task_silence")
+    env["FAKE_CLAUDE_SILENCE_S"] = "3"
+    ticket_id = wq_add(env, "shim 9: mid-task silence > T_gap")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "mid_task_silence",
+                          extra_args=["--frame-gap-timeout", "1"])
+    assert wq_status(env, ticket_id) == "blocked"
+    record = attempt_record(runs_root, ticket_id, n=2)
+    assert record["classification"] == "HANG"
+    assert record["killed_reason"] == "inactivity"
+
+
+def test_shim_10_result_then_never_exit_forces_kill_keeps_success(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "success_then_hang")
+    ticket_id = wq_add(env, "shim 10: result-then-never-exit")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success_then_hang",
+                          extra_args=["--post-result-grace", "2"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+    record = attempt_record(runs_root, ticket_id)
+    assert record["classification"] == "SUCCESS"
+    assert record["killed_reason"] == "post_result_stuck"
+
+
+def test_shim_11_success_with_unmet_criteria_is_false_complete(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "success_false_complete")
+    ticket_id = wq_add(env, "shim 11: success but unmet criteria")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success_false_complete")
+    assert wq_status(env, ticket_id) == "blocked"
+    record = attempt_record(runs_root, ticket_id, n=2)
+    assert record["classification"] == "FALSE_COMPLETE"
+
+
+def test_shim_12_401_is_auth(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "auth_401")
+    ticket_id = wq_add(env, "shim 12: 401 authentication_failed")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "auth_401")
+    assert wq_status(env, ticket_id) == "blocked"
+    record = attempt_record(runs_root, ticket_id, n=2)
+    assert record["classification"] == "AUTH"
+
+
+def test_shim_13_empty_result_text_is_degraded_success(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "success_empty_result_text")
+    ticket_id = wq_add(env, "shim 13: empty result text")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success_empty_result_text")
+    first = attempt_record(runs_root, ticket_id, n=1)
+    assert first["raw_classification"] == "DEGRADED_SUCCESS"
+    # no wq done call and no landed commit in this fixture -> same artifact-check
+    # fallthrough as FALSE-COMPLETE once do_attempt() has relabeled it.
+    assert wq_status(env, ticket_id) == "blocked"
+    last = attempt_record(runs_root, ticket_id, n=2)
+    assert last["classification"] == "FALSE_COMPLETE"

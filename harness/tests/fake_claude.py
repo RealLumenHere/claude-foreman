@@ -171,6 +171,47 @@ def main():
         fire_lifecycle("end", session_id, effort)
         sys.exit(0)
 
+    elif scenario == "mid_task_silence":
+        # shim 9 (§C8 STALL): a real turn, then silence with the process still alive —
+        # no more frames ever. The test drives fworker with a short --frame-gap-timeout
+        # so the watchdog fires well inside the test's own subprocess timeout.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        time.sleep(float(os.environ.get("FAKE_CLAUDE_SILENCE_S", "5")))
+
+    elif scenario == "success_then_hang":
+        # shim 10 (§C9 SUCCESS-BUT-STUCK, #25629): a real worker finishes AND calls wq
+        # done itself (same as the "success" scenario), then the process just never
+        # exits. fworker's post-result grace window forces the kill; the result frame
+        # already observed is still the evidence of record (SUCCESS, not HANG/KILLED).
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        if ticket_id:
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+                            capture_output=True, text=True)
+        emit({"type": "result", "subtype": "success", "is_error": False, "result": "done"})
+        time.sleep(float(os.environ.get("FAKE_CLAUDE_STUCK_S", "3600")))
+
+    elif scenario == "success_false_complete":
+        # shim 11 (§C10 FALSE-COMPLETE): a clean result:success frame, but the worker
+        # never actually closed the ticket (no wq done) and landed no commit — the
+        # acceptance-criteria-unmet case. No artifact exists to verify against, so
+        # fworker must not trust this self-report.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "done, I think"}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False, "result": "all done"})
+
+    elif scenario == "auth_401":
+        # shim 12 (§C11 AUTH): system/api_retry authentication_failed + a bare 401.
+        emit({"type": "api_retry", "attempt": 1, "error_status": 401,
+              "error": "authentication_failed"})
+        emit({"type": "result", "subtype": "error_during_execution", "is_error": True,
+              "errors": ["authentication_failed"]})
+
+    elif scenario == "success_empty_result_text":
+        # shim 13 (§C12 DEGRADED-SUCCESS, #7124): result:success but the `result` text
+        # field is the empty string. No wq done call either, so this also exercises the
+        # same artifact-verification fallthrough as FALSE-COMPLETE once classified.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False, "result": ""})
+
     elif scenario == "crash":
         emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "oops"}]}})
         emit({"type": "result", "subtype": "error_during_execution", "is_error": True,

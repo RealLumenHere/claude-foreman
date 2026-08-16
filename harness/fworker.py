@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import re
+import resource
 import shlex
 import signal
 import subprocess
@@ -38,7 +39,10 @@ import threading
 import queue
 
 sys.path.insert(0, os.path.dirname(__file__))
-from classifier import RunState, classify, SUCCESS, LIMIT
+from classifier import (
+    RunState, classify,
+    SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE,
+)
 
 # RELIABILITY_SPEC.md §A: --max-turns errors on ceiling with a real result frame, so
 # fworker passes it and lets the CLI self-enforce. The supervisor's own real-turn
@@ -61,7 +65,6 @@ GOVERNOR_CLI = os.environ.get("FOREMAN_GOVERNOR_CLI",
                                os.path.join(FOREMAN_ROOT, "governor", "foreman_usaged.py"))
 WORKTREES_ROOT = os.environ.get("FOREMAN_WORKTREES_ROOT", "/home/lumen/worktrees")
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
-LUMEN_PR_BIN = os.environ.get("FOREMAN_LUMEN_PR_BIN", "/home/lumen/bin/lumen-pr")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 # wq#617 orchestrator tier: routing (tuple assignment) + verify-pass filing.
 ORCH_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "orchestrator"))
@@ -83,9 +86,24 @@ ARCHETYPE_MAX_TURNS = {
 }
 DEFAULT_MAX_TURNS = ARCHETYPE_MAX_TURNS["standard-engineering"]
 
+def _envint(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 WALL_CLOCK_DEFAULT_S = 3600
 WALL_CLOCK_RCA_S = 7200
-INACTIVITY_TIMEOUT_S = 10 * 60
+# RELIABILITY_SPEC.md §E: frame-gap watchdog is PRIMARY liveness, T_gap configurable
+# 120-300s (above the slowest legit tool call) — wall-clock above is the secondary
+# ceiling. 600s predates §E and sat well outside that range; --frame-gap-timeout / this
+# env var override it per-run (tests need a fast one), the default now lives in-range.
+INACTIVITY_TIMEOUT_S = _envint("FOREMAN_FRAME_GAP_S", 240)
+# §C9 SUCCESS-BUT-STUCK (#25629): once a terminal result frame has landed, a much
+# shorter grace covers the "process just won't exit" case — no more real work is
+# coming, so there is no reason to wait out the full frame-gap window before forcing it.
+POST_RESULT_GRACE_S = _envint("FOREMAN_POST_RESULT_GRACE_S", 20)
 HEARTBEAT_INTERVAL_S = 10 * 60
 MAX_ATTEMPTS = 2
 RESUME_WAIT_MAX_S = 6 * 3600
@@ -355,8 +373,23 @@ def _reader_thread(pipe, q):
         q.put(("eof", None))
 
 
-def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt):
-    """Spawn, parse stream-json, enforce watchdogs. Returns (RunState, exit_code, raw_events)."""
+def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
+              frame_gap_s=None, post_result_grace_s=None):
+    """Spawn, parse stream-json, enforce watchdogs. Returns (RunState, exit_code,
+    raw_events, killed_reason, cpu_s).
+
+    RELIABILITY_SPEC.md §E: the frame-gap watchdog (frame_gap_s, default
+    INACTIVITY_TIMEOUT_S) is PRIMARY liveness — no frames for that long with the
+    process still alive is a stall (§C8), SIGTERM'd here and resumable by the caller.
+    Wall-clock (wall_clock_s) is the secondary ceiling. Neither is CPU-based: CPU time
+    is corroboration only (returned as cpu_s for the attempt record / LAUNCH_FAILURE
+    triage), never a watchdog trigger — a child can legitimately burn near-zero CPU
+    while waiting on a slow tool call.
+    """
+    frame_gap_s = frame_gap_s if frame_gap_s is not None else INACTIVITY_TIMEOUT_S
+    post_result_grace_s = (post_result_grace_s if post_result_grace_s is not None
+                            else POST_RESULT_GRACE_S)
+    cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -374,20 +407,29 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt):
     deadline = start + wall_clock_s
     killed_reason = None
     turn_backstop = max_turns + TURN_BACKSTOP_BUFFER
+    result_seen_at = None
+    # short poll interval when either watchdog window is itself short (tests), so
+    # detection latency stays a fraction of the window instead of the flat 5s floor.
+    poll_timeout = max(0.25, min(5, frame_gap_s, post_result_grace_s) / 4)
 
     while True:
         now = time.time()
         if now >= deadline:
             killed_reason = "wall_clock"
             break
-        if now - last_event >= INACTIVITY_TIMEOUT_S:
+        # §C9 SUCCESS-BUT-STUCK: once a terminal result has landed, don't wait out the
+        # full frame-gap window — a much shorter grace covers "process won't exit".
+        if result_seen_at is not None and now - result_seen_at >= post_result_grace_s:
+            killed_reason = "post_result_stuck"
+            break
+        if now - last_event >= frame_gap_s:
             killed_reason = "inactivity"
             break
         if now - last_heartbeat >= HEARTBEAT_INTERVAL_S:
             wq_heartbeat(ticket_id)
             last_heartbeat = now
         try:
-            kind, payload = q.get(timeout=5)
+            kind, payload = q.get(timeout=poll_timeout)
         except queue.Empty:
             continue
         if kind == "eof":
@@ -408,6 +450,8 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt):
         state.observe(frame)
         if frame.get("type") == "rate_limit_event" and frame.get("status") == "rejected":
             report_limit_event(frame)
+        if frame.get("type") == "result":
+            result_seen_at = time.time()
         if state.turns >= turn_backstop:
             killed_reason = "turns_exceeded"
             break
@@ -436,7 +480,15 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt):
         # would (SIGTERM=143, SIGKILL=137).
         exit_code = 128 - exit_code
 
-    return state, exit_code, raw_events, killed_reason
+    # §E: CPU corroboration-only — RUSAGE_CHILDREN is cumulative across every child this
+    # process has ever reaped, so a before/after delta isolates just this one. Never fed
+    # into classify(); attached to the attempt record for LAUNCH_FAILURE/CRASH triage
+    # ("tiny CPU corroborates" per §C3) and left for a human/orchestrator to read.
+    cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu_s = ((cpu_after.ru_utime + cpu_after.ru_stime)
+             - (cpu_before.ru_utime + cpu_before.ru_stime))
+
+    return state, exit_code, raw_events, killed_reason, cpu_s
 
 
 # ---------------------------------------------------------------------------
@@ -498,20 +550,41 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         f"cwd={worktree} max_turns={max_turns} wall_clock={wall_clock}s")
 
     t0 = time.time()
-    state, exit_code, events, killed_reason = run_child(
-        cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt)
+    state, exit_code, events, killed_reason, cpu_s = run_child(
+        cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
+        frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace)
     elapsed = time.time() - t0
 
-    classification = classify(state, exit_code)
-    log(f"attempt {attempt}: classification={classification} exit={exit_code} "
-        f"killed_reason={killed_reason} turns={state.turns} elapsed={elapsed:.0f}s "
-        f"session_id={state.session_id}")
+    # §C9 SUCCESS-BUT-STUCK: fworker forced this kill AFTER a real terminal result had
+    # already landed — the resulting SIGTERM/SIGKILL exit code is expected, not a §D
+    # exit-code/frame disagreement, so it must not flip an otherwise-legitimate result
+    # to INDETERMINATE. classify() only ever sees a "clean" exit for this one case.
+    effective_exit_code = 0 if killed_reason == "post_result_stuck" else exit_code
+    raw_classification = classify(state, effective_exit_code)
+    classification = raw_classification
+
+    # RELIABILITY_SPEC.md §C10: verify acceptance criteria against artifacts BEFORE
+    # anything downstream (including the persisted attempt record) trusts a self-
+    # reported success — decided here, not inside reconcile(), so the record on disk
+    # carries the same verdict reconcile() acts on. `raw_classification` keeps the
+    # pre-verification classifier output too (e.g. DEGRADED_SUCCESS), so RCA can still
+    # see WHY this got relabeled instead of just seeing FALSE_COMPLETE.
+    if classification in (SUCCESS, DEGRADED_SUCCESS) and not check_artifacts_done(ticket_id, worktree):
+        log(f"{classification} but acceptance criteria unmet (ticket still open, no "
+            f"landed commit found) — RELIABILITY_SPEC.md §C10: never trust the "
+            f"self-report, treating as FALSE_COMPLETE.")
+        classification = FALSE_COMPLETE
+
+    log(f"attempt {attempt}: classification={classification} raw={raw_classification} "
+        f"exit={exit_code} killed_reason={killed_reason} turns={state.turns} "
+        f"elapsed={elapsed:.0f}s cpu_s={cpu_s:.1f} session_id={state.session_id}")
 
     attempt_record = {
         "ticket": ticket_id, "attempt": attempt, "worker_id": worker_id,
         "worktree": worktree, "branch": branch, "model": args.model, "effort": args.effort,
         "archetype": archetype, "max_turns": max_turns, "wall_clock_s": wall_clock,
-        "classification": classification, "exit_code": exit_code,
+        "classification": classification, "raw_classification": raw_classification,
+        "exit_code": exit_code, "cpu_s": cpu_s,
         "killed_reason": killed_reason, "turns": state.turns,
         "session_id": state.session_id, "resumed_from": resume_session,
         "saw_limit": state.saw_limit, "latest_resets_at": state.latest_resets_at,
@@ -574,29 +647,90 @@ def resolve_tuple_from_ticket(args):
         args.model, args.effort = "claude-sonnet-5", args.effort or "high"
 
 
+def check_artifacts_done(ticket_id, worktree):
+    """RELIABILITY_SPEC.md §C10/§C12: never trust the model's own self-report (a
+    result:success frame, or a silent/odd frame shape) — verify against artifacts.
+    Primary: wq status==done (the worker calls `wq done` itself on a real finish, the
+    most direct signal there is). Secondary corroboration: a commit on the default
+    branch referencing the ticket, for the case where real work landed but the worker
+    died/got cut off before it could close the ticket itself."""
+    cur = wq_show(ticket_id)
+    if cur.get("status") == "done":
+        return True
+    try:
+        # a landed PR merges via lumen-pr's remote API call, not a local fetch — the
+        # worktree's cached origin/main can be stale, which would false-negative a
+        # real landing. Best-effort refresh first; a failed/slow fetch just leaves the
+        # (possibly stale) local ref, same conservative fallthrough as no signal at all.
+        subprocess.run(["git", "-C", worktree, "fetch", "-q", "origin", "main"],
+                        capture_output=True, text=True, timeout=15)
+    except Exception:
+        pass
+    try:
+        p = subprocess.run(
+            ["git", "-C", worktree, "log", "origin/main", "--oneline", "-n", "1",
+             "--grep", rf"wq#{ticket_id}\b"],
+            capture_output=True, text=True, timeout=15)
+        if p.returncode == 0 and p.stdout.strip():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def handle_resumable_failure(args, ticket_id, attempt, classification, state, events, worktree):
+    """RELIABILITY_SPEC.md §C7/§C8/§C10/§C11: FALSE_COMPLETE, INDETERMINATE, HANG
+    (§C8's STALL) and AUTH all get a ground-truth artifact check FIRST — §C7's
+    "verify artifacts, re-verdict" applies just as much to a dropped-result
+    drain-death as to an explicit unmet-criteria success frame (do_attempt() already
+    ran this same check for the SUCCESS/DEGRADED_SUCCESS case before relabeling it
+    FALSE_COMPLETE; re-running it here is what makes INDETERMINATE/HANG/AUTH's own
+    "verify artifacts, re-verdict" requirement real instead of just resuming blind).
+    If artifacts don't confirm completion, these four share one more property: a live
+    session_id worth resuming rather than a launch that needs a fresh worktree (AUTH
+    resumes so the next `claude` invocation's own OAuth refresh — BUILD_PLAN.md §2 —
+    gets a chance to clear it; HANG/STALL resumes past a stall instead of restarting
+    real progress from zero). Falls through to handle_failure's block-after-
+    MAX_ATTEMPTS path once attempts are exhausted or there is no session_id to resume.
+    """
+    if check_artifacts_done(ticket_id, worktree):
+        log(f"{classification} but artifacts confirm the ticket actually landed "
+            f"(session {state.session_id}) — verifying beats trusting the missing/odd "
+            f"frame shape.")
+        if wq_show(ticket_id).get("status") != "done":
+            wq_done(ticket_id, f"fworker attempt {attempt}: verified via artifacts "
+                                f"after {classification} (session {state.session_id})")
+        file_verify_pass(ticket_id, args)
+        return EXIT_OK
+    write_prior_attempt_notes(ticket_id, attempt, worktree, events, classification)
+    if attempt < MAX_ATTEMPTS and state.session_id:
+        log(f"{classification}: attempt {attempt} < {MAX_ATTEMPTS}, resuming session "
+            f"{state.session_id}")
+        return do_attempt(args, attempt + 1, resume_session=state.session_id,
+                           prior_worktree=worktree)
+    return handle_failure(args, ticket_id, attempt, classification, state, events, worktree)
+
+
 def reconcile(args, ticket_id, attempt, classification, state, events, worktree, state_path):
-    if classification == SUCCESS:
-        cur = wq_show(ticket_id)
-        status = cur.get("status", "")
-        if status == "done":
-            log("SUCCESS: worker already ran `wq done`.")
-            file_verify_pass(ticket_id, args)
-            return EXIT_OK
-        # worker finished cleanly but never closed the ticket: check whether the
-        # branch actually landed before deciding this was a lie-at-the-finish-line.
-        p = subprocess.run([LUMEN_PR_BIN, "check", worktree], capture_output=True, text=True)
-        if "open PRs" in p.stdout and "no open PR" not in p.stdout.lower():
-            log("SUCCESS but ticket still open and no clear landed PR — treating as CRASH.")
-            return handle_failure(args, ticket_id, attempt, "CRASH", state, events, worktree,
-                                   note="success frame but ticket not closed / PR not landed")
-        wq_done(ticket_id, f"fworker attempt {attempt}: {state_path}")
+    # SUCCESS/DEGRADED_SUCCESS only ever reach here when do_attempt() already verified
+    # artifacts confirm the ticket landed (else it relabeled the classification
+    # FALSE_COMPLETE before calling reconcile at all) — safe to trust directly.
+    if classification in (SUCCESS, DEGRADED_SUCCESS):
+        if wq_show(ticket_id).get("status") != "done":
+            wq_done(ticket_id, f"fworker attempt {attempt} ({classification}): {state_path}")
+        else:
+            log(f"{classification}: worker already ran `wq done`.")
         file_verify_pass(ticket_id, args)
         return EXIT_OK
 
     if classification == LIMIT:
         return handle_limit(args, ticket_id, attempt, state, worktree)
 
-    # TURNS / LAUNCH_FAILURE / KILLED / OOM / INDETERMINATE / REFUSED / BUDGET / CRASH / HANG
+    if classification in (FALSE_COMPLETE, INDETERMINATE, AUTH, HANG):
+        return handle_resumable_failure(args, ticket_id, attempt, classification, state,
+                                         events, worktree)
+
+    # TURNS / LAUNCH_FAILURE / KILLED / OOM / REFUSED / BUDGET / CRASH
     return handle_failure(args, ticket_id, attempt, classification, state, events, worktree)
 
 
@@ -632,7 +766,7 @@ def handle_limit(args, ticket_id, attempt, state, worktree):
     return EXIT_LIMIT
 
 
-def handle_failure(args, ticket_id, attempt, classification, state, events, worktree, note=None):
+def handle_failure(args, ticket_id, attempt, classification, state, events, worktree):
     prior_notes_path = write_prior_attempt_notes(ticket_id, attempt, worktree, events,
                                                   classification)
     if attempt < MAX_ATTEMPTS:
@@ -641,8 +775,6 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
 
     transcript_hint = f"~/.claude/projects/*/{state.session_id}.jsonl" if state.session_id else "unknown"
     reason = f"{classification} after {attempt} attempts; transcript={transcript_hint}"
-    if note:
-        reason += f"; {note}"
     log(f"BLOCKED: {reason}")
     wq_block(ticket_id, reason)
     ntfy("foreman BLOCKED", f"wq#{ticket_id}: {reason}", priority="high")
@@ -731,6 +863,10 @@ def main():
     p_run.add_argument("--archetype", default=None)
     p_run.add_argument("--max-turns", type=int, default=None)
     p_run.add_argument("--wall-clock-timeout", type=int, default=None)
+    # RELIABILITY_SPEC.md §E: frame-gap watchdog is the primary liveness check,
+    # T_gap configurable 120-300s (default/env var: INACTIVITY_TIMEOUT_S above).
+    p_run.add_argument("--frame-gap-timeout", type=int, default=None)
+    p_run.add_argument("--post-result-grace", type=int, default=None)
     p_run.add_argument("--worker-id", default=None)
     p_run.add_argument("--resume", action="store_true")
     p_run.add_argument("--claude-bin", default="claude",

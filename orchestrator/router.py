@@ -566,7 +566,13 @@ def dispatch_cmd(ticket_id, repo, *, manifest=None):
         if not d.get("rung"):
             raise SystemExit(f"router: cannot route wq#{ticket_id}: {d['reasons']}")
         model, effort, arch = d["rung"]["model"], d["rung"]["effort"], d["archetype"]
-    cmd = ["lumen-run", "start", "--name", f"fworker-wq{ticket_id}", "--",
+    # RELIABILITY_SPEC.md §E: TimeoutStopSec>=60 on worker units so a `systemctl stop`/
+    # unit-recycle sends SIGTERM and gives fworker's own child-kill escalation
+    # (fworker.run_child, SIGTERM then SIGKILL) and the CLI's SessionEnd hooks time to
+    # run before systemd would otherwise escalate to SIGKILL itself — margin above the
+    # spec floor so fworker's own 30s SIGTERM->SIGKILL wait always fits inside it.
+    cmd = ["lumen-run", "start", "--name", f"fworker-wq{ticket_id}",
+           "--timeout-stop-sec", "90", "--",
            "python3", FWORKER, "run", "--ticket", str(ticket_id), "--repo", repo,
            "--model", model]
     if effort and effort != "None":

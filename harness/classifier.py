@@ -1,4 +1,11 @@
-"""Stream-json event classifier — RELIABILITY_SPEC.md §C/§D verdict engine (S1, wq#646).
+"""Stream-json event classifier — RELIABILITY_SPEC.md §C/§D verdict engine.
+S1 (wq#646): SUCCESS, TURNS, LAUNCH_FAILURE, LIMIT, KILLED, OOM, INDETERMINATE, shim 1-8.
+S2 (wq#647): AUTH, DEGRADED_SUCCESS, HANG now carries §C8's STALL semantics (resumable,
+not a fresh restart — see fworker.handle_resumable_failure), shim 9-13. FALSE_COMPLETE
+is exported here as the shared outcome vocabulary, but classify() never returns it —
+"acceptance criteria unmet" isn't a stream-json shape, it's a fact about the ticket/repo
+after the fact, so fworker.reconcile()'s check_artifacts_done() decides it (§C10: verify
+against artifacts, never the model's self-report).
 
 RELIABILITY_SPEC.md is frozen law for this harness (cross-validated by wq#645's live
 findings). §D's governing invariant: no verdict without evidence. A verdict that would
@@ -6,12 +13,8 @@ otherwise rest on absent evidence must fall to the most conservative reading —
 guessed as SUCCESS, never silently folded into a generic CRASH bucket once the spec
 gives us a sharper answer.
 
-S1 scope (this file): the 7 canonical outcomes exercised by RELIABILITY_SPEC.md §F
-shim tests 1-8 — SUCCESS, TURNS, LAUNCH_FAILURE, LIMIT, KILLED, OOM, INDETERMINATE.
-§C's remaining outcomes (STALL, SUCCESS-BUT-STUCK, FALSE-COMPLETE, AUTH,
-DEGRADED-SUCCESS, NOT-A-FAILURE — shim tests 9-16) are wq#647/wq#648 (S2/S3) work;
-REFUSED/BUDGET/CRASH/HANG here are pre-existing extensions kept as coarse catch-alls
-for shapes S1 doesn't yet have a sharper spec-mandated answer for.
+REFUSED/BUDGET/CRASH remain coarse catch-alls for shapes neither S1 nor S2 has a
+sharper spec-mandated answer for yet (wq#648/S3: NDJSON parser hardening, shim 14-16).
 """
 
 SUCCESS = "SUCCESS"
@@ -25,6 +28,16 @@ OOM = "OOM"
 INDETERMINATE = "INDETERMINATE"
 CRASH = "CRASH"
 HANG = "HANG"
+AUTH = "AUTH"
+DEGRADED_SUCCESS = "DEGRADED_SUCCESS"
+FALSE_COMPLETE = "FALSE_COMPLETE"
+
+# §C12 DEGRADED-SUCCESS (#7124) fires only when a result frame explicitly carries an
+# EMPTY result text — most result frames in these fixtures/real traffic omit the key
+# entirely (it is absent on non-success subtypes, and plenty of legitimate successes
+# never populate it either), which must stay plain SUCCESS. A sentinel distinguishes
+# "key never seen" from "key seen, empty string" so observe() doesn't have to guess.
+_UNSET = object()
 
 
 class RunState:
@@ -48,12 +61,14 @@ class RunState:
         self.compact_boundaries = 0
         self.result_subtype = None
         self.result_is_error = None
+        self.result_text = _UNSET
         self.terminal_reason = None
         self.last_frame_type = None
         self.last_event_ts = None
         self.hung = False
         self.turns = 0
         self.turns_exceeded = False
+        self.saw_auth_failure = False
 
     def observe(self, frame):
         """Feed one parsed stream-json frame (dict). Returns nothing; mutates state."""
@@ -131,6 +146,12 @@ class RunState:
             })
         if ftype == "api_retry":
             self.api_retries += 1
+            # §C11 AUTH: system/api_retry error in {authentication_failed} or a bare 401,
+            # same frame shape §B/§C4's rate_limit/429 detection already reads from.
+            if (frame.get("error") == "authentication_failed"
+                    or frame.get("error_status") == 401
+                    or frame.get("category") == "authentication_failed"):
+                self.saw_auth_failure = True
 
         if ftype == "compact_boundary":
             self.compact_boundaries += 1
@@ -139,6 +160,8 @@ class RunState:
             self.result_subtype = frame.get("subtype")
             self.result_is_error = frame.get("is_error")
             self.terminal_reason = frame.get("terminal_reason")
+            if "result" in frame:
+                self.result_text = frame.get("result")
 
 
 def classify(state: RunState, exit_code=None) -> str:
@@ -148,7 +171,13 @@ def classify(state: RunState, exit_code=None) -> str:
     cross-check is mandatory: SUCCESS is only legal at exit 0; absent a result frame,
     exit code IS the primary discriminator between KILLED(143)/OOM(137)/other.
     """
-    if state.hung:
+    # §C9 SUCCESS-BUT-STUCK: a watchdog kill AFTER a real terminal result already
+    # arrived is fworker forcing a stuck process to exit, not a stall — the result
+    # frame is still the evidence of record. `state.hung` only means HANG/STALL (§C8)
+    # when no result frame was ever observed; fworker.run_child sets a distinct
+    # killed_reason ("post_result_stuck", never "inactivity") once a result has landed,
+    # precisely so this check has something to key off.
+    if state.hung and state.result_subtype is None:
         return HANG
 
     subtype = state.result_subtype
@@ -169,6 +198,10 @@ def classify(state: RunState, exit_code=None) -> str:
             return INDETERMINATE
         if state.saw_refusal_no_fallback:
             return REFUSED
+        # §C12 DEGRADED-SUCCESS (#7124): a genuine success frame whose `result` text
+        # came back the empty string — read artifacts/transcript rather than trust it.
+        if state.result_text == "":
+            return DEGRADED_SUCCESS
         return SUCCESS
 
     # §C2 TURNS — needs evidence: an actual result frame AND >=1 real assistant turn.
@@ -181,13 +214,16 @@ def classify(state: RunState, exit_code=None) -> str:
     # §C4 LIMIT
     if state.saw_limit:
         return LIMIT
+    # §C11 AUTH: checked after LIMIT (a rate-limited retry storm can also carry stray
+    # 401s from an expired-mid-backoff token; the rate-limit read is the sharper one).
+    if state.saw_auth_failure:
+        return AUTH
     if subtype == "error_max_budget_usd":
         return BUDGET
 
     if subtype is not None:
-        # A result frame arrived but matched none of the shapes above. S1 keeps this
-        # bucket coarse (CRASH); wq#647/wq#648 split AUTH / DEGRADED-SUCCESS /
-        # FALSE-COMPLETE out of it per §C11/§C12/§C10.
+        # A result frame arrived but matched none of the shapes above. wq#648/S3 splits
+        # further sharper answers out of this bucket (NDJSON parser hardening, shim 14-16).
         return CRASH
 
     # No result frame at all past this point (§C: "no result frame can NEVER be

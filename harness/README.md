@@ -9,8 +9,10 @@ child at a time on the shared login (multi-worker auth is T2b, gated on T2b-gate
 
     fworker.py              supervisor: spawn + parse + classify + wq lifecycle
     classifier.py           RELIABILITY_SPEC.md §C/§D verdict engine (SUCCESS/TURNS/
-                             LAUNCH_FAILURE/LIMIT/KILLED/OOM/INDETERMINATE + REFUSED/
-                             BUDGET/CRASH/HANG)
+                             LAUNCH_FAILURE/LIMIT/KILLED/OOM/INDETERMINATE/AUTH/
+                             DEGRADED_SUCCESS/FALSE_COMPLETE + REFUSED/BUDGET/CRASH/HANG)
+    reaper.py                independent wq lease reaper (§E, wq#647) — `wq reap` +
+                             an aq row per reap, decoupled from any worker's own exit path
     worker-settings.json    settings pack — replaces worker-settings-interim.json
     guard.sh                PreToolUse fail-closed guard (§5)
     prompts/worker.md       worker prompt template
@@ -26,9 +28,12 @@ Runtime paths (governor-owned or created on demand, not checked in):
     python3 harness/fworker.py run --ticket <ID> --repo <path> \
       --model claude-sonnet-5 --effort high --archetype standard-engineering
 
-Launch via `lumen-run` so the supervisor itself survives DC-gateway reaping:
+Launch via `lumen-run` so the supervisor itself survives DC-gateway reaping. RELIABILITY_SPEC.md
+§E: `--timeout-stop-sec 90` (>=60) so a unit stop/recycle SIGTERMs fworker with enough grace
+for its own SIGTERM->SIGKILL child-kill escalation and the CLI's SessionEnd hooks to finish
+cleanly instead of racing a hard systemd SIGKILL — `router.py dispatch-cmd` already sets this:
 
-    lumen-run start --name fworker-wq<ID> -- \
+    lumen-run start --name fworker-wq<ID> --timeout-stop-sec 90 -- \
       python3 /home/lumen/foreman/harness/fworker.py run --ticket <ID> --repo <path> \
         --model <id> --effort <name> --archetype <name>
 
@@ -41,6 +46,28 @@ reconcile it calls `../orchestrator/judgment.py verify-pass --for <ID>` (best-ef
 Exit codes: `0` success, `10` claim error, `11` deferred (governor/STOP gate), `12`
 blocked (2 failed attempts, ticket wq-blocked), `13` limit (ticket released, resets
 outside the resume window).
+
+`--frame-gap-timeout SEC` (§E: T_gap, default/env `FOREMAN_FRAME_GAP_S`, 120-300s range)
+overrides the primary stall watchdog; `--post-result-grace SEC` (env
+`FOREMAN_POST_RESULT_GRACE_S`) is the much shorter grace after a terminal result frame
+before fworker force-kills a stuck-but-already-succeeded child (§C9). Both exist mainly
+so tests can run them fast — production defaults are fine left alone.
+
+## Lease reaper (wq#647, §E)
+
+wq's own lease-expiry reclaim only runs lazily, inside a `wq claim` call for the SAME
+lane — a dead fworker (host died, OOM, DC-gateway reap of something that wasn't under
+lumen-run) leaves its claim dangling until someone happens to claim that lane again,
+which can be hours (fq#614: three same-day drain-deaths this way). `reaper.py` is an
+independent process that sweeps ALL lanes on its own schedule:
+
+    python3 harness/reaper.py sweep            # one pass, all lanes
+    lumen-run start --name foreman-reaper -- \
+      python3 /home/lumen/foreman/harness/reaper.py loop --interval 120
+
+Every reclaim posts an `aq` row (source `foreman-reaper`) so a dangling claim is never
+silent again, then reverts the ticket to `open` via `wq reap` (a new lane-independent
+subcommand, same reclaim semantics `wq claim` already uses for its own lane).
 
 ## Build-time discovery vs the design (read before touching --max-turns)
 
