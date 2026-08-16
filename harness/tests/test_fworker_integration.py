@@ -18,6 +18,9 @@ import sys
 
 HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HARNESS_DIR)
+import fworker  # noqa: E402 — reuse slugify() so pre-created branch names match make_worktree's
+
 FWORKER = os.path.join(HARNESS_DIR, "fworker.py")
 FAKE_CLAUDE = os.path.join(TESTS_DIR, "fake_claude.py")
 FAKE_GOVERNOR = os.path.join(TESTS_DIR, "fake_governor.py")
@@ -268,3 +271,74 @@ def test_resume_after_near_term_limit_reuses_worktree_and_closes(tmp_path):
     # same worktree reused across the LIMIT->resume boundary, no attempt-2 worktree.
     assert os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a1"))
     assert not os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a2"))
+
+
+def test_worktree_collision_from_prior_crashed_attempt_is_adopted(tmp_path):
+    # wq#649 repro (fworker-626c): a prior attempt got as far as `git worktree add`
+    # succeeding before the whole fworker process died BEFORE write_attempt_state ran
+    # (which only happens after the child exits) — so a fresh invocation recomputes the
+    # SAME attempt number (next_attempt_n counts written attempt-N.json files) and
+    # make_worktree collides on its own leftover branch. Must adopt gracefully, not
+    # raise (which would crash before the claim was ever released).
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    title = "scratch collision ticket"
+    ticket_id = wq_add(env, title)
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    branch = f"chore/wq{ticket_id}-{fworker.slugify(title)}-a1"
+    wt = os.path.join(worktrees_root, f"wq{ticket_id}-a1")
+    os.makedirs(worktrees_root, exist_ok=True)
+    subprocess.run(["git", "-C", repo, "worktree", "add", wt, "-b", branch, "HEAD"],
+                    capture_output=True, text=True, check=True)
+
+    result = run_fworker(env, ticket_id, repo, "success", archetype="mechanical-edit")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+
+    # adopted the pre-existing worktree/branch — still on the exact branch the
+    # collision left behind, not a renamed/uniqued one.
+    assert os.path.isdir(wt)
+    cur_branch = subprocess.run(["git", "-C", wt, "rev-parse", "--abbrev-ref", "HEAD"],
+                                 capture_output=True, text=True).stdout.strip()
+    assert cur_branch == branch
+
+
+def test_worktree_dir_from_unrelated_branch_is_replaced_not_crashed(tmp_path):
+    # a directory sits at the expected worktree path but isn't ours (wrong branch, or
+    # left by something else entirely) — must be cleared and replaced, not fatal.
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    title = "scratch foreign-dir ticket"
+    ticket_id = wq_add(env, title)
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    wt = os.path.join(worktrees_root, f"wq{ticket_id}-a1")
+    os.makedirs(worktrees_root, exist_ok=True)
+    subprocess.run(["git", "-C", repo, "worktree", "add", wt, "-b", "chore/unrelated-branch",
+                    "HEAD"], capture_output=True, text=True, check=True)
+
+    result = run_fworker(env, ticket_id, repo, "success", archetype="mechanical-edit")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+
+    cur_branch = subprocess.run(["git", "-C", wt, "rev-parse", "--abbrev-ref", "HEAD"],
+                                 capture_output=True, text=True).stdout.strip()
+    assert cur_branch == f"chore/wq{ticket_id}-{fworker.slugify(title)}-a1"
+
+
+def test_unrecoverable_worktree_failure_releases_claim_not_dangling(tmp_path):
+    # wq#649 §D: a make_worktree failure that even the pid-uniqued last resort can't
+    # recover from (here: --repo points at something that isn't a git repo at all) must
+    # not leave the wq claim dangling — cmd_run's try/except releases it immediately
+    # rather than leaving it for the lease reaper to reclaim later.
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    ticket_id = wq_add(env, "scratch unrecoverable ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+    not_a_repo = str(tmp_path / "not_a_git_repo")
+    os.makedirs(not_a_repo, exist_ok=True)
+
+    result = run_fworker(env, ticket_id, not_a_repo, "success", archetype="mechanical-edit")
+    assert result.returncode == fworker.EXIT_CRASH, result.stdout + result.stderr
+    assert "CRASH" in result.stdout
+    assert wq_status(env, ticket_id) == "open", "claim must be released, not held, on crash"

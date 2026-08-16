@@ -31,11 +31,13 @@ import os
 import re
 import resource
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
 import time
 import threading
+import traceback
 import queue
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -124,6 +126,7 @@ EXIT_DEFERRED = 11
 EXIT_BLOCKED = 12
 EXIT_LIMIT = 13
 EXIT_DEPS_UNMET = 14
+EXIT_CRASH = 15
 
 
 def log(msg):
@@ -297,28 +300,62 @@ def slugify(text, maxlen=40):
     return s[:maxlen] or "ticket"
 
 
+def _git(cwd, *args):
+    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+
+
 def make_worktree(repo, ticket_id, attempt, title, archetype):
-    wt = os.path.join(WORKTREES_ROOT, f"wq{ticket_id}-a{attempt}")
-    os.makedirs(WORKTREES_ROOT, exist_ok=True)
+    """RELIABILITY_SPEC.md §D + wq#649: the branch name embeds the attempt number
+    from the start (previously only a retry-fallback appended it), since attempt 1's
+    bare branch name would otherwise collide with every LATER attempt of the same
+    ticket whose worktree/branch nothing ever cleans up. That alone doesn't cover a
+    crash between `git worktree add` succeeding and this attempt's state file being
+    written (write_attempt_state runs only after the child exits) — a re-invocation
+    after that crash recomputes the SAME attempt number (next_attempt_n counts written
+    attempt-N.json files) and calls this with identical args. Adopt-existing-if-ours
+    handles that exact replay instead of raising and leaving the wq claim dangling
+    (the fworker-626c repro this ticket fixes: 'branch ...-a3 already exists', third
+    dangling-claim instance in the fq#614/fq#618 family).
+    """
     type_map = {
         "mechanical-edit": "chore", "probe-build": "test", "rca-investigation": "fix",
         "novel-design": "docs",
     }
     branch_type = type_map.get(archetype, "feat")
-    branch = f"{branch_type}/wq{ticket_id}-{slugify(title)}"
-    p = subprocess.run(
-        ["git", "-C", repo, "worktree", "add", wt, "-b", branch, "HEAD"],
-        capture_output=True, text=True,
-    )
+    branch = f"{branch_type}/wq{ticket_id}-{slugify(title)}-a{attempt}"
+    wt = os.path.join(WORKTREES_ROOT, f"wq{ticket_id}-a{attempt}")
+    os.makedirs(WORKTREES_ROOT, exist_ok=True)
+
+    # prune-on-start: clears git's own bookkeeping for any worktree dir that vanished
+    # without a proper `git worktree remove` (operator rm -rf, partial crash cleanup),
+    # so a since-deleted dir can't make a live branch look falsely "checked out".
+    _git(repo, "worktree", "prune")
+
+    if os.path.isdir(wt):
+        p = _git(wt, "rev-parse", "--abbrev-ref", "HEAD")
+        if p.returncode == 0 and p.stdout.strip() == branch:
+            log(f"wq#{ticket_id} attempt {attempt}: adopting worktree left by a prior "
+                f"crashed attempt at the exact same (ticket, attempt) — {wt} ({branch})")
+            return wt, branch
+        # not ours (or ours but on the wrong branch) — drop it so `worktree add` below
+        # gets a clean path instead of failing on an already-existing directory.
+        if _git(repo, "worktree", "remove", "--force", wt).returncode != 0:
+            shutil.rmtree(wt, ignore_errors=True)
+
+    p = _git(repo, "worktree", "add", wt, "-b", branch, "HEAD")
+    if p.returncode != 0 and "already exists" in (p.stderr or ""):
+        # the branch name is deterministic from (ticket_id, attempt), so if it exists
+        # with no live worktree attached (the worktree dir was removed some other way,
+        # e.g. by hand) it is necessarily ours — reattach instead of erroring.
+        log(f"wq#{ticket_id} attempt {attempt}: branch {branch} exists with no live "
+            f"worktree — adopting.")
+        p = _git(repo, "worktree", "add", wt, branch)
     if p.returncode != 0:
-        # branch may already exist from a prior attempt path collision — retry unique
-        branch = f"{branch}-a{attempt}"
-        p = subprocess.run(
-            ["git", "-C", repo, "worktree", "add", wt, "-b", branch, "HEAD"],
-            capture_output=True, text=True,
-        )
-        if p.returncode != 0:
-            raise RuntimeError(f"git worktree add failed: {p.stdout} {p.stderr}")
+        # last resort: a pid-uniqued branch guarantees no further collision.
+        branch = f"{branch}-p{os.getpid()}"
+        p = _git(repo, "worktree", "add", wt, "-b", branch, "HEAD")
+    if p.returncode != 0:
+        raise RuntimeError(f"git worktree add failed: {p.stdout} {p.stderr}")
     return wt, branch
 
 
@@ -894,8 +931,25 @@ def cmd_run(args):
         return EXIT_CLAIM_ERROR
 
     attempt = next_attempt_n(args.ticket)
-    rc = do_attempt(args, attempt)
-    return rc
+    try:
+        return do_attempt(args, attempt)
+    except Exception:
+        # RELIABILITY_SPEC.md §D "no path ends holding a lease": do_attempt's own
+        # retry/resume logic (handle_failure/handle_limit/handle_resumable_failure)
+        # only runs for OUTCOMES it classified (§C) — an exception here means
+        # something broke OUTSIDE that flow (wq#649: make_worktree's git plumbing was
+        # the repro) before any of it got a chance to release or reclassify. Release
+        # immediately rather than leaving this for the lease reaper (reaper.py) to
+        # reclaim minutes/hours later.
+        tb = traceback.format_exc()
+        log(f"CRASH: unhandled exception during wq#{args.ticket} attempt {attempt} — "
+            f"releasing claim.\n{tb}")
+        wq_release(args.ticket)
+        ntfy("foreman CRASH",
+             f"wq#{args.ticket} attempt {attempt} crashed (claim released): "
+             f"{tb.strip().splitlines()[-1]}", priority="high")
+        print("CRASH")
+        return EXIT_CRASH
 
 
 def main():
