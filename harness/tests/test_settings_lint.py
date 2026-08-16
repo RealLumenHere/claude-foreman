@@ -69,6 +69,15 @@ def test_credential_paths_denied():
     assert any(".credentials.json" in d for d in deny)
 
 
+def test_oauth_token_secrets_dir_denied():
+    # wq#616: worker-settings.json deny list is defense-in-depth on top of guard.sh's
+    # fail-closed hook — both must cover the new static-token secrets dir.
+    with open(SETTINGS) as f:
+        data = json.load(f)
+    deny = data["permissions"]["deny"]
+    assert any(".secrets" in d for d in deny)
+
+
 def test_worker_settings_interim_removed():
     interim = os.path.join(os.path.dirname(HARNESS_DIR), "worker-settings-interim.json")
     assert not os.path.exists(interim), (

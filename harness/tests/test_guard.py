@@ -65,6 +65,12 @@ MUST_BLOCK = [
     ("Read", {"file_path": "/home/lumen/.claude/.credentials.json"}),
     ("Edit", {"file_path": "/home/lumen/foreman/claude_credentials.md"}),
     ("Write", {"file_path": "/home/lumen/foreman/harness/.env"}),
+    # wq#616: the durable oauth token every cloud worker's own `claude -p` consumes via
+    # CLAUDE_CODE_OAUTH_TOKEN env — must never be readable/exfiltratable by the worker's
+    # own tools, Bash included (Read-tool deny alone doesn't stop `cat`/`grep`).
+    ("Read", {"file_path": "/home/lumen/.secrets/claude-oat-worker.token"}),
+    ("Bash", {"command": "cat /home/lumen/.secrets/claude-oat-worker.token"}),
+    ("Bash", {"command": "grep oat /home/lumen/.secrets/claude-oat-worker.token"}),
 ]
 
 MUST_ALLOW = [

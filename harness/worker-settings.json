@@ -22,7 +22,8 @@
       "Bash(sudo *)",
       "Bash(claude setup-token*)",
       "Read(**/.env)", "Read(**/.credentials.json)",
-      "Read(**/claude_credentials.md)", "Read(/home/lumen/agent/.env)"
+      "Read(**/claude_credentials.md)", "Read(/home/lumen/agent/.env)",
+      "Read(/home/lumen/.secrets/**)"
     ]
   },
   "hooks": {

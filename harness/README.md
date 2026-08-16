@@ -2,8 +2,11 @@
 
 wq#625, BUILD_PLAN.md §T2a. Implements
 [design/T2A_WORKER_HARNESS_DESIGN.md](../design/T2A_WORKER_HARNESS_DESIGN.md), Frank-approved
-via PR#2. One `fworker` supervisor process per ticket, spawning exactly one `claude -p`
-child at a time on the shared login (multi-worker auth is T2b, gated on T2b-gate).
+via PR#2. One `fworker` supervisor process per ticket, spawning one `claude -p` child per
+attempt. wq#616 (T2b) lifted the original one-at-a-time constraint: each cloud worker now
+carries the durable setup-token as a static bearer (no shared-login refresh race), and
+`spawner.py` fans multiple tickets out concurrency-capped + staggered — see "Concurrency"
+below.
 
 ## Layout
 
@@ -16,6 +19,8 @@ child at a time on the shared login (multi-worker auth is T2b, gated on T2b-gate
                              classification input itself
     reaper.py                independent wq lease reaper (§E, wq#647) — `wq reap` +
                              an aq row per reap, decoupled from any worker's own exit path
+    concurrency.py           wq#616 (T2b): live fworker-wq* unit count + cloud slot cap
+    spawner.py               wq#616 (T2b): concurrency-capped, staggered batch dispatch
     worker-settings.json    settings pack — replaces worker-settings-interim.json
     guard.sh                PreToolUse fail-closed guard (§5)
     prompts/worker.md       worker prompt template
@@ -97,7 +102,46 @@ subcommand, same reclaim semantics `wq claim` already uses for its own lane).
   `attempt-N.json` as `oom_journal` — never a classification input, same
   corroboration-only status as `cpu_s`.
 
+## Concurrency (wq#616, T2b)
+
+FOREMAN_RESEARCH.md §8: concurrent `claude -p` processes sharing one login race to
+refresh `~/.claude/.credentials.json` at access-token expiry (~8h); the server rotates
+the refresh token, so every session but the winner 401s ("auth cascade", 3 GH issues).
+T2b closes this by construction rather than by careful scheduling:
+
+- **Static bearer.** `fworker.build_env()` reads the durable setup-token (wq#615;
+  path only — `FOREMAN_OAUTH_TOKEN_FILE`, default `/home/lumen/.secrets/claude-oat-worker.token`,
+  0600) fresh on every attempt and sets `CLAUDE_CODE_OAUTH_TOKEN` in the child's env,
+  scrubbing `ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` same as
+  before. No refresh cycle, no shared-file contention — each worker's auth is
+  independent. A missing/unreadable token file logs a WARN and falls back to the
+  shared login (old exposure) rather than failing the dispatch; `attempt-N.json`
+  records `oauth_token_used` so a run's auth path is visible without ever touching the
+  token value itself. The token is treated as a secret throughout: `guard.sh` and
+  `worker-settings.json` both deny Read/Bash access to `/home/lumen/.secrets/*`, so a
+  worker's own tools can't exfiltrate it.
+- **Concurrency cap.** `concurrency.py` counts live `fworker-wq*` `lumen-run` units
+  (not wq claims — a claim can outlive a dead process; that staleness is reaper.py's
+  job, wq#647, on its own schedule). §8's doctrine: start 2, hard ceiling 3 cloud
+  workers (local rung is T4, uncounted here, bounded by Lumen CPU instead).
+- **Staggered batch dispatch.** `spawner.py dispatch --repo PATH --ticket ID [--ticket
+  ID ...]` launches a batch of ready tickets through `router.dispatch_cmd`, waiting for
+  a free concurrency slot before each spawn (never exceeds `--ceiling`, default 3) and
+  sleeping a randomized 2-3s between spawns (§8 point 4: defensive against shared
+  `.claude.json`/history writes at worker startup). Re-checks the T1 governor
+  immediately before each spawn so a denied ticket never spins up a systemd unit that
+  fworker's own gate would just DEFER anyway — that per-ticket gate still runs inside
+  fworker regardless; this is the layer above deciding launch order/pacing, not a
+  replacement for it. A skipped ticket (governor deny / no free slot within
+  `--slot-wait-max`) stays open in wq for the next pass, not treated as a hard error.
+
 ## Build-time discovery vs the design (read before touching --max-turns)
+
+wq#616: the design doc's §3 note ("T2a runs ... ONE cloud worker at a time, fworker
+refuses to start if another fworker-wq* lumen-run unit is RUNNING") describes a
+constraint that was never actually implemented in `fworker.py` — there was no such
+refusal check. T2b replaces that placeholder with the real mechanism (`concurrency.py`
++ `spawner.py` above) instead of retrofitting the placeholder itself.
 
 CORRECTED (wq#646, RELIABILITY_SPEC.md §A): claude CLI 2.1.233 did **not** drop
 `--max-turns` — that earlier belief, from a probe against 2.1.220, was wrong.
@@ -139,6 +183,18 @@ quota; this build's probe gate is zero-quota by design (matches the ticket's two
 adversarial criteria — denied-verb-blocked-at-hook, LIMIT!=CRASH — plus the full harness
 suite). Schedule the quota-costing smoke off-peak when convenient; nothing in the design
 depends on it to land T2a.
+
+wq#616 (T2b) same pattern: its "3 concurrent real tickets, ideally across a token-expiry
+boundary → no auth cascade" verify line is quota-costing and needs a multi-hour window
+to actually cross an expiry boundary, so it's a follow-up smoke rather than a blocking
+gate here — this build's own probe gate is the zero-quota concurrency.py/spawner.py/
+token-injection suite (tests/test_concurrency.py, tests/test_spawner.py,
+tests/test_token_injection.py) plus the fworker/guard/settings regression suite, all
+passing. wq#615 already live-verified the token itself works via
+`CLAUDE_CODE_OAUTH_TOKEN` on a real one-shot; what's untested live is `fworker.py`
+actually wiring it into a real spawn under concurrency. Schedule 3 real tickets through
+`spawner.py dispatch` off-peak (ideally spanning >8h to cross the access-token expiry
+window) once there's a live batch to dispatch.
 
 ## Known gaps vs the full design (explicit, not silent)
 

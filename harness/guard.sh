@@ -111,6 +111,9 @@ Bash)
     if printf '%s' "$target" | grep -qE '(^|[;&|[:space:]])(ANTHROPIC_API_KEY|ANTHROPIC_BASE_URL)='; then
       block "in-command re-injection of ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL denied" "$RAW_CMD"
     fi
+    if printf '%s' "$target" | grep -qE '/home/lumen/\.secrets\b'; then
+      block "denied path: /home/lumen/.secrets (wq#616 static oauth token lives there)" "$RAW_CMD"
+    fi
     if printf '%s' "$target" | grep -qE '\bdocker\b' && ! printf '%s' "$target" | grep -qE '\bdocker\b +(ps|logs)\b'; then
       block "docker denied except ps/logs" "$RAW_CMD"
     fi
@@ -143,7 +146,7 @@ Read|Edit|Write)
   FILE_PATH=$(jfield '.tool_input.file_path')
   if [ -n "$FILE_PATH" ]; then
     case "$FILE_PATH" in
-      *.env|*.credentials.json|*claude_credentials.md|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*)
+      *.env|*.credentials.json|*claude_credentials.md|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*)
         block "denied path: $FILE_PATH" "$FILE_PATH" ;;
     esac
   fi

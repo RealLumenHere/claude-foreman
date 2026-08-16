@@ -71,6 +71,13 @@ NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 ORCH_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "orchestrator"))
 ROUTER_CLI = os.environ.get("FOREMAN_ROUTER_CLI", os.path.join(ORCH_DIR, "router.py"))
 JUDGMENT_CLI = os.environ.get("FOREMAN_JUDGMENT_CLI", os.path.join(ORCH_DIR, "judgment.py"))
+# wq#616 (T2b): every cloud worker gets the durable setup-token as a static bearer —
+# no refresh cycle, eliminates the shared ~/.claude/.credentials.json refresh-token
+# race by construction (FOREMAN_RESEARCH.md §8, 3 GH issues on concurrent-session auth
+# cascade). Path only, never the value: wq#615 stored it 0600, ORCH addendum forbids
+# printing/logging/committing the token itself.
+OAUTH_TOKEN_FILE = os.environ.get("FOREMAN_OAUTH_TOKEN_FILE",
+                                   "/home/lumen/.secrets/claude-oat-worker.token")
 
 # design §3: per-archetype --max-turns defaults (passed to the CLI; the supervisor
 # also backstops a few turns above this, see module docstring). Unlisted archetypes
@@ -319,10 +326,31 @@ def make_worktree(repo, ticket_id, attempt, title, archetype):
 # child env + spawn (design §3)
 # ---------------------------------------------------------------------------
 
+def read_oauth_token():
+    """wq#616: the setup-token minted under wq#615, read fresh per attempt (never
+    cached in a module global — a rotated/replaced file must take effect on the next
+    spawn without a fworker restart). Returns None, never raises, on any read failure;
+    callers fall back to the shared login rather than fail the dispatch outright."""
+    try:
+        with open(OAUTH_TOKEN_FILE) as f:
+            token = f.read().strip()
+        return token or None
+    except OSError:
+        return None
+
+
 def build_env(worker_id, effort, worktree):
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_BASE_URL", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    token = read_oauth_token()
+    if token:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    else:
+        log(f"WARN: no static oauth token at {OAUTH_TOKEN_FILE} — falling back to the "
+            f"shared login (refresh-race exposure, FOREMAN_RESEARCH.md §8)")
     env["HOME"] = "/home/lumen"
     env["FOREMAN_WORKER"] = worker_id
     env["WQ_AGENT"] = worker_id
@@ -554,6 +582,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     )
 
     env = build_env(worker_id, args.effort, worktree)
+    oauth_token_used = "CLAUDE_CODE_OAUTH_TOKEN" in env
     cmd = build_claude_cmd(prompt, args.model, args.effort, SETTINGS_FILE,
                             add_dirs=["/home/lumen/agents/work-queue"], max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin)
@@ -603,7 +632,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "worktree": worktree, "branch": branch, "model": args.model, "effort": args.effort,
         "archetype": archetype, "max_turns": max_turns, "wall_clock_s": wall_clock,
         "classification": classification, "raw_classification": raw_classification,
-        "exit_code": exit_code, "cpu_s": cpu_s,
+        "exit_code": exit_code, "cpu_s": cpu_s, "oauth_token_used": oauth_token_used,
         "oom_journal": oom_journal,
         "killed_reason": killed_reason, "turns": state.turns,
         "session_id": state.session_id, "resumed_from": resume_session,
