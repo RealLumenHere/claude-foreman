@@ -67,11 +67,13 @@ def governor_allows(model):
 def wait_for_slot(prefix, ceiling, max_wait_s):
     """Polls concurrency.slots_available until a slot is free or max_wait_s elapses.
     A LumenRunError (can't reach lumen-run at all) is treated the same as "no slot" —
-    fail toward under- not over-subscribing the shared login."""
+    fail toward under- not over-subscribing the shared login. T4: exclude_local=True —
+    a busy local rung must never eat into this cloud-login ceiling (bounded by Lumen
+    CPU instead, harness/concurrency.py's LOCAL_POOL_MODELS)."""
     waited = 0.0
     while True:
         try:
-            avail, units = concurrency.slots_available(prefix, ceiling)
+            avail, units = concurrency.slots_available(prefix, ceiling, exclude_local=True)
         except concurrency.LumenRunError as e:
             avail, units = 0, [f"<lumen-run unreachable: {e}>"]
         if avail > 0:

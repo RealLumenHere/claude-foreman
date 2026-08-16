@@ -95,3 +95,46 @@ def test_lumen_run_unreachable_raises(monkeypatch):
     concurrency.LUMEN_RUN_BIN = "/nonexistent/lumen-run-binary"
     with pytest.raises(concurrency.LumenRunError):
         concurrency.list_running_units()
+
+
+# ---------- T4 (wq#618): local-rung units excluded from the cloud ceiling ----------
+
+def fake_model_lookup(models):
+    return lambda ticket_id: models.get(ticket_id)
+
+
+def test_is_local_unit_true_for_a_known_local_route():
+    lookup = fake_model_lookup({"1": "deepseek-v4-flash"})
+    assert concurrency.is_local_unit("fworker-wq1", lookup) is True
+
+
+def test_is_local_unit_false_for_a_cloud_model():
+    lookup = fake_model_lookup({"1": "claude-sonnet-5"})
+    assert concurrency.is_local_unit("fworker-wq1", lookup) is False
+
+
+def test_is_local_unit_fails_safe_to_cloud_on_unresolvable_ticket():
+    lookup = fake_model_lookup({})  # ticket "1" not in the map -> None
+    assert concurrency.is_local_unit("fworker-wq1", lookup) is False
+
+
+def test_is_local_unit_false_for_a_non_ticket_unit_name():
+    lookup = fake_model_lookup({"1": "deepseek-v4-flash"})
+    assert concurrency.is_local_unit("mv4-land", lookup) is False
+
+
+def test_slots_available_excludes_local_units_when_asked(fake_env):
+    seed_units(fake_env, ["fworker-wq1", "fworker-wq2", "fworker-wq3"])
+    lookup = fake_model_lookup({"1": "claude-sonnet-5", "2": "claude-sonnet-5",
+                                 "3": "deepseek-v4-flash"})
+    avail, units = concurrency.slots_available(ceiling=3, exclude_local=True, model_lookup=lookup)
+    # 3 units running, but only 2 count toward the cloud ceiling -> 1 slot free.
+    assert avail == 1
+    assert len(units) == 2
+
+
+def test_slots_available_counts_local_units_by_default(fake_env):
+    seed_units(fake_env, ["fworker-wq1", "fworker-wq2", "fworker-wq3"])
+    avail, units = concurrency.slots_available(ceiling=3)
+    assert avail == 0
+    assert len(units) == 3

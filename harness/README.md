@@ -102,6 +102,47 @@ subcommand, same reclaim semantics `wq claim` already uses for its own lane).
   `attempt-N.json` as `oom_journal` — never a classification input, same
   corroboration-only status as `cpu_s`.
 
+## Local rung (wq#618, T4, BUILD_PLAN.md §T4)
+
+Trusted-route dispatch to the LiteLLM gateway (`deepseek-v4-flash`, `qwen36-local`;
+`nephthys-qwen3-14b` is fallback-brain only, never a wq worker) — zero Anthropic quota,
+and **governor-exempt by design**: `governor/governor_core.py:is_local_model()` skips
+session/weekly floor checks and live rate_limit_event blocks for these two model ids
+(STOP is the one gate it still shares with cloud dispatch).
+
+`fworker.is_local_model(model)` drives everything else:
+- `build_env()` sets `ANTHROPIC_BASE_URL=http://localhost:4000` +
+  `ANTHROPIC_AUTH_TOKEN=<scoped foreman key>` +
+  `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` **only** for a local-pool model's own
+  child env — never merged back into fworker's process env, so it can't leak into a
+  later cloud dispatch on the same host. Cloud dispatch unconditionally pops all four
+  gateway vars first, even if inherited. The key lives at
+  `/home/lumen/.secrets/foreman-litellm.token` (0600, same convention as the other
+  `*.token` files there) — a LiteLLM virtual key scoped to `models: [deepseek-v4-flash,
+  qwen36-local]` with a `max_budget`, minted separately from and never the LiteLLM
+  master key.
+- `local_rung_gate()` restricts local-pool dispatch to `mechanical-edit` /
+  `probe-build` — the only two archetypes models.yaml's routing table ever carries an
+  `@local` rung for. Checked pre-claim in `cmd_run()` (same DEFERRED contract as
+  `deps_unmet`/the governor gate — never touches the claim) and again per-attempt in
+  `do_attempt()`. Defense-in-depth: the router itself never produces a mismatched
+  (model, archetype) pair; this only matters against an explicit `--model`/`--archetype`
+  override.
+- `LOCAL_ARCHETYPE_MAX_TURNS` caps local dispatch below `ARCHETYPE_MAX_TURNS`'s cloud
+  defaults for the same two archetypes (FOREMAN_RESEARCH §9: "cap local workers'
+  --max-turns lower, they loop more").
+- The mandatory Sonnet-5 verify-pass gate before land is already T3's job
+  (`orchestrator/judgment.py:verify_required()`, `models.yaml verify_pass.
+  local_author_always`) — `file_verify_pass()` fires it on every SUCCESS reconcile
+  regardless of author model, so a local-rung ticket always gets a fresh sonnet-5@high
+  verify-pass ticket filed against it. No direct-to-main path exists for any rung; every
+  worker still lands via `lumen-pr` (branch → PR → probe → board).
+
+`tests/test_local_rung.py` covers all of the above at zero quota, including a full
+`fake_claude` dispatch on `deepseek-v4-flash` that asserts the CHILD process actually
+received the gateway env (not just `build_env()`'s return value) and that a `[verify]
+wq#<id>` ticket lands authored `claude-sonnet-5@high`.
+
 ## Concurrency (wq#616, T2b)
 
 FOREMAN_RESEARCH.md §8: concurrent `claude -p` processes sharing one login race to

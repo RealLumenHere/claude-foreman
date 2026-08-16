@@ -58,6 +58,16 @@ def main():
     ticket_id = os.environ.get("FAKE_CLAUDE_TICKET")
     session_id = resume or f"fake-session-{scenario}-{int(time.time())}"
 
+    # T4 (wq#618): dump the subset of env the local-rung gateway wiring cares about,
+    # so integration tests can assert on the CHILD's actual env rather than build_env's
+    # return value alone — proves the vars really reach the spawned process.
+    env_dump_path = os.environ.get("FAKE_CLAUDE_ENV_DUMP")
+    if env_dump_path:
+        keys = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+                "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY")
+        with open(env_dump_path, "w") as f:
+            json.dump({k: os.environ[k] for k in keys if k in os.environ}, f)
+
     # shim 3 (RELIABILITY_SPEC.md §F): instant death BEFORE the init frame — no
     # stream-json at all, no hook lifecycle. LAUNCH_FAILURE evidence is precisely the
     # absence of an init frame, so this must exit before emitting one.

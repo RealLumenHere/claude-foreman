@@ -72,7 +72,10 @@ models:
   - {id: claude-3-opus-20240229, status: TOMBSTONE-CONFIRMED, note: "P1 live 2026-08-14: shows in picker but does NOT serve (is_error, model may-not-exist/no-access, EOL Jan 5 2026). Unroutable."}
   - {id: claude-mythos-5,  status: NOT-OURS,  note: "approved-orgs only; the reserved T02 slot in the intended roster"}
 
-  # LOCAL RUNG (via ANTHROPIC_BASE_URL=http://localhost:4000, litellm 'foreman' key; ZERO Anthropic quota)
+  # LOCAL RUNG (via ANTHROPIC_BASE_URL=http://localhost:4000, litellm scoped key
+  # 'foreman-local-rung' -- models:[deepseek-v4-flash,qwen36-local], minted wq#618,
+  # stored /home/lumen/.secrets/foreman-litellm.token 0600, NOT the litellm master
+  # key; ZERO Anthropic quota, governor-exempt by design)
   - id: deepseek-v4-flash
     status: LIVE-local
     pools: [local]

@@ -104,6 +104,44 @@ def test_floor_boundary_is_inclusive_of_exact_value():
     assert d["allow"] is True
 
 
+# ---------- T4: local rung governor-exemption ----------
+
+def test_local_model_allowed_despite_all_floors_breached():
+    d = core.evaluate_dispatch("deepseek-v4-flash", limits=limits_of(0, 0, 0), floors=FLOORS,
+                                now_utc=NOW, stop_active=False, stale=False)
+    assert d["allow"] is True
+    assert d["local_only"] is False
+
+
+def test_local_model_allowed_despite_stale_state():
+    d = core.evaluate_dispatch("qwen36-local", limits=None, floors=FLOORS,
+                                now_utc=NOW, stop_active=False, stale=True)
+    assert d["allow"] is True
+
+
+def test_local_model_allowed_despite_live_rejected_block():
+    future = (NOW + dt.timedelta(hours=2)).isoformat()
+    live_blocks = {"five_hour": future}
+    d = core.evaluate_dispatch("deepseek-v4-flash", limits=limits_of(5, 5, 5), floors=FLOORS,
+                                now_utc=NOW, stop_active=False, stale=False, live_blocks=live_blocks)
+    assert d["allow"] is True
+
+
+def test_local_model_still_blocked_by_stop_kill_switch():
+    d = core.evaluate_dispatch("deepseek-v4-flash", limits=limits_of(0, 0, 0), floors=FLOORS,
+                                now_utc=NOW, stop_active=True, stale=False)
+    assert d["allow"] is False
+    assert "STOP" in d["reasons"][0]
+
+
+def test_is_local_model_matches_known_routes_only():
+    assert core.is_local_model("deepseek-v4-flash") is True
+    assert core.is_local_model("qwen36-local") is True
+    assert core.is_local_model("nephthys-qwen3-14b") is False
+    assert core.is_local_model("claude-sonnet-5") is False
+    assert core.is_local_model(None) is False
+
+
 # ---------- STOP kill-switch ----------
 
 def test_stop_active_blocks_regardless_of_healthy_floors():

@@ -96,6 +96,49 @@ ARCHETYPE_MAX_TURNS = {
 }
 DEFAULT_MAX_TURNS = ARCHETYPE_MAX_TURNS["standard-engineering"]
 
+# T4 (BUILD_PLAN.md §T4, wq#618): the LiteLLM local rung. Same trusted-route set as
+# governor/governor_core.py's LOCAL_POOL_MODELS and orchestrator/judgment.py's
+# LOCAL_POOL_MODELS — deliberately excludes nephthys-qwen3-14b (fallback brain only,
+# not a wq worker per models.yaml).
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local")
+# archetypes models.yaml's routing table ever carries an `@local` rung for — the only
+# work the local rung is trusted with (FOREMAN_RESEARCH §9). Enforced here too
+# (defense-in-depth) so an explicit --model/--archetype override can't dispatch a
+# local-pool model outside what the router itself would ever choose.
+LOCAL_ALLOWED_ARCHETYPES = ("mechanical-edit", "probe-build")
+# FOREMAN_RESEARCH §9: "cap local workers' --max-turns lower (they loop more)" —
+# tighter than ARCHETYPE_MAX_TURNS' cloud defaults for the same two archetypes.
+LOCAL_ARCHETYPE_MAX_TURNS = {
+    "mechanical-edit": 10,
+    "probe-build": 15,
+}
+
+LITELLM_BASE_URL = os.environ.get("FOREMAN_LITELLM_BASE_URL", "http://localhost:4000")
+# scoped 'foreman' LiteLLM virtual key (T4) — plain-text 0600 file, same convention as
+# /home/lumen/.secrets/*.token. NEVER the LiteLLM master key.
+LITELLM_KEY_FILE = os.environ.get("FOREMAN_LITELLM_KEY_FILE",
+                                   "/home/lumen/.secrets/foreman-litellm.token")
+
+
+def is_local_model(model):
+    return bool(model) and any(model.startswith(m) for m in LOCAL_POOL_MODELS)
+
+
+def local_rung_gate(model, archetype):
+    """-> (allow, reason). Cloud models always pass. A local-pool model is only
+    dispatchable for LOCAL_ALLOWED_ARCHETYPES — see module docstring above."""
+    if not is_local_model(model):
+        return True, None
+    if archetype not in LOCAL_ALLOWED_ARCHETYPES:
+        return False, (f"local rung model {model!r} not trusted for archetype "
+                        f"{archetype!r} (only {LOCAL_ALLOWED_ARCHETYPES})")
+    return True, None
+
+
+def read_litellm_key():
+    with open(LITELLM_KEY_FILE) as f:
+        return f.read().strip()
+
 def _envint(name, default):
     try:
         return int(os.environ.get(name, default))
@@ -376,18 +419,23 @@ def read_oauth_token():
         return None
 
 
-def build_env(worker_id, effort, worktree):
+def build_env(worker_id, model, effort, worktree):
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_BASE_URL", None)
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
     env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
-    token = read_oauth_token()
-    if token:
-        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-    else:
-        log(f"WARN: no static oauth token at {OAUTH_TOKEN_FILE} — falling back to the "
-            f"shared login (refresh-race exposure, FOREMAN_RESEARCH.md §8)")
+    env.pop("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", None)
+    # T4/T2b: the two auth paths are mutually exclusive by pool — a local-pool model
+    # gets the LiteLLM gateway vars below and never the cloud static bearer, a cloud
+    # model gets the static bearer and never the gateway vars.
+    if not is_local_model(model):
+        token = read_oauth_token()
+        if token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        else:
+            log(f"WARN: no static oauth token at {OAUTH_TOKEN_FILE} — falling back to the "
+                f"shared login (refresh-race exposure, FOREMAN_RESEARCH.md §8)")
     env["HOME"] = "/home/lumen"
     env["FOREMAN_WORKER"] = worker_id
     env["WQ_AGENT"] = worker_id
@@ -402,6 +450,14 @@ def build_env(worker_id, effort, worktree):
     env["OTEL_EXPORTER_OTLP_ENDPOINT"] = OTEL_ENDPOINT
     env["OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"] = "cumulative"
     env["OTEL_METRIC_EXPORT_INTERVAL"] = "60000"
+    # T4 (BUILD_PLAN.md §T4): per-worker ONLY, never global — this env dict is built
+    # fresh per attempt and only ever handed to THIS attempt's `claude -p` child, never
+    # merged back into fworker's own process env, so a local-rung attempt can never
+    # leak the gateway vars into a later cloud dispatch on the same host/session.
+    if is_local_model(model):
+        env["ANTHROPIC_BASE_URL"] = LITELLM_BASE_URL
+        env["ANTHROPIC_AUTH_TOKEN"] = read_litellm_key()
+        env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
     return env
 
 
@@ -591,6 +647,7 @@ def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None):
 def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
+    archetype = args.archetype or "standard-engineering"
 
     allow, reason = can_dispatch(args.model)
     if not allow:
@@ -599,8 +656,19 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         print("DEFERRED")
         return EXIT_DEFERRED
 
-    archetype = args.archetype or "standard-engineering"
-    max_turns = args.max_turns or ARCHETYPE_MAX_TURNS.get(archetype, DEFAULT_MAX_TURNS)
+    allow, reason = local_rung_gate(args.model, archetype)
+    if not allow:
+        log(f"DEFERRED: {reason} — releasing claim")
+        wq_release(ticket_id)
+        print("DEFERRED")
+        return EXIT_DEFERRED
+
+    if args.max_turns:
+        max_turns = args.max_turns
+    elif is_local_model(args.model):
+        max_turns = LOCAL_ARCHETYPE_MAX_TURNS.get(archetype, ARCHETYPE_MAX_TURNS.get(archetype, DEFAULT_MAX_TURNS))
+    else:
+        max_turns = ARCHETYPE_MAX_TURNS.get(archetype, DEFAULT_MAX_TURNS)
     wall_clock = args.wall_clock_timeout or (
         WALL_CLOCK_RCA_S if archetype == "rca-investigation" else WALL_CLOCK_DEFAULT_S)
 
@@ -618,7 +686,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         prior_notes_path if (attempt > 1 and not resume_session) else None,
     )
 
-    env = build_env(worker_id, args.effort, worktree)
+    env = build_env(worker_id, args.model, args.effort, worktree)
     oauth_token_used = "CLAUDE_CODE_OAUTH_TOKEN" in env
     cmd = build_claude_cmd(prompt, args.model, args.effort, SETTINGS_FILE,
                             add_dirs=["/home/lumen/agents/work-queue"], max_turns=max_turns,
@@ -921,6 +989,14 @@ def cmd_run(args):
     allow, reason = can_dispatch(args.model)
     if not allow:
         log(f"DEFERRED: wq#{args.ticket} governor denied dispatch before claim: {reason}")
+        print("DEFERRED")
+        return EXIT_DEFERRED
+
+    # T4: same pre-claim treatment as the governor gate above — a local-pool model
+    # dispatched outside LOCAL_ALLOWED_ARCHETYPES never touches the claim.
+    allow, reason = local_rung_gate(args.model, args.archetype or "standard-engineering")
+    if not allow:
+        log(f"DEFERRED: wq#{args.ticket} {reason}")
         print("DEFERRED")
         return EXIT_DEFERRED
 

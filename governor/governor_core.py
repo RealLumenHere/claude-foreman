@@ -91,6 +91,16 @@ def is_fable_model(model):
     return "fable" in (model or "").lower()
 
 
+# T4 (BUILD_PLAN.md §T4, wq#618): the LiteLLM local rung — same trusted-route set as
+# orchestrator/judgment.py's LOCAL_POOL_MODELS. Deliberately excludes
+# nephthys-qwen3-14b (fallback brain only, not a wq worker per models.yaml).
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local")
+
+
+def is_local_model(model):
+    return bool(model) and any(model.startswith(m) for m in LOCAL_POOL_MODELS)
+
+
 def _remaining(bucket):
     if not bucket or bucket.get("percent") is None:
         return None
@@ -169,6 +179,14 @@ def evaluate_dispatch(model, *, limits, floors, now_utc, stop_active, stale,
 
     if stop_active:
         return {"allow": False, "local_only": True, "reasons": ["STOP kill-switch active"]}
+
+    # T4: the local rung is governor-exempt by design — it costs zero Anthropic quota,
+    # so session/weekly floors and live rate_limit_event blocks (both Anthropic-pool
+    # concepts) don't apply to it. STOP above is the only gate local dispatch shares
+    # with cloud; a floor breach or in-band rejection on the Anthropic side must never
+    # stall a ticket that was never going to touch that quota.
+    if is_local_model(model):
+        return {"allow": True, "local_only": False, "reasons": ["local rung: governor-exempt"]}
 
     for pool, resets_at in live_blocks.items():
         rt = _parse_iso(resets_at)
