@@ -124,6 +124,65 @@ def is_local_model(model):
     return bool(model) and any(model.startswith(m) for m in LOCAL_POOL_MODELS)
 
 
+# wq#687: silent-downgrade detection. The DeepSeek "best practices" doc that
+# prompted this was mostly filter-evasion junk, but one real concern hid in it:
+# "am I silently getting a weaker model than I asked for?" The honest answer is
+# to compare the model the init frame REPORTS (state.model) against the model we
+# DISPATCHED (args.model) — real result metadata, never a made-up header.
+#
+# Two swaps are LEGITIMATE and must never alarm:
+#   1. Sanctioned safeguards redirects — the refusal_fallback targets in
+#      models.yaml (Fable/most -> Opus 5 for bio, Opus 4.8 for cyber). These are
+#      Anthropic's documented safety behaviour, not a downgrade. The CLI also
+#      emits an explicit model_refusal_fallback / model_fallback frame for them,
+#      which the classifier already records in state.refusal_fallbacks /
+#      state.model_fallbacks — so a swap that is ACCOMPANIED by such a frame is
+#      accounted for and never flagged here.
+#   2. Local-rung dispatch — args.model IS a local id; the CLI (pointed at
+#      LiteLLM) reports whatever LiteLLM served. Handled by is_local_model.
+#
+# Everything else — observed != dispatched with NO explaining frame — is a real
+# unexplained swap and gets surfaced loudly on the attempt record. We do NOT
+# retry or reroute on it (that is the orchestrator's call); the worker's job is
+# to make it impossible to mistake a downgrade for a clean success.
+SANCTIONED_FALLBACK_TARGETS = (
+    "claude-opus-5", "claude-opus-4-8",  # refusal_fallback bio/cyber landing zones
+)
+
+
+def _norm_model(m):
+    """Strip a trailing -YYYYMMDD date suffix so a future CLI that stamps dated
+    ids (claude-fable-5-20260601) does not false-alarm against the bare id we
+    dispatch. Bare ids pass through unchanged."""
+    if not m:
+        return m
+    return re.sub(r"-20\d{6}$", "", m)
+
+
+def check_model_downgrade(dispatched, observed, state):
+    """-> (mismatch: bool, detail: str|None). mismatch=True only for an
+    UNEXPLAINED swap (see SANCTIONED_FALLBACK_TARGETS / explaining frames)."""
+    if not dispatched or not observed:
+        return False, None
+    d, o = _norm_model(dispatched), _norm_model(observed)
+    if d == o:
+        return False, None
+    if is_local_model(dispatched):
+        return False, None  # LiteLLM serves what it serves under a local id
+    # a sanctioned safeguards redirect, or the CLI told us it swapped -> explained
+    explained = (
+        o in SANCTIONED_FALLBACK_TARGETS
+        or bool(state.refusal_fallbacks)
+        or bool(state.model_fallbacks)
+    )
+    if explained:
+        return False, (f"model swap {d}->{o} EXPLAINED "
+                       f"(sanctioned_target={o in SANCTIONED_FALLBACK_TARGETS} "
+                       f"refusal_fallbacks={len(state.refusal_fallbacks)} "
+                       f"model_fallbacks={len(state.model_fallbacks)})")
+    return True, f"UNEXPLAINED model downgrade: dispatched {d}, ran {o}"
+
+
 def local_rung_gate(model, archetype):
     """-> (allow, reason). Cloud models always pass. A local-pool model is only
     dispatchable for LOCAL_ALLOWED_ARCHETYPES — see module docstring above."""
@@ -709,6 +768,18 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     raw_classification = classify(state, effective_exit_code)
     classification = raw_classification
 
+    # wq#687: silent-downgrade check. Compare the model the init frame reported
+    # against the one we dispatched; an UNEXPLAINED swap (not a sanctioned
+    # safeguards redirect, not a CLI-announced fallback, not a local-rung id) is
+    # surfaced loudly so a downgrade can never masquerade as a clean SUCCESS.
+    # Verdict-only — never retries or reroutes (orchestrator's call).
+    model_downgraded, model_swap_detail = check_model_downgrade(
+        args.model, state.model, state)
+    if model_downgraded:
+        log(f"WARNING wq#687: {model_swap_detail} — ticket {ticket_id} attempt "
+            f"{attempt}; classification {classification} was produced by a model "
+            f"OTHER than dispatched. Surfacing on attempt record.")
+
     # RELIABILITY_SPEC.md §E "persistent journal for OOM forensics": exit 137 is
     # already sufficient evidence for the OOM verdict (classify() above) — this is
     # corroboration only, same as cpu_s, attached to the attempt record so a human/
@@ -735,6 +806,9 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     attempt_record = {
         "ticket": ticket_id, "attempt": attempt, "worker_id": worker_id,
         "worktree": worktree, "branch": branch, "model": args.model, "effort": args.effort,
+        "observed_model": state.model,
+        "model_downgraded": model_downgraded,
+        "model_swap_detail": model_swap_detail,
         "archetype": archetype, "max_turns": max_turns, "wall_clock_s": wall_clock,
         "classification": classification, "raw_classification": raw_classification,
         "exit_code": exit_code, "cpu_s": cpu_s, "oauth_token_used": oauth_token_used,

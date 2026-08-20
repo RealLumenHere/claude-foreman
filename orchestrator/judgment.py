@@ -192,6 +192,13 @@ def scan_triggers(runs_root=RUNS_ROOT, state_json=STATE_JSON, since=None):
             found.setdefault("ticket_blocked_twice", []).append(tid)
         if a.get("refusal_no_fallback") or a.get("classification") == "REFUSED":
             found.setdefault("refusal_no_fallback", []).append(tid)
+        # wq#687: an UNEXPLAINED model downgrade (fworker compared observed vs
+        # dispatched and ruled out sanctioned redirects/announced fallbacks) means
+        # a verdict was produced by a weaker model than routed — the orchestrator
+        # must see it, since a "SUCCESS" from the wrong model is not the success
+        # the routing table intended.
+        if a.get("model_downgraded"):
+            found.setdefault("model_downgraded", []).append(tid)
         if a.get("archetype") == "rca-investigation" and a.get("cross_subsystem"):
             found.setdefault("rca_cross_subsystem", []).append(tid)
         if a.get("verify_contradiction"):
