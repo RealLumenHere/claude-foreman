@@ -276,6 +276,41 @@ def test_dispatch_cmd_carries_systemd_resource_limits(monkeypatch):
     assert cmd.index("--") < cmd.index("--model")  # resource flags precede the -- separator
 
 
+# ---- wq#713: lane -> repo, dispatch-cmd must never default to /home/lumen --------------
+
+def test_dispatch_cmd_derives_repo_from_mapped_lane(monkeypatch):
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "lane": "pokemon", "model": "claude-sonnet-5", "effort": "high",
+        "archetype": "standard-engineering",
+    })
+    cmd = router.dispatch_cmd(713)
+    assert "--repo" in cmd and cmd[cmd.index("--repo") + 1] == "/home/lumen/pokemon"
+
+
+def test_dispatch_cmd_explicit_repo_overrides_lane(monkeypatch):
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "lane": "pokemon", "model": "claude-sonnet-5", "effort": "high",
+        "archetype": "standard-engineering",
+    })
+    cmd = router.dispatch_cmd(713, "/tmp/some-other-tree")
+    assert cmd[cmd.index("--repo") + 1] == "/tmp/some-other-tree"
+
+
+def test_dispatch_cmd_unmapped_lane_without_repo_raises_never_defaults_to_home_lumen(monkeypatch):
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "lane": "github", "model": "claude-sonnet-5", "effort": "high",
+        "archetype": "standard-engineering",
+    })
+    with pytest.raises(SystemExit, match="no LANE_REPO entry"):
+        router.dispatch_cmd(713)
+
+
+def test_lane_repo_map_covers_build_and_auto_with_foreman_root():
+    assert router.repo_for_lane("build") == router.FOREMAN_ROOT
+    assert router.repo_for_lane("auto") == router.FOREMAN_ROOT
+    assert router.repo_for_lane("nonexistent-lane") is None
+
+
 # ---- end-to-end against a scratch wq (needs a wq with the wq#617 columns) --------------
 
 def _wq_supports_tuple(wq_bin):

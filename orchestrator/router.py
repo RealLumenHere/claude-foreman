@@ -29,7 +29,8 @@ CLI (all read-only except `assign`, which writes the tuple into wq via `wq edit`
     router.py route     <archetype> [--attempt N] [--fails N] [--cross-subsystem]
                         [--pressure MODEL=ok|tight|deny ...] [--live]
     router.py assign    <ticket-id> [--archetype A] [--dry-run] [--live]
-    router.py dispatch-cmd <ticket-id> --repo PATH      # the fworker command line
+    router.py dispatch-cmd <ticket-id> [--repo PATH]    # the fworker command line;
+                        --repo derives from the ticket's lane (LANE_REPO) when omitted
     router.py roster    # entitled/routed/dominated table
     router.py check     # manifest self-check (what the probe runs)
 """
@@ -50,6 +51,20 @@ FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 MANIFEST_PATH = os.environ.get(
     "FOREMAN_MODELS_YAML",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "research", "models.yaml"))
+# wq#713: lane -> canonical repo, so dispatch-cmd never has to guess (and a caller never
+# has to remember) which working tree a ticket's fworker should be pointed at. /home/lumen
+# itself is NOT a git repo (no .git) — anything landing there crashes fworker's own
+# git-worktree-add step, which is exactly the failure this table exists to prevent.
+# Sources: LANE_BOUNDARIES.md §1 (wq#512, pokemon lane owns /home/lumen/pokemon) and
+# design/T2A_WORKER_HARNESS_DESIGN.md (build/auto tickets worktree off FOREMAN_ROOT itself
+# — this worktree's own .git gitdir points at FOREMAN_ROOT/.git/worktrees/<this>).
+# Lanes not listed here have no single canonical repo (or none confirmed) — dispatch-cmd
+# refuses to guess and requires an explicit --repo instead.
+LANE_REPO = {
+    "build": FOREMAN_ROOT,
+    "auto": FOREMAN_ROOT,
+    "pokemon": "/home/lumen/pokemon",
+}
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 GOVERNOR_CLI = os.environ.get("FOREMAN_GOVERNOR_CLI",
                                os.path.join(FOREMAN_ROOT, "governor", "foreman_usaged.py"))
@@ -575,10 +590,27 @@ WORKER_CPU_QUOTA = "400%"
 WORKER_TASKS_MAX = "512"
 
 
-def dispatch_cmd(ticket_id, repo, *, manifest=None):
+def repo_for_lane(lane):
+    """LANE_REPO lookup, or None if the lane has no canonical repo (caller must pass
+    --repo explicitly). Never returns a guess — an unmapped lane is not /home/lumen."""
+    return LANE_REPO.get(lane)
+
+
+def dispatch_cmd(ticket_id, repo=None, *, manifest=None):
     """The fworker command for a ticket whose tuple is already on the ticket (or gets
-    assigned now). Mirrors design/T2A §2."""
+    assigned now). Mirrors design/T2A §2.
+
+    repo: explicit override. Omit it to derive the repo from the ticket's lane via
+    LANE_REPO (wq#713) — dispatch-cmd raises rather than falling back to any default
+    when the lane isn't mapped."""
     t = wq_show(ticket_id)
+    if not repo:
+        lane = t.get("lane")
+        repo = repo_for_lane(lane)
+        if not repo:
+            raise SystemExit(
+                f"router: wq#{ticket_id} lane {lane!r} has no LANE_REPO entry — "
+                f"pass --repo explicitly (never guess /home/lumen)")
     model, effort, arch = t.get("model"), t.get("effort"), t.get("archetype")
     if model in (None, "", "None"):
         d = assign(ticket_id, manifest=manifest)
@@ -636,7 +668,8 @@ def main(argv=None):
     s.add_argument("--fails", type=int, default=0); s.add_argument("--cross-subsystem", action="store_true")
     s.add_argument("--pressure", action="append"); s.add_argument("--live", action="store_true")
 
-    s = sub.add_parser("dispatch-cmd"); s.add_argument("ticket", type=int); s.add_argument("--repo", required=True)
+    s = sub.add_parser("dispatch-cmd"); s.add_argument("ticket", type=int)
+    s.add_argument("--repo", default=None, help="override; derived from ticket lane (LANE_REPO) if omitted")
     sub.add_parser("roster")
     sub.add_parser("check")
     args = ap.parse_args(argv)
