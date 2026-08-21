@@ -31,6 +31,10 @@
     "foreman-auto": {
       "enabled": true,
       "max_per_day": 18
+    },
+    "build": {
+      "enabled": true,
+      "max_per_day": 20
     }
   }
 }
