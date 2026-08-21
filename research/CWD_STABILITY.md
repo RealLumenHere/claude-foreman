@@ -195,7 +195,10 @@ in what they save.
 
 ---
 
-## (c) Recommendation — ⚠️ NEEDS FRANK APPROVAL BEFORE ANY IMPLEMENTATION
+## (c) Recommendation — ✅ DECIDED 2026-08-21: Frank ACCEPTED (keep per-ticket worktrees, change nothing)
+
+Decision record: /home/lumen/decisions/cwd-ceiling-accepted.md. Options (a)/(b) are rejected;
+this section is retained as the analysis behind the ruling.
 
 **Accept the ceiling (option d). Change nothing about `fworker.py` or the worktree layout.**
 
