@@ -36,7 +36,14 @@ Two structural reasons, both real:
      every ticket, never gets a chance to be recognized as a shared prefix. This is the
      literal defect item (3) asks to fix, and worker.md / FOREMAN_DISPATCH.prompt are
      edited by this ticket to reorder it: static slab first, volatile trailer last.
-  b. **Worktree cwd.** Each ticket runs in its own `git worktree` path
+  b. **Worktree cwd.** *(MEASURED AND FALSIFIED by wq#705 — see CWD_STABILITY.md. The
+     tools block is cached BEFORE the system block that carries cwd, so every real
+     fworker session does get a 16.2k–24.6k-token cross-session hit on turn 1. And the
+     lever this paragraph proposes is worth 0 tokens, not "capped": the per-attempt
+     branch name in `gitStatus` diverges ~1,029 tokens after cwd inside the same block,
+     with no cache breakpoint between them, so stabilizing cwd alone converts nothing.
+     Read the paragraph below as the hypothesis wq#705 tested, not as a finding.)*
+     Each ticket runs in its own `git worktree` path
      (`WORKTREES_ROOT/wq{ticket}-a{attempt}`), and cwd is part of what the CLI injects
      ahead of/around the system context. Two different tickets can never fully converge
      on a shared prefix regardless of prompt ordering, because their cwd differs from the
@@ -73,6 +80,11 @@ Applied in:
   settings/CLAUDE.md mid-run without realizing the cache cost).
 
 ## (3) Volatile-values-at-the-end (codified)
+
+*(wq#705 measured this one too: there is no cache breakpoint interior to the first user
+message, so the reorder cannot pay off unless two dispatches match byte-for-byte, which
+they never do. It stays — free, harmless, correct in principle — but expect zero
+measurable win from it. CWD_STABILITY.md §(a).)*
 
 `harness/prompts/worker.md` and `FOREMAN_DISPATCH.prompt` reordered: the fully-static
 block (identity, RULES, guardrails, land/done instructions, sentinel line) now comes
@@ -117,3 +129,10 @@ pulls a fresh `token_baseline.py`-style rollup from `events/*.jsonl` +
 diff cross-session first-turn `cache_read_input_tokens` (expect: still ~0, given the
 worktree-cwd ceiling in (1)b, unless a future ticket also addresses cwd-level divergence)
 against this baseline's confirmed-zero.
+
+**wq#705 ran that rollup.** The prediction above was wrong: post-fworker first-turn
+`cache_read` is 16,236–24,649 tokens on every worker session, never ~0. See
+CWD_STABILITY.md and `research/cwd_stability.py` / `research/cwd_breakpoints.py`. The gate
+this doc left open ("measured cache hit-rate delta on next worker runs vs baseline") is now
+measured; what remains open is retry count and turn-count growth, which CWD_STABILITY.md
+identifies as ~30x the cwd lever.

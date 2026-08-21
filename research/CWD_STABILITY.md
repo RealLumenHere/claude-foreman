@@ -242,3 +242,114 @@ directly comparable to the ≤21,609-token cwd lever.
    `system` array, tool array, and breakpoint placement, at zero Anthropic quota. It was
    deliberately not run here: this ticket's acceptance criteria scoped measurement to existing
    transcripts.
+
+---
+
+## Appendix — breakpoint placement, cache TTL, and the pre-warm question
+
+Added by wq#705 attempt 4. Everything above was landed by attempt 2, which was then killed
+on the turn ceiling before it could call `wq done` — so the ticket was re-dispatched and
+re-measured from scratch. The independent re-measurement **reproduced the body's numbers
+and reached the same recommendation**, which is worth recording on its own: two runs, two
+corpora snapshots, one answer.
+
+This appendix adds only what the second run settles that the first left open. Instrument:
+`cwd_breakpoints.py` (`--json` for a diffable summary), same zero-spend method, corpus
+grown to 31 worker sessions / 108 transcripts by the time of the run.
+
+### (i) The cwd lever is exactly 0 tokens, not ≤1,029
+
+§(a) bounded the lever at 1,029 tokens (region 3, between cwd and `gitStatus`) and noted
+the bound "further requires a `cache_control` breakpoint to land exactly at the region 3 /
+region 4 boundary". That condition is directly measurable: enumerate every distinct
+first-turn `cache_read` value the corpus contains, and the reachable breakpoints are
+whatever those values cluster on.
+
+Only two values are ever reachable per toolset — end-of-tools (16,236 opus-5 / 24,649
+sonnet-5) and end-of-system (21,723 / ~30,355). **No intermediate value occurs anywhere in
+108 transcripts.** There is no breakpoint between cwd and `gitStatus`, so region 3 is not
+independently cacheable, and stabilizing cwd alone converts nothing at all.
+
+That closes §(a)'s hedge: the realistic gain is not merely "0 in practice", it is **0 by
+construction**, and the ≤1,029-token figure should be read as an upper bound that is
+provably not attained.
+
+The corollary sharpens option (b)'s rejection. Reaching the system block requires cwd *and*
+the `gitStatus` branch name to match, and the branch is `{type}/wq{ticket}-…-a{attempt}` by
+construction. Simulating "cwd and branch both stabilized" — i.e. giving up per-ticket
+branches too — yields 23 of 31 sessions hitting, worth $0.62 (0.79% of worker spend), $0.85
+(1.09%) at a 100% hit rate. So even the version of this that sacrifices wq#649's
+per-ticket-branch invariant buys about 1%. Recommendation unchanged, now with the
+next-most-aggressive alternative priced as well.
+
+### (ii) The open question is settled: this is genuine cross-session reuse
+
+§(a) flagged that transcripts alone cannot distinguish server-side cross-session reuse from
+an in-process CLI pre-warm, and deferred it to a recording-proxy experiment. The corpus
+already answers it.
+
+Which tier a session reaches depends on **other sessions' recent history in the same cwd**:
+12 of 12 sessions that reached end-of-system had another session active in an identical cwd
+within the hour, with **0 counter-examples**; and 68 pairs of worker sessions that started
+under an hour apart in *different* worktrees produced **0** end-of-system hits. A pre-warm
+internal to one process cannot produce a dependence on a different process's history, and
+cannot explain why the dependence is on cwd specifically. Sessions also exist that read the
+whole request from cache (`cache_creation = 0`) on turn 1, which no first-turn pre-warm
+explains either.
+
+The recording-proxy experiment in follow-up 3 is still worth running for the *layout*
+question it also answers, but it is no longer needed for this one.
+
+### (iii) Effective cache TTL is 1 hour, not the 5-minute default
+
+Across CLI-2.1.233 sessions the cache-creation breakdown is 18,327,654 tokens of
+`ephemeral_1h_input_tokens` and **zero** `ephemeral_5m_input_tokens`. The decay curve agrees
+— same-cwd sessions reaching end-of-system, bucketed by gap since the previous same-cwd
+session's last turn:
+
+| gap | reached end-of-system |
+|-----|----------------------:|
+| < 5 min (incl. concurrent) | 10 / 12 (83%) |
+| 5 min – 1 h | 2 / 8 (25%) |
+| 1 h – 24 h | 0 / 19 (0%) |
+| > 24 h | 0 / 4 (0%) |
+
+The cliff sits exactly at one hour. Two consequences: the reuse window for any future
+prefix work is an hour wide rather than five minutes, and §(b)'s costing multiplier should
+be **2× base input** (the 1h cache-write rate) rather than the 1.25× used above. That makes
+every figure in §(b) ~1.6× larger and changes no conclusion, since the lever is 0.
+
+### (iv) Where the tokens are, priced — corroborates follow-up 1
+
+Whole-corpus cost lines for the 31 worker sessions, at `models.yaml` input rates with the
+corrected 2× write multiplier:
+
+| line | tokens | $ | share |
+|------|-------:|--:|------:|
+| cache_read | 104,572,945 | 31.71 | 40.6% |
+| output | 1,372,734 | 24.66 | 31.6% |
+| cache_write, later turns | 3,071,857 | 19.79 | 25.4% |
+| cache_write, **first turn** | 355,393 | 1.79 | **2.3%** |
+| input | 28,380 | 0.12 | 0.1% |
+| **total** | | **78.07** | 100% |
+
+The first-turn cache write — the only line *any* prefix-stability work can touch — is 2.3%
+of worker spend, and the system block is about half of that. 89.6% of all `cache_write` is
+later-turn context growth: the session writing its own accumulating tool results and
+assistant turns back into cache. **66% of worker spend (cache_read + later-turn writes)
+scales with turn count, not with prefix stability at all.**
+
+That is the same conclusion follow-up 1 reaches from the retry angle, arrived at
+independently: this corpus's three most expensive sessions are wq#705's own killed attempts
+at 90–94 turns and $8.66–$9.76 each, against a typical sonnet worker under $2. Retries and
+turn growth are the same lever seen from two sides, and it is roughly 30× the cwd lever.
+
+### (v) A harness bug this ticket surfaced by existing
+
+Attempt 2 landed this document and was then killed on the turn ceiling before calling
+`wq done`. `fworker.py` routes TURNS/KILLED straight to `handle_failure()`, which — unlike
+`handle_resumable_failure()` — never calls `check_artifacts_done()`. So an attempt that has
+already shipped its deliverable is re-dispatched as if it had produced nothing, which is
+why this ticket ran four times and why two independent copies of this research exist. Worth
+its own ticket in the reliability lane rather than the token lane; noted here because the
+evidence is this ticket's own `_runs` history.
