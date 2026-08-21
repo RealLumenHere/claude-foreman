@@ -215,6 +215,15 @@ Unit tests (zero quota): a corpus of must-block strings (incl. `bash -c "docker 
 and must-allow strings (`git push origin branch`, `docker ps -a`, `rm -rf
 <worktree>/build`). Guard failures on the corpus fail the build probe.
 
+**wq#729 addendum (2026-08-21):** allowed Bash calls that don't mutate shell state (no
+`cd`/`export`/`source`/backgrounding `&`, …) are additionally rewritten via the
+`PreToolUse` `updatedInput` field — `{ <cmd>\n} 2>&1 | head -c 2000` — so a single
+discovery/dump command can't carry the whole session's cost on every later call
+(research/CALL_AUDIT.md: tool results are 39.5-51.5% of a build session). Confirmed
+supported on CLI 2.1.233 from the live hooks docs, not the CLI bundle (still out of a
+build worker's reach). Stateful commands are skipped rather than capped: piping subshells
+the left side, so a `cd`/`export` inside it wouldn't persist to the next Bash call.
+
 ## 6. Supervisor — stream-json parsing
 
 fworker reads child stdout line by line (NDJSON), with `--include-hook-events`:

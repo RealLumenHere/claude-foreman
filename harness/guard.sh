@@ -141,6 +141,44 @@ Bash)
       fi
     fi
   done
+
+  # ---- wq#729 R4: cap Bash output ----
+  # Tool results are 39.5-51.5% of a build session's cost (research/CALL_AUDIT.md)
+  # and Bash alone is 17.6% in the audited session; a single unbounded discovery/
+  # dump command lands early and gets carried 150-200 calls. Rewrite the command
+  # via PreToolUse `updatedInput` so the tool itself never returns more than
+  # CAP_BYTES — confirmed supported in CLI 2.1.233 (code.claude.com/docs/en/hooks,
+  # checked 2026-08-21: "Each field the event supports is honored, including
+  # permissionDecision, additionalContext, updatedInput, and systemMessage").
+  # research/CALL_AUDIT.md's tool-result real-vs-cl100k ratio is 1.63-1.81x on
+  # this content mix (shell/code/JSON), so ~2000 bytes lands under, not over,
+  # R4's ~1000-token target.
+  #
+  # Skip commands that mutate shell state the persistent session depends on
+  # (cd/export/source/...) or background a job (&): piping subshells the left
+  # side of the pipe, so a state change inside it would silently vanish instead
+  # of persisting to the next Bash call. `source`/`.`-sourcing: only the `source`
+  # keyword is matched — bare `. file` is deliberately NOT pattern-matched
+  # because a naive check collides with the extremely common `find .`/`ls .`;
+  # losing the (rare) bare-dot case is cheaper than losing capping on `find .`.
+  # When unsure, don't cap: an uncapped result is recoverable, a lost `cd` is a
+  # much worse class of bug.
+  CAP_BYTES=${FOREMAN_BASH_OUTPUT_CAP_BYTES:-2000}
+  SKIP_CAP=0
+  for target in "$RAW_CMD" "$NORM"; do
+    if printf '%s' "$target" | grep -qE '(^|[;&|[:space:]])(cd|export|source|alias|unalias|pushd|popd|declare|readonly|exec|eval|set|unset)\b'; then
+      SKIP_CAP=1
+    fi
+    if printf '%s' "$target" | grep -qE '(^|[^&])&([^&]|$)'; then
+      SKIP_CAP=1
+    fi
+  done
+
+  if [ "$SKIP_CAP" = 0 ]; then
+    WRAPPED=$(printf '{ %s\n} 2>&1 | head -c %s' "$RAW_CMD" "$CAP_BYTES")
+    jq -nc --arg cmd "$WRAPPED" \
+      '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",updatedInput:{command:$cmd}}}'
+  fi
   ;;
 Read|Edit|Write)
   FILE_PATH=$(jfield '.tool_input.file_path')

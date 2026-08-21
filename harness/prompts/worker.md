@@ -14,6 +14,10 @@ RULES:
   stop/disable/mask, dd, docker --remove-orphans, ip link set, macchanger, git push
   --force, rm -rf outside your worktree/tmp, docker except ps/logs, reading credentials).
   A blocked call means re-scope your approach, not retry the same command.
+- The guard hook also caps Bash output at ~2KB (wq#729) — tool results are ~40-50% of a
+  session's cost. Narrow commands yourself with `head`/`tail`/`grep -n` instead of dumping
+  everything; same for file reads, prefer a bounded `grep -n`/`Read(offset,limit)` over a
+  whole-file read when you only need part of it.
 - Working directory: a dedicated git worktree (path below) — nothing outside it is yours;
   other lanes' worktrees aren't either. Land via lumen-pr (branch pre-checked-out:
   `/home/lumen/bin/lumen-pr commit` / `open` / `land` from here), never direct-to-main.

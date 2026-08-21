@@ -286,18 +286,38 @@ the carry. Each row states the measured baseline it targets.
 R1–R4 overlap: they are alternative aggressiveness settings on the same lever, not additive.
 The realistic combined target is **R1 or R2, plus R3** — call it 25–30% of fleet build spend.
 
-**R1/R2/R4 — cap tool output.** Two candidate mechanisms, and picking between them is a
-spike, not a decision this audit can make from transcripts: (a) a prompt-level rule telling
-workers to pipe through `head`/`tail` and to prefer `grep -n` over `cat`; (b) a `PreToolUse`
-hook that rewrites the invocation before it runs. Mechanism (b) depends on whether CLI
-2.1.233 honours an `updatedInput` from a `PreToolUse` hook, which needs a read of the CLI
-bundle — outside this worker's allowed directories, so unverified and deliberately not
-asserted. `guard.sh` does no output capping today, and neither live prompt carries any
-output-discipline rule. A prompt-level rule is additive text in the connective-prose region
-of both prompts and touches nothing on INSTRUCTION_DIET.md §Scope's preserved-verbatim list
-(safety rules, deny rationale, provenance, no-human-present) — but it does mean *adding*
-~50 tokens to a prompt to save ~25% of a session, which is the correct trade by three orders
-of magnitude.
+**R1/R2/R4 — cap tool output.** ✅ **SPIKE SETTLED 2026-08-21 (wq#729): mechanism (a).**
+CLI 2.1.233 *does* honour `updatedInput` from a `PreToolUse` hook — confirmed against the
+live docs (code.claude.com/docs/en/hooks, three independent fetches, 2026-08-21), not the
+CLI bundle (still outside a build worker's allowed dirs, unchanged from this audit). The
+docs' own `hookSpecificOutput` reference table for `PreToolUse` lists `updatedInput` with
+worked example `{"command": "npm test -- --testPathPattern=utils"}`, i.e. exactly the
+Bash-rewrite shape this ticket needs. `updatedInput` is documented as *ignored on
+`mcp__.*` tools* — irrelevant here, Bash/Read/Edit/Write are all first-party.
+
+Implemented in `guard.sh`: every allowed `Bash` call is rewritten to
+`{ <original>\n} 2>&1 | head -c 2000` (~1000 real tokens at this content mix's measured
+1.63-1.81x cl100k ratio), landing R4 and the Bash-attributable share of R1/R2. Commands
+that mutate shell state the persistent session depends on (`cd`, `export`, `source`,
+backgrounding with `&`, …) are excluded from the rewrite — piping subshells the left side,
+so a state change inside it would silently vanish instead of persisting to the next Bash
+call; skipping the cap is the safe failure mode, not capping is not. `harness/prompts/
+worker.md` also gained one bullet (additive connective prose, touches neither the
+no-human-present nor deny-list byte-identical bullets) telling workers the cap exists and
+to prefer bounded `grep -n`/`Read(offset,limit)` themselves — the "(b) prompt rule"
+component, kept as a complement rather than a replacement now that (a) is confirmed to
+work.
+
+**Not done here, and why:** capping `Read` results the same way would need `updatedInput`
+setting a default `limit`, which is wq#730's mechanism (R3, "bound the read" — a smarter,
+not-always-on version of this same lever) and shares this ticket's now-settled spike.
+Porting the R7 wq-path fix into `FOREMAN_DISPATCH.prompt` turned out to be out of a build
+worker's reach the same way reading the CLI bundle is: the file is gitignored and lives
+only on disk at `/home/lumen/foreman/`, outside every worktree, and editing it requires the
+same live-edit access wq#631's diet used — not something a worktree-scoped PR can carry.
+Flagged for whoever has that access (Frank, or a `--dangerously-...` scoped session);
+wq#729 delivers the settled spike plus the guard.sh/worker.md half that a worktree can
+reach.
 
 **R3 — bound the read.** The strongest single lever and the least invasive: 61 of 152 reads
 across the set pulled a whole file. The $14.46 figure is the full carry cost of those reads
@@ -337,10 +357,12 @@ which is what the selection criteria were for.
 
 Filed separately per the acceptance criteria, not implemented here:
 
-- **wq#729** — tool-output discipline lever, spike then implement (R1, R2, R4, R7). The
-  `PreToolUse` `updatedInput` question is the blocking spike; it decides hook-vs-prompt.
+- **wq#729** — tool-output discipline lever, spike then implement (R1, R2, R4, R7). ✅ spike
+  settled (`updatedInput` is honoured), R4 implemented in `guard.sh` + `worker.md`; R7
+  blocked on `FOREMAN_DISPATCH.prompt` being outside any worktree's reach — see above.
 - **wq#730** — bound file reads, suppress repeat reads, drop errored results from the carry
-  (R3, R5, R6). Shares wq#729's mechanism question.
+  (R3, R5, R6). Mechanism question is now settled by wq#729: `updatedInput` on `Read`'s
+  `limit`/`offset` is the same confirmed lever, ready to use directly.
 - **wq#731** — correct `models.yaml`'s stale sonnet-5 `api_price_mtok` (2/10 → 3/15) and
   record the cache-tier multipliers, so the governor prices sessions correctly.
 - **wq#732** — rescale wq#704's per-turn figures to per-API-call, note the ~1.8x

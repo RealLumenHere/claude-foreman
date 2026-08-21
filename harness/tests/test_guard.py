@@ -30,6 +30,24 @@ def run_guard(tool_name, tool_input, env_extra=None):
     return p.returncode, p.stderr
 
 
+def run_guard_stdout(tool_name, tool_input, env_extra=None):
+    payload = json.dumps({
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "session_id": "test-session",
+        "cwd": WORKTREE,
+        "effort": {"level": "high"},
+    })
+    env = dict(os.environ)
+    env["FOREMAN_WORKER"] = "test-worker"
+    env["FOREMAN_EVENTS_DIR"] = "/tmp/guard_test_events"
+    env["FOREMAN_WORKTREE_ROOT"] = WORKTREE
+    if env_extra:
+        env.update(env_extra)
+    p = subprocess.run([GUARD], input=payload, capture_output=True, text=True, env=env)
+    return p.returncode, p.stdout, p.stderr
+
+
 MUST_BLOCK = [
     ("Bash", {"command": "sudo reboot"}),
     ("Bash", {"command": "reboot"}),
@@ -159,3 +177,85 @@ def test_lifecycle_events_logged(tmp_path):
     assert [l["event"] for l in lines] == ["start", "stop", "end"]
     assert all(l["effort"] == "high" for l in lines)
     assert all(l["session_id"] == "s-abc" for l in lines)
+
+
+# ---- wq#729 R4: Bash output cap ----
+
+CAPPABLE = [
+    "cat /etc/hostname",
+    "find / -maxdepth 4 -iname wq*",
+    "git log --oneline -5",
+    "grep -rn foo .",
+]
+
+# Bare & inside a quoted string (not a real background operator) is over-cautious
+# to skip, but skipping is the safe direction — asserted separately below.
+CAPPABLE_BUT_CONSERVATIVELY_SKIPPED = [
+    'curl -s "http://localhost:8080/x?a=1&b=2"',
+]
+
+NOT_CAPPABLE = [
+    "cd /tmp",
+    "cd /tmp && pytest",
+    "export FOO=bar",
+    "source venv/bin/activate",
+    "some-long-job.sh &",
+    "sleep 5 & wait",
+]
+
+
+def test_capped_commands_get_updated_input():
+    for cmd in CAPPABLE:
+        rc, stdout, stderr = run_guard_stdout("Bash", {"command": cmd})
+        assert rc == 0, (cmd, stderr)
+        out = json.loads(stdout)
+        updated = out["hookSpecificOutput"]["updatedInput"]["command"]
+        assert "head -c 2000" in updated
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+        # the original command text is preserved verbatim inside the wrapper
+        assert cmd in updated
+
+
+def test_stateful_commands_are_not_capped():
+    for cmd in NOT_CAPPABLE + CAPPABLE_BUT_CONSERVATIVELY_SKIPPED:
+        rc, stdout, stderr = run_guard_stdout("Bash", {"command": cmd})
+        assert rc == 0, (cmd, stderr)
+        assert stdout.strip() == "", (cmd, stdout)
+
+
+def test_cap_bytes_env_override():
+    rc, stdout, stderr = run_guard_stdout(
+        "Bash", {"command": "cat /etc/hostname"},
+        env_extra={"FOREMAN_BASH_OUTPUT_CAP_BYTES": "500"},
+    )
+    assert rc == 0, stderr
+    out = json.loads(stdout)
+    assert "head -c 500" in out["hookSpecificOutput"]["updatedInput"]["command"]
+
+
+def test_wrapped_command_actually_truncates(tmp_path):
+    # Functional check: what guard.sh hands back, when actually run through bash,
+    # produces output capped at the requested byte count.
+    big = tmp_path / "big.txt"
+    big.write_text("x" * 10_000)
+    rc, stdout, stderr = run_guard_stdout("Bash", {"command": f"cat {big}"})
+    assert rc == 0, stderr
+    wrapped = json.loads(stdout)["hookSpecificOutput"]["updatedInput"]["command"]
+    p = subprocess.run(["bash", "-c", wrapped], capture_output=True, text=True)
+    assert len(p.stdout) == 2000
+
+
+def test_wrapped_command_preserves_normal_output():
+    rc, stdout, stderr = run_guard_stdout("Bash", {"command": "echo hello-wq729"})
+    assert rc == 0, stderr
+    wrapped = json.loads(stdout)["hookSpecificOutput"]["updatedInput"]["command"]
+    p = subprocess.run(["bash", "-c", wrapped], capture_output=True, text=True)
+    assert p.stdout.strip() == "hello-wq729"
+
+
+def test_must_allow_commands_still_exit_zero_when_capped():
+    # cross-check against the existing MUST_ALLOW corpus: capping must never
+    # change the allow/block verdict, only (optionally) rewrite the command.
+    for tool, inp in MUST_ALLOW:
+        rc, stdout, stderr = run_guard_stdout(tool, inp)
+        assert rc == 0, (tool, inp, stderr)
