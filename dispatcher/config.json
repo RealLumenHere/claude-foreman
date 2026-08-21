@@ -9,7 +9,7 @@
   "lanes": {
     "foreman-tok": {
       "enabled": true,
-      "max_per_day": 6
+      "max_per_day": 18
     },
     "lpp": {
       "enabled": false,
@@ -30,7 +30,7 @@
     },
     "foreman-auto": {
       "enabled": true,
-      "max_per_day": 6
+      "max_per_day": 18
     }
   }
 }
