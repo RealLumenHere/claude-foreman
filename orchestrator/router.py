@@ -63,6 +63,8 @@ MANIFEST_PATH = os.environ.get(
 LANE_REPO = {
     "build": FOREMAN_ROOT,
     "auto": FOREMAN_ROOT,
+    "foreman-tok": FOREMAN_ROOT,   # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
+    "foreman-auto": FOREMAN_ROOT,  # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
     "pokemon": "/home/lumen/pokemon",
 }
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")

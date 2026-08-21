@@ -2,12 +2,35 @@
   "cadence_note": "cadence lives in the systemd timer, not here",
   "max_spawns_per_pass": 3,
   "cloud_ceiling": 3,
-  "tight_mode": {"max_spawns_per_pass": 1, "min_pri": 1},
+  "tight_mode": {
+    "max_spawns_per_pass": 1,
+    "min_pri": 1
+  },
   "lanes": {
-    "foreman-tok": {"enabled": false, "max_per_day": 6},
-    "lpp":         {"enabled": false, "max_per_day": 4},
-    "questfree":   {"enabled": false, "max_per_day": 4},
-    "pstack":      {"enabled": false, "max_per_day": 4},
-    "fleet-fires": {"enabled": false, "max_per_day": 2, "requires_approval": true}
+    "foreman-tok": {
+      "enabled": true,
+      "max_per_day": 6
+    },
+    "lpp": {
+      "enabled": false,
+      "max_per_day": 4
+    },
+    "questfree": {
+      "enabled": false,
+      "max_per_day": 4
+    },
+    "pstack": {
+      "enabled": false,
+      "max_per_day": 4
+    },
+    "fleet-fires": {
+      "enabled": false,
+      "max_per_day": 2,
+      "requires_approval": true
+    },
+    "foreman-auto": {
+      "enabled": true,
+      "max_per_day": 6
+    }
   }
 }
