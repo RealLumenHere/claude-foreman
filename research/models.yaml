@@ -51,7 +51,7 @@ models:
     default_effort: high
     pools: [session, weekly_all]
     burn: {est: "workhorse-class; sonnet@high assumed ~= opus@low cost, better value", measured: null}
-    api_price_mtok: {in: 2, out: 10, note: "intro until 2026-08-31, then 3/15"}
+    api_price_mtok: {in: 3, out: 15, cache_read: 0.3, cache_write: 6, note: "CALL_AUDIT (wq#706): reproduces CLI total_cost_usd at 0.0 relative error across all five clean-set sessions; intro 2/10 rate not observed"}
     trust: "standard-engineering; probe-build; mechanical-edit; verify-pass gate model."
 
   - id: claude-haiku-4-5
