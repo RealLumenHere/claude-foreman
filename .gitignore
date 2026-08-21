@@ -3,6 +3,7 @@
 /STOP
 /events.json
 /events/
+/self_heal_state.json
 
 # scratch from probe runs and interim dispatch spawns — not source
 /_probe/

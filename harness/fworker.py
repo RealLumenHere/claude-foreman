@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from classifier import (
     RunState, classify,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
+    TURNS, LAUNCH_FAILURE, KILLED, REFUSED, BUDGET, CRASH,
 )
 from oom_forensics import oom_journal_evidence
 
@@ -329,6 +330,35 @@ def wq_release(ticket_id):
 
 def wq_block(ticket_id, reason):
     wq("block", str(ticket_id), reason)
+
+
+# wq#725: wq#704/705 both exhausted MAX_ATTEMPTS and landed blocked not because the
+# work was impossible but because the spawn environment was broken (wrong --repo, a
+# stale worktree from a prior crashed attempt) — indistinguishable, from the blocked
+# state alone, from a worker that genuinely can't do the work. handle_failure() now
+# tags every wq_block() reason with one of three classes so a downstream self-heal
+# sweep (harness/self_heal.py) can tell them apart without guessing:
+#   INFRA_CRASH  spawn env broken, no real work attempted -> safe to auto-release
+#   WORK_BLOCKED worker decided it cannot do the work -> needs Frank
+#   LIMIT_HIT    ran out of turn/token budget on real work -> may be worth a bigger
+#                budget, but that's Frank's call, not an auto-retry
+# LAUNCH_FAILURE/KILLED/OOM carry the sharpest evidence of the three (RELIABILITY_SPEC.md
+# §C: no-init/instant-death, SIGTERM-no-result, exit 137) that the failure was
+# environmental, not a judgment about the ticket's content. CRASH is deliberately left
+# out of INFRA_CRASH_CLASSES: it's the spec's catch-all for a frame shape no sharper
+# verdict claims yet, so its cause is unknown — §D's "no verdict without evidence"
+# means unknown defaults to the conservative (human-reviewed) bucket, not the
+# auto-healed one.
+INFRA_CRASH_CLASSES = frozenset({LAUNCH_FAILURE, KILLED, OOM})
+LIMIT_HIT_CLASSES = frozenset({TURNS, BUDGET})
+
+
+def block_reason_class(classification):
+    if classification in INFRA_CRASH_CLASSES:
+        return "INFRA_CRASH"
+    if classification in LIMIT_HIT_CLASSES:
+        return "LIMIT_HIT"
+    return "WORK_BLOCKED"
 
 
 def ntfy(title, msg, priority="default"):
@@ -1002,7 +1032,13 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
         return do_attempt(args, attempt + 1)
 
     transcript_hint = f"~/.claude/projects/*/{state.session_id}.jsonl" if state.session_id else "unknown"
-    reason = f"{classification} after {attempt} attempts; transcript={transcript_hint}"
+    reason_class = block_reason_class(classification)
+    blocked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    detail = f"{classification} after {attempt} attempts; transcript={transcript_hint}"
+    # wq has no dedicated block_reason/blocked_at columns (schema lives outside this
+    # repo, in the shared wq CLI) — self_heal.py parses this prefix back out of the
+    # `notes` field wq already stores instead of requiring a live schema migration.
+    reason = f"{reason_class}[at={blocked_at}]: {detail}"
     log(f"BLOCKED: {reason}")
     wq_block(ticket_id, reason)
     ntfy("foreman BLOCKED", f"wq#{ticket_id}: {reason}", priority="high")

@@ -82,6 +82,14 @@ def wq_status(env, ticket_id):
     return None
 
 
+def wq_notes(env, ticket_id):
+    p = subprocess.run([WQ_BIN, "show", str(ticket_id)], capture_output=True, text=True, env=env)
+    for line in p.stdout.splitlines():
+        if line.strip().startswith("notes"):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
 def run_fworker(env, ticket_id, repo, scenario, model="claude-sonnet-5", effort="high",
                  archetype="mechanical-edit", extra_args=None, timeout=60):
     cmd = [sys.executable, FWORKER, "run", "--ticket", str(ticket_id), "--repo", repo,
@@ -127,6 +135,9 @@ def test_denied_verb_blocked_at_hook_during_real_spawn(tmp_path):
     result = run_fworker(env, ticket_id, repo, "denied_verb_blocked")
     # both attempts CRASH (no rate-limit signal) -> blocked after MAX_ATTEMPTS
     assert wq_status(env, ticket_id) == "blocked"
+    # wq#725: CRASH is the spec's unclassified catch-all — no sharper evidence either
+    # way, so it defaults to the conservative, human-reviewed bucket, not INFRA_CRASH.
+    assert wq_notes(env, ticket_id).startswith("WORK_BLOCKED[at=")
 
     events_file = os.path.join(events_dir, f"test-fworker-wq{ticket_id}.jsonl")
     lines = [json.loads(l) for l in open(events_file) if l.strip()]

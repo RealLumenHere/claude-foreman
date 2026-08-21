@@ -19,6 +19,8 @@ below.
                              classification input itself
     reaper.py                independent wq lease reaper (§E, wq#647) — `wq reap` +
                              an aq row per reap, decoupled from any worker's own exit path
+    self_heal.py              blocked-ticket triage (wq#725) — auto-releases INFRA_CRASH
+                             blocks, leaves WORK_BLOCKED/LIMIT_HIT for Frank
     concurrency.py           wq#616 (T2b): live fworker-wq* unit count + cloud slot cap
     spawner.py               wq#616 (T2b): concurrency-capped, staggered batch dispatch
     worker-settings.json    settings pack — replaces worker-settings-interim.json
@@ -76,6 +78,47 @@ independent process that sweeps ALL lanes on its own schedule:
 Every reclaim posts an `aq` row (source `foreman-reaper`) so a dangling claim is never
 silent again, then reverts the ticket to `open` via `wq reap` (a new lane-independent
 subcommand, same reclaim semantics `wq claim` already uses for its own lane).
+
+## Blocked-ticket self-heal (wq#725)
+
+wq#704/705 both exhausted MAX_ATTEMPTS and landed `blocked` not because the work was
+impossible but because the spawn environment was broken (wrong `--repo`, a stale
+worktree from a prior crashed attempt) — indistinguishable, from the blocked state
+alone, from a worker that genuinely can't do the work. A human had to notice and
+manually `wq release` + re-dispatch every time.
+
+`handle_failure()` now tags every `wq_block()` reason with a structured class
+(`fworker.block_reason_class`) plus a blocked-at timestamp, e.g.
+`INFRA_CRASH[at=2026-08-21T14:00:00Z]: LAUNCH_FAILURE after 2 attempts; ...` — packed
+into the `notes` field wq already stores, since wq's own schema (a separate repo, not
+this one) has no dedicated `block_reason`/`blocked_at` columns yet:
+
+  - `INFRA_CRASH` — LAUNCH_FAILURE/KILLED/OOM: spawn env broke before real work
+    happened. Safe to auto-release; the next dispatch gets a fresh worktree.
+  - `LIMIT_HIT` — TURNS/BUDGET: ran out of turn/token budget on real work. Might be
+    worth a bigger budget, but that call is Frank's.
+  - `WORK_BLOCKED` — REFUSED/CRASH/anything else: the worker decided it needs Frank,
+    or the failure shape is ambiguous (CRASH is RELIABILITY_SPEC.md's catch-all with
+    no sharper verdict yet). §D's "no verdict without evidence" means unknown
+    defaults to the conservative, human-reviewed bucket.
+
+`self_heal.py` sweeps every `blocked` ticket on its own schedule and only ever acts on
+`INFRA_CRASH`:
+
+    python3 harness/self_heal.py sweep [--dry-run]     # one pass, all blocked tickets
+    lumen-run start --name foreman-self-heal -- \
+      python3 /home/lumen/foreman/harness/self_heal.py loop --interval 600
+
+A fresh (<30m old) `INFRA_CRASH` block gets `wq release`d so the dispatcher can
+redispatch it. A block that's still `INFRA_CRASH` and still blocked past 30 minutes,
+or has already been auto-released 5 times (`MAX_HEALS`) and kept re-blocking, is left
+alone and Frank gets an `ntfy` instead — per-ticket heal counts and notify-once state
+live in a local JSON sidecar (`self_heal_state.json`, not wq) rather than a wq schema
+change. `WORK_BLOCKED`/`LIMIT_HIT` tickets, and any block with no structured prefix at
+all (e.g. one Frank set by hand), are never auto-released. fworker's own `ntfy` at
+block time (see `handle_failure`) already covers "Frank sees every block" regardless
+of class — self_heal only adds a second notification for the stale/ceiling cases
+above.
 
 ## Governor cache-on-429, NDJSON hardening, OOM forensics (wq#648, §B/§E, S3)
 

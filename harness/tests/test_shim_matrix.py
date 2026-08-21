@@ -13,7 +13,7 @@ import json
 import os
 
 from test_fworker_integration import (
-    make_scratch_repo, make_scratch_env, wq_add, wq_status, run_fworker,
+    make_scratch_repo, make_scratch_env, wq_add, wq_status, wq_notes, run_fworker,
 )
 
 
@@ -49,6 +49,9 @@ def test_shim_2_real_turn_ceiling_is_turns(tmp_path):
     record = attempt_record(runs_root, ticket_id)
     assert record["classification"] == "TURNS"
     assert record["turns"] >= 1
+    # wq#725: TURNS is a budget question ("may be worth retrying with more budget"),
+    # not a spawn-env or work-content one — LIMIT_HIT, never auto-healed.
+    assert wq_notes(env, ticket_id).startswith("LIMIT_HIT[at=")
 
 
 def test_shim_3_no_init_instant_exit_is_launch_failure_never_turns(tmp_path):
@@ -64,6 +67,10 @@ def test_shim_3_no_init_instant_exit_is_launch_failure_never_turns(tmp_path):
     assert record["classification"] == "LAUNCH_FAILURE"
     assert record["classification"] != "TURNS"
     assert record["session_id"] is None
+    # wq#725: no-init/instant-death is the sharpest possible evidence of a broken
+    # spawn env, not the ticket's content — INFRA_CRASH, safe for self_heal.py to
+    # auto-release.
+    assert wq_notes(env, ticket_id).startswith("INFRA_CRASH[at=")
 
 
 def test_shim_4_turn_setup_failed_is_launch_failure(tmp_path):
@@ -105,6 +112,7 @@ def test_shim_6_exit_143_no_result_is_killed(tmp_path):
     record = attempt_record(runs_root, ticket_id)
     assert record["classification"] == "KILLED"
     assert record["exit_code"] == 143
+    assert wq_notes(env, ticket_id).startswith("INFRA_CRASH[at=")
 
 
 def test_shim_7_exit_137_is_oom(tmp_path):
@@ -118,6 +126,7 @@ def test_shim_7_exit_137_is_oom(tmp_path):
     assert wq_status(env, ticket_id) == "blocked"
     record = attempt_record(runs_root, ticket_id)
     assert record["classification"] == "OOM"
+    assert wq_notes(env, ticket_id).startswith("INFRA_CRASH[at=")
     assert record["exit_code"] == 137
 
 
