@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from classifier import (
     RunState, classify,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
+    TURNS, LAUNCH_FAILURE, KILLED, BUDGET,
 )
 from oom_forensics import oom_journal_evidence
 
@@ -219,6 +220,33 @@ POST_RESULT_GRACE_S = _envint("FOREMAN_POST_RESULT_GRACE_S", 20)
 HEARTBEAT_INTERVAL_S = 10 * 60
 MAX_ATTEMPTS = 2
 RESUME_WAIT_MAX_S = 6 * 3600
+
+# wq#725 AUTO-7: every classification that reaches handle_failure() (TURNS,
+# LAUNCH_FAILURE, KILLED, OOM, REFUSED, BUDGET, CRASH) gets bucketed into one of three
+# block classes so wq self-heal (dispatcher/self_heal.py) can tell an infra-crash block
+# apart from a work-content block without re-deriving classifier.py's semantics:
+#   INFRA_CRASH  spawn/process environment broke before or during the run; the ticket's
+#                content was never really attempted -> safe to auto-release and requeue.
+#   LIMIT_HIT    the run hit a turn or budget ceiling; may be worth retrying with more
+#                budget, but that's a resourcing call, not a self-heal one.
+#   WORK_BLOCKED the worker (or model) made a decision it can't do the work, or the
+#                failure shape is an unrecognized catch-all -> always needs Frank; never
+#                auto-requeued. The conservative default for anything not explicitly
+#                known to be infra or a limit.
+BLOCK_INFRA_CRASH = "INFRA_CRASH"
+BLOCK_LIMIT_HIT = "LIMIT_HIT"
+BLOCK_WORK_BLOCKED = "WORK_BLOCKED"
+
+_INFRA_CRASH_CLASSIFICATIONS = {LAUNCH_FAILURE, KILLED, OOM}
+_LIMIT_HIT_CLASSIFICATIONS = {TURNS, BUDGET}
+
+
+def classify_block_reason(classification):
+    if classification in _INFRA_CRASH_CLASSIFICATIONS:
+        return BLOCK_INFRA_CRASH
+    if classification in _LIMIT_HIT_CLASSIFICATIONS:
+        return BLOCK_LIMIT_HIT
+    return BLOCK_WORK_BLOCKED
 
 OTEL_ENDPOINT = "http://100.110.156.91:8429/opentelemetry"
 
@@ -1002,10 +1030,12 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
         return do_attempt(args, attempt + 1)
 
     transcript_hint = f"~/.claude/projects/*/{state.session_id}.jsonl" if state.session_id else "unknown"
-    reason = f"{classification} after {attempt} attempts; transcript={transcript_hint}"
-    log(f"BLOCKED: {reason}")
+    block_class = classify_block_reason(classification)
+    reason = (f"{block_class}: {classification} after {attempt} attempts; "
+              f"transcript={transcript_hint}")
+    log(f"BLOCKED [{block_class}]: {reason}")
     wq_block(ticket_id, reason)
-    ntfy("foreman BLOCKED", f"wq#{ticket_id}: {reason}", priority="high")
+    ntfy("foreman BLOCKED", f"wq#{ticket_id} [{block_class}]: {reason}", priority="high")
     return EXIT_BLOCKED
 
 

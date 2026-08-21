@@ -1,0 +1,10 @@
+# Staged logrotate stanza for the self-heal decision log (wq#725).
+# Install: sudo cp dispatcher/systemd/lumen-foreman-selfheal.logrotate /etc/logrotate.d/lumen-foreman-selfheal
+/home/lumen/foreman/self_heal.log {
+    weekly
+    rotate 8
+    copytruncate
+    compress
+    missingok
+    notifempty
+}

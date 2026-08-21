@@ -75,10 +75,15 @@ def wq_add(env, title):
 
 
 def wq_status(env, ticket_id):
+    return wq_show_field(env, ticket_id, "status")
+
+
+def wq_show_field(env, ticket_id, field):
     p = subprocess.run([WQ_BIN, "show", str(ticket_id)], capture_output=True, text=True, env=env)
     for line in p.stdout.splitlines():
-        if line.strip().startswith("status"):
-            return line.split(":", 1)[1].strip()
+        k, _, v = line.partition(":")
+        if k.strip() == field:
+            return v.strip()
     return None
 
 
@@ -133,6 +138,29 @@ def test_denied_verb_blocked_at_hook_during_real_spawn(tmp_path):
     blocked = [l for l in lines if l.get("event") == "blocked"]
     assert blocked, "guard.sh should have logged a blocked event for --remove-orphans"
     assert "remove-orphans" in blocked[0]["reason"]
+
+    # wq#725 AUTO-7: CRASH is the conservative default (never known to be infra) -> the
+    # wq_block() reason self_heal.py reads is prefixed WORK_BLOCKED, never auto-released.
+    notes = wq_show_field(env, ticket_id, "notes")
+    assert notes.startswith("WORK_BLOCKED:"), notes
+
+
+def test_launch_failure_blocks_with_infra_crash_prefix(tmp_path):
+    """wq#725 AUTO-7: the wq#704/705 failure mode (spawn env broken, no model work ever
+    attempted) classifies LAUNCH_FAILURE both attempts -> blocked with an INFRA_CRASH:
+    prefix, the signal dispatcher/self_heal.py auto-releases on."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+        tmp_path, 0, "turn_setup_failed")
+    ticket_id = wq_add(env, "scratch launch-failure ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    run_fworker(env, ticket_id, repo, "turn_setup_failed")
+    assert wq_status(env, ticket_id) == "blocked"
+
+    notes = wq_show_field(env, ticket_id, "notes")
+    assert notes.startswith("INFRA_CRASH:"), notes
+    assert "LAUNCH_FAILURE" in notes
 
 
 def test_rejected_limit_frame_drives_limit_path_not_crash(tmp_path):

@@ -1,0 +1,20 @@
+# lumen-foreman-selfheal.service — one wq self-heal pass (wq#725 AUTO-7).
+# STAGED (Tier-3): installed but never enabled by the fleet; the timer is the only
+# starter and Frank enables it by hand. See dispatcher/self_heal.py's module docstring
+# and dispatcher/systemd/INSTALL.md.
+# Deliberately no [Install] section: this service cannot be enabled at boot, only
+# started by the timer (or manually for a one-off pass).
+[Unit]
+Description=Lumen wq self-heal — release INFRA_CRASH blocks, leave WORK_BLOCKED/LIMIT_HIT (wq#725)
+Documentation=file:///home/lumen/foreman/dispatcher/self_heal.py
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+# wq / slock / ntfy-send live in /home/lumen/bin.
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/self_heal.py run --once
+TimeoutStartSec=120
+Nice=5

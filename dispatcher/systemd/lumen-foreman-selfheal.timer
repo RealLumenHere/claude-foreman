@@ -1,0 +1,17 @@
+# lumen-foreman-selfheal.timer — 10-min cadence for wq self-heal (wq#725 AUTO-7).
+# SHIPS DISABLED (Tier-3 — same posture as lumen-foreman-dispatch.timer): nothing runs
+# until Frank runs `systemctl enable --now lumen-foreman-selfheal.timer` himself.
+# Instant rollback without systemd: `touch /home/lumen/autonomy/DISPATCH_DISARM` (shared
+# kill switch with the dispatcher — self_heal.py checks the same file).
+[Unit]
+Description=10-min cadence for lumen-foreman-selfheal (STAGED — Frank enables; wq#725)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+RandomizedDelaySec=30
+# A missed window is skipped, never replayed in a burst.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

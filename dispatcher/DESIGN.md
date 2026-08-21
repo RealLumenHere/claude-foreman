@@ -304,6 +304,33 @@ Adversarial posture mirrors T2a §12: every gate test also asserts the *negative
 spawn stub records zero calls), not just the log line — a gate that logs "skip" and
 spawns anyway must fail the suite.
 
+## 12. wq self-heal (wq#725 AUTO-7) — a separate scanner, same contract
+
+`dispatcher/self_heal.py` is a second, independent one-shot scanner (own systemd unit,
+own 10-min timer, own slock scope `foreman-selfheal`) that closes the loop this
+dispatcher only opens: a ticket the dispatcher spawns can still end up `blocked` if
+fworker exhausts `MAX_ATTEMPTS` (harness/fworker.py `handle_failure()`). Before wq#725,
+every blocked ticket looked the same — a broken spawn environment (wrong `--repo`, a
+stale worktree from a prior crashed attempt: wq#704/wq#705) sat blocked exactly like a
+ticket the worker genuinely couldn't do, until Frank noticed by hand.
+
+The fix lives mostly in the harness, not here: `handle_failure()` now prefixes every
+`wq_block()` reason with a class from `classify_block_reason()` — `INFRA_CRASH:` (spawn/
+process environment broke, no real work attempted), `LIMIT_HIT:` (turn/budget ceiling —
+a resourcing call), or `WORK_BLOCKED:` (the worker/model decided it can't do the work,
+or an unrecognized shape — the conservative default). self_heal.py only ever acts on
+`INFRA_CRASH:`: `wq release` it (subject to a per-ticket attempt cap read from fworker's
+own `attempt-N.json` files, and a "how long has this been stuck" ledger in its own
+state.json — wq has no `blocked_at` column, so this is a local first-seen timestamp,
+not a schema change on the shared, concurrently-used `/home/lumen/bin/wq` binary).
+`LIMIT_HIT` and `WORK_BLOCKED` are never released — no override.
+
+Released is as far as self_heal.py goes: it does not spawn. A released ticket is `open`
+again, which makes it a normal candidate for *this* dispatcher's own next pass — the
+same "gate here, spawn there" division of labor as §1, just with an extra scanner ahead
+of it. See `dispatcher/self_heal.py`'s module docstring for the full contract and
+`dispatcher/tests/test_self_heal.py` for coverage.
+
 ## 12. Decisions Frank must ratify (with the design, or as build-phase red lines)
 
 1. **LANE_REPO entries** for foreman-tok / lpp / questfree / pstack (and fleet-fires):
