@@ -1122,7 +1122,9 @@ def main():
     p_run.add_argument("--post-result-grace", type=int, default=None)
     p_run.add_argument("--worker-id", default=None)
     p_run.add_argument("--resume", action="store_true")
-    p_run.add_argument("--claude-bin", default="claude",
+    # wq#714: systemd unit PATH lacks ~/.npm-global/bin, so the bare "claude"
+    # default crashed every spawn with FileNotFoundError within 1s.
+    p_run.add_argument("--claude-bin", default="/home/lumen/.npm-global/bin/claude",
                         help="override for testing against a fake claude shim")
     p_run.set_defaults(func=cmd_run)
 
