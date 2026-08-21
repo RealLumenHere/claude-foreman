@@ -1,0 +1,1110 @@
+{
+  "integrity": {
+    "sessions": 39,
+    "sonnet5_sessions": 33,
+    "max_scale_error_sonnet5": 0.066124,
+    "max_rel_cost_error_after_rescale": 0.0,
+    "note": "input-side usage summed per unique message id; dollars rescaled per session to the CLI's own total_cost_usd"
+  },
+  "clock_crossvalidation": {
+    "contiguous_runs_spanning_multiple_sessions": 12,
+    "max_spread_s": 103244.0,
+    "median_spread_s": 560.0
+  },
+  "trajectories": {
+    "seven_day@1787223600": [
+      {
+        "iso": "2026-08-15T08:05",
+        "utilization": 0.62,
+        "session": "fbuild625r-1f4b20.jsonl"
+      },
+      {
+        "iso": "2026-08-15T08:05",
+        "utilization": 0.63,
+        "session": "fbuild625r-1f4b20.jsonl"
+      },
+      {
+        "iso": "2026-08-15T08:08",
+        "utilization": 0.62,
+        "session": "rabbit22-7ef016.jsonl"
+      },
+      {
+        "iso": "2026-08-15T08:08",
+        "utilization": 0.63,
+        "session": "rabbit22-7ef016.jsonl"
+      },
+      {
+        "iso": "2026-08-15T13:41",
+        "utilization": 0.64,
+        "session": "mv4-drain2-a62d10.jsonl"
+      },
+      {
+        "iso": "2026-08-15T14:23",
+        "utilization": 0.65,
+        "session": "rabbit23-70499a.jsonl"
+      },
+      {
+        "iso": "2026-08-15T17:56",
+        "utilization": 0.66,
+        "session": "fbuild645-182312.jsonl"
+      },
+      {
+        "iso": "2026-08-15T17:58",
+        "utilization": 0.67,
+        "session": "fbuild645-182312.jsonl"
+      },
+      {
+        "iso": "2026-08-15T18:00",
+        "utilization": 0.66,
+        "session": "fleet11-bc74e1.jsonl"
+      },
+      {
+        "iso": "2026-08-15T18:04",
+        "utilization": 0.67,
+        "session": "fleet11-bc74e1.jsonl"
+      },
+      {
+        "iso": "2026-08-15T18:11",
+        "utilization": 0.68,
+        "session": "fleet11-bc74e1.jsonl"
+      },
+      {
+        "iso": "2026-08-15T19:16",
+        "utilization": 0.69,
+        "session": "ftok630-781543.jsonl"
+      },
+      {
+        "iso": "2026-08-15T19:27",
+        "utilization": 0.7,
+        "session": "ftok630-781543.jsonl"
+      },
+      {
+        "iso": "2026-08-16T13:53",
+        "utilization": 0.75,
+        "session": "watch8w-4bdbe4.jsonl"
+      },
+      {
+        "iso": "2026-08-16T15:08",
+        "utilization": 0.76,
+        "session": "mcfix-e9517a.jsonl"
+      },
+      {
+        "iso": "2026-08-16T15:32",
+        "utilization": 0.77,
+        "session": "fleet12-b130a3.jsonl"
+      },
+      {
+        "iso": "2026-08-17T20:15",
+        "utilization": 0.78,
+        "session": "rabbitNOW-bf6e66.jsonl"
+      },
+      {
+        "iso": "2026-08-18T06:07",
+        "utilization": 0.79,
+        "session": "rabbitMisty-efffaa.jsonl"
+      },
+      {
+        "iso": "2026-08-18T13:59",
+        "utilization": 0.8,
+        "session": "fbuild627-6e042c.jsonl"
+      }
+    ],
+    "seven_day_overage_included@1787223600": [
+      {
+        "iso": "2026-08-15T19:16",
+        "utilization": 0.81,
+        "session": "fable617-268843.jsonl"
+      },
+      {
+        "iso": "2026-08-15T19:21",
+        "utilization": 0.82,
+        "session": "fable617-268843.jsonl"
+      },
+      {
+        "iso": "2026-08-15T19:26",
+        "utilization": 0.83,
+        "session": "fable617-268843.jsonl"
+      }
+    ]
+  },
+  "spans": {
+    "seven_day@1787223600": {
+      "from_util": 0.62,
+      "to_util": 0.8,
+      "net_points": 18.0,
+      "t0": "2026-08-15T08:05",
+      "t1": "2026-08-18T14:00",
+      "elapsed_h": 77.92,
+      "calls": 4240,
+      "tokens": {
+        "input": 32442,
+        "cache_write": 7110797,
+        "cache_read": 666717087,
+        "output": 2538698
+      },
+      "usd": 293.85,
+      "per_net_point": {
+        "raw": 37577724,
+        "cost_weighted": 5201069,
+        "free_cache_read": 1497085,
+        "usd": 16.32
+      },
+      "implied_window_floor": {
+        "raw": 3757772400,
+        "cost_weighted": 520106900,
+        "free_cache_read": 149708500,
+        "usd": 1632.0
+      }
+    },
+    "seven_day_overage_included@1787223600": {
+      "from_util": 0.81,
+      "to_util": 0.83,
+      "net_points": 2.0,
+      "t0": "2026-08-15T19:16",
+      "t1": "2026-08-15T19:26",
+      "elapsed_h": 0.16,
+      "calls": 200,
+      "tokens": {
+        "input": 400,
+        "cache_write": 364225,
+        "cache_read": 18800222,
+        "output": 127584
+      },
+      "usd": 15.02,
+      "per_net_point": {
+        "raw": 9646216,
+        "cost_weighted": 1623397,
+        "free_cache_read": 683386,
+        "usd": 7.51
+      },
+      "implied_window_floor": {
+        "raw": 964621600,
+        "cost_weighted": 162339700,
+        "free_cache_read": 68338600,
+        "usd": 751.0
+      }
+    }
+  },
+  "intervals": [
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.62,
+      "to_util": 0.63,
+      "net_points": 1.0,
+      "t0": "2026-08-15T08:05",
+      "t1": "2026-08-15T08:05",
+      "elapsed_h": 0.01,
+      "calls": 8,
+      "tokens": {
+        "input": 16,
+        "cache_write": 13780,
+        "cache_read": 272789,
+        "output": 3531
+      },
+      "usd": 0.22,
+      "per_point": {
+        "raw": 290116,
+        "cost_weighted": 72509,
+        "free_cache_read": 45230,
+        "usd": 0.22
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.63,
+      "to_util": 0.62,
+      "net_points": -1.0,
+      "t0": "2026-08-15T08:05",
+      "t1": "2026-08-15T08:08",
+      "elapsed_h": 0.04,
+      "calls": 69,
+      "tokens": {
+        "input": 138,
+        "cache_write": 146998,
+        "cache_read": 4340068,
+        "output": 31497
+      },
+      "usd": 2.66,
+      "per_point": null
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.62,
+      "to_util": 0.63,
+      "net_points": 1.0,
+      "t0": "2026-08-15T08:08",
+      "t1": "2026-08-15T08:08",
+      "elapsed_h": 0.0,
+      "calls": 3,
+      "tokens": {
+        "input": 6,
+        "cache_write": 2135,
+        "cache_read": 223867,
+        "output": 1373
+      },
+      "usd": 0.1,
+      "per_point": {
+        "raw": 227381,
+        "cost_weighted": 33529,
+        "free_cache_read": 11142,
+        "usd": 0.1
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.63,
+      "to_util": 0.64,
+      "net_points": 1.0,
+      "t0": "2026-08-15T08:08",
+      "t1": "2026-08-15T13:41",
+      "elapsed_h": 5.55,
+      "calls": 418,
+      "tokens": {
+        "input": 836,
+        "cache_write": 623429,
+        "cache_read": 78250687,
+        "output": 238473
+      },
+      "usd": 30.84,
+      "per_point": {
+        "raw": 79113425,
+        "cost_weighted": 10265126,
+        "free_cache_read": 2440057,
+        "usd": 30.84
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.64,
+      "to_util": 0.65,
+      "net_points": 1.0,
+      "t0": "2026-08-15T13:41",
+      "t1": "2026-08-15T14:23",
+      "elapsed_h": 0.71,
+      "calls": 367,
+      "tokens": {
+        "input": 734,
+        "cache_write": 568994,
+        "cache_read": 47672310,
+        "output": 210459
+      },
+      "usd": 20.86,
+      "per_point": {
+        "raw": 48452497,
+        "cost_weighted": 6958248,
+        "free_cache_read": 2191017,
+        "usd": 20.86
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.65,
+      "to_util": 0.66,
+      "net_points": 1.0,
+      "t0": "2026-08-15T14:23",
+      "t1": "2026-08-15T17:56",
+      "elapsed_h": 3.54,
+      "calls": 403,
+      "tokens": {
+        "input": 1354,
+        "cache_write": 666343,
+        "cache_read": 81132908,
+        "output": 198183
+      },
+      "usd": 32.01,
+      "per_point": {
+        "raw": 81998788,
+        "cost_weighted": 10438244,
+        "free_cache_read": 2324953,
+        "usd": 32.01
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.66,
+      "to_util": 0.67,
+      "net_points": 1.0,
+      "t0": "2026-08-15T17:56",
+      "t1": "2026-08-15T17:58",
+      "elapsed_h": 0.03,
+      "calls": 14,
+      "tokens": {
+        "input": 6651,
+        "cache_write": 24767,
+        "cache_read": 633970,
+        "output": 7179
+      },
+      "usd": 0.47,
+      "per_point": {
+        "raw": 672567,
+        "cost_weighted": 155477,
+        "free_cache_read": 92080,
+        "usd": 0.47
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.67,
+      "to_util": 0.66,
+      "net_points": -1.0,
+      "t0": "2026-08-15T17:58",
+      "t1": "2026-08-15T18:00",
+      "elapsed_h": 0.04,
+      "calls": 13,
+      "tokens": {
+        "input": 475,
+        "cache_write": 33188,
+        "cache_read": 842357,
+        "output": 7113
+      },
+      "usd": 0.56,
+      "per_point": null
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.66,
+      "to_util": 0.67,
+      "net_points": 1.0,
+      "t0": "2026-08-15T18:00",
+      "t1": "2026-08-15T18:04",
+      "elapsed_h": 0.07,
+      "calls": 74,
+      "tokens": {
+        "input": 148,
+        "cache_write": 176255,
+        "cache_read": 6491617,
+        "output": 51791
+      },
+      "usd": 3.86,
+      "per_point": {
+        "raw": 6719811,
+        "cost_weighted": 1260776,
+        "free_cache_read": 611614,
+        "usd": 3.86
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.67,
+      "to_util": 0.68,
+      "net_points": 1.0,
+      "t0": "2026-08-15T18:04",
+      "t1": "2026-08-15T18:11",
+      "elapsed_h": 0.11,
+      "calls": 34,
+      "tokens": {
+        "input": 68,
+        "cache_write": 174049,
+        "cache_read": 4430590,
+        "output": 25027
+      },
+      "usd": 2.83,
+      "per_point": {
+        "raw": 4629734,
+        "cost_weighted": 916361,
+        "free_cache_read": 473302,
+        "usd": 2.83
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.68,
+      "to_util": 0.69,
+      "net_points": 1.0,
+      "t0": "2026-08-15T18:11",
+      "t1": "2026-08-15T19:16",
+      "elapsed_h": 1.09,
+      "calls": 197,
+      "tokens": {
+        "input": 394,
+        "cache_write": 382232,
+        "cache_read": 26690477,
+        "output": 159976
+      },
+      "usd": 13.17,
+      "per_point": {
+        "raw": 27233079,
+        "cost_weighted": 4233785,
+        "free_cache_read": 1564737,
+        "usd": 13.17
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.69,
+      "to_util": 0.7,
+      "net_points": 1.0,
+      "t0": "2026-08-15T19:16",
+      "t1": "2026-08-15T19:27",
+      "elapsed_h": 0.19,
+      "calls": 211,
+      "tokens": {
+        "input": 422,
+        "cache_write": 391088,
+        "cache_read": 20339237,
+        "output": 136608
+      },
+      "usd": 16.61,
+      "per_point": {
+        "raw": 20867355,
+        "cost_weighted": 3499561,
+        "free_cache_read": 1465638,
+        "usd": 16.61
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.7,
+      "to_util": 0.75,
+      "net_points": 5.0,
+      "t0": "2026-08-15T19:27",
+      "t1": "2026-08-16T13:53",
+      "elapsed_h": 18.43,
+      "calls": 1154,
+      "tokens": {
+        "input": 16342,
+        "cache_write": 1880655,
+        "cache_read": 218025518,
+        "output": 749146
+      },
+      "usd": 93.13,
+      "per_point": {
+        "raw": 44134332,
+        "cost_weighted": 5865187,
+        "free_cache_read": 1504677,
+        "usd": 18.63
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.75,
+      "to_util": 0.76,
+      "net_points": 1.0,
+      "t0": "2026-08-16T13:53",
+      "t1": "2026-08-16T15:08",
+      "elapsed_h": 1.25,
+      "calls": 157,
+      "tokens": {
+        "input": 314,
+        "cache_write": 360215,
+        "cache_read": 21133617,
+        "output": 115519
+      },
+      "usd": 10.38,
+      "per_point": {
+        "raw": 21609665,
+        "cost_weighted": 3411702,
+        "free_cache_read": 1298340,
+        "usd": 10.38
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.76,
+      "to_util": 0.77,
+      "net_points": 1.0,
+      "t0": "2026-08-16T15:08",
+      "t1": "2026-08-16T15:32",
+      "elapsed_h": 0.4,
+      "calls": 592,
+      "tokens": {
+        "input": 1184,
+        "cache_write": 767446,
+        "cache_read": 73756701,
+        "output": 283820
+      },
+      "usd": 30.99,
+      "per_point": {
+        "raw": 74809151,
+        "cost_weighted": 10330848,
+        "free_cache_read": 2955178,
+        "usd": 30.99
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.77,
+      "to_util": 0.78,
+      "net_points": 1.0,
+      "t0": "2026-08-16T15:32",
+      "t1": "2026-08-17T20:15",
+      "elapsed_h": 28.71,
+      "calls": 168,
+      "tokens": {
+        "input": 336,
+        "cache_write": 197730,
+        "cache_read": 38921946,
+        "output": 86271
+      },
+      "usd": 14.17,
+      "per_point": {
+        "raw": 39206283,
+        "cost_weighted": 4719346,
+        "free_cache_read": 827151,
+        "usd": 14.17
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.78,
+      "to_util": 0.79,
+      "net_points": 1.0,
+      "t0": "2026-08-17T20:15",
+      "t1": "2026-08-18T06:07",
+      "elapsed_h": 9.86,
+      "calls": 208,
+      "tokens": {
+        "input": 1500,
+        "cache_write": 444180,
+        "cache_read": 26571093,
+        "output": 141769
+      },
+      "usd": 12.96,
+      "per_point": {
+        "raw": 27158542,
+        "cost_weighted": 4255816,
+        "free_cache_read": 1598707,
+        "usd": 12.96
+      }
+    },
+    {
+      "pool": "seven_day",
+      "resets_at": 1787223600,
+      "from_util": 0.79,
+      "to_util": 0.8,
+      "net_points": 1.0,
+      "t0": "2026-08-18T06:07",
+      "t1": "2026-08-18T13:59",
+      "elapsed_h": 7.87,
+      "calls": 119,
+      "tokens": {
+        "input": 1493,
+        "cache_write": 216928,
+        "cache_read": 15920911,
+        "output": 79276
+      },
+      "usd": 7.27,
+      "per_point": {
+        "raw": 16218608,
+        "cost_weighted": 2423820,
+        "free_cache_read": 831729,
+        "usd": 7.27
+      }
+    },
+    {
+      "pool": "seven_day_overage_included",
+      "resets_at": 1787223600,
+      "from_util": 0.81,
+      "to_util": 0.82,
+      "net_points": 1.0,
+      "t0": "2026-08-15T19:16",
+      "t1": "2026-08-15T19:21",
+      "elapsed_h": 0.09,
+      "calls": 94,
+      "tokens": {
+        "input": 188,
+        "cache_write": 245486,
+        "cache_read": 5703463,
+        "output": 59972
+      },
+      "usd": 6.42,
+      "per_point": {
+        "raw": 6009109,
+        "cost_weighted": 1361366,
+        "free_cache_read": 791019,
+        "usd": 6.42
+      }
+    },
+    {
+      "pool": "seven_day_overage_included",
+      "resets_at": 1787223600,
+      "from_util": 0.82,
+      "to_util": 0.83,
+      "net_points": 1.0,
+      "t0": "2026-08-15T19:21",
+      "t1": "2026-08-15T19:26",
+      "elapsed_h": 0.07,
+      "calls": 106,
+      "tokens": {
+        "input": 212,
+        "cache_write": 118739,
+        "cache_read": 13096759,
+        "output": 67612
+      },
+      "usd": 8.59,
+      "per_point": {
+        "raw": 13283322,
+        "cost_weighted": 1885428,
+        "free_cache_read": 575752,
+        "usd": 8.59
+      }
+    }
+  ],
+  "stability_across_intervals": {
+    "raw": {
+      "n": 9,
+      "mean": 42791691,
+      "median": 39206283,
+      "min": 16218608,
+      "max": 81998788,
+      "cv": 0.525
+    },
+    "cost_weighted": {
+      "n": 9,
+      "mean": 5841252.7,
+      "median": 4719346,
+      "min": 2423820,
+      "max": 10438244,
+      "cv": 0.463
+    },
+    "free_cache_read": {
+      "n": 9,
+      "mean": 1620152,
+      "median": 1564737,
+      "min": 827151,
+      "max": 2440057,
+      "cv": 0.348
+    },
+    "usd": {
+      "n": 9,
+      "mean": 17.8,
+      "median": 14.2,
+      "min": 7.3,
+      "max": 32.0,
+      "cv": 0.461
+    }
+  },
+  "separability": {
+    "n_intervals": 9,
+    "cache_read_share_of_raw_min": 0.978,
+    "cache_read_share_of_raw_max": 0.9927,
+    "note": "the three weightings are collinear to the extent this share is constant",
+    "raw_over_cost_weighted_min": 6.334,
+    "raw_over_cost_weighted_max": 8.308
+  },
+  "lever_reranking": {
+    "session": "fbuild647-6d3c8b.jsonl",
+    "api_calls": 188,
+    "reconstruction_check_usd": 15.9194,
+    "reported_session_usd": 15.8473,
+    "session_units": {
+      "raw": 41155015,
+      "cost_weighted": 5306452,
+      "free_cache_read": 1234469
+    },
+    "category_share_pct": {
+      "raw": {
+        "tool_result": 52.8,
+        "assistant_thinking": 17.8,
+        "boot_payload": 16.4,
+        "assistant_tool_use": 12.6,
+        "assistant_text": 0.4
+      },
+      "cost_weighted": {
+        "tool_result": 46.5,
+        "assistant_thinking": 21.9,
+        "assistant_tool_use": 16.9,
+        "boot_payload": 14.0,
+        "assistant_text": 0.6
+      },
+      "free_cache_read": {
+        "assistant_thinking": 36.0,
+        "assistant_tool_use": 31.8,
+        "tool_result": 25.4,
+        "boot_payload": 5.8,
+        "assistant_text": 1.1
+      }
+    },
+    "levers": [
+      {
+        "id": "R1",
+        "lever": "cap any tool result at 2,000 tokens",
+        "tokens_removed": 62046,
+        "usd": 3.4193,
+        "implied_reads": 10156747,
+        "units_saved": {
+          "raw": 10218793,
+          "cost_weighted": 1139767,
+          "free_cache_read": 124092
+        },
+        "pct_of_session": {
+          "raw": 24.8,
+          "cost_weighted": 21.5,
+          "free_cache_read": 10.1
+        },
+        "rank": {
+          "raw": 2,
+          "cost_weighted": 2,
+          "free_cache_read": 3
+        }
+      },
+      {
+        "id": "R2",
+        "lever": "cap any tool result at 1,000 tokens",
+        "tokens_removed": 89947,
+        "usd": 4.7178,
+        "implied_reads": 13927060,
+        "units_saved": {
+          "raw": 14017007,
+          "cost_weighted": 1572600,
+          "free_cache_read": 179894
+        },
+        "pct_of_session": {
+          "raw": 34.1,
+          "cost_weighted": 29.6,
+          "free_cache_read": 14.6
+        },
+        "rank": {
+          "raw": 1,
+          "cost_weighted": 1,
+          "free_cache_read": 1
+        }
+      },
+      {
+        "id": "R3",
+        "lever": "bound Read \u2014 grep/offset before whole-file",
+        "tokens_removed": 62981,
+        "usd": 3.4093,
+        "implied_reads": 10104713,
+        "units_saved": {
+          "raw": 10167694,
+          "cost_weighted": 1136433,
+          "free_cache_read": 125962
+        },
+        "pct_of_session": {
+          "raw": 24.7,
+          "cost_weighted": 21.4,
+          "free_cache_read": 10.2
+        },
+        "rank": {
+          "raw": 3,
+          "cost_weighted": 3,
+          "free_cache_read": 2
+        }
+      },
+      {
+        "id": "R4",
+        "lever": "cap Bash output at 1,000 tokens",
+        "tokens_removed": 27891,
+        "usd": 1.4712,
+        "implied_reads": 4346180,
+        "units_saved": {
+          "raw": 4374071,
+          "cost_weighted": 490400,
+          "free_cache_read": 55782
+        },
+        "pct_of_session": {
+          "raw": 10.6,
+          "cost_weighted": 9.2,
+          "free_cache_read": 4.5
+        },
+        "rank": {
+          "raw": 4,
+          "cost_weighted": 4,
+          "free_cache_read": 4
+        }
+      },
+      {
+        "id": "R5",
+        "lever": "suppress re-reading a file already in context",
+        "tokens_removed": 7948,
+        "usd": 0.3383,
+        "implied_reads": 968707,
+        "units_saved": {
+          "raw": 976655,
+          "cost_weighted": 112767,
+          "free_cache_read": 15896
+        },
+        "pct_of_session": {
+          "raw": 2.4,
+          "cost_weighted": 2.1,
+          "free_cache_read": 1.3
+        },
+        "rank": {
+          "raw": 5,
+          "cost_weighted": 5,
+          "free_cache_read": 5
+        }
+      },
+      {
+        "id": "R6",
+        "lever": "keep errored tool results out of the carry",
+        "tokens_removed": 1442,
+        "usd": 0.0329,
+        "implied_reads": 80827,
+        "units_saved": {
+          "raw": 82269,
+          "cost_weighted": 10967,
+          "free_cache_read": 2884
+        },
+        "pct_of_session": {
+          "raw": 0.2,
+          "cost_weighted": 0.2,
+          "free_cache_read": 0.2
+        },
+        "rank": {
+          "raw": 7,
+          "cost_weighted": 7,
+          "free_cache_read": 6
+        }
+      },
+      {
+        "id": "R8",
+        "lever": "delete every word we wrote (slab + CLAUDE.md + trailer)",
+        "tokens_removed": 1378,
+        "usd": 0.1713,
+        "implied_reads": 543440,
+        "units_saved": {
+          "raw": 544818,
+          "cost_weighted": 57100,
+          "free_cache_read": 2756
+        },
+        "pct_of_session": {
+          "raw": 1.3,
+          "cost_weighted": 1.1,
+          "free_cache_read": 0.2
+        },
+        "rank": {
+          "raw": 6,
+          "cost_weighted": 6,
+          "free_cache_read": 7
+        }
+      }
+    ]
+  },
+  "per_session": [
+    {
+      "session": "rabbit23-70499a.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 304,
+      "usd": 26.04,
+      "tokens": {
+        "input": 608,
+        "cache_write": 374062,
+        "cache_read": 70406231,
+        "output": 178318
+      },
+      "cache_read_share_of_raw": 0.9922,
+      "weighted": {
+        "raw": 70959219,
+        "cost_weighted": 8680945,
+        "free_cache_read": 1640322
+      }
+    },
+    {
+      "session": "rabbit25-c9cd5b.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 261,
+      "usd": 22.74,
+      "tokens": {
+        "input": 522,
+        "cache_write": 345883,
+        "cache_read": 60839833,
+        "output": 160437
+      },
+      "cache_read_share_of_raw": 0.9917,
+      "weighted": {
+        "raw": 61346675,
+        "cost_weighted": 7578456,
+        "free_cache_read": 1494473
+      }
+    },
+    {
+      "session": "mv4-drain-2d5787.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 245,
+      "usd": 22.05,
+      "tokens": {
+        "input": 490,
+        "cache_write": 352173,
+        "cache_read": 58149774,
+        "output": 166061
+      },
+      "cache_read_share_of_raw": 0.9912,
+      "weighted": {
+        "raw": 58668498,
+        "cost_weighted": 7350118,
+        "free_cache_read": 1535141
+      }
+    },
+    {
+      "session": "fbuild618-789121.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 238,
+      "usd": 19.0,
+      "tokens": {
+        "input": 476,
+        "cache_write": 313049,
+        "cache_read": 51125089,
+        "output": 119138
+      },
+      "cache_read_share_of_raw": 0.9916,
+      "weighted": {
+        "raw": 51557752,
+        "cost_weighted": 6334773,
+        "free_cache_read": 1222264
+      }
+    },
+    {
+      "session": "fable617-268843.jsonl",
+      "model": "claude-fable-5",
+      "calls": 80,
+      "usd": 16.22,
+      "tokens": {
+        "input": 160,
+        "cache_write": 181553,
+        "cache_read": 8782635,
+        "output": 76018
+      },
+      "cache_read_share_of_raw": 0.9715,
+      "weighted": {
+        "raw": 9040366,
+        "cost_weighted": 1621620,
+        "free_cache_read": 743356
+      }
+    },
+    {
+      "session": "fbuild647-6d3c8b.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 188,
+      "usd": 15.85,
+      "tokens": {
+        "input": 376,
+        "cache_write": 289166,
+        "cache_read": 40744106,
+        "output": 125863
+      },
+      "cache_read_share_of_raw": 0.9899,
+      "weighted": {
+        "raw": 41159511,
+        "cost_weighted": 5282434,
+        "free_cache_read": 1208023
+      }
+    },
+    {
+      "session": "fbuild616-25ac3f.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 151,
+      "usd": 13.55,
+      "tokens": {
+        "input": 11939,
+        "cache_write": 299822,
+        "cache_read": 33924012,
+        "output": 102812
+      },
+      "cache_read_share_of_raw": 0.9879,
+      "weighted": {
+        "raw": 34338585,
+        "cost_weighted": 4518044,
+        "free_cache_read": 1125643
+      }
+    },
+    {
+      "session": "rabbit24-6c15c4.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 200,
+      "usd": 13.14,
+      "tokens": {
+        "input": 911,
+        "cache_write": 381650,
+        "cache_read": 30443584,
+        "output": 67710
+      },
+      "cache_read_share_of_raw": 0.9854,
+      "weighted": {
+        "raw": 30893855,
+        "cost_weighted": 4147119,
+        "free_cache_read": 1102761
+      }
+    },
+    {
+      "session": "mv4e604-954616.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 153,
+      "usd": 12.41,
+      "tokens": {
+        "input": 306,
+        "cache_write": 290764,
+        "cache_read": 29641244,
+        "output": 118054
+      },
+      "cache_read_share_of_raw": 0.9864,
+      "weighted": {
+        "raw": 30050368,
+        "cost_weighted": 4136228,
+        "free_cache_read": 1172104
+      }
+    },
+    {
+      "session": "fleet12-b130a3.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 185,
+      "usd": 10.28,
+      "tokens": {
+        "input": 370,
+        "cache_write": 205952,
+        "cache_read": 25844236,
+        "output": 85740
+      },
+      "cache_read_share_of_raw": 0.9888,
+      "weighted": {
+        "raw": 26136298,
+        "cost_weighted": 3425398,
+        "free_cache_read": 840974
+      }
+    },
+    {
+      "session": "watch8x-a11747.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 141,
+      "usd": 9.68,
+      "tokens": {
+        "input": 282,
+        "cache_write": 316559,
+        "cache_read": 20287732,
+        "output": 102978
+      },
+      "cache_read_share_of_raw": 0.9797,
+      "weighted": {
+        "raw": 20707551,
+        "cost_weighted": 3177063,
+        "free_cache_read": 1148290
+      }
+    },
+    {
+      "session": "fbuild648-cb4682.jsonl",
+      "model": "claude-sonnet-5",
+      "calls": 126,
+      "usd": 9.47,
+      "tokens": {
+        "input": 252,
+        "cache_write": 236002,
+        "cache_read": 22506047,
+        "output": 86444
+      },
+      "cache_read_share_of_raw": 0.9859,
+      "weighted": {
+        "raw": 22828745,
+        "cost_weighted": 3155081,
+        "free_cache_read": 904476
+      }
+    }
+  ]
+}
