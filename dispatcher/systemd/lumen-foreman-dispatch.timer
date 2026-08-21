@@ -1,0 +1,16 @@
+# lumen-foreman-dispatch.timer — 20-min cadence for the foreman auto-dispatcher.
+# SHIPS DISABLED (MUST 10, Tier-3 — same posture as lumen-dispatch.timer): nothing
+# runs until Frank runs `systemctl enable --now lumen-foreman-dispatch.timer` himself.
+# Instant rollback without systemd: `touch /home/lumen/autonomy/DISPATCH_DISARM`.
+[Unit]
+Description=20-min cadence for lumen-foreman-dispatch (STAGED — Frank enables; wq#715)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=20min
+RandomizedDelaySec=60
+# A missed window is skipped, never replayed in a burst.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+# Staged logrotate stanza for the dispatcher decision log (DESIGN.md §8).
+# Install: sudo cp dispatcher/systemd/lumen-foreman-dispatch.logrotate /etc/logrotate.d/lumen-foreman-dispatch
+/home/lumen/foreman/dispatcher.log {
+    weekly
+    rotate 8
+    copytruncate
+    compress
+    missingok
+    notifempty
+}

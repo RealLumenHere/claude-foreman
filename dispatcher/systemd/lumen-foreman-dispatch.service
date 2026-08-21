@@ -1,0 +1,20 @@
+# lumen-foreman-dispatch.service — one foreman auto-dispatcher pass (wq#715 AUTO-3).
+# STAGED (Tier-3): installed but never enabled by the fleet; the timer is the only
+# starter and Frank enables it by hand. See dispatcher/DESIGN.md §10 and INSTALL.md.
+# Deliberately no [Install] section: this service cannot be enabled at boot, only
+# started by the timer (or manually for a one-off pass).
+[Unit]
+Description=Lumen foreman auto-dispatcher — one scan/dispatch pass (wq#715)
+Documentation=file:///home/lumen/foreman/dispatcher/DESIGN.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+# lumen-run / wq / slock / ntfy-send live in /home/lumen/bin (spawner invokes
+# `lumen-run` by bare name via router.dispatch_cmd).
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/foreman_dispatcher.py run --once
+TimeoutStartSec=600
+Nice=5
