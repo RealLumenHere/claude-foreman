@@ -1,0 +1,593 @@
+{
+  "source": "/home/lumen/agents/work-queue/_runs/fbuild<N>-<hex>.jsonl (real interim-ORCH-dispatch sessions, zero new Anthropic spend)",
+  "diet_landed": "2026-08-16T02:39:56Z (harness/prompts/worker.md, commit e17a2da; FOREMAN_DISPATCH.prompt edited live same session per INSTRUCTION_DIET.md)",
+  "files_analyzed": 14,
+  "per_file": {
+    "fbuild616-25ac3f.jsonl": {
+      "path": "_runs/fbuild616-25ac3f.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 180,
+      "turns_with_usage": 300,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 13.554132600000003,
+      "usage_totals": {
+        "input_tokens": 11939,
+        "cache_creation_input_tokens": 299822,
+        "cache_read_input_tokens": 33924012,
+        "output_tokens": 102812,
+        "total_consumed_tokens": 414573
+      },
+      "derived": {
+        "cache_hit_rate": 0.9909,
+        "fixed_prefix_overhead_tokens": 11054,
+        "first_turn_cache_read_tokens": 24649,
+        "tokens_consumed_per_turn": 1381.9,
+        "thrash_turns": 0
+      },
+      "diet_classification": "post_diet",
+      "confound_model": false
+    },
+    "fbuild618-789121.jsonl": {
+      "path": "_runs/fbuild618-789121.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 238,
+      "turns_with_usage": 441,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 19.004318700000006,
+      "usage_totals": {
+        "input_tokens": 476,
+        "cache_creation_input_tokens": 313049,
+        "cache_read_input_tokens": 51125089,
+        "output_tokens": 119138,
+        "total_consumed_tokens": 432663
+      },
+      "derived": {
+        "cache_hit_rate": 0.9939,
+        "fixed_prefix_overhead_tokens": 5246,
+        "first_turn_cache_read_tokens": 30398,
+        "tokens_consumed_per_turn": 981.1,
+        "thrash_turns": 0
+      },
+      "diet_classification": "post_diet",
+      "confound_model": false
+    },
+    "fbuild625r-1f4b20.jsonl": {
+      "path": "_runs/fbuild625r-1f4b20.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 61,
+      "turns_with_usage": 107,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 2.388477899999999,
+      "usage_totals": {
+        "input_tokens": 122,
+        "cache_creation_input_tokens": 90160,
+        "cache_read_input_tokens": 5283523,
+        "output_tokens": 17473,
+        "total_consumed_tokens": 107755
+      },
+      "derived": {
+        "cache_hit_rate": 0.9832,
+        "fixed_prefix_overhead_tokens": 10956,
+        "first_turn_cache_read_tokens": 24649,
+        "tokens_consumed_per_turn": 1007.1,
+        "thrash_turns": 0
+      },
+      "diet_classification": "pre_diet",
+      "confound_model": false
+    },
+    "fbuild626-482845.jsonl": {
+      "path": "_runs/fbuild626-482845.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 60,
+      "turns_with_usage": 108,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 2.737395899999999,
+      "usage_totals": {
+        "input_tokens": 120,
+        "cache_creation_input_tokens": 109689,
+        "cache_read_input_tokens": 5015723,
+        "output_tokens": 38279,
+        "total_consumed_tokens": 148088
+      },
+      "derived": {
+        "cache_hit_rate": 0.9786,
+        "fixed_prefix_overhead_tokens": 10770,
+        "first_turn_cache_read_tokens": 24649,
+        "tokens_consumed_per_turn": 1371.2,
+        "thrash_turns": 0
+      },
+      "diet_classification": "pre_diet",
+      "confound_model": false
+    },
+    "fbuild626c-913463.jsonl": {
+      "path": "_runs/fbuild626c-913463.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/mission-control",
+      "mcp_servers_count": 0,
+      "num_turns_result": 80,
+      "turns_with_usage": 150,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 4.0368053999999995,
+      "usage_totals": {
+        "input_tokens": 140,
+        "cache_creation_input_tokens": 135643,
+        "cache_read_input_tokens": 8301158,
+        "output_tokens": 48812,
+        "total_consumed_tokens": 184595
+      },
+      "derived": {
+        "cache_hit_rate": 0.9839,
+        "fixed_prefix_overhead_tokens": 10907,
+        "first_turn_cache_read_tokens": 24649,
+        "tokens_consumed_per_turn": 1230.6,
+        "thrash_turns": 0
+      },
+      "diet_classification": "pre_diet",
+      "confound_model": false
+    },
+    "fbuild627-6e042c.jsonl": {
+      "path": "_runs/fbuild627-6e042c.jsonl",
+      "model": "claude-sonnet-4-6",
+      "cwd": "/home/lumen",
+      "mcp_servers_count": 0,
+      "num_turns_result": 133,
+      "turns_with_usage": 186,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 4.9776141,
+      "usage_totals": {
+        "input_tokens": 135,
+        "cache_creation_input_tokens": 109273,
+        "cache_read_input_tokens": 11862387,
+        "output_tokens": 50857,
+        "total_consumed_tokens": 160265
+      },
+      "derived": {
+        "cache_hit_rate": 0.9909,
+        "fixed_prefix_overhead_tokens": 3924,
+        "first_turn_cache_read_tokens": 21723,
+        "tokens_consumed_per_turn": 861.6,
+        "thrash_turns": 0
+      },
+      "diet_classification": "unclassified",
+      "confound_model": true
+    },
+    "fbuild639-6ad3b8.jsonl": {
+      "path": "_runs/fbuild639-6ad3b8.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 113,
+      "turns_with_usage": 182,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 6.053383500000001,
+      "usage_totals": {
+        "input_tokens": 225,
+        "cache_creation_input_tokens": 170317,
+        "cache_read_input_tokens": 13438855,
+        "output_tokens": 66610,
+        "total_consumed_tokens": 237152
+      },
+      "derived": {
+        "cache_hit_rate": 0.9875,
+        "fixed_prefix_overhead_tokens": 5136,
+        "first_turn_cache_read_tokens": 30349,
+        "tokens_consumed_per_turn": 1303.0,
+        "thrash_turns": 0
+      },
+      "diet_classification": "pre_diet",
+      "confound_model": false
+    },
+    "fbuild645-182312.jsonl": {
+      "path": "_runs/fbuild645-182312.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 108,
+      "turns_with_usage": 183,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 3.9580857,
+      "usage_totals": {
+        "input_tokens": 7246,
+        "cache_creation_input_tokens": 121087,
+        "cache_read_input_tokens": 8468819,
+        "output_tokens": 44612,
+        "total_consumed_tokens": 172945
+      },
+      "derived": {
+        "cache_hit_rate": 0.9851,
+        "fixed_prefix_overhead_tokens": 10951,
+        "first_turn_cache_read_tokens": 24649,
+        "tokens_consumed_per_turn": 945.1,
+        "thrash_turns": 0
+      },
+      "diet_classification": "pre_diet",
+      "confound_model": false
+    },
+    "fbuild646-511062.jsonl": {
+      "path": "_runs/fbuild646-511062.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 97,
+      "turns_with_usage": 177,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 6.2344557,
+      "usage_totals": {
+        "input_tokens": 194,
+        "cache_creation_input_tokens": 163896,
+        "cache_read_input_tokens": 13344709,
+        "output_tokens": 83139,
+        "total_consumed_tokens": 247229
+      },
+      "derived": {
+        "cache_hit_rate": 0.9879,
+        "fixed_prefix_overhead_tokens": 5222,
+        "first_turn_cache_read_tokens": 30400,
+        "tokens_consumed_per_turn": 1396.8,
+        "thrash_turns": 0
+      },
+      "diet_classification": "pre_diet",
+      "confound_model": false
+    },
+    "fbuild647-6d3c8b.jsonl": {
+      "path": "_runs/fbuild647-6d3c8b.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 188,
+      "turns_with_usage": 345,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 15.847300799999996,
+      "usage_totals": {
+        "input_tokens": 376,
+        "cache_creation_input_tokens": 289166,
+        "cache_read_input_tokens": 40744106,
+        "output_tokens": 125863,
+        "total_consumed_tokens": 415405
+      },
+      "derived": {
+        "cache_hit_rate": 0.9929,
+        "fixed_prefix_overhead_tokens": 11238,
+        "first_turn_cache_read_tokens": 24649,
+        "tokens_consumed_per_turn": 1204.1,
+        "thrash_turns": 0
+      },
+      "diet_classification": "post_diet",
+      "confound_model": false
+    },
+    "fbuild648-cb4682.jsonl": {
+      "path": "_runs/fbuild648-cb4682.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 144,
+      "turns_with_usage": 250,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 9.465242100000003,
+      "usage_totals": {
+        "input_tokens": 252,
+        "cache_creation_input_tokens": 236002,
+        "cache_read_input_tokens": 22506047,
+        "output_tokens": 86444,
+        "total_consumed_tokens": 322698
+      },
+      "derived": {
+        "cache_hit_rate": 0.9896,
+        "fixed_prefix_overhead_tokens": 5273,
+        "first_turn_cache_read_tokens": 30390,
+        "tokens_consumed_per_turn": 1290.8,
+        "thrash_turns": 0
+      },
+      "diet_classification": "post_diet",
+      "confound_model": false
+    },
+    "fbuild649b-26b1dc.jsonl": {
+      "path": "_runs/fbuild649b-26b1dc.jsonl",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/lumen/foreman",
+      "mcp_servers_count": 0,
+      "num_turns_result": 129,
+      "turns_with_usage": 227,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 7.611799800000002,
+      "usage_totals": {
+        "input_tokens": 258,
+        "cache_creation_input_tokens": 180637,
+        "cache_read_input_tokens": 18269296,
+        "output_tokens": 69761,
+        "total_consumed_tokens": 250656
+      },
+      "derived": {
+        "cache_hit_rate": 0.9902,
+        "fixed_prefix_overhead_tokens": 11055,
+        "first_turn_cache_read_tokens": 24649,
+        "tokens_consumed_per_turn": 1104.2,
+        "thrash_turns": 0
+      },
+      "diet_classification": "post_diet",
+      "confound_model": false
+    },
+    "fbuild661-58bb17.jsonl": {
+      "path": "_runs/fbuild661-58bb17.jsonl",
+      "model": "claude-sonnet-4-6",
+      "cwd": "/home/lumen",
+      "mcp_servers_count": 0,
+      "num_turns_result": 103,
+      "turns_with_usage": 157,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 3.9255624,
+      "usage_totals": {
+        "input_tokens": 105,
+        "cache_creation_input_tokens": 109686,
+        "cache_read_input_tokens": 9129888,
+        "output_tokens": 35211,
+        "total_consumed_tokens": 145002
+      },
+      "derived": {
+        "cache_hit_rate": 0.9881,
+        "fixed_prefix_overhead_tokens": 7981,
+        "first_turn_cache_read_tokens": 17666,
+        "tokens_consumed_per_turn": 923.6,
+        "thrash_turns": 0
+      },
+      "diet_classification": "unclassified",
+      "confound_model": true
+    },
+    "fbuild662-024272.jsonl": {
+      "path": "_runs/fbuild662-024272.jsonl",
+      "model": "claude-sonnet-4-6",
+      "cwd": "/home/lumen",
+      "mcp_servers_count": 0,
+      "num_turns_result": 73,
+      "turns_with_usage": 103,
+      "terminal_subtype": "success",
+      "is_error": false,
+      "total_cost_usd": 2.35353,
+      "usage_totals": {
+        "input_tokens": 75,
+        "cache_creation_input_tokens": 75059,
+        "cache_read_input_tokens": 5107570,
+        "output_tokens": 24712,
+        "total_consumed_tokens": 99846
+      },
+      "derived": {
+        "cache_hit_rate": 0.9855,
+        "fixed_prefix_overhead_tokens": 3924,
+        "first_turn_cache_read_tokens": 21723,
+        "tokens_consumed_per_turn": 969.4,
+        "thrash_turns": 0
+      },
+      "diet_classification": "unclassified",
+      "confound_model": true
+    }
+  },
+  "pre_diet_rollup": {
+    "bucket": "pre_diet (FOREMAN_DISPATCH.prompt, sonnet-5, before wq#631 wording landed)",
+    "sessions": 6,
+    "files": [
+      "_runs/fbuild625r-1f4b20.jsonl",
+      "_runs/fbuild626-482845.jsonl",
+      "_runs/fbuild626c-913463.jsonl",
+      "_runs/fbuild639-6ad3b8.jsonl",
+      "_runs/fbuild645-182312.jsonl",
+      "_runs/fbuild646-511062.jsonl"
+    ],
+    "total_turns": 907,
+    "total_cost_usd": 25.4086,
+    "usage_totals": {
+      "input_tokens": 8047,
+      "cache_creation_input_tokens": 790792,
+      "cache_read_input_tokens": 53852787,
+      "output_tokens": 298925,
+      "total_consumed_tokens": 1097764
+    },
+    "cache_hit_rate": 0.9854,
+    "tokens_per_turn": 1210.3,
+    "avg_fixed_prefix_overhead_tokens": 8990.3,
+    "cross_session_cache_hits": 6
+  },
+  "post_diet_rollup": {
+    "bucket": "post_diet (FOREMAN_DISPATCH.prompt, sonnet-5, after wq#631 wording landed)",
+    "sessions": 5,
+    "files": [
+      "_runs/fbuild616-25ac3f.jsonl",
+      "_runs/fbuild618-789121.jsonl",
+      "_runs/fbuild647-6d3c8b.jsonl",
+      "_runs/fbuild648-cb4682.jsonl",
+      "_runs/fbuild649b-26b1dc.jsonl"
+    ],
+    "total_turns": 1563,
+    "total_cost_usd": 65.4828,
+    "usage_totals": {
+      "input_tokens": 13301,
+      "cache_creation_input_tokens": 1318676,
+      "cache_read_input_tokens": 166568550,
+      "output_tokens": 504018,
+      "total_consumed_tokens": 1835995
+    },
+    "cache_hit_rate": 0.9921,
+    "tokens_per_turn": 1174.7,
+    "avg_fixed_prefix_overhead_tokens": 8773.2,
+    "cross_session_cache_hits": 5
+  },
+  "pre_diet_per_ticket": [
+    {
+      "ticket": "wq#625",
+      "title": "foreman T2a-BUILD: worker harness per approved design",
+      "sessions": 1,
+      "turns": 107,
+      "total_tokens_consumed": 107755,
+      "cache_hit_rate": 0.9832,
+      "tokens_per_turn": 1007.1,
+      "cost_usd": 2.3885
+    },
+    {
+      "ticket": "wq#626",
+      "title": "MC Agents view: live worker cards + transcript feed",
+      "sessions": 2,
+      "turns": 258,
+      "total_tokens_consumed": 332683,
+      "cache_hit_rate": 0.9819,
+      "tokens_per_turn": 1289.5,
+      "cost_usd": 6.7742
+    },
+    {
+      "ticket": "wq#639",
+      "title": "fworker shakedown bugs: false-stale governor fail-close + claim held after DEFER exit",
+      "sessions": 1,
+      "turns": 182,
+      "total_tokens_consumed": 237152,
+      "cache_hit_rate": 0.9875,
+      "tokens_per_turn": 1303.0,
+      "cost_usd": 6.0534
+    },
+    {
+      "ticket": "wq#645",
+      "title": "fworker bug 3: instant child death misclassified as TURNS (dropped --max-turns)",
+      "sessions": 1,
+      "turns": 183,
+      "total_tokens_consumed": 172945,
+      "cache_hit_rate": 0.9851,
+      "tokens_per_turn": 945.1,
+      "cost_usd": 3.9581
+    },
+    {
+      "ticket": "wq#646",
+      "title": "reliability-S1: verdict engine per RELIABILITY_SPEC + shim tests 1-8",
+      "sessions": 1,
+      "turns": 177,
+      "total_tokens_consumed": 247229,
+      "cache_hit_rate": 0.9879,
+      "tokens_per_turn": 1396.8,
+      "cost_usd": 6.2345
+    }
+  ],
+  "post_diet_per_ticket": [
+    {
+      "ticket": "wq#616",
+      "title": "foreman T2b: concurrency hardening",
+      "sessions": 1,
+      "turns": 300,
+      "total_tokens_consumed": 414573,
+      "cache_hit_rate": 0.9909,
+      "tokens_per_turn": 1381.9,
+      "cost_usd": 13.5541
+    },
+    {
+      "ticket": "wq#618",
+      "title": "foreman T4: local rung (LiteLLM fallback)",
+      "sessions": 1,
+      "turns": 441,
+      "total_tokens_consumed": 432663,
+      "cache_hit_rate": 0.9939,
+      "tokens_per_turn": 981.1,
+      "cost_usd": 19.0043
+    },
+    {
+      "ticket": "wq#647",
+      "title": "reliability-S2: watchdogs + lease reaper + false-complete verification + shim 9-13",
+      "sessions": 1,
+      "turns": 345,
+      "total_tokens_consumed": 415405,
+      "cache_hit_rate": 0.9929,
+      "tokens_per_turn": 1204.1,
+      "cost_usd": 15.8473
+    },
+    {
+      "ticket": "wq#648",
+      "title": "reliability-S3: governor cache-on-429 + NDJSON hardening + OOM forensics + shim 14-16",
+      "sessions": 1,
+      "turns": 250,
+      "total_tokens_consumed": 322698,
+      "cache_hit_rate": 0.9896,
+      "tokens_per_turn": 1290.8,
+      "cost_usd": 9.4652
+    },
+    {
+      "ticket": "wq#649",
+      "title": "reliability: fworker bug 4, worktree/branch lifecycle stale-branch crash",
+      "sessions": 1,
+      "turns": 227,
+      "total_tokens_consumed": 250656,
+      "cache_hit_rate": 0.9902,
+      "tokens_per_turn": 1104.2,
+      "cost_usd": 7.6118
+    }
+  ],
+  "delta": {
+    "tokens_per_turn_delta_pct": -2.94,
+    "cache_hit_rate_delta_pp": 0.67,
+    "avg_fixed_prefix_overhead_delta_pct": -2.41
+  },
+  "wq629_baseline_cited": {
+    "tickets": {
+      "613": {
+        "title": "T1 governor daemon (sonnet-5)",
+        "sessions": 3,
+        "turns": 293,
+        "total_consumed_tokens": 526564,
+        "cache_hit_rate": 0.976,
+        "tokens_per_turn": 1797,
+        "cost_usd": 9.34
+      },
+      "614": {
+        "title": "T2a design doc (fable-5)",
+        "sessions": 3,
+        "turns": 154,
+        "total_consumed_tokens": 221289,
+        "cache_hit_rate": 0.964,
+        "tokens_per_turn": 1437,
+        "cost_usd": 10.53
+      },
+      "625": {
+        "title": "T2a build / PR#4 (sonnet-5)",
+        "sessions": 1,
+        "turns": 276,
+        "total_consumed_tokens": 277105,
+        "cache_hit_rate": 0.991,
+        "tokens_per_turn": 1004,
+        "cost_usd": 8.7
+      }
+    },
+    "combined_total_consumed_tokens": 1024958,
+    "combined_turns": 723,
+    "note": "cited from committed TOKEN_BASELINE.md, not re-derived -- these 3 tickets closed before the diet shipped and can't be re-run for a like-for-like post-diet pair; the pre_diet_rollup bucket above (also FOREMAN_DISPATCH.prompt/sonnet-5, same _runs source, same instrument, just captured a day later) is the actual apples-to-apples pre/post control for this ticket's delta."
+  },
+  "excluded_unclassified": [
+    "_runs/fbuild627-6e042c.jsonl",
+    "_runs/fbuild661-58bb17.jsonl",
+    "_runs/fbuild662-024272.jsonl"
+  ],
+  "excluded_model_confound": {
+    "note": "claude-sonnet-4-6, not claude-sonnet-5 -- different tokenizer/routing (T4 local-rung / wq#618 LiteLLM-fallback era, downstream of wq#687's downgrade-detection work), would confound a wording-diet delta",
+    "files": [
+      "_runs/fbuild627-6e042c.jsonl",
+      "_runs/fbuild661-58bb17.jsonl",
+      "_runs/fbuild662-024272.jsonl"
+    ]
+  },
+  "unexplained_observation": {
+    "note": "every file in both buckets (pre AND post diet) shows an identical first-turn cache_read_input_tokens of 24649 tokens, despite PREFIX_STABILITY.md's T0 finding of zero cross-session cache reuse in the original 8-file baseline. Consistent across both buckets so it is not a diet effect either way -- flagged as-is, not investigated further here (would need infra-side info on how the interim ORCH dispatcher spawns sessions, out of this ticket's scope)."
+  }
+}
