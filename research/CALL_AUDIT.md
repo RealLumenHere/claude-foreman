@@ -328,6 +328,33 @@ as "the pool this lever draws from", not as a promise.
 tokens: two copies of the same file at different revisions in one context is a known way to
 confuse an editing agent.
 
+**R3/R5/R6 — ✅ IMPLEMENTED 2026-08-21 (wq#730):** all three landed in `guard.sh`, reusing
+wq#729's confirmed `PreToolUse` `updatedInput` mechanism, scoped to the `Read` tool only:
+- **R3:** a `Read` with no `limit` gets one injected (`FOREMAN_READ_LINE_CAP`, default 300
+  lines) — files under the cap are unaffected, only genuinely large whole-file reads get
+  bounded.
+- **R5:** an exact-repeat read (same path/offset/limit) of a file whose mtime hasn't changed
+  since this session last read it is blocked outright, not re-fetched. Per-session state is
+  a JSONL cache under `$FOREMAN_EVENTS_DIR/read_cache/<session_id>.jsonl`.
+- **R6:** a `Read` on a path that can't possibly succeed (missing, or a directory) is denied
+  before it runs — only this unambiguous case, not permission- or content-shaped errors the
+  real tool knows more about than a hook does.
+
+`harness/tests/test_guard.py` gained 10 tests exercising all three directly (default-limit
+injection, explicit-limit passthrough, env override, missing-file/directory denial, same-vs-
+different offset/session dedup, mtime invalidation) —
+`python3 -m pytest harness/tests/ governor/test_governor_core.py -q` → 193 passed. The
+GATE's "re-run
+`research/call_audit.py` on a post-change session" step is, like wq#729's, out of a build
+worker's reach/timing: this worktree's `guard.sh` isn't the one wired into this very
+session's hooks (that's the deployed copy at `/home/lumen/foreman/harness/guard.sh`, updated
+only once this lands and a later worker session runs against it). Verified instead by direct
+functional exercise of the wrapped hook logic (manual stdin→guard.sh→stdout/exit-code checks
+matching what the CLI would actually send/receive) plus the unit corpus above, which assert
+the exact properties `unbounded_whole_file_reads` and `duplication.redundant_carry_cost_usd`
+measure: a no-limit `Read`'s effective invocation now carries a `limit` key, and a same-file
+repeat within a session is suppressed rather than re-carried.
+
 **R8 — CLAUDE.md.** INSTRUCTION_DIET.md deliberately scoped this out and recommended a
 separate Frank-approved ticket if it were ever wanted. **This audit's recommendation is to
 close that thread rather than open it.** CLAUDE.md costs 1.9 cents a session. It is
@@ -362,7 +389,8 @@ Filed separately per the acceptance criteria, not implemented here:
   blocked on `FOREMAN_DISPATCH.prompt` being outside any worktree's reach — see above.
 - **wq#730** — bound file reads, suppress repeat reads, drop errored results from the carry
   (R3, R5, R6). Mechanism question is now settled by wq#729: `updatedInput` on `Read`'s
-  `limit`/`offset` is the same confirmed lever, ready to use directly.
+  `limit`/`offset` is the same confirmed lever, ready to use directly. ✅ implemented — see
+  R3/R5/R6 addendum above.
 - **wq#731** — correct `models.yaml`'s stale sonnet-5 `api_price_mtok` (2/10 → 3/15) and
   record the cache-tier multipliers, so the governor prices sessions correctly.
 - **wq#732** — rescale wq#704's per-turn figures to per-API-call, note the ~1.8x

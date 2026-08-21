@@ -188,6 +188,64 @@ Read|Edit|Write)
         block "denied path: $FILE_PATH" "$FILE_PATH" ;;
     esac
   fi
+
+  # ---- wq#730 R3/R5/R6: bound Read, suppress repeat reads, reject dead reads ----
+  # research/CALL_AUDIT.md: Read is the single most expensive tool in every
+  # audited session, and 61 of 152 reads across the set pulled a whole file with
+  # no offset/limit. Mechanism is the same confirmed PreToolUse `updatedInput`
+  # lever wq#729 settled for Bash.
+  if [ "$TOOL_NAME" = "Read" ] && [ -n "$FILE_PATH" ]; then
+    # R6: a Read on a path that can't possibly succeed (missing, or a directory)
+    # is a guaranteed error tool_result carried at full cost for the rest of the
+    # session and teaches the model nothing a one-line deny doesn't already say.
+    # Only the unambiguous case is caught here; anything permission- or
+    # content-shaped is left to the real tool, which knows more than we do.
+    if [ ! -f "$FILE_PATH" ]; then
+      block "Read target is not a regular file — missing or a directory (wq#730 R6, avoids a guaranteed error entering the carry): $FILE_PATH" "$FILE_PATH"
+    fi
+
+    OFFSET=$(jfield '.tool_input.offset')
+    LIMIT=$(jfield '.tool_input.limit')
+    READ_LINE_CAP=${FOREMAN_READ_LINE_CAP:-300}
+    EFF_LIMIT=${LIMIT:-$READ_LINE_CAP}
+    EFF_OFFSET=${OFFSET:-0}
+
+    # R5: suppress an exact-repeat read (same path/offset/limit) of a file that
+    # hasn't changed on disk since this session last read it — two revisions of
+    # the same file in context is a known way to confuse an editing agent, and
+    # the tokens are pure waste since nothing changed.
+    SESSION_ID=$(jfield '.session_id')
+    MTIME=$(stat -c %Y "$FILE_PATH" 2>/dev/null)
+    if [ -n "$SESSION_ID" ] && [ -n "$MTIME" ]; then
+      CACHE_DIR=${FOREMAN_READ_CACHE_DIR:-$EVENTS_DIR/read_cache}
+      mkdir -p "$CACHE_DIR" 2>/dev/null
+      CACHE_FILE="$CACHE_DIR/$SESSION_ID.jsonl"
+      if [ -f "$CACHE_FILE" ]; then
+        HIT=$(jq -sr --arg p "$FILE_PATH" --arg o "$EFF_OFFSET" --arg l "$EFF_LIMIT" --arg m "$MTIME" \
+          'map(select(.path == $p and .offset == $o and .limit == $l and .mtime == $m)) | length' \
+          "$CACHE_FILE" 2>/dev/null)
+        if [ -n "$HIT" ] && [ "$HIT" != "0" ]; then
+          block "already read this session, file unchanged since (wq#730 R5): $FILE_PATH offset=$EFF_OFFSET limit=$EFF_LIMIT — reuse the earlier tool result instead of re-reading" "$FILE_PATH"
+        fi
+      fi
+      jq -nc --arg p "$FILE_PATH" --arg o "$EFF_OFFSET" --arg l "$EFF_LIMIT" --arg m "$MTIME" \
+        '{path:$p, offset:$o, limit:$l, mtime:$m}' >> "$CACHE_FILE" 2>/dev/null
+    fi
+
+    # R3: a Read that didn't ask for a limit gets one by default, same spirit as
+    # R4's Bash cap — small/medium files pass through untouched (their line
+    # count is under the cap), only genuinely large whole-file reads get bounded,
+    # nudging the model toward grep/offset for the rest instead of one giant read.
+    if [ -z "$LIMIT" ]; then
+      if [ -n "$OFFSET" ]; then
+        jq -nc --arg fp "$FILE_PATH" --argjson off "$OFFSET" --argjson lim "$READ_LINE_CAP" \
+          '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",updatedInput:{file_path:$fp, offset:$off, limit:$lim}}}'
+      else
+        jq -nc --arg fp "$FILE_PATH" --argjson lim "$READ_LINE_CAP" \
+          '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",updatedInput:{file_path:$fp, limit:$lim}}}'
+      fi
+    fi
+  fi
   ;;
 esac
 

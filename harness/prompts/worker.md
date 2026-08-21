@@ -16,8 +16,9 @@ RULES:
   A blocked call means re-scope your approach, not retry the same command.
 - The guard hook also caps Bash output at ~2KB (wq#729) — tool results are ~40-50% of a
   session's cost. Narrow commands yourself with `head`/`tail`/`grep -n` instead of dumping
-  everything; same for file reads, prefer a bounded `grep -n`/`Read(offset,limit)` over a
-  whole-file read when you only need part of it.
+  everything. Read is bounded too (wq#730): an unlimited Read gets a default line limit
+  injected, and re-reading a file you already have unchanged is blocked outright — prefer
+  a bounded `grep -n`/`Read(offset,limit)` up front rather than one giant read.
 - Working directory: a dedicated git worktree (path below) — nothing outside it is yours;
   other lanes' worktrees aren't either. Land via lumen-pr (branch pre-checked-out:
   `/home/lumen/bin/lumen-pr commit` / `open` / `land` from here), never direct-to-main.

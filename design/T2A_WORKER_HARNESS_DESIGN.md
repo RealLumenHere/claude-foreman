@@ -224,6 +224,22 @@ supported on CLI 2.1.233 from the live hooks docs, not the CLI bundle (still out
 build worker's reach). Stateful commands are skipped rather than capped: piping subshells
 the left side, so a `cd`/`export` inside it wouldn't persist to the next Bash call.
 
+**wq#730 addendum (2026-08-21):** same `PreToolUse` `updatedInput` lever, applied to
+`Read` (research/CALL_AUDIT.md R3/R5/R6 — Read is the single most expensive tool in every
+audited session, and 61 of 152 reads pulled a whole file). Three checks, all scoped to
+the `Read` tool only:
+- **R3** — a `Read` with no `limit` gets one injected (`FOREMAN_READ_LINE_CAP`, default
+  300 lines), same shape as R4's Bash cap: files under the cap pass through untouched,
+  only genuinely large whole-file reads get bounded.
+- **R5** — an exact-repeat read (same path/offset/limit) of a file whose mtime hasn't
+  changed since this session last read it is blocked, not re-fetched. Per-session state
+  lives in a JSONL cache under `$FOREMAN_EVENTS_DIR/read_cache/<session_id>.jsonl`; an
+  mtime change (an `Edit`/`Write`, or any out-of-band change) invalidates the entry.
+- **R6** — a `Read` on a path that can't possibly succeed (missing, or a directory) is
+  denied before it runs, so the guaranteed error never becomes a full-size tool_result
+  carried for the rest of the session; only this unambiguous case is caught; anything
+  permission- or content-shaped is left to the real tool.
+
 ## 6. Supervisor — stream-json parsing
 
 fworker reads child stdout line by line (NDJSON), with `--include-hook-events`:

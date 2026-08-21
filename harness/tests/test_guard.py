@@ -7,22 +7,29 @@ whitespace evasion; every allow class gets a straight pass.
 import json
 import os
 import subprocess
+import tempfile
 
 GUARD = os.path.join(os.path.dirname(__file__), "..", "guard.sh")
 WORKTREE = "/home/lumen/worktrees/wq999-a1"
+# A real file, for Read must-allow / bounding tests now that guard.sh's wq#730 R6
+# check requires the target to actually exist on disk.
+EXISTING_FILE = os.path.join(os.path.dirname(__file__), "..", "README.md")
 
 
-def run_guard(tool_name, tool_input, env_extra=None):
+def run_guard(tool_name, tool_input, env_extra=None, session_id="test-session"):
     payload = json.dumps({
         "tool_name": tool_name,
         "tool_input": tool_input,
-        "session_id": "test-session",
+        "session_id": session_id,
         "cwd": WORKTREE,
         "effort": {"level": "high"},
     })
     env = dict(os.environ)
     env["FOREMAN_WORKER"] = "test-worker"
-    env["FOREMAN_EVENTS_DIR"] = "/tmp/guard_test_events"
+    # Fresh dir per call by default so the wq#730 R5 read-cache never leaks
+    # state across tests or across pytest runs; tests that need to reuse the
+    # cache across calls pass FOREMAN_EVENTS_DIR explicitly via env_extra.
+    env["FOREMAN_EVENTS_DIR"] = tempfile.mkdtemp(prefix="guard_test_events_")
     env["FOREMAN_WORKTREE_ROOT"] = WORKTREE
     if env_extra:
         env.update(env_extra)
@@ -30,17 +37,20 @@ def run_guard(tool_name, tool_input, env_extra=None):
     return p.returncode, p.stderr
 
 
-def run_guard_stdout(tool_name, tool_input, env_extra=None):
+def run_guard_stdout(tool_name, tool_input, env_extra=None, session_id="test-session"):
     payload = json.dumps({
         "tool_name": tool_name,
         "tool_input": tool_input,
-        "session_id": "test-session",
+        "session_id": session_id,
         "cwd": WORKTREE,
         "effort": {"level": "high"},
     })
     env = dict(os.environ)
     env["FOREMAN_WORKER"] = "test-worker"
-    env["FOREMAN_EVENTS_DIR"] = "/tmp/guard_test_events"
+    # Fresh dir per call by default so the wq#730 R5 read-cache never leaks
+    # state across tests or across pytest runs; tests that need to reuse the
+    # cache across calls pass FOREMAN_EVENTS_DIR explicitly via env_extra.
+    env["FOREMAN_EVENTS_DIR"] = tempfile.mkdtemp(prefix="guard_test_events_")
     env["FOREMAN_WORKTREE_ROOT"] = WORKTREE
     if env_extra:
         env.update(env_extra)
@@ -102,7 +112,7 @@ MUST_ALLOW = [
     ("Bash", {"command": "sqlite3 queue.db 'select 1'"}),
     ("Bash", {"command": "curl -s http://localhost:8080/x"}),
     ("Bash", {"command": "git log --oneline -5"}),
-    ("Read", {"file_path": f"{WORKTREE}/README.md"}),
+    ("Read", {"file_path": EXISTING_FILE, "limit": 50}),
     ("Write", {"file_path": f"{WORKTREE}/src/main.py"}),
 ]
 
@@ -259,3 +269,110 @@ def test_must_allow_commands_still_exit_zero_when_capped():
     for tool, inp in MUST_ALLOW:
         rc, stdout, stderr = run_guard_stdout(tool, inp)
         assert rc == 0, (tool, inp, stderr)
+
+
+# ---- wq#730 R3: bound Read ----
+
+def test_read_without_limit_gets_a_default_limit():
+    rc, stdout, stderr = run_guard_stdout("Read", {"file_path": EXISTING_FILE})
+    assert rc == 0, stderr
+    out = json.loads(stdout)
+    updated = out["hookSpecificOutput"]["updatedInput"]
+    assert updated["file_path"] == EXISTING_FILE
+    assert updated["limit"] == 300
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+def test_read_with_explicit_limit_is_untouched():
+    rc, stdout, stderr = run_guard_stdout("Read", {"file_path": EXISTING_FILE, "limit": 50})
+    assert rc == 0, stderr
+    assert stdout.strip() == ""
+
+
+def test_read_offset_without_limit_still_gets_capped():
+    rc, stdout, stderr = run_guard_stdout("Read", {"file_path": EXISTING_FILE, "offset": 10})
+    assert rc == 0, stderr
+    updated = json.loads(stdout)["hookSpecificOutput"]["updatedInput"]
+    assert updated["offset"] == 10
+    assert updated["limit"] == 300
+
+
+def test_read_line_cap_env_override():
+    rc, stdout, stderr = run_guard_stdout(
+        "Read", {"file_path": EXISTING_FILE},
+        env_extra={"FOREMAN_READ_LINE_CAP": "50"},
+    )
+    assert rc == 0, stderr
+    updated = json.loads(stdout)["hookSpecificOutput"]["updatedInput"]
+    assert updated["limit"] == 50
+
+
+# ---- wq#730 R6: reject reads that can't possibly succeed ----
+
+def test_read_nonexistent_file_is_blocked(tmp_path):
+    missing = tmp_path / "does-not-exist.txt"
+    rc, stderr = run_guard("Read", {"file_path": str(missing)})
+    assert rc == 2
+    assert "not a regular file" in stderr
+
+
+def test_read_directory_is_blocked(tmp_path):
+    rc, stderr = run_guard("Read", {"file_path": str(tmp_path)})
+    assert rc == 2
+    assert "not a regular file" in stderr
+
+
+# ---- wq#730 R5: suppress repeat reads of an unchanged file ----
+
+def test_repeat_read_same_offset_limit_is_suppressed(tmp_path):
+    f = tmp_path / "same.txt"
+    f.write_text("hello\n" * 5)
+    events = {"FOREMAN_EVENTS_DIR": str(tmp_path / "events")}
+
+    rc1, stdout1, stderr1 = run_guard_stdout("Read", {"file_path": str(f), "limit": 10}, env_extra=events)
+    assert rc1 == 0, stderr1
+
+    rc2, stderr2 = run_guard("Read", {"file_path": str(f), "limit": 10}, env_extra=events)
+    assert rc2 == 2
+    assert "already read this session" in stderr2
+
+
+def test_repeat_read_after_file_changes_is_allowed(tmp_path):
+    f = tmp_path / "changes.txt"
+    f.write_text("v1\n")
+    events = {"FOREMAN_EVENTS_DIR": str(tmp_path / "events")}
+
+    rc1, stderr1 = run_guard("Read", {"file_path": str(f), "limit": 10}, env_extra=events)
+    assert rc1 == 0, stderr1
+
+    # Force a distinct mtime (some filesystems have 1s resolution).
+    new_mtime = f.stat().st_mtime + 2
+    f.write_text("v2\n")
+    os.utime(f, (new_mtime, new_mtime))
+
+    rc2, stderr2 = run_guard("Read", {"file_path": str(f), "limit": 10}, env_extra=events)
+    assert rc2 == 0, stderr2
+
+
+def test_repeat_read_different_offset_is_not_suppressed(tmp_path):
+    f = tmp_path / "ranges.txt"
+    f.write_text("hello\n" * 20)
+    events = {"FOREMAN_EVENTS_DIR": str(tmp_path / "events")}
+
+    rc1, stderr1 = run_guard("Read", {"file_path": str(f), "limit": 5}, env_extra=events)
+    assert rc1 == 0, stderr1
+
+    rc2, stderr2 = run_guard("Read", {"file_path": str(f), "offset": 5, "limit": 5}, env_extra=events)
+    assert rc2 == 0, stderr2
+
+
+def test_repeat_read_different_session_is_not_suppressed(tmp_path):
+    f = tmp_path / "cross-session.txt"
+    f.write_text("hello\n")
+    events = {"FOREMAN_EVENTS_DIR": str(tmp_path / "events")}
+
+    rc1, stderr1 = run_guard("Read", {"file_path": str(f), "limit": 5}, env_extra=events, session_id="session-a")
+    assert rc1 == 0, stderr1
+
+    rc2, stderr2 = run_guard("Read", {"file_path": str(f), "limit": 5}, env_extra=events, session_id="session-b")
+    assert rc2 == 0, stderr2
