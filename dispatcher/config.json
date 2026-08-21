@@ -12,20 +12,20 @@
       "max_per_day": 18
     },
     "lpp": {
-      "enabled": false,
-      "max_per_day": 4
+      "enabled": true,
+      "max_per_day": 18
     },
     "questfree": {
-      "enabled": false,
-      "max_per_day": 4
+      "enabled": true,
+      "max_per_day": 18
     },
     "pstack": {
-      "enabled": false,
-      "max_per_day": 4
+      "enabled": true,
+      "max_per_day": 18
     },
     "fleet-fires": {
-      "enabled": false,
-      "max_per_day": 2,
+      "enabled": true,
+      "max_per_day": 100,
       "requires_approval": true
     },
     "foreman-auto": {

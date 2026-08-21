@@ -66,6 +66,10 @@ LANE_REPO = {
     "foreman-tok": FOREMAN_ROOT,   # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
     "foreman-auto": FOREMAN_ROOT,  # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
     "pokemon": "/home/lumen/pokemon",
+    "lpp": "/home/lumen/pokemon",        # dispatcher lane name is 'lpp'; repo is pokemon (Frank 2026-08-21)
+    "questfree": "/home/lumen/questfree",
+    "pstack": "/home/lumen/pstack",
+    "fleet-fires": FOREMAN_ROOT,          # fires are fleet/infra work, run from foreman
 }
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 GOVERNOR_CLI = os.environ.get("FOREMAN_GOVERNOR_CLI",
