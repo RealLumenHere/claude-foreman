@@ -1,5 +1,12 @@
 # models.yaml — claude-foreman capability manifest (DRAFT, foreman-r1 2026-08-14)
-# Every `burn` value tagged est: is a reasoned estimate pending item-14 calibration (CAL-1).
+# CAL-1 partial close, wq#750 2026-08-22: every `burn` now carries a `measured:` block from
+# 149 real launches (_runs/*/attempt-*.json, 2026-08-15..22). Two caveats bind every figure:
+#   1. TOKENS ARE UNMEASURED. ~/.claude/projects transcripts are guard-denied and the journal
+#      records no usage fields, so `measured_tokens: null` everywhere. The `est:` strings and
+#      api_price_mtok rows stay — nothing available can retire them.
+#   2. 117/149 launches (79%) hit max_turns. Every turns/elapsed/cpu figure is CENSORED at
+#      the cap, not a natural completion cost. Do not read cross-tuple deltas as capability.
+# Full analysis + per-surface fleet audit: research/MODEL_ROUTING_AUDIT.md.
 # Effort names are the CLI strings: low|medium|high|xhigh|max. Frank scale: 1..5 = those, in order.
 # Sources: FOREMAN_RESEARCH.md §2/§3/§10 (citations live there).
 
@@ -24,7 +31,16 @@ models:
     efforts: [low, medium, high, xhigh, max]
     default_effort: high
     pools: [session, weekly_all, fable_weekly]
-    burn: {est: "~2x opus per in-app UI note", measured: "P2 2026-08-14: fable@max emitted 263 out-tokens for a trivial prompt vs 4 for opus5/sonnet5 no-effort; +1pt Fable weekly_scoped from one call. Full matrix = CAL-1"}
+    burn:
+      est: "~2x opus per in-app UI note"
+      measured_tokens: null            # see header caveat 1
+      measured: "P2 2026-08-14: fable@max emitted 263 out-tokens for a trivial prompt vs 4 for
+        opus5/sonnet5 no-effort; +1pt Fable weekly_scoped from one call.
+        wq#750 2026-08-22, n=4 launches (fable-5@high only): highest per-launch cost on the
+        fleet by a wide margin — novel-design 2/2 SUCCESS at 698.2s median wall-clock /
+        75.6s median cpu / 64 median turns, vs opus-5@high novel-design 205.4s / 17.9s.
+        standard-engineering 0/2 (both capped), which is direct support for the
+        'never a volume worker' trust line below."
     api_price_mtok: {in: 10, out: 50}
     quirks: ["thinking cannot be disabled", "cyber-flag -> auto-fallback opus-4-8, bio-flag -> opus-5",
              "-p bills usage credits WITHOUT consent prompt if entitlement says credits (ours: included; stale-entitlement bug #79337 -> restart)",
@@ -38,7 +54,16 @@ models:
     efforts: [low, medium, high, xhigh, max]
     default_effort: high    # no cross-session effort hold (unlike fable/4.8/4.7)
     pools: [session, weekly_all]   # seven_day_opus meter exists in vocab; enforcement on Max = P3
-    burn: {est: "opus-class; > sonnet, < fable", measured: null}
+    burn:
+      est: "opus-class; > sonnet, < fable"
+      measured_tokens: null
+      measured: "wq#750 2026-08-22, n=34 launches. rca-investigation@xhigh: 1/11 SUCCESS,
+        10 capped, 65 median turns, 532.9s median wall-clock, 25.8s cpu — the priciest
+        routed rung by wall-clock. research-synthesis@high: 1/17 SUCCESS, 15 capped, 30
+        median turns, 128.0s. NO measured advantage over sonnet-5@high on either archetype
+        (rca sonnet 0/4, research-synthesis sonnet 0/2) — but both comparisons are
+        cap-censored, so this is 'unproven', NOT 'opus is unnecessary'. See
+        MODEL_ROUTING_AUDIT.md §3 F1/F2."
     api_price_mtok: {in: 5, out: 25}
     quirks: ["bio-flag -> refusal (no fallback)", "cyber-flag -> opus-4-8"]
     trust: "RCA-investigation; research-synthesis; escalation target from sonnet."
@@ -50,7 +75,14 @@ models:
     efforts: [low, medium, high, xhigh, max]
     default_effort: high
     pools: [session, weekly_all]
-    burn: {est: "workhorse-class; sonnet@high assumed ~= opus@low cost, better value", measured: null}
+    burn:
+      est: "workhorse-class; sonnet@high assumed ~= opus@low cost, better value"
+      measured_tokens: null
+      measured: "wq#750 2026-08-22, n=111 launches (75% of all fleet dispatch — the workhorse
+        claim holds). standard-engineering@high: 8/68 SUCCESS, 49 capped, 44 median turns,
+        221.8s median wall-clock, 15.8s cpu. mechanical-edit@low: 3/5 SUCCESS at 19 median
+        turns / 42.4s — the cheapest and highest-yield tuple measured. verify-pass@high:
+        0/12, all 12 capped at max_turns 25 (turn-starved, not model-limited)."
     api_price_mtok: {in: 2, out: 10, note: "intro until 2026-08-31, then 3/15"}
     trust: "standard-engineering; probe-build; mechanical-edit; verify-pass gate model."
 
@@ -60,9 +92,20 @@ models:
     context: 200K
     efforts: []             # no effort support — launch without --effort
     pools: [session, weekly_all]
-    burn: {est: "cheapest cloud", measured: null}
+    burn:
+      est: "cheapest cloud"
+      measured_tokens: null
+      measured: "wq#750 2026-08-22: ZERO launches in 149. Not classifier over-ranking —
+        haiku is the primary for no archetype, and the chain after a primary is walked only
+        on governor pressure, never on attempt count (verified by executing
+        `router.py route probe-build --fails 0|1|2` -> sonnet-5@medium every time;
+        `--pressure claude-sonnet-5=deny` -> claude-haiku-4-5). Pressure never fired:
+        saw_limit 0/149, session utilisation 13%. Reachable, correctly wired, dead in
+        practice."
     quirks: ["always available / cannot be org-disabled", "different shape, not just cheaper"]
-    trust: "archetype 1-2 only; classification chores. Place vs sonnet@low = CAL-1."
+    trust: "archetype 1-2 only; classification chores. Place vs sonnet@low = STILL OPEN after
+            CAL-1 — undecidable by observation at 13% utilisation; needs a deliberate paired
+            A/B (MODEL_ROUTING_AUDIT.md §4)."
 
   # LISTED-NOT-ROUTED (pin targets / fallback landing zones; no price or capability edge on subscription)
   - {id: claude-opus-4-8,  status: LIVE,      efforts: [low,medium,high,xhigh,max], note: "Fable cyber-fallback target; api 5/25"}
@@ -79,10 +122,20 @@ models:
   - id: deepseek-v4-flash
     status: LIVE-local
     pools: [local]
+    # wq#750 2026-08-22 CORRECTION: 'local' here means ZERO ANTHROPIC QUOTA, not local
+    # compute. The LiteLLM entry has no api_base -> this resolves to api.deepseek.com, a
+    # cheap paid cloud API. Genuinely local compute on this rung is qwen36-local /
+    # isis-qwen36 (Isis 100.100.129.24:11434) and nephthys-qwen3-14b (100.98.74.87:11434);
+    # both hosts answered /api/tags at audit time. Measured: 0 of 149 launches used this
+    # rung. MODEL_ROUTING_AUDIT.md §3 F4.
     efforts: []             # backend thinking flags pinned per-alias in litellm config instead
     trust: "mechanical-edit, probe-build, verify-DRAFTS. PR-only + sonnet-5 verify gate. Lower --max-turns."
   - id: qwen36-local
     status: LIVE-local      # Qwen3.6-35B-A3B, Isis-backed, offline-survival rung
+    # wq#750: dropped from the lumen-model-watchdog roster 2026-08-11 when
+    # llama-qwen36.service was stopped on Lumen (resource-offload directive), but the
+    # LiteLLM entry still points at Isis (100.100.129.24:11434), which is up and serving
+    # qwen3.6:35b-a3b. Possibly alive and unmonitored — re-probe before trusting or retiring.
     pools: [local]
     trust: "mechanical-edit only, gated. Offline-survival tier."
   - id: nephthys-qwen3-14b
