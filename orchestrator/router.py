@@ -405,6 +405,18 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
     # escalation rungs that are unlocked jump to the front (highest-condition first)
     esc = [r for r in cands if r.condition]
     base = [r for r in cands if not r.condition]
+    # wq#779 F3: the un-annotated (non-escalation) part of the chain used to move only on
+    # governor pressure, so a repeatedly-failing ticket kept re-hitting the same primary
+    # rung forever whenever pressure stayed 'ok' (which it did: saw_limit 0/149). Each
+    # recorded fail now walks `base` forward by one rung — same doctrine as effort-first
+    # downgrade under pressure, triggered by attempt count instead. Never walks past the
+    # last rung (that floor stays reachable), and never touches `esc`: an escalation
+    # annotation's own condition (escalate-on-fail, 2-fails, ...) already governs when that
+    # rung unlocks and takes precedence over base once it does.
+    if fails > 0 and len(base) > 1:
+        skip = min(fails, len(base) - 1)
+        reasons.append(f"attempt-count downgrade: fails={fails} skips {skip} rung(s) of {archetype}'s base chain")
+        base = base[skip:]
     ordered = list(reversed(esc)) + base if esc else base
     if esc:
         reasons.append(f"escalation unlocked: {[r.spec() for r in esc]}")
@@ -494,10 +506,36 @@ def _qualifies(arch, matched_pats):
     return any((arch, p) not in _WEAK_SIGNALS for p in matched_pats)
 
 
-def classify_archetype(title, detail="", lane=""):
+# wq#779 F3: the two archetypes the audit measured as structurally outranked — sitting
+# last in _RUBRIC order behind every expensive archetype, so any co-occurring expensive
+# signal beat them regardless of how well-evidenced the cheap one was. Deliberately NOT a
+# blanket price sort across all 8 archetypes: comparing fable-5/opus-5/DECOMPOSE costs
+# against each other reshuffles the already-tuned wq#778 balance among the expensive tier
+# (confirmed by replaying real queue.db traffic against that change) without fixing
+# anything the audit actually flagged, and the audit explicitly warns that pure
+# cheapest-wins would misroute genuinely hard RCA work.
+_CHEAP_ARCHETYPES = {"mechanical-edit", "probe-build"}
+
+
+def _primary_rung_cost(manifest, archetype):
+    """Rough relative $ weight of `archetype`'s primary rung: api out-price x effort
+    ladder position. Used only to rank the _CHEAP_ARCHETYPES against each other in
+    classify_archetype's tie-break (wq#779 F3) — never for dispatch, which always uses the
+    manifest chain/pressure/fails machinery in select() above."""
+    primary = manifest.chain(archetype)[0]
+    price = ((manifest.models.get(primary.model) or {}).get("api_price_mtok") or {}).get("out")
+    if price is None:
+        price = 1                      # e.g. haiku: no published api price, cheapest cloud tier
+    weight = EFFORT_LADDER.index(primary.effort) + 1 if primary.effort in EFFORT_LADDER else 1
+    return price * weight
+
+
+def classify_archetype(title, detail="", lane="", manifest=None):
     """Keyword rubric from §15: title/detail signals + lane bias, gated by the wq#778
-    corroboration rule for opus-primary archetypes. Returns (archetype, [matched signals]).
-    Default standard-engineering (archetype 3).
+    corroboration rule for opus-primary archetypes, with cost-aware tie-breaking (wq#779
+    F3) so mechanical-edit/probe-build are reachable against an equally- or
+    less-evidenced pricier archetype. Returns (archetype, [matched signals]). Default
+    standard-engineering (archetype 3).
 
     wq#717 (AUTO-5): fleet-fires is forced to fire-response unconditionally, ahead of
     the keyword rubric (and the wq#778 gate below) — a title that happens to match
@@ -529,7 +567,20 @@ def classify_archetype(title, detail="", lane=""):
     for b in _LANE_BIAS.get(lane or "", []):
         if b in qualifying:
             return b, by_arch[b]
-    return qualifying[0], by_arch[qualifying[0]]
+    incumbent = qualifying[0]
+    if incumbent in _CHEAP_ARCHETYPES or len(qualifying) == 1:
+        return incumbent, by_arch[incumbent]
+    # wq#779 F3: cost-aware resolution, not list-order-first-wins — restricted to the two
+    # structurally-outranked archetypes above. A cheap archetype whose evidence is at
+    # least as strong as the incumbent's should not lose just because it sits lower in
+    # _RUBRIC; among multiple eligible cheap archetypes the cheaper primary rung wins.
+    incumbent_n = len(by_arch[incumbent])
+    cheap = [a for a in qualifying if a in _CHEAP_ARCHETYPES and len(by_arch[a]) >= incumbent_n]
+    if not cheap:
+        return incumbent, by_arch[incumbent]
+    manifest = manifest or load_manifest()
+    best = min(cheap, key=lambda a: _primary_rung_cost(manifest, a))
+    return best, by_arch[best]
 
 
 # ---- governor pressure adapter ------------------------------------------------------
@@ -600,7 +651,7 @@ def assign(ticket_id, *, archetype=None, manifest=None, pressure=None, dry_run=F
     arch = archetype or (t.get("archetype") if t.get("archetype") not in (None, "", "None") else None)
     signals = []
     if not arch:
-        arch, signals = classify_archetype(t.get("title", ""), t.get("detail", ""), t.get("lane", ""))
+        arch, signals = classify_archetype(t.get("title", ""), t.get("detail", ""), t.get("lane", ""), manifest)
     subs = [s for s in (t.get("subsystems") or "").split(",") if s]
     cross = cross_subsystem or len(subs) > 1
     rung, reasons = select(manifest, arch, pressure=pressure, fails=fails, cross_subsystem=cross)
@@ -738,9 +789,9 @@ def main(argv=None):
     if args.cmd == "classify":
         if args.ticket:
             t = wq_show(args.ticket)
-            arch, sig = classify_archetype(t.get("title", ""), t.get("detail", ""), t.get("lane", ""))
+            arch, sig = classify_archetype(t.get("title", ""), t.get("detail", ""), t.get("lane", ""), manifest)
         else:
-            arch, sig = classify_archetype(args.title or "", args.detail, args.lane)
+            arch, sig = classify_archetype(args.title or "", args.detail, args.lane, manifest)
         print(json.dumps({"archetype": arch, "signals": sig}))
         return 0
     if args.cmd == "route":

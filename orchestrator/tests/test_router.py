@@ -62,6 +62,67 @@ def test_fleet_fires_lane_overrides_keyword_rubric():
     assert any("fleet-fires" in s for s in signals)
 
 
+# ---- wq#779 F3: cost-aware rubric resolution + attempt-count downgrade trigger ---------
+
+def test_classify_cost_aware_tiebreak_on_equal_evidence(m):
+    # "bypass" (rca-investigation, 1 non-weak hit, qualifies outright) vs "probe"
+    # (probe-build, 1 hit): equally evidenced, no lane bias. Old list-order-first-wins
+    # always picked rca-investigation (earlier in _RUBRIC) regardless of cost; cost-aware
+    # resolution picks probe-build (sonnet-5@medium, the cheaper primary rung) on a tie
+    # between it and a pricier archetype instead.
+    arch, sig = router.classify_archetype("the fix could bypass the probe safeguard", "", "build", m)
+    assert arch == "probe-build"
+    assert sig
+
+
+def test_classify_still_prefers_corroborated_expensive_archetype(m):
+    # NOT pure cheapest-wins (the audit explicitly warns against that): a well-evidenced
+    # rca-investigation (4 matched signals) still beats an incidental single probe-build
+    # word in the same text.
+    arch, sig = router.classify_archetype(
+        "root cause audit: why does it flap, investigate the escape; a quick probe too",
+        "", "build", m)
+    assert arch == "rca-investigation"
+    assert len(sig) >= 4
+
+
+def test_attempt_count_downgrades_probe_build_without_pressure(m):
+    r0, _ = router.select(m, "probe-build", fails=0)
+    assert (r0.model, r0.effort) == ("claude-sonnet-5", "medium")
+    r1, reasons = router.select(m, "probe-build", fails=1)
+    assert r1.model == "claude-haiku-4-5"
+    assert any("attempt-count downgrade" in w for w in reasons)
+    r2, _ = router.select(m, "probe-build", fails=2)
+    assert r2.model == "deepseek-v4-flash" and r2.pool == "local"
+
+
+def test_attempt_count_downgrades_mechanical_edit_without_pressure(m):
+    r1, _ = router.select(m, "mechanical-edit", fails=1)
+    assert r1.model == "deepseek-v4-flash" and r1.pool == "local"
+
+
+def test_attempt_count_does_not_override_escalation_facts(m):
+    # standard-engineering's opus-5@medium(escalate-on-fail) still wins at fails=1 — the
+    # attempt-count trigger only walks the un-annotated base chain, escalation conditions
+    # still govern their own rungs.
+    r, _ = router.select(m, "standard-engineering", fails=1)
+    assert (r.model, r.effort) == ("claude-opus-5", "medium")
+    r, _ = router.select(m, "rca-investigation", fails=2)
+    assert (r.model, r.effort) == ("claude-fable-5", "high")
+
+
+def test_route_cli_probe_build_fails_1_reaches_cheaper_than_sonnet_medium(m):
+    # literal acceptance criterion: `route probe-build --fails 1` with no --pressure.
+    out = subprocess.run(
+        [sys.executable, os.path.join(ORCH_DIR, "router.py"), "--manifest", MANIFEST,
+         "route", "probe-build", "--fails", "1"],
+        capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    d = json.loads(out.stdout)
+    assert d["rung"] != {"model": "claude-sonnet-5", "effort": "medium", "pool": "cloud", "condition": None}
+    assert d["rung"]["model"] == "claude-haiku-4-5"
+
+
 def test_campaign_decomposes_never_one_worker(m):
     rung, reasons = router.select(m, "long-horizon-campaign")
     assert rung.model == "DECOMPOSE"
