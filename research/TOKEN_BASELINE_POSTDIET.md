@@ -80,6 +80,32 @@ received, not just a proxy for it.
 | wq#649 | reliability: fworker bug 4, worktree/branch lifecycle | 1 | 227 | 250,656 | 99.02% | 1,104.2 | $7.61 |
 | **combined** | | **5** | **1,563** | **1,835,995** | **99.21%** | **1,174.7** | **$65.48** |
 
+## Denominator correction (wq#706): `turns` above counts stream frames, not API calls
+
+CALL_AUDIT.md (wq#706) found that Claude Code emits one `assistant` frame per content
+block and repeats the `message_start` usage total on each — so every `turns`/`tokens/turn`
+figure above is counting frames, not real API calls, and understates tokens-per-call by
+roughly 1.8x. The five post-diet sessions here are exactly `call_audit.json`'s clean set,
+so real per-call figures are already measured and traceable to that file:
+
+| ticket | turns (frames) | API calls | tokens/turn (frame) | tokens/call |
+|---|---|---|---|---|
+| wq#616 | 300 | 151 | 1,381.9 | 2,745.5 |
+| wq#618 | 441 | 238 | 981.1 | 1,817.9 |
+| wq#647 | 345 | 188 | 1,204.1 | 2,209.6 |
+| wq#648 | 250 | 126 | 1,290.8 | 2,561.1 |
+| wq#649 | 227 | 129 | 1,104.2 | 1,943.1 |
+| **combined** | **1,563** | **832** | **1,174.7** | **2,206.7** |
+
+The pre-diet bucket (wq#625/626/639/645/646) wasn't part of CALL_AUDIT.md's audited set,
+so per-file API-call counts for it aren't available without a fresh audit. The bias
+mechanism is the same CLI version emitting the same frame-per-content-block pattern in
+both buckets, so it cancels out of the **-2.9% tokens/turn delta below — that comparison
+stands unchanged.** Only the absolute per-turn numbers above (and the "tokens/turn" row in
+the delta table) need rescaling to per-call; each session's calls/frames ratio (0.50-0.57
+across the table above) is the per-session multiplier, or use the 2,206.7 combined
+tokens/call figure as the single best estimate.
+
 Raw ticket-total-tokens isn't comparable pre vs post (different tickets, different scope —
 post-diet total is bigger only because those 5 tickets ran more total turns, 1,563 vs 907,
 not because per-turn cost rose). The normalized metrics below are the real comparison.
@@ -88,11 +114,15 @@ not because per-turn cost rose). The normalized metrics below are the real compa
 
 | metric | pre-diet | post-diet | delta |
 |---|---|---|---|
-| tokens/turn | 1,210.3 | 1,174.7 | **-2.94%** |
+| tokens/turn¹ | 1,210.3 | 1,174.7 | **-2.94%** |
 | cache hit rate | 98.54% | 99.21% | **+0.67pp** |
 | avg fixed-prefix overhead (first-turn cache-write) | 8,990.3 | 8,773.2 | **-2.41%** |
 | thrash turns (>5k cache-read drop turn-over-turn) | 0 / 907 turns | 0 / 1,563 turns | no change |
 | `compact_boundary` frames | 0 | 0 | no change |
+
+¹ Frame-denominated (see the wq#706 correction above): post-diet's real tokens/call is
+2,206.7, not 1,174.7. The -2.94% delta itself is unaffected — the frame/call bias applies
+to both buckets alike.
 
 **Verdict: real, measurable, small improvement — not the 5-10% (or more) INSTRUCTION_DIET.md
 flagged as the open question.** ~3% tokens/turn is directionally consistent with the diet
@@ -129,15 +159,16 @@ not the wq#629 numbers directly. Both are in `token_baseline_postdiet.json` for 
 None found. Zero thrash turns and zero `compact_boundary` frames in both buckets — same as
 PREFIX_STABILITY.md's T0 finding, still holding post-diet at these ticket sizes.
 
-**One unexplained, non-regressive observation worth a note for a future ticket:** every file
-in *both* buckets (pre- and post-diet alike) shows an identical first-turn
-`cache_read_input_tokens` of exactly 24,649 tokens — meaning some prefix is being served from
-cache on literally the first turn of every session, contradicting PREFIX_STABILITY.md's T0
-finding of zero cross-session cache reuse. Since it's identical in both buckets it isn't
-something this ticket's diet caused or fixed either way, and diagnosing the actual caching
-mechanism (extended TTL? a warm pre-spawn template session? something else in how the interim
-dispatcher spawns children?) needs infra-side information this ticket doesn't have — flagged
-as a candidate follow-up, not investigated further here.
+**Resolved by wq#704's own follow-up (wq#706, CALL_AUDIT.md):** the observation as
+originally worded here overclaimed. Of the five post-diet clean-set files, only three
+(fbuild616, fbuild647, fbuild649b) show the 24,649 first-turn `cache_read_input_tokens`;
+the other two (fbuild618, fbuild648) show 30,398/30,390 instead. The quantity that's
+actually invariant is the first-call context **total**, 35,646–35,889 across all five
+(0.7% spread) — not the cache_read/cache_write split. That split just reflects which cache
+breakpoint a prior session's entry left warm inside the 1h TTL, not a distinct caching
+mechanism, and it isn't something either bucket's diet moved. (CALL_AUDIT.md's audited set
+was the post-diet five only; this correction hasn't been checked against the pre-diet
+bucket's files.)
 
 ## What this baseline does NOT cover
 

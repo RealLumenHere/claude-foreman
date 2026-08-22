@@ -48,6 +48,14 @@ before/after delta, not for predicting the exact live Claude token count.
 | `harness/prompts/worker.md` | 491 | 467 | -4.9% |
 | `/home/lumen/CLAUDE.md` | 310 | 310 (unchanged, see above) | 0% |
 
+**Tokenizer-factor note (wq#706, CALL_AUDIT.md):** these are `cl100k_base` proxy counts,
+and cl100k understates real billed Claude tokens by ~1.8x on code/shell/JSON/paths
+(measured two independent ways, 1.63–2.04x across a five-session clean set). These three
+files are prose/procedural instruction text, not code, and CALL_AUDIT.md explicitly does
+not extend that 1.8x to prose — it estimates prose sits closer to 1.0–1.3x but was not
+itself measured here, so do not rescale the table above by 1.8x. The before/after deltas
+stand either way: both counts in each row are the same tokenizer on the same content mix.
+
 Well short of the source research's 40-50% claim. That number is achievable on prompts
 that are mostly prose; these two are majority safety/procedural content this ticket
 explicitly forbids shortening (GUARDRAILS + PROVENANCE in `FOREMAN_DISPATCH.prompt` alone
