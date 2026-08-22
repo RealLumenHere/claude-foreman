@@ -75,9 +75,17 @@ def denv(tmp_path, monkeypatch):
     calls_log = tmp_path / "lumen_run_calls.jsonl"
     gov_state = tmp_path / "gov_state.json"
     gov_state.write_text(json.dumps(HEALTHY_GOV))
+    wq_db = tmp_path / "scratch_wq.db"
+
+    # config.json is read from HEAD of its own repo (wq#772), never the working tree —
+    # tmp_path is that repo; config commits go through commit_config()/write_config().
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+                   check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "test"], check=True)
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps(BASE_CONFIG))
-    wq_db = tmp_path / "scratch_wq.db"
+    commit_config(tmp_path, "initial test config")
 
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
     monkeypatch.setenv("FAKE_LUMEN_RUN_STATE", str(units_state))
@@ -175,7 +183,28 @@ def add_decision_gate_columns(denv):
             pass  # already added
 
 
+def commit_config(tmp_path, message):
+    """Commit the working-tree config.json so load_config() (reads HEAD, wq#772) sees it."""
+    subprocess.run(["git", "-C", str(tmp_path), "add", "config.json"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", message], check=True)
+    return subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
 def write_config(denv, **overrides):
+    """Write + commit a new config.json — the daemon only sees committed config (wq#772)."""
+    cfg = json.loads(json.dumps(BASE_CONFIG))
+    cfg.update({k: v for k, v in overrides.items() if k != "lanes"})
+    if "lanes" in overrides:
+        cfg["lanes"] = overrides["lanes"]
+    denv["cfg_path"].write_text(json.dumps(cfg))
+    commit_config(denv["tmp"], "test config update")
+    return cfg
+
+
+def write_uncommitted_config(denv, **overrides):
+    """Dirty the working-tree config.json WITHOUT committing — must never become live
+    policy (wq#772). Returns the (unused-by-the-daemon) dict for assertion convenience."""
     cfg = json.loads(json.dumps(BASE_CONFIG))
     cfg.update({k: v for k, v in overrides.items() if k != "lanes"})
     if "lanes" in overrides:
@@ -240,10 +269,63 @@ def test_slock_busy_noop(denv):
 
 def test_invalid_config_fails_closed(denv):
     denv["cfg_path"].write_text("{not json")
+    commit_config(denv["tmp"], "break it")
     assert fd.run_pass() == 1
     errs = log_events(denv, "error")
     assert len(errs) == 1 and errs[0]["stage"] == "config"
     assert len(ntfy_lines(denv)) == 1
+    assert lumen_calls(denv) == []
+
+
+# ---- wq#772: config read from HEAD, never the working tree ---------------------------
+
+def test_working_tree_config_edit_ignored(denv):
+    """An uncommitted edit must never become live policy — no PR, no git record."""
+    write_uncommitted_config(denv, max_spawns_per_pass=99)
+    cfg, sha = fd.load_config(str(denv["cfg_path"]))
+    assert cfg["max_spawns_per_pass"] == BASE_CONFIG["max_spawns_per_pass"]
+    want_sha = subprocess.run(["git", "-C", str(denv["tmp"]), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    assert sha == want_sha
+
+
+def test_committed_config_change_picked_up(denv):
+    new_sha = write_config(denv, max_spawns_per_pass=7)
+    cfg, sha = fd.load_config(str(denv["cfg_path"]))
+    assert cfg["max_spawns_per_pass"] == 7
+    want_sha = subprocess.run(["git", "-C", str(denv["tmp"]), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    assert sha == want_sha
+    assert new_sha["max_spawns_per_pass"] == 7  # write_config still returns the dict
+
+
+def test_pass_start_logs_config_source_and_sha(denv):
+    assert fd.run_pass() == 0
+    starts = log_events(denv, "pass_start")
+    assert len(starts) == 1
+    want_sha = subprocess.run(["git", "-C", str(denv["tmp"]), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    assert starts[0]["config_sha"] == want_sha
+    assert starts[0]["config_path"] == str(denv["cfg_path"])
+
+
+def test_config_missing_from_head_fails_closed(denv):
+    subprocess.run(["git", "-C", str(denv["tmp"]), "rm", "-q", "config.json"], check=True)
+    subprocess.run(["git", "-C", str(denv["tmp"]), "commit", "-q", "-m", "remove config"],
+                   check=True)
+    assert fd.run_pass() == 1
+    errs = log_events(denv, "error")
+    assert len(errs) == 1 and errs[0]["stage"] == "config"
+    assert lumen_calls(denv) == []
+
+
+def test_config_path_outside_any_repo_fails_closed(tmp_path_factory, denv, monkeypatch):
+    stray = tmp_path_factory.mktemp("no-git-here") / "config.json"
+    stray.write_text(json.dumps(BASE_CONFIG))
+    monkeypatch.setattr(fd, "CONFIG_PATH", str(stray))
+    assert fd.run_pass() == 1
+    errs = log_events(denv, "error")
+    assert len(errs) == 1 and errs[0]["stage"] == "config"
     assert lumen_calls(denv) == []
 
 
@@ -316,7 +398,8 @@ def test_fire_approval_not_disarmable(denv):
     lanes = json.loads(json.dumps(BASE_CONFIG["lanes"]))
     lanes["fleet-fires"]["requires_approval"] = False  # hostile config edit
     write_config(denv, lanes=lanes)
-    assert fd.load_config(str(denv["cfg_path"]))["lanes"]["fleet-fires"]["requires_approval"] is True
+    cfg, _sha = fd.load_config(str(denv["cfg_path"]))
+    assert cfg["lanes"]["fleet-fires"]["requires_approval"] is True
 
     tid = add_ticket("still needs Frank", lane="fleet-fires")
     assert fd.run_pass() == 0
@@ -554,10 +637,11 @@ def test_units_staged_disabled():
 
 
 def test_shipped_config_all_lanes_disabled():
-    cfg = fd.load_config(os.path.join(DISPATCHER_DIR, "config.json"))
+    cfg, sha = fd.load_config(os.path.join(DISPATCHER_DIR, "config.json"))
     assert cfg["lanes"], "shipped config must carry the lane allowlist"
     assert all(p["enabled"] is False for p in cfg["lanes"].values())
     assert cfg["lanes"]["fleet-fires"]["requires_approval"] is True
+    assert sha
 
 
 def test_once_pass_exits(denv):
@@ -568,6 +652,8 @@ def test_once_pass_exits(denv):
     cfg.write_text(json.dumps({"max_spawns_per_pass": 3, "cloud_ceiling": 3,
                                "tight_mode": {"max_spawns_per_pass": 1, "min_pri": 1},
                                "lanes": {}}))
+    subprocess.run(["git", "-C", str(tmp), "add", "subproc_config.json"], check=True)
+    subprocess.run(["git", "-C", str(tmp), "commit", "-q", "-m", "subproc config"], check=True)
     log = tmp / "subproc_dispatcher.log"
     env = dict(os.environ)
     env.update({

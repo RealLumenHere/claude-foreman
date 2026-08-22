@@ -117,6 +117,15 @@ Checked into the repo (an edit is a PR, reviewable), read at pass start, schema-
 an unreadable or invalid config **fails the pass closed** (log + ntfy, exit 1 — the timer
 retries in 20 min; systemd OnFailure is not used to auto-heal config errors).
 
+**Read from HEAD, never the working tree (wq#772).** `load_config()` resolves `config.json`'s
+containing repo and runs `git show HEAD:<relpath>` — an out-of-band working-tree edit is
+never live policy (no PR, no git record), and a `git clean`/checkout in that tree can never
+silently revert live policy either, since the daemon was never reading the working copy to
+begin with. There is no working-tree fallback: a repo git can't resolve (missing `.git`,
+detached path, no HEAD) fails the pass closed exactly like a syntax error would. Every
+`pass_start` log line carries `config_path` + `config_sha` so "what config is live" is
+answerable from the log alone.
+
 ```json
 {
   "cadence_note": "cadence lives in the systemd timer, not here",
