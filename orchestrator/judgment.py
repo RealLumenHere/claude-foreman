@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+from typing import Any, Dict, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import router  # noqa: E402
@@ -41,17 +42,17 @@ JUDGMENT_STATE = os.environ.get("FOREMAN_JUDGMENT_STATE",
 LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local")
 
 
-def _now():
+def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-def _iso(t):
+def _iso(t: dt.datetime) -> str:
     return t.replace(microsecond=0).isoformat()
 
 
 # ---- verify-pass ---------------------------------------------------------------------
 
-def verify_required(manifest, archetype, author_model=None):
+def verify_required(manifest: Any, archetype: str, author_model: Optional[str] = None) -> Tuple[bool, str]:
     """-> (bool, reason). Policy from models.yaml verify_pass:."""
     pol = manifest.verify_policy or {}
     if archetype in (pol.get("never_for") or []):
@@ -64,7 +65,7 @@ def verify_required(manifest, archetype, author_model=None):
     return False, f"{archetype} is not in verify_pass.required_for"
 
 
-def verifier_tuple(manifest, author_model=None):
+def verifier_tuple(manifest: Any, author_model: Optional[str] = None) -> Tuple[Any, str]:
     """sonnet-5@high, fresh instance. Model distinct from the author only if the policy
     asks for it (see models.yaml verify_pass.prefer_distinct_model)."""
     pol = manifest.verify_policy or {}
@@ -83,7 +84,7 @@ def verifier_tuple(manifest, author_model=None):
     return rung, note
 
 
-def existing_verify_ticket(shipped_id):
+def existing_verify_ticket(shipped_id: int) -> Optional[int]:
     """The verify-pass ticket already filed for wq#<shipped_id>, if any (idempotence)."""
     p = router.wq("list")
     for line in p.stdout.splitlines():
@@ -94,7 +95,7 @@ def existing_verify_ticket(shipped_id):
     return None
 
 
-def file_verify_pass(shipped_id, *, pr=None, author_model=None, manifest=None, dry_run=False):
+def file_verify_pass(shipped_id: int, *, pr: Optional[str] = None, author_model: Optional[str] = None, manifest: Optional[Any] = None, dry_run: bool = False) -> Dict[str, Any]:
     """File the archetype-8 ticket for a shipped diff. Returns a decision dict."""
     manifest = manifest or router.load_manifest()
     t = router.wq_show(shipped_id)
@@ -135,14 +136,14 @@ def file_verify_pass(shipped_id, *, pr=None, author_model=None, manifest=None, d
     return out
 
 
-def _pr_from_notes(notes):
+def _pr_from_notes(notes: Optional[str]) -> Optional[str]:
     m = re.search(r"https?://\S+/pull/\d+|PR#\d+|https?://\S+/pulls/\d+", notes or "")
     return m.group(0) if m else None
 
 
 # ---- judgment sessions ---------------------------------------------------------------
 
-def load_judgment_state():
+def load_judgment_state() -> Dict[str, Any]:
     try:
         with open(JUDGMENT_STATE) as f:
             return json.load(f)
@@ -150,7 +151,7 @@ def load_judgment_state():
         return {"last_run_at": None, "last_run_tickets_done": None, "runs": []}
 
 
-def save_judgment_state(st):
+def save_judgment_state(st: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(JUDGMENT_STATE), exist_ok=True)
     tmp = JUDGMENT_STATE + ".tmp"
     with open(tmp, "w") as f:
@@ -158,12 +159,12 @@ def save_judgment_state(st):
     os.replace(tmp, JUDGMENT_STATE)
 
 
-def tickets_done_count():
+def tickets_done_count() -> int:
     p = router.wq("list", "--status", "done")
     return sum(1 for line in p.stdout.splitlines() if re.match(r"\s*\[\s*\d+\]", line))
 
 
-def calibrated(manifest):
+def calibrated(manifest: Any) -> bool:
     """CAL-1 has landed when routing rows carry measured[] blocks (BUILD_PLAN CAL-1)."""
     raw = manifest.raw or {}
     if raw.get("measured"):
@@ -175,7 +176,7 @@ def calibrated(manifest):
     return False
 
 
-def scan_triggers(runs_root=RUNS_ROOT, state_json=STATE_JSON, since=None):
+def scan_triggers(runs_root: str = RUNS_ROOT, state_json: str = STATE_JSON, since: Optional[float] = None) -> Dict[str, Any]:
     """Derive burn-down triggers from what the harness and governor already write."""
     found = {}
     for path in glob.glob(os.path.join(runs_root, "wq*", "attempt-*.json")):
@@ -215,7 +216,7 @@ def scan_triggers(runs_root=RUNS_ROOT, state_json=STATE_JSON, since=None):
     return found
 
 
-def _in_quiet_hours(now_utc, spec):
+def _in_quiet_hours(now_utc: dt.datetime, spec: Optional[str]) -> bool:
     """'05:00-11:00 weekdays' in America/Los_Angeles."""
     if not spec:
         return False
@@ -234,7 +235,7 @@ def _in_quiet_hours(now_utc, spec):
     return int(h1) * 60 + int(m1) <= t < int(h2) * 60 + int(m2)
 
 
-def due(manifest, *, triggers=None, now=None, state=None, tickets_done=None):
+def due(manifest: Any, *, triggers: Optional[Dict[str, Any]] = None, now: Optional[dt.datetime] = None, state: Optional[Dict[str, Any]] = None, tickets_done: Optional[int] = None) -> Dict[str, Any]:
     """-> dict {due: bool, tuple: 'claude-fable-5@high'|'...@max'|None, why: [...]}"""
     pol = manifest.judgment_policy or {}
     now = now or _now()
@@ -286,7 +287,7 @@ def due(manifest, *, triggers=None, now=None, state=None, tickets_done=None):
             "why": why, "triggers": triggers}
 
 
-def mark(note=None, tickets_done=None, now=None):
+def mark(note: Optional[str] = None, tickets_done: Optional[int] = None, now: Optional[dt.datetime] = None) -> Dict[str, Any]:
     st = load_judgment_state()
     now = now or _now()
     st["last_run_at"] = _iso(now)
@@ -299,7 +300,7 @@ def mark(note=None, tickets_done=None, now=None):
 
 # ---- CLI -----------------------------------------------------------------------------
 
-def main(argv=None):
+def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(prog="judgment.py")
     ap.add_argument("--manifest")
     sub = ap.add_subparsers(dest="cmd", required=True)
