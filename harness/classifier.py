@@ -70,6 +70,11 @@ class RunState:
         self.turns = 0
         self.turns_exceeded = False
         self.saw_auth_failure = False
+        # observability only (wq#754) — never fed into classify(), just carried through
+        # to the attempt record / Langfuse span for cost and duration visibility.
+        self.total_cost_usd = None
+        self.duration_ms = None
+        self.num_turns = None
 
     def observe(self, frame):
         """Feed one parsed stream-json frame (dict). Returns nothing; mutates state."""
@@ -163,6 +168,9 @@ class RunState:
             self.terminal_reason = frame.get("terminal_reason")
             if "result" in frame:
                 self.result_text = frame.get("result")
+            self.total_cost_usd = frame.get("total_cost_usd")
+            self.duration_ms = frame.get("duration_ms")
+            self.num_turns = frame.get("num_turns")
 
 
 def classify(state: RunState, exit_code=None) -> str:

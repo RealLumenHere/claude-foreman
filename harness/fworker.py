@@ -47,6 +47,7 @@ from classifier import (
     TURNS, LAUNCH_FAILURE, KILLED, BUDGET,
 )
 from oom_forensics import oom_journal_evidence
+from langfuse_client import emit_trace_with_span
 
 # RELIABILITY_SPEC.md §A: --max-turns errors on ceiling with a real result frame, so
 # fworker passes it and lets the CLI self-enforce. The supervisor's own real-turn
@@ -81,6 +82,10 @@ JUDGMENT_CLI = os.environ.get("FOREMAN_JUDGMENT_CLI", os.path.join(ORCH_DIR, "ju
 # printing/logging/committing the token itself.
 OAUTH_TOKEN_FILE = os.environ.get("FOREMAN_OAUTH_TOKEN_FILE",
                                    "/home/lumen/.secrets/claude-oat-worker.token")
+# wq#754: same env file + contract as foreman_dispatcher.LANGFUSE_ENV — one trace per
+# ticket run (stable id, so every attempt lands as a span on the same trace), best-effort.
+LANGFUSE_ENV = os.environ.get("FOREMAN_LANGFUSE_ENV",
+                               "/home/lumen/.secrets/langfuse-foreman.env")
 
 # design §3: per-archetype --max-turns defaults (passed to the CLI; the supervisor
 # also backstops a few turns above this, see module docstring). Unlisted archetypes
@@ -274,6 +279,39 @@ EXIT_CRASH = 15
 
 def log(msg):
     print(f"[fworker {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {msg}", flush=True)
+
+
+def emit_attempt_span(ticket_id, lane, attempt_record):
+    """wq#754: one Langfuse span per attempt, all attempts of one ticket sharing a
+    stable trace id — the debugging replacement for grepping attempt-N.json/jsonl.
+    Best-effort by contract (DESIGN.md §8): never raises into the caller, degrades to
+    a log line when creds aren't minted yet."""
+    try:
+        shipped = emit_trace_with_span(
+            LANGFUSE_ENV,
+            trace_id=f"fworker-wq{ticket_id}",
+            trace_name=f"fworker:wq{ticket_id}",
+            span_name=f"attempt-{attempt_record['attempt']}:{attempt_record['classification']}",
+            metadata={
+                "ticket": ticket_id, "lane": lane,
+                "model": attempt_record["model"], "effort": attempt_record["effort"],
+                "archetype": attempt_record["archetype"],
+                "attempt": attempt_record["attempt"],
+                "outcome_class": attempt_record["classification"],
+                "raw_classification": attempt_record["raw_classification"],
+                "exit_code": attempt_record["exit_code"],
+                "turns": attempt_record["turns"],
+                "elapsed_s": attempt_record["elapsed_s"],
+                "total_cost_usd": attempt_record.get("total_cost_usd"),
+                "session_id": attempt_record["session_id"],
+            },
+            tags=["fworker", lane or "unknown"],
+            trace_metadata={"ticket": ticket_id, "lane": lane},
+        )
+        if shipped is None:
+            log(f"langfuse_disabled — no keys at {LANGFUSE_ENV}, log-only degradation")
+    except Exception as e:  # noqa: BLE001 — best-effort by contract (§8), same as dispatcher
+        log(f"langfuse_emit_failed: {e!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -864,8 +902,10 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "model_fallbacks": state.model_fallbacks, "api_retries": state.api_retries,
         "result_subtype": state.result_subtype, "elapsed_s": elapsed,
         "started_at": t0, "finished_at": time.time(),
+        "total_cost_usd": state.total_cost_usd, "duration_ms": state.duration_ms,
     }
     state_path = write_attempt_state(ticket_id, attempt, attempt_record)
+    emit_attempt_span(ticket_id, ticket.get("lane"), attempt_record)
 
     return reconcile(args, ticket_id, attempt, classification, state, events,
                       worktree, state_path)
