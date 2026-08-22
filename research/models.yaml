@@ -14,7 +14,8 @@ pools:
   session:        {kind: five_hour,     source: oauth_usage, note: "account-global 5h rolling; opens on first metered message; weekday 05-11 PT burns faster"}
   weekly_all:     {kind: seven_day,     source: oauth_usage, note: "temporary raised ceiling ends 2026-08-19"}
   fable_weekly:   {kind: weekly_scoped, source: oauth_usage, match: "scope.model.display_name ~ /fable|mythos/", cap: "50% of weekly_all, included on Max since 2026-07-20"}
-  local:          {kind: none,          source: litellm,     note: "bounded by Lumen CPU only"}
+  local:          {kind: none,          source: litellm,     note: "genuine local compute, bounded by Lumen/Isis/Nephthys CPU-GPU only: qwen36-local, isis-qwen36, nephthys-qwen3-14b"}
+  cheap_cloud:    {kind: none,          source: litellm,     note: "wq#777 split out of 'local' 2026-08-22 (MODEL_ROUTING_AUDIT.md F4): paid external API behind the same LiteLLM gateway (deepseek-v4-flash -> api.deepseek.com). Zero Anthropic quota, governor-exempt, but NOT local compute — bounded by DeepSeek's own rate limits."}
   # P3 pins exact field names; CCC claude.ai limits[] is the fallback mapping (kind session|weekly_all|weekly_scoped, percent 0..100).
 
 defaults:
@@ -121,21 +122,24 @@ models:
   # key; ZERO Anthropic quota, governor-exempt by design)
   - id: deepseek-v4-flash
     status: LIVE-local
-    pools: [local]
-    # wq#750 2026-08-22 CORRECTION: 'local' here means ZERO ANTHROPIC QUOTA, not local
-    # compute. The LiteLLM entry has no api_base -> this resolves to api.deepseek.com, a
-    # cheap paid cloud API. Genuinely local compute on this rung is qwen36-local /
-    # isis-qwen36 (Isis 100.100.129.24:11434) and nephthys-qwen3-14b (100.98.74.87:11434);
-    # both hosts answered /api/tags at audit time. Measured: 0 of 149 launches used this
-    # rung. MODEL_ROUTING_AUDIT.md §3 F4.
+    pools: [cheap_cloud]
+    # wq#750 2026-08-22 CORRECTION, resolved wq#777: this was `pools: [local]`, which is
+    # wrong. The LiteLLM entry has no api_base -> this resolves to api.deepseek.com, a
+    # cheap paid cloud API — ZERO ANTHROPIC QUOTA and governor-exempt (same routing-chain
+    # treatment as genuine local compute) but not local compute itself. See the `local` vs
+    # `cheap_cloud` pool definitions above. Genuinely local compute on this rung is
+    # qwen36-local / isis-qwen36 (Isis 100.100.129.24:11434) and nephthys-qwen3-14b
+    # (100.98.74.87:11434). MODEL_ROUTING_AUDIT.md §3 F4.
     efforts: []             # backend thinking flags pinned per-alias in litellm config instead
     trust: "mechanical-edit, probe-build, verify-DRAFTS. PR-only + sonnet-5 verify gate. Lower --max-turns."
   - id: qwen36-local
     status: LIVE-local      # Qwen3.6-35B-A3B, Isis-backed, offline-survival rung
-    # wq#750: dropped from the lumen-model-watchdog roster 2026-08-11 when
+    # wq#750 2026-08-22: dropped from the lumen-model-watchdog roster 2026-08-11 when
     # llama-qwen36.service was stopped on Lumen (resource-offload directive), but the
-    # LiteLLM entry still points at Isis (100.100.129.24:11434), which is up and serving
-    # qwen3.6:35b-a3b. Possibly alive and unmonitored — re-probe before trusting or retiring.
+    # LiteLLM entry still points at Isis (100.100.129.24:11434). wq#777 2026-08-22
+    # re-probe: Isis /api/tags still answers and still serves qwen3.6:35b-a3b -> reinstated
+    # in the watchdog roster (lumen_model_watchdog.py PROBES). Now the mechanical-edit
+    # primary rung below.
     pools: [local]
     trust: "mechanical-edit only, gated. Offline-survival tier."
   - id: nephthys-qwen3-14b
@@ -143,7 +147,16 @@ models:
     trust: "NOT a wq worker. Fallback brain only."
 
 routing:   # archetype -> primary -> downgrade path (effort first, then model). Details RESEARCH §15.
-  mechanical-edit:      [sonnet-5@low,    deepseek-v4-flash@local]
+  # wq#777 2026-08-22 (MODEL_ROUTING_AUDIT.md F4): local-first. 7/7 mechanical-edit
+  # attempts in the wq#750 audit sample went to cloud sonnet even though qwen36-local/Isis
+  # was reachable and idle the whole time. qwen36-local is now primary; the local-authored
+  # diff still goes through the mandatory sonnet-5 verify-pass gate
+  # (verify_pass.local_author_always, already true — unchanged by this ticket). sonnet-5@low
+  # and deepseek-v4-flash@local stay in the chain (reached via select()'s allow_local=False
+  # kwarg — no CLI flag exposes it yet) even though ordinary governor pressure never walks
+  # past a pool=local primary today — same accepted shape as the haiku row below
+  # (F3: "reachable, correctly wired, dead in practice").
+  mechanical-edit:      [qwen36-local@local, sonnet-5@low, deepseek-v4-flash@local]
   probe-build:          [sonnet-5@medium, haiku-4-5, deepseek-v4-flash@local]   # haiku row = CAL-1
   standard-engineering: [sonnet-5@high,   sonnet-5@medium, opus-5@medium(escalate-on-fail)]
   rca-investigation:    [opus-5@xhigh,    opus-5@high, fable-5@high(2-fails-or-cross-subsystem)]
