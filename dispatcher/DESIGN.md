@@ -361,3 +361,56 @@ of it. See `dispatcher/self_heal.py`'s module docstring for the full contract an
   passes --model/--effort overrides.
 - No waiting: for slots, for approvals, for governor recovery. A pass answers "what can
   dispatch right now", and 20 minutes later the question is asked again.
+
+## 14. Weekly-budget pacing (wq#716 AUTO-4)
+
+§6 layer 2 (`router.governor_pressure`) is reactive: it floors on *remaining* percentage
+of each pool (e.g. Fable weekly-scoped remaining >= its floor per floors.json), so it
+only bites once most of the week's budget is already gone — however fast it got there.
+That let the 2026-08-13..08-20 week burn 99% of Fable in the first 36 hours (~21% of the
+week) while the floor sat untouched the whole time: reactive-only budget awareness has no
+notion of *pace*.
+
+`dispatcher/pacing.py` adds a forward-looking layer on top, run as stage 8b (right after
+§6's tight-mode filter, still inside the existing budget stage): for each weekly-scoped
+pool a candidate's model draws from (`weekly_all` always, `fable_weekly_scoped` only for
+Fable models), project the current burn rate out to that pool's reset
+(`usage_pct / elapsed_fraction_of_week`) and compare against a policy's thresholds:
+
+- **conservative** (default): projected >= 90% by reset -> `delay` (only `pri <=
+  delay_min_pri` tickets still dispatch this pass); projected >= 130% -> `skip` (nothing
+  on that pool dispatches this pass, any priority).
+- **aggressive**: same two-tier shape, looser thresholds (120% / 180%) for a fleet that
+  wants to ride closer to the edge.
+- **off**: pacing verdict is always `ok` — pure escape hatch, e.g. while calibrating
+  thresholds against real burn curves.
+
+Policy and thresholds live in `dispatcher/pacing_config.json` (`FOREMAN_PACING_CONFIG`
+to override the path), loaded once per pass. An unreadable or invalid file is *not* a
+pass-failure — the governor's own floor check is already the fail-closed layer (§6
+layer 1/2); pacing is additive, so a broken pacing config falls back to the in-code
+conservative default and logs `info/pacing_config_invalid` rather than blocking the
+whole pass. Too little data to trust a projection (pool missing `resets_at`, or under
+`min_elapsed_fraction` — default 2% of the week, ~3.4h — into the window) is `None`,
+never guessed into a verdict.
+
+Guardrails (both load-bearing, both unit-tested):
+
+- **Never blocks a Frank-approved fire ticket.** Any ticket that already cleared stage
+  5's fire-approval gate (`fleet-fires`, or any lane with `requires_approval: true`) is
+  passed straight through pacing (`exempt=True`) — Frank saying yes is not something an
+  automated pacer should second-guess.
+- **Bounded to this pass, never permanent.** Pacing holds no cross-pass state beyond an
+  ntfy-dedup ledger (`state.json.pacing_ntfy`, keyed by pool, pruned like `fire_ntfy`);
+  the projection is recomputed from scratch every pass, so a pool that cools off
+  un-throttles on the very next tick with no manual reset required.
+
+Frank-visible signal: `handle_pacing_throttle` fires one deduped ntfy per pool
+(`ntfy_dedup_hours`, default 6h) naming the pool, the action, and the projected
+percentage — so a slowdown is legible as "pacing did this, here's why" rather than
+tickets silently going quiet. `foreman_dispatcher.PACING_HOOK` is a seam
+(`= pacing.decide`, mirroring `LANGFUSE_EMIT`) so tests can swap the hook without faking
+governor state end-to-end. See `dispatcher/pacing.py`'s module docstring and
+`dispatcher/tests/test_pacing.py` (pure module logic) / the `wq#716` block in
+`dispatcher/tests/test_dispatcher.py` (dispatcher-wired: skip/delay/exempt/ntfy-dedup/
+config-fallback) for the full contract.

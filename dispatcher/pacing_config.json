@@ -1,0 +1,16 @@
+{
+  "policy": "conservative",
+  "min_elapsed_fraction": 0.02,
+  "delay_min_pri": 1,
+  "ntfy_dedup_hours": 6,
+  "policies": {
+    "conservative": {
+      "delay_at_projected_pct": 90,
+      "skip_at_projected_pct": 130
+    },
+    "aggressive": {
+      "delay_at_projected_pct": 120,
+      "skip_at_projected_pct": 180
+    }
+  }
+}

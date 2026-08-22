@@ -12,6 +12,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -26,6 +27,7 @@ import foreman_dispatcher as fd  # noqa: E402
 import concurrency  # noqa: E402
 import router  # noqa: E402
 import spawner  # noqa: E402
+import pacing  # noqa: E402
 
 WQ_BIN = "/home/lumen/bin/wq"
 SLOCK_BIN = "/home/lumen/bin/slock"
@@ -95,6 +97,7 @@ def denv(tmp_path, monkeypatch):
     monkeypatch.setattr(fd, "GOVERNOR_CLI", FAKE_GOVERNOR)
     monkeypatch.setattr(fd, "GOVERNOR_STATE", str(gov_state))
     monkeypatch.setattr(fd, "NTFY_BIN", fake_ntfy)
+    monkeypatch.setattr(pacing, "PACING_CONFIG_PATH", str(tmp_path / "pacing_config.json"))
     monkeypatch.setattr(fd, "LANGFUSE_ENV", str(tmp_path / "absent-langfuse.env"))
     monkeypatch.setattr(fd, "STAGGER", (0.0, 0.0))
     monkeypatch.setattr(spawner, "GOVERNOR_CLI", FAKE_GOVERNOR)
@@ -106,7 +109,8 @@ def denv(tmp_path, monkeypatch):
     return {"tmp": tmp_path, "repo": str(repo_dir), "approvals": approvals,
             "units_state": units_state, "calls_log": calls_log, "ntfy_log": ntfy_log,
             "gov_state": gov_state, "cfg_path": cfg_path, "wq_db": str(wq_db),
-            "bin_dir": bin_dir, "lumen_run": lumen_run}
+            "bin_dir": bin_dir, "lumen_run": lumen_run,
+            "pacing_cfg_path": tmp_path / "pacing_config.json"}
 
 
 # ---- helpers -------------------------------------------------------------------------
@@ -422,6 +426,96 @@ def test_lane_cap_resets_on_day_rollover(denv):
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
     st = json.loads((denv["tmp"] / "dstate.json").read_text())
     assert st["lane_counts"] == {"testlane": 1} and st["day"] != "2000-01-01"
+
+
+# ---- wq#716 AUTO-4: weekly-budget pacing ----------------------------------------------
+
+def _resets_at(elapsed_fraction):
+    now = datetime.now(timezone.utc)
+    remaining_s = pacing.WEEK_SECONDS * (1 - elapsed_fraction)
+    return (now + timedelta(seconds=remaining_s)).isoformat()
+
+
+def test_pacing_skip_blocks_hot_pool_regardless_of_priority(denv):
+    # mirrors the actual wq#716 incident shape: ~99% pace at 21% elapsed. percent is kept
+    # under the *governor's own* fable floor (remaining >= 50%) so this exercises pacing,
+    # not the governor's reactive deny (session/weekly_all stay healthy).
+    gov = {"limits": {
+        "session": {"percent": 10}, "weekly_all": {"percent": 10},
+        "fable_weekly_scoped": {"percent": 45, "resets_at": _resets_at(0.3)},  # -> 150%
+    }}
+    denv["gov_state"].write_text(json.dumps(gov))
+    tid = add_ticket("hot fable ticket", pri=0, model="claude-fable-5")
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "pacing_skip"
+    assert skips[0]["pacing_pool"] == "fable_weekly_scoped"
+    assert lumen_calls(denv) == []
+    assert len(ntfy_lines(denv)) == 1
+    assert "pacing" in ntfy_lines(denv)[0]
+
+
+def test_pacing_delay_lets_high_priority_through(denv):
+    gov = {"limits": {
+        "session": {"percent": 10}, "fable_weekly_scoped": {"percent": 10},
+        "weekly_all": {"percent": 56, "resets_at": _resets_at(0.5)},  # -> 112%: delay, not skip
+    }}
+    denv["gov_state"].write_text(json.dumps(gov))
+    hi = add_ticket("p1 rides through pacing delay", pri=1)
+    lo = add_ticket("p2 delayed by pacing", pri=2)
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [hi]
+    skips = log_events(denv, "skip", ticket=lo)
+    assert len(skips) == 1 and skips[0]["reason"] == "pacing_delay"
+
+
+def test_pacing_exempts_frank_approved_fire_ticket(denv):
+    gov = {"limits": {
+        "session": {"percent": 10}, "weekly_all": {"percent": 10},
+        "fable_weekly_scoped": {"percent": 45, "resets_at": _resets_at(0.3)},  # -> 150%
+    }}
+    denv["gov_state"].write_text(json.dumps(gov))
+    tid = add_ticket("approved fire ticket needs fable", lane="fleet-fires", pri=0,
+                     model="claude-fable-5")
+    (denv["approvals"] / f"wq{tid}.approved").write_text("")
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert log_events(denv, "skip", ticket=tid) == []
+
+
+def test_pacing_ntfy_dedup_within_window(denv):
+    gov = {"limits": {
+        "session": {"percent": 10}, "weekly_all": {"percent": 10},
+        "fable_weekly_scoped": {"percent": 45, "resets_at": _resets_at(0.3)},
+    }}
+    denv["gov_state"].write_text(json.dumps(gov))
+    add_ticket("hot fable ticket 1", pri=0, model="claude-fable-5")
+    assert fd.run_pass() == 0
+    assert len(ntfy_lines(denv)) == 1
+    add_ticket("hot fable ticket 2", pri=0, model="claude-fable-5")
+    assert fd.run_pass() == 0
+    assert len(ntfy_lines(denv)) == 1  # deduped: same pool, still within ntfy_dedup_hours
+
+
+def test_pacing_config_invalid_falls_back_conservative(denv):
+    denv["pacing_cfg_path"].write_text("{not json")
+    tid = add_ticket("unaffected by a broken pacing config")
+    assert fd.run_pass() == 0
+    infos = [e for e in log_events(denv, "info") if e.get("stage") == "pacing"]
+    assert len(infos) == 1 and infos[0]["reason"] == "pacing_config_invalid"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
+def test_pacing_policy_off_disables_throttle(denv):
+    denv["pacing_cfg_path"].write_text(json.dumps({**pacing.DEFAULT_CONFIG, "policy": "off"}))
+    gov = {"limits": {
+        "session": {"percent": 10}, "weekly_all": {"percent": 10},
+        "fable_weekly_scoped": {"percent": 45, "resets_at": _resets_at(0.3)},
+    }}
+    denv["gov_state"].write_text(json.dumps(gov))
+    tid = add_ticket("hot pool but pacing is off", pri=0, model="claude-fable-5")
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
 
 
 # ---- MUST 6: concurrency -------------------------------------------------------------

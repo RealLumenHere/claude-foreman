@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "harness"))
 import router       # noqa: E402
 import spawner      # noqa: E402
 import concurrency  # noqa: E402
+import pacing       # noqa: E402
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -160,28 +161,32 @@ class DecisionLog:
         self.emit("skip", ticket=ticket, lane=lane, stage=stage, reason=reason, **fields)
 
 
-# ---- state.json (§6.3: per-day lane counters + fire-ntfy dedup ledger) ---------------
+# ---- state.json (§6.3: per-day lane counters + fire-ntfy/pacing-ntfy dedup ledgers) --
+
+PACING_NTFY_PRUNE_H = 72  # generous vs. the configurable ntfy_dedup_hours (default 6):
+                          # this only bounds ledger growth, not the re-notify cadence.
+
 
 def _utcnow():
     return datetime.now(timezone.utc)
 
 
-def _prune_fire_ntfy(ledger, now):
+def _prune_dedup(ledger, now, hours):
     out = {}
-    for tid, ts in (ledger or {}).items():
+    for key, ts in (ledger or {}).items():
         try:
             then = datetime.fromisoformat(ts)
         except (TypeError, ValueError):
             continue
-        if now - then < timedelta(hours=FIRE_NTFY_DEDUP_H):
-            out[tid] = ts
+        if now - then < timedelta(hours=hours):
+            out[key] = ts
     return out
 
 
 def load_state(now=None):
     now = now or _utcnow()
     today = now.strftime("%Y-%m-%d")
-    fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}}
+    fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -189,13 +194,15 @@ def load_state(now=None):
         return fresh
     if not isinstance(st, dict):
         return fresh
-    fire = _prune_fire_ntfy(st.get("fire_ntfy"), now)
-    if st.get("day") != today:  # UTC day rollover resets counts (§6.3)
-        return {"day": today, "lane_counts": {}, "fire_ntfy": fire}
+    fire = _prune_dedup(st.get("fire_ntfy"), now, FIRE_NTFY_DEDUP_H)
+    pacing_ntfy = _prune_dedup(st.get("pacing_ntfy"), now, PACING_NTFY_PRUNE_H)
+    if st.get("day") != today:  # UTC day rollover resets lane counts, not the ledgers (§6.3)
+        return {"day": today, "lane_counts": {}, "fire_ntfy": fire, "pacing_ntfy": pacing_ntfy}
     counts = st.get("lane_counts")
     return {"day": today,
             "lane_counts": counts if isinstance(counts, dict) else {},
-            "fire_ntfy": fire}
+            "fire_ntfy": fire,
+            "pacing_ntfy": pacing_ntfy}
 
 
 def save_state(st):
@@ -326,6 +333,48 @@ def governor_pressure(model):
                                     governor_cli=GOVERNOR_CLI)
 
 
+def governor_limits():
+    """Raw `limits` block from the governor's state.json (usage % + resets_at per pool),
+    read directly since pacing needs `resets_at` and router.governor_pressure doesn't
+    expose it. Same fail-quiet read as router's own state load: an unreadable/malformed
+    file just means pacing has no pools to project (governor_pressure's own fail-closed
+    'deny' already covers the case where state is unreadable — MUST 5 layer 1)."""
+    try:
+        with open(GOVERNOR_STATE) as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    limits = st.get("limits") if isinstance(st, dict) else None
+    return limits if isinstance(limits, dict) else {}
+
+
+PACING_HOOK = pacing.decide  # seam: tests replace to prove the dispatcher <-> pacing wiring
+
+
+def handle_pacing_throttle(state, verdict, pacing_cfg, dry_run, log):
+    """Frank-visible ntfy on throttle (wq#716 acceptance), deduped per-pool so a
+    multi-ticket pass doesn't page him once per skipped ticket."""
+    now = _utcnow()
+    dedup_h = pacing_cfg.get("ntfy_dedup_hours", pacing.DEFAULT_CONFIG["ntfy_dedup_hours"])
+    last = state["pacing_ntfy"].get(verdict.pool)
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=dedup_h):
+                return
+        except ValueError:
+            pass
+    msg = f"dispatcher pacing: {verdict.action} on {verdict.pool} — {verdict.reason}"
+    if verdict.detail:
+        msg += f" ({verdict.detail})"
+    if dry_run:
+        log.emit("would_ntfy", reason="pacing_throttle", pool=verdict.pool,
+                 action=verdict.action)
+        return
+    ntfy(msg, priority="default", title="dispatcher pacing throttle")
+    state["pacing_ntfy"][verdict.pool] = now.isoformat(timespec="seconds")
+    save_state(state)
+
+
 # ---- candidate scan (§3 stage 2: read-only, effective_pri order) ---------------------
 
 def scan_candidates(cfg, log):
@@ -448,6 +497,11 @@ def _do_pass(cfg, log, state, dry_run):
     spawned = 0
     dep_cache, pressure_cache = {}, {}
 
+    pacing_cfg, pacing_warn = pacing.load_config()  # wq#716: forward-looking layer on §6
+    if pacing_warn:
+        log.emit("info", stage="pacing", reason="pacing_config_invalid", detail=pacing_warn)
+    limits = governor_limits()
+
     for i, cand in enumerate(candidates):
         tid, lane = cand["id"], cand["lane"]
 
@@ -491,10 +545,10 @@ def _do_pass(cfg, log, state, dry_run):
             continue
 
         # stage 5 — fire approval (MUST 4): forced for fleet-fires regardless of config
-        if policy.get("requires_approval") or lane == FIRE_LANE:
-            if not os.path.exists(fire_approval_path(tid)):
-                handle_unapproved_fire(state, tid, lane, dry_run, log)
-                continue
+        fire_exempt = bool(policy.get("requires_approval") or lane == FIRE_LANE)
+        if fire_exempt and not os.path.exists(fire_approval_path(tid)):
+            handle_unapproved_fire(state, tid, lane, dry_run, log)
+            continue
 
         # stage 6 — deps (MUST 2)
         unmet = unmet_deps(t, dep_cache)
@@ -540,6 +594,15 @@ def _do_pass(cfg, log, state, dry_run):
                 log.skip(tid, lane, "budget", "tight_pri", model=model,
                          detail=f"pri {cand['pri']} > tight min_pri {tight_cfg['min_pri']}")
                 continue
+
+        # stage 8b — weekly-budget pacing (wq#716): forward-looking, on top of the
+        # governor's own reactive floor above. Never blocks a Frank-approved fire ticket.
+        verdict = PACING_HOOK(cand["pri"], model, limits, pacing_cfg, fire_exempt)
+        if verdict.action != "ok":
+            log.skip(tid, lane, "budget", f"pacing_{verdict.action}", model=model,
+                     **verdict.as_fields())
+            handle_pacing_throttle(state, verdict, pacing_cfg, dry_run, log)
+            continue
 
         # stage 9 — concurrency ceiling, local rung excluded (T4)
         cloud = [u for u in units if not concurrency.is_local_unit(u)]
