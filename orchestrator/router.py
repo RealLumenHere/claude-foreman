@@ -69,6 +69,7 @@ LANE_REPO = {
     "lpp": "/home/lumen/pokemon",        # dispatcher lane name is 'lpp'; repo is pokemon (Frank 2026-08-21)
     "questfree": "/home/lumen/questfree",
     "pstack": "/home/lumen/pstack",
+    "mission-control": "/home/lumen/mission-control",
     "fleet-fires": FOREMAN_ROOT,          # fires are fleet/infra work, run from foreman
 }
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")

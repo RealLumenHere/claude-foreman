@@ -35,6 +35,10 @@
     "build": {
       "enabled": true,
       "max_per_day": 20
+    },
+    "mission-control": {
+      "enabled": true,
+      "max_per_day": 20
     }
   }
 }
