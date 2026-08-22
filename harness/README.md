@@ -19,6 +19,9 @@ below.
                              classification input itself
     reaper.py                independent wq lease reaper (§E, wq#647) — `wq reap` +
                              an aq row per reap, decoupled from any worker's own exit path
+    repo_reconcile.py        wq#686: managed-repo divergence check/repair — resets a local
+                             branch onto a PR-only remote ONLY when the trees are already
+                             identical (soft, archived), refuses otherwise
     concurrency.py           wq#616 (T2b): live fworker-wq* unit count + cloud slot cap
     spawner.py               wq#616 (T2b): concurrency-capped, staggered batch dispatch
     worker-settings.json    settings pack — replaces worker-settings-interim.json
@@ -76,6 +79,32 @@ independent process that sweeps ALL lanes on its own schedule:
 Every reclaim posts an `aq` row (source `foreman-reaper`) so a dangling claim is never
 silent again, then reverts the ticket to `open` via `wq reap` (a new lane-independent
 subcommand, same reclaim semantics `wq claim` already uses for its own lane).
+
+## Managed-repo divergence (wq#686)
+
+Committing straight onto the local `main` of a deployed repo is unrecoverable-by-push once
+the same work lands on the remote as a squashed PR commit: `git push` is refused by the
+class-a-main ruleset (PR + squash + linear history) and `git pull` would merge, which the
+ruleset also forbids. wq#686 caught `/home/lumen/pokemon` in exactly that state — main 7
+ahead / 1 behind, for three days.
+
+The escape hatch is a fact, not a judgement call. When the squashed remote commit already
+carries the same content, `tree(main) == tree(origin/main)`, and moving the local ref
+changes **zero files** — so it cannot disturb a process running out of that tree. That
+equality is the deploy-parity proof; without it there is no safe ref move at all.
+
+    python3 harness/repo_reconcile.py status                       # default repo: /home/lumen/pokemon
+    python3 harness/repo_reconcile.py reconcile --apply            # only acts on SAFE_RESET
+
+Exit codes are the interface: `0` IN_SYNC, `10` SAFE_RESET (fixable here), `20`
+CONTENT_DIVERGED (needs branch -> PR -> squash, or a Frank bypass), `30` BEHIND_ONLY
+(deploy the remote content first, *then* fast-forward), `2` error. `--apply` soft-resets
+(never `--hard`, so uncommitted and untracked work in a live tree survives) and archives
+the abandoned SHAs under an `archive/reconcile-*` tag first.
+
+wq#686's own reconcile is preserved in `/home/lumen/pokemon` as tag
+`archive/wq686-pre-reconcile-main` (df2d937, the 7 commits) — kept because a squash makes
+the pre-squash SHAs unreachable, and unreachable is one `git gc` away from gone.
 
 ## Governor cache-on-429, NDJSON hardening, OOM forensics (wq#648, §B/§E, S3)
 
@@ -202,7 +231,7 @@ liveness signal during `--resume` reconciliation (design §8) — never the cont
 
     cd harness && python3 -m pytest tests/ -v
 
-36 cases: guard.sh corpus (every deny class + quoting/`bash -c` evasions, lifecycle
+162 cases, including: guard.sh corpus (every deny class + quoting/`bash -c` evasions, lifecycle
 event logging, fail-closed on malformed/empty/off-host input), the classifier's full
 decision table including the turn-ceiling case, settings-pack lint (acceptEdits, no
 bypassPermissions anywhere in the harness or in the retrofitted gh-lane-worker,
