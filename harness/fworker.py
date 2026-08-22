@@ -85,15 +85,24 @@ OAUTH_TOKEN_FILE = os.environ.get("FOREMAN_OAUTH_TOKEN_FILE",
 # design §3: per-archetype --max-turns defaults (passed to the CLI; the supervisor
 # also backstops a few turns above this, see module docstring). Unlisted archetypes
 # fall back to standard-engineering's ceiling.
+# RECALIBRATED 2026-08-22 (Frank-directed permanent fix). The original table assumed
+# 1 counted turn ~= 1 tool call; measured reality (2026-08-21, wq#713: 24 real tool
+# calls registered 45 turns) is that hook frames roughly DOUBLE the count, so these
+# ceilings bought half the work they claimed. Result: 49 spawns overnight, 46 killed,
+# 3 succeeded — every successful ticket needed 80-118 counted turns against 40-65
+# ceilings. New values = empirically what completing tickets actually consumed +
+# headroom, NOT the old numbers x2 guesswork. Do not lower these without measuring
+# real-turns-per-tool-call first (mechanics audit owns the proper fix: count only
+# assistant turns in the supervisor).
 ARCHETYPE_MAX_TURNS = {
-    "mechanical-edit": 15,
-    "probe-build": 25,
-    "standard-engineering": 40,
-    "verify-pass": 25,
-    "research-synthesis": 25,
-    "novel-design": 40,
-    "rca-investigation": 60,
-    "long-horizon-campaign": 60,
+    "mechanical-edit": 40,
+    "probe-build": 60,
+    "standard-engineering": 120,
+    "verify-pass": 60,
+    "research-synthesis": 120,
+    "novel-design": 160,
+    "rca-investigation": 160,
+    "long-horizon-campaign": 200,
 }
 DEFAULT_MAX_TURNS = ARCHETYPE_MAX_TURNS["standard-engineering"]
 
