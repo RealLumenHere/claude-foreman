@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""wq#394 canary gate — summarize measurements.csv and print a fleet-rollout recommendation.
+
+Usage: analyze.py [--csv PATH] [--start-marker PATH] [--min-hours 48]
+
+Thresholds are deliberately conservative placeholders (research doc cited an
+unverified ~1% CPU claim for N100/Mac idle-tuned nodes): recommend GO only if
+netdata's own CPU share stays under 2% average and package watts delta stays
+under 3W average relative to the pre-install baseline noted in the report.
+Frank makes the actual fleet-rollout call; this script produces the numbers,
+not the decision.
+"""
+import argparse
+import csv
+import os
+import statistics
+import time
+
+DEFAULT_CSV = "/var/lib/wq394-netdata-canary/measurements.csv"
+DEFAULT_MARKER = "/var/lib/wq394-netdata-canary/soak_start"
+
+CPU_PCT_GO_THRESHOLD = 2.0
+WATTS_GO_THRESHOLD = 3.0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--csv", default=DEFAULT_CSV)
+    ap.add_argument("--start-marker", default=DEFAULT_MARKER)
+    ap.add_argument("--min-hours", type=float, default=48.0)
+    args = ap.parse_args()
+
+    if not os.path.exists(args.start_marker):
+        print(f"NO_MARKER: {args.start_marker} not found — soak was never started here")
+        return 2
+    with open(args.start_marker) as f:
+        start_ts = float(f.read().strip())
+    elapsed_h = (time.time() - start_ts) / 3600
+    print(f"soak started: {time.ctime(start_ts)} ({elapsed_h:.1f}h ago)")
+    if elapsed_h < args.min_hours:
+        print(f"TOO_EARLY: need {args.min_hours}h, only {elapsed_h:.1f}h elapsed")
+        return 2
+
+    if not os.path.exists(args.csv):
+        print(f"NO_DATA: {args.csv} not found")
+        return 2
+
+    watts, cpu_pcts, rss = [], [], []
+    with open(args.csv) as f:
+        for row in csv.DictReader(f):
+            if row["package_watts"]:
+                watts.append(float(row["package_watts"]))
+            if row["netdata_cpu_pct"]:
+                cpu_pcts.append(float(row["netdata_cpu_pct"]))
+            if row["netdata_rss_kb"]:
+                rss.append(int(row["netdata_rss_kb"]))
+
+    if not watts or not cpu_pcts:
+        print("INSUFFICIENT_SAMPLES: fewer than 2 rows recorded")
+        return 2
+
+    avg_watts = statistics.mean(watts)
+    avg_cpu = statistics.mean(cpu_pcts)
+    avg_rss_mb = statistics.mean(rss) / 1024 if rss else 0.0
+    est_netdata_watts = avg_watts * (avg_cpu / 100)
+
+    print(f"samples: {len(watts)}")
+    print(f"avg package watts (whole host, RAPL pkg-0): {avg_watts:.2f}W")
+    print(f"avg netdata CPU share of total: {avg_cpu:.3f}%")
+    print(f"avg netdata RSS: {avg_rss_mb:.1f}MB")
+    print(f"estimated netdata power draw (pkg_watts * cpu_share): {est_netdata_watts:.3f}W")
+    print(
+        "NOTE: this is a proportional estimate, not a per-process power meter — "
+        "cross-check against the pre-install baseline in reports/wq394_netdata_canary.md "
+        "before treating it as ground truth."
+    )
+
+    go = avg_cpu < CPU_PCT_GO_THRESHOLD and est_netdata_watts < WATTS_GO_THRESHOLD
+    print(f"RECOMMENDATION: {'GO' if go else 'HOLD'} "
+          f"(thresholds: cpu<{CPU_PCT_GO_THRESHOLD}%, watts<{WATTS_GO_THRESHOLD}W)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

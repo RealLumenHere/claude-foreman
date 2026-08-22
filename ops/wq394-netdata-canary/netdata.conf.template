@@ -1,0 +1,24 @@
+# netdata configuration — wq#394 canary (agent-only, tailnet-bind, no cloud)
+# Managed by claude-foreman; see reports/wq394_netdata_canary.md for rationale.
+
+[global]
+	# agent-only: never run netdata-claim.sh on this host
+
+[web]
+	bind to = TAILSCALE_IP:19999
+	allow connections from = localhost 100.*
+	allow dashboard from = localhost 100.*
+	allow mcp from = localhost 100.*
+	allow badges from = localhost 100.*
+	allow streaming from = localhost 100.*
+	allow netdata.conf from = localhost 100.*
+	allow management from = localhost
+	# NOTE: do NOT set "bearer token protection = yes" — verified on v2.11.0 it
+	# breaks the MCP dev-preview API-key flow entirely (initialize/tools/call
+	# both start returning "MCP API key is required" even with a valid key).
+	# The MCP endpoint enforces its own dev-preview key for sensitive functions
+	# independent of this setting; tailnet-bind + allow-from is the network gate.
+	bearer token protection = no
+
+[ml]
+	enabled = yes

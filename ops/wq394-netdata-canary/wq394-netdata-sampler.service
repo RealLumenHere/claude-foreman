@@ -1,0 +1,7 @@
+[Unit]
+Description=wq#394 netdata canary — RAPL watts + netdata CPU% sample
+After=netdata.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/wq394-netdata-canary/sampler.py
