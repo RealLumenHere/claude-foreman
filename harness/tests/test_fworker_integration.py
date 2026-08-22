@@ -145,6 +145,9 @@ def test_denied_verb_blocked_at_hook_during_real_spawn(tmp_path):
     # wq_block() reason self_heal.py reads is prefixed WORK_BLOCKED, never auto-released.
     notes = wq_show_field(env, ticket_id, "notes")
     assert notes.startswith("WORK_BLOCKED:"), notes
+    # wq#741: the same reason also lands in the dedicated block_reason column now.
+    assert wq_show_field(env, ticket_id, "block_reason") == notes
+    assert wq_show_field(env, ticket_id, "blocked_at") != "None"
 
 
 def test_launch_failure_blocks_with_infra_crash_prefix(tmp_path):
@@ -163,6 +166,9 @@ def test_launch_failure_blocks_with_infra_crash_prefix(tmp_path):
     notes = wq_show_field(env, ticket_id, "notes")
     assert notes.startswith("INFRA_CRASH:"), notes
     assert "LAUNCH_FAILURE" in notes
+    # wq#741: the same reason also lands in the dedicated block_reason column now.
+    assert wq_show_field(env, ticket_id, "block_reason") == notes
+    assert wq_show_field(env, ticket_id, "blocked_at") != "None"
 
 
 def test_rejected_limit_frame_drives_limit_path_not_crash(tmp_path):

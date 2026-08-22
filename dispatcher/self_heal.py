@@ -24,14 +24,16 @@ LIMIT_HIT and WORK_BLOCKED tickets are NEVER released by this daemon — no over
 exception; a block reason wq doesn't recognize (predates this feature, or Frank blocked
 it by hand) is treated the same conservative way as WORK_BLOCKED.
 
-wq has no `blocked_at` column (adding one means a live schema migration on the shared,
-concurrently-used /home/lumen/bin/wq binary — out of scope for a single ticket's build;
-noted as a follow-up). This daemon keeps its own small "when did I first see this ticket
-blocked" ledger (state.json) instead: reset the moment a ticket leaves blocked (healed,
-manually released, or closed) so the age check reflects one blocked *occurrence*, not
-cumulative history. The attempt cap reads fworker's own attempt-N.json files directly
-(harness/fworker.py's run_dir/next_attempt_n) rather than keeping a second counter that
-could drift out of sync with the harness's real attempt count.
+wq#741 gave wq dedicated `block_reason`/`blocked_at` columns on tasks (ADDITIVE, same
+ALTER-TABLE-if-missing pattern as lease_expires/subsystems/gate) — cmd_block() writes both
+alongside notes. This daemon reads `blocked_at` straight from `wq show` for the age check,
+so a re-block naturally starts a fresh occurrence (wq clears both columns on release/done).
+Tickets blocked before wq#741 shipped may still carry the class prefix only in `notes` —
+classify_block() falls back to that so an in-flight INFRA_CRASH isn't stranded across the
+upgrade. state.json now holds only the ntfy dedup ledger (`stale_ntfy`), not a first-seen
+ledger. The attempt cap reads fworker's own attempt-N.json files directly (harness/
+fworker.py's run_dir/next_attempt_n) rather than keeping a second counter that could drift
+out of sync with the harness's real attempt count.
 
 CLI:  self_heal.py run --once [--dry-run]
 """
@@ -101,10 +103,11 @@ def _utcnow():
     return datetime.now(timezone.utc)
 
 
-# ---- state.json: {"tickets": {"<id>": {"first_seen": iso}}, "stale_ntfy": {"<id>": iso}} --
+# ---- state.json: {"stale_ntfy": {"<id>": iso}} — first-seen tracking now lives in wq's own
+# blocked_at column (wq#741); this file is just the "don't re-ping Frank every pass" ledger.
 
 def load_state():
-    fresh = {"tickets": {}, "stale_ntfy": {}}
+    fresh = {"stale_ntfy": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -112,10 +115,8 @@ def load_state():
         return fresh
     if not isinstance(st, dict):
         return fresh
-    tickets = st.get("tickets")
     stale = st.get("stale_ntfy")
-    return {"tickets": tickets if isinstance(tickets, dict) else {},
-            "stale_ntfy": stale if isinstance(stale, dict) else {}}
+    return {"stale_ntfy": stale if isinstance(stale, dict) else {}}
 
 
 def save_state(st):
@@ -201,14 +202,34 @@ def wq_release(tid):
     return p.returncode == 0, p.stdout + p.stderr
 
 
-def classify_block_notes(notes):
-    """(block_class, detail) parsed from a wq_block() reason; (None, notes) when the
-    reason predates this feature or was written by hand (Frank) -> treated the same
-    conservative way as WORK_BLOCKED by the caller, never auto-released."""
-    m = BLOCK_PREFIX_RE.match(notes or "")
+def classify_block(ticket):
+    """(block_class, detail) parsed from a ticket's block_reason (wq#741 column); falls back
+    to notes for tickets blocked before that column existed, so an in-flight INFRA_CRASH
+    isn't stranded across the upgrade. (None, reason) when the reason predates the prefix
+    convention entirely or was written by hand (Frank) -> treated the same conservative way
+    as WORK_BLOCKED by the caller, never auto-released."""
+    # `wq show`'s generic key:value dump prints a NULL column as the literal string "None",
+    # so that has to be treated as empty before the `or` fallback even sees it.
+    reason = ticket.get("block_reason")
+    if not reason or reason == "None":
+        reason = ticket.get("notes") or ""
+    if reason == "None":
+        reason = ""
+    m = BLOCK_PREFIX_RE.match(reason)
     if not m:
-        return None, notes
+        return None, reason
     return m.group(1), m.group(2)
+
+
+def parse_blocked_at(raw):
+    """wq's `now()` (/home/lumen/bin/wq) writes naive-UTC '%Y-%m-%d %H:%M:%S'. Returns None
+    for a missing/legacy column (pre-wq#741 blocks, or a NULL `wq show` prints as "None")."""
+    if not raw or raw == "None":
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def attempt_count(tid):
@@ -262,14 +283,12 @@ def _do_pass(dry_run, log):
             log.emit("skip", ticket=tid, reason="not_blocked", detail=t.get("status"))
             continue
 
-        klass, detail = classify_block_notes(t.get("notes", ""))
+        klass, detail = classify_block(t)
         if klass != "INFRA_CRASH":
             log.emit("skip", ticket=tid, reason="not_infra_crash",
                      klass=klass or "unmarked")
             continue
 
-        rec = state["tickets"].setdefault(
-            str(tid), {"first_seen": _utcnow().isoformat(timespec="seconds")})
         attempts = attempt_count(tid)
         if attempts >= MAX_HEAL_ATTEMPTS:
             log.emit("skip", ticket=tid, reason="heal_attempts_exhausted",
@@ -279,7 +298,9 @@ def _do_pass(dry_run, log):
                               dry_run, log)
             continue
 
-        first_seen = datetime.fromisoformat(rec["first_seen"])
+        # missing blocked_at (a block from before wq#741 added the column) reads as just
+        # blocked now — never stale — rather than stranding a legacy INFRA_CRASH forever.
+        first_seen = parse_blocked_at(t.get("blocked_at")) or _utcnow()
         age_min = (_utcnow() - first_seen).total_seconds() / 60
         if age_min >= STALE_AFTER_MIN:
             log.emit("skip", ticket=tid, reason="stale_infra_crash",
@@ -301,9 +322,8 @@ def _do_pass(dry_run, log):
                  detail=detail)
 
     if not dry_run:
-        for tid in list(state["tickets"]):
+        for tid in list(state["stale_ntfy"]):
             if tid not in seen:  # left blocked (healed, closed, or hand-released)
-                state["tickets"].pop(tid, None)
                 state["stale_ntfy"].pop(tid, None)
         save_state(state)
 

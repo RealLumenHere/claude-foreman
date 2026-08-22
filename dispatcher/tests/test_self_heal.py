@@ -8,6 +8,7 @@ released" claim must be proven by re-reading wq, not just by an absent log line.
 import json
 import os
 import re
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -106,11 +107,24 @@ def ntfy_lines(henv):
     return henv["ntfy_log"].read_text().splitlines()
 
 
-def seed_state(henv, tid, first_seen):
-    path = henv["tmp"] / "self_heal" / "state.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"tickets": {str(tid): {"first_seen": first_seen}},
-                                "stale_ntfy": {}}))
+def set_blocked_at(henv, tid, when):
+    """Backdate wq's own blocked_at column (wq#741) to simulate an old block — there's no
+    wq CLI for this (it's system-managed, set only by cmd_block), so go straight at the
+    scratch DB the same way the fixture already owns it."""
+    con = sqlite3.connect(henv["wq_db"])
+    con.execute("UPDATE tasks SET blocked_at=? WHERE id=?",
+                (when.strftime("%Y-%m-%d %H:%M:%S"), tid))
+    con.commit()
+    con.close()
+
+
+def clear_block_reason_column(henv, tid):
+    """Simulate a ticket blocked before wq#741 shipped: notes carries the class prefix but
+    the (newer) block_reason column is NULL."""
+    con = sqlite3.connect(henv["wq_db"])
+    con.execute("UPDATE tasks SET block_reason=NULL WHERE id=?", (tid,))
+    con.commit()
+    con.close()
 
 
 # ---- INFRA_CRASH: healed --------------------------------------------------------------
@@ -126,6 +140,22 @@ def test_infra_crash_auto_released_within_cap(henv):
     heals = log_events(henv, "heal", ticket=tid)
     assert len(heals) == 1 and heals[0]["attempts"] == 2
     assert ntfy_lines(henv) == []  # a healthy heal never pages Frank
+
+
+def test_infra_crash_healed_via_notes_fallback_pre_wq741(henv):
+    """A ticket blocked before wq#741 added block_reason has the prefix only in notes —
+    classify_block() must still recognize it so upgrading self_heal.py never strands an
+    in-flight INFRA_CRASH."""
+    tid = add_ticket()
+    block_ticket(tid, "INFRA_CRASH: LAUNCH_FAILURE after 2 attempts; transcript=x")
+    clear_block_reason_column(henv, tid)
+    make_attempts(henv, tid, 2)
+
+    assert sh.run_pass() == 0
+
+    assert wq_show_field(tid, "status") == "open"
+    heals = log_events(henv, "heal", ticket=tid)
+    assert len(heals) == 1 and heals[0]["attempts"] == 2
 
 
 # ---- WORK_BLOCKED / LIMIT_HIT / unmarked: never released -------------------------------
@@ -170,14 +200,14 @@ def test_heal_attempts_exhausted_notifies_and_leaves_blocked(henv):
     assert len(ntfy_lines(henv)) == 1
 
 
-# ---- staleness (no wq blocked_at column -> local first-seen ledger) --------------------
+# ---- staleness (wq#741: age comes from wq's own blocked_at column) --------------------
 
 def test_stale_infra_crash_notifies_and_leaves_blocked(henv):
     tid = add_ticket()
     block_ticket(tid, "INFRA_CRASH: LAUNCH_FAILURE after 2 attempts; transcript=x")
     make_attempts(henv, tid, 1)
     old = (datetime.now(timezone.utc) - timedelta(minutes=sh.STALE_AFTER_MIN + 5))
-    seed_state(henv, tid, old.isoformat(timespec="seconds"))
+    set_blocked_at(henv, tid, old)
 
     assert sh.run_pass() == 0
 

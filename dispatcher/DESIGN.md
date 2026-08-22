@@ -319,11 +319,12 @@ The fix lives mostly in the harness, not here: `handle_failure()` now prefixes e
 process environment broke, no real work attempted), `LIMIT_HIT:` (turn/budget ceiling —
 a resourcing call), or `WORK_BLOCKED:` (the worker/model decided it can't do the work,
 or an unrecognized shape — the conservative default). self_heal.py only ever acts on
-`INFRA_CRASH:`: `wq release` it (subject to a per-ticket attempt cap read from fworker's
-own `attempt-N.json` files, and a "how long has this been stuck" ledger in its own
-state.json — wq has no `blocked_at` column, so this is a local first-seen timestamp,
-not a schema change on the shared, concurrently-used `/home/lumen/bin/wq` binary).
-`LIMIT_HIT` and `WORK_BLOCKED` are never released — no override.
+`INFRA_CRASH:`: `wq release` it, subject to a per-ticket attempt cap read from fworker's
+own `attempt-N.json` files, and a "how long has this been stuck" age check read from wq's
+own `block_reason`/`blocked_at` columns (wq#741 — added to `tasks` the same additive
+ALTER-TABLE-if-missing way as `lease_expires`/`subsystems`/`gate`; `cmd_block()` populates
+them alongside `notes`, and clears them on release/done). `LIMIT_HIT` and `WORK_BLOCKED`
+are never released — no override.
 
 Released is as far as self_heal.py goes: it does not spawn. A released ticket is `open`
 again, which makes it a normal candidate for *this* dispatcher's own next pass — the
