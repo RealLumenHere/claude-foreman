@@ -95,14 +95,18 @@ OAUTH_TOKEN_FILE = os.environ.get("FOREMAN_OAUTH_TOKEN_FILE",
 # real-turns-per-tool-call first (mechanics audit owns the proper fix: count only
 # assistant turns in the supervisor).
 ARCHETYPE_MAX_TURNS = {
-    "mechanical-edit": 40,
-    "probe-build": 60,
-    "standard-engineering": 120,
-    "verify-pass": 60,
-    "research-synthesis": 120,
-    "novel-design": 160,
-    "rca-investigation": 160,
-    "long-horizon-campaign": 200,
+    # 2026-08-22 Frank-directed: ceilings REMOVED as a failure cause until the real
+    # turn-accounting fix lands (mechanics audit: count assistant turns, not hook
+    # frames). 600 is effectively "don't turn-kill"; wall_clock timeout is the real
+    # bound now. Restore per-archetype values only after the audit measures them.
+    "mechanical-edit": 600,
+    "probe-build": 600,
+    "standard-engineering": 600,
+    "verify-pass": 600,
+    "research-synthesis": 600,
+    "novel-design": 600,
+    "rca-investigation": 600,
+    "long-horizon-campaign": 600,
 }
 DEFAULT_MAX_TURNS = ARCHETYPE_MAX_TURNS["standard-engineering"]
 
