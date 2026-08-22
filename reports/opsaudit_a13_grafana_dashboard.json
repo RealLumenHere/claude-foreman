@@ -1,0 +1,83 @@
+{
+  "dashboard": {
+    "uid": "wq763-flow-metrics",
+    "title": "Fleet flow metrics (wq#763 A13)",
+    "tags": ["ops-audit", "wq763", "flow-metrics"],
+    "timezone": "utc",
+    "schemaVersion": 39,
+    "refresh": "1m",
+    "time": {"from": "now-7d", "to": "now"},
+    "panels": [
+      {
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+        "id": 1,
+        "targets": [{"expr": "sum(lumen_queue_status_total)", "legendFormat": "all tickets"}],
+        "title": "Total tickets tracked",
+        "type": "stat"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+        "id": 2,
+        "targets": [{"expr": "sum(lumen_queue_wip_total)", "legendFormat": "WIP"}],
+        "title": "WIP (open+claimed+blocked)",
+        "type": "stat"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+        "id": 3,
+        "targets": [{"expr": "lumen_queue_frank_parked_total", "legendFormat": "parked on Frank"}],
+        "title": "Items parked on Frank (F1 baseline: 74)",
+        "type": "stat"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+        "id": 4,
+        "targets": [{"expr": "lumen_queue_rework_rate_pct", "legendFormat": "rework %"}],
+        "title": "Rework rate % (reopened or rejected)",
+        "type": "stat"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+        "id": 5,
+        "targets": [{"expr": "lumen_queue_wip_total", "legendFormat": "{{lane}}"}],
+        "title": "WIP by lane over time",
+        "type": "timeseries"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+        "id": 6,
+        "targets": [
+          {"expr": "lumen_queue_blocked_age_days{stat=\"median_d\"}", "legendFormat": "blocked age median (d)"},
+          {"expr": "lumen_queue_blocked_age_days{stat=\"max_d\"}", "legendFormat": "blocked age max (d)"},
+          {"expr": "lumen_queue_frank_parked_age_days{stat=\"median_d\"}", "legendFormat": "frank-parked age median (d)"},
+          {"expr": "lumen_queue_frank_parked_age_days{stat=\"max_d\"}", "legendFormat": "frank-parked age max (d)"}
+        ],
+        "title": "Blocked / Frank-parked age (days)",
+        "type": "timeseries"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+        "id": 7,
+        "targets": [{"expr": "lumen_queue_status_total", "legendFormat": "{{status}}"}],
+        "title": "Ticket status counts over time",
+        "type": "timeseries"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+        "id": 8,
+        "targets": [{"expr": "time() - lumen_queue_flow_captured_at_seconds", "legendFormat": "staleness (s)"}],
+        "title": "Exporter freshness (age of last sample)",
+        "type": "timeseries"
+      }
+    ]
+  },
+  "overwrite": true
+}
