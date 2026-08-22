@@ -21,6 +21,8 @@ import subprocess
 import sys
 import time
 
+VERSION = "0.1"
+
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 AQ_CLI = os.environ.get("FOREMAN_AQ_CLI", "/home/lumen/agents/alert-queue/aq.py")
 DEFAULT_INTERVAL_S = 120
@@ -97,6 +99,7 @@ def cmd_loop(args):
 
 def main():
     ap = argparse.ArgumentParser(description="reaper — independent wq lease sweep")
+    ap.add_argument("--version", action="version", version=f"reaper.py {VERSION}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p_sweep = sub.add_parser("sweep", help="one pass over every lane (or --lane)")
