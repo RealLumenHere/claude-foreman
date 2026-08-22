@@ -86,6 +86,62 @@ gate and its optional time-stepped schedule, the STOP kill-switch,
 fail-closed behavior on stale/missing data, live `rate_limit_event`
 blocking, and the off-peak flag.
 
+## Undocumented pool: `seven_day_overage_included` (wq#739)
+
+The live `rate_limit_event` frame the CLI emits carries a `rateLimitType` that
+is not just `"five_hour"|"seven_day"`. CLAUDE_CLI_INTERNALS.md §D, decompiled
+from the CLI binary [SRC BuE/juE], gives the full enum:
+
+```
+rateLimitType: "five_hour"|"seven_day"|"seven_day_opus"|"seven_day_sonnet"|
+               "seven_day_overage_included"|"overage"
+```
+
+`seven_day_overage_included` was observed live on one Fable session in the
+wq#734 corpus (`fable617-268843.jsonl`, 3 frames, all `status:
+"allowed_warning"`, `surpassedThreshold: 0.75`, utilization 0.81-0.83) at the
+same wall-clock minutes the plain `seven_day` pool on other sessions read
+0.69-0.70. It has not been seen anywhere else in the corpus (49 `seven_day`
+frames, 7 `five_hour`, only these 3 `seven_day_overage_included`, all one
+session).
+
+**What it credibly is:** the enum sits `seven_day` / `seven_day_overage_included`
+/ `overage` in the same list — read together with the frame's own
+`overageStatus`/`overageDisabledReason`/`isUsingOverage` fields, the shape
+implies `seven_day_overage_included` is the seven-day utilization *as it
+would read if the account's extra-usage credits were counted into the same
+window* (i.e. base subscription usage + overage spend, combined), separate
+from the plain `seven_day` figure which is subscription-only. The
+`allowed_warning` status and `surpassedThreshold: 0.75` on every observed
+frame fit a warning pool: it fires as a heads-up once the combined figure
+crosses 75%, distinct from the hard-wall pools. This is inference from the
+decompiled enum and the frame shape, not a documented guarantee — Anthropic's
+statusline reference names only `five_hour` and `seven_day`.
+
+**Confirmed gap: `/api/oauth/usage` has no matching entry.** PROBE_RESULTS.md
+§P3a captured the live payload shape: `limits[]` entries are `kind ==
+"session"|"weekly_all"|"weekly_scoped"` only, plus top-level `five_hour`,
+`seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps`,
+and a separate `extra_usage` object (`is_enabled`, `monthly_limit`,
+`used_credits`, `utilization`, `disabled_reason`). No
+`seven_day_overage_included` key anywhere in that payload. `parse_limits()`
+above only reduces `limits[]` by `kind`, so it was never going to see this
+pool even if present — it lives exclusively in the push-stream
+`rate_limit_event` frames, not the poll snapshot the governor reads.
+
+**Why this matters if extra-usage credits are ever turned on:** the governor
+polls `/api/oauth/usage` and floors against `session`/`weekly_all`/Fable
+`weekly_scoped`. If Frank enables usage credits, dispatch could still get hit
+with a live `rejected` on `seven_day_overage_included` (harness workers
+already report live rejected frames via `report-event`, see State above) that
+the *poll* path has no visibility into and no floor for — the poll snapshot
+would look fine while the push stream reports the wall. Today this is inert:
+every frame in the corpus carries `overageStatus: "rejected"`,
+`overageDisabledReason: "out_of_credits"`, so the pool can never bind. Status:
+UNKNOWN beyond the above — not verified against Anthropic's source, just the
+decompiled enum + one session's live frames. Re-open if extra-usage credits
+get enabled.
+
 ## Known gap
 
 CCC fallback is implemented but not provisioned — no claude.ai session
