@@ -151,6 +151,7 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   long-horizon-campaign: [DECOMPOSE]      # orchestrator splits; never one worker
   research-synthesis:   [opus-5@high,     sonnet-5@high]
   verify-pass:          [sonnet-5@high,   opus-5@high(on-contradiction)]
+  fire-response:        [sonnet-5@high,   opus-5@high(escalate-on-fail)]   # wq#717 AUTO-5: fleet-fires manual-approval; never local (LOCAL_ALLOWED_ARCHETYPES excludes it)
   orchestrator:         [fable-5@high]    # fable-5@max reserved for hardest investigations until CAL data justifies more
 
 dominated_never_select:

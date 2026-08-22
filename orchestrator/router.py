@@ -96,6 +96,7 @@ ARCHETYPE_NUMBERS = {
     1: "mechanical-edit", 2: "probe-build", 3: "standard-engineering",
     4: "rca-investigation", 5: "novel-design", 6: "long-horizon-campaign",
     7: "research-synthesis", 8: "verify-pass",
+    9: "fire-response",  # wq#717 (AUTO-5): fleet-fires manual-approval workflow
 }
 ARCHETYPES = list(ARCHETYPE_NUMBERS.values())
 # routing rows that are not ticket archetypes: the foreman's own judgment sessions.
@@ -496,7 +497,14 @@ def _qualifies(arch, matched_pats):
 def classify_archetype(title, detail="", lane=""):
     """Keyword rubric from §15: title/detail signals + lane bias, gated by the wq#778
     corroboration rule for opus-primary archetypes. Returns (archetype, [matched signals]).
-    Default standard-engineering (archetype 3)."""
+    Default standard-engineering (archetype 3).
+
+    wq#717 (AUTO-5): fleet-fires is forced to fire-response unconditionally, ahead of
+    the keyword rubric (and the wq#778 gate below) — a title that happens to match
+    another archetype's pattern (e.g. "audit") must never route a production-state
+    ticket around the manual-approval workflow (harness/FIRE_MODE.md)."""
+    if lane == "fleet-fires":
+        return "fire-response", ["lane:fleet-fires (forced, wq#717)"]
     text = f"{title or ''}\n{detail or ''}"
     by_arch = {}
     for arch, pats in _RUBRIC:

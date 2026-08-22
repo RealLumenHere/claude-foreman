@@ -26,7 +26,10 @@ below.
     spawner.py               wq#616 (T2b): concurrency-capped, staggered batch dispatch
     worker-settings.json    settings pack — replaces worker-settings-interim.json
     guard.sh                PreToolUse fail-closed guard (§5)
+    fire_gate.py             wq#717 (AUTO-5): fleet-fires manual-approval safety core
+                             (FIRE_MODE.md) — plan/approval file IO, drift/timeout checks
     prompts/worker.md       worker prompt template
+    prompts/fire-diagnosis.md, prompts/fire-apply.md   fire-mode phase prompts (FIRE_MODE.md)
     tests/                  pytest suite (zero Anthropic quota)
 
 Runtime paths (governor-owned or created on demand, not checked in):
@@ -56,7 +59,18 @@ reconcile it calls `../orchestrator/judgment.py verify-pass --for <ID>` (best-ef
 
 Exit codes: `0` success, `10` claim error, `11` deferred (governor/STOP gate), `12`
 blocked (2 failed attempts, ticket wq-blocked), `13` limit (ticket released, resets
-outside the resume window).
+outside the resume window). `16`/`17`/`18` are fire-mode-only (timeout release /
+diagnosis failed / apply incomplete) — see "Fire-mode" below.
+
+## Fire-mode: fleet-fires manual-approval workflow (wq#717, AUTO-5)
+
+`--archetype fire-response` replaces the normal retry-ladder attempt with a dedicated
+diagnose → hold → apply state machine for `[fleet-fires]` lane tickets (production
+state changes: service restarts, config edits, secret rotations, repo unlocks) that
+must never auto-apply without Frank reviewing the SPECIFIC proposed change first — see
+[FIRE_MODE.md](FIRE_MODE.md) for the full workflow, approval file schema, and
+documented failure modes. Core safety logic lives in `fire_gate.py` (unit-tested in
+`tests/test_fire_gate.py`, zero quota, no subprocess).
 
 `--frame-gap-timeout SEC` (§E: T_gap, default/env `FOREMAN_FRAME_GAP_S`, 120-300s range)
 overrides the primary stall watchdog; `--post-result-grace SEC` (env

@@ -47,6 +47,7 @@ from classifier import (
     TURNS, LAUNCH_FAILURE, KILLED, BUDGET,
 )
 from oom_forensics import oom_journal_evidence
+import fire_gate
 from langfuse_client import emit_trace_with_span
 
 # RELIABILITY_SPEC.md §A: --max-turns errors on ceiling with a real result frame, so
@@ -112,8 +113,13 @@ ARCHETYPE_MAX_TURNS = {
     "novel-design": 600,
     "rca-investigation": 600,
     "long-horizon-campaign": 600,
+    "fire-response": 600,  # wq#717 (AUTO-5): fleet-fires manual-approval workflow
 }
 DEFAULT_MAX_TURNS = ARCHETYPE_MAX_TURNS["standard-engineering"]
+
+# wq#717 (AUTO-5): the fleet-fires manual-approval archetype. run_fire_ticket() is a
+# dedicated flow, not do_attempt()'s retry ladder — see FIRE_MODE.md.
+FIRE_ARCHETYPE = "fire-response"
 
 # T4 (BUILD_PLAN.md §T4, wq#618): the LiteLLM local rung. Same trusted-route set as
 # governor/governor_core.py's LOCAL_POOL_MODELS and orchestrator/judgment.py's
@@ -275,6 +281,10 @@ EXIT_BLOCKED = 12
 EXIT_LIMIT = 13
 EXIT_DEPS_UNMET = 14
 EXIT_CRASH = 15
+# wq#717 (AUTO-5) fire-mode
+EXIT_FIRE_TIMEOUT = 16
+EXIT_FIRE_DIAGNOSIS_FAILED = 17
+EXIT_FIRE_APPLY_INCOMPLETE = 18
 
 
 def log(msg):
@@ -782,6 +792,152 @@ def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None):
             .replace("{{PRIOR_ATTEMPT_NOTES}}", prior_notes))
 
 
+# ---------------------------------------------------------------------------
+# wq#717 (AUTO-5): fleet-fires manual-approval workflow — see FIRE_MODE.md
+# ---------------------------------------------------------------------------
+
+def load_fire_prompt(phase, ticket_id, ticket, worktree, plan_text=None):
+    fname = "fire-diagnosis.md" if phase == "diagnosis" else "fire-apply.md"
+    tmpl_path = os.path.join(HARNESS_DIR, "prompts", fname)
+    with open(tmpl_path) as f:
+        tmpl = f.read()
+    out = (tmpl
+           .replace("{{TICKET_ID}}", str(ticket_id))
+           .replace("{{TITLE}}", ticket.get("title", ""))
+           .replace("{{DETAIL}}", ticket.get("detail", ""))
+           .replace("{{WORKTREE}}", worktree)
+           .replace("{{PLAN_PATH}}", fire_gate.plan_path(ticket_id))
+           .replace("{{APPROVAL_PATH}}", fire_gate.approval_path(ticket_id))
+           .replace("{{DRIFT_PATH}}", fire_gate.drift_path(ticket_id)))
+    if plan_text is not None:
+        out = out.replace("{{PLAN_TEXT}}", plan_text)
+    return out
+
+
+def run_fire_child(phase, args, ticket, ticket_id, worktree, worker_id, max_turns,
+                    wall_clock, plan_text=None):
+    """One `claude -p` child for one fire-mode phase. Same spawn/parse/classify
+    plumbing as do_attempt()'s single child, but env carries FOREMAN_FIRE_PHASE so
+    guard.sh can enforce the diagnosis-phase restrictions (harness/guard.sh, wq#717)."""
+    prompt = load_fire_prompt(phase, ticket_id, ticket, worktree, plan_text=plan_text)
+    env = build_env(worker_id, args.model, args.effort, worktree)
+    env["FOREMAN_FIRE_PHASE"] = phase
+    if phase == "diagnosis":
+        env["FOREMAN_FIRE_PLAN_PATH"] = fire_gate.plan_path(ticket_id)
+    cmd = build_claude_cmd(prompt, args.model, args.effort, SETTINGS_FILE,
+                            add_dirs=["/home/lumen/agents/work-queue"],
+                            max_turns=max_turns, claude_bin=args.claude_bin)
+    log(f"wq#{ticket_id} fire-mode {phase}: spawning "
+        f"{' '.join(shlex.quote(c) for c in cmd[:6])}...")
+    state, exit_code, events, killed_reason, cpu_s, pid = run_child(
+        cmd, worktree, env, max_turns, wall_clock, ticket_id, 1)
+    effective_exit_code = 0 if killed_reason == "post_result_stuck" else exit_code
+    return classify(state, effective_exit_code)
+
+
+def run_fire_ticket(args):
+    """wq#717 (AUTO-5): fleet-fires lane manual-approval workflow. Unlike do_attempt()'s
+    single-shot retry ladder, one `fworker run --archetype fire-response` invocation
+    drives the WHOLE diagnose -> hold -> apply state machine (fire_gate.next_action) to
+    a terminal outcome, polling in-process while awaiting Frank rather than exiting and
+    counting on a later redispatch: wq's `blocked` status has no automatic reopen (a
+    ticket `wq block`ed here would need a human to `wq edit --status open` it too), so
+    the hold is a live loop with periodic heartbeats, not a released/reclaimed lease.
+    Guardrails enforced here (ticket's MUST list): the approval file is validated by
+    fire_gate (ticket-id match, bearer token, plan-hash == current plan) before ANY
+    apply-phase child spawns, and the apply-phase child's own mandatory re-verify step
+    (fire-apply.md) can still veto via drift_path if state moved while we were waiting.
+    """
+    ticket_id = args.ticket
+    ticket = wq_show(ticket_id)
+    worktree, branch = make_worktree(args.repo, ticket_id, 1,
+                                      ticket.get("title", str(ticket_id)), FIRE_ARCHETYPE)
+    worker_id = args.worker_id or f"fworker-wq{ticket_id}-fire"
+    max_turns = args.max_turns or ARCHETYPE_MAX_TURNS.get(FIRE_ARCHETYPE, DEFAULT_MAX_TURNS)
+    wall_clock = args.wall_clock_timeout or WALL_CLOCK_DEFAULT_S
+    poll_s = _envint("FOREMAN_FIRE_POLL_S", 60)
+    timeout_hours = _envint("FOREMAN_FIRE_TIMEOUT_HOURS", fire_gate.DEFAULT_TIMEOUT_HOURS)
+    notified_hold = False
+    last_reject_code = None
+
+    while True:
+        action, info = fire_gate.next_action(ticket_id, timeout_hours=timeout_hours)
+
+        if action == "diagnose":
+            classification = run_fire_child("diagnosis", args, ticket, ticket_id,
+                                              worktree, worker_id, max_turns, wall_clock)
+            log(f"wq#{ticket_id} fire-mode diagnosis: {classification}")
+            if fire_gate.read_plan(ticket_id) is None:
+                log(f"wq#{ticket_id} fire-mode: diagnosis ended ({classification}) with "
+                    f"no plan doc written — releasing")
+                wq_release(ticket_id)
+                ntfy("fire ticket diagnosis failed",
+                     f"wq#{ticket_id}: diagnosis phase ended ({classification}) without "
+                     f"writing a plan doc to {fire_gate.plan_path(ticket_id)} — released "
+                     f"for retry.", priority="high")
+                print("RELEASED")
+                return EXIT_FIRE_DIAGNOSIS_FAILED
+            continue  # plan now exists — re-derive next_action
+
+        if action == "hold":
+            code = info.get("code")
+            if not notified_hold:
+                plan_text = fire_gate.read_plan(ticket_id) or ""
+                summary = "\n".join(plan_text.splitlines()[:20])
+                ntfy("fire ticket awaiting approval",
+                     f"wq#{ticket_id}: plan ready at {fire_gate.plan_path(ticket_id)}. "
+                     f"Approve by creating {fire_gate.approval_path(ticket_id)} as JSON: "
+                     '{"ticket": ' + str(ticket_id) + ', "plan_hash": "'
+                     + fire_gate.sha256_text(plan_text) + '", "token": "<fire-approval '
+                     'token file contents>"}. Timeout in ' + str(timeout_hours)
+                     + f"h if unapproved. Plan summary:\n{summary}", priority="high")
+                notified_hold = True
+            elif code != "missing" and code != last_reject_code:
+                # Frank (or something) attempted an approval and it failed validation —
+                # surface why immediately rather than silently waiting out the timeout;
+                # de-duped so a still-broken retry doesn't ntfy on every poll.
+                last_reject_code = code
+                ntfy("fire ticket approval rejected",
+                     f"wq#{ticket_id}: approval file present but invalid ({code}): "
+                     f"{info.get('detail')}", priority="high")
+            wq_heartbeat(ticket_id)
+            time.sleep(poll_s)
+            continue
+
+        if action == "timeout_release":
+            log(f"wq#{ticket_id} fire-mode: {timeout_hours}h elapsed with no valid "
+                f"approval (last: {info.get('code')}) — releasing")
+            ntfy("fire ticket timed out",
+                 f"wq#{ticket_id}: no valid approval within {timeout_hours}h "
+                 f"(last state: {info.get('code')}) — released, dispatcher can requeue.",
+                 priority="high")
+            wq_release(ticket_id)
+            print("RELEASED")
+            return EXIT_FIRE_TIMEOUT
+
+        # action == "apply"
+        plan_text = info["plan_text"]
+        classification = run_fire_child("apply", args, ticket, ticket_id, worktree,
+                                          worker_id, max_turns, wall_clock, plan_text=plan_text)
+        log(f"wq#{ticket_id} fire-mode apply: {classification}")
+        if os.path.exists(fire_gate.drift_path(ticket_id)):
+            log(f"wq#{ticket_id} fire-mode: apply phase found live state had drifted "
+                f"from the approved plan — no change applied, re-diagnosing")
+            ntfy("fire ticket state drifted since approval",
+                 f"wq#{ticket_id}: re-verify caught drift from the approved plan — "
+                 f"nothing was changed. Re-running diagnosis.", priority="high")
+            fire_gate.clear_fire_state(ticket_id)
+            notified_hold = False
+            last_reject_code = None
+            continue
+        # Success/failure from here on is the child's own wq done/block/release call
+        # (fire-apply.md carries the same "call wq done/block/release yourself"
+        # contract as the standard worker.md) — this supervisor's job is done once a
+        # valid-approval apply phase has actually run.
+        print(classification)
+        return EXIT_OK if classification in (SUCCESS, DEGRADED_SUCCESS) else EXIT_FIRE_APPLY_INCOMPLETE
+
+
 def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
@@ -1162,6 +1318,22 @@ def cmd_run(args):
         log(f"CLAIM_ERROR: {msg}")
         print("CLAIM_ERROR")
         return EXIT_CLAIM_ERROR
+
+    # wq#717 (AUTO-5): fleet-fires manual-approval workflow — a dedicated state
+    # machine (diagnose/hold/apply), not do_attempt()'s retry ladder. See FIRE_MODE.md.
+    if args.archetype == FIRE_ARCHETYPE:
+        try:
+            return run_fire_ticket(args)
+        except Exception:
+            tb = traceback.format_exc()
+            log(f"CRASH: unhandled exception during wq#{args.ticket} fire-mode run — "
+                f"releasing claim.\n{tb}")
+            wq_release(args.ticket)
+            ntfy("foreman CRASH",
+                 f"wq#{args.ticket} fire-mode crashed (claim released): "
+                 f"{tb.strip().splitlines()[-1]}", priority="high")
+            print("CRASH")
+            return EXIT_CRASH
 
     attempt = next_attempt_n(args.ticket)
     try:

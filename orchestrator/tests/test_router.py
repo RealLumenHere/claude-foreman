@@ -29,6 +29,7 @@ SAMPLES = [
     ("design lumen-memoryd new service", "", "memory", "novel-design", ("claude-fable-5", "high")),
     ("research pack: agent farm prior art report", "", "research", "research-synthesis", ("claude-opus-5", "high")),
     ("fresh-eyes verify-pass of wq#600 fix", "", "build", "verify-pass", ("claude-sonnet-5", "high")),
+    ("restart the auth service", "", "fleet-fires", "fire-response", ("claude-sonnet-5", "high")),
 ]
 
 
@@ -48,6 +49,17 @@ def test_sample_tickets_route_to_expected_tuple(m, title, detail, lane, arch, ex
     assert got_arch == arch
     rung, _ = router.select(m, got_arch)
     assert (rung.model, rung.effort) == expected
+
+
+def test_fleet_fires_lane_overrides_keyword_rubric():
+    # wq#717: a fleet-fires title that would otherwise hit rca-investigation's "audit"
+    # signal must still route to fire-response — production-state tickets can't be
+    # routed around the manual-approval workflow by title wording.
+    arch, signals = router.classify_archetype(
+        "audit: why is the fleet-agent service down", "root cause investigation",
+        "fleet-fires")
+    assert arch == "fire-response"
+    assert any("fleet-fires" in s for s in signals)
 
 
 def test_campaign_decomposes_never_one_worker(m):

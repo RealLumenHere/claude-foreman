@@ -99,6 +99,12 @@ MUST_BLOCK = [
     ("Read", {"file_path": "/home/lumen/.secrets/claude-oat-worker.token"}),
     ("Bash", {"command": "cat /home/lumen/.secrets/claude-oat-worker.token"}),
     ("Bash", {"command": "grep oat /home/lumen/.secrets/claude-oat-worker.token"}),
+    # wq#717: Grep/Glob use "path", not "file_path" — a Read-only deny list that
+    # forgot them would let a fire-mode worker exfiltrate FIRE_TOKEN_FILE (the
+    # bearer token guarding "MUST NEVER approve itself") via a search hit instead
+    # of a direct Read.
+    ("Grep", {"pattern": ".", "path": "/home/lumen/.secrets/foreman-fire-approval.token"}),
+    ("Glob", {"pattern": "*", "path": "/home/lumen/.secrets"}),
 ]
 
 MUST_ALLOW = [
@@ -114,6 +120,8 @@ MUST_ALLOW = [
     ("Bash", {"command": "git log --oneline -5"}),
     ("Read", {"file_path": EXISTING_FILE, "limit": 50}),
     ("Write", {"file_path": f"{WORKTREE}/src/main.py"}),
+    ("Grep", {"pattern": "TODO", "path": WORKTREE}),
+    ("Glob", {"pattern": "**/*.py", "path": WORKTREE}),
 ]
 
 
@@ -376,3 +384,93 @@ def test_repeat_read_different_session_is_not_suppressed(tmp_path):
 
     rc2, stderr2 = run_guard("Read", {"file_path": str(f), "limit": 5}, env_extra=events, session_id="session-b")
     assert rc2 == 0, stderr2
+
+
+# ---- wq#717 fire-mode diagnosis phase ------------------------------------------------
+
+FIRE_DIAGNOSIS_ENV = {"FOREMAN_FIRE_PHASE": "diagnosis",
+                      "FOREMAN_FIRE_PLAN_PATH": "/home/lumen/foreman/plans/wq717.md"}
+
+
+def test_diagnosis_write_to_plan_path_allowed():
+    rc, stderr = run_guard("Write", {"file_path": "/home/lumen/foreman/plans/wq717.md"},
+                            env_extra=FIRE_DIAGNOSIS_ENV)
+    assert rc == 0, stderr
+
+
+def test_diagnosis_write_elsewhere_denied():
+    rc, stderr = run_guard("Write", {"file_path": f"{WORKTREE}/notes.md"},
+                            env_extra=FIRE_DIAGNOSIS_ENV)
+    assert rc == 2
+
+
+def test_diagnosis_edit_elsewhere_denied():
+    rc, stderr = run_guard("Edit", {"file_path": EXISTING_FILE},
+                            env_extra=FIRE_DIAGNOSIS_ENV)
+    assert rc == 2
+
+
+def test_diagnosis_write_without_plan_path_env_denied():
+    rc, stderr = run_guard("Write", {"file_path": "/home/lumen/foreman/plans/wq717.md"},
+                            env_extra={"FOREMAN_FIRE_PHASE": "diagnosis"})
+    assert rc == 2
+
+
+def test_write_outside_diagnosis_phase_unaffected():
+    # No FOREMAN_FIRE_PHASE set (normal/apply-phase run) — Write anywhere in the
+    # worktree is unaffected by the diagnosis-only restriction.
+    rc, stderr = run_guard("Write", {"file_path": f"{WORKTREE}/notes.md"})
+    assert rc == 0, stderr
+
+
+DIAGNOSIS_MUST_BLOCK = [
+    ("Bash", {"command": "systemctl restart lumen-agent"}),
+    ("Bash", {"command": "systemctl start lumen-agent"}),
+    ("Bash", {"command": "systemctl enable lumen-agent"}),
+    ("Bash", {"command": "kill -9 12345"}),
+    ("Bash", {"command": "pkill -f lumen"}),
+    ("Bash", {"command": "service nginx restart"}),
+    ("Bash", {"command": "apt-get install -y curl"}),
+    ("Bash", {"command": "pip install requests"}),
+    ("Bash", {"command": "mv /etc/foo /etc/foo.bak"}),
+    ("Bash", {"command": "chmod 777 /etc/foo"}),
+    ("Bash", {"command": "touch /tmp/marker"}),
+    ("Bash", {"command": "sed -i 's/a/b/' /etc/foo.conf"}),
+    ("Bash", {"command": "curl -X POST http://localhost/api -d '{}'"}),
+    ("Bash", {"command": "curl --data foo=bar http://localhost/api"}),
+]
+
+DIAGNOSIS_MUST_ALLOW = [
+    ("Bash", {"command": "systemctl status lumen-agent"}),
+    ("Bash", {"command": "systemctl is-active lumen-agent"}),
+    ("Bash", {"command": "journalctl -u lumen-agent -n 50"}),
+    ("Bash", {"command": "ps aux | grep lumen"}),
+    ("Bash", {"command": "curl -s http://localhost:8080/health"}),
+    ("Bash", {"command": "cat /etc/foo.conf"}),
+    ("Bash", {"command": "df -h"}),
+]
+
+
+def test_diagnosis_phase_blocks_mutating_bash():
+    failures = []
+    for tool, inp in DIAGNOSIS_MUST_BLOCK:
+        rc, stderr = run_guard(tool, inp, env_extra=FIRE_DIAGNOSIS_ENV)
+        if rc != 2:
+            failures.append((tool, inp, rc, stderr))
+    assert not failures, f"expected exit 2 (block), got: {failures}"
+
+
+def test_diagnosis_phase_allows_readonly_bash():
+    failures = []
+    for tool, inp in DIAGNOSIS_MUST_ALLOW:
+        rc, stderr = run_guard(tool, inp, env_extra=FIRE_DIAGNOSIS_ENV)
+        if rc != 0:
+            failures.append((tool, inp, rc, stderr))
+    assert not failures, f"expected exit 0 (allow), got: {failures}"
+
+
+def test_diagnosis_denylist_is_a_noop_outside_fire_phase():
+    # Same mutating commands, no FOREMAN_FIRE_PHASE set — a normal/apply-phase
+    # worker is governed by the house deny-list only, not the diagnosis denylist.
+    rc, stderr = run_guard("Bash", {"command": "systemctl restart lumen-agent"})
+    assert rc == 0, stderr

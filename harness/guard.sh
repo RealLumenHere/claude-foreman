@@ -140,6 +140,38 @@ Bash)
         [ "$SAFE" = 1 ] || block "rm -rf outside worktree/tmp denied" "$RAW_CMD"
       fi
     fi
+
+    # ---- wq#717 fire-mode diagnosis phase: read-only-diagnosis denylist ----
+    # fworker sets FOREMAN_FIRE_PHASE=diagnosis only for a fleet-fires ticket's
+    # first-phase child (harness/fire_gate.py / FIRE_MODE.md). Defense-in-depth on
+    # top of the prompt instruction "diagnosis only, no production changes, write
+    # the plan and stop" — not a full read-only sandbox (this is a denylist, same
+    # style as the house rules above, not an allowlist), so it can still miss a
+    # command shaped unlike anything below. The two hard guarantees for this phase
+    # are: this denylist, and the Write/Edit plan-path restriction further down.
+    if [ "${FOREMAN_FIRE_PHASE:-}" = "diagnosis" ]; then
+      if printf '%s' "$target" | grep -qE '\bsystemctl\b +(start|restart|reload|enable|kill|edit)\b'; then
+        block "fire-mode diagnosis: systemctl mutation denied (wq#717)" "$RAW_CMD"
+      fi
+      if printf '%s' "$target" | grep -qE '\b(kill|pkill|killall)\b'; then
+        block "fire-mode diagnosis: kill/pkill/killall denied (wq#717)" "$RAW_CMD"
+      fi
+      if printf '%s' "$target" | grep -qE '\bservice\b +[^ ]+ +(start|restart|stop|reload)\b'; then
+        block "fire-mode diagnosis: service start/restart/stop/reload denied (wq#717)" "$RAW_CMD"
+      fi
+      if printf '%s' "$target" | grep -qE '\b(apt|apt-get|dnf|yum|npm|pip|pip3|gem)\b +.*\b(install|remove|uninstall)\b'; then
+        block "fire-mode diagnosis: package install/remove denied (wq#717)" "$RAW_CMD"
+      fi
+      if printf '%s' "$target" | grep -qE '\b(mv|chmod|chown|useradd|usermod|crontab|touch|tee)\b'; then
+        block "fire-mode diagnosis: filesystem mutation denied (wq#717)" "$RAW_CMD"
+      fi
+      if printf '%s' "$target" | grep -qE '\bsed\b[^|;]*-i\b'; then
+        block "fire-mode diagnosis: in-place sed denied (wq#717)" "$RAW_CMD"
+      fi
+      if printf '%s' "$target" | grep -qE '\b(curl|wget)\b[^|;]*(-X *(POST|PUT|PATCH|DELETE)\b|--data|(^|[^-])-d\b)'; then
+        block "fire-mode diagnosis: mutating HTTP call denied (wq#717)" "$RAW_CMD"
+      fi
+    fi
   done
 
   # ---- wq#729 R4: cap Bash output ----
@@ -180,13 +212,30 @@ Bash)
       '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",updatedInput:{command:$cmd}}}'
   fi
   ;;
-Read|Edit|Write)
+Read|Edit|Write|Grep|Glob)
   FILE_PATH=$(jfield '.tool_input.file_path')
-  if [ -n "$FILE_PATH" ]; then
-    case "$FILE_PATH" in
+  # Grep/Glob use "path", not "file_path" — check both so the same credential deny
+  # list applies to a Grep search over a denied path, not just a direct Read of it
+  # (wq#717: closes the gap a fire-mode worker could otherwise use to exfiltrate
+  # FIRE_TOKEN_FILE's content via a search hit instead of a Read).
+  GREP_PATH=$(jfield '.tool_input.path')
+  for CHECK_PATH in "$FILE_PATH" "$GREP_PATH"; do
+    [ -n "$CHECK_PATH" ] || continue
+    case "$CHECK_PATH" in
       *.env|*.credentials.json|*claude_credentials.md|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*)
-        block "denied path: $FILE_PATH" "$FILE_PATH" ;;
+        block "denied path: $CHECK_PATH" "$CHECK_PATH" ;;
     esac
+  done
+
+  # ---- wq#717 fire-mode diagnosis phase: Write/Edit confined to the plan doc ----
+  # This is the one hard (not denylist-best-effort) guarantee of "read-only
+  # diagnosis phase ONLY": FOREMAN_FIRE_PLAN_PATH is the single path fworker
+  # permits a diagnosis-phase child to Write/Edit (its own plan doc, harness/
+  # fire_gate.py's plan_path()) — everything else is denied outright.
+  if [ "${FOREMAN_FIRE_PHASE:-}" = "diagnosis" ] && { [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; }; then
+    if [ -z "${FOREMAN_FIRE_PLAN_PATH:-}" ] || [ "$FILE_PATH" != "$FOREMAN_FIRE_PLAN_PATH" ]; then
+      block "fire-mode diagnosis phase is read-only except the plan doc (wq#717): $FILE_PATH" "$FILE_PATH"
+    fi
   fi
 
   # ---- wq#730 R3/R5/R6: bound Read, suppress repeat reads, reject dead reads ----
