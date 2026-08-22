@@ -26,7 +26,7 @@
     "fleet-fires": {
       "enabled": true,
       "max_per_day": 100,
-      "requires_approval": true
+      "requires_approval": false
     },
     "foreman-auto": {
       "enabled": true,
@@ -39,6 +39,10 @@
     "mission-control": {
       "enabled": true,
       "max_per_day": 20
+    },
+    "user": {
+      "enabled": false,
+      "max_per_day": 0
     }
   }
 }
