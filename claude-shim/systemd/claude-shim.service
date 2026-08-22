@@ -1,0 +1,25 @@
+# claude-shim.service — OpenAI-compatible endpoint over the Claude Max 20x
+# session (wq#726). STAGED (Tier-3): installed but never enabled by the fleet;
+# see claude-shim/systemd/INSTALL.md and research/CLAUDE_SHIM_DESIGN.md §9.
+# Deliberately no [Install] section: cannot be systemd-enabled at boot by a
+# worker session (no sudo path) — Frank enables it by hand once he's reviewed
+# the design doc.
+[Unit]
+Description=claude-shim — OpenAI-compatible endpoint over the Claude Max session (wq#726)
+Documentation=file:///home/lumen/foreman/research/CLAUDE_SHIM_DESIGN.md
+After=network-online.target
+
+[Service]
+Type=simple
+User=lumen
+Environment=PATH=/home/lumen/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CLAUDE_SHIM_HOST=0.0.0.0
+Environment=CLAUDE_SHIM_PORT=8091
+WorkingDirectory=/home/lumen/foreman/claude-shim
+ExecStart=/usr/bin/python3 /home/lumen/foreman/claude-shim/claude_shim.py run
+Restart=on-failure
+RestartSec=5
+MemoryMax=512M
+MemoryHigh=384M
+NoNewPrivileges=true
+PrivateTmp=true
