@@ -1,0 +1,42 @@
+{
+  "captured_at_utc": "2026-08-22 05:55:55",
+  "status_counts": {
+    "blocked": 44,
+    "claimed": 2,
+    "done": 617,
+    "open": 119,
+    "rejected": 1
+  },
+  "wip_total": 165,
+  "wip_by_lane": {
+    "auto": 27,
+    "build": 59,
+    "fleet": 5,
+    "fleet-fires": 1,
+    "fleet-safety": 1,
+    "fleet-spend": 5,
+    "foreman-auto": 4,
+    "foreman-tok": 9,
+    "memory": 5,
+    "mission-control": 4,
+    "pokemon": 13,
+    "quest-repair-research": 1,
+    "questfree-root": 1,
+    "research": 6,
+    "user": 24
+  },
+  "blocked_age_days": {
+    "n": 44,
+    "mean_d": 21.1,
+    "median_d": 12.2,
+    "max_d": 41.1
+  },
+  "frank_parked_count": 51,
+  "frank_parked_age_days": {
+    "n": 51,
+    "mean_d": 22.3,
+    "median_d": 14.1,
+    "max_d": 48.0
+  },
+  "rework_rate_pct": 2.43
+}
