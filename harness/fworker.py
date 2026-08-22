@@ -67,6 +67,12 @@ GUARD_SH = os.path.join(HARNESS_DIR, "guard.sh")
 EVENTS_DIR = os.environ.get("FOREMAN_EVENTS_DIR", os.path.join(FOREMAN_ROOT, "events"))
 RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_runs"))
 STOP_FILE = os.environ.get("FOREMAN_STOP_FILE", os.path.join(FOREMAN_ROOT, "STOP"))
+# wq#736: the governor (governor/foreman_usaged.py) already polls both plan-usage
+# windows into this file every 60-90s — the usage sidecar below just reads it at
+# session start/exit rather than hitting the API itself. Own env var (not derived
+# from FOREMAN_ROOT alone) so tests can point it at a scratch file without a real
+# state.json in the way, matching STOP_FILE/RUNS_ROOT's pattern.
+STATE_FILE = os.environ.get("FOREMAN_STATE_FILE", os.path.join(FOREMAN_ROOT, "state.json"))
 GOVERNOR_CLI = os.environ.get("FOREMAN_GOVERNOR_CLI",
                                os.path.join(FOREMAN_ROOT, "governor", "foreman_usaged.py"))
 WORKTREES_ROOT = os.environ.get("FOREMAN_WORKTREES_ROOT", "/home/lumen/worktrees")
@@ -451,6 +457,56 @@ def write_attempt_state(ticket_id, n, state):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(state, f, indent=2, default=str)
+    os.rename(tmp, path)
+    return path
+
+
+def read_rate_limits_snapshot():
+    """wq#736 / SESSION_ECONOMICS.md §7: a session start/exit reading of the two plan-
+    usage windows, sourced from the governor's own poll (state.json) rather than a new
+    API call — zero new Anthropic spend, and it sidesteps the guard-denied
+    ~/.claude/projects transcript path that kept the fworker dispatch path out of every
+    token audit so far. Field names follow the CLI's statusline vocabulary
+    (`rate_limits.five_hour/seven_day.used_percentage`), not governor_core's internal
+    session/weekly_all/percent naming — this is the translation layer. Best-effort:
+    a missing/stale/corrupt state.json (governor not running yet, race at boot) yields
+    an all-None snapshot rather than raising, since a data-collection sidecar must never
+    be able to fail the attempt it's riding along with.
+    """
+    snapshot = {
+        "captured_at": time.time(),
+        "five_hour": {"used_percentage": None, "resets_at": None},
+        "seven_day": {"used_percentage": None, "resets_at": None},
+        "source": None,
+        "stale": None,
+    }
+    try:
+        with open(STATE_FILE) as f:
+            gov_state = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return snapshot
+    limits = gov_state.get("limits") or {}
+    session = limits.get("session") or {}
+    weekly_all = limits.get("weekly_all") or {}
+    snapshot["five_hour"] = {"used_percentage": session.get("percent"),
+                              "resets_at": session.get("resets_at")}
+    snapshot["seven_day"] = {"used_percentage": weekly_all.get("percent"),
+                              "resets_at": weekly_all.get("resets_at")}
+    snapshot["source"] = gov_state.get("source")
+    snapshot["stale"] = gov_state.get("stale")
+    return snapshot
+
+
+def write_usage_sidecar(ticket_id, n, record):
+    """wq#704/wq#706/wq#736: per-attempt usage sidecar into RUNS_ROOT/wq{id}/, written
+    unconditionally after run_child() returns — that call site sees clean exit and every
+    watchdog-kill path (inactivity/wall_clock/turns_exceeded/post_result_stuck) alike, so
+    this covers both without a separate kill-path hook."""
+    d = run_dir(ticket_id)
+    path = os.path.join(d, f"usage-{n}.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(record, f, indent=2, default=str)
     os.rename(tmp, path)
     return path
 
@@ -990,9 +1046,14 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         f"cwd={worktree} max_turns={max_turns} wall_clock={wall_clock}s")
 
     t0 = time.time()
+    rate_limits_start = read_rate_limits_snapshot()
     state, exit_code, events, killed_reason, cpu_s, child_pid = run_child(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
         frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace)
+    # run_child() has already returned by every path here — clean exit and every
+    # watchdog kill (inactivity/wall_clock/turns_exceeded/post_result_stuck) alike —
+    # so this snapshot is the session-exit reading regardless of how the child ended.
+    rate_limits_exit = read_rate_limits_snapshot()
     elapsed = time.time() - t0
 
     # §C9 SUCCESS-BUT-STUCK: fworker forced this kill AFTER a real terminal result had
@@ -1062,6 +1123,21 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     }
     state_path = write_attempt_state(ticket_id, attempt, attempt_record)
     emit_attempt_span(ticket_id, ticket.get("lane"), attempt_record)
+
+    # wq#704/wq#706/wq#736: usage sidecar, alongside attempt-N.json rather than folded
+    # into it — a distinct file so token-audit tooling (SESSION_ECONOMICS.md) can glob
+    # RUNS_ROOT/wq*/usage-*.json without parsing the full attempt record.
+    usage_record = {
+        "ticket": ticket_id, "attempt": attempt, "worker_id": worker_id,
+        "session_id": state.session_id,
+        "classification": classification, "killed_reason": killed_reason,
+        "started_at": t0, "finished_at": time.time(), "elapsed_s": elapsed,
+        "turns": state.turns, "result_num_turns": state.num_turns,
+        "usage": state.usage, "total_cost_usd": state.total_cost_usd,
+        "duration_ms": state.duration_ms,
+        "rate_limits_start": rate_limits_start, "rate_limits_exit": rate_limits_exit,
+    }
+    write_usage_sidecar(ticket_id, attempt, usage_record)
 
     return reconcile(args, ticket_id, attempt, classification, state, events,
                       worktree, state_path)

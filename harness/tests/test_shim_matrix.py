@@ -25,7 +25,7 @@ def attempt_record(runs_root, ticket_id, n=1):
 
 def test_shim_1_clean_success(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     ticket_id = wq_add(env, "shim 1: clean success")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
 
@@ -37,7 +37,7 @@ def test_shim_1_clean_success(tmp_path):
 
 def test_shim_2_real_turn_ceiling_is_turns(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "turn_ceiling")
     ticket_id = wq_add(env, "shim 2: real turn ceiling")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -53,7 +53,7 @@ def test_shim_2_real_turn_ceiling_is_turns(tmp_path):
 
 def test_shim_3_no_init_instant_exit_is_launch_failure_never_turns(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "no_init_instant_exit")
     ticket_id = wq_add(env, "shim 3: no-init instant exit")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -68,7 +68,7 @@ def test_shim_3_no_init_instant_exit_is_launch_failure_never_turns(tmp_path):
 
 def test_shim_4_turn_setup_failed_is_launch_failure(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "turn_setup_failed")
     ticket_id = wq_add(env, "shim 4: turn_setup_failed")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -80,7 +80,7 @@ def test_shim_4_turn_setup_failed_is_launch_failure(tmp_path):
 
 def test_shim_5_rejected_rate_limit_is_limit_not_crash(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "rejected_limit")
     ticket_id = wq_add(env, "shim 5: 429/rate_limit")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -95,7 +95,7 @@ def test_shim_5_rejected_rate_limit_is_limit_not_crash(tmp_path):
 
 def test_shim_6_exit_143_no_result_is_killed(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "sigterm_no_result")
     ticket_id = wq_add(env, "shim 6: exit 143, no result")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -109,7 +109,7 @@ def test_shim_6_exit_143_no_result_is_killed(tmp_path):
 
 def test_shim_7_exit_137_is_oom(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "oom_no_result")
     ticket_id = wq_add(env, "shim 7: exit 137")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -123,7 +123,7 @@ def test_shim_7_exit_137_is_oom(tmp_path):
 
 def test_shim_8_task_notification_last_no_result_is_indeterminate(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "task_notification_last")
     ticket_id = wq_add(env, "shim 8: task_notification-last drain-death")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -138,7 +138,7 @@ def test_shim_8_task_notification_last_no_result_is_indeterminate(tmp_path):
 
 def test_shim_9_mid_task_silence_triggers_frame_gap_watchdog(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "mid_task_silence")
     env["FAKE_CLAUDE_SILENCE_S"] = "3"
     ticket_id = wq_add(env, "shim 9: mid-task silence > T_gap")
@@ -154,7 +154,7 @@ def test_shim_9_mid_task_silence_triggers_frame_gap_watchdog(tmp_path):
 
 def test_shim_10_result_then_never_exit_forces_kill_keeps_success(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "success_then_hang")
     ticket_id = wq_add(env, "shim 10: result-then-never-exit")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -170,7 +170,7 @@ def test_shim_10_result_then_never_exit_forces_kill_keeps_success(tmp_path):
 
 def test_shim_11_success_with_unmet_criteria_is_false_complete(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "success_false_complete")
     ticket_id = wq_add(env, "shim 11: success but unmet criteria")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -183,7 +183,7 @@ def test_shim_11_success_with_unmet_criteria_is_false_complete(tmp_path):
 
 def test_shim_12_401_is_auth(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "auth_401")
     ticket_id = wq_add(env, "shim 12: 401 authentication_failed")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -196,7 +196,7 @@ def test_shim_12_401_is_auth(tmp_path):
 
 def test_shim_14_buffered_burst_is_not_a_false_stall(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "buffered_burst")
     env["FAKE_CLAUDE_BURST_DELAY_S"] = "1"
     ticket_id = wq_add(env, "shim 14: buffered-pipe burst is NOT-A-FAILURE")
@@ -214,7 +214,7 @@ def test_shim_14_buffered_burst_is_not_a_false_stall(tmp_path):
 
 def test_shim_15_partial_line_ndjson_reassembly(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "partial_line_split")
     ticket_id = wq_add(env, "shim 15: partial-line NDJSON reassembly")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -231,7 +231,7 @@ def test_shim_15_partial_line_ndjson_reassembly(tmp_path):
 
 def test_shim_16_unknown_frame_type_falls_through_no_crash(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "unknown_frame_type")
     ticket_id = wq_add(env, "shim 16: unknown frame type, raw fallthrough")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -245,7 +245,7 @@ def test_shim_16_unknown_frame_type_falls_through_no_crash(tmp_path):
 
 def test_shim_13_empty_result_text_is_degraded_success(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "success_empty_result_text")
     ticket_id = wq_add(env, "shim 13: empty result text")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)

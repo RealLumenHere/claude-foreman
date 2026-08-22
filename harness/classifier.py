@@ -70,8 +70,10 @@ class RunState:
         self.turns = 0
         self.turns_exceeded = False
         self.saw_auth_failure = False
-        # observability only (wq#754) — never fed into classify(), just carried through
-        # to the attempt record / Langfuse span for cost and duration visibility.
+        # observability only (wq#754/wq#736) — never fed into classify(), just carried
+        # through to the attempt record / usage sidecar for cost, duration and token
+        # visibility.
+        self.usage = None
         self.total_cost_usd = None
         self.duration_ms = None
         self.num_turns = None
@@ -168,6 +170,7 @@ class RunState:
             self.terminal_reason = frame.get("terminal_reason")
             if "result" in frame:
                 self.result_text = frame.get("result")
+            self.usage = frame.get("usage")
             self.total_cost_usd = frame.get("total_cost_usd")
             self.duration_ms = frame.get("duration_ms")
             self.num_turns = frame.get("num_turns")

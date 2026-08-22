@@ -104,7 +104,7 @@ def test_local_rung_end_to_end_wires_env_and_files_sonnet_verify_pass(tmp_path):
     key_file = tmp_path / "litellm.token"
     key_file.write_text("sk-test-foreman-key")
     env_dump = tmp_path / "child_env.json"
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "success",
         extra={
             "FOREMAN_LITELLM_KEY_FILE": str(key_file),
@@ -147,7 +147,7 @@ def test_local_rung_end_to_end_wires_env_and_files_sonnet_verify_pass(tmp_path):
 
 def test_local_rung_gate_defers_before_claim_on_disallowed_archetype(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     ticket_id = wq_add(env, "scratch local-rung misrouted ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
 

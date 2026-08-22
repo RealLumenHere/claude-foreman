@@ -44,6 +44,7 @@ def make_scratch_env(tmp_path, ticket, scenario, extra=None):
     events_dir = str(tmp_path / "events")
     runs_root = str(tmp_path / "_runs")
     worktrees_root = str(tmp_path / "worktrees")
+    state_file = str(tmp_path / "state.json")
     os.makedirs(events_dir, exist_ok=True)
     env = dict(os.environ)
     env.update({
@@ -53,6 +54,7 @@ def make_scratch_env(tmp_path, ticket, scenario, extra=None):
         "FOREMAN_RUNS_ROOT": runs_root,
         "FOREMAN_WORKTREES_ROOT": worktrees_root,
         "FOREMAN_STOP_FILE": str(tmp_path / "STOP_nonexistent"),
+        "FOREMAN_STATE_FILE": state_file,
         "FOREMAN_GOVERNOR_CLI": FAKE_GOVERNOR,
         "FOREMAN_WQ_BIN": WQ_BIN,
         "FOREMAN_LUMEN_PR_BIN": "/bin/false",  # unreachable on purpose; SUCCESS path shouldn't need it
@@ -64,7 +66,7 @@ def make_scratch_env(tmp_path, ticket, scenario, extra=None):
     })
     if extra:
         env.update(extra)
-    return env, wq_db, events_dir, runs_root, worktrees_root
+    return env, wq_db, events_dir, runs_root, worktrees_root, state_file
 
 
 def wq_add(env, title):
@@ -98,7 +100,7 @@ def run_fworker(env, ticket_id, repo, scenario, model="claude-sonnet-5", effort=
 
 def test_success_end_to_end_closes_ticket_and_isolates_worktree(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     ticket_id = wq_add(env, "scratch mechanical-edit ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
 
@@ -124,7 +126,7 @@ def test_success_end_to_end_closes_ticket_and_isolates_worktree(tmp_path):
 
 def test_denied_verb_blocked_at_hook_during_real_spawn(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "denied_verb_blocked")
     ticket_id = wq_add(env, "scratch denied-verb ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -150,7 +152,7 @@ def test_launch_failure_blocks_with_infra_crash_prefix(tmp_path):
     attempted) classifies LAUNCH_FAILURE both attempts -> blocked with an INFRA_CRASH:
     prefix, the signal dispatcher/self_heal.py auto-releases on."""
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "turn_setup_failed")
     ticket_id = wq_add(env, "scratch launch-failure ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -165,7 +167,7 @@ def test_launch_failure_blocks_with_infra_crash_prefix(tmp_path):
 
 def test_rejected_limit_frame_drives_limit_path_not_crash(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "rejected_limit")
     ticket_id = wq_add(env, "scratch rate-limit ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -185,13 +187,82 @@ def test_rejected_limit_frame_drives_limit_path_not_crash(tmp_path):
     assert record["classification"] != "CRASH"
 
 
+def _assert_usage_sidecar_rate_limits(runs_root, ticket_id, attempt=1):
+    """wq#736: shared shape check for the usage-N.json sidecar's rate_limits fields —
+    used by both the clean-exit and watchdog-kill tests below."""
+    sidecar_path = os.path.join(runs_root, f"wq{ticket_id}", f"usage-{attempt}.json")
+    assert os.path.exists(sidecar_path), "wq#736: usage sidecar must be written at attempt exit"
+    with open(sidecar_path) as f:
+        record = json.load(f)
+    for snap_key in ("rate_limits_start", "rate_limits_exit"):
+        snap = record[snap_key]
+        assert snap["captured_at"] is not None
+        assert snap["five_hour"]["used_percentage"] == 42.5
+        assert snap["five_hour"]["resets_at"] == "2026-08-22T12:00:00Z"
+        assert snap["seven_day"]["used_percentage"] == 77.0
+        assert snap["seven_day"]["resets_at"] == "2026-08-25T00:00:00Z"
+    return record
+
+
+def test_usage_sidecar_written_with_rate_limits_on_clean_exit(tmp_path):
+    """wq#736 ACCEPTANCE: sidecar written on clean exit, both rate_limits fields
+    (five_hour/seven_day used_percentage + resets_at) present and non-null, sourced
+    from the governor's state.json (FOREMAN_STATE_FILE) rather than a live API call."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root, state_file = make_scratch_env(
+        tmp_path, 0, "success")
+    ticket_id = wq_add(env, "scratch usage-sidecar ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+    with open(state_file, "w") as f:
+        json.dump({
+            "source": "primary", "stale": False,
+            "limits": {
+                "session": {"percent": 42.5, "resets_at": "2026-08-22T12:00:00Z", "severity": "ok"},
+                "weekly_all": {"percent": 77.0, "resets_at": "2026-08-25T00:00:00Z", "severity": "ok"},
+            },
+        }, f)
+
+    run_fworker(env, ticket_id, repo, "success")
+
+    record = _assert_usage_sidecar_rate_limits(runs_root, ticket_id)
+    assert record["ticket"] == ticket_id
+    assert record["session_id"].startswith("fake-session-success-")
+
+
+def test_usage_sidecar_written_on_watchdog_kill(tmp_path):
+    """wq#736 ACCEPTANCE: sidecar written on a forced kill (fworker's own inactivity
+    watchdog SIGTERMing a stalled child), not just clean exit — write_usage_sidecar()
+    sits after run_child() returns, which is common to both paths."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root, state_file = make_scratch_env(
+        tmp_path, 0, "hang")
+    ticket_id = wq_add(env, "scratch usage-sidecar hang ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+    with open(state_file, "w") as f:
+        json.dump({
+            "source": "primary", "stale": False,
+            "limits": {
+                "session": {"percent": 42.5, "resets_at": "2026-08-22T12:00:00Z", "severity": "ok"},
+                "weekly_all": {"percent": 77.0, "resets_at": "2026-08-25T00:00:00Z", "severity": "ok"},
+            },
+        }, f)
+
+    run_fworker(env, ticket_id, repo, "hang",
+                extra_args=["--frame-gap-timeout", "1", "--post-result-grace", "1"])
+
+    with open(os.path.join(runs_root, f"wq{ticket_id}", "attempt-1.json")) as f:
+        attempt_record = json.load(f)
+    assert attempt_record["killed_reason"] == "inactivity"
+    _assert_usage_sidecar_rate_limits(runs_root, ticket_id)
+
+
 def test_thinking_frames_dont_double_count_toward_turn_ceiling(tmp_path):
     # wq#645 regression: 10 real turns shaped as (thinking-only frame, tool_use frame)
     # pairs, same as the live 2.1.233 CLI. mechanical-edit's max_turns=15 means the
     # pre-fix double-counting bug SIGTERMs this at raw frame 15 (~7.5 real turns) and
     # misclassifies it TURNS; the fix must let it run all 10 real turns and succeed.
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "thinking_paired_turns")
     ticket_id = wq_add(env, "scratch thinking-paired ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -209,7 +280,7 @@ def test_thinking_frames_dont_double_count_toward_turn_ceiling(tmp_path):
 
 def test_dep_preflight_defers_without_claiming_or_spawning(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     dep_id = wq_add(env, "scratch dep ticket, left open on purpose")
     p = subprocess.run([WQ_BIN, "add", "--title", "scratch dependent ticket",
                          "--deps", str(dep_id)], capture_output=True, text=True, env=env)
@@ -229,7 +300,7 @@ def test_dep_preflight_defers_without_claiming_or_spawning(tmp_path):
 
 def test_dep_preflight_proceeds_once_dep_is_done(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     dep_id = wq_add(env, "scratch dep ticket, closed immediately")
     subprocess.run([WQ_BIN, "claim", "--id", str(dep_id)], capture_output=True, text=True, env=env)
     subprocess.run([WQ_BIN, "done", str(dep_id), "--notes", "n/a"],
@@ -249,7 +320,7 @@ def test_governor_deny_defers_without_claiming_or_spawning(tmp_path):
     # wq#639: governor gate must precede claim (design §3 step 1), same as the
     # dep-preflight above — a denied dispatch should never touch the claim.
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     env["FAKE_GOVERNOR_DENY"] = "always"
     ticket_id = wq_add(env, "scratch governor-deny ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -271,7 +342,7 @@ def test_governor_deny_after_claim_releases_ticket(tmp_path):
     # claimed) — the claim must not be left held (was: fworker exited DEFERRED
     # holding the lease, wq#626 13:41:14Z).
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     env["FAKE_GOVERNOR_DENY"] = "after:1"
     env["FAKE_GOVERNOR_COUNTER_FILE"] = str(tmp_path / "governor_calls")
     ticket_id = wq_add(env, "scratch governor-deny-after-claim ticket")
@@ -287,7 +358,7 @@ def test_governor_deny_after_claim_releases_ticket(tmp_path):
 
 def test_resume_after_near_term_limit_reuses_worktree_and_closes(tmp_path):
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "rejected_limit_near")
     ticket_id = wq_add(env, "scratch near-limit ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -309,7 +380,7 @@ def test_worktree_collision_from_prior_crashed_attempt_is_adopted(tmp_path):
     # make_worktree collides on its own leftover branch. Must adopt gracefully, not
     # raise (which would crash before the claim was ever released).
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     title = "scratch collision ticket"
     ticket_id = wq_add(env, title)
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -336,7 +407,7 @@ def test_worktree_dir_from_unrelated_branch_is_replaced_not_crashed(tmp_path):
     # a directory sits at the expected worktree path but isn't ours (wrong branch, or
     # left by something else entirely) — must be cleared and replaced, not fatal.
     repo = make_scratch_repo(tmp_path)
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     title = "scratch foreign-dir ticket"
     ticket_id = wq_add(env, title)
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
@@ -360,7 +431,7 @@ def test_unrecoverable_worktree_failure_releases_claim_not_dangling(tmp_path):
     # recover from (here: --repo points at something that isn't a git repo at all) must
     # not leave the wq claim dangling — cmd_run's try/except releases it immediately
     # rather than leaving it for the lease reaper to reclaim later.
-    env, wq_db, events_dir, runs_root, worktrees_root = make_scratch_env(tmp_path, 0, "success")
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     ticket_id = wq_add(env, "scratch unrecoverable ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
     not_a_repo = str(tmp_path / "not_a_git_repo")

@@ -331,6 +331,21 @@ Filed separately, not implemented here.
 Nothing in this file has been applied to any prompt, settings file, harness, or governor
 configuration. wq#734 is the analysis.
 
+## (9) wq#736 landed — new data source for §7's collinearity break
+
+`fworker.py` now writes `RUNS_ROOT/wq{id}/usage-{attempt}.json` at the end of every attempt
+(`do_attempt()`, both a clean child exit and every watchdog kill — inactivity, wall-clock,
+turns-exceeded, post-result-stuck — since the write sits after `run_child()` returns
+regardless of which path got it there). Each sidecar carries `rate_limits_start` and
+`rate_limits_exit`: `{five_hour: {used_percentage, resets_at}, seven_day: {used_percentage,
+resets_at}}`, read from `/home/lumen/foreman/state.json` (the governor's own poll, `governor/
+foreman_usaged.py`) rather than a new API call, plus the result frame's own `usage`/
+`total_cost_usd`/`duration_ms` totals for that session. Zero new Anthropic spend, and it
+sidesteps the guard-denied `~/.claude/projects` path this file's corpus was limited to (§6,
+point 2). As sidecars accumulate across lanes with different token shapes, the per-session
+start/exit deltas are the free probe §7 proposed — check back once a week's worth has built up
+before spending the two controlled sessions of wq#737.
+
 ## Sources
 
 Anthropic documentation, retrieved 2026-08-21:
