@@ -469,29 +469,59 @@ _LANE_BIAS = {
     "research": ["research-synthesis"],
 }
 
+# wq#778 (from wq#750 audit F1/F2): these four bare-word patterns alone routed 66% of
+# research-synthesis and 48% of rca-investigation — both archetypes whose PRIMARY rung is
+# opus-5 — off a single common word that shows up in ordinary ticket prose ('research',
+# 'report', 'audit', 'why'). An archetype in _OPUS_PRIMARY_ARCHETYPES may not win on one of
+# its _WEAK_SIGNALS alone: it needs a second matched pattern (weak or not) or one non-weak,
+# phrase-level pattern from its own rubric row.
+_OPUS_PRIMARY_ARCHETYPES = {"research-synthesis", "rca-investigation"}
+_WEAK_SIGNALS = {
+    ("research-synthesis", r"\bresearch\b"),
+    ("research-synthesis", r"\breport\b"),
+    ("rca-investigation", r"\baudit\b"),
+    ("rca-investigation", r"\bwhy\b"),
+}
+
+
+def _qualifies(arch, matched_pats):
+    """wq#778 corroboration gate — see _WEAK_SIGNALS above."""
+    if arch not in _OPUS_PRIMARY_ARCHETYPES:
+        return True
+    if len(matched_pats) >= 2:
+        return True
+    return any((arch, p) not in _WEAK_SIGNALS for p in matched_pats)
+
 
 def classify_archetype(title, detail="", lane=""):
-    """Keyword rubric from §15: title/detail signals + lane bias. Returns
-    (archetype, [matched signals]). Default standard-engineering (archetype 3)."""
+    """Keyword rubric from §15: title/detail signals + lane bias, gated by the wq#778
+    corroboration rule for opus-primary archetypes. Returns (archetype, [matched signals]).
+    Default standard-engineering (archetype 3)."""
     text = f"{title or ''}\n{detail or ''}"
-    hits = []
+    by_arch = {}
     for arch, pats in _RUBRIC:
-        for p in pats:
-            if re.search(p, text, re.IGNORECASE):
-                hits.append((arch, p))
-    if not hits:
+        matched = [p for p in pats if re.search(p, text, re.IGNORECASE)]
+        if matched:
+            by_arch[arch] = matched
+    # first-listed archetype in _RUBRIC order that hit at all (used for lane bias + fallback
+    # signal reporting); qualifying narrows that to archs that clear the wq#778 gate.
+    hit_archs = [a for a, _ in _RUBRIC if a in by_arch]
+    if not hit_archs:
         bias = _LANE_BIAS.get(lane or "", [])
         return (bias[0] if bias and bias[0] != "long-horizon-campaign" else
                 "standard-engineering"), []
-    # first-listed archetype in _RUBRIC order wins; lane bias breaks ties among hit archs
-    hit_archs = []
-    for a, _ in hits:
-        if a not in hit_archs:
-            hit_archs.append(a)
+    qualifying = [a for a in hit_archs if _qualifies(a, by_arch[a])]
+    if not qualifying:
+        # signal(s) fired but none cleared the wq#778 corroboration gate — do not let lane
+        # bias resurrect a disqualified archetype (e.g. lane "research" re-picking a
+        # disqualified research-synthesis); fall through to the plain default instead, but
+        # surface the disqualified pattern(s) rather than claiming true no-signal.
+        return "standard-engineering", [p for a in hit_archs for p in by_arch[a]]
+    # lane bias breaks ties among qualifying hit archs
     for b in _LANE_BIAS.get(lane or "", []):
-        if b in hit_archs:
-            return b, [p for a, p in hits if a == b]
-    return hit_archs[0], [p for a, p in hits if a == hit_archs[0]]
+        if b in qualifying:
+            return b, by_arch[b]
+    return qualifying[0], by_arch[qualifying[0]]
 
 
 # ---- governor pressure adapter ------------------------------------------------------

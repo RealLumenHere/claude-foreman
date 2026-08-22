@@ -1,10 +1,12 @@
 """wq#617 T3 orchestrator tier — routing, dominated guard, downgrade doctrine, refusal
 awareness, verify-pass + judgment policy. Zero Anthropic quota."""
+import collections
 import copy
 import datetime as dt
 import itertools
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 
@@ -309,6 +311,72 @@ def test_lane_repo_map_covers_build_and_auto_with_foreman_root():
     assert router.repo_for_lane("build") == router.FOREMAN_ROOT
     assert router.repo_for_lane("auto") == router.FOREMAN_ROOT
     assert router.repo_for_lane("nonexistent-lane") is None
+
+
+# ---- wq#778: classifier corroboration gate (from wq#750 audit F1/F2) --------------------
+# research/MODEL_ROUTING_AUDIT.md found classify_archetype() sent 34.8%/18.4% of all 772
+# filed tickets to research-synthesis/rca-investigation — both opus-primary rungs — with
+# 66%/48% of that load resting on ONE bare word ('research'/'report'/'audit'/'why') that
+# shows up in ordinary ticket prose. _WEAK_SIGNALS + _qualifies() require a second signal
+# or a phrase-level pattern before those two archetypes can win.
+
+QUEUE_DB = "/home/lumen/agents/work-queue/queue.db"
+
+
+@pytest.mark.parametrize("title,disallowed", [
+    ("just some research into vendor pricing", "research-synthesis"),
+    ("weekly status report for the fleet", "research-synthesis"),
+    ("audit the deploy checklist", "rca-investigation"),
+    ("why did the build take longer today", "rca-investigation"),
+])
+def test_bare_word_signal_alone_never_wins_its_opus_primary_archetype(title, disallowed):
+    arch, sig = router.classify_archetype(title, "", "")
+    assert arch != disallowed, (title, arch, sig)
+
+
+def test_second_signal_or_phrase_level_pattern_still_wins():
+    # two weak signals together corroborate each other
+    arch, _ = router.classify_archetype("research pack: agent farm prior art report", "", "")
+    assert arch == "research-synthesis"
+    # a weak signal plus an unrelated strong hit from the same archetype corroborates too
+    arch, _ = router.classify_archetype("audit: why does lpp-watchdog bypass the guard", "", "")
+    assert arch == "rca-investigation"
+    # a phrase-level pattern wins alone, same as before wq#778
+    arch, _ = router.classify_archetype("root cause of the flaky deploy", "", "")
+    assert arch == "rca-investigation"
+
+
+def test_lane_bias_cannot_resurrect_a_disqualified_archetype():
+    # lane "research" biases toward research-synthesis, but a bare 'research' hit alone
+    # must still not win it just because the lane says so (wq#778 regression: the original
+    # fix let the no-signal fallback path re-apply lane bias and undo the gate).
+    arch, sig = router.classify_archetype("research into vendor pricing", "", "research")
+    assert arch != "research-synthesis", (arch, sig)
+
+
+def _replay_queue_db():
+    if not os.path.exists(QUEUE_DB):
+        pytest.skip(f"queue.db not present at {QUEUE_DB} — not running on the fleet host")
+    with sqlite3.connect(f"file:{QUEUE_DB}?mode=ro", uri=True) as c:
+        return list(c.execute("select lane, title, detail from tasks"))
+
+
+def test_classifier_replay_keeps_opus_primary_archetypes_under_15_percent():
+    """ACCEPTANCE (wq#778): replayed over every filed ticket, research-synthesis and
+    rca-investigation must each land below 15%, without pushing the no-signal
+    standard-engineering fallthrough above its pre-fix baseline (~27%)."""
+    rows = _replay_queue_db()
+    n = len(rows)
+    dist = collections.Counter()
+    no_signal = 0
+    for lane, title, detail in rows:
+        arch, sig = router.classify_archetype(title or "", detail or "", lane or "")
+        dist[arch] += 1
+        if not sig:
+            no_signal += 1
+    assert dist["research-synthesis"] / n < 0.15, dict(dist)
+    assert dist["rca-investigation"] / n < 0.15, dict(dist)
+    assert no_signal / n <= 0.27, no_signal
 
 
 # ---- end-to-end against a scratch wq (needs a wq with the wq#617 columns) --------------
