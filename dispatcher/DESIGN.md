@@ -414,3 +414,45 @@ governor state end-to-end. See `dispatcher/pacing.py`'s module docstring and
 `dispatcher/tests/test_pacing.py` (pure module logic) / the `wq#716` block in
 `dispatcher/tests/test_dispatcher.py` (dispatcher-wired: skip/delay/exempt/ntfy-dedup/
 config-fallback) for the full contract.
+
+## 15. Observability, circuit breaker, runaway detection (wq#718 AUTO-6)
+
+Three read-mostly additions on top of the §3 pipeline, none of which change what MUST
+1–10 above already guarantee — they add a dead-man's switch and visibility, they don't
+touch the claim/spawn contract.
+
+**Circuit breaker** (`circuit_breaker.py`) — a new stage 0.5 in `run_pass()`, checked
+right after `kill_switch()` and *before* `load_config()` so a broken config.json can
+never suppress a trip. Reads harness/fworker.py's own `attempt-N.json` records (the
+same ledger self_heal.py already treats as authoritative, §12) and computes the
+fraction classified LAUNCH_FAILURE/KILLED/OOM (fworker's own INFRA_CRASH bucket, §12 —
+not a broader "any non-success" rate; see circuit_breaker.py's module docstring for why
+that would be dominated by ordinary multi-attempt-ticket noise) over a trailing window.
+Above `FOREMAN_BREAKER_MIN_SAMPLES` samples and `FOREMAN_BREAKER_THRESHOLD` rate, it
+`disarm()`s: **touches DISPATCH_DISARM unconditionally first**, then best-effort
+notifies (notify_sinks.py: ntfy urgent + optional xfce4-notifyd sqlite log). The order
+is the guardrail: a notify failure can never suppress or appear to undo the disarm that
+already happened. The same DISARM file is the dispatcher's own kill switch (MUST 8), so
+the very next pass halts at stage 0 without the breaker needing to run again.
+
+**Runaway detector** (`runaway.py`) — a new stage 3.5, right after a candidate's status
+is confirmed `open`. `stuck_ticket_ids()` flags any ticket with
+`>= FOREMAN_RUNAWAY_MAX_ATTEMPTS` finished attempts that hasn't reached `done` (reuses
+self_heal.py's `attempt_count()`/`wq_show()` rather than a second counter). A stuck
+ticket is skipped every pass (never blocked, never edited — §13's "no ticket mutation"
+still holds) and Frank is ntfy'd once per 24h via the same dedup ledger pattern as §5's
+fire-approval ntfy (state.json's new `runaway_ntfy` key, alongside the existing
+`fire_ntfy`).
+
+**Dashboard** (`dashboard_data.py` + `dashboard.py`) — a stdlib-only, GET-only HTTP
+server (no new dependency, no do_POST/PUT/DELETE handler at all — there's no code path
+to turn it into a control surface even by accident) serving the snapshot the ticket
+asked for: running workers, per-lane queue depth (open/eligible/blocked — "eligible"
+reuses `frank_gate_reason`/`unmet_deps` from foreman_dispatcher.py directly, so it
+always means what dispatch means by it), rolling failure rate (24h/7d, the broader
+"did the attempt succeed" definition — distinct from the breaker's narrower trip
+condition above), circuit-breaker armed state, stuck tickets, and governor
+budget/floor state. Ships STAGED (systemd/lumen-foreman-dashboard.service, disabled,
+binds 127.0.0.1 only) — reaching it at a real hostname behind Cloudflare Access is DNS
++ Cloudflare-account work outside a worker's access; systemd/INSTALL.md documents the
+steps Frank runs by hand.

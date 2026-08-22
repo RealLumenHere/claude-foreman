@@ -50,3 +50,74 @@ touch /home/lumen/autonomy/DISPATCH_DISARM        # instant, no systemd needed �
 # or: sudo systemctl disable --now lumen-foreman-dispatch.timer
 # or: sudo systemctl disable --now lumen-foreman-selfheal.timer
 ```
+
+## wq#718 AUTO-6 — circuit breaker, runaway detector, dashboard
+
+The circuit breaker (`circuit_breaker.py`) and runaway detector (`runaway.py`) need
+**no separate install step**: they're called in-process from every
+`foreman_dispatcher.py` pass (see its module docstring's stage 0.5 / stage 3.5), so
+they go live automatically the moment `lumen-foreman-dispatch.timer` is enabled per
+step 3 above. Nothing here changes that timer's staged/disabled default.
+
+Sanity-check the breaker and detector independently of a real pass:
+
+```bash
+python3 /home/lumen/foreman/dispatcher/circuit_breaker.py status
+python3 /home/lumen/foreman/dispatcher/runaway.py list-stuck
+python3 /home/lumen/foreman/dispatcher/circuit_breaker.py test-ntfy   # sends one labeled
+                                                                       # test ntfy; never
+                                                                       # touches DISARM
+```
+
+Defaults (env-overridable — see circuit_breaker.py's constants):
+`FOREMAN_BREAKER_WINDOW_MIN=90`, `FOREMAN_BREAKER_MIN_SAMPLES=8`,
+`FOREMAN_BREAKER_THRESHOLD=0.75` (fraction of the window's attempts that must classify
+LAUNCH_FAILURE/KILLED/OOM — harness/fworker.py's INFRA_CRASH bucket — before the
+breaker trips), `FOREMAN_RUNAWAY_MAX_ATTEMPTS=5`. These were calibrated against this
+fleet's actual attempt history at build time (see circuit_breaker.py's module
+docstring) — re-check them if the fleet's ambient failure rate shifts a lot.
+
+### Dashboard (`dashboard.py`)
+
+Install, staged, same posture as the dispatch/self-heal units:
+
+```bash
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-dashboard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+systemctl is-enabled lumen-foreman-dashboard.service   # expect: disabled
+```
+
+Prove it inert / working locally before exposing it anywhere:
+
+```bash
+python3 /home/lumen/foreman/dispatcher/dashboard.py --bind 127.0.0.1 --port 8791 &
+curl -s http://127.0.0.1:8791/api/snapshot | head -c 400
+kill %1
+```
+
+Enable (Tier-3, Frank only) — binds loopback-only, not internet-reachable by itself:
+
+```bash
+sudo systemctl enable --now lumen-foreman-dashboard.service
+```
+
+**Making it reachable at `dispatch.lumennode.uk` behind Cloudflare Access is DNS +
+Cloudflare-account work this worker has no credentials or network access to perform.**
+The acceptance criterion ("dashboard live at chosen URL, behind Cloudflare Access")
+needs Frank to do, roughly:
+
+1. Point a DNS record (e.g. `dispatch.lumennode.uk`) at this box (or its existing
+   Cloudflare Tunnel, if one's already in use for other lumennode.uk subdomains).
+2. Reverse-proxy the public hostname to `127.0.0.1:8791` — either a Cloudflare Tunnel
+   ingress rule straight to that port, or a local Caddy/nginx vhost that the tunnel (or
+   a direct DNS A/AAAA record) points to. No proxy config is included here because it
+   depends on whether this box already runs a tunnel/proxy for other subdomains —
+   copying a real one blind risks breaking it.
+3. Put a Cloudflare Access policy in front of that hostname (Zero Trust → Access →
+   Applications) restricted to Frank's identity — the guardrail is explicit that this
+   dashboard must stay read-only *and* access-gated even though its own HTTP layer
+   never exposes a mutating verb (see dashboard.py's module docstring).
+
+Rollback is the same kill switch as the dispatcher: `touch DISPATCH_DISARM` stops new
+spawns; the dashboard itself only reads, so `sudo systemctl stop
+lumen-foreman-dashboard.service` (or leaving it disabled) is the only "off" it needs.

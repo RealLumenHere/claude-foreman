@@ -12,6 +12,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -28,6 +29,10 @@ import concurrency  # noqa: E402
 import router  # noqa: E402
 import spawner  # noqa: E402
 import pacing  # noqa: E402
+import circuit_breaker  # noqa: E402
+import runaway  # noqa: E402
+import self_heal  # noqa: E402
+import notify_sinks  # noqa: E402
 
 WQ_BIN = "/home/lumen/bin/wq"
 SLOCK_BIN = "/home/lumen/bin/slock"
@@ -106,8 +111,23 @@ def denv(tmp_path, monkeypatch):
     monkeypatch.setitem(router.LANE_REPO, "fleet-fires", str(repo_dir))
     router.load_manifest(force=True)
 
+    # wq#718: circuit_breaker/runaway read their own RUNS_ROOT/DISARM_PATH independent
+    # of fd's — without this a test run reads the box's REAL _runs history and (if the
+    # real fleet's failure rate ever crosses threshold) could disarm the REAL
+    # production dispatcher. DISARM_PATH must be the SAME file fd.DISARM_PATH uses so
+    # a circuit-breaker trip is actually visible to the next kill_switch() check.
+    runs_root = tmp_path / "_runs"
+    runs_root.mkdir()
+    monkeypatch.setattr(circuit_breaker, "RUNS_ROOT", str(runs_root))
+    monkeypatch.setattr(circuit_breaker, "DISARM_PATH", str(tmp_path / "DISARM"))
+    monkeypatch.setattr(self_heal, "RUNS_ROOT", str(runs_root))
+    monkeypatch.setattr(self_heal, "WQ_BIN", WQ_BIN)
+    monkeypatch.setattr(notify_sinks, "NTFY_BIN", fake_ntfy)
+    monkeypatch.setattr(notify_sinks, "XFCE_NOTIFYD_DB", "")
+
     return {"tmp": tmp_path, "repo": str(repo_dir), "approvals": approvals,
             "units_state": units_state, "calls_log": calls_log, "ntfy_log": ntfy_log,
+            "runs_root": runs_root,
             "gov_state": gov_state, "cfg_path": cfg_path, "wq_db": str(wq_db),
             "bin_dir": bin_dir, "lumen_run": lumen_run,
             "pacing_cfg_path": tmp_path / "pacing_config.json"}
@@ -699,3 +719,99 @@ def test_dry_run_no_side_effects(denv):
     assert not (denv["tmp"] / "dstate.json").exists()  # state.json untouched
     assert task_rows(denv) == before          # DB untouched
     assert ntfy_lines(denv) == []
+
+
+# ---- wq#718 AUTO-6: circuit breaker + runaway wiring ----------------------------------
+
+def write_attempt(denv, tid, n, classification="KILLED", finished_at=None):
+    d = denv["runs_root"] / f"wq{tid}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"attempt-{n}.json").write_text(json.dumps(
+        {"ticket": tid, "attempt": n, "classification": classification,
+         "finished_at": finished_at if finished_at is not None else time.time()}))
+
+
+def test_circuit_breaker_trips_disarms_and_halts_before_config_load(denv, monkeypatch):
+    monkeypatch.setattr(circuit_breaker, "WINDOW_MINUTES", 90)
+    monkeypatch.setattr(circuit_breaker, "MIN_SAMPLES", 5)
+    monkeypatch.setattr(circuit_breaker, "FAILURE_RATE_THRESHOLD", 0.75)
+    for i in range(5):
+        write_attempt(denv, 900 + i, 1, "KILLED")
+    add_ticket("eligible but the breaker trips first")
+    denv["cfg_path"].write_text("{not json")  # a broken config must not suppress the trip
+
+    assert fd.run_pass() == 0
+
+    halts = log_events(denv, "halt")
+    assert len(halts) == 1 and halts[0]["stage"] == "circuit_breaker"
+    assert (denv["tmp"] / "DISARM").exists()
+    assert lumen_calls(denv) == []
+    lines = ntfy_lines(denv)
+    assert len(lines) == 1 and "-p urgent" in lines[0]
+    # the DISARM this pass wrote is the SAME file the dispatcher's own kill_switch()
+    # reads: the very next pass halts at stage 0, before circuit_breaker even runs again
+    assert fd.run_pass() == 0
+    log2 = [json.loads(l) for l in (denv["tmp"] / "dispatcher.log").read_text().splitlines()
+           if l.strip()]
+    assert log2[-1]["event"] == "halt" and log2[-1]["stage"] == "kill_switch"
+
+
+def test_circuit_breaker_dry_run_reports_without_disarming(denv, monkeypatch):
+    monkeypatch.setattr(circuit_breaker, "WINDOW_MINUTES", 90)
+    monkeypatch.setattr(circuit_breaker, "MIN_SAMPLES", 5)
+    monkeypatch.setattr(circuit_breaker, "FAILURE_RATE_THRESHOLD", 0.75)
+    for i in range(5):
+        write_attempt(denv, 900 + i, 1, "KILLED")
+
+    assert fd.run_pass(dry_run=True) == 0
+
+    halts = log_events(denv, "halt")
+    assert len(halts) == 1 and halts[0]["stage"] == "circuit_breaker"
+    assert not (denv["tmp"] / "DISARM").exists()
+    assert ntfy_lines(denv) == []
+
+
+def test_circuit_breaker_below_threshold_pass_proceeds_normally(denv, monkeypatch):
+    monkeypatch.setattr(circuit_breaker, "WINDOW_MINUTES", 90)
+    monkeypatch.setattr(circuit_breaker, "MIN_SAMPLES", 5)
+    monkeypatch.setattr(circuit_breaker, "FAILURE_RATE_THRESHOLD", 0.75)
+    for i in range(5):
+        write_attempt(denv, 900 + i, 1, "SUCCESS")
+    tid = add_ticket("healthy fleet, this should spawn")
+
+    assert fd.run_pass() == 0
+
+    assert log_events(denv, "halt", ) == []
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert not (denv["tmp"] / "DISARM").exists()
+
+
+def test_runaway_stuck_ticket_skipped_and_frank_notified(denv):
+    tid = add_ticket("keeps getting attempted")
+    for n in range(1, 6):
+        write_attempt(denv, tid, n)
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["stage"] == "runaway"
+    assert skips[0]["reason"] == "runaway_stuck"
+    assert lumen_calls(denv) == []
+    lines = ntfy_lines(denv)
+    assert len(lines) == 1 and f"wq#{tid}" in lines[0]
+
+    # second pass same day: still skipped, but not re-pinged (24h dedup)
+    assert fd.run_pass() == 0
+    assert len(log_events(denv, "skip", ticket=tid)) == 2
+    assert len(ntfy_lines(denv)) == 1
+
+
+def test_runaway_below_threshold_not_skipped(denv):
+    tid = add_ticket("only attempted a couple times")
+    for n in range(1, 3):
+        write_attempt(denv, tid, n)
+
+    assert fd.run_pass() == 0
+
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert log_events(denv, "skip", ticket=tid) == []

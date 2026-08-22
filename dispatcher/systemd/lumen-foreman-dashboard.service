@@ -1,0 +1,25 @@
+# lumen-foreman-dashboard.service — read-only dispatch dashboard HTTP server (wq#718 AUTO-6).
+# STAGED (Tier-3): installed but never enabled by the fleet; Frank enables it by hand.
+# Unlike lumen-foreman-dispatch/-selfheal (oneshot + timer), this is a long-running
+# server — Type=simple, restarted on failure, no timer. See dispatcher/dashboard.py's
+# module docstring and dispatcher/systemd/INSTALL.md's wq#718 section (Cloudflare
+# Access / DNS steps this worker has no access to run).
+# Binds loopback only (127.0.0.1) — a reverse proxy (Caddy/nginx + Cloudflare Access)
+# terminates the public side; this unit alone is NOT internet-reachable.
+[Unit]
+Description=Lumen foreman dispatch dashboard — read-only (wq#718)
+Documentation=file:///home/lumen/foreman/dispatcher/dashboard.py
+After=network-online.target
+
+[Service]
+Type=simple
+User=lumen
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/dashboard.py --bind 127.0.0.1 --port 8791
+Restart=on-failure
+RestartSec=10
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

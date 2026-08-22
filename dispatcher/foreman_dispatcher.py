@@ -18,10 +18,13 @@ CLI:  foreman_dispatcher.py run --once [--dry-run]
 
 Decision-log events (one JSON object per line, file + stdout):
   pass_start / pass_end    pass boundaries
-  skip                     per-ticket refusal: stage + reason
+  skip                     per-ticket refusal: stage + reason (incl. runaway_stuck —
+                           wq#718's runaway.py; see stuck_ticket_ids())
   spawn / would_spawn      per-ticket dispatch (or dry-run equivalent)
-  halt                     pass-level stop: kill_switch, lock_busy, no_slots,
-                           spawn_cap, lumen_run_unreachable
+  halt                     pass-level stop: kill_switch, circuit_breaker (wq#718 —
+                           see circuit_breaker.py; disarms before this halt is even
+                           logged), lock_busy, no_slots, spawn_cap,
+                           lumen_run_unreachable
   tight_mode               governor pressure flipped the pass into tight-mode
   error                    config/spawn/langfuse/pass failures
   info                     degradations (e.g. langfuse_disabled)
@@ -44,10 +47,12 @@ DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(DISPATCHER_DIR, ".."))
 sys.path.insert(0, os.path.join(REPO_ROOT, "orchestrator"))
 sys.path.insert(0, os.path.join(REPO_ROOT, "harness"))
-import router       # noqa: E402
-import spawner      # noqa: E402
-import concurrency  # noqa: E402
-import pacing       # noqa: E402
+import router          # noqa: E402
+import spawner         # noqa: E402
+import concurrency     # noqa: E402
+import pacing          # noqa: E402
+import circuit_breaker  # noqa: E402
+import runaway          # noqa: E402
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -172,6 +177,8 @@ def _utcnow():
 
 
 def _prune_dedup(ledger, now, hours):
+    """Shared dedup-ledger pruning for fire_ntfy (§5), pacing_ntfy (AUTO-4), and
+    runaway_ntfy (wq#718) — same {key: iso_ts} shape, caller picks the window."""
     out = {}
     for key, ts in (ledger or {}).items():
         try:
@@ -186,7 +193,8 @@ def _prune_dedup(ledger, now, hours):
 def load_state(now=None):
     now = now or _utcnow()
     today = now.strftime("%Y-%m-%d")
-    fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {}}
+    fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {},
+             "runaway_ntfy": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -196,13 +204,16 @@ def load_state(now=None):
         return fresh
     fire = _prune_dedup(st.get("fire_ntfy"), now, FIRE_NTFY_DEDUP_H)
     pacing_ntfy = _prune_dedup(st.get("pacing_ntfy"), now, PACING_NTFY_PRUNE_H)
+    runaway_ntfy = _prune_dedup(st.get("runaway_ntfy"), now, FIRE_NTFY_DEDUP_H)
     if st.get("day") != today:  # UTC day rollover resets lane counts, not the ledgers (§6.3)
-        return {"day": today, "lane_counts": {}, "fire_ntfy": fire, "pacing_ntfy": pacing_ntfy}
+        return {"day": today, "lane_counts": {}, "fire_ntfy": fire,
+                "pacing_ntfy": pacing_ntfy, "runaway_ntfy": runaway_ntfy}
     counts = st.get("lane_counts")
     return {"day": today,
             "lane_counts": counts if isinstance(counts, dict) else {},
             "fire_ntfy": fire,
-            "pacing_ntfy": pacing_ntfy}
+            "pacing_ntfy": pacing_ntfy,
+            "runaway_ntfy": runaway_ntfy}
 
 
 def save_state(st):
@@ -433,6 +444,29 @@ def handle_unapproved_fire(state, tid, lane, dry_run, log):
     save_state(state)
 
 
+# ---- runaway tickets (wq#718 AUTO-6, DESIGN addendum §13) ----------------------------
+
+def handle_runaway_stuck(state, tid, lane, attempts, dry_run, log):
+    log.skip(tid, lane, "runaway", "runaway_stuck",
+             detail=f"{attempts} attempts, still not done")
+    now = _utcnow()
+    last = state["runaway_ntfy"].get(str(tid))
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=FIRE_NTFY_DEDUP_H):
+                return  # already pinged Frank within 24h — never flood
+        except ValueError:
+            pass
+    if dry_run:
+        log.emit("would_ntfy", ticket=tid, lane=lane, reason="runaway_stuck")
+        return
+    ntfy(f"wq#{tid} ({lane}) looks stuck: {attempts} attempts without reaching done. "
+         f"Dispatcher will keep skipping it every pass until it's fixed or manually "
+         f"intervened.", priority="high", title="foreman dispatcher: runaway ticket")
+    state["runaway_ntfy"][str(tid)] = now.isoformat(timespec="seconds")
+    save_state(state)
+
+
 # ---- Langfuse trace (§8: best-effort by contract) ------------------------------------
 
 def _load_langfuse_creds(path):
@@ -496,6 +530,7 @@ def _do_pass(cfg, log, state, dry_run):
     tight = False
     spawned = 0
     dep_cache, pressure_cache = {}, {}
+    stuck = runaway.stuck_ticket_ids()  # wq#718: one scan per pass, not per-candidate
 
     pacing_cfg, pacing_warn = pacing.load_config()  # wq#716: forward-looking layer on §6
     if pacing_warn:
@@ -536,6 +571,12 @@ def _do_pass(cfg, log, state, dry_run):
             continue
         if t.get("status") != "open":
             log.skip(tid, lane, "scan", "not_open", detail=t.get("status"))
+            continue
+
+        # stage 3.5 — runaway (wq#718): a ticket stuck below RUNAWAY_MAX_ATTEMPTS
+        # cycles without reaching done is skipped every pass, not re-attempted forever
+        if tid in stuck:
+            handle_runaway_stuck(state, tid, lane, stuck[tid]["attempts"], dry_run, log)
             continue
 
         # stage 4 — Frank-gate (MUST 3): never claimed, no override flag
@@ -642,6 +683,18 @@ def run_pass(dry_run=False):
     if ks:
         log.emit("halt", stage="kill_switch", reason=ks)
         return 0
+
+    # stage 0.5 (wq#718): dead-man's switch, checked before config load so a broken
+    # config.json can never suppress a trip. Emits nothing when not tripped — a clean
+    # pass looks exactly like it did before this existed.
+    tripped, breaker_stats = circuit_breaker.check_and_trip(dry_run=dry_run)
+    if tripped:
+        reason = (f"failure rate {breaker_stats['rate']:.0%} over last "
+                  f"{breaker_stats['window_minutes']}m "
+                  f"({breaker_stats['failures']}/{breaker_stats['total']} attempts)")
+        log.emit("halt", stage="circuit_breaker", reason=reason, **breaker_stats)
+        return 0
+
     try:
         cfg = load_config()  # §4: invalid config fails the pass closed
     except ConfigError as e:
