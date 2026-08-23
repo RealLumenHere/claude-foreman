@@ -1,17 +1,15 @@
 {
-  "session_min_remaining_pct": 20,
-  "weekly_all_min_remaining_pct": 15,
-  "fable_weekly_min_remaining_pct": 10,
-  "fable_floor_schedule": [
-    {"until_pt": "2026-08-19T20:30", "min_remaining_pct": 10},
-    {"until_pt": "2026-08-20T03:00", "min_remaining_pct": 0}
-  ],
+  "session_min_remaining_pct": 0,
+  "weekly_all_min_remaining_pct": 0,
+  "fable_weekly_min_remaining_pct": 0,
+  "fable_floor_schedule": [],
   "stale_fail_closed_seconds": 600,
   "poll_interval_min_s": 60,
   "poll_interval_max_s": 90,
   "poll_backoff_max_s": 600,
   "primary_fail_threshold": 2,
-  "off_peak_days_pt": [0, 1, 2, 3, 4],
+  "off_peak_days_pt": [],
   "off_peak_start_hour_pt": 5,
-  "off_peak_end_hour_pt": 11
+  "off_peak_end_hour_pt": 11,
+  "_note": "floors ZEROED + off-peak disabled per Frank 2026-08-23 (3rd instruction). Only real limit is cloud_ceiling=3 concurrent. Do not restore without Frank."
 }

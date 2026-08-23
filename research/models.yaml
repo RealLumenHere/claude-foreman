@@ -18,7 +18,7 @@ pools:
   # P3 pins exact field names; CCC claude.ai limits[] is the fallback mapping (kind session|weekly_all|weekly_scoped, percent 0..100).
 
 defaults:
-  reserve_floors: {session: 20, weekly_all: 15, fable_weekly: 50}   # percent REMAINING required to dispatch that pool
+  reserve_floors: {session: 0, weekly_all: 0, fable_weekly: 0}   # REMOVED per Frank 2026-08-23 (3rd instruction): 3-concurrent is the only real limit, no weekly/session gating
   concurrency:    {cloud_max: 3, local_max: 4}
   offpeak_bias:   "avoid new cloud dispatch weekdays 05:00-11:00 PT"
   autocompact_window: 500000   # fable/opus/sonnet workers

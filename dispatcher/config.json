@@ -9,40 +9,40 @@
   "lanes": {
     "foreman-tok": {
       "enabled": true,
-      "max_per_day": 18
+      "max_per_day": 999
     },
     "lpp": {
       "enabled": true,
-      "max_per_day": 18
+      "max_per_day": 999
     },
     "questfree": {
       "enabled": true,
-      "max_per_day": 18
+      "max_per_day": 999
     },
     "pstack": {
       "enabled": true,
-      "max_per_day": 18
+      "max_per_day": 999
     },
     "fleet-fires": {
       "enabled": true,
-      "max_per_day": 100,
+      "max_per_day": 999,
       "requires_approval": false
     },
     "foreman-auto": {
       "enabled": true,
-      "max_per_day": 18
+      "max_per_day": 999
     },
     "build": {
       "enabled": true,
-      "max_per_day": 20
+      "max_per_day": 999
     },
     "mission-control": {
       "enabled": true,
-      "max_per_day": 20
+      "max_per_day": 999
     },
     "user": {
       "enabled": false,
-      "max_per_day": 0
+      "max_per_day": 1
     }
   }
 }
