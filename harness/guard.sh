@@ -154,14 +154,33 @@ Bash)
     # and the only op in the primary's reflog history). ff-only onto the remote
     # default can never switch branches or introduce unreviewed content; anything
     # else that moves HEAD is denied.
+    #
+    # wq#929: switching branches was only half of it. 2719f89 was committed
+    # straight onto /home/lumen/foreman's main and went live in the next
+    # dispatcher pass (config_sha=2719f89, fdisp-20260823T170102Z) — no PR, no
+    # review — and left the primary permanently unable to ff onto origin. So the
+    # commit-creating verbs are denied here too: branch-frozen has to mean the
+    # history is frozen, not just which ref is checked out. Those verbs are
+    # matched only at a command-word boundary, so `git log --grep=commit` and
+    # `git rev-parse HEAD^{commit}` stay readable in a primary.
     PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control}
+    # Judge each command segment on its own. Whole-string matching let one
+    # segment's sanctioned ff-merge license a denied verb in the next
+    # ("git merge --ff-only origin/main; git merge feat/x"), and made the
+    # sanctioned form itself unrecognisable the moment a `;` followed it —
+    # wq794 was blocked live running exactly the deploy ff it is allowed.
     GIT_MOVE=0
-    if printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\b(checkout|switch|restore|reset|rebase|pull)\b'; then
-      GIT_MOVE=1
-    elif printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bmerge\b' \
-        && ! printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bmerge +--ff-only +origin/(main|master)([[:space:]]|$)'; then
-      GIT_MOVE=1
-    fi
+    while IFS= read -r seg; do
+      if printf '%s' "$seg" | grep -qE '\bgit\b.*\b(checkout|switch|restore|reset|rebase|pull)\b'; then
+        GIT_MOVE=1
+      elif printf '%s' "$seg" | grep -qE '\bgit\b.*[[:space:]](commit|cherry-pick|revert|am)\b'; then
+        GIT_MOVE=1
+      elif printf '%s' "$seg" | grep -qE '\bgit\b.*[[:space:]]merge([[:space:]]|$)' \
+          && ! printf '%s' "$seg" | grep -qE '\bgit\b.*[[:space:]]merge +--ff-only +origin/(main|master)([[:space:]]|$)'; then
+        GIT_MOVE=1
+      fi
+      if [ "$GIT_MOVE" = 1 ]; then break; fi
+    done < <(printf '%s\n' "$target" | tr ';&|' '\n')
     if [ "$GIT_MOVE" = 1 ]; then
       HOOK_CWD=$(jfield '.cwd')
       IFS=':' read -ra PT_ARR <<< "$PRIMARY_TREES"
@@ -169,10 +188,10 @@ Bash)
         [ -n "$ptree" ] || continue
         case "$HOOK_CWD" in
           "$ptree"|"$ptree"/*)
-            block "git branch/HEAD-moving verb inside PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD" ;;
+            block "git branch/history-moving verb inside PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD" ;;
         esac
         if printf '%s' "$target" | grep -qE "(cd +|-C +|--git-dir[= ]|--work-tree[= ])[\"']?$ptree(/|['\" ;&|]|\$)"; then
-          block "git branch/HEAD-moving verb targeting PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD"
+          block "git branch/history-moving verb targeting PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD"
         fi
       done
     fi

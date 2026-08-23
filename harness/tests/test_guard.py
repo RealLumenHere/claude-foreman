@@ -534,6 +534,23 @@ PRIMARY_MUST_BLOCK = [
     ({"command": "git merge --ff-only origin/feat/x"}, PRIMARY),  # non-default target
     ({"command": f"git -C {PRIMARY} merge --no-ff origin/main"}, WORKTREE),
     ({"command": "git merge --ff-only origin/main && git checkout feat/x"}, PRIMARY),
+    # wq#929: commit-creating verbs. 2719f89 was committed straight onto the
+    # primary's main and went live in the dispatcher (config_sha=2719f89,
+    # pass fdisp-20260823T170102Z) — branch-frozen has to mean the history is
+    # frozen too, not just which branch is checked out.
+    ({"command": 'git commit -am "fix(dispatcher): register 6 orphan lanes"'}, PRIMARY),
+    ({"command": "git commit --amend --no-edit"}, PRIMARY),
+    ({"command": "git add -A && git commit -m x"}, f"{PRIMARY}/dispatcher"),
+    ({"command": "git  \tcommit -m x"}, PRIMARY),  # whitespace evasion
+    ({"command": "git cherry-pick 2719f89"}, PRIMARY),
+    ({"command": "git revert HEAD"}, PRIMARY),
+    ({"command": "git am /tmp/patch.mbox"}, PRIMARY),
+    ({"command": f"git -C {PRIMARY} commit -m x"}, WORKTREE),
+    ({"command": f"cd {PRIMARY} && git add -A && git commit -m x"}, WORKTREE),
+    ({"command": f"git -C /home/lumen/bin cherry-pick abc1234"}, WORKTREE),
+    # wq#929: a sanctioned ff-merge in one segment licenses nothing in the next
+    ({"command": "git merge --ff-only origin/main; git merge feat/x"}, PRIMARY),
+    ({"command": "git merge --ff-only origin/main && git commit --amend"}, PRIMARY),
 ]
 
 PRIMARY_MUST_ALLOW = [
@@ -554,6 +571,22 @@ PRIMARY_MUST_ALLOW = [
     ({"command": "git merge --ff-only origin/main"}, PRIMARY),
     ({"command": f"git -C {PRIMARY} merge --ff-only origin/main"}, WORKTREE),
     ({"command": "git -C /home/lumen/pstack merge --ff-only origin/master"}, WORKTREE),
+    # wq#929: the worker's own commits are the whole point of a worktree
+    ({"command": 'git commit -m "feat: x"'}, WORKTREE),
+    ({"command": "git add -A && git commit --amend --no-edit"}, WORKTREE),
+    ({"command": "/home/lumen/bin/lumen-pr commit"}, WORKTREE),
+    # a commit-ish verb inside an option value or a revision spec is not a verb
+    ({"command": "git log --grep=commit -5"}, PRIMARY),
+    ({"command": 'git rev-parse "HEAD^{commit}"'}, PRIMARY),
+    ({"command": f"git -C {PRIMARY} log --format=%H --no-merges -3"}, WORKTREE),
+    # wq#929: the deploy ff stays allowed when composed — fworker-wq794-a1 was
+    # blocked live on this exact shape (events/fworker-wq794-a1.jsonl) while
+    # trying to deploy a landed PR
+    ({"command": 'git merge --ff-only origin/main; echo "deployed"'}, PRIMARY),
+    ({"command": f"git -C {PRIMARY} merge --ff-only origin/main -q && echo ok"}, WORKTREE),
+    # merge-base is read-only divergence diagnosis, not a merge
+    ({"command": "git merge-base --is-ancestor main origin/main"}, PRIMARY),
+    ({"command": f"git -C /home/lumen/bin merge-base main origin/main"}, WORKTREE),
 ]
 
 
