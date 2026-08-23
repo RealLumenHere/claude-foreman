@@ -1,0 +1,45 @@
+{
+  "errata_for": "reports/opsaudit_a13_baseline_20260821.json",
+  "errata_for_sha256_file": "reports/opsaudit_a13_baseline_20260821.json.sha256",
+  "raised_by": "wq#787 (verify-pass of wq#763/PR#53), fixed under wq#841",
+  "issued_utc": "2026-08-23",
+  "frozen_file_status": "UNCHANGED — byte-identical to the 2026-08-22 artifact, sha256 still verifies. This errata sits beside it; it does not amend it.",
+  "fields_still_reproducible": [
+    "cutoff_utc",
+    "lead_cycle_time_by_lane",
+    "throughput",
+    "wip_in_flight_at_cutoff",
+    "blocked_age_distribution",
+    "time_parked_on_frank"
+  ],
+  "reproduction_check_2026-08-23": "Re-running the shipped script against the live queue.db with the same fixed cutoff (2026-08-21 18:06:42) reproduces every field above exactly. rework_rate is the ONLY divergence.",
+  "field_in_error": {
+    "path": "rework_rate",
+    "as_frozen": {
+      "population": 747,
+      "reopened_marker_in_notes": 12,
+      "rejected_status": 1,
+      "rework_rate_pct": 1.74
+    },
+    "recomputed_2026-08-23_same_rule_same_cutoff": {
+      "reopened_marker_in_notes": 2,
+      "rejected_status": 1,
+      "rework_rate_pct": 0.4
+    },
+    "why_it_moved": "The rule was `notes LIKE '%REOPENED%'`. notes is a mutable field that `wq done` REPLACES wholesale on every close, so a ticket that was genuinely reopened silently left the population the next time anyone closed it. created_at (what the population is keyed on) never changed, so nothing in the artifact showed the loss. Roughly 14 of ~18 markers fleet-wide evaporated in under 24h from ordinary ticket churn, not from any reduction in rework. Two more were observed vanishing during the wq#841 fix itself (wq#755 and wq#760, both re-closed mid-session).",
+    "secondary_defect": "SQLite LIKE is case-insensitive for ASCII, so prose counted too: of the 3 rows matching the rule on 2026-08-23, wq#645 ('wq#626/wq#603 reopened with corrected notes' — about OTHER tickets) and wq#787 (a report quoting the metric's own SQL) are false positives.",
+    "verdict": "1.74 is a floor of unknown tightness, not a measurement. It is NOT a valid comparison point for any later rework figure. Do not plot it in a series."
+  },
+  "replacement": {
+    "signal": "tasks.reopened_count",
+    "description": "Monotonic per-ticket column, bumped by wq on every terminal (done/rejected) -> in-flight (open/claimed/blocked) transition. Nothing a later `wq done`/`wq edit` writes can erase it.",
+    "authoritative_from": "2026-08-23",
+    "pre-epoch_recoverability": "NONE. The oldest queue.db backup (2026-08-14) predates the marker convention entirely and contains zero markers, so the lost reopens cannot be reconstructed from any surviving source. Three reopens (wq#433, wq#755, wq#760, all reopened 2026-08-22 04:36:00) were seeded by hand from evidence captured before their notes were overwritten; everything earlier is gone.",
+    "emitted_by": "reports/opsaudit_a13_flow_metrics.py, baseline_schema 2",
+    "gauges": [
+      "lumen_queue_reopened_total",
+      "lumen_queue_reopened_signal_is_structural",
+      "lumen_queue_rework_rate_pct"
+    ]
+  }
+}

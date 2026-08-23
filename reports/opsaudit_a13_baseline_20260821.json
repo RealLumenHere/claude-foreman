@@ -1,0 +1,325 @@
+{
+  "artifact": "opsaudit_a13_baseline_20260821",
+  "campaign_doc": "/home/lumen/instructions/FLEET_OPS_AUDIT_2026-08-21.md",
+  "cutoff_utc": "2026-08-21 18:06:42",
+  "cutoff_rationale": "earliest created_at among the ops-audit campaign tickets (wq#751); baseline population is every task row that existed strictly before the campaign was seeded, so the campaign's own output cannot contaminate its own baseline",
+  "lead_cycle_time_by_lane": {
+    "auto": {
+      "lead_time_hours": {
+        "n": 116,
+        "mean_h": 34.06,
+        "median_h": 2.56,
+        "p90_h": 33.08,
+        "max_h": 839.13
+      },
+      "cycle_time_hours": {
+        "n": 110,
+        "mean_h": 15.56,
+        "median_h": 0.09,
+        "p90_h": 0.4,
+        "max_h": 836.45
+      }
+    },
+    "build": {
+      "lead_time_hours": {
+        "n": 112,
+        "mean_h": 60.72,
+        "median_h": 8.93,
+        "p90_h": 101.3,
+        "max_h": 948.47
+      },
+      "cycle_time_hours": {
+        "n": 90,
+        "mean_h": 12.89,
+        "median_h": 0.11,
+        "p90_h": 0.39,
+        "max_h": 934.53
+      }
+    },
+    "fable": {
+      "lead_time_hours": {
+        "n": 40,
+        "mean_h": 52.37,
+        "median_h": 63.73,
+        "p90_h": 69.94,
+        "max_h": 73.52
+      },
+      "cycle_time_hours": {
+        "n": 33,
+        "mean_h": 0.21,
+        "median_h": 0.05,
+        "p90_h": 0.19,
+        "max_h": 4.4
+      }
+    },
+    "fleet": {
+      "lead_time_hours": {
+        "n": 24,
+        "mean_h": 9.94,
+        "median_h": 9.53,
+        "p90_h": 19.82,
+        "max_h": 35.53
+      },
+      "cycle_time_hours": {
+        "n": 23,
+        "mean_h": 0.23,
+        "median_h": 0.23,
+        "p90_h": 0.45,
+        "max_h": 0.49
+      }
+    },
+    "fleet-fires": {
+      "lead_time_hours": {
+        "n": 3,
+        "mean_h": 13.26,
+        "median_h": 13.26,
+        "p90_h": 13.26,
+        "max_h": 13.26
+      },
+      "cycle_time_hours": {
+        "n": 0
+      }
+    },
+    "foreman-auto": {
+      "lead_time_hours": {
+        "n": 4,
+        "mean_h": 12.38,
+        "median_h": 10.88,
+        "p90_h": 17.1,
+        "max_h": 18.94
+      },
+      "cycle_time_hours": {
+        "n": 4,
+        "mean_h": 0.18,
+        "median_h": 0.18,
+        "p90_h": 0.27,
+        "max_h": 0.28
+      }
+    },
+    "foreman-tok": {
+      "lead_time_hours": {
+        "n": 7,
+        "mean_h": 15.11,
+        "median_h": 12.85,
+        "p90_h": 27.55,
+        "max_h": 27.71
+      },
+      "cycle_time_hours": {
+        "n": 7,
+        "mean_h": 0.34,
+        "median_h": 0.33,
+        "p90_h": 0.57,
+        "max_h": 0.63
+      }
+    },
+    "github": {
+      "lead_time_hours": {
+        "n": 17,
+        "mean_h": 1.64,
+        "median_h": 1.17,
+        "p90_h": 3.25,
+        "max_h": 3.47
+      },
+      "cycle_time_hours": {
+        "n": 15,
+        "mean_h": 0.13,
+        "median_h": 0.1,
+        "p90_h": 0.22,
+        "max_h": 0.38
+      }
+    },
+    "memory": {
+      "lead_time_hours": {
+        "n": 20,
+        "mean_h": 14.86,
+        "median_h": 17.24,
+        "p90_h": 26.65,
+        "max_h": 28.94
+      },
+      "cycle_time_hours": {
+        "n": 20,
+        "mean_h": 0.65,
+        "median_h": 0.29,
+        "p90_h": 1.13,
+        "max_h": 5.91
+      }
+    },
+    "pokemon": {
+      "lead_time_hours": {
+        "n": 73,
+        "mean_h": 3.2,
+        "median_h": 1.14,
+        "p90_h": 10.1,
+        "max_h": 22.63
+      },
+      "cycle_time_hours": {
+        "n": 69,
+        "mean_h": 0.64,
+        "median_h": 0.22,
+        "p90_h": 0.67,
+        "max_h": 21.32
+      }
+    },
+    "research": {
+      "lead_time_hours": {
+        "n": 128,
+        "mean_h": 27.9,
+        "median_h": 3.37,
+        "p90_h": 45.67,
+        "max_h": 952.03
+      },
+      "cycle_time_hours": {
+        "n": 116,
+        "mean_h": 0.05,
+        "median_h": 0.03,
+        "p90_h": 0.08,
+        "max_h": 0.89
+      }
+    },
+    "t1": {
+      "lead_time_hours": {
+        "n": 1,
+        "mean_h": 0.21,
+        "median_h": 0.21,
+        "p90_h": 0.21,
+        "max_h": 0.21
+      },
+      "cycle_time_hours": {
+        "n": 1,
+        "mean_h": 0.03,
+        "median_h": 0.03,
+        "p90_h": 0.03,
+        "max_h": 0.03
+      }
+    },
+    "user": {
+      "lead_time_hours": {
+        "n": 54,
+        "mean_h": 59.69,
+        "median_h": 3.07,
+        "p90_h": 162.14,
+        "max_h": 311.35
+      },
+      "cycle_time_hours": {
+        "n": 0
+      }
+    }
+  },
+  "throughput": {
+    "weekly_counts_overall": {
+      "2026-W27": 9,
+      "2026-W28": 119,
+      "2026-W29": 226,
+      "2026-W30": 6,
+      "2026-W31": 1,
+      "2026-W32": 22,
+      "2026-W33": 188,
+      "2026-W34": 28
+    },
+    "mean_per_week_overall": 74.9,
+    "weekly_counts_by_lane": {
+      "auto": {
+        "2026-W27": 9,
+        "2026-W28": 40,
+        "2026-W29": 40,
+        "2026-W32": 3,
+        "2026-W33": 22,
+        "2026-W34": 2
+      },
+      "build": {
+        "2026-W28": 5,
+        "2026-W29": 55,
+        "2026-W30": 3,
+        "2026-W32": 15,
+        "2026-W33": 30,
+        "2026-W34": 4
+      },
+      "fable": {
+        "2026-W29": 40
+      },
+      "fleet": {
+        "2026-W33": 24
+      },
+      "fleet-fires": {
+        "2026-W34": 3
+      },
+      "foreman-auto": {
+        "2026-W34": 4
+      },
+      "foreman-tok": {
+        "2026-W34": 7
+      },
+      "github": {
+        "2026-W33": 17
+      },
+      "memory": {
+        "2026-W33": 20
+      },
+      "pokemon": {
+        "2026-W33": 66,
+        "2026-W34": 7
+      },
+      "research": {
+        "2026-W28": 47,
+        "2026-W29": 71,
+        "2026-W32": 4,
+        "2026-W33": 5,
+        "2026-W34": 1
+      },
+      "t1": {
+        "2026-W29": 1
+      },
+      "user": {
+        "2026-W28": 27,
+        "2026-W29": 19,
+        "2026-W30": 3,
+        "2026-W31": 1,
+        "2026-W33": 4
+      }
+    }
+  },
+  "wip_in_flight_at_cutoff": {
+    "count": 147,
+    "caveat": "total in-flight count only (created<cutoff, not done by cutoff). queue.db has no status-transition log, so open/claimed/blocked sub-state AT cutoff cannot be reconstructed from current rows alone \u2014 only CURRENT status is stored. See report for what this blocks."
+  },
+  "rework_rate": {
+    "population": 747,
+    "reopened_marker_in_notes": 12,
+    "rejected_status": 1,
+    "rework_rate_pct": 1.74
+  },
+  "blocked_age_distribution": {
+    "not_reconstructable_at_cutoff": true,
+    "reason": "no blocked_at column / no status-transition log in queue.db",
+    "substitute": "campaign doc F1 (measured 2026-08-21, same day as this cutoff): 52 blocked tickets fleet-wide, 23 open+blocked in lane=user, avg age of open user ticket 23 days, oldest blocked 41 days, wq#383 33 days FRANK DECISION PENDING as of audit time"
+  },
+  "time_parked_on_frank": {
+    "source": "campaign doc F1, measured 2026-08-21 (this cutoff's day)",
+    "items_parked": 74,
+    "blocked_naming_frank_gate_approval": 23,
+    "open_blocked_in_user_lane": 23,
+    "avg_age_open_user_ticket_days": 23,
+    "oldest_blocked_days": 41,
+    "wq383_days_pending_at_audit": 33
+  },
+  "worker_success_rate": {
+    "source": "reports/opsaudit_a1_worker_success.md (wq#751, same campaign, same day)",
+    "attempts": 149,
+    "tickets": 69,
+    "attempt_level_success_rate_pct": 22,
+    "killed_by_turn_backstop_pct": 44,
+    "same_ceiling_retry_recovery_pct": 4.8,
+    "worker_hours_total": 11.3,
+    "worker_hours_on_success": 2.5
+  },
+  "cost_per_successful_ticket": {
+    "basis": "Max subscription (oauth_token_used=true for 100% of A1's sample) \u2014 no marginal per-token dollar cost, so cost is worker-time against the shared weekly quota, not USD (audit R2)",
+    "worker_hours_per_success": 0.81,
+    "successful_tickets_in_a1_sample": 14,
+    "mean_output_tokens_by_model": {
+      "claude-sonnet-5": 56825,
+      "claude-opus-5": 186644,
+      "claude-fable-5": 142454
+    }
+  }
+}
