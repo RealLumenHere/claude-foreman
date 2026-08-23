@@ -55,14 +55,18 @@ MANIFEST_PATH = os.environ.get(
 # has to remember) which working tree a ticket's fworker should be pointed at. /home/lumen
 # itself is NOT a git repo (no .git) — anything landing there crashes fworker's own
 # git-worktree-add step, which is exactly the failure this table exists to prevent.
-# Sources: LANE_BOUNDARIES.md §1 (wq#512, pokemon lane owns /home/lumen/pokemon) and
-# design/T2A_WORKER_HARNESS_DESIGN.md (build/auto tickets worktree off FOREMAN_ROOT itself
-# — this worktree's own .git gitdir points at FOREMAN_ROOT/.git/worktrees/<this>).
+# Sources: LANE_BOUNDARIES.md §1 (wq#512, pokemon lane owns /home/lumen/pokemon); the
+# 'build' lane's own tickets are foreman work and dispatch off FOREMAN_ROOT (this file's
+# lane, as this very ticket's worktree shows).
 # Lanes not listed here have no single canonical repo (or none confirmed) — dispatch-cmd
 # refuses to guess and requires an explicit --repo instead.
+# wq#830: 'auto' is deliberately NOT listed. It is wq's CLI default lane (`wq add` with no
+# --lane) and so spans arbitrary repos — wq#688 targets questfree, wq#306 vault, wq#545
+# wq-tooling. Mapping it to FOREMAN_ROOT made `dispatch-cmd <auto-ticket>` emit a silently
+# wrong --repo. Do not re-add it without the per-entry Frank confirmation every other
+# non-obvious entry below carries; the honest fix for an auto ticket is an explicit --repo.
 LANE_REPO = {
     "build": FOREMAN_ROOT,
-    "auto": FOREMAN_ROOT,
     "foreman-tok": FOREMAN_ROOT,   # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
     "foreman-auto": FOREMAN_ROOT,  # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
     "pokemon": "/home/lumen/pokemon",

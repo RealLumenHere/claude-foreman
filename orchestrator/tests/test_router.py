@@ -380,10 +380,27 @@ def test_dispatch_cmd_unmapped_lane_without_repo_raises_never_defaults_to_home_l
         router.dispatch_cmd(713)
 
 
-def test_lane_repo_map_covers_build_and_auto_with_foreman_root():
+def test_lane_repo_map_covers_build_with_foreman_root():
     assert router.repo_for_lane("build") == router.FOREMAN_ROOT
-    assert router.repo_for_lane("auto") == router.FOREMAN_ROOT
     assert router.repo_for_lane("nonexistent-lane") is None
+
+
+# wq#830: 'auto' is wq's CLI default lane and spans arbitrary repos (wq#688 questfree,
+# wq#306 vault, wq#545 wq-tooling), so it must not resolve to FOREMAN_ROOT. Dispatching an
+# auto ticket without --repo has to fail loudly, not hand fworker the wrong tree.
+def test_auto_lane_has_no_canonical_repo():
+    assert router.repo_for_lane("auto") is None
+
+
+def test_dispatch_cmd_auto_lane_without_repo_raises(monkeypatch):
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "lane": "auto", "model": "claude-sonnet-5", "effort": "high",
+        "archetype": "standard-engineering",
+    })
+    with pytest.raises(SystemExit, match="no LANE_REPO entry"):
+        router.dispatch_cmd(688)
+    cmd = router.dispatch_cmd(688, "/home/lumen/questfree")
+    assert cmd[cmd.index("--repo") + 1] == "/home/lumen/questfree"
 
 
 # ---- wq#778: classifier corroboration gate (from wq#750 audit F1/F2) --------------------
