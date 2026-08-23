@@ -1,0 +1,104 @@
+--- /home/lumen/.npm-global/lib/node_modules/supergateway/dist/gateways/stdioToStatelessStreamableHttp.js	2026-07-06 01:43:14.398655422 +0000
++++ /home/lumen/worktrees/wq829-a1/ops/wq829-mcp-gateway/stdioToStatelessStreamableHttp.js	2026-08-23 04:01:16.405221774 +0000
+@@ -14,6 +14,53 @@
+     return Number.isFinite(g) && g >= 0 ? g : 2000;
+ };
+ /**
++ * wq#829: admission gate for the stateless per-request child model. Every POST
++ * spawns a full child process; under parallel-chat fan-out the unbounded spawn
++ * storm drives box-wide memory PSI, which trips mcp-pressure-guard into a
++ * whole-unit restart — the actual "Commander is down" outage. Cap concurrent
++ * children and queue the overflow; a request that can't get a slot within the
++ * queue timeout is shed with 503 + Retry-After instead of dying mid-call.
++ */
++const maxConcurrentChildren = () => {
++    const n = Number(process.env.SUPERGATEWAY_MAX_CONCURRENT_CHILDREN);
++    return Number.isFinite(n) && n > 0 ? n : 12;
++};
++const queueTimeoutMs = () => {
++    const t = Number(process.env.SUPERGATEWAY_QUEUE_TIMEOUT_MS);
++    return Number.isFinite(t) && t >= 0 ? t : 30000;
++};
++let activeChildren = 0;
++const slotWaiters = [];
++const acquireChildSlot = () => {
++    if (activeChildren < maxConcurrentChildren()) {
++        activeChildren++;
++        return Promise.resolve(true);
++    }
++    return new Promise((resolve) => {
++        const waiter = {
++            resolve,
++            timer: setTimeout(() => {
++                const i = slotWaiters.indexOf(waiter);
++                if (i !== -1)
++                    slotWaiters.splice(i, 1);
++                resolve(false);
++            }, queueTimeoutMs()),
++        };
++        waiter.timer.unref?.();
++        slotWaiters.push(waiter);
++    });
++};
++const releaseChildSlot = () => {
++    const next = slotWaiters.shift();
++    if (next) {
++        clearTimeout(next.timer);
++        next.resolve(true); // slot transfers to the queued request
++    }
++    else {
++        activeChildren--;
++    }
++};
++/**
+  * Force-kill only the processes that still belong to THIS request's own
+  * session — the stateless child plus the workers it spawned to serve the
+  * request. Any process that deliberately detached — called setsid (new
+@@ -124,6 +171,47 @@
+         // In stateless mode, create a new instance of transport and server for each request
+         // to ensure complete isolation. A single instance would cause request ID collisions
+         // when multiple clients connect concurrently.
++        // wq#829: admission first — no server/transport/child until a slot is held.
++        // Capture client aborts from before/while we sit in the queue: res 'close'
++        // fires once and won't re-fire for listeners added after the fact. (Do NOT
++        // test req.destroyed for this — express.json() has already consumed the
++        // body, and a fully-read IncomingMessage auto-destroys, so req.destroyed
++        // is true on every request.)
++        let clientGone = false;
++        res.on('close', () => {
++            clientGone = true;
++        });
++        const admitted = await acquireChildSlot();
++        if (!admitted) {
++            logger.error(`Shedding request: ${activeChildren} children in flight, queue wait exceeded ${queueTimeoutMs()}ms`);
++            res
++                .status(503)
++                .set('Retry-After', '5')
++                .json({
++                jsonrpc: '2.0',
++                error: {
++                    code: -32000,
++                    message: `MCP gateway saturated (${maxConcurrentChildren()} children in flight); retry shortly`,
++                },
++                id: null,
++            });
++            return;
++        }
++        let slotReleased = false;
++        const releaseSlotOnce = () => {
++            if (slotReleased)
++                return;
++            slotReleased = true;
++            releaseChildSlot();
++        };
++        // 'close' fires on every outcome (finish, abort, error) in Node >= 12.
++        res.on('close', releaseSlotOnce);
++        if (clientGone) {
++            // Client hung up while this request sat in the queue — 'close' already
++            // fired and will not re-fire, so release the slot by hand.
++            releaseSlotOnce();
++            return;
++        }
+         try {
+             const server = new Server({ name: 'supergateway', version: getVersion() }, { capabilities: {} });
+             const transport = new StreamableHTTPServerTransport({
