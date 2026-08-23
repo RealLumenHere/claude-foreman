@@ -49,9 +49,32 @@ cloud `claude -p` worker should call it first and treat a non-zero exit as
 
 ## Reserve floors
 
-Defaults in `floors.json` (session >=20% remaining, weekly_all >=15%
-remaining, Fable weekly_scoped >=50% remaining reserved for Frank's
-interactive use). Edit that file to tune; the daemon re-reads it every poll.
+Current `floors.json`: `session_min_remaining_pct`, `weekly_all_min_remaining_pct`,
+and `fable_weekly_min_remaining_pct` are all **0**, and off-peak throttling is
+disabled (`off_peak_days_pt: []`). Edit that file to tune; the daemon re-reads
+it every poll.
+
+**Why they're zeroed, not tuned.** wq#734/SESSION_ECONOMICS.md §3/§8 (wq#738)
+found the previous floors were denominated in the wrong window: across 39
+fleet transcripts spanning four days, the 5-hour window never once produced a
+utilization reading (all 7 `five_hour` `rate_limit_event` frames carry
+`status: allowed` with no utilization field), while the 7-day window walked
+62% -> 80%, 18 net points in 77.9 hours — the window the old
+`session_min_remaining_pct: 20` floor guarded never bound, and
+`weekly_all_min_remaining_pct: 15` guarded the one that actually moves. wq#734
+priced that window at >=$16.32 of API list price per point, with a median
+build session costing <=0.97 points — so the old 15-point weekly floor was
+roughly 15 median build sessions of reserve, held back from a window that, per
+Anthropic's own error reference, can be exhausted by "a single burst of heavy
+activity" regardless of session-window state.
+
+wq#738 put a re-tune of both numbers to Frank with that exchange rate in
+hand. Frank's actual answer, given directly (not through the ticket) and
+applied across 2026-08-21/22/23, went further than a re-tune: remove all
+throughput throttling fleet-wide — lane caps raised to 999, reserve floors
+zeroed, off-peak disabled (commit `890afe3`, refs wq#715). The only remaining
+real limit is `cloud_ceiling=3` concurrent, the account's own session cap.
+**Do not restore non-zero floors without a new, explicit Frank instruction.**
 
 `fable_weekly_min_remaining_pct` is a single static number. For a Frank-ruled
 time-stepped reserve (e.g. "keep >=10% through Tuesday, may burn to 0% from
