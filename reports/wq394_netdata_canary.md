@@ -104,6 +104,15 @@ synchronous worker session. What's running now:
   Both ticks were during the post-install ML training burst
   (`netdata_cpu_pct` ~25% over a 14s window) — **not representative**, which
   is exactly why this needs the full 48h window rather than a snapshot.
+  > **Errata (wq#865, 2026-08-23):** the sentence above was checked against
+  > 24h of soak data and is wrong on both counts. ~25% is steady state, not a
+  > burst (min 21.8%, max 26.2%, flat across 24h), and it is not ML — per-PID
+  > cgroup attribution puts the ML threads at 0.8% of one core, ~3% of
+  > netdata's CPU, with `apps.plugin` and the cgroups collector accounting for
+  > most of it. The reading is also per-core, not a share of the host: ÷44
+  > cores it is 0.562%, which passes the gate. Left in place rather than
+  > edited out so the original call stays visible next to the check.
+  > See `reports/wq865_canary_cpu_attribution.md`.
 - `analyze.py` refuses to produce a recommendation before 48h have elapsed
   since the marker, and prints GO/HOLD against placeholder thresholds
   (<2% avg CPU share, <3W estimated draw) that whoever runs it should sanity

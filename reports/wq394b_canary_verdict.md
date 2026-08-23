@@ -99,6 +99,17 @@ can't stay alive across the remaining ~24h to do it.
 CPU/watts overhead remains — the two questions below are the actual blockers
 on a fleet-wide rollout decision, both requiring Frank:
 
+> **Addendum (wq#865, 2026-08-23):** the normalization fix above was
+> independently reconfirmed by direct cgroup measurement, and the
+> `total_cpu_pct` finding flagged here as future cleanup is now fixed in
+> `sampler.py`. Two items qualify "no open question remains", though: netdata
+> RSS is still climbing at soak hour 24 (+12.0MB/h, 329→615MB, no gate
+> criterion and no configured dbengine ceiling), and a 2%-of-host threshold is
+> a 0.08-core budget on a 4-core N100 versus 0.88 cores here — netdata's
+> measured 0.25 absolute cores passes on this box but would need to be 3.1x
+> cheaper to pass on fleet-target hardware. Both are Frank decisions, added to
+> the list below. See `reports/wq865_canary_cpu_attribution.md`.
+
 1. **MCP capability scope.** `journal`/`procs`/`network-connections` MCP
    tools are cloud-claim-gated in netdata v2.11 — verified `execute_function`
    on `processes` returns `not authorized` even with a valid API key while

@@ -28,6 +28,12 @@ def main():
     ap.add_argument("--csv", default=DEFAULT_CSV)
     ap.add_argument("--start-marker", default=DEFAULT_MARKER)
     ap.add_argument("--min-hours", type=float, default=48.0)
+    ap.add_argument(
+        "--ncpu", type=int, default=None,
+        help="logical core count of the SAMPLED host (default: this host's). "
+             "Set this when analyzing a CSV copied from another machine — the "
+             "netdata CPU normalization below is wrong otherwise.",
+    )
     args = ap.parse_args()
 
     if not os.path.exists(args.start_marker):
@@ -53,7 +59,7 @@ def main():
             if row["netdata_cpu_pct"]:
                 cpu_pcts.append(float(row["netdata_cpu_pct"]))
             if row["netdata_rss_kb"]:
-                rss.append(int(row["netdata_rss_kb"]))
+                rss.append((int(row["ts"]), int(row["netdata_rss_kb"])))
 
     if not watts or not cpu_pcts:
         print("INSUFFICIENT_SAMPLES: fewer than 2 rows recorded")
@@ -65,10 +71,10 @@ def main():
     # run 0-100*ncpu), NOT already a share of total system capacity. The
     # go/hold thresholds below are expressed as system-wide share, so it must
     # be normalized by core count before comparing.
-    ncpu = os.cpu_count() or 1
+    ncpu = args.ncpu or os.cpu_count() or 1
     avg_cpu_per_core = statistics.mean(cpu_pcts)
     avg_cpu = avg_cpu_per_core / ncpu
-    avg_rss_mb = statistics.mean(rss) / 1024 if rss else 0.0
+    avg_rss_mb = statistics.mean(v for _, v in rss) / 1024 if rss else 0.0
     est_netdata_watts = avg_watts * (avg_cpu / 100)
 
     print(f"samples: {len(watts)}")
@@ -76,6 +82,17 @@ def main():
     print(f"avg netdata CPU (single-core-equivalent, like top's %CPU): {avg_cpu_per_core:.3f}%")
     print(f"avg netdata CPU share of total ({ncpu} cores): {avg_cpu:.3f}%")
     print(f"avg netdata RSS: {avg_rss_mb:.1f}MB")
+    if len(rss) >= 8:
+        # RSS is not a gate criterion (no threshold is defined for it), but a
+        # still-climbing working set at the end of the soak means the average
+        # above is a snapshot of a moving number, so show the trend. wq#865
+        # measured +8.6MB/h still rising at hour 24 on the first canary.
+        tail = rss[-max(4, len(rss) // 4):]
+        d_h = (tail[-1][0] - tail[0][0]) / 3600
+        slope = (tail[-1][1] - tail[0][1]) / 1024 / d_h if d_h > 0 else 0.0
+        print(f"netdata RSS trend: {rss[0][1] / 1024:.0f}MB -> {rss[-1][1] / 1024:.0f}MB "
+              f"over the window, {slope:+.1f}MB/h across the final {d_h:.1f}h "
+              f"(not gated — flag for review if still climbing at soak end)")
     print(f"estimated netdata power draw (pkg_watts * cpu_share): {est_netdata_watts:.3f}W")
     print(
         "NOTE: this is a proportional estimate, not a per-process power meter — "
