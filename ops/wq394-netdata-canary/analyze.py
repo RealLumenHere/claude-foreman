@@ -60,13 +60,21 @@ def main():
         return 2
 
     avg_watts = statistics.mean(watts)
-    avg_cpu = statistics.mean(cpu_pcts)
+    # sampler.py's netdata_cpu_pct is CPUUsageNSec-delta / wall-time — a
+    # single-core-equivalent percentage (like `top`'s %CPU column, which can
+    # run 0-100*ncpu), NOT already a share of total system capacity. The
+    # go/hold thresholds below are expressed as system-wide share, so it must
+    # be normalized by core count before comparing.
+    ncpu = os.cpu_count() or 1
+    avg_cpu_per_core = statistics.mean(cpu_pcts)
+    avg_cpu = avg_cpu_per_core / ncpu
     avg_rss_mb = statistics.mean(rss) / 1024 if rss else 0.0
     est_netdata_watts = avg_watts * (avg_cpu / 100)
 
     print(f"samples: {len(watts)}")
     print(f"avg package watts (whole host, RAPL pkg-0): {avg_watts:.2f}W")
-    print(f"avg netdata CPU share of total: {avg_cpu:.3f}%")
+    print(f"avg netdata CPU (single-core-equivalent, like top's %CPU): {avg_cpu_per_core:.3f}%")
+    print(f"avg netdata CPU share of total ({ncpu} cores): {avg_cpu:.3f}%")
     print(f"avg netdata RSS: {avg_rss_mb:.1f}MB")
     print(f"estimated netdata power draw (pkg_watts * cpu_share): {est_netdata_watts:.3f}W")
     print(
