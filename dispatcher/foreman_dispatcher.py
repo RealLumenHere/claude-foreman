@@ -17,7 +17,10 @@ CLI:  foreman_dispatcher.py run --once [--dry-run]
       no spawns, no state writes, no ntfy.)
 
 Decision-log events (one JSON object per line, file + stdout):
-  pass_start / pass_end    pass boundaries
+  pass_start / pass_end    pass boundaries (pass_start carries config_path + config_sha —
+                           the config is read from HEAD of its repo, wq#772, never the raw
+                           working-tree file, so this is the only place "what config is
+                           live" is answerable from)
   skip                     per-ticket refusal: stage + reason (incl. runaway_stuck —
                            wq#718's runaway.py; see stuck_ticket_ids())
   spawn / would_spawn      per-ticket dispatch (or dry-run equivalent)
@@ -95,13 +98,38 @@ class ConfigError(Exception):
 
 # ---- config (§4: allowlist, fail-closed on any invalidity) ---------------------------
 
+def _git_show_committed(path):
+    """Read `path` as it stands COMMITTED at HEAD of its containing repo (wq#772) — never
+    the raw working-tree file. An uncommitted edit or a `git clean` must not change live
+    policy. Returns (raw_text, sha). Fails loud (ConfigError); no working-tree fallback."""
+    abspath = os.path.abspath(path)
+    repo_dir = os.path.dirname(abspath)
+
+    def git(*args):
+        try:
+            p = subprocess.run(["git", "-C", repo_dir, *args],
+                               capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise ConfigError(f"config {path}: git {' '.join(args)} failed: {e}")
+        if p.returncode != 0:
+            raise ConfigError(f"config {path}: git {' '.join(args)} failed: {p.stderr.strip()}")
+        return p.stdout
+
+    toplevel = git("rev-parse", "--show-toplevel").strip()
+    sha = git("rev-parse", "HEAD").strip()
+    relpath = os.path.relpath(abspath, toplevel)
+    return git("show", f"HEAD:{relpath}"), sha
+
+
 def load_config(path=None):
+    """Returns (cfg, lane_warnings, sha) — sha is the commit the config was read from
+    (wq#772: pass_start logging, 'what config is live' answerable from the log alone)."""
     path = path or CONFIG_PATH
     try:
-        with open(path) as f:
-            cfg = json.load(f)
-    except (OSError, ValueError) as e:
-        raise ConfigError(f"unreadable config {path}: {e}")
+        raw, sha = _git_show_committed(path)
+        cfg = json.loads(raw)
+    except ValueError as e:
+        raise ConfigError(f"config {path}: invalid JSON in committed config: {e}")
     if not isinstance(cfg, dict):
         raise ConfigError(f"config {path}: top level must be an object")
 
@@ -161,7 +189,7 @@ def load_config(path=None):
     # forced requires_approval=True regardless of config, silently ignoring Frank's
     # intentional disarm. Safety note: if re-enabling, also restore the
     # `or lane == FIRE_LANE` fallback in stage 5 below.
-    return cfg, lane_warnings
+    return cfg, lane_warnings, sha
 
 
 # ---- decision log (§8) ---------------------------------------------------------------
@@ -725,8 +753,8 @@ def run_pass(dry_run=False):
         return 0
 
     try:
-        cfg, lane_warnings = load_config()  # §4: structural errors fail closed;
-        # wq#824: per-lane errors are soft (lane disabled, pass continues)
+        cfg, lane_warnings, config_sha = load_config()  # §4: structural errors fail
+        # closed; wq#824: per-lane errors are soft (lane disabled, pass continues)
     except ConfigError as e:
         log.emit("error", stage="config", reason=str(e))
         ntfy(f"dispatcher: invalid config — pass aborted: {e}")
@@ -746,7 +774,8 @@ def run_pass(dry_run=False):
 
     rc = 0
     try:
-        log.emit("pass_start", dry_run=dry_run)
+        log.emit("pass_start", dry_run=dry_run, config_path=CONFIG_PATH,
+                 config_sha=config_sha)
         summary = _do_pass(cfg, log, load_state(), dry_run)
         log.emit("pass_end", **summary)
     except Exception as e:  # noqa: BLE001 — pass boundary: log + ntfy, never silent
