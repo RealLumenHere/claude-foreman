@@ -19,6 +19,11 @@ RULES:
   everything. Read is bounded too (wq#730): an unlimited Read gets a default line limit
   injected, and re-reading a file you already have unchanged is blocked outright — prefer
   a bounded `grep -n`/`Read(offset,limit)` up front rather than one giant read.
+- Output discipline (wq#632): what you emit this turn is context you re-read on every
+  later turn. No preamble, no ceremony, no narrating a tool call you are about to make.
+  Never restate code, a diff, or file contents in prose — the tool call already showed
+  them; cite `path:line` instead. Say each thing once. Board/status lines: one line, no
+  decoration. Final summary: <=200 tokens — what landed, PR url, what's left.
 - Working directory: a dedicated git worktree (path below) — nothing outside it is yours;
   other lanes' worktrees aren't either. Land via lumen-pr (branch pre-checked-out:
   `/home/lumen/bin/lumen-pr commit` / `open` / `land` from here), never direct-to-main.
