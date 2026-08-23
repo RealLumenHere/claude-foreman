@@ -440,7 +440,7 @@ not a broader "any non-success" rate; see circuit_breaker.py's module docstring 
 that would be dominated by ordinary multi-attempt-ticket noise) over a trailing window.
 Above `FOREMAN_BREAKER_MIN_SAMPLES` samples and `FOREMAN_BREAKER_THRESHOLD` rate, it
 `disarm()`s: **touches DISPATCH_DISARM unconditionally first**, then best-effort
-notifies (notify_sinks.py: ntfy urgent + optional xfce4-notifyd sqlite log). The order
+notifies (notify_sinks.py: ntfy urgent + notify-send over SSH to Frank's desktop). The order
 is the guardrail: a notify failure can never suppress or appear to undo the disarm that
 already happened. The same DISARM file is the dispatcher's own kill switch (MUST 8), so
 the very next pass halts at stage 0 without the breaker needing to run again.

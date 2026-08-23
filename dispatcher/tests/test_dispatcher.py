@@ -131,7 +131,7 @@ def denv(tmp_path, monkeypatch):
     monkeypatch.setattr(self_heal, "RUNS_ROOT", str(runs_root))
     monkeypatch.setattr(self_heal, "WQ_BIN", WQ_BIN)
     monkeypatch.setattr(notify_sinks, "NTFY_BIN", fake_ntfy)
-    monkeypatch.setattr(notify_sinks, "XFCE_NOTIFYD_DB", "")
+    monkeypatch.setattr(notify_sinks, "DESKTOP_SSH_HOST", "")
 
     return {"tmp": tmp_path, "repo": str(repo_dir), "approvals": approvals,
             "units_state": units_state, "calls_log": calls_log, "ntfy_log": ntfy_log,

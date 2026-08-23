@@ -30,7 +30,7 @@ before kill_switch()'s own DISARM check has any chance to matter and before conf
 load, so a broken config.json can never suppress a trip. When the window has enough
 samples (MIN_SAMPLES) and the failure rate exceeds FAILURE_RATE_THRESHOLD, `disarm()`
 touches DISPATCH_DISARM FIRST, unconditionally — the guardrail is explicit that this
-MUST fail safe even if notify_sinks can't reach ntfy or xfce4-notifyd, so the disarm
+MUST fail safe even if notify_sinks can't reach ntfy or Frank's desktop, so the disarm
 write happens before either notification attempt and neither attempt's outcome can
 undo it.
 
@@ -162,7 +162,7 @@ def disarm(reason):
     try:
         return notify_sinks.notify_critical(msg, title="foreman circuit breaker TRIPPED")
     except Exception:  # noqa: BLE001 — notification is never load-bearing here
-        return {"ntfy": False, "xfce_notifyd": False}
+        return {"ntfy": False, "desktop": False}
 
 
 def check_and_trip(now=None, dry_run=False):

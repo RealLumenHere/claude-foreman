@@ -43,6 +43,30 @@
     "user": {
       "enabled": false,
       "max_per_day": 1
+    },
+    "auto": {
+      "enabled": true,
+      "max_per_day": 999
+    },
+    "fleet": {
+      "enabled": true,
+      "max_per_day": 999
+    },
+    "fleet-spend": {
+      "enabled": true,
+      "max_per_day": 999
+    },
+    "ops": {
+      "enabled": true,
+      "max_per_day": 999
+    },
+    "research": {
+      "enabled": true,
+      "max_per_day": 999
+    },
+    "pokemon": {
+      "enabled": false,
+      "max_per_day": 1
     }
   }
 }

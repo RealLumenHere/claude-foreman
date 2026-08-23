@@ -63,7 +63,7 @@ def henv(tmp_path, monkeypatch):
     monkeypatch.setattr(dh, "STATE_PATH", str(tmp_path / "dispatcher_health" / "state.json"))
     monkeypatch.setattr(dh, "CONSECUTIVE_THRESHOLD", 2)
     monkeypatch.setattr(notify_sinks, "NTFY_BIN", fake_ntfy)
-    monkeypatch.setattr(notify_sinks, "XFCE_NOTIFYD_DB", "")
+    monkeypatch.setattr(notify_sinks, "DESKTOP_SSH_HOST", "")
 
     return {"tmp": tmp_path, "wq_db": str(wq_db), "ntfy_log": ntfy_log,
             "runs_root": runs_root, "dispatcher_log": tmp_path / "dispatcher.log"}

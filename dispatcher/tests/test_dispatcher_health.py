@@ -40,7 +40,7 @@ def henv(tmp_path, monkeypatch):
     monkeypatch.setattr(dh, "CONSECUTIVE_THRESHOLD", 2)
     monkeypatch.setattr(dh, "NTFY_DEDUP_HOURS", 1)
     monkeypatch.setattr(notify_sinks, "NTFY_BIN", fake_ntfy)
-    monkeypatch.setattr(notify_sinks, "XFCE_NOTIFYD_DB", "")
+    monkeypatch.setattr(notify_sinks, "DESKTOP_SSH_HOST", "")
 
     return {"tmp": tmp_path, "log_path": log_path, "ntfy_log": ntfy_log}
 

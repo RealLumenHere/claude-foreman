@@ -42,7 +42,7 @@ def benv(tmp_path, monkeypatch):
     monkeypatch.setattr(cb, "RUNS_ROOT", str(runs_root))
     monkeypatch.setattr(cb, "DISARM_PATH", str(disarm))
     monkeypatch.setattr(notify_sinks, "NTFY_BIN", fake_ntfy)
-    monkeypatch.setattr(notify_sinks, "XFCE_NOTIFYD_DB", "")
+    monkeypatch.setattr(notify_sinks, "DESKTOP_SSH_HOST", "")
     monkeypatch.setattr(cb, "WINDOW_MINUTES", 90)
     monkeypatch.setattr(cb, "MIN_SAMPLES", 5)
     monkeypatch.setattr(cb, "FAILURE_RATE_THRESHOLD", 0.75)
