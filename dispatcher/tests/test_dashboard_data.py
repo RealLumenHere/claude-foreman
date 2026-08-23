@@ -42,8 +42,16 @@ def ddenv(tmp_path, monkeypatch):
     runs_root = tmp_path / "_runs"
     runs_root.mkdir()
     wq_db = tmp_path / "scratch_wq.db"
+    # config.json is read from HEAD of its own repo (wq#772), never the working tree.
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+                   check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "test"], check=True)
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps(BASE_CONFIG))
+    subprocess.run(["git", "-C", str(tmp_path), "add", "config.json"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "initial test config"],
+                   check=True)
     gov_state = tmp_path / "gov_state.json"
     gov_state.write_text(json.dumps({"limits": {"session": {"percent": 10}},
                                      "stop_active": False, "off_peak": False}))

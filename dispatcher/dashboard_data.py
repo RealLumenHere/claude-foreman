@@ -99,7 +99,7 @@ def _lane_ticket_ids(lane, status):
 def queue_depth(lanes=None):
     if lanes is None:
         try:
-            cfg, _warnings = fd.load_config()
+            cfg, _warnings, _sha = fd.load_config()
             lanes = sorted(cfg["lanes"].keys())
         except fd.ConfigError:
             lanes = []
