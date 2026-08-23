@@ -26,7 +26,7 @@ echo "pci_nvme_02:00.0=$(cat /sys/bus/pci/devices/0000:02:00.0/power/control 2>/
 echo "thermald_active=$(systemctl is-active thermald 2>/dev/null)"
 echo "pg_active=$(systemctl is-active postgresql 2>/dev/null)"
 echo "pg_isready=$(pg_isready 2>&1)"
-echo "walreceiver=$(ps -eo cmd | grep -c "walreceiver streaming")"
+echo "walreceiver=$(ps -eo cmd | grep "walreceiver streaming" | grep -vc grep)"
 ps -eo cmd | grep "walreceiver streaming" | grep -v grep || echo "walreceiver_line=NONE"
 echo "pg_journal_errors_last200=$(journalctl -u postgresql --no-pager -n 200 -o cat | grep -icE "fatal|panic|error")"
 '
