@@ -11,7 +11,9 @@ Three walls, one per layer:
    when the hook cwd is inside a registered primary tree or the command targets
    one via `cd` / `git -C` / `--git-dir` / `--work-tree`. Registry comes from
    `FOREMAN_PRIMARY_TREES` (set by fworker from `router.LANE_REPO` +
-   `/home/lumen/bin`), with a static fallback in guard.sh.
+   `/home/lumen/bin`), with a static fallback in guard.sh. One sanctioned
+   exception: `git merge --ff-only origin/main|master` — the deploy fast-forward
+   every landed PR needs; it can't switch branches or add unreviewed content.
 2. **Post-run backstop** — `fworker.run_child` calls
    `primary_tree_guard.check_and_restore_all()` after every child exits: restores
    a clean drifted primary and ntfy-alerts, seconds after an evasion.

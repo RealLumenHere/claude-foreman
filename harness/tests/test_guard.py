@@ -528,6 +528,12 @@ PRIMARY_MUST_BLOCK = [
     ({"command": f"git --git-dir={PRIMARY}/.git checkout x"}, WORKTREE),
     ({"command": f"git --work-tree={PRIMARY} checkout x"}, WORKTREE),
     ({"command": "git -C /home/lumen/bin checkout feat/x"}, WORKTREE),
+    # merge is denied unless it is exactly the sanctioned deploy fast-forward
+    ({"command": "git merge feat/x"}, PRIMARY),
+    ({"command": "git merge origin/main"}, PRIMARY),  # missing --ff-only
+    ({"command": "git merge --ff-only origin/feat/x"}, PRIMARY),  # non-default target
+    ({"command": f"git -C {PRIMARY} merge --no-ff origin/main"}, WORKTREE),
+    ({"command": "git merge --ff-only origin/main && git checkout feat/x"}, PRIMARY),
 ]
 
 PRIMARY_MUST_ALLOW = [
@@ -544,6 +550,10 @@ PRIMARY_MUST_ALLOW = [
     # read-only git in a primary is fine
     ({"command": "git status"}, PRIMARY),
     ({"command": "git log --oneline -3"}, PRIMARY),
+    # the sanctioned deploy fast-forward (repo_reconcile BEHIND_ONLY advice)
+    ({"command": "git merge --ff-only origin/main"}, PRIMARY),
+    ({"command": f"git -C {PRIMARY} merge --ff-only origin/main"}, WORKTREE),
+    ({"command": "git -C /home/lumen/pstack merge --ff-only origin/master"}, WORKTREE),
 ]
 
 
