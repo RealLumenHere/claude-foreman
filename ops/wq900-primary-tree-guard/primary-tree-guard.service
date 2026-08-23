@@ -1,0 +1,9 @@
+[Unit]
+Description=primary tree guard — assert PRIMARY trees are on their default branch, alert+restore on drift (wq#900)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/primary_tree_guard.py check
+User=lumen
+Group=lumen

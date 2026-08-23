@@ -141,6 +141,30 @@ Bash)
       fi
     fi
 
+    # ---- wq#900: PRIMARY trees are branch-frozen for workers ----
+    # A worker's raw `git checkout` in /home/lumen/foreman put the live dispatcher
+    # timers on a feature branch (audit 2026-08-23; same class hit /home/lumen/bin,
+    # wq#867). lumen-pr already refuses --primary — this is the wall behind it: any
+    # HEAD/branch-moving git verb is denied when the hook cwd is inside a registered
+    # primary tree, or the command explicitly targets one (cd / git -C / --git-dir /
+    # --work-tree). FOREMAN_PRIMARY_TREES comes from fworker (router.LANE_REPO +
+    # /home/lumen/bin); the fallback mirrors it so a stripped env can't drop the wall.
+    PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control}
+    if printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\b(checkout|switch|restore|reset|rebase|merge|pull)\b'; then
+      HOOK_CWD=$(jfield '.cwd')
+      IFS=':' read -ra PT_ARR <<< "$PRIMARY_TREES"
+      for ptree in "${PT_ARR[@]}"; do
+        [ -n "$ptree" ] || continue
+        case "$HOOK_CWD" in
+          "$ptree"|"$ptree"/*)
+            block "git branch/HEAD-moving verb inside PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; do git work in your own worktree" "$RAW_CMD" ;;
+        esac
+        if printf '%s' "$target" | grep -qE "(cd +|-C +|--git-dir[= ]|--work-tree[= ])[\"']?$ptree(/|['\" ;&|]|\$)"; then
+          block "git branch/HEAD-moving verb targeting PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; do git work in your own worktree" "$RAW_CMD"
+        fi
+      done
+    fi
+
     # ---- wq#717 fire-mode diagnosis phase: read-only-diagnosis denylist ----
     # fworker sets FOREMAN_FIRE_PHASE=diagnosis only for a fleet-fires ticket's
     # first-phase child (harness/fire_gate.py / FIRE_MODE.md). Defense-in-depth on

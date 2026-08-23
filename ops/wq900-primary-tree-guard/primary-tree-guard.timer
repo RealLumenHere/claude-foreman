@@ -1,0 +1,10 @@
+[Unit]
+Description=primary tree guard — 5-minute branch-drift check on PRIMARY trees (wq#900)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -16,12 +16,13 @@ WORKTREE = "/home/lumen/worktrees/wq999-a1"
 EXISTING_FILE = os.path.join(os.path.dirname(__file__), "..", "README.md")
 
 
-def run_guard(tool_name, tool_input, env_extra=None, session_id="test-session"):
+def run_guard(tool_name, tool_input, env_extra=None, session_id="test-session",
+              cwd=WORKTREE):
     payload = json.dumps({
         "tool_name": tool_name,
         "tool_input": tool_input,
         "session_id": session_id,
-        "cwd": WORKTREE,
+        "cwd": cwd,
         "effort": {"level": "high"},
     })
     env = dict(os.environ)
@@ -502,3 +503,89 @@ def test_diagnosis_denylist_is_a_noop_outside_fire_phase():
     # worker is governed by the house deny-list only, not the diagnosis denylist.
     rc, stderr = run_guard("Bash", {"command": "systemctl restart lumen-agent"})
     assert rc == 0, stderr
+
+
+# ---- wq#900: PRIMARY trees are branch-frozen for workers ----
+# The audit case verbatim: a worker's raw `git checkout` in /home/lumen/foreman
+# switched the live dispatcher onto a feature branch. Deny any HEAD/branch-moving
+# git verb when cwd is inside a registered primary tree or the command explicitly
+# targets one; a worker's git work in its OWN worktree stays untouched.
+
+PRIMARY = "/home/lumen/foreman"
+
+PRIMARY_MUST_BLOCK = [
+    # cwd inside a primary tree
+    ({"command": "git checkout research/wq633-849-headroom-judge"}, PRIMARY),
+    ({"command": "git switch feat/lumen-guardian"}, "/home/lumen/bin"),
+    ({"command": "git checkout -b feat/new"}, PRIMARY),
+    ({"command": "git reset --hard HEAD~1"}, f"{PRIMARY}/harness"),  # subdir counts
+    ({"command": "git  \tcheckout main"}, PRIMARY),  # whitespace evasion
+    ({"command": "git pull origin research/foo"}, PRIMARY),
+    # cwd elsewhere, command targets the primary explicitly
+    ({"command": f"git -C {PRIMARY} checkout research/foo"}, WORKTREE),
+    ({"command": f"cd {PRIMARY} && git checkout research/foo"}, WORKTREE),
+    ({"command": f"cd {PRIMARY}/harness && git switch x"}, WORKTREE),
+    ({"command": f"git --git-dir={PRIMARY}/.git checkout x"}, WORKTREE),
+    ({"command": f"git --work-tree={PRIMARY} checkout x"}, WORKTREE),
+    ({"command": "git -C /home/lumen/bin checkout feat/x"}, WORKTREE),
+]
+
+PRIMARY_MUST_ALLOW = [
+    # normal branch work in the worker's own worktree
+    ({"command": "git checkout -b feat/wq900"}, WORKTREE),
+    ({"command": "git switch main"}, WORKTREE),
+    ({"command": "git rebase main"}, WORKTREE),
+    # mentioning a primary path without a git verb aimed at it
+    ({"command": f"ls {PRIMARY}/harness"}, WORKTREE),
+    ({"command": f"git log --oneline -5 && grep -rn checkout {PRIMARY}/docs"}, WORKTREE),
+    # full-path wq call composed with local git work must not trip the
+    # /home/lumen/bin registry entry
+    ({"command": "git checkout main && /home/lumen/bin/wq done 1 --notes x"}, WORKTREE),
+    # read-only git in a primary is fine
+    ({"command": "git status"}, PRIMARY),
+    ({"command": "git log --oneline -3"}, PRIMARY),
+]
+
+
+def test_primary_tree_branch_switch_blocked():
+    failures = []
+    for inp, cwd in PRIMARY_MUST_BLOCK:
+        rc, stderr = run_guard("Bash", inp, cwd=cwd)
+        if rc != 2 or "wq#900" not in stderr:
+            failures.append((inp, cwd, rc, stderr))
+    assert not failures, f"expected wq#900 block, got: {failures}"
+
+
+def test_primary_tree_allow_cases():
+    failures = []
+    for inp, cwd in PRIMARY_MUST_ALLOW:
+        rc, stderr = run_guard("Bash", inp, cwd=cwd)
+        if rc != 0:
+            failures.append((inp, cwd, rc, stderr))
+    assert not failures, f"expected exit 0 (allow), got: {failures}"
+
+
+def test_primary_tree_env_override_respected():
+    # A tree listed only via FOREMAN_PRIMARY_TREES is guarded too (fworker computes
+    # the list from router.LANE_REPO at dispatch time).
+    rc, stderr = run_guard(
+        "Bash", {"command": "git checkout feature"},
+        env_extra={"FOREMAN_PRIMARY_TREES": "/srv/custom-primary"},
+        cwd="/srv/custom-primary")
+    assert rc == 2 and "wq#900" in stderr, stderr
+    # ...and the env var replaces the fallback list rather than unioning — fworker
+    # always passes the full registry.
+    rc, _ = run_guard(
+        "Bash", {"command": "git checkout feature"},
+        env_extra={"FOREMAN_PRIMARY_TREES": "/srv/custom-primary"},
+        cwd=PRIMARY)
+    assert rc == 0
+
+
+def test_primary_tree_blocked_event_logged(tmp_path):
+    events = tmp_path / "events"
+    rc, _ = run_guard("Bash", {"command": "git checkout research/foo"},
+                      env_extra={"FOREMAN_EVENTS_DIR": str(events)}, cwd=PRIMARY)
+    assert rc == 2
+    logged = (events / "test-worker.jsonl").read_text()
+    assert "wq#900" in logged

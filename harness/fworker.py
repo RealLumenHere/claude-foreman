@@ -48,6 +48,7 @@ from classifier import (
 )
 from oom_forensics import oom_journal_evidence
 import fire_gate
+import primary_tree_guard
 from langfuse_client import emit_trace_with_span
 
 # RELIABILITY_SPEC.md §A: --max-turns errors on ceiling with a real result frame, so
@@ -652,6 +653,10 @@ def build_env(worker_id, model, effort, worktree):
     env["WQ_AGENT"] = worker_id
     env["FOREMAN_EVENTS_DIR"] = EVENTS_DIR
     env["FOREMAN_WORKTREE_ROOT"] = worktree
+    # wq#900: registered primary trees for guard.sh's branch-freeze deny class —
+    # computed here (router.LANE_REPO + static mirror) so the guard never depends
+    # on an import at hook time.
+    env["FOREMAN_PRIMARY_TREES"] = ":".join(primary_tree_guard.primary_trees())
     if effort:
         env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
     env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "500000"
@@ -831,6 +836,18 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu_s = ((cpu_after.ru_utime + cpu_after.ru_stime)
              - (cpu_before.ru_utime + cpu_before.ru_stime))
+
+    # wq#900 (c): post-run backstop — no child leaves a PRIMARY tree off its default
+    # branch. guard.sh should have denied the checkout; if it was evaded, restore
+    # (clean trees only) and alert within seconds of the child exiting instead of
+    # waiting for the timer. Never let this check fail the attempt itself.
+    try:
+        for d in primary_tree_guard.check_and_restore_all(
+                context=f"post-run wq#{ticket_id} attempt {attempt}", log=log):
+            log(f"PRIMARY DRIFT after wq#{ticket_id} attempt {attempt}: "
+                f"{d['repo']} on {d['head']!r} restored={d['restored']}")
+    except Exception as e:
+        log(f"WARN: wq#900 post-run primary tree check failed: {e}")
 
     return state, exit_code, raw_events, killed_reason, cpu_s, proc.pid
 
