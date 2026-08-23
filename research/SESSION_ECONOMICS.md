@@ -346,6 +346,57 @@ point 2). As sidecars accumulate across lanes with different token shapes, the p
 start/exit deltas are the free probe §7 proposed — check back once a week's worth has built up
 before spending the two controlled sessions of wq#737.
 
+## (10) wq#737 — controlled-probe attempt, deferred with cause (2026-08-23)
+
+wq#737 is the controlled two-session probe §7 proposed as a last resort, gated on wq#736's
+sidecar running for a week and failing to break the collinearity first. Two earlier attempts
+(2026-08-22, session `03a11ec1-4998-4e1e-87d5-337555b342d3`) exited in 10 and 3 turns with no
+diff and were marked FALSE_COMPLETE — apparently recognizing the ticket as premature and
+stopping without leaving evidence. This attempt instead checked the sidecar's actual state,
+via the reusable `sidecar_collinearity_check.py` added alongside this section.
+
+**The free path has 6.75 hours in it, not a week.** `RUNS_ROOT/wq{id}/usage-*.json`
+(`/home/lumen/foreman/_runs`) holds 135 sessions with matched `rate_limits_start`/
+`rate_limits_exit` seven-day readings, spanning 2026-08-23 02:26–09:07. wq#736 merged 2026-08-22
+08:22, so an 18-hour gap sits before the first sidecar file — the effective accumulation window
+is shorter than "time since merge" suggests.
+
+- **Mix**: cache-read is **98.06%** of the 406.1M raw tokens in the window, and 84 of 87
+  sessions with nonzero raw tokens sit in the 90–100% band — the same range the original
+  39-transcript corpus showed (97.8–99.3%, §6). The one clean outlier (a 2,116-raw-token
+  session, cache-read fraction 0) is four to five orders of magnitude smaller than the rest and
+  cannot move a quantized reading.
+- **Signal**: `seven_day.used_percentage` moved **29 → 30**, one point, across the whole
+  6.75-hour, 406M-token, 135-session window; per-session deltas are 0 for 133/135 records. At
+  this rate a week would accumulate on the order of 25 points — the same order of magnitude as
+  the original 77.9-hour/18-point trajectory in §2. That is consistent with §7's own estimate
+  of how long the free path needs, not evidence the wait was unnecessary.
+
+**Why the controlled probe was not run this attempt — two independent reasons, not one.**
+First, timing: only 6.75 of the ~168 hours §7 asks for have elapsed. Second, and unforeseen when
+§7 was written: `governor/floors.json` no longer defines a live off-peak window. Commit
+`890afe3` (2026-08-23 02:30 UTC, minutes before this attempt started) zeroed every reserve floor
+and set `off_peak_days_pt: []` — "floors ZEROED + off-peak disabled per Frank 2026-08-23 (3rd
+instruction) ... Do not restore without Frank" (refs wq#715). `state.json` confirms it live:
+`off_peak: false`, `stop_active: false`, `weekly_all.percent: 30` and climbing, with sidecar
+files from dozens of concurrently dispatching tickets landing seconds apart. The fleet is not
+quiesced — it is explicitly, repeatedly instructed by Frank to run at full throughput with no
+reserve — so a delta measured now would not be attributable, which defeats the probe's premise
+independent of how little time has passed. Restoring the floor is Frank's call per that same
+commit note, so re-enabling the mechanism this ticket's design depends on is out of scope here.
+Separately, `fworker`'s per-attempt wall-clock cap (3,600s, per `_runs/wq737/attempt-{1,2}.json`)
+is shorter than the time to the old 05:00 PT window even if it still applied, so waiting it out
+inside one dispatch was never mechanically possible.
+
+**Claim 1.9, restated.** Still grade C — this attempt adds evidence, not a coefficient. The
+free path has not had its week and cannot yet be judged to have failed; the interim data is
+directionally consistent with §7's prediction, not a counterexample to it. Re-run
+`sidecar_collinearity_check.py` before spending wq#737's two-session budget again: it reports
+whether the mix has broken free (skip the probe) or whether a week has passed with the mix
+still collinear (free path exhausted as designed). Either way, before spending the quota, first
+confirm an off-peak/quiescence mechanism is actually live again — as of this writing it is not,
+and enabling one is Frank's decision, not this ticket's.
+
 ## Sources
 
 Anthropic documentation, retrieved 2026-08-21:
