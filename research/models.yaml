@@ -104,9 +104,13 @@ models:
         saw_limit 0/149, session utilisation 13%. Reachable, correctly wired, dead in
         practice."
     quirks: ["always available / cannot be org-disabled", "different shape, not just cheaper"]
-    trust: "archetype 1-2 only; classification chores. Place vs sonnet@low = STILL OPEN after
-            CAL-1 — undecidable by observation at 13% utilisation; needs a deliberate paired
-            A/B (MODEL_ROUTING_AUDIT.md §4)."
+    trust: "archetype 1-2 only; classification chores. Measured wq#780 (2026-08-22,
+      N=4 matched probe-build/mechanical-edit pairs, same 600-turn ceiling both arms):
+      SUCCESS 4/4 on both haiku and sonnet-5@low, output verified equivalent (tests
+      passed) on every pair; haiku ran ~44% longer wall-clock on average (mean 73s vs
+      51s per pair, range +10% to +58%). No correctness edge for haiku, measurably
+      slower, only cheaper — stays the downgrade rung behind sonnet@low, not a primary.
+      Small-N calibration; see research/CAL1_HAIKU_VS_SONNET_LOW.md."
 
   # LISTED-NOT-ROUTED (pin targets / fallback landing zones; no price or capability edge on subscription)
   - {id: claude-opus-4-8,  status: LIVE,      efforts: [low,medium,high,xhigh,max], note: "Fable cyber-fallback target; api 5/25"}
