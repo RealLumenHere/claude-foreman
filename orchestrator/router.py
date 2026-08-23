@@ -70,7 +70,6 @@ LANE_REPO = {
     "foreman-tok": FOREMAN_ROOT,   # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
     "foreman-auto": FOREMAN_ROOT,  # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
     "pokemon": "/home/lumen/pokemon",
-    "lpp": "/home/lumen/pokemon",        # dispatcher lane name is 'lpp'; repo is pokemon (Frank 2026-08-21)
     "questfree": "/home/lumen/questfree",
     "pstack": "/home/lumen/pstack",
     "mission-control": "/home/lumen/mission-control",

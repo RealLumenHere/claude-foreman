@@ -37,6 +37,12 @@ NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 
 ALERT_DEDUP_SECONDS = 3600  # don't re-alert within 1h
 
+# wq#912: lanes that deliberately have no dispatcher config.json entry — not drift.
+# 'auto' is wq's own default lane (wq#830: spans arbitrary repos, never one-lane-dispatchable).
+# 'user' is Frank-only (wq itself refuses agent claims from it). 't1' stays lumen_dispatch's
+# (DESIGN.md §13: "No t1 lane takeover — lumen_dispatch keeps running until Frank retires it").
+EXEMPT_LANES = {"auto", "user", "t1"}
+
 
 def _utcnow():
     return datetime.now(timezone.utc)
@@ -95,7 +101,7 @@ def lint(config_path=None, db_path=None):
 
     fails = []
     for lane, n in sorted(open_counts.items()):
-        if n > 0 and lane not in config_lanes:
+        if n > 0 and lane not in config_lanes and lane not in EXEMPT_LANES:
             fails.append(f"lane={lane!r} has {n} open ticket(s) in queue.db but no "
                          f"config.json entry — dispatcher will never see them")
 

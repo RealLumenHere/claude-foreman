@@ -11,7 +11,7 @@
       "enabled": true,
       "max_per_day": 999
     },
-    "lpp": {
+    "pokemon": {
       "enabled": true,
       "max_per_day": 999
     },
@@ -43,6 +43,10 @@
     "user": {
       "enabled": false,
       "max_per_day": 1
+    },
+    "research": {
+      "enabled": false,
+      "max_per_day": 4
     }
   }
 }
