@@ -1,0 +1,82 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "wq753-node-exporter",
+    "title": "Fleet Node Exporter (wq#753)",
+    "tags": ["wq753", "node_exporter", "ops-audit"],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "version": 0,
+    "time": {"from": "now-1h", "to": "now"},
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "node_exporter targets up",
+        "type": "stat",
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {"expr": "count(up{job=\"node_exporter_fleet\"} == 1)", "legendFormat": "up"}
+        ]
+      },
+      {
+        "id": 2,
+        "title": "CPU busy % by node",
+        "type": "timeseries",
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 8, "w": 18, "x": 6, "y": 0},
+        "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}, "overrides": []},
+        "targets": [
+          {
+            "expr": "100 - (avg by (node) (rate(node_cpu_seconds_total{mode=\"idle\",job=\"node_exporter_fleet\"}[5m])) * 100)",
+            "legendFormat": "{{node}}"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Memory used % by node",
+        "type": "timeseries",
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}, "overrides": []},
+        "targets": [
+          {
+            "expr": "100 * (1 - (node_memory_MemAvailable_bytes{job=\"node_exporter_fleet\"} / node_memory_MemTotal_bytes{job=\"node_exporter_fleet\"}))",
+            "legendFormat": "{{node}}"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "AMD GPU VRAM used % (textfile collector)",
+        "type": "timeseries",
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}, "overrides": []},
+        "targets": [
+          {
+            "expr": "100 * amdgpu_vram_used_bytes{job=\"node_exporter_fleet\"} / amdgpu_vram_total_bytes{job=\"node_exporter_fleet\"}",
+            "legendFormat": "{{node}}/{{card}}"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Disk used % (root fs) by node",
+        "type": "timeseries",
+        "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+        "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}, "overrides": []},
+        "targets": [
+          {
+            "expr": "100 * (1 - (node_filesystem_avail_bytes{job=\"node_exporter_fleet\",mountpoint=\"/\"} / node_filesystem_size_bytes{job=\"node_exporter_fleet\",mountpoint=\"/\"}))",
+            "legendFormat": "{{node}}"
+          }
+        ]
+      }
+    ]
+  },
+  "overwrite": true
+}
