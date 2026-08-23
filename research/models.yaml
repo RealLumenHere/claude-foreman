@@ -14,7 +14,8 @@ pools:
   session:        {kind: five_hour,     source: oauth_usage, note: "account-global 5h rolling; opens on first metered message; weekday 05-11 PT burns faster"}
   weekly_all:     {kind: seven_day,     source: oauth_usage, note: "temporary raised ceiling ends 2026-08-19"}
   fable_weekly:   {kind: weekly_scoped, source: oauth_usage, match: "scope.model.display_name ~ /fable|mythos/", cap: "50% of weekly_all, included on Max since 2026-07-20"}
-  local:          {kind: none,          source: litellm,     note: "bounded by Lumen CPU only"}
+  local:          {kind: none,          source: litellm,     note: "genuine local compute: qwen36-local, bounded by Isis (100.100.129.24) CPU/GPU only"}
+  cheap_cloud:    {kind: none,          source: litellm,     note: "wq#777 2026-08-23: split out of 'local' (MODEL_ROUTING_AUDIT.md F4). Paid external API behind the same LiteLLM gateway (deepseek-v4-flash -> api.deepseek.com): ZERO Anthropic quota and governor-exempt like genuine local compute, but bounded by the vendor's own rate limits, not Lumen/Isis hardware."}
   # P3 pins exact field names; CCC claude.ai limits[] is the fallback mapping (kind session|weekly_all|weekly_scoped, percent 0..100).
 
 defaults:
@@ -121,29 +122,52 @@ models:
   # key; ZERO Anthropic quota, governor-exempt by design)
   - id: deepseek-v4-flash
     status: LIVE-local
-    pools: [local]
-    # wq#750 2026-08-22 CORRECTION: 'local' here means ZERO ANTHROPIC QUOTA, not local
-    # compute. The LiteLLM entry has no api_base -> this resolves to api.deepseek.com, a
-    # cheap paid cloud API. Genuinely local compute on this rung is qwen36-local /
-    # isis-qwen36 (Isis 100.100.129.24:11434) and nephthys-qwen3-14b (100.98.74.87:11434);
-    # both hosts answered /api/tags at audit time. Measured: 0 of 149 launches used this
-    # rung. MODEL_ROUTING_AUDIT.md §3 F4.
+    pools: [cheap_cloud]
+    # wq#750 2026-08-22 CORRECTION, resolved wq#777 2026-08-23: this was `pools: [local]`,
+    # which is wrong. The LiteLLM entry has no api_base -> this resolves to api.deepseek.com,
+    # a cheap paid cloud API -- ZERO ANTHROPIC QUOTA and governor-exempt (same
+    # routing-chain treatment as genuine local compute) but NOT local compute itself.
+    # Genuinely local compute on this rung is qwen36-local (Isis 100.100.129.24:11434).
+    # nephthys-qwen3-14b (100.98.74.87:11434) answered at wq#750 audit time but Nephthys
+    # was decommissioned the next day (wq#589, 2026-08-22) and its LiteLLM entry removed;
+    # see the nephthys-qwen3-14b row below. MODEL_ROUTING_AUDIT.md §3 F4.
     efforts: []             # backend thinking flags pinned per-alias in litellm config instead
     trust: "mechanical-edit, probe-build, verify-DRAFTS. PR-only + sonnet-5 verify gate. Lower --max-turns."
   - id: qwen36-local
     status: LIVE-local      # Qwen3.6-35B-A3B, Isis-backed, offline-survival rung
     # wq#750: dropped from the lumen-model-watchdog roster 2026-08-11 when
-    # llama-qwen36.service was stopped on Lumen (resource-offload directive), but the
-    # LiteLLM entry still points at Isis (100.100.129.24:11434), which is up and serving
-    # qwen3.6:35b-a3b. Possibly alive and unmonitored — re-probe before trusting or retiring.
+    # llama-qwen36.service was stopped on Lumen (resource-offload directive); the LiteLLM
+    # entry was never repointed, though -- it still targets Isis (100.100.129.24:11434).
+    # wq#777 2026-08-23 re-probe: Isis /api/tags answers and lists qwen3.6:35b-a3b, so this
+    # is Isis-hosted, not Lumen-hosted -- the resource-offload concern does not apply.
+    # REINSTATED in the watchdog roster (lumen_model_watchdog.py LOCAL). CAVEAT: a direct
+    # /api/chat probe against Isis during this same re-probe hung >100s with no response,
+    # and lumen-model-watchdog's own real /chat/completions probes show it flapping down
+    # since ~06:28 UTC today after being up all morning -- likely a live Isis-side
+    # inference hang (GPU contention or a wedged worker), not a dead rung. Now
+    # mechanical-edit's primary; router.py's wq#779 F3 fails-walk (base chain advances one
+    # rung per recorded fail) is the safety net if Isis is still hung when a ticket lands.
     pools: [local]
+    efforts: []
     trust: "mechanical-edit only, gated. Offline-survival tier."
   - id: nephthys-qwen3-14b
-    status: LIVE-local
-    trust: "NOT a wq worker. Fallback brain only."
+    status: RETIRED          # wq#589 2026-08-22: Nephthys decommissioned, LiteLLM entry
+                              # removed. wq#777 2026-08-23 live probe: host unreachable
+                              # (connection timeout on 100.98.74.87:11434). Not routable.
+    trust: "NOT a wq worker. Fallback brain only. Kept for history."
 
 routing:   # archetype -> primary -> downgrade path (effort first, then model). Details RESEARCH §15.
-  mechanical-edit:      [sonnet-5@low,    deepseek-v4-flash@local]
+  # wq#777 2026-08-23 (MODEL_ROUTING_AUDIT.md F4): local-first. Measured 0/149 foreman
+  # launches used the local rung though Isis was reachable the whole time; mechanical-edit
+  # is the cheapest/highest-yield archetype measured (3/5 SUCCESS, 19 median turns, 42.4s
+  # for sonnet-5@low), so it carries the bounded downside best. qwen36-local is now
+  # primary; the local-authored diff still goes through the mandatory sonnet-5 verify-pass
+  # gate (verify_pass.local_author_always, already true -- unchanged by this ticket).
+  # sonnet-5@low then deepseek-v4-flash@local stay in the chain as-is -- router.py's
+  # wq#779 F3 fails-walk advances the base chain one rung per recorded fail, so a hung/dead
+  # Isis costs at most one failed attempt before a ticket lands on cloud sonnet, not a
+  # standing outage. See the qwen36-local model entry above for live-status caveats.
+  mechanical-edit:      [qwen36-local@local, sonnet-5@low, deepseek-v4-flash@local]
   probe-build:          [sonnet-5@medium, haiku-4-5, deepseek-v4-flash@local]   # haiku row = CAL-1
   standard-engineering: [sonnet-5@high,   sonnet-5@medium, opus-5@medium(escalate-on-fail)]
   rca-investigation:    [opus-5@xhigh,    opus-5@high, fable-5@high(2-fails-or-cross-subsystem)]

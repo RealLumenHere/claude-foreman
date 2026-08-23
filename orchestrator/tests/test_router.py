@@ -22,7 +22,7 @@ MANIFEST = os.path.join(ORCH_DIR, "..", "research", "models.yaml")
 
 # BUILD_PLAN §T3 verify: "assign 5 sample tickets across archetypes -> correct (model,effort)"
 SAMPLES = [
-    ("wire standing checks to systemd timers", "", "fleet", "mechanical-edit", ("claude-sonnet-5", "low")),
+    ("wire standing checks to systemd timers", "", "fleet", "mechanical-edit", ("qwen36-local", None)),
     ("probe: CI hygiene for lumen-pr", "", "build", "probe-build", ("claude-sonnet-5", "medium")),
     ("add conflict guard to lumen-pr", "", "build", "standard-engineering", ("claude-sonnet-5", "high")),
     ("audit: why does lpp-watchdog bypass the guard", "", "pokemon", "rca-investigation", ("claude-opus-5", "xhigh")),
@@ -97,8 +97,12 @@ def test_attempt_count_downgrades_probe_build_without_pressure(m):
 
 
 def test_attempt_count_downgrades_mechanical_edit_without_pressure(m):
+    # wq#777: primary is now qwen36-local@local; fails=1 walks the base chain to the
+    # cloud fallback, fails=2 to the second (cheap-cloud) local rung.
     r1, _ = router.select(m, "mechanical-edit", fails=1)
-    assert r1.model == "deepseek-v4-flash" and r1.pool == "local"
+    assert r1.model == "claude-sonnet-5" and r1.effort == "low" and r1.pool == "cloud"
+    r2, _ = router.select(m, "mechanical-edit", fails=2)
+    assert r2.model == "deepseek-v4-flash" and r2.pool == "local"
 
 
 def test_attempt_count_does_not_override_escalation_facts(m):
@@ -207,8 +211,10 @@ def test_effort_first_downgrade_under_soft_pressure(m):
 
 
 def test_hard_deny_moves_to_next_model_not_lower_effort(m):
+    # wq#777: mechanical-edit's primary is now the local pool, which is governor-exempt
+    # (pressure never applies to it) — a sonnet deny doesn't even need to be walked around.
     r, why = router.select(m, "mechanical-edit", pressure=lambda x: "deny" if "sonnet" in x else "ok")
-    assert r.model == "deepseek-v4-flash" and r.pool == "local"
+    assert r.model == "qwen36-local" and r.pool == "local"
     r, _ = router.select(m, "probe-build", pressure=lambda x: "deny" if "sonnet" in x else "ok")
     assert r.model == "claude-haiku-4-5" and r.effort is None
     r, why = router.select(m, "novel-design", pressure=lambda x: "deny")
@@ -516,4 +522,4 @@ def test_assign_and_verify_pass_fire_on_scratch_wq(tmp_path):
     assert not d3["required"] and d3["filed"] is None
     # dispatch-cmd carries the tuple through to fworker
     cmd = subprocess.run(R + ["dispatch-cmd", str(ids[0][0]), "--repo", "/tmp/x"], capture_output=True, text=True, env=env).stdout
-    assert "--model claude-sonnet-5 --effort low --archetype mechanical-edit" in cmd
+    assert "--model qwen36-local --archetype mechanical-edit" in cmd
