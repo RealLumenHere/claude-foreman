@@ -409,7 +409,7 @@ def section_retries(attempts):
 def section_cost(attempts):
     lines = ["## 5. Cost per SUCCESSFUL ticket by model\n"]
     n_oauth = sum(1 for a in attempts if a.get("oauth_token_used"))
-    if n_oauth == len(attempts):
+    if attempts and n_oauth == len(attempts):
         lines.append("Every attempt in this dataset has `oauth_token_used: true` — these run on "
                       "the Max subscription, not per-token API billing (audit R2). There is no "
                       "marginal dollar cost to compare, so the honest cost proxy is token volume "
@@ -455,10 +455,13 @@ def section_cost(attempts):
 
     total_elapsed = sum(a["elapsed_s"] for a in attempts)
     succ_elapsed = sum(a["elapsed_s"] for a in attempts if a["classification"] == "SUCCESS")
-    lines.append(f"Fleet-wide: {len(attempts)} attempts consumed {total_elapsed/3600:.1f} "
-                 f"worker-hours; only {succ_elapsed/3600:.1f}h ({succ_elapsed/total_elapsed:.0%}) "
-                 f"produced a SUCCESS. {100-succ_elapsed/total_elapsed*100:.0f}% of measured "
-                 f"worker time bought nothing shippable.")
+    if total_elapsed:
+        lines.append(f"Fleet-wide: {len(attempts)} attempts consumed {total_elapsed/3600:.1f} "
+                     f"worker-hours; only {succ_elapsed/3600:.1f}h ({succ_elapsed/total_elapsed:.0%}) "
+                     f"produced a SUCCESS. {100-succ_elapsed/total_elapsed*100:.0f}% of measured "
+                     f"worker time bought nothing shippable.")
+    else:
+        lines.append(f"Fleet-wide: {len(attempts)} attempts, no elapsed time recorded.")
     lines.append("")
     return "\n".join(lines)
 
@@ -471,7 +474,7 @@ def section_recommendation(attempts):
     ceilings = sorted(set(in_force.values()))
     ceil_desc = (f"{ceilings[0]} for every archetype" if len(ceilings) == 1 else
                  ", ".join(f"`{arch}`={mt}" for arch, mt in sorted(in_force.items())))
-    newest = max((a.get("finished_at") or 0) for a in attempts)
+    newest = max((a.get("finished_at") or 0) for a in attempts) if attempts else 0
     as_of = (dt.datetime.fromtimestamp(newest, dt.timezone.utc).strftime("%Y-%m-%d")
              if newest else "unknown date")
     lines.append(f"Ceilings in force as of the most recent attempt in this dataset ({as_of}): "
