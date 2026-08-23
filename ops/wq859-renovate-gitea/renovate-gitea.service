@@ -1,0 +1,16 @@
+[Unit]
+Description=wq#859 Renovate — scan Gitea (Anubis) repos, open dependency update PRs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/services/renovate-gitea
+EnvironmentFile=/home/lumen/agent/.env
+EnvironmentFile=/home/lumen/services/renovate-gitea/.env
+Environment=RENOVATE_CONFIG_FILE=/home/lumen/services/renovate-gitea/config.js
+Environment=LOG_LEVEL=info
+ExecStart=/usr/bin/node /home/lumen/.npm-global/lib/node_modules/renovate/dist/renovate.js
+StandardOutput=journal
+StandardError=journal

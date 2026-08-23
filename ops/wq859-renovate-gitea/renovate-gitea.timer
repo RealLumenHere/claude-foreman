@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#859 Renovate — every 4h
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=4h
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
