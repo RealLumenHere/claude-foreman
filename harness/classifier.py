@@ -33,6 +33,32 @@ AUTH = "AUTH"
 DEGRADED_SUCCESS = "DEGRADED_SUCCESS"
 FALSE_COMPLETE = "FALSE_COMPLETE"
 
+# wq#749: harness/prompts/worker.md has the model print exactly one of these as the
+# LAST line of its final message. Nothing parsed it before wq#749 — the sentinel
+# existed only as prose in the prompt (design/T2A_WORKER_HARNESS_DESIGN.md §3: "belt-
+# and-braces... the result frame is the real signal"), so a worker that correctly
+# called `wq block` and exited 0 produced an ordinary result:success frame, which
+# fworker.do_attempt() then relabeled FALSE_COMPLETE (ticket status != "done") and
+# retried — burning an attempt on a ticket that had already been legitimately blocked.
+TICKET_CLOSED_SENTINEL = "TICKET_CLOSED"
+BLOCK_SENTINEL = "BLOCKED"
+CLAIM_ERROR_SENTINEL = "CLAIM_ERROR"
+_WORKER_SENTINELS = frozenset({TICKET_CLOSED_SENTINEL, BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL})
+
+
+def parse_worker_sentinel(result_text):
+    """Last non-empty line of the model's final message, if it's one of the three
+    sentinels worker.md mandates; else None. A recognized sentinel is NOT sufficient
+    on its own to trust the outcome it claims (§C10: never trust a self-report) —
+    callers must corroborate it against actual ticket/repo state before acting on it."""
+    if not isinstance(result_text, str):
+        return None
+    for line in reversed(result_text.strip().splitlines()):
+        line = line.strip()
+        if line:
+            return line if line in _WORKER_SENTINELS else None
+    return None
+
 # §C12 DEGRADED-SUCCESS (#7124) fires only when a result frame explicitly carries an
 # EMPTY result text — most result frames in these fixtures/real traffic omit the key
 # entirely (it is absent on non-success subtypes, and plenty of legitimate successes

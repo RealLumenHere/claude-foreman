@@ -13,7 +13,7 @@ import json
 import os
 
 from test_fworker_integration import (
-    make_scratch_repo, make_scratch_env, wq_add, wq_status, run_fworker,
+    make_scratch_repo, make_scratch_env, wq_add, wq_status, wq_show_field, run_fworker,
 )
 
 
@@ -179,6 +179,61 @@ def test_shim_11_success_with_unmet_criteria_is_false_complete(tmp_path):
     assert wq_status(env, ticket_id) == "blocked"
     record = attempt_record(runs_root, ticket_id, n=2)
     assert record["classification"] == "FALSE_COMPLETE"
+
+
+def test_shim_11b_legit_block_sentinel_is_terminal_not_retried(tmp_path):
+    """wq#749: a worker that calls `wq block` and prints BLOCKED as its last line
+    exits 0 with an ordinary result:success frame — classify() alone can't tell that
+    apart from shim 11's genuine false-complete. fworker must read the ticket's own
+    "blocked" status together with the sentinel and stop, not relabel FALSE_COMPLETE
+    and burn a second attempt on an already-blocked ticket."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
+        tmp_path, 0, "success_legit_block")
+    ticket_id = wq_add(env, "shim 11b: legit block sentinel")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success_legit_block")
+    assert result.returncode == 12, result.stdout + result.stderr  # EXIT_BLOCKED
+    assert wq_status(env, ticket_id) == "blocked"
+    assert wq_show_field(env, ticket_id, "notes") == "WORK_BLOCKED: needs Frank"
+    record = attempt_record(runs_root, ticket_id, n=1)
+    assert record["classification"] == "SUCCESS"
+    # the one-and-only attempt: no second worktree/attempt spawned for a ticket that
+    # was already legitimately closed out by the worker itself.
+    assert not os.path.exists(os.path.join(runs_root, f"wq{ticket_id}", "attempt-2.json"))
+
+
+def test_shim_11c_unconfirmed_block_sentinel_still_false_completes(tmp_path):
+    """wq#749 adversarial case: a BLOCKED sentinel with no corroborating `wq block`
+    call must NOT be trusted on its own — falls through to the ordinary
+    FALSE_COMPLETE/retry path, same as shim 11."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
+        tmp_path, 0, "success_unconfirmed_block_sentinel")
+    ticket_id = wq_add(env, "shim 11c: unconfirmed block sentinel")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success_unconfirmed_block_sentinel")
+    assert wq_status(env, ticket_id) == "blocked"
+    record = attempt_record(runs_root, ticket_id, n=2)
+    assert record["classification"] == "FALSE_COMPLETE"
+
+
+def test_shim_11d_claim_error_sentinel_is_terminal_not_retried(tmp_path):
+    """wq#749: a worker that hits a claim race and reports CLAIM_ERROR as instructed
+    exits 0 with an ordinary result:success frame too — must stop and release, not
+    retry under the same stale claim."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
+        tmp_path, 0, "success_claim_error_sentinel")
+    ticket_id = wq_add(env, "shim 11d: claim error sentinel")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success_claim_error_sentinel")
+    assert result.returncode == 10, result.stdout + result.stderr  # EXIT_CLAIM_ERROR
+    assert wq_status(env, ticket_id) == "open"  # released, not left claimed
+    assert not os.path.exists(os.path.join(runs_root, f"wq{ticket_id}", "attempt-2.json"))
 
 
 def test_shim_12_401_is_auth(tmp_path):

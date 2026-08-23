@@ -42,9 +42,9 @@ import queue
 
 sys.path.insert(0, os.path.dirname(__file__))
 from classifier import (
-    RunState, classify,
+    RunState, classify, parse_worker_sentinel,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
-    TURNS, LAUNCH_FAILURE, KILLED, BUDGET,
+    TURNS, LAUNCH_FAILURE, KILLED, BUDGET, BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL,
 )
 from oom_forensics import oom_journal_evidence
 import fire_gate
@@ -1083,13 +1083,34 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     # run journalctl by hand. Best-effort; never raises, never changes classification.
     oom_journal = oom_journal_evidence(t0, pid=child_pid) if classification == OOM else None
 
+    # wq#749: a worker that did exactly what worker.md tells it to do on an
+    # unworkable ticket — `wq block`, print BLOCKED, exit 0 — produces an ordinary
+    # result:success frame; classify() has no way to know that was a legitimate
+    # terminal outcome rather than a lie. Read the sentinel FIRST and corroborate it
+    # against the ticket's actual status before the FALSE_COMPLETE check below ever
+    # runs, so a real block/claim-race never gets relabeled and retried. The sentinel
+    # alone is never trusted (a worker could print BLOCKED without calling `wq
+    # block`) — only the ticket-status cross-check makes it terminal.
+    worker_sentinel = None
+    sentinel_status = None
+    if classification in (SUCCESS, DEGRADED_SUCCESS):
+        worker_sentinel = parse_worker_sentinel(state.result_text)
+        if worker_sentinel in (BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL):
+            sentinel_status = wq_show(ticket_id).get("status")
+    sentinel_confirmed_block = (worker_sentinel == BLOCK_SENTINEL
+                                 and sentinel_status == "blocked")
+    sentinel_confirmed_claim_error = (worker_sentinel == CLAIM_ERROR_SENTINEL
+                                       and sentinel_status != "done")
+
     # RELIABILITY_SPEC.md §C10: verify acceptance criteria against artifacts BEFORE
     # anything downstream (including the persisted attempt record) trusts a self-
     # reported success — decided here, not inside reconcile(), so the record on disk
     # carries the same verdict reconcile() acts on. `raw_classification` keeps the
     # pre-verification classifier output too (e.g. DEGRADED_SUCCESS), so RCA can still
     # see WHY this got relabeled instead of just seeing FALSE_COMPLETE.
-    if classification in (SUCCESS, DEGRADED_SUCCESS) and not check_artifacts_done(ticket_id, worktree):
+    if (classification in (SUCCESS, DEGRADED_SUCCESS)
+            and not sentinel_confirmed_block and not sentinel_confirmed_claim_error
+            and not check_artifacts_done(ticket_id, worktree)):
         log(f"{classification} but acceptance criteria unmet (ticket still open, no "
             f"landed commit found) — RELIABILITY_SPEC.md §C10: never trust the "
             f"self-report, treating as FALSE_COMPLETE.")
@@ -1138,6 +1159,20 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "rate_limits_start": rate_limits_start, "rate_limits_exit": rate_limits_exit,
     }
     write_usage_sidecar(ticket_id, attempt, usage_record)
+
+    # wq#749: reconcile()'s SUCCESS/DEGRADED_SUCCESS branch calls `wq done` — wrong
+    # for a ticket the worker itself already blocked. Terminal here, no retry, no
+    # reconcile: the ticket already carries the worker's own verdict.
+    if sentinel_confirmed_block:
+        log(f"BLOCKED: ticket already carries the worker's own block (wq#749 sentinel "
+            f"confirmed by status={sentinel_status!r}) — not a false complete, no retry.")
+        ntfy("foreman BLOCKED", f"wq#{ticket_id} blocked by worker", priority="high")
+        return EXIT_BLOCKED
+    if sentinel_confirmed_claim_error:
+        log(f"CLAIM_ERROR: worker reported a claim race on wq#{ticket_id} "
+            f"(status={sentinel_status!r}) — releasing, no retry (wq#749).")
+        wq_release(ticket_id)
+        return EXIT_CLAIM_ERROR
 
     return reconcile(args, ticket_id, attempt, classification, state, events,
                       worktree, state_path)

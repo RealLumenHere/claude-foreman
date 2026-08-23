@@ -208,6 +208,37 @@ def main():
         emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "done, I think"}]}})
         emit({"type": "result", "subtype": "success", "is_error": False, "result": "all done"})
 
+    elif scenario == "success_legit_block":
+        # wq#749: a worker that does exactly what worker.md tells it to do on an
+        # unworkable ticket — call `wq block`, print BLOCKED as the last line, exit
+        # 0. classify() sees an ordinary result:success frame; fworker must read the
+        # ticket's own "blocked" status and the BLOCKED sentinel together and treat
+        # this as terminal, not FALSE_COMPLETE.
+        emit({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "ticket needs a Frank decision, blocking"}]}})
+        if ticket_id:
+            subprocess.run([WQ_BIN, "block", str(ticket_id), "WORK_BLOCKED: needs Frank"],
+                            capture_output=True, text=True)
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "result": "blocking, needs Frank's call\nBLOCKED"})
+
+    elif scenario == "success_unconfirmed_block_sentinel":
+        # wq#749 adversarial case: the sentinel claims BLOCKED but the worker never
+        # actually called `wq block` — the ticket status doesn't corroborate it, so
+        # this must still fall through to the ordinary FALSE_COMPLETE path rather
+        # than being trusted on the sentinel text alone.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False, "result": "BLOCKED"})
+
+    elif scenario == "success_claim_error_sentinel":
+        # wq#749: the worker discovers mid-session its claim raced (e.g. lease
+        # stolen) and reports CLAIM_ERROR as instructed rather than doing the work
+        # under a stale claim. exit 0, ordinary result:success frame.
+        emit({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "claim looks stale, bailing"}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "result": "claim race detected\nCLAIM_ERROR"})
+
     elif scenario == "auth_401":
         # shim 12 (§C11 AUTH): system/api_retry authentication_failed + a bare 401.
         emit({"type": "api_retry", "attempt": 1, "error_status": 401,
