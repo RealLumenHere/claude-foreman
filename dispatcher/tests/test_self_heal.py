@@ -19,7 +19,9 @@ import pytest
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 DISPATCHER_DIR = os.path.dirname(TESTS_DIR)
 sys.path.insert(0, DISPATCHER_DIR)
-import self_heal as sh  # noqa: E402
+import self_heal as sh          # noqa: E402
+import dispatcher_health as dh  # noqa: E402
+import notify_sinks             # noqa: E402
 
 WQ_BIN = "/home/lumen/bin/wq"
 SLOCK_BIN = "/home/lumen/bin/slock"
@@ -54,8 +56,17 @@ def henv(tmp_path, monkeypatch):
     monkeypatch.setattr(sh, "DISARM_PATH", str(tmp_path / "DISARM"))
     monkeypatch.setattr(sh, "STOP_PATH", str(tmp_path / "STOP"))
 
+    # wq#825: dispatcher_health is invoked from run_pass() — give it its own scratch
+    # dispatcher.log/state and route its ntfy through the same fake shim so a health
+    # alarm shows up in ntfy_lines() alongside self-heal's own notifications.
+    monkeypatch.setattr(dh, "LOG_PATH", str(tmp_path / "dispatcher.log"))
+    monkeypatch.setattr(dh, "STATE_PATH", str(tmp_path / "dispatcher_health" / "state.json"))
+    monkeypatch.setattr(dh, "CONSECUTIVE_THRESHOLD", 2)
+    monkeypatch.setattr(notify_sinks, "NTFY_BIN", fake_ntfy)
+    monkeypatch.setattr(notify_sinks, "XFCE_NOTIFYD_DB", "")
+
     return {"tmp": tmp_path, "wq_db": str(wq_db), "ntfy_log": ntfy_log,
-            "runs_root": runs_root}
+            "runs_root": runs_root, "dispatcher_log": tmp_path / "dispatcher.log"}
 
 
 # ---- helpers ---------------------------------------------------------------------------
@@ -270,3 +281,49 @@ def test_slock_busy_noop(henv):
     halts = log_events(henv, "halt")
     assert len(halts) == 1 and halts[0]["reason"] == "lock_busy"
     assert log_events(henv, "pass_start") == []
+
+
+# ---- wq#825: dispatcher-not-dispatching alarm, wired into run_pass() ---------------------
+
+def write_dispatcher_pass(log_path, pass_id, events):
+    with open(log_path, "a") as f:
+        for e in events:
+            rec = {"ts": "2026-08-22T00:00:00+00:00", "pass_id": pass_id}
+            rec.update(e)
+            f.write(json.dumps(rec) + "\n")
+
+
+def config_error_pass(pass_id):
+    return [{"event": "pass_start"},
+            {"event": "error", "stage": "config", "reason": "bad user-lane value"}]
+
+
+def test_run_pass_pages_frank_after_two_consecutive_dispatcher_config_errors(henv):
+    """The ticket's own acceptance test, exercised through self_heal's real cadence:
+    inject a config error twice, prove an alarm fires within 2 cycles."""
+    write_dispatcher_pass(henv["dispatcher_log"], "fdisp-1", config_error_pass("fdisp-1"))
+    assert sh.run_pass() == 0
+    assert ntfy_lines(henv) == []  # 1 unhealthy pass < threshold 2
+
+    write_dispatcher_pass(henv["dispatcher_log"], "fdisp-2", config_error_pass("fdisp-2"))
+    assert sh.run_pass() == 0
+
+    lines = ntfy_lines(henv)
+    assert len(lines) == 1
+    assert "-p urgent" in lines[0] and "NOT DISPATCHING" in lines[0]
+    health_events = log_events(henv, "dispatcher_health")
+    assert health_events[-1]["alarmed"] is True and health_events[-1]["streak"] == 2
+
+
+def test_run_pass_no_alarm_when_dispatcher_healthy(henv):
+    write_dispatcher_pass(henv["dispatcher_log"], "fdisp-1",
+                          [{"event": "pass_start"},
+                           {"event": "spawn", "ticket": 1},
+                           {"event": "pass_end", "spawned": 1, "candidates": 1,
+                            "tight": False}])
+
+    assert sh.run_pass() == 0
+
+    assert ntfy_lines(henv) == []
+    health_events = log_events(henv, "dispatcher_health")
+    assert health_events[-1]["alarmed"] is False

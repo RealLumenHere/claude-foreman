@@ -35,6 +35,13 @@ ledger. The attempt cap reads fworker's own attempt-N.json files directly (harne
 fworker.py's run_dir/next_attempt_n) rather than keeping a second counter that could drift
 out of sync with the harness's real attempt count.
 
+wq#825: this daemon's 10-min cadence also doubles as the dispatcher-not-dispatching
+watchdog — every pass calls dispatcher_health.check_dispatcher_health() (see that
+module) and pages Frank urgent if foreman_dispatcher.py's own decision log shows
+CONSECUTIVE_THRESHOLD consecutive unhealthy passes (event=error, or spawned=0 with
+candidates>0). Piggybacked here rather than on a new systemd timer so Frank doesn't
+have to separately enable a third daemon for it.
+
 CLI:  self_heal.py run --once [--dry-run]
 """
 import argparse
@@ -47,6 +54,8 @@ from datetime import datetime, timedelta, timezone
 
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(DISPATCHER_DIR, ".."))
+sys.path.insert(0, DISPATCHER_DIR)
+import dispatcher_health  # noqa: E402  (wq#825: dispatcher-not-dispatching alarm)
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 STATE_PATH = os.environ.get("FOREMAN_SELFHEAL_STATE",
@@ -348,6 +357,8 @@ def run_pass(dry_run=False):
     try:
         log.emit("pass_start", dry_run=dry_run)
         summary = _do_pass(dry_run, log)
+        alarmed, health = dispatcher_health.check_dispatcher_health(dry_run=dry_run)
+        log.emit("dispatcher_health", alarmed=alarmed, **health)
         log.emit("pass_end", **summary)
     except Exception as e:  # noqa: BLE001 — pass boundary: log + ntfy, never silent
         log.emit("error", stage="pass", reason=f"unhandled: {e!r}")

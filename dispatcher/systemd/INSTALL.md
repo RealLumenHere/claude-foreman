@@ -77,6 +77,27 @@ breaker trips), `FOREMAN_RUNAWAY_MAX_ATTEMPTS=5`. These were calibrated against 
 fleet's actual attempt history at build time (see circuit_breaker.py's module
 docstring) — re-check them if the fleet's ambient failure rate shifts a lot.
 
+## wq#825 — dispatcher-not-dispatching alarm
+
+`dispatcher_health.py` also needs **no separate install step**: it's called in-process
+from every `self_heal.py` pass (see that module's docstring), so it goes live the
+moment `lumen-foreman-selfheal.timer` is enabled per step 3 above — no third timer for
+Frank to remember to enable.
+
+Sanity-check it independently of a real self-heal pass:
+
+```bash
+python3 /home/lumen/foreman/dispatcher/dispatcher_health.py status
+python3 /home/lumen/foreman/dispatcher/dispatcher_health.py check --dry-run
+```
+
+Defaults (env-overridable — see dispatcher_health.py's constants):
+`FOREMAN_HEALTH_CONSECUTIVE=2` (consecutive unhealthy dispatcher passes — an
+`event=error` line, or a `pass_end` with `spawned=0` while `candidates>0` — before
+paging Frank), `FOREMAN_HEALTH_NTFY_DEDUP_H=1` (re-ping cadence while the dispatcher
+stays unhealthy, so a still-broken dispatcher isn't a single missable ntfy over a
+10-hour outage but also doesn't spam every 10-min self-heal cycle).
+
 ### Dashboard (`dashboard.py`)
 
 Install, staged, same posture as the dispatch/self-heal units:
