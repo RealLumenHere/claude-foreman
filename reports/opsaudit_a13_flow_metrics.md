@@ -30,7 +30,7 @@ the campaign's own output cannot leak into its own baseline. Read-only: every qu
 | cycle time (claimed→done), by lane | `done_at - claimed_at`, same population | queue.db, computed |
 | throughput/week | count of `done_at < cutoff` completions per ISO week, overall + by lane | queue.db, computed |
 | WIP in-flight at cutoff | count of `created_at < cutoff AND (done_at IS NULL OR done_at >= cutoff)` | queue.db, computed |
-| rework rate | `(notes LIKE '%REOPENED%' OR status='rejected') / population`, pre-cutoff | queue.db, computed |
+| rework rate | `(reopened_count > 0 OR status='rejected') / population`, pre-cutoff — **signal replaced under wq#841, see §Rework rate erratum** | queue.db, computed |
 | blocked-age distribution at cutoff | **not reconstructable** — see §2 | campaign doc F1 (measured same day) |
 | time-parked-on-Frank at cutoff | 74 items, 23 named Frank/gate/approval, 23-day avg, 41-day oldest, wq#383 33d | campaign doc F1 (measured same day) |
 | worker success rate | 149 attempts / 69 tickets, 22% attempt-level success, 44% killed-by-turn-backstop | reports/opsaudit_a1_worker_success.md (wq#751, same day) |
@@ -51,7 +51,34 @@ Baseline headline numbers (full detail in the JSON):
   campaign-driven batches (W29, W33) dominate, not steady-state throughput. Any post-campaign
   throughput comparison must control for this or it will read as noise.
 - **WIP in-flight at cutoff**: 147 tickets (total only — see caveat below).
-- **Rework rate pre-cutoff**: 1.74% (12 reopened-marker + 1 rejected / 747).
+- **Rework rate pre-cutoff**: ~~1.74% (12 reopened-marker + 1 rejected / 747)~~ **RETRACTED as a
+  measurement — see §Rework rate erratum (wq#841).** The marker it counted was erasable, so 1.74%
+  is a floor of unknown tightness, not a number any later figure can be compared against. Every
+  other headline in this section still reproduces exactly on re-run.
+
+### Rework rate erratum (wq#841, issued 2026-08-23)
+
+One metric in this report measured itself away. `rework_rate` counted `notes LIKE '%REOPENED%'`,
+and `wq done` replaces a ticket's notes wholesale on every close — so a ticket that really was
+reopened dropped out of the population as soon as anybody closed it again. `created_at`, which
+the population is keyed on, never moved, so the artifact showed no sign of the loss. Roughly 14
+of ~18 markers fleet-wide vanished in under 24 hours from ordinary churn; two more (wq#755,
+wq#760) were watched vanishing during the fix itself. The gauge read 2.43% → 0.6% and meant
+nothing by it.
+
+Re-running the shipped script today against the same fixed cutoff reproduces **every other field
+of the frozen baseline exactly** — lead/cycle percentiles across all 10 lanes, throughput, WIP,
+population, rejected count. `rework_rate` is the only divergence, which is both the defect and
+the evidence that the rest of the methodology holds.
+
+The signal is now `tasks.reopened_count`: a monotonic column wq bumps on every terminal →
+in-flight transition, which no later write can erase. It is authoritative from 2026-08-23 onward
+only. The reopens lost before that are **not recoverable** — the oldest queue.db backup
+(2026-08-14) predates the marker convention and holds zero markers — so the series starts fresh
+rather than pretending to a history it does not have. Full account, including the seeded
+exceptions and the case-insensitivity false positives: `reports/wq841_rework_rate_durability.md`
+and `reports/opsaudit_a13_baseline_20260821.errata.json`. The frozen baseline JSON and its
+sha256 are untouched; the errata sits beside them.
 
 ## 2. What could not be captured cleanly (said loudly, per this ticket's own constraint)
 
@@ -93,7 +120,13 @@ collector on GPU hosts. This ticket reuses that exact mechanism — no new infra
 Metrics exposed: `lumen_queue_status_total{status}`, `lumen_queue_wip_total{lane}`,
 `lumen_queue_blocked_age_days{stat}`, `lumen_queue_frank_parked_total`,
 `lumen_queue_frank_parked_age_days{stat}`, `lumen_queue_rework_rate_pct`,
+`lumen_queue_reopened_total` and `lumen_queue_reopened_signal_is_structural` (both wq#841),
 `lumen_queue_flow_captured_at_seconds` (staleness signal).
+
+`lumen_queue_reopened_signal_is_structural` is a tripwire, not a statistic: it reads 1 while the
+count comes from `tasks.reopened_count` and 0 the moment the exporter falls back to the old
+mutable-substring rule. A rework rate that drops while that gauge reads 0 is the metric decaying,
+not the fleet improving — which is precisely how the original version failed, unnoticed.
 
 Lead/cycle time and throughput are NOT re-exported live — they're expensive-ish full-table
 aggregates better suited to periodic snapshot artifacts (like this baseline) than a 60s gauge,
@@ -136,9 +169,9 @@ flow-metric lever.
 | **A4** (done) | wire idle Langfuse | richer per-ticket cost attribution (real traces vs A1's token-volume proxy) | `cost_per_successful_ticket` gains a $-equivalent/trace-based figure; no lever on lead/cycle/WIP |
 | **A5** (open) | measure Lumen contention | if contention is real and gets relieved, `build`-lane cycle time (currently p90 0.39h once claimed — already fast) is NOT where this shows; watch `build`-lane **lead time** p90 (101.3h baseline) if queueing was contention-driven rather than Frank-driven | no numeric prediction until A5's own measurement lands — flagged as the input A13 is waiting on |
 | **A6** (done, design only) | risk-tiered standing approvals (not yet adopted) | zero effect on any metric here until adopted — a JUDGE ticket is a decision, not an enforcement | 0% movement expected pre-adoption; re-baseline after adoption, not after this ticket |
-| **A7** (claimed) | SUBTRACT rule corpus audit | indirect: if a retired rule was generating wasted rework (agents punting fixable things to backlog per R3), `rework_rate` (1.74% baseline) could tick down | too indirect to size; watch, don't predict |
+| **A7** (claimed) | SUBTRACT rule corpus audit | indirect: if a retired rule was generating wasted rework (agents punting fixable things to backlog per R3), `rework_rate` could tick down | too indirect to size; watch, don't predict. **Baseline for this comparison is the wq#841 structural series (starts 2026-08-23), not the retracted 1.74%.** |
 | **A8** (open) | enforce UNIVERSAL_RULES in dispatch-lint/CI | no flow-metric lever — this is a drift-prevention control, not a throughput one | no prediction |
-| **A9** (open) | evidence gate on ticket closure | `rework_rate` likely **rises** short-term (currently-invisible FALSE_COMPLETE closures start getting caught and reopened instead of silently standing as `done`), then falls as workers adapt | falsifiable: reopened-marker rate should exceed 1.74% in the first 2 weeks post-A9, then trend back down within a month |
+| **A9** (open) | evidence gate on ticket closure | `rework_rate` likely **rises** short-term (currently-invisible FALSE_COMPLETE closures start getting caught and reopened instead of silently standing as `done`), then falls as workers adapt | falsifiable, and now actually testable: watch `lumen_queue_reopened_total` (wq#841's monotonic count) rise post-A9, then flatten within a month. The original form of this prediction — "reopened-marker rate should exceed 1.74%" — was untestable, because the marker it named erased itself |
 | **A10** (open) | audit why lanes are born switched off | `throughput` in currently-`enabled:false` lanes (lpp, questfree, pstack, fleet-fires) should go from ~0 dispatcher-driven completions to nonzero; overall WIP backlog in previously-invisible lanes (F2's build-lane example: 27 tickets never dispatcher-visible) should start draining | watch `lumen_queue_wip_total{lane="fleet-fires"}` etc. — currently 1 (near-zero, consistent with "off") |
 | **A11** (open) | maintenance window design | `blocked_age_distribution` max (41d baseline / 41.1d live) should drop once CVE/patch tickets like wq#383 stop waiting indefinitely | falsifiable: oldest-blocked age should fall below 41d within one maintenance-window cycle after adoption |
 | **A12** (open) | external practice consult | informational; no direct lever | no prediction |
@@ -157,7 +190,7 @@ throughput:
 | blocked tickets | 52 | 44 | -8 |
 | oldest blocked (days) | 41 | 41.1 | +0.1 (noise — same ticket, one more day old) |
 | WIP in-flight | 147 (at cutoff) | 165 (now) | +18 — expected: campaign itself added 15 new ops-audit tickets |
-| rework rate | 1.74% | 2.43% | +0.69pp — watch this, could be early A9-shaped signal or just small-n noise (population 747→783) |
+| ~~rework rate~~ | ~~1.74%~~ | ~~2.43%~~ | **row void — both sides were computed from an erasable marker; the delta measured note churn, not rework (wq#841)** |
 
 This is the falsifiable evidence this ticket exists to produce: the campaign has already moved
 `time_parked_on_frank` by -31% within the same day, independently confirmed by both the frozen
@@ -171,3 +204,7 @@ self-reported claim.
 - `opsaudit_a13_flow_metrics.py` — `--baseline` / `--live` / `--prom`, read-only against queue.db.
 - `opsaudit_a13_deploy_flow_exporter.sh` — idempotent exporter deploy (already run live on `lumen` this session).
 - `opsaudit_a13_grafana_dashboard.json` — dashboard body, already POSTed and verified live.
+- `opsaudit_a13_baseline_20260821.errata.json` — wq#841: the one field of the frozen baseline
+  that is not reproducible, what replaced it, and what is unrecoverable.
+- `wq841_rework_rate_durability.md` + `../ops/wq841-rework-durability/` — the durable-signal fix
+  and its audited backfill.

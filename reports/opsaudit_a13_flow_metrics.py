@@ -130,24 +130,65 @@ def wip_at_cutoff(cur, cutoff):
     return n
 
 
-def rework_rate(cur, before):
-    total = cur.execute(
-        "select count(*) from tasks where created_at < ?", (before,)
-    ).fetchone()[0]
-    reopened = cur.execute(
-        "select count(*) from tasks where created_at < ? and notes like '%REOPENED%'",
-        (before,),
-    ).fetchone()[0]
-    rejected = cur.execute(
-        "select count(*) from tasks where created_at < ? and status='rejected'",
-        (before,),
-    ).fetchone()[0]
+# wq#841 (escalated from wq#787's verify-pass of this file): rework used to be counted as
+# `notes LIKE '%REOPENED%'`. That is a substring match against a MUTABLE field — `wq done`
+# replaces notes wholesale on every close — so a ticket that was genuinely reopened dropped out
+# of the population the moment anybody closed it again. Measured decay: ~18 markers -> 4 in under
+# 24h, dragging this very gauge 2.43 -> 0.6 with no change in real rework. The rule is also
+# case-insensitive in SQLite, so prose ("wq#626 reopened with corrected notes") counted too.
+#
+# tasks.reopened_count is the durable replacement: a monotonic column that wq bumps on every
+# terminal -> in-flight transition and that nothing later overwrites. It is AUTHORITATIVE FROM
+# REWORK_EPOCH ONWARD ONLY — reopens before that were never recorded structurally and, apart
+# from the three seeded by ops/wq841-rework-durability/backfill_reopened.py, are unrecoverable.
+REWORK_EPOCH = "2026-08-23"
+REWORK_CAVEAT = (
+    "reopened counted from tasks.reopened_count (wq#841), a monotonic column bumped on every "
+    f"terminal->in-flight transition. Authoritative from {REWORK_EPOCH} onward only: before "
+    "that, rework was inferred from a mutable `notes LIKE '%REOPENED%'` substring that any "
+    "later `wq done` erased, so every rework figure dated before this epoch UNDERCOUNTS by an "
+    "unknown amount and is NOT comparable with figures dated after it. See "
+    "reports/wq841_rework_rate_durability.md."
+)
+
+
+def has_reopened_column(cur):
+    return "reopened_count" in {r[1] for r in cur.execute("PRAGMA table_info(tasks)")}
+
+
+def rework_block(cur, where="", params=()):
+    """Shared by the cutoff-scoped baseline and the all-time live snapshot — one definition of
+    rework, so the frozen series and the Grafana gauge can never drift apart again."""
+    scope = where or "1=1"
+
+    def count(extra=None):
+        sql = f"select count(*) from tasks where {scope}" + (f" and {extra}" if extra else "")
+        return cur.execute(sql, params).fetchone()[0]
+
+    total = count()
+    rejected = count("status='rejected'")
+    legacy = count("notes like '%REOPENED%'")
+    structural = count("coalesce(reopened_count, 0) > 0") if has_reopened_column(cur) else None
+    reopened = legacy if structural is None else structural
     return {
         "population": total,
-        "reopened_marker_in_notes": reopened,
+        "reopened": reopened,
+        "reopened_signal": "notes_substring_LEGACY" if structural is None else "reopened_count",
+        # Kept side by side, never summed: the gap between them is the decay this metric used to
+        # suffer silently, and a reader can see it without re-deriving anything.
+        "reopened_structural": structural,
+        "reopened_marker_in_notes": legacy,
         "rejected_status": rejected,
         "rework_rate_pct": round(100.0 * (reopened + rejected) / total, 2) if total else None,
+        "caveat": REWORK_CAVEAT if structural is not None else (
+            "tasks.reopened_count is ABSENT from this DB — falling back to the mutable "
+            "notes-substring rule, which silently undercounts. Do not publish this figure."
+        ),
     }
+
+
+def rework_rate(cur, before):
+    return rework_block(cur, "created_at < ?", (before,))
 
 
 def live_snapshot(cur):
@@ -172,9 +213,7 @@ def live_snapshot(cur):
         h = hours_between(created_at, now)
         if h is not None:
             frank_ages.append(h / 24.0)
-    reopened_live = cur.execute("select count(*) from tasks where notes like '%REOPENED%'").fetchone()[0]
-    rejected_live = cur.execute("select count(*) from tasks where status='rejected'").fetchone()[0]
-    total_live = cur.execute("select count(*) from tasks").fetchone()[0]
+    rework = rework_block(cur)          # wq#841: all-time, same definition as the baseline
     return {
         "captured_at_utc": now,
         "status_counts": status_counts,
@@ -183,7 +222,8 @@ def live_snapshot(cur):
         "blocked_age_days": summarize_days(blocked_ages),
         "frank_parked_count": len(frank_rows),
         "frank_parked_age_days": summarize_days(frank_ages),
-        "rework_rate_pct": round(100.0 * (reopened_live + rejected_live) / total_live, 2) if total_live else None,
+        "rework_rate_pct": rework["rework_rate_pct"],
+        "rework": rework,
     }
 
 
@@ -203,6 +243,10 @@ def build_baseline():
     cur = con.cursor()
     out = {
         "artifact": "opsaudit_a13_baseline_20260821",
+        # wq#841: v1 (the sha256-frozen file shipped 2026-08-22) is byte-reproducible in EVERY
+        # field except rework_rate, whose signal was mutable — see the errata JSON beside it.
+        # v2 keeps the frozen file untouched and changes only the rework_rate block.
+        "baseline_schema": 2,
         "campaign_doc": "/home/lumen/instructions/FLEET_OPS_AUDIT_2026-08-21.md",
         "cutoff_utc": CUTOFF,
         "cutoff_rationale": (
@@ -311,8 +355,17 @@ def to_prom(snap):
             continue
         lines.append(f'lumen_queue_frank_parked_age_days{{stat="{stat}"}} {v}')
 
+    # wq#841: the components ship as their own gauges, not just the ratio. A rework_rate_pct that
+    # falls is only good news if reopened_total held or fell too — the old gauge could not tell a
+    # real improvement from a marker that got overwritten, and that is how it read 2.43 -> 0.6.
+    rework = snap["rework"]
+    gauge("lumen_queue_reopened_total", "tickets with reopened_count>0 — durable, monotonic per ticket (wq#841)")
+    lines.append(f"lumen_queue_reopened_total {rework['reopened']}")
+    gauge("lumen_queue_reopened_signal_is_structural",
+          "1 = counted from tasks.reopened_count, 0 = degraded to the mutable notes substring (wq#841)")
+    lines.append(f"lumen_queue_reopened_signal_is_structural {int(rework['reopened_signal'] == 'reopened_count')}")
     if snap["rework_rate_pct"] is not None:
-        gauge("lumen_queue_rework_rate_pct", "pct of all-time tickets reopened or rejected (wq#763)")
+        gauge("lumen_queue_rework_rate_pct", "pct of all-time tickets reopened or rejected (wq#763, signal fixed in wq#841)")
         lines.append(f"lumen_queue_rework_rate_pct {snap['rework_rate_pct']}")
 
     return "\n".join(lines) + "\n"

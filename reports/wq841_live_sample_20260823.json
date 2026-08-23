@@ -1,0 +1,50 @@
+{
+  "captured_at_utc": "2026-08-23 06:02:14",
+  "status_counts": {
+    "blocked": 13,
+    "claimed": 7,
+    "done": 726,
+    "open": 99,
+    "rejected": 1
+  },
+  "wip_total": 119,
+  "wip_by_lane": {
+    "auto": 8,
+    "build": 63,
+    "fleet": 7,
+    "fleet-fires": 1,
+    "fleet-safety": 1,
+    "fleet-spend": 1,
+    "foreman-tok": 1,
+    "memory": 3,
+    "ops": 1,
+    "pokemon": 8,
+    "quest-repair-research": 1,
+    "research": 5,
+    "user": 19
+  },
+  "blocked_age_days": {
+    "n": 13,
+    "mean_d": 24.7,
+    "median_d": 36.0,
+    "max_d": 42.0
+  },
+  "frank_parked_count": 30,
+  "frank_parked_age_days": {
+    "n": 30,
+    "mean_d": 21.2,
+    "median_d": 13.0,
+    "max_d": 49.0
+  },
+  "rework_rate_pct": 0.47,
+  "rework": {
+    "population": 846,
+    "reopened": 3,
+    "reopened_signal": "reopened_count",
+    "reopened_structural": 3,
+    "reopened_marker_in_notes": 3,
+    "rejected_status": 1,
+    "rework_rate_pct": 0.47,
+    "caveat": "reopened counted from tasks.reopened_count (wq#841), a monotonic column bumped on every terminal->in-flight transition. Authoritative from 2026-08-23 onward only: before that, rework was inferred from a mutable `notes LIKE '%REOPENED%'` substring that any later `wq done` erased, so every rework figure dated before this epoch UNDERCOUNTS by an unknown amount and is NOT comparable with figures dated after it. See reports/wq841_rework_rate_durability.md."
+  }
+}
