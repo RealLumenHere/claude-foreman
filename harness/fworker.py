@@ -415,7 +415,14 @@ def wq_heartbeat(ticket_id):
 
 
 def wq_done(ticket_id, notes):
-    wq("done", str(ticket_id), "--notes", notes)
+    p = wq("done", str(ticket_id), "--notes", notes)
+    if p.returncode != 0:
+        # wq#759 evidence gate (or any other refusal): log loudly so fworker never
+        # silently swallows a refused close (wq#837 contradict finding).
+        log(f"ERROR: wq done {ticket_id} refused (exit {p.returncode}): "
+            f"{p.stdout.strip()} {p.stderr.strip()}")
+        raise RuntimeError(f"wq done {ticket_id} refused (exit {p.returncode}): "
+                           f"{p.stdout.strip()}")
 
 
 def wq_release(ticket_id):
