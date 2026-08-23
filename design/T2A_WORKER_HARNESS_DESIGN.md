@@ -231,10 +231,14 @@ the `Read` tool only:
 - **R3** — a `Read` with no `limit` gets one injected (`FOREMAN_READ_LINE_CAP`, default
   300 lines), same shape as R4's Bash cap: files under the cap pass through untouched,
   only genuinely large whole-file reads get bounded.
-- **R5** — an exact-repeat read (same path/offset/limit) of a file whose mtime hasn't
-  changed since this session last read it is blocked, not re-fetched. Per-session state
-  lives in a JSONL cache under `$FOREMAN_EVENTS_DIR/read_cache/<session_id>.jsonl`; an
-  mtime change (an `Edit`/`Write`, or any out-of-band change) invalidates the entry.
+- **R5** — an exact-repeat read (same path/offset/limit) of a file untouched since this
+  session last read it is blocked, not re-fetched. Per-session state lives in a JSONL
+  cache under `$FOREMAN_EVENTS_DIR/read_cache/<session_id>.jsonl`, keyed on size plus
+  **nanosecond** mtime (`stat -c '%s:%Y:%.9Y'`); any change to either (an `Edit`/`Write`,
+  or an out-of-band change) invalidates the entry. Whole-second mtime was the original
+  key and was wrong (wq#833): an `Edit` followed by a verifying `Read` in the same
+  wall-clock second — the normal rhythm of a fast agent loop — read as unchanged, and the
+  agent was told its stale copy was current.
 - **R6** — a `Read` on a path that can't possibly succeed (missing, or a directory) is
   denied before it runs, so the guaranteed error never becomes a full-size tool_result
   carried for the rest of the session; only this unambiguous case is caught; anything

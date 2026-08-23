@@ -333,9 +333,13 @@ wq#729's confirmed `PreToolUse` `updatedInput` mechanism, scoped to the `Read` t
 - **R3:** a `Read` with no `limit` gets one injected (`FOREMAN_READ_LINE_CAP`, default 300
   lines) — files under the cap are unaffected, only genuinely large whole-file reads get
   bounded.
-- **R5:** an exact-repeat read (same path/offset/limit) of a file whose mtime hasn't changed
-  since this session last read it is blocked outright, not re-fetched. Per-session state is
-  a JSONL cache under `$FOREMAN_EVENTS_DIR/read_cache/<session_id>.jsonl`.
+- **R5:** an exact-repeat read (same path/offset/limit) of a file untouched since this
+  session last read it is blocked outright, not re-fetched. Per-session state is a JSONL
+  cache under `$FOREMAN_EVENTS_DIR/read_cache/<session_id>.jsonl`, keyed on size plus
+  nanosecond mtime. **Corrected 2026-08-23 (wq#833):** the original key used whole-second
+  mtime, so an `Edit` and the `Read` that verifies it in the same wall-clock second looked
+  identical to a wasteful repeat read and got blocked — the agent kept the pre-edit
+  content and was told it was current.
 - **R6:** a `Read` on a path that can't possibly succeed (missing, or a directory) is denied
   before it runs — only this unambiguous case, not permission- or content-shaped errors the
   real tool knows more about than a hook does.

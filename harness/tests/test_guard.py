@@ -353,13 +353,41 @@ def test_repeat_read_after_file_changes_is_allowed(tmp_path):
     rc1, stderr1 = run_guard("Read", {"file_path": str(f), "limit": 10}, env_extra=events)
     assert rc1 == 0, stderr1
 
-    # Force a distinct mtime (some filesystems have 1s resolution).
+    # An out-of-band mtime change (restore, rsync, touch) invalidates too.
     new_mtime = f.stat().st_mtime + 2
     f.write_text("v2\n")
     os.utime(f, (new_mtime, new_mtime))
 
     rc2, stderr2 = run_guard("Read", {"file_path": str(f), "limit": 10}, env_extra=events)
     assert rc2 == 0, stderr2
+
+
+def test_repeat_read_after_same_second_change_is_allowed(tmp_path):
+    """wq#833: Edit-then-Read inside one wall-clock second must not be misreported
+    as unchanged. No os.utime fudge — the write really does land in the same
+    integer second as the first read, which is what a fast agent loop does."""
+    events = {"FOREMAN_EVENTS_DIR": str(tmp_path / "events")}
+
+    for attempt in range(10):
+        f = tmp_path / f"same-second-{attempt}.txt"
+        f.write_text("v1\n")
+        session = f"same-second-{attempt}"
+
+        rc1, stderr1 = run_guard("Read", {"file_path": str(f), "limit": 10},
+                                 env_extra=events, session_id=session)
+        assert rc1 == 0, stderr1
+
+        second_before = int(f.stat().st_mtime)
+        f.write_text("v2\n")
+        if int(f.stat().st_mtime) != second_before:
+            continue  # the two writes straddled a second boundary; not the case under test
+
+        rc2, stderr2 = run_guard("Read", {"file_path": str(f), "limit": 10},
+                                 env_extra=events, session_id=session)
+        assert rc2 == 0, f"same-second edit misreported as unchanged: {stderr2}"
+        return
+
+    raise AssertionError("every attempt straddled a second boundary — test never ran")
 
 
 def test_repeat_read_different_offset_is_not_suppressed(tmp_path):

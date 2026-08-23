@@ -263,22 +263,29 @@ Read|Edit|Write|Grep|Glob)
     # hasn't changed on disk since this session last read it — two revisions of
     # the same file in context is a known way to confuse an editing agent, and
     # the tokens are pure waste since nothing changed.
+    # wq#833: the key has to be size + *nanosecond* mtime, not `stat -c %Y`.
+    # Whole-second mtime cannot tell an Edit-then-Read-to-verify apart from a
+    # genuine repeat read — in a fast agent loop both land in the same wall-clock
+    # second, and the agent was then told its stale copy was still current.
+    # `%.9Y` keeps ~100ns resolution; a stat too old to know the precision spec
+    # emits it literally, which degrades to the old %Y behaviour rather than
+    # freezing the key.
     SESSION_ID=$(jfield '.session_id')
-    MTIME=$(stat -c %Y "$FILE_PATH" 2>/dev/null)
+    MTIME=$(stat -c '%s:%Y:%.9Y' "$FILE_PATH" 2>/dev/null)
     if [ -n "$SESSION_ID" ] && [ -n "$MTIME" ]; then
       CACHE_DIR=${FOREMAN_READ_CACHE_DIR:-$EVENTS_DIR/read_cache}
       mkdir -p "$CACHE_DIR" 2>/dev/null
       CACHE_FILE="$CACHE_DIR/$SESSION_ID.jsonl"
       if [ -f "$CACHE_FILE" ]; then
         HIT=$(jq -sr --arg p "$FILE_PATH" --arg o "$EFF_OFFSET" --arg l "$EFF_LIMIT" --arg m "$MTIME" \
-          'map(select(.path == $p and .offset == $o and .limit == $l and .mtime == $m)) | length' \
+          'map(select(.path == $p and .offset == $o and .limit == $l and .fp == $m)) | length' \
           "$CACHE_FILE" 2>/dev/null)
         if [ -n "$HIT" ] && [ "$HIT" != "0" ]; then
           block "already read this session, file unchanged since (wq#730 R5): $FILE_PATH offset=$EFF_OFFSET limit=$EFF_LIMIT — reuse the earlier tool result instead of re-reading" "$FILE_PATH"
         fi
       fi
       jq -nc --arg p "$FILE_PATH" --arg o "$EFF_OFFSET" --arg l "$EFF_LIMIT" --arg m "$MTIME" \
-        '{path:$p, offset:$o, limit:$l, mtime:$m}' >> "$CACHE_FILE" 2>/dev/null
+        '{path:$p, offset:$o, limit:$l, fp:$m}' >> "$CACHE_FILE" 2>/dev/null
     fi
 
     # R3: a Read that didn't ask for a limit gets one by default, same spirit as
