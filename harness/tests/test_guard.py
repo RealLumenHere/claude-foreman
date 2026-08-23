@@ -561,9 +561,12 @@ def test_primary_tree_branch_switch_blocked():
     failures = []
     for inp, cwd in PRIMARY_MUST_BLOCK:
         rc, stderr = run_guard("Bash", inp, cwd=cwd)
-        if rc != 2 or "wq#900" not in stderr:
+        # "syntax error": a shell-metacharacter (backtick/quote) slip in the reason
+        # string executes inside block()'s double quotes — caught live once; keep
+        # the reason inert, not just the exit code right.
+        if rc != 2 or "wq#900" not in stderr or "syntax error" in stderr:
             failures.append((inp, cwd, rc, stderr))
-    assert not failures, f"expected wq#900 block, got: {failures}"
+    assert not failures, f"expected clean wq#900 block, got: {failures}"
 
 
 def test_primary_tree_allow_cases():
