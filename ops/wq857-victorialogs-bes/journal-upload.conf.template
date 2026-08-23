@@ -1,0 +1,2 @@
+[Upload]
+URL=http://__BES_ADDR__:9428/insert/journald

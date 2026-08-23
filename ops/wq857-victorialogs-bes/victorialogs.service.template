@@ -1,0 +1,21 @@
+[Unit]
+Description=VictoriaLogs (fleet-wide log aggregation, wq#857)
+Documentation=https://docs.victoriametrics.com/victorialogs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=victorialogs
+Group=victorialogs
+ExecStart=/usr/local/bin/victoria-logs-prod -storageDataPath=/var/lib/victorialogs -retentionPeriod=30d -httpListenAddr=__VL_LISTEN_ADDR__:9428 -loggerTimezone=UTC
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/victorialogs
+
+[Install]
+WantedBy=multi-user.target
