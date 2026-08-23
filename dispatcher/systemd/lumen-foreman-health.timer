@@ -1,8 +1,9 @@
-# lumen-foreman-health.timer — 5-min cadence for dispatch_health.py (wq#825).
-# Runs twice per dispatch cycle (20min) so consecutive unhealthy passes are
-# caught within ~10min. SHIPS DISABLED (Tier-3, same posture as dispatch/selfheal).
+# lumen-foreman-health.timer — 5-min cadence for dispatch_health.py (wq#825) and
+# dispatch_config_lint.py (wq#845). Runs twice per dispatch cycle (20min) so
+# consecutive unhealthy passes are caught within ~10min. SHIPS DISABLED (Tier-3,
+# same posture as dispatch/selfheal).
 [Unit]
-Description=5-min cadence for lumen-foreman-health (STAGED — Frank enables; wq#825)
+Description=5-min cadence for lumen-foreman-health (STAGED — Frank enables; wq#825, wq#845)
 
 [Timer]
 OnBootSec=3min

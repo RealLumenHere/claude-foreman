@@ -1,9 +1,13 @@
-# lumen-foreman-health.service — one dispatch health check (wq#825).
+# lumen-foreman-health.service — dispatch health checks (wq#825, wq#845).
 # Reads the dispatcher log, classifies last N passes, ntfys Frank URGENT
 # if all are unhealthy. Replaces the interim dispatch-deadman.sh.
+# Also runs dispatch_config_lint.py: FAILs when a lane has open queue.db tickets
+# but no dispatcher config.json entry (wq#760 §4b — the "build lane was invisible
+# for an entire campaign" finding).
 [Unit]
-Description=Lumen dispatcher health check — alarm on consecutive stalled passes (wq#825)
+Description=Lumen dispatcher health checks — stalled passes + lane/config drift (wq#825, wq#845)
 Documentation=file:///home/lumen/foreman/dispatcher/dispatch_health.py
+Documentation=file:///home/lumen/foreman/dispatcher/dispatch_config_lint.py
 After=network-online.target
 
 [Service]
@@ -11,6 +15,7 @@ Type=oneshot
 User=lumen
 Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/home/lumen/foreman
-ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/dispatch_health.py check
+ExecStart=-/usr/bin/python3 /home/lumen/foreman/dispatcher/dispatch_health.py check
+ExecStart=-/usr/bin/python3 /home/lumen/foreman/dispatcher/dispatch_config_lint.py check
 TimeoutStartSec=60
 Nice=5
