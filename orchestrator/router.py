@@ -74,6 +74,9 @@ LANE_REPO = {
     "questfree": "/home/lumen/questfree",
     "pstack": "/home/lumen/pstack",
     "mission-control": "/home/lumen/mission-control",
+    "fleet-spend": FOREMAN_ROOT,
+    "ops": FOREMAN_ROOT,
+    "quest-repair-research": FOREMAN_ROOT,
     "fleet-fires": FOREMAN_ROOT,          # fires are fleet/infra work, run from foreman
 }
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
