@@ -8,9 +8,9 @@ HTTP call, and the git ancestry check. Nothing here touches the live queue, the 
 
     python3 ops/wq899-pr-recon/test_merge_state_gate.py
 
-Exits 0 when every case passes. The patched binary is built on the fly by applying
-wq899_merge_state_gate.diff to a copy of /home/lumen/bin/wq, which also proves the shipped
-diff still applies to the live tool.
+Exits 0 when every case passes. The binary under test is a copy of /home/lumen/bin/wq; if
+that copy predates wq#905 the shipped wq899_merge_state_gate.diff is applied to it first,
+which also proves the diff still applies. Point WQ_BIN at another `wq` to test that one.
 """
 import http.server
 import json
@@ -42,8 +42,21 @@ class Forge(http.server.BaseHTTPRequestHandler):
         pass
 
 
+MARKER = "wq#899 merge-state gate"
+
+
 def build_patched_wq(dest):
+    """Copy LIVE_WQ to dest with the gate in it, patching only if it isn't there yet.
+
+    Before wq#905 the gate lived only in this diff, so applying it was the whole setup step.
+    Now it is in `wq` itself, and re-applying would fail — so the patch runs only against a
+    base that predates the landing, which keeps this usable as a regression test either way.
+    """
     shutil.copy(LIVE_WQ, dest)
+    os.chmod(dest, 0o755)
+    with open(dest, encoding="utf-8", errors="replace") as fh:
+        if MARKER in fh.read():
+            return
     p = subprocess.run(["patch", "-s", "--forward", dest, DIFF], capture_output=True, text=True)
     if p.returncode != 0:
         sys.exit(f"the shipped diff no longer applies to {LIVE_WQ}:\n{p.stdout}{p.stderr}")
@@ -83,11 +96,14 @@ def main():
     def fresh_ticket():
         who = next(holder)
         # unique title per case: `wq add` collapses duplicate titles onto the existing ticket.
-        r = run("add", "--lane", "test", "--title", f"gate case {who}", "--pri", "5")
+        # lane t1: wq#912 refuses `add` on a lane with no dispatcher/config.json entry, and t1
+        # is one of the three deliberately-exempt lanes. The scratch WQ_DB is per-run, so
+        # nothing here reaches the real t1 queue.
+        r = run("add", "--lane", "t1", "--title", f"gate case {who}", "--pri", "5")
         tid = next((t for t in reversed(r.stdout.split()) if t.isdigit()), "")
         if not tid or not r.stdout.startswith("added"):
             sys.exit(f"could not create a scratch ticket: {r.stdout}{r.stderr}")
-        c = run("claim", who, "--lane", "test", "--id", tid, agent=who)
+        c = run("claim", who, "--lane", "t1", "--id", tid, agent=who)
         if "claimed" not in (c.stdout + c.stderr).lower():
             sys.exit(f"could not claim scratch ticket {tid}: {c.stdout}{c.stderr}")
         return tid, who
