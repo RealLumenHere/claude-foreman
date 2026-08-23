@@ -340,7 +340,8 @@ def test_fire_approval_not_disarmable(denv):
     lanes = json.loads(json.dumps(BASE_CONFIG["lanes"]))
     lanes["fleet-fires"]["requires_approval"] = False  # hostile config edit
     write_config(denv, lanes=lanes)
-    assert fd.load_config(str(denv["cfg_path"]))["lanes"]["fleet-fires"]["requires_approval"] is True
+    cfg, _ = fd.load_config(str(denv["cfg_path"]))
+    assert cfg["lanes"]["fleet-fires"]["requires_approval"] is True
 
     tid = add_ticket("still needs Frank", lane="fleet-fires")
     assert fd.run_pass() == 0
@@ -667,10 +668,10 @@ def test_units_staged_disabled():
     assert "OnBootSec" in timer
 
 
-def test_shipped_config_all_lanes_disabled():
-    cfg = fd.load_config(os.path.join(DISPATCHER_DIR, "config.json"))
+def test_shipped_config_loads_without_warnings():
+    cfg, warnings = fd.load_config(os.path.join(DISPATCHER_DIR, "config.json"))
     assert cfg["lanes"], "shipped config must carry the lane allowlist"
-    assert all(p["enabled"] is False for p in cfg["lanes"].values())
+    assert warnings == [], f"shipped config has lane warnings: {warnings}"
     assert cfg["lanes"]["fleet-fires"]["requires_approval"] is True
 
 
@@ -815,3 +816,109 @@ def test_runaway_below_threshold_not_skipped(denv):
 
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
     assert log_events(denv, "skip", ticket=tid) == []
+
+
+# ---- wq#824: fail-soft lane validation -----------------------------------------------
+
+def test_bad_lane_does_not_halt_dispatch(denv):
+    """ROOT CAUSE REGRESSION: a lane with max_per_day=0 must NOT prevent other lanes
+    from dispatching. The bad lane is silently disabled; good lanes proceed."""
+    lanes = {
+        "testlane": {"enabled": True, "max_per_day": 10},
+        "badlane": {"enabled": True, "max_per_day": 0},  # the exact 10h-outage shape
+    }
+    write_config(denv, lanes=lanes)
+    tid = add_ticket("good lane ticket dispatches fine")
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    # config_lane error logged for the bad lane
+    config_errs = [e for e in log_events(denv, "error") if e["stage"] == "config_lane"]
+    assert len(config_errs) == 1
+    assert "badlane" in config_errs[0]["reason"]
+
+
+def test_bad_lane_ntfy_fires(denv):
+    """Config validation errors on individual lanes must ntfy Frank loudly."""
+    lanes = {
+        "testlane": {"enabled": True, "max_per_day": 10},
+        "broken": {"enabled": True, "max_per_day": "nope"},
+    }
+    write_config(denv, lanes=lanes)
+    add_ticket("still dispatches")
+    assert fd.run_pass() == 0
+    lines = ntfy_lines(denv)
+    assert len(lines) >= 1
+    assert any("bad lane config" in l or "broken" in l for l in lines)
+
+
+def test_disabled_lane_ignores_max_per_day(denv):
+    """enabled:false alone disables a lane — max_per_day is not validated."""
+    lanes = {
+        "testlane": {"enabled": True, "max_per_day": 10},
+        "off": {"enabled": False, "max_per_day": 0},       # was the 10h outage trigger
+        "off2": {"enabled": False, "max_per_day": -999},    # absurd value, still fine
+        "off3": {"enabled": False},                          # max_per_day omitted entirely
+    }
+    write_config(denv, lanes=lanes)
+    tid = add_ticket("clean dispatch")
+    cfg, warnings = fd.load_config(str(denv["cfg_path"]))
+    assert warnings == [], f"disabled lanes should not trigger warnings: {warnings}"
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
+def test_bad_lane_object_type(denv):
+    """A lane set to a non-dict (e.g. null, string) is disabled, not fatal."""
+    lanes = {
+        "testlane": {"enabled": True, "max_per_day": 10},
+        "junk": "not a dict",
+    }
+    write_config(denv, lanes=lanes)
+    tid = add_ticket("survives junk sibling lane")
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    config_errs = [e for e in log_events(denv, "error") if e["stage"] == "config_lane"]
+    assert len(config_errs) == 1
+
+
+def test_bad_lane_enabled_not_bool(denv):
+    """A lane with enabled=1 (not a bool) is disabled, not fatal."""
+    lanes = {
+        "testlane": {"enabled": True, "max_per_day": 10},
+        "truthy": {"enabled": 1, "max_per_day": 5},
+    }
+    write_config(denv, lanes=lanes)
+    tid = add_ticket("still goes")
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
+def test_multiple_bad_lanes_all_reported(denv):
+    """Every bad lane gets its own warning; none suppress the others."""
+    lanes = {
+        "testlane": {"enabled": True, "max_per_day": 10},
+        "bad1": {"enabled": True, "max_per_day": 0},
+        "bad2": {"enabled": True, "max_per_day": -1},
+        "bad3": "not a dict",
+    }
+    write_config(denv, lanes=lanes)
+    tid = add_ticket("good lane still dispatches")
+    cfg, warnings = fd.load_config(str(denv["cfg_path"]))
+    assert len(warnings) == 3
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
+def test_structural_config_error_still_fails_closed(denv):
+    """Top-level structural errors (missing lanes key, bad tight_mode, etc.) still
+    fail the entire pass — wq#824 only softened PER-LANE validation."""
+    denv["cfg_path"].write_text(json.dumps({
+        "max_spawns_per_pass": 3, "cloud_ceiling": 3,
+        "tight_mode": {"max_spawns_per_pass": 1, "min_pri": 1},
+        "lanes": "not a dict",
+    }))
+    add_ticket("structural error must still halt")
+    assert fd.run_pass() == 1
+    errs = log_events(denv, "error")
+    assert any(e["stage"] == "config" for e in errs)
+    assert lumen_calls(denv) == []

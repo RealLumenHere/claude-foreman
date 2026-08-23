@@ -122,18 +122,44 @@ def load_config(path=None):
     lanes = cfg.get("lanes")
     if not isinstance(lanes, dict):
         raise ConfigError(f"config {path}: lanes must be an object")
+    # wq#824: per-lane validation is fail-SOFT. A bad lane is disabled + warned,
+    # never halts all dispatch. Only structural (top-level) errors are fail-closed.
+    lane_warnings = []
+    valid_lanes = {}
     for lane, policy in lanes.items():
         if not isinstance(policy, dict):
-            raise ConfigError(f"config {path}: lanes.{lane} must be an object")
+            lane_warnings.append(f"lanes.{lane} must be an object — lane disabled")
+            valid_lanes[lane] = {"enabled": False, "_config_error": True}
+            continue
         if not isinstance(policy.get("enabled"), bool):
-            raise ConfigError(f"config {path}: lanes.{lane}.enabled must be a boolean")
-        pos_int(policy, "max_per_day", f"lanes.{lane}")
+            lane_warnings.append(f"lanes.{lane}.enabled must be a boolean — lane disabled")
+            valid_lanes[lane] = {"enabled": False, "_config_error": True}
+            continue
+        if not policy["enabled"]:
+            # Disabled lane: skip field validation entirely (wq#824 root cause fix).
+            # enabled:false alone is sufficient to disable a lane.
+            valid_lanes[lane] = policy
+            continue
+        # Enabled lane: validate operational fields
+        v = policy.get("max_per_day")
+        if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+            lane_warnings.append(
+                f"lanes.{lane}.max_per_day must be a positive integer "
+                f"(got {v!r}) — lane disabled")
+            policy = dict(policy, enabled=False, _config_error=True)
+            valid_lanes[lane] = policy
+            continue
         if "requires_approval" in policy and not isinstance(policy["requires_approval"], bool):
-            raise ConfigError(f"config {path}: lanes.{lane}.requires_approval must be a boolean")
+            lane_warnings.append(
+                f"lanes.{lane}.requires_approval must be a boolean — field ignored")
+            policy = dict(policy)
+            del policy["requires_approval"]
+        valid_lanes[lane] = policy
+    cfg["lanes"] = valid_lanes
     # MUST 4: a config edit cannot silently disarm fire approval (DESIGN §4, test T4b).
-    if FIRE_LANE in lanes:
-        lanes[FIRE_LANE]["requires_approval"] = True
-    return cfg
+    if FIRE_LANE in cfg["lanes"]:
+        cfg["lanes"][FIRE_LANE]["requires_approval"] = True
+    return cfg, lane_warnings
 
 
 # ---- decision log (§8) ---------------------------------------------------------------
@@ -696,11 +722,20 @@ def run_pass(dry_run=False):
         return 0
 
     try:
-        cfg = load_config()  # §4: invalid config fails the pass closed
+        cfg, lane_warnings = load_config()  # §4: structural errors fail closed;
+        # wq#824: per-lane errors are soft (lane disabled, pass continues)
     except ConfigError as e:
         log.emit("error", stage="config", reason=str(e))
         ntfy(f"dispatcher: invalid config — pass aborted: {e}")
         return 1
+    for w in lane_warnings:
+        log.emit("error", stage="config_lane", reason=w)
+    if lane_warnings:
+        bad = ", ".join(w.split(".")[0].replace("lanes", "").strip(".")
+                        for w in lane_warnings)
+        ntfy(f"dispatcher: bad lane config ({bad}) — lane(s) disabled, "
+             f"other lanes proceeding. Details: {'; '.join(lane_warnings)}",
+             priority="high", title="dispatcher config warning")
     ok, holder = slock_acquire()  # stage 1
     if not ok:
         log.emit("halt", stage="lock", reason="lock_busy")
