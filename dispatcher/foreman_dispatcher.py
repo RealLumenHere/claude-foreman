@@ -53,6 +53,7 @@ import concurrency     # noqa: E402
 import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
 import runaway          # noqa: E402
+import psi_pressure     # noqa: E402  # wq#844
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -559,6 +560,21 @@ def _do_pass(cfg, log, state, dry_run):
     spawned = 0
     dep_cache, pressure_cache = {}, {}
     stuck = runaway.stuck_ticket_ids()  # wq#718: one scan per pass, not per-candidate
+
+    # wq#844: PSI memory pressure — real backpressure from the box, not budget guessing.
+    # Checked once per pass (PSI avg60 is already smoothed).
+    psi_verdict, psi_reason = psi_pressure.check(tight_cfg)
+    if psi_verdict == "deny":
+        log.emit("halt", stage="psi_pressure", reason=psi_reason)
+        ntfy(f"dispatcher: PSI hard stop — {psi_reason}", priority="high",
+             title="dispatcher PSI halt")
+        return {"candidates": len(candidates), "spawned": 0, "tight": False,
+                "psi_halt": psi_reason}
+    if psi_verdict == "tight" and not tight:
+        tight = True
+        log.emit("tight_mode", reason=psi_reason,
+                 detail=f"PSI pressure: max {tight_cfg['max_spawns_per_pass']} "
+                        f"spawn(s), pri<={tight_cfg['min_pri']} only")
 
     pacing_cfg, pacing_warn = pacing.load_config()  # wq#716: forward-looking layer on §6
     if pacing_warn:
