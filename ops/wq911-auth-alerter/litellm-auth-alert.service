@@ -1,0 +1,13 @@
+[Unit]
+Description=LiteLLM auth-failure burst alerter (wq#911, consumes auth-failures.jsonl)
+Documentation=file:///home/lumen/docs/litellm/service_keys.md
+Wants=lumen-litellm-auth-monitor.service
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+ExecStart=/home/lumen/bin/litellm-auth-alert
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=litellm-auth-alert
