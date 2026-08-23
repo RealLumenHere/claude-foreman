@@ -1,5 +1,6 @@
 {
-  "policy": "conservative",
+  "policy": "off",
+  "_note": "set to off 2026-08-23 to respect zeroed governor/floors.json per Frank directive; conservative thresholds retained for re-enable",
   "min_elapsed_fraction": 0.02,
   "delay_min_pri": 1,
   "ntfy_dedup_hours": 6,

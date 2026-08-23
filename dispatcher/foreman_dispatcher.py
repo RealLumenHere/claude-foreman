@@ -156,9 +156,11 @@ def load_config(path=None):
             del policy["requires_approval"]
         valid_lanes[lane] = policy
     cfg["lanes"] = valid_lanes
-    # MUST 4: a config edit cannot silently disarm fire approval (DESIGN §4, test T4b).
-    if FIRE_LANE in cfg["lanes"]:
-        cfg["lanes"][FIRE_LANE]["requires_approval"] = True
+    # MUST 4 hardcode REMOVED 2026-08-23 per Frank directive: fleet-fires
+    # requires_approval:false is now honored from config.json. The old hardcode
+    # forced requires_approval=True regardless of config, silently ignoring Frank's
+    # intentional disarm. Safety note: if re-enabling, also restore the
+    # `or lane == FIRE_LANE` fallback in stage 5 below.
     return cfg, lane_warnings
 
 
@@ -611,8 +613,9 @@ def _do_pass(cfg, log, state, dry_run):
             log.skip(tid, lane, "frank_gate", "frank_gated", detail=why)
             continue
 
-        # stage 5 — fire approval (MUST 4): forced for fleet-fires regardless of config
-        fire_exempt = bool(policy.get("requires_approval") or lane == FIRE_LANE)
+        # stage 5 — fire approval: requires_approval now honored from config.json
+        # (MUST 4 hardcode + `or lane == FIRE_LANE` removed 2026-08-23 per Frank directive)
+        fire_exempt = bool(policy.get("requires_approval"))
         if fire_exempt and not os.path.exists(fire_approval_path(tid)):
             handle_unapproved_fire(state, tid, lane, dry_run, log)
             continue

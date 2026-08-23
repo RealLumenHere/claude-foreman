@@ -336,12 +336,29 @@ def test_fire_requires_approval(denv):
     assert (denv["approvals"] / f"wq{tid}.approved").exists()
 
 
-def test_fire_approval_not_disarmable(denv):
+def test_fire_approval_config_honored(denv):
+    """MUST-4 hardcode REMOVED 2026-08-23 per Frank directive: config.json's
+    requires_approval is now honored. When fleet-fires has requires_approval:false,
+    tickets dispatch WITHOUT an approval file (the old hardcode silently forced
+    requires_approval:true regardless of config)."""
     lanes = json.loads(json.dumps(BASE_CONFIG["lanes"]))
-    lanes["fleet-fires"]["requires_approval"] = False  # hostile config edit
+    lanes["fleet-fires"]["requires_approval"] = False
     write_config(denv, lanes=lanes)
     cfg, _ = fd.load_config(str(denv["cfg_path"]))
-    assert cfg["lanes"]["fleet-fires"]["requires_approval"] is True
+    assert cfg["lanes"]["fleet-fires"]["requires_approval"] is False
+
+    tid = add_ticket("fire ticket dispatches without approval", lane="fleet-fires")
+    assert fd.run_pass() == 0
+    spawns = log_events(denv, "spawn", ticket=tid)
+    # With requires_approval:false, the ticket should spawn (not be skipped for approval)
+    assert len(spawns) == 1 or len(log_events(denv, "would_spawn", ticket=tid)) == 1
+
+
+def test_fire_approval_when_enabled(denv):
+    """When requires_approval:true, fleet-fires tickets still need an approval file."""
+    lanes = json.loads(json.dumps(BASE_CONFIG["lanes"]))
+    lanes["fleet-fires"]["requires_approval"] = True
+    write_config(denv, lanes=lanes)
 
     tid = add_ticket("still needs Frank", lane="fleet-fires")
     assert fd.run_pass() == 0
@@ -672,7 +689,9 @@ def test_shipped_config_loads_without_warnings():
     cfg, warnings = fd.load_config(os.path.join(DISPATCHER_DIR, "config.json"))
     assert cfg["lanes"], "shipped config must carry the lane allowlist"
     assert warnings == [], f"shipped config has lane warnings: {warnings}"
-    assert cfg["lanes"]["fleet-fires"]["requires_approval"] is True
+    # MUST-4 hardcode removed 2026-08-23 per Frank directive: config.json's
+    # requires_approval:false for fleet-fires is now honored as-is.
+    assert cfg["lanes"]["fleet-fires"]["requires_approval"] is False
 
 
 def test_once_pass_exits(denv):

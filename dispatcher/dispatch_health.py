@@ -226,18 +226,25 @@ FAULT_BAK = CONFIG_PATH + ".bak.healthtest"
 
 def inject_fault():
     """Write a structurally invalid config that will make the dispatcher emit
-    error stage=config on its next pass. Backs up the real config first."""
+    error stage=config on its next pass. Backs up the real config first.
+
+    NOTE (wq#827 verify fix, 2026-08-23): the original version added a bad lane
+    (__HEALTHTEST__ with max_per_day:-999), but wq#824 made per-lane validation
+    SOFT (stage=config_lane, not stage=config), so the health checker correctly
+    classified the pass as healthy (it continued and spawned). This version
+    corrupts a top-level required field (max_spawns_per_pass) instead, which is
+    a hard config error → the pass aborts → dispatch_health.py detects it."""
     with open(CONFIG_PATH) as f:
         real = f.read()
     with open(FAULT_BAK, "w") as f:
         f.write(real)
     cfg = json.loads(real)
-    cfg["lanes"]["__HEALTHTEST__"] = {"enabled": True, "max_per_day": -999}
+    cfg["max_spawns_per_pass"] = "HEALTHTEST_INVALID"
     with open(CONFIG_PATH, "w") as f:
         json.dump(cfg, f, indent=2)
-    print(f"FAULT INJECTED: wrote bad lane '__HEALTHTEST__' to {CONFIG_PATH}")
+    print(f"FAULT INJECTED: set max_spawns_per_pass to invalid value in {CONFIG_PATH}")
     print(f"Backup: {FAULT_BAK}")
-    print("The dispatcher's next pass will emit error stage=config_lane.")
+    print("The dispatcher's next pass will emit error stage=config (hard abort).")
 
 
 def clear_fault():
