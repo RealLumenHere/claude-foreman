@@ -50,6 +50,13 @@ CWD_STABILITY §(i) proved the region is not cacheable.)*
 
 ### SmartCrusher — CONDITIONAL (highest value, needs hook point)
 
+> **wq#888 correction (2026-08-24):** the hook point was found and the answer is no.
+> The 93.7% below counts the tool-result *envelope*, which claude-code assembles
+> after every hook runs. The only usable hook (PreToolUse `updatedInput`) sees raw
+> Bash stdout, and that is JSON in **1.7%** of results — 0.07% of tool-result bytes.
+> See research/SMARTCRUSHER_HOOK.md. The remaining §3-§5 assessment of the engines
+> themselves stands; only SmartCrusher's rank in §5 changes.
+
 93.7% of our tool results are JSON. SmartCrusher claims 60-95% on JSON arrays (collapses
 repeated keys, deduplicates homogeneous records, preserves structure). Our bash command
 outputs are JSON-wrapped (`{stdout, stderr, exitCode}`) — the stdout inside is often
@@ -130,9 +137,10 @@ CacheAligner on top of claude-code's existing cache is the VOLATILE CONTENT dete
 ## 7. Recommendation
 
 - **Now:** Run CacheAligner as a diagnostic on worker prompts. Seed ticket.
-- **Next:** Investigate SmartCrusher hook point. If fworker can intercept tool results
-  (e.g., via claude-code's `--output-format stream-json` post-processing), integrate
-  SmartCrusher library-mode for JSON compression. Seed ticket.
+- **Next:** ~~Investigate SmartCrusher hook point.~~ DONE, wq#888: hook point exists
+  (PreToolUse `updatedInput` + pipe filter), stream-json post-processing is impossible
+  (one-way stream), payload reachable is 0.07% of tool-result bytes. Prototype merged
+  unwired. research/SMARTCRUSHER_HOOK.md.
 - **Later:** Test proxy OAuth passthrough. If it works, evaluate proxy mode for headless
   workers. Seed ticket.
 - **Never:** Kompress ML model on Broadwell for <5% of payload. Not worth the resident cost.
