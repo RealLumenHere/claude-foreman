@@ -20,6 +20,13 @@ or leak through it today. Two measurements answer that:
 The replay redirects guard.sh's event log to a scratch dir; it is otherwise a
 pure decision function, so this is safe to run repeatedly.
 
+SUPERSEDED by wq#954: guard.sh no longer caps Bash at all -- the cap moved to
+BASH_MAX_OUTPUT_LENGTH, which truncates the result rather than the command. Run
+against a current guard, the replay now reports 100% "exempt", which means "the
+guard rewrote nothing", not "the bytes leak". Point WQ951_GUARD at a pre-wq#954
+guard to reproduce the measurements in UNCAPPED_BASH.md §2-3; the numbers there
+are a point-in-time record of the design this ticket replaced.
+
 Reproduce:  python3 research/uncapped_bash_probe.py
 Source:     /home/lumen/agents/work-queue/_runs/*.jsonl + /home/lumen/foreman/_runs/*.jsonl
             (the work-queue root alone is wq#888's corpus, kept comparable)

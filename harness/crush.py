@@ -4,16 +4,21 @@
 research/SMARTCRUSHER_HOOK.md is the feasibility assessment this implements. The
 short version: claude-code 2.1.233 has no way to rewrite a tool *result*, so the
 only lever that changes bytes before they enter the context is PreToolUse
-`updatedInput` -- the same lever harness/guard.sh already uses for the wq#729
-Bash cap and the wq#730 Read bound. That lever rewrites the *command*, so the
-compressor has to be a stdin->stdout filter the guard appends to the pipeline:
+`updatedInput` -- the same lever harness/guard.sh uses for the wq#730 Read bound.
+That lever rewrites the *command*, so the compressor has to be a stdin->stdout
+filter the guard appends to the pipeline:
 
     { <cmd>
     } 2>&1 | crush.py --max-bytes 2000
 
-Placed there it runs strictly *before* the wq#729 `head -c` cap, which is the
-whole point: truncation destroys the tail of a large result, compression keeps
-every value and drops only the bytes that repeat.
+wq#954 note: guard.sh no longer rewrites Bash commands at all -- the output cap
+moved to BASH_MAX_OUTPUT_LENGTH, which truncates the assembled result after the
+command has already run, so there is no longer a pipeline for this filter to sit
+in front of. Wiring crush.py up means reintroducing a command rewrite and, with
+it, the shell-state exemptions wq#954 deleted (research/UNCAPPED_BASH.md §4). The
+motivation is unchanged and still worth having -- truncation destroys the tail of
+a large result, compression keeps every value and drops only the bytes that repeat
+-- but this file is not reachable from the guard today.
 
 Encoding (deterministic, no ML, no deps -- all three properties are why headroom
 is not a dependency here; see the assessment's "why not headroom" section):

@@ -215,14 +215,18 @@ Unit tests (zero quota): a corpus of must-block strings (incl. `bash -c "docker 
 and must-allow strings (`git push origin branch`, `docker ps -a`, `rm -rf
 <worktree>/build`). Guard failures on the corpus fail the build probe.
 
-**wq#729 addendum (2026-08-21):** allowed Bash calls that don't mutate shell state (no
-`cd`/`export`/`source`/backgrounding `&`, …) are additionally rewritten via the
-`PreToolUse` `updatedInput` field — `{ <cmd>\n} 2>&1 | head -c 2000` — so a single
-discovery/dump command can't carry the whole session's cost on every later call
-(research/CALL_AUDIT.md: tool results are 39.5-51.5% of a build session). Confirmed
-supported on CLI 2.1.233 from the live hooks docs, not the CLI bundle (still out of a
-build worker's reach). Stateful commands are skipped rather than capped: piping subshells
-the left side, so a `cd`/`export` inside it wouldn't persist to the next Bash call.
+**wq#729 addendum (2026-08-21), superseded by wq#954 (2026-08-24):** the Bash output cap
+keeps a single discovery/dump command from carrying the whole session's cost on every
+later call (research/CALL_AUDIT.md: tool results are 39.5-51.5% of a build session). It
+was first built as a `PreToolUse` `updatedInput` command rewrite — `{ <cmd>\n} 2>&1 |
+head -c 2000` — which capped the *pipeline* and so had to exempt every shell-state verb
+(`cd`/`export`/`source`/backgrounding `&`), because piping subshells the left side and a
+`cd` inside it wouldn't persist to the next Bash call. Those exemptions were 20.1% of the
+over-cap bytes. wq#951 established that CLI 2.1.233 honours `BASH_MAX_OUTPUT_LENGTH`
+natively (default 30000 chars, clamped at 150000, no lower bound), which truncates the
+assembled *result* instead, so wq#954 moved the cap to `fworker.build_env()` and deleted
+the rewrite. Nothing can opt out now, and the unit is whole-result characters — stderr
+included — rather than stdout bytes. See research/UNCAPPED_BASH.md §4-5.
 
 **wq#730 addendum (2026-08-21):** same `PreToolUse` `updatedInput` lever, applied to
 `Read` (research/CALL_AUDIT.md R3/R5/R6 — Read is the single most expensive tool in every
