@@ -44,6 +44,10 @@ cache chain), but it CAN detect volatile content in our worker prompt/settings t
 breaks intra-session cache. Run it as a read-only lint against FOREMAN_DISPATCH.prompt and
 worker-settings-interim.json. Zero ML, zero proxy, zero risk.
 
+*(Done in wq#887 — `research/cache_aligner_lint.py`, findings in CACHE_ALIGNER_LINT.md. No
+volatile content in any target; the one layout defect it did find is worth 0 tokens because
+CWD_STABILITY §(i) proved the region is not cacheable.)*
+
 ### SmartCrusher — CONDITIONAL (highest value, needs hook point)
 
 93.7% of our tool results are JSON. SmartCrusher claims 60-95% on JSON arrays (collapses

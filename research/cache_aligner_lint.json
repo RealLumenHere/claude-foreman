@@ -1,0 +1,268 @@
+[
+  {
+    "path": "/home/lumen/foreman/FOREMAN_DISPATCH.prompt",
+    "kind": "prompt",
+    "bytes": 3849,
+    "tokens_est": 1106,
+    "volatile": [],
+    "tail": {
+      "placeholders": [
+        {
+          "name": "<TICKET>",
+          "offset": 3840
+        }
+      ],
+      "first_placeholder": "<TICKET>",
+      "static_head_bytes": 3840,
+      "trailing_block_bytes": 9,
+      "static_head_pct": 99.8,
+      "stranded_static_bytes": 1,
+      "stranded_static_tokens": 1,
+      "aligned": true
+    },
+    "spawn": {
+      "shared_prefix_bytes": 3840,
+      "shared_prefix_tokens_est": 1102,
+      "render_bytes": [
+        3844,
+        3844
+      ],
+      "shared_prefix_pct": 99.9,
+      "stable_prefix_hashes": [
+        "afeb1405df964f4f",
+        "f3d3b4d5deecd1c5"
+      ],
+      "hash_identical_across_spawns": false,
+      "aligner_warnings": [],
+      "alignment_score": 100.0
+    },
+    "findings": 0,
+    "status": "CLEAN"
+  },
+  {
+    "path": "/home/lumen/foreman/harness/prompts/worker.md",
+    "kind": "prompt",
+    "bytes": 2985,
+    "tokens_est": 865,
+    "volatile": [],
+    "tail": {
+      "placeholders": [
+        {
+          "name": "{{TICKET_ID}}",
+          "offset": 2899
+        },
+        {
+          "name": "{{TITLE}}",
+          "offset": 2914
+        },
+        {
+          "name": "{{DETAIL}}",
+          "offset": 2925
+        },
+        {
+          "name": "{{WORKTREE}}",
+          "offset": 2947
+        },
+        {
+          "name": "{{PRIOR_ATTEMPT_NOTES}}",
+          "offset": 2961
+        }
+      ],
+      "first_placeholder": "{{TICKET_ID}}",
+      "static_head_bytes": 2899,
+      "trailing_block_bytes": 86,
+      "static_head_pct": 97.1,
+      "stranded_static_bytes": 19,
+      "stranded_static_tokens": 6,
+      "aligned": true
+    },
+    "spawn": {
+      "shared_prefix_bytes": 2899,
+      "shared_prefix_tokens_est": 833,
+      "render_bytes": [
+        3034,
+        3059
+      ],
+      "shared_prefix_pct": 94.8,
+      "stable_prefix_hashes": [
+        "16110e59fb822fa5",
+        "862e32af55d9ffec"
+      ],
+      "hash_identical_across_spawns": false,
+      "aligner_warnings": [],
+      "alignment_score": 100.0
+    },
+    "findings": 0,
+    "status": "CLEAN"
+  },
+  {
+    "path": "/home/lumen/foreman/harness/prompts/fire-diagnosis.md",
+    "kind": "prompt",
+    "bytes": 3360,
+    "tokens_est": 902,
+    "volatile": [],
+    "tail": {
+      "placeholders": [
+        {
+          "name": "{{PLAN_PATH}}",
+          "offset": 1024
+        },
+        {
+          "name": "{{TICKET_ID}}",
+          "offset": 3248
+        },
+        {
+          "name": "{{TITLE}}",
+          "offset": 3263
+        },
+        {
+          "name": "{{DETAIL}}",
+          "offset": 3274
+        },
+        {
+          "name": "{{WORKTREE}}",
+          "offset": 3296
+        }
+      ],
+      "first_placeholder": "{{PLAN_PATH}}",
+      "static_head_bytes": 1024,
+      "trailing_block_bytes": 2336,
+      "static_head_pct": 30.5,
+      "stranded_static_bytes": 2227,
+      "stranded_static_tokens": 602,
+      "aligned": false
+    },
+    "spawn": {
+      "shared_prefix_bytes": 1052,
+      "shared_prefix_tokens_est": 276,
+      "render_bytes": [
+        3537,
+        3536
+      ],
+      "shared_prefix_pct": 29.7,
+      "stable_prefix_hashes": [
+        "1e1901a22ff3b90f",
+        "f3135cb09fe74e2e"
+      ],
+      "hash_identical_across_spawns": false,
+      "aligner_warnings": [],
+      "alignment_score": 100.0
+    },
+    "findings": 1,
+    "status": "FINDINGS"
+  },
+  {
+    "path": "/home/lumen/foreman/harness/prompts/fire-apply.md",
+    "kind": "prompt",
+    "bytes": 3335,
+    "tokens_est": 897,
+    "volatile": [],
+    "tail": {
+      "placeholders": [
+        {
+          "name": "{{DRIFT_PATH}}",
+          "offset": 1009
+        },
+        {
+          "name": "{{TICKET_ID}}",
+          "offset": 2329
+        },
+        {
+          "name": "{{APPROVAL_PATH}}",
+          "offset": 2359
+        },
+        {
+          "name": "{{PLAN_TEXT}}",
+          "offset": 2380
+        },
+        {
+          "name": "{{TITLE}}",
+          "offset": 3289
+        },
+        {
+          "name": "{{DETAIL}}",
+          "offset": 3300
+        },
+        {
+          "name": "{{WORKTREE}}",
+          "offset": 3322
+        }
+      ],
+      "first_placeholder": "{{DRIFT_PATH}}",
+      "static_head_bytes": 1009,
+      "trailing_block_bytes": 2326,
+      "static_head_pct": 30.3,
+      "stranded_static_bytes": 2225,
+      "stranded_static_tokens": 606,
+      "aligned": false
+    },
+    "spawn": {
+      "shared_prefix_bytes": 1037,
+      "shared_prefix_tokens_est": 266,
+      "render_bytes": [
+        3485,
+        3490
+      ],
+      "shared_prefix_pct": 29.7,
+      "stable_prefix_hashes": [
+        "bdacbfe09b08060f",
+        "8c24565dcba9a10b"
+      ],
+      "hash_identical_across_spawns": false,
+      "aligner_warnings": [],
+      "alignment_score": 100.0
+    },
+    "findings": 1,
+    "status": "FINDINGS"
+  },
+  {
+    "path": "/home/lumen/foreman/worker-settings-general.json",
+    "kind": "settings",
+    "bytes": 1643,
+    "tokens_est": 515,
+    "volatile": [],
+    "volatile_values": [],
+    "findings": 0,
+    "status": "CLEAN"
+  },
+  {
+    "path": "/home/lumen/foreman/harness/worker-settings.json",
+    "kind": "settings",
+    "bytes": 1688,
+    "tokens_est": 608,
+    "volatile": [],
+    "volatile_values": [],
+    "findings": 0,
+    "status": "CLEAN"
+  },
+  {
+    "path": "/home/lumen/CLAUDE.md",
+    "kind": "prompt",
+    "bytes": 1201,
+    "tokens_est": 341,
+    "volatile": [],
+    "tail": {
+      "placeholders": [],
+      "aligned": true,
+      "note": "no per-run placeholders; whole file is static"
+    },
+    "spawn": {
+      "shared_prefix_bytes": 1201,
+      "shared_prefix_tokens_est": 341,
+      "render_bytes": [
+        1201,
+        1201
+      ],
+      "shared_prefix_pct": 100.0,
+      "stable_prefix_hashes": [
+        "3ba9ac46d327ee72",
+        "3ba9ac46d327ee72"
+      ],
+      "hash_identical_across_spawns": true,
+      "aligner_warnings": [],
+      "alignment_score": 100.0
+    },
+    "findings": 0,
+    "status": "CLEAN"
+  }
+]
