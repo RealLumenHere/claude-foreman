@@ -237,7 +237,16 @@ Bash)
     if printf '%s' "$target" | grep -qE '(^|[;&|[:space:]])(cd|export|source|alias|unalias|pushd|popd|declare|readonly|exec|eval|set|unset)\b'; then
       SKIP_CAP=1
     fi
-    if printf '%s' "$target" | grep -qE '(^|[^&])&([^&]|$)'; then
+    # A backgrounding `&` — but not a file-descriptor duplication. wq#951's replay
+    # of the pre-cap corpus through this guard found 245 of the 338 exempted
+    # commands were claimed by this clause and NOT ONE was a background job: every
+    # match was `2>&1`. That single false positive exempted 875 KB, 24.3% of the
+    # 3.6 MB the cap was supposed to catch — and guard.sh's own wrapper below adds
+    # `2>&1`, so the clause was firing on the very idiom it emits. Exclude `&`
+    # adjacent to a redirect (`2>&1`, `>&2`, `<&0`, `&>file`); `&&` was already
+    # excluded. A bare `&` inside a quoted string still skips — over-cautious in
+    # the safe direction, same as before.
+    if printf '%s' "$target" | grep -qE '(^|[^&<>])&([^&>]|$)'; then
       SKIP_CAP=1
     fi
   done

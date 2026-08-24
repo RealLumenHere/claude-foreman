@@ -205,6 +205,14 @@ CAPPABLE = [
     "find / -maxdepth 4 -iname wq*",
     "git log --oneline -5",
     "grep -rn foo .",
+    # wq#951: fd duplication is not backgrounding. These were all exempted by the
+    # `&` clause before the redirect-adjacency exclusion, worth 882 KB of the
+    # uncapped 3.4 MB — including the `2>&1` idiom guard.sh's own wrapper emits.
+    "make build 2>&1",
+    "pytest -q 2>&1 | tail -20",
+    "python3 script.py >&2",
+    "./run.sh &>/tmp/out.log",
+    "diff a b 1>&2",
 ]
 
 # Bare & inside a quoted string (not a real background operator) is over-cautious
