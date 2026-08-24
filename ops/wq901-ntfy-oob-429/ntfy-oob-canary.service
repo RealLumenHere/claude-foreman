@@ -1,0 +1,12 @@
+[Unit]
+Description=ntfy OOB canary — daily forced out-of-band publish to prove the backup path (wq#901)
+# NO SuccessExitStatus=1: a non-200 from the OOB endpoint is the finding and must fire OnFailure=.
+OnFailure=ntfy-onfailure@%n.service
+
+[Service]
+Type=oneshot
+User=lumen
+# ntfy-send exits 0 if ANY endpoint took the message, so a healthy primary would
+# mask a dead OOB leg — assert the oob=200 marker specifically.
+ExecStart=/bin/bash -o pipefail -c '/home/lumen/bin/ntfy-send --oob -p low -T "oob-canary" "OOB path check (wq#901 canary)" | grep -q "oob=200"'
+TimeoutStartSec=60
