@@ -110,6 +110,15 @@ intercepts requests, compresses tool-result content blocks, forwards to Anthropi
 on the Max plan.** Test procedure: start headroom proxy, run a single `claude -p` short
 session through it, confirm the session completes and compression metrics are emitted.
 
+**Resolved 2026-08-24 (wq#889): the OAuth question passes, the blocker moved.** On
+headroom-ai 0.36.5 the bearer forwards byte-for-byte, real sessions complete, metrics are
+emitted, and the loopback base URL does not resurrect the worker-side env-leak class —
+though the redirect risk relocates to the proxy process's own environment
+(`ANTHROPIC_TARGET_API_URL`). The new blocker is tool-schema deferral: the proxy pulls
+23–65 tool definitions out of each request, which is 92% of the savings it reports and a
+change to what the model can see. Full result and the rerunnable gate:
+HEADROOM_PROXY_OAUTH_GATE.md, `research/headroom_proxy_gate.py`.
+
 ## 5. Fit ranking (our stack, ordered by risk-adjusted value)
 
 1. **CacheAligner diagnostic** — standalone lint, no integration. Zero risk, zero ML, zero
@@ -122,8 +131,8 @@ session through it, confirm the session completes and compression metrics are em
 3. **MCP server mode for orch sessions** — exposes headroom_compress/headroom_retrieve
    tools. Adds ~2-3K tool-schema tokens to prefix. Useful for claude.ai orch sessions
    where the operator can call compress explicitly on large results. Not automatic.
-4. **Proxy mode for headless workers** — maximum automation, maximum risk. BLOCKED on
-   OAuth passthrough test.
+4. **Proxy mode for headless workers** — maximum automation, maximum risk. OAuth
+   passthrough cleared (wq#889); now blocked on a tool-search-deferral A/B.
 
 ## 6. What we already have (from wq#629 NOT-APPLICABLE analysis)
 
@@ -142,7 +151,8 @@ CacheAligner on top of claude-code's existing cache is the VOLATILE CONTENT dete
   (one-way stream), payload reachable is 0.07% of tool-result bytes. Prototype merged
   unwired. research/SMARTCRUSHER_HOOK.md.
 - **Later:** Test proxy OAuth passthrough. If it works, evaluate proxy mode for headless
-  workers. Seed ticket.
+  workers. Seed ticket. — DONE (wq#889): passthrough works; the evaluation now needs a
+  tool-search-deferral A/B before proxy mode can be recommended.
 - **Never:** Kompress ML model on Broadwell for <5% of payload. Not worth the resident cost.
 
 ## Reproduce
