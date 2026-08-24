@@ -77,6 +77,15 @@ STATE_FILE = os.environ.get("FOREMAN_STATE_FILE", os.path.join(FOREMAN_ROOT, "st
 GOVERNOR_CLI = os.environ.get("FOREMAN_GOVERNOR_CLI",
                                os.path.join(FOREMAN_ROOT, "governor", "foreman_usaged.py"))
 WORKTREES_ROOT = os.environ.get("FOREMAN_WORKTREES_ROOT", "/home/lumen/worktrees")
+# wq#954: the Bash output cap. claude-code 2.1.233 truncates an assembled Bash
+# result to BASH_MAX_OUTPUT_LENGTH *characters* (default 30000, clamped at 150000,
+# no lower bound — research/UNCAPPED_BASH.md §4), which replaces wq#729's
+# `| head -c` command rewrite in guard.sh. Same 2000 as the old cap; the unit is
+# now whole-result characters rather than stdout bytes, so stderr counts toward it
+# and multi-byte output buys fewer bytes than it used to. The CLI interpolates this
+# value into the Bash tool description, so lowering it also lowers the number the
+# model is told it has.
+BASH_MAX_OUTPUT_LENGTH = os.environ.get("FOREMAN_BASH_OUTPUT_CAP_CHARS", "2000")
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 # wq#617 orchestrator tier: routing (tuple assignment) + verify-pass filing.
@@ -660,6 +669,7 @@ def build_env(worker_id, model, effort, worktree):
     if effort:
         env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
     env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "500000"
+    env["BASH_MAX_OUTPUT_LENGTH"] = BASH_MAX_OUTPUT_LENGTH
     env["CLAUDE_CODE_ENABLE_TELEMETRY"] = "1"
     env["OTEL_METRICS_EXPORTER"] = "otlp"
     env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/protobuf"

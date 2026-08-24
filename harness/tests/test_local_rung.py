@@ -125,6 +125,9 @@ def test_local_rung_end_to_end_wires_env_and_files_sonnet_verify_pass(tmp_path):
     assert dumped.get("ANTHROPIC_AUTH_TOKEN") == "sk-test-foreman-key"
     assert dumped.get("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1"
     assert "ANTHROPIC_API_KEY" not in dumped
+    # wq#954: the Bash output cap is an env var now, so it only works if it survives
+    # the trip to the child. Unset here means the CLI silently uses its 30000 default.
+    assert dumped.get("BASH_MAX_OUTPUT_LENGTH") == "2000"
 
     # mandatory Sonnet-5 verify-pass gate (models.yaml verify_pass.local_author_always,
     # orchestrator/judgment.py): a [verify] ticket must exist for this shipped ticket,

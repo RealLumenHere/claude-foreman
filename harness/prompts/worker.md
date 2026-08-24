@@ -14,9 +14,10 @@ RULES:
   stop/disable/mask, dd, docker --remove-orphans, ip link set, macchanger, git push
   --force, rm -rf outside your worktree/tmp, docker except ps/logs, reading credentials).
   A blocked call means re-scope your approach, not retry the same command.
-- The guard hook also caps Bash output at ~2KB (wq#729) — tool results are ~40-50% of a
-  session's cost. Narrow commands yourself with `head`/`tail`/`grep -n` instead of dumping
-  everything. Read is bounded too (wq#730): an unlimited Read gets a default line limit
+- Bash output is capped at 2000 characters per result (wq#954) and the tail is dropped —
+  tool results are ~40-50% of a session's cost. Narrow commands yourself with
+  `head`/`tail`/`grep -n` instead of dumping everything; stderr counts toward the same
+  2000. Read is bounded too (wq#730): an unlimited Read gets a default line limit
   injected, and re-reading a file you already have unchanged is blocked outright — prefer
   a bounded `grep -n`/`Read(offset,limit)` up front rather than one giant read.
 - Output discipline (wq#632): what you emit this turn is context you re-read on every

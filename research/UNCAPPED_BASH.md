@@ -196,13 +196,37 @@ capped too, with no way for a command shape to opt out.
 
 - **Landed here:** the `2>&1` fix (875 KB, 24.5% of the class), the replay probe,
   the live test, this record.
-- **Next, wq#954:** move the cap to `BASH_MAX_OUTPUT_LENGTH` in `fworker.py`'s
-  worker env and delete the `head -c` rewrite and `SKIP_CAP` from `guard.sh`.
-  Not folded in here because it is a fleet-wide behaviour swap with two decisions
-  attached: the truncation unit changes from stdout bytes to whole-result
-  characters, and dropping the `{ ...\n} 2>&1` wrapper stops merging stderr into
-  stdout. Both are probably improvements; neither should ride in on an
-  investigation ticket.
+- **wq#954 — LANDED 2026-08-24:** the cap is `BASH_MAX_OUTPUT_LENGTH=2000`, set in
+  `fworker.build_env()`; the `head -c` rewrite and `SKIP_CAP` are gone from
+  `guard.sh`, which no longer rewrites Bash commands at all. Both attached
+  decisions went the way this section predicted: the truncation unit is now
+  whole-result characters rather than stdout bytes (so stderr counts toward the
+  same 2000), and dropping the `{ ...\n} 2>&1` wrapper stops merging stderr into
+  stdout — the CLI reports them separately, which is the better shape. Override
+  knob renamed with the unit: `FOREMAN_BASH_OUTPUT_CAP_BYTES` →
+  `FOREMAN_BASH_OUTPUT_CAP_CHARS`.
+
+  Verified live against the branch's own guard, `research/wq954_cap_migration_test.py`:
+
+  ```
+  payload: 8000 chars, guard.sh under test: harness/guard.sh
+
+    A-unset  BASH_MAX_OUTPUT_LENGTH=unset  result=  8000 chars  guard-rewrote=False
+    B-plain  BASH_MAX_OUTPUT_LENGTH=2000   result=  2226 chars  guard-rewrote=False
+    C-cd     BASH_MAX_OUTPUT_LENGTH=2000   result=  2273 chars  guard-rewrote=False
+             `cd` survived: pwd reported /tmp
+  ```
+
+  Arm C is the 725 KB residual this ticket existed to close: `cd /tmp && pwd &&
+  <8000 chars>` used to trip `SKIP_CAP` and come back uncapped. It now caps at
+  2273 and the `cd` still takes effect in the session shell — the two things the
+  old design could not have at once.
+
+  One behaviour the reading of the binary did not predict: at this size the CLI
+  prefixes the truncated result with a `<persisted-output>` notice naming a spool
+  file that holds the full output ("Output too large (7.8KB). Full output saved
+  to: …"). Truncation is not destruction — the tail stays retrievable on disk
+  without spending context.
 - **Also next:** the fleet cannot observe its own tool-result sizes any more.
   Either restore a content transcript under `_runs/wq{id}/`, or have `fworker.py`
   record per-call result byte totals in the usage sidecar. Every measurement in
@@ -217,5 +241,6 @@ python3 research/uncapped_bash_probe.py                                  # this 
 WQ951_GUARD=/home/lumen/foreman/harness/guard.sh \
   python3 research/uncapped_bash_probe.py                                # the deployed guard
 python3 research/native_bash_cap_test.py                                 # two Haiku sessions
+python3 research/wq954_cap_migration_test.py                             # three; the end state
 python3 -m pytest harness/tests/test_guard.py -q
 ```

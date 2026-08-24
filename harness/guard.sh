@@ -210,52 +210,15 @@ Bash)
     fi
   done
 
-  # ---- wq#729 R4: cap Bash output ----
-  # Tool results are 39.5-51.5% of a build session's cost (research/CALL_AUDIT.md)
-  # and Bash alone is 17.6% in the audited session; a single unbounded discovery/
-  # dump command lands early and gets carried 150-200 calls. Rewrite the command
-  # via PreToolUse `updatedInput` so the tool itself never returns more than
-  # CAP_BYTES — confirmed supported in CLI 2.1.233 (code.claude.com/docs/en/hooks,
-  # checked 2026-08-21: "Each field the event supports is honored, including
-  # permissionDecision, additionalContext, updatedInput, and systemMessage").
-  # research/CALL_AUDIT.md's tool-result real-vs-cl100k ratio is 1.63-1.81x on
-  # this content mix (shell/code/JSON), so ~2000 bytes lands under, not over,
-  # R4's ~1000-token target.
-  #
-  # Skip commands that mutate shell state the persistent session depends on
-  # (cd/export/source/...) or background a job (&): piping subshells the left
-  # side of the pipe, so a state change inside it would silently vanish instead
-  # of persisting to the next Bash call. `source`/`.`-sourcing: only the `source`
-  # keyword is matched — bare `. file` is deliberately NOT pattern-matched
-  # because a naive check collides with the extremely common `find .`/`ls .`;
-  # losing the (rare) bare-dot case is cheaper than losing capping on `find .`.
-  # When unsure, don't cap: an uncapped result is recoverable, a lost `cd` is a
-  # much worse class of bug.
-  CAP_BYTES=${FOREMAN_BASH_OUTPUT_CAP_BYTES:-2000}
-  SKIP_CAP=0
-  for target in "$RAW_CMD" "$NORM"; do
-    if printf '%s' "$target" | grep -qE '(^|[;&|[:space:]])(cd|export|source|alias|unalias|pushd|popd|declare|readonly|exec|eval|set|unset)\b'; then
-      SKIP_CAP=1
-    fi
-    # A backgrounding `&` — but not a file-descriptor duplication. wq#951's replay
-    # of the pre-cap corpus through this guard found 245 of the 338 exempted
-    # commands were claimed by this clause and NOT ONE was a background job: every
-    # match was `2>&1`. That single false positive exempted 875 KB, 24.3% of the
-    # 3.6 MB the cap was supposed to catch — and guard.sh's own wrapper below adds
-    # `2>&1`, so the clause was firing on the very idiom it emits. Exclude `&`
-    # adjacent to a redirect (`2>&1`, `>&2`, `<&0`, `&>file`); `&&` was already
-    # excluded. A bare `&` inside a quoted string still skips — over-cautious in
-    # the safe direction, same as before.
-    if printf '%s' "$target" | grep -qE '(^|[^&<>])&([^&>]|$)'; then
-      SKIP_CAP=1
-    fi
-  done
-
-  if [ "$SKIP_CAP" = 0 ]; then
-    WRAPPED=$(printf '{ %s\n} 2>&1 | head -c %s' "$RAW_CMD" "$CAP_BYTES")
-    jq -nc --arg cmd "$WRAPPED" \
-      '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",updatedInput:{command:$cmd}}}'
-  fi
+  # The Bash output cap does NOT live here. wq#729 capped by rewriting the command
+  # to `{ cmd } 2>&1 | head -c 2000`; wq#951 proved claude-code 2.1.233 honours
+  # BASH_MAX_OUTPUT_LENGTH natively, so wq#954 moved the cap to that variable in
+  # fworker.build_env(). Do not reintroduce a pipeline cap: piping subshells the
+  # left side, so `cd`/`export`/`source` had to be exempted from the rewrite, and
+  # those exemptions were the entire residual leak (168 results, 725 KB, 20.1% of
+  # the corpus's over-cap bytes — research/UNCAPPED_BASH.md §4). A native cap
+  # truncates the assembled result instead of the pipeline, so no command shape
+  # can opt out and nothing can swallow a shell-state change.
   ;;
 Read|Edit|Write|Grep|Glob)
   FILE_PATH=$(jfield '.tool_input.file_path')
