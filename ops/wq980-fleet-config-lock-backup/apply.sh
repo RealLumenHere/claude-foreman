@@ -7,5 +7,4 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/bin/fleet-safe-write
 
 cp "$HERE/fleet-safe-write.sh" "$DEST"
-chmod 755 "$DEST"
 echo "installed: $DEST"
