@@ -5,6 +5,8 @@ plan below (fworker verified the approval file's ticket id, bearer token, and
 plan-hash match before spawning you — see harness/fire_gate.py). Your job is to
 re-verify the plan still matches reality, then apply it.
 
+{{INSTINCTS_TIER0}}
+
 MANDATORY RE-VERIFY STEP (do this FIRST, before changing anything):
 - Re-check the "Current State" section of the approved plan below against the live
   system, read-only, the same way the diagnosis phase did.

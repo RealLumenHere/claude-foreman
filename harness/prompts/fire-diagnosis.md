@@ -4,6 +4,8 @@ This is a [fleet-fires] production-state ticket (service restarts, config edits,
 rotations, repo unlocks) — production changes on this ticket require Frank's explicit
 per-plan approval before anything is applied. This run is the DIAGNOSIS PHASE ONLY.
 
+{{INSTINCTS_TIER0}}
+
 DIAGNOSIS-PHASE RULES:
 - Investigate read-only. Do NOT restart/reload/enable any service, do NOT edit any
   config outside your plan doc, do NOT rotate any secret, do NOT unlock/modify any

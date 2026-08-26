@@ -866,10 +866,24 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
 # main attempt orchestration
 # ---------------------------------------------------------------------------
 
+def _sub_instincts_tier0(tmpl):
+    """wq#959: tier-0 hard constraints go into every fworker prompt (R1 §6 —
+    workers previously received zero instinct text). Fail-open to the bare
+    template: a broken/missing/schema-1 instincts.yaml must never stop a spawn."""
+    try:
+        import instincts_render
+        block = instincts_render.tier0_block(warn=log)
+    except Exception:
+        block = ""
+    if block:
+        return tmpl.replace("{{INSTINCTS_TIER0}}", block)
+    return tmpl.replace("{{INSTINCTS_TIER0}}\n\n", "").replace("{{INSTINCTS_TIER0}}", "")
+
+
 def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None):
     tmpl_path = os.path.join(HARNESS_DIR, "prompts", "worker.md")
     with open(tmpl_path) as f:
-        tmpl = f.read()
+        tmpl = _sub_instincts_tier0(f.read())
     prior_notes = ""
     if prior_notes_path and os.path.exists(prior_notes_path):
         with open(prior_notes_path) as f:
@@ -890,7 +904,7 @@ def load_fire_prompt(phase, ticket_id, ticket, worktree, plan_text=None):
     fname = "fire-diagnosis.md" if phase == "diagnosis" else "fire-apply.md"
     tmpl_path = os.path.join(HARNESS_DIR, "prompts", fname)
     with open(tmpl_path) as f:
-        tmpl = f.read()
+        tmpl = _sub_instincts_tier0(f.read())
     out = (tmpl
            .replace("{{TICKET_ID}}", str(ticket_id))
            .replace("{{TITLE}}", ticket.get("title", ""))
