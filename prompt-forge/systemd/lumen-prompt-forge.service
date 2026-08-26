@@ -1,0 +1,24 @@
+# lumen-prompt-forge.service — fleet-aware prompt generator (wq#957).
+# STAGED (wq#718 posture): installed by hand via prompt-forge/INSTALL.md.
+# Binds loopback only; cloudflared + Cloudflare Access terminate the public
+# side (prompts.lumennode.uk) — this unit alone is NOT internet-reachable.
+[Unit]
+Description=Lumen Prompt Forge — fleet-aware prompt generator (wq#957)
+Documentation=file:///home/lumen/foreman/prompt-forge/README.md
+After=network-online.target
+
+[Service]
+Type=simple
+User=lumen
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+# Named LiteLLM key (docs/litellm/service_keys.md). Absent key = the service
+# still runs, deterministic-only (no clarifying questions / framing).
+Environment=PROMPT_FORGE_KEY_FILE=/home/lumen/.secrets/litellm-service-keys/prompt-forge.key
+WorkingDirectory=/home/lumen/foreman/prompt-forge
+ExecStart=/usr/bin/python3 /home/lumen/foreman/prompt-forge/server.py --bind 127.0.0.1 --port 8792
+Restart=on-failure
+RestartSec=10
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

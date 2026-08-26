@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt Forge — Lumen</title>
+<style>
+  /* Palette matches glance theme: background-color 240 10 10, primary 210 100 70 */
+  :root {
+    --bg: hsl(240 10% 10%); --panel: hsl(240 10% 14%); --line: hsl(240 8% 24%);
+    --fg: hsl(240 10% 88%); --dim: hsl(240 6% 60%); --pri: hsl(210 100% 70%);
+    --neg: hsl(0 80% 60%); --pos: hsl(130 60% 55%);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1rem; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 system-ui, sans-serif; }
+  h1 { font-size: 1.1rem; color: var(--pri); margin: 0 0 1rem; }
+  h1 small { color: var(--dim); font-weight: normal; }
+  .card { background: var(--panel); border: 1px solid var(--line);
+          border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  label { display: block; color: var(--dim); margin: .6rem 0 .2rem; font-size: .85rem; }
+  textarea, input[type=text], select {
+    width: 100%; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; padding: .5rem;
+    font: inherit; }
+  textarea:focus, input:focus, select:focus { outline: 1px solid var(--pri); }
+  .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+             gap: .25rem .75rem; margin-top: .3rem; }
+  .filters label { display: flex; gap: .45rem; align-items: baseline;
+                   margin: 0; color: var(--fg); cursor: pointer; }
+  .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .8rem; }
+  button { background: var(--pri); color: hsl(240 10% 10%); border: 0;
+           border-radius: 6px; padding: .5rem 1rem; font: inherit; font-weight: 600;
+           cursor: pointer; }
+  button.ghost { background: transparent; color: var(--pri);
+                 border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .status { color: var(--dim); }
+  .status.err { color: var(--neg); }
+  .status.ok { color: var(--pos); }
+  #questions .q { margin-bottom: .6rem; }
+  #questions .q label { color: var(--fg); }
+  pre { white-space: pre-wrap; word-break: break-word; background: var(--bg);
+        border: 1px solid var(--line); border-radius: 6px; padding: .75rem;
+        max-height: 24rem; overflow: auto; font-size: .8rem; }
+  .hidden { display: none; }
+  a { color: var(--pri); }
+</style>
+</head>
+<body>
+<h1>Prompt Forge <small>— fleet-aware session prompts, measured live</small></h1>
+
+<div class="card" id="form">
+  <label for="desc">What are we doing?</label>
+  <textarea id="desc" rows="2"
+    placeholder="Starting a new project. We are going to reverse engineer a Google Glass device."></textarea>
+
+  <label for="category">Category</label>
+  <select id="category">
+    <option value="project">Project</option>
+    <option value="research">Deep research</option>
+    <option value="fleet-maint">Fleet maintenance</option>
+    <option value="audit">Audit</option>
+    <option value="other">Other</option>
+  </select>
+
+  <label for="resources">Resources — URLs, file paths, prior research (optional)</label>
+  <textarea id="resources" rows="3" placeholder="one per line"></textarea>
+
+  <label>Filters</label>
+  <div class="filters" id="filters"></div>
+
+  <label for="slug" id="slugLabel" class="hidden">Existing project slug</label>
+  <input type="text" id="slug" class="hidden" list="projects" placeholder="miko3">
+  <datalist id="projects"></datalist>
+
+  <div class="row">
+    <button id="go">Generate</button>
+    <span class="status" id="status"></span>
+  </div>
+</div>
+
+<div class="card hidden" id="questions">
+  <label>Clarifying questions <span id="qnote" class="status"></span></label>
+  <div id="qlist"></div>
+  <div class="row">
+    <button id="finish">Build prompt</button>
+    <button id="skip" class="ghost">Skip questions</button>
+  </div>
+</div>
+
+<div class="card hidden" id="output">
+  <div class="row" style="margin: 0 0 .5rem">
+    <button id="copy">Copy prompt</button>
+    <button id="again" class="ghost">New prompt</button>
+    <span class="status" id="ostatus"></span>
+  </div>
+  <pre id="prompt"></pre>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let clarify = { questions: [], assumptions: [], project_slug: "" };
+
+const api = (path, body) => fetch(path, body ? {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body)
+} : {}).then(r => r.json());
+
+function inputs() {
+  const filters = [...document.querySelectorAll("#filters input:checked")]
+    .map(c => c.value);
+  return {
+    description: $("desc").value.trim(),
+    category: $("category").value,
+    resources: $("resources").value,
+    filters,
+    project_slug: $("slug").value.trim() || clarify.project_slug,
+  };
+}
+
+api("/api/meta").then(m => {
+  $("filters").innerHTML = Object.entries(m.filters).map(([k, v]) =>
+    `<label><input type="checkbox" value="${k}"> ${v}</label>`).join("");
+  $("projects").innerHTML = m.projects.map(p => `<option value="${p}">`).join("");
+  $("filters").addEventListener("change", () => {
+    const cont = document.querySelector('#filters input[value=continuation]').checked;
+    $("slug").classList.toggle("hidden", !cont);
+    $("slugLabel").classList.toggle("hidden", !cont);
+  });
+}).catch(() => $("status").textContent = "meta load failed");
+
+$("go").onclick = async () => {
+  const p = inputs();
+  if (!p.description) { $("status").textContent = "describe the project first"; return; }
+  $("go").disabled = true;
+  $("status").textContent = "asking for clarifying questions…";
+  try {
+    clarify = await api("/api/clarify", p);
+    if (clarify.project_slug && !$("slug").value) $("slug").value = clarify.project_slug;
+    if (!clarify.llm) {
+      $("status").textContent = "LLM unavailable — building deterministic prompt";
+      return generate();
+    }
+    if (!clarify.questions.length) {
+      $("status").textContent = "no questions needed";
+      return generate();
+    }
+    $("qlist").innerHTML = clarify.questions.map((q, i) =>
+      `<div class="q"><label>${q}</label><input type="text" data-q="${i}"></div>`).join("");
+    $("qnote").textContent = clarify.assumptions.length
+      ? `assumptions: ${clarify.assumptions.join("; ")}` : "";
+    $("questions").classList.remove("hidden");
+    $("status").textContent = "";
+  } catch (e) {
+    $("status").className = "status err";
+    $("status").textContent = "clarify failed — you can still generate";
+    generate();
+  } finally { $("go").disabled = false; }
+};
+
+async function generate(withAnswers = true) {
+  const p = inputs();
+  p.assumptions = clarify.assumptions || [];
+  p.answers = withAnswers ? clarify.questions.map((q, i) => ({
+    q, a: (document.querySelector(`input[data-q="${i}"]`) || {}).value || ""
+  })) : [];
+  $("status").textContent = "assembling prompt…";
+  $("finish").disabled = $("skip").disabled = true;
+  try {
+    const e = await api("/api/generate", p);
+    $("prompt").textContent = e.prompt || JSON.stringify(e);
+    $("output").classList.remove("hidden");
+    $("questions").classList.add("hidden");
+    $("status").textContent = "";
+    $("ostatus").textContent = e.llm_framing ? "" : "deterministic only (no LLM framing)";
+    $("output").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    $("status").className = "status err";
+    $("status").textContent = "generate failed: " + e;
+  } finally { $("finish").disabled = $("skip").disabled = false; }
+}
+
+$("finish").onclick = () => generate(true);
+$("skip").onclick = () => generate(false);
+$("again").onclick = () => { $("output").classList.add("hidden"); scrollTo(0, 0); };
+$("copy").onclick = async () => {
+  await navigator.clipboard.writeText($("prompt").textContent);
+  $("ostatus").className = "status ok";
+  $("ostatus").textContent = "copied";
+  setTimeout(() => { $("ostatus").textContent = ""; }, 1500);
+};
+</script>
+</body>
+</html>
