@@ -30,7 +30,10 @@
     "PreToolUse": [
       { "matcher": "Bash|Read|Edit|Write",
         "hooks": [{ "type": "command",
-                    "command": "/home/lumen/foreman/harness/guard.sh" }] }
+                    "command": "/home/lumen/foreman/harness/guard.sh" }] },
+      { "matcher": "Bash|Edit|Write",
+        "hooks": [{ "type": "command",
+                    "command": "python3 /home/lumen/foreman/harness/action_gate.py hook" }] }
     ],
     "SessionStart": [ { "hooks": [{ "type": "command",
         "command": "/home/lumen/foreman/harness/guard.sh --lifecycle start" }] } ],

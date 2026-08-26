@@ -47,6 +47,7 @@ from classifier import (
     TURNS, LAUNCH_FAILURE, KILLED, BUDGET, BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL,
 )
 from oom_forensics import oom_journal_evidence
+import action_gate
 import fire_gate
 import primary_tree_guard
 from langfuse_client import emit_trace_with_span
@@ -733,7 +734,7 @@ def _reader_thread(pipe, q):
 
 
 def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
-              frame_gap_s=None, post_result_grace_s=None):
+              frame_gap_s=None, post_result_grace_s=None, loop_tracker=None):
     """Spawn, parse stream-json, enforce watchdogs. Returns (RunState, exit_code,
     raw_events, killed_reason, cpu_s, pid).
 
@@ -807,6 +808,14 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             continue
         raw_events.append(frame)
         state.observe(frame)
+        # Layer 2 (TIERED_INTELLIGENCE_DESIGN.md, wq#985): loop breaker. This is
+        # what Frank had to do manually on the Miko — the harness does it for him.
+        if loop_tracker is not None:
+            loop_reason = loop_tracker.observe(frame)
+            if loop_reason:
+                killed_reason = "loop_break"
+                log(f"LOOP BREAK: {loop_reason} — stopping session, handoff to follow")
+                break
         if frame.get("type") == "rate_limit_event" and frame.get("status") == "rejected":
             report_limit_event(frame)
         if frame.get("type") == "result":
@@ -1086,6 +1095,28 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
 
     env = build_env(worker_id, args.model, args.effort, worktree)
     oauth_token_used = "CLAUDE_CODE_OAUTH_TOKEN" in env
+    # Layers 1+3 (TIERED_INTELLIGENCE_DESIGN.md, wq#985): compile per-project
+    # .fworker-rules.yaml (repo root + worktree root, additive over builtins) into
+    # the fworker-owned run dir at ticket start — mid-session edits to the worktree
+    # copy of the rules file have no effect on this attempt. The PreToolUse hook
+    # (action_gate.py, wired in worker-settings.json) reads the compiled path; with
+    # the env unset it still enforces the builtin RED/AMBER lists.
+    try:
+        gate_rules_path = action_gate.compile_rules(
+            [args.repo, worktree],
+            os.path.join(run_dir(ticket_id), f"gate-rules-attempt-{attempt}.json"))
+        if gate_rules_path:
+            env[action_gate.GATE_RULES_ENV] = gate_rules_path
+            log(f"gate: project rules compiled -> {gate_rules_path}")
+    except Exception as e:
+        # A malformed rules file must not silently drop protection: refuse to run.
+        log(f"gate: .fworker-rules.yaml compile FAILED ({e}) — releasing ticket, "
+            f"fix the rules file before dispatching against this project.")
+        wq_release(ticket_id)
+        return EXIT_DEFERRED
+    env[action_gate.SNAPDIR_ENV] = os.path.join(run_dir(ticket_id), "snapshots")
+    env[action_gate.HANDOFF_ENV] = run_dir(ticket_id)
+    loop_tracker = action_gate.LoopTracker()
     cmd = build_claude_cmd(prompt, args.model, args.effort, SETTINGS_FILE,
                             add_dirs=["/home/lumen/agents/work-queue"], max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin)
@@ -1097,7 +1128,21 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     rate_limits_start = read_rate_limits_snapshot()
     state, exit_code, events, killed_reason, cpu_s, child_pid = run_child(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
-        frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace)
+        frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace,
+        loop_tracker=loop_tracker)
+    if killed_reason == "loop_break":
+        # Layer 2 handoff: "SESSION PAUSED: repeated unsuccessful approach detected.
+        # Your work has been preserved for a reviewing agent." — written to the run
+        # dir so prior-attempt notes and (future L4) review both find it.
+        hpath = os.path.join(run_dir(ticket_id), f"loop-handoff-attempt-{attempt}.md")
+        try:
+            with open(hpath, "w") as hf:
+                hf.write(f"# SESSION PAUSED — repeated unsuccessful approach detected\n\n"
+                         f"ticket: wq#{ticket_id} attempt {attempt} worker {worker_id}\n\n"
+                         f"{loop_tracker.report()}\n")
+            log(f"loop handoff written -> {hpath}")
+        except OSError as e:
+            log(f"WARN: loop handoff write failed: {e}")
     # run_child() has already returned by every path here — clean exit and every
     # watchdog kill (inactivity/wall_clock/turns_exceeded/post_result_stuck) alike —
     # so this snapshot is the session-exit reading regardless of how the child ended.
@@ -1178,7 +1223,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "classification": classification, "raw_classification": raw_classification,
         "exit_code": exit_code, "cpu_s": cpu_s, "oauth_token_used": oauth_token_used,
         "oom_journal": oom_journal,
-        "killed_reason": killed_reason, "turns": state.turns,
+        "killed_reason": killed_reason, "loop_reason": loop_tracker.tripped,
+        "turns": state.turns,
         "session_id": state.session_id, "resumed_from": resume_session,
         "saw_limit": state.saw_limit, "latest_resets_at": state.latest_resets_at,
         "compact_boundaries": state.compact_boundaries,
