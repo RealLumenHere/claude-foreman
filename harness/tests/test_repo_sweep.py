@@ -93,6 +93,28 @@ def make_content_diverged_repo(tmp_path, name="content-div"):
     return work
 
 
+def make_redundant_ahead_repo(tmp_path, name="redundant"):
+    """The wq#975 shape: local main ahead with a duplicate of landed content, AND behind
+    later remote commits — so the sweep sees exit 11, which it must not read as ERROR."""
+    origin = str(tmp_path / f"{name}-origin.git")
+    work = str(tmp_path / name)
+    subprocess.run(["git", "init", "--bare", "--initial-branch=main", origin],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "clone", origin, work], check=True, capture_output=True)
+    git(work, "config", "user.email", "test@lumen.local")
+    git(work, "config", "user.name", "test")
+    commit(work, "file.txt", "base\n", "base")
+    git(work, "push", "origin", "main")
+    git(work, "checkout", "-b", "landed")
+    commit(work, "file.txt", "final\n", "feat: squashed PR")
+    commit(work, "other.txt", "later\n", "work the duplicate never saw")
+    git(work, "push", "origin", "landed:main")
+    git(work, "checkout", "main")
+    commit(work, "file.txt", "final\n", "direct-to-main duplicate")
+    git(work, "fetch", "origin")
+    return work
+
+
 def make_behind_only_repo(tmp_path, name="behind"):
     """Local main behind origin/main."""
     origin = str(tmp_path / f"{name}-origin.git")
@@ -185,6 +207,21 @@ def test_safe_reset_files_one_ticket(tmp_path):
     assert len(entries) == 1
     assert "SAFE_RESET" in entries[0]["title"]
     assert "diverged" in entries[0]["title"]  # basename of the repo
+
+
+def test_redundant_ahead_files_a_ticket_not_an_error(tmp_path):
+    repo = make_redundant_ahead_repo(tmp_path)
+    fake_wq, log = make_fake_wq(tmp_path)
+    env = os.environ.copy()
+    env["REPO_SWEEP_WQ"] = fake_wq
+    p = subprocess.run([sys.executable, SWEEP, "--repo", repo],
+                       capture_output=True, text=True, env=env)
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert "REDUNDANT_AHEAD" in p.stdout
+    assert "ERROR" not in p.stdout, "an unmapped exit code silently files no ticket"
+    entries = read_wq_log(log)
+    assert len(entries) == 1
+    assert "REDUNDANT_AHEAD" in entries[0]["title"]
 
 
 def test_idempotent_no_duplicate_ticket(tmp_path):

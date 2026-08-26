@@ -105,16 +105,25 @@ ahead / 1 behind, for three days.
 The escape hatch is a fact, not a judgement call. When the squashed remote commit already
 carries the same content, `tree(main) == tree(origin/main)`, and moving the local ref
 changes **zero files** — so it cannot disturb a process running out of that tree. That
-equality is the deploy-parity proof; without it there is no safe ref move at all.
+equality is the deploy-parity proof.
+
+It stops being available the moment the remote lands anything else, which is wq#975:
+`/home/lumen/bin` sat 1 ahead / 4 behind on a duplicate of an already-landed one-line fix,
+whole-tree equality was unreachable, and landed PRs stopped reaching the deployed path. So
+there is a second, narrower proof — for every path the ahead commits touched since the
+merge-base, `blob(main:path) == blob(origin/main:path)`. Paths only the remote changed are
+not the local's problem. Rewinding to the merge-base still changes zero files, and leaves
+the repo BEHIND_ONLY: fast-forwardable again.
 
     python3 harness/repo_reconcile.py status                       # default repo: /home/lumen/pokemon
-    python3 harness/repo_reconcile.py reconcile --apply            # only acts on SAFE_RESET
+    python3 harness/repo_reconcile.py reconcile --apply            # SAFE_RESET or REDUNDANT_AHEAD
 
-Exit codes are the interface: `0` IN_SYNC, `10` SAFE_RESET (fixable here), `20`
-CONTENT_DIVERGED (needs branch -> PR -> squash, or a Frank bypass), `30` BEHIND_ONLY
-(deploy the remote content first, *then* fast-forward), `2` error. `--apply` soft-resets
-(never `--hard`, so uncommitted and untracked work in a live tree survives) and archives
-the abandoned SHAs under an `archive/reconcile-*` tag first.
+Exit codes are the interface: `0` IN_SYNC, `10` SAFE_RESET (fixable here), `11`
+REDUNDANT_AHEAD (ahead *and* behind, but the ahead commits duplicate landed content —
+fixable here, lands on BEHIND_ONLY), `20` CONTENT_DIVERGED (needs branch -> PR -> squash,
+or a Frank bypass), `30` BEHIND_ONLY (fast-forward to deploy), `2` error. `--apply`
+soft-resets (never `--hard`, so uncommitted and untracked work in a live tree survives)
+and archives the abandoned SHAs under an `archive/reconcile-*` tag first.
 
 wq#686's own reconcile is preserved in `/home/lumen/pokemon` as tag
 `archive/wq686-pre-reconcile-main` (df2d937, the 7 commits) — kept because a squash makes
