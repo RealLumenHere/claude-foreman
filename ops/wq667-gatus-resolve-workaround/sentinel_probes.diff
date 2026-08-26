@@ -1,0 +1,42 @@
+--- a/home/lumen/sentinel/probes/sentinel_probes.py
++++ b/home/lumen/sentinel/probes/sentinel_probes.py
+@@ -557,17 +557,32 @@
+         if ok:
+             try:
+                 import sys as _s; _s.path.insert(0, "/home/lumen/agents/alert-queue")
+                 import aq as _aq
+                 _c = _aq.db(); _ts = _aq.now()
+                 _stale = _c.execute(
+                     "SELECT id FROM alerts WHERE source='probe' AND key=? AND status='open'",
+                     (name,)).fetchall()
+                 for (_rid,) in _stale:
+                     _c.execute("UPDATE alerts SET status='resolved', note=?, resolved_ts=? "
+                                "WHERE id=? AND status='open'",
+                                (f"auto-cleared: {name} returned PASS on {_ts} sentinel cycle", _ts, _rid))
+-                _c.commit(); _c.close()
+-                if _stale:
+-                    print(f"  EDGE-CLEAR {name}: resolved {len(_stale)} stale aq row(s)")
++                # wq#667: Gatus never fires send-on-resolved for external/heartbeat
++                # endpoints (5-probes group) -- its alert-resolution eval only runs on
++                # the watchdog polling loop, which pushed endpoints never enter. The
++                # ntfy_alert_subscriber recovery path (wq#548) depends on that webhook,
++                # so a Gatus-origin aq row for this probe would otherwise stay open
++                # forever even after confirmed recovery (aq#544, aq#557). This probe
++                # cycle is the only thing that reliably knows the condition cleared, so
++                # it closes the row directly instead of waiting on a webhook that never
++                # comes. Keyed on Gatus's default ntfy title "Gatus: 5-probes/<name>".
++                _gatus_key = f"Gatus: 5-probes/{name}"
++                _gstale = _c.execute(
++                    "SELECT id FROM alerts WHERE source='ntfy:lumen-alerts' AND key=? AND status='open'",
++                    (_gatus_key,)).fetchall()
++                for (_rid,) in _gstale:
++                    _c.execute("UPDATE alerts SET status='resolved', note=?, resolved_ts=? "
++                               "WHERE id=? AND status='open'",
++                               (f"auto-cleared (wq#667): {name} returned PASS on {_ts} sentinel cycle "
++                                "-- Gatus send-on-resolved never fires for external/heartbeat endpoints",
++                                _ts, _rid))
++                _c.commit(); _c.close()
++                if _stale or _gstale:
++                    print(f"  EDGE-CLEAR {name}: resolved {len(_stale) + len(_gstale)} stale aq row(s)")
+             except Exception as _e:
+                 print(f"aq edge-clear failed (non-fatal): {_e}")
