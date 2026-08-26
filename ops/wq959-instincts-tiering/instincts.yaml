@@ -80,12 +80,6 @@ rules:
       nothing references it, the value came from Claude and the response proves only
       that.
 
-  - id: stress7-dead-identity
-    tier: 0
-    added: 2026-08-13
-    source: "identity dead since 2026-06-18; retirement post-tiering ticketed wq#961 (R1 §4)"
-    text: "Never SSH stress7@100.69.82.3 (dead identity; Thor = thor@100.112.151.100)."
-
   # == TIER 1 — OPERATING DOCTRINE (orchestrator / audit / chat sessions, after tier 0) ==
 
   - id: no-fast-sloppy-patches
@@ -409,5 +403,11 @@ rules:
 # Retired at restructure: reboot-gate (superseded by thor-only-hard-rule per Frank's
 # 2026-08-22 autonomy grant, which retires it in its own text; corpus-wide purge = wq#960);
 # self-generated-evidence (merged into fabricated-evidence, A7 merge-candidate verdict).
+# Retired at wq#961: stress7-dead-identity (SSH tripwire for stress7@100.69.82.3, dead
+# since 2026-06-18) — redundant with thor-only-hard-rule once tiering landed, since that
+# tier-0 rule already carries Thor's correct address (thor@100.112.151.100); keep one.
+# tag_sections rule (playbooks/fleet-ops.md) verified live at wq#961: script exists at
+# /home/lumen/minerva/context/tag_sections.py, imported by path in lumen_prose_lifecycle.py
+# and referenced verbatim (section-id/slugify logic) in lumen_federate.py.
 # Candidates still arrive weekly in /home/lumen/minerva/dream/instincts_candidates.yaml
 # (lumen_dream, proposal-only). Review-gated by Frank.

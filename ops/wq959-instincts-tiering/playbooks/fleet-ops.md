@@ -21,8 +21,8 @@ before session end.
 Replay/backfill jobs must be idempotency-guarded before first run.
 
 ## tag_sections is a singleton
-(added ≤2026-08-13; live: /home/lumen/minerva/context/tag_sections.py, referenced by
-lumen_federate.py and lumen_prose_lifecycle.py — path amendment per R1 §4 / wq#961)
+(added ≤2026-08-13; live: /home/lumen/minerva/context/tag_sections.py — imported by path
+in lumen_prose_lifecycle.py, referenced verbatim in lumen_federate.py; path verified wq#961)
 
 Never run two tag_sections concurrently.
 

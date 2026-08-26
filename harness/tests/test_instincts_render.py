@@ -72,7 +72,7 @@ def test_canonical_corpus_is_clean_and_within_budget():
     assert errs == [], errs
     rules = ir.load_rules(CANONICAL)
     t0 = [r for r in rules if r["tier"] == 0]
-    assert len(t0) == 8
+    assert len(t0) == 7
     block = ir.tier0_block(CANONICAL)
     assert ir._est_tokens(block) <= ir.TIER0_TOKEN_BUDGET
     assert "THOR" in block and "FULL AUTONOMY" in block and "MASK BEFORE PRINT" in block
