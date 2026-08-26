@@ -1,0 +1,36 @@
+--- a/home/lumen/sentinel/probes/sentinel_probes.py
++++ b/home/lumen/sentinel/probes/sentinel_probes.py
+@@ -497,6 +497,25 @@
+         return False, f"no turns in {turn_age/60:.0f}m (ActiveState=active)", False
+     return True, f"last turn {turn_age/60:.1f}m ago", False
+ 
++def probe_litellm_auth_monitor():
++    """wq#897: lumen-litellm-auth-monitor exited cleanly (docker logs --follow ends
++    when the litellm container is recreated) and sat dead for ~12h through the
++    wq#896 401 storm, because Restart=on-failure ignores a clean exit. The unit
++    is now Restart=always, which self-heals the known failure mode, but nothing
++    was watching whether it stayed down for some other reason. Check ActiveState
++    directly every cycle so a dead monitor pages instead of going unnoticed."""
++    try:
++        r = subprocess.run(
++            ["systemctl", "show", "lumen-litellm-auth-monitor.service", "-p", "ActiveState,SubState"],
++            capture_output=True, text=True, timeout=10)
++        svc = dict(l.split("=", 1) for l in r.stdout.strip().splitlines() if "=" in l)
++    except Exception as e:
++        return False, f"systemctl show failed: {e}", True
++    active = svc.get("ActiveState", "?")
++    if active != "active":
++        return False, f"lumen-litellm-auth-monitor.service ActiveState={active}/{svc.get('SubState','?')}", True
++    return True, "active", False
++
+ PROBES = [
+     ("probe-output-rate",     probe_output_rate,     False),
+     ("probe-duplicate-rate",  probe_duplicate_rate,  False),
+@@ -511,6 +530,7 @@
+     ("probe-kb-hygiene",      probe_kb_hygiene,      "24h"),
+     ("probe-storage-integrity", probe_storage_integrity, False),
+     ("probe-pokemon-liveness", probe_pokemon_liveness, False),
++    ("probe-litellm-auth-monitor", probe_litellm_auth_monitor, False),
+ ]
+ GATE = {"4h": 4*3600, "24h": 24*3600}
+ 

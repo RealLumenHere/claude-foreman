@@ -1,0 +1,14 @@
+--- a/home/lumen/sentinel/config/config.yaml
++++ b/home/lumen/sentinel/config/config.yaml
+@@ -327,6 +327,11 @@
+     token: "sntl-probe-7f3a9c1e"
+     heartbeat: { interval: 50m }
+     alerts: [{type: ntfy, send-on-resolved: true, description: "lumen-pokemon-live ActiveState=active but no turn_summary progress (or service down) — wq#908, systemd active proved nothing during the 08-23 12h freeze"}]
++  - name: probe-litellm-auth-monitor
++    group: 5-probes
++    token: "sntl-probe-7f3a9c1e"
++    heartbeat: { interval: 50m }
++    alerts: [{type: ntfy, send-on-resolved: true, description: "lumen-litellm-auth-monitor.service ActiveState != active — wq#897, sat dead 03:29Z-15:20Z through the 08-23 401 storm with nothing watching"}]
+ 
+   # ── SSH-AUTH synthetic probes (ticket 85) ──────────────────────────────
+   # Pushed by gatus-sshauth-probe.timer on Lumen using a DEDICATED restricted
