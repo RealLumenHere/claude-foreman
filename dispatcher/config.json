@@ -69,6 +69,11 @@
       "enabled": true,
       "max_per_day": 999,
       "priority_override": 99
+    },
+    "fleet-safety": {
+      "enabled": false,
+      "manual": true,
+      "note": "Gated manual safety lane (wq#1011 / R2 section 10.4). Enumerated so lane/config-drift checks see it as present, but never auto-claimed: enabled:false makes the dispatcher scan allowlist skip it (foreman_dispatcher.py eligible-scan). Holds Frank-gated safety builds like wq#709 lumen-guardian (a systemctl-poweroff thermal/MCE daemon) that must be built deliberately under review, never auto-dispatched to an arbitrary worker."
     }
   }
 }
