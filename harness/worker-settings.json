@@ -7,6 +7,7 @@
       "Bash(npm test*)", "Bash(sqlite3 *)",
       "Bash(/home/lumen/bin/wq *)", "Bash(/home/lumen/bin/lumen-pr *)",
       "Bash(/home/lumen/bin/slock *)", "Bash(/home/lumen/bin/lumen-run *)",
+      "Bash(/home/lumen/bin/fleet-search *)",
       "Bash(docker ps*)", "Bash(docker logs*)",
       "Bash(curl *)"
     ],
