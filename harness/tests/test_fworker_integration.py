@@ -309,8 +309,12 @@ def test_dep_preflight_proceeds_once_dep_is_done(tmp_path):
     env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     dep_id = wq_add(env, "scratch dep ticket, closed immediately")
     subprocess.run([WQ_BIN, "claim", "--id", str(dep_id)], capture_output=True, text=True, env=env)
-    subprocess.run([WQ_BIN, "done", str(dep_id), "--notes", "n/a"],
-                    capture_output=True, text=True, env=env)
+    # wq#759 evidence gate: this dep ticket is test-setup scaffolding with no real
+    # artifact to cite, so say so explicitly rather than feeding it a fake path.
+    dep_done = subprocess.run([WQ_BIN, "done", str(dep_id), "--no-artifact",
+                                "test-setup dep ticket, no real work done"],
+                               capture_output=True, text=True, env=env)
+    assert dep_done.returncode == 0, dep_done.stdout + dep_done.stderr
     p = subprocess.run([WQ_BIN, "add", "--title", "scratch dependent ticket, ready",
                          "--deps", str(dep_id)], capture_output=True, text=True, env=env)
     assert p.returncode == 0, p.stdout + p.stderr

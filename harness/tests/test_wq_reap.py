@@ -26,7 +26,11 @@ def wq(env, *args):
 
 
 def wq_add(env, title, lane="auto"):
-    p = wq(env, "add", "--lane", lane, "--title", title)
+    # wq#912 refuses `add` on a lane absent from dispatcher/config.json (checked
+    # globally, independent of WQ_DB). "auto" is exempt; the arbitrary "lane-a"/
+    # "lane-b" throwaway lanes this suite uses to test reap's --lane filter are
+    # not, so --force bypasses that gate for this scratch-DB-only test.
+    p = wq(env, "add", "--lane", lane, "--title", title, "--force")
     assert p.returncode == 0, p.stdout + p.stderr
     return int(p.stdout.strip().split()[2])
 

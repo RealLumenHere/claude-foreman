@@ -498,8 +498,13 @@ def test_assign_and_verify_pass_fire_on_scratch_wq(tmp_path):
 
     ids = []
     for title, detail, lane, arch, expected in SAMPLES[:5]:
-        out = wq("add", "--lane", lane, "--title", title).stdout
-        tid = int(out.split()[2]); ids.append((tid, arch, expected))
+        # wq#912 refuses `add` on a lane absent from dispatcher/config.json (checked
+        # globally, independent of WQ_DB). This test only exercises router/judgment
+        # assign+verify-pass logic against a scratch db -- dispatcher visibility of
+        # these throwaway tickets is out of scope -- so --force bypasses that gate.
+        add = wq("add", "--lane", lane, "--title", title, "--force")
+        assert add.returncode == 0, add.stdout + add.stderr
+        tid = int(add.stdout.split()[2]); ids.append((tid, arch, expected))
     for tid, arch, expected in ids:
         d = json.loads(subprocess.run(R + ["assign", str(tid)], capture_output=True, text=True, env=env).stdout)
         assert d["written"], d

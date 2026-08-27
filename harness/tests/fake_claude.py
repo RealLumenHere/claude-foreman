@@ -64,7 +64,11 @@ def main():
     env_dump_path = os.environ.get("FAKE_CLAUDE_ENV_DUMP")
     if env_dump_path:
         keys = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
-                "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY")
+                "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+                # wq#954: the Bash output cap moved to this env var (fworker.py
+                # build_env()); dump it too or a test can never prove it reached
+                # the child, only that build_env()'s return value carried it.
+                "BASH_MAX_OUTPUT_LENGTH")
         with open(env_dump_path, "w") as f:
             json.dump({k: os.environ[k] for k in keys if k in os.environ}, f)
 
@@ -101,7 +105,14 @@ def main():
             fire_lifecycle("stop", session_id, effort)
             sys.exit(1)
         if ticket_id:
-            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+            # wq#759 evidence gate (real `wq` binary, not stubbed here): `done` refuses
+            # notes that don't name a checkable artifact. README.md is the one file the
+            # scratch repo is guaranteed to have (make_scratch_repo commits it) and it's
+            # present in this worker's own worktree cwd, so it resolves as a real path
+            # candidate — same shape a real worker's notes would need, no git-commit
+            # plumbing required just to exercise the SUCCESS lifecycle path.
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                             "fake worker done, see README.md"],
                             capture_output=True, text=True)
         emit({"type": "result", "subtype": "success", "is_error": False,
               "total_cost_usd": 0.001, "num_turns": 2})
@@ -131,7 +142,10 @@ def main():
         if resume:
             emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "resumed"}]}})
             if ticket_id:
-                subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "resumed after limit"],
+                # wq#759 evidence gate (see the "success" scenario above for detail) —
+                # same fix, same reason: README.md is a real path in this worker's cwd.
+                subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                                 "resumed after limit, see README.md"],
                                 capture_output=True, text=True)
             emit({"type": "result", "subtype": "success", "is_error": False})
         else:
@@ -195,7 +209,9 @@ def main():
         # already observed is still the evidence of record (SUCCESS, not HANG/KILLED).
         emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
         if ticket_id:
-            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+            # wq#759 evidence gate (see the "success" scenario above for detail).
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                             "fake worker done, see README.md"],
                             capture_output=True, text=True)
         emit({"type": "result", "subtype": "success", "is_error": False, "result": "done"})
         time.sleep(float(os.environ.get("FAKE_CLAUDE_STUCK_S", "3600")))
@@ -279,7 +295,9 @@ def main():
         for i in range(5):
             emit({"type": "assistant", "message": {"content": [{"type": "text", "text": f"burst {i}"}]}})
         if ticket_id:
-            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+            # wq#759 evidence gate (see the "success" scenario above for detail).
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                             "fake worker done, see README.md"],
                             capture_output=True, text=True)
         emit({"type": "result", "subtype": "success", "is_error": False})
 
@@ -298,7 +316,9 @@ def main():
         sys.stdout.write(frame[half:] + "\n")
         sys.stdout.flush()
         if ticket_id:
-            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+            # wq#759 evidence gate (see the "success" scenario above for detail).
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                             "fake worker done, see README.md"],
                             capture_output=True, text=True)
         emit({"type": "result", "subtype": "success", "is_error": False})
 
@@ -309,7 +329,9 @@ def main():
         emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
         emit({"type": "some_future_frame_type_v99", "wat": "?", "nested": {"a": [1, 2, 3]}})
         if ticket_id:
-            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+            # wq#759 evidence gate (see the "success" scenario above for detail).
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                             "fake worker done, see README.md"],
                             capture_output=True, text=True)
         emit({"type": "result", "subtype": "success", "is_error": False})
 
@@ -331,7 +353,9 @@ def main():
                 fire_lifecycle("stop", session_id, effort)
                 sys.exit(1)
         if ticket_id:
-            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes", "fake worker done"],
+            # wq#759 evidence gate (see the "success" scenario above for detail).
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                             "fake worker done, see README.md"],
                             capture_output=True, text=True)
         emit({"type": "result", "subtype": "success", "is_error": False,
               "total_cost_usd": 0.002, "num_turns": 10})
