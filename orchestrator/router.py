@@ -501,12 +501,24 @@ _WEAK_SIGNALS = {
     ("research-synthesis", r"\breport\b"),
     ("rca-investigation", r"\baudit\b"),
     ("rca-investigation", r"\bwhy\b"),
+    # wq#992: long-horizon-campaign -> DECOMPOSE is the most consequential routing the
+    # classifier emits (one ticket becomes many). Its one generic signal, \bchain\b,
+    # shows up in ordinary prose ("chain tickets", "routing chain", "tool-chain") and
+    # must never force decomposition on its own. Same class as the wq#778 bare-word
+    # fix, extended to the DECOMPOSE-primary archetype. The other campaign signals
+    # (campaign/multi-session/checkpoint/uplift/pivot) stay strong and win alone.
+    ("long-horizon-campaign", r"\bchain\b"),
 }
+
+# Archetypes whose routing is expensive/consequential enough that a single WEAK signal
+# must not win them alone: the opus-primary pair (wq#778) plus long-horizon-campaign,
+# whose primary rung is DECOMPOSE (wq#992).
+_CORROBORATION_ARCHETYPES = _OPUS_PRIMARY_ARCHETYPES | {"long-horizon-campaign"}
 
 
 def _qualifies(arch, matched_pats):
-    """wq#778 corroboration gate — see _WEAK_SIGNALS above."""
-    if arch not in _OPUS_PRIMARY_ARCHETYPES:
+    """wq#778 + wq#992 corroboration gate — see _WEAK_SIGNALS above."""
+    if arch not in _CORROBORATION_ARCHETYPES:
         return True
     if len(matched_pats) >= 2:
         return True

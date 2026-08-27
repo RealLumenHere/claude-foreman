@@ -262,6 +262,27 @@ HEARTBEAT_INTERVAL_S = 10 * 60
 MAX_ATTEMPTS = 2
 RESUME_WAIT_MAX_S = 6 * 3600
 
+# wq#992-B: a worker that ran to a terminal verdict has just vacated a cloud slot.
+# Rather than let that slot sit idle until the next 20-min dispatch tick, kick one
+# dispatch pass immediately so the freed slot refills in seconds — Frank's manual
+# "finish -> relaunch" loop, put in the machine. See trigger_refill().
+DISPATCH_SERVICE = os.environ.get("FOREMAN_DISPATCH_SERVICE",
+                                  "lumen-foreman-dispatch.service")
+DISPATCH_DISARM_PATH = os.environ.get("FOREMAN_DISPATCH_DISARM",
+                                      "/home/lumen/autonomy/DISPATCH_DISARM")
+# Settle delay so this fworker's own `fworker-wq<ID>` unit is fully gone before the
+# kicked pass counts running slots (else its still-deactivating unit masks the slot it
+# just freed). Small: 3s is negligible against the 20-min gap it replaces.
+REFILL_SETTLE_S = _envint("FOREMAN_REFILL_SETTLE_S", 3)
+# wq#992-C: once the ticket itself reads done, no more real work is coming. Poll the
+# ticket on this cadence inside run_child; after POST_DONE_GRACE_S more with the child
+# still alive, force it — this is the "agent ran wq done but keeps taking agentic turns
+# with no result frame" case that post_result_grace never arms for (it would otherwise
+# burn to the turn-backstop and misclassify TURNS). Grace is generous on purpose: the
+# good case (wq done -> result frame -> exit) never trips it; only the lingerer does.
+DONE_POLL_INTERVAL_S = _envint("FOREMAN_DONE_POLL_S", 15)
+POST_DONE_GRACE_S = _envint("FOREMAN_POST_DONE_GRACE_S", 60)
+
 # wq#725 AUTO-7: every classification that reaches handle_failure() (TURNS,
 # LAUNCH_FAILURE, KILLED, OOM, REFUSED, BUDGET, CRASH) gets bucketed into one of three
 # block classes so wq self-heal (dispatcher/self_heal.py) can tell an infra-crash block
@@ -768,6 +789,8 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     killed_reason = None
     turn_backstop = max_turns + TURN_BACKSTOP_BUFFER
     result_seen_at = None
+    done_seen_at = None          # wq#992-C: when the ticket itself first read `done`
+    last_done_poll = start       # throttle the wq status poll to DONE_POLL_INTERVAL_S
     # short poll interval when either watchdog window is itself short (tests), so
     # detection latency stays a fraction of the window instead of the flat 5s floor.
     poll_timeout = max(0.25, min(5, frame_gap_s, post_result_grace_s) / 4)
@@ -782,12 +805,32 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         if result_seen_at is not None and now - result_seen_at >= post_result_grace_s:
             killed_reason = "post_result_stuck"
             break
+        # wq#992-C: the ticket itself reached `done` mid-run. Give a short grace for a
+        # trailing episode-commit / final message, then stop the lingering session so it
+        # can't keep taking agentic turns (which frame-gap wouldn't catch and the
+        # turn-backstop would misclassify TURNS). Checked BEFORE frame-gap so a
+        # finished-but-quiet agent is recognized as done, not a hang.
+        if done_seen_at is not None and now - done_seen_at >= POST_DONE_GRACE_S:
+            killed_reason = "ticket_done"
+            break
         if now - last_event >= frame_gap_s:
             killed_reason = "inactivity"
             break
         if now - last_heartbeat >= HEARTBEAT_INTERVAL_S:
             wq_heartbeat(ticket_id)
             last_heartbeat = now
+        # wq#992-C: throttled ticket-status poll (one `wq show` per DONE_POLL_INTERVAL_S).
+        # Best-effort: a failed poll just leaves done_seen_at unset and the frame-gap /
+        # wall-clock watchdogs still bound the run.
+        if done_seen_at is None and now - last_done_poll >= DONE_POLL_INTERVAL_S:
+            last_done_poll = now
+            try:
+                if wq_show(ticket_id).get("status") == "done":
+                    done_seen_at = time.time()
+                    log(f"ticket_done: wq#{ticket_id} reached done mid-run; grace "
+                        f"{POST_DONE_GRACE_S}s then stopping the session.")
+            except Exception:
+                pass
         try:
             kind, payload = q.get(timeout=poll_timeout)
         except queue.Empty:
@@ -1153,9 +1196,18 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     # already landed — the resulting SIGTERM/SIGKILL exit code is expected, not a §D
     # exit-code/frame disagreement, so it must not flip an otherwise-legitimate result
     # to INDETERMINATE. classify() only ever sees a "clean" exit for this one case.
-    effective_exit_code = 0 if killed_reason == "post_result_stuck" else exit_code
+    effective_exit_code = (0 if killed_reason in ("post_result_stuck", "ticket_done")
+                           else exit_code)
     raw_classification = classify(state, effective_exit_code)
     classification = raw_classification
+    # wq#992-C: run_child stopped the child specifically because the ticket itself
+    # reached `done` mid-run — the most direct completion signal there is. That is a
+    # verified success, not a watchdog failure, and there may be no result frame for
+    # classify() to key on, so force SUCCESS. The §C10 artifact gate immediately below
+    # still runs and re-confirms status==done, so a racy flip-back to open self-corrects
+    # to FALSE_COMPLETE (-> resume) rather than force-closing on a stale read.
+    if killed_reason == "ticket_done":
+        classification = SUCCESS
 
     # wq#687: silent-downgrade check. Compare the model the init frame reported
     # against the one we dispatched; an UNEXPLAINED swap (not a sanctioned
@@ -1562,6 +1614,44 @@ def cmd_run(args):
         return EXIT_CRASH
 
 
+def trigger_refill(ticket_id, outcome):
+    """wq#992-B: kick one dispatch pass so the cloud slot this worker just freed refills
+    in seconds instead of at the next 20-min timer tick.
+
+    Detached via `sudo -n systemd-run` with a short settle sleep so this fworker returns
+    and its own `fworker-wq<ID>` unit deactivates BEFORE the pass runs — otherwise
+    concurrency.list_running_units() still counts this worker's unit as running and masks
+    the slot it just freed. The pass is slock-serialized, ceiling-bounded and idempotent,
+    so a burst of near-simultaneous completions coalesces and can never over-spawn; the
+    20-min timer remains the backstop for hard supervisor deaths that fire no kick.
+    Fail-open by contract: any problem is logged and swallowed (the timer still covers
+    the slot); a refill kick must never change this worker's own exit outcome.
+    """
+    if os.environ.get("FOREMAN_NO_REFILL") == "1":
+        return
+    for path in (DISPATCH_DISARM_PATH, STOP_FILE):
+        if os.path.exists(path):
+            log(f"refill: {os.path.basename(path)} present — not kicking a pass "
+                f"after wq#{ticket_id}")
+            return
+    settle = max(0, REFILL_SETTLE_S)
+    unit = f"fdisp-kick-wq{ticket_id}-{int(time.time())}"
+    cmd = ["sudo", "-n", "systemd-run", "--collect", f"--unit={unit}",
+           "/bin/sh", "-c",
+           f"sleep {settle}; exec systemctl start --no-block {DISPATCH_SERVICE}"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"refill: kick failed to launch after wq#{ticket_id}: {e}")
+        return
+    if p.returncode == 0:
+        log(f"refill: wq#{ticket_id} {outcome} -> kicked {DISPATCH_SERVICE} "
+            f"in ~{settle}s ({unit})")
+    else:
+        log(f"refill: kick after wq#{ticket_id} failed rc={p.returncode}: "
+            f"{(p.stderr or p.stdout).strip()}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="fworker — per-ticket claude -p supervisor")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1590,6 +1680,16 @@ def main():
 
     args = ap.parse_args()
     rc = args.func(args)
+    # wq#992-B: a terminal verdict that vacated a cloud slot chains the next ticket now,
+    # rather than leaving the slot idle until the 20-min timer. Only the two run-outcomes
+    # that mean "this worker ran and freed its slot" — a verified done and an
+    # attempts-exhausted block. Pre-claim deferrals (deps/governor/claim) never occupied
+    # the slot meaningfully, and LIMIT means the whole login is throttled (a kicked pass
+    # would just be governor-denied), so neither kicks. Fail-open, after the exit code is
+    # fixed so it can't perturb the outcome.
+    if getattr(args, "func", None) is cmd_run and rc in (EXIT_OK, EXIT_BLOCKED):
+        trigger_refill(getattr(args, "ticket", "?"),
+                       "done" if rc == EXIT_OK else "blocked")
     sys.exit(rc if isinstance(rc, int) else 0)
 
 
