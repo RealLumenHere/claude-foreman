@@ -222,6 +222,11 @@ def test_backup_required_token_ambers_with_local_backup(tmp_path):
     dump.write_bytes(b"\x00" * 1024)
     yaml_text = MIKO_RULES + f"backups:\n  - {dump}\n"
     out = compiled(tmp_path, yaml_text)
+    # wq#1006: research gate now precedes the flash/backup path — satisfy it so
+    # this test keeps proving the backup->AMBER downgrade in isolation.
+    research = tmp_path / "proj" / "research"
+    research.mkdir(parents=True, exist_ok=True)
+    (research / "PRIOR_ART.md").write_text("## finding\nprior art on file\n")
     snapdir = tmp_path / "snaps"
     rc, _ = run_hook(bash_payload("fastboot flash boot boot.img"),
                      {ag.GATE_RULES_ENV: out, ag.SNAPDIR_ENV: str(snapdir),
@@ -236,6 +241,118 @@ def test_builtins_never_weakened_by_project_rules(tmp_path):
                      {ag.GATE_RULES_ENV: out, ag.HANDOFF_ENV: str(tmp_path),
                       "FOREMAN_EVENTS_DIR": str(tmp_path)})
     assert rc == 2
+
+
+# ---------------- wq#1006: research phase gate ----------------
+# Distinct project name so a real /home/lumen/projects/<name>/research/
+# PRIOR_ART.md can never satisfy these tests' gate from outside the tmp tree.
+
+GATEPROJ_RULES = textwrap.dedent("""\
+    project: wq1006-gatetest
+    hardware_class: unrecoverable
+    rules:
+      - phase_gates: [research, planning, implementation]
+""")
+
+
+def _env(tmp_path, out):
+    return {ag.GATE_RULES_ENV: out, ag.HANDOFF_ENV: str(tmp_path),
+            "FOREMAN_EVENTS_DIR": str(tmp_path)}
+
+
+def test_research_gate_blocks_adb_without_prior_art(tmp_path):
+    out = compiled(tmp_path, GATEPROJ_RULES)
+    rc, err = run_hook(bash_payload("adb shell getprop ro.build.fingerprint"),
+                       _env(tmp_path, out))
+    assert rc == 2
+    assert "research phase gate" in err and "fleet-search" in err
+
+
+def test_research_gate_blocks_flash_even_with_verified_backup(tmp_path):
+    """Research trumps backup: a local dump alone does not license device work."""
+    dump = tmp_path / "dump.bin"
+    dump.write_bytes(b"\x00" * 512)
+    out = compiled(tmp_path, GATEPROJ_RULES + f"backups:\n  - {dump}\n")
+    rc, err = run_hook(bash_payload("fastboot flash boot boot.img"),
+                       _env(tmp_path, out))
+    assert rc == 2
+    assert "research phase gate" in err
+
+
+def test_research_gate_opens_with_nonempty_prior_art(tmp_path):
+    out = compiled(tmp_path, GATEPROJ_RULES)
+    research = tmp_path / "proj" / "research"
+    research.mkdir(parents=True)
+    (research / "PRIOR_ART.md").write_text("## web: teardown thread found\n")
+    rc, err = run_hook(bash_payload("adb devices"), _env(tmp_path, out))
+    assert rc == 0, f"gate should open on non-empty PRIOR_ART: {err}"
+
+
+def test_research_gate_empty_prior_art_still_blocks(tmp_path):
+    out = compiled(tmp_path, GATEPROJ_RULES)
+    research = tmp_path / "proj" / "research"
+    research.mkdir(parents=True)
+    (research / "PRIOR_ART.md").write_text("")
+    rc, _ = run_hook(bash_payload("adb devices"), _env(tmp_path, out))
+    assert rc == 2
+
+
+def test_research_gate_fleet_search_itself_exempt(tmp_path):
+    """The satisfaction path must not deadlock on device tokens in its query."""
+    out = compiled(tmp_path, GATEPROJ_RULES)
+    rc, err = run_hook(bash_payload(
+        "fleet-search --project wq1006-gatetest web 'miko3 adb root jailbreak'"),
+        _env(tmp_path, out))
+    assert rc == 0, f"standalone fleet-search must pass: {err}"
+
+
+def test_research_gate_fleet_search_chain_not_exempt(tmp_path):
+    out = compiled(tmp_path, GATEPROJ_RULES)
+    rc, _ = run_hook(bash_payload(
+        "fleet-search --project wq1006-gatetest web 'q'; adb shell ls /data"),
+        _env(tmp_path, out))
+    assert rc == 2, "chained command must not ride the fleet-search exemption"
+
+
+def test_research_gate_prior_art_tamper_blocked(tmp_path):
+    out = compiled(tmp_path, GATEPROJ_RULES)
+    research = tmp_path / "proj" / "research"
+    research.mkdir(parents=True)
+    pa = research / "PRIOR_ART.md"
+    for payload in (
+        bash_payload(f"echo seeded > {pa}"),
+        bash_payload(f"touch {pa}"),
+        {"tool_name": "Write", "tool_input": {"file_path": str(pa),
+                                               "content": "fake"}, "cwd": "/tmp"},
+        {"tool_name": "Edit", "tool_input": {"file_path": str(pa)}, "cwd": "/tmp"},
+    ):
+        rc, err = run_hook(payload, _env(tmp_path, out))
+        assert rc == 2, f"PRIOR_ART tamper not blocked: {payload}"
+        assert "tamper" in err
+
+
+def test_research_gate_needs_hardware_class(tmp_path):
+    """phase_gates without hardware_class = software project; no device gate."""
+    out = compiled(tmp_path, "project: softproj\nrules:\n"
+                             "  - phase_gates: [research, implementation]\n")
+    rc, err = run_hook(bash_payload("adb devices"), _env(tmp_path, out))
+    assert rc == 0, err
+
+
+def test_research_gate_needs_research_phase_declared(tmp_path):
+    out = compiled(tmp_path, "project: hwproj\nhardware_class: recoverable\n"
+                             "rules:\n  - phase_gates: [planning, implementation]\n")
+    rc, err = run_hook(bash_payload("adb devices"), _env(tmp_path, out))
+    assert rc == 0, err
+
+
+def test_compile_rules_prior_art_paths(tmp_path):
+    out = compiled(tmp_path, GATEPROJ_RULES)
+    data = json.load(open(out))
+    assert data["phase_gates"] == ["research", "planning", "implementation"]
+    assert data["prior_art_paths"][0] == \
+        "/home/lumen/projects/wq1006-gatetest/research/PRIOR_ART.md"
+    assert any(p.startswith(str(tmp_path)) for p in data["prior_art_paths"])
 
 
 # ---------------- hook fail-closed ----------------

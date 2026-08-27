@@ -107,6 +107,74 @@ BUILTIN_AMBER = [
 
 _MUTATION_MARKERS = re.compile(r'(\brm\b|\bmv\b|\bsed\b[^|;&]*-i|\btee\b|>|\btruncate\b|\bcp\b)')
 
+# --------------------------------------------------------------------------
+# wq#1006 — research phase gate (wires the declared phase_gates:[research,...]).
+# A project with hardware_class set REQUIRES a non-empty PRIOR_ART.md before
+# ANY device-interaction action. Satisfiable ONLY by running fleet-search
+# --project <name>, which writes projects/<name>/research/PRIOR_ART.md.
+# Token-presence matching (\badb\b etc.), same posture as guard.sh and
+# BUILTIN_RED: `grep adb notes.md` blocks too while the gate is unsatisfied —
+# accepted false positive, one standalone fleet-search opens the gate for the
+# whole attempt. Loose-over-precise means wrappers (timeout/env/xargs adb)
+# cannot evade. dd of= stays unconditionally RED via BUILTIN_RED regardless.
+# --------------------------------------------------------------------------
+
+RESEARCH_GATE_DEVICE = [
+    (r'\badb\b', "adb"),
+    (r'\bfastboot\b', "fastboot"),
+    (r'\bheimdall\b', "heimdall"),
+    (r'(^|[\s;|&])edl(\.py)?\b', "edl"),
+    (r'\bflashrom\b', "flashrom"),
+    (r'\bmtkclient\b', "mtkclient"),
+    (r'\besptool(\.py)?\b', "esptool"),
+    (r'\bopenocd\b', "openocd"),
+    (r'\bdfu-util\b', "dfu-util"),
+    (r'\bstm32flash\b', "stm32flash"),
+    (r'\bavrdude\b', "avrdude"),
+    (r'\b(picocom|minicom)\b', "serial console"),
+    (r'\bscreen\b[^|;&]*/dev/tty(USB|ACM|S)', "serial console (screen)"),
+    (r'\bdd\b[^|;&]*\bif=/dev/(sd|mmcblk|nvme|block/)', "dd raw device read"),
+]
+
+# The one exemption that prevents deadlock: the sanctioned research command
+# itself may mention device tokens in its quoted query ("miko3 adb root").
+# Only an ENTIRE command that is a single fleet-search invocation is exempt —
+# any ;|&& chaining voids it, so `fleet-search ...; adb ...` still gates.
+_FLEET_SEARCH_ONLY = re.compile(r'^\s*(?:/home/lumen/bin/)?fleet-search\b[^;|&]*$')
+
+# Hand-writing PRIOR_ART.md defeats the gate in one GREEN command; it is
+# machine-written by fleet-search only (same tamper class as .fworker-rules).
+_PRIOR_ART_TAMPER = re.compile(
+    r'(\brm\b|\bcp\b|\bmv\b|\btee\b|\btouch\b|\btruncate\b|\bdd\b'
+    r'|\bsed\b\s+-i[^|;&]*|>{1,2})\s*[^|;&]*PRIOR_ART', re.IGNORECASE)
+
+
+def _research_gate_required(rules):
+    if not rules.get("hardware_class"):
+        return False
+    return "research" in [str(g) for g in rules.get("phase_gates") or []]
+
+
+def _prior_art_ok(rules):
+    for p in rules.get("prior_art_paths", []):
+        try:
+            if os.path.isfile(p) and os.path.getsize(p) > 0:
+                return p
+        except OSError:
+            continue
+    return None
+
+
+def _research_gate_reason(label, rules):
+    expect = (rules.get("prior_art_paths") or
+              ["projects/<name>/research/PRIOR_ART.md"])[0]
+    proj = rules.get("project") or "<name>"
+    return (f"research phase gate: '{label}' is device interaction on "
+            f"hardware_class={rules.get('hardware_class')} and {expect} is "
+            f"missing or empty. Complete the research phase first: run "
+            f"`fleet-search --project {proj} web|github|reddit '<topic>'` as a "
+            f"standalone command (it writes PRIOR_ART.md), then retry (wq#1006)")
+
 
 def _norm(cmd):
     return re.sub(r'\s+', ' ', cmd.replace('\n', ' ').replace('\t', ' '))
@@ -157,7 +225,8 @@ def compile_rules(project_dirs, out_path):
     top-level keys are also honored."""
     compiled = {"project": None, "hardware_class": None, "prose_rules": [],
                 "context": [], "red_patterns": [], "amber_patterns": [],
-                "backup_required_before": [], "backups": [], "source_files": []}
+                "backup_required_before": [], "backups": [], "source_files": [],
+                "phase_gates": [], "prior_art_paths": []}
     seen = set()
     for d in project_dirs:
         if not d:
@@ -178,10 +247,14 @@ def compile_rules(project_dirs, out_path):
                 for k, v in item.items():
                     if k == "backup_required_before" and isinstance(v, list):
                         compiled["backup_required_before"] += [str(t) for t in v]
-                    elif k == "phase_gates":
-                        compiled["phase_gates"] = v
+                    elif k == "phase_gates" and isinstance(v, list):
+                        compiled["phase_gates"] += [str(g) for g in v
+                                                    if str(g) not in compiled["phase_gates"]]
                     else:
                         compiled["prose_rules"].append(f"{k}: {v}")
+        if isinstance(data.get("phase_gates"), list):  # top-level form also honored
+            compiled["phase_gates"] += [str(g) for g in data["phase_gates"]
+                                        if str(g) not in compiled["phase_gates"]]
         compiled["context"] += [str(c) for c in (data.get("context") or [])]
         for key in ("red_patterns", "amber_patterns"):
             for pat in data.get(key) or []:
@@ -195,6 +268,21 @@ def compile_rules(project_dirs, out_path):
         compiled["backups"] += [str(b) for b in (data.get("backups") or [])]
     if not compiled["source_files"]:
         return None
+    # wq#1006: candidate PRIOR_ART.md locations, checked LIVE at hook time (so
+    # fleet-search run mid-session opens the gate without a recompile).
+    # Canonical projects/<name>/research/ first — that is where fleet-search
+    # --project writes — then research/ beside each rules file (worktree copies).
+    pa, pa_seen = [], set()
+    if compiled["project"]:
+        pa.append(os.path.join("/home/lumen/projects", str(compiled["project"]),
+                               "research", "PRIOR_ART.md"))
+    for src in compiled["source_files"]:
+        pa.append(os.path.join(os.path.dirname(src), "research", "PRIOR_ART.md"))
+    for p in pa:
+        rp = os.path.realpath(p)
+        if rp not in pa_seen:
+            pa_seen.add(rp)
+            compiled["prior_art_paths"].append(p)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(compiled, f, indent=1)
@@ -232,6 +320,17 @@ def classify_bash(cmd, rules):
         for entry in rules.get("red_patterns", []):
             if re.search(entry["pattern"], target, re.IGNORECASE):
                 return "RED", entry["reason"], None
+        # wq#1006 research phase gate: ordered BEFORE the flash/backup path on
+        # purpose — a verified backup does not excuse skipping research. Checked
+        # live so a fleet-search run this session opens the gate immediately.
+        if _research_gate_required(rules):
+            if _PRIOR_ART_TAMPER.search(target):
+                return ("RED", "direct mutation of PRIOR_ART.md (research gate "
+                        "tamper — PRIOR_ART.md is written by fleet-search only)", None)
+            if not _prior_art_ok(rules) and not _FLEET_SEARCH_ONLY.search(target):
+                for pat, label in RESEARCH_GATE_DEVICE:
+                    if re.search(pat, target, re.IGNORECASE):
+                        return "RED", _research_gate_reason(label, rules), None
         # flash class: RED unless a declared LOCAL backup verifies
         for pat, reason in BUILTIN_FLASH:
             if re.search(pat, target, re.IGNORECASE):
@@ -261,6 +360,11 @@ def classify_file_tool(tool_name, file_path, rules):
     base = os.path.basename(file_path)
     if base == RULES_BASENAME or base.startswith(".fworker-rules"):
         return "RED", "write/edit of .fworker-rules.yaml (gate tamper)", None
+    # wq#1006: PRIOR_ART.md is machine-written by fleet-search only — a hand
+    # Write/Edit would open the research gate without research.
+    if base == "PRIOR_ART.md" and _research_gate_required(rules):
+        return ("RED", "write/edit of PRIOR_ART.md (research gate tamper — "
+                "run fleet-search instead)", None)
     if re.match(r'^/(etc|boot|usr|dev)(/|$)', os.path.realpath(file_path)):
         return "RED", f"{tool_name} into system path {file_path}", None
     for entry in rules.get("red_patterns", []):
