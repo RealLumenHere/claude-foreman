@@ -21,9 +21,13 @@ mode 0600 lumen:lumen.
 Without the key everything still works minus clarifying questions and the
 framing section — the UI labels the output "deterministic only".
 
-Model default is `claude-sonnet-5`; if the gateway names it differently
-(check `python3 /home/lumen/pstack/tools/lumen_panel.py --list-models`), set
-`Environment=PROMPT_FORGE_MODEL=<gateway-name>` in the unit.
+Model: the gateway has NO `claude-sonnet-5` rung. The `claude-max-*` rungs are
+CLI-backed and time out on synchronous requests (measured 90s+, empty body), so
+they are unusable for this web UI. DEPLOYED DEFAULT (wq#957, 2026-08-27):
+`deepseek-v4-flash` (1s, clean JSON, adequate for clarify+framing), set via
+drop-in `/etc/systemd/system/lumen-prompt-forge.service.d/10-model.conf`.
+Re-list with `python3 /home/lumen/pstack/tools/lumen_panel.py --list-models` if
+choosing a different rung.
 
 ## 3. Install + enable the service
 
