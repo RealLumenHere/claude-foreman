@@ -42,6 +42,16 @@ SNAP_DB_CAP = 200 * 1024 * 1024       # sqlite db copy cap
 RED_MSG = ("ACTION BLOCKED: destructive operation requires review. "
            "Your context has been preserved for a reviewing agent.")
 
+# wq#991 — research-first phase gate. A hardware_class / research-phase-gated
+# project blocks ALL device commands (read-only included) until a valid prior-art
+# research marker exists. Self-service: the agent clears it by running
+# research_phase.py, not by escalation.
+PROJECTS_ROOT = os.environ.get("FOREMAN_PROJECTS_ROOT", "/home/lumen/projects")
+RESEARCH_MARKER = ".research-complete.json"   # lives in projects/<name>/research/
+RESEARCH_SCHEMA = "research-complete/v1"
+MIN_FINDINGS_BYTES = 200                       # a bare touch can't satisfy this
+RESEARCH_PHASE_TOOL = "/home/lumen/foreman/harness/research_phase.py"
+
 # --------------------------------------------------------------------------
 # Layer 1 — builtin classification lists. Regexes run against BOTH the raw
 # command and a whitespace-collapsed copy (same evasion posture as guard.sh).
@@ -105,7 +115,35 @@ BUILTIN_AMBER = [
     (r'\b(cp|mv)\b\s+(?:-[a-z]+\s+)*[^\s;|&]+\s+(/[^\s;|&]+)', "cp/mv onto path", "files"),
 ]
 
+# wq#991 DEVICE — commands that DRIVE the physical device under RE (read-only
+# contact included: `adb shell getprop` is first contact and still gated). Host
+# OBSERVATION (lsusb, dmesg, ls /dev) is deliberately NOT here — that is how you
+# identify the device; gating it is pointless friction. Per-project
+# `device_patterns` extends this additively.
+BUILTIN_DEVICE = [
+    (r'\badb\b', "adb (Android device bridge)"),
+    (r'\bfastboot\b', "fastboot"),
+    (r'\bheimdall\b', "heimdall (Samsung flash)"),
+    (r'\b(edl|qdl|firehose)\b', "Qualcomm EDL/QDL/firehose"),
+    (r'\bflashrom\b', "flashrom (SPI/BIOS)"),
+    (r'\b(rkdeveloptool|upgrade_tool)\b', "Rockchip flash tool"),
+    (r'\b(mtk|mtkclient|sp_?flash(tool)?)\b', "MediaTek flash tool"),
+    (r'\buuu\b', "NXP uuu (mfgtools)"),
+    (r'\besptool(\.py)?\b', "esptool (ESP flash)"),
+    (r'\bopenocd\b', "OpenOCD (JTAG)"),
+    (r'\bavrdude\b', "avrdude"),
+    (r'\bdfu-util\b', "dfu-util (USB DFU)"),
+    (r'\bnvflash\b|\btegrarcm\b|\bfusee\b', "NVIDIA Tegra flash"),
+    (r'\b(screen|minicom|picocom|tio|cu)\b[^|;&]*\s(/dev/tty|/dev/serial)', "serial console on tty"),
+    (r'(^|[\s;|&])(cat|echo|printf|dd)\b[^|;&]*[<>]\s*/dev/tty', "raw serial tty read/write"),
+]
+
 _MUTATION_MARKERS = re.compile(r'(\brm\b|\bmv\b|\bsed\b[^|;&]*-i|\btee\b|>|\btruncate\b|\bcp\b)')
+# wq#991 — write-intent tokens for detecting an attempt to FORGE the research
+# marker (covers python -c open(...,'w'), redirects, touch, install, etc).
+_MARKER_WRITE_INTENT = re.compile(
+    r'(>|>>|\btee\b|\btouch\b|\bcp\b|\bmv\b|\bdd\b|\binstall\b|\btruncate\b|'
+    r"\bopen\s*\(|\.write\s*\(|\bsed\b[^|;&]*-i|\bprintf\b|\becho\b)")
 
 
 def _norm(cmd):
@@ -157,6 +195,7 @@ def compile_rules(project_dirs, out_path):
     top-level keys are also honored."""
     compiled = {"project": None, "hardware_class": None, "prose_rules": [],
                 "context": [], "red_patterns": [], "amber_patterns": [],
+                "device_patterns": [], "phase_gates": [], "project_root": None,
                 "backup_required_before": [], "backups": [], "source_files": []}
     seen = set()
     for d in project_dirs:
@@ -171,6 +210,9 @@ def compile_rules(project_dirs, out_path):
         compiled["source_files"].append(p)
         compiled["project"] = compiled["project"] or data.get("project")
         compiled["hardware_class"] = compiled["hardware_class"] or data.get("hardware_class")
+        # wq#991 — canonical project dir (first rules file wins); the research
+        # marker lives under projects/<project>/research/, resolved at check time.
+        compiled["project_root"] = compiled["project_root"] or os.path.dirname(os.path.realpath(p))
         for item in data.get("rules", []) or []:
             if isinstance(item, str):
                 compiled["prose_rules"].append(item)
@@ -179,11 +221,17 @@ def compile_rules(project_dirs, out_path):
                     if k == "backup_required_before" and isinstance(v, list):
                         compiled["backup_required_before"] += [str(t) for t in v]
                     elif k == "phase_gates":
-                        compiled["phase_gates"] = v
+                        for g in (v or []):
+                            if str(g) not in compiled["phase_gates"]:
+                                compiled["phase_gates"].append(str(g))
                     else:
                         compiled["prose_rules"].append(f"{k}: {v}")
+        # top-level phase_gates: (additive with any found under rules:)
+        for g in (data.get("phase_gates") or []):
+            if str(g) not in compiled["phase_gates"]:
+                compiled["phase_gates"].append(str(g))
         compiled["context"] += [str(c) for c in (data.get("context") or [])]
-        for key in ("red_patterns", "amber_patterns"):
+        for key in ("red_patterns", "amber_patterns", "device_patterns"):
             for pat in data.get(key) or []:
                 if isinstance(pat, str):
                     entry = {"pattern": pat, "reason": f"project rule ({os.path.basename(d)})"}
@@ -229,6 +277,10 @@ def classify_bash(cmd, rules):
         # gate-tamper: any mutation touching a rules file is RED
         if RULES_BASENAME.rsplit(".", 1)[0] in target and _MUTATION_MARKERS.search(target):
             return "RED", "mutation of .fworker-rules.yaml (gate tamper)", None
+        # wq#991 — forging the research marker is RED (the only sanctioned writer
+        # is research_phase.py, which does the real searches). Reads (cat/ls) pass.
+        if RESEARCH_MARKER in target and _MARKER_WRITE_INTENT.search(target):
+            return "RED", f"write to {RESEARCH_MARKER} (research-gate tamper)", None
         for entry in rules.get("red_patterns", []):
             if re.search(entry["pattern"], target, re.IGNORECASE):
                 return "RED", entry["reason"], None
@@ -261,6 +313,8 @@ def classify_file_tool(tool_name, file_path, rules):
     base = os.path.basename(file_path)
     if base == RULES_BASENAME or base.startswith(".fworker-rules"):
         return "RED", "write/edit of .fworker-rules.yaml (gate tamper)", None
+    if base == RESEARCH_MARKER:
+        return "RED", f"write/edit of {RESEARCH_MARKER} (research-gate tamper)", None
     if re.match(r'^/(etc|boot|usr|dev)(/|$)', os.path.realpath(file_path)):
         return "RED", f"{tool_name} into system path {file_path}", None
     for entry in rules.get("red_patterns", []):
@@ -511,6 +565,86 @@ class LoopTracker:
 
 
 # --------------------------------------------------------------------------
+# wq#991 — research-first phase gate
+# --------------------------------------------------------------------------
+
+def is_research_gated(rules):
+    """A project is research-gated if it declares a hardware_class OR lists
+    'research' among its phase_gates. Either signal opts the project in."""
+    if not rules:
+        return False
+    if rules.get("hardware_class"):
+        return True
+    return "research" in [str(g).lower() for g in rules.get("phase_gates", [])]
+
+
+def is_device_command(cmd, rules):
+    """True if cmd DRIVES the device under RE (read-only contact included).
+    Builtin list + per-project device_patterns (additive)."""
+    for target in (cmd, _norm(cmd)):
+        for pat, _reason in BUILTIN_DEVICE:
+            if re.search(pat, target, re.IGNORECASE):
+                return True
+        for entry in rules.get("device_patterns", []):
+            if re.search(entry["pattern"], target, re.IGNORECASE):
+                return True
+    return False
+
+
+def research_dir(rules):
+    """Canonical research dir for the gated project — projects/<name>/research
+    (the same dir fleet-search writes to), falling back to project_root/research
+    when the rules file carries no project name."""
+    proj = rules.get("project")
+    if proj:
+        return os.path.join(PROJECTS_ROOT, str(proj), "research")
+    root = rules.get("project_root")
+    return os.path.join(root, "research") if root else None
+
+
+def research_complete(rules):
+    """Validate the prior-art marker. Existence is not enough: it must parse,
+    carry the right schema, match the project, and point at a findings file that
+    actually exists and is non-trivial (a bare touch can't satisfy this)."""
+    rdir = research_dir(rules)
+    if not rdir:
+        return False
+    marker = os.path.join(rdir, RESEARCH_MARKER)
+    try:
+        with open(marker) as f:
+            m = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if str(m.get("schema", "")).split("/")[0] != RESEARCH_SCHEMA.split("/")[0]:
+        return False
+    if rules.get("project") and m.get("project") not in (None, rules.get("project")):
+        return False
+    findings = m.get("findings_file") or "PRIOR_ART.md"
+    fpath = findings if os.path.isabs(findings) else os.path.join(rdir, findings)
+    try:
+        return os.path.isfile(fpath) and os.path.getsize(fpath) >= MIN_FINDINGS_BYTES
+    except OSError:
+        return False
+
+
+def research_gate_reason(tool_name, detail, rules):
+    """Return a block reason if this action is a device command on a
+    research-gated project whose research is not yet complete; else None.
+    Non-device work (reading files, inspecting dumps, git, planning, running the
+    research tool itself) is never blocked by this gate."""
+    if tool_name != "Bash":
+        return None                       # device writes via Write/Edit are already RED (dev/ path)
+    if not is_research_gated(rules):
+        return None
+    if research_complete(rules):
+        return None
+    if not is_device_command(detail, rules):
+        return None
+    return (f"research phase required before any device interaction "
+            f"(project={rules.get('project')}, hardware_class={rules.get('hardware_class')})")
+
+
+# --------------------------------------------------------------------------
 # hook mode — PreToolUse entry point (fail-closed like guard.sh)
 # --------------------------------------------------------------------------
 
@@ -544,6 +678,27 @@ def hook_main():
                       file=sys.stderr)
             else:
                 print(f"{RED_MSG} ({reason})", file=sys.stderr)
+            return 2
+        # wq#991 — research-first phase gate. Checked AFTER RED (destructive
+        # always wins) and BEFORE any AMBER/GREEN device command executes. Unlike
+        # RED this is self-service: the agent clears it by doing the research.
+        rg = research_gate_reason(tool_name, detail, rules)
+        if rg:
+            rdir = research_dir(rules)
+            _log_event("gate_research_block", reason=rg, snippet=detail[:200])
+            print(
+                f"ACTION BLOCKED: {rg}.\n"
+                f"No completed prior-art research found at "
+                f"{os.path.join(rdir, RESEARCH_MARKER)}.\n"
+                f"This is the wq#991 research gate: hardware-RE projects were "
+                f"bricked or stalled because the agent touched the device before "
+                f"searching what the community already solved. Run the research "
+                f"phase first — it searches Reddit/GitHub/forums via fleet-search, "
+                f"writes findings to {rdir}/PRIOR_ART.md, and unlocks device "
+                f"commands:\n"
+                f"  python3 {RESEARCH_PHASE_TOOL} --project {rules.get('project')}\n"
+                f"Then re-run your command.",
+                file=sys.stderr)
             return 2
         if verdict == "AMBER":
             try:

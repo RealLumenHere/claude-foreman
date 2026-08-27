@@ -223,8 +223,11 @@ def test_backup_required_token_ambers_with_local_backup(tmp_path):
     yaml_text = MIKO_RULES + f"backups:\n  - {dump}\n"
     out = compiled(tmp_path, yaml_text)
     snapdir = tmp_path / "snaps"
+    projects = tmp_path / "projects"
+    _make_marker(str(projects))   # wq#991: research complete, to isolate the backup->AMBER path
     rc, _ = run_hook(bash_payload("fastboot flash boot boot.img"),
                      {ag.GATE_RULES_ENV: out, ag.SNAPDIR_ENV: str(snapdir),
+                      "FOREMAN_PROJECTS_ROOT": str(projects),
                       "FOREMAN_EVENTS_DIR": str(tmp_path)})
     assert rc == 0, "verified local backup should downgrade flash to AMBER"
 
@@ -318,3 +321,188 @@ def test_error_sig_ignores_timestamps_and_addresses():
     a = ag.LoopTracker._error_sig("fail at 12:01:03 addr 0xdeadbeef took 1.23s")
     b = ag.LoopTracker._error_sig("fail at 23:59:59 addr 0xcafe0000 took 9.87s")
     assert a == b
+
+
+# ---------------- wq#991: research-first phase gate ----------------
+
+def _make_marker(projects_root, project="miko3", findings_bytes=600,
+                 findings_name="PRIOR_ART.md", marker_project="miko3",
+                 schema=ag.RESEARCH_SCHEMA, write_findings=True):
+    rdir = os.path.join(projects_root, project, "research")
+    os.makedirs(rdir, exist_ok=True)
+    if write_findings:
+        with open(os.path.join(rdir, findings_name), "w") as f:
+            f.write("# PRIOR ART\n" + ("x" * findings_bytes))
+    marker = {"schema": schema, "project": marker_project,
+              "hardware_class": "unrecoverable", "completed_at": "2026-08-27T00:00:00Z",
+              "engine": "fleet-search+searxng", "queries": ["miko 3 github"],
+              "sources_ok": ["web"], "result_counts": {"web": 3}, "total_results": 3,
+              "findings_file": findings_name, "findings_bytes": findings_bytes}
+    with open(os.path.join(rdir, ag.RESEARCH_MARKER), "w") as f:
+        json.dump(marker, f)
+    return rdir
+
+
+def test_research_gate_blocks_device_command_pre_research(tmp_path):
+    """A fresh session on a hardware_class project cannot touch the device until
+    research is done — even a read-only `adb shell getprop`."""
+    out = compiled(tmp_path)
+    projects = tmp_path / "projects"          # empty: no marker exists
+    rc, err = run_hook(bash_payload("adb shell getprop ro.product.model"),
+                       {ag.GATE_RULES_ENV: out, "FOREMAN_PROJECTS_ROOT": str(projects),
+                        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2, "device command allowed before research"
+    assert "research phase required" in err
+    assert "research_phase.py" in err
+
+
+def test_research_gate_allows_after_valid_marker(tmp_path):
+    out = compiled(tmp_path)
+    projects = tmp_path / "projects"
+    _make_marker(str(projects))
+    rc, err = run_hook(bash_payload("adb shell getprop ro.product.model"),
+                       {ag.GATE_RULES_ENV: out, "FOREMAN_PROJECTS_ROOT": str(projects),
+                        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 0, f"device command still blocked after valid research marker :: {err}"
+
+
+def test_research_marker_existence_alone_insufficient(tmp_path):
+    """Marker present but findings file missing (a bare/forged marker) -> the
+    validator rejects it and the device command stays blocked."""
+    out = compiled(tmp_path)
+    projects = tmp_path / "projects"
+    _make_marker(str(projects), write_findings=False)   # marker only, no PRIOR_ART.md
+    rc, err = run_hook(bash_payload("adb devices"),
+                       {ag.GATE_RULES_ENV: out, "FOREMAN_PROJECTS_ROOT": str(projects),
+                        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2, "marker with no findings file should not satisfy the gate"
+
+
+def test_research_marker_tiny_findings_insufficient(tmp_path):
+    out = compiled(tmp_path)
+    projects = tmp_path / "projects"
+    _make_marker(str(projects), findings_bytes=10)      # < MIN_FINDINGS_BYTES
+    rc, _ = run_hook(bash_payload("fastboot getvar all"),
+                     {ag.GATE_RULES_ENV: out, "FOREMAN_PROJECTS_ROOT": str(projects),
+                      ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2, "trivially small findings should not satisfy the gate"
+
+
+def test_research_marker_forge_via_bash_is_red(tmp_path):
+    """The agent cannot self-clear the gate by writing the marker itself."""
+    for cmd in (
+        "touch /home/lumen/projects/miko3/research/.research-complete.json",
+        "echo '{}' > /home/lumen/projects/miko3/research/.research-complete.json",
+        "python3 -c \"open('/p/research/.research-complete.json','w').write('{}')\"",
+    ):
+        rc, err = run_hook(bash_payload(cmd),
+                           {ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+        assert rc == 2, f"marker forge not blocked: {cmd}"
+        assert "tamper" in err.lower() or "ACTION BLOCKED" in err
+
+
+def test_research_marker_forge_via_write_is_red(tmp_path):
+    rc, err = run_hook({"tool_name": "Write",
+                        "tool_input": {"file_path": "/p/research/.research-complete.json",
+                                       "content": "{}"}, "cwd": "/tmp"},
+                       {ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "tamper" in err.lower()
+
+
+def test_research_marker_read_is_allowed(tmp_path):
+    """Reading the marker (cat/ls) is fine — only writes are tamper."""
+    rc, _ = run_hook(bash_payload("cat /home/lumen/projects/miko3/research/.research-complete.json"),
+                     {ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 0
+
+
+def test_research_gate_non_device_command_allowed_pre_research(tmp_path):
+    """During the research phase the agent may still read dumps, grep, plan,
+    commit — only DEVICE commands are gated."""
+    out = compiled(tmp_path)
+    projects = tmp_path / "projects"          # no marker
+    for cmd in ("cat /home/lumen/projects/miko3/gd32_dump.bin",
+                "grep -rn miko /home/lumen/projects/miko3",
+                "git commit -m 'chore: notes'",
+                "python3 /home/lumen/foreman/harness/research_phase.py --project miko3"):
+        rc, err = run_hook(bash_payload(cmd),
+                           {ag.GATE_RULES_ENV: out, "FOREMAN_PROJECTS_ROOT": str(projects),
+                            ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+        assert rc == 0, f"non-device command wrongly blocked pre-research: {cmd} :: {err}"
+
+
+def test_research_gate_destructive_device_stays_red(tmp_path):
+    """RED wins: a destructive device command is blocked-and-escalated even
+    with no research, not softened into the self-service research block."""
+    out = compiled(tmp_path)
+    projects = tmp_path / "projects"          # no marker
+    rc, err = run_hook(bash_payload("fastboot flash boot boot.img"),
+                       {ag.GATE_RULES_ENV: out, "FOREMAN_PROJECTS_ROOT": str(projects),
+                        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "hardware_class=unrecoverable" in err   # RED project-rule path, not research msg
+    assert "research phase required" not in err
+
+
+def test_research_gate_not_applied_without_optin(tmp_path):
+    """A project with neither hardware_class nor a research phase_gate is NOT
+    research-gated — no regression on ordinary (non-hardware) tickets."""
+    out = compiled(tmp_path, "project: webapp\nrules:\n  - be tidy\n")
+    projects = tmp_path / "projects"
+    rc, _ = run_hook(bash_payload("adb shell getprop ro.build.version.sdk"),
+                     {ag.GATE_RULES_ENV: out, "FOREMAN_PROJECTS_ROOT": str(projects),
+                      ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 0, "non-hardware project should not be research-gated"
+
+
+def test_research_gate_phasegate_alone_opts_in(tmp_path):
+    """phase_gates:[research] with NO hardware_class still opts the project in."""
+    out = compiled(tmp_path, "project: nest\nphase_gates: [research, implementation]\n")
+    projects = tmp_path / "projects"
+    rc, err = run_hook(bash_payload("adb shell dumpsys"),
+                       {ag.GATE_RULES_ENV: out, "FOREMAN_PROJECTS_ROOT": str(projects),
+                        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "research phase required" in err
+
+
+def test_research_gate_no_rules_no_gate(tmp_path):
+    """No compiled rules at all (e.g. a foreman ticket) -> device-ish command is
+    not research-gated by this stage (guard.sh/builtins still apply)."""
+    rc, _ = run_hook(bash_payload("adb devices"),
+                     {ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 0
+
+
+# ---------------- wq#991: is_device_command unit ----------------
+
+@pytest.mark.parametrize("cmd", [
+    "adb shell getprop", "fastboot getvar all", "heimdall detect",
+    "flashrom -p linux_spi -r dump.bin", "rkdeveloptool rfi",
+    "edl printgpt", "esptool.py flash_id", "openocd -f board.cfg",
+    "screen /dev/ttyUSB0 115200", "picocom -b 115200 /dev/ttyUSB1",
+])
+def test_is_device_command_true(cmd):
+    assert ag.is_device_command(cmd, {}) is True, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "lsusb", "dmesg | tail", "ls /dev", "cat dump.bin", "grep foo bar.txt",
+    "python3 tool.py", "git status", "fleet-search web 'miko 3'",
+])
+def test_is_device_command_false(cmd):
+    assert ag.is_device_command(cmd, {}) is False, cmd
+
+
+def test_device_patterns_additive(tmp_path):
+    """Per-project device_patterns extend the builtin list."""
+    yaml_text = ("project: screenpad\nhardware_class: risky\n"
+                 "device_patterns:\n  - pattern: '\\brtd-isp\\b'\n    reason: RTD ISP flasher\n")
+    out = compiled(tmp_path, yaml_text)
+    projects = tmp_path / "projects"
+    rc, err = run_hook(bash_payload("rtd-isp --write fw.bin"),
+                       {ag.GATE_RULES_ENV: out, "FOREMAN_PROJECTS_ROOT": str(projects),
+                        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "research phase required" in err
