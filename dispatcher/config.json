@@ -41,8 +41,9 @@
       "max_per_day": 999
     },
     "user": {
-      "enabled": false,
-      "max_per_day": 1
+      "enabled": true,
+      "max_per_day": 999,
+      "priority_override": 99
     },
     "auto": {
       "enabled": true,
@@ -65,8 +66,9 @@
       "max_per_day": 999
     },
     "pokemon": {
-      "enabled": false,
-      "max_per_day": 1
+      "enabled": true,
+      "max_per_day": 999,
+      "priority_override": 99
     }
   }
 }
