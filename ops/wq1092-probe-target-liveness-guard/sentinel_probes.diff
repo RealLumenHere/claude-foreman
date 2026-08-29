@@ -1,0 +1,128 @@
+--- a/sentinel_probes.py
++++ b/sentinel_probes.py
+@@ -90,6 +90,65 @@
+         print(f"ntfy_digest failed: {e}")
+ 
+ def _norm(stem): return re.sub(r"_\d{10}$", "", re.sub(r"\.claimed_[a-z]+_\d+$", "", stem))
++
++
++# ── wq#1092: stale-target guard (class fix for the a5-health shape) ────────
++# A probe whose systemd target has been RETIRED (unit file removed --
++# LoadState=not-found) or deliberately masked can never recover via
++# is-active alone: FAIL forever -> CRITICAL forever -> pages Frank forever
++# (aq#899/wq#1064). Every probe that shells out to systemctl for a specific
++# unit MUST call _stale_or_none() first. STALE short-circuits to
++# (ok=True, critical=False) -- structurally unable to reach ntfy_urgent --
++# and files ONE build-lane wq ticket (deduped via state.json) so a human
++# still sees it instead of it silently passing forever.
++PROBE_TICKETS_FILED_KEY = "_stale_probe_tickets"
++WQ_BIN = os.environ.get("SENTINEL_WQ_BIN", "/home/lumen/bin/wq")
++WQ_FILE_CAPTURE = os.environ.get("SENTINEL_WQ_FILE_CAPTURE")  # test hook, same convention as NTFY_UPDATES_CAPTURE
++
++def _unit_load_state(unit):
++    try:
++        r = subprocess.run(["systemctl", "show", unit, "-p", "LoadState"],
++                           capture_output=True, text=True, timeout=10)
++        return dict(l.split("=", 1) for l in r.stdout.strip().splitlines() if "=" in l).get("LoadState", "not-found")
++    except Exception:
++        return "not-found"
++
++def _file_stale_probe_ticket(probe_name, unit, load_state):
++    s = _state()
++    filed = s.setdefault(PROBE_TICKETS_FILED_KEY, {})
++    key = f"{probe_name}:{unit}"
++    if key in filed:
++        return
++    title = f"[monitor] {probe_name} targets retired unit {unit} ({load_state}) -- remove or retarget probe"
++    detail = (f"{probe_name} in sentinel_probes.py checks systemd unit '{unit}' but "
++              f"LoadState={load_state} -- the unit no longer exists to watch. Auto-detected "
++              f"by the wq#1092 stale-target guard (was CRITICAL-forever/false-page shape, "
++              f"see wq#1064/aq#899). Comment out or retarget the probe.")
++    if WQ_FILE_CAPTURE:
++        try:
++            with open(WQ_FILE_CAPTURE, "a") as fh:
++                fh.write(json.dumps({"probe": probe_name, "unit": unit, "load_state": load_state,
++                                      "title": title}) + "\n")
++        except Exception as e:
++            print(f"stale-probe ticket capture failed: {e}")
++    else:
++        try:
++            subprocess.run([WQ_BIN, "add", "--lane", "build", "--pri", "2",
++                            "--title", title, "--detail", detail],
++                           capture_output=True, text=True, timeout=20)
++        except Exception as e:
++            print(f"stale-probe ticket file failed (non-fatal): {e}")
++    filed[key] = time.time()
++    _save(s)
++
++def _stale_or_none(unit, probe_name):
++    """Returns a (ok, detail, critical) STALE tuple if unit is not-found/masked,
++    else None -- caller proceeds with its normal is-active/ActiveState logic."""
++    load = _unit_load_state(unit)
++    if load in ("not-found", "masked"):
++        _file_stale_probe_ticket(probe_name, unit, load)
++        return True, f"STALE TARGET: {unit} LoadState={load} (build ticket filed, never pages)", False
++    return None
+ 
+ # ── PROBES ───────────────────────────────────────────────────────────────
+ def probe_output_rate():
+@@ -327,6 +386,11 @@
+               # lumen-smart-watchdog removed 2026-08-27 wq#971: daemon retired,
+               # stall rule absorbed into self-healer watch table.
+               "lumen-node-killer","lumen-self-healer"):
++        # wq#1092: a retired unit (file removed/masked) is a config problem for
++        # whoever left it in this list, not tailnet/unit drift -- skip it here
++        # (ticket filed by _stale_or_none) instead of counting it as a "problem".
++        if _stale_or_none(u, "probe-state-drift"):
++            continue
+         r = subprocess.run(["systemctl","is-active",u], capture_output=True, text=True)
+         if r.stdout.strip() not in ("active","activating"):
+             problems.append(f"unit {u}: {r.stdout.strip()}")
+@@ -480,6 +544,9 @@
+     'active' only proves the PID exists, not that turns are landing, so liveness
+     here is measured independently: wall-clock age since the last turn_summary
+     event actually written to the live event log."""
++    stale = _stale_or_none("lumen-pokemon-live.service", "probe-pokemon-liveness")
++    if stale:
++        return stale
+     try:
+         r = subprocess.run(
+             ["systemctl", "show", "lumen-pokemon-live.service", "-p", "ActiveState,SubState,NRestarts"],
+@@ -566,6 +633,9 @@
+     is now Restart=always, which self-heals the known failure mode, but nothing
+     was watching whether it stayed down for some other reason. Check ActiveState
+     directly every cycle so a dead monitor pages instead of going unnoticed."""
++    stale = _stale_or_none("lumen-litellm-auth-monitor.service", "probe-litellm-auth-monitor")
++    if stale:
++        return stale
+     try:
+         r = subprocess.run(
+             ["systemctl", "show", "lumen-litellm-auth-monitor.service", "-p", "ActiveState,SubState"],
+@@ -614,6 +684,9 @@
+     (original returned silently) — redis itself is healer+Gatus territory."""
+     down = []
+     for s in A5_SERVICES:
++        stale = _stale_or_none(s, "probe-a5-health")
++        if stale:
++            return stale
+         r = subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True, timeout=10)
+         if r.stdout.strip() != "active":
+             down.append(f"{s}={r.stdout.strip()}")
+@@ -861,8 +934,15 @@
+     ("probe-pokemon-liveness", probe_pokemon_liveness, False),
+     ("probe-litellm-auth-monitor", probe_litellm_auth_monitor, False),
+     ("probe-maat-vault",      probe_maat_vault,      False),   # wq#969 fold
+-    # DISABLED 2026-08-29 (orch5): a5 split (lumen-planner/generator/evaluator) RETIRED by Frank 2026-08-21; lumen-agent masked. This probe folded in stale by wq#969 -> CRITICAL x47 -> false P0 page (aq#899/wq#1064). Rollback: uncomment.
+-    # ("probe-a5-health",       probe_a5_health,       False),   # wq#969 fold (RETIRED)
++    # RE-ENABLED 2026-08-29 (wq#1092): was DISABLED by the wq#1064 instance fix
++    # (orch5) after aq#899's CRITICAL x47 false P0 page. Its targets
++    # (lumen-planner/generator/evaluator) are still RETIRED and always will be
++    # LoadState=not-found -- but the probe now routes every A5_SERVICES check
++    # through _stale_or_none() first, so it returns STALE (ok=True,
++    # critical=False, one build-lane ticket filed) instead of CRITICAL. Safe
++    # to leave live as a demonstration that the guard makes the class
++    # impossible; if it ever fires FAIL again it is a genuine incident.
++    ("probe-a5-health",       probe_a5_health,       False),   # wq#969 fold, guarded wq#1092
+     ("probe-brain-health",    probe_brain_health,    False),   # wq#969 fold
+     ("probe-invisible-work-watch", probe_invisible_work_watch, "7d"),  # wq#973
+     ("probe-r4-unticketed-recovery", probe_r4_unticketed_recovery, "24h"),  # wq#963
