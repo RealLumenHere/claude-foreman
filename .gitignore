@@ -25,3 +25,12 @@ __pycache__/
 # claude-shim runtime secret — generated per-install, never committed (wq#726)
 /claude-shim/.api_key
 ops/systemd-desired-state/
+
+# per-daemon health/self-heal runtime state (wq#1012 split) — not source
+/dispatcher_health/
+/self_heal/
+/self_heal.log
+/self_heal.log.*.gz
+/dispatcher.log.*.gz
+/ops/intervention_ledger.db
+/scribe.db
