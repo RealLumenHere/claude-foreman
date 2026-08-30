@@ -17,6 +17,7 @@ ORCH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ORCH_DIR)
 import router  # noqa: E402
 import judgment  # noqa: E402
+import repo_sweep  # noqa: E402
 
 MANIFEST = os.path.join(ORCH_DIR, "..", "research", "models.yaml")
 
@@ -407,6 +408,40 @@ def test_dispatch_cmd_auto_lane_without_repo_raises(monkeypatch):
         router.dispatch_cmd(688)
     cmd = router.dispatch_cmd(688, "/home/lumen/questfree")
     assert cmd[cmd.index("--repo") + 1] == "/home/lumen/questfree"
+
+
+# ---- wq#1123: dispatch-cmd (the manual CLI, per its own docstring) must resolve a
+# repo-sweep ticket's repo hint the same way foreman_dispatcher's automated pass does
+# (wq#1094) — via the shared router.repo_for_ticket(), not just LANE_REPO. ----------------
+
+def test_dispatch_cmd_auto_lane_repo_sweep_ticket_resolves_via_repo_hint(monkeypatch):
+    repo = "/home/lumen/questfree"
+    monkeypatch.setattr(repo_sweep, "managed_repos", lambda: {repo})
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "lane": "auto", "model": "claude-sonnet-5", "effort": "high",
+        "archetype": "standard-engineering",
+        "title": "[repo-sweep] questfree: BEHIND_ONLY",
+        "detail": f"Automated sweep detected BEHIND_ONLY in {repo}.\n"
+                  f"Output: BEHIND_ONLY {repo} main ahead=0 behind=1",
+    })
+    cmd = router.dispatch_cmd(1089)  # no --repo, like a human running the CLI directly
+    assert cmd[cmd.index("--repo") + 1] == repo
+
+
+def test_repo_for_ticket_prefers_lane_repo_over_hint():
+    assert router.repo_for_ticket({"lane": "pokemon", "title": "", "detail": ""}) == "/home/lumen/pokemon"
+
+
+def test_repo_for_ticket_falls_back_to_repo_hint(monkeypatch):
+    repo = "/home/lumen/vault"
+    monkeypatch.setattr(repo_sweep, "managed_repos", lambda: {repo})
+    t = {"lane": "auto", "title": "[repo-sweep] vault: BEHIND_ONLY",
+         "detail": f"Automated sweep detected BEHIND_ONLY in {repo}.\nOutput: x"}
+    assert router.repo_for_ticket(t) == repo
+
+
+def test_repo_for_ticket_none_when_neither_resolves():
+    assert router.repo_for_ticket({"lane": "auto", "title": "plain ticket", "detail": ""}) is None
 
 
 # ---- wq#778: classifier corroboration gate (from wq#750 audit F1/F2) --------------------

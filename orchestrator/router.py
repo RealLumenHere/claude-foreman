@@ -30,7 +30,9 @@ CLI (all read-only except `assign`, which writes the tuple into wq via `wq edit`
                         [--pressure MODEL=ok|tight|deny ...] [--live]
     router.py assign    <ticket-id> [--archetype A] [--dry-run] [--live]
     router.py dispatch-cmd <ticket-id> [--repo PATH]    # the fworker command line;
-                        --repo derives from the ticket's lane (LANE_REPO) when omitted
+                        --repo derives from repo_for_ticket() when omitted — the
+                        ticket's lane (LANE_REPO), then a repo-sweep ticket's own
+                        repo hint (wq#1094/wq#1123)
     router.py roster    # entitled/routed/dominated table
     router.py check     # manifest self-check (what the probe runs)
 """
@@ -46,6 +48,9 @@ try:
     import yaml
 except ImportError:  # pragma: no cover
     yaml = None
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "harness"))
+import repo_sweep  # noqa: E402  # wq#1123: shared repo_for_ticket() resolver
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 MANIFEST_PATH = os.environ.get(
@@ -715,20 +720,34 @@ def repo_for_lane(lane):
     return LANE_REPO.get(lane)
 
 
+def repo_for_ticket(ticket_id_or_dict):
+    """The one resolver shared by dispatch_cmd and foreman_dispatcher._do_pass (wq#1123):
+    LANE_REPO first, then — for lanes LANE_REPO doesn't cover (e.g. 'auto') — the exact
+    repo a repo-sweep ticket wrote into its own detail (repo_sweep.repo_hint). Returns
+    None (never a guess) if neither resolves.
+
+    Accepts either a ticket id (does the wq_show lookup itself) or an already-fetched
+    ticket dict, so a caller that already has the ticket doesn't pay for a second show."""
+    t = ticket_id_or_dict if isinstance(ticket_id_or_dict, dict) else wq_show(ticket_id_or_dict)
+    repo = repo_for_lane(t.get("lane"))
+    if repo:
+        return repo
+    return repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
+
+
 def dispatch_cmd(ticket_id, repo=None, *, manifest=None):
     """The fworker command for a ticket whose tuple is already on the ticket (or gets
     assigned now). Mirrors design/T2A §2.
 
-    repo: explicit override. Omit it to derive the repo from the ticket's lane via
-    LANE_REPO (wq#713) — dispatch-cmd raises rather than falling back to any default
-    when the lane isn't mapped."""
+    repo: explicit override. Omit it to derive the repo via repo_for_ticket() — LANE_REPO
+    (wq#713) first, then a repo-sweep ticket's own repo hint (wq#1094/wq#1123) — raising
+    rather than falling back to any default when neither resolves."""
     t = wq_show(ticket_id)
     if not repo:
-        lane = t.get("lane")
-        repo = repo_for_lane(lane)
+        repo = repo_for_ticket(t)
         if not repo:
             raise SystemExit(
-                f"router: wq#{ticket_id} lane {lane!r} has no LANE_REPO entry — "
+                f"router: wq#{ticket_id} lane {t.get('lane')!r} has no LANE_REPO entry — "
                 f"pass --repo explicitly (never guess /home/lumen)")
     model, effort, arch = t.get("model"), t.get("effort"), t.get("archetype")
     if model in (None, "", "None"):
