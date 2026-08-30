@@ -630,6 +630,44 @@ def _git(cwd, *args):
     return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
 
 
+SLOCK_BIN = os.environ.get("FOREMAN_SLOCK", "/home/lumen/bin/slock")
+GITLOCK_TTL_MIN = int(os.environ.get("FOREMAN_GITLOCK_TTL_MIN", "5"))  # slock --ttl is MINUTES; setup is ~seconds, this is only the crash-safety bound
+GITLOCK_TRIES = int(os.environ.get("FOREMAN_GITLOCK_TRIES", "20"))
+GITLOCK_SLEEP_S = float(os.environ.get("FOREMAN_GITLOCK_SLEEP_S", "2"))
+
+
+def _gitlock_scope(repo):
+    """The repo's git-lock scope, IDENTICAL to lumen-pr's gitlock_scope() (bin/lumen-pr)
+    so worktree setup serializes against `lumen-pr land` on the same repo. Derived from
+    the repo REMOTE slug (not the local path) so it matches regardless of checkout
+    location: lumen-plays-pokemon -> lpp-git, else <slug>-git."""
+    p = _git(repo, "remote", "get-url", "origin")
+    url = p.stdout.strip() if p.returncode == 0 else ""
+    name = url.rsplit("/", 1)[-1] if url else os.path.basename(os.path.normpath(repo))
+    name = re.sub(r"\.git$", "", name)
+    return "lpp-git" if name == "lumen-plays-pokemon" else f"{name}-git"
+
+
+def _gitlock_acquire(scope, holder, note):
+    """slock is non-blocking (fails if held). Retry a bounded number of times — the
+    common contender is a transient land — and return False if it stays held so the
+    caller can defer rather than race the primary .git."""
+    for _ in range(max(1, GITLOCK_TRIES)):
+        r = subprocess.run(
+            [SLOCK_BIN, "acquire", scope, "--ttl", str(GITLOCK_TTL_MIN),
+             "--holder", holder, "--note", note],
+            capture_output=True, text=True)
+        if r.returncode == 0:
+            return True
+        time.sleep(GITLOCK_SLEEP_S)
+    return False
+
+
+def _slock_release(scope, holder):
+    subprocess.run([SLOCK_BIN, "release", scope, "--holder", holder],
+                   capture_output=True, text=True)
+
+
 def make_worktree(repo, ticket_id, attempt, title, archetype):
     """RELIABILITY_SPEC.md §D + wq#649: the branch name embeds the attempt number
     from the start (previously only a retry-fallback appended it), since attempt 1's
@@ -652,37 +690,55 @@ def make_worktree(repo, ticket_id, attempt, title, archetype):
     wt = os.path.join(WORKTREES_ROOT, f"wq{ticket_id}-a{attempt}")
     os.makedirs(WORKTREES_ROOT, exist_ok=True)
 
-    # prune-on-start: clears git's own bookkeeping for any worktree dir that vanished
-    # without a proper `git worktree remove` (operator rm -rf, partial crash cleanup),
-    # so a since-deleted dir can't make a live branch look falsely "checked out".
-    _git(repo, "worktree", "prune")
+    # wq#1141: every git op below MUTATES the primary repo's .git — `worktree prune`,
+    # `worktree add` and `worktree remove` write worktree bookkeeping, refs and the
+    # index/ref locks. Run them under the SAME repo git lock `lumen-pr land` takes
+    # (bin/lumen-pr gitlock_scope), so worktree setup can never race a concurrent
+    # land/rebase on the primary tree. The wq#1097 corruption was exactly that race: an
+    # orchestrator's #78 land on /home/lumen/pokemon vs an unlocked `worktree add` on
+    # the same .git. slock is non-blocking and the contender is a transient (seconds)
+    # land, so _gitlock_acquire retries briefly, then we raise rather than race — the
+    # attempt defers and redispatch retries.
+    scope = _gitlock_scope(repo)
+    holder = os.environ.get("WQ_AGENT") or f"fworker-wq{ticket_id}-a{attempt}:{os.getpid()}"
+    if not _gitlock_acquire(scope, holder, f"wq{ticket_id} a{attempt} worktree setup"):
+        raise RuntimeError(
+            f"could not take git lock '{scope}' for worktree setup after "
+            f"{GITLOCK_TRIES} tries — another agent is mid-merge on {repo}; deferring.")
+    try:
+        # prune-on-start: clears git's own bookkeeping for any worktree dir that vanished
+        # without a proper `git worktree remove` (operator rm -rf, partial crash cleanup),
+        # so a since-deleted dir can't make a live branch look falsely "checked out".
+        _git(repo, "worktree", "prune")
 
-    if os.path.isdir(wt):
-        p = _git(wt, "rev-parse", "--abbrev-ref", "HEAD")
-        if p.returncode == 0 and p.stdout.strip() == branch:
-            log(f"wq#{ticket_id} attempt {attempt}: adopting worktree left by a prior "
-                f"crashed attempt at the exact same (ticket, attempt) — {wt} ({branch})")
-            return wt, branch
-        # not ours (or ours but on the wrong branch) — drop it so `worktree add` below
-        # gets a clean path instead of failing on an already-existing directory.
-        if _git(repo, "worktree", "remove", "--force", wt).returncode != 0:
-            shutil.rmtree(wt, ignore_errors=True)
+        if os.path.isdir(wt):
+            p = _git(wt, "rev-parse", "--abbrev-ref", "HEAD")
+            if p.returncode == 0 and p.stdout.strip() == branch:
+                log(f"wq#{ticket_id} attempt {attempt}: adopting worktree left by a prior "
+                    f"crashed attempt at the exact same (ticket, attempt) — {wt} ({branch})")
+                return wt, branch
+            # not ours (or ours but on the wrong branch) — drop it so `worktree add` below
+            # gets a clean path instead of failing on an already-existing directory.
+            if _git(repo, "worktree", "remove", "--force", wt).returncode != 0:
+                shutil.rmtree(wt, ignore_errors=True)
 
-    p = _git(repo, "worktree", "add", wt, "-b", branch, "HEAD")
-    if p.returncode != 0 and "already exists" in (p.stderr or ""):
-        # the branch name is deterministic from (ticket_id, attempt), so if it exists
-        # with no live worktree attached (the worktree dir was removed some other way,
-        # e.g. by hand) it is necessarily ours — reattach instead of erroring.
-        log(f"wq#{ticket_id} attempt {attempt}: branch {branch} exists with no live "
-            f"worktree — adopting.")
-        p = _git(repo, "worktree", "add", wt, branch)
-    if p.returncode != 0:
-        # last resort: a pid-uniqued branch guarantees no further collision.
-        branch = f"{branch}-p{os.getpid()}"
         p = _git(repo, "worktree", "add", wt, "-b", branch, "HEAD")
-    if p.returncode != 0:
-        raise RuntimeError(f"git worktree add failed: {p.stdout} {p.stderr}")
-    return wt, branch
+        if p.returncode != 0 and "already exists" in (p.stderr or ""):
+            # the branch name is deterministic from (ticket_id, attempt), so if it exists
+            # with no live worktree attached (the worktree dir was removed some other way,
+            # e.g. by hand) it is necessarily ours — reattach instead of erroring.
+            log(f"wq#{ticket_id} attempt {attempt}: branch {branch} exists with no live "
+                f"worktree — adopting.")
+            p = _git(repo, "worktree", "add", wt, branch)
+        if p.returncode != 0:
+            # last resort: a pid-uniqued branch guarantees no further collision.
+            branch = f"{branch}-p{os.getpid()}"
+            p = _git(repo, "worktree", "add", wt, "-b", branch, "HEAD")
+        if p.returncode != 0:
+            raise RuntimeError(f"git worktree add failed: {p.stdout} {p.stderr}")
+        return wt, branch
+    finally:
+        _slock_release(scope, holder)
 
 
 # ---------------------------------------------------------------------------
