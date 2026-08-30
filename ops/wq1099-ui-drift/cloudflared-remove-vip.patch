@@ -1,0 +1,14 @@
+--- a/etc/cloudflared/config.yml
++++ b/etc/cloudflared/config.yml
+@@ -33,11 +33,6 @@
+     originRequest:
+       connectTimeout: 30s
+ 
+-  - hostname: vip.lumennode.uk
+-    service: http://localhost:8099
+-    originRequest:
+-      connectTimeout: 30s
+-
+   - hostname: analytics.lumennode.uk
+     service: http://localhost:8006
+     originRequest:
