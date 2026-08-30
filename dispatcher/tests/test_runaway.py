@@ -25,9 +25,15 @@ def renv(tmp_path, monkeypatch):
     runs_root = tmp_path / "_runs"
     runs_root.mkdir()
     wq_db = tmp_path / "scratch_wq.db"
+    # wq#912: the real `wq` binary refuses `add` for a lane with no dispatcher/config.json
+    # entry. Point it at a scratch config carrying just the fixture's own lane so the real
+    # CLI's own safety check never depends on the live fleet config.
+    dispatcher_config = tmp_path / "dispatcher_config.json"
+    dispatcher_config.write_text('{"lanes": {"testlane": {}}}')
 
     monkeypatch.setenv("WQ_DB", str(wq_db))
     monkeypatch.setenv("WQ_AGENT", "test-runaway")
+    monkeypatch.setenv("WQ_DISPATCHER_CONFIG", str(dispatcher_config))
     monkeypatch.setattr(self_heal, "RUNS_ROOT", str(runs_root))
     monkeypatch.setattr(self_heal, "WQ_BIN", WQ_BIN)
     monkeypatch.setattr(runaway, "RUNAWAY_MAX_ATTEMPTS", 5)

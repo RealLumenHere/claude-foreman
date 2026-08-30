@@ -58,12 +58,18 @@ def ddenv(tmp_path, monkeypatch):
 
     monkeypatch.setenv("WQ_DB", str(wq_db))
     monkeypatch.setenv("WQ_AGENT", "test-dashboard")
+    # wq#912: point the real `wq` binary's own lane-refusal check at the same scratch
+    # config (already carries "testlane") so `wq add` never depends on the live fleet config.
+    monkeypatch.setenv("WQ_DISPATCHER_CONFIG", str(cfg_path))
     monkeypatch.setattr(fd, "CONFIG_PATH", str(cfg_path))
     monkeypatch.setattr(fd, "WQ_BIN", WQ_BIN)
     monkeypatch.setattr(fd, "GOVERNOR_STATE", str(gov_state))
     monkeypatch.setattr(self_heal, "RUNS_ROOT", str(runs_root))
     monkeypatch.setattr(self_heal, "WQ_BIN", WQ_BIN)
     monkeypatch.setattr(circuit_breaker, "RUNS_ROOT", str(runs_root))
+    # circuit_breaker.is_armed() defaults to the real fleet's DISARM_PATH — without this,
+    # test_circuit_breaker_state_passthrough silently reads live production disarm state.
+    monkeypatch.setattr(circuit_breaker, "DISARM_PATH", str(tmp_path / "DISARM"))
     monkeypatch.setitem(router.LANE_REPO, "testlane", str(tmp_path))
     router.load_manifest(force=True)
 
