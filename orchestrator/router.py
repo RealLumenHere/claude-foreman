@@ -65,6 +65,10 @@ MANIFEST_PATH = os.environ.get(
 # wq-tooling. Mapping it to FOREMAN_ROOT made `dispatch-cmd <auto-ticket>` emit a silently
 # wrong --repo. Do not re-add it without the per-entry Frank confirmation every other
 # non-obvious entry below carries; the honest fix for an auto ticket is an explicit --repo.
+# wq#1094: the one exception is repo-sweep tickets, which carry their own exact target
+# repo in the ticket's own detail (harness/repo_sweep.py wrote it there) — the dispatcher
+# reads that back (repo_sweep.repo_hint) instead of using this table. Still not a guess:
+# it's per-ticket data, validated against repo_sweep.managed_repos() before use.
 LANE_REPO = {
     "build": FOREMAN_ROOT,
     "foreman-tok": FOREMAN_ROOT,   # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)

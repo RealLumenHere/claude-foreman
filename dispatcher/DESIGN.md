@@ -82,7 +82,13 @@ Ordered, fail-closed; the first refusing stage wins and is the logged `reason`. 
 2. candidate scan     read-only: open tickets in config-enabled lanes, status=open,
                       ordered by effective_pri ASC then id ASC (wq#661 aging respected).
 3. lane policy        lane enabled? within per-lane caps (§6)? lane mapped in LANE_REPO
-                      (wq#713)? An unmapped lane is SKIPPED — never guess a repo.
+                      (wq#713)? An unmapped lane is SKIPPED — never guess a repo. Sole
+                      exception (wq#1094): 'auto' has no single LANE_REPO entry (repo
+                      sweeps target different repos), but a repo-sweep ticket carries
+                      its own target repo in its detail, written by repo_sweep.py — the
+                      dispatcher reads that back (repo_sweep.repo_hint, validated
+                      against the exact managed-repo set) instead of guessing. Any other
+                      'auto' ticket still refuses.
 4. Frank-gate         title/flags say Frank owns it → skip, never claim (§5). MUST 3.
 5. fire approval      lane fleet-fires → approvals/wq<ID>.approved must exist, else
                       skip + one deduped ntfy (§5). MUST 4.
@@ -302,7 +308,7 @@ overridden via the existing `FOREMAN_*` env seams plus new `FOREMAN_DISPATCHER_*
 | 4 | Fire approval | `test_fire_requires_approval`: fleet-fires ticket, no file → `skip/fire_unapproved` + exactly one ntfy; second pass same day → no second ntfy; file created → proceeds to later stages. `test_fire_approval_not_disarmable`: config `requires_approval: false` on fleet-fires → still enforced. |
 | 5 | Budget-aware | `test_governor_deny_skips`: stub can-dispatch exit 1 → no spawn. `test_tight_mode`: pressure tight → max 1 spawn, pri-2 ticket ineligible. `test_lane_cap`: max_per_day=1, two candidates → one spawn, one `skip/lane_cap`; counter resets on day rollover. |
 | 6 | Concurrency | `test_ceiling_respected`: 3 running units stubbed → zero spawns; 2 running → one spawn. `test_local_excluded`: local-rung unit doesn't consume a slot. `test_lumen_run_unreachable_is_full`: list failure → zero spawns. |
-| 7 | Router routing | `test_repo_from_lane`: spawn command line comes from router.dispatch_cmd with lane-derived repo; `test_unmapped_lane_skipped`: enabled lane absent from LANE_REPO → `skip/lane_unmapped`, never `/home/lumen`. |
+| 7 | Router routing | `test_repo_from_lane`: spawn command line comes from router.dispatch_cmd with lane-derived repo; `test_unmapped_lane_skipped`: enabled lane absent from LANE_REPO → `skip/lane_unmapped`, never `/home/lumen`. wq#1094: `test_auto_lane_repo_sweep_ticket_dispatches_via_repo_hint`: 'auto' repo-sweep ticket dispatches via its own detail's repo, never LANE_REPO; `test_auto_lane_non_sweep_ticket_still_unmapped`: a non-repo-sweep 'auto' ticket still refuses. |
 | 8 | Kill switch | `test_disarm_at_start`: DISPATCH_DISARM present → pass exits, zero decisions beyond `disarmed`. `test_disarm_midrun`: file created between candidates (stub hook) → later candidates never evaluated. `test_stop_file_equivalent`: foreman STOP honored identically. |
 | 9 | Logged | `test_every_decision_logged`: each candidate yields exactly one JSONL line, schema-checked; `test_langfuse_best_effort`: emitter raising → pass still succeeds + `langfuse_emit_failed` logged; `test_ntfy_on_spawn_failure`. |
 | 10 | Staged deploy | covered by test #1's staged/disabled assertions + `test_dry_run_no_side_effects`: --dry-run leaves DB, state.json, and spawn stub untouched. |

@@ -14,6 +14,7 @@ Exit 1: at least one repo diverged (ticket(s) filed or already open).
 Exit 2: internal error.
 """
 import os
+import re
 import subprocess
 import sys
 
@@ -35,6 +36,37 @@ def _lane_repos():
 
 # Extra repos the ticket calls out that are not in LANE_REPO.
 EXTRA_REPOS = ["/home/lumen/bin"]
+
+TITLE_PREFIX = "[repo-sweep] "
+
+# Matches the first line this module writes into a filed ticket's detail (see
+# sweep_repos() below): "Automated sweep detected {verdict} in {repo}."
+_DETAIL_REPO_RE = re.compile(r"^Automated sweep detected \S+ in (\S+)\.")
+
+
+def managed_repos():
+    """The exact repo universe a sweep can file a ticket against."""
+    return _lane_repos() | set(EXTRA_REPOS)
+
+
+def repo_hint(title, detail):
+    """wq#1094: read back the exact repo a repo-sweep ticket targets.
+
+    repo_sweep tickets carry the full absolute repo path in their own detail
+    (written by sweep_repos() below) — the dispatcher's 'auto' lane otherwise
+    has no single LANE_REPO entry since sweeps span arbitrary repos (wq#830).
+    This is reading data this module itself wrote, not guessing: returns None
+    (never a guess) unless the title marks a repo-sweep ticket AND the parsed
+    path is still a member of the exact set sweep_repos() iterates, so a
+    hand-edited or stale detail can't point dispatch at an arbitrary path.
+    """
+    if not title.startswith(TITLE_PREFIX):
+        return None
+    m = _DETAIL_REPO_RE.match(detail or "")
+    if not m:
+        return None
+    repo = m.group(1)
+    return repo if repo in managed_repos() else None
 
 WQ_BIN = os.environ.get("REPO_SWEEP_WQ", "/home/lumen/bin/wq")
 

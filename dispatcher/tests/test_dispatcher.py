@@ -33,6 +33,8 @@ import circuit_breaker  # noqa: E402
 import runaway  # noqa: E402
 import self_heal  # noqa: E402
 import notify_sinks  # noqa: E402
+import psi_pressure  # noqa: E402
+import repo_sweep  # noqa: E402
 
 WQ_BIN = "/home/lumen/bin/wq"
 SLOCK_BIN = "/home/lumen/bin/slock"
@@ -100,6 +102,10 @@ def denv(tmp_path, monkeypatch):
     monkeypatch.setenv("WQ_DB", str(wq_db))
     monkeypatch.setenv("WQ_AGENT", "test-dispatcher")
     monkeypatch.delenv("FAKE_GOVERNOR_DENY", raising=False)
+    # wq#844 PSI check reads the real host's /proc/pressure/memory by default — point it
+    # at a nonexistent path so these tests aren't at the mercy of the box's live memory
+    # pressure (fail-open: psi_pressure._parse_psi() -> {} -> verdict "ok").
+    monkeypatch.setattr(psi_pressure, "PSI_PATH", str(tmp_path / "no-such-psi-file"))
 
     monkeypatch.setattr(fd, "CONFIG_PATH", str(cfg_path))
     monkeypatch.setattr(fd, "STATE_PATH", str(tmp_path / "dstate.json"))
@@ -145,7 +151,11 @@ def denv(tmp_path, monkeypatch):
 
 def add_ticket(title, lane="testlane", pri=1, model="claude-sonnet-5", effort="high",
                deps=None, gate=None):
-    cmd = [WQ_BIN, "add", "--lane", lane, "--pri", str(pri), "--title", title]
+    # wq#912 lane allowlist checks against the LIVE dispatcher/config.json, not this
+    # test's scratch WQ_DB — these synthetic lanes (testlane, ghostlane, ...) exercise
+    # dispatcher logic only, never real dispatcher visibility, so --force bypasses it
+    # (same fix wq#1004 applied to test_router.py/test_wq_reap.py for the same reason).
+    cmd = [WQ_BIN, "add", "--lane", lane, "--pri", str(pri), "--title", title, "--force"]
     if model:
         cmd += ["--model", model, "--effort", effort]
     if deps:
@@ -705,6 +715,45 @@ def test_unmapped_lane_skipped(denv):
     skips = log_events(denv, "skip", ticket=tid)
     assert len(skips) == 1 and skips[0]["reason"] == "lane_unmapped"
     assert lumen_calls(denv) == []  # never guessed /home/lumen or anything else
+
+
+def test_auto_lane_repo_sweep_ticket_dispatches_via_repo_hint(denv, monkeypatch):
+    """wq#1094: 'auto' has no LANE_REPO entry (repo-sweeps span arbitrary repos), but a
+    repo-sweep ticket carries its own target repo in its detail — the dispatcher must
+    read that back and dispatch instead of skipping it forever as lane_unmapped."""
+    write_config(denv, lanes={**BASE_CONFIG["lanes"],
+                              "auto": {"enabled": True, "max_per_day": 10}})
+    repo = denv["repo"]
+    monkeypatch.setattr(repo_sweep, "managed_repos", lambda: {repo})
+    short = os.path.basename(repo)
+    title = f"[repo-sweep] {short}: BEHIND_ONLY"
+    detail = (f"Automated sweep detected BEHIND_ONLY in {repo}.\n"
+              f"Output: BEHIND_ONLY {repo} main ahead=0 behind=1")
+    p = subprocess.run([WQ_BIN, "add", "--lane", "auto", "--pri", "1", "--title", title,
+                       "--detail", detail, "--model", "claude-sonnet-5", "--effort", "high"],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+    tid = int(p.stdout.strip().split()[2])
+
+    assert fd.run_pass() == 0
+    assert log_events(denv, "skip", ticket=tid) == []
+    calls = lumen_calls(denv)
+    assert len(calls) == 1
+    args = calls[0]["args"]
+    assert args[args.index("--repo") + 1] == repo
+    assert f"fworker-wq{tid}" in args
+
+
+def test_auto_lane_non_sweep_ticket_still_unmapped(denv):
+    """A plain 'auto'-lane ticket (not repo-sweep-shaped) must still refuse rather than
+    guess — the repo hint only ever applies to tickets repo_sweep.py itself filed."""
+    write_config(denv, lanes={**BASE_CONFIG["lanes"],
+                              "auto": {"enabled": True, "max_per_day": 10}})
+    tid = add_ticket("just an ordinary auto-lane ticket", lane="auto")
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "lane_unmapped"
+    assert lumen_calls(denv) == []
 
 
 # ---- MUST 9: logging + telemetry -----------------------------------------------------

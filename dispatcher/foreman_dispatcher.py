@@ -57,6 +57,7 @@ import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
 import runaway          # noqa: E402
 import psi_pressure     # noqa: E402  # wq#844
+import repo_sweep       # noqa: E402  # wq#1094: auto-lane repo-sweep ticket repo hints
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -87,6 +88,10 @@ SLOCK_TTL_MIN = "30"
 FIRE_NTFY_DEDUP_H = 24
 FIRE_LANE = "fleet-fires"  # requires_approval is forced in code for this lane (MUST 4)
 STAGGER = (spawner.STAGGER_MIN_S, spawner.STAGGER_MAX_S)
+# wq#1094: the only lane where an unmapped LANE_REPO isn't final — repo-sweep tickets
+# in 'auto' carry their own repo in the ticket (repo_sweep.repo_hint). Every other
+# unmapped lane still short-circuits before paying for a wq_show (unchanged).
+REPO_HINT_LANE = "auto"
 
 FRANK_TITLE_RE = re.compile(r"\[frank gate\]|\[manual\]|owner\s*=\s*frank", re.I)
 # wq list line: `[ 12] lane p1 ep0 open     title...` (ep tag only when it differs)
@@ -631,7 +636,7 @@ def _do_pass(cfg, log, state, dry_run):
                      detail=f"max_per_day={policy['max_per_day']} reached")
             continue
         repo = router.repo_for_lane(lane)
-        if not repo:
+        if not repo and lane != REPO_HINT_LANE:
             log.skip(tid, lane, "lane_policy", "lane_unmapped",
                      detail="no LANE_REPO entry — never guess a repo")
             continue
@@ -643,6 +648,17 @@ def _do_pass(cfg, log, state, dry_run):
             continue
         if t.get("status") != "open":
             log.skip(tid, lane, "scan", "not_open", detail=t.get("status"))
+            continue
+
+        if not repo:
+            # wq#1094: 'auto' has no single LANE_REPO entry (repo-sweeps target
+            # different repos, wq#830) — but a repo-sweep ticket carries its exact
+            # target repo in its own detail (repo_sweep.py wrote it there). Read
+            # that back instead of guessing; anything else in 'auto' still refuses.
+            repo = repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
+        if not repo:
+            log.skip(tid, lane, "lane_policy", "lane_unmapped",
+                     detail="no LANE_REPO entry — never guess a repo")
             continue
 
         # stage 3.5 — runaway (wq#718): a ticket stuck below RUNAWAY_MAX_ATTEMPTS

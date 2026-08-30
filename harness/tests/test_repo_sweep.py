@@ -18,6 +18,9 @@ HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SWEEP = os.path.join(HARNESS_DIR, "repo_sweep.py")
 RECONCILE = os.path.join(HARNESS_DIR, "repo_reconcile.py")
 
+sys.path.insert(0, HARNESS_DIR)
+import repo_sweep  # noqa: E402
+
 
 def git(repo, *args):
     p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
@@ -291,3 +294,34 @@ def test_dry_run_does_not_file_tickets(tmp_path):
     assert p.returncode == 1
     assert "dry run" in p.stdout
     assert read_wq_log(log) == []
+
+
+# --- repo_hint (wq#1094: dispatcher reads the repo back off a filed ticket) -----------
+
+def test_repo_hint_round_trips_a_filed_ticket_detail(tmp_path, monkeypatch):
+    repo = "/home/lumen/questfree"
+    monkeypatch.setattr(repo_sweep, "managed_repos", lambda: {repo, "/home/lumen/pokemon"})
+    title = f"[repo-sweep] {os.path.basename(repo)}: BEHIND_ONLY"
+    detail = (f"Automated sweep detected BEHIND_ONLY in {repo}.\n"
+              f"Output: BEHIND_ONLY {repo} main ahead=0 behind=1\n\n"
+              f"To inspect: python3 {RECONCILE} status --repo {repo}\n"
+              f"To fix (if SAFE_RESET or REDUNDANT_AHEAD): "
+              f"python3 {RECONCILE} reconcile --repo {repo} --apply")
+    assert repo_sweep.repo_hint(title, detail) == repo
+
+
+def test_repo_hint_none_for_non_sweep_ticket():
+    assert repo_sweep.repo_hint("just a normal ticket", "detail: /home/lumen/pokemon") is None
+
+
+def test_repo_hint_none_when_detail_missing_or_malformed():
+    title = "[repo-sweep] pokemon: SAFE_RESET"
+    assert repo_sweep.repo_hint(title, "") is None
+    assert repo_sweep.repo_hint(title, "some unrelated first line") is None
+
+
+def test_repo_hint_refuses_a_repo_outside_the_managed_set(monkeypatch):
+    monkeypatch.setattr(repo_sweep, "managed_repos", lambda: {"/home/lumen/pokemon"})
+    title = "[repo-sweep] evil: SAFE_RESET"
+    detail = "Automated sweep detected SAFE_RESET in /etc/shadow-adjacent-repo.\nmore text"
+    assert repo_sweep.repo_hint(title, detail) is None
