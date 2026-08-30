@@ -84,7 +84,12 @@ Per-attempt setup by fworker, in order:
    CLAIM_ERROR, nothing spawned.
 3. Worktree: `git -C <repo> worktree add /home/lumen/worktrees/wq<ID>-a<N>
    -b <type>/wq<ID>-<slug> origin/<default>` (fresh per attempt; prior attempt's worktree
-   kept for forensics until the ticket closes).
+   kept for forensics until the ticket closes). wq#1141: prune/remove/add all WRITE the
+   PRIMARY repo's .git, so they run under the SAME slock scope `lumen-pr land` takes
+   around a merge (`lpp-git` for lumen-plays-pokemon, else `<repo>-git`, derived from the
+   origin remote). Bounded wait, released in a finally; a lock that cannot be had is a
+   DEFERRAL (claim released, exit DEFERRED), never an unserialized `git worktree add`
+   against a tree someone else is rebasing — that race corrupted HEAD/main (wq#1097).
 4. Spawn:
 
     env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL \

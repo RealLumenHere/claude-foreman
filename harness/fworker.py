@@ -90,6 +90,11 @@ WORKTREES_ROOT = os.environ.get("FOREMAN_WORKTREES_ROOT", "/home/lumen/worktrees
 BASH_MAX_OUTPUT_LENGTH = os.environ.get("FOREMAN_BASH_OUTPUT_CAP_CHARS", "2000")
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
+# wq#1141: the SAME advisory lock `lumen-pr land` takes around a merge (bin/lumen-pr
+# gitlock_acquire), used here to serialize make_worktree's writes to the primary repo's
+# .git against a concurrent land. Env-overridable on the dispatcher's FOREMAN_SLOCK_BIN
+# name so a scratch fixture can point at a stub.
+SLOCK_BIN = os.environ.get("FOREMAN_SLOCK_BIN", "/home/lumen/bin/slock")
 # wq#617 orchestrator tier: routing (tuple assignment) + verify-pass filing.
 ORCH_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "orchestrator"))
 ROUTER_CLI = os.environ.get("FOREMAN_ROUTER_CLI", os.path.join(ORCH_DIR, "router.py"))
@@ -283,6 +288,15 @@ REFILL_SETTLE_S = _envint("FOREMAN_REFILL_SETTLE_S", 3)
 # good case (wq done -> result frame -> exit) never trips it; only the lingerer does.
 DONE_POLL_INTERVAL_S = _envint("FOREMAN_DONE_POLL_S", 15)
 POST_DONE_GRACE_S = _envint("FOREMAN_POST_DONE_GRACE_S", 60)
+
+# wq#1141 repo git lock. The contention this waits out is a land holding the same scope
+# for the length of one merge, so the wait is short and bounded: a worktree that cannot
+# be created within it is a DEFERRAL (the dispatcher redispatches), never a queue behind
+# an hour-long hold. TTL is in minutes (slock's unit) and covers only prune/add/remove —
+# short so a crashed fworker cannot park the repo lock the way a 120m lease once did.
+WORKTREE_LOCK_WAIT_S = _envint("FOREMAN_WORKTREE_LOCK_WAIT_S", 90)
+WORKTREE_LOCK_POLL_S = _envint("FOREMAN_WORKTREE_LOCK_POLL_S", 5)
+WORKTREE_LOCK_TTL_MIN = os.environ.get("FOREMAN_WORKTREE_LOCK_TTL_MIN", "5")
 
 # wq#725 AUTO-7: every classification that reaches handle_failure() (TURNS,
 # LAUNCH_FAILURE, KILLED, OOM, REFUSED, BUDGET, CRASH) gets bucketed into one of three
@@ -630,6 +644,79 @@ def _git(cwd, *args):
     return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
 
 
+class WorktreeLockUnavailable(RuntimeError):
+    """The primary repo's git lock could not be taken for worktree setup — the caller
+    releases the claim and DEFERS (wq#1141). Deliberately not a crash: another agent
+    mid-land on this repo is normal, and the ticket is untouched, so a redispatch a few
+    minutes later succeeds with nothing to clean up."""
+
+
+def repo_git_lock_scope(repo):
+    """The slock scope `lumen-pr land` takes around a merge, derived the same way it
+    derives it (bin/lumen-pr gitlock_scope + need_repo): from the ORIGIN REMOTE, not
+    from the directory name, so a linked worktree and its primary tree resolve to one
+    scope. Locking a different string than lumen-pr does would lock nothing — that
+    equality is the whole fix, so keep the two derivations in step.
+    """
+    p = _git(repo, "remote", "get-url", "origin")
+    url = p.stdout.strip() if p.returncode == 0 else ""
+    if url:
+        bare = re.sub(r"^[a-z+]+://", "", url)      # scheme
+        bare = re.sub(r"^[^/@]+@", "", bare)        # userinfo
+        bare = re.sub(r"\.git$", "", bare).rstrip("/")
+        name = bare.split("/")[-1]                  # host[:port]/owner/repo and host:owner/repo
+        name = name.split(":")[-1]                  # degenerate scp-form host:repo
+    else:
+        # No origin — lumen-pr refuses such a repo outright, so nothing has to match here;
+        # a deterministic per-repo scope still serializes fworkers against each other
+        # (this is the scratch-repo case the integration tests run in).
+        top = _git(repo, "rev-parse", "--show-toplevel")
+        name = os.path.basename((top.stdout.strip() if top.returncode == 0 else "")
+                                or os.path.abspath(repo).rstrip("/"))
+    if name == "lumen-plays-pokemon":
+        return "lpp-git"
+    return f"{name}-git"
+
+
+def acquire_repo_git_lock(scope, holder, note):
+    """Bounded wait, then give up. Fail CLOSED on any failure to run slock at all: the
+    point of the lock is that an unserialized `git worktree add` against a repo being
+    rebased is what corrupted HEAD/main under wq#1097, and a fence that fails open is
+    not a fence. Raises WorktreeLockUnavailable; returns nothing on success."""
+    deadline = time.monotonic() + max(0, WORKTREE_LOCK_WAIT_S)
+    last = ""
+    waited = False
+    while True:
+        try:
+            p = subprocess.run([SLOCK_BIN, "acquire", scope, "--ttl", WORKTREE_LOCK_TTL_MIN,
+                                "--holder", holder, "--note", note],
+                               capture_output=True, text=True, timeout=30)
+            if p.returncode == 0:
+                return
+            head = (p.stdout or p.stderr or "").strip().splitlines()
+            last = head[0] if head else f"slock exit {p.returncode}"
+        except (OSError, subprocess.TimeoutExpired) as e:
+            # slock missing/hung: we cannot prove serialization, so behave as lock-busy.
+            last = f"cannot run {SLOCK_BIN}: {e}"
+        if time.monotonic() + WORKTREE_LOCK_POLL_S >= deadline:
+            raise WorktreeLockUnavailable(
+                f"git lock '{scope}' not available after {WORKTREE_LOCK_WAIT_S}s — {last}")
+        if not waited:
+            # Log the FIRST denial only: what wq#1097 lacked was any record that two
+            # processes wanted this .git at once. Later polls would just be noise.
+            waited = True
+            log(f"waiting for git lock '{scope}' before worktree setup — {last}")
+        time.sleep(WORKTREE_LOCK_POLL_S)
+
+
+def release_repo_git_lock(scope, holder):
+    try:
+        subprocess.run([SLOCK_BIN, "release", scope, "--holder", holder],
+                       capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # the short TTL expires it; never fail a finished setup on the release
+
+
 def make_worktree(repo, ticket_id, attempt, title, archetype):
     """RELIABILITY_SPEC.md §D + wq#649: the branch name embeds the attempt number
     from the start (previously only a retry-fallback appended it), since attempt 1's
@@ -642,6 +729,14 @@ def make_worktree(repo, ticket_id, attempt, title, archetype):
     handles that exact replay instead of raising and leaving the wq claim dangling
     (the fworker-626c repro this ticket fixes: 'branch ...-a3 already exists', third
     dangling-claim instance in the fq#614/fq#618 family).
+
+    wq#1141 (root cause of the wq#1097 pokemon-tree corruption): prune/remove/add below
+    all WRITE the PRIMARY repo's .git — its worktrees/ bookkeeping, its refs, and the
+    HEAD they branch from — and the isolated worktree is only the result. `lumen-pr land`
+    already serializes its merge on the repo's slock scope; worktree setup was the one
+    primary-.git op that did not, so an fworker starting a ticket while an orchestrator
+    rebased/reset that same tree ran two unsynchronized git processes over one .git.
+    Take the SAME lock, hold it across those ops only, release in a finally.
     """
     type_map = {
         "mechanical-edit": "chore", "probe-build": "test", "rca-investigation": "fix",
@@ -652,37 +747,48 @@ def make_worktree(repo, ticket_id, attempt, title, archetype):
     wt = os.path.join(WORKTREES_ROOT, f"wq{ticket_id}-a{attempt}")
     os.makedirs(WORKTREES_ROOT, exist_ok=True)
 
-    # prune-on-start: clears git's own bookkeeping for any worktree dir that vanished
-    # without a proper `git worktree remove` (operator rm -rf, partial crash cleanup),
-    # so a since-deleted dir can't make a live branch look falsely "checked out".
-    _git(repo, "worktree", "prune")
+    scope = repo_git_lock_scope(repo)
+    # Holder resolved once and reused for the release — slock's own default holder is
+    # pid-derived per invocation, which would acquire under one name and fail to release
+    # under another (bin/lumen-pr GITLOCK_HOLDER, same reasoning).
+    holder = f"fworker-wq{ticket_id}-a{attempt}:{os.getpid()}"
+    acquire_repo_git_lock(scope, holder,
+                          f"fworker wq#{ticket_id} attempt {attempt} worktree setup")
+    log(f"wq#{ticket_id} attempt {attempt}: holding git lock '{scope}' for worktree setup")
+    try:
+        # prune-on-start: clears git's own bookkeeping for any worktree dir that vanished
+        # without a proper `git worktree remove` (operator rm -rf, partial crash cleanup),
+        # so a since-deleted dir can't make a live branch look falsely "checked out".
+        _git(repo, "worktree", "prune")
 
-    if os.path.isdir(wt):
-        p = _git(wt, "rev-parse", "--abbrev-ref", "HEAD")
-        if p.returncode == 0 and p.stdout.strip() == branch:
-            log(f"wq#{ticket_id} attempt {attempt}: adopting worktree left by a prior "
-                f"crashed attempt at the exact same (ticket, attempt) — {wt} ({branch})")
-            return wt, branch
-        # not ours (or ours but on the wrong branch) — drop it so `worktree add` below
-        # gets a clean path instead of failing on an already-existing directory.
-        if _git(repo, "worktree", "remove", "--force", wt).returncode != 0:
-            shutil.rmtree(wt, ignore_errors=True)
+        if os.path.isdir(wt):
+            p = _git(wt, "rev-parse", "--abbrev-ref", "HEAD")
+            if p.returncode == 0 and p.stdout.strip() == branch:
+                log(f"wq#{ticket_id} attempt {attempt}: adopting worktree left by a prior "
+                    f"crashed attempt at the exact same (ticket, attempt) — {wt} ({branch})")
+                return wt, branch
+            # not ours (or ours but on the wrong branch) — drop it so `worktree add` below
+            # gets a clean path instead of failing on an already-existing directory.
+            if _git(repo, "worktree", "remove", "--force", wt).returncode != 0:
+                shutil.rmtree(wt, ignore_errors=True)
 
-    p = _git(repo, "worktree", "add", wt, "-b", branch, "HEAD")
-    if p.returncode != 0 and "already exists" in (p.stderr or ""):
-        # the branch name is deterministic from (ticket_id, attempt), so if it exists
-        # with no live worktree attached (the worktree dir was removed some other way,
-        # e.g. by hand) it is necessarily ours — reattach instead of erroring.
-        log(f"wq#{ticket_id} attempt {attempt}: branch {branch} exists with no live "
-            f"worktree — adopting.")
-        p = _git(repo, "worktree", "add", wt, branch)
-    if p.returncode != 0:
-        # last resort: a pid-uniqued branch guarantees no further collision.
-        branch = f"{branch}-p{os.getpid()}"
         p = _git(repo, "worktree", "add", wt, "-b", branch, "HEAD")
-    if p.returncode != 0:
-        raise RuntimeError(f"git worktree add failed: {p.stdout} {p.stderr}")
-    return wt, branch
+        if p.returncode != 0 and "already exists" in (p.stderr or ""):
+            # the branch name is deterministic from (ticket_id, attempt), so if it exists
+            # with no live worktree attached (the worktree dir was removed some other way,
+            # e.g. by hand) it is necessarily ours — reattach instead of erroring.
+            log(f"wq#{ticket_id} attempt {attempt}: branch {branch} exists with no live "
+                f"worktree — adopting.")
+            p = _git(repo, "worktree", "add", wt, branch)
+        if p.returncode != 0:
+            # last resort: a pid-uniqued branch guarantees no further collision.
+            branch = f"{branch}-p{os.getpid()}"
+            p = _git(repo, "worktree", "add", wt, "-b", branch, "HEAD")
+        if p.returncode != 0:
+            raise RuntimeError(f"git worktree add failed: {p.stdout} {p.stderr}")
+        return wt, branch
+    finally:
+        release_repo_git_lock(scope, holder)
 
 
 # ---------------------------------------------------------------------------
@@ -1583,6 +1689,17 @@ def reconcile_on_resume(ticket_id):
     return True
 
 
+def defer_for_repo_lock(ticket_id, exc):
+    """wq#1141: worktree setup could not take the repo git lock. Nothing was created and
+    no attempt-N state was written, so this is a clean DEFERRAL, not a crash — release
+    the claim and let the next dispatch pass pick the ticket up once the land holding
+    the lock has finished. No ntfy: contention with a live land is expected traffic."""
+    log(f"DEFERRED: wq#{ticket_id} worktree setup — {exc} — releasing claim")
+    wq_release(ticket_id)
+    print("DEFERRED")
+    return EXIT_DEFERRED
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1634,6 +1751,8 @@ def cmd_run(args):
     if args.archetype == FIRE_ARCHETYPE:
         try:
             return run_fire_ticket(args)
+        except WorktreeLockUnavailable as e:
+            return defer_for_repo_lock(args.ticket, e)
         except Exception:
             tb = traceback.format_exc()
             log(f"CRASH: unhandled exception during wq#{args.ticket} fire-mode run — "
@@ -1648,6 +1767,8 @@ def cmd_run(args):
     attempt = next_attempt_n(args.ticket)
     try:
         return do_attempt(args, attempt)
+    except WorktreeLockUnavailable as e:
+        return defer_for_repo_lock(args.ticket, e)
     except Exception:
         # RELIABILITY_SPEC.md §D "no path ends holding a lease": do_attempt's own
         # retry/resume logic (handle_failure/handle_limit/handle_resumable_failure)
