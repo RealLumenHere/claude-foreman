@@ -8,7 +8,10 @@ Metrics (per ISO week):
   d  undetected_min  fleet downtime minutes not self-detected
 Headline = distinct intervention EVENTS (a|b|e) per week, trending.
 Sources (ALL read-only): minerva.db archival_notes, queue.db, alerts.db,
-plus manual events (add-event) for incidents documented only in prose.
+Claude session transcripts (~/.claude/projects — Frank's chat-origin signal,
+mined automatically since wq#1014 so the ledger no longer depends on anyone
+remembering to annotate), plus manual events (add-event) for incidents
+documented only in prose.
 Own store: intervention_ledger.db (this dir). Outputs: glance assets JSON +
 telemetry JSON. Structured markers (higher precision than regex, put them in
 episode commits / ticket notes going forward):
@@ -41,6 +44,40 @@ RX_DET = re.compile(r"Frank (noticed|discovered|caught|found)|Frank was right",
 RX_REP = re.compile(r"Frank ha[sd] (corrected|said|stated).{0,40}"
                     r"(again|repeatedly|before)|had to say it again|"
                     r"repeat(ed)? himself", re.I)
+
+# --- Chat-origin mining (wq#1014). Every Frank intervention arrives as a
+# type:"user" turn in a session transcript; that log is written by the harness,
+# not by anyone's memory, so coverage is structural. Design:
+# ops/R4_frank_marker_autoemit_design.md
+CHAT_ROOT = "/home/lumen/.claude/projects"
+# Headless worker/cron sessions also log "user" turns (harness prompts, tool
+# results) — a session showing any sentinel is discarded wholesale.
+HARNESS_SENTINELS = ("You are a Lumen fleet", "YOUR TICKET: wq#",
+                     "<<autonomous-loop")
+WORKTREE_PROJ_PREFIX = "-home-lumen-worktrees-"
+INJECTED_PREFIXES = ("<command-name>", "<local-command-stdout>",
+                     "<system-reminder>", "Caveat:", "[Request interrupted")
+# Frank-voice classifiers; precedence detect > repeat > fix mirrors the
+# report's b > e > a damning-ness rule. Conservative: no match = no event.
+CHAT_DET = re.compile(
+    r"\b(?:is|are|went|looks?|seems?)\s+(?:completely\s+|totally\s+)?"
+    r"(?:down|dead|broken|offline|stuck|hung|frozen)\b"
+    r"|\bnot\s+work(?:ing)?\b|\bstopped\s+working\b|\bcrashed\b"
+    r"|\bwhy\s+is\b.{0,50}\b(?:failing|down|broken|empty|stale|dead)\b"
+    r"|\bsomething(?:'s| is)\s+(?:wrong|off|broken)\b", re.I)
+CHAT_REP = re.compile(
+    r"\bi(?:'ve| have)?\s+(?:already\s+|just\s+)?(?:told|said|asked)\b.{0,60}"
+    r"\b(?:again|before|already)\b"
+    r"|\bhow\s+many\s+times\b|\b(?:second|third)\s+time\b"
+    r"|\bstill\s+(?:broken|down|dead|wrong|not\s+working)\b", re.I)
+CHAT_FIX = re.compile(
+    r"\b(?:please\s+)?fix\s+(?:it|this|that|the)\b|\bneeds?\s+fixing\b"
+    r"|\brestart\s+(?:it|the)\b|\brevert\b|\broll\s?back\b"
+    r"|\bget\s+(?:it|this|that)\s+(?:working|back\s+up)\b"
+    r"|\bundo\s+(?:that|this)\b", re.I)
+# Instinct 3: token-shaped substrings never reach the DB.
+TOKEN_RE = re.compile(r"\b(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}"
+                      r"|eyJ[A-Za-z0-9_.-]{10,}|[A-Za-z0-9+/=]{40,})\b")
 
 
 def db():
@@ -86,6 +123,105 @@ def classify(text):
         if RX_REP.search(text):
             out.append(("repeat", text[:160], "regex", 0))
     return out
+
+
+def classify_chat(text):
+    """Classify one Frank-typed message; returns kind or None."""
+    for rx, kind in ((CHAT_DET, "detect"), (CHAT_REP, "repeat"),
+                     (CHAT_FIX, "fix")):
+        if rx.search(text):
+            return kind
+    return None
+
+
+def _chat_texts(path):
+    """(date, text) list of Frank-typed turns in one transcript, or None if
+    the file is a headless harness session."""
+    out = []
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            if o.get("type") != "user" or o.get("isSidechain"):
+                continue
+            if o.get("toolUseResult") is not None:
+                continue
+            content = (o.get("message") or {}).get("content")
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                if any(isinstance(b, dict) and b.get("type") == "tool_result"
+                       for b in content):
+                    continue
+                text = "\n".join(b.get("text", "") for b in content
+                                 if isinstance(b, dict)
+                                 and b.get("type") == "text")
+            else:
+                continue
+            text = (text or "").strip()
+            if not text:
+                continue
+            if any(s in text for s in HARNESS_SENTINELS):
+                return None
+            if text.startswith(INJECTED_PREFIXES):
+                continue
+            ts = (o.get("timestamp") or "")[:10]
+            if len(ts) == 10:
+                out.append((ts, text))
+    return out
+
+
+def chat_events(since, root=CHAT_ROOT):
+    """Yield (ts, kind, desc, source_ref) mined from session transcripts.
+    One event per (session, kind, day) — a burst about one outage is one
+    intervention, not five."""
+    if not os.path.isdir(root):
+        return
+    try:
+        cutoff = (datetime.datetime.fromisoformat(since[:10]).timestamp()
+                  - 86400)
+    except ValueError:
+        cutoff = None
+    for proj in sorted(os.listdir(root)):
+        pdir = os.path.join(root, proj)
+        if proj.startswith(WORKTREE_PROJ_PREFIX) or not os.path.isdir(pdir):
+            continue
+        for fn in sorted(os.listdir(pdir)):
+            if not fn.endswith(".jsonl"):
+                continue
+            path = os.path.join(pdir, fn)
+            try:
+                if cutoff and os.path.getmtime(path) < cutoff:
+                    continue
+                msgs = _chat_texts(path)
+            except OSError:
+                continue
+            firsts = {}
+            for date, text in (msgs or []):
+                if date < since[:10]:
+                    continue
+                kind = classify_chat(text)
+                if kind:
+                    firsts.setdefault((kind, date), text)
+            sid = fn[:-6][:8]
+            for (kind, date), text in sorted(firsts.items()):
+                desc = TOKEN_RE.sub("[MASKED]", text)[:160]
+                yield (date, kind, desc, f"chat:{proj}:{sid}:{date}")
+
+
+def collect_chat(c, since, root=CHAT_ROOT):
+    """Insert conf='chat' events; idempotent via UNIQUE(ts,kind,source_ref)."""
+    n = 0
+    for ts, kind, desc, ref in chat_events(since, root):
+        before = c.total_changes
+        c.execute("INSERT OR IGNORE INTO events"
+                  "(ts,kind,desc,source_ref,conf,undetected_min) "
+                  "VALUES(?,?,?,?,'chat',0)", (ts, kind, desc, ref))
+        n += c.total_changes - before
+    c.commit()
+    return n
 
 
 def collect(since):
@@ -153,7 +289,15 @@ def snapshot_parked(c):
 
 def rollup(c):
     weeks = {}
-    for r in c.execute("SELECT ts, kind, conf, undetected_min FROM events"):
+    rows = c.execute(
+        "SELECT ts, kind, conf, undetected_min FROM events").fetchall()
+    # wq#1014: a regex event is the low-confidence sighting of an incident the
+    # chat miner saw directly — same (kind, day) counts once, chat wins. Only
+    # chat suppresses regex, so pre-chat history (W34=13 baseline) is unchanged.
+    chat_days = {(r[0], r[1]) for r in rows if r[2] == "chat"}
+    for r in rows:
+        if r[2] == "regex" and (r[0], r[1]) in chat_days:
+            continue
         w = week_of(r[0])
         d = weeks.setdefault(w, {"fix": 0, "detect": 0, "repeat": 0,
                                  "events": 0, "undetected_min": 0,
@@ -288,6 +432,12 @@ def main():
     a.add_argument("--desc", required=True)
     a.add_argument("--ref", required=True)
     a.add_argument("--undetected-min", type=int, default=0)
+    m = sub.add_parser("mine-chat",
+                       help="mine Frank chat transcripts (wq#1014)")
+    m.add_argument("--since", default=None)
+    m.add_argument("--root", default=CHAT_ROOT)
+    m.add_argument("--dry-run", action="store_true",
+                   help="print would-be events, write nothing")
     sub.add_parser("show")
     args = ap.parse_args()
 
@@ -302,10 +452,25 @@ def main():
         emit(c)
         print("added + emitted")
         return
+    if args.cmd == "mine-chat":
+        since = args.since or (datetime.date.today()
+                               - datetime.timedelta(days=14)).isoformat()
+        if args.dry_run:
+            for ev in chat_events(since, args.root):
+                print(json.dumps(dict(zip(("ts", "kind", "desc", "ref"), ev))))
+            return
+        c = db()
+        print(json.dumps({"inserted": collect_chat(c, since, args.root)}))
+        return
     if args.cmd in ("run", "backfill"):
         since = args.since or (datetime.date.today()
                                - datetime.timedelta(days=14)).isoformat()
         c = collect(since)
+        # Chat mining must never take down the daily run: degrade to a WARN.
+        try:
+            collect_chat(c, since)
+        except Exception as e:
+            print(f"WARN chat mining failed: {e}", file=sys.stderr)
         if args.cmd == "run":
             snapshot_parked(c)
         out = emit(c)

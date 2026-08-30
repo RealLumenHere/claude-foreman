@@ -134,6 +134,21 @@ timestamps) — today (d) only lands via a manual post-mortem marker.
 Frank-signal — the recent files there are agent-authored design docs, so counting them would
 INFLATE the metric the ledger exists to shrink. Not added.
 
+## ADDENDUM 2026-08-30 — CHAT-ORIGIN MINING (wq#1014, session wq1014-a3)
+
+Caveat 2's class defect (annotation that depends on memory) is fixed at the source the
+memory was standing in for: the collector now mines Frank's own messages from Claude
+session transcripts (`~/.claude/projects`), where every intervention lands by
+construction — messenger-bridged or console-typed — with headless worker/cron sessions
+excluded by sentinel and project-dir heuristics. Events land as `conf='chat'`, one per
+(session, kind, day); a same-(kind, day) `regex` event is suppressed at rollup so one
+incident is not counted twice (chat-only suppression: W31–W34 history, incl. the W34=13
+baseline, is bit-identical). `FRANK-*` markers remain parsed as an optional precision
+bonus, no longer load-bearing. New `mine-chat --dry-run` subcommand for live
+calibration. Design: `foreman/ops/R4_frank_marker_autoemit_design.md`; tests:
+`foreman/ops/tests/test_intervention_ledger_chat.py` (10, green). Metric (d) still has
+no automatic sensor — that remains wq#1015.
+
 Net: R4 is deployed, verified, and now shows a number Frank can trust. The honest reading today
 is **W34 = 13, up 2 on W33 (red)** — last full week the fleet needed Frank *more*; W35 is pacing
 one better so far, shown without a false green arrow.
