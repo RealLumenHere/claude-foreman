@@ -1,0 +1,29 @@
+--- sentinel_probes.py.bak.20260830_012759_pre_wq1100	2026-08-30 01:27:59.153823440 +0000
++++ sentinel_probes.py	2026-08-30 01:28:10.401874993 +0000
+@@ -283,9 +283,12 @@
+ def probe_log_repeats():
+     """Same WARNING ≥30x/hour from one unit = swallowed-error loop
+     (the phantom-table bug logged identical warnings every 2 min for a month)."""
+-    units = ["lumen-prompt-engine","lumen-agent","lumen-fleet-cerebras",
+-             "lumen-fleet-mistral","lumen-fleet-openrouter","lumen-messenger","lumen-persona-engine",
+-             "lumen-dashboard","lumen-self-healer"]  # smart-watchdog retired wq#971
++    # wq#1100 (2026-08-30) sweep: lumen-prompt-engine + lumen-persona-engine retired with the
++    # research mill 2026-08-28 (LoadState=not-found), lumen-agent masked 2026-08-21 -- dropped;
++    # a retired unit has no journal to loop on. smart-watchdog retired wq#971.
++    units = ["lumen-fleet-cerebras",
++             "lumen-fleet-mistral","lumen-fleet-openrouter","lumen-messenger",
++             "lumen-dashboard","lumen-self-healer"]
+     bad = []
+     for u in units:
+         r = subprocess.run(["journalctl","-u",u,"--since","-1h","-p","warning","--no-pager","-o","cat"],
+@@ -381,7 +384,9 @@
+     # lumen-agent RETIRED 2026-08-21 (deliberately masked; messenger brain routes via
+     # claude CLI on Max session, not this unit) — removed 2026-08-27 wq#972: the probe
+     # was alarming on policy (a correctly retired unit), not fault, every daily run.
+-    for u in ("lumen-messenger","lumen-prompt-engine","lumen-dashboard",
++    # lumen-prompt-engine RETIRED 2026-08-28 with the research mill (LoadState=not-found;
++    # units parked in /etc/systemd/system/DISABLED-research-mill.bak/) -- removed wq#1100.
++    for u in ("lumen-messenger","lumen-dashboard",
+               "lumen-fleet-cerebras","lumen-fleet-mistral","lumen-fleet-openrouter",
+               # lumen-smart-watchdog removed 2026-08-27 wq#971: daemon retired,
+               # stall rule absorbed into self-healer watch table.
