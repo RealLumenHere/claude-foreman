@@ -1,0 +1,59 @@
+--- a/lumen_self_healer.py	2026-08-30 13:23:03.190558934 +0000
++++ b/lumen_self_healer.py	2026-08-30 13:21:00.568471246 +0000
+@@ -135,6 +135,44 @@
+     # simple/notify/forking services in inactive state = broken
+     return False
+ 
++# ── wq#1112: stale-target guard (same class as sentinel's wq#971 guard) ─────
++# A unit in the watch table whose systemd unit file has been retired
++# (LoadState=not-found) or deliberately masked can never recover via
++# restart -- without this guard the healer burns the 3-attempt restart
++# ladder against it every time it's checked, forever, for a target that
++# structurally cannot come back (the research-mill retirement left
++# lumen-vip-api/lumen-vip-watcher/lumen-prompt-engine in the table this way,
++# wq#1112). Skip it entirely and file ONE build-lane ticket (deduped for the
++# process lifetime) so a human removes the row from the watch table.
++WQ_BIN = os.environ.get("HEALER_WQ_BIN", "/home/lumen/bin/wq")
++_stale_alerted = set()   # units whose retired-target ticket has been filed
++
++def _unit_load_state(unit: str) -> str:
++    try:
++        r = subprocess.run(["systemctl", "show", unit, "-p", "LoadState"],
++                           capture_output=True, text=True, timeout=10)
++        return dict(l.split("=", 1) for l in r.stdout.strip().splitlines()
++                    if "=" in l).get("LoadState", "not-found")
++    except Exception:
++        return "not-found"
++
++def _file_stale_unit_ticket(unit: str, load_state: str):
++    if unit in _stale_alerted:
++        return
++    _stale_alerted.add(unit)
++    title = f"[healer] watch table targets retired unit {unit} ({load_state}) -- remove from healer_watch_table.yaml"
++    detail = (f"lumen_self_healer.py watches systemd unit '{unit}' but LoadState={load_state} "
++              f"-- the unit no longer exists to restart. Auto-detected by the wq#1112 "
++              f"stale-target guard (same shape as sentinel's wq#1092). Remove its row "
++              f"from {WATCH_TABLE}.")
++    try:
++        subprocess.run([WQ_BIN, "add", "--lane", "build", "--pri", "2",
++                        "--title", title, "--detail", detail],
++                       capture_output=True, text=True, timeout=20)
++    except Exception as e:
++        log.warning(f"stale-unit ticket file failed (non-fatal): {e}")
++    log.warning(f"{unit}: LoadState={load_state} -- retired target, skipping (ticket filed)")
++
+ def is_docker_running(name: str) -> bool:
+     r = subprocess.run(f"sudo docker inspect --format='{{{{.State.Status}}}}' {name}",
+                        shell=True, capture_output=True, text=True, timeout=10)
+@@ -458,6 +496,11 @@
+             log.info(f"holddown: {name} is flagged — deferring to check_holddowns")
+             continue
+         try:
++            if spec.get("kind") == "systemd":
++                load = _unit_load_state(name)
++                if load in ("not-found", "masked"):
++                    _file_stale_unit_ticket(name, load)
++                    continue
+             healthy = is_docker_running(name) if spec.get("kind") == "docker" \
+                       else is_systemd_active(name)
+             if not healthy:

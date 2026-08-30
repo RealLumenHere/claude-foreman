@@ -1,0 +1,32 @@
+--- a/healer_watch_table.yaml	2026-08-30 13:23:40.820859728 +0000
++++ b/healer_watch_table.yaml	2026-08-30 13:23:24.062942531 +0000
+@@ -13,10 +13,7 @@
+ # mtime change each cycle; a malformed table keeps the last good one and pages.
+ units:
+   redis-server:          {kind: systemd, policy: restart, owner: core,      holddown_flag: /home/lumen/agents/holddowns/redis-server.json}
+-  lumen-prompt-engine:   {kind: systemd, policy: restart, owner: research,  holddown_flag: /home/lumen/agents/holddowns/lumen-prompt-engine.json}
+   lumen-messenger:       {kind: systemd, policy: restart, owner: product,   holddown_flag: /home/lumen/agents/holddowns/lumen-messenger.json}
+-  lumen-vip-api:         {kind: systemd, policy: restart, owner: product,   holddown_flag: /home/lumen/agents/holddowns/lumen-vip-api.json}
+-  lumen-vip-watcher:     {kind: systemd, policy: restart, owner: product,   holddown_flag: /home/lumen/agents/holddowns/lumen-vip-watcher.json}
+   cloudflared:           {kind: systemd, policy: restart, owner: edge,      holddown_flag: /home/lumen/agents/holddowns/cloudflared.json}
+   lumen-memoryd:         {kind: systemd, policy: restart, owner: memory,    holddown_flag: /home/lumen/agents/holddowns/lumen-memoryd.json}
+   mcp-gateway:           {kind: systemd, policy: restart, owner: hands,     holddown_flag: /home/lumen/agents/holddowns/mcp-gateway.json}
+@@ -30,12 +27,17 @@
+   # lumen-agent: deliberately ABSENT from liveness list (retired from healer
+   # 2026-08-21 per Frank — do not re-add without his explicit direction).
+   # Its stall rule below only applies while the unit is active.
++  # wq#1112 (2026-08-30): lumen-vip-api, lumen-vip-watcher, lumen-prompt-engine
++  # removed — retired 2026-08-28 with the 8-unit research mill (unit files in
++  # /etc/systemd/system/DISABLED-research-mill.bak/). Found by wq#1099; the
++  # healer now also carries a LoadState=not-found/masked guard (see
++  # lumen_self_healer.py) so a future stale row skips + files one ticket
++  # instead of restart-looping.
+ 
+ # Port sanity (log-only, unchanged semantics from the old PORT_CHECKS dict)
+ ports:
+   lumen-memoryd: 8139
+   lumen-messenger: 8765
+-  lumen-vip-api: 8099
+   ntfy: 8080
+ 
+ # wq#971: absorbed from lumen-smart-watchdog (daemon retired 2026-08-27).
