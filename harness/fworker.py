@@ -462,8 +462,23 @@ def deps_unmet(ticket_id):
     return unmet
 
 
+def wq_identity(ticket_id):
+    """wq#1116: the identity that OWNS this ticket in wq. Stable across attempts, because what
+    wq owns is the TICKET, not the attempt.
+
+    fworker used to claim under its own `lumen:<pid>` fallback and then hand the worker a
+    different WQ_AGENT (`fworker-wq<id>-a<n>`), so the name that claimed and the name that closed
+    disagreed on every single dispatch. That is what made wq's unregistered-caller backcompat
+    branch load-bearing, and that branch is what let two orchestrator sessions close each other's
+    tickets on 2026-08-30. Claiming under the name the worker will actually use costs nothing and
+    lets wq's holder check mean what it says. worker_id stays per-attempt for logs, events and
+    worktree naming; only the wq identity is per-ticket.
+    """
+    return f"fworker-wq{ticket_id}"
+
+
 def wq_claim(ticket_id):
-    p = wq("claim", "--id", str(ticket_id))
+    p = wq("claim", wq_identity(ticket_id), "--id", str(ticket_id))
     return p.returncode == 0, p.stdout + p.stderr
 
 
@@ -687,7 +702,7 @@ def read_oauth_token():
         return None
 
 
-def build_env(worker_id, model, effort, worktree):
+def build_env(worker_id, model, effort, worktree, ticket_id):
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_BASE_URL", None)
@@ -706,7 +721,9 @@ def build_env(worker_id, model, effort, worktree):
                 f"shared login (refresh-race exposure, FOREMAN_RESEARCH.md §8)")
     env["HOME"] = "/home/lumen"
     env["FOREMAN_WORKER"] = worker_id
-    env["WQ_AGENT"] = worker_id
+    # wq#1116: the worker closes the ticket fworker claimed, so it must carry the identity that
+    # claimed it — not its own per-attempt worker_id, which never matched the holder.
+    env["WQ_AGENT"] = wq_identity(ticket_id)
     env["FOREMAN_EVENTS_DIR"] = EVENTS_DIR
     env["FOREMAN_WORKTREE_ROOT"] = worktree
     # wq#900: registered primary trees for guard.sh's branch-freeze deny class —
@@ -1001,7 +1018,7 @@ def run_fire_child(phase, args, ticket, ticket_id, worktree, worker_id, max_turn
     plumbing as do_attempt()'s single child, but env carries FOREMAN_FIRE_PHASE so
     guard.sh can enforce the diagnosis-phase restrictions (harness/guard.sh, wq#717)."""
     prompt = load_fire_prompt(phase, ticket_id, ticket, worktree, plan_text=plan_text)
-    env = build_env(worker_id, args.model, args.effort, worktree)
+    env = build_env(worker_id, args.model, args.effort, worktree, ticket_id)
     env["FOREMAN_FIRE_PHASE"] = phase
     if phase == "diagnosis":
         env["FOREMAN_FIRE_PLAN_PATH"] = fire_gate.plan_path(ticket_id)
@@ -1161,7 +1178,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         prior_notes_path if (attempt > 1 and not resume_session) else None,
     )
 
-    env = build_env(worker_id, args.model, args.effort, worktree)
+    env = build_env(worker_id, args.model, args.effort, worktree, ticket_id)
     oauth_token_used = "CLAUDE_CODE_OAUTH_TOKEN" in env
     # Layers 1+3 (TIERED_INTELLIGENCE_DESIGN.md, wq#985): compile per-project
     # .fworker-rules.yaml (repo root + worktree root, additive over builtins) into
@@ -1600,6 +1617,11 @@ def cmd_run(args):
         log(f"DEFERRED: wq#{args.ticket} {reason}")
         print("DEFERRED")
         return EXIT_DEFERRED
+
+    # wq#1116: fworker's own heartbeat/done/release go through wq() with an inherited env, so
+    # pin the ticket identity here — before the claim — and every later call is the holder
+    # rather than a fresh `lumen:<pid>` that wq has to wave through.
+    os.environ["WQ_AGENT"] = wq_identity(args.ticket)
 
     claimed, msg = wq_claim(args.ticket)
     if not claimed:

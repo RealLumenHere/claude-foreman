@@ -58,7 +58,7 @@ def test_build_env_wires_gateway_vars_for_local_model(tmp_path, monkeypatch):
     key_file.write_text("sk-test-foreman-key")
     monkeypatch.setattr(fworker, "LITELLM_KEY_FILE", str(key_file))
 
-    env = fworker.build_env("wid", "deepseek-v4-flash", "medium", "/tmp/wt")
+    env = fworker.build_env("wid", "deepseek-v4-flash", "medium", "/tmp/wt", 1116)
 
     assert env["ANTHROPIC_BASE_URL"] == fworker.LITELLM_BASE_URL
     assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-test-foreman-key"
@@ -67,7 +67,7 @@ def test_build_env_wires_gateway_vars_for_local_model(tmp_path, monkeypatch):
 
 
 def test_build_env_never_sets_gateway_vars_for_a_cloud_model():
-    env = fworker.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt")
+    env = fworker.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt", 1116)
     assert "ANTHROPIC_BASE_URL" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
     assert "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" not in env
@@ -82,7 +82,7 @@ def test_build_env_strips_inherited_gateway_vars_for_a_cloud_model(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "leaked-api-key")
     monkeypatch.setenv("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1")
 
-    env = fworker.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt")
+    env = fworker.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt", 1116)
 
     assert "ANTHROPIC_BASE_URL" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env

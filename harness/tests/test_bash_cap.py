@@ -26,12 +26,12 @@ CLI_UPPER_LIMIT = 150000
 
 
 def test_build_env_sets_the_native_cap():
-    env = fworker.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt")
+    env = fworker.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt", 1116)
     assert env["BASH_MAX_OUTPUT_LENGTH"] == "2000"
 
 
 def test_cap_applies_to_local_models_too():
-    env = fworker.build_env("wid", "deepseek-v4-flash", "medium", "/tmp/wt")
+    env = fworker.build_env("wid", "deepseek-v4-flash", "medium", "/tmp/wt", 1116)
     assert env["BASH_MAX_OUTPUT_LENGTH"] == "2000"
 
 
@@ -39,7 +39,7 @@ def test_cap_is_env_overridable(monkeypatch):
     monkeypatch.setenv("FOREMAN_BASH_OUTPUT_CAP_CHARS", "500")
     try:
         fw = importlib.reload(fworker)
-        env = fw.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt")
+        env = fw.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt", 1116)
         assert env["BASH_MAX_OUTPUT_LENGTH"] == "500"
     finally:
         monkeypatch.undo()
