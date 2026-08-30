@@ -78,6 +78,47 @@ def test_oauth_token_secrets_dir_denied():
     assert any(".secrets" in d for d in deny)
 
 
+def test_fworker_loads_this_pack_not_the_general_one():
+    """wq#1107 was misdiagnosed for a day because ../worker-settings-general.json (a
+    separate blanket-`Bash` pack, used by orchestrator-spawned fleet-triage workers) was
+    read as if it were the one fworker loads. Pin the real default so the next reader
+    checks the file that actually gates a build worker."""
+    sys.path.insert(0, HARNESS_DIR)
+    import fworker  # noqa: PLC0415 — deliberately late, after the path insert
+    assert os.path.realpath(fworker.SETTINGS_FILE) == os.path.realpath(SETTINGS)
+
+
+def test_readonly_diagnostic_shapes_are_allowlisted():
+    """wq#1107: the allowlist is per-command, so every read-only shape a worker actually
+    reaches for has to be on it or headless gets an unapprovable "requires approval".
+    These three are the shapes with recorded loop-break evidence (2026-08-29)."""
+    with open(SETTINGS) as f:
+        allow = json.load(f)["permissions"]["allow"]
+    for prefix in ("Bash(ps -p ", "Bash(gh pr view", "Bash(jq "):
+        assert any(a.startswith(prefix) for a in allow), prefix
+
+
+def test_process_inspection_is_pid_targeted_not_a_full_dump():
+    """Instinct 3 names "ps with args" as credential-emitting: another process's argv can
+    carry a bearer token, so a broad `ps aux`/`ps -ef` dump stays off the allowlist. The
+    shape wq#1107 needed — liveness/etime for a PID this worker already owns — is
+    `ps -p <pid> ...`, which is targeted and does not sweep the process table."""
+    with open(SETTINGS) as f:
+        allow = json.load(f)["permissions"]["allow"]
+    assert "Bash(ps *)" not in allow
+    assert "Bash(ps -p *)" in allow
+
+
+def test_env_dump_denied_not_merely_unlisted():
+    """Instinct 3 (mask before print): an unlisted command yields an approval prompt no
+    headless worker can answer, which is a loop-break; an explicit deny yields a clear
+    refusal. Credential-dumping shapes get the explicit deny."""
+    with open(SETTINGS) as f:
+        deny = json.load(f)["permissions"]["deny"]
+    assert "Bash(env)" in deny
+    assert any(d.startswith("Bash(printenv") for d in deny)
+
+
 def test_worker_settings_interim_removed():
     interim = os.path.join(os.path.dirname(HARNESS_DIR), "worker-settings-interim.json")
     assert not os.path.exists(interim), (

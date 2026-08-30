@@ -28,3 +28,12 @@ def test_work_blocked_classifications():
     # infra or a limit defaults to WORK_BLOCKED (never auto-requeued without evidence).
     for c in ("REFUSED", "CRASH", "SOME_FUTURE_VERDICT"):
         assert fworker.classify_block_reason(c) == "WORK_BLOCKED", c
+
+
+def test_permission_loop_is_harness_defect_not_infra_crash():
+    # wq#1107: the whole point of the new verdict is that it does NOT land in the
+    # INFRA_CRASH bucket — that bucket is both auto-requeued by self_heal (pointless
+    # against a static settings gap) and counted by the dispatcher circuit breaker.
+    assert fworker.classify_block_reason("PERMISSION_LOOP") == "HARNESS_DEFECT"
+    assert "PERMISSION_LOOP" not in fworker._INFRA_CRASH_CLASSIFICATIONS
+    assert "PERMISSION_LOOP" not in fworker._LIMIT_HIT_CLASSIFICATIONS

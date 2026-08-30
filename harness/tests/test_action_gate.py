@@ -399,6 +399,69 @@ def test_loop_same_error_trips_across_classes():
     assert trip and "same error" in trip
 
 
+# ---------------- wq#1107: permission refusals are a HARNESS trip, not a model loop ----
+
+def test_permission_denial_detector_covers_observed_shapes():
+    for text in ("This command requires approval",
+                 "This Bash command contains multiple operations. The following parts "
+                 "require approval: ps -p 4242 -o pid,etime,cmd",
+                 "ls in '/home/lumen/.claude/' was blocked. For security, Claude Code "
+                 "may only list files in the allowed working directories for this session"):
+        assert ag.is_permission_denial(text), text
+    # a real tool error must never be mistaken for one
+    for text in ("adb: no devices/emulators found", "=== 3 failed, 1 passed ===", ""):
+        assert not ag.is_permission_denial(text), text
+
+
+def test_same_error_permission_trip_is_marked_permission():
+    t = ag.LoopTracker(threshold=3)
+    trip = None
+    for i, cmd in enumerate(["ps -p 1 -o pid,cmd", "ps aux", "ps -ef"]):
+        t.observe(tu("Bash", f"p{i}", command=cmd))
+        trip = t.observe(tr(f"p{i}", error=True, text="This command requires approval"))
+    assert trip and t.trip_kind == "PERMISSION"
+    assert "HARNESS DEFECT" in t.report()
+
+
+def test_same_class_permission_trip_is_marked_permission():
+    """The compound-denial message embeds the command, so three retries of one shape
+    produce three DIFFERENT error signatures — only the same-command-class counter
+    trips. It still has to read as PERMISSION."""
+    t = ag.LoopTracker(threshold=3)
+    trip = None
+    for i in range(3):
+        t.observe(tu("Bash", f"c{i}", command=f"gh pr view {i} --json state"))
+        trip = t.observe(tr(f"c{i}", error=True,
+                            text=("This Bash command contains multiple operations. The "
+                                  f"following parts require approval: gh pr view {i} "
+                                  "--json state")))
+    assert trip and "same command class" in trip
+    assert t.trip_kind == "PERMISSION"
+
+
+def test_ordinary_loop_is_not_marked_permission():
+    t = ag.LoopTracker(threshold=3)
+    for i in range(3):
+        t.observe(tu("Bash", f"n{i}", command="adb devices"))
+        t.observe(tr(f"n{i}", error=True, text="adb: no devices/emulators found"))
+    assert t.tripped and t.trip_kind is None
+    assert "HARNESS DEFECT" not in t.report()
+
+
+def test_permission_streak_resets_on_successful_mutation():
+    """Two refusals, then a successful Bash, then a third refusal of the same class is
+    NOT a loop — the successful call is progress, same rule fail_counts already uses."""
+    t = ag.LoopTracker(threshold=3)
+    for i in range(2):
+        t.observe(tu("Bash", f"r{i}", command="ps aux"))
+        t.observe(tr(f"r{i}", error=True, text=f"parts require approval: ps aux #{i}"))
+    t.observe(tu("Bash", "ok", command="git status"))
+    assert t.observe(tr("ok", error=False, text="clean")) is None
+    assert t.perm_counts == {}
+    t.observe(tu("Bash", "r2", command="ps aux"))
+    assert t.observe(tr("r2", error=True, text="parts require approval: ps aux #2")) is None
+
+
 def test_healthy_tdd_loop_does_not_trip():
     """fail test -> edit (success) -> fail test -> edit -> fail test: the
     intervening successful mutations mean this is progress, not a loop."""

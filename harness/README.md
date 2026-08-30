@@ -24,7 +24,14 @@ below.
                              identical (soft, archived), refuses otherwise
     concurrency.py           wq#616 (T2b): live fworker-wq* unit count + cloud slot cap
     spawner.py               wq#616 (T2b): concurrency-capped, staggered batch dispatch
-    worker-settings.json    settings pack — replaces worker-settings-interim.json
+    worker-settings.json    settings pack fworker.py loads (SETTINGS_FILE, override with
+                             FOREMAN_SETTINGS_FILE) — replaces worker-settings-interim.json.
+                             NOT ../worker-settings-general.json: that is the separate
+                             blanket-`Bash` pack orchestrator-spawned fleet-triage workers
+                             use, and reading it instead of this one is how wq#1107 got
+                             misdiagnosed as "bare Bash is allowed, why the denials?".
+                             This pack's allowlist is deliberately per-command; see
+                             "Permission refusals" below.
     guard.sh                PreToolUse fail-closed guard (§5)
     fire_gate.py             wq#717 (AUTO-5): fleet-fires manual-approval safety core
                              (FIRE_MODE.md) — plan/approval file IO, drift/timeout checks
@@ -249,6 +256,36 @@ TURNS. See the module docstrings in `fworker.py` and `classifier.py`.
 
 `claude agents --json` (confirmed working, no TTY needed) is used only as an advisory
 liveness signal during `--resume` reconciliation (design §8) — never the control channel.
+
+## Permission refusals and PERMISSION_LOOP (wq#1107)
+
+Two gates sit in front of a worker's Bash calls, and neither is the guard.sh deny-list:
+
+1. `worker-settings.json`'s `permissions.allow` is a **per-command allowlist**
+   (`Bash(git *)`, `Bash(ps *)`, …), not a blanket `Bash` grant. Anything not listed gets
+   Claude Code's `This command requires approval`. Every segment of a `|`/`&&`/`;` chain
+   is matched separately, so one unlisted segment fails the whole line with the compound
+   variant `...the following parts require approval: <cmd>`.
+2. The session's directory bound (worktree + every `--add-dir`) refuses reads outside it
+   with `was blocked. For security, Claude Code may only ...`, whatever the allowlist says.
+
+Headless has no one to approve, so both come back as tool errors. A worker that retries
+one three times trips action_gate's loop breaker, and before this ticket the SIGTERM that
+followed made it exit 143 -> `KILLED` -> `INFRA_CRASH`: a settings gap charged to the
+model, requeued into the identical wall, and counted by the dispatcher's circuit breaker
+(2026-08-29: 8/9 attempts, breaker tripped, `DISPATCH_DISARM` set).
+
+Now `LoopTracker` records `trip_kind = "PERMISSION"` when the repeated error matches
+`action_gate.PERMISSION_DENIAL_RE`, `fworker.py` overrides the verdict to
+`classifier.PERMISSION_LOOP` (keeping `KILLED` in `raw_classification`), and
+`classify_block_reason()` buckets it as `HARNESS_DEFECT` — outside
+`circuit_breaker.CATASTROPHIC_CLASSES`, so a config regression can no longer spend the
+fleet's dead-man's switch, and outside self_heal's release path, because releasing a
+ticket blocked on our own config just re-runs it into the same refusal.
+
+**When a `HARNESS_DEFECT` block appears: widen the allowlist (or the `--add-dir` set),
+land that, then `wq release` the ticket.** The exact refused command is in
+`../_runs/wq<ID>/loop-handoff-attempt-<N>.md`.
 
 ## Tests
 

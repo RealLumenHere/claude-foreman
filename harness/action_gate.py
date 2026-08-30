@@ -514,6 +514,25 @@ def write_red_handoff(tool_name, detail, reason, rules):
 # Layer 2 — LoopTracker (used by fworker.run_child)
 # --------------------------------------------------------------------------
 
+# wq#1107: the harness's own permission configuration can refuse a tool call. Claude
+# Code's permission layer answers a Bash call the settings pack does not allow with a
+# fixed string ("This command requires approval", or the compound-command variant
+# "...the following parts require approval: <cmd>"), and answers a path outside the
+# session's --add-dir set with "was blocked. For security, Claude Code may only ...".
+# A model that retries such a call reads as a loop, but the defect is ours: the same
+# command would have succeeded under a settings pack that allowed it. Marking the trip
+# lets fworker classify it as a HARNESS defect (PERMISSION_LOOP) instead of charging
+# KILLED/INFRA_CRASH — and so the dispatcher circuit breaker — against the model.
+PERMISSION_DENIAL_RE = re.compile(
+    r"requires? approval|requires? permission|blocked\. for security", re.I)
+
+
+def is_permission_denial(text):
+    """True when `text` is Claude Code's own permission/workspace-boundary refusal
+    rather than an error the tool itself produced."""
+    return bool(text) and bool(PERMISSION_DENIAL_RE.search(text))
+
+
 class LoopTracker:
     """Feeds on the same stream-json frames RunState.observe() sees. Triggers
     when the agent is demonstrably retrying a failed approach without change:
@@ -529,10 +548,12 @@ class LoopTracker:
         self.n = threshold or int(os.environ.get("FOREMAN_LOOP_THRESHOLD", "3"))
         self.pending = {}          # tool_use_id -> (tool, class_sig, file_path)
         self.fail_counts = {}      # class_sig -> count (reset on successful mutation)
+        self.perm_counts = {}      # class_sig -> permission-refusal count (tracks fail_counts)
         self.error_counts = {}     # error_sig -> count (never reset)
         self.read_counts = {}      # file_path -> count (reset on successful mutation)
         self.recent = []           # last tool calls for the handoff
         self.tripped = None
+        self.trip_kind = None      # "PERMISSION" when the harness itself refused the call
 
     @staticmethod
     def _class_sig(tool, tool_input):
@@ -560,8 +581,9 @@ class LoopTracker:
             return " ".join(x.get("text", "") for x in c if isinstance(x, dict))
         return ""
 
-    def _trip(self, reason):
+    def _trip(self, reason, kind=None):
         self.tripped = reason
+        self.trip_kind = kind
         return reason
 
     def observe(self, frame):
@@ -596,14 +618,24 @@ class LoopTracker:
                     self.fail_counts[sig] = self.fail_counts.get(sig, 0) + 1
                     if self.recent:
                         self.recent[-1]["failed"] = True
-                    esig = self._error_sig(self._result_text(b))
+                    raw_err = self._result_text(b)
+                    # wq#1107: keyed off the RAW result text, not the normalized esig —
+                    # _error_sig() keeps only the last 240 chars, and a long compound
+                    # denial can push the marker phrase out of that tail.
+                    if is_permission_denial(raw_err):
+                        self.perm_counts[sig] = self.perm_counts.get(sig, 0) + 1
+                    esig = self._error_sig(raw_err)
                     if esig:
                         self.error_counts[esig] = self.error_counts.get(esig, 0) + 1
                         if self.error_counts[esig] >= self.n:
-                            return self._trip(f"same error {self.error_counts[esig]}x: {esig[:120]!r}")
+                            kind = "PERMISSION" if is_permission_denial(raw_err) else None
+                            return self._trip(
+                                f"same error {self.error_counts[esig]}x: {esig[:120]!r}", kind)
                     if self.fail_counts[sig] >= self.n:
+                        kind = ("PERMISSION"
+                                if self.perm_counts.get(sig, 0) >= self.n else None)
                         return self._trip(f"same command class failing {self.fail_counts[sig]}x with no "
-                                          f"intervening successful change: {sig}")
+                                          f"intervening successful change: {sig}", kind)
                 else:
                     if tool == "Read" and fpath:
                         self.read_counts[fpath] = self.read_counts.get(fpath, 0) + 1
@@ -612,11 +644,18 @@ class LoopTracker:
                                               f"{self.read_counts[fpath]}x without progress")
                     elif tool in ("Edit", "Write", "Bash"):
                         self.fail_counts.clear()
+                        self.perm_counts.clear()
                         self.read_counts.clear()
         return None
 
     def report(self):
-        lines = [f"trigger: {self.tripped}", "", "recent tool calls:"]
+        lines = [f"trigger: {self.tripped}"]
+        if self.trip_kind == "PERMISSION":
+            lines += ["", "HARNESS DEFECT (wq#1107), not a model loop: the calls below were "
+                      "refused by this session's own permission configuration, not by the "
+                      "tool. Fix harness/worker-settings.json (permissions.allow) or the "
+                      "--add-dir set rather than reworking the ticket."]
+        lines += ["", "recent tool calls:"]
         for r in self.recent:
             lines.append(f"- {'FAIL ' if r.get('failed') else ''}{r['tool']}: {r['detail']}")
         return "\n".join(lines)

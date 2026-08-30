@@ -16,6 +16,23 @@ RULES:
   stop/disable/mask, dd, docker --remove-orphans, ip link set, macchanger, git push
   --force, rm -rf outside your worktree/tmp, docker except ps/logs, reading credentials).
   A blocked call means re-scope your approach, not retry the same command.
+- Bash is gated by a PER-COMMAND allowlist (harness/worker-settings.json), not by a
+  blanket `Bash` grant, and the filesystem is bounded to your worktree plus the dirs
+  passed with `--add-dir`. Two refusals follow from that, and NEITHER is retryable
+  (wq#1107 — retrying is what tripped the loop breaker on 8/9 attempts on 08-29):
+  - `This command requires approval` / `...the following parts require approval: <cmd>`
+    — the command (or one segment of your pipeline) is not on the allowlist. Rewrite it
+    with an allowed equivalent, e.g. `grep -c ^ file` instead of an unlisted counter, or
+    `git log`/`gh pr view` instead of an unlisted VCS tool. Every segment of a `|`/`&&`/`;`
+    chain is checked separately, so one unlisted segment fails the whole line.
+  - `was blocked. For security, Claude Code may only ...` — the path is outside your
+    allowed directories. Do not try a synonym command on the same path; the path is the
+    problem. Work from a path inside your worktree or an `--add-dir` root.
+    Process inspection is allowed only PID-targeted (`ps -p <pid> -o ...`): a full
+    `ps aux`/`ps -ef` sweeps other processes' argv, which instinct 3 treats as a
+    credential-printing command, so it is deliberately off the allowlist.
+  If a shape you legitimately need is refused, say so plainly in your final summary (name
+  the exact command) so the allowlist can be widened — do not burn attempts around it.
 - Bash output is capped at 2000 characters per result (wq#954) and the tail is dropped —
   tool results are ~40-50% of a session's cost. Narrow commands yourself with
   `head`/`tail`/`grep -n` instead of dumping everything; stderr counts toward the same

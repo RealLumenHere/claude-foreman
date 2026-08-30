@@ -45,6 +45,7 @@ from classifier import (
     RunState, classify, parse_worker_sentinel,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
     TURNS, LAUNCH_FAILURE, KILLED, BUDGET, BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL,
+    PERMISSION_LOOP,
 )
 from oom_forensics import oom_journal_evidence
 import action_gate
@@ -295,15 +296,39 @@ POST_DONE_GRACE_S = _envint("FOREMAN_POST_DONE_GRACE_S", 60)
 #                failure shape is an unrecognized catch-all -> always needs Frank; never
 #                auto-requeued. The conservative default for anything not explicitly
 #                known to be infra or a limit.
+#   HARNESS_DEFECT (wq#1107) the run died on OUR configuration — the permission pack
+#                refused a tool call the ticket legitimately needed. Requeueing is
+#                pointless (the next attempt hits the identical wall) and the run is no
+#                evidence about the model, so this bucket is deliberately outside
+#                circuit_breaker.CATASTROPHIC_CLASSES: a settings regression must not
+#                spend the fleet's dead-man's switch. Needs a harness fix, then release.
 BLOCK_INFRA_CRASH = "INFRA_CRASH"
 BLOCK_LIMIT_HIT = "LIMIT_HIT"
 BLOCK_WORK_BLOCKED = "WORK_BLOCKED"
+BLOCK_HARNESS_DEFECT = "HARNESS_DEFECT"
 
 _INFRA_CRASH_CLASSIFICATIONS = {LAUNCH_FAILURE, KILLED, OOM}
 _LIMIT_HIT_CLASSIFICATIONS = {TURNS, BUDGET}
+_HARNESS_DEFECT_CLASSIFICATIONS = {PERMISSION_LOOP}
+
+
+def loop_break_classification(raw_classification, killed_reason, loop_tracker):
+    """wq#1107. The loop breaker's SIGTERM makes every trip exit 143 -> KILLED ->
+    INFRA_CRASH. That is right when the model was genuinely repeating a failed approach
+    and wrong when the repeated failure was this harness's own permission pack refusing
+    the call: INFRA_CRASH requeues the ticket into the identical wall, and the dispatcher
+    circuit breaker spends its trip budget on a settings bug (2026-08-29: 8/9 attempts,
+    breaker at 89%, DISPATCH_DISARM set). Callers keep the KILLED verdict in
+    `raw_classification` — this only changes what the ticket and the breaker are told."""
+    if (killed_reason == "loop_break"
+            and getattr(loop_tracker, "trip_kind", None) == "PERMISSION"):
+        return PERMISSION_LOOP
+    return raw_classification
 
 
 def classify_block_reason(classification):
+    if classification in _HARNESS_DEFECT_CLASSIFICATIONS:
+        return BLOCK_HARNESS_DEFECT
     if classification in _INFRA_CRASH_CLASSIFICATIONS:
         return BLOCK_INFRA_CRASH
     if classification in _LIMIT_HIT_CLASSIFICATIONS:
@@ -1208,6 +1233,12 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     # to FALSE_COMPLETE (-> resume) rather than force-closing on a stale read.
     if killed_reason == "ticket_done":
         classification = SUCCESS
+    else:
+        classification = loop_break_classification(raw_classification, killed_reason,
+                                                    loop_tracker)
+        if classification != raw_classification:
+            log(f"{classification}: loop break was a harness permission refusal, not a "
+                f"model loop — verdict overridden (raw {raw_classification})")
 
     # wq#687: silent-downgrade check. Compare the model the init frame reported
     # against the one we dispatched; an UNEXPLAINED swap (not a sanctioned

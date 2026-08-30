@@ -12,6 +12,7 @@ of three classes (classify_block_reason(), same module):
   INFRA_CRASH:   spawn/process environment broke, work never really attempted
   LIMIT_HIT:     turn or budget ceiling — a resourcing call, not a self-heal one
   WORK_BLOCKED:  the worker/model decided it can't do the work, or an unrecognized shape
+  HARNESS_DEFECT (wq#1107): our own configuration refused a tool call the ticket needed
 This daemon scans `wq list --status blocked`, and for every INFRA_CRASH ticket:
   - if fworker's own attempt-N.json count for the ticket is under MAX_HEAL_ATTEMPTS AND
     this occurrence of the block is under STALE_AFTER_MIN old -> `wq release` it (the
@@ -20,9 +21,12 @@ This daemon scans `wq list --status blocked`, and for every INFRA_CRASH ticket:
     labor applies here too).
   - otherwise (attempts exhausted, or the block has been sitting INFRA_CRASH for too long
     despite releases) -> ntfy Frank (deduped) and leave it blocked.
-LIMIT_HIT and WORK_BLOCKED tickets are NEVER released by this daemon — no override, no
-exception; a block reason wq doesn't recognize (predates this feature, or Frank blocked
-it by hand) is treated the same conservative way as WORK_BLOCKED.
+LIMIT_HIT, WORK_BLOCKED and HARNESS_DEFECT tickets are NEVER released by this daemon — no
+override, no exception; a block reason wq doesn't recognize (predates this feature, or
+Frank blocked it by hand) is treated the same conservative way as WORK_BLOCKED.
+HARNESS_DEFECT is listed in BLOCK_PREFIX_RE rather than left to that fallback so the
+class shows up as itself in `self_heal status`: releasing it would only re-run the ticket
+into the same refusal, so the release has to wait on a harness change landing first.
 
 wq#741 gave wq dedicated `block_reason`/`blocked_at` columns on tasks (ADDITIVE, same
 ALTER-TABLE-if-missing pattern as lease_expires/subsystems/gate) — cmd_block() writes both
@@ -76,7 +80,8 @@ STALE_AFTER_MIN = int(os.environ.get("FOREMAN_SELFHEAL_STALE_MIN", "30"))
 MAX_HEAL_ATTEMPTS = int(os.environ.get("FOREMAN_SELFHEAL_MAX_ATTEMPTS", "5"))
 STALE_NTFY_DEDUP_H = 6  # a still-stuck ticket only re-pings Frank every 6h, not every pass
 
-BLOCK_PREFIX_RE = re.compile(r"^(INFRA_CRASH|WORK_BLOCKED|LIMIT_HIT):\s*(.*)$", re.S)
+BLOCK_PREFIX_RE = re.compile(
+    r"^(INFRA_CRASH|WORK_BLOCKED|LIMIT_HIT|HARNESS_DEFECT):\s*(.*)$", re.S)
 # wq list line: `[ 12] lane p1 ep0 blocked  title...` (ep tag only when it differs)
 LIST_LINE_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)\s+p(\d+)(?:\s+ep(\d+))?\s+(\S+)")
 ATTEMPT_FILE_RE = re.compile(r"^attempt-(\d+)\.json$")

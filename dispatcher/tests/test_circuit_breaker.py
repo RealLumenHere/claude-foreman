@@ -73,6 +73,24 @@ def test_catastrophic_classes_match_fworker_infra_crash_bucket():
     assert cb.CATASTROPHIC_CLASSES == fworker._INFRA_CRASH_CLASSIFICATIONS
 
 
+def test_permission_loop_never_trips_the_breaker(benv):
+    """wq#1107: a run killed by our own permission pack says nothing about fleet health.
+    On 2026-08-29 eight such runs read as KILLED, tripped the breaker at 89%, and set
+    DISPATCH_DISARM. The same eight, classified PERMISSION_LOOP, must not."""
+    assert "PERMISSION_LOOP" not in cb.CATASTROPHIC_CLASSES
+    now = time.time()
+    for i in range(8):
+        write_attempt(benv["runs_root"], 1000 + i, 1, "PERMISSION_LOOP", now - 60 * (i + 1))
+    write_attempt(benv["runs_root"], 1099, 1, "SUCCESS", now - 30)
+    tripped, stats = cb.check_and_trip(now=now)
+    assert not tripped, stats
+    assert cb.is_armed()
+    # still visible as a failure in the broad ops-health number — excluded from the trip
+    # decision, not swept out of the dashboard.
+    broad = cb.general_failure_rate(90, now=now)
+    assert broad["failures"] == 8 and broad["total"] == 9
+
+
 # ---- failure_rate / general_failure_rate -----------------------------------------------
 
 def test_failure_rate_counts_catastrophic_classes_only(benv):

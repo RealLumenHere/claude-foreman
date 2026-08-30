@@ -32,6 +32,13 @@ HANG = "HANG"
 AUTH = "AUTH"
 DEGRADED_SUCCESS = "DEGRADED_SUCCESS"
 FALSE_COMPLETE = "FALSE_COMPLETE"
+# wq#1107: the loop breaker stopped the session, but the repeated failure was this
+# harness's own permission configuration refusing a tool call — the run says nothing
+# about the model or the ticket. Never produced by classify() (which only sees the
+# child's frames and exit code); fworker.py overrides the raw KILLED verdict with this
+# when action_gate.LoopTracker reports trip_kind == "PERMISSION", the same way it
+# overrides to SUCCESS for killed_reason == "ticket_done".
+PERMISSION_LOOP = "PERMISSION_LOOP"
 
 # wq#749: harness/prompts/worker.md has the model print exactly one of these as the
 # LAST line of its final message. Nothing parsed it before wq#749 — the sentinel
