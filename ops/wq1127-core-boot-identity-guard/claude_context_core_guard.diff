@@ -1,0 +1,26 @@
+--- a/minerva/context/claude_context.sh
++++ b/minerva/context/claude_context.sh
+@@ -9,6 +9,20 @@
+ # Saves ~90% tokens per session.
+ cd /home/lumen/minerva/context
+ if [ "$1" = "--core" ]; then
++    # wq#1127: wq#1116 fixed collisions between two REGISTERED orchestrators but left the
++    # anonymous-boot hole open — nothing at the wq chokepoint can tell two unregistered
++    # same-host drivers apart (wq#594's docstring), so refuse to hand back a --core context
++    # to a caller wq cannot vouch for. `wq whoami` always exits 0 regardless of registration
++    # (it is a query, not a gate), so the status line has to be parsed.
++    whoami_out=$(/home/lumen/bin/wq whoami 2>/dev/null)
++    if grep -q '^status   : REGISTERED' <<<"$whoami_out"; then
++        session_id=$(sed -n 's/^identity : \([^ ]*\).*/\1/p' <<<"$whoami_out")
++        echo "===== REGISTERED SESSION: $session_id ====="
++    else
++        echo "REFUSED: --core requires a registered wq identity (wq#1127)."
++        echo "Two unregistered same-host sessions are indistinguishable to wq and can step on"
++        echo "each other's in-flight claims (wq#1116)."
++        echo "Register first:  wq whoami --register orch-<slug>"
++        echo "Then re-run:     bash $0 --core"
++        exit 1
++    fi
+     /home/lumen/bin/handoff verify 2>/dev/null; echo
+     if [ -f /home/lumen/HANDOFF.md ]; then
+         echo "===== HANDOFF.md (index — read after VERIFY above) ====="
