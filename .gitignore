@@ -11,6 +11,7 @@
 /_runs/
 *.bak.*
 *.bak
+*.bak-*
 
 # interim dispatch scaffolding, superseded once T2a lands
 /FOREMAN_DISPATCH.md
@@ -34,3 +35,5 @@ ops/systemd-desired-state/
 /dispatcher.log.*.gz
 /ops/intervention_ledger.db
 /scribe.db
+/dispatcher/health_state.json
+/dispatcher/config_lint_state.json
