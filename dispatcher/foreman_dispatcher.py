@@ -57,7 +57,6 @@ import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
 import runaway          # noqa: E402
 import psi_pressure     # noqa: E402  # wq#844
-import repo_sweep       # noqa: E402  # wq#1094: auto-lane repo-sweep ticket repo hints
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -651,11 +650,12 @@ def _do_pass(cfg, log, state, dry_run):
             continue
 
         if not repo:
-            # wq#1094: 'auto' has no single LANE_REPO entry (repo-sweeps target
+            # wq#1094/wq#1123: 'auto' has no single LANE_REPO entry (repo-sweeps target
             # different repos, wq#830) — but a repo-sweep ticket carries its exact
-            # target repo in its own detail (repo_sweep.py wrote it there). Read
-            # that back instead of guessing; anything else in 'auto' still refuses.
-            repo = repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
+            # target repo in its own detail (repo_sweep.py wrote it there). router's
+            # shared resolver reads that back instead of guessing; anything else in
+            # 'auto' still refuses.
+            repo = router.repo_for_ticket(t)
         if not repo:
             log.skip(tid, lane, "lane_policy", "lane_unmapped",
                      detail="no LANE_REPO entry — never guess a repo")
