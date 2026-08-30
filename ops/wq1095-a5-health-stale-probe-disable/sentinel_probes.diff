@@ -1,0 +1,27 @@
+--- a/home/lumen/sentinel/probes/sentinel_probes.py
++++ b/home/lumen/sentinel/probes/sentinel_probes.py
+@@ -934,15 +934,15 @@
+     ("probe-pokemon-liveness", probe_pokemon_liveness, False),
+     ("probe-litellm-auth-monitor", probe_litellm_auth_monitor, False),
+     ("probe-maat-vault",      probe_maat_vault,      False),   # wq#969 fold
+-    # RE-ENABLED 2026-08-29 (wq#1092): was DISABLED by the wq#1064 instance fix
+-    # (orch5) after aq#899's CRITICAL x47 false P0 page. Its targets
+-    # (lumen-planner/generator/evaluator) are still RETIRED and always will be
+-    # LoadState=not-found -- but the probe now routes every A5_SERVICES check
+-    # through _stale_or_none() first, so it returns STALE (ok=True,
+-    # critical=False, one build-lane ticket filed) instead of CRITICAL. Safe
+-    # to leave live as a demonstration that the guard makes the class
+-    # impossible; if it ever fires FAIL again it is a genuine incident.
+-    ("probe-a5-health",       probe_a5_health,       False),   # wq#969 fold, guarded wq#1092
++    # DISABLED 2026-08-30 (wq#1095): wq#1092 re-enabled this probe guarded by
++    # _stale_or_none() specifically to live-prove the STALE-not-CRITICAL guard
++    # on a real not-found target (lumen-planner/generator/evaluator, retired
++    # 2026-08-21 and never coming back) -- that proof is wq#1095 itself, filed
++    # once, non-paging, exactly as designed. Proof obtained; no reason to keep
++    # spending a systemctl call every 30min on a check that can only ever
++    # return the same STALE string. probe_a5_health() left intact below in
++    # case A5 (or its guard-of-the-guard role) is ever needed again.
++    # ("probe-a5-health",       probe_a5_health,       False),   # wq#969 fold, guarded wq#1092, disabled wq#1095
+     ("probe-brain-health",    probe_brain_health,    False),   # wq#969 fold
+     ("probe-invisible-work-watch", probe_invisible_work_watch, "7d"),  # wq#973
+     ("probe-r4-unticketed-recovery", probe_r4_unticketed_recovery, "24h"),  # wq#963
