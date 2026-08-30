@@ -568,14 +568,22 @@ class LoopTracker:
         if self.tripped:
             return self.tripped
         ftype = frame.get("type")
-        content = (frame.get("message") or {}).get("content") or []
+        _msg = frame.get("message")
+        content = (_msg.get("content") if isinstance(_msg, dict) else None) or []
         if ftype == "assistant":
             for b in content:
                 if isinstance(b, dict) and b.get("type") == "tool_use":
                     tool = b.get("name") or ""
                     ti = b.get("input") or {}
                     sig = self._class_sig(tool, ti)
-                    self.pending[b.get("id")] = (tool, sig, ti.get("file_path"))
+                    # paged-read fix (2026-08-29): guard.sh R3 caps every Read at
+                    # FOREMAN_READ_LINE_CAP lines, so a large file is legitimately read
+                    # in offset pages. Key the re-read counter by (path, offset, limit)
+                    # so paging is progress, not a loop; the SAME page 3x still trips.
+                    fkey = ti.get("file_path")
+                    if tool == "Read" and fkey:
+                        fkey = f"{fkey}@{ti.get('offset') or 0}+{ti.get('limit') or 0}"
+                    self.pending[b.get("id")] = (tool, sig, fkey)
                     self.recent.append({"tool": tool, "sig": sig,
                                         "detail": (ti.get("command") or ti.get("file_path") or "")[:160]})
                     self.recent = self.recent[-15:]
@@ -600,7 +608,7 @@ class LoopTracker:
                     if tool == "Read" and fpath:
                         self.read_counts[fpath] = self.read_counts.get(fpath, 0) + 1
                         if self.read_counts[fpath] >= self.n:
-                            return self._trip(f"re-read {os.path.basename(fpath)} "
+                            return self._trip(f"re-read {os.path.basename(fpath.split('@')[0])} "
                                               f"{self.read_counts[fpath]}x without progress")
                     elif tool in ("Edit", "Write", "Bash"):
                         self.fail_counts.clear()

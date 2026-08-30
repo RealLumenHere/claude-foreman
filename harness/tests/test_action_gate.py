@@ -435,3 +435,18 @@ def test_error_sig_ignores_timestamps_and_addresses():
     a = ag.LoopTracker._error_sig("fail at 12:01:03 addr 0xdeadbeef took 1.23s")
     b = ag.LoopTracker._error_sig("fail at 23:59:59 addr 0xcafe0000 took 9.87s")
     assert a == b
+
+
+def test_loop_paged_read_is_progress_not_loop():
+    """guard.sh R3 pages large files at FOREMAN_READ_LINE_CAP; reading successive
+    offsets of one file is progress. Only the SAME page repeated trips (2026-08-29,
+    seen on wq#1095 a1: sentinel_probes.py 960 lines read in 3 pages -> KILLED)."""
+    t = ag.LoopTracker(threshold=3)
+    for i, off in enumerate((0, 300, 600, 900)):
+        t.observe(tu("Read", f"p{i}", file_path="/x/big.py", offset=off, limit=300))
+        assert t.observe(tr(f"p{i}", error=False, text="page")) is None
+    trip = None
+    for i in range(3):
+        t.observe(tu("Read", f"s{i}", file_path="/x/big.py", offset=300, limit=300))
+        trip = t.observe(tr(f"s{i}", error=False, text="page"))
+    assert trip and "re-read big.py" in trip

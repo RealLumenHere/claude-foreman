@@ -1,7 +1,7 @@
 {
   "cadence_note": "cadence lives in the systemd timer, not here",
   "max_spawns_per_pass": 3,
-  "cloud_ceiling": 3,
+  "cloud_ceiling": 10,
   "tight_mode": {
     "max_spawns_per_pass": 1,
     "min_pri": 1
@@ -74,6 +74,10 @@
       "enabled": false,
       "manual": true,
       "note": "Gated manual safety lane (wq#1011 / R2 section 10.4). Enumerated so lane/config-drift checks see it as present, but never auto-claimed: enabled:false makes the dispatcher scan allowlist skip it (foreman_dispatcher.py eligible-scan). Holds Frank-gated safety builds like wq#709 lumen-guardian (a systemctl-poweroff thermal/MCE daemon) that must be built deliberately under review, never auto-dispatched to an arbitrary worker."
+    },
+    "simpill": {
+      "enabled": true,
+      "max_per_day": 999
     }
   }
 }

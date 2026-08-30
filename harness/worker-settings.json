@@ -2,45 +2,138 @@
   "permissions": {
     "defaultMode": "acceptEdits",
     "allow": [
-      "Read", "Grep", "Glob", "Edit", "Write",
-      "Bash(git *)", "Bash(python3 *)", "Bash(pytest *)", "Bash(node *)",
-      "Bash(npm test*)", "Bash(sqlite3 *)",
-      "Bash(/home/lumen/bin/wq *)", "Bash(/home/lumen/bin/lumen-pr *)",
-      "Bash(/home/lumen/bin/slock *)", "Bash(/home/lumen/bin/lumen-run *)",
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write",
+      "Bash(git *)",
+      "Bash(python3 *)",
+      "Bash(pytest *)",
+      "Bash(node *)",
+      "Bash(npm test*)",
+      "Bash(sqlite3 *)",
+      "Bash(/home/lumen/bin/wq *)",
+      "Bash(/home/lumen/bin/lumen-pr *)",
+      "Bash(/home/lumen/bin/slock *)",
+      "Bash(/home/lumen/bin/lumen-run *)",
       "Bash(/home/lumen/bin/fleet-search *)",
-      "Bash(docker ps*)", "Bash(docker logs*)",
-      "Bash(curl *)"
+      "Bash(docker ps*)",
+      "Bash(docker logs*)",
+      "Bash(curl *)",
+      "Bash(/home/lumen/bin/lumen_busy *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(cd *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(chmod *)",
+      "Bash(mktemp*)",
+      "Bash(touch *)",
+      "Bash(sed *)",
+      "Bash(awk *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(sort *)",
+      "Bash(uniq *)",
+      "Bash(diff *)",
+      "Bash(echo *)",
+      "Bash(printf *)",
+      "Bash(test *)",
+      "Bash(true)",
+      "Bash(basename *)",
+      "Bash(dirname *)",
+      "Bash(systemctl status*)",
+      "Bash(systemctl is-active*)",
+      "Bash(systemctl is-enabled*)",
+      "Bash(systemctl show*)",
+      "Bash(systemctl list-*)",
+      "Bash(systemctl cat*)",
+      "Bash(journalctl *)",
+      "Bash(stat *)",
+      "Bash(readlink *)",
+      "Bash(realpath *)"
     ],
     "deny": [
-      "Bash(*reboot*)", "Bash(shutdown*)", "Bash(poweroff*)", "Bash(halt*)",
-      "Bash(systemctl stop*)", "Bash(systemctl disable*)", "Bash(systemctl mask*)",
+      "Bash(*reboot*)",
+      "Bash(shutdown*)",
+      "Bash(poweroff*)",
+      "Bash(halt*)",
+      "Bash(systemctl stop*)",
+      "Bash(systemctl disable*)",
+      "Bash(systemctl mask*)",
       "Bash(dd *)",
       "Bash(*--remove-orphans*)",
-      "Bash(ip link set*)", "Bash(macchanger*)",
-      "Bash(git push --force*)", "Bash(git push -f*)",
+      "Bash(ip link set*)",
+      "Bash(macchanger*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
       "Bash(rm -rf /*)",
       "Bash(docker *)",
       "Bash(sudo *)",
       "Bash(claude setup-token*)",
-      "Read(**/.env)", "Read(**/.credentials.json)",
-      "Read(**/claude_credentials.md)", "Read(/home/lumen/agent/.env)",
+      "Read(**/.env)",
+      "Read(**/.credentials.json)",
+      "Read(**/claude_credentials.md)",
+      "Read(/home/lumen/agent/.env)",
       "Read(/home/lumen/.secrets/**)"
     ]
   },
   "hooks": {
     "PreToolUse": [
-      { "matcher": "Bash|Read|Edit|Write",
-        "hooks": [{ "type": "command",
-                    "command": "/home/lumen/foreman/harness/guard.sh" }] },
-      { "matcher": "Bash|Edit|Write",
-        "hooks": [{ "type": "command",
-                    "command": "python3 /home/lumen/foreman/harness/action_gate.py hook" }] }
+      {
+        "matcher": "Bash|Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/lumen/foreman/harness/action_gate.py hook"
+          }
+        ]
+      }
     ],
-    "SessionStart": [ { "hooks": [{ "type": "command",
-        "command": "/home/lumen/foreman/harness/guard.sh --lifecycle start" }] } ],
-    "Stop":         [ { "hooks": [{ "type": "command",
-        "command": "/home/lumen/foreman/harness/guard.sh --lifecycle stop" }] } ],
-    "SessionEnd":   [ { "hooks": [{ "type": "command",
-        "command": "/home/lumen/foreman/harness/guard.sh --lifecycle end" }] } ]
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh --lifecycle start"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh --lifecycle stop"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh --lifecycle end"
+          }
+        ]
+      }
+    ]
   }
 }

@@ -284,7 +284,14 @@ def main(argv=None):
     if a.cmd == "check":
         fired, detail = check_health(a.log, a.threshold, dry_run=a.dry_run)
         print(detail)
-        sys.exit(2 if fired else 0)
+        # wq#1012/R2-T5: on the real timer-driven pass the DISPATCHER STALLED alarm is
+        # delivered via _ntfy() inside check_health(); a nonzero exit here only made
+        # systemd mark lumen-foreman-health failed -> "failed-unit + recovered" echo per
+        # stall. Exit 0 on the real pass so the ntfy IS the output. --dry-run keeps the
+        # nonzero exit so test/CI callers can still read the fired boolean.
+        if a.dry_run:
+            sys.exit(2 if fired else 0)
+        sys.exit(0)
 
     elif a.cmd == "inject-fault":
         inject_fault()

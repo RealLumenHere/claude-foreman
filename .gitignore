@@ -24,3 +24,4 @@ __pycache__/
 
 # claude-shim runtime secret — generated per-install, never committed (wq#726)
 /claude-shim/.api_key
+ops/systemd-desired-state/
