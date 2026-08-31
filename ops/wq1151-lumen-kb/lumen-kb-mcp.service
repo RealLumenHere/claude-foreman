@@ -1,0 +1,26 @@
+# lumen-kb-mcp — HTTP MCP over the /home/lumen/kb vault (wq#1151 P1)
+# Loopback only; exposure is mcpw's job (P2). Managed by systemd_desired_state
+# once captured (run `systemd_desired_state.py capture` after install).
+[Unit]
+Description=lumen-kb MCP server (streamable-http, 127.0.0.1:8781)
+After=network.target
+
+[Service]
+Type=simple
+User=lumen
+WorkingDirectory=/home/lumen/projects/lumen-kb-mcp
+ExecStart=/home/lumen/projects/lumen-kb-mcp/.venv/bin/python server.py
+Restart=on-failure
+RestartSec=5
+Environment=LUMEN_KB_VAULT=/home/lumen/kb
+# Hardening: server needs the vault (rw, git commits) and nothing else writable.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/lumen/kb
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+# lumen-kb-mcp runtime deps (wq#1151).
+# SDK 2.x migration (P1) is NOT done: 2.x import layout could not be verified
+# offline from the build lane. server.py already tries both layouts; to
+# migrate, bump this pin on the host, run tests/, and re-verify the
+# initialize handshake before restarting the unit.
+mcp>=1.9,<2
