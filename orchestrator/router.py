@@ -571,6 +571,16 @@ def classify_archetype(title, detail="", lane="", manifest=None):
     ticket around the manual-approval workflow (harness/FIRE_MODE.md)."""
     if lane == "fleet-fires":
         return "fire-response", ["lane:fleet-fires (forced, wq#717)"]
+    # wq#1143: LPP stuck-supervisor alerts ([lpp][stuck] ...) are single-worker RCA of one
+    # frozen game state (like wq#1097 FIGHT_LOSS_LOOP -> PR#82), never a multi-worker
+    # campaign. Force rca-investigation ahead of the keyword rubric, same shape as the
+    # fleet-fires override above: these alerts are full of game save-state terms
+    # ("checkpoint", "alternate_checkpoint", "checkpoint_restore") that the rubric reads as
+    # STRONG long-horizon-campaign signals and mis-routes to DECOMPOSE, parking them
+    # undispatched. WARP_OSC/RESUME_DEADEND carry "checkpoint"; FIGHT_LOSS_LOOP does not,
+    # which is why only the former mis-routed.
+    if (title or "").lstrip().lower().startswith("[lpp][stuck]"):
+        return "rca-investigation", ["lpp-stuck alert (forced rca-investigation, wq#1143)"]
     text = f"{title or ''}\n{detail or ''}"
     by_arch = {}
     for arch, pats in _RUBRIC:
