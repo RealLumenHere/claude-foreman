@@ -1,0 +1,7 @@
+[Unit]
+Description=Phoenix tracer bounded-retention + disk-alert guard (wq#1299)
+After=phoenix.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/wq1299-phoenix-tracer/phoenix_disk_guard.py check
