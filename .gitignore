@@ -11,6 +11,7 @@
 /_runs/
 *.bak.*
 *.bak
+*.bak-*
 
 # interim dispatch scaffolding, superseded once T2a lands
 /FOREMAN_DISPATCH.md
@@ -25,6 +26,10 @@ __pycache__/
 # claude-shim runtime secret — generated per-install, never committed (wq#726)
 /claude-shim/.api_key
 ops/systemd-desired-state/
+
+# alert-dedup timestamps rewritten by the daemons on every alert (wq#1108) — not source
+/dispatcher/health_state.json
+/dispatcher/config_lint_state.json
 
 # per-daemon health/self-heal runtime state (wq#1012 split) — not source
 /dispatcher_health/
