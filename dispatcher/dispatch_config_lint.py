@@ -32,7 +32,10 @@ CONFIG_PATH = os.environ.get("FOREMAN_DISPATCHER_CONFIG",
                              os.path.join(DISPATCHER_DIR, "config.json"))
 DB_PATH = os.environ.get("WQ_DB", "/home/lumen/agents/work-queue/queue.db")
 STATE_PATH = os.environ.get("FOREMAN_CONFIG_LINT_STATE",
-                            os.path.join(DISPATCHER_DIR, "config_lint_state.json"))
+                            os.path.join(DISPATCHER_DIR, "runtime", "config_lint_state.json"))
+# wq#1253 (#23): moved under runtime/ (gitignored); one-release fallback below for a
+# pre-migration state file still at the old tracked location.
+_LEGACY_STATE_PATH = os.path.join(DISPATCHER_DIR, "config_lint_state.json")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 
 ALERT_DEDUP_SECONDS = 3600  # don't re-alert within 1h
@@ -51,14 +54,18 @@ def _ntfy(msg, priority="urgent", title="LANE/CONFIG DRIFT"):
 
 
 def load_state():
+    path = STATE_PATH if os.path.exists(STATE_PATH) else _LEGACY_STATE_PATH
     try:
-        with open(STATE_PATH) as f:
+        with open(path) as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
 
 
 def save_state(state):
+    d = os.path.dirname(STATE_PATH)
+    if d:
+        os.makedirs(d, exist_ok=True)
     tmp = STATE_PATH + ".tmp"
     with open(tmp, "w") as f:
         json.dump(state, f)

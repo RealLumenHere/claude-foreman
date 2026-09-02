@@ -39,7 +39,11 @@ DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.environ.get("FOREMAN_DISPATCH_LOG",
                           os.path.join(os.path.dirname(DISPATCHER_DIR), "dispatcher.log"))
 STATE_PATH = os.environ.get("FOREMAN_HEALTH_STATE",
-                            os.path.join(DISPATCHER_DIR, "health_state.json"))
+                            os.path.join(DISPATCHER_DIR, "runtime", "health_state.json"))
+# wq#1253 (#23): health_state.json moved under runtime/ (gitignored) so its own writes
+# never dirty a tracked path. One-release fallback for a pre-migration state file still
+# sitting at the old tracked location on a host that hasn't run since the move.
+_LEGACY_STATE_PATH = os.path.join(DISPATCHER_DIR, "health_state.json")
 CONFIG_PATH = os.path.join(DISPATCHER_DIR, "config.json")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 
@@ -62,14 +66,18 @@ def _ntfy(msg, priority="urgent", title="DISPATCHER STALLED"):
 
 
 def load_state():
+    path = STATE_PATH if os.path.exists(STATE_PATH) else _LEGACY_STATE_PATH
     try:
-        with open(STATE_PATH) as f:
+        with open(path) as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
 
 
 def save_state(st):
+    d = os.path.dirname(STATE_PATH)
+    if d:
+        os.makedirs(d, exist_ok=True)
     tmp = STATE_PATH + ".tmp"
     with open(tmp, "w") as f:
         json.dump(st, f)

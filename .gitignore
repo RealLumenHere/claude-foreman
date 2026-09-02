@@ -34,3 +34,10 @@ ops/systemd-desired-state/
 /dispatcher.log.*.gz
 /ops/intervention_ledger.db
 /scribe.db
+
+# wq#1253 (#23): all mutable dispatcher runtime state lives under runtime/ dirs,
+# gitignored, so lumen-pr's dirty-tree guard never false-blocks a land on a daemon's
+# own state writes. config.json stays tracked and static (wq#772).
+runtime/
+*.err
+.*.err

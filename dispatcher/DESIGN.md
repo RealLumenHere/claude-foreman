@@ -60,6 +60,8 @@ repo (claude-foreman)                      deployed at /home/lumen/foreman/
 runtime state (never in git):
 ├── /home/lumen/foreman/dispatcher.log     JSONL decision log (ticket MUST 9)
 ├── /home/lumen/foreman/dispatcher/state.json   per-day lane counters + ntfy dedup (§6)
+├── /home/lumen/foreman/dispatcher/runtime/health_state.json      dispatch_health.py dedup (§4)
+├── /home/lumen/foreman/dispatcher/runtime/config_lint_state.json dispatch_config_lint.py dedup (§4)
 ├── /home/lumen/foreman/approvals/wq<ID>.approved   fire-ticket approvals (Frank-created)
 └── /home/lumen/autonomy/DISPATCH_DISARM   kill switch (shared with lumen_dispatch)
 ```
@@ -160,6 +162,18 @@ answerable from the log alone.
   **with Frank confirming each path** (open question §12.1).
 - `requires_approval` is forced true for `fleet-fires` in code as well — a config edit
   cannot silently disarm MUST 4 (test §11/T4b).
+
+**Mutable state lives under `dispatcher/runtime/` (wq#1253, #23), never in a tracked
+file.** `health_state.json` (dispatch_health.py's alert-dedup ledger) and
+`config_lint_state.json` (dispatch_config_lint.py's) write there now; both fall back to
+reading their pre-migration path for one release if the new file is absent. `config.json`
+itself is unaffected — it stays tracked and static, still read from HEAD per wq#772 above.
+`dispatcher/runtime/lane_state.json` is reserved as the staging path for lane
+auto-registration (currently `/home/lumen/bin/wq-lane-init`, a separate repo): once that
+script is updated to write there instead of directly into `config.json`, a lane still
+needs an explicit commit into `config.json` to become live policy — a working-tree-only
+`lane_state.json` entry is never itself dispatch-effective, by the same no-working-tree-
+fallback rule as `load_config()`.
 
 ## 5. Frank-gate and fire-ticket handling (MUST 3, MUST 4)
 
