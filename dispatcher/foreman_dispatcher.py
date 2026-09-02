@@ -85,7 +85,9 @@ LANGFUSE_ENV = os.environ.get("FOREMAN_LANGFUSE_ENV",
 SLOCK_SCOPE = "foreman-dispatcher"
 SLOCK_TTL_MIN = "30"
 FIRE_NTFY_DEDUP_H = 24
-FIRE_LANE = "fleet-fires"  # requires_approval is forced in code for this lane (MUST 4)
+FIRE_LANE = "fleet-fires"  # kept for the disarmed fallback noted at line ~196 if
+# requires_approval forcing is ever restored; no longer used to force the gate itself
+# (MUST 4 hardcode removed 2026-08-23 per Frank directive, see load_config below)
 STAGGER = (spawner.STAGGER_MIN_S, spawner.STAGGER_MAX_S)
 # wq#1094: the only lane where an unmapped LANE_REPO isn't final — repo-sweep tickets
 # in 'auto' carry their own repo in the ticket (repo_sweep.repo_hint). Every other
