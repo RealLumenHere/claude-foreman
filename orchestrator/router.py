@@ -106,7 +106,16 @@ EFFORT_LADDER = ["low", "medium", "high", "xhigh", "max"]
 
 # short name in routing/dominated tables -> full CLI id. Anything already starting with
 # "claude-" or listed as a local model id passes through unchanged.
-ALIASES = {
+#
+# wq#1329 (ISSUE-LOG #127): this used to be a hand-maintained dict, duplicating
+# research/models.yaml's own models[].alias field as a second source of truth. They
+# diverged the moment claude-fable-5-1 was added to the manifest without a matching
+# entry here: resolve_alias('fable-5-1') fell through unresolved. Now derived from the
+# manifest itself so there is exactly one place aliases are declared.
+_FALLBACK_ALIASES = {
+    # wq#1329: only used if models.yaml is missing/unparseable at import time (keeps the
+    # CLI usable for e.g. --help). Once load_manifest() runs successfully this is dead
+    # weight but never wrong — every entry here is also derivable from the yaml.
     "fable-5": "claude-fable-5", "fable": "claude-fable-5",
     "opus-5": "claude-opus-5", "opus": "claude-opus-5",
     "sonnet-5": "claude-sonnet-5", "sonnet": "claude-sonnet-5",
@@ -114,6 +123,41 @@ ALIASES = {
     "opus-4-8": "claude-opus-4-8", "opus-4-7": "claude-opus-4-7", "opus-4-6": "claude-opus-4-6",
     "sonnet-4-6": "claude-sonnet-4-6",
 }
+
+
+def _build_aliases(path=None, data=None):
+    """alias -> full id, built from research/models.yaml models[].id + models[].alias.
+    For every model: its declared `alias` field (if any) maps to its id, and the bare
+    family shorthand (id with the 'claude-' prefix stripped, e.g. 'fable-5-1' for
+    'claude-fable-5-1') also maps to it — that shorthand rule is what reproduces every
+    entry _FALLBACK_ALIASES used to hand-list, with zero maintenance, including the
+    fable-5-1 entry that was previously missing (ISSUE-LOG #127).
+
+    `data` lets a caller that already parsed the yaml (load_manifest) skip a second
+    read; passed None (the module-import-time call below), this does its own read."""
+    p = path or MANIFEST_PATH
+    try:
+        if data is None:
+            if yaml is None:
+                return dict(_FALLBACK_ALIASES)
+            with open(p) as f:
+                data = yaml.safe_load(f) or {}
+        aliases = {}
+        for m in (data or {}).get("models") or []:
+            mid = m.get("id")
+            if not mid:
+                continue
+            alias = m.get("alias")
+            if alias:
+                aliases[alias] = mid
+            if mid.startswith("claude-"):
+                aliases[mid[len("claude-"):]] = mid
+        return aliases or dict(_FALLBACK_ALIASES)
+    except (OSError, ValueError):
+        return dict(_FALLBACK_ALIASES)
+
+
+ALIASES = _build_aliases()
 
 # FOREMAN_RESEARCH §15 numbering — dominated rows say "(archetypes 1-2)".
 ARCHETYPE_NUMBERS = {
@@ -346,7 +390,7 @@ _MANIFEST = None
 
 
 def load_manifest(path=None, force=False):
-    global _MANIFEST
+    global _MANIFEST, ALIASES
     if _MANIFEST is not None and not force and path is None:
         return _MANIFEST
     p = path or MANIFEST_PATH
@@ -354,6 +398,11 @@ def load_manifest(path=None, force=False):
         raise ManifestError("PyYAML not installed")
     with open(p) as f:
         data = yaml.safe_load(f)
+    # wq#1329: keep resolve_alias() in sync with whichever manifest is actually being
+    # loaded — matters for --manifest / FOREMAN_MODELS_YAML overrides and tests, where
+    # the import-time ALIASES (built from the default MANIFEST_PATH) would otherwise be
+    # stale for a rung this manifest's own parse_rung() call below is about to resolve.
+    ALIASES = _build_aliases(p, data=data)
     m = Manifest(data, p)
     if path is None:
         _MANIFEST = m

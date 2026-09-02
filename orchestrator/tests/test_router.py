@@ -44,6 +44,40 @@ def test_manifest_loads_and_self_checks(m):
     assert set(router.ARCHETYPES) <= set(m.routing)
 
 
+# ---- wq#1329 (ISSUE-LOG #127): alias table derived from models.yaml, not hand-maintained
+
+def test_every_yaml_alias_round_trips(m):
+    # every models[].alias in the manifest resolves back to that exact model's id —
+    # this is the check that would have caught #127 (fable-5-1's alias field existed
+    # in the yaml but resolve_alias('fable-5-1') passed it through unresolved because
+    # the old hardcoded ALIASES dict was never updated to match).
+    with open(MANIFEST) as f:
+        raw = yaml.safe_load(f)
+    checked = 0
+    for model in raw["models"]:
+        mid = model["id"]
+        alias = model.get("alias")
+        if alias:
+            assert router.resolve_alias(alias) == mid, \
+                f"alias {alias!r} should resolve to {mid!r}"
+            checked += 1
+        # bare family shorthand (id minus the 'claude-' prefix) must also round-trip —
+        # this is what covers fable-5-1 specifically, since its shorthand IS its alias.
+        if mid.startswith("claude-"):
+            shorthand = mid[len("claude-"):]
+            assert router.resolve_alias(shorthand) == mid, \
+                f"shorthand {shorthand!r} should resolve to {mid!r}"
+            checked += 1
+    assert checked > 0, "models.yaml had no aliases to check — test would pass vacuously"
+
+
+def test_resolve_alias_fable_5_1_specifically(m):
+    # the exact regression #127 named: fable-5-1's alias was missing from the old
+    # hardcoded dict while fable-5's was present, so only this one silently broke.
+    assert router.resolve_alias("fable-5-1") == "claude-fable-5-1"
+    assert router.resolve_alias("fable") == "claude-fable-5"
+
+
 @pytest.mark.parametrize("title,detail,lane,arch,expected", SAMPLES)
 def test_sample_tickets_route_to_expected_tuple(m, title, detail, lane, arch, expected):
     got_arch, _ = router.classify_archetype(title, detail, lane)
