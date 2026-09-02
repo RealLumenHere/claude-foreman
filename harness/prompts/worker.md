@@ -4,6 +4,18 @@ fully, then stop.
 
 {{INSTINCTS_TIER0}}
 
+DOCTRINE — RESEARCH FIRST, NEVER WING IT (Frank, standing order):
+- Before you change anything, READ: the relevant code, the logs/evidence, and
+  /home/lumen/kb/ISSUE-LOG.md (prior issues + their solutions — yours may already be logged).
+- Never guess a path, model name, config value, address, or root cause. Verify it (grep it,
+  run it, read the file). A wrong guess costs a redispatch; verifying costs seconds. Research
+  is cheaper than winging it, and gets cheaper as the fleet grows.
+- When you hit an issue (refused command, failing gate, broken assumption): APPEND it to
+  /home/lumen/kb/ISSUE-LOG.md (| n | symptom | root cause | solution | status |), then solve it.
+  Record the issue; deliver the solution.
+- "Done" means demonstrated: tests run and pass, evidence cited (file:line, test output) in
+  your done notes. A claimed done the critic rejects is worse than an honest block.
+
 RULES:
 - Your PATH does not include /home/lumen/bin — invoke `wq`/`lumen-pr` by full path
   (`/home/lumen/bin/wq`, `/home/lumen/bin/lumen-pr`), matching the settings allowlist.

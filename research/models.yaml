@@ -26,7 +26,7 @@ defaults:
 
 models:
   - id: claude-fable-5
-    alias: fable            # also `best` where available; [1m] row exists (native 1M anyway)
+    alias: fable-5            # also `best` where available; [1m] row exists (native 1M anyway)
     status: LIVE            # needs CC >=2.1.170; we run 2.1.220
     context: 1M native
     efforts: [low, medium, high, xhigh, max]
@@ -34,6 +34,29 @@ models:
     pools: [session, weekly_all, fable_weekly]
     burn:
       est: "~2x opus per in-app UI note"
+      measured_tokens: null            # see header caveat 1
+      measured: "P2 2026-08-14: fable@max emitted 263 out-tokens for a trivial prompt vs 4 for
+        opus5/sonnet5 no-effort; +1pt Fable weekly_scoped from one call.
+        wq#750 2026-08-22, n=4 launches (fable-5@high only): highest per-launch cost on the
+        fleet by a wide margin — novel-design 2/2 SUCCESS at 698.2s median wall-clock /
+        75.6s median cpu / 64 median turns, vs opus-5@high novel-design 205.4s / 17.9s.
+        standard-engineering 0/2 (both capped), which is direct support for the
+        'never a volume worker' trust line below."
+    api_price_mtok: {in: 10, out: 50}
+    quirks: ["thinking cannot be disabled", "cyber-flag -> auto-fallback opus-4-8, bio-flag -> opus-5",
+             "-p bills usage credits WITHOUT consent prompt if entitlement says credits (ours: included; stale-entitlement bug #79337 -> restart)",
+             "model-default effort hold on first run -> always pass --effort"]
+    trust: "orchestrator sessions; novel-design; escalated RCA. Never a volume worker."
+
+  - id: claude-fable-5-1
+    alias: fable            # DEFAULT fable = 5.1. Fable 5.1: large usage cut + far fewer false flags (Frank 2026-09-02)
+    status: LIVE            # needs CC >=2.1.251; we run 2.1.258 (updated 2026-09-02)
+    context: 1M native
+    efforts: [low, medium, high, xhigh, max]
+    default_effort: high
+    pools: [session, weekly_all, fable_weekly]
+    burn:
+      est: "less than fable-5 (Frank 2026-09-02: large usage cut, fewer false flags)"
       measured_tokens: null            # see header caveat 1
       measured: "P2 2026-08-14: fable@max emitted 263 out-tokens for a trivial prompt vs 4 for
         opus5/sonnet5 no-effort; +1pt Fable weekly_scoped from one call.
