@@ -1,0 +1,10 @@
+[Unit]
+Description=session-handoff — regenerate kb/SESSION-HANDOFF.md from live fleet state (wq#1294)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/lumen/bin/session-handoff
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+User=lumen
+Group=lumen
