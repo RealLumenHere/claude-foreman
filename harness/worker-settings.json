@@ -122,7 +122,9 @@
       "Read(**/.credentials.json)",
       "Read(**/claude_credentials.md)",
       "Read(/home/lumen/agent/.env)",
-      "Read(/home/lumen/.secrets/**)"
+      "Read(/home/lumen/.secrets/**)",
+      "Write(**/acceptance.json)",
+      "Edit(**/acceptance.json)"
     ]
   },
   "hooks": {
@@ -162,6 +164,10 @@
           {
             "type": "command",
             "command": "/home/lumen/foreman/harness/guard.sh --lifecycle stop"
+          },
+          {
+            "type": "command",
+            "command": "python3 /home/lumen/foreman/harness/hooks/stop_gate.py"
           }
         ]
       }

@@ -48,6 +48,7 @@ from classifier import (
     PERMISSION_LOOP,
 )
 from oom_forensics import oom_journal_evidence
+import acceptance as acceptance_mod
 import action_gate
 import agents_spec
 import fire_gate
@@ -1112,10 +1113,20 @@ def _sub_instincts_tier0(tmpl):
     return tmpl.replace("{{INSTINCTS_TIER0}}\n\n", "").replace("{{INSTINCTS_TIER0}}", "")
 
 
-def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None):
+def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None,
+                        acceptance_doc=None, rework=None):
     tmpl_path = os.path.join(HARNESS_DIR, "prompts", "worker.md")
     with open(tmpl_path) as f:
         tmpl = _sub_instincts_tier0(f.read())
+    # ISSUE-LOG #17: the done-contract (§1a) and, on a rejected attempt, the structured
+    # rework block (§1d) — which goes at the TOP, ahead of everything else, because its
+    # first rule is that the worker's first action is to re-run the repro commands.
+    contract = acceptance_mod.contract_block(acceptance_doc, worktree) if acceptance_doc else ""
+    rework_text = acceptance_mod.rework_block(rework) if rework else ""
+    for placeholder, block in (("{{ACCEPTANCE_CONTRACT}}", contract),
+                                ("{{REWORK}}", rework_text)):
+        tmpl = (tmpl.replace(placeholder, block) if block
+                else tmpl.replace(placeholder + "\n\n", "").replace(placeholder, ""))
     prior_notes = ""
     if prior_notes_path and os.path.exists(prior_notes_path):
         with open(prior_notes_path) as f:
@@ -1353,12 +1364,26 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
                                           ticket.get("title", str(ticket_id)), archetype)
 
     prior_notes_path = os.path.join(run_dir(ticket_id), "prior-attempt-notes.md")
+    # §1a: criteria are machine-checkable and pinned BEFORE the worker starts, so the
+    # prompt can carry the done-contract and the Stop hook has something to enforce.
+    acceptance_doc = pin_acceptance(ticket_id, dict(ticket, archetype=archetype),
+                                     worktree, attempt)
+    # §1d: only a LIVE rejection renders — rework.json outlives the rejection it
+    # describes (it is kept as the run's history), the marker does not.
+    rework = (acceptance_mod.read_json(
+        os.path.join(run_dir(ticket_id), acceptance_mod.REWORK_FILENAME))
+        if evidence_rejected(ticket_id) else None)
     prompt = load_worker_prompt(
         ticket_id, ticket, worktree,
         prior_notes_path if (attempt > 1 and not resume_session) else None,
+        acceptance_doc=acceptance_doc, rework=rework,
     )
 
     env = build_env(worker_id, args.model, args.effort, worktree, ticket_id)
+    # §1c: the Stop hook reads these — which ticket this session owns, and where its
+    # per-session block counter lives (capped, so it can never wedge a session).
+    env["FOREMAN_TICKET_ID"] = str(ticket_id)
+    env["FOREMAN_STOP_GATE_STATE"] = os.path.join(run_dir(ticket_id), "stop-gate.json")
     oauth_token_used = "CLAUDE_CODE_OAUTH_TOKEN" in env
     # Layers 1+3 (TIERED_INTELLIGENCE_DESIGN.md, wq#985): compile per-project
     # .fworker-rules.yaml (repo root + worktree root, additive over builtins) into
@@ -1482,6 +1507,20 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     # carries the same verdict reconcile() acts on. `raw_classification` keeps the
     # pre-verification classifier output too (e.g. DEGRADED_SUCCESS), so RCA can still
     # see WHY this got relabeled instead of just seeing FALSE_COMPLETE.
+    # ISSUE-LOG #17 §1b: the evidence replay runs FIRST, because it is the stronger
+    # check — the artifact gate below asks "did something land", this one asks "does the
+    # claim reproduce". A ticket with no pinned criteria skips it and the pre-#17
+    # behaviour stands unchanged.
+    evidence_escalated = False
+    if (classification in (SUCCESS, DEGRADED_SUCCESS)
+            and not sentinel_confirmed_block and not sentinel_confirmed_claim_error):
+        evidence_ok, evidence_escalated = verify_done(ticket_id, worktree, attempt)
+        if not evidence_ok:
+            log(f"{classification} but the harness's own replay of evidence.json did not "
+                f"reproduce the claim — ISSUE-LOG #17: done is a replay, not a claim. "
+                f"Treating as FALSE_COMPLETE.")
+            classification = FALSE_COMPLETE
+
     if (classification in (SUCCESS, DEGRADED_SUCCESS)
             and not sentinel_confirmed_block and not sentinel_confirmed_claim_error
             and not check_artifacts_done(ticket_id, worktree)):
@@ -1555,6 +1594,14 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     # wq#749: reconcile()'s SUCCESS/DEGRADED_SUCCESS branch calls `wq done` — wrong
     # for a ticket the worker itself already blocked. Terminal here, no retry, no
     # reconcile: the ticket already carries the worker's own verdict.
+    # ISSUE-LOG #17 §1d: the attempt ceiling. verify_done() has already blocked the
+    # ticket for Frank; dispatching a fourth attempt at criteria three attempts could
+    # not prove is the churn this gate exists to stop.
+    if evidence_escalated:
+        log(f"BLOCKED: wq#{ticket_id} escalated by the evidence gate — repeated attempts "
+            f"could not prove the pinned criteria. No further dispatch.")
+        return EXIT_BLOCKED
+
     if sentinel_confirmed_block:
         log(f"BLOCKED: ticket already carries the worker's own block (wq#749 sentinel "
             f"confirmed by status={sentinel_status!r}) — not a false complete, no retry.")
@@ -1615,13 +1662,179 @@ def resolve_tuple_from_ticket(args):
         args.model, args.effort = "claude-sonnet-5", args.effort or "high"
 
 
+# ---------------------------------------------------------------------------
+# evidence-gated done — ISSUE-SOLUTIONS-fable.md §1 (ISSUE-LOG #17)
+# ---------------------------------------------------------------------------
+
+REJECTION_MARKER = "evidence-rejected.json"
+
+
+def evidence_gate_on():
+    return os.environ.get("FOREMAN_EVIDENCE_GATE", "1").lower() not in ("0", "false", "no")
+
+
+def _rejection_path(ticket_id):
+    return os.path.join(run_dir(ticket_id), REJECTION_MARKER)
+
+
+def evidence_rejected(ticket_id):
+    """True once this ticket's evidence has failed replay and has not since passed.
+    check_artifacts_done() consults it so a landed-looking artifact (a commit whose
+    message names the ticket) can never resurrect a done the harness already refused."""
+    return os.path.isfile(_rejection_path(ticket_id))
+
+
+def _clear_rejection(ticket_id):
+    try:
+        os.remove(_rejection_path(ticket_id))
+    except OSError:
+        pass
+
+
+def _acceptance_model_call():
+    """The spec's one cheap model call, opt-in via FOREMAN_ACCEPTANCE_MODEL. Unset (the
+    default) means criteria are derived deterministically from the ticket text — no
+    quota spent per dispatch, and no derivation that can fail on a rate limit."""
+    model = os.environ.get("FOREMAN_ACCEPTANCE_MODEL")
+    if not model:
+        return None
+
+    def call(prompt):
+        p = subprocess.run(["claude", "-p", prompt, "--model", model],
+                           capture_output=True, text=True, timeout=180)
+        if p.returncode != 0:
+            raise RuntimeError(f"derivation model exited {p.returncode}: {p.stderr[:200]}")
+        return p.stdout
+    return call
+
+
+def pin_acceptance(ticket_id, ticket, worktree, attempt):
+    """§1a: render the ticket's machine-checkable criteria into the worktree and pin
+    them by hash in the fworker-owned run dir before the worker starts. Re-pinning on a
+    later attempt reuses the ORIGINAL doc — the goalposts do not move between attempts,
+    and a worker that edited its worktree copy gets the pinned copy back. Returns the
+    doc actually in force (None when the gate is off or nothing checkable was derived).
+    """
+    if not evidence_gate_on():
+        return None
+    rd = run_dir(ticket_id)
+    doc = acceptance_mod.pinned_doc(rd)
+    if not doc:
+        try:
+            doc = acceptance_mod.derive(dict(ticket, id=ticket_id),
+                                         model_call=_acceptance_model_call())
+        except Exception as e:
+            log(f"WARN: acceptance derivation failed ({e}) — dispatching ungated")
+            return None
+    if not doc.get("criteria"):
+        return None
+    try:
+        path, digest = acceptance_mod.pin(worktree, rd, doc)
+    except OSError as e:
+        log(f"WARN: could not pin acceptance.json ({e}) — dispatching ungated")
+        return None
+    log(f"wq#{ticket_id} attempt {attempt}: acceptance pinned {digest[:12]} "
+        f"({len(doc['criteria'])} criteria, {doc.get('derived_by')}) -> {path}")
+    return doc
+
+
+def _reclaim_after_revert(ticket_id):
+    """Undo a premature self-`wq done`. release+claim rather than a bare release: the
+    row must not sit unclaimed while this fworker is still working it, and wq bumps the
+    row's `attempt`/`fence` on the re-claim — which is exactly the attempt counter §1d
+    escalates on."""
+    if wq_show(ticket_id).get("status") == "done":
+        wq_release(ticket_id)
+        ok, msg = wq_claim(ticket_id)
+        if not ok:
+            log(f"WARN: re-claim after evidence rejection failed: {msg.strip()}")
+
+
+def verify_done(ticket_id, worktree, attempt, base_ref="origin/main"):
+    """§1b: the harness's own verdict on a done claim. Re-runs every `test` criterion
+    here and re-checks every citation against the diff; the worker's logged exit code is
+    a hint, never proof. On failure the ticket goes to rework (or, at
+    FOREMAN_EVIDENCE_MAX_ATTEMPTS row attempts, escalates to Frank) — never to done.
+
+    Returns (ok, escalated).
+    """
+    if not evidence_gate_on():
+        return True, False
+    rd = run_dir(ticket_id)
+    pinned = acceptance_mod.pinned_doc(rd)
+    if not pinned or not pinned.get("criteria"):
+        return True, False
+
+    live = acceptance_mod.read_acceptance(worktree)
+    tampered = live is not None and acceptance_mod.doc_hash(live) != acceptance_mod.doc_hash(pinned)
+    evidence = acceptance_mod.read_evidence(worktree)
+    ev_dir = os.path.join(rd, "evidence", f"attempt-{attempt}")
+    result = acceptance_mod.verify(pinned, evidence, worktree, base_ref=base_ref,
+                                    evidence_dir=ev_dir)
+    if tampered:
+        result["ok"] = False
+        result["failed"].insert(0, {
+            "id": "PIN", "text": "acceptance.json is pinned at dispatch",
+            "expected": f"sha256 {acceptance_mod.doc_hash(pinned)[:12]}",
+            "observed": f"sha256 {acceptance_mod.doc_hash(live)[:12]} — the worktree copy "
+                        f"was edited; the pinned criteria still govern",
+            "repro": f"sha256sum {os.path.join(worktree, acceptance_mod.ACCEPTANCE_FILENAME)}",
+            "output_tail": ""})
+
+    if result["ok"]:
+        _clear_rejection(ticket_id)
+        log(f"wq#{ticket_id}: evidence replay PASSED "
+            f"({len(result['checked'])} criteria re-run/re-checked by the harness)")
+        return True, False
+
+    try:
+        os.makedirs(ev_dir, exist_ok=True)
+        src = os.path.join(worktree, acceptance_mod.EVIDENCE_FILENAME)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(ev_dir, acceptance_mod.EVIDENCE_FILENAME))
+    except OSError:
+        pass
+
+    row_attempt = 0
+    try:
+        row_attempt = int(wq_show(ticket_id).get("attempt") or 0)
+    except ValueError:
+        pass
+    doc = acceptance_mod.rework_doc(ticket_id, attempt, result, prior_evidence_dir=ev_dir)
+    rework_path = acceptance_mod.write_rework(rd, doc)
+    acceptance_mod.write_json(_rejection_path(ticket_id),
+                               {"attempt": attempt, "failed": [f["id"] for f in result["failed"]]})
+    ids = ", ".join(f.get("id", "?") for f in result["failed"])
+    log(f"wq#{ticket_id}: evidence replay REJECTED (unproven: {ids}) — rework at "
+        f"{rework_path}; the claim never reaches done.")
+
+    max_attempts = _envint("FOREMAN_EVIDENCE_MAX_ATTEMPTS", 3)
+    if row_attempt >= max_attempts:
+        reason = (f"evidence gate: {row_attempt} attempts, still unproven ({ids}). "
+                  f"Machine replay of evidence.json failed each time — see {rework_path}. "
+                  f"Escalating instead of dispatching again (ISSUE-LOG #17).")
+        wq_block(ticket_id, reason)
+        ntfy("foreman evidence gate", f"wq#{ticket_id} escalated after {row_attempt} "
+                                       f"unproven attempts", priority="high")
+        return False, True
+    _reclaim_after_revert(ticket_id)
+    return False, False
+
+
 def check_artifacts_done(ticket_id, worktree):
     """RELIABILITY_SPEC.md §C10/§C12: never trust the model's own self-report (a
     result:success frame, or a silent/odd frame shape) — verify against artifacts.
     Primary: wq status==done (the worker calls `wq done` itself on a real finish, the
     most direct signal there is). Secondary corroboration: a commit on the default
     branch referencing the ticket, for the case where real work landed but the worker
-    died/got cut off before it could close the ticket itself."""
+    died/got cut off before it could close the ticket itself.
+
+    ISSUE-LOG #17: a ticket whose evidence already failed harness replay is never
+    "confirmed by artifacts" — a landed-looking commit message is exactly the artifact a
+    FALSE_COMPLETE produces, and letting it back in here would hand the rejected claim a
+    second door into `done`."""
+    if evidence_rejected(ticket_id):
+        return False
     cur = wq_show(ticket_id)
     if cur.get("status") == "done":
         return True
@@ -1903,6 +2116,20 @@ def trigger_refill(ticket_id, outcome):
             f"{(p.stderr or p.stdout).strip()}")
 
 
+def cmd_verify_evidence(args):
+    """Read-only replay: same verdict fworker will reach, minus the state transition."""
+    pinned = (acceptance_mod.pinned_doc(run_dir(args.ticket))
+              or acceptance_mod.read_acceptance(args.worktree))
+    if not pinned or not pinned.get("criteria"):
+        print(json.dumps({"ok": True, "reason": "no pinned acceptance criteria"}))
+        return EXIT_OK
+    result = acceptance_mod.verify(
+        pinned, acceptance_mod.read_evidence(args.worktree), args.worktree,
+        base_ref=args.base_ref)
+    print(json.dumps(result, indent=2))
+    return EXIT_OK if result["ok"] else EXIT_BLOCKED
+
+
 def main():
     ap = argparse.ArgumentParser(description="fworker — per-ticket claude -p supervisor")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1928,6 +2155,16 @@ def main():
     p_run.add_argument("--claude-bin", default="/home/lumen/.npm-global/bin/claude",
                         help="override for testing against a fake claude shim")
     p_run.set_defaults(func=cmd_run)
+
+    # ISSUE-LOG #17: the same replay fworker runs after the child exits, exposed so a
+    # worker (or a critic) can self-check BEFORE claiming done. Read-only — it never
+    # touches the wq row.
+    p_ver = sub.add_parser("verify-evidence",
+                           help="replay evidence.json against the pinned acceptance.json")
+    p_ver.add_argument("--ticket", type=int, required=True)
+    p_ver.add_argument("--worktree", required=True)
+    p_ver.add_argument("--base-ref", default="origin/main")
+    p_ver.set_defaults(func=cmd_verify_evidence)
 
     args = ap.parse_args()
     rc = args.func(args)

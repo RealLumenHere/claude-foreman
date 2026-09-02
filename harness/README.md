@@ -296,6 +296,45 @@ every node repo picks it up on its next dispatch — closed by profile, not by d
 Currently declared: `foreman` (python+shell), `pokemon` (node-ts+shell), `mailbot`
 (node-ts+python).
 
+## Evidence-gated done (wq#1289, ISSUE-SOLUTIONS-fable.md §1, ISSUE-LOG #17)
+
+`done` is a state transition the harness performs after it has observed the evidence
+itself, not a claim the model makes. `acceptance.py` holds the logic; `fworker.py` and
+`hooks/stop_gate.py` are the two wiring points.
+
+    dispatch     pin_acceptance()  derives criteria from the ticket and writes
+                 acceptance.json into the worktree, pinning doc+hash in _runs/wq<ID>/
+                 (which the worker's settings do not reach). The prompt gains the
+                 done-contract; settings deny Write/Edit on acceptance.json.
+    during       hooks/stop_gate.py (Stop hook) refuses to let the session end while
+                 evidence.json is missing an entry for a pinned criterion. Capped at 3
+                 blocks per session — it is a nudge, not a wall, and fails OPEN.
+    after exit   verify_done() re-runs every `proof_type: test` criterion itself and
+                 re-checks every `citation` against `git diff`. A claimed exit code is a
+                 hint; the harness's own observation decides.
+    on failure   rework.json (failed criteria, repro commands, the harness's own replay
+                 output tail) lands in the run dir, the row is reverted out of `done` and
+                 re-claimed, and the next attempt renders the rework block at the TOP of
+                 the prompt: re-run the repros first, do not re-assert the rejected claim.
+                 At `attempt >= FOREMAN_EVIDENCE_MAX_ATTEMPTS` (3) it escalates to Frank
+                 (`wq block`) instead of dispatching again.
+
+Criteria are derived deterministically from the ticket text (commands the ticket names
+become `test` criteria; a code ticket always gets one "cite file:line inside the diff"
+criterion). Set `FOREMAN_ACCEPTANCE_MODEL=<model>` to add the spec's cheap model
+derivation pass in front of it — its output is validated and any criterion the harness
+cannot replay is dropped, so a hallucinated command costs a criterion, not a stuck gate.
+Replay is argv-only against an allowlist of test-runner binaries (`acceptance.replayable`)
+— ticket text is not a trusted script. `FOREMAN_EVIDENCE_GATE=0` disables the whole
+mechanism without a code change.
+
+Self-check, same replay, no state transition:
+
+    python3 harness/fworker.py verify-evidence --ticket <id> --worktree <path>
+
+Tickets whose deliverable is a document rather than a diff (`verify-pass`,
+`rca-investigation`, `fire-response`, research) derive no criteria and stay ungated.
+
 ## harness-preflight + dispatch stamp gate (wq#1259, ISSUE-SOLUTIONS-fable.md §2c)
 
 Two layers, both in `harness_preflight.py`, driven by `./harness-preflight <repo>`

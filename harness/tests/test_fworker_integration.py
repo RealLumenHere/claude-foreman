@@ -124,6 +124,40 @@ def test_success_end_to_end_closes_ticket_and_isolates_worktree(tmp_path):
     assert all(l["effort"] == "high" for l in lines if l["event"] in ("start", "stop", "end"))
 
 
+def test_evidence_gate_end_to_end_a_proofless_done_becomes_rework(tmp_path):
+    """ISSUE-LOG #17 / ISSUE-SOLUTIONS-fable.md §1, on the real dispatch path: a worker
+    that does the `wq done` dance but proves nothing does not get to keep `done`. The
+    only difference from the passing test above is FAKE_CLAUDE_NO_EVIDENCE."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
+        tmp_path, 0, "success", extra={"FAKE_CLAUDE_NO_EVIDENCE": "1"})
+    ticket_id = wq_add(env, "scratch ticket whose worker proves nothing")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success")
+    assert wq_status(env, ticket_id) != "done", result.stdout + result.stderr
+
+    # the criteria were pinned outside the worktree, and the rejection is on the record
+    # with a repro the next attempt can run.
+    run_dir = os.path.join(runs_root, f"wq{ticket_id}")
+    assert os.path.isfile(os.path.join(run_dir, "acceptance-pin.json"))
+    with open(os.path.join(run_dir, "rework.json")) as f:
+        rework = json.load(f)
+    assert rework["failed"] and rework["failed"][0]["observed"] == "missing"
+    assert json.load(open(os.path.join(runs_root, f"wq{ticket_id}",
+                                        "attempt-1.json")))["classification"] == "FALSE_COMPLETE"
+
+    # …and the compliant worker (same scenario, evidence written) still closes cleanly.
+    env2, _db2, _ev2, runs2, _wt2, _st2 = make_scratch_env(tmp_path, 0, "success")
+    env2["WQ_DB"] = env["WQ_DB"]
+    ticket2 = wq_add(env2, "scratch ticket whose worker proves it")
+    env2["FAKE_CLAUDE_TICKET"] = str(ticket2)
+    r2 = run_fworker(env2, ticket2, repo, "success")
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert wq_status(env2, ticket2) == "done"
+    assert not os.path.isfile(os.path.join(runs2, f"wq{ticket2}", "rework.json"))
+
+
 def test_denied_verb_blocked_at_hook_during_real_spawn(tmp_path):
     repo = make_scratch_repo(tmp_path)
     env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(

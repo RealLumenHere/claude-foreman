@@ -11,6 +11,7 @@ worker does — so fworker's reconcile() sees a genuinely closed ticket.
 """
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -40,6 +41,32 @@ def fire_lifecycle(phase, session_id, effort):
     env = dict(os.environ)
     subprocess.run([GUARD_SH, "--lifecycle", phase], input=payload,
                     capture_output=True, text=True, env=env)
+
+
+def satisfy_acceptance():
+    """ISSUE-LOG #17: model a COMPLIANT worker — make a real change, then record
+    evidence for every pinned criterion, running the test commands for real. Set
+    FAKE_CLAUDE_NO_EVIDENCE=1 to model the worker the evidence gate exists to catch:
+    one that claims done and proves nothing."""
+    if os.environ.get("FAKE_CLAUDE_NO_EVIDENCE"):
+        return
+    try:
+        with open("acceptance.json") as f:
+            criteria = json.load(f).get("criteria") or []
+    except (OSError, ValueError):
+        return
+    change = "fake_worker_change.txt"
+    with open(change, "w") as f:
+        f.write("the change this fake worker made\nsecond line\n")
+    entries = []
+    for c in criteria:
+        if c.get("proof_type") == "test":
+            p = subprocess.run(shlex.split(c["cmd"]), capture_output=True, text=True)
+            entries.append({"id": c["id"], "cmd_run": c["cmd"], "exit_code": p.returncode})
+        else:
+            entries.append({"id": c["id"], "citation": f"{change}:1-2"})
+    with open("evidence.json", "w") as f:
+        json.dump({"criteria": entries}, f)
 
 
 def main():
@@ -78,6 +105,7 @@ def main():
     if scenario == "no_init_instant_exit":
         sys.exit(2)
 
+    satisfy_acceptance()
     fire_lifecycle("start", session_id, effort)
 
     emit({"type": "system", "subtype": "init", "session_id": session_id, "model": model,
