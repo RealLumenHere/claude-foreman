@@ -505,6 +505,24 @@ PRIMARY_MUST_BLOCK = [
     ({"command": "git merge --ff-only origin/feat/x"}, PRIMARY),  # non-default target
     ({"command": f"git -C {PRIMARY} merge --no-ff origin/main"}, WORKTREE),
     ({"command": "git merge --ff-only origin/main && git checkout feat/x"}, PRIMARY),
+    # wq#1316: wq#1285's `merge([[:space:]]|$)` terminator only accepted a space
+    # or end-of-string, so every space-free way bash lets the merge token end ran
+    # unblocked in a primary. One case per terminator bash actually accepts.
+    ({"command": "git merge;true"}, PRIMARY),
+    ({"command": "git merge>foo"}, PRIMARY),
+    ({"command": "git merge<foo"}, PRIMARY),
+    ({"command": "git merge&"}, PRIMARY),
+    ({"command": "(git merge)"}, PRIMARY),
+    ({"command": 'bash -c "git merge"'}, PRIMARY),
+    ({"command": f'bash -c "cd {PRIMARY} && git merge"'}, WORKTREE),
+    # wq#1316: the ff-only carve-out is per shell segment — one sanctioned
+    # fast-forward must not launder an un-sanctioned merge later in the line.
+    ({"command": "git merge --ff-only origin/main && git merge evil"}, PRIMARY),
+    ({"command": "git merge --ff-only origin/main; git merge evil"}, PRIMARY),
+    ({"command": "git merge --ff-only origin/main | git merge evil"}, PRIMARY),
+    # near-miss branch names must not ride the carve-out's terminator class
+    ({"command": "git merge --ff-only origin/mainline"}, PRIMARY),
+    ({"command": "git merge --ff-only origin/main-deploy"}, PRIMARY),
     # wq#1256 (#19): git clean -f/--force is as destructive as checkout/reset
     ({"command": "git clean -f"}, PRIMARY),
     ({"command": "git clean -fd"}, PRIMARY),
@@ -555,6 +573,14 @@ PRIMARY_MUST_ALLOW = [
     ({"command": "git merge-base --is-ancestor abc123 origin/main"}, PRIMARY),
     ({"command": "git merge-base main origin/main"}, PRIMARY),
     ({"command": "git merge-tree main origin/main"}, PRIMARY),
+    # wq#1316: the plumbing family stays allowed under the hyphen-aware
+    # terminator, and the sanctioned deploy ff still passes when the segment
+    # ends in something other than a bare space/EOL.
+    ({"command": "git merge-file a.txt base.txt b.txt"}, PRIMARY),
+    ({"command": "git merge-base --is-ancestor abc123 origin/main; echo done"}, PRIMARY),
+    ({"command": "git merge --ff-only origin/main;"}, PRIMARY),
+    ({"command": 'bash -c "git merge --ff-only origin/main"'}, PRIMARY),
+    ({"command": "git merge --ff-only origin/main && git log --oneline -1"}, PRIMARY),
 ]
 
 

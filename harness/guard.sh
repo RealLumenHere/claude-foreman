@@ -169,22 +169,43 @@ Bash)
     # until it was reconciled. Commit-creating verbs are denied for the same reason
     # branch-moving ones are: content reaches a primary only by fast-forwarding onto
     # origin/<default>, which means only after review.
+    #
+    # wq#1316: split the command into shell segments FIRST, then run each verb
+    # detector against one segment at a time. The old shape was a single
+    # whole-string regex that faked segmentation with `[^|;&]*` between `git`
+    # and the verb, and that leaked two ways (both reproduced live against the
+    # shipped guard, report reports/1309_guard_merge_regex_verify.md):
+    #   1. the ff-only carve-out was a whole-string negation, so ONE sanctioned
+    #      `git merge --ff-only origin/main && git merge evil` suppressed the
+    #      block for the un-sanctioned second command;
+    #   2. the terminator set had to be hand-maintained, and wq#1285's
+    #      `merge([[:space:]]|$)` omitted every space-free terminator bash
+    #      accepts — `git merge;true`, `git merge>foo`, `git merge&`,
+    #      `(git merge)`, `bash -c "git merge"` all ran unblocked in a primary.
+    # Segmenting makes the carve-out apply only to the segment that earned it,
+    # and lets the merge word end at a segment boundary instead of needing `;`
+    # `&` `|` `(` `)` spelled into the regex.
     GIT_MOVE=0
-    if printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\b(checkout|switch|restore|reset|rebase|pull|commit|cherry-pick|revert|am)\b'; then
-      GIT_MOVE=1
-    # wq#1285: \bmerge\b alone also matches the read-only plumbing verbs
-    # merge-base/merge-tree/merge-file (the word boundary sits on the hyphen),
-    # so a diagnostic `git merge-base --is-ancestor` — the exact primitive
-    # sync-live and this guard's own #19 spec use to verify a commit landed —
-    # was tripping the branch-moving-verb block in a primary tree. Require
-    # `merge` to stand alone (followed by whitespace or end of string) before
-    # treating it as the branch-moving `git merge`.
-    elif printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bmerge([[:space:]]|$)' \
-        && ! printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bmerge +--ff-only +origin/(main|master)([[:space:]]|$)'; then
-      GIT_MOVE=1
-    elif printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bclean\b[^|;&]*(-[a-zA-Z]*f[a-zA-Z]*\b|--force\b)'; then
-      GIT_MOVE=1
-    fi
+    while IFS= read -r seg; do
+      [ -n "$seg" ] || continue
+      if printf '%s' "$seg" | grep -qE '\bgit\b.*\b(checkout|switch|restore|reset|rebase|pull|commit|cherry-pick|revert|am)\b'; then
+        GIT_MOVE=1
+      # wq#1285: \bmerge\b alone also matches the read-only plumbing verbs
+      # merge-base/merge-tree/merge-file (the word boundary sits on the hyphen),
+      # so a diagnostic `git merge-base --is-ancestor` — the exact primitive
+      # sync-live and this guard's own #19 spec use to verify a commit landed —
+      # was tripping the branch-moving-verb block in a primary tree. `merge` is
+      # the branch-moving verb only when the next character ends the word AND is
+      # not a hyphen; that excludes the whole merge-* plumbing family without
+      # enumerating which characters may follow.
+      elif printf '%s' "$seg" | grep -qE '\bgit\b.*\bmerge($|[^-[:alnum:]_])' \
+          && ! printf '%s' "$seg" | grep -qE '\bgit\b.*\bmerge +--ff-only +origin/(main|master)($|[^-[:alnum:]_./])'; then
+        GIT_MOVE=1
+      elif printf '%s' "$seg" | grep -qE '\bgit\b.*\bclean\b.*(-[a-zA-Z]*f[a-zA-Z]*\b|--force\b)'; then
+        GIT_MOVE=1
+      fi
+      if [ "$GIT_MOVE" = 1 ]; then break; fi
+    done <<< "$(printf '%s' "$target" | tr '|;&()' '\n\n\n\n\n')"
     if [ "$GIT_MOVE" = 1 ]; then
       HOOK_CWD=$(jfield '.cwd')
       IFS=':' read -ra PT_ARR <<< "$PRIMARY_TREES"
