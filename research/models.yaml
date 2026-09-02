@@ -26,7 +26,7 @@ defaults:
 
 models:
   - id: claude-fable-5
-    alias: fable-5            # also `best` where available; [1m] row exists (native 1M anyway)
+    alias: fable            # DEFAULT fable = 5.0 (reverted 2026-09-02, ISSUE-LOG #38: 5.1 usage unmeasured, may burn MORE). also `best` where available; [1m] row exists (native 1M anyway)
     status: LIVE            # needs CC >=2.1.170; we run 2.1.220
     context: 1M native
     efforts: [low, medium, high, xhigh, max]
@@ -49,14 +49,14 @@ models:
     trust: "orchestrator sessions; novel-design; escalated RCA. Never a volume worker."
 
   - id: claude-fable-5-1
-    alias: fable            # DEFAULT fable = 5.1. Fable 5.1: large usage cut + far fewer false flags (Frank 2026-09-02)
+    alias: fable-5-1        # NOT the default. 5.1-vs-5.0 usage is OPEN until measured (ISSUE-LOG #38); Frank observed 5.1 may burn MORE
     status: LIVE            # needs CC >=2.1.251; we run 2.1.258 (updated 2026-09-02)
     context: 1M native
     efforts: [low, medium, high, xhigh, max]
     default_effort: high
     pools: [session, weekly_all, fable_weekly]
     burn:
-      est: "less than fable-5 (Frank 2026-09-02: large usage cut, fewer false flags)"
+      est: "UNMEASURED vs fable-5 — do not assert a usage cut until usage-*.json records model+tokens (ISSUE-LOG #38)"
       measured_tokens: null            # see header caveat 1
       measured: "P2 2026-08-14: fable@max emitted 263 out-tokens for a trivial prompt vs 4 for
         opus5/sonnet5 no-effort; +1pt Fable weekly_scoped from one call.
