@@ -83,7 +83,14 @@
       "Bash(gh run view*)",
       "Bash(gh run list*)",
       "Bash(gh issue view*)",
-      "Bash(gh issue list*)"
+      "Bash(gh issue list*)",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(npx tsx *)",
+      "Bash(./node_modules/.bin/*)",
+      "Bash(bash scripts/*)",
+      "Bash(npm ci)",
+      "Bash(npm install)"
     ],
     "deny": [
       "Bash(*reboot*)",
