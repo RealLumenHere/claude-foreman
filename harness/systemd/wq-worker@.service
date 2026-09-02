@@ -1,0 +1,61 @@
+# wq-worker@.service — one worker PROCESS per node slot (wq#1182).
+#
+# WHY: harness/README.md "Build-time discovery vs the design" (wq#616) already flags that
+# T2a's original "one cloud worker at a time" note was never a real refusal check — T2b
+# replaced it with concurrency.py's count-then-spawn cap (start 2, ceiling 3). A count-then-
+# spawn cap is a TOCTOU by construction: wq#1116's own residual-risk section says it plainly
+# ("no per-instance signal exists" at wq's chokepoint) for the ticket-claim collision, and
+# the identical shape applies one layer up, at PROCESS launch — two racing dispatch passes
+# (or a manual `lumen-run start` racing the timer) can both read "room for one more" and both
+# spawn, landing two `fworker` processes under one node's single worker slot at once. wq
+# itself still refuses the SECOND one's `wq claim --id` on the live lease (§9 of
+# dispatcher/DESIGN.md), so no ticket is ever double-worked — but the wasted process, the
+# doubled local CPU/model load on a node sized for one, and (if the race lands on the SAME
+# ticket before either claims) a doubled claim attempt are exactly the "double-WORKER" half
+# the wq#1158 follow-up review flagged as still open.
+#
+# This template is the OS-level backstop: independent of wq, of concurrency.py's count, and
+# of whatever triggered the start (systemd timer, a manual `systemctl start`, a future
+# dispatcher wired to target it directly). `%i` is the node's worker-slot number, not a
+# ticket id — a node offers a FIXED, small number of slots (usually one: `wq-worker@1`), and
+# capacity is added by an operator explicitly enabling `@2`, `@3`, ... never by this unit
+# scaling itself. The flock is what makes "fixed count" a fact instead of a policy:
+#
+#   ExecStartPre=... flock -n LOCK -c true     -- fails fast, logged, BEFORE ExecStart even
+#                                                  starts, if slot %i's lock is already held.
+#                                                  This flock call acquires-and-releases in
+#                                                  the instant `true` returns, so on its own
+#                                                  it would NOT catch a second start racing
+#                                                  in mid-run -- it is a cheap pre-flight echo
+#                                                  of ExecStart's OWN lock below, not the
+#                                                  enforcement.
+#   ExecStart=...    flock -n LOCK wq_worker_slot.sh %i   -- THIS is the enforcement: the
+#                                                  lock is held by the ExecStart process for
+#                                                  the run's entire lifetime, so a genuinely
+#                                                  concurrent second attempt's ExecStartPre
+#                                                  (or ExecStart) sees it held and refuses,
+#                                                  no matter what started it or when.
+#
+# Deliberately NOT wired into dispatcher/foreman_dispatcher.py or harness/spawner.py by this
+# ticket — that means changing the live spawn path (`lumen-run start --name fworker-wq<ID>`
+# -> a slot-targeted `systemctl start wq-worker@<slot>`), which is real integration risk this
+# ticket cannot validate against the live fleet. See harness/WORKER_SLOT.md.
+[Unit]
+Description=Lumen wq build worker — node slot %i (wq#1182 one-worker-per-node)
+Documentation=file:///home/lumen/foreman/harness/WORKER_SLOT.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+Environment=WQ_WORKER_LOCK_DIR=/home/lumen/.locks
+WorkingDirectory=/home/lumen/foreman
+# Per-slot job description, written by whatever triggers this slot before each start.
+# `-` = missing file is not an error; wq_worker_slot.sh refuses loudly on missing TICKET_ID.
+EnvironmentFile=-/home/lumen/.locks/wq-worker-%i.env
+ExecStartPre=/usr/bin/flock -n ${WQ_WORKER_LOCK_DIR}/wq-worker-%i.lock -c true
+ExecStart=/usr/bin/flock -n ${WQ_WORKER_LOCK_DIR}/wq-worker-%i.lock /home/lumen/foreman/harness/wq_worker_slot.sh %i
+TimeoutStartSec=0
+TimeoutStopSec=90
+Restart=no

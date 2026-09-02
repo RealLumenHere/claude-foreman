@@ -35,6 +35,9 @@ below.
     guard.sh                PreToolUse fail-closed guard (§5)
     fire_gate.py             wq#717 (AUTO-5): fleet-fires manual-approval safety core
                              (FIRE_MODE.md) — plan/approval file IO, drift/timeout checks
+    systemd/wq-worker@.service  wq#1182: one-worker-per-node-slot template, flock-guarded
+                             (WORKER_SLOT.md)
+    wq_worker_slot.sh        wq#1182: ExecStart body for wq-worker@.service
     prompts/worker.md       worker prompt template
     prompts/fire-diagnosis.md, prompts/fire-apply.md   fire-mode phase prompts (FIRE_MODE.md)
     tests/                  pytest suite (zero Anthropic quota)
