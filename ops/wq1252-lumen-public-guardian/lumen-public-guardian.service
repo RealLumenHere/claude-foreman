@@ -14,6 +14,12 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=lumen
+# S2 reads lumen-pokemon-live's journal; name the journal-reading groups
+# explicitly rather than relying on whatever the unit context inherits.
+# (Journal reads can still come back empty for reasons other than permissions
+# — journald vacuuming is one, observed on this host — which is exactly why S2
+# does not treat a quiet journal as a stall on its own.)
+SupplementaryGroups=adm systemd-journal
 WorkingDirectory=/home/lumen/services/lumen-public-guardian
 ExecStart=/usr/bin/python3 /home/lumen/services/lumen-public-guardian/guardian.py run
 ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n

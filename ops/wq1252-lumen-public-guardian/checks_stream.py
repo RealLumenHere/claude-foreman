@@ -199,17 +199,22 @@ def check_s3_tunnel(cfg):
 
 
 def heal_restart_live(cfg, dry_run=False):
-    return run_heal(["sudo", "systemctl", "restart", _cfg(cfg)["unit"]],
+    return run_heal(["sudo", "/usr/bin/systemctl", "restart", _cfg(cfg)["unit"]],
                     timeout=120, dry_run=dry_run)
 
 
 def heal_restart_cloudflared(cfg, dry_run=False):
-    """Detached via systemd-run: restarting cloudflared from a unit that is
-    itself reached over the tunnel kills its own parent otherwise (instinct 4
-    — cloudflared changes go through detached systemd-run, never foreground)."""
-    unit = f"lpg-cfd-restart-{int(time.time())}"
-    return run_heal(["sudo", "systemd-run", "--collect", "--unit", unit,
-                     "/bin/systemctl", "restart", _cfg(cfg)["cloudflared_unit"]],
+    """Detached via systemd-run: restarting cloudflared from a process whose own
+    route out runs over that tunnel otherwise kills the restarter (instinct 4 —
+    cloudflared changes go through detached systemd-run, never foreground).
+
+    systemd names the transient unit itself. Passing --unit with a timestamp
+    would need a sudoers wildcard, and sudoers refuses wildcards in command
+    arguments; a fixed name would collide with a restart still in flight.
+    """
+    return run_heal(["sudo", "/usr/bin/systemd-run", "--collect",
+                     "/usr/bin/systemctl", "restart",
+                     _cfg(cfg)["cloudflared_unit"]],
                     timeout=60, dry_run=dry_run)
 
 

@@ -155,8 +155,8 @@ report.
 
 ### Stream heal ladder (automatic, in this order)
 
-1. `sudo systemctl restart lumen-pokemon-live.service`
-2. `sudo systemd-run --collect --unit lpg-cfd-restart-<ts> /bin/systemctl restart cloudflared.service`
+1. `sudo /usr/bin/systemctl restart lumen-pokemon-live.service`
+2. `sudo /usr/bin/systemd-run --collect /usr/bin/systemctl restart cloudflared.service`
    — detached on purpose: the guardian's own route out runs over that tunnel,
    so a foreground restart can kill the process doing the restarting.
 3. still red → this fire.

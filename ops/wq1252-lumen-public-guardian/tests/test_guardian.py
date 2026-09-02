@@ -178,14 +178,30 @@ def test_heal_allowlist_refuses_unlisted_commands():
     with pytest.raises(guardian.HealNotAllowed):
         guardian.run_heal(["sudo", "reboot"])
     with pytest.raises(guardian.HealNotAllowed):
-        guardian.run_heal(["sudo", "systemctl", "stop", "cloudflared.service"])
+        guardian.run_heal(["sudo", "/usr/bin/systemctl", "stop",
+                           "cloudflared.service"])
+    # A different unit on an allowed verb must also be refused — the entries
+    # are complete argv, not open-ended prefixes.
+    with pytest.raises(guardian.HealNotAllowed):
+        guardian.run_heal(["sudo", "/usr/bin/systemctl", "restart", "vaultwarden"])
 
 
 def test_heal_allowlist_permits_the_listed_stream_heals():
     ok, out = guardian.run_heal(
-        ["sudo", "systemctl", "restart", "lumen-pokemon-live.service"],
+        ["sudo", "/usr/bin/systemctl", "restart", "lumen-pokemon-live.service"],
         dry_run=True)
     assert ok and "dry-run" in out
+
+
+def test_every_heal_the_checks_can_run_is_allowlisted():
+    """A heal that is not in HEAL_ALLOWLIST raises at the worst possible moment
+    — mid-incident. Assert the two shapes the check modules actually build."""
+    cfg = json.load(open(os.path.join(SRC, "config.json")))
+    for fn in (checks_stream.heal_restart_live,
+               checks_stream.heal_restart_cloudflared,
+               checks_email.heal_sync):
+        ok, out = fn(cfg, dry_run=True)
+        assert ok, out
 
 
 def test_cloudflared_heal_goes_through_detached_systemd_run():

@@ -47,10 +47,20 @@ UNCONFIGURED = "unconfigured"   # check cannot run — missing credential/path
 # "heals only via listed commands, anything else -> fire ticket + research", so
 # this is a prefix allowlist checked at call time, not a convention. Adding a
 # heal means editing this table and the runbook together.
+# Absolute paths, and complete argv rather than an open-ended prefix, because
+# these same strings are the sudoers rules: an entry that ends in a bare verb
+# would grant "restart anything". Changing a unit name in config.json without
+# updating this table makes the heal refuse and open a fire ticket — which is
+# the intended failure direction.
 HEAL_ALLOWLIST = [
-    ["sudo", "systemctl", "restart", "lumen-pokemon-live.service"],
-    ["sudo", "systemd-run", "--collect", "--unit"],   # cloudflared restart (instinct 4)
+    ["sudo", "/usr/bin/systemctl", "restart", "lumen-pokemon-live.service"],
+    # cloudflared goes through detached systemd-run (instinct 4). No --unit:
+    # sudoers rejects wildcards in command arguments, and a fixed unit name
+    # would collide with an in-flight restart.
+    ["sudo", "/usr/bin/systemd-run", "--collect", "/usr/bin/systemctl",
+     "restart", "cloudflared.service"],
     ["npx", "wrangler", "d1", "migrations", "apply"],
+    ["npx", "wrangler", "d1", "export"],
     ["npx", "wrangler", "rollback"],
     ["/usr/bin/python3", "/home/lumen/mailbot/mail_recall.py", "sync"],
 ]

@@ -326,8 +326,19 @@ def check_e2_roundtrip(cfg):
     inbound, outbound = match_roundtrip(rows, tokens, e.get("roundtrip_s", 300))
     if inbound and outbound:
         _promote_validated(cfg)
+        _arm_probe(cfg)
         return Result("E2-roundtrip", OK,
                       f"probe {inbound['ts']} replied at {outbound['ts']}")
+
+    # Until one round trip has ever completed, the probe worker simply is not
+    # deployed yet: that is UNCONFIGURED (daily nag, no heals, no fire), not an
+    # outage. Once armed it never disarms, so a probe that stops working after
+    # it has worked once is a real RED.
+    if not _version_state(cfg).get("probe_armed"):
+        return Result("E2-roundtrip", UNCONFIGURED,
+                      "no probe round trip has ever completed — lumen-mail-probe "
+                      "is not deployed yet (runbook: UNCONFIGURED table)")
+
     if inbound and not outbound:
         return Result("E2-roundtrip", RED,
                       f"probe mail arrived at {inbound['ts']} but no reply stored "
@@ -341,6 +352,13 @@ def check_e2_roundtrip(cfg):
                   {"rows_seen": len(rows)})
 
 
+def _arm_probe(cfg):
+    """Record that the round trip has worked at least once."""
+    vstate = _version_state(cfg)
+    if not vstate.get("probe_armed"):
+        _write_version_state(cfg, {**vstate, "probe_armed": True})
+
+
 def _promote_validated(cfg):
     """A green round trip is what makes the live version trustworthy — and what
     gives E2's rollback a last-good target to roll back TO."""
@@ -349,8 +367,11 @@ def _promote_validated(cfg):
     if not pending or pending == vstate.get("validated_version"):
         return
     _write_version_state(cfg, {
+        **vstate,
         "validated_version": pending,
         "previous_validated": vstate.get("validated_version"),
+        "pending_version": None,
+        "pending_since": None,
         "seen_at": time.time(),
     })
 
