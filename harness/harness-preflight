@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""harness-preflight <repo> — ISSUE-SOLUTIONS-fable.md §2c CLI.
+
+Prove a worker can run `repo`'s declared build/test/probe commands under its rendered
+permission profile before a wave dispatches to it. Exit 0 + a written stamp on a clean
+proof; exit 1 (no stamp written/updated) otherwise, with the static-lint failures or
+live-proof denials printed.
+
+    harness-preflight /home/lumen/foreman
+    harness-preflight --all          # every repo with a repos.d/<repo>.json entry
+"""
+import argparse
+import json
+import os
+import sys
+
+HARNESS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HARNESS_DIR)
+import harness_preflight  # noqa: E402
+import permission_profiles  # noqa: E402
+
+
+def _all_repo_paths():
+    """Repo path for every permission-profiles/repos.d/<name>.json entry, resolved
+    against LANE_REPO so the stamp is written under the same path the dispatcher will
+    look it up by. A repo name with no LANE_REPO match falls back to /home/lumen/<name>
+    — the same convention repo_sweep.py's managed-set uses."""
+    sys.path.insert(0, os.path.join(os.path.dirname(HARNESS_DIR), "orchestrator"))
+    import router  # noqa: E402
+    by_name = {permission_profiles.repo_name(p): p for p in router.LANE_REPO.values()}
+    names = sorted(f[:-len(".json")] for f in os.listdir(permission_profiles.REPOS_DIR)
+                    if f.endswith(".json"))
+    return [by_name.get(name, f"/home/lumen/{name}") for name in names]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("repo", nargs="?", help="repo path, e.g. /home/lumen/foreman")
+    ap.add_argument("--all", action="store_true",
+                     help="preflight every repo with a repos.d/<repo>.json entry")
+    ap.add_argument("--claude-bin", default="claude")
+    ap.add_argument("--model", default=harness_preflight.CHEAPEST_MODEL)
+    args = ap.parse_args()
+
+    if bool(args.repo) == bool(args.all):
+        ap.error("pass exactly one of <repo> or --all")
+
+    repos = _all_repo_paths() if args.all else [args.repo]
+    ok = True
+    for repo in repos:
+        result = harness_preflight.preflight(repo, claude_bin=args.claude_bin, model=args.model)
+        print(json.dumps(result.to_dict(), indent=2))
+        ok = ok and result.ok
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()

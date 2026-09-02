@@ -1,5 +1,6 @@
 {
   "profiles": ["base", "node-ts", "shell"],
   "extra_allow": [],
-  "verbs": []
+  "verbs": [],
+  "preflight_cmds": ["npx tsc --version", "node --version"]
 }

@@ -57,6 +57,7 @@ import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
 import runaway          # noqa: E402
 import psi_pressure     # noqa: E402  # wq#844
+import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -743,6 +744,16 @@ def _do_pass(cfg, log, state, dry_run):
                      detail=f"{len(cloud)} cloud unit(s) at ceiling "
                             f"{cfg['cloud_ceiling']}; next tick retries")
             break
+
+        # stage 9b — harness-preflight stamp (§2c): a wave must not discover a
+        # permission gap three hours in when a two-minute preflight would have caught
+        # it before the first spawn. Unmigrated repos (no repos.d/<repo>.json) pass
+        # through unchanged — same additive-migration boundary permission_profiles.py
+        # draws for the render-at-dispatch pack itself.
+        preflight_ok, preflight_reason = harness_preflight.dispatch_gate_check(repo)
+        if not preflight_ok:
+            log.skip(tid, lane, "preflight", "no_fresh_stamp", detail=preflight_reason)
+            continue
 
         # stage 10 — spawn via the existing stack (MUST 7: router owns repo + tuple)
         if dry_run:

@@ -1,5 +1,7 @@
 {
   "profiles": ["base", "python", "shell"],
   "extra_allow": [],
-  "verbs": []
+  "verbs": [],
+  "preflight_cmds": ["python3 -m pytest harness/tests/test_harness_preflight.py -q",
+                      "python3 --version"]
 }

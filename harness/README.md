@@ -291,11 +291,42 @@ An allowlist gap discovered in one node repo is now fixed once in `node-ts.json`
 every node repo picks it up on its next dispatch — closed by profile, not by discovery.
 
 Currently declared: `foreman` (python+shell), `pokemon` (node-ts+shell), `mailbot`
-(node-ts+python). `harness-preflight` (ISSUE-SOLUTIONS-fable.md §2c, not built yet) is
-the intended dispatch-time gate that proves a repo's rendered profile has no gaps before
-a wave runs against it, and the place a render-hash-on-the-wq-row stamp belongs; §2b
-only renders and logs the hash (`resolve_worker_settings` logs
-`rendered permission profile <hash> -> <path>`), it doesn't gate dispatch on it.
+(node-ts+python).
+
+## harness-preflight + dispatch stamp gate (wq#1259, ISSUE-SOLUTIONS-fable.md §2c)
+
+Two layers, both in `harness_preflight.py`, driven by `./harness-preflight <repo>`
+(or `--all`):
+
+1. `static_lint()` — offline, zero quota. Each repo's `preflight_cmds`
+   (`repos.d/<repo>.json`) plus every `verbs` entry plus one repo-agnostic worst-case
+   compound (`INSPECTION_PIPE_PROBE`, proving the base profile's pipe targets —
+   `tail`/`grep`/`wc` — are covered) get split on `&&`/`||`/`;`/`|`, the same way
+   Claude Code's permission layer splits a compound command, and every segment is
+   checked against the repo's rendered allow/deny rules. A missing rule fails
+   immediately, naming the exact command and segment.
+2. `run_live_proof()` — the truth. Only reached once static_lint is clean: spawns one
+   throwaway headless `claude -p` session in the repo under the rendered settings and
+   scans its stream-json for `action_gate.is_permission_denial()` hits (the same
+   "requires approval" / "blocked. For security" signal PERMISSION_LOOP classification
+   already keys off, wq#1107). Zero denials -> `write_stamp()` writes
+   `runtime/preflight/<repo>.ok` with `hash(rendered_settings + preflight_cmds)`.
+
+`dispatch_gate_check(repo)` is the third piece — cheap, offline, called by
+`foreman_dispatcher.py`'s spawn loop (stage 9b, right before `spawner.dispatch_one`).
+It recomputes the same hash from the *current* rendered settings/preflight_cmds and
+refuses (`log.skip(..., "preflight", "no_fresh_stamp", ...)`) unless it matches the
+stamp on disk — a settings or `preflight_cmds` change since the last proof reads as "no
+stamp" until `harness-preflight` runs again. A repo with no `repos.d/<repo>.json` is not
+gated (same additive-migration boundary §2b draws).
+
+**Structural limitation, not a bug:** `run_live_proof()`'s `claude` invocation is not on
+any worker permission profile's allow list, so `harness-preflight` cannot run its live
+layer from inside a dispatched (sandboxed) worker session — the nested call gets
+refused by the exact allowlist the tool exists to validate (ISSUE-LOG.md #50). It has to
+run from host/dispatcher context. Until `harness-preflight --all` has been run once from
+there, `foreman`/`pokemon`/`mailbot` dispatch will pause on `no_fresh_stamp` — visible
+and recoverable (the skip reason names the fix), not a crash.
 
 ## Permission refusals and PERMISSION_LOOP (wq#1107)
 

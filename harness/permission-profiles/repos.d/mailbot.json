@@ -1,5 +1,6 @@
 {
   "profiles": ["base", "node-ts", "python"],
   "extra_allow": [],
-  "verbs": []
+  "verbs": [],
+  "preflight_cmds": ["node --version", "python3 --version"]
 }
