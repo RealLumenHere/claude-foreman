@@ -694,6 +694,14 @@ def _do_pass(cfg, log, state, dry_run):
             log.skip(tid, lane, "scan", "not_open", detail=t.get("status"))
             continue
 
+        # wq#433: the lane resolved a repo above, but if the TITLE names a different one
+        # the lane is wrong and dispatching would hand the worker a tree without any of
+        # the paths its ticket cites (ISSUE-LOG #56 class). Skip loudly instead.
+        mismatch = router.repo_mismatch(t)
+        if mismatch:
+            log.skip(tid, lane, "lane_policy", "repo_mismatch", detail=mismatch)
+            continue
+
         if not repo:
             # wq#1094/wq#1123: 'auto' has no single LANE_REPO entry (repo-sweeps target
             # different repos, wq#830) — but a repo-sweep ticket carries its exact

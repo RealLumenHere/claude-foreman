@@ -651,3 +651,78 @@ def test_assign_and_verify_pass_fire_on_scratch_wq(tmp_path):
     # dispatch-cmd carries the tuple through to fworker
     cmd = subprocess.run(R + ["dispatch-cmd", str(ids[0][0]), "--repo", "/tmp/x"], capture_output=True, text=True, env=env).stdout
     assert "--model qwen36-local --archetype mechanical-edit" in cmd
+
+
+# ---- wq#433 / ISSUE-LOG #56 class: lane says one repo, title says another. Dispatching
+# on the lane alone hands the worker a tree with none of the paths its ticket cites, and
+# --add-dir only grants the right tree READ access, so the attempt cannot land anywhere.
+# Refuse loudly instead of guessing. ----------------------------------------------------
+
+def test_title_repo_marker_reads_bracketed_and_bare_leading_tags():
+    assert router.title_repo_marker("[lpp-mp] M5d: cross-node link over Tailscale") == "/home/lumen/pokemon"
+    assert router.title_repo_marker("[lpp][stuck] agent parked 40 turns") == "/home/lumen/pokemon"
+    assert router.title_repo_marker("LPP-MP M5 (stretch): BGB link-over-TCP bridge") == "/home/lumen/pokemon"
+    assert router.title_repo_marker("[nest] wire the porch sensor") == "/home/lumen/projects/nest"
+    assert router.title_repo_marker("[questfree] Quest 1 DTS") == "/home/lumen/questfree"
+
+
+def test_title_repo_marker_none_for_ordinary_titles():
+    assert router.title_repo_marker("fix(dispatcher): lint committed lanes") is None
+    assert router.title_repo_marker("[repo-sweep] vault: BEHIND_ONLY") is None
+    assert router.title_repo_marker("") is None
+    assert router.title_repo_marker(None) is None
+
+
+def test_repo_mismatch_flags_wq433_shape_and_names_both_repos():
+    t = {"lane": "build", "title": "LPP-MP M5 (stretch): BGB link-over-TCP bridge", "detail": ""}
+    reason = router.repo_mismatch(t)
+    assert reason and "/home/lumen/pokemon" in reason and router.FOREMAN_ROOT in reason
+
+
+def test_repo_mismatch_silent_when_lane_and_title_agree():
+    assert router.repo_mismatch(
+        {"lane": "pokemon", "title": "[lpp-mp] M5e: interop vs a real BGB build", "detail": ""}) is None
+    assert router.repo_mismatch(
+        {"lane": "build", "title": "fix(dispatcher): lint committed lanes", "detail": ""}) is None
+
+
+def test_repo_mismatch_exempts_verify_pass_tickets():
+    # wq#1220: a verify ticket's lane is a static policy default and its real repo lives
+    # in its own detail — the marker check must not fight that resolver.
+    t = {"lane": "build", "title": "[verify] wq#511 [lpp-mp] M5c-3 continuation",
+         "detail": "Verify repo: /home/lumen/pokemon"}
+    assert router.repo_mismatch(t) is None
+    assert router.repo_for_ticket(t) == "/home/lumen/pokemon"
+
+
+def test_repo_for_ticket_refuses_mismatched_ticket_rather_than_returning_lane_repo():
+    t = {"lane": "build", "title": "LPP-MP M5 (stretch): BGB link-over-TCP bridge", "detail": ""}
+    assert router.repo_for_ticket(t) is None
+
+
+def test_dispatch_cmd_raises_on_lane_repo_mismatch(monkeypatch):
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "lane": "build", "detail": "",
+        "title": "LPP-MP M5 (stretch): BGB link-over-TCP bridge",
+        "model": "claude-sonnet-5", "effort": "high", "archetype": "standard-engineering",
+    })
+    with pytest.raises(SystemExit, match="lane/repo mismatch"):
+        router.dispatch_cmd(433)
+
+
+def test_dispatch_cmd_explicit_repo_still_overrides_a_mismatch(monkeypatch):
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "lane": "build", "detail": "",
+        "title": "LPP-MP M5 (stretch): BGB link-over-TCP bridge",
+        "model": "claude-sonnet-5", "effort": "high", "archetype": "standard-engineering",
+    })
+    cmd = router.dispatch_cmd(433, "/home/lumen/pokemon")
+    assert cmd[cmd.index("--repo") + 1] == "/home/lumen/pokemon"
+
+
+def test_title_repo_markers_agree_with_lane_repo_map():
+    """A marker must never point somewhere LANE_REPO does not also recognise, or the
+    guard would refuse a dispatch nothing could then satisfy."""
+    known = set(router.LANE_REPO.values())
+    for marker, repo in router.TITLE_REPO_MARKERS.items():
+        assert repo in known, f"{marker} -> {repo} is not a LANE_REPO destination"

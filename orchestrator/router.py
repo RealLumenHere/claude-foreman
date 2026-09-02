@@ -776,13 +776,75 @@ def verify_repo_hint(title, detail):
     return repo if repo in repo_sweep.managed_repos() else None
 
 
+# wq#433/ISSUE-LOG #56 class (wq#683 questfree, wq#1155 nest, wq#433 LPP-MP): a ticket
+# whose lane says one repo and whose TITLE says another dispatches, silently, into the
+# wrong tree. The worker then finds none of the paths its ticket names, and — because
+# --add-dir grants primary trees READ access only (fworker.py WORKER_ADD_DIRS) — cannot
+# write or land in the right one either. Every instance so far burned a full attempt,
+# blocked, and got redispatched into the identical misconfiguration (wq#433 twice).
+# The lane is not evidence enough on its own when the title names a different repo, so
+# refuse rather than guess: the title markers below are the ones LPP/fleet tickets
+# actually carry, each mapped to the same path LANE_REPO uses.
+TITLE_REPO_MARKERS = {
+    "lpp": "/home/lumen/pokemon",
+    "lpp-mp": "/home/lumen/pokemon",
+    "pokemon": "/home/lumen/pokemon",
+    "nest": "/home/lumen/projects/nest",
+    "questfree": "/home/lumen/questfree",
+    "mailbot": "/home/lumen/mailbot",
+    "pstack": "/home/lumen/pstack",
+    "mission-control": "/home/lumen/mission-control",
+}
+_LEADING_TAGS_RE = re.compile(r"^\s*(?:\[([^\]]*)\]\s*)+")
+_TAG_RE = re.compile(r"\[([^\]]*)\]")
+
+
+def title_repo_marker(title):
+    """The repo a ticket's title names, or None. Reads the leading `[tag]` run
+    (`[lpp-mp] M5d: ...`, `[lpp][stuck] ...`); with no brackets, falls back to the first
+    bare word (`LPP-MP M5 (stretch): ...` — wq#433's own title). Only exact
+    TITLE_REPO_MARKERS keys match, so an ordinary title like `fix(dispatcher): ...`
+    never resolves."""
+    title = title or ""
+    lead = _LEADING_TAGS_RE.match(title)
+    if lead:
+        tags = [t.strip().lower() for t in _TAG_RE.findall(lead.group(0))]
+    else:
+        tags = [title.strip().split()[0].strip("[]():,").lower()] if title.strip() else []
+    for tag in tags:
+        repo = TITLE_REPO_MARKERS.get(tag)
+        if repo:
+            return repo
+    return None
+
+
+def repo_mismatch(ticket):
+    """wq#433: the reason string for a ticket whose title marker names a different repo
+    than its lane resolves to, else None. Verify-pass tickets are exempt — their lane is
+    a static policy default and their real repo is pinned in their own detail (wq#1220).
+    An explicit --repo still overrides; this only fires where dispatch would otherwise
+    derive the repo from the lane alone."""
+    title = ticket.get("title", "")
+    if title.startswith(VERIFY_TITLE_PREFIX):
+        return None
+    lane = ticket.get("lane")
+    lane_repo = repo_for_lane(lane)
+    title_repo = title_repo_marker(title)
+    if not lane_repo or not title_repo or lane_repo == title_repo:
+        return None
+    return (f"title names {title_repo} but lane {lane!r} maps to {lane_repo} — "
+            f"re-lane the ticket (or pass --repo); a worker in {lane_repo} gets "
+            f"READ-only access to {title_repo} and cannot land there")
+
+
 def repo_for_ticket(ticket_id_or_dict):
     """The one resolver shared by dispatch_cmd and foreman_dispatcher._do_pass (wq#1123):
     the verify-pass repo hint first (wq#1220 — a verify ticket's own lane is a static
     policy default, not the repo it needs to verify), then LANE_REPO, then — for lanes
     LANE_REPO doesn't cover (e.g. 'auto') — the exact repo a repo-sweep ticket wrote
     into its own detail (repo_sweep.repo_hint). Returns None (never a guess) if none
-    resolve.
+    resolve, including when the lane and the title disagree about the repo (wq#433 —
+    see repo_mismatch).
 
     Accepts either a ticket id (does the wq_show lookup itself) or an already-fetched
     ticket dict, so a caller that already has the ticket doesn't pay for a second show."""
@@ -790,6 +852,8 @@ def repo_for_ticket(ticket_id_or_dict):
     repo = verify_repo_hint(t.get("title", ""), t.get("detail", ""))
     if repo:
         return repo
+    if repo_mismatch(t):
+        return None
     repo = repo_for_lane(t.get("lane"))
     if repo:
         return repo
@@ -805,6 +869,9 @@ def dispatch_cmd(ticket_id, repo=None, *, manifest=None):
     rather than falling back to any default when neither resolves."""
     t = wq_show(ticket_id)
     if not repo:
+        mismatch = repo_mismatch(t)
+        if mismatch:
+            raise SystemExit(f"router: wq#{ticket_id} lane/repo mismatch — {mismatch}")
         repo = repo_for_ticket(t)
         if not repo:
             raise SystemExit(

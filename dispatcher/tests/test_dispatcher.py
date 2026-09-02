@@ -789,6 +789,19 @@ def test_auto_lane_non_sweep_ticket_still_unmapped(denv):
     assert lumen_calls(denv) == []
 
 
+def test_lane_repo_mismatch_skipped_not_dispatched(denv):
+    """wq#433 / ISSUE-LOG #56 class: the lane maps fine, but the TITLE names a different
+    repo. Dispatching would hand the worker a tree holding none of the paths its ticket
+    cites — and --add-dir grants the right tree READ access only, so the attempt cannot
+    land there either. Skip with the reason instead of burning an attempt."""
+    tid = add_ticket("[lpp-mp] M5d: cross-node link over Tailscale (lumen<->Thor)")
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "repo_mismatch"
+    assert "/home/lumen/pokemon" in skips[0]["detail"]
+    assert lumen_calls(denv) == []
+
+
 # ---- MUST 9: logging + telemetry -----------------------------------------------------
 
 def test_every_decision_logged(denv):
