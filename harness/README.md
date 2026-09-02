@@ -22,6 +22,11 @@ below.
     repo_reconcile.py        wq#686: managed-repo divergence check/repair — resets a local
                              branch onto a PR-only remote ONLY when the trees are already
                              identical (soft, archived), refuses otherwise
+    acceptance.py            ISSUE-SOLUTIONS-fable.md §1 (#17): acceptance derivation +
+                             pinning, evidence replay, rework.json — see "Evidence-gated
+                             done" below
+    hooks/stop_gate.py       §1c Stop hook: refuses the session's stop while the pinned
+                             criteria are unevidenced (capped at 3 blocks, fails open)
     concurrency.py           wq#616 (T2b): live fworker-wq* unit count + cloud slot cap
     spawner.py               wq#616 (T2b): concurrency-capped, staggered batch dispatch
     worker-settings.json    settings pack fworker.py loads (SETTINGS_FILE, override with
@@ -77,6 +82,38 @@ Exit codes: `0` success, `10` claim error, `11` deferred (governor/STOP gate), `
 blocked (2 failed attempts, ticket wq-blocked), `13` limit (ticket released, resets
 outside the resume window). `16`/`17`/`18` are fire-mode-only (timeout release /
 diagnosis failed / apply incomplete) — see "Fire-mode" below.
+
+## Evidence-gated done (ISSUE-SOLUTIONS-fable.md §1, issue #17)
+
+"done" is not a speech act by the model: the model proposes, the harness replays, and
+only the harness transitions the row.
+
+1. **§1a pin at dispatch.** `do_attempt()` derives an acceptance checklist from the ticket
+   (one cheap model call; a deterministic heuristic covers every failure so derivation can
+   never block a dispatch) and writes `acceptance.json` twice — the truth into
+   `_runs/wq<id>/`, a read-only copy into the worktree (deny-written in
+   worker-settings.json, hash-checked at done time). Attempt 2+ reuses attempt 1's pin.
+2. **§1b replay.** The worker's only path to done is `evidence.json` in its worktree.
+   `evidence_gate()` re-runs every `proof_type: test` criterion **itself** (merged
+   stdout+stderr into `_runs/wq<id>/evidence/<AC>.replay.log`) and resolves every
+   `citation` against the branch's diff. The model's logged exit code is a hint, never
+   proof. A rejected claim sets the row to `rework` — including reverting a `done` the
+   worker wrote itself — and classifies the attempt FALSE_COMPLETE.
+3. **§1c Stop hook.** `hooks/stop_gate.py` blocks the session's stop while the evidence is
+   missing or structurally incomplete, printing the specific gap. Capped at 3 blocks
+   (`FOREMAN_STOP_GATE_MAX_BLOCKS`), then the stop is allowed and §1b routes to rework, so
+   a confused worker cannot loop inside the hook.
+4. **§1d rework.** A rejection writes `_runs/wq<id>/rework.json` (per-criterion
+   expected/observed/repro/output_tail); the next attempt's prompt opens with it under
+   three rules — run each repro first, do not re-assert rejected claims, the same pinned
+   checklist still governs. `MAX_ATTEMPTS` exhausted escalates to Frank (`wq block` +
+   ntfy) rather than dispatching again.
+
+Switches: `FOREMAN_EVIDENCE_GATE=off` disables §1 for a dispatch (rollback, and what the
+pre-§1 fixtures in test_fworker_integration.py run under);
+`FOREMAN_ACCEPTANCE_DERIVE=heuristic` skips the derivation model call;
+`FOREMAN_ACCEPTANCE_MODEL` picks the derivation model; `FOREMAN_REPLAY_TIMEOUT_S` bounds
+each replayed command. Coverage: `tests/test_evidence_gate.py`.
 
 ## Fire-mode: fleet-fires manual-approval workflow (wq#717, AUTO-5)
 

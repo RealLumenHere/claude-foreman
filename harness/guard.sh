@@ -243,6 +243,17 @@ Read|Edit|Write|Grep|Glob)
     esac
   done
 
+  # ---- ISSUE-SOLUTIONS-fable.md §1a: acceptance.json is pinned, never worker-writable ----
+  # The settings deny rules (Edit/Write(**/acceptance.json)) are the first line; this is
+  # the fail-closed one, so the checklist a worker is judged against cannot be edited by
+  # the worker being judged. Reads stay allowed — the worker MUST read its criteria.
+  if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; then
+    case "$FILE_PATH" in
+      */acceptance.json)
+        block "acceptance.json is pinned by fworker (evidence-gated done, §1a): $FILE_PATH" "$FILE_PATH" ;;
+    esac
+  fi
+
   # ---- wq#717 fire-mode diagnosis phase: Write/Edit confined to the plan doc ----
   # This is the one hard (not denylist-best-effort) guarantee of "read-only
   # diagnosis phase ONLY": FOREMAN_FIRE_PLAN_PATH is the single path fworker

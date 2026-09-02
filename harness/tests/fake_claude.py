@@ -117,6 +117,42 @@ def main():
         emit({"type": "result", "subtype": "success", "is_error": False,
               "total_cost_usd": 0.001, "num_turns": 2})
 
+    elif scenario in ("evidence_missing", "evidence_lie", "evidence_pass"):
+        # ISSUE-SOLUTIONS-fable.md §1 fixtures: a worker that claims success against a
+        # pinned acceptance.json. It reads the criteria from its own worktree copy —
+        # proving the §1a worktree render reaches the worker — and then behaves as the
+        # spec's three cases: no evidence at all, evidence that lies about the exit code,
+        # and evidence that is true because the work was actually done.
+        criteria = []
+        try:
+            with open(os.path.join(os.getcwd(), "acceptance.json")) as f:
+                criteria = json.load(f).get("criteria", [])
+        except (OSError, ValueError):
+            pass
+        cmd_c = next((c for c in criteria if c.get("proof_type") == "test"), None)
+        cite_c = next((c for c in criteria if c.get("proof_type") == "citation"), None)
+        if scenario == "evidence_pass":
+            # do the actual work: make the deliberately-failing probe pass.
+            with open(os.path.join(os.getcwd(), "probe_test.sh"), "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+        if scenario in ("evidence_lie", "evidence_pass"):
+            entries = []
+            if cmd_c:
+                entries.append({"id": cmd_c["id"], "cmd_run": cmd_c["cmd"], "exit_code": 0,
+                                "log": "runtime/evidence/probe.log"})
+            if cite_c:
+                entries.append({"id": cite_c["id"], "citation": "probe_test.sh:1"})
+            with open(os.path.join(os.getcwd(), "evidence.json"), "w") as f:
+                json.dump({"criteria": entries}, f)
+            if ticket_id:
+                subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                                 "fake worker done, see README.md"],
+                                capture_output=True, text=True)
+        emit({"type": "assistant",
+              "message": {"content": [{"type": "text", "text": f"{scenario}: claiming done"}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "total_cost_usd": 0.001, "num_turns": 1})
+
     elif scenario == "denied_verb_blocked":
         rc = fire_hook("Bash", {"command": "docker compose down --remove-orphans"},
                         session_id, effort)

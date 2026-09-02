@@ -54,6 +54,12 @@ def make_scratch_env(tmp_path, ticket, scenario, extra=None):
         "FOREMAN_RUNS_ROOT": runs_root,
         "FOREMAN_WORKTREES_ROOT": worktrees_root,
         "FOREMAN_STOP_FILE": str(tmp_path / "STOP_nonexistent"),
+        # These fixtures predate the §1 evidence gate (ISSUE-SOLUTIONS-fable.md): their
+        # canned workers close a ticket without writing evidence.json, which is exactly
+        # what the gate now rejects. They stay ungated so they keep testing the lifecycle
+        # plumbing they were written for; the gate's own coverage is test_evidence_gate.py,
+        # which turns it back on via `extra`.
+        "FOREMAN_EVIDENCE_GATE": "off",
         "FOREMAN_STATE_FILE": state_file,
         "FOREMAN_GOVERNOR_CLI": FAKE_GOVERNOR,
         "FOREMAN_WQ_BIN": WQ_BIN,

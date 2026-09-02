@@ -48,6 +48,7 @@ from classifier import (
     PERMISSION_LOOP,
 )
 from oom_forensics import oom_journal_evidence
+import acceptance
 import action_gate
 import fire_gate
 import permission_profiles
@@ -263,7 +264,7 @@ INACTIVITY_TIMEOUT_S = _envint("FOREMAN_FRAME_GAP_S", 240)
 # coming, so there is no reason to wait out the full frame-gap window before forcing it.
 POST_RESULT_GRACE_S = _envint("FOREMAN_POST_RESULT_GRACE_S", 20)
 HEARTBEAT_INTERVAL_S = 10 * 60
-MAX_ATTEMPTS = 2
+MAX_ATTEMPTS = _envint("FOREMAN_MAX_ATTEMPTS", 2)
 RESUME_WAIT_MAX_S = 6 * 3600
 
 # wq#992-B: a worker that ran to a terminal verdict has just vacated a cloud slot.
@@ -506,6 +507,29 @@ def wq_release(ticket_id):
 
 def wq_block(ticket_id, reason):
     wq("block", str(ticket_id), reason)
+
+
+def wq_rework(ticket_id):
+    """ISSUE-SOLUTIONS-fable.md §1b step 4: a claim the harness could not verify never
+    reaches `done` — the row goes to `rework`, which also REVERTS a row the worker closed
+    itself before its evidence was replayed.
+
+    §1b wants the lease fence (PR#46) carried onto this transition. `wq edit` is not one of
+    the subcommands wq runs through owner_ok() (only done/release/block are), so the fence
+    is applied here: a zombie attempt whose ticket has since been reclaimed by another
+    identity does not get to rewrite that row's status.
+    """
+    holder = (wq_show(ticket_id).get("claimed_by") or "").strip()
+    mine = wq_identity(ticket_id)
+    if holder and holder != mine and not holder.startswith(f"{mine}:"):
+        log(f"rework transition SKIPPED for {ticket_id}: held by {holder!r}, this attempt "
+            f"is {mine!r} — a stale attempt does not rewrite a live claim (fence).")
+        return False
+    p = wq("edit", str(ticket_id), "--status", "rework")
+    if p.returncode != 0:
+        log(f"WARN: wq edit --status rework refused for {ticket_id} (exit "
+            f"{p.returncode}): {p.stdout.strip()} {p.stderr.strip()}")
+    return p.returncode == 0
 
 
 def ntfy(title, msg, priority="default"):
@@ -837,6 +861,10 @@ def build_env(worker_id, model, effort, worktree, ticket_id):
     env["WQ_AGENT"] = wq_identity(ticket_id)
     env["FOREMAN_EVENTS_DIR"] = EVENTS_DIR
     env["FOREMAN_WORKTREE_ROOT"] = worktree
+    # ISSUE-SOLUTIONS-fable.md §1c: the Stop hook resolves this attempt's pinned
+    # acceptance.json from these two — with either unset the gate fails open.
+    env[acceptance.TICKET_ENV] = str(ticket_id)
+    env[acceptance.RUN_DIR_ENV] = run_dir(ticket_id)
     # wq#900: registered primary trees for guard.sh's branch-freeze deny class —
     # computed here (router.LANE_REPO + static mirror) so the guard never depends
     # on an import at hook time.
@@ -1104,7 +1132,8 @@ def _sub_instincts_tier0(tmpl):
     return tmpl.replace("{{INSTINCTS_TIER0}}\n\n", "").replace("{{INSTINCTS_TIER0}}", "")
 
 
-def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None):
+def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None,
+                        acceptance_doc=None):
     tmpl_path = os.path.join(HARNESS_DIR, "prompts", "worker.md")
     with open(tmpl_path) as f:
         tmpl = _sub_instincts_tier0(f.read())
@@ -1112,6 +1141,13 @@ def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None):
     if prior_notes_path and os.path.exists(prior_notes_path):
         with open(prior_notes_path) as f:
             prior_notes = f.read()
+    # ISSUE-SOLUTIONS-fable.md §1a/§1d: the done contract goes in every gated dispatch;
+    # a rejected prior attempt puts its structured rework block at the very TOP.
+    contract = acceptance.contract_block(acceptance_doc, worktree)
+    rework = acceptance.rework_block(run_dir(ticket_id))
+    for key, block in (("{{ACCEPTANCE_CONTRACT}}", contract), ("{{REWORK}}", rework)):
+        tmpl = (tmpl.replace(key, block) if block
+                else tmpl.replace(f"{key}\n\n", "").replace(key, ""))
     memory_block = distilled_memory_block(ticket)
     if not memory_block:
         tmpl = tmpl.replace("{{DISTILLED_MEMORY}}\n\n", "").replace(
@@ -1308,10 +1344,31 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         worktree, branch = make_worktree(args.repo, ticket_id, attempt,
                                           ticket.get("title", str(ticket_id)), archetype)
 
+    # ISSUE-SOLUTIONS-fable.md §1a: derive the machine-checkable acceptance checklist and
+    # PIN it before the worker starts. The run-dir copy is the truth (fworker-owned, the
+    # same ownership pattern as the compiled gate rules below); the worktree copy is the
+    # worker's read-only view, deny-written in worker-settings.json and hash-checked at
+    # done time. Attempt 2+ reuses attempt 1's pin — §1d's "the same pinned
+    # acceptance.json still governs" is what makes rework converge instead of drift.
+    pinned = acceptance.load_pinned(run_dir(ticket_id))
+    if pinned and worktree:
+        try:
+            shutil.copyfile(os.path.join(run_dir(ticket_id), acceptance.ACCEPTANCE_FILE),
+                            os.path.join(worktree, acceptance.ACCEPTANCE_FILE))
+        except OSError as e:
+            log(f"acceptance: could not refresh worktree copy ({e})")
+    if not pinned:
+        pinned = acceptance.pin_acceptance(ticket, run_dir(ticket_id), worktree,
+                                            claude_bin=args.claude_bin, log=log)
+    if pinned:
+        log(f"acceptance pinned {pinned['sha256'][:12]}: "
+            f"{len(pinned.get('criteria', []))} criteria")
+
     prior_notes_path = os.path.join(run_dir(ticket_id), "prior-attempt-notes.md")
     prompt = load_worker_prompt(
         ticket_id, ticket, worktree,
         prior_notes_path if (attempt > 1 and not resume_session) else None,
+        acceptance_doc=pinned,
     )
 
     env = build_env(worker_id, args.model, args.effort, worktree, ticket_id)
@@ -1438,7 +1495,26 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     # carries the same verdict reconcile() acts on. `raw_classification` keeps the
     # pre-verification classifier output too (e.g. DEGRADED_SUCCESS), so RCA can still
     # see WHY this got relabeled instead of just seeing FALSE_COMPLETE.
+    # ISSUE-SOLUTIONS-fable.md §1b: when this ticket carries pinned criteria the evidence
+    # gate runs FIRST and outranks every other success signal — including the worker's own
+    # `wq done`, which §C10 would otherwise accept as ground truth. The harness re-runs the
+    # criteria itself; a claim it cannot reproduce has no code path to `done`.
+    evidence_verdict, evidence_detail = "ungated", None
     if (classification in (SUCCESS, DEGRADED_SUCCESS)
+            and not sentinel_confirmed_block and not sentinel_confirmed_claim_error):
+        evidence_verdict, evidence_detail = evidence_gate(ticket_id, worktree, attempt)
+        if evidence_verdict == "fail":
+            ids = ", ".join(f["id"] for f in evidence_detail["failed"])
+            log(f"{classification} but the evidence gate REJECTED the claim on replay "
+                f"({ids}) — §1b: routing to rework, rework.json written.")
+            wq_rework(ticket_id)
+            classification = FALSE_COMPLETE
+        elif evidence_verdict == "pass":
+            log(f"evidence gate: {evidence_detail['checked']} criteria replayed and "
+                f"confirmed harness-side.")
+
+    if (classification in (SUCCESS, DEGRADED_SUCCESS)
+            and evidence_verdict != "pass"
             and not sentinel_confirmed_block and not sentinel_confirmed_claim_error
             and not check_artifacts_done(ticket_id, worktree)):
         log(f"{classification} but acceptance criteria unmet (ticket still open, no "
@@ -1458,6 +1534,10 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "model_swap_detail": model_swap_detail,
         "archetype": archetype, "max_turns": max_turns, "wall_clock_s": wall_clock,
         "classification": classification, "raw_classification": raw_classification,
+        # ISSUE-SOLUTIONS-fable.md §1b: the harness's own replay verdict, so the
+        # done-then-critic-reverted count (#17's signature) is measurable per attempt.
+        "evidence_verdict": evidence_verdict,
+        "evidence_failed": [f["id"] for f in (evidence_detail or {}).get("failed", [])],
         "exit_code": exit_code, "cpu_s": cpu_s, "oauth_token_used": oauth_token_used,
         "oom_journal": oom_journal,
         "killed_reason": killed_reason, "loop_reason": loop_tracker.tripped,
@@ -1523,7 +1603,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         return EXIT_CLAIM_ERROR
 
     return reconcile(args, ticket_id, attempt, classification, state, events,
-                      worktree, state_path)
+                      worktree, state_path, evidence_verdict)
 
 
 def file_verify_pass(ticket_id, args):
@@ -1602,7 +1682,39 @@ def check_artifacts_done(ticket_id, worktree):
     return False
 
 
-def handle_resumable_failure(args, ticket_id, attempt, classification, state, events, worktree):
+def evidence_gate(ticket_id, worktree, attempt):
+    """ISSUE-SOLUTIONS-fable.md §1b: the harness's OWN observation of the evidence.
+
+    Returns (verdict, detail) where verdict is one of:
+      "ungated"  — no pinned criteria for this ticket; callers fall back to §C10 alone
+      "pass"     — every criterion appears in evidence.json AND replayed as specified
+      "fail"     — a criterion is missing, tampered, or replayed differently than claimed
+
+    On "fail" a structured rework.json (§1d) is written to the run dir; the caller routes
+    the ticket to rework, never done.
+    """
+    rd = run_dir(ticket_id)
+    pinned = acceptance.load_pinned(rd)
+    if not pinned or not pinned.get("criteria"):
+        return "ungated", None
+    if not acceptance.worktree_copy_matches(rd, worktree):
+        failed = [{"id": "PIN", "expected": f"{acceptance.ACCEPTANCE_FILE} unchanged "
+                                            f"(sha256 {pinned['sha256'][:12]})",
+                   "observed": "the worktree copy was edited",
+                   "repro": f"sha256sum {os.path.join(worktree, acceptance.ACCEPTANCE_FILE)}",
+                   "output_tail": ""}]
+        acceptance.write_rework(rd, attempt, failed)
+        return "fail", {"ok": False, "failed": failed, "checked": 0}
+    evidence = acceptance.load_evidence(worktree, rd)
+    result = acceptance.verify_done(pinned, evidence, worktree, rd)
+    if result["ok"]:
+        return "pass", result
+    acceptance.write_rework(rd, attempt, result["failed"])
+    return "fail", result
+
+
+def handle_resumable_failure(args, ticket_id, attempt, classification, state, events,
+                              worktree, evidence_verdict="ungated"):
     """RELIABILITY_SPEC.md §C7/§C8/§C10/§C11: FALSE_COMPLETE, INDETERMINATE, HANG
     (§C8's STALL) and AUTH all get a ground-truth artifact check FIRST — §C7's
     "verify artifacts, re-verdict" applies just as much to a dropped-result
@@ -1617,7 +1729,13 @@ def handle_resumable_failure(args, ticket_id, attempt, classification, state, ev
     real progress from zero). Falls through to handle_failure's block-after-
     MAX_ATTEMPTS path once attempts are exhausted or there is no session_id to resume.
     """
-    if check_artifacts_done(ticket_id, worktree):
+    # §1b outranks the artifact shortcut: once the harness has itself replayed the pinned
+    # criteria and seen them fail, a landed commit is not enough to call the ticket done —
+    # otherwise a worker could evidence nothing, land a branch, and be waved through here.
+    if evidence_verdict == "fail":
+        log(f"{classification}: evidence gate rejected this attempt on replay — the "
+            f"artifact shortcut is suppressed, this ticket stays in rework.")
+    elif check_artifacts_done(ticket_id, worktree):
         log(f"{classification} but artifacts confirm the ticket actually landed "
             f"(session {state.session_id}) — verifying beats trusting the missing/odd "
             f"frame shape.")
@@ -1635,7 +1753,8 @@ def handle_resumable_failure(args, ticket_id, attempt, classification, state, ev
     return handle_failure(args, ticket_id, attempt, classification, state, events, worktree)
 
 
-def reconcile(args, ticket_id, attempt, classification, state, events, worktree, state_path):
+def reconcile(args, ticket_id, attempt, classification, state, events, worktree, state_path,
+               evidence_verdict="ungated"):
     # SUCCESS/DEGRADED_SUCCESS only ever reach here when do_attempt() already verified
     # artifacts confirm the ticket landed (else it relabeled the classification
     # FALSE_COMPLETE before calling reconcile at all) — safe to trust directly.
@@ -1652,7 +1771,7 @@ def reconcile(args, ticket_id, attempt, classification, state, events, worktree,
 
     if classification in (FALSE_COMPLETE, INDETERMINATE, AUTH, HANG):
         return handle_resumable_failure(args, ticket_id, attempt, classification, state,
-                                         events, worktree)
+                                         events, worktree, evidence_verdict)
 
     # TURNS / LAUNCH_FAILURE / KILLED / OOM / REFUSED / BUDGET / CRASH
     return handle_failure(args, ticket_id, attempt, classification, state, events, worktree)
