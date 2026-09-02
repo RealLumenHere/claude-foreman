@@ -50,6 +50,7 @@ from classifier import (
 from oom_forensics import oom_journal_evidence
 import action_gate
 import fire_gate
+import permission_profiles
 import primary_tree_guard
 from langfuse_client import emit_trace_with_span
 
@@ -867,6 +868,19 @@ def build_env(worker_id, model, effort, worktree, ticket_id):
 WORKER_ADD_DIRS = ["/home/lumen/agents/work-queue", "/home/lumen/mailbot", "/home/lumen/pokemon",
                    "/home/lumen/bin", "/home/lumen/foreman", "/home/lumen/kb"]
 
+def resolve_worker_settings(repo, ticket_id):
+    """ISSUE-SOLUTIONS-fable.md §2b: render this repo's per-repo toolchain permission
+    profile (permission-profiles/repos.d/<repo>.json) into the ticket's run_dir, unioned
+    from the shared profile fragments. A repo with no profile declaration yet falls back
+    to the static SETTINGS_FILE unchanged — no regression for repos not yet migrated.
+    """
+    settings_file, digest = permission_profiles.resolve_settings_file(
+        repo, SETTINGS_FILE, run_dir(ticket_id))
+    if digest:
+        log(f"wq#{ticket_id}: rendered permission profile {digest[:12]} -> {settings_file}")
+    return settings_file
+
+
 def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=None,
                       resume_session=None, claude_bin="claude"):
     cmd = [claude_bin, "-p", prompt]
@@ -1143,7 +1157,8 @@ def run_fire_child(phase, args, ticket, ticket_id, worktree, worker_id, max_turn
     env["FOREMAN_FIRE_PHASE"] = phase
     if phase == "diagnosis":
         env["FOREMAN_FIRE_PLAN_PATH"] = fire_gate.plan_path(ticket_id)
-    cmd = build_claude_cmd(prompt, args.model, args.effort, SETTINGS_FILE,
+    settings_file = resolve_worker_settings(args.repo, ticket_id)
+    cmd = build_claude_cmd(prompt, args.model, args.effort, settings_file,
                             add_dirs=WORKER_ADD_DIRS,
                             max_turns=max_turns, claude_bin=args.claude_bin)
     log(f"wq#{ticket_id} fire-mode {phase}: spawning "
@@ -1323,7 +1338,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     env[action_gate.SNAPDIR_ENV] = os.path.join(run_dir(ticket_id), "snapshots")
     env[action_gate.HANDOFF_ENV] = run_dir(ticket_id)
     loop_tracker = action_gate.LoopTracker()
-    cmd = build_claude_cmd(prompt, args.model, args.effort, SETTINGS_FILE,
+    settings_file = resolve_worker_settings(args.repo, ticket_id)
+    cmd = build_claude_cmd(prompt, args.model, args.effort, settings_file,
                             add_dirs=WORKER_ADD_DIRS, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin)
 

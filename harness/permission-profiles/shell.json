@@ -1,0 +1,7 @@
+{
+  "_comment": "ISSUE-SOLUTIONS-fable.md §2b — bash scripts, shellcheck.",
+  "allow": [
+    "Bash(bash scripts/*)",
+    "Bash(shellcheck *)"
+  ]
+}

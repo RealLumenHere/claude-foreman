@@ -1,0 +1,21 @@
+{
+  "_comment": "ISSUE-SOLUTIONS-fable.md §2b — node, npm, npx, pnpm, tsc, vitest, jest.",
+  "allow": [
+    "Bash(node *)",
+    "Bash(npm test*)",
+    "Bash(npm run *)",
+    "Bash(npm ci)",
+    "Bash(npm ci *)",
+    "Bash(npm install)",
+    "Bash(npm install *)",
+    "Bash(npx *)",
+    "Bash(npx tsc *)",
+    "Bash(npx tsx *)",
+    "Bash(pnpm *)",
+    "Bash(tsc *)",
+    "Bash(vitest *)",
+    "Bash(jest *)",
+    "Bash(./node_modules/.bin/*)",
+    "Bash(node_modules/.bin/*)"
+  ]
+}

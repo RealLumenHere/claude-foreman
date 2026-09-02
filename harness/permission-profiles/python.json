@@ -1,0 +1,13 @@
+{
+  "_comment": "ISSUE-SOLUTIONS-fable.md §2b — python, pytest, pip, uv, ruff.",
+  "allow": [
+    "Bash(python3 *)",
+    "Bash(python *)",
+    "Bash(pytest *)",
+    "Bash(pip *)",
+    "Bash(pip3 *)",
+    "Bash(uv *)",
+    "Bash(ruff *)",
+    "Bash(sqlite3 *)"
+  ]
+}

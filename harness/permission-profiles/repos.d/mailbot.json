@@ -1,0 +1,5 @@
+{
+  "profiles": ["base", "node-ts", "python"],
+  "extra_allow": [],
+  "verbs": []
+}

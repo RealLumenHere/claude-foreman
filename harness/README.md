@@ -32,6 +32,12 @@ below.
                              misdiagnosed as "bare Bash is allowed, why the denials?".
                              This pack's allowlist is deliberately per-command; see
                              "Permission refusals" below.
+    permission_profiles.py   wq#1258 (§2b): renders a repo's toolchain permission profile
+                             at dispatch — see "Per-repo toolchain permission profiles"
+                             below.
+    permission-profiles/    base.json/python.json/node-ts.json/shell.json (shared allow/
+                             deny fragments) + repos.d/<repo>.json (which fragments a repo
+                             gets).
     guard.sh                PreToolUse fail-closed guard (§5)
     fire_gate.py             wq#717 (AUTO-5): fleet-fires manual-approval safety core
                              (FIRE_MODE.md) — plan/approval file IO, drift/timeout checks
@@ -260,6 +266,37 @@ TURNS. See the module docstrings in `fworker.py` and `classifier.py`.
 `claude agents --json` (confirmed working, no TTY needed) is used only as an advisory
 liveness signal during `--resume` reconciliation (design §8) — never the control channel.
 
+## Per-repo toolchain permission profiles (wq#1258, ISSUE-SOLUTIONS-fable.md §2b)
+
+`worker-settings.json`'s allowlist used to be one flat list serving every dispatched
+repo — pokemon/mailbot (TS), foreman (python), etc. — regardless of toolchain, which is
+exactly how PERMISSION_LOOP happened twice (ISSUE-LOG.md #14): a python-shaped allowlist
+missing `npm`/`npx`/pipe targets on a TS repo. `permission_profiles.py` replaces the
+single static list with a union of shared toolchain fragments, chosen per repo:
+
+    permission-profiles/base.json        inspection verbs, git, lumen_busy, wq/lumen-pr CLIs
+    permission-profiles/python.json      python3, pytest, pip, uv, ruff, sqlite3
+    permission-profiles/node-ts.json     node, npm, npx, pnpm, tsc, vitest, jest
+    permission-profiles/shell.json       bash scripts/*, shellcheck
+    permission-profiles/repos.d/<repo>.json   {"profiles": [...], "extra_allow": [...], "verbs": [...]}
+
+`fworker.resolve_worker_settings(repo, ticket_id)` (called from both `do_attempt()` and
+`run_fire_child()` in place of the old bare `SETTINGS_FILE` constant) renders
+`union(profiles) + extra_allow + Bash(<repo>/<verb>)` into a content-addressed file under
+the ticket's `_runs/wq<ID>/` dir — hooks and `defaultMode` pass through from
+`worker-settings.json` unchanged, only `permissions.allow`/`deny` are replaced. A repo
+with no `repos.d/<repo>.json` entry yet keeps getting the static `worker-settings.json`
+verbatim (`digest is None`), so migrating repos in is additive, never a big-bang cutover.
+An allowlist gap discovered in one node repo is now fixed once in `node-ts.json` and
+every node repo picks it up on its next dispatch — closed by profile, not by discovery.
+
+Currently declared: `foreman` (python+shell), `pokemon` (node-ts+shell), `mailbot`
+(node-ts+python). `harness-preflight` (ISSUE-SOLUTIONS-fable.md §2c, not built yet) is
+the intended dispatch-time gate that proves a repo's rendered profile has no gaps before
+a wave runs against it, and the place a render-hash-on-the-wq-row stamp belongs; §2b
+only renders and logs the hash (`resolve_worker_settings` logs
+`rendered permission profile <hash> -> <path>`), it doesn't gate dispatch on it.
+
 ## Permission refusals and PERMISSION_LOOP (wq#1107)
 
 Two gates sit in front of a worker's Bash calls, and neither is the guard.sh deny-list:
@@ -294,12 +331,14 @@ land that, then `wq release` the ticket.** The exact refused command is in
 
     cd harness && python3 -m pytest tests/ -v
 
-162 cases, including: guard.sh corpus (every deny class + quoting/`bash -c` evasions, lifecycle
+377 cases, including: guard.sh corpus (every deny class + quoting/`bash -c` evasions, lifecycle
 event logging, fail-closed on malformed/empty/off-host input), the classifier's full
 decision table including the turn-ceiling case, settings-pack lint (acceptEdits, no
 bypassPermissions anywhere in the harness or in the retrofitted gh-lane-worker,
-docker ps/logs allow vs docker-star deny, credential-path denies), the STOP/can-dispatch
-governor gate, and four end-to-end fworker runs against a fake `claude` shim
+docker ps/logs allow vs docker-star deny, credential-path denies), per-repo permission
+profile rendering (`test_permission_profiles.py`: union/dedup, unconfigured-repo
+fallback, verbs/extra_allow, hash determinism), the STOP/can-dispatch governor gate,
+and four end-to-end fworker runs against a fake `claude` shim
 (`tests/fake_claude.py`) covering success + worktree isolation, a denied verb actually
 blocked at the hook during a real spawn, a synthetic rejected rate-limit frame driving
 the real LIMIT path (release, not block), and resume-after-LIMIT reusing the worktree.
