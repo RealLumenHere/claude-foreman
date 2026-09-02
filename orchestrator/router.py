@@ -87,6 +87,7 @@ LANE_REPO = {
     "ops": FOREMAN_ROOT,
     "quest-repair-research": FOREMAN_ROOT,
     "fleet-fires": FOREMAN_ROOT,          # fires are fleet/infra work, run from foreman
+    "mailbot": "/home/lumen/mailbot",     # lumen@ email agent (wq#1163 v2, wq#1164-1174); Frank 2026-09-01 "go ahead with the build"
 }
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 GOVERNOR_CLI = os.environ.get("FOREMAN_GOVERNOR_CLI",
