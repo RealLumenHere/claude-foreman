@@ -41,3 +41,7 @@ ops/systemd-desired-state/
 runtime/
 *.err
 .*.err
+
+# systemd unit backups dropped beside the plans that generated them (wq#997).
+# The *.bak / *.bak.* patterns above miss the -service / -timer suffixes.
+*.bak-*
