@@ -92,6 +92,8 @@ WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 # wq#617 orchestrator tier: routing (tuple assignment) + verify-pass filing.
 ORCH_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "orchestrator"))
+# wq#1183 pattern-C memory: episodic append + distilled-fact recall (memory/README.md).
+MEMORY_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "memory"))
 ROUTER_CLI = os.environ.get("FOREMAN_ROUTER_CLI", os.path.join(ORCH_DIR, "router.py"))
 JUDGMENT_CLI = os.environ.get("FOREMAN_JUDGMENT_CLI", os.path.join(ORCH_DIR, "judgment.py"))
 # wq#616 (T2b): every cloud worker gets the durable setup-token as a static bearer —
@@ -621,6 +623,58 @@ def write_prior_attempt_notes(ticket_id, n, worktree, transcript_events, classif
 # worktree
 # ---------------------------------------------------------------------------
 
+def _memory_import(name):
+    """Import a memory/ module (episodic, recall) fail-open: fleet memory is
+    strictly additive (wq#1183) — a missing or broken memory tree must never
+    fail an attempt or a prompt build."""
+    if MEMORY_DIR not in sys.path:
+        sys.path.insert(0, MEMORY_DIR)
+    return __import__(name)
+
+
+def append_episode_event(ticket_id, event):
+    """wq#1183 episodic memory: append-only per-run log, the distiller's input.
+    Best-effort by contract (memory/README.md failure posture)."""
+    try:
+        _memory_import("episodic").append_event(ticket_id, event,
+                                                 runs_root=RUNS_ROOT)
+    except Exception as e:
+        log(f"episode append failed (non-fatal): {e!r}")
+
+
+def assistant_text_tail(transcript_events, n=6, each_chars=1500):
+    """Last n assistant text blocks from the stream — the episode's narrative
+    payload, mirroring what write_prior_attempt_notes keeps mechanically."""
+    texts = []
+    for ev in transcript_events:
+        if ev.get("type") != "assistant":
+            continue
+        for block in (ev.get("message") or {}).get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = (block.get("text") or "").strip()
+                if t:
+                    texts.append(t[:each_chars])
+    return texts[-n:]
+
+
+def distilled_memory_block(ticket):
+    """wq#1183 recall: top-k distilled facts for the worker prompt prelude,
+    scoped to fleet + this ticket's repo when one is declared. Empty string on
+    any failure — prompt assembly never depends on the memory store."""
+    try:
+        recall = _memory_import("recall")
+        scopes = {"fleet"}
+        repo = (ticket.get("repo") or "").strip()
+        if repo:
+            scopes.add(f"repo:{os.path.basename(repo)}")
+        lane = (ticket.get("lane") or "").strip()
+        if lane:
+            scopes.add(f"lane:{lane}")
+        return recall.render_block(recall.top_facts(scopes=scopes))
+    except Exception:
+        return ""
+
+
 def slugify(text, maxlen=40):
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return s[:maxlen] or "ticket"
@@ -1038,11 +1092,16 @@ def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None):
     if prior_notes_path and os.path.exists(prior_notes_path):
         with open(prior_notes_path) as f:
             prior_notes = f.read()
+    memory_block = distilled_memory_block(ticket)
+    if not memory_block:
+        tmpl = tmpl.replace("{{DISTILLED_MEMORY}}\n\n", "").replace(
+            "{{DISTILLED_MEMORY}}", "")
     return (tmpl
             .replace("{{TICKET_ID}}", str(ticket_id))
             .replace("{{TITLE}}", ticket.get("title", ""))
             .replace("{{DETAIL}}", ticket.get("detail", ""))
             .replace("{{WORKTREE}}", worktree)
+            .replace("{{DISTILLED_MEMORY}}", memory_block)
             .replace("{{PRIOR_ATTEMPT_NOTES}}", prior_notes))
 
 
@@ -1409,6 +1468,23 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "rate_limits_start": rate_limits_start, "rate_limits_exit": rate_limits_exit,
     }
     write_usage_sidecar(ticket_id, attempt, usage_record)
+
+    # wq#1183 episodic memory: one attempt_end event per attempt into the
+    # append-only per-run episode log. This — not the attempt record — is what
+    # memory/distill.py reads, so it carries the narrative (result text +
+    # assistant tail) alongside the mechanical outcome. Best-effort.
+    append_episode_event(ticket_id, {
+        "type": "attempt_end", "attempt": attempt, "worker_id": worker_id,
+        "lane": ticket.get("lane"), "title": ticket.get("title"),
+        "classification": classification,
+        "raw_classification": raw_classification,
+        "killed_reason": killed_reason, "model": args.model,
+        "observed_model": state.model, "turns": state.turns,
+        "elapsed_s": round(elapsed, 1), "session_id": state.session_id,
+        "result_text": (state.result_text
+                        if isinstance(state.result_text, str) else "")[:4000],
+        "assistant_tail": assistant_text_tail(events),
+    })
 
     # wq#749: reconcile()'s SUCCESS/DEGRADED_SUCCESS branch calls `wq done` — wrong
     # for a ticket the worker itself already blocked. Terminal here, no retry, no

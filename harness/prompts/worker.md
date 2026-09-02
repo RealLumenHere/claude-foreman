@@ -61,6 +61,8 @@ Print exactly one sentinel as the last line: TICKET_CLOSED | BLOCKED | CLAIM_ERR
 
 ---
 
+{{DISTILLED_MEMORY}}
+
 YOUR TICKET: wq#{{TICKET_ID}}: {{TITLE}}
 
 {{DETAIL}}
