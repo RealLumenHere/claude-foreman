@@ -505,6 +505,11 @@ PRIMARY_MUST_BLOCK = [
     ({"command": "git merge --ff-only origin/feat/x"}, PRIMARY),  # non-default target
     ({"command": f"git -C {PRIMARY} merge --no-ff origin/main"}, WORKTREE),
     ({"command": "git merge --ff-only origin/main && git checkout feat/x"}, PRIMARY),
+    # wq#1256 (#19): git clean -f/--force is as destructive as checkout/reset
+    ({"command": "git clean -f"}, PRIMARY),
+    ({"command": "git clean -fd"}, PRIMARY),
+    ({"command": "git clean --force"}, f"{PRIMARY}/harness"),
+    ({"command": f"git -C {PRIMARY} clean -fdx"}, WORKTREE),
 ]
 
 PRIMARY_MUST_ALLOW = [
@@ -525,6 +530,9 @@ PRIMARY_MUST_ALLOW = [
     ({"command": "git merge --ff-only origin/main"}, PRIMARY),
     ({"command": f"git -C {PRIMARY} merge --ff-only origin/main"}, WORKTREE),
     ({"command": "git -C /home/lumen/pstack merge --ff-only origin/master"}, WORKTREE),
+    # wq#1256 (#19): a dry-run/status-only clean is not destructive
+    ({"command": "git clean -n"}, PRIMARY),
+    ({"command": "git clean --dry-run"}, PRIMARY),
 ]
 
 

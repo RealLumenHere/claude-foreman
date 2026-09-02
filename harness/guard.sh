@@ -155,11 +155,19 @@ Bash)
     # default can never switch branches or introduce unreviewed content; anything
     # else that moves HEAD is denied.
     PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control}
+    # wq#1256 (#19 sync-live guard): git clean -f/--force is just as destructive
+    # to a live tree as checkout/reset — it discards untracked files with no
+    # undo. The sanctioned path for resyncing a primary is /home/lumen/bin/sync-live
+    # <repo> <expected-sha>, which fetches, verifies the SHA landed on
+    # origin/main, refuses on a dirty tree, and only then does the reset — so
+    # the reason string below points there instead of leaving a worker to guess.
     GIT_MOVE=0
     if printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\b(checkout|switch|restore|reset|rebase|pull)\b'; then
       GIT_MOVE=1
     elif printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bmerge\b' \
         && ! printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bmerge +--ff-only +origin/(main|master)([[:space:]]|$)'; then
+      GIT_MOVE=1
+    elif printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bclean\b[^|;&]*(-[a-zA-Z]*f[a-zA-Z]*\b|--force\b)'; then
       GIT_MOVE=1
     fi
     if [ "$GIT_MOVE" = 1 ]; then
@@ -169,10 +177,10 @@ Bash)
         [ -n "$ptree" ] || continue
         case "$HOOK_CWD" in
           "$ptree"|"$ptree"/*)
-            block "git branch/HEAD-moving verb inside PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD" ;;
+            block "git branch/HEAD-moving verb inside PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; use sync-live to resync a primary, or do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD" ;;
         esac
         if printf '%s' "$target" | grep -qE "(cd +|-C +|--git-dir[= ]|--work-tree[= ])[\"']?$ptree(/|['\" ;&|]|\$)"; then
-          block "git branch/HEAD-moving verb targeting PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD"
+          block "git branch/HEAD-moving verb targeting PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; use sync-live to resync a primary, or do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD"
         fi
       done
     fi
