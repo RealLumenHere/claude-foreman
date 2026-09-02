@@ -201,14 +201,20 @@ def list_blocked():
 
 
 def wq_show(tid):
-    p = subprocess.run([WQ_BIN, "show", str(tid)], capture_output=True, text=True, timeout=30)
-    out = {}
-    for line in p.stdout.splitlines():
-        if ":" not in line:
-            continue
-        k, v = line.split(":", 1)
-        out[k.strip()] = v.strip()
-    return out
+    """wq#1277: `--json` avoids the line-oriented `key : value` parse that truncated a
+    `detail` field at its first embedded newline (aq_escalate.py's seed_ticket() writes
+    exactly that shape) and mis-parsed later colon-bearing lines as bogus keys. Values
+    come back stringified to preserve the old dict-of-strings contract every caller here
+    already expects."""
+    p = subprocess.run([WQ_BIN, "show", str(tid), "--json"], capture_output=True, text=True,
+                        timeout=30)
+    try:
+        out = json.loads(p.stdout) if p.stdout.strip() else {}
+    except json.JSONDecodeError:
+        return {}
+    if "error" in out and "id" not in out:
+        return {}
+    return {k: ("" if v is None else str(v)) for k, v in out.items()}
 
 
 def wq_release(tid):

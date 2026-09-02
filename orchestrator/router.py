@@ -670,15 +670,15 @@ def wq(*args):
 
 
 def wq_show(ticket_id):
-    out = {}
-    for line in wq("show", str(ticket_id)).stdout.splitlines():
-        if ":" not in line:
-            continue
-        k, v = line.split(":", 1)
-        out[k.strip()] = v.strip()
+    """wq#1277: `--json` avoids the line-oriented `key : value` parse that truncated a
+    `detail` field at its first embedded newline (aq_escalate.py's seed_ticket() writes
+    exactly that shape) and mis-parsed later colon-bearing lines as bogus keys. Values
+    come back stringified to preserve the old dict-of-strings contract every caller here
+    already expects (None/"" sentinels compared via `in (None, "", "None")`)."""
+    out = json.loads(wq("show", str(ticket_id), "--json").stdout or "{}")
     if not out or out.get("id") is None:
         raise SystemExit(f"router: no such ticket {ticket_id}")
-    return out
+    return {k: ("" if v is None else str(v)) for k, v in out.items()}
 
 
 def assign(ticket_id, *, archetype=None, manifest=None, pressure=None, dry_run=False,

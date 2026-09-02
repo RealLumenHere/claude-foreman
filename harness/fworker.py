@@ -432,15 +432,19 @@ def wq(*args, check=False):
 
 
 def wq_show(ticket_id):
-    """Parse `wq show <id>`'s `key : value` text into a dict — wq has no --json."""
-    p = wq("show", str(ticket_id))
-    out = {}
-    for line in p.stdout.splitlines():
-        if ":" not in line:
-            continue
-        k, v = line.split(":", 1)
-        out[k.strip()] = v.strip()
-    return out
+    """wq#1277: `--json` avoids the line-oriented `key : value` parse that truncated a
+    `detail` field at its first embedded newline (aq_escalate.py's seed_ticket() writes
+    exactly that shape) and mis-parsed later colon-bearing lines as bogus keys. Values
+    come back stringified to preserve the old dict-of-strings contract every caller here
+    already expects."""
+    p = wq("show", str(ticket_id), "--json")
+    try:
+        out = json.loads(p.stdout) if p.stdout.strip() else {}
+    except json.JSONDecodeError:
+        return {}
+    if "error" in out and "id" not in out:
+        return {}
+    return {k: ("" if v is None else str(v)) for k, v in out.items()}
 
 
 def deps_unmet(ticket_id):
