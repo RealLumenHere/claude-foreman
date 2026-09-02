@@ -1,0 +1,85 @@
+--- a/agent_bridge.py
++++ b/agent_bridge.py
+@@ -2775,6 +2775,35 @@
+         pass
+     return system
+ 
++# ── Persona (wq#1193) ─────────────────────────────────────────────────────────
++# wq#1176 item 4, "persona facts flow both ways". Lumen's canonical self-facts
++# live in lumen_state (subject lumen-persona), shared with the streamer, so what
++# he claimed on stream is what he claims here and the reverse. Both wrappers are
++# thin on purpose — the store read, the extraction policy and the guardrails all
++# live in lumen_persona_bridge.py. Fail-open, like every other prompt augment
++# above: a persona problem must never cost a reply.
++
++def _with_persona(system: str) -> str:
++    """Append the canonical self-facts. Sits BELOW the worklog and ABOVE the
++    telemetry block so the volatile 60s telemetry stays in the tail position."""
++    try:
++        import lumen_persona_bridge
++        return lumen_persona_bridge.with_persona(system)
++    except Exception as _e:
++        log.warning(f"persona recall unavailable: {_e}")
++        return system
++
++
++def _note_persona(reply: str) -> None:
++    """Mine a reply Lumen just gave HERE for durable self-facts, so the streamer
++    knows them next turn. Returns immediately; extraction runs off the response
++    path and refuses anything carrying fleet infrastructure."""
++    try:
++        import lumen_persona_bridge
++        lumen_persona_bridge.note_reply(reply)
++    except Exception as _e:
++        log.warning(f"persona ingest unavailable: {_e}")
++
+ # ── History ───────────────────────────────────────────────────────────────────
+ 
+ def _add_agent_path():
+@@ -3027,7 +3056,8 @@
+         # wq#185 + cache fix 2026-08-13: telemetry block now appended BELOW the
+         # persona (stable prefix = worklog + persona; volatile block at tail).
+         # Identity of active_system is untouched so is_rage_mode still works.
+-        composed_system = _with_telemetry(_with_worklog(active_system))
++        # wq#1193: self-facts go between the two, for the same cache reason.
++        composed_system = _with_telemetry(_with_persona(_with_worklog(active_system)))
+         # Speaker identity (2026-08-10): Frank = operator, Jay = guest. Guests are
+         # detected by self-announcement, are sticky per chat, and CANNOT escalate.
+         _speaker, _tools_ok = "frank", True
+@@ -3124,6 +3154,10 @@
+ 
+         history.append({"role": "assistant", "content": reply})
+         _save_history(history)
++        # wq#1193: rage replies are the hermit crab, not Lumen, and the canned
++        # ones are hardcoded — neither is a self-disclosure worth storing.
++        if not is_rage_mode:
++            _note_persona(reply)
+ 
+         ts = datetime.utcnow().isoformat()
+         user_emotion = detect_emotion(text, is_user=True)
+@@ -3173,7 +3207,8 @@
+                 recent = recent[:-1] + [{**recent[-1], "content": clipped}]
+         # wq#185 + cache fix 2026-08-13: telemetry appended BELOW persona
+         # (streaming path). Stable prefix = worklog + persona.
+-        composed_system = _with_telemetry(_with_worklog(active_system))
++        # wq#1193: self-facts go between the two, for the same cache reason.
++        composed_system = _with_telemetry(_with_persona(_with_worklog(active_system)))
+         # Speaker identity (2026-08-10) — streaming path. Same gate as the sync
+         # path: guests get no tool execution, ever.
+         _speaker, _tools_ok = "frank", True
+@@ -3208,6 +3243,7 @@
+             # the shared persistence block at the end of this function.
+             history.append({"role": "assistant", "content": reply})
+             _save_history(history)
++            _note_persona(reply)
+             _ts = datetime.utcnow().isoformat()
+             _save_server_history([
+                 {"text": text,  "isUser": True,  "time": _ts,
+@@ -3263,6 +3299,7 @@
+ 
+         history.append({"role": "assistant", "content": reply})
+         _save_history(history)
++        _note_persona(reply)
+         ts = datetime.utcnow().isoformat()
+         user_emotion = detect_emotion(text, is_user=True)
+         lumen_emotion = detect_emotion(reply, is_user=False)
