@@ -31,6 +31,27 @@ One `fworker` process drives the whole thing to a terminal outcome — `fire_gat
 only thing that calls it and does the side-effecting work (spawn a child, ntfy, wq
 lifecycle calls).
 
+**0. Every loop iteration re-verifies first (wq#1234).** Before computing `next_action`,
+   `run_fire_ticket()` calls `fire_gate.probe_condition_cleared(ticket_detail)`, which
+   checks whether the aq alert-queue row that originated this ticket (parsed from the
+   `Probe: <name>` / `aq row: #<id>` lines `aq_escalate.seed_ticket` writes into every
+   fleet-fires ticket's detail) is still `status='open'`. Only the independent sentinel
+   probe cycle ever clears that row (edge-clear on PASS) — this never re-runs the probe
+   itself, it just asks whether sentinel already has. If the row has cleared, the ticket
+   auto-closes right there (`wq done`, note `"condition cleared: ..."`) with no diagnosis
+   or apply child ever spawned — this is what wq#1154/#1160/#1161 needed: Maat/the brain
+   model had already recovered, but the old loop had no way to notice and kept holding
+   for an approval on a fire that was already out. Every re-verify is logged
+   (`fire-mode re-verify: ... CLEARED|still active`), pass or fail, each iteration.
+
+   Right after that, total wall-clock since `run_fire_ticket()` started is checked
+   against `FOREMAN_FIRE_MAX_RUNTIME_S` (default 2700s / 45min,
+   `fire_gate.DEFAULT_MAX_RUNTIME_S`) via `fire_gate.runtime_exceeded()`. This bounds the
+   WHOLE diagnose/hold/apply run, not any one child's wall-clock — once exceeded, the
+   ticket `wq block`s with the current `next_action()` state in the reason (not `wq
+   release`: a churning fire needs a human to look at it, not a silent requeue) and
+   `run_fire_ticket()` returns `EXIT_FIRE_MAX_RUNTIME` (19). No more 13-22h runs.
+
 1. **No plan on disk yet → diagnose.** Spawns a read-only diagnosis child
    (`prompts/fire-diagnosis.md`, env `FOREMAN_FIRE_PHASE=diagnosis`) that investigates
    and writes `/home/lumen/foreman/plans/wq<ID>.md` with five required sections —
@@ -131,7 +152,10 @@ that halts the ticket outright, and never as an approval.
 
 `16` timeout release, `17` diagnosis produced no plan doc, `18` apply phase ran but
 didn't reach SUCCESS/DEGRADED_SUCCESS (the child's own `wq block`/`wq release` call, if
-any, is authoritative — this is just fworker's process exit code).
+any, is authoritative — this is just fworker's process exit code). `19` max-runtime
+exceeded — blocked for a human (wq#1234), `0` (`EXIT_OK`) also covers the wq#1234
+re-verify auto-close path (condition cleared, `wq done` called directly by the
+supervisor rather than by a child).
 
 ## Known gap (follow-up, not this ticket)
 
@@ -148,4 +172,7 @@ concern into this ticket's diff.
 
 `FOREMAN_PLANS_DIR`, `FOREMAN_APPROVALS_DIR`, `FOREMAN_FIRE_TOKEN_FILE` (paths, same
 override convention as every other root in this harness), `FOREMAN_FIRE_POLL_S`
-(default 60), `FOREMAN_FIRE_TIMEOUT_HOURS` (default 24).
+(default 60), `FOREMAN_FIRE_TIMEOUT_HOURS` (default 24), `FOREMAN_FIRE_AQ_DB` (path to
+the alert-queue sqlite db the re-verify step reads, default
+`/home/lumen/agents/alert-queue/alerts.db`), `FOREMAN_FIRE_MAX_RUNTIME_S` (wq#1234 total
+wall-clock cap, default 2700 / 45min).

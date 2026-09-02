@@ -2,13 +2,28 @@
 documented failure modes (FIRE_MODE.md) for the fleet-fires manual-approval workflow:
 malformed/missing approval, ticket-id reuse, bad token, plan drift, and the
 diagnose/hold/apply/timeout_release decision table.
+
+wq#1234 adds re-verify (parse_probe_ref/probe_condition_cleared) and max-runtime
+(runtime_exceeded) coverage — see test_fire_mode.py for the fworker-level wiring.
 """
 import json
 import os
+import sqlite3
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import fire_gate  # noqa: E402
+
+
+def _aq_db(tmp_path, rows):
+    """rows: list of (id, status) tuples to seed the alerts table."""
+    path = str(tmp_path / "alerts.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE alerts(id INTEGER PRIMARY KEY, status TEXT)")
+    conn.executemany("INSERT INTO alerts(id, status) VALUES (?, ?)", rows)
+    conn.commit()
+    conn.close()
+    return path
 
 
 def _wire(tmp_path, monkeypatch, token="s3cr3t-token"):
@@ -174,3 +189,66 @@ def test_sha256_text_is_stable_and_sensitive():
     c = fire_gate.sha256_text("hello ")
     assert a == b
     assert a != c
+
+
+# --- wq#1234: re-verify (parse_probe_ref / probe_condition_cleared) ------------------
+
+SAMPLE_DETAIL = (
+    "Auto-escalated by aq_escalate (wq#965 responder).\n\n"
+    "Probe: probe-maat-vault\n"
+    "aq row: #967 (source=probe, priority=high)\n"
+    "Repeats: 3 consecutive CRITICAL fails, no ack, no recovery\n"
+)
+
+
+def test_parse_probe_ref_extracts_probe_and_aq_id():
+    probe, aq_id = fire_gate.parse_probe_ref(SAMPLE_DETAIL)
+    assert probe == "probe-maat-vault"
+    assert aq_id == 967
+
+
+def test_parse_probe_ref_none_for_unstructured_detail():
+    assert fire_gate.parse_probe_ref("just some free text, no probe reference") == (None, None)
+    assert fire_gate.parse_probe_ref("") == (None, None)
+    assert fire_gate.parse_probe_ref(None) == (None, None)
+
+
+def test_probe_condition_cleared_true_when_aq_row_resolved(tmp_path):
+    db = _aq_db(tmp_path, [(967, "resolved")])
+    assert fire_gate.probe_condition_cleared(SAMPLE_DETAIL, aq_db=db) is True
+
+
+def test_probe_condition_cleared_false_when_aq_row_still_open(tmp_path):
+    db = _aq_db(tmp_path, [(967, "open")])
+    assert fire_gate.probe_condition_cleared(SAMPLE_DETAIL, aq_db=db) is False
+
+
+def test_probe_condition_cleared_fails_closed_no_probe_ref(tmp_path):
+    db = _aq_db(tmp_path, [(967, "resolved")])
+    assert fire_gate.probe_condition_cleared("no probe reference here", aq_db=db) is False
+
+
+def test_probe_condition_cleared_fails_closed_missing_db(tmp_path):
+    missing = str(tmp_path / "does-not-exist.db")
+    assert fire_gate.probe_condition_cleared(SAMPLE_DETAIL, aq_db=missing) is False
+
+
+def test_probe_condition_cleared_fails_closed_row_not_found(tmp_path):
+    db = _aq_db(tmp_path, [(1, "resolved")])  # no row 967
+    assert fire_gate.probe_condition_cleared(SAMPLE_DETAIL, aq_db=db) is False
+
+
+# --- wq#1234: max-runtime (runtime_exceeded) ------------------------------------------
+
+def test_runtime_not_exceeded_within_cap():
+    start = 1000.0
+    assert fire_gate.runtime_exceeded(start, max_runtime_s=2700, now=start + 60) is False
+
+
+def test_runtime_exceeded_past_cap():
+    start = 1000.0
+    assert fire_gate.runtime_exceeded(start, max_runtime_s=2700, now=start + 2701) is True
+
+
+def test_runtime_exceeded_default_is_45_minutes():
+    assert fire_gate.DEFAULT_MAX_RUNTIME_S == 45 * 60

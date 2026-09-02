@@ -351,6 +351,7 @@ EXIT_CRASH = 15
 EXIT_FIRE_TIMEOUT = 16
 EXIT_FIRE_DIAGNOSIS_FAILED = 17
 EXIT_FIRE_APPLY_INCOMPLETE = 18
+EXIT_FIRE_MAX_RUNTIME = 19  # wq#1234: hard wall-clock cap exceeded, blocked for a human
 
 
 def log(msg):
@@ -1181,6 +1182,13 @@ def run_fire_ticket(args):
     fire_gate (ticket-id match, bearer token, plan-hash == current plan) before ANY
     apply-phase child spawns, and the apply-phase child's own mandatory re-verify step
     (fire-apply.md) can still veto via drift_path if state moved while we were waiting.
+
+    wq#1234: wq#1154/#1160/#1161 all ran 13-22h holding for an approval that never came,
+    even after the underlying probe condition had already cleared on its own. Every loop
+    iteration now re-verifies the originating probe (fire_gate.probe_condition_cleared) —
+    if it's PASSing again, the ticket auto-closes with 'condition cleared' instead of
+    continuing to hold — and total wall-clock is capped at max_runtime_s: once exceeded,
+    the ticket blocks with the current probe state for a human instead of churning.
     """
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
@@ -1191,10 +1199,40 @@ def run_fire_ticket(args):
     wall_clock = args.wall_clock_timeout or WALL_CLOCK_DEFAULT_S
     poll_s = _envint("FOREMAN_FIRE_POLL_S", 60)
     timeout_hours = _envint("FOREMAN_FIRE_TIMEOUT_HOURS", fire_gate.DEFAULT_TIMEOUT_HOURS)
+    max_runtime_s = _envint("FOREMAN_FIRE_MAX_RUNTIME_S", fire_gate.DEFAULT_MAX_RUNTIME_S)
     notified_hold = False
     last_reject_code = None
+    start_ts = time.time()
+    detail = ticket.get("detail", "")
 
     while True:
+        cleared = fire_gate.probe_condition_cleared(detail)
+        log(f"wq#{ticket_id} fire-mode re-verify: originating probe condition "
+            f"{'CLEARED' if cleared else 'still active'}")
+        if cleared:
+            wq_done(ticket_id, "condition cleared: re-verify found the originating "
+                    "probe's aq row no longer open — auto-closed by the fire-response "
+                    "archetype (wq#1234), no manual apply needed")
+            ntfy("fire ticket auto-closed",
+                 f"wq#{ticket_id}: re-verify found the originating probe condition has "
+                 f"cleared on its own — auto-closed, no change applied.",
+                 priority="default")
+            fire_gate.clear_fire_state(ticket_id)
+            print("TICKET_CLOSED")
+            return EXIT_OK
+
+        if fire_gate.runtime_exceeded(start_ts, max_runtime_s):
+            action, info = fire_gate.next_action(ticket_id, timeout_hours=timeout_hours)
+            reason = (f"fire-response exceeded max runtime ({max_runtime_s}s) without "
+                      f"the probe condition clearing — current state: action={action} "
+                      f"info={info}")
+            log(f"wq#{ticket_id} fire-mode: {reason} — blocking for human review")
+            wq_block(ticket_id, reason)
+            ntfy("fire ticket exceeded max runtime", f"wq#{ticket_id}: {reason}",
+                 priority="high")
+            print("BLOCKED")
+            return EXIT_FIRE_MAX_RUNTIME
+
         action, info = fire_gate.next_action(ticket_id, timeout_hours=timeout_hours)
 
         if action == "diagnose":

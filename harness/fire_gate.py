@@ -15,6 +15,8 @@ sandbox, same trust boundary as OAUTH_TOKEN_FILE (wq#616) — ever opens FIRE_TO
 import hashlib
 import json
 import os
+import re
+import sqlite3
 import time
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
@@ -24,6 +26,17 @@ APPROVALS_DIR = os.environ.get("FOREMAN_APPROVALS_DIR",
 FIRE_TOKEN_FILE = os.environ.get("FOREMAN_FIRE_TOKEN_FILE",
                                   "/home/lumen/.secrets/foreman-fire-approval.token")
 DEFAULT_TIMEOUT_HOURS = 24
+
+# wq#1234: re-verify + max-runtime for the fleet-fires manual-approval workflow. wq#1154/
+# #1160/#1161 all ran 13-22h after the underlying probe condition had already cleared,
+# because nothing ever re-ran the originating probe or bounded total wall-clock.
+AQ_DB = os.environ.get("FOREMAN_FIRE_AQ_DB", "/home/lumen/agents/alert-queue/alerts.db")
+DEFAULT_MAX_RUNTIME_S = 45 * 60
+
+# Matches aq_escalate.seed_ticket's detail template exactly (bin/aq_escalate.py):
+#   "Probe: {probe}\naq row: #{row['id']} (source=..., priority=...)\n"
+PROBE_RE = re.compile(r"^Probe:\s*(\S+)", re.MULTILINE)
+AQ_ROW_RE = re.compile(r"aq row:\s*#(\d+)", re.MULTILINE)
 
 REQUIRED_APPROVAL_FIELDS = ("ticket", "plan_hash", "token")
 
@@ -165,3 +178,55 @@ def next_action(ticket_id, timeout_hours=DEFAULT_TIMEOUT_HOURS, now=None):
     if diagnosis_timed_out(ticket_id, timeout_hours, now):
         return "timeout_release", {"code": code, "detail": detail}
     return "hold", {"code": code, "detail": detail}
+
+
+def parse_probe_ref(detail):
+    """Extract (probe_name, aq_id) from a fleet-fires ticket's detail text, in the exact
+    shape aq_escalate.seed_ticket writes it. Returns (None, None) for a fire-response
+    ticket that wasn't probe-originated (no "Probe:"/"aq row: #<id>" lines) — such a
+    ticket has no aq row to re-verify against."""
+    if not detail:
+        return None, None
+    probe_m = PROBE_RE.search(detail)
+    aq_m = AQ_ROW_RE.search(detail)
+    probe = probe_m.group(1) if probe_m else None
+    aq_id = int(aq_m.group(1)) if aq_m else None
+    return probe, aq_id
+
+
+def probe_condition_cleared(detail, aq_db=None):
+    """Re-verify step (wq#1234): True iff the aq alert-queue row that originated this
+    fire ticket is no longer 'open'. The independent sentinel probe cycle is the only
+    thing that ever clears a row (edge-clear on PASS, see aq_escalate.seed_ticket's
+    Acceptance text and sentinel_probes.py's EDGE-CLEAR path) — this never re-runs the
+    probe itself, it just asks whether sentinel already has.
+
+    Fails closed (returns False, i.e. "still on fire") whenever the answer can't be
+    determined: no parseable aq row reference, no aq db file, unreadable db, or no
+    matching row — "can't check" must never be mistaken for "cleared"."""
+    _, aq_id = parse_probe_ref(detail)
+    if aq_id is None:
+        return False
+    path = aq_db or AQ_DB
+    if not os.path.isfile(path):
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
+        try:
+            row = conn.execute("SELECT status FROM alerts WHERE id=?", (aq_id,)).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    if row is None:
+        return False
+    return row[0] != "open"
+
+
+def runtime_exceeded(start_ts, max_runtime_s=DEFAULT_MAX_RUNTIME_S, now=None):
+    """True once a fire-response ticket has run longer than max_runtime_s wall-clock
+    since start_ts (the whole diagnose/hold/apply run, not one child's wall-clock) —
+    the hard cap wq#1234 adds so a churning fire ticket blocks for a human instead of
+    running 13-22h like wq#1154/#1160/#1161 did."""
+    now = now if now is not None else time.time()
+    return (now - start_ts) > max_runtime_s

@@ -2,9 +2,14 @@
 run_fire_child (the one function that actually spawns a `claude -p` child) so these
 exercise run_fire_ticket()'s diagnose/hold/apply/timeout state-machine wiring and its
 wq lifecycle calls (release/heartbeat/ntfy) without a live model or subprocess.
+
+wq#1234 adds re-verify + max-runtime coverage: a fire whose originating probe flips to
+PASS (aq row resolved) auto-closes instead of holding, and a fire that churns past the
+wall-clock cap blocks cleanly with the current probe state instead of running for hours.
 """
 import json
 import os
+import sqlite3
 import sys
 import types
 
@@ -34,12 +39,30 @@ def _wire_common(tmp_path, monkeypatch):
     monkeypatch.setattr(fworker, "wq_show", lambda tid: {"title": "test fire ticket", "detail": "x"})
     monkeypatch.setattr(fworker.time, "sleep", lambda s: None)
 
-    calls = {"released": [], "blocked": [], "heartbeats": [], "ntfy": []}
+    # wq#1234: no aq db on disk by default -> probe_condition_cleared fails closed
+    # (False) for every existing test here, same as before this ticket's change.
+    monkeypatch.setattr(fire_gate, "AQ_DB", str(tmp_path / "no-such-alerts.db"))
+
+    calls = {"released": [], "blocked": [], "heartbeats": [], "ntfy": [], "done": []}
     monkeypatch.setattr(fworker, "wq_release", lambda tid: calls["released"].append(tid))
     monkeypatch.setattr(fworker, "wq_block", lambda tid, reason: calls["blocked"].append((tid, reason)))
     monkeypatch.setattr(fworker, "wq_heartbeat", lambda tid: calls["heartbeats"].append(tid))
+    monkeypatch.setattr(fworker, "wq_done", lambda tid, notes: calls["done"].append((tid, notes)))
     monkeypatch.setattr(fworker, "ntfy", lambda title, msg, priority="default": calls["ntfy"].append((title, msg)))
     return calls
+
+
+def _aq_db(tmp_path, rows):
+    path = str(tmp_path / "alerts.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE alerts(id INTEGER PRIMARY KEY, status TEXT)")
+    conn.executemany("INSERT INTO alerts(id, status) VALUES (?, ?)", rows)
+    conn.commit()
+    conn.close()
+    return path
+
+
+PROBE_DETAIL = "Probe: probe-maat-vault\naq row: #967 (source=probe, priority=high)\n"
 
 
 def test_diagnosis_with_no_plan_written_releases(tmp_path, monkeypatch):
@@ -138,3 +161,88 @@ def test_apply_drift_clears_state_and_rediagnoses(tmp_path, monkeypatch):
     assert hold_reached["hit"]
     assert not os.path.exists(fire_gate.drift_path(717))  # cleared by clear_fire_state
     assert any("drift" in title.lower() for title, _ in calls["ntfy"])
+
+
+# --- wq#1234: re-verify auto-closes a fire whose probe flips to PASS ------------------
+
+def test_probe_recovery_auto_closes_without_apply(tmp_path, monkeypatch):
+    calls = _wire_common(tmp_path, monkeypatch)
+    # aq row already resolved (sentinel edge-cleared it) before the fire worker even
+    # gets its first turn — mirrors wq#1154: Maat recovered while the ticket sat idle.
+    db = _aq_db(tmp_path, [(967, "resolved")])
+    monkeypatch.setattr(fire_gate, "AQ_DB", db)
+    monkeypatch.setattr(fworker, "wq_show", lambda tid: {"title": "t", "detail": PROBE_DETAIL})
+
+    spawned = []
+    monkeypatch.setattr(fworker, "run_fire_child", lambda *a, **k: spawned.append(a) or SUCCESS)
+
+    rc = fworker.run_fire_ticket(_args())
+
+    assert rc == fworker.EXIT_OK
+    assert spawned == []  # never spawned a diagnosis/apply child at all
+    assert calls["done"] == [(717, calls["done"][0][1])]
+    assert "condition cleared" in calls["done"][0][1]
+    assert calls["released"] == []
+    assert calls["blocked"] == []
+    assert any("auto-closed" in title.lower() for title, _ in calls["ntfy"])
+
+
+def test_probe_recovery_auto_closes_mid_hold(tmp_path, monkeypatch):
+    calls = _wire_common(tmp_path, monkeypatch)
+    monkeypatch.setattr(fworker, "wq_show", lambda tid: {"title": "t", "detail": PROBE_DETAIL})
+    db = _aq_db(tmp_path, [(967, "open")])
+    monkeypatch.setattr(fire_gate, "AQ_DB", db)
+
+    def fake_child(phase, args, ticket, ticket_id, worktree, worker_id, max_turns, wall_clock, plan_text=None):
+        assert phase == "diagnosis"
+        fire_gate.write_plan(ticket_id, "# plan\ncurrent state: ok\n")
+        return SUCCESS
+    monkeypatch.setattr(fworker, "run_fire_child", fake_child)
+
+    # The probe recovers while the ticket is holding for approval — flip the aq row to
+    # resolved on the first sleep() call (i.e. after the first hold iteration).
+    conn = sqlite3.connect(db)
+
+    def sleep_then_recover(s):
+        conn.execute("UPDATE alerts SET status='resolved' WHERE id=967")
+        conn.commit()
+    monkeypatch.setattr(fworker.time, "sleep", sleep_then_recover)
+
+    rc = fworker.run_fire_ticket(_args())
+
+    assert rc == fworker.EXIT_OK
+    assert calls["done"] and "condition cleared" in calls["done"][0][1]
+    assert calls["released"] == []
+    assert calls["blocked"] == []
+
+
+# --- wq#1234: max-runtime blocks cleanly instead of churning --------------------------
+
+def test_max_runtime_exceeded_blocks_with_probe_state(tmp_path, monkeypatch):
+    calls = _wire_common(tmp_path, monkeypatch)
+    monkeypatch.setattr(fworker, "wq_show", lambda tid: {"title": "t", "detail": "x"})
+    monkeypatch.setenv("FOREMAN_FIRE_MAX_RUNTIME_S", "1")
+
+    # First call establishes start_ts via time.time(); simulate wall-clock already past
+    # the 1s cap by the time the loop re-checks, without a real sleep.
+    real_time = fworker.time.time
+    times = [real_time(), real_time() + 5]
+
+    def fake_time():
+        return times.pop(0) if times else real_time() + 5
+    monkeypatch.setattr(fworker.time, "time", fake_time)
+
+    spawned = []
+    monkeypatch.setattr(fworker, "run_fire_child", lambda *a, **k: spawned.append(a) or SUCCESS)
+
+    rc = fworker.run_fire_ticket(_args())
+
+    assert rc == fworker.EXIT_FIRE_MAX_RUNTIME
+    assert spawned == []  # never got to spawn diagnosis — capped before the first child
+    assert calls["done"] == []
+    assert calls["released"] == []
+    assert len(calls["blocked"]) == 1
+    tid, reason = calls["blocked"][0]
+    assert tid == 717
+    assert "max runtime" in reason.lower()
+    assert any("max runtime" in title.lower() for title, _ in calls["ntfy"])
