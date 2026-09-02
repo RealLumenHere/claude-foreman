@@ -81,6 +81,9 @@ LANE_REPO = {
     "pokemon": "/home/lumen/pokemon",
     "lpp": "/home/lumen/pokemon",        # dispatcher lane name is 'lpp'; repo is pokemon (Frank 2026-08-21)
     "questfree": "/home/lumen/questfree",
+    "nest": "/home/lumen/projects/nest",  # wq#1155/ISSUE-LOG #56 class: [nest]-titled tickets
+                                           # were dispatching lane=build -> FOREMAN_ROOT with
+                                           # zero access to the actual nest repo
     "pstack": "/home/lumen/pstack",
     "mission-control": "/home/lumen/mission-control",
     "fleet-spend": FOREMAN_ROOT,

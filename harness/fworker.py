@@ -865,7 +865,8 @@ def build_env(worker_id, model, effort, worktree, ticket_id):
 # cross-repo work and reach live env/config. Writes stay in the worktree by harness discipline +
 # primary_tree_guard; this only widens read/context access.
 WORKER_ADD_DIRS = ["/home/lumen/agents/work-queue", "/home/lumen/mailbot", "/home/lumen/pokemon",
-                   "/home/lumen/bin", "/home/lumen/foreman", "/home/lumen/kb"]
+                   "/home/lumen/bin", "/home/lumen/foreman", "/home/lumen/kb",
+                   "/home/lumen/projects/nest"]
 
 def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=None,
                       resume_session=None, claude_bin="claude"):
