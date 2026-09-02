@@ -533,6 +533,13 @@ PRIMARY_MUST_ALLOW = [
     # wq#1256 (#19): a dry-run/status-only clean is not destructive
     ({"command": "git clean -n"}, PRIMARY),
     ({"command": "git clean --dry-run"}, PRIMARY),
+    # wq#1285 (#19 harden): merge-base/merge-tree are read-only plumbing, not
+    # the branch-moving `git merge` — must not trip the block, since sync-live
+    # itself (and this guard's own spec) uses merge-base --is-ancestor to
+    # verify a commit landed before any resync.
+    ({"command": "git merge-base --is-ancestor abc123 origin/main"}, PRIMARY),
+    ({"command": "git merge-base main origin/main"}, PRIMARY),
+    ({"command": "git merge-tree main origin/main"}, PRIMARY),
 ]
 
 
