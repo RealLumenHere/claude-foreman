@@ -1,0 +1,96 @@
+# agents.yaml — declarative agent archetype spec (wq#1301, foreman pattern D).
+#
+# One reviewable/diffable file for the per-archetype knobs that used to live as
+# scattered module-level dicts inside harness/fworker.py (ARCHETYPE_MAX_TURNS,
+# LOCAL_ALLOWED_ARCHETYPES, LOCAL_ARCHETYPE_MAX_TURNS, WALL_CLOCK_DEFAULT_S/RCA,
+# WORKER_ADD_DIRS). fworker.py now loads through harness/agents_spec.py instead of
+# hardcoding these — see kb/fleet-architecture-ideas.md pattern D.
+#
+# What stays OUT of this file (single source of truth lives elsewhere, this file
+# only cross-checks against it so drift is detectable rather than silent):
+#   - actual model/effort ROUTING decisions: research/models.yaml `routing:` table
+#     (router.py reads that at dispatch time; `primary_tuple` below is the reviewer-
+#     facing expectation, and `agents_apply.py lint` flags it if models.yaml drifts).
+#   - per-repo tool allowlists: harness/permission-profiles/*.json +
+#     repos.d/<repo>.json (permission_profiles.py) — chosen by REPO, not archetype;
+#     `permission_profile_note` below is documentation only.
+#
+# Schema per archetype entry:
+#   primary_tuple: str        — "<model-id>@<effort>" (or "<model-id>@local"),
+#                                matched against research/models.yaml routing[archetype][0]
+#   max_turns: int             — cloud --max-turns ceiling
+#   wall_clock_timeout_s: int  — supervisor wall-clock ceiling
+#   local:                     — omitted => local rung not trusted for this archetype
+#     max_turns: int           — tighter --max-turns for the local pool (loops more)
+#   prompt_template: str       — filename under harness/prompts/
+#   permission_profile_note: str (optional) — human-facing pointer, not enforced
+
+defaults:
+  max_turns: 600
+  wall_clock_timeout_s: 3600
+  prompt_template: worker.md
+  permission_profile_note: "per-repo, see harness/permission-profiles/repos.d/<repo>.json"
+  # WORKER_ADD_DIRS (fworker.py) — read access every worker gets so it can verify
+  # cross-repo work and reach live fleet config/env (wq#1245); writes stay scoped to
+  # the worktree by primary_tree_guard regardless of this list.
+  add_dirs:
+    - /home/lumen/agents/work-queue
+    - /home/lumen/mailbot
+    - /home/lumen/pokemon
+    - /home/lumen/bin
+    - /home/lumen/foreman
+    - /home/lumen/kb
+    - /home/lumen/projects/nest
+
+archetypes:
+  mechanical-edit:
+    primary_tuple: qwen36-local@local
+    max_turns: 600
+    wall_clock_timeout_s: 3600
+    local:
+      max_turns: 10
+
+  probe-build:
+    primary_tuple: sonnet-5@medium
+    max_turns: 600
+    wall_clock_timeout_s: 3600
+    local:
+      max_turns: 15
+
+  standard-engineering:
+    primary_tuple: sonnet-5@high
+    max_turns: 600
+    wall_clock_timeout_s: 3600
+
+  verify-pass:
+    primary_tuple: sonnet-5@high
+    max_turns: 600
+    wall_clock_timeout_s: 3600
+
+  research-synthesis:
+    primary_tuple: opus-5@high
+    max_turns: 600
+    wall_clock_timeout_s: 3600
+
+  novel-design:
+    primary_tuple: fable-5@high
+    max_turns: 600
+    wall_clock_timeout_s: 3600
+
+  rca-investigation:
+    primary_tuple: opus-5@xhigh
+    max_turns: 600
+    wall_clock_timeout_s: 7200
+
+  long-horizon-campaign:
+    primary_tuple: DECOMPOSE
+    max_turns: 600
+    wall_clock_timeout_s: 3600
+
+  fire-response:
+    # wq#717 (AUTO-5): fleet-fires manual-approval workflow — two-phase prompt
+    # (diagnosis then apply), never local (LOCAL_ALLOWED_ARCHETYPES excluded it).
+    primary_tuple: sonnet-5@high
+    max_turns: 600
+    wall_clock_timeout_s: 3600
+    prompt_template: fire-diagnosis.md

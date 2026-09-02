@@ -49,6 +49,7 @@ from classifier import (
 )
 from oom_forensics import oom_journal_evidence
 import action_gate
+import agents_spec
 import fire_gate
 import permission_profiles
 import primary_tree_guard
@@ -109,33 +110,16 @@ OAUTH_TOKEN_FILE = os.environ.get("FOREMAN_OAUTH_TOKEN_FILE",
 LANGFUSE_ENV = os.environ.get("FOREMAN_LANGFUSE_ENV",
                                "/home/lumen/.secrets/langfuse-foreman.env")
 
-# design §3: per-archetype --max-turns defaults (passed to the CLI; the supervisor
-# also backstops a few turns above this, see module docstring). Unlisted archetypes
-# fall back to standard-engineering's ceiling.
-# RECALIBRATED 2026-08-22 (Frank-directed permanent fix). The original table assumed
-# 1 counted turn ~= 1 tool call; measured reality (2026-08-21, wq#713: 24 real tool
-# calls registered 45 turns) is that hook frames roughly DOUBLE the count, so these
-# ceilings bought half the work they claimed. Result: 49 spawns overnight, 46 killed,
-# 3 succeeded — every successful ticket needed 80-118 counted turns against 40-65
-# ceilings. New values = empirically what completing tickets actually consumed +
-# headroom, NOT the old numbers x2 guesswork. Do not lower these without measuring
-# real-turns-per-tool-call first (mechanics audit owns the proper fix: count only
-# assistant turns in the supervisor).
-ARCHETYPE_MAX_TURNS = {
-    # 2026-08-22 Frank-directed: ceilings REMOVED as a failure cause until the real
-    # turn-accounting fix lands (mechanics audit: count assistant turns, not hook
-    # frames). 600 is effectively "don't turn-kill"; wall_clock timeout is the real
-    # bound now. Restore per-archetype values only after the audit measures them.
-    "mechanical-edit": 600,
-    "probe-build": 600,
-    "standard-engineering": 600,
-    "verify-pass": 600,
-    "research-synthesis": 600,
-    "novel-design": 600,
-    "rca-investigation": 600,
-    "long-horizon-campaign": 600,
-    "fire-response": 600,  # wq#717 (AUTO-5): fleet-fires manual-approval workflow
-}
+# wq#1301 (foreman pattern D): all of the per-archetype knobs below (--max-turns,
+# local-rung trust, wall-clock ceiling, add-dirs — WALL_CLOCK_DEFAULT_S/RCA_S and
+# WORKER_ADD_DIRS further down this file) used to be separate hardcoded dicts here.
+# They now come from harness/agents.yaml via agents_spec.py, so the archetype config
+# is one reviewable/diffable file instead of scattered module constants — see
+# agents.yaml's own header comment and agents_spec.lint() for the drift check against
+# research/models.yaml. The names below are kept so every existing call site in this
+# file (and its tests) is unchanged; only the definition moved.
+_AGENTS = agents_spec.load()
+ARCHETYPE_MAX_TURNS = {name: _AGENTS.get(name).max_turns for name in _AGENTS.names()}
 DEFAULT_MAX_TURNS = ARCHETYPE_MAX_TURNS["standard-engineering"]
 
 # wq#717 (AUTO-5): the fleet-fires manual-approval archetype. run_fire_ticket() is a
@@ -147,16 +131,16 @@ FIRE_ARCHETYPE = "fire-response"
 # LOCAL_POOL_MODELS — deliberately excludes nephthys-qwen3-14b (fallback brain only,
 # not a wq worker per models.yaml).
 LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local")
-# archetypes models.yaml's routing table ever carries an `@local` rung for — the only
-# work the local rung is trusted with (FOREMAN_RESEARCH §9). Enforced here too
-# (defense-in-depth) so an explicit --model/--archetype override can't dispatch a
-# local-pool model outside what the router itself would ever choose.
-LOCAL_ALLOWED_ARCHETYPES = ("mechanical-edit", "probe-build")
+# archetypes agents.yaml marks `local:` for — the only work the local rung is trusted
+# with (FOREMAN_RESEARCH §9). Enforced here too (defense-in-depth) so an explicit
+# --model/--archetype override can't dispatch a local-pool model outside what the
+# router itself would ever choose.
+LOCAL_ALLOWED_ARCHETYPES = tuple(
+    name for name in _AGENTS.names() if _AGENTS.get(name).local_allowed)
 # FOREMAN_RESEARCH §9: "cap local workers' --max-turns lower (they loop more)" —
 # tighter than ARCHETYPE_MAX_TURNS' cloud defaults for the same two archetypes.
 LOCAL_ARCHETYPE_MAX_TURNS = {
-    "mechanical-edit": 10,
-    "probe-build": 15,
+    name: _AGENTS.get(name).local_max_turns for name in LOCAL_ALLOWED_ARCHETYPES
 }
 
 LITELLM_BASE_URL = os.environ.get("FOREMAN_LITELLM_BASE_URL", "http://localhost:4000")
@@ -251,8 +235,18 @@ def _envint(name, default):
         return default
 
 
-WALL_CLOCK_DEFAULT_S = 3600
-WALL_CLOCK_RCA_S = 7200
+# wq#1301: sourced from agents.yaml (see the ARCHETYPE_MAX_TURNS block above) —
+# names kept for existing callers (dashboard_data.py reads WALL_CLOCK_RCA_S directly).
+WALL_CLOCK_DEFAULT_S = _AGENTS.get("standard-engineering").wall_clock_timeout_s
+WALL_CLOCK_RCA_S = _AGENTS.get("rca-investigation").wall_clock_timeout_s
+
+
+def wall_clock_timeout(archetype):
+    """Per-archetype wall-clock ceiling from agents.yaml; unlisted archetypes fall
+    back to WALL_CLOCK_DEFAULT_S, same posture as ARCHETYPE_MAX_TURNS.get(...)."""
+    if archetype in _AGENTS:
+        return _AGENTS.get(archetype).wall_clock_timeout_s
+    return WALL_CLOCK_DEFAULT_S
 # RELIABILITY_SPEC.md §E: frame-gap watchdog is PRIMARY liveness, T_gap configurable
 # 120-300s (above the slowest legit tool call) — wall-clock above is the secondary
 # ceiling. 600s predates §E and sat well outside that range; --frame-gap-timeout / this
@@ -866,9 +860,17 @@ def build_env(worker_id, model, effort, worktree, ticket_id):
 # wq#1245: workers (esp. verify tickets) must be able to READ the fleet's primary trees to verify
 # cross-repo work and reach live env/config. Writes stay in the worktree by harness discipline +
 # primary_tree_guard; this only widens read/context access.
-WORKER_ADD_DIRS = ["/home/lumen/agents/work-queue", "/home/lumen/mailbot", "/home/lumen/pokemon",
-                   "/home/lumen/bin", "/home/lumen/foreman", "/home/lumen/kb",
-                   "/home/lumen/projects/nest"]
+# wq#1301: default list now sourced from agents.yaml's `defaults.add_dirs` (name kept
+# for existing callers/tests). add_dirs_for() below resolves the per-archetype list —
+# every archetype uses this same default today, but a future archetype-specific
+# add_dirs entry in agents.yaml takes effect without another fworker.py change.
+WORKER_ADD_DIRS = _AGENTS.default_add_dirs
+
+
+def add_dirs_for(archetype):
+    if archetype in _AGENTS:
+        return _AGENTS.get(archetype).add_dirs
+    return WORKER_ADD_DIRS
 
 def resolve_worker_settings(repo, ticket_id):
     """ISSUE-SOLUTIONS-fable.md §2b: render this repo's per-repo toolchain permission
@@ -1165,7 +1167,7 @@ def run_fire_child(phase, args, ticket, ticket_id, worktree, worker_id, max_turn
         env["FOREMAN_FIRE_PLAN_PATH"] = fire_gate.plan_path(ticket_id)
     settings_file = resolve_worker_settings(args.repo, ticket_id)
     cmd = build_claude_cmd(prompt, args.model, args.effort, settings_file,
-                            add_dirs=WORKER_ADD_DIRS,
+                            add_dirs=add_dirs_for(FIRE_ARCHETYPE),
                             max_turns=max_turns, claude_bin=args.claude_bin)
     log(f"wq#{ticket_id} fire-mode {phase}: spawning "
         f"{' '.join(shlex.quote(c) for c in cmd[:6])}...")
@@ -1201,7 +1203,7 @@ def run_fire_ticket(args):
                                       ticket.get("title", str(ticket_id)), FIRE_ARCHETYPE)
     worker_id = args.worker_id or f"fworker-wq{ticket_id}-fire"
     max_turns = args.max_turns or ARCHETYPE_MAX_TURNS.get(FIRE_ARCHETYPE, DEFAULT_MAX_TURNS)
-    wall_clock = args.wall_clock_timeout or WALL_CLOCK_DEFAULT_S
+    wall_clock = args.wall_clock_timeout or wall_clock_timeout(FIRE_ARCHETYPE)
     poll_s = _envint("FOREMAN_FIRE_POLL_S", 60)
     timeout_hours = _envint("FOREMAN_FIRE_TIMEOUT_HOURS", fire_gate.DEFAULT_TIMEOUT_HOURS)
     max_runtime_s = _envint("FOREMAN_FIRE_MAX_RUNTIME_S", fire_gate.DEFAULT_MAX_RUNTIME_S)
@@ -1340,8 +1342,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         max_turns = LOCAL_ARCHETYPE_MAX_TURNS.get(archetype, ARCHETYPE_MAX_TURNS.get(archetype, DEFAULT_MAX_TURNS))
     else:
         max_turns = ARCHETYPE_MAX_TURNS.get(archetype, DEFAULT_MAX_TURNS)
-    wall_clock = args.wall_clock_timeout or (
-        WALL_CLOCK_RCA_S if archetype == "rca-investigation" else WALL_CLOCK_DEFAULT_S)
+    wall_clock = args.wall_clock_timeout or wall_clock_timeout(archetype)
 
     worker_id = args.worker_id or f"fworker-wq{ticket_id}-a{attempt}"
 
@@ -1383,7 +1384,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     loop_tracker = action_gate.LoopTracker()
     settings_file = resolve_worker_settings(args.repo, ticket_id)
     cmd = build_claude_cmd(prompt, args.model, args.effort, settings_file,
-                            add_dirs=WORKER_ADD_DIRS, max_turns=max_turns,
+                            add_dirs=add_dirs_for(archetype), max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin)
 
     log(f"attempt {attempt}: spawning {' '.join(shlex.quote(c) for c in cmd[:6])}... "
