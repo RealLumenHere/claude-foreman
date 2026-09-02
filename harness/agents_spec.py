@@ -188,4 +188,24 @@ def lint(spec=None, models_yaml_path=None):
                 problems.append(
                     f"{name}: has a models.yaml routing entry but no agents.yaml archetype")
 
+    # wq#1329 (ISSUE-LOG #127): the alias/id resolution bug that ticket fixed only ever
+    # showed up in the FULL routing chain (downgrade/escalation rungs beyond the primary
+    # tuple the checks above already cover), so it needed its own check. router.py's own
+    # Manifest.check() (triggered inside load_manifest()) already walks every rung of
+    # every chain and rejects one whose resolved model isn't a real models.yaml id —
+    # reuse that instead of re-deriving alias resolution here a second time, which is
+    # exactly the two-sources-of-truth pattern that produced #127 in the first place.
+    # Local import: lint() is documented as off fworker's hot path, so this doesn't
+    # affect the module's import-time cost; the "independent of router.py" promise in
+    # this file's docstring is specifically about primary-tuple parsing, not this check.
+    try:
+        import sys as _sys
+        orch_dir = os.path.join(HARNESS_DIR, "..", "orchestrator")
+        if orch_dir not in _sys.path:
+            _sys.path.insert(0, orch_dir)
+        import router as _router
+        _router.load_manifest(models_yaml_path or MODELS_YAML, force=True)
+    except Exception as e:  # noqa: BLE001 — any manifest-load failure is a lint finding
+        problems.append(f"router.py manifest check failed (rung alias/id resolution): {e}")
+
     return problems
