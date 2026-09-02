@@ -1,0 +1,136 @@
+# /home/lumen/kb/gatus/config.yaml — wq#1184 fleet-hardening Gatus instance
+#
+# This is a SEPARATE Gatus instance from sentinel-gatus (docker, wq#856,
+# config at /home/lumen/sentinel/config/config.yaml — that one hosts the
+# "5-probes" push-style endpoints). This instance is native (systemd, single
+# Go binary, no docker) and does its own active HTTP polling of core fleet
+# services. See RUNBOOK.md for the split rationale.
+#
+# HARD BRIDGE RULES — do not violate these when editing this file:
+#   1. HTTP(S) checks ONLY. Every `url:` must be http:// or https://.
+#      Never add an icmp:// or tcp:// endpoint — NO PING, of any kind, ever.
+#   2. Targets must be Tailscale addresses (100.x.x.x) or loopback
+#      (127.0.0.1). Never point an endpoint at a bare LAN address.
+#   3. FORBIDDEN TARGETS — never probe these, under any circumstances:
+#        - 192.168.8.1     (LAN gateway)
+#        - 100.81.177.14   (be3600 Slate 7 travel router's Tailscale IP)
+#      Both are routers on the path the fleet's own connectivity depends on;
+#      probing them (even HTTP) has been a self-inflicted outage vector
+#      before. Off-limits permanently, independent of anything else here.
+#   4. Every `interval:` must be >= 60s (1m). No sub-minute polling of
+#      bridged services.
+#   5. Alerts fire on state TRANSITIONS only. This falls out of Gatus's own
+#      failure-threshold / success-threshold semantics on each endpoint
+#      below (a per-check alert type does not exist here) — do not add one.
+#
+# Runbook: ops/wq1184-gatus-health-checks/RUNBOOK.md (claude-foreman repo).
+
+web:
+  address: 127.0.0.1
+  port: 8783
+
+storage:
+  type: sqlite
+  path: /home/lumen/kb/gatus/data/gatus.db
+
+# Custom webhook provider — NOT Gatus's built-in `ntfy` provider. The ticket
+# requires alerting to go through the house /home/lumen/bin/ntfy-send wrapper
+# (priority routing, primary+OOB fan-out, ntfy-send.conf topic config) rather
+# than Gatus talking to an ntfy server directly. gatus-ntfy-relay.service is
+# the loopback-only shim that receives this webhook and shells out to
+# ntfy-send; see ntfy_relay.py.
+alerting:
+  custom:
+    url: "http://127.0.0.1:8784/gatus-alert"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    body: |
+      {
+        "endpoint": "[ENDPOINT_NAME]",
+        "group": "[ENDPOINT_GROUP]",
+        "description": "[ALERT_DESCRIPTION]",
+        "status": "[ALERT_TRIGGERED_OR_RESOLVED]"
+      }
+
+endpoints:
+  # LiteLLM gateway — shallow readiness, polled tight (rule 4 minimum: 1m).
+  - name: litellm-readiness
+    group: fleet-hardening
+    url: "http://100.117.66.102:4000/health/readiness"
+    interval: 1m
+    conditions:
+      - "[STATUS] == 200"
+    alerts:
+      - type: custom
+        failure-threshold: 3
+        success-threshold: 2
+        send-on-resolved: true
+        description: "LiteLLM gateway readiness probe failing (wq#1184)"
+
+  # LiteLLM gateway — deep health (checks configured model backends), polled
+  # loose since it's a heavier call. Requires an API key: set LITELLM_MASTER_KEY
+  # in /home/lumen/kb/gatus/gatus.env (0600, not committed) — see RUNBOOK.md.
+  - name: litellm-health
+    group: fleet-hardening
+    url: "http://100.117.66.102:4000/health"
+    interval: 15m
+    headers:
+      Authorization: "Bearer ${LITELLM_MASTER_KEY}"
+    conditions:
+      - "[STATUS] == 200"
+    alerts:
+      - type: custom
+        failure-threshold: 2
+        success-threshold: 1
+        send-on-resolved: true
+        description: "LiteLLM deep health check failing (wq#1184) — backend-level failure, not just gateway-process-down"
+
+  # Ollama on Isis — deliberately /api/tags (model listing), NOT a chat
+  # completion. Isis is single-slot; a chat probe risks a cold-load stall or
+  # contending with real traffic for the one decode slot (wq#907).
+  - name: ollama-isis-tags
+    group: fleet-hardening
+    url: "http://100.100.129.24:11434/api/tags"
+    interval: 5m
+    conditions:
+      - "[STATUS] == 200"
+    alerts:
+      - type: custom
+        failure-threshold: 3
+        success-threshold: 2
+        send-on-resolved: true
+        description: "Ollama (Isis) /api/tags unreachable (wq#1184) — listing only, not a chat probe (cold-load risk on the single decode slot, wq#907)"
+
+  # foreman's own dashboard/snapshot endpoint — loopback only. PREREQUISITE:
+  # lumen-foreman-dashboard.service is staged but disabled by default
+  # (Tier-3, Frank enables by hand per dispatcher/systemd/INSTALL.md). This
+  # probe will read FAIL until that unit is enabled — see RUNBOOK.md.
+  - name: foreman-heartbeat
+    group: fleet-hardening
+    url: "http://127.0.0.1:8791/api/snapshot"
+    interval: 5m
+    conditions:
+      - "[STATUS] == 200"
+    alerts:
+      - type: custom
+        failure-threshold: 3
+        success-threshold: 2
+        send-on-resolved: true
+        description: "foreman dashboard heartbeat unreachable (wq#1184) — check lumen-foreman-dashboard.service is enabled"
+
+  # kb-mcp — no documented /health route (confirmed live: / and /health both
+  # 404, /mcp responds 406 which still proves the listener is alive and
+  # routing). Liveness-only condition, not a status-code check.
+  - name: kb-mcp
+    group: fleet-hardening
+    url: "http://127.0.0.1:8781/mcp"
+    interval: 5m
+    conditions:
+      - "[CONNECTED] == true"
+    alerts:
+      - type: custom
+        failure-threshold: 3
+        success-threshold: 2
+        send-on-resolved: true
+        description: "kb-mcp :8781 not accepting connections (wq#1184)"

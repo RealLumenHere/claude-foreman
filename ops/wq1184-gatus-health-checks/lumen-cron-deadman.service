@@ -1,0 +1,13 @@
+# lumen-cron-deadman.service — one dead-man sweep over lumen-* stamp files
+# (wq#1184). Companion timer runs this every 10 minutes.
+[Unit]
+Description=Lumen cron dead-man's switch — stamp freshness check (wq#1184)
+Documentation=file:///home/lumen/foreman/ops/wq1184-gatus-health-checks/cron_deadman.py
+After=network.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/wq1184-gatus-health-checks/cron_deadman.py check
+TimeoutStartSec=60
+Nice=10

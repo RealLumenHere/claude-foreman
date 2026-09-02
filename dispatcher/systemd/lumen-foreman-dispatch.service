@@ -16,5 +16,8 @@ User=lumen
 Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/home/lumen/foreman
 ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/foreman_dispatcher.py run --once
+# Dead-man's-switch stamp (wq#1184) — non-fatal (`-`) so a stamp-write hiccup
+# never fails the dispatch pass itself.
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
 TimeoutStartSec=600
 Nice=5
