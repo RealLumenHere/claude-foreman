@@ -945,10 +945,14 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     post_result_grace_s = (post_result_grace_s if post_result_grace_s is not None
                             else POST_RESULT_GRACE_S)
     cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    # ISSUE-SOLUTIONS-fable.md #18: start_new_session=True puts the child in its own
+    # session/process group so a signal delivered to fworker's process group (e.g. an
+    # interactive connector recycle killing the whole group) does not take the `claude`
+    # child down with it — the same detach discipline dispatch-batch applies one level up.
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1,
+        text=True, bufsize=1, start_new_session=True,
     )
     q = queue.Queue()
     t = threading.Thread(target=_reader_thread, args=(proc.stdout, q), daemon=True)
