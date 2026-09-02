@@ -1,0 +1,58 @@
+{
+  "_comment": "lumen-public-guardian config (wq#1252). Paths are absolute on purpose: this runs from a systemd timer with no useful cwd. Nothing secret lives here — credentials are read from the 0600 files named below.",
+
+  "state_path": "/home/lumen/logs/lumen-public-guardian-state.json",
+  "status_path": "/home/lumen/logs/lumen-public-guardian-status.json",
+  "status_push_map": "/home/lumen/.secrets/lpg-status-push.json",
+  "ntfy_topic": null,
+  "wq_bin": "/home/lumen/bin/wq",
+  "fire_lane": "fleet-fires",
+  "runbook": "/home/lumen/foreman/LUMEN_PUBLIC_RUNBOOK.md",
+
+  "realert_cycles": 15,
+  "unconfigured_nag_s": 86400,
+
+  "email": {
+    "mailbot_dir": "/home/lumen/mailbot",
+    "migrations_dir": "/home/lumen/mailbot/migrations",
+    "mail_db": "/home/lumen/mailbot/mail.db",
+    "mail_recall": "/home/lumen/mailbot/mail_recall.py",
+    "agent_bridge": "/home/lumen/agent/agent_bridge.py",
+    "backup_dir": "/home/lumen/mailbot/backups",
+
+    "cf_account_id_file": "/home/lumen/mailbot/.cf_account_id",
+    "d1_id_file": "/home/lumen/mailbot/.d1_database_id",
+    "d1_token_file": "/home/lumen/mailbot/.cf_d1_token",
+    "cf_deploy_token_file": "/home/lumen/mailbot/.cf_deploy_token",
+
+    "worker_name": "lumen-mailbot",
+    "d1_database_name": "lumen-mail",
+    "lumen_state_cli": "/home/lumen/minerva/lumen_state.py",
+    "deploy_grace_s": 1800,
+
+    "probe_sender": "probe@lumennode.uk",
+    "probe_secret_file": "/home/lumen/.secrets/lpg-probe-hmac",
+    "probe_window_s": 1800,
+    "roundtrip_s": 300,
+
+    "deepseek_env_file": "/home/lumen/agent/.env",
+    "deepseek_balance_url": "https://api.deepseek.com/user/balance",
+    "min_balance": 0.5,
+
+    "sync_timer": "lumen-mail-sync.timer",
+    "sync_lag_s": 600,
+    "auth_fail_threshold": 5,
+    "canary_threshold": 3
+  },
+
+  "stream": {
+    "public_url": "https://pokemon.lumennode.uk",
+    "local_url": "http://127.0.0.1:8871",
+    "host": "pokemon.lumennode.uk",
+    "unit": "lumen-pokemon-live.service",
+    "cloudflared_unit": "cloudflared.service",
+    "cloudflared_config": "/etc/cloudflared/config.yml",
+    "freshness_s": 600,
+    "journal_s": 900
+  }
+}

@@ -1,0 +1,24 @@
+# lumen-public-guardian.service — one watchdog pass over Lumen's public
+# surfaces: email (lumen@lumennode.uk) and the LPP stream (wq#1252).
+#
+# ExecStartPost stamps /home/lumen/logs/.stamp.%n, which is what gives this
+# unit its own dead man's switch: lumen-cron-deadman (wq#1184) alerts when a
+# stamp is older than 2x its timer cadence, so a guardian that dies silently
+# is itself reported. A watchdog nobody watches is not a watchdog.
+[Unit]
+Description=Lumen public-surface guardian — email + LPP stream (wq#1252)
+Documentation=file:///home/lumen/foreman/LUMEN_PUBLIC_RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/services/lumen-public-guardian
+ExecStart=/usr/bin/python3 /home/lumen/services/lumen-public-guardian/guardian.py run
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+# A pass that finds a RED check exits non-zero by design; that is a finding,
+# not a unit failure, and must not trip OnFailure or the restart logic.
+SuccessExitStatus=0 1
+TimeoutStartSec=300
+Nice=5

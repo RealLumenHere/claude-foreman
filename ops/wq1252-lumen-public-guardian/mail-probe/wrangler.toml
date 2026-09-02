@@ -1,0 +1,28 @@
+# lumen-mail-probe (wq#1252) — the synthetic sender behind guardian check E2.
+#
+# Before the first deploy:
+#   1. Cloudflare dashboard -> Email -> Destination addresses: lumen@lumennode.uk
+#      must be a VERIFIED destination address, otherwise send_email refuses at
+#      runtime. This is the one step nobody but Frank can do (it needs a click
+#      in his account) — the runbook tracks it.
+#   2. wrangler secret put PROBE_HMAC_SECRET   (same bytes as
+#      /home/lumen/.secrets/lpg-probe-hmac on Lumen)
+name = "lumen-mail-probe"
+workers_dev = false
+main = "src/worker.js"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+account_id = "3f413ce08c3163f99984a78720fa8b97"
+
+[vars]
+PROBE_FROM = "probe@lumennode.uk"
+PROBE_TO = "lumen@lumennode.uk"
+
+# Every 30 minutes — matches probe_window_s in the guardian config, so a token
+# is always current when the mail lands.
+[triggers]
+crons = ["*/30 * * * *"]
+
+[[send_email]]
+name = "MAILER"
+destination_address = "lumen@lumennode.uk"
