@@ -1,0 +1,25 @@
+# wq#1299 — merge into the live LiteLLM proxy config.yaml (not committed to
+# this repo; lives on the gateway node outside git, same convention as
+# wq#897/wq#948). This is a fragment, not a diff, because this BUILD worker's
+# sandbox has no read access to that file — apply by hand and record the
+# applied result the way wq#897's README documents.
+#
+# VERIFY on first deploy: exact `callbacks` vs `success_callback` key name
+# and the `module.instance_name` loading syntax against the LiteLLM version
+# actually running (litellm --version). The shape below matches LiteLLM's
+# documented custom-callback loading convention as of training cutoff;
+# confirm against `litellm --version` and the proxy startup log ("Initialized
+# custom callback...") before trusting traces are flowing.
+
+litellm_settings:
+  # Custom callback module: ops/wq1299-phoenix-tracer/litellm_phoenix_sampler.py,
+  # deployed alongside the proxy config (see install.sh). Handles the
+  # sample-successes / trace-all-errors split itself (kb/fleet-upgrade-plan-review.md
+  # §3) rather than relying on OTel head sampling, which can't see the
+  # outcome before the sampling decision is made.
+  success_callback: ["litellm_phoenix_sampler.phoenix_logger"]
+  failure_callback: ["litellm_phoenix_sampler.phoenix_logger"]
+
+environment_variables:
+  PHOENIX_OTLP_ENDPOINT: "http://127.0.0.1:6006/v1/traces"  # loopback only — co-located with the gateway, survives a bridge drop
+  PHOENIX_SAMPLE_RATE: "0.2"  # 20% of successful calls traced; 100% of failures

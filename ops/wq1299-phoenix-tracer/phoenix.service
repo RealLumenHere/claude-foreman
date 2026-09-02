@@ -1,0 +1,31 @@
+[Unit]
+Description=Arize Phoenix tracer (wq#1299) - single container, SQLite, gateway-local
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# Loopback bind only: -p 127.0.0.1:6006:6006 (UI/query) and
+# 127.0.0.1:4317/4318 (OTLP grpc/http) — never expose beyond the gateway
+# node itself, this stays reachable even if the inter-node bridge is down.
+ExecStartPre=-/usr/bin/docker rm -f phoenix-tracer
+ExecStart=/usr/bin/docker run --rm --name phoenix-tracer \
+  -p 127.0.0.1:6006:6006 \
+  -p 127.0.0.1:4317:4317 \
+  -p 127.0.0.1:4318:4318 \
+  -v /home/lumen/var/phoenix:/mnt/data \
+  -e PHOENIX_WORKING_DIR=/mnt/data \
+  -e PHOENIX_SQL_DATABASE_URL=sqlite:////mnt/data/phoenix.db \
+  arizephoenix/phoenix:latest
+ExecStop=/usr/bin/docker stop phoenix-tracer
+Restart=on-failure
+RestartSec=10
+
+# Guardrail: cannot OOM the gateway (kb/fleet-upgrade-plan-review.md §3).
+# VERIFY against observed RSS after a burn-in period; start conservative.
+MemoryMax=1G
+MemoryHigh=768M
+
+[Install]
+WantedBy=multi-user.target
