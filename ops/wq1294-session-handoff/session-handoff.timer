@@ -1,0 +1,10 @@
+[Unit]
+Description=session-handoff — refresh kb/SESSION-HANDOFF.md every 30 minutes (wq#1294)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

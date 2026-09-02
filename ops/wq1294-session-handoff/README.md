@@ -1,0 +1,36 @@
+# session-handoff (wq#1294)
+
+Resuming a fleet orchestrator session today costs ~10 turns of re-deriving
+state: querying the work queue for in-flight workers, scrolling landed PRs,
+grepping for blocked tickets, checking for open FRANK decisions, and reading
+the Day-0 detectors' last state one at a time. `session-handoff` collapses
+all of that into a single generated file.
+
+**Tool**: `/home/lumen/bin/session-handoff` (its own repo, committed directly
+per that repo's convention — see its git log). Reads `queue.db` read-only and
+the detector stamp/laststate files under `/home/lumen/logs/`; writes and
+`git commit`s `/home/lumen/kb/SESSION-HANDOFF.md`.
+
+**Sections**: in-flight workers (claimed tickets), last 10 landed PRs (done
+tickets whose notes cite a PR url — `wq done`'s evidence gate, wq#759/wq#899,
+already makes that note a checked verdict, not a bare link), blocked tickets
+grouped by a leading `TAG:` in `block_reason`, open FRANK decisions
+(`frank_gated`/`pending_review`), the four Day-0 detectors' last-run age and
+state (model-check, wq-health, secret-check, log-watch), and a free-text
+"what the orchestrator was in the middle of" log that accumulates across runs
+via `--note` (capped at the last 20 entries) — this is the one section that
+isn't rederived from live state each run.
+
+**Usage**:
+```
+python3 /home/lumen/bin/session-handoff                  # regenerate + commit
+python3 /home/lumen/bin/session-handoff --note "..."     # leave a handoff note, then regenerate
+python3 /home/lumen/bin/session-handoff --no-commit       # write only, for testing
+```
+
+**Cron**: `session-handoff.timer` runs it every 30 minutes (plus boot+3min).
+Install (root, via `lumen-run --root`):
+```
+lumen-run start --root -- bash /home/lumen/foreman/ops/wq1294-session-handoff/install.sh
+```
+Manual run: `systemctl start session-handoff.service`
