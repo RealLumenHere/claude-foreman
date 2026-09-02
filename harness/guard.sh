@@ -164,7 +164,14 @@ Bash)
     GIT_MOVE=0
     if printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\b(checkout|switch|restore|reset|rebase|pull)\b'; then
       GIT_MOVE=1
-    elif printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bmerge\b' \
+    # wq#1285: \bmerge\b alone also matches the read-only plumbing verbs
+    # merge-base/merge-tree/merge-file (the word boundary sits on the hyphen),
+    # so a diagnostic `git merge-base --is-ancestor` — the exact primitive
+    # sync-live and this guard's own #19 spec use to verify a commit landed —
+    # was tripping the branch-moving-verb block in a primary tree. Require
+    # `merge` to stand alone (followed by whitespace or end of string) before
+    # treating it as the branch-moving `git merge`.
+    elif printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bmerge([[:space:]]|$)' \
         && ! printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bmerge +--ff-only +origin/(main|master)([[:space:]]|$)'; then
       GIT_MOVE=1
     elif printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\bclean\b[^|;&]*(-[a-zA-Z]*f[a-zA-Z]*\b|--force\b)'; then
