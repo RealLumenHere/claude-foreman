@@ -4,7 +4,10 @@
   "cloud_ceiling": 10,
   "tight_mode": {
     "max_spawns_per_pass": 1,
-    "min_pri": 1
+    "min_pri": 1,
+    "psi_full_deny": 5.0,
+    "psi_some_tight": 10.0,
+    "psi_some_deny": 25.0
   },
   "lanes": {
     "foreman-tok": {
