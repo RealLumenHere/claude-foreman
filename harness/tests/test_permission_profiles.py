@@ -117,6 +117,28 @@ def test_extra_allow_included_and_deduped_against_profile_rules():
         os.remove(fixture_path)
 
 
+def test_deny_floor_holds_even_when_repo_config_omits_base_profile():
+    """wq#1267 CONTRADICT: {"profiles": ["python"]} (no "base") used to render an empty
+    deny list, dropping Bash(env)/printenv/.env-read protections guard.sh does not
+    independently re-implement. base.json's deny is now an unconditional floor.
+    """
+    conf = {"profiles": ["python"]}
+    fixture_path = os.path.join(permission_profiles.REPOS_DIR, "wq1258-fixture-repo.json")
+    with open(fixture_path, "w") as f:
+        json.dump(conf, f)
+    try:
+        with open(SETTINGS) as f:
+            base = json.load(f)
+        merged = permission_profiles.render_permissions(
+            "/home/lumen/wq1258-fixture-repo", base)
+        deny = merged["permissions"]["deny"]
+        assert "Bash(*reboot*)" in deny
+        assert any("env" in d for d in deny)
+        assert any(".env" in d for d in deny)
+    finally:
+        os.remove(fixture_path)
+
+
 def test_render_hash_deterministic_and_content_addressed():
     with open(SETTINGS) as f:
         base = json.load(f)
