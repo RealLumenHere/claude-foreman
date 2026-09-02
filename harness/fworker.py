@@ -861,6 +861,12 @@ def build_env(worker_id, model, effort, worktree, ticket_id):
     return env
 
 
+# wq#1245: workers (esp. verify tickets) must be able to READ the fleet's primary trees to verify
+# cross-repo work and reach live env/config. Writes stay in the worktree by harness discipline +
+# primary_tree_guard; this only widens read/context access.
+WORKER_ADD_DIRS = ["/home/lumen/agents/work-queue", "/home/lumen/mailbot", "/home/lumen/pokemon",
+                   "/home/lumen/bin", "/home/lumen/foreman", "/home/lumen/kb"]
+
 def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=None,
                       resume_session=None, claude_bin="claude"):
     cmd = [claude_bin, "-p", prompt]
@@ -1138,7 +1144,7 @@ def run_fire_child(phase, args, ticket, ticket_id, worktree, worker_id, max_turn
     if phase == "diagnosis":
         env["FOREMAN_FIRE_PLAN_PATH"] = fire_gate.plan_path(ticket_id)
     cmd = build_claude_cmd(prompt, args.model, args.effort, SETTINGS_FILE,
-                            add_dirs=["/home/lumen/agents/work-queue"],
+                            add_dirs=WORKER_ADD_DIRS,
                             max_turns=max_turns, claude_bin=args.claude_bin)
     log(f"wq#{ticket_id} fire-mode {phase}: spawning "
         f"{' '.join(shlex.quote(c) for c in cmd[:6])}...")
@@ -1318,7 +1324,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     env[action_gate.HANDOFF_ENV] = run_dir(ticket_id)
     loop_tracker = action_gate.LoopTracker()
     cmd = build_claude_cmd(prompt, args.model, args.effort, SETTINGS_FILE,
-                            add_dirs=["/home/lumen/agents/work-queue"], max_turns=max_turns,
+                            add_dirs=WORKER_ADD_DIRS, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin)
 
     log(f"attempt {attempt}: spawning {' '.join(shlex.quote(c) for c in cmd[:6])}... "
