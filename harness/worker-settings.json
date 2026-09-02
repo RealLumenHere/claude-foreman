@@ -90,7 +90,12 @@
       "Bash(./node_modules/.bin/*)",
       "Bash(bash scripts/*)",
       "Bash(npm ci)",
-      "Bash(npm install)"
+      "Bash(npm install)",
+      "Bash(npm ci *)",
+      "Bash(npm install *)",
+      "Bash(npx *)",
+      "Bash(node_modules/.bin/*)",
+      "Bash(ln -s *)"
     ],
     "deny": [
       "Bash(*reboot*)",
