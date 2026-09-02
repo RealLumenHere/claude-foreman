@@ -45,3 +45,6 @@ runtime/
 # systemd unit backups dropped beside the plans that generated them (wq#997).
 # The *.bak / *.bak.* patterns above miss the -service / -timer suffixes.
 *.bak-*
+
+# wq#1300: generated eval dataset/results — regenerated each run, not source
+/harness/evals/worker-quality/runtime/

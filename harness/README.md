@@ -47,6 +47,9 @@ below.
     prompts/worker.md       worker prompt template
     prompts/fire-diagnosis.md, prompts/fire-apply.md   fire-mode phase prompts (FIRE_MODE.md)
     tests/                  pytest suite (zero Anthropic quota)
+    evals/worker-quality/   wq#1300: promptfoo suite scoring the done-claim critic's
+                             false-complete rate + real rework-convergence stats — see
+                             its own README.md
 
 Runtime paths (governor-owned or created on demand, not checked in):
 `../events/<worker-id>.jsonl` (lifecycle + blocked events), `../_runs/wq<ID>/`

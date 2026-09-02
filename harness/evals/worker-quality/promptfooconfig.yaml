@@ -1,0 +1,28 @@
+# wq#1300: worker-quality eval — scores the done-claim critic against
+# tasks.reopened_count ground truth + synthetic false-complete fixtures.
+# Run via run_eval.sh, never invoke `promptfoo eval` directly (it skips the
+# bridge-safety and concurrency-cap guards). See README.md.
+description: "Lumen worker-quality eval (wq#1300): false-complete rate of the done-claim critic"
+
+prompts:
+  - file://judge_prompt.md
+
+providers:
+  # LiteLLM gateway, OpenAI-compatible. Must be loopback — see run_eval.sh's guard.
+  # Model id is the LiteLLM model alias configured on the gateway for the
+  # harness's judge role; override with WQ1300_JUDGE_MODEL if the alias differs.
+  - id: openai:chat:${WQ1300_JUDGE_MODEL:-claude-sonnet-5}
+    config:
+      apiBaseUrl: ${LITELLM_BASE_URL:-http://localhost:4000}/v1
+      apiKeyEnvar: LITELLM_API_KEY
+      temperature: 0
+      max_tokens: 300
+
+defaultTest:
+  assert:
+    - type: python
+      value: file://grader.py
+
+tests: file://runtime/dataset.yaml
+
+outputPath: runtime/results.json
