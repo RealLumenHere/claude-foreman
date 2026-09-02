@@ -31,6 +31,10 @@ def _args(ticket=717, model="claude-sonnet-5", effort="high"):
 def _wire_common(tmp_path, monkeypatch):
     monkeypatch.setattr(fire_gate, "PLANS_DIR", str(tmp_path / "plans"))
     monkeypatch.setattr(fire_gate, "APPROVALS_DIR", str(tmp_path / "approvals"))
+    # wq#1261: run_fire_ticket() now writes attempt-N.json (fire_fenced_attempt_count)
+    # like every other archetype — isolate RUNS_ROOT so one test's attempts can't leak
+    # into another's fence count (every test here reuses ticket 717).
+    monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path / "_runs"))
     token_file = tmp_path / "fire.token"
     token_file.write_text("s3cr3t")
     monkeypatch.setattr(fire_gate, "FIRE_TOKEN_FILE", str(token_file))

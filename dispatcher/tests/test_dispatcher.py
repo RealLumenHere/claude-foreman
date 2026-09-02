@@ -150,7 +150,7 @@ def denv(tmp_path, monkeypatch):
 # ---- helpers -------------------------------------------------------------------------
 
 def add_ticket(title, lane="testlane", pri=1, model="claude-sonnet-5", effort="high",
-               deps=None, gate=None):
+               deps=None, gate=None, detail=None):
     # wq#912 lane allowlist checks against the LIVE dispatcher/config.json, not this
     # test's scratch WQ_DB — these synthetic lanes (testlane, ghostlane, ...) exercise
     # dispatcher logic only, never real dispatcher visibility, so --force bypasses it
@@ -162,9 +162,17 @@ def add_ticket(title, lane="testlane", pri=1, model="claude-sonnet-5", effort="h
         cmd += ["--deps", deps]
     if gate:
         cmd += ["--gate", gate]
+    if detail:
+        cmd += ["--detail", detail]
     p = subprocess.run(cmd, capture_output=True, text=True)
     assert p.returncode == 0, p.stdout + p.stderr
     return int(p.stdout.strip().split()[2])
+
+
+# wq#1261 (#13 item 1): a fleet-fires ticket needs a fire_probe (or the legacy aq-row
+# reference) to pass the dispatcher's no-probe refusal gate — every fleet-fires fixture
+# below that expects a spawn/skip decision UNRELATED to the probe itself carries this.
+FIRE_PROBE_DETAIL = 'fire_probe: {"cmd": "true", "clear_when_exit": 0}'
 
 
 def log_events(denv, event=None, ticket=None):
@@ -410,7 +418,7 @@ def test_wq_gate_unmet_skipped(denv):
 # ---- MUST 4: fire-ticket approval ----------------------------------------------------
 
 def test_fire_requires_approval(denv):
-    tid = add_ticket("burning issue", lane="fleet-fires")
+    tid = add_ticket("burning issue", lane="fleet-fires", detail=FIRE_PROBE_DETAIL)
     assert fd.run_pass() == 0
     skips = log_events(denv, "skip", ticket=tid)
     assert len(skips) == 1 and skips[0]["reason"] == "fire_unapproved"
@@ -440,7 +448,8 @@ def test_fire_approval_config_honored(denv):
     cfg, _warnings, _sha = fd.load_config(str(denv["cfg_path"]))
     assert cfg["lanes"]["fleet-fires"]["requires_approval"] is False
 
-    tid = add_ticket("fire ticket dispatches without approval", lane="fleet-fires")
+    tid = add_ticket("fire ticket dispatches without approval", lane="fleet-fires",
+                     detail=FIRE_PROBE_DETAIL)
     assert fd.run_pass() == 0
     spawns = log_events(denv, "spawn", ticket=tid)
     # With requires_approval:false, the ticket should spawn (not be skipped for approval)
@@ -607,7 +616,7 @@ def test_pacing_exempts_frank_approved_fire_ticket(denv):
     }}
     denv["gov_state"].write_text(json.dumps(gov))
     tid = add_ticket("approved fire ticket needs fable", lane="fleet-fires", pri=0,
-                     model="claude-fable-5")
+                     model="claude-fable-5", detail=FIRE_PROBE_DETAIL)
     (denv["approvals"] / f"wq{tid}.approved").write_text("")
     assert fd.run_pass() == 0
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]

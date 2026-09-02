@@ -250,5 +250,7 @@ def test_runtime_exceeded_past_cap():
     assert fire_gate.runtime_exceeded(start, max_runtime_s=2700, now=start + 2701) is True
 
 
-def test_runtime_exceeded_default_is_45_minutes():
-    assert fire_gate.DEFAULT_MAX_RUNTIME_S == 45 * 60
+def test_runtime_exceeded_default_is_2_hours():
+    # wq#1261 (#13 item 2): bumped from wq#1234's 45min to the spec's explicit
+    # fire-lane default of 7200s.
+    assert fire_gate.DEFAULT_MAX_RUNTIME_S == 7200

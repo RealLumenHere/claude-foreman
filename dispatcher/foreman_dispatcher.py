@@ -58,6 +58,7 @@ import circuit_breaker  # noqa: E402
 import runaway          # noqa: E402
 import psi_pressure     # noqa: E402  # wq#844
 import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
+import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refusal
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -508,6 +509,34 @@ def handle_unapproved_fire(state, tid, lane, dry_run, log):
     save_state(state)
 
 
+# ---- wq#1261 (#13 item 1): no probe, no dispatch ---------------------------------------
+# "A fire ticket without a probe is refused dispatch by the router entirely — a fire you
+# can't re-verify is a FRANK page, not a worker." (ISSUE-SOLUTIONS-fable.md §4 item 1)
+
+def handle_no_probe_fire(state, tid, lane, dry_run, log):
+    log.skip(tid, lane, "fire_probe", "fire_no_probe",
+             detail="no fire_probe: {cmd, clear_when_exit} line and no legacy aq "
+                    "Probe:/aq row: reference in ticket detail")
+    now = _utcnow()
+    last = state["fire_ntfy"].get(f"noprobe-{tid}")
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=FIRE_NTFY_DEDUP_H):
+                return  # already pinged Frank within 24h — never flood
+        except ValueError:
+            pass
+    if dry_run:
+        log.emit("would_ntfy", ticket=tid, lane=lane, reason="fire_no_probe")
+        return
+    ntfy(f"wq#{tid} ({lane}) is dispatch-ready but has no re-verify probe — refusing to "
+         f"dispatch (a fire without a probe can't auto-close on recovery). Add "
+         f'`fire_probe: {{"cmd": "...", "clear_when_exit": 0}}` to the ticket detail: '
+         f'`wq edit {tid} --detail "..."`.', priority="high",
+         title="fire ticket has no probe")
+    state["fire_ntfy"][f"noprobe-{tid}"] = now.isoformat(timespec="seconds")
+    save_state(state)
+
+
 # ---- runaway tickets (wq#718 AUTO-6, DESIGN addendum §13) ----------------------------
 
 def handle_runaway_stuck(state, tid, lane, attempts, dry_run, log):
@@ -682,6 +711,18 @@ def _do_pass(cfg, log, state, dry_run):
         if fire_exempt and not os.path.exists(fire_approval_path(tid)):
             handle_unapproved_fire(state, tid, lane, dry_run, log)
             continue
+
+        # stage 5b — no probe, no dispatch (wq#1261 §4 item 1): every fleet-fires
+        # ticket must carry a machine-checkable re-verify condition before it ever
+        # reaches a worker. The legacy aq-row reference (wq#1234, `aq row: #<id>`)
+        # still counts — only a ticket with NEITHER form is refused.
+        if lane == FIRE_LANE:
+            detail = t.get("detail", "")
+            has_cmd_probe = fire_gate.parse_fire_probe(detail) is not None
+            has_aq_probe = fire_gate.parse_probe_ref(detail)[1] is not None
+            if not has_cmd_probe and not has_aq_probe:
+                handle_no_probe_fire(state, tid, lane, dry_run, log)
+                continue
 
         # stage 6 — deps (MUST 2)
         unmet = unmet_deps(t, dep_cache)

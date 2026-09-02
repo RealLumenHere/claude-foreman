@@ -358,6 +358,32 @@ def test_dispatch_cmd_carries_systemd_resource_limits(monkeypatch):
     assert cmd.index("--") < cmd.index("--model")  # resource flags precede the -- separator
 
 
+def test_dispatch_cmd_wraps_fire_response_session_in_external_timeout(monkeypatch):
+    # wq#1261 (#13 item 2): the fire-response session gets an external `timeout` wrap at
+    # the dispatch path itself — belt-and-braces for a wedged fworker that never reaches
+    # fire_gate.runtime_exceeded()'s in-process check.
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "model": "claude-sonnet-5", "effort": "high", "archetype": "fire-response",
+    })
+    cmd = router.dispatch_cmd(717, "/home/lumen/foreman")
+    dash = cmd.index("--")
+    tail = cmd[dash + 1:]
+    assert tail[:4] == ["timeout", "--signal=TERM",
+                        f"--kill-after={router.FIRE_MAX_RUNTIME_KILL_AFTER_S}",
+                        str(router.FIRE_MAX_RUNTIME_S)]
+    assert tail[4] == "python3"
+    assert "--archetype" in cmd and cmd[cmd.index("--archetype") + 1] == "fire-response"
+
+
+def test_dispatch_cmd_does_not_wrap_non_fire_archetypes(monkeypatch):
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "model": "claude-sonnet-5", "effort": "high", "archetype": "standard-engineering",
+    })
+    cmd = router.dispatch_cmd(717, "/home/lumen/foreman")
+    dash = cmd.index("--")
+    assert cmd[dash + 1] == "python3"  # no timeout wrap for a non-fire archetype
+
+
 # ---- wq#713: lane -> repo, dispatch-cmd must never default to /home/lumen --------------
 
 def test_dispatch_cmd_derives_repo_from_mapped_lane(monkeypatch):

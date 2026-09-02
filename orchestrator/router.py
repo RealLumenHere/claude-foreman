@@ -731,6 +731,15 @@ WORKER_MEM_HIGH = "6G"
 WORKER_CPU_QUOTA = "400%"
 WORKER_TASKS_MAX = "512"
 
+# wq#1261 (#13 item 2): the fire-response archetype's whole fworker session (not just
+# its `claude` child — fire_gate.runtime_exceeded() only fires if fworker's own loop is
+# still alive to check it) gets wrapped in `timeout` at the dispatch path, so a wedged
+# fworker still gets torn down at the cap instead of running forever. Same env var/
+# default fire_gate.py's internal watchdog reads, so both layers agree on the cap.
+FIRE_ARCHETYPE = "fire-response"
+FIRE_MAX_RUNTIME_S = int(os.environ.get("FOREMAN_FIRE_MAX_RUNTIME_S", 2 * 3600))
+FIRE_MAX_RUNTIME_KILL_AFTER_S = int(os.environ.get("FOREMAN_FIRE_MAX_RUNTIME_KILL_AFTER_S", "60"))
+
 
 def repo_for_lane(lane):
     """LANE_REPO lookup, or None if the lane has no canonical repo (caller must pass
@@ -817,13 +826,20 @@ def dispatch_cmd(ticket_id, repo=None, *, manifest=None):
            "--mem", WORKER_MEM_MAX, "--mem-high", WORKER_MEM_HIGH,
            "--cpu", WORKER_CPU_QUOTA, "--tasks-max", WORKER_TASKS_MAX,
            "--oom-policy", "stop",
-           "--",
-           "python3", FWORKER, "run", "--ticket", str(ticket_id), "--repo", repo,
-           "--model", model]
+           "--"]
+    inner = ["python3", FWORKER, "run", "--ticket", str(ticket_id), "--repo", repo,
+             "--model", model]
     if effort and effort != "None":
-        cmd += ["--effort", effort]
+        inner += ["--effort", effort]
     if arch and arch != "None":
-        cmd += ["--archetype", arch]
+        inner += ["--archetype", arch]
+    if arch == FIRE_ARCHETYPE:
+        # wq#1261 (#13 item 2): external wall-clock cap on the WHOLE session, enforced
+        # by `timeout` outside fworker's own process — belt-and-braces against
+        # fire_gate.runtime_exceeded()'s in-process watchdog never getting scheduled.
+        inner = (["timeout", "--signal=TERM", f"--kill-after={FIRE_MAX_RUNTIME_KILL_AFTER_S}",
+                  str(FIRE_MAX_RUNTIME_S)] + inner)
+    cmd += inner
     return cmd
 
 

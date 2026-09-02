@@ -347,6 +347,14 @@ EXIT_FIRE_TIMEOUT = 16
 EXIT_FIRE_DIAGNOSIS_FAILED = 17
 EXIT_FIRE_APPLY_INCOMPLETE = 18
 EXIT_FIRE_MAX_RUNTIME = 19  # wq#1234: hard wall-clock cap exceeded, blocked for a human
+EXIT_FIRE_ATTEMPT_FENCE = 20  # wq#1261: 3rd expired/rework attempt, escalated to FRANK
+
+# wq#1261 (#13 item 3): expired/rework fire tickets re-dispatch at most FIRE_ATTEMPT_FENCE
+# times before the 3rd strike escalates to FRANK instead of running again. Only outcomes
+# that mean the ticket bounced without resolving count against the fence — an auto-close
+# (probe cleared) or a successful apply never do.
+FIRE_ATTEMPT_FENCE = _envint("FOREMAN_FIRE_ATTEMPT_FENCE", 2)
+FIRE_FENCE_OUTCOMES = frozenset({"expired", "diagnosis_failed", "timeout_release", "apply_incomplete"})
 
 
 def log(msg):
@@ -537,6 +545,32 @@ def write_attempt_state(ticket_id, n, state):
         json.dump(state, f, indent=2, default=str)
     os.rename(tmp, path)
     return path
+
+
+def fire_fenced_attempt_count(ticket_id):
+    """wq#1261 (#13 item 3): how many of this ticket's recorded fire-response attempts
+    ended in an outcome that counts against the attempt fence (FIRE_FENCE_OUTCOMES).
+    Reads the same attempt-N.json files write_attempt_state() writes for every
+    archetype — dispatcher/self_heal.py's attempt_count() reads the identical directory
+    for its own (unscoped) count, so this is "the same counter as 1d", filtered to
+    fire-response's failing outcomes only."""
+    d = run_dir(ticket_id)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    n = 0
+    for name in names:
+        if not re.match(r"attempt-\d+\.json$", name):
+            continue
+        try:
+            with open(os.path.join(d, name)) as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if rec.get("archetype") == FIRE_ARCHETYPE and rec.get("fire_outcome") in FIRE_FENCE_OUTCOMES:
+            n += 1
+    return n
 
 
 def read_rate_limits_snapshot():
@@ -1203,13 +1237,38 @@ def run_fire_ticket(args):
 
     wq#1234: wq#1154/#1160/#1161 all ran 13-22h holding for an approval that never came,
     even after the underlying probe condition had already cleared on its own. Every loop
-    iteration now re-verifies the originating probe (fire_gate.probe_condition_cleared) —
-    if it's PASSing again, the ticket auto-closes with 'condition cleared' instead of
-    continuing to hold — and total wall-clock is capped at max_runtime_s: once exceeded,
-    the ticket blocks with the current probe state for a human instead of churning.
+    iteration now re-verifies the originating probe (fire_gate.probe_cleared) — if it's
+    PASSing again, the ticket auto-closes with 'condition cleared' instead of continuing
+    to hold — and total wall-clock is capped at max_runtime_s: once exceeded, the ticket
+    blocks with the current probe state for a human instead of churning.
+
+    wq#1261 (#13): probe_cleared() now prefers the ticket's own `fire_probe: {cmd,
+    clear_when_exit}` line over the aq-row check, and its command output is attached as
+    this run's evidence (fire_probe_evidence.json in the run dir) when it auto-closes.
+    Every terminal outcome is also recorded as attempt-N.json (write_attempt_state, the
+    same convention do_attempt() uses) with a `fire_outcome` field; expired/diagnosis-
+    failed/timeout-released/apply-incomplete outcomes count against FIRE_ATTEMPT_FENCE —
+    the 3rd such outcome escalates straight to FRANK instead of running fire-mode again.
     """
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
+
+    fenced = fire_fenced_attempt_count(ticket_id)
+    if fenced >= FIRE_ATTEMPT_FENCE:
+        reason = (f"FRANK: fire-response attempt fence tripped — {fenced} prior "
+                  f"expired/rework attempt(s) (fence={FIRE_ATTEMPT_FENCE}); this ticket "
+                  f"needs a human, not another automatic fire-mode run "
+                  f"(ISSUE-SOLUTIONS-fable.md §4 item 3).")
+        log(f"wq#{ticket_id} fire-mode: {reason}")
+        wq_block(ticket_id, reason)
+        ntfy("fire ticket escalated to FRANK",
+             f"wq#{ticket_id}: {fenced} fire-response attempts already bounced "
+             f"(expired/rework) — attempt fence reached, escalated for human review "
+             f"instead of a {fenced + 1}th automatic run.", priority="urgent")
+        print("BLOCKED")
+        return EXIT_FIRE_ATTEMPT_FENCE
+
+    attempt_n = next_attempt_n(ticket_id)
     worktree, branch = make_worktree(args.repo, ticket_id, 1,
                                       ticket.get("title", str(ticket_id)), FIRE_ARCHETYPE)
     worker_id = args.worker_id or f"fworker-wq{ticket_id}-fire"
@@ -1223,31 +1282,52 @@ def run_fire_ticket(args):
     start_ts = time.time()
     detail = ticket.get("detail", "")
 
+    def _record(fire_outcome, **extra):
+        rec = {"ticket": ticket_id, "attempt": attempt_n, "worker_id": worker_id,
+               "archetype": FIRE_ARCHETYPE, "fire_outcome": fire_outcome,
+               "started_at": start_ts, "finished_at": time.time()}
+        rec.update(extra)
+        write_attempt_state(ticket_id, attempt_n, rec)
+
     while True:
-        cleared = fire_gate.probe_condition_cleared(detail)
+        cleared, evidence = fire_gate.probe_cleared(detail)
         log(f"wq#{ticket_id} fire-mode re-verify: originating probe condition "
             f"{'CLEARED' if cleared else 'still active'}")
         if cleared:
-            wq_done(ticket_id, "condition cleared: re-verify found the originating "
-                    "probe's aq row no longer open — auto-closed by the fire-response "
-                    "archetype (wq#1234), no manual apply needed")
+            evidence_path = None
+            if evidence is not None:
+                evidence_path = os.path.join(run_dir(ticket_id), "fire_probe_evidence.json")
+                tmp = evidence_path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(evidence, f, indent=2, default=str)
+                os.rename(tmp, evidence_path)
+            notes = ("condition cleared: re-verify found the originating probe no "
+                     "longer firing — auto-closed by the fire-response archetype "
+                     "(wq#1261), no manual apply needed.")
+            if evidence_path:
+                notes += (f" Probe evidence: {evidence_path} "
+                          f"(cmd={evidence['cmd']!r} exit={evidence['exit_code']}).")
+            wq_done(ticket_id, notes)
             ntfy("fire ticket auto-closed",
                  f"wq#{ticket_id}: re-verify found the originating probe condition has "
                  f"cleared on its own — auto-closed, no change applied.",
                  priority="default")
             fire_gate.clear_fire_state(ticket_id)
+            _record("auto_closed", evidence_path=evidence_path)
             print("TICKET_CLOSED")
             return EXIT_OK
 
         if fire_gate.runtime_exceeded(start_ts, max_runtime_s):
             action, info = fire_gate.next_action(ticket_id, timeout_hours=timeout_hours)
-            reason = (f"fire-response exceeded max runtime ({max_runtime_s}s) without "
-                      f"the probe condition clearing — current state: action={action} "
-                      f"info={info}")
+            reason = (f"EXPIRED: fire-response exceeded max runtime ({max_runtime_s}s) "
+                      f"without the probe condition clearing — current state: "
+                      f"action={action} info={info}")
             log(f"wq#{ticket_id} fire-mode: {reason} — blocking for human review")
             wq_block(ticket_id, reason)
-            ntfy("fire ticket exceeded max runtime", f"wq#{ticket_id}: {reason}",
-                 priority="high")
+            ntfy("fire ticket exceeded max runtime",
+                 f"wq#{ticket_id}: {reason} (fence: {fenced + 1}/{FIRE_ATTEMPT_FENCE} "
+                 f"expired/rework attempts so far)", priority="high")
+            _record("expired", max_runtime_s=max_runtime_s, last_action=action)
             print("BLOCKED")
             return EXIT_FIRE_MAX_RUNTIME
 
@@ -1265,6 +1345,7 @@ def run_fire_ticket(args):
                      f"wq#{ticket_id}: diagnosis phase ended ({classification}) without "
                      f"writing a plan doc to {fire_gate.plan_path(ticket_id)} — released "
                      f"for retry.", priority="high")
+                _record("diagnosis_failed", classification=classification)
                 print("RELEASED")
                 return EXIT_FIRE_DIAGNOSIS_FAILED
             continue  # plan now exists — re-derive next_action
@@ -1302,6 +1383,7 @@ def run_fire_ticket(args):
                  f"(last state: {info.get('code')}) — released, dispatcher can requeue.",
                  priority="high")
             wq_release(ticket_id)
+            _record("timeout_release", last_code=info.get("code"))
             print("RELEASED")
             return EXIT_FIRE_TIMEOUT
 
@@ -1325,7 +1407,11 @@ def run_fire_ticket(args):
         # contract as the standard worker.md) — this supervisor's job is done once a
         # valid-approval apply phase has actually run.
         print(classification)
-        return EXIT_OK if classification in (SUCCESS, DEGRADED_SUCCESS) else EXIT_FIRE_APPLY_INCOMPLETE
+        if classification in (SUCCESS, DEGRADED_SUCCESS):
+            _record("applied", classification=classification)
+            return EXIT_OK
+        _record("apply_incomplete", classification=classification)
+        return EXIT_FIRE_APPLY_INCOMPLETE
 
 
 def do_attempt(args, attempt, resume_session=None, prior_worktree=None):

@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import time
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
@@ -31,7 +32,11 @@ DEFAULT_TIMEOUT_HOURS = 24
 # #1160/#1161 all ran 13-22h after the underlying probe condition had already cleared,
 # because nothing ever re-ran the originating probe or bounded total wall-clock.
 AQ_DB = os.environ.get("FOREMAN_FIRE_AQ_DB", "/home/lumen/agents/alert-queue/alerts.db")
-DEFAULT_MAX_RUNTIME_S = 45 * 60
+# wq#1261 (#13 item 2): fire-lane default bumped 45min -> 2h, matching
+# ISSUE-SOLUTIONS-fable.md §4's explicit "max_runtime_s ... fire-lane default 7200".
+# Still overridable per-run via FOREMAN_FIRE_MAX_RUNTIME_S (fworker.py, router.py both
+# read the same env var so the internal watchdog and the external `timeout` wrap agree).
+DEFAULT_MAX_RUNTIME_S = int(os.environ.get("FOREMAN_FIRE_MAX_RUNTIME_S", 2 * 3600))
 
 # Matches aq_escalate.seed_ticket's detail template exactly (bin/aq_escalate.py):
 #   "Probe: {probe}\naq row: #{row['id']} (source=..., priority=...)\n"
@@ -221,6 +226,83 @@ def probe_condition_cleared(detail, aq_db=None):
     if row is None:
         return False
     return row[0] != "open"
+
+
+# --- wq#1261 (#13 item 1): fire_probe schema — a machine-checkable re-verify a worker
+# can run directly, instead of only being able to ask whether aq_escalate's alerts.db row
+# has cleared. This is what lets a synthetic/drill fire ticket (no aq row at all, see
+# tests/test_fire_reverify.py) carry its own re-verify condition, and it's what the
+# dispatcher's no-probe refusal (wq#13 item 1's "a fire you can't re-verify is a FRANK
+# page, not a worker") checks for before ever spawning fworker on a fleet-fires ticket.
+FIRE_PROBE_RE = re.compile(r"^fire_probe:\s*(\{.*\})\s*$", re.MULTILINE)
+DEFAULT_PROBE_TIMEOUT_S = 60
+
+
+def parse_fire_probe(detail):
+    """Extract the {"cmd": ..., "clear_when_exit": ...} schema from a fire ticket's
+    detail text — one line, `fire_probe: {...}` (JSON). Returns the dict (with only
+    those two keys, exactly as given) or None if the ticket carries no such line, or
+    the line is present but malformed (not valid JSON / not an object / cmd not a
+    non-empty string / clear_when_exit not an int) — malformed is treated the same as
+    absent everywhere this is checked: a probe you can't trust is not a probe."""
+    if not detail:
+        return None
+    m = FIRE_PROBE_RE.search(detail)
+    if not m:
+        return None
+    try:
+        probe = json.loads(m.group(1))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(probe, dict):
+        return None
+    cmd = probe.get("cmd")
+    clear_when_exit = probe.get("clear_when_exit")
+    if not isinstance(cmd, str) or not cmd.strip():
+        return None
+    if not isinstance(clear_when_exit, int) or isinstance(clear_when_exit, bool):
+        return None
+    return {"cmd": cmd, "clear_when_exit": clear_when_exit}
+
+
+def run_fire_probe(probe, timeout_s=DEFAULT_PROBE_TIMEOUT_S, now=None):
+    """Runs probe['cmd'] through the shell and reports whether it cleared. Returns
+    (cleared, evidence) — evidence is exactly what a fire ticket's auto-close attaches
+    as its evidence.json (ISSUE-SOLUTIONS-fable.md §4 item 1: "the worker auto-closes
+    with the probe output as its evidence").
+
+    Fails closed (cleared=False) on a timeout or a spawn failure — same fail-closed
+    contract as probe_condition_cleared: "can't check" must never read as "cleared"."""
+    now = now if now is not None else time.time()
+    evidence = {"cmd": probe["cmd"], "clear_when_exit": probe["clear_when_exit"],
+                "ran_at": now}
+    try:
+        result = subprocess.run(probe["cmd"], shell=True, capture_output=True,
+                                 text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        evidence.update(exit_code=None, stdout="", stderr=f"probe timed out after {timeout_s}s",
+                         cleared=False)
+        return False, evidence
+    except OSError as e:
+        evidence.update(exit_code=None, stdout="", stderr=str(e), cleared=False)
+        return False, evidence
+    cleared = result.returncode == probe["clear_when_exit"]
+    evidence.update(exit_code=result.returncode, stdout=result.stdout[-4000:],
+                     stderr=result.stderr[-2000:], cleared=cleared)
+    return cleared, evidence
+
+
+def probe_cleared(detail, aq_db=None, timeout_s=DEFAULT_PROBE_TIMEOUT_S, now=None):
+    """The re-verify step run_fire_ticket() actually calls each iteration. Prefers the
+    explicit fire_probe cmd schema (wq#1261); falls back to the aq alert-queue row check
+    (wq#1234) for tickets seeded before this schema existed, so old in-flight fire
+    tickets keep working unchanged. Returns (cleared, evidence_or_None) — evidence is
+    only ever populated by the cmd-based probe (literal command output); the aq-row
+    fallback has nothing to attach, so it reports (bool, None)."""
+    probe = parse_fire_probe(detail)
+    if probe is not None:
+        return run_fire_probe(probe, timeout_s=timeout_s, now=now)
+    return probe_condition_cleared(detail, aq_db=aq_db), None
 
 
 def runtime_exceeded(start_ts, max_runtime_s=DEFAULT_MAX_RUNTIME_S, now=None):
