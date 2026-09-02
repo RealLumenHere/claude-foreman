@@ -62,6 +62,7 @@ runtime state (never in git):
 ├── /home/lumen/foreman/dispatcher/state.json   per-day lane counters + ntfy dedup (§6)
 ├── /home/lumen/foreman/dispatcher/runtime/health_state.json      dispatch_health.py dedup (§4)
 ├── /home/lumen/foreman/dispatcher/runtime/config_lint_state.json dispatch_config_lint.py dedup (§4)
+├── /home/lumen/foreman/dispatcher/runtime/lane_state.json         wq-lane-init staged lanes (§4)
 ├── /home/lumen/foreman/approvals/wq<ID>.approved   fire-ticket approvals (Frank-created)
 └── /home/lumen/autonomy/DISPATCH_DISARM   kill switch (shared with lumen_dispatch)
 ```
@@ -168,12 +169,19 @@ file.** `health_state.json` (dispatch_health.py's alert-dedup ledger) and
 `config_lint_state.json` (dispatch_config_lint.py's) write there now; both fall back to
 reading their pre-migration path for one release if the new file is absent. `config.json`
 itself is unaffected — it stays tracked and static, still read from HEAD per wq#772 above.
-`dispatcher/runtime/lane_state.json` is reserved as the staging path for lane
-auto-registration (currently `/home/lumen/bin/wq-lane-init`, a separate repo): once that
-script is updated to write there instead of directly into `config.json`, a lane still
-needs an explicit commit into `config.json` to become live policy — a working-tree-only
-`lane_state.json` entry is never itself dispatch-effective, by the same no-working-tree-
-fallback rule as `load_config()`.
+`dispatcher/runtime/lane_state.json` is where lane auto-registration stages a new lane
+(`/home/lumen/bin/wq-lane-init`, wq#1282). It writes there instead of into `config.json`,
+so opening a lane no longer dirties the tracked tree. Staging is not policy: a lane still
+needs an explicit commit into `config.json` to become dispatch-effective, by the same
+no-working-tree-fallback rule as `load_config()`. Nothing merges `lane_state.json` into
+live config — `dispatch_config_lint.py` only *reports* the gap, naming the commit as the
+remedy, so a staged-but-uncommitted lane is loud instead of silent.
+
+That lint reads `config.json` **at HEAD**, the same way `load_config()` does. Reading the
+working tree (its behaviour before wq#1282) made it blind to the drift it exists to catch:
+`wq-lane-init`'s uncommitted edit satisfied the lint while the dispatcher, which only ever
+sees HEAD, went on ignoring the lane's tickets — the wq#845 `build`-lane failure with an
+extra step.
 
 ## 5. Frank-gate and fire-ticket handling (MUST 3, MUST 4)
 
