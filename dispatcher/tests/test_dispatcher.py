@@ -372,6 +372,30 @@ def test_config_path_outside_any_repo_fails_closed(tmp_path_factory, denv, monke
     assert lumen_calls(denv) == []
 
 
+# ---- wq#428: epic/tracker parents are never dispatched --------------------------------
+
+def test_nodispatch_title_variants(denv):
+    for title in ("[EPIC][DO NOT CLAIM] LPP multiplayer", "[epic] lowercase rollup",
+                  "[Do Not Claim] mixed case", "[DO-NOT-CLAIM] hyphenated",
+                  "tracker [DONOTCLAIM] jammed"):
+        add_ticket(title)
+    before = task_rows(denv)
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip")
+    assert len(skips) == 5
+    assert {s["reason"] for s in skips} == {"nodispatch_marker"}
+    assert task_rows(denv) == before  # zero wq writes: never claimed, never edited
+    assert lumen_calls(denv) == []
+
+
+def test_nodispatch_marker_needs_brackets(denv):
+    # "epic" as an ordinary adjective is real work, not a rollup marker
+    tid = add_ticket("epic refactor of the do not claim helper")
+    assert fd.run_pass() == 0
+    assert log_events(denv, "skip", ticket=tid) == []
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
 # ---- MUST 3: Frank-gate --------------------------------------------------------------
 
 def test_frank_gate_title_variants(denv):

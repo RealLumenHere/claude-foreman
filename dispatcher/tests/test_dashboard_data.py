@@ -157,13 +157,14 @@ def test_running_workers_reports_lumen_run_error(ddenv, monkeypatch):
 def test_queue_depth_counts_open_eligible_blocked(ddenv):
     eligible = add_ticket("plain open ticket")
     frank_gated = add_ticket("[FRANK GATE] rotate keys")
+    epic_parent = add_ticket("[EPIC][DO NOT CLAIM] rollup over children")  # wq#428
     dep_blocked = add_ticket("waiting on a dep", deps="999999")
     blocked = add_ticket("will be blocked")
     set_status(ddenv, blocked, "blocked")
 
     depth = dd.queue_depth(lanes=["testlane"])
 
-    assert depth["testlane"]["open"] == 3  # eligible + frank_gated + dep_blocked
+    assert depth["testlane"]["open"] == 4  # eligible + frank_gated + epic + dep_blocked
     assert depth["testlane"]["eligible"] == 1  # only the plain one
     assert depth["testlane"]["blocked"] == 1
     assert table_snapshot(ddenv)  # sanity: real rows exist, nothing was corrupted

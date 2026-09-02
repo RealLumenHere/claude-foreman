@@ -5,8 +5,9 @@ Pure data-gathering for dashboard.py's HTTP layer, kept separate so the aggregat
 logic is unit-testable without a live server. Every function is read-only by
 construction: no wq claim/release/block, no file writes, no spawns — the guardrail is
 explicit that the dashboard is never a control surface (controls stay in systemd/wq
-CLI). Reuses the exact gate logic foreman_dispatcher.py itself uses (frank_gate_reason,
-unmet_deps) so "eligible" on the dashboard always means the same thing dispatch does.
+CLI). Reuses the exact gate logic foreman_dispatcher.py itself uses (nodispatch_reason,
+frank_gate_reason, unmet_deps) so "eligible" on the dashboard always means the same
+thing dispatch does.
 
 snapshot() sections:
   running        currently-live fworker units (ticket, lane, model, started_at,
@@ -114,7 +115,7 @@ def queue_depth(lanes=None):
                 t = fd.router.wq_show(tid)
             except SystemExit:
                 continue
-            if fd.frank_gate_reason(t):
+            if fd.nodispatch_reason(t) or fd.frank_gate_reason(t):
                 continue
             if fd.unmet_deps(t, dep_cache):
                 continue

@@ -92,6 +92,8 @@ Ordered, fail-closed; the first refusing stage wins and is the logged `reason`. 
                       dispatcher reads that back (repo_sweep.repo_hint, validated
                       against the exact managed-repo set) instead of guessing. Any other
                       'auto' ticket still refuses.
+3.6 nodispatch        title carries `[EPIC]` or `[DO NOT CLAIM]` → skip, never claim
+                      (§4b). A rollup parent is a tracker, not work (wq#428).
 4. Frank-gate         title/flags say Frank owns it → skip, never claim (§5). MUST 3.
 5. fire approval      lane fleet-fires → approvals/wq<ID>.approved must exist, else
                       skip + one deduped ntfy (§5). MUST 4.
@@ -182,6 +184,22 @@ working tree (its behaviour before wq#1282) made it blind to the drift it exists
 `wq-lane-init`'s uncommitted edit satisfied the lint while the dispatcher, which only ever
 sees HEAD, went on ignoring the lane's tickets — the wq#845 `build`-lane failure with an
 extra step.
+
+## 4b. Epic/tracker parents — never dispatched (wq#428)
+
+A ticket whose title matches `\[epic\]|\[do[ -]?not[ -]?claim\]` (case-insensitive) is
+skipped with stage `nodispatch`, reason `nodispatch_marker`, before the Frank-gate.
+
+An epic parent is a rollup over child tickets: it has no acceptance criteria a build
+worker can satisfy, so a lane that claims one can only come back with an empty diff.
+wq#428 (`[EPIC][DO NOT CLAIM] LPP multiplayer`) burnt three lanes that way — every
+attempt correctly produced nothing and was then judged FALSE_COMPLETE. The marker had
+been in the title from the start; the dispatcher simply never read it.
+
+Fail-closed and no override, exactly like the Frank-gate: the marker is the whole rule.
+The brackets are load-bearing — `epic` as an ordinary adjective in a title is real work
+(`test_nodispatch_marker_needs_brackets`). Close or convert an epic parent
+administratively via `wq`; do not hand it to a lane.
 
 ## 5. Frank-gate and fire-ticket handling (MUST 3, MUST 4)
 
@@ -327,6 +345,7 @@ overridden via the existing `FOREMAN_*` env seams plus new `FOREMAN_DISPATCHER_*
 | 1 | Scheduled | `test_units_staged_disabled`: unit files parse (systemd-analyze verify if present, else key assertions: oneshot, timer 20 min, not enabled by any [Install] side effect); `test_once_pass_exits`: one pass terminates without a timer. |
 | 2 | Deps-aware | `test_deps_unmet_skipped`: candidate with an open dep → `skip/deps`; dep flipped done → spawned next pass. `test_wq_claim_backstop`: dispatcher bypassed (spawn forced), fake fworker's `wq claim --id` still refuses. |
 | 3 | Frank-gate | `test_frank_gate_title_variants`: `[FRANK GATE]`, `[manual]`, `owner=frank`, case-mixed → all `skip/frank_gated`, zero wq writes (DB before == after). `test_pending_gate_type_skipped`: gate_type set, frank_response empty → skipped; response recorded → eligible. |
+| 3b | Nodispatch (§4b) | `test_nodispatch_title_variants`: `[EPIC][DO NOT CLAIM]`, `[epic]`, `[Do Not Claim]`, `[DO-NOT-CLAIM]`, `[DONOTCLAIM]` → all `skip/nodispatch_marker`, zero wq writes (DB before == after). `test_nodispatch_marker_needs_brackets`: `epic` as a plain adjective still spawns. |
 | 4 | Fire approval | `test_fire_requires_approval`: fleet-fires ticket, no file → `skip/fire_unapproved` + exactly one ntfy; second pass same day → no second ntfy; file created → proceeds to later stages. `test_fire_approval_not_disarmable`: config `requires_approval: false` on fleet-fires → still enforced. |
 | 5 | Budget-aware | `test_governor_deny_skips`: stub can-dispatch exit 1 → no spawn. `test_tight_mode`: pressure tight → max 1 spawn, pri-2 ticket ineligible. `test_lane_cap`: max_per_day=1, two candidates → one spawn, one `skip/lane_cap`; counter resets on day rollover. |
 | 6 | Concurrency | `test_ceiling_respected`: 3 running units stubbed → zero spawns; 2 running → one spawn. `test_local_excluded`: local-rung unit doesn't consume a slot. `test_lumen_run_unreachable_is_full`: list failure → zero spawns. |
@@ -486,7 +505,8 @@ fire-approval ntfy (state.json's new `runaway_ntfy` key, alongside the existing
 server (no new dependency, no do_POST/PUT/DELETE handler at all — there's no code path
 to turn it into a control surface even by accident) serving the snapshot the ticket
 asked for: running workers, per-lane queue depth (open/eligible/blocked — "eligible"
-reuses `frank_gate_reason`/`unmet_deps` from foreman_dispatcher.py directly, so it
+reuses `nodispatch_reason`/`frank_gate_reason`/`unmet_deps` from foreman_dispatcher.py
+directly, so it
 always means what dispatch means by it), rolling failure rate (24h/7d, the broader
 "did the attempt succeed" definition — distinct from the breaker's narrower trip
 condition above), circuit-breaker armed state, stuck tickets, and governor

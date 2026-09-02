@@ -97,6 +97,11 @@ STAGGER = (spawner.STAGGER_MIN_S, spawner.STAGGER_MAX_S)
 REPO_HINT_LANE = "auto"
 
 FRANK_TITLE_RE = re.compile(r"\[frank gate\]|\[manual\]|owner\s*=\s*frank", re.I)
+# wq#428: an epic parent is a rollup over children, not work — it carries no
+# acceptance criteria a build lane can satisfy, so every lane that claimed one came
+# back with an empty diff and was judged FALSE_COMPLETE (three lanes burnt that way
+# before this gate). The marker was written in the title all along; nothing read it.
+NODISPATCH_TITLE_RE = re.compile(r"\[epic\]|\[do[ -]?not[ -]?claim\]", re.I)
 # wq list line: `[ 12] lane p1 ep0 open     title...` (ep tag only when it differs)
 LIST_LINE_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)\s+p(\d+)(?:\s+ep(\d+))?\s+(\S+)")
 
@@ -365,6 +370,14 @@ def frank_gate_reason(t):
         ok, why = gate_met(gate)
         if not ok:
             return f"wq gate unmet ({why})"
+    return None
+
+
+def nodispatch_reason(t):
+    """Non-None detail when the ticket is a tracker, not work (wq#428).
+    Fail-closed like frank_gate_reason: the marker is the whole rule, no override."""
+    if NODISPATCH_TITLE_RE.search(t.get("title") or ""):
+        return "title marker ([EPIC]/[DO NOT CLAIM])"
     return None
 
 
@@ -697,6 +710,12 @@ def _do_pass(cfg, log, state, dry_run):
         # cycles without reaching done is skipped every pass, not re-attempted forever
         if tid in stuck:
             handle_runaway_stuck(state, tid, lane, stuck[tid]["attempts"], dry_run, log)
+            continue
+
+        # stage 3.6 — epic/tracker parents (wq#428): a rollup is never dispatchable work
+        why = nodispatch_reason(t)
+        if why:
+            log.skip(tid, lane, "nodispatch", "nodispatch_marker", detail=why)
             continue
 
         # stage 4 — Frank-gate (MUST 3): never claimed, no override flag
