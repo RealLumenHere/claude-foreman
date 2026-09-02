@@ -161,8 +161,16 @@ Bash)
     # <repo> <expected-sha>, which fetches, verifies the SHA landed on
     # origin/main, refuses on a dirty tree, and only then does the reset — so
     # the reason string below points there instead of leaving a worker to guess.
+    # wq#929: `git commit` was never in this verb set, so the wall stopped a worker
+    # moving a primary's BRANCH but not writing an unreviewed COMMIT onto it. That is
+    # how 2719f89 (a dispatcher lane-config change, 2026-08-23 17:01Z) landed: it sat
+    # on /home/lumen/foreman's main, diverged the tree from origin, and — since the
+    # ff-merge below is the only sanctioned deploy op — stalled every later deploy
+    # until it was reconciled. Commit-creating verbs are denied for the same reason
+    # branch-moving ones are: content reaches a primary only by fast-forwarding onto
+    # origin/<default>, which means only after review.
     GIT_MOVE=0
-    if printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\b(checkout|switch|restore|reset|rebase|pull)\b'; then
+    if printf '%s' "$target" | grep -qE '\bgit\b[^|;&]*\b(checkout|switch|restore|reset|rebase|pull|commit|cherry-pick|revert|am)\b'; then
       GIT_MOVE=1
     # wq#1285: \bmerge\b alone also matches the read-only plumbing verbs
     # merge-base/merge-tree/merge-file (the word boundary sits on the hyphen),
@@ -184,10 +192,10 @@ Bash)
         [ -n "$ptree" ] || continue
         case "$HOOK_CWD" in
           "$ptree"|"$ptree"/*)
-            block "git branch/HEAD-moving verb inside PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; use sync-live to resync a primary, or do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD" ;;
+            block "git branch/HEAD-moving or commit-creating verb inside PRIMARY tree $ptree denied (wq#900/wq#929) — primaries stay on their default branch and take new content only by deploy ff-merge; use sync-live to resync a primary, or do git work (and land it with lumen-pr) in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD" ;;
         esac
         if printf '%s' "$target" | grep -qE "(cd +|-C +|--git-dir[= ]|--work-tree[= ])[\"']?$ptree(/|['\" ;&|]|\$)"; then
-          block "git branch/HEAD-moving verb targeting PRIMARY tree $ptree denied (wq#900) — primaries stay on their default branch; use sync-live to resync a primary, or do git work in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD"
+          block "git branch/HEAD-moving or commit-creating verb targeting PRIMARY tree $ptree denied (wq#900/wq#929) — primaries stay on their default branch and take new content only by deploy ff-merge; use sync-live to resync a primary, or do git work (and land it with lumen-pr) in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD"
         fi
       done
     fi

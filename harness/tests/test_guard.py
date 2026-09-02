@@ -510,6 +510,15 @@ PRIMARY_MUST_BLOCK = [
     ({"command": "git clean -fd"}, PRIMARY),
     ({"command": "git clean --force"}, f"{PRIMARY}/harness"),
     ({"command": f"git -C {PRIMARY} clean -fdx"}, WORKTREE),
+    # wq#929: the gap that let 2719f89 onto the live main — the branch never moved,
+    # a commit was just written onto it, diverging the tree and stalling deploy-ff.
+    ({"command": "git commit -m 'fix(dispatcher): register orphan lanes'"}, PRIMARY),
+    ({"command": "git commit -am wip"}, f"{PRIMARY}/dispatcher"),
+    ({"command": f"git -C {PRIMARY} commit -m x"}, WORKTREE),
+    ({"command": f"cd {PRIMARY} && git add -A && git commit -m x"}, WORKTREE),
+    ({"command": "git cherry-pick abc1234"}, PRIMARY),
+    ({"command": "git revert HEAD"}, PRIMARY),
+    ({"command": "git am /tmp/patch.mbox"}, PRIMARY),
 ]
 
 PRIMARY_MUST_ALLOW = [
@@ -533,6 +542,12 @@ PRIMARY_MUST_ALLOW = [
     # wq#1256 (#19): a dry-run/status-only clean is not destructive
     ({"command": "git clean -n"}, PRIMARY),
     ({"command": "git clean --dry-run"}, PRIMARY),
+    # wq#929: committing in the worker's OWN worktree is the sanctioned path, and
+    # lumen-pr (which refuses --primary itself) carries no `git` token to match on
+    ({"command": "git commit -m 'fix(guard): deny primary-tree commits'"}, WORKTREE),
+    ({"command": "/home/lumen/bin/lumen-pr commit"}, PRIMARY),
+    # reading a primary's commit history is still read-only
+    ({"command": "git log --oneline origin/main..main"}, PRIMARY),
     # wq#1285 (#19 harden): merge-base/merge-tree are read-only plumbing, not
     # the branch-moving `git merge` — must not trip the block, since sync-live
     # itself (and this guard's own spec) uses merge-base --is-ancestor to

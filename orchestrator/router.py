@@ -79,7 +79,11 @@ LANE_REPO = {
     "foreman-tok": FOREMAN_ROOT,   # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
     "foreman-auto": FOREMAN_ROOT,  # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
     "pokemon": "/home/lumen/pokemon",
-    "lpp": "/home/lumen/pokemon",        # dispatcher lane name is 'lpp'; repo is pokemon (Frank 2026-08-21)
+    "lpp": "/home/lumen/pokemon",        # legacy alias kept so a hand-typed lane still resolves;
+                                         # wq#912/wq#929: every LPP ticket ever filed uses lane
+                                         # 'pokemon' (0 tickets have ever used 'lpp'), so the dead
+                                         # 'lpp' dispatcher-config entry was dropped — this map
+                                         # entry is not a config lane and is never scanned
     "questfree": "/home/lumen/questfree",
     "nest": "/home/lumen/projects/nest",  # wq#1155/ISSUE-LOG #56 class: [nest]-titled tickets
                                            # were dispatching lane=build -> FOREMAN_ROOT with

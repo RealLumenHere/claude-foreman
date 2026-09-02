@@ -14,10 +14,6 @@
       "enabled": true,
       "max_per_day": 999
     },
-    "lpp": {
-      "enabled": true,
-      "max_per_day": 999
-    },
     "questfree": {
       "enabled": true,
       "max_per_day": 999
@@ -40,6 +36,10 @@
       "max_per_day": 999
     },
     "mission-control": {
+      "enabled": true,
+      "max_per_day": 999
+    },
+    "nest": {
       "enabled": true,
       "max_per_day": 999
     },

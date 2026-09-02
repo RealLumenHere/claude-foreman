@@ -143,7 +143,7 @@ answerable from the log alone.
   "tight_mode": {"max_spawns_per_pass": 1, "min_pri": 1},
   "lanes": {
     "foreman-tok": {"enabled": false, "max_per_day": 6},
-    "lpp":         {"enabled": false, "max_per_day": 4},
+    "pokemon":     {"enabled": false, "max_per_day": 4},
     "questfree":   {"enabled": false, "max_per_day": 4},
     "pstack":      {"enabled": false, "max_per_day": 4},
     "fleet-fires": {"enabled": false, "max_per_day": 2, "requires_approval": true}
