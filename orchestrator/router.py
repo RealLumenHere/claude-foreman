@@ -731,15 +731,49 @@ def repo_for_lane(lane):
     return LANE_REPO.get(lane)
 
 
+# wq#1220: verify-pass tickets (judgment.file_verify_pass) are filed under the static
+# verify_pass policy lane (models.yaml verify_pass.lane, normally 'build') so board/
+# reporting groups all fleet QA work together regardless of what lane produced the
+# diff being verified — but that means LANE_REPO would resolve the ticket's OWN lane
+# ('build' -> FOREMAN_ROOT) instead of the SHIPPED ticket's repo (e.g. 'mailbot' ->
+# /home/lumen/mailbot), leaving a non-foreman-lane verify worker with no access to the
+# code it was dispatched to verify. file_verify_pass writes the shipped ticket's
+# resolved repo back into the verify ticket's own detail (same wq#1094 pattern
+# repo_sweep uses for the 'auto' lane) instead of overloading lane, so lane stays
+# meaningful for dashboards/pacing/reaper messages.
+VERIFY_TITLE_PREFIX = "[verify] wq#"
+_VERIFY_REPO_RE = re.compile(r"^Verify repo: (\S+)", re.MULTILINE)
+
+
+def verify_repo_hint(title, detail):
+    """wq#1220: read back the shipped ticket's repo a verify-pass ticket carries in its
+    own detail (written by judgment.file_verify_pass). Returns None (never a guess)
+    unless the title marks a verify-pass ticket AND the parsed path is still a member
+    of repo_sweep.managed_repos(), so a hand-edited detail can't point dispatch at an
+    arbitrary path."""
+    if not title.startswith(VERIFY_TITLE_PREFIX):
+        return None
+    m = _VERIFY_REPO_RE.search(detail or "")
+    if not m:
+        return None
+    repo = m.group(1)
+    return repo if repo in repo_sweep.managed_repos() else None
+
+
 def repo_for_ticket(ticket_id_or_dict):
     """The one resolver shared by dispatch_cmd and foreman_dispatcher._do_pass (wq#1123):
-    LANE_REPO first, then — for lanes LANE_REPO doesn't cover (e.g. 'auto') — the exact
-    repo a repo-sweep ticket wrote into its own detail (repo_sweep.repo_hint). Returns
-    None (never a guess) if neither resolves.
+    the verify-pass repo hint first (wq#1220 — a verify ticket's own lane is a static
+    policy default, not the repo it needs to verify), then LANE_REPO, then — for lanes
+    LANE_REPO doesn't cover (e.g. 'auto') — the exact repo a repo-sweep ticket wrote
+    into its own detail (repo_sweep.repo_hint). Returns None (never a guess) if none
+    resolve.
 
     Accepts either a ticket id (does the wq_show lookup itself) or an already-fetched
     ticket dict, so a caller that already has the ticket doesn't pay for a second show."""
     t = ticket_id_or_dict if isinstance(ticket_id_or_dict, dict) else wq_show(ticket_id_or_dict)
+    repo = verify_repo_hint(t.get("title", ""), t.get("detail", ""))
+    if repo:
+        return repo
     repo = repo_for_lane(t.get("lane"))
     if repo:
         return repo

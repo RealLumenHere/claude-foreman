@@ -444,6 +444,68 @@ def test_repo_for_ticket_none_when_neither_resolves():
     assert router.repo_for_ticket({"lane": "auto", "title": "plain ticket", "detail": ""}) is None
 
 
+# ---- wq#1220: a verify-pass ticket is filed under the static verify_pass policy lane
+# ('build'), not the shipped ticket's own lane — so LANE_REPO alone would point dispatch
+# at claude-foreman instead of e.g. mailbot. judgment.file_verify_pass carries the
+# shipped ticket's resolved repo back in its own detail; repo_for_ticket must read it
+# back and prefer it over the verify ticket's 'build' lane. ------------------------------
+
+def test_verify_repo_hint_overrides_verify_ticket_own_lane():
+    t = {"lane": "build", "title": "[verify] wq#1173 add mailbot lane routing",
+         "detail": "Adversarial verify-pass ... \n\nVerify repo: /home/lumen/mailbot"}
+    assert router.repo_for_ticket(t) == "/home/lumen/mailbot"
+
+
+def test_verify_repo_hint_ignored_when_not_a_verify_ticket():
+    t = {"lane": "build", "title": "not a verify ticket",
+         "detail": "Verify repo: /home/lumen/mailbot"}
+    assert router.repo_for_ticket(t) == router.FOREMAN_ROOT
+
+
+def test_verify_repo_hint_none_when_repo_not_managed():
+    t = {"lane": "build", "title": "[verify] wq#1173 add mailbot lane routing",
+         "detail": "Verify repo: /home/lumen/not-a-real-repo"}
+    assert router.repo_for_ticket(t) == router.FOREMAN_ROOT
+
+
+def test_file_verify_pass_embeds_shipped_ticket_repo_hint(monkeypatch, m):
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "lane": "mailbot", "title": "add mailbot lane routing",
+        "detail": "", "notes": "", "archetype": "standard-engineering",
+        "model": "claude-sonnet-5",
+    })
+    calls = []
+
+    def fake_wq(*args):
+        calls.append(args)
+        out = subprocess.CompletedProcess(args, 0)
+        out.stdout = "" if args[0] == "list" else "added task 9999"
+        out.stderr = ""
+        return out
+
+    monkeypatch.setattr(router, "wq", fake_wq)
+    out = judgment.file_verify_pass(1173, manifest=m)
+    assert out["filed"] == 9999
+    add_call = next(c for c in calls if c[0] == "add")
+    detail = add_call[add_call.index("--detail") + 1]
+    assert "Verify repo: /home/lumen/mailbot" in detail
+    assert add_call[add_call.index("--lane") + 1] == "build"  # policy lane unchanged
+
+
+def test_dispatch_cmd_verify_pass_ticket_resolves_shipped_repo_not_own_lane(monkeypatch):
+    # wq#1220 repro: a mailbot-lane ticket's verify-pass is filed lane=build (policy
+    # default) — dispatch_cmd must still point the worker at /home/lumen/mailbot, not
+    # FOREMAN_ROOT, using the hint file_verify_pass wrote into the verify ticket's detail.
+    monkeypatch.setattr(router, "wq_show", lambda tid: {
+        "id": str(tid), "lane": "build", "model": "claude-sonnet-5", "effort": "high",
+        "archetype": "verify-pass",
+        "title": "[verify] wq#1173 add mailbot lane routing",
+        "detail": "Adversarial verify-pass ...\n\nVerify repo: /home/lumen/mailbot",
+    })
+    cmd = router.dispatch_cmd(1217)  # no --repo, like the automated dispatcher
+    assert cmd[cmd.index("--repo") + 1] == "/home/lumen/mailbot"
+
+
 # ---- wq#778: classifier corroboration gate (from wq#750 audit F1/F2) --------------------
 # research/MODEL_ROUTING_AUDIT.md found classify_archetype() sent 34.8%/18.4% of all 772
 # filed tickets to research-synthesis/rca-investigation — both opus-primary rungs — with

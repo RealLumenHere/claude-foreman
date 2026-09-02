@@ -123,6 +123,14 @@ def file_verify_pass(shipped_id, *, pr=None, author_model=None, manifest=None, d
         f"contradiction escalates to {pol.get('escalate_on_contradiction', 'opus-5@high')} "
         f"and is a judgment trigger. Do NOT re-implement; verify."
     )
+    # wq#1220: this ticket files under the static verify_pass policy lane (below), not
+    # wq#{shipped_id}'s own lane, so router.repo_for_ticket() would otherwise resolve
+    # the wrong repo for any shipped ticket outside the 'build'/foreman lanes (e.g.
+    # mailbot). Carry the shipped ticket's own resolved repo back so the dispatched
+    # worker's worktree points at the code it's meant to verify, not claude-foreman.
+    shipped_repo = router.repo_for_ticket(t)
+    if shipped_repo:
+        detail += f"\n\nVerify repo: {shipped_repo}"
     out.update(verifier=rung.as_dict(), verifier_note=note, title=title, pr=pr_ref)
     if dry_run:
         return out
