@@ -1,0 +1,23 @@
+# lumen-gatus.service — bridge-safe fleet health checks, single Go binary,
+# no docker (wq#1184). Separate from the existing docker sentinel-gatus
+# (wq#856, /home/lumen/sentinel) — see RUNBOOK.md for the split rationale.
+# Binds loopback only; not internet- or tailnet-reachable by itself.
+[Unit]
+Description=Gatus — fleet health checks (wq#1184)
+Documentation=file:///home/lumen/kb/gatus/config.yaml
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lumen
+WorkingDirectory=/home/lumen/kb/gatus
+Environment=GATUS_CONFIG_PATH=/home/lumen/kb/gatus/config.yaml
+EnvironmentFile=-/home/lumen/kb/gatus/gatus.env
+ExecStart=/home/lumen/bin/gatus
+Restart=on-failure
+RestartSec=10
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

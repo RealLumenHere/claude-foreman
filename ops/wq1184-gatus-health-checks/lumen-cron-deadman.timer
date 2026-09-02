@@ -1,0 +1,14 @@
+# lumen-cron-deadman.timer — every 10 minutes (wq#1184). Any stamp interval
+# has to be sampled at least twice within its own 2x-interval threshold for
+# the alert to fire promptly; 10 min is well under the tightest lumen-*
+# cadence (5 min) seen on this host, so we won't miss a transition for long.
+[Unit]
+Description=Lumen cron dead-man's switch timer (wq#1184)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target

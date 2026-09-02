@@ -1,0 +1,17 @@
+# lumen-gatus-ntfy-relay.service — loopback shim: Gatus custom-webhook
+# alerts -> /home/lumen/bin/ntfy-send (wq#1184). See ntfy_relay.py docstring.
+[Unit]
+Description=Gatus-to-ntfy-send alert relay (wq#1184)
+Documentation=file:///home/lumen/foreman/ops/wq1184-gatus-health-checks/ntfy_relay.py
+After=network.target
+
+[Service]
+Type=simple
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/bin/gatus-ntfy-relay
+Restart=on-failure
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
