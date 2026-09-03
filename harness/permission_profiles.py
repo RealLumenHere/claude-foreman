@@ -58,12 +58,14 @@ def render_permissions(repo_path, base_settings):
     allow, deny = [], []
     seen_allow, seen_deny = set(), set()
 
-    # Deny rules are a safety floor, not a toolchain-specific opt-in like allow
-    # fragments are: always union base.json's deny regardless of whether "base" is in
+    # base.json is a floor, not a toolchain-specific opt-in like the other profile
+    # fragments are: always union its allow and deny regardless of whether "base" is in
     # the repo's declared profiles, so a repos.d/<repo>.json that forgets "base" (e.g.
     # {"profiles": ["python"]}) can't silently render an empty deny list and drop
-    # protections guard.sh doesn't independently re-implement (wq#1267 CONTRADICT).
+    # protections guard.sh doesn't independently re-implement (wq#1267 CONTRADICT), and
+    # can't silently lose base.json's allow rules the same way (wq#1382).
     base_prof = _load_json(os.path.join(PROFILES_DIR, "base.json"))
+    _dedup_extend(allow, seen_allow, base_prof.get("allow", []))
     _dedup_extend(deny, seen_deny, base_prof.get("deny", []))
 
     for name in profile_names:

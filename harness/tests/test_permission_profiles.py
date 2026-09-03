@@ -139,6 +139,30 @@ def test_deny_floor_holds_even_when_repo_config_omits_base_profile():
         os.remove(fixture_path)
 
 
+def test_allow_floor_holds_even_when_repo_config_omits_base_profile():
+    """wq#1382: base.json's allow was only unioned in when "base" was literally in the
+    repo's declared profiles, unlike deny (an unconditional floor since wq#1267). A
+    repos.d/<repo>.json that forgets "base" (e.g. {"profiles": ["python"]}) used to
+    silently render without base.json's allow rules while its deny floor still held.
+    """
+    conf = {"profiles": ["python"]}
+    fixture_path = os.path.join(permission_profiles.REPOS_DIR, "wq1258-fixture-repo.json")
+    with open(fixture_path, "w") as f:
+        json.dump(conf, f)
+    try:
+        with open(SETTINGS) as f:
+            base = json.load(f)
+        merged = permission_profiles.render_permissions(
+            "/home/lumen/wq1258-fixture-repo", base)
+        allow = merged["permissions"]["allow"]
+        with open(os.path.join(permission_profiles.PROFILES_DIR, "base.json")) as f:
+            base_prof = json.load(f)
+        for rule in base_prof["allow"]:
+            assert rule in allow
+    finally:
+        os.remove(fixture_path)
+
+
 def test_render_hash_deterministic_and_content_addressed():
     with open(SETTINGS) as f:
         base = json.load(f)
