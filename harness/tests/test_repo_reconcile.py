@@ -173,6 +173,19 @@ def test_behind_only_is_reported_not_fixed(tmp_path):
     assert git(work, "rev-parse", "main") != git(work, "rev-parse", "origin/main")
 
 
+def test_behind_only_explain_warns_about_untracked_file_collisions(tmp_path):
+    """wq#1327: the manual ff-only recipe BEHIND_ONLY tells a worker to run can lose
+    untracked files (wq#1279 hit this on /home/lumen/bin) unless they're stashed
+    aside first. Locks in that the fix landed in explain(), not just in a commit
+    message."""
+    _, work = make_repos(tmp_path)
+    git(work, "reset", "--hard", "HEAD~2")
+    rc, out = run("reconcile", "--repo", work, "--no-fetch", "--apply")
+    assert rc == 30, out
+    assert "wq#1279" in out
+    assert "stash" in out
+
+
 def test_status_reports_redundant_ahead_once_the_remote_moved_on(tmp_path):
     _, work, _ = make_wq975(tmp_path)
     assert git(work, "rev-parse", "main^{tree}") != git(work, "rev-parse", "origin/main^{tree}"), \
