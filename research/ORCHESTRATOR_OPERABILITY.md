@@ -395,3 +395,6 @@ file already read in this doc, none touch a documented safety invariant, and tog
 every incident in the log except the DC truncation class (which item 5, pure documentation,
 addresses at effectively zero cost). Ticket the build as a small follow-up scoped to exactly these
 four changes plus the doc addition, deps on nothing (wq#1368 is independent — see §0).
+
+Filed as **wq#1374** — build lane, `standard-engineering` archetype, scoped to exactly the four
+`bin/wq` / `foreman/dispatcher/dispatch_health.py` changes in rows 1-4 above, deps: none.
