@@ -537,6 +537,19 @@ PRIMARY_MUST_BLOCK = [
     ({"command": "git cherry-pick abc1234"}, PRIMARY),
     ({"command": "git revert HEAD"}, PRIMARY),
     ({"command": "git am /tmp/patch.mbox"}, PRIMARY),
+    # wq#1335 (§3.3 negative forms): only the exact path-scoped shapes ride the
+    # carve-out — whole-tree discard, ref-sourced checkout/restore, escapes, and
+    # branch-creating flags all stay denied.
+    ({"command": "git checkout -- ."}, PRIMARY),
+    ({"command": "git checkout main -- f"}, PRIMARY),
+    ({"command": "git restore --source=HEAD~1 f"}, PRIMARY),
+    ({"command": "git checkout -- ../escape"}, PRIMARY),
+    ({"command": "git checkout -- -b"}, PRIMARY),
+    ({"command": "git restore /etc/hosts"}, PRIMARY),
+    ({"command": "git checkout -b feat -- f"}, PRIMARY),
+    ({"command": f"git -C {PRIMARY}/../foreman checkout -- f"}, WORKTREE),
+    # the carve-out is per segment — it must not launder a later verb
+    ({"command": "git checkout -- f && git checkout main"}, PRIMARY),
 ]
 
 PRIMARY_MUST_ALLOW = [
@@ -581,6 +594,16 @@ PRIMARY_MUST_ALLOW = [
     ({"command": "git merge --ff-only origin/main;"}, PRIMARY),
     ({"command": 'bash -c "git merge --ff-only origin/main"'}, PRIMARY),
     ({"command": "git merge --ff-only origin/main && git log --oneline -1"}, PRIMARY),
+    # wq#1335 (ISSUE-LOG #38): path-scoped checkout/restore discards working-tree
+    # changes to named files, moves no branch/HEAD, and is the exact remedy
+    # lumen-pr's land-refusal prescribes. The #38 refused strings verbatim:
+    ({"command": f"git -C {PRIMARY} restore dispatcher/health_state.json"}, WORKTREE),
+    ({"command": f"git -C {PRIMARY} checkout -- dispatcher/health_state.json"}, WORKTREE),
+    ({"command": "git checkout -- harness/guard.sh"}, PRIMARY),
+    ({"command": "git restore --staged harness/guard.sh"}, PRIMARY),
+    ({"command": "git restore f.txt docs/g.md"}, PRIMARY),
+    ({"command": "git checkout -- .gitignore"}, PRIMARY),
+    ({"command": "git checkout -- f.txt && git status"}, PRIMARY),
 ]
 
 

@@ -185,9 +185,28 @@ Bash)
     # Segmenting makes the carve-out apply only to the segment that earned it,
     # and lets the merge word end at a segment boundary instead of needing `;`
     # `&` `|` `(` `)` spelled into the regex.
+    # wq#1335 (ISSUE-LOG #38): path-scoped `git [-C <dir>] checkout -- <relpath>...`
+    # and `git [-C <dir>] restore [--staged] <relpath>...` move no branch and no
+    # HEAD — they only discard working-tree changes to named files — and lumen-pr's
+    # own land-refusal prescribes exactly `git -C <primary> checkout -- <path>` as
+    # the sanctioned discard, so the wall was blocking the remedy the adjacent tool
+    # recommends. The carve-out is a full-segment anchored match: every path must be
+    # relative (no leading `/` or `-`; `.` alone doesn't qualify), the segment may
+    # contain no `..` anywhere (also covers the -C target), and no branch-creating/
+    # detaching token (-b/-B/--orphan/--detach) — anchoring already precludes flags
+    # between the verb and the paths, the token check is belt-and-braces. Anything
+    # that doesn't match the exact shape (checkout <ref> -- f, restore --source=...,
+    # quoted paths, redirects) falls through to the deny below, per §3.3 of
+    # research/WORKER_EXEC_CAPABILITY_GAP.md.
+    PATH_SCOPED_GIT_RE='^[[:space:]]*git([[:space:]]+-C[[:space:]]+/[A-Za-z0-9._/-]+)?[[:space:]]+(checkout[[:space:]]+--|restore([[:space:]]+--staged)?)([[:space:]]+\.?[A-Za-z0-9_][A-Za-z0-9._/-]*)+[[:space:]]*$'
     GIT_MOVE=0
     while IFS= read -r seg; do
       [ -n "$seg" ] || continue
+      if printf '%s' "$seg" | grep -qE "$PATH_SCOPED_GIT_RE" \
+          && ! printf '%s' "$seg" | grep -q '\.\.' \
+          && ! printf '%s' "$seg" | grep -qE '(^|[[:space:]])(-b|-B|--orphan|--detach)([[:space:]]|$)'; then
+        continue
+      fi
       if printf '%s' "$seg" | grep -qE '\bgit\b.*\b(checkout|switch|restore|reset|rebase|pull|commit|cherry-pick|revert|am)\b'; then
         GIT_MOVE=1
       # wq#1285: \bmerge\b alone also matches the read-only plumbing verbs
