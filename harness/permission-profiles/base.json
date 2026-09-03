@@ -1,6 +1,11 @@
 {
-  "_comment": "ISSUE-SOLUTIONS-fable.md §2b — inspection verbs, git read ops, lumen_busy, wq CLI. Every repo profile includes this one.",
+  "_comment": "ISSUE-SOLUTIONS-fable.md §2b — inspection verbs, git read ops, lumen_busy, wq CLI. Every repo profile includes this one. THIS FILE, not worker-settings.json, is where a cross-toolchain allow rule goes: for a repo with a repos.d/ declaration the rendered pack REPLACES worker-settings.json's allow list (permission_profiles.py:84), so a rule added only there is inert (wq#1376).",
   "allow": [
+    "Read",
+    "Grep",
+    "Glob",
+    "Edit",
+    "Write",
     "Bash(git *)",
     "Bash(/home/lumen/bin/wq *)",
     "Bash(/home/lumen/bin/lumen-pr *)",
@@ -44,6 +49,7 @@
     "Bash(systemctl show*)",
     "Bash(systemctl list-*)",
     "Bash(systemctl cat*)",
+    "Bash(systemctl restart lumen-messenger)",
     "Bash(journalctl *)",
     "Bash(stat *)",
     "Bash(readlink *)",

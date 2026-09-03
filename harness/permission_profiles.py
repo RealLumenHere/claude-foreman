@@ -81,6 +81,15 @@ def render_permissions(repo_path, base_settings):
 
     merged = json.loads(json.dumps(base_settings))  # deep copy; hooks/defaultMode untouched
     merged.setdefault("permissions", {})
+    # CONTRACT (wq#1376): profiles are AUTHORITATIVE for a repo that declares them —
+    # base_settings' allow is REPLACED, not unioned in. Unioning would re-import the flat
+    # worker-settings.json allowlist that profiles exist to replace (a python-shaped rule
+    # leaking onto a TS lane, ISSUE-LOG #14), making every repo's pack identical again.
+    # Consequence: worker-settings.json's allow only reaches repos with NO repos.d/ entry.
+    # Add a cross-toolchain allow rule to permission-profiles/base.json; a rule added only
+    # to worker-settings.json is inert for pokemon/mailbot/foreman. test_permission_
+    # profiles.py::test_worker_settings_allow_rules_all_exist_in_some_profile fails on a
+    # rule that lands in the dead file, which is how this went unnoticed three times.
     merged["permissions"]["allow"] = allow
     merged["permissions"]["deny"] = deny
     return merged

@@ -296,6 +296,30 @@ every node repo picks it up on its next dispatch — closed by profile, not by d
 Currently declared: `foreman` (python+shell), `pokemon` (node-ts+shell), `mailbot`
 (node-ts+python).
 
+### Where to add an allow rule (wq#1376 — read this before editing an allowlist)
+
+**Profiles are authoritative, not additive.** For a repo with a `repos.d/<repo>.json`
+entry, `permission_profiles.py:84` *replaces* `worker-settings.json`'s allow list with
+`union(declared profiles) + extra_allow + verbs`. It does **not** union
+`worker-settings.json` in — doing so would re-import the flat allowlist that profiles
+exist to replace, and every repo's pack would be identical again (ISSUE-LOG #14).
+
+So:
+
+| the rule should reach | put it in |
+| --- | --- |
+| every dispatched repo | `permission-profiles/base.json` |
+| one toolchain | `permission-profiles/{python,node-ts,shell}.json` |
+| one repo | `repos.d/<repo>.json` `extra_allow` / `verbs` |
+| only repos with **no** `repos.d/` entry | `worker-settings.json` |
+
+A rule added only to `worker-settings.json` is **inert** for `pokemon`, `mailbot` and
+`foreman`. That is what burned wq#1323 and wq#1347: `Bash(systemctl restart
+lumen-messenger)` landed at `worker-settings.json:57` and three successive workers still
+got `This command requires approval`. `test_permission_profiles.py::
+test_worker_settings_allow_rules_all_exist_in_some_profile` now fails when a rule lands
+in the dead file.
+
 ## Evidence-gated done (wq#1289, ISSUE-SOLUTIONS-fable.md §1, ISSUE-LOG #17)
 
 `done` is a state transition the harness performs after it has observed the evidence

@@ -1,0 +1,10 @@
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "harness/permission-profiles/base.json:51",
+      "cmd_run": "python3 -m pytest harness/tests/test_permission_profiles.py -q",
+      "exit_code": 0
+    }
+  ]
+}

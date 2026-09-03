@@ -72,6 +72,48 @@ def test_mailbot_profile_gets_node_and_python():
     assert "Bash(python3 *)" in allow
 
 
+def test_base_settings_only_allow_rule_is_deliberately_dropped():
+    """wq#1376: pins the REPLACE contract. A rule that exists only in the static
+    worker-settings.json does NOT survive rendering for a profile-declared repo — that is
+    intended (unioning would re-import the flat allowlist profiles exist to replace), and
+    it is why an allow rule must be added to permission-profiles/base.json instead.
+    """
+    base = {"permissions": {"allow": ["Bash(only-in-static-settings)"], "deny": []}}
+    merged = permission_profiles.render_permissions("/home/lumen/pokemon", base)
+    assert "Bash(only-in-static-settings)" not in merged["permissions"]["allow"]
+    assert "Bash(git *)" in merged["permissions"]["allow"]  # from base.json profile
+
+
+def test_worker_settings_allow_rules_all_exist_in_some_profile():
+    """wq#1376 regression guard: three fixes in a row (wq#1323, wq#1347) landed an allow
+    rule in worker-settings.json, which is inert for every repos.d-declared repo. Any rule
+    worth having in the static pack must also exist in a profile fragment, or the next
+    dispatched pokemon/mailbot/foreman worker still gets 'requires approval'.
+    """
+    with open(SETTINGS) as f:
+        static_allow = json.load(f)["permissions"]["allow"]
+    union = set()
+    for name in ("base", "python", "node-ts", "shell"):
+        with open(os.path.join(permission_profiles.PROFILES_DIR, f"{name}.json")) as f:
+            union.update(json.load(f).get("allow", []))
+    orphans = [r for r in static_allow if r not in union]
+    assert not orphans, (
+        "allow rules present only in worker-settings.json are inert for profile-declared "
+        f"repos; add them to permission-profiles/base.json: {orphans}")
+
+
+def test_scoped_messenger_restart_reaches_every_declared_repo():
+    """wq#1376 / blocks wq#1345 clause 3. Exactly scoped — not 'systemctl restart*'."""
+    with open(SETTINGS) as f:
+        base = json.load(f)
+    rule = "Bash(systemctl restart lumen-messenger)"
+    for repo in ("/home/lumen/pokemon", "/home/lumen/mailbot", "/home/lumen/foreman"):
+        allow = permission_profiles.render_permissions(repo, base)["permissions"]["allow"]
+        assert rule in allow, repo
+        assert "Bash(systemctl restart*)" not in allow, repo
+        assert "Bash(systemctl restart *)" not in allow, repo
+
+
 def test_merged_pack_keeps_deny_list_and_hooks_from_static_settings():
     with open(SETTINGS) as f:
         base = json.load(f)
