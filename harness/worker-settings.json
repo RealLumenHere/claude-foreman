@@ -54,6 +54,7 @@
       "Bash(systemctl show*)",
       "Bash(systemctl list-*)",
       "Bash(systemctl cat*)",
+      "Bash(systemctl restart lumen-messenger)",
       "Bash(journalctl *)",
       "Bash(stat *)",
       "Bash(readlink *)",
