@@ -226,15 +226,30 @@ def write_json(path, doc):
     os.replace(tmp, path)
 
 
-def pin(worktree, run_dir, doc):
-    """Render acceptance.json into the worktree and pin its hash in the fworker-owned
-    run dir (which the worker's settings do not reach). Returns (path, hash)."""
+def dispatch_origin_sha(worktree, base_ref="origin/main"):
+    """The sha `base_ref` points at right now, resolved once at dispatch time. Frozen
+    into the pin record so a later replay diffs against the same commit the worker
+    actually started from — not whatever origin/main has moved to by then (which, once
+    this ticket's own PR merges, would make HEAD an ancestor of it and collapse the
+    diff to nothing; ISSUE-LOG #143/#156)."""
+    p = _git(worktree, "rev-parse", base_ref)
+    if p and p.returncode == 0 and p.stdout.strip():
+        return p.stdout.strip()
+    return None
+
+
+def pin(worktree, run_dir, doc, origin_sha=None):
+    """Render acceptance.json into the worktree and pin its hash, plus the dispatch-time
+    origin/main sha, in the fworker-owned run dir (which the worker's settings do not
+    reach). Returns (path, hash)."""
     path = os.path.join(worktree, ACCEPTANCE_FILENAME)
     write_json(path, doc)
     digest = doc_hash(doc)
+    if origin_sha is None:
+        origin_sha = dispatch_origin_sha(worktree)
     write_json(os.path.join(run_dir, PIN_FILENAME),
                 {"hash": digest, "criteria": len(doc.get("criteria", [])),
-                 "ticket": doc.get("ticket"), "doc": doc})
+                 "ticket": doc.get("ticket"), "doc": doc, "origin_sha": origin_sha})
     return path, digest
 
 
@@ -250,6 +265,12 @@ def pinned_doc(run_dir):
     """The doc as pinned at dispatch — the only copy that governs. The worktree copy is
     the worker's convenience; this one is what verification reads."""
     return _pin_record(run_dir).get("doc")
+
+
+def pinned_origin_sha(run_dir):
+    """The origin/main sha frozen at dispatch time, or None for pins made before this
+    field existed (falls back to the live ref in that case)."""
+    return _pin_record(run_dir).get("origin_sha")
 
 
 def read_json(path):

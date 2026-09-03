@@ -376,6 +376,48 @@ def test_the_attempt_ceiling_escalates_instead_of_dispatching_again(worktree, ga
     assert "release" not in [c[0] for c in gated["log"]], "escalated, not re-dispatched"
 
 
+# ---------------------------------------------------------------------------
+# wq#1377 — this ticket's own land can't erase its citation evidence
+# ---------------------------------------------------------------------------
+
+def test_pinned_origin_sha_survives_this_tickets_own_merge_into_main(
+        worktree, tmp_path, monkeypatch):
+    """ISSUE-LOG #143/#156: a ticket that merges its own PR into main before calling
+    `wq done` used to fail its own citation AC, because changed_files() diffed against
+    the LIVE main ref — once merged, HEAD is an ancestor of main and that diff is empty.
+    Freezing main's sha at dispatch time (acceptance.pin's origin_sha) and diffing
+    against that frozen sha instead keeps the diff intact after the merge."""
+    monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setattr(fworker, "wq_show", lambda tid: {"status": "done", "attempt": "1"})
+    monkeypatch.setattr(fworker, "wq_release", lambda tid: None)
+    monkeypatch.setattr(fworker, "wq_claim", lambda tid: (True, ""))
+    monkeypatch.setattr(fworker, "wq_block", lambda tid, why: None)
+    monkeypatch.setattr(fworker, "ntfy", lambda *a, **k: None)
+
+    # dispatch time: freeze the sha main points at right now, before any of this
+    # ticket's work is merged into it.
+    origin_sha = acceptance.dispatch_origin_sha(str(worktree), base_ref="main")
+    assert origin_sha
+    acceptance.pin(str(worktree), fworker.run_dir(5555), _acceptance_doc(),
+                    origin_sha=origin_sha)
+
+    # the worker finishes and lands its own PR by merging into main before `wq done`
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    _git(worktree, "add", "-A")
+    _git(worktree, "commit", "-q", "-m", "fix probe")
+    _git(worktree, "checkout", "-q", "main")
+    _git(worktree, "merge", "-q", "--no-ff", "feat/evidence", "-m", "merge")
+    _git(worktree, "checkout", "-q", "feat/evidence")
+
+    # the live diff against main is now empty -- this is the bug the fix routes around
+    assert acceptance.changed_files(str(worktree), base_ref="main") == set()
+
+    _write_evidence(worktree, [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                               {"id": "AC2", "citation": "impl.py:3"}])
+    ok, escalated = fworker.verify_done(5555, str(worktree), 1, base_ref="main")
+    assert (ok, escalated) == (True, False)
+
+
 def test_the_gate_can_be_switched_off_without_a_code_change(worktree, gated, monkeypatch):
     monkeypatch.setenv("FOREMAN_EVIDENCE_GATE", "0")
     assert fworker.verify_done(4242, str(worktree), 1, base_ref="main") == (True, False)

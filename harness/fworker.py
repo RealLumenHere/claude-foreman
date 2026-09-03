@@ -2070,7 +2070,11 @@ def verify_done(ticket_id, worktree, attempt, base_ref="origin/main"):
     tampered = live is not None and acceptance_mod.doc_hash(live) != acceptance_mod.doc_hash(pinned)
     evidence = acceptance_mod.read_evidence(worktree)
     ev_dir = os.path.join(rd, "evidence", f"attempt-{attempt}")
-    result = acceptance_mod.verify(pinned, evidence, worktree, base_ref=base_ref,
+    # Diff against the sha origin/main pointed at when this ticket was dispatched, not
+    # the live ref: if this ticket's own PR has since merged, HEAD is now an ancestor of
+    # live origin/main and the diff would collapse to empty (ISSUE-LOG #143/#156).
+    frozen_ref = acceptance_mod.pinned_origin_sha(rd) or base_ref
+    result = acceptance_mod.verify(pinned, evidence, worktree, base_ref=frozen_ref,
                                     evidence_dir=ev_dir)
     if tampered:
         result["ok"] = False
@@ -2523,14 +2527,16 @@ def trigger_refill(ticket_id, outcome):
 
 def cmd_verify_evidence(args):
     """Read-only replay: same verdict fworker will reach, minus the state transition."""
-    pinned = (acceptance_mod.pinned_doc(run_dir(args.ticket))
+    rd = run_dir(args.ticket)
+    pinned = (acceptance_mod.pinned_doc(rd)
               or acceptance_mod.read_acceptance(args.worktree))
     if not pinned or not pinned.get("criteria"):
         print(json.dumps({"ok": True, "reason": "no pinned acceptance criteria"}))
         return EXIT_OK
+    frozen_ref = acceptance_mod.pinned_origin_sha(rd) or args.base_ref
     result = acceptance_mod.verify(
         pinned, acceptance_mod.read_evidence(args.worktree), args.worktree,
-        base_ref=args.base_ref)
+        base_ref=frozen_ref)
     print(json.dumps(result, indent=2))
     return EXIT_OK if result["ok"] else EXIT_BLOCKED
 
