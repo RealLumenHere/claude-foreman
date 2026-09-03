@@ -35,6 +35,7 @@ import self_heal  # noqa: E402
 import notify_sinks  # noqa: E402
 import psi_pressure  # noqa: E402
 import repo_sweep  # noqa: E402
+import harness_preflight  # noqa: E402
 
 WQ_BIN = "/home/lumen/bin/wq"
 SLOCK_BIN = "/home/lumen/bin/slock"
@@ -748,6 +749,75 @@ def test_unmapped_lane_skipped(denv):
     skips = log_events(denv, "skip", ticket=tid)
     assert len(skips) == 1 and skips[0]["reason"] == "lane_unmapped"
     assert lumen_calls(denv) == []  # never guessed /home/lumen or anything else
+
+
+def test_stale_preflight_auto_reproves_and_spawns(denv, monkeypatch):
+    """wq#1372: a stale stamp must not strand the lane — a clean re-prove writes a
+    fresh stamp and the ticket dispatches in the same pass, no human re-run needed."""
+    tid = add_ticket("stale stamp, clean reprove")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (False, "stale preflight stamp for repo"))
+    calls = []
+
+    def fake_preflight(repo):
+        calls.append(repo)
+        return harness_preflight.PreflightResult(repo, ok=True, reason="ok",
+                                                  static_failures=[], denials=[])
+    monkeypatch.setattr(harness_preflight, "preflight", fake_preflight)
+    assert fd.run_pass() == 0
+    assert calls == [denv["repo"]]
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert log_events(denv, "skip", ticket=tid) == []
+    infos = [e for e in log_events(denv, "info") if e.get("reason") == "auto_reproved"]
+    assert len(infos) == 1
+    assert ntfy_lines(denv) == []
+
+
+def test_stale_preflight_reprove_failure_alerts_instead_of_silent_skip(denv, monkeypatch):
+    """A re-prove that still fails (denials survive the settings change) must alert
+    Frank, not just log another silent skip like the old behavior did forever."""
+    tid = add_ticket("stale stamp, reprove still denied")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (False, "stale preflight stamp for repo"))
+    monkeypatch.setattr(
+        harness_preflight, "preflight",
+        lambda repo: harness_preflight.PreflightResult(
+            repo, ok=False, reason="live proof found permission denials",
+            static_failures=[], denials=["This command requires approval: foo"]))
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "reprove_failed"
+    assert lumen_calls(denv) == []
+    lines = ntfy_lines(denv)
+    assert len(lines) == 1 and "reprove failed" in lines[0] and "repo" in lines[0]
+
+
+def test_stale_preflight_reprove_cooldown_avoids_repeat_live_proof(denv, monkeypatch):
+    """A live re-prove spawns a real throwaway claude session — a persistently broken
+    profile must not pay for that on every single dispatch pass."""
+    t1 = add_ticket("first stale-stamp pass")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (False, "stale preflight stamp for repo"))
+    calls = []
+
+    def fake_preflight(repo):
+        calls.append(repo)
+        return harness_preflight.PreflightResult(
+            repo, ok=False, reason="live proof found permission denials",
+            static_failures=[], denials=["denied"])
+    monkeypatch.setattr(harness_preflight, "preflight", fake_preflight)
+    assert fd.run_pass() == 0
+    assert len(calls) == 1
+    assert len(ntfy_lines(denv)) == 1
+
+    t2 = add_ticket("second pass, still within cooldown")
+    assert fd.run_pass() == 0
+    assert len(calls) == 1  # not re-run — cooldown still active
+    assert len(ntfy_lines(denv)) == 1  # not re-alerted
+    skips = log_events(denv, "skip", ticket=t2)
+    assert len(skips) == 1 and skips[0]["reason"] == "no_fresh_stamp"
+    assert lumen_calls(denv) == []
+    assert log_events(denv, "spawn", ticket=t1) == []
 
 
 def test_auto_lane_repo_sweep_ticket_dispatches_via_repo_hint(denv, monkeypatch):

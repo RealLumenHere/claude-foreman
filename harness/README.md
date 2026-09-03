@@ -357,10 +357,25 @@ Two layers, both in `harness_preflight.py`, driven by `./harness-preflight <repo
 `dispatch_gate_check(repo)` is the third piece — cheap, offline, called by
 `foreman_dispatcher.py`'s spawn loop (stage 9b, right before `spawner.dispatch_one`).
 It recomputes the same hash from the *current* rendered settings/preflight_cmds and
-refuses (`log.skip(..., "preflight", "no_fresh_stamp", ...)`) unless it matches the
-stamp on disk — a settings or `preflight_cmds` change since the last proof reads as "no
-stamp" until `harness-preflight` runs again. A repo with no `repos.d/<repo>.json` is not
-gated (same additive-migration boundary §2b draws).
+refuses unless it matches the stamp on disk — a settings or `preflight_cmds` change
+since the last proof reads as "no stamp" until `harness-preflight` runs again. A repo
+with no `repos.d/<repo>.json` is not gated (same additive-migration boundary §2b draws).
+
+**Auto-reprove on a stale/missing stamp (wq#1372).** A `dispatch_gate_check` refusal no
+longer just means `log.skip(..., "preflight", "no_fresh_stamp", ...)` and `continue`
+forever — `handle_stale_preflight()` (`foreman_dispatcher.py`) re-runs
+`harness_preflight.preflight(repo)` inline, right there in the dispatcher's own
+(unsandboxed, host-context) process:
+- Clean re-prove -> fresh stamp written, `log.emit("info", stage="preflight",
+  reason="auto_reproved", ...)`, and the ticket falls through to spawn in the *same*
+  pass — no more waiting on a human to notice and re-run `harness-preflight` by hand.
+- Re-prove still fails (denials survive the settings change) -> an `ntfy` alert fires
+  (`"preflight auto-reprove failed for <repo>: ..."`) instead of a silent skip, and the
+  skip reason becomes `reprove_failed` instead of `no_fresh_stamp`.
+- Either way, an in-flight re-prove spawns a real throwaway `claude -p` live-proof
+  session (not free), so repeat attempts for the same repo are cooldown-gated
+  (`PREFLIGHT_REPROVE_COOLDOWN_H`, state.json's `preflight_ntfy` ledger) — a
+  persistently broken profile alerts once per cooldown window, not once per pass.
 
 **Structural limitation, not a bug:** `run_live_proof()`'s `claude` invocation is not on
 any worker permission profile's allow list, so `harness-preflight` cannot run its live

@@ -87,6 +87,11 @@ LANGFUSE_ENV = os.environ.get("FOREMAN_LANGFUSE_ENV",
 SLOCK_SCOPE = "foreman-dispatcher"
 SLOCK_TTL_MIN = "30"
 FIRE_NTFY_DEDUP_H = 24
+# wq#1372: a stale preflight stamp is auto-reproved inline (harness_preflight.preflight
+# spawns a real throwaway `claude -p` live-proof session, not free) rather than left to
+# strand the lane until a human notices. Bound retry cadence so a persistently broken
+# profile can't re-spawn that session every dispatch pass forever.
+PREFLIGHT_REPROVE_COOLDOWN_H = 1
 FIRE_LANE = "fleet-fires"  # kept for the disarmed fallback noted at line ~196 if
 # requires_approval forcing is ever restored; no longer used to force the gate itself
 # (MUST 4 hardcode removed 2026-08-23 per Frank directive, see load_config below)
@@ -264,7 +269,7 @@ def load_state(now=None):
     now = now or _utcnow()
     today = now.strftime("%Y-%m-%d")
     fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {},
-             "runaway_ntfy": {}}
+             "runaway_ntfy": {}, "preflight_ntfy": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -275,15 +280,18 @@ def load_state(now=None):
     fire = _prune_dedup(st.get("fire_ntfy"), now, FIRE_NTFY_DEDUP_H)
     pacing_ntfy = _prune_dedup(st.get("pacing_ntfy"), now, PACING_NTFY_PRUNE_H)
     runaway_ntfy = _prune_dedup(st.get("runaway_ntfy"), now, FIRE_NTFY_DEDUP_H)
+    preflight_ntfy = _prune_dedup(st.get("preflight_ntfy"), now, FIRE_NTFY_DEDUP_H)
     if st.get("day") != today:  # UTC day rollover resets lane counts, not the ledgers (§6.3)
         return {"day": today, "lane_counts": {}, "fire_ntfy": fire,
-                "pacing_ntfy": pacing_ntfy, "runaway_ntfy": runaway_ntfy}
+                "pacing_ntfy": pacing_ntfy, "runaway_ntfy": runaway_ntfy,
+                "preflight_ntfy": preflight_ntfy}
     counts = st.get("lane_counts")
     return {"day": today,
             "lane_counts": counts if isinstance(counts, dict) else {},
             "fire_ntfy": fire,
             "pacing_ntfy": pacing_ntfy,
-            "runaway_ntfy": runaway_ntfy}
+            "runaway_ntfy": runaway_ntfy,
+            "preflight_ntfy": preflight_ntfy}
 
 
 def save_state(st):
@@ -573,6 +581,46 @@ def handle_runaway_stuck(state, tid, lane, attempts, dry_run, log):
     save_state(state)
 
 
+def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
+    """wq#1372: dispatch_gate_check() failing used to just mean `continue` forever —
+    a repo's worker-settings.json or preflight_cmds changing made its stamp stale and
+    the lane sat idle, silently, until a human noticed and re-ran harness-preflight by
+    hand (twice in one day per the ticket). Re-prove right here instead: a clean proof
+    writes a fresh stamp and the caller falls through to spawn this same pass; a
+    failing proof alerts (deduped, cooldown-gated so a persistently broken profile
+    can't re-spawn a live-proof session every pass) instead of idling silently.
+    Returns True when the repo now has a fresh stamp."""
+    name = harness_preflight.permission_profiles.repo_name(repo)
+    now = _utcnow()
+    last = state["preflight_ntfy"].get(name)
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=PREFLIGHT_REPROVE_COOLDOWN_H):
+                log.skip(tid, lane, "preflight", "no_fresh_stamp", detail=reason)
+                return False
+        except ValueError:
+            pass
+    if dry_run:
+        log.emit("would_ntfy", ticket=tid, lane=lane, reason="preflight_reprove", repo=name)
+        log.skip(tid, lane, "preflight", "no_fresh_stamp", detail=reason)
+        return False
+    result = harness_preflight.preflight(repo)
+    if result.ok:
+        log.emit("info", stage="preflight", reason="auto_reproved",
+                 detail=f"{name}: stale stamp ({reason}) reproved clean")
+        state["preflight_ntfy"].pop(name, None)
+        save_state(state)
+        return True
+    problems = "; ".join(result.static_failures + result.denials) or result.reason
+    ntfy(f"preflight auto-reprove failed for {name}: {problems}. wq#{tid} ({lane}) and "
+         f"every other {name} ticket will keep idling until this is fixed.",
+         priority="high", title="foreman dispatcher: preflight reprove failed")
+    state["preflight_ntfy"][name] = now.isoformat(timespec="seconds")
+    save_state(state)
+    log.skip(tid, lane, "preflight", "reprove_failed", detail=problems)
+    return False
+
+
 # ---- Langfuse trace (§8: best-effort by contract) ------------------------------------
 
 def _load_langfuse_creds(path):
@@ -819,11 +867,15 @@ def _do_pass(cfg, log, state, dry_run):
         # permission gap three hours in when a two-minute preflight would have caught
         # it before the first spawn. Unmigrated repos (no repos.d/<repo>.json) pass
         # through unchanged — same additive-migration boundary permission_profiles.py
-        # draws for the render-at-dispatch pack itself.
+        # draws for the render-at-dispatch pack itself. wq#1372: a stale/missing stamp
+        # (settings or preflight_cmds changed since the last proof) auto-reproves right
+        # here instead of stranding the lane until a human re-runs harness-preflight —
+        # see handle_stale_preflight().
         preflight_ok, preflight_reason = harness_preflight.dispatch_gate_check(repo)
         if not preflight_ok:
-            log.skip(tid, lane, "preflight", "no_fresh_stamp", detail=preflight_reason)
-            continue
+            if not handle_stale_preflight(state, tid, lane, repo, preflight_reason,
+                                           dry_run, log):
+                continue
 
         # stage 10 — spawn via the existing stack (MUST 7: router owns repo + tuple)
         if dry_run:
