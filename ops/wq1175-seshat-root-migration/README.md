@@ -33,10 +33,12 @@ further research pass needed.
 1. **Clone root onto the new drive** — `migrate_root.sh <target-dev>`
    (`migrate_root.sh:1-71`). Partitions the target as GPT (512MiB ESP +
    ext4 root), rsyncs the live root filesystem across
-   (`migrate_root.sh:46-49`), chroots in to install GRUB in UEFI mode and
+   (`migrate_root.sh:74-77`), chroots in to install GRUB in UEFI mode and
    rewrite `/etc/fstab` with the new partitions' UUIDs
-   (`migrate_root.sh:56-62`). The NVMe stays the live root throughout — this
-   step only reads it.
+   (`migrate_root.sh:84-91`). The NVMe stays the live root throughout — this
+   step only reads it. Before any of that it refuses to run when the target
+   resolves to the same physical disk as the live root
+   (`migrate_root.sh:45-48`) — see "Same-device guard" below.
 
 2. **Cutover** — `efibootmgr -v` to confirm the new `ubuntu-seshat` boot
    entry exists, reboot and manually select it once (one-time boot override,
@@ -72,8 +74,30 @@ to boot, Seshat still has its original root untouched. `repurpose_nvme_data.sh`
 enforces that ordering in code, not just in this doc (see the two refusal
 checks above), so a future run can't skip the safety window by accident.
 
+## Same-device guard
+
+`migrate_root.sh` repartitions and reformats whatever device it is handed, so
+its one job before that is to notice when the operator has named the live
+root's own disk. The original check compared `TARGET_DEV` against
+`${root_dev%[0-9]*}`, which strips only the final digit: `/dev/nvme0n1p2`
+became `/dev/nvme0n1p`, so `TARGET_DEV=/dev/nvme0n1` — the same drive, under
+its correct base-disk name — did not match and the script proceeded to wipe
+the running root. The bug was NVMe-specific (the `p` partition separator
+survived the strip); `/dev/sda2` vs `/dev/sda` refused correctly. Seshat's
+root is on an NVMe, which is precisely the case this runbook is written for.
+
+`base_disk()` (`migrate_root.sh:17-32`) now normalizes *both* names to their
+whole disk before comparing, preferring `lsblk -no PKNAME` and falling back to
+partition-naming rules (`p`-separated for nvme/mmcblk/loop/md, bare digits for
+sd/vd/hd) when the node doesn't exist on the machine running the check.
+
 ## Verifying
 
+- `bash ops/wq1175-seshat-root-migration/test_same_device_guard.sh` — 13
+  assertions over the guard, no privileges or real devices needed (it sources
+  `migrate_root.sh`, which returns early when sourced, `migrate_root.sh:38`).
+  Covers the NVMe case above, the SATA control case, `sda10`-style two-digit
+  partitions, and the allow cases the migration actually depends on.
 - `bash -n ops/wq1175-seshat-root-migration/migrate_root.sh` and same for
   `repurpose_nvme_data.sh` — both parse clean.
 - Neither script has been run against live Seshat: this build worker has no

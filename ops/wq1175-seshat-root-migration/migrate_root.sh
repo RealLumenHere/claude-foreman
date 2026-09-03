@@ -9,13 +9,41 @@
 # of README.md).
 set -euo pipefail
 
+# Resolve a device node to the whole disk it lives on:
+#   /dev/nvme0n1p2 -> /dev/nvme0n1, /dev/sda2 -> /dev/sda, /dev/sda -> /dev/sda.
+# lsblk's PKNAME is authoritative and naming-scheme agnostic; the regex fallback
+# covers nodes lsblk can't resolve (absent node, or / on a non-block source).
+# NVMe/mmcblk/loop/md separate the partition number with a 'p'; sd/vd/hd do not.
+base_disk() {
+  local dev="$1" parent=""
+  if [[ -b "${dev}" ]]; then
+    parent="$(lsblk -no PKNAME "${dev}" 2>/dev/null || true)"
+    parent="${parent%%$'\n'*}"
+  fi
+  if [[ -n "${parent}" ]]; then
+    printf '/dev/%s\n' "${parent}"
+  elif [[ "${dev}" =~ ^(/dev/(nvme[0-9]+n[0-9]+|mmcblk[0-9]+|loop[0-9]+|md[0-9]+))p[0-9]+$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  elif [[ "${dev}" =~ ^(/dev/[a-z]+)[0-9]+$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '%s\n' "${dev}"
+  fi
+}
+
+is_same_disk() { [[ "$(base_disk "$1")" == "$(base_disk "$2")" ]]; }
+
+# Sourced by test_same_device_guard.sh: stop here with the guard helpers defined
+# and nothing destructive run.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then return 0; fi
+
 TARGET_DEV="${1:?usage: migrate_root.sh /dev/sdX   # the drive that links on ata1}"
 ROOT_SRC="/"
 ESP_SIZE_MIB=512
 
 root_dev="$(findmnt -n -o SOURCE /)"
-if [[ "${TARGET_DEV}" == "${root_dev%[0-9]*}"* ]]; then
-  echo "refusing: ${TARGET_DEV} looks like the current root device (${root_dev})" >&2
+if is_same_disk "${TARGET_DEV}" "${root_dev}"; then
+  echo "refusing: ${TARGET_DEV} is the disk the current root lives on (${root_dev} -> $(base_disk "${root_dev}"))" >&2
   exit 1
 fi
 if mount | grep -q "^${TARGET_DEV}"; then
