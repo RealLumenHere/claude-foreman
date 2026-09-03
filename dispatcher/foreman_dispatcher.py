@@ -403,18 +403,31 @@ def unmet_deps(t, cache):
 
 def candidate_model(t, tid):
     """The model the ticket would dispatch on: its wq tuple, else the router's dry-run
-    assignment. None = unroutable (skip; dispatch_cmd would fail the same way)."""
+    assignment. Returns (model, skip_reason); skip_reason is None iff model is set.
+
+    wq#1368: wq#1358/#1359 carried archetype='build' (a LANE name, not an archetype)
+    straight onto a ticket. router.assign -> select -> candidates -> manifest.chain()
+    raises router.ManifestError('no routing row for archetype ...') for that shape, and
+    it used to propagate uncaught out of this function, out of _do_pass's per-ticket
+    loop entirely, crashing the WHOLE pass (run_pass's try/except Exception around
+    _do_pass caught it, but only after every other ready candidate in this pass had
+    already been abandoned mid-loop). A bad archetype on one ticket must only ever cost
+    that one ticket a skip, never the pass."""
     m = t.get("model")
     if m and m != "None":
-        return m
+        return m, None
     try:
         d = router.assign(tid, dry_run=True)
     except SystemExit:
-        return None
+        return None, "route_unassigned"
+    except router.ManifestError as e:
+        ntfy(f"dispatcher: wq#{tid} has an unroutable archetype ({e}) — skipped "
+             f"every pass until fixed", priority="high", title="dispatcher bad archetype")
+        return None, "bad_archetype"
     rung = d.get("rung")
     if not rung or rung.get("model") == "DECOMPOSE":
-        return None
-    return rung.get("model")
+        return None, "route_unassigned"
+    return rung.get("model"), None
 
 
 def governor_pressure(model):
@@ -771,9 +784,9 @@ def _do_pass(cfg, log, state, dry_run):
             continue
 
         # stage 8 — budget (MUST 5): governor verdict + floors via router
-        model = candidate_model(t, tid)
+        model, skip_reason = candidate_model(t, tid)
         if not model:
-            log.skip(tid, lane, "budget", "route_unassigned",
+            log.skip(tid, lane, "budget", skip_reason,
                      detail="router has no rung for this ticket")
             continue
         pressure = pressure_cache.get(model)
