@@ -100,11 +100,27 @@ def test_structural_skip_reasons_excluded_from_dispatchable():
         {"event": "skip", "reason": "runaway_stuck"},
         {"event": "skip", "reason": "not_open"},
         {"event": "skip", "reason": "vanished"},
+        {"event": "skip", "reason": "fire_unapproved"},
+        {"event": "skip", "reason": "fire_no_probe"},
         {"event": "skip", "reason": "lane_cap"},       # NOT structural — real capacity skip
         {"event": "skip", "reason": "governor_deny"},  # NOT structural — budget skip
         {"event": "spawn"},
     ]
-    assert fd.count_structural_skips(events) == 7
+    assert fd.count_structural_skips(events) == 9
+
+
+def test_fire_gate_skips_excluded_from_dispatchable():
+    # wq#1423: a backlog entirely of fire tickets stuck on a Frank action
+    # (missing approval or missing fire_probe) must not look dispatchable —
+    # neither skip is fixable by the dispatcher/recovery ladder, same as frank_gated.
+    events = [
+        {"event": "skip", "reason": "fire_unapproved"},
+        {"event": "skip", "reason": "fire_no_probe"},
+        {"event": "skip", "reason": "fire_unapproved"},
+    ]
+    candidates = len(events)
+    dispatchable = candidates - fd.count_structural_skips(events)
+    assert dispatchable == 0
 
 
 def test_dispatchable_zero_when_all_skips_structural():

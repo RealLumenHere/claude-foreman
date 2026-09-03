@@ -108,7 +108,7 @@ REPO_HINT_LANE = "auto"
 # from a backlog of lane_unmapped noise (33-38 of every 43-59 candidates historically).
 STRUCTURAL_SKIP_REASONS = frozenset({
     "lane_unmapped", "nodispatch_marker", "frank_gated", "deps_unmet",
-    "runaway_stuck", "not_open", "vanished",
+    "runaway_stuck", "not_open", "vanished", "fire_unapproved", "fire_no_probe",
 })
 
 
