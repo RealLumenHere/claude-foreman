@@ -140,7 +140,13 @@ def explain(st):
     if v == BEHIND_ONLY:
         return (f"{st['remote_ref']} is {st['behind']} ahead of local {st['branch']}. A "
                 f"fast-forward REWRITES FILES in this tree — deploy the remote content "
-                f"first, then `git merge --ff-only {st['remote_ref']}`. Not this tool's job.")
+                f"first, then `git merge --ff-only {st['remote_ref']}`. Not this tool's job. "
+                f"ahead=0 makes the ff itself always safe (no local commits at risk), but a "
+                f"live tree can carry untracked files that collide with incoming paths — "
+                f"wq#1279 hit exactly this on /home/lumen/bin. Set them aside first with "
+                f"`git stash push -u -m <unique-tag>` (never bare `stash`/`stash pop` — the "
+                f"stash stack is shared), do the fetch + ff-only merge, then `stash apply "
+                f"<sha>` + `stash drop` to restore them byte-for-byte.")
     if v == SAFE_RESET:
         return (f"{st['branch']} is {st['ahead']} ahead of {st['remote_ref']} but the trees "
                 f"are identical ({st['local_tree'][:7]}) — the remote already carries this "
