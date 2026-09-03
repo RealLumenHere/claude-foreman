@@ -1,0 +1,10 @@
+[Unit]
+Description=gitleaks-detect — full gitleaks detect (git history) across fleet repos, detect-and-alert (wq#1298)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/lumen/bin/gitleaks-detect-cron run
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+User=lumen
+Group=lumen

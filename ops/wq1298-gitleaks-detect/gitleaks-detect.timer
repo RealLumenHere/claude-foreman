@@ -1,0 +1,12 @@
+[Unit]
+Description=gitleaks-detect — run full gitleaks detect across fleet repos daily (wq#1298)
+
+[Timer]
+OnBootSec=15min
+OnCalendar=daily
+RandomizedDelaySec=10min
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
