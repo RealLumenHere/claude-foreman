@@ -101,6 +101,22 @@ STAGGER = (spawner.STAGGER_MIN_S, spawner.STAGGER_MAX_S)
 # unmapped lane still short-circuits before paying for a wq_show (unchanged).
 REPO_HINT_LANE = "auto"
 
+# wq#1410 (research/NIGHTLY_DISPATCH_RESILIENCE.md §1.6, §3.3.1): a candidate skipped
+# for one of these reasons was never going to spawn regardless of dispatcher health —
+# the ticket/lane is structurally undispatchable, not stalled. pass_end's `dispatchable`
+# count excludes them so the watchdog can tell a real stall (dispatchable>0, spawned=0)
+# from a backlog of lane_unmapped noise (33-38 of every 43-59 candidates historically).
+STRUCTURAL_SKIP_REASONS = frozenset({
+    "lane_unmapped", "nodispatch_marker", "frank_gated", "deps_unmet",
+    "runaway_stuck", "not_open", "vanished",
+})
+
+
+def count_structural_skips(events):
+    return sum(1 for ev in events
+               if ev.get("event") == "skip" and ev.get("reason") in STRUCTURAL_SKIP_REASONS)
+
+
 FRANK_TITLE_RE = re.compile(r"\[frank gate\]|\[manual\]|owner\s*=\s*frank", re.I)
 # wq#428: an epic parent is a rollup over children, not work — it carries no
 # acceptance criteria a build lane can satisfy, so every lane that claimed one came
@@ -1061,8 +1077,9 @@ def _do_pass(cfg, log, state, dry_run):
             quarantined.append(tid)
             continue
 
+    dispatchable = len(candidates) - count_structural_skips(log.events)
     return {"candidates": len(candidates), "spawned": spawned, "tight": tight,
-            "quarantined": len(quarantined)}
+            "quarantined": len(quarantined), "dispatchable": dispatchable}
 
 
 def run_pass(dry_run=False):
