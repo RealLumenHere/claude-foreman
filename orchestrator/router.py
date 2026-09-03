@@ -97,6 +97,12 @@ LANE_REPO = {
     "pstack": "/home/lumen/pstack",
     "mission-control": "/home/lumen/mission-control",
     "fleet-spend": FOREMAN_ROOT,
+    "fleet": FOREMAN_ROOT,   # wq#1414: fleet-infra work (bin/ scripts, cron guards, monitors)
+                             # lands in foreman like ops/fleet-fires/fleet-spend below — the 4
+                             # open fleet tickets at ticket time (wq#1296/1297/1133/1373) are all
+                             # foreman-repo deliverables. Was previously unmapped, so every fleet
+                             # ticket was skipped as lane_unmapped on every dispatch pass
+                             # (research/NIGHTLY_DISPATCH_RESILIENCE.md §1.6, dispatcher.log).
     "ops": FOREMAN_ROOT,
     "quest-repair-research": FOREMAN_ROOT,
     "fleet-fires": FOREMAN_ROOT,          # fires are fleet/infra work, run from foreman
@@ -728,8 +734,16 @@ def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI
 
 # ---- wq glue -------------------------------------------------------------------------
 
+WQ_TIMEOUT_S = 30  # wq#1408: an sqlite-lock hang used to wedge a whole dispatch pass
+# with no pass_end and no error line — TimeoutStartSec=600 eventually SIGTERMed the
+# unit, but nothing in dispatcher.log ever said why. Callers decide what a timeout
+# means for their ticket (foreman_dispatcher.py's primary wq_show call treats it the
+# same as "no such ticket" — vanished).
+
+
 def wq(*args):
-    return subprocess.run([WQ_BIN, *args], capture_output=True, text=True)
+    return subprocess.run([WQ_BIN, *args], capture_output=True, text=True,
+                          timeout=WQ_TIMEOUT_S)
 
 
 def wq_show(ticket_id):
