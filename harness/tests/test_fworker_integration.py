@@ -175,19 +175,37 @@ def test_denied_verb_blocked_at_hook_during_real_spawn(tmp_path):
     assert blocked, "guard.sh should have logged a blocked event for --remove-orphans"
     assert "remove-orphans" in blocked[0]["reason"]
 
-    # wq#725 AUTO-7: CRASH is the conservative default (never known to be infra) -> the
-    # wq_block() reason self_heal.py reads is prefixed WORK_BLOCKED, never auto-released.
+    # wq#1330: the block reason is triage-led now — "<triage>: <one-line>; see
+    # <failure.json path>" — and the wq#725 block CLASS (WORK_BLOCKED here: CRASH is
+    # never known to be infra) moved into the failure.json the reason points at.
     notes = wq_show_field(env, ticket_id, "notes")
-    assert notes.startswith("WORK_BLOCKED:"), notes
+    assert notes.startswith("UNKNOWN:"), notes
+    assert "; see " in notes and "failure.json" in notes, notes
+    assert "transcript=" not in notes, notes  # the glob is gone (doc §4.2)
     # wq#741: the same reason also lands in the dedicated block_reason column now.
     assert wq_show_field(env, ticket_id, "block_reason") == notes
     assert wq_show_field(env, ticket_id, "blocked_at") != "None"
+    with open(os.path.join(runs_root, f"wq{ticket_id}", "failure.json")) as f:
+        failure = json.load(f)
+    assert failure["schema"] == 1
+    assert failure["block_class"] == "WORK_BLOCKED"
+    assert failure["triage"] == "UNKNOWN"
+    # …and the sha256 of that file is folded into the terminal attempt record.
+    import hashlib
+    with open(os.path.join(runs_root, f"wq{ticket_id}", "failure.json"), "rb") as f:
+        want_sha = hashlib.sha256(f.read()).hexdigest()
+    with open(os.path.join(runs_root, f"wq{ticket_id}", "attempt-2.json")) as f:
+        arec = json.load(f)
+    assert arec["failure_json_sha256"] == want_sha
+    assert arec["triage"] == "UNKNOWN"
 
 
-def test_launch_failure_blocks_with_infra_crash_prefix(tmp_path):
-    """wq#725 AUTO-7: the wq#704/705 failure mode (spawn env broken, no model work ever
-    attempted) classifies LAUNCH_FAILURE both attempts -> blocked with an INFRA_CRASH:
-    prefix, the signal dispatcher/self_heal.py auto-releases on."""
+def test_launch_failure_blocks_with_infra_crash_class(tmp_path):
+    """wq#725 AUTO-7 via wq#1330: the wq#704/705 failure mode (spawn env broken, no
+    model work ever attempted) classifies LAUNCH_FAILURE both attempts -> blocked
+    with a triage-led reason whose failure.json carries block_class INFRA_CRASH —
+    the signal dispatcher/self_heal.py auto-releases on (it follows the `see <path>`
+    pointer, dispatcher/self_heal.classify_block)."""
     repo = make_scratch_repo(tmp_path)
     env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "turn_setup_failed")
@@ -198,11 +216,20 @@ def test_launch_failure_blocks_with_infra_crash_prefix(tmp_path):
     assert wq_status(env, ticket_id) == "blocked"
 
     notes = wq_show_field(env, ticket_id, "notes")
-    assert notes.startswith("INFRA_CRASH:"), notes
+    assert notes.startswith("UNKNOWN:"), notes
     assert "LAUNCH_FAILURE" in notes
+    assert "; see " in notes and "failure.json" in notes, notes
     # wq#741: the same reason also lands in the dedicated block_reason column now.
     assert wq_show_field(env, ticket_id, "block_reason") == notes
     assert wq_show_field(env, ticket_id, "blocked_at") != "None"
+    # the INFRA_CRASH auto-release signal survives the reason-format change:
+    with open(os.path.join(runs_root, f"wq{ticket_id}", "failure.json")) as f:
+        failure = json.load(f)
+    assert failure["block_class"] == "INFRA_CRASH"
+    sys.path.insert(0, os.path.join(os.path.dirname(HARNESS_DIR), "dispatcher"))
+    import self_heal
+    klass, _detail = self_heal.classify_block({"block_reason": notes})
+    assert klass == "INFRA_CRASH"
 
 
 def test_rejected_limit_frame_drives_limit_path_not_crash(tmp_path):

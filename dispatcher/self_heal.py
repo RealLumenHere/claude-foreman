@@ -82,6 +82,20 @@ STALE_NTFY_DEDUP_H = 6  # a still-stuck ticket only re-pings Frank every 6h, not
 
 BLOCK_PREFIX_RE = re.compile(
     r"^(INFRA_CRASH|WORK_BLOCKED|LIMIT_HIT|HARNESS_DEFECT):\s*(.*)$", re.S)
+# wq#1330: fworker's block reason first line is now "<triage>: <one-line>; see
+# <failure.json path>" (WORKER_EXEC_CAPABILITY_GAP.md §4.2). The block CLASS this
+# daemon acts on moved into the failure.json the reason points at; the prefix map
+# below is the conservative fallback when that file is missing/unreadable.
+TRIAGE_PREFIX_RE = re.compile(
+    r"^(CAPABILITY_DENIED|HARNESS_DEFECT|GENUINE_BUG|REAL_BLOCK|LIMIT|UNKNOWN):"
+    r"\s*(.*)$", re.S)
+TRIAGE_FALLBACK_CLASS = {
+    "CAPABILITY_DENIED": "HARNESS_DEFECT",  # our pack refused the call — wq#1107 bucket
+    "HARNESS_DEFECT": "HARNESS_DEFECT",
+    "LIMIT": "LIMIT_HIT",
+    # GENUINE_BUG / REAL_BLOCK / UNKNOWN: conservative, never auto-released
+}
+FAILURE_JSON_RE = re.compile(r"see\s+(\S+failure\.json)")
 # wq list line: `[ 12] lane p1 ep0 blocked  title...` (ep tag only when it differs)
 LIST_LINE_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)\s+p(\d+)(?:\s+ep(\d+))?\s+(\S+)")
 ATTEMPT_FILE_RE = re.compile(r"^attempt-(\d+)\.json$")
@@ -230,9 +244,25 @@ def classify_block(ticket):
     if reason == "None":
         reason = ""
     m = BLOCK_PREFIX_RE.match(reason)
-    if not m:
+    if m:
+        return m.group(1), m.group(2)
+    # wq#1330 triage-led reason: the authoritative block_class is in the failure.json
+    # the reason cites (so an INFRA_CRASH-classified KILLED/OOM keeps auto-healing);
+    # fall back to the static triage map, then to unmarked-conservative.
+    t = TRIAGE_PREFIX_RE.match(reason)
+    if not t:
         return None, reason
-    return m.group(1), m.group(2)
+    fj = FAILURE_JSON_RE.search(reason)
+    if fj:
+        try:
+            with open(fj.group(1)) as f:
+                block_class = json.load(f).get("block_class")
+            if block_class in ("INFRA_CRASH", "WORK_BLOCKED", "LIMIT_HIT",
+                               "HARNESS_DEFECT"):
+                return block_class, t.group(2)
+        except (OSError, ValueError):
+            pass
+    return TRIAGE_FALLBACK_CLASS.get(t.group(1)), t.group(2)
 
 
 def parse_blocked_at(raw):

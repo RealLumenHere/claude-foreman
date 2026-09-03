@@ -50,6 +50,7 @@ from classifier import (
 from oom_forensics import oom_journal_evidence
 import acceptance as acceptance_mod
 import action_gate
+import failure_record
 import agents_spec
 import fire_gate
 import permission_profiles
@@ -1287,6 +1288,24 @@ def run_fire_ticket(args):
                "archetype": FIRE_ARCHETYPE, "fire_outcome": fire_outcome,
                "started_at": start_ts, "finished_at": time.time()}
         rec.update(extra)
+        # wq#1330: fence-counting fire outcomes are terminal failures — same
+        # failure.json + triage + sha256 contract as handle_failure(). No transcript
+        # events flow through this supervisor loop, so triage keys off the child
+        # classification alone (UNKNOWN when there is none) — recorded, never silent.
+        if fire_outcome in FIRE_FENCE_OUTCOMES:
+            try:
+                frec = failure_record.build_failure_record(
+                    ticket=ticket_id, attempts=attempt_n,
+                    classification=extra.get("classification") or fire_outcome.upper(),
+                    block_class=classify_block_reason(
+                        extra.get("classification") or fire_outcome.upper()),
+                    events=[], worktree=worktree, expected_repo=args.repo,
+                    session_id=None, attempt_files=[f"attempt-{attempt_n}.json"])
+                fpath = failure_record.write_failure_record(run_dir(ticket_id), frec)
+                rec.update({"triage": frec["triage"], "failure_json_path": fpath,
+                            "failure_json_sha256": failure_record.sha256_file(fpath)})
+            except Exception as e:  # noqa: BLE001 — bookkeeping must not eat the outcome
+                log(f"WARN: fire-mode failure.json not written: {e!r}")
         write_attempt_state(ticket_id, attempt_n, rec)
 
     while True:
@@ -2033,6 +2052,58 @@ def handle_limit(args, ticket_id, attempt, state, worktree):
     return EXIT_LIMIT
 
 
+def record_terminal_failure(ticket_id, attempt, classification, state, events,
+                             worktree, expected_repo, archetype,
+                             worker_block_reason=None, lane=None):
+    """wq#1330 (WORKER_EXEC_CAPABILITY_GAP.md §4): write _runs/wq<id>/failure.json
+    (schema v1, mechanical triage), fold its sha256 into this attempt's
+    attempt-N.json, and emit a failure span on the ticket's Langfuse trace.
+    Returns (record, failure_path). Best-effort on the sidecars — the block itself
+    must never be lost to a bookkeeping error."""
+    block_class = classify_block_reason(classification)
+    d = run_dir(ticket_id)
+    attempt_files = sorted(f for f in os.listdir(d) if re.match(r"attempt-\d+\.json$", f))
+    try:
+        reachable = [worktree] + list(add_dirs_for(archetype or "standard-engineering"))
+    except Exception:
+        reachable = [worktree]
+    rec = failure_record.build_failure_record(
+        ticket=ticket_id, attempts=attempt, classification=classification,
+        block_class=block_class, events=events or [], worktree=worktree,
+        expected_repo=expected_repo,
+        session_id=(state.session_id if state else None),
+        trip_kind=("PERMISSION" if classification == PERMISSION_LOOP else None),
+        worker_block_reason=worker_block_reason,
+        attempt_files=attempt_files, reachable_roots=reachable)
+    fpath = failure_record.write_failure_record(d, rec)
+    fsha = failure_record.sha256_file(fpath)
+    apath = os.path.join(d, f"attempt-{attempt}.json")
+    try:
+        with open(apath) as f:
+            arec = json.load(f)
+        arec.update({"triage": rec["triage"], "failure_json_path": fpath,
+                     "failure_json_sha256": fsha})
+        write_attempt_state(ticket_id, attempt, arec)
+    except (OSError, ValueError) as e:
+        log(f"WARN: failure.json sha not folded into {apath}: {e}")
+    try:
+        emit_trace_with_span(
+            LANGFUSE_ENV,
+            trace_id=f"fworker-wq{ticket_id}",
+            trace_name=f"fworker:wq{ticket_id}",
+            span_name=f"failure-{attempt}:{rec['triage']}",
+            metadata={"ticket": ticket_id, "lane": lane, "attempt": attempt,
+                      "triage": rec["triage"], "classification": classification,
+                      "block_class": block_class,
+                      "inferred_needs": ",".join(rec["inferred_needs"]),
+                      "failure_json_path": fpath, "failure_json_sha256": fsha},
+            tags=["fworker", "failure", lane or "unknown"],
+            trace_metadata={"ticket": ticket_id, "lane": lane})
+    except Exception as e:  # noqa: BLE001 — best-effort by contract (§8)
+        log(f"langfuse_emit_failed (failure span): {e!r}")
+    return rec, fpath
+
+
 def handle_failure(args, ticket_id, attempt, classification, state, events, worktree):
     prior_notes_path = write_prior_attempt_notes(ticket_id, attempt, worktree, events,
                                                   classification)
@@ -2040,12 +2111,24 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
         log(f"{classification}: attempt {attempt} < {MAX_ATTEMPTS}, restarting fresh worktree")
         return do_attempt(args, attempt + 1)
 
-    transcript_hint = f"~/.claude/projects/*/{state.session_id}.jsonl" if state.session_id else "unknown"
-    block_class = classify_block_reason(classification)
-    reason = (f"{block_class}: {classification} after {attempt} attempts; "
-              f"transcript={transcript_hint}")
-    log(f"BLOCKED [{block_class}]: {reason}")
-    wq_block(ticket_id, reason)
+    # wq#1330: terminal failure — machine-readable record + mechanical triage. If the
+    # worker already blocked the ticket itself (the good path), that reason wins:
+    # triage copies it (REAL_BLOCK) and the ticket text is left untouched.
+    ticket = wq_show(ticket_id)
+    worker_reason = None
+    if ticket.get("status") == "blocked":
+        worker_reason = ticket.get("block_reason") or ticket.get("notes") or None
+        if worker_reason == "None":
+            worker_reason = None
+    rec, fpath = record_terminal_failure(
+        ticket_id, attempt, classification, state, events, worktree,
+        expected_repo=args.repo, archetype=(args.archetype or "standard-engineering"),
+        worker_block_reason=worker_reason, lane=ticket.get("lane"))
+    block_class = rec["block_class"]
+    reason = failure_record.block_reason_line(rec, fpath)
+    log(f"BLOCKED [{block_class}/{rec['triage']}]: {reason}")
+    if rec["triage"] != failure_record.TRIAGE_REAL_BLOCK:
+        wq_block(ticket_id, reason)
     ntfy("foreman BLOCKED", f"wq#{ticket_id} [{block_class}]: {reason}", priority="high")
     return EXIT_BLOCKED
 
