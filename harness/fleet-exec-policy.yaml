@@ -1,0 +1,106 @@
+# fleet-exec-policy.yaml — static, crown-jewel policy for /home/lumen/bin/fleet-exec
+# (wq#1332, WORKER_EXEC_CAPABILITY_GAP.md §2.4). Lands ONLY by PR into foreman; a
+# worker can never widen this file, and no `needs:` tag on any ticket can grant past
+# it — the broker checks a per-ticket grant (dispatcher-derived from `needs:` tags)
+# AND this policy, and denies unless BOTH agree (fail-closed).
+#
+# `thor` gets its own hardcoded lock in fleet_exec_policy.py (THOR_HARDLOCK) in
+# addition to the `never.nodes` row below — instinct tier 0 #1 (THOR IS THE ONLY
+# HARD RULE) is enforced in code, not just data, so an edited/corrupted copy of this
+# file still can't open Thor beyond read-only run + copy-into-lumen-drop.
+#
+# Rollback (design §5.1/5.3): `chmod 000` this file — fleet-exec fails closed on an
+# unreadable policy (every verb denies with rule=policy_unreadable).
+
+never:
+  # No verb at all on these nodes except: `run` with an argv on run_readonly_cmds,
+  # and `copy` whose remote dir is that node's lumen-drop (see copy_dirs below).
+  # restart/sudo/bench/power are therefore always denied on every node in this list.
+  nodes: [thor]
+
+  # power is v2 (fleet-exec has no `power` verb yet) — this row is enforced by
+  # fleet_exec_policy.check_power() now so the policy matrix and future v2 wiring
+  # share one source of truth instead of a second copy drifting in later.
+  power: [thor, lumen, maat, sobek, bes]
+
+  # restart is v1. Per-node unit globs that are never restartable via the broker,
+  # regardless of any grant. fnmatch-style '*' globs.
+  restart:
+    lumen:
+      - "vaultwarden*"
+      - "cloudflared"
+      - "desktop-commander-mcp"
+      - "postgresql*"
+      - "tailscaled"
+      - "sshd"
+    maat:
+      - "*"
+    sobek:
+      - "postgresql*"
+      - "cloudflared"
+
+  # sudo is v2 (fleet-exec has no `sudo` verb yet). argv[0] basenames never allowed
+  # even once sudo lands, on any node, regardless of any grant.
+  sudo_argv_deny:
+    - ip
+    - macchanger
+    - dd
+    - "mkfs*"
+    - wipefs
+    - visudo
+    - passwd
+    - useradd
+    - chpasswd
+    - "tailscale up*"
+    - "systemctl mask*"
+
+# run: read-only probe set. Each entry is either a bare basename (argv[0] must equal
+# it exactly) or "<basename> <subcmd-pattern>" (argv[1] must fnmatch one of the
+# '|'-separated patterns). argv is never shell-joined; metacharacters, -c/bash/sh/
+# eval are rejected before this list is even consulted (fleet_exec_policy.check_run).
+run_readonly_cmds:
+  - "true"
+  - uptime
+  - hostname
+  - uname
+  - cat
+  - ls
+  - stat
+  - df
+  - free
+  - "systemctl status|is-active|is-enabled|show|cat|list-*"
+  - journalctl
+  - ss
+  - "ip addr"
+  - "tailscale status"
+  - "docker ps"
+  - "docker logs"
+
+# The one narrow exception to "no -c": a python3 probe is allowed ONLY when the
+# remaining argv, joined with single spaces, exactly matches one of these strings —
+# never a worker-supplied string. Add new probes here (PR review), never widen the
+# match to a prefix/glob.
+run_readonly_python_probes:
+  - "import shutil; print(shutil.disk_usage('/'))"
+
+# sudo is v2 — this is the allowlist check_sudo() will use once fleet-exec grows a
+# `sudo` verb. Same two-token pattern shape as run_readonly_cmds.
+sudo_cmds:
+  - "systemctl restart|reload|start <unit>"
+  - "install -m0644 <src> <dst-under:/etc/<pkg>/>"
+  - "apt-get install -y <pkg>"
+  - "tee <dst-under:/etc/systemd/system/>"
+
+# copy: verb v1. Destination directories a `copy` may land files into, per node.
+# Nothing outside this list is a valid target for any node, including thor's.
+copy_dirs:
+  thor: [/home/thor/lumen-drop]
+  isis: [/home/isis/lumen-drop]
+  lumen: [/home/lumen/lumen-drop]
+  maat: [/home/maat/lumen-drop]
+  sobek: [/home/sobek/lumen-drop]
+  bes: [/home/bes/lumen-drop]
+
+# bench is v2 (fleet-exec has no `bench` verb yet).
+bench_tools:
+  thor: [adb, fastboot]

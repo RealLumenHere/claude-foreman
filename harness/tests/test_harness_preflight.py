@@ -147,3 +147,26 @@ def test_unmigrated_repo_is_not_gated():
     result = harness_preflight.preflight("/home/lumen/no-such-repo-configured")
     assert result.ok is False
     assert "not migrated to profiles" in result.reason
+
+
+def test_preflight_commands_include_fleet_exec_probes(fixture_conf):
+    """wq#1332 (§3.2 point 4): one representative command per v1 fleet-exec verb is
+    always proved, repo-agnostic, the same way INSPECTION_PIPE_PROBE always is —
+    the allow rule is unconditional, so this doesn't need a needs:-tagged repo."""
+    write, _stamp_dir, _render_dir = fixture_conf
+    write(["node"])
+    conf = harness_preflight.load_repo_config(FIXTURE_REPO)
+    cmds = harness_preflight.preflight_commands(FIXTURE_REPO, conf)
+    for probe in harness_preflight.FLEET_EXEC_PREFLIGHT_PROBES:
+        assert probe in cmds
+
+
+def test_fleet_exec_probes_pass_static_lint_against_real_worker_settings():
+    """Proves the worker-settings.json allow rule this PR adds actually covers the
+    fleet-exec shapes harness-preflight now proves for every needs:-tagged repo."""
+    with open(SETTINGS) as f:
+        settings = json.load(f)
+    perms = settings["permissions"]
+    failures = harness_preflight.static_lint(
+        harness_preflight.FLEET_EXEC_PREFLIGHT_PROBES, perms["allow"], perms.get("deny", []))
+    assert failures == []

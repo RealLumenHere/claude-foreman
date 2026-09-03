@@ -7,6 +7,7 @@
     "Bash(/home/lumen/bin/slock *)",
     "Bash(/home/lumen/bin/lumen-run *)",
     "Bash(/home/lumen/bin/fleet-search *)",
+    "Bash(/home/lumen/bin/fleet-exec *)",
     "Bash(/home/lumen/bin/lumen_busy *)",
     "Bash(docker ps*)",
     "Bash(docker logs*)",

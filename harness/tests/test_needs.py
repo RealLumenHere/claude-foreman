@@ -67,3 +67,30 @@ def test_validate_rejects_unknown_tag_and_bad_shapes():
     assert not needs.validate("repo(relative/path)")[0]
     assert not needs.validate("dir()")[0]
     assert not needs.validate("just some prose")[0]
+
+
+# wq#1332 (§2.4): fleet-exec grant resolution reads these three accessors.
+
+def test_ssh_nodes():
+    n = needs.parse("ssh(isis), ssh(thor)")
+    assert n.ssh_nodes == ["isis", "thor"]
+
+
+def test_copy_targets_parses_node_colon_dir():
+    n = needs.parse("copy(isis:/home/isis/lumen-drop)")
+    assert n.copy_targets == [("isis", "/home/isis/lumen-drop")]
+
+
+def test_copy_targets_skips_malformed_arg():
+    n = needs.parse("copy(no-colon-here)")
+    assert n.copy_targets == []
+
+
+def test_restart_targets_parses_unit_at_node():
+    n = needs.parse("restart(ollama@isis)")
+    assert n.restart_targets == [("isis", "ollama")]
+
+
+def test_restart_targets_skips_malformed_arg():
+    n = needs.parse("restart(no-at-sign)")
+    assert n.restart_targets == []

@@ -28,6 +28,7 @@ Usage:
 import argparse
 import json
 import os
+from datetime import datetime, timedelta, timezone
 import re
 import resource
 import shlex
@@ -54,6 +55,14 @@ import failure_record
 import needs as needs_mod
 import agents_spec
 import fire_gate
+
+# wq#1332 (WORKER_EXEC_CAPABILITY_GAP.md §2.4): fleet_exec_policy.py lives in the
+# lumen-bin repo alongside the fleet-exec broker it backs, not in foreman — same
+# cross-repo import shape holddown (bin/holddown) already uses for holddown_lib in
+# /home/lumen/agent. fworker is the "dispatcher" §2.2 point 2 means: the per-attempt
+# spawn preflight that turns a ticket's needs:ssh/copy/restart tags into a grant.
+sys.path.insert(0, "/home/lumen/bin")
+import fleet_exec_policy
 import permission_profiles
 import primary_tree_guard
 from langfuse_client import emit_trace_with_span
@@ -74,6 +83,8 @@ SETTINGS_FILE = os.environ.get("FOREMAN_SETTINGS_FILE",
 GUARD_SH = os.path.join(HARNESS_DIR, "guard.sh")
 EVENTS_DIR = os.environ.get("FOREMAN_EVENTS_DIR", os.path.join(FOREMAN_ROOT, "events"))
 RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_runs"))
+FLEET_EXEC_POLICY_PATH = os.environ.get("FOREMAN_FLEET_EXEC_POLICY",
+                                         os.path.join(HARNESS_DIR, "fleet-exec-policy.yaml"))
 STOP_FILE = os.environ.get("FOREMAN_STOP_FILE", os.path.join(FOREMAN_ROOT, "STOP"))
 # wq#736: the governor (governor/foreman_usaged.py) already polls both plan-usage
 # windows into this file every 60-90s — the usage sidecar below just reads it at
@@ -846,6 +857,62 @@ def assert_spawn_paths(ticket_id, detail, worktree, repo, add_dirs, needs_dirs):
     raise SpawnRefused("CITED_PATH_UNREACHABLE", summary, worktree=worktree)
 
 
+def resolve_exec_grant(ticket_id, attempt, needs, wall_clock_s, worktree=None):
+    """wq#1332 (§2.2 point 2, §2.4): turn a ticket's needs:ssh/copy/restart tags into
+    a grant fleet-exec can enforce, refusing the SPAWN (uncharged, same class as
+    assert_spawn_paths) if any tag asks for something fleet-exec-policy.yaml forbids
+    outright — "a tag the static policy forbids is a dispatch REFUSAL, never a silent
+    downgrade". ssh(node) tags are always grantable as read-only `run`: the actual
+    argv allowlist is enforced by the broker per-invocation, not knowable at spawn
+    time. Returns (grant_dict_or_None, sha256_or_None, path_or_None) — a ticket with
+    no exec-shaped needs tags gets (None, None, None), which fworker treats as "no
+    FOREMAN_GRANT_FILE for this attempt" (fleet-exec then denies on grant_missing_env
+    if the worker tries to call it anyway — the sandbox's own allow rule for
+    fleet-exec is unconditional, so this refusal has to come from the grant, not the
+    Bash allowlist)."""
+    if needs_mod.disabled():
+        return None, None, None
+    grants = []
+    problems = []
+    policy = None
+    wants_exec = bool(needs.ssh_nodes or needs.copy_targets or needs.restart_targets)
+    if wants_exec:
+        try:
+            policy = fleet_exec_policy.load_policy(FLEET_EXEC_POLICY_PATH)
+        except fleet_exec_policy.PolicyError as e:
+            raise SpawnRefused("CAPABILITY_DENIED_BY_POLICY",
+                                f"fleet-exec-policy.yaml unreadable: {e}", worktree=worktree)
+    for node in needs.ssh_nodes:
+        grants.append({"kind": "ssh", "node": node, "verbs": ["run"]})
+    for node, remote_dir in needs.copy_targets:
+        ok, rule, reason = fleet_exec_policy.check_copy(node, remote_dir, policy)
+        if not ok:
+            problems.append(f"needs:copy({node}:{remote_dir}) denied by {rule}: {reason}")
+            continue
+        grants.append({"kind": "copy", "node": node, "dir": remote_dir})
+    for node, unit in needs.restart_targets:
+        ok, rule, reason = fleet_exec_policy.check_restart(node, unit, policy)
+        if not ok:
+            problems.append(f"needs:restart({unit}@{node}) denied by {rule}: {reason}")
+            continue
+        grants.append({"kind": "restart", "node": node, "unit": unit})
+    if problems:
+        raise SpawnRefused("CAPABILITY_DENIED_BY_POLICY", "; ".join(problems), worktree=worktree)
+    if not grants:
+        return None, None, None
+    expires = (datetime.now(timezone.utc) + timedelta(seconds=wall_clock_s)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    grant = {"ticket": ticket_id, "attempt": attempt, "expires": expires, "grants": grants}
+    path = os.path.join(run_dir(ticket_id), "grant.json")
+    raw = json.dumps(grant, indent=2, sort_keys=True).encode() + b"\n"
+    if os.path.exists(path):
+        os.chmod(path, 0o600)
+    with open(path, "wb") as f:
+        f.write(raw)
+    os.chmod(path, 0o400)
+    return grant, fleet_exec_policy.sha256_bytes(raw), path
+
+
 def make_worktree(repo, ticket_id, attempt, title, archetype):
     """RELIABILITY_SPEC.md §D + wq#649: the branch name embeds the attempt number
     from the start (previously only a retry-fallback appended it), since attempt 1's
@@ -1582,6 +1649,13 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         assert_spawn_paths(ticket_id, ticket.get("detail", ""), worktree, args.repo,
                            add_dirs, ticket_needs.dirs)
 
+    # wq#1332 (§2.2 point 2): resolved every attempt (not just fresh spawns) so a
+    # resumed session's grant lease tracks its OWN wall_clock, not the first
+    # attempt's — raises SpawnRefused (uncharged) if a needs:copy/restart tag asks
+    # for something fleet-exec-policy.yaml forbids outright.
+    grant, grant_sha, grant_path = resolve_exec_grant(ticket_id, attempt, ticket_needs,
+                                                       wall_clock, worktree=worktree)
+
     prior_notes_path = os.path.join(run_dir(ticket_id), "prior-attempt-notes.md")
     # §1a: criteria are machine-checkable and pinned BEFORE the worker starts, so the
     # prompt can carry the done-contract and the Stop hook has something to enforce.
@@ -1599,6 +1673,13 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     )
 
     env = build_env(worker_id, args.model, args.effort, worktree, ticket_id)
+    if grant_path:
+        # wq#1332: fleet-exec's OWN enforcement step 1 re-derives this sha256 from
+        # the file it reads — this env var is the tamper check, not a convenience.
+        env["FOREMAN_GRANT_FILE"] = grant_path
+        env["FOREMAN_GRANT_SHA"] = grant_sha
+        env["FOREMAN_ATTEMPT"] = str(attempt)
+        env["FLEET_EXEC_WORKER_AUDIT_PATH"] = os.path.join(EVENTS_DIR, f"{worker_id}.jsonl")
     # §1c: the Stop hook reads these — which ticket this session owns, and where its
     # per-session block counter lives (capped, so it can never wedge a session).
     env["FOREMAN_TICKET_ID"] = str(ticket_id)
@@ -1755,6 +1836,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     attempt_record = {
         "ticket": ticket_id, "attempt": attempt, "worker_id": worker_id,
         "worktree": worktree, "branch": branch, "model": args.model, "effort": args.effort,
+        "grant_sha256": grant_sha,
         "observed_model": state.model,
         "model_downgraded": model_downgraded,
         "model_swap_detail": model_swap_detail,

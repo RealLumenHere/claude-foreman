@@ -57,6 +57,20 @@ LIVE_PROOF_TIMEOUT = 300
 # covered regardless of which toolchain profiles a repo declares.
 INSPECTION_PIPE_PROBE = "git status | tail -5 | grep -c . | wc -l"
 
+# wq#1332 (§3.2 point 4): the fleet-exec allow rule is unconditional (every worker
+# gets Bash(/home/lumen/bin/fleet-exec *) — the broker's own grant check, not the
+# Bash allowlist, is what denies a ticket with no needs: tags), so one representative
+# command per v1 verb is proved here the same way INSPECTION_PIPE_PROBE proves the
+# pipe shape: repo-agnostic, always appended, regardless of this repo's declared
+# verbs/preflight_cmds.
+FLEET_EXEC_BIN = "/home/lumen/bin/fleet-exec"
+FLEET_EXEC_PREFLIGHT_PROBES = [
+    f"{FLEET_EXEC_BIN} run isis -- true",
+    f"{FLEET_EXEC_BIN} copy isis /tmp/probe /home/isis/lumen-drop",
+    f"{FLEET_EXEC_BIN} restart isis probe.service",
+    f"{FLEET_EXEC_BIN} grant",
+]
+
 _OPERATORS = {"&&", "||", ";", "|"}
 
 
@@ -134,6 +148,7 @@ def preflight_commands(repo_path, repo_conf):
     for verb in repo_conf.get("verbs", []):
         cmds.append(os.path.join(repo_abs, verb))
     cmds.append(INSPECTION_PIPE_PROBE)
+    cmds.extend(FLEET_EXEC_PREFLIGHT_PROBES)
     return cmds
 
 

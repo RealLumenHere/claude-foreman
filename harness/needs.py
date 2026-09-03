@@ -48,6 +48,33 @@ class Needs:
         """Every dir(<abs-path>) arg, in order."""
         return [arg for name, arg in self.tags if name == "dir" and arg]
 
+    @property
+    def ssh_nodes(self):
+        """Every ssh(<node>) arg, in order (wq#1332 fleet-exec grant resolution)."""
+        return [arg for name, arg in self.tags if name == "ssh" and arg]
+
+    @property
+    def copy_targets(self):
+        """Every copy(<node>:<dir>) arg as (node, dir), malformed args skipped."""
+        out = []
+        for name, arg in self.tags:
+            if name == "copy" and ":" in arg:
+                node, _, d = arg.partition(":")
+                if node and d:
+                    out.append((node, d))
+        return out
+
+    @property
+    def restart_targets(self):
+        """Every restart(<unit>@<node>) arg as (node, unit), malformed args skipped."""
+        out = []
+        for name, arg in self.tags:
+            if name == "restart" and "@" in arg:
+                unit, _, node = arg.partition("@")
+                if node and unit:
+                    out.append((node, unit))
+        return out
+
     def __bool__(self):
         return bool(self.tags)
 
