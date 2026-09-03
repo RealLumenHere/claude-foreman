@@ -1246,3 +1246,237 @@ def test_structural_config_error_still_fails_closed(denv):
     errs = log_events(denv, "error")
     assert any(e["stage"] == "config" for e in errs)
     assert lumen_calls(denv) == []
+
+
+# ---- wq#1408: per-ticket exception boundary, per-repo gate cache, wq() timeout -------
+#
+# research/NIGHTLY_DISPATCH_RESILIENCE.md §1.5 audit table: every unwrapped per-ticket
+# call in _do_pass that could turn one bad ticket/repo into a dead pass. One test per
+# row, same shape as test_bad_archetype_skips_ticket_without_crashing_pass: inject the
+# exception, assert the rest of the pass still spawns.
+
+def test_profile_unreadable_skips_repo_without_crashing_pass(denv, monkeypatch):
+    """§1.5 row :891 — harness_preflight.dispatch_gate_check(repo) itself can raise
+    (a JSON typo in any permission-profiles fragment: permission_profiles._load_json is
+    a bare json.load). Uncaught, that killed every ticket of the migrated repo, one
+    exception at a time, every pass. It must cost the repo's tickets one skip each
+    (reason profile_unreadable) from ONE cached exception per repo per pass, one ntfy,
+    and a ticket of an unrelated repo must still get a normal decision."""
+    broken_repo = denv["repo"]
+    other_repo = str(denv["tmp"] / "other_repo")
+    os.makedirs(other_repo, exist_ok=True)
+    write_config(denv, lanes={
+        "testlane": {"enabled": True, "max_per_day": 10},
+        "otherlane": {"enabled": True, "max_per_day": 10},
+    })
+    monkeypatch.setitem(router.LANE_REPO, "otherlane", other_repo)
+
+    calls = []
+    real_check = harness_preflight.dispatch_gate_check
+
+    def flaky_gate_check(repo):
+        calls.append(repo)
+        if repo == broken_repo:
+            raise json.JSONDecodeError("bad json", "doc", 0)
+        return real_check(repo)
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check", flaky_gate_check)
+
+    t1 = add_ticket("first ticket, broken profile", lane="testlane")
+    t2 = add_ticket("second ticket, same broken profile", lane="testlane")
+    good = add_ticket("ticket on an unrelated, healthy repo", lane="otherlane")
+
+    assert fd.run_pass() == 0
+    assert calls.count(broken_repo) == 1  # cached per repo per pass
+    for tid in (t1, t2):
+        skips = log_events(denv, "skip", ticket=tid)
+        assert len(skips) == 1 and skips[0]["reason"] == "profile_unreadable"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [good]
+    assert log_events(denv, "error") == []
+    lines = ntfy_lines(denv)
+    assert len(lines) == 1 and "unreadable" in lines[0]  # one ntfy per repo per pass
+
+
+def test_wq_show_timeout_treated_as_vanished_without_crashing_pass(denv, monkeypatch):
+    """§1.5 row :755 (router.py:731-732 router.wq()) — no subprocess timeout meant a
+    wq/sqlite lock hung the WHOLE pass until systemd's TimeoutStartSec=600 SIGTERMed
+    it: no pass_end, no error line, exit 1. router.wq() now bounds every call at 30s;
+    a TimeoutExpired on the primary per-ticket wq_show is treated like the ticket
+    vanished, costing only that ticket a skip."""
+    bad = add_ticket("wq show hangs for this one")
+    good = add_ticket("an ordinary candidate in the same pass")
+
+    real_wq_show = router.wq_show
+
+    def flaky_wq_show(tid):
+        if int(tid) == bad:
+            raise subprocess.TimeoutExpired(cmd=["wq", "show", str(tid)], timeout=30)
+        return real_wq_show(tid)
+    monkeypatch.setattr(router, "wq_show", flaky_wq_show)
+
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=bad)
+    assert len(skips) == 1 and skips[0]["reason"] == "vanished"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [good]
+    assert log_events(denv, "error") == []
+
+
+def test_repo_for_ticket_exception_quarantines_tickets_without_crashing_pass(denv, monkeypatch):
+    """§1.5 row :780 — router.repo_for_ticket() calls needs.parse()/
+    repo_sweep.managed_repos(), either of which can raise on a malformed needs tag or
+    an unreadable repo universe. Uncaught, that used to abort the whole pass mid-scan
+    (the wq#1368 class, generalized to every unwrapped call). The per-ticket exception
+    boundary (wq#1408 §3.1) quarantines only the affected tickets, and pass_end reports
+    how many were quarantined."""
+    bad1 = add_ticket("repo_for_ticket blows up for this one")
+    bad2 = add_ticket("and this one")
+    good = add_ticket("an ordinary candidate in the same pass")
+
+    real_repo_for_ticket = router.repo_for_ticket
+
+    def flaky_repo_for_ticket(ticket_id_or_dict):
+        t = (ticket_id_or_dict if isinstance(ticket_id_or_dict, dict)
+             else router.wq_show(ticket_id_or_dict))
+        if int(t["id"]) in (bad1, bad2):
+            raise ValueError("malformed needs tag")
+        return real_repo_for_ticket(ticket_id_or_dict)
+    monkeypatch.setattr(router, "repo_for_ticket", flaky_repo_for_ticket)
+
+    assert fd.run_pass() == 0
+    for tid in (bad1, bad2):
+        skips = log_events(denv, "skip", ticket=tid)
+        assert len(skips) == 1 and skips[0]["reason"] == "quarantined"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [good]
+    ends = log_events(denv, "pass_end")
+    assert len(ends) == 1 and ends[0]["quarantined"] == 2
+
+
+def test_router_assign_non_manifest_exception_quarantines_ticket_without_crashing_pass(
+        denv, monkeypatch):
+    """§1.5 row :839 (router.py:405-407 router.assign non-Manifest paths) —
+    candidate_model() only catches SystemExit and ManifestError around router.assign();
+    a FileNotFoundError/yaml.YAMLError from an unparseable models.yaml propagates
+    further. The per-ticket exception boundary quarantines just that ticket."""
+    bad = add_ticket("assign blows up for this one", model=None)
+    good = add_ticket("an ordinary candidate in the same pass")
+
+    real_assign = router.assign
+
+    def flaky_assign(tid, **kwargs):
+        if int(tid) == bad:
+            raise FileNotFoundError("models.yaml vanished")
+        return real_assign(tid, **kwargs)
+    monkeypatch.setattr(router, "assign", flaky_assign)
+
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=bad)
+    assert len(skips) == 1 and skips[0]["reason"] == "quarantined"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [good]
+
+
+def test_pacing_hook_exception_quarantines_ticket_without_crashing_pass(denv, monkeypatch):
+    """§1.5 row :862 — PACING_HOOK (pacing.decide) can raise ValueError/KeyError on
+    malformed governor limits. Uncaught, that used to abort the whole pass. The
+    per-ticket exception boundary quarantines just the affected ticket."""
+    bad = add_ticket("pacing hook blows up for this one", pri=5)
+    good = add_ticket("an ordinary candidate in the same pass", pri=1)
+
+    real_hook = fd.PACING_HOOK
+
+    def flaky_hook(pri, model, limits, pacing_cfg, exempt):
+        if pri == 5:
+            raise KeyError("malformed governor limits")
+        return real_hook(pri, model, limits, pacing_cfg, exempt)
+    monkeypatch.setattr(fd, "PACING_HOOK", flaky_hook)
+
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=bad)
+    assert len(skips) == 1 and skips[0]["reason"] == "quarantined"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [good]
+
+
+def test_save_state_exception_quarantines_ticket_without_crashing_pass(denv, monkeypatch):
+    """§1.5 row :912 — save_state() (OSError on a full disk) used to propagate straight
+    out of the per-ticket loop and abort the whole pass, abandoning every remaining
+    candidate. The exception boundary quarantines that ticket's bookkeeping instead;
+    the next candidate in the same pass still gets a normal decision."""
+    bad = add_ticket("save_state blows up right after this spawns")
+    good = add_ticket("an ordinary candidate in the same pass")
+
+    real_save_state = fd.save_state
+    calls = []
+
+    def flaky_save_state(state):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("disk full")
+        return real_save_state(state)
+    monkeypatch.setattr(fd, "save_state", flaky_save_state)
+
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=bad)
+    assert len(skips) == 1 and skips[0]["reason"] == "quarantined"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [good]
+
+
+def test_runaway_stuck_ticket_ids_exception_degrades_to_empty_set(denv, monkeypatch):
+    """wq#1408 §3.1 preamble degrade — runaway.stuck_ticket_ids() raising (a broken
+    RUNS_ROOT read) used to abort the whole pass before any ticket got a decision. It
+    now degrades to the documented safe default (no stuck set) with a logged error
+    event, and the pass still runs."""
+    def raising_stuck_ticket_ids(threshold=None):
+        raise OSError("RUNS_ROOT unreadable")
+    monkeypatch.setattr(runaway, "stuck_ticket_ids", raising_stuck_ticket_ids)
+    tid = add_ticket("ordinary candidate despite runaway failure")
+
+    assert fd.run_pass() == 0
+    errs = [e for e in log_events(denv, "error") if e["stage"] == "runaway"]
+    assert len(errs) == 1
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
+def test_psi_pressure_check_exception_degrades_to_ok(denv, monkeypatch):
+    """wq#1408 §3.1 preamble degrade — psi_pressure.check() raising used to abort the
+    whole pass before any ticket got a decision. Degrades to verdict 'ok' with a
+    logged error event."""
+    def raising_check(tight_cfg):
+        raise ValueError("boom")
+    monkeypatch.setattr(psi_pressure, "check", raising_check)
+    tid = add_ticket("ordinary candidate despite psi failure")
+
+    assert fd.run_pass() == 0
+    errs = [e for e in log_events(denv, "error") if e["stage"] == "psi_pressure"]
+    assert len(errs) == 1
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
+def test_pacing_load_config_exception_degrades_to_default(denv, monkeypatch):
+    """wq#1408 §3.1 preamble degrade — pacing.load_config() raising an exception type
+    it doesn't already catch internally used to abort the whole pass. Degrades to
+    pacing.DEFAULT_CONFIG with a logged error event."""
+    def raising_load_config(path=None):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(pacing, "load_config", raising_load_config)
+    tid = add_ticket("ordinary candidate despite pacing config failure")
+
+    assert fd.run_pass() == 0
+    errs = [e for e in log_events(denv, "error")
+           if e["stage"] == "pacing" and e["reason"] == "pacing_load_failed"]
+    assert len(errs) == 1
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
+def test_circuit_breaker_exception_logs_error_not_bare_traceback(denv, monkeypatch):
+    """wq#1408 §3.1 — circuit_breaker.check_and_trip() used to run OUTSIDE the
+    pass-level try/except: an exception there was a bare Python traceback (exit 1,
+    nothing in dispatcher.log, invisible even to the health classifier). It now runs
+    inside the same try as _do_pass, so an exception is a logged 'error' event like
+    every other pass-level failure."""
+    def raising_check_and_trip(dry_run=False):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(circuit_breaker, "check_and_trip", raising_check_and_trip)
+    add_ticket("never reached")
+
+    assert fd.run_pass() == 1
+    errs = [e for e in log_events(denv, "error") if e["stage"] == "pass"]
+    assert len(errs) == 1 and "boom" in errs[0]["reason"]
+    assert lumen_calls(denv) == []

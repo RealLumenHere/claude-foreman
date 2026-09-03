@@ -734,8 +734,16 @@ def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI
 
 # ---- wq glue -------------------------------------------------------------------------
 
+WQ_TIMEOUT_S = 30  # wq#1408: an sqlite-lock hang used to wedge a whole dispatch pass
+# with no pass_end and no error line — TimeoutStartSec=600 eventually SIGTERMed the
+# unit, but nothing in dispatcher.log ever said why. Callers decide what a timeout
+# means for their ticket (foreman_dispatcher.py's primary wq_show call treats it the
+# same as "no such ticket" — vanished).
+
+
 def wq(*args):
-    return subprocess.run([WQ_BIN, *args], capture_output=True, text=True)
+    return subprocess.run([WQ_BIN, *args], capture_output=True, text=True,
+                          timeout=WQ_TIMEOUT_S)
 
 
 def wq_show(ticket_id):
