@@ -1232,6 +1232,34 @@ def test_multiple_bad_lanes_all_reported(denv):
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
 
 
+# ---- wq#1410 §3.3.1: dispatchable = candidates minus structural skips -----------------
+
+def test_dispatchable_excludes_structural_skip(denv):
+    """A lane_unmapped candidate was never really dispatchable — it must not count
+    toward dispatchable (the watchdog's 'could have spawned' number)."""
+    lanes = {"ghostlane": {"enabled": True, "max_per_day": 5}}
+    write_config(denv, lanes=lanes)
+    add_ticket("no repo mapping", lane="ghostlane")
+    assert fd.run_pass() == 0
+    pe = log_events(denv, "pass_end")[0]
+    assert pe["candidates"] == 1
+    assert pe["dispatchable"] == 0
+
+
+def test_dispatchable_counts_non_structural_skip_as_real_backlog(denv):
+    """lane_cap is a policy limit on real, dispatchable work, not a structural skip —
+    it must still count toward dispatchable so a hot lane doesn't look idle."""
+    lanes = {"testlane": {"enabled": True, "max_per_day": 1}}
+    write_config(denv, lanes=lanes)
+    add_ticket("first under the cap")
+    add_ticket("second over the cap")
+    assert fd.run_pass() == 0
+    pe = log_events(denv, "pass_end")[0]
+    assert pe["candidates"] == 2
+    assert pe["spawned"] == 1
+    assert pe["dispatchable"] == 2
+
+
 def test_structural_config_error_still_fails_closed(denv):
     """Top-level structural errors (missing lanes key, bad tight_mode, etc.) still
     fail the entire pass — wq#824 only softened PER-LANE validation."""

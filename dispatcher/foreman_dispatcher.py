@@ -213,10 +213,24 @@ def load_config(path=None):
 
 # ---- decision log (§8) ---------------------------------------------------------------
 
+# wq#1410 §3.3.1: skip reasons that mean "this candidate was never really
+# dispatchable" (lane has no repo, ticket is a rollup, Frank hasn't claimed it, a
+# dep is unmet, it's runaway-stuck, it vanished, or it's no longer open) as opposed
+# to a reason that reflects real, still-pending backlog (lane_cap, repo_mismatch,
+# already_running, budget/pacing throttling). The watchdog keys off the latter:
+# candidates minus this set is what "the dispatcher could have spawned" actually
+# means (research/NIGHTLY_DISPATCH_RESILIENCE.md §1.6, §3.3).
+STRUCTURAL_SKIP_REASONS = frozenset({
+    "lane_unmapped", "nodispatch_marker", "frank_gated", "deps_unmet",
+    "runaway_stuck", "not_open", "vanished",
+})
+
+
 class DecisionLog:
     def __init__(self, path, pass_id):
         self.path, self.pass_id, self.events = path, pass_id, []
         self._file_broken = False
+        self.skip_counts = {}
 
     def emit(self, event, **fields):
         rec = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -238,7 +252,14 @@ class DecisionLog:
                       file=sys.stderr, flush=True)
 
     def skip(self, ticket, lane, stage, reason, **fields):
+        self.skip_counts[reason] = self.skip_counts.get(reason, 0) + 1
         self.emit("skip", ticket=ticket, lane=lane, stage=stage, reason=reason, **fields)
+
+    def structural_skips(self):
+        """Count of skips this pass whose reason means the candidate was never
+        really dispatchable (see STRUCTURAL_SKIP_REASONS)."""
+        return sum(n for reason, n in self.skip_counts.items()
+                   if reason in STRUCTURAL_SKIP_REASONS)
 
 
 # ---- state.json (§6.3: per-day lane counters + fire-ntfy/pacing-ntfy dedup ledgers) --
@@ -912,7 +933,9 @@ def _do_pass(cfg, log, state, dry_run):
         if i < len(candidates) - 1:
             time.sleep(random.uniform(*STAGGER))  # same stagger doctrine as spawner
 
-    return {"candidates": len(candidates), "spawned": spawned, "tight": tight}
+    dispatchable = max(0, len(candidates) - log.structural_skips())
+    return {"candidates": len(candidates), "spawned": spawned, "tight": tight,
+            "dispatchable": dispatchable}
 
 
 def run_pass(dry_run=False):

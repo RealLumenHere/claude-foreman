@@ -12,9 +12,18 @@ dispatcher.
 A pass is UNHEALTHY if:
   - It emitted an `error` event (any stage — config error, or any other unhandled
     crash inside the _do_pass loop, wq#1374) and has NO `pass_end` (hard abort).
-  - Its `pass_end` has spawned=0 AND candidates>0 AND dry_run=false AND no
+  - Its `pass_end` has spawned=0 AND dispatchable>0 AND dry_run=false AND no
     `halt stage=concurrency reason=no_slots` in the same pass (= the dispatcher COULD
-    have spawned but didn't, and it wasn't because all slots were full).
+    have spawned but didn't, and it wasn't because all slots were full). `dispatchable`
+    (wq#1410 §3.3.1, foreman_dispatcher.py's DecisionLog.structural_skips()) is
+    candidates minus skips that mean "never really dispatchable" (lane_unmapped,
+    nodispatch_marker, frank_gated, deps_unmet, runaway_stuck, not_open, vanished) —
+    a queue of 40 structurally-dead candidates no longer masks a real stall. Older
+    log lines with no `dispatchable` field fall back to `candidates` (pre-wq#1410
+    behavior, unchanged).
+  - It has a `pass_start` and no matching `pass_end`/`error`, and that pass_start is
+    older than HUNG_PASS_SECONDS (wq#1410 §3.3.1: the hung-wq case — a wq/sqlite lock
+    that hangs the pass past TimeoutStartSec with no line ever written).
 
 A pass is HEALTHY if:
   - It has a `pass_end` with spawned>0, OR
@@ -48,19 +57,41 @@ _LEGACY_STATE_PATH = os.path.join(DISPATCHER_DIR, "health_state.json")
 CONFIG_PATH = os.path.join(DISPATCHER_DIR, "config.json")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 
-DEFAULT_THRESHOLD = 3          # consecutive unhealthy passes before alarm
+DEFAULT_THRESHOLD = 2          # consecutive unhealthy passes before alarm (wq#1410
+                                # §3.3.2: was 3, but the 20-min health cadence makes
+                                # 3 a one-hour blind spot before the ladder ever runs)
 ALERT_DEDUP_SECONDS = 3600     # don't re-alert within 1h
 # How many log lines to scan from the tail. 200 lines covers ~30 passes at ~6 lines each.
 TAIL_LINES = 200
+# wq#1410: TimeoutStartSec for lumen-foreman-dispatch.service — a pass_start with no
+# pass_end/error older than this is presumed hung (dispatcher/systemd/lumen-foreman-
+# dispatch.service).
+HUNG_PASS_SECONDS = int(os.environ.get("FOREMAN_DISPATCH_TIMEOUT_S", "600"))
+STALL_TITLE = "[DISPATCH] DISPATCHER STALLED"   # wq#1410 §3.3.4: prefixed + filterable
+                                                 # from the 30-min sentinel-probe floor
 
 
 def _utcnow():
     return datetime.now(timezone.utc)
 
 
-def _ntfy(msg, priority="urgent", title="DISPATCHER STALLED"):
+def _pass_age_seconds(ts):
+    """Seconds between an event's ts and now, or None if ts is unparseable."""
     try:
-        subprocess.run([NTFY_BIN, "-t", "lumen-alerts", "-p", priority, "-T", title, msg],
+        t = datetime.fromisoformat(ts)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (_utcnow() - t).total_seconds()
+    except (ValueError, TypeError):
+        return None
+
+
+def _ntfy(msg, priority="urgent", title=STALL_TITLE):
+    # wq#1410 §3.3.4: rotating_light tag so Frank's ntfy client can route this to a
+    # sound distinct from the 30-min sentinel-probe floor (bin/ntfy-send -g/--tags).
+    try:
+        subprocess.run([NTFY_BIN, "-t", "lumen-alerts", "-p", priority, "-T", title,
+                        "-g", "rotating_light", msg],
                        capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired):
         pass
@@ -117,6 +148,8 @@ def classify_passes(events):
             continue
         passes.setdefault(pid, []).append(ev)
 
+    last_pid = next(reversed(passes), None)
+
     results = []
     for pid, evs in passes.items():
         ts = evs[0].get("ts", "")
@@ -126,6 +159,7 @@ def classify_passes(events):
         is_dry_run = False
         spawned = 0
         candidates = 0
+        dispatchable = None
         has_no_slots_halt = False
 
         for ev in evs:
@@ -139,6 +173,9 @@ def classify_passes(events):
                 has_pass_end = True
                 spawned = ev.get("spawned", 0)
                 candidates = ev.get("candidates", 0)
+                # wq#1410 §3.3.1: fall back to candidates for pre-migration log lines
+                # that never wrote a dispatchable field.
+                dispatchable = ev.get("dispatchable", candidates)
             if event == "halt" and ev.get("stage") == "concurrency" \
                and "no_slots" in (ev.get("reason") or ""):
                 has_no_slots_halt = True
@@ -156,24 +193,34 @@ def classify_passes(events):
             results.append((pid, ts, "unhealthy", "error event (pass aborted)"))
             continue
 
-        # Case 2: pass completed but spawned nothing despite candidates waiting,
+        # Case 2: pass completed but spawned nothing despite real backlog waiting,
         # and it wasn't because all slots were full.
-        if has_pass_end and spawned == 0 and candidates > 0 \
+        if has_pass_end and spawned == 0 and dispatchable > 0 \
            and not has_no_slots_halt and not is_dry_run:
             results.append((pid, ts, "unhealthy",
-                            f"spawned=0 candidates={candidates} (not concurrency-limited)"))
+                            f"spawned=0 dispatchable={dispatchable} candidates={candidates} "
+                            "(not concurrency-limited)"))
             continue
 
         # Everything else is healthy (or at least not the dispatcher's fault).
         if has_pass_end:
             results.append((pid, ts, "healthy",
-                            f"spawned={spawned} candidates={candidates}"))
+                            f"spawned={spawned} dispatchable={dispatchable} "
+                            f"candidates={candidates}"))
         elif has_config_error:
             # config error but somehow got a pass_end → shouldn't happen, but be safe
             results.append((pid, ts, "unhealthy", "config error with unexpected pass_end"))
         else:
-            # No pass_end, no config error — possibly incomplete log line, skip
-            results.append((pid, ts, "skip", "incomplete pass data"))
+            # No pass_end, no config error. Only the most recent pass_id in the tail
+            # can be "still running" — an older one missing pass_end is a truncated
+            # log line, not a hang. wq#1410 §3.3.1: the hung-wq case (a wq/sqlite
+            # lock hangs the pass past TimeoutStartSec with no line ever written).
+            age = _pass_age_seconds(ts)
+            if pid == last_pid and age is not None and age > HUNG_PASS_SECONDS:
+                results.append((pid, ts, "unhealthy",
+                                f"hung: pass_start with no pass_end after {int(age)}s"))
+            else:
+                results.append((pid, ts, "skip", "incomplete pass data"))
 
     return results
 
@@ -192,7 +239,22 @@ def check_health(log_path, threshold, dry_run=False):
 
     # Take the last `threshold` scored passes.
     recent = scored[-threshold:]
-    all_unhealthy = all(v == "unhealthy" for _, _, v, _ in recent)
+    all_unhealthy = len(recent) == threshold and all(v == "unhealthy" for _, _, v, _ in recent)
+
+    # wq#1410 §3.3.2: drive the recovery ladder off the *raw* alarm condition, not
+    # the ntfy-dedup-suppressed one below — the ladder must advance every tick while
+    # unhealthy even on hours where the page itself is deduped. A single healthy
+    # pass (independent of the K-window) resets it. Import here, not at module
+    # scope: dispatch_recover imports dispatch_health for its selftest, and this
+    # keeps that a one-directional edge, not a cycle.
+    import dispatch_recover
+    try:
+        if all_unhealthy:
+            dispatch_recover.advance(dry_run=dry_run)
+        elif scored[-1][2] == "healthy":
+            dispatch_recover.reset(dry_run=dry_run)
+    except Exception as e:  # noqa: BLE001 — the actor must never take the sensor down
+        print(f"[dispatch_health] recover actor error (non-fatal): {e!r}", file=sys.stderr)
 
     detail_lines = []
     for pid, ts, v, r in recent:
