@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "harness/harness_preflight.py:294-299 (run_live_proof wrapped in except (OSError, subprocess.TimeoutExpired)); dispatcher/foreman_dispatcher.py:607-611 (harness_preflight.preflight(repo) wrapped in try/except Exception, treated as ok=False); dispatcher/tests/test_dispatcher.py:823-849 (test_stale_preflight_live_proof_exception_bypasses_cooldown asserts cooldown engages on the exception path)"}]}
+{"criteria": [{"id": "AC1", "citation": "harness/harness_preflight.py:297"}]}
