@@ -452,6 +452,16 @@ def test_lane_repo_map_covers_build_with_foreman_root():
     assert router.repo_for_lane("nonexistent-lane") is None
 
 
+# wq#1325/ISSUE-LOG #125: LANE_REPO["nest"] once pointed at /home/lumen/projects/nest, an
+# archive/scratch repo of unrelated RE notes — not the git-tracked firmware repo, which
+# lives one level deeper (its own history/remote, .gitignore'd out of the archive per
+# bd5c4f1). No test pinned the exact value, so it regressed silently once already
+# (wq#1155). Pin it so a future edit can't quietly point it back at the archive dir.
+def test_lane_repo_nest_points_at_firmware_repo_not_archive_dir():
+    assert router.repo_for_lane("nest") == "/home/lumen/projects/nest/NoLongerEvil-Thermostat"
+    assert router.repo_for_lane("nest") != "/home/lumen/projects/nest"
+
+
 # wq#830: 'auto' is wq's CLI default lane and spans arbitrary repos (wq#688 questfree,
 # wq#306 vault, wq#545 wq-tooling), so it must not resolve to FOREMAN_ROOT. Dispatching an
 # auto ticket without --repo has to fail loudly, not hand fworker the wrong tree.
