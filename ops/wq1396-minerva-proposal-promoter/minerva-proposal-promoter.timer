@@ -1,0 +1,11 @@
+[Unit]
+Description=Run minerva-proposal-promoter 15min after each minerva-eval slot (wq#1396)
+Requires=minerva-proposal-promoter.service
+
+[Timer]
+OnCalendar=*-*-* 03,07,11,17,19,23:15:00 UTC
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
