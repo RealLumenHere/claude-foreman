@@ -604,7 +604,11 @@ def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
         log.emit("would_ntfy", ticket=tid, lane=lane, reason="preflight_reprove", repo=name)
         log.skip(tid, lane, "preflight", "no_fresh_stamp", detail=reason)
         return False
-    result = harness_preflight.preflight(repo)
+    try:
+        result = harness_preflight.preflight(repo)
+    except Exception as e:
+        result = harness_preflight.PreflightResult(
+            repo, ok=False, reason=f"preflight raised: {e!r}", static_failures=[], denials=[])
     if result.ok:
         log.emit("info", stage="preflight", reason="auto_reproved",
                  detail=f"{name}: stale stamp ({reason}) reproved clean")

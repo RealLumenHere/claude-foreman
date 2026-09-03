@@ -291,8 +291,12 @@ def preflight(repo_path, claude_bin="claude", model=CHEAPEST_MODEL, runner=None,
         return PreflightResult(repo_path, ok=False, reason="static lint failed",
                                 static_failures=static_failures, denials=[], digest=digest)
 
-    denials = run_live_proof(repo_path, settings_path, cmds, claude_bin=claude_bin,
-                              model=model, runner=runner)
+    try:
+        denials = run_live_proof(repo_path, settings_path, cmds, claude_bin=claude_bin,
+                                  model=model, runner=runner)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return PreflightResult(repo_path, ok=False, reason=f"live proof errored: {e!r}",
+                                static_failures=[], denials=[], digest=digest)
     if denials:
         return PreflightResult(repo_path, ok=False, reason="live proof found permission denials",
                                 static_failures=[], denials=denials, digest=digest)

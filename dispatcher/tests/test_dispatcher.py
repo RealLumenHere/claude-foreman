@@ -820,6 +820,36 @@ def test_stale_preflight_reprove_cooldown_avoids_repeat_live_proof(denv, monkeyp
     assert log_events(denv, "spawn", ticket=t1) == []
 
 
+def test_stale_preflight_live_proof_exception_bypasses_cooldown(denv, monkeypatch):
+    """wq#1384: wq#1380 found that a raw exception out of harness_preflight.preflight()
+    (TimeoutExpired on a hung live-proof session, FileNotFoundError if claude_bin isn't
+    on PATH) used to propagate past handle_stale_preflight() and abort the whole pass —
+    preflight_ntfy never got written, so the reprove cooldown never engaged and the next
+    pass re-spawned the same doomed live-proof session forever. An exception must be
+    treated identically to a clean ok=False: alert once, write the cooldown, skip."""
+    t1 = add_ticket("first stale-stamp pass, preflight raises")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (False, "stale preflight stamp for repo"))
+    calls = []
+
+    def raising_preflight(repo):
+        calls.append(repo)
+        raise subprocess.TimeoutExpired(cmd=["claude"], timeout=300)
+    monkeypatch.setattr(harness_preflight, "preflight", raising_preflight)
+    assert fd.run_pass() == 0
+    assert len(calls) == 1
+    assert len(ntfy_lines(denv)) == 1
+
+    t2 = add_ticket("second pass, still within cooldown")
+    assert fd.run_pass() == 0
+    assert len(calls) == 1  # not re-run — cooldown still active despite the raise
+    assert len(ntfy_lines(denv)) == 1  # not re-alerted
+    skips = log_events(denv, "skip", ticket=t2)
+    assert len(skips) == 1 and skips[0]["reason"] == "no_fresh_stamp"
+    assert lumen_calls(denv) == []
+    assert log_events(denv, "spawn", ticket=t1) == []
+
+
 def test_auto_lane_repo_sweep_ticket_dispatches_via_repo_hint(denv, monkeypatch):
     """wq#1094: 'auto' has no LANE_REPO entry (repo-sweeps span arbitrary repos), but a
     repo-sweep ticket carries its own target repo in its detail — the dispatcher must
