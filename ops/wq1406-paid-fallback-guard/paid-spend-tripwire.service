@@ -1,0 +1,8 @@
+[Unit]
+Description=wq#1406 per-paid-model daily spend tripwire (LiteLLM SpendLogs)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/wq1406-paid-fallback-guard/paid_spend_tripwire.py
+User=lumen
