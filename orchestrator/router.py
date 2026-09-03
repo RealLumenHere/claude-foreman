@@ -97,6 +97,12 @@ LANE_REPO = {
     "pstack": "/home/lumen/pstack",
     "mission-control": "/home/lumen/mission-control",
     "fleet-spend": FOREMAN_ROOT,
+    "fleet": FOREMAN_ROOT,   # wq#1414: fleet-infra work (bin/ scripts, cron guards, monitors)
+                             # lands in foreman like ops/fleet-fires/fleet-spend below — the 4
+                             # open fleet tickets at ticket time (wq#1296/1297/1133/1373) are all
+                             # foreman-repo deliverables. Was previously unmapped, so every fleet
+                             # ticket was skipped as lane_unmapped on every dispatch pass
+                             # (research/NIGHTLY_DISPATCH_RESILIENCE.md §1.6, dispatcher.log).
     "ops": FOREMAN_ROOT,
     "quest-repair-research": FOREMAN_ROOT,
     "fleet-fires": FOREMAN_ROOT,          # fires are fleet/infra work, run from foreman
