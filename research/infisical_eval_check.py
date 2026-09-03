@@ -32,6 +32,17 @@ def main() -> int:
     infisical_hits = grep_count("infisical", "/home/lumen/foreman") + grep_count("infisical", "/home/lumen/bin")
     checks.append((f"no existing Infisical deployment/config in fleet (found {infisical_hits} file(s))", infisical_hits == 0))
 
+    issue_20 = subprocess.run(
+        ["grep", "-n", r"^| 20 |", "/home/lumen/kb/ISSUE-LOG.md"],
+        capture_output=True, text=True,
+    ).stdout
+    secrets_terms = ("secret", "token", "rotat", "vault", "credential")
+    issue_20_is_secrets_related = any(t in issue_20.lower() for t in secrets_terms)
+    checks.append((
+        "ISSUE-LOG #20 citation does not match the secrets/rotation class (ticket's citation is stale, corrected in doc addendum)",
+        not issue_20_is_secrets_related,
+    ))
+
     ok = True
     for label, passed in checks:
         print(f"{'PASS' if passed else 'FAIL'}: {label}")

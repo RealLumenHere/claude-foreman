@@ -77,3 +77,15 @@ Postgres-backed secret platform next to Vaultwarden's Postgres-backed one on the
 drift check across the *whole* secrets manifest" (today only GitHub PATs get a dedicated check) —
 both addressable by extending the existing `lumen-secret-check` pattern to the full
 `vw_migration_306.md` manifest, not by standing up Infisical.
+
+## 6. Addendum: the ISSUE-LOG #20 citation doesn't hold
+
+The ticket cites ISSUE-LOG #1 *and* #20 as the token-rotation/orphaned-secret class. #1 checks out
+(section 2 above). #20 does not: it's `lumen-pr open` silently swallowing a missing §5 PR body
+because output was grep-filtered to the happy path, fixed as a habit (always read full output on
+gating steps) — a PR-tooling bug, unrelated to secret storage or rotation
+(`/home/lumen/kb/ISSUE-LOG.md:26`). Verified with `research/infisical_eval_check.py`'s
+`issue_log_20_is_secrets_related` check below (expected FAIL, confirming the mismatch so a future
+reader doesn't chase a bad citation). This doesn't change the verdict — #1 alone is the failure
+class in question, and Infisical still wouldn't have fixed it — but the ticket's own citation should
+be corrected for anyone revisiting this.
