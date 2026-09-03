@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#1397 — check live Gitea version against CVE-2026-66877 patched floor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/services/gitea-version-check/gitea_version_check.py run
+StandardOutput=journal
+StandardError=journal
