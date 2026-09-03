@@ -243,10 +243,35 @@ Systemd unit: `llama-server.service` (this directory) — installs to
 `/opt/hapi/models/qwen3.6-35b-a3b-iq3.gguf` (adjust `ExecStart` if the deploy path
 differs). Serves OpenAI-compatible `/v1/completions` and `/completion` on `:8080`.
 
+### Service account and model directory — do this BEFORE enabling the unit
+
+The unit runs as `User=llama` / `Group=render` with `ReadWritePaths=/opt/hapi`. Neither
+the account nor the directory exists on a stock Ubuntu 24.04 install, and systemd fails
+the unit at start if it cannot resolve `User=` to a UID or if a `ReadWritePaths=` path is
+missing — so `systemctl enable --now` below fails unconditionally without this step.
+
+```sh
+# render/video ship with udev on 24.04; create them only if this image lacks them
+getent group render >/dev/null || sudo groupadd -r render
+getent group video  >/dev/null || sudo groupadd -r video
+# system account, no login shell, no home; -G covers running llama-server by hand (§7)
+getent passwd llama >/dev/null || \
+  sudo useradd -r -M -s /usr/sbin/nologin -G render,video llama
+sudo mkdir -p /opt/hapi/models
+sudo chown -R llama:render /opt/hapi
+sudo chmod 0755 /opt/hapi /opt/hapi/models
+```
+
+`chown` uses `llama:render` (not `llama:llama`) because `Group=render` in the unit makes
+`render` the service's *primary* group at runtime; group-owning the tree by `llama`'s own
+group would leave `/opt/hapi` non-writable under `ReadWritePaths=`. If the GGUF is pulled
+as root, re-run the `chown` afterwards so the model file is readable by the service.
+
 ```sh
 sudo cp llama-server.service /etc/systemd/system/llama-server.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now llama-server
+systemctl is-active llama-server   # expect: active — anything else, `journalctl -u llama-server -n50`
 curl -s http://127.0.0.1:8080/health
 ```
 
