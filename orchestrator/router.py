@@ -85,9 +85,14 @@ LANE_REPO = {
                                          # 'lpp' dispatcher-config entry was dropped — this map
                                          # entry is not a config lane and is never scanned
     "questfree": "/home/lumen/questfree",
-    "nest": "/home/lumen/projects/nest",  # wq#1155/ISSUE-LOG #56 class: [nest]-titled tickets
-                                           # were dispatching lane=build -> FOREMAN_ROOT with
-                                           # zero access to the actual nest repo
+    "nest": "/home/lumen/projects/nest/NoLongerEvil-Thermostat",  # wq#1155/ISSUE-LOG #56 class:
+                                           # [nest]-titled tickets were dispatching lane=build ->
+                                           # FOREMAN_ROOT with zero access to the actual nest repo.
+                                           # wq#1325/ISSUE-LOG #125: the bare /home/lumen/projects/nest
+                                           # dir above is itself just an archive repo of RE notes;
+                                           # the real git-tracked firmware repo (its own history/remote,
+                                           # deliberately .gitignore'd out of the archive per bd5c4f1)
+                                           # lives one level deeper, hence the nested path here.
     "pstack": "/home/lumen/pstack",
     "mission-control": "/home/lumen/mission-control",
     "fleet-spend": FOREMAN_ROOT,
@@ -839,7 +844,7 @@ TITLE_REPO_MARKERS = {
     "lpp": "/home/lumen/pokemon",
     "lpp-mp": "/home/lumen/pokemon",
     "pokemon": "/home/lumen/pokemon",
-    "nest": "/home/lumen/projects/nest",
+    "nest": "/home/lumen/projects/nest/NoLongerEvil-Thermostat",  # wq#1325: keep in sync with LANE_REPO["nest"]
     "questfree": "/home/lumen/questfree",
     "mailbot": "/home/lumen/mailbot",
     "pstack": "/home/lumen/pstack",
