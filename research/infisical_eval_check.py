@@ -22,18 +22,18 @@ def main() -> int:
     checks = []
 
     vw_migrator_exists = subprocess.run(
-        ["test", "-f", "/home/lumen/bin/vw-migrate-secrets"]
+        ["test", "-f", f"{FLEET_ROOT}/bin/vw-migrate-secrets"]
     ).returncode == 0
     checks.append(("vw-migrate-secrets present (fleet already has a vault loader)", vw_migrator_exists))
 
-    vw_hits = grep_count("vaultwarden", "/home/lumen/foreman/reports")
+    vw_hits = grep_count("vaultwarden", f"{FLEET_ROOT}/foreman/reports")
     checks.append((f"vaultwarden referenced in ops reports (found in {vw_hits} file(s))", vw_hits > 0))
 
-    infisical_hits = grep_count("infisical", "/home/lumen/foreman") + grep_count("infisical", "/home/lumen/bin")
+    infisical_hits = grep_count("infisical", f"{FLEET_ROOT}/foreman") + grep_count("infisical", f"{FLEET_ROOT}/bin")
     checks.append((f"no existing Infisical deployment/config in fleet (found {infisical_hits} file(s))", infisical_hits == 0))
 
     issue_20 = subprocess.run(
-        ["grep", "-n", r"^| 20 |", "/home/lumen/kb/ISSUE-LOG.md"],
+        ["grep", "-n", r"^| 20 |", f"{FLEET_ROOT}/kb/ISSUE-LOG.md"],
         capture_output=True, text=True,
     ).stdout
     secrets_terms = ("secret", "token", "rotat", "vault", "credential")
