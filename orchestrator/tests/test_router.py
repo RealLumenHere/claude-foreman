@@ -696,7 +696,7 @@ def test_title_repo_marker_reads_bracketed_and_bare_leading_tags():
     assert router.title_repo_marker("[lpp-mp] M5d: cross-node link over Tailscale") == "/home/lumen/pokemon"
     assert router.title_repo_marker("[lpp][stuck] agent parked 40 turns") == "/home/lumen/pokemon"
     assert router.title_repo_marker("LPP-MP M5 (stretch): BGB link-over-TCP bridge") == "/home/lumen/pokemon"
-    assert router.title_repo_marker("[nest] wire the porch sensor") == "/home/lumen/projects/nest"
+    assert router.title_repo_marker("[nest] wire the porch sensor") == "/home/lumen/projects/nest/NoLongerEvil-Thermostat"
     assert router.title_repo_marker("[questfree] Quest 1 DTS") == "/home/lumen/questfree"
 
 
