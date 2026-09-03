@@ -1,0 +1,44 @@
+# wq#1337 — hapi-1 LiteLLM rung, staged DARK.
+#
+# NOT MERGED. NOT LIVE. This is a model_list entry ready to splice into the fleet's real
+# LiteLLM config.yaml once the gate below passes — do not add it to the live config as
+# part of landing this ticket.
+#
+# Gate: wq#266 (hapi-1 quant eval vs Isis). wq#266 itself is blocked on hapi-1's first
+# boot (this runbook is what unblocks that boot). Pass bar per wq#266's own text:
+#   candidate UD-Q2_K_XL Instruct-2507 vs Isis qwen3:32b, using
+#   /home/lumen/hapi/eval (run_eval.py, pinned tasks.jsonl)
+#   PASS = verdict_agree >= 0.9 AND leaks == 0 AND rationale >= 3.5
+# Then a 40-CU unlock A/B (thermals + tok/s) before fleet rollout.
+#
+# Activation steps, in order, once wq#266 shows PASS:
+#   1. Confirm bench.sh's soak test (this directory) shows PASS for hapi-1's actual
+#      deployed build (not a stand-in) — the RUNBOOK.md §11 pass/fail table.
+#   2. Copy the model_list entry below into the live LiteLLM config.yaml.
+#   3. Reload/restart the LiteLLM proxy through the normal fleet-exec/restart path —
+#      never a raw `systemctl restart` from a build worker (capability C3, see
+#      research/WORKER_EXEC_CAPABILITY_GAP.md).
+#   4. Add the corresponding `hapi-1` entry to research/models.yaml (this repo) with a
+#      real status (LIVE-local or similar) so the foreman router can route to it too —
+#      that is a separate follow-up edit, deliberately not done here, so this ticket's
+#      "nothing live" bar holds.
+#   5. Update BC250_PROJECT.md's CURRENT STATE block to mark the rung live.
+
+model_list:
+  - model_name: hapi-1
+    litellm_params:
+      # OpenAI-compatible endpoint exposed by llama-server.service (this directory),
+      # port 8080. Replace the host below with hapi-1's actual Tailscale hostname or
+      # DHCP-reserved LAN IP once assigned (BC250_PROJECT.md: GL-iNet DHCP + Tailscale
+      # mgmt) — "hapi-1" as a bare hostname assumes Tailscale MagicDNS is in use, same
+      # pattern as the fleet's other single-node rungs.
+      model: openai/qwen3.6-35b-a3b
+      api_base: http://hapi-1:8080/v1
+      api_key: "not-required"          # llama-server has no auth by default; do not
+                                        # expose :8080 outside the tailnet
+    model_info:
+      gate: wq#266
+      status: dark                     # dark = staged, not routable, until wq#266 PASS
+      served_by: llama-server (Vulkan, 40CU unlock, 1800MHz/65W governor cap)
+      replaces_tier: qwen36-local (Isis) — SPEED upgrade for the same LOCAL tier,
+        not a Cerebras/120B-class replacement (BC250_PROJECT.md line 37)

@@ -1,0 +1,39 @@
+[Unit]
+Description=llama.cpp server (Vulkan) - Qwen3.6-35B-A3B IQ3, hapi-1
+After=network-online.target cyan-skillfish-governor-smu.service
+Wants=network-online.target
+Requires=cyan-skillfish-governor-smu.service
+
+[Service]
+Type=simple
+User=llama
+Group=render
+SupplementaryGroups=video render
+
+Environment=RADV_PERFTEST=aco
+Environment=RADV_DEBUG=noibs,nobinning
+Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
+# Uncomment if NaN outputs appear under multi-client 40CU load (llama.cpp MR #6789):
+# Environment=LLAMACPP_VULKAN_COMMAND_BUFFER_COUNT=1
+
+ExecStart=/usr/local/bin/llama-server \
+  --model /opt/hapi/models/qwen3.6-35b-a3b-iq3.gguf \
+  --cache-type-k q4_0 \
+  --cache-type-v q4_0 \
+  --ctx-size 10240 \
+  --n-gpu-layers 999 \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --metrics
+
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/hapi
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
