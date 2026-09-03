@@ -269,7 +269,8 @@ def load_state(now=None):
     now = now or _utcnow()
     today = now.strftime("%Y-%m-%d")
     fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {},
-             "runaway_ntfy": {}, "preflight_ntfy": {}, "gate_error_ntfy": {}}
+             "runaway_ntfy": {}, "preflight_ntfy": {}, "gate_error_ntfy": {},
+             "harness_defect_ntfy": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -282,10 +283,12 @@ def load_state(now=None):
     runaway_ntfy = _prune_dedup(st.get("runaway_ntfy"), now, FIRE_NTFY_DEDUP_H)
     preflight_ntfy = _prune_dedup(st.get("preflight_ntfy"), now, FIRE_NTFY_DEDUP_H)
     gate_error_ntfy = _prune_dedup(st.get("gate_error_ntfy"), now, FIRE_NTFY_DEDUP_H)
+    harness_defect_ntfy = _prune_dedup(st.get("harness_defect_ntfy"), now, FIRE_NTFY_DEDUP_H)
     if st.get("day") != today:  # UTC day rollover resets lane counts, not the ledgers (§6.3)
         return {"day": today, "lane_counts": {}, "fire_ntfy": fire,
                 "pacing_ntfy": pacing_ntfy, "runaway_ntfy": runaway_ntfy,
-                "preflight_ntfy": preflight_ntfy, "gate_error_ntfy": gate_error_ntfy}
+                "preflight_ntfy": preflight_ntfy, "gate_error_ntfy": gate_error_ntfy,
+                "harness_defect_ntfy": harness_defect_ntfy}
     counts = st.get("lane_counts")
     return {"day": today,
             "lane_counts": counts if isinstance(counts, dict) else {},
@@ -293,7 +296,8 @@ def load_state(now=None):
             "pacing_ntfy": pacing_ntfy,
             "runaway_ntfy": runaway_ntfy,
             "preflight_ntfy": preflight_ntfy,
-            "gate_error_ntfy": gate_error_ntfy}
+            "gate_error_ntfy": gate_error_ntfy,
+            "harness_defect_ntfy": harness_defect_ntfy}
 
 
 def save_state(st):
@@ -596,6 +600,33 @@ def handle_runaway_stuck(state, tid, lane, attempts, dry_run, log):
     save_state(state)
 
 
+def handle_harness_defect_hold(state, tid, lane, summary, dry_run, log):
+    """wq#1415: hold a ticket whose last recorded failure is HARNESS_DEFECT (see
+    runaway.harness_defect_ticket_ids()) so it stops being re-claimed on every
+    event-driven refill pass (fworker.py trigger_refill) while the underlying harness
+    defect is still unfixed. Never auto-blocks the ticket — it self-clears the moment a
+    later attempt gets past preflight — so this only needs the same dedup-ntfy pattern
+    as handle_runaway_stuck, not a new escalation path."""
+    log.skip(tid, lane, "harness_defect", "harness_defect_hold", detail=summary)
+    now = _utcnow()
+    last = state["harness_defect_ntfy"].get(str(tid))
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=FIRE_NTFY_DEDUP_H):
+                return  # already pinged Frank within 24h — never flood
+        except ValueError:
+            pass
+    if dry_run:
+        log.emit("would_ntfy", ticket=tid, lane=lane, reason="harness_defect_hold")
+        return
+    ntfy(f"wq#{tid} ({lane}) held: last failure was HARNESS_DEFECT ({summary}). "
+         f"Dispatcher will keep skipping it every pass until the defect is fixed and a "
+         f"later attempt gets past preflight.", priority="high",
+         title="foreman dispatcher: harness-defect hold")
+    state["harness_defect_ntfy"][str(tid)] = now.isoformat(timespec="seconds")
+    save_state(state)
+
+
 def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
     """wq#1372: dispatch_gate_check() failing used to just mean `continue` forever —
     a repo's worker-settings.json or preflight_cmds changing made its stamp stale and
@@ -762,6 +793,14 @@ def _do_pass(cfg, log, state, dry_run):
         log.emit("error", stage="runaway", reason="stuck_ticket_ids_failed",
                  detail=repr(e)[:300])
         stuck = {}
+    try:
+        # wq#1415: ditto — a SpawnRefused loop never writes attempt-N.json, so it never
+        # shows up in `stuck` above; degrade the same way (no holds this pass) on error.
+        harness_defects = runaway.harness_defect_ticket_ids()
+    except Exception as e:  # noqa: BLE001 — see docstring above
+        log.emit("error", stage="runaway", reason="harness_defect_ticket_ids_failed",
+                 detail=repr(e)[:300])
+        harness_defects = {}
 
     # wq#844: PSI memory pressure — real backpressure from the box, not budget guessing.
     # Checked once per pass (PSI avg60 is already smoothed).
@@ -871,6 +910,17 @@ def _do_pass(cfg, log, state, dry_run):
             # cycles without reaching done is skipped every pass, not re-attempted forever
             if tid in stuck:
                 handle_runaway_stuck(state, tid, lane, stuck[tid]["attempts"], dry_run, log)
+                continue
+
+            # stage 3.5b — harness-defect hold (wq#1415): a SpawnRefused preflight
+            # refusal never writes an attempt-N.json (fworker.py handle_spawn_refused —
+            # "attempt not charged"), so it never trips the attempt-count runaway check
+            # just above; without this it got re-claimed on every event-driven refill
+            # kick instead of the timer's 20-min cadence. See
+            # runaway.harness_defect_ticket_ids().
+            if tid in harness_defects:
+                handle_harness_defect_hold(state, tid, lane,
+                                           harness_defects[tid]["summary"], dry_run, log)
                 continue
 
             # stage 3.6 — epic/tracker parents (wq#428): a rollup is never dispatchable work

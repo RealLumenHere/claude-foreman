@@ -1141,6 +1141,50 @@ def test_runaway_below_threshold_not_skipped(denv):
     assert log_events(denv, "skip", ticket=tid) == []
 
 
+# ---- wq#1415: harness-defect hold (SpawnRefused never writes attempt-N.json, so the
+# runaway breaker above never sees it) --------------------------------------------------
+
+def write_failure_json(denv, tid, triage="HARNESS_DEFECT", summary="CITED_PATH_UNREACHABLE"):
+    d = denv["runs_root"] / f"wq{tid}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "failure.json").write_text(json.dumps(
+        {"ticket": tid, "triage": triage, "summary": summary}))
+
+
+def test_harness_defect_ticket_held_and_frank_notified(denv):
+    tid = add_ticket("keeps hitting CITED_PATH_UNREACHABLE")
+    write_failure_json(denv, tid)
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["stage"] == "harness_defect"
+    assert skips[0]["reason"] == "harness_defect_hold"
+    assert lumen_calls(denv) == []
+    lines = ntfy_lines(denv)
+    assert len(lines) == 1 and f"wq#{tid}" in lines[0]
+
+    # second pass same day: still held, but not re-pinged (24h dedup) — this is the
+    # "at most one event-driven pass worth of noise" the ticket asks for, even though
+    # a refill kick can still trigger the pass itself every couple of minutes.
+    assert fd.run_pass() == 0
+    assert len(log_events(denv, "skip", ticket=tid)) == 2
+    assert len(ntfy_lines(denv)) == 1
+
+
+def test_harness_defect_clears_once_triage_changes(denv):
+    """Once a later attempt gets past preflight (a fresh non-HARNESS_DEFECT failure.json,
+    e.g. a real classified failure that DOES charge an attempt), the hold lifts on its
+    own — no manual unblock step needed."""
+    tid = add_ticket("defect got fixed, now fails for a real reason")
+    write_failure_json(denv, tid, triage="GENUINE_BUG", summary="assertion error")
+
+    assert fd.run_pass() == 0
+
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert log_events(denv, "skip", ticket=tid) == []
+
+
 # ---- wq#824: fail-soft lane validation -----------------------------------------------
 
 def test_bad_lane_does_not_halt_dispatch(denv):

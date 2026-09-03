@@ -1,1 +1,8 @@
-{"criteria": [{"id": "AC1", "citation": "orchestrator/router.py:100"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "dispatcher/foreman_dispatcher.py:915-923"
+    }
+  ]
+}
