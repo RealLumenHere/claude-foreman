@@ -1,0 +1,2759 @@
+{
+  "blockers": {
+    "bridge-sensitive": 44,
+    "container-control": 22,
+    "local-exec": 109,
+    "local-state": 107,
+    "root-privilege": 8,
+    "secret-handling": 69,
+    "self-watch": 60,
+    "systemd-control": 24
+  },
+  "counts": {
+    "blocked": 109,
+    "movable": 0,
+    "os-managed": 22
+  },
+  "jobs": [
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Beat the off-fleet alert-path dead man's switch (wq#1039)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/alert-deadman-beat.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/alert-deadman-beat.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "alert-deadman-beat.service",
+      "timer": "alert-deadman-beat.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Process error reports when automatic reporting is enabled",
+      "environment": [],
+      "exec_start": [
+        "/usr/share/apport/whoopsie-upload-all --timeout 20"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/apport-autoreport.service",
+      "schedule": "OnUnitActiveSec=3h",
+      "service": "apport-autoreport.service",
+      "timer": "apport-autoreport.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Daily apt upgrade and clean activities",
+      "environment": [],
+      "exec_start": [
+        "/usr/lib/apt/apt.systemd.daily install"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/apt-daily-upgrade.service",
+      "schedule": "OnCalendar=*-*-* 6:00",
+      "service": "apt-daily-upgrade.service",
+      "timer": "apt-daily-upgrade.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Daily apt download activities",
+      "environment": [],
+      "exec_start": [
+        "/usr/lib/apt/apt.systemd.daily update"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/apt-daily.service",
+      "schedule": "OnCalendar=*-*-* 6,18:00",
+      "service": "apt-daily.service",
+      "timer": "apt-daily.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Commit-hygiene sweep \u2014 flag dirty/unpushed/behind fleet git trees (wq: git hygiene)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/git-hygiene-sweep"
+      ],
+      "fragment_path": "/etc/systemd/system/commit-hygiene-sweep.service",
+      "schedule": "OnCalendar=*-*-* 09:00:00",
+      "service": "commit-hygiene-sweep.service",
+      "timer": "commit-hygiene-sweep.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "root-privilege",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Re-enforce tier-1 Desktop Commander config on drift",
+      "environment": [],
+      "exec_start": [
+        "/usr/local/sbin/dc-config-guard.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/dc-config-guard.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "dc-config-guard.service",
+      "timer": "dc-config-guard.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "DC patch tripwire \u2014 detect silent desktop-commander upgrades wiping Lumen patches (wq#416)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/dc-patch-tripwire"
+      ],
+      "fragment_path": "/etc/systemd/system/dc-patch-tripwire.service",
+      "schedule": "OnCalendar=*-*-* 09:00:00 UTC",
+      "service": "dc-patch-tripwire.service",
+      "timer": "dc-patch-tripwire.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Quarterly kill-test of the off-fleet alert-path dead man's switch (wq#1039)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/deadman-killtest.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/deadman-killtest.service",
+      "schedule": "OnCalendar=*-01,04,07,10-01 09:00:00",
+      "service": "deadman-killtest.service",
+      "timer": "deadman-killtest.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "DeepSeek Daily Cost Tracker",
+      "environment": [
+        "/home/lumen/agent/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agent/deepseek_cost_tracker.py"
+      ],
+      "fragment_path": "/etc/systemd/system/deepseek-cost-tracker.service",
+      "schedule": "OnCalendar=*-*-* 23:59:00",
+      "service": "deepseek-cost-tracker.service",
+      "timer": "deepseek-cost-tracker.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Daily dpkg database backup service",
+      "environment": [],
+      "exec_start": [
+        "/usr/libexec/dpkg/dpkg-db-backup"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/dpkg-db-backup.service",
+      "schedule": "OnCalendar=daily",
+      "service": "dpkg-db-backup.service",
+      "timer": "dpkg-db-backup.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "drift-assert v2 \u2014 nightly config drift vs golden facts, proposal-only (wq#393)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/drift-assert"
+      ],
+      "fragment_path": "/etc/systemd/system/drift-assert.service",
+      "schedule": "OnCalendar=*-*-* 08:30:00 UTC",
+      "service": "drift-assert.service",
+      "timer": "drift-assert.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Online ext4 Metadata Check for All Filesystems",
+      "environment": [
+        "SERVICE_MODE=1"
+      ],
+      "exec_start": [
+        "/sbin/e2scrub_all"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/e2scrub_all.service",
+      "schedule": "OnCalendar=Sun *-*-* 03:10:00",
+      "service": "e2scrub_all.service",
+      "timer": "e2scrub_all.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Fleet synthetic AUTH-layer SSH probe (closes monitoring_gap; fail-loud to ntfy.sh)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/fleet-auth-ssh-probe.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/fleet-auth-ssh-probe.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "fleet-auth-ssh-probe.service",
+      "timer": "fleet-auth-ssh-probe.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Discard unused blocks on filesystems from /etc/fstab",
+      "environment": [],
+      "exec_start": [
+        "/sbin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose --quiet-unsupported"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/fstrim.service",
+      "schedule": "OnCalendar=weekly",
+      "service": "fstrim.service",
+      "timer": "fstrim.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Refresh fwupd metadata and update motd",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/fwupdmgr refresh"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/fwupd-refresh.service",
+      "schedule": "OnCalendar=*-*-* *:00:00",
+      "service": "fwupd-refresh.service",
+      "timer": "fwupd-refresh.timer",
+      "unscanned": [],
+      "user": "fwupd-refresh"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Gatus push-model SSH-AUTH probe (t85; restricted key -> Gatus external endpoints)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/services/sentinel/gatus-sshauth-probe.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/gatus-sshauth-probe.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "gatus-sshauth-probe.service",
+      "timer": "gatus-sshauth-probe.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "git-guard-sentinel \u2014 alert when lumen-git-guard is bypassed on a Class A default branch",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agents/git-guard-sentinel/git_guard_sentinel.py"
+      ],
+      "fragment_path": "/etc/systemd/system/git-guard-sentinel.service",
+      "schedule": "OnUnitActiveSec=1h",
+      "service": "git-guard-sentinel.service",
+      "timer": "git-guard-sentinel.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "jay-watch \u2014 GitHub activity watcher for SkinnnyJay collaboration",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agents/jay-watch/jay_watch.py"
+      ],
+      "fragment_path": "/etc/systemd/system/jay-watch.service",
+      "schedule": "OnUnitActiveSec=15min",
+      "service": "jay-watch.service",
+      "timer": "jay-watch.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen Langfuse evaluator judge-path smoke test (wq#989 weekly connectivity check)",
+      "environment": [
+        "/home/lumen/agent/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/services/langfuse-ops/evaluator.py --smoke --verbose"
+      ],
+      "fragment_path": "/etc/systemd/system/langfuse-evaluator-smoke.service",
+      "schedule": "OnCalendar=Sun 10:50 UTC",
+      "service": "langfuse-evaluator-smoke.service",
+      "timer": "langfuse-evaluator-smoke.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen Langfuse external evaluator (LLM-as-judge, 5%% sample)",
+      "environment": [
+        "/home/lumen/agent/.env",
+        "/home/lumen/.secrets/litellm-service-keys/env/langfuse-evaluator.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/services/langfuse-ops/evaluator.py --window-min 15 --sample-pct 5 --max-evals 20"
+      ],
+      "fragment_path": "/etc/systemd/system/langfuse-evaluator.service",
+      "schedule": "OnUnitActiveSec=15min",
+      "service": "langfuse-evaluator.service",
+      "timer": "langfuse-evaluator.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen Langfuse idle alert (6h zero-traces ntfy push)",
+      "environment": [
+        "/home/lumen/agent/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/services/langfuse-ops/idle_alert.py --window-hours 6"
+      ],
+      "fragment_path": "/etc/systemd/system/langfuse-idle-alert.service",
+      "schedule": "OnUnitActiveSec=1h",
+      "service": "langfuse-idle-alert.service",
+      "timer": "langfuse-idle-alert.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Rebuild CA custody law reference (daily scrape)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/legal-resource/build.py"
+      ],
+      "fragment_path": "/etc/systemd/system/legal-resource-rebuild.service",
+      "schedule": "OnCalendar=*-*-* 00/3:00:00",
+      "service": "legal-resource-rebuild.service",
+      "timer": "legal-resource-rebuild.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "LiteLLM auth-failure burst alerter (wq#911, consumes auth-failures.jsonl)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/litellm-auth-alert"
+      ],
+      "fragment_path": "/etc/systemd/system/litellm-auth-alert.service",
+      "schedule": "OnUnitActiveSec=2min",
+      "service": "litellm-auth-alert.service",
+      "timer": "litellm-auth-alert.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Rotate log files",
+      "environment": [],
+      "exec_start": [
+        "/usr/sbin/logrotate /etc/logrotate.conf"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/logrotate.service",
+      "schedule": "OnCalendar=daily",
+      "service": "logrotate.service",
+      "timer": "logrotate.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "bridge-sensitive",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Standing quarterly alert-hygiene audit (wq#1042, R5 G4) \u2014 90-day rule + page-field audit",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/foreman/ops/alert_hygiene_audit.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-alert-hygiene-audit.service",
+      "schedule": "OnCalendar=*-01,04,07,10-01 08:00:00 UTC",
+      "service": "lumen-alert-hygiene-audit.service",
+      "timer": "lumen-alert-hygiene-audit.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "aq auto-ack stale info-class alerts",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agents/alert-queue/aq_autoack.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-aq-autoack.service",
+      "schedule": "OnCalendar=*-*-* 09:00:00 UTC",
+      "service": "lumen-aq-autoack.service",
+      "timer": "lumen-aq-autoack.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "aq escalation responder \u2014 unacked CRITICAL probe repeats -> fleet-fires ticket + one page (wq#965)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/bin/aq_escalate.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-aq-escalate.service",
+      "schedule": "OnUnitActiveSec=10min",
+      "service": "lumen-aq-escalate.service",
+      "timer": "lumen-aq-escalate.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen hourly critical backup (Vaultwarden, Langfuse PG, pgvector, Redis, agent SQLite)",
+      "environment": [
+        "TMPDIR=/home/lumen/services/backup/tmp",
+        "RESTIC_CACHE_DIR=/scratch/restic-cache"
+      ],
+      "exec_start": [
+        "/home/lumen/services/backup/scripts/backup-critical.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-backup-critical.service",
+      "schedule": "OnCalendar=hourly",
+      "service": "lumen-backup-critical.service",
+      "timer": "lumen-backup-critical.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "bridge-sensitive",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen daily important backup (Langfuse CH, MinIO, Plausible, MongoDB)",
+      "environment": [
+        "RESTIC_CACHE_DIR=/scratch/restic-cache"
+      ],
+      "exec_start": [
+        "/home/lumen/services/backup/scripts/backup-important.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-backup-important.service",
+      "schedule": "OnCalendar=*-*-* 11:00:00",
+      "service": "lumen-backup-important.service",
+      "timer": "lumen-backup-important.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "bridge-sensitive",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen offsite restic copy to Thoth",
+      "environment": [
+        "RESTIC_CACHE_DIR=/scratch/restic-cache"
+      ],
+      "exec_start": [
+        "/home/lumen/services/backup/scripts/backup-offsite.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-backup-offsite.service",
+      "schedule": "OnCalendar=*-*-* 12:30:00 UTC",
+      "service": "lumen-backup-offsite.service",
+      "timer": "lumen-backup-offsite.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen weekly backup retention prune",
+      "environment": [
+        "RESTIC_CACHE_DIR=/scratch/restic-cache"
+      ],
+      "exec_start": [
+        "/home/lumen/services/backup/scripts/backup-prune.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-backup-prune.service",
+      "schedule": "OnCalendar=Sun *-*-* 04:00:00",
+      "service": "lumen-backup-prune.service",
+      "timer": "lumen-backup-prune.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen monthly backup integrity check (restic check 10% sample)",
+      "environment": [
+        "RESTIC_CACHE_DIR=/scratch/restic-cache"
+      ],
+      "exec_start": [
+        "/home/lumen/services/backup/scripts/backup-verify.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-backup-verify.service",
+      "schedule": "OnCalendar=*-*-01 09:00:00",
+      "service": "lumen-backup-verify.service",
+      "timer": "lumen-backup-verify.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "BC-250 intel tripwire \u2014 keyword match in minerva.db -> ntfy lumen-alerts, bypasses self_relevance gate",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/bc250-watch"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-bc250-watch.service",
+      "schedule": "OnUnitActiveSec=15min",
+      "service": "lumen-bc250-watch.service",
+      "timer": "lumen-bc250-watch.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Bench eBay listing-status checker (oneshot)",
+      "environment": [
+        "BENCH_DB=/home/lumen/projects/bench/data/bench.db"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/projects/bench/checker.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-bench-checker.service",
+      "schedule": "OnCalendar=*-*-* 01,07,13,19:20:00 UTC",
+      "service": "lumen-bench-checker.service",
+      "timer": "lumen-bench-checker.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen Daily Briefing for Frank",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agent/daily_briefing.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-briefing.service",
+      "schedule": "OnCalendar=*-*-* 08:00:00",
+      "service": "lumen-briefing.service",
+      "timer": "lumen-briefing.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "LiteLLM per-service budget alert checker (wq#719)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/bin/litellm-budget-alert"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-budget-alert.service",
+      "schedule": "OnCalendar=*-*-* 00/6:15:00",
+      "service": "lumen-budget-alert.service",
+      "timer": "lumen-budget-alert.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen community watch (BC-250 community repos + Old Lamer YouTube -> ntfy)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/services/lumen-community-watch/watch.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-community-watch.service",
+      "schedule": "OnUnitActiveSec=6h",
+      "service": "lumen-community-watch.service",
+      "timer": "lumen-community-watch.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen learns from messenger conversations (extract durable learnings -> episode)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/lumen_convo_learn.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-convo-learn.service",
+      "schedule": "OnUnitActiveSec=6h",
+      "service": "lumen-convo-learn.service",
+      "timer": "lumen-convo-learn.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen Corrector \u2014 auto-fix AUTO-SAFE findings, escalate the rest (Phase 3)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agents/corrector/lumen_corrector.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-corrector.service",
+      "schedule": "OnUnitActiveSec=30min",
+      "service": "lumen-corrector.service",
+      "timer": "lumen-corrector.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen cron dead-man's switch \u2014 stamp freshness check (wq#1184)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/foreman/ops/wq1184-gatus-health-checks/cron_deadman.py check"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-cron-deadman.service",
+      "schedule": "OnUnitActiveSec=10min",
+      "service": "lumen-cron-deadman.service",
+      "timer": "lumen-cron-deadman.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "DeepSeek balance snapshot for spend history (CCC/LMCC bottom bars)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/messenger/deepseek_spend_history.py record"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-deepseek-spend.service",
+      "schedule": "OnUnitActiveSec=15min",
+      "service": "lumen-deepseek-spend.service",
+      "timer": "lumen-deepseek-spend.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen DGM self-improvement cycle (propose, sandbox db6, gate, pending+ntfy; human-gated)",
+      "environment": [
+        "/home/lumen/agent/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/autonomy/agent5/dgm.py run"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-dgm.service",
+      "schedule": "OnCalendar=*-*-* 17:00:00 UTC",
+      "service": "lumen-dgm.service",
+      "timer": "lumen-dgm.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen conservative disk hygiene (dead-space reclamation)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/lumen-disk-hygiene"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-disk-hygiene.service",
+      "schedule": "OnCalendar=*-*-* 11:30:00 UTC",
+      "service": "lumen-disk-hygiene.service",
+      "timer": "lumen-disk-hygiene.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "dispatch-lint \u2014 alert when a dispatch file still instructs a retired rule (wq#533/wq#565)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/dispatch-lint"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-dispatch-lint.service",
+      "schedule": "OnCalendar=daily",
+      "service": "lumen-dispatch-lint.service",
+      "timer": "lumen-dispatch-lint.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen memory consolidation pass (Memory v2 P3, PROPOSAL-ONLY -- never mutates memory)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/lumen_dream.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-dream.service",
+      "schedule": "OnCalendar=Sun *-*-* 18:00:00 UTC",
+      "service": "lumen-dream.service",
+      "timer": "lumen-dream.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen eBay watch (tracked listings -> ntfy + memory ingest)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/services/lumen-ebay-watch/watch.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-ebay-watch.service",
+      "schedule": "OnUnitActiveSec=30min",
+      "service": "lumen-ebay-watch.service",
+      "timer": "lumen-ebay-watch.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "root-privilege",
+        "systemd-control",
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen daily ECC health rollup to ntfy",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/lumen-ecc-rollup"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-ecc-rollup.service",
+      "schedule": "OnCalendar=*-*-* 15:05:00 UTC",
+      "service": "lumen-ecc-rollup.service",
+      "timer": "lumen-ecc-rollup.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "root-privilege",
+        "systemd-control",
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen EDAC ECC error delta watcher (ntfy on new CE/UE)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/lumen-ecc-watch"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-ecc-watch.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "lumen-ecc-watch.service",
+      "timer": "lumen-ecc-watch.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Memory embedding store integrity guard + repair (wq#465)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/memory_embed_guard.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-embed-guard.service",
+      "schedule": "OnCalendar=hourly",
+      "service": "lumen-embed-guard.service",
+      "timer": "lumen-embed-guard.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen \u2014 edge-triggered sweep for failed systemd units",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/lumen-failed-units"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-failed-units.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "lumen-failed-units.service",
+      "timer": "lumen-failed-units.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Entity-familiarity ingest from classified_intel (behavioral proxy, arXiv:2607.13568; prop fd2622e69837)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/familiarity_scorer.py ingest"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-familiarity.service",
+      "schedule": "OnCalendar=*-*-* 01,07,13,19:20:00 UTC",
+      "service": "lumen-familiarity.service",
+      "timer": "lumen-familiarity.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen foreman auto-dispatcher \u2014 one scan/dispatch pass (wq#715)",
+      "environment": [
+        "PATH=REDACTED"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/foreman/dispatcher/foreman_dispatcher.py run --once"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-foreman-dispatch.service",
+      "schedule": "OnUnitActiveSec=20min",
+      "service": "lumen-foreman-dispatch.service",
+      "timer": "lumen-foreman-dispatch.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen dispatcher health check \u2014 alarm on consecutive stalled passes (wq#825)",
+      "environment": [
+        "PATH=REDACTED"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/foreman/dispatcher/dispatch_health.py check"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-foreman-health.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "lumen-foreman-health.service",
+      "timer": "lumen-foreman-health.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen wq self-heal \u2014 release INFRA_CRASH blocks, leave WORK_BLOCKED/LIMIT_HIT (wq#725)",
+      "environment": [
+        "PATH=REDACTED"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/foreman/dispatcher/self_heal.py run --once"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-foreman-selfheal.service",
+      "schedule": "OnUnitActiveSec=10min",
+      "service": "lumen-foreman-selfheal.service",
+      "timer": "lumen-foreman-selfheal.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen GitHub watch (SkinnnyJay public activity -> ntfy)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/services/lumen-github-watch/watch.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-github-watch.service",
+      "schedule": "OnUnitActiveSec=30min",
+      "service": "lumen-github-watch.service",
+      "timer": "lumen-github-watch.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen Intel Engine - Academic & Newsletter Intelligence",
+      "environment": [
+        "/home/lumen/agent/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agent/lumen_intel.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-intel.service",
+      "schedule": "OnUnitActiveSec=4h",
+      "service": "lumen-intel.service",
+      "timer": "lumen-intel.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "R4 intervention ledger daily collect+snapshot+emit",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/foreman/ops/intervention_ledger.py run"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-intervention-ledger.service",
+      "schedule": "OnCalendar=*-*-* 06:15:00 UTC",
+      "service": "lumen-intervention-ledger.service",
+      "timer": "lumen-intervention-ledger.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "JudgeArena judge-agreement bench vs human labels (arXiv:2608.02620, prop 9455507d9aeb)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/judgearena/.venv/bin/python3 /home/lumen/minerva/judgearena_bench.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-judgearena-bench.service",
+      "schedule": "OnCalendar=Sun *-*-* 06:15:00 UTC",
+      "service": "lumen-judgearena-bench.service",
+      "timer": "lumen-judgearena-bench.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "LPP frontier \u2014 regenerate runtime/frontier.json cross-run progress state (wq#1066)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/pokemon/tools/lpp_frontier.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-lpp-frontier.service",
+      "schedule": "OnUnitActiveSec=15min",
+      "service": "lumen-lpp-frontier.service",
+      "timer": "lumen-lpp-frontier.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "LPP stuck-supervisor \u2014 story_score/MODE stall detect + bounded intervene + auto-ticket/escalate (wq#671-673)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/pokemon/tools/lpp-stuck-supervisor --quiet"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-lpp-stuck-supervisor.service",
+      "schedule": "OnUnitActiveSec=30min",
+      "service": "lumen-lpp-stuck-supervisor.service",
+      "timer": "lumen-lpp-stuck-supervisor.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Mirror lumen-mail D1 (public inbox threads) to /home/lumen/mailbot/mail.db",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/mailbot/mail_recall.py sync"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-mail-sync.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "lumen-mail-sync.service",
+      "timer": "lumen-mail-sync.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "pgvector embedding integrity/version-drift audit (prop 0658b2f0f457, wq#452)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/memory_audit.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-memory-audit.service",
+      "schedule": "OnCalendar=Tue *-*-* 09:10:00 UTC",
+      "service": "lumen-memory-audit.service",
+      "timer": "lumen-memory-audit.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Known-answer correctness audit of external LiteLLM rungs (prop c1fdd68427b6, wq#449)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/model_audit.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-model-audit.service",
+      "schedule": "OnCalendar=*-*-* 03,15:40:00 UTC",
+      "service": "lumen-model-audit.service",
+      "timer": "lumen-model-audit.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen model endpoint watchdog (LiteLLM rungs incl local fallback) \u2014 wq#90",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agents/model-watchdog/lumen_model_watchdog.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-model-watchdog.service",
+      "schedule": "OnUnitActiveSec=10min",
+      "service": "lumen-model-watchdog.service",
+      "timer": "lumen-model-watchdog.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen daily intel digest (Phase 2) - tiered research digest to Messenger+ntfy",
+      "environment": [
+        "DIGEST_INTEL_SECTION=1"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agent/lumen_news_digest.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-news-digest.service",
+      "schedule": "OnCalendar=*-*-* 16:00:00",
+      "service": "lumen-news-digest.service",
+      "timer": "lumen-news-digest.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "pat-scan \u2014 alert when a GitHub token literal is world-readable or still live (wq#523/wq#565)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/wq523_pat_residue.py --alert"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-pat-scan.service",
+      "schedule": "OnCalendar=daily",
+      "service": "lumen-pat-scan.service",
+      "timer": "lumen-pat-scan.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Pelican-style probe battery over local models (wq#441, prop d979fd19f54f)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/pelican_bench.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-pelican-bench.service",
+      "schedule": "OnCalendar=Sun 12:00 UTC",
+      "service": "lumen-pelican-bench.service",
+      "timer": "lumen-pelican-bench.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Refresh per-node smart-plug wattage baselines (wq#591)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/plug-baseline --window 14d --write"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-plug-baseline.service",
+      "schedule": "OnCalendar=*-*-* 11:10:00 UTC",
+      "service": "lumen-plug-baseline.service",
+      "timer": "lumen-plug-baseline.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Weekly smart-plug power digest to ntfy (wq#591)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/plug-findings --window 7d --digest"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-plug-digest.service",
+      "schedule": "OnCalendar=Mon *-*-* 15:10:00 UTC",
+      "service": "lumen-plug-digest.service",
+      "timer": "lumen-plug-digest.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Push unprompted smart-plug power findings to ntfy (wq#591)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/plug-findings --window 24h"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-plug-findings.service",
+      "schedule": "OnCalendar=*-*-* 15:05:00 UTC",
+      "service": "lumen-plug-findings.service",
+      "timer": "lumen-plug-findings.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "bridge-sensitive",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Tapo plug power snapshot for Glance",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/plug-snapshot"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-plug-snapshot.service",
+      "schedule": "OnUnitActiveSec=1min",
+      "service": "lumen-plug-snapshot.service",
+      "timer": "lumen-plug-snapshot.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen PR watch \u2014 poll Frank\\x27s open upstream PRs, ntfy on change",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/services/lumen-pr-watch/watch.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-pr-watch.service",
+      "schedule": "OnUnitActiveSec=30min",
+      "service": "lumen-pr-watch.service",
+      "timer": "lumen-pr-watch.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen public-surface guardian \u2014 email + LPP stream (wq#1252)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/services/lumen-public-guardian/guardian.py run"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-public-guardian.service",
+      "schedule": "OnUnitActiveSec=2min",
+      "service": "lumen-public-guardian.service",
+      "timer": "lumen-public-guardian.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "wq#572 quiet-hours recall bench + drift alarm (p50+accuracy only)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/minerva/eval/run_sched_bench.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-recall-bench.service",
+      "schedule": "OnCalendar=*-*-* 10:37:00",
+      "service": "lumen-recall-bench.service",
+      "timer": "lumen-recall-bench.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen LLM sleep-time reflector (Memory v2 P3 richer, PROPOSAL-ONLY -- never mutates memory; uses deepseek-v4-pro, never messenger-chat/re)",
+      "environment": [
+        "/home/lumen/.secrets/litellm-service-keys/env/lumen-reflector.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/lumen_reflector.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-reflector.service",
+      "schedule": "OnCalendar=Sun *-*-* 18:30:00 UTC",
+      "service": "lumen-reflector.service",
+      "timer": "lumen-reflector.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "wq#800 managed-repo divergence sweep",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/foreman/harness/repo_sweep.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-repo-sweep.service",
+      "schedule": "OnCalendar=*-*-* 02,06,10,14,18,22:15:00",
+      "service": "lumen-repo-sweep.service",
+      "timer": "lumen-repo-sweep.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "root-privilege",
+        "systemd-control",
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "wq#596 rerank 16-thread watch + auto-rollback (48h window)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/rerank-thread-watch.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-rerank-thread-watch.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "lumen-rerank-thread-watch.service",
+      "timer": "lumen-rerank-thread-watch.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen \u2014 embed research corpus into pgvector (idempotent, resumable)",
+      "environment": [
+        "LUMEN_RESEARCH_ROOT=/home/lumen/scratch/research_clean",
+        "/home/lumen/agent/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/retrieval/index_research.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-research-index.service",
+      "schedule": "OnCalendar=*-*-* 10:00:00 UTC",
+      "service": "lumen-research-index.service",
+      "timer": "lumen-research-index.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "retirement-audit \u2014 weekly sweep for retired services still running, still enabled, or still burning RAM (wq#723)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/retirement-audit run"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-retirement-audit.service",
+      "schedule": "OnCalendar=Mon *-*-* 09:17:00 UTC",
+      "service": "lumen-retirement-audit.service",
+      "timer": "lumen-retirement-audit.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "bridge-sensitive",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Rosco RAM Janitor \u2014 kills stale processes only under RAM pressure",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agent/rosco.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-rosco.service",
+      "schedule": "OnUnitActiveSec=1h",
+      "service": "lumen-rosco.service",
+      "timer": "lumen-rosco.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen GitHub Daily Scout \u2014 queue gap-analysis for trending repos",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/autonomy/lumen_scout_graph.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-scout.service",
+      "schedule": "OnCalendar=*-*-* 06:00:00 UTC",
+      "service": "lumen-scout.service",
+      "timer": "lumen-scout.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen scratch retention sweep (dry-run logging only)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/retention/scratch_sweep.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-scratch-sweep.service",
+      "schedule": "OnCalendar=Sun *-*-* 04:00:00 UTC",
+      "service": "lumen-scratch-sweep.service",
+      "timer": "lumen-scratch-sweep.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Reciprocal watchdog \u2014 Lumen checks the Sentinel is alive",
+      "environment": [],
+      "exec_start": [
+        "/bin/bash -c 'curl -sf -m 10 http://localhost:8418/api/v1/endpoints/statuses > /dev/null || curl -s -m 5 -d \"Sentinel (Gatus) is DOWN \u2014 fleet is unmonitored. Hosted on Lumen :8418 (Anubis migration pending \u2014 runbook: /home/lumen/bootstrap/sentinel/README.md).\" -H \"Title: SENTINEL DOWN\" -H \"Priority: urgent\" -H \"Tags: rotating_light\" http://localhost:8080/lumen-alerts'"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-sentinel-watch.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "lumen-sentinel-watch.service",
+      "timer": "lumen-sentinel-watch.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen Signal Engine \u2014 daily real-time content intelligence",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agent/signal_engine.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-signal-engine.service",
+      "schedule": "OnCalendar=*-*-* 06:00:00 UTC",
+      "service": "lumen-signal-engine.service",
+      "timer": "lumen-signal-engine.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "SkillHEX hypothesis loop over agent5 (evidence-grounded prompt mutation, human-gated; prop 5ccfeb0adf86)",
+      "environment": [
+        "/home/lumen/agent/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/autonomy/agent5/skillhex.py --n 6"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-skillhex.service",
+      "schedule": "OnCalendar=Mon,Wed,Fri *-*-* 12:30:00 UTC",
+      "service": "lumen-skillhex.service",
+      "timer": "lumen-skillhex.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "agent5 split idle/error watch (wq#140, edge-triggered -> ntfy lumen-alerts)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agents/split-watch/split_watch.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-split-watch.service",
+      "schedule": "OnUnitActiveSec=10min",
+      "service": "lumen-split-watch.service",
+      "timer": "lumen-split-watch.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "bridge-sensitive",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Weekly read-only SQLite health check across Lumen archival stores (wq#91)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/lumen-sqlutil health --all --alert"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-sqlite-health.service",
+      "schedule": "OnCalendar=Sun 10:00 UTC",
+      "service": "lumen-sqlite-health.service",
+      "timer": "lumen-sqlite-health.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Reconcile bi-temporal fleet-state store against live tailscale (Memory v2 P1 change-time hook)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/state_reconcile.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-state-reconcile.service",
+      "schedule": "OnCalendar=*-*-* 17:30:00 UTC",
+      "service": "lumen-state-reconcile.service",
+      "timer": "lumen-state-reconcile.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "lumen-telemetry-v1 collector (wq#184/#185 persona proprioception)",
+      "environment": [],
+      "exec_start": [
+        "/bin/bash -c 'python3 /home/lumen/personas/telemetry/collect.py > /home/lumen/personas/telemetry/payload.json.tmp && mv /home/lumen/personas/telemetry/payload.json.tmp /home/lumen/personas/telemetry/payload.json'"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-telemetry.service",
+      "schedule": "OnUnitActiveSec=60",
+      "service": "lumen-telemetry.service",
+      "timer": "lumen-telemetry.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen tickler \u2014 fire due deferred-work items into wq",
+      "environment": [
+        "PATH=REDACTED"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/services/lumen-tickle/tickle.py fire"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-tickle.service",
+      "schedule": "OnCalendar=hourly",
+      "service": "lumen-tickle.service",
+      "timer": "lumen-tickle.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "wq#858 Trivy weekly CVE scan \u2014 containers + host rootfs",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/services/trivy-weekly/scan.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-trivy-weekly.service",
+      "schedule": "OnCalendar=Sun *-*-* 09:00:00",
+      "service": "lumen-trivy-weekly.service",
+      "timer": "lumen-trivy-weekly.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "ui-drift (wq#770) \u2014 dashboards-vs-reality probe (read-only, reports + tickets only)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/ui-drift"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-ui-drift.service",
+      "schedule": "OnCalendar=*-*-* 11:15:00",
+      "service": "lumen-ui-drift.service",
+      "timer": "lumen-ui-drift.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Lumen Weekly Intelligence Report",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agents/weekly-report/weekly_report.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-weekly-report.service",
+      "schedule": "OnCalendar=Sun 09:00:00 UTC",
+      "service": "lumen-weekly-report.service",
+      "timer": "lumen-weekly-report.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Regenerate Lumen messenger case-book (worklog.md) from episodes",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/personas/worklog_gen.py"
+      ],
+      "fragment_path": "/etc/systemd/system/lumen-worklog.service",
+      "schedule": "OnUnitActiveSec=6h",
+      "service": "lumen-worklog.service",
+      "timer": "lumen-worklog.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Daily man-db regeneration",
+      "environment": [],
+      "exec_start": [
+        "+/usr/bin/install -d -o man -g man -m 0755 /var/cache/man",
+        "/usr/bin/mandb --quiet"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/man-db.service",
+      "schedule": "OnCalendar=daily",
+      "service": "man-db.service",
+      "timer": "man-db.timer",
+      "unscanned": [],
+      "user": "man"
+    },
+    {
+      "blockers": [
+        "root-privilege",
+        "systemd-control",
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "MCP gateway pressure guard (wq#380 auto-recovery)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/mcp-pressure-guard.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/mcp-pressure-guard.service",
+      "schedule": "OnUnitActiveSec=60",
+      "service": "mcp-pressure-guard.service",
+      "timer": "mcp-pressure-guard.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "MD array scrubbing - continuation",
+      "environment": [
+        "\"MDADM_CHECK_DURATION=6 hours\""
+      ],
+      "exec_start": [
+        "/usr/share/mdadm/mdcheck --start --duration ${MDADM_CHECK_DURATION}"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/mdcheck_continue.service",
+      "schedule": "OnCalendar=daily",
+      "service": "mdcheck_continue.service",
+      "timer": "mdcheck_continue.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "MD array scrubbing",
+      "environment": [],
+      "exec_start": [
+        "/usr/share/mdadm/mdcheck --restart"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/mdcheck_start.service",
+      "schedule": "OnCalendar=Sun *-*-1..7 0:45:00",
+      "service": "mdcheck_start.service",
+      "timer": "mdcheck_start.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Reminder for degraded MD arrays",
+      "environment": [
+        "-/etc/default/mdadm"
+      ],
+      "exec_start": [
+        "sh -c '[ \"$AUTOSCAN\" != \"true\" ] || /usr/sbin/mdadm --monitor --oneshot --scan'"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/mdmonitor-oneshot.service",
+      "schedule": "OnCalendar=daily",
+      "service": "mdmonitor-oneshot.service",
+      "timer": "mdmonitor-oneshot.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Minerva \u2014 daily morning brief (auto-appends to claude_memory.md)",
+      "environment": [
+        "/home/lumen/agent/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/minerva_brief.py"
+      ],
+      "fragment_path": "/etc/systemd/system/minerva-brief.service",
+      "schedule": "OnCalendar=*-*-* 13:00:00 UTC",
+      "service": "minerva-brief.service",
+      "timer": "minerva-brief.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Minerva \u2014 classify new intel items (two-axis relevance)",
+      "environment": [
+        "/home/lumen/agent/.env",
+        "/home/lumen/.secrets/litellm-service-keys/env/minerva-pipeline.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/minerva_classifier.py"
+      ],
+      "fragment_path": "/etc/systemd/system/minerva-classifier.service",
+      "schedule": "OnCalendar=*-*-* 02,06,10,14,18,22:30:00 UTC",
+      "service": "minerva-classifier.service",
+      "timer": "minerva-classifier.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Minerva \u2014 reap finished defer research, then review the aged defer pile",
+      "environment": [
+        "DEFER_MAX_PROMPTS=3",
+        "DEFER_MIN_AGE_DAYS=7",
+        "DEFER_STALE_DAYS=45",
+        "/home/lumen/agent/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/minerva_defer_review.py review"
+      ],
+      "fragment_path": "/etc/systemd/system/minerva-defer-review.service",
+      "schedule": "OnCalendar=*-*-* 09:10:00 UTC",
+      "service": "minerva-defer-review.service",
+      "timer": "minerva-defer-review.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Minerva \u2014 eval accepted proposals (safety checks before deploy)",
+      "environment": [
+        "VERIFY_JUDGE_MODEL=deepseek-v4-flash",
+        "VERIFY_JUDGE_MODEL_2=mistral-small",
+        "XAGREE_ENABLED=0",
+        "/home/lumen/agent/.env",
+        "/home/lumen/.secrets/litellm-service-keys/env/minerva-pipeline.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/minerva_eval.py"
+      ],
+      "fragment_path": "/etc/systemd/system/minerva-eval.service",
+      "schedule": "OnCalendar=*-*-* 03,07,11,17,19,23:00:00 UTC",
+      "service": "minerva-eval.service",
+      "timer": "minerva-eval.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Minerva production factory - plan+apply GREEN, stage YELLOW (Frank-approved 2026-08-09)",
+      "environment": [
+        "/home/lumen/.secrets/litellm-service-keys/env/minerva-pipeline.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/minerva_factory.py run 15 --apply"
+      ],
+      "fragment_path": "/etc/systemd/system/minerva-factory.service",
+      "schedule": "OnCalendar=*-*-* 03,07,11,17,19,23:35:00 UTC",
+      "service": "minerva-factory.service",
+      "timer": "minerva-factory.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "container-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Minerva \u2014 generate proposals from high-self-relevance intel",
+      "environment": [
+        "VERIFY_JUDGE_MODEL=deepseek-v4-flash",
+        "VERIFY_JUDGE_MODEL_2=mistral-small",
+        "JUDGE_CTX_CHARS=16000",
+        "ENABLE_LATENT_GUARD=1",
+        "LATENT_MODE=rescue",
+        "LATENT_RESCUE_T=0.75",
+        "MINERVA_MODEL=deepseek-v4-flash",
+        "/home/lumen/agent/.env",
+        "/home/lumen/.secrets/litellm-service-keys/env/minerva-pipeline.env"
+      ],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/minerva/minerva_proposal.py"
+      ],
+      "fragment_path": "/etc/systemd/system/minerva-proposal.service",
+      "schedule": "OnCalendar=*-*-* 02,06,10,14,18,22:45:00 UTC",
+      "service": "minerva-proposal.service",
+      "timer": "minerva-proposal.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Message of the Day",
+      "environment": [],
+      "exec_start": [
+        "/etc/update-motd.d/50-motd-news --force"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/motd-news.service",
+      "schedule": "OnCalendar=00,12:00:00",
+      "service": "motd-news.service",
+      "timer": "motd-news.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Power-remediate \u2014 unreachable-node auto-remediation (STAGED \u2014 ARMED=0 in conf until Frank flips it)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/bin/power-remediate run"
+      ],
+      "fragment_path": "/etc/systemd/system/power-remediate.service",
+      "schedule": "OnUnitActiveSec=60s",
+      "service": "power-remediate.service",
+      "timer": "power-remediate.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "primary tree guard \u2014 assert PRIMARY trees are on their default branch, alert+restore on drift (wq#900)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/foreman/harness/primary_tree_guard.py check"
+      ],
+      "fragment_path": "/etc/systemd/system/primary-tree-guard.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "primary-tree-guard.service",
+      "timer": "primary-tree-guard.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "wq#859 Renovate \u2014 scan Gitea (Anubis) repos, open dependency update PRs",
+      "environment": [
+        "RENOVATE_CONFIG_FILE=/home/lumen/services/renovate-gitea/config.js",
+        "LOG_LEVEL=info",
+        "/home/lumen/agent/.env",
+        "/home/lumen/services/renovate-gitea/.env"
+      ],
+      "exec_start": [
+        "/usr/bin/node /home/lumen/.npm-global/lib/node_modules/renovate/dist/renovate.js"
+      ],
+      "fragment_path": "/etc/systemd/system/renovate-gitea.service",
+      "schedule": "OnUnitActiveSec=4h",
+      "service": "renovate-gitea.service",
+      "timer": "renovate-gitea.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "repo-visibility-sentinel \u2014 alert on any public GitHub repo not on allowlist",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/agents/repo-visibility-sentinel/repo_sentinel.py"
+      ],
+      "fragment_path": "/etc/systemd/system/repo-visibility-sentinel.service",
+      "schedule": "OnUnitActiveSec=15min",
+      "service": "repo-visibility-sentinel.service",
+      "timer": "repo-visibility-sentinel.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Fleet Sentinel \u2014 Tier 2 function-correctness probes",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/sentinel/probes/sentinel_probes.py"
+      ],
+      "fragment_path": "/etc/systemd/system/sentinel-probes.service",
+      "schedule": "OnUnitActiveSec=30min",
+      "service": "sentinel-probes.service",
+      "timer": "sentinel-probes.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "session-handoff \u2014 regenerate kb/SESSION-HANDOFF.md from live fleet state (wq#1294)",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /home/lumen/bin/session-handoff"
+      ],
+      "fragment_path": "/etc/systemd/system/session-handoff.service",
+      "schedule": "OnUnitActiveSec=30min",
+      "service": "session-handoff.service",
+      "timer": "session-handoff.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "bridge-sensitive",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Pull scored news prompts from sia into research queue",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/sia-news-pull"
+      ],
+      "fragment_path": "/etc/systemd/system/sia-news-pull.service",
+      "schedule": "OnUnitActiveSec=2min",
+      "service": "sia-news-pull.service",
+      "timer": "sia-news-pull.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Automatically fetch and run repair assertions",
+      "environment": [
+        "SNAP_REPAIR_FROM_TIMER=1",
+        "-/etc/environment",
+        "-/var/lib/snapd/environment/snapd.conf"
+      ],
+      "exec_start": [
+        "/usr/lib/snapd/snap-repair run"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/snapd.snap-repair.service",
+      "schedule": "OnCalendar=*-*-* 5,11,17,23:00",
+      "service": "snapd.snap-repair.service",
+      "timer": "snapd.snap-repair.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "system activity accounting tool",
+      "environment": [],
+      "exec_start": [
+        "/usr/libexec/sysstat/sa1 1 1"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/sysstat-collect.service",
+      "schedule": "OnCalendar=*:00/10",
+      "service": "sysstat-collect.service",
+      "timer": "sysstat-collect.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "system activity accounting tool",
+      "environment": [],
+      "exec_start": [
+        "/usr/libexec/sysstat/sa1 --rotate"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/sysstat-rotate.service",
+      "schedule": "OnCalendar=00:00",
+      "service": "sysstat-rotate.service",
+      "timer": "sysstat-rotate.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Generate a daily summary of process accounting",
+      "environment": [],
+      "exec_start": [
+        "/usr/libexec/sysstat/sa2 -A"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/sysstat-summary.service",
+      "schedule": "OnCalendar=00:07:00",
+      "service": "sysstat-summary.service",
+      "timer": "sysstat-summary.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Regenerate SYSTEM_MAP.md central system record (alerts Frank on change)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/system-map-update"
+      ],
+      "fragment_path": "/etc/systemd/system/system-map.service",
+      "schedule": "OnCalendar=*-*-* 06:30:00",
+      "service": "system-map.service",
+      "timer": "system-map.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Cleanup of Temporary Directories",
+      "environment": [],
+      "exec_start": [
+        "systemd-tmpfiles --clean"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/systemd-tmpfiles-clean.service",
+      "schedule": "OnUnitActiveSec=1d",
+      "service": "systemd-tmpfiles-clean.service",
+      "timer": "systemd-tmpfiles-clean.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Ubuntu Pro Timer for running repeated jobs",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /usr/lib/ubuntu-advantage/timer.py"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/ua-timer.service",
+      "schedule": "OnUnitActiveSec=6h",
+      "service": "ua-timer.service",
+      "timer": "ua-timer.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "unit-drift (wq#1041) read-only drift check: /etc/systemd/system vs git baseline",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/unit-drift check --digest"
+      ],
+      "fragment_path": "/etc/systemd/system/unit-drift.service",
+      "schedule": "OnUnitActiveSec=15min",
+      "service": "unit-drift.service",
+      "timer": "unit-drift.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Download data for packages that failed at package install time",
+      "environment": [],
+      "exec_start": [
+        "/usr/lib/update-notifier/package-data-downloader"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/update-notifier-download.service",
+      "schedule": "OnUnitActiveSec=24h",
+      "service": "update-notifier-download.service",
+      "timer": "update-notifier-download.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Check to see whether there is a new version of Ubuntu available",
+      "environment": [],
+      "exec_start": [
+        "/usr/lib/ubuntu-release-upgrader/release-upgrade-motd"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/update-notifier-motd.service",
+      "schedule": "OnCalendar=Sun *-*-* 06:00:00",
+      "service": "update-notifier-motd.service",
+      "timer": "update-notifier-motd.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "root-privilege",
+        "systemd-control",
+        "local-state",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "wq#857 VictoriaLogs journal forwarder \u2014 ship journald to Bes",
+      "environment": [
+        "VLOGS_URL=http://100.110.156.91:9428",
+        "CURSOR_FILE=/var/lib/vlogs-forwarder/cursor"
+      ],
+      "exec_start": [
+        "/home/lumen/services/vlogs-forwarder/forward-journal.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/vlogs-forwarder.service",
+      "schedule": "OnUnitActiveSec=60",
+      "service": "vlogs-forwarder.service",
+      "timer": "vlogs-forwarder.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Vaultwarden data-dir sync Maat->Bes (wq#324 promote payload)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/vw-bes-datasync.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/vw-bes-datasync.service",
+      "schedule": "OnCalendar=hourly",
+      "service": "vw-bes-datasync.service",
+      "timer": "vw-bes-datasync.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Vaultwarden data-dir sync Maat->Sobek (wq#414 promote payload)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/vw-sobek-datasync.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/vw-sobek-datasync.service",
+      "schedule": "OnCalendar=hourly",
+      "service": "vw-sobek-datasync.service",
+      "timer": "vw-sobek-datasync.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "root-privilege",
+        "systemd-control",
+        "container-control",
+        "local-state",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Wadjet HA vault auto-promote monitor (probe Ma'at, failover to Wadjet)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/wadjet-ha-monitor.sh"
+      ],
+      "fragment_path": "/etc/systemd/system/wadjet-ha-monitor.service",
+      "schedule": "OnUnitActiveSec=30",
+      "service": "wadjet-ha-monitor.service",
+      "timer": "wadjet-ha-monitor.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "bridge-sensitive",
+        "secret-handling",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "Poll GL-iNet BE9300 WAN byte counters into SQLite",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/wan-usage-poll"
+      ],
+      "fragment_path": "/etc/systemd/system/wan-usage-poll.service",
+      "schedule": "OnUnitActiveSec=60s",
+      "service": "wan-usage-poll.service",
+      "timer": "wan-usage-poll.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "local-state",
+        "self-watch",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "wq drift detection \u2014 alert if /home/lumen/bin/wq diverges from git HEAD (wq#886)",
+      "environment": [],
+      "exec_start": [
+        "/home/lumen/bin/wq-drift-guard"
+      ],
+      "fragment_path": "/etc/systemd/system/wq-drift-guard.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "wq-drift-guard.service",
+      "timer": "wq-drift-guard.timer",
+      "unscanned": [],
+      "user": "lumen"
+    },
+    {
+      "blockers": [
+        "root-privilege",
+        "local-exec"
+      ],
+      "category": "blocked",
+      "depth": "body",
+      "description": "wq#394 netdata canary \u2014 RAPL watts + netdata CPU% sample",
+      "environment": [],
+      "exec_start": [
+        "/usr/bin/python3 /usr/local/lib/wq394-netdata-canary/sampler.py"
+      ],
+      "fragment_path": "/etc/systemd/system/wq394-netdata-sampler.service",
+      "schedule": "OnUnitActiveSec=5min",
+      "service": "wq394-netdata-sampler.service",
+      "timer": "wq394-netdata-sampler.timer",
+      "unscanned": [],
+      "user": "root"
+    },
+    {
+      "blockers": [],
+      "category": "os-managed",
+      "depth": "body",
+      "description": "Online XFS Metadata Check for All Filesystems",
+      "environment": [
+        "SERVICE_MODE=1"
+      ],
+      "exec_start": [
+        "/usr/sbin/xfs_scrub_all --auto-media-scan-interval 1mo"
+      ],
+      "fragment_path": "/usr/lib/systemd/system/xfs_scrub_all.service",
+      "schedule": "OnCalendar=Sun *-*-* 03:10:00",
+      "service": "xfs_scrub_all.service",
+      "timer": "xfs_scrub_all.timer",
+      "unscanned": [],
+      "user": "root"
+    }
+  ]
+}
