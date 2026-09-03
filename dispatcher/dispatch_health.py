@@ -10,7 +10,8 @@ URGENT ntfy if all N are unhealthy. Runs on its own systemd timer alongside the
 dispatcher.
 
 A pass is UNHEALTHY if:
-  - It emitted `error stage=config` and has NO `pass_end` (hard abort).
+  - It emitted an `error` event (any stage — config error, or any other unhandled
+    crash inside the _do_pass loop, wq#1374) and has NO `pass_end` (hard abort).
   - Its `pass_end` has spawned=0 AND candidates>0 AND dry_run=false AND no
     `halt stage=concurrency reason=no_slots` in the same pass (= the dispatcher COULD
     have spawned but didn't, and it wasn't because all slots were full).
@@ -129,7 +130,7 @@ def classify_passes(events):
 
         for ev in evs:
             event = ev.get("event", "")
-            if event == "error" and ev.get("stage") == "config":
+            if event == "error":
                 has_config_error = True
             if event == "pass_start":
                 if ev.get("dry_run"):
@@ -148,9 +149,11 @@ def classify_passes(events):
             results.append((pid, ts, "skip", "dry_run pass"))
             continue
 
-        # Case 1: hard config error, no pass_end → dispatcher dead this cycle.
+        # Case 1: an error event (config error, or any other unhandled crash inside
+        # the _do_pass loop — wq#1368 shape) with no following pass_end → dispatcher
+        # dead this cycle.
         if has_config_error and not has_pass_end:
-            results.append((pid, ts, "unhealthy", "config error (pass aborted)"))
+            results.append((pid, ts, "unhealthy", "error event (pass aborted)"))
             continue
 
         # Case 2: pass completed but spawned nothing despite candidates waiting,
