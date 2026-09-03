@@ -9,19 +9,26 @@
 # of README.md).
 set -euo pipefail
 
-# Resolve a device node to the whole disk it lives on:
-#   /dev/nvme0n1p2 -> /dev/nvme0n1, /dev/sda2 -> /dev/sda, /dev/sda -> /dev/sda.
-# lsblk's PKNAME is authoritative and naming-scheme agnostic; the regex fallback
-# covers nodes lsblk can't resolve (absent node, or / on a non-block source).
-# NVMe/mmcblk/loop/md separate the partition number with a 'p'; sd/vd/hd do not.
-base_disk() {
-  local dev="$1" parent=""
+# Resolve a device node to the whole disk(s) it physically lives on, one per line:
+#   /dev/nvme0n1p2 -> /dev/nvme0n1, /dev/sda -> /dev/sda,
+#   /dev/mapper/vg-lv (LVM on a partition) -> that partition's disk,
+#   /dev/md0 (RAID over three NVMes) -> all three.
+# `lsblk -s` walks the *inverse* dependency tree (the device, then its parents,
+# up to whole disks). The plain `lsblk -no PKNAME` this replaced printed the
+# device's whole *descendant* subtree instead, so "take the first line" picked a
+# grandchild's parent on any stacked layout — on the default Ubuntu guided-LVM
+# root, `base_disk /dev/nvme5n1` returned `/dev/nvme5n1p3` and the guard ALLOWED
+# wiping the live root's own disk (wq#1348, reproduced on real hardware).
+# The naming-rule fallback covers nodes lsblk can't resolve (absent node, or /
+# on a non-block source); NVMe/mmcblk/loop/md separate the partition number with
+# a 'p', sd/vd/hd do not.
+base_disks() {
+  local dev="$1" disks=""
   if [[ -b "${dev}" ]]; then
-    parent="$(lsblk -no PKNAME "${dev}" 2>/dev/null || true)"
-    parent="${parent%%$'\n'*}"
+    disks="$(lsblk -srno NAME,TYPE "${dev}" 2>/dev/null | awk '$2 == "disk" { print "/dev/" $1 }' | sort -u || true)"
   fi
-  if [[ -n "${parent}" ]]; then
-    printf '/dev/%s\n' "${parent}"
+  if [[ -n "${disks}" ]]; then
+    printf '%s\n' "${disks}"
   elif [[ "${dev}" =~ ^(/dev/(nvme[0-9]+n[0-9]+|mmcblk[0-9]+|loop[0-9]+|md[0-9]+))p[0-9]+$ ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"
   elif [[ "${dev}" =~ ^(/dev/[a-z]+)[0-9]+$ ]]; then
@@ -31,7 +38,20 @@ base_disk() {
   fi
 }
 
-is_same_disk() { [[ "$(base_disk "$1")" == "$(base_disk "$2")" ]]; }
+# True when the two nodes share any physical disk. Set intersection, not string
+# equality: a RAID member disk is "the same disk" as the array built on top of it.
+is_same_disk() {
+  local -a target_disks root_disks
+  local t r
+  mapfile -t target_disks < <(base_disks "$1")
+  mapfile -t root_disks < <(base_disks "$2")
+  for t in "${target_disks[@]}"; do
+    for r in "${root_disks[@]}"; do
+      [[ "${t}" == "${r}" ]] && return 0
+    done
+  done
+  return 1
+}
 
 # Sourced by test_same_device_guard.sh: stop here with the guard helpers defined
 # and nothing destructive run.
@@ -42,8 +62,16 @@ ROOT_SRC="/"
 ESP_SIZE_MIB=512
 
 root_dev="$(findmnt -n -o SOURCE /)"
+# Fail closed: if the live root isn't a block device we can walk (btrfs prints a
+# `/dev/sda2[/@subvol]` source, zfs/overlay print no device at all), base_disks()
+# would drop to its naming-rule fallback and compare two unrelated strings, which
+# ALLOWS. Refusing is the only safe answer when the guard can't be evaluated.
+if [[ ! -b "${root_dev}" ]]; then
+  echo "refusing: live root source (${root_dev}) is not a block device, so the same-disk guard cannot be evaluated" >&2
+  exit 1
+fi
 if is_same_disk "${TARGET_DEV}" "${root_dev}"; then
-  echo "refusing: ${TARGET_DEV} is the disk the current root lives on (${root_dev} -> $(base_disk "${root_dev}"))" >&2
+  echo "refusing: ${TARGET_DEV} is the disk the current root lives on (${root_dev} -> $(base_disks "${root_dev}" | tr '\n' ' '))" >&2
   exit 1
 fi
 if mount | grep -q "^${TARGET_DEV}"; then

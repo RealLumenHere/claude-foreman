@@ -31,14 +31,14 @@ further research pass needed.
 ## Plan
 
 1. **Clone root onto the new drive** — `migrate_root.sh <target-dev>`
-   (`migrate_root.sh:1-71`). Partitions the target as GPT (512MiB ESP +
+   (`migrate_root.sh:1-99`). Partitions the target as GPT (512MiB ESP +
    ext4 root), rsyncs the live root filesystem across
-   (`migrate_root.sh:74-77`), chroots in to install GRUB in UEFI mode and
+   (`migrate_root.sh:102-105`), chroots in to install GRUB in UEFI mode and
    rewrite `/etc/fstab` with the new partitions' UUIDs
-   (`migrate_root.sh:84-91`). The NVMe stays the live root throughout — this
+   (`migrate_root.sh:112-119`). The NVMe stays the live root throughout — this
    step only reads it. Before any of that it refuses to run when the target
    resolves to the same physical disk as the live root
-   (`migrate_root.sh:45-48`) — see "Same-device guard" below.
+   (`migrate_root.sh:65-76`) — see "Same-device guard" below.
 
 2. **Cutover** — `efibootmgr -v` to confirm the new `ubuntu-seshat` boot
    entry exists, reboot and manually select it once (one-time boot override,
@@ -86,18 +86,42 @@ the running root. The bug was NVMe-specific (the `p` partition separator
 survived the strip); `/dev/sda2` vs `/dev/sda` refused correctly. Seshat's
 root is on an NVMe, which is precisely the case this runbook is written for.
 
-`base_disk()` (`migrate_root.sh:17-32`) now normalizes *both* names to their
-whole disk before comparing, preferring `lsblk -no PKNAME` and falling back to
-partition-naming rules (`p`-separated for nvme/mmcblk/loop/md, bare digits for
-sd/vd/hd) when the node doesn't exist on the machine running the check.
+`base_disks()` (`migrate_root.sh:25-39`) now normalizes *both* names to the
+whole disk(s) they physically live on before comparing, and `is_same_disk()`
+(`migrate_root.sh:43-54`) refuses when those two sets intersect.
+
+The first version of that fix (wq#1346) used `lsblk -no PKNAME <dev>` and took
+the first output line as the device's own parent. wq#1348 reproduced a false
+ALLOW from that on real hardware: without `--nodeps`, `lsblk` prints the
+device's entire *descendant* subtree, so on the default Ubuntu guided-LVM
+layout (LV on a partition on a disk) `base_disk /dev/nvme5n1` returned
+`/dev/nvme5n1p3` — a grandchild — and the guard let the operator target the
+live root's own disk. `lsblk -srno NAME,TYPE` instead walks the *inverse*
+dependency tree — device, its parents, up to whole disks — which resolves the
+disk case, the partition case, and the LVM/LUKS/RAID cases the single PKNAME
+lookup could not reach at all (an LV has no PKNAME). A RAID array yields
+several disks, hence set intersection rather than string equality. The
+partition-naming fallback (`p`-separated for nvme/mmcblk/loop/md, bare digits
+for sd/vd/hd) still covers nodes that don't exist on the machine running the
+check. Where the live root isn't a walkable block device at all (btrfs reports
+`/dev/sda2[/@subvol]`, zfs and overlay report no device), the script now
+refuses rather than falling through to a string comparison that would allow
+(`migrate_root.sh:65-71`).
 
 ## Verifying
 
 - `bash ops/wq1175-seshat-root-migration/test_same_device_guard.sh` — 13
-  assertions over the guard, no privileges or real devices needed (it sources
-  `migrate_root.sh`, which returns early when sourced, `migrate_root.sh:38`).
-  Covers the NVMe case above, the SATA control case, `sda10`-style two-digit
-  partitions, and the allow cases the migration actually depends on.
+  fabricated-device assertions plus a real-device section, no privileges needed
+  (it sources `migrate_root.sh`, which returns early when sourced,
+  `migrate_root.sh:58`). The fabricated names cover the NVMe case above, the
+  SATA control case, `sda10`-style two-digit partitions, and the allow cases the
+  migration depends on — but none of them are block devices, so they only ever
+  exercise the naming-rule fallback. The real-device section
+  (`test_same_device_guard.sh:75-116`) runs the guard against the host's live
+  device tree: every disk `base_disks()` reports for the live root must be
+  `TYPE=disk`, must resolve to itself, and must be refused as a target, plus an
+  unrelated whole disk must still be allowed. On a guided-LVM host that section
+  fails against the pre-fix code and passes after.
 - `bash -n ops/wq1175-seshat-root-migration/migrate_root.sh` and same for
   `repurpose_nvme_data.sh` — both parse clean.
 - Neither script has been run against live Seshat: this build worker has no
