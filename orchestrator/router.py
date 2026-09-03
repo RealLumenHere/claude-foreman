@@ -51,6 +51,7 @@ except ImportError:  # pragma: no cover
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "harness"))
 import repo_sweep  # noqa: E402  # wq#1123: shared repo_for_ticket() resolver
+import needs as needs_mod  # noqa: E402  # wq#1331: per-ticket needs:repo/needs:dir tags
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 MANIFEST_PATH = os.environ.get(
@@ -838,18 +839,16 @@ def verify_repo_hint(title, detail):
 # write or land in the right one either. Every instance so far burned a full attempt,
 # blocked, and got redispatched into the identical misconfiguration (wq#433 twice).
 # The lane is not evidence enough on its own when the title names a different repo, so
-# refuse rather than guess: the title markers below are the ones LPP/fleet tickets
-# actually carry, each mapped to the same path LANE_REPO uses.
+# refuse rather than guess.
+# wq#1331 (§3.2): derived from LANE_REPO at import instead of a hand-kept second table
+# that could drift from it (the wq#1325 nest entry did exactly that). Every lane whose
+# repo is not FOREMAN_ROOT is a marker (a `[build]`/`[ops]` title tag says nothing a
+# foreman lane doesn't already); "lpp-mp" is the one marker with no lane of its own —
+# the LPP-MP title prefix wq#433 tickets actually carry.
 TITLE_REPO_MARKERS = {
-    "lpp": "/home/lumen/pokemon",
-    "lpp-mp": "/home/lumen/pokemon",
-    "pokemon": "/home/lumen/pokemon",
-    "nest": "/home/lumen/projects/nest/NoLongerEvil-Thermostat",  # wq#1325: keep in sync with LANE_REPO["nest"]
-    "questfree": "/home/lumen/questfree",
-    "mailbot": "/home/lumen/mailbot",
-    "pstack": "/home/lumen/pstack",
-    "mission-control": "/home/lumen/mission-control",
+    lane: path for lane, path in LANE_REPO.items() if path != FOREMAN_ROOT
 }
+TITLE_REPO_MARKERS["lpp-mp"] = LANE_REPO["pokemon"]
 _LEADING_TAGS_RE = re.compile(r"^\s*(?:\[([^\]]*)\]\s*)+")
 _TAG_RE = re.compile(r"\[([^\]]*)\]")
 
@@ -892,23 +891,38 @@ def repo_mismatch(ticket):
             f"READ-only access to {title_repo} and cannot land there")
 
 
+def needs_repo_hint(ticket):
+    """wq#1331 (§3.2): the per-ticket needs:repo(<path>) override, validated against
+    repo_sweep.managed_repos() exactly as verify_repo_hint is — a hand-edited tag can't
+    point dispatch at an arbitrary path; an unmanaged path falls through to the normal
+    resolution order rather than being trusted. FOREMAN_NEEDS_DISABLE=1 (rollback)
+    makes needs_mod.parse() return empty, so this returns None."""
+    repo = needs_mod.parse(ticket.get("needs"), ticket.get("detail", "")).repo
+    return repo if repo and repo in repo_sweep.managed_repos() else None
+
+
 def repo_for_ticket(ticket_id_or_dict):
     """The one resolver shared by dispatch_cmd and foreman_dispatcher._do_pass (wq#1123):
-    the verify-pass repo hint first (wq#1220 — a verify ticket's own lane is a static
+    a lane/title repo disagreement refuses outright (wq#433 — see repo_mismatch; a
+    needs tag never papers over a mis-laned ticket, §5.2), then the ticket's own
+    needs:repo tag (wq#1331 — the per-ticket override, ahead of every derived source),
+    then the verify-pass repo hint (wq#1220 — a verify ticket's own lane is a static
     policy default, not the repo it needs to verify), then LANE_REPO, then — for lanes
     LANE_REPO doesn't cover (e.g. 'auto') — the exact repo a repo-sweep ticket wrote
     into its own detail (repo_sweep.repo_hint). Returns None (never a guess) if none
-    resolve, including when the lane and the title disagree about the repo (wq#433 —
-    see repo_mismatch).
+    resolve.
 
     Accepts either a ticket id (does the wq_show lookup itself) or an already-fetched
     ticket dict, so a caller that already has the ticket doesn't pay for a second show."""
     t = ticket_id_or_dict if isinstance(ticket_id_or_dict, dict) else wq_show(ticket_id_or_dict)
+    if repo_mismatch(t):
+        return None
+    repo = needs_repo_hint(t)
+    if repo:
+        return repo
     repo = verify_repo_hint(t.get("title", ""), t.get("detail", ""))
     if repo:
         return repo
-    if repo_mismatch(t):
-        return None
     repo = repo_for_lane(t.get("lane"))
     if repo:
         return repo

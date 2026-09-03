@@ -770,3 +770,69 @@ def test_title_repo_markers_agree_with_lane_repo_map():
     known = set(router.LANE_REPO.values())
     for marker, repo in router.TITLE_REPO_MARKERS.items():
         assert repo in known, f"{marker} -> {repo} is not a LANE_REPO destination"
+
+
+# ---- wq#1331 (WORKER_EXEC_CAPABILITY_GAP.md §2.3/§3.2): needs:repo is the per-ticket
+# repo override, validated against managed_repos(); TITLE_REPO_MARKERS is derived from
+# LANE_REPO at import so the two tables cannot drift (the wq#1325 nest entry did). ------
+
+def test_needs_repo_overrides_lane():
+    t = {"lane": "build", "title": "fix(build.sh): flash path", "detail": "",
+         "needs": "repo(/home/lumen/questfree)"}
+    assert router.repo_for_ticket(t) == "/home/lumen/questfree"
+
+
+def test_needs_repo_line_in_detail_also_resolves():
+    t = {"lane": "build", "title": "fix(build.sh): flash path",
+         "detail": "prose\nNeeds: repo(/home/lumen/questfree)\nmore"}
+    assert router.repo_for_ticket(t) == "/home/lumen/questfree"
+
+
+def test_needs_repo_unmanaged_path_falls_through_never_trusted():
+    t = {"lane": "build", "title": "x", "detail": "", "needs": "repo(/home/lumen/evil)"}
+    assert router.repo_for_ticket(t) == router.FOREMAN_ROOT
+
+
+def test_needs_repo_beats_verify_hint():
+    t = {"lane": "build", "title": "[verify] wq#1173 add mailbot lane routing",
+         "detail": "Verify repo: /home/lumen/mailbot",
+         "needs": "repo(/home/lumen/questfree)"}
+    assert router.repo_for_ticket(t) == "/home/lumen/questfree"
+
+
+def test_mislaned_ticket_refused_even_with_needs_repo():
+    # §5.2 test-to-failure: lane=build + [questfree] title + needs:repo(questfree)
+    # must REFUSE (re-lane the ticket), not let the tag paper over the mis-lane...
+    t = {"lane": "build", "title": "[questfree] Quest 1 DTS", "detail": "",
+         "needs": "repo(/home/lumen/questfree)"}
+    assert router.repo_mismatch(t)
+    assert router.repo_for_ticket(t) is None
+
+
+def test_mislaned_ticket_resolves_after_relane():
+    # ...and once the lane is fixed, the same ticket resolves.
+    t = {"lane": "questfree", "title": "[questfree] Quest 1 DTS", "detail": "",
+         "needs": "repo(/home/lumen/questfree)"}
+    assert router.repo_mismatch(t) is None
+    assert router.repo_for_ticket(t) == "/home/lumen/questfree"
+
+
+def test_needs_disable_env_makes_resolver_ignore_needs(monkeypatch):
+    monkeypatch.setenv("FOREMAN_NEEDS_DISABLE", "1")
+    t = {"lane": "build", "title": "x", "detail": "",
+         "needs": "repo(/home/lumen/questfree)"}
+    assert router.repo_for_ticket(t) == router.FOREMAN_ROOT
+
+
+def test_title_repo_markers_derived_from_lane_repo():
+    # every non-foreman lane is a marker; lpp-mp is the one extra alias (wq#433's
+    # own title prefix); no marker may disagree with LANE_REPO.
+    expected = {lane: path for lane, path in router.LANE_REPO.items()
+                if path != router.FOREMAN_ROOT}
+    expected["lpp-mp"] = router.LANE_REPO["pokemon"]
+    assert router.TITLE_REPO_MARKERS == expected
+    for key in ("lpp", "lpp-mp", "pokemon", "nest", "questfree", "mailbot",
+                "pstack", "mission-control"):
+        assert key in router.TITLE_REPO_MARKERS, key
+    assert router.TITLE_REPO_MARKERS["nest"] == \
+        "/home/lumen/projects/nest/NoLongerEvil-Thermostat"  # wq#1325

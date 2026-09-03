@@ -702,13 +702,15 @@ def _do_pass(cfg, log, state, dry_run):
             log.skip(tid, lane, "lane_policy", "repo_mismatch", detail=mismatch)
             continue
 
-        if not repo:
-            # wq#1094/wq#1123: 'auto' has no single LANE_REPO entry (repo-sweeps target
-            # different repos, wq#830) — but a repo-sweep ticket carries its exact
-            # target repo in its own detail (repo_sweep.py wrote it there). router's
-            # shared resolver reads that back instead of guessing; anything else in
-            # 'auto' still refuses.
-            repo = router.repo_for_ticket(t)
+        # wq#1094/wq#1123: 'auto' has no single LANE_REPO entry (repo-sweeps target
+        # different repos, wq#830) — but a repo-sweep ticket carries its exact
+        # target repo in its own detail (repo_sweep.py wrote it there). router's
+        # shared resolver reads that back instead of guessing; anything else in
+        # 'auto' still refuses. wq#1331: the same resolver now also honours a
+        # ticket's own needs:repo tag (and wq#1220's verify-repo hint) AHEAD of the
+        # lane default, so it runs for every ticket, not just unmapped lanes — for a
+        # plain lane ticket it returns exactly the LANE_REPO path already in `repo`.
+        repo = router.repo_for_ticket(t) or repo
         if not repo:
             log.skip(tid, lane, "lane_policy", "lane_unmapped",
                      detail="no LANE_REPO entry — never guess a repo")

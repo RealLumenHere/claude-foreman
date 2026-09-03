@@ -51,6 +51,7 @@ from oom_forensics import oom_journal_evidence
 import acceptance as acceptance_mod
 import action_gate
 import failure_record
+import needs as needs_mod
 import agents_spec
 import fire_gate
 import permission_profiles
@@ -349,6 +350,8 @@ EXIT_FIRE_DIAGNOSIS_FAILED = 17
 EXIT_FIRE_APPLY_INCOMPLETE = 18
 EXIT_FIRE_MAX_RUNTIME = 19  # wq#1234: hard wall-clock cap exceeded, blocked for a human
 EXIT_FIRE_ATTEMPT_FENCE = 20  # wq#1261: 3rd expired/rework attempt, escalated to FRANK
+EXIT_LAUNCH_REFUSED = 21  # wq#1331: spawn preflight refused (repo mismatch / unreachable
+                          # cited path) — harness defect, attempt not charged
 
 # wq#1261 (#13 item 3): expired/rework fire tickets re-dispatch at most FIRE_ATTEMPT_FENCE
 # times before the 3rd strike escalates to FRANK instead of running again. Only outcomes
@@ -754,6 +757,95 @@ def _slock_release(scope, holder):
                    capture_output=True, text=True)
 
 
+class SpawnRefused(RuntimeError):
+    """wq#1331 (WORKER_EXEC_CAPABILITY_GAP.md §3.2): the spawn preflight refused to
+    start `claude -p`. This is a harness/routing defect, not evidence about the model
+    or the ticket — cmd_run's handler writes failure.json but NO attempt-N.json
+    (next_attempt_n stays put, so the attempt is not charged), releases the claim so
+    the ticket stays open, appends a notes line, and pages ntfy."""
+
+    def __init__(self, code, summary, worktree=None):
+        super().__init__(f"{code}: {summary}")
+        self.code = code
+        self.summary = summary
+        self.worktree = worktree
+
+
+def _git_common_dir_realpath(path):
+    p = _git(path, "rev-parse", "--git-common-dir")
+    if p.returncode != 0:
+        return None
+    out = p.stdout.strip()
+    if not os.path.isabs(out):
+        out = os.path.join(path, out)
+    return os.path.realpath(out)
+
+
+def assert_worktree_repo(worktree, repo, ticket_id):
+    """wq#1331/§3.2 (ties to wq#1288): the worktree handed to the child must actually
+    belong to the repo the router resolved — normalized origin URLs must match AND the
+    two `git rev-parse --git-common-dir` realpaths must be the same .git. A mismatch is
+    the wq#433/wq#1152 dispatch-into-the-wrong-tree defect, refused before a single
+    token is spent. FOREMAN_NEEDS_DISABLE=1 downgrades to log-only (rollback)."""
+    problems = []
+    wt_check = failure_record.worktree_origin_check(worktree, repo)
+    if wt_check.get("match") is False:
+        problems.append(f"origin got={wt_check.get('origin')}")
+    wt_common = _git_common_dir_realpath(worktree)
+    repo_common = _git_common_dir_realpath(repo)
+    if not wt_common or not repo_common or wt_common != repo_common:
+        problems.append(f"git-common-dir {wt_common} != {repo_common}")
+    if not problems:
+        return
+    summary = f"WORKTREE_REPO_MISMATCH expected={repo} ({'; '.join(problems)})"
+    if needs_mod.disabled():
+        log(f"wq#{ticket_id}: {summary} — FOREMAN_NEEDS_DISABLE=1, log-only")
+        return
+    raise SpawnRefused("WORKTREE_REPO_MISMATCH", summary, worktree=worktree)
+
+
+# path literals a ticket detail can cite; punctuation that ends a sentence around a
+# path is stripped after the match, globs/ellipses simply end the literal early.
+_CITED_PATH_RE = re.compile(r"/home/lumen/[\w./~-]+")
+
+
+def _under(path, root):
+    path, root = os.path.normpath(path), os.path.normpath(root)
+    return path == root or path.startswith(root + os.sep)
+
+
+def cited_paths(detail):
+    out = []
+    for m in _CITED_PATH_RE.finditer(detail or ""):
+        p = m.group(0).rstrip(".,;:")
+        if p != "/home/lumen" and p not in out:
+            out.append(p)
+    return out
+
+
+def assert_spawn_paths(ticket_id, detail, worktree, repo, add_dirs, needs_dirs):
+    """§3.2 last clause: every needs:dir must exist as a directory, and every
+    /home/lumen/ path literal the ticket detail cites must be inside
+    worktree ∪ repo ∪ add_dirs — a cited path outside the reachable set is the exact
+    wq#1152 signature and is refused before spawn rather than after a burned attempt.
+    FOREMAN_NEEDS_DISABLE=1 downgrades to log-only (rollback)."""
+    roots = [worktree, repo] + [d for d in add_dirs if d]
+    problems = []
+    for d in needs_dirs:
+        if not os.path.isdir(d):
+            problems.append(f"needs:dir({d}) is not an existing directory")
+    for p in cited_paths(detail):
+        if not any(_under(p, r) for r in roots):
+            problems.append(f"cited path {p} outside worktree ∪ add_dirs")
+    if not problems:
+        return
+    summary = f"CITED_PATH_UNREACHABLE ({'; '.join(problems)})"
+    if needs_mod.disabled():
+        log(f"wq#{ticket_id}: {summary} — FOREMAN_NEEDS_DISABLE=1, log-only")
+        return
+    raise SpawnRefused("CITED_PATH_UNREACHABLE", summary, worktree=worktree)
+
+
 def make_worktree(repo, ticket_id, attempt, title, archetype):
     """RELIABILITY_SPEC.md §D + wq#649: the branch name embeds the attempt number
     from the start (previously only a retry-fallback appended it), since attempt 1's
@@ -802,6 +894,7 @@ def make_worktree(repo, ticket_id, attempt, title, archetype):
             if p.returncode == 0 and p.stdout.strip() == branch:
                 log(f"wq#{ticket_id} attempt {attempt}: adopting worktree left by a prior "
                     f"crashed attempt at the exact same (ticket, attempt) — {wt} ({branch})")
+                assert_worktree_repo(wt, repo, ticket_id)
                 return wt, branch
             # not ours (or ours but on the wrong branch) — drop it so `worktree add` below
             # gets a clean path instead of failing on an already-existing directory.
@@ -822,6 +915,9 @@ def make_worktree(repo, ticket_id, attempt, title, archetype):
             p = _git(repo, "worktree", "add", wt, "-b", branch, "HEAD")
         if p.returncode != 0:
             raise RuntimeError(f"git worktree add failed: {p.stdout} {p.stderr}")
+        # wq#1331 (§3.2): assert the tree we just made is of the repo the router
+        # resolved, before any child is spawned against it.
+        assert_worktree_repo(wt, repo, ticket_id)
         return wt, branch
     finally:
         _slock_release(scope, holder)
@@ -903,10 +999,17 @@ def build_env(worker_id, model, effort, worktree, ticket_id):
 WORKER_ADD_DIRS = _AGENTS.default_add_dirs
 
 
-def add_dirs_for(archetype):
-    if archetype in _AGENTS:
-        return _AGENTS.get(archetype).add_dirs
-    return WORKER_ADD_DIRS
+def add_dirs_for(archetype, needs_dirs=None):
+    """Per-archetype --add-dir list (wq#1301), unioned with the ticket's own
+    needs:dir tags (wq#1331 §3.2 — read context only; landing still goes through the
+    worktree). needs_dirs is already empty when FOREMAN_NEEDS_DISABLE=1 because
+    needs.parse() returned nothing."""
+    base = _AGENTS.get(archetype).add_dirs if archetype in _AGENTS else WORKER_ADD_DIRS
+    out = list(base)
+    for d in needs_dirs or []:
+        if d not in out:
+            out.append(d)
+    return out
 
 def resolve_worker_settings(repo, ticket_id):
     """ISSUE-SOLUTIONS-fable.md §2b: render this repo's per-repo toolchain permission
@@ -1462,11 +1565,22 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
 
     worker_id = args.worker_id or f"fworker-wq{ticket_id}-a{attempt}"
 
+    # wq#1331 (§3.2): the ticket's own needs:dir tags widen read context; needs:repo
+    # was already honoured by the router before --repo reached us. parse() returns
+    # empty under FOREMAN_NEEDS_DISABLE=1 (rollback).
+    ticket_needs = needs_mod.parse(ticket.get("needs"), ticket.get("detail", ""))
+    add_dirs = add_dirs_for(archetype, ticket_needs.dirs)
+
     if resume_session:
         worktree, branch = prior_worktree, None
     else:
         worktree, branch = make_worktree(args.repo, ticket_id, attempt,
                                           ticket.get("title", str(ticket_id)), archetype)
+        # §3.2 last clause: refuse (uncharged) while zero tokens are spent, not after
+        # a burned attempt — the wq#1152 signature is a cited path the sandbox can't
+        # reach. A resume reuses a worktree that already passed this gate.
+        assert_spawn_paths(ticket_id, ticket.get("detail", ""), worktree, args.repo,
+                           add_dirs, ticket_needs.dirs)
 
     prior_notes_path = os.path.join(run_dir(ticket_id), "prior-attempt-notes.md")
     # §1a: criteria are machine-checkable and pinned BEFORE the worker starts, so the
@@ -1514,7 +1628,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     loop_tracker = action_gate.LoopTracker()
     settings_file = resolve_worker_settings(args.repo, ticket_id)
     cmd = build_claude_cmd(prompt, args.model, args.effort, settings_file,
-                            add_dirs=add_dirs_for(archetype), max_turns=max_turns,
+                            add_dirs=add_dirs, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin)
 
     log(f"attempt {attempt}: spawning {' '.join(shlex.quote(c) for c in cmd[:6])}... "
@@ -2054,7 +2168,7 @@ def handle_limit(args, ticket_id, attempt, state, worktree):
 
 def record_terminal_failure(ticket_id, attempt, classification, state, events,
                              worktree, expected_repo, archetype,
-                             worker_block_reason=None, lane=None):
+                             worker_block_reason=None, lane=None, needs_dirs=None):
     """wq#1330 (WORKER_EXEC_CAPABILITY_GAP.md §4): write _runs/wq<id>/failure.json
     (schema v1, mechanical triage), fold its sha256 into this attempt's
     attempt-N.json, and emit a failure span on the ticket's Langfuse trace.
@@ -2064,7 +2178,10 @@ def record_terminal_failure(ticket_id, attempt, classification, state, events,
     d = run_dir(ticket_id)
     attempt_files = sorted(f for f in os.listdir(d) if re.match(r"attempt-\d+\.json$", f))
     try:
-        reachable = [worktree] + list(add_dirs_for(archetype or "standard-engineering"))
+        # wq#1331: a dir granted via needs:dir was reachable — without it triage would
+        # wrongly re-propose the tag the ticket already carried.
+        reachable = [worktree] + list(add_dirs_for(archetype or "standard-engineering",
+                                                    needs_dirs))
     except Exception:
         reachable = [worktree]
     rec = failure_record.build_failure_record(
@@ -2104,6 +2221,35 @@ def record_terminal_failure(ticket_id, attempt, classification, state, events,
     return rec, fpath
 
 
+def handle_spawn_refused(args, ticket_id, e):
+    """wq#1331 (§3.2): a SpawnRefused preflight is LAUNCH_FAILURE with the refusal
+    reason, bucketed HARNESS_DEFECT like PERMISSION_LOOP (wq#1107) — the run says
+    nothing about the model or the ticket. No attempt-N.json is written, so
+    next_attempt_n() recomputes the same attempt next dispatch: the attempt is not
+    charged (and never reaches the breaker — HARNESS_DEFECT is outside
+    circuit_breaker.CATASTROPHIC_CLASSES). failure.json still lands so slice-1
+    triage/measurement sees the refusal; the ticket goes back to open with a notes
+    line and ntfy pages lumen-fleet."""
+    d = run_dir(ticket_id)
+    rec = failure_record.build_failure_record(
+        ticket=ticket_id, attempts=0, classification=LAUNCH_FAILURE,
+        block_class=BLOCK_HARNESS_DEFECT, events=[], worktree=e.worktree,
+        expected_repo=args.repo)
+    rec["triage"] = failure_record.TRIAGE_HARNESS_DEFECT
+    rec["summary"] = e.summary
+    fpath = failure_record.write_failure_record(d, rec)
+    log(f"LAUNCH_FAILURE [{e.code}] wq#{ticket_id}: {e.summary} — releasing claim, "
+        f"attempt not charged; failure.json -> {fpath}")
+    p = wq("note", str(ticket_id),
+           f"LAUNCH_FAILURE {e.summary}; attempt not charged (harness defect); see {fpath}")
+    if p.returncode != 0:
+        log(f"WARN: wq note append failed: {(p.stdout or p.stderr).strip()}")
+    wq_release(ticket_id)
+    ntfy("foreman LAUNCH_FAILURE",
+         f"wq#{ticket_id} {e.code}: {e.summary} (attempt not charged)", priority="high")
+    return EXIT_LAUNCH_REFUSED
+
+
 def handle_failure(args, ticket_id, attempt, classification, state, events, worktree):
     prior_notes_path = write_prior_attempt_notes(ticket_id, attempt, worktree, events,
                                                   classification)
@@ -2123,7 +2269,8 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
     rec, fpath = record_terminal_failure(
         ticket_id, attempt, classification, state, events, worktree,
         expected_repo=args.repo, archetype=(args.archetype or "standard-engineering"),
-        worker_block_reason=worker_reason, lane=ticket.get("lane"))
+        worker_block_reason=worker_reason, lane=ticket.get("lane"),
+        needs_dirs=needs_mod.parse(ticket.get("needs"), ticket.get("detail", "")).dirs)
     block_class = rec["block_class"]
     reason = failure_record.block_reason_line(rec, fpath)
     log(f"BLOCKED [{block_class}/{rec['triage']}]: {reason}")
@@ -2214,6 +2361,8 @@ def cmd_run(args):
     if args.archetype == FIRE_ARCHETYPE:
         try:
             return run_fire_ticket(args)
+        except SpawnRefused as e:
+            return handle_spawn_refused(args, args.ticket, e)
         except Exception:
             tb = traceback.format_exc()
             log(f"CRASH: unhandled exception during wq#{args.ticket} fire-mode run — "
@@ -2228,6 +2377,11 @@ def cmd_run(args):
     attempt = next_attempt_n(args.ticket)
     try:
         return do_attempt(args, attempt)
+    except SpawnRefused as e:
+        # wq#1331: preflight refusal — release uncharged, leave ticket open with a
+        # notes line; NOT the generic crash path (which would page as CRASH and
+        # tell the record nothing mechanical).
+        return handle_spawn_refused(args, args.ticket, e)
     except Exception:
         # RELIABILITY_SPEC.md §D "no path ends holding a lease": do_attempt's own
         # retry/resume logic (handle_failure/handle_limit/handle_resumable_failure)
