@@ -151,11 +151,13 @@ def denv(tmp_path, monkeypatch):
 # ---- helpers -------------------------------------------------------------------------
 
 def add_ticket(title, lane="testlane", pri=1, model="claude-sonnet-5", effort="high",
-               deps=None, gate=None, detail=None):
+               deps=None, gate=None, detail=None, archetype=None):
     # wq#912 lane allowlist checks against the LIVE dispatcher/config.json, not this
     # test's scratch WQ_DB — these synthetic lanes (testlane, ghostlane, ...) exercise
     # dispatcher logic only, never real dispatcher visibility, so --force bypasses it
     # (same fix wq#1004 applied to test_router.py/test_wq_reap.py for the same reason).
+    # --force also bypasses wq#1368's own archetype-routing-row guard, needed for the
+    # wq#1358/#1359 repro (archetype='build', a lane name, has no routing row).
     cmd = [WQ_BIN, "add", "--lane", lane, "--pri", str(pri), "--title", title, "--force"]
     if model:
         cmd += ["--model", model, "--effort", effort]
@@ -165,6 +167,8 @@ def add_ticket(title, lane="testlane", pri=1, model="claude-sonnet-5", effort="h
         cmd += ["--gate", gate]
     if detail:
         cmd += ["--detail", detail]
+    if archetype:
+        cmd += ["--archetype", archetype]
     p = subprocess.run(cmd, capture_output=True, text=True)
     assert p.returncode == 0, p.stdout + p.stderr
     return int(p.stdout.strip().split()[2])
@@ -546,6 +550,25 @@ def test_governor_deny_skips(denv, monkeypatch):
     skips = log_events(denv, "skip", ticket=tid)
     assert len(skips) == 1 and skips[0]["reason"] == "governor_deny"
     assert lumen_calls(denv) == []
+
+
+def test_bad_archetype_skips_ticket_without_crashing_pass(denv):
+    """wq#1368: wq#1358/#1359 carried archetype='build' (a LANE name, not an archetype)
+    straight onto a ticket. router.assign -> select -> candidates -> manifest.chain()
+    raises ManifestError('no routing row for archetype build') for that shape, and it
+    used to propagate uncaught out of candidate_model and out of _do_pass's per-ticket
+    loop entirely — one bad-archetype ticket crashed the WHOLE pass (0 workers, 46 ready
+    candidates sat idle live). A bad archetype must cost only its own ticket a skip;
+    every other ready candidate in the same pass still gets a decision."""
+    bad = add_ticket("wq1358-repro: lane name masquerading as archetype",
+                      model=None, archetype="build")
+    good = add_ticket("an ordinary candidate in the same pass")
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=bad)
+    assert len(skips) == 1 and skips[0]["reason"] == "bad_archetype"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [good]
+    assert log_events(denv, "error") == []
+    assert any("unroutable archetype" in line for line in ntfy_lines(denv))
 
 
 def test_tight_mode_pri_filter(denv):
