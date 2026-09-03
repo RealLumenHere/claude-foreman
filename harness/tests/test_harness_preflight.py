@@ -105,6 +105,25 @@ def test_live_proof_denials_block_stamp_even_when_static_lint_clean(fixture_conf
     assert harness_preflight.read_stamp(FIXTURE_REPO, stamp_dir=stamp_dir) is None
 
 
+def test_live_proof_filenotfound_returns_ok_false_instead_of_raising(fixture_conf):
+    """wq#1384: claude_bin missing from PATH raises FileNotFoundError (an OSError
+    subclass) out of subprocess.run inside run_live_proof — preflight() must catch it
+    like every other subprocess.run in this module, not let it propagate to the caller."""
+    write, stamp_dir, render_dir = fixture_conf
+    write(["base", "python", "node-ts"])
+
+    def _missing_binary_runner(cmd, cwd):
+        raise FileNotFoundError(2, "No such file or directory", cmd[0])
+
+    result = harness_preflight.preflight(
+        FIXTURE_REPO, settings_file=SETTINGS, render_dir=render_dir, stamp_dir=stamp_dir,
+        runner=_missing_binary_runner)
+
+    assert result.ok is False
+    assert "live proof errored" in result.reason
+    assert harness_preflight.read_stamp(FIXTURE_REPO, stamp_dir=stamp_dir) is None
+
+
 def test_dispatch_gate_refuses_unstamped_repo(fixture_conf):
     write, stamp_dir, render_dir = fixture_conf
     write(["base", "python", "node-ts"])
