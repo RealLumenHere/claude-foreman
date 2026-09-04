@@ -1,0 +1,10 @@
+[Unit]
+Description=Run paid-spend-tripwire every 30 minutes (daily $ threshold, checked intraday so a runaway pages within 30min, not at midnight)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
