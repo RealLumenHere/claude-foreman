@@ -5,10 +5,19 @@ once the approach below is approved. Retargeted 2026-09-04 to land in this
 in-repo, worker-writable `research/` dir (the prior path was out of scope for
 this worktree).
 
+**Revision note (2026-09-04, wq#1364 rework after wq#1428 adversarial
+verify):** the first version of this doc claimed mailbot's reply path went
+"via LiteLLM" and that retrieval could piggyback on that round trip. Both
+claims were wrong — mailbot calls DeepSeek's cloud API directly, with no
+LiteLLM hop. Corrected in §1 and §3.3, and the resulting reachability gap is
+promoted to a blocking item in §4.
+
 ## 1. Problem
 
-The Messenger brain (mailbot's public-inbox auto-reply worker, driven by
-DeepSeek V4 via LiteLLM per `reports/FLEET_OPS_AUDIT_2026-08-23.md:17,72`)
+The Messenger brain (mailbot's public-inbox auto-reply worker, a Cloudflare
+Worker — `mailbot/wrangler.toml:2-3` — that calls DeepSeek's cloud API
+directly via `callDeepSeek()`, `mailbot/src/worker.js:173,175,179`; there is
+no LiteLLM hop in this path, see §3.3 correction below)
 generates replies from a fixed persona template with no access to reference
 material about pragmatics, text ambiguity, or style calibration. Campaign
 brain-interp wants three research docs — `pragmatics.md`, `text_ambiguity.md`,
@@ -150,8 +159,19 @@ without a schema migration per category.
   prose reference material, not discrete facts) cosine-similarity search over
   the `brain-interp` category, keyed on the sender's message body
   (`trimmedBody`, already computed at `mailbot/src/worker.js:212`).
-  Cheap embedding call added to the existing DeepSeek/LiteLLM round trip, not
-  a new provider.
+  **Correction (wq#1428 verify pass):** the original draft of this section
+  claimed this could be "a cheap embedding call added to the existing
+  DeepSeek/LiteLLM round trip, not a new provider." That is wrong — per §1,
+  mailbot's `callDeepSeek()` (`mailbot/src/worker.js:173-207`) fetches
+  `api.deepseek.com` directly with a DeepSeek key; there is no LiteLLM
+  gateway hop in this code path to piggyback on. mailbot is also a
+  Cloudflare Worker (`mailbot/wrangler.toml:2-3`, `workers_dev = false`), an
+  edge runtime with no existing network path to the fleet's local pgvector
+  Postgres instance. Reaching pgvector therefore requires *some* new network
+  hop regardless — a query proxy/API, or a cloud-side embedding+lookup call —
+  not a reuse of an existing round trip. This is now a blocking open
+  question for the build ticket, promoted from §4 item 3 below; it must be
+  resolved before the "cheap, no new provider" framing is treated as settled.
 - Injection: a new block built the same way `earlier` is built
   (`mailbot/src/worker.js:216-222`) — run each retrieved chunk through
   `stripInstructionBlocks()`, truncate to a hard char cap (mirror
@@ -186,10 +206,13 @@ Two layers, both already precedented in mailbot:
 2. Decide: extend `index_research.py`'s existing run to also walk
    `/home/lumen/knowledge/corpus/`, or add a second timer — depends on what
    §1 finds about how coupled the script is to `LUMEN_RESEARCH_ROOT`.
-3. Confirm mailbot's Worker (Cloudflare Workers runtime, per
-   `mailbot/src/worker.js`) can reach the pgvector Postgres instance — it may
-   need a query proxy/API rather than a direct DB connection, unlike
-   fworker's filesystem-local `memory/recall.py`.
+3. **BLOCKING:** mailbot's Worker (Cloudflare Workers edge runtime, per
+   `mailbot/wrangler.toml:2-3`) has no existing network path to the fleet's
+   local pgvector Postgres instance — confirmed in §3.3, this is not an
+   open confirmation but a known gap. Resolve the reachability mechanism
+   (query proxy/API in front of pgvector, most likely) *before* implementing
+   retrieval; it determines whether §3.3's design is feasible as written or
+   needs a network-service component this doc does not yet cover.
 4. Land the three seed docs (`pragmatics.md`, `text_ambiguity.md`,
    `style_calibration.md`) under `/home/lumen/knowledge/corpus/brain-interp/`
    — currently a dependency on another in-flight ticket (§1).
@@ -199,7 +222,9 @@ Two layers, both already precedented in mailbot:
 ## 5. Non-goals
 
 - No cloud vector DB or embedding API — local pgvector only, per the ticket's
-  "own it locally, no cloud cost."
+  "own it locally, no cloud cost." (This governs where vectors are *stored*;
+  it does not by itself resolve how the Cloudflare Worker *reaches* that
+  local store — see §4 item 3.)
 - No dump of full documents into the prompt — capped, scored slices only.
 - No new persona/canary framework — reuse mailbot's existing
   stripping/red-tape machinery (§2.2, §3.4) rather than building a parallel
