@@ -1,1 +1,16 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1396-minerva-proposal-promoter/minerva_proposal_promoter.py:147-176"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "research/brain/style_calibration.md:1-207"
+    }
+  ],
+  "derived_by": "worker",
+  "notes": [
+    "Redo of wq#1363-a1 (merged PR#297), which wq#1425 flagged CONTRADICT for asserting contact_notes (D1, wq#1167) and loadContactLore() (wq#1359) as live mailbot infrastructure when both are built but unmerged, gated on wq#1338 (status: blocked).",
+    "Re-verified against /home/lumen/mailbot origin/main @ 4b12e6d: `grep -n contact_notes mailbot/src/worker.js migrations/*.sql` and `grep -rn loadContactLore mailbot/src/*.js` both return zero hits; loadHistory() and loadRecentDodgeStyles() confirmed live at worker.js:306 and worker.js:317 respectively.",
+    "`wq show 1338` confirmed status: blocked at time of writing.",
+    "Doc content (dimensions of variation, schema proposal, update procedure, anti-patterns, worked example) carried over from the a1 version, which wq#1425's verify report confirmed sound; only the infrastructure-status framing was rewritten."
+  ],
+  "ticket": "wq#1363"
+}
