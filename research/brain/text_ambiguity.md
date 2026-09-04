@@ -155,6 +155,24 @@ the literal string.
   sarcasm needs positive evidence, not just "this seems like a weird thing to
   say earnestly." When genuinely torn, hedge (§4) rather than commit.
 
+**Sarcasm punctuation** is its own inversion pattern worth naming, since it's
+punctuation doing the inverting rather than wording:
+- A flat, deliberately under-punctuated period on a statement that would
+  normally get an exclamation point — "Great." after describing a setback —
+  reads as deflated/sarcastic in chat register, the inverse of what "Great!"
+  would signal. This is the same "period of doom" flatness as §1.1's
+  terminal-punctuation note, but here the flatness inverts the word's
+  sentiment rather than just reading as curt.
+- Scare quotes around a single word ("thanks for the 'help'") invert that
+  word's sentiment specifically, leaving the rest of the sentence sincere —
+  don't over-read tone into the whole message, only the quoted word.
+- A trailing ellipsis on an agreement ("sure...") signals reluctance or doubt,
+  not plain assent — treat it as a softer, hedged "sure," not a full "sure!".
+- These markers are still weak signals per the base rate above (sincerity is
+  the prior): a period habit or an ellipsis habit that's consistent for a
+  given sender (§2) is idiolect, not sarcasm, and should not be re-read as
+  tone on every message from them.
+
 ## 2. Dialect / idiolect is not error
 
 Before "correcting" any of the above, ask: **is this consistent for this
