@@ -19,9 +19,12 @@ Both functions return a plain bool (delivered / not) instead of raising, so a ca
 that must never be blocked by notification failure (circuit_breaker.disarm's fail-safe
 contract) can call this and move on unconditionally.
 """
+import json
 import os
 import shlex
 import subprocess
+import sys
+from datetime import datetime, timezone
 
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 DESKTOP_SSH_HOST = os.environ.get("FOREMAN_DESKTOP_SSH_HOST", "thor")
@@ -31,9 +34,18 @@ def ntfy_critical(msg, title="foreman-dispatcher"):
     try:
         p = subprocess.run([NTFY_BIN, "-p", "urgent", "-T", title, msg],
                            capture_output=True, text=True, timeout=20)
+        delivered = p.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    return p.returncode == 0
+        delivered = False
+    # wq#1416: ntfy's own cache.db only retains ~12h — print a journald copy (stderr, so
+    # it never pollutes a caller's stdout-as-JSON contract, e.g. circuit_breaker.py's
+    # `test-ntfy`/`test`) of every critical publish, so vlogs-forwarder (already shipping
+    # this host's journal to bes:9428 VictoriaLogs, 30d retention) keeps it queryable
+    # well past that window.
+    print(json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                       "event": "ntfy_publish", "title": title, "priority": "urgent",
+                       "delivered": delivered, "msg": msg}), file=sys.stderr, flush=True)
+    return delivered
 
 
 def desktop_notify(summary, body, app_name="foreman-dispatcher"):

@@ -335,11 +335,19 @@ def slock_release(holder):
 
 
 def ntfy(msg, priority="high", title="foreman-dispatcher"):
+    delivered = False
     try:
-        subprocess.run([NTFY_BIN, "-p", priority, "-T", title, msg],
-                       capture_output=True, text=True, timeout=20)
+        r = subprocess.run([NTFY_BIN, "-p", priority, "-T", title, msg],
+                           capture_output=True, text=True, timeout=20)
+        delivered = r.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         pass  # ntfy is telemetry, never load-bearing
+    # wq#1416: journald copy — ntfy's own cache.db only retains ~12h; vlogs-forwarder
+    # already ships this host's journal to bes:9428 VictoriaLogs (30d retention).
+    print(json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                       "event": "ntfy_publish", "title": title, "priority": priority,
+                       "delivered": delivered, "msg": msg}), flush=True)
+    return delivered
 
 
 # ---- per-ticket gates (§3 stages 3-8) ------------------------------------------------

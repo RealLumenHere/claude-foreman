@@ -59,11 +59,23 @@ def _utcnow():
 
 
 def _ntfy(msg, priority="urgent", title="DISPATCHER STALLED"):
+    delivered = False
     try:
-        subprocess.run([NTFY_BIN, "-t", "lumen-alerts", "-p", priority, "-T", title, msg],
-                       capture_output=True, text=True, timeout=15)
+        r = subprocess.run([NTFY_BIN, "-t", "lumen-alerts", "-p", priority, "-T", title, msg],
+                           capture_output=True, text=True, timeout=15)
+        delivered = r.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         pass
+    # wq#1416: ntfy's own cache.db retains ~12h (confirmed gap during the 09-02 stall —
+    # research/NIGHTLY_DISPATCH_RESILIENCE.md §1.2, page delivery before 06:00 UTC could
+    # not be proven). Print a journald copy of every page attempt so vlogs-forwarder
+    # (lumen-foreman-health.timer's own host already ships its full journal to
+    # bes:9428 VictoriaLogs, 30d retention — ops/wq857-victorialogs-bes/) makes the page
+    # queryable long after cache.db has rolled it off.
+    print(json.dumps({"ts": _utcnow().isoformat(timespec="seconds"), "event": "ntfy_publish",
+                       "title": title, "priority": priority, "delivered": delivered,
+                       "msg": msg}), flush=True)
+    return delivered
 
 
 def load_state():

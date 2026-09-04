@@ -79,19 +79,26 @@ docstring) — re-check them if the fleet's ambient failure rate shifts a lot.
 
 ## wq#825 — dispatcher-not-dispatching alarm
 
-`dispatcher_health.py` also needs **no separate install step**: it's called in-process
-from every `self_heal.py` pass (see that module's docstring), so it goes live the
-moment `lumen-foreman-selfheal.timer` is enabled per step 3 above — no third timer for
-Frank to remember to enable.
-
-Sanity-check it independently of a real self-heal pass:
+`dispatch_health.py` is the single owner of this alarm (wq#1012: the older in-process
+`dispatcher_health.py` piggyback inside `self_heal.py` was retired as a duplicate —
+see `self_heal.py`'s module docstring — and the file itself removed by wq#1416). It
+runs on its own timer:
 
 ```bash
-python3 /home/lumen/foreman/dispatcher/dispatcher_health.py status
-python3 /home/lumen/foreman/dispatcher/dispatcher_health.py check --dry-run
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-health.service /etc/systemd/system/
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-health.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+systemctl is-enabled lumen-foreman-health.timer   # expect: disabled
 ```
 
-Defaults (env-overridable — see dispatcher_health.py's constants):
+Sanity-check it independently of the timer:
+
+```bash
+python3 /home/lumen/foreman/dispatcher/dispatch_health.py status
+python3 /home/lumen/foreman/dispatcher/dispatch_health.py check --dry-run
+```
+
+Defaults (env-overridable — see dispatch_health.py's constants):
 `FOREMAN_HEALTH_CONSECUTIVE=2` (consecutive unhealthy dispatcher passes — an
 `event=error` line, or a `pass_end` with `spawned=0` while `candidates>0` — before
 paging Frank), `FOREMAN_HEALTH_NTFY_DEDUP_H=1` (re-ping cadence while the dispatcher

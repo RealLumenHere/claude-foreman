@@ -159,13 +159,21 @@ def load_state():
 
 
 def send_ntfy(priority, title, msg):
+    delivered = False
     try:
         r = subprocess.run([NTFY_SEND, "-p", priority, "-T", title, msg],
                             capture_output=True, timeout=15, text=True)
-        if r.returncode != 0:
+        delivered = r.returncode == 0
+        if not delivered:
             log(f"WARN: ntfy-send exited {r.returncode}: {r.stderr.strip()}")
     except (subprocess.SubprocessError, OSError) as e:
         log(f"WARN: ntfy-send failed: {e}")
+    # wq#1416: journald copy (via log()'s existing print) — ntfy's own cache.db only
+    # retains ~12h; vlogs-forwarder already ships this host's journal to bes:9428
+    # VictoriaLogs (30d retention).
+    log(json.dumps({"event": "ntfy_publish", "title": title, "priority": priority,
+                     "delivered": delivered, "msg": msg}))
+    return delivered
 
 
 def poll_once(floors, prev_state):
