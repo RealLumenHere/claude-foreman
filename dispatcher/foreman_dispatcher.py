@@ -101,6 +101,22 @@ STAGGER = (spawner.STAGGER_MIN_S, spawner.STAGGER_MAX_S)
 # unmapped lane still short-circuits before paying for a wq_show (unchanged).
 REPO_HINT_LANE = "auto"
 
+# wq#1410 (research/NIGHTLY_DISPATCH_RESILIENCE.md §1.6, §3.3.1): a candidate skipped
+# for one of these reasons was never going to spawn regardless of dispatcher health —
+# the ticket/lane is structurally undispatchable, not stalled. pass_end's `dispatchable`
+# count excludes them so the watchdog can tell a real stall (dispatchable>0, spawned=0)
+# from a backlog of lane_unmapped noise (33-38 of every 43-59 candidates historically).
+STRUCTURAL_SKIP_REASONS = frozenset({
+    "lane_unmapped", "nodispatch_marker", "frank_gated", "deps_unmet",
+    "runaway_stuck", "not_open", "vanished", "fire_unapproved", "fire_no_probe",
+})
+
+
+def count_structural_skips(events):
+    return sum(1 for ev in events
+               if ev.get("event") == "skip" and ev.get("reason") in STRUCTURAL_SKIP_REASONS)
+
+
 FRANK_TITLE_RE = re.compile(r"\[frank gate\]|\[manual\]|owner\s*=\s*frank", re.I)
 # wq#428: an epic parent is a rollup over children, not work — it carries no
 # acceptance criteria a build lane can satisfy, so every lane that claimed one came
@@ -269,7 +285,8 @@ def load_state(now=None):
     now = now or _utcnow()
     today = now.strftime("%Y-%m-%d")
     fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {},
-             "runaway_ntfy": {}, "preflight_ntfy": {}}
+             "runaway_ntfy": {}, "preflight_ntfy": {}, "gate_error_ntfy": {},
+             "harness_defect_ntfy": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -281,17 +298,22 @@ def load_state(now=None):
     pacing_ntfy = _prune_dedup(st.get("pacing_ntfy"), now, PACING_NTFY_PRUNE_H)
     runaway_ntfy = _prune_dedup(st.get("runaway_ntfy"), now, FIRE_NTFY_DEDUP_H)
     preflight_ntfy = _prune_dedup(st.get("preflight_ntfy"), now, FIRE_NTFY_DEDUP_H)
+    gate_error_ntfy = _prune_dedup(st.get("gate_error_ntfy"), now, FIRE_NTFY_DEDUP_H)
+    harness_defect_ntfy = _prune_dedup(st.get("harness_defect_ntfy"), now, FIRE_NTFY_DEDUP_H)
     if st.get("day") != today:  # UTC day rollover resets lane counts, not the ledgers (§6.3)
         return {"day": today, "lane_counts": {}, "fire_ntfy": fire,
                 "pacing_ntfy": pacing_ntfy, "runaway_ntfy": runaway_ntfy,
-                "preflight_ntfy": preflight_ntfy}
+                "preflight_ntfy": preflight_ntfy, "gate_error_ntfy": gate_error_ntfy,
+                "harness_defect_ntfy": harness_defect_ntfy}
     counts = st.get("lane_counts")
     return {"day": today,
             "lane_counts": counts if isinstance(counts, dict) else {},
             "fire_ntfy": fire,
             "pacing_ntfy": pacing_ntfy,
             "runaway_ntfy": runaway_ntfy,
-            "preflight_ntfy": preflight_ntfy}
+            "preflight_ntfy": preflight_ntfy,
+            "gate_error_ntfy": gate_error_ntfy,
+            "harness_defect_ntfy": harness_defect_ntfy}
 
 
 def save_state(st):
@@ -594,6 +616,33 @@ def handle_runaway_stuck(state, tid, lane, attempts, dry_run, log):
     save_state(state)
 
 
+def handle_harness_defect_hold(state, tid, lane, summary, dry_run, log):
+    """wq#1415: hold a ticket whose last recorded failure is HARNESS_DEFECT (see
+    runaway.harness_defect_ticket_ids()) so it stops being re-claimed on every
+    event-driven refill pass (fworker.py trigger_refill) while the underlying harness
+    defect is still unfixed. Never auto-blocks the ticket — it self-clears the moment a
+    later attempt gets past preflight — so this only needs the same dedup-ntfy pattern
+    as handle_runaway_stuck, not a new escalation path."""
+    log.skip(tid, lane, "harness_defect", "harness_defect_hold", detail=summary)
+    now = _utcnow()
+    last = state["harness_defect_ntfy"].get(str(tid))
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=FIRE_NTFY_DEDUP_H):
+                return  # already pinged Frank within 24h — never flood
+        except ValueError:
+            pass
+    if dry_run:
+        log.emit("would_ntfy", ticket=tid, lane=lane, reason="harness_defect_hold")
+        return
+    ntfy(f"wq#{tid} ({lane}) held: last failure was HARNESS_DEFECT ({summary}). "
+         f"Dispatcher will keep skipping it every pass until the defect is fixed and a "
+         f"later attempt gets past preflight.", priority="high",
+         title="foreman dispatcher: harness-defect hold")
+    state["harness_defect_ntfy"][str(tid)] = now.isoformat(timespec="seconds")
+    save_state(state)
+
+
 def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
     """wq#1372: dispatch_gate_check() failing used to just mean `continue` forever —
     a repo's worker-settings.json or preflight_cmds changing made its stamp stale and
@@ -636,6 +685,52 @@ def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
     save_state(state)
     log.skip(tid, lane, "preflight", "reprove_failed", detail=problems)
     return False
+
+
+def repo_gate_check(cache, repo):
+    """wq#1408 §1.5/§3.1: dispatch_gate_check() itself can raise (malformed
+    repos.d/<repo>.json, base.json, or any profile fragment — permission_profiles.py's
+    own _load_json is a bare `json.load`; an unwritable/unreadable file surfaces as
+    OSError). Unwrapped, that one JSON typo killed every ticket of that repo, every
+    pass, one at a time. Cache the (ok, reason, errored) result per repo per pass —
+    same digest, same answer for every candidate of that repo this pass — so a broken
+    profile costs one exception and one skip reason (`profile_unreadable`) instead of
+    one exception per ticket. Not a real dispatch_gate_check result: `errored=True`
+    means the gate itself is broken, not that the stamp is merely stale."""
+    if repo not in cache:
+        try:
+            ok, reason = harness_preflight.dispatch_gate_check(repo)
+            cache[repo] = (ok, reason, False)
+        except Exception as e:  # noqa: BLE001 — see docstring
+            cache[repo] = (False, f"profile_unreadable: {e!r}", True)
+    return cache[repo]
+
+
+def handle_profile_unreadable(state, tid, lane, repo, reason, dry_run, log):
+    """wq#1408: the gate itself is broken (see repo_gate_check) — this is not a stale
+    stamp handle_stale_preflight can reprove its way out of, it's a JSON syntax error
+    or permission problem a human has to fix. Skip loudly, once per repo per pass
+    (repo_gate_check's cache already guarantees that), and alert once per repo per
+    1h (same dedup window as the reprove-failure alert) so a persistently broken
+    profile can't page every pass forever."""
+    name = harness_preflight.permission_profiles.repo_name(repo)
+    log.skip(tid, lane, "preflight", "profile_unreadable", detail=reason)
+    now = _utcnow()
+    last = state["gate_error_ntfy"].get(name)
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=PREFLIGHT_REPROVE_COOLDOWN_H):
+                return
+        except ValueError:
+            pass
+    if dry_run:
+        log.emit("would_ntfy", ticket=tid, lane=lane, reason="profile_unreadable", repo=name)
+        return
+    ntfy(f"dispatcher: {name}'s preflight profile is unreadable: {reason}. wq#{tid} "
+         f"({lane}) and every other {name} ticket will keep idling until this is fixed.",
+         priority="high", title="foreman dispatcher: profile unreadable")
+    state["gate_error_ntfy"][name] = now.isoformat(timespec="seconds")
+    save_state(state)
 
 
 # ---- Langfuse trace (§8: best-effort by contract) ------------------------------------
@@ -700,25 +795,55 @@ def _do_pass(cfg, log, state, dry_run):
     tight_cfg = cfg["tight_mode"]
     tight = False
     spawned = 0
-    dep_cache, pressure_cache = {}, {}
-    stuck = runaway.stuck_ticket_ids()  # wq#718: one scan per pass, not per-candidate
+    quarantined = []
+    dep_cache, pressure_cache, gate_cache = {}, {}, {}
+
+    # wq#1408 §3.1: these three preamble calls run once per pass, before any ticket is
+    # decided — an exception here used to abort the pass before a single candidate got
+    # a decision (no pass_end, invisible to the health classifier). Degrade to each
+    # call's documented safe default instead: no stuck set, psi=ok, pacing's own
+    # conservative DEFAULT_CONFIG.
+    try:
+        stuck = runaway.stuck_ticket_ids()  # wq#718: one scan per pass, not per-candidate
+    except Exception as e:  # noqa: BLE001 — see docstring above
+        log.emit("error", stage="runaway", reason="stuck_ticket_ids_failed",
+                 detail=repr(e)[:300])
+        stuck = {}
+    try:
+        # wq#1415: ditto — a SpawnRefused loop never writes attempt-N.json, so it never
+        # shows up in `stuck` above; degrade the same way (no holds this pass) on error.
+        harness_defects = runaway.harness_defect_ticket_ids()
+    except Exception as e:  # noqa: BLE001 — see docstring above
+        log.emit("error", stage="runaway", reason="harness_defect_ticket_ids_failed",
+                 detail=repr(e)[:300])
+        harness_defects = {}
 
     # wq#844: PSI memory pressure — real backpressure from the box, not budget guessing.
     # Checked once per pass (PSI avg60 is already smoothed).
-    psi_verdict, psi_reason = psi_pressure.check(tight_cfg)
+    try:
+        psi_verdict, psi_reason = psi_pressure.check(tight_cfg)
+    except Exception as e:  # noqa: BLE001 — see docstring above
+        log.emit("error", stage="psi_pressure", reason="psi_check_failed",
+                 detail=repr(e)[:300])
+        psi_verdict, psi_reason = "ok", "psi_check_error"
     if psi_verdict == "deny":
         log.emit("halt", stage="psi_pressure", reason=psi_reason)
         ntfy(f"dispatcher: PSI hard stop — {psi_reason}", priority="high",
              title="dispatcher PSI halt")
         return {"candidates": len(candidates), "spawned": 0, "tight": False,
-                "psi_halt": psi_reason}
+                "quarantined": 0, "psi_halt": psi_reason}
     if psi_verdict == "tight" and not tight:
         tight = True
         log.emit("tight_mode", reason=psi_reason,
                  detail=f"PSI pressure: max {tight_cfg['max_spawns_per_pass']} "
                         f"spawn(s), pri<={tight_cfg['min_pri']} only")
 
-    pacing_cfg, pacing_warn = pacing.load_config()  # wq#716: forward-looking layer on §6
+    try:
+        pacing_cfg, pacing_warn = pacing.load_config()  # wq#716: forward-looking layer §6
+    except Exception as e:  # noqa: BLE001 — see docstring above
+        log.emit("error", stage="pacing", reason="pacing_load_failed",
+                 detail=repr(e)[:300])
+        pacing_cfg, pacing_warn = dict(pacing.DEFAULT_CONFIG), None
     if pacing_warn:
         log.emit("info", stage="pacing", reason="pacing_config_invalid", detail=pacing_warn)
     limits = governor_limits()
@@ -726,7 +851,11 @@ def _do_pass(cfg, log, state, dry_run):
     for i, cand in enumerate(candidates):
         tid, lane = cand["id"], cand["lane"]
 
-        # stage 0 recheck — a mid-run DISARM/STOP halts before the next spawn (MUST 8)
+        # stage 0 recheck — a mid-run DISARM/STOP halts before the next spawn (MUST 8).
+        # Halts stay pass-level `break`s outside the per-ticket boundary below: a
+        # `break` inside a `try` still exits the loop normally, without being caught by
+        # that try's `except Exception`, but keeping halts out of the boundary entirely
+        # makes that not matter.
         ks = kill_switch()
         if ks:
             log.emit("halt", stage="kill_switch", reason=ks)
@@ -738,181 +867,219 @@ def _do_pass(cfg, log, state, dry_run):
                             f"{', tight' if tight else ''})")
             break
 
-        # stage 3 — lane policy (MUST 5 lane caps; wq#713 repo mapping, MUST 7)
-        policy = cfg["lanes"][lane]
-        if state["lane_counts"].get(lane, 0) >= policy["max_per_day"]:
-            log.skip(tid, lane, "lane_policy", "lane_cap",
-                     detail=f"max_per_day={policy['max_per_day']} reached")
-            continue
-        repo = router.repo_for_lane(lane)
-        if not repo and lane != REPO_HINT_LANE:
-            log.skip(tid, lane, "lane_policy", "lane_unmapped",
-                     detail="no LANE_REPO entry — never guess a repo")
-            continue
-
+        # wq#1408 §3.1 (the wq#1368 class, generalized): everything from here to the
+        # end of the loop body is one ticket's decision. A bad archetype, an unreadable
+        # dep tag, a malformed ticket field — none of it may cost any OTHER candidate
+        # its decision this pass. Only KeyboardInterrupt/SystemExit escape; everything
+        # else is quarantined: skip this ticket, log why, keep scanning.
         try:
-            t = router.wq_show(tid)
-        except SystemExit:
-            log.skip(tid, lane, "scan", "vanished")
-            continue
-        if t.get("status") != "open":
-            log.skip(tid, lane, "scan", "not_open", detail=t.get("status"))
-            continue
-
-        # wq#433: the lane resolved a repo above, but if the TITLE names a different one
-        # the lane is wrong and dispatching would hand the worker a tree without any of
-        # the paths its ticket cites (ISSUE-LOG #56 class). Skip loudly instead.
-        mismatch = router.repo_mismatch(t)
-        if mismatch:
-            log.skip(tid, lane, "lane_policy", "repo_mismatch", detail=mismatch)
-            continue
-
-        # wq#1094/wq#1123: 'auto' has no single LANE_REPO entry (repo-sweeps target
-        # different repos, wq#830) — but a repo-sweep ticket carries its exact
-        # target repo in its own detail (repo_sweep.py wrote it there). router's
-        # shared resolver reads that back instead of guessing; anything else in
-        # 'auto' still refuses. wq#1331: the same resolver now also honours a
-        # ticket's own needs:repo tag (and wq#1220's verify-repo hint) AHEAD of the
-        # lane default, so it runs for every ticket, not just unmapped lanes — for a
-        # plain lane ticket it returns exactly the LANE_REPO path already in `repo`.
-        repo = router.repo_for_ticket(t) or repo
-        if not repo:
-            log.skip(tid, lane, "lane_policy", "lane_unmapped",
-                     detail="no LANE_REPO entry — never guess a repo")
-            continue
-
-        # stage 3.5 — runaway (wq#718): a ticket stuck below RUNAWAY_MAX_ATTEMPTS
-        # cycles without reaching done is skipped every pass, not re-attempted forever
-        if tid in stuck:
-            handle_runaway_stuck(state, tid, lane, stuck[tid]["attempts"], dry_run, log)
-            continue
-
-        # stage 3.6 — epic/tracker parents (wq#428): a rollup is never dispatchable work
-        why = nodispatch_reason(t)
-        if why:
-            log.skip(tid, lane, "nodispatch", "nodispatch_marker", detail=why)
-            continue
-
-        # stage 4 — Frank-gate (MUST 3): never claimed, no override flag
-        why = frank_gate_reason(t)
-        if why:
-            log.skip(tid, lane, "frank_gate", "frank_gated", detail=why)
-            continue
-
-        # stage 5 — fire approval: requires_approval now honored from config.json
-        # (MUST 4 hardcode + `or lane == FIRE_LANE` removed 2026-08-23 per Frank directive)
-        fire_exempt = bool(policy.get("requires_approval"))
-        if fire_exempt and not os.path.exists(fire_approval_path(tid)):
-            handle_unapproved_fire(state, tid, lane, dry_run, log)
-            continue
-
-        # stage 5b — no probe, no dispatch (wq#1261 §4 item 1): every fleet-fires
-        # ticket must carry a machine-checkable re-verify condition before it ever
-        # reaches a worker. The legacy aq-row reference (wq#1234, `aq row: #<id>`)
-        # still counts — only a ticket with NEITHER form is refused.
-        if lane == FIRE_LANE:
-            detail = t.get("detail", "")
-            has_cmd_probe = fire_gate.parse_fire_probe(detail) is not None
-            has_aq_probe = fire_gate.parse_probe_ref(detail)[1] is not None
-            if not has_cmd_probe and not has_aq_probe:
-                handle_no_probe_fire(state, tid, lane, dry_run, log)
+            # stage 3 — lane policy (MUST 5 lane caps; wq#713 repo mapping, MUST 7)
+            policy = cfg["lanes"][lane]
+            if state["lane_counts"].get(lane, 0) >= policy["max_per_day"]:
+                log.skip(tid, lane, "lane_policy", "lane_cap",
+                         detail=f"max_per_day={policy['max_per_day']} reached")
+                continue
+            repo = router.repo_for_lane(lane)
+            if not repo and lane != REPO_HINT_LANE:
+                log.skip(tid, lane, "lane_policy", "lane_unmapped",
+                         detail="no LANE_REPO entry — never guess a repo")
                 continue
 
-        # stage 6 — deps (MUST 2)
-        unmet = unmet_deps(t, dep_cache)
-        if unmet:
-            log.skip(tid, lane, "deps", "deps_unmet", detail=",".join(unmet))
-            continue
+            try:
+                t = router.wq_show(tid)
+            except SystemExit:
+                log.skip(tid, lane, "scan", "vanished")
+                continue
+            except subprocess.TimeoutExpired:
+                # wq#1408 §1.5: an sqlite-lock hang here used to wedge the whole pass
+                # (TimeoutStartSec=600 SIGTERM, no pass_end, no error line). router.wq()
+                # now bounds it at 30s; treat the same as "couldn't find the ticket".
+                log.skip(tid, lane, "scan", "vanished", detail="wq show timed out")
+                continue
+            if t.get("status") != "open":
+                log.skip(tid, lane, "scan", "not_open", detail=t.get("status"))
+                continue
 
-        # stages 7+9 share one live-unit read (MUST 6): units are the ground truth
-        try:
-            units = concurrency.list_running_units()
-        except concurrency.LumenRunError as e:
-            log.emit("halt", stage="concurrency", reason="lumen_run_unreachable",
-                     detail=str(e))  # fail toward under-subscription
-            break
-        if f"fworker-wq{tid}" in units:
-            log.skip(tid, lane, "already_running", "already_running")
-            continue
+            # wq#433: the lane resolved a repo above, but if the TITLE names a different
+            # one the lane is wrong and dispatching would hand the worker a tree without
+            # any of the paths its ticket cites (ISSUE-LOG #56 class). Skip loudly instead.
+            mismatch = router.repo_mismatch(t)
+            if mismatch:
+                log.skip(tid, lane, "lane_policy", "repo_mismatch", detail=mismatch)
+                continue
 
-        # stage 8 — budget (MUST 5): governor verdict + floors via router
-        model, skip_reason = candidate_model(t, tid)
-        if not model:
-            log.skip(tid, lane, "budget", skip_reason,
-                     detail="router has no rung for this ticket")
-            continue
-        pressure = pressure_cache.get(model)
-        if pressure is None:
-            pressure = governor_pressure(model)
-            pressure_cache[model] = pressure
-        if pressure == "deny":
-            log.skip(tid, lane, "budget", "governor_deny", model=model)
-            continue
-        if pressure == "tight" and not tight:
-            tight = True
-            log.emit("tight_mode", model=model,
-                     reason=f"pressure tight: max {tight_cfg['max_spawns_per_pass']} "
-                            f"spawn(s), pri<={tight_cfg['min_pri']} only")
-        if tight:
-            if spawned >= tight_cfg["max_spawns_per_pass"]:
-                log.emit("halt", stage="spawn_cap",
-                         reason=f"tight-mode spawn cap reached ({spawned})")
+            # wq#1094/wq#1123: 'auto' has no single LANE_REPO entry (repo-sweeps target
+            # different repos, wq#830) — but a repo-sweep ticket carries its exact
+            # target repo in its own detail (repo_sweep.py wrote it there). router's
+            # shared resolver reads that back instead of guessing; anything else in
+            # 'auto' still refuses. wq#1331: the same resolver now also honours a
+            # ticket's own needs:repo tag (and wq#1220's verify-repo hint) AHEAD of the
+            # lane default, so it runs for every ticket, not just unmapped lanes — for a
+            # plain lane ticket it returns exactly the LANE_REPO path already in `repo`.
+            repo = router.repo_for_ticket(t) or repo
+            if not repo:
+                log.skip(tid, lane, "lane_policy", "lane_unmapped",
+                         detail="no LANE_REPO entry — never guess a repo")
+                continue
+
+            # stage 3.5 — runaway (wq#718): a ticket stuck below RUNAWAY_MAX_ATTEMPTS
+            # cycles without reaching done is skipped every pass, not re-attempted forever
+            if tid in stuck:
+                handle_runaway_stuck(state, tid, lane, stuck[tid]["attempts"], dry_run, log)
+                continue
+
+            # stage 3.5b — harness-defect hold (wq#1415): a SpawnRefused preflight
+            # refusal never writes an attempt-N.json (fworker.py handle_spawn_refused —
+            # "attempt not charged"), so it never trips the attempt-count runaway check
+            # just above; without this it got re-claimed on every event-driven refill
+            # kick instead of the timer's 20-min cadence. See
+            # runaway.harness_defect_ticket_ids().
+            if tid in harness_defects:
+                handle_harness_defect_hold(state, tid, lane,
+                                           harness_defects[tid]["summary"], dry_run, log)
+                continue
+
+            # stage 3.6 — epic/tracker parents (wq#428): a rollup is never dispatchable work
+            why = nodispatch_reason(t)
+            if why:
+                log.skip(tid, lane, "nodispatch", "nodispatch_marker", detail=why)
+                continue
+
+            # stage 4 — Frank-gate (MUST 3): never claimed, no override flag
+            why = frank_gate_reason(t)
+            if why:
+                log.skip(tid, lane, "frank_gate", "frank_gated", detail=why)
+                continue
+
+            # stage 5 — fire approval: requires_approval now honored from config.json
+            # (MUST 4 hardcode + `or lane == FIRE_LANE` removed 2026-08-23 per Frank directive)
+            fire_exempt = bool(policy.get("requires_approval"))
+            if fire_exempt and not os.path.exists(fire_approval_path(tid)):
+                handle_unapproved_fire(state, tid, lane, dry_run, log)
+                continue
+
+            # stage 5b — no probe, no dispatch (wq#1261 §4 item 1): every fleet-fires
+            # ticket must carry a machine-checkable re-verify condition before it ever
+            # reaches a worker. The legacy aq-row reference (wq#1234, `aq row: #<id>`)
+            # still counts — only a ticket with NEITHER form is refused.
+            if lane == FIRE_LANE:
+                detail = t.get("detail", "")
+                has_cmd_probe = fire_gate.parse_fire_probe(detail) is not None
+                has_aq_probe = fire_gate.parse_probe_ref(detail)[1] is not None
+                if not has_cmd_probe and not has_aq_probe:
+                    handle_no_probe_fire(state, tid, lane, dry_run, log)
+                    continue
+
+            # stage 6 — deps (MUST 2)
+            unmet = unmet_deps(t, dep_cache)
+            if unmet:
+                log.skip(tid, lane, "deps", "deps_unmet", detail=",".join(unmet))
+                continue
+
+            # stages 7+9 share one live-unit read (MUST 6): units are the ground truth
+            try:
+                units = concurrency.list_running_units()
+            except concurrency.LumenRunError as e:
+                log.emit("halt", stage="concurrency", reason="lumen_run_unreachable",
+                         detail=str(e))  # fail toward under-subscription
                 break
-            if cand["pri"] > tight_cfg["min_pri"]:
-                log.skip(tid, lane, "budget", "tight_pri", model=model,
-                         detail=f"pri {cand['pri']} > tight min_pri {tight_cfg['min_pri']}")
+            if f"fworker-wq{tid}" in units:
+                log.skip(tid, lane, "already_running", "already_running")
                 continue
 
-        # stage 8b — weekly-budget pacing (wq#716): forward-looking, on top of the
-        # governor's own reactive floor above. Never blocks a Frank-approved fire ticket.
-        verdict = PACING_HOOK(cand["pri"], model, limits, pacing_cfg, fire_exempt)
-        if verdict.action != "ok":
-            log.skip(tid, lane, "budget", f"pacing_{verdict.action}", model=model,
-                     **verdict.as_fields())
-            handle_pacing_throttle(state, verdict, pacing_cfg, dry_run, log)
-            continue
+            # stage 8 — budget (MUST 5): governor verdict + floors via router
+            model, skip_reason = candidate_model(t, tid)
+            if not model:
+                log.skip(tid, lane, "budget", skip_reason,
+                         detail="router has no rung for this ticket")
+                continue
+            pressure = pressure_cache.get(model)
+            if pressure is None:
+                pressure = governor_pressure(model)
+                pressure_cache[model] = pressure
+            if pressure == "deny":
+                log.skip(tid, lane, "budget", "governor_deny", model=model)
+                continue
+            if pressure == "tight" and not tight:
+                tight = True
+                log.emit("tight_mode", model=model,
+                         reason=f"pressure tight: max {tight_cfg['max_spawns_per_pass']} "
+                                f"spawn(s), pri<={tight_cfg['min_pri']} only")
+            if tight:
+                if spawned >= tight_cfg["max_spawns_per_pass"]:
+                    log.emit("halt", stage="spawn_cap",
+                             reason=f"tight-mode spawn cap reached ({spawned})")
+                    break
+                if cand["pri"] > tight_cfg["min_pri"]:
+                    log.skip(tid, lane, "budget", "tight_pri", model=model,
+                             detail=f"pri {cand['pri']} > tight min_pri {tight_cfg['min_pri']}")
+                    continue
 
-        # stage 9 — concurrency ceiling, local rung excluded (T4)
-        cloud = [u for u in units if not concurrency.is_local_unit(u)]
-        if len(cloud) >= cfg["cloud_ceiling"]:
-            log.emit("halt", stage="concurrency", reason="no_slots",
-                     detail=f"{len(cloud)} cloud unit(s) at ceiling "
-                            f"{cfg['cloud_ceiling']}; next tick retries")
-            break
-
-        # stage 9b — harness-preflight stamp (§2c): a wave must not discover a
-        # permission gap three hours in when a two-minute preflight would have caught
-        # it before the first spawn. Unmigrated repos (no repos.d/<repo>.json) pass
-        # through unchanged — same additive-migration boundary permission_profiles.py
-        # draws for the render-at-dispatch pack itself. wq#1372: a stale/missing stamp
-        # (settings or preflight_cmds changed since the last proof) auto-reproves right
-        # here instead of stranding the lane until a human re-runs harness-preflight —
-        # see handle_stale_preflight().
-        preflight_ok, preflight_reason = harness_preflight.dispatch_gate_check(repo)
-        if not preflight_ok:
-            if not handle_stale_preflight(state, tid, lane, repo, preflight_reason,
-                                           dry_run, log):
+            # stage 8b — weekly-budget pacing (wq#716): forward-looking, on top of the
+            # governor's own reactive floor above. Never blocks a Frank-approved fire ticket.
+            verdict = PACING_HOOK(cand["pri"], model, limits, pacing_cfg, fire_exempt)
+            if verdict.action != "ok":
+                log.skip(tid, lane, "budget", f"pacing_{verdict.action}", model=model,
+                         **verdict.as_fields())
+                handle_pacing_throttle(state, verdict, pacing_cfg, dry_run, log)
                 continue
 
-        # stage 10 — spawn via the existing stack (MUST 7: router owns repo + tuple)
-        if dry_run:
-            spawned += 1  # count so dry-run reports caps honestly
-            log.emit("would_spawn", ticket=tid, lane=lane, model=model, repo=repo)
-            continue
-        unit = spawner.dispatch_one(tid, repo)
-        if unit is None:
-            log.emit("error", stage="spawn", ticket=tid, lane=lane,
-                     reason="spawn_failed", model=model)
-            ntfy(f"dispatcher: spawn failed for wq#{tid} ({lane}) — see dispatcher.log")
-            continue
-        spawned += 1
-        state["lane_counts"][lane] = state["lane_counts"].get(lane, 0) + 1
-        save_state(state)  # §9: written after each spawn, atomically
-        log.emit("spawn", ticket=tid, lane=lane, model=model, repo=repo, unit=unit)
-        if i < len(candidates) - 1:
-            time.sleep(random.uniform(*STAGGER))  # same stagger doctrine as spawner
+            # stage 9 — concurrency ceiling, local rung excluded (T4)
+            cloud = [u for u in units if not concurrency.is_local_unit(u)]
+            if len(cloud) >= cfg["cloud_ceiling"]:
+                log.emit("halt", stage="concurrency", reason="no_slots",
+                         detail=f"{len(cloud)} cloud unit(s) at ceiling "
+                                f"{cfg['cloud_ceiling']}; next tick retries")
+                break
 
-    return {"candidates": len(candidates), "spawned": spawned, "tight": tight}
+            # stage 9b — harness-preflight stamp (§2c): a wave must not discover a
+            # permission gap three hours in when a two-minute preflight would have
+            # caught it before the first spawn. Unmigrated repos (no
+            # repos.d/<repo>.json) pass through unchanged — same additive-migration
+            # boundary permission_profiles.py draws for the render-at-dispatch pack
+            # itself. wq#1372: a stale/missing stamp (settings or preflight_cmds
+            # changed since the last proof) auto-reproves right here instead of
+            # stranding the lane until a human re-runs harness-preflight — see
+            # handle_stale_preflight(). wq#1408: the gate check itself can raise (a
+            # JSON typo in any profile fragment) — repo_gate_check caches that per
+            # repo per pass so it costs one exception, not one per ticket of that repo.
+            preflight_ok, preflight_reason, gate_errored = repo_gate_check(gate_cache, repo)
+            if not preflight_ok:
+                if gate_errored:
+                    handle_profile_unreadable(state, tid, lane, repo, preflight_reason,
+                                               dry_run, log)
+                    continue
+                if not handle_stale_preflight(state, tid, lane, repo, preflight_reason,
+                                               dry_run, log):
+                    continue
+
+            # stage 10 — spawn via the existing stack (MUST 7: router owns repo + tuple)
+            if dry_run:
+                spawned += 1  # count so dry-run reports caps honestly
+                log.emit("would_spawn", ticket=tid, lane=lane, model=model, repo=repo)
+                continue
+            unit = spawner.dispatch_one(tid, repo)
+            if unit is None:
+                log.emit("error", stage="spawn", ticket=tid, lane=lane,
+                         reason="spawn_failed", model=model)
+                ntfy(f"dispatcher: spawn failed for wq#{tid} ({lane}) — see dispatcher.log")
+                continue
+            spawned += 1
+            state["lane_counts"][lane] = state["lane_counts"].get(lane, 0) + 1
+            save_state(state)  # §9: written after each spawn, atomically
+            log.emit("spawn", ticket=tid, lane=lane, model=model, repo=repo, unit=unit)
+            if i < len(candidates) - 1:
+                time.sleep(random.uniform(*STAGGER))  # same stagger doctrine as spawner
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as e:  # noqa: BLE001 — wq#1408 §3.1: quarantine boundary
+            log.skip(tid, lane, "unhandled", "quarantined", detail=repr(e)[:300])
+            quarantined.append(tid)
+            continue
+
+    dispatchable = len(candidates) - count_structural_skips(log.events)
+    return {"candidates": len(candidates), "spawned": spawned, "tight": tight,
+            "quarantined": len(quarantined), "dispatchable": dispatchable}
 
 
 def run_pass(dry_run=False):
@@ -923,17 +1090,6 @@ def run_pass(dry_run=False):
     ks = kill_switch()  # stage 0 (MUST 8)
     if ks:
         log.emit("halt", stage="kill_switch", reason=ks)
-        return 0
-
-    # stage 0.5 (wq#718): dead-man's switch, checked before config load so a broken
-    # config.json can never suppress a trip. Emits nothing when not tripped — a clean
-    # pass looks exactly like it did before this existed.
-    tripped, breaker_stats = circuit_breaker.check_and_trip(dry_run=dry_run)
-    if tripped:
-        reason = (f"failure rate {breaker_stats['rate']:.0%} over last "
-                  f"{breaker_stats['window_minutes']}m "
-                  f"({breaker_stats['failures']}/{breaker_stats['total']} attempts)")
-        log.emit("halt", stage="circuit_breaker", reason=reason, **breaker_stats)
         return 0
 
     try:
@@ -958,6 +1114,18 @@ def run_pass(dry_run=False):
 
     rc = 0
     try:
+        # stage 0.5 (wq#718): dead-man's switch. wq#1408: moved inside this try — it
+        # used to run before config load with no boundary of its own, so an exception
+        # out of check_and_trip (a bad runs_root read, a malformed attempt file) was a
+        # bare traceback: no error line in dispatcher.log, invisible even to the health
+        # classifier. Now it's caught by the same pass boundary as everything else.
+        tripped, breaker_stats = circuit_breaker.check_and_trip(dry_run=dry_run)
+        if tripped:
+            reason = (f"failure rate {breaker_stats['rate']:.0%} over last "
+                      f"{breaker_stats['window_minutes']}m "
+                      f"({breaker_stats['failures']}/{breaker_stats['total']} attempts)")
+            log.emit("halt", stage="circuit_breaker", reason=reason, **breaker_stats)
+            return 0
         log.emit("pass_start", dry_run=dry_run, config_path=CONFIG_PATH,
                  config_sha=config_sha)
         summary = _do_pass(cfg, log, load_state(), dry_run)

@@ -1,1 +1,18 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1396-minerva-proposal-promoter/minerva_proposal_promoter.py:147-176"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "dispatcher/dispatch_health.py:205-209"
+    }
+  ],
+  "derived_by": "worker",
+  "notes": [
+    "Full dispatcher/tests/ suite: 211 passed (189 pre-existing + 22 new), run via `python3 -m pytest tests/` in dispatcher/.",
+    "dispatch_recover.py selftest verified standalone: `python3 dispatch_recover.py selftest` -> SELFTEST PASS.",
+    "Companion change in a separate repo (not part of this branch's diff, cited for completeness): /home/lumen/bin/aq_escalate.py gained the DISPATCHER STALLED escalation rule (title LIKE match, count>=3 -> fleet-fires ticket + urgent page), tested via `python3 tests/test_aq_escalate.py` in /home/lumen/bin -> ALL CHECKS PASSED (11 scenarios, 4 new).",
+    "Out of scope / needs a follow-up ticket: bin/ntfy-send has no header passthrough (only -t/-p/-T), so the design's 'Tags: rotating_light' ntfy header could not be added from this repo; only the '[DISPATCH]' title prefix was achievable here (dispatch_health.py:STALL_TITLE).",
+    "K threshold changed from 3 to 2 (dispatch_health.DEFAULT_THRESHOLD) per §3.3.1; TIMEOUT_START_SEC=600 hung-pass detection added to the classifier.",
+    "Rebased 2026-09-03 onto origin/main (which had already landed wq#1408's per-ticket exception boundary touching the same _do_pass return statement); dispatchable computation merged alongside the new quarantined field, both counted independently and correctly (a quarantined ticket is not a structural skip, so it still counts toward dispatchable, which is correct: quarantine is a real anomaly, not undispatchable-by-design)."
+  ],
+  "ticket": "wq#1410"
+}

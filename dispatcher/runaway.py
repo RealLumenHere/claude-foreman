@@ -63,6 +63,40 @@ def stuck_ticket_ids(threshold=None):
     return stuck
 
 
+def harness_defect_ticket_ids():
+    """{ticket_id: {"summary", "status", "lane"}} for every open ticket whose most
+    recent failure.json is still triaged HARNESS_DEFECT (wq#1415).
+
+    fworker.py's handle_spawn_refused (wq#1331 SpawnRefused preflight, e.g.
+    CITED_PATH_UNREACHABLE) writes failure.json but deliberately skips attempt-N.json
+    ("attempt not charged" by design, so a transient refusal never eats into the real
+    MAX_ATTEMPTS/circuit-breaker budget) and releases the ticket straight back to
+    `open`. stuck_ticket_ids() above only ever sees attempt-N.json, so that loop never
+    trips the runaway breaker either — it just gets re-claimed on the very next pass.
+    Combined with fworker.py's trigger_refill() kicking a pass on every worker exit
+    (up to every 2-4 min fleet-wide, far tighter than the 20-min timer this was sized
+    for), the same unresolved defect got re-dispatched repeatedly. Hold here on the
+    ticket's own last recorded triage instead of an attempt count; it clears itself as
+    soon as a later attempt gets past preflight (a fresh non-HARNESS_DEFECT failure.json,
+    or `done`/`blocked` takes the ticket out of `open`)."""
+    held = {}
+    for tid in candidate_ticket_ids():
+        fpath = os.path.join(self_heal.RUNS_ROOT, f"wq{tid}", "failure.json")
+        try:
+            with open(fpath) as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if rec.get("triage") != "HARNESS_DEFECT":
+            continue
+        t = self_heal.wq_show(tid)
+        if t.get("status") != "open":
+            continue
+        held[tid] = {"summary": rec.get("summary"), "status": t.get("status"),
+                     "lane": t.get("lane")}
+    return held
+
+
 def cmd_list_stuck(_args):
     print(json.dumps(stuck_ticket_ids(), indent=2))
     return 0

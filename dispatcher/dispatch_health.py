@@ -12,9 +12,17 @@ dispatcher.
 A pass is UNHEALTHY if:
   - It emitted an `error` event (any stage — config error, or any other unhandled
     crash inside the _do_pass loop, wq#1374) and has NO `pass_end` (hard abort).
-  - Its `pass_end` has spawned=0 AND candidates>0 AND dry_run=false AND no
+  - Its `pass_end` has spawned=0 AND dispatchable>0 AND dry_run=false AND no
     `halt stage=concurrency reason=no_slots` in the same pass (= the dispatcher COULD
-    have spawned but didn't, and it wasn't because all slots were full).
+    have spawned but didn't, and it wasn't because all slots were full). `dispatchable`
+    (wq#1410, research/NIGHTLY_DISPATCH_RESILIENCE.md §3.3.1) is candidates minus
+    structural skips (lane_unmapped, nodispatch_marker, frank_gated, deps_unmet,
+    runaway_stuck, not_open, vanished) — a candidates>0 pass full of structurally
+    undispatchable tickets is not a stall. Falls back to raw `candidates` when a
+    pass_end predates this field (pre-migration log tail).
+  - It has a `pass_start` with no matching `pass_end` and that `pass_start` is older
+    than TIMEOUT_START_SEC (600s, matching the dispatch service's TimeoutStartSec —
+    the hung-wq-lock case, wq#1410 §3.3.1 item 1).
 
 A pass is HEALTHY if:
   - It has a `pass_end` with spawned>0, OR
@@ -48,17 +56,31 @@ _LEGACY_STATE_PATH = os.path.join(DISPATCHER_DIR, "health_state.json")
 CONFIG_PATH = os.path.join(DISPATCHER_DIR, "config.json")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 
-DEFAULT_THRESHOLD = 3          # consecutive unhealthy passes before alarm
+DEFAULT_THRESHOLD = 2          # consecutive unhealthy passes before alarm (wq#1410:
+# K=2 not 3 — at the 20-min health-tick cadence, 3 leaves a one-hour blind spot)
 ALERT_DEDUP_SECONDS = 3600     # don't re-alert within 1h
 # How many log lines to scan from the tail. 200 lines covers ~30 passes at ~6 lines each.
 TAIL_LINES = 200
+# wq#1410: matches dispatcher/systemd/lumen-foreman-dispatch.service TimeoutStartSec —
+# a pass_start with no pass_end older than this is the hung-wq-lock case (§1.5).
+TIMEOUT_START_SEC = int(os.environ.get("FOREMAN_DISPATCH_TIMEOUT_START_SEC", "600"))
 
 
 def _utcnow():
     return datetime.now(timezone.utc)
 
 
-def _ntfy(msg, priority="urgent", title="DISPATCHER STALLED"):
+# wq#1410 §3.3.4: the stall page needs to be filterable from the 30-min sentinel
+# floor (72 of 159 lumen-alerts messages in one window were priority-5 sentinel
+# repeats — a bare "DISPATCHER STALLED" title is indistinguishable from that noise).
+# `bin/ntfy-send` (a separate repo, not this branch) only forwards -T/-p today with
+# no header passthrough, so "Tags: rotating_light" is a follow-up there; the title
+# prefix below is the part achievable from this repo and is what Frank's client can
+# match a routing rule against right now.
+STALL_TITLE = "[DISPATCH] DISPATCHER STALLED"
+
+
+def _ntfy(msg, priority="urgent", title=STALL_TITLE):
     try:
         subprocess.run([NTFY_BIN, "-t", "lumen-alerts", "-p", priority, "-T", title, msg],
                        capture_output=True, text=True, timeout=15)
@@ -104,12 +126,13 @@ def parse_log_tail(log_path, n_lines):
     return events
 
 
-def classify_passes(events):
+def classify_passes(events, now=None):
     """Group events by pass_id, classify each pass as healthy/unhealthy.
 
     Returns list of (pass_id, ts, verdict, reason) in chronological order,
     where verdict is 'healthy', 'unhealthy', or 'skip'.
     """
+    now = now or _utcnow()
     passes = OrderedDict()
     for ev in events:
         pid = ev.get("pass_id", "")
@@ -126,19 +149,23 @@ def classify_passes(events):
         is_dry_run = False
         spawned = 0
         candidates = 0
+        dispatchable = None
         has_no_slots_halt = False
+        pass_start_ts = None
 
         for ev in evs:
             event = ev.get("event", "")
             if event == "error":
                 has_config_error = True
             if event == "pass_start":
+                pass_start_ts = ev.get("ts")
                 if ev.get("dry_run"):
                     is_dry_run = True
             if event == "pass_end":
                 has_pass_end = True
                 spawned = ev.get("spawned", 0)
                 candidates = ev.get("candidates", 0)
+                dispatchable = ev.get("dispatchable")
             if event == "halt" and ev.get("stage") == "concurrency" \
                and "no_slots" in (ev.get("reason") or ""):
                 has_no_slots_halt = True
@@ -156,12 +183,31 @@ def classify_passes(events):
             results.append((pid, ts, "unhealthy", "error event (pass aborted)"))
             continue
 
-        # Case 2: pass completed but spawned nothing despite candidates waiting,
-        # and it wasn't because all slots were full.
-        if has_pass_end and spawned == 0 and candidates > 0 \
+        # Case 1b (wq#1410 §1.5/§3.3.1): pass_start with no pass_end at all — a hung
+        # wq()/sqlite lock with no timeout gives no error line either, just silence
+        # until the unit's TimeoutStartSec SIGTERMs it. Only fire once the pass has
+        # actually run long enough to be hung, not merely still in flight.
+        if not has_pass_end and not has_config_error and pass_start_ts:
+            try:
+                started = datetime.fromisoformat(pass_start_ts)
+                age = (now - started).total_seconds()
+            except ValueError:
+                age = None
+            if age is not None and age > TIMEOUT_START_SEC:
+                results.append((pid, ts, "unhealthy",
+                                f"hung: pass_start with no pass_end after {int(age)}s"))
+                continue
+
+        # Case 2: pass completed but spawned nothing despite dispatchable candidates
+        # waiting, and it wasn't because all slots were full. `dispatchable` (wq#1410)
+        # excludes structural skips (lane_unmapped etc.); fall back to raw `candidates`
+        # for a pass_end predating the field.
+        effective_dispatchable = dispatchable if dispatchable is not None else candidates
+        if has_pass_end and spawned == 0 and effective_dispatchable > 0 \
            and not has_no_slots_halt and not is_dry_run:
             results.append((pid, ts, "unhealthy",
-                            f"spawned=0 candidates={candidates} (not concurrency-limited)"))
+                            f"spawned=0 dispatchable={effective_dispatchable} "
+                            f"candidates={candidates} (not concurrency-limited)"))
             continue
 
         # Everything else is healthy (or at least not the dispatcher's fault).
@@ -172,7 +218,8 @@ def classify_passes(events):
             # config error but somehow got a pass_end → shouldn't happen, but be safe
             results.append((pid, ts, "unhealthy", "config error with unexpected pass_end"))
         else:
-            # No pass_end, no config error — possibly incomplete log line, skip
+            # No pass_end, no config error, not yet past timeout — possibly incomplete
+            # log line or still in flight, skip
             results.append((pid, ts, "skip", "incomplete pass data"))
 
     return results
@@ -190,6 +237,17 @@ def check_health(log_path, threshold, dry_run=False):
     if not scored:
         return False, "no scorable passes in log tail"
 
+    # wq#1410 §3.3.2: a healthy pass resets the recovery ladder immediately, ahead of
+    # the alarm window/dedup below — the ladder tracks the dispatcher's own state, not
+    # this call's report cadence. Never let a ladder bug break the watchdog itself.
+    if scored[-1][2] == "healthy":
+        try:
+            import dispatch_recover
+            dispatch_recover.reset(dry_run=dry_run)
+        except Exception as e:
+            print(f"[dispatch_health] WARN dispatch_recover.reset failed: {e!r}",
+                  file=sys.stderr)
+
     # Take the last `threshold` scored passes.
     recent = scored[-threshold:]
     all_unhealthy = all(v == "unhealthy" for _, _, v, _ in recent)
@@ -200,6 +258,16 @@ def check_health(log_path, threshold, dry_run=False):
 
     if not all_unhealthy:
         return False, f"OK — last {len(recent)} passes:\n" + "\n".join(detail_lines)
+
+    # wq#1410 §3.3.2: the alarm condition holds — advance the recovery ladder one
+    # rung, every tick, independent of the ntfy dedup below (the ladder must climb
+    # all 3 rungs well inside the 1h ntfy dedup window, not wait behind it).
+    try:
+        import dispatch_recover
+        dispatch_recover.advance(dry_run=dry_run)
+    except Exception as e:
+        print(f"[dispatch_health] WARN dispatch_recover.advance failed: {e!r}",
+              file=sys.stderr)
 
     # All recent passes are unhealthy — check dedup.
     state = load_state()
