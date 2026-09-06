@@ -18,6 +18,8 @@ NDJSON parser hardening — reader-level, not a new verdict; shim 14-16 all reso
 SUCCESS/HANG on the existing verdict set) has a sharper spec-mandated answer for yet.
 """
 
+import re
+
 SUCCESS = "SUCCESS"
 REFUSED = "REFUSED"
 TURNS = "TURNS"
@@ -39,6 +41,18 @@ FALSE_COMPLETE = "FALSE_COMPLETE"
 # when action_gate.LoopTracker reports trip_kind == "PERMISSION", the same way it
 # overrides to SUCCESS for killed_reason == "ticket_done".
 PERMISSION_LOOP = "PERMISSION_LOOP"
+
+# wq#1442 (evidence: wq#1436/wq#1434, both --model opus-5, died in 1.9s/1 turn/$0
+# cost): the CLI's own --model preflight rejects an id/alias it doesn't recognize
+# as a "success"-shaped result frame (subtype "success", but `is_error` is
+# omitted rather than explicitly false) with a friendly result_text — before any
+# real model turn runs. That fails classify()'s SUCCESS branch (§C1 needs
+# `is_error is False`, not merely absent) and used to fall into the generic CRASH
+# catch-all, charging an attempt and blocking UNKNOWN:CRASH against a bad model
+# string the harness itself dispatched. Bucketed HARNESS_DEFECT like
+# PERMISSION_LOOP: retrying hits the identical 404, so the run is no evidence
+# about the ticket or the model.
+MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
 
 # wq#749: harness/prompts/worker.md has the model print exactly one of these as the
 # LAST line of its final message. Nothing parsed it before wq#749 — the sentinel
@@ -73,6 +87,16 @@ def parse_worker_sentinel(result_text):
 # "key never seen" from "key seen, empty string" so observe() doesn't have to guess.
 _UNSET = object()
 
+# wq#1442: the CLI's exact friendly wording for an unrecognized --model id/alias
+# (live evidence: wq#1436/wq#1434 result_text "There's an issue with the selected
+# model (opus-5). It may not exist or you may not have access to it. Run --model
+# to pick a different model."), plus the raw API error shape RESEARCH docs
+# (CLAUDE_CLI_INTERNALS.md §C model_fallback triggers) name for the same failure,
+# in case a resumed/mid-session 404 ever surfaces it as a structured error instead
+# of this preflight text.
+_MODEL_NOT_FOUND_RE = re.compile(
+    r"issue with the selected model|model_not_found|not_found_error", re.I)
+
 
 class RunState:
     """Accumulates the signals classify() needs while a child's stdout is parsed
@@ -103,6 +127,7 @@ class RunState:
         self.turns = 0
         self.turns_exceeded = False
         self.saw_auth_failure = False
+        self.saw_model_not_found = False
         # observability only (wq#754/wq#736) — never fed into classify(), just carried
         # through to the attempt record / usage sidecar for cost, duration and token
         # visibility.
@@ -164,6 +189,12 @@ class RunState:
                 self.latest_resets_at = self.latest_resets_at or rl.get("resets_at")
             if err.get("category") == "rate_limit":
                 self.saw_limit = True
+            # wq#1442: a genuine API-level 404/model_not_found (as opposed to the CLI's
+            # own preflight text caught in the result-frame branch below) — same shape
+            # the rate_limit/401 checks above already read err.get("category")/status
+            # from.
+            if err.get("category") == "model_not_found" or err.get("type") == "not_found_error":
+                self.saw_model_not_found = True
 
         # api_retry (and any other frame) can carry error-category "rate_limit" at the
         # top level, or a bare 429, per RELIABILITY_SPEC.md §B.
@@ -171,6 +202,8 @@ class RunState:
             self.saw_limit = True
         if frame.get("error_status") == 429 or frame.get("api_error_status") == 429:
             self.saw_limit = True
+        if frame.get("error_status") == 404 or frame.get("api_error_status") == 404:
+            self.saw_model_not_found = True
 
         if ftype in ("model_refusal_no_fallback",):
             self.saw_refusal_no_fallback = True
@@ -203,6 +236,8 @@ class RunState:
             self.terminal_reason = frame.get("terminal_reason")
             if "result" in frame:
                 self.result_text = frame.get("result")
+                if isinstance(self.result_text, str) and _MODEL_NOT_FOUND_RE.search(self.result_text):
+                    self.saw_model_not_found = True
             self.usage = frame.get("usage")
             self.total_cost_usd = frame.get("total_cost_usd")
             self.duration_ms = frame.get("duration_ms")
@@ -265,6 +300,14 @@ def classify(state: RunState, exit_code=None) -> str:
         return AUTH
     if subtype == "error_max_budget_usd":
         return BUDGET
+
+    # wq#1442: a bad --model id/alias rejected before any real model turn ran
+    # (turns <= 1: the CLI's own preflight message is itself the only "turn").
+    # Checked after LIMIT/AUTH/BUDGET (a real one of those wins if it also
+    # happens to co-occur) but before the generic catch-all below, so this
+    # harness-configuration shape never gets bucketed as an ordinary CRASH.
+    if state.saw_model_not_found and state.turns <= 1:
+        return MODEL_NOT_FOUND
 
     if subtype is not None:
         # A result frame arrived but matched none of the shapes above — still a coarse

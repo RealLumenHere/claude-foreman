@@ -46,7 +46,7 @@ from classifier import (
     RunState, classify, parse_worker_sentinel,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
     TURNS, LAUNCH_FAILURE, KILLED, BUDGET, BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL,
-    PERMISSION_LOOP,
+    PERMISSION_LOOP, MODEL_NOT_FOUND,
 )
 from oom_forensics import oom_journal_evidence
 import acceptance as acceptance_mod
@@ -321,7 +321,7 @@ BLOCK_HARNESS_DEFECT = "HARNESS_DEFECT"
 
 _INFRA_CRASH_CLASSIFICATIONS = {LAUNCH_FAILURE, KILLED, OOM}
 _LIMIT_HIT_CLASSIFICATIONS = {TURNS, BUDGET}
-_HARNESS_DEFECT_CLASSIFICATIONS = {PERMISSION_LOOP}
+_HARNESS_DEFECT_CLASSIFICATIONS = {PERMISSION_LOOP, MODEL_NOT_FOUND}
 
 
 def loop_break_classification(raw_classification, killed_reason, loop_tracker):
@@ -364,6 +364,8 @@ EXIT_FIRE_MAX_RUNTIME = 19  # wq#1234: hard wall-clock cap exceeded, blocked for
 EXIT_FIRE_ATTEMPT_FENCE = 20  # wq#1261: 3rd expired/rework attempt, escalated to FRANK
 EXIT_LAUNCH_REFUSED = 21  # wq#1331: spawn preflight refused (repo mismatch / unreachable
                           # cited path) — harness defect, attempt not charged
+EXIT_MODEL_NOT_FOUND = 22  # wq#1442: dispatched --model id/alias rejected by the CLI
+                           # (model_not_found/404) — harness defect, attempt not charged
 
 # wq#1261 (#13 item 3): expired/rework fire tickets re-dispatch at most FIRE_ATTEMPT_FENCE
 # times before the 3rd strike escalates to FRANK instead of running again. Only outcomes
@@ -2190,6 +2192,9 @@ def reconcile(args, ticket_id, attempt, classification, state, events, worktree,
     if classification == LIMIT:
         return handle_limit(args, ticket_id, attempt, state, worktree)
 
+    if classification == MODEL_NOT_FOUND:
+        return handle_model_not_found(args, ticket_id, attempt, state, worktree)
+
     if classification in (FALSE_COMPLETE, INDETERMINATE, AUTH, HANG):
         return handle_resumable_failure(args, ticket_id, attempt, classification, state,
                                          events, worktree)
@@ -2312,6 +2317,45 @@ def handle_spawn_refused(args, ticket_id, e):
     ntfy("foreman LAUNCH_FAILURE",
          f"wq#{ticket_id} {e.code}: {e.summary} (attempt not charged)", priority="high")
     return EXIT_LAUNCH_REFUSED
+
+
+def handle_model_not_found(args, ticket_id, attempt, state, worktree):
+    """wq#1442 (evidence wq#1436/wq#1434: --model opus-5, died in 1.9s/1 turn/$0 cost,
+    result_text "There's an issue with the selected model (opus-5)..."). Bucketed
+    HARNESS_DEFECT like handle_spawn_refused (wq#1331) and PERMISSION_LOOP (wq#1107):
+    the CLI rejected the --model string fworker itself dispatched, so the run is no
+    evidence about the ticket, and retrying hits the identical 404. Unlike the
+    ordinary HARNESS_DEFECT path (which still burns up to MAX_ATTEMPTS before the
+    terminal block), this attempt is uncharged outright — do_attempt() already wrote
+    attempt-{attempt}.json/usage-{attempt}.json before classify() ran, so they're
+    removed here the same way handle_spawn_refused simply never writes them, and
+    next_attempt_n() recomputes this same slot next dispatch."""
+    d = run_dir(ticket_id)
+    rec = failure_record.build_failure_record(
+        ticket=ticket_id, attempts=0, classification=MODEL_NOT_FOUND,
+        block_class=BLOCK_HARNESS_DEFECT, events=[], worktree=worktree,
+        expected_repo=args.repo, session_id=state.session_id if state else None)
+    rec["triage"] = failure_record.TRIAGE_HARNESS_DEFECT
+    rec["summary"] = f"model {args.model!r} rejected by the CLI (model_not_found/404)"
+    fpath = failure_record.write_failure_record(d, rec)
+    for fname in (f"attempt-{attempt}.json", f"usage-{attempt}.json"):
+        try:
+            os.remove(os.path.join(d, fname))
+        except OSError:
+            pass
+    log(f"MODEL_NOT_FOUND wq#{ticket_id}: model {args.model!r} rejected by the CLI — "
+        f"releasing claim, attempt not charged; failure.json -> {fpath}")
+    p = wq("note", str(ticket_id),
+           f"MODEL_NOT_FOUND: dispatched model {args.model!r} rejected by the CLI "
+           f"(model_not_found/404); attempt not charged (harness defect) — canonicalize "
+           f"this ticket's model column (wq#1442) before redispatching; see {fpath}")
+    if p.returncode != 0:
+        log(f"WARN: wq note append failed: {(p.stdout or p.stderr).strip()}")
+    wq_release(ticket_id)
+    ntfy("foreman MODEL_NOT_FOUND",
+         f"wq#{ticket_id}: model {args.model!r} rejected by CLI (attempt not charged)",
+         priority="high")
+    return EXIT_MODEL_NOT_FOUND
 
 
 def handle_failure(args, ticket_id, attempt, classification, state, events, worktree):

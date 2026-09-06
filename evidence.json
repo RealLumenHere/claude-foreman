@@ -2,27 +2,9 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "harness/capability.py:263-295",
-      "note": "capability.preflight() — the shared gate: path reachability (moved body of fworker.assert_spawn_paths), node_reachable() at capability.py:201-209, and the policy half of resolve_exec_grant at capability.py:227-260. fworker imports and calls it (harness/fworker.py:833-847, call site :1648-1649; resolve_exec_grant delegates at :869-874). SpawnRefused carries the lists (harness/fworker.py:778-788) and failure_record.spawn_refusal_fields fills unreachable_paths/inferred_needs/refused (harness/failure_record.py:372-388, wired at :412-416).",
-      "cmd_run": "python3 -m pytest harness/tests/test_capability.py -q",
-      "exit_code": 0
-    }
-  ],
-  "tests": [
-    {
-      "cmd_run": "python3 -m pytest harness/tests/test_capability.py -q",
-      "result": "32 passed",
-      "exit_code": 0
-    },
-    {
-      "cmd_run": "python3 -m pytest harness/tests -q",
-      "result": "556 passed",
-      "exit_code": 0
-    },
-    {
-      "cmd_run": "python3 -m pytest dispatcher/tests -q",
-      "result": "224 passed",
-      "exit_code": 0
+      "cmd_run": "python3 -m pytest harness/tests/test_classifier.py harness/tests/test_model_alias_sweep.py -q",
+      "exit_code": 0,
+      "citation": "harness/classifier.py:309-315"
     }
   ]
 }
