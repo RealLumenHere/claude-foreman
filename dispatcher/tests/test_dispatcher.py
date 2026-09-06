@@ -36,6 +36,7 @@ import notify_sinks  # noqa: E402
 import psi_pressure  # noqa: E402
 import repo_sweep  # noqa: E402
 import harness_preflight  # noqa: E402
+import capability_lint  # noqa: E402
 
 WQ_BIN = "/home/lumen/bin/wq"
 SLOCK_BIN = "/home/lumen/bin/slock"
@@ -1524,3 +1525,80 @@ def test_circuit_breaker_exception_logs_error_not_bare_traceback(denv, monkeypat
     errs = [e for e in log_events(denv, "error") if e["stage"] == "pass"]
     assert len(errs) == 1 and "boom" in errs[0]["reason"]
     assert lumen_calls(denv) == []
+
+
+# ---- stage 3.7: capability lint in warn mode (wq#1437, BROKER_WIRING.md §2.1) ----
+
+def _lint_roster(monkeypatch):
+    """Fixture roster: the lint must never shell out to lumen_state during a test."""
+    roster = capability_lint.Roster(names=["lumen", "isis", "thor"], ips={})
+    monkeypatch.setattr(capability_lint, "load_roster", lambda refresh=False: roster)
+    return roster
+
+
+def test_capability_lint_warn_logs_one_event_per_candidate_and_applies_nothing(
+        denv, monkeypatch):
+    """Slice B is measurement only: every candidate gets exactly one capability_lint
+    event carrying the three buckets, the ticket's `needs` column is untouched, and
+    the dispatch decision is exactly what it would have been without the lint."""
+    _lint_roster(monkeypatch)
+    tid = add_ticket("ops: land the dead worktree PR",
+                     detail="run lumen-pr land /home/lumen/worktrees/wq1357-a1 5 "
+                            "--merge, then restart(tailscaled@thor), then ssh isis")
+
+    assert fd.run_pass() == 0
+
+    lints = log_events(denv, "capability_lint")
+    assert len(lints) == 1
+    ev = lints[0]
+    assert ev["ticket"] == tid and ev["mode"] == "warn" and ev["applied"] is False
+    assert ev["refused"] == [
+        "dir(/home/lumen/worktrees/wq1357-a1) deny:prefix (/home/lumen/worktrees)",
+        "restart(tailscaled@thor) policy:never.nodes (thor)"]
+    assert ev["tags"] == ["ssh(isis)"]
+    # applies nothing: no needs write, no extra skip, the ticket still spawned
+    row = [r for r in task_rows(denv) if r[0] == tid][0]
+    assert not row[-1]  # `needs` column still empty
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert not [e for e in log_events(denv, "skip") if e.get("ticket") == tid]
+
+
+def test_capability_lint_counts_every_candidate_in_pass_end(denv, monkeypatch):
+    """A candidate that cites nothing gets no event (one decision line per ticket
+    stays true) but is still counted, so `lint_flagged/lint_scanned` is the honest
+    slice-C blast-radius number a pass at a time."""
+    _lint_roster(monkeypatch)
+    add_ticket("plain ticket, cites nothing")
+    flagged = add_ticket("ops: ssh isis and read the journal")
+
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "capability_lint")] == [flagged]
+    end = log_events(denv, "pass_end")[0]
+    assert (end["lint_scanned"], end["lint_flagged"]) == (2, 1)
+
+
+def test_capability_lint_off_flag_silences_the_stage(denv, monkeypatch):
+    """Rollback (slice B's flag): FOREMAN_NEEDS_LINT_MODE=off derives nothing and
+    logs nothing; dispatch is unchanged."""
+    _lint_roster(monkeypatch)
+    monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "off")
+    tid = add_ticket("ops: read /home/lumen/worktrees/wq1357-a1")
+
+    assert fd.run_pass() == 0
+    assert log_events(denv, "capability_lint") == []
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
+def test_capability_lint_exception_never_costs_a_ticket_its_decision(denv, monkeypatch):
+    """A measurement stage that can quarantine a candidate is worse than no stage:
+    a lint crash logs capability_lint_error and the ticket dispatches anyway."""
+    def boom(*a, **kw):
+        raise RuntimeError("lint boom")
+    monkeypatch.setattr(capability_lint, "derive", boom)
+    tid = add_ticket("ordinary candidate")
+
+    assert fd.run_pass() == 0
+    errs = log_events(denv, "capability_lint_error")
+    assert len(errs) == 1 and "lint boom" in errs[0]["reason"]
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert not [e for e in log_events(denv, "skip") if e["reason"] == "quarantined"]

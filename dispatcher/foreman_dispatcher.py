@@ -28,6 +28,13 @@ Decision-log events (one JSON object per line, file + stdout):
                            see circuit_breaker.py; disarms before this halt is even
                            logged), lock_busy, no_slots, spawn_cap,
                            lumen_run_unreachable
+  capability_lint          per-candidate capability derivation (wq#1437 slice B,
+                           BROKER_WIRING.md §2.1): tags/unresolved/refused, always
+                           applied=False in warn mode, emitted only when the
+                           derivation is non-empty (pass_end's lint_scanned/
+                           lint_flagged carry the totals). capability_lint_error is
+                           the swallowed-exception twin. FOREMAN_NEEDS_LINT_MODE=off
+                           silences both.
   tight_mode               governor pressure flipped the pass into tight-mode
   error                    config/spawn/langfuse/pass failures
   info                     degradations (e.g. langfuse_disabled)
@@ -59,6 +66,7 @@ import runaway          # noqa: E402
 import psi_pressure     # noqa: E402  # wq#844
 import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
 import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refusal
+import capability_lint    # noqa: E402  # wq#1437 BROKER_WIRING §2.1 slice B (warn)
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -480,6 +488,37 @@ def governor_limits():
     return limits if isinstance(limits, dict) else {}
 
 
+def lint_capability(tid, t, lane, repo, log):
+    """Stage 3.7, WARN MODE (wq#1437, BROKER_WIRING.md §2.1/§5 slice B): derive this
+    candidate's capability needs and log one `capability_lint` event carrying the three
+    buckets. Applies nothing — no `wq edit --needs`, no skip, no change to any
+    decision. Slice C turns `refused`/`unresolved` into pre-skips and `tags` into a
+    needs write; until then this exists to build the tuning corpus from real passes.
+
+    A candidate whose derivation is EMPTY gets no event: the decision log's one-line-
+    per-ticket property (test_every_decision_logged) is the thing the health classifier
+    reads, and "this ticket cites nothing" is already counted in pass_end's
+    `lint_scanned`/`lint_flagged`.
+
+    Rollback: FOREMAN_NEEDS_LINT_MODE=off (no derivation, no event). Any exception in
+    the lint is logged and swallowed — a measurement stage must never cost a ticket
+    its decision (wq#1408 §3.1, same reasoning as the quarantine boundary).
+    """
+    if not capability_lint.enabled():
+        return None
+    try:
+        derived = capability_lint.derive(
+            t, repo=repo, add_dirs=capability_lint.base_add_dirs(t.get("archetype")))
+    except Exception as e:  # noqa: BLE001 — see docstring
+        log.emit("capability_lint_error", ticket=tid, lane=lane, reason=repr(e)[:300])
+        return None
+    if derived:
+        log.emit("capability_lint", ticket=tid, lane=lane,
+                 mode=capability_lint.mode(), applied=False,
+                 needs_current=t.get("needs") or "", **derived.as_event())
+    return derived
+
+
 PACING_HOOK = pacing.decide  # seam: tests replace to prove the dispatcher <-> pacing wiring
 
 
@@ -795,6 +834,7 @@ def _do_pass(cfg, log, state, dry_run):
     tight_cfg = cfg["tight_mode"]
     tight = False
     spawned = 0
+    lint_scanned = lint_flagged = 0  # wq#1437 stage 3.7 (warn): measurement only
     quarantined = []
     dep_cache, pressure_cache, gate_cache = {}, {}, {}
 
@@ -921,6 +961,14 @@ def _do_pass(cfg, log, state, dry_run):
                 log.skip(tid, lane, "lane_policy", "lane_unmapped",
                          detail="no LANE_REPO entry — never guess a repo")
                 continue
+
+            # stage 3.7 — capability lint (wq#1437 slice B): measurement only, in
+            # front of the holds so a held ticket still produces a lint line (the
+            # corpus slice C's pre-skip and hold-release are tuned on is mostly
+            # blocked/held tickets — BROKER_WIRING.md §0 "26 of the 37 are blocked").
+            lint_scanned += 1
+            if lint_capability(tid, t, lane, repo, log):
+                lint_flagged += 1
 
             # stage 3.5 — runaway (wq#718): a ticket stuck below RUNAWAY_MAX_ATTEMPTS
             # cycles without reaching done is skipped every pass, not re-attempted forever
@@ -1079,7 +1127,8 @@ def _do_pass(cfg, log, state, dry_run):
 
     dispatchable = len(candidates) - count_structural_skips(log.events)
     return {"candidates": len(candidates), "spawned": spawned, "tight": tight,
-            "quarantined": len(quarantined), "dispatchable": dispatchable}
+            "quarantined": len(quarantined), "dispatchable": dispatchable,
+            "lint_scanned": lint_scanned, "lint_flagged": lint_flagged}
 
 
 def run_pass(dry_run=False):
