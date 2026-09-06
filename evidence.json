@@ -2,9 +2,19 @@
   "criteria": [
     {
       "id": "AC1",
-      "cmd_run": "python3 -m pytest harness/tests/test_classifier.py harness/tests/test_model_alias_sweep.py -q",
-      "exit_code": 0,
-      "citation": "harness/classifier.py:309-315"
+      "citation": "dispatcher/foreman_dispatcher.py:577-611"
     }
+  ],
+  "derived_by": "worker",
+  "ticket": "wq#1438",
+  "notes": [
+    "AC1 primary citation: dispatcher/foreman_dispatcher.py:577-611 enforce_capability() \u2014 stage 3.7 enforcement: derived.refused -> capability_denied_by_policy, derived.unresolved -> needs_unresolved, capability.preflight verdict -> its own reason (cited_path_unreachable | node_unknown | capability_denied_by_policy), else apply_tags. Wired into _do_pass at dispatcher/foreman_dispatcher.py:1077, immediately after repo_for_ticket and before the runaway/harness-defect holds.",
+    "Per-reason 24h ntfy dedup (same ledger shape as handle_harness_defect_hold): dispatcher/foreman_dispatcher.py:544-575.",
+    "Structural skips so pass_end.dispatchable stays honest: dispatcher/foreman_dispatcher.py:130-140.",
+    "Hold release: dispatcher/runaway.py:70-94 hold_released(), wired at dispatcher/runaway.py:127.",
+    "Shared helpers: harness/capability.py:321 effective_needs, :338 effective_add_dirs, :352 covered_by, :372 apply_tags.",
+    "apply-dir mode + dir-only tag filter: harness/capability_lint.py:127 DEFAULT_MODE, :151 enforcing(), :156 appliable_tags().",
+    "Replay harness for doc section 4 row iv: dispatcher/capability_replay.py (read-only, no spawn/write path).",
+    "Tests: python3 -m pytest dispatcher/tests -q -> 252 passed; python3 -m pytest harness/tests -q -> 653 passed."
   ]
 }

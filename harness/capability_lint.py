@@ -10,11 +10,13 @@ buckets, never merged:
   unresolved  an action verb or node the regexes saw but could not pin to one tag
   refused     a derived tag the DIR_DENY list or fleet-exec-policy.yaml forbids
 
-Slice B ships the derivation in WARN mode only: the dispatcher logs one
-`capability_lint` event per candidate and applies nothing (see `mode()`). Slices C/F
-turn the buckets into skip reasons and `wq edit --needs` writes.
+Slice B shipped the derivation in WARN mode (log the buckets, apply nothing). Slice C
+(wq#1438, §2.2) makes `apply-dir` the default: the buckets become dispatcher skip
+reasons and the `dir` tags become a `wq edit --needs` write. `apply` (slice F) is the
+same gate with the action tags applied too.
 
-Rollback: FOREMAN_NEEDS_LINT_MODE=off makes the dispatcher stop calling this module;
+Rollback ladder: FOREMAN_NEEDS_LINT_MODE=warn restores slice B (derive + log, decide
+nothing); =off makes the dispatcher stop calling this module at all;
 FOREMAN_NEEDS_DISABLE=1 (needs.py) already disables the consumers downstream.
 """
 import fnmatch
@@ -120,13 +122,43 @@ class Derived:
 
 # ---- mode flag (rollback) ------------------------------------------------------
 
+MODE_OFF, MODE_WARN, MODE_APPLY_DIR, MODE_APPLY = "off", "warn", "apply-dir", "apply"
+MODES = (MODE_OFF, MODE_WARN, MODE_APPLY_DIR, MODE_APPLY)
+DEFAULT_MODE = MODE_APPLY_DIR  # wq#1438 slice C; `warn` is the documented rollback
+ENFORCING_MODES = (MODE_APPLY_DIR, MODE_APPLY)
+# Which derived tags the dispatcher may write back per mode. `apply-dir` is slice C's
+# whole scope: `dir` is read-only and deny-listed (§2.1), so auto-applying it can only
+# ever widen a worker's READ context. ssh/restart/copy stay derive-and-refuse until
+# slice F has test (viii)'s three clean adversarial cycles behind it.
+APPLIED_TAG_NAMES = {MODE_APPLY_DIR: ("dir",),
+                     MODE_APPLY: ("dir", "ssh", "restart", "copy")}
+
+
 def mode():
-    """`warn` (default, slice B: log only) | `apply` (slice C+) | `off` (rollback)."""
-    return (os.environ.get("FOREMAN_NEEDS_LINT_MODE") or "warn").strip().lower()
+    """`off` | `warn` (slice B: derive + log only) | `apply-dir` (slice C default:
+    gate + write `dir` tags) | `apply` (slice F: gate + write action tags too).
+
+    An unrecognised value degrades to `warn`, never to an enforcing mode: a typo in a
+    systemd drop-in must not be able to make the whole queue undispatchable."""
+    m = (os.environ.get("FOREMAN_NEEDS_LINT_MODE") or DEFAULT_MODE).strip().lower()
+    return m if m in MODES else MODE_WARN
 
 
 def enabled():
-    return mode() != "off"
+    return mode() != MODE_OFF
+
+
+def enforcing():
+    """True when the buckets are dispatcher decisions, not just log lines (§2.2)."""
+    return mode() in ENFORCING_MODES
+
+
+def appliable_tags(derived):
+    """The subset of `derived.tags` this mode lets the dispatcher write back."""
+    names = APPLIED_TAG_NAMES.get(mode(), ())
+    if not derived or not names:
+        return []
+    return [t for t in derived.tags if t[0] in names]
 
 
 # ---- node roster (lumen_state) -------------------------------------------------

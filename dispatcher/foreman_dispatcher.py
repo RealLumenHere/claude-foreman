@@ -29,12 +29,18 @@ Decision-log events (one JSON object per line, file + stdout):
                            logged), lock_busy, no_slots, spawn_cap,
                            lumen_run_unreachable
   capability_lint          per-candidate capability derivation (wq#1437 slice B,
-                           BROKER_WIRING.md §2.1): tags/unresolved/refused, always
-                           applied=False in warn mode, emitted only when the
-                           derivation is non-empty (pass_end's lint_scanned/
-                           lint_flagged carry the totals). capability_lint_error is
-                           the swallowed-exception twin. FOREMAN_NEEDS_LINT_MODE=off
-                           silences both.
+                           BROKER_WIRING.md §2.1): tags/unresolved/refused, emitted
+                           only when the derivation is non-empty (pass_end's
+                           lint_scanned/lint_flagged carry the totals).
+                           capability_lint_error is the swallowed-exception twin.
+                           FOREMAN_NEEDS_LINT_MODE=off silences both.
+  capability_applied       stage 3.7 wrote derived tags into the ticket's `needs`
+                           column (wq#1438 slice C, §2.1 auto-tag). The four capability
+                           SKIP reasons it can raise instead are cited_path_unreachable,
+                           node_unknown, capability_denied_by_policy and
+                           needs_unresolved — all structural (see
+                           STRUCTURAL_SKIP_REASONS). FOREMAN_NEEDS_LINT_MODE=warn is
+                           the rollback: derive and log, decide nothing.
   tight_mode               governor pressure flipped the pass into tight-mode
   error                    config/spawn/langfuse/pass failures
   info                     degradations (e.g. langfuse_disabled)
@@ -67,6 +73,7 @@ import psi_pressure     # noqa: E402  # wq#844
 import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
 import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refusal
 import capability_lint    # noqa: E402  # wq#1437 BROKER_WIRING §2.1 slice B (warn)
+import capability         # noqa: E402  # wq#1438 BROKER_WIRING §2.2 slice C (pre-skip)
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -114,10 +121,22 @@ REPO_HINT_LANE = "auto"
 # the ticket/lane is structurally undispatchable, not stalled. pass_end's `dispatchable`
 # count excludes them so the watchdog can tell a real stall (dispatchable>0, spawned=0)
 # from a backlog of lane_unmapped noise (33-38 of every 43-59 candidates historically).
+
+# wq#1438 (BROKER_WIRING.md §2.2): the four ways stage 3.7 refuses a candidate. The
+# doc names three as structural; `node_unknown` is the same class (preflight can
+# return it, and a ticket naming a node the fleet has never heard of is exactly as
+# undispatchable as one citing a path nobody can reach), so all four are — otherwise
+# the watchdog reads a queue full of correctly-refused tickets as a dispatcher stall.
+CAPABILITY_SKIP_REASONS = (
+    capability.REASON_CAPABILITY_DENIED_BY_POLICY,
+    capability.REASON_NEEDS_UNRESOLVED,
+    capability.REASON_CITED_PATH_UNREACHABLE,
+    capability.REASON_NODE_UNKNOWN,
+)
 STRUCTURAL_SKIP_REASONS = frozenset({
     "lane_unmapped", "nodispatch_marker", "frank_gated", "deps_unmet",
     "runaway_stuck", "not_open", "vanished", "fire_unapproved", "fire_no_probe",
-})
+} | set(CAPABILITY_SKIP_REASONS))
 
 
 def count_structural_skips(events):
@@ -294,7 +313,7 @@ def load_state(now=None):
     today = now.strftime("%Y-%m-%d")
     fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {},
              "runaway_ntfy": {}, "preflight_ntfy": {}, "gate_error_ntfy": {},
-             "harness_defect_ntfy": {}}
+             "harness_defect_ntfy": {}, "capability_ntfy": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -308,11 +327,13 @@ def load_state(now=None):
     preflight_ntfy = _prune_dedup(st.get("preflight_ntfy"), now, FIRE_NTFY_DEDUP_H)
     gate_error_ntfy = _prune_dedup(st.get("gate_error_ntfy"), now, FIRE_NTFY_DEDUP_H)
     harness_defect_ntfy = _prune_dedup(st.get("harness_defect_ntfy"), now, FIRE_NTFY_DEDUP_H)
+    capability_ntfy = _prune_dedup(st.get("capability_ntfy"), now, FIRE_NTFY_DEDUP_H)
     if st.get("day") != today:  # UTC day rollover resets lane counts, not the ledgers (§6.3)
         return {"day": today, "lane_counts": {}, "fire_ntfy": fire,
                 "pacing_ntfy": pacing_ntfy, "runaway_ntfy": runaway_ntfy,
                 "preflight_ntfy": preflight_ntfy, "gate_error_ntfy": gate_error_ntfy,
-                "harness_defect_ntfy": harness_defect_ntfy}
+                "harness_defect_ntfy": harness_defect_ntfy,
+                "capability_ntfy": capability_ntfy}
     counts = st.get("lane_counts")
     return {"day": today,
             "lane_counts": counts if isinstance(counts, dict) else {},
@@ -321,7 +342,8 @@ def load_state(now=None):
             "runaway_ntfy": runaway_ntfy,
             "preflight_ntfy": preflight_ntfy,
             "gate_error_ntfy": gate_error_ntfy,
-            "harness_defect_ntfy": harness_defect_ntfy}
+            "harness_defect_ntfy": harness_defect_ntfy,
+            "capability_ntfy": capability_ntfy}
 
 
 def save_state(st):
@@ -489,11 +511,11 @@ def governor_limits():
 
 
 def lint_capability(tid, t, lane, repo, log):
-    """Stage 3.7, WARN MODE (wq#1437, BROKER_WIRING.md §2.1/§5 slice B): derive this
-    candidate's capability needs and log one `capability_lint` event carrying the three
-    buckets. Applies nothing — no `wq edit --needs`, no skip, no change to any
-    decision. Slice C turns `refused`/`unresolved` into pre-skips and `tags` into a
-    needs write; until then this exists to build the tuning corpus from real passes.
+    """Stage 3.7 DERIVATION half (wq#1437, BROKER_WIRING.md §2.1/§5 slice B): derive
+    this candidate's capability needs and log one `capability_lint` event carrying the
+    three buckets. Decides nothing on its own — `enforce_capability` below is what
+    turns `refused`/`unresolved` into pre-skips and `tags` into a needs write, and
+    only in an enforcing mode.
 
     A candidate whose derivation is EMPTY gets no event: the decision log's one-line-
     per-ticket property (test_every_decision_logged) is the thing the health classifier
@@ -501,8 +523,8 @@ def lint_capability(tid, t, lane, repo, log):
     `lint_scanned`/`lint_flagged`.
 
     Rollback: FOREMAN_NEEDS_LINT_MODE=off (no derivation, no event). Any exception in
-    the lint is logged and swallowed — a measurement stage must never cost a ticket
-    its decision (wq#1408 §3.1, same reasoning as the quarantine boundary).
+    the lint is logged and swallowed — a derivation must never cost a ticket its
+    decision (wq#1408 §3.1, same reasoning as the quarantine boundary).
     """
     if not capability_lint.enabled():
         return None
@@ -517,6 +539,85 @@ def lint_capability(tid, t, lane, repo, log):
                  mode=capability_lint.mode(), applied=False,
                  needs_current=t.get("needs") or "", **derived.as_event())
     return derived
+
+
+def handle_capability_skip(state, tid, lane, reason, detail, dry_run, log):
+    """One of the four §2.2 pre-skips, plus Frank's once-per-ticket-per-24h ping
+    naming the exact tag that is missing. Same ledger shape and same dedup window as
+    handle_harness_defect_hold — this is that hold moved BEFORE the spawn, which is the
+    whole point of the slice: pre-PR#287 wq#1361 spawned 65x and #1401 33x on the same
+    unreachable path, and even after the hold landed each still cost one uncharged
+    LAUNCH_FAILURE before anything noticed.
+
+    Deduped per (reason, ticket): a ticket that gets its dir tag applied and then trips
+    a DIFFERENT capability wall is a new fact and pages again. Always returns True —
+    the caller's `continue`."""
+    log.skip(tid, lane, "capability", reason, detail=detail)
+    now = _utcnow()
+    key = f"{reason}:{tid}"
+    last = state["capability_ntfy"].get(key)
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=FIRE_NTFY_DEDUP_H):
+                return True  # already pinged Frank within 24h — never flood
+        except ValueError:
+            pass
+    if dry_run:
+        log.emit("would_ntfy", ticket=tid, lane=lane, reason=reason)
+        return True
+    ntfy(f"wq#{tid} ({lane}) not dispatchable: {reason} — {detail}. No worker was "
+         f"spawned. Rewrite the ticket (or add the tag by hand) and it dispatches on "
+         f"the next pass.", priority="high",
+         title="foreman dispatcher: capability pre-skip")
+    state["capability_ntfy"][key] = now.isoformat(timespec="seconds")
+    save_state(state)
+    return True
+
+
+def enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
+    """Stage 3.7 ENFORCEMENT half — the churn killer (wq#1438, BROKER_WIRING.md §2.2).
+
+    Returns True when the candidate must be skipped. The order is the doc's, and the
+    order matters: `refused` and `unresolved` are facts about the ticket TEXT that no
+    grant can fix, so they are answered before preflight is asked anything, and
+    `preflight` is asked over `ticket.needs ∪ lint.tags` so a path this very pass is
+    about to grant does not read as unreachable. Auto-tagging happens last, only for a
+    candidate that has already cleared the gate: a ticket that would be skipped anyway
+    must not have its `needs` column edited on the way out.
+
+    Fail-open on an internal exception (logged as capability_lint_error, ticket keeps
+    its decision): fworker calls the same `capability.preflight` at spawn (§1
+    belt-and-braces), so a crash here costs the slot burn this slice exists to save,
+    never a wrongly-granted capability. Rollback: FOREMAN_NEEDS_LINT_MODE=warn."""
+    if not capability_lint.enforcing():
+        return False
+    try:
+        if derived is not None and derived.refused:
+            return handle_capability_skip(
+                state, tid, lane, capability.REASON_CAPABILITY_DENIED_BY_POLICY,
+                "; ".join(derived.refused), dry_run, log)
+        if derived is not None and derived.unresolved:
+            return handle_capability_skip(
+                state, tid, lane, capability.REASON_NEEDS_UNRESOLVED,
+                "; ".join(derived.unresolved), dry_run, log)
+        needs = capability.effective_needs(t, derived)
+        add_dirs = capability.effective_add_dirs(t.get("archetype"), needs)
+        verdict = capability.preflight(t, repo, add_dirs, needs)
+        if not verdict.ok:
+            return handle_capability_skip(state, tid, lane, verdict.reason,
+                                          verdict.summary, dry_run, log)
+        tags = capability_lint.appliable_tags(derived)
+        if tags:
+            written = capability.apply_tags(tid, tags, current_needs=t.get("needs"),
+                                            dry_run=dry_run)
+            if written:
+                log.emit("capability_applied", ticket=tid, lane=lane,
+                         mode=capability_lint.mode(), dry_run=dry_run,
+                         tags=[f"{n}({a})" for n, a in tags], needs=written)
+    except Exception as e:  # noqa: BLE001 — see docstring
+        log.emit("capability_lint_error", ticket=tid, lane=lane, stage="enforce",
+                 reason=repr(e)[:300])
+    return False
 
 
 PACING_HOOK = pacing.decide  # seam: tests replace to prove the dispatcher <-> pacing wiring
@@ -962,13 +1063,19 @@ def _do_pass(cfg, log, state, dry_run):
                          detail="no LANE_REPO entry — never guess a repo")
                 continue
 
-            # stage 3.7 — capability lint (wq#1437 slice B): measurement only, in
-            # front of the holds so a held ticket still produces a lint line (the
-            # corpus slice C's pre-skip and hold-release are tuned on is mostly
-            # blocked/held tickets — BROKER_WIRING.md §0 "26 of the 37 are blocked").
+            # stage 3.7 — capability (wq#1437 derive / wq#1438 enforce,
+            # BROKER_WIRING.md §2.1-§2.2). In front of the holds by design: a held
+            # ticket must still be linted and auto-tagged, because that is exactly
+            # what lets the hold below release (§2.2 last para — otherwise
+            # auto-tagging a held ticket never lets it run), and the corpus this is
+            # tuned on is mostly blocked/held tickets (§0, "26 of the 37 are
+            # blocked").
             lint_scanned += 1
-            if lint_capability(tid, t, lane, repo, log):
+            derived = lint_capability(tid, t, lane, repo, log)
+            if derived:
                 lint_flagged += 1
+            if enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
+                continue
 
             # stage 3.5 — runaway (wq#718): a ticket stuck below RUNAWAY_MAX_ATTEMPTS
             # cycles without reaching done is skipped every pass, not re-attempted forever

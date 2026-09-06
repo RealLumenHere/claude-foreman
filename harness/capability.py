@@ -11,8 +11,11 @@ dispatcher's own stages; it is this module, which both callers use:
     fworker      belt-and-braces at spawn (a hand-spawned `lumen-run fworker` must
                  still refuse) — `assert_spawn_paths` and `resolve_exec_grant` are
                  now adapters over `preflight()` / `policy_grants()`.
-    dispatcher   pre-skip stage 3.7 (slice C, not in this PR): ask `preflight()`
-                 "would this spawn refuse?" before a slot is burned.
+    dispatcher   pre-skip stage 3.7 (slice C, wq#1438): ask `preflight()` "would this
+                 spawn refuse?" before a slot is burned, over the needs the ticket
+                 carries UNIONED with the ones capability_lint derives
+                 (`effective_needs`), then write the safe half back
+                 (`apply_tags`) so the next pass has them on the ticket.
 
 A second copy is a lint failure — tests/test_capability.py asserts fworker imports
 this module and holds no private copy of the path regex or the policy loop.
@@ -53,6 +56,10 @@ import fleet_exec_policy  # noqa: E402
 REASON_CITED_PATH_UNREACHABLE = "cited_path_unreachable"
 REASON_NODE_UNKNOWN = "node_unknown"
 REASON_CAPABILITY_DENIED_BY_POLICY = "capability_denied_by_policy"
+# wq#1438 §2.2: not a preflight() verdict — the lint's `unresolved` bucket, which only
+# the dispatcher can act on (there is no tag to check, which is the point). Lives here
+# so the four capability skip reasons are one list in one module.
+REASON_NEEDS_UNRESOLVED = "needs_unresolved"
 
 # SpawnRefused code per reason: the dispatcher skips on the lowercase reason, the
 # worker raises the uppercase code, and both name the same verdict.
@@ -64,6 +71,8 @@ SPAWN_CODE = {
 
 DEFAULT_POLICY_PATH = os.environ.get(
     "FOREMAN_FLEET_EXEC_POLICY", "/home/lumen/foreman/harness/fleet-exec-policy.yaml")
+WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
+WQ_TIMEOUT_S = 30
 LUMEN_STATE = os.environ.get("FOREMAN_LUMEN_STATE", "/home/lumen/minerva/lumen_state.py")
 # fleet-exec's known_nodes() (fleet-exec:60) reads the first of these only; the ssh
 # alias half is what makes the node actually addressable. Override for tests.
@@ -303,3 +312,91 @@ def _verdict(reason, summary, **fields):
         return Verdict(True, summary=f"{code} ({summary}) — FOREMAN_NEEDS_DISABLE=1, "
                                      f"log-only", downgraded=True, **fields)
     return Verdict(False, reason=reason, summary=f"{code} ({summary})", **fields)
+
+
+# ---------------------------------------------------------------------------
+# effective needs + auto-tag write-back (wq#1438 slice C, §2.2)
+# ---------------------------------------------------------------------------
+
+def effective_needs(ticket, derived=None):
+    """§2.2 line 1: `ticket.needs ∪ lint.tags`.
+
+    The ticket's own tags come from both authored sources (`needs` column and a
+    `Needs:` detail line, needs.parse); `derived` is capability_lint's `tags` bucket,
+    which has not been written back yet on this pass. Preflight must see the union or
+    a ticket would be refused for a path the very same pass is about to grant it.
+
+    FOREMAN_NEEDS_DISABLE=1 is honoured by needs.parse() returning empty; the derived
+    half is dropped here for the same reason, so the rollback flag really does mean
+    "needs tags decide nothing"."""
+    parsed = needs_mod.parse((ticket or {}).get("needs"), (ticket or {}).get("detail"))
+    if derived is None or needs_mod.disabled():
+        return parsed
+    return needs_mod.Needs(list(parsed.tags) + list(derived.tags))
+
+
+def effective_add_dirs(archetype, needs):
+    """The `--add-dir` set a worker for this ticket WOULD get — computed at dispatch
+    time, before any spawn. Mirrors fworker.add_dirs_for (:1049) exactly: the
+    archetype's base list from agents.yaml, unioned with the ticket's needs:dir tags,
+    order preserved. Two functions, one answer; the base half is read through
+    capability_lint.base_add_dirs so both read the same manifest loader."""
+    import capability_lint  # local: capability_lint imports nothing from this module
+    out = list(capability_lint.base_add_dirs(archetype))
+    for d in (needs.dirs if needs is not None else []):
+        if d not in out:
+            out.append(d)
+    return out
+
+
+def covered_by(paths, add_dirs):
+    """True when EVERY path is inside one of add_dirs (§2.2 hold release). Empty
+    `paths` is False, not vacuously True: a failure record with no structured
+    unreachable_paths tells us nothing, and "nothing to cover" must never be read as
+    "the defect is fixed" (that is the pre-slice-A failure.json shape, §2.5)."""
+    roots = [r for r in (add_dirs or []) if r]
+    if not paths or not roots:
+        return False
+    return all(any(_under(p, r) for r in roots) for p in paths)
+
+
+def _wq(*args):
+    p = subprocess.run([WQ_BIN, *args], capture_output=True, text=True,
+                       timeout=WQ_TIMEOUT_S)
+    if p.returncode != 0:
+        raise RuntimeError(f"wq {args[0]} failed ({p.returncode}): "
+                           f"{(p.stderr or p.stdout).strip()[:200]}")
+    return p.stdout
+
+
+def apply_tags(tid, tags, current_needs=None, dry_run=False):
+    """§2.1 auto-tag: union `tags` into the ticket's `needs` column via
+    `wq edit --needs` and record what changed with `wq note`. Returns the needs field
+    written, or None when there was nothing new to write.
+
+    Union, never overwrite — a human-authored tag the lint cannot derive must survive
+    an auto-tag pass — and dedupe, so a ticket re-linted every pass gets exactly one
+    note line per genuinely new tag (§4 row vi). Written by the DISPATCHER: a worker
+    has no `wq edit` in its allowlist (§3), so this is the single writer.
+
+    The field is re-validated with needs.validate() before the write: `wq edit`
+    validates too, but a lint that can emit an unstorable tag should fail here, where
+    the caller logs it, rather than as an opaque non-zero exit from the CLI."""
+    existing = needs_mod.parse_tags(current_needs)
+    merged, added = list(existing), []
+    for t in tags or []:
+        if t not in merged:
+            merged.append(t)
+            added.append(t)
+    if not added:
+        return None
+    field = ", ".join(f"{name}({arg})" for name, arg in merged)
+    ok, err = needs_mod.validate(field)
+    if not ok:
+        raise ValueError(f"capability_lint derived an unstorable needs field: {err}")
+    if dry_run:
+        return field
+    _wq("edit", str(tid), "--needs", field)
+    _wq("note", str(tid), "capability_lint: "
+        + " ".join(f"+{name}({arg})" for name, arg in added))
+    return field

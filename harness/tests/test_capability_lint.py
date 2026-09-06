@@ -372,12 +372,43 @@ def test_empty_ticket_derives_nothing():
     assert not d and d.as_event() == {"tags": [], "unresolved": [], "refused": []}
 
 
-def test_mode_defaults_to_warn_and_off_disables(monkeypatch):
-    assert cl.mode() == "warn" and cl.enabled()
+def test_mode_defaults_to_apply_dir_and_off_disables(monkeypatch):
+    """wq#1438 flipped the default from slice B's `warn` to `apply-dir`: the pre-skip
+    and the dir auto-tag are the slice, so shipping them inert would ship nothing."""
+    monkeypatch.delenv("FOREMAN_NEEDS_LINT_MODE", raising=False)
+    assert cl.mode() == "apply-dir" and cl.enabled() and cl.enforcing()
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "off")
-    assert not cl.enabled()
+    assert not cl.enabled() and not cl.enforcing()
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply")
-    assert cl.mode() == "apply" and cl.enabled()
+    assert cl.mode() == "apply" and cl.enabled() and cl.enforcing()
+
+
+def test_warn_is_the_documented_rollback(monkeypatch):
+    """The slice's rollback (`FOREMAN_NEEDS_LINT_MODE=warn`) must restore slice B
+    exactly: still derives, still logs, decides and applies nothing."""
+    monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "warn")
+    assert cl.mode() == "warn" and cl.enabled() and not cl.enforcing()
+    d = cl.derive({"title": "read /home/lumen/agent"}, roster=ROSTER, policy=POLICY)
+    assert d.tags and cl.appliable_tags(d) == []
+
+
+def test_unknown_mode_degrades_to_warn_never_to_enforcing(monkeypatch):
+    """A typo in a systemd drop-in must not be able to make the whole queue
+    undispatchable — fail toward measurement, not toward the gate."""
+    monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply_dir")  # underscore, not dash
+    assert cl.mode() == "warn" and not cl.enforcing()
+
+
+def test_apply_dir_applies_only_dir_tags(monkeypatch):
+    """Slice C's scope: `dir` is read-only and deny-listed, so auto-applying it can
+    only widen READ context. ssh/restart/copy wait for slice F."""
+    monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply-dir")
+    d = cl.derive({"title": "ops", "detail": "ssh isis and read /home/lumen/agent"},
+                  roster=ROSTER, policy=POLICY)
+    assert ("ssh", "isis") in d.tags and ("dir", "/home/lumen/agent") in d.tags
+    assert cl.appliable_tags(d) == [("dir", "/home/lumen/agent")]
+    monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply")
+    assert cl.appliable_tags(d) == d.tags
 
 
 def test_unreachable_state_store_fails_closed(monkeypatch):
