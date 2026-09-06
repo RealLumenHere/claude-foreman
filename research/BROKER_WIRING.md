@@ -239,6 +239,32 @@ not "done" until the live column is filled in by the landing PR)
 
 Failure of any row is a defect in the row's component, fixed before the next slice, never a doc edit.
 
+### 4.1 Slice C results (wq#1438, 2026-09-06)
+
+| row | where | result |
+|---|---|---|
+| i (unit half) | `dispatcher/tests/test_dispatcher.py::test_capability_auto_tags_a_cited_dir_and_still_spawns` | PASS — `needs` gains `dir(/home/lumen/agent)`, one `capability_applied` event, one note line, same-pass spawn. The `--add-dir` half is slice D's live drill. |
+| iv | `test_cited_secret_is_refused_before_any_spawn`, `test_nonexistent_cited_path_is_unresolved_not_guessed`, `test_v2_verb_stays_unresolved_and_names_the_missing_verb` | PASS — skip before spawn, `lumen_calls == []`, no `needs` write, one ntfy then 24h dedup. |
+| iv (live drill) | `python3 dispatcher/capability_replay.py 1401 1402 1403 1407` | PASS with one correction, below. Zero spawns: the replay harness has no code path that spawns or writes. |
+| vi | `test_auto_tag_is_idempotent_and_appends_a_newly_cited_dir`, `test_refusal_beats_a_partial_grant` | PASS — second pass adds nothing, an edited detail appends exactly one tag, a deny-listed third path refuses the whole ticket rather than granting the safe half. |
+| vii | `test_held_ticket_releases_once_its_cited_path_is_granted` + `dispatcher/tests/test_runaway.py` (7 rows) | PASS — a v2-schema `unreachable_paths` covered by the ticket's effective add_dirs releases the hold; empty paths, partial coverage, a non-path defect and a lint crash all keep it. |
+
+**Correction to row iv's prediction.** The row predicted `1401/1402/1403 -> auto dir`.
+1402/1403/1407 land exactly there. wq#1401 lands in `needs_unresolved`, because its
+detail names `reboot` and §2.4 is explicit that a ticket needing a v2 verb "stays
+`needs_unresolved` with the v2 tag named in the skip detail, which is the honest
+state". The dir tag is still derived (`dir(/home/lumen/instructions/playbooks)`); it is
+simply not applied to a ticket that is being skipped anyway. The §4 prediction predates
+the lint's v2-verb bucket (slice B, wq#1437); §2.4 governs. No component changed.
+
+**Default flipped.** `FOREMAN_NEEDS_LINT_MODE` now defaults to `apply-dir`, not slice
+B's `warn` — the rollback this slice ships would otherwise be a no-op. `warn` restores
+slice B exactly (derive + log, decide nothing) and `off` silences the stage. Blast
+radius measured on the live queue the day it landed: of 34 open tickets, 6 land in
+`needs_unresolved` (all naming a v2 verb) and 1 in `capability_denied_by_policy`
+(`restart(tailscaled@thor)`) — i.e. 7 tickets that would each have spawned and failed
+now skip instead. An unrecognised mode value degrades to `warn`, never to enforcing.
+
 ## 5. Slices (smallest blast radius first; one PR each; each ships with its tests + rollback flag)
 
 | slice | content | repo | rollback | unblocks |

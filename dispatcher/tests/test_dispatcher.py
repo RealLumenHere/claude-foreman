@@ -103,6 +103,13 @@ def denv(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_LUMEN_RUN_LOG", str(calls_log))
     monkeypatch.setenv("WQ_DB", str(wq_db))
     monkeypatch.setenv("WQ_AGENT", "test-dispatcher")
+    # wq#1438: production defaults stage 3.7 to `apply-dir` (it gates and auto-tags).
+    # Every test that predates slice C asserts a decision made WITHOUT that gate, so
+    # the fixture pins slice B's mode and the slice-C tests below opt back in
+    # explicitly — a gate nobody asked about must not silently rewrite 200 fixtures'
+    # expectations. `test_capability_lint_mode_defaults_to_apply_dir` is what holds
+    # the real default honest.
+    monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "warn")
     monkeypatch.delenv("FAKE_GOVERNOR_DENY", raising=False)
     # wq#844 PSI check reads the real host's /proc/pressure/memory by default — point it
     # at a nonexistent path so these tests aren't at the mercy of the box's live memory
@@ -229,6 +236,37 @@ def add_decision_gate_columns(denv):
             db_exec(denv, f"ALTER TABLE tasks ADD COLUMN {col} TEXT")
         except sqlite3.OperationalError:
             pass  # already added
+
+
+def add_needs_column(denv):
+    """Same trick for wq#1331's `needs` column: a scratch DB built by plain `wq add`
+    predates that migration, and `wq edit --needs` refuses outright without it — so a
+    slice-C test would measure the missing column instead of the pre-skip."""
+    try:
+        db_exec(denv, "ALTER TABLE tasks ADD COLUMN needs TEXT")
+    except sqlite3.OperationalError:
+        pass  # already added
+
+
+def needs_of(denv, tid):
+    """The ticket's `needs` column, or "" when this scratch schema has none."""
+    c = sqlite3.connect(denv["wq_db"])
+    try:
+        return (c.execute("SELECT needs FROM tasks WHERE id=?", (tid,)).fetchone()
+                or [""])[0] or ""
+    except sqlite3.OperationalError:
+        return ""
+    finally:
+        c.close()
+
+
+def notes_of(denv, tid):
+    c = sqlite3.connect(denv["wq_db"])
+    try:
+        return (c.execute("SELECT notes FROM tasks WHERE id=?", (tid,)).fetchone()
+                or [""])[0] or ""
+    finally:
+        c.close()
 
 
 def commit_config(tmp_path, message):
@@ -1557,8 +1595,7 @@ def test_capability_lint_warn_logs_one_event_per_candidate_and_applies_nothing(
         "restart(tailscaled@thor) policy:never.nodes (thor)"]
     assert ev["tags"] == ["ssh(isis)"]
     # applies nothing: no needs write, no extra skip, the ticket still spawned
-    row = [r for r in task_rows(denv) if r[0] == tid][0]
-    assert not row[-1]  # `needs` column still empty
+    assert needs_of(denv, tid) == ""
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
     assert not [e for e in log_events(denv, "skip") if e.get("ticket") == tid]
 
@@ -1602,3 +1639,221 @@ def test_capability_lint_exception_never_costs_a_ticket_its_decision(denv, monke
     assert len(errs) == 1 and "lint boom" in errs[0]["reason"]
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
     assert not [e for e in log_events(denv, "skip") if e["reason"] == "quarantined"]
+
+
+# ---- stage 3.7 enforcement: the pre-skip + dir auto-tag (wq#1438, §2.2, slice C) ----
+#
+# Test-to-failure rows i (unit half), iv, vi and vii from BROKER_WIRING.md §4. Every
+# row asserts the negative the doc asks for: lumen_calls(denv) == [] is "no slot was
+# burned", which is the entire point of moving the check in front of the spawn.
+
+# Two real directories that are outside every repo ∪ base add_dirs the fixture gives a
+# worker, so the lint must derive a dir tag for them (the normalise_dir half of §2.1
+# only ever names a directory that EXISTS, so these cannot be invented paths).
+REACHABLE_DIR = "/home/lumen/agent"
+SECOND_DIR = "/home/lumen/instructions/playbooks"
+
+
+def _apply_dir(monkeypatch):
+    monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply-dir")
+
+
+def test_capability_auto_tags_a_cited_dir_and_still_spawns(denv, monkeypatch):
+    """Row (i), unit half: a ticket citing a path outside its reach gets the read
+    grant written onto it and dispatches in the SAME pass — the tag is what makes
+    fworker.add_dirs_for hand the child `--add-dir /home/lumen/agent`."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket(f"ops: read the notes in {REACHABLE_DIR}")
+    add_needs_column(denv)
+
+    assert fd.run_pass() == 0
+
+    assert needs_of(denv, tid) == f"dir({REACHABLE_DIR})"
+    assert f"capability_lint: +dir({REACHABLE_DIR})" in notes_of(denv, tid)
+    applied = log_events(denv, "capability_applied")
+    assert len(applied) == 1 and applied[0]["tags"] == [f"dir({REACHABLE_DIR})"]
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
+def test_cited_secret_is_refused_before_any_spawn(denv, monkeypatch):
+    """Row (iv): a ticket citing a token is a Frank-hands ticket. It must be skipped
+    with `capability_denied_by_policy`, page once, take no slot, and NEVER have the
+    deny-listed path written onto it as a grant."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket("ops: rotate the github token",
+                     detail="read /home/lumen/.secrets/github-frank.token first")
+    add_needs_column(denv)
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["stage"] == "capability"
+    assert skips[0]["reason"] == "capability_denied_by_policy"
+    assert ".secrets" in skips[0]["detail"]
+    assert lumen_calls(denv) == [] and needs_of(denv, tid) == ""
+    assert len(ntfy_lines(denv)) == 1 and f"wq#{tid}" in ntfy_lines(denv)[0]
+
+    # second pass same day: still skipped, not re-pinged (24h dedup, §2.2)
+    assert fd.run_pass() == 0
+    assert len(log_events(denv, "skip", ticket=tid)) == 2
+    assert len(ntfy_lines(denv)) == 1
+
+
+def test_nonexistent_cited_path_is_unresolved_not_guessed(denv, monkeypatch):
+    """Row (iv), second half: the lint will not walk a missing path up to some
+    ancestor that does exist — that would be a guess (§2.1). The honest answer is
+    `needs_unresolved` with the lint's own text, and no spawn."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket("ops: fix the thing",
+                     detail="the config lives in /home/lumen/no-such-dir-at-all/conf")
+    add_needs_column(denv)
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "needs_unresolved"
+    assert "does not exist" in skips[0]["detail"]
+    assert lumen_calls(denv) == [] and needs_of(denv, tid) == ""
+
+
+def test_v2_verb_stays_unresolved_and_names_the_missing_verb(denv, monkeypatch):
+    """§2.4: the tickets that need `sudo`/`reboot`/`adb` stay `needs_unresolved` with
+    the v2 tag named in the skip detail. That IS the honest state — better than
+    spawning a worker that will discover the same thing after taking a slot."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket("ops: bring the node back", detail="reboot isis after the upgrade")
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "needs_unresolved"
+    assert "reboot" in skips[0]["detail"] and "v2 verb" in skips[0]["detail"]
+    assert lumen_calls(denv) == []
+
+
+def test_refusal_beats_a_partial_grant(denv, monkeypatch):
+    """Row (vi), second half: a ticket citing one grantable dir AND one deny-listed
+    path is refused whole. Never partially granted — the safe half must not be written
+    while the unsafe half is what the ticket is actually about."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket("ops: copy secrets into place",
+                     detail=f"read {REACHABLE_DIR} then /home/lumen/.ssh/id_ed25519")
+    add_needs_column(denv)
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "capability_denied_by_policy"
+    assert needs_of(denv, tid) == "" and log_events(denv, "capability_applied") == []
+    assert lumen_calls(denv) == []
+
+
+def test_auto_tag_is_idempotent_and_appends_a_newly_cited_dir(denv, monkeypatch):
+    """Row (vi): re-linting an already-tagged ticket writes nothing; a detail edited
+    to cite a second path appends exactly that tag, with no duplicate of the first."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket(f"ops: read {REACHABLE_DIR}")
+    add_needs_column(denv)
+
+    def reopen():  # the ticket must be a candidate again on the next pass
+        db_exec(denv, "UPDATE tasks SET status='open', claimed_by=NULL WHERE id=?", (tid,))
+
+    assert fd.run_pass() == 0
+    assert needs_of(denv, tid) == f"dir({REACHABLE_DIR})"
+
+    # second pass, nothing new cited: no second write, no duplicate tag, no note spam
+    reopen()
+    assert fd.run_pass() == 0
+    assert needs_of(denv, tid) == f"dir({REACHABLE_DIR})"
+    assert len(log_events(denv, "capability_applied")) == 1
+    assert notes_of(denv, tid).count("capability_lint:") == 1
+
+    # detail now cites a second reachable-once-granted path
+    db_exec(denv, "UPDATE tasks SET detail=? WHERE id=?",
+            (f"also read {SECOND_DIR}/maintenance-window.md", tid))
+    reopen()
+    assert fd.run_pass() == 0
+    assert needs_of(denv, tid) == f"dir({REACHABLE_DIR}), dir({SECOND_DIR})"
+    assert len(log_events(denv, "capability_applied")) == 2
+    assert notes_of(denv, tid).count("capability_lint:") == 2
+
+
+def test_capability_skips_are_structural_in_pass_end(denv, monkeypatch):
+    """§2.2: all four reasons subtract from `dispatchable` so the watchdog can still
+    tell a real stall (dispatchable>0, spawned=0) from a queue of correctly-refused
+    tickets (NIGHTLY_DISPATCH_RESILIENCE §3.3.1)."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    add_ticket("secret", detail="cat /home/lumen/secrets/reddit.env")
+    add_ticket("ghost", detail="see /home/lumen/no-such-dir-at-all/x")
+    ok = add_ticket("ordinary candidate that cites nothing")
+
+    assert fd.run_pass() == 0
+
+    end = log_events(denv, "pass_end")[0]
+    assert end["candidates"] == 3 and end["dispatchable"] == 1
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [ok]
+    assert set(fd.CAPABILITY_SKIP_REASONS) <= fd.STRUCTURAL_SKIP_REASONS
+
+
+def test_warn_mode_is_the_rollback(denv, monkeypatch):
+    """The slice's documented rollback: FOREMAN_NEEDS_LINT_MODE=warn restores slice B
+    — the same ticket the pre-skip refuses above is derived, logged and dispatched."""
+    _lint_roster(monkeypatch)
+    monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "warn")
+    tid = add_ticket("ops: rotate the token",
+                     detail="read /home/lumen/.secrets/github-frank.token")
+    add_needs_column(denv)
+
+    assert fd.run_pass() == 0
+
+    assert log_events(denv, "skip", ticket=tid) == []
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert needs_of(denv, tid) == "" and log_events(denv, "capability_lint")
+
+
+def test_held_ticket_releases_once_its_cited_path_is_granted(denv, monkeypatch):
+    """Row (vii), end to end (wq#1401's shape): a ticket held on a
+    CITED_PATH_UNREACHABLE failure.json is auto-tagged by stage 3.7 — which runs in
+    FRONT of the hold for exactly this reason — and the hold no longer applies, so it
+    spawns instead of sitting held forever."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket(f"ops: read {REACHABLE_DIR}")
+    add_needs_column(denv)
+    d = denv["runs_root"] / f"wq{tid}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "failure.json").write_text(json.dumps(
+        {"ticket": tid, "triage": "HARNESS_DEFECT", "schema": 2,
+         "summary": f"CITED_PATH_UNREACHABLE (cited path {REACHABLE_DIR} outside "
+                    f"worktree ∪ add_dirs)",
+         "unreachable_paths": [REACHABLE_DIR], "refused": [],
+         "inferred_needs": [f"dir({REACHABLE_DIR})"]}))
+
+    assert fd.run_pass() == 0
+
+    assert log_events(denv, "skip", ticket=tid) == []
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert needs_of(denv, tid) == f"dir({REACHABLE_DIR})"
+
+
+def test_an_unrelated_harness_defect_still_holds_under_the_pre_skip(denv, monkeypatch):
+    """The backstop the release must not eat: a defect with no structured paths keeps
+    its hold even in apply-dir mode (§2.2 — harness_defect_hold stays for the defects
+    the pre-skip cannot see)."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket("worktree/repo mismatch, nothing to do with paths")
+    write_failure_json(denv, tid, summary="WORKTREE_REPO_MISMATCH")
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "harness_defect_hold"
+    assert lumen_calls(denv) == []

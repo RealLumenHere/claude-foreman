@@ -303,3 +303,88 @@ def test_failure_record_without_a_refusal_still_mines_the_transcript():
         events=[], node_map={}, check_worktree=False)
     assert rec["refused"] == [] and rec["unreachable_paths"] == []
     assert rec["schema"] == failure_record.SCHEMA_VERSION
+
+
+# ---- wq#1438 slice C: effective needs, effective add_dirs, coverage, auto-tag --------
+
+class _Derived:
+    """capability_lint.Derived's read surface, without importing the lint — these are
+    capability's own contracts, and the lint has its own suite."""
+
+    def __init__(self, tags=()):
+        self.tags = list(tags)
+
+
+def test_effective_needs_unions_ticket_tags_with_derived_ones():
+    t = {"needs": "dir(/home/lumen/kb)", "detail": "Needs: ssh(isis)"}
+    n = capability.effective_needs(t, _Derived([("dir", "/home/lumen/agent")]))
+    assert n.dirs == ["/home/lumen/kb", "/home/lumen/agent"]
+    assert n.ssh_nodes == ["isis"]
+
+
+def test_effective_needs_dedupes_a_tag_the_ticket_already_carries():
+    """A second pass over an already-auto-tagged ticket must not double it (§4 row vi)."""
+    t = {"needs": "dir(/home/lumen/agent)", "detail": ""}
+    n = capability.effective_needs(t, _Derived([("dir", "/home/lumen/agent")]))
+    assert n.dirs == ["/home/lumen/agent"]
+
+
+def test_effective_needs_drops_the_derived_half_under_the_rollback_flag(monkeypatch):
+    monkeypatch.setenv("FOREMAN_NEEDS_DISABLE", "1")
+    n = capability.effective_needs({"needs": "dir(/home/lumen/kb)"},
+                                   _Derived([("dir", "/home/lumen/agent")]))
+    assert n.dirs == []
+
+
+def test_effective_add_dirs_matches_fworkers_union():
+    """One answer, two callers: what the dispatcher preflights over must be exactly
+    what fworker.add_dirs_for (:1049) will hand the child once the tag is written."""
+    n = needs_mod.parse("dir(/home/lumen/agent), dir(/home/lumen/kb)")
+    for archetype in (None, "standard-engineering"):
+        assert (capability.effective_add_dirs(archetype, n)
+                == fworker.add_dirs_for(archetype, n.dirs))
+
+
+def test_covered_by_requires_every_path_and_treats_empty_as_unknown():
+    dirs = ["/home/lumen/agent", "/home/lumen/kb"]
+    assert capability.covered_by(["/home/lumen/agent/x.py"], dirs)
+    assert not capability.covered_by(["/home/lumen/agent/x.py", "/home/lumen/other"], dirs)
+    # a v1 failure.json wrote unreachable_paths: [] — that is "we don't know", never
+    # "nothing left to cover" (§2.5).
+    assert not capability.covered_by([], dirs)
+    assert not capability.covered_by(["/home/lumen/agent"], [])
+    assert not capability.covered_by(["/home/lumen/agent-old"], ["/home/lumen/agent"])
+
+
+def test_apply_tags_unions_and_writes_once(monkeypatch):
+    calls = []
+    monkeypatch.setattr(capability, "_wq", lambda *a: calls.append(a) or "")
+    field = capability.apply_tags(99, [("dir", "/home/lumen/agent")],
+                                  current_needs="dir(/home/lumen/kb)")
+    assert field == "dir(/home/lumen/kb), dir(/home/lumen/agent)"
+    assert calls[0] == ("edit", "99", "--needs", field)
+    assert calls[1] == ("note", "99", "capability_lint: +dir(/home/lumen/agent)")
+
+
+def test_apply_tags_is_a_noop_when_the_ticket_already_carries_the_tag(monkeypatch):
+    calls = []
+    monkeypatch.setattr(capability, "_wq", lambda *a: calls.append(a) or "")
+    assert capability.apply_tags(99, [("dir", "/home/lumen/agent")],
+                                 current_needs="dir(/home/lumen/agent)") is None
+    assert calls == []
+
+
+def test_apply_tags_writes_nothing_in_dry_run(monkeypatch):
+    calls = []
+    monkeypatch.setattr(capability, "_wq", lambda *a: calls.append(a) or "")
+    assert capability.apply_tags(99, [("dir", "/home/lumen/agent")],
+                                 dry_run=True) == "dir(/home/lumen/agent)"
+    assert calls == []
+
+
+def test_apply_tags_refuses_an_unstorable_field(monkeypatch):
+    """needs.validate() is re-run before the write so a lint bug fails where the caller
+    logs it, not as an opaque non-zero exit from `wq edit`."""
+    monkeypatch.setattr(capability, "_wq", lambda *a: pytest.fail("must not write"))
+    with pytest.raises(ValueError):
+        capability.apply_tags(99, [("dir", "relative/path")])

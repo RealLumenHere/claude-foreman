@@ -25,8 +25,12 @@ import re
 import sys
 
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.normpath(os.path.join(DISPATCHER_DIR, ".."))
 sys.path.insert(0, DISPATCHER_DIR)
+sys.path.insert(0, os.path.join(REPO_ROOT, "harness"))
 import self_heal  # noqa: E402 — reuses attempt_count()/wq_show()/RUNS_ROOT
+import capability  # noqa: E402 — wq#1438 §2.2 hold release
+import capability_lint  # noqa: E402
 
 RUNAWAY_MAX_ATTEMPTS = int(os.environ.get("FOREMAN_RUNAWAY_MAX_ATTEMPTS", "5"))
 RUN_DIR_RE = re.compile(r"^wq(\d+)$")
@@ -63,6 +67,33 @@ def stuck_ticket_ids(threshold=None):
     return stuck
 
 
+def hold_released(rec, ticket):
+    """wq#1438 (BROKER_WIRING.md §2.2, last para): True when a HARNESS_DEFECT hold is
+    stale because the thing it held for has since been granted.
+
+    The only defect the pre-skip can retire this way is CITED_PATH_UNREACHABLE, and
+    only through its STRUCTURED field: `unreachable_paths` (schema v2, wq#1436 §2.5 —
+    v1 records always wrote it empty, which is why covered_by() treats empty as
+    "tells us nothing" rather than "nothing left to cover"). If every path that
+    refusal named is now inside the ticket's effective add_dirs — its own needs:dir
+    tags plus whatever stage 3.7 derives for it this pass — then the next spawn will
+    get past preflight and holding it is just a loop that never ends. Without this,
+    auto-tagging a held ticket could never let it run (§2.2).
+
+    Anything else (WORKTREE_REPO_MISMATCH, a hook crash, a v1 record) keeps its hold:
+    the backstop is only bypassed for a defect this module can prove is fixed."""
+    paths = (rec or {}).get("unreachable_paths") or []
+    if not paths:
+        return False
+    try:
+        derived = capability_lint.derive(ticket) if capability_lint.enabled() else None
+        needs = capability.effective_needs(ticket, derived)
+        add_dirs = capability.effective_add_dirs(ticket.get("archetype"), needs)
+    except Exception:  # noqa: BLE001 — a lint failure must never RELEASE a hold
+        return False
+    return capability.covered_by(paths, add_dirs)
+
+
 def harness_defect_ticket_ids():
     """{ticket_id: {"summary", "status", "lane"}} for every open ticket whose most
     recent failure.json is still triaged HARNESS_DEFECT (wq#1415).
@@ -78,7 +109,8 @@ def harness_defect_ticket_ids():
     for), the same unresolved defect got re-dispatched repeatedly. Hold here on the
     ticket's own last recorded triage instead of an attempt count; it clears itself as
     soon as a later attempt gets past preflight (a fresh non-HARNESS_DEFECT failure.json,
-    or `done`/`blocked` takes the ticket out of `open`)."""
+    or `done`/`blocked` takes the ticket out of `open`) — or, since wq#1438, as soon as
+    hold_released() can prove the paths the refusal named are now granted."""
     held = {}
     for tid in candidate_ticket_ids():
         fpath = os.path.join(self_heal.RUNS_ROOT, f"wq{tid}", "failure.json")
@@ -91,6 +123,8 @@ def harness_defect_ticket_ids():
             continue
         t = self_heal.wq_show(tid)
         if t.get("status") != "open":
+            continue
+        if hold_released(rec, t):  # wq#1438 §2.2: the cited paths are granted now
             continue
         held[tid] = {"summary": rec.get("summary"), "status": t.get("status"),
                      "lane": t.get("lane")}

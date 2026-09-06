@@ -1,18 +1,20 @@
 {
-  "ticket": "wq#1445",
-  "derived_by": "worker",
   "criteria": [
     {
       "id": "AC1",
-      "citation": "harness/fleet-exec-policy.yaml:101-106"
+      "citation": "dispatcher/foreman_dispatcher.py:577-611"
     }
   ],
+  "derived_by": "worker",
+  "ticket": "wq#1438",
   "notes": [
-    "Root cause (verified live): sobek (tailscale_ip 100.86.156.91 since 2026-07-31, lumen_state) is absent from /home/lumen/bin/fleet-keymesh's hardcoded NODES list (script generated 2026-07-18, predates sobek's provisioning) -> ~/.ssh/fleet_config has no Host sobek stanza -> `ssh sobek` fails hostname resolution, not a broker/policy bug.",
-    "This BUILD worker's sandbox has no ssh/tailscale in its Bash allowlist (harness/worker-settings.json) and no fleet-exec grant for this ticket, so it cannot itself run `ssh sobek -- true`, provision ~/lumen-drop, or safely hand-edit the shared ~/.ssh/fleet_config (that file is generated infra state outside this worktree, and /home/lumen/bin currently has another session's unrelated uncommitted work checked out — not safe to touch from here).",
-    "Took the ticket's explicit fallback: dropped sobek from harness/fleet-exec-policy.yaml's copy_dirs roster (harness/fleet-exec-policy.yaml:100-107) so `fleet-exec copy` no longer passes the known-node gate only to die on DNS. never.power/never.restart entries for sobek left untouched (those are deny-lists, unrelated to reachability, must stay in force regardless).",
-    "Verified the edit: `python3 -c \"import yaml; yaml.safe_load(open('harness/fleet-exec-policy.yaml'))['copy_dirs']\"` parses with sobek absent; `python3 -m pytest harness/tests/test_fworker_grant.py -q` -> 14 passed (uses its own embedded fixture, unaffected).",
-    "Filed wq#1447 (build lane, needs=ssh(sobek)) for the real fix: add sobek to fleet-keymesh's NODES list, rerun it, verify ssh, provision lumen-drop, ingest sobek.lumen_drop, then re-add sobek to copy_dirs via a foreman PR.",
-    "Allowlist gap worth widening: `ssh <fleet-node>` and `tailscale status` are refused outright in harness/worker-settings.json's Bash allowlist for this BUILD archetype, so any ticket needing a live fleet-node probe (not just this one) cannot be completed by this worker type without a fleet-exec grant."
+    "AC1 primary citation: dispatcher/foreman_dispatcher.py:577-611 enforce_capability() \u2014 stage 3.7 enforcement: derived.refused -> capability_denied_by_policy, derived.unresolved -> needs_unresolved, capability.preflight verdict -> its own reason (cited_path_unreachable | node_unknown | capability_denied_by_policy), else apply_tags. Wired into _do_pass at dispatcher/foreman_dispatcher.py:1077, immediately after repo_for_ticket and before the runaway/harness-defect holds.",
+    "Per-reason 24h ntfy dedup (same ledger shape as handle_harness_defect_hold): dispatcher/foreman_dispatcher.py:544-575.",
+    "Structural skips so pass_end.dispatchable stays honest: dispatcher/foreman_dispatcher.py:130-140.",
+    "Hold release: dispatcher/runaway.py:70-94 hold_released(), wired at dispatcher/runaway.py:127.",
+    "Shared helpers: harness/capability.py:321 effective_needs, :338 effective_add_dirs, :352 covered_by, :372 apply_tags.",
+    "apply-dir mode + dir-only tag filter: harness/capability_lint.py:127 DEFAULT_MODE, :151 enforcing(), :156 appliable_tags().",
+    "Replay harness for doc section 4 row iv: dispatcher/capability_replay.py (read-only, no spawn/write path).",
+    "Tests: python3 -m pytest dispatcher/tests -q -> 252 passed; python3 -m pytest harness/tests -q -> 653 passed."
   ]
 }
