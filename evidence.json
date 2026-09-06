@@ -3,18 +3,19 @@
     {
       "id": "AC1",
       "citation": "ops/wq1373-cf-token-liveness/cf_token_liveness.py:142-174",
-      "cmd_run": "python3 cf_token_liveness.py --manifest /tmp/wq1434/tokens_badkey.json --dry-run",
+      "cmd_run": "python3 cf_token_liveness.py --manifest /tmp/wq1443/manifest_repro.json --dry-run",
       "exit_code": 1
     }
   ],
   "derived_by": "worker",
   "notes": [
-    "Fix shape (judgment call, both prongs shipped): (1) check_one() wraps the whole entry body in try/except CONFIG_ERRORS (KeyError, AttributeError, TypeError, ValueError) so a malformed manifest entry is charged to THAT token as a normal dead-token failure and the loop keeps going -- cf_token_liveness.py:142-174, CONFIG_ERRORS at :61. (2) main() backstops anything else with a distinct exit 2 (EXIT_ABORTED, cf_token_liveness.py:55, :209-231) so the crash path is no longer indistinguishable from the intentional dead-token exit 1 that cf-token-liveness.service's SuccessExitStatus=0 1 whitelists; exit 2 fails the unit, which also skips ExecStartPost=lumen-cron-stamp so lumen-cron-deadman (wq#1184) sees it.",
-    "wq#1433's exact repro, re-run against the fix: `python3 cf_token_liveness.py --manifest /tmp/wq1434/tokens_badkey.json --dry-run` -> exit 1 (was: uncaught KeyError traceback, exit 1, no alert). Alert now fires ('would alert priority=urgent ... badkey-missing-account-id-file: malformed manifest entry: KeyError: 'account_id_file'') AND the later entry in the same manifest is still checked ('later-entry-must-still-be-checked: token file missing').",
-    "Exit-2 path verified twice: missing manifest file -> FileNotFoundError, urgent 'monitor ABORTED' alert, exit 2; manifest with no `tokens` array -> RuntimeError raised by run() (cf_token_liveness.py:187-191), exit 2.",
-    "No regression on the real fleet manifest: `python3 cf_token_liveness.py --dry-run` -> 'cf_token_liveness: 2/2 tokens live', exit 0 against the live /home/lumen/mailbot/.cf_d1_token and .cf_d1_write_token. TTL-warning path unchanged (name-prefixing moved into check_one, run() no longer touches entry['name']): back-dated minted still emits 'ttl-warning-path: expires in -6.3d' at priority high, exit 1 driven only by the failing entries.",
-    "Also covered by the same catch: unparseable `minted` (ValueError) and a non-object entry in the tokens array (AttributeError) -- both reported per-token, pass completes.",
-    "Docs/unit updated to match: README.md exit-code table + rationale section, cf-token-liveness.service comment on why exit 2 is deliberately NOT in SuccessExitStatus."
+    "Verdict: CONFIRM. Full report: reports/1443_verify_wq1434_cf_token_liveness.md.",
+    "Reproduced wq#1433's original crash against the pre-fix script (local /home/lumen/foreman main, one commit behind origin/main): a two-entry manifest with the first entry missing account_id_file raises uncaught KeyError, exit 1, second entry never checked, no alert.",
+    "Ran the post-fix script (origin/main 349b498) against the identical manifest: both entries checked, urgent alert fires, exit 1 (per-token failure, not a crash) -- the KeyError is now caught by check_one()'s CONFIG_ERRORS handler and attributed to the malformed entry only.",
+    "Also exercised: a non-dict manifest entry (AttributeError, caught, loop continues) and a manifest with no `tokens` array (RuntimeError from run(), caught by main()'s backstop, exit 2 -- distinct from the exit-1 per-token path and correctly outside cf-token-liveness.service's SuccessExitStatus=0 1, so lumen-cron-deadman wq#1184 would flag a real crash as stale).",
+    "No regression: ran post-fix script against the real tokens.json (live /home/lumen/mailbot/.cf_d1_token, .cf_d1_write_token) -- 2/2 tokens live, exit 0, matches wq#1434's own closing note.",
+    "Minor non-blocking observation: CONFIG_ERRORS' ValueError also swallows json.JSONDecodeError from a non-JSON CF API response body (monkey-patched urlopen to confirm), mislabeling it 'malformed manifest entry' instead of 'probe failed'. Still alerts urgent, still exits 1, still continues the loop -- not a repeat of wq#1433's crash/skip/mask failure mode, and wq#1433's own disposition section explicitly scoped ValueError/JSONDecodeError into this catch-all. Not contradiction-worthy; noted for a future label-precision pass.",
+    "Not re-implementing (verify-pass, not a fix ticket, precedent wq#872/#1268)."
   ],
-  "ticket": "wq#1434"
+  "ticket": "wq#1443"
 }
