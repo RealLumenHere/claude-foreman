@@ -97,7 +97,7 @@ copy_dirs:
   thor: [/home/thor/lumen-drop]
   isis: [/home/isis/lumen-drop]
   lumen: [/home/lumen/lumen-drop]
-  maat: [/home/maat/lumen-drop]
+  maat: [/home/maam/lumen-drop]  # ssh user on maat is maam (wq#1444)
   sobek: [/home/sobek/lumen-drop]
   bes: [/home/bes/lumen-drop]
 
