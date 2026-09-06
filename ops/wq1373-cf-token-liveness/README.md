@@ -34,6 +34,26 @@ triggers `ntfy-send -p urgent`. If a manifest entry also carries `minted` +
 `ttl_days`, the script warns (`ntfy-send -p high`, does not affect exit code)
 once fewer than `TTL_WARN_DAYS` (3) remain.
 
+### Exit codes (wq#1434)
+
+| exit | meaning                                                       |
+|------|---------------------------------------------------------------|
+| 0    | every configured token probed live                             |
+| 1    | at least one token is dead/missing/misconfigured — pages `urgent` |
+| 2    | the pass itself could not complete — tokens left unchecked     |
+
+A malformed manifest entry is charged to *that* token (exit 1, alert fires,
+the loop keeps going) rather than aborting the pass: the resource-id lookups
+live inside the `probe_*` functions, so an entry missing `account_id_file` /
+`database_id_file` / `zone_id_file` — precisely the config-only edit this
+README prescribes for each pending token below — used to raise an uncaught
+`KeyError` out of `run()`, killing the pass before any alert fired and
+skipping every later entry (wq#1433). `check_one()` now catches config-shape
+errors, and `main()` backstops anything else with exit **2**, which
+`SuccessExitStatus=0 1` deliberately does not whitelist — otherwise a crash
+(Python's default status is also 1) would look identical to a healthy pass to
+systemd *and* to `lumen-cron-deadman`.
+
 The D1 and Workers request shapes are reused verbatim from code already
 proven live in this fleet: `mailbot/mail_recall.py:38-46` and
 `foreman/ops/wq1252-lumen-public-guardian/checks_email.py:47-65`.

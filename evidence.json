@@ -2,16 +2,19 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1373-cf-token-liveness/cf_token_liveness.py:126-138"
+      "citation": "ops/wq1373-cf-token-liveness/cf_token_liveness.py:142-174",
+      "cmd_run": "python3 cf_token_liveness.py --manifest /tmp/wq1434/tokens_badkey.json --dry-run",
+      "exit_code": 1
     }
   ],
   "derived_by": "worker",
   "notes": [
-    "Verdict: CONTRADICT. Full report: reports/1433_verify_wq1373_cf_token_liveness.md.",
-    "Reproduced the PR's own verification transcript live: `python3 cf_token_liveness.py --manifest tokens.json --dry-run` -> 'cf_token_liveness: 2/2 tokens live' against the real /home/lumen/mailbot/.cf_d1_token and .cf_d1_write_token files; synthetic-manifest failure/TTL-warning path also reproduced.",
-    "Contradiction: check_one() (cf_token_liveness.py:126-138) only try/excepts the probe() network call, not the entry[\"account_id_file\"]/[\"database_id_file\"]/[\"zone_id_file\"] lookups inside each probe_* function. A manifest entry missing a required key raises an uncaught KeyError, reproduced directly: `python3 cf_token_liveness.py --manifest tokens_badkey.json --dry-run` crashes with a traceback, exit 1, no alert ever fires, and the loop never reaches later (healthy) entries in the same pass.",
-    "Compounds with cf-token-liveness.service's `SuccessExitStatus=0 1` (added so the intentional 'found a dead token' exit 1 doesn't trip OnFailure=): Python's default uncaught-exception exit code is also 1, so the crash path and the healthy-detection path are indistinguishable to systemd, and lumen-cron-deadman (wq#1184) never catches the crash either -- the exact 'nothing was watching' failure mode (ISSUE-LOG.md #37) this ticket exists to close.",
-    "Not fixed under this ticket (verify-pass is not a re-implementation gate, precedent wq#872/#1268); escalating to opus-5@high per this ticket's own instructions."
+    "Fix shape (judgment call, both prongs shipped): (1) check_one() wraps the whole entry body in try/except CONFIG_ERRORS (KeyError, AttributeError, TypeError, ValueError) so a malformed manifest entry is charged to THAT token as a normal dead-token failure and the loop keeps going -- cf_token_liveness.py:142-174, CONFIG_ERRORS at :61. (2) main() backstops anything else with a distinct exit 2 (EXIT_ABORTED, cf_token_liveness.py:55, :209-231) so the crash path is no longer indistinguishable from the intentional dead-token exit 1 that cf-token-liveness.service's SuccessExitStatus=0 1 whitelists; exit 2 fails the unit, which also skips ExecStartPost=lumen-cron-stamp so lumen-cron-deadman (wq#1184) sees it.",
+    "wq#1433's exact repro, re-run against the fix: `python3 cf_token_liveness.py --manifest /tmp/wq1434/tokens_badkey.json --dry-run` -> exit 1 (was: uncaught KeyError traceback, exit 1, no alert). Alert now fires ('would alert priority=urgent ... badkey-missing-account-id-file: malformed manifest entry: KeyError: 'account_id_file'') AND the later entry in the same manifest is still checked ('later-entry-must-still-be-checked: token file missing').",
+    "Exit-2 path verified twice: missing manifest file -> FileNotFoundError, urgent 'monitor ABORTED' alert, exit 2; manifest with no `tokens` array -> RuntimeError raised by run() (cf_token_liveness.py:187-191), exit 2.",
+    "No regression on the real fleet manifest: `python3 cf_token_liveness.py --dry-run` -> 'cf_token_liveness: 2/2 tokens live', exit 0 against the live /home/lumen/mailbot/.cf_d1_token and .cf_d1_write_token. TTL-warning path unchanged (name-prefixing moved into check_one, run() no longer touches entry['name']): back-dated minted still emits 'ttl-warning-path: expires in -6.3d' at priority high, exit 1 driven only by the failing entries.",
+    "Also covered by the same catch: unparseable `minted` (ValueError) and a non-object entry in the tokens array (AttributeError) -- both reported per-token, pass completes.",
+    "Docs/unit updated to match: README.md exit-code table + rationale section, cf-token-liveness.service comment on why exit 2 is deliberately NOT in SuccessExitStatus."
   ],
-  "ticket": "wq#1433"
+  "ticket": "wq#1434"
 }

@@ -14,7 +14,10 @@ ExecStart=/usr/bin/python3 /home/lumen/services/cf-token-liveness/cf_token_liven
 ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
 # A pass that finds a dead token exits 1 by design (see run() in
 # cf_token_liveness.py) — that is the finding, not a unit failure, and must
-# not trip a restart loop or OnFailure=.
+# not trip a restart loop or OnFailure=. A pass that could not complete exits
+# 2 instead (main()'s backstop, wq#1434) and is deliberately NOT whitelisted
+# here: it fails the unit, which also skips the ExecStartPost= stamp below so
+# lumen-cron-deadman (wq#1184) reports the monitor as stale.
 SuccessExitStatus=0 1
 TimeoutStartSec=120
 Nice=5
