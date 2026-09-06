@@ -2,15 +2,15 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "research/brain/style_calibration.md:1-207"
+      "citation": "ops/wq1373-cf-token-liveness/cf_token_liveness.py:66-99"
     }
   ],
   "derived_by": "worker",
   "notes": [
-    "Redo of wq#1363-a1 (merged PR#297), which wq#1425 flagged CONTRADICT for asserting contact_notes (D1, wq#1167) and loadContactLore() (wq#1359) as live mailbot infrastructure when both are built but unmerged, gated on wq#1338 (status: blocked).",
-    "Re-verified against /home/lumen/mailbot origin/main @ 4b12e6d: `grep -n contact_notes mailbot/src/worker.js migrations/*.sql` and `grep -rn loadContactLore mailbot/src/*.js` both return zero hits; loadHistory() and loadRecentDodgeStyles() confirmed live at worker.js:306 and worker.js:317 respectively.",
-    "`wq show 1338` confirmed status: blocked at time of writing.",
-    "Doc content (dimensions of variation, schema proposal, update procedure, anti-patterns, worked example) carried over from the a1 version, which wq#1425's verify report confirmed sound; only the infrastructure-status framing was rewritten."
+    "cf_token_liveness.py:66-99 implements the per-scope liveness probes (probe_d1/probe_workers/probe_dns/probe_r2/probe_access) that hit a real scoped Cloudflare op instead of /user/tokens/verify.",
+    "Ran live against the two verified real mailbot D1 tokens: `python3 ops/wq1373-cf-token-liveness/cf_token_liveness.py --dry-run` -> 'cf_token_liveness: 2/2 tokens live' (exit 0).",
+    "Ran against a synthetic manifest with a garbage token, a missing token file, and a back-dated `minted` date: correctly reported 2 failures (would ntfy_urgent) and 1 TTL warning (would ntfy_high), exit 1.",
+    "claude_credentials.md is denied to this worker by guard.sh (credential-file deny pattern); did not guess the other ~5 tokens' paths (ISSUE-LOG.md #189). tokens.json covers the 2 tokens whose files this worker could verify with `ls -la`; remaining tokens are a config-only add, documented in README.md."
   ],
-  "ticket": "wq#1363"
+  "ticket": "wq#1373"
 }

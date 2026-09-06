@@ -1,0 +1,20 @@
+# cf-token-liveness.service — one pass over tokens.json, alerting on any dead
+# or soon-to-expire Cloudflare token (wq#1373).
+[Unit]
+Description=Cloudflare token liveness probe — one pass (wq#1373)
+Documentation=file:///home/lumen/foreman/ops/wq1373-cf-token-liveness/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/services/cf-token-liveness
+ExecStart=/usr/bin/python3 /home/lumen/services/cf-token-liveness/cf_token_liveness.py
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+# A pass that finds a dead token exits 1 by design (see run() in
+# cf_token_liveness.py) — that is the finding, not a unit failure, and must
+# not trip a restart loop or OnFailure=.
+SuccessExitStatus=0 1
+TimeoutStartSec=120
+Nice=5

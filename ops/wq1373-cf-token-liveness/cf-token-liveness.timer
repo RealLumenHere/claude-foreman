@@ -1,0 +1,19 @@
+# cf-token-liveness.timer — hourly CF token liveness probe (wq#1373).
+#
+# Hourly is plenty: a dead token sits silently broken for however long until
+# the next probe, and #37 sat dead through an unknown number of gating calls
+# before Frank noticed by hand — anything that bounds that window to under a
+# day is a large improvement. TTL warnings fire at 3 days remaining (see
+# TTL_WARN_DAYS in cf_token_liveness.py), so hourly cadence gives many chances
+# to catch that window before it lapses.
+[Unit]
+Description=Cloudflare token liveness probe (wq#1373)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+AccuracySec=1min
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target
