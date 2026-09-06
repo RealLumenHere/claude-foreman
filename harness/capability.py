@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""capability.py — wq#1436, BROKER_WIRING.md §1 + §2.5 (slice A).
+
+One capability check, shared. BROKER_WIRING.md §1 names the class of defect: the
+only reachability/grant check the fleet had (`fworker.assert_spawn_paths`,
+`fworker.resolve_exec_grant`) ran INSIDE the spawned child — after a slot was taken,
+after a worktree was cut — and reported through a failure record the dispatcher only
+reads on the next pass. The fix is not a second copy of that logic next to the
+dispatcher's own stages; it is this module, which both callers use:
+
+    fworker      belt-and-braces at spawn (a hand-spawned `lumen-run fworker` must
+                 still refuse) — `assert_spawn_paths` and `resolve_exec_grant` are
+                 now adapters over `preflight()` / `policy_grants()`.
+    dispatcher   pre-skip stage 3.7 (slice C, not in this PR): ask `preflight()`
+                 "would this spawn refuse?" before a slot is burned.
+
+A second copy is a lint failure — tests/test_capability.py asserts fworker imports
+this module and holds no private copy of the path regex or the policy loop.
+
+Three refusal reasons, all deterministic (regex + policy dict + state store, never a
+model judgement), each also a dispatcher skip reason:
+
+    cited_path_unreachable       a needs:dir that is not a directory, or a
+                                 /home/lumen/ literal in the detail that lands
+                                 outside worktree ∪ repo ∪ add_dirs (wq#1152)
+    node_unknown                 an ssh/copy/restart tag names a node that is not a
+                                 lumen_state subject with a tailscale_ip fact AND
+                                 does not have a Host entry in the ssh config —
+                                 fleet-exec's known_nodes() checks only the first, so
+                                 such a node passes the broker's gate and then dies
+                                 at transport time
+    capability_denied_by_policy  a copy/restart tag fleet-exec-policy.yaml forbids
+                                 outright (never.nodes, THOR_HARDLOCK, unit globs),
+                                 or an unreadable policy file — a refusal, never a
+                                 silent downgrade to the allowed half
+
+Rollback: FOREMAN_NEEDS_DISABLE=1 downgrades every refusal to log-only —
+`preflight()` returns ok with `downgraded=True` and the summary it would have
+refused with, so the caller logs instead of raising.
+"""
+import glob
+import os
+import re
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import needs as needs_mod  # noqa: E402
+
+sys.path.insert(0, "/home/lumen/bin")
+import fleet_exec_policy  # noqa: E402
+
+REASON_CITED_PATH_UNREACHABLE = "cited_path_unreachable"
+REASON_NODE_UNKNOWN = "node_unknown"
+REASON_CAPABILITY_DENIED_BY_POLICY = "capability_denied_by_policy"
+
+# SpawnRefused code per reason: the dispatcher skips on the lowercase reason, the
+# worker raises the uppercase code, and both name the same verdict.
+SPAWN_CODE = {
+    REASON_CITED_PATH_UNREACHABLE: "CITED_PATH_UNREACHABLE",
+    REASON_NODE_UNKNOWN: "NODE_UNKNOWN",
+    REASON_CAPABILITY_DENIED_BY_POLICY: "CAPABILITY_DENIED_BY_POLICY",
+}
+
+DEFAULT_POLICY_PATH = os.environ.get(
+    "FOREMAN_FLEET_EXEC_POLICY", "/home/lumen/foreman/harness/fleet-exec-policy.yaml")
+LUMEN_STATE = os.environ.get("FOREMAN_LUMEN_STATE", "/home/lumen/minerva/lumen_state.py")
+# fleet-exec's known_nodes() (fleet-exec:60) reads the first of these only; the ssh
+# alias half is what makes the node actually addressable. Override for tests.
+SSH_CONFIG_PATHS = [p for p in os.environ.get(
+    "FOREMAN_SSH_CONFIG",
+    os.path.expanduser("~/.ssh/config") + os.pathsep
+    + os.path.expanduser("~/.ssh/fleet_config")).split(os.pathsep) if p]
+
+# path literals a ticket detail can cite; punctuation that ends a sentence around a
+# path is stripped after the match, globs/ellipses simply end the literal early.
+_CITED_PATH_RE = re.compile(r"/home/lumen/[\w./~-]+")
+_STATE_TAILSCALE_RE = re.compile(r"^\s*(?P<subject>[\w-]+)\.tailscale_ip\s*=")
+_SSH_HOST_RE = re.compile(r"^\s*Host\s+(?P<aliases>.+?)\s*$", re.IGNORECASE)
+_SSH_INCLUDE_RE = re.compile(r"^\s*Include\s+(?P<patterns>.+?)\s*$", re.IGNORECASE)
+_INCLUDE_MAX_DEPTH = 3
+
+
+class Verdict:
+    """The answer both callers act on. `ok` is the only thing a caller must branch
+    on; `reason` is the dispatcher's skip reason and `code` the worker's SpawnRefused
+    code. `unreachable_paths` and `refused` are the structured fields §2.5 writes into
+    failure.json — the auto-triage reads those, never the summary string."""
+
+    def __init__(self, ok, reason=None, summary="", unreachable_paths=None,
+                 refused=None, nodes_unknown=None, downgraded=False):
+        self.ok = ok
+        self.reason = reason
+        self.summary = summary
+        self.unreachable_paths = list(unreachable_paths or [])
+        self.refused = list(refused or [])
+        self.nodes_unknown = list(nodes_unknown or [])
+        self.downgraded = downgraded
+
+    @property
+    def code(self):
+        return SPAWN_CODE.get(self.reason)
+
+    def __repr__(self):
+        return (f"Verdict(ok={self.ok}, reason={self.reason!r}, "
+                f"summary={self.summary!r})")
+
+
+def _under(path, root):
+    path, root = os.path.normpath(path), os.path.normpath(root)
+    return path == root or path.startswith(root + os.sep)
+
+
+def cited_paths(detail):
+    out = []
+    for m in _CITED_PATH_RE.finditer(detail or ""):
+        p = m.group(0).rstrip(".,;:")
+        if p != "/home/lumen" and p not in out:
+            out.append(p)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# path reachability (moved body of fworker.assert_spawn_paths, wq#1331 §3.2)
+# ---------------------------------------------------------------------------
+
+def path_problems(detail, roots, needs_dirs):
+    """(problems, unreachable_paths). Every needs:dir must exist as a directory and
+    every /home/lumen/ literal the detail cites must be inside roots — a cited path
+    outside the reachable set is the exact wq#1152 signature."""
+    problems = []
+    unreachable = []
+    for d in needs_dirs or []:
+        if not os.path.isdir(d):
+            problems.append(f"needs:dir({d}) is not an existing directory")
+            unreachable.append(d)
+    roots = [r for r in roots if r]
+    for p in cited_paths(detail):
+        if not any(_under(p, r) for r in roots):
+            problems.append(f"cited path {p} outside worktree ∪ add_dirs")
+            if p not in unreachable:
+                unreachable.append(p)
+    return problems, unreachable
+
+
+# ---------------------------------------------------------------------------
+# node reachability (§2.2: state-store subject AND an ssh alias)
+# ---------------------------------------------------------------------------
+
+def state_nodes(state_output=None):
+    """Fleet subjects that declare a tailscale_ip, same source and same fail-closed
+    behaviour as fleet-exec's known_nodes(): an unreachable minerva yields an empty
+    roster, which refuses every node rather than skipping the check."""
+    if state_output is None:
+        try:
+            p = subprocess.run(
+                ["python3", LUMEN_STATE, "current", "", "tailscale_ip"],
+                capture_output=True, text=True, timeout=15)
+            state_output = p.stdout if p.returncode == 0 else ""
+        except (OSError, subprocess.TimeoutExpired):
+            state_output = ""
+    return {m.group("subject") for m in
+            (_STATE_TAILSCALE_RE.match(line) for line in state_output.splitlines()) if m}
+
+
+def ssh_config_hosts(paths=None, _depth=0, _seen=None):
+    """Host aliases from the ssh config(s), following `Include` one fleet-config
+    layer deep — an alias behind an Include is just as addressable as an inline one,
+    and treating it as unknown would refuse work that ssh can do. Patterns (`Host *`,
+    `Host !x`) are dropped: `*` matches everything, so honouring it would make every
+    node look addressable and defeat the check."""
+    hosts = set()
+    seen = _seen if _seen is not None else set()
+    for path in (paths if paths is not None else SSH_CONFIG_PATHS):
+        path = os.path.abspath(os.path.expanduser(path))
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            with open(path) as f:
+                text = f.read()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = _SSH_HOST_RE.match(line)
+            if m:
+                hosts.update(a for a in m.group("aliases").split()
+                             if not any(c in a for c in "*?!"))
+                continue
+            m = _SSH_INCLUDE_RE.match(line)
+            if m and _depth < _INCLUDE_MAX_DEPTH:
+                for pat in m.group("patterns").split():
+                    pat = os.path.expanduser(pat)
+                    if not os.path.isabs(pat):
+                        pat = os.path.join(os.path.dirname(path), pat)
+                    hosts |= ssh_config_hosts(sorted(glob.glob(pat)),
+                                              _depth=_depth + 1, _seen=seen)
+    return hosts
+
+
+def node_reachable(node, state_output=None, ssh_hosts=None):
+    """A node the fleet can actually address: a lumen_state subject with a
+    tailscale_ip fact AND an ssh Host entry. A node in the state store with no ssh
+    alias passes fleet-exec's known_nodes() today and then fails at transport time —
+    that is the failure this half of the preflight moves earlier."""
+    if not node:
+        return False
+    hosts = ssh_config_hosts() if ssh_hosts is None else ssh_hosts
+    return node in state_nodes(state_output) and node in hosts
+
+
+def needs_nodes(needs):
+    """Every node an exec-shaped tag names, in tag order, deduped."""
+    out = []
+    for node in (list(needs.ssh_nodes)
+                 + [n for n, _ in needs.copy_targets]
+                 + [n for n, _ in needs.restart_targets]):
+        if node not in out:
+            out.append(node)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# policy half of resolve_exec_grant (wq#1332 §2.2 point 2) — no grant file here
+# ---------------------------------------------------------------------------
+
+def policy_grants(needs, policy_path=None):
+    """(grants, refused): the grant entries fleet-exec-policy.yaml would allow, and
+    one refusal string per tag it forbids. Pure policy — the caller decides whether
+    to write a grant.json (fworker) or merely ask whether it would (dispatcher).
+    ssh(node) is always grantable as read-only `run`: the argv allowlist is enforced
+    by the broker per-invocation, not knowable at spawn time."""
+    grants = []
+    refused = []
+    wants_exec = bool(needs.ssh_nodes or needs.copy_targets or needs.restart_targets)
+    if not wants_exec:
+        return grants, refused
+    try:
+        policy = fleet_exec_policy.load_policy(policy_path or DEFAULT_POLICY_PATH)
+    except fleet_exec_policy.PolicyError as e:
+        return [], [f"fleet-exec-policy.yaml unreadable: {e}"]
+    for node in needs.ssh_nodes:
+        grants.append({"kind": "ssh", "node": node, "verbs": ["run"]})
+    for node, remote_dir in needs.copy_targets:
+        ok, rule, reason = fleet_exec_policy.check_copy(node, remote_dir, policy)
+        if not ok:
+            refused.append(f"needs:copy({node}:{remote_dir}) denied by {rule}: {reason}")
+            continue
+        grants.append({"kind": "copy", "node": node, "dir": remote_dir})
+    for node, unit in needs.restart_targets:
+        ok, rule, reason = fleet_exec_policy.check_restart(node, unit, policy)
+        if not ok:
+            refused.append(f"needs:restart({unit}@{node}) denied by {rule}: {reason}")
+            continue
+        grants.append({"kind": "restart", "node": node, "unit": unit})
+    return grants, refused
+
+
+# ---------------------------------------------------------------------------
+# the shared gate
+# ---------------------------------------------------------------------------
+
+def preflight(ticket, repo, add_dirs, needs, worktree=None, policy_path=None,
+              state_output=None, ssh_hosts=None):
+    """Can a worker for this ticket reach what the ticket cites and do what it asks?
+
+    `ticket` is a wq row (only `detail` is read). `worktree` is the worker's own tree
+    when there is one — at dispatch time there is not, and repo ∪ add_dirs is the
+    reachable set. Checks run cheapest-first and the first failure wins, so a ticket
+    that cites an unreachable path AND names an unknown node reports the path: fixing
+    the reason a verdict names is always a step forward."""
+    if needs is None:
+        needs = needs_mod.Needs([])
+    detail = (ticket or {}).get("detail", "") if hasattr(ticket, "get") else (ticket or "")
+    roots = [worktree, repo] + list(add_dirs or [])
+
+    problems, unreachable = path_problems(detail, roots, needs.dirs)
+    if problems:
+        return _verdict(REASON_CITED_PATH_UNREACHABLE, "; ".join(problems),
+                        unreachable_paths=unreachable)
+
+    unknown = [n for n in needs_nodes(needs)
+               if not node_reachable(n, state_output=state_output, ssh_hosts=ssh_hosts)]
+    if unknown:
+        return _verdict(REASON_NODE_UNKNOWN,
+                        "; ".join(f"node {n} is not a fleet subject with a tailscale_ip "
+                                  f"and an ssh Host entry" for n in unknown),
+                        nodes_unknown=unknown)
+
+    _, refused = policy_grants(needs, policy_path=policy_path)
+    if refused:
+        return _verdict(REASON_CAPABILITY_DENIED_BY_POLICY, "; ".join(refused),
+                        refused=refused)
+
+    return Verdict(True, summary="ok")
+
+
+def _verdict(reason, summary, **fields):
+    """A refusal, downgraded to an ok-with-summary under the rollback flag so
+    FOREMAN_NEEDS_DISABLE=1 means log-only in both callers, not just in fworker."""
+    code = SPAWN_CODE[reason]
+    if needs_mod.disabled():
+        return Verdict(True, summary=f"{code} ({summary}) — FOREMAN_NEEDS_DISABLE=1, "
+                                     f"log-only", downgraded=True, **fields)
+    return Verdict(False, reason=reason, summary=f"{code} ({summary})", **fields)

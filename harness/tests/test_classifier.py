@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from classifier import (
     RunState, classify,
     SUCCESS, REFUSED, TURNS, LAUNCH_FAILURE, BUDGET, LIMIT, KILLED, OOM,
-    INDETERMINATE, CRASH, HANG, AUTH, DEGRADED_SUCCESS,
+    INDETERMINATE, CRASH, HANG, AUTH, DEGRADED_SUCCESS, MODEL_NOT_FOUND,
 )
 
 
@@ -355,3 +355,52 @@ def test_ambiguous_result_present_shape_fails_closed_to_crash():
         {"type": "result", "subtype": "some_unforeseen_subtype", "is_error": False},
     ]
     assert run(frames) == CRASH
+
+
+def test_bad_model_preflight_text_is_model_not_found_not_crash():
+    # wq#1442 evidence: wq#1436/wq#1434 ("--model opus-5") died in 1.9s/1 turn/$0 cost.
+    # The CLI's own --model preflight surfaces the rejection as a "success"-subtype
+    # result frame with `is_error` omitted (not explicitly False), which used to fall
+    # into the generic CRASH catch-all and burn a charged attempt on a bad harness
+    # dispatch, never the model or ticket doing anything.
+    msg = ("There's an issue with the selected model (opus-5). It may not exist or "
+           "you may not have access to it. Run --model to pick a different model.")
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": msg}]}},
+        {"type": "result", "subtype": "success", "result": msg},
+    ]
+    assert run(frames, exit_code=1) == MODEL_NOT_FOUND
+    assert run(frames, exit_code=1) != CRASH
+
+
+def test_model_not_found_text_after_real_turns_is_not_model_not_found():
+    # Gated to turns <= 1 (the CLI's own rejection message IS the only "turn") — text
+    # that merely mentions the phrase after genuine model work already happened must
+    # not be misread as the harness-defect preflight shape.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "turn one"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "turn two"}]}},
+        {"type": "result", "subtype": "success",
+         "result": "issue with the selected model, mentioned in passing"},
+    ]
+    assert run(frames, exit_code=1) != MODEL_NOT_FOUND
+
+
+def test_api_error_category_model_not_found_is_model_not_found():
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "api_error", "error": {"category": "model_not_found"}},
+        {"type": "result", "subtype": "some_unforeseen_subtype"},
+    ]
+    assert run(frames, exit_code=1) == MODEL_NOT_FOUND
+
+
+def test_bare_404_status_is_model_not_found():
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "api_retry", "error_status": 404},
+        {"type": "result", "subtype": "some_unforeseen_subtype"},
+    ]
+    assert run(frames, exit_code=1) == MODEL_NOT_FOUND

@@ -97,7 +97,7 @@ copy_dirs:
   thor: [/home/thor/lumen-drop]
   isis: [/home/isis/lumen-drop]
   lumen: [/home/lumen/lumen-drop]
-  maat: [/home/maat/lumen-drop]
+  maat: [/home/maam/lumen-drop]  # ssh user on maat is maam (wq#1444)
   # sobek dropped from the roster (wq#1445): hostname 'sobek' does not resolve from
   # Lumen (Temporary failure in name resolution) despite a tailscale_ip fact — it is
   # missing from fleet-keymesh's NODES list (~/.ssh/fleet_config predates sobek's
