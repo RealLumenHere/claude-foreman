@@ -1,17 +1,18 @@
 {
+  "ticket": "wq#1445",
+  "derived_by": "worker",
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1373-cf-token-liveness/cf_token_liveness.py:126-138"
+      "citation": "harness/fleet-exec-policy.yaml:101-106"
     }
   ],
-  "derived_by": "worker",
   "notes": [
-    "Verdict: CONTRADICT. Full report: reports/1433_verify_wq1373_cf_token_liveness.md.",
-    "Reproduced the PR's own verification transcript live: `python3 cf_token_liveness.py --manifest tokens.json --dry-run` -> 'cf_token_liveness: 2/2 tokens live' against the real /home/lumen/mailbot/.cf_d1_token and .cf_d1_write_token files; synthetic-manifest failure/TTL-warning path also reproduced.",
-    "Contradiction: check_one() (cf_token_liveness.py:126-138) only try/excepts the probe() network call, not the entry[\"account_id_file\"]/[\"database_id_file\"]/[\"zone_id_file\"] lookups inside each probe_* function. A manifest entry missing a required key raises an uncaught KeyError, reproduced directly: `python3 cf_token_liveness.py --manifest tokens_badkey.json --dry-run` crashes with a traceback, exit 1, no alert ever fires, and the loop never reaches later (healthy) entries in the same pass.",
-    "Compounds with cf-token-liveness.service's `SuccessExitStatus=0 1` (added so the intentional 'found a dead token' exit 1 doesn't trip OnFailure=): Python's default uncaught-exception exit code is also 1, so the crash path and the healthy-detection path are indistinguishable to systemd, and lumen-cron-deadman (wq#1184) never catches the crash either -- the exact 'nothing was watching' failure mode (ISSUE-LOG.md #37) this ticket exists to close.",
-    "Not fixed under this ticket (verify-pass is not a re-implementation gate, precedent wq#872/#1268); escalating to opus-5@high per this ticket's own instructions."
-  ],
-  "ticket": "wq#1433"
+    "Root cause (verified live): sobek (tailscale_ip 100.86.156.91 since 2026-07-31, lumen_state) is absent from /home/lumen/bin/fleet-keymesh's hardcoded NODES list (script generated 2026-07-18, predates sobek's provisioning) -> ~/.ssh/fleet_config has no Host sobek stanza -> `ssh sobek` fails hostname resolution, not a broker/policy bug.",
+    "This BUILD worker's sandbox has no ssh/tailscale in its Bash allowlist (harness/worker-settings.json) and no fleet-exec grant for this ticket, so it cannot itself run `ssh sobek -- true`, provision ~/lumen-drop, or safely hand-edit the shared ~/.ssh/fleet_config (that file is generated infra state outside this worktree, and /home/lumen/bin currently has another session's unrelated uncommitted work checked out — not safe to touch from here).",
+    "Took the ticket's explicit fallback: dropped sobek from harness/fleet-exec-policy.yaml's copy_dirs roster (harness/fleet-exec-policy.yaml:100-107) so `fleet-exec copy` no longer passes the known-node gate only to die on DNS. never.power/never.restart entries for sobek left untouched (those are deny-lists, unrelated to reachability, must stay in force regardless).",
+    "Verified the edit: `python3 -c \"import yaml; yaml.safe_load(open('harness/fleet-exec-policy.yaml'))['copy_dirs']\"` parses with sobek absent; `python3 -m pytest harness/tests/test_fworker_grant.py -q` -> 14 passed (uses its own embedded fixture, unaffected).",
+    "Filed wq#1447 (build lane, needs=ssh(sobek)) for the real fix: add sobek to fleet-keymesh's NODES list, rerun it, verify ssh, provision lumen-drop, ingest sobek.lumen_drop, then re-add sobek to copy_dirs via a foreman PR.",
+    "Allowlist gap worth widening: `ssh <fleet-node>` and `tailscale status` are refused outright in harness/worker-settings.json's Bash allowlist for this BUILD archetype, so any ticket needing a live fleet-node probe (not just this one) cannot be completed by this worker type without a fleet-exec grant."
+  ]
 }
