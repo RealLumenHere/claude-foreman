@@ -2,15 +2,16 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1373-cf-token-liveness/cf_token_liveness.py:66-99"
+      "citation": "ops/wq1373-cf-token-liveness/cf_token_liveness.py:126-138"
     }
   ],
   "derived_by": "worker",
   "notes": [
-    "cf_token_liveness.py:66-99 implements the per-scope liveness probes (probe_d1/probe_workers/probe_dns/probe_r2/probe_access) that hit a real scoped Cloudflare op instead of /user/tokens/verify.",
-    "Ran live against the two verified real mailbot D1 tokens: `python3 ops/wq1373-cf-token-liveness/cf_token_liveness.py --dry-run` -> 'cf_token_liveness: 2/2 tokens live' (exit 0).",
-    "Ran against a synthetic manifest with a garbage token, a missing token file, and a back-dated `minted` date: correctly reported 2 failures (would ntfy_urgent) and 1 TTL warning (would ntfy_high), exit 1.",
-    "claude_credentials.md is denied to this worker by guard.sh (credential-file deny pattern); did not guess the other ~5 tokens' paths (ISSUE-LOG.md #189). tokens.json covers the 2 tokens whose files this worker could verify with `ls -la`; remaining tokens are a config-only add, documented in README.md."
+    "Verdict: CONTRADICT. Full report: reports/1433_verify_wq1373_cf_token_liveness.md.",
+    "Reproduced the PR's own verification transcript live: `python3 cf_token_liveness.py --manifest tokens.json --dry-run` -> 'cf_token_liveness: 2/2 tokens live' against the real /home/lumen/mailbot/.cf_d1_token and .cf_d1_write_token files; synthetic-manifest failure/TTL-warning path also reproduced.",
+    "Contradiction: check_one() (cf_token_liveness.py:126-138) only try/excepts the probe() network call, not the entry[\"account_id_file\"]/[\"database_id_file\"]/[\"zone_id_file\"] lookups inside each probe_* function. A manifest entry missing a required key raises an uncaught KeyError, reproduced directly: `python3 cf_token_liveness.py --manifest tokens_badkey.json --dry-run` crashes with a traceback, exit 1, no alert ever fires, and the loop never reaches later (healthy) entries in the same pass.",
+    "Compounds with cf-token-liveness.service's `SuccessExitStatus=0 1` (added so the intentional 'found a dead token' exit 1 doesn't trip OnFailure=): Python's default uncaught-exception exit code is also 1, so the crash path and the healthy-detection path are indistinguishable to systemd, and lumen-cron-deadman (wq#1184) never catches the crash either -- the exact 'nothing was watching' failure mode (ISSUE-LOG.md #37) this ticket exists to close.",
+    "Not fixed under this ticket (verify-pass is not a re-implementation gate, precedent wq#872/#1268); escalating to opus-5@high per this ticket's own instructions."
   ],
-  "ticket": "wq#1373"
+  "ticket": "wq#1433"
 }
