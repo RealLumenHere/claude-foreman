@@ -98,7 +98,12 @@ copy_dirs:
   isis: [/home/isis/lumen-drop]
   lumen: [/home/lumen/lumen-drop]
   maat: [/home/maam/lumen-drop]  # ssh user on maat is maam (wq#1444)
-  sobek: [/home/sobek/lumen-drop]
+  # sobek dropped from the roster (wq#1445): hostname 'sobek' does not resolve from
+  # Lumen (Temporary failure in name resolution) despite a tailscale_ip fact — it is
+  # missing from fleet-keymesh's NODES list (~/.ssh/fleet_config predates sobek's
+  # 2026-07-31 provisioning), so `copy` would pass the known-node gate and then die on
+  # DNS. Re-add once fleet-keymesh is rerun with sobek included and `ssh sobek -- true`
+  # exits 0 (follow-up ops ticket).
   bes: [/home/bes/lumen-drop]
 
 # bench is v2 (fleet-exec has no `bench` verb yet).

@@ -1,10 +1,18 @@
 {
+  "ticket": "wq#1445",
+  "derived_by": "worker",
   "criteria": [
     {
       "id": "AC1",
-      "cmd_run": "python3 -m pytest harness/tests/test_classifier.py harness/tests/test_model_alias_sweep.py -q",
-      "exit_code": 0,
-      "citation": "harness/classifier.py:309-315"
+      "citation": "harness/fleet-exec-policy.yaml:101-106"
     }
+  ],
+  "notes": [
+    "Root cause (verified live): sobek (tailscale_ip 100.86.156.91 since 2026-07-31, lumen_state) is absent from /home/lumen/bin/fleet-keymesh's hardcoded NODES list (script generated 2026-07-18, predates sobek's provisioning) -> ~/.ssh/fleet_config has no Host sobek stanza -> `ssh sobek` fails hostname resolution, not a broker/policy bug.",
+    "This BUILD worker's sandbox has no ssh/tailscale in its Bash allowlist (harness/worker-settings.json) and no fleet-exec grant for this ticket, so it cannot itself run `ssh sobek -- true`, provision ~/lumen-drop, or safely hand-edit the shared ~/.ssh/fleet_config (that file is generated infra state outside this worktree, and /home/lumen/bin currently has another session's unrelated uncommitted work checked out — not safe to touch from here).",
+    "Took the ticket's explicit fallback: dropped sobek from harness/fleet-exec-policy.yaml's copy_dirs roster (harness/fleet-exec-policy.yaml:100-107) so `fleet-exec copy` no longer passes the known-node gate only to die on DNS. never.power/never.restart entries for sobek left untouched (those are deny-lists, unrelated to reachability, must stay in force regardless).",
+    "Verified the edit: `python3 -c \"import yaml; yaml.safe_load(open('harness/fleet-exec-policy.yaml'))['copy_dirs']\"` parses with sobek absent; `python3 -m pytest harness/tests/test_fworker_grant.py -q` -> 14 passed (uses its own embedded fixture, unaffected).",
+    "Filed wq#1447 (build lane, needs=ssh(sobek)) for the real fix: add sobek to fleet-keymesh's NODES list, rerun it, verify ssh, provision lumen-drop, ingest sobek.lumen_drop, then re-add sobek to copy_dirs via a foreman PR.",
+    "Allowlist gap worth widening: `ssh <fleet-node>` and `tailscale status` are refused outright in harness/worker-settings.json's Bash allowlist for this BUILD archetype, so any ticket needing a live fleet-node probe (not just this one) cannot be completed by this worker type without a fleet-exec grant."
   ]
 }
