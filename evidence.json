@@ -2,20 +2,27 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1373-cf-token-liveness/cf_token_liveness.py:142-174",
-      "cmd_run": "python3 cf_token_liveness.py --manifest /tmp/wq1443/manifest_repro.json --dry-run",
-      "exit_code": 1
+      "citation": "harness/capability.py:263-295",
+      "note": "capability.preflight() — the shared gate: path reachability (moved body of fworker.assert_spawn_paths), node_reachable() at capability.py:201-209, and the policy half of resolve_exec_grant at capability.py:227-260. fworker imports and calls it (harness/fworker.py:833-847, call site :1648-1649; resolve_exec_grant delegates at :869-874). SpawnRefused carries the lists (harness/fworker.py:778-788) and failure_record.spawn_refusal_fields fills unreachable_paths/inferred_needs/refused (harness/failure_record.py:372-388, wired at :412-416).",
+      "cmd_run": "python3 -m pytest harness/tests/test_capability.py -q",
+      "exit_code": 0
     }
   ],
-  "derived_by": "worker",
-  "notes": [
-    "Verdict: CONFIRM. Full report: reports/1443_verify_wq1434_cf_token_liveness.md.",
-    "Reproduced wq#1433's original crash against the pre-fix script (local /home/lumen/foreman main, one commit behind origin/main): a two-entry manifest with the first entry missing account_id_file raises uncaught KeyError, exit 1, second entry never checked, no alert.",
-    "Ran the post-fix script (origin/main 349b498) against the identical manifest: both entries checked, urgent alert fires, exit 1 (per-token failure, not a crash) -- the KeyError is now caught by check_one()'s CONFIG_ERRORS handler and attributed to the malformed entry only.",
-    "Also exercised: a non-dict manifest entry (AttributeError, caught, loop continues) and a manifest with no `tokens` array (RuntimeError from run(), caught by main()'s backstop, exit 2 -- distinct from the exit-1 per-token path and correctly outside cf-token-liveness.service's SuccessExitStatus=0 1, so lumen-cron-deadman wq#1184 would flag a real crash as stale).",
-    "No regression: ran post-fix script against the real tokens.json (live /home/lumen/mailbot/.cf_d1_token, .cf_d1_write_token) -- 2/2 tokens live, exit 0, matches wq#1434's own closing note.",
-    "Minor non-blocking observation: CONFIG_ERRORS' ValueError also swallows json.JSONDecodeError from a non-JSON CF API response body (monkey-patched urlopen to confirm), mislabeling it 'malformed manifest entry' instead of 'probe failed'. Still alerts urgent, still exits 1, still continues the loop -- not a repeat of wq#1433's crash/skip/mask failure mode, and wq#1433's own disposition section explicitly scoped ValueError/JSONDecodeError into this catch-all. Not contradiction-worthy; noted for a future label-precision pass.",
-    "Not re-implementing (verify-pass, not a fix ticket, precedent wq#872/#1268)."
-  ],
-  "ticket": "wq#1443"
+  "tests": [
+    {
+      "cmd_run": "python3 -m pytest harness/tests/test_capability.py -q",
+      "result": "32 passed",
+      "exit_code": 0
+    },
+    {
+      "cmd_run": "python3 -m pytest harness/tests -q",
+      "result": "556 passed",
+      "exit_code": 0
+    },
+    {
+      "cmd_run": "python3 -m pytest dispatcher/tests -q",
+      "result": "224 passed",
+      "exit_code": 0
+    }
+  ]
 }

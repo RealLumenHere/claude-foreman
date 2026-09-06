@@ -199,7 +199,7 @@ def test_build_write_and_reason_line(tmp_path):
         expected_repo=None, session_id="sid-123", trip_kind="PERMISSION",
         attempt_files=["attempt-1.json", "attempt-2.json"], node_map=NODE_MAP,
         check_worktree=False)
-    assert rec["schema"] == 1
+    assert rec["schema"] == fr.SCHEMA_VERSION
     assert rec["triage"] == "CAPABILITY_DENIED"
     assert rec["inferred_needs"] == ["ssh(thor)"]
     assert rec["denied_calls"][0]["count"] == 3

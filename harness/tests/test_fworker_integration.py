@@ -20,6 +20,7 @@ HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HARNESS_DIR)
 import fworker  # noqa: E402 — reuse slugify() so pre-created branch names match make_worktree's
+import failure_record  # noqa: E402
 
 FWORKER = os.path.join(HARNESS_DIR, "fworker.py")
 FAKE_CLAUDE = os.path.join(TESTS_DIR, "fake_claude.py")
@@ -187,7 +188,7 @@ def test_denied_verb_blocked_at_hook_during_real_spawn(tmp_path):
     assert wq_show_field(env, ticket_id, "blocked_at") != "None"
     with open(os.path.join(runs_root, f"wq{ticket_id}", "failure.json")) as f:
         failure = json.load(f)
-    assert failure["schema"] == 1
+    assert failure["schema"] == failure_record.SCHEMA_VERSION
     assert failure["block_class"] == "WORK_BLOCKED"
     assert failure["triage"] == "UNKNOWN"
     # …and the sha256 of that file is folded into the terminal attempt record.

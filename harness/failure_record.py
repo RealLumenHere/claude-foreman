@@ -34,7 +34,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from action_gate import LoopTracker, is_permission_denial  # noqa: E402
 
-SCHEMA_VERSION = 1
+# v2 (wq#1436, BROKER_WIRING.md §2.5): adds `refused` and fills unreachable_paths /
+# inferred_needs on a spawn refusal, which v1 always wrote empty. Additive — every v1
+# key is still present with the same meaning.
+SCHEMA_VERSION = 2
 FAILURE_FILENAME = "failure.json"
 
 TRIAGE_CAPABILITY_DENIED = "CAPABILITY_DENIED"
@@ -366,11 +369,28 @@ def triage(classification, trip_kind, denied_calls, unreachable_paths,
 # record assembly + write
 # ---------------------------------------------------------------------------
 
+def spawn_refusal_fields(refusal):
+    """BROKER_WIRING.md §2.5: a spawn refusal already knows exactly which paths were
+    unreachable and which tags policy refused — carry those through instead of
+    re-parsing the summary string, which is what left `unreachable_paths: []` and
+    `inferred_needs: []` in every LAUNCH_FAILURE record (_runs/wq1401/failure.json
+    and wq1361/1402/1403/1407). CITED_PATH_UNREACHABLE fills unreachable_paths and
+    the dir() tags they imply; CAPABILITY_DENIED_BY_POLICY fills refused[] and no
+    inferred needs — a policy refusal is not a missing grant, it is a forbidden one."""
+    unreachable = list(getattr(refusal, "unreachable_paths", None) or [])
+    refused = list(getattr(refusal, "refused", None) or [])
+    return {
+        "unreachable_paths": unreachable,
+        "refused": refused,
+        "inferred_needs": infer_needs([], unreachable),
+    }
+
+
 def build_failure_record(ticket, attempts, classification, block_class,
                          events=None, worktree=None, expected_repo=None,
                          session_id=None, trip_kind=None, worker_block_reason=None,
                          attempt_files=None, node_map=None, reachable_roots=None,
-                         check_worktree=True):
+                         check_worktree=True, spawn_refusal=None):
     node_map = load_node_map() if node_map is None else node_map
     denied, unreachable, last_error_sig = extract_denied_calls(
         events, node_map=node_map, reachable_roots=reachable_roots)
@@ -381,6 +401,12 @@ def build_failure_record(ticket, attempts, classification, block_class,
                                wt, events, worker_block_reason=worker_block_reason)
     denied_out = [{k: d[k] for k in ("tool", "argv0", "target", "refusal", "count")}
                   for d in denied]
+    structured = {"unreachable_paths": unreachable, "refused": [],
+                  "inferred_needs": infer_needs(denied, unreachable)}
+    if spawn_refusal is not None:
+        # a SpawnRefused has no transcript to mine (events=[]), so its own lists are
+        # the only source of these fields.
+        structured = spawn_refusal_fields(spawn_refusal)
     return {
         "schema": SCHEMA_VERSION,
         "ticket": ticket,
@@ -390,9 +416,10 @@ def build_failure_record(ticket, attempts, classification, block_class,
         "triage": verdict,
         "summary": one_line,
         "denied_calls": denied_out,
-        "inferred_needs": infer_needs(denied, unreachable),
+        "inferred_needs": structured["inferred_needs"],
         "worktree": wt,
-        "unreachable_paths": unreachable,
+        "unreachable_paths": structured["unreachable_paths"],
+        "refused": structured["refused"],
         "last_error_sig": last_error_sig,
         "transcript": (f"~/.claude/projects/*/{session_id}.jsonl"
                        if session_id else None),

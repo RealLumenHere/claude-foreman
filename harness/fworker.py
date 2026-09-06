@@ -53,6 +53,7 @@ import acceptance as acceptance_mod
 import action_gate
 import failure_record
 import needs as needs_mod
+import capability
 import agents_spec
 import fire_gate
 
@@ -775,11 +776,17 @@ class SpawnRefused(RuntimeError):
     (next_attempt_n stays put, so the attempt is not charged), releases the claim so
     the ticket stays open, appends a notes line, and pages ntfy."""
 
-    def __init__(self, code, summary, worktree=None):
+    def __init__(self, code, summary, worktree=None, unreachable_paths=None,
+                 refused=None):
         super().__init__(f"{code}: {summary}")
         self.code = code
         self.summary = summary
         self.worktree = worktree
+        # wq#1436 (BROKER_WIRING.md §2.5): the refusal carries its own structured
+        # lists so failure_record fills unreachable_paths/refused from the refusal
+        # rather than re-parsing the summary string.
+        self.unreachable_paths = list(unreachable_paths or [])
+        self.refused = list(refused or [])
 
 
 def _git_common_dir_realpath(path):
@@ -815,46 +822,36 @@ def assert_worktree_repo(worktree, repo, ticket_id):
     raise SpawnRefused("WORKTREE_REPO_MISMATCH", summary, worktree=worktree)
 
 
-# path literals a ticket detail can cite; punctuation that ends a sentence around a
-# path is stripped after the match, globs/ellipses simply end the literal early.
-_CITED_PATH_RE = re.compile(r"/home/lumen/[\w./~-]+")
+# wq#1436 (BROKER_WIRING.md §1): the path/node/policy checks themselves live in
+# capability.py, which the dispatcher's pre-skip (slice C) calls too. fworker keeps
+# its call so a hand-spawned `lumen-run fworker` still refuses; what it does NOT keep
+# is a private copy of the logic — these are the module's own functions.
+cited_paths = capability.cited_paths
+_under = capability._under
 
 
-def _under(path, root):
-    path, root = os.path.normpath(path), os.path.normpath(root)
-    return path == root or path.startswith(root + os.sep)
-
-
-def cited_paths(detail):
-    out = []
-    for m in _CITED_PATH_RE.finditer(detail or ""):
-        p = m.group(0).rstrip(".,;:")
-        if p != "/home/lumen" and p not in out:
-            out.append(p)
-    return out
+def assert_spawn_capability(ticket_id, ticket, worktree, repo, add_dirs, ticket_needs):
+    """§3.2 last clause, widened by BROKER_WIRING.md §1 to the whole capability
+    question: can this worker reach what the ticket cites (wq#1152 signature),
+    address the nodes its needs tags name, and get the grant those tags ask for?
+    Refused before spawn rather than after a burned attempt.
+    FOREMAN_NEEDS_DISABLE=1 downgrades to log-only (rollback)."""
+    v = capability.preflight(ticket, repo, add_dirs, ticket_needs, worktree=worktree,
+                             policy_path=FLEET_EXEC_POLICY_PATH)
+    if v.downgraded:
+        log(f"wq#{ticket_id}: {v.summary}")
+        return v
+    if not v.ok:
+        raise SpawnRefused(v.code, v.summary, worktree=worktree,
+                           unreachable_paths=v.unreachable_paths, refused=v.refused)
+    return v
 
 
 def assert_spawn_paths(ticket_id, detail, worktree, repo, add_dirs, needs_dirs):
-    """§3.2 last clause: every needs:dir must exist as a directory, and every
-    /home/lumen/ path literal the ticket detail cites must be inside
-    worktree ∪ repo ∪ add_dirs — a cited path outside the reachable set is the exact
-    wq#1152 signature and is refused before spawn rather than after a burned attempt.
-    FOREMAN_NEEDS_DISABLE=1 downgrades to log-only (rollback)."""
-    roots = [worktree, repo] + [d for d in add_dirs if d]
-    problems = []
-    for d in needs_dirs:
-        if not os.path.isdir(d):
-            problems.append(f"needs:dir({d}) is not an existing directory")
-    for p in cited_paths(detail):
-        if not any(_under(p, r) for r in roots):
-            problems.append(f"cited path {p} outside worktree ∪ add_dirs")
-    if not problems:
-        return
-    summary = f"CITED_PATH_UNREACHABLE ({'; '.join(problems)})"
-    if needs_mod.disabled():
-        log(f"wq#{ticket_id}: {summary} — FOREMAN_NEEDS_DISABLE=1, log-only")
-        return
-    raise SpawnRefused("CITED_PATH_UNREACHABLE", summary, worktree=worktree)
+    """The path half alone, for callers that have needs:dir tags and nothing else."""
+    return assert_spawn_capability(
+        ticket_id, {"detail": detail}, worktree, repo, add_dirs,
+        needs_mod.Needs([("dir", d) for d in needs_dirs]))
 
 
 def resolve_exec_grant(ticket_id, attempt, needs, wall_clock_s, worktree=None):
@@ -872,32 +869,13 @@ def resolve_exec_grant(ticket_id, attempt, needs, wall_clock_s, worktree=None):
     Bash allowlist)."""
     if needs_mod.disabled():
         return None, None, None
-    grants = []
-    problems = []
-    policy = None
-    wants_exec = bool(needs.ssh_nodes or needs.copy_targets or needs.restart_targets)
-    if wants_exec:
-        try:
-            policy = fleet_exec_policy.load_policy(FLEET_EXEC_POLICY_PATH)
-        except fleet_exec_policy.PolicyError as e:
-            raise SpawnRefused("CAPABILITY_DENIED_BY_POLICY",
-                                f"fleet-exec-policy.yaml unreadable: {e}", worktree=worktree)
-    for node in needs.ssh_nodes:
-        grants.append({"kind": "ssh", "node": node, "verbs": ["run"]})
-    for node, remote_dir in needs.copy_targets:
-        ok, rule, reason = fleet_exec_policy.check_copy(node, remote_dir, policy)
-        if not ok:
-            problems.append(f"needs:copy({node}:{remote_dir}) denied by {rule}: {reason}")
-            continue
-        grants.append({"kind": "copy", "node": node, "dir": remote_dir})
-    for node, unit in needs.restart_targets:
-        ok, rule, reason = fleet_exec_policy.check_restart(node, unit, policy)
-        if not ok:
-            problems.append(f"needs:restart({unit}@{node}) denied by {rule}: {reason}")
-            continue
-        grants.append({"kind": "restart", "node": node, "unit": unit})
-    if problems:
-        raise SpawnRefused("CAPABILITY_DENIED_BY_POLICY", "; ".join(problems), worktree=worktree)
+    # wq#1436: the allow/deny half is capability.policy_grants — the same code the
+    # dispatcher's pre-skip asks "would this be granted?". Only the lease and the
+    # 0400 file below are fworker's.
+    grants, refused = capability.policy_grants(needs, policy_path=FLEET_EXEC_POLICY_PATH)
+    if refused:
+        raise SpawnRefused("CAPABILITY_DENIED_BY_POLICY", "; ".join(refused),
+                           worktree=worktree, refused=refused)
     if not grants:
         return None, None, None
     expires = (datetime.now(timezone.utc) + timedelta(seconds=wall_clock_s)).strftime(
@@ -1646,8 +1624,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         # §3.2 last clause: refuse (uncharged) while zero tokens are spent, not after
         # a burned attempt — the wq#1152 signature is a cited path the sandbox can't
         # reach. A resume reuses a worktree that already passed this gate.
-        assert_spawn_paths(ticket_id, ticket.get("detail", ""), worktree, args.repo,
-                           add_dirs, ticket_needs.dirs)
+        assert_spawn_capability(ticket_id, ticket, worktree, args.repo, add_dirs,
+                                ticket_needs)
 
     # wq#1332 (§2.2 point 2): resolved every attempt (not just fresh spawns) so a
     # resumed session's grant lease tracks its OWN wall_clock, not the first
@@ -2320,7 +2298,7 @@ def handle_spawn_refused(args, ticket_id, e):
     rec = failure_record.build_failure_record(
         ticket=ticket_id, attempts=0, classification=LAUNCH_FAILURE,
         block_class=BLOCK_HARNESS_DEFECT, events=[], worktree=e.worktree,
-        expected_repo=args.repo)
+        expected_repo=args.repo, spawn_refusal=e)
     rec["triage"] = failure_record.TRIAGE_HARNESS_DEFECT
     rec["summary"] = e.summary
     fpath = failure_record.write_failure_record(d, rec)
