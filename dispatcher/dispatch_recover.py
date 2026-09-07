@@ -34,9 +34,9 @@ CLI:
   dispatch_recover.py status                # print current ladder state
   dispatch_recover.py selftest              # synthetic stall -> classify -> dry-run
                                              # rung 1 -> assert the page would fire
-  dispatch_recover.py gate [--dry-run]      # wq#1411 high-value-window pre-flight gate,
-                                             # research/NIGHTLY_DISPATCH_RESILIENCE.md §4 —
-                                             # see gate()'s docstring below
+  dispatch_recover.py gate --mode window|nightly [--dry-run]
+                                             # wq#1411 §4: prove the next pass can
+                                             # dispatch; one OK ntfy or one urgent page
 """
 import argparse
 import json
@@ -45,17 +45,13 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from collections import Counter
 from datetime import datetime, timezone
 
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(DISPATCHER_DIR)
-HARNESS_DIR = os.path.join(REPO_ROOT, "harness")
-ORCHESTRATOR_DIR = os.path.join(REPO_ROOT, "orchestrator")
+HARNESS_DIR = os.path.join(os.path.dirname(DISPATCHER_DIR), "harness")
 PROFILES_DIR = os.path.join(HARNESS_DIR, "permission-profiles")
 CONFIG_PATH = os.path.join(DISPATCHER_DIR, "config.json")
 HARNESS_PREFLIGHT_CLI = os.path.join(HARNESS_DIR, "harness-preflight")
-FOREMAN_DISPATCHER_CLI = os.path.join(DISPATCHER_DIR, "foreman_dispatcher.py")
 
 sys.path.insert(0, DISPATCHER_DIR)
 
@@ -81,19 +77,6 @@ STALLED_TITLE_LIKE = "%DISPATCHER STALLED%"
 MAX_RUNG = 3
 STALL_TAG_TITLE = "[DISPATCH] recovery ladder exhausted"
 RECOVERED_TITLE = "[DISPATCH] dispatcher recovered"
-
-# ---- window gate (wq#1411, §4) -----------------------------------------------------
-# The dispatch unit's own Environment=PATH (dispatcher/systemd/lumen-foreman-
-# dispatch.service) — the gate's claude-auth check must run inside this exact
-# environment, not an interactive login shell's, or it proves nothing about the class
-# of failure this ticket exists to catch ahead of time (§1.3: a binary/flag that
-# resolves under an interactive shell but not under systemd).
-DISPATCH_UNIT_PATH = os.environ.get("FOREMAN_DISPATCH_UNIT_PATH",
-                                    "/home/lumen/bin:/usr/local/bin:/usr/bin:/bin")
-GOVERNOR_STATE = os.environ.get("FOREMAN_STATE_JSON", os.path.join(REPO_ROOT, "state.json"))
-GATE_RESETS_WITHIN_H = float(os.environ.get("FOREMAN_GATE_RESETS_WITHIN_H", "6"))
-GATE_OK_TITLE = "[DISPATCH] window gate OK"
-GATE_FAIL_TITLE = "[DISPATCH] window gate FAILED"
 
 
 def _utcnow():
@@ -305,233 +288,6 @@ def reset(dry_run=False, reason="dispatcher recovered"):
     return was_active
 
 
-def _gate_check_stamps(dry_run):
-    """§4 item 1: every migrated repo's preflight stamp fresh — reprove the stale ones
-    NOW instead of leaving them for the next dispatcher pass's inline reprove (which
-    only fires once a wave is already trying to dispatch, §1.3/§1.4). Cheap freshness
-    check first (dispatch_gate_check reads a stamp file), live-proof reprove only for
-    repos that actually need it — a live proof spawns a real throwaway claude session
-    (harness_preflight.preflight's module docstring), not something to pay for on
-    every migrated repo every night regardless of whether it's already proven."""
-    sys.path.insert(0, HARNESS_DIR)
-    sys.path.insert(0, ORCHESTRATOR_DIR)
-    import harness_preflight   # noqa: E402
-    import permission_profiles  # noqa: E402
-    import router               # noqa: E402
-
-    try:
-        names = sorted(f[:-len(".json")] for f in os.listdir(permission_profiles.REPOS_DIR)
-                        if f.endswith(".json"))
-    except OSError as e:
-        return False, f"cannot list {permission_profiles.REPOS_DIR}: {e!r}"
-    by_name = {permission_profiles.repo_name(p): p for p in router.LANE_REPO.values()}
-    repos = [by_name.get(name, f"/home/lumen/{name}") for name in names]
-
-    stale = []
-    for repo in repos:
-        ok, reason = harness_preflight.dispatch_gate_check(repo)
-        if not ok:
-            stale.append((repo, reason))
-    if not stale:
-        return True, f"{len(repos)} migrated repo(s), stamps fresh"
-    if dry_run:
-        names_stale = [permission_profiles.repo_name(r) for r, _ in stale]
-        return False, f"DRY-RUN would reprove {len(stale)} stale repo(s): {names_stale}"
-
-    results = []
-    all_ok = True
-    for repo, _reason in stale:
-        result = harness_preflight.preflight(repo, claude_bin=CLAUDE_BIN)
-        all_ok = all_ok and result.ok
-        results.append(f"{permission_profiles.repo_name(repo)}: "
-                       f"{'ok' if result.ok else result.reason}")
-    return all_ok, f"reproved {len(stale)}/{len(repos)} stale repo(s): " + "; ".join(results)
-
-
-def _gate_check_dispatch(dry_run):
-    """§4 item 2: foreman_dispatcher.py run --dry-run must show dispatchable>0 and
-    would_spawn>0. On failure, name the top skip reasons instead of a bare
-    'nothing would spawn' — the page should tell Frank where to look first."""
-    cmd = [sys.executable, FOREMAN_DISPATCHER_CLI, "run", "--dry-run"]
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=580)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return False, f"dispatch --dry-run failed to run: {e!r}"
-
-    events = []
-    for line in p.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            events.append(json.loads(line))
-        except (json.JSONDecodeError, ValueError):
-            continue
-
-    pass_end = next((e for e in reversed(events) if e.get("event") == "pass_end"), None)
-    if pass_end is None:
-        tail = (p.stdout + p.stderr).strip()[-1500:]
-        return False, f"dry-run produced no pass_end (rc={p.returncode})\n{tail}"
-
-    dispatchable = pass_end.get("dispatchable", 0)
-    would_spawn = pass_end.get("spawned", 0)  # --dry-run counts would_spawn into `spawned`
-    if dispatchable > 0 and would_spawn > 0:
-        return True, f"dispatchable={dispatchable} would_spawn={would_spawn}"
-
-    reasons = Counter(e.get("reason") for e in events if e.get("event") == "skip")
-    top = ", ".join(f"{r}={n}" for r, n in reasons.most_common(5)) or "none logged"
-    return False, (f"dispatchable={dispatchable} would_spawn={would_spawn} — "
-                   f"top skip reasons: {top}")
-
-
-def _parse_iso(ts):
-    if not ts:
-        return None
-    try:
-        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _gate_check_governor():
-    """§4 item 3a: governor state readable, with a limit resets_at inside the next
-    FOREMAN_GATE_RESETS_WITHIN_H hours — the whole point of this gate is to run ahead
-    of the Max reset, so a governor state with no reset landing soon means the gate
-    is being asked the wrong week's question, not that anything is broken quietly."""
-    if not os.path.exists(GOVERNOR_STATE):
-        return False, f"governor state unreadable: {GOVERNOR_STATE} does not exist"
-    try:
-        with open(GOVERNOR_STATE) as f:
-            state = json.load(f)
-    except (OSError, ValueError) as e:
-        return False, f"governor state unreadable: {e!r}"
-
-    limits = state.get("limits") or {}
-    now = _utcnow()
-    within = []
-    for kind, bucket in limits.items():
-        rt = _parse_iso((bucket or {}).get("resets_at"))
-        if rt is None:
-            continue
-        hours = (rt - now).total_seconds() / 3600
-        if 0 <= hours <= GATE_RESETS_WITHIN_H:
-            within.append(f"{kind} resets in {hours:.1f}h")
-    if not within:
-        return False, (f"no limit resets_at within {GATE_RESETS_WITHIN_H}h "
-                       f"(limits tracked: {sorted(limits)})")
-    return True, "; ".join(within)
-
-
-def _gate_check_breaker_disarm():
-    """§4 item 3b/3c: circuit breaker not tripped, DISPATCH_DISARM absent. Two
-    independent checks kept separate — evaluate() reports the LIVE rate with no side
-    effect, so it can be true ahead of the next real pass's check_and_trip() actually
-    writing DISARM_PATH (circuit_breaker.py's module docstring); a stale DISARM left
-    over from an unrelated manual stop is a different failure than an about-to-trip
-    breaker, and the page should say which."""
-    import circuit_breaker  # noqa: E402 — deferred: keeps `status`/`reset` callers light
-    detail = []
-    ok = True
-    tripped, stats = circuit_breaker.evaluate()
-    if tripped:
-        ok = False
-        detail.append(f"circuit breaker tripped: {stats['failures']}/{stats['total']} "
-                      f"failed over {stats['window_minutes']}m")
-    else:
-        detail.append("circuit breaker not tripped")
-    if os.path.exists(DISARM_PATH):
-        ok = False
-        detail.append(f"DISPATCH_DISARM present at {DISARM_PATH}")
-    else:
-        detail.append("DISPATCH_DISARM absent")
-    return ok, "; ".join(detail)
-
-
-def _gate_check_claude_auth():
-    """§4 item 3d: `claude auth status` must succeed inside a transient unit carrying
-    the dispatch service's own PATH (not this process's), via systemd-run --pipe — the
-    same "works interactively, fails under the unit" class §1.3 documents for the bare
-    `claude` name. CLAUDE_BIN stays absolute here on purpose (wq#1410 §2.2 item 1): this
-    check is about the unit's *environment* passing auth, not about re-testing PATH
-    resolution the absolute path already sidesteps."""
-    cmd = ["systemd-run", "--pipe", "--collect", "--wait",
-           f"--property=Environment=PATH={DISPATCH_UNIT_PATH}",
-           CLAUDE_BIN, "auth", "status"]
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return False, f"claude auth status failed to run: {e!r}"
-    tail = (p.stdout + p.stderr).strip()[-500:]
-    return p.returncode == 0, f"claude auth status rc={p.returncode} {tail}"
-
-
-GATE_CHECKS = (
-    ("stamps_fresh", _gate_check_stamps),
-    ("dispatch_dry_run", _gate_check_dispatch),
-    ("governor_resets", lambda dry_run: _gate_check_governor()),
-    ("breaker_disarm", lambda dry_run: _gate_check_breaker_disarm()),
-    ("claude_auth", lambda dry_run: _gate_check_claude_auth()),
-)
-
-
-def _run_gate_checks(dry_run):
-    return [(name, *fn(dry_run)) for name, fn in GATE_CHECKS]
-
-
-def _format_gate_checks(results):
-    return "\n".join(f"{'OK' if ok else 'FAIL'} {name}: {detail}"
-                     for name, ok, detail in results)
-
-
-def gate(dry_run=False):
-    """The Thursday high-value-window pre-window gate, and (unmodified) the ordinary
-    22:00 PT overnight gate — same function, two timers (§4): run while there is still
-    time to fix things, not discover a stall at 03:00 with nobody watching.
-
-    All five checks pass -> one default-priority 'window gate OK' ntfy, so silence is
-    never ambiguous with "didn't run". Any failure -> advance the recovery ladder one
-    rung (dispatch_recover's existing bounded ladder — never loops, never touches
-    DISPATCH_DISARM) and recheck once; still failing -> urgent page naming exactly
-    which check(s) are still red. stamps_fresh fixes itself inline (it reproves the
-    stale repos as part of the check, §1.4) — the ladder is the fallback for the
-    classes it can't reach: a wedged dispatch unit (rung 2) or unparseable config/
-    profile JSON (rung 3)."""
-    results = _run_gate_checks(dry_run)
-    if all(ok for _, ok, _ in results):
-        detail = _format_gate_checks(results)
-        msg = "window gate OK:\n" + detail
-        if dry_run:
-            print("WOULD NTFY (gate OK):\n" + msg)
-        else:
-            _ntfy(msg, priority="default", title=GATE_OK_TITLE)
-        return {"ok": True, "recovered": False, "checks": results, "detail": detail}
-
-    recover_result = advance(dry_run=dry_run)
-    recheck = _run_gate_checks(dry_run)
-    recheck_detail = _format_gate_checks(recheck)
-
-    if all(ok for _, ok, _ in recheck):
-        msg = (f"window gate OK after recovery (ladder rung {recover_result.get('rung')}"
-              f", {recover_result.get('action')}):\n{recheck_detail}")
-        if dry_run:
-            print("WOULD NTFY (gate OK after recovery):\n" + msg)
-        else:
-            _ntfy(msg, priority="default", title=GATE_OK_TITLE)
-        return {"ok": True, "recovered": True, "recover": recover_result,
-                "checks": recheck, "detail": recheck_detail}
-
-    msg = (f"window gate FAILED, recovery did not fix it (ladder rung "
-          f"{recover_result.get('rung')}, {recover_result.get('action')}):\n"
-          f"{recheck_detail}")
-    if dry_run:
-        print("WOULD PAGE (gate failed):\n" + msg)
-    else:
-        _ntfy(msg, priority="urgent", title=GATE_FAIL_TITLE)
-    return {"ok": False, "recovered": False, "recover": recover_result,
-            "checks": recheck, "detail": recheck_detail}
-
-
 # ---- selftest (§3.3.5): wired into the weekly gate elsewhere; here it's a plain,
 # no-side-effect check runnable any time. ------------------------------------------------
 
@@ -589,6 +345,456 @@ def selftest():
     return ok
 
 
+# =========================================================================================
+# ---- window gate (wq#1411, research/NIGHTLY_DISPATCH_RESILIENCE.md §4) -------------------
+# =========================================================================================
+#
+# The Max reset lands Thursday ~04:00 PT (governor limits.weekly_all.resets_at). The
+# ladder above reacts to a stall AFTER it has cost passes; the gate below runs BEFORE
+# the window (Thu 00:30 PT) and every night (22:00 PT) and proves, end to end, that
+# the next pass CAN dispatch — then says so with one default-priority ntfy, so a
+# silent night is never ambiguous.
+#
+# Seven checks; the first two are recoverable in-gate (they are exactly the stamp
+# and wedged-unit classes the ladder's rungs fix), the rest are reported as-is:
+#   stamps    every repos.d/<repo>.json repo has a fresh preflight stamp under
+#             harness_preflight.dispatch_gate_check; stale -> harness-preflight NOW
+#             (absolute CLAUDE_BIN), recheck.
+#   dryrun    foreman_dispatcher.py run --once --dry-run into a scratch log completes
+#             with pass_end dispatchable>0 and spawned>0 (in dry-run `spawned` counts
+#             would_spawn events — foreman_dispatcher.py stage 10). would_spawn=0 ->
+#             top skip reasons in the page.
+#   governor  state.json readable, poll fresh (updated_at within
+#             floors.stale_fail_closed_seconds), stop not active; --mode window adds:
+#             weekly_all.resets_at within the next GATE_RESET_HORIZON_S.
+#   breaker   circuit_breaker.evaluate() not tripped.
+#   disarm    DISPATCH_DISARM absent.
+#   auth      `claude auth status` reports loggedIn under the dispatch unit's own
+#             PATH, run through `systemd-run --pipe` (a real transient unit, not this
+#             process's environment) — the §1.3 class, proven the way the unit runs it.
+#   selftest  selftest() above (§3.3.5) passes.
+#
+# Rungs used here call the rung functions directly and never touch recover_state.json:
+# the gate is a separate actor from the health-tick ladder and must not advance or
+# reset it. FOREMAN_RECOVER_DISABLE=1 makes the gate report-only (no reproves, no
+# restarts). DISPATCH_DISARM is read, never written.
+
+# Same env hook circuit_breaker.py:53 honours, so a worktree checkout can be pointed
+# at the live tree's state/stamps for a drill without editing anything.
+FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", os.path.dirname(DISPATCHER_DIR))
+GOVERNOR_STATE = os.environ.get("FOREMAN_STATE_JSON", os.path.join(FOREMAN_ROOT, "state.json"))
+GOVERNOR_FLOORS = os.environ.get("FOREMAN_GOVERNOR_FLOORS",
+                                 os.path.join(FOREMAN_ROOT, "governor", "floors.json"))
+DISPATCHER_CLI = os.path.join(DISPATCHER_DIR, "foreman_dispatcher.py")
+ORCHESTRATOR_DIR = os.path.join(FOREMAN_ROOT, "orchestrator")
+GATE_REPORT_PATH = os.environ.get("FOREMAN_GATE_REPORT",
+                                  os.path.join(DISPATCHER_DIR, "runtime", "gate_last.json"))
+GATE_RESET_HORIZON_S = int(os.environ.get("FOREMAN_GATE_RESET_HORIZON_S", str(6 * 3600)))
+GATE_STALE_DEFAULT_S = 600            # governor_core DEFAULT_FLOORS stale_fail_closed_seconds
+GATE_DRYRUN_TIMEOUT_S = 540           # under the unit's TimeoutStartSec, leaves room for rungs
+GATE_PREFLIGHT_TIMEOUT_S = 330        # harness_preflight.LIVE_PROOF_TIMEOUT + slack
+GATE_LOCK_RETRY_S = int(os.environ.get("FOREMAN_GATE_LOCK_RETRY_S", "60"))
+GATE_TOP_SKIPS = 5
+GATE_MODES = ("window", "nightly")
+GATE_OK_TITLE = {"window": "[DISPATCH] window gate OK", "nightly": "[DISPATCH] nightly gate OK"}
+GATE_FAIL_TITLE = {"window": "[DISPATCH] window gate FAILED",
+                   "nightly": "[DISPATCH] nightly gate FAILED"}
+DISPATCH_UNIT_FOR_PATH = os.environ.get("FOREMAN_GATE_PATH_UNIT", DISPATCH_SERVICE)
+_PT = "America/Los_Angeles"
+
+
+def _pt(dt_or_iso):
+    """Render a UTC datetime/ISO string in Pacific for the page (fleet convention)."""
+    try:
+        from zoneinfo import ZoneInfo
+        d = dt_or_iso if isinstance(dt_or_iso, datetime) else datetime.fromisoformat(dt_or_iso)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.astimezone(ZoneInfo(_PT)).strftime("%a %H:%M %Z")
+    except Exception:  # noqa: BLE001 — formatting must never break a check
+        return str(dt_or_iso)
+
+
+def _check(name, ok, detail, recoverable=False):
+    return {"name": name, "ok": bool(ok), "detail": detail, "recoverable": recoverable}
+
+
+def _migrated_repo_paths():
+    """Same resolution harness/harness-preflight --all uses: one path per
+    permission-profiles/repos.d/<name>.json, mapped through router.LANE_REPO so the
+    stamp is looked up under the path the dispatcher will use."""
+    sys.path.insert(0, HARNESS_DIR)
+    sys.path.insert(0, ORCHESTRATOR_DIR)
+    import permission_profiles  # noqa: E402
+    import router  # noqa: E402
+    by_name = {permission_profiles.repo_name(p): p for p in router.LANE_REPO.values()}
+    try:
+        names = sorted(f[:-len(".json")] for f in os.listdir(permission_profiles.REPOS_DIR)
+                       if f.endswith(".json"))
+    except OSError:
+        return []
+    return [by_name.get(n, f"/home/lumen/{n}") for n in names]
+
+
+def _reprove_repo(repo, dry_run):
+    cmd = [sys.executable, HARNESS_PREFLIGHT_CLI, repo, "--claude-bin", CLAUDE_BIN]
+    if dry_run:
+        return False, "DRY-RUN would run: " + " ".join(cmd)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=GATE_PREFLIGHT_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"harness-preflight failed to run: {e!r}"
+    tail = (p.stdout + p.stderr).strip()[-400:]
+    return p.returncode == 0, f"rc={p.returncode} {tail}"
+
+
+def check_stamps(fix=True, dry_run=False):
+    """Every migrated repo has a fresh stamp; a stale/missing one is reproved right
+    here (the §4.1 'not at 03:00' rule) and rechecked."""
+    sys.path.insert(0, HARNESS_DIR)
+    import harness_preflight  # noqa: E402
+    repos = _migrated_repo_paths()
+    if not repos:
+        return _check("stamps", True, "no migrated repos (no repos.d/*.json) — nothing to prove")
+    lines, all_ok, reproved = [], True, []
+    for repo in repos:
+        name = os.path.basename(repo.rstrip("/"))
+        try:
+            ok, reason = harness_preflight.dispatch_gate_check(repo)
+        except Exception as e:  # noqa: BLE001 — a broken profile file is a finding, not a crash
+            ok, reason = False, f"profile_unreadable: {e!r}"
+        if ok:
+            lines.append(f"{name}: fresh" + (f" ({reason})" if reason else ""))
+            continue
+        if not fix:
+            all_ok = False
+            lines.append(f"{name}: STALE — {reason}")
+            continue
+        rok, rdetail = _reprove_repo(repo, dry_run)
+        if rok:
+            try:
+                ok2, reason2 = harness_preflight.dispatch_gate_check(repo)
+            except Exception as e:  # noqa: BLE001
+                ok2, reason2 = False, repr(e)
+            if ok2:
+                reproved.append(name)
+                lines.append(f"{name}: was stale ({reason}) -> reproved now, fresh")
+                continue
+            all_ok = False
+            lines.append(f"{name}: reproved but STILL stale — {reason2}")
+        else:
+            all_ok = False
+            lines.append(f"{name}: STALE ({reason}); reprove FAILED — {rdetail}")
+    c = _check("stamps", all_ok, "; ".join(lines), recoverable=True)
+    c["reproved"] = reproved
+    return c
+
+
+def _run_dispatcher_dry_run(scratch_log):
+    env = dict(os.environ)
+    env["FOREMAN_DISPATCHER_LOG"] = scratch_log
+    cmd = [sys.executable, DISPATCHER_CLI, "run", "--once", "--dry-run"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=GATE_DRYRUN_TIMEOUT_S,
+                           cwd=FOREMAN_ROOT, env=env)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"dry-run failed to run: {e!r}", []
+    events = []
+    try:
+        with open(scratch_log) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        events.append(json.loads(line))
+                    except ValueError:
+                        continue
+    except OSError:
+        pass
+    return p.returncode, (p.stdout + p.stderr).strip()[-300:], events
+
+
+def _summarize_dry_run(events):
+    """(verdict, detail) from one dry-run pass's decision log. verdict in
+    {'ok','lock_busy','fail'}."""
+    pass_end = next((e for e in events if e.get("event") == "pass_end"), None)
+    halts = [e for e in events if e.get("event") == "halt"]
+    errors = [e for e in events if e.get("event") == "error" and e.get("stage") != "config_lane"]
+    for h in halts:
+        stage, reason = h.get("stage", ""), h.get("reason", "") or ""
+        if stage == "lock" and "lock_busy" in reason:
+            return "lock_busy", "dispatcher lock busy (a real pass is running)"
+        if stage == "concurrency" and "no_slots" in reason:
+            return "ok", "halted at concurrency/no_slots — every slot is busy, nothing to prove"
+        if stage in ("kill_switch", "circuit_breaker"):
+            return "fail", f"halt stage={stage} reason={reason}"
+    if errors:
+        e = errors[0]
+        return "fail", f"error stage={e.get('stage')} reason={str(e.get('reason'))[:200]}"
+    if pass_end is None:
+        return "fail", "no pass_end in dry-run log (pass did not complete)"
+    cand = int(pass_end.get("candidates") or 0)
+    dispatchable = pass_end.get("dispatchable")
+    dispatchable = int(dispatchable) if dispatchable is not None else cand
+    would_spawn = int(pass_end.get("spawned") or 0)   # dry-run counts would_spawn here
+    n_ws = sum(1 for e in events if e.get("event") == "would_spawn")
+    would_spawn = max(would_spawn, n_ws)
+    head = f"candidates={cand} dispatchable={dispatchable} would_spawn={would_spawn}"
+    if dispatchable > 0 and would_spawn > 0:
+        return "ok", head
+    from collections import Counter
+    skips = Counter((e.get("stage", "?"), e.get("reason", "?"))
+                    for e in events if e.get("event") == "skip")
+    top = ", ".join(f"{s}/{r}={n}" for (s, r), n in skips.most_common(GATE_TOP_SKIPS))
+    why = ("queue has no candidates at all" if cand == 0 else
+           "every candidate is structurally undispatchable" if dispatchable == 0 else
+           "dispatchable tickets exist but none would spawn")
+    return "fail", f"{head} — {why}; top skips: {top or 'none'}"
+
+
+def check_dryrun(dry_run=False):
+    """§4.2: a real decision pass, zero side effects, must report it WOULD spawn."""
+    if dry_run:
+        return _check("dryrun", True, "DRY-RUN would run foreman_dispatcher.py run --once "
+                      "--dry-run into a scratch log", recoverable=True)
+    with tempfile.TemporaryDirectory() as td:
+        scratch = os.path.join(td, "dispatcher-dryrun.log")
+        rc, tail, events = _run_dispatcher_dry_run(scratch)
+        if rc is None:
+            return _check("dryrun", False, tail, recoverable=True)
+        verdict, detail = _summarize_dry_run(events)
+        if verdict == "lock_busy":
+            import time
+            time.sleep(GATE_LOCK_RETRY_S)
+            rc, tail, events = _run_dispatcher_dry_run(scratch + ".2")
+            if rc is None:
+                return _check("dryrun", False, tail, recoverable=True)
+            verdict, detail = _summarize_dry_run(events)
+            if verdict == "lock_busy":
+                detail = f"{detail} on both attempts ({GATE_LOCK_RETRY_S}s apart)"
+        if rc not in (0, None) and verdict == "ok":
+            detail += f" (dispatcher rc={rc}: {tail})"
+        return _check("dryrun", verdict == "ok", detail, recoverable=True)
+
+
+def _stale_seconds():
+    try:
+        with open(GOVERNOR_FLOORS) as f:
+            v = json.load(f).get("stale_fail_closed_seconds")
+        return int(v) if v else GATE_STALE_DEFAULT_S
+    except (OSError, ValueError, TypeError):
+        return GATE_STALE_DEFAULT_S
+
+
+def check_governor(mode, now=None):
+    """§4.3: governor state readable + fresh; in window mode the weekly reset must be
+    ahead of us and inside GATE_RESET_HORIZON_S (else the window this gate exists
+    for is not the window the governor thinks it is)."""
+    now = now or _utcnow()
+    try:
+        with open(GOVERNOR_STATE) as f:
+            st = json.load(f)
+    except (OSError, ValueError) as e:
+        return _check("governor", False, f"state unreadable: {e!r} ({GOVERNOR_STATE})")
+    if not isinstance(st, dict):
+        return _check("governor", False, "state.json is not an object")
+    problems, notes = [], []
+    upd = st.get("updated_at")
+    try:
+        age = (now - datetime.fromisoformat(upd)).total_seconds()
+    except (TypeError, ValueError):
+        age = None
+    stale_s = _stale_seconds()
+    if age is None:
+        problems.append("updated_at missing/unparseable")
+    elif age > stale_s:
+        problems.append(f"poll stale: updated_at {int(age)}s ago (> {stale_s}s) — "
+                        "governor daemon not running?")
+    else:
+        notes.append(f"poll {max(0, int(age))}s old")
+    if st.get("stale"):
+        problems.append("state.stale=true (daemon failed closed)")
+    if st.get("stop_active"):
+        problems.append("STOP kill-switch active")
+    limits = st.get("limits") if isinstance(st.get("limits"), dict) else {}
+    weekly = limits.get("weekly_all") if isinstance(limits.get("weekly_all"), dict) else {}
+    resets_at = weekly.get("resets_at")
+    pct = weekly.get("percent")
+    reset_dt = None
+    try:
+        reset_dt = datetime.fromisoformat(resets_at) if resets_at else None
+    except (TypeError, ValueError):
+        reset_dt = None
+    if reset_dt is not None:
+        delta = (reset_dt - now).total_seconds()
+        notes.append(f"weekly_all {pct}% resets {_pt(reset_dt)} ({int(delta // 60)}m away)")
+        if mode == "window" and not (0 < delta <= GATE_RESET_HORIZON_S):
+            problems.append(f"weekly_all.resets_at not within the next "
+                            f"{GATE_RESET_HORIZON_S // 3600}h ({int(delta // 60)}m away)")
+    else:
+        msg = "weekly_all.resets_at missing/unparseable"
+        (problems if mode == "window" else notes).append(msg)
+    ok = not problems
+    return _check("governor", ok, "; ".join(problems + notes))
+
+
+def check_breaker():
+    try:
+        import circuit_breaker
+        tripped, stats = circuit_breaker.evaluate()
+    except Exception as e:  # noqa: BLE001
+        return _check("breaker", False, f"evaluate() raised {e!r}")
+    detail = (f"tripped={tripped} {stats.get('failures')}/{stats.get('total')} failed in "
+              f"last {stats.get('window_minutes')}m")
+    return _check("breaker", not tripped, detail)
+
+
+def check_disarm():
+    present = os.path.exists(DISARM_PATH)
+    return _check("disarm", not present,
+                  f"DISPATCH_DISARM {'PRESENT' if present else 'absent'} ({DISARM_PATH})")
+
+
+def _dispatch_unit_path():
+    """PATH the live dispatch unit actually runs with (its drop-ins included), so the
+    auth proof tests the environment a spawn gets — not this process's."""
+    try:
+        p = subprocess.run(["systemctl", "show", "-p", "Environment", "--value",
+                            DISPATCH_UNIT_FOR_PATH], capture_output=True, text=True, timeout=15)
+        for tok in p.stdout.split():
+            if tok.startswith("PATH="):
+                return tok[len("PATH="):], f"from {DISPATCH_UNIT_FOR_PATH}"
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return os.environ.get("PATH", ""), "fallback: this process's PATH (unit env unreadable)"
+
+
+def _run_under_unit_env(path, argv, timeout=60):
+    """Run argv as a transient system unit with exactly `path` as PATH. Bare names in
+    systemd-run's own argv are resolved by the manager's search path, not the unit's,
+    so the command is wrapped in /bin/sh -c — the shell inside resolves against the
+    PATH under test. Returns (rc, stdout, stderr); rc None if systemd-run itself could
+    not be started."""
+    cmd = ["sudo", "-n", "systemd-run", "--pipe", "--wait", "--collect", "-q",
+           "-p", "User=lumen", "-p", f"WorkingDirectory={FOREMAN_ROOT}",
+           "-E", f"PATH={path}", "-E", "HOME=/home/lumen",
+           "/bin/sh", "-c", " ".join(argv)]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, "", repr(e)
+    return p.returncode, p.stdout, p.stderr
+
+
+def check_auth():
+    """§4.3: `claude auth status` under the unit PATH via systemd-run --pipe."""
+    path, src = _dispatch_unit_path()
+    rc, out, err = _run_under_unit_env(path, ["claude", "auth", "status"])
+    if rc is None:
+        return _check("auth", False, f"systemd-run could not start: {err[:200]} (PATH {src})")
+    if rc != 0:
+        return _check("auth", False,
+                      f"claude auth status rc={rc} under unit PATH ({src}): "
+                      f"{(err or out).strip()[:200]}")
+    try:
+        info = json.loads(out)
+    except ValueError:
+        return _check("auth", False, f"claude auth status printed non-JSON: {out.strip()[:200]}")
+    logged_in = bool(info.get("loggedIn"))
+    detail = (f"loggedIn={logged_in} authMethod={info.get('authMethod')} "
+              f"subscription={info.get('subscriptionType')} (PATH {src})")
+    return _check("auth", logged_in, detail)
+
+
+def check_selftest():
+    import contextlib
+    import io
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            ok = selftest()
+    except Exception as e:  # noqa: BLE001
+        return _check("selftest", False, f"selftest raised {e!r}")
+    last = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
+    return _check("selftest", ok, (last[-1] if last else "no output")[:200])
+
+
+def _recover_dryrun(dry_run):
+    """The two rungs that can unwedge a pass that would not spawn (stamps already
+    reproved themselves in check_stamps). Direct rung calls: recover_state.json is the
+    health ladder's, not the gate's."""
+    steps = []
+    for rung in (2, 3):
+        name, fn = RUNGS[rung]
+        ok, detail = fn(dry_run)
+        steps.append(f"rung{rung} {name}: {'ok' if ok else 'FAILED'} — {detail[:300]}")
+    return steps
+
+
+def run_gate(mode="window", dry_run=False, now=None):
+    """Run every check; recover what is recoverable; page exactly once.
+    Returns the report dict (also written to GATE_REPORT_PATH)."""
+    if mode not in GATE_MODES:
+        raise ValueError(f"mode must be one of {GATE_MODES}")
+    started = now or _utcnow()
+    disabled = os.environ.get(DISABLE_ENV) == "1"
+    fix = not disabled
+    checks = [check_stamps(fix=fix, dry_run=dry_run),
+              check_dryrun(dry_run=dry_run),
+              check_governor(mode, now=started),
+              check_breaker(),
+              check_disarm(),
+              check_auth(),
+              check_selftest()]
+    recovery = []
+    dr = next(c for c in checks if c["name"] == "dryrun")
+    if not dr["ok"] and fix and not dry_run:
+        recovery = _recover_dryrun(dry_run)
+        dr2 = check_dryrun(dry_run=dry_run)
+        dr2["detail"] = f"after rungs: {dr2['detail']} | first attempt: {dr['detail']}"
+        checks[checks.index(dr)] = dr2
+    failed = [c for c in checks if not c["ok"]]
+    ok = not failed
+    report = {"mode": mode, "ok": ok, "dry_run": dry_run, "disabled": disabled,
+              "started_at": started.isoformat(timespec="seconds"),
+              "finished_at": _utcnow().isoformat(timespec="seconds"),
+              "checks": checks, "recovery": recovery,
+              "reproved": next((c.get("reproved") for c in checks
+                                if c["name"] == "stamps"), [])}
+    if ok:
+        fixed = report["reproved"]
+        msg = (f"{mode} gate OK at {_pt(started)}: stamps fresh"
+               + (f" (reproved {', '.join(fixed)})" if fixed else "")
+               + f"; dry-run {dr['detail'].split(' — ')[0]}; "
+               + next(c['detail'] for c in checks if c['name'] == 'governor')
+               + "; breaker armed; DISARM absent; claude auth ok under unit PATH; "
+                 "selftest pass.")
+        title, prio = GATE_OK_TITLE[mode], "default"
+    else:
+        names = ", ".join(c["name"] for c in failed)
+        body = "\n".join(f"- {c['name']}: {c['detail'][:400]}" for c in failed)
+        rec = ("\nrecovery: " + " | ".join(recovery)) if recovery else ""
+        msg = (f"{mode} gate FAILED at {_pt(started)} — {len(failed)} check(s): {names}\n"
+               f"{body}{rec}")
+        title, prio = GATE_FAIL_TITLE[mode], "urgent"
+    report["ntfy"] = {"title": title, "priority": prio, "message": msg}
+    if dry_run:
+        print(f"WOULD NTFY [{prio}] {title}: {msg}")
+    else:
+        _ntfy(msg, priority=prio, title=title)
+        try:
+            d = os.path.dirname(GATE_REPORT_PATH)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            tmp = GATE_REPORT_PATH + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(report, f, indent=1)
+            os.replace(tmp, GATE_REPORT_PATH)
+        except OSError:
+            pass
+    return report
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Dispatcher stall recovery ladder (wq#1410)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -602,8 +808,13 @@ def main(argv=None):
     sub.add_parser("status", help="print the current ladder state")
     sub.add_parser("selftest", help="synthetic stall -> classify -> dry-run rung 1")
 
-    g = sub.add_parser("gate", help="wq#1411 high-value-window pre-flight gate")
-    g.add_argument("--dry-run", action="store_true")
+    g = sub.add_parser("gate", help="wq#1411 §4 pre-window / nightly dispatch gate")
+    g.add_argument("--mode", choices=GATE_MODES, default="window",
+                   help="window = Thu pre-reset (adds the 6h resets_at check); "
+                        "nightly = same gate without it")
+    g.add_argument("--dry-run", action="store_true",
+                   help="run the read-only checks, no reproves/restarts/ntfy; "
+                        "exit 2 if any check fails")
 
     args = ap.parse_args(argv)
 
@@ -619,9 +830,13 @@ def main(argv=None):
     elif args.cmd == "selftest":
         sys.exit(0 if selftest() else 1)
     elif args.cmd == "gate":
-        result = gate(dry_run=args.dry_run)
-        print(result["detail"])
-        sys.exit(0 if result["ok"] else 1)
+        report = run_gate(mode=args.mode, dry_run=args.dry_run)
+        print(json.dumps({k: v for k, v in report.items() if k != "ntfy"}, indent=2))
+        # Real run: the ntfy IS the verdict (same rule as dispatch_health.py, wq#1012);
+        # exit 0 so a failed CHECK does not also fire the unit's OnFailure page — that
+        # hook is reserved for the gate itself crashing. --dry-run keeps the nonzero
+        # exit so tests/CI can read the verdict.
+        sys.exit(0 if (report["ok"] or not args.dry_run) else 2)
 
 
 if __name__ == "__main__":

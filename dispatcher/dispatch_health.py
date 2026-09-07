@@ -58,9 +58,9 @@ NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 
 DEFAULT_THRESHOLD = 2          # consecutive unhealthy passes before alarm (wq#1410:
 # K=2 not 3 — at the 20-min health-tick cadence, 3 leaves a one-hour blind spot)
-# wq#1411 §4: the Thursday during-window instance (01:00-09:00 PT) runs with
-# --threshold 1 and a 20-min dedup instead of the default 1h — a stall right before
-# the Max reset window needs a much tighter alarm than the ordinary overnight cadence.
+# wq#1411 §4: env/flag-overridable so the Thursday window instance
+# (lumen-foreman-health-window.timer) can run K=1 with a 20-min dedup while sharing
+# this state file with the regular instance — the tighter page suppresses the 1h one.
 ALERT_DEDUP_SECONDS = int(os.environ.get("FOREMAN_HEALTH_ALERT_DEDUP_SECONDS", "3600"))
 # How many log lines to scan from the tail. 200 lines covers ~30 passes at ~6 lines each.
 TAIL_LINES = 200
@@ -228,8 +228,17 @@ def classify_passes(events, now=None):
     return results
 
 
-def check_health(log_path, threshold, dry_run=False):
-    """Main check. Returns (alarm_fired, detail_string)."""
+def check_health(log_path, threshold, dry_run=False, dedup_seconds=None, ladder=True):
+    """Main check. Returns (alarm_fired, detail_string).
+
+    dedup_seconds: override ALERT_DEDUP_SECONDS (wq#1411 window instance: 1200).
+    ladder=False: never advance/reset the recovery ladder from this call. The window
+    instance runs alongside the regular 5-min one; two callers advancing one rung per
+    tick would climb the 3-rung ladder twice as fast and exhaust it (urgent page)
+    before a restarted pass could even be scored. The ladder keeps exactly one
+    actor — the regular K=2 instance; the window instance only tightens detection.
+    """
+    dedup_seconds = ALERT_DEDUP_SECONDS if dedup_seconds is None else dedup_seconds
     events = parse_log_tail(log_path, TAIL_LINES)
     if not events:
         return False, "no log data"
@@ -243,7 +252,7 @@ def check_health(log_path, threshold, dry_run=False):
     # wq#1410 §3.3.2: a healthy pass resets the recovery ladder immediately, ahead of
     # the alarm window/dedup below — the ladder tracks the dispatcher's own state, not
     # this call's report cadence. Never let a ladder bug break the watchdog itself.
-    if scored[-1][2] == "healthy":
+    if scored[-1][2] == "healthy" and ladder:
         try:
             import dispatch_recover
             dispatch_recover.reset(dry_run=dry_run)
@@ -265,12 +274,13 @@ def check_health(log_path, threshold, dry_run=False):
     # wq#1410 §3.3.2: the alarm condition holds — advance the recovery ladder one
     # rung, every tick, independent of the ntfy dedup below (the ladder must climb
     # all 3 rungs well inside the 1h ntfy dedup window, not wait behind it).
-    try:
-        import dispatch_recover
-        dispatch_recover.advance(dry_run=dry_run)
-    except Exception as e:
-        print(f"[dispatch_health] WARN dispatch_recover.advance failed: {e!r}",
-              file=sys.stderr)
+    if ladder:
+        try:
+            import dispatch_recover
+            dispatch_recover.advance(dry_run=dry_run)
+        except Exception as e:
+            print(f"[dispatch_health] WARN dispatch_recover.advance failed: {e!r}",
+                  file=sys.stderr)
 
     # All recent passes are unhealthy — check dedup.
     state = load_state()
@@ -279,9 +289,9 @@ def check_health(log_path, threshold, dry_run=False):
     if last_alert:
         try:
             elapsed = (_utcnow() - datetime.fromisoformat(last_alert)).total_seconds()
-            if elapsed < ALERT_DEDUP_SECONDS:
+            if elapsed < dedup_seconds:
                 return False, (f"UNHEALTHY but suppressed (last alert {int(elapsed)}s ago, "
-                               f"dedup={ALERT_DEDUP_SECONDS}s):\n" + "\n".join(detail_lines))
+                               f"dedup={dedup_seconds}s):\n" + "\n".join(detail_lines))
         except ValueError:
             pass
 
@@ -353,6 +363,12 @@ def main(argv=None):
     c.add_argument("--log", default=LOG_PATH, help="dispatcher log path")
     c.add_argument("--dry-run", action="store_true",
                    help="classify + report, don't ntfy")
+    c.add_argument("--dedup", type=int, default=None, metavar="SECONDS",
+                   help=f"re-alert suppression window (default {ALERT_DEDUP_SECONDS}s; "
+                        "wq#1411 Thu window instance uses 1200)")
+    c.add_argument("--no-ladder", action="store_true",
+                   help="never advance/reset the recovery ladder from this instance "
+                        "(wq#1411: the window instance; the regular timer owns the ladder)")
 
     sub.add_parser("inject-fault", help="write a bad config for acceptance testing")
     sub.add_parser("clear-fault", help="restore config after testing")
@@ -364,7 +380,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.cmd == "check":
-        fired, detail = check_health(a.log, a.threshold, dry_run=a.dry_run)
+        fired, detail = check_health(a.log, a.threshold, dry_run=a.dry_run,
+                                     dedup_seconds=a.dedup, ladder=not a.no_ladder)
         print(detail)
         # wq#1012/R2-T5: on the real timer-driven pass the DISPATCHER STALLED alarm is
         # delivered via _ntfy() inside check_health(); a nonzero exit here only made

@@ -8,7 +8,6 @@ state paths).
 """
 import json
 import os
-import shutil
 import sqlite3
 import stat
 import sys
@@ -18,16 +17,10 @@ import pytest
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 DISPATCHER_DIR = os.path.dirname(TESTS_DIR)
-REPO_ROOT = os.path.dirname(DISPATCHER_DIR)
 sys.path.insert(0, DISPATCHER_DIR)
-sys.path.insert(0, os.path.join(REPO_ROOT, "harness"))
-sys.path.insert(0, os.path.join(REPO_ROOT, "orchestrator"))
 import dispatch_health as dh        # noqa: E402
 import dispatch_recover as dr       # noqa: E402
 import foreman_dispatcher as fd     # noqa: E402
-import harness_preflight as hp      # noqa: E402 — gate §5(vii) fixture
-import permission_profiles as pp    # noqa: E402
-import router as rt                 # noqa: E402
 
 
 def _script(path, body):
@@ -168,22 +161,6 @@ def test_classify_falls_back_to_candidates_when_dispatchable_missing(env):
 
 def test_default_threshold_is_two_not_three():
     assert dh.DEFAULT_THRESHOLD == 2
-
-
-def test_alert_dedup_seconds_env_override(monkeypatch):
-    """wq#1411 §4: the Thursday during-window dispatch_health instance
-    (lumen-foreman-health-thu.service) sets FOREMAN_HEALTH_ALERT_DEDUP_SECONDS=1200
-    (20min) instead of the ordinary 1h — must actually move the module constant read
-    at import, not just exist as an unread env var."""
-    import importlib
-    monkeypatch.setenv("FOREMAN_HEALTH_ALERT_DEDUP_SECONDS", "1200")
-    try:
-        importlib.reload(dh)
-        assert dh.ALERT_DEDUP_SECONDS == 1200
-    finally:
-        monkeypatch.delenv("FOREMAN_HEALTH_ALERT_DEDUP_SECONDS", raising=False)
-        importlib.reload(dh)
-        assert dh.ALERT_DEDUP_SECONDS == 3600
 
 
 # ---- classifier: hung pass_start with no pass_end past TIMEOUT_START_SEC ----------------
@@ -432,188 +409,228 @@ def test_selftest_fails_loudly_if_classifier_stops_detecting_the_stall(env, monk
     assert dr.selftest() is False
 
 
-# ---- window gate orchestration (wq#1411 §4) ----------------------------------------------
-# GATE_CHECKS is a tuple of (name, fn) bound at import time — same reason _fake_rungs
-# replaces dr.RUNGS wholesale instead of patching the rung functions individually.
+# ---- wq#1411 §4 window gate -------------------------------------------------------------
 
-def _fake_gate_checks(monkeypatch, verdicts):
-    """verdicts: name -> (ok, detail) tuple, or name -> callable(dry_run)->(ok, detail)
-    for a check that changes its answer across calls (recovery tests)."""
-    checks = []
-    for name, v in verdicts.items():
-        if callable(v):
-            checks.append((name, v))
-        else:
-            ok, detail = v
-            checks.append((name, lambda dry_run, ok=ok, detail=detail: (ok, detail)))
-    monkeypatch.setattr(dr, "GATE_CHECKS", tuple(checks))
-
-
-ALL_OK_VERDICTS = {
-    "stamps_fresh": (True, "3 migrated repo(s), stamps fresh"),
-    "dispatch_dry_run": (True, "dispatchable=5 would_spawn=2"),
-    "governor_resets": (True, "session resets in 2.0h"),
-    "breaker_disarm": (True, "circuit breaker not tripped; DISPATCH_DISARM absent"),
-    "claude_auth": (True, "claude auth status rc=0"),
-}
-
-
-def test_gate_all_checks_pass_sends_default_ok_ntfy(env, monkeypatch):
-    _fake_gate_checks(monkeypatch, ALL_OK_VERDICTS)
-    result = dr.gate(dry_run=False)
-    assert result["ok"] is True
-    assert result["recovered"] is False
-    assert len(result["checks"]) == 5
-    transcript = env["ntfy_log"].read_text()
-    assert dr.GATE_OK_TITLE in transcript
-    assert "default" in transcript
-    assert "urgent" not in transcript
-
-
-def test_gate_dry_run_all_pass_never_ntfys(env, monkeypatch, capsys):
-    _fake_gate_checks(monkeypatch, ALL_OK_VERDICTS)
-    result = dr.gate(dry_run=True)
-    assert result["ok"] is True
-    assert not env["ntfy_log"].exists()
-    assert "WOULD NTFY (gate OK)" in capsys.readouterr().out
-
-
-def test_gate_failure_advances_ladder_one_rung_then_recovers(env, monkeypatch):
-    _fake_rungs(monkeypatch, ok=True)
-    calls = {"n": 0}
-
-    def flaky_dispatch(dry_run):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return False, ("dispatchable=0 would_spawn=0 — top skip reasons: "
-                           "lane_unmapped=40")
-        return True, "dispatchable=5 would_spawn=2"
-
-    verdicts = dict(ALL_OK_VERDICTS, dispatch_dry_run=flaky_dispatch)
-    _fake_gate_checks(monkeypatch, verdicts)
-
-    result = dr.gate(dry_run=False)
-    assert result["ok"] is True
-    assert result["recovered"] is True
-    assert calls["n"] == 2  # first (failing) check, then exactly one recheck
-    assert dr.load_state()["rung"] == 1  # advance() ran exactly one rung, not the whole ladder
-    transcript = env["ntfy_log"].read_text()
-    assert dr.GATE_OK_TITLE in transcript
-    assert "after recovery" in transcript
-
-
-def test_gate_still_failing_after_ladder_pages_urgent_naming_the_failed_check(env, monkeypatch):
-    _fake_rungs(monkeypatch, ok=False)
-    verdicts = dict(ALL_OK_VERDICTS,
-                    claude_auth=(False, "claude auth status rc=1 not logged in"))
-    _fake_gate_checks(monkeypatch, verdicts)
-
-    result = dr.gate(dry_run=False)
-    assert result["ok"] is False
-    transcript = env["ntfy_log"].read_text()
-    assert dr.GATE_FAIL_TITLE in transcript
-    assert "urgent" in transcript
-    assert "claude_auth" in transcript
-    assert "claude auth status rc=1" in transcript
-
-
-def test_gate_dry_run_failure_pages_nothing(env, monkeypatch, capsys):
-    _fake_rungs(monkeypatch, ok=False)
-    verdicts = dict(ALL_OK_VERDICTS,
-                    governor_resets=(False, "no limit resets_at within 6h"))
-    _fake_gate_checks(monkeypatch, verdicts)
-
-    result = dr.gate(dry_run=True)
-    assert result["ok"] is False
-    assert not env["ntfy_log"].exists()
-    assert "WOULD PAGE (gate failed)" in capsys.readouterr().out
-
-
-def test_gate_cli_exit_code_reflects_ok(env, monkeypatch, capsys):
-    _fake_gate_checks(monkeypatch, ALL_OK_VERDICTS)
-    with pytest.raises(SystemExit) as exc:
-        dr.main(["gate", "--dry-run"])
-    assert exc.value.code == 0
-
-    verdicts = dict(ALL_OK_VERDICTS, claude_auth=(False, "rc=1"))
-    _fake_gate_checks(monkeypatch, verdicts)
-    _fake_rungs(monkeypatch, ok=False)
-    with pytest.raises(SystemExit) as exc:
-        dr.main(["gate", "--dry-run"])
-    assert exc.value.code == 1
-
-
-# ---- §5 case (vii): stale stamp under the gate is fixed in place, reports OK -------------
-
-GATE_FIXTURE_NAME = "wq1411-gate-fixture-repo"
-GATE_FIXTURE_REPO = f"/home/lumen/{GATE_FIXTURE_NAME}"
+def _ok(name):
+    return {"name": name, "ok": True, "detail": "stub ok", "recoverable": False}
 
 
 @pytest.fixture
-def stale_stamp_repo(tmp_path, monkeypatch):
-    # Isolated repos.d with ONLY the fixture entry — _gate_check_stamps enumerates
-    # every repos.d/*.json, and the real dir carries the fleet's actual migrated repos
-    # (foreman, mailbot, pokemon, ...), which would show up as "stale" too once
-    # STAMP_DIR/RENDER_DIR are redirected to an empty tmp dir below.
-    repos_dir = tmp_path / "repos.d"
-    repos_dir.mkdir()
-    (repos_dir / f"{GATE_FIXTURE_NAME}.json").write_text(json.dumps(
-        {"profiles": ["base", "python"], "extra_allow": [],
-         "preflight_cmds": ["python3 -c 'print(1)'"], "verbs": []}))
-    stamp_dir = str(tmp_path / "stamps")
-    render_dir = str(tmp_path / "render")
-
-    monkeypatch.setattr(pp, "REPOS_DIR", str(repos_dir))
-    monkeypatch.setattr(hp, "STAMP_DIR", stamp_dir)
-    monkeypatch.setattr(hp, "RENDER_DIR", render_dir)
-    # Zero-quota: no denials, same convention as test_harness_preflight.py's
-    # _clean_runner, but patched at the run_live_proof layer since dispatch_recover's
-    # gate calls harness_preflight.preflight() without exposing a runner param (the
-    # real deployment always wants a real proof — see _gate_check_stamps's docstring).
-    monkeypatch.setattr(hp, "run_live_proof", lambda *a, **k: [])
-    monkeypatch.setattr(rt, "LANE_REPO", {})  # force the /home/lumen/<name> fallback path
-
-    yield GATE_FIXTURE_REPO
-    shutil.rmtree(stamp_dir, ignore_errors=True)
-    shutil.rmtree(render_dir, ignore_errors=True)
+def gate_env(env, monkeypatch, tmp_path):
+    """Every check stubbed to pass; individual tests flip one. run_gate never touches
+    the real fleet: ntfy -> fake script, report -> tmp, systemd-run -> patched."""
+    for name in ("check_breaker", "check_disarm", "check_auth", "check_selftest"):
+        monkeypatch.setattr(dr, name, lambda _n=name: _ok(_n))
+    monkeypatch.setattr(dr, "check_stamps",
+                        lambda fix=True, dry_run=False: dict(_ok("stamps"), reproved=[]))
+    monkeypatch.setattr(dr, "check_dryrun", lambda dry_run=False: _ok("dryrun"))
+    monkeypatch.setattr(dr, "check_governor", lambda mode, now=None: _ok("governor"))
+    monkeypatch.setattr(dr, "GATE_REPORT_PATH", str(tmp_path / "gate_last.json"))
+    monkeypatch.delenv(dr.DISABLE_ENV, raising=False)
+    return env
 
 
-def test_gate_check_stamps_reproves_a_stale_repo_and_then_reports_fresh(stale_stamp_repo):
-    # No stamp yet at all -> missing counts as stale -> gate reproves it inline.
-    ok, detail = dr._gate_check_stamps(dry_run=False)
-    assert ok is True
-    assert "reproved 1/1" in detail
-    assert hp.read_stamp(GATE_FIXTURE_REPO, stamp_dir=hp.STAMP_DIR) is not None
-
-    # Next call: the stamp it just wrote is fresh, no reprove needed.
-    ok2, detail2 = dr._gate_check_stamps(dry_run=False)
-    assert ok2 is True
-    assert "stamps fresh" in detail2
+def test_gate_all_pass_sends_one_default_ok_ntfy(gate_env):
+    report = dr.run_gate(mode="window")
+    assert report["ok"] is True
+    lines = gate_env["ntfy_log"].read_text().splitlines()
+    assert len(lines) == 1
+    assert "-p default" in lines[0] and "[DISPATCH] window gate OK" in lines[0]
+    assert json.load(open(dr.GATE_REPORT_PATH))["ok"] is True
 
 
-def test_gate_check_stamps_dry_run_reports_would_reprove_without_writing_a_stamp(
-        stale_stamp_repo):
-    ok, detail = dr._gate_check_stamps(dry_run=True)
-    assert ok is False
-    assert "DRY-RUN would reprove" in detail
-    assert hp.read_stamp(GATE_FIXTURE_REPO, stamp_dir=hp.STAMP_DIR) is None
+def test_gate_nightly_title_differs(gate_env):
+    dr.run_gate(mode="nightly")
+    assert "[DISPATCH] nightly gate OK" in gate_env["ntfy_log"].read_text()
 
 
-def test_gate_end_to_end_fixes_a_stale_stamp_and_reports_ok(env, stale_stamp_repo, monkeypatch):
-    """The full §5(vii) shape: the gate's own stamps_fresh check does the fixing (no
-    ladder rung needed), the other four checks are faked healthy, and gate() reports
-    ok=True with a single default-priority ntfy — proving a stale stamp alone never
-    needs the recovery ladder or a page."""
-    verdicts = dict(ALL_OK_VERDICTS)
-    del verdicts["stamps_fresh"]  # let the real _gate_check_stamps run
-    checks = [("stamps_fresh", dr._gate_check_stamps)] + [
-        (name, lambda dry_run, ok=ok, detail=detail: (ok, detail))
-        for name, (ok, detail) in verdicts.items()]
-    monkeypatch.setattr(dr, "GATE_CHECKS", tuple(checks))
+def test_gate_non_recoverable_failure_pages_urgent_no_rungs(gate_env, monkeypatch):
+    monkeypatch.setattr(dr, "check_auth", lambda: {"name": "auth", "ok": False,
+                                                    "detail": "loggedIn=False", "recoverable": False})
+    ran = []
+    monkeypatch.setattr(dr, "_recover_dryrun", lambda dry_run: ran.append(1) or [])
+    report = dr.run_gate(mode="window")
+    assert report["ok"] is False
+    text = gate_env["ntfy_log"].read_text()
+    pages = [ln for ln in text.splitlines() if ln.startswith("-t lumen-alerts")]
+    assert len(pages) == 1 and "-p urgent" in pages[0] and "auth" in pages[0]
+    assert "gate FAILED" in pages[0] and "loggedIn=False" in text
+    assert ran == []   # auth is not something a rung fixes
 
-    result = dr.gate(dry_run=False)
-    assert result["ok"] is True
-    assert result["recovered"] is False
-    transcript = env["ntfy_log"].read_text()
-    assert dr.GATE_OK_TITLE in transcript
-    assert "urgent" not in transcript
+
+def test_gate_dryrun_failure_runs_rungs_then_rechecks(gate_env, monkeypatch):
+    calls = []
+
+    def fake_dryrun(dry_run=False):
+        calls.append("dryrun")
+        ok = len(calls) > 1            # first attempt fails, recheck passes
+        return {"name": "dryrun", "ok": ok, "recoverable": True,
+                "detail": "candidates=5 dispatchable=3 would_spawn=%d" % (2 if ok else 0)}
+    monkeypatch.setattr(dr, "check_dryrun", fake_dryrun)
+    monkeypatch.setattr(dr, "rung2_restart", lambda dry_run: (True, "restarted (stub)"))
+    monkeypatch.setattr(dr, "rung3_diagnose", lambda dry_run: (True, "all json ok (stub)"))
+    monkeypatch.setitem(dr.RUNGS, 2, ("restart", dr.rung2_restart))
+    monkeypatch.setitem(dr.RUNGS, 3, ("diagnose", dr.rung3_diagnose))
+    report = dr.run_gate(mode="nightly")
+    assert calls == ["dryrun", "dryrun"]
+    assert report["ok"] is True
+    assert len(report["recovery"]) == 2
+    assert "gate OK" in gate_env["ntfy_log"].read_text()
+    # the gate's rungs never touched the health ladder's state
+    assert dr.load_state()["rung"] == 0
+
+
+def test_gate_disable_env_is_report_only(gate_env, monkeypatch):
+    monkeypatch.setenv(dr.DISABLE_ENV, "1")
+    monkeypatch.setattr(dr, "check_dryrun", lambda dry_run=False: {
+        "name": "dryrun", "ok": False, "detail": "would_spawn=0", "recoverable": True})
+    ran = []
+    monkeypatch.setattr(dr, "_recover_dryrun", lambda dry_run: ran.append(1) or [])
+    report = dr.run_gate(mode="nightly")
+    assert report["ok"] is False and report["disabled"] is True and ran == []
+
+
+def test_gate_dry_run_never_ntfys_and_never_writes_report(gate_env, capsys):
+    report = dr.run_gate(mode="window", dry_run=True)
+    assert report["ok"] is True
+    assert not gate_env["ntfy_log"].exists()
+    assert not os.path.exists(dr.GATE_REPORT_PATH)
+    assert "WOULD NTFY [default]" in capsys.readouterr().out
+
+
+def _gov_state(tmp_path, monkeypatch, *, age_s=30, resets_in_s=3600, stale=False, stop=False):
+    now = datetime.now(timezone.utc)
+    st = {"updated_at": iso(now - timedelta(seconds=age_s)), "stale": stale,
+          "stop_active": stop,
+          "limits": {"weekly_all": {"percent": 20,
+                                    "resets_at": iso(now + timedelta(seconds=resets_in_s))}}}
+    p = tmp_path / "state.json"
+    p.write_text(json.dumps(st))
+    monkeypatch.setattr(dr, "GOVERNOR_STATE", str(p))
+    monkeypatch.setattr(dr, "GOVERNOR_FLOORS", str(tmp_path / "no-floors.json"))
+    return now
+
+
+def test_governor_window_passes_when_reset_within_6h(tmp_path, monkeypatch):
+    now = _gov_state(tmp_path, monkeypatch, resets_in_s=3 * 3600)
+    c = dr.check_governor("window", now=now)
+    assert c["ok"], c["detail"]
+    assert "resets" in c["detail"]
+
+
+def test_governor_window_fails_when_reset_too_far_or_past(tmp_path, monkeypatch):
+    now = _gov_state(tmp_path, monkeypatch, resets_in_s=8 * 3600)
+    assert not dr.check_governor("window", now=now)["ok"]
+    now = _gov_state(tmp_path, monkeypatch, resets_in_s=-60)
+    assert not dr.check_governor("window", now=now)["ok"]
+
+
+def test_governor_nightly_ignores_reset_horizon_but_not_staleness(tmp_path, monkeypatch):
+    now = _gov_state(tmp_path, monkeypatch, resets_in_s=5 * 86400)
+    assert dr.check_governor("nightly", now=now)["ok"]
+    # the 2026-08-23 shape: daemon dead, stored stale=False, updated_at 15 days old
+    now = _gov_state(tmp_path, monkeypatch, age_s=15 * 86400, resets_in_s=5 * 86400)
+    c = dr.check_governor("nightly", now=now)
+    assert not c["ok"] and "poll stale" in c["detail"]
+
+
+def test_governor_unreadable_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(dr, "GOVERNOR_STATE", str(tmp_path / "missing.json"))
+    assert not dr.check_governor("nightly")["ok"]
+
+
+def test_disarm_check_reads_never_writes(tmp_path, monkeypatch):
+    p = tmp_path / "DISPATCH_DISARM"
+    monkeypatch.setattr(dr, "DISARM_PATH", str(p))
+    assert dr.check_disarm()["ok"]
+    p.write_text("")
+    assert not dr.check_disarm()["ok"]
+    assert p.exists()
+
+
+def test_auth_check_parses_logged_in_under_unit_path(monkeypatch):
+    seen = {}
+
+    def fake_run(path, argv, timeout=60):
+        seen["path"] = path
+        seen["argv"] = argv
+        return 0, json.dumps({"loggedIn": True, "authMethod": "claude.ai",
+                              "subscriptionType": "max"}), ""
+    monkeypatch.setattr(dr, "_run_under_unit_env", fake_run)
+    monkeypatch.setattr(dr, "_dispatch_unit_path", lambda: ("/a:/b", "from test"))
+    c = dr.check_auth()
+    assert c["ok"] and "authMethod=claude.ai" in c["detail"]
+    assert seen["path"] == "/a:/b" and seen["argv"] == ["claude", "auth", "status"]
+
+
+def test_auth_check_fails_on_not_found_and_logged_out(monkeypatch):
+    monkeypatch.setattr(dr, "_dispatch_unit_path", lambda: ("/nope", "from test"))
+    monkeypatch.setattr(dr, "_run_under_unit_env",
+                        lambda p, a, timeout=60: (127, "", "sh: 1: claude: not found"))
+    c = dr.check_auth()
+    assert not c["ok"] and "not found" in c["detail"]
+    monkeypatch.setattr(dr, "_run_under_unit_env",
+                        lambda p, a, timeout=60: (0, json.dumps({"loggedIn": False}), ""))
+    assert not dr.check_auth()["ok"]
+
+
+def test_summarize_dry_run_shapes():
+    ev = lambda **k: k  # noqa: E731
+    assert dr._summarize_dry_run([ev(event="pass_end", candidates=9, dispatchable=3, spawned=2)])[0] == "ok"
+    assert dr._summarize_dry_run([ev(event="halt", stage="lock", reason="lock_busy")])[0] == "lock_busy"
+    assert dr._summarize_dry_run([ev(event="halt", stage="concurrency", reason="no_slots")])[0] == "ok"
+    v, d = dr._summarize_dry_run([
+        ev(event="skip", stage="lane_policy", reason="repo_mismatch"),
+        ev(event="skip", stage="lane_policy", reason="repo_mismatch"),
+        ev(event="skip", stage="preflight", reason="no_fresh_stamp"),
+        ev(event="pass_end", candidates=3, dispatchable=1, spawned=0)])
+    assert v == "fail" and "lane_policy/repo_mismatch=2" in d and "would_spawn=0" in d
+    assert dr._summarize_dry_run([ev(event="pass_start")])[0] == "fail"
+    assert dr._summarize_dry_run([ev(event="halt", stage="kill_switch", reason="DISARM")])[0] == "fail"
+    v, _ = dr._summarize_dry_run([ev(event="pass_end", candidates=0, dispatchable=0, spawned=0)])
+    assert v == "fail"
+
+
+def test_stamps_check_reproves_stale_then_fresh(monkeypatch):
+    import types
+    calls = {"gate": 0, "reprove": []}
+
+    def gate(repo):
+        calls["gate"] += 1
+        return (calls["gate"] > 1), (None if calls["gate"] > 1 else "stale preflight stamp")
+    fake_hp = types.SimpleNamespace(dispatch_gate_check=gate)
+    monkeypatch.setitem(sys.modules, "harness_preflight", fake_hp)
+    monkeypatch.setattr(dr, "_migrated_repo_paths", lambda: ["/home/lumen/foreman"])
+    monkeypatch.setattr(dr, "_reprove_repo",
+                        lambda repo, dry_run: calls["reprove"].append(repo) or (True, "rc=0"))
+    c = dr.check_stamps()
+    assert c["ok"] and c["reproved"] == ["foreman"] and "reproved now" in c["detail"]
+    assert calls["reprove"] == ["/home/lumen/foreman"]
+
+
+def test_stamps_check_no_fix_reports_stale(monkeypatch):
+    import types
+    fake_hp = types.SimpleNamespace(dispatch_gate_check=lambda r: (False, "no preflight stamp"))
+    monkeypatch.setitem(sys.modules, "harness_preflight", fake_hp)
+    monkeypatch.setattr(dr, "_migrated_repo_paths", lambda: ["/home/lumen/foreman"])
+    c = dr.check_stamps(fix=False)
+    assert not c["ok"] and "STALE" in c["detail"]
+
+
+def test_health_no_ladder_and_dedup_flags(env, monkeypatch):
+    """wq#1411: --no-ladder never advances/resets; --dedup overrides the 1h default."""
+    advanced, reset = [], []
+    monkeypatch.setattr(dr, "advance", lambda dry_run=False: advanced.append(1))
+    monkeypatch.setattr(dr, "reset", lambda dry_run=False, reason="": reset.append(1))
+    now = datetime.now(timezone.utc)
+    write_lines(env["log_path"], _pass_lines("fdisp-x1", iso(now), spawned=0, dispatchable=4))
+    fired, _ = dh.check_health(env["log_path"], threshold=1, ladder=False)
+    assert fired and advanced == []
+    # regular instance, same state file: suppressed by the window instance's page
+    fired2, detail = dh.check_health(env["log_path"], threshold=1, dedup_seconds=1200)
+    assert not fired2 and "suppressed" in detail and advanced == [1]
+    write_lines(env["log_path"], _pass_lines("fdisp-x2", iso(now), spawned=1, dispatchable=4))
+    dh.check_health(env["log_path"], threshold=1, ladder=False)
+    assert reset == []
+    dh.check_health(env["log_path"], threshold=1)
+    assert reset == [1]

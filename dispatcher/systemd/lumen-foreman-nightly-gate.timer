@@ -1,0 +1,14 @@
+# lumen-foreman-nightly-gate.timer — nightly dispatch gate (wq#1411 §4).
+# Same gate as the Thursday one, minus the 6h resets_at check, before every
+# ordinary overnight run. Silence at 22:00 PT is never ambiguous: OK ntfy or page.
+[Unit]
+Description=22:00 PT nightly dispatch gate (wq#1411)
+
+[Timer]
+OnCalendar=*-*-* 22:00 America/Los_Angeles
+Unit=lumen-foreman-gate@nightly.service
+AccuracySec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

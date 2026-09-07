@@ -1,0 +1,28 @@
+# lumen-foreman-gate@.service — pre-window / nightly dispatch gate (wq#1411 §4).
+# Instance %i = window (Thu 00:30 PT, before the Max reset; adds the 6h resets_at
+# check) or nightly (22:00 PT, same gate without it). Proves the next pass CAN
+# dispatch: stamps fresh (reproves now, not at 03:00), dry-run would_spawn>0,
+# governor fresh, breaker armed, DISARM absent, claude auth ok under the dispatch
+# unit's PATH, watchdog selftest. One default "gate OK" ntfy or one urgent page.
+# Started only by its timer. Rollback: systemctl disable --now the timer.
+[Unit]
+Description=Lumen foreman dispatch gate (%i) — prove the next pass can dispatch (wq#1411)
+Documentation=file:///home/lumen/foreman/dispatcher/dispatch_recover.py
+After=network-online.target
+# Reserved for the gate CRASHING. A failed check pages from inside the gate and
+# exits 0 (same rule as dispatch_health.py, wq#1012) so one failure = one page.
+OnFailure=ntfy-onfailure@%n.service
+
+[Service]
+Type=oneshot
+User=lumen
+# Same PATH the live dispatch unit runs with (.npm-global first: wq#1407 class).
+# The auth check does NOT rely on this — it reads the dispatch unit's PATH live
+# via `systemctl show` and proves claude under that.
+Environment=PATH=/home/lumen/.npm-global/bin:/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/dispatch_recover.py gate --mode %i
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+# 3 repos x live proof (<=300s each) + dry-run pass (<=540s) + rungs.
+TimeoutStartSec=1500
+Nice=5

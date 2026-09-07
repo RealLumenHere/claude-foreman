@@ -1,0 +1,14 @@
+# lumen-foreman-health-window.timer — Thu 01:00-08:55 PT every 5 min (wq#1411 §4).
+# Covers the Max-reset window (reset ~04:00 PT). Verified:
+# `systemd-analyze calendar 'Thu *-*-* 01..08:00/5 America/Los_Angeles'`.
+[Unit]
+Description=Thu 01:00-09:00 PT tightened dispatcher watch, 5-min (wq#1411)
+
+[Timer]
+OnCalendar=Thu *-*-* 01..08:00/5 America/Los_Angeles
+Unit=lumen-foreman-health-window.service
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

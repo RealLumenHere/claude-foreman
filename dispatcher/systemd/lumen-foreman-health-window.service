@@ -1,0 +1,20 @@
+# lumen-foreman-health-window.service — tightened Thursday-window watch (wq#1411 §4).
+# Same classifier as lumen-foreman-health.service, K=1 and a 20-min re-page window,
+# sharing runtime/health_state.json so the regular 1h instance is suppressed while
+# this one pages. --no-ladder: the recovery ladder keeps one actor (the regular
+# K=2 5-min instance); two instances advancing per tick would exhaust it on a
+# single bad pass. Started only by its timer.
+[Unit]
+Description=Lumen dispatcher health check, Thu window: K=1, 20-min dedup (wq#1411)
+Documentation=file:///home/lumen/foreman/dispatcher/dispatch_health.py
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/dispatch_health.py check --threshold 1 --dedup 1200 --no-ladder
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=60
+Nice=5

@@ -122,49 +122,6 @@ Enable (Tier-3, Frank only) — binds loopback-only, not internet-reachable by i
 sudo systemctl enable --now lumen-foreman-dashboard.service
 ```
 
-## wq#1411 — window gate + Thursday tightened watch
-
-`lumen-foreman-window-gate.timer/.service` (research/NIGHTLY_DISPATCH_RESILIENCE.md §4):
-runs `dispatch_recover.py gate` nightly at 22:00 America/Los_Angeles, plus an extra
-Thursday 00:30 PT run ahead of the weekly Max reset. Every check passing sends one
-default-priority `[DISPATCH] window gate OK` ntfy; any failure advances the recovery
-ladder one rung, rechecks, and pages urgent (`[DISPATCH] window gate FAILED`) if still
-red. `lumen-foreman-health-thu.timer/.service` runs the existing `dispatch_health.py
-check` with `--threshold 1` and a 20-min ntfy dedup (`FOREMAN_HEALTH_ALERT_DEDUP_SECONDS
-=1200`) every 5 min from 01:00 to 09:00 PT Thursday — the tightened during-window watch,
-alongside (not instead of) the ordinary `lumen-foreman-health.timer`.
-
-```bash
-sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-window-gate.service /etc/systemd/system/
-sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-window-gate.timer   /etc/systemd/system/
-sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-health-thu.service /etc/systemd/system/
-sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-health-thu.timer   /etc/systemd/system/
-sudo systemctl daemon-reload
-systemctl is-enabled lumen-foreman-window-gate.timer   # expect: disabled
-systemctl is-enabled lumen-foreman-health-thu.timer    # expect: disabled
-```
-
-Prove it inert first:
-
-```bash
-python3 /home/lumen/foreman/dispatcher/dispatch_recover.py gate --dry-run
-FOREMAN_HEALTH_ALERT_DEDUP_SECONDS=1200 python3 /home/lumen/foreman/dispatcher/dispatch_health.py check --threshold 1 --dry-run
-```
-
-Enable (Tier-3, Frank only):
-
-```bash
-sudo systemctl enable --now lumen-foreman-window-gate.timer
-sudo systemctl enable --now lumen-foreman-health-thu.timer
-```
-
-Both OnCalendar= strings carry an explicit `America/Los_Angeles` TZ suffix — confirm
-normalization on the target box before enabling:
-`systemd-analyze calendar 'Thu *-*-* 00:30:00 America/Los_Angeles'` (same requirement
-wq#1401 already needed for its maintenance window). Rollback is the shared kill switch:
-`touch /home/lumen/autonomy/DISPATCH_DISARM`, or `sudo systemctl disable --now
-lumen-foreman-window-gate.timer` / `lumen-foreman-health-thu.timer` individually.
-
 **Making it reachable at `dispatch.lumennode.uk` behind Cloudflare Access is DNS +
 Cloudflare-account work this worker has no credentials or network access to perform.**
 The acceptance criterion ("dashboard live at chosen URL, behind Cloudflare Access")
@@ -185,3 +142,45 @@ needs Frank to do, roughly:
 Rollback is the same kill switch as the dispatcher: `touch DISPATCH_DISARM` stops new
 spawns; the dashboard itself only reads, so `sudo systemctl stop
 lumen-foreman-dashboard.service` (or leaving it disabled) is the only "off" it needs.
+
+### Window gate + Thursday tightened watch (wq#1411)
+
+Three timers, two services. `lumen-foreman-gate@.service` is a template: `window`
+(Thu 00:30 PT, before the Max reset ~04:00 PT; adds the 6h `resets_at` check) and
+`nightly` (22:00 PT, same gate without it). `lumen-foreman-health-window.*` runs the
+existing classifier at K=1 / 20-min dedup, Thu 01:00-08:55 PT every 5 min, sharing
+`runtime/health_state.json` with the regular instance and never touching the
+recovery ladder (`--no-ladder`; the regular K=2 timer is its only actor).
+
+```bash
+cd /home/lumen/foreman/dispatcher/systemd
+sudo cp lumen-foreman-gate@.service lumen-foreman-window-gate.timer lumen-foreman-nightly-gate.timer \
+        lumen-foreman-health-window.service lumen-foreman-health-window.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+systemd-analyze calendar 'Thu 00:30 America/Los_Angeles' '*-*-* 22:00 America/Los_Angeles' \
+                         'Thu *-*-* 01..08:00/5 America/Los_Angeles'   # TZ suffix must normalize
+```
+
+Prove it before enabling — read-only, no ntfy, exit 2 on any failing check:
+
+```bash
+python3 /home/lumen/foreman/dispatcher/dispatch_recover.py gate --mode nightly --dry-run
+python3 /home/lumen/foreman/dispatcher/dispatch_health.py check --threshold 1 --dedup 1200 --no-ladder --dry-run
+```
+
+A real run (`gate --mode nightly`) sends exactly one ntfy to lumen-alerts: default
+`[DISPATCH] nightly gate OK`, or urgent `[DISPATCH] nightly gate FAILED` listing every
+failing check. It reproves stale stamps in place and, if the dry-run pass would not
+spawn, runs ladder rungs 2-3 (restart timer+service, JSON diagnose) and rechecks.
+Report: `dispatcher/runtime/gate_last.json`.
+
+Enable:
+
+```bash
+sudo systemctl enable --now lumen-foreman-window-gate.timer lumen-foreman-nightly-gate.timer lumen-foreman-health-window.timer
+systemctl list-timers --no-pager | grep -E 'gate|health-window'
+```
+
+Rollback: `sudo systemctl disable --now` any of the three timers. `FOREMAN_RECOVER_DISABLE=1`
+in a drop-in makes the gate report-only (no reproves, no restarts). `DISPATCH_DISARM`
+is read by the gate, never written.
