@@ -93,6 +93,14 @@ MUST_BLOCK = [
     ("Read", {"file_path": "/home/lumen/foreman/.credentials.json"}),
     ("Read", {"file_path": "/home/lumen/.claude/.credentials.json"}),
     ("Edit", {"file_path": "/home/lumen/foreman/claude_credentials.md"}),
+    # wq#1454 secrets sweep of needs:dir grants: the .bak copies and the minerva context
+    # mirror of the credentials section escaped the *claude_credentials.md glob.
+    ("Read", {"file_path": "/home/lumen/minerva/context/claude_credentials.md.bak.20260828_171707"}),
+    ("Read", {"file_path": "/home/lumen/minerva/context/sections/027_4-credentials-secrets.md"}),
+    ("Grep", {"pattern": "token", "path": "/home/lumen/minerva/context/sections.json"}),
+    ("Bash", {"command": "cat /home/lumen/minerva/context/claude_credentials.md.bak.20260828_171707"}),
+    ("Bash", {"command": "grep -n key /home/lumen/minerva/context/sections/027_4-credentials-secrets.md"}),
+    ("Bash", {"command": "tail -c 999 /home/lumen/minerva/context/sections.json"}),
     ("Write", {"file_path": "/home/lumen/foreman/harness/.env"}),
     # wq#616: the durable oauth token every cloud worker's own `claude -p` consumes via
     # CLAUDE_CODE_OAUTH_TOKEN env — must never be readable/exfiltratable by the worker's
@@ -110,6 +118,8 @@ MUST_BLOCK = [
 
 MUST_ALLOW = [
     ("Bash", {"command": "git push origin feat/wq625"}),
+    ("Read", {"file_path": "/home/lumen/minerva/context/sections/000_preamble.md"}),
+    ("Bash", {"command": "bash /home/lumen/minerva/context/claude_context.sh --core"}),
     ("Bash", {"command": "docker ps -a"}),
     ("Bash", {"command": "docker logs mycontainer"}),
     ("Bash", {"command": f"rm -rf {WORKTREE}/build"}),

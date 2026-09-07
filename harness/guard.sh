@@ -114,6 +114,12 @@ Bash)
     if printf '%s' "$target" | grep -qE '/home/lumen/\.secrets\b'; then
       block "denied path: /home/lumen/.secrets (wq#616 static oauth token lives there)" "$RAW_CMD"
     fi
+    # Bash-side twin of the Read/Grep credential deny below: the credentials file, its
+    # timestamped .bak copies, and the minerva context sections that mirror it (027 +
+    # the sections.json index) sit inside dirs workers get via needs:dir.
+    if printf '%s' "$target" | grep -qE 'claude_credentials\.md|/home/lumen/minerva/context/sections/[^ ]*credentials|/home/lumen/minerva/context/sections\.json'; then
+      block "denied path: credential file/copy (claude_credentials.md*, minerva context credential sections)" "$RAW_CMD"
+    fi
     if printf '%s' "$target" | grep -qE '\bdocker\b' && ! printf '%s' "$target" | grep -qE '\bdocker\b +(ps|logs)\b'; then
       block "docker denied except ps/logs" "$RAW_CMD"
     fi
@@ -293,7 +299,7 @@ Read|Edit|Write|Grep|Glob)
   for CHECK_PATH in "$FILE_PATH" "$GREP_PATH"; do
     [ -n "$CHECK_PATH" ] || continue
     case "$CHECK_PATH" in
-      *.env|*.credentials.json|*claude_credentials.md|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*)
+      *.env|*.credentials.json|*claude_credentials.md|*claude_credentials.md.*|/home/lumen/minerva/context/sections/*credentials*|/home/lumen/minerva/context/sections.json|/home/lumen/minerva/context/sections.json.*|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*)
         block "denied path: $CHECK_PATH" "$CHECK_PATH" ;;
     esac
   done
