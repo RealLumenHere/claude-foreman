@@ -325,3 +325,8 @@ def test_repo_hint_refuses_a_repo_outside_the_managed_set(monkeypatch):
     title = "[repo-sweep] evil: SAFE_RESET"
     detail = "Automated sweep detected SAFE_RESET in /etc/shadow-adjacent-repo.\nmore text"
     assert repo_sweep.repo_hint(title, detail) is None
+
+
+def test_fleet_inventory_is_a_managed_repo():
+    # wq#1453-1456: needs:repo(/home/lumen/fleet/inventory) must resolve (router.needs_repo_hint).
+    assert "/home/lumen/fleet/inventory" in repo_sweep.managed_repos()

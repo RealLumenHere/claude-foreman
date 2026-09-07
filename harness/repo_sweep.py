@@ -35,7 +35,15 @@ def _lane_repos():
 
 
 # Extra repos the ticket calls out that are not in LANE_REPO.
-EXTRA_REPOS = ["/home/lumen/bin"]
+EXTRA_REPOS = [
+    "/home/lumen/bin",
+    # wq#1453-1456: the fleet inventory SoT repo (Gitea lumen/fleet-inventory) has no
+    # lane of its own; tickets reach it through needs:repo(), which router.needs_repo_hint
+    # only honours for a managed repo. Without this line the tag is dropped, the lane
+    # repo (foreman) wins, and every to-be-created path under the repo is reported by
+    # capability_lint as "does not exist".
+    "/home/lumen/fleet/inventory",
+]
 
 TITLE_PREFIX = "[repo-sweep] "
 
