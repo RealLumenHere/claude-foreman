@@ -1,0 +1,25 @@
+# lumen-foreman-usaged.service — budget governor poll daemon (wq#613, wq#1458).
+# STAGED (Tier-3): installed but never enabled by the fleet; Frank enables it by hand.
+# Long-running poll loop, not a one-shot pass — Type=simple + Restart=always, no timer.
+# Replaces running it ad hoc via `lumen-run` (governor/README.md's old Running section):
+# a lumen-run unit does not survive a reboot or a DC-gateway process-group reap, so the
+# daemon silently stops polling and state.json goes stale forever with nothing to notice
+# (wq#1458 — found dead since 2026-08-23, 15 days of no polls, stale flag frozen False).
+# See governor/README.md's State section and foreman_usaged.py's module docstring.
+[Unit]
+Description=Lumen foreman budget governor — usage poll daemon (wq#613, wq#1458)
+Documentation=file:///home/lumen/foreman/governor/foreman_usaged.py
+After=network-online.target
+
+[Service]
+Type=simple
+User=lumen
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/governor/foreman_usaged.py run
+Restart=always
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

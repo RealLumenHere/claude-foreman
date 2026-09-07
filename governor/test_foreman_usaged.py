@@ -2,7 +2,9 @@
 429 handling, cache_age_s, and the "never fail-closed on one stale read"
 invariant (RELIABILITY_SPEC.md §B, fworker bug 1).
 """
+import argparse
 import datetime as dt
+import json
 
 import foreman_usaged as usaged
 
@@ -79,3 +81,27 @@ def test_non_429_failure_also_reuses_cache_without_the_429_label(monkeypatch, tm
     assert state["reused_cache"] is True
     assert state["reused_cache_reason"] == "HTTP 503"
     assert state["stale"] is False
+
+
+def test_dead_daemon_computed_staleness_denies_despite_stored_stale_false(monkeypatch, tmp_path, capsys):
+    """wq#1458: a dead daemon never runs poll_once again, so the last-written
+    `stale` flag freezes at whatever it was the moment the daemon died —
+    typically False. can-dispatch must not trust that frozen flag forever;
+    it has to recompute staleness from state.json's own updated_at age.
+    """
+    _isolate(monkeypatch, tmp_path)
+    floors = usaged.load_floors()
+    long_dead = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=15)).isoformat()
+    stale_state = {
+        "updated_at": long_dead,
+        "stale": False,
+        "limits": usaged.core.parse_limits(GOOD_PAYLOAD),
+    }
+    usaged.atomic_write_json(usaged.STATE_PATH, stale_state)
+
+    rc = usaged.cmd_can_dispatch(argparse.Namespace(model="opus"))
+
+    decision = json.loads(capsys.readouterr().out)
+    assert decision["allow"] is False
+    assert decision["local_only"] is True
+    assert rc == 1

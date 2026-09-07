@@ -184,3 +184,40 @@ systemctl list-timers --no-pager | grep -E 'gate|health-window'
 Rollback: `sudo systemctl disable --now` any of the three timers. `FOREMAN_RECOVER_DISABLE=1`
 in a drop-in makes the gate report-only (no reproves, no restarts). `DISPATCH_DISARM`
 is read by the gate, never written.
+
+### Budget governor poll daemon — `lumen-foreman-usaged` (wq#613, wq#1458)
+
+Long-running poll loop (`governor/foreman_usaged.py run`), not a one-shot pass —
+`Type=simple` + `Restart=always`, no timer. This replaces the old `lumen-run
+start --name foreman-usaged ...` posture documented previously in
+`governor/README.md`'s Running section: a `lumen-run` unit does not survive a
+reboot or a DC-gateway process-group reap, which is exactly how the daemon went
+dead-and-unnoticed for 15 days (wq#1458 — last poll 2026-08-23, no process, no
+unit, `state.json` frozen stale).
+
+```bash
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-usaged.service /etc/systemd/system/
+sudo systemctl daemon-reload
+systemctl is-enabled lumen-foreman-usaged.service   # expect: disabled
+```
+
+Prove it before enabling — a single poll, no daemon loop:
+
+```bash
+python3 /home/lumen/foreman/governor/foreman_usaged.py run --once
+python3 /home/lumen/foreman/governor/foreman_usaged.py status
+```
+
+Enable (Tier-3, Frank only):
+
+```bash
+sudo systemctl enable --now lumen-foreman-usaged.service
+systemctl status lumen-foreman-usaged.service --no-pager
+```
+
+Rollback: `sudo systemctl disable --now lumen-foreman-usaged.service`. Every
+`can-dispatch` call also fail-closes on its own once `state.json`'s
+`updated_at` outlives `floors.json`'s `stale_fail_closed_seconds` (default
+600s) — see `foreman_usaged.py`'s `_daemon_stale()` — so even an un-enabled
+or crashed unit degrades to local-rung-only rather than allowing dispatch on
+stale data.

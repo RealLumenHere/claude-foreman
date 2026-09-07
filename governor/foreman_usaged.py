@@ -275,6 +275,28 @@ def cmd_run(args):
         time.sleep(random.uniform(lo, hi))
 
 
+def _daemon_stale(state, floors, now):
+    """Computed staleness: age of state.json's own updated_at against
+    stale_fail_closed_seconds, independent of the stored `stale` flag.
+
+    The stored flag is only ever set by a running poll (poll_once) — if the
+    daemon itself is dead (no process, no unit), no poll ever runs to flip
+    it, so a stale flag last written `stale=False` stays False forever no
+    matter how old state.json gets (wq#1458). Recomputing from updated_at
+    catches that case: a state.json that hasn't been touched in
+    stale_fail_closed_seconds is stale regardless of what it last claimed.
+    """
+    updated_at = (state or {}).get("updated_at")
+    if not updated_at:
+        return True
+    try:
+        updated_dt = dt.datetime.fromisoformat(updated_at)
+    except ValueError:
+        return True
+    age_s = (now - updated_dt).total_seconds()
+    return age_s > floors.get("stale_fail_closed_seconds", 600)
+
+
 def cmd_can_dispatch(args):
     floors = load_floors()
     state = load_state()
@@ -282,7 +304,7 @@ def cmd_can_dispatch(args):
     stop_active = os.path.exists(STOP_PATH)
     events = load_events()
     live_blocks = {k: v.get("resets_at") for k, v in events.items()}
-    stale = bool((state or {}).get("stale", True))
+    stale = bool((state or {}).get("stale", True)) or _daemon_stale(state, floors, now)
     limits = (state or {}).get("limits")
     decision = core.evaluate_dispatch(
         args.model, limits=limits, floors=floors, now_utc=now,

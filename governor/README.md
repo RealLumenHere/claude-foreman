@@ -89,14 +89,27 @@ without a daemon restart.
 
 ## Running
 
-Detached via lumen-run (survives the DC-gateway process-group reap):
+Persistent unit, not `lumen-run` (wq#1458 — a `lumen-run` transient unit does
+not survive a reboot or a DC-gateway process-group reap; that's exactly how
+this daemon went dead-and-unnoticed for 15 days, last poll 2026-08-23, no
+process, no unit, `state.json` frozen stale with the `stale` flag stuck
+`False`). Staged install, `Type=simple` + `Restart=always`:
+`dispatcher/systemd/lumen-foreman-usaged.service`, see
+`dispatcher/systemd/INSTALL.md`'s "Budget governor poll daemon" section.
 
 ```
-lumen-run start --name foreman-usaged --mem 512M -- \
-  python3 /home/lumen/foreman/governor/foreman_usaged.py run
-lumen-run status <UNIT>   # RUNNING | DONE:0 | FAILED:<code> | GONE
-lumen-run log <UNIT>      # daemon's stdout/stderr (structured log lines)
+sudo cp dispatcher/systemd/lumen-foreman-usaged.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now lumen-foreman-usaged.service   # Tier-3, Frank only
+systemctl status lumen-foreman-usaged.service --no-pager
+journalctl -u lumen-foreman-usaged.service -n 50           # daemon's structured log lines
 ```
+
+Even if the unit is never enabled or crashes, `can-dispatch` fails closed on
+its own: it now recomputes staleness from `state.json`'s `updated_at` against
+`stale_fail_closed_seconds` (`foreman_usaged.py`'s `_daemon_stale()`), instead
+of trusting only the stored `stale` flag — which is written by the poll loop
+itself and freezes at its last value if that loop stops running.
 
 ## Tests
 
