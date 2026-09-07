@@ -892,6 +892,8 @@ def test_stale_preflight_live_proof_exception_bypasses_cooldown(denv, monkeypatc
     t1 = add_ticket("first stale-stamp pass, preflight raises")
     monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
                          lambda repo: (False, "stale preflight stamp for repo"))
+    slept = []
+    monkeypatch.setattr(fd, "_sleep", slept.append)
     calls = []
 
     def raising_preflight(repo):
@@ -899,15 +901,23 @@ def test_stale_preflight_live_proof_exception_bypasses_cooldown(denv, monkeypatc
         raise subprocess.TimeoutExpired(cmd=["claude"], timeout=300)
     monkeypatch.setattr(harness_preflight, "preflight", raising_preflight)
     assert fd.run_pass() == 0
-    assert len(calls) == 1
-    assert len(ntfy_lines(denv)) == 1
+    # wq#1409 §2.2: a raise is a TRANSIENT error — the in-pass ladder runs every rung
+    # (3 attempts, 0/30/120s) and only then pages, urgent, naming the exception.
+    assert len(calls) == 3
+    assert slept == [30, 120]
+    lines = ntfy_lines(denv)
+    assert len(lines) == 1 and "-p urgent" in lines[0] and "TimeoutExpired" in lines[0]
+    assert "3x" in lines[0]
 
     t2 = add_ticket("second pass, still within cooldown")
     assert fd.run_pass() == 0
-    assert len(calls) == 1  # not re-run — cooldown still active despite the raise
+    assert len(calls) == 3  # not re-run — cooldown still active despite the raise
     assert len(ntfy_lines(denv)) == 1  # not re-alerted
     skips = log_events(denv, "skip", ticket=t2)
     assert len(skips) == 1 and skips[0]["reason"] == "no_fresh_stamp"
+    st = fd.load_state()
+    assert st["preflight_ntfy"]["repo"]["attempts"] == 3
+    assert st["preflight_ntfy"]["repo"]["paged"] is True
     assert lumen_calls(denv) == []
     assert log_events(denv, "spawn", ticket=t1) == []
 
@@ -1857,3 +1867,160 @@ def test_an_unrelated_harness_defect_still_holds_under_the_pre_skip(denv, monkey
     skips = log_events(denv, "skip", ticket=tid)
     assert len(skips) == 1 and skips[0]["reason"] == "harness_defect_hold"
     assert lumen_calls(denv) == []
+
+
+# ---- wq#1409: reprove retry ladder + soft-stale dispatch ---------------------------
+
+def _clean_result(repo):
+    return harness_preflight.PreflightResult(repo, ok=True, reason="ok",
+                                              static_failures=[], denials=[])
+
+
+def _errored_result(repo, exc="FileNotFoundError(2, 'No such file or directory')"):
+    return harness_preflight.PreflightResult(repo, ok=False,
+                                              reason=f"live proof errored: {exc}",
+                                              static_failures=[], denials=[])
+
+
+def test_transient_reprove_error_retries_then_succeeds_without_paging(denv, monkeypatch):
+    """(iii) shim fails twice then succeeds: two retries logged, third attempt writes
+    the stamp, ticket spawns this pass, zero pages."""
+    tid = add_ticket("transient reprove, recovers on 3rd")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (False, "stale preflight stamp for repo"))
+    slept = []
+    monkeypatch.setattr(fd, "_sleep", slept.append)
+    calls = []
+
+    def flaky(repo):
+        calls.append(repo)
+        return _errored_result(repo) if len(calls) < 3 else _clean_result(repo)
+    monkeypatch.setattr(harness_preflight, "preflight", flaky)
+    assert fd.run_pass() == 0
+    assert len(calls) == 3 and slept == [30, 120]
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert log_events(denv, "skip", ticket=tid) == []
+    retries = [e for e in log_events(denv, "info") if e.get("reason") == "reprove_retry"]
+    assert len(retries) == 2 and "FileNotFoundError" in retries[0]["detail"]
+    reproved = [e for e in log_events(denv, "info") if e.get("reason") == "auto_reproved"]
+    assert len(reproved) == 1 and "attempt 3" in reproved[0]["detail"]
+    assert ntfy_lines(denv) == []
+    assert "repo" not in fd.load_state()["preflight_ntfy"]
+
+
+def test_transient_reprove_error_three_times_pages_urgent_with_exception(denv, monkeypatch):
+    """(iii-b) shim fails 3x: one urgent page naming the literal error, cooldown set,
+    skip reason carries attempts."""
+    tid = add_ticket("transient reprove, never recovers")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (False, "stale preflight stamp for repo"))
+    monkeypatch.setattr(fd, "_sleep", lambda s: None)
+    monkeypatch.setattr(harness_preflight, "preflight", _errored_result)
+    assert fd.run_pass() == 0
+    lines = ntfy_lines(denv)
+    assert len(lines) == 1
+    assert "-p urgent" in lines[0] and "FileNotFoundError" in lines[0]
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "reprove_failed"
+    assert "attempts=3" in skips[0]["detail"]
+    assert lumen_calls(denv) == []
+    entry = fd.load_state()["preflight_ntfy"]["repo"]
+    assert entry["attempts"] == 3 and "FileNotFoundError" in entry["last_error"]
+
+
+def test_persistent_reprove_failure_gets_no_retry(denv, monkeypatch):
+    """(iv) a regressed profile: static lint / live denials are persistent — one
+    attempt, one high page, no ladder (retrying the same proof cannot help), and the
+    denial text surfaces instead of being silently passed."""
+    add_ticket("denials survive reprove")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (False, "stale preflight stamp for repo"))
+    slept = []
+    monkeypatch.setattr(fd, "_sleep", slept.append)
+    calls = []
+
+    def denying(repo):
+        calls.append(repo)
+        return harness_preflight.PreflightResult(
+            repo, ok=False, reason="live proof found permission denials",
+            static_failures=[], denials=["This command requires approval: npx tsc"])
+    monkeypatch.setattr(harness_preflight, "preflight", denying)
+    assert fd.run_pass() == 0
+    assert len(calls) == 1 and slept == []
+    lines = ntfy_lines(denv)
+    assert len(lines) == 1 and "-p high" in lines[0] and "npx tsc" in lines[0]
+    assert log_events(denv, "spawn") == []
+
+
+def test_reprove_success_after_page_sends_recovered_ntfy(denv, monkeypatch):
+    """§2.2 item 4: a clean proof after a page sends a default-priority Recovered:
+    ntfy so the aq row can auto-resolve."""
+    add_ticket("first pass errors")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (False, "stale preflight stamp for repo"))
+    monkeypatch.setattr(fd, "_sleep", lambda s: None)
+    monkeypatch.setattr(harness_preflight, "preflight", _errored_result)
+    assert fd.run_pass() == 0
+    assert len(ntfy_lines(denv)) == 1
+    # expire the cooldown by hand, then recover
+    st = fd.load_state()
+    st["preflight_ntfy"]["repo"]["ts"] = (
+        datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(timespec="seconds")
+    fd.save_state(st)
+    tid2 = add_ticket("second pass recovers")
+    monkeypatch.setattr(harness_preflight, "preflight", _clean_result)
+    assert fd.run_pass() == 0
+    lines = ntfy_lines(denv)
+    assert len(lines) == 2 and "-p default" in lines[1] and "Recovered:" in lines[1]
+    assert tid2 in [e["ticket"] for e in log_events(denv, "spawn")]
+    assert "repo" not in fd.load_state()["preflight_ntfy"]
+
+
+def test_preflight_ntfy_dict_entries_survive_load_state(denv):
+    """load_state's dedup pruning must read the wq#1409 dict shape (and still the old
+    plain-string shape) instead of dropping the cooldown on every load."""
+    now = datetime.now(timezone.utc)
+    fresh_ts = (now - timedelta(minutes=5)).isoformat(timespec="seconds")
+    old_ts = (now - timedelta(hours=48)).isoformat(timespec="seconds")
+    fd.save_state({"day": now.strftime("%Y-%m-%d"), "lane_counts": {},
+                   "preflight_ntfy": {"a": {"ts": fresh_ts, "attempts": 3, "paged": True},
+                                      "b": fresh_ts,
+                                      "c": {"ts": old_ts, "attempts": 1},
+                                      "d": {"nots": 1}}})
+    st = fd.load_state()
+    assert set(st["preflight_ntfy"]) == {"a", "b"}
+    assert st["preflight_ntfy"]["a"]["attempts"] == 3
+
+
+def test_soft_stale_stamp_dispatches_logs_once_and_reseals(denv, monkeypatch):
+    """(i) wq#1409 §3.2: profile unchanged, settings churned -> the gate says ok with a
+    soft-stale reason; the ticket spawns, ONE stamp_soft_stale info event per repo
+    per pass, reseal_stamp is called, preflight() (a live proof) is never called."""
+    t1 = add_ticket("soft stale one")
+    t2 = add_ticket("soft stale two")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (True, "stamp_soft_stale for repo: hook churn"))
+    resealed = []
+    monkeypatch.setattr(harness_preflight, "reseal_stamp", lambda repo: resealed.append(repo))
+
+    def boom(repo):
+        raise AssertionError("soft-stale must not reprove")
+    monkeypatch.setattr(harness_preflight, "preflight", boom)
+    assert fd.run_pass() == 0
+    assert sorted(e["ticket"] for e in log_events(denv, "spawn")) == sorted([t1, t2])
+    soft = [e for e in log_events(denv, "info") if e.get("reason") == "stamp_soft_stale"]
+    assert len(soft) == 1 and "hook churn" in soft[0]["detail"]
+    assert resealed == [denv["repo"]]
+    assert ntfy_lines(denv) == []
+
+
+def test_soft_stale_dry_run_logs_but_does_not_reseal(denv, monkeypatch):
+    add_ticket("soft stale dry")
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
+                         lambda repo: (True, "stamp_soft_stale for repo"))
+    resealed = []
+    monkeypatch.setattr(harness_preflight, "reseal_stamp", lambda repo: resealed.append(repo))
+    assert fd.run_pass(dry_run=True) == 0
+    assert [e for e in log_events(denv, "info") if e.get("reason") == "stamp_soft_stale"]
+    assert resealed == []
+    assert log_events(denv, "would_spawn")

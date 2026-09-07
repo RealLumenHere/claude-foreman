@@ -531,8 +531,10 @@ def wq_block(ticket_id, reason):
 
 
 def ntfy(title, msg, priority="default"):
+    # wq#1407: bin/ntfy-send parses -T/-p only; --title/--priority fell into the
+    # message body and every alert went out at default priority (162 in 48h).
     try:
-        subprocess.run([NTFY_BIN, "--title", title, "--priority", priority, msg],
+        subprocess.run([NTFY_BIN, "-T", title, "-p", priority, msg],
                         capture_output=True, text=True, timeout=10)
     except Exception:
         pass

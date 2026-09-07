@@ -107,6 +107,15 @@ FIRE_NTFY_DEDUP_H = 24
 # strand the lane until a human notices. Bound retry cadence so a persistently broken
 # profile can't re-spawn that session every dispatch pass forever.
 PREFLIGHT_REPROVE_COOLDOWN_H = 1
+# wq#1409 §2.2: a reprove that ERRORED (claude spawn failed, hung, exited non-zero) is
+# transient until proven otherwise — retry inside the pass with this backoff before
+# paging; a reprove that FAILED (static lint / live denials) is the profile being
+# broken and gets no retry (retrying the same proof cannot change the answer).
+REPROVE_RETRY_BACKOFF_S = (0, 30, 120)
+# The whole ladder must fit under the unit's TimeoutStartSec=600 with headroom for the
+# rest of the pass; a live proof is capped at harness_preflight.LIVE_PROOF_TIMEOUT.
+REPROVE_LADDER_BUDGET_S = 420
+_sleep = time.sleep  # monkeypatch seam for tests
 FIRE_LANE = "fleet-fires"  # kept for the disarmed fallback noted at line ~196 if
 # requires_approval forcing is ever restored; no longer used to force the gate itself
 # (MUST 4 hardcode removed 2026-08-23 per Frank directive, see load_config below)
@@ -294,14 +303,22 @@ def _utcnow():
     return datetime.now(timezone.utc)
 
 
+def _ledger_ts(entry):
+    """A dedup-ledger value is an iso timestamp string, or (preflight_ntfy since
+    wq#1409) a dict {ts, attempts, last_error, paged} whose `ts` is that string."""
+    if isinstance(entry, dict):
+        entry = entry.get("ts")
+    return datetime.fromisoformat(entry)
+
+
 def _prune_dedup(ledger, now, hours):
     """Shared dedup-ledger pruning for fire_ntfy (§5), pacing_ntfy (AUTO-4), and
     runaway_ntfy (wq#718) — same {key: iso_ts} shape, caller picks the window."""
     out = {}
     for key, ts in (ledger or {}).items():
         try:
-            then = datetime.fromisoformat(ts)
-        except (TypeError, ValueError):
+            then = _ledger_ts(ts)
+        except (TypeError, ValueError, AttributeError):
             continue
         if now - then < timedelta(hours=hours):
             out[key] = ts
@@ -783,47 +800,105 @@ def handle_harness_defect_hold(state, tid, lane, summary, dry_run, log):
     save_state(state)
 
 
+PERSISTENT_PREFLIGHT_REASONS = ("static lint failed", "live proof found permission denials")
+
+
+def _preflight_failure_is_persistent(result):
+    return result.reason in PERSISTENT_PREFLIGHT_REASONS
+
+
+def _reprove_once(repo):
+    """One harness_preflight.preflight() call, never raising: a raw exception used to
+    abort the whole pass (wq#1384) — it is a result like any other."""
+    try:
+        return harness_preflight.preflight(repo)
+    except Exception as e:  # noqa: BLE001 — see docstring
+        return harness_preflight.PreflightResult(
+            repo, ok=False, reason=f"preflight raised: {e!r}", static_failures=[], denials=[])
+
+
 def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
     """wq#1372: dispatch_gate_check() failing used to just mean `continue` forever —
     a repo's worker-settings.json or preflight_cmds changing made its stamp stale and
     the lane sat idle, silently, until a human noticed and re-ran harness-preflight by
     hand (twice in one day per the ticket). Re-prove right here instead: a clean proof
-    writes a fresh stamp and the caller falls through to spawn this same pass; a
-    failing proof alerts (deduped, cooldown-gated so a persistently broken profile
-    can't re-spawn a live-proof session every pass) instead of idling silently.
+    writes a fresh stamp and the caller falls through to spawn this same pass.
+
+    wq#1409 §2.2: only a HARD-stale stamp reaches here now (the allow/deny/defaultMode/
+    cmds set really changed — harness_preflight.stamp_status); benign churn is
+    soft-stale and never comes this way. Two failure classes:
+      persistent  static lint failed / live denials — the profile is broken; page once
+                  (high), 1h cooldown, skip. Retrying the same proof cannot help.
+      transient   the proof ERRORED (FileNotFoundError, TimeoutExpired, claude exit,
+                  raised) — retry in-pass on REPROVE_RETRY_BACKOFF_S, then page urgent
+                  with the literal exception + cooldown. On 2026-09-03 every one of
+                  these was the wq#1407 PATH bug and each one silently cost an hour.
+    preflight_ntfy[repo] is {ts, attempts, last_error, paged}; a clean proof after a
+    page sends a default-priority "Recovered:" ntfy so the aq row can auto-resolve.
     Returns True when the repo now has a fresh stamp."""
     name = harness_preflight.permission_profiles.repo_name(repo)
     now = _utcnow()
     last = state["preflight_ntfy"].get(name)
     if last:
         try:
-            if now - datetime.fromisoformat(last) < timedelta(hours=PREFLIGHT_REPROVE_COOLDOWN_H):
+            if now - _ledger_ts(last) < timedelta(hours=PREFLIGHT_REPROVE_COOLDOWN_H):
                 log.skip(tid, lane, "preflight", "no_fresh_stamp", detail=reason)
                 return False
-        except ValueError:
+        except (TypeError, ValueError, AttributeError):
             pass
     if dry_run:
         log.emit("would_ntfy", ticket=tid, lane=lane, reason="preflight_reprove", repo=name)
         log.skip(tid, lane, "preflight", "no_fresh_stamp", detail=reason)
         return False
-    try:
-        result = harness_preflight.preflight(repo)
-    except Exception as e:
-        result = harness_preflight.PreflightResult(
-            repo, ok=False, reason=f"preflight raised: {e!r}", static_failures=[], denials=[])
+
+    was_paged = isinstance(last, dict) and bool(last.get("paged"))
+    started = time.monotonic()
+    attempts = 0
+    result = None
+    for backoff in REPROVE_RETRY_BACKOFF_S:
+        if backoff:
+            if time.monotonic() - started + backoff > REPROVE_LADDER_BUDGET_S:
+                log.emit("info", stage="preflight", reason="reprove_ladder_budget",
+                         detail=f"{name}: {attempts} attempt(s), no time left for a "
+                                f"{backoff}s retry under {REPROVE_LADDER_BUDGET_S}s")
+                break
+            log.emit("info", stage="preflight", reason="reprove_retry",
+                     detail=f"{name}: attempt {attempts} errored ({result.reason}); "
+                            f"retrying in {backoff}s")
+            _sleep(backoff)
+        attempts += 1
+        result = _reprove_once(repo)
+        if result.ok or _preflight_failure_is_persistent(result):
+            break
+
     if result.ok:
         log.emit("info", stage="preflight", reason="auto_reproved",
-                 detail=f"{name}: stale stamp ({reason}) reproved clean")
+                 detail=f"{name}: stale stamp ({reason}) reproved clean on attempt {attempts}")
         state["preflight_ntfy"].pop(name, None)
         save_state(state)
+        if was_paged:
+            ntfy(f"Recovered: preflight reprove for {name} succeeded (attempt {attempts}); "
+                 f"wq#{tid} ({lane}) dispatching.",
+                 priority="default", title="foreman dispatcher: preflight recovered")
         return True
+
     problems = "; ".join(result.static_failures + result.denials) or result.reason
-    ntfy(f"preflight auto-reprove failed for {name}: {problems}. wq#{tid} ({lane}) and "
-         f"every other {name} ticket will keep idling until this is fixed.",
-         priority="high", title="foreman dispatcher: preflight reprove failed")
-    state["preflight_ntfy"][name] = now.isoformat(timespec="seconds")
+    if _preflight_failure_is_persistent(result):
+        ntfy(f"preflight auto-reprove failed for {name}: {problems}. wq#{tid} ({lane}) and "
+             f"every other {name} ticket will keep idling until this is fixed.",
+             priority="high", title="foreman dispatcher: preflight reprove failed")
+    else:
+        ntfy(f"preflight reprove for {name} ERRORED {attempts}x in one pass "
+             f"(retry ladder {REPROVE_RETRY_BACKOFF_S}): {problems}. wq#{tid} ({lane}) and "
+             f"every other {name} ticket idle until the next pass after "
+             f"{PREFLIGHT_REPROVE_COOLDOWN_H}h.",
+             priority="urgent", title="foreman dispatcher: preflight reprove erroring")
+    state["preflight_ntfy"][name] = {"ts": now.isoformat(timespec="seconds"),
+                                     "attempts": attempts, "last_error": problems[:300],
+                                     "paged": True}
     save_state(state)
-    log.skip(tid, lane, "preflight", "reprove_failed", detail=problems)
+    log.skip(tid, lane, "preflight", "reprove_failed",
+             detail=f"{problems} (attempts={attempts})")
     return False
 
 
@@ -844,6 +919,26 @@ def repo_gate_check(cache, repo):
         except Exception as e:  # noqa: BLE001 — see docstring
             cache[repo] = (False, f"profile_unreadable: {e!r}", True)
     return cache[repo]
+
+
+def handle_soft_stale_preflight(cache, tid, lane, repo, reason, dry_run, log):
+    """wq#1409 §3.2: dispatch_gate_check() said (True, "stamp_soft_stale ..."). Emit
+    the info event once per repo per pass (the gate cache is per pass, so mark it
+    there) and reseal the stamp's settings_hash — never a reprove, never a skip."""
+    name = harness_preflight.permission_profiles.repo_name(repo)
+    key = ("soft_stale_logged", repo)
+    if key in cache:
+        return
+    cache[key] = True
+    log.emit("info", stage="preflight", reason="stamp_soft_stale", ticket=tid, lane=lane,
+             detail=reason)
+    if dry_run:
+        return
+    try:
+        harness_preflight.reseal_stamp(repo)
+    except Exception as e:  # noqa: BLE001 — resealing is hygiene, never load-bearing
+        log.emit("error", stage="preflight", reason="reseal_failed",
+                 detail=f"{name}: {e!r}")
 
 
 def handle_profile_unreadable(state, tid, lane, repo, reason, dry_run, log):
@@ -1207,6 +1302,12 @@ def _do_pass(cfg, log, state, dry_run):
                 if not handle_stale_preflight(state, tid, lane, repo, preflight_reason,
                                                dry_run, log):
                     continue
+            elif preflight_reason:
+                # wq#1409 §3.2: soft-stale — profile unchanged, settings churned.
+                # Dispatch on the existing proof; say so once per repo per pass and
+                # reseal so the next pass reads it as plain fresh.
+                handle_soft_stale_preflight(gate_cache, tid, lane, repo, preflight_reason,
+                                             dry_run, log)
 
             # stage 10 — spawn via the existing stack (MUST 7: router owns repo + tuple)
             if dry_run:
