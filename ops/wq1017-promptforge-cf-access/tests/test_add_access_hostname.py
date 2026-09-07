@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -102,6 +103,70 @@ class AddHostnameTest(unittest.TestCase):
         m._cf_put = lambda url, token, body: {"success": False, "errors": ["nope"]}
         with self.assertRaisesRegex(RuntimeError, "rejected"):
             m.add_hostname("acct", "tok", APP_SELF_HOSTED, "prompts.lumennode.uk", dry_run=False)
+
+
+class MainTest(unittest.TestCase):
+    """main() — the CLI entry point and its exit-code contract — had zero
+    coverage: everything below it (find_front_app/add_hostname) was tested
+    directly, but argument parsing, config-file reads, and which exception
+    maps to which exit code were never exercised."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.token_file = os.path.join(self.tmpdir.name, "token")
+        self.account_file = os.path.join(self.tmpdir.name, "account")
+        with open(self.token_file, "w") as f:
+            f.write("tok\n")
+        with open(self.account_file, "w") as f:
+            f.write("acct\n")
+        self.addCleanup(setattr, m, "_cf_get", m._cf_get)
+        self.addCleanup(setattr, m, "_cf_put", m._cf_put)
+
+    def _argv(self, **extra):
+        argv = ["--add-hostname", "prompts.lumennode.uk",
+                "--token-file", self.token_file,
+                "--account-id-file", self.account_file]
+        for k, v in extra.items():
+            argv += [f"--{k.replace('_', '-')}", v]
+        return argv
+
+    def test_missing_token_file_is_usage_error(self):
+        rc = m.main(["--add-hostname", "prompts.lumennode.uk",
+                     "--token-file", os.path.join(self.tmpdir.name, "nope"),
+                     "--account-id-file", self.account_file])
+        self.assertEqual(rc, m.EXIT_USAGE)
+
+    def test_missing_account_file_is_usage_error(self):
+        rc = m.main(["--add-hostname", "prompts.lumennode.uk",
+                     "--token-file", self.token_file,
+                     "--account-id-file", os.path.join(self.tmpdir.name, "nope")])
+        self.assertEqual(rc, m.EXIT_USAGE)
+
+    def test_lookup_failure_is_exit_failed(self):
+        m._cf_get = lambda url, token: {"success": False, "errors": ["bad token"]}
+        rc = m.main(self._argv())
+        self.assertEqual(rc, m.EXIT_FAILED)
+
+    def test_ambiguous_match_is_exit_failed(self):
+        dup = dict(APP_SELF_HOSTED, id="app-3")
+        m._cf_get = lambda url, token: {"success": True, "result": [APP_SELF_HOSTED, dup]}
+        rc = m.main(self._argv())
+        self.assertEqual(rc, m.EXIT_FAILED)
+
+    def test_success_path_is_exit_ok(self):
+        m._cf_get = lambda url, token: {"success": True, "result": [APP_SELF_HOSTED]}
+        m._cf_put = lambda url, token, body: {"success": True, "result": {}}
+        rc = m.main(self._argv())
+        self.assertEqual(rc, m.EXIT_OK)
+
+    def test_dry_run_never_calls_put(self):
+        put_calls = []
+        m._cf_get = lambda url, token: {"success": True, "result": [APP_SELF_HOSTED]}
+        m._cf_put = lambda *a, **k: put_calls.append((a, k)) or {"success": True}
+        rc = m.main(self._argv() + ["--dry-run"])
+        self.assertEqual(rc, m.EXIT_OK)
+        self.assertEqual(put_calls, [])
 
 
 if __name__ == "__main__":
