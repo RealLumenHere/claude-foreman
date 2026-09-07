@@ -39,7 +39,8 @@ def main():
     ap.add_argument("repo", nargs="?", help="repo path, e.g. /home/lumen/foreman")
     ap.add_argument("--all", action="store_true",
                      help="preflight every repo with a repos.d/<repo>.json entry")
-    ap.add_argument("--claude-bin", default="claude")
+    ap.add_argument("--claude-bin", default=None,
+                     help=f"default $FOREMAN_CLAUDE_BIN or {harness_preflight.CLAUDE_BIN}")
     ap.add_argument("--model", default=harness_preflight.CHEAPEST_MODEL)
     args = ap.parse_args()
 
