@@ -78,9 +78,12 @@ _COPY_RE = re.compile(
     rf"\b(?:scp|rsync)\b[^\n]{{0,120}}?\b(?P<node>{_NODE}):(?P<dir>/[\w./-]+)")
 # v2 verbs (§2.4 "not in v1, still"): seen, never tagged — the ticket is honest about
 # needing something the broker cannot do yet.
+# A verb glued to a name by '-', '/', '_' or '.' (fleet-roll-reboot.sh, /usr/bin/sudo,
+# power_cycle_log) is a file or script being cited, not an instruction to the worker,
+# so it must not put the ticket in `unresolved`.
 _V2_VERB_RE = re.compile(
-    r"\b(?P<verb>sudo|adb|fastboot|reboot|poweroff|shutdown|power-cycle|"
-    r"docker\s+restart)\b")
+    r"(?<![\w/.-])(?P<verb>sudo|adb|fastboot|reboot|poweroff|shutdown|power-cycle|"
+    r"docker\s+restart)(?![\w/.-])")
 
 DEFAULT_RESTART_NODE = "lumen"  # §2.1: "node omitted = lumen"
 

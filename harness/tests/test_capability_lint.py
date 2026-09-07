@@ -339,6 +339,18 @@ def test_v2_verbs_are_unresolved_never_tagged(verb, detail):
     assert any(verb in u and "v2 verb" in u for u in d.unresolved), d.unresolved
 
 
+@pytest.mark.parametrize("detail", [
+    "convert /home/lumen/bin/fleet-roll-reboot.sh to read fleet-inv ssh-list",
+    "the power-cycle_log.txt shows the plug bounced",
+    "install lands via /usr/bin/sudo only when the orchestrator runs it",
+    "the adb-tools dir is on thor",
+])
+def test_v2_verb_inside_a_name_is_not_unresolved(detail):
+    d = cl.derive({"title": "t", "detail": detail}, repo="/home/lumen/foreman",
+                    add_dirs=("/home/lumen/bin",), roster=ROSTER, policy={})
+    assert not any("v2 verb" in u for u in d.unresolved), d.unresolved
+
+
 # --- contract -------------------------------------------------------------------
 
 def test_derive_is_deterministic():
