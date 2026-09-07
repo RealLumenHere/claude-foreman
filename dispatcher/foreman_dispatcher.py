@@ -129,7 +129,7 @@ REPO_HINT_LANE = "auto"
 # calls. Human-owned, NEVER worker-dispatchable, so it must skip as frank_gated (a recognized
 # human-owned skip already excluded from `dispatchable`) instead of lane_unmapped, which looked
 # like a routing defect and buried 53 of Frank's real to-dos in noise.
-HUMAN_LANES = {"user", "user-projects"}
+HUMAN_LANES = {"user", "user-projects", "frank-re", "frank-hw", "frank-funding", "frank-cred"}
 
 # wq#1410 (research/NIGHTLY_DISPATCH_RESILIENCE.md §1.6, §3.3.1): a candidate skipped
 # for one of these reasons was never going to spawn regardless of dispatcher health —
