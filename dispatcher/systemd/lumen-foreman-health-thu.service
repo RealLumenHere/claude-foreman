@@ -1,0 +1,23 @@
+# lumen-foreman-health-thu.service — tightened dispatcher health check for the
+# Thursday Max-reset watch window (wq#1411, research/NIGHTLY_DISPATCH_RESILIENCE.md
+# §4). Same dispatch_health.py as lumen-foreman-health.service, run with a tighter
+# alarm threshold (K=1, not the ordinary K=2) and a 20-min ntfy dedup (not 1h) for
+# the duration of the window — a stall right before the reset needs to page fast, not
+# wait out the ordinary overnight dedup. STAGED (Tier-3): installed but never enabled
+# by the fleet; Frank enables it by hand (INSTALL.md).
+[Unit]
+Description=Lumen dispatcher health check — Thursday Max-reset window, tightened K=1/20min dedup (wq#1411)
+Documentation=file:///home/lumen/foreman/dispatcher/dispatch_health.py
+Documentation=file:///home/lumen/foreman/research/NIGHTLY_DISPATCH_RESILIENCE.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+Environment=FOREMAN_HEALTH_ALERT_DEDUP_SECONDS=1200
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/dispatch_health.py check --threshold 1
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=60
+Nice=5

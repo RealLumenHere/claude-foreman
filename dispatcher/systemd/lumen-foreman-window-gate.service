@@ -1,0 +1,21 @@
+# lumen-foreman-window-gate.service — pre-flight gate for the overnight dispatch
+# window (wq#1411, research/NIGHTLY_DISPATCH_RESILIENCE.md §4). Runs while there is
+# still time to fix things, not discover a stall at 03:00 with nobody watching.
+# STAGED (Tier-3), same posture as lumen-foreman-dispatch/-health/-selfheal: installed
+# but never enabled by the fleet; Frank enables it by hand (INSTALL.md).
+[Unit]
+Description=Lumen dispatch window gate — pre-flight check ahead of the overnight/Max-reset window (wq#1411)
+Documentation=file:///home/lumen/foreman/research/NIGHTLY_DISPATCH_RESILIENCE.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/dispatch_recover.py gate
+# Dead-man's-switch stamp (wq#1184) — non-fatal (`-`) so a stamp-write hiccup never
+# fails the gate itself.
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=600
+Nice=5

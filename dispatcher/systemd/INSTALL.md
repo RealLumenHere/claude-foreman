@@ -122,6 +122,49 @@ Enable (Tier-3, Frank only) — binds loopback-only, not internet-reachable by i
 sudo systemctl enable --now lumen-foreman-dashboard.service
 ```
 
+## wq#1411 — window gate + Thursday tightened watch
+
+`lumen-foreman-window-gate.timer/.service` (research/NIGHTLY_DISPATCH_RESILIENCE.md §4):
+runs `dispatch_recover.py gate` nightly at 22:00 America/Los_Angeles, plus an extra
+Thursday 00:30 PT run ahead of the weekly Max reset. Every check passing sends one
+default-priority `[DISPATCH] window gate OK` ntfy; any failure advances the recovery
+ladder one rung, rechecks, and pages urgent (`[DISPATCH] window gate FAILED`) if still
+red. `lumen-foreman-health-thu.timer/.service` runs the existing `dispatch_health.py
+check` with `--threshold 1` and a 20-min ntfy dedup (`FOREMAN_HEALTH_ALERT_DEDUP_SECONDS
+=1200`) every 5 min from 01:00 to 09:00 PT Thursday — the tightened during-window watch,
+alongside (not instead of) the ordinary `lumen-foreman-health.timer`.
+
+```bash
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-window-gate.service /etc/systemd/system/
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-window-gate.timer   /etc/systemd/system/
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-health-thu.service /etc/systemd/system/
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-health-thu.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+systemctl is-enabled lumen-foreman-window-gate.timer   # expect: disabled
+systemctl is-enabled lumen-foreman-health-thu.timer    # expect: disabled
+```
+
+Prove it inert first:
+
+```bash
+python3 /home/lumen/foreman/dispatcher/dispatch_recover.py gate --dry-run
+FOREMAN_HEALTH_ALERT_DEDUP_SECONDS=1200 python3 /home/lumen/foreman/dispatcher/dispatch_health.py check --threshold 1 --dry-run
+```
+
+Enable (Tier-3, Frank only):
+
+```bash
+sudo systemctl enable --now lumen-foreman-window-gate.timer
+sudo systemctl enable --now lumen-foreman-health-thu.timer
+```
+
+Both OnCalendar= strings carry an explicit `America/Los_Angeles` TZ suffix — confirm
+normalization on the target box before enabling:
+`systemd-analyze calendar 'Thu *-*-* 00:30:00 America/Los_Angeles'` (same requirement
+wq#1401 already needed for its maintenance window). Rollback is the shared kill switch:
+`touch /home/lumen/autonomy/DISPATCH_DISARM`, or `sudo systemctl disable --now
+lumen-foreman-window-gate.timer` / `lumen-foreman-health-thu.timer` individually.
+
 **Making it reachable at `dispatch.lumennode.uk` behind Cloudflare Access is DNS +
 Cloudflare-account work this worker has no credentials or network access to perform.**
 The acceptance criterion ("dashboard live at chosen URL, behind Cloudflare Access")

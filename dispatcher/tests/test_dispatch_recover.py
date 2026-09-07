@@ -8,6 +8,7 @@ state paths).
 """
 import json
 import os
+import shutil
 import sqlite3
 import stat
 import sys
@@ -17,10 +18,16 @@ import pytest
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 DISPATCHER_DIR = os.path.dirname(TESTS_DIR)
+REPO_ROOT = os.path.dirname(DISPATCHER_DIR)
 sys.path.insert(0, DISPATCHER_DIR)
+sys.path.insert(0, os.path.join(REPO_ROOT, "harness"))
+sys.path.insert(0, os.path.join(REPO_ROOT, "orchestrator"))
 import dispatch_health as dh        # noqa: E402
 import dispatch_recover as dr       # noqa: E402
 import foreman_dispatcher as fd     # noqa: E402
+import harness_preflight as hp      # noqa: E402 — gate §5(vii) fixture
+import permission_profiles as pp    # noqa: E402
+import router as rt                 # noqa: E402
 
 
 def _script(path, body):
@@ -161,6 +168,22 @@ def test_classify_falls_back_to_candidates_when_dispatchable_missing(env):
 
 def test_default_threshold_is_two_not_three():
     assert dh.DEFAULT_THRESHOLD == 2
+
+
+def test_alert_dedup_seconds_env_override(monkeypatch):
+    """wq#1411 §4: the Thursday during-window dispatch_health instance
+    (lumen-foreman-health-thu.service) sets FOREMAN_HEALTH_ALERT_DEDUP_SECONDS=1200
+    (20min) instead of the ordinary 1h — must actually move the module constant read
+    at import, not just exist as an unread env var."""
+    import importlib
+    monkeypatch.setenv("FOREMAN_HEALTH_ALERT_DEDUP_SECONDS", "1200")
+    try:
+        importlib.reload(dh)
+        assert dh.ALERT_DEDUP_SECONDS == 1200
+    finally:
+        monkeypatch.delenv("FOREMAN_HEALTH_ALERT_DEDUP_SECONDS", raising=False)
+        importlib.reload(dh)
+        assert dh.ALERT_DEDUP_SECONDS == 3600
 
 
 # ---- classifier: hung pass_start with no pass_end past TIMEOUT_START_SEC ----------------
@@ -407,3 +430,190 @@ def test_selftest_fails_loudly_if_classifier_stops_detecting_the_stall(env, monk
     returns False rather than raising or silently passing."""
     monkeypatch.setattr(dh, "classify_passes", lambda events, now=None: [])
     assert dr.selftest() is False
+
+
+# ---- window gate orchestration (wq#1411 §4) ----------------------------------------------
+# GATE_CHECKS is a tuple of (name, fn) bound at import time — same reason _fake_rungs
+# replaces dr.RUNGS wholesale instead of patching the rung functions individually.
+
+def _fake_gate_checks(monkeypatch, verdicts):
+    """verdicts: name -> (ok, detail) tuple, or name -> callable(dry_run)->(ok, detail)
+    for a check that changes its answer across calls (recovery tests)."""
+    checks = []
+    for name, v in verdicts.items():
+        if callable(v):
+            checks.append((name, v))
+        else:
+            ok, detail = v
+            checks.append((name, lambda dry_run, ok=ok, detail=detail: (ok, detail)))
+    monkeypatch.setattr(dr, "GATE_CHECKS", tuple(checks))
+
+
+ALL_OK_VERDICTS = {
+    "stamps_fresh": (True, "3 migrated repo(s), stamps fresh"),
+    "dispatch_dry_run": (True, "dispatchable=5 would_spawn=2"),
+    "governor_resets": (True, "session resets in 2.0h"),
+    "breaker_disarm": (True, "circuit breaker not tripped; DISPATCH_DISARM absent"),
+    "claude_auth": (True, "claude auth status rc=0"),
+}
+
+
+def test_gate_all_checks_pass_sends_default_ok_ntfy(env, monkeypatch):
+    _fake_gate_checks(monkeypatch, ALL_OK_VERDICTS)
+    result = dr.gate(dry_run=False)
+    assert result["ok"] is True
+    assert result["recovered"] is False
+    assert len(result["checks"]) == 5
+    transcript = env["ntfy_log"].read_text()
+    assert dr.GATE_OK_TITLE in transcript
+    assert "default" in transcript
+    assert "urgent" not in transcript
+
+
+def test_gate_dry_run_all_pass_never_ntfys(env, monkeypatch, capsys):
+    _fake_gate_checks(monkeypatch, ALL_OK_VERDICTS)
+    result = dr.gate(dry_run=True)
+    assert result["ok"] is True
+    assert not env["ntfy_log"].exists()
+    assert "WOULD NTFY (gate OK)" in capsys.readouterr().out
+
+
+def test_gate_failure_advances_ladder_one_rung_then_recovers(env, monkeypatch):
+    _fake_rungs(monkeypatch, ok=True)
+    calls = {"n": 0}
+
+    def flaky_dispatch(dry_run):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return False, ("dispatchable=0 would_spawn=0 — top skip reasons: "
+                           "lane_unmapped=40")
+        return True, "dispatchable=5 would_spawn=2"
+
+    verdicts = dict(ALL_OK_VERDICTS, dispatch_dry_run=flaky_dispatch)
+    _fake_gate_checks(monkeypatch, verdicts)
+
+    result = dr.gate(dry_run=False)
+    assert result["ok"] is True
+    assert result["recovered"] is True
+    assert calls["n"] == 2  # first (failing) check, then exactly one recheck
+    assert dr.load_state()["rung"] == 1  # advance() ran exactly one rung, not the whole ladder
+    transcript = env["ntfy_log"].read_text()
+    assert dr.GATE_OK_TITLE in transcript
+    assert "after recovery" in transcript
+
+
+def test_gate_still_failing_after_ladder_pages_urgent_naming_the_failed_check(env, monkeypatch):
+    _fake_rungs(monkeypatch, ok=False)
+    verdicts = dict(ALL_OK_VERDICTS,
+                    claude_auth=(False, "claude auth status rc=1 not logged in"))
+    _fake_gate_checks(monkeypatch, verdicts)
+
+    result = dr.gate(dry_run=False)
+    assert result["ok"] is False
+    transcript = env["ntfy_log"].read_text()
+    assert dr.GATE_FAIL_TITLE in transcript
+    assert "urgent" in transcript
+    assert "claude_auth" in transcript
+    assert "claude auth status rc=1" in transcript
+
+
+def test_gate_dry_run_failure_pages_nothing(env, monkeypatch, capsys):
+    _fake_rungs(monkeypatch, ok=False)
+    verdicts = dict(ALL_OK_VERDICTS,
+                    governor_resets=(False, "no limit resets_at within 6h"))
+    _fake_gate_checks(monkeypatch, verdicts)
+
+    result = dr.gate(dry_run=True)
+    assert result["ok"] is False
+    assert not env["ntfy_log"].exists()
+    assert "WOULD PAGE (gate failed)" in capsys.readouterr().out
+
+
+def test_gate_cli_exit_code_reflects_ok(env, monkeypatch, capsys):
+    _fake_gate_checks(monkeypatch, ALL_OK_VERDICTS)
+    with pytest.raises(SystemExit) as exc:
+        dr.main(["gate", "--dry-run"])
+    assert exc.value.code == 0
+
+    verdicts = dict(ALL_OK_VERDICTS, claude_auth=(False, "rc=1"))
+    _fake_gate_checks(monkeypatch, verdicts)
+    _fake_rungs(monkeypatch, ok=False)
+    with pytest.raises(SystemExit) as exc:
+        dr.main(["gate", "--dry-run"])
+    assert exc.value.code == 1
+
+
+# ---- §5 case (vii): stale stamp under the gate is fixed in place, reports OK -------------
+
+GATE_FIXTURE_NAME = "wq1411-gate-fixture-repo"
+GATE_FIXTURE_REPO = f"/home/lumen/{GATE_FIXTURE_NAME}"
+
+
+@pytest.fixture
+def stale_stamp_repo(tmp_path, monkeypatch):
+    # Isolated repos.d with ONLY the fixture entry — _gate_check_stamps enumerates
+    # every repos.d/*.json, and the real dir carries the fleet's actual migrated repos
+    # (foreman, mailbot, pokemon, ...), which would show up as "stale" too once
+    # STAMP_DIR/RENDER_DIR are redirected to an empty tmp dir below.
+    repos_dir = tmp_path / "repos.d"
+    repos_dir.mkdir()
+    (repos_dir / f"{GATE_FIXTURE_NAME}.json").write_text(json.dumps(
+        {"profiles": ["base", "python"], "extra_allow": [],
+         "preflight_cmds": ["python3 -c 'print(1)'"], "verbs": []}))
+    stamp_dir = str(tmp_path / "stamps")
+    render_dir = str(tmp_path / "render")
+
+    monkeypatch.setattr(pp, "REPOS_DIR", str(repos_dir))
+    monkeypatch.setattr(hp, "STAMP_DIR", stamp_dir)
+    monkeypatch.setattr(hp, "RENDER_DIR", render_dir)
+    # Zero-quota: no denials, same convention as test_harness_preflight.py's
+    # _clean_runner, but patched at the run_live_proof layer since dispatch_recover's
+    # gate calls harness_preflight.preflight() without exposing a runner param (the
+    # real deployment always wants a real proof — see _gate_check_stamps's docstring).
+    monkeypatch.setattr(hp, "run_live_proof", lambda *a, **k: [])
+    monkeypatch.setattr(rt, "LANE_REPO", {})  # force the /home/lumen/<name> fallback path
+
+    yield GATE_FIXTURE_REPO
+    shutil.rmtree(stamp_dir, ignore_errors=True)
+    shutil.rmtree(render_dir, ignore_errors=True)
+
+
+def test_gate_check_stamps_reproves_a_stale_repo_and_then_reports_fresh(stale_stamp_repo):
+    # No stamp yet at all -> missing counts as stale -> gate reproves it inline.
+    ok, detail = dr._gate_check_stamps(dry_run=False)
+    assert ok is True
+    assert "reproved 1/1" in detail
+    assert hp.read_stamp(GATE_FIXTURE_REPO, stamp_dir=hp.STAMP_DIR) is not None
+
+    # Next call: the stamp it just wrote is fresh, no reprove needed.
+    ok2, detail2 = dr._gate_check_stamps(dry_run=False)
+    assert ok2 is True
+    assert "stamps fresh" in detail2
+
+
+def test_gate_check_stamps_dry_run_reports_would_reprove_without_writing_a_stamp(
+        stale_stamp_repo):
+    ok, detail = dr._gate_check_stamps(dry_run=True)
+    assert ok is False
+    assert "DRY-RUN would reprove" in detail
+    assert hp.read_stamp(GATE_FIXTURE_REPO, stamp_dir=hp.STAMP_DIR) is None
+
+
+def test_gate_end_to_end_fixes_a_stale_stamp_and_reports_ok(env, stale_stamp_repo, monkeypatch):
+    """The full §5(vii) shape: the gate's own stamps_fresh check does the fixing (no
+    ladder rung needed), the other four checks are faked healthy, and gate() reports
+    ok=True with a single default-priority ntfy — proving a stale stamp alone never
+    needs the recovery ladder or a page."""
+    verdicts = dict(ALL_OK_VERDICTS)
+    del verdicts["stamps_fresh"]  # let the real _gate_check_stamps run
+    checks = [("stamps_fresh", dr._gate_check_stamps)] + [
+        (name, lambda dry_run, ok=ok, detail=detail: (ok, detail))
+        for name, (ok, detail) in verdicts.items()]
+    monkeypatch.setattr(dr, "GATE_CHECKS", tuple(checks))
+
+    result = dr.gate(dry_run=False)
+    assert result["ok"] is True
+    assert result["recovered"] is False
+    transcript = env["ntfy_log"].read_text()
+    assert dr.GATE_OK_TITLE in transcript
+    assert "urgent" not in transcript
