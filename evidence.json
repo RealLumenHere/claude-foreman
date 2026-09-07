@@ -2,7 +2,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "dispatcher/dispatch_recover.py:487-535"
+      "citation": "dispatcher/foreman_dispatcher.py:462-483"
     }
   ]
 }

@@ -563,6 +563,52 @@ def test_missing_dep_fails_closed(denv):
     assert lumen_calls(denv) == []
 
 
+# ---- wq#1461: hold (deps-blocked double-build guard) ---------------------------------
+# Third instance of the class (wq#1410 a1/a2, wq#1409 09-07 09:37, wq#1411 orch vs
+# fworker 09-07 10:49): an orchestrator directed to build a ticket whose deps are unmet
+# cannot `claim --id` it (wq#582, no --force) and had no other way to record intent, so
+# the moment the dep merged the dispatcher spawned an fworker on the SAME ticket. `wq
+# hold` fixes that; these two tests are the ticket's own AC5 ("held ticket is not
+# spawned, expired hold is").
+
+def test_held_ticket_not_spawned(denv):
+    tid = add_ticket("orch is mid-build on this one")
+    p = subprocess.run([WQ_BIN, "hold", str(tid), "--by", "orch-1", "--ttl", "60"],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "held"
+    assert "orch-1" in skips[0]["detail"]
+    assert lumen_calls(denv) == []
+
+
+def test_expired_hold_is_spawned(denv):
+    tid = add_ticket("hold expired before this pass")
+    p = subprocess.run([WQ_BIN, "hold", str(tid), "--by", "orch-1", "--ttl", "60"],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+    # backdate hold_expires the same way test fixtures elsewhere backdate lease_expires —
+    # direct db_exec, since `wq hold` has no --ttl<=0 escape hatch (by design: TTLs are
+    # always future-facing at the CLI, matching claim's lease_from()).
+    db_exec(denv, "UPDATE tasks SET hold_expires=? WHERE id=?",
+           ("2000-01-01 00:00:00", tid))
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert not [e for e in log_events(denv, "skip", ticket=tid) if e["reason"] == "held"]
+
+
+def test_ignore_holds_rollback(denv, monkeypatch):
+    """Rollback: FOREMAN_IGNORE_HOLDS=1 makes the dispatcher blind to holds entirely."""
+    tid = add_ticket("held but ignored")
+    p = subprocess.run([WQ_BIN, "hold", str(tid), "--by", "orch-1", "--ttl", "60"],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+    monkeypatch.setenv("FOREMAN_IGNORE_HOLDS", "1")
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+
+
 def test_wq_claim_backstop(denv):
     """DESIGN §3 TOCTOU: even if every dispatcher gate were bypassed, `wq claim --id`
     is the authoritative guard — a second claim on a held ticket refuses."""

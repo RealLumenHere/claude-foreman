@@ -145,6 +145,7 @@ CAPABILITY_SKIP_REASONS = (
 STRUCTURAL_SKIP_REASONS = frozenset({
     "lane_unmapped", "nodispatch_marker", "frank_gated", "deps_unmet",
     "runaway_stuck", "not_open", "vanished", "fire_unapproved", "fire_no_probe",
+    "held",  # wq#1461: a live `wq hold` — structural, not a stall (see hold_reason)
 } | set(CAPABILITY_SKIP_REASONS))
 
 
@@ -456,6 +457,30 @@ def nodispatch_reason(t):
     if NODISPATCH_TITLE_RE.search(t.get("title") or ""):
         return "title marker ([EPIC]/[DO NOT CLAIM])"
     return None
+
+
+def hold_reason(t):
+    """wq#1461: non-None detail when a `wq hold` on this ticket is still live. BUILD
+    class (third instance: wq#1410 a1/a2, wq#1409 09-07 09:37, wq#1411 orch vs
+    fworker 09-07 10:49) — an orchestrator directed to build a ticket whose deps are
+    unmet cannot `claim --id` it (wq#582, no --force) and had no other way to record
+    intent, so the moment the dep merged the dispatcher spawned an fworker on the SAME
+    ticket the orchestrator was already mid-build on. `wq hold <id> --by <agent> --ttl
+    N` fixes that: the hold is checked here, BEFORE the deps stage, so it names the
+    holder even while the ticket is still deps-blocked (the DecisionLog line is the
+    signal that intent is already recorded, not just that dispatch would fail anyway).
+    `t["hold_by"]`/`t["hold_expires"]` come straight off `wq show`'s SELECT * — a
+    plain-text 'None' means unset (wq#1277 stringifies every NULL column).
+    Rollback: FOREMAN_IGNORE_HOLDS=1 makes the dispatcher blind to holds entirely."""
+    if os.environ.get("FOREMAN_IGNORE_HOLDS") == "1":
+        return None
+    hold_by = t.get("hold_by") or ""
+    hold_expires = t.get("hold_expires") or ""
+    if hold_by in ("", "None") or hold_expires in ("", "None"):
+        return None
+    if hold_expires < _utcnow().strftime("%Y-%m-%d %H:%M:%S"):
+        return None  # expired — same lexical-compare idiom wq itself uses on hold_expires
+    return f"held by '{hold_by}' until {hold_expires}Z"
 
 
 def unmet_deps(t, cache):
@@ -1219,6 +1244,16 @@ def _do_pass(cfg, log, state, dry_run):
                 if not has_cmd_probe and not has_aq_probe:
                     handle_no_probe_fire(state, tid, lane, dry_run, log)
                     continue
+
+            # stage 5c — hold (wq#1461): checked before deps so a hold on a still
+            # deps-blocked ticket is named in the DecisionLog, not silently absorbed
+            # into deps_unmet. Structural — not a stall, another agent already claimed
+            # intent (see hold_reason docstring for the wq#1410/1409/1411 double-build
+            # history this exists to stop).
+            why = hold_reason(t)
+            if why:
+                log.skip(tid, lane, "hold", "held", detail=why)
+                continue
 
             # stage 6 — deps (MUST 2)
             unmet = unmet_deps(t, dep_cache)
