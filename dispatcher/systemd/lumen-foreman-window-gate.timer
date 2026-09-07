@@ -1,0 +1,23 @@
+# lumen-foreman-window-gate.timer — ordinary overnight gate every night at 22:00 PT,
+# plus an extra Thursday 00:30 PT run tight before the weekly Max reset window
+# (wq#1411, research/NIGHTLY_DISPATCH_RESILIENCE.md §4). Same gate, same service —
+# the Thursday-specific tightening lives in lumen-foreman-health-thu.timer's
+# --threshold/dedup, not here.
+#
+# TZ suffix on OnCalendar= is honoured by systemd (verified with `systemd-analyze
+# calendar` on this box — wq#1401 needed the same TZ-aware OnCalendar for its
+# maintenance window). SHIPS DISABLED (Tier-3, same posture as dispatch/health/
+# selfheal): nothing runs until Frank runs
+# `systemctl enable --now lumen-foreman-window-gate.timer` himself.
+[Unit]
+Description=Overnight + Thursday pre-window dispatch gate (STAGED — Frank enables; wq#1411)
+
+[Timer]
+OnCalendar=*-*-* 22:00:00 America/Los_Angeles
+OnCalendar=Thu *-*-* 00:30:00 America/Los_Angeles
+RandomizedDelaySec=60
+# A missed window is skipped, never replayed in a burst.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

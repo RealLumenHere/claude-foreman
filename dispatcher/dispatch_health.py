@@ -58,7 +58,10 @@ NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 
 DEFAULT_THRESHOLD = 2          # consecutive unhealthy passes before alarm (wq#1410:
 # K=2 not 3 — at the 20-min health-tick cadence, 3 leaves a one-hour blind spot)
-ALERT_DEDUP_SECONDS = 3600     # don't re-alert within 1h
+# wq#1411 §4: the Thursday during-window instance (01:00-09:00 PT) runs with
+# --threshold 1 and a 20-min dedup instead of the default 1h — a stall right before
+# the Max reset window needs a much tighter alarm than the ordinary overnight cadence.
+ALERT_DEDUP_SECONDS = int(os.environ.get("FOREMAN_HEALTH_ALERT_DEDUP_SECONDS", "3600"))
 # How many log lines to scan from the tail. 200 lines covers ~30 passes at ~6 lines each.
 TAIL_LINES = 200
 # wq#1410: matches dispatcher/systemd/lumen-foreman-dispatch.service TimeoutStartSec —
