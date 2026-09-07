@@ -296,3 +296,4 @@ already fixed (router.py:89 + PR #247, per wq#1331 notes) — close it.
   queue is another aq#794. Safety comes from what the tags CAN grant (§3), not from a human reading them.
 - Not chosen: widening `run_readonly_cmds`, adding `docker restart`, or any v2 verb. Those are separate PRs with
   their own matrix rows once F has a week of clean audit.
+- wq#1451 live-drill (BROKER_WIRING.md section 2.3, wq#1439 slice D): read /home/lumen/agent/AGENTS.md line 1 ("# LUMEN AUTONOMOUS AGENT — OPERATIONAL MANDATE") via --add-dir /home/lumen/agent.
