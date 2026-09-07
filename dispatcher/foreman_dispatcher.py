@@ -125,6 +125,12 @@ STAGGER = (spawner.STAGGER_MIN_S, spawner.STAGGER_MAX_S)
 # unmapped lane still short-circuits before paying for a wq_show (unchanged).
 REPO_HINT_LANE = "auto"
 
+# 'user' is Frank's action/decision queue — physical work, purchases, reboots, repo-disposition
+# calls. Human-owned, NEVER worker-dispatchable, so it must skip as frank_gated (a recognized
+# human-owned skip already excluded from `dispatchable`) instead of lane_unmapped, which looked
+# like a routing defect and buried 53 of Frank's real to-dos in noise.
+HUMAN_LANES = {"user"}
+
 # wq#1410 (research/NIGHTLY_DISPATCH_RESILIENCE.md §1.6, §3.3.1): a candidate skipped
 # for one of these reasons was never going to spawn regardless of dispatcher health —
 # the ticket/lane is structurally undispatchable, not stalled. pass_end's `dispatchable`
@@ -1139,6 +1145,10 @@ def _do_pass(cfg, log, state, dry_run):
             if state["lane_counts"].get(lane, 0) >= policy["max_per_day"]:
                 log.skip(tid, lane, "lane_policy", "lane_cap",
                          detail=f"max_per_day={policy['max_per_day']} reached")
+                continue
+            if lane in HUMAN_LANES:
+                log.skip(tid, lane, "frank_gate", "frank_gated",
+                         detail="human-owned lane (Frank's action/decision queue) — not worker-dispatchable")
                 continue
             repo = router.repo_for_lane(lane)
             if not repo and lane != REPO_HINT_LANE:
