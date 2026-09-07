@@ -105,3 +105,45 @@ def test_dead_daemon_computed_staleness_denies_despite_stored_stale_false(monkey
     assert decision["allow"] is False
     assert decision["local_only"] is True
     assert rc == 1
+
+
+def test_daemon_stale_fails_closed_on_missing_updated_at():
+    """No updated_at at all (e.g. a hand-edited or half-written state.json)
+    must be treated as stale, not as fresh."""
+    floors = usaged.load_floors()
+    now = dt.datetime.now(dt.timezone.utc)
+    assert usaged._daemon_stale({"limits": []}, floors, now) is True
+    assert usaged._daemon_stale({}, floors, now) is True
+    assert usaged._daemon_stale(None, floors, now) is True
+
+
+def test_daemon_stale_fails_closed_on_malformed_updated_at():
+    """A corrupt updated_at string must not raise and must not be trusted
+    as fresh — fail closed like the missing-field case."""
+    floors = usaged.load_floors()
+    now = dt.datetime.now(dt.timezone.utc)
+    assert usaged._daemon_stale({"updated_at": "not-a-timestamp"}, floors, now) is True
+
+
+def test_restarted_daemon_flips_dispatch_back_to_allow(monkeypatch, tmp_path, capsys):
+    """wq#1458 TEST criterion, second half: once the unit restarts and a
+    fresh poll writes a recent updated_at, can-dispatch must allow again —
+    computed staleness has to clear, not just trip."""
+    _isolate(monkeypatch, tmp_path)
+    usaged.load_floors()
+    healthy_payload = {"limits": [
+        {"kind": "session", "percent": 10, "resets_at": "2026-08-16T00:00:00+00:00", "severity": "normal"},
+        {"kind": "weekly_all", "percent": 10, "resets_at": "2026-09-10T11:00:00+00:00", "severity": "normal"},
+    ]}
+    fresh_state = {
+        "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "stale": False,
+        "limits": usaged.core.parse_limits(healthy_payload),
+    }
+    usaged.atomic_write_json(usaged.STATE_PATH, fresh_state)
+
+    rc = usaged.cmd_can_dispatch(argparse.Namespace(model="opus"))
+
+    decision = json.loads(capsys.readouterr().out)
+    assert decision["allow"] is True
+    assert rc == 0
