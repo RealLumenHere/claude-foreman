@@ -60,6 +60,13 @@ generated prompts embed node IPs and autonomy grants, so this hostname must
 never be reachable unauthenticated. The service itself binds loopback only,
 so nothing is exposed until this step is done deliberately.
 
+Scripted, idempotent version of this step (wq#1017):
+`ops/wq1017-promptforge-cf-access/add_access_hostname.py` — looks up the
+Access app already covering `home.lumennode.uk` and appends
+`prompts.lumennode.uk` to it (no-ops if already present, refuses rather than
+guesses if the lookup is ambiguous). Needs an Access-mgmt CF token file; see
+that script's README for why one isn't wired up yet.
+
 ## 5. Glance dashboard
 
 Apply `prompt-forge/glance/glance-integration.md` to
