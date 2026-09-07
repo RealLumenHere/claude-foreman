@@ -98,6 +98,58 @@ def make_wq975(tmp_path, local_final="final"):
     return origin, work, base
 
 
+def make_wq1472(tmp_path):
+    """The wq#1472 deadlock: local main carries work origin/main lacks, and that same work
+    is already pushed on a PR branch — whose rebase onto the remote tip gave it a DIFFERENT
+    SHA than the local commit. Nothing is at risk of being lost; only `main` has not caught
+    up. `--contains` answers "no" here, which is why the proof compares content.
+    """
+    origin, work, base = make_wq975(tmp_path, local_final="work-only-the-local-has")
+    git(work, "checkout", "-b", "pr", "origin/main")
+    commit(work, "file.txt", "work-only-the-local-has\n", "feat: the PR, rebased onto tip")
+    git(work, "push", "origin", "pr")
+    git(work, "checkout", "main")
+    git(work, "fetch", "origin")
+    return origin, work, base
+
+
+def make_split_across_refs(tmp_path):
+    """Two pushed refs that between them account for every touched path, but neither of
+    which carries both. A coincidence, not a pushed PR — must stay CONTENT_DIVERGED.
+    """
+    origin = str(tmp_path / "origin.git")
+    work = str(tmp_path / "work")
+    subprocess.run(["git", "init", "--bare", "--initial-branch=main", origin], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "clone", origin, work], check=True, capture_output=True)
+    git(work, "config", "user.email", "test@lumen.local")
+    git(work, "config", "user.name", "test")
+
+    commit(work, "a.txt", "a1\n", "base a")
+    commit(work, "b.txt", "b1\n", "base b")
+    git(work, "push", "origin", "main")
+
+    git(work, "checkout", "-b", "landed")
+    commit(work, "other.txt", "o2\n", "later work on the remote")
+    git(work, "push", "origin", "landed:main")
+
+    git(work, "checkout", "main")
+    commit(work, "a.txt", "a2\n", "direct-to-main a")
+    commit(work, "b.txt", "b2\n", "direct-to-main b")
+
+    git(work, "checkout", "-b", "half-a", "origin/main")
+    commit(work, "a.txt", "a2\n", "carries a only")
+    git(work, "push", "origin", "half-a")
+
+    git(work, "checkout", "-b", "half-b", "origin/main")
+    commit(work, "b.txt", "b2\n", "carries b only")
+    git(work, "push", "origin", "half-b")
+
+    git(work, "checkout", "main")
+    git(work, "fetch", "origin")
+    return origin, work
+
+
 def worktree_snapshot(repo):
     """Every tracked-or-not file's bytes, .git excluded — what "zero files change" means.
 
@@ -235,6 +287,61 @@ def test_refuses_to_rewind_when_the_ahead_commit_carries_real_work(tmp_path):
     assert "CONTENT_DIVERGED" in out
     assert git(work, "rev-parse", "main") == head, "ref must not move on diverged content"
     assert git(work, "tag", "-l") == "", "no archive tag when nothing was reconciled"
+
+
+def test_status_reports_pr_pending_when_the_work_is_pushed_on_a_pr_branch(tmp_path):
+    _, work, _ = make_wq1472(tmp_path)
+    ahead = git(work, "rev-list", "origin/main..main")
+    assert git(work, "rev-parse", "origin/pr") not in ahead, \
+        "the rebase gave the PR a different SHA — a --contains proof would miss it"
+    rc, out = run("status", "--repo", work, "--no-fetch")
+    assert rc == 12, out
+    assert "PR_PENDING" in out and "ahead=1 behind=3" in out
+    assert "refs/remotes/origin/pr" in out, "the verdict must name the ref it proved against"
+
+
+def test_pr_pending_apply_rewinds_and_leaves_the_fast_forward_runnable(tmp_path):
+    _, work, base = make_wq1472(tmp_path)
+    old_head = git(work, "rev-parse", "main")
+    write(work, "scratch.log", "untracked\n")
+
+    rc, out = run("reconcile", "--repo", work, "--no-fetch", "--apply")
+    assert rc == 30, out  # BEHIND_ONLY: rewound, deploy still owed
+    assert git(work, "rev-parse", "main") == base
+
+    tag = [ln.split()[-1] for ln in out.splitlines() if "as tag " in ln][0]
+    assert git(work, "rev-parse", f"{tag}^{{commit}}") == old_head, "old head stays reachable"
+    with open(os.path.join(work, "scratch.log")) as fh:
+        assert fh.read() == "untracked\n", "untracked files are still none of its business"
+
+    # The whole point: unlike REDUNDANT_AHEAD this restores the touched path itself, so the
+    # ff needs no hand-cleanup first — and neither does the land guard that reads the same
+    # dirty-path list. A --soft reset alone would leave file.txt staged and still blocking.
+    assert git(work, "status", "--porcelain") == "?? scratch.log"
+    git(work, "merge", "--ff-only", "origin/main")
+    assert git(work, "rev-parse", "main") == git(work, "rev-parse", "origin/main")
+
+
+def test_pr_pending_refuses_when_a_touched_path_has_uncommitted_work(tmp_path):
+    _, work, _ = make_wq1472(tmp_path)
+    head = git(work, "rev-parse", "main")
+    write(work, "file.txt", "a hand-edit no PR branch is carrying\n")
+
+    rc, out = run("reconcile", "--repo", work, "--no-fetch", "--apply")
+    assert rc == 2, out
+    assert "uncommitted changes" in out and "file.txt" in out
+    assert git(work, "rev-parse", "main") == head, "ref must not move"
+    assert git(work, "tag", "-l") == "", "no archive tag when nothing was reconciled"
+    with open(os.path.join(work, "file.txt")) as fh:
+        assert fh.read() == "a hand-edit no PR branch is carrying\n", "the edit survives"
+
+
+def test_two_refs_splitting_the_touched_paths_are_not_proof(tmp_path):
+    _, work = make_split_across_refs(tmp_path)
+    rc, out = run("reconcile", "--repo", work, "--no-fetch", "--apply")
+    assert rc == 20, out
+    assert "CONTENT_DIVERGED" in out, "one ref must carry every touched path, or it proves nothing"
+    assert git(work, "tag", "-l") == ""
 
 
 def test_refuses_when_branch_is_not_checked_out(tmp_path):

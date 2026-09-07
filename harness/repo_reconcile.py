@@ -31,11 +31,39 @@ content-free against the remote, so rewinding to the merge-base drops them witho
 changing a file. That leaves the repo BEHIND_ONLY: fast-forwardable again, which is all
 this tool ever promises.
 
+    for every path the ahead commits touched since the merge-base,
+    blob(local:path) == blob(<some other ref on the remote>:path)        -> PR_PENDING
+
+The third proof is what makes CONTENT_DIVERGED's own prescribed remedy executable. That
+remedy ends "...open a PR, squash it, and reconcile afterwards", but wq#1472 found the
+"afterwards" unreachable: `lumen-pr land` refuses to merge a PR touching a path the
+primary tree holds in an unpushed commit (its wq#771 guard), and that unpushed commit is
+exactly what the PR is carrying. Landing needs the rewind; the rewind needed the landing.
+Two tickets deadlocked there (ISSUE-LOG #217, #218) before the loop was named.
+
+What breaks it is that "unpushed" stops being true the moment the PR branch is pushed.
+The remote then carries the content — just not on `main` yet — so rewinding the local ref
+destroys nothing: the work is on the forge, in flight, and reachable. Note this proof
+compares CONTENT, not SHAs: rebasing the commit onto the remote tip to keep the PR honest
+rewrites its SHA, so `--contains` would answer no on a branch that demonstrably holds the
+work. Requiring one single ref to match at EVERY touched path is what keeps it a proof
+and not a coincidence — a ref that carries the ahead commits' whole contribution.
+
+Unlike the other two this one does NOT promise "zero files change": the rewind drops
+content the remote has not landed yet, so the tree loses it until the PR merges. That is
+the ordinary state of unmerged work, and the archive tag holds the old head regardless.
+
 Invariants it holds:
-  1. Reset only on proven content equality, whole-tree or per-touched-path. Otherwise the
-     ahead commits carry real work and the branch->PR->squash path (or a Frank ruleset
-     bypass) is the only honest answer.
+  1. Reset only on proven content preservation — whole-tree, per-touched-path against the
+     tracked branch, or per-touched-path against another ref the remote already holds.
+     Otherwise the ahead commits carry work that exists nowhere else, and the
+     branch->PR->squash path (or a Frank ruleset bypass) is the only honest answer.
   2. Soft reset, never --hard. Uncommitted and untracked work in a live tree survives.
+     PR_PENDING additionally restores the touched paths — a soft reset alone would leave
+     the dropped content staged, which blocks the land it exists to unblock — and refuses
+     outright if any of those paths holds an uncommitted edit, since that edit is the one
+     thing no PR branch is carrying. Every other path, and every untracked file, is
+     still left alone.
   3. Archive the abandoned SHAs under a tag first, so the old history stays reachable.
   4. Idempotent. Re-running against an already-reconciled repo is a no-op success.
 
@@ -48,6 +76,9 @@ Exit codes (greppable from cron/self-heal, 0 only ever means "nothing to chase")
     10  SAFE_RESET       ahead, but content-identical: fixable by this tool with --apply
     11  REDUNDANT_AHEAD  ahead AND behind, but the ahead commits duplicate landed content:
                          --apply rewinds to the merge-base and leaves BEHIND_ONLY
+    12  PR_PENDING       ahead with content the tracked branch lacks, but another remote ref
+                         (an open PR's branch) already carries it: --apply rewinds to the
+                         merge-base so the PR can land, and leaves BEHIND_ONLY
     20  CONTENT_DIVERGED ahead with different content: needs PR->squash, or Frank
     30  BEHIND_ONLY      remote ahead: needs a deploy, then a fast-forward
     2   error
@@ -60,9 +91,10 @@ import time
 
 IN_SYNC, SAFE_RESET, REDUNDANT_AHEAD, CONTENT_DIVERGED, BEHIND_ONLY, ERROR = (
     "IN_SYNC", "SAFE_RESET", "REDUNDANT_AHEAD", "CONTENT_DIVERGED", "BEHIND_ONLY", "ERROR")
+PR_PENDING = "PR_PENDING"
 
-EXIT = {IN_SYNC: 0, SAFE_RESET: 10, REDUNDANT_AHEAD: 11, CONTENT_DIVERGED: 20,
-        BEHIND_ONLY: 30, ERROR: 2}
+EXIT = {IN_SYNC: 0, SAFE_RESET: 10, REDUNDANT_AHEAD: 11, PR_PENDING: 12,
+        CONTENT_DIVERGED: 20, BEHIND_ONLY: 30, ERROR: 2}
 
 DEFAULT_REPO = os.environ.get("FOREMAN_RECONCILE_REPO", "/home/lumen/pokemon")
 
@@ -106,6 +138,31 @@ def redundancy(repo, base, local, remote_ref):
     return touched, not unmatched
 
 
+def preserved_on(repo, local, touched, remote, exclude):
+    """The remote ref that already carries the ahead commits' content, or "" if none.
+
+    The PR_PENDING proof. Same per-path question `redundancy` asks, aimed at every OTHER
+    ref the remote has rather than only the tracked branch: is there one ref against which
+    the local branch has nothing outstanding at any touched path? If so the ahead commits'
+    entire contribution is already on the forge and rewinding past them loses nothing.
+
+    One ref must satisfy every path. Testing paths independently would let two unrelated
+    branches each account for a fragment and together "prove" a state neither holds, which
+    is how a coincidence gets mistaken for a pushed PR. origin/HEAD is skipped as a
+    symbolic alias for the tracked branch — matching it would only restate `redundancy`.
+    """
+    if not touched:
+        return ""
+    refs = [r for r in git(repo, "for-each-ref", "--format=%(refname)",
+                           f"refs/remotes/{remote}/").splitlines() if r]
+    for ref in refs:
+        if ref in (exclude, f"refs/remotes/{remote}/HEAD"):
+            continue
+        if not git(repo, "diff", "--name-only", "--no-renames", local, ref, "--", *touched):
+            return ref
+    return ""
+
+
 def inspect(repo, branch="main", remote="origin", fetch=True):
     remote_ref = f"{remote}/{branch}"
     if fetch:
@@ -113,7 +170,7 @@ def inspect(repo, branch="main", remote="origin", fetch=True):
     behind, ahead = counts(repo, branch, remote_ref)
     local_tree = git(repo, "rev-parse", f"{branch}^{{tree}}")
     remote_tree = git(repo, "rev-parse", f"{remote_ref}^{{tree}}")
-    base, touched = "", []
+    base, touched, pr_ref = "", [], ""
     if ahead == 0:
         verdict = IN_SYNC if behind == 0 else BEHIND_ONLY
     elif local_tree == remote_tree:
@@ -121,10 +178,15 @@ def inspect(repo, branch="main", remote="origin", fetch=True):
     else:
         base = git(repo, "merge-base", branch, remote_ref)
         touched, carried = redundancy(repo, base, branch, remote_ref)
-        verdict = REDUNDANT_AHEAD if carried else CONTENT_DIVERGED
+        if carried:
+            verdict = REDUNDANT_AHEAD
+        else:
+            pr_ref = preserved_on(repo, branch, touched, remote,
+                                  f"refs/remotes/{remote_ref}")
+            verdict = PR_PENDING if pr_ref else CONTENT_DIVERGED
     return {
         "repo": repo, "branch": branch, "remote_ref": remote_ref,
-        "ahead": ahead, "behind": behind,
+        "ahead": ahead, "behind": behind, "preserved_on": pr_ref,
         "local_head": git(repo, "rev-parse", branch),
         "remote_head": git(repo, "rev-parse", remote_ref),
         "local_tree": local_tree, "remote_tree": remote_tree,
@@ -160,6 +222,16 @@ def explain(st):
                 f"`reconcile --apply` archives them and rewinds the ref to the merge-base "
                 f"{st['base'][:7]}; zero files change and the repo lands on BEHIND_ONLY, "
                 f"i.e. fast-forwardable again.")
+    if v == PR_PENDING:
+        return (f"{st['branch']} is {st['ahead']} ahead of {st['remote_ref']} with content "
+                f"{st['remote_ref']} does not carry — but {st['preserved_on']} does, at "
+                f"every path those commits touch ({', '.join(st['touched'])}). The work is "
+                f"pushed and in flight as a PR, so rewinding loses nothing. `reconcile "
+                f"--apply` archives the local SHAs and rewinds the ref to the merge-base "
+                f"{st['base'][:7]}, leaving BEHIND_ONLY — which is what lets the PR land "
+                f"(wq#771's guard refuses to merge over an unpushed commit). Unlike "
+                f"SAFE_RESET/REDUNDANT_AHEAD this DOES change files: the tree gives up that "
+                f"content until the PR merges and the fast-forward brings it back.")
     return (f"{st['branch']} is {st['ahead']} ahead of {st['remote_ref']} and the content "
             f"DIFFERS (local {st['local_tree'][:7]} vs remote {st['remote_tree'][:7]}). No "
             f"safe ref move exists: branch off {st['branch']}, open a PR, squash it, and "
@@ -168,28 +240,53 @@ def explain(st):
 
 def reconcile(repo, branch="main", remote="origin", fetch=True, apply=False, tag=None):
     st = inspect(repo, branch, remote, fetch)
-    if st["verdict"] not in (SAFE_RESET, REDUNDANT_AHEAD) or not apply:
+    if st["verdict"] not in (SAFE_RESET, REDUNDANT_AHEAD, PR_PENDING) or not apply:
         return st
     if git(repo, "rev-parse", "--abbrev-ref", "HEAD") != branch:
         raise GitError(f"{repo} has {branch} un-checked-out; refusing to move a ref out from "
                        "under a different HEAD")
+    if st["verdict"] == PR_PENDING:
+        # PR_PENDING is the one verdict that restores files rather than only moving a ref,
+        # so it is also the one that can overwrite an edit nobody committed. The proof
+        # covers committed content only — an uncommitted edit to a touched path exists
+        # nowhere but this tree, and no PR branch is holding it.
+        held = git(repo, "status", "--porcelain", "--", *st["touched"])
+        if held:
+            raise GitError(
+                f"{repo} has uncommitted changes at a path this reconcile would restore "
+                f"({', '.join(held.split())}); the PR branch does not carry them. Commit "
+                f"or set them aside first.")
     if st["verdict"] == SAFE_RESET:
         # The whole tree already matches, so the remote ref itself is the safe landing spot.
         target, expected = st["remote_ref"], IN_SYNC
         proof = (f"content identical to {st['remote_ref']} {st['remote_head'][:7]} "
                  f"(tree {st['local_tree']})")
-    else:
+    elif st["verdict"] == REDUNDANT_AHEAD:
         # The remote has moved on, so only the merge-base is reachable without deploying.
         # Landing there is the point: it converts a divergence into a plain fast-forward.
         target, expected = st["base"], BEHIND_ONLY
         proof = (f"duplicates of landed work — {st['remote_ref']} {st['remote_head'][:7]} "
                  f"already carries this content at {', '.join(st['touched'])}")
+    else:
+        # Same landing spot, weaker guarantee: the content is pushed but not merged, so
+        # this rewind DOES remove it from the tree until the PR lands. The archive tag and
+        # the PR branch are both holding it.
+        target, expected = st["base"], BEHIND_ONLY
+        proof = (f"pushed but unlanded — {st['preserved_on']} already carries this content "
+                 f"at {', '.join(st['touched'])}")
     tag = tag or f"archive/reconcile-{branch}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
     git(repo, "tag", "-a", tag, st["local_head"], "-m",
         f"pre-reconcile snapshot of {branch} ({st['ahead']} unpushed commits); {proof}")
     # --soft, never --hard: index and working tree are left untouched, so uncommitted edits
     # and untracked files in a live deployment tree survive the reconcile intact.
     git(repo, "reset", "--soft", target)
+    if st["verdict"] == PR_PENDING:
+        # A soft reset alone would leave the dropped content STAGED, which is the same
+        # blocker wearing different clothes: wq#771's land guard reads uncommitted paths
+        # and unpushed paths from the same list, so the PR still could not merge. Restore
+        # the touched paths — and only those — so the tree matches the ref it now sits on.
+        # Untracked files and uncommitted work at every other path are still untouched.
+        git(repo, "checkout", target, "--", *st["touched"])
     after = inspect(repo, branch, remote, fetch=False)
     if after["verdict"] != expected:
         raise GitError(f"reset left {repo} at {after['verdict']} — expected {expected}")

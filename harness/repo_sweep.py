@@ -80,9 +80,9 @@ WQ_BIN = os.environ.get("REPO_SWEEP_WQ", "/home/lumen/bin/wq")
 
 # Verdict names from repo_reconcile.py. Anything missing here is read as ERROR and files
 # no ticket, so a new verdict has to arrive in the same wave as the exit code — wq#975 is
-# the one that added 11.
-VERDICTS = {10: "SAFE_RESET", 11: "REDUNDANT_AHEAD", 20: "CONTENT_DIVERGED",
-            30: "BEHIND_ONLY"}
+# the one that added 11, wq#1472 the one that added 12.
+VERDICTS = {10: "SAFE_RESET", 11: "REDUNDANT_AHEAD", 12: "PR_PENDING",
+            20: "CONTENT_DIVERGED", 30: "BEHIND_ONLY"}
 
 
 def _detect_branch_and_remote(repo):
@@ -146,7 +146,7 @@ def sweep_repos(repos=None, wq_bin=None, reconcile=None, dry_run=False):
             detail = (f"Automated sweep detected {verdict} in {repo}.\n"
                       f"Output: {entry['output']}\n\n"
                       f"To inspect: python3 {reconcile} status --repo {repo}\n"
-                      f"To fix (if SAFE_RESET or REDUNDANT_AHEAD): "
+                      f"To fix (if SAFE_RESET, REDUNDANT_AHEAD or PR_PENDING): "
                       f"python3 {reconcile} reconcile --repo {repo} --apply")
             if dry_run:
                 entry["ticket_filed"] = "dry_run"
