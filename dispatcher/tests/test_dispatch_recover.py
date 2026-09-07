@@ -8,6 +8,7 @@ state paths).
 """
 import json
 import os
+import re
 import sqlite3
 import stat
 import sys
@@ -422,8 +423,9 @@ def gate_env(env, monkeypatch, tmp_path):
     for name in ("check_breaker", "check_disarm", "check_auth", "check_selftest"):
         monkeypatch.setattr(dr, name, lambda _n=name: _ok(_n))
     monkeypatch.setattr(dr, "check_stamps",
-                        lambda fix=True, dry_run=False: dict(_ok("stamps"), reproved=[]))
-    monkeypatch.setattr(dr, "check_dryrun", lambda dry_run=False: _ok("dryrun"))
+                        lambda fix=True, dry_run=False, budget=None: dict(_ok("stamps"),
+                                                                          reproved=[]))
+    monkeypatch.setattr(dr, "check_dryrun", lambda dry_run=False, budget=None: _ok("dryrun"))
     monkeypatch.setattr(dr, "check_governor", lambda mode, now=None: _ok("governor"))
     monkeypatch.setattr(dr, "GATE_REPORT_PATH", str(tmp_path / "gate_last.json"))
     monkeypatch.delenv(dr.DISABLE_ENV, raising=False)
@@ -448,7 +450,7 @@ def test_gate_non_recoverable_failure_pages_urgent_no_rungs(gate_env, monkeypatc
     monkeypatch.setattr(dr, "check_auth", lambda: {"name": "auth", "ok": False,
                                                     "detail": "loggedIn=False", "recoverable": False})
     ran = []
-    monkeypatch.setattr(dr, "_recover_dryrun", lambda dry_run: ran.append(1) or [])
+    monkeypatch.setattr(dr, "_recover_dryrun", lambda dry_run, budget=None: ran.append(1) or [])
     report = dr.run_gate(mode="window")
     assert report["ok"] is False
     text = gate_env["ntfy_log"].read_text()
@@ -461,7 +463,7 @@ def test_gate_non_recoverable_failure_pages_urgent_no_rungs(gate_env, monkeypatc
 def test_gate_dryrun_failure_runs_rungs_then_rechecks(gate_env, monkeypatch):
     calls = []
 
-    def fake_dryrun(dry_run=False):
+    def fake_dryrun(dry_run=False, budget=None):
         calls.append("dryrun")
         ok = len(calls) > 1            # first attempt fails, recheck passes
         return {"name": "dryrun", "ok": ok, "recoverable": True,
@@ -482,10 +484,10 @@ def test_gate_dryrun_failure_runs_rungs_then_rechecks(gate_env, monkeypatch):
 
 def test_gate_disable_env_is_report_only(gate_env, monkeypatch):
     monkeypatch.setenv(dr.DISABLE_ENV, "1")
-    monkeypatch.setattr(dr, "check_dryrun", lambda dry_run=False: {
+    monkeypatch.setattr(dr, "check_dryrun", lambda dry_run=False, budget=None: {
         "name": "dryrun", "ok": False, "detail": "would_spawn=0", "recoverable": True})
     ran = []
-    monkeypatch.setattr(dr, "_recover_dryrun", lambda dry_run: ran.append(1) or [])
+    monkeypatch.setattr(dr, "_recover_dryrun", lambda dry_run, budget=None: ran.append(1) or [])
     report = dr.run_gate(mode="nightly")
     assert report["ok"] is False and report["disabled"] is True and ran == []
 
@@ -602,7 +604,8 @@ def test_stamps_check_reproves_stale_then_fresh(monkeypatch):
     monkeypatch.setitem(sys.modules, "harness_preflight", fake_hp)
     monkeypatch.setattr(dr, "_migrated_repo_paths", lambda: ["/home/lumen/foreman"])
     monkeypatch.setattr(dr, "_reprove_repo",
-                        lambda repo, dry_run: calls["reprove"].append(repo) or (True, "rc=0"))
+                        lambda repo, dry_run, budget=None:
+                        calls["reprove"].append(repo) or (True, "rc=0"))
     c = dr.check_stamps()
     assert c["ok"] and c["reproved"] == ["foreman"] and "reproved now" in c["detail"]
     assert calls["reprove"] == ["/home/lumen/foreman"]
@@ -615,6 +618,110 @@ def test_stamps_check_no_fix_reports_stale(monkeypatch):
     monkeypatch.setattr(dr, "_migrated_repo_paths", lambda: ["/home/lumen/foreman"])
     c = dr.check_stamps(fix=False)
     assert not c["ok"] and "STALE" in c["detail"]
+
+
+# ---- wq#1460: the pass has one wall-clock budget ----------------------------------------
+
+class _FakeClock:
+    """Monotonic seconds the test moves by hand."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def test_budget_clamps_a_timeout_to_what_is_left_then_refuses():
+    clock = _FakeClock()
+    b = dr.GateBudget(1200, clock=clock)
+    assert b.timeout_for(330) == 330            # plenty left: the check gets what it asked
+    clock.t = 1000
+    assert b.timeout_for(330) == 140            # 1200 - 60 reserve - 1000 spent
+    clock.t = 1150
+    assert b.timeout_for(330) is None and b.exhausted()   # under GATE_MIN_CHECK_S
+
+
+def test_stamps_stops_reproving_when_the_budget_runs_out(monkeypatch):
+    """The wq#1459 CONTRADICT case: N stale repos x 330s each, sequential. The repos past
+    the budget are reported STALE, not reproved — the pass never runs out the unit clock."""
+    import types
+    clock = _FakeClock()
+    budget = dr.GateBudget(1200, clock=clock)
+    monkeypatch.setitem(sys.modules, "harness_preflight",
+                        types.SimpleNamespace(dispatch_gate_check=lambda r: (False, "stale")))
+    monkeypatch.setattr(dr, "_migrated_repo_paths",
+                        lambda: [f"/home/lumen/repo{i}" for i in range(6)])
+
+    reproved = []
+
+    def slow_reprove(repo, dry_run, budget=None):
+        clock.t += budget.timeout_for(dr.GATE_PREFLIGHT_TIMEOUT_S)   # each one burns its slice
+        reproved.append(repo)
+        return False, "rc=1 timed out proving"
+    monkeypatch.setattr(dr, "_reprove_repo", slow_reprove)
+
+    c = dr.check_stamps(budget=budget)
+    assert not c["ok"]
+    assert len(reproved) == 4                     # 3x330 + one 150s remainder, then stop
+    assert c["detail"].count("not reproved — gate budget exhausted") == 2
+    assert budget.exhausted()
+
+
+def test_gate_budget_exhaustion_still_pages_instead_of_running_out_the_unit_clock(
+        gate_env, monkeypatch):
+    """The failure mode wq#1460 exists to kill: a slow first check must not eat the whole
+    TimeoutStartSec, because a SIGTERM'd start job sends neither ntfy and skips
+    ExecStartPost (the wq#1184 cron dead-man) — silence that means 'didn't run'."""
+    clock = _FakeClock()
+
+    def slow_stamps(fix=True, dry_run=False, budget=None):
+        clock.t += 1190                            # a batch of newly-stale stamps
+        return dict(_ok("stamps"), reproved=["kb", "mailbot", "nest"])
+    monkeypatch.setattr(dr, "check_stamps", slow_stamps)
+
+    report = dr.run_gate(mode="window", budget=dr.GateBudget(1200, clock=clock))
+    assert report["ok"] is False
+    unrun = [c["name"] for c in report["checks"] if "not run" in c["detail"]]
+    assert unrun == ["dryrun", "governor", "breaker", "disarm", "auth", "selftest"]
+    assert report["budget"]["exhausted"] is True and report["budget"]["spent_s"] >= 1190
+    pages = [ln for ln in gate_env["ntfy_log"].read_text().splitlines()
+             if ln.startswith("-t lumen-alerts")]
+    assert len(pages) == 1 and "-p urgent" in pages[0] and "gate FAILED" in pages[0]
+
+
+def test_dryrun_skips_the_lock_busy_retry_sleep_it_cannot_afford(monkeypatch):
+    """The retry costs GATE_LOCK_RETRY_S of sleep plus a second pass; with only that much
+    budget left, sleeping would put the ntfy past the unit timeout. Report instead."""
+    clock = _FakeClock()
+    budget = dr.GateBudget(1200, clock=clock)
+    clock.t = 1200 - 60 - dr.GATE_LOCK_RETRY_S   # exactly the sleep, nothing for a 2nd pass
+    slept = []
+    monkeypatch.setattr(dr.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(dr, "_run_dispatcher_dry_run",
+                        lambda log, budget=None: (0, "", [{"event": "halt", "stage": "lock",
+                                                           "reason": "lock_busy"}]))
+    c = dr.check_dryrun(budget=budget)
+    assert not c["ok"] and "no retry — gate budget exhausted" in c["detail"]
+    assert slept == []
+
+
+def test_gate_budget_records_spend_on_a_healthy_pass(gate_env):
+    report = dr.run_gate(mode="nightly")
+    assert report["ok"] is True
+    assert report["budget"]["total_s"] == dr.GATE_BUDGET_S
+    assert report["budget"]["exhausted"] is False
+
+
+def test_gate_budget_fits_under_unit_timeout_start_sec():
+    """The budget is only a guarantee if the unit outlives it. Read the shipped unit."""
+    unit = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(dr.__file__))),
+                        "dispatcher", "systemd", "lumen-foreman-gate@.service")
+    text = open(unit).read()
+    m = re.search(r"^TimeoutStartSec=(\d+)$", text, re.M)
+    assert m, "lumen-foreman-gate@.service must set TimeoutStartSec"
+    assert dr.GATE_BUDGET_S + dr.GATE_BUDGET_RESERVE_S < int(m.group(1))
+    assert "OnFailure=" in text          # a crash still pages (wq#1459)
 
 
 def test_health_no_ladder_and_dedup_flags(env, monkeypatch):

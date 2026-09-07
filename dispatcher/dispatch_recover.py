@@ -45,6 +45,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -374,6 +375,12 @@ def selftest():
 #             process's environment) — the §1.3 class, proven the way the unit runs it.
 #   selftest  selftest() above (§3.3.5) passes.
 #
+# One pass is bounded by GATE_BUDGET_S (wq#1460): the checks above have per-call timeouts
+# but no aggregate one, and check_stamps alone costs 330s per stale repo. Running out the
+# unit's TimeoutStartSec would page NOTHING (SIGTERM precedes both ntfys and skips
+# ExecStartPost), so the gate fails fast on its own clock instead: an unrun check is a
+# failed check, and the urgent page always goes out.
+#
 # Rungs used here call the rung functions directly and never touch recover_state.json:
 # the gate is a separate actor from the health-tick ladder and must not advance or
 # reset it. FOREMAN_RECOVER_DISABLE=1 makes the gate report-only (no reproves, no
@@ -394,6 +401,21 @@ GATE_STALE_DEFAULT_S = 600            # governor_core DEFAULT_FLOORS stale_fail_
 GATE_DRYRUN_TIMEOUT_S = 540           # under the unit's TimeoutStartSec, leaves room for rungs
 GATE_PREFLIGHT_TIMEOUT_S = 330        # harness_preflight.LIVE_PROOF_TIMEOUT + slack
 GATE_LOCK_RETRY_S = int(os.environ.get("FOREMAN_GATE_LOCK_RETRY_S", "60"))
+# Aggregate wall-clock budget for one gate pass (wq#1460). The per-check timeouts above
+# do NOT bound a pass: check_stamps reproves stale repos sequentially at up to
+# GATE_PREFLIGHT_TIMEOUT_S each, so its cost is 330s x migrated-repo-count and grows every
+# time a repo is migrated; add dryrun (540) + rungs + the dryrun recheck (540) and the
+# worst case already exceeds lumen-foreman-gate@.service's TimeoutStartSec=1500 at three
+# repos. A systemd timeout kill is the one outcome the gate must never have: SIGTERM lands
+# before either ntfy and skips ExecStartPost (the wq#1184 cron dead-man), so a wedged unit —
+# exactly what the gate exists to catch — would page nothing at all. So the gate bounds
+# ITSELF: every check draws from this budget, and once it is spent the remaining checks are
+# reported unrun (a failure) and the urgent page still goes out with time to spare.
+# INVARIANT, asserted by test_gate_budget_fits_under_unit_timeout_start_sec:
+#   GATE_BUDGET_S + GATE_BUDGET_RESERVE_S < TimeoutStartSec of lumen-foreman-gate@.service.
+GATE_BUDGET_S = int(os.environ.get("FOREMAN_GATE_BUDGET_S", "1200"))
+GATE_BUDGET_RESERVE_S = 60            # held back for the ntfy + report write + ExecStartPost
+GATE_MIN_CHECK_S = 20                 # below this, don't start another check at all
 GATE_TOP_SKIPS = 5
 GATE_MODES = ("window", "nightly")
 GATE_OK_TITLE = {"window": "[DISPATCH] window gate OK", "nightly": "[DISPATCH] nightly gate OK"}
@@ -419,6 +441,39 @@ def _check(name, ok, detail, recoverable=False):
     return {"name": name, "ok": bool(ok), "detail": detail, "recoverable": recoverable}
 
 
+class GateBudget:
+    """One wall-clock budget shared by every check in a gate pass (wq#1460).
+
+    Checks ask for a subprocess timeout with timeout_for(); they get the smaller of what
+    they wanted and what is left, or None when there is not enough left to be worth
+    starting. Monotonic, so a clock step mid-pass cannot hand out a bigger budget than
+    the unit's TimeoutStartSec allows.
+    """
+
+    def __init__(self, total_s=None, clock=time.monotonic):
+        self._clock = clock
+        self.total = GATE_BUDGET_S if total_s is None else int(total_s)
+        self._started = clock()
+
+    def spent(self):
+        return self._clock() - self._started
+
+    def remaining(self):
+        """Seconds a check may still consume — the reserve is not spendable."""
+        return self.total - GATE_BUDGET_RESERVE_S - self.spent()
+
+    def timeout_for(self, want_s):
+        """Subprocess timeout clamped to the budget; None means don't start it."""
+        left = int(self.remaining())
+        return None if left < GATE_MIN_CHECK_S else min(int(want_s), left)
+
+    def exhausted(self):
+        return self.timeout_for(GATE_MIN_CHECK_S) is None
+
+    def note(self):
+        return f"gate budget exhausted ({self.spent():.0f}s of {self.total}s spent)"
+
+
 def _migrated_repo_paths():
     """Same resolution harness/harness-preflight --all uses: one path per
     permission-profiles/repos.d/<name>.json, mapped through router.LANE_REPO so the
@@ -436,21 +491,27 @@ def _migrated_repo_paths():
     return [by_name.get(n, f"/home/lumen/{n}") for n in names]
 
 
-def _reprove_repo(repo, dry_run):
+def _reprove_repo(repo, dry_run, budget=None):
     cmd = [sys.executable, HARNESS_PREFLIGHT_CLI, repo, "--claude-bin", CLAUDE_BIN]
     if dry_run:
         return False, "DRY-RUN would run: " + " ".join(cmd)
+    timeout = GATE_PREFLIGHT_TIMEOUT_S if budget is None \
+        else budget.timeout_for(GATE_PREFLIGHT_TIMEOUT_S)
+    if timeout is None:
+        return False, budget.note()
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=GATE_PREFLIGHT_TIMEOUT_S)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, f"harness-preflight failed to run: {e!r}"
     tail = (p.stdout + p.stderr).strip()[-400:]
     return p.returncode == 0, f"rc={p.returncode} {tail}"
 
 
-def check_stamps(fix=True, dry_run=False):
+def check_stamps(fix=True, dry_run=False, budget=None):
     """Every migrated repo has a fresh stamp; a stale/missing one is reproved right
-    here (the §4.1 'not at 03:00' rule) and rechecked."""
+    here (the §4.1 'not at 03:00' rule) and rechecked. Reproving is the one check whose
+    cost scales with the fleet (330s x stale repos), so it draws from the pass budget:
+    once that is spent the still-stale repos are reported, not reproved (wq#1460)."""
     sys.path.insert(0, HARNESS_DIR)
     import harness_preflight  # noqa: E402
     repos = _migrated_repo_paths()
@@ -470,7 +531,11 @@ def check_stamps(fix=True, dry_run=False):
             all_ok = False
             lines.append(f"{name}: STALE — {reason}")
             continue
-        rok, rdetail = _reprove_repo(repo, dry_run)
+        if budget is not None and budget.exhausted():
+            all_ok = False
+            lines.append(f"{name}: STALE ({reason}); not reproved — {budget.note()}")
+            continue
+        rok, rdetail = _reprove_repo(repo, dry_run, budget=budget)
         if rok:
             try:
                 ok2, reason2 = harness_preflight.dispatch_gate_check(repo)
@@ -490,12 +555,15 @@ def check_stamps(fix=True, dry_run=False):
     return c
 
 
-def _run_dispatcher_dry_run(scratch_log):
+def _run_dispatcher_dry_run(scratch_log, budget=None):
     env = dict(os.environ)
     env["FOREMAN_DISPATCHER_LOG"] = scratch_log
     cmd = [sys.executable, DISPATCHER_CLI, "run", "--once", "--dry-run"]
+    timeout = GATE_DRYRUN_TIMEOUT_S if budget is None else budget.timeout_for(GATE_DRYRUN_TIMEOUT_S)
+    if timeout is None:
+        return None, budget.note(), []
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=GATE_DRYRUN_TIMEOUT_S,
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                            cwd=FOREMAN_ROOT, env=env)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"dry-run failed to run: {e!r}", []
@@ -552,21 +620,25 @@ def _summarize_dry_run(events):
     return "fail", f"{head} — {why}; top skips: {top or 'none'}"
 
 
-def check_dryrun(dry_run=False):
+def check_dryrun(dry_run=False, budget=None):
     """§4.2: a real decision pass, zero side effects, must report it WOULD spawn."""
     if dry_run:
         return _check("dryrun", True, "DRY-RUN would run foreman_dispatcher.py run --once "
                       "--dry-run into a scratch log", recoverable=True)
     with tempfile.TemporaryDirectory() as td:
         scratch = os.path.join(td, "dispatcher-dryrun.log")
-        rc, tail, events = _run_dispatcher_dry_run(scratch)
+        rc, tail, events = _run_dispatcher_dry_run(scratch, budget=budget)
         if rc is None:
             return _check("dryrun", False, tail, recoverable=True)
         verdict, detail = _summarize_dry_run(events)
         if verdict == "lock_busy":
-            import time
+            # The retry sleep spends budget like anything else; skip it if that would
+            # leave no room for the second pass (wq#1460).
+            if budget is not None and budget.remaining() < GATE_LOCK_RETRY_S + GATE_MIN_CHECK_S:
+                return _check("dryrun", False, f"{detail}; no retry — {budget.note()}",
+                              recoverable=True)
             time.sleep(GATE_LOCK_RETRY_S)
-            rc, tail, events = _run_dispatcher_dry_run(scratch + ".2")
+            rc, tail, events = _run_dispatcher_dry_run(scratch + ".2", budget=budget)
             if rc is None:
                 return _check("dryrun", False, tail, recoverable=True)
             verdict, detail = _summarize_dry_run(events)
@@ -719,38 +791,53 @@ def check_selftest():
     return _check("selftest", ok, (last[-1] if last else "no output")[:200])
 
 
-def _recover_dryrun(dry_run):
+def _recover_dryrun(dry_run, budget=None):
     """The two rungs that can unwedge a pass that would not spawn (stamps already
     reproved themselves in check_stamps). Direct rung calls: recover_state.json is the
     health ladder's, not the gate's."""
     steps = []
     for rung in (2, 3):
         name, fn = RUNGS[rung]
+        if budget is not None and budget.exhausted():
+            steps.append(f"rung{rung} {name}: not run — {budget.note()}")
+            continue
         ok, detail = fn(dry_run)
         steps.append(f"rung{rung} {name}: {'ok' if ok else 'FAILED'} — {detail[:300]}")
     return steps
 
 
-def run_gate(mode="window", dry_run=False, now=None):
+def run_gate(mode="window", dry_run=False, now=None, budget=None):
     """Run every check; recover what is recoverable; page exactly once.
-    Returns the report dict (also written to GATE_REPORT_PATH)."""
+    Returns the report dict (also written to GATE_REPORT_PATH).
+
+    Every check draws from one wall-clock budget (wq#1460) so the pass always reaches its
+    ntfy inside the unit's TimeoutStartSec. A check with no budget left is not started and
+    is reported unrun — which fails the gate, because unrun is not proven."""
     if mode not in GATE_MODES:
         raise ValueError(f"mode must be one of {GATE_MODES}")
     started = now or _utcnow()
     disabled = os.environ.get(DISABLE_ENV) == "1"
     fix = not disabled
-    checks = [check_stamps(fix=fix, dry_run=dry_run),
-              check_dryrun(dry_run=dry_run),
-              check_governor(mode, now=started),
-              check_breaker(),
-              check_disarm(),
-              check_auth(),
-              check_selftest()]
+    budget = GateBudget() if budget is None else budget
+    ordered = (("stamps", lambda: check_stamps(fix=fix, dry_run=dry_run, budget=budget)),
+               ("dryrun", lambda: check_dryrun(dry_run=dry_run, budget=budget)),
+               ("governor", lambda: check_governor(mode, now=started)),
+               ("breaker", check_breaker),
+               ("disarm", check_disarm),
+               ("auth", check_auth),
+               ("selftest", check_selftest))
+    checks = []
+    for name, fn in ordered:
+        if budget.exhausted():
+            checks.append(_check(name, False, f"not run — {budget.note()}"))
+            continue
+        checks.append(fn())
     recovery = []
     dr = next(c for c in checks if c["name"] == "dryrun")
-    if not dr["ok"] and fix and not dry_run:
-        recovery = _recover_dryrun(dry_run)
-        dr2 = check_dryrun(dry_run=dry_run)
+    if not dr["ok"] and fix and not dry_run and not budget.exhausted():
+        recovery = _recover_dryrun(dry_run, budget=budget)
+        dr2 = (check_dryrun(dry_run=dry_run, budget=budget) if not budget.exhausted()
+               else _check("dryrun", False, f"not rechecked — {budget.note()}", recoverable=True))
         dr2["detail"] = f"after rungs: {dr2['detail']} | first attempt: {dr['detail']}"
         checks[checks.index(dr)] = dr2
     failed = [c for c in checks if not c["ok"]]
@@ -759,6 +846,8 @@ def run_gate(mode="window", dry_run=False, now=None):
               "started_at": started.isoformat(timespec="seconds"),
               "finished_at": _utcnow().isoformat(timespec="seconds"),
               "checks": checks, "recovery": recovery,
+              "budget": {"total_s": budget.total, "spent_s": round(budget.spent(), 1),
+                         "exhausted": budget.exhausted()},
               "reproved": next((c.get("reproved") for c in checks
                                 if c["name"] == "stamps"), [])}
     if ok:
@@ -774,8 +863,9 @@ def run_gate(mode="window", dry_run=False, now=None):
         names = ", ".join(c["name"] for c in failed)
         body = "\n".join(f"- {c['name']}: {c['detail'][:400]}" for c in failed)
         rec = ("\nrecovery: " + " | ".join(recovery)) if recovery else ""
+        bud = f"\n{budget.note()} — checks left unrun are NOT proven" if budget.exhausted() else ""
         msg = (f"{mode} gate FAILED at {_pt(started)} — {len(failed)} check(s): {names}\n"
-               f"{body}{rec}")
+               f"{body}{rec}{bud}")
         title, prio = GATE_FAIL_TITLE[mode], "urgent"
     report["ntfy"] = {"title": title, "priority": prio, "message": msg}
     if dry_run:

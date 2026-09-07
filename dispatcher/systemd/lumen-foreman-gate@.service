@@ -23,6 +23,11 @@ Environment=PATH=/home/lumen/.npm-global/bin:/home/lumen/bin:/usr/local/bin:/usr
 WorkingDirectory=/home/lumen/foreman
 ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/dispatch_recover.py gate --mode %i
 ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
-# 3 repos x live proof (<=300s each) + dry-run pass (<=540s) + rungs.
+# The gate bounds itself: dispatch_recover.GATE_BUDGET_S (1200s) + GATE_BUDGET_RESERVE_S
+# (60s) is the most one pass can spend, so this only has to sit above that with room for
+# python startup and ExecStartPost. Raising the ceiling alone would NOT have been enough —
+# check_stamps costs ~330s per stale repo and grows with every migrated repo (wq#1460).
+# Keep in sync with GATE_BUDGET_S; test_gate_budget_fits_under_unit_timeout_start_sec
+# reads this line and fails if they drift.
 TimeoutStartSec=1500
 Nice=5
