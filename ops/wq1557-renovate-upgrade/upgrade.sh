@@ -12,6 +12,13 @@ set -euo pipefail
 
 RENOVATE_VERSION=44.69.11
 
+# npm renames the old package dir to .renovate-<hash> during an in-place
+# upgrade; a prior interrupted install left one of these behind (observed
+# 2026-09-08: /home/lumen/.npm-global/lib/node_modules/.renovate-yLjRkvnd,
+# dated Aug 23), which makes the next install's rename fail ENOTEMPTY. Clear
+# any leftovers first so this stays idempotent.
+rm -rf /home/lumen/.npm-global/lib/node_modules/.renovate-*
+
 npm install -g "renovate@${RENOVATE_VERSION}"
 
 installed="$(node -p "require('/home/lumen/.npm-global/lib/node_modules/renovate/package.json').version")"
