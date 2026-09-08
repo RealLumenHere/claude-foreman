@@ -36,6 +36,16 @@ POLICY = {
                     "maat": ["*"]},
     },
     "copy_dirs": {"isis": ["/home/isis/lumen-drop"], "thor": ["/home/thor/lumen-drop"]},
+    # wq#1441: deny is the default; these are the fixture's explicit grants. Rows
+    # below that expect a tag are under one of them; rows that expect `unresolved`
+    # with the allow hint are deliberately not.
+    "allow": {
+        "read_dirs": ["/home/lumen/instructions", "/home/lumen/agent",
+                      "/home/lumen/foreman", "/home/lumen/bin",
+                      "/home/lumen/backups/wq-proposals", "/home/lumen/.npm-global"],
+        "restart": {"isis": ["ollama", "ollama.service"], "lumen": ["lumen-messenger"]},
+        "ssh": ["isis", "bes", "lumen", "anubis"],
+    },
 }
 
 # Paths the corpus rows cite. Everything else "does not exist" for these tests.
