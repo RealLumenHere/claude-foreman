@@ -54,6 +54,45 @@ never:
     - "tailscale up*"
     - "systemctl mask*"
 
+# allow: explicit GRANT side (wq#1441, research/BROKER_GRANT_COVERAGE.md). Deny is the
+# default: capability_lint emits a `needs:` tag ONLY for a target listed here (after
+# `never` above, which always wins). Anything not listed lands the ticket in
+# `needs_unresolved` with a propose-by-PR hint — never a silent grant.
+allow:
+  # READ: dir(X) auto-tags only when X is under one of these roots. Every root was
+  # swept with harness/read_dir_sweep.py (masked; basename globs + token regexes)
+  # on 2026-09-08, zero hits — evidence table in BROKER_GRANT_COVERAGE.md §3. Add a
+  # root only with a fresh zero-hit sweep in the PR body. Deliberately NOT here:
+  # /home/lumen/agent (live .env + .env.bak tokens), /home/lumen/sentinel/* (sntl
+  # tokens, wq#1466), /home/lumen/minerva (credentials mirrored into context/sections,
+  # wq#1467), /home/lumen/messenger (vapid key, chat-log token), /home/lumen/fleet
+  # (token in patches/wq1454).
+  read_dirs:
+    - /home/lumen/research_prompts
+    - /home/lumen/decisions
+    - /home/lumen/instructions
+    - /home/lumen/security
+    - /home/lumen/etc
+    - /home/lumen/hapi/eval
+    - /home/lumen/pstack
+    - /home/lumen/personas
+    - /home/lumen/questfree/docs
+    - /home/lumen/projects/bench
+    - /home/lumen/infra
+
+  # RESTART: unit globs per node the lint may tag restart(unit@node) for. Each entry
+  # was verified per-target before listing (unit LoadState=loaded, `sudo -n true`
+  # exits 0 on the node, unit not in never.restart, a fleet probe exists to verify
+  # after). The broker's own gate (fleet_exec_policy.check_restart + never rows +
+  # holddown + verify-after) is unchanged and still applies at call time.
+  restart:
+    isis: [ollama]              # proven e2e 2026-09-06 (wq#1440, lumen-bin PR #63)
+    lumen: [lumen-messenger]    # wq#1350 needs it; reversible, not a crown-jewel unit
+
+  # SSH: nodes the lint may tag ssh(node) for (read-only `run` under
+  # run_readonly_cmds only). thor is never here: never.nodes covers it.
+  ssh: [lumen, isis, bes, anubis, maat, sobek]
+
 # run: read-only probe set. Each entry is either a bare basename (argv[0] must equal
 # it exactly) or "<basename> <subcmd-pattern>" (argv[1] must fnmatch one of the
 # '|'-separated patterns). argv is never shell-joined; metacharacters, -c/bash/sh/
