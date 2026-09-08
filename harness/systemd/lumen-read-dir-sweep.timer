@@ -1,0 +1,14 @@
+# lumen-read-dir-sweep.timer — daily trigger for lumen-read-dir-sweep.service
+# (wq#1482, research/BROKER_GRANT_COVERAGE.md slice 5). `Persistent=true` catches up
+# a missed run (host was down) on the next boot rather than silently letting the
+# record go stale past capability_lint.py's 48h fail-closed threshold.
+[Unit]
+Description=Daily lumen-read-dir-sweep (wq#1482)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

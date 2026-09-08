@@ -10,6 +10,7 @@ drill itself, skipped when the queue is absent so this file still runs anywhere.
 """
 import os
 import sys
+import time
 
 import pytest
 
@@ -26,23 +27,38 @@ ROSTER = capability_lint.Roster(names=["lumen", "isis", "thor"], ips={})
 
 # The four tickets' real shapes: a cited path outside every add_dirs, and — for 1401
 # only — a v2 verb in the same detail. Text trimmed to the parts stage 3.7 reads.
+#
+# wq#1441 (BROKER_GRANT_COVERAGE.md §2, slice 1) landed AFTER this doc's original
+# "1402/1403/1407 -> auto dir -> dispatchable" prediction and made dir(X) explicit-
+# allow-only: none of /home/lumen/agent, /home/lumen/backups/wq-proposals, or
+# /home/lumen/.npm-global is on the curated fleet-exec-policy.yaml allow.read_dirs
+# list (agent carries live tokens — the wq#1466 class this same slice exists to
+# catch). All three now land in needs_unresolved with the propose-don't-deploy hint,
+# same as 1401 — this is the intended tightening, not a regression.
 CORPUS = [
     (1401, "Maintenance-window scheduler",
      "doc /home/lumen/instructions/playbooks/maintenance-window.md ... and REBOOTS "
      "only if boot-safety triple-checked; reboot the node afterwards",
      "needs_unresolved"),
-    (1402, "agent notes", "read the config under /home/lumen/agent", "dispatchable"),
+    (1402, "agent notes", "read the config under /home/lumen/agent", "needs_unresolved"),
     (1403, "wq proposal backups",
-     "write to /home/lumen/backups/wq-proposals nightly", "dispatchable"),
+     "write to /home/lumen/backups/wq-proposals nightly", "needs_unresolved"),
     (1407, "Fix preflight claude spawn under systemd PATH",
      "PATH lacks /home/lumen/.npm-global/bin so every auto-reprove fails",
-     "dispatchable"),
+     "needs_unresolved"),
 ]
 
 
 @pytest.fixture(autouse=True)
 def _apply_dir(monkeypatch):
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply-dir")
+    # wq#1482 slice 5: this corpus predates the sweep gate and is about which column a
+    # ticket lands in, not sweep freshness — fixture-in a fresh no-hit sweep so a
+    # missing runtime/read_dir_sweep.json doesn't turn every predicted dir tag into
+    # needs_unresolved here.
+    monkeypatch.setattr(capability_lint, "load_sweep",
+                        lambda path=None: {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                           "roots": {}})
 
 
 @pytest.mark.parametrize("tid,title,detail,column", CORPUS,
@@ -85,15 +101,14 @@ def test_the_replay_never_writes(monkeypatch):
 
 @pytest.mark.skipif(not os.path.exists(LIVE_DB), reason="no live queue on this host")
 def test_live_replay_of_the_four_stuck_tickets():
-    """The drill on the real rows. 1402/1403/1407 clear the gate on an auto dir tag;
-    1401 is held by its v2 verb. Nothing is spawned and nothing is written — this
-    module has no code path that can do either."""
+    """The drill on the real rows. wq#1441 slice 1 tightened dir(X) to explicit-allow-
+    only after this doc's original prediction, and none of 1402/1403/1407's cited
+    dirs made the curated allow.read_dirs list — all four now land in
+    needs_unresolved (1401 on its v2 verb, the rest on the allow-hint), which is the
+    intended tightening (see the CORPUS comment above). Nothing is spawned and
+    nothing is written — this module has no code path that can do either."""
     tickets = capability_replay.load_tickets([1401, 1402, 1403, 1407], LIVE_DB)
     assert {t["id"] for t in tickets} == {1401, 1402, 1403, 1407}
     got = {t["id"]: capability_replay.replay(t) for t in tickets}
-    assert got[1401]["column"] == "needs_unresolved"
-    assert got[1402]["apply"] == ["dir(/home/lumen/agent)"]
-    assert got[1403]["apply"] == ["dir(/home/lumen/backups/wq-proposals)"]
-    assert got[1407]["apply"] == ["dir(/home/lumen/.npm-global/bin)"]
-    for tid in (1402, 1403, 1407):
-        assert got[tid]["column"] == "dispatchable"
+    for tid in (1401, 1402, 1403, 1407):
+        assert got[tid]["column"] == "needs_unresolved", (tid, got[tid])

@@ -1627,6 +1627,12 @@ def _lint_roster(monkeypatch):
     """Fixture roster: the lint must never shell out to lumen_state during a test."""
     roster = capability_lint.Roster(names=["lumen", "isis", "thor"], ips={})
     monkeypatch.setattr(capability_lint, "load_roster", lambda refresh=False: roster)
+    # wq#1482 slice 5: a dir(X) tag also needs a fresh read_dir_sweep.json now — these
+    # tests are about the lint's bucketing, not the sweep gate, so hand it a fresh
+    # no-hit sweep rather than falling through to the live (missing) runtime file.
+    monkeypatch.setattr(capability_lint, "load_sweep",
+                        lambda path=None: {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                           "roots": {}})
     return roster
 
 

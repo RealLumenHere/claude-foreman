@@ -2,6 +2,7 @@
 burned credential, and the first throwaway sweep this ticket used truncated the
 line BEFORE masking, so a token cut at the 100-char edge escaped the replace and
 was printed whole. That exact shape is pinned here."""
+import json
 import os
 import sys
 
@@ -70,3 +71,41 @@ def test_binary_and_git_skipped(tmp_path):
 
 def test_mask():
     assert rds.mask(FAKE_PAT) == "gith…" and rds.mask("ab") == "…"
+
+
+# --- record_policy_sweep (wq#1482 slice 5: the timer's command) -------------------
+
+def test_record_writes_ts_and_roots_alerts_only_on_new_hits(tmp_path, monkeypatch):
+    root = str(tmp_path / "root")
+    os.makedirs(root)
+    calls = []
+    monkeypatch.setattr(rds, "policy_read_dirs", lambda: [root])
+    monkeypatch.setattr(rds.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    out = str(tmp_path / "sweep.json")
+
+    report = rds.record_policy_sweep(out_path=out)
+    assert report["ts"] and report["roots"][root] == {"files": 0, "hits": []}
+    assert calls == []
+    with open(out) as f:
+        assert json.load(f) == report
+
+    _write(tmp_path / "root", "leak.env", "x\n")
+    report2 = rds.record_policy_sweep(out_path=out)
+    assert len(report2["roots"][root]["hits"]) == 1
+    assert len(calls) == 1 and calls[0][:2] == [sys.executable, rds.AQ_CLI]
+    assert calls[0][2:5] == ["add", "read-dir-sweep", "fresh-hit"]
+
+    # the same hit again on the next run is not "new" -> no second alert
+    report3 = rds.record_policy_sweep(out_path=out)
+    assert len(report3["roots"][root]["hits"]) == 1
+    assert len(calls) == 1
+
+
+def test_record_missing_root_is_an_error_row_not_a_crash(tmp_path, monkeypatch):
+    missing = str(tmp_path / "nope")
+    monkeypatch.setattr(rds, "policy_read_dirs", lambda: [missing])
+    monkeypatch.setattr(rds.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("must not alert when nothing was swept")))
+    out = str(tmp_path / "sweep.json")
+    report = rds.record_policy_sweep(out_path=out)
+    assert report["roots"][missing]["error"] == "not a directory"

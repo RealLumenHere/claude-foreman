@@ -19,7 +19,9 @@ Rollback ladder: FOREMAN_NEEDS_LINT_MODE=warn restores slice B (derive + log, de
 nothing); =off makes the dispatcher stop calling this module at all;
 FOREMAN_NEEDS_DISABLE=1 (needs.py) already disables the consumers downstream.
 """
+import datetime
 import fnmatch
+import json
 import os
 import re
 import subprocess
@@ -29,6 +31,13 @@ LUMEN_STATE_CLI = os.environ.get("FOREMAN_LUMEN_STATE_CLI",
 HARNESS_DIR = os.path.dirname(os.path.abspath(__file__))
 FLEET_EXEC_POLICY_PATH = os.environ.get("FOREMAN_FLEET_EXEC_POLICY",
                                         os.path.join(HARNESS_DIR, "fleet-exec-policy.yaml"))
+# wq#1482 (BROKER_GRANT_COVERAGE.md slice 5): the lumen-read-dir-sweep.timer's daily
+# record. A dir(X) tag proves X clean at PR time only (wq#1466 class) — this file is
+# the ONLY evidence that it is still clean now, so a missing/stale record must fail
+# the same way a missing/edited-away `allow:` section already does (load_policy above).
+READ_DIR_SWEEP_PATH = os.environ.get("FOREMAN_READ_DIR_SWEEP",
+                                     os.path.join(HARNESS_DIR, "runtime", "read_dir_sweep.json"))
+READ_DIR_SWEEP_MAX_AGE_S = 48 * 3600
 STATE_TIMEOUT_S = 15
 
 # §2.1: hard-coded in the lint, NOT in policy.yaml — same reasoning as THOR_HARDLOCK
@@ -279,6 +288,42 @@ def allowed_read_dir(path, policy):
     return None
 
 
+def load_sweep(path=None):
+    """harness/runtime/read_dir_sweep.json as a dict, or {} if missing/unreadable —
+    the caller (`sweep_stale`) treats {} exactly like a stale sweep: no fresh
+    evidence, no dir(X) tag (wq#1482 slice 5, fail closed same as `load_policy`)."""
+    path = path or READ_DIR_SWEEP_PATH
+    try:
+        with open(path) as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def sweep_stale(sweep, now=None):
+    """True if `sweep` has no parseable `ts`, or `ts` is more than 48h old."""
+    ts = (sweep or {}).get("ts")
+    if not ts:
+        return True
+    try:
+        swept = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc)
+    except (ValueError, TypeError):
+        return True
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    return (now - swept).total_seconds() > READ_DIR_SWEEP_MAX_AGE_S
+
+
+def sweep_hit_under(path, sweep, root):
+    """The first recorded hit under `path` for allow root `root`, or None. Hits are
+    recorded per policy root (read_dir_sweep.py --record), so a cited dir `path`
+    (which sits under `root`) only needs that root's hit list, not the whole sweep."""
+    for h in ((sweep or {}).get("roots") or {}).get(root, {}).get("hits") or []:
+        if _under(h.get("path") or "", path):
+            return h
+    return None
+
+
 def allowed_restart(node, unit, policy):
     for glob in (allow_section(policy).get("restart") or {}).get(node) or []:
         if fnmatch.fnmatch(unit, glob):
@@ -360,7 +405,7 @@ def cited_paths(text):
     return out
 
 
-def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None):
+def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, sweep=None):
     roots = [r for r in [repo, *add_dirs] if r]
     for p in cited_paths(text):
         if any(_under(p, r) for r in roots):
@@ -379,8 +424,24 @@ def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None):
             continue
         if any(_under(d, r) for r in roots):
             continue
-        if allowed_read_dir(d, policy) is None:
+        allow_root = allowed_read_dir(d, policy)
+        if allow_root is None:
             unresolved.append(f"dir({d}) is not under allow.read_dirs — {ALLOW_HINT}")
+            continue
+        # wq#1482 slice 5: a dir(X) tag proves X clean at PR time only — the daily
+        # read_dir_sweep.json is the ONLY evidence it is still clean now. Stale/missing
+        # sweep -> unresolved (fail closed, same shape as a missing allow: section). A
+        # fresh sweep with a hit under X -> refused with file:line, never a partial tag.
+        if sweep_stale(sweep):
+            unresolved.append(
+                f"dir({d}) read_dir_sweep is missing or >48h stale — fail closed "
+                f"(BROKER_GRANT_COVERAGE.md slice 5); run read_dir_sweep.py --policy --record")
+            continue
+        hit = sweep_hit_under(d, sweep, allow_root)
+        if hit:
+            refused.append(
+                f"dir({d}) fresh sweep hit at {hit.get('path')}:{hit.get('line')} "
+                f"[{hit.get('kind')}] — {ALLOW_HINT}")
             continue
         tags.append(("dir", d))
 
@@ -500,17 +561,19 @@ def ticket_text(ticket):
     return f"{ticket.get('title') or ''}\n{ticket.get('detail') or ''}"
 
 
-def derive(ticket, repo=None, add_dirs=(), roster=None, policy=None):
+def derive(ticket, repo=None, add_dirs=(), roster=None, policy=None, sweep=None):
     """Derived(tags, unresolved, refused) for one ticket dict (`title`, `detail`).
 
     `repo`/`add_dirs` are the reach the worker already has — a path inside them needs
-    no tag. `roster`/`policy` are injectable so a test never touches the live fleet.
+    no tag. `roster`/`policy`/`sweep` are injectable so a test never touches the live
+    fleet or the live read_dir_sweep.json.
     """
     text = ticket_text(ticket)
     roster = roster if roster is not None else load_roster()
     policy = policy if policy is not None else load_policy()
+    sweep = sweep if sweep is not None else load_sweep()
     tags, unresolved, refused = [], [], []
-    _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=policy)
+    _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=policy, sweep=sweep)
     _derive_ssh(text, roster, tags, unresolved, policy=policy)
     _derive_restart(text, roster, policy, tags, unresolved, refused)
     _derive_copy(text, roster, policy, tags, unresolved)

@@ -9,6 +9,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -173,6 +174,11 @@ def _hermetic_lint(monkeypatch):
     """hold_released() runs the lint; never let a unit test read the live fleet."""
     monkeypatch.setattr(capability_lint, "load_roster",
                         lambda refresh=False: capability_lint.Roster(names=["lumen"]))
+    # wq#1482 slice 5: dir(X) also needs a fresh read_dir_sweep.json now — fixture-in a
+    # no-hit sweep so this file's tests stay about hold-release, not the sweep gate.
+    monkeypatch.setattr(capability_lint, "load_sweep",
+                        lambda path=None: {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                           "roots": {}})
 
 
 def write_failure(renv, tid, **fields):

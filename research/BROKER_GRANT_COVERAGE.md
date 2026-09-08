@@ -113,7 +113,31 @@ not touched, no collision), `fworker.resolve_exec_grant`, guard.sh, the never-li
 | 2 | lint default `apply` (restart/ssh tags written); test iii forged-`Needs:` drill against the broker (every call a deny row, no grant.json for thor) | foreman | mode `apply-dir` | next |
 | 3 | live proof i: synthetic ticket citing `/home/lumen/research_prompts` → `dir` tag → runs → one-line doc PR lands; proof ii: `fleet-exec restart isis ollama` from the lumen-bin `main` checkout under the new allow row, audit `verified=true`; iv: `dispatchable` > 0 after | foreman + live | — | next |
 | 4 | lumen-bin `fleet_exec_policy.check_restart` honours `allow.restart` when the section is present (broker enforces allow, not only the lint; hand-authored tags bounded too) | lumen-bin | no allow section = old behaviour | parallel-dispatchable |
-| 5 | `lumen-read-dir-sweep.timer` daily → `harness/runtime/read_dir_sweep.json`; lint refuses `dir(X)` on a fresh hit under X and treats a >48h-stale sweep as unresolved | foreman + one unit | timer disabled = slice-1 behaviour | ticket |
+| 5 | `lumen-read-dir-sweep.timer` daily → `harness/runtime/read_dir_sweep.json`; lint refuses `dir(X)` on a fresh hit under X and treats a >48h-stale sweep as unresolved | foreman + one unit | timer disabled = slice-1 behaviour | BUILT |
+
+### 5.1 Slice 5 (wq#1482)
+`read_dir_sweep.py --policy --record` writes `harness/runtime/read_dir_sweep.json`
+(`{"ts": ..., "roots": {root: {"files", "hits"}}}`, gitignored — mutable runtime state,
+same convention as every other `runtime/` dir, wq#1253 #23) and `aq add`s one
+`read-dir-sweep`/`fresh-hit` row for any hit the previous record did not have.
+`capability_lint.load_sweep()`/`sweep_stale()`/`sweep_hit_under()` gate `dir(X)`:
+missing or >48h-stale record → `unresolved` (fail closed, same shape as an
+edited-away `allow:` section); a fresh record with a hit under X → `refused` with
+`path:line`; otherwise the existing allow-list tag. `lumen-read-dir-sweep.timer`
+(`OnCalendar=daily`, `Persistent=true`) is the daily trigger; disabling it reproduces
+slice-1 behaviour exactly once the record ages past 48h. Tests:
+`harness/tests/test_capability_allow.py` (the gate: fresh hit, stale, missing,
+`sweep_stale`/`sweep_hit_under` boundaries) and `harness/tests/test_read_dir_sweep.py`
+(`record_policy_sweep`: writes ts+roots, alerts only on hits not already recorded,
+handles a missing configured root without crashing or alerting).
+
+Also fixed as a byproduct: `dispatcher/tests/test_capability_replay.py`'s corpus
+predated slice 1's `allow:` restriction and still expected `/home/lumen/agent`,
+`/home/lumen/backups/wq-proposals`, and `/home/lumen/.npm-global` to auto-grant a
+`dir` tag (`dispatchable`) — none of the three is on the curated
+`allow.read_dirs` list, so live wq#1401/1402/1403/1407 replay now correctly lands
+all four in `needs_unresolved`. Corpus and assertions updated to match; this was a
+pre-existing gap in slice 1, not something slice 5 introduced.
 
 ## 6. Findings → tickets (same turn)
 - GITHUB_TOKEN burned into a transcript by the throwaway sweep — rotation is a Frank physical act (mint on his account); `agent/.env.bak.*` should be 0600-and-pruned or moved under `.secrets/`.

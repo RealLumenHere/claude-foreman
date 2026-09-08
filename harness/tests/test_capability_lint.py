@@ -11,6 +11,7 @@ Zero live services: the node roster and the broker policy are fixtures, and the
 filesystem questions go through capability_lint._isdir/_exists so a row's expected
 bucket is pinned to this file, not to the host's disk.
 """
+import datetime
 import os
 import sys
 
@@ -20,6 +21,14 @@ HARNESS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HARNESS)
 import capability_lint as cl  # noqa: E402
 import needs as needs_mod  # noqa: E402
+
+# wq#1482 slice 5: a dir(X) tag now also needs a fresh, no-hit read_dir_sweep.json.
+# This corpus is about the dir/restart/ssh/copy bucketing, not the sweep gate, so the
+# autouse fixture below hands `derive()` a fresh empty sweep by default; the sweep
+# gate itself (stale, fresh hit) is covered in test_capability_allow.py.
+def _fresh_sweep():
+    return {"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "roots": {}}
 
 # --- fixtures -------------------------------------------------------------------
 
@@ -69,6 +78,7 @@ def fs(monkeypatch):
     monkeypatch.setattr(cl, "_isdir", lambda p: p in EXISTING_DIRS)
     monkeypatch.setattr(cl, "_exists",
                         lambda p: p in EXISTING_DIRS or p in EXISTING_FILES)
+    monkeypatch.setattr(cl, "load_sweep", _fresh_sweep)
     monkeypatch.delenv("FOREMAN_NEEDS_LINT_MODE", raising=False)
 
 

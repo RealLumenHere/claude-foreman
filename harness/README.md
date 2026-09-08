@@ -44,6 +44,12 @@ below.
     systemd/wq-worker@.service  wq#1182: one-worker-per-node-slot template, flock-guarded
                              (WORKER_SLOT.md)
     wq_worker_slot.sh        wq#1182: ExecStart body for wq-worker@.service
+    systemd/lumen-read-dir-sweep.{service,timer}  wq#1482: daily allow.read_dirs secret
+                             sweep -> runtime/read_dir_sweep.json (BROKER_GRANT_COVERAGE.md
+                             slice 5); capability_lint.py's dir(X) gate fails closed if
+                             this record is missing or >48h stale
+    read_dir_sweep.py       wq#1441/wq#1482: the sweep itself (masked hits); --record is
+                             the timer's command (writes the json, aq-alerts new hits)
     prompts/worker.md       worker prompt template
     prompts/fire-diagnosis.md, prompts/fire-apply.md   fire-mode phase prompts (FIRE_MODE.md)
     tests/                  pytest suite (zero Anthropic quota)

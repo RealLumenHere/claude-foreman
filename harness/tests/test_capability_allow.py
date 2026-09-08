@@ -5,6 +5,7 @@ policy's `allow:` section names; `never` is checked first and always wins (refus
 never "not allowed"); a target that is neither lands in `unresolved` with the
 propose-don't-deploy hint. Fixtures only — no roster, no disk, no policy file.
 """
+import datetime
 import os
 import sys
 
@@ -13,6 +14,19 @@ import pytest
 HARNESS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HARNESS)
 import capability_lint as cl  # noqa: E402
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def fresh_sweep(roots=None):
+    return {"ts": _iso(datetime.datetime.now(datetime.timezone.utc)), "roots": roots or {}}
+
+
+def stale_sweep(roots=None, age_h=49):
+    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=age_h)
+    return {"ts": _iso(old), "roots": roots or {}}
 
 ROSTER = cl.Roster(names=["lumen", "isis", "thor", "anubis", "maat"],
                    ips={"100.64.0.5": "isis"})
@@ -36,10 +50,12 @@ FILES = {"/home/lumen/agent/AGENTS.md", "/home/lumen/research_prompts/x.md",
 def fs(monkeypatch):
     monkeypatch.setattr(cl, "_isdir", lambda p: p in DIRS)
     monkeypatch.setattr(cl, "_exists", lambda p: p in DIRS or p in FILES)
+    monkeypatch.setattr(cl, "load_sweep", fresh_sweep)
 
 
-def derive(detail, policy=POLICY):
-    return cl.derive({"title": "", "detail": detail}, roster=ROSTER, policy=policy)
+def derive(detail, policy=POLICY, sweep=None):
+    return cl.derive({"title": "", "detail": detail}, roster=ROSTER, policy=policy,
+                     sweep=sweep)
 
 
 # --- dir --------------------------------------------------------------------------
@@ -57,6 +73,69 @@ def test_dir_outside_allow_is_unresolved_with_the_hint():
     assert d.tag_strings == []
     assert d.unresolved == ["dir(/home/lumen/agent) is not under allow.read_dirs — "
                             + cl.ALLOW_HINT]
+
+
+# --- read_dir_sweep gate (wq#1441 §2.3, wq#1482 slice 5) --------------------------
+# A dir(X) tag proves X clean at PR time only; a secret written later under an allowed
+# root (the wq#1466 class) must be caught on the next sweep, not silently re-granted.
+
+def test_dir_fresh_hit_is_refused_with_file_line():
+    sweep = fresh_sweep({"/home/lumen/instructions":
+                         {"files": 1, "hits": [{"path": "/home/lumen/instructions/playbooks/x.md",
+                                                "line": 12, "kind": "gh_pat", "excerpt": "ghp_…"}]}})
+    d = derive("read /home/lumen/instructions/playbooks then report", sweep=sweep)
+    assert d.tag_strings == []
+    assert d.refused == [
+        "dir(/home/lumen/instructions/playbooks) fresh sweep hit at "
+        "/home/lumen/instructions/playbooks/x.md:12 [gh_pat] — " + cl.ALLOW_HINT]
+
+
+def test_dir_hit_outside_the_cited_subdir_still_tags():
+    """A hit elsewhere under the allow root, but not under the cited dir itself, does
+    not block this narrower dir(X)."""
+    sweep = fresh_sweep({"/home/lumen/instructions":
+                         {"files": 1, "hits": [{"path": "/home/lumen/instructions/other/x.md",
+                                                "line": 1, "kind": "gh_pat", "excerpt": "ghp_…"}]}})
+    d = derive("read /home/lumen/instructions/playbooks then report", sweep=sweep)
+    assert d.tag_strings == ["dir(/home/lumen/instructions/playbooks)"]
+    assert d.refused == []
+
+
+def test_dir_stale_sweep_is_unresolved_fail_closed():
+    sweep = stale_sweep()
+    d = derive("read /home/lumen/instructions/playbooks then report", sweep=sweep)
+    assert d.tag_strings == [] and d.refused == []
+    assert d.unresolved == [
+        "dir(/home/lumen/instructions/playbooks) read_dir_sweep is missing or >48h "
+        "stale — fail closed (BROKER_GRANT_COVERAGE.md slice 5); run "
+        "read_dir_sweep.py --policy --record"]
+
+
+def test_dir_missing_sweep_is_unresolved_fail_closed():
+    d = derive("read /home/lumen/instructions/playbooks then report", sweep={})
+    assert d.tag_strings == [] and d.refused == []
+    assert "read_dir_sweep is missing or >48h stale" in d.unresolved[0]
+
+
+def test_sweep_stale_boundary():
+    assert cl.sweep_stale(None) is True
+    assert cl.sweep_stale({}) is True
+    assert cl.sweep_stale({"ts": "not-a-timestamp"}) is True
+    assert cl.sweep_stale(fresh_sweep()) is False
+    assert cl.sweep_stale(stale_sweep(age_h=48.5)) is True
+    assert cl.sweep_stale(stale_sweep(age_h=1)) is False
+
+
+def test_sweep_hit_under_scopes_to_the_named_root():
+    sweep = fresh_sweep({
+        "/home/lumen/instructions": {"files": 1, "hits": [
+            {"path": "/home/lumen/instructions/x.md", "line": 3, "kind": "aws", "excerpt": "AKIA…"}]},
+        "/home/lumen/research_prompts": {"files": 0, "hits": []},
+    })
+    assert cl.sweep_hit_under("/home/lumen/instructions", sweep,
+                             "/home/lumen/instructions")["line"] == 3
+    assert cl.sweep_hit_under("/home/lumen/instructions", sweep,
+                             "/home/lumen/research_prompts") is None
 
 
 def test_deny_list_still_beats_allow():

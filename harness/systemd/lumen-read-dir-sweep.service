@@ -1,0 +1,27 @@
+# lumen-read-dir-sweep.service — wq#1482 (research/BROKER_GRANT_COVERAGE.md slice 5).
+#
+# WHY: harness/read_dir_sweep.py (wq#1441, PR #342) proves an allow.read_dirs root
+# clean at PR time only — a secret written later under an already-allowed root (the
+# wq#1466 class: `dir(/home/lumen/sentinel/config)` was auto-granted, the dir carried
+# 38 literal bearer tokens) would otherwise be re-granted forever on the next pass.
+# This unit is the freshness half of the fix: it re-sweeps daily and records the
+# result at harness/runtime/read_dir_sweep.json so capability_lint.py can check "is
+# this still clean NOW", not just "was it clean once". See lumen-read-dir-sweep.timer
+# for the schedule and capability_lint.py's sweep_stale()/sweep_hit_under() for the
+# gate this record feeds (a fresh hit under X -> dir(X) refused; a stale/missing
+# record -> dir(X) unresolved, fail closed — never a silent re-grant).
+#
+# Rollback: disable the timer. capability_lint.py then treats every dir(X) as
+# perpetually stale (fail closed to unresolved, never open — see slice 1's `allow:`
+# fail-closed default for the same shape one layer up).
+[Unit]
+Description=Lumen read_dir_sweep — daily allow.read_dirs secret sweep (wq#1482)
+Documentation=file:///home/lumen/foreman/research/BROKER_GRANT_COVERAGE.md
+
+[Service]
+Type=oneshot
+User=lumen
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/read_dir_sweep.py --policy --record
+TimeoutStartSec=300
