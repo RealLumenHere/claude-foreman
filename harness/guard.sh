@@ -123,6 +123,24 @@ Bash)
     if printf '%s' "$target" | grep -qE '\bdocker\b' && ! printf '%s' "$target" | grep -qE '\bdocker\b +(ps|logs)\b'; then
       block "docker denied except ps/logs" "$RAW_CMD"
     fi
+    # wq#1297: a worker running unattended (this hook only fires for fworker/cron
+    # spawns, never a human's interactive session) is a bigger bridge threat than any
+    # monitor — an ollama pull can be tens of GB, and unlike speedtest-tracker
+    # (ISSUE-LOG #26) it was on no exclusion list. `docker pull` already dies on the
+    # generic docker-denied rule above; podman and git-lfs have no such umbrella rule,
+    # so each large-pull surface gets its own line here. These pulls are manual/
+    # off-peak-only (Frank at a terminal), never something a headless worker decides
+    # to run — there is no size threshold to compute here because there is no
+    # allowed size; the refusal is unconditional in this context.
+    if printf '%s' "$target" | grep -qE '\bollama\b +pull\b'; then
+      block "ollama pull denied from cron/fworker context (wq#1297: large pulls are manual off-peak only — bridge risk)" "$RAW_CMD"
+    fi
+    if printf '%s' "$target" | grep -qE '\bpodman\b +pull\b'; then
+      block "podman pull denied from cron/fworker context (wq#1297: large pulls are manual off-peak only — bridge risk)" "$RAW_CMD"
+    fi
+    if printf '%s' "$target" | grep -qE '\bgit\b.*\blfs\b +(pull|fetch)\b'; then
+      block "git lfs pull/fetch denied from cron/fworker context (wq#1297: large pulls are manual off-peak only — bridge risk)" "$RAW_CMD"
+    fi
     if printf '%s' "$target" | grep -qE '\brm\b'; then
       HAS_R=0; HAS_F=0
       printf '%s' "$target" | grep -qE '\brm\b[^|;]*(-[a-zA-Z]*r[a-zA-Z]*\b|--recursive\b)' && HAS_R=1
