@@ -138,3 +138,21 @@ Zero writes: no wq calls, no notes, no status changes.
    from the ledger into tickets as `Liveness:` lines.
 4: ticket-generation lint refuses to file a frank-* ticket without a `Liveness:` line
    or with a premise the ledger already records as done.
+
+## 11. Findings from the build (2026-09-07)
+
+- wq#1133 / wq#1296 were reported CLOSED by the prior session; both are still
+  `blocked`, `done_at` NULL. `wq done` refuses on an unclaimed ticket (wq:1546) and
+  the orchestrator read `tail -1` as success. Ticketed wq#1479. Consequence for
+  Slice 3: the close path is claim-then-done, never done alone, and MUST read rc.
+- Semantic trap caught on the first ticket-authored tag (wq#1478): a `Liveness:`
+  probe must mean "the premise is DONE", not "the code that checks it exists" —
+  the first draft would have auto-cleared a live decision. Slice 4's lint must
+  reject a liveness probe that can be SATISFIED without the ticket's ask being met
+  (rule of thumb: the probe's SATISFIED detail should read as the ticket's title in
+  the past tense).
+- Six tickets sit in status `frank_gated` (wq#662 shape) which the first sweep
+  predicate missed; OPEN_STATUSES now includes it.
+- `/home/lumen/.secrets/cf-email-routing.token` exists and verifies 200 while
+  claude_credentials.md listed it as PENDING mint — doc drift, fixed same session
+  and recorded in the ledger.

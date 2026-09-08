@@ -27,7 +27,7 @@ import liveness  # noqa: E402
 
 WQ_DB = os.environ.get("WQ_DB", "/home/lumen/agents/work-queue/queue.db")
 LEDGER = os.environ.get("FOREMAN_LIVENESS_LEDGER", os.path.join(HERE, "liveness_ledger.yaml"))
-OPEN_STATUSES = ("open", "blocked", "pending_review")
+OPEN_STATUSES = ("open", "blocked", "pending_review", "frank_gated")
 
 LABEL = {liveness.SATISFIED: "STALE", liveness.STILL_BLOCKED: "STILL_BLOCKED",
          liveness.UNKNOWN: "UNKNOWN", capability.LIVENESS_NO_TAG: "NO_TAG"}
