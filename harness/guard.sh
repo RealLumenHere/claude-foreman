@@ -113,7 +113,11 @@ Bash)
     if printf '%s' "$target" | grep -qE 'claude +setup-token\b'; then
       block "claude setup-token denied (rotates the account refresh token, GH #48786)" "$RAW_CMD"
     fi
-    if printf '%s' "$target" | grep -qE '(^|[;&|[:space:]])(ANTHROPIC_API_KEY|ANTHROPIC_BASE_URL)='; then
+    # Same leading-context class as the denied-verb scan above: the old
+    # [;&|[:space:]] class saw nothing after an opening quote, so the assignment
+    # wrapped in `ssh host '...'` or `bash -c "..."` re-injected the key unblocked
+    # (wq#879 fixed only the verb scan, wq#1548 closes this twin).
+    if printf '%s' "$target" | grep -qE '(^|[^[:alnum:]_./-])(ANTHROPIC_API_KEY|ANTHROPIC_BASE_URL)='; then
       block "in-command re-injection of ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL denied" "$RAW_CMD"
     fi
     if printf '%s' "$target" | grep -qE '/home/lumen/\.secrets\b'; then
