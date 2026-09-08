@@ -14,7 +14,13 @@ Covers:
      edit — the one guard this tool exists to enforce.
   C. --apply preserves the target's executable bit and rejects a candidate that fails to
      parse before it ever reaches the live path.
+  D. (wq#1544) a SECOND origin advance after a successful --apply still applies. --apply never
+     moves HEAD, so its own prior write leaves the file permanently "modified" against HEAD;
+     reading that as WIP made this a one-shot tool that self-locked (wq#1541's repro, and the
+     state live /home/lumen/bin was already stuck in). B still has to refuse, so the two cases
+     are asserted against the same fixture shape.
 """
+import json
 import os
 import subprocess
 import sys
@@ -49,26 +55,37 @@ def make_pair(tmp_path, script_body="#!/usr/bin/env bash\necho v1\n"):
     return origin, primary
 
 
-def run(*args):
-    return subprocess.run([sys.executable, ENSURE, *args], capture_output=True, text=True)
+def push_version(tmp_path, origin, body, msg):
+    """Land a new version on origin from a SECOND clone — the primary's checkout never sees it
+    until this tool runs (mirrors wq#1536 landing on origin/main while /home/lumen/bin sat on
+    an older branch)."""
+    other = tmp_path / "other"
+    if other.exists():
+        git(other, "pull", "origin", "main")
+    else:
+        git(tmp_path, "clone", str(origin), str(other))
+        git(other, "config", "user.email", "test@example.com")
+        git(other, "config", "user.name", "test")
+    (other / "tool").write_text(body)
+    git(other, "add", "tool")
+    git(other, "commit", "-m", msg)
+    git(other, "push", "origin", "main")
+
+
+def args_for(primary):
+    return ["--repo", str(primary), "--path", "tool", "--branch", "main", "--remote", "origin"]
+
+
+def run(*args, env=None):
+    return subprocess.run([sys.executable, ENSURE, *args], capture_output=True, text=True,
+                          env={**os.environ, **(env or {})})
 
 
 def test_check_and_apply_sync_to_origin(tmp_path):
     origin, primary = make_pair(tmp_path)
+    push_version(tmp_path, origin, "#!/usr/bin/env bash\necho v2\n", "v2")
 
-    # Someone else pushes a newer version straight to a second clone, landing it on origin —
-    # the primary's checkout never sees it until this tool runs (mirrors wq#1536 landing on
-    # origin/main while /home/lumen/bin sat on an older branch).
-    other = tmp_path / "other"
-    git(tmp_path, "clone", str(origin), str(other))
-    git(other, "config", "user.email", "test@example.com")
-    git(other, "config", "user.name", "test")
-    (other / "tool").write_text("#!/usr/bin/env bash\necho v2\n")
-    git(other, "add", "tool")
-    git(other, "commit", "-m", "v2")
-    git(other, "push", "origin", "main")
-
-    common = ["--repo", str(primary), "--path", "tool", "--branch", "main", "--remote", "origin"]
+    common = args_for(primary)
 
     p = run("--check", *common)
     assert p.returncode == 1, p.stdout + p.stderr
@@ -95,20 +112,13 @@ def test_check_and_apply_sync_to_origin(tmp_path):
 
 def test_apply_refuses_when_live_file_is_locally_dirty(tmp_path):
     origin, primary = make_pair(tmp_path)
-    other = tmp_path / "other"
-    git(tmp_path, "clone", str(origin), str(other))
-    git(other, "config", "user.email", "test@example.com")
-    git(other, "config", "user.name", "test")
-    (other / "tool").write_text("#!/usr/bin/env bash\necho v2\n")
-    git(other, "add", "tool")
-    git(other, "commit", "-m", "v2")
-    git(other, "push", "origin", "main")
+    push_version(tmp_path, origin, "#!/usr/bin/env bash\necho v2\n", "v2")
 
     # The primary has its OWN uncommitted edit to the same file — an in-flight ticket's WIP
     # that exists nowhere else and must never be silently overwritten.
     (primary / "tool").write_text("#!/usr/bin/env bash\necho WIP-do-not-clobber\n")
 
-    common = ["--repo", str(primary), "--path", "tool", "--branch", "main", "--remote", "origin"]
+    common = args_for(primary)
     p = run("--apply", *common)
     assert p.returncode == 2, p.stdout + p.stderr
     assert "uncommitted local edit" in p.stderr
@@ -117,17 +127,66 @@ def test_apply_refuses_when_live_file_is_locally_dirty(tmp_path):
 
 def test_apply_rejects_unparseable_candidate(tmp_path):
     origin, primary = make_pair(tmp_path)
-    other = tmp_path / "other"
-    git(tmp_path, "clone", str(origin), str(other))
-    git(other, "config", "user.email", "test@example.com")
-    git(other, "config", "user.name", "test")
-    (other / "tool").write_text("#!/usr/bin/env bash\nif [ 1 -eq 1\necho unterminated\n")
-    git(other, "add", "tool")
-    git(other, "commit", "-m", "broken")
-    git(other, "push", "origin", "main")
+    push_version(tmp_path, origin, "#!/usr/bin/env bash\nif [ 1 -eq 1\necho unterminated\n",
+                 "broken")
 
-    common = ["--repo", str(primary), "--path", "tool", "--branch", "main", "--remote", "origin"]
+    common = args_for(primary)
     original = (primary / "tool").read_text()
     p = run("--apply", *common)
     assert p.returncode == 2, p.stdout + p.stderr
     assert (primary / "tool").read_text() == original
+
+
+V2 = "#!/usr/bin/env bash\necho v2\n"
+V3 = "#!/usr/bin/env bash\necho v3\n"
+
+
+def test_second_origin_advance_still_applies_after_a_first_apply(tmp_path):
+    """wq#1544: --apply must not self-lock on its own prior write."""
+    origin, primary = make_pair(tmp_path)
+    common = args_for(primary)
+
+    push_version(tmp_path, origin, V2, "v2")
+    p = run("--apply", *common)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (primary / "tool").read_text() == V2
+
+    # HEAD deliberately stayed put, so the file this tool just wrote IS modified against it —
+    # dirty, but ours, and that distinction is the whole fix.
+    assert git(primary, "status", "--porcelain", "--", "tool").strip()
+    st = json.loads(run("--check", "--json", *common).stdout)
+    assert st["dirty"] and not st["foreign_edit"], st
+
+    push_version(tmp_path, origin, V3, "v3")
+    p = run("--apply", *common)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (primary / "tool").read_text() == V3
+
+    # ...and the guard is still armed: a genuine third-party edit on top of a synced file is
+    # refused exactly as before.
+    (primary / "tool").write_text("#!/usr/bin/env bash\necho WIP-do-not-clobber\n")
+    push_version(tmp_path, origin, "#!/usr/bin/env bash\necho v4\n", "v4")
+    p = run("--apply", *common)
+    assert p.returncode == 2, p.stdout + p.stderr
+    assert "uncommitted local edit" in p.stderr
+    assert (primary / "tool").read_text() == "#!/usr/bin/env bash\necho WIP-do-not-clobber\n"
+
+
+def test_prior_write_is_recognized_from_the_sidecar_alone(tmp_path):
+    """The remote-history lookup alone could explain a self-written file, so pin the sidecar
+    independently: with the history window closed to one commit, only the recorded write can
+    tell our own v2 output apart from somebody's WIP."""
+    origin, primary = make_pair(tmp_path)
+    common = args_for(primary)
+    narrow = {"WQ1537_LOG_LIMIT": "1"}
+
+    push_version(tmp_path, origin, V2, "v2")
+    assert run("--apply", *common, env=narrow).returncode == 0
+
+    push_version(tmp_path, origin, V3, "v3")
+    st = json.loads(run("--check", "--json", *common, env=narrow).stdout)
+    assert st["self_written"] and not st["in_remote_history"], st
+
+    p = run("--apply", *common, env=narrow)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (primary / "tool").read_text() == V3

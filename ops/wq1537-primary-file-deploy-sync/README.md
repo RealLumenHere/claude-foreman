@@ -27,10 +27,19 @@ of truth already exists there, reviewed and merged, so there is nothing to re-de
 
 `ensure_primary_file_deploy_sync.py`:
 - `--check` reports whether `<repo>/<path>` matches `origin/<branch>:<path>`.
-- `--apply` refuses if the live file has an uncommitted local edit (the one guard that
-  matters — that content exists nowhere else), otherwise backs it up, writes a verified
+- `--apply` refuses if the live file has a *foreign* uncommitted local edit (the one guard
+  that matters — that content exists nowhere else), otherwise backs it up, writes a verified
   candidate (syntax-checked before it ever reaches the live path) with the target's
   executable bit, and rolls back if a post-write re-check fails.
+- Foreign, per wq#1544: because `--apply` never moves HEAD, the file it writes stays
+  "modified" against HEAD forever, so a bare porcelain check made this a one-shot tool that
+  refused its own prior output on the next origin advance (wq#1541 repro; live
+  `/home/lumen/bin` was already stuck there). An uncommitted diff is only foreign when the
+  live blob is neither one this tool recorded writing (sidecar
+  `<git-dir>/wq1537-deploy-sync-state.json` — inside the git dir, so it dirties no worktree)
+  nor one this path already had in the last `WQ1537_LOG_LIMIT` (50) commits of the remote
+  branch. `--check --json` reports `dirty`, `self_written`, `in_remote_history`,
+  `foreign_edit` so the distinction is visible without re-deriving it.
 - Never touches HEAD, the branch, or any other path — the class of deploy step wq#1537 asked
   for: one that does not depend on the primary's HEAD (wq#1313 lineage).
 
