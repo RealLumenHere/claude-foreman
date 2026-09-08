@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#1482 read_dir_sweep daily — re-sweep allow.read_dirs roots so a secret written after PR time is caught before the next grant
+
+[Timer]
+OnCalendar=*-*-* 05:15:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=lumen-read-dir-sweep.service
+
+[Install]
+WantedBy=timers.target

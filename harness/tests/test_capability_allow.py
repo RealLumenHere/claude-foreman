@@ -5,6 +5,7 @@ policy's `allow:` section names; `never` is checked first and always wins (refus
 never "not allowed"); a target that is neither lands in `unresolved` with the
 propose-don't-deploy hint. Fixtures only — no roster, no disk, no policy file.
 """
+import datetime
 import os
 import sys
 
@@ -38,8 +39,27 @@ def fs(monkeypatch):
     monkeypatch.setattr(cl, "_exists", lambda p: p in DIRS or p in FILES)
 
 
-def derive(detail, policy=POLICY):
-    return cl.derive({"title": "", "detail": detail}, roster=ROSTER, policy=policy)
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def fresh_sweep(hits_by_root=None):
+    """A read_dir_sweep.json shaped exactly like harness/read_dir_sweep.write_runtime's
+    output, timestamped now (never stale), with a hit list per allow.read_dirs root."""
+    hits_by_root = hits_by_root or {}
+    ts = _iso(datetime.datetime.now(datetime.timezone.utc))
+    roots = {r: {"files": 0, "hits": hits_by_root.get(r, [])}
+             for r in POLICY["allow"]["read_dirs"]}
+    return {"ts": ts, "roots": roots}
+
+
+def derive(detail, policy=POLICY, sweep=None):
+    """wq#1482: every dir-tagging test in this file needs a fresh, hitless sweep to
+    reach the tag bucket at all — default to one so only the sweep-gate tests below
+    need to construct their own."""
+    sweep = sweep if sweep is not None else fresh_sweep()
+    return cl.derive({"title": "", "detail": detail}, roster=ROSTER, policy=policy,
+                     sweep=sweep)
 
 
 # --- dir --------------------------------------------------------------------------
@@ -71,6 +91,82 @@ def test_missing_allow_section_allows_nothing():
     pol = {k: v for k, v in POLICY.items() if k != "allow"}
     d = derive("read /home/lumen/research_prompts/x.md", policy=pol)
     assert d.tag_strings == [] and "allow.read_dirs" in d.unresolved[0]
+
+
+# --- read_dir_sweep gate (wq#1482) -------------------------------------------------
+
+def test_dir_refused_on_fresh_sweep_hit():
+    """A hit under the cited dir in the latest sweep refuses the tag with file:line,
+    instead of granting it — the wq#1466 class this ticket exists for."""
+    hit = {"path": "/home/lumen/instructions/playbooks/leaked.env", "line": 3,
+           "kind": "gh_pat", "excerpt": "GITHUB_TOKEN=ghp_…"}
+    sweep = fresh_sweep({"/home/lumen/instructions": [hit]})
+    d = derive("read /home/lumen/instructions/playbooks then report", sweep=sweep)
+    assert d.tag_strings == []
+    assert d.refused == ["dir(/home/lumen/instructions/playbooks) fresh secret-sweep "
+                         "hit at /home/lumen/instructions/playbooks/leaked.env:3"]
+
+
+def test_dir_hit_outside_cited_subdir_still_tags():
+    """A hit elsewhere under the allow root, but NOT under the cited directory, must
+    not refuse — the gate is scoped to `dir(X)`, not the whole allow root."""
+    hit = {"path": "/home/lumen/instructions/executive/other.env", "line": 1,
+           "kind": "basename", "excerpt": "other.env"}
+    sweep = fresh_sweep({"/home/lumen/instructions": [hit]})
+    d = derive("read /home/lumen/instructions/playbooks then report", sweep=sweep)
+    assert d.tag_strings == ["dir(/home/lumen/instructions/playbooks)"]
+    assert d.refused == []
+
+
+def test_dir_unresolved_when_sweep_missing():
+    """No sweep at all (timer never ran) fails closed: unresolved, not tagged. Calls
+    `_derive_dirs` directly with `sweep=None` — the `derive()` helper above defaults a
+    None sweep to fresh, so only a direct call exercises the true "no sweep" path."""
+    tags, unresolved, refused = [], [], []
+    cl._derive_dirs("read /home/lumen/instructions/playbooks then report", None, (),
+                    tags, unresolved, refused, policy=POLICY, sweep=None)
+    assert tags == []
+    assert len(unresolved) == 1
+    assert unresolved[0].startswith(
+        "dir(/home/lumen/instructions/playbooks) read_dir_sweep is missing or >48h stale")
+
+
+def test_dir_unresolved_when_sweep_stale():
+    """A sweep older than 48h fails closed even though it exists and is well-formed."""
+    stale_ts = _iso(datetime.datetime.now(datetime.timezone.utc)
+                    - datetime.timedelta(hours=49))
+    sweep = fresh_sweep()
+    sweep["ts"] = stale_ts
+    d = derive("read /home/lumen/instructions/playbooks then report", sweep=sweep)
+    assert d.tag_strings == []
+    assert len(d.unresolved) == 1
+    assert "read_dir_sweep is missing or >48h stale" in d.unresolved[0]
+
+
+def test_sweep_stale_boundary():
+    assert cl.sweep_stale(None) is True
+    assert cl.sweep_stale({"ts": "not-a-timestamp"}) is True
+    assert cl.sweep_stale(fresh_sweep()) is False
+    old = fresh_sweep()
+    old["ts"] = _iso(datetime.datetime.now(datetime.timezone.utc)
+                     - datetime.timedelta(hours=47))
+    assert cl.sweep_stale(old) is False
+    old["ts"] = _iso(datetime.datetime.now(datetime.timezone.utc)
+                     - datetime.timedelta(hours=49))
+    assert cl.sweep_stale(old) is True
+
+
+def test_sweep_hit_under_scopes_to_directory():
+    hit = {"path": "/home/lumen/instructions/playbooks/leaked.env", "line": 3,
+           "kind": "gh_pat", "excerpt": "x"}
+    sweep = fresh_sweep({"/home/lumen/instructions": [hit]})
+    assert cl.sweep_hit_under("/home/lumen/instructions/playbooks",
+                              "/home/lumen/instructions", sweep) == \
+        ("/home/lumen/instructions/playbooks/leaked.env", 3)
+    assert cl.sweep_hit_under("/home/lumen/instructions/executive",
+                              "/home/lumen/instructions", sweep) is None
+    assert cl.sweep_hit_under("/home/lumen/instructions", "/home/lumen/instructions",
+                              None) is None
 
 
 # --- restart ----------------------------------------------------------------------

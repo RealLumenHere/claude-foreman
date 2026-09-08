@@ -170,9 +170,21 @@ def test_cmd_list_stuck(renv, capsys):
 
 @pytest.fixture(autouse=True)
 def _hermetic_lint(monkeypatch):
-    """hold_released() runs the lint; never let a unit test read the live fleet."""
+    """hold_released() runs the lint; never let a unit test read the live fleet.
+
+    wq#1482: also stub `load_sweep` to a fresh, hitless sweep over the real
+    allow.read_dirs roots, so this file's hold/release corpus (which predates the
+    sweep gate) is not turned into permanent unresolved holds by a runtime sweep
+    file this test suite never writes."""
+    import datetime
     monkeypatch.setattr(capability_lint, "load_roster",
                         lambda refresh=False: capability_lint.Roster(names=["lumen"]))
+    policy = capability_lint.load_policy()
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    roots = {r: {"files": 0, "hits": []}
+             for r in (policy.get("allow") or {}).get("read_dirs") or []}
+    monkeypatch.setattr(capability_lint, "load_sweep",
+                        lambda path=None: {"ts": ts, "roots": roots})
 
 
 def write_failure(renv, tid, **fields):

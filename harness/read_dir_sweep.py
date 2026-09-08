@@ -16,15 +16,21 @@ printed is a credential burned (instincts tier 0 MASK BEFORE PRINT).
     python3 harness/read_dir_sweep.py <root> [<root>...]      # human table, exit 1 on hits
     python3 harness/read_dir_sweep.py --policy [--json]       # every allow.read_dirs root
 """
+import datetime
 import fnmatch
 import json
 import os
 import re
+import subprocess
 import sys
 
 HARNESS_DIR = os.path.dirname(os.path.abspath(__file__))
 POLICY_PATH = os.environ.get("FOREMAN_FLEET_EXEC_POLICY",
                              os.path.join(HARNESS_DIR, "fleet-exec-policy.yaml"))
+RUNTIME_PATH = os.environ.get("FOREMAN_READ_DIR_SWEEP_RUNTIME",
+                              os.path.join(HARNESS_DIR, "runtime", "read_dir_sweep.json"))
+AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "/home/lumen/bin/aq")
+AQ_SOURCE = "read-dir-sweep"
 
 # file names that are a credential by convention regardless of content
 BASENAME_GLOBS = ("*.env", ".env*", "*.token", "*.key", "*.pem", "id_*", "*.p12", "*.pfx",
@@ -98,6 +104,76 @@ def policy_read_dirs(path=POLICY_PATH):
     return list(((data.get("allow") or {}).get("read_dirs")) or [])
 
 
+def _now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _sweep_report(roots):
+    report = {}
+    for root in roots:
+        if not os.path.isdir(root):
+            report[root] = {"error": "not a directory", "files": 0, "hits": []}
+            continue
+        hits, nfiles = sweep_root(root)
+        report[root] = {"files": nfiles, "hits": [
+            {"path": p, "line": ln, "kind": k, "excerpt": ex} for p, ln, k, ex in hits]}
+    return report
+
+
+def _prev_hit_keys(prev_roots):
+    keys = set()
+    for root, r in (prev_roots or {}).items():
+        for h in r.get("hits") or []:
+            keys.add((root, h.get("path"), h.get("line"), h.get("kind")))
+    return keys
+
+
+def write_runtime(roots=None, runtime_path=None):
+    """Sweep every `allow.read_dirs` root (or `roots`), write the masked report to
+    `runtime_path` (wq#1482: lumen-read-dir-sweep.timer's daily payload), and return
+    `(report, new_hits)`. `new_hits` are hits whose (root, path, line, kind) was not
+    present in the PREVIOUS runtime write, so a rerun of an already-known hit does
+    not re-alert every day — only a hit that is new since the last sweep does."""
+    runtime_path = runtime_path or RUNTIME_PATH
+    roots = list(roots) if roots is not None else policy_read_dirs()
+    prev = None
+    try:
+        with open(runtime_path) as f:
+            prev = json.load(f)
+    except Exception:
+        prev = None
+    prev_keys = _prev_hit_keys((prev or {}).get("roots"))
+    report = _sweep_report(roots)
+    new_hits = []
+    for root, r in report.items():
+        for h in r.get("hits") or []:
+            key = (root, h.get("path"), h.get("line"), h.get("kind"))
+            if key not in prev_keys:
+                new_hits.append((root, h))
+    os.makedirs(os.path.dirname(runtime_path), exist_ok=True)
+    with open(runtime_path, "w") as f:
+        json.dump({"ts": _now_iso(), "roots": report}, f, indent=1, sort_keys=True)
+    return report, new_hits
+
+
+def aq_alert(new_hits, aq_bin=None):
+    """aq add one row per NEW masked hit (source=read-dir-sweep). Fail-open: no aq
+    binary or a failed call must never break the sweep itself (instinct: mask before
+    print — the excerpt handed to aq is already masked by sweep_root)."""
+    aq_bin = aq_bin or AQ_BIN
+    if not new_hits or not os.path.exists(aq_bin):
+        return
+    for root, h in new_hits:
+        title = f"read_dir_sweep: fresh hit under {root}"
+        body = f"{h.get('path')}:{h.get('line')} [{h.get('kind')}] {h.get('excerpt')}"
+        key = f"{root}:{h.get('path')}:{h.get('line')}"
+        try:
+            subprocess.run([aq_bin, "add", AQ_SOURCE, key, title, body],
+                           check=False, timeout=15)
+        except Exception:
+            pass
+
+
 def _main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="secret sweep of read-grant roots (masked output)")
@@ -105,23 +181,23 @@ def _main(argv=None):
     ap.add_argument("--policy", action="store_true", help="sweep every allow.read_dirs root")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--max-lines", type=int, default=40, help="hits shown per root (text mode)")
+    ap.add_argument("--write-runtime", action="store_true",
+                    help="sweep every allow.read_dirs root, write runtime/read_dir_sweep.json, "
+                         "aq-alert on any hit new since the last write (wq#1482)")
     a = ap.parse_args(argv)
+    if a.write_runtime:
+        report, new_hits = write_runtime()
+        aq_alert(new_hits)
+        total = sum(len(r.get("hits") or []) for r in report.values())
+        print(f"read_dir_sweep: wrote {RUNTIME_PATH} — {total} hits, {len(new_hits)} new")
+        return 1 if total else 0
     roots = list(a.roots)
     if a.policy:
         roots += policy_read_dirs()
     if not roots:
         ap.error("give at least one root or --policy")
-    total = 0
-    report = {}
-    for root in roots:
-        if not os.path.isdir(root):
-            report[root] = {"error": "not a directory", "files": 0, "hits": []}
-            total += 1
-            continue
-        hits, nfiles = sweep_root(root)
-        total += len(hits)
-        report[root] = {"files": nfiles, "hits": [
-            {"path": p, "line": ln, "kind": k, "excerpt": ex} for p, ln, k, ex in hits]}
+    report = _sweep_report(roots)
+    total = sum(1 if "error" in r else len(r.get("hits") or []) for r in report.values())
     if a.json:
         print(json.dumps(report, indent=1, sort_keys=True))
     else:
