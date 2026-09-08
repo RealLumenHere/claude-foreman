@@ -53,6 +53,15 @@ DIR_DENY_EXACT = ("/home/lumen", "/")
 DIR_DENY_PATH_GLOBS = ("/home/lumen/agents/work-queue/queue.db*",)
 DIR_DENY_BASENAME_GLOBS = ("*.env", "*.token", "*.key", "*.pem", "id_*")
 
+# wq#1535: closure artifacts. A ticket may cite a file that the WORK creates — the
+# factory's yellow-approval touch file is the shape that hit us (14 promoter tickets
+# stuck on `cited path .../approvals/F<plan>.approved does not exist`). Such a path is
+# not a guess about reach: the reach a worker needs to create it is its parent
+# directory, which must already exist and still passes deny/allow/sweep like any other
+# dir. Hard-coded next to the deny list for the same reason the deny list is: an edited
+# policy file must not be able to widen this. Full-path globs, fnmatch.
+CLOSURE_ARTIFACT_GLOBS = ("/home/lumen/instructions/approvals/*.approved",)
+
 # fworker.py:820 — the same literal set assert_spawn_paths refuses on, so the lint and
 # the spawn assertion can never disagree about what a ticket cites.
 _CITED_PATH_RE = re.compile(r"/home/lumen/[\w./~-]+")
@@ -419,6 +428,24 @@ def normalise_dir(path):
     return None
 
 
+def closure_artifact(path):
+    """True when `path` matches CLOSURE_ARTIFACT_GLOBS — a file the ticket's work is
+    expected to create, so its absence is not evidence the ticket is wrong."""
+    p = _norm(path)
+    # fnmatch's `*` spans `/`; the factory writes flat into the approvals dir, so a
+    # deeper path is not its shape and must stay the ordinary not-guessed case.
+    return any(fnmatch.fnmatch(p, g) and p.count(os.sep) == g.count(os.sep)
+               for g in CLOSURE_ARTIFACT_GLOBS)
+
+
+def normalise_closure_dir(path):
+    """The parent directory of a closure artifact when that parent EXISTS, else None.
+    Exactly one level: the parent is the reach needed to create the file. A missing
+    parent is still not walked up (wq#1535) — same not-guessed rule as normalise_dir."""
+    parent = os.path.dirname(_norm(path))
+    return parent if _isdir(parent) else None
+
+
 def cited_paths(text):
     """fworker.cited_paths (:828) over title+detail rather than detail alone."""
     out = []
@@ -439,6 +466,12 @@ def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, s
             refused.append(f"dir({p}) {why}")
             continue
         d = normalise_dir(p)
+        if d is None and closure_artifact(p):
+            d = normalise_closure_dir(p)   # wq#1535: to-be-created file, reach = parent
+            if d is None:
+                unresolved.append(f"closure artifact {p}: parent directory does not exist "
+                                  f"(not guessed)")
+                continue
         if d is None:
             unresolved.append(f"cited path {p} does not exist (not guessed)")
             continue

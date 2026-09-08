@@ -85,6 +85,7 @@ not touched, no collision), `fworker.resolve_exec_grant`, guard.sh, the never-li
 | /home/lumen/questfree/docs | 20 | 0 | yes |
 | /home/lumen/projects/bench | 7 | 0 | yes |
 | /home/lumen/infra | 16 | 0 | yes |
+| /home/lumen/proposals (wq#1535: promoter-published proposal.md + plan.md, masked at write) | 45 | 0 | yes (added 2026-09-08) |
 | /home/lumen/agent | 443 | 899 | **NO** — agent/.env (live GITHUB_TOKEN), 20× .env.bak.* (same PAT + old DeepSeek keys), litellm_config.yaml.bak.* (`api_key: os.environ/…` = benign, the .env files are not) |
 | /home/lumen/sentinel/probes | 26 | 22 | NO — sentinel_probes.py:23 + every .bak: `TOKEN = "sntl…"` (wq#1466 rotation scope) |
 | /home/lumen/sentinel/config | — | 38 tokens | NO — wq#1466 |

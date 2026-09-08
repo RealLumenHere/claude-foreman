@@ -79,6 +79,11 @@ allow:
     - /home/lumen/questfree/docs
     - /home/lumen/projects/bench
     - /home/lumen/infra
+    # wq#1535: minerva_promote.publish() copies proposal.md + plan.md here per proposal,
+    # masked through read_dir_sweep.PATTERNS at write time (fail closed if the sweep
+    # module is unavailable). Swept 2026-09-08 after publishing all 14 live proposals:
+    # zero hits (research/PROMOTER_TICKET_REACH.md §4.3, BROKER_GRANT_COVERAGE.md §3).
+    - /home/lumen/proposals
 
   # RESTART: unit globs per node the lint may tag restart(unit@node) for. Each entry
   # was verified per-target before listing (unit LoadState=loaded, `sudo -n true`

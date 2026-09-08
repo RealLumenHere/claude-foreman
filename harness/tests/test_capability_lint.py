@@ -55,6 +55,7 @@ EXISTING_DIRS = {
     "/home/lumen/bin", "/home/lumen/mailbot", "/home/lumen/foreman",
     "/home/lumen/foreman/harness", "/home/lumen/secrets", "/home/lumen/.secrets",
     "/home/lumen/worktrees", "/home/lumen/worktrees/wq1357-a1", "/home/lumen",
+    "/home/lumen/instructions/approvals",   # wq#1535 closure-artifact parent
 }
 EXISTING_FILES = {
     "/home/lumen/.secrets/github-frank.token", "/home/lumen/secrets/reddit.env",
@@ -244,6 +245,53 @@ def test_missing_path_is_unresolved_never_guessed():
     assert d.tags == []
     assert d.unresolved == [
         "cited path /home/lumen/mailbot/does/not/exist/yet.md does not exist (not guessed)"]
+
+
+# --- wq#1535: closure artifacts -------------------------------------------------
+
+def test_closure_artifact_resolves_to_its_existing_parent():
+    """The factory's yellow-approval touch file does not exist until the work touches
+    it; the reach that work needs is the approvals dir, which does exist and is under
+    an allow root -> a plain dir tag, no `does not exist` shrug."""
+    d = derive("touch /home/lumen/instructions/approvals/F55b260980679.approved then apply")
+    assert d.tag_strings == ["dir(/home/lumen/instructions/approvals)"]
+    assert d.unresolved == [] and d.refused == []
+
+
+def test_closure_artifact_with_missing_parent_is_still_not_guessed(monkeypatch):
+    monkeypatch.setattr(cl, "CLOSURE_ARTIFACT_GLOBS",
+                        ("/home/lumen/instructions/approvals/*.approved",
+                         "/home/lumen/instructions/nowhere/*.approved"))
+    d = derive("touch /home/lumen/instructions/nowhere/F1.approved")
+    assert d.tags == []
+    assert d.unresolved == ["closure artifact /home/lumen/instructions/nowhere/F1.approved: "
+                            "parent directory does not exist (not guessed)"]
+
+
+def test_closure_artifact_glob_is_narrow():
+    """Only the exact shape is a closure artifact; a sibling file that does not exist
+    is still the ordinary not-guessed case (the doctrine is unchanged for everything
+    else)."""
+    d = derive("read /home/lumen/instructions/approvals/F55b260980679.md")
+    assert d.tags == []
+    assert d.unresolved == ["cited path /home/lumen/instructions/approvals/F55b260980679.md "
+                            "does not exist (not guessed)"]
+
+
+def test_closure_artifact_under_deny_prefix_is_refused_first(monkeypatch):
+    """Deny still wins before the closure rule sees the path."""
+    monkeypatch.setattr(cl, "CLOSURE_ARTIFACT_GLOBS", ("/home/lumen/.secrets/*.approved",))
+    d = derive("touch /home/lumen/.secrets/F1.approved")
+    assert d.tags == [] and d.unresolved == []
+    assert d.refused == ["dir(/home/lumen/.secrets/F1.approved) deny:prefix (/home/lumen/.secrets)"]
+
+
+def test_closure_artifact_shipped_glob_matches_the_factory_convention():
+    """minerva_factory.approval_path(plan_id) = APPROVALS_DIR/F<plan_id>.approved — the
+    shipped glob must match that exact shape or the promoter's tickets stall again."""
+    assert cl.closure_artifact("/home/lumen/instructions/approvals/F0cab64387782.approved")
+    assert not cl.closure_artifact("/home/lumen/instructions/approvals/F0cab64387782.md")
+    assert not cl.closure_artifact("/home/lumen/instructions/approvals/sub/F1.approved")
 
 
 def test_paths_already_reachable_need_no_tag():
