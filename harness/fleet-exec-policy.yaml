@@ -99,6 +99,12 @@ allow:
 # it exactly) or "<basename> <subcmd-pattern>" (argv[1] must fnmatch one of the
 # '|'-separated patterns). argv is never shell-joined; metacharacters, -c/bash/sh/
 # eval are rejected before this list is even consulted (fleet_exec_policy.check_run).
+#
+# wq#1297 (research/FLEET_MAP.md): no pull verb (ollama pull, docker/podman pull,
+# git lfs pull|fetch) belongs on this list or any allow.* list above. A large pull
+# is a bridge-saturation risk worse than any monitor and stays manual/off-peak —
+# never something a cron/fworker-derived grant can reach. Deny is the default for
+# anything absent here; do not add one "just for isis" without a fresh review.
 run_readonly_cmds:
   - "true"
   - uptime

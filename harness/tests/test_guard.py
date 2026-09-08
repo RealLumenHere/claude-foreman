@@ -114,6 +114,15 @@ MUST_BLOCK = [
     # of a direct Read.
     ("Grep", {"pattern": ".", "path": "/home/lumen/.secrets/foreman-fire-approval.token"}),
     ("Glob", {"pattern": "*", "path": "/home/lumen/.secrets"}),
+    # wq#1297: large pulls (ollama/podman/git-lfs) are manual off-peak only, never
+    # from a cron/fworker context — this hook only ever fires for that context.
+    ("Bash", {"command": "ollama pull llama3:70b"}),
+    ("Bash", {"command": "bash -c \"ollama pull llama3:70b\""}),
+    ("Bash", {"command": "ollama    pull\tllama3:70b"}),
+    ("Bash", {"command": "podman pull docker.io/library/ollama"}),
+    ("Bash", {"command": "docker pull ollama/ollama"}),
+    ("Bash", {"command": "git lfs pull"}),
+    ("Bash", {"command": "git lfs fetch --all"}),
 ]
 
 MUST_ALLOW = [
@@ -133,6 +142,9 @@ MUST_ALLOW = [
     ("Write", {"file_path": f"{WORKTREE}/src/main.py"}),
     ("Grep", {"pattern": "TODO", "path": WORKTREE}),
     ("Glob", {"pattern": "**/*.py", "path": WORKTREE}),
+    # wq#1297: only pull is denied — inspection verbs stay usable from a worker.
+    ("Bash", {"command": "ollama list"}),
+    ("Bash", {"command": "ollama show llama3:70b"}),
 ]
 
 
