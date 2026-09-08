@@ -53,3 +53,11 @@ through `eprint`, not `print`) — this patch was derived against that state. `-
 Same keeper note as wq1479/wq841: `wq` is rewritten in place by whichever lane touches it
 next, so this needs re-applying, not just applying once — `--check` is the alarm that fires
 when the live wq loses the patch.
+
+**Superseded in part by wq#1539**: the `_finish` block this patch introduced called
+`owner_ok()` before checking the `--dead-worker` override's own eligibility, so a fully
+successful override still opened its stderr with `owner_ok`'s REFUSED banner.
+`ops/wq1539-release-dead-worker-order/` reorders that check; `FINISH_HEAD_NEW` in
+`ensure_wq_dead_worker_release.py` was updated in place to the post-wq#1539 text so this
+script's own `--check` keeper stays meaningful (applying wq#1498 fresh now also carries the
+wq#1539 fix). `owner_ok` itself is untouched by wq#1539.

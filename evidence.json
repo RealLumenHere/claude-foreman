@@ -1,11 +1,1 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "ops/wq1537-primary-file-deploy-sync/ensure_primary_file_deploy_sync.py:99-176",
-      "cmd_run": "python3 -m pytest harness/tests/test_wq1537_primary_file_deploy_sync.py -q",
-      "exit_code": 0,
-      "note": "status() now computes self_written (sidecar, state_path/record_write at :99-129) and in_remote_history (remote_blob_shas at :132-144); foreign_edit at :172 replaces the bare dirty veto that apply() raises on at :201. Regression tests added at harness/tests/test_wq1537_primary_file_deploy_sync.py:135-193 (5 passed). Pre-fix vs fixed on a double origin advance: old rc=2 REFUSED, fixed rc=0 SYNCED."
-    }
-  ]
-}
+{"criteria": [{"id": "AC1", "citation": "ops/wq1539-release-dead-worker-order/ensure_wq_release_dead_worker_order.py:71-99"}]}
