@@ -28,6 +28,24 @@ lease to lapse, or (only if you know that session is dead) `wq retire <that iden
 On the way out, always: `wq orch --release`. `wq orch` with no flags shows who currently holds
 what, and is safe to run any time as a sanity check.
 
+## Closing a ticket you do not hold
+
+Never a bare `wq done`. Use:
+
+```bash
+python3 /home/lumen/foreman/harness/wq_close.py <id> --notes "<evidence>" [--no-artifact "<reason>"]
+```
+
+It does the unblock -> claim -> done sequence (`wq claim --id` refuses a `blocked` ticket, and
+`wq done` refuses another session's live claim), restores the block if any step fails, and — the
+part that matters — re-reads the ticket row instead of trusting what the CLI printed. Its last
+line is always `CLOSED wq#N` or `NOT-CLOSED wq#N step=... rc=...: <refusal>`, and it exits 0 only
+on `CLOSED`.
+
+This exists because on 2026-09-07 an orchestrator read `tail -1` of a refused `wq done` and
+reported wq#1133 and wq#1296 closed; both were still `blocked` (wq#1479). Never report a closure
+you have not read back off the ticket.
+
 ---
 
 Why this can't be applied by the build worker that wrote it: `/home/lumen/.claude/skills/` is

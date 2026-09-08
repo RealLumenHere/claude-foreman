@@ -1,0 +1,73 @@
+# liveness_ledger.yaml — canonical ledger (research/LIVENESS_GATE.md §7).
+# One record per credential (WHERE it lives and HOW to verify it — never the value),
+# one per done-capability, plus `bindings:` = staged Liveness tags for tickets that
+# predate the `Liveness:` line. Ticket-generation for frank-* lanes reads this first.
+# Updated by hand or by the sweep's --refresh (Slice 3, not built). Dates are the
+# last LIVE verification, not the mint date.
+
+credentials:
+  github-frank:
+    path: /home/lumen/.secrets/github-frank.token
+    scope: frankstupak PAT (repo read/admin as Frank); canonical, consumers point here
+    verify_url: https://api.github.com/user
+    scheme: bearer
+    last_verified: 2026-09-07
+    probe: cred_alive(/home/lumen/.secrets/github-frank.token, https://api.github.com/user)
+  github-lumen:
+    path: /home/lumen/.secrets/github-lumen.token
+    scope: Lumen Industries PAT (fleet PRs on Jay's repos + lumen/*)
+    verify_url: https://api.github.com/user
+    scheme: bearer
+    last_verified: 2026-09-07
+    probe: cred_alive(/home/lumen/.secrets/github-lumen.token, https://api.github.com/user)
+  tailscale-api:
+    path: /home/lumen/.secrets/tailscale-api.key
+    scope: tailnet API (devices read; key-expiry audit)
+    verify_url: https://api.tailscale.com/api/v2/tailnet/-/devices
+    scheme: bearer
+    last_verified: 2026-09-07
+    probe: cred_alive(/home/lumen/.secrets/tailscale-api.key, https://api.tailscale.com/api/v2/tailnet/-/devices)
+  cf-dns-edit:
+    path: /home/lumen/.secrets/cf-dns-edit.token
+    scope: Cloudflare Zone DNS Edit (lumennode.uk)
+    verify_url: https://api.cloudflare.com/client/v4/user/tokens/verify
+    scheme: bearer
+    last_verified: 2026-09-07
+    probe: cred_alive(/home/lumen/.secrets/cf-dns-edit.token, https://api.cloudflare.com/client/v4/user/tokens/verify)
+  cf-email-routing:
+    path: /home/lumen/.secrets/cf-email-routing.token
+    scope: Cloudflare Email Routing Addresses+Rules Edit (was listed PENDING in claude_credentials.md — it exists and verifies)
+    verify_url: https://api.cloudflare.com/client/v4/user/tokens/verify
+    scheme: bearer
+    last_verified: 2026-09-07
+    probe: cred_alive(/home/lumen/.secrets/cf-email-routing.token, https://api.cloudflare.com/client/v4/user/tokens/verify)
+  cerebras:
+    path: /home/lumen/agent/.env  # CEREBRAS_API_KEY
+    scope: Cerebras inference (gpt-oss-120b judge rung)
+    last_verified: 2026-09-07
+    probe: balance_over(cerebras, 0)
+
+done_capabilities:
+  ts_key_expiry_disabled:
+    since: 2026-06
+    evidence: TS API devices list, every device keyExpiryDisabled=true (2026-09-07, wq#1296 premise)
+    probe: ts_key_expiry_disabled()
+  questfree_not_public:
+    since: 2026-09-07
+    evidence: frankstupak/questfree private=true; RealLumenHere/questfree unauth 404 (not publicly visible)
+    probe: repo_is(private, RealLumenHere/questfree), repo_is(private, frankstupak/questfree)
+  github_frank_pat_canonical:
+    since: 2026-08-30
+    evidence: .secrets/github-frank.token answers 200; the 401 copy was archived as .bak.20260830_151512_dead401
+    probe: cred_alive(/home/lumen/.secrets/github-frank.token, https://api.github.com/user)
+
+# Staged Liveness tags for open frank-gated tickets that predate the tag. The sweep
+# uses these when the ticket has no `Liveness:` line. Slice 3 writes them into the
+# tickets; until then this is the only place they exist. Keys are wq ids.
+bindings:
+  902: repo_is(private, RealLumenHere/questfree), repo_is(private, frankstupak/questfree)
+  1101: repo_is(private, frankstupak/lumen-content), repo_is(private, frankstupak/lumen-blog)
+  1133: cred_alive(/home/lumen/.secrets/github-frank.token, https://api.github.com/user)
+  1296: ts_key_expiry_disabled()
+  1047: balance_over(cerebras, 0)
+  362: node_healthy(hathor)

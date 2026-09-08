@@ -1,1 +1,19 @@
-{"criteria": [{"id": "AC1", "citation": "research/BROKER_GRANT_COVERAGE.md:107"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "harness/wq_close.py:172-186",
+      "cmd_run": "python3 -m pytest harness/tests/test_wq1479_close_verdict.py -q",
+      "exit_code": 0
+    }
+  ],
+  "derived_by": "worker",
+  "notes": [
+    "AC1 citation is the confirm step: after `wq done` exits 0, wq_close re-reads the ticket row and reports CLOSED only when status=='done' — the queue's own state is the verdict, not anything the CLI printed.",
+    "Supporting citations: ops/wq1479-close-verdict/ensure_wq_refuse_stderr.py:45-79 (the eight anchored close-path REFUSED->stderr replacements, applied to /home/lumen/bin/wq 2026-09-08, backup .bak.wq1479.20260908_052837); harness/tests/test_wq1479_close_verdict.py:72-221 (13 tests).",
+    "13/13 new tests pass; 701/701 harness/tests pass with the patched wq.",
+    "The ticket's stated cause did not reproduce: `wq done` on a blocked, claimed_by-NULL ticket succeeds (owner_ok returns True at wq:814), and the cited wq:1546 is in cmd_heartbeat. Which guard actually refused on 09-07 is unrecoverable — a refused close logs no agent_activity row (verified). Recorded as ISSUE-LOG row 219; the fix is guard-agnostic by design.",
+    "wq#1133/wq#1296 deliberately NOT closed — that is Liveness Gate Slice 3, gated on Frank."
+  ],
+  "ticket": "wq#1479"
+}

@@ -137,7 +137,8 @@ def main():
     Forge.payload = {"state": "open", "merged": False, "head": {"sha": off_main},
                      "base": {"ref": "main"}}
     r, _ = close("--notes", f"PR {url(port)}")
-    check("open unlanded PR is REFUSED", r.returncode == 3 and "wq#899" in r.stdout,
+    # wq#1479 moved close-path refusals to stderr, so the assertion reads both streams.
+    check("open unlanded PR is REFUSED", r.returncode == 3 and "wq#899" in r.stdout + r.stderr,
           f"rc={r.returncode} {r.stdout}{r.stderr}")
 
     # 3. open PR whose head IS on main — a squash or cherry-pick. Must not be refused.
@@ -164,7 +165,8 @@ def main():
     # 6. wq#759 regression guard: a non-PR artifact must not acquire a forge dependency.
     r, _ = close("--notes", f"see {DIFF}")
     check("file-path artifact still closes without the forge",
-          r.returncode == 0 and "wq#899" not in r.stdout, f"rc={r.returncode} {r.stdout}{r.stderr}")
+          r.returncode == 0 and "wq#899" not in r.stdout + r.stderr,
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
 
     # 7. closed-without-merging is not evidence either.
     Forge.payload = {"state": "closed", "merged": False, "head": {"sha": off_main},

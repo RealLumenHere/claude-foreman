@@ -113,6 +113,35 @@ def make_wq1472(tmp_path):
     return origin, work, base
 
 
+def make_wq1479(tmp_path):
+    """The wq#1479 shape: the PR branch does not rebase the local commits, it BUILDS on
+    them — and then edits one of the files they touched. The blob proof cannot fire (the
+    PR's version is a superset, so it differs), but the branch contains the local commits
+    whole, which preserves strictly more.
+    """
+    origin, work, base = make_wq975(tmp_path, local_final="work-only-the-local-has")
+    git(work, "checkout", "-b", "pr", "main")
+    commit(work, "file.txt", "work-only-the-local-has\nand the PR's own edit on top\n",
+           "feat: build on the local commits and edit the same file")
+    git(work, "push", "origin", "pr")
+    git(work, "checkout", "main")
+    git(work, "fetch", "origin")
+    return origin, work, base
+
+
+def make_wq1479_new_file(tmp_path):
+    """The ahead commits ADD a file. `git checkout <merge-base> -- <paths>` cannot restore a
+    path that does not exist at the merge-base, and fails the whole pathspec when one does
+    not — so every touched path stays staged and the land stays blocked."""
+    origin, work, base = make_wq975(tmp_path, local_final="work-only-the-local-has")
+    commit(work, "brand_new.txt", "added by the unpushed work\n", "feat: a new file")
+    git(work, "checkout", "-b", "pr", "main")
+    git(work, "push", "origin", "pr")
+    git(work, "checkout", "main")
+    git(work, "fetch", "origin")
+    return origin, work, base
+
+
 def make_split_across_refs(tmp_path):
     """Two pushed refs that between them account for every touched path, but neither of
     which carries both. A coincidence, not a pushed PR — must stay CONTENT_DIVERGED.
@@ -298,6 +327,47 @@ def test_status_reports_pr_pending_when_the_work_is_pushed_on_a_pr_branch(tmp_pa
     assert rc == 12, out
     assert "PR_PENDING" in out and "ahead=1 behind=3" in out
     assert "refs/remotes/origin/pr" in out, "the verdict must name the ref it proved against"
+
+
+def test_pr_pending_accepts_a_branch_that_contains_the_local_commits_and_edits_them(tmp_path):
+    """wq#1479: a PR that MODIFIES a path its own base commits touched can never satisfy
+    the blob proof — its version is a superset. Containing the commits outright preserves
+    strictly more than matching their blobs, so it qualifies on stronger grounds."""
+    _, work, _ = make_wq1479(tmp_path)
+    assert git(work, "diff", "--name-only", "main", "origin/pr", "--", "file.txt"), \
+        "the fixture is only interesting while the PR's version DIFFERS at a touched path"
+    rc, out = run("status", "--repo", work, "--no-fetch")
+    assert rc == 12, out
+    assert "PR_PENDING" in out and "refs/remotes/origin/pr" in out
+
+
+def test_a_ref_that_merely_shares_history_is_not_a_preservation_proof(tmp_path):
+    """The ancestor test runs in the right direction: local must be an ancestor of the ref,
+    not the other way round. A ref the local branch has moved PAST proves nothing."""
+    _, work, _ = make_wq975(tmp_path, local_final="work-only-the-local-has")
+    git(work, "branch", "stale", "main~1")        # shares history, stops short of the work
+    git(work, "push", "origin", "stale")
+    git(work, "fetch", "origin")
+    rc, out = run("status", "--repo", work, "--no-fetch")
+    assert rc == 20, out
+    assert "CONTENT_DIVERGED" in out
+
+
+def test_pr_pending_apply_removes_paths_the_merge_base_never_had(tmp_path):
+    """A staged leftover is the same blocker in different clothes — wq#771's land guard reads
+    uncommitted and unpushed paths from one list, so a half-finished restore blocks the very
+    land this verdict exists to unblock."""
+    _, work, base = make_wq1479_new_file(tmp_path)
+    rc, out = run("reconcile", "--repo", work, "--no-fetch", "--apply")
+    assert rc == 30, out
+    assert git(work, "rev-parse", "main") == base
+    assert git(work, "status", "--porcelain") == "", "nothing may be left staged"
+    assert not os.path.exists(os.path.join(work, "brand_new.txt"))
+    # It is dropped, not lost: the archive tag and the PR branch both still carry it.
+    assert git(work, "cat-file", "-e", "origin/pr:brand_new.txt") == ""
+
+    git(work, "merge", "--ff-only", "origin/main")
+    assert git(work, "rev-parse", "main") == git(work, "rev-parse", "origin/main")
 
 
 def test_pr_pending_apply_rewinds_and_leaves_the_fast_forward_runnable(tmp_path):
