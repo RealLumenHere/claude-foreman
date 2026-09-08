@@ -1,0 +1,18 @@
+# langfuse-lag-monitor.timer — 15-minute Langfuse export-lag probe
+# (wq#1552/wq#1554).
+#
+# The alert threshold (LANGFUSE_LAG_THRESHOLD_S, default 300s) is 5 minutes;
+# polling every 15 minutes gives 3 chances to catch a sustained lag spike
+# within the hour without paging on every transient blip a single sample
+# would catch.
+[Unit]
+Description=Langfuse export-lag probe (wq#1552/wq#1554)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target
