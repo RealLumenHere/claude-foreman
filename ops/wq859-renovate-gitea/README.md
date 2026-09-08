@@ -39,6 +39,18 @@ First run per repo opens a Renovate "onboarding" PR proposing a `renovate.json` 
 PRs start only after that's merged. This is standard Renovate behavior and gives Frank a
 chokepoint to skip repos he doesn't want scanned.
 
+**wq#1504 — Alpine `apk` package tracking:** `customManagers` enables the `apk` datasource for
+Dockerfiles (any `Dockerfile`/`Dockerfile.*`). Base-image tags (`nginx:alpine`,
+`postgres:15-alpine`) are already tracked by the default `docker` datasource — no config needed.
+For a specific package pinned via `apk add pkg=version` inside a Dockerfile, opt that line in
+with an annotation comment above an `ENV ..._VERSION=` line, e.g.:
+
+```dockerfile
+# renovate: datasource=apk depName=curl versioning=loose
+ENV CURL_VERSION="8.9.1-r1"
+RUN apk add --no-cache curl=$CURL_VERSION
+```
+
 ## Verify
 
 ```bash

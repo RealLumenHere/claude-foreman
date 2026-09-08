@@ -22,6 +22,26 @@ module.exports = {
   automerge: false,
   platformAutomerge: false,
 
+  // wq#1504 — Alpine package tracking. Renovate has no built-in manager for `apk add`
+  // version pins in Dockerfiles, so the apk datasource is opted in per-line via an
+  // annotation comment (Renovate's documented pattern for datasources without native
+  // manager support): a Dockerfile that wants a pin tracked adds
+  //   # renovate: datasource=apk depName=<pkg> versioning=loose
+  //   ENV <PKG>_VERSION="<version>-r<rel>"
+  // immediately above the ENV line that feeds `apk add pkg=$<PKG>_VERSION`. Base-image
+  // tags like `nginx:alpine` are already covered by the default docker datasource/manager
+  // and need no extra config.
+  customManagers: [
+    {
+      customType: 'regex',
+      fileMatch: ['(^|/)Dockerfile$', '(^|/)Dockerfile\\.[^/]+$'],
+      matchStrings: [
+        '# renovate: datasource=apk depName=(?<depName>.*?)( versioning=(?<versioning>.*?))?\\s+ENV .*?_VERSION="?(?<currentValue>[\\w.+-]+)"?',
+      ],
+      datasourceTemplate: 'apk',
+    },
+  ],
+
   cacheDir: '/home/lumen/services/renovate-gitea/cache',
   prConcurrentLimit: 5,
   branchConcurrentLimit: 10,
