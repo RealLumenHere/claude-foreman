@@ -1,0 +1,18 @@
+[Unit]
+Description=wq#1478 liveness clear — auto-close Frank-gated tickets whose premise is met on live state (LIVENESS_GATE.md §12.3)
+Documentation=file:///home/lumen/foreman/research/LIVENESS_GATE.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+Environment=WQ_AGENT=liveness-clear
+# Rollback switch: FOREMAN_LIVENESS_CLEAR=0 makes --apply report-only (edit here + daemon-reload).
+Environment=FOREMAN_LIVENESS_CLEAR=1
+ExecStartPre=-/bin/sh -c '/home/lumen/bin/wq whoami >/dev/null 2>&1 || /home/lumen/bin/wq whoami --register liveness-clear >/dev/null 2>&1 || true'
+ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/liveness_clear.py --apply --write-bindings
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=600
+Nice=10

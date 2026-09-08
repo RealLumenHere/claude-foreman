@@ -74,6 +74,7 @@ import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
 import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refusal
 import capability_lint    # noqa: E402  # wq#1437 BROKER_WIRING §2.1 slice B (warn)
 import capability         # noqa: E402  # wq#1438 BROKER_WIRING §2.2 slice C (pre-skip)
+import liveness_clear     # noqa: E402  # wq#1478 LIVENESS_GATE §12.4: stale Frank-gates auto-clear
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -455,6 +456,17 @@ def frank_gate_reason(t):
         if not ok:
             return f"wq gate unmet ({why})"
     return None
+
+
+def _liveness_autoclosed(tid, t, log):
+    """wq#1478: True when the liveness gate closed this Frank-gated ticket just now.
+    Fail-open: a liveness exception is logged and the caller proceeds to its normal
+    frank_gated skip — the gate can only ever remove a ticket from Frank's queue."""
+    try:
+        return liveness_clear.dispatch_hook(tid, t, router.wq_show, log.emit)
+    except Exception as e:  # noqa: BLE001
+        log.emit("error", stage="liveness", ticket=tid, reason=f"liveness hook: {e!r}")
+        return False
 
 
 def nodispatch_reason(t):
@@ -1147,6 +1159,12 @@ def _do_pass(cfg, log, state, dry_run):
                          detail=f"max_per_day={policy['max_per_day']} reached")
                 continue
             if lane in HUMAN_LANES:
+                # wq#1478 (LIVENESS_GATE.md §12.4): a Frank-gate whose premise is already
+                # met on live state is closed here, before Frank sees it. Cheap by
+                # construction (only known-tagged tickets, TTL-cached); any other verdict
+                # falls through to the unchanged skip. Can only close, never dispatch.
+                if _liveness_autoclosed(tid, None, log):
+                    continue
                 log.skip(tid, lane, "frank_gate", "frank_gated",
                          detail="human-owned lane (Frank's action/decision queue) — not worker-dispatchable")
                 continue
@@ -1233,6 +1251,8 @@ def _do_pass(cfg, log, state, dry_run):
             # stage 4 — Frank-gate (MUST 3): never claimed, no override flag
             why = frank_gate_reason(t)
             if why:
+                if _liveness_autoclosed(tid, t, log):  # wq#1478 §12.4, same as stage 3
+                    continue
                 log.skip(tid, lane, "frank_gate", "frank_gated", detail=why)
                 continue
 
