@@ -2,18 +2,18 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1017-promptforge-cf-access/add_access_hostname.py:105-119",
-      "cmd_run": "python3 -m unittest discover -s tests -p \"test_*.py\"",
+      "citation": "reports/1486_verify_wq1485_broker_grant_coverage_row.md:1",
+      "cmd_run": "python3 -m pytest harness/tests/test_capability_allow.py harness/tests/test_read_dir_sweep.py harness/tests/test_capability_lint.py dispatcher/tests/test_capability_replay.py dispatcher/tests/test_dispatcher.py dispatcher/tests/test_runaway.py -q",
       "exit_code": 0
     }
   ],
   "derived_by": "worker",
   "notes": [
-    "Verdict: CONFIRM. Full report: reports/1469_verify_wq1017_promptforge_cf_access.md.",
-    "PR#336 (merged c706536+908b561) pulled via git show since this worktree branched before the merge.",
-    "Ran the shipped test suite (tests/test_add_access_hostname.py as of 908b561): 17/17 pass, up from the README's stale '11 tests' claim (accurate for the first commit 09d524a, not updated after the second commit added 6 MainTest cases).",
-    "Confirmed the guard hook's sudo denial directly, backing the README's claim that INSTALL.md steps 3/5 are genuinely out of BUILD-worker scope.",
-    "No fabricated token/app id: find_front_app looks the Access app up live by an existing covered hostname; no Access-mgmt token exists in this sandbox to exercise the live PUT path, consistent with wq#1373's independent record.",
-    "Non-blocking: PUT body spreads the full GET app object back (unverifiable against the real CF API without a token); GET .../access/apps has no pagination handling."
+    "Verdict: CONFIRM. Full report: reports/1486_verify_wq1485_broker_grant_coverage_row.md.",
+    "PR#344 (merged e86fd38 rewritten to 3c26f42 on origin/main) adds exactly one row to research/BROKER_GRANT_COVERAGE.md matching wq#1485's fixed template, plus repoints evidence.json's AC1 citation to it (line 107, verified accurate).",
+    "Confirmed /home/lumen/research_prompts is a real allow.read_dirs entry (harness/fleet-exec-policy.yaml:71) and the allow-hit dir-tagging logic exists in harness/capability_lint.py, not just claimed in prose.",
+    "Ran all six touched/depended-on test files from a disposable worktree off pr-344: 114 harness + 127 dispatcher = 241 passed, matching the doc's own stated counts.",
+    "No scope creep: the wq#1485 commit alone (e86fd38) touches only evidence.json and research/BROKER_GRANT_COVERAGE.md; the other 2 commits bundled into PR#344 predate wq#1485's claim time and were already on the shared lane branch.",
+    "Non-blocking: neither the commit, PR notes, nor evidence.json cites the specific research_prompts file/line read, but the ticket's fixed-template deliverable has no slot for one."
   ]
 }
