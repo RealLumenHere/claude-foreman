@@ -338,9 +338,30 @@ def _frame_denials(frames):
     return denials
 
 
+# wq#1288: FLEET_EXEC_PREFLIGHT_PROBES includes a `restart`/`copy` probe whose entire
+# point is to prove the Bash allowlist covers the fleet-exec invocation shape — it must
+# never actually execute against a live node. fleet-exec's own grant check is what's
+# supposed to deny it (no ticket identity == no grant == exit 2), but that check reads
+# these vars straight out of the process environment (fleet-exec:95-99). subprocess.run
+# inherits the caller's env by default, so a worker (or worker-triggered subprocess)
+# that happens to hold a real fleet-exec grant for the probed node+verb — e.g. running
+# `harness-preflight` by hand mid-ticket — would pass that grant straight through to the
+# probe session and the "throwaway" restart could fire for real. Scrub grant identity
+# before the spawn so the probe can never present a valid grant regardless of the
+# caller's environment.
+_GRANT_ENV_VARS = ("WQ_AGENT", "FOREMAN_GRANT_FILE", "FOREMAN_GRANT_SHA", "FOREMAN_TICKET_ID")
+
+
+def _probe_env():
+    env = dict(os.environ)
+    for var in _GRANT_ENV_VARS:
+        env.pop(var, None)
+    return env
+
+
 def _default_runner(cmd, cwd):
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                           timeout=LIVE_PROOF_TIMEOUT)
+                           timeout=LIVE_PROOF_TIMEOUT, env=_probe_env())
     frames = []
     for line in proc.stdout.splitlines():
         line = line.strip()
