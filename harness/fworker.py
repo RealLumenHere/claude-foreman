@@ -26,6 +26,7 @@ Usage:
                [--worker-id ID] [--resume]
 """
 import argparse
+import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -538,6 +539,49 @@ def ntfy(title, msg, priority="default"):
                         capture_output=True, text=True, timeout=10)
     except Exception:
         pass
+
+
+# wq#1487: CRASH pages dedupe on (ticket, error-line). The same crash re-firing every
+# dispatch cycle is ONE incident, not forty pages (wq#1424 paged `foreman CRASH` 40+
+# times in 7h). First occurrence pages; identical repeats within CRASH_PAGE_DEDUP_S are
+# logged with the suppressed count and re-paged once the window expires. Fail-open:
+# any bookkeeping error pages as before.
+CRASH_PAGE_DEDUP_S = _envint("FOREMAN_CRASH_PAGE_DEDUP_S", 6 * 3600)
+CRASH_PAGE_STATE = os.environ.get("FOREMAN_CRASH_PAGE_STATE",
+                                  "/home/lumen/foreman/_runs/crash_pages.json")
+
+
+def ntfy_crash(ticket_id, err_line, msg):
+    key = f"{ticket_id}:{hashlib.sha1(err_line.encode(errors='replace')).hexdigest()[:12]}"
+    try:
+        try:
+            with open(CRASH_PAGE_STATE) as f:
+                st = json.load(f)
+        except (OSError, ValueError):
+            st = {}
+        rec = st.get(key) or {}
+        now = time.time()
+        if rec and now - rec.get("paged_at", 0) < CRASH_PAGE_DEDUP_S:
+            rec["suppressed"] = rec.get("suppressed", 0) + 1
+            rec["last_seen"] = now
+            st[key] = rec
+            tmp = CRASH_PAGE_STATE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(st, f)
+            os.replace(tmp, CRASH_PAGE_STATE)
+            log(f"CRASH page suppressed (dedup {key}, {rec['suppressed']} repeat(s) since "
+                f"last page): {msg[:160]}")
+            return
+        st[key] = {"paged_at": now, "last_seen": now, "suppressed": 0, "err": err_line[:200]}
+        # keep the file bounded: drop entries older than 2 windows
+        st = {k: v for k, v in st.items() if now - v.get("last_seen", 0) < 2 * CRASH_PAGE_DEDUP_S}
+        tmp = CRASH_PAGE_STATE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+        os.replace(tmp, CRASH_PAGE_STATE)
+    except Exception as e:  # noqa: BLE001 — dedup bookkeeping must never eat a page
+        log(f"WARN: crash-page dedup bookkeeping failed ({e!r}); paging anyway")
+    ntfy("foreman CRASH", msg, priority="high")
 
 
 # ---------------------------------------------------------------------------
@@ -1477,8 +1521,26 @@ def run_fire_ticket(args):
                      "(wq#1261), no manual apply needed.")
             if evidence_path:
                 notes += (f" Probe evidence: {evidence_path} "
-                          f"(cmd={evidence['cmd']!r} exit={evidence['exit_code']}).")
-            wq_done(ticket_id, notes)
+                          f"(cmd={evidence.get('cmd')!r} exit={evidence.get('exit_code')}"
+                          f"{' kind=' + evidence['kind'] if evidence.get('kind') else ''}).")
+            # wq#1487: a refused `wq done` (evidence gate or anything else) must NOT
+            # become the generic CRASH path — that released the claim and let the
+            # dispatcher re-fire the ticket forever (wq#1424: 312 attempts). Block it
+            # with the refusal on the record so a human sees exactly one ticket, not
+            # a page per dispatch cycle.
+            try:
+                wq_done(ticket_id, notes)
+            except RuntimeError as e:
+                reason = (f"AUTO-CLOSE REFUSED: probe cleared but `wq done` was refused "
+                          f"— {str(e)[:400]}")
+                log(f"wq#{ticket_id} fire-mode: {reason} — blocking instead of crash-looping")
+                wq_block(ticket_id, reason)
+                ntfy("fire ticket auto-close refused",
+                     f"wq#{ticket_id}: {reason}", priority="high")
+                fire_gate.clear_fire_state(ticket_id)
+                _record("auto_close_refused", evidence_path=evidence_path)
+                print("BLOCKED")
+                return EXIT_BLOCKED
             ntfy("fire ticket auto-closed",
                  f"wq#{ticket_id}: re-verify found the originating probe condition has "
                  f"cleared on its own — auto-closed, no change applied.",
@@ -2478,9 +2540,9 @@ def cmd_run(args):
             log(f"CRASH: unhandled exception during wq#{args.ticket} fire-mode run — "
                 f"releasing claim.\n{tb}")
             wq_release(args.ticket)
-            ntfy("foreman CRASH",
-                 f"wq#{args.ticket} fire-mode crashed (claim released): "
-                 f"{tb.strip().splitlines()[-1]}", priority="high")
+            err_line = tb.strip().splitlines()[-1]
+            ntfy_crash(args.ticket, err_line,
+                       f"wq#{args.ticket} fire-mode crashed (claim released): {err_line}")
             print("CRASH")
             return EXIT_CRASH
 
@@ -2504,9 +2566,9 @@ def cmd_run(args):
         log(f"CRASH: unhandled exception during wq#{args.ticket} attempt {attempt} — "
             f"releasing claim.\n{tb}")
         wq_release(args.ticket)
-        ntfy("foreman CRASH",
-             f"wq#{args.ticket} attempt {attempt} crashed (claim released): "
-             f"{tb.strip().splitlines()[-1]}", priority="high")
+        err_line = tb.strip().splitlines()[-1]
+        ntfy_crash(args.ticket, err_line,
+                   f"wq#{args.ticket} attempt {attempt} crashed (claim released): {err_line}")
         print("CRASH")
         return EXIT_CRASH
 

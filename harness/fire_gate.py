@@ -302,7 +302,33 @@ def probe_cleared(detail, aq_db=None, timeout_s=DEFAULT_PROBE_TIMEOUT_S, now=Non
     probe = parse_fire_probe(detail)
     if probe is not None:
         return run_fire_probe(probe, timeout_s=timeout_s, now=now)
-    return probe_condition_cleared(detail, aq_db=aq_db), None
+    cleared = probe_condition_cleared(detail, aq_db=aq_db)
+    if not cleared:
+        return False, None
+    # wq#1487: the aq-row fallback used to return (True, None). run_fire_ticket()
+    # then called `wq done` with notes that named NO artifact, the wq#759 evidence
+    # gate refused it, the refusal became an unhandled exception, the claim was
+    # released, and the dispatcher re-fired the ticket forever (wq#1424: 312
+    # attempts, a `foreman CRASH` page every cycle — the "lumen crashed" cry-wolf).
+    # Class fix: every cleared verdict carries evidence, so auto-close always has a
+    # file path to cite. The evidence here is the aq row itself.
+    probe_name, aq_id = parse_probe_ref(detail)
+    evidence = {"cmd": None, "clear_when_exit": None, "exit_code": None,
+                "kind": "aq_row", "probe": probe_name, "aq_id": aq_id,
+                "checked_at": (now if now is not None else time.time())}
+    try:
+        conn = sqlite3.connect(f"file:{aq_db or AQ_DB}?mode=ro", uri=True, timeout=10)
+        try:
+            row = conn.execute("SELECT status, resolved_ts, note FROM alerts WHERE id=?",
+                               (aq_id,)).fetchone()
+        finally:
+            conn.close()
+        if row:
+            evidence.update({"aq_status": row[0], "aq_resolved_ts": row[1],
+                             "aq_note": (row[2] or "")[:300]})
+    except sqlite3.Error as e:
+        evidence["aq_read_error"] = repr(e)
+    return True, evidence
 
 
 def runtime_exceeded(start_ts, max_runtime_s=DEFAULT_MAX_RUNTIME_S, now=None):
