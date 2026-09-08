@@ -104,6 +104,7 @@ not touched, no collision), `fworker.resolve_exec_grant`, guard.sh, the never-li
 | replay | live open queue (30 tickets), old vs new lint, same repo resolution | 0 tickets change bucket. The 4 already-refused rows (1446/1466/1467/1474) additionally lose their partial `dir` tags — correct, refusal beats a partial grant (§4 row vi) |
 | iii | never-list: `restart tailscaled on thor` / `restart(postgresql@maat)` / `systemctl restart cloudflared` → `refused` deterministically; MAC-spoof text has no verb shape → no tag; `rm -rf` is not a verb the lint emits and `run_readonly_cmds` has no `rm` | PASS (unit); broker-side forged-Needs drill = slice 2 |
 | i / ii / iv (live) | slice 3 (§5) | owed |
+| i (live) | worker read an allow-listed dir via needs:dir and landed this line | PASS 2026-09-08 wq#1485 |
 
 ## 5. Slices
 
