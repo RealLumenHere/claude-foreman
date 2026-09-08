@@ -105,6 +105,34 @@ def test_live_proof_denials_block_stamp_even_when_static_lint_clean(fixture_conf
     assert harness_preflight.read_stamp(FIXTURE_REPO, stamp_dir=stamp_dir) is None
 
 
+def test_default_runner_scrubs_grant_env_before_spawning_probe_session(monkeypatch):
+    """wq#1288: FLEET_EXEC_PREFLIGHT_PROBES's restart/copy probes must never present a
+    real fleet-exec grant to the throwaway session — fleet-exec reads WQ_AGENT/
+    FOREMAN_GRANT_FILE/FOREMAN_GRANT_SHA/FOREMAN_TICKET_ID straight out of the process
+    env, and subprocess.run inherits the caller's env by default, so a worker holding a
+    live grant for the probed node+verb would pass it straight through."""
+    monkeypatch.setenv("WQ_AGENT", "fworker-wq1288")
+    monkeypatch.setenv("FOREMAN_GRANT_FILE", "/tmp/fake-grant.json")
+    monkeypatch.setenv("FOREMAN_GRANT_SHA", "deadbeef")
+    monkeypatch.setenv("FOREMAN_TICKET_ID", "1288")
+    monkeypatch.setenv("HARMLESS_MARKER", "keep-me")
+
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, timeout, env):
+        captured["env"] = env
+        raise FileNotFoundError(2, "No such file or directory", cmd[0])
+
+    monkeypatch.setattr(harness_preflight.subprocess, "run", _fake_run)
+
+    with pytest.raises(FileNotFoundError):
+        harness_preflight._default_runner(["claude"], "/tmp")
+
+    for var in ("WQ_AGENT", "FOREMAN_GRANT_FILE", "FOREMAN_GRANT_SHA", "FOREMAN_TICKET_ID"):
+        assert var not in captured["env"]
+    assert captured["env"]["HARMLESS_MARKER"] == "keep-me"
+
+
 def test_live_proof_filenotfound_returns_ok_false_instead_of_raising(fixture_conf):
     """wq#1384: claude_bin missing from PATH raises FileNotFoundError (an OSError
     subclass) out of subprocess.run inside run_live_proof — preflight() must catch it
