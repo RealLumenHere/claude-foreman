@@ -79,24 +79,24 @@ docstring) — re-check them if the fleet's ambient failure rate shifts a lot.
 
 ## wq#825 — dispatcher-not-dispatching alarm
 
-`dispatcher_health.py` also needs **no separate install step**: it's called in-process
-from every `self_heal.py` pass (see that module's docstring), so it goes live the
-moment `lumen-foreman-selfheal.timer` is enabled per step 3 above — no third timer for
-Frank to remember to enable.
+`dispatch_health.py` (not `dispatcher_health.py` — that duplicate was retired in
+wq#1416, see `self_heal.py`'s docstring) is the sole DISPATCHER-STALLED pager. It
+writes `health_state.json` and runs the config-lint on `lumen-foreman-health.timer`
+(5-min cadence), independent of `self_heal.py`.
 
-Sanity-check it independently of a real self-heal pass:
+Sanity-check it independently of a real pass:
 
 ```bash
-python3 /home/lumen/foreman/dispatcher/dispatcher_health.py status
-python3 /home/lumen/foreman/dispatcher/dispatcher_health.py check --dry-run
+python3 /home/lumen/foreman/dispatcher/dispatch_health.py status
+python3 /home/lumen/foreman/dispatcher/dispatch_health.py check --dry-run
 ```
 
-Defaults (env-overridable — see dispatcher_health.py's constants):
+Defaults (env-overridable — see dispatch_health.py's constants):
 `FOREMAN_HEALTH_CONSECUTIVE=2` (consecutive unhealthy dispatcher passes — an
 `event=error` line, or a `pass_end` with `spawned=0` while `candidates>0` — before
-paging Frank), `FOREMAN_HEALTH_NTFY_DEDUP_H=1` (re-ping cadence while the dispatcher
-stays unhealthy, so a still-broken dispatcher isn't a single missable ntfy over a
-10-hour outage but also doesn't spam every 10-min self-heal cycle).
+paging Frank), `FOREMAN_HEALTH_ALERT_DEDUP_SECONDS=3600` (re-ping cadence while the
+dispatcher stays unhealthy, so a still-broken dispatcher isn't a single missable ntfy
+over a long outage but also doesn't spam every 5-min health-timer cycle).
 
 ### Dashboard (`dashboard.py`)
 

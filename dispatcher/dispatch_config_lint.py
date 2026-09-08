@@ -35,6 +35,9 @@ import sys
 from datetime import datetime, timezone
 
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, DISPATCHER_DIR)
+import vlogs_mirror  # noqa: E402
+
 CONFIG_PATH = os.environ.get("FOREMAN_DISPATCHER_CONFIG",
                              os.path.join(DISPATCHER_DIR, "config.json"))
 DB_PATH = os.environ.get("WQ_DB", "/home/lumen/agents/work-queue/queue.db")
@@ -57,6 +60,7 @@ def _utcnow():
 
 
 def _ntfy(msg, priority="urgent", title="LANE/CONFIG DRIFT"):
+    vlogs_mirror.mirror("dispatch_config_lint", title, priority, msg)
     try:
         subprocess.run([NTFY_BIN, "-t", "lumen-alerts", "-p", priority, "-T", title, msg],
                        capture_output=True, text=True, timeout=15)

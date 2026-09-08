@@ -71,6 +71,7 @@ import circuit_breaker  # noqa: E402
 import runaway          # noqa: E402
 import psi_pressure     # noqa: E402  # wq#844
 import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
+import vlogs_mirror      # noqa: E402  # wq#1416
 import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refusal
 import capability_lint    # noqa: E402  # wq#1437 BROKER_WIRING §2.1 slice B (warn)
 import capability         # noqa: E402  # wq#1438 BROKER_WIRING §2.2 slice C (pre-skip)
@@ -412,6 +413,7 @@ def slock_release(holder):
 
 
 def ntfy(msg, priority="high", title="foreman-dispatcher"):
+    vlogs_mirror.mirror("foreman_dispatcher", title, priority, msg)
     try:
         subprocess.run([NTFY_BIN, "-p", priority, "-T", title, msg],
                        capture_output=True, text=True, timeout=20)

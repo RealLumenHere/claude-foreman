@@ -55,6 +55,7 @@ CONFIG_PATH = os.path.join(DISPATCHER_DIR, "config.json")
 HARNESS_PREFLIGHT_CLI = os.path.join(HARNESS_DIR, "harness-preflight")
 
 sys.path.insert(0, DISPATCHER_DIR)
+import vlogs_mirror  # noqa: E402
 
 STATE_PATH = os.environ.get("FOREMAN_RECOVER_STATE",
                             os.path.join(DISPATCHER_DIR, "runtime", "recover_state.json"))
@@ -85,6 +86,7 @@ def _utcnow():
 
 
 def _ntfy(msg, priority="default", title=RECOVERED_TITLE):
+    vlogs_mirror.mirror("dispatch_recover", title, priority, msg)
     try:
         subprocess.run([NTFY_BIN, "-t", "lumen-alerts", "-p", priority, "-T", title, msg],
                        capture_output=True, text=True, timeout=20)

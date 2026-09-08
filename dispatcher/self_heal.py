@@ -45,7 +45,7 @@ AND the standalone dispatch_health.py (lumen-foreman-health.timer, 5-min) both a
 the same condition on out-of-phase cadences (R2 T5 / R3 wq#1012). Single owner is now
 dispatch_health.py: it writes health_state.json, runs the config-lint, and is the only
 DISPATCHER-STALLED pager. Do NOT re-add a check_dispatcher_health() call here.
-dispatcher_health.py stays on disk but is now unreferenced (retirement candidate).
+dispatcher_health.py was unreferenced and has been removed (wq#1416).
 
 CLI:  self_heal.py run --once [--dry-run]
 """
@@ -60,6 +60,7 @@ from datetime import datetime, timedelta, timezone
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(DISPATCHER_DIR, ".."))
 sys.path.insert(0, DISPATCHER_DIR)
+import vlogs_mirror  # noqa: E402
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 STATE_PATH = os.environ.get("FOREMAN_SELFHEAL_STATE",
@@ -186,6 +187,7 @@ def slock_release(holder):
 
 
 def ntfy(msg, priority="default", title="foreman-selfheal"):
+    vlogs_mirror.mirror("self_heal", title, priority, msg)
     try:
         subprocess.run([NTFY_BIN, "-p", priority, "-T", title, msg],
                        capture_output=True, text=True, timeout=20)
