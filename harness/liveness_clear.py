@@ -30,7 +30,7 @@ import liveness  # noqa: E402
 import liveness_sweep  # noqa: E402  (frank_gated_tickets + load_bindings, imported not copied)
 
 WQ_BIN = os.environ.get("WQ_BIN", "/home/lumen/bin/wq")
-NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy")
+NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")  # same default as the dispatcher
 RUNTIME = os.environ.get("FOREMAN_LIVENESS_RUNTIME", os.path.join(HERE, "runtime"))
 STATE_PATH = os.path.join(RUNTIME, "liveness_state.json")
 AUDIT_PATH = os.path.join(RUNTIME, "liveness_audit.jsonl")
