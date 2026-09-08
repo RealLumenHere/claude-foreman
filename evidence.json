@@ -2,19 +2,19 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "reports/1486_verify_wq1485_broker_grant_coverage_row.md:1",
-      "cmd_run": "python3 -m pytest harness/tests/test_capability_allow.py harness/tests/test_read_dir_sweep.py harness/tests/test_capability_lint.py dispatcher/tests/test_capability_replay.py dispatcher/tests/test_dispatcher.py dispatcher/tests/test_runaway.py -q",
+      "citation": "reports/1495_verify_wq1494_repo_sweep_foreman_pr_pending.md:1",
+      "cmd_run": "python3 -m pytest harness/tests/test_repo_reconcile.py -q",
       "exit_code": 0
     }
   ],
   "derived_by": "worker",
   "notes": [
-    "Verdict: CONFIRM. Full report: reports/1486_verify_wq1485_broker_grant_coverage_row.md.",
-    "PR#344 (merged e86fd38 rewritten to 3c26f42 on origin/main) adds exactly one row to research/BROKER_GRANT_COVERAGE.md matching wq#1485's fixed template, plus repoints evidence.json's AC1 citation to it (line 107, verified accurate).",
-    "Confirmed /home/lumen/research_prompts is a real allow.read_dirs entry (harness/fleet-exec-policy.yaml:71) and the allow-hit dir-tagging logic exists in harness/capability_lint.py, not just claimed in prose.",
-    "Ran all six touched/depended-on test files from a disposable worktree off pr-344: 114 harness + 127 dispatcher = 241 passed, matching the doc's own stated counts.",
-    "No scope creep: the wq#1485 commit alone (e86fd38) touches only evidence.json and research/BROKER_GRANT_COVERAGE.md; the other 2 commits bundled into PR#344 predate wq#1485's claim time and were already on the shared lane branch.",
-    "Non-blocking: neither the commit, PR notes, nor evidence.json cites the specific research_prompts file/line read, but the ticket's fixed-template deliverable has no slot for one."
+    "Verdict: CONFIRM. Full report: reports/1495_verify_wq1494_repo_sweep_foreman_pr_pending.md.",
+    "wq#1494's repo_reconcile.py --apply run on /home/lumen/foreman is fully verified: main == origin/main == 3048094 (IN_SYNC), archive tag archive/reconcile-main-20260908T061842Z holds exactly the 3 commits touching exactly the 3 claimed files.",
+    "Content is byte-identical between the archive tag and origin/test/wq1468-lumen-bin-single-host-endpoint-constants-a4 at all 3 touched paths -- 'preserved on the PR branch' is true, not just asserted.",
+    "ISSUE-LOG #223's exit-2 root cause confirmed by reading repo_reconcile.py:293-322 directly: the PR_PENDING branch hardcodes expected=BEHIND_ONLY with no case for origin already sitting at the merge-base. Genuine, currently-untested edge case -- correctly logged as a followup, not silently patched in a sweep-response ticket.",
+    "Ran the tool's full test suite (18 passed) as the probe -- wq#1494's operation did not regress repo_reconcile.py.",
+    "No leftover cruft or data loss: working tree clean at touched paths, untracked files present all predate wq#1494's run window."
   ],
-  "ticket": "wq#1486"
+  "ticket": "wq#1495"
 }
