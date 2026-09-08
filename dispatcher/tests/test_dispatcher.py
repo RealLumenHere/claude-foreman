@@ -1706,7 +1706,7 @@ def test_capability_lint_exception_never_costs_a_ticket_its_decision(denv, monke
 # Two real directories that are outside every repo ∪ base add_dirs the fixture gives a
 # worker, so the lint must derive a dir tag for them (the normalise_dir half of §2.1
 # only ever names a directory that EXISTS, so these cannot be invented paths).
-REACHABLE_DIR = "/home/lumen/agent"
+REACHABLE_DIR = "/home/lumen/research_prompts"  # wq#1441: must be under allow.read_dirs
 SECOND_DIR = "/home/lumen/instructions/playbooks"
 
 

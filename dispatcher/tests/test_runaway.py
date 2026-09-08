@@ -213,18 +213,18 @@ def test_hold_releases_once_the_ticket_carries_the_dir_tag(renv):
     # title cites nothing, so the lint derives nothing: only the written tag can
     # release this hold.
     tid = add_ticket("the worker could not reach its notes")
-    write_failure(renv, tid, unreachable_paths=["/home/lumen/agent/notes.md"])
+    write_failure(renv, tid, unreachable_paths=["/home/lumen/research_prompts/notes.md"])
     assert tid in runaway.harness_defect_ticket_ids()
 
-    set_needs(tid, "dir(/home/lumen/agent)")
+    set_needs(tid, "dir(/home/lumen/research_prompts)")
     assert tid not in runaway.harness_defect_ticket_ids()
 
 
 def test_hold_releases_on_a_tag_the_lint_derives_this_pass(renv):
     """Even before the write lands, the lint's own derivation covers the path — the
     hold and the pre-skip must agree about what the next spawn would reach."""
-    tid = add_ticket("ops: read /home/lumen/agent for the config")
-    write_failure(renv, tid, unreachable_paths=["/home/lumen/agent"])
+    tid = add_ticket("ops: read /home/lumen/research_prompts for the config")
+    write_failure(renv, tid, unreachable_paths=["/home/lumen/research_prompts"])
 
     assert tid not in runaway.harness_defect_ticket_ids()
 
@@ -232,8 +232,8 @@ def test_hold_releases_on_a_tag_the_lint_derives_this_pass(renv):
 def test_partial_coverage_keeps_the_hold(renv):
     tid = add_ticket("two paths, one granted")
     write_failure(renv, tid,
-                  unreachable_paths=["/home/lumen/agent", "/home/lumen/nowhere-at-all"])
-    set_needs(tid, "dir(/home/lumen/agent)")
+                  unreachable_paths=["/home/lumen/research_prompts", "/home/lumen/nowhere-at-all"])
+    set_needs(tid, "dir(/home/lumen/research_prompts)")
 
     assert tid in runaway.harness_defect_ticket_ids()
 
@@ -242,7 +242,7 @@ def test_a_v1_record_with_no_structured_paths_keeps_its_hold(renv):
     """Pre-slice-A failure.json always wrote unreachable_paths: [] (§2.5). An empty
     list is "we don't know", and a hold must never release on not knowing."""
     tid = add_ticket("old record, no structured fields")
-    set_needs(tid, "dir(/home/lumen/agent)")
+    set_needs(tid, "dir(/home/lumen/research_prompts)")
     write_failure(renv, tid)  # no unreachable_paths key at all
 
     assert tid in runaway.harness_defect_ticket_ids()
@@ -252,7 +252,7 @@ def test_a_non_path_defect_keeps_its_hold(renv):
     """WORKTREE_REPO_MISMATCH and hook crashes are what the backstop is FOR — only a
     defect this module can prove is fixed gets to bypass it."""
     tid = add_ticket("worktree/repo mismatch")
-    set_needs(tid, "dir(/home/lumen/agent)")
+    set_needs(tid, "dir(/home/lumen/research_prompts)")
     write_failure(renv, tid, summary="WORKTREE_REPO_MISMATCH")
 
     assert tid in runaway.harness_defect_ticket_ids()
@@ -262,8 +262,8 @@ def test_a_lint_crash_never_releases_a_hold(renv, monkeypatch):
     def boom(*a, **kw):
         raise RuntimeError("lint boom")
     monkeypatch.setattr(capability_lint, "derive", boom)
-    tid = add_ticket("reads /home/lumen/agent")
-    set_needs(tid, "dir(/home/lumen/agent)")
-    write_failure(renv, tid, unreachable_paths=["/home/lumen/agent"])
+    tid = add_ticket("reads /home/lumen/research_prompts")
+    set_needs(tid, "dir(/home/lumen/research_prompts)")
+    write_failure(renv, tid, unreachable_paths=["/home/lumen/research_prompts"])
 
     assert tid in runaway.harness_defect_ticket_ids()
