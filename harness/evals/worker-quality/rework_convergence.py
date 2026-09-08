@@ -25,9 +25,12 @@ DEFAULT_RUNS_ROOT = os.environ.get(
 
 
 def load_attempts(runs_root, ticket_dir):
+    # wq#1499: attempt-N.uncharged.json shares the glob but is a harness fault, not an
+    # attempt — skip it, and never let the sort key hit a name the anchored regex rejects.
     files = sorted(
-        glob.glob(os.path.join(runs_root, ticket_dir, "attempt-*.json")),
-        key=lambda p: int(re.search(r"attempt-(\d+)\.json$", os.path.basename(p)).group(1)),
+        (p for p in glob.glob(os.path.join(runs_root, ticket_dir, "attempt-*.json"))
+         if re.search(r"^attempt-(\d+)\.json$", os.path.basename(p))),
+        key=lambda p: int(re.search(r"^attempt-(\d+)\.json$", os.path.basename(p)).group(1)),
     )
     out = []
     for f in files:

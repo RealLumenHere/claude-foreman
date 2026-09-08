@@ -551,9 +551,13 @@ def run_dir(ticket_id):
 
 
 def next_attempt_n(ticket_id):
+    # wq#1499: attempt-N.uncharged.json (dispatcher/uncharge_attempt.py) still owns its
+    # number — usage-N.json, evidence/attempt-N and the transcript for that N are on disk
+    # as the audit trail. Counting only charged records would hand the next run a number
+    # that is already taken and overwrite those sidecars.
     d = run_dir(ticket_id)
-    existing = [f for f in os.listdir(d) if re.match(r"attempt-\d+\.json$", f)]
-    nums = [int(re.match(r"attempt-(\d+)\.json$", f).group(1)) for f in existing]
+    nums = [int(m.group(1)) for m in
+            (re.match(r"attempt-(\d+)(?:\.uncharged)?\.json$", f) for f in os.listdir(d)) if m]
     return (max(nums) + 1) if nums else 1
 
 
@@ -641,6 +645,20 @@ def write_usage_sidecar(ticket_id, n, record):
         json.dump(record, f, indent=2, default=str)
     os.rename(tmp, path)
     return path
+
+
+def worktree_diff_is_empty(worktree):
+    """wq#1499: True/False evidence for classify()'s thin/no-diff LAUNCH_FAILURE
+    heuristic; None (never guessed) if the check itself can't run — an unknown diff
+    state must not be treated as "empty"."""
+    try:
+        p = subprocess.run(["git", "-C", worktree, "diff", "--quiet"],
+                            capture_output=True, timeout=15)
+    except Exception:
+        return None
+    if p.returncode not in (0, 1):
+        return None
+    return p.returncode == 0
 
 
 def write_prior_attempt_notes(ticket_id, n, worktree, transcript_events, classification):
@@ -1728,7 +1746,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     # to INDETERMINATE. classify() only ever sees a "clean" exit for this one case.
     effective_exit_code = (0 if killed_reason in ("post_result_stuck", "ticket_done")
                            else exit_code)
-    raw_classification = classify(state, effective_exit_code)
+    raw_classification = classify(state, effective_exit_code, elapsed_s=elapsed,
+                                   diff_is_empty=worktree_diff_is_empty(worktree))
     classification = raw_classification
     # wq#992-C: run_child stopped the child specifically because the ticket itself
     # reached `done` mid-run — the most direct completion signal there is. That is a

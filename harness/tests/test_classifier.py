@@ -14,12 +14,12 @@ from classifier import (
 )
 
 
-def run(frames, exit_code=None, hung=False):
+def run(frames, exit_code=None, hung=False, elapsed_s=None, diff_is_empty=None):
     st = RunState()
     for f in frames:
         st.observe(f)
     st.hung = hung
-    return classify(st, exit_code)
+    return classify(st, exit_code, elapsed_s=elapsed_s, diff_is_empty=diff_is_empty)
 
 
 def test_clean_success():
@@ -39,6 +39,56 @@ def test_success_with_nonzero_exit_is_indeterminate_not_success():
         {"type": "result", "subtype": "success", "is_error": False},
     ]
     assert run(frames, exit_code=1) == INDETERMINATE
+
+
+def test_thin_no_diff_result_frame_is_launch_failure_wq1499():
+    # Pinned to _runs/wq869/attempt-5.json (also wq879/#983/#1122/#1350): a
+    # success-shaped result frame with is_error not explicitly False (the real CLI
+    # bug — wq869's raw_classification was CRASH, not INDETERMINATE, precisely
+    # because is_error was absent), turns=1, exit_code=1, elapsed_s=2.26, and the
+    # worker's worktree had no diff at all. Before wq#1499 this fell through the
+    # generic catch-all to CRASH — a charged, breaker-tripping attempt for a run
+    # that never did any real model work.
+    frames = [
+        {"type": "system", "subtype": "init", "session_id": "6cf3c809", "model": "opus-5"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "boom"}]}},
+        {"type": "result", "subtype": "success", "total_cost_usd": 0},
+    ]
+    assert run(frames, exit_code=1, elapsed_s=2.264770030975342,
+               diff_is_empty=True) == LAUNCH_FAILURE
+
+
+def test_thin_no_diff_with_is_error_false_is_also_launch_failure():
+    # Same shape as test_success_with_nonzero_exit_is_indeterminate_not_success
+    # above, but now with the elapsed_s/diff_is_empty evidence supplied: the
+    # sharper LAUNCH_FAILURE verdict wins over the coarser INDETERMINATE fallback.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "result", "subtype": "success", "is_error": False},
+    ]
+    assert run(frames, exit_code=1, elapsed_s=1.5, diff_is_empty=True) == LAUNCH_FAILURE
+
+
+def test_thin_result_frame_with_real_diff_stays_crash_not_launch_failure():
+    # The no-diff signal is load-bearing: identical timing/turns/exit but the
+    # worker actually changed the worktree must NOT be swept into LAUNCH_FAILURE.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "boom"}]}},
+        {"type": "result", "subtype": "success", "total_cost_usd": 0},
+    ]
+    assert run(frames, exit_code=1, elapsed_s=2.0, diff_is_empty=False) == CRASH
+
+
+def test_thin_no_diff_fault_never_overrides_limit():
+    # A real rate-limit signal is sharper evidence than the thin/no-diff heuristic
+    # even if the timing/turns/exit/diff shape happens to match.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "rate_limit_event", "status": "rejected", "resetsAt": "later"},
+        {"type": "result", "subtype": "success", "total_cost_usd": 0},
+    ]
+    assert run(frames, exit_code=1, elapsed_s=2.0, diff_is_empty=True) == LIMIT
 
 
 def test_rejected_rate_limit_event_is_limit_not_crash():

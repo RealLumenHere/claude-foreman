@@ -244,12 +244,17 @@ class RunState:
             self.num_turns = frame.get("num_turns")
 
 
-def classify(state: RunState, exit_code=None) -> str:
+def classify(state: RunState, exit_code=None, elapsed_s=None, diff_is_empty=None) -> str:
     """Apply RELIABILITY_SPEC.md §C/§D to an accumulated RunState.
 
     `exit_code` is the child process's raw exit code (None if unknown). §D's exit-code
     cross-check is mandatory: SUCCESS is only legal at exit 0; absent a result frame,
     exit code IS the primary discriminator between KILLED(143)/OOM(137)/other.
+
+    `elapsed_s` (wall-clock seconds) and `diff_is_empty` (worktree git diff) are
+    optional, measured by the caller (fworker.py), not derived from stream frames —
+    unlike everything else classify() reads. Callers that don't have them (unit tests,
+    run_fire_child) simply omit them and get the pre-wq#1499 fallback verdicts below.
     """
     # §C9 SUCCESS-BUT-STUCK: a watchdog kill AFTER a real terminal result already
     # arrived is fworker forcing a stuck process to exit, not a stall — the result
@@ -270,12 +275,28 @@ def classify(state: RunState, exit_code=None) -> str:
     if terminal_reason == "turn_setup_failed":
         return LAUNCH_FAILURE
 
+    # wq#1499: a result frame this thin — <=1 real turn, wall-clock under 10s, a
+    # nonzero exit, and the worktree shows no diff — is a launch-class fault the CLI
+    # happened to still wrap in a success-shaped (or otherwise unrecognized) result
+    # frame, indistinguishable in cause from turn_setup_failed above: no real model
+    # work ever ran (live evidence: wq869/#879 attempts, #983/#1122, #1350 — every
+    # one elapsed_s 1-2, turns=1, exit_code=1, empty git diff). Only overrides the
+    # two fallback verdicts below (never TURNS/LIMIT/AUTH/BUDGET/MODEL_NOT_FOUND,
+    # which have sharper evidence of their own) and only fires when the caller
+    # actually measured both signals — an unmeasured None never counts as "empty".
+    thin_no_diff_fault = (
+        exit_code not in (None, 0)
+        and state.turns <= 1
+        and elapsed_s is not None and elapsed_s < 10
+        and diff_is_empty is True
+    )
+
     # §C1 SUCCESS — result:success + is_error:false + terminal_reason:completed (or
     # absent, pre-terminal_reason CLI versions carry no such field at all). Cross-check
     # exit code (§D): a success frame paired with a non-zero exit is a disagreement.
     if subtype == "success" and is_error is False and terminal_reason in (None, "completed"):
         if exit_code not in (None, 0):
-            return INDETERMINATE
+            return LAUNCH_FAILURE if thin_no_diff_fault else INDETERMINATE
         if state.saw_refusal_no_fallback:
             return REFUSED
         # §C12 DEGRADED-SUCCESS (#7124): a genuine success frame whose `result` text
@@ -311,8 +332,9 @@ def classify(state: RunState, exit_code=None) -> str:
 
     if subtype is not None:
         # A result frame arrived but matched none of the shapes above — still a coarse
-        # catch-all (wq#648/S3 hardened the NDJSON reader, not this bucket's boundary).
-        return CRASH
+        # catch-all (wq#648/S3 hardened the NDJSON reader, not this bucket's boundary),
+        # unless it's the wq#1499 thin/no-diff shape computed above.
+        return LAUNCH_FAILURE if thin_no_diff_fault else CRASH
 
     # No result frame at all past this point (§C: "no result frame can NEVER be
     # SUCCESS" -> KILLED/OOM/LAUNCH_FAILURE/INDETERMINATE only).
