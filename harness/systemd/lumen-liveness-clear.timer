@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#1478 liveness clear — every 30 min, stale Frank-gates auto-close before Frank sees them
+
+[Timer]
+OnCalendar=*:07,37
+RandomizedDelaySec=90
+Persistent=true
+Unit=lumen-liveness-clear.service
+
+[Install]
+WantedBy=timers.target

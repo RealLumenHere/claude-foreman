@@ -175,3 +175,150 @@ Zero writes: no wq calls, no notes, no status changes.
 - `/home/lumen/.secrets/cf-email-routing.token` exists and verifies 200 while
   claude_credentials.md listed it as PENDING mint — doc drift, fixed same session
   and recorded in the ledger.
+
+## 12. Slices 3-4 — auto-clear + creation gate (BUILT 2026-09-08, wq#1478)
+
+Sign-off: Frank's 2026-09-07 build order ("a stale Frank-gate should auto-clear BEFORE it
+reaches Frank"). The broker-grant PR (#342 -> 57491d3) merged before this landed, so the
+file sets never overlapped: #342 touched capability_lint.py / fleet-exec-policy.yaml; this
+touches liveness_clear.py (new), foreman_dispatcher.py (two hook lines), and /home/lumen/bin/wq
+(cmd_add + cmd_decide, ~25 lines). fworker.py: untouched. capability.preflight /
+policy_grants / effective_needs: untouched (pinned by hash in test_liveness_clear.py).
+
+### 12.1 Where "Frank's queue" actually is (evidence)
+
+There is no queue object. Frank sees a gated ticket through three surfaces, all computed
+from queue.db at read time: (a) mission-control app.py:346-390 "awaiting Frank" (status
+frank_gated/pending_review, or blocked with a Frank/gate/approval note); (b) the
+dispatcher's `frank_gated` skip (stage 3 HUMAN_LANES, stage 4 frank_gate_reason); (c) the
+orchestrator's end-of-session report. A ticket ENTERS the queue at exactly three writes:
+`wq add` into a human lane / --frank-gated / title marker, `wq decide` (frank_gated ->
+pending_review = "a queued question"), and `wq edit --status frank_gated`. So "before it
+reaches Frank" = gate those writes (Slice 4 + decide hook) and keep the standing set
+clean (Slice 3 sweep + dispatcher hook). Mission-control stays read-only (its QUEUE
+INTEGRITY rule: writes go through the wq CLI), it just stops seeing closed tickets.
+
+### 12.2 One write path: harness/liveness_clear.py
+
+Every state change made by the liveness gate goes through `clear_if_stale(ticket)`:
+
+    verdict = capability.liveness_verdict(ticket, bindings)      # read-only, Slice 2
+    SATISFIED     -> audit line -> wq note -> normalize status -> wq_close.close() -> confirm
+    STILL_BLOCKED -> nothing (Frank genuinely needed); audit line only on verdict change
+    UNKNOWN       -> nothing to the ticket state; `wq note "[liveness] UNKNOWN ..."` ONCE per
+                     verdict transition (state file dedupes), audit line, ntfy on first flag
+    NO_TAG        -> nothing
+
+Status normalization: `frank_gated`/`pending_review` are refused by `wq claim --id`
+(wq:1180-1187), and `blocked` is refused too. wq_close.close() already handles blocked
+(unblock -> claim -> done, re-block on failure). liveness_clear handles the two decision
+statuses the same way: `wq edit --status open` first, and if any later step fails the
+original status is restored by `wq edit --status <prev>` — a failed close must never leave
+a gated ticket sitting `open` (that would widen the dispatchable queue).
+
+Close is confirmed the wq#1479 way: the ticket row's own status after the close, never
+CLI stdout. `wq note` and `wq done --notes` both carry the probe verdict verbatim:
+`[liveness] auto-clear SATISFIED: repo_is(private, X) -> X is private`.
+
+Audit: harness/runtime/liveness_audit.jsonl, one JSON line per decision that changed
+anything or flagged anything: ts, ticket, prior status, verdict, every probe result,
+action, close verdict (CLOSED/NOT-CLOSED + step), actor. Plus a `wq note` on the ticket
+and an ntfy to lumen-fleet (Frank ro) per auto-close — that is the "route to
+orchestrator": the next session's `handoff verify` shows the episode, the ticket shows
+the note, the channel shows the line.
+
+State: harness/runtime/liveness_state.json = {ticket: {verdict, ts, detail}} — last
+verdict per ticket. Used for (1) UNKNOWN flag dedupe (flag on transition only), (2) the
+dispatcher re-probe TTL (§12.4), (3) `--json` reporting.
+
+Bindings -> tickets (§10): with `--write-bindings`, a ticket that has a ledger binding and
+no `Liveness:` line gets the binding appended to its detail as a `Liveness:` line via
+`wq edit --detail` (read-modify-write from `wq show --json`). Done once; after that the
+ticket is self-describing and the ledger binding is redundant.
+
+### 12.3 Periodic sweep (deliverable 2)
+
+`python3 harness/liveness_clear.py --apply` over the same frank-gated predicate as the
+Slice 2 sweep (imported from the dispatcher, not copied). systemd:
+lumen-liveness-clear.timer, every 30 min (OnCalendar *:07/37), RandomizedDelaySec=90,
+service Type=oneshot, User=lumen, WorkingDirectory=/home/lumen/foreman,
+WQ_AGENT=liveness-clear (registered via `wq whoami --register liveness-clear` at install;
+the unit re-registers if wq refuses). Runtime bound: probes have 15-20 s timeouts and only
+tagged tickets cost anything (7 of 44 today) — measured 2026-09-08: full sweep 19 s.
+Default with no flag is `--dry-run` (report, zero writes) so a bare invocation is safe.
+
+### 12.4 Dispatcher hook (deliverable 1, surface (b))
+
+foreman_dispatcher.py stage 3 (HUMAN_LANES skip) and stage 4 (frank_gate_reason skip) call
+`liveness_clear.dispatch_hook(tid, ticket_or_None, fetch, log)` right before logging the
+`frank_gated` skip. The hook is cheap by construction: it consults liveness_state.json
+and the ledger bindings, and only re-probes a ticket that (a) is known to carry a
+liveness condition (ledger binding, or a prior sweep saw a `Liveness:` line) and (b) has
+no verdict newer than FOREMAN_LIVENESS_TTL_MIN (default 30). A brand-new tagged ticket is
+picked up by the next sweep (<=30 min) and by the creation gate at file time. If the
+hook closes the ticket it emits `liveness_autoclose` and the loop `continue`s without the
+frank_gated skip; every other outcome falls through to the unchanged skip. The hook is
+wrapped in the per-ticket try (wq#1408): a liveness exception costs that ticket's hook,
+never the pass.
+
+### 12.5 Creation gate (deliverable 3, Slice 4) — /home/lumen/bin/wq
+
+`cmd_add` and `cmd_decide` call `_liveness_creation_check(title, detail, lane, frank_gated)`
+when the ticket would be Frank's (lane in the dispatcher's HUMAN_LANES, --frank-gated,
+or FRANK_TITLE_RE on the title). The check imports harness/liveness_clear.py lazily
+(FOREMAN_HARNESS=/home/lumen/foreman/harness); an import failure is fail-OPEN with a
+one-line warning (a missing harness must never block filing a ticket — same shape as
+configured_lanes()). Verdicts:
+
+  - `Liveness:` line present, probes SATISFIED  -> REFUSED (exit 1) "premise already met":
+    the thing is done, file nothing. `--force` files it anyway with the verdict noted.
+  - every probe on the line is recorded under `done_capabilities:` in the ledger -> REFUSED
+    "ledger says done since <since>" (no probe run needed; the probe is still run and
+    reported for the record).
+  - STILL_BLOCKED / UNKNOWN -> filed normally, verdict printed.
+  - no `Liveness:` line -> filed with a WARNING that the gate can never auto-clear.
+    FOREMAN_LIVENESS_LINT_MODE=strict makes this a refusal; default is warn, because
+    most of Frank's real queue is physical acts (buy X, boot Y) with no machine probe.
+  - `wq decide` on a SATISFIED ticket: refused AND the ticket is closed through
+    clear_if_stale in the same call — decide is the act of queueing a question, and a
+    question whose answer is already on disk is exactly the redo loop.
+
+Semantic-trap rule (§11) is documented, not linted: no deterministic check can tell
+"probe means the ask is done" from "probe means the checker exists". The lint prints the
+probe's would-be SATISFIED detail next to the title so the author sees the mismatch.
+
+### 12.6 Safety properties (Frank's SAFETY line)
+
+- Deterministic: probes only; no LLM anywhere in the path.
+- Firewalled: liveness_clear imports capability.liveness_verdict and wq_close only.
+  test_liveness_clear.py pins the source hashes of capability.preflight, policy_grants,
+  effective_needs, effective_add_dirs and fworker.resolve_exec_grant,
+  assert_spawn_capability — any drift fails the test with "not liveness's change".
+  The dispatcher hook runs AFTER stage 3.7 has already decided the ticket is not
+  dispatchable; it can only close a ticket, never route one to a worker.
+- Fail-safe: UNKNOWN never closes (aggregate: any STILL_BLOCKED wins, then any UNKNOWN,
+  SATISFIED only when every probe is SATISFIED); NO_TAG never closes; a close that does not
+  land restores the prior status.
+- Audited: every close = audit jsonl + wq note + ntfy, with the probe verdict verbatim.
+- Reversible: FOREMAN_LIVENESS_CLEAR=0 makes every write path report-only (dispatcher
+  hook no-op, sweep dry-run, creation check warn-only); `systemctl disable --now
+  lumen-liveness-clear.timer`; wq patch is a .bak'd 25-line block behind one function;
+  a wrongly closed ticket reopens with `wq edit --status <prev>` (the audit line records
+  prev status).
+
+### 12.7 Test-to-failure (harness/tests/test_liveness_clear.py, against a scratch queue.db
+copy under WQ_DB with the REAL wq binary)
+
+(i)   seeded ticket, lane frank-cred, `Liveness: path_exists(<tmpfile that exists>)`,
+      status blocked -> --apply closes it; row status=done; audit line present; note present.
+(ii)  seeded `path_exists(<missing>)` -> STILL_BLOCKED, status unchanged, no note.
+(iii) seeded probe that raises (monkeypatched registry) -> UNKNOWN, status unchanged, ONE
+      note on first sweep, none on the second (dedupe), audit line flagged.
+(iv)  hash pins on the exec allow/deny functions; `import liveness_clear` never imports
+      fworker; policy_grants over a Liveness-only ticket still ([], []).
+(v)   replay this session's set (902/1101/1133/1296/1047/362/1478) with probe results
+      recorded from the live 2026-09-08 sweep -> only 1101 remains STILL_BLOCKED.
+(vi)  failed close (wq done forced to fail) on a frank_gated ticket -> status restored to
+      frank_gated, audit line NOT-CLOSED.
+(vii) creation gate: add with SATISFIED probe REFUSED; --force files; strict mode refuses
+      tagless; decide on SATISFIED refuses and closes.
