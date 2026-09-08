@@ -18,6 +18,11 @@ Installs to `/home/lumen/.npm-global/lib/node_modules/renovate`. Update later th
 (`npm install -g renovate` again); no service restart needed since the timer starts a fresh
 process each run.
 
+**wq#1557 — pin to 44.69.11 (APK constraint fix):** run
+`ops/wq1557-renovate-upgrade/upgrade.sh` (as `lumen`, no root, via `lumen-run`) instead of a
+bare `npm install -g renovate` so the version is explicit and verified post-install. See that
+script for the exact version pin.
+
 ## Deploy (root — `lumen-run --root` on Lumen itself)
 
 ```bash
