@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "harness/fworker.py:1833-1836", "cmd_run": "python3 -m pytest harness/tests/test_shim_matrix.py harness/tests/test_fworker_integration.py harness/tests/test_wq_reopened.py harness/tests/test_block_classification.py harness/tests/test_classifier.py -q", "exit_code": 0}]}
+{"criteria": [{"id": "AC1", "citation": "harness/langfuse_lag_monitor.py:44-58", "cmd_run": "python3 -m pytest harness/tests/test_langfuse_lag_monitor.py -q", "exit_code": 0}]}
