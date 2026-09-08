@@ -87,7 +87,9 @@ allow:
   # holddown + verify-after) is unchanged and still applies at call time.
   restart:
     isis: [ollama]              # proven e2e 2026-09-06 (wq#1440, lumen-bin PR #63)
-    lumen: [lumen-messenger]    # wq#1350 needs it; reversible, not a crown-jewel unit
+    lumen: [lumen-messenger, lumen-pokemon-live]    # lumen-messenger: wq#1350; lumen-pokemon-live: wq#1360
+                                # (LPP live loop; verified 2026-09-08: LoadState=loaded, active, sudo -n ok,
+                                #  not never-listed; probe = sentinel probe_pokemon_liveness incl. flap guard)
 
   # SSH: nodes the lint may tag ssh(node) for (read-only `run` under
   # run_readonly_cmds only). thor is never here: never.nodes covers it.
