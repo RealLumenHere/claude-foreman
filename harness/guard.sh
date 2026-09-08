@@ -81,7 +81,12 @@ Bash)
   NORM=$(printf '%s' "$RAW_CMD" | tr '\n\t' '  ' | tr -s ' ')
 
   for target in "$RAW_CMD" "$NORM"; do
-    if printf '%s' "$target" | grep -qE '(^|[;&|[:space:]])(sudo|reboot|shutdown|poweroff|halt|init +[06])\b'; then
+    # Leading context is "anything that is not part of a longer word": an explicit
+    # [;&|[:space:]] class missed every verb sitting immediately after an opening
+    # quote or paren — `ssh bes 'sudo ...'` slipped straight through. Disclosed in
+    # reports/wq415_..., re-hit by wq#857, closed here (wq#879). Keeping _ . / -
+    # out of the match keeps `my_sudo`, `./reboot.sh` and `--no-halt` from tripping.
+    if printf '%s' "$target" | grep -qE '(^|[^[:alnum:]_./-])(sudo|reboot|shutdown|poweroff|halt|init +[06])\b'; then
       block "denied verb (sudo/reboot/shutdown/poweroff/halt/init 0|6)" "$RAW_CMD"
     fi
     if printf '%s' "$target" | grep -qE 'systemctl +(stop|disable|mask)\b'; then

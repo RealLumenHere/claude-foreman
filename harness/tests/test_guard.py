@@ -89,6 +89,14 @@ MUST_BLOCK = [
     ("Bash", {"command": "export ANTHROPIC_BASE_URL=http://evil"}),
     ("Bash", {"command": "init 0"}),
     ("Bash", {"command": "  sudo   reboot  "}),
+    # wq#879: the denied-verb scan only looked for [;&| ] before the verb, so a verb
+    # sitting immediately after an opening quote/paren was invisible. Disclosed by
+    # wq#415, exercised again by wq#857's verify pass, closed at guard.sh:84.
+    ("Bash", {"command": "ssh bes 'sudo ufw status'"}),
+    ("Bash", {"command": "ssh bes \"sudo -n true\""}),
+    ("Bash", {"command": "ssh bes 'sudo bash -c \"whoami\"'"}),
+    ("Bash", {"command": "ssh bes 'poweroff'"}),
+    ("Bash", {"command": "bash -c '(reboot)'"}),
     ("Read", {"file_path": "/home/lumen/agent/.env"}),
     ("Read", {"file_path": "/home/lumen/foreman/.credentials.json"}),
     ("Read", {"file_path": "/home/lumen/.claude/.credentials.json"}),
@@ -142,6 +150,11 @@ MUST_ALLOW = [
     ("Write", {"file_path": f"{WORKTREE}/src/main.py"}),
     ("Grep", {"pattern": "TODO", "path": WORKTREE}),
     ("Glob", {"pattern": "**/*.py", "path": WORKTREE}),
+    # wq#879: widening the denied-verb leading context must not start matching verbs
+    # that are only a substring of a longer identifier or a path.
+    ("Bash", {"command": "grep -n shutdown_hook src/app.py"}),
+    ("Bash", {"command": "echo my_sudo"}),
+    ("Bash", {"command": "cat ./reboot.sh"}),
     # wq#1297: only pull is denied — inspection verbs stay usable from a worker.
     ("Bash", {"command": "ollama list"}),
     ("Bash", {"command": "ollama show llama3:70b"}),

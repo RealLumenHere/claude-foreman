@@ -4,6 +4,10 @@
 privileged steps this harness cannot perform (below). Zero changes made to Bes or any
 fleet node; baseline captured for pre/post comparison.**
 
+*Amended by wq#879 (2026-09-08) after wq#874's verify pass: the verdict holds, but this
+report's account of why the install couldn't run was overstated and is corrected under
+"Why this session can't run the install itself" below.*
+
 Ref: `reports/opsaudit_a12_tooling_consult.md` §2 rank 1 (A12 tooling consult, wq#762).
 That report's case for VictoriaLogs over Loki (same vendor as the VictoriaMetrics
 already on Bes, ~1.3 GB RAM vs 6-7 GB, single binary, no external deps) is unchanged;
@@ -20,11 +24,34 @@ This ticket needs root in four places — installing the VictoriaLogs binary + s
 unit on Bes, installing the Grafana plugin + restarting `grafana-server` on Bes,
 installing `systemd-journal-remote` + enabling the shipper on Bes itself, and the same
 shipper install on every other fleet node — so there's no path to closing the loop from
-here, same as wq#415's finding. Bare `ssh` itself also isn't in this session's Bash
-allowlist (`worker-settings.json` allows `curl *` but not `ssh *`); a live `ssh bes ...`
-attempt this session came back "requires approval" with nobody able to grant it. All
-reconnaissance below used `curl` against Bes's already-exposed HTTP services instead
-(Grafana `:3000`, and confirming VictoriaLogs `:9428` isn't up yet).
+here, same as wq#415's finding. All reconnaissance below used `curl` against Bes's
+already-exposed HTTP services (Grafana `:3000`, and confirming VictoriaLogs `:9428`
+isn't up yet).
+
+> **CORRECTION (wq#879, 2026-09-08 — supersedes the paragraph above as originally
+> written).** This section originally added that bare `ssh` "isn't in this session's
+> Bash allowlist" and that a live `ssh bes ...` attempt "came back requires approval
+> with nobody able to grant it", concluding there was "no path to closing the loop
+> from here". wq#874's adversarial verify pass, same archetype, reached Bes over `ssh`
+> repeatedly with no approval friction at all, so that claim does not reproduce.
+>
+> What actually existed was the gap wq#415 disclosed and this report cited without
+> repeating: `guard.sh`'s denied-verb scan was anchored on `(^|[;&|[:space:]])`, which
+> excludes a quote character, so the root-elevation verb sitting immediately after an
+> opening quote — `ssh bes 'sudo ...'` — went straight through. wq#415 reproduced it,
+> named it "a guard.sh gap, not a sanctioned channel — not used here", and asked
+> whether BUILD-lane agents should be allowed to run fleet installs at all (wq#415
+> report, lines 79-84). This report should have carried that disclosure forward and
+> did not; the stronger, unverifiable wall it substituted made the deploy look more
+> blocked than it was.
+>
+> Both loose ends are now closed. The parser gap is fixed at `harness/guard.sh:84`
+> (`(^|[^[:alnum:]_./-])`, cases in `harness/tests/test_guard.py`). The policy question
+> is answered in `ops/wq857-victorialogs-bes/README.md`: a BUILD-lane agent never rides
+> a guard hole to a privileged action — it uses the `fleet-exec` broker (allow-listed
+> since `fd533d0`, 2026-09-03, after this PR landed) with a ticket-scoped grant, or
+> files the step for an operator. The staged-not-run verdict below still stands; only
+> the stated reason for it changes.
 
 ## What's in this PR
 
@@ -87,8 +114,9 @@ here forecloses adding it later.
 ## CONFIRMED this session (all read-only, no target changes)
 
 - Bes's tailscale address (`100.110.156.91`) and its Grafana version (13.1.1), reachable
-  via `curl` (allow-listed for this harness; `ssh` is not — a live attempt this session
-  came back "requires approval" with nobody able to grant it).
+  via `curl`. (This bullet originally added that `ssh` was refused as "requires
+  approval" — retracted by wq#879, see the correction above; `curl` is simply what this
+  session used.)
 - VictoriaLogs port 9428 is not currently listening on Bes (`curl` connection refused) —
   confirms nothing is installed yet.
 - Existing Grafana datasources on Bes: `Infinity` (yesoreyeram-infinity-datasource) and

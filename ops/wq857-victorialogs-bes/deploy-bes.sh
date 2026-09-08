@@ -5,7 +5,8 @@
 # needs root on a target host, and this harness's guard.sh unconditionally
 # denies `sudo` (local or remote-embedded), with no exception — see README.md
 # for the full explanation (same constraint wq#415's Sobek canary hit first).
-# Run this from Frank interactively or a claude-web session.
+# Run this from Frank interactively, a claude-web session, or an agent holding a
+# `fleet-exec` grant for Bes (the brokered channel, added after this was staged).
 #
 # Usage: deploy-bes.sh
 set -euo pipefail
