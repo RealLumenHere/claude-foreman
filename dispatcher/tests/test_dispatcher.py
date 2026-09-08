@@ -2086,3 +2086,9 @@ def test_soft_stale_dry_run_logs_but_does_not_reseal(denv, monkeypatch):
     assert [e for e in log_events(denv, "info") if e.get("reason") == "stamp_soft_stale"]
     assert resealed == []
     assert log_events(denv, "would_spawn")
+
+
+def test_repo_mismatch_and_route_unassigned_are_structural():
+    import foreman_dispatcher as fd
+    assert {"repo_mismatch", "route_unassigned"} <= fd.STRUCTURAL_SKIP_REASONS
+    assert "tight_pri" not in fd.STRUCTURAL_SKIP_REASONS  # pressure is a real stall signal

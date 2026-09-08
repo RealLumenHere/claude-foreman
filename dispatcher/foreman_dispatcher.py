@@ -154,6 +154,11 @@ STRUCTURAL_SKIP_REASONS = frozenset({
     "lane_unmapped", "nodispatch_marker", "frank_gated", "deps_unmet",
     "runaway_stuck", "not_open", "vanished", "fire_unapproved", "fire_no_probe",
     "held",  # wq#1461: a live `wq hold` — structural, not a stall (see hold_reason)
+    # 2026-09-08: a ticket whose title names a repo its lane cannot land in, or that
+    # the router has no rung for, is a ticket defect — it will never spawn until the
+    # ticket is re-laned/re-routed. Counting them as dispatchable made the watchdog
+    # page "STALLED — recovery FAILED, needs you" (aq#1098 x7) on a drained queue.
+    "repo_mismatch", "route_unassigned",
 } | set(CAPABILITY_SKIP_REASONS))
 
 
