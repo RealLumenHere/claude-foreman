@@ -223,7 +223,11 @@ def test_shim_11c_unconfirmed_block_sentinel_still_false_completes(tmp_path):
 def test_shim_11d_claim_error_sentinel_is_terminal_not_retried(tmp_path):
     """wq#749: a worker that hits a claim race and reports CLAIM_ERROR as instructed
     exits 0 with an ordinary result:success frame too — must stop and release, not
-    retry under the same stale claim."""
+    retry under the same stale claim.
+
+    wq#869: the scenario now actually loses the claim (the ticket is reopened out
+    from under the attempt) instead of merely saying so, because that DB fact is what
+    makes the sentinel terminal."""
     repo = make_scratch_repo(tmp_path)
     env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "success_claim_error_sentinel")
@@ -234,6 +238,29 @@ def test_shim_11d_claim_error_sentinel_is_terminal_not_retried(tmp_path):
     assert result.returncode == 10, result.stdout + result.stderr  # EXIT_CLAIM_ERROR
     assert wq_status(env, ticket_id) == "open"  # released, not left claimed
     assert not os.path.exists(os.path.join(runs_root, f"wq{ticket_id}", "attempt-2.json"))
+
+
+def test_shim_11e_uncorroborated_claim_error_sentinel_still_false_completes(tmp_path):
+    """wq#869 adversarial case (the CLAIM_ERROR twin of 11c): a CLAIM_ERROR sentinel
+    printed while the ticket is still held by this very attempt is not a claim race —
+    nothing raced. It must NOT buy a release + EXIT_CLAIM_ERROR + no-retry on sentinel
+    text alone; it falls through to the ordinary FALSE_COMPLETE/retry path, so the
+    fabrication stays visible in the attempt record instead of vanishing.
+
+    Before wq#869 the corroboration was `status != "done"`, which the ordinary
+    in-progress status "claimed" satisfies, so this scenario exited 10 with no
+    attempt-2.json at all."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
+        tmp_path, 0, "success_uncorroborated_claim_error_sentinel")
+    ticket_id = wq_add(env, "shim 11e: uncorroborated claim error sentinel")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+
+    result = run_fworker(env, ticket_id, repo, "success_uncorroborated_claim_error_sentinel")
+    assert result.returncode != 10, result.stdout + result.stderr  # not EXIT_CLAIM_ERROR
+    assert wq_status(env, ticket_id) == "blocked"
+    record = attempt_record(runs_root, ticket_id, n=2)
+    assert record["classification"] == "FALSE_COMPLETE"
 
 
 def test_shim_12_401_is_auth(tmp_path):

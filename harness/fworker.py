@@ -466,6 +466,19 @@ def wq_show(ticket_id):
     return out
 
 
+def ticket_holder(ticket):
+    """wq#869: the identity currently holding `ticket`, or None if unheld.
+
+    `wq show`'s plain-text mode stringifies a NULL claimed_by as the literal "None"
+    (cmd_show in /home/lumen/bin/wq f-strings every column), so a released ticket and
+    a ticket held by an agent literally named "None" are indistinguishable in that
+    output. Normalising here keeps "the claim went away" and "the claim changed
+    hands" one comparison rather than three at every call site.
+    """
+    holder = (ticket.get("claimed_by") or "").strip()
+    return None if holder in ("", "None") else holder
+
+
 def deps_unmet(ticket_id):
     """Read-only dep check ahead of claim/spawn (BUILD_PLAN.md §T2a: "dep-preflight
     before spawn"). `wq claim --id` already refuses at the DB layer if deps aren't
@@ -1607,6 +1620,11 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
     archetype = args.archetype or "standard-engineering"
+    # wq#869: whoever holds the ticket as this attempt starts — the baseline a
+    # CLAIM_ERROR sentinel is corroborated against below. Captured here rather than
+    # assumed to be wq_identity() so a resumed attempt compares against the claim it
+    # actually inherited.
+    claim_holder_at_start = ticket_holder(ticket)
 
     allow, reason = can_dispatch(args.model)
     if not allow:
@@ -1790,17 +1808,32 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     # against the ticket's actual status before the FALSE_COMPLETE check below ever
     # runs, so a real block/claim-race never gets relabeled and retried. The sentinel
     # alone is never trusted (a worker could print BLOCKED without calling `wq
-    # block`) — only the ticket-status cross-check makes it terminal.
+    # block`) — only the cross-check against wq's own DB state makes it terminal.
+    #
+    # wq#869: that promise used to hold for BLOCKED only. CLAIM_ERROR was gated on
+    # `status != "done"`, which the ordinary in-progress status ("claimed") satisfies
+    # on its own — so any session could print the literal line CLAIM_ERROR with zero
+    # claim contention and buy itself a release + no-retry + no FALSE_COMPLETE flag,
+    # exactly the self-report trust RELIABILITY_SPEC.md §C10 exists to deny. The
+    # corroborating DB fact for a claim race is the CLAIM, not the status: the ticket
+    # must have left this attempt's holder — stolen by another identity, or reopened
+    # out from under it. A ticket still held by whoever held it at attempt start
+    # falls through to the ordinary FALSE_COMPLETE path.
     worker_sentinel = None
     sentinel_status = None
+    sentinel_holder = None
     if classification in (SUCCESS, DEGRADED_SUCCESS):
         worker_sentinel = parse_worker_sentinel(state.result_text)
         if worker_sentinel in (BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL):
-            sentinel_status = wq_show(ticket_id).get("status")
+            sentinel_ticket = wq_show(ticket_id)
+            sentinel_status = sentinel_ticket.get("status")
+            sentinel_holder = ticket_holder(sentinel_ticket)
     sentinel_confirmed_block = (worker_sentinel == BLOCK_SENTINEL
                                  and sentinel_status == "blocked")
-    sentinel_confirmed_claim_error = (worker_sentinel == CLAIM_ERROR_SENTINEL
-                                       and sentinel_status != "done")
+    claim_lost = (worker_sentinel == CLAIM_ERROR_SENTINEL
+                  and claim_holder_at_start is not None
+                  and sentinel_holder != claim_holder_at_start)
+    sentinel_confirmed_claim_error = (claim_lost and sentinel_status != "done")
 
     # RELIABILITY_SPEC.md §C10: verify acceptance criteria against artifacts BEFORE
     # anything downstream (including the persisted attempt record) trusts a self-
@@ -1910,8 +1943,9 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         ntfy("foreman BLOCKED", f"wq#{ticket_id} blocked by worker", priority="high")
         return EXIT_BLOCKED
     if sentinel_confirmed_claim_error:
-        log(f"CLAIM_ERROR: worker reported a claim race on wq#{ticket_id} "
-            f"(status={sentinel_status!r}) — releasing, no retry (wq#749).")
+        log(f"CLAIM_ERROR: worker reported a claim race on wq#{ticket_id}, corroborated "
+            f"by the claim leaving {claim_holder_at_start!r} (now {sentinel_holder!r}, "
+            f"status={sentinel_status!r}) — releasing, no retry (wq#749, wq#869).")
         wq_release(ticket_id)
         return EXIT_CLAIM_ERROR
 

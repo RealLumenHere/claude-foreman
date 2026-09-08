@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1539-release-dead-worker-order/ensure_wq_release_dead_worker_order.py:71-99"}]}
+{"criteria": [{"id": "AC1", "citation": "harness/fworker.py:1833-1836", "cmd_run": "python3 -m pytest harness/tests/test_shim_matrix.py harness/tests/test_fworker_integration.py harness/tests/test_wq_reopened.py harness/tests/test_block_classification.py harness/tests/test_classifier.py -q", "exit_code": 0}]}

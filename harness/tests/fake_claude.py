@@ -24,6 +24,25 @@ def emit(frame):
     print(json.dumps(frame), flush=True)
 
 
+def _steal_claim(ticket_id, holder, status):
+    """wq#869: take `ticket_id` away from the attempt that is running us.
+
+    Scenarios that report CLAIM_ERROR have to leave the DB in the state a real race
+    leaves it in, because fworker now corroborates that sentinel against claimed_by.
+    No wq subcommand can do this — `release` refuses a non-holder and `claim` refuses
+    a live ticket, both on purpose — so this writes the scratch DB directly.
+    """
+    import sqlite3
+    db = os.environ.get("WQ_DB")
+    if not db or not ticket_id:
+        return
+    c = sqlite3.connect(db)
+    c.execute("UPDATE tasks SET claimed_by=?, status=? WHERE id=?",
+              (holder, status, int(ticket_id)))
+    c.commit()
+    c.close()
+
+
 def fire_hook(tool_name, tool_input, session_id, effort):
     payload = json.dumps({
         "tool_name": tool_name, "tool_input": tool_input,
@@ -275,13 +294,30 @@ def main():
         emit({"type": "result", "subtype": "success", "is_error": False, "result": "BLOCKED"})
 
     elif scenario == "success_claim_error_sentinel":
-        # wq#749: the worker discovers mid-session its claim raced (e.g. lease
-        # stolen) and reports CLAIM_ERROR as instructed rather than doing the work
-        # under a stale claim. exit 0, ordinary result:success frame.
+        # wq#749: the worker discovers mid-session its claim raced and reports
+        # CLAIM_ERROR as instructed rather than doing the work under a stale claim.
+        # exit 0, ordinary result:success frame.
+        #
+        # wq#869: the race is now ACTED OUT, not just asserted — the ticket is
+        # reopened out from under this attempt (status open, claim cleared), which is
+        # the DB fact fworker corroborates the sentinel against. Written straight to
+        # the scratch DB because no wq subcommand lets a third party yank a live
+        # claim; the state is what fworker reads, not how it got there.
+        _steal_claim(ticket_id, holder=None, status="open")
         emit({"type": "assistant", "message": {"content": [
             {"type": "text", "text": "claim looks stale, bailing"}]}})
         emit({"type": "result", "subtype": "success", "is_error": False,
               "result": "claim race detected\nCLAIM_ERROR"})
+
+    elif scenario == "success_uncorroborated_claim_error_sentinel":
+        # wq#869 adversarial case, the CLAIM_ERROR twin of
+        # success_unconfirmed_block_sentinel: the sentinel claims a claim race but
+        # the ticket is still held by this very attempt, so nothing raced. Must fall
+        # through to the ordinary FALSE_COMPLETE path instead of buying a free
+        # release + no-retry on sentinel text alone.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "result": "CLAIM_ERROR"})
 
     elif scenario == "auth_401":
         # shim 12 (§C11 AUTH): system/api_retry authentication_failed + a bare 401.
