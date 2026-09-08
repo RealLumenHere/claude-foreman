@@ -103,7 +103,9 @@ not touched, no collision), `fworker.resolve_exec_grant`, guard.sh, the never-li
 | unit | existing `test_capability_lint.py` (79) + `test_capability.py` under the new fixture allow section | PASS (fixture gained `allow:`; no expectation weakened — every row that expects a tag is under a fixture allow root) |
 | replay | live open queue (30 tickets), old vs new lint, same repo resolution | 0 tickets change bucket. The 4 already-refused rows (1446/1466/1467/1474) additionally lose their partial `dir` tags — correct, refusal beats a partial grant (§4 row vi) |
 | iii | never-list: `restart tailscaled on thor` / `restart(postgresql@maat)` / `systemctl restart cloudflared` → `refused` deterministically; MAC-spoof text has no verb shape → no tag; `rm -rf` is not a verb the lint emits and `run_readonly_cmds` has no `rm` | PASS (unit); broker-side forged-Needs drill = slice 2 |
-| i / ii / iv (live) | slice 3 (§5) | owed |
+| ii (live) | `fleet-exec restart isis ollama` from the lumen-bin `origin/main` checkout (fe8e492) with the new policy, forged grant naming it | PASS 2026-09-08 05:46Z: audit `allow policy:restart_allowed`, `before={loaded,active,running,516198266878}` → `after={…,680501786733}`, `verified=true`, exit 0; ActiveEnterTimestamp `2026-09-06 08:08:02` → `2026-09-08 05:46:26 UTC`; `holddown list` → no flags; `/api/tags` still serves `qwen3.6:35b-a3b` + `qwen3:32b` |
+| iii (live, broker) | forged grant.json (sha-valid, ticket 1441) listing restart thor/tailscaled, lumen/cloudflared, maat/postgresql, isis/gitea + ssh run on thor/isis; ten calls | every mutating call DENIED and audited: `policy:never_nodes` (thor), `policy:never_restart` ×2, `policy:restart_not_allowed` (gitea@isis — the new allow row), `policy:not_readonly` (`systemctl restart` on thor, `rm -rf`, `ip link set … address 64:00:6a:58:fc:d8`), `policy:shell_escape_basename` (`bash -c`), `policy:credential_path_blocked` (`cat ~/.ssh/id_ed25519`). Only `run thor -- uptime` allowed (the designed read-only exception). Zero ssh sessions opened for any denied call (deny precedes transport) |
+| iv | `dispatchable` after landing | dry-run pass from the merged tree: dispatchable 4, lint_scanned 11, no new skips; the same pass spawned wq#1485 (row i) and wq#1484 |
 | i (live) | worker read an allow-listed dir via needs:dir and landed this line | PASS 2026-09-08 wq#1485 |
 
 ## 5. Slices
@@ -111,9 +113,9 @@ not touched, no collision), `fworker.resolve_exec_grant`, guard.sh, the never-li
 | slice | content | repo | rollback | state |
 |---|---|---|---|---|
 | 1 | this: `allow:` section + lint gating + sweep tool + tests + this note | foreman | `FOREMAN_NEEDS_LINT_MODE=warn`; or delete the `allow:` lists (allows nothing) | BUILT |
-| 2 | lint default `apply` (restart/ssh tags written); test iii forged-`Needs:` drill against the broker (every call a deny row, no grant.json for thor) | foreman | mode `apply-dir` | next |
-| 3 | live proof i: synthetic ticket citing `/home/lumen/research_prompts` → `dir` tag → runs → one-line doc PR lands; proof ii: `fleet-exec restart isis ollama` from the lumen-bin `main` checkout under the new allow row, audit `verified=true`; iv: `dispatchable` > 0 after | foreman + live | — | next |
-| 4 | lumen-bin `fleet_exec_policy.check_restart` honours `allow.restart` when the section is present (broker enforces allow, not only the lint; hand-authored tags bounded too) | lumen-bin | no allow section = old behaviour | parallel-dispatchable |
+| 2 | lint default `apply` (restart/ssh tags written); test iii forged-grant drill against the broker | foreman | `FOREMAN_NEEDS_LINT_MODE=apply-dir` | DONE (this PR; drill §4) |
+| 3 | live proofs i / ii / iv | foreman + live | — | DONE (§4; wq#1485 PR #344) |
+| 4 | lumen-bin `fleet_exec_policy.check_restart` honours `allow.restart` (broker enforces allow, not only the lint) | lumen-bin | no allow section = old behaviour | LANDED fe8e492 (wq#1484) — NOT yet on the `/home/lumen/bin` primary (wq#1481) |
 | 5 | `lumen-read-dir-sweep.timer` daily → `harness/runtime/read_dir_sweep.json`; lint refuses `dir(X)` on a fresh hit under X and treats a >48h-stale sweep as unresolved | foreman + one unit | timer disabled = slice-1 behaviour | ticket |
 
 ## 6. Findings → tickets (same turn)

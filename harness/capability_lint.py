@@ -127,7 +127,11 @@ class Derived:
 
 MODE_OFF, MODE_WARN, MODE_APPLY_DIR, MODE_APPLY = "off", "warn", "apply-dir", "apply"
 MODES = (MODE_OFF, MODE_WARN, MODE_APPLY_DIR, MODE_APPLY)
-DEFAULT_MODE = MODE_APPLY_DIR  # wq#1438 slice C; `warn` is the documented rollback
+# wq#1441 slice 2: `apply` — restart/ssh/copy tags are written too. Safe now because a
+# tag is only ever emitted for an allow-listed target (allow_section), the never rows
+# win first, and the broker re-checks allow.restart at call time (lumen-bin fe8e492).
+# `apply-dir` restores slice C exactly; `warn` restores slice B.
+DEFAULT_MODE = MODE_APPLY
 ENFORCING_MODES = (MODE_APPLY_DIR, MODE_APPLY)
 # Which derived tags the dispatcher may write back per mode. `apply-dir` is slice C's
 # whole scope: `dir` is read-only and deny-listed (§2.1), so auto-applying it can only

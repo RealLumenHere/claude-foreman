@@ -394,11 +394,11 @@ def test_empty_ticket_derives_nothing():
     assert not d and d.as_event() == {"tags": [], "unresolved": [], "refused": []}
 
 
-def test_mode_defaults_to_apply_dir_and_off_disables(monkeypatch):
+def test_mode_defaults_to_apply_and_off_disables(monkeypatch):
     """wq#1438 flipped the default from slice B's `warn` to `apply-dir`: the pre-skip
     and the dir auto-tag are the slice, so shipping them inert would ship nothing."""
     monkeypatch.delenv("FOREMAN_NEEDS_LINT_MODE", raising=False)
-    assert cl.mode() == "apply-dir" and cl.enabled() and cl.enforcing()
+    assert cl.mode() == "apply" and cl.enabled() and cl.enforcing()
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "off")
     assert not cl.enabled() and not cl.enforcing()
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply")
