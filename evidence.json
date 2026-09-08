@@ -2,19 +2,17 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "harness/capability_lint.py:432-465",
-      "cmd_run": "python3 -m pytest harness/tests/test_capability_allow.py harness/tests/test_read_dir_sweep.py harness/tests/test_capability_lint.py dispatcher/tests/test_dispatcher.py dispatcher/tests/test_runaway.py dispatcher/tests/test_capability_replay.py -q",
+      "citation": "ops/wq1501-minerva-judge-rung/40-judge-model.conf:36-41",
+      "cmd_run": "python3 ops/wq1501-minerva-judge-rung/verify_judge.py env journal --since \"2026-09-08 10:45\"",
       "exit_code": 0
     }
   ],
   "derived_by": "worker",
   "notes": [
-    "harness/capability_lint.py: load_sweep/sweep_stale/sweep_hit_under (:303-350) gate _derive_dirs (:432-465) — a dir(X) tag is refused with file:line when the latest read_dir_sweep.json has a hit under X, and lands in unresolved (fail closed) when the sweep is missing or >48h stale. derive()/scan_queue() thread sweep through (:583-628).",
-    "harness/read_dir_sweep.py: write_runtime (:131-152) sweeps every allow.read_dirs root, writes runtime/read_dir_sweep.json (masked hits per root + ts), diffs against the previous write; aq_alert (:159-174) aq-adds one row per hit new since the last write. `--write-runtime` CLI flag wired for the timer.",
-    "harness/systemd/lumen-read-dir-sweep.timer + .service: daily (05:15 UTC + jitter) oneshot running read_dir_sweep.py --write-runtime, modeled on harness/systemd/lumen-liveness-clear.timer/.service.",
-    "Tests: harness/tests/test_capability_allow.py (dir refused on fresh hit, hit outside cited subdir still tags, unresolved on missing/stale sweep, sweep_stale/sweep_hit_under unit tests) and harness/tests/test_read_dir_sweep.py (write_runtime new-hit diffing, idempotent rerun, aq_alert dedup/fail-open).",
-    "Regression fix: capability_lint.derive's default sweep=None now fails closed (no runtime file yet in this worktree), which broke 9 pre-existing tests in harness/tests/test_capability_lint.py and 4 in dispatcher/tests/{test_dispatcher,test_runaway}.py that expected dir auto-tagging without a sweep concept. Fixed by giving each a fresh, hitless sweep fixture (matching their existing policy/roster fixture pattern) rather than weakening the gate.",
-    "aq alert on any new hit: harness/read_dir_sweep.py aq_alert() (:159), called from --write-runtime (:196)."
+    "Drop-in (qwen36-local primary, VERIFY_JUDGE_MODEL_2 empty = no phantom rung, timeout 230, n=1) tracked at ops/wq1501-minerva-judge-rung/40-judge-model.conf; installed live via apply.sh as root job lumen-job-wq1501-judge-1788865196 (DONE:0, backup 20260908T105956Z), second run unchanged.",
+    "verify_judge.py journal over the 10:45 run: verify=3 readtimeout=0 phantom4xx=0; over the 06:45 (a1, 150s) run it fails with 2 phantom 4xx.",
+    "Measured: primary pinned at the timeout on 3/3 calls, 2s retry answers from a rung that is not Isis (slot 0 still on the 6144-token prompt minutes later) - wq#1529. Factpack cap (design 2e) needs /home/lumen/minerva code, outside this sandbox - wq#1528. ISSUE-LOG #233.",
+    "Report: reports/1501_minerva_judge_rung.md"
   ],
-  "ticket": "wq#1482"
+  "ticket": "wq#1501"
 }
