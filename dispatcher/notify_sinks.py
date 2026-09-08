@@ -18,16 +18,23 @@ failing must never suppress the other:
 Both functions return a plain bool (delivered / not) instead of raising, so a caller
 that must never be blocked by notification failure (circuit_breaker.disarm's fail-safe
 contract) can call this and move on unconditionally.
+
+wq#1416: ntfy_critical also mirrors the full alert to the journal (vlogs_mirror.py)
+before publishing, so it survives ntfy's own short cache.db retention — see that
+module's docstring.
 """
 import os
 import shlex
 import subprocess
+
+import vlogs_mirror
 
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 DESKTOP_SSH_HOST = os.environ.get("FOREMAN_DESKTOP_SSH_HOST", "thor")
 
 
 def ntfy_critical(msg, title="foreman-dispatcher"):
+    vlogs_mirror.mirror("notify_sinks", title, "urgent", msg)
     try:
         p = subprocess.run([NTFY_BIN, "-p", "urgent", "-T", title, msg],
                            capture_output=True, text=True, timeout=20)
