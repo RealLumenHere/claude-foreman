@@ -12,10 +12,12 @@ never copies /dev/null content, so a mask is itself part of the desired state.
 
 Commands:
   capture              rebuild the snapshot from live + git commit (baseline / update)
-  check                READ-ONLY drift report (live vs git); edge-triggered alert
+  check                READ-ONLY drift report (live vs git) + staged-not-installed; alerts
+  staged               READ-ONLY: units staged in the foreman repo but not live
   status               short summary, no alert
   apply [--apply]      reconcile git->disk; DRY-RUN unless --apply (then sudo + reload)
-Env: SDS_REPO (repo dir), SDS_ALERT=0 to silence, SDS_AQ/SDS_NTFY overrides for tests.
+Env: SDS_REPO (repo dir), SDS_ALERT=0 to silence, SDS_AQ/SDS_NTFY overrides for tests,
+     SDS_FOREMAN (foreman checkout scanned for staged units).
 """
 import os, sys, json, glob, hashlib, shutil, subprocess, datetime
 
@@ -23,6 +25,8 @@ REPO = os.environ.get("SDS_REPO", "/home/lumen/foreman/ops/systemd-desired-state
 FILES = os.path.join(REPO, "files")
 MANIFEST = os.path.join(REPO, "manifest.json")
 SYS = "/etc/systemd/system"
+FOREMAN = os.environ.get("SDS_FOREMAN",
+                         os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 AQ = os.environ.get("SDS_AQ", "/home/lumen/bin/aq")
 NTFY = os.environ.get("SDS_NTFY", "/home/lumen/bin/ntfy-send")
 SOURCE = "systemd-drift"
@@ -104,6 +108,77 @@ def diff():
             removed.append(rp)
     return {"modified": sorted(modified), "new": sorted(new), "removed": sorted(removed)}
 
+# ── staged-but-not-installed (wq#1531) ──────────────────────────────────────────
+# diff() only walks live_paths(), so a unit that was committed under <repo>/*/systemd/
+# and never copied to /etc/systemd/system is invisible to it: the drift check reads
+# CLEAN while the feature it gates is dead. That is the wq#1404 (gitea-version-check)
+# and wq#1482 (read-dir-sweep) class — code correct, tests green, timer never
+# installed. staged_drift() closes it by walking the repo side instead of the live
+# side, so "staged" is a state the check can name rather than a silence.
+
+def staged_paths():
+    """Unit files committed under any <foreman>/*/systemd/ dir, as (basename, abspath).
+    Templates (`foo@.service`) are skipped — an unenabled template is not drift, it is
+    instantiated per-caller — as is anything not lumen-*, which capture() also excludes."""
+    out = []
+    for ext in ("service", "timer", "socket", "path", "target", "mount"):
+        for p in glob.glob(f"{FOREMAN}/*/systemd/*.{ext}"):
+            b = os.path.basename(p)
+            if "@" in b or not b.startswith("lumen-"):
+                continue
+            out.append((b, p))
+    return sorted(set(out))
+
+def _sha(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+def _enabled(unit):
+    """UnitFileState for `unit`, or "" when systemctl is unavailable. Read-only."""
+    try:
+        r = subprocess.run(["systemctl", "show", unit, "-p", "UnitFileState", "--value"],
+                           capture_output=True, text=True, timeout=10)
+        return r.stdout.strip()
+    except Exception:
+        return ""
+
+def staged_drift():
+    """{"missing": [...], "stale": [...], "disabled": [...]} over staged_paths().
+    missing  — staged unit absent from /etc/systemd/system (never installed)
+    stale    — installed but its content differs from the staged file
+    disabled — an installed .timer whose UnitFileState is not `enabled`; a timer that
+               is present but not enabled never fires, which is the same dead feature.
+    A unit we cannot read a UnitFileState for is NOT reported disabled — an unknown
+    state is not evidence of one (instinct 7)."""
+    missing, stale, disabled = [], [], []
+    for b, src in staged_paths():
+        live = os.path.join(SYS, b)
+        if not os.path.exists(live):
+            missing.append(b)
+            continue
+        if os.path.isfile(live) and not os.path.islink(live) and _sha(live) != _sha(src):
+            stale.append(b)
+        if b.endswith(".timer") and _enabled(b) not in ("", "enabled", "static"):
+            disabled.append(b)
+    return {"missing": sorted(missing), "stale": sorted(stale), "disabled": sorted(disabled)}
+
+def staged_report():
+    """(count, lines) — human-readable staged drift, empty when every staged unit is live."""
+    d = staged_drift()
+    lines = [f"  {k.upper():8} {b} (staged in {FOREMAN}, not live)" if k == "missing"
+             else f"  {k.upper():8} {b}"
+             for k in ("missing", "stale", "disabled") for b in d[k]]
+    return sum(len(v) for v in d.values()), lines
+
+def staged():
+    n, lines = staged_report()
+    if n == 0:
+        print(f"CLEAN — every lumen-* unit staged under {FOREMAN}/*/systemd/ is installed")
+        return 0
+    print(f"staged-not-installed: {n} unit(s)")
+    print("\n".join(lines))
+    return 1
+
 def _aq_open():
     """Edge-trigger: True if an OPEN systemd-drift aq row already exists."""
     try:
@@ -116,14 +191,17 @@ def check():
     if not os.path.exists(MANIFEST):
         print("no baseline yet — run `systemd_desired_state.py capture` first"); return 3
     d = diff()
-    n = len(d["modified"]) + len(d["new"]) + len(d["removed"])
+    sn, slines = staged_report()
+    n = len(d["modified"]) + len(d["new"]) + len(d["removed"]) + sn
     if n == 0:
-        print("CLEAN — live /etc/systemd/system lumen-* matches git desired-state")
+        print("CLEAN — live /etc/systemd/system lumen-* matches git desired-state, "
+              "every staged unit installed")
         return 0
     lines = []
     for k in ("modified", "new", "removed"):
         for rp in d[k]:
             lines.append(f"  {k.upper():8} {rp}")
+    lines += slines
     body = f"systemd desired-state DRIFT: {n} object(s)\n" + "\n".join(lines)
     print(body)
     if ALERT:
@@ -168,14 +246,17 @@ def status():
     if not os.path.exists(MANIFEST):
         print("no baseline"); return 3
     d = diff(); n = sum(len(v) for v in d.values())
+    sn, _ = staged_report()
     print(f"desired-state objects: {len(load_manifest())} | drift: {n} "
-          f"(modified={len(d['modified'])} new={len(d['new'])} removed={len(d['removed'])})")
-    return 0 if n == 0 else 1
+          f"(modified={len(d['modified'])} new={len(d['new'])} removed={len(d['removed'])})"
+          f" | staged-not-installed: {sn}")
+    return 0 if n + sn == 0 else 1
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
     if cmd == "capture": capture()
     elif cmd == "check": sys.exit(check())
+    elif cmd == "staged": sys.exit(staged())
     elif cmd == "status": sys.exit(status())
     elif cmd == "apply": sys.exit(apply("--apply" in sys.argv))
     else: print(__doc__)
