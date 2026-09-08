@@ -400,3 +400,40 @@ def apply_tags(tid, tags, current_needs=None, dry_run=False):
     _wq("note", str(tid), "capability_lint: "
         + " ".join(f"+{name}({arg})" for name, arg in added))
     return field
+
+
+
+# ---------------------------------------------------------------------------
+# Liveness Gate (research/LIVENESS_GATE.md §3/§4) — sibling of the needs: checks
+# above, FIREWALLED from them: preflight() and policy_grants() do not call this,
+# and this never returns a Verdict, a grant, or a SpawnRefused code.
+# ---------------------------------------------------------------------------
+
+LIVENESS_NO_TAG = "NO_TAG"
+
+
+def liveness_verdict(ticket, bindings=None):
+    """Re-probe a frank-gated ticket's premise against live state.
+
+    Returns (verdict, results) where verdict is liveness.SATISFIED (the gate is
+    STALE — already done), liveness.STILL_BLOCKED (Frank genuinely needed),
+    liveness.UNKNOWN (fail-safe: leave the ticket alone) or LIVENESS_NO_TAG (no
+    `Liveness:` line and no ledger binding — nothing to check). results is the list
+    of (probe, arg_text, verdict, detail) so a report can show its work.
+
+    `bindings` is the ledger's {ticket_id: "probe(args), ..."} staging map for
+    tickets that predate the tag (§7); it is consulted ONLY when the ticket has no
+    `Liveness:` line of its own. Read-only: this function never writes anywhere."""
+    import liveness  # local: keeps the exec-grant import surface unchanged
+    tid = str((ticket or {}).get("id", ""))
+    lv = needs_mod.parse_liveness((ticket or {}).get("detail"))
+    if not lv and bindings and tid in {str(k) for k in bindings}:
+        bound = next(v for k, v in bindings.items() if str(k) == tid)
+        lv = needs_mod.parse_liveness(liveness_field=bound)
+    if not lv:
+        return LIVENESS_NO_TAG, []
+    results = []
+    for probe, arg_text in lv:
+        verdict, detail = liveness.run(probe, arg_text)
+        results.append((probe, arg_text, verdict, detail))
+    return liveness.aggregate([(v, d) for _, _, v, d in results]), results

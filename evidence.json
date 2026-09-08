@@ -15,5 +15,6 @@
     "Ran all six touched/depended-on test files from a disposable worktree off pr-344: 114 harness + 127 dispatcher = 241 passed, matching the doc's own stated counts.",
     "No scope creep: the wq#1485 commit alone (e86fd38) touches only evidence.json and research/BROKER_GRANT_COVERAGE.md; the other 2 commits bundled into PR#344 predate wq#1485's claim time and were already on the shared lane branch.",
     "Non-blocking: neither the commit, PR notes, nor evidence.json cites the specific research_prompts file/line read, but the ticket's fixed-template deliverable has no slot for one."
-  ]
+  ],
+  "ticket": "wq#1486"
 }

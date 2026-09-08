@@ -49,6 +49,12 @@ rewrites its SHA, so `--contains` would answer no on a branch that demonstrably 
 work. Requiring one single ref to match at EVERY touched path is what keeps it a proof
 and not a coincidence — a ref that carries the ahead commits' whole contribution.
 
+A ref that has the local branch as an ANCESTOR qualifies too, and is checked first: it
+carries those commits whole, which preserves strictly more than matching their blobs.
+Without it a PR that BUILDS on the unpushed commits and then edits a file they touched
+could never qualify — its version is a superset, so the blobs differ (wq#1479; wq#1472
+built this proof against a rebased PR that only added files).
+
 Unlike the other two this one does NOT promise "zero files change": the rewind drops
 content the remote has not landed yet, so the tree loses it until the PR merges. That is
 the ordinary state of unmerged work, and the archive tag holds the old head regardless.
@@ -111,6 +117,13 @@ def git(repo, *args, check=True):
     return p.stdout.strip()
 
 
+def git_ok(repo, *args):
+    """For the git commands whose ANSWER is the exit code (`merge-base --is-ancestor`),
+    where `git()` would hand back an empty stdout that reads as success either way."""
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True,
+                          timeout=120).returncode == 0
+
+
 def counts(repo, local, remote_ref):
     """(behind, ahead) relative to the remote ref."""
     out = git(repo, "rev-list", "--left-right", "--count", f"{remote_ref}...{local}")
@@ -150,14 +163,24 @@ def preserved_on(repo, local, touched, remote, exclude):
     branches each account for a fragment and together "prove" a state neither holds, which
     is how a coincidence gets mistaken for a pushed PR. origin/HEAD is skipped as a
     symbolic alias for the tracked branch — matching it would only restate `redundancy`.
+
+    A ref that has the local branch as an ANCESTOR is accepted first and on stronger
+    grounds: it carries every ahead commit whole, so preservation needs no per-path
+    argument at all. The blob comparison is the fallback for the PR that rebased or
+    squashed those commits and no longer contains them by SHA. Without the ancestor case a
+    PR that MODIFIES a path its own base commits touched can never qualify — its version
+    is a superset, so the blobs differ — which is exactly wq#1479's shape (wq#1472 built
+    this proof against a PR that only added files).
     """
     if not touched:
         return ""
     refs = [r for r in git(repo, "for-each-ref", "--format=%(refname)",
                            f"refs/remotes/{remote}/").splitlines() if r]
-    for ref in refs:
-        if ref in (exclude, f"refs/remotes/{remote}/HEAD"):
-            continue
+    candidates = [r for r in refs if r not in (exclude, f"refs/remotes/{remote}/HEAD")]
+    for ref in candidates:
+        if git_ok(repo, "merge-base", "--is-ancestor", local, ref):
+            return ref
+    for ref in candidates:
         if not git(repo, "diff", "--name-only", "--no-renames", local, ref, "--", *touched):
             return ref
     return ""
@@ -286,7 +309,14 @@ def reconcile(repo, branch="main", remote="origin", fetch=True, apply=False, tag
         # and unpushed paths from the same list, so the PR still could not merge. Restore
         # the touched paths — and only those — so the tree matches the ref it now sits on.
         # Untracked files and uncommitted work at every other path are still untouched.
-        git(repo, "checkout", target, "--", *st["touched"])
+        #
+        # `git restore`, not `git checkout`: a path the ahead commits ADDED does not exist at
+        # the merge-base, and `git checkout <base> -- <paths>` fails the WHOLE pathspec on the
+        # first one it cannot find — leaving every touched path staged and the land still
+        # blocked. `restore --source` deletes those instead of refusing, which is the correct
+        # answer: the archive tag and the PR branch are both holding them.
+        git(repo, "restore", f"--source={target}", "--staged", "--worktree", "--",
+            *st["touched"])
     after = inspect(repo, branch, remote, fetch=False)
     if after["verdict"] != expected:
         raise GitError(f"reset left {repo} at {after['verdict']} — expected {expected}")

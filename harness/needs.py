@@ -20,10 +20,21 @@ TAG_NAMES = ("ssh", "root", "restart", "copy", "repo", "dir", "bench", "power")
 
 _TAG_RE = re.compile(r"(?:needs:)?([a-z_-]+)\(([^)]*)\)")
 _NEEDS_LINE_RE = re.compile(r"^Needs:\s*(.+)$", re.MULTILINE)
+# Liveness Gate (research/LIVENESS_GATE.md §5): a `Liveness:` detail line is the
+# sibling of `Needs:` — same _TAG_RE, same parse_tags. Its tags live in a separate
+# Liveness object and are NEVER merged into Needs.tags (§4 firewall): the exec
+# allow/deny path (capability.policy_grants, fworker.resolve_exec_grant) reads Needs
+# only, so a liveness tag can never widen a grant. TAG_NAMES is deliberately NOT
+# extended — `wq edit --needs liveness(...)` stays a validate() error.
+_LIVENESS_LINE_RE = re.compile(r"^Liveness:\s*(.+)$", re.MULTILINE)
 
 
 def disabled():
     return os.environ.get("FOREMAN_NEEDS_DISABLE") == "1"
+
+
+def liveness_disabled():
+    return os.environ.get("FOREMAN_LIVENESS_DISABLE") == "1"
 
 
 class Needs:
@@ -115,3 +126,37 @@ def validate(needs_field):
         if name in ("repo", "dir") and not arg.startswith("/"):
             return False, f"needs:{name}({arg}) must be an absolute path"
     return True, None
+
+
+# ---------------------------------------------------------------------------
+# Liveness Gate — `Liveness:` sibling of `Needs:` (research/LIVENESS_GATE.md §5)
+# ---------------------------------------------------------------------------
+
+class Liveness:
+    """Probe tags from a ticket's `Liveness:` detail line, as (probe, arg_text) in
+    source order, deduped. Deliberately not a Needs and not merged into one."""
+
+    def __init__(self, tags):
+        self.tags = []
+        for t in tags:
+            if t not in self.tags:
+                self.tags.append(t)
+
+    def __bool__(self):
+        return bool(self.tags)
+
+    def __iter__(self):
+        return iter(self.tags)
+
+
+def parse_liveness(detail=None, liveness_field=None):
+    """Liveness from the ticket detail's `Liveness:` line (and, if a column ever
+    lands, an explicit field) — the SAME parse_tags/_TAG_RE that `Needs:` uses.
+    Honours FOREMAN_LIVENESS_DISABLE=1 (rollback: no ticket has a liveness tag)."""
+    if liveness_disabled():
+        return Liveness([])
+    tags = parse_tags(liveness_field)
+    m = _LIVENESS_LINE_RE.search(detail or "")
+    if m:
+        tags += parse_tags(m.group(1))
+    return Liveness(tags)

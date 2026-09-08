@@ -1,0 +1,116 @@
+[
+ {
+  "id": 362,
+  "status": "blocked",
+  "lane": "frank-hw",
+  "title": "[hathor] Bench root-cause: wedge-on-boot + runaway + AFTERG3 disarm",
+  "gate": "lane frank-hw",
+  "verdict": "STALE",
+  "source": "ledger",
+  "probes": [
+   {
+    "probe": "node_healthy",
+    "args": "hathor",
+    "verdict": "SATISFIED",
+    "detail": "hathor online + ssh ok"
+   }
+  ]
+ },
+ {
+  "id": 902,
+  "status": "open",
+  "lane": "frank-cred",
+  "title": "[frank-hands] privatize RealLumenHere/questfree (needs RealLumenHere c",
+  "gate": "lane frank-cred",
+  "verdict": "STALE",
+  "source": "ledger",
+  "probes": [
+   {
+    "probe": "repo_is",
+    "args": "private, RealLumenHere/questfree",
+    "verdict": "SATISFIED",
+    "detail": "RealLumenHere/questfree not publicly visible"
+   },
+   {
+    "probe": "repo_is",
+    "args": "private, frankstupak/questfree",
+    "verdict": "SATISFIED",
+    "detail": "frankstupak/questfree is private"
+   }
+  ]
+ },
+ {
+  "id": 1047,
+  "status": "blocked",
+  "lane": "user",
+  "title": "[physical] Cerebras billing 402 \u2014 restore billing OR drop gpt-oss from",
+  "gate": "lane user",
+  "verdict": "STALE",
+  "source": "ledger",
+  "probes": [
+   {
+    "probe": "balance_over",
+    "args": "cerebras, 0",
+    "verdict": "SATISFIED",
+    "detail": "cerebras served a 1-token completion"
+   }
+  ]
+ },
+ {
+  "id": 1101,
+  "status": "open",
+  "lane": "frank-cred",
+  "title": "PULL lumen-content + lumen-blog from public (overdue months) \u2014 Frank U",
+  "gate": "lane frank-cred",
+  "verdict": "STILL_BLOCKED",
+  "source": "ledger",
+  "probes": [
+   {
+    "probe": "repo_is",
+    "args": "private, frankstupak/lumen-content",
+    "verdict": "STILL_BLOCKED",
+    "detail": "frankstupak/lumen-content is public"
+   },
+   {
+    "probe": "repo_is",
+    "args": "private, frankstupak/lumen-blog",
+    "verdict": "STILL_BLOCKED",
+    "detail": "frankstupak/lumen-blog is public"
+   }
+  ]
+ },
+ {
+  "id": 1133,
+  "status": "blocked",
+  "lane": "frank-cred",
+  "title": "frankstupak PAT rotation must write canonical .secrets/github-frank.to",
+  "gate": "lane frank-cred",
+  "verdict": "STALE",
+  "source": "ledger",
+  "probes": [
+   {
+    "probe": "cred_alive",
+    "args": "/home/lumen/.secrets/github-frank.token, https://api.github.com/user",
+    "verdict": "SATISFIED",
+    "detail": "github-frank.token present, verify 200"
+   }
+  ]
+ },
+ {
+  "id": 1296,
+  "status": "blocked",
+  "lane": "frank-cred",
+  "title": "tailscale: disable node-key expiry on always-on fleet nodes",
+  "gate": "lane frank-cred",
+  "verdict": "STALE",
+  "source": "ledger",
+  "probes": [
+   {
+    "probe": "ts_key_expiry_disabled",
+    "args": "",
+    "verdict": "SATISFIED",
+    "detail": "all 25 devices keyExpiryDisabled"
+   }
+  ]
+ }
+]

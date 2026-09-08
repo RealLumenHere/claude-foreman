@@ -127,7 +127,11 @@ class Derived:
 
 MODE_OFF, MODE_WARN, MODE_APPLY_DIR, MODE_APPLY = "off", "warn", "apply-dir", "apply"
 MODES = (MODE_OFF, MODE_WARN, MODE_APPLY_DIR, MODE_APPLY)
-DEFAULT_MODE = MODE_APPLY_DIR  # wq#1438 slice C; `warn` is the documented rollback
+# wq#1441 slice 2: `apply` — restart/ssh/copy tags are written too. Safe now because a
+# tag is only ever emitted for an allow-listed target (allow_section), the never rows
+# win first, and the broker re-checks allow.restart at call time (lumen-bin fe8e492).
+# `apply-dir` restores slice C exactly; `warn` restores slice B.
+DEFAULT_MODE = MODE_APPLY
 ENFORCING_MODES = (MODE_APPLY_DIR, MODE_APPLY)
 # Which derived tags the dispatcher may write back per mode. `apply-dir` is slice C's
 # whole scope: `dir` is read-only and deny-listed (§2.1), so auto-applying it can only
@@ -254,6 +258,50 @@ def restart_refusal(node, unit, policy):
     return None
 
 
+# ---- explicit ALLOW (wq#1441, research/BROKER_GRANT_COVERAGE.md §2) -------------
+# Deny is the default; a tag is EMITTED only for a target the policy's `allow:` section
+# names. `never` is still checked first and still wins (a never-listed target is
+# `refused`, never merely "not allowed"). A target that is neither never- nor
+# allow-listed lands in `unresolved` with the propose-don't-deploy hint, so the
+# ticket skips honestly instead of spawning into a broker deny.
+
+ALLOW_HINT = "propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)"
+_UNIT_SHAPED_RE = re.compile(r"[\w-]*[-.@][\w.@-]*")
+
+
+def allow_section(policy):
+    return (policy or {}).get("allow") or {}
+
+
+def allowed_read_dir(path, policy):
+    """The allow.read_dirs root `path` sits under, or None. A missing allow section
+    or an empty list allows nothing (fail closed — an edited-away section must
+    not silently restore the pre-wq#1441 open-by-default behaviour)."""
+    for root in allow_section(policy).get("read_dirs") or []:
+        if _under(path, root):
+            return root
+    return None
+
+
+def allowed_restart(node, unit, policy):
+    for glob in (allow_section(policy).get("restart") or {}).get(node) or []:
+        if fnmatch.fnmatch(unit, glob):
+            return glob
+    return None
+
+
+def allowed_ssh(node, policy):
+    return node in (allow_section(policy).get("ssh") or [])
+
+
+def unit_shaped(unit):
+    """`ollama.service`, `lumen-messenger`, `getty@tty1` look like units; `without`,
+    `on`, `it` are the English the restart regexes trip over in prose (wq#1440's
+    detail yielded restart(without@lumen)). A bare word is only a unit when a policy
+    row names it — allow or never — otherwise it is prose and emits nothing."""
+    return bool(_UNIT_SHAPED_RE.fullmatch(unit or ""))
+
+
 # ---- dir tags ------------------------------------------------------------------
 
 def _norm(path):
@@ -316,7 +364,7 @@ def cited_paths(text):
     return out
 
 
-def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused):
+def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None):
     roots = [r for r in [repo, *add_dirs] if r]
     for p in cited_paths(text):
         if any(_under(p, r) for r in roots):
@@ -335,12 +383,15 @@ def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused):
             continue
         if any(_under(d, r) for r in roots):
             continue
+        if allowed_read_dir(d, policy) is None:
+            unresolved.append(f"dir({d}) is not under allow.read_dirs — {ALLOW_HINT}")
+            continue
         tags.append(("dir", d))
 
 
 # ---- action tags ---------------------------------------------------------------
 
-def _derive_ssh(text, roster, tags, unresolved):
+def _derive_ssh(text, roster, tags, unresolved, policy=None):
     for m in _SSH_RE.finditer(text):
         host = m.group("host")
         if _IP_RE.fullmatch(host):
@@ -355,26 +406,43 @@ def _derive_ssh(text, roster, tags, unresolved):
             continue
         else:
             continue  # prose, not a node mention
+        # an explicit `ssh <node>` is authored intent: not allowed -> honest skip
+        if not allowed_ssh(node, policy):
+            unresolved.append(f"ssh({node}) is not on allow.ssh — {ALLOW_HINT}")
+            continue
         tags.append(("ssh", node))
+    # `... on <node>` / bare-ip mentions are prose-grade: tag when allowed, else
+    # emit nothing (the broker still fails closed if the worker really needs it)
     for m in _PROBE_ON_RE.finditer(text):
         node = m.group("node")
-        if roster.known(node):
+        if roster.known(node) and allowed_ssh(node, policy):
             tags.append(("ssh", node))
     for m in _IP_RE.finditer(text):
         node = roster.node_for_ip(m.group(0))
-        if node:
+        if node and allowed_ssh(node, policy):
             tags.append(("ssh", node))
 
 
-def _add_restart(node, unit, roster, policy, tags, unresolved, refused, context):
-    if not roster.known(node):
-        unresolved.append(f"{context}: node {node!r} is not a lumen_state subject")
-        return
+def _add_restart(node, unit, roster, policy, tags, unresolved, refused, context,
+                 explicit=True):
+    """`never` first (refused, always — even for a prose-shaped mention, so
+    "restart tailscaled on thor" is a deterministic deny row, test iii), then
+    `allow` (tag), then: an explicit shape (`restart(u@n)` tag form, `systemctl
+    restart u`) that is neither -> unresolved; a prose shape (`restart u on n`)
+    that is neither -> unresolved only when `u` is unit-shaped, else nothing."""
     why = restart_refusal(node, unit, policy)
     if why:
         refused.append(f"restart({unit}@{node}) {why}")
         return
-    tags.append(("restart", f"{unit}@{node}"))
+    if not roster.known(node):
+        unresolved.append(f"{context}: node {node!r} is not a lumen_state subject")
+        return
+    if allowed_restart(node, unit, policy) is not None:
+        tags.append(("restart", f"{unit}@{node}"))
+        return
+    if explicit or unit_shaped(unit):
+        unresolved.append(f"restart({unit}@{node}) is not on allow.restart[{node}] — "
+                          f"{ALLOW_HINT}")
 
 
 def _derive_restart(text, roster, policy, tags, unresolved, refused):
@@ -383,12 +451,16 @@ def _derive_restart(text, roster, policy, tags, unresolved, refused):
                      tags, unresolved, refused, f"restart({m.group('unit')}@{m.group('node')})")
     for m in _SYSTEMCTL_RE.finditer(text):
         node = m.group("node") or DEFAULT_RESTART_NODE
+        # `systemctl restart <unit>` in prose about the verb itself (wq#1440:
+        # "systemctl restart without sudo") is not authored intent unless the unit
+        # token is unit-shaped or a policy row names it
         _add_restart(node, m.group("unit"), roster, policy,
-                     tags, unresolved, refused, f"systemctl restart {m.group('unit')}")
+                     tags, unresolved, refused, f"systemctl restart {m.group('unit')}",
+                     explicit=False)
     for m in _RESTART_ON_RE.finditer(text):
         _add_restart(m.group("node"), m.group("unit"), roster, policy,
                      tags, unresolved, refused,
-                     f"restart {m.group('unit')} on {m.group('node')}")
+                     f"restart {m.group('unit')} on {m.group('node')}", explicit=False)
 
 
 def _derive_copy(text, roster, policy, tags, unresolved):
@@ -442,8 +514,8 @@ def derive(ticket, repo=None, add_dirs=(), roster=None, policy=None):
     roster = roster if roster is not None else load_roster()
     policy = policy if policy is not None else load_policy()
     tags, unresolved, refused = [], [], []
-    _derive_dirs(text, repo, add_dirs, tags, unresolved, refused)
-    _derive_ssh(text, roster, tags, unresolved)
+    _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=policy)
+    _derive_ssh(text, roster, tags, unresolved, policy=policy)
     _derive_restart(text, roster, policy, tags, unresolved, refused)
     _derive_copy(text, roster, policy, tags, unresolved)
     _derive_v2(text, unresolved)
