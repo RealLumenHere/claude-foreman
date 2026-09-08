@@ -1,0 +1,122 @@
+# wq#1492 — every backlog ticket the one-time sweep left WITHOUT a Liveness binding,
+# with the one-line reason (LIVENESS_GATE.md §13.2). Categories:
+#   physical   — hands/hardware/purchase; no machine-checkable premise
+#   human      — a judgment or authorization only Frank can give
+#   harness    — HANG / PERMISSION_LOOP / CRASH / CAPABILITY_DENIED / evidence-gate; the
+#                block is a harness defect, not a premise
+#   prereq     — the cited wq#N / cited path is a PREREQUISITE: its arrival unblocks the
+#                work, it does not deliver it (closing would lose the work) — see the
+#                dep-met list in the report for the ones ready to unblock
+#   work       — plain open work with no premise to probe
+#   trap       — a probe exists but all-SATISFIED would not mean the ask is done
+# Read by ops/wq1492-liveness-backlog-sweep/render_report.py. Keys are wq ids.
+reasons:
+  11:   {cat: physical, why: "Nest UART bench recon — needs the board on the bench"}
+  12:   {cat: physical, why: "Frank's phone: reload PWA + confirm messaging cutover"}
+  120:  {cat: prereq,   why: "hapi-1 has never joined the tailnet (node_healthy would be UNKNOWN forever); boot is the prerequisite for the PoC, not the PoC"}
+  124:  {cat: physical, why: "NVMe purchase + install before any pilot"}
+  160:  {cat: physical, why: "purchase (SPI programmer/clip/spare chip)"}
+  266:  {cat: prereq,   why: "hapi-1 boot is the prerequisite; the eval run is the work"}
+  306:  {cat: trap,     why: "deps=305 is done but the ask (VW migration) needs Frank to drop .vw_master_pw then a run; path_exists on the pw file would mean 'dropped', not 'migrated', and the file is shredded afterwards"}
+  325:  {cat: physical, why: "live HA drill window with Frank + destructive Wadjet release"}
+  339:  {cat: physical, why: "Frank's phone ntfy resubscription; publisher patch apply is the fleet half"}
+  349:  {cat: physical, why: "Miko 3 USB-UART wiring on Thor bench"}
+  350:  {cat: physical, why: "24-port switch bench walk"}
+  358:  {cat: physical, why: "apply pack on Sia after Bes soak; no soak probe in vocabulary"}
+  364:  {cat: physical, why: "SPI dump needs clip on the blade"}
+  390:  {cat: human,    why: "policy decision (auto-reboot watchdog); ARMED flag would be the effect, not the decision"}
+  391:  {cat: physical, why: "purchase (IP-KVM)"}
+  402:  {cat: physical, why: "watch8 wireless debugging must be re-enabled on-device"}
+  418:  {cat: physical, why: "reboot window needs Frank present for Lumen/dbx; no pending-reboot probe"}
+  463:  {cat: harness,  why: "HANG; underlying work is a Frank-gated fence drill anyway"}
+  484:  {cat: harness,  why: "PERMISSION_LOOP; deps=511 done is a prerequisite"}
+  501:  {cat: human,    why: "4-item repo disposition; DELETE is indistinguishable from private via repo_is; orch decided rom-transfer-tmp DELETE 09-07, execution needs Frank's admin token"}
+  558:  {cat: human,    why: "release/tag removal on claude-command-center; no release probe; orch decided REMOVE 09-07 and said it was dispatching — no child ticket found by title"}
+  600:  {cat: harness,  why: "HANG x4; proposal is Frank-gated design"}
+  619:  {cat: harness,  why: "FALSE_COMPLETE x5; calibration run is the work"}
+  665:  {cat: physical, why: "watch must be online at the bench"}
+  679:  {cat: physical, why: "headset USB-connected + adb allowlisted"}
+  683:  {cat: harness,  why: "PERMISSION_LOOP x3"}
+  684:  {cat: harness,  why: "wrong-repo dispatch (fixed by lane edit); next dispatch runs it"}
+  703:  {cat: bound,    why: "file_contains(worker-settings-general.json, Skill) — the ask (Skill on the worker allow-list) is on disk"}
+  709:  {cat: work,     why: "open build work (lumen-guardian), no premise"}
+  765:  {cat: bound,    why: "ticket_done(756, 757, 764) — items 2-4 are A6/A7/A14, all done; item 1 delivered per detail"}
+  843:  {cat: bound,    why: "json_gte(config.json, cloud_ceiling, 5) — decision moot once the ceiling is >=5"}
+  855:  {cat: bound,    why: "service_active(fleet-update-check.timer@lumen) — the ask IS the timer installed+active"}
+  869:  {cat: harness,  why: "CRASH x5"}
+  879:  {cat: harness,  why: "CRASH x5"}
+  891:  {cat: trap,     why: "block reason (cerebras 402) cleared per 09-07 note, but the ask is the re-run; balance_over SATISFIED != re-gate run — orchestrator unblock"}
+  894:  {cat: human,    why: "authorization to burn Max-20x limit budget"}
+  895:  {cat: human,    why: "authorization to burn Max-20x limit budget"}
+  913:  {cat: harness,  why: "HANG x4"}
+  919:  {cat: harness,  why: "HANG x4; litellm bug"}
+  927:  {cat: trap,     why: "bin primary-tree drift; superseded by wq#1490 (canonical tree pull-only) — orchestrator dedupe, no git-state probe in vocabulary"}
+  940:  {cat: trap,     why: "same class as 927/1481/1490; ref move on the primary tree"}
+  941:  {cat: physical, why: "M70s provisioning at the machine; 'sentinel' never joined the tailnet"}
+  1008: {cat: bound,    why: "path_exists(/home/lumen/secrets/reddit.env) — the deliverable IS the creds file"}
+  1016: {cat: physical, why: "Thor fan swap (part ordered 08-28)"}
+  1044: {cat: physical, why: "Frank+Claude bench, explicitly do-not-dispatch"}
+  1053: {cat: work,     why: "Node sd_notify primitive needs its own design; deps=1043 done is a prerequisite"}
+  1071: {cat: physical, why: "Nest DFU reflash on the bench"}
+  1077: {cat: human,    why: "ralph-loop adoption decision"}
+  1078: {cat: trap,     why: "orch decided 09-07 (port make-bot-ui, skip the rest) and said it was dispatching; no child ticket found by title — orchestrator close by hand"}
+  1101: {cat: bound,    why: "repo_is(private, lumen-content), repo_is(private, lumen-blog) — existing binding, STILL_BLOCKED (repos public)"}
+  1105: {cat: work,     why: "upstream PR not yet opened; pr_merged needs a number"}
+  1121: {cat: trap,     why: "CITED_PATH_UNREACHABLE cites /home/lumen/bin/lumen-pr which EXISTS — path_exists would close a live bug; same defect re-filed as wq#1474 (orchestrator dedupe)"}
+  1122: {cat: harness,  why: "CRASH x4"}
+  1146: {cat: work,     why: "open build work (auto-decomposer)"}
+  1152: {cat: harness,  why: "needs --add-dir /home/lumen/projects/nest respawn"}
+  1155: {cat: prereq,   why: "deps wq#1325 (LANE_REPO fix) is done -> unblock; the D4/D6/D7 landing is the work"}
+  1156: {cat: work,     why: "disk growth hunt; no disk-usage probe in vocabulary"}
+  1157: {cat: trap,     why: "thoth is back on the tailnet (Online=true 09-08) but the ask is qbit.lumennode.uk up + LAN sshd; node_healthy(thoth) SATISFIED != qbit up — orchestrator verify + close by hand"}
+  1197: {cat: harness,  why: "HANG x5"}
+  1204: {cat: prereq,   why: "verify-pass of wq#1168 (done); the verification is the work"}
+  1207: {cat: harness,  why: "FALSE_COMPLETE x5; verify-pass of wq#1170 (done)"}
+  1269: {cat: bound,    why: "path_exists(/home/lumen/mailbot/.cf_deploy_token) — 09-07 note: E1+E2 done, only an OPTIONAL item left"}
+  1270: {cat: trap,     why: "TEST ARTIFACT: guardian state path is /tmp/pytest-of-lumen/... — filed by a pytest run, not a fire; waiting on approvals/wq1270.approved that nobody should write. Orchestrator: close as bogus"}
+  1278: {cat: harness,  why: "PERMISSION_LOOP x3"}
+  1288: {cat: harness,  why: "FALSE_COMPLETE x2; deps=1287 done is a prerequisite"}
+  1293: {cat: harness,  why: "PERMISSION_LOOP x2"}
+  1295: {cat: harness,  why: "PERMISSION_LOOP x2"}
+  1297: {cat: prereq,   why: "CITED_PATH_UNREACHABLE (kb/); the guard is the work"}
+  1304: {cat: physical, why: "bench RE toolchain install at the bench"}
+  1338: {cat: bound,    why: "pr_merged(lumen/mailbot, 3) — the ask IS PR#3 landed"}
+  1341: {cat: physical, why: "Seshat ata1 power/mSATA swap"}
+  1344: {cat: bound,    why: "pr_merged(lumen/claude-foreman, 186, closed) — the ask IS PR#186 closed/merged"}
+  1345: {cat: prereq,   why: "deps 1375+1376 done -> unblock; the both-directions verification is the work"}
+  1350: {cat: harness,  why: "CRASH x2; deps=1347 done"}
+  1356: {cat: trap,     why: "premise = mailbot primary tree clean; no git_clean probe (deliberately not added: it would only ever report STILL_BLOCKED on the leftover .patch file); notes say resolved except one untracked file — orchestrator rm + close"}
+  1358: {cat: bound,    why: "pr_merged(lumen/mailbot, 5) — the ask IS PR#5 landed"}
+  1360: {cat: trap,     why: "CAPABILITY_DENIED restart; streamer.ts present on main != kiosk chat panel wired"}
+  1368: {cat: harness,  why: "CAPABILITY_DENIED x6; dispatcher half unverified"}
+  1386: {cat: work,     why: "open auto work"}
+  1387: {cat: harness,  why: "CAPABILITY_DENIED curl x7; verify of wq#1375 (done)"}
+  1388: {cat: bound,    why: "pr_merged(lumen/lumen-bin, 61) — the ask IS PR#61 landed"}
+  1398: {cat: harness,  why: "/home/lumen/langfuse outside sandbox"}
+  1401: {cat: prereq,   why: "parked on wq#1415 (launcher fix, done) -> unblock; scheduler is the work"}
+  1402: {cat: work,     why: "multi-service maintenance batch"}
+  1403: {cat: harness,  why: "CITED_PATH_UNREACHABLE (backups/wq-proposals)"}
+  1416: {cat: harness,  why: "CAPABILITY_DENIED x3"}
+  1421: {cat: human,    why: "fire fence tripped x2; needs a human"}
+  1429: {cat: physical, why: "Miko3 patch; no live flash without Frank"}
+  1431: {cat: work,     why: "recurring log review"}
+  1432: {cat: physical, why: "Miko3 mtkclient write on device"}
+  1435: {cat: human,    why: "fire fence tripped x2; needs a human"}
+  1439: {cat: harness,  why: "FALSE_COMPLETE; deps=1438 done is a prerequisite"}
+  1446: {cat: work,     why: "dispatcher deliverable-repo fix"}
+  1452: {cat: physical, why: "Miko Mini teardown"}
+  1458: {cat: trap,     why: "governor runs only as a transient lumen-job unit today; persistent unit name unknown until built (service_active needs a name)"}
+  1466: {cat: work,     why: "secrets move; a negative file_contains would print nothing useful and misses the .bak copies"}
+  1467: {cat: work,     why: "secrets mirror fix"}
+  1468: {cat: harness,  why: "evidence gate PIN x3"}
+  1473: {cat: bound,    why: "file_contains(dispatcher/config.json, frank-cred) — the ask IS the lanes in config.json"}
+  1474: {cat: work,     why: "lumen-pr guard carve-out (same defect as 1121)"}
+  1480: {cat: human,    why: "PAT rotation on Frank's account; cred_alive cannot tell old from new (a sha-prefix probe was considered and rejected: one ticket, STILL_BLOCKED either way)"}
+  1481: {cat: trap,     why: "bin primary on a feature branch; superseded by wq#1490"}
+  1482: {cat: harness,  why: "FALSE_COMPLETE"}
+  1483: {cat: work,     why: "secrets scrub + token rotation"}
+  1488: {cat: human,    why: "LiteLLM key budget spend decision; no budget probe (litellm /key/info) in vocabulary"}
+  1490: {cat: work,     why: "lumen-bin hygiene refactor"}
+  1491: {cat: human,    why: "fleet sudo password rotation"}
+  1498: {cat: work,     why: "filed during the run (wq retire / fworker identity); open build work"}
+  1499: {cat: work,     why: "filed during the run (harness-fault attempts charged); open build work"}

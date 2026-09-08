@@ -168,6 +168,7 @@ def clear_if_stale(ticket, bindings=None, apply=True, agent=None, state=None, lo
     verdict, results = capability.liveness_verdict(ticket, bindings)
     prev_verdict = (state.get(tid) or {}).get("verdict")
     rec = {"ticket": int(tid), "prior_status": status, "lane": ticket.get("lane"),
+           "title": (ticket.get("title") or "")[:80],
            "verdict": verdict, "prev_verdict": prev_verdict, "apply": apply,
            "probes": [{"probe": p, "args": a, "verdict": v, "detail": d} for p, a, v, d in results],
            "action": "none", "actor": agent or os.environ.get("WQ_AGENT") or DEFAULT_AGENT}
@@ -233,11 +234,14 @@ def write_binding(ticket, bindings, agent=None, apply=True):
 # ---------------------------------------------------------------------------
 
 def sweep(apply=False, ids=None, db=None, ledger=None, agent=None, write_bindings=False,
-          log=None, state_path=None):
+          log=None, state_path=None, scope="frank"):
+    """scope='frank' (default, the timer) = the dispatcher's frank-gated predicate;
+    scope='all' (wq#1492 backlog sweep) = every open|blocked|frank_gated|pending_review
+    ticket. The per-ticket decision is identical either way (clear_if_stale)."""
     bindings = liveness_sweep.load_bindings(ledger or LEDGER)
     state = load_state(state_path)
     out = []
-    tickets = liveness_sweep.frank_gated_tickets(db or liveness_sweep.WQ_DB, ids)
+    tickets = liveness_sweep.tickets_in_scope(scope, db or liveness_sweep.WQ_DB, ids)
     for t in tickets:
         if write_bindings:
             if write_binding(t, bindings, agent=agent, apply=apply):
@@ -357,6 +361,9 @@ def main(argv=None):
     ap.add_argument("--agent", default=None)
     ap.add_argument("--db", default=None)
     ap.add_argument("--ledger", default=None)
+    ap.add_argument("--scope", choices=liveness_sweep.SCOPES, default="frank",
+                    help="frank (default, what the timer runs) or all (every open|blocked|"
+                         "frank_gated|pending_review ticket — wq#1492 backlog sweep)")
     a = ap.parse_args(argv)
     apply = bool(a.apply and not a.dry_run)
     if apply and not writes_enabled():
@@ -364,7 +371,7 @@ def main(argv=None):
         apply = False
     lines = []
     recs = sweep(apply=apply, ids=a.ids, db=a.db, ledger=a.ledger, agent=a.agent,
-                 write_bindings=a.write_bindings, log=lines.append)
+                 write_bindings=a.write_bindings, log=lines.append, scope=a.scope)
     if a.json:
         print(json.dumps(recs, indent=1))
         return 0
@@ -372,7 +379,8 @@ def main(argv=None):
     for r in recs:
         counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
     mode = "APPLY" if apply else "DRY-RUN (no writes)"
-    print(f"liveness clear [{mode}]: {len(recs)} frank-gated ticket(s) "
+    what = "frank-gated ticket(s)" if a.scope == "frank" else "backlog ticket(s) [scope=all]"
+    print(f"liveness clear [{mode}]: {len(recs)} {what} "
           + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     for r in recs:
         if r["verdict"] == capability.LIVENESS_NO_TAG:

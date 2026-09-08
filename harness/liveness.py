@@ -36,6 +36,11 @@ SSH_TIMEOUT_S = 20
 TS_API_KEY = os.environ.get("FOREMAN_TS_API_KEY", "/home/lumen/.secrets/tailscale-api.key")
 GH_TOKEN = os.environ.get("FOREMAN_GH_TOKEN", "/home/lumen/.secrets/github-frank.token")
 AGENT_ENV = os.environ.get("FOREMAN_AGENT_ENV", "/home/lumen/agent/.env")
+# wq#1492 backlog probes: ticket_done reads queue.db read-only (same WQ_DB the sweep
+# uses); pr_merged reads the forge API with the same token file lumen-pr uses.
+WQ_DB = os.environ.get("WQ_DB", "/home/lumen/agents/work-queue/queue.db")
+GITEA_TOKEN = os.environ.get("FOREMAN_GITEA_TOKEN", "/home/lumen/.secrets/gitea-lumen.token")
+GITEA_URL = os.environ.get("FOREMAN_GITEA_URL", "http://100.121.17.5:3000")
 
 
 def disabled():
@@ -252,7 +257,102 @@ def node_healthy(name):
 
 
 # ---------------------------------------------------------------------------
-# registry — the closed vocabulary a `Liveness:` line may use (§5, §6)
+# backlog probes (wq#1492, LIVENESS_GATE.md §13) — deterministic, read-only
+# ---------------------------------------------------------------------------
+
+def ticket_done(tid):
+    """wq#<tid> is status=done in queue.db. Only for tickets whose OUTCOME the cited
+    ticket delivers (superseded-by); a prerequisite dep being done means unblock, not
+    done, and must not be bound (§13.2)."""
+    try:
+        tid = int(str(tid).lstrip("wq#"))
+    except ValueError:
+        return UNKNOWN, f"bad ticket id {tid!r}"
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{WQ_DB}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT status FROM tasks WHERE id=?", (tid,)).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return UNKNOWN, f"queue.db: {str(e)[:60]}"
+    if row is None:
+        return UNKNOWN, f"wq#{tid} not in queue.db"
+    status = (row[0] or "").strip()
+    if status == "done":
+        return SATISFIED, f"wq#{tid} done"
+    return STILL_BLOCKED, f"wq#{tid} {status or '?'}"
+
+
+def pr_merged(repo, n, want="merged", forge="gitea"):
+    """PR #n on owner/repo is merged (want=merged) or closed either way (want=closed).
+    forge=gitea (default, the fleet forge) or github. A PR the token cannot see (404)
+    is UNKNOWN, never a verdict."""
+    want, forge = want.lower(), forge.lower()
+    if want not in ("merged", "closed"):
+        return UNKNOWN, f"bad want {want!r}"
+    if forge == "gitea":
+        url = f"{GITEA_URL.rstrip('/')}/api/v1/repos/{repo}/pulls/{n}"
+        tok = _read_secret(GITEA_TOKEN)
+        headers = {"Authorization": f"token {tok}"} if tok else {}
+    elif forge == "github":
+        url = f"https://api.github.com/repos/{repo}/pulls/{n}"
+        tok = _read_secret(GH_TOKEN)
+        headers = {"Authorization": f"Bearer {tok}"} if tok else {}
+    else:
+        return UNKNOWN, f"bad forge {forge!r}"
+    status, body = _http(url, headers)
+    if status != 200:
+        return UNKNOWN, f"{forge} {repo}#{n} http {status}"
+    try:
+        d = json.loads(body)
+    except ValueError:
+        return UNKNOWN, f"{forge} {repo}#{n} non-json"
+    merged, state = bool(d.get("merged")), (d.get("state") or "?")
+    label = f"{repo}#{n} {'merged' if merged else state}"
+    if want == "merged":
+        return (SATISFIED if merged else STILL_BLOCKED), label
+    return (SATISFIED if (merged or state == "closed") else STILL_BLOCKED), label
+
+
+def file_contains(path, needle):
+    """A readable file contains the literal needle. Detail echoes the needle, never
+    the file content."""
+    if not needle:
+        return UNKNOWN, "empty needle"
+    try:
+        with open(path, errors="replace") as f:
+            text = f.read()
+    except OSError as e:
+        return UNKNOWN, f"{path}: {e.strerror or 'unreadable'}"
+    if needle in text:
+        return SATISFIED, f"{os.path.basename(path)} contains {needle!r}"
+    return STILL_BLOCKED, f"{os.path.basename(path)} lacks {needle!r}"
+
+
+def json_gte(path, key, minimum):
+    """Numeric value at dotted `key` in a JSON file is >= minimum."""
+    try:
+        minimum = float(minimum)
+    except ValueError:
+        return UNKNOWN, f"bad minimum {minimum!r}"
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except (OSError, ValueError) as e:
+        return UNKNOWN, f"{path}: {str(e)[:60]}"
+    for part in key.split("."):
+        if not isinstance(d, dict) or part not in d:
+            return UNKNOWN, f"{os.path.basename(path)}: no key {key!r}"
+        d = d[part]
+    if isinstance(d, bool) or not isinstance(d, (int, float)):
+        return UNKNOWN, f"{key} is not a number"
+    return (SATISFIED if d >= minimum else STILL_BLOCKED), f"{key}={d} vs min {minimum:g}"
+
+
+# ---------------------------------------------------------------------------
+# registry — the closed vocabulary a `Liveness:` line may use (§5, §6, §13)
 # ---------------------------------------------------------------------------
 
 PROBES = {
@@ -263,6 +363,10 @@ PROBES = {
     "path_exists": path_exists,
     "service_active": service_active,
     "node_healthy": node_healthy,
+    "ticket_done": ticket_done,
+    "pr_merged": pr_merged,
+    "file_contains": file_contains,
+    "json_gte": json_gte,
 }
 PROBE_NAMES = tuple(PROBES)
 

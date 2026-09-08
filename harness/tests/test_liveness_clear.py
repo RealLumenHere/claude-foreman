@@ -290,3 +290,68 @@ def test_dispatch_hook_is_cheap_and_closes_known(env, tmp_path):
     events.clear()
     assert lc.dispatch_hook(tid, row(env, tid), fetch, log, state_path=str(tmp_path / "s.json")) is False
     assert events == []
+
+
+# ---- wq#1492: --scope all backlog sweep (LIVENESS_GATE.md §13) ---------------------------
+
+def test_scope_all_reaches_non_frank_tickets_and_is_idempotent(env, tmp_path):
+    """(i) a build-lane blocked ticket (NOT frank-gated) with a done premise is invisible
+    to the default scope and closes under --scope all; a second apply = 0 new closes."""
+    lc = clear_mod(env)
+    import liveness_sweep
+    marker = tmp_path / "landed"; marker.write_text("x")
+    done_dep = seed(env, "build", "[t-scope] the dep", "seed")
+    assert run(env, "edit", done_dep, "--status", "done").returncode == 0
+    tid = seed(env, "build", "[t-scope] blocked on dep", f"seed\nLiveness: ticket_done({done_dep})", status="blocked")
+    kept = seed(env, "build", "[t-scope] still blocked", f"seed\nLiveness: path_exists({tmp_path}/nope)", status="blocked")
+    kw = dict(apply=True, ids=[tid, kept], db=env["db"], ledger=env["env"]["FOREMAN_LIVENESS_LEDGER"])
+    assert [t["id"] for t in liveness_sweep.frank_gated_tickets(env["db"], [tid, kept])] == []
+    assert lc.sweep(**kw) == []                       # default scope never sees a build-lane ticket
+    assert row(env, tid)["status"] == "blocked"
+    recs = lc.sweep(scope="all", **kw)
+    assert {r["ticket"]: r["action"] for r in recs} == {tid: "closed", kept: "kept"}
+    assert row(env, tid)["status"] == "done" and row(env, kept)["status"] == "blocked"
+    closed = [a for a in audit_lines(env) if a["ticket"] == tid and a["action"] == "closed"]
+    assert len(closed) == 1 and closed[0]["probes"][0]["verdict"] == "SATISFIED"
+    # idempotent: the done ticket has left OPEN_STATUSES, nothing else changes
+    recs2 = lc.sweep(scope="all", **kw)
+    assert [r["ticket"] for r in recs2] == [kept] and recs2[0]["action"] == "kept"
+    assert len([a for a in audit_lines(env) if a["action"] == "closed" and a["ticket"] == tid]) == 1
+
+
+def test_scope_all_transport_error_is_unknown_flagged_once(env, tmp_path):
+    """(iii) a real transport error (bogus verify_url in a test ledger binding, no
+    monkeypatch) -> UNKNOWN, ticket untouched, ONE flag note, deduped on re-run."""
+    lc = clear_mod(env)
+    tok = tmp_path / "tok"; tok.write_text("x")
+    ledger = tmp_path / "ledger-bogus.yaml"
+    tid = seed(env, "build", "[t-scope-iii] bogus verify url", "seed no line", status="blocked")
+    ledger.write_text(f"bindings:\n  {tid}: cred_alive({tok}, http://127.0.0.1:9/verify)\n")
+    kw = dict(apply=True, ids=[tid], db=env["db"], ledger=str(ledger), scope="all")
+    r1 = lc.sweep(**kw)[0]
+    assert r1["verdict"] == "UNKNOWN" and r1["action"] == "flagged"
+    assert r1["probes"][0]["detail"].startswith("verify http 0")
+    r2 = lc.sweep(**kw)[0]
+    assert r2["verdict"] == "UNKNOWN" and r2["action"] == "flag_deduped"
+    r = row(env, tid)
+    assert r["status"] == "blocked" and r["notes"].count("[liveness] UNKNOWN") == 1
+    assert not [a for a in audit_lines(env) if a["ticket"] == tid and a["action"] == "closed"]
+
+
+def test_scope_all_no_tag_never_closes(env):
+    """NO_TAG under --scope all = the ticket is listed, untouched, unaudited."""
+    lc = clear_mod(env)
+    tid = seed(env, "build", "[t-scope] no premise", "seed, nothing to probe", status="blocked")
+    recs = lc.sweep(scope="all", apply=True, ids=[tid], db=env["db"], ledger=env["env"]["FOREMAN_LIVENESS_LEDGER"])
+    assert recs[0]["verdict"] == "NO_TAG" and recs[0]["action"] == "none"
+    assert row(env, tid)["status"] == "blocked"
+    assert not [a for a in audit_lines(env) if a["ticket"] == tid]
+
+
+def test_scope_default_unchanged_for_timer():
+    """The timer's bare invocation keeps the frank-gated predicate."""
+    import liveness_clear as lc_mod, liveness_sweep
+    assert inspect.signature(lc_mod.sweep).parameters["scope"].default == "frank"
+    assert inspect.signature(liveness_sweep.sweep).parameters["scope"].default == "frank"
+    with pytest.raises(ValueError):
+        liveness_sweep.tickets_in_scope("everything")

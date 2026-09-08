@@ -322,3 +322,82 @@ copy under WQ_DB with the REAL wq binary)
       frank_gated, audit line NOT-CLOSED.
 (vii) creation gate: add with SATISFIED probe REFUSED; --force files; strict mode refuses
       tagless; decide on SATISFIED refuses and closes.
+
+## 13. One-time backlog sweep — `--scope all` (BUILT 2026-09-08, wq#1492)
+
+Why: §12.3's timer only walks the dispatcher's frank-gated predicate (39 tickets on
+2026-09-08, 38 of them NO_TAG) while the whole open+blocked backlog was 113 with exactly
+one `Liveness:` line. The orchestrator was finding stale gates by hand. Report:
+reports/1492_liveness_backlog_sweep.md.
+
+### 13.1 Scope + probes
+
+`liveness_sweep.tickets_in_scope(scope)`: `frank` (default, unchanged, what the timer runs)
+= `frank_gated_tickets()`; `all` = `backlog_tickets()` = every row in OPEN_STATUSES
+(open|blocked|frank_gated|pending_review), `_gate_why` = the dispatcher's reason or
+`scope:all`. `liveness_clear.sweep(scope=)` / `--scope` pass it through; the per-ticket
+decision (`clear_if_stale`) is identical in both scopes, so every §12.6 property holds
+unchanged. The timer unit is not touched.
+
+Four probes joined the closed vocabulary, each deterministic, never raising, UNKNOWN on
+any transport/parse error, unit-tested in test_liveness.py:
+
+- `ticket_done(<id>)` — queue.db `?mode=ro`, status == done. UNKNOWN when the row is
+  missing or the db unreadable; anything not done is STILL_BLOCKED.
+- `pr_merged(owner/repo, n[, merged|closed[, gitea|github]])` — forge API GET with the
+  same token file lumen-pr reads (gitea: `/home/lumen/.secrets/gitea-lumen.token`,
+  `token` scheme; github: the frank PAT, `Bearer`). 404 (invisible to the token) is
+  UNKNOWN, never a verdict. `closed` accepts merged-or-closed (for "close this PR" asks).
+- `file_contains(path, needle)` — literal substring; detail echoes the needle, never the
+  content. Missing/unreadable file is UNKNOWN (a fabricated path must flag, not sit).
+- `json_gte(path, dotted.key, min)` — numeric compare; missing key / non-number UNKNOWN.
+
+### 13.2 Binding rule — premise, not prerequisite
+
+A binding is written ONLY when all-SATISFIED means the ticket's ask is delivered. Two
+shortcuts the build order suggested are semantic traps (§11) and were refused:
+
+- `ticket_done(N)` for "blocked on wq#N" / `deps=N`: a done dep UNBLOCKS the ticket, it
+  does not finish it (#306 cites done wq#305 but still needs Frank's `.vw_master_pw`
+  drop + the migration run). Bound only for superseded-by (the cited ticket delivers
+  this ticket's outcome: #765 -> 756/757/764). Prerequisite deps are listed read-only in
+  the report's dep-met table; no unblock verb was added — SATISFIED -> liveness-close
+  stays the one write.
+- `path_exists` for CITED_PATH_UNREACHABLE: the cited paths EXIST on the host (the
+  worker could not reach them), so the probe would close live bugs (#1121 cites
+  /home/lumen/bin/lumen-pr). Bound only where the deliverable IS the file.
+- `node_healthy` for a node that has never joined the tailnet is UNKNOWN forever
+  (hapi-1, sentinel): not bound, listed as physical.
+
+Everything unbound carries a one-line reason in
+ops/wq1492-liveness-backlog-sweep/no_tag_reasons.yaml (categories physical / human /
+harness / prereq / work / trap), which render_report.py folds into the ledger table.
+
+### 13.3 Run (2026-09-08 06:30-06:32Z) + findings
+
+Backups first: /home/lumen/foreman/_runs/wq1492/backups/ (queue.db via the sqlite backup
+API, live ledger, live state). dryrun -> apply -> apply2 (idempotence), all through
+ops/wq1492-liveness-backlog-sweep/run_sweep.py, which pins FOREMAN_LIVENESS_RUNTIME to
+the LIVE runtime (shared state/audit with the timer) and WQ_AGENT=liveness-clear (the
+per-command allowlist refuses an env-var prefix on the CLI, ISSUE-LOG #226).
+
+    dryrun  107 tickets  SATISFIED=4 STILL_BLOCKED=8 UNKNOWN=0 NO_TAG=95  would_close=4
+    apply   107          SATISFIED=4 STILL_BLOCKED=8 UNKNOWN=0 NO_TAG=95  closed=4
+    apply2  103          STILL_BLOCKED=8 NO_TAG=95                        closed=0
+
+Closed: 703 (Skill already on the worker allow-list), 765 (A6/A7/A14 done), 843
+(cloud_ceiling already 10 >= 5), 1269 (E1/E2 credentials exist per its own note). Every
+close = pre-note + `wq liveness-close --verdict <verbatim>` + audit row with SATISFIED
+probes[] (10/10 closed rows in the live audit file check out). Bindings written into 14
+tickets as `Liveness:` lines, so the 8 STILL_BLOCKED ones (855, 1008, 1101, 1338, 1344,
+1358, 1388, 1473) self-clear from here.
+
+The backlog moved during the build: orch-fleetops-broker closed 485/983/1322/1333/1393/1440
+by hand between the snapshot and the dry run — 1322/1333/1440 on exactly the premise this
+sweep had staged and already probed SATISFIED. The sweep and the orchestrator agree; the
+bindings were dropped because a done ticket is out of scope.
+
+"Expect a large clear" did not materialise: 95/107 have no deterministic premise
+(harness defects 25, physical 24, open work 16, trap 12, human 11, prereq 7). The
+actionable residue is the 16-ticket dep-met list (all deps done, status still blocked) —
+unblock candidates for the orchestrator, deliberately not closes.

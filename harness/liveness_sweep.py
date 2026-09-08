@@ -43,9 +43,11 @@ def load_bindings(path=LEDGER):
     return {str(k): str(v) for k, v in (doc.get("bindings") or {}).items()}
 
 
-def frank_gated_tickets(db=WQ_DB, ids=None):
-    """Read-only select of open tickets the dispatcher would classify as Frank's."""
-    import foreman_dispatcher as fd  # import is side-effect free (verified 2026-09-07)
+SCOPES = ("frank", "all")
+
+
+def _backlog_rows(db=WQ_DB, ids=None):
+    """Read-only select of every ticket in OPEN_STATUSES (optionally a subset of ids)."""
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     q = f"SELECT * FROM tasks WHERE status IN ({','.join('?' * len(OPEN_STATUSES))})"
@@ -55,23 +57,47 @@ def frank_gated_tickets(db=WQ_DB, ids=None):
         args += list(ids)
     rows = [dict(r) for r in con.execute(q + " ORDER BY id", args)]
     con.close()
+    return rows
+
+
+def _gate_why(t):
+    import foreman_dispatcher as fd  # import is side-effect free (verified 2026-09-07)
+    if (t.get("lane") or "") in fd.HUMAN_LANES:
+        return f"lane {t['lane']}"
+    return fd.frank_gate_reason(t)
+
+
+def frank_gated_tickets(db=WQ_DB, ids=None):
+    """Read-only select of open tickets the dispatcher would classify as Frank's."""
     out = []
-    for t in rows:
-        why = None
-        if (t.get("lane") or "") in fd.HUMAN_LANES:
-            why = f"lane {t['lane']}"
-        else:
-            why = fd.frank_gate_reason(t)
+    for t in _backlog_rows(db, ids):
+        why = _gate_why(t)
         if why:
             t["_gate_why"] = why
             out.append(t)
     return out
 
 
-def sweep(ids=None, db=WQ_DB, ledger=LEDGER):
+def backlog_tickets(db=WQ_DB, ids=None):
+    """wq#1492 --scope all: every ticket in OPEN_STATUSES, frank-gated or not.
+    `_gate_why` is the dispatcher's reason when it has one, else 'scope:all'."""
+    out = []
+    for t in _backlog_rows(db, ids):
+        t["_gate_why"] = _gate_why(t) or "scope:all"
+        out.append(t)
+    return out
+
+
+def tickets_in_scope(scope="frank", db=WQ_DB, ids=None):
+    if scope not in SCOPES:
+        raise ValueError(f"scope must be one of {SCOPES}, got {scope!r}")
+    return backlog_tickets(db, ids) if scope == "all" else frank_gated_tickets(db, ids)
+
+
+def sweep(ids=None, db=WQ_DB, ledger=LEDGER, scope="frank"):
     bindings = load_bindings(ledger)
     report = []
-    for t in frank_gated_tickets(db, ids):
+    for t in tickets_in_scope(scope, db, ids):
         verdict, results = capability.liveness_verdict(t, bindings)
         report.append({
             "id": t["id"], "status": t["status"], "lane": t["lane"],
@@ -91,15 +117,19 @@ def main(argv=None):
     ap.add_argument("--ids", nargs="*", type=int)
     ap.add_argument("--db", default=WQ_DB)
     ap.add_argument("--ledger", default=LEDGER)
+    ap.add_argument("--scope", choices=SCOPES, default="frank",
+                    help="frank (default: the dispatcher's frank-gated predicate) or all "
+                         "(every open|blocked|frank_gated|pending_review ticket, wq#1492)")
     a = ap.parse_args(argv)
-    rep = sweep(a.ids, a.db, a.ledger)
+    rep = sweep(a.ids, a.db, a.ledger, scope=a.scope)
     if a.json:
         print(json.dumps(rep, indent=1))
         return 0
     counts = {}
     for r in rep:
         counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
-    print(f"liveness sweep (READ-ONLY, no state change): {len(rep)} frank-gated ticket(s) "
+    what = "frank-gated ticket(s)" if a.scope == "frank" else "backlog ticket(s) [scope=all]"
+    print(f"liveness sweep (READ-ONLY, no state change): {len(rep)} {what} "
           + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     for r in rep:
         print(f"  wq#{r['id']:<5} {r['verdict']:<13} [{r['lane']}/{r['status']}] {r['title']}")

@@ -1,1 +1,19 @@
-{"criteria": [{"id": "AC1", "citation": "harness/guard.sh:126-142"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "harness/liveness_sweep.py:46-82",
+      "cmd_run": "python3 -m pytest harness/tests/test_liveness.py harness/tests/test_liveness_clear.py -q",
+      "exit_code": 0
+    }
+  ],
+  "derived_by": "worker",
+  "notes": [
+    "--scope all: harness/liveness_sweep.py:46-82 (_backlog_rows / backlog_tickets / tickets_in_scope, SCOPES) and harness/liveness_clear.py sweep(scope=) + --scope; default scope stays 'frank' (timer unchanged).",
+    "New deterministic probes harness/liveness.py: ticket_done, pr_merged, file_contains, json_gte — never raise, UNKNOWN on transport/parse error; unit tests in harness/tests/test_liveness.py.",
+    "Live run 2026-09-08 06:30-06:32Z via ops/wq1492-liveness-backlog-sweep/run_sweep.py: 107 tickets, 4 closed (703, 765, 843, 1269), 8 STILL_BLOCKED kept, 0 UNKNOWN, 95 NO_TAG; apply2 = 0 closes (idempotent). Backups in /home/lumen/foreman/_runs/wq1492/backups/.",
+    "Report: reports/1492_liveness_backlog_sweep.md (ledger table by category, every close with its audit evidence line, dep-met unblock list, test-to-failure i-iv with run output). Design: research/LIVENESS_GATE.md section 13.",
+    "Tests: 33 passed (25 prior + 8 new) in test_liveness.py + test_liveness_clear.py; firewall pins untouched."
+  ],
+  "ticket": "wq#1492"
+}

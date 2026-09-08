@@ -71,3 +71,22 @@ bindings:
   1296: ts_key_expiry_disabled()
   1047: balance_over(cerebras, 0)
   362: node_healthy(hathor)
+  # wq#1492 backlog sweep (LIVENESS_GATE.md §13). Rule: a binding is written ONLY when
+  # all-SATISFIED means the ticket's ASK is delivered, not merely that it is unblocked.
+  # A prerequisite dep (deps= column, "blocked on wq#N") is therefore NOT bound —
+  # see ops/wq1492-liveness-backlog-sweep/no_tag_reasons.yaml for every kept ticket.
+  703: file_contains(/home/lumen/foreman/worker-settings-general.json, Skill)
+  765: ticket_done(756), ticket_done(757), ticket_done(764)
+  843: json_gte(/home/lumen/foreman/dispatcher/config.json, cloud_ceiling, 5)
+  855: service_active(fleet-update-check.timer@lumen)
+  1008: path_exists(/home/lumen/secrets/reddit.env)
+  1269: path_exists(/home/lumen/mailbot/.cf_deploy_token)
+  1338: pr_merged(lumen/mailbot, 3)
+  1344: pr_merged(lumen/claude-foreman, 186, closed)
+  1358: pr_merged(lumen/mailbot, 5)
+  1388: pr_merged(lumen/lumen-bin, 61)
+  1473: file_contains(/home/lumen/foreman/dispatcher/config.json, frank-cred)
+  # 1322 pr_merged(lumen/lumen-bin, 57), 1333 ticket_done(1437,1438,1441), 1440
+  # pr_merged(lumen/lumen-bin, 63) were staged here and probed SATISFIED on the
+  # 2026-09-08 dry run; orch-fleetops-broker closed all three by hand on the same
+  # premise minutes earlier (reports/1492_liveness_backlog_sweep.md), so no binding.

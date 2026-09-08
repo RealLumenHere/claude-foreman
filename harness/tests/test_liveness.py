@@ -112,6 +112,87 @@ def test_liveness_verdict_unknown_and_no_tag(monkeypatch):
     assert v == liveness.STILL_BLOCKED
 
 
+# ---- wq#1492 backlog probes (LIVENESS_GATE.md §13.1): deterministic, UNKNOWN on any
+# transport/parse error, never raise (every case goes through liveness.run) ------------
+
+def test_ticket_done_probe(tmp_path, monkeypatch):
+    import sqlite3
+    db = tmp_path / "q.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY, status TEXT)")
+    con.executemany("INSERT INTO tasks VALUES (?, ?)", [(1, "done"), (2, "blocked"), (3, "open")])
+    con.commit(); con.close()
+    monkeypatch.setattr(liveness, "WQ_DB", str(db))
+    assert liveness.run("ticket_done", "1")[0] == liveness.SATISFIED
+    assert liveness.run("ticket_done", "wq#1")[0] == liveness.SATISFIED
+    assert liveness.run("ticket_done", "2")[0] == liveness.STILL_BLOCKED
+    assert liveness.run("ticket_done", "3")[0] == liveness.STILL_BLOCKED
+    assert liveness.run("ticket_done", "999")[0] == liveness.UNKNOWN      # no such row
+    assert liveness.run("ticket_done", "abc")[0] == liveness.UNKNOWN      # bad id
+    monkeypatch.setattr(liveness, "WQ_DB", str(tmp_path / "missing.db"))
+    v, d = liveness.run("ticket_done", "1")                              # db unreadable
+    assert v == liveness.UNKNOWN and "queue.db" in d
+
+
+def test_pr_merged_probe(monkeypatch, tmp_path):
+    tok = tmp_path / "t"; tok.write_text("secret-token")
+    monkeypatch.setattr(liveness, "GITEA_TOKEN", str(tok))
+    monkeypatch.setattr(liveness, "GH_TOKEN", str(tok))
+    seen = {}
+    def fake_http(url, headers=None, data=None, method=None):
+        seen["url"], seen["headers"] = url, headers or {}
+        return fake_http.reply
+    monkeypatch.setattr(liveness, "_http", fake_http)
+    fake_http.reply = (200, '{"state": "closed", "merged": true}')
+    v, d = liveness.run("pr_merged", "lumen/mailbot, 3")
+    assert v == liveness.SATISFIED and "merged" in d and "secret-token" not in d
+    assert seen["url"].endswith("/api/v1/repos/lumen/mailbot/pulls/3")
+    assert seen["headers"]["Authorization"] == "token secret-token"
+    fake_http.reply = (200, '{"state": "open", "merged": false}')
+    assert liveness.run("pr_merged", "lumen/mailbot, 3")[0] == liveness.STILL_BLOCKED
+    assert liveness.run("pr_merged", "lumen/mailbot, 3, closed")[0] == liveness.STILL_BLOCKED
+    fake_http.reply = (200, '{"state": "closed", "merged": false}')
+    assert liveness.run("pr_merged", "lumen/mailbot, 3")[0] == liveness.STILL_BLOCKED   # closed != merged
+    assert liveness.run("pr_merged", "lumen/mailbot, 3, closed")[0] == liveness.SATISFIED
+    fake_http.reply = (404, "")
+    assert liveness.run("pr_merged", "lumen/mailbot, 3")[0] == liveness.UNKNOWN         # invisible, not a verdict
+    fake_http.reply = (0, "timed out")
+    assert liveness.run("pr_merged", "lumen/mailbot, 3")[0] == liveness.UNKNOWN         # transport error
+    fake_http.reply = (200, "not json")
+    assert liveness.run("pr_merged", "lumen/mailbot, 3")[0] == liveness.UNKNOWN
+    fake_http.reply = (200, '{"state": "closed", "merged": true}')
+    v, _ = liveness.run("pr_merged", "frankstupak/x, 9, merged, github")
+    assert v == liveness.SATISFIED and seen["url"].startswith("https://api.github.com/repos/frankstupak/x/pulls/9")
+    assert seen["headers"]["Authorization"] == "Bearer secret-token"
+    assert liveness.run("pr_merged", "a/b, 1, deleted")[0] == liveness.UNKNOWN
+    assert liveness.run("pr_merged", "a/b, 1, merged, bitbucket")[0] == liveness.UNKNOWN
+
+
+def test_file_contains_and_json_gte_probes(tmp_path):
+    f = tmp_path / "settings.json"; f.write_text('{"allow": ["Read", "Skill"], "cloud_ceiling": 10, "n": {"m": 2}}')
+    v, d = liveness.run("file_contains", f"{f}, Skill")
+    assert v == liveness.SATISFIED and "Skill" in d and "Read" not in d          # detail echoes the needle only
+    assert liveness.run("file_contains", f"{f}, Bash")[0] == liveness.STILL_BLOCKED
+    assert liveness.run("file_contains", f"{tmp_path}/nope, Skill")[0] == liveness.UNKNOWN
+    assert liveness.run("file_contains", f"{f}, ")[0] == liveness.UNKNOWN            # empty needle -> bad arity/UNKNOWN
+    assert liveness.run("json_gte", f"{f}, cloud_ceiling, 5")[0] == liveness.SATISFIED
+    assert liveness.run("json_gte", f"{f}, cloud_ceiling, 11")[0] == liveness.STILL_BLOCKED
+    assert liveness.run("json_gte", f"{f}, n.m, 2")[0] == liveness.SATISFIED
+    assert liveness.run("json_gte", f"{f}, missing, 1")[0] == liveness.UNKNOWN
+    assert liveness.run("json_gte", f"{f}, allow, 1")[0] == liveness.UNKNOWN          # not a number
+    assert liveness.run("json_gte", f"{f}, cloud_ceiling, x")[0] == liveness.UNKNOWN
+    assert liveness.run("json_gte", f"{tmp_path}/nope.json, k, 1")[0] == liveness.UNKNOWN
+    bad = tmp_path / "bad.json"; bad.write_text("{")
+    assert liveness.run("json_gte", f"{bad}, k, 1")[0] == liveness.UNKNOWN
+
+
+def test_backlog_probes_registered_and_aggregate_fail_safe():
+    for name in ("ticket_done", "pr_merged", "file_contains", "json_gte"):
+        assert name in liveness.PROBES
+    # a SATISFIED ticket_done next to an UNKNOWN pr_merged must never aggregate SATISFIED
+    assert liveness.aggregate([(liveness.SATISFIED, ""), (liveness.UNKNOWN, "")]) == liveness.UNKNOWN
+
+
 def test_sweep_has_no_write_path():
     """Code tokens only (docstrings/comments stripped) — the first run of this test
     failed on the docstring's own 'Zero writes', which is the test doing its job."""
