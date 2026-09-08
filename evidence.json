@@ -2,17 +2,9 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1501-minerva-judge-rung/40-judge-model.conf:36-41",
-      "cmd_run": "python3 ops/wq1501-minerva-judge-rung/verify_judge.py env journal --since \"2026-09-08 10:45\"",
+      "citation": "harness/fworker.py:1834-1835",
+      "cmd_run": "python3 -m pytest harness/tests/test_shim_matrix.py -k 11 -q",
       "exit_code": 0
     }
-  ],
-  "derived_by": "worker",
-  "notes": [
-    "Drop-in (qwen36-local primary, VERIFY_JUDGE_MODEL_2 empty = no phantom rung, timeout 230, n=1) tracked at ops/wq1501-minerva-judge-rung/40-judge-model.conf; installed live via apply.sh as root job lumen-job-wq1501-judge-1788865196 (DONE:0, backup 20260908T105956Z), second run unchanged.",
-    "verify_judge.py journal over the 10:45 run: verify=3 readtimeout=0 phantom4xx=0; over the 06:45 (a1, 150s) run it fails with 2 phantom 4xx.",
-    "Measured: primary pinned at the timeout on 3/3 calls, 2s retry answers from a rung that is not Isis (slot 0 still on the 6144-token prompt minutes later) - wq#1529. Factpack cap (design 2e) needs /home/lumen/minerva code, outside this sandbox - wq#1528. ISSUE-LOG #233.",
-    "Report: reports/1501_minerva_judge_rung.md"
-  ],
-  "ticket": "wq#1501"
+  ]
 }

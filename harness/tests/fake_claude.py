@@ -274,14 +274,31 @@ def main():
         emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}})
         emit({"type": "result", "subtype": "success", "is_error": False, "result": "BLOCKED"})
 
-    elif scenario == "success_claim_error_sentinel":
-        # wq#749: the worker discovers mid-session its claim raced (e.g. lease
-        # stolen) and reports CLAIM_ERROR as instructed rather than doing the work
-        # under a stale claim. exit 0, ordinary result:success frame.
+    elif scenario == "success_stolen_claim_error_sentinel":
+        # wq#749/wq#869: a REAL claim race — the ticket is taken out from under this
+        # attempt (released, then re-claimed by another agent) while the session is
+        # still running, and the worker reports CLAIM_ERROR as instructed rather than
+        # doing the work under a stale claim. exit 0, ordinary result:success frame.
+        # The state change in wq — not the sentinel text — is what fworker corroborates.
         emit({"type": "assistant", "message": {"content": [
             {"type": "text", "text": "claim looks stale, bailing"}]}})
+        if ticket_id:
+            subprocess.run([WQ_BIN, "release", str(ticket_id)],
+                            capture_output=True, text=True)
+            subprocess.run([WQ_BIN, "claim", "rival-orchestrator", "--id", str(ticket_id)],
+                            capture_output=True, text=True)
         emit({"type": "result", "subtype": "success", "is_error": False,
               "result": "claim race detected\nCLAIM_ERROR"})
+
+    elif scenario == "success_unconfirmed_claim_error_sentinel":
+        # wq#869 adversarial case (the wq#836 contradiction): the sentinel claims
+        # CLAIM_ERROR but the ticket never changed hands — no release, no reclaim, no
+        # contention of any kind, just the literal word on the last line. It must NOT
+        # buy a terminal unretried exit; it falls through to the ordinary
+        # FALSE_COMPLETE path, same as the unconfirmed BLOCKED sentinel above.
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "result": "all criteria met\nCLAIM_ERROR"})
 
     elif scenario == "auth_401":
         # shim 12 (§C11 AUTH): system/api_retry authentication_failed + a bare 401.

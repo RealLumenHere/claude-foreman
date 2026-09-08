@@ -502,6 +502,17 @@ def wq_identity(ticket_id):
     return f"fworker-wq{ticket_id}"
 
 
+def claim_holder(ticket_row):
+    """wq#869: the agent name that holds this ticket right now, normalised for comparison.
+
+    `wq show` is line-oriented text with no NULL encoding, so an unclaimed row prints the
+    literal string "None" — collapse that (and whitespace/empty) to "" so an unclaimed
+    ticket compares equal to another unclaimed reading and unequal to any real holder.
+    """
+    holder = (ticket_row.get("claimed_by") or "").strip()
+    return "" if holder in ("None", "null") else holder
+
+
 def wq_claim(ticket_id):
     p = wq("claim", wq_identity(ticket_id), "--id", str(ticket_id))
     return p.returncode == 0, p.stdout + p.stderr
@@ -1607,6 +1618,12 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
     archetype = args.archetype or "standard-engineering"
+    # wq#869: who holds the ticket as this attempt begins — normally wq_identity(),
+    # claimed before the first attempt was ever spawned; a retry or resume re-reads
+    # whatever the row says now rather than assuming. Kept so the CLAIM_ERROR
+    # sentinel below can be corroborated against a real change of hands rather than
+    # against a status test the ordinary in-progress state already satisfies.
+    claim_holder_at_spawn = claim_holder(ticket)
 
     allow, reason = can_dispatch(args.model)
     if not allow:
@@ -1790,17 +1807,32 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     # against the ticket's actual status before the FALSE_COMPLETE check below ever
     # runs, so a real block/claim-race never gets relabeled and retried. The sentinel
     # alone is never trusted (a worker could print BLOCKED without calling `wq
-    # block`) — only the ticket-status cross-check makes it terminal.
+    # block`) — only the cross-check against wq's own row makes it terminal.
+    #
+    # wq#869 (verify-pass wq#836 contradiction): that promise used to hold for BLOCKED
+    # only. CLAIM_ERROR was corroborated by `status != "done"`, which the ordinary
+    # in-progress status ("claimed") satisfies unconditionally — so a session that
+    # merely printed the word CLAIM_ERROR bought itself a terminal, unretried,
+    # unrecorded exit, exactly the self-report trust RELIABILITY_SPEC.md §C10 forbids.
+    # The corroboration is now the same shape as BLOCKED's: a DB state change the
+    # worker's text cannot fake. The ticket must have CHANGED HANDS while the attempt
+    # ran — released out from under it, reaped, or re-claimed by another agent — which
+    # is what a claim race IS. Still held by the same agent that spawned this attempt
+    # means no race happened, whatever the last line says, and the sentinel falls
+    # through to the ordinary FALSE_COMPLETE path (bounded retry, visible in RCA).
     worker_sentinel = None
     sentinel_status = None
+    sentinel_holder = None
     if classification in (SUCCESS, DEGRADED_SUCCESS):
         worker_sentinel = parse_worker_sentinel(state.result_text)
         if worker_sentinel in (BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL):
-            sentinel_status = wq_show(ticket_id).get("status")
+            sentinel_row = wq_show(ticket_id)
+            sentinel_status = sentinel_row.get("status")
+            sentinel_holder = claim_holder(sentinel_row)
     sentinel_confirmed_block = (worker_sentinel == BLOCK_SENTINEL
                                  and sentinel_status == "blocked")
     sentinel_confirmed_claim_error = (worker_sentinel == CLAIM_ERROR_SENTINEL
-                                       and sentinel_status != "done")
+                                       and sentinel_holder != claim_holder_at_spawn)
 
     # RELIABILITY_SPEC.md §C10: verify acceptance criteria against artifacts BEFORE
     # anything downstream (including the persisted attempt record) trusts a self-
@@ -1846,6 +1878,11 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "exit_code": exit_code, "cpu_s": cpu_s, "oauth_token_used": oauth_token_used,
         "oom_journal": oom_journal,
         "killed_reason": killed_reason, "loop_reason": loop_tracker.tripped,
+        # wq#869: the claim-race evidence, so RCA can see WHY a CLAIM_ERROR sentinel was
+        # trusted (or wasn't) instead of taking the exit code's word for it.
+        "worker_sentinel": worker_sentinel,
+        "claim_holder_at_spawn": claim_holder_at_spawn,
+        "claim_holder_at_exit": sentinel_holder,
         "turns": state.turns,
         "session_id": state.session_id, "resumed_from": resume_session,
         "saw_limit": state.saw_limit, "latest_resets_at": state.latest_resets_at,
@@ -1910,9 +1947,15 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         ntfy("foreman BLOCKED", f"wq#{ticket_id} blocked by worker", priority="high")
         return EXIT_BLOCKED
     if sentinel_confirmed_claim_error:
-        log(f"CLAIM_ERROR: worker reported a claim race on wq#{ticket_id} "
-            f"(status={sentinel_status!r}) — releasing, no retry (wq#749).")
-        wq_release(ticket_id)
+        # wq#869: no wq_release() here any more. Confirmation now MEANS the ticket is no
+        # longer held by the agent this attempt spawned under, so there is nothing of
+        # ours to release — and wq's own owner check would refuse a non-holder release
+        # anyway. Releasing on the old vacuous confirmation is what let a fabricated
+        # sentinel hand a live ticket back to the queue.
+        log(f"CLAIM_ERROR: wq#{ticket_id} changed hands while attempt {attempt} ran — "
+            f"held by {claim_holder_at_spawn or '(unclaimed)'!r} at spawn, "
+            f"{sentinel_holder or '(unclaimed)'!r} now (status={sentinel_status!r}). "
+            f"The worker's CLAIM_ERROR is corroborated — no retry (wq#749/wq#869).")
         return EXIT_CLAIM_ERROR
 
     return reconcile(args, ticket_id, attempt, classification, state, events,
