@@ -2,18 +2,19 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "harness/wq_close.py:172-186",
-      "cmd_run": "python3 -m pytest harness/tests/test_wq1479_close_verdict.py -q",
+      "citation": "reports/1486_verify_wq1485_broker_grant_coverage_row.md:1",
+      "cmd_run": "python3 -m pytest harness/tests/test_capability_allow.py harness/tests/test_read_dir_sweep.py harness/tests/test_capability_lint.py dispatcher/tests/test_capability_replay.py dispatcher/tests/test_dispatcher.py dispatcher/tests/test_runaway.py -q",
       "exit_code": 0
     }
   ],
   "derived_by": "worker",
   "notes": [
-    "AC1 citation is the confirm step: after `wq done` exits 0, wq_close re-reads the ticket row and reports CLOSED only when status=='done' — the queue's own state is the verdict, not anything the CLI printed.",
-    "Supporting citations: ops/wq1479-close-verdict/ensure_wq_refuse_stderr.py:45-79 (the eight anchored close-path REFUSED->stderr replacements, applied to /home/lumen/bin/wq 2026-09-08, backup .bak.wq1479.20260908_052837); harness/tests/test_wq1479_close_verdict.py:72-221 (13 tests).",
-    "13/13 new tests pass; 701/701 harness/tests pass with the patched wq.",
-    "The ticket's stated cause did not reproduce: `wq done` on a blocked, claimed_by-NULL ticket succeeds (owner_ok returns True at wq:814), and the cited wq:1546 is in cmd_heartbeat. Which guard actually refused on 09-07 is unrecoverable — a refused close logs no agent_activity row (verified). Recorded as ISSUE-LOG row 219; the fix is guard-agnostic by design.",
-    "wq#1133/wq#1296 deliberately NOT closed — that is Liveness Gate Slice 3, gated on Frank."
+    "Verdict: CONFIRM. Full report: reports/1486_verify_wq1485_broker_grant_coverage_row.md.",
+    "PR#344 (merged e86fd38 rewritten to 3c26f42 on origin/main) adds exactly one row to research/BROKER_GRANT_COVERAGE.md matching wq#1485's fixed template, plus repoints evidence.json's AC1 citation to it (line 107, verified accurate).",
+    "Confirmed /home/lumen/research_prompts is a real allow.read_dirs entry (harness/fleet-exec-policy.yaml:71) and the allow-hit dir-tagging logic exists in harness/capability_lint.py, not just claimed in prose.",
+    "Ran all six touched/depended-on test files from a disposable worktree off pr-344: 114 harness + 127 dispatcher = 241 passed, matching the doc's own stated counts.",
+    "No scope creep: the wq#1485 commit alone (e86fd38) touches only evidence.json and research/BROKER_GRANT_COVERAGE.md; the other 2 commits bundled into PR#344 predate wq#1485's claim time and were already on the shared lane branch.",
+    "Non-blocking: neither the commit, PR notes, nor evidence.json cites the specific research_prompts file/line read, but the ticket's fixed-template deliverable has no slot for one."
   ],
-  "ticket": "wq#1479"
+  "ticket": "wq#1486"
 }
