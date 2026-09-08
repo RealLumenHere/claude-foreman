@@ -1630,6 +1630,21 @@ def _lint_roster(monkeypatch):
     return roster
 
 
+def _lint_sweep(monkeypatch):
+    """wq#1482: a fresh, hitless read_dir_sweep.json for every real allow.read_dirs
+    root, so this file's pre-sweep-gate corpus (dir auto-tag on a cited real allow
+    root) is not turned into a permanent unresolved skip by a runtime sweep file
+    this test suite never writes."""
+    import datetime
+    policy = capability_lint.load_policy()
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    roots = {r: {"files": 0, "hits": []}
+             for r in (policy.get("allow") or {}).get("read_dirs") or []}
+    sweep = {"ts": ts, "roots": roots}
+    monkeypatch.setattr(capability_lint, "load_sweep", lambda path=None: sweep)
+    return sweep
+
+
 def test_capability_lint_warn_logs_one_event_per_candidate_and_applies_nothing(
         denv, monkeypatch):
     """Slice B is measurement only: every candidate gets exactly one capability_lint
@@ -1712,6 +1727,7 @@ SECOND_DIR = "/home/lumen/instructions/playbooks"
 
 def _apply_dir(monkeypatch):
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply-dir")
+    _lint_sweep(monkeypatch)
 
 
 def test_capability_auto_tags_a_cited_dir_and_still_spawns(denv, monkeypatch):

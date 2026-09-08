@@ -72,9 +72,19 @@ def fs(monkeypatch):
     monkeypatch.delenv("FOREMAN_NEEDS_LINT_MODE", raising=False)
 
 
+def fresh_sweep():
+    """wq#1482: a fresh, hitless read_dir_sweep.json for every allow.read_dirs root
+    — this file's corpus is about the allow-list gate, not the sweep gate, so every
+    row here should behave as if the sweep just ran clean."""
+    import datetime
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    roots = {r: {"files": 0, "hits": []} for r in POLICY["allow"]["read_dirs"]}
+    return {"ts": ts, "roots": roots}
+
+
 def derive(detail, title="", repo=None, add_dirs=()):
     return cl.derive({"title": title, "detail": detail}, repo=repo, add_dirs=add_dirs,
-                     roster=ROSTER, policy=POLICY)
+                     roster=ROSTER, policy=POLICY, sweep=fresh_sweep())
 
 
 # --- the real corpus ------------------------------------------------------------
@@ -410,7 +420,8 @@ def test_warn_is_the_documented_rollback(monkeypatch):
     exactly: still derives, still logs, decides and applies nothing."""
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "warn")
     assert cl.mode() == "warn" and cl.enabled() and not cl.enforcing()
-    d = cl.derive({"title": "read /home/lumen/agent"}, roster=ROSTER, policy=POLICY)
+    d = cl.derive({"title": "read /home/lumen/agent"}, roster=ROSTER, policy=POLICY,
+                  sweep=fresh_sweep())
     assert d.tags and cl.appliable_tags(d) == []
 
 
@@ -426,7 +437,7 @@ def test_apply_dir_applies_only_dir_tags(monkeypatch):
     only widen READ context. ssh/restart/copy wait for slice F."""
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply-dir")
     d = cl.derive({"title": "ops", "detail": "ssh isis and read /home/lumen/agent"},
-                  roster=ROSTER, policy=POLICY)
+                  roster=ROSTER, policy=POLICY, sweep=fresh_sweep())
     assert ("ssh", "isis") in d.tags and ("dir", "/home/lumen/agent") in d.tags
     assert cl.appliable_tags(d) == [("dir", "/home/lumen/agent")]
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "apply")

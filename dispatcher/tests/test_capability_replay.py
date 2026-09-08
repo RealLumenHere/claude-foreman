@@ -24,6 +24,19 @@ import capability_replay  # noqa: E402
 LIVE_DB = "/home/lumen/agents/work-queue/queue.db"
 ROSTER = capability_lint.Roster(names=["lumen", "isis", "thor"], ips={})
 
+
+def fresh_sweep():
+    """wq#1482: a fresh, hitless read_dir_sweep.json — this file's corpus is about
+    the allow-list gate (wq#1441), not the sweep gate, so replay() should see the
+    same "sweep just ran clean" state `foreman_dispatcher` sees once the timer has
+    run at least once."""
+    import datetime
+    policy = capability_lint.load_policy()
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    roots = {r: {"files": 0, "hits": []}
+             for r in (policy.get("allow") or {}).get("read_dirs") or []}
+    return {"ts": ts, "roots": roots}
+
 # The four tickets' real shapes: a cited path outside every add_dirs, and — for 1401
 # only — a v2 verb in the same detail. Text trimmed to the parts stage 3.7 reads.
 CORPUS = [
@@ -56,7 +69,8 @@ def _apply_dir(monkeypatch):
 def test_each_ticket_lands_in_the_predicted_column(tid, title, detail, column):
     t = {"id": tid, "title": title, "detail": detail, "needs": None,
          "archetype": "standard-engineering", "status": "blocked"}
-    r = capability_replay.replay(t, repo="/home/lumen/foreman", roster=ROSTER)
+    r = capability_replay.replay(t, repo="/home/lumen/foreman", roster=ROSTER,
+                                 sweep=fresh_sweep())
     assert r["column"] == column
     if column == "dispatchable":
         # the dir tag is what makes the path reachable; the replay names what the
@@ -72,7 +86,8 @@ def test_1401_names_the_v2_verb_that_holds_it():
     tid, title, detail, _ = CORPUS[0]
     r = capability_replay.replay({"id": tid, "title": title, "detail": detail,
                                   "needs": None, "archetype": "standard-engineering"},
-                                 repo="/home/lumen/foreman", roster=ROSTER)
+                                 repo="/home/lumen/foreman", roster=ROSTER,
+                                 sweep=fresh_sweep())
     assert r["column"] == "needs_unresolved" and "reboot" in r["detail"]
     assert r["tags"] == ["dir(/home/lumen/instructions/playbooks)"]
     assert "apply" not in r

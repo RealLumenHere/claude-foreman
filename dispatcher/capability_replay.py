@@ -54,13 +54,13 @@ def load_tickets(ticket_ids, db_path=None):
     return [dict(r) for r in rows]
 
 
-def replay(ticket, repo=None, roster=None, policy=None):
+def replay(ticket, repo=None, roster=None, policy=None, sweep=None):
     """The verdict stage 3.7 would reach for this ticket, as a dict."""
     repo = repo if repo is not None else router.repo_for_ticket(ticket)
     derived = capability_lint.derive(
         ticket, repo=repo,
         add_dirs=capability_lint.base_add_dirs(ticket.get("archetype")),
-        roster=roster, policy=policy)
+        roster=roster, policy=policy, sweep=sweep)
     out = {"id": ticket["id"], "status": ticket.get("status"), "repo": repo,
            "mode": capability_lint.mode(), **derived.as_event()}
     if derived.refused:
@@ -92,9 +92,11 @@ def main(argv=None):
     missing = set(a.tickets) - {t["id"] for t in tickets}
     for tid in sorted(missing):
         print(f"wq#{tid}: no such ticket", file=sys.stderr)
-    roster, policy = capability_lint.load_roster(), capability_lint.load_policy()
+    roster = capability_lint.load_roster()
+    policy = capability_lint.load_policy()
+    sweep = capability_lint.load_sweep()
     for t in tickets:
-        r = replay(t, roster=roster, policy=policy)
+        r = replay(t, roster=roster, policy=policy, sweep=sweep)
         if a.json:
             print(json.dumps(r))
         else:

@@ -70,3 +70,59 @@ def test_binary_and_git_skipped(tmp_path):
 
 def test_mask():
     assert rds.mask(FAKE_PAT) == "gith…" and rds.mask("ab") == "…"
+
+
+# --- write_runtime / aq_alert (wq#1482) --------------------------------------------
+
+def test_write_runtime_writes_ts_and_masked_hits(tmp_path):
+    root = tmp_path / "root"
+    _write(root, "prod.env", "nothing\n")
+    runtime = tmp_path / "runtime" / "read_dir_sweep.json"
+    report, new_hits = rds.write_runtime(roots=[str(root)], runtime_path=str(runtime))
+    assert runtime.exists()
+    import json
+    written = json.loads(runtime.read_text())
+    assert written["ts"] and written["roots"][str(root)]["hits"][0]["kind"] == "basename"
+    assert len(new_hits) == 1 and new_hits[0][0] == str(root)
+
+
+def test_write_runtime_second_run_same_hit_is_not_new(tmp_path):
+    root = tmp_path / "root"
+    _write(root, "prod.env", "nothing\n")
+    runtime = tmp_path / "runtime" / "read_dir_sweep.json"
+    rds.write_runtime(roots=[str(root)], runtime_path=str(runtime))
+    _, new_hits = rds.write_runtime(roots=[str(root)], runtime_path=str(runtime))
+    assert new_hits == []
+
+
+def test_write_runtime_flags_only_the_newly_added_hit(tmp_path):
+    root = tmp_path / "root"
+    _write(root, "prod.env", "nothing\n")
+    runtime = tmp_path / "runtime" / "read_dir_sweep.json"
+    rds.write_runtime(roots=[str(root)], runtime_path=str(runtime))
+    _write(root, "id_ed25519", "nothing\n")
+    _, new_hits = rds.write_runtime(roots=[str(root)], runtime_path=str(runtime))
+    assert len(new_hits) == 1
+    assert new_hits[0][1]["path"].endswith("id_ed25519")
+
+
+def test_aq_alert_calls_aq_add_per_new_hit(tmp_path, monkeypatch):
+    calls = []
+    fake_aq = tmp_path / "aq"
+    fake_aq.write_text("#!/bin/sh\nexit 0\n")
+    fake_aq.chmod(0o755)
+    monkeypatch.setattr(rds.subprocess, "run", lambda argv, **kw: calls.append(argv))
+    new_hits = [("/root", {"path": "/root/x.env", "line": 0, "kind": "basename",
+                           "excerpt": "x.env"})]
+    rds.aq_alert(new_hits, aq_bin=str(fake_aq))
+    assert len(calls) == 1
+    assert calls[0][:3] == [str(fake_aq), "add", rds.AQ_SOURCE]
+
+
+def test_aq_alert_noop_without_new_hits_or_binary(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(rds.subprocess, "run", lambda argv, **kw: calls.append(argv))
+    rds.aq_alert([], aq_bin=str(tmp_path / "aq"))
+    rds.aq_alert([("/root", {"path": "/root/x", "line": 1, "kind": "basename",
+                             "excerpt": "x"})], aq_bin=str(tmp_path / "does-not-exist"))
+    assert calls == []

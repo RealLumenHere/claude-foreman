@@ -1,0 +1,14 @@
+[Unit]
+Description=wq#1482 read_dir_sweep — masked secret sweep of every allow.read_dirs root, written to harness/runtime/read_dir_sweep.json; capability_lint refuses a fresh hit and fails closed on a stale/missing sweep
+Documentation=file:///home/lumen/foreman/research/BROKER_GRANT_COVERAGE.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/read_dir_sweep.py --write-runtime
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=600
+Nice=10
