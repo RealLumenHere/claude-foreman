@@ -1,0 +1,16 @@
+[Unit]
+Description=AuditForecast on-demand transparent forecast run (wq#1574)
+Documentation=file:///home/lumen/foreman/ops/wq1574-auditforecast/README.md
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+# Not enabled by default — see README.md "systemd timer" section. Requires
+# $AUDITFORECAST_QUESTION and $AUDITFORECAST_BASELINE to be set by the
+# caller (systemctl set-environment or an EnvironmentFile=) before this
+# unit is wired to a timer.
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/wq1574-auditforecast/audit_forecast.py "${AUDITFORECAST_QUESTION}" --baseline "${AUDITFORECAST_BASELINE}"
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=auditforecast

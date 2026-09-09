@@ -2,7 +2,9 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1573-glm53flash-eval/glm53flash_price_watchdog.py:65-84"
+      "cmd_run": "python3 ops/wq1574-auditforecast/test_audit_forecast.py",
+      "exit_code": 0,
+      "citation": "ops/wq1574-auditforecast/audit_forecast.py:106-137"
     }
   ]
 }

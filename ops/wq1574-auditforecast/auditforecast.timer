@@ -1,0 +1,15 @@
+[Unit]
+Description=Placeholder timer for AuditForecast (wq#1574) — not installed
+Documentation=file:///home/lumen/foreman/ops/wq1574-auditforecast/README.md
+
+# Intentionally not enabled: see README.md "systemd timer" section. There
+# is no standing list of forecast questions to feed this yet, so an
+# OnCalendar= schedule here would just be a no-op cron job. Fill in a real
+# schedule and Requires=auditforecast.service once a question source
+# exists, then install to /etc/systemd/system/ and enable.
+[Timer]
+OnCalendar=
+Persistent=false
+
+[Install]
+WantedBy=timers.target
