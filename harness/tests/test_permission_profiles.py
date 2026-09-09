@@ -49,7 +49,10 @@ def test_foreman_profile_gets_python_and_shell_not_node():
     assert "Bash(npm run *)" not in allow
 
 
-def test_pokemon_profile_gets_node_and_shell_not_python():
+def test_pokemon_profile_gets_node_shell_and_python():
+    """wq#1566 (ISSUE-LOG #258): pokemon is polyglot — src/ is TypeScript, tools/ is
+    entirely Python (lpp_stuck_*.py, lpp-sentinel). Omitting python made every ticket
+    touching tools/ unrunnable (wq#1563 attempt 1 PERMISSION_LOOP)."""
     with open(SETTINGS) as f:
         base = json.load(f)
     merged = permission_profiles.render_permissions("/home/lumen/pokemon", base)
@@ -58,8 +61,8 @@ def test_pokemon_profile_gets_node_and_shell_not_python():
     assert "Bash(npm run *)" in allow
     assert "Bash(npx *)" in allow
     assert "Bash(bash scripts/*)" in allow
-    assert "Bash(python3 *)" not in allow
-    assert "Bash(pytest *)" not in allow
+    assert "Bash(python3 *)" in allow
+    assert "Bash(pytest *)" in allow
 
 
 def test_mailbot_profile_gets_node_and_python():

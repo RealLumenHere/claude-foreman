@@ -1,5 +1,6 @@
 {
-  "profiles": ["base", "node-ts", "shell"],
+  "_comment": "wq#1563 (ISSUE-LOG #258): pokemon is polyglot — src/ is TypeScript, tools/ is entirely Python (lpp_stuck_*.py, lpp-sentinel, the stuck supervisor). Omitting the python profile made every ticket touching tools/ unrunnable; wq#1563 attempt 1 died a PERMISSION_LOOP on exactly that.",
+  "profiles": ["base", "node-ts", "shell", "python"],
   "extra_allow": [],
   "verbs": [],
   "preflight_cmds": ["npx tsc --version", "node --version"]
