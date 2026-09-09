@@ -1,0 +1,5 @@
+# Pilot artifacts that are regenerable and too large to version.
+# sample.json is the pinned fixed sample — its sha256 is recorded in the pilot's
+# CARD.md and REPORT.md, and build_sample.py rebuilds it from minerva.db on Lumen.
+*/sample.json
+*/graph.db

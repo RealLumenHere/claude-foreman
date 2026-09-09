@@ -1,0 +1,29 @@
+[
+  {
+    "arm": "A baseline dense+rerank",
+    "n": 50,
+    "R@1": 0.94,
+    "R@5": 0.98,
+    "MRR": 0.957,
+    "ms_per_query": 93.0,
+    "misses_at5": 1
+  },
+  {
+    "arm": "B graph only",
+    "n": 50,
+    "R@1": 0.82,
+    "R@5": 0.96,
+    "MRR": 0.872,
+    "ms_per_query": 0.2,
+    "misses_at5": 2
+  },
+  {
+    "arm": "C fused (A+B)",
+    "n": 50,
+    "R@1": 0.92,
+    "R@5": 0.98,
+    "MRR": 0.947,
+    "ms_per_query": 93.2,
+    "misses_at5": 1
+  }
+]

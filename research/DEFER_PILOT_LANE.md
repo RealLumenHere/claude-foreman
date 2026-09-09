@@ -68,6 +68,18 @@ template, opens a `pilot`-lane wq ticket pointing at it, sets the proposal to
 `status='piloting'` with the ticket id in `decision_reason`. Capped by
 `DEFER_MAX_PILOTS` (default 3/day) so a first run cannot flood the lane.
 
+**The ticket must carry `needs: ssh(<node>)` — measured gap, wq#1560.** The policy
+half of the lane is correct (`harness/fleet-exec-policy.yaml:108` lists hathor with
+read-only `run` plus copy-into-pilots), but the grant half is derived from the
+ticket, not the policy: `fworker.resolve_exec_grant` builds the grant from the
+ticket's `needs:` tags and writes no `FOREMAN_GRANT_FILE` when there are none. The
+first pilot ticket was opened with `needs:` empty, so every `fleet-exec run hathor`
+from the worker denied with `grant:grant_missing_env` (audit:
+`events/fleet-exec.jsonl`, ticket 1560) and the pilot ran on Lumen instead. A pilot
+whose card names a node must be created with `needs: ssh(<node>)`, plus `copy(<node>)`
+when it ships its own extract; otherwise the card's node line is unenforceable and
+the runner silently substitutes a host.
+
 Reap: `cmd_reap` already sweeps `status='researching'`. It gains a second sweep
 over `status='piloting'`, reading `/home/lumen/foreman/pilots/<pid>/REPORT.md` and
 running the *same* `_verdict_from()` — ADOPT->accept, WATCH->defer, SKIP->
