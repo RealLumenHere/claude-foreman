@@ -1,0 +1,24 @@
+{
+  "baseline": {
+    "arm": "baseline",
+    "n_records": 5000,
+    "n_queries": 200,
+    "build_ms": 60.356,
+    "p50_ms": 0.7659,
+    "p95_ms": 1.1908,
+    "mean_ms": 0.8351,
+    "min_ms": 0.6523,
+    "max_ms": 1.2671
+  },
+  "treatment": {
+    "arm": "treatment",
+    "n_records": 5000,
+    "n_queries": 200,
+    "build_ms": 38.732,
+    "p50_ms": 3.1517,
+    "p95_ms": 3.4251,
+    "mean_ms": 2.9479,
+    "min_ms": 2.4128,
+    "max_ms": 3.9226
+  }
+}
