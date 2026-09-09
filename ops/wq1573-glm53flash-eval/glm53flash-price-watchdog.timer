@@ -1,0 +1,10 @@
+[Unit]
+Description=Run glm53flash-price-watchdog every 6 hours (a promo-pricing repeal isn't intraday-urgent like a spend runaway; 6h keeps us noticing same-day)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

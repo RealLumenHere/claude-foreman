@@ -1,0 +1,8 @@
+[Unit]
+Description=wq#1573 glm-5.3-flash OpenRouter price-move watchdog
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/wq1573-glm53flash-eval/glm53flash_price_watchdog.py
+User=lumen

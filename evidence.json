@@ -1,1 +1,8 @@
-{"criteria": [{"id": "AC1", "citation": "pilots/7c516dfb1a14/run_pilot.py:27-75", "cmd_run": "python3 run_pilot.py --arm baseline --sample sample.json --queries 200 --out results.json && python3 run_pilot.py --arm treatment --sample sample.json --queries 200 --out results.json", "exit_code": 0}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "ops/wq1573-glm53flash-eval/glm53flash_price_watchdog.py:65-84"
+    }
+  ]
+}
