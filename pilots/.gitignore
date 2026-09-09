@@ -1,0 +1,6 @@
+# Pilot working data, not source of record. sample.json is a multi-MB vector extract
+# rebuildable from build_sample.py; graph.db is a treatment-arm artifact rebuilt by
+# run_pilot.py on every run. CARD.md, REPORT.md, results.json and the scripts ARE
+# committed — they are the evidence a pilot's verdict rests on.
+sample.json
+graph.db
