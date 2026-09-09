@@ -63,6 +63,18 @@ def probability_to_log_odds(p):
 
 
 def log_odds_to_probability(log_odds):
+    """Logistic transform that saturates instead of overflowing.
+
+    MAX_LOG_LR bounds each individual evidence item's swing, but nothing
+    bounds the cumulative sum: fold in enough items (~240 at strength 100,
+    plausible for a standing question fed by >~50 SearXNG queries) and
+    log_odds passes ~709, where a naive math.exp(log_odds) raises
+    OverflowError and crashes the CLI with a traceback instead of emitting
+    the auditable report this module exists to guarantee (wq#1576). Picking
+    the branch by sign keeps the exponent argument <= 0, so extremes
+    underflow to a saturated 0.0/1.0 rather than overflowing."""
+    if log_odds >= 0.0:
+        return 1.0 / (1.0 + math.exp(-log_odds))
     odds = math.exp(log_odds)
     return odds / (1.0 + odds)
 

@@ -10,6 +10,7 @@ subprocess (--self-test), matching this repo's ops/ test convention
 
 Exits 0 when every case passes.
 """
+import json
 import math
 import os
 import subprocess
@@ -109,6 +110,62 @@ def test_extreme_strength_is_bounded():
     )
 
 
+def test_cumulative_log_odds_saturates_without_overflow():
+    """wq#1576: per-item clamping does not bound the running total. 240
+    in-contract support items push log_odds past math.exp's ~709 limit, which
+    used to raise OverflowError mid-report."""
+    baseline = af.baseline_probability("q", base_rate=0.3)
+    items = [{"source": f"q{i}", "stance": "support", "strength": 100.0} for i in range(240)]
+    try:
+        log_odds, steps = af.mechanical_odds_update(baseline, items)
+    except OverflowError as exc:
+        check("240 support items do not overflow", False, f"OverflowError: {exc}")
+        return
+    check("240 support items do not overflow", True)
+    check("saturated probability stays in [0, 1]", 0.0 <= steps[-1]["probability_after"] <= 1.0)
+    check(
+        "saturated probability reaches 1.0",
+        math.isclose(af.log_odds_to_probability(log_odds), 1.0),
+        str(af.log_odds_to_probability(log_odds)),
+    )
+    refuters = [{"source": f"r{i}", "stance": "refute", "strength": 100.0} for i in range(240)]
+    neg_log_odds, _ = af.mechanical_odds_update(baseline, refuters)
+    p_refuted = af.log_odds_to_probability(neg_log_odds)
+    check(
+        "saturated refute probability floors at ~0.0",
+        0.0 <= p_refuted < 1e-300,
+        str(p_refuted),
+    )
+
+
+def test_cli_survives_saturating_evidence():
+    """The whole point of the module is an auditable JSON report; a traceback
+    is not one. Drive the real CLI with enough evidence to saturate."""
+    evidence = json.dumps(
+        [{"source": f"q{i}", "stance": "support", "strength": 100.0} for i in range(240)]
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            os.path.join(HERE, "audit_forecast.py"),
+            "will X happen?",
+            "--baseline",
+            "0.3",
+            "--evidence",
+            evidence,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    check("CLI exits 0 on saturating evidence", proc.returncode == 0, proc.stderr[-400:])
+    if proc.returncode != 0:
+        return
+    report = json.loads(proc.stdout)
+    check("CLI emits JSON report with final_probability", report["final_probability"] == 1.0,
+          str(report.get("final_probability")))
+
+
 def test_invalid_stance_rejected():
     baseline = af.baseline_probability("q", base_rate=0.5)
     try:
@@ -155,6 +212,8 @@ def main():
     test_mechanical_update_refute_decreases_probability()
     test_mechanical_update_is_order_independent_in_log_space()
     test_extreme_strength_is_bounded()
+    test_cumulative_log_odds_saturates_without_overflow()
+    test_cli_survives_saturating_evidence()
     test_invalid_stance_rejected()
     test_build_report_without_judging()
     test_submit_for_judging_degrades_without_minerva_reach()

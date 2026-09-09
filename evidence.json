@@ -2,9 +2,9 @@
   "criteria": [
     {
       "id": "AC1",
+      "citation": "ops/wq1574-auditforecast/audit_forecast.py:65-79",
       "cmd_run": "python3 ops/wq1574-auditforecast/test_audit_forecast.py",
-      "exit_code": 0,
-      "citation": "ops/wq1574-auditforecast/audit_forecast.py:106-137"
+      "exit_code": 0
     }
   ]
 }
