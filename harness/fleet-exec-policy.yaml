@@ -84,6 +84,13 @@ allow:
     # module is unavailable). Swept 2026-09-08 after publishing all 14 live proposals:
     # zero hits (research/PROMOTER_TICKET_REACH.md §4.3, BROKER_GRANT_COVERAGE.md §3).
     - /home/lumen/proposals
+    # wq#1559: pilot cards and reports. minerva_defer_review writes CARD.md here from
+    # proposal columns (title/current_state/proposed_change/decision_reason) and the
+    # pilot writes REPORT.md. No credential surface: /home/lumen/minerva itself stays
+    # OFF this list, minerva.db is never copied to a pilot node, and a pilot that needs
+    # fleet data takes a purpose-built column extract written on Lumen. Swept with
+    # harness/read_dir_sweep.py 2026-09-08 after generating the first card: zero hits.
+    - /home/lumen/foreman/pilots
 
   # RESTART: unit globs per node the lint may tag restart(unit@node) for. Each entry
   # was verified per-target before listing (unit LoadState=loaded, `sudo -n true`
@@ -98,7 +105,12 @@ allow:
 
   # SSH: nodes the lint may tag ssh(node) for (read-only `run` under
   # run_readonly_cmds only). thor is never here: never.nodes covers it.
-  ssh: [lumen, isis, bes, anubis, maat, sobek]
+  # wq#1559: hathor added as the first pilot node. Verified 2026-09-08 before listing —
+  # `ssh hathor@100.80.71.13` exits 0 key-only, hostname=hathor, 24 threads / 60G,
+  # load 0.00, up 8d. NOTE the ssh grant is READ-ONLY run + copy-into-pilots; hathor is
+  # deliberately absent from allow.restart, so the broker still denies every restart on
+  # it exactly as it did before this change.
+  ssh: [lumen, isis, bes, anubis, maat, sobek, hathor]
 
 # run: read-only probe set. Each entry is either a bare basename (argv[0] must equal
 # it exactly) or "<basename> <subcmd-pattern>" (argv[1] must fnmatch one of the
@@ -152,6 +164,13 @@ copy_dirs:
   maat: [/home/maam/lumen-drop]  # ssh user on maat is maam (wq#1444)
   sobek: [/home/sobek/lumen-drop]  # re-added wq#1447: fleet-keymesh now lists sobek, `ssh sobek -- true` exits 0
   bes: [/home/bes/lumen-drop]
+  # wq#1559: hathor is the first pilot node. The ticket named the remote root as
+  # "/home/lumen/pilots on hathor"; there is no /home/lumen on hathor — the ssh user
+  # is `hathor` and $HOME is /home/hathor (verified 2026-09-08: `ls -d /home/lumen` ->
+  # No such file or directory). The remote root is therefore /home/hathor/pilots,
+  # matching every other node's <node-home> convention above. /home/lumen/foreman/pilots
+  # on LUMEN stays the root of record for CARD.md and REPORT.md.
+  hathor: [/home/hathor/pilots, /home/hathor/lumen-drop]
 
 # bench is v2 (fleet-exec has no `bench` verb yet).
 bench_tools:

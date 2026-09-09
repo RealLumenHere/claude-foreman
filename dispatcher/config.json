@@ -85,6 +85,10 @@
     "mailbot": {
       "enabled": true,
       "max_per_day": 999
+    },
+    "pilot": {
+      "enabled": true,
+      "max_per_day": 3
     }
   }
 }

@@ -107,6 +107,10 @@ LANE_REPO = {
     "quest-repair-research": FOREMAN_ROOT,
     "fleet-fires": FOREMAN_ROOT,          # fires are fleet/infra work, run from foreman
     "research": FOREMAN_ROOT,             # research docs land in foreman/research/ (wq#1334; exec-capability doc PR#237)
+    "pilot": FOREMAN_ROOT,                # wq#1559: pilot cards/reports land in foreman/pilots/<proposal-id>/.
+                                          # The EXPERIMENT runs on a fleet node (hathor first), but the
+                                          # artifacts of record — CARD.md, REPORT.md — are foreman files,
+                                          # so the worktree a pilot worker gets is the foreman repo.
     "mailbot": "/home/lumen/mailbot",     # lumen@ email agent (wq#1163 v2, wq#1164-1174); Frank 2026-09-01 "go ahead with the build"
 }
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
@@ -566,6 +570,11 @@ _LANE_BIAS = {
     "memory": ["novel-design", "research-synthesis"],
     "fleet": ["mechanical-edit", "standard-engineering"],
     "research": ["research-synthesis"],
+    # wq#1559: a pilot ticket is two jobs in one — RUN the experiment, then WRITE it
+    # up. probe-build leads because the run is the expensive, fallible half (build a
+    # treatment, measure a baseline, hit a kill criterion); research-synthesis is the
+    # tie-break for the write-up half. Order is the bias order, not a sequence.
+    "pilot": ["probe-build", "research-synthesis"],
 }
 
 # wq#778 (from wq#750 audit F1/F2): these four bare-word patterns alone routed 66% of
