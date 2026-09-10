@@ -1,0 +1,25 @@
+# wq#1590 — merge into the live LiteLLM proxy config.yaml (not committed to
+# this repo; lives on the gateway node, outside git — same convention as
+# wq#897/wq#948/wq#1299/wq#1406). This BUILD worker's sandbox has no access
+# to that host, so this is a fragment to hand-merge, not a diff.
+#
+# VERIFY on first deploy: exact `success_callback`/`failure_callback` key
+# names and the `module.instance_name` loading syntax against the LiteLLM
+# version actually running (litellm --version) — same caveat wq#1299/wq#1406
+# flagged for their callbacks.
+
+litellm_settings:
+  # Registers deepseek_connect_alert.py's callback ALONGSIDE whatever is
+  # already listed here (e.g. wq#1299's phoenix_logger, wq#1406's
+  # paid_fallback_logger) — both callback lists are lists, append, don't
+  # replace. Registered on BOTH success and failure: the rate's denominator
+  # needs successful calls counted too, not just failures.
+  success_callback: [..., "deepseek_connect_alert.deepseek_connect_logger"]
+  failure_callback: [..., "deepseek_connect_alert.deepseek_connect_logger"]
+
+environment_variables:
+  DEEPSEEK_ALERT_TOPIC: "lumen-alerts"
+  DEEPSEEK_ALERT_COOLDOWN_MIN: "30"   # edge-triggered: alert once per breach, re-alert every 30min while it persists
+  DEEPSEEK_ALERT_WINDOW_MIN: "90"     # trailing window for the rate, same default as dispatcher/circuit_breaker.py
+  DEEPSEEK_ALERT_MIN_SAMPLES: "15"    # don't trust a rate on too few calls
+  DEEPSEEK_ALERT_THRESHOLD: "0.5"     # below the 0.592 this ticket measured, so the real incident trips with margin
