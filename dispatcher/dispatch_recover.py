@@ -144,9 +144,17 @@ def rung1_preflight(dry_run):
 
 
 def rung2_restart(dry_run):
-    """restart the dispatch timer + start the service (fixes a wedged unit, §1.5)."""
-    cmds = [["systemctl", "restart", DISPATCH_TIMER],
-            ["systemctl", "start", DISPATCH_SERVICE]]
+    """restart the dispatch timer + start the service (fixes a wedged unit, §1.5).
+
+    wq#1624: these are SYSTEM units, so an unprivileged `systemctl restart/start`
+    hits polkit's interactive-auth requirement and always fails with rc=1 ("Access
+    denied ... requires interactive authentication") -- this rung has been silently
+    non-functional. The lumen user has full passwordless sudo (`sudo -n -l` shows
+    `(ALL) NOPASSWD: ALL`), so `sudo -n` is the fix -- same posture as lumen-run's
+    `sudo -n systemd-run` pattern elsewhere in this fleet.
+    """
+    cmds = [["sudo", "-n", "systemctl", "restart", DISPATCH_TIMER],
+            ["sudo", "-n", "systemctl", "start", DISPATCH_SERVICE]]
     if dry_run:
         return True, "DRY-RUN would run: " + " && ".join(" ".join(c) for c in cmds)
     details = []

@@ -324,6 +324,49 @@ def test_disarm_pauses_ladder_and_is_never_touched(env, monkeypatch, tmp_path):
     assert disarm.read_text() == "frank stopped it"  # never modified
 
 
+# ---- rung 2: restart uses sudo -n, not a bare systemctl (wq#1624) -----------------------
+
+def test_rung2_restart_commands_are_sudo_wrapped(monkeypatch):
+    """wq#1624: DISPATCH_TIMER/DISPATCH_SERVICE are SYSTEM units. An unprivileged
+    `systemctl restart/start` hits polkit's interactive-auth requirement and always
+    fails -- this rung was silently non-functional until sudo -n was added. Assert the
+    actual argv, not just the return value, so a regression back to a bare `systemctl`
+    call fails this test even if some other environment happens to let it exit 0."""
+    seen = []
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        return FakeCompleted()
+
+    monkeypatch.setattr(dr.subprocess, "run", fake_run)
+
+    ok, detail = dr.rung2_restart(dry_run=False)
+
+    assert ok is True
+    assert len(seen) == 2
+    for cmd in seen:
+        assert cmd[:2] == ["sudo", "-n"], f"missing sudo -n prefix: {cmd}"
+        assert "systemctl" in cmd
+    assert any(dr.DISPATCH_TIMER in cmd for cmd in seen)
+    assert any(dr.DISPATCH_SERVICE in cmd for cmd in seen)
+
+
+def test_rung2_restart_dry_run_does_not_call_subprocess(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dr.subprocess, "run", lambda *a, **k: calls.append(1))
+
+    ok, detail = dr.rung2_restart(dry_run=True)
+
+    assert ok is True
+    assert calls == []
+    assert "sudo" in detail  # dry-run message should reflect the real command
+
+
 # ---- rung 3: names the broken file (§5 case (v), config.json corruption) ----------------
 
 def test_rung3_names_the_broken_json_file(tmp_path, monkeypatch):
