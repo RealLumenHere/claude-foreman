@@ -15,8 +15,19 @@ module is two of the three walls (guard.sh's wq#900 deny class is the first):
   - post-run mode: fworker calls check_and_restore_all() after every child exits,
     so a worker that evaded the guard is caught within seconds of finishing.
 
-Exit codes (CLI): 0 = all primaries on default branch (or restored this run),
-1 = at least one still drifted, 2 = internal error.
+wq#1618/wq#1540: a worker can also leave a primary tree dirty WITHOUT ever switching
+branches — it writes straight into the primary instead of its worktree (wq#1589 wrote
+pokemon's src/brain.ts/config.ts directly). The drift checks above never saw this
+because the old `dirty` computation only ran inside `if r["drifted"]:` — a tree that
+stayed on its default branch was reported clean no matter what was modified on disk.
+`check_tree` now computes `dirty` unconditionally, and `check_and_restore_all` flags a
+default-branch-but-dirty tree too: there is no other branch to restore from, and
+nobody is ever supposed to edit a primary tree directly, so the state has no
+legitimate owner by definition — it's an aq row (`aq_alert`), not just an ntfy ping
+that can scroll off a topic nobody's watching.
+
+Exit codes (CLI): 0 = all primaries on default branch and clean (or restored this
+run), 1 = at least one still drifted or dirty, 2 = internal error.
 """
 import json
 import os
@@ -25,6 +36,8 @@ import sys
 
 HARNESS_DIR = os.path.dirname(os.path.abspath(__file__))
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
+AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "/home/lumen/bin/aq")
+AQ_SOURCE = "primary-tree-guard"
 STATE_PATH = os.environ.get("PRIMARY_TREE_GUARD_STATE",
                             "/tmp/.primary-tree-guard.state")
 
@@ -73,7 +86,10 @@ def default_branch(repo):
 
 
 def check_tree(repo):
-    """One tree's verdict: {repo, head, default, drifted, dirty, error}."""
+    """One tree's verdict: {repo, head, default, drifted, dirty, error}. `dirty` is
+    computed unconditionally (wq#1618): a primary tree can be dirty on ITS OWN
+    default branch (a worker wrote into it directly, never checked anything out),
+    which is exactly as unowned as a dirty drifted tree and must not go unseen."""
     r = {"repo": repo, "head": None, "default": None, "drifted": False,
          "dirty": False, "error": None}
     if not os.path.isdir(os.path.join(repo, ".git")):
@@ -86,12 +102,11 @@ def check_tree(repo):
             r["error"] = "no main/master branch"
             return r
         r["drifted"] = r["head"] != r["default"]
-        if r["drifted"]:
-            # Modified tracked files only — untracked droppings (e.g. wq#634's
-            # PXPIPE_CANARY.md) don't block a branch switch, so they don't block
-            # the restore either; they're repo_sweep's problem, not ours.
-            r["dirty"] = bool(_git(repo, "status", "--porcelain",
-                                   "--untracked-files=no").stdout.strip())
+        # Modified tracked files only — untracked droppings (e.g. wq#634's
+        # PXPIPE_CANARY.md) don't block a branch switch/restore; they're
+        # repo_sweep's problem, not ours.
+        r["dirty"] = bool(_git(repo, "status", "--porcelain",
+                               "--untracked-files=no").stdout.strip())
     except Exception as e:
         r["error"] = str(e)
     return r
@@ -113,38 +128,67 @@ def alert(title, msg):
         pass
 
 
+def aq_alert(repo, r, context=""):
+    """wq#1618/wq#1540: a tree dirty on its OWN default branch has no live owner by
+    definition — nothing is ever supposed to edit a primary tree directly — so it goes
+    on the persistent alert queue, not just an ntfy ping that can scroll off a topic
+    nobody's watching. Fail-open (same posture as read_dir_sweep.aq_alert): no aq
+    binary, or a failed call, must never break the sweep itself."""
+    if not os.path.exists(AQ_BIN):
+        return
+    suffix = f" ({context})" if context else ""
+    key = f"{repo}:dirty-on-default"
+    title = f"primary tree dirty, no live owner: {repo}"
+    body = (f"{repo} is on '{r['default']}' with uncommitted tracked-file changes and "
+            f"no live owner{suffix}. git -C {repo} status --porcelain")
+    try:
+        subprocess.run([AQ_BIN, "add", AQ_SOURCE, key, title, body],
+                       check=False, timeout=15)
+    except Exception:
+        pass
+
+
 def check_and_restore_all(repos=None, restore=True, do_alert=True, context="",
                           log=None):
-    """Check every primary; restore clean drifted trees; alert on any drift.
-    Returns the list of drifted results (each annotated with restored/restore_out).
+    """Check every primary; restore clean drifted trees; alert on drift AND on a tree
+    that's dirty on its own default branch (wq#1618) — that state has no branch to
+    restore from, so it always waits for a human, alert or not.
+    Returns the list of flagged results (each annotated with restored/restore_out).
     Never raises for a single bad repo — the sweep must reach every tree."""
-    drifted = []
+    flagged = []
     for repo in (repos if repos is not None else primary_trees()):
         r = check_tree(repo)
-        if not r["drifted"]:
+        if not r["drifted"] and not r["dirty"]:
             continue
         r["restored"] = False
         r["restore_out"] = ""
-        if restore and not r["dirty"] and not r["error"]:
+        if r["drifted"] and restore and not r["dirty"] and not r["error"]:
             r["restored"], r["restore_out"] = restore_tree(repo, r["default"])
         if do_alert:
             suffix = f" ({context})" if context else ""
-            if r["restored"]:
-                body = (f"{repo} was on '{r['head']}' (default {r['default']}) — "
-                        f"auto-restored{suffix}. A worker switched a PRIMARY tree; "
-                        f"find it in the events log.")
+            if not r["drifted"]:
+                aq_alert(repo, r, context)
+                alert("PRIMARY tree dirty with no live owner (wq#1618)",
+                      f"{repo} is on '{r['default']}' with uncommitted tracked-file "
+                      f"changes and no live owner{suffix}. git -C {repo} status "
+                      f"--porcelain")
+            elif r["restored"]:
+                alert("PRIMARY tree off default branch (wq#900)",
+                      f"{repo} was on '{r['head']}' (default {r['default']}) — "
+                      f"auto-restored{suffix}. A worker switched a PRIMARY tree; "
+                      f"find it in the events log.")
             else:
                 why = "dirty tracked files" if r["dirty"] else (r["error"] or
                                                                 "restore failed")
-                body = (f"{repo} is on '{r['head']}' (default {r['default']}) and NOT "
-                        f"auto-restored: {why}{suffix}. Manual: "
-                        f"git -C {repo} checkout {r['default']}")
-            alert("PRIMARY tree off default branch (wq#900)", body)
+                alert("PRIMARY tree off default branch (wq#900)",
+                      f"{repo} is on '{r['head']}' (default {r['default']}) and NOT "
+                      f"auto-restored: {why}{suffix}. Manual: "
+                      f"git -C {repo} checkout {r['default']}")
         if log:
             log(f"primary_tree_guard: {repo} head={r['head']} "
-                f"default={r['default']} restored={r['restored']}")
-        drifted.append(r)
-    return drifted
+                f"default={r['default']} dirty={r['dirty']} restored={r['restored']}")
+        flagged.append(r)
+    return flagged
 
 
 def _load_state():
@@ -183,6 +227,10 @@ def main(argv=None):
                 print(f"DRIFTED  {repo}: on '{r['head']}', default '{r['default']}'"
                       f"{' (dirty)' if r['dirty'] else ''}")
                 rc = 1
+            elif r["dirty"]:
+                print(f"DIRTY    {repo}: on '{r['head']}' with uncommitted tracked "
+                      f"files, no live owner")
+                rc = 1
             else:
                 print(f"OK       {repo}: {r['head']}")
         return rc
@@ -192,11 +240,11 @@ def main(argv=None):
     # record once the tree is clean again. A successful auto-restore always alerts
     # (it is the one-shot signal that a worker touched a primary).
     state = _load_state()
-    drifted = check_and_restore_all(repos=a.repo, restore=True, do_alert=False,
+    flagged = check_and_restore_all(repos=a.repo, restore=True, do_alert=False,
                                     context="timer")
     still_bad = 0
     seen = set()
-    for r in drifted:
+    for r in flagged:
         seen.add(r["repo"])
         if r["restored"]:
             state.pop(r["repo"], None)
@@ -204,6 +252,23 @@ def main(argv=None):
                   f"{r['repo']} was on '{r['head']}' (default {r['default']}) — "
                   f"auto-restored by timer. A worker switched a PRIMARY tree.")
             print(f"RESTORED {r['repo']}: '{r['head']}' -> '{r['default']}'")
+            continue
+        if not r["drifted"]:
+            # dirty on its own default branch: no branch to restore from, and
+            # nobody is ever supposed to edit a primary tree directly — every
+            # tick is a fresh aq row (aq itself dedups/bumps by key) even though
+            # the ntfy ping is still deduped per episode like the drift case below.
+            still_bad += 1
+            print(f"DIRTY    {r['repo']}: on '{r['head']}' with uncommitted tracked "
+                  f"files — no live owner")
+            state_key = f"{r['head']}:dirty"
+            if state.get(r["repo"]) != state_key:
+                state[r["repo"]] = state_key
+                alert("PRIMARY tree dirty with no live owner (wq#1618)",
+                      f"{r['repo']} is on '{r['head']}' with uncommitted tracked-file "
+                      f"changes and no live owner — timer. git -C {r['repo']} status "
+                      f"--porcelain")
+            aq_alert(r["repo"], r, context="timer")
             continue
         still_bad += 1
         why = "dirty" if r["dirty"] else (r["error"] or "restore failed")
