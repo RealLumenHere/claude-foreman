@@ -70,6 +70,7 @@ import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
 import runaway          # noqa: E402
 import psi_pressure     # noqa: E402  # wq#844
+import burn_rate        # noqa: E402  # wq#1669: burn-rate spawn controller
 import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
 import vlogs_mirror      # noqa: E402  # wq#1416
 import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refusal
@@ -1122,7 +1123,7 @@ def _do_pass(cfg, log, state, dry_run):
         tight = True
         log.emit("tight_mode", reason=psi_reason,
                  detail=f"PSI pressure: max {tight_cfg['max_spawns_per_pass']} "
-                        f"spawn(s), pri<={tight_cfg['min_pri']} only")
+                        f"spawn(s), epri<={tight_cfg['min_pri']} only")
 
     try:
         pacing_cfg, pacing_warn = pacing.load_config()  # wq#716: forward-looking layer §6
@@ -1133,6 +1134,31 @@ def _do_pass(cfg, log, state, dry_run):
     if pacing_warn:
         log.emit("info", stage="pacing", reason="pacing_config_invalid", detail=pacing_warn)
     limits = governor_limits()
+
+    # wq#1669/wq#1699: surface the usage API's severity labels every pass. router
+    # grades them (warning is advisory on a zero-floor pool, critical engages the
+    # burn-rate controller), so "why is nothing throttling at 86%" must stay answerable
+    # from this log alone.
+    hot = sorted(p for p, b in limits.items()
+                 if isinstance(b, dict) and b.get("severity") in ("warning", "critical"))
+    if hot:
+        log.emit("info", stage="budget", reason="api_severity",
+                 detail=",".join(f"{p}={limits[p]['severity']}" for p in hot))
+
+    # wq#1669/wq#1699: burn-rate controller inputs. When governor pressure is tight the
+    # controller turns budget-remaining vs time-to-reset into a concurrency ceiling,
+    # enforced at stage 9 against the same live unit list as cloud_ceiling. Missing
+    # percent/resets_at -> None -> the old binary tight_mode clamp.
+    burn_cfg = burn_rate.merge_config(cfg.get("burn_rate"))
+    burn_obs = burn_rate.load_observed()
+    burn_cache = {}   # pools tuple -> (allowed_concurrent | None, detail)
+    burn_logged = set()
+
+    def burn_allowed(pools):
+        if pools not in burn_cache:
+            burn_cache[pools] = burn_rate.allowed_concurrent(
+                limits, cfg["cloud_ceiling"], burn_cfg, observed=burn_obs, pools=pools)
+        return burn_cache[pools]
 
     for i, cand in enumerate(candidates):
         tid, lane = cand["id"], cand["lane"]
@@ -1322,24 +1348,42 @@ def _do_pass(cfg, log, state, dry_run):
             if pressure == "deny":
                 log.skip(tid, lane, "budget", "governor_deny", model=model)
                 continue
-            if pressure == "tight" and not tight:
-                tight = True
-                log.emit("tight_mode", model=model,
-                         reason=f"pressure tight: max {tight_cfg['max_spawns_per_pass']} "
-                                f"spawn(s), pri<={tight_cfg['min_pri']} only")
+            burn = None  # (pools, allowed_concurrent) when the controller owns this ticket
+            if pressure == "tight":
+                model_pools = burn_rate.pools_for_model(model)
+                allowed, burn_detail = burn_allowed(model_pools)
+                if allowed is None:
+                    if not tight:  # no percent/resets_at anywhere: old binary clamp
+                        tight = True
+                        log.emit("tight_mode", model=model,
+                                 reason=f"pressure tight: max {tight_cfg['max_spawns_per_pass']} "
+                                        f"spawn(s), epri<={tight_cfg['min_pri']} only",
+                                 detail=burn_detail)
+                else:
+                    # wq#1699: scaled, not binary, and no pri filter — scarcity shows up
+                    # as a lower concurrency ceiling at stage 9 instead.
+                    burn = (model_pools, allowed)
+                    if model not in burn_logged:
+                        burn_logged.add(model)
+                        log.emit("burn_rate", model=model,
+                                 reason=f"pressure tight: burn-rate ceiling {allowed}",
+                                 detail=burn_detail)
             if tight:
                 if spawned >= tight_cfg["max_spawns_per_pass"]:
                     log.emit("halt", stage="spawn_cap",
                              reason=f"tight-mode spawn cap reached ({spawned})")
                     break
-                if cand["pri"] > tight_cfg["min_pri"]:
+                # wq#1699: gate on the aged effective priority the scan sorted on
+                # (wq#661), not raw pri — an aged p2 at ep1 sorts first and must pass.
+                if cand["epri"] > tight_cfg["min_pri"]:
                     log.skip(tid, lane, "budget", "tight_pri", model=model,
-                             detail=f"pri {cand['pri']} > tight min_pri {tight_cfg['min_pri']}")
+                             detail=f"epri {cand['epri']} (pri {cand['pri']}) > "
+                                    f"tight min_pri {tight_cfg['min_pri']}")
                     continue
 
             # stage 8b — weekly-budget pacing (wq#716): forward-looking, on top of the
             # governor's own reactive floor above. Never blocks a Frank-approved fire ticket.
-            verdict = PACING_HOOK(cand["pri"], model, limits, pacing_cfg, fire_exempt)
+            verdict = PACING_HOOK(cand["epri"], model, limits, pacing_cfg, fire_exempt)  # wq#1699: epri
             if verdict.action != "ok":
                 log.skip(tid, lane, "budget", f"pacing_{verdict.action}", model=model,
                          **verdict.as_fields())
@@ -1353,6 +1397,23 @@ def _do_pass(cfg, log, state, dry_run):
                          detail=f"{len(cloud)} cloud unit(s) at ceiling "
                                 f"{cfg['cloud_ceiling']}; next tick retries")
                 break
+            if burn is not None and len(cloud) >= burn[1]:
+                # wq#1699: the burn-rate ceiling is the concurrency the budget can sustain
+                # to its reset. A model on the pass pools only (every cloud model draws on
+                # them) -> same halt as cloud_ceiling: dispatch_health reads no_slots as
+                # healthy, and min_allowed>=1 means a worker is running. A model with its
+                # own extra pool (fable) -> skip only it; its tightness may come from that
+                # pool alone, so it must not halt tickets on unflagged pools behind it.
+                model_pools, allowed = burn
+                if model_pools == burn_rate.PASS_POOLS:
+                    log.emit("halt", stage="concurrency", reason="no_slots",
+                             detail=f"{len(cloud)} cloud unit(s) at burn-rate ceiling "
+                                    f"{allowed}; next tick retries")
+                    break
+                log.skip(tid, lane, "budget", "burn_rate_cap", model=model,
+                         detail=f"{len(cloud)} cloud unit(s) at {model} burn-rate "
+                                f"ceiling {allowed}")
+                continue
 
             # stage 9b — harness-preflight stamp (§2c): a wave must not discover a
             # permission gap three hours in when a two-minute preflight would have
@@ -1407,6 +1468,7 @@ def _do_pass(cfg, log, state, dry_run):
 
     dispatchable = len(candidates) - count_structural_skips(log.events)
     return {"candidates": len(candidates), "spawned": spawned, "tight": tight,
+            "burn_ceiling": {",".join(k): v[0] for k, v in burn_cache.items()},
             "quarantined": len(quarantined), "dispatchable": dispatchable,
             "lint_scanned": lint_scanned, "lint_flagged": lint_flagged}
 

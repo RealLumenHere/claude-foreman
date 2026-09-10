@@ -9,6 +9,15 @@
     "psi_some_tight": 10.0,
     "psi_some_deny": 25.0
   },
+  "burn_rate": {
+    "_note": "wq#1669/wq#1699: when governor pressure is tight (soft margin, critical severity, or warning on a floored pool) the dispatcher enforces a concurrency ceiling = (remaining_pct / hours_to_reset) / avg_worker_pct_per_hour, min over the model's pools, clamped to [min_allowed, cloud_ceiling] (burn_rate.py). tight_mode above only owns PSI pressure and the no-resets_at fallback. session/weekly_all rates measured 2026-09-10 (1.24 / 0.31, rounded up); fable is an estimate. observed_burn.json overrides when present.",
+    "avg_worker_pct_per_hour": {
+      "session": 1.5,
+      "weekly_all": 0.35,
+      "fable_weekly_scoped": 0.75
+    },
+    "min_allowed": 1
+  },
   "lanes": {
     "foreman-tok": {
       "enabled": true,

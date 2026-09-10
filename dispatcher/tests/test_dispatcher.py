@@ -677,6 +677,222 @@ def test_tight_mode_single_spawn(denv):
     assert len(lumen_calls(denv)) == 1
 
 
+def _burn_gov(session_pct, session_reset_h, weekly_pct, weekly_reset_h, severity=None):
+    now = datetime.now(timezone.utc)
+    s = {"percent": session_pct,
+         "resets_at": (now + timedelta(hours=session_reset_h)).isoformat()}
+    if severity:
+        s["severity"] = severity
+    return {"limits": {
+        "session": s,
+        "weekly_all": {"percent": weekly_pct,
+                       "resets_at": (now + timedelta(hours=weekly_reset_h)).isoformat()},
+        "fable_weekly_scoped": {"percent": 10}}}
+
+
+def test_burn_rate_cap_replaces_binary_tight_clamp(denv):
+    """wq#1669/wq#1699: governor pressure tight + usable percent/resets_at -> the
+    burn-rate controller owns the ceiling (scaled, no tight_pri filter), not
+    tight_mode's binary 1. session 70% used with 30min to reset = an expiring budget:
+    30%/0.5h over 1.5%/worker-h supports 40 concurrent, clamped to cloud_ceiling 3."""
+    denv["gov_state"].write_text(json.dumps(_burn_gov(70, 0.5, 10, 48, severity="warning")))
+    t1 = add_ticket("burn p1", pri=1)
+    t2 = add_ticket("burn p2 spawns too", pri=2)
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [t1, t2]
+    assert len(log_events(denv, "burn_rate")) == 1
+    assert log_events(denv, "tight_mode") == []
+    assert [e for e in log_events(denv, "skip") if e["reason"] == "tight_pri"] == []
+    # the raw severity labels are surfaced once per pass
+    adv = [e for e in log_events(denv, "info") if e.get("reason") == "api_severity"]
+    assert len(adv) == 1 and "session=warning" in adv[0]["detail"]
+
+
+def test_burn_rate_cap_shrinks_when_burn_outruns_budget(denv):
+    # weekly 71% used with 100h to the reset projects past the budget -> min_allowed 1
+    # (pacing off: this test is about the burn-rate cap, not the wq#716 layer, which
+    # also fires on these numbers)
+    denv["pacing_cfg_path"].write_text(json.dumps(
+        {"policy": "off", "min_elapsed_fraction": 0.02, "delay_min_pri": 1,
+         "ntfy_dedup_hours": 6}))
+    denv["gov_state"].write_text(json.dumps(_burn_gov(10, 2, 71, 100)))
+    t1 = add_ticket("scarce p1 a", pri=1)
+    add_ticket("scarce p1 b", pri=1)
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [t1]
+    halts = log_events(denv, "halt")
+    # wq#1699: a concurrency ceiling, halted exactly like cloud_ceiling (no_slots)
+    assert len(halts) == 1 and halts[0]["stage"] == "concurrency"
+    assert halts[0]["reason"] == "no_slots" and "burn-rate" in halts[0]["detail"]
+    assert len(lumen_calls(denv)) == 1
+
+
+def test_burn_rate_no_resets_at_falls_back_to_binary_tight(denv):
+    # TIGHT_GOV has no resets_at anywhere -> controller has no data -> old clamp
+    denv["gov_state"].write_text(json.dumps(TIGHT_GOV))
+    tid = add_ticket("fallback p2", pri=2)
+    assert fd.run_pass() == 0
+    assert len(log_events(denv, "tight_mode")) == 1
+    assert log_events(denv, "burn_rate") == []
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "tight_pri"
+
+
+def _seed_running(units):
+    with open(os.environ["FAKE_LUMEN_RUN_STATE"], "w") as f:
+        json.dump(units, f)
+
+
+def _zero_floors(denv, monkeypatch):
+    """Frank's live governor/floors.json shape (2026-08-23 + wq#1669): every floor and
+    the soft margin 0. router reads floors.json next to the governor CLI, so point the
+    dispatcher at a private copy of the fake governor with that file beside it."""
+    gdir = denv["tmp"] / "gov_zero"
+    gdir.mkdir()
+    cli = gdir / "fake_governor.py"
+    cli.write_text(open(FAKE_GOVERNOR).read())
+    (gdir / "floors.json").write_text(json.dumps({
+        "session_min_remaining_pct": 0, "weekly_all_min_remaining_pct": 0,
+        "fable_weekly_min_remaining_pct": 0, "soft_margin_pct": 0}))
+    monkeypatch.setattr(fd, "GOVERNOR_CLI", str(cli))
+
+
+def _sec5_gov(weekly_severity):
+    now = datetime.now(timezone.utc)
+    return {"limits": {
+        "session": {"percent": 80, "severity": "warning",
+                    "resets_at": (now + timedelta(minutes=40)).isoformat()},
+        "weekly_all": {"percent": 83, "severity": weekly_severity,
+                       "resets_at": (now + timedelta(hours=4)).isoformat()},
+        "fable_weekly_scoped": {"percent": 10}}}
+
+
+def test_sec5_zero_floors_warning_does_not_throttle(denv, monkeypatch):
+    """Walkthrough sec 5 numbers (2026-09-10 05:30Z-07:01Z) on Frank's zeroed floors:
+    severity=warning everywhere used to clamp every pass to 1 spawn, pri<=1. Warning is
+    advisory on a zero-floor pool: no tight_mode, no burn_rate, p2 spawns to root cap."""
+    _zero_floors(denv, monkeypatch)
+    denv["gov_state"].write_text(json.dumps(_sec5_gov("warning")))
+    ids = [add_ticket(f"sec5 p2 {n}", pri=2) for n in range(4)]
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == ids[:3]
+    assert log_events(denv, "tight_mode") == [] and log_events(denv, "burn_rate") == []
+
+
+def test_sec5_zero_floors_critical_engages_scaled_ceiling(denv, monkeypatch):
+    """wq#1699 warning != critical: critical engages the controller even with floors
+    zeroed, but as a budget-scaled ceiling. 17% weekly with 4h to reset is an expiring
+    budget -> ceiling opens to cloud_ceiling; no binary clamp, no pri filter."""
+    _zero_floors(denv, monkeypatch)
+    denv["gov_state"].write_text(json.dumps(_sec5_gov("critical")))
+    ids = [add_ticket(f"sec5 crit p2 {n}", pri=2) for n in range(4)]
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == ids[:3]
+    assert len(log_events(denv, "burn_rate")) == 1
+    assert log_events(denv, "tight_mode") == []
+    assert [e for e in log_events(denv, "skip") if e["reason"] == "tight_pri"] == []
+
+
+def test_burn_rate_fable_tight_never_halts_unflagged_pools(denv, monkeypatch):
+    """wq#1699: a fable model can be tight from its own pool alone. Its ceiling must
+    not halt the pass: with weekly_all scarce but unflagged (floors 0, no severity),
+    sonnet is not throttled at all, so the fable skip must leave the sonnet spawn."""
+    _zero_floors(denv, monkeypatch)
+    denv["pacing_cfg_path"].write_text(json.dumps(
+        {"policy": "off", "min_elapsed_fraction": 0.02, "delay_min_pri": 1,
+         "ntfy_dedup_hours": 6}))
+    now = datetime.now(timezone.utc)
+    denv["gov_state"].write_text(json.dumps({"limits": {
+        "session": {"percent": 10, "resets_at": (now + timedelta(hours=4)).isoformat()},
+        "weekly_all": {"percent": 60, "resets_at": (now + timedelta(hours=100)).isoformat()},
+        "fable_weekly_scoped": {"percent": 70, "severity": "critical",
+                                "resets_at": (now + timedelta(hours=100)).isoformat()}}}))
+    _seed_running(["fworker-wq999993"])
+    fable = add_ticket("fable ticket, weekly-bound ceiling", pri=1, model="claude-fable-5")
+    sonnet = add_ticket("sonnet on unflagged pools", pri=2)
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=fable)
+    assert len(skips) == 1 and skips[0]["reason"] == "burn_rate_cap"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [sonnet]
+    assert [h for h in log_events(denv, "halt") if h["stage"] == "concurrency"] == []
+
+
+def _age_ticket(denv, tid, days):
+    c = sqlite3.connect(denv["wq_db"])
+    old = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("UPDATE tasks SET created_at=? WHERE id=?", (old, tid))
+    c.commit()
+    c.close()
+
+
+def test_tight_pri_gates_on_epri_not_raw_pri(denv):
+    """wq#1699: the scan sorts on the wq#661 aged effective priority, but tight_pri
+    compared raw pri — an aged p2 at ep1 sorted first and was still refused. Binary
+    fallback (no resets_at) so tight_pri is live."""
+    denv["gov_state"].write_text(json.dumps(TIGHT_GOV))
+    aged = add_ticket("aged p2 now ep1", pri=2)
+    _age_ticket(denv, aged, 8)
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [aged]
+    assert [e for e in log_events(denv, "skip") if e["reason"] == "tight_pri"] == []
+
+
+def test_psi_tight_pri_gates_on_epri(denv, monkeypatch):
+    monkeypatch.setattr(psi_pressure, "check", lambda cfg=None: ("tight", "psi test"))
+    aged = add_ticket("psi aged p2", pri=2)
+    _age_ticket(denv, aged, 8)
+    fresh = add_ticket("psi fresh p2", pri=2)
+    write_config(denv, tight_mode={"max_spawns_per_pass": 2, "min_pri": 1})
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [aged]
+    skips = log_events(denv, "skip", ticket=fresh)
+    assert len(skips) == 1 and skips[0]["reason"] == "tight_pri"
+
+
+def test_burn_rate_full_ceiling_with_zero_spawns_is_healthy(denv):
+    """wq#1699: a pass that spawns nothing because the burn-rate ceiling is already
+    occupied is the cloud_ceiling case, not a stall — dispatch_health must not page it."""
+    import dispatch_health
+    denv["pacing_cfg_path"].write_text(json.dumps(
+        {"policy": "off", "min_elapsed_fraction": 0.02, "delay_min_pri": 1,
+         "ntfy_dedup_hours": 6}))
+    denv["gov_state"].write_text(json.dumps(_burn_gov(10, 2, 71, 100)))
+    _seed_running(["fworker-wq999991"])
+    add_ticket("budget ceiling already occupied", pri=1)
+    assert fd.run_pass() == 0
+    assert log_events(denv, "spawn") == []
+    halts = log_events(denv, "halt")
+    assert len(halts) == 1 and halts[0]["stage"] == "concurrency"
+    events = [json.loads(l) for l in (denv["tmp"] / "dispatcher.log").read_text().splitlines()
+              if l.strip()]
+    verdicts = [v for _, _, v, _ in dispatch_health.classify_passes(events)]
+    assert verdicts == ["healthy"]
+
+
+def test_burn_rate_fable_pool_skips_fable_only(denv, monkeypatch):
+    """wq#1699: fable_weekly_scoped critical and scarce narrows only the fable model's
+    ceiling. The fable candidate is skipped (burn_rate_cap) and scanning continues so
+    the sonnet candidate behind it still spawns."""
+    now = datetime.now(timezone.utc)
+    denv["gov_state"].write_text(json.dumps({"limits": {
+        "session": {"percent": 10, "resets_at": (now + timedelta(hours=4)).isoformat()},
+        "weekly_all": {"percent": 10, "resets_at": (now + timedelta(hours=20)).isoformat()},
+        "fable_weekly_scoped": {"percent": 99, "severity": "critical",
+                                "resets_at": (now + timedelta(hours=100)).isoformat()}}}))
+    _zero_floors(denv, monkeypatch)
+    denv["pacing_cfg_path"].write_text(json.dumps(  # isolate stage 9 from wq#716 pacing
+        {"policy": "off", "min_elapsed_fraction": 0.02, "delay_min_pri": 1,
+         "ntfy_dedup_hours": 6}))
+    _seed_running(["fworker-wq999992"])
+    fable = add_ticket("fable ticket, pool nearly spent", pri=1, model="claude-fable-5")
+    sonnet = add_ticket("sonnet ticket behind it", pri=2)
+    assert fd.run_pass() == 0
+    skips = log_events(denv, "skip", ticket=fable)
+    assert len(skips) == 1 and skips[0]["reason"] == "burn_rate_cap"
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [sonnet]
+    assert [h for h in log_events(denv, "halt") if h["stage"] == "concurrency"] == []
+
+
 def test_lane_cap(denv):
     lanes = {"testlane": {"enabled": True, "max_per_day": 1}}
     write_config(denv, lanes=lanes)

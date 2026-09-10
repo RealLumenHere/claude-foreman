@@ -189,6 +189,9 @@ EXTRA_ROUTING_ROWS = {"orchestrator"}
 
 # Soft-pressure margin: remaining% above the governor floor below which the router steps
 # effort down first (doctrine 3). Above it: full tuple. Below the floor: governor denies.
+# wq#1669: this is only the DEFAULT — floors.json `soft_margin_pct` overrides it, so
+# zeroing floors.json (Frank 2026-08-23) can zero the margin too instead of leaving a
+# hardcoded 15-point throttle behind the zeroed floors.
 SOFT_MARGIN_PCT = 15
 
 
@@ -705,8 +708,17 @@ def classify_archetype(title, detail="", lane="", manifest=None):
 def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI,
                       soft_margin=SOFT_MARGIN_PCT):
     """'deny' if `foreman_usaged.py can-dispatch MODEL` refuses; else 'tight' when any pool
-    the model draws from is within soft_margin points of its floor (or flagged
-    warning/critical by the governor); else 'ok'. Fail-closed: unreadable state = 'deny'."""
+    the model draws from is within the soft margin of its floor, flagged critical by the
+    usage API, or flagged warning on a floored pool; else 'ok'. Fail-closed: unreadable state =
+    'deny'.
+
+    wq#1669: floors.json `soft_margin_pct` overrides the soft_margin argument. The API
+    flags warning around 80% used, which throttled the whole fleet during a
+    burn-before-reset window despite Frank zeroing every floor.
+    wq#1699: severity is graded — warning is advisory on a zero-floor pool, critical
+    returns tight on any pool. 'tight' no longer means a flat clamp: the dispatcher
+    turns it into a burn-rate concurrency ceiling (dispatcher/burn_rate.py) and logs
+    the raw labels once per pass (api_severity)."""
     try:
         p = subprocess.run([sys.executable, governor_cli, "can-dispatch", model],
                            capture_output=True, text=True, timeout=30)
@@ -725,6 +737,7 @@ def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI
     except (OSError, ValueError):
         return "deny"
     limits = st.get("limits") or {}
+    soft_margin = floors.get("soft_margin_pct", soft_margin)
     checks = [("session", floors.get("session_min_remaining_pct", 20)),
               ("weekly_all", floors.get("weekly_all_min_remaining_pct", 15))]
     if "fable" in model:
@@ -736,7 +749,13 @@ def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI
         remaining = 100 - b["percent"]
         if remaining < floor:
             return "deny"
-        if remaining - floor < soft_margin or b.get("severity") in ("warning", "critical"):
+        if remaining - floor < soft_margin:
+            return "tight"
+        # wq#1699: warning != critical. critical always engages the dispatcher's
+        # burn-rate controller (a scaled ceiling, never a flat clamp); warning (~80%
+        # used) only does when Frank has set a floor on that pool.
+        sev = b.get("severity")
+        if sev == "critical" or (floor > 0 and sev == "warning"):
             return "tight"
     return "ok"
 
