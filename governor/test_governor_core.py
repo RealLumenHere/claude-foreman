@@ -349,3 +349,83 @@ def test_poll_backoff_respects_custom_floors():
     floors = dict(FLOORS, poll_interval_min_s=10, poll_interval_max_s=20, poll_backoff_max_s=100)
     assert core.poll_backoff_bounds(1, floors) == (20, 40)
     assert core.poll_backoff_bounds(5, floors) == (100, 100)
+
+
+# ---------- wq#1737: stale usage vs zeroed floors ----------
+# floors.json has every floor at 0 (Frank 2026-08-23: only cloud_ceiling limits). A
+# reading that cannot deny when fresh must not deny when stale: the stale branch was
+# the only thing the usage poll did, and it turned a 12h endpoint 429 streak into a
+# fleet-wide dispatch outage. STOP and live_blocks stay hard gates.
+
+ZERO_FLOORS = dict(FLOORS, session_min_remaining_pct=0, weekly_all_min_remaining_pct=0,
+                   fable_weekly_min_remaining_pct=0, fable_floor_schedule=[])
+
+
+def test_zero_floors_and_stale_allows_advisory():
+    d = core.evaluate_dispatch("claude-sonnet-5", limits=limits_of(77, 89, 94), floors=ZERO_FLOORS,
+                                now_utc=NOW, stop_active=False, stale=True)
+    assert d["allow"] is True
+    assert d["local_only"] is False
+    assert any("advisory" in r and "floors zeroed" in r for r in d["reasons"])
+
+
+def test_zero_floors_and_missing_limits_allows_advisory():
+    d = core.evaluate_dispatch("claude-fable-5", limits=None, floors=ZERO_FLOORS,
+                                now_utc=NOW, stop_active=False, stale=True)
+    assert d["allow"] is True
+
+
+def test_nonzero_floors_and_stale_still_denies():
+    d = core.evaluate_dispatch("claude-sonnet-5", limits=limits_of(10, 10, 10), floors=FLOORS,
+                                now_utc=NOW, stop_active=False, stale=True)
+    assert d["allow"] is False
+    assert d["local_only"] is True
+    assert "stale" in d["reasons"][0]
+
+
+def test_single_nonzero_applicable_floor_keeps_fail_closed():
+    # session+weekly zeroed but a fable reserve is set: a fable model still fails closed
+    # on stale data, a non-fable model (fable floor not applicable) does not.
+    floors = dict(ZERO_FLOORS, fable_weekly_min_remaining_pct=50)
+    fable = core.evaluate_dispatch("claude-fable-5", limits=limits_of(), floors=floors,
+                                    now_utc=NOW, stop_active=False, stale=True)
+    sonnet = core.evaluate_dispatch("claude-sonnet-5", limits=limits_of(), floors=floors,
+                                     now_utc=NOW, stop_active=False, stale=True)
+    assert fable["allow"] is False
+    assert sonnet["allow"] is True
+
+
+def test_live_block_and_zero_floors_still_denies():
+    d = core.evaluate_dispatch("claude-sonnet-5", limits=limits_of(), floors=ZERO_FLOORS,
+                                now_utc=NOW, stop_active=False, stale=True,
+                                live_blocks={"five_hour": "2026-08-15T19:00:00+00:00"})
+    assert d["allow"] is False
+    assert d["local_only"] is True
+    assert "live rejected rate_limit_event" in d["reasons"][0]
+
+
+def test_stop_and_zero_floors_still_denies():
+    d = core.evaluate_dispatch("claude-sonnet-5", limits=limits_of(), floors=ZERO_FLOORS,
+                                now_utc=NOW, stop_active=True, stale=True)
+    assert d["allow"] is False
+    assert d["reasons"] == ["STOP kill-switch active"]
+
+
+def test_fresh_limits_missing_bucket_on_zero_floor_pool_allows():
+    # same class: a bucket the poll did not return has no authority when its floor is 0
+    limits = {"session": {"percent": 5, "resets_at": "x", "severity": "normal"}}
+    d = core.evaluate_dispatch("claude-sonnet-5", limits=limits, floors=ZERO_FLOORS,
+                                now_utc=NOW, stop_active=False, stale=False)
+    assert d["allow"] is True
+    d2 = core.evaluate_dispatch("claude-sonnet-5", limits=limits, floors=FLOORS,
+                                 now_utc=NOW, stop_active=False, stale=False)
+    assert d2["allow"] is False
+
+
+def test_floors_zeroed_helper():
+    assert core.floors_zeroed("claude-sonnet-5", ZERO_FLOORS, NOW) is True
+    assert core.floors_zeroed("claude-fable-5", ZERO_FLOORS, NOW) is True
+    assert core.floors_zeroed("claude-sonnet-5", FLOORS, NOW) is False
+    sched = dict(ZERO_FLOORS, fable_floor_schedule=[{"until_pt": "2099-01-01T00:00", "min_remaining_pct": 30}])
+    assert core.floors_zeroed("claude-fable-5", sched, NOW) is False
+    assert core.floors_zeroed("claude-sonnet-5", sched, NOW) is True

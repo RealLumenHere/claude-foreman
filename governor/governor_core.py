@@ -165,12 +165,38 @@ def resolve_fable_floor(floors, now_utc):
     return static_floor
 
 
+def applicable_floors(model, floors, now_utc):
+    """The floors evaluate_dispatch consults for `model`: session and weekly_all
+    always, plus the (scheduled) fable reserve for fable models. wq#1737."""
+    out = {
+        "session": floors.get("session_min_remaining_pct", DEFAULT_FLOORS["session_min_remaining_pct"]),
+        "weekly_all": floors.get("weekly_all_min_remaining_pct", DEFAULT_FLOORS["weekly_all_min_remaining_pct"]),
+    }
+    if is_fable_model(model):
+        out["fable_weekly_scoped"] = resolve_fable_floor(floors, now_utc)
+    return out
+
+
+def floors_zeroed(model, floors, now_utc):
+    """True when every floor that applies to `model` is 0 — i.e. the usage reading
+    has no authority to deny this model even when fresh (wq#1737)."""
+    return all(not f for f in applicable_floors(model, floors, now_utc).values())
+
+
 def evaluate_dispatch(model, *, limits, floors, now_utc, stop_active, stale,
                        live_blocks=None):
     """Pure decision function. `limits` = parse_limits() output (or None if
     no successful poll yet). `live_blocks` = {pool: resets_at_iso} recorded
     from in-band rejected rate_limit_event frames (report-event), which
     override the poll cadence immediately.
+
+    Gate order: STOP -> local rung exempt -> live_blocks -> stale/missing
+    limits -> floors. wq#1737: stale/missing limits fail closed ONLY when some
+    floor that applies to the model is non-zero. With every applicable floor
+    at 0 (floors.json since 2026-08-23) a fresh reading could never deny, so a
+    stale one must not either — it turned a 12h /api/oauth/usage 429 streak
+    into a fleet-wide dispatch outage. STOP and live_blocks (in-band rejected
+    rate_limit_event, the real exhaustion signal) stay hard gates regardless.
 
     Returns dict: {allow, local_only, reasons: [...]})
     """
@@ -194,25 +220,28 @@ def evaluate_dispatch(model, *, limits, floors, now_utc, stop_active, stale,
             reasons.append(f"live rejected rate_limit_event on {pool}, resets {resets_at}")
             return {"allow": False, "local_only": True, "reasons": reasons}
 
+    applicable = applicable_floors(model, floors, now_utc)
+    zeroed = all(not f for f in applicable.values())
+
     if stale or not limits:
+        if zeroed:
+            return {"allow": True, "local_only": False,
+                    "reasons": ["stale usage, floors zeroed: advisory only"]}
         return {"allow": False, "local_only": True,
                 "reasons": ["usage state stale/unavailable — fail-closed to local-rung-only"]}
 
-    session_remaining = _remaining(limits.get("session"))
-    weekly_remaining = _remaining(limits.get("weekly_all"))
-    session_floor = floors.get("session_min_remaining_pct", DEFAULT_FLOORS["session_min_remaining_pct"])
-    weekly_floor = floors.get("weekly_all_min_remaining_pct", DEFAULT_FLOORS["weekly_all_min_remaining_pct"])
-
-    if session_remaining is None or session_remaining < session_floor:
-        reasons.append(f"session remaining {session_remaining} < floor {session_floor}")
-    if weekly_remaining is None or weekly_remaining < weekly_floor:
-        reasons.append(f"weekly_all remaining {weekly_remaining} < floor {weekly_floor}")
-
-    if is_fable_model(model):
-        fable_remaining = _remaining(limits.get("fable_weekly_scoped"))
-        fable_floor = resolve_fable_floor(floors, now_utc)
-        if fable_remaining is None or fable_remaining < fable_floor:
-            reasons.append(f"Fable weekly_scoped remaining {fable_remaining} < reserve floor {fable_floor}")
+    # A missing bucket (remaining None) only denies when that pool's floor is > 0:
+    # same rule as staleness — the reading has no authority on a zero-floor pool.
+    labels = {"session": "session", "weekly_all": "weekly_all",
+              "fable_weekly_scoped": "Fable weekly_scoped"}
+    for pool, floor in applicable.items():
+        remaining = _remaining(limits.get(pool))
+        if remaining is None:
+            if floor:
+                reasons.append(f"{labels[pool]} remaining None < floor {floor}")
+        elif remaining < floor:
+            kind = "reserve floor" if pool == "fable_weekly_scoped" else "floor"
+            reasons.append(f"{labels[pool]} remaining {remaining} < {kind} {floor}")
 
     if reasons:
         return {"allow": False, "local_only": True, "reasons": reasons}

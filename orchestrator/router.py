@@ -745,7 +745,11 @@ def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI
     for pool, floor in checks:
         b = limits.get(pool) or {}
         if b.get("percent") is None:
-            return "deny"
+            # wq#1737: a bucket the poll never returned has no authority on a
+            # zero-floor pool (same rule as governor_core's stale branch).
+            if floor > 0:
+                return "deny"
+            continue
         remaining = 100 - b["percent"]
         if remaining < floor:
             return "deny"

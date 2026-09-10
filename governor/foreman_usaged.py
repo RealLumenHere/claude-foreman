@@ -4,8 +4,10 @@
 Polls GET /api/oauth/usage every 60-90s (refresh-aware OAuth bearer),
 parses limits[] (session / weekly_all / Fable weekly_scoped), falls back to
 CCC after 2 consecutive primary failures, fails closed to local-rung-only
-if both are stale >10 min, and exposes a can_dispatch(model) decision that
-the worker harness (T2a) queries before spawning a cloud worker.
+if both are stale >10 min AND a floor is set (wq#1737: with every floor at 0
+a stale reading is advisory — it keeps an aq row open instead), and exposes a
+can_dispatch(model) decision that the worker harness (T2a) queries before
+spawning a cloud worker.
 
 State: /home/lumen/foreman/state.json (atomic write). Kill-switch:
 /home/lumen/foreman/STOP (any content, presence is all that matters).
@@ -43,6 +45,10 @@ FLOORS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "floors.j
 CREDS_PATH = os.environ.get("FOREMAN_CREDS_PATH", os.path.expanduser("~/.claude/.credentials.json"))
 CLAUDE_BIN = "/home/lumen/.npm-global/bin/claude"
 NTFY_SEND = "/home/lumen/bin/ntfy-send"
+AQ_BIN = "/home/lumen/bin/aq"
+AQ_DB = os.environ.get("AQ_DB", "/home/lumen/agents/alert-queue/alerts.db")
+AQ_SOURCE = "foreman-governor"
+AQ_KEY = "usage-stale"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CCC_ORG_ID = "06598063-72d8-4013-938d-ec6a9213b3e4"
 CCC_URL = f"https://claude.ai/api/organizations/{CCC_ORG_ID}/usage"
@@ -168,6 +174,57 @@ def send_ntfy(priority, title, msg):
         log(f"WARN: ntfy-send failed: {e}")
 
 
+def _aq(*argv):
+    """Run /home/lumen/bin/aq; log and swallow failures (the poll must never die
+    on the alert queue). AQ_DB is inherited from the environment."""
+    try:
+        r = subprocess.run([AQ_BIN, *argv], capture_output=True, timeout=15, text=True)
+        if r.returncode != 0:
+            log(f"WARN: aq {argv[0]} exited {r.returncode}: {r.stderr.strip()}")
+            return False
+        return True
+    except (subprocess.SubprocessError, OSError) as e:
+        log(f"WARN: aq {argv[0]} failed: {e}")
+        return False
+
+
+def aq_open_id():
+    """Id of the open aq row for (foreman-governor, usage-stale), or None."""
+    import sqlite3
+    try:
+        c = sqlite3.connect(AQ_DB, timeout=10)
+        row = c.execute("SELECT id FROM alerts WHERE source=? AND key=? AND status='open'",
+                        (AQ_SOURCE, AQ_KEY)).fetchone()
+        c.close()
+    except sqlite3.Error as e:
+        log(f"WARN: aq db unreadable: {e}")
+        return None
+    return row[0] if row else None
+
+
+def aq_stale_edge(stale, prev_stale, state, zeroed):
+    """wq#1737: keep one open aq row for as long as the usage poll is stale, resolve
+    it on recovery. ntfy alone let a 12h stale window pass silently (one push at the
+    flip, nothing after). Edge -> add; later stale polls only re-add if the row was
+    resolved by hand (add dedups onto the open row, so count/last_ts stay honest);
+    recovery -> resolve whatever open row exists, whoever opened it."""
+    if stale:
+        if not prev_stale or aq_open_id() is None:
+            age = state.get("cache_age_s")
+            age_s = f"{age:.0f}s" if isinstance(age, (int, float)) else "no good poll yet"
+            posture = ("advisory only — floors zeroed, cloud dispatch continues"
+                       if zeroed else "FAIL-CLOSED — cloud dispatch denied, local rung only")
+            _aq("add", AQ_SOURCE, AQ_KEY,
+                "governor: usage poll stale",
+                f"cache_age {age_s} > stale_fail_closed_seconds; last_good_at "
+                f"{state.get('last_good_at')}; primary_fail_streak {state.get('primary_fail_streak')} "
+                f"({state.get('reused_cache_reason')}); {posture}")
+    elif prev_stale:
+        rid = aq_open_id()
+        if rid is not None:
+            _aq("resolve", str(rid), f"usage poll fresh again at {state.get('last_good_at')}")
+
+
 def poll_once(floors, prev_state):
     now = dt.datetime.now(dt.timezone.utc)
     ok, payload, err = fetch_primary()
@@ -246,11 +303,18 @@ def poll_once(floors, prev_state):
         send_ntfy("default", "foreman: reserve floor recovered", f"{pool} is back above its reserve floor")
 
     prev_stale = bool((prev_state or {}).get("stale"))
+    # fable carries the superset of applicable floors; if those are all 0 every model's are.
+    zeroed = core.floors_zeroed("claude-fable-5", floors, now)
     if stale and not prev_stale:
-        send_ntfy("urgent", "foreman: FAIL-CLOSED to local-rung-only",
-                   f"usage state stale ({cache_age_s}s since last good poll) — dispatching local rung only")
+        if zeroed:
+            send_ntfy("high", "foreman: usage poll stale (advisory, floors zeroed)",
+                       f"usage state stale ({cache_age_s}s since last good poll) — floors are 0 so cloud dispatch continues")
+        else:
+            send_ntfy("urgent", "foreman: FAIL-CLOSED to local-rung-only",
+                       f"usage state stale ({cache_age_s}s since last good poll) — dispatching local rung only")
     elif prev_stale and not stale:
         send_ntfy("default", "foreman: usage polling recovered", "primary/CCC usage poll is fresh again")
+    aq_stale_edge(stale, prev_stale, state, zeroed)
 
     return state
 

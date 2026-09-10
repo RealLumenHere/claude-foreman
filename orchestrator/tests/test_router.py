@@ -885,3 +885,22 @@ def test_title_repo_markers_derived_from_lane_repo():
         assert key in router.TITLE_REPO_MARKERS, key
     assert router.TITLE_REPO_MARKERS["nest"] == \
         "/home/lumen/projects/nest/NoLongerEvil-Thermostat"  # wq#1325
+
+
+def test_governor_pressure_missing_bucket_on_zero_floor_pool_is_not_deny(tmp_path):
+    """wq#1737: no limits at all (governor allowed on zeroed floors while the usage
+    poll is stale/never good) must not turn into 'deny' here; with a floor set the
+    missing bucket still denies."""
+    gov = tmp_path / "gov.py"
+    gov.write_text("import sys; sys.exit(0)\n")
+    floors = tmp_path / "floors.json"
+    floors.write_text(json.dumps({
+        "session_min_remaining_pct": 0, "weekly_all_min_remaining_pct": 0,
+        "fable_weekly_min_remaining_pct": 0, "soft_margin_pct": 0}))
+    st = tmp_path / "state.json"
+    st.write_text(json.dumps({"limits": None, "stale": True}))
+    assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "ok"
+    assert router.governor_pressure("claude-fable-5", state_path=str(st), governor_cli=str(gov)) == "ok"
+    floors.write_text(json.dumps({"session_min_remaining_pct": 20, "weekly_all_min_remaining_pct": 0,
+                                  "fable_weekly_min_remaining_pct": 0, "soft_margin_pct": 0}))
+    assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "deny"

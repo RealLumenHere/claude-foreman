@@ -8,7 +8,13 @@ quota) on a 401. Falls back to a CCC (claude.ai cookie) poll after 2
 consecutive primary failures — currently unprovisioned on this box (no
 session cookie configured; see `CCC_SESSION_COOKIE_FILE` in
 `foreman_usaged.py`). Fails closed to local-rung-only if both sources are
-stale for more than 10 minutes.
+stale for more than 10 minutes and a floor is set. With every applicable
+floor at 0 (floors.json since 2026-08-23) a stale reading is advisory only:
+`can-dispatch` allows with reason `stale usage, floors zeroed: advisory only`,
+while STOP and live `rate_limit_event` blocks still deny (wq#1737 — the stale
+branch alone turned a 12h endpoint 429 streak into a fleet-wide dispatch
+outage). While stale, the daemon keeps one aq row open
+(`foreman-governor` / `usage-stale`) and resolves it on recovery.
 
 On consecutive primary failures the poll interval backs off (doubles per
 failure, capped at `poll_backoff_max_s`, default 600s) instead of retrying at
@@ -182,6 +188,6 @@ get enabled.
 
 CCC fallback is implemented but not provisioned — no claude.ai session
 cookie is available on this box. If the primary `/api/oauth/usage` poll
-starts failing, the daemon will fail closed to local-rung-only after 10
-minutes rather than silently degrading, which is the safe default, but it
-means the CCC fallback path is currently untested against a real cookie.
+starts failing, the daemon fails closed to local-rung-only after 10 minutes
+only if a floor is set (zeroed floors: advisory, aq row instead — wq#1737).
+The CCC fallback path is currently untested against a real cookie.
