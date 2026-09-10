@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily contradiction scan — superseded fact values still asserted in notes and prose (wq#1609)
+Documentation=file:///home/lumen/foreman/ops/wq1609-minerva-contradiction-scan/README.md
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+ExecStart=/home/lumen/bin/lumen-contradiction-scan --apply
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lumen-contradiction-scan

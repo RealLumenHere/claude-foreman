@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily contradiction scan (wq#1609) — was a weekly pass inside lumen-dream
+
+[Timer]
+OnCalendar=*-*-* 06:20:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
