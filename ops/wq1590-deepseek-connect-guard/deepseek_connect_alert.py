@@ -145,20 +145,28 @@ def windowed_rate(events: list) -> dict:
     return {"total": total, "failures": failures, "rate": rate}
 
 
-def record_event(is_failure: bool, now: float = None) -> dict:
-    """Append one (timestamp, is_failure) sample for a deepseek call, prune to
-    the trailing window, persist, and return the resulting windowed stats."""
+def record_event(litellm_model: str, is_failure: bool, now: float = None) -> dict:
+    """Append one (timestamp, is_failure) sample for a deepseek call, keyed by
+    litellm_model so each deepseek deployment (deepseek-v4-flash,
+    deepseek-v4-pro, ...) gets its own windowed counter instead of pooling
+    into one shared rate (wq#1604 — pooling let a healthy model's traffic
+    mask a breaching one's). Prune that model's events to the trailing
+    window, persist, and return the resulting windowed stats for it alone."""
     now = now if now is not None else time.time()
     window_s = float(os.environ.get("DEEPSEEK_ALERT_WINDOW_MIN", "90")) * 60
     path = _events_path()
-    events = _load_json(path, [])
+    all_events = _load_json(path, {})
+    if not isinstance(all_events, dict):
+        all_events = {}
+    events = all_events.get(litellm_model, [])
     events.append([now, bool(is_failure)])
     events = prune_events(events, now, window_s)
-    _save_json(path, events)
+    all_events[litellm_model] = events
+    _save_json(path, all_events)
     return windowed_rate(events)
 
 
-def notify_connect_spike(stats: dict) -> None:
+def notify_connect_spike(litellm_model: str, stats: dict) -> None:
     """Fire-and-forget ntfy post. Never raises into the caller's path (fails-open,
     same guardrail as wq#1299/wq#1406)."""
     ntfy = os.environ.get("DEEPSEEK_ALERT_NTFY", "/home/lumen/bin/ntfy-send")
@@ -166,14 +174,14 @@ def notify_connect_spike(stats: dict) -> None:
     window_min = os.environ.get("DEEPSEEK_ALERT_WINDOW_MIN", "90")
     cooldown_min = os.environ.get("DEEPSEEK_ALERT_COOLDOWN_MIN", "30")
     msg = (
-        f"deepseek-v4-flash connect-failure rate {stats['failures']}/{stats['total']} "
+        f"{litellm_model} connect-failure rate {stats['failures']}/{stats['total']} "
         f"({stats['rate']:.0%}) over the last {window_min}min — api.deepseek.com "
         f"connectivity looks unhealthy, not just an application error. Re-alerts "
         f"every {cooldown_min}min while it persists."
     )
     try:
         subprocess.run(
-            [ntfy, "-t", topic, "-p", "urgent", "-T", "deepseek-v4-flash connect failures spiking",
+            [ntfy, "-t", topic, "-p", "urgent", "-T", f"{litellm_model} connect failures spiking",
              "--quiet", msg],
             timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
@@ -188,7 +196,7 @@ def handle_call_event(litellm_model: str, error_str: str = None, now: float = No
     if not is_deepseek_model(litellm_model):
         return False
     is_failure = is_connect_failure(error_str) if error_str else False
-    stats = record_event(is_failure, now=now)
+    stats = record_event(litellm_model, is_failure, now=now)
     min_samples = int(os.environ.get("DEEPSEEK_ALERT_MIN_SAMPLES", "15"))
     threshold = float(os.environ.get("DEEPSEEK_ALERT_THRESHOLD", "0.5"))
     if stats["total"] < min_samples or stats["rate"] <= threshold:
@@ -201,7 +209,7 @@ def handle_call_event(litellm_model: str, error_str: str = None, now: float = No
         return False
     alert_state[litellm_model] = now
     _save_json(alert_path, alert_state)
-    notify_connect_spike(stats)
+    notify_connect_spike(litellm_model, stats)
     return True
 
 

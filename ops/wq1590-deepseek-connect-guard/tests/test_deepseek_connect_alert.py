@@ -149,6 +149,76 @@ class TestHandleCallEvent(unittest.TestCase):
         self.assertTrue(first)
         self.assertTrue(later)
 
+    def test_healthy_model_does_not_mask_breaching_sibling(self):
+        # wq#1604 repro: 20 back-to-back deepseek-v4-flash connect failures
+        # (100%) interleaved with 30 healthy deepseek-v4-pro calls. Pooled
+        # into one counter this never crosses 0.5 (20/50 = 0.40); keyed per
+        # model, flash alone is 100% failures and must trip well before all
+        # 20 failures land.
+        os.environ["DEEPSEEK_ALERT_MIN_SAMPLES"] = "15"
+        flash_alerts = []
+        for i in range(20):
+            flash_alerts.append(handle_call_event(
+                "deepseek/deepseek-v4-flash",
+                "Cannot connect to host api.deepseek.com:443",
+                now=float(i),
+            ))
+            if i < 30:
+                handle_call_event("deepseek/deepseek-v4-pro", None, now=float(i) + 0.5)
+        self.assertTrue(any(flash_alerts))
+
+    def test_pro_stays_healthy_and_never_alerts_from_flash_failures(self):
+        for i in range(20):
+            handle_call_event(
+                "deepseek/deepseek-v4-flash",
+                "Cannot connect to host api.deepseek.com:443",
+                now=float(i),
+            )
+        pro_alerts = [
+            handle_call_event("deepseek/deepseek-v4-pro", None, now=float(i) + 0.5)
+            for i in range(30)
+        ]
+        self.assertFalse(any(pro_alerts))
+
+
+class TestNotifyMessageNamesBreachingModel(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="deepseek-connect-alert-test-")
+        self._old_env = {
+            k: os.environ.get(k) for k in (
+                "DEEPSEEK_ALERT_STATE_DIR", "DEEPSEEK_ALERT_NTFY", "DEEPSEEK_ALERT_TOPIC",
+            )
+        }
+        os.environ["DEEPSEEK_ALERT_STATE_DIR"] = self.tmp
+        self.captured = os.path.join(self.tmp, "ntfy_args.txt")
+        # a fake ntfy-send that dumps argv so we can assert on the message
+        fake_ntfy = os.path.join(self.tmp, "fake_ntfy.py")
+        with open(fake_ntfy, "w") as f:
+            f.write(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                f"open({self.captured!r}, 'w').write(repr(sys.argv))\n"
+            )
+        os.chmod(fake_ntfy, 0o755)
+        os.environ["DEEPSEEK_ALERT_NTFY"] = fake_ntfy
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        for k, v in self._old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_message_names_the_actual_breaching_model_not_flash_literal(self):
+        from deepseek_connect_alert import notify_connect_spike
+        stats = {"total": 20, "failures": 20, "rate": 1.0}
+        notify_connect_spike("deepseek/deepseek-v4-pro", stats)
+        with open(self.captured) as f:
+            argv_repr = f.read()
+        self.assertIn("deepseek/deepseek-v4-pro", argv_repr)
+        self.assertNotIn("deepseek-v4-flash connect failures spiking", argv_repr)
+
 
 if __name__ == "__main__":
     unittest.main()
