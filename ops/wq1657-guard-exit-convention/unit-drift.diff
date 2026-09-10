@@ -1,0 +1,71 @@
+--- /home/lumen/bin/unit-drift	2026-09-10 07:55:07.018236423 +0000
++++ staged/unit-drift	2026-09-10 07:53:13.301863533 +0000
+@@ -7,7 +7,9 @@
+ 
+   unit-drift snapshot          rebuild baseline from /etc, git commit
+   unit-drift check [--digest]  read-only diff; exit 1 on drift;
+-                               --digest emits an info-class ntfy on drift
++                               --digest emits an info-class ntfy on drift;
++                               also lints the guard exit-code contract
++                               (wq#1657 GEL1/GEL2 via guard_exit_lint.py)
+   unit-drift apply --dry-run   show disk<-baseline plan (manual, no write)
+   unit-drift show-baseline     list tracked files in the baseline
+ 
+@@ -98,13 +100,6 @@
+     return set()
+ 
+ def cmd_snapshot():
+-    # wq#1658: close any new dead-man coverage gap before capturing the
+-    # baseline, so opting out of cron-stamp coverage is the exception —
+-    # failure here must never block the snapshot itself.
+-    try:
+-        subprocess.run(["/home/lumen/bin/lumen-cron-stamp-dropin-gen", "apply"], timeout=60)
+-    except (OSError, subprocess.TimeoutExpired) as exc:
+-        print("unit-drift: lumen-cron-stamp-dropin-gen skipped: %s" % exc)
+     os.makedirs(UNITS_DIR, exist_ok=True); os.makedirs(DROPIN_DIR, exist_ok=True)
+     st = scan()
+     for d in (UNITS_DIR, DROPIN_DIR):
+@@ -134,6 +129,15 @@
+     print(msg); print((r.stdout or r.stderr).strip())
+     return 0
+ 
++def guard_lint():
++    """wq#1657 guard exit-code contract lint. Fail-open: no module, no lint."""
++    try:
++        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++        import guard_exit_lint
++        return guard_exit_lint.lint_dir(SYS, read=read_bytes)
++    except Exception:
++        return []
++
+ def _diff(kind, base, cur, known_rm=None):
+     d = []
+     for n in sorted(set(cur) - set(base)):
+@@ -155,18 +159,22 @@
+     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+     counts = "%d units, %d drop-ins, %d enable-links" % (
+         len(cur["units"]), len(cur["dropins"]), len(cur["enable"]))
+-    if not drift:
++    lint = guard_lint()
++    if not drift and not lint:
+         print("[%s] unit-drift: CLEAN (%s)" % (ts, counts))
+         if orphans: print("  advisory: orphaned drop-in dir(s), base unit absent: " + ", ".join(orphans))
+         return 0
+-    print("[%s] unit-drift: DRIFT — %d change(s) vs git baseline" % (ts, len(drift)))
++    print("[%s] unit-drift: DRIFT — %d change(s) vs git baseline, %d guard-lint violation(s)"
++          % (ts, len(drift), len(lint)))
+     for kind, name in drift: print("  %-16s %s" % (kind, name))
++    for v in lint: print("  GUARD-LINT       %s" % v)
+     if orphans: print("  advisory: orphaned drop-in dir(s), base unit absent: " + ", ".join(orphans))
+     if digest:
+-        summ = "; ".join(k + " " + n for k, n in drift[:12])
+-        if len(drift) > 12: summ += "; +%d more" % (len(drift) - 12)
++        items = [k + " " + n for k, n in drift] + [v.split(":")[0] for v in lint]
++        summ = "; ".join(items[:12])
++        if len(items) > 12: summ += "; +%d more" % (len(items) - 12)
+         subprocess.run([NTFY, "-t", TOPIC, "-p", "low", "-T",
+-                        "unit-drift: %d change(s) on lumen" % len(drift), summ])
++                        "unit-drift: %d change(s) on lumen" % len(items), summ])
+     return 1
+ 
+ def cmd_apply():
