@@ -1,0 +1,22 @@
+# wq#1623 — hand-merge into the live LiteLLM proxy config.yaml (not
+# committed to this repo; lives on the gateway node at
+# /home/lumen/agent/litellm_config.yaml, outside git — same convention as
+# wq#897/wq#948/wq#1299/wq#1406). This BUILD worker's sandbox has no read
+# access to that file, so this is a fragment to hand-merge, not a diff.
+#
+# Change: qwen36-local's timeout 600 -> 180. Real callers cancel at
+# 40-160s (wq#1588/wq#1623 journal); 600 held a connection open for minutes
+# past every observed caller's own patience and bought nothing. 180 is a
+# small margin above the 160s longest observed wait. qwen36-live's existing
+# timeout: 120 is already inside the ceiling and is left unchanged.
+#
+# Run ops/wq1623-qwen36-queue-guard/audit_rung_timeout.py against this
+# file's live copy after merging to confirm no qwen36/Isis deployment still
+# exceeds the ceiling.
+
+model_list:
+  - model_name: qwen36-local
+    litellm_params:
+      model: ollama/qwen36
+      api_base: http://100.100.129.24:11434
+      timeout: 180  # was 600
