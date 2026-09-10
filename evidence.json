@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1613-minerva-verifier-registry/lumen_verify.py:333-370"}]}
+{"criteria": [{"id": "AC1", "cmd_run": "python3 -m pytest ops/wq1613-minerva-verifier-registry/test_lumen_verify.py -q", "exit_code": 0, "citation": "ops/wq1613-minerva-verifier-registry/lumen_verify.py:308-333"}]}

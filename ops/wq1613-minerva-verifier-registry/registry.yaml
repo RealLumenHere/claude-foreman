@@ -54,12 +54,26 @@ probes:
     predicates: [url, port]
     subjects: known-in-store
     interval_days: 1
+  node_liveness:
+    # wq#1620: khepri/wadjet sat 26d/53d offline with lumen_state still
+    # claiming POWERED ON / IDLE+available -- no probe backed a node's own
+    # reachability. ssh, then tailscale ping (app-layer, not fooled by ICMP
+    # filtering); either succeeding means available, both failing means
+    # offline is the observation, not an unknown.
+    command: "ssh <subject> true || tailscale ping --c 1 <subject>"
+    predicates: [availability]
+    subjects: known-in-store
+    interval_days: 3
 
 predicates:
   lifecycle:
     class: status
     reserved: true
     enum: [provisioning, active, degraded, offline, decommissioned, retired]
+  availability:
+    class: status
+    closes_on_decommission: true
+    probe: node_liveness
     closes_on_decommission: false
   status:
     class: status
