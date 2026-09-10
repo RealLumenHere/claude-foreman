@@ -149,6 +149,21 @@ sweep closes it the half-hour it clears. No new daemon; extend what runs.
 | P2 | **Read-only subsystem mode.** `subsystems: foreman:ro` acquires a shared lock: many readers, one writer, writer excluded while readers hold. Analysis/audit archetypes default to `:ro`. | `bin/wq:acquire_subs` + `wq add` | ~60 lines | F7 |
 | P3 | **Sha evidence resolves somewhere.** `find_artifact` sha branch: `git cat-file -e` across cwd, `/home/lumen/*`, `projects/*`; unresolvable sha -> treated like a missing path. | `bin/wq` | 15 lines | tail of F3 |
 
+### Landed
+
+wq#1673 (lumen-bin PR#89, `7eaa059`) took the P1 canonicalize+durability fix, the P2
+deliverable column and the P3 sha check together. `done` rewrites an accepted path token
+to the absolute path `find_artifact` stat()ed; a path that resolves only inside a **linked
+worktree** and is absent from `origin/main`/`main` is refused (exit 6, override
+`--unlanded "<reason>"` -> `[UNLANDED: ...]`); `wq add --deliverable <path>` binds a ticket
+to its named output and `done` refuses (exit 7) unless that file is on main, which
+`--no-artifact` does not excuse; a sha citation must resolve via `git cat-file` in the
+caller's repo or a checkout under `/home/lumen`. The durability test is "is this a linked
+worktree" rather than the `scratch/worktrees/` prefix named above — the same invariant, and
+it also covers `/home/lumen/worktrees/`, where the fworker BUILD lane runs and where all 10
+dead citations in F4 were written. Fail-open-on-infrastructure is preserved throughout.
+Evidence: `bin/tests/test_wq_evidence_durability.py` (11 cases), full bin suite 283 passed.
+
 ## 5. What the sample does not say
 
 - "Real-complete" here means the queue's own evidence checks out from a clean vantage.
