@@ -1,0 +1,12 @@
+[Unit]
+Description=Minerva verifier registry sweep — re-observe due facts, never auto-supersede frank_stated (wq#1613)
+Documentation=file:///home/lumen/foreman/ops/wq1613-minerva-verifier-registry/README.md
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+ExecStart=/home/lumen/bin/lumen-verify sweep
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lumen-verify

@@ -1,0 +1,10 @@
+[Unit]
+Description=Minerva verifier registry sweep (wq#1613) — before the 13:00 UTC brief, after overnight work
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+RandomizedDelaySec=180
+Persistent=true
+
+[Install]
+WantedBy=timers.target
