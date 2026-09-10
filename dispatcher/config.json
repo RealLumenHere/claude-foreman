@@ -48,6 +48,31 @@
       "max_per_day": 999,
       "priority_override": 99
     },
+    "user-projects": {
+      "enabled": true,
+      "max_per_day": 999,
+      "priority_override": 99
+    },
+    "frank-cred": {
+      "enabled": true,
+      "max_per_day": 999,
+      "priority_override": 99
+    },
+    "frank-funding": {
+      "enabled": true,
+      "max_per_day": 999,
+      "priority_override": 99
+    },
+    "frank-hw": {
+      "enabled": true,
+      "max_per_day": 999,
+      "priority_override": 99
+    },
+    "frank-re": {
+      "enabled": true,
+      "max_per_day": 999,
+      "priority_override": 99
+    },
     "auto": {
       "enabled": true,
       "max_per_day": 999
