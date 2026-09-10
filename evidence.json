@@ -2,9 +2,9 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1610-minerva-archival-contradictions/note_contradiction_scan.py:63-79",
-      "note": "ensure_schema() creates note_contradictions(id,note_id,fact_id,dead_value,current_value,detected_at,cleared_at) with no column added to archival_notes (wq#576 precedent, per ticket text). dead_value_index() (note_contradiction_scan.py:82-99) builds the structured-token dead-value index from closed state_facts (<=60 chars, ^[A-Za-z0-9._:/@-]+$, §3.5). live_notes() (:102-112) scans archival_notes excluded the same way search_v3 already excludes them (not absorbed, revoked_at/superseded_by NULL). find_hits() (:115-142) applies the changelog + as-of suppressors and a negation-line skip (fixed to mask the matched token first, so a dead value that is itself a negation word like RETIRED still flags). scan() (:145-181) writes rows idempotently and clears rows for rescanned notes whose text no longer contains the dead value. Regression + idempotency + clearing + dry-run tests: ops/wq1610-minerva-archival-contradictions/test_note_contradiction_scan.py.",
-      "cmd_run": "python3 ops/wq1610-minerva-archival-contradictions/test_note_contradiction_scan.py",
+      "citation": "ops/wq1654-timer-label-drift/label_drift_check.py:59-68",
+      "note": "violations() flags a timer as drifted when ActiveState=='active' and UnitFileState=='enabled' and Description matches STALE_LABEL_RE=DISABLED|STAGED|Frank-gated (label_drift_check.py:21); CLI 'check' (label_drift_check.py:71-89) runs it against live systemctl and exits 1 on any hit. Run live against this box: catches all nine ticket-named timers (lumen-familiarity/model-audit/skillhex/memory-audit/judgearena-bench/pelican-bench/foreman-dispatch/foreman-health/foreman-selfheal) plus power-remediate.timer. Decisions (keep all nine, fix label) + rationale ingested via the wq#1632 gated path: ops/wq1654-timer-label-drift/ingest_decisions.py:DECISIONS (lines 32-60) and ingest_all() (lines 63-72) calling state_lifecycle.ingest (ops/wq1632-lumen-state-lifecycle/state_lifecycle.py:142). Follow-up wq#1677 filed for the actual fleet-units Description= edit (outside this worker's sandbox). Tests: ops/wq1654-timer-label-drift/test_label_drift_check.py (5 cases, live-string fixtures) and test_ingest_decisions.py (3 cases, fixture DB).",
+      "cmd_run": "python3 -m pytest ops/wq1654-timer-label-drift/ -q",
       "exit_code": 0
     }
   ]
