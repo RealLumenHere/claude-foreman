@@ -212,3 +212,33 @@ def test_sweep_dry_run_does_not_write(conn, registry, monkeypatch):
     assert result["counts"]["confirmed"] == 1
     assert conn.execute("SELECT count(*) FROM fact_verifications").fetchone()[0] == 0
     assert get_fact(conn, fid)["last_confirmed_at"] != iso(NOW)
+
+
+# --------------------------------------------------------------- node_liveness
+
+def test_probe_node_liveness_unreachable_is_offline_not_error(monkeypatch):
+    # wq#1620: ssh AND tailscale ping both failing (khepri/wadjet's actual
+    # state) must be reported as the observation "offline", not an unknown
+    # probe error -- otherwise a genuinely offline node's stale POWERED ON /
+    # available fact can never be superseded by the sweep.
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (255, "", "unreachable"))
+    facts = [{"predicate": "availability", "value": "available"}]
+    result = lv.probe_node_liveness("wadjet", facts)
+    assert result[("wadjet", "availability")] == ("offline", None)
+
+
+def test_probe_node_liveness_ssh_ok_is_available(monkeypatch):
+    def fake_run(argv, timeout=20):
+        return (0, "", "") if argv[0] == "ssh" else (1, "", "no route")
+    monkeypatch.setattr(lv, "run", fake_run)
+    facts = [{"predicate": "availability", "value": "offline"}]
+    result = lv.probe_node_liveness("khepri", facts)
+    assert result[("khepri", "availability")] == ("available", None)
+
+
+def test_sweep_supersedes_stale_availability_when_node_goes_offline(conn, registry, monkeypatch):
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (255, "", "unreachable"))
+    fid = seed(conn, "wadjet", "availability", "available", age_days=5)
+    result = lv.sweep(conn, registry, now=NOW)
+    assert result["counts"]["superseded"] == 1
+    assert get_fact(conn, fid)["valid_to"] == iso(NOW)

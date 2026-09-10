@@ -305,6 +305,22 @@ def probe_endpoint_live(subject, facts):
     return result
 
 
+def probe_node_liveness(subject, facts):
+    """wq#1620: khepri/wadjet sat offline for 26d/53d while lumen_state kept
+
+    stale POWERED ON / IDLE+available facts, because no probe ever backed a
+    node's own reachability -- unlike probe_service_state, an ssh failure
+    here IS the observation (offline), not an inconclusive error. Mirrors
+    the manual check that caught the drift: ssh, then tailscale ping
+    (app-layer, so it isn't fooled by ICMP filtering that a bare ping would
+    miss).
+    """
+    ssh_rc, _, _ = run(_ssh_argv(subject, ["true"]))
+    ts_rc, _, _ = run(["tailscale", "ping", "--c", "1", subject])
+    observed = "available" if ssh_rc == 0 or ts_rc == 0 else "offline"
+    return {(subject, f["predicate"]): (observed, None) for f in facts}
+
+
 PROBES = {
     "tailscale_ip": probe_tailscale_ip,
     "fleet_inventory": probe_fleet_inventory,
@@ -313,6 +329,7 @@ PROBES = {
     "os_kernel": probe_os_kernel,
     "plug_map": probe_plug_map,
     "endpoint_live": probe_endpoint_live,
+    "node_liveness": probe_node_liveness,
 }
 
 
