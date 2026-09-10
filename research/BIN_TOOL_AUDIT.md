@@ -205,3 +205,9 @@ All `.bak.*`, `.retired.*`, `.staged`, `.new`, `.orig` files in bin/ are point-i
 
 No other `.bak`/`.retired`/`.staged`/`.new` file is referenced anywhere in the live bin/ scripts or in any systemd unit's ExecStart. Full per-file list (base tool each supersedes) omitted here for length — see `/home/lumen/scratch/bin_audit_rows.json` (bak section) for the raw list if a future pass wants to age these out.
 
+## Re-verification (wq#1583)
+
+wq#1583 dispatched the same audit task as wq#1579 (near-identical ticket text) after this file had already landed on main via commit `00d73a1`. Rather than regenerate a duplicate report, this pass re-diffed the current `/home/lumen/bin` listing (`ls -la`, 331 lines) against every tool name in the two tables above: zero live executables are missing from the tables, and zero table rows reference a name no longer present in `bin/` — no drift since the wq#1579 pass. wq#1583 closes against this same file.
+
+**Issue-log cross-reference:** logged as ISSUE-LOG.md #268 (duplicate ticket dispatch, wq#1579 vs wq#1583) so a future dedup pass has a citable precedent.
+
