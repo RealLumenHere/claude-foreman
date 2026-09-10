@@ -174,6 +174,15 @@ models:
     # inference hang (GPU contention or a wedged worker), not a dead rung. Now
     # mechanical-edit's primary; router.py's wq#779 F3 fails-walk (base chain advances one
     # rung per recorded fail) is the safety net if Isis is still hung when a ticket lands.
+    # wq#1623 2026-09-10: wq#1588 measurement on Isis llama-qwen36.service (:8095) found
+    # this rung QUEUE-STARVED, not down -- /health ok, 723ms on a 4-token prompt, but a
+    # 4,910-token prompt spent 277s in PROMPT EVAL alone (ollama.service + ollama-lpp.service
+    # share the box, load average 20.06). Capacity decision: stays small-prompt-only, Isis is
+    # NOT dedicated to this service (see ops/wq1623-qwen36-queue-guard/README.md). Timeout
+    # bounded 600->180 to match the 40-160s callers actually wait before cancelling
+    # (ops/wq1623-qwen36-queue-guard/audit_rung_timeout.py, hand-merge pending on the gateway
+    # node). FLEET_COST_PLAN.md's three "after D2/D3" routing moves onto this rung are gated
+    # on this fix landing too, not just D2/D3.
     pools: [local]
     efforts: []
     trust: "mechanical-edit only, gated. Offline-survival tier."
