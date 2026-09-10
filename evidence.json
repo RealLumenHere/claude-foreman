@@ -1,10 +1,1 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "ops/wq1574-auditforecast/audit_forecast.py:65-79",
-      "cmd_run": "python3 ops/wq1574-auditforecast/test_audit_forecast.py",
-      "exit_code": 0
-    }
-  ]
-}
+{"criteria": [{"id": "AC1", "citation": "ops/wq1591-glm53flash-pricing/litellm_config_snippet.yaml:27-37"}]}

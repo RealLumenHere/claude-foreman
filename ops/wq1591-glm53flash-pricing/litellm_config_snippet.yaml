@@ -1,0 +1,37 @@
+# wq#1591 — merge into the live LiteLLM proxy config.yaml (not committed to
+# this repo; lives on the gateway node at /home/lumen/agent/litellm_config.yaml,
+# outside git — same convention as wq#897/wq#948/wq#1299/wq#1406). This BUILD
+# worker's sandbox has no read access to that file (/home/lumen/agent is not
+# in the allowed-dirs set), so this is a fragment to hand-merge, not a diff.
+#
+# D6 (foreman/research/FLEET_COST_PLAN.md): glm-5.3-flash is absent from
+# LiteLLM's price map (/app/model_prices_and_context_window.json in the
+# litellm container). Spend is currently recovered from OpenRouter's returned
+# `cost` field, which works on the OpenRouter route but will not on the Z.ai
+# direct route (glm-5.3-flash-zai, still 401ing per wq#1587/D1 — that's a
+# separate credential fix, not blocking this one). Without input/output/
+# cache_read pricing in model_info on both rungs, the migration is
+# unmeasurable and the budget governor and model-watchdog budgets go blind
+# the moment any traffic lands on the Z.ai route.
+#
+# VERIFY on first deploy: these keys merge into each rung's EXISTING
+# model_list entry (add model_info alongside the existing litellm_params) —
+# do not delete or recreate the entries.
+#
+# Prices: Z.ai published list rate, effective now. The $0.075/M-in promo
+# (glm53flash-price-watchdog's pinned baseline, ops/wq1573-glm53flash-eval/)
+# ended 2026-09-09 24:00 UTC+8; list is in effect as of this merge
+# (2026-09-10), so list is what belongs in model_info, not the promo rate.
+
+model_list:
+  - model_name: glm-5.3-flash          # OpenRouter route
+    model_info:
+      input_cost_per_token: 0.00000015        # $0.15 / M tokens
+      cache_read_input_token_cost: 0.00000003 # $0.03 / M tokens
+      output_cost_per_token: 0.0000005        # $0.50 / M tokens
+
+  - model_name: glm-5.3-flash-zai      # Z.ai direct route
+    model_info:
+      input_cost_per_token: 0.00000015
+      cache_read_input_token_cost: 0.00000003
+      output_cost_per_token: 0.0000005
