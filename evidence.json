@@ -2,9 +2,9 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1593-rung-retirement-price-check/rung_retirement_price_check.py:103-127",
-      "note": "price_disclosures_by_rung() attributes each $x/M figure to the nearest known rung name in its own clause, replacing the body-wide count; check_retirement() (same file:130-163) then emits one REFUSED per flagged rung with no figure of its own (line 146-155) plus one when no surviving rung is priced (line 156-162). Regression tests for both wq#1602 repros: ops/wq1593-rung-retirement-price-check/tests/test_rung_retirement_price_check.py:156-165 and :173-180. Suite: python3 ops/wq1593-rung-retirement-price-check/tests/test_rung_retirement_price_check.py -> 29 tests, OK.",
-      "cmd_run": "python3 ops/wq1593-rung-retirement-price-check/tests/test_rung_retirement_price_check.py",
+      "citation": "ops/wq1610-minerva-archival-contradictions/note_contradiction_scan.py:63-79",
+      "note": "ensure_schema() creates note_contradictions(id,note_id,fact_id,dead_value,current_value,detected_at,cleared_at) with no column added to archival_notes (wq#576 precedent, per ticket text). dead_value_index() (note_contradiction_scan.py:82-99) builds the structured-token dead-value index from closed state_facts (<=60 chars, ^[A-Za-z0-9._:/@-]+$, §3.5). live_notes() (:102-112) scans archival_notes excluded the same way search_v3 already excludes them (not absorbed, revoked_at/superseded_by NULL). find_hits() (:115-142) applies the changelog + as-of suppressors and a negation-line skip (fixed to mask the matched token first, so a dead value that is itself a negation word like RETIRED still flags). scan() (:145-181) writes rows idempotently and clears rows for rescanned notes whose text no longer contains the dead value. Regression + idempotency + clearing + dry-run tests: ops/wq1610-minerva-archival-contradictions/test_note_contradiction_scan.py.",
+      "cmd_run": "python3 ops/wq1610-minerva-archival-contradictions/test_note_contradiction_scan.py",
       "exit_code": 0
     }
   ]
