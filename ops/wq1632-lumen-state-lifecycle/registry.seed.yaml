@@ -1,0 +1,74 @@
+# Predicate registry seed — wq#1632, shared file with wq#1613 (verifier registry).
+# Deployed to /home/lumen/minerva/verify/registry.yaml; `seed-registry` merges the
+# live DB's remaining predicate vocabulary in at deploy time. wq#1613 adds probe /
+# verify_interval_days / source_kind per predicate; loaders tolerate unknown keys.
+version: 1
+patterns:
+  # Globs checked after exact names. Operational axes close on decommission.
+  - match: "*_status"
+    class: status
+    closes_on_decommission: true
+  - match: "mcp_*"
+    class: config
+    closes_on_decommission: true
+  - match: "*_version"
+    class: config
+    closes_on_decommission: true
+predicates:
+  lifecycle:
+    class: status
+    reserved: true
+    enum: [provisioning, active, degraded, offline, decommissioned, retired]
+    closes_on_decommission: false
+  status:
+    class: status
+    closes_on_decommission: true
+  tailnet_routing:
+    class: status
+    closes_on_decommission: true
+  serving_model:
+    class: config
+    closes_on_decommission: true
+  embed_model:
+    class: config
+    closes_on_decommission: true
+  litellm_aliases:
+    class: config
+    closes_on_decommission: true
+  dc_handle_store:
+    class: config
+    closes_on_decommission: true
+  ollama_version:
+    class: config
+    closes_on_decommission: true
+  # Identity / hardware — a decommissioned Mac still has 64 GB. Stay open.
+  role:
+    class: identity
+    closes_on_decommission: false
+  tailscale_ip:
+    class: identity
+    closes_on_decommission: false
+  lan_ip:
+    class: identity
+    closes_on_decommission: false
+  ssh_user:
+    class: identity
+    closes_on_decommission: false
+  ram:
+    class: hardware
+    closes_on_decommission: false
+  storage:
+    class: hardware
+    closes_on_decommission: false
+  hardware:
+    class: hardware
+    closes_on_decommission: false
+  os:
+    class: config
+    closes_on_decommission: false
+  kernel:
+    class: config
+    closes_on_decommission: false
+  power_plug:
+    class: config
+    closes_on_decommission: false
