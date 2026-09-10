@@ -1,0 +1,2 @@
+Retiring mistral-small ($0.106/M) and gpt-oss-cheap ($0.150/M), moving
+everything onto deepseek-v4-flash ($0.208/M).

@@ -12,7 +12,7 @@ should require the price delta in the ticket.
 ## What's here
 
 - `rung_retirement_price_check.py` — pure decision functions
-  (`removed_rungs`, `high_spend_retirements`, `has_price_delta_disclosure`,
+  (`removed_rungs`, `high_spend_retirements`, `price_disclosures_by_rung`,
   `check_retirement`) plus a thin CLI. Given the model_list before/after a
   retirement, a per-rung spend export, and the ticket body text, it refuses
   (exit 1, one `REFUSED:` line per violation) unless every retired rung that
@@ -21,6 +21,7 @@ should require the price delta in the ticket.
 - `tests/` — unit tests for every pure function, run standalone (no yaml
   config or spend export needed):
   `python3 ops/wq1593-rung-retirement-price-check/tests/test_rung_retirement_price_check.py`
+- `examples/` — the fixture set the worked example below runs against.
 
 ## Why a pre-flight check, not a runtime callback
 
@@ -56,29 +57,45 @@ python3 rung_retirement_price_check.py \
   so the mistral-small retirement itself would have tripped it.
 
 Exits 0 and prints `OK: ...` when clear to file; exits 1 with one
-`REFUSED: ...` line per undisclosed high-spend retirement otherwise. A
-disclosure is anything containing at least two `$x/M` figures in the ticket
-body — one for the retired rung, one for its replacement — so a reviewer can
-read the delta without re-deriving it from spend logs after the fact.
+`REFUSED: ...` line per undisclosed high-spend retirement otherwise.
 
-## Worked example (this ticket's own D7 numbers)
+## What counts as a disclosure
+
+Every flagged retirement needs its **own** `$x/M` figure, and the board it
+moves onto needs one too. A figure is read as disclosing the rung whose name
+sits nearest to it in the same clause — clauses break on `.`/`;` and blank
+lines, never mid-number or on a lone wrap newline — so:
+
+- pricing one retirement plus the shared replacement does not also count as
+  pricing a second rung retiring in the same ticket, and
+- `$x/M` figures quoted for models that aren't on the board (competitor
+  pricing, historical rates) disclose nothing.
+
+Both shapes cleared the original body-wide "at least two `$x/M` figures
+anywhere" count; wq#1602 reproduced them and wq#1605 closed them. Still
+deliberately loose on the prose around each number — dispatch style varies —
+and strict only on which rung each number is about.
+
+## Worked example (`examples/`, D7 numbers plus a second high-spend rung)
+
+`examples/old.yaml` retires both `mistral-small` ($8.79) and `gpt-oss-cheap`
+($12.00) onto `deepseek-v4-flash`. `bad_ticket.txt` prices only the first
+retirement and the replacement — two `$x/M` figures, which the pre-wq#1605
+check accepted:
 
 ```
 $ python3 rung_retirement_price_check.py \
-    --old-config old.yaml --new-config new.yaml \
-    --spend-json spend.json --ticket-body bad_ticket.txt
-REFUSED: retiring mistral-small (spend mistral-small=$8.79) clears the
-$5.00 review threshold but the ticket body carries fewer than 2 '$x/M'
-price figures — state the retired rung's measured $/M input price and the
-replacement rung's $/M input price so the delta is reviewable
-(FLEET_COST_PLAN.md D7).
+    --old-config examples/old.yaml --new-config examples/new.yaml \
+    --spend-json examples/spend.json --ticket-body examples/bad_ticket.txt
+REFUSED: retiring gpt-oss-cheap (spend $12.00) clears the $5.00 review
+threshold but none of the 2 '$x/M' price figure(s) in the ticket body is
+stated alongside 'gpt-oss-cheap' — state that rung's own measured $/M input
+price where it is named, so the delta is reviewable (FLEET_COST_PLAN.md D7).
 
 $ python3 rung_retirement_price_check.py \
-    --old-config old.yaml --new-config new.yaml \
-    --spend-json spend.json --ticket-body good_ticket.txt
+    --old-config examples/old.yaml --new-config examples/new.yaml \
+    --spend-json examples/spend.json --ticket-body examples/good_ticket.txt
 OK: no undisclosed high-spend rung retirement
 ```
 
-where `good_ticket.txt` states "removing mistral-small ($0.106/M) in favor
-of deepseek-v4-flash ($0.208/M))" and `bad_ticket.txt` just says "removing
-mistral-small, unused" — the actual wq#1593/D7 shape of the miss.
+`good_ticket.txt` is the same body with `gpt-oss-cheap ($0.150/M)` filled in.

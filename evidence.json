@@ -1,1 +1,11 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1590-deepseek-connect-guard/deepseek_connect_alert.py:148-165"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "ops/wq1593-rung-retirement-price-check/rung_retirement_price_check.py:103-127",
+      "note": "price_disclosures_by_rung() attributes each $x/M figure to the nearest known rung name in its own clause, replacing the body-wide count; check_retirement() (same file:130-163) then emits one REFUSED per flagged rung with no figure of its own (line 146-155) plus one when no surviving rung is priced (line 156-162). Regression tests for both wq#1602 repros: ops/wq1593-rung-retirement-price-check/tests/test_rung_retirement_price_check.py:156-165 and :173-180. Suite: python3 ops/wq1593-rung-retirement-price-check/tests/test_rung_retirement_price_check.py -> 29 tests, OK.",
+      "cmd_run": "python3 ops/wq1593-rung-retirement-price-check/tests/test_rung_retirement_price_check.py",
+      "exit_code": 0
+    }
+  ]
+}

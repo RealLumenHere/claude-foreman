@@ -1,0 +1,4 @@
+model_list:
+  - model_name: mistral-small
+  - model_name: gpt-oss-cheap
+  - model_name: deepseek-v4-flash
