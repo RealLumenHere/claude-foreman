@@ -43,7 +43,7 @@ is still valid. Counts measured live 2026-09-10 06:3x UTC.
 | writers | `lumen_state.py ingest` (CLI, any session) · `state_reconcile.py` (daily 17:30 UTC, tailscale_ip only) · `backfill_state.py` (one-shot seed) · wq/fworker sessions by hand |
 | readers | `lumen_state_gen.py` → LIVE_FLEET_STATE*.md · `lumen_proposal_digest.py` → lumen_state.txt · `lumen_recall2._subjects_re` (subject vocabulary for graph channel) · `lumen_dream.superseded_ips` · `fleet-inv drift` · `factory_context.py`, `minerva_factpack.py`, `minerva_verify.py` (proposal hallucination guard) · every `lumen_state.py current` call |
 | validity | structural only: `valid_to IS NULL`. No evidence TTL (wq#1607 §1.1). Supersession is deterministic on `(subject,predicate)` — a change to a DIFFERENT predicate on the same subject does not touch a stale sibling (see §3.1 thoth) |
-| audit | **none**. `ingest()` writes no `memory_audit` row; memoryd governs `archival_notes` only. Anyone with a shell can rewrite fleet truth with no trail beyond free-text `source_ref` |
+| audit | was **none** — anyone with a shell could rewrite fleet truth with no trail beyond free-text `source_ref`. CLOSED by wq#1634 (§4.5): `ingest()` now appends a `memory_audit` row (`table_name='state_facts'`, action write/supersede/reconfirm, `agent_id=$WQ_AGENT`, lane read from the ticket in `source_ref`) in the same transaction, and stamps `source_kind` on the fact |
 
 ### 1.2 `LIVE_FLEET_STATE.md` / `LIVE_FLEET_STATE_FULL.md` — rendered projection
 
@@ -73,7 +73,7 @@ is still valid. Counts measured live 2026-09-10 06:3x UTC.
 | writers | `lumen_episode.py commit` (→ `minerva_memory.write_note` + `log_event`) · memoryd `/commit` (lanes) · `lumen_convo_learn.py` (6h) · `continual_learn.py` · `lumen_federate`/`lumen_salience` do NOT write notes · `minerva_memory.seed()` |
 | readers | `lumen_episode.py recall/precheck` → `lumen_recall2.search_v3` · memoryd `/recall` `/precheck` (agent lanes, `MEMORY_V4_MEMORYD=1`) · `handoff verify` (top-6 recent) · `worklog_gen.py` (messenger case-book, 6h) · `lumen_dream` dedup · `lumen_reflector` · `fq ingest-episode` (only when `--failed` non-empty) · `recall_bench` nightly |
 | validity | retrieval-shaped: excluded iff absorbed (`note_merges`), revoked, or superseded (wq#1607 §1.2). 1674/1693 permanently equal. No link to 1.1 |
-| audit | memoryd writes `memory_audit` (615 rows) for lane commits only. `lumen_episode.py commit` from a CLI session bypasses memoryd and the audit table entirely — same class as the 1.1 gap |
+| audit | memoryd writes `memory_audit` (615 rows) for lane commits only. `lumen_episode.py commit` from a CLI session bypassed memoryd and the audit table entirely — same class as the 1.1 gap. CLOSED by wq#1634 (§4.5): `commit` posts to memoryd `/commit` when the daemon is healthy and the session is registered, and the fail-open direct write carries its own audit row |
 
 ### 1.5 episodic satellites (minerva.db)
 
