@@ -696,3 +696,42 @@ def test_primary_tree_blocked_event_logged(tmp_path):
     assert rc == 2
     logged = (events / "test-worker.jsonl").read_text()
     assert "wq#900" in logged
+
+
+# ---- wq#1719: PRIMARY trees are write-frozen (Edit/Write, not just git) ----
+# agents.yaml's default add_dirs make every primary repo root reach for Edit/Write,
+# not just Read/Bash — closing that gap so a worker can never edit a primary tree's
+# files in place, only its own worktree. "a synthetic ticket that tries to Edit
+# /home/lumen/foreman/README must be refused and the attempt must not leave dirt."
+def test_primary_tree_write_edit_blocked():
+    failures = []
+    for tool in ("Write", "Edit"):
+        for ptree in (PRIMARY, "/home/lumen/bin", "/home/lumen/pokemon"):
+            target = f"{ptree}/README.md"
+            rc, stderr = run_guard(tool, {"file_path": target, "content": "x"})
+            if rc != 2 or "wq#1719" not in stderr:
+                failures.append((tool, target, rc, stderr))
+    assert not failures, f"expected clean wq#1719 block, got: {failures}"
+
+
+def test_primary_tree_write_edit_worktree_allowed():
+    failures = []
+    for tool in ("Write", "Edit"):
+        target = f"{WORKTREE}/README.md"
+        rc, stderr = run_guard(tool, {"file_path": target, "content": "x"})
+        if rc != 0:
+            failures.append((tool, target, rc, stderr))
+    assert not failures, f"expected exit 0 (allow) in worker's own worktree, got: {failures}"
+
+
+def test_primary_tree_write_edit_env_override_respected():
+    # A tree listed only via FOREMAN_PRIMARY_TREES is guarded too, same as the
+    # git-verb wall above.
+    rc, stderr = run_guard(
+        "Edit", {"file_path": "/srv/custom-primary/f.py", "old_string": "a", "new_string": "b"},
+        env_extra={"FOREMAN_PRIMARY_TREES": "/srv/custom-primary"})
+    assert rc == 2 and "wq#1719" in stderr, stderr
+    rc, _ = run_guard(
+        "Edit", {"file_path": f"{PRIMARY}/f.py", "old_string": "a", "new_string": "b"},
+        env_extra={"FOREMAN_PRIMARY_TREES": "/srv/custom-primary"})
+    assert rc == 0

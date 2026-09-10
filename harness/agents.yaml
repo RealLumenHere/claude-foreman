@@ -31,8 +31,11 @@ defaults:
   prompt_template: worker.md
   permission_profile_note: "per-repo, see harness/permission-profiles/repos.d/<repo>.json"
   # WORKER_ADD_DIRS (fworker.py) — read access every worker gets so it can verify
-  # cross-repo work and reach live fleet config/env (wq#1245); writes stay scoped to
-  # the worktree by primary_tree_guard regardless of this list.
+  # cross-repo work and reach live fleet config/env (wq#1245). These are also
+  # PRIMARY repo roots (router.LANE_REPO + /home/lumen/bin): Edit/Write into them
+  # is denied at the guard.sh hook (wq#1719), not merely restored after the fact
+  # by primary_tree_guard's periodic timer — a worker's own worktree is the only
+  # writable place for its changes, landed via lumen-pr.
   add_dirs:
     - /home/lumen/agents/work-queue
     - /home/lumen/mailbot

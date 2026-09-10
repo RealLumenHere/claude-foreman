@@ -1,8 +1,1 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "ops/wq1623-qwen36-queue-guard/audit_rung_timeout.py:44-55"
-    }
-  ]
-}
+{"criteria": [{"id": "AC1", "citation": "harness/guard.sh:334-365"}]}

@@ -331,6 +331,40 @@ Read|Edit|Write|Grep|Glob)
     esac
   done
 
+  # ---- wq#1719: PRIMARY trees are write-frozen for workers ----
+  # agents.yaml's `defaults.add_dirs` grants every worker --add-dir reach into
+  # the fleet's primary repo roots (foreman/bin/pokemon/mailbot/kb/nest — wq#1245,
+  # read access for cross-repo verification), but Edit/Write is an unscoped
+  # tool-level allow (worker-settings.json), so that same add_dir also lets a
+  # worker edit files in place inside a primary tree. Commits there are denied
+  # (wq#900 above), so a worker that edits in place and then dies leaves code
+  # that is live, unreviewed, and unlandable — fworker-wq1676-a3 (run
+  # 08:34-09:04Z, 2026-09-10) edited 5 foreman harness files 08:43-08:51Z and
+  # bin/wq at 08:56Z this way, then PERMISSION_LOOP'd trying to diff them back
+  # into its own worktree (_runs/wq1676/failure.json). Mirrors the Bash
+  # PRIMARY_TREES wall above: any Write/Edit whose target resolves inside a
+  # registered primary tree is denied outright, regardless of add_dirs. A
+  # worker's own worktree is never itself a primary tree (worktrees live under
+  # /home/lumen/worktrees/), so this cannot collide with a legitimate edit.
+  # wq#717's own plan doc (FOREMAN_FIRE_PLAN_PATH, harness/fire_gate.py plan_path())
+  # is the one sanctioned exception: it is untracked orchestrator state living under
+  # a primary tree's plans/ dir by design, never landed via git/lumen-pr, and the
+  # narrower fire-mode check just below already confines diagnosis-phase Write/Edit
+  # to exactly this one path.
+  if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; then
+    if [ -z "${FOREMAN_FIRE_PLAN_PATH:-}" ] || [ "$FILE_PATH" != "$FOREMAN_FIRE_PLAN_PATH" ]; then
+      WRITE_PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control}
+      IFS=':' read -ra WPT_ARR <<< "$WRITE_PRIMARY_TREES"
+      for ptree in "${WPT_ARR[@]}"; do
+        [ -n "$ptree" ] || continue
+        case "$FILE_PATH" in
+          "$ptree"|"$ptree"/*)
+            block "Write/Edit inside PRIMARY tree $ptree denied (wq#1719/wq#900) — primary repo roots are read-only for workers; make this change in your own worktree${WORKTREE_ROOT:+ ($WORKTREE_ROOT)} and land it with lumen-pr" "$FILE_PATH" ;;
+        esac
+      done
+    fi
+  fi
+
   # ---- wq#717 fire-mode diagnosis phase: Write/Edit confined to the plan doc ----
   # This is the one hard (not denylist-best-effort) guarantee of "read-only
   # diagnosis phase ONLY": FOREMAN_FIRE_PLAN_PATH is the single path fworker
