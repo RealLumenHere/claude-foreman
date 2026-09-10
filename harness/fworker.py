@@ -362,6 +362,7 @@ EXIT_FIRE_DIAGNOSIS_FAILED = 17
 EXIT_FIRE_APPLY_INCOMPLETE = 18
 EXIT_FIRE_MAX_RUNTIME = 19  # wq#1234: hard wall-clock cap exceeded, blocked for a human
 EXIT_FIRE_ATTEMPT_FENCE = 20  # wq#1261: 3rd expired/rework attempt, escalated to FRANK
+EXIT_FIRE_DONE_REFUSED = 21  # wq#1670: wq#759 evidence gate refused the auto-close
 EXIT_LAUNCH_REFUSED = 21  # wq#1331: spawn preflight refused (repo mismatch / unreachable
                           # cited path) — harness defect, attempt not charged
 EXIT_MODEL_NOT_FOUND = 22  # wq#1442: dispatched --model id/alias rejected by the CLI
@@ -372,7 +373,8 @@ EXIT_MODEL_NOT_FOUND = 22  # wq#1442: dispatched --model id/alias rejected by th
 # that mean the ticket bounced without resolving count against the fence — an auto-close
 # (probe cleared) or a successful apply never do.
 FIRE_ATTEMPT_FENCE = _envint("FOREMAN_FIRE_ATTEMPT_FENCE", 2)
-FIRE_FENCE_OUTCOMES = frozenset({"expired", "diagnosis_failed", "timeout_release", "apply_incomplete"})
+FIRE_FENCE_OUTCOMES = frozenset({"expired", "diagnosis_failed", "timeout_release",
+                                  "apply_incomplete", "auto_close_refused"})
 
 
 def log(msg):
@@ -524,15 +526,28 @@ def wq_heartbeat(ticket_id):
     wq("heartbeat", str(ticket_id))
 
 
-def wq_done(ticket_id, notes):
-    p = wq("done", str(ticket_id), "--notes", notes)
+class WqDoneRefused(RuntimeError):
+    """wq#1670: wq done was refused (e.g. wq#759 evidence gate). Distinct from a bare
+    RuntimeError so fire-mode's auto-close can catch just this and turn it into a
+    block/attempt-charge instead of letting it fall into the generic CRASH handler,
+    which was respawning wq#1543/#1572 dozens of times an hour (measured 2026-09-10)."""
+
+
+def wq_done(ticket_id, notes, no_artifact=None):
+    cmd = ["done", str(ticket_id), "--notes", notes]
+    if no_artifact:
+        # wq#759 [NO-ARTIFACT: ...] shape (bin/wq ~L1965) — for legacy aq-row probe
+        # clears where probe_cleared() returns evidence=None, so `notes` has no
+        # verifiable artifact path for the gate to find.
+        cmd += ["--no-artifact", no_artifact]
+    p = wq(*cmd)
     if p.returncode != 0:
         # wq#759 evidence gate (or any other refusal): log loudly so fworker never
         # silently swallows a refused close (wq#837 contradict finding).
         log(f"ERROR: wq done {ticket_id} refused (exit {p.returncode}): "
             f"{p.stdout.strip()} {p.stderr.strip()}")
-        raise RuntimeError(f"wq done {ticket_id} refused (exit {p.returncode}): "
-                           f"{p.stdout.strip()}")
+        raise WqDoneRefused(f"wq done {ticket_id} refused (exit {p.returncode}): "
+                            f"{p.stdout.strip()}")
 
 
 def wq_release(ticket_id):
@@ -1506,10 +1521,34 @@ def run_fire_ticket(args):
             notes = ("condition cleared: re-verify found the originating probe no "
                      "longer firing — auto-closed by the fire-response archetype "
                      "(wq#1261), no manual apply needed.")
+            no_artifact = None
             if evidence_path:
                 notes += (f" Probe evidence: {evidence_path} "
                           f"(cmd={evidence['cmd']!r} exit={evidence['exit_code']}).")
-            wq_done(ticket_id, notes)
+            else:
+                # wq#1670: legacy aq-row probe form has no fire_probe cmd, so
+                # probe_cleared() returns evidence=None — no artifact path exists for
+                # the wq#759 evidence gate to find in `notes`. Declare it explicitly
+                # instead of letting `wq done` refuse and crash the supervisor loop.
+                no_artifact = "fire-response re-verify: aq-row probe condition cleared"
+            try:
+                wq_done(ticket_id, notes, no_artifact=no_artifact)
+            except WqDoneRefused as e:
+                # wq#1670: a refused auto-close must not raise into the generic CRASH
+                # handler — that released the claim and trigger_refill respawned the
+                # ticket, burning a tight-mode slot each time (wq#1543 x31, wq#1572
+                # x23 in one 3h window). Charge the attempt and block for a human
+                # instead of crash-looping.
+                reason = f"fire-mode auto-close refused by wq done: {e}"
+                log(f"wq#{ticket_id} fire-mode: {reason} — blocking for human review")
+                wq_block(ticket_id, reason)
+                ntfy("fire ticket auto-close refused",
+                     f"wq#{ticket_id}: probe condition cleared but wq done refused the "
+                     f"close ({e}) — blocked for human review instead of crash-looping.",
+                     priority="high")
+                _record("auto_close_refused", evidence_path=evidence_path, reason=reason)
+                print("BLOCKED")
+                return EXIT_FIRE_DONE_REFUSED
             ntfy("fire ticket auto-closed",
                  f"wq#{ticket_id}: re-verify found the originating probe condition has "
                  f"cleared on its own — auto-closed, no change applied.",

@@ -2,10 +2,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1654-timer-label-drift/label_drift_check.py:59-68",
-      "note": "violations() flags a timer as drifted when ActiveState=='active' and UnitFileState=='enabled' and Description matches STALE_LABEL_RE=DISABLED|STAGED|Frank-gated (label_drift_check.py:21); CLI 'check' (label_drift_check.py:71-89) runs it against live systemctl and exits 1 on any hit. Run live against this box: catches all nine ticket-named timers (lumen-familiarity/model-audit/skillhex/memory-audit/judgearena-bench/pelican-bench/foreman-dispatch/foreman-health/foreman-selfheal) plus power-remediate.timer. Decisions (keep all nine, fix label) + rationale ingested via the wq#1632 gated path: ops/wq1654-timer-label-drift/ingest_decisions.py:DECISIONS (lines 32-60) and ingest_all() (lines 63-72) calling state_lifecycle.ingest (ops/wq1632-lumen-state-lifecycle/state_lifecycle.py:142). Follow-up wq#1677 filed for the actual fleet-units Description= edit (outside this worker's sandbox). Tests: ops/wq1654-timer-label-drift/test_label_drift_check.py (5 cases, live-string fixtures) and test_ingest_decisions.py (3 cases, fixture DB).",
-      "cmd_run": "python3 -m pytest ops/wq1654-timer-label-drift/ -q",
-      "exit_code": 0
+      "citation": "harness/fworker.py:1535-1552"
     }
   ]
 }

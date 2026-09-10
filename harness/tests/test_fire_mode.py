@@ -51,7 +51,8 @@ def _wire_common(tmp_path, monkeypatch):
     monkeypatch.setattr(fworker, "wq_release", lambda tid: calls["released"].append(tid))
     monkeypatch.setattr(fworker, "wq_block", lambda tid, reason: calls["blocked"].append((tid, reason)))
     monkeypatch.setattr(fworker, "wq_heartbeat", lambda tid: calls["heartbeats"].append(tid))
-    monkeypatch.setattr(fworker, "wq_done", lambda tid, notes: calls["done"].append((tid, notes)))
+    monkeypatch.setattr(fworker, "wq_done",
+                         lambda tid, notes, no_artifact=None: calls["done"].append((tid, notes, no_artifact)))
     monkeypatch.setattr(fworker, "ntfy", lambda title, msg, priority="default": calls["ntfy"].append((title, msg)))
     return calls
 
@@ -184,8 +185,11 @@ def test_probe_recovery_auto_closes_without_apply(tmp_path, monkeypatch):
 
     assert rc == fworker.EXIT_OK
     assert spawned == []  # never spawned a diagnosis/apply child at all
-    assert calls["done"] == [(717, calls["done"][0][1])]
+    assert calls["done"] == [(717, calls["done"][0][1], calls["done"][0][2])]
     assert "condition cleared" in calls["done"][0][1]
+    # wq#1670: aq-row probe has no fire_probe cmd -> evidence=None -> no artifact path
+    # exists in notes, so the wq#759 gate must be satisfied via --no-artifact instead.
+    assert calls["done"][0][2]
     assert calls["released"] == []
     assert calls["blocked"] == []
     assert any("auto-closed" in title.lower() for title, _ in calls["ntfy"])
@@ -218,6 +222,49 @@ def test_probe_recovery_auto_closes_mid_hold(tmp_path, monkeypatch):
     assert calls["done"] and "condition cleared" in calls["done"][0][1]
     assert calls["released"] == []
     assert calls["blocked"] == []
+
+
+# --- wq#1670: a refused auto-close blocks instead of crash-looping --------------------
+
+def test_probe_recovery_done_refused_blocks_instead_of_crashing(tmp_path, monkeypatch):
+    """wq#1670: when probe_cleared() returns evidence=None (legacy aq-row form) and
+    `wq done` still refuses the close (e.g. --no-artifact rejected for some other
+    reason), run_fire_ticket must catch it, charge the attempt, and block for a human —
+    never let it raise into the generic CRASH handler, which released the claim and
+    let trigger_refill respawn the ticket (wq#1543 x31, wq#1572 x23 in 3h, measured
+    2026-09-10 05:00-07:00Z)."""
+    calls = _wire_common(tmp_path, monkeypatch)
+    db = _aq_db(tmp_path, [(967, "resolved")])
+    monkeypatch.setattr(fire_gate, "AQ_DB", db)
+    monkeypatch.setattr(fworker, "wq_show", lambda tid: {"title": "t", "detail": PROBE_DETAIL})
+
+    def refuse_done(tid, notes, no_artifact=None):
+        calls["done"].append((tid, notes, no_artifact))
+        raise fworker.WqDoneRefused(f"wq done {tid} refused (exit 2): REFUSED: wq#759 evidence gate")
+    monkeypatch.setattr(fworker, "wq_done", refuse_done)
+
+    spawned = []
+    monkeypatch.setattr(fworker, "run_fire_child", lambda *a, **k: spawned.append(a) or SUCCESS)
+
+    rc = fworker.run_fire_ticket(_args())
+
+    assert rc == fworker.EXIT_FIRE_DONE_REFUSED
+    assert spawned == []
+    assert calls["done"] and calls["done"][0][2]  # --no-artifact was attempted
+    assert calls["released"] == []
+    assert len(calls["blocked"]) == 1
+    assert calls["blocked"][0][0] == 717
+    assert "refused" in calls["blocked"][0][1].lower()
+    assert any("refused" in title.lower() for title, _ in calls["ntfy"])
+
+    # Charged against the fire attempt fence, same as expired/timeout_release/etc, so
+    # a persistently-refused close eventually escalates to FRANK instead of looping
+    # forever inside a single blocked-then-respawned ticket.
+    attempt_path = os.path.join(str(tmp_path / "_runs"), "wq717", "attempt-1.json")
+    assert os.path.exists(attempt_path)
+    with open(attempt_path) as f:
+        rec = json.load(f)
+    assert rec["fire_outcome"] == "auto_close_refused"
 
 
 # --- wq#1234: max-runtime blocks cleanly instead of churning --------------------------
