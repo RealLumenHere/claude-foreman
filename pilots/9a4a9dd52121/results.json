@@ -1,0 +1,110 @@
+[
+  {
+    "id": 0,
+    "prompt": "In one sentence, what is the capital of France?",
+    "baseline": {
+      "model": "gemma4-e4b-local",
+      "text": "The capital of France is Paris.",
+      "latency_s": 2.3
+    },
+    "treatment": {
+      "draft_model": "hathor-lfm-1b",
+      "draft_text": "The capital of France is Paris.",
+      "draft_latency_s": 0.556,
+      "verify_model": "gemma4-e4b-local",
+      "verify_text": "The capital of France is Paris.",
+      "verify_latency_s": 2.89,
+      "total_latency_s": 3.446
+    }
+  },
+  {
+    "id": 1,
+    "prompt": "In one sentence, what does the Python `len()` builtin do?",
+    "baseline": {
+      "model": "gemma4-e4b-local",
+      "text": "The Python `len()` built-in function returns the number of items (the length) of an object, such as a string, list, tuple, or dictionary.",
+      "latency_s": 4.465
+    },
+    "treatment": {
+      "draft_model": "hathor-lfm-1b",
+      "draft_text": "The Python `len()` built-in returns the number of elements in a given sequence or data structure.",
+      "draft_latency_s": 1.069,
+      "verify_model": "gemma4-e4b-local",
+      "verify_text": "The Python `len()` built-in returns the number of elements in a given sequence or data structure.",
+      "verify_latency_s": 4.075,
+      "total_latency_s": 5.144
+    }
+  },
+  {
+    "id": 2,
+    "prompt": "In one sentence, what is the boiling point of water at sea level in Celsius?",
+    "baseline": {
+      "model": "gemma4-e4b-local",
+      "text": "The boiling point of water at sea level is $100$ degrees Celsius.",
+      "latency_s": 3.087
+    },
+    "treatment": {
+      "draft_model": "hathor-lfm-1b",
+      "draft_text": "The boiling point of water at sea level is 100 degrees Celsius.",
+      "draft_latency_s": 0.959,
+      "verify_model": "gemma4-e4b-local",
+      "verify_text": "The boiling point of water at sea level is 100 degrees Celsius.",
+      "verify_latency_s": 3.71,
+      "total_latency_s": 4.668
+    }
+  },
+  {
+    "id": 3,
+    "prompt": "In one sentence, what does HTTP stand for?",
+    "baseline": {
+      "model": "gemma4-e4b-local",
+      "text": "HTTP stands for Hypertext Transfer Protocol.",
+      "latency_s": 2.287
+    },
+    "treatment": {
+      "draft_model": "hathor-lfm-1b",
+      "draft_text": "HTTP stands for Hypertext Transfer Protocol.",
+      "draft_latency_s": 0.684,
+      "verify_model": "gemma4-e4b-local",
+      "verify_text": "HTTP stands for Hypertext Transfer Protocol.",
+      "verify_latency_s": 2.936,
+      "total_latency_s": 3.62
+    }
+  },
+  {
+    "id": 4,
+    "prompt": "In one sentence, what is the chemical symbol for gold?",
+    "baseline": {
+      "model": "gemma4-e4b-local",
+      "text": "The chemical symbol for gold is $\\text{Au}$.",
+      "latency_s": 2.582
+    },
+    "treatment": {
+      "draft_model": "hathor-lfm-1b",
+      "draft_text": "The chemical symbol for gold is Au.",
+      "draft_latency_s": 0.657,
+      "verify_model": "gemma4-e4b-local",
+      "verify_text": "The chemical symbol for gold is Au.",
+      "verify_latency_s": 2.912,
+      "total_latency_s": 3.569
+    }
+  },
+  {
+    "id": 5,
+    "prompt": "In one sentence, what is the primary purpose of a git commit?",
+    "baseline": {
+      "model": "gemma4-e4b-local",
+      "text": "The primary purpose of a Git commit is to create a permanent snapshot of your repository's state at a specific point in time, recording the changes you have made.",
+      "latency_s": 4.637
+    },
+    "treatment": {
+      "draft_model": "hathor-lfm-1b",
+      "draft_text": "The primary purpose of a git commit is to save changes to your project in a structured and tracked way.",
+      "draft_latency_s": 0.947,
+      "verify_model": "gemma4-e4b-local",
+      "verify_text": "The primary purpose of a git commit is to save changes to your project in a structured and tracked way.",
+      "verify_latency_s": 4.158,
+      "total_latency_s": 5.105
+    }
+  }
+]
