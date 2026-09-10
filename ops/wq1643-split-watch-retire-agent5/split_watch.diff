@@ -1,0 +1,66 @@
+--- a/home/lumen/agents/split-watch/split_watch.py
++++ b/home/lumen/agents/split-watch/split_watch.py
+@@ -1,6 +1,10 @@
+ #!/usr/bin/env python3
+ """split_watch — edge-triggered idle/error alerting for the agent5 split
+ (planner/generator/evaluator on Redis db5). wq#140.
++
++wq#1643: the three units are confirmed LoadState=not-found (structurally
++retired, not masked/transient) -- see docs/fleet/retired_services.yaml. This
++guard now self-detects that and drains+goes permanently inert instead of
++polling a ghost pipeline and printing a misleading "ok" forever.
+
+ Signals:
+   STALL  — any work queue (plan_in/gen_in/eval_in) has items AND its depth has
+@@ -21,6 +25,20 @@
+ def ntfy(title, msg, prio="high"):
+     try:
+         requests.post(NTFY, data=msg.encode(),
+                       headers={"Title": title, "Priority": prio}, timeout=5)
+     except Exception as e:
+         print(f"[ntfy fail-open] {e}")
+
++RETIRED_DOC = "docs/fleet/retired_services.yaml"
++
++def _load_state(unit: str) -> str:
++    """systemd LoadState for `unit` ('not-found' on any lookup failure)."""
++    try:
++        r = subprocess.run(["systemctl", "show", unit, "-p", "LoadState"],
++                            capture_output=True, text=True, timeout=10)
++        return dict(l.split("=", 1) for l in r.stdout.strip().splitlines()
++                    if "=" in l).get("LoadState", "not-found")
++    except Exception:
++        return "not-found"
++
+ def load():
+     try:
+         return json.loads(STATE.read_text())
+@@ -30,8 +48,26 @@
+ def main():
+     st = load()
+     now = int(time.time())
++
++    if st.get("retired"):
++        print(f"agent5 split retired {st.get('retired_at')} — guard inert, "
++              f"see {RETIRED_DOC}")
++        return
++
++    if all(_load_state(u) == "not-found" for u in UNITS):
++        # Structural retirement, not a transient outage (wq#1643): drain the
++        # stuck queues once and go permanently quiet instead of restarting
++        # the same edge-triggered alert forever over a pipeline that cannot
++        # come back.
++        r = redis.Redis(db=5)
++        drained = {q: r.llen(q) for q in QUEUES + ["lumen5:dead"]}
++        for q in QUEUES + ["lumen5:dead"]:
++            r.delete(q)
++        st = {"retired": True, "retired_at": now, "drained": drained}
++        STATE.write_text(json.dumps(st))
++        msg = (f"agent5 split (planner/generator/evaluator) confirmed "
++               f"retired -- drained {drained}. Guard now inert, see {RETIRED_DOC}")
++        print(msg)
++        ntfy("Homelab: agent5 split RETIRED", msg, "default")
++        return
++
+     r = redis.Redis(db=5)
+     alerts, resolves = [], []

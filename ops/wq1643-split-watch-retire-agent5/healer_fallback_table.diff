@@ -1,0 +1,25 @@
+--- a/home/lumen/agent/lumen_self_healer.py
++++ b/home/lumen/agent/lumen_self_healer.py
+@@ -47,13 +47,15 @@
+ WATCH_TABLE = Path("/home/lumen/agent/healer_watch_table.yaml")
+ FALLBACK_TABLE = {   # pre-wq#971 coverage (all policy=restart)
+-    "units": {**{u: {"kind": "systemd", "policy": "restart"} for u in
+-                 ["redis-server", "lumen-prompt-engine", "lumen-messenger",
+-                  "lumen-vip-api", "lumen-vip-watcher", "cloudflared",
+-                  "lumen-memoryd", "mcp-gateway", "desktop-commander-mcp"]},
++    # wq#1643: lumen-prompt-engine/lumen-vip-api/lumen-vip-watcher removed —
++    # retired 2026-08-28 with the research mill (wq#1112 cleaned the live
++    # table; this baked fallback was missed). The wq#1112 not-found/masked
++    # guard in check_all() already stops these from restart-looping even via
++    # this fallback, so this was stale documentation-as-code, not a live
++    # restart-loop risk — see docs/fleet/retired_services.yaml.
++    "units": {**{u: {"kind": "systemd", "policy": "restart"} for u in
++                 ["redis-server", "lumen-messenger", "cloudflared",
++                  "lumen-memoryd", "mcp-gateway", "desktop-commander-mcp"]},
+               "ntfy": {"kind": "docker", "policy": "restart"},
+               "litellm": {"kind": "docker", "policy": "restart"}},
+-    "ports": {"lumen-memoryd": 8139, "lumen-messenger": 8765,
+-              "lumen-vip-api": 8099, "ntfy": 8080},
++    "ports": {"lumen-memoryd": 8139, "lumen-messenger": 8765, "ntfy": 8080},
+     "stall": {}, "ram": {"crit_pct": 90},
+ }

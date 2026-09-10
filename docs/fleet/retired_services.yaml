@@ -1,0 +1,78 @@
+# docs/fleet/retired_services.yaml — formal record of retired Lumen fleet
+# services. A guard (split-watch, self-healer, sentinel, ...) that still
+# names a unit here is watching a ghost on purpose-documented grounds, not by
+# accident; retirement-audit tooling (wq#1644) should read this file before
+# flagging a guard target as stale.
+#
+# Fields:
+#   units:        systemd unit names that no longer exist (LoadState verified)
+#   retired_on:   date the units stopped existing / were superseded
+#   reason:       why it was retired
+#   ticket:       wq ticket that retired it (or found the retirement)
+#   data:         any datastore left behind and its disposition
+#   guards:       monitoring that referenced this service and what happened to it
+
+- name: agent5-split
+  units: [lumen-planner, lumen-generator, lumen-evaluator]
+  load_state: not-found   # confirmed via `systemctl status` — files gone, not masked
+  retired_on: unknown (found already gone by wq#1627 fleet atlas sweep, 2026-09)
+  reason: >
+    planner/generator/evaluator pipeline (wq#140) superseded; unit files no
+    longer exist on the host. `lumen-split-watch.timer` (still enabled, runs
+    every 10 min) kept polling for these units and the lumen5:* redis queues
+    and printed a plain "ok" because its edge-triggered alert design only
+    fires once per state transition — once the initial down/stall edge had
+    already fired (before this was ever audited), the guard went quiet
+    forever while the queues sat stuck. Found and fixed by wq#1643.
+  ticket: wq#1643 (fix), wq#1627 (found, FLEET_SERVICE_ATLAS.md finding F-4)
+  data:
+    redis_db: 5
+    queues: [lumen5:plan_in, lumen5:gen_in, lumen5:eval_in, lumen5:dead]
+    disposition: >
+      drained by split_watch.py itself the first time it confirms all three
+      units are LoadState=not-found (self-detecting retirement, see
+      ops/wq1643-split-watch-retire-agent5/split_watch.diff) — 206 stuck in
+      plan_in, 187 in dead at time of fix.
+  guards:
+    - lumen-split-watch.service/.timer: >
+        made retirement-aware — detects all-units-not-found, drains the
+        queues once, records retired:true in its own state.json, and exits
+        immediately on every run thereafter (no more redis/systemctl calls,
+        no more misleading "ok" line). The systemd timer itself is left
+        enabled (systemctl disable/mask is outside this build lane's
+        permitted actions — house deny-list); the script is now a fast
+        no-op instead, which is the disable in effect. Follow-up ticket
+        filed to mask/disable the timer unit properly from a lane with
+        systemctl-mutate access.
+
+- name: research-mill (context only, not touched by wq#1643)
+  units: [lumen-prompt-engine, lumen-vip-api, lumen-vip-watcher]
+  load_state: not-found
+  retired_on: "2026-08-28"
+  reason: 8-unit research mill retired; unit files moved to /etc/systemd/system/DISABLED-research-mill.bak/
+  ticket: wq#1112 (healer_watch_table.yaml + lumen_self_healer.py stale-target guard), wq#1099 (found)
+  guards:
+    - lumen_self_healer.py `units:` table: cleaned by wq#1112.
+    - lumen_self_healer.py `FALLBACK_TABLE` (baked-in emergency table used only
+        if healer_watch_table.yaml is unreadable at startup): missed by
+        wq#1112, still names all three ghosts + lumen-vip-api's port. Not an
+        active restart-loop risk today — the wq#1112 not-found/masked guard
+        in check_all() also covers units sourced from FALLBACK_TABLE, so a
+        fallback-triggered run would file one stale-target ticket per ghost
+        and skip, not restart-loop — but it's stale documentation-as-code.
+        Cleanup diff in ops/wq1643-split-watch-retire-agent5/healer_fallback_table.diff.
+        Found by wq#1627 (F-4), cleaned by wq#1643.
+
+- name: lumen-agent (context only, not touched by wq#1643)
+  units: [lumen-agent]
+  load_state: masked
+  retired_on: "2026-08-21"
+  reason: retired per Frank; do not re-add without his explicit direction.
+  ticket: n/a (Frank decision, see healer_watch_table.yaml comment)
+  guards:
+    - healer_watch_table.yaml `stall.lumen-agent` rule: deliberately left in
+        place — `check_stall()` (lumen_self_healer.py) gates every rule on
+        `is_systemd_active(unit)` first and no-ops for a masked unit, so
+        this is inert by construction, not a live bug. It self-arms if
+        Frank ever unmasks/revives lumen-agent. wq#1627 (F-4) flagged it as
+        "harmless but stale"; this entry is that documentation.
