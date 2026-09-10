@@ -212,13 +212,13 @@ Baseline column is the post-rotation monthly rate from section 1.
 | ops-emergency recurring job | deepseek-v4-pro | glm-5.3-flash | 64/day every day is a timer, not an emergency; identify it and give it its own key | 12.42 | 3.90 |
 | ops-emergency true escalation | deepseek-v4-pro | keep | reserve the reasoning rung for actual human-in-loop escalation | (in above) | (in above) |
 | lumen-agent (output-heavy) | deepseek-v4-flash | keep | out 1,984 > in 1,743; glm output is 2x DeepSeek's, moving it would cost more | 6.57 | 6.00 |
-| lumen-agent (cerebras leg) | cerebras-oss-120b | qwen36-local after D2/D3+wq#1623 | output-heavy local work, no cloud reason | 2.49 | 0.50 |
+| lumen-agent (cerebras leg) | cerebras-oss-120b | qwen36-local after D2/D3 | output-heavy local work, no cloud reason | 2.49 | 0.50 |
 | lumen-agent (or-free/mistral) | openrouter-free, mistral | consolidate onto deepseek-v4-flash | mistral rung is gone; two paths for one job | 1.45 | 1.00 |
 | ops-emergency light leg | deepseek-v4-flash | glm-5.3-flash | 1,388 in / 536 out, no reasoning need | 3.36 | 1.20 |
 | minerva classifier | deepseek-v4-flash | glm-5.3-flash + cache | 3,485 in / 152 out is classification; stable system prompt | 2.50 | 0.60 |
-| minerva verify judge | gemini-flash | qwen36-local after D2/D3+wq#1623, else glm | 5,937 in / 87 out at $2.47/M output is the worst rate on the board | 0.91 | 0.15 |
+| minerva verify judge | gemini-flash | qwen36-local after D2/D3, else glm | 5,937 in / 87 out at $2.47/M output is the worst rate on the board | 0.91 | 0.15 |
 | minerva cerebras leg | cerebras-oss-120b | glm-5.3-flash | 1,279 in / 406 out | 0.55 | 0.20 |
-| sia-news | deepseek-v4-flash | qwen36-local after D2/D3+wq#1623 | 395 in / 1 out, it returns a single token | 0.33 | 0.00 |
+| sia-news | deepseek-v4-flash | qwen36-local after D2/D3 | 395 in / 1 out, it returns a single token | 0.33 | 0.00 |
 | foreman-local-rung | qwen36-local (leaking to Cerebras) | qwen36-local, fixed | should already be $0; D2 is the whole cost | 0.18 | 0.00 |
 | model-watchdog | 4 paid rungs | keep | it is the liveness probe; hitting the paid rungs is the point | 0.66 | 0.66 |
 | reflector / bench / misc | various | keep | 0.49 | 0.49 | 0.49 |
@@ -259,8 +259,8 @@ Annualised, the full plan is roughly $1,280/year against $2,036/year.
 Confidence on the LPP half is good: the token volumes are measured, the prices are
 published, and the prompt is already built cache-stable. Confidence on the non-LPP
 half is lower, because two of its moves depend on qwen36-local becoming reliable
-(D2, D3, **and wq#1623** — see below) and one depends on identifying what the
-64/day job on the ops-emergency key actually is.
+(D2, D3) and one depends on identifying what the 64/day job on the ops-emergency
+key actually is.
 
 ## 6. Order of work
 
@@ -273,18 +273,6 @@ Nothing here should be done before the one above it.
    and stop routing multimodal turns at a text-only target. Until this is fixed
    the free rung is a cost source, not a cost sink, and three rows of the routing
    table cannot execute.
-   **wq#1623, on top of D2/D3:** qwen36-local was found queue-starved, not
-   down — Isis (`llama-qwen36.service`) shares the box with `ollama.service`
-   and `ollama-lpp.service`, and a 4,910-token prompt spent 277s in PROMPT
-   EVAL alone while sibling callers cancelled waiting. `cerebras-oss-120b ->
-   qwen36-local` and `cerebras-llama -> qwen36-local` survive D2/D3 by design
-   (paid-to-free), so even with the cycle broken they hand a fast paid
-   failure to a rung that can queue for minutes. Fix: `ops/wq1623-qwen36-queue-guard/`
-   bounds qwen36-local's `timeout` (600 -> 180, matching the 40-160s real
-   callers actually wait) and keeps the rung a small-prompt-only tier rather
-   than dedicating Isis to it (see that directory's README for the full
-   decision). The three rows below marked "after D2/D3" do not execute until
-   this lands too.
 3. **Canary the reasoning-token assumption.** Run LPP's real prompt shape against
    glm-5.3-flash over OpenRouter for one session and measure actual
    `completion_tokens` and `cached_tokens`. If output inflates more than 3x, or
