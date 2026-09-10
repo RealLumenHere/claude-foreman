@@ -400,6 +400,44 @@ def _replay(criterion, worktree, evidence_dir, runner):
     return (p.returncode == expect, f"exit {p.returncode}", _tail(merged), log_path)
 
 
+# wq#1724: a citation into an ops/wqNNNN-*/install.sh proves the SCRIPT landed on this
+# branch, not that it ever reached its target — wq#1632 closed done on exactly this shape
+# (install.sh landed, ticket closed, lumen_state.py never saw a write). Extends this same
+# citation check rather than adding a parallel gate: an ops-install citation additionally
+# needs a `deploy_target` naming a live file whose bytes match one the artifact ships (same
+# rule bin/wq's `ops_deploy_check` enforces on `wq done`, applied here to evidence.json).
+_OPS_INSTALL_RE = re.compile(r"(?:^|/)ops/wq\d+[\w.-]*/install\.sh$")
+
+
+def _sha256(path):
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def _ops_deploy_evidence(entry, abspath):
+    target = str(entry.get("deploy_target") or "").strip()
+    art_dir = os.path.dirname(abspath)
+    if not target:
+        return False, (f"{abspath} is an ops install artifact — landing on this branch proves "
+                       f"the script exists, not that it reached a target; add a "
+                       f"'deploy_target' path to this criterion naming a live file whose bytes "
+                       f"match one shipped in {art_dir}")
+    if not os.path.isfile(target):
+        return False, f"deploy_target {target} does not exist"
+    target_hash = _sha256(target)
+    for root, _dirs, files in os.walk(art_dir):
+        for name in files:
+            if name == "install.sh":
+                continue
+            cand = os.path.join(root, name)
+            if target_hash is not None and _sha256(cand) == target_hash:
+                return True, f"{target} byte-matches {cand}"
+    return False, f"deploy_target {target} matches no file shipped in {art_dir}"
+
+
 def _check_citation(entry, worktree, changed):
     cite = str(entry.get("citation") or "").strip()
     m = _CITATION_RE.match(cite)
@@ -420,6 +458,10 @@ def _check_citation(entry, worktree, changed):
     norm = os.path.normpath(rel)
     if norm not in {os.path.normpath(c) for c in changed}:
         return False, f"{rel} is not touched by this branch's diff", ""
+    if _OPS_INSTALL_RE.search(norm):
+        ok, why = _ops_deploy_evidence(entry, abspath)
+        if not ok:
+            return False, why, ""
     return True, f"{rel}:{start}-{end} in diff", ""
 
 

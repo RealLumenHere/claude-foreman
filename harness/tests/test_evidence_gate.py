@@ -215,6 +215,69 @@ def test_citations_are_checked_against_the_file_and_the_diff(worktree, citation,
     assert why in [f for f in result["failed"] if f["id"] == "AC2"][0]["observed"]
 
 
+# ---------------------------------------------------------------------------
+# wq#1724 — an ops/wqNNNN-*/install.sh citation needs deploy evidence, not just landing
+# ---------------------------------------------------------------------------
+
+def _write_ops_artifact(repo):
+    """foreman/ops/wq1632-fake-fix/{install.sh,lumen_state.py}, committed on this branch —
+    same shape as the real wq1632 artifact wq#1724 is fixing (EVIDENCE section)."""
+    art_dir = repo / "foreman" / "ops" / "wq1632-fake-fix"
+    art_dir.mkdir(parents=True)
+    (art_dir / "install.sh").write_text("#!/bin/bash\ncp lumen_state.py /target/lumen_state.py\n")
+    (art_dir / "lumen_state.py").write_text("# fixed lifecycle closure logic\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "wq1632-shaped ops artifact")
+    return art_dir
+
+
+def test_ops_install_citation_without_deploy_target_is_rejected(worktree):
+    """wq1632 replay: install.sh landed on this branch, cited as evidence, nothing proves
+    it ever ran against a target."""
+    art_dir = _write_ops_artifact(worktree)
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": f"foreman/ops/wq1632-fake-fix/install.sh:1"}]},
+        str(worktree), base_ref="main")
+    assert not result["ok"]
+    ac2 = [f for f in result["failed"] if f["id"] == "AC2"][0]
+    assert "deploy_target" in ac2["observed"]
+
+
+def test_ops_install_citation_with_matching_deploy_target_is_accepted(worktree, tmp_path):
+    art_dir = _write_ops_artifact(worktree)
+    live = tmp_path / "target" / "lumen_state.py"
+    live.parent.mkdir()
+    live.write_text("# fixed lifecycle closure logic\n")  # byte-identical to the shipped copy
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                       "deploy_target": str(live)}]},
+        str(worktree), base_ref="main")
+    assert result["ok"], result["failed"]
+
+
+def test_ops_install_citation_with_stale_deploy_target_is_rejected(worktree, tmp_path):
+    """A --deploy_target pointing at a real file whose bytes don't match anything the
+    artifact ships is the wq#1632 failure mode with a plausible flag slapped on."""
+    art_dir = _write_ops_artifact(worktree)
+    stale = tmp_path / "target" / "lumen_state.py"
+    stale.parent.mkdir()
+    stale.write_text("# old code, install.sh never actually ran\n")
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                       "deploy_target": str(stale)}]},
+        str(worktree), base_ref="main")
+    assert not result["ok"]
+
+
 def test_uncommitted_work_still_counts_as_touched(worktree):
     (worktree / "fresh.py").write_text("x = 1\ny = 2\n")
     assert "fresh.py" in acceptance.changed_files(str(worktree), base_ref="main")
