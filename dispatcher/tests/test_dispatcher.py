@@ -677,6 +677,66 @@ def test_tight_mode_single_spawn(denv):
     assert len(lumen_calls(denv)) == 1
 
 
+def _burn_gov(session_pct, session_reset_h, weekly_pct, weekly_reset_h, severity=None):
+    now = datetime.now(timezone.utc)
+    s = {"percent": session_pct,
+         "resets_at": (now + timedelta(hours=session_reset_h)).isoformat()}
+    if severity:
+        s["severity"] = severity
+    return {"limits": {
+        "session": s,
+        "weekly_all": {"percent": weekly_pct,
+                       "resets_at": (now + timedelta(hours=weekly_reset_h)).isoformat()},
+        "fable_weekly_scoped": {"percent": 10}}}
+
+
+def test_burn_rate_cap_replaces_binary_tight_clamp(denv):
+    """wq#1669: governor pressure tight + usable percent/resets_at -> the burn-rate
+    controller owns the cap (scaled, no tight_pri filter), not tight_mode's binary 1.
+    session 70% used with 30min to reset = an expiring budget: 30%/0.5h over
+    5%/worker-h supports 6 concurrent, clamped to ceiling/root cap 3."""
+    denv["gov_state"].write_text(json.dumps(_burn_gov(70, 0.5, 10, 48, severity="warning")))
+    t1 = add_ticket("burn p1", pri=1)
+    t2 = add_ticket("burn p2 spawns too", pri=2)
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [t1, t2]
+    assert len(log_events(denv, "burn_rate")) == 1
+    assert log_events(denv, "tight_mode") == []
+    assert [e for e in log_events(denv, "skip") if e["reason"] == "tight_pri"] == []
+    # the severity flag is surfaced as advisory, never a clamp
+    adv = [e for e in log_events(denv, "info") if e.get("reason") == "api_severity_advisory"]
+    assert len(adv) == 1 and "session=warning" in adv[0]["detail"]
+
+
+def test_burn_rate_cap_shrinks_when_burn_outruns_budget(denv):
+    # weekly 71% used with 100h to the reset projects past the budget -> min_allowed 1
+    # (pacing off: this test is about the burn-rate cap, not the wq#716 layer, which
+    # also fires on these numbers)
+    denv["pacing_cfg_path"].write_text(json.dumps(
+        {"policy": "off", "min_elapsed_fraction": 0.02, "delay_min_pri": 1,
+         "ntfy_dedup_hours": 6}))
+    denv["gov_state"].write_text(json.dumps(_burn_gov(10, 2, 71, 100)))
+    t1 = add_ticket("scarce p1 a", pri=1)
+    add_ticket("scarce p1 b", pri=1)
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [t1]
+    halts = log_events(denv, "halt")
+    assert len(halts) == 1 and halts[0]["stage"] == "spawn_cap"
+    assert "burn-rate" in halts[0]["reason"]
+    assert len(lumen_calls(denv)) == 1
+
+
+def test_burn_rate_no_resets_at_falls_back_to_binary_tight(denv):
+    # TIGHT_GOV has no resets_at anywhere -> controller has no data -> old clamp
+    denv["gov_state"].write_text(json.dumps(TIGHT_GOV))
+    tid = add_ticket("fallback p2", pri=2)
+    assert fd.run_pass() == 0
+    assert len(log_events(denv, "tight_mode")) == 1
+    assert log_events(denv, "burn_rate") == []
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "tight_pri"
+
+
 def test_lane_cap(denv):
     lanes = {"testlane": {"enabled": True, "max_per_day": 1}}
     write_config(denv, lanes=lanes)

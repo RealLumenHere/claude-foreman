@@ -86,11 +86,17 @@ def wait_for_slot(prefix, ceiling, max_wait_s):
         waited += SLOT_POLL_S
 
 
+def governor_pressure(model):
+    """wq#1669: pressure for router.assign so select()'s effort-first downgrade under
+    tight runs on the live-assign path too (it was dead: nothing passed pressure=)."""
+    return router.governor_pressure(model, governor_cli=GOVERNOR_CLI)
+
+
 def dispatch_one(ticket_id, repo):
     t = router.wq_show(ticket_id)
     model = t.get("model")
     if model in (None, "", "None"):
-        d = router.assign(ticket_id)
+        d = router.assign(ticket_id, pressure=governor_pressure)
         if not d.get("rung"):
             log(f"wq#{ticket_id}: router could not assign a rung ({d['reasons']}) — skipping")
             return None

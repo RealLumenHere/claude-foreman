@@ -375,6 +375,39 @@ def test_governor_pressure_adapter(tmp_path):
     assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "tight"
 
 
+def test_governor_pressure_zeroed_floors_are_advisory(tmp_path):
+    """wq#1669 (walkthrough sec 5, 2026-09-10): floors + soft margin zeroed, session
+    80% / weekly 83% / fable 86% all severity=warning — the old code returned 'tight'
+    on every pool (hardcoded SOFT_MARGIN_PCT + unconditional severity check) and
+    clamped the fleet exactly during a burn-before-reset window. With floors.json
+    zeroed (including soft_margin_pct), severity is advisory and the verdict is 'ok'."""
+    gov = tmp_path / "gov.py"
+    gov.write_text("import sys; sys.exit(0)\n")
+    floors = tmp_path / "floors.json"
+    floors.write_text(json.dumps({
+        "session_min_remaining_pct": 0, "weekly_all_min_remaining_pct": 0,
+        "fable_weekly_min_remaining_pct": 0, "soft_margin_pct": 0}))
+    st = tmp_path / "state.json"
+    st.write_text(json.dumps({"limits": {
+        "session": {"percent": 80, "severity": "warning"},
+        "weekly_all": {"percent": 83, "severity": "warning"},
+        "fable_weekly_scoped": {"percent": 86, "severity": "warning"}}}))
+    assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "ok"
+    assert router.governor_pressure("claude-fable-5", state_path=str(st), governor_cli=str(gov)) == "ok"
+    # a nonzero floor re-arms the severity flag for that pool
+    floors.write_text(json.dumps({
+        "session_min_remaining_pct": 20, "weekly_all_min_remaining_pct": 0,
+        "fable_weekly_min_remaining_pct": 0, "soft_margin_pct": 0}))
+    assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "tight"
+    # soft_margin_pct in floors.json overrides the hardcoded default even with floors 0
+    floors.write_text(json.dumps({
+        "session_min_remaining_pct": 0, "weekly_all_min_remaining_pct": 0,
+        "fable_weekly_min_remaining_pct": 0, "soft_margin_pct": 30}))
+    st.write_text(json.dumps({"limits": {
+        "session": {"percent": 80}, "weekly_all": {"percent": 10}}}))
+    assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "tight"
+
+
 def test_dispatch_cmd_carries_systemd_resource_limits(monkeypatch):
     # RELIABILITY_SPEC.md §E / wq#648 (S3): every fworker-wq<ID> unit gets MemoryMax +
     # MemoryHigh + CPUQuota + TasksMax + OOMPolicy=stop, not just TimeoutStopSec.

@@ -9,6 +9,15 @@
     "psi_some_tight": 10.0,
     "psi_some_deny": 25.0
   },
+  "burn_rate": {
+    "_note": "wq#1669: governor-tight passes are capped by budget-remaining vs time-to-reset (burn_rate.py), not tight_mode above; tight_mode still owns PSI pressure and the no-resets_at fallback. Rates = est. pool-% one worker burns per hour until observed_burn.json measures them.",
+    "avg_worker_pct_per_hour": {
+      "session": 5.0,
+      "weekly_all": 0.5,
+      "fable_weekly_scoped": 0.75
+    },
+    "min_allowed": 1
+  },
   "lanes": {
     "foreman-tok": {
       "enabled": true,

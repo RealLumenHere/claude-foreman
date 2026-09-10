@@ -2,6 +2,7 @@
   "session_min_remaining_pct": 0,
   "weekly_all_min_remaining_pct": 0,
   "fable_weekly_min_remaining_pct": 0,
+  "soft_margin_pct": 0,
   "fable_floor_schedule": [],
   "stale_fail_closed_seconds": 600,
   "poll_interval_min_s": 60,
@@ -11,5 +12,5 @@
   "off_peak_days_pt": [],
   "off_peak_start_hour_pt": 5,
   "off_peak_end_hour_pt": 11,
-  "_note": "floors ZEROED + off-peak disabled per Frank 2026-08-23 (3rd instruction). Only real limit is cloud_ceiling=3 concurrent. Do not restore without Frank."
+  "_note": "floors ZEROED + off-peak disabled per Frank 2026-08-23 (3rd instruction). Only real limit is cloud_ceiling concurrent. Do not restore without Frank. wq#1669: soft_margin_pct=0 zeroes router.governor_pressure's soft margin too (was a hardcoded 15 in router.py); with floors 0 the usage-API severity flag is advisory-only."
 }

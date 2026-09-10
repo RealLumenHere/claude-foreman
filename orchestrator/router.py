@@ -189,6 +189,9 @@ EXTRA_ROUTING_ROWS = {"orchestrator"}
 
 # Soft-pressure margin: remaining% above the governor floor below which the router steps
 # effort down first (doctrine 3). Above it: full tuple. Below the floor: governor denies.
+# wq#1669: this is only the DEFAULT — floors.json `soft_margin_pct` overrides it, so
+# zeroing floors.json (Frank 2026-08-23) can zero the margin too instead of leaving a
+# hardcoded 15-point throttle behind the zeroed floors.
 SOFT_MARGIN_PCT = 15
 
 
@@ -705,8 +708,15 @@ def classify_archetype(title, detail="", lane="", manifest=None):
 def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI,
                       soft_margin=SOFT_MARGIN_PCT):
     """'deny' if `foreman_usaged.py can-dispatch MODEL` refuses; else 'tight' when any pool
-    the model draws from is within soft_margin points of its floor (or flagged
-    warning/critical by the governor); else 'ok'. Fail-closed: unreadable state = 'deny'."""
+    the model draws from is within the soft margin of its floor, or (floored pools only)
+    flagged warning/critical by the usage API; else 'ok'. Fail-closed: unreadable state =
+    'deny'.
+
+    wq#1669: floors.json `soft_margin_pct` overrides the soft_margin argument, and a pool
+    whose floor is 0 treats the API severity flag as advisory only — the API flags
+    warning around 80% used, which throttled the whole fleet during a burn-before-reset
+    window despite Frank zeroing every floor. The dispatcher logs the advisory severity
+    once per pass (api_severity_advisory); nothing here throttles on it."""
     try:
         p = subprocess.run([sys.executable, governor_cli, "can-dispatch", model],
                            capture_output=True, text=True, timeout=30)
@@ -725,6 +735,7 @@ def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI
     except (OSError, ValueError):
         return "deny"
     limits = st.get("limits") or {}
+    soft_margin = floors.get("soft_margin_pct", soft_margin)
     checks = [("session", floors.get("session_min_remaining_pct", 20)),
               ("weekly_all", floors.get("weekly_all_min_remaining_pct", 15))]
     if "fable" in model:
@@ -736,7 +747,9 @@ def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI
         remaining = 100 - b["percent"]
         if remaining < floor:
             return "deny"
-        if remaining - floor < soft_margin or b.get("severity") in ("warning", "critical"):
+        if remaining - floor < soft_margin:
+            return "tight"
+        if floor > 0 and b.get("severity") in ("warning", "critical"):
             return "tight"
     return "ok"
 

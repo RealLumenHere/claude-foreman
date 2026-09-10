@@ -70,6 +70,7 @@ import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
 import runaway          # noqa: E402
 import psi_pressure     # noqa: E402  # wq#844
+import burn_rate        # noqa: E402  # wq#1669: burn-rate spawn controller
 import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
 import vlogs_mirror      # noqa: E402  # wq#1416
 import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refusal
@@ -528,9 +529,14 @@ def unmet_deps(t, cache):
     return unmet
 
 
-def candidate_model(t, tid):
+def candidate_model(t, tid, pressure=None):
     """The model the ticket would dispatch on: its wq tuple, else the router's dry-run
     assignment. Returns (model, skip_reason); skip_reason is None iff model is set.
+
+    wq#1669: `pressure` (model -> ok|tight|deny) is forwarded into router.assign so
+    select()'s effort-first downgrade under tight actually runs on the dispatch path —
+    it was dead code here because nothing ever passed pressure= (walkthrough sec 3).
+    Only bites tickets without a pinned model; a written tuple still wins.
 
     wq#1368: wq#1358/#1359 carried archetype='build' (a LANE name, not an archetype)
     straight onto a ticket. router.assign -> select -> candidates -> manifest.chain()
@@ -544,7 +550,7 @@ def candidate_model(t, tid):
     if m and m != "None":
         return m, None
     try:
-        d = router.assign(tid, dry_run=True)
+        d = router.assign(tid, dry_run=True, pressure=pressure)
     except SystemExit:
         return None, "route_unassigned"
     except router.ManifestError as e:
@@ -1134,6 +1140,39 @@ def _do_pass(cfg, log, state, dry_run):
         log.emit("info", stage="pacing", reason="pacing_config_invalid", detail=pacing_warn)
     limits = governor_limits()
 
+    # wq#1669: with floors zeroed the usage API's severity flag no longer throttles
+    # anything (router treats it as advisory) — but "why is nothing throttling at 86%"
+    # must stay answerable from this log alone.
+    hot = sorted(p for p, b in limits.items()
+                 if isinstance(b, dict) and b.get("severity") in ("warning", "critical"))
+    if hot:
+        log.emit("info", stage="budget", reason="api_severity_advisory",
+                 detail=",".join(f"{p}={limits[p]['severity']}" for p in hot))
+
+    # wq#1669: burn-rate controller — when governor pressure reports tight, the pass cap
+    # is what the budget-vs-time-to-reset math supports (up to the root cap), not the
+    # binary tight_mode clamp. Grows toward the ceiling as a reset approaches with
+    # budget unspent; shrinks when projected burn exceeds remaining. Falls back to the
+    # old binary clamp when state lacks percent/resets_at or units are unreadable.
+    burn_allowed = burn_detail = None
+    try:
+        _cloud0 = len([u for u in concurrency.list_running_units()
+                       if not concurrency.is_local_unit(u)])
+    except concurrency.LumenRunError:
+        _cloud0 = None  # stage 7 will halt the pass anyway if this persists
+    if _cloud0 is not None:
+        burn_allowed, burn_detail = burn_rate.allowed_this_pass(
+            limits, _cloud0, cfg["cloud_ceiling"], burn_rate.merge_config(cfg.get("burn_rate")),
+            observed=burn_rate.load_observed())
+    gov_cap = None  # set on first governor-tight pressure: min(root cap, burn_allowed)
+
+    def cached_pressure(m):
+        p = pressure_cache.get(m)
+        if p is None:
+            p = governor_pressure(m)
+            pressure_cache[m] = p
+        return p
+
     for i, cand in enumerate(candidates):
         tid, lane = cand["id"], cand["lane"]
 
@@ -1147,10 +1186,13 @@ def _do_pass(cfg, log, state, dry_run):
             log.emit("halt", stage="kill_switch", reason=ks)
             break
         limit = tight_cfg["max_spawns_per_pass"] if tight else cfg["max_spawns_per_pass"]
+        if not tight and gov_cap is not None:
+            limit = min(limit, gov_cap)  # wq#1669: burn-rate cap owns governor pressure
         if spawned >= limit:
             log.emit("halt", stage="spawn_cap",
                      reason=f"per-pass spawn cap reached ({spawned}/{limit}"
-                            f"{', tight' if tight else ''})")
+                            f"{', tight' if tight else ''}"
+                            f"{', burn-rate' if not tight and gov_cap is not None else ''})")
             break
 
         # wq#1408 §3.1 (the wq#1368 class, generalized): everything from here to the
@@ -1310,23 +1352,28 @@ def _do_pass(cfg, log, state, dry_run):
                 continue
 
             # stage 8 — budget (MUST 5): governor verdict + floors via router
-            model, skip_reason = candidate_model(t, tid)
+            model, skip_reason = candidate_model(t, tid, pressure=cached_pressure)
             if not model:
                 log.skip(tid, lane, "budget", skip_reason,
                          detail="router has no rung for this ticket")
                 continue
-            pressure = pressure_cache.get(model)
-            if pressure is None:
-                pressure = governor_pressure(model)
-                pressure_cache[model] = pressure
+            pressure = cached_pressure(model)
             if pressure == "deny":
                 log.skip(tid, lane, "budget", "governor_deny", model=model)
                 continue
-            if pressure == "tight" and not tight:
-                tight = True
-                log.emit("tight_mode", model=model,
-                         reason=f"pressure tight: max {tight_cfg['max_spawns_per_pass']} "
-                                f"spawn(s), pri<={tight_cfg['min_pri']} only")
+            if pressure == "tight" and not tight and gov_cap is None:
+                if burn_allowed is not None:
+                    # wq#1669: the controller owns the cap — scaled, not binary, and no
+                    # tight_pri filter (scarcity shows up as a smaller cap instead).
+                    gov_cap = min(cfg["max_spawns_per_pass"], burn_allowed)
+                    log.emit("burn_rate", model=model,
+                             reason=f"pressure tight: burn-rate cap {gov_cap} spawn(s) this pass",
+                             detail=burn_detail)
+                else:
+                    tight = True
+                    log.emit("tight_mode", model=model,
+                             reason=f"pressure tight: max {tight_cfg['max_spawns_per_pass']} "
+                                    f"spawn(s), pri<={tight_cfg['min_pri']} only")
             if tight:
                 if spawned >= tight_cfg["max_spawns_per_pass"]:
                     log.emit("halt", stage="spawn_cap",
@@ -1336,6 +1383,10 @@ def _do_pass(cfg, log, state, dry_run):
                     log.skip(tid, lane, "budget", "tight_pri", model=model,
                              detail=f"pri {cand['pri']} > tight min_pri {tight_cfg['min_pri']}")
                     continue
+            elif gov_cap is not None and spawned >= gov_cap:
+                log.emit("halt", stage="spawn_cap",
+                         reason=f"burn-rate spawn cap reached ({spawned}/{gov_cap})")
+                break
 
             # stage 8b — weekly-budget pacing (wq#716): forward-looking, on top of the
             # governor's own reactive floor above. Never blocks a Frank-approved fire ticket.
@@ -1407,6 +1458,7 @@ def _do_pass(cfg, log, state, dry_run):
 
     dispatchable = len(candidates) - count_structural_skips(log.events)
     return {"candidates": len(candidates), "spawned": spawned, "tight": tight,
+            "burn_cap": gov_cap,
             "quarantined": len(quarantined), "dispatchable": dispatchable,
             "lint_scanned": lint_scanned, "lint_flagged": lint_flagged}
 
