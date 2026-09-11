@@ -1,0 +1,16 @@
+# wq#1652 — unified RAM-actuator protect-list (cmdline regexes, one per line).
+# A process whose full cmdline matches ANY line here is never killed by a RAM
+# actuator (rosco, node-killer generic sweeps, healer RAM-crit, future
+# ram-actuator). Regexes, not bare names: rosco's name-allowlist left bash
+# wrappers unprotected — a 7-day-old fworker wrapper was fair game.
+# Lines starting with # are comments.
+fworker\.py
+/home/lumen/bin/lumen-run
+/home/lumen/bin/lumen-pr
+claude-code
+/usr/local/bin/claude
+/home/lumen/foreman/harness/
+systemd-run .*cloudflared
+/home/lumen/bin/cfd-actuator
+/home/lumen/bin/holddown
+/home/lumen/bin/slock

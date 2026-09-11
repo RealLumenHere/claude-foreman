@@ -1,0 +1,10 @@
+[Unit]
+Description=cfd-actuator drain: single cloudflared restart owner (wq#1652)
+After=network.target
+OnFailure=ntfy-onfailure@%n.service
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/bin/cfd-actuator drain
+TimeoutStartSec=120

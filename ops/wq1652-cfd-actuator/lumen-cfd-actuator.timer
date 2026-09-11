@@ -1,0 +1,10 @@
+[Unit]
+Description=60s drain cadence for cfd-actuator (wq#1652)
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=60
+AccuracySec=10
+
+[Install]
+WantedBy=timers.target
