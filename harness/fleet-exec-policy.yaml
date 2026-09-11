@@ -91,6 +91,16 @@ allow:
     # fleet data takes a purpose-built column extract written on Lumen. Swept with
     # harness/read_dir_sweep.py 2026-09-08 after generating the first card: zero hits.
     - /home/lumen/foreman/pilots
+    # de-spaghettifier (wq#1803-1815): the Phase-0 wiring spec + decision docs, and a
+    # worker-readable mirror of HarnessRouter CE src (Apache-2.0) WITHOUT tests/, ui/ and
+    # .env.example — the original research/harnessrouter tree carries 5 sweep hits
+    # (placeholder sk-test keys in gateway/tests, an .env.example, a UI apiKey stub), so
+    # the mirror is what gets granted, never the original. Swept 2026-09-11 with
+    # harness/read_dir_sweep.py: harnessrouter-ref files=127 hits=0,
+    # projects/de-spaghettifier files=1 hits=0 (evidence in the PR body). Refresh recipe
+    # is in research/harnessrouter-ref/README.md.
+    - /home/lumen/projects/de-spaghettifier
+    - /home/lumen/research/harnessrouter-ref
 
   # RESTART: unit globs per node the lint may tag restart(unit@node) for. Each entry
   # was verified per-target before listing (unit LoadState=loaded, `sudo -n true`
