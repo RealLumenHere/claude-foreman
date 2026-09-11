@@ -11,6 +11,7 @@ sudo install -m 0644 "$HERE/lumen-contradiction-scan.service" /etc/systemd/syste
 sudo install -m 0644 "$HERE/lumen-contradiction-scan.timer" /etc/systemd/system/lumen-contradiction-scan.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now lumen-contradiction-scan.timer
+systemctl is-active --quiet lumen-contradiction-scan.timer
 systemctl list-timers lumen-contradiction-scan.timer --no-pager --no-legend
 
 /home/lumen/bin/lumen-contradiction-scan
