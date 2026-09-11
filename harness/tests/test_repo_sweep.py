@@ -1,15 +1,22 @@
-"""harness/repo_sweep.py — wq#800. Zero-quota: real git repos in tmp_path,
-a fake wq that records add calls, no network, no claude.
+"""harness/repo_sweep.py — wq#800, wq#1674. Zero-quota: real git repos in tmp_path,
+a fake aq over a scratch alerts.db, no network, no claude.
+
+wq#1674 moved the sweep off `wq add` and onto a keyed aq row, so the tests below
+assert the alert-queue contract instead of a ticket count: one row per
+(repo, verdict), count++ on re-fire, and the edge-clear that ends an incident.
 
 Tests:
-  1. All repos in sync → exit 0, no tickets.
-  2. Seeded divergence → exit 1, exactly one ticket filed.
-  3. Re-run with existing ticket → no duplicate (idempotent).
-  4. Content-diverged repo → files a CONTENT_DIVERGED ticket.
-  5. Behind-only repo → files a BEHIND_ONLY ticket.
-  6. Non-git directory → reported as NOT_A_REPO, no crash.
+  1. All repos in sync → exit 0, no aq rows.
+  2. Seeded divergence → exit 1, exactly one keyed aq row.
+  3. Re-run while still diverged → same row, count++ (the F5 no-refile fix).
+  4. Content-diverged / behind-only repos → the right keyed row.
+  5. Non-git directory → reported as NOT_A_REPO, no row.
+  6. Repo returning to IN_SYNC → its open row is resolved (the edge-clear).
+  7. Verdict change → the stale row is resolved, the new one opened.
+  8. aq unavailable → the sweep still reports and still exits 1.
 """
 import os
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -137,163 +144,216 @@ def make_behind_only_repo(tmp_path, name="behind"):
     return work
 
 
-def make_fake_wq(tmp_path):
-    """A fake wq that records 'add' calls and rejects duplicates."""
-    fake = str(tmp_path / "fake-wq")
-    log = str(tmp_path / "wq-adds.log")
+ALERTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS alerts(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  first_ts TEXT NOT NULL, last_ts TEXT NOT NULL,
+  source TEXT NOT NULL, key TEXT NOT NULL,
+  title TEXT, message TEXT, priority TEXT DEFAULT 'default',
+  count INTEGER DEFAULT 1, status TEXT DEFAULT 'open',
+  owner TEXT DEFAULT 'unassigned', note TEXT, resolved_ts TEXT);
+"""
+
+
+def make_fake_aq(tmp_path):
+    """A fake aq over a scratch alerts.db with the real add/resolve contract:
+    `add` dedups onto the open (source, key) row and increments count (see
+    governor/foreman_usaged.py), `resolve` closes one row by id."""
+    db = str(tmp_path / "alerts.db")
+    c = sqlite3.connect(db)
+    c.executescript(ALERTS_SCHEMA)
+    c.commit()
+    c.close()
+    fake = str(tmp_path / "fake-aq")
     with open(fake, "w") as fh:
         fh.write(textwrap.dedent(f"""\
             #!/usr/bin/env python3
-            import sys, os, json
-            LOG = "{log}"
+            import sys, sqlite3, datetime
+            DB = "{db}"
+            now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             args = sys.argv[1:]
-            if args[0] != "add":
-                sys.exit(0)
-            title = None
-            for i, a in enumerate(args):
-                if a == "--title" and i + 1 < len(args):
-                    title = args[i + 1]
-            # Check for duplicates
-            entries = []
-            if os.path.exists(LOG):
-                with open(LOG) as f:
-                    entries = [json.loads(l) for l in f if l.strip()]
-            if any(e["title"] == title for e in entries):
-                print("DUPLICATE — already exists")
-                sys.exit(1)
-            with open(LOG, "a") as f:
-                f.write(json.dumps({{"title": title, "args": args}}) + "\\n")
-            print(f"added wq ticket: {{title}}")
+            c = sqlite3.connect(DB)
+            if args[0] == "add":
+                source, key, title, message = args[1], args[2], args[3], args[4]
+                row = c.execute("SELECT id FROM alerts WHERE source=? AND key=? "
+                                "AND status='open'", (source, key)).fetchone()
+                if row:
+                    c.execute("UPDATE alerts SET count=count+1, last_ts=?, title=?, "
+                              "message=? WHERE id=?", (now, title, message, row[0]))
+                else:
+                    c.execute("INSERT INTO alerts(first_ts,last_ts,source,key,title,message) "
+                              "VALUES(?,?,?,?,?,?)", (now, now, source, key, title, message))
+            elif args[0] == "resolve":
+                c.execute("UPDATE alerts SET status='resolved', resolved_ts=?, note=? "
+                          "WHERE id=?", (now, args[2] if len(args) > 2 else '', args[1]))
+            else:
+                sys.exit(2)
+            c.commit(); c.close()
         """))
     os.chmod(fake, 0o755)
-    return fake, log
+    return fake, db
 
 
-def read_wq_log(log):
-    import json
-    if not os.path.exists(log):
-        return []
-    with open(log) as fh:
-        return [json.loads(l) for l in fh if l.strip()]
+def aq_rows(db, status="open"):
+    c = sqlite3.connect(db)
+    c.row_factory = sqlite3.Row
+    rows = c.execute("SELECT * FROM alerts WHERE status=? ORDER BY id", (status,)).fetchall()
+    c.close()
+    return rows
 
 
 # --- Tests ---
 
-def run_sweep(*args):
-    p = subprocess.run([sys.executable, SWEEP, *args], capture_output=True, text=True)
+def sweep_env(fake_aq, db):
+    env = os.environ.copy()
+    env["REPO_SWEEP_AQ"] = fake_aq
+    env["AQ_DB"] = db
+    return env
+
+
+def run_sweep(*args, env=None):
+    p = subprocess.run([sys.executable, SWEEP, *args], capture_output=True, text=True, env=env)
     return p.returncode, p.stdout + p.stderr
 
 
-def test_all_in_sync_no_tickets(tmp_path):
+def test_all_in_sync_no_aq_rows(tmp_path):
     repo = make_in_sync_repo(tmp_path)
-    fake_wq, log = make_fake_wq(tmp_path)
-    env = os.environ.copy()
-    env["REPO_SWEEP_WQ"] = fake_wq
-    p = subprocess.run([sys.executable, SWEEP, "--repo", repo],
-                       capture_output=True, text=True, env=env)
-    assert p.returncode == 0, p.stdout + p.stderr
-    assert "IN_SYNC" in p.stdout
-    assert read_wq_log(log) == []
+    fake_aq, db = make_fake_aq(tmp_path)
+    rc, out = run_sweep("--repo", repo, env=sweep_env(fake_aq, db))
+    assert rc == 0, out
+    assert "IN_SYNC" in out
+    assert aq_rows(db) == []
 
 
-def test_safe_reset_files_one_ticket(tmp_path):
+def test_safe_reset_records_one_keyed_row(tmp_path):
     repo = make_safe_reset_repo(tmp_path)
-    fake_wq, log = make_fake_wq(tmp_path)
-    env = os.environ.copy()
-    env["REPO_SWEEP_WQ"] = fake_wq
-    p = subprocess.run([sys.executable, SWEEP, "--repo", repo],
-                       capture_output=True, text=True, env=env)
-    assert p.returncode == 1, p.stdout + p.stderr
-    assert "SAFE_RESET" in p.stdout
-    assert "ticket filed" in p.stdout
-    entries = read_wq_log(log)
-    assert len(entries) == 1
-    assert "SAFE_RESET" in entries[0]["title"]
-    assert "diverged" in entries[0]["title"]  # basename of the repo
+    fake_aq, db = make_fake_aq(tmp_path)
+    rc, out = run_sweep("--repo", repo, env=sweep_env(fake_aq, db))
+    assert rc == 1, out
+    assert "SAFE_RESET" in out
+    assert "aq row recorded" in out
+    rows = aq_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["source"] == "repo-sweep"
+    assert rows[0]["key"] == f"{repo}:SAFE_RESET"
+    assert rows[0]["count"] == 1
+    # The row carries the ticket aq_escalate will file, verbatim (wq#1674).
+    assert rows[0]["title"] == f"[repo-sweep] {os.path.basename(repo)}: SAFE_RESET"
+    assert rows[0]["message"].startswith(f"Automated sweep detected SAFE_RESET in {repo}.")
 
 
-def test_redundant_ahead_files_a_ticket_not_an_error(tmp_path):
+def test_redundant_ahead_is_a_verdict_not_an_error(tmp_path):
     repo = make_redundant_ahead_repo(tmp_path)
-    fake_wq, log = make_fake_wq(tmp_path)
-    env = os.environ.copy()
-    env["REPO_SWEEP_WQ"] = fake_wq
-    p = subprocess.run([sys.executable, SWEEP, "--repo", repo],
-                       capture_output=True, text=True, env=env)
-    assert p.returncode == 1, p.stdout + p.stderr
-    assert "REDUNDANT_AHEAD" in p.stdout
-    assert "ERROR" not in p.stdout, "an unmapped exit code silently files no ticket"
-    entries = read_wq_log(log)
-    assert len(entries) == 1
-    assert "REDUNDANT_AHEAD" in entries[0]["title"]
+    fake_aq, db = make_fake_aq(tmp_path)
+    rc, out = run_sweep("--repo", repo, env=sweep_env(fake_aq, db))
+    assert rc == 1, out
+    assert "REDUNDANT_AHEAD" in out
+    assert "ERROR" not in out, "an unmapped exit code silently records nothing"
+    rows = aq_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["key"] == f"{repo}:REDUNDANT_AHEAD"
 
 
-def test_idempotent_no_duplicate_ticket(tmp_path):
+def test_refire_increments_one_row_instead_of_refiling(tmp_path):
+    """The wq#1674 fix for F5: nine sweeps over nine days used to mean nine
+    tickets, because wq add's dup guard only sees rows that are not done."""
     repo = make_safe_reset_repo(tmp_path)
-    fake_wq, log = make_fake_wq(tmp_path)
-    env = os.environ.copy()
-    env["REPO_SWEEP_WQ"] = fake_wq
-    # First run files the ticket
-    subprocess.run([sys.executable, SWEEP, "--repo", repo],
-                   capture_output=True, text=True, env=env)
-    assert len(read_wq_log(log)) == 1
-    # Second run: duplicate, should not crash and should not double-file
-    p = subprocess.run([sys.executable, SWEEP, "--repo", repo],
-                       capture_output=True, text=True, env=env)
-    assert p.returncode == 1  # still diverged
-    assert "already open" in p.stdout
-    assert len(read_wq_log(log)) == 1  # still just one entry
+    fake_aq, db = make_fake_aq(tmp_path)
+    env = sweep_env(fake_aq, db)
+    for _ in range(3):
+        rc, out = run_sweep("--repo", repo, env=env)
+        assert rc == 1, out
+    rows = aq_rows(db)
+    assert len(rows) == 1, [dict(r) for r in rows]
+    assert rows[0]["count"] == 3
 
 
-def test_content_diverged_files_ticket(tmp_path):
+def test_content_diverged_records_row(tmp_path):
     repo = make_content_diverged_repo(tmp_path)
-    fake_wq, log = make_fake_wq(tmp_path)
-    env = os.environ.copy()
-    env["REPO_SWEEP_WQ"] = fake_wq
-    p = subprocess.run([sys.executable, SWEEP, "--repo", repo],
-                       capture_output=True, text=True, env=env)
-    assert p.returncode == 1, p.stdout + p.stderr
-    assert "CONTENT_DIVERGED" in p.stdout
-    entries = read_wq_log(log)
-    assert len(entries) == 1
-    assert "CONTENT_DIVERGED" in entries[0]["title"]
+    fake_aq, db = make_fake_aq(tmp_path)
+    rc, out = run_sweep("--repo", repo, env=sweep_env(fake_aq, db))
+    assert rc == 1, out
+    assert "CONTENT_DIVERGED" in out
+    rows = aq_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["key"] == f"{repo}:CONTENT_DIVERGED"
 
 
-def test_behind_only_files_ticket(tmp_path):
+def test_behind_only_records_row(tmp_path):
     repo = make_behind_only_repo(tmp_path)
-    fake_wq, log = make_fake_wq(tmp_path)
-    env = os.environ.copy()
-    env["REPO_SWEEP_WQ"] = fake_wq
-    p = subprocess.run([sys.executable, SWEEP, "--repo", repo],
-                       capture_output=True, text=True, env=env)
-    assert p.returncode == 1, p.stdout + p.stderr
-    assert "BEHIND_ONLY" in p.stdout
-    entries = read_wq_log(log)
-    assert len(entries) == 1
-    assert "BEHIND_ONLY" in entries[0]["title"]
+    fake_aq, db = make_fake_aq(tmp_path)
+    rc, out = run_sweep("--repo", repo, env=sweep_env(fake_aq, db))
+    assert rc == 1, out
+    assert "BEHIND_ONLY" in out
+    rows = aq_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["key"] == f"{repo}:BEHIND_ONLY"
+
+
+def test_in_sync_again_resolves_the_open_row(tmp_path):
+    """The edge-clear. Without it `count` is lifetime, not per-incident, and
+    aq_escalate — which suppresses per aq id — never tickets a later divergence."""
+    repo = make_behind_only_repo(tmp_path)
+    fake_aq, db = make_fake_aq(tmp_path)
+    env = sweep_env(fake_aq, db)
+    rc, _ = run_sweep("--repo", repo, env=env)
+    assert rc == 1
+    assert len(aq_rows(db)) == 1
+    git(repo, "merge", "--ff-only", "origin/main")
+    rc, out = run_sweep("--repo", repo, env=env)
+    assert rc == 0, out
+    assert "1 stale aq row(s) resolved" in out
+    assert aq_rows(db) == []
+    resolved = aq_rows(db, status="resolved")
+    assert len(resolved) == 1
+    assert "IN_SYNC" in (resolved[0]["note"] or "")
+
+
+def test_verdict_change_resolves_the_stale_row(tmp_path):
+    repo = make_behind_only_repo(tmp_path)
+    fake_aq, db = make_fake_aq(tmp_path)
+    env = sweep_env(fake_aq, db)
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO alerts(first_ts,last_ts,source,key,title,message) "
+              "VALUES('t','t','repo-sweep',?,'stale','stale')", (f"{repo}:SAFE_RESET",))
+    c.commit()
+    c.close()
+    rc, out = run_sweep("--repo", repo, env=env)
+    assert rc == 1, out
+    rows = aq_rows(db)
+    assert len(rows) == 1, [dict(r) for r in rows]
+    assert rows[0]["key"] == f"{repo}:BEHIND_ONLY"
+    assert aq_rows(db, status="resolved")[0]["key"] == f"{repo}:SAFE_RESET"
 
 
 def test_not_a_git_repo_does_not_crash(tmp_path):
     notrepo = str(tmp_path / "notgit")
     os.makedirs(notrepo)
-    fake_wq, log = make_fake_wq(tmp_path)
-    env = os.environ.copy()
-    env["REPO_SWEEP_WQ"] = fake_wq
-    p = subprocess.run([sys.executable, SWEEP, "--repo", notrepo],
-                       capture_output=True, text=True, env=env)
-    assert "NOT_A_REPO" in p.stdout
-    assert read_wq_log(log) == []  # no ticket for non-repo
+    fake_aq, db = make_fake_aq(tmp_path)
+    rc, out = run_sweep("--repo", notrepo, env=sweep_env(fake_aq, db))
+    assert "NOT_A_REPO" in out
+    assert aq_rows(db) == []
 
 
-def test_dry_run_does_not_file_tickets(tmp_path):
+def test_dry_run_touches_nothing(tmp_path):
     repo = make_safe_reset_repo(tmp_path)
-    fake_wq, log = make_fake_wq(tmp_path)
-    env = os.environ.copy()
-    env["REPO_SWEEP_WQ"] = fake_wq
-    p = subprocess.run([sys.executable, SWEEP, "--repo", repo, "--dry-run"],
-                       capture_output=True, text=True, env=env)
-    assert p.returncode == 1
-    assert "dry run" in p.stdout
-    assert read_wq_log(log) == []
+    fake_aq, db = make_fake_aq(tmp_path)
+    rc, out = run_sweep("--repo", repo, "--dry-run", env=sweep_env(fake_aq, db))
+    assert rc == 1
+    assert "dry run" in out
+    assert aq_rows(db) == []
+
+
+def test_aq_failure_is_reported_not_swallowed(tmp_path):
+    """A broken alert queue must not turn a diverged repo into a clean sweep."""
+    repo = make_safe_reset_repo(tmp_path)
+    _, db = make_fake_aq(tmp_path)
+    env = sweep_env(str(tmp_path / "no-such-aq"), db)
+    rc, out = run_sweep("--repo", repo, env=env)
+    assert rc == 1, out
+    assert "SAFE_RESET" in out
+    assert "aq FAILED" in out
+    assert aq_rows(db) == []
 
 
 # --- repo_hint (wq#1094: dispatcher reads the repo back off a filed ticket) -----------
@@ -325,6 +385,24 @@ def test_repo_hint_refuses_a_repo_outside_the_managed_set(monkeypatch):
     title = "[repo-sweep] evil: SAFE_RESET"
     detail = "Automated sweep detected SAFE_RESET in /etc/shadow-adjacent-repo.\nmore text"
     assert repo_sweep.repo_hint(title, detail) is None
+
+
+def test_escalated_ticket_format_round_trips_through_repo_hint(tmp_path, monkeypatch):
+    """wq#1674: repo_sweep now writes the ticket text into an aq row and
+    aq_escalate passes it through, so the dispatcher's read-back has to survive
+    the extra hop. The provenance aq_escalate appends must stay AFTER the detail."""
+    repo = "/home/lumen/pokemon"
+    monkeypatch.setattr(repo_sweep, "managed_repos", lambda: {repo})
+    title = repo_sweep.ticket_title(repo, "BEHIND_ONLY")
+    detail = repo_sweep.ticket_detail(repo, "BEHIND_ONLY", "ahead=0 behind=2")
+    assert repo_sweep.repo_hint(title, detail) == repo
+    escalated = detail + "\n\nAuto-escalated by aq_escalate (wq#1674 repo-sweep rule)."
+    assert repo_sweep.repo_hint(title, escalated) == repo
+
+
+def test_aq_key_splits_back_into_repo_and_verdict():
+    key = repo_sweep.aq_key("/home/lumen/bin", "BEHIND_ONLY")
+    assert key.rsplit(":", 1) == ["/home/lumen/bin", "BEHIND_ONLY"]
 
 
 def test_fleet_inventory_is_a_managed_repo():

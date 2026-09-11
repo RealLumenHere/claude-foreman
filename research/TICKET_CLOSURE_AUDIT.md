@@ -164,6 +164,24 @@ it also covers `/home/lumen/worktrees/`, where the fworker BUILD lane runs and w
 dead citations in F4 were written. Fail-open-on-infrastructure is preserved throughout.
 Evidence: `bin/tests/test_wq_evidence_durability.py` (11 cases), full bin suite 283 passed.
 
+wq#1674 took the P2 recurring-detectors fix. `harness/repo_sweep.py` no longer calls
+`wq add` at all: each non-`IN_SYNC` verdict becomes a keyed aq row
+(`source='repo-sweep'`, `key='{repo}:{VERDICT}'`), so the 4-hourly re-fire is `count++`
+on one row instead of a fresh title. The sweep resolves that row the moment the repo is
+back `IN_SYNC` (and resolves a stale row when the verdict changes), which is what scopes
+`count` to one incident and lets a *later* divergence honestly earn a new ticket. A third
+rule in `bin/aq_escalate.py` (the wq#965 responder, alongside the probe and dispatcher-stall
+rules) is now the only thing that files the ticket, at `count>=3` — ~12h of persistence at
+the sweep cadence — with one default-priority notification, not an urgent page. The row
+carries the wq title/detail verbatim, so the `repo_hint` read-back the dispatcher's `auto`
+lane depends on (wq#1094) survives the extra hop; a round-trip test pins that. The location
+guessed above (`bin/lumen-repo-sweep`) does not exist: `lumen-repo-sweep.service` runs
+`harness/repo_sweep.py` directly. Evidence: `harness/tests/test_repo_sweep.py` 18 passed,
+`bin/tests/test_aq_escalate.py` all checks passed. The audit's other F5 candidates were
+checked and left alone: `ops/wq1252-lumen-public-guardian/guardian.py` varies its title per
+observation and gates on its own heal ladder, and all 21 sampled duplicates were
+`[repo-sweep]`.
+
 ## 5. What the sample does not say
 
 - "Real-complete" here means the queue's own evidence checks out from a clean vantage.
