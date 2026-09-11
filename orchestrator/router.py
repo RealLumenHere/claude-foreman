@@ -599,12 +599,27 @@ _WEAK_SIGNALS = {
     # fix, extended to the DECOMPOSE-primary archetype. The other campaign signals
     # (campaign/multi-session/checkpoint/uplift/pivot) stay strong and win alone.
     ("long-horizon-campaign", r"\bchain\b"),
+    # wq#1707: same class as \bchain\b, found by replaying the real queue — wq#1628 ("LPP
+    # full behavioral analysis from run logs") matched \bcheckpoint and NOTHING else for
+    # long-horizon-campaign, out-ranked a 2-signal research-synthesis on _RUBRIC order, and
+    # was DECOMPOSEd until Frank hand-corrected it. wq#1143 already documents that
+    # checkpoint is save-state vocabulary in LPP prose, but its fix only covers titles
+    # prefixed [lpp][stuck]; wq#1628 carried no such prefix. A real campaign says so with
+    # campaign/multi-session/uplift/pivot, all of which stay strong and win alone.
+    ("long-horizon-campaign", r"\bcheckpoint"),
 }
 
 # Archetypes whose routing is expensive/consequential enough that a single WEAK signal
 # must not win them alone: the opus-primary pair (wq#778) plus long-horizon-campaign,
 # whose primary rung is DECOMPOSE (wq#992).
 _CORROBORATION_ARCHETYPES = _OPUS_PRIMARY_ARCHETYPES | {"long-horizon-campaign"}
+
+# wq#1707: the analysis tier — archetypes whose deliverable is judgment (a design, a root
+# cause, a synthesis) rather than a diff. mechanical-edit's primary rung is qwen36-local, a
+# small local model chosen for bounded one-line edits; it cannot produce an analysis. So a
+# ticket that evidences ANY analysis archetype is never a mechanical edit, however many
+# mechanical-sounding words ("wire", "rename", "bump") its prose also happens to contain.
+_ANALYSIS_ARCHETYPES = {"novel-design", "rca-investigation", "research-synthesis"}
 
 
 def _qualifies(arch, matched_pats):
@@ -625,6 +640,17 @@ def _qualifies(arch, matched_pats):
 # anything the audit actually flagged, and the audit explicitly warns that pure
 # cheapest-wins would misroute genuinely hard RCA work.
 _CHEAP_ARCHETYPES = {"mechanical-edit", "probe-build"}
+
+
+def _mechanical_edit_allowed(qualifying):
+    """wq#1707: mechanical-edit may not be selected while an analysis archetype also
+    qualifies — see _ANALYSIS_ARCHETYPES. Guards both selection paths that can reach
+    mechanical-edit past a better-fitting archetype: _LANE_BIAS['fleet'], which lists it
+    first, and the wq#779 F3 cost tie-break, which only requires the cheap archetype's
+    evidence to be *equal*. The latter is what routed wq#1669 (a governor scaling design,
+    hand-corrected to novel-design) onto qwen36-local off one incidental "wire".
+    mechanical-edit is untouched when it is the only thing the text evidences."""
+    return not any(a in _ANALYSIS_ARCHETYPES for a in qualifying)
 
 
 def _primary_rung_cost(manifest, archetype):
@@ -683,9 +709,10 @@ def classify_archetype(title, detail="", lane="", manifest=None):
         # disqualified research-synthesis); fall through to the plain default instead, but
         # surface the disqualified pattern(s) rather than claiming true no-signal.
         return "standard-engineering", [p for a in hit_archs for p in by_arch[a]]
+    mech_ok = _mechanical_edit_allowed(qualifying)      # wq#1707
     # lane bias breaks ties among qualifying hit archs
     for b in _LANE_BIAS.get(lane or "", []):
-        if b in qualifying:
+        if b in qualifying and (b != "mechanical-edit" or mech_ok):
             return b, by_arch[b]
     incumbent = qualifying[0]
     if incumbent in _CHEAP_ARCHETYPES or len(qualifying) == 1:
@@ -695,7 +722,8 @@ def classify_archetype(title, detail="", lane="", manifest=None):
     # least as strong as the incumbent's should not lose just because it sits lower in
     # _RUBRIC; among multiple eligible cheap archetypes the cheaper primary rung wins.
     incumbent_n = len(by_arch[incumbent])
-    cheap = [a for a in qualifying if a in _CHEAP_ARCHETYPES and len(by_arch[a]) >= incumbent_n]
+    cheap = [a for a in qualifying if a in _CHEAP_ARCHETYPES and len(by_arch[a]) >= incumbent_n
+             and (a != "mechanical-edit" or mech_ok)]
     if not cheap:
         return incumbent, by_arch[incumbent]
     manifest = manifest or load_manifest()
