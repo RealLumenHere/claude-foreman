@@ -614,6 +614,23 @@ _WEAK_SIGNALS = {
 # whose primary rung is DECOMPOSE (wq#992).
 _CORROBORATION_ARCHETYPES = _OPUS_PRIMARY_ARCHETYPES | {"long-horizon-campaign"}
 
+# wq#1725: same bare-word-in-prose failure class as wq#778/wq#992, but for probe-build's
+# generic single-word signals. router.py assign 1724 classified a wq-tooling + audit
+# ticket as probe-build because its DETAIL happened to say "a named live probe" (signal
+# \bprobe\b), routing an analysis ticket to deepseek-v4-flash. Unlike the corroboration
+# gate above (any second signal from anywhere in title+detail rescues the archetype),
+# these words (probe/CI/measure/benchmark/hygiene) are plain enough that a mention in
+# ticket DETAIL prose proves nothing about the ticket's own archetype — only a TITLE
+# match counts. \btest harness\b stays a detail-eligible phrase: two-word phrases are
+# specific enough not to show up as incidental prose.
+_TITLE_ONLY_SIGNALS = {
+    ("probe-build", r"\bprobe\b"),
+    ("probe-build", r"\bCI\b"),
+    ("probe-build", r"\bmeasure\b"),
+    ("probe-build", r"\bbenchmark\b"),
+    ("probe-build", r"\bhygiene\b"),
+}
+
 # wq#1707: the analysis tier — archetypes whose deliverable is judgment (a design, a root
 # cause, a synthesis) rather than a diff. mechanical-edit's primary rung is qwen36-local, a
 # small local model chosen for bounded one-line edits; it cannot produce an analysis. So a
@@ -692,7 +709,13 @@ def classify_archetype(title, detail="", lane="", manifest=None):
     text = f"{title or ''}\n{detail or ''}"
     by_arch = {}
     for arch, pats in _RUBRIC:
-        matched = [p for p in pats if re.search(p, text, re.IGNORECASE)]
+        matched = []
+        for p in pats:
+            if not re.search(p, text, re.IGNORECASE):
+                continue
+            if (arch, p) in _TITLE_ONLY_SIGNALS and not re.search(p, title or "", re.IGNORECASE):
+                continue    # wq#1725: detail-only hit on a title-only signal doesn't count
+            matched.append(p)
         if matched:
             by_arch[arch] = matched
     # first-listed archetype in _RUBRIC order that hit at all (used for lane bias + fallback

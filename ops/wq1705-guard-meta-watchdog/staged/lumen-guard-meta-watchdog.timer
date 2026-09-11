@@ -1,0 +1,14 @@
+[Unit]
+Description=Run guard-meta-watchdog every 10 minutes (wq#1705)
+
+[Timer]
+# 10m matches lumen-aq-escalate.timer: fast enough that a dead guard is back up
+# (or escalated) inside one sentinel cycle, slow enough that the 300s backoff
+# base actually throttles a unit that refuses to start.
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

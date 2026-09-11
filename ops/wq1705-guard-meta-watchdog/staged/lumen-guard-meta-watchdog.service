@@ -1,0 +1,16 @@
+[Unit]
+Description=guard-meta-watchdog — restart crashed guard units with backoff, open an aq row when restart keeps failing (wq#1705)
+Documentation=file:///home/lumen/foreman/ops/wq1705-guard-meta-watchdog/DESIGN.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Mode A per wq#1657: this guard exits 0 whether or not it found anything.
+# Findings leave via ntfy-send + aq, so any nonzero exit here is a real crash.
+ExecStart=/usr/bin/python3 /home/lumen/bin/guard_meta_watchdog.py
+User=root
+TimeoutStartSec=300
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

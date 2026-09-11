@@ -773,6 +773,26 @@ def test_mechanical_edit_still_wins_when_nothing_analytical_is_evidenced(m):
     assert arch == "probe-build"
 
 
+# ---- wq#1725: probe-build's bare-word signals must not fire from detail prose alone ----
+
+def test_detail_only_probe_word_does_not_win_probe_build(m):
+    # wq#1724 verbatim shape: a wq-tooling + audit ticket whose detail mentions "a named
+    # live probe" was classified probe-build off that one word and routed to
+    # deepseek-v4-flash. The title carries no probe-build vocabulary at all, so the
+    # detail-only "probe" must not count.
+    arch, sig = router.classify_archetype(
+        "wq-tooling: reconcile the audit trail for lumen-pr merges",
+        "root cause: a named live probe left a stale lockfile the last time this ran.",
+        "build", m)
+    assert arch != "probe-build", (arch, sig)
+
+
+def test_title_probe_word_still_wins_probe_build(m):
+    # same signal, but in the title — still fires alone, same as before wq#1725.
+    arch, sig = router.classify_archetype("probe the CI hygiene job", "", "build", m)
+    assert arch == "probe-build", (arch, sig)
+
+
 def test_replay_no_filed_ticket_with_analysis_evidence_is_a_mechanical_edit(m):
     """ACCEPTANCE (wq#1707): over every filed ticket, no row whose text carries CORROBORATED
     novel-design / rca-investigation / research-synthesis evidence may classify as
