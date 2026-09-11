@@ -48,6 +48,14 @@ FABLE_POOL = "fable_weekly_scoped"
 # safe direction). Rounded up. fable_weekly_scoped is NOT measured (no fable-only
 # worker-hours split yet) and keeps the wq#1669 estimate. One night of data: the
 # observed_burn.json writer replaces these with a rolling measurement.
+# wq (Frank 2026-09-11): reserve a slice of each pool for Frank's OWN interactive chat, so
+# fleet claude -p workers (which share the SAME Max subscription pool) don't burn his session
+# in half the time while he's idle. Workers only spend against (remaining - reserve). Per-pool.
+FRANK_RESERVE_PCT = {
+    "session": float(os.environ.get("FOREMAN_RESERVE_SESSION", "30")),      # keep 30% of the 5h session for Frank
+    "weekly_all": float(os.environ.get("FOREMAN_RESERVE_WEEKLY", "15")),    # keep 15% of the week
+    "fable_weekly_scoped": float(os.environ.get("FOREMAN_RESERVE_FABLE", "10")),
+}
 DEFAULT_AVG_WORKER_PCT_PER_HOUR = {"session": 1.5, "weekly_all": 0.35,
                                    "fable_weekly_scoped": 0.75}
 MIN_ALLOWED = 1
@@ -104,7 +112,9 @@ def pool_spend_rate(limits, pool, now):
     remaining_s = (reset_dt - now).total_seconds()
     if remaining_s <= 0 or remaining_s > WINDOW_S[pool]:
         return None
-    remaining_pct = max(0.0, 100.0 - float(pct))
+    reserve = FRANK_RESERVE_PCT.get(pool, 0.0)
+    # spend only against budget ABOVE Frank's reserve: at/below the reserve, rate->0 (workers stop, Frank keeps his headroom)
+    remaining_pct = max(0.0, (100.0 - float(pct)) - reserve)
     hours = max(remaining_s / 3600.0, 1.0 / 60.0)  # floor at 1 min: no div-by-~0 blowup
     return remaining_pct / hours
 
