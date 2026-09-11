@@ -1,0 +1,10 @@
+[Unit]
+Description=SPOF watch: restart-loop sweep every 30 min (wq#1704)
+
+[Timer]
+OnBootSec=8min
+OnUnitActiveSec=30min
+AccuracySec=2min
+
+[Install]
+WantedBy=timers.target

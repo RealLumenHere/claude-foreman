@@ -1,0 +1,10 @@
+[Unit]
+Description=SPOF watch: alert-path round-trip every 15 min (wq#1704)
+
+[Timer]
+OnBootSec=6min
+OnUnitActiveSec=15min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

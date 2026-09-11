@@ -1,0 +1,10 @@
+[Unit]
+Description=SPOF watch: alert-path daemon liveness every 5 min (wq#1704)
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
