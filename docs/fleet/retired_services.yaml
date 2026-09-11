@@ -63,6 +63,51 @@
         Cleanup diff in ops/wq1643-split-watch-retire-agent5/healer_fallback_table.diff.
         Found by wq#1627 (F-4), cleaned by wq#1643.
 
+- name: lumen-rerank-thread-watch
+  units: [lumen-rerank-thread-watch.timer, lumen-rerank-thread-watch.service]
+  load_state: loaded   # confirmed via `systemctl show -p LoadState` 2026-09-11 —
+                        # timer is UnitFileState=enabled/ActiveState=active, still
+                        # firing every 5 min; files not yet removed, see guards below
+  retired_on: "2026-09-11"
+  reason: >
+    wq#596 installed a 48h auto-expiring 5-min watch on 2026-08-14 to catch a
+    gateway restart or sustained memory PSI during the pinned 16-thread rerank
+    arm rollout, with a one-shot DONE marker
+    (`/home/lumen/minerva/v4/reports/596_watch_ROLLED_BACK`) so a trip can only
+    roll back once. 27 days later the timer is still installed and firing
+    every 5 min (confirmed via `journalctl -u lumen-rerank-thread-watch.service`
+    on 2026-09-11 — "Deactivated successfully" every cycle, no rollback/ntfy
+    activity) — `rerank-thread-watch.sh:57` (`[ -f "$DONE" ] && exit 0`) makes
+    every run a no-op once the marker exists, which it does. Found by wq#1627
+    fleet atlas sweep (FLEET_SERVICE_ATLAS.md finding F-10).
+  ticket: wq#1656 (retire, found no-op), wq#1627 (found, F-10), wq#596 (installed)
+  data:
+    files: [/home/lumen/minerva/v4/reports/596_watch.csv,
+            /home/lumen/minerva/v4/reports/596_watch_events.log,
+            /home/lumen/minerva/v4/reports/596_watch_state,
+            /home/lumen/minerva/v4/reports/596_watch_ROLLED_BACK,
+            /home/lumen/minerva/v4/reports/596_watch_baseline]
+    disposition: >
+      left in place — small append-only CSV/log/state files, harmless once
+      the timer is gone, useful as a record of the 2026-08-14 rollout window
+      if anyone re-derives the baseline restart count later.
+  guards:
+    - lumen-rerank-thread-watch.service/.timer: >
+        `systemctl stop`/`disable`/`mask` and removing the two unit files
+        under `/etc/systemd/system` is outside this build lane's permitted
+        actions (house deny-list blocks systemctl stop/disable/mask; no
+        systemctl-mutate grant on this lane) — same restriction hit by wq#1643
+        for `lumen-split-watch`. The script itself already self-neutralizes
+        (DONE-marker exit 0, see reason above), so removing the unit is a
+        cleanup of dead weight (a wasted fork+exec every 5 min, one more
+        false "still doing something" line in service atlases) rather than a
+        behavior fix. Follow-up filed to a lane with systemctl-mutate access:
+        stop+disable both units, `rm` the two files under
+        `/etc/systemd/system/`, `systemctl daemon-reload`, then
+        `unit-drift snapshot` to fold the removal into the
+        `/home/lumen/fleet-units` baseline (see
+        ops/wq1656-retire-lumen-rerank-thread-watch/RUNBOOK.md).
+
 - name: lumen-agent (context only, not touched by wq#1643)
   units: [lumen-agent]
   load_state: masked
