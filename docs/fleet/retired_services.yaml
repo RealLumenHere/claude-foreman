@@ -121,3 +121,52 @@
         this is inert by construction, not a live bug. It self-arms if
         Frank ever unmasks/revives lumen-agent. wq#1627 (F-4) flagged it as
         "harmless but stale"; this entry is that documentation.
+
+- name: lumen-dgm
+  units: [lumen-dgm.timer, lumen-dgm.service]
+  load_state: loaded   # confirmed via `systemctl status lumen-dgm.timer` 2026-09-11 —
+                        # enabled/active(waiting), fires daily 17:00 UTC, last real
+                        # cycle 2026-09-10 (DISCARD)
+  retired_on: "2026-09-11"
+  reason: >
+    DGM's genome is config_registry.json (only mutated field in practice:
+    generator_sys), whose only live readers are dgm.py and a5_common.py —
+    i.e. DGM's own benchmark harness (wq#1715 F2). The three services that
+    consumed the config in production (lumen-planner, lumen-generator,
+    lumen-evaluator) were structurally retired with the agent5 split — unit
+    files not-found per the wq#1643 sweep (see agent5-split entry above).
+    Since then every daily cycle spends one proposer LLM call plus a paired
+    12-prompt benchmark run (base + candidate generations, LLM-graded)
+    optimizing a system prompt no live output ever flows through.
+    Empirically the loop had also plateaued on its own benchmark: 91 cycles
+    since 2026-06-16 — 85 discard, 3 promote (2026-08-18/20/24), 2 pending,
+    1 discarded-by-human; zero promotes in the 18 days to 2026-09-11, recent
+    bootstrap CIs all straddle zero. Rewiring the genome onto a live
+    consumer (fworker prompt / prompt-forge templates) was considered and
+    rejected: those templates are code changed by PR with no benchmark
+    harness, no versioned registry, and no human-gated promote path — that
+    is a new project to design on its own merits, not a rewire (recorded in
+    ops/wq1778-dgm-retire-decision/RUNBOOK.md). Decision made under the
+    standing full-autonomy instruction; also settles wq#1777's dependency
+    (do NOT build the v2 rotation wheel — the genome has no consumer).
+  ticket: wq#1778 (decision + this record), wq#1715 (F2 found), wq#1643 (agent5-split retirement)
+  data:
+    files: [/home/lumen/autonomy/agent5/config_registry.json,
+            /home/lumen/autonomy/agent5/.dgm_history.jsonl,
+            /home/lumen/autonomy/agent5/benchmark.jsonl,
+            /home/lumen/autonomy/agent5/.dgm_sandbox.log]
+    disposition: >
+      left in place as archive — config_registry.json holds the full
+      versioned lineage (10 versions, active v3-evaltokens-20260807, no
+      pending awaiting approval) and .dgm_history.jsonl the 91-cycle record
+      with per-prompt graded rows; both are the primary evidence base for
+      any future prompt-optimization loop design. Nothing to drain: DGM
+      sandboxes exclusively on redis db6 (lumen6:*) and clears it after
+      every run.
+  guards:
+    - lumen-dgm.timer/.service: >
+        `systemctl disable --now` and unit-file removal are outside this
+        build lane's permitted actions (house deny-list, same restriction
+        as wq#1643/wq#1656). Follow-up ticket filed for a lane with
+        systemctl-mutate access — steps in
+        ops/wq1778-dgm-retire-decision/RUNBOOK.md.
