@@ -302,3 +302,34 @@ def test_cli_json_output_and_exit_codes(db, capsys):
     assert '"index_size": 5' in payload
     assert lcs.main(["--db", db, "--strict", "--no-files"]) == 1
     assert lcs.main(["--db", "/nonexistent/minerva.db", "--no-files"]) == 2
+
+
+# --------------------------------------------------------------- ticket filing
+
+def test_file_config_ticket_uses_the_real_wq_and_aq_argv_shapes(monkeypatch):
+    """wq#1797: wq add takes --title (positional title is an argparse error)
+    and aq add is positional <source> <key> <title> [msg] (bin/aq:93). The
+    TIER_TICKET action must file against those shapes, not invented flags."""
+    calls = []
+    monkeypatch.setattr(lcs, "run", lambda cmd, timeout=120: calls.append(cmd) or (0, ""))
+    hits = [{
+        "location": "storage_manifest.yaml:1",
+        "subject": "hathor", "predicate": "power_plug",
+        "dead_value": "P3", "valid_to": "2026-07-01", "current_value": "P5",
+    }]
+
+    lcs.file_config_ticket(hits)
+
+    assert len(calls) == 2
+    wq_cmd, aq_cmd = calls
+
+    assert wq_cmd[:2] == [lcs.WQ, "add"]
+    assert "--title" in wq_cmd
+    title = wq_cmd[wq_cmd.index("--title") + 1]
+    assert title == "[minerva] stale superseded values in storage_manifest.yaml"
+
+    assert aq_cmd[0] == lcs.AQ
+    assert aq_cmd[1] == "add"
+    assert aq_cmd[2] == "lumen-contradiction-scan"
+    assert aq_cmd[3] == "storage_manifest.yaml"
+    assert aq_cmd[4] == title
