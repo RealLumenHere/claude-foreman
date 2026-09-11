@@ -7,7 +7,11 @@ whitespace evasion; every allow class gets a straight pass.
 import json
 import os
 import subprocess
+import sys
 import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import primary_tree_guard as ptg  # noqa: E402  # wq#1752 runtime-env simulation
 
 GUARD = os.path.join(os.path.dirname(__file__), "..", "guard.sh")
 WORKTREE = "/home/lumen/worktrees/wq999-a1"
@@ -735,3 +739,64 @@ def test_primary_tree_write_edit_env_override_respected():
         "Edit", {"file_path": f"{PRIMARY}/f.py", "old_string": "a", "new_string": "b"},
         env_extra={"FOREMAN_PRIMARY_TREES": "/srv/custom-primary"})
     assert rc == 0
+
+
+# ---- wq#1752 (ISSUE-LOG #302, wq#1733 contradiction): kb + shallow nest archive ----
+# wq#1733's verify-pass of wq#1719/PR#426 found the Edit/Write wall above missed kb
+# and the shallow /home/lumen/projects/nest archive: both are granted as default
+# add_dirs (agents.yaml) but neither was reachable through primary_tree_guard's
+# STATIC_PRIMARY_TREES or router.LANE_REPO (kb had no entry at all; LANE_REPO's
+# "nest" pointed one level deeper, at .../nest/NoLongerEvil-Thermostat). The prior
+# wq#1719 tests only ever exercised the stale foreman/bin/pokemon 3-root list, so
+# CI passed despite the gap. These target kb/nest specifically, in both the
+# fallback list guard.sh carries when FOREMAN_PRIMARY_TREES is unset/empty, and in
+# a simulation of the real runtime env fworker sets from
+# primary_tree_guard.primary_trees()'s own output.
+def test_primary_trees_registry_includes_kb_and_nest(monkeypatch):
+    monkeypatch.delenv("FOREMAN_PRIMARY_TREES", raising=False)
+    trees = ptg.primary_trees()
+    assert "/home/lumen/kb" in trees and "/home/lumen/projects/nest" in trees, trees
+
+
+def test_primary_tree_write_edit_kb_and_nest_blocked_fallback():
+    # FOREMAN_PRIMARY_TREES unset/empty: guard.sh falls back to its own hardcoded
+    # list, which must also carry kb/nest, not just the original 3 roots.
+    failures = []
+    for tool in ("Write", "Edit"):
+        for ptree in ("/home/lumen/kb", "/home/lumen/projects/nest"):
+            target = f"{ptree}/README.md"
+            rc, stderr = run_guard(tool, {"file_path": target, "content": "x"},
+                                    env_extra={"FOREMAN_PRIMARY_TREES": ""})
+            if rc != 2 or "wq#1719" not in stderr:
+                failures.append((tool, target, rc, stderr))
+    assert not failures, f"expected clean wq#1719 block, got: {failures}"
+
+
+def test_primary_tree_write_edit_kb_and_nest_blocked_runtime_env(monkeypatch):
+    # wq#1733's actual repro: build FOREMAN_PRIMARY_TREES the way fworker does, from
+    # primary_tree_guard.primary_trees()'s own output, and confirm kb/nest are
+    # covered by the resulting env value, not just by a test-only override.
+    monkeypatch.delenv("FOREMAN_PRIMARY_TREES", raising=False)
+    trees = ptg.primary_trees()
+    assert "/home/lumen/kb" in trees and "/home/lumen/projects/nest" in trees, trees
+    env_val = ":".join(trees)
+    failures = []
+    for tool in ("Write", "Edit"):
+        for ptree in ("/home/lumen/kb", "/home/lumen/projects/nest"):
+            target = f"{ptree}/README.md"
+            rc, stderr = run_guard(tool, {"file_path": target, "content": "x"},
+                                    env_extra={"FOREMAN_PRIMARY_TREES": env_val})
+            if rc != 2 or "wq#1719" not in stderr:
+                failures.append((tool, target, rc, stderr))
+    assert not failures, f"expected clean wq#1719 block, got: {failures}"
+
+
+def test_primary_tree_branch_switch_blocked_kb_and_nest_fallback():
+    # Same fallback-list gap, on the wq#900 git-verb wall (Bash), not just Edit/Write.
+    failures = []
+    for ptree in ("/home/lumen/kb", "/home/lumen/projects/nest"):
+        rc, stderr = run_guard("Bash", {"command": "git checkout feature"}, cwd=ptree,
+                                env_extra={"FOREMAN_PRIMARY_TREES": ""})
+        if rc != 2 or "wq#900" not in stderr:
+            failures.append((ptree, rc, stderr))
+    assert not failures, f"expected clean wq#900 block, got: {failures}"

@@ -187,7 +187,11 @@ Bash)
     # and the only op in the primary's reflog history). ff-only onto the remote
     # default can never switch branches or introduce unreviewed content; anything
     # else that moves HEAD is denied.
-    PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control}
+    # wq#1752 (ISSUE-LOG #302): kb and the shallow nest archive are default add_dirs
+    # (agents.yaml) too but were missing from this fallback and from
+    # primary_tree_guard.STATIC_PRIMARY_TREES, so a stripped env dropped the wall
+    # for exactly those two trees — added to both.
+    PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest}
     # wq#1256 (#19 sync-live guard): git clean -f/--force is just as destructive
     # to a live tree as checkout/reset — it discards untracked files with no
     # undo. The sanctioned path for resyncing a primary is /home/lumen/bin/sync-live
@@ -353,7 +357,9 @@ Read|Edit|Write|Grep|Glob)
   # to exactly this one path.
   if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; then
     if [ -z "${FOREMAN_FIRE_PLAN_PATH:-}" ] || [ "$FILE_PATH" != "$FOREMAN_FIRE_PLAN_PATH" ]; then
-      WRITE_PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control}
+      # wq#1752 (ISSUE-LOG #302): kb + shallow nest archive added, same gap as the
+      # Bash PRIMARY_TREES wall above.
+      WRITE_PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest}
       IFS=':' read -ra WPT_ARR <<< "$WRITE_PRIMARY_TREES"
       for ptree in "${WPT_ARR[@]}"; do
         [ -n "$ptree" ] || continue

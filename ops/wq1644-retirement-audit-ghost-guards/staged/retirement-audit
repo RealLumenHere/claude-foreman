@@ -80,6 +80,7 @@ def load_conf(path=CONF_PATH):
     conf.setdefault("nodes", {})
     conf.setdefault("never_touch", [])
     conf.setdefault("manifest_extra", [])
+    conf.setdefault("local_only", False)
     return conf
 
 
@@ -99,6 +100,11 @@ def run_on(node, cmd, conf, timeout=30):
         return rc, out, True
     if node in conf.get("never_touch", []):
         return 255, "NEVER_TOUCH", False
+    if conf.get("local_only"):
+        # --local-only means no outbound SSH, for every check. Enforced here, at
+        # the one primitive that can open a connection, so a check added later
+        # inherits the contract instead of having to re-declare it (wq#1756).
+        return 255, "LOCAL_ONLY", False
     ip = node_ip(node)
     if not ip:
         return 255, "NO_IP_IN_STATE_STORE", False
@@ -476,12 +482,19 @@ def extract_failed_units_allowlist(text):
     return [("systemd", n) for n in names]
 
 
-def check_d(conf, findings):
+def check_d(conf, local_only, findings):
     def missing(label, path):
         findings.append({"check": "D", "entry": label, "node": "lumen", "target": path,
                          "severity": "skip", "detail": "source file unreadable"})
 
     def probe_and_add(label, node, kind, name):
+        if node != "lumen" and local_only:
+            # Same gate check A applies before probing a remote node, reported as
+            # a skip rather than dropped so the roster stays visible in render().
+            findings.append({"check": "D", "entry": f"{label}: {name}", "node": node,
+                             "target": name, "severity": "skip",
+                             "detail": f"named by {label} — not probed (--local-only)"})
+            return
         sev, detail = probe_ghost(kind, name, node, conf)
         findings.append({"check": "D", "entry": f"{label}: {name}", "node": node,
                          "target": name, "severity": sev, "detail": f"named by {label} — {detail}"})
@@ -724,6 +737,36 @@ def selftest():
     rc, out, reachable = run_on("thor", "echo SHOULD_NEVER_RUN", conf)
     chk("run_on refuses thor", out, "NEVER_TOUCH")
 
+    # --local-only is enforced at the one primitive that can open a connection,
+    # so every check inherits it — not just the ones that remember to ask (wq#1756)
+    lo_conf = dict(conf, local_only=True)
+    rc, out, reachable = run_on("anubis", "echo SHOULD_NEVER_RUN", lo_conf)
+    chk("run_on refuses a remote node under local_only", (out, reachable),
+        ("LOCAL_ONLY", False))
+    chk("run_on still runs locally under local_only",
+        run_on("lumen", "echo ok", lo_conf)[1].strip(), "ok")
+    # gate fires only when the flag is set — asserted against an undeclared node so
+    # the "off" case stops at the IP lookup instead of opening a real connection
+    chk("run_on does not claim LOCAL_ONLY when the flag is off",
+        run_on("no-such-node-wq1756", "true", dict(conf, local_only=False))[1],
+        "NO_IP_IN_STATE_STORE")
+
+    # check D's own gate: no remote ref is probed at all under --local-only
+    probed = []
+    real_probe = globals()["probe_ghost"]
+    globals()["probe_ghost"] = lambda kind, name, node, c: (probed.append(node), ("ok", "stub"))[1]
+    try:
+        lo_findings = []
+        check_d(lo_conf, True, lo_findings)
+        chk("check_d probes nothing remote under local_only",
+            sorted({n for n in probed if n != "lumen"}), [])
+        chk("check_d still probes lumen refs under local_only", "lumen" in probed, True)
+        remote_rows = [f for f in lo_findings if f["node"] != "lumen"]
+        chk("check_d reports skipped remote refs rather than dropping them",
+            sorted({f["severity"] for f in remote_rows}) or ["skip"], ["skip"])
+    finally:
+        globals()["probe_ghost"] = real_probe
+
     print("\n" + ("ALL PASS" if fails == 0 else f"{fails} FAILURE(S)"))
     return 1 if fails else 0
 
@@ -732,11 +775,12 @@ def selftest():
 
 def cmd_run(args):
     conf = load_conf()
+    conf["local_only"] = args.local_only
     findings = []
     check_a(conf, args.local_only, findings)
     check_b(conf, args.max_age_days, findings)
     check_c(conf, findings)
-    check_d(conf, findings)
+    check_d(conf, args.local_only, findings)
     emit_alerts(findings, enabled=not args.no_alert)
     if args.json:
         print(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

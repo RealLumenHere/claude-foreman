@@ -96,6 +96,17 @@ def test_primary_trees_default_includes_registry(monkeypatch):
     assert "/home/lumen/foreman" in trees and "/home/lumen/bin" in trees
 
 
+def test_primary_trees_default_includes_kb_and_nest(monkeypatch):
+    # wq#1752 (ISSUE-LOG #302): kb and the shallow nest archive are default
+    # add_dirs (agents.yaml) but were reachable through neither STATIC_PRIMARY_TREES
+    # nor router.LANE_REPO (kb had no entry; LANE_REPO["nest"] points one level
+    # deeper, at .../nest/NoLongerEvil-Thermostat) — so a worker could Edit/Write
+    # either tree despite fworker setting FOREMAN_PRIMARY_TREES from this function.
+    monkeypatch.delenv("FOREMAN_PRIMARY_TREES", raising=False)
+    trees = ptg.primary_trees()
+    assert "/home/lumen/kb" in trees and "/home/lumen/projects/nest" in trees, trees
+
+
 def test_cli_status_exit_codes(tmp_path, monkeypatch, capsys):
     repo, git = make_primary(tmp_path)
     assert ptg.main(["status", "--repo", str(repo)]) == 0
