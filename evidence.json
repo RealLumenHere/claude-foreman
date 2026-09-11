@@ -1,1 +1,8 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1651-sentinel-probe-nrestarts-delta/README.md:6-9"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "ops/wq1766-lpp-brain-escalate-dropin/install.sh:16-24"
+    }
+  ]
+}
