@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# lumen-failed-units — EDGE-TRIGGERED sweep for ANY failed systemd unit.
+#
+# WHY THIS EXISTS (2026-08-13): logrotate.service failed every day from
+# 2026-08-08 to 2026-08-13 and nothing noticed. Every existing corrector
+# (smart-watchdog, self-healer, state-reconcile) checks an ALLOWLIST of named
+# fleet units via `systemctl is-active`. A stock Ubuntu oneshot that nobody
+# enumerated is invisible to all of them. This closes that gap: it asks systemd
+# what is broken instead of asking whether specific known things are alive.
+#
+# wq#1655 (2026-09-11): --type=path was missing from the sweep entirely, so
+# fleet-inventory-render.path sat failed+unmonitored from 05:39:45Z onward
+# (research/FLEET_SERVICE_ATLAS.md #11/F-7). .path/.socket/.timer units never
+# self-recover the way a restart=on-failure .service does, so once one is
+# newly-failed it stays that way until someone runs reset-failed by hand --
+# that class gets bumped to urgent priority instead of high. This revision is
+# layered on top of wq#1657's staged guard-exit-code classification
+# (ops/wq1657-guard-exit-convention/staged/lumen-failed-units) rather than the
+# plainer version currently live at /home/lumen/bin/lumen-failed-units -- see
+# RUNBOOK.md for which base to diff against at deploy time.
+#
+# DESIGN:
+#  - EDGE-TRIGGERED. Alerts on units NEWLY failed since last run, and posts a
+#    CLEARED notice when a previously-failed unit recovers. A unit that stays
+#    failed does NOT re-alert every cycle -- constant re-alerting is what trains
+#    you to ignore alerts, which is the actual root cause of the 6-day miss.
+#  - It NEVER restarts, resets, or mutates any unit. Reporting only. Correctors
+#    own remediation; this owns visibility. Mixing them is how you get the
+#    two-agents-restarting-lumen-agent race documented in REGISTRY.yaml.
+#  - Fail-open: any internal error exits 0 and leaves state untouched.
+#
+# State: /home/lumen/agents/failed-units/state.json
+set -uo pipefail
+
+STATE_DIR=/home/lumen/agents/failed-units
+STATE="$STATE_DIR/state.json"
+NTFY=/home/lumen/bin/ntfy-send
+AQ=/home/lumen/bin/aq
+mkdir -p "$STATE_DIR" 2>/dev/null || exit 0
+
+NOW=$(systemctl list-units --type=service --type=timer --type=socket --type=mount --type=path \
+        --state=failed --no-legend --plain 2>/dev/null \
+      | awk '{print $1}' | sort -u)
+
+PREV=""
+if [[ -r $STATE ]]; then
+  PREV=$(python3 -c "
+import json
+try:
+    print('\n'.join(json.load(open('$STATE')).get('failed', [])))
+except Exception:
+    pass
+" 2>/dev/null)
+fi
+
+NEWLY=$(comm -13 <(printf '%s\n' "$PREV" | grep -v '^$' | sort -u) \
+                 <(printf '%s\n' "$NOW"  | grep -v '^$' | sort -u))
+CLEARED=$(comm -23 <(printf '%s\n' "$PREV" | grep -v '^$' | sort -u) \
+                   <(printf '%s\n' "$NOW"  | grep -v '^$' | sort -u))
+
+notify() { # $1=priority $2=title $3=message [$4=aq-source, default failed-unit]
+  [[ -x $NTFY ]] && "$NTFY" -t lumen-alerts -p "$1" -T "$2" --quiet "$3" >/dev/null 2>&1
+  # aq CLI: aq add <source> <key> <title> [msg] -- dedups on (source,key).
+  [[ -x $AQ   ]] && "$AQ" add "${4:-failed-unit}" "$2" "$2" "$3" >/dev/null 2>&1
+  return 0
+}
+
+# wq#1657 guard exit-code contract: a unit tagged X-Lumen-Guard=finding-exit
+# (unit file or drop-in), or listed in guard-finding-exit.list, that exited 1
+# FIRED a finding -- it did not crash. Info, not urgent.
+FINDING_LIST=/home/lumen/bin/guard-finding-exit.list
+is_finding_exit() { # $1=unit
+  systemctl cat "$1" 2>/dev/null | grep -qE '^[[:space:]]*X-Lumen-Guard[[:space:]]*=[[:space:]]*finding-exit[[:space:]]*$' && return 0
+  [[ -r $FINDING_LIST ]] && grep -qxF "$1" "$FINDING_LIST" && return 0
+  return 1
+}
+
+# wq#1655: .path/.socket/.timer units have no restart=on-failure equivalent --
+# once failed they sit dead until a human runs `systemctl reset-failed`, so a
+# newly-failed one is urgent, not just high.
+is_non_recovering() { # $1=unit
+  case "$1" in
+    *.path|*.socket|*.timer) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+for u in $NEWLY; do
+  [[ -z $u ]] && continue
+  REASON=$(systemctl show "$u" -p Result --value 2>/dev/null)
+  CODE=$(systemctl show "$u" -p ExecMainStatus --value 2>/dev/null)
+  TAIL=$(journalctl -u "$u" --no-pager -n 3 -o cat 2>/dev/null | tr '\n' ' ' | cut -c1-300)
+  if [[ $REASON == exit-code && $CODE == 1 ]] && is_finding_exit "$u"; then
+    notify low "Guard fired: $u" "finding-exit guard reported (exit 1) :: $TAIL" guard-fired
+  elif is_non_recovering "$u"; then
+    notify urgent "Failed unit: $u" "result=$REASON exit=$CODE :: $TAIL :: NEVER SELF-RECOVERS -- needs manual 'systemctl reset-failed $u'"
+  else
+    notify high "Failed unit: $u" "result=$REASON exit=$CODE :: $TAIL"
+  fi
+done
+
+for u in $CLEARED; do
+  [[ -z $u ]] && continue
+  notify low "Recovered: $u" "unit no longer in failed state"
+done
+
+python3 - <<PY 2>/dev/null || true
+import json, time
+units = [u for u in """$NOW""".split() if u]
+json.dump({"failed": sorted(set(units)), "checked_at": int(time.time())},
+          open("$STATE", "w"), indent=1)
+PY
+
+if [[ -t 1 || "${1:-}" == "--print" ]]; then
+  if [[ -z $NOW ]]; then echo "no failed units"; else echo "FAILED:"; printf '  %s\n' $NOW; fi
+  [[ -n $NEWLY   ]] && { echo "NEWLY FAILED:"; printf '  %s\n' $NEWLY; }
+  [[ -n $CLEARED ]] && { echo "CLEARED:";      printf '  %s\n' $CLEARED; }
+fi
+exit 0
