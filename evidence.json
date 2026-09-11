@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "orchestrator/router.py:645-653", "cmd_run": "python3 -m pytest orchestrator/tests/test_router.py -q", "exit_code": 0}]}
+{"criteria": [{"id": "AC1", "citation": "pilots/a7d04e5ebe7d/run_pilot.py:105-133"}]}
