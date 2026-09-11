@@ -51,16 +51,25 @@ docker still stops it; this diff only fixes the ordering/wait lie.
 +After=docker.service
 +Requires=docker.service
 @@ [Service]
-+ExecStartPre=/home/lumen/bin/wait-for-port 127.0.0.1 5432 30
++ExecStartPre=/home/lumen/bin/wait-for-port 127.0.0.1 5433 30
 
 Notes:
 - lumen-convo-learn and lumen-research-index did not previously declare
   Requires=docker.service (only the 3 fleet researchers did, per
   FLEET_SERVICE_ATLAS.md :55); adding it closes the same gap for them —
   stopping docker should stop anything that depends on a container it hosts.
-- Port 4000 = litellm (FLEET_SERVICE_ATLAS.md :76). Port 5432 = lumen-pgvector,
-  a postgres/pgvector container (standard postgres port; confirmed via
-  pg_isready convention used elsewhere in this fleet, ops/wq415-.../baseline-sobek-pre.md:18).
+- Port 4000 = litellm (FLEET_SERVICE_ATLAS.md :76; confirmed open via a live
+  TCP probe, wq#1765 verify). Port 5433 = lumen-pgvector — NOT 5432. The
+  original draft of this diff guessed 5432 ("standard postgres port
+  convention") without checking the running container; wq#1765's verify pass
+  probed 127.0.0.1 directly and found 5432 refused (something else — likely
+  langfuse's own postgres — owns 5432) while 5433 is open. Applying the
+  original 5432 hunk would have made every lumen-research-index.service run
+  fail its ExecStartPre after the 30s timeout, turning today's benign
+  ordering no-op into a real outage of the research-index job. Re-confirm
+  with `python3 -c "import socket;s=socket.socket();s.settimeout(1);s.connect(('127.0.0.1',5433))"`
+  (or equivalent) before applying, in case the container's port mapping has
+  since changed.
 - `@@ [Unit]` / `@@ [Service]` mark the section each hunk belongs in rather than
   claiming exact line numbers, since the live files are outside this worker's
   sandboxed directories (see RUNBOOK.md) and could not be read to anchor a
