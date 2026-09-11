@@ -1,0 +1,7 @@
+[Unit]
+Description=wq#1640 — Frank-side hardware quick-ref drift check (files ONE user-lane ticket on drift)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/lumen/minerva
+ExecStart=/usr/bin/python3 /home/lumen/minerva/prefs_block.py check

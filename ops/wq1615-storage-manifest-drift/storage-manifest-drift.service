@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily storage manifest + FLEET_MAP drift check — survey regen diffed against committed (wq#1615)
+Documentation=file:///home/lumen/foreman/ops/wq1615-storage-manifest-drift/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+ExecStart=/home/lumen/bin/storage-manifest-drift --apply
+TimeoutStartSec=15min
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=storage-manifest-drift

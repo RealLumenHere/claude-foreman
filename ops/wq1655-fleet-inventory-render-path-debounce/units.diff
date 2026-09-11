@@ -1,0 +1,41 @@
+wq#1655 — [Unit]/[Path] stanza changes for fleet-inventory-render.{service,path}.
+Live content captured via `systemctl cat fleet-inventory-render.service
+fleet-inventory-render.path` 2026-09-11 (see RUNBOOK.md for the full pre-image).
+
+--- a/etc/systemd/system/fleet-inventory-render.service
++++ b/etc/systemd/system/fleet-inventory-render.service
+@@ [Unit]
+ Description=Fleet inventory: render machines/*.yaml -> www/fleet.html (wq#1455)
+ Documentation=file:///home/lumen/fleet/inventory/DESIGN_SOT.md
+ After=local-fs.target
++# wq#1655: a burst of PathChanged triggers (13 writes in ~15s, wq#1580) must
++# never permanently fail this oneshot; the trigger-rate guard lives on the
++# .path unit instead (TriggerLimitIntervalSec/TriggerLimitBurst below).
++StartLimitIntervalSec=0
+
+--- a/etc/systemd/system/fleet-inventory-render.path
++++ b/etc/systemd/system/fleet-inventory-render.path
+@@ [Unit]
+ Description=Fleet inventory: re-render on inventory change (wq#1455)
++# wq#1655: absorb rapid successive PathChanged events (e.g. a multi-file
++# YAML batch write) without tripping systemd's default per-unit start limit,
++# which is what actually failed 2026-09-10 05:39:45Z (unit-start-limit-hit)
++# and then stayed failed forever, since .path units never self-recover.
++TriggerLimitIntervalSec=10s
++TriggerLimitBurst=20
+
+Notes:
+- `StartLimitIntervalSec=0` on the .service disables its own start-rate
+  failure mode entirely — a oneshot render is cheap and idempotent, so there
+  is no runaway-restart risk worth guarding against on that side.
+- `TriggerLimitIntervalSec=`/`TriggerLimitBurst=` (systemd.path(5), systemd
+  >= 236) are the .path unit's own trigger-rate guard, separate from
+  StartLimit*. 20 triggers per 10s comfortably absorbs the wq#1580 case (13
+  writes in ~15s) while still bounding a genuine runaway loop. Exceeding it
+  stops the path unit from triggering further (does not itself require a
+  reset-failed the way the old default StartLimit did).
+- Neither change touches ExecStart, WorkingDirectory, or the PathChanged=
+  target list — render.py itself is untouched; this is a systemd-level fix,
+  not a render.py debounce (the ticket's "or debounce in render.py"
+  alternative was not taken because the systemd-level fix covers the same
+  failure with less surface area).
