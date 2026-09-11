@@ -2,7 +2,8 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "ops/wq1766-lpp-brain-escalate-dropin/install.sh:16-24"
+      "citation": "ops/wq1766-lpp-brain-escalate-dropin/install.sh:16-24",
+      "deploy_target": "/etc/systemd/system/lumen-pokemon-live.service.d/35-brain-escalate-1664.conf"
     }
   ]
 }
