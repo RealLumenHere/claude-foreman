@@ -1,0 +1,357 @@
+--- /home/lumen/bin/retirement-audit	2026-08-23 12:18:00.076174760 +0000
++++ staged/retirement-audit	2026-09-10 23:57:31.995101127 +0000
+@@ -14,6 +14,18 @@
+                            systemd unit and no container owns. WARN.
+   C  DEAD UNIT FILES       units that are active or enabled while their unit file
+                            or ExecStart target is gone from disk. WARN.
++  D  GHOST GUARDS          every unit/container named by ANOTHER guard's own
++                           config (healer_watch_table.yaml, split_watch.py UNITS,
++                           lumen_status_monitor.py svc list, aq_escalate
++                           RUNBOOKS, drift-assert GOLDEN, lumen-failed-units'
++                           guard-finding-exit.list) must resolve to a loaded
++                           systemd unit or a running docker container. A guard
++                           naming a ghost is an ALERT (wq#1644,
++                           foreman/research/FLEET_SERVICE_ATLAS.md §6): the
++                           guard silently no-ops or false-"ok"s forever and
++                           nothing else is watching the watcher. This is what
++                           would have caught the split-watch agent5 units and
++                           the healer's stale `stall:`/FALLBACK entries.
+ 
+ Read-only. Never stops, disables or kills anything — it reports and files alerts.
+ Alerts persist to aq (source=retirement-audit) and go out on ntfy.
+@@ -24,7 +36,7 @@
+   retirement-audit list
+   retirement-audit selftest
+ """
+-import argparse, json, os, re, subprocess, sys, time
++import argparse, ast, json, os, re, subprocess, sys, time
+ 
+ CONF_PATH = os.environ.get("RETIREMENT_AUDIT_CONF",
+                            "/home/lumen/docs/fleet/retired_services.yaml")
+@@ -36,6 +48,20 @@
+ 
+ LIVE_ACTIVE = ("active", "activating", "reloading")
+ 
++# ---- check D source files (env overrides so tests can point at fixtures) ----
++HEALER_TABLE     = os.environ.get("RETIREMENT_AUDIT_HEALER_TABLE",
++                                  "/home/lumen/agent/healer_watch_table.yaml")
++SPLIT_WATCH_SRC  = os.environ.get("RETIREMENT_AUDIT_SPLIT_WATCH",
++                                  "/home/lumen/agents/split-watch/split_watch.py")
++STATUS_MON_SRC   = os.environ.get("RETIREMENT_AUDIT_STATUS_MON",
++                                  "/home/lumen/agent/lumen_status_monitor.py")
++AQ_ESCALATE_SRC  = os.environ.get("RETIREMENT_AUDIT_AQ_ESCALATE",
++                                  "/home/lumen/bin/aq_escalate.py")
++DRIFT_ASSERT_SRC = os.environ.get("RETIREMENT_AUDIT_DRIFT_ASSERT",
++                                  "/home/lumen/bin/drift-assert")
++FAILED_UNITS_SRC = os.environ.get("RETIREMENT_AUDIT_FAILED_UNITS",
++                                  "/home/lumen/bin/lumen-failed-units")
++
+ 
+ def sh(cmd, timeout=30):
+     try:
+@@ -307,6 +333,217 @@
+                          "detail": "no active unit points at a missing file"})
+ 
+ 
++# ---------------------------------------------------------------- check D
++
++def read_text(path):
++    try:
++        with open(path) as f:
++            return f.read()
++    except OSError:
++        return None
++
++
++def ghost_verdict_systemd(facts):
++    """(status, detail) — pure, selftested. A guard's target only needs to be
++    LOADED, not active: plenty of legitimate guard targets are oneshot units or
++    timers that sit inactive between fires. not-found/masked is the ghost."""
++    load = facts.get("LoadState", "unknown")
++    active = facts.get("ActiveState", "unknown")
++    if load in ("not-found", "masked"):
++        return "alert", f"ghost: LoadState={load} (ActiveState={active}) — no guard should be watching this"
++    return "ok", f"LoadState={load}, ActiveState={active}"
++
++
++def docker_ghost_verdict(hits, pattern):
++    """hits: [(name, state), ...] from `docker ps -a`. Pure, selftested."""
++    matched = [(n, s) for n, s in hits if re.search(pattern, n)]
++    running = [n for n, s in matched if s == "running"]
++    if running:
++        return "ok", f"running: {', '.join(running)}"
++    if matched:
++        return "warn", f"present but not running: {', '.join(n for n, _ in matched)}"
++    return "alert", "ghost: no container by this name/pattern"
++
++
++def probe_ghost(kind, name, node, conf):
++    """(severity, detail) for one (kind, name) ref on node, via the same
++    read-only run_on() plumbing check A uses (SSH, never_touch, reachability)."""
++    if kind == "docker":
++        rc, out, reachable = run_on(node, "docker ps -a --format '{{.Names}}\t{{.State}}'", conf)
++        if not reachable or rc != 0:
++            return "skip", "docker not queryable on this node"
++        hits = [tuple(l.split("\t")) for l in out.strip().splitlines() if "\t" in l]
++        return docker_ghost_verdict(hits, name)
++    cmd = f"systemctl show {name} -p LoadState -p ActiveState"
++    rc, out, reachable = run_on(node, cmd, conf)
++    if not reachable:
++        return "skip", f"node unreachable ({out.strip()[:80]})"
++    return ghost_verdict_systemd(unit_facts(out))
++
++
++def extract_healer_units(text):
++    """(kind, name) refs from healer_watch_table.yaml's units:/stall: blocks.
++    Pure over already-read text — selftested against a synthetic table."""
++    import yaml
++    t = yaml.safe_load(text) or {}
++    refs = [(spec.get("kind", "systemd"), name)
++            for name, spec in (t.get("units") or {}).items()]
++    refs += [("systemd", name) for name in (t.get("stall") or {}).keys()]
++    return refs
++
++
++def extract_bracket_list(text, marker):
++    """Quoted strings out of `marker = [...]` or `for s in [...]`. Regex only —
++    never executes the source file. Pure, selftested."""
++    m = re.search(re.escape(marker) + r"\s*(?:=|in)\s*\[([^\]]*)\]", text)
++    if not m:
++        return []
++    return re.findall(r"""['"]([^'"]+)['"]""", m.group(1))
++
++
++SHELL_REF_PATTERNS = (
++    ("systemd", re.compile(r"systemctl (?:restart|start|stop|is-active|is-enabled|status|show) "
++                          r"([A-Za-z0-9_.@-]+)")),
++    ("docker",  re.compile(r"docker inspect -f '[^']*' ([A-Za-z0-9_.-]+)")),
++    ("docker",  re.compile(r"docker (?:restart|stop|start) ([A-Za-z0-9_.-]+)")),
++    ("docker",  re.compile(r"docker ps[^\n]*grep -c ([A-Za-z0-9_.-]+)")),
++    ("docker",  re.compile(r"\bdocker (\S+) recreation\b")),
++)
++
++
++def extract_shell_refs(text):
++    """(kind, name) refs out of a shell snippet or runbook prose string. Pure,
++    selftested. Deliberately narrow: only clearly-named systemctl/docker
++    targets, never a guess at what a bare word might mean."""
++    refs = []
++    for kind, pat in SHELL_REF_PATTERNS:
++        refs += [(kind, m.group(1)) for m in pat.finditer(text)]
++    return refs
++
++
++def extract_aq_runbooks(text):
++    """(kind, name) refs out of aq_escalate.py's RUNBOOKS dict values."""
++    m = re.search(r"RUNBOOKS\s*=\s*\{(.*?)\n\}", text, re.S)
++    if not m:
++        return []
++    try:
++        d = ast.literal_eval("{" + m.group(1) + "}")
++    except Exception:
++        return []
++    refs = []
++    for runbook in d.values():
++        refs += extract_shell_refs(runbook)
++    return refs
++
++
++def extract_drift_golden(text, conf):
++    """(kind, name, node) refs out of drift-assert's GOLDEN list. Only rows
++    whose host is "lumen" or already declared in retired_services.yaml's
++    nodes: map are probed — same roster check_a already trusts."""
++    m = re.search(r"GOLDEN\s*=\s*\[(.*?)\n\]", text, re.S)
++    if not m:
++        return []
++    try:
++        rows = ast.literal_eval("[" + m.group(1) + "]")
++    except Exception:
++        return []
++    refs = []
++    for row in rows:
++        if len(row) < 5:
++            continue
++        _gid, host, _desc, cmd, _expected = row[:5]
++        if host != "lumen" and host not in conf.get("nodes", {}):
++            continue
++        refs += [(kind, name, host) for kind, name in extract_shell_refs(cmd)]
++    return refs
++
++
++def extract_failed_units_allowlist(text):
++    """lumen-failed-units (wq#1657, staged) reads a FINDING_LIST file of unit
++    names to classify "guard fired" vs "guard broke". Returns:
++      None                      — FINDING_LIST not wired yet, nothing to check
++      ("__missing__", path)     — wired, but the list file itself is gone
++      [(kind, name), ...]       — wired and readable
++    """
++    m = re.search(r"FINDING_LIST=(\S+)", text)
++    if not m:
++        return None
++    path = m.group(1).strip("'\"")
++    body = read_text(path)
++    if body is None:
++        return ("__missing__", path)
++    names = [l.strip() for l in body.splitlines() if l.strip() and not l.strip().startswith("#")]
++    return [("systemd", n) for n in names]
++
++
++def check_d(conf, findings):
++    def missing(label, path):
++        findings.append({"check": "D", "entry": label, "node": "lumen", "target": path,
++                         "severity": "skip", "detail": "source file unreadable"})
++
++    def probe_and_add(label, node, kind, name):
++        sev, detail = probe_ghost(kind, name, node, conf)
++        findings.append({"check": "D", "entry": f"{label}: {name}", "node": node,
++                         "target": name, "severity": sev, "detail": f"named by {label} — {detail}"})
++
++    text = read_text(HEALER_TABLE)
++    if text is None:
++        missing("healer_watch_table.yaml", HEALER_TABLE)
++    else:
++        try:
++            refs = extract_healer_units(text)
++        except Exception as e:
++            refs = []
++            findings.append({"check": "D", "entry": "healer_watch_table.yaml", "node": "lumen",
++                             "target": HEALER_TABLE, "severity": "warn",
++                             "detail": f"could not parse: {e}"})
++        for kind, name in refs:
++            probe_and_add("healer_watch_table.yaml", "lumen", kind, name)
++
++    text = read_text(SPLIT_WATCH_SRC)
++    if text is None:
++        missing("split_watch.py UNITS", SPLIT_WATCH_SRC)
++    else:
++        for name in extract_bracket_list(text, "UNITS"):
++            probe_and_add("split_watch.py UNITS", "lumen", "systemd", name)
++
++    text = read_text(STATUS_MON_SRC)
++    if text is None:
++        missing("lumen_status_monitor.py svc list", STATUS_MON_SRC)
++    else:
++        for name in extract_bracket_list(text, "for s"):
++            probe_and_add("lumen_status_monitor.py svc list", "lumen", "systemd", name)
++
++    text = read_text(AQ_ESCALATE_SRC)
++    if text is None:
++        missing("aq_escalate RUNBOOKS", AQ_ESCALATE_SRC)
++    else:
++        for kind, name in extract_aq_runbooks(text):
++            probe_and_add("aq_escalate RUNBOOKS", "lumen", kind, name)
++
++    text = read_text(DRIFT_ASSERT_SRC)
++    if text is None:
++        missing("drift-assert GOLDEN", DRIFT_ASSERT_SRC)
++    else:
++        for kind, name, node in extract_drift_golden(text, conf):
++            probe_and_add("drift-assert GOLDEN", node, kind, name)
++
++    text = read_text(FAILED_UNITS_SRC)
++    if text is None:
++        missing("lumen-failed-units", FAILED_UNITS_SRC)
++    else:
++        allow = extract_failed_units_allowlist(text)
++        if allow is None:
++            pass  # guard-finding-exit.list not wired yet (wq#1657 still staged) — nothing to check
++        elif isinstance(allow, tuple) and allow[0] == "__missing__":
++            findings.append({"check": "D", "entry": "lumen-failed-units: guard-finding-exit.list",
++                             "node": "lumen", "target": allow[1], "severity": "warn",
++                             "detail": f"FINDING_LIST={allow[1]} is wired in but the file does not exist"})
++        else:
++            for kind, name in allow:
++                probe_and_add("lumen-failed-units guard-finding-exit.list", "lumen", kind, name)
++
++
+ # ---------------------------------------------------------------- output
+ 
+ def emit_alerts(findings, enabled=True):
+@@ -397,6 +634,79 @@
+         exec_target_exists("/no/such/binary"), False)
+     chk("exec target: bare name on PATH is fine", exec_target_exists("sh"), True)
+ 
++    # ---- check D: ghost-guard helpers, pure, no live file/network I/O ----
++    chk("ghost: not-found is a ghost",
++        ghost_verdict_systemd({"LoadState": "not-found", "ActiveState": "inactive"})[0], "alert")
++    chk("ghost: masked is a ghost",
++        ghost_verdict_systemd({"LoadState": "masked", "ActiveState": "inactive"})[0], "alert")
++    chk("ghost: loaded-but-inactive is fine (oneshot/timer target)",
++        ghost_verdict_systemd({"LoadState": "loaded", "ActiveState": "inactive"})[0], "ok")
++    chk("ghost: loaded-and-active is fine",
++        ghost_verdict_systemd({"LoadState": "loaded", "ActiveState": "active"})[0], "ok")
++
++    chk("docker ghost: running container is fine",
++        docker_ghost_verdict([("litellm", "running")], "litellm")[0], "ok")
++    chk("docker ghost: stopped-but-present is a warn, not a ghost",
++        docker_ghost_verdict([("ntfy", "exited")], "ntfy")[0], "warn")
++    chk("docker ghost: absent is a ghost",
++        docker_ghost_verdict([("litellm", "running")], "no-such-container")[0], "alert")
++
++    chk("extract healer units: units: + stall: both surface, ports: does not",
++        sorted(extract_healer_units(
++            "units:\n  redis-server: {kind: systemd}\n  ntfy: {kind: docker}\n"
++            "stall:\n  lumen-agent: {threshold_s: 60}\n"
++            "ports:\n  redis-server: 6379\n")),
++        sorted([("systemd", "redis-server"), ("docker", "ntfy"), ("systemd", "lumen-agent")]))
++
++    chk("extract bracket list: UNITS = [...]",
++        extract_bracket_list('UNITS = ["lumen-planner", "lumen-generator"]\n', "UNITS"),
++        ["lumen-planner", "lumen-generator"])
++    chk("extract bracket list: for s in [...]",
++        extract_bracket_list('"services": {s:svc(s) for s in ["lumen-agent","lumen-messenger"]},\n',
++                             "for s"),
++        ["lumen-agent", "lumen-messenger"])
++    chk("extract bracket list: marker absent yields nothing",
++        extract_bracket_list("no markers in this text\n", "UNITS"), [])
++
++    chk("extract shell refs: systemctl restart",
++        extract_shell_refs("systemctl restart lumen-litellm-auth-monitor (Restart=always)"),
++        [("systemd", "lumen-litellm-auth-monitor")])
++    chk("extract shell refs: docker inspect -f",
++        extract_shell_refs("docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' litellm"),
++        [("docker", "litellm")])
++    chk("extract shell refs: docker ps | grep -c",
++        extract_shell_refs("docker ps --format '{{.Names}}' | grep -c homeassistant"),
++        [("docker", "homeassistant")])
++    chk("extract shell refs: prose 'docker X recreation'",
++        extract_shell_refs("check docker litellm recreation"),
++        [("docker", "litellm")])
++    chk("extract shell refs: no systemctl/docker means no refs",
++        extract_shell_refs("sudo -n -u postgres psql -tAc 'SELECT pg_is_in_recovery()'"), [])
++
++    chk("extract aq_escalate RUNBOOKS: unit + container both surface",
++        sorted(extract_aq_runbooks(
++            'RUNBOOKS = {\n'
++            ' "probe-a": "systemctl restart lumen-litellm-auth-monitor; check docker litellm recreation",\n'
++            ' "probe-b": "no unit here",\n'
++            '}\nDEFAULT_RUNBOOK = "x"\n')),
++        sorted([("systemd", "lumen-litellm-auth-monitor"), ("docker", "litellm")]))
++
++    _drift_conf = {"nodes": {"maat": {}}}
++    chk("extract drift GOLDEN: lumen host kept, non-roster host dropped",
++        extract_drift_golden(
++            'GOLDEN = [\n'
++            '    ("a", "lumen", "d", "systemctl is-enabled lumen-agent", "enabled"),\n'
++            '    ("b", "maat", "d", "docker inspect -f \'{{.State}}\' vaultwarden", "x"),\n'
++            '    ("c", "unknownhost", "d", "systemctl is-active something", "x"),\n'
++            ']\n', _drift_conf),
++        [("systemd", "lumen-agent", "lumen"), ("docker", "vaultwarden", "maat")])
++
++    chk("failed-units allowlist: FINDING_LIST absent means nothing wired yet",
++        extract_failed_units_allowlist("FINDING=nope\n"), None)
++    chk("failed-units allowlist: wired but file missing",
++        extract_failed_units_allowlist("FINDING_LIST=/no/such/file.list\n"),
++        ("__missing__", "/no/such/file.list"))
++
+     conf = load_conf()
+     chk("config parses with entries", len(conf["retired"]) > 0, True)
+     required = {"name", "kind", "expect"}
+@@ -426,6 +736,7 @@
+     check_a(conf, args.local_only, findings)
+     check_b(conf, args.max_age_days, findings)
+     check_c(conf, findings)
++    check_d(conf, findings)
+     emit_alerts(findings, enabled=not args.no_alert)
+     if args.json:
+         print(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
