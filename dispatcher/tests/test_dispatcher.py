@@ -31,6 +31,7 @@ import spawner  # noqa: E402
 import pacing  # noqa: E402
 import circuit_breaker  # noqa: E402
 import runaway  # noqa: E402
+import spawn_loop_guard  # noqa: E402
 import self_heal  # noqa: E402
 import notify_sinks  # noqa: E402
 import psi_pressure  # noqa: E402
@@ -148,7 +149,14 @@ def denv(tmp_path, monkeypatch):
     monkeypatch.setattr(notify_sinks, "NTFY_BIN", fake_ntfy)
     monkeypatch.setattr(notify_sinks, "DESKTOP_SSH_HOST", "")
 
+    # wq#1703: the spawn-loop guard files an aq row. Point it at a fake binary — a unit
+    # test must never open a row on the live alert queue.
+    aq_log = tmp_path / "aq.log"
+    fake_aq = _script(bin_dir / "fake-aq", f"#!/usr/bin/env bash\necho \"$@\" >> {aq_log}\n")
+    monkeypatch.setattr(spawn_loop_guard, "AQ_BIN", fake_aq)
+
     return {"tmp": tmp_path, "repo": str(repo_dir), "approvals": approvals,
+            "aq_log": aq_log,
             "units_state": units_state, "calls_log": calls_log, "ntfy_log": ntfy_log,
             "runs_root": runs_root,
             "gov_state": gov_state, "cfg_path": cfg_path, "wq_db": str(wq_db),
@@ -1494,6 +1502,149 @@ def test_harness_defect_clears_once_triage_changes(denv):
 
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
     assert log_events(denv, "skip", ticket=tid) == []
+
+
+# ---- wq#1703: spawn-loop guard (a worker that dies before writing EITHER artifact is
+# invisible to both breakers above — ISSUE-LOG #283: wq#1543 spawned 31x in 3h) ---------
+
+def aq_rows(denv):
+    if not denv["aq_log"].exists():
+        return []
+    return denv["aq_log"].read_text().splitlines()
+
+
+@pytest.fixture
+def loop_guard(monkeypatch):
+    """Trip on the 3rd pass instead of the 4th: the fixture's cloud_ceiling is 3, and
+    this test is about the guard, not the concurrency ceiling."""
+    monkeypatch.setattr(spawn_loop_guard, "SPAWN_LOOP_MAX", 2)
+
+
+def crash_pass(denv, dry_run=False):
+    """One dispatch pass whose worker dies leaving nothing behind — the ISSUE-LOG #283
+    shape. Clearing the fake unit list is what the crash does in production (the unit
+    exits, so the next pass no longer skips `already_running`); no attempt-N.json and no
+    failure.json are written, which is exactly why both older breakers stay blind."""
+    assert fd.run_pass(dry_run=dry_run) == 0
+    denv["units_state"].write_text("[]")
+
+
+def test_repeated_spawns_with_no_finished_attempt_stop_and_open_an_aq_row(denv, loop_guard):
+    tid = add_ticket("crashes before it can write attempt-N.json")
+
+    for _ in range(2):
+        crash_pass(denv)
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid, tid]
+    assert log_events(denv, "skip", ticket=tid) == []
+
+    crash_pass(denv)  # third pass: the guard refuses
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["stage"] == "spawn_loop"
+    assert skips[0]["reason"] == "spawn_loop"
+    assert "2 spawns since" in skips[0]["detail"]
+    assert len(lumen_calls(denv)) == 2  # the refusal really cost nothing
+    rows = aq_rows(denv)
+    assert len(rows) == 1 and f"spawn-loop-wq{tid}" in rows[0]
+    assert log_events(denv, "aq_row", ticket=tid)[0]["reason"] == "filed"
+    lines = ntfy_lines(denv)
+    assert len(lines) == 1 and f"wq#{tid}" in lines[0]
+
+
+def test_a_held_ticket_is_not_re_filed_or_re_pinged_every_pass(denv, loop_guard):
+    """The loop this replaces fired ~10 passes/hour; one aq row and one ntfy per 24h."""
+    tid = add_ticket("loops forever")
+    for _ in range(4):
+        crash_pass(denv)
+
+    assert len(log_events(denv, "skip", ticket=tid)) == 2  # passes 3 and 4
+    assert len(aq_rows(denv)) == 1
+    assert len(ntfy_lines(denv)) == 1
+
+
+def test_a_finished_attempt_lets_the_ticket_dispatch_again(denv, loop_guard):
+    """Progress is the same signal the wq#718 breaker counts: a spawn that produced an
+    attempt-N.json is an honest retry, not a loop."""
+    tid = add_ticket("slow but making progress")
+    for _ in range(2):
+        crash_pass(denv)
+    write_attempt(denv, tid, 1)
+
+    crash_pass(denv)
+
+    assert len(log_events(denv, "spawn", ticket=tid)) == 3
+    assert log_events(denv, "skip", ticket=tid) == []
+    assert aq_rows(denv) == []
+
+
+def test_the_guard_holds_a_ticket_that_was_already_being_retried(denv, loop_guard):
+    """An older attempt count is the baseline, not an exemption — the burst still has to
+    produce something NEW."""
+    tid = add_ticket("two real attempts, then a crash loop")
+    for n in (1, 2):
+        write_attempt(denv, tid, n)
+    for _ in range(2):
+        crash_pass(denv)
+
+    crash_pass(denv)
+
+    assert log_events(denv, "skip", ticket=tid)[0]["reason"] == "spawn_loop"
+
+
+def test_spawn_loop_skips_are_not_counted_as_dispatchable(denv, loop_guard):
+    """wq#1410: a correctly-refused ticket must not read as a dispatcher stall."""
+    tid = add_ticket("loops forever")
+    for _ in range(3):
+        crash_pass(denv)
+
+    assert log_events(denv, "pass_end")[-1]["dispatchable"] == 0
+
+
+def test_dry_run_neither_files_a_row_nor_pings(denv, loop_guard):
+    tid = add_ticket("loops forever")
+    for _ in range(2):
+        crash_pass(denv)
+
+    crash_pass(denv, dry_run=True)
+
+    assert log_events(denv, "would_ntfy", ticket=tid)[0]["reason"] == "spawn_loop"
+    assert aq_rows(denv) == []
+    assert len(ntfy_lines(denv)) == 0
+
+
+def test_the_ledger_survives_the_utc_day_rollover(denv, loop_guard):
+    """lane_counts reset at midnight; a 3h spawn window that reset with them would hand
+    a looping ticket a fresh budget every night (§6.3)."""
+    tid = add_ticket("spawned either side of midnight")
+    for _ in range(2):
+        crash_pass(denv)
+    st = json.loads((denv["tmp"] / "dstate.json").read_text())
+    st["day"] = "2000-01-01"
+    (denv["tmp"] / "dstate.json").write_text(json.dumps(st))
+
+    crash_pass(denv)
+
+    assert log_events(denv, "skip", ticket=tid)[0]["reason"] == "spawn_loop"
+
+
+def test_old_spawns_age_out_of_the_ledger(denv, loop_guard):
+    """The guard clears itself: the burst leaves the window and the ticket dispatches
+    again, so a transient loop never needs a human to unstick it."""
+    tid = add_ticket("loops, then goes quiet")
+    for _ in range(2):
+        crash_pass(denv)
+    path = denv["tmp"] / "dstate.json"
+    st = json.loads(path.read_text())
+    stale = (datetime.now(timezone.utc) - timedelta(hours=9)).isoformat(timespec="seconds")
+    for entry in st["spawn_ledger"][str(tid)]:
+        entry["ts"] = stale
+    path.write_text(json.dumps(st))
+
+    crash_pass(denv)
+
+    assert len(log_events(denv, "spawn", ticket=tid)) == 3
+    # the aged-out entries are pruned on load, so the ledger keeps only this pass's spawn
+    assert len(json.loads(path.read_text())["spawn_ledger"][str(tid)]) == 1
 
 
 # ---- wq#824: fail-soft lane validation -----------------------------------------------
