@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "dispatcher/spawn_loop_guard.py:105-130"}]}
+{"criteria": [{"id": "AC1", "citation": "orchestrator/router.py:709-717"}]}
