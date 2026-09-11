@@ -1,0 +1,19 @@
+--- a/context/fleet_tools.yaml (before, wq entry only)
++++ b/context/fleet_tools.yaml (after, wq entry only)
+@@ -1,4 +1,10 @@
+       - name: wq
+         path: /home/lumen/bin/wq
+         use: "The work queue. add/show/edit/claim/done/note/hold/preflight/list. Every unit of work is a ticket."
+-        invoke: "wq add --lane <lane> --pri <n> --title '...' --detail '...'   |   wq show <id>   |   wq note <id> '...'"
++        invoke: >-
++          SESSION START (wq#1720 canonical 3-line header — a bare 'export WQ_AGENT' exports
++          empty, and 'wq claim <id>' is refused as a numeric agent name):
++          1) eval "$(wq whoami --register work-N --eval)"
++          2) bash /home/lumen/minerva/context/claude_context.sh --core
++          3) wq claim --id N
++          |   wq add --lane <lane> --pri <n> --title '...' --detail '...'   |   wq show <id>   |   wq note <id> '...'
+
+Also bumped `updated: 2026-09-09` -> `updated: 2026-09-11` at the top of the file,
+and re-rendered FLEET_TOOLS.md with `fleet-tools-render` (no drift). `context/` is
+.gitignore'd in the minerva repo, so this is a direct live edit with no commit/PR —
+same shape as wq#1127's claude_context.sh change.
