@@ -118,3 +118,15 @@ def test_edit_distance_examples_from_ticket():
     formatting-typo example (lan_ip vs lan-ip)."""
     assert ls._edit_distance('lan_ip', 'lan-ip') == 1
     assert ls._edit_distance('lan_ip', 'lan_ip') == 0
+
+
+def test_hygiene_pass_aliases_resolve_against_real_registry():
+    """The one-time hygiene pass this ticket calls for (ts_ip->tailscale_ip,
+    lan-ip->lan_ip, hw->hardware, role_status->status) is config, not code --
+    verify it's actually wired into the live `state_registry.json` that
+    `canonical_predicate()` reads, not just asserted in the README's prose."""
+    reg = ls.registry()
+    assert ls.canonical_predicate('ts_ip', reg) == 'tailscale_ip'
+    assert ls.canonical_predicate('lan-ip', reg) == 'lan_ip'
+    assert ls.canonical_predicate('hw', reg) == 'hardware'
+    assert ls.canonical_predicate('role_status', reg) == 'status'
