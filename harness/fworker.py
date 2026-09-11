@@ -705,12 +705,23 @@ def write_prior_attempt_notes(ticket_id, n, worktree, transcript_events, classif
 # worktree
 # ---------------------------------------------------------------------------
 
+PROMPT_FORGE_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "prompt-forge"))
+
+
 def _memory_import(name):
     """Import a memory/ module (episodic, recall) fail-open: fleet memory is
     strictly additive (wq#1183) — a missing or broken memory tree must never
     fail an attempt or a prompt build."""
     if MEMORY_DIR not in sys.path:
         sys.path.insert(0, MEMORY_DIR)
+    return __import__(name)
+
+
+def _prompt_forge_import(name):
+    """Import a prompt-forge/ module fail-open, same contract as
+    _memory_import (wq#1636)."""
+    if PROMPT_FORGE_DIR not in sys.path:
+        sys.path.insert(0, PROMPT_FORGE_DIR)
     return __import__(name)
 
 
@@ -739,10 +750,15 @@ def assistant_text_tail(transcript_events, n=6, each_chars=1500):
     return texts[-n:]
 
 
-def distilled_memory_block(ticket):
+def distilled_memory_block(ticket_id, ticket):
     """wq#1183 recall: top-k distilled facts for the worker prompt prelude,
-    scoped to fleet + this ticket's repo when one is declared. Empty string on
-    any failure — prompt assembly never depends on the memory store."""
+    scoped to fleet + this ticket's repo when one is declared, plus (wq#1636)
+    subject-scoped live state for every subject the ticket's minerva notes
+    mention — the replacement for a worker re-running `claude_context.sh
+    --core` for the same facts. Each source is independently fail-open:
+    prompt assembly never depends on either the distilled-fact store or
+    minerva being reachable."""
+    blocks = []
     try:
         recall = _memory_import("recall")
         scopes = {"fleet"}
@@ -752,9 +768,18 @@ def distilled_memory_block(ticket):
         lane = (ticket.get("lane") or "").strip()
         if lane:
             scopes.add(f"lane:{lane}")
-        return recall.render_block(recall.top_facts(scopes=scopes))
+        block = recall.render_block(recall.top_facts(scopes=scopes))
+        if block:
+            blocks.append(block)
     except Exception:
-        return ""
+        pass
+    try:
+        block = _prompt_forge_import("fleet_context").ticket_state_block(ticket_id)
+        if block:
+            blocks.append(block.strip())
+    except Exception:
+        pass
+    return "\n\n".join(blocks)
 
 
 def slugify(text, maxlen=40):
@@ -1349,7 +1374,7 @@ def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None,
     if prior_notes_path and os.path.exists(prior_notes_path):
         with open(prior_notes_path) as f:
             prior_notes = f.read()
-    memory_block = distilled_memory_block(ticket)
+    memory_block = distilled_memory_block(ticket_id, ticket)
     if not memory_block:
         tmpl = tmpl.replace("{{DISTILLED_MEMORY}}\n\n", "").replace(
             "{{DISTILLED_MEMORY}}", "")

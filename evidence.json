@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1651-sentinel-probe-nrestarts-delta/README.md:6-9"}]}
+{"criteria": [{"id": "AC1", "cmd_run": "python3 -m pytest prompt-forge/tests/test_prompt_forge.py harness/tests/test_memory_injection.py harness/tests/test_evidence_gate.py -q", "exit_code": 0, "citation": "prompt-forge/fleet_context.py:190-238"}]}

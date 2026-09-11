@@ -495,7 +495,7 @@ def test_the_gate_can_be_switched_off_without_a_code_change(worktree, gated, mon
 def test_the_prompt_carries_the_contract_and_puts_rework_first(worktree, tmp_path,
                                                                 monkeypatch):
     monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path / "runs"))
-    monkeypatch.setattr(fworker, "distilled_memory_block", lambda t: "")
+    monkeypatch.setattr(fworker, "distilled_memory_block", lambda t, k: "")
     doc = _acceptance_doc()
     result = acceptance.verify(doc, {"criteria": []}, str(worktree), base_ref="main")
     rework = acceptance.rework_doc(4242, 1, result, prior_evidence_dir="/tmp/ev")
@@ -517,7 +517,7 @@ def test_the_prompt_carries_the_contract_and_puts_rework_first(worktree, tmp_pat
 
 def test_an_ungated_ticket_renders_exactly_as_before(worktree, tmp_path, monkeypatch):
     monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path / "runs"))
-    monkeypatch.setattr(fworker, "distilled_memory_block", lambda t: "")
+    monkeypatch.setattr(fworker, "distilled_memory_block", lambda t, k: "")
     p = fworker.load_worker_prompt(4242, {"title": "t", "detail": "d"}, str(worktree))
     assert p.startswith("You are a Lumen fleet BUILD worker")
     assert "DONE IS A REPLAY" not in p
