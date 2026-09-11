@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily storage manifest + FLEET_MAP drift check (wq#1615)
+
+[Timer]
+OnCalendar=*-*-* 06:40:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

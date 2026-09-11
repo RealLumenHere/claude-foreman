@@ -1,0 +1,36 @@
+--- a/lumen_state.py
++++ b/lumen_state.py
+@@ -49,6 +49,7 @@
+ import minerva_audit
+ import projection_state
+ import state_value_split
++import prefs_block
+
+ DB = '/home/lumen/minerva/minerva.db'
+ REGISTRY_PATH = os.environ.get(
+@@ -812,6 +813,11 @@
+     pa = sub.add_parser('asof'); pa.add_argument('when'); pa.add_argument('subject', nargs='?'); pa.add_argument('predicate', nargs='?')
+     ph = sub.add_parser('history'); ph.add_argument('subject'); ph.add_argument('predicate')
++    pr = sub.add_parser('render')  # wq#1640: renders a projection this tool owns
++    pr.add_argument('--prefs-block', action='store_true',
++                    help='wq#1640: the Frank-side hardware quick-ref (Lumen/Thor/'
++                         'Thoth/Mirror/PBox users+TS+LAN IPs), regenerated from '
++                         'state_facts instead of hand-maintained in four places')
+     a = ap.parse_args()
+
+     if a.cmd == 'init':
+@@ -848,6 +854,12 @@
+             end = r['valid_to'][:10] if r['valid_to'] else 'NOW'
+             print(f"{r['valid_from'][:10]} -> {end:<10} {display_value(r)}"
+                   f"  [{r['source_ref'] or ''}]")
+         return
++    if a.cmd == 'render':
++        if a.prefs_block:
++            print(prefs_block.render_prefs_block())
++        else:
++            print('render: nothing selected (try --prefs-block)', file=sys.stderr)
++            sys.exit(1)
++        return
+
+ if __name__ == '__main__':
+     _main()
