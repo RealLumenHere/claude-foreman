@@ -239,8 +239,12 @@ Three layers, all consulted per pass:
    session ≥20 %, weekly_all ≥15 %, Fable scoped floor per its schedule; soft margin 15
    points) → `ok`/`tight`/`deny` per model. `deny` skips. `tight` flips the pass into
    **tight-mode**: `max_spawns_per_pass` drops to 1 and only tickets at
-   `pri <= tight_mode.min_pri` are eligible; effort-first downgrade inside the rung is
-   already the router's job (T3 doctrine), not duplicated here.
+   `pri <= tight_mode.min_pri` are eligible. Concurrency is the ONLY budget response:
+   wq#1723 deleted the router's effort-first downgrade after measuring it
+   (`reports/wq1723_effort_first_downgrade.md` — a downgraded run is 9.4 % cheaper but
+   needs 9.0 % more attempts, so spend per ticket is flat at $2.75 vs $2.79 while success
+   drops 52.3 % → 48.0 % and the reopen rate goes 4.3 % → 10.5 %), so nothing below this
+   tier lowers a ticket's effort under pressure.
 3. **Lane caps (dispatch-count proxy):** `max_per_day` per lane, counted in
    `dispatcher/state.json` (`{"day": "2026-08-21", "lane_counts": {...},
    "fire_ntfy": {"710": "<iso ts>"}}`, atomic tmp+rename, UTC day rollover resets

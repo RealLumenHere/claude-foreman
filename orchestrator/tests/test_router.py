@@ -227,23 +227,30 @@ def test_family_dominance_lifts_if_sibling_not_live(tmp_path):
     assert mm.is_dominated("claude-sonnet-4-6", "high")
 
 
-# ---- effort-first downgrade -------------------------------------------------------------
+# ---- soft pressure does not move the tuple (wq#1723) ------------------------------------
 
-def test_effort_first_downgrade_under_soft_pressure(m):
-    r, why = router.select(m, "standard-engineering", pressure=lambda x: "tight")
-    assert (r.model, r.effort) == ("claude-sonnet-5", "medium")
-    assert any("effort-first" in w for w in why)
-    r, _ = router.select(m, "rca-investigation", pressure=lambda x: "tight")
-    assert (r.model, r.effort) == ("claude-opus-5", "high")
-    # fable has no legal lower effort (low/medium dominated) -> stays high, never medium
-    r, why = router.select(m, "novel-design", pressure=lambda x: "tight")
-    assert (r.model, r.effort) == ("claude-fable-5", "high")
-    assert router.effort_down(m, "claude-fable-5", "high") is None
-    # opus-5@low is dominated -> effort_down from medium is None, from high is medium
-    assert router.effort_down(m, "claude-opus-5", "medium") is None
-    assert router.effort_down(m, "claude-opus-5", "high") == "medium"
-    # sonnet-5 on archetype 1-2: xhigh/max dominated so effort_down(max) skips to high
-    assert router.effort_down(m, "claude-sonnet-5", "max", "probe-build") == "high"
+def test_soft_pressure_leaves_the_tuple_alone(m):
+    """wq#1723 deleted the effort-first downgrade. 'tight' must now select exactly the
+    tuple 'ok' would, on every archetype — the burn-rate ceiling
+    (dispatcher/burn_rate.py) is the whole budget response.
+    Evidence: reports/wq1723_effort_first_downgrade.md."""
+    for arch in router.ARCHETYPES:
+        ok, _ = router.select(m, arch, pressure=lambda x: "ok")
+        tight, why = router.select(m, arch, pressure=lambda x: "tight")
+        if ok is None:
+            assert tight is None, arch
+            continue
+        assert (tight.model, tight.effort) == (ok.model, ok.effort), arch
+        assert not any("effort-first" in w for w in why), arch
+    # the pressure reading is still recorded on the cloud rung it applied to
+    _, why = router.select(m, "standard-engineering", pressure=lambda x: "tight")
+    assert any("soft pressure noted" in w for w in why)
+
+
+def test_effort_down_helper_is_gone(m):
+    # wq#1723: the helper existed only to serve the deleted downgrade branch. If a future
+    # change reintroduces it, that change owes fresh evidence against reports/wq1723/.
+    assert not hasattr(router, "effort_down")
 
 
 def test_hard_deny_moves_to_next_model_not_lower_effort(m):

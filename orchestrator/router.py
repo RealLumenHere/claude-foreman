@@ -12,10 +12,15 @@ Doctrine, in the order it is applied:
   2. dominated_never_select is a hard guard: a dominated (model, effort) is NEVER emitted,
      not as primary, not as a downgrade, not as an escalation. If a manifest edit ever puts
      one in a chain, load_manifest() refuses to load rather than route around it.
-  3. Effort-first downgrade (§10 CONFIRMED): under soft budget pressure the same model
-     steps DOWN one effort (never into dominated territory, never below the model's own
-     ladder) before the chain moves to a cheaper model. A hard governor deny for a model
-     skips straight to the next model in the chain — a lower effort cannot un-deny a pool.
+  3. Soft budget pressure ('tight') does NOT change the tuple. A hard governor deny for a
+     model skips straight to the next model in the chain — a lower effort cannot un-deny a
+     pool — but 'tight' is handled one tier up, by the dispatcher's burn-rate concurrency
+     ceiling (dispatcher/burn_rate.py), which paces the fleet without touching any ticket's
+     (model, effort). wq#1723 measured the effort-first downgrade this replaced
+     (reports/wq1723_effort_first_downgrade.md): a downgraded run is 9.4% cheaper but needs
+     9.0% more attempts, so spend per ticket is flat ($2.75 vs $2.79) while success drops
+     52.3% -> 48.0% and the reopen rate goes 4.3% -> 10.5%. See §10 CONFIRMED in
+     FOREMAN_RESEARCH for the original claim this retires.
   4. Escalation rungs are annotated in the manifest ("(escalate-on-fail)",
      "(2-fails-or-cross-subsystem)", "(on-contradiction)") and only become eligible when
      the caller's facts satisfy the annotation.
@@ -187,8 +192,9 @@ ARCHETYPES = list(ARCHETYPE_NUMBERS.values())
 # routing rows that are not ticket archetypes: the foreman's own judgment sessions.
 EXTRA_ROUTING_ROWS = {"orchestrator"}
 
-# Soft-pressure margin: remaining% above the governor floor below which the router steps
-# effort down first (doctrine 3). Above it: full tuple. Below the floor: governor denies.
+# Soft-pressure margin: remaining% above the governor floor below which governor_pressure
+# reports 'tight'. Above it: 'ok'. Below the floor: 'deny'. 'tight' never changes the
+# tuple (doctrine 3) — it is the dispatcher's signal to engage the burn-rate ceiling.
 # wq#1669: this is only the DEFAULT — floors.json `soft_margin_pct` overrides it, so
 # zeroing floors.json (Frank 2026-08-23) can zero the margin too instead of leaving a
 # hardcoded 15-point throttle behind the zeroed floors.
@@ -446,21 +452,6 @@ def _condition_met(cond, fails, cross_subsystem, contradiction):
     return True
 
 
-def effort_down(manifest, model, effort, archetype=None):
-    """One effort step down on the same model, skipping dominated tuples. None if there
-    is no legal lower step (then the chain must move to the next model)."""
-    if effort is None:
-        return None
-    ok = [e for e in EFFORT_LADDER if e in manifest.efforts_for(model)]
-    if effort not in ok:
-        return None
-    i = ok.index(effort)
-    for e in reversed(ok[:i]):
-        if not manifest.is_dominated(model, e, archetype):
-            return e
-    return None
-
-
 def candidates(manifest, archetype, fails=0, cross_subsystem=False, contradiction=False):
     """The eligible chain for this ticket's facts, in preference order, dominated rungs
     removed (defensively; check() already refuses manifests that contain them)."""
@@ -479,7 +470,8 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
     """Pick the (model, effort) for one dispatch.
 
     pressure(model) -> 'ok' | 'tight' | 'deny'   (default: everything 'ok')
-      tight = soft budget pressure -> effort-first downgrade on that model
+      tight = soft budget pressure -> NO effect here; the dispatcher answers it with the
+              burn-rate concurrency ceiling instead (doctrine 3, wq#1723)
       deny  = governor refuses that model -> next model in the chain
     Escalation facts (fails, cross_subsystem, contradiction) unlock annotated rungs; when
     any escalation rung is unlocked it is preferred over the primary (that is what
@@ -501,8 +493,9 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
     # wq#779 F3: the un-annotated (non-escalation) part of the chain used to move only on
     # governor pressure, so a repeatedly-failing ticket kept re-hitting the same primary
     # rung forever whenever pressure stayed 'ok' (which it did: saw_limit 0/149). Each
-    # recorded fail now walks `base` forward by one rung — same doctrine as effort-first
-    # downgrade under pressure, triggered by attempt count instead. Never walks past the
+    # recorded fail now walks `base` forward by one rung, triggered by attempt count. This
+    # is the ONLY in-router downgrade left (wq#1723 deleted the pressure-driven effort-first
+    # one, which measured as a wash on spend and worse on rework). Never walks past the
     # last rung (that floor stays reachable), and never touches `esc`: an escalation
     # annotation's own condition (escalate-on-fail, 2-fails, ...) already governs when that
     # rung unlocks and takes precedence over base once it does.
@@ -524,16 +517,14 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
             reasons.append(f"skip {r}: governor denies {r.model}")
             continue
         model, effort = r.model, r.effort
-        if p == "tight" and effort:
-            e2 = effort_down(manifest, model, effort, archetype)
-            if e2:
-                reasons.append(f"{model}: soft pressure, effort-first downgrade {effort}->{e2}")
-                effort = e2
-            else:
-                reasons.append(f"{model}@{effort}: soft pressure but no legal lower effort")
+        if p == "tight":
+            # wq#1723: 'tight' used to step effort down one rung here. It no longer does —
+            # see doctrine 3. The reason line stays so a dispatch pass still records that
+            # the governor was soft-pressured when this tuple was picked.
+            reasons.append(f"{model}: soft pressure noted; burn-rate ceiling answers it, tuple unchanged")
         effort = manifest.clamp_effort(model, effort)
         why = manifest.is_dominated(model, effort, archetype)
-        if why:            # cannot happen given effort_down, but never emit a dominated tuple
+        if why:            # a manifest chain should never hold one, but never emit it
             reasons.append(f"skip {model}@{effort}: {why}")
             continue
         if (model, effort) in seen:

@@ -7,9 +7,12 @@ and *when* the foreman itself thinks. It spends no quota: the router decides, fw
 ## Layout
 
     router.py       models.yaml loader; archetype -> (model, effort) with the downgrade /
-                    escalation chain, the dominated_never_select hard guard, effort-first
-                    downgrade under soft pressure, §15 keyword classifier, wq assign,
-                    refusal-fallback awareness, fworker dispatch-cmd
+                    escalation chain, the dominated_never_select hard guard, the
+                    attempt-count base walk, §15 keyword classifier, wq assign,
+                    refusal-fallback awareness, fworker dispatch-cmd. Soft governor
+                    pressure ('tight') does NOT change the tuple — the dispatcher's
+                    burn-rate ceiling answers it (wq#1723,
+                    reports/wq1723_effort_first_downgrade.md)
     judgment.py     verify-pass filing on a shipped diff (archetype 8) + Fable-5@high
                     judgment-session cadence / burn-down triggers (`due` / `mark`)
     tests/          pytest (zero quota); the E2E case needs a wq with the wq#617 columns
