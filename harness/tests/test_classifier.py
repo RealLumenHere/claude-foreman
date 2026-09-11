@@ -31,6 +31,42 @@ def test_clean_success():
     assert run(frames, exit_code=0) == SUCCESS
 
 
+def test_api_error_retry_banner_as_last_assistant_text_is_crash_not_success():
+    # wq#1799: a success-shaped result frame whose last assistant text is a CLI
+    # "API Error:" retry banner is not real work — must not classify SUCCESS (and
+    # so must never cascade into fworker's FALSE_COMPLETE via the artifact gate).
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "working on it"}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "API Error: 400 litellm.BadRequestError: OpenAIException"}]}},
+        {"type": "result", "subtype": "success", "is_error": False},
+    ]
+    assert run(frames, exit_code=0) == CRASH
+
+
+def test_api_error_retry_banner_bracketed_and_indented_still_matches():
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "  [API Error: 529 overloaded]"}]}},
+        {"type": "result", "subtype": "success", "is_error": False},
+    ]
+    assert run(frames, exit_code=0) == CRASH
+
+
+def test_api_error_text_not_in_last_block_still_scores_success():
+    # The scrub reads the LAST assistant text only — a real recovery after a
+    # transient error, with genuine text after it, is a genuine success.
+    frames = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "API Error: 429 rate limited, retrying"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "done, PR opened"}]}},
+        {"type": "result", "subtype": "success", "is_error": False},
+    ]
+    assert run(frames, exit_code=0) == SUCCESS
+
+
 def test_success_with_nonzero_exit_is_indeterminate_not_success():
     # §D exit-code cross-check: a success result frame paired with a disagreeing exit
     # code is never trusted as SUCCESS outright.
