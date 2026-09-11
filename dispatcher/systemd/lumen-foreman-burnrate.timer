@@ -1,0 +1,16 @@
+# lumen-foreman-burnrate.timer — 15-min cadence for observed_burn_writer.py (wq#1722).
+# 15 min keeps the >=2 worker-hour minimum sample (observed_burn_core.MIN_WORKER_HOURS)
+# reachable within an hour or so at typical concurrency, without polling so often that
+# a short-lived worker's window never accumulates enough time to clear the floor.
+# SHIPS DISABLED (Tier-3, same posture as dispatch/selfheal/health).
+[Unit]
+Description=15-min cadence for lumen-foreman-burnrate (STAGED — Frank enables; wq#1722)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+RandomizedDelaySec=30
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,22 @@
+# lumen-foreman-burnrate.service — one observed_burn.json sampler poll (wq#1722).
+# Samples governor state.json percent per pool, counts cloud fworker worker-hours
+# since the last poll (lumen-run list for units still running + journalctl for
+# units that already exited), updates a per-pool EMA and writes
+# dispatcher/observed_burn.json atomically. burn_rate.load_observed() picks it up
+# on the dispatcher's next pass — no coupling between this timer and the dispatch
+# timer beyond that shared file. SHIPS DISABLED (Tier-3, same posture as
+# dispatch/selfheal/health).
+[Unit]
+Description=Lumen observed_burn.json sampler — measured per-worker pool burn (wq#1722, STAGED)
+Documentation=file:///home/lumen/foreman/dispatcher/observed_burn_writer.py
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/observed_burn_writer.py run --once
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=60
+Nice=5
