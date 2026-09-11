@@ -800,3 +800,56 @@ def test_primary_tree_branch_switch_blocked_kb_and_nest_fallback():
         if rc != 2 or "wq#900" not in stderr:
             failures.append((ptree, rc, stderr))
     assert not failures, f"expected clean wq#900 block, got: {failures}"
+
+
+# ---- wq#1761 (ISSUE-LOG #313, wq#1760 contradiction): work-queue ----
+# wq#1760's verify-pass of wq#1752/PR#459 found the same bug class survives for a
+# third default add_dir: /home/lumen/agents/work-queue (first entry in agents.yaml's
+# add_dirs) is granted to every worker but was reachable through neither
+# STATIC_PRIMARY_TREES/the guard.sh fallbacks nor router.LANE_REPO — and unlike
+# kb/nest it can never be covered by LANE_REPO at all, since it isn't a git repo.
+# Confirmed live pre-fix: Write/Edit into work-queue/wq.db (the sqlite store backing
+# the fleet task queue every worker reads/writes through the wq CLI) exited 0
+# (ALLOWED) — worse than kb/nest since a worker could hand-corrupt the live queue
+# directly, bypassing wq semantics entirely.
+def test_primary_tree_write_edit_work_queue_blocked_fallback():
+    # FOREMAN_PRIMARY_TREES unset/empty: guard.sh's own hardcoded fallback list
+    # must carry work-queue, not just the kb/nest pair wq#1752 added.
+    failures = []
+    for tool in ("Write", "Edit"):
+        for target in ("/home/lumen/agents/work-queue/wq.db",
+                       "/home/lumen/agents/work-queue/wq",
+                       "/home/lumen/agents/work-queue/README.md"):
+            rc, stderr = run_guard(tool, {"file_path": target, "content": "x"},
+                                    env_extra={"FOREMAN_PRIMARY_TREES": ""})
+            if rc != 2 or "wq#1719" not in stderr:
+                failures.append((tool, target, rc, stderr))
+    assert not failures, f"expected clean wq#1719 block, got: {failures}"
+
+
+def test_primary_tree_write_edit_work_queue_blocked_runtime_env(monkeypatch):
+    # wq#1760's actual repro: build FOREMAN_PRIMARY_TREES the way fworker does, from
+    # primary_tree_guard.primary_trees()'s own output, and confirm work-queue is
+    # covered by the resulting env value, not just by a test-only override.
+    monkeypatch.delenv("FOREMAN_PRIMARY_TREES", raising=False)
+    trees = ptg.primary_trees()
+    assert "/home/lumen/agents/work-queue" in trees, trees
+    env_val = ":".join(trees)
+    failures = []
+    for tool in ("Write", "Edit"):
+        target = "/home/lumen/agents/work-queue/wq.db"
+        rc, stderr = run_guard(tool, {"file_path": target, "content": "x"},
+                                env_extra={"FOREMAN_PRIMARY_TREES": env_val})
+        if rc != 2 or "wq#1719" not in stderr:
+            failures.append((tool, target, rc, stderr))
+    assert not failures, f"expected clean wq#1719 block, got: {failures}"
+
+
+def test_primary_tree_branch_switch_blocked_work_queue_fallback():
+    # Same fallback-list gap, on the wq#900 git-verb wall (Bash), not just Edit/Write.
+    # work-queue isn't itself a git repo, but a worker could still run a git verb
+    # with --git-dir/--work-tree/-C pointed at it, or simply have cwd resolve there.
+    rc, stderr = run_guard("Bash", {"command": "git checkout feature"},
+                            cwd="/home/lumen/agents/work-queue",
+                            env_extra={"FOREMAN_PRIMARY_TREES": ""})
+    assert rc == 2 and "wq#900" in stderr, stderr

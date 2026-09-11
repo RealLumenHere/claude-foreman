@@ -11,6 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import primary_tree_guard as ptg
+import agents_spec
 
 
 def make_primary(tmp_path, name="primary"):
@@ -105,6 +106,33 @@ def test_primary_trees_default_includes_kb_and_nest(monkeypatch):
     monkeypatch.delenv("FOREMAN_PRIMARY_TREES", raising=False)
     trees = ptg.primary_trees()
     assert "/home/lumen/kb" in trees and "/home/lumen/projects/nest" in trees, trees
+
+
+def test_primary_trees_default_includes_work_queue(monkeypatch):
+    # wq#1761 (ISSUE-LOG #313, wq#1760's verify-pass of wq#1752/PR#459): same bug
+    # class as kb/nest above, third default add_dir. work-queue has no
+    # router.LANE_REPO entry and is not a git repo (no .git — a shallow-nest-style
+    # exception, not a crash: check_tree() already handles "not a git repo"
+    # without raising), so STATIC_PRIMARY_TREES is the only thing that can ever
+    # cover it.
+    monkeypatch.delenv("FOREMAN_PRIMARY_TREES", raising=False)
+    trees = ptg.primary_trees()
+    assert "/home/lumen/agents/work-queue" in trees, trees
+
+
+def test_primary_trees_covers_every_agents_yaml_add_dir(monkeypatch):
+    # wq#1761: re-audit ask — this bug class (a default add_dir granted by
+    # agents.yaml but unreachable through primary_trees()) has now recurred twice
+    # (kb+nest in wq#1752, work-queue here). Rather than hardcode a third
+    # allowlist that itself can drift, assert directly against the live
+    # agents.yaml defaults so a future add_dir is caught automatically instead of
+    # needing its own wq ticket.
+    monkeypatch.delenv("FOREMAN_PRIMARY_TREES", raising=False)
+    trees = set(ptg.primary_trees())
+    add_dirs = agents_spec.load().default_add_dirs
+    assert add_dirs, "agents.yaml defaults.add_dirs is empty — test fixture drifted"
+    missing = [d for d in add_dirs if d not in trees]
+    assert not missing, f"add_dirs missing from primary_trees(): {missing}"
 
 
 def test_cli_status_exit_codes(tmp_path, monkeypatch, capsys):

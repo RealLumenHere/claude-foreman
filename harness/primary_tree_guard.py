@@ -41,6 +41,13 @@ STATE_PATH = os.environ.get("PRIMARY_TREE_GUARD_STATE",
 # FOREMAN_PRIMARY_TREES from this function's own output. Listed here (not
 # LANE_REPO) because LANE_REPO is keyed by dispatch lane, not guard scope, and
 # already has a distinct 'nest' entry for the deeper firmware repo.
+#
+# wq#1761 (ISSUE-LOG #313, wq#1760's verify-pass of wq#1752/PR#459): same bug
+# class, third default add_dir — /home/lumen/agents/work-queue (the sqlite
+# store + wq CLI backing the fleet task queue, first entry in agents.yaml's
+# add_dirs) has no router.LANE_REPO entry and is not a git repo (no .git), so
+# it can never reach primary_trees() through the LANE_REPO union — only this
+# static list can cover it.
 STATIC_PRIMARY_TREES = [
     "/home/lumen/foreman",
     "/home/lumen/bin",
@@ -50,6 +57,7 @@ STATIC_PRIMARY_TREES = [
     "/home/lumen/mission-control",
     "/home/lumen/kb",
     "/home/lumen/projects/nest",
+    "/home/lumen/agents/work-queue",
 ]
 
 
