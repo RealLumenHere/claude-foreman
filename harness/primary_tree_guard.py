@@ -31,6 +31,16 @@ STATE_PATH = os.environ.get("PRIMARY_TREE_GUARD_STATE",
 # Static mirror of router.LANE_REPO's values + /home/lumen/bin (repo_sweep's
 # EXTRA_REPOS). The import below is authoritative; this list exists so a broken
 # import path can never silently shrink the guard's scope to nothing.
+#
+# wq#1752 (ISSUE-LOG #302, wq#1733's verify-pass of wq#1719/PR#426): kb and the
+# shallow nest archive are both granted as default add_dirs (agents.yaml) but
+# neither was reachable through router.LANE_REPO — kb has no LANE_REPO entry at
+# all, and LANE_REPO["nest"] points one level deeper (.../nest/NoLongerEvil-
+# Thermostat) than the shallow /home/lumen/projects/nest root actually granted.
+# That let a worker Edit/Write inside either tree despite fworker setting
+# FOREMAN_PRIMARY_TREES from this function's own output. Listed here (not
+# LANE_REPO) because LANE_REPO is keyed by dispatch lane, not guard scope, and
+# already has a distinct 'nest' entry for the deeper firmware repo.
 STATIC_PRIMARY_TREES = [
     "/home/lumen/foreman",
     "/home/lumen/bin",
@@ -38,6 +48,8 @@ STATIC_PRIMARY_TREES = [
     "/home/lumen/questfree",
     "/home/lumen/pstack",
     "/home/lumen/mission-control",
+    "/home/lumen/kb",
+    "/home/lumen/projects/nest",
 ]
 
 
