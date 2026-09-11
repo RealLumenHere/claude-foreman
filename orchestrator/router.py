@@ -650,14 +650,15 @@ def _qualifies(arch, matched_pats):
 _CHEAP_ARCHETYPES = {"mechanical-edit", "probe-build"}
 
 
-def _mechanical_edit_allowed(qualifying):
-    """wq#1707: mechanical-edit may not be selected while an analysis archetype also
-    qualifies — see _ANALYSIS_ARCHETYPES. Guards both selection paths that can reach
-    mechanical-edit past a better-fitting archetype: _LANE_BIAS['fleet'], which lists it
-    first, and the wq#779 F3 cost tie-break, which only requires the cheap archetype's
-    evidence to be *equal*. The latter is what routed wq#1669 (a governor scaling design,
-    hand-corrected to novel-design) onto qwen36-local off one incidental "wire".
-    mechanical-edit is untouched when it is the only thing the text evidences."""
+def _cheap_archetype_allowed(qualifying):
+    """wq#1707 + wq#1755: a cheap archetype (mechanical-edit, probe-build) may not win a
+    _LANE_BIAS tie-break while an analysis archetype also qualifies — see
+    _ANALYSIS_ARCHETYPES. wq#1707 guarded _LANE_BIAS['fleet'], which lists mechanical-edit
+    first, and the wq#779 F3 cost tie-break (still restricted to mechanical-edit there: see
+    the call site). wq#1755 extends the same _LANE_BIAS-loop guard to _LANE_BIAS['pilot'],
+    which lists probe-build first and could otherwise put a corroborated analysis ticket
+    (e.g. "design doc for pilot benchmark harness") on sonnet-5 instead of fable-5/opus-5.
+    A cheap archetype is untouched when it is the only thing the text evidences."""
     return not any(a in _ANALYSIS_ARCHETYPES for a in qualifying)
 
 
@@ -723,10 +724,11 @@ def classify_archetype(title, detail="", lane="", manifest=None):
         # disqualified research-synthesis); fall through to the plain default instead, but
         # surface the disqualified pattern(s) rather than claiming true no-signal.
         return "standard-engineering", [p for a in hit_archs for p in by_arch[a]]
-    mech_ok = _mechanical_edit_allowed(qualifying)      # wq#1707
+    cheap_ok = _cheap_archetype_allowed(qualifying)      # wq#1707 + wq#1755
+    lane_bias = _LANE_BIAS.get(lane or "", [])
     # lane bias breaks ties among qualifying hit archs
-    for b in _LANE_BIAS.get(lane or "", []):
-        if b in qualifying and (b != "mechanical-edit" or mech_ok):
+    for b in lane_bias:
+        if b in qualifying and (b not in _CHEAP_ARCHETYPES or cheap_ok):
             return b, by_arch[b]
     incumbent = qualifying[0]
     if incumbent in _CHEAP_ARCHETYPES or len(qualifying) == 1:
@@ -735,9 +737,16 @@ def classify_archetype(title, detail="", lane="", manifest=None):
     # structurally-outranked archetypes above. A cheap archetype whose evidence is at
     # least as strong as the incumbent's should not lose just because it sits lower in
     # _RUBRIC; among multiple eligible cheap archetypes the cheaper primary rung wins.
+    # wq#1755: for a lane whose _LANE_BIAS entry leads with probe-build (pilot), this
+    # tie-break is the second path back to it after the loop above turns it away, same
+    # shape as the mechanical-edit/fleet case wq#1707 already guards here — so probe-build
+    # gets the same cheap_ok gate ONLY in a lane that actually biases toward it. A bare
+    # (lane-less) tie-break, like the "build"-lane probe-build-vs-rca-investigation case
+    # above, is untouched: that ambiguity is not lane bias resurrecting a rejected pick.
     incumbent_n = len(by_arch[incumbent])
     cheap = [a for a in qualifying if a in _CHEAP_ARCHETYPES and len(by_arch[a]) >= incumbent_n
-             and (a != "mechanical-edit" or mech_ok)]
+             and (a != "mechanical-edit" or cheap_ok)
+             and (a != "probe-build" or cheap_ok or "probe-build" not in lane_bias)]
     if not cheap:
         return incumbent, by_arch[incumbent]
     manifest = manifest or load_manifest()
