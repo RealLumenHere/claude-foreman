@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 import unittest
+import unittest.mock
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -58,6 +59,56 @@ class TestStateParsing(unittest.TestCase):
     def test_bad_slug_rejected(self):
         for bad in ("../etc", "a/b", "", "x" * 65):
             self.assertFalse(fleet_context.project_context(bad)["found"])
+
+
+class TestTicketSubjectFacts(unittest.TestCase):
+    """wq#1636: subject-scoped state facts for a ticket, sourced from
+    memory_edges (note references ticket, note mentions subject) and
+    rendered from lumen_state — the replacement for a worker re-running
+    claude_context.sh --core just to get facts it already needs."""
+
+    def setUp(self):
+        fleet_context._cache.clear()
+
+    def tearDown(self):
+        fleet_context._cache.clear()
+
+    def test_facts_gathered_per_linked_subject_and_capped(self):
+        with unittest.mock.patch.object(
+                fleet_context, "_ticket_subjects",
+                return_value=["anubis", "3dprinter", "extra"]) as mock_subjects, \
+             unittest.mock.patch.object(
+                fleet_context, "_run_state",
+                side_effect=lambda subject: {
+                    "anubis": " anubis.role = Borg backup repo  (since 2026-06-01)\n",
+                    "3dprinter": " 3dprinter.role = 3D print server  (since 2026-06-09)\n",
+                }.get(subject, "")):
+            facts = fleet_context.ticket_subject_facts(1636, cap=2)
+        mock_subjects.assert_called_once_with("wq#1636")
+        self.assertEqual([f["subject"] for f in facts], ["anubis", "3dprinter"])
+
+    def test_state_block_empty_when_no_subjects(self):
+        with unittest.mock.patch.object(fleet_context, "_ticket_subjects",
+                                         return_value=[]):
+            self.assertEqual(fleet_context.ticket_state_block(1636), "")
+
+    def test_state_block_renders_facts(self):
+        with unittest.mock.patch.object(
+                fleet_context, "_ticket_subjects", return_value=["anubis"]), \
+             unittest.mock.patch.object(
+                fleet_context, "_run_state",
+                return_value=" anubis.role = Borg backup repo  (since 2026-06-01)\n"):
+            block = fleet_context.ticket_state_block(1636)
+        self.assertIn("wq#1636", block)
+        self.assertIn("anubis.role = Borg backup repo (since 2026-06-01)", block)
+
+    def test_ticket_subjects_returns_empty_on_missing_db(self):
+        old = fleet_context.MINERVA_DB
+        fleet_context.MINERVA_DB = fleet_context.Path("/nonexistent/minerva.db")
+        try:
+            self.assertEqual(fleet_context._ticket_subjects("wq#1"), [])
+        finally:
+            fleet_context.MINERVA_DB = old
 
 
 class TestTemplates(unittest.TestCase):

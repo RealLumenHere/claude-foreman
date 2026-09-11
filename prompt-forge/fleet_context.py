@@ -28,11 +28,14 @@ import time
 from pathlib import Path
 
 LUMEN_STATE = Path("/home/lumen/minerva/lumen_state.py")
+MINERVA_DB = Path("/home/lumen/minerva/minerva.db")
 UI_INVENTORY = Path("/home/lumen/sentinel/ui_inventory.json")
 PROJECTS_DIR = Path("/home/lumen/projects")
 
 STATE_TIMEOUT_S = 20
 CACHE_TTL_S = 60
+DB_TIMEOUT_S = 5
+TICKET_SUBJECT_CAP = 6
 
 # subject.predicate = value  (since YYYY-MM-DD)
 _STATE_LINE = re.compile(
@@ -182,6 +185,60 @@ def known_projects() -> list[str]:
             pass
         return sorted(out)
     return _cached("projects", build)
+
+
+def _ticket_subjects(ticket_ref: str) -> list[str]:
+    """Subjects a ticket's minerva notes mention (wq#1636 s4.6/s5#9): a note
+    linked to the ticket by a `references` edge and to a subject by a separate
+    `mentions` edge (memory_edges is note-centric — there is no direct
+    ticket-to-subject edge) ties the two together. Empty on any DB trouble;
+    this must never block prompt assembly."""
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{MINERVA_DB}?mode=ro", uri=True,
+                               timeout=DB_TIMEOUT_S)
+    except sqlite3.Error:
+        return []
+    try:
+        cur = con.execute(
+            "SELECT DISTINCT m2.dst_id FROM memory_edges m1 "
+            "JOIN memory_edges m2 ON m1.src_id = m2.src_id "
+            "WHERE m1.dst_type='ticket' AND m1.dst_id=? AND m1.rel='references' "
+            "AND m2.rel='mentions' AND m2.dst_type='subject'",
+            (ticket_ref,),
+        )
+        return sorted(row[0] for row in cur.fetchall())
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+
+
+def ticket_subject_facts(ticket_id, cap: int = TICKET_SUBJECT_CAP) -> list[dict]:
+    """current-state facts for every subject wq#<ticket_id>'s minerva notes
+    mention, capped at `cap` subjects (wq#1636): this is what lets fworker and
+    lane prompts carry the ticket's relevant fleet facts without re-running
+    the whole `claude_context.sh --core` boot path inside the worker."""
+    ref = f"wq#{ticket_id}"
+
+    def build():
+        facts = []
+        for subject in _ticket_subjects(ref)[:cap]:
+            facts.extend(parse_state_lines(_run_state(subject)))
+        return facts
+    return _cached(f"ticket_subjects:{ref}", build)
+
+
+def ticket_state_block(ticket_id) -> str:
+    facts = ticket_subject_facts(ticket_id)
+    if not facts:
+        return ""
+    lines = [f"Subject-scoped state for wq#{ticket_id} "
+             "(live from lumen_state, linked via memory_edges — wq#1636):"]
+    for f in facts:
+        lines.append(f"- {f['subject']}.{f['predicate']} = {f['value']} "
+                     f"(since {f['since']})")
+    return "\n".join(lines) + "\n"
 
 
 def compact_summary() -> str:

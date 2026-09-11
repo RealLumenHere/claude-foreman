@@ -51,6 +51,31 @@ def test_prompt_fail_open_on_recall_crash(monkeypatch):
     assert "YOUR TICKET: wq#5" in prompt
 
 
+def test_prompt_injects_ticket_subject_state(tmp_path, monkeypatch):
+    """wq#1636: subject-scoped lumen_state facts for the ticket ride the same
+    {{DISTILLED_MEMORY}} slot as the distilled-fact recall block."""
+    recall = fworker._memory_import("recall")
+    monkeypatch.setattr(recall, "DEFAULT_STORE", str(tmp_path / "missing"))
+    fleet_context = fworker._prompt_forge_import("fleet_context")
+    monkeypatch.setattr(fleet_context, "ticket_state_block",
+                         lambda ticket_id: f"Subject-scoped state for wq#{ticket_id}:\n"
+                                            "- anubis.role = Borg backup repo (since 2026-06-01)\n")
+    prompt = fworker.load_worker_prompt(5, TICKET, "/tmp/wt")
+    assert "{{DISTILLED_MEMORY}}" not in prompt
+    assert "Subject-scoped state for wq#5" in prompt
+    assert "anubis.role = Borg backup repo" in prompt
+
+
+def test_prompt_fail_open_on_fleet_context_crash(monkeypatch):
+    fleet_context = fworker._prompt_forge_import("fleet_context")
+    def boom(ticket_id):
+        raise RuntimeError("minerva unreachable")
+    monkeypatch.setattr(fleet_context, "ticket_state_block", boom)
+    prompt = fworker.load_worker_prompt(5, TICKET, "/tmp/wt")
+    assert "{{DISTILLED_MEMORY}}" not in prompt
+    assert "YOUR TICKET: wq#5" in prompt
+
+
 def test_append_episode_event_writes_log(tmp_path, monkeypatch):
     monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
     fworker.append_episode_event(11, {"type": "attempt_end", "attempt": 1})
