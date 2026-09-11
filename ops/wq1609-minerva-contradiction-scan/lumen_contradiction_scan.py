@@ -133,12 +133,17 @@ def is_structured(value, fact_class):
 def self_identifying(value):
     """Whether a value carries its own subject. `100.88.71.47`,
     `lumen-brain.service` and `embeddings-host` do; `active`, `dead` and `P3`
-    are ordinary words or bare labels that mean nothing on their own."""
+    are ordinary words or bare labels that mean nothing on their own.
+
+    Shouting does not make a word self-identifying (wq#1629): `RETIRED` says
+    nothing about WHICH thing is retired, so it is matched subject-scoped like
+    its lowercase twin. This used to be `value.isupper() and value.isalpha()`,
+    which was harmless only while status values were prose the index could not
+    read at all — once wq#1629 split them into tokens it put 763 unscoped
+    English words into the index and the daily scan went 14 -> 777 hits."""
     if any(rx.fullmatch(value) for rx in SELF_IDENTIFYING):
         return True
-    if len(value) >= 8 and re.search(r"[0-9._:/@-]", value):
-        return True
-    return value.isupper() and value.isalpha() and len(value) >= 6
+    return len(value) >= 8 and bool(re.search(r"[0-9._:/@-]", value))
 
 
 PREDICATE_STOPWORDS = {"the", "and", "for", "has", "was"}

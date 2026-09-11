@@ -119,6 +119,18 @@ def test_bare_labels_and_common_words_stay_subject_scoped(db):
         assert next(e for e in idx if e["dead_value"] == value)["scoped"] is True
 
 
+def test_a_shouted_status_word_is_not_self_identifying():
+    """wq#1629 split prose status values into tokens, so the index is now full
+    of words like RETIRED. Uppercase says nothing about WHICH subject is
+    retired, so these match subject-scoped like their lowercase twins —
+    unscoping them took the live scan from 14 to 777 hits."""
+    assert lcs.self_identifying("100.88.71.47")
+    assert lcs.self_identifying("lumen-brain.service")
+    assert lcs.self_identifying("embeddings-host")
+    for word in ("RETIRED", "OFFLINE", "DECOMMISSIONED"):
+        assert not lcs.self_identifying(word)
+
+
 # ------------------------------------------------------------------- matching
 
 def scan_line(db_path, line):

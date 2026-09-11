@@ -93,6 +93,12 @@ are structured tokens; 184 of them are prose sentences (`root_disk` =
 is upstream — facts written as prose blobs instead of a value plus a note —
 filed as wq#1629, not paperable here.
 
+**Update (wq#1629, 2026-09-11):** that lever was pulled. Ingest now writes a
+token to `value` and the prose to `note`, and the backfill split 99 stored rows,
+taking reach to **64 of 364** (136 with `-p ALL`). Feeding the index shouted
+status words also exposed an over-broad `self_identifying()` here — see
+`../wq1629-minerva-value-note-split/README.md`.
+
 Reach that matters is hits, not index size: the weekly dream pass reported **0**;
 this pass reports **3 actionable** on the same store, each one a real superseded
 value in live text:
