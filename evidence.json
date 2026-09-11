@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1689-minerva-volatile-state-halflife/test_lumen_state_wq1689.py:44-58"}]}
+{"criteria": [{"id": "AC1", "citation": "dispatcher/spawn_loop_guard.py:105-130"}]}

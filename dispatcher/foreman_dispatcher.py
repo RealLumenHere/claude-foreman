@@ -22,7 +22,9 @@ Decision-log events (one JSON object per line, file + stdout):
                            working-tree file, so this is the only place "what config is
                            live" is answerable from)
   skip                     per-ticket refusal: stage + reason (incl. runaway_stuck —
-                           wq#718's runaway.py; see stuck_ticket_ids())
+                           wq#718's runaway.py; see stuck_ticket_ids() — and spawn_loop,
+                           wq#1703's spawn_loop_guard.looping())
+  aq_row                   an alert-queue row this pass filed (wq#1703 spawn loops)
   spawn / would_spawn      per-ticket dispatch (or dry-run equivalent)
   halt                     pass-level stop: kill_switch, circuit_breaker (wq#718 —
                            see circuit_breaker.py; disarms before this halt is even
@@ -69,6 +71,7 @@ import concurrency     # noqa: E402
 import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
 import runaway          # noqa: E402
+import spawn_loop_guard  # noqa: E402  # wq#1703: restart-loop breaker
 import psi_pressure     # noqa: E402  # wq#844
 import burn_rate        # noqa: E402  # wq#1669: burn-rate spawn controller
 import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
@@ -160,6 +163,10 @@ STRUCTURAL_SKIP_REASONS = frozenset({
     # ticket is re-laned/re-routed. Counting them as dispatchable made the watchdog
     # page "STALLED — recovery FAILED, needs you" (aq#1098 x7) on a drained queue.
     "repo_mismatch", "route_unassigned",
+    # wq#1703: a ticket the spawn-loop guard is holding is refused on purpose, the same
+    # class as runaway_stuck — counting it as dispatchable would make the watchdog read
+    # a working breaker as a dispatcher stall.
+    "spawn_loop",
 } | set(CAPABILITY_SKIP_REASONS))
 
 
@@ -345,7 +352,8 @@ def load_state(now=None):
     today = now.strftime("%Y-%m-%d")
     fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {},
              "runaway_ntfy": {}, "preflight_ntfy": {}, "gate_error_ntfy": {},
-             "harness_defect_ntfy": {}, "capability_ntfy": {}}
+             "harness_defect_ntfy": {}, "capability_ntfy": {}, "spawn_loop_ntfy": {},
+             "spawn_ledger": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -360,12 +368,17 @@ def load_state(now=None):
     gate_error_ntfy = _prune_dedup(st.get("gate_error_ntfy"), now, FIRE_NTFY_DEDUP_H)
     harness_defect_ntfy = _prune_dedup(st.get("harness_defect_ntfy"), now, FIRE_NTFY_DEDUP_H)
     capability_ntfy = _prune_dedup(st.get("capability_ntfy"), now, FIRE_NTFY_DEDUP_H)
+    spawn_loop_ntfy = _prune_dedup(st.get("spawn_loop_ntfy"), now, FIRE_NTFY_DEDUP_H)
+    # wq#1703: {tid: [{ts, attempts}]} — a list per ticket, not a single timestamp, so it
+    # prunes on its own window rather than through _prune_dedup.
+    spawn_ledger = spawn_loop_guard.prune_ledger(st.get("spawn_ledger"), now)
     if st.get("day") != today:  # UTC day rollover resets lane counts, not the ledgers (§6.3)
         return {"day": today, "lane_counts": {}, "fire_ntfy": fire,
                 "pacing_ntfy": pacing_ntfy, "runaway_ntfy": runaway_ntfy,
                 "preflight_ntfy": preflight_ntfy, "gate_error_ntfy": gate_error_ntfy,
                 "harness_defect_ntfy": harness_defect_ntfy,
-                "capability_ntfy": capability_ntfy}
+                "capability_ntfy": capability_ntfy, "spawn_loop_ntfy": spawn_loop_ntfy,
+                "spawn_ledger": spawn_ledger}
     counts = st.get("lane_counts")
     return {"day": today,
             "lane_counts": counts if isinstance(counts, dict) else {},
@@ -375,7 +388,9 @@ def load_state(now=None):
             "preflight_ntfy": preflight_ntfy,
             "gate_error_ntfy": gate_error_ntfy,
             "harness_defect_ntfy": harness_defect_ntfy,
-            "capability_ntfy": capability_ntfy}
+            "capability_ntfy": capability_ntfy,
+            "spawn_loop_ntfy": spawn_loop_ntfy,
+            "spawn_ledger": spawn_ledger}
 
 
 def save_state(st):
@@ -851,6 +866,39 @@ def handle_harness_defect_hold(state, tid, lane, summary, dry_run, log):
     save_state(state)
 
 
+def handle_spawn_loop(state, tid, lane, info, dry_run, log):
+    """wq#1703: stop re-spawning a ticket that has burned SPAWN_LOOP_MAX spawns inside
+    the guard's window without one attempt finishing, and open an aq row so the loop is
+    visible. Both breakers above key on an artifact the worker writes (attempt-N.json,
+    failure.json); this one keys on the spawn itself, which is the only thing still
+    observable when the worker dies before writing either (ISSUE-LOG #283: wq#1543
+    spawned 31x in 3h that way). Never blocks the ticket — the burst ages out of the
+    window, or a finished attempt lifts the guard and hands it to the wq#718 breaker."""
+    detail = (f"{info['spawns']} spawns since {info['since']}, "
+              f"{info['attempts']} finished attempts")
+    log.skip(tid, lane, "spawn_loop", "spawn_loop", detail=detail)
+    now = _utcnow()
+    last = state["spawn_loop_ntfy"].get(str(tid))
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=FIRE_NTFY_DEDUP_H):
+                return  # already filed + pinged within 24h — never flood
+        except ValueError:
+            pass
+    if dry_run:
+        log.emit("would_ntfy", ticket=tid, lane=lane, reason="spawn_loop")
+        return
+    filed = spawn_loop_guard.aq_row(tid, info)
+    log.emit("aq_row", ticket=tid, lane=lane, stage="spawn_loop",
+             reason="filed" if filed else "aq_add_failed", detail=detail)
+    ntfy(f"wq#{tid} ({lane}) is in a spawn loop: {detail}. Dispatcher has stopped "
+         f"re-spawning it and opened an aq row — look for a worker dying before it "
+         f"writes attempt-N.json.", priority="high",
+         title="foreman dispatcher: spawn loop")
+    state["spawn_loop_ntfy"][str(tid)] = now.isoformat(timespec="seconds")
+    save_state(state)
+
+
 PERSISTENT_PREFLIGHT_REASONS = ("static lint failed", "live proof found permission denials")
 
 
@@ -1275,6 +1323,14 @@ def _do_pass(cfg, log, state, dry_run):
                                            harness_defects[tid]["summary"], dry_run, log)
                 continue
 
+            # stage 3.5c — spawn-loop guard (wq#1703): neither breaker above sees a
+            # worker that dies before writing attempt-N.json OR failure.json, so count
+            # this dispatcher's own spawns instead. See spawn_loop_guard.looping().
+            spawn_loop = spawn_loop_guard.looping(state, tid)
+            if spawn_loop:
+                handle_spawn_loop(state, tid, lane, spawn_loop, dry_run, log)
+                continue
+
             # stage 3.6 — epic/tracker parents (wq#428): a rollup is never dispatchable work
             why = nodispatch_reason(t)
             if why:
@@ -1455,6 +1511,7 @@ def _do_pass(cfg, log, state, dry_run):
                 continue
             spawned += 1
             state["lane_counts"][lane] = state["lane_counts"].get(lane, 0) + 1
+            spawn_loop_guard.record_spawn(state, tid)  # wq#1703, before the save below
             save_state(state)  # §9: written after each spawn, atomically
             log.emit("spawn", ticket=tid, lane=lane, model=model, repo=repo, unit=unit)
             if i < len(candidates) - 1:

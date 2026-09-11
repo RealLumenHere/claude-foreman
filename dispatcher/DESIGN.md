@@ -501,6 +501,25 @@ still holds) and Frank is ntfy'd once per 24h via the same dedup ledger pattern 
 fire-approval ntfy (state.json's new `runaway_ntfy` key, alongside the existing
 `fire_ntfy`).
 
+**Spawn-loop guard** (`spawn_loop_guard.py`, wq#1703) — a new stage 3.5c, after the
+runaway detector above and the wq#1415 harness-defect hold. Both of those key on an
+artifact the *worker* writes (attempt-N.json, failure.json); a worker that dies before
+writing either is invisible to both, which is how wq#1543 spawned 31 times and wq#1572
+23 times in three hours on 2026-09-10 (ISSUE-LOG #283) with nothing to show for it. This
+guard counts the dispatcher's own spawns instead: stage 10 appends `{ts, attempts}` to
+state.json's `spawn_ledger` after each real spawn (`attempts` = the finished-attempt
+count at that moment), and `looping()` refuses a ticket that reached
+`FOREMAN_SPAWN_LOOP_MAX` (3) spawns inside `FOREMAN_SPAWN_LOOP_WINDOW_H` (3h) without
+the attempt count moving. The refusal skips as `spawn_loop` (structural, so the wq#1410
+watchdog doesn't read a working breaker as a stall), opens one `aq add` row
+(source `foreman-dispatcher`, key `spawn-loop-wq<id>` — aq's own dedup bumps it rather
+than duplicating) and ntfy's once per 24h on the `spawn_loop_ntfy` ledger. Like §15's
+other breakers it never mutates the ticket, and it clears itself two ways: a finished
+attempt lifts it immediately (handing the ticket to the attempt-count breaker above), or
+the burst ages out of the window. The ledger is pruned in `load_state()` and survives the
+UTC day rollover that resets `lane_counts` — a window that reset at midnight would hand a
+looping ticket a fresh budget every night.
+
 **Dashboard** (`dashboard_data.py` + `dashboard.py`) — a stdlib-only, GET-only HTTP
 server (no new dependency, no do_POST/PUT/DELETE handler at all — there's no code path
 to turn it into a control surface even by accident) serving the snapshot the ticket
