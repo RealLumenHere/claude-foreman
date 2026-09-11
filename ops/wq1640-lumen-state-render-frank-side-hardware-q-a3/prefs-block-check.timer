@@ -1,0 +1,10 @@
+[Unit]
+Description=wq#1640 — daily trigger for prefs-block-check.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target
