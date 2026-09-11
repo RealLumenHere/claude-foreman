@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "harness/guard.sh:334-365"}]}
+{"criteria": [{"id": "AC1", "citation": "harness/liveness_clear.py:417-445 (derive_probe) + harness/liveness.py:354-393 (git_clean, wq_field probes)"}]}

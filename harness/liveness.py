@@ -351,6 +351,47 @@ def json_gte(path, key, minimum):
     return (SATISFIED if d >= minimum else STILL_BLOCKED), f"{key}={d} vs min {minimum:g}"
 
 
+def git_clean(repo):
+    """wq#1676: repo has no uncommitted changes (tracked or untracked) — covers the
+    #1356 class ('mailbot tree dirty'). Never runs a hook; `status --porcelain` only."""
+    if not os.path.isdir(repo):
+        return UNKNOWN, f"{repo}: not a directory"
+    rc, out, err = _sh(["git", "-C", repo, "status", "--porcelain"], timeout=SSH_TIMEOUT_S)
+    if rc != 0:
+        return UNKNOWN, f"git -C {repo} status: rc={rc} {err[:80]}"
+    if out.strip():
+        n = len(out.strip().splitlines())
+        return STILL_BLOCKED, f"{repo}: {n} dirty path(s)"
+    return SATISFIED, f"{repo}: clean"
+
+
+def wq_field(tid, col, want):
+    """wq#1676: column `col` of wq#<tid> equals `want` in queue.db — covers a
+    'decide -> ticket done' chain where the deliverable isn't status itself
+    (e.g. lane, pri) but some other recorded field (#124/#940 class)."""
+    if col not in ("status", "lane", "pri", "gate", "claimed_by", "block_reason"):
+        return UNKNOWN, f"wq_field: column {col!r} not readable"
+    try:
+        tid = int(str(tid).lstrip("wq#"))
+    except ValueError:
+        return UNKNOWN, f"bad ticket id {tid!r}"
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{WQ_DB}?mode=ro", uri=True)
+        try:
+            row = con.execute(f"SELECT {col} FROM tasks WHERE id=?", (tid,)).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return UNKNOWN, f"queue.db: {str(e)[:60]}"
+    if row is None:
+        return UNKNOWN, f"wq#{tid} not in queue.db"
+    actual = "" if row[0] is None else str(row[0]).strip()
+    if actual == str(want).strip():
+        return SATISFIED, f"wq#{tid}.{col}=={actual!r}"
+    return STILL_BLOCKED, f"wq#{tid}.{col}=={actual!r} (want {want!r})"
+
+
 # ---------------------------------------------------------------------------
 # registry — the closed vocabulary a `Liveness:` line may use (§5, §6, §13)
 # ---------------------------------------------------------------------------
@@ -367,6 +408,8 @@ PROBES = {
     "pr_merged": pr_merged,
     "file_contains": file_contains,
     "json_gte": json_gte,
+    "git_clean": git_clean,
+    "wq_field": wq_field,
 }
 PROBE_NAMES = tuple(PROBES)
 

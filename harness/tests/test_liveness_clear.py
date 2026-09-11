@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -257,12 +258,27 @@ def test_vii_creation_gate(env, tmp_path, monkeypatch):
     # STILL_BLOCKED files normally
     p = run(env, "add", "--lane", "user", "--title", "[t-vii] blocked ok", "--detail", f"x\nLiveness: path_exists({tmp_path}/missing)")
     assert p.returncode == 0 and "STILL_BLOCKED" in p.stdout
-    # tagless: warn by default, refuse in strict
+    # tagless: warn by default for the 7-day rollout window (wq#1676 item 1) — a
+    # hard default broke `wq block`/`wq decide` scaffolding all over the rest of the
+    # test suite (fworker_integration, shim_matrix, token_injection, wq1479, wq1539),
+    # which is exactly the fleet-wide blast radius the rollout knob exists to avoid.
     p = run(env, "add", "--lane", "user", "--title", "[t-vii] tagless", "--detail", "buy a thing")
     assert p.returncode == 0 and "can never auto-clear" in p.stderr
-    e = dict(env["env"], FOREMAN_LIVENESS_LINT_MODE="strict")
-    p = subprocess.run([env["wq"], "add", "--lane", "user", "--title", "[t-vii] tagless strict", "--detail", "buy"], env=e, capture_output=True, text=True)
+    # FOREMAN_LIVENESS_CLEAR=strict is the explicit flip (set once the window has
+    # passed and callers are updated); =warn is the explicit no-op spelling.
+    e = dict(env["env"], FOREMAN_LIVENESS_CLEAR="strict")
+    p = subprocess.run([env["wq"], "add", "--lane", "user", "--title", "[t-vii] tagless strict-knob", "--detail", "buy"], env=e, capture_output=True, text=True)
     assert p.returncode == 6
+    e = dict(env["env"], FOREMAN_LIVENESS_CLEAR="warn")
+    p = subprocess.run([env["wq"], "add", "--lane", "user", "--title", "[t-vii] tagless warn-knob", "--detail", "buy"], env=e, capture_output=True, text=True)
+    assert p.returncode == 0 and "can never auto-clear" in p.stderr, p.stdout + p.stderr
+    # FOREMAN_LIVENESS_LINT_MODE is the older override, still honored, wins either way
+    e = dict(env["env"], FOREMAN_LIVENESS_LINT_MODE="strict")
+    p = subprocess.run([env["wq"], "add", "--lane", "user", "--title", "[t-vii] tagless lint-strict", "--detail", "buy"], env=e, capture_output=True, text=True)
+    assert p.returncode == 6
+    e = dict(env["env"], FOREMAN_LIVENESS_CLEAR="strict", FOREMAN_LIVENESS_LINT_MODE="warn")
+    p = subprocess.run([env["wq"], "add", "--lane", "user", "--title", "[t-vii] tagless lint-warn", "--detail", "buy"], env=e, capture_output=True, text=True)
+    assert p.returncode == 0
     # non-gated lane untouched
     p = run(env, "add", "--lane", "build", "--title", "[t-vii] build lane", "--detail", "normal")
     assert p.returncode == 0 and "liveness" not in (p.stdout + p.stderr).lower()
@@ -346,6 +362,76 @@ def test_scope_all_no_tag_never_closes(env):
     assert recs[0]["verdict"] == "NO_TAG" and recs[0]["action"] == "none"
     assert row(env, tid)["status"] == "blocked"
     assert not [a for a in audit_lines(env) if a["ticket"] == tid]
+
+
+def test_derive_probe():
+    lc = __import__("liveness_clear")
+    assert lc.derive_probe("blocked on wq#1518 until minted") == "ticket_done(1518)"
+    assert lc.derive_probe("see lumen/mailbot/pull/42 for the fix") == "pr_merged(lumen/mailbot, 42, merged, gitea)"
+    assert lc.derive_probe("see https://github.com/lumen/mailbot/pull/42") == \
+        "pr_merged(lumen/mailbot, 42, merged, github)"
+    # a bare absolute path is NOT derived (dropped after the real-data dry-run showed
+    # it grabbing incidental, unrelated paths — see derive_probe's docstring)
+    assert lc.derive_probe("mint /home/lumen/.secrets/cf-r2.env then wire it up") is None
+    assert lc.derive_probe("nothing parseable here") is None
+
+
+def test_derive_probe_resolves_ledger_credential(tmp_path):
+    lc = __import__("liveness_clear")
+    ledger = tmp_path / "ledger.yaml"
+    ledger.write_text(
+        "credentials:\n  gh:\n    path: /home/lumen/.secrets/github-frank.token\n"
+        "    verify_url: https://api.github.com/user\n    scheme: bearer\n"
+        "    probe: cred_alive(/home/lumen/.secrets/github-frank.token, https://api.github.com/user)\n")
+    got = lc.derive_probe("rotate /home/lumen/.secrets/github-frank.token before it expires", ledger=str(ledger))
+    assert got == "cred_alive(/home/lumen/.secrets/github-frank.token, https://api.github.com/user)"
+
+
+def test_untagged_gate_ages_out_to_aq(env, tmp_path, monkeypatch):
+    lc = clear_mod(env)
+    tid = seed(env, "build", "[t-age] no premise, old", "seed, nothing to probe", status="blocked")
+    old = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() - 10 * 86400))
+    con = sqlite3.connect(env["db"]); con.execute("UPDATE tasks SET created_at=? WHERE id=?", (old, tid)); con.commit(); con.close()
+    calls = []
+    monkeypatch.setattr(lc.subprocess, "run", lambda argv, **k: calls.append(argv))
+    recs = lc.sweep(scope="all", apply=True, ids=[tid], db=env["db"], ledger=env["env"]["FOREMAN_LIVENESS_LEDGER"])
+    assert recs[0]["verdict"] == "NO_TAG" and recs[0]["action"] == "age_alarmed"
+    assert calls and calls[0][:3] == ["aq", "add", "liveness"] and calls[0][3] == f"untagged-gate-{tid}"
+    # a second sweep does not re-fire (deduped via state)
+    calls.clear()
+    lc.sweep(scope="all", apply=True, ids=[tid], db=env["db"], ledger=env["env"]["FOREMAN_LIVENESS_LEDGER"])
+    assert not calls
+
+
+def test_no_probe_stamp_never_ages_out(env, tmp_path, monkeypatch):
+    lc = clear_mod(env)
+    tid = seed(env, "build", "[t-age] no-probe escape hatch", "seed [NO-PROBE: physical]", status="blocked")
+    old = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() - 10 * 86400))
+    con = sqlite3.connect(env["db"]); con.execute("UPDATE tasks SET created_at=? WHERE id=?", (old, tid)); con.commit(); con.close()
+    calls = []
+    monkeypatch.setattr(lc.subprocess, "run", lambda argv, **k: calls.append(argv))
+    recs = lc.sweep(scope="all", apply=True, ids=[tid], db=env["db"], ledger=env["env"]["FOREMAN_LIVENESS_LEDGER"])
+    assert recs[0]["verdict"] == "NO_TAG" and recs[0]["action"] == "none"
+    assert not calls
+
+
+def test_sweep_derive_backfills_tagless_gate(env, tmp_path):
+    """wq#1676 item 2 backfill: --derive proposes from the ticket's own text; dry-run
+    reports without writing, --apply writes the Liveness: line and re-probes it."""
+    lc = clear_mod(env)
+    done_dep = seed(env, "build", "[t-derive] the dep", "seed")
+    assert run(env, "edit", done_dep, "--status", "done").returncode == 0
+    tid = seed(env, "build", "[t-derive] tagless but parseable",
+               f"blocked on wq#{done_dep} until it lands", status="blocked")
+    kw = dict(ids=[tid], db=env["db"], ledger=env["env"]["FOREMAN_LIVENESS_LEDGER"], scope="all")
+    recs = lc.sweep(apply=False, derive=True, **kw)
+    assert recs[0]["verdict"] == "NO_TAG" and recs[0]["derived_probe"] == f"ticket_done({done_dep})"
+    assert "Liveness:" not in row(env, tid)["detail"]  # dry-run: nothing written
+    recs = lc.sweep(apply=True, derive=True, **kw)
+    assert recs[0]["derived_probe"] == f"ticket_done({done_dep})"
+    assert recs[0]["verdict"] == "SATISFIED" and recs[0]["action"] == "closed"
+    assert f"Liveness: ticket_done({done_dep})" in row(env, tid)["detail"]
+    assert row(env, tid)["status"] == "done"
 
 
 def test_scope_default_unchanged_for_timer():

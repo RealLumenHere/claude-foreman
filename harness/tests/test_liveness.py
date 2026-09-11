@@ -134,6 +134,41 @@ def test_ticket_done_probe(tmp_path, monkeypatch):
     assert v == liveness.UNKNOWN and "queue.db" in d
 
 
+def test_git_clean_probe(tmp_path):
+    import subprocess
+    repo = tmp_path / "r"; repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    (repo / "f").write_text("x")
+    subprocess.run(["git", "-C", str(repo), "add", "f"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "x"], check=True)
+    assert liveness.run("git_clean", str(repo))[0] == liveness.SATISFIED
+    (repo / "f").write_text("y")
+    assert liveness.run("git_clean", str(repo))[0] == liveness.STILL_BLOCKED
+    (repo / "untracked").write_text("z")
+    subprocess.run(["git", "-C", str(repo), "checkout", "--", "f"], check=True)
+    assert liveness.run("git_clean", str(repo))[0] == liveness.STILL_BLOCKED  # untracked counts
+    assert liveness.run("git_clean", str(tmp_path / "missing"))[0] == liveness.UNKNOWN
+    assert liveness.run("git_clean", str(tmp_path))[0] == liveness.UNKNOWN  # a dir, not a repo
+
+
+def test_wq_field_probe(tmp_path, monkeypatch):
+    import sqlite3
+    db = tmp_path / "q.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY, status TEXT, lane TEXT)")
+    con.executemany("INSERT INTO tasks VALUES (?, ?, ?)", [(1, "done", "build"), (2, "open", "user")])
+    con.commit(); con.close()
+    monkeypatch.setattr(liveness, "WQ_DB", str(db))
+    assert liveness.run("wq_field", "1, status, done")[0] == liveness.SATISFIED
+    assert liveness.run("wq_field", "1, lane, build")[0] == liveness.SATISFIED
+    assert liveness.run("wq_field", "2, status, done")[0] == liveness.STILL_BLOCKED
+    assert liveness.run("wq_field", "999, status, done")[0] == liveness.UNKNOWN
+    assert liveness.run("wq_field", "1, notes, x")[0] == liveness.UNKNOWN   # not a readable column
+    assert liveness.run("wq_field", "abc, status, done")[0] == liveness.UNKNOWN
+
+
 def test_pr_merged_probe(monkeypatch, tmp_path):
     tok = tmp_path / "t"; tok.write_text("secret-token")
     monkeypatch.setattr(liveness, "GITEA_TOKEN", str(tok))

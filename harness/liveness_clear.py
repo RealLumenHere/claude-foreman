@@ -18,6 +18,7 @@ status); every close audited with the probe verdict verbatim; reversible
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -156,6 +157,41 @@ def close_ticket(ticket, results, bindings=None, agent=None, apply=True):
     return False, {"steps": steps, "close": f"NOT-CLOSED wq#{tid} rc={p.returncode} status={final!r}: {first[:160]}"}
 
 
+AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "aq")
+UNTAGGED_AGE_DAYS = int(os.environ.get("FOREMAN_LIVENESS_UNTAGGED_AGE_DAYS", "7"))
+
+
+def _ticket_age_days(ticket):
+    """Days since created_at, or None when it can't be parsed (fail-safe: no alarm)."""
+    created = (ticket or {}).get("created_at")
+    if not created:
+        return None
+    import calendar
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            t = calendar.timegm(time.strptime(created, fmt))
+            return (time.time() - t) / 86400.0
+        except ValueError:
+            continue
+    return None
+
+
+def _aq_untagged_gate(tid, ticket, age_days):
+    """wq#1676 item 5: one keyed aq row per tagless gate past the age threshold —
+    visible without paging, never load-bearing (aq trouble must not touch the sweep)."""
+    try:
+        subprocess.run(
+            [AQ_BIN, "add", "liveness", f"untagged-gate-{tid}",
+             f"wq#{tid} is a Frank-gate with no Liveness: tag, {age_days:.0f}d old",
+             f"wq#{tid} [{ticket.get('lane')}/{ticket.get('status')}] "
+             f"{(ticket.get('title') or '')[:80]} carries no Liveness: line, no ledger "
+             "binding, and no [NO-PROBE: ...] escape hatch — file --liveness/--no-probe "
+             "or `wq decide --accept-probe`."],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass  # telemetry, never load-bearing
+
+
 def clear_if_stale(ticket, bindings=None, apply=True, agent=None, state=None, log=None):
     """One ticket's decision. Returns the audit record (also written when anything
     changed or was flagged). `apply=False` = report-only. `state` is the shared
@@ -204,6 +240,18 @@ def clear_if_stale(ticket, bindings=None, apply=True, agent=None, state=None, lo
         rec["action"] = "kept"
         if prev_verdict not in (None, liveness.STILL_BLOCKED):
             audit(rec)  # verdict changed (e.g. SATISFIED->STILL_BLOCKED): worth a line
+    elif verdict == capability.LIVENESS_NO_TAG:
+        no_probe = "[NO-PROBE:" in (ticket.get("detail") or "")
+        age_days = None if no_probe else _ticket_age_days(ticket)
+        alarmed = state.setdefault("_no_tag_alarmed", {})
+        if age_days is not None and age_days > UNTAGGED_AGE_DAYS and tid not in alarmed:
+            if apply:
+                _aq_untagged_gate(tid, ticket, age_days)
+            alarmed[tid] = now_iso()
+            rec["action"] = "age_alarmed"
+            audit(rec)
+            if log:
+                log(f"wq#{tid} untagged gate {age_days:.0f}d old -> aq")
     return rec
 
 
@@ -233,11 +281,37 @@ def write_binding(ticket, bindings, agent=None, apply=True):
 # sweep (timer) — §12.3
 # ---------------------------------------------------------------------------
 
+def write_derived(ticket, agent=None, apply=True, ledger=None):
+    """wq#1676 item 2 backfill: propose+write a Liveness: line from the ticket's own
+    title/detail text via derive_probe(), for a ticket with neither a Liveness: line
+    nor a ledger binding nor a --no-probe stamp. Returns the proposal string when
+    written, else None (nothing parseable, already tagged, or apply=False)."""
+    tid = str(ticket["id"])
+    detail = ticket.get("detail") or ""
+    if "Liveness:" in detail or "[NO-PROBE:" in detail:
+        return None
+    proposal = derive_probe(f"{ticket.get('title') or ''}\n{detail}", ledger)
+    if not proposal:
+        return None
+    if not (apply and writes_enabled()):
+        return proposal
+    new_detail = detail.rstrip("\n") + "\nLiveness: " + proposal
+    p = _wq("edit", tid, "--detail", new_detail, agent=agent)
+    if p.returncode != 0:
+        return None
+    _wq("note", tid, f"[liveness] derived tag from ticket text: {proposal}", agent=agent)
+    audit({"ticket": int(tid), "action": "derived_binding_written", "binding": proposal})
+    return proposal
+
+
 def sweep(apply=False, ids=None, db=None, ledger=None, agent=None, write_bindings=False,
-          log=None, state_path=None, scope="frank"):
+          derive=False, log=None, state_path=None, scope="frank"):
     """scope='frank' (default, the timer) = the dispatcher's frank-gated predicate;
     scope='all' (wq#1492 backlog sweep) = every open|blocked|frank_gated|pending_review
-    ticket. The per-ticket decision is identical either way (clear_if_stale)."""
+    ticket. The per-ticket decision is identical either way (clear_if_stale).
+
+    derive=True (wq#1676 item 2 backfill): for a ticket write_bindings left tagless,
+    try derive_probe() on its own text before probing — report-only unless apply."""
     bindings = liveness_sweep.load_bindings(ledger or LEDGER)
     state = load_state(state_path)
     out = []
@@ -246,7 +320,15 @@ def sweep(apply=False, ids=None, db=None, ledger=None, agent=None, write_binding
         if write_bindings:
             if write_binding(t, bindings, agent=agent, apply=apply):
                 t["detail"] = (t.get("detail") or "").rstrip("\n") + "\nLiveness: " + bindings[str(t["id"])]
-        out.append(clear_if_stale(t, bindings, apply=apply, agent=agent, state=state, log=log))
+        derived = None
+        if derive and "Liveness:" not in (t.get("detail") or ""):
+            derived = write_derived(t, agent=agent, apply=apply, ledger=ledger or LEDGER)
+            if derived and apply:
+                t["detail"] = (t.get("detail") or "").rstrip("\n") + "\nLiveness: " + derived
+        rec = clear_if_stale(t, bindings, apply=apply, agent=agent, state=state, log=log)
+        if derived:
+            rec["derived_probe"] = derived
+        out.append(rec)
     save_state(state, state_path)
     return out
 
@@ -311,6 +393,79 @@ def _parse(text):
     return list(needs_mod.parse_liveness(liveness_field=text))
 
 
+def ledger_credentials(ledger=None):
+    """path -> the ledger's own `probe:` string, e.g. cred_alive(path, verify_url)."""
+    try:
+        import yaml
+        with open(ledger or LEDGER) as f:
+            doc = yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+    out = {}
+    for rec in (doc.get("credentials") or {}).values():
+        path, probe = rec.get("path"), rec.get("probe")
+        if path and probe:
+            out[path] = probe
+    return out
+
+
+_DERIVE_TICKET_RE = re.compile(r"\bblocked on wq#(\d+)\b", re.IGNORECASE)
+_DERIVE_PR_RE = re.compile(r"\b([\w.-]+/[\w.-]+)/pull/(\d+)\b")
+_DERIVE_TOKEN_RE = re.compile(r"(/\S*\.secrets/\S+\.token)\b")
+
+
+def derive_probe(text, ledger=None):
+    """wq#1676 item 2: propose a `Liveness:` tag from patterns the ticket text already
+    states. Returns a probe string ('probe(args)') or None when nothing parses. Only
+    the three shapes where the match IS the stated precondition, not merely a path
+    mentioned in passing: a `blocked on wq#N` reference, an `owner/repo/pull/N` URL,
+    and a `.secrets/*.token` path resolved against the ledger's own credential record.
+
+    A generic 'any absolute path -> path_exists' fallback was tried and DROPPED
+    (wq#1676 backfill dry-run against the real 33 frank-gated tickets, 2026-09-10):
+    real ticket prose routinely mentions an unrelated file/binary/doc path with no
+    relation to the actual blocker (e.g. wq#339 'resubscribe your phone' mentions
+    /home/lumen/security/ntfy-rename; wq#1121 a guard-fix ticket mentions
+    /home/lumen/bin/lumen-pr) — auto-tagging those would be actively wrong, not just
+    unhelpful. A human still can (`--liveness "path_exists(...)"`); the deriver won't
+    guess it."""
+    text = text or ""
+    m = _DERIVE_TICKET_RE.search(text)
+    if m:
+        return f"ticket_done({m.group(1)})"
+    m = _DERIVE_PR_RE.search(text)
+    if m:
+        # args are positional only (split_args does a plain comma split — no kwargs),
+        # so a non-default forge means spelling out `want` too.
+        forge = "github" if "github.com" in text else "gitea"
+        return f"pr_merged({m.group(1)}, {m.group(2)}, merged, {forge})"
+    m = _DERIVE_TOKEN_RE.search(text)
+    if m:
+        probe = ledger_credentials(ledger).get(m.group(1))
+        if probe:
+            return probe
+    return None
+
+
+def _no_tag_strict():
+    """wq#1676 item 1: the tag becomes mandatory at the on-ramp, but NOT by silently
+    flipping the shipped default — a same-day dry-run of this change (2026-09-10)
+    against the real test suite showed `wq block`/`wq decide` callers all over
+    fworker_integration/shim_matrix/token_injection/wq1479/wq1539 that never pass a
+    tag; a hard default would refuse ordinary blocks fleet-wide today, not just in
+    tests. So the default stays warn-only (unchanged from pre-1676) for the 7-day
+    rollout window; FOREMAN_LIVENESS_CLEAR=strict is the explicit flip (set it once
+    the rollout window has passed and callers have been updated). =warn is the
+    explicit no-op spelling. FOREMAN_LIVENESS_LINT_MODE=strict|warn is the older,
+    still-honored override, and wins either way."""
+    lint = os.environ.get("FOREMAN_LIVENESS_LINT_MODE")
+    if lint == "strict":
+        return True
+    if lint == "warn":
+        return False
+    return os.environ.get("FOREMAN_LIVENESS_CLEAR") == "strict"
+
+
 def creation_check(title, detail, lane=None, frank_gated=False, ledger=None, run_probes=True):
     """(ok, verdict, message). ok=False means REFUSE the add/decide. Only Frank-gated
     shapes are checked; anything else returns (True, 'NOT_GATED', '')."""
@@ -324,7 +479,7 @@ def creation_check(title, detail, lane=None, frank_gated=False, ledger=None, run
     import needs as needs_mod
     lv = list(needs_mod.parse_liveness(detail))
     if not lv:
-        strict = os.environ.get("FOREMAN_LIVENESS_LINT_MODE", "warn") == "strict"
+        strict = _no_tag_strict()
         msg = ("Frank-gate has no `Liveness:` line — it can never auto-clear "
                "(LIVENESS_GATE.md §5: `Liveness: probe(args), ...` in the detail)")
         return (not strict), "NO_TAG", msg
@@ -356,6 +511,9 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="(default) report only, zero writes")
     ap.add_argument("--write-bindings", action="store_true",
                     help="copy ledger bindings into tickets as Liveness: lines (with --apply)")
+    ap.add_argument("--derive", action="store_true",
+                    help="wq#1676: propose/write a Liveness: line from the ticket's own text "
+                         "(derive_probe) for anything still tagless after --write-bindings")
     ap.add_argument("--ids", nargs="*", type=int)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--agent", default=None)
@@ -371,7 +529,7 @@ def main(argv=None):
         apply = False
     lines = []
     recs = sweep(apply=apply, ids=a.ids, db=a.db, ledger=a.ledger, agent=a.agent,
-                 write_bindings=a.write_bindings, log=lines.append, scope=a.scope)
+                 write_bindings=a.write_bindings, derive=a.derive, log=lines.append, scope=a.scope)
     if a.json:
         print(json.dumps(recs, indent=1))
         return 0
@@ -384,6 +542,9 @@ def main(argv=None):
           + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     for r in recs:
         if r["verdict"] == capability.LIVENESS_NO_TAG:
+            if r.get("derived_probe"):
+                print(f"  wq#{r['ticket']:<5} {'NO_TAG':<13} derive-only  [{r['lane']}/{r['prior_status']}]"
+                      f" proposal: Liveness: {r['derived_probe']} (--apply to write)")
             continue
         print(f"  wq#{r['ticket']:<5} {r['verdict']:<13} {r['action']:<12} [{r['lane']}/{r['prior_status']}]"
               f" {r.get('close', '')}")
