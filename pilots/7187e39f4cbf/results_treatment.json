@@ -1,0 +1,30 @@
+{
+  "arm": "treatment",
+  "sample_sha256": "031c565c05e578476cd55e6c11adda48a8c23a84c71861202a8e649eca3bf9ef",
+  "n_tasks_total": 60,
+  "n_tasks_completed": 16,
+  "total_budget": 100,
+  "cost_spent": 100,
+  "value_captured": 212.837,
+  "total_value_available": 552.794,
+  "fractional_optimum": 214.41,
+  "pct_of_optimum": 99.27,
+  "completed_task_ids": [
+    56,
+    23,
+    50,
+    2,
+    21,
+    51,
+    13,
+    12,
+    47,
+    17,
+    11,
+    33,
+    40,
+    52,
+    37,
+    0
+  ]
+}

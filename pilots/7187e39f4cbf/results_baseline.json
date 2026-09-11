@@ -1,0 +1,33 @@
+{
+  "arm": "baseline",
+  "sample_sha256": "031c565c05e578476cd55e6c11adda48a8c23a84c71861202a8e649eca3bf9ef",
+  "n_tasks_total": 60,
+  "n_tasks_completed": 19,
+  "total_budget": 100,
+  "cost_spent": 98,
+  "value_captured": 171.412,
+  "total_value_available": 552.794,
+  "fractional_optimum": 214.41,
+  "pct_of_optimum": 79.95,
+  "completed_task_ids": [
+    0,
+    3,
+    6,
+    9,
+    12,
+    15,
+    18,
+    21,
+    1,
+    4,
+    7,
+    10,
+    13,
+    43,
+    2,
+    5,
+    8,
+    23,
+    56
+  ]
+}
