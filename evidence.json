@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "orchestrator/router.py:731-748"}]}
+{"criteria": [{"id": "AC1", "citation": "ops/wq1609-minerva-contradiction-scan/install.sh:14", "deploy_target": "/home/lumen/bin/lumen-contradiction-scan"}]}
