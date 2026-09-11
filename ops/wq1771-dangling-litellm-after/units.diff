@@ -1,0 +1,18 @@
+wq#1771 — drop dangling After=litellm.service from the 2 units wq#1659 missed
+(FLEET_SERVICE_ATLAS.md #13 covered 5; wq#1765's verify pass against the live
+fleet found these 2 more with the same pattern). Neither unit is gated on
+litellm's readiness the way the fleet researchers are (health-watchdog /
+grounding-audit role, not an inference client), so no wait-for-port
+ExecStartPre is needed here — just remove the dangling token.
+
+--- a/etc/systemd/system/lumen-brain-health.service
++++ b/etc/systemd/system/lumen-brain-health.service
+@@ [Unit]
+-After=network.target litellm.service
++After=network.target
+
+--- a/etc/systemd/system/lumen-predicate-audit.service
++++ b/etc/systemd/system/lumen-predicate-audit.service
+@@ [Unit]
+-After=network-online.target litellm.service
++After=network-online.target
