@@ -45,7 +45,7 @@ anywhere in the output above.
 
     install -m 0755 staged/unit-drift /home/lumen/bin/unit-drift
     unit-drift snapshot   # re-baseline: unit content changed in step 2
-    unit-drift check      # expect CLEAN, 0 dangling target(s)
+    unit-drift check      # see caveat below — do NOT expect exit 0 yet
 
 `unit-drift check` now fails (exit 1) if *any* unit's `After=`/`Wants=`/
 `Requires=`/`BindsTo=`/`PartOf=` names a target with no loadable unit file
@@ -53,6 +53,18 @@ anywhere in `SEARCH_PATHS` — this is the general lint the ticket asks for, not
 just a point fix for these 5 units. Run `python3 -m pytest
 tests/test_dangling_target_lint.py` first (or the repo's test runner) to
 confirm the lint logic before installing.
+
+**Caveat (wq#1765 verify, 2026-09-11):** running this lint's
+`dangling_target_lint()` against the live fleet turns up 2 more units with the
+exact same `After=litellm.service` pattern that this ticket's scope (the 5
+units above, per `research/FLEET_SERVICE_ATLAS.md` #13) never covered:
+`lumen-brain-health.service` and `lumen-predicate-audit.service`. Deploying
+steps 2-4 as written will NOT make `unit-drift check` clean — it will still
+exit 1 on these two. Either fix those two units in the same pass (same
+per-unit recipe: drop the dangling `After=`/`Wants=`, they have no
+docker-container gate to add since they're consumers, not the litellm
+container itself) or track them as a known follow-up before relying on
+`unit-drift check`'s exit code as a "0 dangling targets" gate. See wq#1771.
 
 ## Rollback
 
