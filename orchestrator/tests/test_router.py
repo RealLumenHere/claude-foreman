@@ -6,6 +6,7 @@ import datetime as dt
 import itertools
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -689,6 +690,114 @@ def test_classifier_replay_keeps_opus_primary_archetypes_under_15_percent():
     assert dist["research-synthesis"] / n < 0.15, dict(dist)
     assert dist["rca-investigation"] / n < 0.15, dict(dist)
     assert no_signal / n <= 0.27, no_signal
+
+
+# ---- wq#1707: analysis tickets must never land on a mechanical-edit / DECOMPOSE rung ----
+# Both cases below are real tickets Frank hand-corrected on 2026-09-10, recovered from
+# queue.db by comparing each row's stored archetype against what classify_archetype()
+# produced for the same text.
+
+# wq#1669 verbatim: a governor scaling design. Its ONLY mechanical-edit evidence is the
+# word "wire" inside "budget remaining vs time to reset ... rewire"-style prose; its only
+# novel-design evidence is "design". Equal counts, so the wq#779 F3 cost tie-break handed
+# it to mechanical-edit -> qwen36-local until this fix.
+WQ1669_TITLE = ("governor tight-mode ignores zeroed floors; spawn rate should scale "
+                "with budget remaining vs time to reset")
+WQ1669_DETAIL = ("FOUND by wq#1667 walkthrough. Frank zeroed governor/floors.json and "
+                 "pacing policy=off, but router.governor_pressure still returns tight. "
+                 "Design the replacement pacing curve and wire it through.")
+
+# wq#1628 verbatim-ish: a log post-mortem whose only long-horizon-campaign evidence is the
+# word "checkpoint" (LPP save-state vocabulary, per wq#1143), which DECOMPOSEd it.
+WQ1628_TITLE = "LPP full behavioral analysis from run logs — why it freezes"
+WQ1628_DETAIL = ("Heavy log-analysis + design (no code changes). Do a full behavioral "
+                 "post-mortem from the data: progress.json, events/*.jsonl, "
+                 "stuck_escalation.json, and the resume/checkpoint logs.")
+
+
+def test_wq1669_analysis_ticket_no_longer_routes_to_mechanical_edit(m):
+    arch, sig = router.classify_archetype(WQ1669_TITLE, WQ1669_DETAIL, "build", m)
+    assert arch != "mechanical-edit", (arch, sig)
+    assert arch == "novel-design", (arch, sig)
+    rung, _ = router.select(m, arch)
+    assert rung.model != "qwen36-local"
+
+
+def test_wq1628_checkpoint_alone_no_longer_decomposes(m):
+    arch, sig = router.classify_archetype(WQ1628_TITLE, WQ1628_DETAIL, "build", m)
+    assert arch != "long-horizon-campaign", (arch, sig)
+    rung, _ = router.select(m, arch)
+    assert rung.model != "DECOMPOSE"
+
+
+def test_strong_campaign_signals_still_decompose_alone(m):
+    # the wq#992 line holds: checkpoint joins \bchain\b as weak, the rest stay strong.
+    for title in ("multi-session campaign to port the fleet off systemd timers",
+                  "uplift every worker prompt to the new instincts",
+                  "pivot the memory subsystem onto the minerva store"):
+        arch, sig = router.classify_archetype(title, "", "", m)
+        assert arch == "long-horizon-campaign", (title, arch, sig)
+
+
+@pytest.mark.parametrize("title", [
+    # each pairs a genuine analysis signal with an incidental mechanical-edit word
+    "root cause of the duplicate dispatch; rename the counter while we are in there",
+    "design doc for the new alert daemon — also bump the schema version",
+    "research pack on local model pricing, report includes a one-liner fix",
+])
+def test_incidental_mechanical_word_never_beats_an_analysis_signal(m, title):
+    arch, sig = router.classify_archetype(title, "", "fleet", m)
+    assert arch != "mechanical-edit", (arch, sig)
+
+
+def test_fleet_lane_bias_cannot_pick_mechanical_edit_over_analysis(m):
+    # _LANE_BIAS['fleet'] lists mechanical-edit first, which is the second path (besides
+    # the cost tie-break) that could put an analysis ticket on qwen36-local.
+    arch, sig = router.classify_archetype(
+        "root cause of the watchdog flap; then rename the stale unit", "", "fleet", m)
+    assert arch == "rca-investigation", (arch, sig)
+
+
+def test_mechanical_edit_still_wins_when_nothing_analytical_is_evidenced(m):
+    # the guard is scoped: a true mechanical edit is untouched and still reaches the
+    # cheap local rung (this is the SAMPLES row at the top of the file).
+    arch, sig = router.classify_archetype("wire standing checks to systemd timers", "",
+                                          "fleet", m)
+    assert arch == "mechanical-edit", (arch, sig)
+    rung, _ = router.select(m, arch)
+    assert rung.model == "qwen36-local"
+    # and the wq#779 F3 tie-break still lets the OTHER cheap archetype win on equal
+    # evidence against a pricier one — that fix is not what misrouted these tickets.
+    arch, _ = router.classify_archetype("the fix could bypass the probe safeguard", "",
+                                        "build", m)
+    assert arch == "probe-build"
+
+
+def test_replay_no_filed_ticket_with_analysis_evidence_is_a_mechanical_edit(m):
+    """ACCEPTANCE (wq#1707): over every filed ticket, no row whose text carries CORROBORATED
+    novel-design / rca-investigation / research-synthesis evidence may classify as
+    mechanical-edit. Corroborated, not merely matched: wq#778 already settled that one bare
+    word ('report', 'audit') is not evidence of anything, so such a row is a legitimate
+    mechanical edit and the guard deliberately lets it through."""
+    offenders = []
+    checked = 0
+    for lane, title, detail in _replay_queue_db():
+        text = f"{title or ''}\n{detail or ''}"
+        analysis = []
+        for a, pats in router._RUBRIC:
+            if a not in router._ANALYSIS_ARCHETYPES:
+                continue
+            matched = [p for p in pats if re.search(p, text, re.IGNORECASE)]
+            if matched and router._qualifies(a, matched):
+                analysis.append(a)
+        if not analysis:
+            continue
+        checked += 1
+        arch, _ = router.classify_archetype(title or "", detail or "", lane or "", m)
+        if arch == "mechanical-edit":
+            offenders.append((title, analysis))
+    assert checked > 0, "no ticket carried analysis evidence — test would pass vacuously"
+    assert not offenders, offenders
 
 
 # ---- end-to-end against a scratch wq (needs a wq with the wq#617 columns) --------------
