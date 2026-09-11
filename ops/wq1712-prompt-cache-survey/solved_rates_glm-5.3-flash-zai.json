@@ -1,0 +1,69 @@
+{
+  "ts": "2026-09-11T03:49:46.065Z",
+  "model": "glm-5.3-flash-zai",
+  "rows": [
+    {
+      "tag": "long_fresh",
+      "status": 200,
+      "cost": 0.0018895399999999999,
+      "hit": 768,
+      "miss": 6120,
+      "out": 1897,
+      "error": null
+    },
+    {
+      "tag": "long_repeat",
+      "status": 200,
+      "cost": 0.00129518,
+      "hit": 896,
+      "miss": 5992,
+      "out": 739,
+      "error": null
+    },
+    {
+      "tag": "short_fresh",
+      "status": 200,
+      "cost": 0.00055968,
+      "hit": 896,
+      "miss": 332,
+      "out": 966,
+      "error": null
+    },
+    {
+      "tag": "long_repeat_2",
+      "status": 200,
+      "cost": 0.00072394,
+      "hit": 6848,
+      "miss": 40,
+      "out": 1025,
+      "error": null
+    }
+  ],
+  "solved_rates_usd_per_mtok": {
+    "cache_hit_input": 0.03,
+    "cache_miss_input": 0.15,
+    "output": 0.5
+  },
+  "residuals": [
+    {
+      "tag": "long_fresh",
+      "actual": 0.0018895399999999999,
+      "predicted": 0.00188954
+    },
+    {
+      "tag": "long_repeat",
+      "actual": 0.00129518,
+      "predicted": 0.00129518
+    },
+    {
+      "tag": "short_fresh",
+      "actual": 0.00055968,
+      "predicted": 0.00055968
+    },
+    {
+      "tag": "long_repeat_2",
+      "actual": 0.00072394,
+      "predicted": 0.00072394
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "ts": "2026-09-11T03:43:44.545Z",
+  "model": "deepseek-v4-flash",
+  "nonce": "1789098219280",
+  "calls": [
+    {
+      "tag": "cold_miss",
+      "status": 200,
+      "response_cost_usd": "0.000306992",
+      "prompt_tokens": 6934,
+      "completion_tokens": 28,
+      "prompt_cache_hit_tokens": 6528,
+      "prompt_cache_miss_tokens": 406,
+      "error": null
+    },
+    {
+      "tag": "warm_hit",
+      "status": 200,
+      "response_cost_usd": "0.00021509600000000002",
+      "prompt_tokens": 6934,
+      "completion_tokens": 41,
+      "prompt_cache_hit_tokens": 6784,
+      "prompt_cache_miss_tokens": 150,
+      "error": null
+    }
+  ]
+}

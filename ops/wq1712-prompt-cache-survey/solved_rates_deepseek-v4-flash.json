@@ -1,0 +1,69 @@
+{
+  "ts": "2026-09-11T03:44:56.050Z",
+  "model": "deepseek-v4-flash",
+  "rows": [
+    {
+      "tag": "long_fresh",
+      "status": 200,
+      "cost": 0.002739632,
+      "hit": 768,
+      "miss": 6145,
+      "out": 19,
+      "error": null
+    },
+    {
+      "tag": "long_repeat",
+      "status": 200,
+      "cost": 0.000192146,
+      "hit": 6779,
+      "miss": 134,
+      "out": 29,
+      "error": null
+    },
+    {
+      "tag": "short_fresh",
+      "status": 200,
+      "cost": 0.000197784,
+      "hit": 896,
+      "miss": 358,
+      "out": 21,
+      "error": null
+    },
+    {
+      "tag": "long_repeat_2",
+      "status": 200,
+      "cost": 0.00019874600000000002,
+      "hit": 6779,
+      "miss": 134,
+      "out": 34,
+      "error": null
+    }
+  ],
+  "solved_rates_usd_per_mtok": {
+    "cache_hit_input": 0.014,
+    "cache_miss_input": 0.44,
+    "output": 1.32
+  },
+  "residuals": [
+    {
+      "tag": "long_fresh",
+      "actual": 0.002739632,
+      "predicted": 0.002739632
+    },
+    {
+      "tag": "long_repeat",
+      "actual": 0.000192146,
+      "predicted": 0.000192146
+    },
+    {
+      "tag": "short_fresh",
+      "actual": 0.000197784,
+      "predicted": 0.000197784
+    },
+    {
+      "tag": "long_repeat_2",
+      "actual": 0.00019874600000000002,
+      "predicted": 0.000198746
+    }
+  ]
+}

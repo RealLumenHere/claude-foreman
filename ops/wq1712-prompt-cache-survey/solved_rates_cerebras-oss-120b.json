@@ -1,0 +1,69 @@
+{
+  "ts": "2026-09-11T03:47:24.666Z",
+  "model": "cerebras-oss-120b",
+  "rows": [
+    {
+      "tag": "long_fresh",
+      "status": 200,
+      "cost": 0.00032665,
+      "hit": 6784,
+      "miss": 164,
+      "out": 359,
+      "error": null
+    },
+    {
+      "tag": "long_repeat",
+      "status": 200,
+      "cost": 0.00030209999999999997,
+      "hit": 6912,
+      "miss": 36,
+      "out": 386,
+      "error": null
+    },
+    {
+      "tag": "short_fresh",
+      "status": 200,
+      "cost": 0.00088355,
+      "hit": 0,
+      "miss": 1288,
+      "out": 577,
+      "error": null
+    },
+    {
+      "tag": "long_repeat_2",
+      "status": 200,
+      "cost": 0.00216115,
+      "hit": 1024,
+      "miss": 5924,
+      "out": 117,
+      "error": null
+    }
+  ],
+  "solved_rates_usd_per_mtok": {
+    "cache_hit_input": 0,
+    "cache_miss_input": 0.35,
+    "output": 0.75
+  },
+  "residuals": [
+    {
+      "tag": "long_fresh",
+      "actual": 0.00032665,
+      "predicted": 0.00032665
+    },
+    {
+      "tag": "long_repeat",
+      "actual": 0.00030209999999999997,
+      "predicted": 0.0003021
+    },
+    {
+      "tag": "short_fresh",
+      "actual": 0.00088355,
+      "predicted": 0.00088355
+    },
+    {
+      "tag": "long_repeat_2",
+      "actual": 0.00216115,
+      "predicted": 0.00216115
+    }
+  ]
+}
