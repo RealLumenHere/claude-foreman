@@ -1,0 +1,67 @@
+wq#1659 — [Unit] stanza changes for the 5 affected units. `litellm.service` and
+`lumen-pgvector.service` are docker containers, not systemd units; `systemctl
+daemon-reload` has never been able to resolve either name (FLEET_SERVICE_ATLAS.md
+:68). Each unit already carries (or gets) Requires=docker.service so stopping
+docker still stops it; this diff only fixes the ordering/wait lie.
+
+--- a/etc/systemd/system/lumen-fleet-cerebras.service
++++ b/etc/systemd/system/lumen-fleet-cerebras.service
+@@ [Unit]
+-After=litellm.service
+-Wants=litellm.service
++After=docker.service
+ Requires=docker.service
+@@ [Service]
++ExecStartPre=/home/lumen/bin/wait-for-port 127.0.0.1 4000 30
+
+--- a/etc/systemd/system/lumen-fleet-mistral.service
++++ b/etc/systemd/system/lumen-fleet-mistral.service
+@@ [Unit]
+-After=litellm.service
+-Wants=litellm.service
++After=docker.service
+ Requires=docker.service
+@@ [Service]
++ExecStartPre=/home/lumen/bin/wait-for-port 127.0.0.1 4000 30
+
+--- a/etc/systemd/system/lumen-fleet-openrouter.service
++++ b/etc/systemd/system/lumen-fleet-openrouter.service
+@@ [Unit]
+-After=litellm.service
+-Wants=litellm.service
++After=docker.service
+ Requires=docker.service
+@@ [Service]
++ExecStartPre=/home/lumen/bin/wait-for-port 127.0.0.1 4000 30
+
+--- a/etc/systemd/system/lumen-convo-learn.service
++++ b/etc/systemd/system/lumen-convo-learn.service
+@@ [Unit]
+-After=litellm.service
+-Wants=litellm.service
++After=docker.service
++Requires=docker.service
+@@ [Service]
++ExecStartPre=/home/lumen/bin/wait-for-port 127.0.0.1 4000 30
+
+--- a/etc/systemd/system/lumen-research-index.service
++++ b/etc/systemd/system/lumen-research-index.service
+@@ [Unit]
+-After=lumen-pgvector.service
++After=docker.service
++Requires=docker.service
+@@ [Service]
++ExecStartPre=/home/lumen/bin/wait-for-port 127.0.0.1 5432 30
+
+Notes:
+- lumen-convo-learn and lumen-research-index did not previously declare
+  Requires=docker.service (only the 3 fleet researchers did, per
+  FLEET_SERVICE_ATLAS.md :55); adding it closes the same gap for them —
+  stopping docker should stop anything that depends on a container it hosts.
+- Port 4000 = litellm (FLEET_SERVICE_ATLAS.md :76). Port 5432 = lumen-pgvector,
+  a postgres/pgvector container (standard postgres port; confirmed via
+  pg_isready convention used elsewhere in this fleet, ops/wq415-.../baseline-sobek-pre.md:18).
+- `@@ [Unit]` / `@@ [Service]` mark the section each hunk belongs in rather than
+  claiming exact line numbers, since the live files are outside this worker's
+  sandboxed directories (see RUNBOOK.md) and could not be read to anchor a
+  byte-exact unified diff. Apply by section, not by line offset.
