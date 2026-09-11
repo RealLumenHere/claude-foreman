@@ -1,0 +1,94 @@
+Target: /home/lumen/claude_memory.md
+Verified verbatim by direct Read from this session, 2026-09-11 (offsets 450-679, 4338-4422).
+Not a machine-clean unified diff (file is outside this git repo and outside this session's
+Bash-writable roots — nothing here could be applied with `git apply` even if it were tracked).
+Each block below is exact current text and its exact replacement; apply by hand or with a
+small script that matches the "current" block literally and substitutes "replacement".
+
+=== Block 1 — MCP Toolkit Index stub (lines 452-460) ===
+--- current ---
+---
+
+## 🧭 MCP Toolkit Index — READ THIS FIRST
+MIGRATED 2026-07-09 to the instruction plane: full content now in
+`/home/lumen/instructions/playbooks/session-start.md` (MCP TOOLKIT INDEX).
+Registry source of truth unchanged: /home/lumen/infra/mcp_index.yaml.
+
+---
+## 🔒 CONFIRMED HARDWARE PLAN — 2026-04-19 (Frank-locked)
+--- replacement ---
+---
+## 🔒 CONFIRMED HARDWARE PLAN — 2026-04-19 (Frank-locked)
+
+=== Block 2 — Classifier-shape routing rule stub (lines 539-546) ===
+--- current ---
+---
+
+## 🛡️ CLASSIFIER-SHAPE ROUTING RULE (2026-04-19, after flagged chat)
+MIGRATED 2026-07-09: full rule (verbatim intent preserved) now in
+`/home/lumen/instructions/playbooks/session-start.md` (RESEARCH ROUTING RULE).
+
+---
+## 🎯 ACTIVE PROJECTS — 2026-04-19
+--- replacement ---
+---
+## 🎯 ACTIVE PROJECTS — 2026-04-19
+
+=== Block 3 — Quick Reference Card stub + orphaned TABLE OF CONTENTS + Session Start Checklist stub (lines 648-677) ===
+--- current ---
+---
+
+## 0. QUICK REFERENCE CARD
+MIGRATED 2026-07-09 to `/home/lumen/instructions/playbooks/session-start.md`
+(QUICK REFERENCE). SSH/addressing: playbooks/ssh-access.md. Secrets: paths
+only — plaintext creds removed from this card per L0 cred policy.
+
+---
+## TABLE OF CONTENTS
+1. Session start checklist
+2. Hardware inventory
+3. Network topology
+4. Credentials & secrets
+5. Software stack & services
+6. Inference fleet
+7. Decision trees
+8. Common task playbooks
+9. Failure modes & recovery
+10. Active projects & roadmap
+11. Operational rules
+12. Update protocol & changelog
+
+---
+
+## 1. SESSION START CHECKLIST
+MIGRATED 2026-07-09 to `/home/lumen/instructions/playbooks/session-start.md`
+(BOOT SEQUENCE). Dead Ghost checks dropped in the move.
+
+---
+## 4. CREDENTIALS & SECRETS
+--- replacement ---
+---
+## 4. CREDENTIALS & SECRETS
+
+(Note: this also removes the numbered-TOC convention entirely — the remaining sections in the
+file are not numbered to match it and haven't been since at least 2026-07-09. If a table of
+contents is still wanted, it should be regenerated from live H2 headings, not hand-maintained;
+out of this ticket's scope to build that generator.)
+
+=== Block 4 — HANDOFF SYSTEM stub (lines 4340-4343) ===
+--- current ---
+## HANDOFF SYSTEM (built 2026-07-01) #CORE
+MIGRATED 2026-07-09 (verbatim) to `/home/lumen/instructions/playbooks/session-start.md`
+(HANDOFF SYSTEM). Boot: `claude_context.sh --core` = handoff verify + HANDOFF.md.
+## FALSE "litellm down" — ROOT-CAUSED & FIXED (2026-07-01)
+--- replacement ---
+## FALSE "litellm down" — ROOT-CAUSED & FIXED (2026-07-01)
+
+=== Block 5 — Long Commander Jobs stub (lines 4419-4422) ===
+--- current ---
+## LONG COMMANDER JOBS → lumen-run (systemd-run) — 2026-07-05 #CORE
+MIGRATED 2026-07-09 (verbatim) to `/home/lumen/instructions/playbooks/long-jobs.md`.
+MANDATE unchanged: every long/detached job via /home/lumen/bin/lumen-run.
+## [2026-07-06] Live gateway now runs NARROWED reap (PR#151 parity)
+--- replacement ---
+## [2026-07-06] Live gateway now runs NARROWED reap (PR#151 parity)

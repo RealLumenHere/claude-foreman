@@ -1,0 +1,162 @@
+# PROPOSAL ONLY — wq#1637 candidates for /home/lumen/instincts.yaml (schema 2, wq959).
+# Not live. Merge under the matching tier header in the real file; do not overwrite existing
+# entries. Each `source` cites the exact claude_memory.md line range this was extracted from
+# (verified by direct Read from this session, not the earlier subagent pass, unless noted).
+
+candidates:
+  # == TIER 1 additions (operating doctrine — every --core session) ==
+
+  - id: bi-temporal-state-query
+    tier: 1
+    added: 2026-09-11
+    source: "claude_memory.md:4004-4011 (MEMORY V2 PHASE 1, LIVE 2026-06-25); wq#1637 migration"
+    text: >-
+      FLEET FACTS LIVE IN THE STATE STORE, NOT PROSE: for current fleet facts (IPs, hostnames,
+      status, hardware), query `lumen_state.py current <subject> [predicate]` — never trust
+      dated prose, which goes stale. On any fleet fact change, `lumen_state.py ingest <subject>
+      <predicate> <value> --valid-from <date> --source <ref>` immediately, then
+      `/home/lumen/bin/state-regen`. Never hand-edit `LIVE_FLEET_STATE.md` — it is a rendered
+      projection.
+
+  - id: episodic-recall-guard
+    tier: 1
+    added: 2026-09-11
+    source: "claude_memory.md:4029-4035 (MEMORY V2 PHASE 2); wq#1637 migration, requirement 4"
+    text: >-
+      EPISODE PRECHECK/COMMIT, NOT A SESSION LOG: before any change/install/service action,
+      run `lumen_episode.py precheck "<what you are about to do>"` — a warning line means
+      related past failures exist, read them first. After finishing meaningful work,
+      `lumen_episode.py commit --summary ... --changed ... --worked ... --failed ... --why
+      ... --tags ... --ref "session:<date>"`. This is the ONLY place in-session lessons go —
+      claude_memory.md "SESSION <date>" blocks are RETIRED (wq#1637): they duplicated this
+      mechanism with no supersession and no recall, and 4 of the last 5 were written by 4
+      different concurrent sessions on the same day because the retirement was never stated.
+
+  - id: build-now-never-defer
+    tier: 1
+    added: 2026-09-11
+    source: "claude_memory.md:4350-4351 (#CORE STANDING RULE, Frank directive 2026-07-01)"
+    text: >-
+      NEVER defer building or populating a resource to a timer/schedule. Build it and populate
+      it IMMEDIATELY, in-session, the moment it is requested. A timer is ONLY for refreshing
+      already-built content — never a substitute for doing the work now, and never reported as
+      if a future scheduled run were the deliverable.
+
+  - id: anthropic-max-not-api
+    tier: 1
+    added: 2026-09-11
+    source: "claude_memory.md:4798-4809 (Frank directive 2026-07-28)"
+    text: >-
+      ANTHROPIC ACCESS IS THE MAX 20x SUBSCRIPTION, NEVER THE API: do not re-derive or
+      "check if we should use the API." `ANTHROPIC_API_KEY` in `/home/lumen/agent/.env` is
+      DEFUSED — never re-enable it, never export it into an agent worker env. "No Anthropic
+      API spend" means no per-token billing; it does not mean avoid Claude. Verify with
+      `claude auth status`; machine-readable truth is `lumen_state.py current
+      anthropic_subscription`.
+
+  # == TIER 2 additions (domain — index only reaches --core, full text in the named playbook) ==
+
+  - id: fleet-state-markers
+    tier: 2
+    domain: fleet-ops
+    added: 2026-09-11
+    source: "claude_memory.md:233-244 (STATE MARKERS, 2026-05-18)"
+    trigger: "writing a prompt or plan that assumes a host/service is available"
+    playbook: /home/lumen/instructions/playbooks/fleet-ops.md
+    text: >-
+      PROMPT-DRAFTING RULE: if a fleet entry has no state marker or is marked [PLANNED], do
+      not write a prompt that assumes the host/service is available. Probe with `tailscale
+      status` + SSH first, or add an explicit precondition step the downstream agent must
+      verify before proceeding.
+
+  - id: gpu-b-gating-and-initramfs-ban
+    tier: 2
+    domain: fleet-ops
+    added: 2026-09-11
+    source: "claude_memory.md:4049-4053 (FLEET IDENTITY CORRECTION, 2026-06-25); identity/IP facts excluded — state_facts territory, not this instinct"
+    trigger: "any GPU power/driver work or initramfs change on a Mac Pro 6,1 node (Isis/Hathor/Nephthys/Khepri) or any headless node"
+    playbook: /home/lumen/instructions/playbooks/fleet-ops.md
+    text: >-
+      STANDING RULE: do NOT gate GPU-B (setpci D3/driver_override/unbind) on amdgpu-both-bound
+      Macs (Isis/Hathor/Nephthys/Khepri) — it caused a documented overheating incident on
+      Isis+Hathor 2026-06-25. Leave both GPUs amdgpu-bound + dpm=low. NEVER edit initramfs on
+      a headless node remotely — it bricked Hathor's boot 2026-06-25 with no local console to
+      recover from; use a udev rule (real-root, boots even if it loses the driver-binding race)
+      instead.
+
+  - id: reflector-hard-guarantees
+    tier: 2
+    domain: fleet-ops
+    added: 2026-09-11
+    source: "claude_memory.md:4057-4066 (LLM SLEEP-TIME REFLECTOR, built 2026-06-25)"
+    trigger: "running or modifying lumen_reflector.py, or reviewing its output"
+    playbook: /home/lumen/instructions/playbooks/fleet-ops.md
+    text: >-
+      `lumen_reflector.py` is PROPOSAL-ONLY: it must never mutate claude_memory.md, the state
+      store, or the episodic store — only `dream/reflections/reflection-<date>.{md,json}`.
+      Fail-LOUD (LLM error → ntfy alert + non-zero exit + no report; a silent/empty reflection
+      must never masquerade as "nothing to improve"). Output is human-gated — promote lessons
+      via `lumen_episode.py commit`, never auto-applied.
+
+  - id: verify-inventory-before-spend
+    tier: 2
+    domain: hardware
+    added: 2026-09-11
+    source: "claude_memory.md:4709-4715 (LUMEN STORAGE TOPOLOGY, 2026-07-16); topology numbers themselves are state_facts territory, not migrated here"
+    trigger: "recommending or pricing any hardware purchase"
+    playbook: /home/lumen/instructions/playbooks/hardware-claims.md
+    text: >-
+      Any report recommending hardware spend MUST verify existing inventory first (`lsblk`,
+      `lumen_state.py current lumen storage`, or equivalent) — do not price a purchase off an
+      assumed baseline. wq#110 priced an NVMe purchase off an assumed SATA-only baseline
+      without checking `lsblk`.
+
+  - id: gitea-credential-domain
+    tier: 2
+    domain: github
+    added: 2026-09-11
+    source: "claude_memory.md:5001-5010 (GITEA CREDENTIAL, wq#529, 2026-08-13)"
+    trigger: "touching the Gitea remote, its token, or rotating it"
+    playbook: /home/lumen/instructions/playbooks/github-standards.md
+    text: >-
+      The Gitea token lives ONLY in `/home/lumen/.secrets/gitea-lumen.token` (0600), read by a
+      host-scoped git credential helper. Never re-embed a token in a remote URL — `git remote
+      -v` prints it everywhere. Mask protocol-agnostically (`^[a-z]+://user:pass@`, never
+      anchored on `https://`; hosts may be %3a-encoded) — this cost a live token once.
+
+  - id: memoryd-identity-trust
+    tier: 2
+    domain: fleet-ops
+    added: 2026-09-11
+    source: "claude_memory.md:5082-5131 (MEMORY V4 P3 — lumen-memoryd, wq#575, 2026-08-15); architecture narrative not migrated, one sentence is the rule"
+    trigger: "any lumen-memoryd client code or identity/trust handling for agent-lane recall"
+    playbook: /home/lumen/instructions/playbooks/fleet-ops.md
+    text: >-
+      Identity into lumen-memoryd is DERIVED server-side, never read from the request body —
+      a lane cannot spell its own name.
+
+  - id: aq-escalation-domain
+    tier: 2
+    domain: fleet-ops
+    added: 2026-09-11
+    source: "claude_memory.md:5261-5275 (AQ ESCALATION RESPONDER, wq#965, 2026-08-27)"
+    trigger: "handling or building on the aq (alert-queue) escalation path"
+    playbook: /home/lumen/instructions/playbooks/fleet-ops.md
+    text: >-
+      Once an aq row escalates (source=probe, priority=high, status=open, count>=3), suppress
+      further escalation for that row — never re-page while it stays open. `aq_escalate.py` +
+      `lumen-aq-escalate.timer` (10 min) own this; do not build a second escalation path.
+
+  - id: cord-secret-handoff
+    tier: 2
+    domain: secrets
+    added: 2026-09-11
+    source: "claude_memory.md:5466-5481 (CORD, wq#1367, LIVE 2026-09-02)"
+    trigger: "needing a value only Frank can supply (password, key, confirmation)"
+    playbook: /home/lumen/instructions/playbooks/cloudflare-ops.md
+    text: >-
+      An agent that needs a Frank-only value NEVER stalls and NEVER asks in chat: `cord
+      request "<what>" --note "why"` pages Frank, blocks, and prints the value on stdout only
+      — never a log, journal line, ticket note, report, commit, or chat message. `cord` is
+      deliberately NOT behind Cloudflare (plaintext secrets must not transit CF TLS
+      termination) — never add a cloudflared ingress rule for it.

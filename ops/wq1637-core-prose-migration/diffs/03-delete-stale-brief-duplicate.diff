@@ -1,0 +1,74 @@
+Target: /home/lumen/claude_memory.md
+Verified verbatim by direct Read from this session, 2026-09-11 (offset 395-449).
+
+This is the stale, orphaned `MINERVA_BRIEF_START/END` copy described in README.md §5 — dated
+2026-07-04/07-05 content sitting inside an unrelated `<!-- SECTION:MESSENGER_WEBAPP_2026_04_23
+START -->` wrapper (that wrapper's own section, if any content of it remains meaningful,
+extends before line 399; only the brief-duplicate portion is targeted here). Delete lines
+399-448 inclusive (the `SECTION:MESSENGER_WEBAPP...` wrapper open through `MINERVA_BRIEF_END`
+plus the trailing blank line before the next H1).
+
+--- current (lines 397-449) ---
+<!-- SECTION:MINERVA_SYSTEM END -->
+
+<!-- SECTION:MESSENGER_WEBAPP_2026_04_23 START -->
+## Overview (last 24h)
+- Intel items classified: 30
+- High self-relevance hits (adoptable): 4
+- Proposals generated: 5
+- Proposals pending decision: 13
+- Skill library size: 5 (new: 0)
+- Hallucination guard: 1/3 passed (avg score 0.53)
+
+## Proposals for your review
+
+### [DEFER] Cross-call PID durability for desktop-commander (session-independent process store)
+- ID: `710fcfb4999d` | Effort: L | Impact: L | Risk: M
+- Created: 2026-07-04 23:15 PT
+- Current: claude.ai web MCP re-initializes a NEW session per tool call, so start_process and read_process_output land in different DC children -> 'No session found for PID'. Stateless confirmed; --stateful supergateway is worse (per-call child spawn), tested live and reverted. Canonical workaround = guarded w
+- Proposed: Optionally build approach A (patch desktop-commander: detached setsid spawn + SQLite proc-registry at /home/lumen/.dc/proc-registry.db + disk-tee of stdout) or B (sidecar process-broker daemon, DC tools become unix-socket clients) so read/kill succeed from any DC child on lumen. PARKED behind ROI gate.
+- File: `/home/lumen/minerva/proposals/pending/20260705_710fcfb4999d.md`
+
+### [DEFER] Fleet token-cost instrumentation + MCP schema pruning (Effective-Tokens metric)
+- ID: `a9c03f7ed112` | Effort: M | Impact: M | Risk: L
+- Created: 2026-07-04 23:15 PT
+- Current: Fleet worker calls via LiteLLM include the full Commander MCP schema (~11 tools) every turn; cost is tracked as raw tokens with no per-run usage log and no per-workflow tool pruning.
+- Proposed: (1) Add token-usage.jsonl logging to the LiteLLM proxy (per-run in/out/cache tokens). (2) Compute Effective-Tokens (out x4, cache x0.1, model multiplier) for model-agnostic cost tracking. (3) Strip unused MCP tool schemas per worker/workflow. Deliver as a LiteLLM callback module + a config diff STAGED (not applied live).
+- File: `/home/lumen/minerva/proposals/pending/20260705_a9c03f7ed112.md`
+
+### [DEFER] SkillOpt: validation-gated SKILL.md optimization via mitkox fork (evaluator scaffold)
+- ID: `a21de7a997ce` | Effort: M | Impact: M | Risk: L
+- Created: 2026-07-04 23:15 PT
+- Current: mitkox/SkillOpt fork cloned+installed at /home/lumen/skillopt-workspace/mitkox-skillopt (openai_compat -> LiteLLM localhost:4000). gbrain ruled out (wrong harness for bash/computer-tool skills, audit 2026-06-07). AGENT_PROMPT.md prepared at /home/lumen/skillopt-workspace/AGENT_PROMPT.md. BLOCKER: ne
+- Proposed: In a dedicated Commander/Claude Code session, run AGENT_PROMPT.md: build the evaluator env class for one low-risk skill (file-reading), baseline + 1-2 optimization epochs via the LiteLLM gateway, review the best_skill.md diff before any apply. /mnt/skills/public is read-only on claude.ai -> apply only via the skill-creator workflow.
+- File: `/home/lumen/minerva/proposals/pending/20260705_a21de7a997ce.md`
+
+### [DEFER] Local speech-to-speech voice pipeline PoC for Lumen Messenger
+- ID: `cf32432f6452` | Effort: M | Impact: M | Risk: L
+- Created: 2026-07-04 23:15 PT
+- Current: Lumen Messenger has no voice; the voice pipeline is planning-stage. HF speech-to-speech (Silero VAD -> Parakeet-TDT STT -> pluggable LLM -> Qwen3-TTS) exposes a Realtime-API WebSocket at /v1/realtime; the LLM backend can point at LiteLLM/DeepSeek.
+- Proposed: Stand up speech-to-speech on a fleet node pointed at the LiteLLM gateway as a Messenger voice PoC; measure round-trip voice latency; verify fully-local TTS (no ElevenLabs/cloud).
+- File: `/home/lumen/minerva/proposals/pending/20260705_cf32432f6452.md`
+
+### [BLOCKED] Add Mistral‑7B to local Ollama and expose via LiteLLM
+- ID: `7f850c3507af` | Effort: M | Impact: M | Risk: M
+- Created: 2026-07-04 11:45 PT
+- Current: Local Ollama hosts gemma4‑12B, LFM2.5‑1.2B, nomic‑embed‑text; LiteLLM gateway (127.0.0.1:4000) routes to remote Mistral provider but no local Mistral model.
+- Proposed: Pull the open‑source Mistral‑7B model into Ollama, create an alias (e.g., mistral-7b) and add a routing entry in the LiteLLM config (liteLLM.yaml) to map requests for "mistral‑7b" to the local Ollama endpoint.
+- File: `/home/lumen/minerva/proposals/pending/20260705_7f850c3507af.md`
+
+## Top self-relevant intel (potential adoption candidates)
+
+<!-- MINERVA_BRIEF_END -->
+
+# Claude Extended Memory — Lumen Infrastructure
+--- replacement (lines 397-449) ---
+<!-- SECTION:MINERVA_SYSTEM END -->
+
+# Claude Extended Memory — Lumen Infrastructure
+
+Note: this leaves the `# Claude Extended Memory` H1 immediately after `MINERVA_SYSTEM END` —
+matches the structure everywhere else in the file where an H1 divider follows a closed
+`<!-- SECTION -->` block with one blank line between. If minerva_brief_fix.md's scan-and-remove
+fix lands first, this specific stale copy will already be gone and this diff becomes a no-op;
+check before applying.

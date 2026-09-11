@@ -1,0 +1,63 @@
+Target: /home/lumen/claude_memory.md
+Verified verbatim by direct Read from this session, 2026-09-11 (offsets 5520-5635 for blocks
+2-5; block 1, 2026-06-26, taken from the subagent's mapping pass and NOT independently
+re-verified line-for-line by this session — spot-check before applying).
+Same caveat as diff 01: hand-apply or literal-match-and-replace, not a git-apply target.
+
+=== Block 1 — SESSION 2026-06-26 (line ~4112, NOT independently re-verified) ===
+Heading: `## SESSION 2026-06-26 — Commander STATELESS, vault failback, mcpw affinity`
+Reported span: lines 4112-4157 (~45 lines). Delete the full section (heading through the line
+before the next `## ` heading). VERIFY EXACT BOUNDARIES WITH A FRESH READ before deleting —
+this is the one block in this diff whose exact end line this session did not confirm itself.
+
+=== Block 2 — SESSION 2026-09-08 (multi-day orch) — STRUCTURAL FIXES LANDED (lines 5525-5576) ===
+Delete from the heading line:
+  ## ============ SESSION 2026-09-08 (multi-day orch) — STRUCTURAL FIXES LANDED ============
+through the line immediately before the next heading:
+  ## ============ SESSION 2026-09-08 (orch-seshat-s31-3d0d1e) — thoth tailnet, restic retention, seshat armed ============
+i.e. lines 5525-5576 inclusive (verified: line 5524 is the prior section's last content line,
+line 5577 is the next SESSION heading — both confirmed present by direct Read).
+
+=== Block 3 — SESSION 2026-09-08 (orch-seshat-s31-3d0d1e) (lines 5577-5620) ===
+Delete from:
+  ## ============ SESSION 2026-09-08 (orch-seshat-s31-3d0d1e) — thoth tailnet, restic retention, seshat armed ============
+through the line immediately before:
+  ## SESSION 2026-09-08 (work-1536-dabaac) — wq#1536 lumen-pr land ff primary
+i.e. lines 5577-5620 inclusive (line 5621 confirmed as the next heading).
+
+=== Block 4 — SESSION 2026-09-08 (work-1536-dabaac) (lines 5621-5627) ===
+--- current ---
+## SESSION 2026-09-08 (work-1536-dabaac) — wq#1536 lumen-pr land ff primary
+- ROOT CAUSE: cmd_land linked-worktree branch returned before the ff step; --primary path hid git stderr behind 2>/dev/null. Every --worktree land since the guard rewrite left the primary behind origin/main (fleet-inventory PR #6, foreman PR #362 were just the two noticed).
+- SHIPPED (lumen-bin PR #81 230eaa6 + PR #82 05ff01c on origin/main): ff_primary_after_land — ff or print the exact reason + fix command (lock / in-progress op / parked branch / diverged / overlapping dirt / git stderr); parked-elsewhere case forwards the main REF only when main is checked out nowhere (ISSUE-LOG #237 precedent); new `lumen-pr ffprimary <repo-path>`; tests/test_lumen_pr_ff_primary.py (11) gated in .githooks/pre-commit when lumen-pr is staged. ISSUE-LOG #238/#239.
+- LIVE PROOF: both lands printed "primary /home/lumen/bin NOT fast-forwarded: it is on 'feat/wq1374-...', not main" and #82 moved lumen-bin's main ref 8923dda->05ff01c, tree untouched.
+- OPEN: wq#1537 — DEPLOYED /home/lumen/bin/lumen-pr is still the old code while the primary sits on feat/wq1374 (dirty, another session). Until that tree returns to main, a land run with the deployed binary still skips the ff. Nothing else parked.
+- LESSON (#239): tests that shell out to git under a pre-commit hook inherit GIT_DIR/GIT_INDEX_FILE and commit into the real repo — scrub GIT_* in test env.
+
+## SESSION 2026-09-08 (orch-watch8-ce5f8a) — Watch8 ADB + FingerFind
+--- replacement ---
+## SESSION 2026-09-08 (orch-watch8-ce5f8a) — Watch8 ADB + FingerFind
+
+(This block's content is a real lesson (#239, GIT_* scrubbing in test env) that has no other
+home once the SESSION block goes away — recommend routing it through `lumen_episode.py commit`
+retroactively, or folding the GIT_* scrubbing lesson into whichever playbook covers the
+lumen-pr test suite, rather than losing it outright. Flagged, not resolved, in this diff.)
+
+=== Block 5 — SESSION 2026-09-08 (orch-watch8-ce5f8a) (lines 5628-5635) ===
+--- current ---
+## SESSION 2026-09-08 (orch-watch8-ce5f8a) — Watch8 ADB + FingerFind
+- ADB host = Thor, `/opt/platform-tools/adb` (Google 37.0.1). Ubuntu's adb 34.0.5 WEDGES on this watch (kill-server hangs) — do not use it. Thor keeps the pairing (guid adb-RFAY619BK7Z).
+- Watch IP AND wireless-debug port rotate. Discover with `ssh thor@100.112.151.100 '/opt/platform-tools/adb mdns services'` (_adb-tls-connect). Never ask Frank for a port again. Watch can land on the workbench net (10.216.82.x, Thor-only reach) or the LAN (192.168.8.x). Pair only if Frank re-pairs; his pair/connect ports came swapped once — pairing against the connect port = "protocol fault" TLS fail.
+- Watch drops wireless debug when WiFi sleeps: batch every session into one script (pattern: projects/watch8_debloat/baseline/20260908/apply_402_20260908.sh), run via lumen-run.
+- FingerFind = com.finger.find.app (KISSOFT). Frank's chosen separation alert. Audio is an IN-APP toggle ("Sound Alarm" under Disconnection notification settings; prefs soundDisconnectAlarm) — no adb path. Cards are inherent to the app; native replacement = wq#1561.
+- Applied: disconnection_alert_on=0 (Samsung dup), batch 2 debloat (wq#402), harness now mdns-based + timer live (tag battery_saver). Revert: thor:~/watch8_battery/session_20260908/REVERT_402_20260908.sh.
+
+## FLEET_TOOLS registry (2026-09-09) — fleet-wide tool knowledge, injected at boot
+--- replacement ---
+## FLEET_TOOLS registry (2026-09-09) — fleet-wide tool knowledge, injected at boot
+
+(Same flag as block 4: this is Watch8-project reference material, arguably still live/useful
+project state rather than a stale session log. Recommend Frank/orchestrator review before
+deleting blocks 4-5 — they read less like the "nightly collapse" convention this requirement
+targets and more like still-relevant project notes that happen to use the SESSION heading
+format. Blocks 1-3 are unambiguous multi-day-orchestrator retrospectives; 4-5 are borderline.)

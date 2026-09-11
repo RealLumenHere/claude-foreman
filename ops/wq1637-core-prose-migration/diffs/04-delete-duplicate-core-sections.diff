@@ -1,0 +1,94 @@
+Target: /home/lumen/claude_memory.md
+Verified verbatim by direct Read from this session, 2026-09-11 (offsets 4520-4539, 4935-5004).
+These 3 `#CORE` sections are pure duplicates of content that already lives canonically
+elsewhere — deleting them is not a migration (nothing new needs to be created), just removing
+the stale hand copy per the ownership table's "banned hand copies" rule (MINERVA_PIPELINE_MAP
+§4.2).
+
+=== Block 1 — PARALLEL-SESSION COORDINATION (lines 4526-4537) ===
+Duplicate of: /home/lumen/instructions/playbooks/session-start.md:74-92 (confirmed present,
+read directly this session — includes the 2026-07-17 `wq preflight`/enforced-slock addendum
+that this CORE copy predates and does not mention).
+--- current ---
+## PARALLEL-SESSION COORDINATION — wq leases + slock (2026-07-11) #CORE
+Overlap fix (Frank directive): agents were duplicating work because coordination was prose.
+Now enforced in tooling — full rules in instructions/playbooks/session-start.md §PARALLEL-SESSION
+COORDINATION. Summary: (1) ALL agent work is a `wq` ticket claimed via atomic `wq claim`
+(user lane refuses claims); claims carry a 240m lease that auto-expires back to open —
+`wq heartbeat <id>` extends; `wq add` refuses duplicate normalized titles. (2) Before
+state-changing work on any shared subsystem, `slock acquire <scope> --holder <session-name>`
+(auto-expiring advisory lock on queue.db; DENIED = hands off). (3) Use a stable session name
+for wq agent + slock holder. HANDOFF prose ownership ("wq#N owned by session X") is retired —
+if it's not a claimed ticket or a held slock, nobody owns it. Backups: wq.bak.20260712_024158,
+queue.db.bak.20260712_024158. Shipped session claude-fable-coord 2026-07-11.
+
+## 2026-07-11 — Fable batch (fable-3): AUTO LANE EMPTY at claim time.
+--- replacement ---
+## 2026-07-11 — Fable batch (fable-3): AUTO LANE EMPTY at claim time.
+
+=== Block 2 — GITHUB STANDARDS INSTATED (lines 4939-4964) ===
+Duplicate of: /home/lumen/instructions/playbooks/session-start.md:103-106 ("## GITHUB
+STANDARDS (2026-08-12) ... MUST read .../github-standards.md first" — confirmed present,
+read directly this session). The GITHUB TOKEN PATHS correction (2026-09-09, wq#1581) inside
+this section is newer/live info not yet in github-standards.md — fold that specific
+sub-paragraph into `github-standards.md` (or the `gitea-credential-domain` append, since it's
+the same class of fact) before deleting, don't just drop it.
+--- current ---
+## GITHUB STANDARDS INSTATED — 2026-08-12 PT #CORE
+Canonical law: `/home/lumen/instructions/playbooks/github-standards.md` (13 sections: repo
+classes A/B/C, GitHub Flow branching, Conventional Commits with `Refs:`/`Assisted-by:`
+footers, AI-attribution rules — `Assisted-by:` NEVER `Co-authored-by:` per Kubernetes/Ghostty
+era norms — PR tone + 5-section body, 12-point repo hygiene checklist, releases/SemVer/
+release-please, CI, branch+repo lifecycle, 12 hard bans, pre-push checklist).
+Wired into UNIFIED_DISPATCH.md, POKEMON_DISPATCH.md, playbooks/session-start.md.
+wq `github` lane seeded #491-500 + Frank decisions #501. Dispatch: GITHUB_DISPATCH.md.
+AUDIT FACTS (2026-08-12): gh CLI is NOT installed on lumen — use curl with a token read from
+/home/lumen/.secrets/ (see next line). 12 repos.
+GITHUB TOKEN PATHS — CORRECTED 2026-09-09 (wq#1581). The old "GITHUB_TOKEN from
+/home/lumen/agent/.env" instruction is DEAD: that key does not exist in agent/.env at all, and
+following it returns `Bad credentials` on every call. Verified live 2026-09-09 22:5x PT:
+  - frankstupak/* (incl. lumen-plays-pokemon, claude-command-center): read
+    `/home/lumen/.secrets/github-frank.token` (0600) -> login frankstupak, push+admin.
+  - RealLumenHere collaborator access: `/home/lumen/.secrets/github-lumen-classic.token`
+    (push, no admin). `/home/lumen/.secrets/github-lumen.token` is a DIFFERENT, narrower token
+    -> 404 on frankstupak repos; do not reach for it first.
+  - `git` itself needs no token wiring: credential.helper store already carries github.com.
+Rotation moved these on 2026-09-09 (see .bak.*_dead_leaked); mask protocol-agnostically and
+never echo a value. If a curl to api.github.com 401s, the token PATH is what drifted.
+Own repos had 1 branch / 0 PRs / 0 releases / 0 CI / 0 topics (2026-08-12 audit).
+docs/QUEUE_PROGRESS.md was committed INSIDE the LPP product repo (wq#491 evicts it).
+simpill-utils 29/39 PRs merged; interview-prep 13 open 0 merged. RealLumenHere = 0 repos.
+
+## lumen-git-guard LIVE — 2026-08-12 PT
+--- replacement ---
+## lumen-git-guard LIVE — 2026-08-12 PT
+
+(Fold the "GITHUB TOKEN PATHS — CORRECTED 2026-09-09" paragraph above into
+github-standards.md before applying this deletion — see note above.)
+
+=== Block 3 — LANE BOUNDARIES (lines 4989-5000) ===
+Duplicate of: /home/lumen/agents/work-queue/LANE_BOUNDARIES.md (confirmed present at that
+path this session, contents not read — this session only confirmed existence via directory
+listing, since agents/work-queue is a granted add-dir; recommend a byte-diff against this
+CORE copy before deleting, in case the two have actually diverged since 2026-08-13).
+--- current ---
+## LANE BOUNDARIES — wq#512 (2026-08-13) #CORE
+Contract: /home/lumen/agents/work-queue/LANE_BOUNDARIES.md. github + pokemon lanes share ONE repo
+and ONE working tree; boundary is now mechanical:
+- New CANONICAL wq subsystems: `lpp-repo` (published repo/branches/tags/ruleset), `lpp-tree`
+  (PRIMARY tree /home/lumen/pokemon), `ccc-repo`. wq claim slocks declared subsystems in-txn.
+- `lumen-pr start /home/lumen/pokemon <branch>` DEFAULTS to --worktree; `--primary` REFUSED while
+  any linked worktree is live. Worktrees: /home/lumen/scratch/worktrees/.
+- Destructive tickets (496 branch sweep / 507 tag / 509 backfill) must enumerate worktrees + dirty
+  paths + open PR heads and post a skip list BEFORE acting.
+- CI lands NON-required first; promote later via `lumen-ruleset apply <repo> --with-ci <JOB-name>`.
+- Identity: `wq whoami --register <base>` per session (wq#502). Never a shared/bare handle.
+
+## GITEA CREDENTIAL — one file, one rotation point (wq#529, 2026-08-13) #CORE
+--- replacement ---
+## GITEA CREDENTIAL — one file, one rotation point (wq#529, 2026-08-13) #CORE
+
+(GITEA CREDENTIAL itself is migrated by instincts_candidates.yaml's `gitea-credential-domain`
++ playbook_appends/github-standards-append.md — this diff only removes the LANE BOUNDARIES
+block immediately before it; do not delete the GITEA CREDENTIAL heading here, that happens
+once its own migration is applied.)
