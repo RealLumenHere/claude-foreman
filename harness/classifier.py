@@ -97,6 +97,18 @@ _UNSET = object()
 _MODEL_NOT_FOUND_RE = re.compile(
     r"issue with the selected model|model_not_found|not_found_error", re.I)
 
+# wq#1799 (de-spaghettifier Phase-0 E.2, FWORKER_FIXES_FROM_HR_TEARDOWN.md): a CLI
+# "API Error: ..." retry banner can land as the LAST assistant text block of a
+# session that otherwise still ends in a success-shaped result frame — the retry
+# text satisfies §C1's SUCCESS checks (subtype/is_error/terminal_reason all still
+# read "success") even though no real model turn happened after it. 112 of 1306
+# token-pool attempts (as of the Phase-0 count) rode this into FALSE_COMPLETE via
+# fworker's downstream artifact/evidence gate, charging the model for what was
+# actually an infra hiccup. Same shape as the litellm-gateway CRASH examples
+# already in the corpus (_runs/wq1569, _runs/wq913) — this scrub gives the oauth
+# CLI path the same verdict for the same signal.
+_API_ERROR_RETRY_RE = re.compile(r"^\s*\[?API Error: ")
+
 
 class RunState:
     """Accumulates the signals classify() needs while a child's stdout is parsed
@@ -128,6 +140,10 @@ class RunState:
         self.turns_exceeded = False
         self.saw_auth_failure = False
         self.saw_model_not_found = False
+        # wq#1799: last non-empty assistant text block seen, so classify() can scrub
+        # an API-error retry banner out of the SUCCESS path (§C1) — see
+        # _API_ERROR_RETRY_RE above.
+        self.last_assistant_text = None
         # observability only (wq#754/wq#736) — never fed into classify(), just carried
         # through to the attempt record / usage sidecar for cost, duration and token
         # visibility.
@@ -173,6 +189,14 @@ class RunState:
             block_types = {c.get("type") for c in content if isinstance(c, dict)}
             if block_types - {"thinking"}:
                 self.turns += 1
+            # wq#1799: track the last non-empty text block regardless of turn-
+            # counting above — an API-error retry banner is exactly the kind of
+            # content classify() needs to see even when it doesn't move turns.
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    t = (c.get("text") or "").strip()
+                    if t:
+                        self.last_assistant_text = t
 
         # rate_limit_event can arrive as its own frame type or nested in a system message
         rle = frame if ftype == "rate_limit_event" else frame.get("rate_limit_event")
@@ -299,6 +323,15 @@ def classify(state: RunState, exit_code=None, elapsed_s=None, diff_is_empty=None
             return LAUNCH_FAILURE if thin_no_diff_fault else INDETERMINATE
         if state.saw_refusal_no_fallback:
             return REFUSED
+        # wq#1799: a success-shaped result frame is not evidence of real work if the
+        # last thing the model actually said was a CLI retry banner for an API
+        # error — checked before §C12 DEGRADED-SUCCESS so an empty result_text
+        # doesn't mask this into the wrong bucket either. CRASH, not SUCCESS/
+        # FALSE_COMPLETE: same verdict the litellm-gateway path already gives this
+        # exact text shape (_runs/wq1569, _runs/wq913), so the oauth CLI path stops
+        # disagreeing with itself over the same signal.
+        if state.last_assistant_text and _API_ERROR_RETRY_RE.search(state.last_assistant_text):
+            return CRASH
         # §C12 DEGRADED-SUCCESS (#7124): a genuine success frame whose `result` text
         # came back the empty string — read artifacts/transcript rather than trust it.
         if state.result_text == "":
