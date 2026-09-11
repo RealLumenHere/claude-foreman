@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1729-sliding-window-kv-cache-compression/README.md:36-45"}]}
+{"criteria": [{"id": "AC1", "citation": "ops/wq1729-sliding-window-kv-cache-compression/guard_no_fabricated_kv_flags.py:1-13"}]}

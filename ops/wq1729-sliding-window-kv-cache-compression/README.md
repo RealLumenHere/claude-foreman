@@ -47,6 +47,11 @@ mirrors pilot 2c11123fab8b's SKIP for the sibling proposal: the blocker is
 architectural (Ollama-wrapped llama.cpp exposes no such knob today), not a
 tuning or config problem, so no flag exists that would make this real.
 
+**Regression guard:** `guard_no_fabricated_kv_flags.py` (`tests/test_guard_no_fabricated_kv_flags.py`)
+scans every `ops/*/litellm_config_snippet.yaml` for the fabricated
+`kv_cache_compression` key, so a future rescue-model plan can't reintroduce it
+into a hand-merge fragment unnoticed.
+
 **What would change this verdict:** a drop-in patch or plugin for llama.cpp/
 Ollama itself (not vLLM, which Lumen does not run for local models) that
 exposes sliding-window KV cache compression as a request-time or server
