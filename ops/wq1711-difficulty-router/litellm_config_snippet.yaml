@@ -1,0 +1,61 @@
+# wq#1711 — hand-merge into the live LiteLLM proxy config at
+# /home/lumen/agent/litellm_config.yaml (outside git, outside a BUILD worker's
+# sandbox — same convention as wq#897/wq#948/wq#1299/wq#1406/wq#1623).
+#
+# Installs the difficulty router in SHADOW MODE. In shadow mode the hook records
+# what it would have chosen and changes nothing, so this merge cannot move a
+# single request onto a different rung. Flip `shadow: false` per alias only after
+# the 7-day counterfactual in research/DIFFICULTY_ROUTING.md §6 is read.
+#
+# Prerequisite: copy difficulty_router.py next to the proxy's other mounted
+# python and add the CustomLogger subclass shim below, since the module in this
+# repo deliberately has no litellm import (so its tests run without the package).
+#
+#   # /home/lumen/agent/lumen_router_hook.py
+#   from litellm.integrations.custom_logger import CustomLogger
+#   from difficulty_router import DifficultyRouterHook, Policy, Rung
+#
+#   class LumenDifficultyRouter(CustomLogger, DifficultyRouterHook):
+#       def __init__(self):
+#           CustomLogger.__init__(self)
+#           DifficultyRouterHook.__init__(self, POLICIES)
+#
+#   POLICIES = {"lumen-auto": Policy(
+#       alias="lumen-auto",
+#       rungs=(
+#           Rung("qwen36-local",      0.00,  max_prompt_tokens=24_000, max_output_tokens=4_096, local=True),
+#           Rung("glm-5.3-flash-zai", 0.15,  multimodal=True, reasoning=True, max_output_tokens=4_096),
+#           Rung("deepseek-v4-flash", 0.219),
+#           Rung("deepseek-v4-pro",   0.751, reasoning=True),
+#       ),
+#       escalate_to="deepseek-v4-pro",
+#       shadow=True,
+#   )}
+#
+#   router_hook_instance = LumenDifficultyRouter()
+
+# 1. The alias must be a REAL deployment, because in shadow mode nothing
+#    rewrites it. Point it at whatever the opting-in caller runs today, so
+#    asking for `lumen-auto` is a no-op until the router goes live.
+model_list:
+  - model_name: lumen-auto
+    litellm_params:
+      model: openai/glm-5.3-flash
+      api_base: https://api.z.ai/api/paas/v4
+      api_key: os.environ/ZAI_API_KEY
+      timeout: 120
+    model_info:
+      # wq#1591/D6: a rung with no price map entry spends invisibly.
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
+
+# 2. Load the hook. `callbacks` takes `<module>.<instance>` resolved against the
+#    proxy's working directory (LiteLLM 1.83.10, verified via /health/readiness).
+general_settings:
+  callbacks: lumen_router_hook.router_hook_instance
+
+# 3. Do NOT add difficulty rungs to `router_settings.fallbacks`. Fallbacks fire
+#    on failure, not on difficulty, and the existing qwen36-local <-> cerebras
+#    pair is already a documented cost leak (FLEET_COST_PLAN D2 / wq#1588).
+#    The two mechanisms must stay separable or the leak gets harder to see.

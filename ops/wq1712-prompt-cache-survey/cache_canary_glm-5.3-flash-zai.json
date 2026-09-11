@@ -1,0 +1,99 @@
+{
+  "ts": "2026-09-11T03:48:14.686Z",
+  "model": "glm-5.3-flash-zai",
+  "gateway": "http://localhost:4000/v1/chat/completions",
+  "history_lines": 175,
+  "system_prefix_chars": 3180,
+  "prompt_char_len": 19198,
+  "appended_prompt_char_len": 19282,
+  "calls": [
+    {
+      "tag": "call1_cold",
+      "status": 200,
+      "latency_ms": 10090,
+      "prompt_tokens": 6905,
+      "completion_tokens": 904,
+      "prompt_cache_hit_tokens": null,
+      "prompt_cache_miss_tokens": null,
+      "cached_tokens": 768,
+      "usage_raw": {
+        "completion_tokens": 904,
+        "prompt_tokens": 6905,
+        "total_tokens": 7809,
+        "completion_tokens_details": {
+          "reasoning_tokens": 875
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 768
+        }
+      },
+      "error": null
+    },
+    {
+      "tag": "call2_identical_2s",
+      "status": 200,
+      "latency_ms": 15173,
+      "prompt_tokens": 6905,
+      "completion_tokens": 1179,
+      "prompt_cache_hit_tokens": null,
+      "prompt_cache_miss_tokens": null,
+      "cached_tokens": 6848,
+      "usage_raw": {
+        "completion_tokens": 1179,
+        "prompt_tokens": 6905,
+        "total_tokens": 8084,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1141
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 6848
+        }
+      },
+      "error": null
+    },
+    {
+      "tag": "call3_identical_15s",
+      "status": 200,
+      "latency_ms": 7730,
+      "prompt_tokens": 6905,
+      "completion_tokens": 579,
+      "prompt_cache_hit_tokens": null,
+      "prompt_cache_miss_tokens": null,
+      "cached_tokens": 6848,
+      "usage_raw": {
+        "completion_tokens": 579,
+        "prompt_tokens": 6905,
+        "total_tokens": 7484,
+        "completion_tokens_details": {
+          "reasoning_tokens": 536
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 6848
+        }
+      },
+      "error": null
+    },
+    {
+      "tag": "call4_appended_one_turn",
+      "status": 200,
+      "latency_ms": 9514,
+      "prompt_tokens": 6936,
+      "completion_tokens": 648,
+      "prompt_cache_hit_tokens": null,
+      "prompt_cache_miss_tokens": null,
+      "cached_tokens": 768,
+      "usage_raw": {
+        "completion_tokens": 648,
+        "prompt_tokens": 6936,
+        "total_tokens": 7584,
+        "completion_tokens_details": {
+          "reasoning_tokens": 609
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 768
+        }
+      },
+      "error": null
+    }
+  ]
+}

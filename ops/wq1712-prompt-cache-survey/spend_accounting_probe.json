@@ -1,0 +1,8 @@
+{
+  "ts": "2026-09-11T03:42:46.952744+00:00",
+  "base_url": "http://localhost:4000",
+  "key_var": "LITELLM_MASTER_KEY",
+  "key_len": 41,
+  "model_costs_error": "HTTPError: HTTP Error 401: Unauthorized",
+  "spend_logs_error": "HTTPError: HTTP Error 401: Unauthorized"
+}
