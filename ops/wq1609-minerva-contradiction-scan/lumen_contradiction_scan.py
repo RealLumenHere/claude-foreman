@@ -470,10 +470,9 @@ def file_config_ticket(hits):
             )
             + "\n(auto-filed by lumen-contradiction-scan, wq#1609)"
         )
-        rc, out = run([WQ, "add", title, "--lane", "build", "--pri", "3",
+        rc, out = run([WQ, "add", "--title", title, "--lane", "build", "--pri", "3",
                        "--detail", detail, "--archetype", "standard-engineering"])
-        run([AQ, "add", "--source", "lumen-contradiction-scan",
-             "--severity", "warn", "--message", title])
+        run([AQ, "add", "lumen-contradiction-scan", path, title, detail])
         filed.append(f"{path}: rc={rc} {out.strip()[:80]}")
     return filed
 
