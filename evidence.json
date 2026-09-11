@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1698-supergateway-log-redaction/no-body-logs-journald.conf:29-30"}]}
+{"criteria": [{"id": "AC1", "citation": "ops/wq1689-minerva-volatile-state-halflife/test_lumen_state_wq1689.py:44-58"}]}
