@@ -1,0 +1,7 @@
+[Unit]
+Description=wq#1633 — incremental federated-index refresh (lumen_federate.py index)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/lumen/minerva
+ExecStart=/usr/bin/python3 /home/lumen/minerva/lumen_federate.py index

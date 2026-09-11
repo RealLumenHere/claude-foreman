@@ -1,0 +1,23 @@
+--- a/minerva/lumen_state.py
++++ b/minerva/lumen_state.py
+@@ -41,6 +41,7 @@
+ import sqlite3, sys, uuid, argparse, os, json, fnmatch, difflib
+ from datetime import datetime, timezone
+
+ import minerva_audit
++import projection_state
+
+ DB = '/home/lumen/minerva/minerva.db'
+@@ -392,6 +393,12 @@
+ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
+             confidence, half_life_days, episode_id, new_predicate,
+             stated_by_frank=False, source_kind=None):
+     _migrate(conn)
++    # wq#1633: every accepted write below commits before returning, so marking
++    # the state-derived projections dirty here lands in the SAME transaction as
++    # whichever exit path fires (reconfirm / historical_insert / insert / supersede).
++    # projection_state.ensure_schema() is idempotent, so this is a no-op cost on a
++    # DB that hasn't been migrated for wq#1633 yet beyond one extra CREATE-IF-NOT-EXISTS.
++    projection_state.mark_state_projections_dirty(conn)
+     reg = registry()
+     now = _now()

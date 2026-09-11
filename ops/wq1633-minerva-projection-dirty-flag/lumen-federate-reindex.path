@@ -1,0 +1,9 @@
+[Unit]
+Description=wq#1633 — watch claude_memory.md and refresh the federated recall index
+
+[Path]
+PathModified=/home/lumen/claude_memory.md
+Unit=lumen-federate-reindex.service
+
+[Install]
+WantedBy=multi-user.target

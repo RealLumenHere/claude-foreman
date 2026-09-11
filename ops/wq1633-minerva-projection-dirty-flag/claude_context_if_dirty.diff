@@ -1,0 +1,19 @@
+--- a/minerva/context/claude_context.sh
++++ b/minerva/context/claude_context.sh
+@@ -60,6 +60,15 @@
+             echo "      read the file directly before acting on procedural memory ====="
+             echo ;;
+     esac
++    # wq#1633: regen the state projections first if state_facts changed since the
++    # last regen (MINERVA_PIPELINE_MAP.md §4.4/§5#5) — "forgot to run state-regen"
++    # stops being a class of bug; the human step becomes a fast path, not the only one.
++    /home/lumen/bin/state-regen --if-dirty
++    python3 /home/lumen/minerva/projection_state.py check-warn live_fleet_state \
++        --file /home/lumen/minerva/context/LIVE_FLEET_STATE.md
++    if [ -f /home/lumen/minerva/context/sections.json ] \
++        && [ /home/lumen/minerva/context/sections.json -ot /home/lumen/claude_memory.md ]; then
++        echo "WARN: sections.json is older than claude_memory.md (wq#1633) — tag_sections may not have run"
++    fi
+     python3 context_selector.py 'session start core context'
+ elif [ "$1" = "--stats" ]; then
+     shift
