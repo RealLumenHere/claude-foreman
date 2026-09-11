@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1609-minerva-contradiction-scan/install.sh:14", "deploy_target": "/home/lumen/bin/lumen-contradiction-scan"}]}
+{"criteria": [{"id": "AC1", "citation": "spikes/wq1793_uhp_core/app.py:60-97"}]}
