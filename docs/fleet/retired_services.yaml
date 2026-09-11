@@ -149,7 +149,9 @@
     ops/wq1778-dgm-retire-decision/RUNBOOK.md). Decision made under the
     standing full-autonomy instruction; also settles wq#1777's dependency
     (do NOT build the v2 rotation wheel — the genome has no consumer).
-  ticket: wq#1778 (decision + this record), wq#1715 (F2 found), wq#1643 (agent5-split retirement)
+  ticket: wq#1778 (decision + this record), wq#1715 (F2 found), wq#1643 (agent5-split retirement),
+    wq#1777 (v2 rotation wheel not built — amendment of record for the archived
+    DGM_V2_ROTATION_DESIGN.md in ops/wq1777-dgm-v2-rotation-wheel/DECISION.md)
   data:
     files: [/home/lumen/autonomy/agent5/config_registry.json,
             /home/lumen/autonomy/agent5/.dgm_history.jsonl,

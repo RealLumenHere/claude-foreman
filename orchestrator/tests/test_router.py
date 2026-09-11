@@ -765,6 +765,15 @@ def test_fleet_lane_bias_cannot_pick_mechanical_edit_over_analysis(m):
     assert arch == "rca-investigation", (arch, sig)
 
 
+def test_pilot_lane_bias_cannot_pick_probe_build_over_analysis(m):
+    # wq#1755: _LANE_BIAS['pilot'] lists probe-build first, which could put a corroborated
+    # analysis ticket (here: novel-design's "design" signal) on sonnet-5 instead of
+    # fable-5/opus-5, the same failure class as the fleet/mechanical-edit case above.
+    arch, sig = router.classify_archetype(
+        "design doc for pilot benchmark harness", "", "pilot", m)
+    assert arch != "probe-build", (arch, sig)
+
+
 def test_mechanical_edit_still_wins_when_nothing_analytical_is_evidenced(m):
     # the guard is scoped: a true mechanical edit is untouched and still reaches the
     # cheap local rung (this is the SAMPLES row at the top of the file).
