@@ -1,1 +1,8 @@
-{"criteria": [{"id": "AC1", "cmd_run": "python3 -m pytest prompt-forge/tests/test_prompt_forge.py harness/tests/test_memory_injection.py harness/tests/test_evidence_gate.py -q", "exit_code": 0, "citation": "prompt-forge/fleet_context.py:190-238"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "ops/wq1609-minerva-contradiction-scan/lumen_contradiction_scan.py:163"
+    }
+  ]
+}

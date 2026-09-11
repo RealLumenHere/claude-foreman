@@ -130,6 +130,9 @@ def is_structured(value, fact_class):
     return len(value) <= MAX_VALUE_LEN and bool(TOKEN_RE.fullmatch(value))
 
 
+SHOUTED_COMPOUND_RE = re.compile(r"^[A-Z]+(-[A-Z]+)+$")
+
+
 def self_identifying(value):
     """Whether a value carries its own subject. `100.88.71.47`,
     `lumen-brain.service` and `embeddings-host` do; `active`, `dead` and `P3`
@@ -140,10 +143,24 @@ def self_identifying(value):
     its lowercase twin. This used to be `value.isupper() and value.isalpha()`,
     which was harmless only while status values were prose the index could not
     read at all — once wq#1629 split them into tokens it put 763 unscoped
-    English words into the index and the daily scan went 14 -> 777 hits."""
+    English words into the index and the daily scan went 14 -> 777 hits.
+
+    wq#1781: a shouted status word does not become self-identifying just
+    because it is hyphenated. `POWERED-DOWN`, `LIVE-VERIFIED` and `TORN-DOWN`
+    are compound adjectives, not tokens — `A-B` with both halves dictionary
+    words says nothing about WHICH thing is powered down, same as `RETIRED`
+    said nothing about which thing is retired. The hyphen alone used to
+    satisfy the separator check below, so these matched unscoped anywhere in
+    86 MB of research prose (4 of 5 false positives measured in
+    research/PGVECTOR_INVALIDATION_CONTRACTS.md §4.2). A hyphenated hostname
+    like `embeddings-host` is not shouted, so it still qualifies."""
     if any(rx.fullmatch(value) for rx in SELF_IDENTIFYING):
         return True
-    return len(value) >= 8 and bool(re.search(r"[0-9._:/@-]", value))
+    if len(value) < 8:
+        return False
+    if re.search(r"[0-9._:/@]", value):
+        return True
+    return "-" in value and not SHOUTED_COMPOUND_RE.fullmatch(value)
 
 
 PREDICATE_STOPWORDS = {"the", "and", "for", "has", "was"}

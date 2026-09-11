@@ -131,6 +131,22 @@ def test_a_shouted_status_word_is_not_self_identifying():
         assert not lcs.self_identifying(word)
 
 
+def test_a_shouted_hyphenated_compound_is_not_self_identifying():
+    """wq#1781: the hyphen in `POWERED-DOWN` used to satisfy the separator
+    check on its own, so shouted compound adjectives matched unscoped
+    anywhere — 4 of 5 false positives measured in
+    research/PGVECTOR_INVALIDATION_CONTRACTS.md §4.2, and live against
+    archival_notes/FLEET_MAP.md/claude_memory.md too. `A-B` with both halves
+    dictionary words says nothing about WHICH thing is powered down, same as
+    plain `RETIRED` said nothing about which thing is retired."""
+    for value in ("POWERED-DOWN", "POWERED-ON", "LIVE-VERIFIED", "TORN-DOWN",
+                  "FULLY-RETIRED"):
+        assert not lcs.self_identifying(value)
+    # A hyphenated hostname is not a shouted compound and still qualifies.
+    assert lcs.self_identifying("embeddings-host")
+    assert lcs.self_identifying("lumen-brain.service")
+
+
 # ------------------------------------------------------------------- matching
 
 def scan_line(db_path, line):
