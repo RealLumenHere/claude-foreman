@@ -80,6 +80,30 @@ def replayable(cmd):
     return True, ""
 
 
+# wq#1705: "make", "go" and "check" are English verbs as well as build tools, so an
+# UNQUOTED ticket line can open with one and still be prose — that ticket was titled
+# "make failed guard services self-heal or alert instead of staying dead" and derived
+# the criterion `make failed guard services self-heal or alert instead of staying dead`,
+# a command no repo can satisfy and which the worker cannot repair (acceptance.json is
+# pinned at dispatch). A backticked span is an author saying "this is a command" and is
+# still trusted as-is; a bare line has to earn it. Prose gives itself away with function
+# words no build target ever uses, and with length — real invocations are short.
+_PROSE_TOKENS = frozenset("""
+a an and are as at be but by for from if in instead into is it its of on or so than
+that the their them then there these they this to until when where which while who
+with without you your
+""".split())
+_MAX_BARE_CMD_TOKENS = 6
+
+
+def _looks_like_prose(argv):
+    """True when a bare line opening with a build-tool name is really a sentence."""
+    rest = argv[1:]
+    if len(argv) > _MAX_BARE_CMD_TOKENS:
+        return True
+    return any(tok.lower() in _PROSE_TOKENS for tok in rest)
+
+
 def _command_candidates(text):
     """Command-shaped spans in ticket text: backticked spans first, then bare lines."""
     out = []
@@ -87,7 +111,10 @@ def _command_candidates(text):
         out.append(span.strip())
     for line in (text or "").splitlines():
         s = line.strip().lstrip("-*0123456789. ").strip()
-        if s and s.split()[0] in ("pytest", "npm", "make", "cargo", "go"):
+        if not s:
+            continue
+        argv = s.split()
+        if argv[0] in ("pytest", "npm", "make", "cargo", "go") and not _looks_like_prose(argv):
             out.append(s)
     seen, uniq = set(), []
     for c in out:

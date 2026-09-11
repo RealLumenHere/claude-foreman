@@ -1,0 +1,15 @@
+# Fallback copy of wq#1657's bridge list, shipped so guard-meta-watchdog can
+# tell "this guard found something" from "this guard crashed" before wq#1657
+# deploys its own copy to /home/lumen/bin/guard-finding-exit.list. Once that
+# path exists it wins (FINDING_LIST_PATHS order) and this file goes unread.
+# Units whose exit 1 means "finding", not "crash". One unit name per line.
+unit-drift.service
+wq-drift-guard.service
+primary-tree-guard.service
+lumen-repo-sweep.service
+lumen-pat-scan.service
+lumen-dispatch-lint.service
+lumen-retirement-audit.service
+lumen-budget-alert.service
+git-guard-sentinel.service
+repo-visibility-sentinel.service
