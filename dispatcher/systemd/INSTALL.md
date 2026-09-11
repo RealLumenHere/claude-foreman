@@ -221,3 +221,42 @@ Rollback: `sudo systemctl disable --now lumen-foreman-usaged.service`. Every
 600s) — see `foreman_usaged.py`'s `_daemon_stale()` — so even an un-enabled
 or crashed unit degrades to local-rung-only rather than allowing dispatch on
 stale data.
+
+### observed_burn.json sampler — `lumen-foreman-burnrate` (wq#1722)
+
+15-min timer, one-shot poll (`observed_burn_writer.py run --once`), same staged
+posture as dispatch/selfheal/health. Samples governor `state.json` percent per pool,
+counts cloud fworker worker-hours since the last poll (`lumen-run list` for units
+still running + `journalctl` for units that already exited, ticket->model resolved
+via `concurrency.ticket_model` so local-rung units are excluded and fable units are
+split into `fable_weekly_scoped`), skips windows that span a reset, and writes a
+per-pool EMA to `dispatcher/observed_burn.json` — which `burn_rate.load_observed()`
+already reads and prefers over its one-night 2026-09-10 defaults (wq#1699
+"Measurement method"). No dispatcher coupling beyond that shared file.
+
+```bash
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-burnrate.service /etc/systemd/system/
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-burnrate.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+systemctl is-enabled lumen-foreman-burnrate.timer   # expect: disabled
+```
+
+Prove it before enabling — a single poll, no daemon loop:
+
+```bash
+python3 /home/lumen/foreman/dispatcher/observed_burn_writer.py run --once
+python3 /home/lumen/foreman/dispatcher/observed_burn_writer.py status
+```
+
+Enable (Tier-3, Frank only):
+
+```bash
+sudo systemctl enable --now lumen-foreman-burnrate.timer
+systemctl list-timers --no-pager | grep burnrate
+```
+
+Rollback: `sudo systemctl disable --now lumen-foreman-burnrate.timer`. Deleting
+`dispatcher/observed_burn.json` (or leaving the timer disabled so it's never
+written) falls back to `burn_rate.py`'s measured-2026-09-10 config defaults —
+`load_observed()` treats an absent/unreadable file as "nothing measured yet", never
+as a zero rate.

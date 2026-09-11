@@ -1,1 +1,10 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1609-minerva-contradiction-scan/lumen_contradiction_scan.py:473-475"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "dispatcher/observed_burn_writer.py:224",
+      "cmd_run": "python3 -m pytest dispatcher/tests/test_observed_burn_core.py dispatcher/tests/test_observed_burn_writer.py -q",
+      "exit_code": 0
+    }
+  ]
+}
