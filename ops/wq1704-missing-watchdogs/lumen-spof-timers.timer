@@ -1,0 +1,10 @@
+[Unit]
+Description=SPOF watch: vault HA + backup dead-man every 10 min (wq#1704)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
