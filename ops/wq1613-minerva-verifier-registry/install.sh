@@ -13,6 +13,7 @@ sudo install -m 0644 "$HERE/lumen-state-verify.service" /etc/systemd/system/lume
 sudo install -m 0644 "$HERE/lumen-state-verify.timer" /etc/systemd/system/lumen-state-verify.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now lumen-state-verify.timer
+systemctl is-active --quiet lumen-state-verify.timer
 systemctl list-timers lumen-state-verify.timer --no-pager --no-legend
 
 /home/lumen/bin/lumen-verify sweep --dry-run --json
