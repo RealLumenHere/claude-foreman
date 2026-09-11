@@ -70,12 +70,21 @@ safe but means the allowlist isn't doing anything).
 | `drift-assert GOLDEN` | `lumen-agent` (`lumen-agent-enabled` row) | masked | GOLDEN asserts `is-enabled` should be `enabled`; the unit is masked — GOLDEN itself is stale |
 | `drift-assert GOLDEN` | `lumen-agent` (`lumen-agent-notify` row) | masked | same unit, second stale GOLDEN row |
 
-1 **skip** (`vaultwarden` on `maat` — docker not queryable from this session,
-same as check A's existing remote-docker skip behavior). The remaining 15
-references (redis-server, lumen-messenger, cloudflared, lumen-memoryd,
-mcp-gateway, desktop-commander-mcp, lumen-pokemon-live, ntfy, litellm ×2,
-lumen-messenger (status monitor), lumen-litellm-auth-monitor, litellm
-(aq_escalate docker mention), homeassistant@bes, gitea@anubis) all resolved OK.
+3 **skips**, all of them the non-`lumen` refs `drift-assert`'s GOLDEN table
+names (`vaultwarden@maat`, `homeassistant@bes`, `gitea@anubis`): under
+`--local-only` these are reported, not contacted. The remaining 13 references
+(redis-server, lumen-messenger, cloudflared, lumen-memoryd, mcp-gateway,
+desktop-commander-mcp, lumen-pokemon-live, ntfy, litellm ×2, lumen-messenger
+(status monitor), lumen-litellm-auth-monitor, litellm (aq_escalate docker
+mention)) all resolved OK.
+
+Superseded by wq#1756: the first cut of this sweep showed **1 skip**, because
+check D ignored `--local-only` and actually SSHed to `anubis` and `bes` (both
+answered, hence OK) and `maat` (skipped only because docker wasn't queryable
+over that connection). `--local-only` is now enforced inside `run_on()` itself,
+so every check — including any added later — inherits it rather than having to
+re-declare check A's gate. Without the flag, all three are probed as before; the
+8 alerts are identical either way.
 
 No fix to the ghosts themselves in this ticket — wq#1644 is the *detector*.
 The `lumen-agent`/`stall:` and `drift-assert` GOLDEN staleness were already
@@ -111,7 +120,9 @@ gained 21 new checks for check D:
 All existing check A/B/C selftest assertions are unchanged and still pass.
 
 Run: `python3 ops/wq1644-retirement-audit-ghost-guards/staged/retirement-audit
-selftest` → `ALL PASS` (38 checks total, up from 17).
+selftest` → `ALL PASS` (44 checks total, up from 17; the last 6 are wq#1756's
+`--local-only` enforcement, which stub out `probe_ghost` to assert check D
+probes nothing remote and never open a connection of their own).
 
 ## Apply
 
