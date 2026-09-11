@@ -1,15 +1,1 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "research/ACTIVATION_PROBES.md:1-30",
-      "note": "wq#1716 deliverable: feasibility of hidden-layer activation probes on the local open-weight rung"
-    },
-    {
-      "id": "AC2",
-      "citation": "research/activation_probe_feasibility.py:1-84",
-      "note": "reproduces every grade-A fact in the doc: build b1-96278e39f, 40x2048 geometry, 256/8 experts, /embeddings 501, live logprobs, prefill 19.14-19.41 tok/s"
-    }
-  ],
-  "ticket": "wq#1716"
-}
+{"criteria": [{"id": "AC1", "citation": "orchestrator/router.py:731-748"}]}
