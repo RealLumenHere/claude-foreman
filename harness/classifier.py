@@ -201,6 +201,10 @@ class RunState:
         # rate_limit_event can arrive as its own frame type or nested in a system message
         rle = frame if ftype == "rate_limit_event" else frame.get("rate_limit_event")
         if rle:
+            # wq#1814: on the wire the payload sits one level down, under
+            # "rate_limit_info" (every captured frame, CLI 2.1.220/2.1.233); the flat
+            # shape is kept for older fixtures.
+            rle = rle.get("rate_limit_info") or rle
             if rle.get("status") == "rejected":
                 self.saw_limit = True
                 self.latest_resets_at = rle.get("resetsAt") or rle.get("resets_at")
@@ -242,8 +246,14 @@ class RunState:
                 "reason": frame.get("reason") or frame.get("trigger"),
                 "fallback_model": frame.get("fallback_model") or frame.get("fallbackModel"),
             })
-        if ftype == "api_retry":
+        # wq#1814: the CLI emits retries as {"type":"system","subtype":"api_retry",
+        # "error_status":<int|null>,"error":"<category>"} — never a top-level
+        # "type":"api_retry", which is why api_retries read 0 on every recorded
+        # attempt. The category rides in "error", not "category".
+        if ftype == "api_retry" or (ftype == "system" and frame.get("subtype") == "api_retry"):
             self.api_retries += 1
+            if frame.get("error") == "rate_limit":
+                self.saw_limit = True
             # §C11 AUTH: system/api_retry error in {authentication_failed} or a bare 401,
             # same frame shape §B/§C4's rate_limit/429 detection already reads from.
             if (frame.get("error") == "authentication_failed"

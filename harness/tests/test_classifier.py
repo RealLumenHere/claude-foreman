@@ -173,6 +173,79 @@ def test_bare_429_status_is_limit():
     assert run(frames) == LIMIT
 
 
+# wq#1814: verbatim wire frames. The CLI emits retries as a system subtype and nests
+# rate-limit state under "rate_limit_info" — the flat fixtures above are shapes it never
+# produced. Source: agents/work-queue/_runs/rabbitMisty3-e8dfb9.jsonl:4 and :15 (CLI
+# 2.1.233), foreman/_runs/fbuild-625.jsonl:2 (CLI 2.1.220).
+CAPTURED_API_RETRY = {
+    "type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 10,
+    "retry_delay_ms": 513, "error_status": None, "error": "unknown",
+    "session_id": "08694b7c-b0eb-4eaf-ab8a-9955848886a0",
+    "uuid": "c152e5e2-0fd0-40ea-ad27-fb324770c3f5"}
+CAPTURED_API_ERROR_RESULT = {
+    "type": "result", "subtype": "success", "is_error": True, "num_turns": 1,
+    "terminal_reason": "api_error", "api_error_status": None,
+    "result": "API Error: Unable to connect to API (UNKNOWN_CERTIFICATE_VERIFICATION_ERROR)"}
+CAPTURED_RATE_LIMIT_EVENT = {
+    "type": "rate_limit_event",
+    "rate_limit_info": {"status": "allowed_warning", "resetsAt": 1787223600,
+                        "rateLimitType": "seven_day", "utilization": 0.57,
+                        "isUsingOverage": False},
+    "uuid": "7241b0b5-d639-41fd-ade0-8f9e342103d2",
+    "session_id": "61649146-6bec-4421-b732-c5a9be1231d5"}
+
+
+def _retry(**over):
+    return {**CAPTURED_API_RETRY, **over}
+
+
+def test_captured_system_api_retry_frames_are_counted():
+    st = RunState()
+    for n in range(1, 11):
+        st.observe(_retry(attempt=n))
+    st.observe(CAPTURED_API_ERROR_RESULT)
+    assert st.api_retries == 10
+    assert classify(st, exit_code=1) == CRASH
+
+
+def test_captured_api_retry_shape_rate_limit_category_is_limit():
+    # the category rides in "error", not "category"; no 429 needed
+    frames = [{"type": "system", "subtype": "init"}, _retry(error="rate_limit"),
+              {"type": "result", "subtype": "error_during_execution", "is_error": True}]
+    assert run(frames) == LIMIT
+
+
+def test_captured_api_retry_shape_authentication_failed_is_auth():
+    frames = [{"type": "system", "subtype": "init"}, _retry(error="authentication_failed"),
+              {"type": "result", "subtype": "error_during_execution", "is_error": True}]
+    assert run(frames) == AUTH
+
+
+def test_captured_api_retry_shape_bare_401_is_auth():
+    frames = [{"type": "system", "subtype": "init"}, _retry(error_status=401),
+              {"type": "result", "subtype": "error_during_execution", "is_error": True}]
+    assert run(frames) == AUTH
+
+
+def test_captured_rate_limit_event_warning_is_not_limit():
+    st = RunState()
+    st.observe(CAPTURED_RATE_LIMIT_EVENT)
+    assert st.saw_limit is False
+
+
+def test_captured_rate_limit_event_shape_rejected_is_limit_with_resets_at():
+    rejected = {**CAPTURED_RATE_LIMIT_EVENT,
+                "rate_limit_info": {**CAPTURED_RATE_LIMIT_EVENT["rate_limit_info"],
+                                    "status": "rejected", "utilization": 1.0}}
+    st = RunState()
+    for f in [{"type": "system", "subtype": "init"}, rejected,
+              {"type": "result", "subtype": "error_during_execution", "is_error": True}]:
+        st.observe(f)
+    assert st.saw_limit is True
+    assert st.latest_resets_at == 1787223600
+    assert classify(st) == LIMIT
+
+
 def test_error_max_turns_with_real_turns_is_turns():
     # §C2/§D: TURNS requires evidence — a result frame AND >=1 real assistant turn.
     frames = [
