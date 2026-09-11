@@ -131,6 +131,18 @@ def test_a_shouted_status_word_is_not_self_identifying():
         assert not lcs.self_identifying(word)
 
 
+def test_a_shouted_hyphenated_compound_is_not_self_identifying():
+    """wq#1781: a hyphen alone doesn't carry a subject either. POWERED-DOWN is
+    two dictionary words joined by punctuation, not an identifier — it should
+    stay subject-scoped exactly like RETIRED, while a real hyphenated
+    identifier (embeddings-host) keeps self-identifying."""
+    for word in ("POWERED-DOWN", "POWERED-ON", "LIVE-VERIFIED", "TORN-DOWN",
+                 "FULLY-RETIRED"):
+        assert not lcs.self_identifying(word)
+    assert lcs.self_identifying("embeddings-host")
+    assert lcs.self_identifying("lumen-brain.service")
+
+
 # ------------------------------------------------------------------- matching
 
 def scan_line(db_path, line):

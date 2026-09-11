@@ -140,10 +140,24 @@ def self_identifying(value):
     its lowercase twin. This used to be `value.isupper() and value.isalpha()`,
     which was harmless only while status values were prose the index could not
     read at all — once wq#1629 split them into tokens it put 763 unscoped
-    English words into the index and the daily scan went 14 -> 777 hits."""
+    English words into the index and the daily scan went 14 -> 777 hits.
+
+    A bare hyphen has the same problem (wq#1781): `POWERED-DOWN` is two
+    dictionary words joined by a hyphen, not a token with a subject baked in,
+    so a shouted hyphenated compound is exactly as unscoped as `RETIRED` was.
+    A digit or any separator other than `-` still counts on its own
+    (`lumen-brain.service`, `100.88.71.47`); a lone hyphen only counts when
+    the value isn't a shouted compound (`embeddings-host` does, `POWERED-DOWN`
+    doesn't)."""
     if any(rx.fullmatch(value) for rx in SELF_IDENTIFYING):
         return True
-    return len(value) >= 8 and bool(re.search(r"[0-9._:/@-]", value))
+    if len(value) < 8:
+        return False
+    if re.search(r"[0-9._:/@]", value):
+        return True
+    if "-" not in value:
+        return False
+    return not (value.isupper() and value.replace("-", "").isalpha())
 
 
 PREDICATE_STOPWORDS = {"the", "and", "for", "has", "was"}
