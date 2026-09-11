@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -322,6 +323,50 @@ def test_usage_sidecar_written_on_watchdog_kill(tmp_path):
         attempt_record = json.load(f)
     assert attempt_record["killed_reason"] == "inactivity"
     _assert_usage_sidecar_rate_limits(runs_root, ticket_id)
+
+
+def test_watchdog_kill_reaches_grandchild_process(tmp_path):
+    """wq#1798 ACCEPTANCE: the inactivity watchdog SIGTERMs the `claude` CLI pid, but
+    start_new_session=True (fworker.py run_child) puts a Bash-tool grandchild (e.g. a
+    build/sleep/server the CLI spawned) in the SAME process group. Before the fix,
+    fworker.py:1299-1304 signaled only the CLI pid, so that grandchild survived the CLI's
+    death, kept the stdout pipe open, and kept mutating the worktree after fworker had
+    already recorded KILLED. _kill_proc_tree() (fworker.py) now signals the whole group,
+    so the grandchild must be dead once run_fworker() returns."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root, state_file = make_scratch_env(
+        tmp_path, 0, "hang_with_grandchild")
+    ticket_id = wq_add(env, "scratch grandchild-survives-cancel ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+    pid_file = tmp_path / "grandchild.pid"
+    env["FAKE_CLAUDE_GRANDCHILD_PID_FILE"] = str(pid_file)
+
+    run_fworker(env, ticket_id, repo, "hang_with_grandchild",
+                extra_args=["--frame-gap-timeout", "1", "--post-result-grace", "1"])
+
+    with open(os.path.join(runs_root, f"wq{ticket_id}", "attempt-1.json")) as f:
+        attempt_record = json.load(f)
+    assert attempt_record["killed_reason"] == "inactivity"
+
+    grandchild_pid = int(pid_file.read_text().strip())
+    # A killed process can sit as a zombie briefly before its new parent (it was
+    # reparented off the dead `claude` CLI) reaps it, so poll for "gone or zombie"
+    # instead of a single os.kill(pid, 0) check, which would still see a zombie's pid.
+    deadline = time.time() + 5
+    reaped_or_zombie = False
+    while time.time() < deadline:
+        try:
+            with open(f"/proc/{grandchild_pid}/stat") as f:
+                state = f.read().rsplit(")", 1)[1].split()[0]
+            reaped_or_zombie = state == "Z"
+        except FileNotFoundError:
+            reaped_or_zombie = True
+        if reaped_or_zombie:
+            break
+        time.sleep(0.1)
+    assert reaped_or_zombie, (
+        f"grandchild pid {grandchild_pid} still running after fworker cancel — "
+        f"process-group kill did not reach it")
 
 
 def test_thinking_frames_dont_double_count_toward_turn_ceiling(tmp_path):

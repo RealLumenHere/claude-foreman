@@ -341,6 +341,17 @@ def main():
     elif scenario == "hang":
         time.sleep(3600)
 
+    elif scenario == "hang_with_grandchild":
+        # wq#1798: models a Bash-tool child (build/sleep/server) that survives the CLI's
+        # own death. Spawn a detached grandchild, record its pid for the test to poll,
+        # then hang exactly like "hang" so the inactivity watchdog SIGTERMs *this*
+        # process — proving the fix has to reach the grandchild too, not just us.
+        pid_file = os.environ["FAKE_CLAUDE_GRANDCHILD_PID_FILE"]
+        grandchild = subprocess.Popen(["sleep", "3600"])
+        with open(pid_file, "w") as f:
+            f.write(str(grandchild.pid))
+        time.sleep(3600)
+
     elif scenario == "turns_flood":
         for _ in range(200):
             emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "x"}]}})

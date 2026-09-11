@@ -1,10 +1,1 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "dispatcher/observed_burn_writer.py:224",
-      "cmd_run": "python3 -m pytest dispatcher/tests/test_observed_burn_core.py dispatcher/tests/test_observed_burn_writer.py -q",
-      "exit_code": 0
-    }
-  ]
-}
+{"criteria": [{"id": "AC1", "citation": "harness/fworker.py:1177-1330"}]}

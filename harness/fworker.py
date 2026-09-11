@@ -1174,6 +1174,37 @@ def _reader_thread(pipe, q):
         q.put(("eof", None))
 
 
+def _kill_proc_tree(proc, term_timeout=30, kill_timeout=10):
+    """wq#1798: signal the whole process GROUP, not just the CLI pid. start_new_session=
+    True at the spawn site (below) makes proc.pid double as its own process group id, so
+    a group-wide kill reaches Bash-tool grandchildren (build/sleep/server) that would
+    otherwise survive the CLI's death, keep the stdout pipe open, and keep mutating the
+    worktree after fworker has already recorded KILLED. This is the single terminate site
+    every caller (plain run, fire-mode's run_fire_child, and do_attempt's resume path)
+    funnels through, since they all bottom out in this same run_child() watchdog loop."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=term_timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=kill_timeout)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
               frame_gap_s=None, post_result_grace_s=None, loop_tracker=None):
     """Spawn, parse stream-json, enforce watchdogs. Returns (RunState, exit_code,
@@ -1296,14 +1327,7 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             state.hung = True
         elif killed_reason == "turns_exceeded":
             state.turns_exceeded = True
-        try:
-            proc.send_signal(signal.SIGTERM)
-            proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=10)
-        except ProcessLookupError:
-            pass
+        _kill_proc_tree(proc)
     else:
         proc.wait()
 
