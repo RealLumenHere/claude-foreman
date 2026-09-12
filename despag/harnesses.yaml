@@ -7,6 +7,14 @@
 # `enabled: false` is a despag-local extension (Harness.additionalProperties: true) —
 # a disabled harness is listed by GET /v1/harnesses but reports available: false for
 # every model under it (see despag/app.py:_compute_available).
+#
+# wq#1810: `repo` is a despag-local extension, same standing as `enabled`
+# (Harness.model_config extra="allow" in despag/uhp/models.py, so it round-trips
+# through GET /v1/harnesses same as any other additionalProperties field) — it names
+# the git repo despag/workspace.py checks a session's workspace out of
+# (PHASE0_WIRING_SPEC.md RECOMMENDATION step 5). The conformance harnesses have no
+# real product repo to point at, so they share one scratch repo that
+# despag.workspace initialises once under DESPAG_DATA_DIR/scratch-repo.
 harnesses:
   - id: chrn_claude-max
     name: claude-max
@@ -19,6 +27,7 @@ harnesses:
     models: [claude-sonnet-5, claude-opus-5, claude-fable-5-1]
     timeoutSeconds: 300
     enabled: true
+    repo: scratch
   - id: chrn_litellm-mechanical
     name: litellm-mechanical
     base: claude-code
@@ -30,6 +39,7 @@ harnesses:
     models: [deepseek-v4-flash, qwen36-local]
     timeoutSeconds: 300
     enabled: true
+    repo: scratch
   - id: chrn_claude-local-rung
     name: claude-local-rung
     base: claude-code
@@ -37,3 +47,4 @@ harnesses:
     defaultModel: claude-sonnet-5
     timeoutSeconds: 300
     enabled: false
+    repo: scratch

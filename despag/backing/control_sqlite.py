@@ -238,6 +238,22 @@ class ControlStore:
         finally:
             con.close()
 
+    async def lease_is_live(self, sid: str) -> bool:
+        """True iff SOME owner currently holds a non-expired lease on sid — the check
+        wq#1810's workspace reaper uses (it has no fence of its own, just "is anyone
+        mid-turn on this session"). Fail-safe: an unreadable store returns True rather
+        than let the reaper delete a session it can't prove is idle."""
+        con = _connect(self._path)
+        try:
+            row = _live(con, f"lease::{sid}")
+            if row is None:
+                return False
+            return float(json.loads(row[0]).get("expires") or 0) > time.time()
+        except sqlite3.Error:
+            return True
+        finally:
+            con.close()
+
     async def lease_still_held(self, sid: str, fence: int) -> bool:
         """True iff the fence is unchanged since this turn acquired it — the gate a
         turn checks before it commits (a stale fence refuses the commit). Fail-safe:
