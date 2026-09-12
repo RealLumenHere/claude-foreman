@@ -2,15 +2,10 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "despag/admission.py:229-237",
-      "cmd_run": "python3 -m pytest despag/tests/ -q",
+      "citation": "despag/admission.py:230-244",
+      "cmd_run": "python3 -m pytest despag/tests/test_admission.py -q",
       "exit_code": 0,
-      "note": "wq#1865 fix: despag/admission.py:229-237 replaces the old `if allowed is not None and running_claude_max >= allowed:` guard. When burn_rate.allowed_concurrent returns (None, why) -- no usable percent+resets_at on any pool the model draws on (dispatcher/burn_rate.py:142-143) -- admission now sets allowed = DESPAG_MAX_CLAUDE_CONCURRENT (despag/admission.py:82) and falls through to the unconditional `if running_claude_max >= allowed:` at :238, mirroring foreman_dispatcher.py:1411-1417's tight-mode fallback on the same None. Module docstring updated at despag/admission.py:22-27. Regression test: despag/tests/test_admission.py:86-110 (test_missing_resets_at_falls_back_to_the_max_concurrent_clamp) builds limits with percent but no resets_at on session and weekly_all, asserts allow at DESPAG_MAX_CLAUDE_CONCURRENT-1, refusal at DESPAG_MAX_CLAUDE_CONCURRENT, and refusal at running_claude_max=500 (the exact shape wq#1864 reproduced as allow:True). Verified the test is non-vacuous: neutralizing the new guard makes it fail with `assert True is False` at test_admission.py:105; restored, despag/tests/ is 133 passed (132 pre-existing + 1 new), exit 0. Out of scope per ticket and untouched: LIMIT wall, governor_core wiring, reserve logic, dispatcher/burn_rate.py."
+      "note": "allowed-is-None branch now degrades to min(cfg['min_allowed'], DESPAG_MAX_CLAUDE_CONCURRENT) = 1 instead of substituting the clamp for the FRANK_RESERVE_PCT-aware ceiling; module docstring corrected at despag/admission.py:20-28; regression tests at despag/tests/test_admission.py:86-140 (13/13 pass, whole despag suite 134/134)."
     }
-  ],
-  "derived_by": "deterministic",
-  "notes": [
-    "dispatcher/tests/test_burn_rate.py has 4 failures on this box that pre-date this branch (dispatcher/ is unmodified here): those expectations were written at fee4c54, before FRANK_RESERVE_PCT was added to pool_spend_rate. Logged as kb/ISSUE-LOG.md #365 (OPEN) with a re-baseline follow-up."
-  ],
-  "ticket": "wq#1865"
+  ]
 }

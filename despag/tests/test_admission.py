@@ -83,30 +83,60 @@ def test_reserve_not_yet_breached_allows_more_than_one(monkeypatch):
 
 # --- no usable burn-rate data still has a ceiling ---------------------------------------
 
-def test_missing_resets_at_falls_back_to_the_max_concurrent_clamp(monkeypatch):
-    """wq#1865 (wq#1864's verify-pass): percent present but resets_at missing on every
-    pool claude-sonnet-5 draws on makes burn_rate.allowed_concurrent return
+def test_missing_resets_at_fails_closed_to_min_allowed(monkeypatch):
+    """wq#1868 (wq#1866's verify-pass of wq#1865): percent present but resets_at missing
+    on every pool claude-sonnet-5 draws on makes burn_rate.allowed_concurrent return
     (None, why) (burn_rate.py:142-143) — the shape a governor poll restart produces.
-    The old guard skipped the ceiling entirely on None, so DESPAG_MAX_CLAUDE_CONCURRENT
-    was unreachable at any running count. It must clamp instead, exactly like
-    foreman_dispatcher.py:1411-1417's tight-mode fallback on the same None."""
+    There is no reserve calculation to be had on that data, so the gate must fail closed
+    to burn_rate.MIN_ALLOWED (1), not open to DESPAG_MAX_CLAUDE_CONCURRENT (8)."""
     limits = {
         "session": {"percent": 5, "severity": "normal"},
         "weekly_all": {"percent": 5, "severity": "normal"},
     }
     _mock_state(monkeypatch, limits=limits, stale=False)
 
-    below = admission.check_admission(
-        "claude-sonnet-5", running_claude_max=admission.DESPAG_MAX_CLAUDE_CONCURRENT - 1, now=NOW)
-    assert below["allow"] is True
+    assert admission.check_admission(
+        "claude-sonnet-5", running_claude_max=0, now=NOW)["allow"] is True
 
-    at_ceiling = admission.check_admission(
-        "claude-sonnet-5", running_claude_max=admission.DESPAG_MAX_CLAUDE_CONCURRENT, now=NOW)
-    assert at_ceiling["allow"] is False
-    assert "concurrency ceiling" in at_ceiling["reasons"][0]
+    refused = admission.check_admission("claude-sonnet-5", running_claude_max=1, now=NOW)
+    assert refused["allow"] is False
+    assert "concurrency ceiling" in refused["reasons"][0]
+    assert "allowed=1" in refused["reasons"][0]
 
-    way_over = admission.check_admission("claude-sonnet-5", running_claude_max=500, now=NOW)
-    assert way_over["allow"] is False
+    assert admission.check_admission(
+        "claude-sonnet-5",
+        running_claude_max=admission.DESPAG_MAX_CLAUDE_CONCURRENT - 1, now=NOW)["allow"] is False
+
+
+def test_missing_resets_at_does_not_loosen_a_reserve_breached_account(monkeypatch):
+    """wq#1868's live repro: the SAME usage as
+    test_reserve_honoured_remaining_below_reserve_refuses (session 75% used, i.e. 25%
+    remaining against a 30% reserve) must not admit MORE turns merely because resets_at
+    is missing. Under wq#1865's clamp this allowed 7 concurrent claude-max turns while
+    the reserve-respecting path allowed 1."""
+    with_resets = {
+        "session": {"percent": 75, "resets_at": (NOW + dt.timedelta(hours=1)).isoformat(),
+                    "severity": "normal"},
+        "weekly_all": {"percent": 10, "resets_at": (NOW + dt.timedelta(days=3)).isoformat(),
+                       "severity": "normal"},
+    }
+    without_resets = {"session": {"percent": 75, "severity": "normal"},
+                      "weekly_all": {"percent": 10, "severity": "normal"}}
+
+    def _ceiling(limits):
+        """Highest running count still admitted, probed up past the operator clamp."""
+        allowed = 0
+        for running in range(0, admission.DESPAG_MAX_CLAUDE_CONCURRENT + 2):
+            monkeypatch.setattr(admission, "_cached", None)
+            monkeypatch.setattr(admission, "_cached_at", 0.0)
+            _mock_state(monkeypatch, limits=limits, stale=False)
+            if admission.check_admission("claude-sonnet-5", running_claude_max=running,
+                                         now=NOW)["allow"]:
+                allowed = running + 1
+        return allowed
+
+    assert _ceiling(with_resets) == 1
+    assert _ceiling(without_resets) == _ceiling(with_resets)
 
 
 # --- LIMIT wall is account-global -----------------------------------------------------

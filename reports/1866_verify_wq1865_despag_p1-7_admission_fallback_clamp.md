@@ -86,3 +86,34 @@ the dispatcher's actual tight-mode behavior (or equivalently, degrade to `burn_r
 rather than `DESPAG_MAX_CLAUDE_CONCURRENT`) when no pool has usable `percent`+`resets_at`
 data — the same "fail closed" posture `admission.py:216-219` already uses for a governor
 read failure two branches up. Filing wq#1867 (claude-opus-5@high, judgment) to fix.
+
+## Judgment (wq#1868): CONTRADICT upheld — fixed
+
+The contradiction holds on both counts, verified against this branch:
+
+- The claimed mirror is false. `dispatcher/foreman_dispatcher.py:1408-1417` on
+  `allowed_concurrent() -> None` sets `tight = True` (spawn-per-pass cap + `epri` filter
+  from `tight_cfg`) and substitutes no concurrency number; `DESPAG_MAX_CLAUDE_CONCURRENT`
+  does not appear in the dispatcher at all.
+- The clamp was the entire decision in that branch, so `FRANK_RESERVE_PCT` stopped
+  gating: the wq#1865 code reached `allowed = 8` from `percent` alone, with or without a
+  reserve breach.
+
+Fix landed at `despag/admission.py:230-244`: the `None` branch now degrades to
+`min(cfg["min_allowed"], DESPAG_MAX_CLAUDE_CONCURRENT)` — 1 by default — which is the
+fail-closed posture `admission.py:216-219` already takes for an unreadable governor read,
+and keeps the operator clamp an upper bound only. The module docstring (lines 20-28) and
+`despag/reports/p1-7_admission.md` were corrected to state that posture.
+
+Test coverage for the hole wq#1865's test missed
+(`despag/tests/test_admission.py:86-140`):
+
+| test | shape | ceiling |
+| --- | --- | --- |
+| `test_missing_resets_at_fails_closed_to_min_allowed` | percent 5/5, no `resets_at` | 1 (was 8) |
+| `test_missing_resets_at_does_not_loosen_a_reserve_breached_account` | session 75% used vs 30% reserve, with and without `resets_at` | 1 in both (was 1 vs 7) |
+
+The second test is the live repro: it asserts the two shapes agree, so re-introducing any
+percent-independent substitute for the reserve number fails the suite. 13/13 pass
+(`python3 -m pytest despag/tests/test_admission.py -q`); the whole despag suite is
+134/134.

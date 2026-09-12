@@ -22,9 +22,10 @@ first:
      burn_rate.py:54-58), clamped to DESPAG_MAX_CLAUDE_CONCURRENT as an upper
      bound only, never a bypass — counted against turns actually in flight in
      THIS process's TurnRegistry, not a config constant. When no pool has usable
-     percent+resets_at the burn-rate ceiling is unavailable, not absent:
-     DESPAG_MAX_CLAUDE_CONCURRENT becomes the ceiling outright (wq#1865),
-     mirroring the dispatcher's tight-mode fallback on the same None.
+     percent+resets_at the ceiling degrades to burn_rate.MIN_ALLOWED, not to
+     DESPAG_MAX_CLAUDE_CONCURRENT (wq#1868): with no percent+resets_at there is
+     no reserve calculation to be had, so the gate fails closed to one turn the
+     way it already does for an unreadable governor read.
 
 litellm-mechanical (the local pool) is exempt from all three gates, mirroring
 governor_core.evaluate_dispatch's own local-rung exemption — it costs no
@@ -227,14 +228,20 @@ def check_admission(model: str, *, running_claude_max: int, now: _dt.datetime | 
         limits, DESPAG_MAX_CLAUDE_CONCURRENT, cfg, observed=observed, now=now, pools=pools,
     )
     if allowed is None:
-        # wq#1865: allowed_concurrent returns (None, why) when no pool this model draws
-        # on has a usable percent+resets_at pair (burn_rate.py:142-143) — a real shape,
-        # e.g. a governor poll restart that repopulates percent before resets_at. Its
-        # documented contract is that the caller falls back to its own clamp, which is
-        # what foreman_dispatcher.py:1411-1417 does via tight_mode. Skipping the check
-        # here instead would make DESPAG_MAX_CLAUDE_CONCURRENT unreachable at ANY
-        # running count, i.e. exactly the bypass this module's docstring forbids.
-        allowed, detail = DESPAG_MAX_CLAUDE_CONCURRENT, f"{detail}; clamped to DESPAG_MAX_CLAUDE_CONCURRENT"
+        # allowed_concurrent returns (None, why) when no pool this model draws on has a
+        # usable percent+resets_at pair (burn_rate.py:142-143) — a real shape, e.g. a
+        # governor poll restart that repopulates percent before resets_at.
+        # wq#1868 (wq#1866's verify-pass of wq#1865): substituting
+        # DESPAG_MAX_CLAUDE_CONCURRENT here made the clamp the ENTIRE decision, so the
+        # same account usage that holds the ceiling to 1 under FRANK_RESERVE_PCT allowed
+        # 7 concurrent turns the moment resets_at went missing — the bypass the module
+        # docstring forbids. The dispatcher's fallback on this same None
+        # (foreman_dispatcher.py:1408-1417) substitutes no concurrency number either: it
+        # flips tight mode on, tightening the pass. So fail closed to burn_rate's own
+        # floor — one turn — matching the posture the governor-read failure two branches
+        # up already uses, still under the operator's upper clamp.
+        allowed = min(cfg["min_allowed"], DESPAG_MAX_CLAUDE_CONCURRENT)
+        detail = f"{detail}; failing closed to min_allowed={allowed}"
     if running_claude_max >= allowed:
         return {"allow": False,
                 "reasons": [f"burn-rate concurrency ceiling reached: allowed={allowed} "
