@@ -21,7 +21,10 @@ first:
      concurrency ceiling (session 30% / weekly 15% / fable 10%, env-overridable;
      burn_rate.py:54-58), clamped to DESPAG_MAX_CLAUDE_CONCURRENT as an upper
      bound only, never a bypass — counted against turns actually in flight in
-     THIS process's TurnRegistry, not a config constant.
+     THIS process's TurnRegistry, not a config constant. When no pool has usable
+     percent+resets_at the burn-rate ceiling is unavailable, not absent:
+     DESPAG_MAX_CLAUDE_CONCURRENT becomes the ceiling outright (wq#1865),
+     mirroring the dispatcher's tight-mode fallback on the same None.
 
 litellm-mechanical (the local pool) is exempt from all three gates, mirroring
 governor_core.evaluate_dispatch's own local-rung exemption — it costs no
@@ -223,7 +226,16 @@ def check_admission(model: str, *, running_claude_max: int, now: _dt.datetime | 
     allowed, detail = burn_rate.allowed_concurrent(
         limits, DESPAG_MAX_CLAUDE_CONCURRENT, cfg, observed=observed, now=now, pools=pools,
     )
-    if allowed is not None and running_claude_max >= allowed:
+    if allowed is None:
+        # wq#1865: allowed_concurrent returns (None, why) when no pool this model draws
+        # on has a usable percent+resets_at pair (burn_rate.py:142-143) — a real shape,
+        # e.g. a governor poll restart that repopulates percent before resets_at. Its
+        # documented contract is that the caller falls back to its own clamp, which is
+        # what foreman_dispatcher.py:1411-1417 does via tight_mode. Skipping the check
+        # here instead would make DESPAG_MAX_CLAUDE_CONCURRENT unreachable at ANY
+        # running count, i.e. exactly the bypass this module's docstring forbids.
+        allowed, detail = DESPAG_MAX_CLAUDE_CONCURRENT, f"{detail}; clamped to DESPAG_MAX_CLAUDE_CONCURRENT"
+    if running_claude_max >= allowed:
         return {"allow": False,
                 "reasons": [f"burn-rate concurrency ceiling reached: allowed={allowed} "
                             f"running={running_claude_max} ({detail})"],
