@@ -1,0 +1,424 @@
+{
+  "arm_key": "source",
+  "arms": [
+    {
+      "accepted": 110,
+      "n": 810,
+      "name": "arXiv",
+      "rate": 0.1358
+    },
+    {
+      "accepted": 8,
+      "n": 78,
+      "name": "GitHub",
+      "rate": 0.1026
+    },
+    {
+      "accepted": 9,
+      "n": 76,
+      "name": "HuggingFace",
+      "rate": 0.1184
+    },
+    {
+      "accepted": 21,
+      "n": 58,
+      "name": "Fleet Releases",
+      "rate": 0.3621
+    },
+    {
+      "accepted": 8,
+      "n": 54,
+      "name": "MarkTechPost",
+      "rate": 0.1481
+    },
+    {
+      "accepted": 11,
+      "n": 49,
+      "name": "The Decoder",
+      "rate": 0.2245
+    },
+    {
+      "accepted": 5,
+      "n": 42,
+      "name": "VentureBeat",
+      "rate": 0.119
+    },
+    {
+      "accepted": 8,
+      "n": 32,
+      "name": "OpenAlex",
+      "rate": 0.25
+    },
+    {
+      "accepted": 0,
+      "n": 30,
+      "name": "Phoronix",
+      "rate": 0.0
+    },
+    {
+      "accepted": 6,
+      "n": 29,
+      "name": "Simon Willison",
+      "rate": 0.2069
+    },
+    {
+      "accepted": 2,
+      "n": 28,
+      "name": "HF Daily Papers",
+      "rate": 0.0714
+    }
+  ],
+  "attribution": {
+    "accepted_from_prompt_engine": 0,
+    "intel_from_prompt_engine": 5,
+    "intel_total": 20474,
+    "proposals_from_prompt_engine": 0
+  },
+  "best_arm": "Fleet Releases",
+  "feedback_delay": 0,
+  "horizon": 300,
+  "policies": {
+    "baseline_histmix": {
+      "ci95": [
+        -1.354,
+        -1.114
+      ],
+      "delta_vs_baseline": -1.235,
+      "mean_accepted_per_100": 14.586
+    },
+    "baseline_uniform": {
+      "mean_accepted_per_100": 15.821
+    },
+    "oracle_best_arm": {
+      "ci95": [
+        20.294,
+        20.583
+      ],
+      "delta_vs_baseline": 20.439,
+      "mean_accepted_per_100": 36.26
+    },
+    "treatment_epsilon_greedy": {
+      "ci95": [
+        10.65,
+        11.195
+      ],
+      "delta_vs_baseline": 10.924,
+      "mean_accepted_per_100": 26.745
+    },
+    "treatment_thompson": {
+      "ci95": [
+        7.5,
+        7.872
+      ],
+      "delta_vs_baseline": 7.688,
+      "mean_accepted_per_100": 23.509
+    }
+  },
+  "sample_rows": 1400,
+  "sample_sha256": "6455685a8338ee17c5c66b0787be5227869d42513de478102d757ce4f0643cc6",
+  "seeds": 2000,
+  "stationarity": {
+    "AI News": {
+      "first_half": {
+        "n": 5,
+        "rate": 0.2
+      }
+    },
+    "Ahead of AI": {
+      "first_half": {
+        "n": 2,
+        "rate": 0.5
+      }
+    },
+    "AlphaSignal": {
+      "first_half": {
+        "n": 9,
+        "rate": 0.2222
+      },
+      "second_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "Andrej Karpathy (X)": {
+      "first_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "Ashutosh Shrivastava (X)": {
+      "second_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "BAIR Blog": {
+      "first_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "Cameron R. Wolfe (X)": {
+      "first_half": {
+        "n": 1,
+        "rate": 0.0
+      },
+      "second_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "Dan Kornas (X)": {
+      "first_half": {
+        "n": 5,
+        "rate": 0.0
+      }
+    },
+    "DeepSeek (X)": {
+      "first_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "Fleet Advisories": {
+      "second_half": {
+        "n": 11,
+        "rate": 0.3636
+      }
+    },
+    "Fleet Releases": {
+      "second_half": {
+        "n": 58,
+        "rate": 0.3621
+      }
+    },
+    "Georgi Gerganov / llama.cpp (X)": {
+      "first_half": {
+        "n": 3,
+        "rate": 0.0
+      }
+    },
+    "GitHub": {
+      "first_half": {
+        "n": 44,
+        "rate": 0.1591
+      },
+      "second_half": {
+        "n": 34,
+        "rate": 0.0294
+      }
+    },
+    "HF Blog": {
+      "first_half": {
+        "n": 8,
+        "rate": 0.25
+      },
+      "second_half": {
+        "n": 5,
+        "rate": 0.0
+      }
+    },
+    "HF Daily Papers": {
+      "first_half": {
+        "n": 12,
+        "rate": 0.0833
+      },
+      "second_half": {
+        "n": 16,
+        "rate": 0.0625
+      }
+    },
+    "HuggingFace": {
+      "first_half": {
+        "n": 34,
+        "rate": 0.0882
+      },
+      "second_half": {
+        "n": 42,
+        "rate": 0.1429
+      }
+    },
+    "Import AI": {
+      "first_half": {
+        "n": 1,
+        "rate": 0.0
+      },
+      "second_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "LWN": {
+      "first_half": {
+        "n": 2,
+        "rate": 0.0
+      },
+      "second_half": {
+        "n": 4,
+        "rate": 0.0
+      }
+    },
+    "Last Week in AI": {
+      "second_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "Latent Space": {
+      "first_half": {
+        "n": 3,
+        "rate": 0.6667
+      },
+      "second_half": {
+        "n": 3,
+        "rate": 0.3333
+      }
+    },
+    "MarkTechPost": {
+      "first_half": {
+        "n": 47,
+        "rate": 0.1702
+      },
+      "second_half": {
+        "n": 7,
+        "rate": 0.0
+      }
+    },
+    "OMG! Ubuntu (RSS)": {
+      "second_half": {
+        "n": 2,
+        "rate": 0.5
+      }
+    },
+    "OpenAlex": {
+      "first_half": {
+        "n": 9,
+        "rate": 0.4444
+      },
+      "second_half": {
+        "n": 23,
+        "rate": 0.1739
+      }
+    },
+    "Papers Explained": {
+      "second_half": {
+        "n": 2,
+        "rate": 0.5
+      }
+    },
+    "Phoronix": {
+      "first_half": {
+        "n": 8,
+        "rate": 0.0
+      },
+      "second_half": {
+        "n": 22,
+        "rate": 0.0
+      }
+    },
+    "Phoronix (X)": {
+      "second_half": {
+        "n": 2,
+        "rate": 0.0
+      }
+    },
+    "Semantic Scholar": {
+      "first_half": {
+        "n": 13,
+        "rate": 0.0769
+      },
+      "second_half": {
+        "n": 2,
+        "rate": 0.0
+      }
+    },
+    "Simon Willison": {
+      "first_half": {
+        "n": 15,
+        "rate": 0.1333
+      },
+      "second_half": {
+        "n": 14,
+        "rate": 0.2857
+      }
+    },
+    "TechCrunch AI": {
+      "first_half": {
+        "n": 6,
+        "rate": 0.1667
+      },
+      "second_half": {
+        "n": 4,
+        "rate": 0.0
+      }
+    },
+    "The Decoder": {
+      "first_half": {
+        "n": 23,
+        "rate": 0.2174
+      },
+      "second_half": {
+        "n": 26,
+        "rate": 0.2308
+      }
+    },
+    "Valaxy Technologies (YouTube)": {
+      "first_half": {
+        "n": 1,
+        "rate": 0.0
+      },
+      "second_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "VentureBeat": {
+      "first_half": {
+        "n": 14,
+        "rate": 0.1429
+      },
+      "second_half": {
+        "n": 28,
+        "rate": 0.1071
+      }
+    },
+    "arXiv": {
+      "first_half": {
+        "n": 427,
+        "rate": 0.1569
+      },
+      "second_half": {
+        "n": 383,
+        "rate": 0.1123
+      }
+    },
+    "article-add (manual)": {
+      "first_half": {
+        "n": 1,
+        "rate": 0.0
+      }
+    },
+    "bc250-40cu-unlock (commits)": {
+      "first_half": {
+        "n": 1,
+        "rate": 1.0
+      }
+    },
+    "r/LocalLLaMA": {
+      "second_half": {
+        "n": 2,
+        "rate": 0.0
+      }
+    },
+    "vLLM (X)": {
+      "first_half": {
+        "n": 3,
+        "rate": 0.0
+      },
+      "second_half": {
+        "n": 4,
+        "rate": 0.0
+      }
+    }
+  }
+}

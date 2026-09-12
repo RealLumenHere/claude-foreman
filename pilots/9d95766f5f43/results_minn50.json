@@ -1,0 +1,156 @@
+{
+  "arm_key": "category",
+  "arms": [
+    {
+      "accepted": 111,
+      "n": 804,
+      "name": "paper",
+      "rate": 0.1381
+    },
+    {
+      "accepted": 35,
+      "n": 243,
+      "name": "tool",
+      "rate": 0.144
+    },
+    {
+      "accepted": 37,
+      "n": 156,
+      "name": "news",
+      "rate": 0.2372
+    },
+    {
+      "accepted": 17,
+      "n": 107,
+      "name": "technique",
+      "rate": 0.1589
+    },
+    {
+      "accepted": 4,
+      "n": 62,
+      "name": "framework",
+      "rate": 0.0645
+    }
+  ],
+  "attribution": {
+    "accepted_from_prompt_engine": 0,
+    "intel_from_prompt_engine": 5,
+    "intel_total": 20474,
+    "proposals_from_prompt_engine": 0
+  },
+  "best_arm": "news",
+  "feedback_delay": 0,
+  "horizon": 300,
+  "policies": {
+    "baseline_histmix": {
+      "ci95": [
+        -0.116,
+        0.106
+      ],
+      "delta_vs_baseline": -0.005,
+      "mean_accepted_per_100": 14.813
+    },
+    "baseline_uniform": {
+      "mean_accepted_per_100": 14.819
+    },
+    "oracle_best_arm": {
+      "ci95": [
+        8.854,
+        9.102
+      ],
+      "delta_vs_baseline": 8.978,
+      "mean_accepted_per_100": 23.797
+    },
+    "treatment_epsilon_greedy": {
+      "ci95": [
+        3.599,
+        3.981
+      ],
+      "delta_vs_baseline": 3.793,
+      "mean_accepted_per_100": 18.611
+    },
+    "treatment_thompson": {
+      "ci95": [
+        3.427,
+        3.719
+      ],
+      "delta_vs_baseline": 3.571,
+      "mean_accepted_per_100": 18.39
+    }
+  },
+  "sample_rows": 1400,
+  "sample_sha256": "6455685a8338ee17c5c66b0787be5227869d42513de478102d757ce4f0643cc6",
+  "seeds": 2000,
+  "stationarity": {
+    "framework": {
+      "first_half": {
+        "n": 44,
+        "rate": 0.0682
+      },
+      "second_half": {
+        "n": 18,
+        "rate": 0.0556
+      }
+    },
+    "hardware": {
+      "first_half": {
+        "n": 6,
+        "rate": 0.1667
+      },
+      "second_half": {
+        "n": 9,
+        "rate": 0.0
+      }
+    },
+    "news": {
+      "first_half": {
+        "n": 51,
+        "rate": 0.2157
+      },
+      "second_half": {
+        "n": 105,
+        "rate": 0.2476
+      }
+    },
+    "paper": {
+      "first_half": {
+        "n": 411,
+        "rate": 0.163
+      },
+      "second_half": {
+        "n": 393,
+        "rate": 0.112
+      }
+    },
+    "technique": {
+      "first_half": {
+        "n": 63,
+        "rate": 0.1746
+      },
+      "second_half": {
+        "n": 44,
+        "rate": 0.1364
+      }
+    },
+    "tool": {
+      "first_half": {
+        "n": 119,
+        "rate": 0.1429
+      },
+      "second_half": {
+        "n": 124,
+        "rate": 0.1452
+      }
+    },
+    "tools": {
+      "first_half": {
+        "n": 6,
+        "rate": 0.0
+      },
+      "second_half": {
+        "n": 7,
+        "rate": 0.1429
+      }
+    }
+  }
+}

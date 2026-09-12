@@ -1,0 +1,38 @@
+{
+  "arm_key": "source",
+  "arms": [
+    "GitHub",
+    "HuggingFace",
+    "The Decoder",
+    "arXiv"
+  ],
+  "baseline_ci95": [
+    12.11,
+    13.43
+  ],
+  "baseline_uniform_per_100": 12.76,
+  "best_arm_on_test": "The Decoder",
+  "best_arm_on_train": "The Decoder",
+  "delta_per_100": 10.07,
+  "min_n": 20,
+  "split_at": "2026-08-09T11:16:06.046919+00:00",
+  "test_rates": {
+    "GitHub": 0.0294,
+    "HuggingFace": 0.1429,
+    "The Decoder": 0.2308,
+    "arXiv": 0.1123
+  },
+  "test_rows": 700,
+  "train_rates": {
+    "GitHub": 0.1591,
+    "HuggingFace": 0.0882,
+    "The Decoder": 0.2174,
+    "arXiv": 0.1569
+  },
+  "train_rows": 700,
+  "treatment_ci95": [
+    22.03,
+    23.62
+  ],
+  "treatment_exploit_train_best_per_100": 22.83
+}

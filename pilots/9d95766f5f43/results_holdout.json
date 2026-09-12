@@ -1,0 +1,38 @@
+{
+  "arm_key": "category",
+  "arms": [
+    "news",
+    "paper",
+    "technique",
+    "tool"
+  ],
+  "baseline_ci95": [
+    15.2,
+    16.65
+  ],
+  "baseline_uniform_per_100": 15.94,
+  "best_arm_on_test": "news",
+  "best_arm_on_train": "news",
+  "delta_per_100": 9.39,
+  "min_n": 20,
+  "split_at": "2026-08-09T11:16:06.046919+00:00",
+  "test_rates": {
+    "news": 0.2476,
+    "paper": 0.112,
+    "technique": 0.1364,
+    "tool": 0.1452
+  },
+  "test_rows": 700,
+  "train_rates": {
+    "news": 0.2157,
+    "paper": 0.163,
+    "technique": 0.1746,
+    "tool": 0.1429
+  },
+  "train_rows": 700,
+  "treatment_ci95": [
+    24.42,
+    26.17
+  ],
+  "treatment_exploit_train_best_per_100": 25.33
+}
