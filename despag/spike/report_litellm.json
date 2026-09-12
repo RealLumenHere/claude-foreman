@@ -1,0 +1,101 @@
+{
+  "protocol": "uhp",
+  "protocol_version": "2026-08-11",
+  "suite_version": "2026.8.11.post1",
+  "generated_at": "2026-09-12T14:44:50Z",
+  "target": "http://127.0.0.1:37685",
+  "requested_class": "core",
+  "conformant": true,
+  "conformant_with_skips": true,
+  "skipped_not_verified": [],
+  "highest_class_passed": "core",
+  "summary": {
+    "pass": 10,
+    "fail": 0,
+    "skip": 0,
+    "error": 0,
+    "total": 10
+  },
+  "checks": [
+    {
+      "id": "D-01",
+      "title": "Discovery document is served",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/lifecycle.md#2-capability-discovery",
+      "outcome": "pass",
+      "detail": "conformance_class=core versions=['2026-08-11']"
+    },
+    {
+      "id": "H-01",
+      "title": "Harness list is served and well formed",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/harnesses.md#1-discovering-harnesses",
+      "outcome": "pass",
+      "detail": "2 harness(es)"
+    },
+    {
+      "id": "S-03",
+      "title": "Every event validates against the schema",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/schema.md",
+      "outcome": "pass",
+      "detail": "9 events valid"
+    },
+    {
+      "id": "S-04",
+      "title": "sequence_number starts at 0 and has no gaps",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#3-ordering-guarantees",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "S-05",
+      "title": "The first event is response.created",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#3-ordering-guarantees",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "S-06",
+      "title": "The stream ends with exactly one terminal event",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#4-terminal-events",
+      "outcome": "pass",
+      "detail": "terminal=response.completed"
+    },
+    {
+      "id": "S-07",
+      "title": "The terminal event carries the complete response",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#4-terminal-events",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "S-09",
+      "title": "The stream is progressive, not buffered to the end",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/streaming.md#1-opening-a-stream",
+      "outcome": "pass",
+      "detail": "events spread over 3.1s"
+    },
+    {
+      "id": "C-02",
+      "title": "Cancelling a terminal task succeeds and changes nothing",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/sessions.md#4-cancelling",
+      "outcome": "pass",
+      "detail": ""
+    },
+    {
+      "id": "C-03",
+      "title": "A running task can be cancelled and ends non-running",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/sessions.md#4-cancelling",
+      "outcome": "pass",
+      "detail": "final status=cancelled"
+    }
+  ]
+}
