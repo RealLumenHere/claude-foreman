@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DESPAG_API_TOKEN_FILE", str(tmp_path / "token"))
+    monkeypatch.setenv("DESPAG_DATA_DIR", str(tmp_path / "data"))
     import importlib
 
     import despag.app as app_module
@@ -100,6 +101,48 @@ def test_responses_not_implemented(client):
     )
     assert r.status_code == 501
     assert r.json()["error"]["code"] == "lumen_not_implemented"
+
+
+def test_responses_idempotency_key_reservation_is_released_after_the_stub(client):
+    """wq#1807: the stub 501 never persists output, so the reservation it took for
+    Idempotency-Key must be released, not left dangling for IDEMPOTENCY_TTL_S — a
+    second call with the SAME key must be free to reserve (and also 501) rather
+    than hang waiting for a reservation that can never settle."""
+    import asyncio
+
+    c, app_module = client
+    headers = {"Authorization": f"Bearer {app_module.API_TOKEN}", "Idempotency-Key": "abc123"}
+    r1 = c.post("/v1/responses", headers=headers, json={"input": "hi"})
+    assert r1.status_code == 501
+    assert asyncio.run(app_module.CONTROL.idem_get("abc123")) is None
+    r2 = c.post("/v1/responses", headers=headers, json={"input": "hi"})
+    assert r2.status_code == 501
+
+
+def test_responses_session_busy_when_lease_is_held_by_another_owner(client):
+    """wq#1807: a session with an active, fresh lease held by a different request
+    must 409 session_busy rather than admit a second concurrent task."""
+    import asyncio
+
+    c, app_module = client
+    asyncio.run(app_module.CONTROL.lease_admit("hsess_a", "some-other-inflight-request", ttl_s=60))
+    r = c.post(
+        "/v1/responses",
+        headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
+        json={"input": "hi", "metadata": {"session_id": "hsess_a"}},
+    )
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "session_busy"
+
+
+def test_responses_no_session_id_is_never_session_busy(client):
+    c, app_module = client
+    r = c.post(
+        "/v1/responses",
+        headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
+        json={"input": "hi"},
+    )
+    assert r.status_code == 501  # no session_id supplied — nothing to conflict with
 
 
 def test_disabled_harness_never_available(client):

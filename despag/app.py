@@ -2,10 +2,18 @@
 
 No task execution here (PHASE0_WIRING_SPEC.md RECOMMENDATION step 1 is discovery
 only; step 2+ wires the runner). `POST /v1/responses` therefore answers 501
-lumen_not_implemented rather than running a harness.
+lumen_not_implemented rather than running a harness — but wq#1807 (P1-4) wires the
+control-plane invariants around that stub so the runner ticket only has to fill in
+execution, not reinvent dedup/fencing: an `Idempotency-Key` reserves a response id
+before the stub runs and releases it after (since nothing is persisted yet, a
+retry must be free to try again, not replay a name that never produced output);
+a session_id (from metadata.session_id or previous_response_id — UHP sessions are
+identified by their most recent response) is admitted through a per-session lease
+that fails closed with 409 session_busy when another request already holds it.
 """
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import os
@@ -17,6 +25,7 @@ import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from despag.backing.control_sqlite import ControlStore
 from despag.uhp import models
 from despag.uhp.errors import error_response
 
@@ -61,6 +70,15 @@ def _load_or_create_token() -> str:
 
 
 API_TOKEN = _load_or_create_token()
+
+# wq#1807: control-plane store for Idempotency-Key reservation + session lease/
+# fence. Same DESPAG_DATA_DIR convention as despag.backing.make_backing(), kept as
+# a separate file (control.db) since it is hot, small, single-writer state, not a
+# graph/blob/secret record.
+DESPAG_DATA_DIR = Path(os.environ.get("DESPAG_DATA_DIR", "~/despag-data")).expanduser()
+CONTROL = ControlStore(str(DESPAG_DATA_DIR / "control.db"))
+IDEMPOTENCY_TTL_S = 24 * 3600            # errors.md/tasks.md: >=24h retention
+SESSION_LEASE_TTL_S = 300                # one in-flight task per session (lifecycle.md)
 
 
 def _claude_logged_in() -> bool:
@@ -210,15 +228,82 @@ async def harness_models(harness_id: str, request: Request):
     return result.model_dump(exclude_none=True)
 
 
+async def _idem_admit(idem_key: str, resp_id: str) -> tuple[str, dict | None]:
+    """Reserve `idem_key` for resp_id, waiting briefly if someone else already
+    holds it (tasks.md: "wait if first still running").
+
+    Returns ("won", None): we hold the reservation — caller executes and MUST
+    idem_settle or idem_release it. ("replay", output): a prior winner already
+    settled this key — return their output verbatim, no second execution.
+    ("busy", None): a prior winner is still running after the bounded wait."""
+    existing = await CONTROL.idem_reserve(idem_key, resp_id, ttl_s=IDEMPOTENCY_TTL_S)
+    for _ in range(10):
+        if existing is None:
+            return "won", None
+        if existing.get("state") == "done":
+            return "replay", existing["output"]
+        await asyncio.sleep(0.05)
+        existing = await CONTROL.idem_get(idem_key)
+        if existing is None:            # the winner released — free to try for ourselves
+            existing = await CONTROL.idem_reserve(idem_key, resp_id, ttl_s=IDEMPOTENCY_TTL_S)
+    return "busy", None
+
+
 @app.post("/v1/responses")
 async def create_response(request: Request):
     if (err := require_auth(request)) is not None:
         return err
-    return error_response(
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    metadata = body.get("metadata") or {}
+    # B.4: session is implicit, extended by previous_response_id — the client has
+    # no other way to name an existing session before the runner ticket assigns
+    # hsess ids of its own, so a caller-supplied metadata.session_id (if any) wins.
+    session_id = metadata.get("session_id") or body.get("previous_response_id")
+
+    idem_key = request.headers.get("idempotency-key")
+    resp_id = f"resp_{secrets.token_hex(12)}"
+    reserved_by_us = False
+    if idem_key:
+        outcome, payload = await _idem_admit(idem_key, resp_id)
+        if outcome == "replay":
+            return payload
+        if outcome == "busy":
+            return error_response(
+                "lumen_still_running",
+                f"a request with Idempotency-Key {idem_key!r} is still running",
+                status=409,
+                detail={"retry_after_ms": 500},
+            )
+        reserved_by_us = True
+
+    if session_id:
+        lease = await CONTROL.lease_admit(session_id, resp_id, ttl_s=SESSION_LEASE_TTL_S, reject_on_conflict=True)
+        if lease["rejected"]:
+            if reserved_by_us:
+                await CONTROL.idem_release(idem_key, resp_id)
+            return error_response(
+                "session_busy",
+                f"session {session_id!r} already has a task in flight",
+                detail={"retry_after_ms": 2000},
+            )
+
+    result = error_response(
         "lumen_not_implemented",
         "task execution is not implemented by this build of despag",
         status=501,
     )
+    if reserved_by_us:
+        # The stub never runs a harness, so nothing is ever persisted under resp_id.
+        # Release rather than poison the key for IDEMPOTENCY_TTL_S with a reservation
+        # that can never settle — the runner ticket replaces this release with
+        # idem_settle(idem_key, resp_id, output) once it actually produces output.
+        await CONTROL.idem_release(idem_key, resp_id)
+    return result
 
 
 @app.get("/v1/responses/{response_id}")
