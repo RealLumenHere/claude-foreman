@@ -91,15 +91,39 @@ def test_error_envelope_shape(client):
     assert set(err.keys()) == {"type", "code", "message", "param", "detail"}
 
 
-def test_responses_not_implemented(client):
+def test_streaming_responses_not_implemented(client):
+    # wq#1806 wires POST /v1/responses for stream:false (blocking + background) only —
+    # SSE is the next ticket. stream:true must still answer 501, never attempt a turn.
     c, app_module = client
     r = c.post(
         "/v1/responses",
         headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
-        json={"input": "hi"},
+        json={"input": "hi", "stream": True},
     )
     assert r.status_code == 501
     assert r.json()["error"]["code"] == "lumen_not_implemented"
+
+
+def test_unknown_harness_id_on_create_response(client):
+    c, app_module = client
+    r = c.post(
+        "/v1/responses",
+        headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
+        json={"input": "hi", "metadata": {"harness_id": "chrn_does-not-exist"}},
+    )
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "harness_not_found"
+
+
+def test_disabled_harness_rejected_on_create_response(client):
+    c, app_module = client
+    r = c.post(
+        "/v1/responses",
+        headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
+        json={"input": "hi", "metadata": {"harness_id": "chrn_claude-local-rung"}},
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "model_unavailable"
 
 
 def test_disabled_harness_never_available(client):

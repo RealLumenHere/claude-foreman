@@ -2,8 +2,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "despag/app.py:136-158",
-      "note": "GET /v1/uhp discovery route: unauthenticated, builds the response from the generated despag/uhp/models.py Discovery/Capabilities models (despag/tools/gen_uhp_models.py generates models.py from research/harnessrouter-ref schema/uhp-2026-08-11.openapi.yaml). Version negotiation at despag/app.py:113-124 (400 unsupported_protocol_version). Bearer auth at despag/app.py:127-133 require_auth(), applied on despag/app.py:162-227 (harnesses/models/responses routes). Error envelope + closed code table + lumen_ vendor prefix rule in despag/uhp/errors.py:1-95. Harness catalog despag/harnesses.yaml (chrn_claude-max, chrn_litellm-mechanical, chrn_claude-local-rung disabled). despag/__main__.py runs uvicorn on 127.0.0.1:$DESPAG_PORT (default 8790). Conformance: cd research/harnessrouter-ref/src/protocol/conformance && python3 -m uhp_conformance.cli --base-url http://127.0.0.1:8790 --class core --only D-01,D-02,D-03,D-04,D-05,V-01,V-02,V-03,A-01,A-02,E-01,E-02,E-03,E-04,H-01,H-02,H-03,H-04 --plain --json despag/reports/p1-1_discovery.json -> 18/18 passed, CONFORMANT (report committed at despag/reports/p1-1_discovery.json). Unit tests: python3 -m pytest despag/tests/test_uhp.py -> 13 passed (despag/tests/test_uhp.py:1-127)."
+      "citation": "despag/runner/turn.py:118"
     }
   ]
 }

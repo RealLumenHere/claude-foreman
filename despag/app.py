@@ -1,22 +1,28 @@
-"""wq#1805: despag P1-1 package skeleton — UHP discovery/harnesses/models.
-
-No task execution here (PHASE0_WIRING_SPEC.md RECOMMENDATION step 1 is discovery
-only; step 2+ wires the runner). `POST /v1/responses` therefore answers 501
-lumen_not_implemented rather than running a harness.
+"""wq#1805/wq#1806: despag package — UHP discovery/harnesses/models (P1-1) plus the
+`POST /v1/responses` task-execution surface (P1-2, PHASE0_WIRING_SPEC.md
+RECOMMENDATION step 2). Execution is wired for `stream:false` only (blocking and
+`background:true`+polling); `stream:true` still answers 501 lumen_not_implemented —
+SSE is the next ticket (RECOMMENDATION step 3).
 """
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import os
 import secrets
 import subprocess
+import time
+import uuid
 from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from despag.backends import claude_max
+from despag.runner import canonical
+from despag.runner.turn import TurnRegistry
 from despag.uhp import models
 from despag.uhp.errors import error_response
 
@@ -105,6 +111,145 @@ def compute_available(harness: dict) -> bool:
         return _litellm_healthy()
     token_path = Path(os.environ.get("DESPAG_API_TOKEN_FILE", "~/.secrets/despag-api.token")).expanduser()
     return token_path.exists() and os.access(token_path, os.R_OK) and _claude_logged_in()
+
+
+# --- P1-2 task execution (PHASE0_WIRING_SPEC.md RECOMMENDATION step 2) --------------
+# One process serves every concurrent turn: REGISTRY is the shared table
+# despag.runner.turn.Turn instances (each its own thread + `claude -p` child) are
+# started into and polled from. RESPONSES/SESSIONS are UHP-shaped bookkeeping on top
+# — a session is a workspace directory (implicit on first task, UHP lifecycle.md), a
+# response is one turn's request/result pairing.
+SESSIONS_ROOT = Path(os.environ.get("DESPAG_SESSIONS_ROOT", "/tmp/despag-sessions"))
+REGISTRY = TurnRegistry()
+RESPONSES: dict[str, dict] = {}
+SESSIONS: dict[str, dict] = {}
+
+# turn.status -> UHP ResponseStatus (lifecycle.md: only these five exist). "timeout"
+# (wall-clock cap, a budget stop) maps to incomplete; "hang" (frame-gap watchdog, no
+# result ever arrived) is not a budget stop and maps to failed.
+_STATUS_MAP = {
+    "completed": "completed",
+    "failed": "failed",
+    "incomplete": "incomplete",
+    "cancelled": "cancelled",
+    "timeout": "incomplete",
+    "hang": "failed",
+}
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:24]}"
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _flatten_input(items: list) -> str:
+    parts = []
+    for it in items:
+        parts.append(str(it.get("content", it)) if isinstance(it, dict) else str(it))
+    return "\n".join(parts)
+
+
+def _resolve_session(previous_response_id: str | None) -> tuple[str | None, str | None, str | None, str | None]:
+    """Returns `(session_id, cwd, resume_session, error_code)`. A fresh task opens a
+    new session (workspace directory) implicitly; a continuation reuses the prior
+    response's session and, once the CLI has told us its own conversation id, resumes
+    it via `--resume` (session_id != errors.md's response_not_found)."""
+    if not previous_response_id:
+        sid = _new_id("hsess")
+        cwd = str(SESSIONS_ROOT / sid)
+        Path(cwd).mkdir(parents=True, exist_ok=True)
+        SESSIONS[sid] = {"cwd": cwd, "cli_session_id": None}
+        return sid, cwd, None, None
+    prev = RESPONSES.get(previous_response_id)
+    if prev is None:
+        return None, None, None, "response_not_found"
+    sid = prev["session_id"]
+    session = SESSIONS[sid]
+    return sid, session["cwd"], session.get("cli_session_id"), None
+
+
+def _remember_cli_session(session_id: str, turn) -> None:
+    """The CLI mints its own conversation id on `system/init`; stash it the first time
+    a turn's frames carry one so the NEXT turn in this session can `--resume` it."""
+    session = SESSIONS.get(session_id)
+    if session is None or session.get("cli_session_id"):
+        return
+    for frame in turn.snapshot_frames():
+        if frame.get("type") == "system" and frame.get("subtype") == "init" and frame.get("session_id"):
+            session["cli_session_id"] = frame["session_id"]
+            return
+
+
+def _extract_text(frame: dict) -> str:
+    content = (frame.get("message") or {}).get("content") or []
+    return "".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text")
+
+
+def _build_output(turn) -> tuple[list[dict], dict | None, dict | None]:
+    """Turn -> `(output, usage, result_frame)`. Not the general canonical-frame ->
+    UHP-event `_RespTranslator` (PHASE0_WIRING_SPEC.md C.1/RECOMMENDATION step 3, out
+    of scope here — that's for SSE); this only needs the final blocking/polled shape."""
+    parts, result_frame = [], None
+    for frame in turn.snapshot_frames():
+        if frame.get("type") == "assistant":
+            text = _extract_text(frame)
+            if text:
+                parts.append(text)
+        elif frame.get("type") == "result":
+            result_frame = frame
+    text = "".join(parts) or (result_frame or {}).get("result") or ""
+    output = []
+    if text:
+        output = [{"id": _new_id("msg"), "type": "message", "status": "completed", "role": "assistant",
+                   "content": [{"type": "output_text", "text": text}]}]
+    usage = canonical._norm_token_usage((result_frame or {}).get("usage")) or None
+    return output, usage, result_frame
+
+
+def _build_error(turn, result_frame: dict | None) -> dict | None:
+    status = turn.status
+    if status in (None, "completed"):
+        return None
+    if status == "cancelled":
+        return {"type": "invalid_request_error", "code": "cancelled", "message": "cancelled by client"}
+    if status == "timeout":
+        return {"type": "harness_error", "code": "timeout",
+                "message": f"wall-clock cap of {turn.wall_clock_s}s exceeded"}
+    if status == "hang":
+        return {"type": "harness_error", "code": "timeout",
+                "message": f"no frame for {turn.frame_gap_s}s (frame-gap watchdog)"}
+    if status == "incomplete":
+        return None   # a budget stop, not a failure — incomplete_details carries the reason
+    message = (result_frame or {}).get("result") or turn.error or "turn failed"
+    return {"type": "harness_error", "code": "harness_error", "message": str(message)[:2000]}
+
+
+def _response_view(response_id: str) -> dict:
+    rec = RESPONSES[response_id]
+    turn = REGISTRY.get(response_id)
+    if turn is None or turn.status is None:
+        status = "in_progress"
+        output, usage, error, incomplete_details = [], None, None, None
+    else:
+        output, usage, result_frame = _build_output(turn)
+        status = _STATUS_MAP.get(turn.status, "failed")
+        error = _build_error(turn, result_frame)
+        incomplete_details = None
+        if status == "incomplete":
+            reason = "max_turns" if turn.status == "incomplete" else "timeout"
+            incomplete_details = {"reason": reason}
+    metadata = {"session_id": rec["session_id"], "harness_id": rec["harness_id"]}
+    if rec.get("ignored_fields"):
+        metadata["ignored_fields"] = rec["ignored_fields"]
+    return {
+        "id": response_id, "object": "response", "created_at": rec["created_at"], "status": status,
+        "error": error, "incomplete_details": incomplete_details,
+        "previous_response_id": rec.get("previous_response_id"), "model": rec["model"],
+        "output": output, "store": True, "usage": usage, "metadata": metadata,
+    }
 
 
 app = FastAPI()
@@ -214,17 +359,71 @@ async def harness_models(harness_id: str, request: Request):
 async def create_response(request: Request):
     if (err := require_auth(request)) is not None:
         return err
-    return error_response(
-        "lumen_not_implemented",
-        "task execution is not implemented by this build of despag",
-        status=501,
+    body = await request.json()
+    try:
+        req = models.CreateResponseRequest(**body)
+    except Exception as e:  # noqa: BLE001 — a malformed request body is a 400, not a 500
+        return error_response("invalid_input", str(e), status=400)
+    if req.stream:
+        # RECOMMENDATION step 2 wires blocking + background/polling only; step 3
+        # (SSE, gapless sequence_number, the general _RespTranslator) is the next
+        # ticket.
+        return error_response(
+            "lumen_not_implemented",
+            "streaming responses (stream:true) are not implemented by this build of despag",
+            status=501,
+        )
+    harness_id = (req.metadata.harness_id if req.metadata else None) or HARNESSES[0]["id"]
+    harness = HARNESS_BY_ID.get(harness_id)
+    if harness is None:
+        return error_response("harness_not_found", f"no harness with id {harness_id!r}", param="metadata.harness_id")
+    if not compute_available(harness):
+        return error_response("model_unavailable", f"harness {harness_id!r} has no available model", status=422)
+    sid, cwd, resume_session, err_code = _resolve_session(req.previous_response_id)
+    if err_code is not None:
+        return error_response(err_code, f"no response with id {req.previous_response_id!r}",
+                               param="previous_response_id")
+    prompt = req.input if isinstance(req.input, str) else _flatten_input(req.input)
+    model = req.model or harness["defaultModel"]
+    cmd, env = claude_max.build_turn(
+        worker_id="despag", model=model, effort=None, worktree=cwd, ticket_id=sid,
+        prompt=prompt, resume_session=resume_session,
     )
+    response_id = _new_id("resp")
+    RESPONSES[response_id] = {
+        "created_at": _now_ms(), "harness_id": harness_id, "session_id": sid,
+        "previous_response_id": req.previous_response_id, "model": model,
+        "ignored_fields": [f for f in ("tools", "include") if f in body],
+    }
+    turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env, timeout_seconds=req.timeout_seconds)
+    if not req.background:
+        await asyncio.to_thread(turn.done.wait)
+    _remember_cli_session(sid, turn)
+    return JSONResponse(_response_view(response_id))
 
 
 @app.get("/v1/responses/{response_id}")
 async def get_response(response_id: str, request: Request):
     if (err := require_auth(request)) is not None:
         return err
-    # No response is ever stored in P1-1 (task execution is 501), so every id is
-    # out of scope — 404, same as any other unknown object (architecture.md).
-    return error_response("response_not_found", f"no response with id {response_id!r}", param="response_id")
+    if response_id not in RESPONSES:
+        return error_response("response_not_found", f"no response with id {response_id!r}", param="response_id")
+    turn = REGISTRY.get(response_id)
+    if turn is not None and turn.done.is_set():
+        _remember_cli_session(RESPONSES[response_id]["session_id"], turn)
+    return JSONResponse(_response_view(response_id))
+
+
+@app.post("/v1/responses/{response_id}/cancel")
+async def cancel_response(response_id: str, request: Request):
+    if (err := require_auth(request)) is not None:
+        return err
+    if response_id not in RESPONSES:
+        return error_response("response_not_found", f"no response with id {response_id!r}", param="response_id")
+    turn = REGISTRY.get(response_id)
+    if turn is not None:
+        # sessions.md §4: idempotent on a terminal task — Turn.cancel() is a no-op
+        # once turn.done is set, so a terminal response's status never changes (C-02).
+        # Reply promptly either way: cancel() only requests a killpg, it doesn't wait.
+        turn.cancel()
+    return JSONResponse(_response_view(response_id))
