@@ -3,6 +3,7 @@ and `available` computation. The conformance suite (despag/reports/) covers the
 black-box HTTP surface; these cover the pieces it can't reach directly."""
 from __future__ import annotations
 
+import json
 import os
 import time
 
@@ -91,19 +92,6 @@ def test_error_envelope_shape(client):
     assert set(body.keys()) == {"error"}
     err = body["error"]
     assert set(err.keys()) == {"type", "code", "message", "param", "detail"}
-
-
-def test_streaming_responses_not_implemented(client):
-    # wq#1806 wires POST /v1/responses for stream:false (blocking + background) only —
-    # SSE is the next ticket. stream:true must still answer 501, never attempt a turn.
-    c, app_module = client
-    r = c.post(
-        "/v1/responses",
-        headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
-        json={"input": "hi", "stream": True},
-    )
-    assert r.status_code == 501
-    assert r.json()["error"]["code"] == "lumen_not_implemented"
 
 
 def test_unknown_harness_id_on_create_response(client):
@@ -277,6 +265,59 @@ def test_failed_admission_frees_the_idempotency_key(runner_client):
         assert asyncio.run(app_module.CONTROL.idem_get("released-again")) is None
         r2 = c.post("/v1/responses", headers=headers, json={"input": "hi"})
     assert r2.status_code == 200, r2.text
+
+
+# --- wq#1809: SSE streaming (RECOMMENDATION step 3) ---------------------------------
+
+def _parse_sse(body: str) -> list[dict]:
+    events = []
+    for block in body.split("\n\n"):
+        block = block.strip()
+        if block.startswith("data:"):
+            events.append(json.loads(block[len("data:"):].strip()))
+    return events
+
+
+def test_stream_emits_gapless_events_ending_in_one_terminal(runner_client):
+    app_module, _ = runner_client
+    with TestClient(app_module.app) as c:
+        r = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi", "stream": True})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert r.headers["cache-control"] == "no-cache"
+    events = _parse_sse(r.text)
+    assert events[0]["type"] == "response.created"
+    assert [e["sequence_number"] for e in events] == list(range(len(events)))
+    terminals = {"response.completed", "response.incomplete", "response.failed"}
+    assert [e["type"] for e in events if e["type"] in terminals] == ["response.completed"]
+    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "ok"
+
+
+def test_stream_and_blocking_agree_on_output_shape(runner_client):
+    # streaming.md §6 / S-08: the two paths must produce the same result for the
+    # same input — checked here at the HTTP level, not just inside the translator.
+    app_module, _ = runner_client
+    with TestClient(app_module.app) as c:
+        blocking = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi", "stream": False}).json()
+        stream_events = _parse_sse(
+            c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi", "stream": True}).text)
+    streamed = stream_events[-1]["response"]
+    assert blocking["status"] == streamed["status"] == "completed"
+    strip_id = lambda output: [{k: v for k, v in item.items() if k != "id"} for item in output]
+    assert strip_id(blocking["output"]) == strip_id(streamed["output"])
+
+
+def test_stream_idempotency_key_replays_settled_output(runner_client):
+    app_module, _ = runner_client
+    headers = {**_auth(app_module), "Idempotency-Key": "stream-retry"}
+    with TestClient(app_module.app) as c:
+        r1 = c.post("/v1/responses", headers=headers, json={"input": "hi", "stream": True})
+        assert r1.status_code == 200, r1.text
+        r2 = c.post("/v1/responses", headers=headers, json={"input": "hi"})
+    terminal = _parse_sse(r1.text)[-1]["response"]
+    assert r2.status_code == 200
+    assert r2.json() == terminal, "a replayed Idempotency-Key must read back the stream's own terminal response"
+    assert len(app_module.RESPONSES) == 1
 
 
 def test_disabled_harness_never_available(client):

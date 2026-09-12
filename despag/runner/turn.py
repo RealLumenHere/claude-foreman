@@ -62,11 +62,18 @@ class Turn:
     """
 
     def __init__(self, turn_id: str, cmd: list[str], cwd: str, env: dict,
-                 *, timeout_seconds: float | None = None, frame_gap_s: float | None = None):
+                 *, timeout_seconds: float | None = None, frame_gap_s: float | None = None,
+                 on_frame=None):
         self.id = turn_id
         self.cmd = cmd
         self.cwd = cwd
         self.env = env
+        # wq#1809: the live-SSE bridge. Called synchronously on THIS turn's own thread
+        # right after a canonical frame is appended to `self.frames` — a caller that
+        # wants the frame the instant it exists (not on the next poll) subscribes here
+        # rather than diffing `snapshot_frames()`, which is what "flush the moment the
+        # reader thread appends it, no polling" (streaming.md §1) requires.
+        self.on_frame = on_frame
         max_turn_cap = _envint("DESPAG_MAX_TURN_SECONDS", DESPAG_MAX_TURN_SECONDS_DEFAULT)
         # C.2: cap = min(caller's timeout_seconds, the hard ceiling) — a caller can ask
         # for less than the ceiling, never more. wq#1857: test `is None`, not falsiness
@@ -210,6 +217,8 @@ class Turn:
                         self.frames.append(ev)
                     if ev.get("type") == "result":
                         result_frame = ev
+                    if self.on_frame is not None:
+                        self.on_frame(ev)
         finally:
             timer.cancel()
             if self.killed_reason is None and self._cancel_requested.is_set():
@@ -260,8 +269,10 @@ class TurnRegistry:
         self._lock = threading.Lock()
 
     def start(self, turn_id: str, cmd: list[str], cwd: str, env: dict,
-              *, timeout_seconds: float | None = None, frame_gap_s: float | None = None) -> Turn:
-        turn = Turn(turn_id, cmd, cwd, env, timeout_seconds=timeout_seconds, frame_gap_s=frame_gap_s)
+              *, timeout_seconds: float | None = None, frame_gap_s: float | None = None,
+              on_frame=None) -> Turn:
+        turn = Turn(turn_id, cmd, cwd, env, timeout_seconds=timeout_seconds, frame_gap_s=frame_gap_s,
+                    on_frame=on_frame)
         with self._lock:
             self._turns[turn_id] = turn
         threading.Thread(target=turn.run, daemon=True, name=f"despag-turn-{turn_id}").start()
