@@ -1,1 +1,9 @@
-{"criteria": [{"id": "AC1", "citation": "harness/fworker.py:1177-1330"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "despag/spike/app.py:105-198",
+      "note": "run_turn(): spawns claude -p via imported fworker.build_env/build_claude_cmd (start_new_session=True), translates stream-json frames into gapless-sequence_number UHP SSE events; cancel_response() at despag/spike/app.py:266-277 does os.killpg(pgid, SIGKILL) directly. Suite runs: despag/spike/report_litellm.json and despag/spike/report_claudemax.json both 10/10 on D-01,H-01,S-03,S-04,S-05,S-06,S-07,S-09,C-02,C-03; despag/spike/report_litellm_full_core.json is 40/40 on the full core class."
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+# wq#1803: static harness catalog for the UHP acceptance spike.
+# Harness `id` is chrn_-prefixed per the UHP Harness schema (pattern ^chrn_, checked by
+# conformance check H-01); `name` is the human/CLI-facing label the ticket calls
+# "litellm-mechanical" / "claude-max". defaultModel drives fworker.build_env's pool
+# selection: a name in LOCAL_POOL_MODELS takes the ANTHROPIC_BASE_URL/AUTH_TOKEN
+# (LiteLLM) path, anything else takes the CLAUDE_CODE_OAUTH_TOKEN (Max) path.
+harnesses:
+  - id: chrn_litellm-mechanical
+    name: litellm-mechanical
+    base: claude-code
+    baseLabel: claude-code
+    defaultModel: deepseek-v4-flash
+    timeoutSeconds: 300
+  - id: chrn_claude-max
+    name: claude-max
+    base: claude-code
+    baseLabel: claude-code
+    defaultModel: claude-sonnet-5
+    timeoutSeconds: 300
