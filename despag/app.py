@@ -1,15 +1,11 @@
-"""wq#1805: despag P1-1 package skeleton — UHP discovery/harnesses/models.
-
-No task execution here (PHASE0_WIRING_SPEC.md RECOMMENDATION step 1 is discovery
-only; step 2+ wires the runner). `POST /v1/responses` therefore answers 501
-lumen_not_implemented rather than running a harness — but wq#1807 (P1-4) wires the
-control-plane invariants around that stub so the runner ticket only has to fill in
-execution, not reinvent dedup/fencing: an `Idempotency-Key` reserves a response id
-before the stub runs and releases it after (since nothing is persisted yet, a
-retry must be free to try again, not replay a name that never produced output);
-a session_id (from metadata.session_id or previous_response_id — UHP sessions are
-identified by their most recent response) is admitted through a per-session lease
-that fails closed with 409 session_busy when another request already holds it.
+"""wq#1805/wq#1806/wq#1807/wq#1809: despag package — UHP discovery/harnesses/models
+(P1-1), the `POST /v1/responses` task-execution surface (P1-2), the idempotency+lease
+control plane around it (P1-4), and the canonical-frame -> UHP `response.*` SSE
+translator (P1-3, PHASE0_WIRING_SPEC.md RECOMMENDATION step 3). `stream:false`
+(blocking and `background:true`+polling) and `stream:true` (SSE) both build their
+`output`/`usage` through the same `despag.uhp.translate.RespTranslator` replay of a
+turn's canonical frames, so the two paths agree on the result shape by construction
+(streaming.md §6, S-08) rather than by keeping two assemblies in sync.
 """
 from __future__ import annotations
 
@@ -19,15 +15,20 @@ import json
 import os
 import secrets
 import subprocess
+import time
+import uuid
 from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from despag.backends import claude_max
 from despag.backing.control_sqlite import ControlStore
+from despag.runner.turn import TurnRegistry
 from despag.uhp import models
 from despag.uhp.errors import error_response
+from despag.uhp.translate import RespTranslator
 
 UHP_VERSION = "2026-08-11"
 SUPPORTED_VERSIONS = [UHP_VERSION]
@@ -123,6 +124,139 @@ def compute_available(harness: dict) -> bool:
         return _litellm_healthy()
     token_path = Path(os.environ.get("DESPAG_API_TOKEN_FILE", "~/.secrets/despag-api.token")).expanduser()
     return token_path.exists() and os.access(token_path, os.R_OK) and _claude_logged_in()
+
+
+# --- P1-2/P1-3 task execution (PHASE0_WIRING_SPEC.md RECOMMENDATION steps 2-3) ------
+# One process serves every concurrent turn: REGISTRY is the shared table
+# despag.runner.turn.Turn instances (each its own thread + `claude -p` child) are
+# started into and polled from. RESPONSES/SESSIONS are UHP-shaped bookkeeping on top
+# — a session is a workspace directory (implicit on first task, UHP lifecycle.md), a
+# response is one turn's request/result pairing.
+SESSIONS_ROOT = Path(os.environ.get("DESPAG_SESSIONS_ROOT", "/tmp/despag-sessions"))
+REGISTRY = TurnRegistry()
+RESPONSES: dict[str, dict] = {}
+SESSIONS: dict[str, dict] = {}
+
+# turn.status -> UHP ResponseStatus (lifecycle.md: only these five exist). "timeout"
+# (wall-clock cap, a budget stop) maps to incomplete; "hang" (frame-gap watchdog, no
+# result ever arrived) is not a budget stop and maps to failed.
+_STATUS_MAP = {
+    "completed": "completed",
+    "failed": "failed",
+    "incomplete": "incomplete",
+    "cancelled": "cancelled",
+    "timeout": "incomplete",
+    "hang": "failed",
+}
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:24]}"
+
+
+def _flatten_input(items: list) -> str:
+    parts = []
+    for it in items:
+        parts.append(str(it.get("content", it)) if isinstance(it, dict) else str(it))
+    return "\n".join(parts)
+
+
+def _resolve_session(previous_response_id: str | None) -> tuple[str | None, str | None, str | None, str | None]:
+    """Returns `(session_id, cwd, resume_session, error_code)`. A fresh task opens a
+    new session (workspace directory) implicitly; a continuation reuses the prior
+    response's session and, once the CLI has told us its own conversation id, resumes
+    it via `--resume` (session_id != errors.md's response_not_found)."""
+    if not previous_response_id:
+        sid = _new_id("hsess")
+        cwd = str(SESSIONS_ROOT / sid)
+        Path(cwd).mkdir(parents=True, exist_ok=True)
+        SESSIONS[sid] = {"cwd": cwd, "cli_session_id": None}
+        return sid, cwd, None, None
+    prev = RESPONSES.get(previous_response_id)
+    if prev is None:
+        return None, None, None, "response_not_found"
+    sid = prev["session_id"]
+    session = SESSIONS[sid]
+    return sid, session["cwd"], session.get("cli_session_id"), None
+
+
+def _remember_cli_session(session_id: str, turn) -> None:
+    """The CLI mints its own conversation id on `system/init`; stash it the first time
+    a turn's frames carry one so the NEXT turn in this session can `--resume` it."""
+    session = SESSIONS.get(session_id)
+    if session is None or session.get("cli_session_id"):
+        return
+    for frame in turn.snapshot_frames():
+        if frame.get("type") == "system" and frame.get("subtype") == "init" and frame.get("session_id"):
+            session["cli_session_id"] = frame["session_id"]
+            return
+
+
+# --- P1-3: canonical frames -> UHP response.* (despag/uhp/translate.py) ------------
+def _build_translator(response_id: str) -> RespTranslator:
+    rec = RESPONSES[response_id]
+    return RespTranslator(
+        response_id, rec["model"], rec.get("previous_response_id"), True, rec["created_at"],
+        session_id=rec["session_id"], ignored_fields=rec.get("ignored_fields") or None,
+    )
+
+
+def _last_result_frame(frames: list[dict]) -> dict | None:
+    return next((f for f in reversed(frames) if f.get("type") == "result"), None)
+
+
+def _turn_failure_message(turn) -> str:
+    if turn.status == "hang":
+        return f"no frame for {turn.frame_gap_s}s (frame-gap watchdog)"
+    result_frame = _last_result_frame(turn.snapshot_frames())
+    message = (result_frame or {}).get("result") or turn.error or "turn failed"
+    return str(message)[:2000]
+
+
+def _finish_events(turn, translator: RespTranslator) -> list[dict]:
+    """The terminal leg every execution path shares (blocking, background-polled, and
+    the SSE subscriber): turn `Turn.status` into the UHP outcome and close the
+    translator exactly once, so every path reads the final response object off the
+    identical assembly (streaming.md §6, S-08). Idempotent per response_id: a second
+    call (a GET racing the SSE path's own terminal) replays the first call's cached
+    `response` rather than closing a second translator with its own fresh item ids —
+    `RespTranslator` mints those from `uuid.uuid4()`, so two independent closes of the
+    same frames would disagree about the very ids tasks.md §4 requires to "read back"."""
+    rec = RESPONSES[turn.id]
+    cached = rec.get("_final")
+    if cached is not None:
+        ev_type = {"completed": "response.completed", "incomplete": "response.incomplete",
+                   "failed": "response.failed"}[cached["status"] if cached["status"] != "cancelled" else "failed"]
+        return [{"type": ev_type, "sequence_number": translator.seq, "response": cached}]
+    status = _STATUS_MAP.get(turn.status, "failed")
+    if status == "failed":
+        evs = translator.fail(_turn_failure_message(turn))
+    elif status == "incomplete":
+        reason = "max_turns" if turn.status == "incomplete" else "timeout"
+        evs = translator.complete(status, incomplete_reason=reason)
+    elif status == "cancelled":
+        evs = translator.complete(status, error={"type": "invalid_request_error", "code": "cancelled",
+                                                    "message": "cancelled by client"})
+    else:
+        evs = translator.complete(status)
+    rec["_final"] = evs[-1]["response"]
+    return evs
+
+
+def _response_view(response_id: str) -> dict:
+    """A terminal response is re-read, not rebuilt — see `_finish_events` for why."""
+    cached = RESPONSES[response_id].get("_final")
+    if cached is not None:
+        return cached
+    turn = REGISTRY.get(response_id)
+    translator = _build_translator(response_id)
+    if turn is None:
+        return translator._response_obj("in_progress")
+    for frame in turn.snapshot_frames():
+        translator.feed(frame)
+    if not turn.done.is_set():
+        return translator._response_obj("in_progress")
+    return _finish_events(turn, translator)[-1]["response"]
 
 
 app = FastAPI()
@@ -249,6 +383,53 @@ async def _idem_admit(idem_key: str, resp_id: str) -> tuple[str, dict | None]:
     return "busy", None
 
 
+async def _sse_gen(queue: "asyncio.Queue"):
+    """No polling: a subscriber blocks on the queue a frame is pushed onto the moment
+    the turn's reader thread appends it (`despag.runner.turn.Turn.on_frame`, bridged
+    across threads with `call_soon_threadsafe`); the 20s wait is only for keep-alive,
+    never a poll interval (streaming.md §1 "MUST NOT buffer")."""
+    while True:
+        try:
+            ev = await asyncio.wait_for(queue.get(), timeout=20)
+        except asyncio.TimeoutError:
+            yield b": keep-alive\n\n"
+            continue
+        if ev is None:
+            break
+        yield f"data: {json.dumps(ev)}\n\n".encode()
+
+
+async def _stream_response(response_id: str, cmd: list[str], cwd: str, env: dict,
+                            timeout_seconds: float | None, *, on_done) -> StreamingResponse:
+    translator = _build_translator(response_id)
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def _on_frame(frame: dict) -> None:
+        # Runs on the Turn's own thread; hop to the event loop before touching the
+        # translator or the queue, both of which are only ever touched from the loop.
+        def _feed() -> None:
+            for ev in translator.feed(frame):
+                queue.put_nowait(ev)
+        loop.call_soon_threadsafe(_feed)
+
+    for ev in translator.start():      # response.created (seq 0) is the first event
+        queue.put_nowait(ev)
+    turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env,
+                          timeout_seconds=timeout_seconds, on_frame=_on_frame)
+
+    async def _finish() -> None:
+        await asyncio.to_thread(turn.done.wait)
+        for ev in _finish_events(turn, translator):
+            queue.put_nowait(ev)
+        queue.put_nowait(None)
+        await on_done(turn)
+
+    asyncio.create_task(_finish())
+    return StreamingResponse(_sse_gen(queue), media_type="text/event-stream",
+                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.post("/v1/responses")
 async def create_response(request: Request):
     if (err := require_auth(request)) is not None:
@@ -259,17 +440,27 @@ async def create_response(request: Request):
         body = {}
     if not isinstance(body, dict):
         body = {}
-    metadata = body.get("metadata") or {}
-    # B.4: session is implicit, extended by previous_response_id — the client has
-    # no other way to name an existing session before the runner ticket assigns
-    # hsess ids of its own, so a caller-supplied metadata.session_id (if any) wins.
-    session_id = metadata.get("session_id") or body.get("previous_response_id")
+    try:
+        req = models.CreateResponseRequest(**body)
+    except Exception as e:  # noqa: BLE001 — a malformed request body is a 400, not a 500
+        return error_response("invalid_input", str(e), status=400)
+
+    harness_id = (req.metadata.harness_id if req.metadata else None) or HARNESSES[0]["id"]
+    harness = HARNESS_BY_ID.get(harness_id)
+    if harness is None:
+        return error_response("harness_not_found", f"no harness with id {harness_id!r}", param="metadata.harness_id")
+    if not compute_available(harness):
+        return error_response("model_unavailable", f"harness {harness_id!r} has no available model", status=422)
+    sid, cwd, resume_session, err_code = _resolve_session(req.previous_response_id)
+    if err_code is not None:
+        return error_response(err_code, f"no response with id {req.previous_response_id!r}",
+                               param="previous_response_id")
 
     idem_key = request.headers.get("idempotency-key")
-    resp_id = f"resp_{secrets.token_hex(12)}"
+    response_id = _new_id("resp")
     reserved_by_us = False
     if idem_key:
-        outcome, payload = await _idem_admit(idem_key, resp_id)
+        outcome, payload = await _idem_admit(idem_key, response_id)
         if outcome == "replay":
             return payload
         if outcome == "busy":
@@ -281,35 +472,77 @@ async def create_response(request: Request):
             )
         reserved_by_us = True
 
-    if session_id:
-        lease = await CONTROL.lease_admit(session_id, resp_id, ttl_s=SESSION_LEASE_TTL_S, reject_on_conflict=True)
+    lease_fence = 0
+    if sid:
+        lease = await CONTROL.lease_admit(sid, response_id, ttl_s=SESSION_LEASE_TTL_S, reject_on_conflict=True)
         if lease["rejected"]:
             if reserved_by_us:
-                await CONTROL.idem_release(idem_key, resp_id)
+                await CONTROL.idem_release(idem_key, response_id)
             return error_response(
                 "session_busy",
-                f"session {session_id!r} already has a task in flight",
+                f"session {sid!r} already has a task in flight",
                 detail={"retry_after_ms": 2000},
             )
+        lease_fence = lease["fence"]
 
-    result = error_response(
-        "lumen_not_implemented",
-        "task execution is not implemented by this build of despag",
-        status=501,
+    prompt = req.input if isinstance(req.input, str) else _flatten_input(req.input)
+    model = req.model or harness["defaultModel"]
+    cmd, env = claude_max.build_turn(
+        worker_id="despag", model=model, effort=None, worktree=cwd, ticket_id=sid,
+        prompt=prompt, resume_session=resume_session,
     )
-    if reserved_by_us:
-        # The stub never runs a harness, so nothing is ever persisted under resp_id.
-        # Release rather than poison the key for IDEMPOTENCY_TTL_S with a reservation
-        # that can never settle — the runner ticket replaces this release with
-        # idem_settle(idem_key, resp_id, output) once it actually produces output.
-        await CONTROL.idem_release(idem_key, resp_id)
-    return result
+    RESPONSES[response_id] = {
+        "created_at": int(time.time()), "harness_id": harness_id, "session_id": sid,
+        "previous_response_id": req.previous_response_id, "model": model,
+        "ignored_fields": [f for f in ("tools", "include") if f in body],
+    }
+
+    async def _settle(turn) -> None:
+        """The completion hook every execution path funnels through (blocking,
+        background+polled, and streaming's own `_finish`): release the session lease
+        and settle the idempotency reservation with the REAL output once the turn is
+        actually done, replacing P1-1's stub-era release-only behaviour now that a
+        retried key has a result worth replaying (despag/app.py module docstring, P1-1)."""
+        await asyncio.to_thread(turn.done.wait)
+        _remember_cli_session(sid, turn)
+        if lease_fence:
+            await CONTROL.lease_release(sid, response_id, lease_fence)
+        if reserved_by_us:
+            await CONTROL.idem_settle(idem_key, response_id, _response_view(response_id), ttl_s=IDEMPOTENCY_TTL_S)
+
+    if req.stream:
+        return await _stream_response(response_id, cmd, cwd, env, req.timeout_seconds, on_done=_settle)
+
+    turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env, timeout_seconds=req.timeout_seconds)
+    if req.background:
+        asyncio.create_task(_settle(turn))
+        return JSONResponse(_response_view(response_id))
+    await _settle(turn)
+    return JSONResponse(_response_view(response_id))
 
 
 @app.get("/v1/responses/{response_id}")
 async def get_response(response_id: str, request: Request):
     if (err := require_auth(request)) is not None:
         return err
-    # No response is ever stored in P1-1 (task execution is 501), so every id is
-    # out of scope — 404, same as any other unknown object (architecture.md).
-    return error_response("response_not_found", f"no response with id {response_id!r}", param="response_id")
+    if response_id not in RESPONSES:
+        return error_response("response_not_found", f"no response with id {response_id!r}", param="response_id")
+    turn = REGISTRY.get(response_id)
+    if turn is not None and turn.done.is_set():
+        _remember_cli_session(RESPONSES[response_id]["session_id"], turn)
+    return JSONResponse(_response_view(response_id))
+
+
+@app.post("/v1/responses/{response_id}/cancel")
+async def cancel_response(response_id: str, request: Request):
+    if (err := require_auth(request)) is not None:
+        return err
+    if response_id not in RESPONSES:
+        return error_response("response_not_found", f"no response with id {response_id!r}", param="response_id")
+    turn = REGISTRY.get(response_id)
+    if turn is not None:
+        # sessions.md §4: idempotent on a terminal task — Turn.cancel() is a no-op
+        # once turn.done is set, so a terminal response's status never changes (C-02).
+        # Reply promptly either way: cancel() only requests a killpg, it doesn't wait.
+        turn.cancel()
+    return JSONResponse(_response_view(response_id))

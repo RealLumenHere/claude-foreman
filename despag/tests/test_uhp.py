@@ -92,57 +92,145 @@ def test_error_envelope_shape(client):
     assert set(err.keys()) == {"type", "code", "message", "param", "detail"}
 
 
-def test_responses_not_implemented(client):
+def _patch_fake_backend(app_module, monkeypatch, *, mode="quick"):
+    """wq#1809: swap the real `claude -p` backend for fake_backend.py (same fixture
+    despag/tests/test_runner.py uses) so POST /v1/responses can be exercised end to
+    end — real execution, real translator, real SSE — without spawning the CLI or
+    spending window budget. Returns the list of kwargs each call was made with."""
+    import sys
+    from pathlib import Path
+
+    fake_backend = str(Path(__file__).resolve().parent / "fake_backend.py")
+    calls: list[dict] = []
+
+    def fake_build_turn(**kwargs):
+        calls.append(kwargs)
+        return [sys.executable, fake_backend, "--mode", mode], dict(os.environ)
+
+    monkeypatch.setattr(app_module.claude_max, "build_turn", fake_build_turn)
+    # The sandbox running this test has no logged-in `claude` CLI; availability is
+    # not what these tests are about (see test_disabled_harness_never_available).
+    monkeypatch.setattr(app_module, "compute_available", lambda harness: True)
+    return calls
+
+
+def _auth(app_module) -> dict:
+    return {"Authorization": f"Bearer {app_module.API_TOKEN}"}
+
+
+def _parse_sse(body: str) -> list[dict]:
+    import json
+
+    events = []
+    for block in body.split("\n\n"):
+        block = block.strip()
+        if block.startswith("data:"):
+            events.append(json.loads(block[len("data:"):].strip()))
+    return events
+
+
+def test_responses_blocking_runs_the_backend_and_returns_completed(client, monkeypatch):
     c, app_module = client
-    r = c.post(
-        "/v1/responses",
-        headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
-        json={"input": "hi"},
-    )
-    assert r.status_code == 501
-    assert r.json()["error"]["code"] == "lumen_not_implemented"
+    _patch_fake_backend(app_module, monkeypatch, mode="quick")
+    r = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "completed"
+    assert body["output"][0]["content"][0]["text"] == "ok"
+    assert body["metadata"]["session_id"]
 
 
-def test_responses_idempotency_key_reservation_is_released_after_the_stub(client):
-    """wq#1807: the stub 501 never persists output, so the reservation it took for
-    Idempotency-Key must be released, not left dangling for IDEMPOTENCY_TTL_S — a
-    second call with the SAME key must be free to reserve (and also 501) rather
-    than hang waiting for a reservation that can never settle."""
-    import asyncio
-
+def test_responses_stream_emits_gapless_events_ending_in_one_terminal(client, monkeypatch):
     c, app_module = client
-    headers = {"Authorization": f"Bearer {app_module.API_TOKEN}", "Idempotency-Key": "abc123"}
+    _patch_fake_backend(app_module, monkeypatch, mode="quick")
+    r = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi", "stream": True})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert r.headers["cache-control"] == "no-cache"
+    events = _parse_sse(r.text)
+    assert events[0]["type"] == "response.created"
+    assert [e["sequence_number"] for e in events] == list(range(len(events)))
+    terminals = {"response.completed", "response.incomplete", "response.failed"}
+    assert [e["type"] for e in events if e["type"] in terminals] == ["response.completed"]
+    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "ok"
+
+
+def test_responses_stream_and_blocking_agree_on_output_shape(client, monkeypatch):
+    # streaming.md §6 / S-08: the two paths must produce the same result for the
+    # same input — checked here at the HTTP level, not just inside the translator.
+    c, app_module = client
+    _patch_fake_backend(app_module, monkeypatch, mode="quick")
+    blocking = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi", "stream": False}).json()
+    stream_events = _parse_sse(
+        c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi", "stream": True}).text)
+    streamed = stream_events[-1]["response"]
+    assert blocking["status"] == streamed["status"] == "completed"
+    strip_id = lambda output: [{k: v for k, v in item.items() if k != "id"} for item in output]
+    assert strip_id(blocking["output"]) == strip_id(streamed["output"])
+
+
+def test_responses_idempotency_key_replays_settled_output_without_rerunning(client, monkeypatch):
+    """wq#1809: now that execution is real, a retried Idempotency-Key must replay the
+    FIRST run's actual output rather than release-and-rerun (P1-1's stub-era
+    behaviour, now obsolete — despag/app.py module docstring)."""
+    c, app_module = client
+    calls = _patch_fake_backend(app_module, monkeypatch, mode="quick")
+    headers = {**_auth(app_module), "Idempotency-Key": "abc123"}
     r1 = c.post("/v1/responses", headers=headers, json={"input": "hi"})
-    assert r1.status_code == 501
-    assert asyncio.run(app_module.CONTROL.idem_get("abc123")) is None
+    assert r1.status_code == 200
     r2 = c.post("/v1/responses", headers=headers, json={"input": "hi"})
-    assert r2.status_code == 501
+    assert r2.status_code == 200
+    assert r2.json() == r1.json()
+    assert len(calls) == 1, "a replayed Idempotency-Key must not run the backend a second time"
 
 
-def test_responses_session_busy_when_lease_is_held_by_another_owner(client):
-    """wq#1807: a session with an active, fresh lease held by a different request
-    must 409 session_busy rather than admit a second concurrent task."""
+def test_responses_session_busy_when_continuing_a_session_under_another_owners_lease(client, monkeypatch):
+    """wq#1807/wq#1809: a session is implicit and extended via `previous_response_id`
+    (metadata.session_id is not a session selector) — so to exercise the 409 path,
+    continue a real response's session and pre-seed a conflicting lease on it."""
     import asyncio
 
     c, app_module = client
-    asyncio.run(app_module.CONTROL.lease_admit("hsess_a", "some-other-inflight-request", ttl_s=60))
-    r = c.post(
-        "/v1/responses",
-        headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
-        json={"input": "hi", "metadata": {"session_id": "hsess_a"}},
-    )
+    _patch_fake_backend(app_module, monkeypatch, mode="quick")
+    first = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi"}).json()
+    sid = first["metadata"]["session_id"]
+    asyncio.run(app_module.CONTROL.lease_admit(sid, "some-other-inflight-request", ttl_s=60))
+    r = c.post("/v1/responses", headers=_auth(app_module),
+                json={"input": "again", "previous_response_id": first["id"]})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "session_busy"
 
 
-def test_responses_no_session_id_is_never_session_busy(client):
+def test_responses_a_fresh_session_is_never_session_busy(client, monkeypatch):
+    import asyncio
+
+    c, app_module = client
+    _patch_fake_backend(app_module, monkeypatch, mode="quick")
+    asyncio.run(app_module.CONTROL.lease_admit("hsess_unrelated", "some-other-inflight-request", ttl_s=60))
+    r = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi"})
+    assert r.status_code == 200  # a brand new session never conflicts with an unrelated one
+
+
+def test_unknown_harness_id_on_create_response(client):
     c, app_module = client
     r = c.post(
         "/v1/responses",
         headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
-        json={"input": "hi"},
+        json={"input": "hi", "metadata": {"harness_id": "chrn_does-not-exist"}},
     )
-    assert r.status_code == 501  # no session_id supplied — nothing to conflict with
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "harness_not_found"
+
+
+def test_disabled_harness_rejected_on_create_response(client):
+    c, app_module = client
+    r = c.post(
+        "/v1/responses",
+        headers={"Authorization": f"Bearer {app_module.API_TOKEN}"},
+        json={"input": "hi", "metadata": {"harness_id": "chrn_claude-local-rung"}},
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "model_unavailable"
 
 
 def test_disabled_harness_never_available(client):
