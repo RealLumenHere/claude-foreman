@@ -27,6 +27,11 @@ claude-max turn may reach `REGISTRY.start` without passing this gate.
      bound only, counted against turns actually in flight in this process's
      `TurnRegistry` (`despag/runner/turn.py:289-295 TurnRegistry.count_in_flight`),
      never a config constant.
+  - With no usable `percent`+`resets_at` on any pool (`allowed_concurrent` returns
+    `None`), there is no reserve calculation to clamp, so the ceiling degrades to
+    `burn_rate.MIN_ALLOWED` (1) rather than to `DESPAG_MAX_CLAUDE_CONCURRENT`
+    (`despag/admission.py:229-244`, wq#1868) — the upper clamp is never a
+    substitute for the reserve-aware number.
   - litellm-mechanical is exempt from all three (`admission.is_local_model`),
     mirroring `governor_core.evaluate_dispatch`'s own local-rung exemption — it
     costs no Anthropic quota.
