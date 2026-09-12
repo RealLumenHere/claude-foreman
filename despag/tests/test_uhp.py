@@ -135,6 +135,18 @@ def test_responses_session_busy_when_lease_is_held_by_another_owner(client):
     assert r.json()["error"]["code"] == "session_busy"
 
 
+def test_responses_two_consecutive_turns_of_one_session_both_admitted(client):
+    """wq#1851: the stub completes synchronously, so the lease it took must be
+    released — otherwise the second turn of an ordinary multi-turn conversation 409s
+    session_busy for the whole SESSION_LEASE_TTL_S."""
+    c, app_module = client
+    headers = {"Authorization": f"Bearer {app_module.API_TOKEN}"}
+    body = {"input": "hi", "metadata": {"session_id": "hsess_multiturn"}}
+    assert c.post("/v1/responses", headers=headers, json=body).status_code == 501
+    r2 = c.post("/v1/responses", headers=headers, json=body)
+    assert r2.status_code == 501, r2.json()
+
+
 def test_responses_no_session_id_is_never_session_busy(client):
     c, app_module = client
     r = c.post(

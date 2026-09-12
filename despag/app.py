@@ -281,6 +281,7 @@ async def create_response(request: Request):
             )
         reserved_by_us = True
 
+    lease_fence = 0
     if session_id:
         lease = await CONTROL.lease_admit(session_id, resp_id, ttl_s=SESSION_LEASE_TTL_S, reject_on_conflict=True)
         if lease["rejected"]:
@@ -291,6 +292,7 @@ async def create_response(request: Request):
                 f"session {session_id!r} already has a task in flight",
                 detail={"retry_after_ms": 2000},
             )
+        lease_fence = lease["fence"]
 
     result = error_response(
         "lumen_not_implemented",
@@ -303,6 +305,12 @@ async def create_response(request: Request):
         # that can never settle — the runner ticket replaces this release with
         # idem_settle(idem_key, resp_id, output) once it actually produces output.
         await CONTROL.idem_release(idem_key, resp_id)
+    if lease_fence:
+        # Nothing is in flight once the response is produced, so the turn's lease ends
+        # here. Hold it and the NEXT turn of the same session 409s session_busy until
+        # SESSION_LEASE_TTL_S burns down — i.e. ordinary multi-turn conversation breaks
+        # (wq#1851). The runner ticket moves this release to the end of real execution.
+        await CONTROL.lease_release(session_id, resp_id, lease_fence)
     return result
 
 

@@ -91,6 +91,18 @@ def test_blob_path_escape_refused(tmp_path):
     assert run(b.get("kb1", "../../etc/passwd")) is None
 
 
+def test_blob_sibling_kb_with_shared_name_prefix_is_not_reachable(tmp_path):
+    """wq#1851: kb "kb1" must not reach kb "kb1x" — a string-prefix guard passes the
+    traversal because "…/kb1x/secret" starts with "…/kb1"."""
+    b = FileBlobStore(str(tmp_path / "blobs"))
+    run(b.put("kb1x", "secret.txt", b"other-tenant"))
+    assert run(b.get("kb1", "../kb1x/secret.txt")) is None
+    assert run(b.put("kb1", "../kb1x/secret.txt", b"clobbered")) is False
+    assert run(b.delete("kb1", "../kb1x/secret.txt")) is False
+    assert run(b.get("kb1x", "secret.txt")) == b"other-tenant"
+    assert run(b.list("kb1", "../kb1x/"))["items"] == []
+
+
 def test_blob_list_prefix_and_ordering(tmp_path):
     b = FileBlobStore(str(tmp_path / "blobs"))
     for fid in ("a/2", "a/1", "a/3", "b/1"):
