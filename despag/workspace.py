@@ -289,12 +289,16 @@ def resume_lost(sid: str, prior_response_id: str) -> bool:
 # --exclude=NAME with no slash in it matches EVERY path component, so the bare
 # `.claude` form also stripped harness_home()/.claude/projects/*.jsonl — the CLI
 # transcripts that travel inside the tarball so `--resume` survives a rehydrate, and
-# the exact files resume_lost() exists to detect the loss of (wq#1861). The secret
-# under a HOME-redirect .claude is `.credentials.json`, which stays excluded at any
-# depth by its own entry below.
+# the exact files resume_lost() exists to detect the loss of (wq#1861). The secrets
+# under a HOME-redirect .claude are `.credentials.json` and the CLI's `config.json`
+# (the same two files a root `.claude` holds): both stay excluded at any depth by
+# their own entries below — a pattern WITH a slash is matched against the whole
+# member name, so `.claude/config.json` strips only that one file and leaves
+# `.claude/projects/*.jsonl` alone.
 CHECKPOINT_EXCLUDE = [
     f"--exclude={p}" for p in
-    (".git", "./.claude", ".credentials.json", ".env", "tmp", "node_modules", ".venv", "__pycache__")
+    (".git", "./.claude", ".claude/config.json", ".credentials.json",
+     ".env", "tmp", "node_modules", ".venv", "__pycache__")
 ]
 
 

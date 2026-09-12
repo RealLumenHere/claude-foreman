@@ -116,8 +116,9 @@ def test_checkpoint_excludes_credentials(tmp_path, monkeypatch):
 def test_checkpoint_keeps_harness_home_transcripts(tmp_path, monkeypatch):
     """wq#1861: CHECKPOINT_EXCLUDE's `.claude` entry had no slash, so GNU tar matched
     it at every path depth and stripped harness_home()/.claude/projects/*.jsonl from
-    every checkpoint — the transcripts resume_lost() exists to protect. The secret in
-    that directory (.credentials.json) must still not travel."""
+    every checkpoint — the transcripts resume_lost() exists to protect. The secrets in
+    that directory (.credentials.json, config.json — the same two a root `.claude`
+    holds) must still not travel."""
     _env(monkeypatch, tmp_path)
     control = _control(tmp_path)
     blob = _blob(tmp_path)
@@ -127,6 +128,7 @@ def test_checkpoint_keeps_harness_home_transcripts(tmp_path, monkeypatch):
     projects.mkdir(parents=True, exist_ok=True)
     (projects / "session.jsonl").write_text(json.dumps({"prior_response_id": "resp-abc"}))
     (home / ".claude" / ".credentials.json").write_text("harness-home-token")
+    (home / ".claude" / "config.json").write_text("harness-home-oauth")
     assert ws.resume_lost("sid-home", "resp-abc") is False
 
     run(ws.checkpoint("sid-home", blob))
@@ -136,6 +138,7 @@ def test_checkpoint_keeps_harness_home_transcripts(tmp_path, monkeypatch):
     names = subprocess.run(["tar", "tzf", str(tar_path)], capture_output=True, text=True).stdout
     assert "./.harness/home/.claude/projects/session.jsonl" in names
     assert ".credentials.json" not in names
+    assert "config.json" not in names
 
     # round trip: lose the transcript on disk, rehydrate, resume target is found again
     shutil.rmtree(home / ".claude")
