@@ -63,11 +63,15 @@ class Turn:
 
     def __init__(self, turn_id: str, cmd: list[str], cwd: str, env: dict,
                  *, timeout_seconds: float | None = None, frame_gap_s: float | None = None,
-                 on_frame=None):
+                 on_frame=None, model: str | None = None):
         self.id = turn_id
         self.cmd = cmd
         self.cwd = cwd
         self.env = env
+        # wq#1812: which model this turn is running, so the admission gate's
+        # concurrency ceiling can count in-flight claude-max turns straight off this
+        # registry instead of a separately maintained counter that could drift.
+        self.model = model
         # wq#1809: the live-SSE bridge. Called synchronously on THIS turn's own thread
         # right after a canonical frame is appended to `self.frames` — a caller that
         # wants the frame the instant it exists (not on the next poll) subscribes here
@@ -270,9 +274,9 @@ class TurnRegistry:
 
     def start(self, turn_id: str, cmd: list[str], cwd: str, env: dict,
               *, timeout_seconds: float | None = None, frame_gap_s: float | None = None,
-              on_frame=None) -> Turn:
+              on_frame=None, model: str | None = None) -> Turn:
         turn = Turn(turn_id, cmd, cwd, env, timeout_seconds=timeout_seconds, frame_gap_s=frame_gap_s,
-                    on_frame=on_frame)
+                    on_frame=on_frame, model=model)
         with self._lock:
             self._turns[turn_id] = turn
         threading.Thread(target=turn.run, daemon=True, name=f"despag-turn-{turn_id}").start()
@@ -281,6 +285,14 @@ class TurnRegistry:
     def get(self, turn_id: str) -> Turn | None:
         with self._lock:
             return self._turns.get(turn_id)
+
+    def count_in_flight(self, predicate) -> int:
+        """wq#1812: the admission gate's own count of turns not yet done matching
+        `predicate(turn)` — e.g. claude-max (non-local) turns — read straight off
+        this table rather than a separately tracked counter that could drift from
+        what's actually running."""
+        with self._lock:
+            return sum(1 for t in self._turns.values() if not t.done.is_set() and predicate(t))
 
     def evict_finished(self, now: float | None = None) -> int:
         """Drop finished records older than MAX_TURN_SECONDS + 30min past their start

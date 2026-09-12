@@ -144,6 +144,14 @@ def runner_client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "compute_available", lambda h: h.get("enabled", True))
     monkeypatch.setattr(app_module.claude_max, "build_turn",
                         lambda **kw: ([sys.executable, fake, *mode], dict(os.environ)))
+    # wq#1812: the admission gate now sits in front of every create_response call.
+    # These tests exercise session-lease/idempotency plumbing with a fake `claude -p`
+    # stand-in, not the real Max pool — stub the gate open so they stay hermetic
+    # against whatever this box's live governor state.json happens to say (see
+    # test_admission.py for the gate's own coverage, which mocks limits directly).
+    monkeypatch.setattr(app_module.admission, "check_admission",
+                        lambda model, **kw: {"allow": True, "reasons": ["test stub"],
+                                              "retry_after_s": None, "resets_at": None})
     return app_module, mode
 
 

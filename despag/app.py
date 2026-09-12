@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -38,10 +39,13 @@ import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from despag import admission
 from despag.backends import claude_max
 from despag.backing.control_sqlite import ControlStore
 from despag.runner.turn import TurnRegistry
 from despag.uhp import models
+
+logger = logging.getLogger("despag.app")
 from despag.uhp.errors import error_response
 from despag.uhp.translate import RespTranslator
 
@@ -163,6 +167,7 @@ def compute_available(harness: dict) -> bool:
 SESSIONS_ROOT = Path(os.environ.get("DESPAG_SESSIONS_ROOT", "/tmp/despag-sessions"))
 REGISTRY = TurnRegistry()
 RESPONSES: dict[str, dict] = {}
+admission.log_startup_reserves()
 SESSIONS: dict[str, dict] = {}
 
 # wq#1857: RESPONSES/SESSIONS are mutated by request handlers AND by the background
@@ -377,7 +382,13 @@ async def discovery():
         capabilities=capabilities,
         implementation=models.DiscoveryImplementation(name="despag", version="0.1.0"),
     )
-    return JSONResponse(doc.model_dump())
+    body = doc.model_dump()
+    # wq#1812: `lumen.budget` — a Lumen vendor extension field (errors.md §1's
+    # vendor-namespace convention, applied here to a non-error field: nested under
+    # `lumen` so a future protocol field can never collide with it), so an operator
+    # can see WHY claude-max admission refused without reading state.json by hand.
+    body["lumen"] = {"budget": admission.budget_snapshot()}
+    return JSONResponse(body)
 
 
 @app.get("/v1/harnesses")
@@ -484,7 +495,8 @@ async def _sse_gen(queue: "asyncio.Queue"):
 
 async def _stream_response(response_id: str, cmd: list[str], cwd: str, env: dict,
                             timeout_seconds: float | None, session_id: str, lease_fence: int,
-                            idem_key: str | None) -> StreamingResponse:
+                            idem_key: str | None, model: str | None = None,
+                            limit_observer=None) -> StreamingResponse:
     translator = _build_translator(response_id)
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -492,6 +504,13 @@ async def _stream_response(response_id: str, cmd: list[str], cwd: str, env: dict
     def _on_frame(frame: dict) -> None:
         # Runs on the Turn's own thread; hop to the event loop before touching the
         # translator or the queue, both of which are only ever touched from the loop.
+        # wq#1812: the LIMIT-wall observer runs synchronously right here too, not
+        # hopped to the loop — it only ever touches admission's own lock, and doing
+        # it inline means a second in-flight session's next admission check sees the
+        # pause the instant this frame lands, not after an event-loop round trip.
+        if limit_observer is not None:
+            limit_observer(frame)
+
         def _feed() -> None:
             for ev in translator.feed(frame):
                 queue.put_nowait(ev)
@@ -500,7 +519,7 @@ async def _stream_response(response_id: str, cmd: list[str], cwd: str, env: dict
     for ev in translator.start():      # response.created (seq 0) is the first event
         queue.put_nowait(ev)
     turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env,
-                          timeout_seconds=timeout_seconds, on_frame=_on_frame)
+                          timeout_seconds=timeout_seconds, on_frame=_on_frame, model=model)
 
     async def _finish() -> None:
         await asyncio.to_thread(turn.done.wait)
@@ -555,6 +574,37 @@ async def create_response(request: Request):
     if not compute_available(harness):
         return error_response("model_unavailable", f"harness {harness_id!r} has no available model", status=422)
 
+    model = req.model or harness["defaultModel"]
+
+    # wq#1812 P1-7: account-global Max admission gate. Checked before ANY other
+    # state is touched (idempotency key, session lease) so a refusal needs no
+    # cleanup — this is despag's cost-protection wall, not a protocol nicety: it
+    # already drained Frank's own interactive session once (ticket wq#1812).
+    # litellm-mechanical is exempt (admission.is_local_model), matching the
+    # governor's own local-rung exemption.
+    if not admission.is_local_model(model):
+        running = REGISTRY.count_in_flight(lambda t: not admission.is_local_model(t.model))
+        decision = admission.check_admission(model, running_claude_max=running)
+        logger.warning(
+            "despag admission: model=%s allow=%s running=%s reasons=%s",
+            model, decision["allow"], running, decision["reasons"],
+        )
+        if not decision["allow"]:
+            if decision["retry_after_s"] is not None:
+                resp = error_response(
+                    "lumen_max_window_exhausted",
+                    "; ".join(decision["reasons"]) or "claude-max backend paused account-wide",
+                    status=429,
+                    detail={"retry_after_s": decision["retry_after_s"], "resets_at": decision["resets_at"]},
+                )
+                resp.headers["Retry-After"] = str(max(1, int(decision["retry_after_s"])))
+            else:
+                resp = error_response(
+                    "quota_exhausted",
+                    "; ".join(decision["reasons"]) or "claude-max admission refused",
+                )
+            return resp
+
     response_id = _new_id("resp")
 
     # wq#1807 admission gate 1 of 2: Idempotency-Key. A settled key replays its
@@ -603,7 +653,6 @@ async def create_response(request: Request):
     lease_fence = lease["fence"]
 
     prompt = req.input if isinstance(req.input, str) else _flatten_input(req.input)
-    model = req.model or harness["defaultModel"]
     cmd, env = claude_max.build_turn(
         worker_id="despag", model=model, effort=None, worktree=cwd, ticket_id=sid,
         prompt=prompt, resume_session=resume_session,
@@ -614,12 +663,15 @@ async def create_response(request: Request):
         "ignored_fields": [f for f in ("tools", "include") if f in body],
     }
     settle_key = idem_key if reserved_by_us else None
+    limit_observer = None if admission.is_local_model(model) else admission.LimitObserver()
 
     if req.stream:
         return await _stream_response(response_id, cmd, cwd, env, req.timeout_seconds,
-                                       sid, lease_fence, settle_key)
+                                       sid, lease_fence, settle_key, model=model,
+                                       limit_observer=limit_observer)
 
-    turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env, timeout_seconds=req.timeout_seconds)
+    turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env, timeout_seconds=req.timeout_seconds,
+                          on_frame=limit_observer, model=model)
     if req.background:
         # The turn outlives the request, so the lease must too — releasing it here
         # would let a second turn of the same session start alongside this one.
