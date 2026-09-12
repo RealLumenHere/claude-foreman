@@ -285,9 +285,16 @@ def resume_lost(sid: str, prior_response_id: str) -> bool:
 
 
 # ── checkpoint / rehydrate ──────────────────────────────────────────────────────
+# `.claude` is anchored to the workspace ROOT (`./.claude`) on purpose. GNU tar's
+# --exclude=NAME with no slash in it matches EVERY path component, so the bare
+# `.claude` form also stripped harness_home()/.claude/projects/*.jsonl — the CLI
+# transcripts that travel inside the tarball so `--resume` survives a rehydrate, and
+# the exact files resume_lost() exists to detect the loss of (wq#1861). The secret
+# under a HOME-redirect .claude is `.credentials.json`, which stays excluded at any
+# depth by its own entry below.
 CHECKPOINT_EXCLUDE = [
     f"--exclude={p}" for p in
-    (".git", ".claude", ".credentials.json", ".env", "tmp", "node_modules", ".venv", "__pycache__")
+    (".git", "./.claude", ".credentials.json", ".env", "tmp", "node_modules", ".venv", "__pycache__")
 ]
 
 
@@ -308,7 +315,8 @@ def checkpoint_marker(sid: str) -> str | None:
 
 async def checkpoint(sid: str, blob: BlobStore) -> dict:
     """git add -A && commit --allow-empty, tar (credentials/scratch/.git excluded at
-    any depth) spooled to disk not RAM, sha256 over the spooled file, stored via
+    any depth, the root `.claude` excluded at the root only — see CHECKPOINT_EXCLUDE)
+    spooled to disk not RAM, sha256 over the spooled file, stored via
     BlobStore as sessions/<sid>/workspace.tgz; the marker records the sha so a
     rehydrate probe can short-circuit without re-fetching."""
     sid = sanitize_sid(sid)
