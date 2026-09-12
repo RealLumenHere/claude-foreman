@@ -177,7 +177,10 @@ class FileBlobStore:
     def _p(self, kb: str, file_id: str) -> Path:
         p = (self._root / kb / file_id).resolve()
         base = (self._root / kb).resolve()
-        if not str(p).startswith(str(base)):
+        # Path.is_relative_to, not a string prefix: "…/kb1x/secret" starts with the
+        # STRING "…/kb1", so a prefix test lets kb1 read every sibling kb whose name
+        # merely extends its own (wq#1851).
+        if not p.is_relative_to(base):
             raise ValueError(f"blob id escapes store: {file_id!r}")
         return p
 
@@ -211,7 +214,7 @@ class FileBlobStore:
         base = (self._root / kb).resolve()
         dir_part, _, _ = prefix.rpartition("/")
         top = (base / dir_part).resolve() if dir_part else base
-        if not str(top).startswith(str(base)) or not top.is_dir():
+        if not top.is_relative_to(base) or not top.is_dir():
             return {"items": [], "cursor": None}
         root_len = len(str(base)) + 1
         keys: list[str] = []

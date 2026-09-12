@@ -76,8 +76,12 @@ class Turn:
         self.on_frame = on_frame
         max_turn_cap = _envint("DESPAG_MAX_TURN_SECONDS", DESPAG_MAX_TURN_SECONDS_DEFAULT)
         # C.2: cap = min(caller's timeout_seconds, the hard ceiling) — a caller can ask
-        # for less than the ceiling, never more.
-        self.wall_clock_s = min(timeout_seconds, max_turn_cap) if timeout_seconds else max_turn_cap
+        # for less than the ceiling, never more. wq#1857: test `is None`, not falsiness
+        # — `timeout_seconds=0` is the SMALLEST cap a caller can ask for, and a falsy
+        # test silently handed it the 6-hour ceiling instead. Clamp negatives to 0 so
+        # the Timer below still fires immediately rather than raising.
+        self.wall_clock_s = (max_turn_cap if timeout_seconds is None
+                              else max(0.0, min(timeout_seconds, max_turn_cap)))
         self.frame_gap_s = (frame_gap_s if frame_gap_s is not None
                              else _envint("DESPAG_FRAME_GAP_SECONDS", DESPAG_FRAME_GAP_SECONDS_DEFAULT))
 

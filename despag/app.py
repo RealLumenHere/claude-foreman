@@ -1,11 +1,22 @@
-"""wq#1805/wq#1806/wq#1807/wq#1809: despag package — UHP discovery/harnesses/models
-(P1-1), the `POST /v1/responses` task-execution surface (P1-2), the idempotency+lease
-control plane around it (P1-4), and the canonical-frame -> UHP `response.*` SSE
-translator (P1-3, PHASE0_WIRING_SPEC.md RECOMMENDATION step 3). `stream:false`
-(blocking and `background:true`+polling) and `stream:true` (SSE) both build their
-`output`/`usage` through the same `despag.uhp.translate.RespTranslator` replay of a
-turn's canonical frames, so the two paths agree on the result shape by construction
-(streaming.md §6, S-08) rather than by keeping two assemblies in sync.
+"""despag — UHP discovery/harnesses/models (wq#1805 P1-1) plus the `POST
+/v1/responses` task-execution surface (wq#1806 P1-2, PHASE0_WIRING_SPEC.md
+RECOMMENDATION step 2). Execution is wired for `stream:false` only (blocking and
+`background:true`+polling); `stream:true` still answers 501 lumen_not_implemented —
+SSE is the next ticket (RECOMMENDATION step 3).
+
+wq#1857 reconciles the two: wq#1806's runner branched before wq#1807 (P1-4) landed
+the control-plane invariants, so its create_response had no path to them. Every
+started turn now passes BOTH admission gates before REGISTRY.start, and gives back
+exactly what they took when the turn finishes:
+  * an `Idempotency-Key` reserves the response id (_idem_admit) — a retry of a
+    finished key replays the winner's response instead of spawning a second Turn,
+    and a retry while the winner still runs is 409 lumen_still_running;
+  * the resolved session (an hsess id, not a caller-supplied string) is admitted
+    through a per-session lease that fails closed with 409 session_busy, so one
+    session never has two `claude -p` children in flight.
+Unlike the P1-1 stub, the reservation is now SETTLED with the real response (there
+is output to replay) and the lease is released only when the turn is done — for a
+background turn that is in _settle_turn, not at request return.
 """
 from __future__ import annotations
 
@@ -21,14 +32,14 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 from despag.backends import claude_max
 from despag.backing.control_sqlite import ControlStore
+from despag.runner import canonical
 from despag.runner.turn import TurnRegistry
 from despag.uhp import models
 from despag.uhp.errors import error_response
-from despag.uhp.translate import RespTranslator
 
 UHP_VERSION = "2026-08-11"
 SUPPORTED_VERSIONS = [UHP_VERSION]
@@ -126,7 +137,7 @@ def compute_available(harness: dict) -> bool:
     return token_path.exists() and os.access(token_path, os.R_OK) and _claude_logged_in()
 
 
-# --- P1-2/P1-3 task execution (PHASE0_WIRING_SPEC.md RECOMMENDATION steps 2-3) ------
+# --- P1-2 task execution (PHASE0_WIRING_SPEC.md RECOMMENDATION step 2) --------------
 # One process serves every concurrent turn: REGISTRY is the shared table
 # despag.runner.turn.Turn instances (each its own thread + `claude -p` child) are
 # started into and polled from. RESPONSES/SESSIONS are UHP-shaped bookkeeping on top
@@ -136,6 +147,15 @@ SESSIONS_ROOT = Path(os.environ.get("DESPAG_SESSIONS_ROOT", "/tmp/despag-session
 REGISTRY = TurnRegistry()
 RESPONSES: dict[str, dict] = {}
 SESSIONS: dict[str, dict] = {}
+
+# wq#1857: RESPONSES/SESSIONS are mutated by request handlers AND by the background
+# _settle_turn task, which interleave at every `await`. Guard the read-modify-write
+# pairs (resolve-or-create a session; stash the CLI's conversation id) so two
+# requests can't both mkdir the same workspace or clobber each other's entry. This is
+# bookkeeping-level mutual exclusion only — the durable "one turn per session" fence
+# is CONTROL.lease_admit, which survives a restart and a second process; this lock
+# does not.
+_BOOKKEEPING_LOCK = asyncio.Lock()
 
 # turn.status -> UHP ResponseStatus (lifecycle.md: only these five exist). "timeout"
 # (wall-clock cap, a budget stop) maps to incomplete; "hang" (frame-gap watchdog, no
@@ -154,6 +174,10 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:24]}"
 
 
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
 def _flatten_input(items: list) -> str:
     parts = []
     for it in items:
@@ -161,102 +185,117 @@ def _flatten_input(items: list) -> str:
     return "\n".join(parts)
 
 
-def _resolve_session(previous_response_id: str | None) -> tuple[str | None, str | None, str | None, str | None]:
+async def _resolve_session(req) -> tuple[str | None, str | None, str | None, str | None]:
     """Returns `(session_id, cwd, resume_session, error_code)`. A fresh task opens a
     new session (workspace directory) implicitly; a continuation reuses the prior
     response's session and, once the CLI has told us its own conversation id, resumes
-    it via `--resume` (session_id != errors.md's response_not_found)."""
-    if not previous_response_id:
-        sid = _new_id("hsess")
-        cwd = str(SESSIONS_ROOT / sid)
-        Path(cwd).mkdir(parents=True, exist_ok=True)
-        SESSIONS[sid] = {"cwd": cwd, "cli_session_id": None}
-        return sid, cwd, None, None
-    prev = RESPONSES.get(previous_response_id)
-    if prev is None:
-        return None, None, None, "response_not_found"
-    sid = prev["session_id"]
-    session = SESSIONS[sid]
-    return sid, session["cwd"], session.get("cli_session_id"), None
+    it via `--resume` (session_id != errors.md's response_not_found).
+
+    wq#1857: B.4 says a session is named by its most recent response, but wq#1807 also
+    honoured an explicit `metadata.session_id`; now that sessions are real hsess
+    records that id must NAME ONE — an unknown one is session_not_found, never a new
+    workspace, or a client could mint session ids the lease can't reason about."""
+    explicit = (req.metadata.model_extra or {}).get("session_id") if req.metadata else None
+    async with _BOOKKEEPING_LOCK:
+        if explicit:
+            session = SESSIONS.get(explicit)
+            if session is None:
+                return None, None, None, "session_not_found"
+            return explicit, session["cwd"], session.get("cli_session_id"), None
+        if not req.previous_response_id:
+            sid = _new_id("hsess")
+            cwd = str(SESSIONS_ROOT / sid)
+            Path(cwd).mkdir(parents=True, exist_ok=True)
+            SESSIONS[sid] = {"cwd": cwd, "cli_session_id": None}
+            return sid, cwd, None, None
+        prev = RESPONSES.get(req.previous_response_id)
+        if prev is None:
+            return None, None, None, "response_not_found"
+        sid = prev["session_id"]
+        session = SESSIONS[sid]
+        return sid, session["cwd"], session.get("cli_session_id"), None
 
 
-def _remember_cli_session(session_id: str, turn) -> None:
+async def _remember_cli_session(session_id: str, turn) -> None:
     """The CLI mints its own conversation id on `system/init`; stash it the first time
     a turn's frames carry one so the NEXT turn in this session can `--resume` it."""
-    session = SESSIONS.get(session_id)
-    if session is None or session.get("cli_session_id"):
-        return
-    for frame in turn.snapshot_frames():
-        if frame.get("type") == "system" and frame.get("subtype") == "init" and frame.get("session_id"):
-            session["cli_session_id"] = frame["session_id"]
+    async with _BOOKKEEPING_LOCK:
+        session = SESSIONS.get(session_id)
+        if session is None or session.get("cli_session_id"):
             return
+        for frame in turn.snapshot_frames():
+            if frame.get("type") == "system" and frame.get("subtype") == "init" and frame.get("session_id"):
+                session["cli_session_id"] = frame["session_id"]
+                return
 
 
-# --- P1-3: canonical frames -> UHP response.* (despag/uhp/translate.py) ------------
-def _build_translator(response_id: str) -> RespTranslator:
-    rec = RESPONSES[response_id]
-    return RespTranslator(
-        response_id, rec["model"], rec.get("previous_response_id"), True, rec["created_at"],
-        session_id=rec["session_id"], ignored_fields=rec.get("ignored_fields") or None,
-    )
+def _extract_text(frame: dict) -> str:
+    content = (frame.get("message") or {}).get("content") or []
+    return "".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text")
 
 
-def _last_result_frame(frames: list[dict]) -> dict | None:
-    return next((f for f in reversed(frames) if f.get("type") == "result"), None)
+def _build_output(turn) -> tuple[list[dict], dict | None, dict | None]:
+    """Turn -> `(output, usage, result_frame)`. Not the general canonical-frame ->
+    UHP-event `_RespTranslator` (PHASE0_WIRING_SPEC.md C.1/RECOMMENDATION step 3, out
+    of scope here — that's for SSE); this only needs the final blocking/polled shape."""
+    parts, result_frame = [], None
+    for frame in turn.snapshot_frames():
+        if frame.get("type") == "assistant":
+            text = _extract_text(frame)
+            if text:
+                parts.append(text)
+        elif frame.get("type") == "result":
+            result_frame = frame
+    text = "".join(parts) or (result_frame or {}).get("result") or ""
+    output = []
+    if text:
+        output = [{"id": _new_id("msg"), "type": "message", "status": "completed", "role": "assistant",
+                   "content": [{"type": "output_text", "text": text}]}]
+    usage = canonical._norm_token_usage((result_frame or {}).get("usage")) or None
+    return output, usage, result_frame
 
 
-def _turn_failure_message(turn) -> str:
-    if turn.status == "hang":
-        return f"no frame for {turn.frame_gap_s}s (frame-gap watchdog)"
-    result_frame = _last_result_frame(turn.snapshot_frames())
+def _build_error(turn, result_frame: dict | None) -> dict | None:
+    status = turn.status
+    if status in (None, "completed"):
+        return None
+    if status == "cancelled":
+        return {"type": "invalid_request_error", "code": "cancelled", "message": "cancelled by client"}
+    if status == "timeout":
+        return {"type": "harness_error", "code": "timeout",
+                "message": f"wall-clock cap of {turn.wall_clock_s}s exceeded"}
+    if status == "hang":
+        return {"type": "harness_error", "code": "timeout",
+                "message": f"no frame for {turn.frame_gap_s}s (frame-gap watchdog)"}
+    if status == "incomplete":
+        return None   # a budget stop, not a failure — incomplete_details carries the reason
     message = (result_frame or {}).get("result") or turn.error or "turn failed"
-    return str(message)[:2000]
-
-
-def _finish_events(turn, translator: RespTranslator) -> list[dict]:
-    """The terminal leg every execution path shares (blocking, background-polled, and
-    the SSE subscriber): turn `Turn.status` into the UHP outcome and close the
-    translator exactly once, so every path reads the final response object off the
-    identical assembly (streaming.md §6, S-08). Idempotent per response_id: a second
-    call (a GET racing the SSE path's own terminal) replays the first call's cached
-    `response` rather than closing a second translator with its own fresh item ids —
-    `RespTranslator` mints those from `uuid.uuid4()`, so two independent closes of the
-    same frames would disagree about the very ids tasks.md §4 requires to "read back"."""
-    rec = RESPONSES[turn.id]
-    cached = rec.get("_final")
-    if cached is not None:
-        ev_type = {"completed": "response.completed", "incomplete": "response.incomplete",
-                   "failed": "response.failed"}[cached["status"] if cached["status"] != "cancelled" else "failed"]
-        return [{"type": ev_type, "sequence_number": translator.seq, "response": cached}]
-    status = _STATUS_MAP.get(turn.status, "failed")
-    if status == "failed":
-        evs = translator.fail(_turn_failure_message(turn))
-    elif status == "incomplete":
-        reason = "max_turns" if turn.status == "incomplete" else "timeout"
-        evs = translator.complete(status, incomplete_reason=reason)
-    elif status == "cancelled":
-        evs = translator.complete(status, error={"type": "invalid_request_error", "code": "cancelled",
-                                                    "message": "cancelled by client"})
-    else:
-        evs = translator.complete(status)
-    rec["_final"] = evs[-1]["response"]
-    return evs
+    return {"type": "harness_error", "code": "harness_error", "message": str(message)[:2000]}
 
 
 def _response_view(response_id: str) -> dict:
-    """A terminal response is re-read, not rebuilt — see `_finish_events` for why."""
-    cached = RESPONSES[response_id].get("_final")
-    if cached is not None:
-        return cached
+    rec = RESPONSES[response_id]
     turn = REGISTRY.get(response_id)
-    translator = _build_translator(response_id)
-    if turn is None:
-        return translator._response_obj("in_progress")
-    for frame in turn.snapshot_frames():
-        translator.feed(frame)
-    if not turn.done.is_set():
-        return translator._response_obj("in_progress")
-    return _finish_events(turn, translator)[-1]["response"]
+    if turn is None or turn.status is None:
+        status = "in_progress"
+        output, usage, error, incomplete_details = [], None, None, None
+    else:
+        output, usage, result_frame = _build_output(turn)
+        status = _STATUS_MAP.get(turn.status, "failed")
+        error = _build_error(turn, result_frame)
+        incomplete_details = None
+        if status == "incomplete":
+            reason = "max_turns" if turn.status == "incomplete" else "timeout"
+            incomplete_details = {"reason": reason}
+    metadata = {"session_id": rec["session_id"], "harness_id": rec["harness_id"]}
+    if rec.get("ignored_fields"):
+        metadata["ignored_fields"] = rec["ignored_fields"]
+    return {
+        "id": response_id, "object": "response", "created_at": rec["created_at"], "status": status,
+        "error": error, "incomplete_details": incomplete_details,
+        "previous_response_id": rec.get("previous_response_id"), "model": rec["model"],
+        "output": output, "store": True, "usage": usage, "metadata": metadata,
+    }
 
 
 app = FastAPI()
@@ -328,10 +367,22 @@ async def get_harness(harness_id: str, request: Request):
     return harness
 
 
-def _model_entry(harness: dict) -> dict:
-    model_id = harness["defaultModel"]
+def _harness_model_ids(harness: dict) -> list[str]:
+    """wq#1811: a harness's own model list (despag/tiers.py TIER_MODELS mirrors this
+    per-tier). Falls back to [defaultModel] for a harness that predates the `models`
+    extension field (e.g. the disabled claude-local-rung harness)."""
+    return harness.get("models") or [harness["defaultModel"]]
+
+
+def _model_entry(harness: dict, model_id: str) -> dict:
     backend = "litellm" if _is_local_model(model_id) else "claude"
-    entry = models.Model(id=model_id, label=model_id, backend=backend, available=compute_available(harness), default=True)
+    entry = models.Model(
+        id=model_id,
+        label=model_id,
+        backend=backend,
+        available=compute_available(harness),
+        default=(model_id == harness["defaultModel"]),
+    )
     return entry.model_dump(exclude_none=True)
 
 
@@ -341,10 +392,10 @@ async def list_models(request: Request):
         return err
     backends: dict[str, dict] = {}
     for h in HARNESSES:
-        model_id = h["defaultModel"]
-        backend = "litellm" if _is_local_model(model_id) else "claude"
-        bucket = backends.setdefault(backend, {"default": model_id, "models": []})
-        bucket["models"].append(_model_entry(h))
+        for model_id in _harness_model_ids(h):
+            backend = "litellm" if _is_local_model(model_id) else "claude"
+            bucket = backends.setdefault(backend, {"default": h["defaultModel"], "models": []})
+            bucket["models"].append(_model_entry(h, model_id))
     catalog = models.ModelCatalog(backends={k: models.ModelCatalogBackendsItem(**v) for k, v in backends.items()})
     return catalog.model_dump()
 
@@ -356,9 +407,10 @@ async def harness_models(harness_id: str, request: Request):
     harness = HARNESS_BY_ID.get(harness_id)
     if harness is None:
         return error_response("harness_not_found", f"no harness with id {harness_id!r}", param="harness_id")
-    model_id = harness["defaultModel"]
-    backend = "litellm" if _is_local_model(model_id) else "claude"
-    result = models.HarnessModels(harness_id=harness_id, backend=backend, default=model_id, models=[_model_entry(harness)])
+    default_model = harness["defaultModel"]
+    backend = "litellm" if _is_local_model(default_model) else "claude"
+    entries = [_model_entry(harness, model_id) for model_id in _harness_model_ids(harness)]
+    result = models.HarnessModels(harness_id=harness_id, backend=backend, default=default_model, models=entries)
     return result.model_dump(exclude_none=True)
 
 
@@ -383,51 +435,24 @@ async def _idem_admit(idem_key: str, resp_id: str) -> tuple[str, dict | None]:
     return "busy", None
 
 
-async def _sse_gen(queue: "asyncio.Queue"):
-    """No polling: a subscriber blocks on the queue a frame is pushed onto the moment
-    the turn's reader thread appends it (`despag.runner.turn.Turn.on_frame`, bridged
-    across threads with `call_soon_threadsafe`); the 20s wait is only for keep-alive,
-    never a poll interval (streaming.md §1 "MUST NOT buffer")."""
-    while True:
-        try:
-            ev = await asyncio.wait_for(queue.get(), timeout=20)
-        except asyncio.TimeoutError:
-            yield b": keep-alive\n\n"
-            continue
-        if ev is None:
-            break
-        yield f"data: {json.dumps(ev)}\n\n".encode()
+async def _settle_turn(response_id: str, turn, session_id: str, lease_fence: int,
+                        idem_key: str | None) -> dict:
+    """Wait for a started turn, then give back everything admission took. Runs inline
+    for a blocking request and as a background task for `background:true` — either way
+    it is the ONLY place a lease is released or a reservation settled after
+    REGISTRY.start, so the two paths cannot drift.
 
-
-async def _stream_response(response_id: str, cmd: list[str], cwd: str, env: dict,
-                            timeout_seconds: float | None, *, on_done) -> StreamingResponse:
-    translator = _build_translator(response_id)
-    queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-
-    def _on_frame(frame: dict) -> None:
-        # Runs on the Turn's own thread; hop to the event loop before touching the
-        # translator or the queue, both of which are only ever touched from the loop.
-        def _feed() -> None:
-            for ev in translator.feed(frame):
-                queue.put_nowait(ev)
-        loop.call_soon_threadsafe(_feed)
-
-    for ev in translator.start():      # response.created (seq 0) is the first event
-        queue.put_nowait(ev)
-    turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env,
-                          timeout_seconds=timeout_seconds, on_frame=_on_frame)
-
-    async def _finish() -> None:
-        await asyncio.to_thread(turn.done.wait)
-        for ev in _finish_events(turn, translator):
-            queue.put_nowait(ev)
-        queue.put_nowait(None)
-        await on_done(turn)
-
-    asyncio.create_task(_finish())
-    return StreamingResponse(_sse_gen(queue), media_type="text/event-stream",
-                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    The reservation is settled (not released) with the finished response view: unlike
+    the P1-1 stub there IS output, so a retry of the same Idempotency-Key must replay
+    it rather than spawn a second Turn."""
+    await asyncio.to_thread(turn.done.wait)
+    await _remember_cli_session(session_id, turn)
+    view = _response_view(response_id)
+    if idem_key:
+        await CONTROL.idem_settle(idem_key, response_id, view, ttl_s=IDEMPOTENCY_TTL_S)
+    if lease_fence:
+        await CONTROL.lease_release(session_id, response_id, lease_fence)
+    return view
 
 
 @app.post("/v1/responses")
@@ -444,25 +469,34 @@ async def create_response(request: Request):
         req = models.CreateResponseRequest(**body)
     except Exception as e:  # noqa: BLE001 — a malformed request body is a 400, not a 500
         return error_response("invalid_input", str(e), status=400)
-
+    if req.stream:
+        # RECOMMENDATION step 2 wires blocking + background/polling only; step 3
+        # (SSE, gapless sequence_number, the general _RespTranslator) is the next
+        # ticket. Bail out before admission: a 501 must not burn an Idempotency-Key
+        # or a session lease on a turn that was never going to run.
+        return error_response(
+            "lumen_not_implemented",
+            "streaming responses (stream:true) are not implemented by this build of despag",
+            status=501,
+        )
     harness_id = (req.metadata.harness_id if req.metadata else None) or HARNESSES[0]["id"]
     harness = HARNESS_BY_ID.get(harness_id)
     if harness is None:
         return error_response("harness_not_found", f"no harness with id {harness_id!r}", param="metadata.harness_id")
     if not compute_available(harness):
         return error_response("model_unavailable", f"harness {harness_id!r} has no available model", status=422)
-    sid, cwd, resume_session, err_code = _resolve_session(req.previous_response_id)
-    if err_code is not None:
-        return error_response(err_code, f"no response with id {req.previous_response_id!r}",
-                               param="previous_response_id")
 
-    idem_key = request.headers.get("idempotency-key")
     response_id = _new_id("resp")
+
+    # wq#1807 admission gate 1 of 2: Idempotency-Key. A settled key replays its
+    # winner's response verbatim — the whole point is that a retry never spawns a
+    # second `claude -p` for work already done.
+    idem_key = request.headers.get("idempotency-key")
     reserved_by_us = False
     if idem_key:
         outcome, payload = await _idem_admit(idem_key, response_id)
         if outcome == "replay":
-            return payload
+            return JSONResponse(payload)
         if outcome == "busy":
             return error_response(
                 "lumen_still_running",
@@ -472,18 +506,32 @@ async def create_response(request: Request):
             )
         reserved_by_us = True
 
-    lease_fence = 0
-    if sid:
-        lease = await CONTROL.lease_admit(sid, response_id, ttl_s=SESSION_LEASE_TTL_S, reject_on_conflict=True)
-        if lease["rejected"]:
-            if reserved_by_us:
-                await CONTROL.idem_release(idem_key, response_id)
-            return error_response(
-                "session_busy",
-                f"session {sid!r} already has a task in flight",
-                detail={"retry_after_ms": 2000},
-            )
-        lease_fence = lease["fence"]
+    async def _abandon() -> None:
+        """Nothing was started, so the key must be free for the next retry."""
+        if reserved_by_us:
+            await CONTROL.idem_release(idem_key, response_id)
+
+    sid, cwd, resume_session, err_code = await _resolve_session(req)
+    if err_code is not None:
+        await _abandon()
+        param = "metadata.session_id" if err_code == "session_not_found" else "previous_response_id"
+        bad = req.previous_response_id if err_code == "response_not_found" else (req.metadata.model_extra or {}).get("session_id")
+        return error_response(err_code, f"no such {param.split('.')[-1]} {bad!r}", param=param)
+
+    # wq#1807 admission gate 2 of 2: one in-flight turn per session (lifecycle.md).
+    # The lease is taken on the RESOLVED hsess id — the thing that actually owns a
+    # workspace directory and a resumable CLI conversation — not on the raw
+    # previous_response_id the P1-1 stub used, which named a different key per turn
+    # and so never fenced a conversation at all.
+    lease = await CONTROL.lease_admit(sid, response_id, ttl_s=SESSION_LEASE_TTL_S, reject_on_conflict=True)
+    if lease["rejected"]:
+        await _abandon()
+        return error_response(
+            "session_busy",
+            f"session {sid!r} already has a task in flight",
+            detail={"retry_after_ms": 2000},
+        )
+    lease_fence = lease["fence"]
 
     prompt = req.input if isinstance(req.input, str) else _flatten_input(req.input)
     model = req.model or harness["defaultModel"]
@@ -492,33 +540,18 @@ async def create_response(request: Request):
         prompt=prompt, resume_session=resume_session,
     )
     RESPONSES[response_id] = {
-        "created_at": int(time.time()), "harness_id": harness_id, "session_id": sid,
+        "created_at": _now_ms(), "harness_id": harness_id, "session_id": sid,
         "previous_response_id": req.previous_response_id, "model": model,
         "ignored_fields": [f for f in ("tools", "include") if f in body],
     }
-
-    async def _settle(turn) -> None:
-        """The completion hook every execution path funnels through (blocking,
-        background+polled, and streaming's own `_finish`): release the session lease
-        and settle the idempotency reservation with the REAL output once the turn is
-        actually done, replacing P1-1's stub-era release-only behaviour now that a
-        retried key has a result worth replaying (despag/app.py module docstring, P1-1)."""
-        await asyncio.to_thread(turn.done.wait)
-        _remember_cli_session(sid, turn)
-        if lease_fence:
-            await CONTROL.lease_release(sid, response_id, lease_fence)
-        if reserved_by_us:
-            await CONTROL.idem_settle(idem_key, response_id, _response_view(response_id), ttl_s=IDEMPOTENCY_TTL_S)
-
-    if req.stream:
-        return await _stream_response(response_id, cmd, cwd, env, req.timeout_seconds, on_done=_settle)
-
     turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env, timeout_seconds=req.timeout_seconds)
+    settle_key = idem_key if reserved_by_us else None
     if req.background:
-        asyncio.create_task(_settle(turn))
+        # The turn outlives the request, so the lease must too — releasing it here
+        # would let a second turn of the same session start alongside this one.
+        asyncio.create_task(_settle_turn(response_id, turn, sid, lease_fence, settle_key))
         return JSONResponse(_response_view(response_id))
-    await _settle(turn)
-    return JSONResponse(_response_view(response_id))
+    return JSONResponse(await _settle_turn(response_id, turn, sid, lease_fence, settle_key))
 
 
 @app.get("/v1/responses/{response_id}")
@@ -529,7 +562,7 @@ async def get_response(response_id: str, request: Request):
         return error_response("response_not_found", f"no response with id {response_id!r}", param="response_id")
     turn = REGISTRY.get(response_id)
     if turn is not None and turn.done.is_set():
-        _remember_cli_session(RESPONSES[response_id]["session_id"], turn)
+        await _remember_cli_session(RESPONSES[response_id]["session_id"], turn)
     return JSONResponse(_response_view(response_id))
 
 
@@ -544,5 +577,7 @@ async def cancel_response(response_id: str, request: Request):
         # sessions.md §4: idempotent on a terminal task — Turn.cancel() is a no-op
         # once turn.done is set, so a terminal response's status never changes (C-02).
         # Reply promptly either way: cancel() only requests a killpg, it doesn't wait.
+        # The lease and reservation are settled by _settle_turn when the turn actually
+        # ends, cancelled or not — cancelling must not leave a session fenced forever.
         turn.cancel()
     return JSONResponse(_response_view(response_id))

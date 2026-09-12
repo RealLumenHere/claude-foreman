@@ -76,6 +76,23 @@ def test_wall_clock_cap_times_out(tmp_path):
     assert turn.status == "timeout"
 
 
+def test_zero_timeout_seconds_is_a_cap_not_the_default(tmp_path):
+    """wq#1857: `timeout_seconds=0` is falsy, and the old `if timeout_seconds` test
+    silently replaced the caller's smallest possible cap with the 6-hour ceiling."""
+    turn = Turn("t-zero", _cmd("steady", interval=0.05, count=10000), str(tmp_path),
+                dict(os.environ), timeout_seconds=0, frame_gap_s=30)
+    assert turn.wall_clock_s == 0
+    th = _run_async(turn)
+    th.join(timeout=15)
+    assert turn.killed_reason == "wall_clock"
+    assert turn.status == "timeout"
+
+
+def test_no_timeout_seconds_still_gets_the_ceiling(tmp_path):
+    turn = Turn("t-default", _cmd("quick"), str(tmp_path), dict(os.environ), frame_gap_s=30)
+    assert turn.wall_clock_s == 21600
+
+
 def test_frame_gap_watchdog_hangs(tmp_path):
     turn = Turn("t-hang", _cmd("silent", sleep_seconds=30), str(tmp_path),
                 dict(os.environ), timeout_seconds=60, frame_gap_s=0.5)

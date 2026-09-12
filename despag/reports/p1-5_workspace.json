@@ -1,0 +1,49 @@
+{
+  "protocol": "uhp",
+  "protocol_version": "2026-08-11",
+  "suite_version": "2026.8.11.post1",
+  "generated_at": "2026-09-12T15:36:26Z",
+  "target": "http://127.0.0.1:8790",
+  "requested_class": "core",
+  "conformant": false,
+  "conformant_with_skips": true,
+  "skipped_not_verified": [
+    "C-01",
+    "C-02",
+    "C-03"
+  ],
+  "highest_class_passed": "",
+  "summary": {
+    "pass": 0,
+    "fail": 0,
+    "skip": 3,
+    "error": 0,
+    "total": 3
+  },
+  "checks": [
+    {
+      "id": "C-01",
+      "title": "A task can continue a session",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/sessions.md#1-continuing-a-session",
+      "outcome": "skip",
+      "detail": "the first task did not return an id and session_id"
+    },
+    {
+      "id": "C-02",
+      "title": "Cancelling a terminal task succeeds and changes nothing",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/sessions.md#4-cancelling",
+      "outcome": "skip",
+      "detail": "no response to cancel"
+    },
+    {
+      "id": "C-03",
+      "title": "A running task can be cancelled and ends non-running",
+      "class": "core",
+      "spec": "protocol/versions/2026-08-11/sessions.md#4-cancelling",
+      "outcome": "skip",
+      "detail": "could not start a cancellable task (HTTP 501)"
+    }
+  ]
+}

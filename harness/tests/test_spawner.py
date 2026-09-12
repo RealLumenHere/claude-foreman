@@ -52,6 +52,7 @@ def spawner_env(tmp_path, monkeypatch):
 
     concurrency.LUMEN_RUN_BIN = lumen_run
     spawner.GOVERNOR_CLI = FAKE_GOVERNOR
+    spawner.SPAWN_RESERVE_DB = str(tmp_path / "spawn_reserve.db")  # wq#1815: isolated per test
     router.load_manifest(force=True)  # fresh manifest cache under the new env
 
     return {"state_file": state_file, "log_file": log_file, "wq_db": str(wq_db),
@@ -140,6 +141,36 @@ def test_governor_deny_skips_without_spawning(spawner_env, monkeypatch):
 
     calls = read_calls(spawner_env["log_file"])
     assert calls == [], "governor deny must prevent the lumen-run start call"
+
+
+def test_double_spawn_reservation_blocks_racing_duplicate(spawner_env):
+    """wq#1815 (PHASE0_WIRING_SPEC E.5): two concurrent dispatch_one() calls for the same
+    ticket race to reserve the same (ticket_id, attempt) key via despag's control_sqlite
+    (wq#1807) idempotency reserve. Exactly one may reach `lumen-run start`; the other must
+    lose the reservation and return None before Popen. This is the dispatcher-spawn-path
+    class fix for the double-spawn incidents ISSUE-LOG #4 logged at the wq-claim layer
+    (wq#1141, wq#1097 x2, fixed there by PR#46's lease+fence)."""
+    import threading
+
+    t = add_ticket("scratch spawner double-spawn ticket")
+
+    results = [None, None]
+
+    def run(i):
+        results[i] = spawner.dispatch_one(t, spawner_env["repo"])
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in range(2)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    calls = read_calls(spawner_env["log_file"])
+    assert len(calls) == 1, f"expected exactly one lumen-run start call, got {len(calls)}"
+    winners = [r for r in results if r is not None]
+    losers = [r for r in results if r is None]
+    assert len(winners) == 1 and winners[0].startswith("UNIT=")
+    assert len(losers) == 1
 
 
 def test_mixed_allow_and_deny_batch(spawner_env, monkeypatch):
