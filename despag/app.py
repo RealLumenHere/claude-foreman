@@ -194,10 +194,22 @@ async def get_harness(harness_id: str, request: Request):
     return harness
 
 
-def _model_entry(harness: dict) -> dict:
-    model_id = harness["defaultModel"]
+def _harness_model_ids(harness: dict) -> list[str]:
+    """wq#1811: a harness's own model list (despag/tiers.py TIER_MODELS mirrors this
+    per-tier). Falls back to [defaultModel] for a harness that predates the `models`
+    extension field (e.g. the disabled claude-local-rung harness)."""
+    return harness.get("models") or [harness["defaultModel"]]
+
+
+def _model_entry(harness: dict, model_id: str) -> dict:
     backend = "litellm" if _is_local_model(model_id) else "claude"
-    entry = models.Model(id=model_id, label=model_id, backend=backend, available=compute_available(harness), default=True)
+    entry = models.Model(
+        id=model_id,
+        label=model_id,
+        backend=backend,
+        available=compute_available(harness),
+        default=(model_id == harness["defaultModel"]),
+    )
     return entry.model_dump(exclude_none=True)
 
 
@@ -207,10 +219,10 @@ async def list_models(request: Request):
         return err
     backends: dict[str, dict] = {}
     for h in HARNESSES:
-        model_id = h["defaultModel"]
-        backend = "litellm" if _is_local_model(model_id) else "claude"
-        bucket = backends.setdefault(backend, {"default": model_id, "models": []})
-        bucket["models"].append(_model_entry(h))
+        for model_id in _harness_model_ids(h):
+            backend = "litellm" if _is_local_model(model_id) else "claude"
+            bucket = backends.setdefault(backend, {"default": h["defaultModel"], "models": []})
+            bucket["models"].append(_model_entry(h, model_id))
     catalog = models.ModelCatalog(backends={k: models.ModelCatalogBackendsItem(**v) for k, v in backends.items()})
     return catalog.model_dump()
 
@@ -222,9 +234,10 @@ async def harness_models(harness_id: str, request: Request):
     harness = HARNESS_BY_ID.get(harness_id)
     if harness is None:
         return error_response("harness_not_found", f"no harness with id {harness_id!r}", param="harness_id")
-    model_id = harness["defaultModel"]
-    backend = "litellm" if _is_local_model(model_id) else "claude"
-    result = models.HarnessModels(harness_id=harness_id, backend=backend, default=model_id, models=[_model_entry(harness)])
+    default_model = harness["defaultModel"]
+    backend = "litellm" if _is_local_model(default_model) else "claude"
+    entries = [_model_entry(harness, model_id) for model_id in _harness_model_ids(harness)]
+    result = models.HarnessModels(harness_id=harness_id, backend=backend, default=default_model, models=entries)
     return result.model_dump(exclude_none=True)
 
 

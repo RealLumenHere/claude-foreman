@@ -13,6 +13,10 @@ harnesses:
     base: claude-code
     baseLabel: claude-code
     defaultModel: claude-sonnet-5
+    # wq#1811 (despag/tiers.py TIER_MODELS): standard tier uses only claude-sonnet-5;
+    # frontier tier's claude-opus-5 / claude-fable-5-1 live on this SAME harness (D.2 —
+    # tier is harness+model+effort, not a harness per tier) so both are listed here.
+    models: [claude-sonnet-5, claude-opus-5, claude-fable-5-1]
     timeoutSeconds: 300
     enabled: true
   - id: chrn_litellm-mechanical
@@ -20,6 +24,10 @@ harnesses:
     base: claude-code
     baseLabel: claude-code
     defaultModel: deepseek-v4-flash
+    # wq#1811: the mechanical tier's own model list (despag/tiers.py TIER_MODELS) — the
+    # only two `routed` local-pool rungs `router.py roster` shows entitled today. No
+    # cerebras rung is listed: roster does not show one as routed/entitled.
+    models: [deepseek-v4-flash, qwen36-local]
     timeoutSeconds: 300
     enabled: true
   - id: chrn_claude-local-rung
