@@ -1,9 +1,1 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "despag/backing/control_sqlite.py:82-104",
-      "note": "idem_reserve(): atomic idempotency reservation inside one BEGIN IMMEDIATE sqlite transaction — a duplicate key reads the winner's resp_id instead of executing again; fail-closed (sqlite errors propagate). This is the ControlStore.idem_reserve method wq#1807 adds in despag/backing/control_sqlite.py (new file, ~285 ln) alongside lease_admit/lease_renew/lease_release/lease_still_held (per-session lease with monotonic fence, despag/backing/control_sqlite.py:155-255) and resp_put_running/resp_mark_terminal/resp_get (one-way terminal latch, despag/backing/control_sqlite.py:257-305). The four Protocol interfaces (GraphStore/BlobStore/SecretStore/WorkspaceFiles) + Backing composition + local impls (SqliteGraphStore/FileBlobStore/FileSecretStore/LocalWorkspaceFiles) + make_backing() live in despag/backing/__init__.py (new file, 382 ln). despag/app.py wires Idempotency-Key + the session lease into POST /v1/responses: _idem_admit (despag/app.py:231-249) reserves/replays/waits on the Idempotency-Key header; create_response (despag/app.py:252-307) admits metadata.session_id/previous_response_id through CONTROL.lease_admit(reject_on_conflict=True) and returns 409 session_busy on an active conflict (despag/app.py:286-296). Unit tests: python3 -m pytest despag/tests/test_backing.py despag/tests/test_control.py despag/tests/test_uhp.py -> 62 passed, 0 failed (despag/tests/test_backing.py new file 23 tests; despag/tests/test_control.py new file 21 tests incl. test_idem_two_threads_race_produce_one_reservation, test_lease_fence_mismatch_refuses_commit, test_resp_terminal_latch_cannot_go_backwards; despag/tests/test_uhp.py +3 route-level tests for Idempotency-Key release-after-stub and 409 session_busy). Restic coverage of DESPAG_DATA_DIR could not be verified from this worker's bounded filesystem (~/backups is outside worktree + --add-dir roots) — not edited, logged at kb/ISSUE-LOG.md#360, and written up in despag/reports/p1-4_backing.md."
-    }
-  ]
-}
+{"criteria": [{"id": "AC1", "citation": "harness/spawner.py:99-172"}]}

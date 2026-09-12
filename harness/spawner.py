@@ -20,17 +20,32 @@ implemented in fworker.py — see harness/README.md's "Build-time discovery vs t
 design" section. Does not replace fworker's own per-ticket governor/dep/claim gates;
 those still run inside fworker regardless of how it was launched.
 
+PHASE0_WIRING_SPEC.md E.5 (wq#1815): the concurrency ceiling above bounds HOW MANY spawn
+at once, not whether the SAME (ticket, attempt) can be spawned twice — two dispatcher
+passes (or a dispatcher restart mid-pass) racing on the same ready ticket could each
+reach dispatch_one() and both exec `lumen-run start` before either's attempt-N.json
+exists to say otherwise. ISSUE-LOG #4 hit this class at the wq-claim layer (wq#1141,
+wq#1097 x2) before PR#46's lease+fence; this is the same fix one layer down, in the
+dispatcher's own spawn path, using despag's control_sqlite (wq#1807) idempotency
+reserve: an atomic `BEGIN IMMEDIATE` INSERT keyed `dispatch-spawn:<ticket>:<attempt>`
+where `attempt` is self_heal.attempt_count()+1 (the attempt THIS spawn would create).
+The loser's reserve call returns the winner's record instead of None and exits before
+Popen; a spawn that fails to launch releases its reservation so the next pass can retry
+the same attempt number.
+
 Usage:
   spawner.py dispatch --repo PATH --ticket ID [--ticket ID ...]
              [--ceiling N] [--stagger-min S] [--stagger-max S] [--slot-wait-max S]
 """
 import argparse
+import asyncio
 import json
 import os
 import random
 import subprocess
 import sys
 import time
+import uuid
 
 HARNESS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HARNESS_DIR)
@@ -40,6 +55,14 @@ ORCH_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "orchestrator"))
 sys.path.insert(0, ORCH_DIR)
 import router  # noqa: E402
 
+DISPATCHER_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "dispatcher"))
+sys.path.insert(0, DISPATCHER_DIR)
+import self_heal  # noqa: E402 — attempt_count(), the same signal spawn_loop_guard uses
+
+REPO_ROOT = os.path.normpath(os.path.join(HARNESS_DIR, ".."))
+sys.path.insert(0, REPO_ROOT)
+from despag.backing.control_sqlite import ControlStore  # noqa: E402 — wq#1807
+
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 GOVERNOR_CLI = os.environ.get("FOREMAN_GOVERNOR_CLI",
                                os.path.join(FOREMAN_ROOT, "governor", "foreman_usaged.py"))
@@ -48,6 +71,15 @@ STAGGER_MIN_S = 2.0
 STAGGER_MAX_S = 3.0
 SLOT_POLL_S = float(os.environ.get("FOREMAN_SLOT_POLL_S", "5"))
 DEFAULT_SLOT_WAIT_MAX_S = 1800  # give up waiting for a slot after 30 min
+
+# wq#1815 (E.5): gitignored runtime/ path (ISSUE-LOG #41 convention) — mutable daemon
+# state, never tracked. TTL is a safety net for a reservation whose owner crashed
+# before releasing/settling it, sized above any real worker session (router.py's
+# FIRE_MAX_RUNTIME_S is 2h; this is 3x that).
+SPAWN_RESERVE_DB = os.environ.get(
+    "FOREMAN_SPAWN_RESERVE_DB",
+    os.path.join(FOREMAN_ROOT, "dispatcher", "runtime", "spawn_reserve.db"))
+SPAWN_RESERVE_TTL_S = int(os.environ.get("FOREMAN_SPAWN_RESERVE_TTL_S", str(6 * 3600)))
 
 
 def log(msg):
@@ -62,6 +94,27 @@ def governor_allows(model):
         log(f"governor unreachable ({e}) — treating as deny")
         return False
     return p.returncode == 0
+
+
+def reserve_spawn(ticket_id, attempt, owner):
+    """Atomic reserve for (ticket_id, attempt) via despag's control_sqlite idem_reserve
+    (wq#1807/E.5). True: we won, caller may spawn. False: someone else already holds
+    this exact (ticket, attempt) reservation — the caller must exit before Popen.
+    idem_reserve has no real await point (pure sqlite under one BEGIN IMMEDIATE), so
+    asyncio.run() per call is just a sync wrapper, not a background task."""
+    store = ControlStore(SPAWN_RESERVE_DB)
+    key = f"dispatch-spawn:{ticket_id}:{attempt}"
+    existing = asyncio.run(store.idem_reserve(key, owner, ttl_s=SPAWN_RESERVE_TTL_S))
+    return existing is None
+
+
+def release_spawn(ticket_id, attempt, owner):
+    """Best-effort release of a reservation whose spawn never actually launched (lumen-run
+    failed before Popen), so the next dispatch pass can retry the same attempt number
+    instead of being locked out until SPAWN_RESERVE_TTL_S expires."""
+    store = ControlStore(SPAWN_RESERVE_DB)
+    key = f"dispatch-spawn:{ticket_id}:{attempt}"
+    asyncio.run(store.idem_release(key, owner))
 
 
 def wait_for_slot(prefix, ceiling, max_wait_s):
@@ -98,15 +151,23 @@ def dispatch_one(ticket_id, repo):
     if not governor_allows(model):
         log(f"wq#{ticket_id}: governor denies {model} right now — skipping this pass")
         return None
+    attempt = self_heal.attempt_count(ticket_id) + 1
+    owner = f"{os.getpid()}:{uuid.uuid4()}"
+    if not reserve_spawn(ticket_id, attempt, owner):
+        log(f"wq#{ticket_id} attempt {attempt}: spawn reservation already held — "
+            f"duplicate spawn, refusing before Popen (E.5)")
+        return None
     cmd = router.dispatch_cmd(ticket_id, repo)
     log(f"spawning wq#{ticket_id}: {' '.join(cmd)}")
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"wq#{ticket_id}: lumen-run start failed to launch: {e}")
+        release_spawn(ticket_id, attempt, owner)
         return None
     if p.returncode != 0:
         log(f"wq#{ticket_id}: lumen-run start failed rc={p.returncode}: {p.stdout} {p.stderr}")
+        release_spawn(ticket_id, attempt, owner)
         return None
     return p.stdout.strip()
 
