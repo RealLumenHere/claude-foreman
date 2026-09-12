@@ -1,0 +1,31 @@
+# wq#1805: static harness catalog (UHP Harness object, harnesses.md / schema.yaml
+# components.schemas.Harness). Field names are camelCase on this object — a wart the
+# spec calls out to accept, not fix (PHASE0_WIRING_SPEC.md B.1 row 3 / B.1 note): the
+# conformance suite checks these exact names (defaultModel, timeoutSeconds, ...).
+#
+# `id` is chrn_-prefixed per the schema pattern (^chrn_, checked by conformance H-01).
+# `enabled: false` is a despag-local extension (Harness.additionalProperties: true) —
+# a disabled harness is listed by GET /v1/harnesses but reports available: false for
+# every model under it (see despag/app.py:_compute_available).
+harnesses:
+  - id: chrn_claude-max
+    name: claude-max
+    base: claude-code
+    baseLabel: claude-code
+    defaultModel: claude-sonnet-5
+    timeoutSeconds: 300
+    enabled: true
+  - id: chrn_litellm-mechanical
+    name: litellm-mechanical
+    base: claude-code
+    baseLabel: claude-code
+    defaultModel: deepseek-v4-flash
+    timeoutSeconds: 300
+    enabled: true
+  - id: chrn_claude-local-rung
+    name: claude-local-rung
+    base: claude-code
+    baseLabel: claude-code
+    defaultModel: claude-sonnet-5
+    timeoutSeconds: 300
+    enabled: false
