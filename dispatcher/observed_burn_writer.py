@@ -188,16 +188,23 @@ def poll_once(now=None):
     limits = governor_state.get("limits") or {}
     sampler_state = load_json(SAMPLER_STATE_PATH) or {}
 
-    # Window: since the oldest pool's last sample (or a 1h lookback the first time
-    # this ever runs), so a pool that hasn't accumulated MIN_WORKER_HOURS yet keeps
-    # growing its window on the next poll instead of losing history.
-    since_dt = now - dt.timedelta(hours=1)
+    # Each pool's own worker-hours window starts at ITS OWN last sample (or a 1h
+    # lookback the first time this ever runs) — never a window shared across pools.
+    # A shared/global since_dt would re-count worker-hours a busy pool already
+    # consumed in its last "updated" window whenever a quieter pool (e.g.
+    # fable_weekly_scoped on a night with no fable tickets) is still stuck in
+    # "insufficient_sample" and hasn't advanced its own sampled_at — inflating that
+    # pool's window and silently pulling every OTHER pool's rate toward zero.
+    default_since = now - dt.timedelta(hours=1)
+    since_by_pool = {}
+    earliest_since = default_since
     for pool in POOLS:
         sampled_at = (sampler_state.get(pool) or {}).get("sampled_at")
         d = core._parse_iso(sampled_at)
-        if d is not None:
-            since_dt = min(since_dt, d)
-    since_iso = since_dt.strftime("%Y-%m-%d %H:%M:%S")
+        since_by_pool[pool] = d if d is not None else default_since
+        earliest_since = min(earliest_since, since_by_pool[pool])
+    # journalctl/lumen-run are queried once, wide enough to cover every pool's window.
+    since_iso = earliest_since.strftime("%Y-%m-%d %H:%M:%S")
 
     unit_series = gather_unit_series(since_iso, now.timestamp())
 
@@ -209,7 +216,7 @@ def poll_once(now=None):
         if percent is None or not resets_at:
             events[pool] = "no_governor_data"
             continue
-        wh = core.worker_hours(unit_series, since_dt.timestamp(), now.timestamp(), pool)
+        wh = core.worker_hours(unit_series, since_by_pool[pool].timestamp(), now.timestamp(), pool)
         sample, event = core.update_pool_sample(prev, float(percent), resets_at, wh, now)
         sampler_state[pool] = sample
         events[pool] = event

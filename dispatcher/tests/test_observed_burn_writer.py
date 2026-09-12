@@ -73,6 +73,52 @@ def test_second_poll_computes_rate_from_worker_hours_and_fable_split(tmp_path, m
     assert "_note" in observed and "Frank" in observed["_note"]
 
 
+def test_desynced_pool_does_not_widen_a_busy_pools_window(tmp_path, monkeypatch):
+    """A quiet pool stuck in "insufficient_sample" (fable_weekly_scoped, no fable
+    tickets this window) must not drag a busy pool's (session) worker-hours window
+    wider than that pool's own last sample — else the busy pool re-counts hours its
+    previous poll already spent, diluting its rate toward zero every subsequent poll
+    the quiet pool stays stalled."""
+    gov, sampler, out = _paths(tmp_path, monkeypatch)
+    t0 = NOW - dt.timedelta(hours=4)
+    sampler.write_text(json.dumps({
+        "session": {"percent": 10.0, "resets_at": "2026-09-11T17:00:00+00:00",
+                    "sampled_at": t0.isoformat(), "ema": None},
+        "fable_weekly_scoped": {"percent": 5.0, "resets_at": "2026-09-18T07:00:00+00:00",
+                                 "sampled_at": t0.isoformat(), "ema": None},
+    }))
+    monkeypatch.setattr(w, "running_units", lambda: [("fworker-wq10", int(t0.timestamp()))])
+    monkeypatch.setattr(w, "exited_units", lambda since_iso: [])
+    monkeypatch.setattr(w.concurrency, "ticket_model", lambda tid, wq_bin=None: "claude-sonnet-5")
+
+    # poll 1, t0+2h: session sees 2 worker-hours (its own window) -> updates and
+    # advances its own sampled_at; fable_weekly_scoped sees 0 fable worker-hours ->
+    # stays "insufficient_sample", sampled_at frozen at t0.
+    t1 = t0 + dt.timedelta(hours=2)
+    gov.write_text(json.dumps({"limits": {
+        "session": {"percent": 12.0, "resets_at": "2026-09-11T17:00:00+00:00"},
+        "fable_weekly_scoped": {"percent": 5.0, "resets_at": "2026-09-18T07:00:00+00:00"},
+    }}))
+    obs1 = w.poll_once(now=t1)
+    assert obs1["_events"]["session"] == "updated"
+    assert obs1["_events"]["fable_weekly_scoped"] == "insufficient_sample"
+    assert obs1["session"] == 1.0
+
+    # poll 2, t1+2h: session's own window is [t1, t1+2h] = 2 more worker-hours for
+    # 2 more pct -> still 1.0 %/worker-h. A shared/global since_dt (still t0, because
+    # fable_weekly_scoped never advanced) would instead see a 4h window for the same
+    # 2 pct delta -> 0.5 %/worker-h, pulling the EMA down to 0.85.
+    t2 = t1 + dt.timedelta(hours=2)
+    gov.write_text(json.dumps({"limits": {
+        "session": {"percent": 14.0, "resets_at": "2026-09-11T17:00:00+00:00"},
+        "fable_weekly_scoped": {"percent": 5.0, "resets_at": "2026-09-18T07:00:00+00:00"},
+    }}))
+    obs2 = w.poll_once(now=t2)
+    assert obs2["_events"]["session"] == "updated"
+    assert obs2["_events"]["fable_weekly_scoped"] == "insufficient_sample"
+    assert obs2["session"] == 1.0
+
+
 def test_reset_crossing_is_skipped_end_to_end(tmp_path, monkeypatch):
     gov, sampler, out = _paths(tmp_path, monkeypatch)
     t0 = NOW - dt.timedelta(hours=2)
