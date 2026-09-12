@@ -1,22 +1,26 @@
 """despag — UHP discovery/harnesses/models (wq#1805 P1-1) plus the `POST
 /v1/responses` task-execution surface (wq#1806 P1-2, PHASE0_WIRING_SPEC.md
-RECOMMENDATION step 2). Execution is wired for `stream:false` only (blocking and
-`background:true`+polling); `stream:true` still answers 501 lumen_not_implemented —
-SSE is the next ticket (RECOMMENDATION step 3).
+RECOMMENDATION step 2).
 
-wq#1857 reconciles the two: wq#1806's runner branched before wq#1807 (P1-4) landed
-the control-plane invariants, so its create_response had no path to them. Every
-started turn now passes BOTH admission gates before REGISTRY.start, and gives back
-exactly what they took when the turn finishes:
+wq#1857 reconciles execution with admission: wq#1806's runner branched before
+wq#1807 (P1-4) landed the control-plane invariants, so its create_response had no
+path to them. Every started turn now passes BOTH admission gates before
+REGISTRY.start, and gives back exactly what they took when the turn finishes:
   * an `Idempotency-Key` reserves the response id (_idem_admit) — a retry of a
     finished key replays the winner's response instead of spawning a second Turn,
     and a retry while the winner still runs is 409 lumen_still_running;
   * the resolved session (an hsess id, not a caller-supplied string) is admitted
     through a per-session lease that fails closed with 409 session_busy, so one
     session never has two `claude -p` children in flight.
-Unlike the P1-1 stub, the reservation is now SETTLED with the real response (there
-is output to replay) and the lease is released only when the turn is done — for a
-background turn that is in _settle_turn, not at request return.
+The reservation is SETTLED with the real response (there is output to replay) and
+the lease is released only when the turn is done — for a background turn that is in
+_settle_turn, not at request return.
+
+wq#1809 (P1-3, RECOMMENDATION step 3) adds `stream:true`: `despag.uhp.translate.
+RespTranslator` turns a turn's canonical frames into UHP `response.*` SSE events as
+they arrive, and the exact same translator replay builds the `output` a blocking
+request or a polled GET sees — see `_build_translator`/`_finish_events`/
+`_response_view` below.
 """
 from __future__ import annotations
 
@@ -32,14 +36,14 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from despag.backends import claude_max
 from despag.backing.control_sqlite import ControlStore
-from despag.runner import canonical
 from despag.runner.turn import TurnRegistry
 from despag.uhp import models
 from despag.uhp.errors import error_response
+from despag.uhp.translate import RespTranslator
 
 UHP_VERSION = "2026-08-11"
 SUPPORTED_VERSIONS = [UHP_VERSION]
@@ -53,7 +57,15 @@ HARNESSES_FILE = DESPAG_DIR / "harnesses.yaml"
 LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local")
 
 CLAUDE_BIN = os.environ.get("DESPAG_CLAUDE_BIN", "claude")
-LITELLM_HEALTH_URL = os.environ.get("DESPAG_LITELLM_HEALTH", "http://localhost:4000/health")
+# Plain `/health` makes LiteLLM probe every configured deployment and can take
+# 15s+ (or hang) under load; `/health/liveliness` is the proxy's own fast liveness
+# check (no model calls) — what `compute_available` actually needs per request.
+LITELLM_HEALTH_URL = os.environ.get("DESPAG_LITELLM_HEALTH", "http://localhost:4000/health/liveliness")
+# fworker.py:164-165 FOREMAN_LITELLM_KEY_FILE — the same gateway fworker routes the
+# local-pool models through (fworker.py:1102-1103 ANTHROPIC_AUTH_TOKEN, despag/
+# backends/litellm.py:build_env), so the health probe needs the same bearer; an
+# unauthenticated /health reads 401 ("No api key passed in"), never healthy.
+LITELLM_KEY_FILE = os.environ.get("FOREMAN_LITELLM_KEY_FILE", "/home/lumen/.secrets/foreman-litellm.token")
 
 
 def _is_local_model(model_id: str) -> bool:
@@ -111,9 +123,14 @@ def _litellm_healthy() -> bool:
     from urllib.parse import urlparse
 
     parsed = urlparse(LITELLM_HEALTH_URL)
+    headers = {}
+    try:
+        headers["Authorization"] = f"Bearer {Path(LITELLM_KEY_FILE).expanduser().read_text().strip()}"
+    except OSError:
+        pass   # no key on this box — try unauthenticated, consistent with the old behaviour
     try:
         conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=2)
-        conn.request("GET", parsed.path or "/")
+        conn.request("GET", parsed.path or "/", headers=headers)
         resp = conn.getresponse()
         return 200 <= resp.status < 300
     except OSError:
@@ -234,68 +251,82 @@ def _extract_text(frame: dict) -> str:
     return "".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text")
 
 
-def _build_output(turn) -> tuple[list[dict], dict | None, dict | None]:
-    """Turn -> `(output, usage, result_frame)`. Not the general canonical-frame ->
-    UHP-event `_RespTranslator` (PHASE0_WIRING_SPEC.md C.1/RECOMMENDATION step 3, out
-    of scope here — that's for SSE); this only needs the final blocking/polled shape."""
-    parts, result_frame = [], None
-    for frame in turn.snapshot_frames():
-        if frame.get("type") == "assistant":
-            text = _extract_text(frame)
-            if text:
-                parts.append(text)
-        elif frame.get("type") == "result":
-            result_frame = frame
-    text = "".join(parts) or (result_frame or {}).get("result") or ""
-    output = []
-    if text:
-        output = [{"id": _new_id("msg"), "type": "message", "status": "completed", "role": "assistant",
-                   "content": [{"type": "output_text", "text": text}]}]
-    usage = canonical._norm_token_usage((result_frame or {}).get("usage")) or None
-    return output, usage, result_frame
+# --- P1-3: canonical frames -> UHP response.* (despag/uhp/translate.py) ------------
+# `_build_translator`/`_finish_events`/`_response_view` are shared by every execution
+# path (blocking, background-polled, and the SSE subscriber in `_stream_response`) so
+# stream and non-stream agree on the result shape by construction (streaming.md §6,
+# S-08) instead of by keeping two assemblies in sync, the way `_build_output`/
+# `_build_error` (wq#1806/wq#1857, replaced here) had to.
+def _build_translator(response_id: str) -> RespTranslator:
+    rec = RESPONSES[response_id]
+    return RespTranslator(
+        response_id, rec["model"], rec.get("previous_response_id"), True, rec["created_at"],
+        session_id=rec["session_id"], ignored_fields=rec.get("ignored_fields") or None,
+    )
 
 
-def _build_error(turn, result_frame: dict | None) -> dict | None:
-    status = turn.status
-    if status in (None, "completed"):
-        return None
-    if status == "cancelled":
-        return {"type": "invalid_request_error", "code": "cancelled", "message": "cancelled by client"}
-    if status == "timeout":
-        return {"type": "harness_error", "code": "timeout",
-                "message": f"wall-clock cap of {turn.wall_clock_s}s exceeded"}
-    if status == "hang":
-        return {"type": "harness_error", "code": "timeout",
-                "message": f"no frame for {turn.frame_gap_s}s (frame-gap watchdog)"}
-    if status == "incomplete":
-        return None   # a budget stop, not a failure — incomplete_details carries the reason
+def _last_result_frame(frames: list[dict]) -> dict | None:
+    return next((f for f in reversed(frames) if f.get("type") == "result"), None)
+
+
+def _turn_failure_message(turn) -> str:
+    if turn.status == "hang":
+        return f"no frame for {turn.frame_gap_s}s (frame-gap watchdog)"
+    if turn.status == "timeout":
+        return f"wall-clock cap of {turn.wall_clock_s}s exceeded"
+    result_frame = _last_result_frame(turn.snapshot_frames())
     message = (result_frame or {}).get("result") or turn.error or "turn failed"
-    return {"type": "harness_error", "code": "harness_error", "message": str(message)[:2000]}
+    return str(message)[:2000]
+
+
+def _finish_events(turn, translator: RespTranslator) -> list[dict]:
+    """The terminal leg every execution path shares: turn `Turn.status` into the UHP
+    outcome and close the translator exactly once. Idempotent per response_id: a
+    second call (a GET racing the SSE path's own terminal, or the idempotency-settle
+    call right after it) replays the first call's cached `response` rather than
+    closing a second translator with its own fresh item ids — `RespTranslator` mints
+    those from `uuid.uuid4()`, so two independent closes of the same frames would
+    disagree about the very ids tasks.md §4 "read back" depends on."""
+    rec = RESPONSES[turn.id]
+    cached = rec.get("_final")
+    if cached is not None:
+        ev_type = {"completed": "response.completed", "incomplete": "response.incomplete",
+                   "failed": "response.failed"}[cached["status"] if cached["status"] != "cancelled" else "failed"]
+        return [{"type": ev_type, "sequence_number": translator.seq, "response": cached}]
+    status = _STATUS_MAP.get(turn.status, "failed")
+    if status == "failed":
+        evs = translator.fail(_turn_failure_message(turn))
+    elif status == "incomplete":
+        reason = "max_turns" if turn.status == "incomplete" else "timeout"
+        evs = translator.complete(status, incomplete_reason=reason)
+    elif status == "cancelled":
+        evs = translator.complete(status, error={"type": "invalid_request_error", "code": "cancelled",
+                                                    "message": "cancelled by client"})
+    else:
+        evs = translator.complete(status)
+    evs[-1]["response"]["metadata"]["harness_id"] = rec["harness_id"]
+    rec["_final"] = evs[-1]["response"]
+    return evs
 
 
 def _response_view(response_id: str) -> dict:
-    rec = RESPONSES[response_id]
+    """A terminal response is re-read, not rebuilt — see `_finish_events` for why."""
+    cached = RESPONSES[response_id].get("_final")
+    if cached is not None:
+        return cached
     turn = REGISTRY.get(response_id)
-    if turn is None or turn.status is None:
-        status = "in_progress"
-        output, usage, error, incomplete_details = [], None, None, None
-    else:
-        output, usage, result_frame = _build_output(turn)
-        status = _STATUS_MAP.get(turn.status, "failed")
-        error = _build_error(turn, result_frame)
-        incomplete_details = None
-        if status == "incomplete":
-            reason = "max_turns" if turn.status == "incomplete" else "timeout"
-            incomplete_details = {"reason": reason}
-    metadata = {"session_id": rec["session_id"], "harness_id": rec["harness_id"]}
-    if rec.get("ignored_fields"):
-        metadata["ignored_fields"] = rec["ignored_fields"]
-    return {
-        "id": response_id, "object": "response", "created_at": rec["created_at"], "status": status,
-        "error": error, "incomplete_details": incomplete_details,
-        "previous_response_id": rec.get("previous_response_id"), "model": rec["model"],
-        "output": output, "store": True, "usage": usage, "metadata": metadata,
-    }
+    translator = _build_translator(response_id)
+    if turn is None:
+        view = translator._response_obj("in_progress")
+        view["metadata"]["harness_id"] = RESPONSES[response_id]["harness_id"]
+        return view
+    for frame in turn.snapshot_frames():
+        translator.feed(frame)
+    if not turn.done.is_set():
+        view = translator._response_obj("in_progress")
+        view["metadata"]["harness_id"] = RESPONSES[response_id]["harness_id"]
+        return view
+    return _finish_events(turn, translator)[-1]["response"]
 
 
 app = FastAPI()
@@ -435,6 +466,54 @@ async def _idem_admit(idem_key: str, resp_id: str) -> tuple[str, dict | None]:
     return "busy", None
 
 
+async def _sse_gen(queue: "asyncio.Queue"):
+    """No polling: a subscriber blocks on the queue a frame is pushed onto the moment
+    the turn's reader thread appends it (`despag.runner.turn.Turn.on_frame`, bridged
+    across threads with `call_soon_threadsafe`); the 20s wait is only for keep-alive,
+    never a poll interval (streaming.md §1 "MUST NOT buffer")."""
+    while True:
+        try:
+            ev = await asyncio.wait_for(queue.get(), timeout=20)
+        except asyncio.TimeoutError:
+            yield b": keep-alive\n\n"
+            continue
+        if ev is None:
+            break
+        yield f"data: {json.dumps(ev)}\n\n".encode()
+
+
+async def _stream_response(response_id: str, cmd: list[str], cwd: str, env: dict,
+                            timeout_seconds: float | None, session_id: str, lease_fence: int,
+                            idem_key: str | None) -> StreamingResponse:
+    translator = _build_translator(response_id)
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def _on_frame(frame: dict) -> None:
+        # Runs on the Turn's own thread; hop to the event loop before touching the
+        # translator or the queue, both of which are only ever touched from the loop.
+        def _feed() -> None:
+            for ev in translator.feed(frame):
+                queue.put_nowait(ev)
+        loop.call_soon_threadsafe(_feed)
+
+    for ev in translator.start():      # response.created (seq 0) is the first event
+        queue.put_nowait(ev)
+    turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env,
+                          timeout_seconds=timeout_seconds, on_frame=_on_frame)
+
+    async def _finish() -> None:
+        await asyncio.to_thread(turn.done.wait)
+        for ev in _finish_events(turn, translator):
+            queue.put_nowait(ev)
+        queue.put_nowait(None)
+        await _settle_turn(response_id, turn, session_id, lease_fence, idem_key)
+
+    asyncio.create_task(_finish())
+    return StreamingResponse(_sse_gen(queue), media_type="text/event-stream",
+                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 async def _settle_turn(response_id: str, turn, session_id: str, lease_fence: int,
                         idem_key: str | None) -> dict:
     """Wait for a started turn, then give back everything admission took. Runs inline
@@ -469,16 +548,6 @@ async def create_response(request: Request):
         req = models.CreateResponseRequest(**body)
     except Exception as e:  # noqa: BLE001 — a malformed request body is a 400, not a 500
         return error_response("invalid_input", str(e), status=400)
-    if req.stream:
-        # RECOMMENDATION step 2 wires blocking + background/polling only; step 3
-        # (SSE, gapless sequence_number, the general _RespTranslator) is the next
-        # ticket. Bail out before admission: a 501 must not burn an Idempotency-Key
-        # or a session lease on a turn that was never going to run.
-        return error_response(
-            "lumen_not_implemented",
-            "streaming responses (stream:true) are not implemented by this build of despag",
-            status=501,
-        )
     harness_id = (req.metadata.harness_id if req.metadata else None) or HARNESSES[0]["id"]
     harness = HARNESS_BY_ID.get(harness_id)
     if harness is None:
@@ -544,8 +613,13 @@ async def create_response(request: Request):
         "previous_response_id": req.previous_response_id, "model": model,
         "ignored_fields": [f for f in ("tools", "include") if f in body],
     }
-    turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env, timeout_seconds=req.timeout_seconds)
     settle_key = idem_key if reserved_by_us else None
+
+    if req.stream:
+        return await _stream_response(response_id, cmd, cwd, env, req.timeout_seconds,
+                                       sid, lease_fence, settle_key)
+
+    turn = REGISTRY.start(response_id, cmd, cwd=cwd, env=env, timeout_seconds=req.timeout_seconds)
     if req.background:
         # The turn outlives the request, so the lease must too — releasing it here
         # would let a second turn of the same session start alongside this one.
