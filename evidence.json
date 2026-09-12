@@ -1,1 +1,11 @@
-{"criteria": [{"id": "AC1", "citation": "harness/spawner.py:99-172"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "despag/app.py:481-534",
+      "cmd_run": "python3 -m pytest despag/tests/ -q",
+      "exit_code": 0,
+      "note": "create_response now runs BOTH wq#1807 admission gates before REGISTRY.start: _idem_admit at despag/app.py:484 (replay/409 lumen_still_running) and CONTROL.lease_admit(..., reject_on_conflict=True) on the resolved hsess id at despag/app.py:513, with REGISTRY.start at despag/app.py:534. _settle_turn (despag/app.py:425-442) idem_settles the real response and releases the lease only when the turn ends, so background turns stay fenced. timeout_seconds=0 falsy bug fixed at despag/runner/turn.py:76. 79 tests pass; disabling both gates fails 3 of the new tests (falsification run)."
+    }
+  ]
+}
