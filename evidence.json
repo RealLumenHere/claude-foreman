@@ -2,10 +2,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "despag/admission.py:230-244",
-      "cmd_run": "python3 -m pytest despag/tests/test_admission.py -q",
-      "exit_code": 0,
-      "note": "allowed-is-None branch now degrades to min(cfg['min_allowed'], DESPAG_MAX_CLAUDE_CONCURRENT) = 1 instead of substituting the clamp for the FRANK_RESERVE_PCT-aware ceiling; module docstring corrected at despag/admission.py:20-28; regression tests at despag/tests/test_admission.py:86-140 (13/13 pass, whole despag suite 134/134)."
+      "citation": "pilots/3d071a263025/REPORT.md:130"
     }
   ]
 }
