@@ -1,8 +1,1 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "harness/spawner.py:141-167"
-    }
-  ]
-}
+{"criteria": [{"id": "AC1", "citation": "ops/wq1529-minerva-judge-rung-name/minerva_verify.py:51"}]}
