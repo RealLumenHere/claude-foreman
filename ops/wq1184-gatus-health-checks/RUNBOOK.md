@@ -43,6 +43,14 @@ Idempotent. What it does (see `install.sh` for the exact commands):
    systemctl enable --now lumen-foreman-dashboard.service
    ```
    Until then, that one endpoint will legitimately read FAIL.
+3a. **Prerequisite for the `despag-uhp` endpoint**: it targets
+   `127.0.0.1:8790/v1/uhp`, served by `lumen-despag.service` — staged but not
+   installed by default (wq#1887 P2-1, `harness/systemd/lumen-despag.env.example`).
+   Install the env file and unit per that ticket's PR body, then:
+   ```
+   systemctl enable --now lumen-despag.service
+   ```
+   Until then, that one endpoint will legitimately read FAIL.
 4. Enable:
    ```
    systemctl enable --now lumen-gatus.service

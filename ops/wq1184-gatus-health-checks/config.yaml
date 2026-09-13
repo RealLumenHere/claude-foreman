@@ -119,6 +119,24 @@ endpoints:
         send-on-resolved: true
         description: "foreman dashboard heartbeat unreachable (wq#1184) — check lumen-foreman-dashboard.service is enabled"
 
+  # despag — UHP discovery document, no auth, no spawn, no backend call
+  # (despag/app.py:367-395). PREREQUISITE: lumen-despag.service is STAGED but
+  # not installed by default (wq#1887 P2-1, operator installs by hand per
+  # harness/systemd/lumen-despag.env.example). This probe reads FAIL until an
+  # operator installs and starts that unit — see RUNBOOK.md.
+  - name: despag-uhp
+    group: fleet-hardening
+    url: "http://127.0.0.1:8790/v1/uhp"
+    interval: 5m
+    conditions:
+      - "[STATUS] == 200"
+    alerts:
+      - type: custom
+        failure-threshold: 3
+        success-threshold: 2
+        send-on-resolved: true
+        description: "despag GET /v1/uhp unreachable (wq#1887) — check lumen-despag.service is installed and enabled"
+
   # kb-mcp — no documented /health route (confirmed live: / and /health both
   # 404, /mcp responds 406 which still proves the listener is alive and
   # routing). Liveness-only condition, not a status-code check.

@@ -1,0 +1,42 @@
+# lumen-despag.service — despag UHP discovery/harness/task-execution gateway
+# (wq#1805-1809, wq#1887 P2-1). STAGED (wq#718 posture): installed by an operator's
+# privileged step, never by a worker — see the PR body for the exact apply command.
+# Binds loopback only: despag/__main__.py:32 hardcodes uvicorn.run(host="127.0.0.1", ...)
+# regardless of env, so this unit is not internet- or tailnet-reachable by itself; no
+# tunnel or reverse proxy is part of this ticket.
+[Unit]
+Description=despag — UHP discovery/harness/task-execution gateway, loopback only (wq#1887 P2-1)
+Documentation=file:///home/lumen/foreman/despag/decision/PHASE2_WIRING_SPEC.md
+After=network-online.target
+
+[Service]
+Type=simple
+User=lumen
+WorkingDirectory=/home/lumen/foreman
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+# 0600, operator-created from harness/systemd/lumen-despag.env.example — see that
+# file for the key reference (token, data dir, concurrency cap, wall-clock, port).
+EnvironmentFile=/home/lumen/foreman/harness/systemd/lumen-despag.env
+ExecStart=/usr/bin/python3 -m despag
+Restart=on-failure
+RestartSec=5
+
+# Hardening, consistent with ops/wq1151-lumen-kb/lumen-kb-mcp.service's block.
+# ProtectHome is read-only, not `true`/`tmpfs`: despag.workspace.workspace_root()
+# (despag/workspace.py:88-92) writes conformance-harness workspaces under
+# $DESPAG_WORKTREES_ROOT (default /home/lumen/worktrees/despag) and
+# despag.app.DESPAG_DATA_DIR (despag/app.py:106-107) holds control.db — both live
+# under $HOME, so a stricter ProtectHome would silently break every task-execution
+# turn. ReadWritePaths carves out exactly those two roots; the `-` prefix means a
+# path that does not exist yet at start is skipped rather than failing the start
+# (the operator creates DESPAG_DATA_DIR, matching the env file, before first start).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/lumen/worktrees -/home/lumen/despag-data
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target
