@@ -1,0 +1,74 @@
+{
+  "mode": "reach",
+  "ts": "2026-09-13T05:54:28Z",
+  "golden_path": "/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl",
+  "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+  "golden_sha256_expected": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+  "golden_sha256_ok": true,
+  "fixture_path": "/home/lumen/minerva/eval/fixtures/note_contradictions_20260913.json",
+  "fixture_sha256": "d0df678036066b066627cbc04962387949fcba92a94eb99ea9e5a8df82499633",
+  "contradiction_rows": 20,
+  "contradicted_notes_open": 17,
+  "contradicted_subjects": [
+    "gameboy-pc",
+    "hathor",
+    "isis",
+    "llama33-local",
+    "lumen",
+    "nephthys",
+    "sia",
+    "thor"
+  ],
+  "contradicted_predicates": [
+    "fan_status",
+    "ollama_version",
+    "power_plug",
+    "status",
+    "ts_ip"
+  ],
+  "n_trap_rows": 16,
+  "trap_rows_id_typed": [
+    235
+  ],
+  "trap_rows_substr_only": [
+    228,
+    229,
+    230,
+    231,
+    232,
+    233,
+    234,
+    236,
+    238,
+    239,
+    240,
+    241,
+    242,
+    243,
+    244
+  ],
+  "id_typed_traps_in_contradiction_index": [],
+  "baseline_trap_block": {
+    "n_trap_rows": 16,
+    "trap_at1_rate": 0.25,
+    "trap_at1_qids": [
+      230,
+      238,
+      241,
+      243
+    ],
+    "penalized_qids": [
+      230,
+      231,
+      235,
+      238
+    ],
+    "penalty_classes": [
+      "contradiction-resolution",
+      "knowledge-update"
+    ],
+    "note": "trap@1 is alarmed on ANY increase \u2014 retrieval is deterministic here, so a rise is a real regression"
+  },
+  "note": "Only id-typed trap rows can be resolved to a note id without reading note content, so this is a LOWER BOUND on reach. A substr-only trap may still be a contradicted note.",
+  "trap_at1_qids_id_typed": []
+}
