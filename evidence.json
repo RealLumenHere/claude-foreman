@@ -1,1 +1,1 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1898-pokemon-liveness-apply-live-fix/sentinel_probes.diff:6-15"}]}
+{"criteria": [{"id": "AC1", "citation": "ops/wq1500-minerva-promoter/test_minerva_promote.py:124-190", "cmd_run": "python3 ops/wq1500-minerva-promoter/test_minerva_promote.py", "exit_code": 0, "also": ["ops/wq1500-minerva-promoter/minerva-promote.timer:9", "ops/wq1500-minerva-promoter/install.sh:14-27", "ops/wq1396-minerva-proposal-promoter/install.sh:8-13"]}]}

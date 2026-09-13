@@ -1,0 +1,15 @@
+[Unit]
+Description=Run minerva-promote backfill 20min after each minerva-factory slot (wq#1500)
+Requires=minerva-promote.service
+
+[Timer]
+# minerva-factory.timer fires at *-*-* 03,07,11,17,19,23:35:00 UTC (+<=120s jitter) and promotes
+# what it plans in-process; this slot catches rows the hook fail-opened on, rows planned/staged
+# before the hook existed, and anything a manual `minerva-factory replan` parked.
+OnCalendar=*-*-* 03,07,11,17,19,23:55:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

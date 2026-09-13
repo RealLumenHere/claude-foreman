@@ -1,5 +1,12 @@
 # wq#1396 — minerva proposal -> wq ticket promoter
 
+> **SUPERSEDED (wq#1500, 2026-09-13).** The live promoter is `minerva_promote.py` in the minerva
+> repo (`/home/lumen/bin/minerva-promote`), hooked into `minerva_factory` and scheduled by
+> `ops/wq1500-minerva-promoter/`. This script uses a different column (`proposals.ticket` vs
+> `wq_ticket`), a different marker, lane `build` and no `[SEC]` title prefix, so running both
+> double-files every CVE proposal. `install.sh` here now refuses. Kept for the history of
+> wq#1397/wq#1398, which it filed.
+
 ## Root gap
 
 The minerva-classifier/proposal/eval timer chain runs every ~4h and, since
