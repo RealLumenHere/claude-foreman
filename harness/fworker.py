@@ -1188,6 +1188,70 @@ def _reader_thread(pipe, q):
         q.put(("eof", None))
 
 
+# ---------------------------------------------------------------------------
+# external SIGTERM (unit stop) — distinct from run_child()'s internal watchdog kill,
+# which SIGTERMs the CHILD and then retries in-process (wq#1894).
+# ---------------------------------------------------------------------------
+
+# do_attempt() populates this right before spawning the child and marks it written
+# once that attempt's own write_attempt_state() call lands normally — the window this
+# covers is exactly "child in flight, no attempt-N.json yet", the wq#1852/1883 gap.
+# Deliberately not wired into fire-mode's run_fire_child(): its attempt numbering is
+# tracked separately (run_fire_ticket's attempt_n) and run_child() there is always
+# called with attempt=1, so charging through this context would mislabel the record.
+_SIGTERM_CTX = {"ticket_id": None, "attempt": None, "worker_id": None, "proc": None,
+                "written": False}
+
+
+def set_sigterm_context(ticket_id, attempt, worker_id):
+    _SIGTERM_CTX.update(ticket_id=ticket_id, attempt=attempt, worker_id=worker_id,
+                         proc=None, written=False)
+
+
+def mark_attempt_written():
+    """This attempt's record already landed the normal way (do_attempt's own
+    write_attempt_state call) — a SIGTERM from here on must not re-charge or
+    re-release; that would race the retry ladder's own decision for the SAME claim."""
+    _SIGTERM_CTX["written"] = True
+
+
+def handle_external_sigterm(signum, frame):
+    """wq#1894: SIGTERM delivered to the fworker PROCESS itself (e.g. `systemctl stop
+    fworker-wq<id>`), not run_child()'s frame-gap/wall-clock/turns watchdog — that
+    internal path already funnels through _kill_proc_tree() and retries in the same
+    process, so it needs no help here. An external stop kills the whole worker with no
+    such retry: left alone, the ticket sits 'claimed' until lease expiry (wq#1852 sat
+    6h) and the spawn reservation sits held until SPAWN_RESERVE_TTL_S, because nothing
+    ever writes attempt-N.json or releases either.
+
+    On the way out: kill whatever child is running (the same _kill_proc_tree every
+    other terminate path uses), charge a minimal KILLED/signal attempt so
+    next_attempt_n() moves on, and release the wq claim. write_attempt_state() settles
+    the spawn reservation as its own side effect (_settle_spawn_reservation, wq#1893),
+    so there is nothing separate to release there. A no-op (just exit) if no attempt is
+    in flight, or this attempt's record already landed through the normal path."""
+    ctx = _SIGTERM_CTX
+    ticket_id, attempt = ctx["ticket_id"], ctx["attempt"]
+    if ticket_id is not None and not ctx["written"]:
+        log(f"SIGTERM: wq#{ticket_id} attempt {attempt} — worker stopping with no "
+            f"attempt-{attempt}.json yet; charging KILLED, releasing claim.")
+        if ctx["proc"] is not None:
+            _kill_proc_tree(ctx["proc"])
+        try:
+            write_attempt_state(ticket_id, attempt, {
+                "ticket": ticket_id, "attempt": attempt, "worker_id": ctx["worker_id"],
+                "classification": KILLED, "raw_classification": KILLED,
+                "killed_reason": "signal", "finished_at": time.time(),
+            })
+        except Exception as e:  # noqa: BLE001 — still must release the claim below
+            log(f"WARN: wq#{ticket_id} SIGTERM attempt-state write failed: {e!r}")
+        try:
+            wq_release(ticket_id)
+        except Exception as e:  # noqa: BLE001
+            log(f"WARN: wq#{ticket_id} SIGTERM release failed: {e!r}")
+    sys.exit(128 + signum)
+
+
 def _kill_proc_tree(proc, term_timeout=30, kill_timeout=10):
     """wq#1798 (dup-reported as wq#1813 — same gap, same fix, both close here): signal
     the whole process GROUP, not just the CLI pid. start_new_session=True at the spawn
@@ -1249,6 +1313,10 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1, start_new_session=True,
     )
+    # wq#1894: only meaningful when the caller has set a matching context via
+    # set_sigterm_context() (do_attempt's plain path) — fire-mode's run_fire_child()
+    # never does, so this is a no-op write there.
+    _SIGTERM_CTX["proc"] = proc
     q = queue.Queue()
     t = threading.Thread(target=_reader_thread, args=(proc.stdout, q), daemon=True)
     t.start()
@@ -1348,6 +1416,10 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         _kill_proc_tree(proc)
     else:
         proc.wait()
+    # wq#1894: proc is reaped either way by this point — clear the SIGTERM handler's
+    # reference so it never re-signals an already-dead pid.
+    if _SIGTERM_CTX["proc"] is proc:
+        _SIGTERM_CTX["proc"] = None
 
     exit_code = proc.returncode
     if exit_code is not None and exit_code < 0:
@@ -1800,6 +1872,10 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     log(f"attempt {attempt}: spawning {' '.join(shlex.quote(c) for c in cmd[:6])}... "
         f"cwd={worktree} max_turns={max_turns} wall_clock={wall_clock}s")
 
+    # wq#1894: from here until this attempt's own write_attempt_state() lands below, an
+    # external SIGTERM (unit stop) must charge a minimal KILLED record and release the
+    # claim itself — see handle_external_sigterm().
+    set_sigterm_context(ticket_id, attempt, worker_id)
     t0 = time.time()
     rate_limits_start = read_rate_limits_snapshot()
     state, exit_code, events, killed_reason, cpu_s, child_pid = run_child(
@@ -1959,6 +2035,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "total_cost_usd": state.total_cost_usd, "duration_ms": state.duration_ms,
     }
     state_path = write_attempt_state(ticket_id, attempt, attempt_record)
+    mark_attempt_written()  # wq#1894: attempt-N.json landed — SIGTERM no longer our job
     emit_attempt_span(ticket_id, ticket.get("lane"), attempt_record)
 
     # wq#704/wq#706/wq#736: usage sidecar, alongside attempt-N.json rather than folded
@@ -2686,6 +2763,10 @@ def cmd_verify_evidence(args):
 
 
 def main():
+    # wq#1894: installed once here, not at import time — tests import this module
+    # directly (test_kill_group.py, test_fworker_integration.py) without going through
+    # main(), and must keep the test runner's own default SIGTERM disposition.
+    signal.signal(signal.SIGTERM, handle_external_sigterm)
     ap = argparse.ArgumentParser(description="fworker — per-ticket claude -p supervisor")
     sub = ap.add_subparsers(dest="cmd", required=True)
 

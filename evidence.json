@@ -1,1 +1,8 @@
-{"criteria": [{"id": "AC1", "citation": "harness/systemd/lumen-despag.service:20"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "harness/fworker.py:1218-1252"
+    }
+  ]
+}
