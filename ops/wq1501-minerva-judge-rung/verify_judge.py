@@ -9,9 +9,13 @@ passes. Runs as lumen (journalctl + systemctl show are read-only).
   journal  verify lines since --since: ReadTimeout share and phantom-fallback
            4xx count. Fails on any fallback 4xx (a rung that cannot answer) or
            when ReadTimeout share exceeds --max-timeout-share.
-  window   JUDGE_CTX_CHARS minus --reserve must cover the proposal digest, else
-           build_context drops the digest tail and every retrieved fact
-           (wq#1383 window class, 3rd occurrence). WARN unless --strict.
+  window   wq#1528: the three sizes must stay ordered, judged against what the
+           judge actually sees (minerva_factpack.judge_digest compaction):
+             compact digest + CLOSED_WORLD + facts reserve <= FACTPACK_CAP
+             <= VERIFY_JUDGE_CTX_CHARS <= rung window (--rung-max chars,
+             qwen36-local n_ctx 8192 tokens).
+           Otherwise build_context drops the digest tail and every retrieved
+           fact (wq#1383 window class, 3rd occurrence). WARN unless --strict.
 
 Usage:
   verify_judge.py [env] [journal] [window] [--since TS] [--strict]
@@ -95,18 +99,63 @@ def check_journal(since, max_timeout_share):
     return not problems
 
 
-def check_window(digest_path, reserve, strict):
+FACTPACK_PATHS = ('/home/lumen/minerva/minerva_factpack.py',            # live
+                  '/home/lumen/research/minerva-ref/minerva_factpack.py')  # worker mirror
+
+
+def _load_factpack():
+    import importlib.util
+    for p in FACTPACK_PATHS:
+        if not os.path.exists(p):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location('_mfp_check', p)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)      # constants only; probes are lazy
+            return mod
+        except Exception:
+            continue
+    return None
+
+
+def check_window(digest_path, reserve, rung_max, strict):
     env = service_env()
-    window = int(env.get('JUDGE_CTX_CHARS', '0') or 0)
-    cap = window - reserve
+    # The code reads VERIFY_JUDGE_CTX_CHARS; JUDGE_CTX_CHARS is the legacy env
+    # name (factpack.conf 2026-07-27) kept as fallback for pre-wq#1528 hosts.
+    window = int(env.get('VERIFY_JUDGE_CTX_CHARS') or env.get('JUDGE_CTX_CHARS') or 0)
     if not os.path.exists(digest_path):
         print(f'window SKIP digest {digest_path} not readable here')
         return True
-    digest = os.path.getsize(digest_path)
-    ok = cap >= digest
+    fp = _load_factpack()
+    if fp is not None:
+        cap = int(env.get('FACTPACK_CAP') or fp.CAP)
+        reserve = int(env.get('FACTPACK_FACTS_RESERVE')
+                      or getattr(fp, 'FACTS_RESERVE', reserve))
+        with open(digest_path) as fh:
+            digest = len(fp.judge_digest(fh.read()))     # what the judge sees
+        need = digest + len(getattr(fp, 'CLOSED_WORLD', '')) + reserve
+        kind = 'compact'
+    else:                                # factpack unreadable: raw-size fallback
+        cap = int(env.get('FACTPACK_CAP') or window - reserve)
+        digest = os.path.getsize(digest_path)
+        need = digest + reserve
+        kind = 'raw'
+    problems = []
+    if cap < need:
+        problems.append(f'FACTPACK_CAP {cap} < {kind} digest + closed-world + '
+                        f'facts reserve {need} ({need - cap} over): digest tail '
+                        f'dropped and retrieved facts starved')
+    if cap > window:
+        problems.append(f'FACTPACK_CAP {cap} > judge window {window}: factpack '
+                        f'context truncated at the window')
+    if window > rung_max:
+        problems.append(f'window {window} > rung max {rung_max} chars '
+                        f'(qwen36-local n_ctx 8192 tokens): prompt overruns n_ctx')
+    ok = not problems
     tag = 'OK' if ok else ('FAIL' if strict else 'WARN')
-    print(f'window {tag} JUDGE_CTX_CHARS={window} cap={cap} digest={digest}'
-          + ('' if ok else f' :: digest tail dropped and retrieved facts starved ({digest - cap} over)'))
+    print(f'window {tag} window={window} cap={cap} reserve={reserve} '
+          f'digest({kind})={digest} rung_max={rung_max}'
+          + ('' if ok else ' :: ' + '; '.join(problems)))
     return ok or not strict
 
 
@@ -118,8 +167,12 @@ def main():
     ap.add_argument('--models-file', default=None,
                     help='one LiteLLM model name per line; fallback must be listed')
     ap.add_argument('--digest', default=DIGEST_DEFAULT)
-    ap.add_argument('--reserve', type=int, default=500,
-                    help='chars build_context keeps back from JUDGE_CTX_CHARS (FACTPACK_CAP = window - reserve)')
+    ap.add_argument('--reserve', type=int, default=4000,
+                    help='facts budget build_context reserves before the digest '
+                         '(fallback when FACTPACK_FACTS_RESERVE/minerva_factpack unavailable)')
+    ap.add_argument('--rung-max', type=int, default=23500,
+                    help='judge rung window in chars (qwen36-local n_ctx 8192 tokens '
+                         'minus completion + safety at ~3.0 chars/token)')
     ap.add_argument('--strict', action='store_true')
     a = ap.parse_args()
     checks = a.checks or ['env', 'journal', 'window']
@@ -129,7 +182,7 @@ def main():
     if 'journal' in checks:
         results.append(check_journal(a.since, a.max_timeout_share))
     if 'window' in checks:
-        results.append(check_window(a.digest, a.reserve, a.strict))
+        results.append(check_window(a.digest, a.reserve, a.rung_max, a.strict))
     sys.exit(0 if all(results) else 1)
 
 
