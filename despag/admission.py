@@ -296,9 +296,14 @@ def budget_snapshot(now: _dt.datetime | None = None) -> dict:
 def log_startup_reserves() -> None:
     """Log the reserve values in effect at startup (ticket requirement) — read once
     at import/app-startup so an operator can see what was actually loaded, not just
-    the code default, without a separate status endpoint."""
+    the code default, without a separate status endpoint. wq#1889: also logs the
+    Frank-active reserve and window, so an operator reading startup logs sees both
+    the floor and the bump it can jump to, not just the floor — matching what
+    budget_snapshot() surfaces at request time."""
     logger.warning(
-        "despag admission startup: FRANK_RESERVE_PCT=%s DESPAG_MAX_CLAUDE_CONCURRENT=%s "
+        "despag admission startup: FRANK_RESERVE_PCT=%s FRANK_RESERVE_PCT_ACTIVE=%s "
+        "FRANK_ACTIVE_WINDOW_MIN=%s DESPAG_MAX_CLAUDE_CONCURRENT=%s "
         "DESPAG_USAGE_POLL_SECONDS=%s",
-        dict(burn_rate.FRANK_RESERVE_PCT), DESPAG_MAX_CLAUDE_CONCURRENT, DESPAG_USAGE_POLL_SECONDS,
+        dict(burn_rate.FRANK_RESERVE_PCT), dict(burn_rate.FRANK_RESERVE_PCT_ACTIVE),
+        burn_rate.FRANK_ACTIVE_WINDOW_MIN, DESPAG_MAX_CLAUDE_CONCURRENT, DESPAG_USAGE_POLL_SECONDS,
     )
