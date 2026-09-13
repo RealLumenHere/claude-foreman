@@ -1,0 +1,229 @@
+{
+  "baseline": {
+    "hits": 4,
+    "n": 8,
+    "per_question": [
+      {
+        "both_gold_retrieved": false,
+        "gold": [
+          0,
+          1
+        ],
+        "id": "hathor-down",
+        "retrieved": [
+          0,
+          7,
+          9,
+          14
+        ]
+      },
+      {
+        "both_gold_retrieved": false,
+        "gold": [
+          2,
+          3
+        ],
+        "id": "qwen36-node",
+        "retrieved": [
+          2,
+          16,
+          19,
+          22
+        ]
+      },
+      {
+        "both_gold_retrieved": false,
+        "gold": [
+          4,
+          5
+        ],
+        "id": "wq1107-loop",
+        "retrieved": [
+          4,
+          8,
+          10,
+          14
+        ]
+      },
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          6,
+          7
+        ],
+        "id": "issue257-card",
+        "retrieved": [
+          6,
+          7,
+          0,
+          9
+        ]
+      },
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          8,
+          9
+        ],
+        "id": "wq1719-guard",
+        "retrieved": [
+          8,
+          9,
+          21,
+          35
+        ]
+      },
+      {
+        "both_gold_retrieved": false,
+        "gold": [
+          10,
+          11
+        ],
+        "id": "fleet-memory-split",
+        "retrieved": [
+          10,
+          35,
+          3,
+          4
+        ]
+      },
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          12,
+          13
+        ],
+        "id": "kv-cache-pilot",
+        "retrieved": [
+          12,
+          13,
+          3,
+          6
+        ]
+      },
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          14,
+          15
+        ],
+        "id": "reach-ts-gap",
+        "retrieved": [
+          14,
+          15,
+          40
+        ]
+      }
+    ],
+    "recall_at_bridge": 0.5
+  },
+  "delta_recall_at_bridge": 0.25,
+  "k": 4,
+  "sample_sha256": "eaa55b8a7ecf7c60a3d53fe5c293f137f6c8d8450519e188fa7858bbaf49a0f0",
+  "treatment": {
+    "hits": 6,
+    "n": 8,
+    "per_question": [
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          0,
+          1
+        ],
+        "id": "hathor-down",
+        "retrieved": [
+          0,
+          7,
+          1
+        ]
+      },
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          2,
+          3
+        ],
+        "id": "qwen36-node",
+        "retrieved": [
+          2,
+          16,
+          3
+        ]
+      },
+      {
+        "both_gold_retrieved": false,
+        "gold": [
+          4,
+          5
+        ],
+        "id": "wq1107-loop",
+        "retrieved": [
+          4,
+          8
+        ]
+      },
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          6,
+          7
+        ],
+        "id": "issue257-card",
+        "retrieved": [
+          6,
+          7
+        ]
+      },
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          8,
+          9
+        ],
+        "id": "wq1719-guard",
+        "retrieved": [
+          8,
+          9
+        ]
+      },
+      {
+        "both_gold_retrieved": false,
+        "gold": [
+          10,
+          11
+        ],
+        "id": "fleet-memory-split",
+        "retrieved": [
+          10,
+          35
+        ]
+      },
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          12,
+          13
+        ],
+        "id": "kv-cache-pilot",
+        "retrieved": [
+          12,
+          13,
+          20
+        ]
+      },
+      {
+        "both_gold_retrieved": true,
+        "gold": [
+          14,
+          15
+        ],
+        "id": "reach-ts-gap",
+        "retrieved": [
+          14,
+          15
+        ]
+      }
+    ],
+    "recall_at_bridge": 0.75
+  }
+}
