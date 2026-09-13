@@ -1199,13 +1199,31 @@ def _reader_thread(pipe, q):
 # Deliberately not wired into fire-mode's run_fire_child(): its attempt numbering is
 # tracked separately (run_fire_ticket's attempt_n) and run_child() there is always
 # called with attempt=1, so charging through this context would mislabel the record.
+#
+# wq#1911: "written" going True does NOT mean the claim is free to sit unguarded --
+# it only means THIS attempt's record landed. The gap between one attempt's
+# mark_attempt_written() and the next set_sigterm_context() (e.g. handle_limit's
+# up-to-6h RESUME_WAIT_MAX_S sleep) still holds the wq claim with "written" stuck
+# True from the finished attempt, so the old handler silently no-op'd there. "idle"
+# tracks that gap explicitly: True means "claim is ours, no child in flight, no
+# attempt-N.json pending" -- a SIGTERM must release the claim but must NOT fabricate
+# or overwrite an attempt record for a slot that already landed.
 _SIGTERM_CTX = {"ticket_id": None, "attempt": None, "worker_id": None, "proc": None,
-                "written": False}
+                "written": False, "idle": False}
 
 
 def set_sigterm_context(ticket_id, attempt, worker_id):
     _SIGTERM_CTX.update(ticket_id=ticket_id, attempt=attempt, worker_id=worker_id,
-                         proc=None, written=False)
+                         proc=None, written=False, idle=False)
+
+
+def set_sigterm_idle(ticket_id):
+    """wq#1911: mark the inter-attempt gap (claim held, no child in flight) as
+    SIGTERM-safe-to-release. Call before any multi-second-or-longer wait between
+    mark_attempt_written() and the next set_sigterm_context() -- currently only
+    handle_limit's resume-wait sleep, the one with real-world (up to 6h) exposure."""
+    _SIGTERM_CTX.update(ticket_id=ticket_id, attempt=None, proc=None, written=True,
+                         idle=True)
 
 
 def mark_attempt_written():
@@ -1229,9 +1247,23 @@ def handle_external_sigterm(signum, frame):
     next_attempt_n() moves on, and release the wq claim. write_attempt_state() settles
     the spawn reservation as its own side effect (_settle_spawn_reservation, wq#1893),
     so there is nothing separate to release there. A no-op (just exit) if no attempt is
-    in flight, or this attempt's record already landed through the normal path."""
+    in flight, or this attempt's record already landed through the normal path.
+
+    wq#1911: "landed through the normal path" is not the same as "safe to ignore" --
+    set_sigterm_idle() marks the inter-attempt gap (e.g. handle_limit's resume-wait
+    sleep) where the claim is still ours but no child is running and no attempt is
+    pending. That gap still needs the claim released; it must NOT get a fabricated
+    KILLED record written over the attempt that already landed."""
     ctx = _SIGTERM_CTX
     ticket_id, attempt = ctx["ticket_id"], ctx["attempt"]
+    if ticket_id is not None and ctx["idle"]:
+        log(f"SIGTERM: wq#{ticket_id} — worker stopping between attempts (no child "
+            f"in flight, e.g. mid LIMIT resume-wait); releasing claim.")
+        try:
+            wq_release(ticket_id)
+        except Exception as e:  # noqa: BLE001
+            log(f"WARN: wq#{ticket_id} SIGTERM idle-release failed: {e!r}")
+        sys.exit(128 + signum)
     if ticket_id is not None and not ctx["written"]:
         log(f"SIGTERM: wq#{ticket_id} attempt {attempt} — worker stopping with no "
             f"attempt-{attempt}.json yet; charging KILLED, releasing claim.")
@@ -2417,6 +2449,11 @@ def handle_limit(args, ticket_id, attempt, state, worktree):
     wait_s = (resets_epoch - now) if resets_epoch else None
     if wait_s is not None and 0 <= wait_s <= RESUME_WAIT_MAX_S and state.session_id:
         log(f"LIMIT: sleeping {wait_s:.0f}s then resuming session {state.session_id}")
+        # wq#1911: up to RESUME_WAIT_MAX_S (6h) of no child in flight and no attempt
+        # pending -- _SIGTERM_CTX["written"] is still stuck True from this attempt's
+        # own LIMIT record, so without this the handler silently no-op'd here and the
+        # claim sat until lease expiry on an external stop (the wq#1852 bug, relocated).
+        set_sigterm_idle(ticket_id)
         slept = 0
         while slept < wait_s:
             chunk = min(600, wait_s - slept)
