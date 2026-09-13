@@ -1,1 +1,9 @@
-{"criteria": [{"id": "AC1", "citation": "ops/wq1895-pokemon-liveness-retire-probe/sentinel_probes.diff:6-15"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "despag/decision/PHASE2_WIRING_SPEC.md:196-224",
+      "note": "The deliverable is the spec itself. §B.6 (lines 196-224) is the load-bearing finding: fworker's gateway migration is blocked on three gateway additions, derived from despag/uhp/translate.py:31-67 dropping every classification signal classifier.py:155-278 reads. Section index for the five decided items: A=27, B=98, C=284, D=349, E=390, RECOMMENDATION=439. Full file is 479 lines, new on this branch; a byte-identical copy was placed at the ticket's --deliverable path /home/lumen/projects/de-spaghettifier/decision/PHASE2_WIRING_SPEC.md (an untracked scratch dir in a remote-less repo, so the PR carries the tracked copy)."
+    }
+  ]
+}
