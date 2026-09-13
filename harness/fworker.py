@@ -581,7 +581,21 @@ def write_attempt_state(ticket_id, n, state):
     with open(tmp, "w") as f:
         json.dump(state, f, indent=2, default=str)
     os.rename(tmp, path)
+    _settle_spawn_reservation(ticket_id, n)
     return path
+
+
+def _settle_spawn_reservation(ticket_id, n):
+    """wq#1893: this attempt-N.json just landed, so harness/spawner.py's
+    dispatch-spawn:<ticket>:<n> reservation (PHASE0_WIRING_SPEC E.5, wq#1815) has done
+    its job of blocking a duplicate Popen — clear it now instead of leaving the row
+    'reserved' until SPAWN_RESERVE_TTL_S. Best-effort and isolated: bookkeeping for a
+    different subsystem's table must never fail an attempt that already landed."""
+    try:
+        import spawner  # same dir as this file — already on sys.path (see top of module)
+        spawner.settle_spawn(ticket_id, n)
+    except Exception as e:  # noqa: BLE001
+        log(f"WARN: spawn reservation settle skipped for wq#{ticket_id} attempt {n}: {e!r}")
 
 
 def fire_fenced_attempt_count(ticket_id):

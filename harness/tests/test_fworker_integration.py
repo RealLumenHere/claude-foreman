@@ -11,6 +11,7 @@ Covers the ticket's two named adversarial criteria end-to-end (not just at the u
 level): a denied verb is blocked at the hook during a real spawn, and a synthetic
 rejected-limit frame drives fworker's real LIMIT path (release + exit code), not CRASH.
 """
+import asyncio
 import json
 import os
 import subprocess
@@ -22,6 +23,7 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HARNESS_DIR)
 import fworker  # noqa: E402 — reuse slugify() so pre-created branch names match make_worktree's
 import failure_record  # noqa: E402
+import spawner  # noqa: E402 — wq#1893: assert write_attempt_state settles its spawn reservation
 
 FWORKER = os.path.join(HARNESS_DIR, "fworker.py")
 FAKE_CLAUDE = os.path.join(TESTS_DIR, "fake_claude.py")
@@ -471,6 +473,34 @@ def test_governor_deny_after_claim_releases_ticket(tmp_path):
 
     assert wq_status(env, ticket_id) == "open", "claim must be released, not held, on deny"
     assert not os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a1"))
+
+
+def test_success_settles_spawn_reservation(tmp_path):
+    """wq#1893 settle half: write_attempt_state (called from inside the real fworker
+    subprocess, not mocked) must clear its dispatch-spawn:<ticket>:<attempt>
+    reservation (harness/spawner.py, wq#1815's E.5 idempotency reserve) as soon as
+    attempt-1.json lands, instead of leaving the row 'reserved' until
+    SPAWN_RESERVE_TTL_S. The reclaim half (a dead owner's row) is covered in
+    test_spawner.py."""
+    repo = make_scratch_repo(tmp_path)
+    env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
+    ticket_id = wq_add(env, "scratch settle-reservation ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+    reserve_db = str(tmp_path / "spawn_reserve.db")
+    env["FOREMAN_SPAWN_RESERVE_DB"] = reserve_db
+
+    spawner.SPAWN_RESERVE_DB = reserve_db
+    key = f"dispatch-spawn:{ticket_id}:1"
+    assert spawner.reserve_spawn(ticket_id, 1, "fake-dispatcher-owner"), \
+        "pre-seed (standing in for the dispatcher's own reservation before it spawned this worker) must win"
+
+    result = run_fworker(env, ticket_id, repo, "success")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert wq_status(env, ticket_id) == "done"
+
+    store = spawner.ControlStore(reserve_db)
+    assert asyncio.run(store.idem_get(key)) is None, \
+        "write_attempt_state must settle (clear) the reservation once attempt-1.json lands"
 
 
 def test_resume_after_near_term_limit_reuses_worktree_and_closes(tmp_path):

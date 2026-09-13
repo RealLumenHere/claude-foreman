@@ -3,6 +3,7 @@
 governor, scratch wq db — mirrors the fixture style test_fworker_integration.py and
 test_settings_lint.py already use.
 """
+import asyncio
 import json
 import os
 import stat
@@ -171,6 +172,65 @@ def test_double_spawn_reservation_blocks_racing_duplicate(spawner_env):
     losers = [r for r in results if r is None]
     assert len(winners) == 1 and winners[0].startswith("UNIT=")
     assert len(losers) == 1
+
+
+def test_duplicate_reclaims_reservation_from_dead_owner(spawner_env, monkeypatch):
+    """wq#1893: a reservation whose owner never became a running fworker-wq<ticket>
+    unit — killed before Popen, or launched and then died (SIGTERM/OOM/node crash)
+    before write_attempt_state ran — must not lock the ticket's attempt number for the
+    full SPAWN_RESERVE_TTL_S (wq#1883: five passes logged 'spawn reservation already
+    held — duplicate spawn' over 02:55-03:18Z 2026-09-13 before the 6h TTL finally
+    cleared it). reserve_spawn must detect the dead owner (no fworker-wq<ticket> unit
+    in `lumen-run list` — state_file starts at "[]" per spawner_env) and reclaim the
+    row in the same pass, letting the spawn through. DEAD_OWNER_GRACE_S zeroed so the
+    pre-seeded reservation (created microseconds ago in test time) is old enough to
+    judge — see test_double_spawn_reservation_blocks_racing_duplicate for the case the
+    grace period itself exists to protect."""
+    monkeypatch.setattr(spawner, "DEAD_OWNER_GRACE_S", 0)
+    t = add_ticket("scratch spawner dead-owner ticket")
+    assert spawner.reserve_spawn(t, 1, "dead-dispatcher-owner"), \
+        "pre-seed must win the first reservation"
+
+    result = spawner.dispatch_one(t, spawner_env["repo"])
+    assert result is not None and result.startswith("UNIT=")
+
+    calls = read_calls(spawner_env["log_file"])
+    assert len(calls) == 1, "the reclaimed reservation must let exactly one spawn through"
+
+
+def test_duplicate_refused_when_owner_unit_still_running(spawner_env, monkeypatch):
+    """Companion to the reclaim test: when the ticket's fworker-wq<ticket> unit IS
+    running (per the fake `lumen-run list` state), a duplicate reservation hit must
+    still refuse before Popen, unchanged — reclaim must never steal a truly-live
+    worker's attempt slot. DEAD_OWNER_GRACE_S zeroed so this exercises the unit-
+    liveness check itself, not just the grace period that already protects a fresh
+    reservation regardless of unit state."""
+    monkeypatch.setattr(spawner, "DEAD_OWNER_GRACE_S", 0)
+    t = add_ticket("scratch spawner live-owner ticket")
+    spawner_env["state_file"].write_text(json.dumps([f"fworker-wq{t}"]))
+    assert spawner.reserve_spawn(t, 1, "live-dispatcher-owner")
+
+    result = spawner.dispatch_one(t, spawner_env["repo"])
+    assert result is None
+
+    calls = read_calls(spawner_env["log_file"])
+    assert calls == [], "a live owner's reservation must still refuse the duplicate spawn"
+
+
+def test_settle_spawn_clears_reservation(spawner_env):
+    """wq#1893 settle half: once fworker has written attempt-N.json for (ticket,
+    attempt) — harness/fworker.py's write_attempt_state calls this — the row must
+    clear immediately so spawn_reserve.db reflects only still-live spawns, instead of
+    every settled reservation sitting 'reserved' until SPAWN_RESERVE_TTL_S."""
+    t = add_ticket("scratch spawner settle ticket")
+    assert spawner.reserve_spawn(t, 1, "some-dispatcher-owner")
+
+    store = spawner.ControlStore(spawner.SPAWN_RESERVE_DB)
+    key = f"dispatch-spawn:{t}:1"
+    assert asyncio.run(store.idem_get(key)) is not None
+
+    spawner.settle_spawn(t, 1)
+    assert asyncio.run(store.idem_get(key)) is None
 
 
 def test_mixed_allow_and_deny_batch(spawner_env, monkeypatch):

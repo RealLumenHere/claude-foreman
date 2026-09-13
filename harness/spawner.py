@@ -33,6 +33,19 @@ The loser's reserve call returns the winner's record instead of None and exits b
 Popen; a spawn that fails to launch releases its reservation so the next pass can retry
 the same attempt number.
 
+wq#1893: that loser path had a gap — a worker that launched and then died WITHOUT
+writing attempt-N.json (operator SIGTERM, OOM, node crash) left its reservation row
+'reserved' with nobody left to release it, locking the ticket's attempt number for the
+full SPAWN_RESERVE_TTL_S (wq#1883: five passes logged spawn_failed over 02:55-03:18Z
+2026-09-13 before the TTL finally cleared it). reserve_spawn() now checks
+reservation_owner_alive() on a duplicate hit — is a `fworker-wq<ticket>` unit actually
+running? — and reclaims (release + re-reserve) a dead owner's row in the SAME pass
+instead of waiting out the TTL; a live owner still refuses, unchanged. And
+settle_spawn(), called from harness/fworker.py's write_attempt_state on every attempt
+write, clears the row as soon as the attempt actually lands instead of leaving every
+settled spawn 'reserved' until the TTL. The TTL stays as the last-resort net for
+whatever neither path catches.
+
 Usage:
   spawner.py dispatch --repo PATH --ticket ID [--ticket ID ...]
              [--ceiling N] [--stagger-min S] [--stagger-max S] [--slot-wait-max S]
@@ -81,6 +94,15 @@ SPAWN_RESERVE_DB = os.environ.get(
     os.path.join(FOREMAN_ROOT, "dispatcher", "runtime", "spawn_reserve.db"))
 SPAWN_RESERVE_TTL_S = int(os.environ.get("FOREMAN_SPAWN_RESERVE_TTL_S", str(6 * 3600)))
 
+# wq#1893: a reservation younger than this is never reclaimed, no matter what
+# reservation_owner_alive() says — its owner has simply not Popen'd yet (dispatch_one's
+# own `lumen-run start` call can take up to its 30s subprocess timeout, plus however
+# long the unit takes to register as "running"), NOT died. 60s is comfortably above
+# that window and comfortably below a dispatcher pass interval (wq#1883: 02:55-03:18Z
+# 2026-09-13, 5 passes ~4-5min apart) — a genuinely dead owner still gets reclaimed on
+# the very next pass, not after the full 6h TTL.
+DEAD_OWNER_GRACE_S = float(os.environ.get("FOREMAN_SPAWN_DEAD_OWNER_GRACE_S", "60"))
+
 
 def log(msg):
     print(f"[spawner {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {msg}", flush=True)
@@ -96,16 +118,54 @@ def governor_allows(model):
     return p.returncode == 0
 
 
+def reservation_owner_alive(ticket_id):
+    """wq#1893: is SOME fworker unit for this ticket currently running, per `lumen-run
+    list` (concurrency.py's own list_running_units — the identical signal the
+    concurrency cap and wq#1498's holder_unit_running both read)? A held reservation
+    whose ticket has no running unit means the owner (a dispatcher pass that reserved
+    but never Popen'd, or a worker that launched then died — SIGTERM/OOM/node crash —
+    without reaching write_attempt_state) is dead.
+
+    Fails CLOSED (assume alive) on any lumen-run trouble, matching wq#1498's
+    holder_unit_running: a liveness check that can't reach lumen-run must never be
+    read as 'confirmed dead'. Listed against the full fworker-wq* prefix and checked
+    by exact name, not `startswith(f"fworker-wq{ticket_id}")` — wq#1893 vs wq#18930
+    would otherwise prefix-collide."""
+    try:
+        units = concurrency.list_running_units(prefix="fworker-wq")
+    except concurrency.LumenRunError:
+        return True
+    return f"fworker-wq{ticket_id}" in units
+
+
 def reserve_spawn(ticket_id, attempt, owner):
     """Atomic reserve for (ticket_id, attempt) via despag's control_sqlite idem_reserve
     (wq#1807/E.5). True: we won, caller may spawn. False: someone else already holds
     this exact (ticket, attempt) reservation — the caller must exit before Popen.
     idem_reserve has no real await point (pure sqlite under one BEGIN IMMEDIATE), so
-    asyncio.run() per call is just a sync wrapper, not a background task."""
+    asyncio.run() per call is just a sync wrapper, not a background task.
+
+    wq#1893: a duplicate hit no longer means an automatic refusal — first check
+    whether the reservation's owner is still alive. A dead owner's row is reclaimed
+    (released, then re-reserved under this call's `owner`) in the SAME pass rather
+    than left to log spawn_failed every pass until SPAWN_RESERVE_TTL_S expires
+    (wq#1883). A live owner still refuses, unchanged — and so does an owner that is
+    merely too YOUNG to judge yet (DEAD_OWNER_GRACE_S)."""
     store = ControlStore(SPAWN_RESERVE_DB)
     key = f"dispatch-spawn:{ticket_id}:{attempt}"
     existing = asyncio.run(store.idem_reserve(key, owner, ttl_s=SPAWN_RESERVE_TTL_S))
-    return existing is None
+    if existing is None:
+        return True
+    age_s = time.time() - float(existing.get("ts") or 0)
+    if age_s < DEAD_OWNER_GRACE_S or reservation_owner_alive(ticket_id):
+        return False
+    asyncio.run(store.idem_release(key, existing.get("resp_id")))
+    existing = asyncio.run(store.idem_reserve(key, owner, ttl_s=SPAWN_RESERVE_TTL_S))
+    if existing is not None:
+        # someone else reclaimed it first in the same race window — defer to them.
+        return False
+    log(f"wq#{ticket_id} attempt {attempt}: reservation reclaimed from dead owner (wq#1893)")
+    return True
 
 
 def release_spawn(ticket_id, attempt, owner):
@@ -115,6 +175,23 @@ def release_spawn(ticket_id, attempt, owner):
     store = ControlStore(SPAWN_RESERVE_DB)
     key = f"dispatch-spawn:{ticket_id}:{attempt}"
     asyncio.run(store.idem_release(key, owner))
+
+
+def settle_spawn(ticket_id, attempt):
+    """wq#1893: clear the (ticket, attempt) reservation once fworker has actually
+    written attempt-N.json for it, so spawn_reserve.db reflects live spawns instead of
+    every settled row sitting 'reserved' until SPAWN_RESERVE_TTL_S. Called from
+    harness/fworker.py's write_attempt_state, which knows ticket_id/attempt but not
+    this dispatch pass's `owner` string — so it settles WHATEVER resp_id currently
+    holds the key rather than requiring an owner match. Safe: idem_release only
+    deletes a reservation whose resp_id still matches what was just read, so a racing
+    reclaim that reused the same key after this read can never be clobbered."""
+    store = ControlStore(SPAWN_RESERVE_DB)
+    key = f"dispatch-spawn:{ticket_id}:{attempt}"
+    existing = asyncio.run(store.idem_get(key))
+    if existing is None:
+        return
+    asyncio.run(store.idem_release(key, existing.get("resp_id")))
 
 
 def wait_for_slot(prefix, ceiling, max_wait_s):
