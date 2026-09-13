@@ -310,6 +310,19 @@ def _finish_events(turn, translator: RespTranslator) -> list[dict]:
     else:
         evs = translator.complete(status)
     evs[-1]["response"]["metadata"]["harness_id"] = rec["harness_id"]
+    # wq#1888 despag P2-2 (PHASE2_WIRING_SPEC.md §B.6): the eleven-plus fields a
+    # direct claude -p spawn's classifier.RunState carries that a bare UHP response
+    # has no channel for (result_subtype, terminal_reason, saw_limit, session_id,
+    # ...) — the LimitObserver already computed all of them off these same frames
+    # for the LIMIT wall, so attach the snapshot rather than let a gateway-backed
+    # fworker run misclassify every time (§B.3: without this every gateway run falls
+    # through to the no-result branch and LIMIT can never fire). Vendor-namespaced
+    # (errors.md §1) exactly like the /v1/uhp `lumen.budget` field.
+    limit_observer = rec.get("_limit_observer")
+    if limit_observer is not None:
+        evs[-1]["response"]["lumen"] = {
+            "run_state": {**limit_observer.state.to_dict(), "exit_code": turn.exit_code},
+        }
     rec["_final"] = evs[-1]["response"]
     return evs
 
@@ -525,10 +538,21 @@ async def _stream_response(response_id: str, cmd: list[str], cwd: str, env: dict
         # hopped to the loop — it only ever touches admission's own lock, and doing
         # it inline means a second in-flight session's next admission check sees the
         # pause the instant this frame lands, not after an event-loop round trip.
+        limit_flipped = False
         if limit_observer is not None:
+            was = limit_observer.state.saw_limit
             limit_observer(frame)
+            limit_flipped = limit_observer.state.saw_limit and not was
 
         def _feed() -> None:
+            # wq#1888 (PHASE2_WIRING_SPEC.md §B.6 item 2): a mid-turn LIMIT detection
+            # reaches the client as its own event the instant it's seen, not only in
+            # the terminal `lumen.run_state` sidecar — without this a rate-limit stall
+            # arrives as an opaque `harness_error` (translate.py's fail()) and a
+            # gateway-backed fworker has no `resets_at` to resume on (§B.3).
+            if limit_flipped:
+                queue.put_nowait(translator.vendor_event(
+                    "lumen.limit", resets_at=limit_observer.state.latest_resets_at))
             for ev in translator.feed(frame):
                 queue.put_nowait(ev)
         loop.call_soon_threadsafe(_feed)
@@ -681,6 +705,10 @@ async def create_response(request: Request):
     }
     settle_key = idem_key if reserved_by_us else None
     limit_observer = None if admission.is_local_model(model) else admission.LimitObserver()
+    # wq#1888: stashed alongside the other per-response bookkeeping so _finish_events
+    # (called later, from _settle_turn or a polled GET, not just here) can reach the
+    # same observer instance every frame was already fed through above.
+    RESPONSES[response_id]["_limit_observer"] = limit_observer
 
     if req.stream:
         return await _stream_response(response_id, cmd, cwd, env, req.timeout_seconds,

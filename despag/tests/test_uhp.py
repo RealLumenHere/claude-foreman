@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -131,6 +132,24 @@ def test_disabled_harness_rejected_on_create_response(client):
 # needed — which is the only way to prove the Idempotency-Key and the session lease are
 # actually on the runner's path and not on a 501 stub's.
 
+def _rebind_worktree_classifier(admission_module, monkeypatch):
+    """ISSUE-LOG #384: `despag/admission.py` hardcodes `/home/lumen/foreman/harness`
+    (the MAIN checkout) onto sys.path, so its `import classifier` (same shape as
+    `burn_rate` — see test_admission.py's own `_worktree_burn_rate`) loads MAIN's
+    copy no matter which worktree despag itself is running from: correct in
+    production (there is only one despag deployment, always on main) but wrong for a
+    per-ticket worktree's own tests, which must exercise THIS branch's
+    classifier.RunState.to_dict() (wq#1888), not main's classifier.py."""
+    import importlib.util
+
+    repo_root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "classifier_wq1888_worktree", repo_root / "harness" / "classifier.py")
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    monkeypatch.setattr(admission_module, "classifier", fresh)
+
+
 @pytest.fixture()
 def runner_client(tmp_path, monkeypatch):
     """`(make_client, mode_holder)`. The caller enters the TestClient as a context
@@ -138,7 +157,6 @@ def runner_client(tmp_path, monkeypatch):
     turn in an asyncio task, which a per-request portal would tear down."""
     import importlib
     import sys
-    from pathlib import Path
 
     monkeypatch.setenv("DESPAG_API_TOKEN_FILE", str(tmp_path / "token"))
     monkeypatch.setenv("DESPAG_DATA_DIR", str(tmp_path / "data"))
@@ -147,6 +165,7 @@ def runner_client(tmp_path, monkeypatch):
     import despag.app as app_module
 
     importlib.reload(app_module)
+    _rebind_worktree_classifier(app_module.admission, monkeypatch)
     fake = str(Path(__file__).resolve().parent / "fake_backend.py")
     mode: list[str] = ["--mode", "quick"]
 
@@ -322,6 +341,77 @@ def test_stream_and_blocking_agree_on_output_shape(runner_client):
     assert blocking["status"] == streamed["status"] == "completed"
     strip_id = lambda output: [{k: v for k, v in item.items() if k != "id"} for item in output]
     assert strip_id(blocking["output"]) == strip_id(streamed["output"])
+
+
+# --- wq#1888 despag P2-2: lumen.run_state / lumen.limit vendor sidecars ------------
+# PHASE2_WIRING_SPEC.md §B.6: what a gateway-backed fworker needs on the wire that a
+# bare UHP response has no channel for.
+
+def test_terminal_event_carries_lumen_run_state_sidecar(runner_client):
+    app_module, _ = runner_client
+    with TestClient(app_module.app) as c:
+        r = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi", "stream": True})
+    assert r.status_code == 200, r.text
+    terminal = _parse_sse(r.text)[-1]
+    run_state = terminal["response"]["lumen"]["run_state"]
+    assert run_state["result_subtype"] == "success"
+    assert run_state["result_is_error"] is False
+    assert run_state["saw_limit"] is False
+    assert run_state["turns"] >= 1
+    assert run_state["exit_code"] == 0
+
+
+def test_blocking_response_also_carries_lumen_run_state_sidecar(runner_client):
+    # The sidecar must not be a streaming-only artifact — a gateway-backed fworker
+    # that never sets stream:true still needs it off the polled/blocking response.
+    app_module, _ = runner_client
+    with TestClient(app_module.app) as c:
+        body = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi"}).json()
+    assert body["lumen"]["run_state"]["result_subtype"] == "success"
+
+
+def test_local_model_turn_has_no_lumen_run_state_sidecar(runner_client):
+    # admission.is_local_model models are exempt from LimitObserver entirely
+    # (create_response only builds one `if not admission.is_local_model(model)`) —
+    # no observer, no sidecar.
+    app_module, _ = runner_client
+    with TestClient(app_module.app) as c:
+        body = c.post(
+            "/v1/responses", headers=_auth(app_module),
+            json={"input": "hi", "model": "qwen36-local"},
+        ).json()
+    assert "lumen" not in body
+
+
+def test_mid_stream_rate_limit_emits_lumen_limit_event_before_terminal(runner_client):
+    app_module, mode = runner_client
+    mode[:] = ["--mode", "rate_limited"]
+    with TestClient(app_module.app) as c:
+        r = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi", "stream": True})
+    assert r.status_code == 200, r.text
+    events = _parse_sse(r.text)
+    limit_events = [e for e in events if e["type"] == "lumen.limit"]
+    assert len(limit_events) == 1
+    assert limit_events[0]["resets_at"] == "2026-09-12T13:00:00+00:00"
+    # gapless sequence, and strictly before the terminal event (§B.6 item 2: a
+    # gateway-backed client must learn saw_limit mid-turn, not only at the end).
+    assert [e["sequence_number"] for e in events] == list(range(len(events)))
+    # fake_backend's rate_limited mode never emits a result frame (exit 1 right
+    # after the rejected rate_limit_event) — canonical._status_from_result has no
+    # result frame to read, so this is response.failed, not .completed.
+    terminal_idx = next(i for i, e in enumerate(events) if e["type"] == "response.failed")
+    assert events.index(limit_events[0]) < terminal_idx
+    assert events[terminal_idx]["response"]["lumen"]["run_state"]["saw_limit"] is True
+    assert (events[terminal_idx]["response"]["lumen"]["run_state"]["latest_resets_at"]
+            == "2026-09-12T13:00:00+00:00")
+
+
+def test_blocking_rate_limited_turn_sidecar_reports_saw_limit(runner_client):
+    app_module, mode = runner_client
+    mode[:] = ["--mode", "rate_limited"]
+    with TestClient(app_module.app) as c:
+        body = c.post("/v1/responses", headers=_auth(app_module), json={"input": "hi"}).json()
+    assert body["lumen"]["run_state"]["saw_limit"] is True
 
 
 def test_stream_idempotency_key_replays_settled_output(runner_client):
