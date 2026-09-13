@@ -1,8 +1,1 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "despag/backends/claude_max.py:25-32"
-    }
-  ]
-}
+{"criteria": [{"id": "AC1", "citation": "ops/wq1895-pokemon-liveness-retire-probe/sentinel_probes.diff:6-15"}]}
