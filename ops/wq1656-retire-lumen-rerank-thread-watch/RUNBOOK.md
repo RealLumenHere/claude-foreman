@@ -55,11 +55,53 @@ be found" on `systemctl status`, then `unit-drift snapshot` to fold the
 removal into the `/home/lumen/fleet-units` baseline (otherwise `unit-drift
 check` would flag the disappearance as unexpected drift on its next run).
 
+## wq#1762 attempt (2026-09-13) — still blocked, now with the privilege proof
+
+wq#1762 was dispatched to a build lane, which has the same restriction. Live
+state re-confirmed 2026-09-13 (`systemctl show`, `LastTriggerUSec=@1789273000`
+= 04:16:40Z, i.e. still firing every 5 min):
+
+| unit | LoadState | ActiveState | UnitFileState |
+|---|---|---|---|
+| lumen-rerank-thread-watch.timer | loaded | active | enabled |
+| lumen-rerank-thread-watch.service | loaded | inactive | static |
+
+Two independent walls, not one:
+
+1. **Guard deny-list.** `systemctl disable --now lumen-rerank-thread-watch.timer`
+   returns `guard.sh: BLOCKED — systemctl stop/disable/mask denied`
+   (`foreman/harness/guard.sh:92-93`, deny patterns at
+   `foreman/harness/worker-settings.json:107-109`).
+2. **Privilege.** The lane runs as uid 1000 `lumen`;
+   `/etc/systemd/system` is `root` `0755` and both unit files are `root`
+   `0644`, so step (2) of the removal needs root regardless of the guard.
+   `sudo *` is on the same deny-list (`worker-settings.json:118`), and `/etc`
+   is outside the lane's allowed directories.
+
+So no build lane can close this, and the ISSUE-LOG #376 `python3 -c` file-I/O
+workaround does not apply — that one routed around a *path* boundary on a
+lumen-writable file; here the target is root-owned. Deleting the unit files
+without first stopping the timer would also leave the timer active-but-not-found
+in memory, a worse state than today.
+
+`ops/wq1656-retire-lumen-rerank-thread-watch/remove-units.sh` (added by wq#1762)
+performs all six steps idempotently and verifies them; run it as root from a
+context without the build-lane deny-list:
+
+    sudo bash ops/wq1656-retire-lumen-rerank-thread-watch/remove-units.sh
+
+This is the third ticket stacked on the same missing capability —
+wq#1643 (`lumen-split-watch.timer`, still `enabled` as of 2026-09-13),
+wq#1656/wq#1762 (this unit), wq#1778 (dgm). The durable fix is a
+systemctl-mutate path for retirement work, not another follow-up ticket; see
+ISSUE-LOG entry #377.
+
 ## Verify
 
-Once wq#1762 lands: `systemctl status lumen-rerank-thread-watch.timer` and
+Once the removal runs: `systemctl status lumen-rerank-thread-watch.timer` and
 `.service` both report "could not be found"; `unit-drift check --digest`
-shows no drift for these two units afterward.
+shows no drift for these two units afterward. `remove-units.sh` asserts both
+and exits non-zero if either unit survives.
 
 ## Rollback
 

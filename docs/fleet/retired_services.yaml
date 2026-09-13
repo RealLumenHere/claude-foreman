@@ -107,6 +107,13 @@
         `unit-drift snapshot` to fold the removal into the
         `/home/lumen/fleet-units` baseline (see
         ops/wq1656-retire-lumen-rerank-thread-watch/RUNBOOK.md).
+        STATUS 2026-09-13 (wq#1762): still live — timer loaded/active/enabled,
+        last triggered 04:16:40Z. wq#1762 was dispatched to another build lane
+        and hit both the same guard and a privilege wall (unit files are
+        root-owned under `/etc`, lane runs as uid 1000), so it could not close;
+        it left a root-runnable
+        ops/wq1656-retire-lumen-rerank-thread-watch/remove-units.sh performing
+        all six steps, and ISSUE-LOG #377 for the capability gap.
 
 - name: lumen-agent (context only, not touched by wq#1643)
   units: [lumen-agent]
