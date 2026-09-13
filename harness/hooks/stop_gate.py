@@ -66,11 +66,17 @@ def decide(hook_input):
     """(exit_code, message). Pure enough to test without a subprocess."""
     worktree = (os.environ.get("FOREMAN_WORKTREE_ROOT")
                 or hook_input.get("cwd") or os.getcwd())
-    acc = acceptance.read_acceptance(worktree)
+    ticket_id = os.environ.get(TICKET_ENV)
+    # wq#1905: prefer the run_dir copy pin() wrote at dispatch and never touches again —
+    # unlike evidence.json (attempt-scoped, only ever a live snapshot), the same doc
+    # governs every attempt, so there is no staleness risk in reading it here. Falls
+    # back to the worktree copy when run_dir isn't reachable (most workers' sandbox) or
+    # the ticket id isn't set (e.g. a bare `decide()` call in tests).
+    run_dir = acceptance.run_dir_path(ticket_id) if ticket_id else None
+    acc = acceptance.read_acceptance(worktree, run_dir=run_dir)
     if not acc or not (acc.get("criteria") or []):
         return ALLOW, ""  # no pinned criteria for this ticket — nothing to enforce
 
-    ticket_id = os.environ.get(TICKET_ENV)
     evidence = acceptance.read_evidence(worktree)
     missing = acceptance.gaps(acc, evidence)
     if not missing:

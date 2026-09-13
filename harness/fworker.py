@@ -2598,9 +2598,16 @@ def verify_done(ticket_id, worktree, attempt, base_ref="origin/main"):
     if not pinned or not pinned.get("criteria"):
         return True, False
 
+    # Tamper detection reads the WORKTREE copy specifically — that is the worker's only
+    # writable copy, so it is the one an edit would show up in; run_dir's copy is never
+    # touched after pin() and would silently hide the tamper if checked instead (wq#1905).
     live = acceptance_mod.read_acceptance(worktree)
     tampered = live is not None and acceptance_mod.doc_hash(live) != acceptance_mod.doc_hash(pinned)
-    evidence = acceptance_mod.read_evidence(worktree)
+    # wq#1905: snapshot the worker's evidence.json into run_dir (outside its sandbox,
+    # never git-tracked) before reading it — run_dir becomes the actual replay source,
+    # the worktree copy only a fallback for when the snapshot itself couldn't be taken.
+    acceptance_mod.snapshot_evidence(worktree, rd)
+    evidence = acceptance_mod.read_evidence(worktree, run_dir=rd)
     ev_dir = os.path.join(rd, "evidence", f"attempt-{attempt}")
     # Diff against the sha origin/main pointed at when this ticket was dispatched, not
     # the live ref: if this ticket's own PR has since merged, HEAD is now an ancestor of
@@ -2626,7 +2633,9 @@ def verify_done(ticket_id, worktree, attempt, base_ref="origin/main"):
 
     try:
         os.makedirs(ev_dir, exist_ok=True)
-        src = os.path.join(worktree, acceptance_mod.EVIDENCE_FILENAME)
+        # wq#1905: source the just-snapshotted run_dir copy, not the worktree — it is
+        # the one this replay actually verified against.
+        src = os.path.join(rd, acceptance_mod.EVIDENCE_FILENAME)
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(ev_dir, acceptance_mod.EVIDENCE_FILENAME))
     except OSError:
@@ -3108,13 +3117,19 @@ def cmd_verify_evidence(args):
     """Read-only replay: same verdict fworker will reach, minus the state transition."""
     rd = run_dir(args.ticket)
     pinned = (acceptance_mod.pinned_doc(rd)
-              or acceptance_mod.read_acceptance(args.worktree))
+              or acceptance_mod.read_acceptance(args.worktree, run_dir=rd))
     if not pinned or not pinned.get("criteria"):
         print(json.dumps({"ok": True, "reason": "no pinned acceptance criteria"}))
         return EXIT_OK
     frozen_ref = acceptance_mod.pinned_origin_sha(rd) or args.base_ref
+    # wq#1905: same snapshot-then-read-from-run_dir replay path verify_done() uses —
+    # this CLI is the same verdict "minus the state transition" (see docstring above),
+    # so it reads the same source. When the caller (a worker self-checking mid-session)
+    # can't reach run_dir at all, the snapshot best-effort no-ops and the read falls
+    # back to the worktree copy, same as before this ticket.
+    acceptance_mod.snapshot_evidence(args.worktree, rd)
     result = acceptance_mod.verify(
-        pinned, acceptance_mod.read_evidence(args.worktree), args.worktree,
+        pinned, acceptance_mod.read_evidence(args.worktree, run_dir=rd), args.worktree,
         base_ref=frozen_ref)
     print(json.dumps(result, indent=2))
     return EXIT_OK if result["ok"] else EXIT_BLOCKED

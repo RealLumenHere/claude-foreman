@@ -532,3 +532,163 @@ def test_settings_wire_the_stop_gate_and_deny_editing_the_pin():
                  json.load(open(os.path.join(HARNESS_DIR, "permission-profiles",
                                              "base.json")))["deny"]):
         assert "Write(**/acceptance.json)" in pack and "Edit(**/acceptance.json)" in pack
+
+
+# ---------------------------------------------------------------------------
+# wq#1905 — evidence.json/acceptance.json move out of the tracked worktree tree
+# ---------------------------------------------------------------------------
+
+def test_pin_writes_the_run_dir_copy_alongside_the_worktree_one(worktree, tmp_path):
+    run_dir = tmp_path / "rd"
+    run_dir.mkdir()
+    doc = _acceptance_doc()
+    acceptance.pin(str(worktree), str(run_dir), doc)
+    assert acceptance.read_json(os.path.join(str(run_dir),
+                                              acceptance.ACCEPTANCE_FILENAME)) == doc
+
+
+def test_read_acceptance_prefers_run_dir_over_the_worktree_copy(worktree, tmp_path):
+    run_dir = tmp_path / "rd"
+    run_dir.mkdir()
+    acceptance.write_json(os.path.join(str(worktree), acceptance.ACCEPTANCE_FILENAME),
+                          {"ticket": "worktree-copy"})
+    acceptance.write_json(os.path.join(str(run_dir), acceptance.ACCEPTANCE_FILENAME),
+                          {"ticket": "run-dir-copy"})
+    assert acceptance.read_acceptance(str(worktree),
+                                      run_dir=str(run_dir))["ticket"] == "run-dir-copy"
+
+
+def test_read_acceptance_falls_back_to_the_worktree_when_run_dir_has_no_copy(
+        worktree, tmp_path):
+    run_dir = tmp_path / "rd"  # never written to
+    acceptance.write_json(os.path.join(str(worktree), acceptance.ACCEPTANCE_FILENAME),
+                          {"ticket": "worktree-copy"})
+    assert acceptance.read_acceptance(str(worktree),
+                                      run_dir=str(run_dir))["ticket"] == "worktree-copy"
+
+
+def test_read_evidence_prefers_run_dir_and_falls_back_to_the_worktree(worktree, tmp_path):
+    run_dir = tmp_path / "rd"
+    run_dir.mkdir()
+    _write_evidence(worktree, [{"id": "AC1", "citation": "from-worktree"}])
+    assert acceptance.read_evidence(str(worktree),
+                                    run_dir=str(run_dir))["criteria"][0]["citation"] \
+        == "from-worktree"
+    acceptance.write_json(os.path.join(str(run_dir), acceptance.EVIDENCE_FILENAME),
+                          {"criteria": [{"id": "AC1", "citation": "from-run-dir"}]})
+    assert acceptance.read_evidence(str(worktree),
+                                    run_dir=str(run_dir))["criteria"][0]["citation"] \
+        == "from-run-dir"
+
+
+def test_snapshot_evidence_copies_the_worktree_file_into_run_dir(worktree, tmp_path):
+    run_dir = tmp_path / "rd"
+    run_dir.mkdir()
+    _write_evidence(worktree, [{"id": "AC1", "citation": "impl.py:3"}])
+    acceptance.snapshot_evidence(str(worktree), str(run_dir))
+    copied = acceptance.read_json(os.path.join(str(run_dir), acceptance.EVIDENCE_FILENAME))
+    assert copied["criteria"][0]["citation"] == "impl.py:3"
+
+
+def test_snapshot_evidence_is_a_noop_when_the_worktree_has_nothing_to_copy(
+        worktree, tmp_path):
+    run_dir = tmp_path / "rd"
+    run_dir.mkdir()
+    acceptance.write_json(os.path.join(str(run_dir), acceptance.EVIDENCE_FILENAME),
+                          {"criteria": [{"id": "AC1", "citation": "already-here"}]})
+    acceptance.snapshot_evidence(str(worktree), str(run_dir))  # no evidence.json in worktree
+    still_there = acceptance.read_json(os.path.join(str(run_dir),
+                                                     acceptance.EVIDENCE_FILENAME))
+    assert still_there["criteria"][0]["citation"] == "already-here"
+
+
+def test_verify_done_replays_from_the_run_dir_snapshot(worktree, gated):
+    """fworker's real done-path: verify_done() snapshots the worktree's evidence.json
+    into run_dir and replays from there — this is the AC1/AC2 pass case with the run_dir
+    copy asserted directly, not just the pass/fail verdict (already covered by
+    test_c_fixing_the_failure_is_accepted_and_clears_the_rejection)."""
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    _write_evidence(worktree, [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                               {"id": "AC2", "citation": "impl.py:3"}])
+    ok, escalated = fworker.verify_done(4242, str(worktree), 1, base_ref="main")
+    assert (ok, escalated) == (True, False)
+    rd = fworker.run_dir(4242)
+    snapshot = acceptance.read_json(os.path.join(rd, acceptance.EVIDENCE_FILENAME))
+    assert {c["id"] for c in snapshot["criteria"]} == {"AC1", "AC2"}
+
+
+def test_verify_done_still_replays_when_the_worktree_copy_is_already_gone(worktree, gated):
+    """The worktree is only ever a fallback source: if the run_dir copy already exists
+    (e.g. from an earlier snapshot) and the worktree file is gone, replay still works."""
+    rd = fworker.run_dir(4242)
+    _write_evidence(worktree, [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                               {"id": "AC2", "citation": "impl.py:3"}])
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    acceptance.snapshot_evidence(str(worktree), rd)
+    os.remove(os.path.join(str(worktree), acceptance.EVIDENCE_FILENAME))
+    ok, escalated = fworker.verify_done(4242, str(worktree), 1, base_ref="main")
+    assert (ok, escalated) == (True, False)
+
+
+def test_ops_deploy_check_replays_correctly_from_a_run_dir_evidence_file(
+        worktree, tmp_path):
+    """wq#1905 Tests item: an ops/*/install.sh citation with a deploy_target still gets
+    the wq#1724 deploy-evidence check when the evidence entry comes from run_dir, not the
+    worktree — verify() itself is storage-agnostic, so this exercises the read_evidence
+    run_dir path feeding straight into it."""
+    art_dir = _write_ops_artifact(worktree)
+    live = tmp_path / "target" / "lumen_state.py"
+    live.parent.mkdir()
+    live.write_text("# fixed lifecycle closure logic\n")
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    run_dir = tmp_path / "rd"
+    run_dir.mkdir()
+    acceptance.write_json(os.path.join(str(run_dir), acceptance.EVIDENCE_FILENAME), {
+        "criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                     {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                      "deploy_target": str(live)}]})
+    evidence = acceptance.read_evidence(str(worktree), run_dir=str(run_dir))
+    result = acceptance.verify(_acceptance_doc(), evidence, str(worktree), base_ref="main")
+    assert result["ok"], result["failed"]
+
+
+def test_lint_fails_when_a_worktree_stages_the_root_evidence_files(worktree):
+    (worktree / "acceptance.json").write_text("{}")
+    (worktree / "evidence.json").write_text("{}")
+    _git(worktree, "add", "-f", "acceptance.json", "evidence.json")
+    assert set(acceptance.staged_leak(str(worktree))) == {"acceptance.json", "evidence.json"}
+
+
+def test_lint_is_clean_when_nothing_is_staged(worktree):
+    assert acceptance.staged_leak(str(worktree)) == []
+
+
+def test_lint_is_clean_when_other_files_are_staged(worktree):
+    (worktree / "unrelated.py").write_text("x = 1\n")
+    _git(worktree, "add", "unrelated.py")
+    assert acceptance.staged_leak(str(worktree)) == []
+
+
+def test_stop_hook_reads_acceptance_from_run_dir_when_the_ticket_id_is_set(
+        worktree, tmp_path, monkeypatch):
+    """wq#1905: the Stop hook's own acceptance read now prefers run_dir (never touched
+    after pin(), so no staleness risk) — proven here by pinning ONLY into run_dir and
+    leaving the worktree copy absent entirely."""
+    monkeypatch.setattr(acceptance, "RUNS_ROOT", str(tmp_path))
+    run_dir = tmp_path / "wq4242"  # acceptance.run_dir_path("4242")'s exact layout
+    run_dir.mkdir()
+    doc = _acceptance_doc()
+    acceptance.write_json(os.path.join(str(run_dir), acceptance.ACCEPTANCE_FILENAME), doc)
+    monkeypatch.setenv("FOREMAN_WORKTREE_ROOT", str(worktree))
+    monkeypatch.setenv("FOREMAN_TICKET_ID", "4242")
+    monkeypatch.setattr(stop_gate, "_ticket_is_done", lambda tid: False)
+    code, msg = stop_gate.decide({"session_id": "s1"})
+    assert code == stop_gate.BLOCK
+    assert "AC1" in msg and "AC2" in msg
+
+
+def test_gitignore_excludes_the_root_evidence_files():
+    repo_root = os.path.dirname(HARNESS_DIR)
+    with open(os.path.join(repo_root, ".gitignore")) as f:
+        text = f.read()
+    assert "/acceptance.json" in text and "/evidence.json" in text

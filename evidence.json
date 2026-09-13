@@ -1,8 +1,0 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "harness/fworker.py:1511-1512"
-    }
-  ]
-}

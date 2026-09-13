@@ -21,12 +21,28 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 
 ACCEPTANCE_FILENAME = "acceptance.json"
 EVIDENCE_FILENAME = "evidence.json"
 REWORK_FILENAME = "rework.json"
 PIN_FILENAME = "acceptance-pin.json"
+
+# wq#1905: acceptance.json/evidence.json used to be written only at the tracked
+# worktree root — a worktree of the FOREMAN repo itself, so 82 commits on main each
+# clobbered the previous ticket's evidence with its own. The run dir (fworker's
+# RUNS_ROOT/wq<id>, never git-tracked) is the durable per-ticket home now; the
+# worktree copy is kept only as a fallback for a worker whose sandbox can't reach it.
+FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
+RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_runs"))
+
+
+def run_dir_path(ticket_id):
+    """Same layout as fworker.run_dir(), without fworker's heavier import surface and
+    without creating it — a run dir that doesn't exist yet just means callers fall back
+    to the worktree copy."""
+    return os.path.join(RUNS_ROOT, f"wq{ticket_id}")
 
 # Replaying a criterion means the HARNESS runs the command, so the command has to come
 # from a bounded set: acceptance.json is derived from ticket text, and ticket text is
@@ -277,6 +293,11 @@ def pin(worktree, run_dir, doc, origin_sha=None):
     write_json(os.path.join(run_dir, PIN_FILENAME),
                 {"hash": digest, "criteria": len(doc.get("criteria", [])),
                  "ticket": doc.get("ticket"), "doc": doc, "origin_sha": origin_sha})
+    # wq#1905: a plain-named copy alongside the wrapped pin record, so tools that just
+    # want "the acceptance doc for this ticket" (read_acceptance's run_dir-first lookup)
+    # find it without unwrapping acceptance-pin.json. This copy is never rewritten after
+    # dispatch, unlike the worktree one — it is not what the tamper check inspects.
+    write_json(os.path.join(run_dir, ACCEPTANCE_FILENAME), doc)
     return path, digest
 
 
@@ -308,12 +329,63 @@ def read_json(path):
         return None
 
 
-def read_acceptance(worktree):
+def read_acceptance(worktree, run_dir=None):
+    """wq#1905: run_dir first when given — it is the copy pin() wrote once at dispatch
+    and nothing after that touches. Callers doing TAMPER detection (did the worker edit
+    its mutable worktree copy?) must not pass run_dir here; they need the worktree copy
+    specifically, by design."""
+    if run_dir:
+        doc = read_json(os.path.join(run_dir, ACCEPTANCE_FILENAME))
+        if doc is not None:
+            return doc
     return read_json(os.path.join(worktree, ACCEPTANCE_FILENAME))
 
 
-def read_evidence(worktree):
+def read_evidence(worktree, run_dir=None):
+    """wq#1905: run_dir first when given. Pair with snapshot_evidence() beforehand if
+    the run_dir copy needs to be fresh — this function alone never looks at the
+    worktree once a run_dir copy exists."""
+    if run_dir:
+        doc = read_json(os.path.join(run_dir, EVIDENCE_FILENAME))
+        if doc is not None:
+            return doc
     return read_json(os.path.join(worktree, EVIDENCE_FILENAME))
+
+
+def snapshot_evidence(worktree, run_dir):
+    """wq#1905: copy the worker's worktree evidence.json into run_dir right before a
+    replay. The fworker process (unlike the sandboxed worker, which cannot write outside
+    its worktree/add-dirs) can always reach run_dir, so this is what makes run_dir the
+    replay's actual source rather than merely a second place a stale copy could sit.
+    Best-effort: a worktree the worker never wrote to, or a run_dir the caller's own
+    sandbox can't reach (the read-only self-check CLI, invoked BY the worker), must not
+    break the read that follows — it just falls back to the worktree copy instead."""
+    src = os.path.join(worktree, EVIDENCE_FILENAME)
+    try:
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(run_dir, EVIDENCE_FILENAME))
+    except OSError:
+        pass
+
+
+# wq#1905: these two filenames are per-ticket claims, not source — 82 commits on main
+# each clobbered a different ticket's evidence.json before the tracked-tree copies were
+# removed (git rm --cached) and gitignored. staged_leak() is the lint: a non-empty
+# result means one of them is staged for commit in `worktree` and the commit must be
+# refused, not warned about.
+LEAK_FILENAMES = (ACCEPTANCE_FILENAME, EVIDENCE_FILENAME)
+
+
+def staged_leak(worktree):
+    try:
+        p = subprocess.run(["git", "-C", worktree, "diff", "--cached", "--name-only"],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if p.returncode != 0:
+        return []
+    staged = set(p.stdout.splitlines())
+    return [name for name in LEAK_FILENAMES if name in staged]
 
 
 # ---------------------------------------------------------------------------
