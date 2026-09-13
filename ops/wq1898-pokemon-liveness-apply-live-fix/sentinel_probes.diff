@@ -1,0 +1,19 @@
+--- a/home/lumen/sentinel/probes/sentinel_probes.py
++++ b/home/lumen/sentinel/probes/sentinel_probes.py
+@@ -977,7 +977,16 @@
+     ("probe-kb-hygiene",      probe_kb_hygiene,      "24h"),
+     ("probe-storage-integrity", probe_storage_integrity, False),
+-    ("probe-pokemon-liveness", probe_pokemon_liveness, False),
++    # DISABLED 2026-09-13 (wq#1898, dup of wq#1895): lumen-pokemon-live.service is masked
++    # (LoadState=masked, retired) -- confirmed live via
++    # `systemctl show lumen-pokemon-live.service -p LoadState`. The wq#1092
++    # stale-target guard already keeps this from paging (STALE, not
++    # CRITICAL); it kept re-filing this ticket every cycle because wq#1895
++    # only prepared this diff (sentinel_probes.py is outside worker scope,
++    # wq#1466) and it was never applied to the live file until now.
++    # probe_pokemon_liveness() left intact below -- retarget instead of
++    # delete if lumen-pokemon-live.service (or a successor unit) ever comes
++    # back (see wq#908 for the frozen-turn detection logic it implements).
++    # ("probe-pokemon-liveness", probe_pokemon_liveness, False),   # wq#908, disabled wq#1895/wq#1898
+     ("probe-litellm-auth-monitor", probe_litellm_auth_monitor, False),
+     ("probe-maat-vault",      probe_maat_vault,      False),   # wq#969 fold
