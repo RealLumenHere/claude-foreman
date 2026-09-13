@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly sweep-gated resync of research/minerva-ref from the live minerva tree
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

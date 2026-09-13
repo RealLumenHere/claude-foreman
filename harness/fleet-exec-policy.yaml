@@ -104,12 +104,22 @@ allow:
     # is in research/harnessrouter-ref/README.md.
     - /home/lumen/projects/de-spaghettifier
     - /home/lumen/research/harnessrouter-ref
-    # wq#1738 / wq#1614: minerva golden sets + bench scripts only. /home/lumen/minerva itself
+    # wq#1738 / wq#1614 (entry is /home/lumen/minerva/eval at the top of this list, moved there
+    # by 4dfb16e): minerva golden sets + bench scripts only. /home/lumen/minerva itself
     # stays OFF this list (wq#1467: credentials mirrored into context/sections). Sub-root
     # matching is component-bounded (harness/capability.py:118-120), so this grants nothing
     # under context/, sections.json, minerva.db or the sibling eval_sets/. Swept 2026-09-13
     # with harness/read_dir_sweep.py: /home/lumen/minerva/eval files=508 hits=0 (evidence in
     # the PR body). Decision record: research/MINERVA_EVAL_GRANT_DECISION.md.
+    # wq#1738 follow-on (research/MINERVA_EVAL_GRANT_DECISION.md §5): sweep-GATED code-only
+    # mirror of /home/lumen/minerva produced hourly by ops/minerva-ref-sync/minerva_ref_sync.py.
+    # Filter: context/, tests/, archival/, archive/, backups/, logs/, staging/, retention/,
+    # gate-redteam/, .git/, *.db*, *.bak* and every deny basename. Guarantee: every publish
+    # sweeps the RESULT with harness/read_dir_sweep.py and refuses (prior mirror kept, aq
+    # alert) on any hit — a secret in an unanticipated file can never reach this root.
+    # /home/lumen/minerva itself stays OFF this list (wq#1467). Sweep 2026-09-13:
+    # research/minerva-ref files=2317 hits=0 (evidence in the PR body).
+    - /home/lumen/research/minerva-ref
 
   # RESTART: unit globs per node the lint may tag restart(unit@node) for. Each entry
   # was verified per-target before listing (unit LoadState=loaded, `sudo -n true`

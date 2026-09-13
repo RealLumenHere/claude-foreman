@@ -1,0 +1,15 @@
+[Unit]
+Description=Sweep-gated code-only mirror of /home/lumen/minerva -> research/minerva-ref (wq#1738 follow-on)
+Documentation=file:///home/lumen/foreman/ops/minerva-ref-sync/README.md
+After=network.target
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+ExecStart=/home/lumen/bin/minerva-ref-sync --json
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=minerva-ref-sync
+# rc 2 = refused (secret found, prior mirror kept, aq alert raised); 3 = sweep tool error.
+# Both are deliberate non-zero exits so `systemctl --failed` and the healer see them.
