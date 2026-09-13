@@ -1189,13 +1189,17 @@ def _reader_thread(pipe, q):
 
 
 def _kill_proc_tree(proc, term_timeout=30, kill_timeout=10):
-    """wq#1798: signal the whole process GROUP, not just the CLI pid. start_new_session=
-    True at the spawn site (below) makes proc.pid double as its own process group id, so
-    a group-wide kill reaches Bash-tool grandchildren (build/sleep/server) that would
-    otherwise survive the CLI's death, keep the stdout pipe open, and keep mutating the
-    worktree after fworker has already recorded KILLED. This is the single terminate site
-    every caller (plain run, fire-mode's run_fire_child, and do_attempt's resume path)
-    funnels through, since they all bottom out in this same run_child() watchdog loop."""
+    """wq#1798 (dup-reported as wq#1813 — same gap, same fix, both close here): signal
+    the whole process GROUP, not just the CLI pid. start_new_session=True at the spawn
+    site (below) makes proc.pid double as its own process group id, so a group-wide kill
+    reaches Bash-tool grandchildren (build/sleep/server) that would otherwise survive the
+    CLI's death, keep the stdout pipe open, and keep mutating the worktree after fworker
+    has already recorded KILLED. This is the single terminate site every caller (plain
+    run, fire-mode's run_fire_child, and do_attempt's resume path) funnels through, since
+    they all bottom out in this same run_child() watchdog loop — see
+    tests/test_kill_group.py for a direct unit-level pin of this function, and
+    tests/test_fworker_integration.py:test_watchdog_kill_reaches_grandchild_process for
+    the full-CLI-dispatch version of the same acceptance."""
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
