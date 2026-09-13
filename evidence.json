@@ -1,8 +1,0 @@
-{
-  "criteria": [
-    {
-      "id": "AC1",
-      "citation": "dispatcher/burn_rate.py:81-126"
-    }
-  ]
-}

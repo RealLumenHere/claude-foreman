@@ -6,6 +6,15 @@
 /dispatcher/state.json
 /dispatcher.log
 
+# wq#1905: per-ticket evidence-gate claim, not source — every worker writes these at the
+# worktree root, and this worktree IS the foreman repo, so tracking them meant every
+# ticket's evidence clobbered the last one's on main (82 commits touching evidence.json
+# alone). The run dir (RUNS_ROOT/wq<id>, never git-tracked) is authoritative now;
+# acceptance.py's read_acceptance/read_evidence fall back to these worktree copies only
+# when the run dir copy is unreachable.
+/acceptance.json
+/evidence.json
+
 # scratch from probe runs and interim dispatch spawns — not source
 /_probe/
 /_runs/
