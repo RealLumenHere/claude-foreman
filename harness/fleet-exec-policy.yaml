@@ -101,6 +101,13 @@ allow:
     # is in research/harnessrouter-ref/README.md.
     - /home/lumen/projects/de-spaghettifier
     - /home/lumen/research/harnessrouter-ref
+    # wq#1738 / wq#1614: minerva golden sets + bench scripts only. /home/lumen/minerva itself
+    # stays OFF this list (wq#1467: credentials mirrored into context/sections). Sub-root
+    # matching is component-bounded (harness/capability.py:118-120), so this grants nothing
+    # under context/, sections.json, minerva.db or the sibling eval_sets/. Swept 2026-09-13
+    # with harness/read_dir_sweep.py: /home/lumen/minerva/eval files=508 hits=0 (evidence in
+    # the PR body). Decision record: research/MINERVA_EVAL_GRANT_DECISION.md.
+    - /home/lumen/minerva/eval
 
   # RESTART: unit globs per node the lint may tag restart(unit@node) for. Each entry
   # was verified per-target before listing (unit LoadState=loaded, `sudo -n true`
