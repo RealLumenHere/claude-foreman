@@ -26,6 +26,7 @@ Usage:
                [--worker-id ID] [--resume]
 """
 import argparse
+import http.client
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -40,6 +41,7 @@ import time
 import threading
 import traceback
 import queue
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(__file__))
 from classifier import (
@@ -1319,6 +1321,315 @@ def _kill_proc_tree(proc, term_timeout=30, kill_timeout=10):
         pass
 
 
+# ---------------------------------------------------------------------------
+# wq#1888 despag P2-2: gateway-backed spawn (canary) — run_child_gateway
+#
+# FOREMAN_GATEWAY_LANES=<comma list> (default empty: no lane) opts a ticket's own
+# `lane` into running its turn through despag's `POST /v1/responses` instead of a
+# local `claude -p` child, so despag/admission.py becomes the ONE admission gate for
+# the Max pool (PHASE2_WIRING_SPEC.md §B.7) instead of two independent ones. See
+# harness/GATEWAY_CANARY.md for what to watch and the revert.
+# ---------------------------------------------------------------------------
+
+FOREMAN_GATEWAY_URL = os.environ.get("FOREMAN_GATEWAY_URL", "http://127.0.0.1:8790")
+# instinct 4: fworker reads its OWN copy of despag's bearer token — never the CLI's
+# CLAUDE_CODE_OAUTH_TOKEN, which never appears in the gateway request at all (the
+# JSON body below carries only input/model/stream, nothing from `env`).
+FOREMAN_GATEWAY_TOKEN_FILE = os.environ.get(
+    "FOREMAN_GATEWAY_TOKEN_FILE", os.path.expanduser("~/.secrets/despag-api.token"))
+GATEWAY_CONNECT_TIMEOUT_S = _envint("FOREMAN_GATEWAY_CONNECT_TIMEOUT_S", 10)
+# Read-loop poll granularity — small next to wall_clock_s/frame_gap_s (minutes), same
+# role as run_child's own poll_timeout: how often the watchdog checks can fire, not a
+# meaningful latency bound on its own.
+GATEWAY_POLL_S = _envint("FOREMAN_GATEWAY_POLL_S", 2)
+
+
+def gateway_lanes():
+    raw = os.environ.get("FOREMAN_GATEWAY_LANES", "")
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def gateway_lane_enabled(lane):
+    lane = (lane or "").strip()
+    return bool(lane) and lane in gateway_lanes()
+
+
+class GatewayUnavailable(Exception):
+    """Connect failure or a 5xx from despag — the only two shapes run_child_gateway
+    treats as 'the gateway itself is down', triggering the direct claude -p fallback.
+    A 4xx (e.g. despag's own admission gate refusing the turn) is a real answer, not
+    an availability problem, and must not fall back — see _gateway_post_stream."""
+
+
+def _parse_claude_argv(cmd):
+    """Pull (prompt, model) back out of build_claude_cmd()'s argv. Keeping
+    run_child_gateway's signature identical to run_child's (PHASE2_WIRING_SPEC.md
+    §B.1: the call site is a ~6-line, 2-site diff) means the one extra hop of
+    re-deriving what the caller already had as separate variables happens here,
+    once, rather than by widening both call sites' parameter lists."""
+    prompt = cmd[2] if len(cmd) > 2 and cmd[1] == "-p" else None
+    model = None
+    if "--model" in cmd:
+        i = cmd.index("--model")
+        if i + 1 < len(cmd):
+            model = cmd[i + 1]
+    return prompt, model
+
+
+def _read_gateway_token():
+    with open(os.path.expanduser(FOREMAN_GATEWAY_TOKEN_FILE)) as f:
+        return f.read().strip()
+
+
+def _gateway_connection(timeout_s):
+    parsed = urllib.parse.urlparse(FOREMAN_GATEWAY_URL)
+    cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    return cls(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80),
+               timeout=timeout_s), (parsed.path.rstrip("/") or "")
+
+
+def _gateway_post_stream(prompt, model, *, connect_timeout, read_timeout):
+    """POST /v1/responses stream:true. Returns the open http.client.HTTPResponse for
+    the caller to read SSE lines off of, with its socket's timeout re-armed from
+    `connect_timeout` to the much shorter `read_timeout` (`HTTPConnection.sock` is a
+    plain public attribute — the socket object `resp.fp` wraps, so this reaches every
+    later `resp.readline()` too, not just the connect) so the watchdog loop below can
+    poll at its own granularity instead of blocking for up to `connect_timeout` per
+    read. Raises GatewayUnavailable on connect failure or a 5xx; anything else (a 4xx
+    UHP error envelope) is returned as-is for the caller to read the body of and map
+    onto a real verdict, never a fallback."""
+    try:
+        conn, base_path = _gateway_connection(connect_timeout)
+        token = _read_gateway_token()
+        body = json.dumps({"input": prompt, "model": model, "stream": True}).encode()
+        conn.request("POST", f"{base_path}/v1/responses", body=body, headers={
+            "Authorization": f"Bearer {token}", "Content-Type": "application/json",
+        })
+        resp = conn.getresponse()
+    except OSError as e:
+        # ECONNREFUSED (dead port), DNS failure, connect timeout — despag is not
+        # reachable at all. This is the fallback's own repro shape (point
+        # FOREMAN_GATEWAY_URL at a dead port).
+        raise GatewayUnavailable(f"gateway connect failed: {e}") from e
+    if resp.status >= 500:
+        raise GatewayUnavailable(f"gateway HTTP {resp.status}")
+    if conn.sock is not None:
+        conn.sock.settimeout(read_timeout)
+    return resp
+
+
+def _gateway_cancel(response_id, *, connect_timeout):
+    """Best-effort — mirrors _kill_proc_tree's own posture of never raising into the
+    caller. Substitutes for process-group cancel semantics: there is no local pid to
+    killpg, so a client-side wall-clock/frame-gap trip asks despag's runner to kill
+    the process GROUP it owns instead (app.py: POST /v1/responses/{id}/cancel ->
+    despag.runner.turn.Turn.cancel(), which already killpg's — PHASE2_WIRING_SPEC.md
+    §B.5)."""
+    try:
+        conn, base_path = _gateway_connection(connect_timeout)
+        token = _read_gateway_token()
+        conn.request("POST", f"{base_path}/v1/responses/{response_id}/cancel", body=b"{}",
+                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        conn.getresponse().read()
+    except Exception as e:  # noqa: BLE001 — best-effort, never the reason a turn fails
+        log(f"gateway cancel({response_id}) failed (non-fatal): {e}")
+
+
+def _frames_from_lumen_output(output_items):
+    """Reverse of despag.uhp.translate.blocks_from_canonical: one canonical
+    assistant/user frame per finished UHP output item, in order. Not fed through
+    state.observe() (the `lumen.run_state` sidecar already carries the authoritative
+    turns/last_assistant_text/etc a real classifier.RunState computed off the SAME
+    frames server-side — see _observe_gateway_event) — only the loop tracker
+    (Layer 2, wq#985) needs the raw tool_use frames themselves, since its state
+    lives outside classifier.RunState (PHASE2_WIRING_SPEC.md §B.5: 'the loop
+    breaker survives')."""
+    frames = []
+    for item in output_items:
+        t = item.get("type")
+        if t == "function_call":
+            args = item.get("arguments")
+            try:
+                inp = json.loads(args) if isinstance(args, str) else (args or {})
+            except (TypeError, ValueError):
+                inp = {"_raw": args}
+            frames.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": item.get("call_id") or item.get("id"),
+                 "name": item.get("name"), "input": inp}]}})
+        elif t == "function_call_output":
+            frames.append({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": item.get("call_id"),
+                 "content": item.get("output"), "is_error": False}]}})
+    return frames
+
+
+def _observe_gateway_event(ev, state, loop_tracker):
+    """One UHP `response.*` SSE event folded onto `state`. Returns (done, exit_code):
+    `done` is True once a terminal event (completed/incomplete/failed) has been
+    folded in, at which point the caller stops reading. `exit_code` is only
+    meaningful once `done` is True.
+
+    Mid-turn `lumen.limit` (PHASE2_WIRING_SPEC.md §B.6 item 2) is folded through the
+    exact synthetic rate_limit_event frame classifier.RunState.observe() already
+    understands, and reported to the shared governor the same way run_child's own
+    watchdog loop does (report_limit_event) — so the account-global rate-limit
+    history despag/admission.py's own check_admission reads back
+    (foreman_usaged.load_events) stays in sync regardless of which backend served a
+    turn.
+    """
+    etype = ev.get("type")
+    if etype == "lumen.limit":
+        frame = {"type": "rate_limit_event",
+                 "rate_limit_info": {"status": "rejected", "resetsAt": ev.get("resets_at")}}
+        was = state.saw_limit
+        state.observe(frame)
+        if state.saw_limit and not was:
+            report_limit_event(frame)
+        if loop_tracker is not None:
+            loop_tracker.observe(frame)
+        return False, None
+    if etype not in ("response.completed", "response.incomplete", "response.failed"):
+        return False, None
+
+    response = ev.get("response") or {}
+    for frame in _frames_from_lumen_output(response.get("output") or []):
+        if loop_tracker is not None:
+            loop_tracker.observe(frame)
+
+    # §B.6 item 1: the terminal sidecar IS a classifier.RunState snapshot (computed
+    # server-side, off the real canonical frames, by the same class this process
+    # would use for a direct spawn) — adopt it wholesale rather than re-derive a
+    # weaker approximation from the UHP output shape.
+    sidecar = (response.get("lumen") or {}).get("run_state") or {}
+    for key, value in sidecar.items():
+        if key != "exit_code" and hasattr(state, key):
+            setattr(state, key, value)
+    state.usage = state.usage or response.get("usage")
+    return True, sidecar.get("exit_code")
+
+
+def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
+                       frame_gap_s=None, post_result_grace_s=None, loop_tracker=None):
+    """Gateway-backed sibling of run_child(): identical signature and identical
+    6-tuple return (state, exit_code, raw_events, killed_reason, cpu_s, pid), so a
+    caller's choice of which one to call is a plain conditional (PHASE2_WIRING_SPEC.md
+    §B.1). Spawns nothing locally — POSTs `/v1/responses` `stream:true` to despag
+    (FOREMAN_GATEWAY_URL) and maps its UHP events back onto the canonical frame shape
+    classify() already understands (_observe_gateway_event).
+
+    Falls back to a direct run_child() spawn on any gateway connect failure or 5xx
+    (never on a 4xx — despag refusing the request is a real answer, e.g. its own
+    admission gate, not an availability problem), recording `gateway_fallback` +
+    `gateway_fallback_reason` on the returned state so the canary is measurable
+    (do_attempt copies both onto the attempt record). `cpu_s` is always 0.0 (no local
+    child to RUSAGE_CHILDREN) and `pid` is always None on the gateway path itself —
+    both already documented as corroboration-only, never fed into classify().
+    """
+    frame_gap_s = frame_gap_s if frame_gap_s is not None else INACTIVITY_TIMEOUT_S
+    prompt, model = _parse_claude_argv(cmd)
+
+    def _fallback(reason):
+        log(f"wq#{ticket_id} attempt {attempt}: gateway unavailable ({reason}) — "
+            f"falling back to direct claude -p spawn")
+        fb_state, exit_code, raw_events, killed_reason, cpu_s, pid = run_child(
+            cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
+            frame_gap_s=frame_gap_s, post_result_grace_s=post_result_grace_s,
+            loop_tracker=loop_tracker)
+        fb_state.gateway_backend = False
+        fb_state.gateway_fallback = True
+        fb_state.gateway_fallback_reason = reason
+        return fb_state, exit_code, raw_events, killed_reason, cpu_s, pid
+
+    poll_s = max(0.25, min(GATEWAY_POLL_S, frame_gap_s))
+    try:
+        resp = _gateway_post_stream(prompt, model, connect_timeout=GATEWAY_CONNECT_TIMEOUT_S,
+                                     read_timeout=poll_s)
+    except GatewayUnavailable as e:
+        return _fallback(str(e))
+
+    state = RunState()
+    state.gateway_backend = True
+    state.gateway_fallback = False
+    state.gateway_fallback_reason = None
+    raw_events = []
+    response_id = None
+    killed_reason = None
+    exit_code = None
+    start = time.time()
+    deadline = start + wall_clock_s
+    last_event = start
+
+    if resp.status >= 400:
+        # despag rejected the request outright (e.g. its own admission gate, or a
+        # malformed body) — never a fallback case. A 429 lumen_max_window_exhausted/
+        # quota_exhausted IS the LIMIT verdict (admission refused before any turn
+        # ran); every other 4xx has no result frame, so classify() correctly falls
+        # to LAUNCH_FAILURE (saw_init stays False).
+        raw = resp.read()
+        try:
+            err = (json.loads(raw or b"{}").get("error")) or {}
+        except json.JSONDecodeError:
+            err = {}
+        raw_events.append({"type": "despag_error", "status": resp.status, "error": err})
+        if resp.status == 429:
+            state.saw_limit = True
+            state.latest_resets_at = (err.get("detail") or {}).get("resets_at")
+        return state, 1, raw_events, None, 0.0, None
+
+    with resp:
+        buf = []
+        while True:
+            now = time.time()
+            if now >= deadline:
+                killed_reason = "wall_clock"
+                break
+            if now - last_event >= frame_gap_s:
+                killed_reason = "inactivity"
+                break
+            try:
+                line = resp.readline()
+            except (TimeoutError, OSError):
+                continue
+            if not line:
+                break
+            text = line.decode("utf-8", "replace").rstrip("\n")
+            if text.startswith(":"):
+                last_event = time.time()   # SSE keep-alive: still evidence of life
+                continue
+            if not text:
+                if buf:
+                    raw = "".join(buf)
+                    buf = []
+                    if raw.startswith("data:"):
+                        last_event = time.time()
+                        try:
+                            ev = json.loads(raw[len("data:"):].strip())
+                        except json.JSONDecodeError:
+                            continue
+                        raw_events.append(ev)
+                        if response_id is None:
+                            response_id = ((ev.get("response") or {}).get("id"))
+                        done, ev_exit_code = _observe_gateway_event(ev, state, loop_tracker)
+                        if done:
+                            exit_code = ev_exit_code
+                            break
+                continue
+            buf.append(text)
+
+    if killed_reason in ("wall_clock", "inactivity"):
+        if response_id is not None:
+            _gateway_cancel(response_id, connect_timeout=GATEWAY_CONNECT_TIMEOUT_S)
+        if killed_reason == "inactivity":
+            state.hung = True
+        # No local process to normalize a signal exit from — 143 (SIGTERM
+        # convention, RELIABILITY_SPEC.md §D) is the honest equivalent of "this
+        # watchdog stopped it", matching what a direct spawn's own
+        # _kill_proc_tree(SIGTERM) would have reported.
+        exit_code = 143
+
+    return state, exit_code, raw_events, killed_reason, 0.0, None
+
+
 def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
               frame_gap_s=None, post_result_grace_s=None, loop_tracker=None):
     """Spawn, parse stream-json, enforce watchdogs. Returns (RunState, exit_code,
@@ -1910,7 +2221,12 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
     set_sigterm_context(ticket_id, attempt, worker_id)
     t0 = time.time()
     rate_limits_start = read_rate_limits_snapshot()
-    state, exit_code, events, killed_reason, cpu_s, child_pid = run_child(
+    # wq#1888 despag P2-2: the one call-site diff the gateway canary needs — which
+    # backend runs this attempt's turn, picked by the ticket's own `lane` against
+    # FOREMAN_GATEWAY_LANES (default empty: no lane, so every ticket keeps spawning
+    # claude -p directly until an operator opts one in — harness/GATEWAY_CANARY.md).
+    run_fn = run_child_gateway if gateway_lane_enabled(ticket.get("lane")) else run_child
+    state, exit_code, events, killed_reason, cpu_s, child_pid = run_fn(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
         frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace,
         loop_tracker=loop_tracker)
@@ -2065,6 +2381,11 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         "result_subtype": state.result_subtype, "elapsed_s": elapsed,
         "started_at": t0, "finished_at": time.time(),
         "total_cost_usd": state.total_cost_usd, "duration_ms": state.duration_ms,
+        # wq#1888 despag P2-2: canary measurability — getattr, not state.foo, since
+        # a plain run_child() attempt never sets these (only run_child_gateway does).
+        "gateway_backend": getattr(state, "gateway_backend", False),
+        "gateway_fallback": getattr(state, "gateway_fallback", False),
+        "gateway_fallback_reason": getattr(state, "gateway_fallback_reason", None),
     }
     state_path = write_attempt_state(ticket_id, attempt, attempt_record)
     mark_attempt_written()  # wq#1894: attempt-N.json landed — SIGTERM no longer our job

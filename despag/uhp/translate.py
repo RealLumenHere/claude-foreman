@@ -97,6 +97,15 @@ class RespTranslator:
         self.seq += 1
         return ev
 
+    def vendor_event(self, type_: str, **fields) -> dict:
+        """wq#1888 despag P2-2: a non-terminal Lumen vendor event (errors.md §1's
+        namespace convention — `lumen.*`, never a bare protocol-looking name a future
+        UHP field could collide with), sequenced into the SAME gapless counter as
+        every other event this translator emits. Used for `lumen.limit` — a mid-turn
+        rate-limit detection that would otherwise only reach a caller as an opaque
+        `harness_error` (PHASE2_WIRING_SPEC.md §B.3/§B.6)."""
+        return self._ev(type_, **fields)
+
     def _response_obj(self, status: str) -> dict:
         metadata: dict = {}
         if self.session_id:

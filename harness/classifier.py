@@ -277,6 +277,36 @@ class RunState:
             self.duration_ms = frame.get("duration_ms")
             self.num_turns = frame.get("num_turns")
 
+    # wq#1888 despag P2-2: the gateway-backed run_child_gateway() reconstructs a
+    # RunState from UHP response.* events instead of feeding it real canonical
+    # frames one at a time — this is the JSON-safe snapshot despag/admission.py's
+    # LimitObserver (which already runs a RunState over the SAME frames, in-process,
+    # to drive the account-global LIMIT wall) attaches to the terminal event as the
+    # `lumen.run_state` vendor sidecar (PHASE2_WIRING_SPEC.md §B.2/§B.6): every field
+    # classify() or the attempt/usage-sidecar records read, so the gateway path's
+    # verdict and artifacts are not distinguishable from the direct path's.
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id, "model": self.model,
+            "permission_mode": self.permission_mode, "saw_init": self.saw_init,
+            "saw_limit": self.saw_limit, "latest_resets_at": self.latest_resets_at,
+            "saw_refusal_no_fallback": self.saw_refusal_no_fallback,
+            "refusal_fallbacks": self.refusal_fallbacks,
+            "model_fallbacks": self.model_fallbacks,
+            "api_retries": self.api_retries,
+            "compact_boundaries": self.compact_boundaries,
+            "result_subtype": self.result_subtype,
+            "result_is_error": self.result_is_error,
+            "result_text": None if self.result_text is _UNSET else self.result_text,
+            "terminal_reason": self.terminal_reason,
+            "turns": self.turns,
+            "saw_auth_failure": self.saw_auth_failure,
+            "saw_model_not_found": self.saw_model_not_found,
+            "last_assistant_text": self.last_assistant_text,
+            "usage": self.usage, "total_cost_usd": self.total_cost_usd,
+            "duration_ms": self.duration_ms, "num_turns": self.num_turns,
+        }
+
 
 def classify(state: RunState, exit_code=None, elapsed_s=None, diff_is_empty=None) -> str:
     """Apply RELIABILITY_SPEC.md §C/§D to an accumulated RunState.

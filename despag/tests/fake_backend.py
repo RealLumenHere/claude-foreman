@@ -32,10 +32,18 @@ def result_frame(*, subtype: str = "success", is_error: bool = False, result: st
             "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 40}}
 
 
+def rate_limit_event(resets_at: str) -> dict:
+    """wq#1814 wire shape (classifier.py:201-210): `rate_limit_info` nested one level
+    down, `status: rejected` is what promotes classifier.RunState.saw_limit."""
+    return {"type": "rate_limit_event",
+            "rate_limit_info": {"status": "rejected", "resetsAt": resets_at}}
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--mode", required=True,
-                    choices=["quick", "grandchild", "steady", "silent", "api_error"])
+                    choices=["quick", "grandchild", "steady", "silent", "api_error",
+                             "rate_limited"])
     p.add_argument("--count", type=int, default=1000)
     p.add_argument("--interval", type=float, default=0.05)
     p.add_argument("--sleep-seconds", type=float, default=300)
@@ -76,6 +84,18 @@ def main() -> int:
         time.sleep(args.sleep_seconds)
         emit(result_frame())
         return 0
+
+    if args.mode == "rate_limited":
+        # A mid-turn rejected rate_limit_event with no result frame ever following
+        # it (classifier.py's LIMIT check — CL:358-360 — fires unconditionally on
+        # saw_limit, ahead of the no-result-frame branch, so this alone is enough
+        # for classify() to return LIMIT rather than SUCCESS/INDETERMINATE) — the
+        # shape wq#1888's `lumen.limit` mid-stream event and
+        # `lumen.run_state.saw_limit` sidecar both need to be exercised against
+        # (PHASE2_WIRING_SPEC.md §B.6).
+        emit(assistant_text("working"))
+        emit(rate_limit_event("2026-09-12T13:00:00+00:00"))
+        return 1
 
     if args.mode == "api_error":
         # The CLI's own transient-error banner rendered as assistant text, with no

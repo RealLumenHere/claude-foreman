@@ -181,6 +181,15 @@ class LimitObserver:
     def __init__(self):
         self._state = classifier.RunState()
 
+    @property
+    def state(self) -> classifier.RunState:
+        """wq#1888 despag P2-2: read-only access to the RunState this observer has
+        been accumulating — despag/app.py's terminal-event builder reads it to attach
+        the `lumen.run_state` sidecar (PHASE2_WIRING_SPEC.md §B.6), the same signals
+        fworker's OWN classifier.RunState computes for a direct claude -p spawn,
+        computed here from the identical canonical frames, just never emitted before."""
+        return self._state
+
     def __call__(self, frame: dict) -> None:
         was = self._state.saw_limit
         self._state.observe(frame)
