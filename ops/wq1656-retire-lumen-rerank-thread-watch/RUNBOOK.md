@@ -103,6 +103,14 @@ Once the removal runs: `systemctl status lumen-rerank-thread-watch.timer` and
 shows no drift for these two units afterward. `remove-units.sh` asserts both
 and exits non-zero if either unit survives.
 
+wq#1762's block carries the liveness probe
+`file_contains(/home/lumen/fleet-units/known-removed.txt, lumen-rerank-thread-watch.timer)`:
+the script registers both units in the wq#1041 known-removed list only after
+the "could not be found" assertions pass, so the ticket auto-clears exactly
+when the removal really happened. The `path_exists`/`service_active` probes in
+`harness/liveness.py:207,216` have the wrong polarity for a removal — both read
+SATISFIED while the unit is still there.
+
 ## Rollback
 
 The four data files under `/home/lumen/minerva/v4/reports/596_watch*` are

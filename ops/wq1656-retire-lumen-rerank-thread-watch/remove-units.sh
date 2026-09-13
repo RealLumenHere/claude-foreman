@@ -43,6 +43,17 @@ for u in "${UNITS[@]}"; do
   fi
 done
 
+# Register both units as deliberately removed (wq#1041) so a reappearance at
+# top-level reads as a respawn rather than as a fresh install. Idempotent.
+# This line is also wq#1762's liveness probe:
+#   file_contains(/home/lumen/fleet-units/known-removed.txt, lumen-rerank-thread-watch.timer)
+KNOWN_RM=/home/lumen/fleet-units/known-removed.txt
+if [ "$rc" -eq 0 ]; then
+  for u in "${UNITS[@]}"; do
+    grep -qxF "$u" "$KNOWN_RM" || echo "$u" | sudo -u lumen tee -a "$KNOWN_RM" >/dev/null
+  done
+fi
+
 # Fold the removal into the /home/lumen/fleet-units baseline, otherwise
 # unit-drift check flags the disappearance as unexpected drift next run.
 sudo -u lumen /home/lumen/bin/unit-drift snapshot
