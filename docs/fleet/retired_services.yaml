@@ -179,3 +179,19 @@
         as wq#1643/wq#1656). Follow-up ticket filed for a lane with
         systemctl-mutate access — steps in
         ops/wq1778-dgm-retire-decision/RUNBOOK.md.
+    - "apply status 2026-09-13 (wq#1779)": >
+        NOT YET APPLIED — this record is a decision, not a host state. The
+        follow-up (wq#1779) was itself dispatched to a build lane and hit the
+        same two walls (guard.sh:92-93 deny + uid 1000 cannot write
+        root-owned files in /etc/systemd/system); no lane in the fleet can
+        currently run the apply, and fleet-exec has no root-escalation verb
+        (fleet-exec-policy.yaml:170-176, v2). Live state as of 2026-09-13:
+        lumen-dgm.timer enabled/active(waiting), next fire 17:00 UTC,
+        .dgm_history.jsonl at 93 lines (two further DISCARD cycles on 09-11
+        and 09-12 since this record was written at 91). The apply is now
+        scripted end-to-end with assertions in
+        ops/wq1778-dgm-retire-decision/remove-units.sh — one privileged
+        command closes it. Third retirement stranded on this gap:
+        lumen-split-watch.timer (wq#1643) and lumen-rerank-thread-watch.timer
+        (wq#1656/1762) are also still `enabled` today. See ISSUE-LOG #377,
+        #378.
