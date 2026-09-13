@@ -22,7 +22,14 @@ if _FWORKER_DIR not in sys.path:
 
 import fworker  # noqa: E402 — path must be inserted first; this IS the import, never a copy.
 
-CLAUDE_BIN = os.environ.get("DESPAG_CLAUDE_BIN", "claude")
+# wq#1885: a bare "claude" depends on the npm-global bin dir being on PATH, which
+# isn't reliably true outside an interactive login shell (systemd services, sandboxed
+# BUILD-worker conformance runs) — every turn then dies instantly with `spawn: [Errno 2]
+# No such file or directory: 'claude'` (status "failed" in ~0.0s, indistinguishable from
+# a real task failure to a UHP client). claude-shim (claude-shim/claude_shim.py:41) hit
+# the exact same PATH gap and already settled on this absolute default; despag now
+# matches it instead of trusting PATH.
+CLAUDE_BIN = os.environ.get("DESPAG_CLAUDE_BIN", "/home/lumen/.npm-global/bin/claude")
 
 
 def build_turn(*, worker_id: str, model: str, effort: str | None, worktree: str,

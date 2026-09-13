@@ -2,10 +2,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "despag/tools/run_p1_exit.py:22-32",
-      "cmd_run": "python3 -m despag.tools.run_p1_exit conformance --port 8795 --data-dir despag/reports/rundata2 --class core --harness-id chrn_litellm-mechanical --json despag/reports/rundata2/smoke.json",
-      "exit_code": 0,
-      "note": "_configure_env (despag/tools/run_p1_exit.py:22-32) is the real wiring this ticket's P1-exit run used: isolated DESPAG_DATA_DIR/SESSIONS_ROOT/WORKTREES_ROOT/API_TOKEN_FILE inside the caller's own --data-dir (never /tmp or ~/despag-data), plus DESPAG_CLAUDE_BIN=/home/lumen/.npm-global/bin/claude to close the BUILD-worker PATH gap logged as ISSUE-LOG #374. cmd_run above is a smoke re-run of the same subcommand used for the real litellm-mechanical/claude-max runs; it reproduced the same 40/40 CONFORMANT result reported in despag/reports/P1_EXIT.md and despag/reports/p1-exit_litellm.json."
+      "citation": "despag/backends/claude_max.py:25-32"
     }
   ]
 }
