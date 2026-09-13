@@ -24,6 +24,7 @@ tight clamp).
 """
 import json
 import os
+import sqlite3
 from datetime import datetime, timezone
 
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -59,6 +60,70 @@ FRANK_RESERVE_PCT = {
 DEFAULT_AVG_WORKER_PCT_PER_HOUR = {"session": 1.5, "weekly_all": 0.35,
                                    "fable_weekly_scoped": 0.75}
 MIN_ALLOWED = 1
+
+# wq#1889 (despag P2-3, wq#1883 C section): FRANK_RESERVE_PCT above is already
+# conservative (it's sized to cover Frank's own interactive use even when he's
+# idle — :52-57), but it cannot see that he's mid-session in claude.ai on this SAME
+# Max pool right now — that blind spot is what drained his interactive session before
+# this reserve existed. frank_active() below answers that from `wq`'s own
+# agent_sessions table (Frank's claude.ai orchestrator chats register there via
+# `wq whoami --register`, wq:1146, and refresh `last_seen` on every subsequent wq
+# subcommand, wq:607-614/616). When active, both consumers of pool_spend_rate swap in
+# this wider reserve instead.
+FRANK_ACTIVE_WINDOW_MIN = int(os.environ.get("FRANK_ACTIVE_WINDOW_MIN", "20"))
+FRANK_RESERVE_PCT_ACTIVE_BUMP = float(os.environ.get("FRANK_RESERVE_PCT_ACTIVE_BUMP", "15"))
+FRANK_RESERVE_PCT_ACTIVE = {pool: v + FRANK_RESERVE_PCT_ACTIVE_BUMP
+                            for pool, v in FRANK_RESERVE_PCT.items()}
+
+WQ_DB_DEFAULT = "/home/lumen/agents/work-queue/queue.db"
+
+
+def frank_active(now, db_path=None):
+    """(active: bool, detail: str) — True when an `orch-*` agent_sessions row (wq:332-335,
+    indexed on base_name) has `last_seen` within FRANK_ACTIVE_WINDOW_MIN of `now`. One
+    read-only indexed query, no writes, no new timer. `db_path` defaults to the `WQ_DB`
+    env var (matching bin/wq's own override) read at CALL time, not import time, so a
+    path swapped in after this module loads (tests; a future db migration) takes effect
+    with no restart — the same per-call-not-per-import reasoning `pool_spend_rate` below
+    already applies to FRANK_RESERVE_PCT (wq#1883 C.3).
+
+    `last_seen` advances when the orchestrator session RUNS a wq command — a proxy for
+    "Frank is actively orchestrating", not a measurement of claude.ai token burn (wq#1883
+    C.5). A chat that reads and writes for the whole window without touching `wq` reads
+    idle here: a false negative. That is safe by construction, not just by luck:
+    FRANK_RESERVE_PCT already overstates a worker's fair share to cover Frank's own
+    interactive use (:52-57), so a false negative here only returns dispatch to that
+    already-conservative floor — never to an unguarded one. The same posture covers a
+    read failure (missing db, locked file, corrupt schema): degrade to (False, ...), not
+    a fail-closed refusal, because raising the reserve is a refinement on an
+    already-safe baseline, not the safety-critical gate admission.py's LIMIT wall is.
+    """
+    path = db_path or os.environ.get("WQ_DB", WQ_DB_DEFAULT)
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = con.execute(
+                "SELECT base_name, last_seen FROM agent_sessions WHERE base_name LIKE 'orch-%'"
+            ).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return False, f"agent_sessions unreadable ({e}) — treating as inactive"
+    freshest_name, freshest_idle = None, None
+    for base_name, last_seen in rows:
+        try:
+            seen = datetime.strptime(last_seen, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        idle_min = (now - seen).total_seconds() / 60.0
+        if freshest_idle is None or idle_min < freshest_idle:
+            freshest_name, freshest_idle = base_name, idle_min
+    if freshest_idle is None:
+        return False, "no orch- session rows in agent_sessions"
+    if freshest_idle <= FRANK_ACTIVE_WINDOW_MIN:
+        return True, f"{freshest_name} idle={freshest_idle:.1f}m (window={FRANK_ACTIVE_WINDOW_MIN}m)"
+    return False, (f"freshest orch- session {freshest_name} idle={freshest_idle:.1f}m "
+                   f"> window={FRANK_ACTIVE_WINDOW_MIN}m")
 
 
 def pools_for_model(model):
@@ -98,9 +163,11 @@ def load_observed(path=None):
             if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0}
 
 
-def pool_spend_rate(limits, pool, now):
+def pool_spend_rate(limits, pool, now, active=False):
     """remaining_pct / hours_to_reset for one pool, or None without reliable data
-    (missing percent/resets_at, already rolled over, bogus horizon) — never guess."""
+    (missing percent/resets_at, already rolled over, bogus horizon) — never guess.
+    `active` (wq#1889's frank_active(now), computed once per allowed_concurrent call so
+    every pool it checks agrees on the same reading) swaps in FRANK_RESERVE_PCT_ACTIVE."""
     b = (limits or {}).get(pool) or {}
     pct, resets_at = b.get("percent"), b.get("resets_at")
     if pct is None or not resets_at:
@@ -112,7 +179,7 @@ def pool_spend_rate(limits, pool, now):
     remaining_s = (reset_dt - now).total_seconds()
     if remaining_s <= 0 or remaining_s > WINDOW_S[pool]:
         return None
-    reserve = FRANK_RESERVE_PCT.get(pool, 0.0)
+    reserve = (FRANK_RESERVE_PCT_ACTIVE if active else FRANK_RESERVE_PCT).get(pool, 0.0)
     # spend only against budget ABOVE Frank's reserve: at/below the reserve, rate->0 (workers stop, Frank keeps his headroom)
     remaining_pct = max(0.0, (100.0 - float(pct)) - reserve)
     hours = max(remaining_s / 3600.0, 1.0 / 60.0)  # floor at 1 min: no div-by-~0 blowup
@@ -123,14 +190,16 @@ def allowed_concurrent(limits, ceiling, cfg, observed=None, now=None, pools=PASS
     """(allowed, detail): concurrent cloud workers the budget supports, min over
     `pools`, clamped to [min_allowed, ceiling]. (None, why) when none of `pools` has
     reliable data — the caller falls back to the binary tight clamp rather than
-    trusting a guess."""
+    trusting a guess. Reads frank_active(now) once so every pool in this call and the
+    caller's own log line agree on the same reading (wq#1889)."""
     now = now or datetime.now(timezone.utc)
     observed = observed or {}
     rates = cfg["avg_worker_pct_per_hour"]
+    active, active_detail = frank_active(now)
     best = None
-    details = []
+    details = [f"frank_active={active} ({active_detail})"]
     for pool in pools:
-        spend = pool_spend_rate(limits, pool, now)
+        spend = pool_spend_rate(limits, pool, now, active=active)
         if spend is None:
             continue
         q = observed.get(pool, rates.get(pool))
@@ -140,7 +209,7 @@ def allowed_concurrent(limits, ceiling, cfg, observed=None, now=None, pools=PASS
         details.append(f"{pool}: {spend:.2f}%/h / {q:.2f}%/worker-h = {n:.1f}")
         best = n if best is None else min(best, n)
     if best is None:
-        return None, f"no usable percent+resets_at in {','.join(pools)}"
+        return None, f"no usable percent+resets_at in {','.join(pools)}; {details[0]}"
     allowed = int(min(max(best, cfg["min_allowed"]), ceiling))
     return allowed, "; ".join(details)
 

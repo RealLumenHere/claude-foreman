@@ -1201,6 +1201,10 @@ def _do_pass(cfg, log, state, dry_run):
     burn_obs = burn_rate.load_observed()
     burn_cache = {}   # pools tuple -> (allowed_concurrent | None, detail)
     burn_logged = set()
+    # wq#1889: one frank_active read for the whole pass, surfaced on pass_end so
+    # "why did the ceiling drop this pass" is answerable from the log alone — the
+    # per-pool ceilings above already apply it internally (burn_rate.allowed_concurrent).
+    frank_is_active, frank_active_detail = burn_rate.frank_active(datetime.now(timezone.utc))
 
     def burn_allowed(pools):
         if pools not in burn_cache:
@@ -1526,6 +1530,7 @@ def _do_pass(cfg, log, state, dry_run):
     dispatchable = len(candidates) - count_structural_skips(log.events)
     return {"candidates": len(candidates), "spawned": spawned, "tight": tight,
             "burn_ceiling": {",".join(k): v[0] for k, v in burn_cache.items()},
+            "frank_active": frank_is_active, "frank_active_detail": frank_active_detail,
             "quarantined": len(quarantined), "dispatchable": dispatchable,
             "lint_scanned": lint_scanned, "lint_flagged": lint_flagged}
 

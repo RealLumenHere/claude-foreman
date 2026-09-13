@@ -746,6 +746,38 @@ def test_burn_rate_no_resets_at_falls_back_to_binary_tight(denv):
     assert len(skips) == 1 and skips[0]["reason"] == "tight_pri"
 
 
+def test_frank_active_row_drops_the_burn_rate_ceiling_dry_run(denv):
+    """wq#1889 acceptance: a dry-run pass showing the burn-rate ceiling drop while an
+    orch-* agent_sessions row is fresh. session 50% used, severity=warning forces
+    governor 'tight' regardless of margin; weekly is given abundant near-term headroom
+    so it never becomes the limiting pool — session alone drives the ceiling in both
+    passes. Same config, same percents; only the fresh orch- row differs between them."""
+    denv["gov_state"].write_text(json.dumps(_burn_gov(50, 4, 5, 1, severity="warning")))
+
+    add_ticket("frank inactive baseline", pri=1)
+    assert fd.run_pass(dry_run=True) == 0
+    baseline = log_events(denv, "pass_end")[-1]
+    assert baseline["frank_active"] is False
+    baseline_ceiling = next(iter(baseline["burn_ceiling"].values()))
+    assert baseline_ceiling == 3  # (100-50)-30=20% / 4h = 5%/h over 1.5 -> 3.3 -> 3
+
+    con = sqlite3.connect(denv["wq_db"])
+    fresh = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    con.execute("INSERT INTO agent_sessions VALUES (?,?,?,?,?,?)",
+                ("orch-wq1889-test", "orch-wq1889-test", "lumen", 1, fresh, fresh))
+    con.commit()
+    con.close()
+
+    add_ticket("frank active", pri=1)
+    assert fd.run_pass(dry_run=True) == 0
+    active = log_events(denv, "pass_end")[-1]
+    assert active["frank_active"] is True
+    assert "orch-wq1889-test" in active["frank_active_detail"]
+    active_ceiling = next(iter(active["burn_ceiling"].values()))
+    assert active_ceiling == 1  # (100-50)-45=5% / 4h = 1.25%/h over 1.5 -> 0.83 -> min_allowed 1
+    assert active_ceiling < baseline_ceiling
+
+
 def _seed_running(units):
     with open(os.environ["FAKE_LUMEN_RUN_STATE"], "w") as f:
         json.dump(units, f)

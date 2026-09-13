@@ -1,1 +1,8 @@
-{"criteria": [{"id": "AC1", "citation": "harness/fworker.py:1220-2456", "cmd_run": "python3 -m pytest harness/tests/test_wq1911_sigterm_idle_gap.py harness/tests/test_wq1894_sigterm_cancel.py -q", "exit_code": 0}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "dispatcher/burn_rate.py:81-126"
+    }
+  ]
+}

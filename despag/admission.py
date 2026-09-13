@@ -25,7 +25,12 @@ first:
      percent+resets_at the ceiling degrades to burn_rate.MIN_ALLOWED, not to
      DESPAG_MAX_CLAUDE_CONCURRENT (wq#1868): with no percent+resets_at there is
      no reserve calculation to be had, so the gate fails closed to one turn the
-     way it already does for an unreadable governor read.
+     way it already does for an unreadable governor read. wq#1889: when
+     `burn_rate.frank_active()` sees Frank mid-session on this same Max pool (an
+     `orch-*` agent_sessions row, wq#1883 §C.1), `allowed_concurrent` computes the
+     ceiling above against the wider FRANK_RESERVE_PCT_ACTIVE instead, internally
+     — this module makes no separate check, so it agrees with the dispatcher's
+     own ceiling by construction, not by duplicated logic.
 
 litellm-mechanical (the local pool) is exempt from all three gates, mirroring
 governor_core.evaluate_dispatch's own local-rung exemption — it costs no
@@ -257,19 +262,25 @@ def check_admission(model: str, *, running_claude_max: int, now: _dt.datetime | 
 def budget_snapshot(now: _dt.datetime | None = None) -> dict:
     """The `GET /v1/uhp` `lumen.budget` extension block: session_pct_used,
     weekly_pct_used, reserve_pct (FRANK_RESERVE_PCT in effect), resets_at,
-    paused_until — an operator's answer to "why did admission refuse"."""
+    paused_until, frank_active + frank_active_window_min (wq#1889: whether the
+    wider FRANK_RESERVE_PCT_ACTIVE reserve is in effect right now, and the window
+    that decision is judged against) — an operator's answer to "why did admission
+    refuse"."""
     now = now or _now()
     cached = _read_governor_state()
     limits = (cached["state"] or {}).get("limits") or {}
     session = limits.get("session") or {}
     weekly = limits.get("weekly_all") or {}
     wall = _limit_wall(now)
+    active, _detail = burn_rate.frank_active(now)
     return {
         "session_pct_used": session.get("percent"),
         "weekly_pct_used": weekly.get("percent"),
         "reserve_pct": dict(burn_rate.FRANK_RESERVE_PCT),
         "resets_at": session.get("resets_at") or weekly.get("resets_at"),
         "paused_until": wall["resets_at"] if wall is not None else None,
+        "frank_active": active,
+        "frank_active_window_min": burn_rate.FRANK_ACTIVE_WINDOW_MIN,
     }
 
 

@@ -5,10 +5,23 @@ what live fleet usage happens to say at test time."""
 from __future__ import annotations
 
 import datetime as dt
+import importlib.util
+import os
 
 import pytest
 
 from despag import admission
+
+# ISSUE-LOG #384: admission.py imports `burn_rate` via a hardcoded absolute path to
+# the MAIN checkout (/home/lumen/foreman/dispatcher), not this repo's own
+# dispatcher/ relative to admission.py — so in a per-ticket worktree, admission.py
+# transitively loads whatever burn_rate.py is on MAIN, not this branch's edits, no
+# matter how early the worktree's dispatcher/ is inserted into sys.path (admission.py's
+# own sys.path.insert(0, ...) runs later, at import time, and wins). The
+# `_worktree_burn_rate` fixture below loads this worktree's copy explicitly and rebinds
+# it onto `admission.burn_rate` so these tests exercise the code this branch ships.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_WORKTREE_BURN_RATE_PATH = os.path.join(_REPO_ROOT, "dispatcher", "burn_rate.py")
 
 NOW = dt.datetime(2026, 9, 12, 12, 0, 0, tzinfo=dt.timezone.utc)
 
@@ -29,6 +42,21 @@ def _reset_admission_globals(monkeypatch):
     monkeypatch.setattr(admission, "_cached", None)
     monkeypatch.setattr(admission, "_cached_at", 0.0)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _worktree_burn_rate(monkeypatch):
+    """See ISSUE-LOG #384 above `_WORKTREE_BURN_RATE_PATH`: rebind admission.burn_rate
+    onto THIS worktree's dispatcher/burn_rate.py (not main's stale copy), then default
+    frank_active to inactive so every pre-wq#1889 test keeps its plain-FRANK_RESERVE_PCT
+    expectations regardless of whether some real orch-* session is fresh on this box.
+    Yields the fresh module so a test can flip frank_active to prove the bump."""
+    spec = importlib.util.spec_from_file_location("burn_rate_wq1889_worktree", _WORKTREE_BURN_RATE_PATH)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    monkeypatch.setattr(admission, "burn_rate", fresh)
+    monkeypatch.setattr(fresh, "frank_active", lambda now: (False, "test default: inactive"))
+    yield fresh
 
 
 def _mock_state(monkeypatch, *, limits, stale=False, floors=None, stop_active=False,
@@ -222,6 +250,50 @@ def test_litellm_never_gated_by_the_limit_wall():
     admission.record_limit_frame((NOW + dt.timedelta(hours=1)).isoformat())
     decision = admission.check_admission("qwen36-local", running_claude_max=0, now=NOW)
     assert decision["allow"] is True
+
+
+# --- wq#1889: frank-active reserve bump agrees with the dispatcher's own gate ----------
+
+def test_frank_active_lowers_the_admission_ceiling_same_as_dispatcher(monkeypatch, _worktree_burn_rate):
+    """The SAME limits as test_reserve_not_yet_breached_allows_more_than_one admit more
+    than one turn when Frank is inactive; flipping frank_active(now) True must tighten
+    the ceiling here exactly the way it tightens dispatcher/burn_rate.allowed_concurrent
+    (test_reserve_bumps_when_frank_active in test_burn_rate.py) — both consumers read
+    the same pool_spend_rate, so they can't disagree by construction, but this proves it
+    end-to-end through check_admission rather than assuming it."""
+    resets_at = (NOW + dt.timedelta(hours=1)).isoformat()
+    limits = {
+        "session": {"percent": 5, "resets_at": resets_at, "severity": "normal"},
+        "weekly_all": {"percent": 5, "resets_at": (NOW + dt.timedelta(days=3)).isoformat(), "severity": "normal"},
+    }
+    _mock_state(monkeypatch, limits=limits, stale=False)
+
+    inactive = admission.check_admission("claude-sonnet-5", running_claude_max=2, now=NOW)
+    assert inactive["allow"] is True
+
+    monkeypatch.setattr(_worktree_burn_rate, "frank_active", lambda now: (True, "orch-x idle=1.0m"))
+    active = admission.check_admission("claude-sonnet-5", running_claude_max=2, now=NOW)
+    assert active["allow"] is False
+    assert "concurrency ceiling" in active["reasons"][0]
+
+
+def test_budget_snapshot_surfaces_frank_active_and_window(monkeypatch, _worktree_burn_rate):
+    resets_at = (NOW + dt.timedelta(hours=1)).isoformat()
+    _mock_state(monkeypatch, limits={
+        "session": {"percent": 40, "resets_at": resets_at, "severity": "normal"},
+        "weekly_all": {"percent": 20, "resets_at": resets_at, "severity": "normal"},
+    }, stale=False)
+
+    inactive_snap = admission.budget_snapshot(now=NOW)
+    assert inactive_snap["frank_active"] is False
+    assert inactive_snap["frank_active_window_min"] == _worktree_burn_rate.FRANK_ACTIVE_WINDOW_MIN
+
+    monkeypatch.setattr(_worktree_burn_rate, "frank_active", lambda now: (True, "orch-x idle=1.0m"))
+    active_snap = admission.budget_snapshot(now=NOW)
+    assert active_snap["frank_active"] is True
+    # reserve_pct itself stays the base table — frank_active is the separate signal an
+    # operator reads to know the wider FRANK_RESERVE_PCT_ACTIVE is what's really applied.
+    assert active_snap["reserve_pct"] == inactive_snap["reserve_pct"]
 
 
 # --- /v1/uhp lumen.budget extension -----------------------------------------------------
