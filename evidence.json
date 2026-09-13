@@ -2,10 +2,10 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "pilots/3d071a263025/aggregate_results.py:20-27",
-      "cmd_run": "python3 pilots/3d071a263025/aggregate_results.py",
+      "citation": "despag/tools/run_p1_exit.py:22-32",
+      "cmd_run": "python3 -m despag.tools.run_p1_exit conformance --port 8795 --data-dir despag/reports/rundata2 --class core --harness-id chrn_litellm-mechanical --json despag/reports/rundata2/smoke.json",
       "exit_code": 0,
-      "note": "aggregate() (pilots/3d071a263025/aggregate_results.py:9-11) sums OmegaUse-OfficeVal verifier scores committed alongside it (baseline_002/005/010.json, treatment_005.json) into the pilot's primary metric: baseline=7/131=0.053, treatment(task 005 only)=7/28=0.250. REPORT.md (pilots/3d071a263025/REPORT.md) ends with RECOMMENDATION: SKIP, matching the original defer reason (no CARD.md existed for this proposal; reconstructed and disclosed per ISSUE-LOG #369)."
+      "note": "_configure_env (despag/tools/run_p1_exit.py:22-32) is the real wiring this ticket's P1-exit run used: isolated DESPAG_DATA_DIR/SESSIONS_ROOT/WORKTREES_ROOT/API_TOKEN_FILE inside the caller's own --data-dir (never /tmp or ~/despag-data), plus DESPAG_CLAUDE_BIN=/home/lumen/.npm-global/bin/claude to close the BUILD-worker PATH gap logged as ISSUE-LOG #374. cmd_run above is a smoke re-run of the same subcommand used for the real litellm-mechanical/claude-max runs; it reproduced the same 40/40 CONFORMANT result reported in despag/reports/P1_EXIT.md and despag/reports/p1-exit_litellm.json."
     }
   ]
 }

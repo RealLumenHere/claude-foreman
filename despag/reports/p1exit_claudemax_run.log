@@ -1,0 +1,52 @@
+
+UHP conformance — http://127.0.0.1:8795
+protocol 2026-08-11 · requested class: core
+
+  CORE
+    PASS  D-01  Discovery document is served  — conformance_class=core versions=['2026-08-11']
+    PASS  D-02  Discovery is served without authentication
+    PASS  D-03  Discovery document matches the schema
+    PASS  D-04  default_version is one of versions
+    PASS  D-05  conformance_class agrees with capabilities  — class=core
+    PASS  V-01  UHP-Version header on every response  — UHP-Version: 2026-08-11
+    PASS  V-02  A supported version is honoured
+    PASS  V-03  An unsupported version is refused, not silently substituted  — supported=['2026-08-11']
+    PASS  A-01  Authenticated endpoints reject an absent credential
+    PASS  A-02  Authenticated endpoints reject an invalid credential
+    PASS  E-01  Errors use the structured envelope  — code=harness_not_found
+    PASS  E-02  Unknown harness reports harness_not_found
+    PASS  E-03  Unknown response reports response_not_found
+    PASS  E-04  Error messages carry no stack traces
+    PASS  H-01  Harness list is served and well formed  — 3 harness(es)
+    PASS  H-02  A harness can be fetched by id
+    PASS  H-03  Model catalogue is served and availability is a boolean  — 5/5 models available
+    PASS  H-04  Per-harness model list is served
+    PASS  T-01  A non-streaming task returns a valid Response  — status=completed in 3.3s
+    PASS  T-02  A finished task is in a terminal state
+    PASS  T-03  The response names the model that actually ran  — model=claude-sonnet-5
+    PASS  T-04  The response reports its session  — session_id=hsess_93ecdf4254534304b3dd1cf3
+    PASS  T-05  usage is an object or explicitly null, never fabricated
+    PASS  T-06  A stored response can be read back
+    PASS  T-07  Response ids are prefixed
+    PASS  S-01  A streaming task emits events  — 9 events
+    PASS  S-02  Stream content type is text/event-stream
+    PASS  S-03  Every event validates against the schema  — 9 events valid
+    PASS  S-04  sequence_number starts at 0 and has no gaps
+    PASS  S-05  The first event is response.created
+    PASS  S-06  The stream ends with exactly one terminal event  — terminal=response.completed
+    PASS  S-07  The terminal event carries the complete response
+    PASS  S-08  Streaming and non-streaming agree on the result shape
+    PASS  S-09  The stream is progressive, not buffered to the end  — events spread over 3.2s
+    PASS  C-01  A task can continue a session  — session hsess_93ecdf4254534304b3dd1cf3 extended
+    PASS  C-02  Cancelling a terminal task succeeds and changes nothing
+    PASS  C-03  A running task can be cancelled and ends non-running  — final status=cancelled
+    PASS  T-08  A request carrying reserved fields is accepted, not rejected  — accepted and ran
+    PASS  T-09  Reserved fields are reported in metadata.ignored_fields  — ignored_fields=['tools', 'include']
+    PASS  T-10  A task that sends no reserved field is not told one was ignored
+
+  Summary
+    40/40 passed · 0 failed · 0 skipped · 0 errored
+    CONFORMANT — UHP 2026-08-11 (core)
+
+  JSON report: despag/reports/p1-exit_claudemax.json
+

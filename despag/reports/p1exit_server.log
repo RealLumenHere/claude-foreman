@@ -1,0 +1,127 @@
+despag admission startup: FRANK_RESERVE_PCT={'session': 30.0, 'weekly_all': 15.0, 'fable_weekly_scoped': 10.0} DESPAG_MAX_CLAUDE_CONCURRENT=8 DESPAG_USAGE_POLL_SECONDS=60
+INFO:     Started server process [952806]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8795 (Press CTRL+C to quit)
+INFO:     127.0.0.1:34966 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48486 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48502 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48518 - "GET /v1/responses/resp_cb367162f8344f468910aade HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48522 - "GET /v1/responses/resp_9f49b34b3d484399accc69ad HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48526 - "GET /v1/uhp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48532 - "GET /v1/uhp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48540 - "GET /v1/uhp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48550 - "GET /v1/uhp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48552 - "GET /v1/uhp HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:48562 - "GET /v1/harnesses HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:48572 - "GET /v1/harnesses HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:48578 - "GET /v1/harnesses/chrn_uhpconformancenosuchharness00 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48588 - "GET /v1/harnesses/chrn_uhpconformancenosuchharness00 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48592 - "GET /v1/responses/resp_uhpconformancenosuchresponse HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48602 - "GET /v1/harnesses/chrn_uhpconformancenosuchharness00 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48612 - "GET /v1/harnesses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48624 - "GET /v1/harnesses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48636 - "GET /v1/harnesses/chrn_litellm-mechanical HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48642 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48644 - "GET /v1/responses/resp_cb367162f8344f468910aade HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48648 - "GET /v1/harnesses/chrn_litellm-mechanical/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48656 - "GET /v1/responses/resp_9f49b34b3d484399accc69ad HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48672 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48670 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52924 - "GET /v1/responses/resp_87cd34f1a2b04d51b25bccf2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52928 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52944 - "GET /v1/responses/resp_cb367162f8344f468910aade HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52958 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52966 - "GET /v1/responses/resp_88cbd39724c448ecabd7bffb HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52986 - "GET /v1/responses/resp_0ee29c40ee36496798071525 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52990 - "GET /v1/responses/resp_88cbd39724c448ecabd7bffb HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52980 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53004 - "GET /v1/responses/resp_87cd34f1a2b04d51b25bccf2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53020 - "POST /v1/responses/resp_87cd34f1a2b04d51b25bccf2/cancel HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53036 - "GET /v1/responses/resp_87cd34f1a2b04d51b25bccf2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53040 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53052 - "GET /v1/responses/resp_0ee29c40ee36496798071525 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53066 - "GET /v1/responses/resp_88cbd39724c448ecabd7bffb HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53072 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53078 - "POST /v1/responses/resp_69bfaeb4b93d40eea1e36b87/cancel HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53092 - "GET /v1/responses/resp_69bfaeb4b93d40eea1e36b87 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59136 - "GET /v1/responses/resp_0ee29c40ee36496798071525 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59138 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59152 - "GET /v1/responses/resp_3eb39992a98f41e5a46bf531 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59162 - "GET /v1/responses/resp_69bfaeb4b93d40eea1e36b87 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59178 - "GET /v1/responses/resp_1f168596bcc24f17ac5328c9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59192 - "GET /v1/responses/resp_3eb39992a98f41e5a46bf531 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59172 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59204 - "GET /v1/responses/resp_1f168596bcc24f17ac5328c9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59214 - "GET /v1/responses/resp_3eb39992a98f41e5a46bf531 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59224 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59234 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59248 - "GET /v1/responses/resp_1f168596bcc24f17ac5328c9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59250 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59256 - "GET /v1/responses/resp_81d34795582441a4ad31ea27 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41950 - "GET /v1/responses/resp_13bf34d7d8c24569a090f244 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41954 - "GET /v1/responses/resp_81d34795582441a4ad31ea27 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41960 - "GET /v1/responses/resp_13bf34d7d8c24569a090f244 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41974 - "GET /v1/responses/resp_81d34795582441a4ad31ea27 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41984 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41998 - "GET /v1/responses/resp_13bf34d7d8c24569a090f244 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42002 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42018 - "GET /v1/responses/resp_7e63a848f36b40f588cdb527 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37592 - "GET /v1/responses/resp_c0d36d5e667f4820aef1c8c0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37602 - "GET /v1/responses/resp_7e63a848f36b40f588cdb527 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37618 - "GET /v1/responses/resp_c0d36d5e667f4820aef1c8c0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37632 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37634 - "GET /v1/responses/resp_7e63a848f36b40f588cdb527 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37646 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37654 - "GET /v1/responses/resp_b98334033f0b4848bb8fdb13 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37664 - "GET /v1/responses/resp_23d523f284bc47ab993fc9a9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47026 - "GET /v1/responses/resp_b98334033f0b4848bb8fdb13 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47030 - "GET /v1/responses/resp_23d523f284bc47ab993fc9a9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47038 - "GET /v1/responses/resp_b98334033f0b4848bb8fdb13 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47044 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47058 - "GET /v1/responses/resp_23d523f284bc47ab993fc9a9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47070 - "GET /v1/responses/resp_3f9a942e329b4072b30e99bc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47076 - "GET /v1/responses/resp_23d523f284bc47ab993fc9a9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47086 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42018 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42030 - "POST /v1/responses/resp_ae1259c428c44746ad53a41e/cancel HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42040 - "GET /v1/responses/resp_ae1259c428c44746ad53a41e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42044 - "GET /v1/responses/resp_ae1259c428c44746ad53a41e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52940 - "GET /v1/uhp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52952 - "GET /v1/uhp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52966 - "GET /v1/uhp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52974 - "GET /v1/uhp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52978 - "GET /v1/uhp HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:52982 - "GET /v1/harnesses HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:52998 - "GET /v1/harnesses HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:53000 - "GET /v1/harnesses/chrn_uhpconformancenosuchharness00 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53008 - "GET /v1/harnesses/chrn_uhpconformancenosuchharness00 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53014 - "GET /v1/responses/resp_uhpconformancenosuchresponse HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53028 - "GET /v1/harnesses/chrn_uhpconformancenosuchharness00 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53036 - "GET /v1/harnesses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53046 - "GET /v1/harnesses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53050 - "GET /v1/harnesses/chrn_claude-max HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53052 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53058 - "GET /v1/harnesses/chrn_claude-max/models HTTP/1.1" 200 OK
+despag admission: model=claude-sonnet-5 allow=True running=0 reasons=['session: 41.94%/h / 1.50%/worker-h = 28.0; weekly_all: 0.26%/h / 0.35%/worker-h = 0.7']
+INFO:     127.0.0.1:53074 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59876 - "GET /v1/responses/resp_c609f0dd47d44d3c9df32fce HTTP/1.1" 200 OK
+despag admission: model=claude-sonnet-5 allow=True running=0 reasons=['session: 41.97%/h / 1.50%/worker-h = 28.0; weekly_all: 0.26%/h / 0.35%/worker-h = 0.7']
+INFO:     127.0.0.1:59884 - "POST /v1/responses HTTP/1.1" 200 OK
+despag admission: model=claude-sonnet-5 allow=True running=0 reasons=['session: 42.01%/h / 1.50%/worker-h = 28.0; weekly_all: 0.26%/h / 0.35%/worker-h = 0.7']
+INFO:     127.0.0.1:59900 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59906 - "GET /v1/responses/resp_c609f0dd47d44d3c9df32fce HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59912 - "POST /v1/responses/resp_c609f0dd47d44d3c9df32fce/cancel HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59922 - "GET /v1/responses/resp_c609f0dd47d44d3c9df32fce HTTP/1.1" 200 OK
+despag admission: model=claude-sonnet-5 allow=True running=0 reasons=['session: 42.05%/h / 1.50%/worker-h = 28.0; weekly_all: 0.26%/h / 0.35%/worker-h = 0.7']
+INFO:     127.0.0.1:59930 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55834 - "POST /v1/responses/resp_7fb8fce76ff9400291b7e7e2/cancel HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55850 - "GET /v1/responses/resp_7fb8fce76ff9400291b7e7e2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55854 - "GET /v1/responses/resp_7fb8fce76ff9400291b7e7e2 HTTP/1.1" 200 OK
+despag admission: model=claude-sonnet-5 allow=True running=0 reasons=['session: 42.10%/h / 1.50%/worker-h = 28.1; weekly_all: 0.26%/h / 0.35%/worker-h = 0.7']
+INFO:     127.0.0.1:55864 - "POST /v1/responses HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33576 - "GET /v1/uhp HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [952806]
