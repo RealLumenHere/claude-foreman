@@ -2,10 +2,10 @@
   "criteria": [
     {
       "id": "AC1",
-      "citation": "memory/cmt_retrieval.py:78-104",
-      "cmd_run": "cd memory && python3 -m pytest tests/test_cmt_retrieval.py -v",
+      "citation": "pilots/3d071a263025/aggregate_results.py:20-27",
+      "cmd_run": "python3 pilots/3d071a263025/aggregate_results.py",
       "exit_code": 0,
-      "note": "retrieve_complementary_traces (memory/cmt_retrieval.py:78-104) implements the pilot's treatment: hop-1 single-trace retrieval (retrieve_single_trace, memory/cmt_retrieval.py:61-68) plus a hop-2 re-query seeded by entity tokens extracted from hop 1's results (_entities, memory/cmt_retrieval.py:56-58), bridging multi-hop facts a single verbatim trace misses. 6/6 new unit tests pass (memory/tests/test_cmt_retrieval.py), full memory/ suite 37/37. Measured on the fixed sample (pilots/a7d04e5ebe7d/sample.json, sha256 eaa55b8a7ecf7c60a3d53fe5c293f137f6c8d8450519e188fa7858bbaf49a0f0): baseline recall_at_bridge=0.500, treatment=0.750 (pilots/a7d04e5ebe7d/results.json, run via pilots/a7d04e5ebe7d/run_pilot.py). REPORT.md ends with RECOMMENDATION: WATCH."
+      "note": "aggregate() (pilots/3d071a263025/aggregate_results.py:9-11) sums OmegaUse-OfficeVal verifier scores committed alongside it (baseline_002/005/010.json, treatment_005.json) into the pilot's primary metric: baseline=7/131=0.053, treatment(task 005 only)=7/28=0.250. REPORT.md (pilots/3d071a263025/REPORT.md) ends with RECOMMENDATION: SKIP, matching the original defer reason (no CARD.md existed for this proposal; reconstructed and disclosed per ISSUE-LOG #369)."
     }
   ]
 }

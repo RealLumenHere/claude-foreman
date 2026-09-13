@@ -1,0 +1,103 @@
+{
+  "id": "002",
+  "file_name": "城市社区微气候韧性评价与公共空间更新研究_.docx",
+  "status": "ok",
+  "error": null,
+  "dim1_pass": true,
+  "dim1_reason": "",
+  "dim2_items": [
+    {
+      "rule": "摘要前所有页面页眉处没有横线",
+      "max_delta": 3,
+      "delta": 3,
+      "hit": true,
+      "detail": ""
+    },
+    {
+      "rule": "摘要页及摘要页后所有页面页眉处存在两条相互平行的黑色横线，上横线粗细不低于下横线的3倍，下横线粗细不超过1.5磅",
+      "max_delta": 5,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "所有页页眉位置上的横线位于页眉文本下方，与页眉文本间距在1-4字符之间",
+      "max_delta": 5,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "任意一页页眉文本内容不是\"澄湖理工大学硕士学位论文\"或不在居中位置",
+      "max_delta": -1,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "目录页后所有页面不满足以下任意一项：页脚文本没有出现\"城市社区微气候韧性评价与公共空间更新研究\"；奇数页页脚文本不是左对齐；偶数页页脚文本不是右对齐",
+      "max_delta": -1,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "任意一页页脚居中位置没有出现页码",
+      "max_delta": -1,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "目录页及目录页之前的页面页码不是罗马数字，目录页之后的页面页码不是阿拉伯数字",
+      "max_delta": -1,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "中文摘要页、英文摘要页、目录页不是此先后顺序",
+      "max_delta": -1,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "目录页后所有一级标题不是黑体、三号、加粗",
+      "max_delta": -1,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "目录页后所有二级标题不是黑体、四号、加粗",
+      "max_delta": -1,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "目录页后所有三级标题不是黑体、小四号、加粗",
+      "max_delta": -1,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "\"1.1.1 研究背景\"与\"1.1.2 研究意义\"中间的文本不满足以下任意一项：宋体、小四、1.5倍行距、两端对齐",
+      "max_delta": -1,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    },
+    {
+      "rule": "目录页后任意一个表格的边框线数量不是3",
+      "max_delta": -3,
+      "delta": 0,
+      "hit": false,
+      "detail": ""
+    }
+  ],
+  "total_score": 3,
+  "max_score": 13
+}
