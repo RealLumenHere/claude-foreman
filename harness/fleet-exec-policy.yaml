@@ -68,6 +68,9 @@ allow:
   # wq#1467), /home/lumen/messenger (vapid key, chat-log token), /home/lumen/fleet
   # (token in patches/wq1454).
   read_dirs:
+    - /home/lumen/fleet-units         # wq#1774: narrow grant, sweep hits=0 (410 files), deploy unit artifacts
+    - /home/lumen/autonomy/agent5     # wq#1779: narrow grant, sweep hits=0 (45 files, .py source), DGM retirement
+    - /home/lumen/minerva/eval   # wq#1738: narrow grant, sweep hits=0 (508 files), NOT the parent minerva (credentials in context/sections)
     - /home/lumen/research_prompts
     - /home/lumen/decisions
     - /home/lumen/instructions
@@ -107,7 +110,6 @@ allow:
     # under context/, sections.json, minerva.db or the sibling eval_sets/. Swept 2026-09-13
     # with harness/read_dir_sweep.py: /home/lumen/minerva/eval files=508 hits=0 (evidence in
     # the PR body). Decision record: research/MINERVA_EVAL_GRANT_DECISION.md.
-    - /home/lumen/minerva/eval
 
   # RESTART: unit globs per node the lint may tag restart(unit@node) for. Each entry
   # was verified per-target before listing (unit LoadState=loaded, `sudo -n true`
