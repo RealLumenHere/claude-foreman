@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from fastapi.responses import JSONResponse
 
-# type -> default HTTP status (errors.md §2)
+# type -> default HTTP status (errors.md §2). `harness_error` is 200: the harness ran
+# and failed, so the transport succeeded and the failure is carried in a failed response
+# (errors.md §2 "200 (in a failed response)", §3.3). Without this entry every §3.3
+# execution code — harness_error, provider_error, timeout — raised KeyError (wq#1852).
 TYPE_STATUS = {
     "invalid_request_error": 400,
     "authentication_error": 401,
     "permission_error": 403,
     "rate_limit_error": 429,
+    "harness_error": 200,
     "server_error": 500,
 }
 

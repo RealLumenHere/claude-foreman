@@ -341,11 +341,15 @@ app = FastAPI()
 async def uhp_version_negotiation(request: Request, call_next):
     requested = request.headers.get("uhp-version")
     if requested and requested not in SUPPORTED_VERSIONS:
-        return error_response(
+        # wq#1852: the rejection is the response most about version negotiation, so it
+        # carries the header too — stamp it before returning, not only after call_next().
+        rejected = error_response(
             "unsupported_protocol_version",
             f"unsupported UHP-Version {requested!r}",
             detail={"supported": SUPPORTED_VERSIONS},
         )
+        rejected.headers["UHP-Version"] = UHP_VERSION
+        return rejected
     response = await call_next(request)
     response.headers["UHP-Version"] = UHP_VERSION
     return response
@@ -432,12 +436,25 @@ def _model_entry(harness: dict, model_id: str) -> dict:
 async def list_models(request: Request):
     if (err := require_auth(request)) is not None:
         return err
+    # wq#1852: the catalog is keyed by model id, not by harness. Two harnesses can serve
+    # the same model (chrn_claude-max and the disabled chrn_claude-local-rung both default
+    # to claude-sonnet-5), and without coalescing here the same id appeared twice in one
+    # response — once available:true, once available:false. A model is available if ANY
+    # harness serving it is available, and default if it is the default of any of them.
     backends: dict[str, dict] = {}
+    seen: dict[tuple[str, str], dict] = {}
     for h in HARNESSES:
         for model_id in _harness_model_ids(h):
             backend = "litellm" if _is_local_model(model_id) else "claude"
             bucket = backends.setdefault(backend, {"default": h["defaultModel"], "models": []})
-            bucket["models"].append(_model_entry(h, model_id))
+            entry = _model_entry(h, model_id)
+            prior = seen.get((backend, model_id))
+            if prior is None:
+                seen[(backend, model_id)] = entry
+                bucket["models"].append(entry)
+                continue
+            prior["available"] = prior["available"] or entry["available"]
+            prior["default"] = prior.get("default", False) or entry.get("default", False)
     catalog = models.ModelCatalog(backends={k: models.ModelCatalogBackendsItem(**v) for k, v in backends.items()})
     return catalog.model_dump()
 

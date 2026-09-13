@@ -38,6 +38,15 @@ def test_uhp_version_header_on_every_response(client):
     c, _ = client
     r = c.get("/v1/uhp")
     assert r.headers["uhp-version"] == "2026-08-11"
+    # wq#1852: including the negotiation middleware's own rejection, which returns
+    # before call_next() and so used to be the one response without the header.
+    r = c.get("/v1/uhp", headers={"UHP-Version": "1999-01-01"})
+    assert r.status_code == 400
+    assert r.headers["uhp-version"] == "2026-08-11"
+    # and an error raised past the middleware, on an authenticated route
+    r = c.get("/v1/harnesses")
+    assert r.status_code == 401
+    assert r.headers["uhp-version"] == "2026-08-11"
 
 
 def test_unsupported_version_rejected(client):
@@ -351,3 +360,38 @@ def test_closed_code_table_status_codes():
     assert r.status_code == 409
     r = error_response("rate_limited", "slow down")
     assert r.status_code == 429
+
+
+@pytest.mark.parametrize("code", ["harness_error", "provider_error", "timeout"])
+def test_execution_codes_build_a_failed_response_envelope(code):
+    """wq#1852: every errors.md §3.3 execution code used to raise KeyError, because
+    CODE_TYPES types them `harness_error` and TYPE_STATUS had no such key."""
+    from despag.uhp.errors import error_response
+
+    r = error_response(code, "the harness ran and failed")
+    assert r.status_code == 200, "errors.md §2: harness_error is carried in a failed response"
+    err = json.loads(r.body)["error"]
+    assert err["type"] == "harness_error"
+    assert err["code"] == code
+
+
+def test_model_catalog_reports_each_model_once(client):
+    """wq#1852: chrn_claude-max (enabled) and chrn_claude-local-rung (disabled) both
+    serve claude-sonnet-5, which used to appear twice — available:true and false."""
+    c, app_module = client
+    r = c.get("/v1/models", headers={"Authorization": f"Bearer {app_module.API_TOKEN}"})
+    assert r.status_code == 200
+    for backend, bucket in r.json()["backends"].items():
+        ids = [m["id"] for m in bucket["models"]]
+        assert len(ids) == len(set(ids)), f"{backend} lists a model id more than once: {ids}"
+
+
+def test_model_availability_coalesces_across_harnesses(monkeypatch, client):
+    """A model an enabled harness can serve is available even though a disabled
+    harness also lists it."""
+    c, app_module = client
+    monkeypatch.setattr(app_module, "_claude_logged_in", lambda: True)
+    r = c.get("/v1/models", headers={"Authorization": f"Bearer {app_module.API_TOKEN}"})
+    entries = [m for m in r.json()["backends"]["claude"]["models"] if m["id"] == "claude-sonnet-5"]
+    assert len(entries) == 1
+    assert entries[0]["available"] is True
