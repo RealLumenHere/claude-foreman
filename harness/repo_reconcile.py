@@ -84,7 +84,8 @@ Exit codes (greppable from cron/self-heal, 0 only ever means "nothing to chase")
                          --apply rewinds to the merge-base and leaves BEHIND_ONLY
     12  PR_PENDING       ahead with content the tracked branch lacks, but another remote ref
                          (an open PR's branch) already carries it: --apply rewinds to the
-                         merge-base so the PR can land, and leaves BEHIND_ONLY
+                         merge-base so the PR can land, and leaves BEHIND_ONLY — or IN_SYNC
+                         when the branch was ahead only, since then the base IS the remote
     20  CONTENT_DIVERGED ahead with different content: needs PR->squash, or Frank
     30  BEHIND_ONLY      remote ahead: needs a deploy, then a fast-forward
     2   error
@@ -246,12 +247,15 @@ def explain(st):
                 f"{st['base'][:7]}; zero files change and the repo lands on BEHIND_ONLY, "
                 f"i.e. fast-forwardable again.")
     if v == PR_PENDING:
+        # Ahead-only puts the merge-base AT the remote head, so the rewind lands IN_SYNC and
+        # there is no fast-forward left to run afterwards (wq#1923).
+        landing = "BEHIND_ONLY" if st["behind"] else "IN_SYNC"
         return (f"{st['branch']} is {st['ahead']} ahead of {st['remote_ref']} with content "
                 f"{st['remote_ref']} does not carry — but {st['preserved_on']} does, at "
                 f"every path those commits touch ({', '.join(st['touched'])}). The work is "
                 f"pushed and in flight as a PR, so rewinding loses nothing. `reconcile "
                 f"--apply` archives the local SHAs and rewinds the ref to the merge-base "
-                f"{st['base'][:7]}, leaving BEHIND_ONLY — which is what lets the PR land "
+                f"{st['base'][:7]}, leaving {landing} — which is what lets the PR land "
                 f"(wq#771's guard refuses to merge over an unpushed commit). Unlike "
                 f"SAFE_RESET/REDUNDANT_AHEAD this DOES change files: the tree gives up that "
                 f"content until the PR merges and the fast-forward brings it back.")
@@ -279,6 +283,11 @@ def reconcile(repo, branch="main", remote="origin", fetch=True, apply=False, tag
                 f"{repo} has uncommitted changes at a path this reconcile would restore "
                 f"({', '.join(held.split())}); the PR branch does not carry them. Commit "
                 f"or set them aside first.")
+    # Both rewinding verdicts land on the merge-base, but that base is only BEHIND_ONLY when
+    # the remote actually moved on. Ahead-only (behind == 0) makes the base the remote head
+    # itself, so the very same rewind ends IN_SYNC — and demanding BEHIND_ONLY there raised
+    # on a reconcile that had just SUCCEEDED, after the ref had already moved (wq#1923).
+    rewound = BEHIND_ONLY if st["behind"] else IN_SYNC
     if st["verdict"] == SAFE_RESET:
         # The whole tree already matches, so the remote ref itself is the safe landing spot.
         target, expected = st["remote_ref"], IN_SYNC
@@ -287,14 +296,14 @@ def reconcile(repo, branch="main", remote="origin", fetch=True, apply=False, tag
     elif st["verdict"] == REDUNDANT_AHEAD:
         # The remote has moved on, so only the merge-base is reachable without deploying.
         # Landing there is the point: it converts a divergence into a plain fast-forward.
-        target, expected = st["base"], BEHIND_ONLY
+        target, expected = st["base"], rewound
         proof = (f"duplicates of landed work — {st['remote_ref']} {st['remote_head'][:7]} "
                  f"already carries this content at {', '.join(st['touched'])}")
     else:
         # Same landing spot, weaker guarantee: the content is pushed but not merged, so
         # this rewind DOES remove it from the tree until the PR lands. The archive tag and
         # the PR branch are both holding it.
-        target, expected = st["base"], BEHIND_ONLY
+        target, expected = st["base"], rewound
         proof = (f"pushed but unlanded — {st['preserved_on']} already carries this content "
                  f"at {', '.join(st['touched'])}")
     tag = tag or f"archive/reconcile-{branch}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"

@@ -142,6 +142,31 @@ def make_wq1479_new_file(tmp_path):
     return origin, work, base
 
 
+def make_wq1923(tmp_path):
+    """The wq#1923 shape: local main is ahead ONLY — origin/main never moved on — and that
+    one direct-to-main hotfix is pushed whole on a PR branch. Every other PR_PENDING fixture
+    has the remote ahead too, which is why nothing caught the ahead-only landing spot: here
+    the merge-base IS origin/main, so the rewind ends IN_SYNC with no fast-forward left.
+    """
+    origin = str(tmp_path / "origin.git")
+    work = str(tmp_path / "work")
+    subprocess.run(["git", "init", "--bare", "--initial-branch=main", origin], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "clone", origin, work], check=True, capture_output=True)
+    git(work, "config", "user.email", "test@lumen.local")
+    git(work, "config", "user.name", "test")
+
+    commit(work, "file.txt", "base\n", "base")
+    git(work, "push", "origin", "main")
+    base = git(work, "rev-parse", "main")
+
+    commit(work, "file.txt", "a hotfix committed straight into the live tree\n",
+           "fix: direct-to-main hotfix")
+    git(work, "push", "origin", "main:pr")
+    git(work, "fetch", "origin")
+    return origin, work, base
+
+
 def make_split_across_refs(tmp_path):
     """Two pushed refs that between them account for every touched path, but neither of
     which carries both. A coincidence, not a pushed PR — must stay CONTENT_DIVERGED.
@@ -390,6 +415,29 @@ def test_pr_pending_apply_rewinds_and_leaves_the_fast_forward_runnable(tmp_path)
     assert git(work, "status", "--porcelain") == "?? scratch.log"
     git(work, "merge", "--ff-only", "origin/main")
     assert git(work, "rev-parse", "main") == git(work, "rev-parse", "origin/main")
+
+
+def test_pr_pending_apply_lands_in_sync_when_the_branch_is_ahead_only(tmp_path):
+    """wq#1923: with behind == 0 the merge-base IS the remote head, so the rewind lands
+    IN_SYNC. The expectation was pinned to BEHIND_ONLY unconditionally, so the tool raised on
+    its own successful reconcile — AFTER moving the ref, telling the caller a reconcile that
+    had in fact worked had failed.
+    """
+    _, work, base = make_wq1923(tmp_path)
+    old_head = git(work, "rev-parse", "main")
+    rc, out = run("status", "--repo", work, "--no-fetch")
+    assert rc == 12, out
+    assert "ahead=1 behind=0" in out
+    assert "leaving IN_SYNC" in out, "the advice must name the landing spot it actually hits"
+
+    rc, out = run("reconcile", "--repo", work, "--no-fetch", "--apply")
+    assert rc == 0, out  # IN_SYNC: reconciled, and no fast-forward is owed
+    assert git(work, "rev-parse", "main") == base
+    assert git(work, "status", "--porcelain") == "", "nothing may be left staged"
+
+    tag = [ln.split()[-1] for ln in out.splitlines() if "as tag " in ln][0]
+    assert git(work, "rev-parse", f"{tag}^{{commit}}") == old_head, "old head stays reachable"
+    assert git(work, "cat-file", "-e", "origin/pr:file.txt") == "", "the PR branch still has it"
 
 
 def test_pr_pending_refuses_when_a_touched_path_has_uncommitted_work(tmp_path):
