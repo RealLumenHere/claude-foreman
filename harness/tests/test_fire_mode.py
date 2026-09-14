@@ -51,7 +51,8 @@ def _wire_common(tmp_path, monkeypatch):
     monkeypatch.setattr(fworker, "wq_release", lambda tid: calls["released"].append(tid))
     monkeypatch.setattr(fworker, "wq_block", lambda tid, reason: calls["blocked"].append((tid, reason)))
     monkeypatch.setattr(fworker, "wq_heartbeat", lambda tid: calls["heartbeats"].append(tid))
-    monkeypatch.setattr(fworker, "wq_done", lambda tid, notes: calls["done"].append((tid, notes)))
+    monkeypatch.setattr(fworker, "wq_done", lambda tid, notes, no_artifact_reason=None:
+                        calls["done"].append((tid, notes, no_artifact_reason)))
     monkeypatch.setattr(fworker, "ntfy", lambda title, msg, priority="default": calls["ntfy"].append((title, msg)))
     return calls
 
@@ -184,8 +185,10 @@ def test_probe_recovery_auto_closes_without_apply(tmp_path, monkeypatch):
 
     assert rc == fworker.EXIT_OK
     assert spawned == []  # never spawned a diagnosis/apply child at all
-    assert calls["done"] == [(717, calls["done"][0][1])]
+    assert [c[0] for c in calls["done"]] == [717]
     assert "condition cleared" in calls["done"][0][1]
+    # wq#1925: fire-mode is the caller that may assert artifact-lessness, and it says why
+    assert "no code change was applied" in calls["done"][0][2]
     assert calls["released"] == []
     assert calls["blocked"] == []
     assert any("auto-closed" in title.lower() for title, _ in calls["ntfy"])

@@ -526,18 +526,31 @@ def wq_heartbeat(ticket_id):
     wq("heartbeat", str(ticket_id))
 
 
-def wq_done(ticket_id, notes):
+def wq_done(ticket_id, notes, no_artifact_reason=None):
+    """Close the ticket. `no_artifact_reason` is the CALLER's own assertion that this
+    ticket has no code artifact to cite, plus the reason why — only a caller that knows
+    it applied no code change may pass one (wq#1925)."""
     p = wq("done", str(ticket_id), "--notes", notes)
     if p.returncode != 0:
         out = (p.stdout or "") + " " + (p.stderr or "")
         # wq#759 evidence gate: `done` is refused (exit 2) unless --notes names a verifiable
         # artifact (file/PR/commit). Fire-mode + operational tickets legitimately have NO code
         # artifact, so bare `done` was refused and fire-mode treated the refusal as a CRASH.
-        # On the evidence-gate refusal, retry ONCE with --no-artifact + a reason (honest: it
-        # documents WHY there is no artifact, does not fake one). Any OTHER refusal still raises.
-        if "759" in out or "evidence gate" in out.lower() or "verifiable artifact" in out.lower():
-            reason = "fire-mode/operational closure - no code artifact; action recorded in --notes"
-            p2 = wq("done", str(ticket_id), "--notes", notes, "--no-artifact", reason)
+        # On the evidence-gate refusal, retry ONCE with --no-artifact + the caller's reason
+        # (honest: it documents WHY there is no artifact, does not fake one).
+        #
+        # wq#1925 (wq#1924 CONTRADICT): the retry used to fire for EVERY caller on a text
+        # match alone, and refusal text cannot tell "nothing to cite" from "something to
+        # cite, badly worded notes". handle_resumable_failure() only reaches `done` after
+        # check_artifacts_done() found a real landed commit, so its prose-only notes hit the
+        # gate and closed the ticket labelled "no code artifact" — a false label, and one
+        # that lands in the very audit bucket (wq closure-quality) wq#759 exists to track.
+        # Artifact-lessness is now asserted by the caller, not inferred here; every other
+        # caller still raises loudly on the refusal, which is what makes it investigable.
+        if no_artifact_reason and ("759" in out or "evidence gate" in out.lower()
+                                   or "verifiable artifact" in out.lower()):
+            p2 = wq("done", str(ticket_id), "--notes", notes,
+                    "--no-artifact", no_artifact_reason)
             if p2.returncode == 0:
                 log(f"wq#{ticket_id} closed via --no-artifact (operational ticket, no code artifact)")
                 return
@@ -2000,7 +2013,12 @@ def run_fire_ticket(args):
             if evidence_path:
                 notes += (f" Probe evidence: {evidence_path} "
                           f"(cmd={evidence['cmd']!r} exit={evidence['exit_code']}).")
-            wq_done(ticket_id, notes)
+            # the one caller that can honestly assert artifact-lessness: this branch
+            # auto-closes precisely BECAUSE no change was applied (wq#1925).
+            wq_done(ticket_id, notes,
+                    no_artifact_reason="fire-mode auto-close: the originating probe "
+                                       "cleared on its own and no code change was "
+                                       "applied; re-verify result recorded in --notes")
             ntfy("fire ticket auto-closed",
                  f"wq#{ticket_id}: re-verify found the originating probe condition has "
                  f"cleared on its own — auto-closed, no change applied.",
@@ -2357,7 +2375,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
 
     if (classification in (SUCCESS, DEGRADED_SUCCESS)
             and not sentinel_confirmed_block and not sentinel_confirmed_claim_error
-            and not check_artifacts_done(ticket_id, worktree)):
+            and not check_artifacts_done(ticket_id, worktree)[0]):
         log(f"{classification} but acceptance criteria unmet (ticket still open, no "
             f"landed commit found) — RELIABILITY_SPEC.md §C10: never trust the "
             f"self-report, treating as FALSE_COMPLETE.")
@@ -2687,12 +2705,18 @@ def check_artifacts_done(ticket_id, worktree):
     ISSUE-LOG #17: a ticket whose evidence already failed harness replay is never
     "confirmed by artifacts" — a landed-looking commit message is exactly the artifact a
     FALSE_COMPLETE produces, and letting it back in here would hand the rejected claim a
-    second door into `done`."""
+    second door into `done`.
+
+    Returns (confirmed, commit_sha). wq#1925: the sha is the citable artifact this check
+    just proved exists — a caller that goes on to close the ticket has to name it in
+    --notes (wq#759's gate), and only this function knows what it found. commit_sha is
+    None when the confirmation is the ticket's own status, i.e. it is already `done` and
+    there is nothing left to close."""
     if evidence_rejected(ticket_id):
-        return False
+        return False, None
     cur = wq_show(ticket_id)
     if cur.get("status") == "done":
-        return True
+        return True, None
     try:
         # a landed PR merges via lumen-pr's remote API call, not a local fetch — the
         # worktree's cached origin/main can be stale, which would false-negative a
@@ -2704,14 +2728,14 @@ def check_artifacts_done(ticket_id, worktree):
         pass
     try:
         p = subprocess.run(
-            ["git", "-C", worktree, "log", "origin/main", "--oneline", "-n", "1",
+            ["git", "-C", worktree, "log", "origin/main", "--format=%H", "-n", "1",
              "--grep", rf"wq#{ticket_id}\b"],
             capture_output=True, text=True, timeout=15)
         if p.returncode == 0 and p.stdout.strip():
-            return True
+            return True, p.stdout.split()[0]
     except Exception:
         pass
-    return False
+    return False, None
 
 
 def handle_resumable_failure(args, ticket_id, attempt, classification, state, events, worktree):
@@ -2729,13 +2753,18 @@ def handle_resumable_failure(args, ticket_id, attempt, classification, state, ev
     real progress from zero). Falls through to handle_failure's block-after-
     MAX_ATTEMPTS path once attempts are exhausted or there is no session_id to resume.
     """
-    if check_artifacts_done(ticket_id, worktree):
+    confirmed, landed_sha = check_artifacts_done(ticket_id, worktree)
+    if confirmed:
         log(f"{classification} but artifacts confirm the ticket actually landed "
             f"(session {state.session_id}) — verifying beats trusting the missing/odd "
             f"frame shape.")
-        if wq_show(ticket_id).get("status") != "done":
+        # wq#1925: cite the commit the check just found. A landed_sha means the ticket is
+        # still open (the already-`done` case returns None), and prose-only notes would be
+        # refused by wq#759's gate even though the artifact is right here.
+        if landed_sha:
             wq_done(ticket_id, f"fworker attempt {attempt}: verified via artifacts "
-                                f"after {classification} (session {state.session_id})")
+                                f"after {classification} (session {state.session_id}) "
+                                f"- landed commit {landed_sha}")
         file_verify_pass(ticket_id, args)
         return EXIT_OK
     write_prior_attempt_notes(ticket_id, attempt, worktree, events, classification)

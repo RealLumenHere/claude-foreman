@@ -82,7 +82,8 @@ def gated(worktree, tmp_path, monkeypatch):
     monkeypatch.setattr(fworker, "wq_block",
                         lambda tid, why: calls["log"].append(("block", tid, why)))
     monkeypatch.setattr(fworker, "wq_done",
-                        lambda tid, notes: calls["log"].append(("done", tid, notes)))
+                        lambda tid, notes, no_artifact_reason=None:
+                        calls["log"].append(("done", tid, notes, no_artifact_reason)))
     monkeypatch.setattr(fworker, "ntfy", lambda *a, **k: None)
     doc = fworker.pin_acceptance(4242, {"title": "t", "detail": "d"}, str(worktree), 1)
     assert doc is None or doc  # pin_acceptance returns the doc in force
@@ -392,7 +393,7 @@ def test_a_no_evidence_never_reaches_done_and_files_rework(worktree, gated):
     assert ("done", 4242) not in [(c[0], c[1]) for c in gated["log"]]
     # and a landed-looking artifact cannot resurrect it
     assert fworker.evidence_rejected(4242)
-    assert fworker.check_artifacts_done(4242, str(worktree)) is False
+    assert fworker.check_artifacts_done(4242, str(worktree)) == (False, None)
 
 
 def test_b_a_claimed_pass_is_rejected_by_the_harness_replay(worktree, gated):
