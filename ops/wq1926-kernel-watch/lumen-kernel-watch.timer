@@ -1,0 +1,13 @@
+# lumen-kernel-watch.timer — daily kernel data-loss fix check (wq#1926).
+[Unit]
+Description=Daily Lumen kernel data-loss fix check (wq#1926)
+
+[Timer]
+OnBootSec=10min
+OnCalendar=daily
+Persistent=true
+AccuracySec=1h
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target
