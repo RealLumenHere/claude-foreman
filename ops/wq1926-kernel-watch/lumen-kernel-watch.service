@@ -1,0 +1,16 @@
+# lumen-kernel-watch.service — one pass comparing the running kernel against
+# Ubuntu 26.04's apt candidate, alerting via ntfy-send when the candidate
+# carries the Linux 7.3 silent-data-loss fix and the running kernel doesn't
+# (wq#1926).
+[Unit]
+Description=Lumen kernel watch for the Linux 7.3 silent data-loss fix (wq#1926)
+Documentation=file:///home/lumen/foreman/ops/wq1926-kernel-watch/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/bin/lumen-kernel-watch
+TimeoutStartSec=60
+Nice=5
