@@ -56,3 +56,20 @@ confirms that concern directly:
   effort that produces no reusable capability for Lumen's actual domain.
 
 ## RECOMMENDATION: SKIP — baseline=0.053, treatment(005-only)=0.250; benchmark harness runs cleanly but its office-typesetting rule set has no observed mapping to homelab/orchestration duties, confirming the original defer reason. Do not adopt; no further pilot spend warranted without a proposed rule subset that maps to Lumen's actual duties.
+
+## Reconciliation (wq#1823 attempt 3, 2026-09-15)
+
+This pilot's deliverable was already merged to `main` in commit `1d2726f` ("chore(pilot):
+OfficeVal benchmark pilot 3d071a263025, verdict SKIP", `Refs: wq#1823`), before this
+attempt's branch was cut — `git diff main` in this worktree was empty at the start of
+this attempt. Re-ran the scoring to confirm the merged numbers still reproduce exactly:
+
+```
+$ python3 pilots/3d071a263025/aggregate_results.py
+baseline:  7/131 = 0.053 (tasks 002,005,010)
+treatment: 7/28 = 0.250 (task 005 only)
+```
+
+Matches the Results section above bit-for-bit. Verdict stands: SKIP. See
+`/home/lumen/kb/ISSUE-LOG.md` #397 for the redispatch-of-already-merged-ticket process
+defect this attempt uncovered.
