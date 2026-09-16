@@ -1,0 +1,66 @@
+[
+  {
+    "id": 0,
+    "arm": "baseline",
+    "query": "Suggest one dinner recipe for me tonight.",
+    "response": "To give you the *best* suggestion, it would be helpful if I knew a little more about what you're in the mood for (e.g., quick/easy, comforting, light, specific cuisine, dietary restrictions).\n\nHowever, since I don't know anything yet, here is one incredibly popular, generally crowd-pleasing, and relatively easy option:\n\n***\n\n### \ud83c\udf5c One-Pan Lemon Herb Roasted Chicken and Veggies\n\nThis recipe is fantastic because it requires minimal cleanup\u2014everything cooks on one sheet pan!\n\n**\u23f1\ufe0f Prep Time:** 10 minutes\n**\ud83d\udd25 Cook Time:** 35\u201345 minutes\n**\ud83e\uddd1\u200d\ud83c\udf73 Difficulty:** Easy\n\n#### **Ingredients:**\n\n*   **Protein:** 2 boneless, skinless chicken breasts (or thighs for more flavor)\n*   **Vegetables:** 1 lb of chopped hardy vegetables (e.g., broccoli florets, sliced potatoes, carrots, bell peppers)",
+    "score": 0.0,
+    "latency_s": 17.058
+  },
+  {
+    "id": 1,
+    "arm": "baseline",
+    "query": "Explain how photosynthesis works.",
+    "response": "Photosynthesis is arguably one of the most important biochemical processes on Earth. It's the process by which **plants, algae, and certain bacteria convert light energy (usually from the sun) into chemical energy in the form of glucose (sugar)**. This process is what sustains almost all life on our planet, either directly or indirectly, because it produces the food we eat and the oxygen we breathe.\n\nHere is a comprehensive breakdown of how photosynthesis works, covering the ingredients, the steps, and the overall purpose.\n\n---\n\n## \ud83c\udf3f The Ingredients (Reactants)\n\nTo perform photosynthesis, a plant needs three main things:\n\n1. **Sunlight (Energy Source):** Provides the initial energy needed to drive the entire chemical reaction.\n2. **Water ($\\text{H}_2\\text{O}$):** Absorbed from the soil through the roots and transported up to the leaves.\n3. **Carbon Dioxide ($\\text{CO}_2$):** A gas",
+    "score": 1.0,
+    "latency_s": 17.732
+  },
+  {
+    "id": 2,
+    "arm": "baseline",
+    "query": "What language should I use for my next side project?",
+    "response": "That's an exciting question! The \"best\" language depends entirely on **what you plan to build** and **what your goals are** (learning, career building, speed, performance, etc.).\n\nTo give you the most helpful recommendation, could you tell me a bit more about your side project? For example:\n\n1. **What kind of project is it?** (e.g., A website/web app, a mobile app, a game, a data analysis script, an API backend, a desktop tool?)\n2. **What is your current skill level?** (Beginner, Intermediate, Experienced in some language already?)\n3. **What are your goals for this project?** (e.g., Learn a new skill, build something fast just to prove a concept, aim for high performance, land a job later?)\n\n---\n\nIn the meantime, here is a breakdown of the most popular and versatile languages categorized by common use cases to get you",
+    "score": 0.0,
+    "latency_s": 16.893
+  },
+  {
+    "id": 3,
+    "arm": "baseline",
+    "query": "How far is a marathon and about how long would it take me to walk it?",
+    "response": "That's a great question! Here is the information you need regarding the distance of a marathon and an estimate for walking time.\n\n---\n\n## \ud83c\udfc3\u200d\u2640\ufe0f The Distance of a Marathon\n\nA standard marathon race is **26.2 miles** (or **42.195 kilometers**).\n\nThis is a fixed, official distance recognized globally for competitive running events.\n\n---\n\n## \ud83d\udeb6\u200d\u2642\ufe0f Estimating Your Walking Time\n\nHow long it would take you to walk the marathon depends entirely on your walking pace and fitness level. There isn't one single answer, but I can give you some estimates based on common walking speeds.\n\nHere are a few scenarios:\n\n### 1. Casual/Leisurely Pace (Comfortable Strolling)\n*   **Pace:** Around 3 miles per hour (mph) or 4.8 km/h.\n*   **Estimated Time:** **About 9 to 10 hours.**\n    ",
+    "score": 0.6666666666666666,
+    "latency_s": 16.523
+  },
+  {
+    "id": 4,
+    "arm": "baseline",
+    "query": "Write a one-sentence birthday message for my dog.",
+    "response": "Happy Birthday to the bestest, fluffiest, tail-wagging companion in the whole wide world!",
+    "score": 0.0,
+    "latency_s": 3.443
+  },
+  {
+    "id": 5,
+    "arm": "baseline",
+    "query": "What is a variable in programming?",
+    "response": "That's a fundamental and very important question! Here is a detailed explanation of what a **variable** is in programming, broken down for clarity.\n\n---\n\n## \ud83e\udde0 The Simple Analogy\n\nThe easiest way to understand a variable is to think of it like a **labeled box** or a **storage container**.\n\n1. **The Box (The Variable Name):** You give the box a specific name (e.g., `age`, `userName`, `totalScore`). This name is how you refer to the data later in your code.\n2. **The Contents (The Value):** Inside the box, you put some piece of information\u2014a number, a word, or something more complex. This is the **value**.\n\nWhen you need the information later, you don't look in the box; you just ask the computer to look at the box labeled `age`, and it gives you whatever is currently inside.\n\n---\n\n## \ud83d\udcbb The Technical",
+    "score": 0.75,
+    "latency_s": 16.532
+  },
+  {
+    "id": 6,
+    "arm": "baseline",
+    "query": "What causes rain?",
+    "response": "Rain is a natural part of the **water cycle**, and it happens through a continuous process involving several key steps. Here is a breakdown of what causes rain, from the beginning to the final drop hitting the ground.\n\n---\n\n## The Process of Rain (The Water Cycle)\n\nThe entire process can be summarized in four main stages: Evaporation/Transpiration, Condensation, Coalescence/Growth, and Precipitation.\n\n### 1. Evaporation and Transpiration (Getting Water into the Air)\nThis is how water gets lifted up from the Earth's surface into the atmosphere.\n\n*   **Evaporation:** When the sun heats up bodies of water (like oceans, lakes, and rivers), the energy turns some of that liquid water into an invisible gas called **water vapor**. This water vapor rises into the atmosphere.\n*   **Transpiration:** Plants also release water vapor into the air through their leaves, a process called transpiration.\n\n*(Think of this step",
+    "score": 0.0,
+    "latency_s": 16.7
+  },
+  {
+    "id": 7,
+    "arm": "baseline",
+    "query": "Give me one piece of advice for this week.",
+    "response": "Here is one piece of advice for your week:\n\n**Prioritize \"Deep Work\" time, even if it's just 30 minutes.**\n\nIn a world full of notifications and constant distractions, the ability to focus deeply on one important task without interruption is incredibly valuable\u2014and rare. Schedule at least one dedicated block of time this week where you intentionally shut off all non-essential alerts (phone on silent, email closed) and tackle your most challenging or important task.\n\n**Why this helps:** Instead of spending the whole week \"busy\" reacting to emails and minor tasks, dedicating focused time allows you to make meaningful progress on what truly moves you toward your goals.",
+    "score": 0.0,
+    "latency_s": 11.773
+  }
+]

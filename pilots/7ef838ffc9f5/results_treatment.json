@@ -1,0 +1,66 @@
+[
+  {
+    "id": 0,
+    "arm": "treatment",
+    "query": "Suggest one dinner recipe for me tonight.",
+    "response": "Since you are a vegetarian and have a peanut allergy, I need to suggest something delicious that is completely safe for you!\n\nHere is a suggestion: **Simple Lemon Herb Roasted Vegetables with Chickpeas.**\n\nThis meal is flavorful, requires minimal cleanup, and is naturally free of peanuts.\n\n### \ud83c\udf4b\ud83c\udf3f Simple Lemon Herb Roasted Vegetables & Chickpeas\n\n**Why this works for you:** It's vegetarian (using chickpeas) and easily customizable to be peanut-free.\n\n**Ingredients:**\n\n*   1 can (15 oz) chickpeas, drained and patted very dry\n*   2 cups of mixed vegetables (e.g., broccoli florets, chopped sweet potato, bell peppers, zucchini)\n*   2 tablespoons olive oil\n*   Juice of 1/2 a lemon\n*   1 teaspoon dried oregano or Italian seasoning\n*   1/2 teaspoon garlic powder\n*   Salt and black pepper to taste\n\n**Instructions:**\n\n1.  **Preheat",
+    "score": 0.5,
+    "latency_s": 16.757
+  },
+  {
+    "id": 1,
+    "arm": "treatment",
+    "query": "Explain how photosynthesis works.",
+    "response": "*   **Definition:** Photosynthesis is the process used by plants and some other organisms to convert light energy into chemical energy (food).\n*   **Reactants Needed:**\n    *   Carbon Dioxide ($\\text{CO}_2$): Absorbed from the atmosphere through small pores on leaves called stomata.\n    *   Water ($\\text{H}_2\\text{O}$): Absorbed from the soil through the roots.\n    *   Light Energy: Usually supplied by the sun.\n*   **Location:** Primarily occurs in chloroplasts, organelles found within plant cells, which contain the green pigment chlorophyll.\n*   **Key Steps (Simplified):**\n    *   **Light-Dependent Reactions:**\n        *   Chlorophyll absorbs sunlight energy.\n        *   This energy is used to split water molecules ($\\text{H}_2\\text{O}$).\n        *   Oxygen ($\\text{O}_2$) is released as a byproduct into the atmosphere",
+    "score": 1.0,
+    "latency_s": 17.259
+  },
+  {
+    "id": 2,
+    "arm": "treatment",
+    "query": "What language should I use for my next side project?",
+    "response": "That depends entirely on what your side project is! To give you the best recommendation, could you tell me a little more about it? For example:\n\n1.  **What kind of project is it?** (e.g., Web backend API, desktop GUI app, command-line tool, game, data processing script, etc.)\n2.  **What are your goals for this project?** (e.g., Speed/performance, rapid prototyping, ease of learning, system control, etc.)\n\nSince I know you prefer **Rust** and dislike Python, here is a quick breakdown based on those preferences, followed by some other strong alternatives:\n\n---\n\n### \ud83e\udd80 If Performance & Safety are Top Priorities (Sticking to your preference)\n\n*   **Rust:**\n    *   **Best for:** Low-level systems programming, high-performance web services, embedded devices, CLI tools where safety and speed matter immensely.\n    *   **Why choose it",
+    "score": 1.0,
+    "latency_s": 16.988
+  },
+  {
+    "id": 3,
+    "arm": "treatment",
+    "query": "How far is a marathon and about how long would it take me to walk it?",
+    "response": "Here is the information you requested, keeping your location in mind:\n\n**Marathon Distance:**\nA standard marathon is **42.195 kilometers (km)**.\n\n**Estimated Walking Time:**\nThe time it would take you to walk a marathon depends entirely on your pace. However, I can give you a few estimates based on typical walking speeds:\n\n*   **Leisurely Pace (Relaxed stroll):** If you walk at a very relaxed pace of about 4-5 km/h, it could take you **around 8 to 10 hours**.\n*   **Steady Walking Pace:** If you maintain a consistent, brisk walking pace (around 6-7 km/h), it would likely take you **about 6 to 7.5 hours**.\n\nTo get a more accurate estimate for yourself, consider how fast you normally walk when you are focused on covering distance!",
+    "score": 1.0,
+    "latency_s": 16.129
+  },
+  {
+    "id": 4,
+    "arm": "treatment",
+    "query": "Write a one-sentence birthday message for my dog.",
+    "response": "Happy Birthday to your wonderful pup, Biscuit! \ud83d\udc3e\ud83c\udf82",
+    "score": 1.0,
+    "latency_s": 3.07
+  },
+  {
+    "id": 5,
+    "arm": "treatment",
+    "query": "What is a variable in programming?",
+    "response": "That's a great question! It's one of the very first things you learn, so don't worry if it sounds confusing right now\u2014it's actually a very simple idea once you see it in action.\n\nSince you're new to coding and want to avoid jargon, let's forget about complicated computer terms for a moment and think about something from everyday life.\n\n### The Simple Analogy: A Labeled Box \ud83d\udce6\n\nImagine you have a set of storage bins or boxes. These boxes are what we call **variables** in programming.\n\n1.  **The Box (The Variable):** When you create a variable, you are essentially creating an empty box with a specific label on it. In coding, the *label* is the name you give the variable (like `age`, `userName`, or `score`).\n2.  **The Contents (The Value):** Inside that box, you put something\u2014a piece of information. This",
+    "score": 0.25,
+    "latency_s": 16.753
+  },
+  {
+    "id": 6,
+    "arm": "treatment",
+    "query": "What causes rain?",
+    "response": "Rain forms when water vapor in the atmosphere cools and condenses into tiny liquid droplets or ice crystals, which then become heavy enough to fall as precipitation. This process is driven by the Earth's heating of water bodies and subsequent evaporation and atmospheric cooling.",
+    "score": 1.0,
+    "latency_s": 6.031
+  },
+  {
+    "id": 7,
+    "arm": "treatment",
+    "query": "Give me one piece of advice for this week.",
+    "response": "Since you're training for a half-marathon in just six weeks, here is my single most important piece of advice for **this week**:\n\n**Focus intensely on recovery and quality over quantity.**\n\nIn the final phase of heavy training, your body needs to adapt, not break down further. This means:\n\n1.  **Prioritize Sleep:** Aim for 7-9 hours consistently. This is when your muscles repair themselves from hard runs.\n2.  **Listen to Your Body (The \"Good vs. Bad\" Pain Rule):** If a planned run feels *sharp*, *aching* in a worrying way, or if you feel unusually fatigued the day before, dial it back. It is far better to take an extra rest day now than to get injured two weeks from now and derail your race entirely.\n3.  **Hydrate & Fuel Smartly:** Focus on consistent hydration throughout the entire day, not just around your runs. Make sure you'",
+    "score": 0.8,
+    "latency_s": 17.212
+  }
+]
