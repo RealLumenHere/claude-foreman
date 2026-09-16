@@ -1,0 +1,508 @@
+{
+  "models": {
+    "glm-5.3-flash": {
+      "pass_rate": 1.0,
+      "answered": 20,
+      "total": 20,
+      "elapsed_s": 40.6,
+      "items": [
+        {
+          "id": 1,
+          "pattern": "modus_ponens",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 2,
+          "pattern": "modus_tollens",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 3,
+          "pattern": "affirming_consequent",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 4,
+          "pattern": "denying_antecedent",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 5,
+          "pattern": "disjunctive_syllogism",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 6,
+          "pattern": "hypothetical_syllogism",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 7,
+          "pattern": "invalid_disjunct",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 8,
+          "pattern": "syllogism_valid",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 9,
+          "pattern": "syllogism_invalid_undistributed",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 10,
+          "pattern": "existential_from_universal",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 11,
+          "pattern": "contrapositive",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 12,
+          "pattern": "de_morgan_and",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 13,
+          "pattern": "de_morgan_or_invalid",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 14,
+          "pattern": "transitivity",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 15,
+          "pattern": "false_transitivity",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 16,
+          "pattern": "biconditional",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 17,
+          "pattern": "biconditional_negative",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 18,
+          "pattern": "quantifier_scope",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 19,
+          "pattern": "conjunction_elimination",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 20,
+          "pattern": "disjunction_introduction_invalid",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        }
+      ]
+    },
+    "deepseek-v4-flash": {
+      "pass_rate": 1.0,
+      "answered": 20,
+      "total": 20,
+      "elapsed_s": 16.3,
+      "items": [
+        {
+          "id": 1,
+          "pattern": "modus_ponens",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 2,
+          "pattern": "modus_tollens",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 3,
+          "pattern": "affirming_consequent",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 4,
+          "pattern": "denying_antecedent",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 5,
+          "pattern": "disjunctive_syllogism",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 6,
+          "pattern": "hypothetical_syllogism",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 7,
+          "pattern": "invalid_disjunct",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 8,
+          "pattern": "syllogism_valid",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 9,
+          "pattern": "syllogism_invalid_undistributed",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 10,
+          "pattern": "existential_from_universal",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 11,
+          "pattern": "contrapositive",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 12,
+          "pattern": "de_morgan_and",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 13,
+          "pattern": "de_morgan_or_invalid",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 14,
+          "pattern": "transitivity",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 15,
+          "pattern": "false_transitivity",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 16,
+          "pattern": "biconditional",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 17,
+          "pattern": "biconditional_negative",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 18,
+          "pattern": "quantifier_scope",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 19,
+          "pattern": "conjunction_elimination",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 20,
+          "pattern": "disjunction_introduction_invalid",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        }
+      ]
+    },
+    "qwen36-local": {
+      "pass_rate": 1.0,
+      "answered": 20,
+      "total": 20,
+      "elapsed_s": 37.7,
+      "items": [
+        {
+          "id": 1,
+          "pattern": "modus_ponens",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 2,
+          "pattern": "modus_tollens",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 3,
+          "pattern": "affirming_consequent",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 4,
+          "pattern": "denying_antecedent",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 5,
+          "pattern": "disjunctive_syllogism",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 6,
+          "pattern": "hypothetical_syllogism",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 7,
+          "pattern": "invalid_disjunct",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 8,
+          "pattern": "syllogism_valid",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 9,
+          "pattern": "syllogism_invalid_undistributed",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 10,
+          "pattern": "existential_from_universal",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 11,
+          "pattern": "contrapositive",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 12,
+          "pattern": "de_morgan_and",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 13,
+          "pattern": "de_morgan_or_invalid",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 14,
+          "pattern": "transitivity",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 15,
+          "pattern": "false_transitivity",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 16,
+          "pattern": "biconditional",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 17,
+          "pattern": "biconditional_negative",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 18,
+          "pattern": "quantifier_scope",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        },
+        {
+          "id": 19,
+          "pattern": "conjunction_elimination",
+          "expected": "True",
+          "got": "True",
+          "raw": "True",
+          "correct": true
+        },
+        {
+          "id": 20,
+          "pattern": "disjunction_introduction_invalid",
+          "expected": "False",
+          "got": "False",
+          "raw": "False",
+          "correct": true
+        }
+      ]
+    }
+  }
+}
