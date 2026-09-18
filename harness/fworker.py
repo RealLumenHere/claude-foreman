@@ -1110,6 +1110,53 @@ def read_oauth_token():
         return None
 
 
+TMP_EXCLUDE_PATTERN = ".tmp/"
+
+
+def _ensure_worktree_tmpdir(worktree):
+    """wq#1915(B): every tool that falls back to tempfile.gettempdir()/$TMPDIR must
+    land inside the worktree, or it hits guard.sh's write-outside-worktree denial
+    (CAPABILITY_DENIED -- wq#1852/wq#1889, 2 attempts each, both refused 3x on exactly
+    this). Returns the created dir's path. 0700: scratch may contain ticket-specific
+    intermediate output, no reason to leave it group/other readable.
+
+    Also excludes it via the repo's git info/exclude. wq#1915's own text says "the
+    worktree's info/exclude", but structurally a worktree has no info/exclude of its
+    own -- `git -C <worktree> rev-parse --git-path info/exclude` resolves to the ONE
+    shared file in the common gitdir (verified: every worktree of this repo resolves
+    to the same path). That is the correct target anyway: a tracked .gitignore line
+    would need its own PR to land before the very first worker that needs it could
+    rely on it, and every other worktree of this repo wants .tmp/ ignored too.
+    Idempotent (checked-then-appended) so calling this once per attempt is cheap and
+    safe under concurrent attempts on different tickets sharing the same repo."""
+    tmp_dir = os.path.join(worktree, ".tmp")
+    os.makedirs(tmp_dir, mode=0o700, exist_ok=True)
+    os.chmod(tmp_dir, 0o700)  # exist_ok path may have pre-existed with a looser mode
+    try:
+        # cwd=worktree, not `-C worktree`: git's --git-path prints a path relative to
+        # the CALLING process's cwd (verified empirically -- `-C` does not make the
+        # output relative to its own target), so resolving against our own known
+        # `worktree` via os.path.join below is only correct if git's relative output
+        # is ALSO relative to that same directory.
+        p = subprocess.run(["git", "rev-parse", "--git-path", "info/exclude"],
+                           capture_output=True, text=True, timeout=10, cwd=worktree)
+        if p.returncode == 0 and p.stdout.strip():
+            exclude_path = os.path.normpath(os.path.join(worktree, p.stdout.strip()))
+            existing = ""
+            if os.path.exists(exclude_path):
+                with open(exclude_path) as f:
+                    existing = f.read()
+            if TMP_EXCLUDE_PATTERN not in existing.splitlines():
+                with open(exclude_path, "a") as f:
+                    if existing and not existing.endswith("\n"):
+                        f.write("\n")
+                    f.write(f"{TMP_EXCLUDE_PATTERN}\n")
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"WARN: could not add {TMP_EXCLUDE_PATTERN!r} to git info/exclude for "
+            f"{worktree}: {e!r}")
+    return tmp_dir
+
+
 def build_env(worker_id, model, effort, worktree, ticket_id):
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)
@@ -1134,6 +1181,11 @@ def build_env(worker_id, model, effort, worktree, ticket_id):
     env["WQ_AGENT"] = wq_identity(ticket_id)
     env["FOREMAN_EVENTS_DIR"] = EVENTS_DIR
     env["FOREMAN_WORKTREE_ROOT"] = worktree
+    # wq#1915(B): scratch goes under $TMPDIR, which is inside your worktree.
+    tmp_dir = _ensure_worktree_tmpdir(worktree)
+    env["TMPDIR"] = tmp_dir
+    env["TEMP"] = tmp_dir
+    env["TMP"] = tmp_dir
     # wq#900: registered primary trees for guard.sh's branch-freeze deny class —
     # computed here (router.LANE_REPO + static mirror) so the guard never depends
     # on an import at hook time.
