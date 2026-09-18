@@ -167,6 +167,45 @@ GH_ADVISORY_API = 'https://api.github.com/advisories/{id}'
 _CVE_ID_RE = re.compile(r'\bCVE-\d{4}-\d{4,}\b', re.I)
 _GHSA_ID_RE = re.compile(r'\bGHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}\b', re.I)
 
+# wq#2005: wq#2001's verify-pass CONTRADICTED wq#1997 on its own reference
+# case. CVE-2026-83601 / GHSA-3qh4-842w-fvrm — which wq#1512/wq#1997 both call
+# fabricated — is a REAL netdata advisory: GET
+# /repos/netdata/netdata/security-advisories returns it state=published
+# severity=medium published_at=2026-09-02. It is absent from NVD and from
+# GitHub's global reviewed DB (404) only because neither had synced a
+# 16-day-old repo-level publication. To the Layer 0 above, 'not yet promoted
+# to the global index' — the default state of every advisory in its first
+# weeks — was indistinguishable from 'fabricated', so fail-closed silently
+# auto-rejected legitimate fresh security proposals: the mirror-image failure
+# of the wq#1512 bug it was built to fix.
+#
+# Two changes. (1) Repo-scoped lookup: ask the owning repo's own advisory
+# list, which publishes weeks before the global index. A match on the exact id
+# is positive existence evidence no matter which candidate repo produced it,
+# so guessing candidate repos can only miss, never false-positive. (2) A third
+# outcome: an id that resolves nowhere is a hard block ONLY when the full
+# check actually ran (global miss AND a definitive repo-scoped miss). When a
+# lookup errored or no repo could be consulted, the id is INCONCLUSIVE — it
+# routes to review instead of flipping `passed`, because we never asked the
+# source that would have known.
+GH_REPO_ADVISORY_API = 'https://api.github.com/repos/{repo}/security-advisories'
+ADVISORY_REPO_MAX_CANDIDATES = int(os.getenv('VERIFY_ADVISORY_MAX_REPOS', '4'))
+_GH_URL_RE = re.compile(r'github\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]{1,100}?)(?=[\s/)\]},.]|$)', re.I)
+_SLUG_RE = re.compile(r'\b([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]{1,100})\b')
+_PROJECT_WORD_RE = re.compile(r'\b([a-z][a-z0-9-]{2,38})\b')
+# Words that look like a project name to the `name/name` fallback but are just
+# English or advisory boilerplate; guessing them costs an HTTP call and a
+# GitHub rate-limit token for a guaranteed miss.
+_NOT_A_PROJECT = frozenset("""
+the and for with that this from has have not but you are was were its
+advisory advisories security vulnerability vulnerabilities severity critical high
+medium low moderate score cvss affected fixed patch patched version versions
+release released report reported disclosed disclosure exploit remote local
+denial service overflow injection traversal bypass authentication authorization
+proposal proposals cites cited claim claims context verify verified fleet intel
+item items upstream package packages library libraries
+""".split())
+
 
 def _cve_exists(cve_id: str):
     """True/False, or None on a network/API error — callers must not treat
@@ -199,24 +238,104 @@ def _ghsa_exists(ghsa_id: str):
         return None
 
 
+def _gh_headers():
+    h = {'Accept': 'application/vnd.github+json', 'User-Agent': 'minerva-verify'}
+    tok = os.getenv('GITHUB_TOKEN') or os.getenv('GH_TOKEN')
+    if tok:
+        h['Authorization'] = f'Bearer {tok}'
+    return h
+
+
+def repo_candidates(text: str):
+    """wq#2005: owner/repo slugs worth asking about the ids in `text`, best
+    evidence first: an explicit github.com URL, then a bare `owner/repo` slug,
+    then `name/name` for a project-looking word (netdata -> netdata/netdata,
+    the reference case, which names no slug at all). The last tier is a guess,
+    and that is safe here because a candidate can only ever CONFIRM an id it
+    holds — a wrong guess 404s or returns a list without the id and changes
+    nothing. Capped so a wordy proposal cannot fan out into GitHub's
+    unauthenticated rate limit."""
+    out = []
+
+    def add(owner, repo):
+        slug = f'{owner}/{repo}'.rstrip('.').lower()
+        if slug not in out and 'cve-' not in slug and 'ghsa-' not in slug:
+            out.append(slug)
+
+    for owner, repo in _GH_URL_RE.findall(text):
+        add(owner, repo)
+    for owner, repo in _SLUG_RE.findall(text):
+        if not owner.isdigit():          # skips dates like 2026/09
+            add(owner, repo)
+    for word in _PROJECT_WORD_RE.findall(text.lower()):
+        if word not in _NOT_A_PROJECT:
+            add(word, word)
+    return out[:ADVISORY_REPO_MAX_CANDIDATES]
+
+
+def _repo_advisory_exists(ident: str, repos):
+    """True on an exact id match in a candidate repo's OWN advisory list,
+    which publishes weeks ahead of NVD and of GitHub's global reviewed DB.
+    False only when at least one candidate answered definitively and none held
+    the id. None means nothing definitive was consulted (no candidates, every
+    request errored, or a full page that may have truncated the id away) —
+    'never asked', which callers must not read as 'does not exist'."""
+    wanted = ident.upper()
+    answered = False
+    for slug in repos:
+        try:
+            r = requests.get(GH_REPO_ADVISORY_API.format(repo=slug),
+                             params={'per_page': 100, 'state': 'published',
+                                     'sort': 'published', 'direction': 'desc'},
+                             timeout=ADVISORY_CHECK_TIMEOUT, headers=_gh_headers())
+            if r.status_code != 200:     # 404 = guessed repo does not exist: no answer
+                continue
+            items = r.json()
+        except Exception:
+            continue
+        if not isinstance(items, list):
+            continue
+        for a in items:
+            if wanted in {str(a.get('ghsa_id') or '').upper(), str(a.get('cve_id') or '').upper()}:
+                return True
+        if len(items) < 100:             # a full page may have cut the id off
+            answered = True
+    return False if answered else None
+
+
 def external_advisory_check(text: str) -> dict:
-    """wq#1997: extract every CVE-/GHSA- id referenced in `text` and resolve
-    each one externally (NVD for CVE, GitHub's global advisory DB for GHSA).
-    Returns {'checked': [ids], 'unresolved': [ids], 'error': bool}. A
-    fabricated id (wq#1512's CVE-2026-83601 / GHSA-3qh4-842w-fvrm class) and
-    an API error both land in 'unresolved' — neither is proof the id is real,
-    so both must block a security-grade proposal the same way."""
+    """wq#1997 + wq#2005: extract every CVE-/GHSA- id in `text` and resolve
+    each one externally — NVD for CVE, GitHub's global advisory DB for GHSA,
+    then the owning repo's own advisory list for whatever those two miss.
+
+    Returns {'checked': [], 'unresolved': [], 'inconclusive': [], 'error':
+    bool}, and the split between the two failure buckets is the whole point:
+
+      unresolved   — the full check RAN and found nothing: absent from the
+                     global index and absent from a repo advisory list we
+                     actually read. A fabricated id lands here and blocks.
+      inconclusive — a lookup errored, or no repo list could be read, so the
+                     one source that publishes fresh ids was never asked. A
+                     real 16-day-old advisory lands here (wq#2005) and routes
+                     to review instead of being auto-rejected as a fake."""
     ids = sorted(set(_CVE_ID_RE.findall(text)) | set(_GHSA_ID_RE.findall(text)))
-    checked, unresolved, had_error = [], [], False
+    checked, unresolved, inconclusive, had_error = [], [], [], False
+    repos = repo_candidates(text) if ids else []
     for ident in ids:
-        exists = _cve_exists(ident) if ident.upper().startswith('CVE-') else _ghsa_exists(ident)
         checked.append(ident)
-        if exists is None:
-            had_error = True
+        exists = _cve_exists(ident) if ident.upper().startswith('CVE-') else _ghsa_exists(ident)
+        if exists is True:
+            continue
+        repo_hit = _repo_advisory_exists(ident, repos)
+        if repo_hit is True:
+            continue
+        if exists is False and repo_hit is False:
             unresolved.append(ident)
-        elif exists is False:
-            unresolved.append(ident)
-    return {'checked': checked, 'unresolved': unresolved, 'error': had_error}
+        else:
+            had_error = had_error or exists is None
+            inconclusive.append(ident)
+    return {'checked': checked, 'unresolved': unresolved,
+            'inconclusive': inconclusive, 'error': had_error}
 
 
 def log(msg):
@@ -594,6 +713,7 @@ def verify(answer: str, context: str, subject: str = 'unknown', model: str = 'un
         'low_confidence_claims': low_conf,
         'failing_claims': [c for c, s, r in cit_details if r != 'ok'],
         'unresolved_advisories': [],
+        'inconclusive_advisories': [], 'advisory_review_required': False,
     }
 
     # --- Latent-Reasoning Guardrail (staged wq#5, proposal 9c9db2ec). OFF unless ENABLE_LATENT_GUARD=1. ---
@@ -624,11 +744,22 @@ def verify(answer: str, context: str, subject: str = 'unknown', model: str = 'un
             passed = False
             result['passed'] = False
             result['unresolved_advisories'] = adv['unresolved']
-            if adv['error'] and not error_kind:
-                error_kind = 'advisory_check_error'
-                result['error_kind'] = error_kind
             reason = (f'{reason};' if reason else '') + f'unresolved_advisory({",".join(adv["unresolved"])})'
             result['reason'] = reason
+        # wq#2005: ids the check could not settle do NOT flip `passed`. An
+        # advisory that is real but younger than the global index's sync lag
+        # is the common case here, and auto-rejecting it silently buries
+        # legitimate fresh security work; the flag routes it to review while
+        # leaving a genuinely fabricated id (above) blocked.
+        if adv['inconclusive']:
+            result['inconclusive_advisories'] = adv['inconclusive']
+            result['advisory_review_required'] = True
+            reason = (f'{reason};' if reason else '') + f'advisory_needs_review({",".join(adv["inconclusive"])})'
+            result['reason'] = reason
+            log(f'advisory check inconclusive (review, not reject): {",".join(adv["inconclusive"])}')
+        if (adv['unresolved'] or adv['inconclusive']) and adv['error'] and not error_kind:
+            error_kind = 'advisory_check_error'
+            result['error_kind'] = error_kind
 
     # wq#1927 meta-review synthesis: OFF unless META_REVIEW_ENABLED=1. Enriches
     # the verdict with an explicit stale-premise vs bad-idea classification;

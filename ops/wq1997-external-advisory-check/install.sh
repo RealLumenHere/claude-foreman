@@ -5,8 +5,12 @@
 # judge=1.0 final=1.0, because those layers only check a claim against
 # CONTEXT, never whether CONTEXT is externally true. This adds a Layer 0
 # external-existence check (NVD for CVE ids, GitHub's global advisory DB for
-# GHSA ids) that runs last in verify() — after any latent-guard rescue — and
-# can only flip a passing verdict to failing. ON by default
+# GHSA ids, then the owning repo's own advisory list) that runs last in
+# verify() — after any latent-guard rescue — and can only flip a passing
+# verdict to failing. wq#2005 added the repo-scoped tier and an inconclusive
+# bucket after wq#2001 showed CVE-2026-83601 is a REAL netdata advisory that
+# the global indexes had not synced yet, so the original check auto-rejected
+# the fresh security proposals it exists to protect. ON by default
 # (EXTERNAL_ADVISORY_CHECK_ENABLED=1): it is a correctness fix, and it is a
 # no-op regex scan on the majority of proposals that cite no CVE/GHSA id.
 #
@@ -28,10 +32,12 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 assert callable(getattr(mod, 'external_advisory_check', None))
 assert mod.EXTERNAL_ADVISORY_CHECK_ENABLED is True  # flag defaults ON
-r = mod.external_advisory_check('cites CVE-2026-83601 as a MEDIUM advisory')
-assert r['unresolved'] == ['CVE-2026-83601'], r
+r = mod.external_advisory_check('cites CVE-2026-83601 as a MEDIUM netdata advisory')
+assert r['unresolved'] == [] and r['inconclusive'] == [], r   # wq#2005: real, repo-scoped
 r2 = mod.external_advisory_check('no advisory ids mentioned here')
 assert r2['checked'] == [] and r2['unresolved'] == [], r2
+r3 = mod.external_advisory_check('cites CVE-2026-99999 as a HIGH netdata advisory')
+assert r3['unresolved'] == ['CVE-2026-99999'], r3             # fabricated still blocks
 print('health OK')
 "; then
     echo "wq1997 install: deployed, external advisory check ON"
