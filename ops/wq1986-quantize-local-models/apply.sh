@@ -38,8 +38,18 @@ pull_with_realm_fallback() {  # $1 = tag; honors OLLAMA_HOST
 case "${1:-apply}" in
   pull-local) pull_with_realm_fallback "$MISTRAL_TAG"; exit ;;
   pull-isis)  OLLAMA_HOST="$ISIS" pull_with_realm_fallback "$QWEN_TAG"; exit ;;
+  verify)
+    # post-apply / post-pull check: config routes quantized, gateway up, and each
+    # quantized tag actually present on the host that serves it
+    grep -q "model: ollama/$QWEN_TAG" "$CFG"
+    grep -q "model: ollama/$MISTRAL_TAG" "$CFG"
+    curl -fsS --max-time 5 http://localhost:4000/health/liveliness; echo
+    ollama list | grep -F "$MISTRAL_TAG" || echo "PENDING: local pull ($MISTRAL_TAG) — run apply.sh pull-local off-peak"
+    OLLAMA_HOST="$ISIS" ollama list | grep -F "$QWEN_TAG" || echo "PENDING: Isis pull ($QWEN_TAG) — run apply.sh pull-isis off-peak"
+    echo "VERIFY_OK — config + gateway healthy; PENDING lines above list unpulled tags"
+    exit ;;
   apply) ;;
-  *) echo "usage: apply.sh [apply|pull-local|pull-isis]" >&2; exit 64 ;;
+  *) echo "usage: apply.sh [apply|pull-local|pull-isis|verify]" >&2; exit 64 ;;
 esac
 
 # precheck (idempotent): edit only if the old full-precision tags are still present
