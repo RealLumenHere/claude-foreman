@@ -767,6 +767,62 @@ def test_gate_budget_fits_under_unit_timeout_start_sec():
     assert "OnFailure=" in text          # a crash still pages (wq#1459)
 
 
+def test_ladder_rung_timeout_fits_under_health_unit_timeout_start_sec():
+    """wq#1966: advance() runs inline inside lumen-foreman-health.service's own
+    ExecStart, not the gate's. If a rung's subprocess timeout can outlive that unit's
+    TimeoutStartSec, systemd SIGTERMs the health check before it ever reaches _ntfy()
+    or lets ExecStartPost touch the wq#1184 dead-man stamp — the watchdog goes stale
+    on its own, and cron_deadman pages "Dead-man: ... stale" on every tick instead of
+    the real STALLED page ever going out."""
+    unit = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(dr.__file__))),
+                        "dispatcher", "systemd", "lumen-foreman-health.service")
+    text = open(unit).read()
+    m = re.search(r"^TimeoutStartSec=(\d+)$", text, re.M)
+    assert m, "lumen-foreman-health.service must set TimeoutStartSec"
+    assert dr.LADDER_RUNG_TIMEOUT_S + dr.HEALTH_TICK_RESERVE_S <= int(m.group(1))
+
+
+def test_rung1_preflight_uses_bounded_ladder_timeout(monkeypatch):
+    seen = {}
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return FakeCompleted()
+
+    monkeypatch.setattr(dr.subprocess, "run", fake_run)
+    ok, detail = dr.rung1_preflight(dry_run=False)
+
+    assert ok is True
+    assert seen["timeout"] == dr.LADDER_RUNG_TIMEOUT_S
+    assert seen["timeout"] < 580, "must not regress to the old unbounded 580s timeout"
+
+
+def test_rung2_restart_splits_budget_across_both_calls(monkeypatch):
+    seen = []
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        seen.append(kwargs["timeout"])
+        return FakeCompleted()
+
+    monkeypatch.setattr(dr.subprocess, "run", fake_run)
+    ok, detail = dr.rung2_restart(dry_run=False)
+
+    assert ok is True
+    assert len(seen) == 2
+    assert sum(seen) <= dr.LADDER_RUNG_TIMEOUT_S
+    assert all(t < 60 for t in seen), "must not regress to the old unbounded 60s-per-call"
+
+
 def test_health_no_ladder_and_dedup_flags(env, monkeypatch):
     """wq#1411: --no-ladder never advances/resets; --dedup overrides the 1h default."""
     advanced, reset = [], []

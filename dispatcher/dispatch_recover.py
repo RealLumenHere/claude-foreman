@@ -80,6 +80,24 @@ MAX_RUNG = 3
 STALL_TAG_TITLE = "[DISPATCH] recovery ladder exhausted"
 RECOVERED_TITLE = "[DISPATCH] dispatcher recovered"
 
+# wq#1966: advance() runs synchronously inside dispatch_health.py's check_health(),
+# which executes under lumen-foreman-health.service — TimeoutStartSec=60, not the
+# 1500s the GATE_BUDGET_S machinery above budgets against. Rung 1 used to allow
+# harness-preflight --all up to 580s and rung 2's two systemctl calls up to 60s each;
+# either can outlive the health unit's own timeout. A SIGTERM there lands before
+# check_health() ever reaches _ntfy() or returns, so ExecStartPost (the wq#1184
+# dead-man stamp) never runs — the watchdog that exists to catch a stalled dispatcher
+# silently stops proving its own liveness, cron_deadman.py starts paging "Dead-man:
+# lumen-foreman-health stale" on every subsequent tick, and the real STALLED page
+# never goes out. Bounding every rung's subprocess time to fit inside the unit's own
+# timeout (with reserve for the ntfy call and file I/O around it) is the same fix
+# already applied to the gate path above, moved to the tighter health-tick unit.
+HEALTH_UNIT_TIMEOUT_START_SEC = 60    # dispatcher/systemd/lumen-foreman-health.service
+HEALTH_TICK_RESERVE_S = 20            # room for check_health()'s own _ntfy (15s) + I/O
+LADDER_RUNG_TIMEOUT_S = int(os.environ.get(
+    "FOREMAN_LADDER_RUNG_TIMEOUT_S",
+    str(HEALTH_UNIT_TIMEOUT_START_SEC - HEALTH_TICK_RESERVE_S)))
+
 
 def _utcnow():
     return datetime.now(timezone.utc)
@@ -135,7 +153,7 @@ def rung1_preflight(dry_run):
     if dry_run:
         return True, "DRY-RUN would run: " + " ".join(cmd)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=580)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=LADDER_RUNG_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, f"harness-preflight --all failed to run: {e!r}"
     ok = p.returncode == 0
@@ -159,9 +177,12 @@ def rung2_restart(dry_run):
         return True, "DRY-RUN would run: " + " && ".join(" ".join(c) for c in cmds)
     details = []
     ok = True
+    # wq#1966: two sequential calls each getting the full ladder budget could add up to
+    # 2x LADDER_RUNG_TIMEOUT_S — split it so the rung as a whole still fits.
+    per_call_timeout = max(5, LADDER_RUNG_TIMEOUT_S // len(cmds))
     for c in cmds:
         try:
-            p = subprocess.run(c, capture_output=True, text=True, timeout=60)
+            p = subprocess.run(c, capture_output=True, text=True, timeout=per_call_timeout)
         except (OSError, subprocess.TimeoutExpired) as e:
             ok = False
             details.append(f"{' '.join(c)} -> EXC {e!r}")
