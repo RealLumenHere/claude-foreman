@@ -18,12 +18,14 @@ For each alias this does, in order:
      so nothing else needs to change proxy-side.
   4. grep every search root for literal occurrences of the OLD value
      (excluding noise dirs) and rewrite each file in place, preserving mode.
-  5. Map each rewritten file to the systemd unit(s) that source it via
-     EnvironmentFile= and restart them (detached systemd-run), skipping
-     anything on the never-restart list.
-  6. Verify the new value with one cheap /chat/completions call.
-  7. Record a completion marker (alias -> new token sha256) so a re-run with
-     nothing changed is a no-op (idempotent).
+  5. Record a completion marker (alias -> new token sha256) so a re-run with
+     nothing changed is a no-op (idempotent). This lands before the restarts
+     because regenerate+rewrite is the irreversible half.
+  6. Map each rewritten file to the systemd unit(s) that source it via
+     EnvironmentFile= and restart each one in its own scope (detached
+     systemd-run, --user for units found on a systemd/user search path),
+     skipping anything on the never-restart list.
+  7. Verify the new value with one cheap /chat/completions call.
 
 Nothing secret ever touches argv, an f-string headed for print(), or a log
 line — only masked 6-char prefixes and file paths are ever printed.
@@ -206,8 +208,24 @@ def rewrite_file_inplace(path: Path, old: str, new: str) -> None:
 ENV_FILE_RE = re.compile(r"^EnvironmentFile=-?(?P<path>\S+)\s*$", re.MULTILINE)
 
 
-def map_file_to_units(target: Path, unit_dirs: list[Path]) -> list[str]:
-    units: set[str] = set()
+def unit_scope_is_user(unit_path: Path) -> bool:
+    """True when a unit file lives on a `systemctl --user` search path.
+
+    Scope has to come from where the *unit* was found (`.../systemd/user/…`
+    vs `/etc/systemd/system/…`), never from the env file it references: this
+    fleet's env files live under `~/.secrets/litellm-service-keys/env/`, which
+    says nothing about the consuming unit's scope. Deciding from the env file
+    path made every real alias look system-scoped and sent a wrong-scope
+    restart at a `--user` consumer, leaving it running on a key the proxy had
+    already invalidated (wq#1977).
+    """
+    parts = unit_path.parts
+    return any(a == "systemd" and b == "user" for a, b in zip(parts, parts[1:]))
+
+
+def map_file_to_units(target: Path, unit_dirs: list[Path]) -> list[tuple[str, bool]]:
+    """Return (unit_name, is_user) for every unit sourcing `target`."""
+    units: set[tuple[str, bool]] = set()
     target_resolved = str(target.resolve())
     for unit_dir in unit_dirs:
         if not unit_dir.exists():
@@ -226,7 +244,7 @@ def map_file_to_units(target: Path, unit_dirs: list[Path]) -> list[str]:
                     if path.suffix == ".conf":
                         # drop-in: <unit>.service.d/override.conf -> <unit>.service
                         unit_name = path.parent.parent.name if path.parent.name.endswith(".d") else path.parent.name
-                    units.add(unit_name)
+                    units.add((unit_name, unit_scope_is_user(path)))
     return sorted(units)
 
 
@@ -239,6 +257,10 @@ def load_never_restart(path: Path | None) -> set[str]:
         if line and not line.startswith("#"):
             out.add(line)
     return out
+
+
+def describe_unit(unit: str, is_user: bool) -> str:
+    return f"{unit} (--user)" if is_user else unit
 
 
 def restart_unit(unit: str, user_unit: bool, run_id: str, dry_run: bool) -> None:
@@ -310,10 +332,10 @@ def rotate_one(alias: str, args, master_key: str) -> dict:
     if args.dry_run:
         result["status"] = "dry_run"
         result["files_would_rewrite"] = [str(f) for f in files]
-        units: set[str] = set()
+        units: set[tuple[str, bool]] = set()
         for f in files:
             units.update(map_file_to_units(f, args.unit_dirs))
-        result["units_would_restart"] = sorted(units)
+        result["units_would_restart"] = [describe_unit(u, is_user) for u, is_user in sorted(units)]
         return result
 
     new_data = regenerate_key(args.base_url, master_key, old_value)
@@ -323,25 +345,35 @@ def rotate_one(alias: str, args, master_key: str) -> dict:
     for f in files:
         rewrite_file_inplace(f, old_value, new_value)
 
+    # The irreversible half (regenerate + rewrite) is done, so the marker goes
+    # down BEFORE the restarts. A restart that throws used to propagate past
+    # this line, leaving no marker: the next run found the alias unrotated and
+    # regenerated *again*, invalidating the key a second time instead of
+    # converging on the units that still need a kick (wq#1977).
+    record_state(args.state_dir, alias, new_token_sha)
+
     never_restart = load_never_restart(args.never_restart_file)
-    units: set[str] = set()
+    units: set[tuple[str, bool]] = set()
     for f in files:
         units.update(map_file_to_units(f, args.unit_dirs))
 
-    restarted, skipped = [], []
+    restarted, skipped, failed = [], [], []
     run_id = time.strftime("%H%M%S")
-    for unit in sorted(units):
+    for unit, is_user in sorted(units):
         if unit in never_restart:
             skipped.append(unit)
             continue
-        is_user = any(str(f).startswith(str(Path.home() / ".config" / "systemd")) for f in files)
-        restart_unit(unit, is_user, run_id, args.dry_run)
-        restarted.append(unit)
+        try:
+            restart_unit(unit, is_user, run_id, args.dry_run)
+        except subprocess.CalledProcessError:
+            # Unit name only — never the systemctl stderr, which can quote
+            # the unit's own Environment= lines back at us.
+            failed.append(describe_unit(unit, is_user))
+            continue
+        restarted.append(describe_unit(unit, is_user))
 
     model = args.verify_model or (models[0] if models else DEFAULT_VERIFY_MODEL)
     verify_ok, verify_note = verify_key(args.base_url, new_value, model)
-
-    record_state(args.state_dir, alias, new_token_sha)
 
     result.update({
         "status": "rotated",
@@ -349,6 +381,7 @@ def rotate_one(alias: str, args, master_key: str) -> dict:
         "files_rewritten": [str(f) for f in files],
         "units_restarted": restarted,
         "units_skipped_never_restart": skipped,
+        "units_failed_restart": failed,
         "verify_ok": verify_ok,
         "verify_note": verify_note,
     })
@@ -410,7 +443,8 @@ def main(argv: list[str] | None = None) -> int:
         status = result["status"]
         if status == "rotated":
             ok = result["verify_ok"]
-            if not ok:
+            failed = result["units_failed_restart"]
+            if not ok or failed:
                 exit_code = 1
             print(
                 f"{alias}: prefix={result['prefix6']} "
@@ -419,6 +453,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"units_skipped={result['units_skipped_never_restart']} "
                 f"verify={'ok' if ok else 'FAILED (' + result['verify_note'] + ')'}"
             )
+            if failed:
+                print(
+                    f"{alias}: RESTART FAILED for {failed} — the key is already rotated and "
+                    f"on disk; restart these by hand, a re-run will report already_rotated",
+                    file=sys.stderr,
+                )
         elif status == "dry_run":
             print(
                 f"{alias}: DRY-RUN would rewrite {len(result['files_would_rewrite'])} file(s), "

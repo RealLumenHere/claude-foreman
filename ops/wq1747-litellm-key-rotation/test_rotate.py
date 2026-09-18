@@ -242,6 +242,83 @@ def test_never_restart_list_skips_unit(tmp_path, fake_proxy, restart_calls):
     assert old_raw not in env_file.read_text()
 
 
+def test_user_scoped_unit_gets_a_user_scoped_restart(tmp_path, fake_proxy, restart_calls):
+    """wq#1977: scope comes from the unit's own dir, not the env file's path."""
+    state, base_url = fake_proxy
+    args, home, unit_dir = make_args(tmp_path, base_url)
+
+    old_raw = "sk-userscopedvalue12"
+    state.add("user-alias", old_raw)
+
+    # Env file lives where this fleet actually keeps them — nowhere near
+    # ~/.config/systemd, which is what the old heuristic keyed off.
+    env_file = home / ".secrets" / "litellm-service-keys" / "env" / "user-alias.env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(f"LITELLM_KEY={old_raw}\n")
+
+    user_unit = unit_dir / "systemd" / "user" / "agent.service"
+    user_unit.parent.mkdir(parents=True)
+    user_unit.write_text(f"[Service]\nEnvironmentFile={env_file}\n")
+
+    result = rotate.rotate_one("user-alias", args, "test-master-key")
+
+    assert result["status"] == "rotated"
+    assert result["units_restarted"] == ["agent.service (--user)"]
+    assert len(restart_calls) == 1
+    cmd = restart_calls[0]
+    assert cmd[:2] == ["systemd-run", "--user"]
+    assert cmd[-4:] == ["systemctl", "--user", "restart", "agent.service"]
+
+
+def test_system_and_user_units_each_get_their_own_scope(tmp_path, fake_proxy, restart_calls):
+    state, base_url = fake_proxy
+    args, home, unit_dir = make_args(tmp_path, base_url)
+
+    old_raw = "sk-mixedscopevalue12"
+    state.add("mixed-alias", old_raw)
+    env_file = home / "shared.env"
+    env_file.write_text(old_raw)
+
+    (unit_dir / "systemd" / "user").mkdir(parents=True)
+    (unit_dir / "systemd" / "user" / "useronly.service").write_text(
+        f"[Service]\nEnvironmentFile={env_file}\n")
+    (unit_dir / "systemonly.service").write_text(
+        f"[Service]\nEnvironmentFile={env_file}\n")
+
+    result = rotate.rotate_one("mixed-alias", args, "test-master-key")
+
+    assert result["units_restarted"] == ["systemonly.service", "useronly.service (--user)"]
+    scoped = {cmd[-1]: ("--user" in cmd) for cmd in restart_calls}
+    assert scoped == {"systemonly.service": False, "useronly.service": True}
+
+
+def test_restart_failure_records_state_and_does_not_re_regenerate(tmp_path, fake_proxy, monkeypatch):
+    """A failed restart must not cost the alias a second regeneration."""
+    state, base_url = fake_proxy
+    args, home, unit_dir = make_args(tmp_path, base_url)
+
+    def boom(cmd, check=True, capture_output=True):
+        raise rotate.subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(rotate.subprocess, "run", boom)
+
+    old_raw = "sk-restartfailvalue1"
+    state.add("fail-alias", old_raw)
+    env_file = home / "service.env"
+    env_file.write_text(old_raw)
+    (unit_dir / "myservice.service").write_text(f"[Service]\nEnvironmentFile={env_file}\n")
+
+    result = rotate.rotate_one("fail-alias", args, "test-master-key")
+
+    assert result["status"] == "rotated"
+    assert result["units_restarted"] == []
+    assert result["units_failed_restart"] == ["myservice.service"]
+
+    result2 = rotate.rotate_one("fail-alias", args, "test-master-key")
+    assert result2["status"] == "already_rotated"
+    assert state.regenerate_calls["fail-alias"] == 1
+
+
 def test_main_cli_exit_code_reflects_failure(tmp_path, fake_proxy, monkeypatch, restart_calls):
     _state, base_url = fake_proxy
     home = tmp_path / "home"
