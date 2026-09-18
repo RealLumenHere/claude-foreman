@@ -68,4 +68,14 @@ old=0 new=0) even though 6/7 of its own sub-patches already reported
   it has a trailing `2>&1` or is chained with `;` into a second command —
   it must be its own bare segment.
 
+## Evidence
+
+Live-repair re-verified 2026-09-18: `/home/lumen/bin` is clean on `main` at
+`6acbce9` (wq#1987's drift was rescued separately into lumen-bin PR #95, no
+longer blocking); `_finish`'s `--dead-worker` override check now runs before
+`owner_ok` at `/home/lumen/bin/wq:2109-2131`. Re-running
+`harness/tests/test_wq1498_dead_worker_release.py` and
+`harness/tests/test_wq1539_release_dead_worker_order.py` from this worktree
+gives `11 passed`.
+
 Refs: wq#1987, wq#1498, wq#1539, wq#2012.
