@@ -217,14 +217,15 @@ def list_blocked():
 
 
 def wq_show(tid):
-    p = subprocess.run([WQ_BIN, "show", str(tid)], capture_output=True, text=True, timeout=30)
-    out = {}
-    for line in p.stdout.splitlines():
-        if ":" not in line:
-            continue
-        k, v = line.split(":", 1)
-        out[k.strip()] = v.strip()
-    return out
+    """wq#1496: same class as router.wq_show — plain-text mode escapes embedded
+    newlines as literal backslash-n (wq#1277), which broke every MULTILINE-anchored
+    consumer downstream. Use --json (real newlines, native column types)."""
+    p = subprocess.run([WQ_BIN, "show", str(tid), "--json"], capture_output=True, text=True, timeout=30)
+    try:
+        out = json.loads(p.stdout)
+    except ValueError:
+        return {}
+    return out if isinstance(out, dict) and not out.get("error") else {}
 
 
 def wq_release(tid):

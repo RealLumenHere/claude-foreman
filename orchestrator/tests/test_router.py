@@ -571,6 +571,48 @@ def test_repo_for_ticket_none_when_neither_resolves():
     assert router.repo_for_ticket({"lane": "auto", "title": "plain ticket", "detail": ""}) is None
 
 
+# ---- wq#1496: the tests above all monkeypatch router.wq_show() to return a dict with a
+# real Python '\n' already in it — that hides the actual bug entirely, since the bug is
+# in how wq_show() itself turns the real `wq show` CLI's plain-text output (which
+# escapes embedded newlines as the literal 2-char sequence backslash-n, wq#1277) into a
+# dict. These drive the real /home/lumen/bin/wq binary against a throwaway DB so the
+# parsing itself is under test, not just its callers. ------------------------------------
+
+def test_wq_show_returns_real_newlines_not_escaped_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("WQ_DB", str(tmp_path / "queue.db"))
+    monkeypatch.delenv("WQ_AGENT", raising=False)
+    detail = "line one\n\nVerify repo: /home/lumen/pokemon\nline four"
+    p = router.wq("add", "--lane", "build", "--title", "scratch wq1496 multiline", "--detail", detail)
+    assert p.returncode == 0, p.stdout + p.stderr
+    tid = int(re.search(r"added task (\d+)", p.stdout).group(1))
+    t = router.wq_show(tid)
+    assert t["detail"] == detail, (
+        f"wq_show() mangled the multi-line detail — got {t['detail']!r}, "
+        f"expected a real newline before 'Verify repo:', not a literal backslash-n")
+
+
+def test_wq_show_missing_ticket_still_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("WQ_DB", str(tmp_path / "queue.db"))
+    monkeypatch.delenv("WQ_AGENT", raising=False)
+    router.wq("add", "--title", "make sure the db exists")  # cmd_show --json on an empty/missing DB
+    with pytest.raises(SystemExit):
+        router.wq_show(999999)
+
+
+def test_verify_repo_hint_resolves_through_the_real_wq_show_round_trip(tmp_path, monkeypatch):
+    """wq#1496's own reproduction: a real ticket, added via the real CLI, whose detail's
+    'Verify repo:' line only a correctly-newlined wq_show() lets verify_repo_hint see."""
+    monkeypatch.setenv("WQ_DB", str(tmp_path / "queue.db"))
+    monkeypatch.delenv("WQ_AGENT", raising=False)
+    monkeypatch.setattr(repo_sweep, "managed_repos", lambda: {"/home/lumen/pokemon"})
+    detail = "Adversarial verify-pass of wq#100 — PR#1.\n\nVerify repo: /home/lumen/pokemon"
+    p = router.wq("add", "--lane", "build", "--title", "[verify] wq#100 something shipped",
+                  "--detail", detail)
+    assert p.returncode == 0, p.stdout + p.stderr
+    tid = int(re.search(r"added task (\d+)", p.stdout).group(1))
+    assert router.repo_for_ticket(tid) == "/home/lumen/pokemon"
+
+
 # ---- wq#1220: a verify-pass ticket is filed under the static verify_pass policy lane
 # ('build'), not the shipped ticket's own lane — so LANE_REPO alone would point dispatch
 # at claude-foreman instead of e.g. mailbot. judgment.file_verify_pass carries the

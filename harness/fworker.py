@@ -457,25 +457,27 @@ def wq(*args, check=False):
 
 
 def wq_show(ticket_id):
-    """Parse `wq show <id>`'s `key : value` text into a dict — wq has no --json."""
-    p = wq("show", str(ticket_id))
-    out = {}
-    for line in p.stdout.splitlines():
-        if ":" not in line:
-            continue
-        k, v = line.split(":", 1)
-        out[k.strip()] = v.strip()
-    return out
+    """wq#1496: this used to parse `wq show <id>`'s plain-text `key : value` lines —
+    stale comment, wq has had --json since wq#1277. Plain-text mode escapes embedded
+    newlines as literal backslash-n, which silently broke any MULTILINE-anchored
+    consumer of a multi-line detail/notes field. --json round-trips real newlines and
+    native column types."""
+    p = wq("show", str(ticket_id), "--json")
+    try:
+        out = json.loads(p.stdout)
+    except ValueError:
+        return {}
+    return out if isinstance(out, dict) and not out.get("error") else {}
 
 
 def ticket_holder(ticket):
     """wq#869: the identity currently holding `ticket`, or None if unheld.
 
-    `wq show`'s plain-text mode stringifies a NULL claimed_by as the literal "None"
-    (cmd_show in /home/lumen/bin/wq f-strings every column), so a released ticket and
-    a ticket held by an agent literally named "None" are indistinguishable in that
-    output. Normalising here keeps "the claim went away" and "the claim changed
-    hands" one comparison rather than three at every call site.
+    wq_show()'s --json path (wq#1496) returns a NULL claimed_by as real None, but the
+    "None" string branch stays: a caller holding a pre-wq#1496 plain-text-parsed dict
+    (or a literally-named "None" agent) must not be treated as held. Normalising here
+    keeps "the claim went away" and "the claim changed hands" one comparison rather
+    than three at every call site.
     """
     holder = (ticket.get("claimed_by") or "").strip()
     return None if holder in ("", "None") else holder

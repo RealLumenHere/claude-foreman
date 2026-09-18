@@ -132,6 +132,21 @@ def clear_block_reason_column(henv, tid):
 
 # ---- INFRA_CRASH: healed --------------------------------------------------------------
 
+# ---- wq#1496: self_heal.wq_show() duplicated router.wq_show()'s plain-text `wq show`
+# parser and the same bug — embedded newlines survive only as the literal backslash-n
+# escape (wq#1277), so any multi-line notes/detail field this module read was mangled.
+# Drives the real wq binary; a hand-built dict would hide exactly this bug. ------------
+
+def test_wq_show_returns_real_newlines(henv):
+    detail = "line one\n\nline three after a blank"
+    tid = add_ticket("wq1496 self_heal multiline")
+    p = subprocess.run([WQ_BIN, "edit", str(tid), "--detail", detail], capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+    t = sh.wq_show(tid)
+    assert t.get("detail") == detail, (
+        f"self_heal.wq_show() mangled the multi-line detail — got {t.get('detail')!r}")
+
+
 def test_infra_crash_auto_released_within_cap(henv):
     tid = add_ticket()
     block_ticket(tid, "INFRA_CRASH: LAUNCH_FAILURE after 2 attempts; transcript=x")
