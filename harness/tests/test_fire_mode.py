@@ -51,7 +51,8 @@ def _wire_common(tmp_path, monkeypatch):
     monkeypatch.setattr(fworker, "wq_release", lambda tid: calls["released"].append(tid))
     monkeypatch.setattr(fworker, "wq_block", lambda tid, reason: calls["blocked"].append((tid, reason)))
     monkeypatch.setattr(fworker, "wq_heartbeat", lambda tid: calls["heartbeats"].append(tid))
-    monkeypatch.setattr(fworker, "wq_done", lambda tid, notes, no_artifact_reason=None:
+    monkeypatch.setattr(fworker, "wq_done",
+                        lambda tid, notes, no_artifact_reason=None, unlanded_reason=None:
                         calls["done"].append((tid, notes, no_artifact_reason)))
     monkeypatch.setattr(fworker, "ntfy", lambda title, msg, priority="default": calls["ntfy"].append((title, msg)))
     return calls

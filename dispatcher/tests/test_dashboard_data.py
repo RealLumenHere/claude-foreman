@@ -77,15 +77,24 @@ def ddenv(tmp_path, monkeypatch):
             "cfg_path": cfg_path, "gov_state": gov_state}
 
 
-def add_ticket(title="scratch dashboard ticket", lane="testlane", deps=None, gate=None):
+def add_ticket(title="scratch dashboard ticket", lane="testlane", deps=None, gate=None,
+               no_probe=None):
+    # no_probe: wq#1676 made a Liveness: tag mandatory on `wq add` for a Frank-gate shape
+    # (e.g. a "[FRANK GATE]" title). A counting test needs the SHAPE, not a live premise,
+    # so callers that file one pass the on-the-record escape hatch rather than a fake probe.
     cmd = [WQ_BIN, "add", "--lane", lane, "--title", title]
     if deps:
         cmd += ["--deps", deps]
     if gate:
         cmd += ["--gate", gate]
+    if no_probe:
+        cmd += ["--no-probe", no_probe]
     p = subprocess.run(cmd, capture_output=True, text=True)
     assert p.returncode == 0, p.stdout + p.stderr
-    return int(p.stdout.strip().split()[2])
+    # `added task <id> [<lane>]` is the LAST line, not the only one: --no-probe makes the
+    # liveness layer print its own "recorded --no-probe" line first, which a whole-stdout
+    # split() would read as the id.
+    return int(p.stdout.strip().splitlines()[-1].split()[2])
 
 
 def claim_ticket(tid):
@@ -156,7 +165,8 @@ def test_running_workers_reports_lumen_run_error(ddenv, monkeypatch):
 
 def test_queue_depth_counts_open_eligible_blocked(ddenv):
     eligible = add_ticket("plain open ticket")
-    frank_gated = add_ticket("[FRANK GATE] rotate keys")
+    frank_gated = add_ticket("[FRANK GATE] rotate keys",
+                             no_probe="test fixture: synthetic Frank-gate row for queue-depth counting")
     epic_parent = add_ticket("[EPIC][DO NOT CLAIM] rollup over children")  # wq#428
     dep_blocked = add_ticket("waiting on a dep", deps="999999")
     blocked = add_ticket("will be blocked")

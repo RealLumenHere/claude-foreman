@@ -528,11 +528,19 @@ def wq_heartbeat(ticket_id):
     wq("heartbeat", str(ticket_id))
 
 
-def wq_done(ticket_id, notes, no_artifact_reason=None):
+def wq_done(ticket_id, notes, no_artifact_reason=None, unlanded_reason=None):
     """Close the ticket. `no_artifact_reason` is the CALLER's own assertion that this
     ticket has no code artifact to cite, plus the reason why — only a caller that knows
-    it applied no code change may pass one (wq#1925)."""
-    p = wq("done", str(ticket_id), "--notes", notes)
+    it applied no code change may pass one (wq#1925).
+
+    `unlanded_reason` is the same kind of caller-side assertion for wq#1673's evidence-
+    DURABILITY gate: the notes cite a real path that is deliberately never committed to
+    main (a run-dir artifact), so "land it and retry" can never be satisfied. Asserted up
+    front rather than retried on a refusal text-match, for wq#1925's reason: the refusal
+    text cannot tell a deliberately-unlanded path from one that merely has not landed yet.
+    """
+    extra = ["--unlanded", unlanded_reason] if unlanded_reason else []
+    p = wq("done", str(ticket_id), "--notes", notes, *extra)
     if p.returncode != 0:
         out = (p.stdout or "") + " " + (p.stderr or "")
         # wq#759 evidence gate: `done` is refused (exit 2) unless --notes names a verifiable
@@ -552,7 +560,7 @@ def wq_done(ticket_id, notes, no_artifact_reason=None):
         if no_artifact_reason and ("759" in out or "evidence gate" in out.lower()
                                    or "verifiable artifact" in out.lower()):
             p2 = wq("done", str(ticket_id), "--notes", notes,
-                    "--no-artifact", no_artifact_reason)
+                    "--no-artifact", no_artifact_reason, *extra)
             if p2.returncode == 0:
                 log(f"wq#{ticket_id} closed via --no-artifact (operational ticket, no code artifact)")
                 return
@@ -566,7 +574,24 @@ def wq_release(ticket_id):
 
 
 def wq_block(ticket_id, reason):
-    wq("block", str(ticket_id), reason)
+    """Block deliberately carries NO liveness tag. wq#1676 briefly made one mandatory here
+    and refused untagged blocks with exit 6; wq#1998 made the gate advisory at `block`
+    instead, precisely because a refusal strands the row in `claimed` under a caller that
+    has already given up. Passing --no-probe would clear the warning, but it also stamps
+    [NO-PROBE: ...] into the detail, and that marker is what liveness_clear.age_alarm()
+    skips on — so tagging every automated block would silence the 7-day stale-gate alarm
+    for the exact population it exists to catch. The warning is the correct outcome.
+
+    wq#1721: the return code used to be dropped on the floor, so during the window when
+    the gate WAS fatal, every fire-mode and evidence-gate block silently no-op'd while
+    fworker went on reporting BLOCKED and the ticket stayed claimed and open. A block that
+    did not take has to be loud.
+    """
+    p = wq("block", str(ticket_id), reason)
+    if p.returncode != 0:
+        out = ((p.stdout or "") + " " + (p.stderr or "")).strip()
+        log(f"ERROR: wq block {ticket_id} refused (exit {p.returncode}): {out}")
+    return p
 
 
 def ntfy(title, msg, priority="default"):
@@ -2020,7 +2045,13 @@ def run_fire_ticket(args):
             wq_done(ticket_id, notes,
                     no_artifact_reason="fire-mode auto-close: the originating probe "
                                        "cleared on its own and no code change was "
-                                       "applied; re-verify result recorded in --notes")
+                                       "applied; re-verify result recorded in --notes",
+                    # wq#1721: the cited evidence lives in this run's RUNS_ROOT dir, which
+                    # is per-run state and never committed — wq#1673's durability gate
+                    # refuses it otherwise, and the refusal is unsatisfiable by design.
+                    unlanded_reason=("fire-mode probe evidence is a per-run artifact under "
+                                     "the fworker run dir, never landed on main by design"
+                                     ) if evidence_path else None)
             ntfy("fire ticket auto-closed",
                  f"wq#{ticket_id}: re-verify found the originating probe condition has "
                  f"cleared on its own — auto-closed, no change applied.",
