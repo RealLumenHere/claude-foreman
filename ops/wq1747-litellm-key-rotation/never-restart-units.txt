@@ -1,0 +1,10 @@
+# wq#1968 rotate.sh: units listed here (one per line, exact unit filename,
+# e.g. `desktop-commander-mcp.service`) are never restarted by rotate.sh even
+# if one of their EnvironmentFile= consumers gets rewritten. rotate.sh still
+# rewrites the file and prints the skipped unit for the operator to restart
+# by hand at a safe moment.
+#
+# Empty by default — populate per fleet policy. The one standing hard rule
+# (CLAUDE.md instinct 2) is host-level, not unit-level: never touch Thor
+# (100.112.151.100) at all, which this script has no path to anyway since it
+# only restarts units on the box it runs on.
