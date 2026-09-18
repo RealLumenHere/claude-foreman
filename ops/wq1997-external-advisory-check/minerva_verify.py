@@ -183,11 +183,12 @@ _GHSA_ID_RE = re.compile(r'\bGHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}\b', re.I)
 # list, which publishes weeks before the global index. A match on the exact id
 # is positive existence evidence no matter which candidate repo produced it,
 # so guessing candidate repos can only miss, never false-positive. (2) A third
-# outcome: an id that resolves nowhere is a hard block ONLY when the full
-# check actually ran (global miss AND a definitive repo-scoped miss). When a
-# lookup errored or no repo could be consulted, the id is INCONCLUSIVE — it
-# routes to review instead of flipping `passed`, because we never asked the
-# source that would have known.
+# outcome: an id that resolves nowhere is a FABRICATION finding only when a
+# repo advisory list was actually read and did not hold it. When no repo could
+# be consulted at all, the id is INCONCLUSIVE — still blocked (wq#2010; an
+# advisory the guard could not confirm is not one to ship on), but under a
+# distinct reason and error_kind, because 'we never asked the source that
+# would have known' is an outage, not proof of a fake.
 GH_REPO_ADVISORY_API = 'https://api.github.com/repos/{repo}/security-advisories'
 ADVISORY_REPO_MAX_CANDIDATES = int(os.getenv('VERIFY_ADVISORY_MAX_REPOS', '4'))
 _GH_URL_RE = re.compile(r'github\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]{1,100}?)(?=[\s/)\]},.]|$)', re.I)
@@ -311,13 +312,15 @@ def external_advisory_check(text: str) -> dict:
     Returns {'checked': [], 'unresolved': [], 'inconclusive': [], 'error':
     bool}, and the split between the two failure buckets is the whole point:
 
-      unresolved   — the full check RAN and found nothing: absent from the
-                     global index and absent from a repo advisory list we
-                     actually read. A fabricated id lands here and blocks.
-      inconclusive — a lookup errored, or no repo list could be read, so the
-                     one source that publishes fresh ids was never asked. A
-                     real 16-day-old advisory lands here (wq#2005) and routes
-                     to review instead of being auto-rejected as a fake."""
+      unresolved   — a repo advisory list we actually read did not hold the
+                     id. That is the freshest source there is, so a miss there
+                     is a definitive no even if the global index errored out
+                     (wq#2010). A fabricated id lands here and blocks.
+      inconclusive — nothing definitive was consulted: no repo list could be
+                     read, so the one source that publishes fresh ids was
+                     never asked. Callers must still fail closed on this
+                     bucket (verify() does), but with a distinct reason so an
+                     outage is never recorded as a fabrication."""
     ids = sorted(set(_CVE_ID_RE.findall(text)) | set(_GHSA_ID_RE.findall(text)))
     checked, unresolved, inconclusive, had_error = [], [], [], False
     repos = repo_candidates(text) if ids else []
@@ -329,10 +332,19 @@ def external_advisory_check(text: str) -> dict:
         repo_hit = _repo_advisory_exists(ident, repos)
         if repo_hit is True:
             continue
-        if exists is False and repo_hit is False:
+        had_error = had_error or exists is None or repo_hit is None
+        # wq#2010: `unresolved` requires that every leg which actually ANSWERED
+        # said no — not that every leg answered. The old `exists is False and
+        # repo_hit is False` let an errored global lookup (`exists is None`:
+        # timeout, 5xx, or the 403 rate-limit that PR#627's extra repo calls
+        # make likelier) silently overrule a definitive repo-scoped miss and
+        # demote a fabricated id into the soft bucket. The repo's own advisory
+        # list is the FRESHER source here (wq#2005), so when it answered and
+        # did not hold the id, an unanswered global index adds no reason to
+        # believe the id exists.
+        if repo_hit is False:            # exists is True already continued above
             unresolved.append(ident)
         else:
-            had_error = had_error or exists is None
             inconclusive.append(ident)
     return {'checked': checked, 'unresolved': unresolved,
             'inconclusive': inconclusive, 'error': had_error}
@@ -746,17 +758,28 @@ def verify(answer: str, context: str, subject: str = 'unknown', model: str = 'un
             result['unresolved_advisories'] = adv['unresolved']
             reason = (f'{reason};' if reason else '') + f'unresolved_advisory({",".join(adv["unresolved"])})'
             result['reason'] = reason
-        # wq#2005: ids the check could not settle do NOT flip `passed`. An
-        # advisory that is real but younger than the global index's sync lag
-        # is the common case here, and auto-rejecting it silently buries
-        # legitimate fresh security work; the flag routes it to review while
-        # leaving a genuinely fabricated id (above) blocked.
+        # wq#2010: an id the check could not settle fails CLOSED, like every
+        # other error path in this module (module docstring, "Fail-closed:
+        # judge/gateway/embed/external-check errors => not-grounded"). wq#2005
+        # left `passed` True here on the strength of routing the case to
+        # review — but advisory_review_required had no consumer anywhere in
+        # the fleet, so 'routes to review' was in fact 'passes silently', and
+        # a single errored lookup disabled Layer 0 for a claim scoring
+        # citation=1.0/judge=1.0 (the wq#1512 shape). The wq#2005 case this
+        # protects — a real advisory younger than the global index's sync lag
+        # — is not affected: it resolves repo-scoped above and never reaches
+        # this bucket. What DOES reach it is an id nothing could confirm, and
+        # that must not ship on the guard's say-so. The distinct reason +
+        # error_kind keep an outage legible as an outage, not a fabrication.
         if adv['inconclusive']:
+            passed = False
+            result['passed'] = False
             result['inconclusive_advisories'] = adv['inconclusive']
             result['advisory_review_required'] = True
             reason = (f'{reason};' if reason else '') + f'advisory_needs_review({",".join(adv["inconclusive"])})'
             result['reason'] = reason
-            log(f'advisory check inconclusive (review, not reject): {",".join(adv["inconclusive"])}')
+            log(f'advisory check inconclusive (blocked pending review, not a fabrication finding): '
+                f'{",".join(adv["inconclusive"])}')
         if (adv['unresolved'] or adv['inconclusive']) and adv['error'] and not error_kind:
             error_kind = 'advisory_check_error'
             result['error_kind'] = error_kind

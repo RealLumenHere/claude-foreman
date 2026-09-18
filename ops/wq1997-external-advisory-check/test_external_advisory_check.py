@@ -86,10 +86,22 @@ def main():
           r["unresolved"] == ["CVE-2026-99999"], r)
 
     # No repo is inferable, so the source that would have known was never
-    # asked: inconclusive (route to review), never a silent auto-reject.
+    # asked: inconclusive, which is a separate finding from a fabrication even
+    # though verify() blocks on both (wq#2010).
     r = mv.external_advisory_check("CVE-2026-99998 has critical severity.")
-    check("unresolvable id with no repo candidate is inconclusive, not blocked",
+    check("unresolvable id with no repo candidate is inconclusive, not a fabrication finding",
           r["unresolved"] == [] and r["inconclusive"] == ["CVE-2026-99998"], r)
+
+    # wq#2010: an errored global lookup must not overrule a definitive
+    # repo-scoped miss. Offline — both legs are stubbed.
+    _real_cve, _real_repo = mv._cve_exists, mv._repo_advisory_exists
+    mv._cve_exists = lambda cve_id: None            # NVD timeout / 5xx / 403
+    mv._repo_advisory_exists = lambda ident, repos: False   # repo list read, id absent
+    r = mv.external_advisory_check("netdata flagged CVE-2026-99999.")
+    check("errored global lookup + definitive repo miss is unresolved, not inconclusive",
+          r["unresolved"] == ["CVE-2026-99999"] and r["inconclusive"] == []
+          and r["error"] is True, r)
+    mv._cve_exists, mv._repo_advisory_exists = _real_cve, _real_repo
 
     # A real, long-standing CVE must resolve and not block.
     r = mv.external_advisory_check("libuv is affected by CVE-2024-32019.")
@@ -138,13 +150,35 @@ def main():
           result["passed"] is True and result["unresolved_advisories"] == [],
           result)
 
-    # And an id nothing could settle: flagged for review, `passed` untouched.
+    # wq#2010: an id nothing could settle blocks too, but as a review finding
+    # rather than a fabrication finding — `unresolved_advisories` stays empty
+    # and the reason names review, so an outage is never logged as a fake.
     murky = "CVE-2026-99998 has critical severity."
     result = mv.verify(murky, murky, subject="wq2005_inconclusive", mode="semantic")
-    check("verify() flags an unsettled id for review instead of rejecting",
-          result["passed"] is True and result["advisory_review_required"] is True
+    check("verify() blocks an unsettled id, flagged for review not fabrication",
+          result["passed"] is False and result["advisory_review_required"] is True
+          and result["unresolved_advisories"] == []
           and result["inconclusive_advisories"] == ["CVE-2026-99998"]
           and "advisory_needs_review" in (result["reason"] or ""),
+          result)
+
+    # wq#2010 liveness, the reproduced fail-open: a total advisory-API outage
+    # (both existence legs error, no repo consultable) on a fabricated id that
+    # scores citation=1.0/judge=1.0 — the wq#1512 reference shape. Before the
+    # fix this returned passed=True, because `exists is None` always routed to
+    # the soft bucket and advisory_review_required had no consumer.
+    _real_cve, _real_ghsa, _real_cands = mv._cve_exists, mv._ghsa_exists, mv.repo_candidates
+    mv._cve_exists = lambda cve_id: None
+    mv._ghsa_exists = lambda ghsa_id: None
+    mv.repo_candidates = lambda text: []
+    outage = "netdata carries CVE-2026-99997, a HIGH severity advisory."
+    result = mv.verify(outage, outage, subject="wq2010_api_outage", mode="semantic")
+    mv._cve_exists, mv._ghsa_exists, mv.repo_candidates = _real_cve, _real_ghsa, _real_cands
+    check("verify() does not pass a fabricated CVE during an advisory-API outage",
+          result["passed"] is False and result["citation_score"] == 1.0
+          and result["judge_score"] == 1.0
+          and result["advisory_review_required"] is True
+          and result["error_kind"] == "advisory_check_error",
           result)
 
     # And the control: a claim with no advisory id at all still passes on

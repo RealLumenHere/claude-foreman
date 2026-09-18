@@ -10,7 +10,11 @@
 # verdict to failing. wq#2005 added the repo-scoped tier and an inconclusive
 # bucket after wq#2001 showed CVE-2026-83601 is a REAL netdata advisory that
 # the global indexes had not synced yet, so the original check auto-rejected
-# the fresh security proposals it exists to protect. ON by default
+# the fresh security proposals it exists to protect. wq#2010 then closed the
+# fail-open that tier opened: an errored global lookup no longer demotes a
+# definitive repo-scoped miss into the soft bucket, and the soft bucket itself
+# blocks (under a distinct reason) instead of passing on a review flag nothing
+# consumed. ON by default
 # (EXTERNAL_ADVISORY_CHECK_ENABLED=1): it is a correctness fix, and it is a
 # no-op regex scan on the majority of proposals that cite no CVE/GHSA id.
 #
@@ -38,6 +42,10 @@ r2 = mod.external_advisory_check('no advisory ids mentioned here')
 assert r2['checked'] == [] and r2['unresolved'] == [], r2
 r3 = mod.external_advisory_check('cites CVE-2026-99999 as a HIGH netdata advisory')
 assert r3['unresolved'] == ['CVE-2026-99999'], r3             # fabricated still blocks
+mod._cve_exists = lambda cve_id: None                         # wq#2010: NVD outage...
+mod._repo_advisory_exists = lambda ident, repos: False        # ...over a definitive repo miss
+r4 = mod.external_advisory_check('cites CVE-2026-99999 as a HIGH netdata advisory')
+assert r4['unresolved'] == ['CVE-2026-99999'], r4             # must not demote to soft bucket
 print('health OK')
 "; then
     echo "wq1997 install: deployed, external advisory check ON"
