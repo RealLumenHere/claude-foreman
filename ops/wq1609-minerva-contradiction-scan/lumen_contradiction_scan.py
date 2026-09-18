@@ -36,6 +36,13 @@ Three suppressors run on each candidate hit:
 Artifact reach and the action tier each one gets (§3.5):
 
   archival_notes                       note_contradictions row  (machine-fixed)
+                                        [this is wq#1610: the 1686-row episodic
+                                        layer had zero invalidation before this
+                                        scanner generalised past the IP-only
+                                        filter — scan_notes()/write_note_contra-
+                                        dictions() below are that fix, and the
+                                        deployed timer is what makes it real
+                                        rather than a script nobody runs]
   LIVE_FLEET_STATE*.md                 regenerate (derived file)
   storage_manifest.yaml, fleet YAML    aq row + wq ticket (owned config)
   FLEET_MAP.md, playbooks              proposal in the report
