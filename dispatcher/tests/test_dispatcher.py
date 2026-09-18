@@ -130,6 +130,11 @@ def denv(tmp_path, monkeypatch):
     monkeypatch.setattr(fd, "LANGFUSE_ENV", str(tmp_path / "absent-langfuse.env"))
     monkeypatch.setattr(fd, "STAGGER", (0.0, 0.0))
     monkeypatch.setattr(spawner, "GOVERNOR_CLI", FAKE_GOVERNOR)
+    # wq#1994: without this every test in this file shares (and leaks into) the REAL
+    # production spawn_reserve.db, since spawner.py defaults SPAWN_RESERVE_DB to
+    # dispatcher/runtime/spawn_reserve.db when FOREMAN_SPAWN_RESERVE_DB is unset.
+    # Isolated per test exactly like test_spawner.py's spawner_env fixture (wq#1815).
+    monkeypatch.setattr(spawner, "SPAWN_RESERVE_DB", str(tmp_path / "spawn_reserve.db"))
     monkeypatch.setattr(concurrency, "LUMEN_RUN_BIN", lumen_run)
     monkeypatch.setitem(router.LANE_REPO, "testlane", str(repo_dir))
     monkeypatch.setitem(router.LANE_REPO, "fleet-fires", str(repo_dir))
