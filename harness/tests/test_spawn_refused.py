@@ -139,6 +139,43 @@ def test_add_dirs_for_unions_needs_dirs_without_duplicates():
     assert got.count("/x") == 1 and got.count(base[0]) == 1
 
 
+# ---- wq#1439 (BROKER_WIRING.md §2.3): add_dirs_for applies the lint's DIR_DENY --------
+
+@pytest.mark.parametrize("denied", [
+    "/home/lumen/.secrets",            # deny:prefix
+    "/home/lumen/.ssh/keys",           # deny:prefix, nested
+    "/home/lumen",                     # deny:path (exact)
+    "/home/lumen/agents/work-queue/queue.db",  # deny:path_glob
+    "/home/lumen/kb/service.token",    # deny:basename
+])
+def test_add_dirs_for_refuses_a_denied_needs_dir_at_spawn(denied):
+    with pytest.raises(fworker.SpawnRefused) as e:
+        fworker.add_dirs_for("standard-engineering", [denied])
+    assert e.value.code == "CAPABILITY_DENIED_BY_POLICY"
+    assert e.value.refused and denied in e.value.refused[0]
+    assert denied in e.value.summary
+
+
+def test_add_dirs_for_refuses_the_whole_list_not_the_safe_half():
+    # §4 row vi: a denied dir never yields a partial grant of the safe remainder.
+    with pytest.raises(fworker.SpawnRefused) as e:
+        fworker.add_dirs_for("standard-engineering", ["/home/lumen/agent", "/home/lumen/.ssh"])
+    assert e.value.refused == ["dir(/home/lumen/.ssh) deny:prefix (/home/lumen/.ssh)"]
+
+
+def test_add_dirs_for_still_unions_an_allowed_needs_dir():
+    got = fworker.add_dirs_for("standard-engineering", ["/home/lumen/agent"])
+    assert got[-1] == "/home/lumen/agent"
+
+
+def test_build_claude_cmd_carries_needs_dir_as_add_dir():
+    # §4 row i, argv half: the widened list renders as a `--add-dir` pair the child sees.
+    add_dirs = fworker.add_dirs_for("standard-engineering", ["/home/lumen/agent"])
+    cmd = fworker.build_claude_cmd("p", "m", "high", "/tmp/s.json", add_dirs)
+    i = cmd.index("/home/lumen/agent")
+    assert cmd[i - 1] == "--add-dir"
+
+
 # ---- §5.2 integration: corrupted origin -> LAUNCH_FAILURE, attempt NOT charged --------
 
 def test_corrupted_origin_launch_failure_not_charged(tmp_path):

@@ -56,6 +56,7 @@ import action_gate
 import failure_record
 import needs as needs_mod
 import capability
+import capability_lint
 import agents_spec
 import fire_gate
 
@@ -1146,12 +1147,27 @@ def add_dirs_for(archetype, needs_dirs=None):
     """Per-archetype --add-dir list (wq#1301), unioned with the ticket's own
     needs:dir tags (wq#1331 §3.2 — read context only; landing still goes through the
     worktree). needs_dirs is already empty when FOREMAN_NEEDS_DISABLE=1 because
-    needs.parse() returned nothing."""
+    needs.parse() returned nothing.
+
+    wq#1439 (BROKER_WIRING.md §2.3): every needs:dir is checked against the lint's
+    own deny-list before it is unioned, so a hand-written `needs:dir(/home/lumen/.ssh)`
+    is refused at spawn (uncharged SpawnRefused, same code as a policy refusal) and
+    not only at dispatch — needs.validate() only checks "absolute path". The check
+    is all-or-nothing: one denied dir refuses the spawn rather than granting the
+    safe remainder (§4 row vi, "never partially granted")."""
     base = _AGENTS.get(archetype).add_dirs if archetype in _AGENTS else WORKER_ADD_DIRS
     out = list(base)
+    refused = []
     for d in needs_dirs or []:
+        why = capability_lint.dir_denied(d)
+        if why:
+            refused.append(f"dir({d}) {why}")
+            continue
         if d not in out:
             out.append(d)
+    if refused:
+        raise SpawnRefused("CAPABILITY_DENIED_BY_POLICY", "; ".join(refused),
+                           refused=refused)
     return out
 
 def resolve_worker_settings(repo, ticket_id):
@@ -2239,8 +2255,11 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
                             add_dirs=add_dirs, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin)
 
+    # wq#1439 (§4 row i): the add-dir list is the argv proof that a needs:dir tag
+    # reached the child, so it is logged in full rather than truncated with cmd[:6].
     log(f"attempt {attempt}: spawning {' '.join(shlex.quote(c) for c in cmd[:6])}... "
-        f"cwd={worktree} max_turns={max_turns} wall_clock={wall_clock}s")
+        f"cwd={worktree} max_turns={max_turns} wall_clock={wall_clock}s "
+        f"add_dirs={' '.join('--add-dir ' + shlex.quote(d) for d in add_dirs)}")
 
     # wq#1894: from here until this attempt's own write_attempt_state() lands below, an
     # external SIGTERM (unit stop) must charge a minimal KILLED record and release the
