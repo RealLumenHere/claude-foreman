@@ -18,6 +18,7 @@ status); every close audited with the probe verdict verbatim; reversible
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -47,6 +48,13 @@ NTFY_TOPIC = os.environ.get("FOREMAN_LIVENESS_NTFY_TOPIC", "lumen-fleet")
 
 def writes_enabled():
     return os.environ.get("FOREMAN_LIVENESS_CLEAR", "1") != "0"
+
+
+def no_tag_mandatory():
+    """wq#1676 item 1: a Frank-gate with no `Liveness:` line refuses by default. The one
+    escape is FOREMAN_LIVENESS_CLEAR=warn — a NEW, distinct value from the existing 0/1
+    writes_enabled() semantics — for the 7-day soft rollout; then it flips (this default)."""
+    return os.environ.get("FOREMAN_LIVENESS_CLEAR", "") != "warn"
 
 
 def now_iso():
@@ -132,6 +140,23 @@ def _fresh(entry, ttl_min):
 # the write path
 # ---------------------------------------------------------------------------
 
+_DELIVERABLE_HINT_RE = re.compile(r'\bdeliverable\b', re.IGNORECASE)
+
+
+def _close_target(ticket):
+    """wq#1676 item 4: the right exit for a SATISFIED ticket. A `blocked` row's own work
+    is still owed once the block clears — it goes back to `open` (claimable), not `done`
+    — UNLESS the ticket's own deliverable was the precondition (best-effort heuristic: a
+    `deliverable` hint in the detail/notes means the ticket's OUTPUT was what the probe
+    was checking, so SATISFIED really does mean done). Any other prior status (frank_gated,
+    pending_review, open) keeps the original done exit — those were never "blocked on
+    someone else", the ticket itself was the thing waiting."""
+    if (ticket.get("status") or "").strip() != "blocked":
+        return "done"
+    text = (ticket.get("detail") or "") + " " + (ticket.get("notes") or "")
+    return "done" if _DELIVERABLE_HINT_RE.search(text) else "open"
+
+
 def close_ticket(ticket, results, bindings=None, agent=None, apply=True):
     """SATISFIED path. Returns (closed: bool, detail: dict). Never raises. The close is
     confirmed against the ticket row, never against the CLI's stdout (wq#1479)."""
@@ -140,7 +165,10 @@ def close_ticket(ticket, results, bindings=None, agent=None, apply=True):
     steps = []
     if not apply:
         return False, {"steps": ["dry-run: would close"], "close": "DRY-RUN"}
+    target = _close_target(ticket)
     args = ["liveness-close", tid, "--verdict", summary]
+    if target == "open":
+        args += ["--to", "open"]
     if "Liveness:" not in (ticket.get("detail") or ""):
         bound = (bindings or {}).get(str(tid))
         if not bound:
@@ -151,8 +179,17 @@ def close_ticket(ticket, results, bindings=None, agent=None, apply=True):
     steps.append(f"liveness-close: rc={p.returncode} {first[:200]}")
     final = row_status(tid, agent=agent)
     steps.append(f"confirm: row status={final!r}")
-    if p.returncode == 0 and final == "done":
-        return True, {"steps": steps, "close": f"CLOSED wq#{tid}"}
+    if p.returncode == 0 and final == target:
+        if target == "open":
+            # wq#1676: the block premise served its purpose; strip the Liveness: line so a
+            # re-opened ticket (still in OPEN_STATUSES for --scope all) does not keep
+            # re-satisfying the SAME probe and getting auto-closed to done with no work done.
+            stripped = re.sub(r'(?m)^Liveness:.*\n?', '', ticket.get("detail") or "").rstrip("\n")
+            if stripped != (ticket.get("detail") or "").rstrip("\n"):
+                _wq("edit", tid, "--detail", stripped, agent=agent)
+                _wq("note", tid, "[liveness] Liveness: line cleared on blocked->open (wq#1676): "
+                    "the block premise cleared, the ticket's own work is still owed", agent=agent)
+        return True, {"steps": steps, "close": f"CLOSED wq#{tid} -> {target}"}
     return False, {"steps": steps, "close": f"NOT-CLOSED wq#{tid} rc={p.returncode} status={final!r}: {first[:160]}"}
 
 
@@ -183,7 +220,7 @@ def clear_if_stale(ticket, bindings=None, apply=True, agent=None, state=None, lo
         rec["action"] = "closed" if closed else ("would_close" if not apply else "close_failed")
         audit(rec)
         if closed:
-            state[tid]["status"] = "done"
+            state[tid]["status"] = _close_target(ticket)
             msg = (f"auto-closed wq#{tid} [{ticket.get('lane')}/{status}] "
                    f"{(ticket.get('title') or '')[:60]} — {probe_summary(results)[:160]}")
             _ntfy(msg)
@@ -311,6 +348,60 @@ def _parse(text):
     return list(needs_mod.parse_liveness(liveness_field=text))
 
 
+# ---------------------------------------------------------------------------
+# probe derivation — wq#1676 item 2. Proposes, never writes.
+# ---------------------------------------------------------------------------
+
+_BLOCKED_ON_WQ_RE = re.compile(r'blocked\s+on\s+wq#?(\d+)', re.IGNORECASE)
+_PR_URL_RE = re.compile(r'^https?://[^/\s]+/([\w.-]+/[\w.-]+)/pulls?/(\d+)/?$')
+
+
+def _ledger_credentials(ledger=None):
+    try:
+        import yaml
+        with open(ledger or LEDGER) as f:
+            doc = yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+    return doc.get("credentials") or {}
+
+
+def derive_probe(text, ledger=None):
+    """Scan title+detail text for a premise the vocabulary can already express and
+    propose (never write) a `Liveness:` tag. None when nothing parses.
+
+        blocked on wq#N          -> ticket_done(N)
+        a .../pull(s)/N URL      -> pr_merged(owner/repo, N[, merged, github])
+        a .secrets/*.token path  -> the matching ledger credential's own probe (None if
+                                     the path is not a known ledger credential)
+        any other absolute path  -> path_exists(path)
+    """
+    text = text or ""
+    m = _BLOCKED_ON_WQ_RE.search(text)
+    if m:
+        return f"ticket_done({m.group(1)})"
+    for raw in re.split(r'\s+', text):
+        tok = raw.strip('()[]{}<>.,;:"\'')
+        if not tok:
+            continue
+        pm = _PR_URL_RE.match(tok)
+        if pm:
+            repo, n = pm.group(1), pm.group(2)
+            return f"pr_merged({repo}, {n}, merged, github)" if "github.com" in tok else f"pr_merged({repo}, {n})"
+        if tok.startswith("http"):
+            continue
+        if ".secrets/" in tok and tok.endswith(".token"):
+            for rec in _ledger_credentials(ledger).values():
+                path = rec.get("path") or ""
+                if path == tok or path.endswith("/" + tok.lstrip("/")) or os.path.basename(path) == os.path.basename(tok):
+                    probe = (rec.get("probe") or "").strip()
+                    return probe or None
+            return None
+        if tok.startswith("/"):
+            return f"path_exists({tok})"
+    return None
+
+
 def creation_check(title, detail, lane=None, frank_gated=False, ledger=None, run_probes=True):
     """(ok, verdict, message). ok=False means REFUSE the add/decide. Only Frank-gated
     shapes are checked; anything else returns (True, 'NOT_GATED', '')."""
@@ -324,10 +415,17 @@ def creation_check(title, detail, lane=None, frank_gated=False, ledger=None, run
     import needs as needs_mod
     lv = list(needs_mod.parse_liveness(detail))
     if not lv:
-        strict = os.environ.get("FOREMAN_LIVENESS_LINT_MODE", "warn") == "strict"
+        # wq#1676 item 1: mandatory at the on-ramp — refuse by default, warn-only for the
+        # 7-day rollout under FOREMAN_LIVENESS_CLEAR=warn. --no-probe is the caller's escape
+        # hatch (bin/wq's wrapper, not here — this function only reports the verdict).
+        warn_only = not no_tag_mandatory()
         msg = ("Frank-gate has no `Liveness:` line — it can never auto-clear "
-               "(LIVENESS_GATE.md §5: `Liveness: probe(args), ...` in the detail)")
-        return (not strict), "NO_TAG", msg
+               "(LIVENESS_GATE.md §5: `Liveness: probe(args), ...` in the detail; wq#1676 "
+               "makes this mandatory — pass --liveness \"<probe>(...)\" or --no-probe \"<why>\")")
+        proposal = derive_probe(f"{title or ''}\n{detail or ''}", ledger)
+        if proposal:
+            msg += f" — derived proposal: Liveness: {proposal} (--accept-probe writes it)"
+        return warn_only, "NO_TAG", msg
     done = ledger_done_probes(ledger)
     covered = [f"{p}({a}) = {done[(p, a)]}" for p, a in lv if (p, a) in done]
     results = []
@@ -344,6 +442,57 @@ def creation_check(title, detail, lane=None, frank_gated=False, ledger=None, run
         return False, "SATISFIED", ("premise already met on live state: " + probe_summary(results)
                                     + " — the gate would be stale the moment it was filed")
     return True, verdict, probe_summary(results)
+
+
+# ---------------------------------------------------------------------------
+# age alarm — wq#1676 item 5. Read-only to wq; the only write is a keyed aq row.
+# ---------------------------------------------------------------------------
+
+AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "/home/lumen/bin/aq")
+AGE_ALARM_DAYS = int(os.environ.get("FOREMAN_LIVENESS_AGE_ALARM_DAYS", "7"))
+_WQ_TS_FMT = "%Y-%m-%d %H:%M:%S"  # bin/wq's now(), not this module's now_iso()
+
+
+def _parse_wq_ts(s):
+    import calendar
+    try:
+        return calendar.timegm(time.strptime((s or "").strip(), _WQ_TS_FMT))
+    except (ValueError, TypeError):
+        return None
+
+
+def age_alarm(scope="all", db=None, ledger=None, aq_bin=None):
+    """Any frank_gated/blocked ticket older than AGE_ALARM_DAYS with no `Liveness:` tag
+    and no `[NO-PROBE:` marker on record files ONE keyed aq row (source=liveness,
+    key=untagged-gate-<id>). Never touches the ticket — aq's (source,key) dedup on an
+    OPEN row (aq.py:ingest) makes repeat sweeps idempotent on its own.
+    Returns [{"ticket": id, "aq_rc": int}, ...] for whatever it filed."""
+    aq_bin = aq_bin or AQ_BIN
+    out = []
+    now_s = time.time()
+    for t in liveness_sweep.tickets_in_scope(scope, db or liveness_sweep.WQ_DB, None):
+        status = (t.get("status") or "").strip()
+        if status not in ("frank_gated", "blocked"):
+            continue
+        detail = t.get("detail") or ""
+        notes = t.get("notes") or ""
+        if "Liveness:" in detail:
+            continue
+        if "[NO-PROBE:" in detail or "[NO-PROBE:" in notes:
+            continue
+        ts = _parse_wq_ts(t.get("blocked_at") if status == "blocked" else t.get("created_at"))
+        if ts is None or (now_s - ts) < AGE_ALARM_DAYS * 86400:
+            continue
+        tid = t["id"]
+        title = f"wq#{tid} untagged {status} gate >{AGE_ALARM_DAYS}d"
+        msg = f"{(t.get('title') or '')[:120]} [{t.get('lane')}] — no Liveness: line, no --no-probe on record"
+        try:
+            p = subprocess.run([aq_bin, "add", "liveness", f"untagged-gate-{tid}", title, msg],
+                               capture_output=True, text=True, timeout=20)
+            out.append({"ticket": tid, "aq_rc": p.returncode})
+        except (OSError, subprocess.TimeoutExpired) as e:
+            out.append({"ticket": tid, "aq_rc": 99, "error": str(e)[:120]})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +513,19 @@ def main(argv=None):
     ap.add_argument("--scope", choices=liveness_sweep.SCOPES, default="frank",
                     help="frank (default, what the timer runs) or all (every open|blocked|"
                          "frank_gated|pending_review ticket — wq#1492 backlog sweep)")
+    ap.add_argument("--age-alarm", action="store_true",
+                    help="wq#1676: file one keyed aq row per frank_gated/blocked ticket "
+                         ">7d old with no Liveness: tag and no --no-probe, then exit")
     a = ap.parse_args(argv)
+    if a.age_alarm:
+        recs = age_alarm(scope=a.scope, db=a.db, ledger=a.ledger)
+        if a.json:
+            print(json.dumps(recs, indent=1))
+        else:
+            print(f"age-alarm: {len(recs)} untagged gate(s) >{AGE_ALARM_DAYS}d filed to aq")
+            for r in recs:
+                print(f"  wq#{r['ticket']} aq_rc={r.get('aq_rc')}")
+        return 0
     apply = bool(a.apply and not a.dry_run)
     if apply and not writes_enabled():
         print("FOREMAN_LIVENESS_CLEAR=0 — forced report-only", file=sys.stderr)

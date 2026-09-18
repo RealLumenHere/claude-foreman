@@ -232,3 +232,39 @@ def test_policy_grants_ignores_liveness(tmp_path):
     only_liveness = needs_mod.parse(None, "Liveness: node_healthy(thor), service_active(sshd@thor)")
     assert capability.policy_grants(only_liveness, policy_path=str(p)) == ([], [])
     assert capability.needs_nodes(only_liveness) == []
+
+
+# ---- wq#1676 items 3: git_clean, wq_field -------------------------------------------
+
+def test_git_clean_probe(tmp_path, monkeypatch):
+    import subprocess
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    assert liveness.run("git_clean", str(repo))[0] == liveness.SATISFIED
+    (repo / "f").write_text("x")
+    v, d = liveness.run("git_clean", str(repo))
+    assert v == liveness.STILL_BLOCKED and "dirty" in d
+    assert liveness.run("git_clean", str(tmp_path / "nope"))[0] == liveness.UNKNOWN   # not a directory
+    monkeypatch.setattr(liveness, "_sh", lambda argv, timeout=1, cwd=None: (99, "", "boom"))
+    assert liveness.run("git_clean", str(repo))[0] == liveness.UNKNOWN                # git/subprocess error
+
+
+def test_wq_field_probe(tmp_path, monkeypatch):
+    import sqlite3
+    db = tmp_path / "q.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY, status TEXT, review_verdict TEXT)")
+    con.executemany("INSERT INTO tasks VALUES (?, ?, ?)", [(1, "done", "accept"), (2, "open", None)])
+    con.commit(); con.close()
+    monkeypatch.setattr(liveness, "WQ_DB", str(db))
+    assert liveness.run("wq_field", "1, status, done")[0] == liveness.SATISFIED
+    assert liveness.run("wq_field", "1, status, blocked")[0] == liveness.STILL_BLOCKED
+    assert liveness.run("wq_field", "2, review_verdict, accept")[0] == liveness.STILL_BLOCKED  # NULL != 'accept'
+    assert liveness.run("wq_field", "999, status, done")[0] == liveness.UNKNOWN        # no such row
+    assert liveness.run("wq_field", "abc, status, done")[0] == liveness.UNKNOWN        # bad id
+    v, d = liveness.run("wq_field", "1, drop table tasks;--, done")                    # untrusted column, whitelisted
+    assert v == liveness.UNKNOWN and "no column" in d
+    monkeypatch.setattr(liveness, "WQ_DB", str(tmp_path / "missing.db"))
+    assert liveness.run("wq_field", "1, status, done")[0] == liveness.UNKNOWN          # db unreadable

@@ -83,10 +83,10 @@ def _http(url, headers=None, data=None, method=None):
         return 0, str(e)[:120]
 
 
-def _sh(argv, timeout=SSH_TIMEOUT_S):
+def _sh(argv, timeout=SSH_TIMEOUT_S, cwd=None):
     """argv list, never a shell string. (rc, stdout, stderr); rc 99 on exception."""
     try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
         return p.returncode, p.stdout.strip(), p.stderr.strip()
     except Exception as e:
         return 99, "", str(e)[:120]
@@ -352,6 +352,52 @@ def json_gte(path, key, minimum):
 
 
 # ---------------------------------------------------------------------------
+# wq#1676 probes: covers #1356's class (dirty worktree) and decide-chains like #124/#940
+# ---------------------------------------------------------------------------
+
+def git_clean(repo):
+    """`git status --porcelain` in <repo> is empty. SATISFIED = the tree has nothing
+    uncommitted. UNKNOWN on a bad path or any git/subprocess error, never a guess."""
+    if not os.path.isdir(repo):
+        return UNKNOWN, f"{repo} not a directory"
+    rc, out, err = _sh(["git", "status", "--porcelain"], cwd=repo)
+    if rc != 0:
+        return UNKNOWN, f"git status rc={rc}: {err[:80]}"
+    if out.strip():
+        n = len(out.strip().splitlines())
+        return STILL_BLOCKED, f"{repo} dirty ({n} entr{'y' if n == 1 else 'ies'})"
+    return SATISFIED, f"{repo} clean"
+
+
+def wq_field(id, col, val):
+    """Column <col> of wq#<id> in queue.db's `tasks` table equals <val> (string compare).
+    col is untrusted (it comes from a Liveness: line an agent wrote) so it is checked
+    against PRAGMA table_info(tasks) before being interpolated into the SELECT."""
+    try:
+        tid = int(str(id).lstrip("wq#"))
+    except ValueError:
+        return UNKNOWN, f"bad ticket id {id!r}"
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{WQ_DB}?mode=ro", uri=True)
+        try:
+            cols = {r[1] for r in con.execute("PRAGMA table_info(tasks)")}
+            if col not in cols:
+                return UNKNOWN, f"tasks has no column {col!r}"
+            row = con.execute(f"SELECT {col} FROM tasks WHERE id=?", (tid,)).fetchone()  # noqa: S608 col whitelisted above
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return UNKNOWN, f"queue.db: {str(e)[:60]}"
+    if row is None:
+        return UNKNOWN, f"wq#{tid} not in queue.db"
+    actual = "" if row[0] is None else str(row[0])
+    if actual == str(val):
+        return SATISFIED, f"wq#{tid}.{col} == {val!r}"
+    return STILL_BLOCKED, f"wq#{tid}.{col} == {actual!r}, want {val!r}"
+
+
+# ---------------------------------------------------------------------------
 # registry — the closed vocabulary a `Liveness:` line may use (§5, §6, §13)
 # ---------------------------------------------------------------------------
 
@@ -367,6 +413,8 @@ PROBES = {
     "pr_merged": pr_merged,
     "file_contains": file_contains,
     "json_gte": json_gte,
+    "git_clean": git_clean,
+    "wq_field": wq_field,
 }
 PROBE_NAMES = tuple(PROBES)
 

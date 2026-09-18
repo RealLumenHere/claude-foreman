@@ -107,17 +107,23 @@ def audit_lines(env):
 # ---------------------------------------------------------------------------
 
 def test_i_seeded_done_gate_autocloses_on_sweep(env, tmp_path):
+    """(i) open/frank_gated close --to done as before; (ii) wq#1676: the blocked row
+    closes --to open instead — the block premise cleared, its own work is still owed."""
     lc = clear_mod(env)
     marker = tmp_path / "done.marker"; marker.write_text("x")
     ids = [seed(env, "frank-cred", "[t-i] cred lane open", f"seed\nLiveness: path_exists({marker})"),
            seed(env, "user", "[t-i] user lane blocked", f"seed\nLiveness: path_exists({marker})", status="blocked"),
            seed(env, "user", "[t-i] user lane frank_gated", f"seed\nLiveness: path_exists({marker})", frank_gated=True)]
+    expect_status = {ids[0]: "done", ids[1]: "open", ids[2]: "done"}
     recs = lc.sweep(apply=True, ids=ids, db=env["db"], ledger=env["env"]["FOREMAN_LIVENESS_LEDGER"])
     assert [r["action"] for r in recs] == ["closed"] * 3, recs
     for tid in ids:
         r = row(env, tid)
-        assert r["status"] == "done" and r["done_at"]
-        assert "[liveness auto-clear wq#1478]" in r["notes"] and "SATISFIED" in r["notes"]
+        want = expect_status[tid]
+        assert r["status"] == want
+        assert bool(r["done_at"]) == (want == "done")
+        assert "[liveness auto-clear wq#1478]" in r["notes"]
+        assert f"-> {want}" in r["notes"] and "SATISFIED" in r["notes"]
         assert "[liveness] auto-clear SATISFIED" in r["notes"]  # the pre-close note survived
     assert {a["ticket"] for a in audit_lines(env) if a["action"] == "closed"} >= set(ids)
 
@@ -257,12 +263,25 @@ def test_vii_creation_gate(env, tmp_path, monkeypatch):
     # STILL_BLOCKED files normally
     p = run(env, "add", "--lane", "user", "--title", "[t-vii] blocked ok", "--detail", f"x\nLiveness: path_exists({tmp_path}/missing)")
     assert p.returncode == 0 and "STILL_BLOCKED" in p.stdout
-    # tagless: warn by default, refuse in strict
+    # wq#1676: tagless refuses by default now (mandatory at the on-ramp)
     p = run(env, "add", "--lane", "user", "--title", "[t-vii] tagless", "--detail", "buy a thing")
+    assert p.returncode == 6 and "can never auto-clear" in p.stderr
+    # FOREMAN_LIVENESS_CLEAR=warn is the 7-day rollout knob: NO_TAG is warn-only again
+    e = dict(env["env"], FOREMAN_LIVENESS_CLEAR="warn")
+    p = subprocess.run([env["wq"], "add", "--lane", "user", "--title", "[t-vii] tagless warn", "--detail", "buy"], env=e, capture_output=True, text=True)
     assert p.returncode == 0 and "can never auto-clear" in p.stderr
-    e = dict(env["env"], FOREMAN_LIVENESS_LINT_MODE="strict")
-    p = subprocess.run([env["wq"], "add", "--lane", "user", "--title", "[t-vii] tagless strict", "--detail", "buy"], env=e, capture_output=True, text=True)
-    assert p.returncode == 6
+    # --no-probe is the physical-task escape hatch: files it, stamps the marker, no refusal
+    p = run(env, "add", "--lane", "user", "--title", "[t-vii] no-probe", "--detail", "buy a thing",
+            "--no-probe", "physical")
+    assert p.returncode == 0 and "no-probe" in p.stdout.lower(), p.stdout + p.stderr
+    tid = int(p.stdout.split("added task ")[1].split()[0])
+    assert "[NO-PROBE: physical]" in row(env, tid)["detail"]
+    # --liveness injects the tag before the check; a STILL_BLOCKED premise files normally
+    p = run(env, "add", "--lane", "user", "--title", "[t-vii] liveness flag", "--detail", "buy a thing",
+            "--liveness", f"path_exists({tmp_path}/missing)")
+    assert p.returncode == 0 and "STILL_BLOCKED" in p.stdout
+    tid = int(p.stdout.split("added task ")[1].split()[0])
+    assert f"Liveness: path_exists({tmp_path}/missing)" in row(env, tid)["detail"]
     # non-gated lane untouched
     p = run(env, "add", "--lane", "build", "--title", "[t-vii] build lane", "--detail", "normal")
     assert p.returncode == 0 and "liveness" not in (p.stdout + p.stderr).lower()
@@ -296,7 +315,10 @@ def test_dispatch_hook_is_cheap_and_closes_known(env, tmp_path):
 
 def test_scope_all_reaches_non_frank_tickets_and_is_idempotent(env, tmp_path):
     """(i) a build-lane blocked ticket (NOT frank-gated) with a done premise is invisible
-    to the default scope and closes under --scope all; a second apply = 0 new closes."""
+    to the default scope and closes under --scope all; wq#1676: it closes --to open (the
+    block premise cleared, the ticket's own work is still owed, not done), and its
+    Liveness: line is stripped so it does not keep re-satisfying the same probe. A
+    second apply finds it NO_TAG (untouched) and 0 new closes."""
     lc = clear_mod(env)
     import liveness_sweep
     marker = tmp_path / "landed"; marker.write_text("x")
@@ -310,12 +332,14 @@ def test_scope_all_reaches_non_frank_tickets_and_is_idempotent(env, tmp_path):
     assert row(env, tid)["status"] == "blocked"
     recs = lc.sweep(scope="all", **kw)
     assert {r["ticket"]: r["action"] for r in recs} == {tid: "closed", kept: "kept"}
-    assert row(env, tid)["status"] == "done" and row(env, kept)["status"] == "blocked"
+    assert row(env, tid)["status"] == "open" and row(env, kept)["status"] == "blocked"
+    assert "Liveness:" not in row(env, tid)["detail"]
     closed = [a for a in audit_lines(env) if a["ticket"] == tid and a["action"] == "closed"]
     assert len(closed) == 1 and closed[0]["probes"][0]["verdict"] == "SATISFIED"
-    # idempotent: the done ticket has left OPEN_STATUSES, nothing else changes
+    # idempotent: the Liveness: line is gone, so a rescan reports NO_TAG (untouched), not
+    # a second close — the ticket does not silently complete itself with no work done.
     recs2 = lc.sweep(scope="all", **kw)
-    assert [r["ticket"] for r in recs2] == [kept] and recs2[0]["action"] == "kept"
+    assert {r["ticket"]: r["action"] for r in recs2} == {tid: "none", kept: "kept"}
     assert len([a for a in audit_lines(env) if a["action"] == "closed" and a["ticket"] == tid]) == 1
 
 
@@ -355,3 +379,73 @@ def test_scope_default_unchanged_for_timer():
     assert inspect.signature(liveness_sweep.sweep).parameters["scope"].default == "frank"
     with pytest.raises(ValueError):
         liveness_sweep.tickets_in_scope("everything")
+
+
+# ---- wq#1676: mandatory tag at the on-ramp, block gating, --to open, derivation -----
+
+def test_block_creation_gate_and_liveness_flags(env, tmp_path):
+    """wq block was ungated (LIVENESS_GATE.md §3); now it shares the same mandatory
+    on-ramp as add/decide — --no-probe and --liveness both satisfy it."""
+    tid = seed(env, "build", "[t-block] needs tag", "seed detail")
+    assert run(env, "claim", "--id", tid).returncode == 0
+    p = run(env, "block", tid, "waiting on something")
+    assert p.returncode == 6 and "can never auto-clear" in p.stderr
+    assert row(env, tid)["status"] != "blocked"
+    p = run(env, "block", tid, "waiting on something", "--no-probe", "physical")
+    assert p.returncode == 0
+    r = row(env, tid)
+    assert r["status"] == "blocked" and "[NO-PROBE: physical]" in r["detail"]
+
+    tid2 = seed(env, "build", "[t-block] with tag", "seed detail")
+    assert run(env, "claim", "--id", tid2).returncode == 0
+    marker = tmp_path / "missing-dep"
+    p = run(env, "block", tid2, "waiting on dep", "--liveness", f"path_exists({marker})")
+    assert p.returncode == 0
+    r2 = row(env, tid2)
+    assert r2["status"] == "blocked" and f"Liveness: path_exists({marker})" in r2["detail"]
+
+
+def test_liveness_close_to_open(env, tmp_path):
+    """wq#1676 item 4: --to open only for a currently-blocked row; it goes open (not
+    done), claimable, no done_at, notes stamped with the target."""
+    marker = tmp_path / "m-open"; marker.write_text("x")
+    tid = seed(env, "build", "[t-open] blocked", f"seed\nLiveness: path_exists({marker})", status="blocked")
+    tid_fg = seed(env, "user", "[t-open] frank_gated", f"seed\nLiveness: path_exists({marker})", frank_gated=True)
+    p = run(env, "liveness-close", tid_fg, "--verdict", "path_exists -> SATISFIED", "--to", "open")
+    assert p.returncode != 0 and "--to open only applies to a blocked row" in p.stderr
+    assert row(env, tid_fg)["status"] == "frank_gated"
+    p = run(env, "liveness-close", tid, "--verdict", "path_exists -> SATISFIED", "--to", "open")
+    assert p.returncode == 0, p.stdout + p.stderr
+    r = row(env, tid)
+    assert r["status"] == "open" and not r["done_at"]
+    assert "-> open" in r["notes"] and "SATISFIED" in r["notes"]
+
+
+def test_derive_probe_unit(tmp_path):
+    import liveness_clear as lc_mod
+    assert lc_mod.derive_probe("blocked on wq#42") == "ticket_done(42)"
+    assert lc_mod.derive_probe("see https://github.com/o/r/pull/7") == "pr_merged(o/r, 7, merged, github)"
+    assert lc_mod.derive_probe("see http://gitea.local/o/r/pulls/9") == "pr_merged(o/r, 9)"
+    assert lc_mod.derive_probe(f"path at {tmp_path}/thing needs doing") == f"path_exists({tmp_path}/thing)"
+    assert lc_mod.derive_probe("nothing parseable here") is None
+    ledger = tmp_path / "ledger.yaml"
+    ledger.write_text(
+        "credentials:\n  gh:\n    path: /home/lumen/.secrets/github-frank.token\n"
+        "    verify_url: https://api.github.com/user\n"
+        "    probe: cred_alive(/home/lumen/.secrets/github-frank.token, https://api.github.com/user)\n")
+    assert lc_mod.derive_probe("token at /home/lumen/.secrets/github-frank.token", str(ledger)) == \
+        "cred_alive(/home/lumen/.secrets/github-frank.token, https://api.github.com/user)"
+    assert lc_mod.derive_probe("token at /home/lumen/.secrets/unknown.token", str(ledger)) is None
+
+
+def test_accept_probe_derives_and_writes_tag(env):
+    """--accept-probe writes derive_probe()'s proposal exactly as --liveness would."""
+    dep = seed(env, "build", "[t-derive] dep", "seed")
+    p = run(env, "add", "--lane", "user", "--title", "[t-derive] blocked on dep",
+            "--detail", f"blocked on wq#{dep}")
+    assert p.returncode == 6 and f"ticket_done({dep})" in p.stderr
+    p = run(env, "add", "--lane", "user", "--title", "[t-derive] blocked on dep 2",
+            "--detail", f"blocked on wq#{dep}", "--accept-probe")
+    assert p.returncode == 0, p.stdout + p.stderr
+    tid = int(p.stdout.split("added task ")[1].split()[0])
+    assert f"Liveness: ticket_done({dep})" in row(env, tid)["detail"]

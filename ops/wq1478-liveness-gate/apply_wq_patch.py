@@ -40,37 +40,65 @@ def _liveness_module():
         warn(f"liveness gate unavailable ({e.__class__.__name__}: {e}) — filing without it")
         return None
 
-def _liveness_creation_check(title, detail, lane, frank_gated, force=False, verb="add"):
-    """Refuse (exit 1) a Frank-gate whose premise is already met; warn on a tagless one.
-    FOREMAN_LIVENESS_CLEAR=0 -> warn-only. --force files it with the verdict printed."""
+def _liveness_creation_check(title, detail, lane, frank_gated, force=False, verb="add",
+                              liveness=None, no_probe=None, accept_probe=False):
+    """Refuse a Frank-gate whose premise is already met, or (wq#1676) whose Liveness:
+    line is simply missing — mandatory at the on-ramp now, not a warning. --liveness
+    injects the tag before the check; --no-probe records the physical-task escape hatch
+    and skips the refusal; --accept-probe writes derive_probe()'s proposal when one
+    exists. FOREMAN_LIVENESS_CLEAR=0 -> warn-only (the existing writes-disabled knob);
+    =warn -> NO_TAG itself is warn-only (the NEW 7-day mandatory-tag rollout knob).
+    --force files it anyway, verdict printed. Returns the (possibly Liveness:/[NO-PROBE:
+    -augmented) detail text; callers persist it (add: before INSERT; block/decide: UPDATE)."""
+    detail = detail or ""
+    if liveness:
+        detail = detail.rstrip("\n") + "\nLiveness: " + liveness
     lc = _liveness_module()
     if lc is None:
-        return
+        return detail
     try:
         ok, verdict, msg = lc.creation_check(title, detail, lane, frank_gated)
     except Exception as e:  # noqa: BLE001
-        warn(f"liveness creation check crashed ({e!r}) — filing without it"); return
+        warn(f"liveness creation check crashed ({e!r}) — filing without it"); return detail
     if verdict == "NOT_GATED":
-        return
+        return detail
+    if verdict == "NO_TAG" and no_probe:
+        print(f"liveness: NO_TAG — recorded --no-probe {no_probe!r}, filed without a tag")
+        return detail.rstrip("\n") + f"\n[NO-PROBE: {no_probe}]"
+    if verdict == "NO_TAG" and accept_probe and not liveness:
+        proposal = lc.derive_probe(f"{title or ''}\n{detail}")
+        if proposal:
+            print(f"liveness: --accept-probe writing derived tag: Liveness: {proposal}")
+            detail = detail.rstrip("\n") + "\nLiveness: " + proposal
+            try:
+                ok, verdict, msg = lc.creation_check(title, detail, lane, frank_gated)
+            except Exception as e:  # noqa: BLE001
+                warn(f"liveness creation check crashed ({e!r}) — filing without it"); return detail
+        else:
+            print("liveness: --accept-probe requested but nothing parseable was found")
     if ok:
         if verdict == "NO_TAG":
             warn(f"liveness: {msg}")
         elif msg:
             print(f"liveness: {verdict} — {msg}")
-        return
+        return detail
     if force or os.environ.get("FOREMAN_LIVENESS_CLEAR", "1") == "0":
         warn(f"liveness {verdict} overridden ({'--force' if force else 'FOREMAN_LIVENESS_CLEAR=0'}): {msg}")
-        return
-    eprint(f"REFUSED: wq#1478 liveness gate — {verb} not done. {msg}")
-    eprint("  A Frank-gate whose premise is already met on live state is the redo loop; fix the")
-    eprint("  premise (or the Liveness: line) instead. --force files it anyway, on the record.")
+        return detail
+    eprint(f"REFUSED: wq#1478/wq#1676 liveness gate — {verb} not done. {msg}")
+    eprint("  A Frank-gate needs a machine-checkable premise: --liveness \"<probe>(...)\", or")
+    eprint("  --no-probe \"<why no deterministic check exists>\" for a physical task. --force")
+    eprint("  files it anyway, on the record; FOREMAN_LIVENESS_CLEAR=warn is the 7-day rollout knob.")
     sys.exit(6)
 
 def cmd_liveness_close(a):
-    """wq#1478 Slice 3: close a Frank-gated ticket whose Liveness: premise is SATISFIED.
-    No claim (user lane stays never-agent-claimable); instead THREE narrow guards:
-    caller base must be liveness-clear, the ticket must carry a Liveness: line (or a
-    ledger binding named on the call), status must be one that Frank would see.
+    """wq#1478 Slice 3 + wq#1676 item 4: close (default --to done) or unblock (--to open)
+    a ticket whose Liveness: premise is SATISFIED. No claim (user lane stays never-
+    agent-claimable); THREE narrow guards: caller base must be liveness-clear, the
+    ticket must carry a Liveness: line (or a ledger binding named on the call), status
+    must be one Frank would see. --to open is refused unless the row is currently
+    blocked — a blocked row whose tag clears goes back to open (claimable, the work is
+    still owed), not done; every other prior status only ever closes --to done.
     notes gets the probe verdict verbatim in the wq#759 [NO-ARTIFACT: ...] shape."""
     ping("liveness-close")
     caller, _ = resolve_identity(a)
@@ -85,11 +113,16 @@ def cmd_liveness_close(a):
     if not r:
         c.execute("COMMIT"); c.close(); eprint(f"REFUSED: no such task {a.id}"); sys.exit(1)
     st, detail, prev_notes, lane = r
+    to = getattr(a, "to", "done") or "done"
     if st == 'done':
         c.execute("COMMIT"); c.close(); print(f"already done wq#{a.id}"); return
     if st not in ('open', 'blocked', 'frank_gated', 'pending_review'):
         c.execute("COMMIT"); c.close()
         eprint(f"REFUSED: wq#{a.id} is {st!r} — liveness-close only acts on open/blocked/frank_gated/pending_review")
+        sys.exit(1)
+    if to == "open" and st != "blocked":
+        c.execute("COMMIT"); c.close()
+        eprint(f"REFUSED: --to open only applies to a blocked row (wq#{a.id} is {st!r}) — wq#1676")
         sys.exit(1)
     has_line = "Liveness:" in (detail or "")
     if not has_line and not getattr(a, "binding", None):
@@ -101,29 +134,42 @@ def cmd_liveness_close(a):
         c.execute("COMMIT"); c.close()
         eprint("REFUSED: --verdict must carry the probe's SATISFIED detail verbatim"); sys.exit(1)
     src = "Liveness: line" if has_line else f"ledger binding {a.binding}"
-    stamped = f"[{now()}] [liveness auto-clear wq#1478] from {st} via {src} [NO-ARTIFACT: liveness: {verdict}]"
+    stamped = f"[{now()}] [liveness auto-clear wq#1478] from {st} via {src} -> {to} [NO-ARTIFACT: liveness: {verdict}]"
     notes = ((prev_notes + "\n") if prev_notes else "") + stamped
     clr = lease_clear_sql(c)
-    c.execute(f"UPDATE tasks SET status='done', done_at=?, notes=?, claimed_by=?, lease_expires=NULL, "
-              f"lease_ttl=NULL, block_reason=NULL, blocked_at=NULL, hold_by=NULL, hold_expires=NULL{clr} "
-              f"WHERE id=?", (now(), notes, caller, a.id))
+    if to == "open":
+        c.execute(f"UPDATE tasks SET status='open', notes=?, claimed_by=NULL, claimed_at=NULL, "
+                  f"lease_expires=NULL, lease_ttl=NULL, block_reason=NULL, blocked_at=NULL, "
+                  f"hold_by=NULL, hold_expires=NULL{clr} WHERE id=?", (notes, a.id))
+    else:
+        c.execute(f"UPDATE tasks SET status='done', done_at=?, notes=?, claimed_by=?, lease_expires=NULL, "
+                  f"lease_ttl=NULL, block_reason=NULL, blocked_at=NULL, hold_by=NULL, hold_expires=NULL{clr} "
+                  f"WHERE id=?", (now(), notes, caller, a.id))
     c.execute("COMMIT"); c.close()
-    print(f"liveness-closed wq#{a.id} ({lane}/{st} -> done): {verdict[:160]}")
+    print(f"liveness-closed wq#{a.id} ({lane}/{st} -> {to}): {verdict[:160]}")
 # --- end wq#1478 helpers ---
 '''
 
-ADD_HOOK = '''    # wq#1478: creation gate — a Frank-gate whose premise is already met is not filed
-    _liveness_creation_check(a.title, a.detail, a.lane, frank_gated, force=a.force, verb="add")
+ADD_HOOK = '''    # wq#1478: creation gate — a Frank-gate whose premise is already met is not filed;
+    # wq#1676: one with no Liveness: line at all is refused unless --no-probe/--accept-probe
+    a.detail = _liveness_creation_check(a.title, a.detail, a.lane, frank_gated, force=a.force, verb="add",
+                                        liveness=getattr(a, "liveness", None), no_probe=getattr(a, "no_probe", None),
+                                        accept_probe=getattr(a, "accept_probe", False))
 '''
-DECIDE_HOOK = '''    # wq#1478: decide gate — queueing a question whose answer is on disk is the redo loop
+DECIDE_HOOK = '''    # wq#1478: decide gate — queueing a question whose answer is on disk is the redo loop;
+    # wq#1676: --liveness/--no-probe/--accept-probe stamp the tag at decide time too
     _lc_row = c.execute("SELECT title, detail, lane FROM tasks WHERE id=?", (a.id,)).fetchone()
     c.execute("COMMIT"); c.close()
-    _liveness_creation_check(_lc_row[0], _lc_row[1], _lc_row[2], True, verb="decide")
+    _lc_new_detail = _liveness_creation_check(_lc_row[0], _lc_row[1], _lc_row[2], True, verb="decide",
+                                              liveness=getattr(a, "liveness", None), no_probe=getattr(a, "no_probe", None),
+                                              accept_probe=getattr(a, "accept_probe", False))
     c = conn(); c.isolation_level = None
     c.execute("BEGIN IMMEDIATE")
+    if _lc_new_detail != (_lc_row[1] or ""):
+        c.execute("UPDATE tasks SET detail=? WHERE id=?", (_lc_new_detail, a.id))
 '''
 PARSER = '''# wq#1478: liveness-close verb
-s=sub.add_parser("liveness-close",help="wq#1478: close a Frank-gated ticket whose Liveness: premise is SATISFIED on live state (liveness-clear identity only, no claim)"); s.add_argument("id",type=int); s.add_argument("--verdict",required=True,help="the probe verdict text, verbatim, must contain SATISFIED"); s.add_argument("--binding",default=None,help="ledger binding used when the ticket has no Liveness: line"); s.add_argument("--agent",default=None); s.set_defaults(f=cmd_liveness_close)
+s=sub.add_parser("liveness-close",help="wq#1478: close a Frank-gated ticket whose Liveness: premise is SATISFIED on live state (liveness-clear identity only, no claim)"); s.add_argument("id",type=int); s.add_argument("--verdict",required=True,help="the probe verdict text, verbatim, must contain SATISFIED"); s.add_argument("--binding",default=None,help="ledger binding used when the ticket has no Liveness: line"); s.add_argument("--to",choices=["done","open"],default="done",help="wq#1676: done (default) or open — a blocked row whose tag clears goes blocked->open (claimable), not done"); s.add_argument("--agent",default=None); s.set_defaults(f=cmd_liveness_close)
 '''
 
 ANCHOR_HELPERS = "def cmd_add(a):"
