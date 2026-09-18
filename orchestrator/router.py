@@ -111,7 +111,11 @@ LANE_REPO = {
     "ops": FOREMAN_ROOT,
     "quest-repair-research": FOREMAN_ROOT,
     "fleet-fires": FOREMAN_ROOT,          # fires are fleet/infra work, run from foreman
-    "research": FOREMAN_ROOT,             # research docs land in foreman/research/ (wq#1334; exec-capability doc PR#237)
+    "research": FOREMAN_ROOT,             # cwd is FOREMAN_ROOT itself, so research docs land in
+                                           # research/NAME.md (NOT foreman/research/NAME.md, which
+                                           # double-nests to FOREMAN_ROOT/foreman/research/) (wq#1334;
+                                           # exec-capability doc PR#237; wq#1976 fixed this misleading
+                                           # comment after it caused 5 docs to double-nest)
     "pilot": FOREMAN_ROOT,                # wq#1559: pilot cards/reports land in foreman/pilots/<proposal-id>/.
                                           # The EXPERIMENT runs on a fleet node (hathor first), but the
                                           # artifacts of record — CARD.md, REPORT.md — are foreman files,
