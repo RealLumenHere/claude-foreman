@@ -706,9 +706,13 @@ def _burn_gov(session_pct, session_reset_h, weekly_pct, weekly_reset_h, severity
 def test_burn_rate_cap_replaces_binary_tight_clamp(denv):
     """wq#1669/wq#1699: governor pressure tight + usable percent/resets_at -> the
     burn-rate controller owns the ceiling (scaled, no tight_pri filter), not
-    tight_mode's binary 1. session 70% used with 30min to reset = an expiring budget:
-    30%/0.5h over 1.5%/worker-h supports 40 concurrent, clamped to cloud_ceiling 3."""
-    denv["gov_state"].write_text(json.dumps(_burn_gov(70, 0.5, 10, 48, severity="warning")))
+    tight_mode's binary 1. session 55% used with 30min to reset = an expiring budget:
+    45% remaining less Frank's 30% session reserve (burn_rate.FRANK_RESERVE_PCT) is
+    15%/0.5h = 30%/h over 1.5%/worker-h -> 20 concurrent; weekly_all (90% remaining
+    less its 15% reserve, over 48h) is the tighter pool at 4.5, clamped to
+    cloud_ceiling 3. wq#2004: this test was written at fee4c54 and read 70% here, which
+    c7cd075's reserve turned into zero spendable session budget -> ceiling 1."""
+    denv["gov_state"].write_text(json.dumps(_burn_gov(55, 0.5, 10, 48, severity="warning")))
     t1 = add_ticket("burn p1", pri=1)
     t2 = add_ticket("burn p2 spawns too", pri=2)
     assert fd.run_pass() == 0
@@ -826,16 +830,32 @@ def test_sec5_zero_floors_warning_does_not_throttle(denv, monkeypatch):
 
 def test_sec5_zero_floors_critical_engages_scaled_ceiling(denv, monkeypatch):
     """wq#1699 warning != critical: critical engages the controller even with floors
-    zeroed, but as a budget-scaled ceiling. 17% weekly with 4h to reset is an expiring
-    budget -> ceiling opens to cloud_ceiling; no binary clamp, no pri filter."""
+    zeroed, and the ceiling it hands back is budget-scaled rather than tight_mode's
+    binary clamp — so p2 tickets are still candidates (no tight_pri filter), they just
+    queue behind a narrow ceiling.
+
+    wq#2004: on these replayed sec-5 numbers that ceiling is now 1, not cloud_ceiling.
+    The test was written at fee4c54; c7cd075 then reserved a slice of each pool for
+    Frank's own interactive use, and at 83% weekly only 2% of the week sits above the
+    15% weekly reserve — 0.5%/h over 0.35%/worker-h = 1.4 -> 1. Session contributes
+    nothing at all (80% used vs a 30% reserve). That is the reserve working as
+    specified, not a regression: three concurrent workers on 2% of spendable weekly
+    budget is exactly what it exists to stop. The controller opening the ceiling to
+    cloud_ceiling is covered by test_burn_rate_cap_replaces_binary_tight_clamp."""
     _zero_floors(denv, monkeypatch)
     denv["gov_state"].write_text(json.dumps(_sec5_gov("critical")))
     ids = [add_ticket(f"sec5 crit p2 {n}", pri=2) for n in range(4)]
     assert fd.run_pass() == 0
-    assert [e["ticket"] for e in log_events(denv, "spawn")] == ids[:3]
-    assert len(log_events(denv, "burn_rate")) == 1
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == ids[:1]
+    burn = log_events(denv, "burn_rate")
+    assert len(burn) == 1 and "burn-rate ceiling 1" in burn[0]["reason"]
     assert log_events(denv, "tight_mode") == []
+    # the discriminator against the binary clamp: p2 is never filtered out, it is
+    # ceiling-bound, so the pass ends on the burn-rate concurrency gate.
     assert [e for e in log_events(denv, "skip") if e["reason"] == "tight_pri"] == []
+    stops = log_events(denv, "halt")
+    assert len(stops) == 1 and stops[0]["stage"] == "concurrency"
+    assert stops[0]["reason"] == "no_slots" and "burn-rate" in stops[0]["detail"]
 
 
 def test_burn_rate_fable_tight_never_halts_unflagged_pools(denv, monkeypatch):
@@ -1553,8 +1573,21 @@ def aq_rows(denv):
 @pytest.fixture
 def loop_guard(monkeypatch):
     """Trip on the 3rd pass instead of the 4th: the fixture's cloud_ceiling is 3, and
-    this test is about the guard, not the concurrency ceiling."""
+    this test is about the guard, not the concurrency ceiling.
+
+    wq#2004 (ISSUE-LOG #415): these tests fire back-to-back run_pass() calls that
+    production fires MINUTES apart (wq#1883 measured 4-5 min), and every pass in the
+    ISSUE-LOG #283 shape targets the same (ticket, attempt) because attempt_count never
+    moves. wq#1893's DEAD_OWNER_GRACE_S refuses to judge a reservation younger than 60s
+    — its owner may simply not have Popen'd yet — so in test time the second pass reads
+    every crashed worker's dangling reservation as "too young to reclaim" and refuses
+    before Popen, and the guard never gets a second spawn to count. Zeroing the grace is
+    how wq#1893's own suite models elapsed time (harness/tests/test_spawner.py:185-188,
+    :205-207) and leaves the reclaim decision to the signal that actually matters here:
+    reservation_owner_alive(), which crash_pass falsifies by clearing the unit list.
+    The grace itself is covered by test_spawner.py's racing-duplicate test."""
     monkeypatch.setattr(spawn_loop_guard, "SPAWN_LOOP_MAX", 2)
+    monkeypatch.setattr(spawner, "DEAD_OWNER_GRACE_S", 0)
 
 
 def crash_pass(denv, dry_run=False):
