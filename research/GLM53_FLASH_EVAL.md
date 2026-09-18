@@ -39,7 +39,7 @@ Session: fworker build lane • 2026-09-09
    - LPP brain (`pokemon/src/config.ts`) primary is `cerebras-oss-120b`,
      controlled by a systemd env drop-in
      (`/etc/systemd/system/lumen-pokemon-live.service.d/30-brain-env.conf` —
-     see `foreman/research/LPP_BRAIN_AB.md`), not by anything in the
+     see `research/LPP_BRAIN_AB.md`), not by anything in the
      `pokemon` repo itself. LPP is a live, actively-watched production game
      session (that same report documents a same-day brain swap and its
      crash-loop history) — swapping its primary brain on a rate-card
