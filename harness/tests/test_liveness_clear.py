@@ -384,17 +384,26 @@ def test_scope_default_unchanged_for_timer():
 # ---- wq#1676: mandatory tag at the on-ramp, block gating, --to open, derivation -----
 
 def test_block_creation_gate_and_liveness_flags(env, tmp_path):
-    """wq block was ungated (LIVENESS_GATE.md §3); now it shares the same mandatory
-    on-ramp as add/decide — --no-probe and --liveness both satisfy it."""
+    """wq block was ungated (LIVENESS_GATE.md §3); it shares add/decide's on-ramp, but
+    wq#1998 made it ADVISORY there: refusing returns before _finish(a, 'blocked'), so a
+    refusal strands the row 'claimed' under a caller that has already given up. An
+    untagged block warns and lands; --no-probe and --liveness still stamp the detail."""
     tid = seed(env, "build", "[t-block] needs tag", "seed detail")
     assert run(env, "claim", "--id", tid).returncode == 0
     p = run(env, "block", tid, "waiting on something")
-    assert p.returncode == 6 and "can never auto-clear" in p.stderr
-    assert row(env, tid)["status"] != "blocked"
-    p = run(env, "block", tid, "waiting on something", "--no-probe", "physical")
-    assert p.returncode == 0
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "can never auto-clear" in p.stderr and "NOT enforced at block" in p.stderr
     r = row(env, tid)
-    assert r["status"] == "blocked" and "[NO-PROBE: physical]" in r["detail"]
+    # no [NO-PROBE: ...] stamp on purpose — that marker is what age_alarm() skips on, and
+    # an untagged block is exactly the shape it must still file an aq row for.
+    assert r["status"] == "blocked" and "[NO-PROBE:" not in r["detail"]
+
+    tid_np = seed(env, "build", "[t-block] no-probe", "seed detail")
+    assert run(env, "claim", "--id", tid_np).returncode == 0
+    p = run(env, "block", tid_np, "waiting on something", "--no-probe", "physical")
+    assert p.returncode == 0, p.stdout + p.stderr
+    r_np = row(env, tid_np)
+    assert r_np["status"] == "blocked" and "[NO-PROBE: physical]" in r_np["detail"]
 
     tid2 = seed(env, "build", "[t-block] with tag", "seed detail")
     assert run(env, "claim", "--id", tid2).returncode == 0
