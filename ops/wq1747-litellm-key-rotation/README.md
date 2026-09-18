@@ -34,20 +34,33 @@ rotation itself — an operator with real proxy/filesystem access runs it.
    rewrite each file in place, byte-for-byte, preserving its mode (0600
    stays 0600). Only file *paths* are ever recorded/printed — never
    contents.
-5. **Restart**: map each rewritten file to the systemd unit(s) that source
-   it via `EnvironmentFile=` (searched under `/etc/systemd/system` and
-   `~/.config/systemd`, including drop-ins), and restart them via detached
-   `systemd-run --collect` (per the Commander-path instinct: never a
-   foreground restart from an unattended script). Units listed in
-   `never-restart-units.txt` are skipped and printed for the operator
-   instead.
-6. **Verify**: one cheap `/chat/completions` call through the proxy with the
-   new key.
-7. **Record state**: `--state-dir/<alias>.json` holds the alias's
+5. **Record state**: `--state-dir/<alias>.json` holds the alias's
    post-rotation token sha256, so a re-run with nothing changed is a no-op
    (`already_rotated`) instead of rotating again — this is what makes the
    script idempotent, since LiteLLM's regenerate endpoint itself is not
-   (every call mints a fresh key).
+   (every call mints a fresh key). The marker goes down *before* the restarts
+   because regenerate+rewrite is the irreversible half: if it were written
+   after, a restart that throws would leave no marker and the next run would
+   mint yet another key instead of converging (wq#1977).
+6. **Restart**: map each rewritten file to the systemd unit(s) that source
+   it via `EnvironmentFile=` (searched under `/etc/systemd/system` and
+   `~/.config/systemd`, including drop-ins), and restart them via detached
+   `systemd-run --collect` (per the Commander-path instinct: never a
+   foreground restart from an unattended script). Each unit is restarted in
+   **its own scope**: a unit found on a `systemd/user` search path gets
+   `systemd-run --user … systemctl --user restart`, anything else gets the
+   system scope. Scope is read off the unit's own path, never off the env
+   file's — this fleet's env files sit under
+   `~/.secrets/litellm-service-keys/env/`, so an env-file heuristic calls
+   every alias system-scoped and silently leaves `--user` consumers running
+   on an already-invalidated key (wq#1977). Units listed in
+   `never-restart-units.txt` are skipped and printed for the operator
+   instead. A restart that fails is reported as `units_failed_restart` and
+   forces exit 1 rather than aborting the alias — the key is already rotated
+   and on disk at that point, so the operator restarts those by hand and a
+   re-run reports `already_rotated`.
+7. **Verify**: one cheap `/chat/completions` call through the proxy with the
+   new key.
 
 ## Credential hygiene
 
