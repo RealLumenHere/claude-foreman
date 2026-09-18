@@ -42,6 +42,27 @@ def renv(tmp_path, monkeypatch):
     monkeypatch.setattr(self_heal, "WQ_BIN", WQ_BIN)
     monkeypatch.setattr(runaway, "RUNAWAY_MAX_ATTEMPTS", 5)
 
+    # wq#1671: `wq init()` creates every column EXCEPT lease_owner/lease_expires_at/fence/
+    # attempt — those are gated behind the wq#1158 migration (bin/wq: LEASE_COLS,
+    # lease_fenced()) so an unmigrated DB keeps wq's pre-fence claim behaviour instead of
+    # silently changing the claim protocol underneath live sessions. Production HAS this
+    # migration applied (that's the only reason wq#1671's own evidence — e.g. wq#1961's
+    # attempt=10 — exists at all), so a scratch DB that skips it is not representative of
+    # what stuck_ticket_ids() actually runs against. Force one `wq add` first so init()
+    # creates the tasks table, then apply the real migration script.
+    add_ticket("wq#1158 migration seed — deleted immediately", lane="testlane")
+    mig = subprocess.run(
+        [sys.executable, "/home/lumen/bin/migrations/wq1158_lease_fence.py",
+         "--db", str(wq_db), "--yes"],
+        capture_output=True, text=True)
+    assert mig.returncode == 0, mig.stdout + mig.stderr
+    conn = sqlite3.connect(str(wq_db))
+    try:
+        conn.execute("DELETE FROM tasks")  # clear the seed row; real tests add their own
+        conn.commit()
+    finally:
+        conn.close()
+
     return {"tmp": tmp_path, "runs_root": runs_root, "wq_db": str(wq_db)}
 
 
@@ -149,6 +170,86 @@ def test_multiple_tickets_mixed(renv):
     set_status(done_tid, "done")
 
     assert set(runaway.stuck_ticket_ids()) == {stuck_tid}
+
+
+# ---- wq#1671: crash-before-charge -- the wq `attempt` DB column as a second signal -------
+
+def bump_db_attempt(tid, n):
+    """Set the wq row's own `attempt` column directly -- what `wq claim` increments on
+    every successful claim (bin/wq: COALESCE(attempt,0)+1), independent of whatever the
+    claimed process goes on to write under RUNS_ROOT. Tests use this instead of actually
+    claiming n times so they don't need a live fworker to reproduce the gap."""
+    db = os.environ["WQ_DB"]
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("UPDATE tasks SET attempt=? WHERE id=?", (n, tid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_db_attempt_column_catches_a_claim_that_never_wrote_a_file(renv):
+    """The class this ticket exists for: a ticket claimed 5 times, each claim dying
+    before write_attempt_state ever ran (unhandled exception, or a hard external kill
+    no except block can catch). attempt_count() alone sees zero files and never trips --
+    the wq column is the only thing that saw the 5 claims happen at all."""
+    tid = add_ticket()
+    d = renv["runs_root"] / f"wq{tid}"
+    d.mkdir(parents=True, exist_ok=True)  # run_dir() is created on claim; no attempt-N.json inside
+    bump_db_attempt(tid, 5)
+
+    assert self_heal.attempt_count(tid) == 0  # the blind spot, confirmed
+    stuck = runaway.stuck_ticket_ids()
+    assert set(stuck) == {tid}
+    assert stuck[tid]["attempts"] == 5
+
+
+def test_db_attempt_below_threshold_alone_does_not_trip(renv):
+    tid = add_ticket()
+    d = renv["runs_root"] / f"wq{tid}"
+    d.mkdir(parents=True, exist_ok=True)
+    bump_db_attempt(tid, 4)  # < RUNAWAY_MAX_ATTEMPTS=5
+
+    assert runaway.stuck_ticket_ids() == {}
+
+
+def test_effective_attempts_is_the_max_not_the_sum(renv):
+    """A ticket claimed once (db attempt=1) that then ran 6 real attempt-N.json rounds
+    inside that one claim (e.g. handle_resumable_failure's retry ladder) is a real 6-try
+    runaway on the file count alone -- summing the two counters (1+6=7) would still call
+    it stuck here, so this doesn't distinguish max from sum. The case that DOES: db
+    climbs past threshold on repeated crash-before-charge claims while a stray single
+    file sits in the run dir from one attempt that DID get far enough to write it. Sum
+    would double-count that lone file on top of every claim; max must not."""
+    tid = add_ticket()
+    make_attempts(renv, tid, 1)
+    bump_db_attempt(tid, 5)
+
+    stuck = runaway.stuck_ticket_ids()
+    assert set(stuck) == {tid}
+    assert stuck[tid]["attempts"] == 5  # max(1, 5), not 1+5=6
+
+
+def test_file_count_above_threshold_still_trips_even_if_db_column_is_low(renv):
+    """A resumed session can legitimately run several attempt-N.json rounds under ONE
+    wq claim (db attempt stays low) -- the pre-existing file-based path must keep
+    catching that shape; the new db check is additive, not a replacement."""
+    tid = add_ticket()
+    make_attempts(renv, tid, 6)
+    bump_db_attempt(tid, 1)
+
+    assert set(runaway.stuck_ticket_ids()) == {tid}
+
+
+def test_null_db_attempt_column_degrades_to_file_count_only(renv):
+    """wq_show()'s `attempt` can come back None/missing on a ticket schema this module
+    has never seen bump it (e.g. a hand-inserted fixture row) -- must not crash, must
+    not be treated as a huge int, just falls back to the file count."""
+    tid = add_ticket()
+    make_attempts(renv, tid, 3)
+    # deliberately do NOT call bump_db_attempt -- leave the column at its natural default
+
+    assert runaway.stuck_ticket_ids(threshold=3)[tid]["attempts"] == 3
 
 
 # ---- CLI ---------------------------------------------------------------------------------

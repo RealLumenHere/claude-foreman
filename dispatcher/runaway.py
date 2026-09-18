@@ -53,17 +53,44 @@ def candidate_ticket_ids():
 
 def stuck_ticket_ids(threshold=None):
     """{ticket_id: {"attempts", "status", "lane"}} for every non-done ticket at or
-    above the attempt threshold."""
+    above the attempt threshold.
+
+    wq#1671: attempt_count() only sees attempt-N.json files, which fworker writes at
+    write_attempt_state() well after wq_claim() already succeeded. A claim that then
+    dies before that point -- an unhandled exception in do_attempt() (wq#649's
+    make_worktree git-plumbing repro is the known case), or a hard external kill
+    (OOM/SIGKILL) that no Python except block can catch -- leaves n at 0 forever while
+    the ticket keeps getting reclaimed every pass. The wq row's own `attempt` column
+    (bin/wq: COALESCE(attempt,0)+1, written atomically IN the claiming UPDATE, wq#582)
+    has no such gap: it climbs on every successful claim regardless of what the
+    claimed process manages to write afterward, or whether it gets to run at all.
+    Comparing the wq column is not a replacement for the file count (a ticket can be
+    claimed once and legitimately spend N real attempts before any of them finishes,
+    which the file count still tracks correctly) -- it is a second, independent signal
+    that catches the specific class of loop the file count is structurally blind to.
+    Live evidence this is not theoretical: wq#1961 sits at file-count 1 / wq-column 10
+    as of 2026-09-18, 9 claims that produced no attempt-N.json.
+
+    effective_attempts is the max of the two counters, not their sum: a resumed
+    session's later attempts share one claim (one wq-column bump for possibly several
+    attempt-N.json files, e.g. handle_resumable_failure's retry ladder), so summing
+    would double count and could false-positive a ticket that is legitimately still
+    within budget."""
     threshold = threshold if threshold is not None else RUNAWAY_MAX_ATTEMPTS
     stuck = {}
     for tid in candidate_ticket_ids():
         n = self_heal.attempt_count(tid)
-        if n < threshold:
-            continue
         t = self_heal.wq_show(tid)
+        try:
+            db_attempts = int(t.get("attempt") or 0)
+        except (TypeError, ValueError):
+            db_attempts = 0
+        effective = max(n, db_attempts)
+        if effective < threshold:
+            continue
         if t.get("status") == "done":
             continue
-        stuck[tid] = {"attempts": n, "status": t.get("status"), "lane": t.get("lane")}
+        stuck[tid] = {"attempts": effective, "status": t.get("status"), "lane": t.get("lane")}
     return stuck
 
 

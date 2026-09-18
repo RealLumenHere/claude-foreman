@@ -2894,6 +2894,43 @@ def record_terminal_failure(ticket_id, attempt, classification, state, events,
     return rec, fpath
 
 
+def handle_unhandled_crash(args, ticket_id, attempt, tb, context="attempt"):
+    """wq#1671: an unhandled exception reaching cmd_run's outer try/except means
+    do_attempt() (or run_fire_ticket()) died before its OWN classify/write_attempt_state
+    ever ran -- the ticket was claimed (wq column bumped) but nothing on disk says so:
+    no attempt-N.json (self_heal.attempt_count/runaway.stuck_ticket_ids never see it) and,
+    until this fix, no failure.json either (runaway.harness_defect_ticket_ids, wq#1415,
+    never sees it). Both existing breakers are blind and the ticket just gets reclaimed
+    every pass. Bucketed HARNESS_DEFECT like handle_spawn_refused (wq#1331) -- same
+    reasoning: the run says nothing about the model or the ticket, only that the harness
+    broke before real work started, so attempt-N.json stays deliberately UNwritten (must
+    not eat into RUNAWAY_MAX_ATTEMPTS/circuit_breaker budget for a crash that has nothing
+    to do with the ticket's own difficulty) -- but failure.json now IS written, so
+    harness_defect_ticket_ids() holds the ticket open instead of respawning it blind,
+    exactly like a SpawnRefused. dispatcher/runaway.py's wq-attempt-column check (also
+    wq#1671) is the backstop for what even this handler cannot reach: a hard external
+    kill (OOM/SIGKILL) that runs no Python except block at all."""
+    log(f"CRASH: unhandled exception during wq#{ticket_id} {context} — releasing claim.\n{tb}")
+    try:
+        d = run_dir(ticket_id)
+        rec = failure_record.build_failure_record(
+            ticket=ticket_id, attempts=0, classification=LAUNCH_FAILURE,
+            block_class=BLOCK_HARNESS_DEFECT, events=[], worktree=None,
+            expected_repo=getattr(args, "repo", None), check_worktree=False)
+        rec["triage"] = failure_record.TRIAGE_HARNESS_DEFECT
+        rec["summary"] = f"unhandled exception in {context}: {tb.strip().splitlines()[-1][:200]}"
+        fpath = failure_record.write_failure_record(d, rec)
+        log(f"failure.json (uncharged, HARNESS_DEFECT) -> {fpath}")
+    except Exception as fe:  # noqa: BLE001 — this handler must never itself block the release
+        log(f"WARN: failed to write crash failure record for wq#{ticket_id}: {fe!r}")
+    wq_release(ticket_id)
+    ntfy("foreman CRASH",
+         f"wq#{ticket_id} {context} crashed (claim released): "
+         f"{tb.strip().splitlines()[-1]}", priority="high")
+    print("CRASH")
+    return EXIT_CRASH
+
+
 def handle_spawn_refused(args, ticket_id, e):
     """wq#1331 (§3.2): a SpawnRefused preflight is LAUNCH_FAILURE with the refusal
     reason, bucketed HARNESS_DEFECT like PERMISSION_LOOP (wq#1107) — the run says
@@ -3077,14 +3114,7 @@ def cmd_run(args):
             return handle_spawn_refused(args, args.ticket, e)
         except Exception:
             tb = traceback.format_exc()
-            log(f"CRASH: unhandled exception during wq#{args.ticket} fire-mode run — "
-                f"releasing claim.\n{tb}")
-            wq_release(args.ticket)
-            ntfy("foreman CRASH",
-                 f"wq#{args.ticket} fire-mode crashed (claim released): "
-                 f"{tb.strip().splitlines()[-1]}", priority="high")
-            print("CRASH")
-            return EXIT_CRASH
+            return handle_unhandled_crash(args, args.ticket, None, tb, context="fire-mode run")
 
     attempt = next_attempt_n(args.ticket)
     try:
@@ -3103,14 +3133,8 @@ def cmd_run(args):
         # immediately rather than leaving this for the lease reaper (reaper.py) to
         # reclaim minutes/hours later.
         tb = traceback.format_exc()
-        log(f"CRASH: unhandled exception during wq#{args.ticket} attempt {attempt} — "
-            f"releasing claim.\n{tb}")
-        wq_release(args.ticket)
-        ntfy("foreman CRASH",
-             f"wq#{args.ticket} attempt {attempt} crashed (claim released): "
-             f"{tb.strip().splitlines()[-1]}", priority="high")
-        print("CRASH")
-        return EXIT_CRASH
+        return handle_unhandled_crash(args, args.ticket, attempt, tb,
+                                       context=f"attempt {attempt}")
 
 
 def trigger_refill(ticket_id, outcome):
