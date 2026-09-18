@@ -269,7 +269,7 @@ verdict alone.
 
 glm-5.3-flash list is $0.15/M in, $0.03/M cached in, $0.50/M out
 (`ops/wq1591-glm53flash-pricing/litellm_config_snippet.yaml:29-37`; the OpenRouter
-promo rate of $0.075/$0.25 in `foreman/research/GLM53_FLASH_EVAL.md:8` is
+promo rate of $0.075/$0.25 in `research/GLM53_FLASH_EVAL.md:8` is
 promotional and should not be budgeted against). A T3 call is roughly 1.5k input
 (mostly cached prefix) and 60 output: about $0.00007. At the ~46 residual
 alerts/day that survive T0–T2, that is under $0.005/day. Even if T1/T2 were

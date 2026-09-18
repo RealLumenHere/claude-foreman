@@ -1,6 +1,6 @@
 # wq#1573 — glm-5.3-flash rung eval + instrumentation
 
-Full report: `foreman/research/GLM53_FLASH_EVAL.md`.
+Full report: `research/GLM53_FLASH_EVAL.md`.
 
 ## What's here
 
