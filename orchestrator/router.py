@@ -834,13 +834,18 @@ def wq(*args):
 
 
 def wq_show(ticket_id):
-    out = {}
-    for line in wq("show", str(ticket_id)).stdout.splitlines():
-        if ":" not in line:
-            continue
-        k, v = line.split(":", 1)
-        out[k.strip()] = v.strip()
-    if not out or out.get("id") is None:
+    """wq#1496: plain-text `wq show` escapes embedded newlines as literal backslash-n
+    (wq#1277), so a line-oriented parser here handed every MULTILINE-anchored regex a
+    detail/notes field with no real newlines to anchor on (verify_repo_hint,
+    repo_sweep.repo_hint, needs_repo_hint all read t.get('detail'/'notes') from this
+    dict). `wq show --json` (wq#1277) round-trips real newlines and native column
+    types via json.loads; use it instead of parsing the plain-text mode."""
+    p = wq("show", str(ticket_id), "--json")
+    try:
+        out = json.loads(p.stdout)
+    except ValueError:
+        raise SystemExit(f"router: no such ticket {ticket_id}")
+    if not isinstance(out, dict) or out.get("error") or out.get("id") is None:
         raise SystemExit(f"router: no such ticket {ticket_id}")
     return out
 
