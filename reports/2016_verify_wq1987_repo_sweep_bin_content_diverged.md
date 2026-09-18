@@ -118,3 +118,8 @@ wider `--add-dir`/path check next time, not a real wq#1112 regression).
 Neither fix applied here — verify-pass is not a re-implementation gate
 (precedent wq#872/wq#1268). Escalating to opus-5@high per this ticket's own
 instructions.
+
+**Resolved by wq#2017:** both contradictions upheld and fixed —
+`/home/lumen/bin/gatus` restored byte-for-byte from `847dc04:gatus`
+(untracked + gitignored, trivy shape), and the wq#1112 "known follow-up"
+note withdrawn. See `reports/2017_judgment_wq1987_bin_gatus_and_healer.md`.
