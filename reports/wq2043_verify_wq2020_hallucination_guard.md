@@ -38,3 +38,9 @@ Live probes ran against isis ollama (`qwen3.6:35b-a3b`), ~28s per claim (3 sampl
 ## ISSUE-LOG row (kb is read-only for workers; land this row when the kb is next synced)
 
 | 439 | wq#2043 verify of wq#2020: guard defaults to advisory, so every fworker `verify_done` and the fworker integration tests call live isis qwen (24s vs 4.4s per test; 79-test subset 6m22s); a hung isis costs 90s per claim x up to 6 serially per verify. Verify lane also refused `rm`/`unlink` of its own probe file, an `env VAR=x cmd` prefix, and Write/Edit under `/home/lumen/kb` | `claim_checker()` honours only the env var, tests never pin it off, no circuit breaker after first inconclusive; kb is a primary tree (wq#1719) | wq#2045 filed for conftest autouse off + short-circuit. Workarounds: `git clean -fq <file>`, in-process `pytest.main` with `os.environ` set | open |
+
+## Follow-up (wq#2045)
+
+1. `harness/tests/conftest.py` pins `FOREMAN_HALLUCINATION_GUARD=off` for every test (autouse); the guard's own tests inject `check=` or set the mode.
+2. `claim_check` stops after the first `inconclusive` verdict and marks the remaining claims `skipped` (`harness/hallucination_guard.py`, new `skipped` counter; covered by `test_first_inconclusive_short_circuits_the_remaining_claims`).
+3. Criterion-text fallback stays advisory: default mode is unchanged and `enforce` is not enabled anywhere. Revisit once advisory verdict data exists.

@@ -2732,8 +2732,8 @@ def verify_done(ticket_id, worktree, attempt, base_ref="origin/main"):
     cc = result.get("claim_check")
     if cc and (cc["flagged"] or cc["inconclusive"]):
         log(f"wq#{ticket_id}: hallucination guard ({cc['mode']}): "
-            f"{len(cc['flagged'])} flagged, {cc['inconclusive']} inconclusive of "
-            f"{len(cc['checked'])} claims")
+            f"{len(cc['flagged'])} flagged, {cc['inconclusive']} inconclusive, "
+            f"{cc.get('skipped', 0)} skipped of {len(cc['checked'])} claims")
     if tampered:
         result["ok"] = False
         result["failed"].insert(0, {

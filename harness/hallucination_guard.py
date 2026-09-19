@@ -292,11 +292,18 @@ def claims_from(acceptance, evidence, worktree):
 
 def claim_check(acceptance, evidence, worktree, check=check_claim, guard_mode=None):
     """Run the claim check over a worker's evidence. Returns {"mode", "checked",
-    "flagged", "inconclusive"}; `flagged` holds verify()-style failure records and is
-    only used to fail the gate in enforce mode."""
+    "flagged", "inconclusive", "skipped"}; `flagged` holds verify()-style failure records
+    and is only used to fail the gate in enforce mode. After the first `inconclusive`
+    verdict the remaining claims are marked `skipped`: a hung guard model would otherwise
+    cost REQUEST_TIMEOUT per claim."""
     guard_mode = guard_mode or mode()
-    result = {"mode": guard_mode, "checked": [], "flagged": [], "inconclusive": 0}
+    result = {"mode": guard_mode, "checked": [], "flagged": [], "inconclusive": 0, "skipped": 0}
     for cid, claim, source, citation in claims_from(acceptance, evidence, worktree):
+        if result["inconclusive"]:
+            result["checked"].append({"status": "skipped", "id": cid, "citation": citation,
+                                      "claim": claim, "error": "earlier claim was inconclusive"})
+            result["skipped"] += 1
+            continue
         verdict = dict(check(claim, source), id=cid, citation=citation)
         result["checked"].append(verdict)
         if verdict["status"] == "inconclusive":

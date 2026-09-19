@@ -191,6 +191,21 @@ def test_inconclusive_never_blocks_even_in_enforce(gate):
     assert r["ok"] and r["claim_check"]["inconclusive"] == 1
 
 
+def test_first_inconclusive_short_circuits_the_remaining_claims(gate):
+    ac, ev, wt = gate
+    ev["criteria"] += [dict(ev["criteria"][0], id="AC2"), dict(ev["criteria"][0], id="AC3")]
+    calls = []
+
+    def check(claim, src):
+        calls.append(claim)
+        return {"status": "inconclusive", "error": "timed out", "claim": claim}
+
+    cc = hg.claim_check(ac, ev, wt, guard_mode="advisory", check=check)
+    assert len(calls) == 1
+    assert [v["status"] for v in cc["checked"]] == ["inconclusive", "skipped", "skipped"]
+    assert cc["inconclusive"] == 1 and cc["skipped"] == 2 and not cc["flagged"]
+
+
 def test_no_claim_check_means_the_original_verdict(gate):
     ac, ev, wt = gate
     assert "claim_check" not in acceptance.verify(ac, ev, wt)
