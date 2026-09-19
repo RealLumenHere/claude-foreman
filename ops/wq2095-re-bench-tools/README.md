@@ -20,5 +20,9 @@ Entries (hardware entries carry no `path`, so the renderer's path-drift check sk
 | sigrok / logic analyzer | sigrok-cli + PulseView on maksoor; physical analyzer model unconfirmed |
 | maksoor RE workstation toolset | from `lumen_state.py current maksoor` (node_provisioning, 2026-09-17) |
 
+`install.sh --verify` (wq#2096, per `../VERIFY_CONTRACT.md`) is read-only: it checks the group and
+its entries are present in both `fleet_tools.yaml` and the rendered `FLEET_TOOLS.md`, and that
+`claude_context.sh` still injects `FLEET_TOOLS`. Without `--verify` it installs nothing and exits 2.
+
 Not verified: the Pico pin map (left to the pico-serprog README rather than guessed), which
 logic analyzer is physically attached, and whether the Picos already carry serprog firmware.
