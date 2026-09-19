@@ -103,11 +103,11 @@ def test_structural_skip_reasons_excluded_from_dispatchable():
         {"event": "skip", "reason": "vanished"},
         {"event": "skip", "reason": "fire_unapproved"},
         {"event": "skip", "reason": "fire_no_probe"},
-        {"event": "skip", "reason": "lane_cap"},       # NOT structural — real capacity skip
+        {"event": "skip", "reason": "lane_cap"},       # wq#2047: daily quota is structural
         {"event": "skip", "reason": "governor_deny"},  # NOT structural — budget skip
         {"event": "spawn"},
     ]
-    assert fd.count_structural_skips(events) == 9
+    assert fd.count_structural_skips(events) == 10
 
 
 def test_fire_gate_skips_excluded_from_dispatchable():
@@ -122,6 +122,13 @@ def test_fire_gate_skips_excluded_from_dispatchable():
     candidates = len(events)
     dispatchable = candidates - fd.count_structural_skips(events)
     assert dispatchable == 0
+
+
+def test_lane_capped_backlog_is_not_dispatchable():
+    # wq#2047: 12 pilot tickets all skipped lane_cap (max_per_day=3) must not read as
+    # dispatchable=12 spawned=0 — that was a false stall on a healthy dispatcher.
+    events = [{"event": "skip", "reason": "lane_cap"} for _ in range(12)]
+    assert len(events) - fd.count_structural_skips(events) == 0
 
 
 def test_dispatchable_zero_when_all_skips_structural():

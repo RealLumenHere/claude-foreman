@@ -167,6 +167,11 @@ STRUCTURAL_SKIP_REASONS = frozenset({
     # class as runaway_stuck — counting it as dispatchable would make the watchdog read
     # a working breaker as a dispatcher stall.
     "spawn_loop",
+    # wq#2047: a lane at its configured max_per_day (pilot=3) refuses on purpose until the
+    # UTC day rolls over — nothing the dispatcher or recovery ladder can change. Counted
+    # as dispatchable, 12 capped pilot tickets read as "dispatchable=12 spawned=0" every
+    # pass and the watchdog reported a stall on a dispatcher that was working.
+    "lane_cap",
 } | set(CAPABILITY_SKIP_REASONS))
 
 
