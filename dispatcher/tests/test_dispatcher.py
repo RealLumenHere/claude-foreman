@@ -372,6 +372,57 @@ def test_slock_busy_noop(denv):
     assert lumen_calls(denv) == []
 
 
+def _take_lock(holder):
+    p = subprocess.run([SLOCK_BIN, "acquire", fd.SLOCK_SCOPE, "--ttl", "5",
+                        "--holder", holder], capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+
+
+def _lock_holder():
+    p = subprocess.run([SLOCK_BIN, "who", fd.SLOCK_SCOPE], capture_output=True, text=True)
+    return p.stdout
+
+
+def test_slock_stolen_from_dead_pass(denv):
+    """wq#2080: lock left by a dead dispatcher pass must not wedge the next pass."""
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    _take_lock(f"foreman-dispatcher:{dead.pid}")
+    add_ticket("dead pass held the lock")
+    assert fd.run_pass() == 0
+    assert log_events(denv, "pass_start")
+    assert not [h for h in log_events(denv, "halt") if h["reason"] == "lock_busy"]
+    assert "foreman-dispatcher" not in _lock_holder()  # and it was released after
+
+
+def test_slock_not_stolen_from_live_pass(denv, monkeypatch):
+    """wq#2080: a live foreman_dispatcher holder is a real rival — never stolen."""
+    _take_lock(f"foreman-dispatcher:{os.getpid()+1}")
+    monkeypatch.setattr(fd, "_pass_pid_alive", lambda pid: True)
+    assert fd.run_pass() == 0
+    halts = log_events(denv, "halt")
+    assert len(halts) == 1 and halts[0]["reason"] == "lock_busy"
+    assert f"foreman-dispatcher:{os.getpid()+1}" in _lock_holder()
+
+
+def test_pass_pid_alive_recycled_pid_is_dead():
+    sleeper = subprocess.Popen(["sleep", "30"])
+    try:
+        assert not fd._pass_pid_alive(sleeper.pid)  # alive, but not a dispatcher
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_sigterm_releases_lock(denv, monkeypatch):
+    """wq#2080: TimeoutStartSec's SIGTERM must unwind through the slock release."""
+    add_ticket("term mid-pass")
+    monkeypatch.setattr(fd, "_do_pass", lambda *a, **k: fd._term_to_exit(15, None))
+    with pytest.raises(SystemExit):
+        fd.run_pass()
+    assert "foreman-dispatcher" not in _lock_holder()
+
+
 # ---- config fails closed -------------------------------------------------------------
 
 def test_invalid_config_fails_closed(denv):

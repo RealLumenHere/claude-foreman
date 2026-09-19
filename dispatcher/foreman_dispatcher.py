@@ -54,6 +54,7 @@ import json
 import os
 import random
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -420,13 +421,49 @@ def kill_switch():
     return None
 
 
+_DEAD_HOLDER_RE = re.compile(r"held by (foreman-dispatcher:(\d+))\b")
+
+
+def _pass_pid_alive(pid):
+    """True while `pid` is a live foreman_dispatcher process. A recycled PID (alive but
+    running something else) counts as dead: the pass that took the lock is gone."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return b"foreman_dispatcher" in f.read()
+    except OSError:
+        return True  # can't read it -> assume alive rather than steal from a live pass
+
+
+def _slock_run(action, holder):
+    argv = [SLOCK_BIN, action, SLOCK_SCOPE, "--holder", holder]
+    if action == "acquire":
+        argv += ["--ttl", SLOCK_TTL_MIN]
+    return subprocess.run(argv, capture_output=True, text=True, timeout=30)
+
+
 def slock_acquire():
+    """wq#2080: a DENIED whose holder is a dead foreman-dispatcher pass is a leaked lock
+    (SIGTERM at TimeoutStartSec skips `finally`), not a live rival — steal it and retry
+    once so one crashed pass can't wedge every later pass until the 30m TTL."""
     holder = f"foreman-dispatcher:{os.getpid()}"
     try:
-        p = subprocess.run([SLOCK_BIN, "acquire", SLOCK_SCOPE, "--ttl", SLOCK_TTL_MIN,
-                            "--holder", holder], capture_output=True, text=True, timeout=30)
+        p = _slock_run("acquire", holder)
+        m = _DEAD_HOLDER_RE.search(p.stdout) if p.returncode else None
+        if m and int(m.group(2)) != os.getpid() and not _pass_pid_alive(int(m.group(2))):
+            _slock_run("release", m.group(1))
+            p = _slock_run("acquire", holder)
     except (OSError, subprocess.TimeoutExpired):
+        slock_release(holder)  # a timed-out acquire may still have been granted
         return False, holder  # can't prove single-instance -> behave as lock-busy
+    except BaseException:  # SIGTERM -> SystemExit mid-acquire (see _term_to_exit)
+        slock_release(holder)
+        raise
     return p.returncode == 0, holder
 
 
@@ -1572,6 +1609,7 @@ def run_pass(dry_run=False):
 
     rc = 0
     try:
+
         # stage 0.5 (wq#718): dead-man's switch. wq#1408: moved inside this try — it
         # used to run before config load with no boundary of its own, so an exception
         # out of check_and_trip (a bad runs_root read, a malformed attempt file) was a
@@ -1605,6 +1643,13 @@ def run_pass(dry_run=False):
     return rc
 
 
+def _term_to_exit(signum, _frame):
+    """wq#2080: systemd's TimeoutStartSec sends SIGTERM, which by default kills Python
+    without running `finally` — the slock leaked for its full 30m TTL. SystemExit unwinds
+    through run_pass's release."""
+    raise SystemExit(128 + signum)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="foreman auto-dispatcher (wq#715 AUTO-3)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1614,6 +1659,7 @@ def main(argv=None):
     r.add_argument("--dry-run", action="store_true",
                    help="decide + log would_spawn; zero side effects")
     a = ap.parse_args(argv)
+    signal.signal(signal.SIGTERM, _term_to_exit)
     return run_pass(dry_run=a.dry_run)
 
 
