@@ -2663,6 +2663,26 @@ def test_local_partition_runs_before_cloud_stop(denv):
     assert end["stopped_cloud_reason"] == "no_slots" and end["stopped_local_reason"] is None
 
 
+def test_cloud_deadline_never_cuts_the_local_partition(denv, monkeypatch):
+    """wq#2088: the soft pass deadline ends only the cloud partition (halt stage=deadline).
+    Local runs first and is not deadline-gated, so a slow/hung cloud side costs local nothing."""
+    orig_init = fd._PassCtx.__init__
+
+    def expired_init(self, *a, **kw):
+        orig_init(self, *a, **kw)
+        self.deadline = float("-inf")  # already past on the first cloud check
+
+    monkeypatch.setattr(fd._PassCtx, "__init__", expired_init)
+    write_config(denv)
+    add_ticket("cloud past the deadline", pri=1)
+    local = add_ticket("local unaffected", pri=2, model="qwen36-local")
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [local]
+    end = _pass_end(denv)
+    assert (end["spawned_local"], end["spawned_cloud"]) == (1, 0)
+    assert end["stopped_cloud_reason"] == "deadline" and end["stopped_local_reason"] is None
+
+
 def test_local_saturates_past_the_cloud_spawn_cap(denv):
     """wq#2088: max_spawns_per_pass caps the cloud pool only; the local lane fills to
     local_max_spawns_per_pass in one pass even with the cloud cap already spent."""
