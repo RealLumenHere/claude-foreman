@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#2092 — fleet HTTPS leaf-cert expiry watcher (21/7/1 day alerts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/services/lumen-cert-watch/cert_watch.py run
+StandardOutput=journal
+StandardError=journal
