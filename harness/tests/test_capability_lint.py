@@ -294,6 +294,41 @@ def test_closure_artifact_shipped_glob_matches_the_factory_convention():
     assert not cl.closure_artifact("/home/lumen/instructions/approvals/sub/F1.approved")
 
 
+# --- wq#1697: a ticket's own worktree citation ----------------------------------
+
+def test_own_worktree_citation_is_neither_tagged_nor_refused():
+    """wq#1697 fix 1: the retry-notes mechanism (fworker.write_prior_attempt_notes)
+    writes this ticket's own prior worktree path into its own detail. That path is
+    not a request for new reach — the next attempt gets exactly it as its worktree
+    regardless of any tag — so it must land in none of the three buckets."""
+    d = cl.derive(
+        {"id": 1672, "title": "t",
+         "detail": "## git diff --stat (prior worktree)\n"
+                   "see /home/lumen/worktrees/wq1672-a3/foo.py for what attempt 3 left"},
+        roster=ROSTER, policy=POLICY, sweep=fresh_sweep())
+    assert d.tags == [] and d.refused == [] and d.unresolved == []
+
+
+def test_other_tickets_worktree_citation_still_refused():
+    """The exemption is keyed to THIS ticket's id — citing a DIFFERENT ticket's
+    worktree (wq#1358's real corpus row above) must stay exactly as refused as
+    before this fix; own-worktree reach is not a door into anyone else's tree."""
+    d = cl.derive(
+        {"id": 1358, "title": "t",
+         "detail": "Re-run 'lumen-pr land /home/lumen/worktrees/wq1357-a1 5 --merge'"},
+        roster=ROSTER, policy=POLICY, sweep=fresh_sweep())
+    assert d.tags == []
+    assert d.refused == ["dir(/home/lumen/worktrees/wq1357-a1) deny:prefix (/home/lumen/worktrees)"]
+
+
+def test_own_worktree_citation_with_no_ticket_id_still_refused():
+    """A caller that derives without an id (e.g. an ad-hoc string, not a real queue
+    row) gets the old, safe behaviour — the exemption never fires on guesswork."""
+    d = cl.derive({"title": "t", "detail": "see /home/lumen/worktrees/wq1672-a3/foo.py"},
+                  roster=ROSTER, policy=POLICY, sweep=fresh_sweep())
+    assert d.refused == ["dir(/home/lumen/worktrees/wq1672-a3/foo.py) deny:prefix (/home/lumen/worktrees)"]
+
+
 def test_paths_already_reachable_need_no_tag():
     d = derive("edit /home/lumen/foreman/harness/fworker.py and /home/lumen/bin/fleet-exec",
                repo="/home/lumen/foreman", add_dirs=["/home/lumen/bin"])

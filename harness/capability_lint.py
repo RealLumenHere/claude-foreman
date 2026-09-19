@@ -66,6 +66,21 @@ CLOSURE_ARTIFACT_GLOBS = ("/home/lumen/instructions/approvals/*.approved",)
 # the spawn assertion can never disagree about what a ticket cites.
 _CITED_PATH_RE = re.compile(r"/home/lumen/[\w./~-]+")
 
+# wq#1697 fix 1: a ticket's OWN worktree, from a prior attempt, is not a citation of
+# someone else's live work — it is the exact path THIS ticket's next attempt reuses or
+# recreates (fworker.py make_worktree: WORKTREES_ROOT/wq<id>-a<n>). write_prior_attempt_notes
+# (fworker.py:756) auto-writes a "## git diff --stat (prior worktree)" section into the
+# ticket's own detail on every retry, citing that exact path — which then permanently
+# DIR_DENY_PREFIXES-refuses the ticket's own future redispatch (wq#1672 was live evidence:
+# 13 refusals, its own worktree cited in its own failure trail). This is narrow ON PURPOSE:
+# it matches only /home/lumen/worktrees/wq<N>-a<attempt> where N is THIS ticket's id — a
+# citation of a DIFFERENT ticket's worktree (wq#1358's corpus row, tests/test_capability_lint.py)
+# still falls through to dir_denied() and stays refused. /home/lumen/scratch/worktrees (the
+# lumen-pr --worktree convention, slug-named, not id-named) is deliberately NOT covered here;
+# it never matches this pattern and keeps its existing deny.
+_OWN_WORKTREE_RE = re.compile(
+    r"^/home/lumen/worktrees/wq(?P<tid>\d+)-a\d+(?:/.*)?$")
+
 _NODE = r"[a-z][a-z0-9_-]*"
 _IP_RE = re.compile(r"\b(?:100|10|192\.168)\.\d{1,3}\.\d{1,3}(?:\.\d{1,3})?\b")
 _SSH_RE = re.compile(r"\bssh\s+(?:-\S+(?:\s+\S+)?\s+)*(?:(?P<user>[\w.-]+)@)?(?P<host>[\w.-]+)")
@@ -456,11 +471,16 @@ def cited_paths(text):
     return out
 
 
-def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, sweep=None):
+def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, sweep=None,
+                 ticket_id=None):
     roots = [r for r in [repo, *add_dirs] if r]
     for p in cited_paths(text):
         if any(_under(p, r) for r in roots):
             continue  # already reachable: repo ∪ add_dirs, no tag needed
+        if ticket_id is not None:
+            m = _OWN_WORKTREE_RE.match(p)
+            if m and m.group("tid") == str(ticket_id):
+                continue  # wq#1697 fix 1: this ticket's own (past or future) worktree
         why = dir_denied(p)
         if why:
             refused.append(f"dir({p}) {why}")
@@ -621,11 +641,13 @@ def derive(ticket, repo=None, add_dirs=(), roster=None, policy=None, sweep=None)
     fleet or filesystem.
     """
     text = ticket_text(ticket)
+    ticket_id = (ticket or {}).get("id")
     roster = roster if roster is not None else load_roster()
     policy = policy if policy is not None else load_policy()
     sweep = sweep if sweep is not None else load_sweep()
     tags, unresolved, refused = [], [], []
-    _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=policy, sweep=sweep)
+    _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=policy, sweep=sweep,
+                ticket_id=ticket_id)
     _derive_ssh(text, roster, tags, unresolved, policy=policy)
     _derive_restart(text, roster, policy, tags, unresolved, refused)
     _derive_copy(text, roster, policy, tags, unresolved)
