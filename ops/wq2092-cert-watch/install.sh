@@ -8,6 +8,17 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/services/lumen-cert-watch
 
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile      "$SRC/cert_watch.py"            "$DEST/cert_watch.py"
+  vunit_file "$SRC/lumen-cert-watch.service" /etc/systemd/system/lumen-cert-watch.service
+  vunit_file "$SRC/lumen-cert-watch.timer"   /etc/systemd/system/lumen-cert-watch.timer
+  vcontains  "$DEST/targets.json" '"extra"' # operator-edited: presence, not byte-identity
+  venabled   lumen-cert-watch.timer
+  vactive    lumen-cert-watch.timer
+  vdone
+fi
+
 mkdir -p "$DEST"
 install -o lumen -g lumen -m 755 "$SRC/cert_watch.py" "$DEST/cert_watch.py"
 # targets.json is operator-edited (extra internal endpoints): never overwrite it.
