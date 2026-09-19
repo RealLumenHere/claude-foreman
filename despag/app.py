@@ -58,7 +58,7 @@ HARNESSES_FILE = DESPAG_DIR / "harnesses.yaml"
 # fworker.py:148 LOCAL_POOL_MODELS — despag does not import fworker (that module is
 # the task-execution runner, out of scope for this ticket); the two model pools are
 # duplicated here deliberately small and static, not lifted as a dependency.
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local")
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
 
 CLAUDE_BIN = os.environ.get("DESPAG_CLAUDE_BIN", "claude")
 # Plain `/health` makes LiteLLM probe every configured deployment and can take

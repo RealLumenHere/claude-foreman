@@ -37,7 +37,7 @@ CLOUD_CEILING = 3
 # wrongly eat into the cloud ceiling this module exists to protect. FOREMAN_RESEARCH
 # §8: "ceiling 3 cloud workers + N local-rung workers (local unlimited by Anthropic,
 # bounded by Lumen CPU instead)".
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local")
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
 
 # `lumen-run list` unit column, e.g. "lumen-job-fworker-wq616-1786850106.service".
 # Non-greedy name capture so a numeric ticket-id slug (fworker-wq616) doesn't get

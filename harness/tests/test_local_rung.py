@@ -46,6 +46,25 @@ def test_local_rung_gate_denies_every_other_archetype():
         assert "not trusted" in reason
 
 
+def test_large_ctx_local_models_registered_and_trusted_for_standard_engineering():
+    """wq#2074: nephthys-qwen14b (40k) / hathor-llama8b (128k) hold a full fworker prompt,
+    so they route through the gateway and also pass the gate for standard-engineering —
+    the 8k qwen36-local / deepseek rungs still do not."""
+    import yaml
+    with open(os.path.join(os.path.dirname(HARNESS_DIR), "research", "models.yaml")) as fh:
+        rows = {m["id"]: m for m in yaml.safe_load(fh)["models"]}
+    for mid, ctx in (("nephthys-qwen14b", 40960), ("hathor-llama8b", 131072)):
+        assert fworker.is_local_model(mid) is True
+        assert rows[mid]["status"] == "LIVE-local" and rows[mid]["pools"] == ["local"]
+        assert rows[mid]["context_tokens"] == ctx
+        assert fworker.local_rung_gate(mid, "standard-engineering") == (True, None)
+        assert fworker.local_rung_gate(mid, "mechanical-edit") == (True, None)
+        allow, reason = fworker.local_rung_gate(mid, "rca-investigation")
+        assert allow is False and "not trusted" in reason
+    assert rows["qwen36-local"]["context_tokens"] == 8192
+    assert fworker.local_rung_gate("qwen36-local", "standard-engineering")[0] is False
+
+
 def test_local_rung_gate_is_a_noop_for_cloud_models():
     allow, reason = fworker.local_rung_gate("claude-sonnet-5", "rca-investigation")
     assert allow is True and reason is None

@@ -38,7 +38,7 @@ RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_run
 STATE_JSON = router.STATE_JSON
 JUDGMENT_STATE = os.environ.get("FOREMAN_JUDGMENT_STATE",
                                 os.path.join(RUNS_ROOT, "judgment.json"))
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local")
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
 
 
 def _now():

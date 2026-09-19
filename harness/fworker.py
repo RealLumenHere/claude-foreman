@@ -148,7 +148,7 @@ FIRE_ARCHETYPE = "fire-response"
 # governor/governor_core.py's LOCAL_POOL_MODELS and orchestrator/judgment.py's
 # LOCAL_POOL_MODELS — deliberately excludes nephthys-qwen3-14b (fallback brain only,
 # not a wq worker per models.yaml).
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local")
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
 # archetypes agents.yaml marks `local:` for — the only work the local rung is trusted
 # with (FOREMAN_RESEARCH §9). Enforced here too (defense-in-depth) so an explicit
 # --model/--archetype override can't dispatch a local-pool model outside what the
@@ -170,6 +170,18 @@ LITELLM_KEY_FILE = os.environ.get("FOREMAN_LITELLM_KEY_FILE",
 
 def is_local_model(model):
     return bool(model) and any(model.startswith(m) for m in LOCAL_POOL_MODELS)
+
+
+# wq#2074: the 40k/131k-ctx rungs hold a full fworker prompt, so unlike the 8k qwen36-local
+# they are also trusted for standard-engineering (the 141-ticket backlog's bulk archetype).
+LOCAL_LARGE_CTX_MODELS = ("nephthys-qwen14b", "hathor-llama8b")
+LOCAL_LARGE_CTX_ARCHETYPES = LOCAL_ALLOWED_ARCHETYPES + ("standard-engineering",)
+
+
+def local_allowed_archetypes(model):
+    if model and any(model.startswith(m) for m in LOCAL_LARGE_CTX_MODELS):
+        return LOCAL_LARGE_CTX_ARCHETYPES
+    return LOCAL_ALLOWED_ARCHETYPES
 
 
 # wq#687: silent-downgrade detection. The DeepSeek "best practices" doc that
@@ -236,9 +248,10 @@ def local_rung_gate(model, archetype):
     dispatchable for LOCAL_ALLOWED_ARCHETYPES — see module docstring above."""
     if not is_local_model(model):
         return True, None
-    if archetype not in LOCAL_ALLOWED_ARCHETYPES:
+    allowed = local_allowed_archetypes(model)
+    if archetype not in allowed:
         return False, (f"local rung model {model!r} not trusted for archetype "
-                        f"{archetype!r} (only {LOCAL_ALLOWED_ARCHETYPES})")
+                        f"{archetype!r} (only {allowed})")
     return True, None
 
 

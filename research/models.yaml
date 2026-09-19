@@ -184,8 +184,26 @@ models:
     # node). FLEET_COST_PLAN.md's three "after D2/D3" routing moves onto this rung are gated
     # on this fix landing too, not just D2/D3.
     pools: [local]
+    context_tokens: 8192    # wq#2070: Isis serves 8192 ctx/req -- crashes on 15-22k fworker prompts. SMALL prompts only.
     efforts: []
     trust: "mechanical-edit only, gated. Offline-survival tier."
+  # wq#2074 2026-09-19: the two warm local boxes that CAN hold a full fworker prompt. Same
+  # CLI-invocation shape as qwen36-local: fworker.is_local_model() matches the id, build_env
+  # points claude at the LiteLLM gateway (ANTHROPIC_BASE_URL) instead of claude.ai OAuth.
+  # Registered here so `wq add/edit --model` (wq#1442 known_models) accepts them. The scoped
+  # 'foreman-local-rung' LiteLLM key must list these model names (gateway-side, not in git).
+  - id: nephthys-qwen14b
+    status: LIVE-local
+    pools: [local]
+    context_tokens: 40960   # wq#2070: holds full fworker prompts (15-22k). Standard-engineering-capable.
+    efforts: []
+    trust: "standard-engineering + the mechanical-edit/probe-build local set. PR-only + sonnet-5 verify gate. Lower --max-turns."
+  - id: hathor-llama8b
+    status: LIVE-local
+    pools: [local]
+    context_tokens: 131072  # wq#2070: llama3.1:8b, holds anything.
+    efforts: []
+    trust: "standard-engineering + the mechanical-edit/probe-build local set. PR-only + sonnet-5 verify gate. Lower --max-turns."
   - id: nephthys-qwen3-14b
     status: RETIRED          # wq#589 2026-08-22: Nephthys decommissioned, LiteLLM entry
                               # removed. wq#777 2026-08-23 live probe: host unreachable
