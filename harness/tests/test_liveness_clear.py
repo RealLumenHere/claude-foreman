@@ -175,17 +175,27 @@ def test_iv_exec_allow_deny_byte_unchanged():
 
 
 def test_iv_firewall_import_surface():
-    for m in list(sys.modules):
-        if m in ("liveness_clear", "fworker", "capability", "liveness", "liveness_sweep"):
-            sys.modules.pop(m)
-    import liveness_clear  # noqa: F401
-    assert "fworker" not in sys.modules, "liveness_clear must never import fworker"
-    src = open(os.path.join(HARNESS, "liveness_clear.py")).read()
-    for banned in ("policy_grants", "preflight(", "resolve_exec_grant", "grant.json", "wq_close"):
-        assert banned not in src, f"liveness_clear references {banned}"
-    import capability, needs
-    t = {"id": 1, "detail": "Liveness: path_exists(/etc/hostname)", "needs": ""}
-    assert capability.policy_grants(needs.parse(t.get("needs"), t["detail"])) == ([], [])
+    # wq#1991 (ISSUE-LOG #428): the pop has to be UNDONE. Dropping `fworker` from
+    # sys.modules and leaving it dropped is invisible here but fatal downstream —
+    # test_token_injection's importlib.reload(fworker) then dies with "module fworker
+    # not in sys.modules", 7 failures that only ever appear in a full-suite run.
+    saved = {m: sys.modules[m] for m in
+             ("liveness_clear", "fworker", "capability", "liveness", "liveness_sweep")
+             if m in sys.modules}
+    for m in saved:
+        sys.modules.pop(m)
+    try:
+        import liveness_clear  # noqa: F401
+        assert "fworker" not in sys.modules, "liveness_clear must never import fworker"
+        src = open(os.path.join(HARNESS, "liveness_clear.py")).read()
+        for banned in ("policy_grants", "preflight(", "resolve_exec_grant", "grant.json",
+                       "wq_close"):
+            assert banned not in src, f"liveness_clear references {banned}"
+        import capability, needs
+        t = {"id": 1, "detail": "Liveness: path_exists(/etc/hostname)", "needs": ""}
+        assert capability.policy_grants(needs.parse(t.get("needs"), t["detail"])) == ([], [])
+    finally:
+        sys.modules.update(saved)
 
 
 def test_iv_verb_refuses_wrong_identity_and_no_premise(env, tmp_path):

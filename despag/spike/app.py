@@ -16,7 +16,11 @@ from pathlib import Path
 import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-sys.path.insert(0, "/home/lumen/foreman/harness")
+# wq#1991: derived from __file__ (<repo>/despag/spike/app.py), never the literal
+# /home/lumen/foreman — see despag/admission.py's note.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "harness"))
 from fworker import build_env, build_claude_cmd, SETTINGS_FILE, is_local_model  # noqa: E402
 
 CLAUDE_BIN = "/home/lumen/.npm-global/bin/claude"  # fworker.py:2692's own --claude-bin default

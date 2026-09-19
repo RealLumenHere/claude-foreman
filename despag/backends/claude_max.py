@@ -16,7 +16,12 @@ from __future__ import annotations
 import os
 import sys
 
-_FWORKER_DIR = "/home/lumen/foreman/harness"
+# wq#1991: derived from __file__ (<repo>/despag/backends/claude_max.py), never the
+# literal /home/lumen/foreman — a hardcoded primary-tree path here shadows the running
+# worktree's modules for the whole process. See despag/admission.py's note.
+_FWORKER_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "harness")
 if _FWORKER_DIR not in sys.path:
     sys.path.insert(0, _FWORKER_DIR)
 

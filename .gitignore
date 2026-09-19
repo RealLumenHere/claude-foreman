@@ -57,3 +57,8 @@ runtime/
 
 # wq#1300: generated eval dataset/results — regenerated each run, not source
 /harness/evals/worker-quality/runtime/
+
+# wq#1991: local output of ops/wq1991-worktree-module-identity/verify_5x.py — one
+# full-suite transcript per repeat, regenerated on demand, never source.
+/.wq1991-verify/
+/.wq1991-verify.log

@@ -16,7 +16,10 @@ import subprocess
 import sys
 import time
 
-GUARD_SH = os.environ.get("FAKE_CLAUDE_GUARD_SH", "/home/lumen/foreman/harness/guard.sh")
+# wq#1991: derive from __file__ so a worktree run exercises its OWN guard.sh, not the
+# primary tree's (this file lives at <repo>/harness/tests/fake_claude.py).
+_HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GUARD_SH = os.environ.get("FAKE_CLAUDE_GUARD_SH", os.path.join(_HARNESS_DIR, "guard.sh"))
 WQ_BIN = os.environ.get("FAKE_CLAUDE_WQ_BIN", "/home/lumen/bin/wq")
 
 

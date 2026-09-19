@@ -51,9 +51,15 @@ import time
 
 logger = logging.getLogger("despag.admission")
 
-_GOVERNOR_DIR = "/home/lumen/foreman/governor"
-_DISPATCHER_DIR = "/home/lumen/foreman/dispatcher"
-_HARNESS_DIR = "/home/lumen/foreman/harness"
+# wq#1991: derived from __file__, never the literal /home/lumen/foreman. A hardcoded
+# primary-tree path here put that tree AHEAD of the running worktree's on sys.path at
+# import time, so every later bare `import X` in the same process cached the PRIMARY
+# copy under that name — wq#1676's test_derive_probe_unit passed alone and failed
+# in-suite with `module liveness_clear has no attribute derive_probe`.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_GOVERNOR_DIR = os.path.join(_REPO_ROOT, "governor")
+_DISPATCHER_DIR = os.path.join(_REPO_ROOT, "dispatcher")
+_HARNESS_DIR = os.path.join(_REPO_ROOT, "harness")
 for _d in (_GOVERNOR_DIR, _DISPATCHER_DIR, _HARNESS_DIR):
     if _d not in sys.path:
         sys.path.insert(0, _d)
