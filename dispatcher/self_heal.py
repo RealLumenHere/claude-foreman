@@ -53,6 +53,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -226,6 +227,43 @@ def wq_show(tid):
     except ValueError:
         return {}
     return out if isinstance(out, dict) and not out.get("error") else {}
+
+
+WQ_ROW_COLS = ("attempt", "status", "lane")
+
+
+def wq_rows(ids):
+    """{tid: {"attempt", "status", "lane"}} for every id in `ids` in ONE read-only
+    sqlite read of the wq DB (WQ_DB, same env var bin/wq honours). Ids with no row are
+    absent from the result — the caller treats that as wq_show()'s `{}`.
+
+    wq#2082: runaway.stuck_ticket_ids() called wq_show() once per RUNS_ROOT dir — 1052
+    subprocesses at ~0.17s = 171s of a 197s dispatch pass (measured 2026-09-19), which
+    with the 5-min timer kept the foreman-dispatcher slock held ~65% of wall-clock and
+    made every pass a TimeoutStartSec candidate. Falls back to per-id wq_show() on any
+    sqlite error (unmigrated DB without `attempt`, locked file) so the answer is never
+    worse than before, only slower.
+    """
+    ids = [int(i) for i in ids]
+    if not ids:
+        return {}
+    db = os.environ.get("WQ_DB", "/home/lumen/agents/work-queue/queue.db")
+    out = {}
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=30)
+        try:
+            con.execute("PRAGMA busy_timeout=30000")
+            cols = ", ".join(WQ_ROW_COLS)
+            for i in range(0, len(ids), 500):  # SQLITE_MAX_VARIABLE_NUMBER headroom
+                chunk = ids[i:i + 500]
+                q = f"SELECT id, {cols} FROM tasks WHERE id IN ({','.join('?' * len(chunk))})"
+                for row in con.execute(q, chunk):
+                    out[int(row[0])] = dict(zip(WQ_ROW_COLS, row[1:]))
+        finally:
+            con.close()
+        return out
+    except sqlite3.Error:
+        return {tid: r for tid in ids if (r := wq_show(tid))}
 
 
 def wq_release(tid):

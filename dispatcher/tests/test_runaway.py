@@ -142,6 +142,53 @@ def test_done_ticket_never_stuck_even_at_high_attempt_count(renv):
     assert runaway.stuck_ticket_ids() == {}
 
 
+def test_stuck_scan_reads_wq_once_not_per_run_dir(renv, monkeypatch):
+    """wq#2082 (research/DISPATCH_STALL_RCA.md §3.4): one `wq show` subprocess per
+    RUNS_ROOT dir was 171s of a 197s pass on 1052 dirs. The scan must get every wq
+    column from a single batched read — no per-ticket subprocess at all — and still
+    catch both stuck shapes (file count, wq `attempt` column) and spare done tickets."""
+    def no_subprocess(tid):
+        raise AssertionError(f"wq_show({tid}) called: per-ticket subprocess is back")
+    monkeypatch.setattr(self_heal, "wq_show", no_subprocess)
+
+    by_files = add_ticket("stuck by attempt files", lane="testlane")
+    make_attempts(renv, by_files, 5)
+    by_column = add_ticket("stuck by wq attempt column", lane="testlane")
+    make_attempts(renv, by_column, 1)
+    db = sqlite3.connect(os.environ["WQ_DB"])
+    try:
+        db.execute("UPDATE tasks SET attempt=7 WHERE id=?", (by_column,))
+        db.commit()
+    finally:
+        db.close()
+    under = add_ticket("under threshold")
+    make_attempts(renv, under, 2)
+    done = add_ticket("done despite many attempts")
+    make_attempts(renv, done, 9)
+    set_status(done, "done")
+
+    stuck = runaway.stuck_ticket_ids()
+    assert set(stuck) == {by_files, by_column}
+    assert stuck[by_files] == {"attempts": 5, "status": "open", "lane": "testlane"}
+    assert stuck[by_column] == {"attempts": 7, "status": "open", "lane": "testlane"}
+
+
+def test_wq_rows_falls_back_to_wq_show_when_db_unreadable(renv, monkeypatch):
+    """The batched read must never make the answer worse than before: an unreadable
+    WQ_DB degrades to the old per-id wq_show path, not to 'nothing is stuck'."""
+    monkeypatch.setenv("WQ_DB", str(renv["tmp"] / "missing.db"))
+    calls = []
+
+    def fake_show(tid):
+        calls.append(tid)
+        return {"attempt": 6, "status": "open", "lane": "testlane"} if tid == 41 else {}
+    monkeypatch.setattr(self_heal, "wq_show", fake_show)
+
+    rows = self_heal.wq_rows([41, 42])
+    assert rows == {41: {"attempt": 6, "status": "open", "lane": "testlane"}}
+    assert sorted(calls) == [41, 42]
+
+
 def test_blocked_ticket_at_threshold_is_stuck(renv):
     tid = add_ticket()
     make_attempts(renv, tid, 5)

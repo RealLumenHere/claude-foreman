@@ -75,12 +75,19 @@ def stuck_ticket_ids(threshold=None):
     session's later attempts share one claim (one wq-column bump for possibly several
     attempt-N.json files, e.g. handle_resumable_failure's retry ladder), so summing
     would double count and could false-positive a ticket that is legitimately still
-    within budget."""
+    within budget.
+
+    wq#2082: the wq column for every candidate comes from ONE batched read
+    (self_heal.wq_rows), not a `wq show` subprocess per RUNS_ROOT dir — that per-dir
+    subprocess (wq#1671, 2026-09-18) grew with the run-dir count to 171s of a 197s pass
+    (research/DISPATCH_STALL_RCA.md §3.4)."""
     threshold = threshold if threshold is not None else RUNAWAY_MAX_ATTEMPTS
     stuck = {}
-    for tid in candidate_ticket_ids():
+    ids = candidate_ticket_ids()
+    rows = self_heal.wq_rows(ids)
+    for tid in ids:
         n = self_heal.attempt_count(tid)
-        t = self_heal.wq_show(tid)
+        t = rows.get(tid) or {}
         try:
             db_attempts = int(t.get("attempt") or 0)
         except (TypeError, ValueError):
