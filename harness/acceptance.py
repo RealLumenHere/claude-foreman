@@ -565,9 +565,14 @@ def _check_citation(entry, worktree, changed):
 
 
 def verify(acceptance, evidence, worktree, base_ref="origin/main", evidence_dir=None,
-           runner=subprocess.run):
+           runner=subprocess.run, claim_check=None):
     """Harness-side verdict on a worker's done claim. Never trusts a logged exit code:
     every `test` criterion is re-run here, every citation re-checked against the diff.
+
+    `claim_check(acceptance, evidence, worktree)` is the optional local-inference pass
+    (hallucination_guard.claim_check, wq#2020) run after the mechanical replay: its
+    verdict lands in result["claim_check"], and its `flagged` records fail the gate only
+    when its mode is `enforce`. It never runs on the Stop-hook path (no caller passes it).
 
     Returns {"ok", "failed": [...], "checked": [...]}.
     """
@@ -608,6 +613,12 @@ def verify(acceptance, evidence, worktree, base_ref="origin/main", evidence_dir=
         result["checked"].append(record)
         if not ok:
             result["failed"].append(record)
+    if claim_check is not None and not result["failed"]:
+        # only worth local inference once the mechanical replay is clean
+        cc = claim_check(acceptance, evidence, worktree)
+        result["claim_check"] = cc
+        if cc.get("mode") == "enforce":
+            result["failed"].extend(cc.get("flagged") or [])
     result["ok"] = not result["failed"]
     return result
 

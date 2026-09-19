@@ -52,6 +52,7 @@ from classifier import (
 )
 from oom_forensics import oom_journal_evidence
 import acceptance as acceptance_mod
+import hallucination_guard
 import action_gate
 import failure_record
 import needs as needs_mod
@@ -2726,7 +2727,13 @@ def verify_done(ticket_id, worktree, attempt, base_ref="origin/main"):
     # live origin/main and the diff would collapse to empty (ISSUE-LOG #143/#156).
     frozen_ref = acceptance_mod.pinned_origin_sha(rd) or base_ref
     result = acceptance_mod.verify(pinned, evidence, worktree, base_ref=frozen_ref,
-                                    evidence_dir=ev_dir)
+                                    evidence_dir=ev_dir,
+                                    claim_check=hallucination_guard.claim_checker())
+    cc = result.get("claim_check")
+    if cc and (cc["flagged"] or cc["inconclusive"]):
+        log(f"wq#{ticket_id}: hallucination guard ({cc['mode']}): "
+            f"{len(cc['flagged'])} flagged, {cc['inconclusive']} inconclusive of "
+            f"{len(cc['checked'])} claims")
     if tampered:
         result["ok"] = False
         result["failed"].insert(0, {
@@ -3277,7 +3284,8 @@ def cmd_verify_evidence(args):
     acceptance_mod.snapshot_evidence(args.worktree, rd)
     result = acceptance_mod.verify(
         pinned, acceptance_mod.read_evidence(args.worktree, run_dir=rd), args.worktree,
-        base_ref=frozen_ref)
+        base_ref=frozen_ref,
+        claim_check=hallucination_guard.claim_checker() if args.claim_check else None)
     print(json.dumps(result, indent=2))
     return EXIT_OK if result["ok"] else EXIT_BLOCKED
 
@@ -3320,6 +3328,9 @@ def main():
     p_ver.add_argument("--ticket", type=int, required=True)
     p_ver.add_argument("--worktree", required=True)
     p_ver.add_argument("--base-ref", default="origin/main")
+    p_ver.add_argument("--claim-check", action="store_true",
+                       help="also run the local-inference claim check (wq#2020); off by "
+                            "default so a worker's self-check stays fast")
     p_ver.set_defaults(func=cmd_verify_evidence)
 
     args = ap.parse_args()
