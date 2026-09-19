@@ -71,12 +71,12 @@ explicit call rather than being bundled into ops cleanup. Left as an open questi
 - MinIO's ILM scanner runs on its own internal schedule (not immediate) — object count
   will not visibly drop today. ClickHouse TTL merges are also background, not immediate.
 - Per the ticket's own item (4), volume growth needs re-measuring after ~1 week to
-  confirm the class is fixed, not just the instance. Filed as wq#2053 with a
+  confirm the class is fixed, not just the instance. Filed as wq#2056 with a
   not-before note, since this session cannot wait a week.
 - Per the ticket's own item (3) ("verify TTL actually deletes MinIO objects, not just
   ClickHouse rows"): the MinIO ILM rule and the ClickHouse TTL are two independent
   mechanisms hitting two different data stores (S3 objects vs. the log table), not one
-  feature verifying the other. Both are now confirmed *configured*; wq#2053's
+  feature verifying the other. Both are now confirmed *configured*; wq#2056's
   re-measurement is what confirms they're actually *firing*.
 
 ## Open decision for Frank (not blocking this ticket's close)
