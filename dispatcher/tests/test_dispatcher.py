@@ -2609,3 +2609,34 @@ def test_repo_mismatch_and_route_unassigned_are_structural():
     import foreman_dispatcher as fd
     assert {"repo_mismatch", "route_unassigned"} <= fd.STRUCTURAL_SKIP_REASONS
     assert "tight_pri" not in fd.STRUCTURAL_SKIP_REASONS  # pressure is a real stall signal
+
+
+# ---- wq#2081: local-pool tickets are exempt from the Anthropic-quota gates ------------
+
+def test_local_ticket_ignores_burn_rate_and_cloud_ceiling(denv):
+    """wq#2081: session/weekly nearly spent (critical) and every cloud slot taken. A
+    local-pinned ticket still spawns — it draws zero Anthropic quota — while the cloud
+    ticket behind it is held by the same gates."""
+    denv["gov_state"].write_text(json.dumps(_burn_gov(96, 4, 96, 100, severity="critical")))
+    denv["pacing_cfg_path"].write_text(json.dumps(
+        {"policy": "off", "min_elapsed_fraction": 0.02, "delay_min_pri": 1,
+         "ntfy_dedup_hours": 6}))
+    _seed_running(["fworker-wq999991", "fworker-wq999992", "fworker-wq999993"])
+    local = add_ticket("local batch item", pri=1, model="qwen36-local")
+    add_ticket("cloud item", pri=2)
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [local]
+    assert log_events(denv, "burn_rate") == []
+
+
+def test_full_local_lane_skips_local_only_and_cloud_still_spawns(denv, monkeypatch):
+    """wq#2081: at local_ceiling the local ticket is skipped (local_slots_full) instead of
+    ending the pass, so the cloud candidate behind it still spawns."""
+    write_config(denv, local_ceiling=1)
+    _seed_running(["fworker-wq999991"])
+    monkeypatch.setattr(fd.concurrency, "is_local_unit", lambda u: u == "fworker-wq999991")
+    add_ticket("local overflow", pri=1, model="qwen36-local")
+    cloud = add_ticket("cloud rides on", pri=2)
+    assert fd.run_pass() == 0
+    assert [s["reason"] for s in log_events(denv, "skip")] == ["local_slots_full"]
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [cloud]

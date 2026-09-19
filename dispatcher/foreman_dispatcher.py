@@ -240,6 +240,8 @@ def load_config(path=None):
 
     pos_int(cfg, "max_spawns_per_pass", "root")
     pos_int(cfg, "cloud_ceiling", "root")
+    if "local_ceiling" in cfg:
+        pos_int(cfg, "local_ceiling", "root")
     tight = cfg.get("tight_mode")
     if not isinstance(tight, dict):
         raise ConfigError(f"config {path}: tight_mode must be an object")
@@ -1457,7 +1459,10 @@ def _do_pass(cfg, log, state, dry_run):
                 log.skip(tid, lane, "budget", "governor_deny", model=model)
                 continue
             burn = None  # (pools, allowed_concurrent) when the controller owns this ticket
-            if pressure == "tight":
+            # wq#2081: burn_rate/pacing meter Anthropic quota; a local-pool model draws none
+            # (models.yaml pools:[local], governor-exempt), so neither gate ever owns it.
+            is_local = concurrency.is_local_model(model)
+            if pressure == "tight" and not is_local:
                 model_pools = burn_rate.pools_for_model(model)
                 allowed, burn_detail = burn_allowed(model_pools)
                 if allowed is None:
@@ -1491,7 +1496,8 @@ def _do_pass(cfg, log, state, dry_run):
 
             # stage 8b — weekly-budget pacing (wq#716): forward-looking, on top of the
             # governor's own reactive floor above. Never blocks a Frank-approved fire ticket.
-            verdict = PACING_HOOK(cand["epri"], model, limits, pacing_cfg, fire_exempt)  # wq#1699: epri
+            verdict = PACING_HOOK(cand["epri"], model, limits, pacing_cfg,
+                                  fire_exempt or is_local)  # wq#1699: epri; wq#2081: local exempt
             if verdict.action != "ok":
                 log.skip(tid, lane, "budget", f"pacing_{verdict.action}", model=model,
                          **verdict.as_fields())
@@ -1500,7 +1506,17 @@ def _do_pass(cfg, log, state, dry_run):
 
             # stage 9 — concurrency ceiling, local rung excluded (T4)
             cloud = [u for u in units if not concurrency.is_local_unit(u)]
-            if len(cloud) >= cfg["cloud_ceiling"]:
+            if is_local:
+                # wq#2081: a local rung is bounded by the boxes, not the cloud login — its own
+                # ceiling over local units, and a full local lane skips only local tickets
+                # (never `break`s past the cloud candidates behind it).
+                local_ceiling = cfg.get("local_ceiling", concurrency.LOCAL_CEILING)
+                if len(units) - len(cloud) >= local_ceiling:
+                    log.skip(tid, lane, "concurrency", "local_slots_full", model=model,
+                             detail=f"{len(units) - len(cloud)} local unit(s) at ceiling "
+                                    f"{local_ceiling}")
+                    continue
+            elif len(cloud) >= cfg["cloud_ceiling"]:
                 log.emit("halt", stage="concurrency", reason="no_slots",
                          detail=f"{len(cloud)} cloud unit(s) at ceiling "
                                 f"{cfg['cloud_ceiling']}; next tick retries")

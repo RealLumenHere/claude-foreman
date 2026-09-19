@@ -383,6 +383,23 @@ def test_governor_pressure_adapter(tmp_path):
     assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "tight"
 
 
+def test_governor_pressure_local_pool_ignores_anthropic_pools(tmp_path):
+    """wq#2081: a local-pool model draws zero Anthropic quota — exhausted session/weekly
+    pools that deny/tighten a cloud model must not touch it (STOP still does, via
+    can-dispatch)."""
+    gov = tmp_path / "gov.py"
+    gov.write_text("import sys; sys.exit(0 if 'deny' not in sys.argv[-1] else 1)\n")
+    (tmp_path / "floors.json").write_text(json.dumps({
+        "session_min_remaining_pct": 20, "weekly_all_min_remaining_pct": 15}))
+    st = tmp_path / "state.json"
+    st.write_text(json.dumps({"limits": {"session": {"percent": 99, "severity": "critical"},
+                                          "weekly_all": {"percent": 99}}}))
+    assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "deny"
+    for m in ("qwen36-local", "nephthys-qwen14b", "hathor-llama8b"):
+        assert router.governor_pressure(m, state_path=str(st), governor_cli=str(gov)) == "ok"
+    assert router.governor_pressure("qwen36-local-deny", state_path=str(st), governor_cli=str(gov)) == "deny"
+
+
 def test_governor_pressure_zeroed_floors_are_advisory(tmp_path):
     """wq#1669 (walkthrough sec 5, 2026-09-10): floors + soft margin zeroed, session
     80% / weekly 83% / fable 86% all severity=warning — the old code returned 'tight'

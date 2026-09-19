@@ -39,6 +39,15 @@ CLOUD_CEILING = 3
 # bounded by Lumen CPU instead)".
 LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
 
+# wq#2081: local-rung ceiling — bounded by the Macs' hardware, never by Anthropic quota
+# (models.yaml concurrency.local_max; config.json local_ceiling overrides it per host).
+LOCAL_CEILING = 12
+
+
+def is_local_model(model):
+    """True when `model` is a governor-exempt local-pool route (zero Anthropic quota)."""
+    return bool(model) and any(model.startswith(p) for p in LOCAL_POOL_MODELS)
+
 # `lumen-run list` unit column, e.g. "lumen-job-fworker-wq616-1786850106.service".
 # Non-greedy name capture so a numeric ticket-id slug (fworker-wq616) doesn't get
 # split at its own digits — see harness/tests/test_concurrency.py for the boundary
@@ -99,8 +108,7 @@ def is_local_unit(name, model_lookup=ticket_model):
     m = TICKET_UNIT_RE.match(name)
     if not m:
         return False
-    model = model_lookup(m.group("id"))
-    return bool(model) and any(model.startswith(p) for p in LOCAL_POOL_MODELS)
+    return is_local_model(model_lookup(m.group("id")))
 
 
 def slots_available(prefix="fworker-wq", ceiling=CLOUD_CEILING, exclude_local=False,

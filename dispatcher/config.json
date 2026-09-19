@@ -2,6 +2,7 @@
   "cadence_note": "cadence lives in the systemd timer, not here",
   "max_spawns_per_pass": 10,
   "cloud_ceiling": 10,
+  "local_ceiling": 12,
   "tight_mode": {
     "max_spawns_per_pass": 1,
     "min_pri": 1,

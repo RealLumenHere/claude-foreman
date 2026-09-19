@@ -55,6 +55,7 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "harness"))
+import concurrency  # noqa: E402  # wq#2081: is_local_model for the governor-exempt local rung
 import repo_sweep  # noqa: E402  # wq#1123: shared repo_for_ticket() resolver
 import needs as needs_mod  # noqa: E402  # wq#1331: per-ticket needs:repo/needs:dir tags
 
@@ -781,6 +782,11 @@ def governor_pressure(model, *, state_path=STATE_JSON, governor_cli=GOVERNOR_CLI
             return "deny"
     except (OSError, subprocess.TimeoutExpired):
         return "deny"
+    if concurrency.is_local_model(model):
+        # wq#2081: can-dispatch already passed (STOP + stale gates). The Anthropic pools
+        # below meter quota a local rung never touches (models.yaml pools:[local],
+        # governor-exempt by design) — reading them would throttle free compute.
+        return "ok"
     try:
         with open(state_path) as f:
             st = json.load(f)
