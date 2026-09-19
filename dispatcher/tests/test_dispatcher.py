@@ -8,6 +8,7 @@ too — the lumen-run call log records zero spawns, not just a "skip" line.
 """
 import json
 import os
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -70,6 +71,7 @@ def _script(path, body):
 
 @pytest.fixture
 def denv(tmp_path, monkeypatch):
+    monkeypatch.setattr(fd, "_terminating", False)  # restored after tests that SIGTERM
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
     approvals = tmp_path / "approvals"
@@ -420,6 +422,27 @@ def test_sigterm_releases_lock(denv, monkeypatch):
     monkeypatch.setattr(fd, "_do_pass", lambda *a, **k: fd._term_to_exit(15, None))
     with pytest.raises(SystemExit):
         fd.run_pass()
+    assert "foreman-dispatcher" not in _lock_holder()
+
+
+def test_sigterm_inside_scan_wq_show_not_swallowed(denv, monkeypatch):
+    """wq#2084: a real SIGTERM landing inside router.wq_show (whose not-found path is
+    SystemExit, caught by the scan-stage handlers) must still abort the pass."""
+    add_ticket("term mid-scan")
+
+    def term_in_show(_tid):
+        os.kill(os.getpid(), signal.SIGTERM)
+        raise SystemExit("wq_show: not found")  # unreachable if the handler raised
+
+    monkeypatch.setattr(router, "wq_show", term_in_show)
+    old = signal.signal(signal.SIGTERM, fd._term_to_exit)
+    try:
+        with pytest.raises(SystemExit) as ei:
+            fd.run_pass()
+    finally:
+        signal.signal(signal.SIGTERM, old)
+    assert ei.value.code == 143
+    assert not log_events(denv, "pass_end")
     assert "foreman-dispatcher" not in _lock_holder()
 
 

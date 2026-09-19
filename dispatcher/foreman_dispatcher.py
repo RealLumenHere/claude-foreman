@@ -579,6 +579,8 @@ def unmet_deps(t, cache):
             try:
                 status = router.wq_show(d).get("status") or "missing"
             except SystemExit:
+                if _terminating:
+                    raise
                 status = "missing"
             cache[d] = status
         if status != "done":
@@ -604,6 +606,8 @@ def candidate_model(t, tid):
     try:
         d = router.assign(tid, dry_run=True)
     except SystemExit:
+        if _terminating:
+            raise
         return None, "route_unassigned"
     except router.ManifestError as e:
         ntfy(f"dispatcher: wq#{tid} has an unroutable archetype ({e}) — skipped "
@@ -1304,6 +1308,8 @@ def _do_pass(cfg, log, state, dry_run):
             try:
                 t = router.wq_show(tid)
             except SystemExit:
+                if _terminating:
+                    raise
                 log.skip(tid, lane, "scan", "vanished")
                 continue
             except subprocess.TimeoutExpired:
@@ -1643,10 +1649,19 @@ def run_pass(dry_run=False):
     return rc
 
 
+_terminating = False
+
+
 def _term_to_exit(signum, _frame):
     """wq#2080: systemd's TimeoutStartSec sends SIGTERM, which by default kills Python
     without running `finally` — the slock leaked for its full 30m TTL. SystemExit unwinds
-    through run_pass's release."""
+    through run_pass's release.
+
+    wq#2084: router.wq_show/assign also raise SystemExit for not-found, and the scan-stage
+    handlers swallow it; they re-raise when _terminating is set so the signal isn't
+    mistaken for a vanished ticket."""
+    global _terminating
+    _terminating = True
     raise SystemExit(128 + signum)
 
 
@@ -1659,6 +1674,8 @@ def main(argv=None):
     r.add_argument("--dry-run", action="store_true",
                    help="decide + log would_spawn; zero side effects")
     a = ap.parse_args(argv)
+    global _terminating
+    _terminating = False
     signal.signal(signal.SIGTERM, _term_to_exit)
     return run_pass(dry_run=a.dry_run)
 
