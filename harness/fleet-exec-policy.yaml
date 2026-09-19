@@ -82,6 +82,9 @@ allow:
     - /home/lumen/questfree/docs
     - /home/lumen/projects/bench
     - /home/lumen/infra
+    # wq#1697 follow-on: split-watch retire/apply work (wq#1739) cites this dir.
+    # Swept 2026-09-19 with harness/read_dir_sweep.py: files=2, hits=0.
+    - /home/lumen/agents/split-watch
     # wq#1535: minerva_promote.publish() copies proposal.md + plan.md here per proposal,
     # masked through read_dir_sweep.PATTERNS at write time (fail closed if the sweep
     # module is unavailable). Swept 2026-09-08 after publishing all 14 live proposals:
