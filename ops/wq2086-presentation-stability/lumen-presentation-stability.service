@@ -1,0 +1,34 @@
+[Unit]
+Description=Competence-preserving perturbation stability probe for the Minerva verify gate (wq#2086, prop d653cc13c6a3)
+Documentation=file:///home/lumen/foreman/ops/wq2086-presentation-stability/README.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/minerva
+# Same LiteLLM key as the rest of the Minerva pipeline (wq#721: EnvironmentFile, not
+# Environment=, or the main unit's /home/lumen/agent/.env wins and this runs on
+# ops-emergency).
+EnvironmentFile=/home/lumen/.secrets/litellm-service-keys/env/minerva-pipeline.env
+# The probe measures the gate as deployed, so it must run the rung the gate runs
+# (minerva-eval.service.d/40-judge-model.conf, wq#1501): free/local, no paid judge spend.
+Environment=VERIFY_JUDGE_MODEL=qwen36-local
+Environment=VERIFY_JUDGE_MODEL_2=
+Environment=VERIFY_JUDGE_TIMEOUT=150
+Environment=VERIFY_JUDGE_MAX_TOKENS=600
+Environment=VERIFY_JUDGE_SAMPLES=1
+# 3 items x (2 baselines + 2 variants) = 12 scores; MAX_SCORES is the hard stop.
+Environment=PSTAB_LIMIT=3
+Environment=PSTAB_VARIANTS=2
+Environment=PSTAB_MAX_SCORES=20
+# A finding is an ntfy, not a failed unit: no --fail-on-finding here, or the healer
+# retries a probe whose whole job is to report.
+ExecStart=/usr/bin/python3 /home/lumen/bin/minerva-presentation-stability
+# qwen36-local is a CPU llama-server on Isis that also serves LPP: slow, never urgent.
+TimeoutStartSec=2h
+MemoryMax=1G
+Nice=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=presentation-stability

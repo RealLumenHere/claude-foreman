@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly presentation-stability probe of the Minerva verify gate (wq#2086)
+
+[Timer]
+# Monday 03:20 UTC: off the Sunday 12:00 pelican-bench slot, and off the hours when Isis
+# (qwen36-local) is serving LPP.
+OnCalendar=Mon 03:20 UTC
+RandomizedDelaySec=20min
+Persistent=false
+
+[Install]
+WantedBy=timers.target
