@@ -157,9 +157,22 @@ _CLAUSE_SPLIT_RE = re.compile(r'[;:,!?\n()]|\.(?=\s|$)')
 # ordinary words ("persistent", "different") and would suppress REAL conflicts,
 # a worse failure than the one being fixed (measured in
 # reports/2025_probe_negation_contraction.py: 2 false negatives).
+# wq#2031: "unambiguous" was asserted, not checked, and two of the stems failed
+# it - ca+nt="cant" (jargon; a tilted surface) and wo+nt="wont" (customary
+# habit) are ordinary English words, so the enumerated arm reproduced the exact
+# false negative the comment above says the general arm must avoid: "Add a
+# cant-adjusted route named bge-m3 ... as a new entry" returned (False, None)
+# (reports/2028_probe_negation_stem_homograph.py). Both are dropped: the
+# apostrophe'd "can't"/"won't" are already the general arm's job, "cannot" is
+# literal, and bare "not" covers "can not"/"will not". Any stem added here must
+# first clear reports/2031_probe_negation_stem_homograph.py, which checks every
+# bare spelling against the system word list and exercises each as a decoy word
+# in a genuine route-add clause. Cost of the trade: an apostrophe-less typo
+# ("this cant add a new route") now reads as a conflict - a false positive a
+# human reviewer sees, not a duplicate silently dropped on the floor.
 _NEGATION_RE = re.compile(
     r"\b(?:\w+n't|"
-    r"(?:do|does|did|is|are|was|were|wo|ca|sha|has|have|had|could|would|"
+    r"(?:do|does|did|is|are|was|were|sha|has|have|had|could|would|"
     r"should|must|might|need|ought|ai)nt|"
     r"not|cannot|no|never|without|rather than|instead of)\b"
 )

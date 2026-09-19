@@ -70,9 +70,14 @@ def run():
         "for bge-m3.",
         "Wrap the gateway in a cache; this mustn't add a new litellm route "
         "for bge-m3.",
-        "Wrap the gateway in a cache; this cant add a new litellm route "
-        "for bge-m3.",
+        # wq#2031 removed the bare "cant" spelling from the negation list, so
+        # the apostrophe-less typo of "can't" is deliberately no longer cleared
+        # here; "cannot" and "can not" still are, and "can't" is covered above.
         "Wrap the gateway in a cache; this cannot add a new litellm route "
+        "for bge-m3.",
+        "Wrap the gateway in a cache; this can not add a new litellm route "
+        "for bge-m3.",
+        "Wrap the gateway in a cache; this won't add a new litellm route "
         "for bge-m3.",
     ]
     for text in false_positive_cases:
@@ -104,6 +109,15 @@ def run():
         "survives gateway restarts.",
         "Add a different litellm route named claude-max-sonnet for the "
         "escalation rung.",
+        # wq#2031: same shape, but the decoy word collides with a bare
+        # "<stem>nt" alternative wq#2025 enumerated as "unambiguous" - "cant"
+        # (a tilted surface) and "wont" (a customary habit) are both ordinary
+        # English words, and both suppressed a genuine duplicate route add
+        # (wq#2028 repro, reports/2028_probe_negation_stem_homograph.py).
+        "Add a cant-adjusted route named bge-m3 to the litellm model pool "
+        "as a new entry.",
+        "Register the wont pattern as a new litellm route named bge-m3 in "
+        "the model pool.",
     ]
     for text in true_positive_cases:
         conflict, route = minerva_dedup.route_conflict(text)
