@@ -240,8 +240,9 @@ def load_config(path=None):
 
     pos_int(cfg, "max_spawns_per_pass", "root")
     pos_int(cfg, "cloud_ceiling", "root")
-    if "local_ceiling" in cfg:
-        pos_int(cfg, "local_ceiling", "root")
+    for key in ("local_ceiling", "local_max_spawns_per_pass", "pass_deadline_s"):
+        if key in cfg:
+            pos_int(cfg, key, "root")
     tight = cfg.get("tight_mode")
     if not isinstance(tight, dict):
         raise ConfigError(f"config {path}: tight_mode must be an object")
@@ -1172,15 +1173,475 @@ LANGFUSE_EMIT = emit_langfuse  # seam: tests replace to prove best-effort isolat
 
 # ---- the pass (§3) -------------------------------------------------------------------
 
+# wq#2088 (research/DISPATCH_STALL_RCA.md §4.3): one pass, two partitions. `_gate_candidate`
+# runs every pool-independent stage once per candidate and resolves the model; the ready
+# tickets are then split by pool and admitted by `_admit_local` (first, no cloud gate of any
+# kind) and `_admit_cloud`. A stop in one partition never reaches the other. An admission
+# returns True (spawn), False (skipped, logged) or a str (stop reason: end this partition).
+PASS_DEADLINE_S = 240  # soft: the cloud partition ends with halt stage=deadline; local ran first
+
+
+class _PassCtx:
+    """Per-pass working state shared by the gate and both partitions."""
+
+    def __init__(self, cfg, log, state, dry_run):
+        self.cfg, self.log, self.state, self.dry_run = cfg, log, state, dry_run
+        self.deadline = time.monotonic() + cfg.get("pass_deadline_s", PASS_DEADLINE_S)
+        self.dep_cache, self.pressure_cache, self.gate_cache = {}, {}, {}
+        self.stuck, self.harness_defects = {}, {}
+        self.units = None            # live fworker units; None = re-read before next use
+        self.unit_is_local = {}      # unit -> bool, one `wq show` per unit per pass
+        self.psi_tight = False       # box pressure: throttles both partitions
+        self.cloud_tight = False     # no-resets_at governor fallback: cloud only
+        self.limits, self.pacing_cfg = {}, {}
+        self.burn_cfg, self.burn_obs = {}, None
+        self.burn_cache, self.burn_logged = {}, set()  # pools tuple -> (allowed | None, detail)
+        self.spawned = {"local": 0, "cloud": 0}
+        self.lane_capped = {"local": 0, "cloud": 0}
+        self.local_slots_full = 0
+        self.lint_scanned = self.lint_flagged = 0  # wq#1437 stage 3.7 (warn): measurement only
+        self.quarantined = []
+
+    def refresh_units(self):
+        self.units = concurrency.list_running_units()
+
+    def unit_counts(self):
+        """(local, cloud) running units. Local-ness is cached per unit for the pass."""
+        local = cloud = 0
+        for u in self.units:
+            if u not in self.unit_is_local:
+                self.unit_is_local[u] = concurrency.is_local_unit(u)
+            if self.unit_is_local[u]:
+                local += 1
+            else:
+                cloud += 1
+        return local, cloud
+
+    def burn_allowed(self, pools):
+        if pools not in self.burn_cache:
+            self.burn_cache[pools] = burn_rate.allowed_concurrent(
+                self.limits, self.cfg["cloud_ceiling"], self.burn_cfg,
+                observed=self.burn_obs, pools=pools)
+        return self.burn_cache[pools]
+
+    def tight(self, part):
+        return self.psi_tight or (part == "cloud" and self.cloud_tight)
+
+
+def _gate_candidate(ctx, cand):
+    """Stages 3-7 + model resolution — nothing here depends on which pool the ticket draws
+    from. Returns a ready record, or None once the skip has been logged."""
+    cfg, log, state, dry_run = ctx.cfg, ctx.log, ctx.state, ctx.dry_run
+    tid, lane = cand["id"], cand["lane"]
+
+    # stage 3 — lane policy (MUST 5 lane caps; wq#713 repo mapping, MUST 7)
+    policy = cfg["lanes"][lane]
+    if state["lane_counts"].get(lane, 0) >= policy["max_per_day"]:
+        log.skip(tid, lane, "lane_policy", "lane_cap",
+                 detail=f"max_per_day={policy['max_per_day']} reached")
+        return None
+    if lane in HUMAN_LANES:
+        # wq#1478 (LIVENESS_GATE.md §12.4): a Frank-gate whose premise is already
+        # met on live state is closed here, before Frank sees it. Cheap by
+        # construction (only known-tagged tickets, TTL-cached); any other verdict
+        # falls through to the unchanged skip. Can only close, never dispatch.
+        if _liveness_autoclosed(tid, None, log):
+            return None
+        log.skip(tid, lane, "frank_gate", "frank_gated",
+                 detail="human-owned lane (Frank's action/decision queue) — not worker-dispatchable")
+        return None
+    repo = router.repo_for_lane(lane)
+    if not repo and lane != REPO_HINT_LANE:
+        log.skip(tid, lane, "lane_policy", "lane_unmapped",
+                 detail="no LANE_REPO entry — never guess a repo")
+        return None
+
+    try:
+        t = router.wq_show(tid)
+    except SystemExit:
+        if _terminating:
+            raise
+        log.skip(tid, lane, "scan", "vanished")
+        return None
+    except subprocess.TimeoutExpired:
+        # wq#1408 §1.5: an sqlite-lock hang here used to wedge the whole pass
+        # (TimeoutStartSec=600 SIGTERM, no pass_end, no error line). router.wq()
+        # now bounds it at 30s; treat the same as "couldn't find the ticket".
+        log.skip(tid, lane, "scan", "vanished", detail="wq show timed out")
+        return None
+    if t.get("status") != "open":
+        log.skip(tid, lane, "scan", "not_open", detail=t.get("status"))
+        return None
+
+    # wq#433: the lane resolved a repo above, but if the TITLE names a different
+    # one the lane is wrong and dispatching would hand the worker a tree without
+    # any of the paths its ticket cites (ISSUE-LOG #56 class). Skip loudly instead.
+    mismatch = router.repo_mismatch(t)
+    if mismatch:
+        log.skip(tid, lane, "lane_policy", "repo_mismatch", detail=mismatch)
+        return None
+
+    # wq#1094/wq#1123: 'auto' has no single LANE_REPO entry (repo-sweeps target
+    # different repos, wq#830) — but a repo-sweep ticket carries its exact
+    # target repo in its own detail (repo_sweep.py wrote it there). router's
+    # shared resolver reads that back instead of guessing; anything else in
+    # 'auto' still refuses. wq#1331: the same resolver now also honours a
+    # ticket's own needs:repo tag (and wq#1220's verify-repo hint) AHEAD of the
+    # lane default, so it runs for every ticket, not just unmapped lanes — for a
+    # plain lane ticket it returns exactly the LANE_REPO path already in `repo`.
+    repo = router.repo_for_ticket(t) or repo
+    if not repo:
+        log.skip(tid, lane, "lane_policy", "lane_unmapped",
+                 detail="no LANE_REPO entry — never guess a repo")
+        return None
+
+    # stage 3.7 — capability (wq#1437 derive / wq#1438 enforce,
+    # BROKER_WIRING.md §2.1-§2.2). In front of the holds by design: a held
+    # ticket must still be linted and auto-tagged, because that is exactly
+    # what lets the hold below release (§2.2 last para — otherwise
+    # auto-tagging a held ticket never lets it run), and the corpus this is
+    # tuned on is mostly blocked/held tickets (§0, "26 of the 37 are
+    # blocked").
+    ctx.lint_scanned += 1
+    derived = lint_capability(tid, t, lane, repo, log)
+    if derived:
+        ctx.lint_flagged += 1
+    if enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
+        return None
+
+    # stage 3.5 — runaway (wq#718): a ticket stuck below RUNAWAY_MAX_ATTEMPTS
+    # cycles without reaching done is skipped every pass, not re-attempted forever
+    if tid in ctx.stuck:
+        handle_runaway_stuck(state, tid, lane, ctx.stuck[tid]["attempts"], dry_run, log)
+        return None
+
+    # stage 3.5b — harness-defect hold (wq#1415): a SpawnRefused preflight
+    # refusal never writes an attempt-N.json (fworker.py handle_spawn_refused —
+    # "attempt not charged"), so it never trips the attempt-count runaway check
+    # just above; without this it got re-claimed on every event-driven refill
+    # kick instead of the timer's 20-min cadence. See
+    # runaway.harness_defect_ticket_ids().
+    if tid in ctx.harness_defects:
+        handle_harness_defect_hold(state, tid, lane,
+                                   ctx.harness_defects[tid]["summary"], dry_run, log)
+        return None
+
+    # stage 3.5c — spawn-loop guard (wq#1703): neither breaker above sees a
+    # worker that dies before writing attempt-N.json OR failure.json, so count
+    # this dispatcher's own spawns instead. See spawn_loop_guard.looping().
+    spawn_loop = spawn_loop_guard.looping(state, tid)
+    if spawn_loop:
+        handle_spawn_loop(state, tid, lane, spawn_loop, dry_run, log)
+        return None
+
+    # stage 3.6 — epic/tracker parents (wq#428): a rollup is never dispatchable work
+    why = nodispatch_reason(t)
+    if why:
+        log.skip(tid, lane, "nodispatch", "nodispatch_marker", detail=why)
+        return None
+
+    # stage 4 — Frank-gate (MUST 3): never claimed, no override flag
+    why = frank_gate_reason(t)
+    if why:
+        if _liveness_autoclosed(tid, t, log):  # wq#1478 §12.4, same as stage 3
+            return None
+        log.skip(tid, lane, "frank_gate", "frank_gated", detail=why)
+        return None
+
+    # stage 5 — fire approval: requires_approval now honored from config.json
+    # (MUST 4 hardcode + `or lane == FIRE_LANE` removed 2026-08-23 per Frank directive)
+    fire_exempt = bool(policy.get("requires_approval"))
+    if fire_exempt and not os.path.exists(fire_approval_path(tid)):
+        handle_unapproved_fire(state, tid, lane, dry_run, log)
+        return None
+
+    # stage 5b — no probe, no dispatch (wq#1261 §4 item 1): every fleet-fires
+    # ticket must carry a machine-checkable re-verify condition before it ever
+    # reaches a worker. The legacy aq-row reference (wq#1234, `aq row: #<id>`)
+    # still counts — only a ticket with NEITHER form is refused.
+    if lane == FIRE_LANE:
+        detail = t.get("detail", "")
+        has_cmd_probe = fire_gate.parse_fire_probe(detail) is not None
+        has_aq_probe = fire_gate.parse_probe_ref(detail)[1] is not None
+        if not has_cmd_probe and not has_aq_probe:
+            handle_no_probe_fire(state, tid, lane, dry_run, log)
+            return None
+
+    # stage 5c — hold (wq#1461): checked before deps so a hold on a still
+    # deps-blocked ticket is named in the DecisionLog, not silently absorbed
+    # into deps_unmet. Structural — not a stall, another agent already claimed
+    # intent (see hold_reason docstring for the wq#1410/1409/1411 double-build
+    # history this exists to stop).
+    why = hold_reason(t)
+    if why:
+        log.skip(tid, lane, "hold", "held", detail=why)
+        return None
+
+    # stage 6 — deps (MUST 2)
+    unmet = unmet_deps(t, ctx.dep_cache)
+    if unmet:
+        log.skip(tid, lane, "deps", "deps_unmet", detail=",".join(unmet))
+        return None
+
+    # stage 7 — units are the ground truth (MUST 6); one read per pass, not per candidate
+    if ctx.units is None:
+        ctx.refresh_units()
+    if f"fworker-wq{tid}" in ctx.units:
+        log.skip(tid, lane, "already_running", "already_running")
+        return None
+
+    # the partition point: the model decides which pool's gates the ticket answers to
+    model, skip_reason = candidate_model(t, tid)
+    if not model:
+        log.skip(tid, lane, "budget", skip_reason,
+                 detail="router has no rung for this ticket")
+        return None
+    return {"cand": cand, "t": t, "repo": repo, "policy": policy, "fire_exempt": fire_exempt,
+            "model": model, "part": "local" if concurrency.is_local_model(model) else "cloud"}
+
+
+def _tight_pri_skip(ctx, r):
+    """wq#1699: under tight mode only epri<=min_pri tickets run — the aged effective priority
+    the scan sorted on (wq#661), not raw pri: an aged p2 at ep1 sorts first and must pass."""
+    cand, min_pri = r["cand"], ctx.cfg["tight_mode"]["min_pri"]
+    if cand["epri"] <= min_pri:
+        return False
+    ctx.log.skip(cand["id"], cand["lane"], "budget", "tight_pri", model=r["model"],
+                 detail=f"epri {cand['epri']} (pri {cand['pri']}) > tight min_pri {min_pri}")
+    return True
+
+
+def _admit_local(ctx, r):
+    """Local rung (wq#2081/wq#2088): bounded by the boxes, never by the Anthropic login —
+    no governor, burn-rate, pacing or cloud_ceiling, and nothing here can stop a cloud
+    ticket. A full local lane skips only local tickets. Only box (PSI) pressure applies. Returns True to
+    proceed to spawn."""
+    tid, lane, model = r["cand"]["id"], r["cand"]["lane"], r["model"]
+    if ctx.psi_tight and _tight_pri_skip(ctx, r):
+        return False
+    local_ceiling = ctx.cfg.get("local_ceiling", concurrency.LOCAL_CEILING)
+    n_local, _ = ctx.unit_counts()
+    if n_local >= local_ceiling:
+        ctx.local_slots_full += 1
+        ctx.log.skip(tid, lane, "concurrency", "local_slots_full", model=model,
+                     detail=f"{n_local} local unit(s) at ceiling {local_ceiling}")
+        return False
+    return True
+
+
+def _admit_cloud(ctx, r):
+    """Stages 8/8b/9 for a cloud model: governor verdict, burn-rate, pacing, cloud_ceiling.
+    A stop here is a stop of the cloud partition only. Returns True to proceed to spawn,
+    False to skip this ticket, a stop-reason str to end the partition."""
+    cfg, log, state = ctx.cfg, ctx.log, ctx.state
+    cand, model = r["cand"], r["model"]
+    tid, lane = cand["id"], cand["lane"]
+    tight_cfg = cfg["tight_mode"]
+
+    # stage 8 — budget (MUST 5): governor verdict + floors via router
+    pressure = ctx.pressure_cache.get(model)
+    if pressure is None:
+        pressure = governor_pressure(model)
+        ctx.pressure_cache[model] = pressure
+    if pressure == "deny":
+        log.skip(tid, lane, "budget", "governor_deny", model=model)
+        return False
+    burn = None  # (pools, allowed_concurrent) when the controller owns this ticket
+    if pressure == "tight":
+        model_pools = burn_rate.pools_for_model(model)
+        allowed, burn_detail = ctx.burn_allowed(model_pools)
+        if allowed is None:
+            if not ctx.cloud_tight:  # no percent/resets_at anywhere: old binary clamp
+                ctx.cloud_tight = True
+                log.emit("tight_mode", model=model,
+                         reason=f"pressure tight: max {tight_cfg['max_spawns_per_pass']} "
+                                f"spawn(s), epri<={tight_cfg['min_pri']} only",
+                         detail=burn_detail)
+        else:
+            # wq#1699: scaled, not binary, and no pri filter — scarcity shows up
+            # as a lower concurrency ceiling at stage 9 instead.
+            burn = (model_pools, allowed)
+            if model not in ctx.burn_logged:
+                ctx.burn_logged.add(model)
+                log.emit("burn_rate", model=model,
+                         reason=f"pressure tight: burn-rate ceiling {allowed}",
+                         detail=burn_detail)
+    if ctx.tight("cloud"):
+        if sum(ctx.spawned.values()) >= tight_cfg["max_spawns_per_pass"]:
+            log.emit("halt", stage="spawn_cap",
+                     reason=f"tight-mode spawn cap reached ({sum(ctx.spawned.values())})")
+            return "spawn_cap"
+        if _tight_pri_skip(ctx, r):
+            return False
+    # stage 8b — weekly-budget pacing (wq#716): forward-looking, on top of the
+    # governor's own reactive floor above. Never blocks a Frank-approved fire ticket.
+    verdict = PACING_HOOK(cand["epri"], model, ctx.limits, ctx.pacing_cfg,
+                          r["fire_exempt"])  # wq#1699: epri, not raw pri
+    if verdict.action != "ok":
+        log.skip(tid, lane, "budget", f"pacing_{verdict.action}", model=model,
+                 **verdict.as_fields())
+        handle_pacing_throttle(state, verdict, ctx.pacing_cfg, ctx.dry_run, log)
+        return False
+
+    # stage 9 — cloud concurrency ceiling; local units never count (T4)
+    _, n_cloud = ctx.unit_counts()
+    if n_cloud >= cfg["cloud_ceiling"]:
+        log.emit("halt", stage="concurrency", reason="no_slots",
+                 detail=f"{n_cloud} cloud unit(s) at ceiling "
+                        f"{cfg['cloud_ceiling']}; next tick retries")
+        return "no_slots"
+    if burn is not None and n_cloud >= burn[1]:
+        # wq#1699: the burn-rate ceiling is the concurrency the budget can sustain
+        # to its reset. A model on the pass pools only (every cloud model draws on
+        # them) -> same halt as cloud_ceiling: dispatch_health reads no_slots as
+        # healthy, and min_allowed>=1 means a worker is running. A model with its
+        # own extra pool (fable) -> skip only it; its tightness may come from that
+        # pool alone, so it must not halt tickets on unflagged pools behind it.
+        model_pools, allowed = burn
+        if model_pools == burn_rate.PASS_POOLS:
+            log.emit("halt", stage="concurrency", reason="no_slots",
+                     detail=f"{n_cloud} cloud unit(s) at burn-rate ceiling "
+                            f"{allowed}; next tick retries")
+            return "no_slots"
+        log.skip(tid, lane, "budget", "burn_rate_cap", model=model,
+                 detail=f"{n_cloud} cloud unit(s) at {model} burn-rate "
+                        f"ceiling {allowed}")
+        return False
+    return True
+
+
+def _spawn(ctx, r):
+    """Stage 9b preflight + stage 10 spawn. Returns True iff a worker was started (or, under
+    --dry-run, would have been)."""
+    log, state = ctx.log, ctx.state
+    cand, repo, model = r["cand"], r["repo"], r["model"]
+    tid, lane = cand["id"], cand["lane"]
+
+    # stage 9b — harness-preflight stamp (§2c): a wave must not discover a
+    # permission gap three hours in when a two-minute preflight would have
+    # caught it before the first spawn. Unmigrated repos (no
+    # repos.d/<repo>.json) pass through unchanged — same additive-migration
+    # boundary permission_profiles.py draws for the render-at-dispatch pack
+    # itself. wq#1372: a stale/missing stamp (settings or preflight_cmds
+    # changed since the last proof) auto-reproves right here instead of
+    # stranding the lane until a human re-runs harness-preflight — see
+    # handle_stale_preflight(). wq#1408: the gate check itself can raise (a
+    # JSON typo in any profile fragment) — repo_gate_check caches that per
+    # repo per pass so it costs one exception, not one per ticket of that repo.
+    preflight_ok, preflight_reason, gate_errored = repo_gate_check(ctx.gate_cache, repo)
+    if not preflight_ok:
+        if gate_errored:
+            handle_profile_unreadable(state, tid, lane, repo, preflight_reason,
+                                       ctx.dry_run, log)
+            return False
+        if not handle_stale_preflight(state, tid, lane, repo, preflight_reason,
+                                       ctx.dry_run, log):
+            return False
+    elif preflight_reason:
+        # wq#1409 §3.2: soft-stale — profile unchanged, settings churned.
+        # Dispatch on the existing proof; say so once per repo per pass and
+        # reseal so the next pass reads it as plain fresh.
+        handle_soft_stale_preflight(ctx.gate_cache, tid, lane, repo, preflight_reason,
+                                     ctx.dry_run, log)
+
+    # stage 10 — spawn via the existing stack (MUST 7: router owns repo + tuple)
+    if ctx.dry_run:
+        ctx.spawned[r["part"]] += 1  # count so dry-run reports caps honestly
+        log.emit("would_spawn", ticket=tid, lane=lane, model=model, repo=repo)
+        return False
+    if sum(ctx.spawned.values()):
+        time.sleep(random.uniform(*STAGGER))  # same stagger doctrine as spawner
+    unit = spawner.dispatch_one(tid, repo)
+    if unit is None:
+        log.emit("error", stage="spawn", ticket=tid, lane=lane,
+                 reason="spawn_failed", model=model)
+        ntfy(f"dispatcher: spawn failed for wq#{tid} ({lane}) — see dispatcher.log")
+        return False
+    ctx.spawned[r["part"]] += 1
+    ctx.units = None  # re-read: the next admission must see this worker
+    state["lane_counts"][lane] = state["lane_counts"].get(lane, 0) + 1
+    spawn_loop_guard.record_spawn(state, tid)  # wq#1703, before the save below
+    save_state(state)  # §9: written after each spawn, atomically
+    log.emit("spawn", ticket=tid, lane=lane, model=model, repo=repo, unit=unit)
+    return True
+
+
+def _run_partition(ctx, part, ready):
+    """Admit and spawn one pool's ready tickets, in scan order. Returns why the partition
+    stopped early ("kill_switch", "spawn_cap", "no_slots", "deadline",
+    "lumen_run_unreachable"), or None if it ran to the end."""
+    cfg, log = ctx.cfg, ctx.log
+    tight_cfg = cfg["tight_mode"]
+    if part == "local":
+        cap = cfg.get("local_max_spawns_per_pass",
+                      cfg.get("local_ceiling", concurrency.LOCAL_CEILING))
+    else:
+        cap = cfg["max_spawns_per_pass"]
+    admit = _admit_local if part == "local" else _admit_cloud
+    for r in ready:
+        cand = r["cand"]
+        tid, lane = cand["id"], cand["lane"]
+
+        # stage 0 recheck — a mid-run DISARM/STOP halts before the next spawn (MUST 8).
+        # Halts stay outside the per-ticket boundary below: a `return` there would not be
+        # caught by its `except Exception` either, but keeping them out makes that moot.
+        ks = kill_switch()
+        if ks:
+            log.emit("halt", stage="kill_switch", reason=ks)
+            return "kill_switch"
+        tight = ctx.tight(part)
+        # tight (box pressure / fallback clamp) caps the whole pass; otherwise each pool has
+        # its own cap so a busy cloud cannot eat the local lane's spawns or vice versa.
+        spawned, limit = ((sum(ctx.spawned.values()), tight_cfg["max_spawns_per_pass"])
+                          if tight else (ctx.spawned[part], cap))
+        if spawned >= limit:
+            log.emit("halt", stage="spawn_cap",
+                     reason=f"per-pass {part} spawn cap reached ({spawned}/{limit}"
+                            f"{', tight' if tight else ''})")
+            return "spawn_cap"
+        if part == "cloud" and time.monotonic() > ctx.deadline:
+            log.emit("halt", stage="deadline",
+                     reason=f"pass deadline {cfg.get('pass_deadline_s', PASS_DEADLINE_S)}s "
+                            f"passed; cloud partition ends, next tick retries")
+            return "deadline"
+
+        # wq#1408 §3.1 (the wq#1368 class, generalized): everything below is one ticket's
+        # decision. A bad archetype, an unreadable dep tag, a malformed ticket field —
+        # none of it may cost any OTHER candidate its decision this pass. Only
+        # KeyboardInterrupt/SystemExit escape; everything else is quarantined.
+        try:
+            # spawns earlier in this pass may have used up the lane's daily allowance that
+            # the gate saw as open
+            policy = r["policy"]
+            if ctx.state["lane_counts"].get(lane, 0) >= policy["max_per_day"]:
+                ctx.lane_capped[part] += 1
+                log.skip(tid, lane, "lane_policy", "lane_cap",
+                         detail=f"max_per_day={policy['max_per_day']} reached")
+                continue
+            if ctx.units is None:
+                try:
+                    ctx.refresh_units()
+                except concurrency.LumenRunError as e:
+                    log.emit("halt", stage="concurrency", reason="lumen_run_unreachable",
+                             detail=str(e))  # fail toward under-subscription
+                    return "lumen_run_unreachable"
+            verdict = admit(ctx, r)
+            if isinstance(verdict, str):
+                return verdict
+            if verdict:
+                _spawn(ctx, r)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as e:  # noqa: BLE001 — wq#1408 §3.1: quarantine boundary
+            log.skip(tid, lane, "unhandled", "quarantined", detail=repr(e)[:300])
+            ctx.quarantined.append(tid)
+    return None
+
+
 def _do_pass(cfg, log, state, dry_run):
     candidates = scan_candidates(cfg, log)
     tight_cfg = cfg["tight_mode"]
     tight = False
-    spawned = 0
-    lint_scanned = lint_flagged = 0  # wq#1437 stage 3.7 (warn): measurement only
-    quarantined = []
-    dep_cache, pressure_cache, gate_cache = {}, {}, {}
-
     # wq#1408 §3.1: these three preamble calls run once per pass, before any ticket is
     # decided — an exception here used to abort the pass before a single candidate got
     # a decision (no pass_end, invisible to the health classifier). Degrade to each
@@ -1254,349 +1715,59 @@ def _do_pass(cfg, log, state, dry_run):
     # per-pool ceilings above already apply it internally (burn_rate.allowed_concurrent).
     frank_is_active, frank_active_detail = burn_rate.frank_active(datetime.now(timezone.utc))
 
-    def burn_allowed(pools):
-        if pools not in burn_cache:
-            burn_cache[pools] = burn_rate.allowed_concurrent(
-                limits, cfg["cloud_ceiling"], burn_cfg, observed=burn_obs, pools=pools)
-        return burn_cache[pools]
+    ctx = _PassCtx(cfg, log, state, dry_run)
+    ctx.stuck, ctx.harness_defects, ctx.psi_tight = stuck, harness_defects, tight
+    ctx.limits, ctx.pacing_cfg, ctx.burn_cfg, ctx.burn_obs = limits, pacing_cfg, burn_cfg, burn_obs
 
-    for i, cand in enumerate(candidates):
-        tid, lane = cand["id"], cand["lane"]
-
-        # stage 0 recheck — a mid-run DISARM/STOP halts before the next spawn (MUST 8).
-        # Halts stay pass-level `break`s outside the per-ticket boundary below: a
-        # `break` inside a `try` still exits the loop normally, without being caught by
-        # that try's `except Exception`, but keeping halts out of the boundary entirely
-        # makes that not matter.
-        ks = kill_switch()
+    # gate: every pool-independent stage, once per candidate, in scan order
+    ready = {"local": [], "cloud": []}
+    halted = False
+    for cand in candidates:
+        ks = kill_switch()  # stage 0
         if ks:
             log.emit("halt", stage="kill_switch", reason=ks)
+            halted = True
             break
-        limit = tight_cfg["max_spawns_per_pass"] if tight else cfg["max_spawns_per_pass"]
-        if spawned >= limit:
-            log.emit("halt", stage="spawn_cap",
-                     reason=f"per-pass spawn cap reached ({spawned}/{limit}"
-                            f"{', tight' if tight else ''})")
-            break
-
-        # wq#1408 §3.1 (the wq#1368 class, generalized): everything from here to the
-        # end of the loop body is one ticket's decision. A bad archetype, an unreadable
-        # dep tag, a malformed ticket field — none of it may cost any OTHER candidate
-        # its decision this pass. Only KeyboardInterrupt/SystemExit escape; everything
-        # else is quarantined: skip this ticket, log why, keep scanning.
         try:
-            # stage 3 — lane policy (MUST 5 lane caps; wq#713 repo mapping, MUST 7)
-            policy = cfg["lanes"][lane]
-            if state["lane_counts"].get(lane, 0) >= policy["max_per_day"]:
-                log.skip(tid, lane, "lane_policy", "lane_cap",
-                         detail=f"max_per_day={policy['max_per_day']} reached")
-                continue
-            if lane in HUMAN_LANES:
-                # wq#1478 (LIVENESS_GATE.md §12.4): a Frank-gate whose premise is already
-                # met on live state is closed here, before Frank sees it. Cheap by
-                # construction (only known-tagged tickets, TTL-cached); any other verdict
-                # falls through to the unchanged skip. Can only close, never dispatch.
-                if _liveness_autoclosed(tid, None, log):
-                    continue
-                log.skip(tid, lane, "frank_gate", "frank_gated",
-                         detail="human-owned lane (Frank's action/decision queue) — not worker-dispatchable")
-                continue
-            repo = router.repo_for_lane(lane)
-            if not repo and lane != REPO_HINT_LANE:
-                log.skip(tid, lane, "lane_policy", "lane_unmapped",
-                         detail="no LANE_REPO entry — never guess a repo")
-                continue
-
-            try:
-                t = router.wq_show(tid)
-            except SystemExit:
-                if _terminating:
-                    raise
-                log.skip(tid, lane, "scan", "vanished")
-                continue
-            except subprocess.TimeoutExpired:
-                # wq#1408 §1.5: an sqlite-lock hang here used to wedge the whole pass
-                # (TimeoutStartSec=600 SIGTERM, no pass_end, no error line). router.wq()
-                # now bounds it at 30s; treat the same as "couldn't find the ticket".
-                log.skip(tid, lane, "scan", "vanished", detail="wq show timed out")
-                continue
-            if t.get("status") != "open":
-                log.skip(tid, lane, "scan", "not_open", detail=t.get("status"))
-                continue
-
-            # wq#433: the lane resolved a repo above, but if the TITLE names a different
-            # one the lane is wrong and dispatching would hand the worker a tree without
-            # any of the paths its ticket cites (ISSUE-LOG #56 class). Skip loudly instead.
-            mismatch = router.repo_mismatch(t)
-            if mismatch:
-                log.skip(tid, lane, "lane_policy", "repo_mismatch", detail=mismatch)
-                continue
-
-            # wq#1094/wq#1123: 'auto' has no single LANE_REPO entry (repo-sweeps target
-            # different repos, wq#830) — but a repo-sweep ticket carries its exact
-            # target repo in its own detail (repo_sweep.py wrote it there). router's
-            # shared resolver reads that back instead of guessing; anything else in
-            # 'auto' still refuses. wq#1331: the same resolver now also honours a
-            # ticket's own needs:repo tag (and wq#1220's verify-repo hint) AHEAD of the
-            # lane default, so it runs for every ticket, not just unmapped lanes — for a
-            # plain lane ticket it returns exactly the LANE_REPO path already in `repo`.
-            repo = router.repo_for_ticket(t) or repo
-            if not repo:
-                log.skip(tid, lane, "lane_policy", "lane_unmapped",
-                         detail="no LANE_REPO entry — never guess a repo")
-                continue
-
-            # stage 3.7 — capability (wq#1437 derive / wq#1438 enforce,
-            # BROKER_WIRING.md §2.1-§2.2). In front of the holds by design: a held
-            # ticket must still be linted and auto-tagged, because that is exactly
-            # what lets the hold below release (§2.2 last para — otherwise
-            # auto-tagging a held ticket never lets it run), and the corpus this is
-            # tuned on is mostly blocked/held tickets (§0, "26 of the 37 are
-            # blocked").
-            lint_scanned += 1
-            derived = lint_capability(tid, t, lane, repo, log)
-            if derived:
-                lint_flagged += 1
-            if enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
-                continue
-
-            # stage 3.5 — runaway (wq#718): a ticket stuck below RUNAWAY_MAX_ATTEMPTS
-            # cycles without reaching done is skipped every pass, not re-attempted forever
-            if tid in stuck:
-                handle_runaway_stuck(state, tid, lane, stuck[tid]["attempts"], dry_run, log)
-                continue
-
-            # stage 3.5b — harness-defect hold (wq#1415): a SpawnRefused preflight
-            # refusal never writes an attempt-N.json (fworker.py handle_spawn_refused —
-            # "attempt not charged"), so it never trips the attempt-count runaway check
-            # just above; without this it got re-claimed on every event-driven refill
-            # kick instead of the timer's 20-min cadence. See
-            # runaway.harness_defect_ticket_ids().
-            if tid in harness_defects:
-                handle_harness_defect_hold(state, tid, lane,
-                                           harness_defects[tid]["summary"], dry_run, log)
-                continue
-
-            # stage 3.5c — spawn-loop guard (wq#1703): neither breaker above sees a
-            # worker that dies before writing attempt-N.json OR failure.json, so count
-            # this dispatcher's own spawns instead. See spawn_loop_guard.looping().
-            spawn_loop = spawn_loop_guard.looping(state, tid)
-            if spawn_loop:
-                handle_spawn_loop(state, tid, lane, spawn_loop, dry_run, log)
-                continue
-
-            # stage 3.6 — epic/tracker parents (wq#428): a rollup is never dispatchable work
-            why = nodispatch_reason(t)
-            if why:
-                log.skip(tid, lane, "nodispatch", "nodispatch_marker", detail=why)
-                continue
-
-            # stage 4 — Frank-gate (MUST 3): never claimed, no override flag
-            why = frank_gate_reason(t)
-            if why:
-                if _liveness_autoclosed(tid, t, log):  # wq#1478 §12.4, same as stage 3
-                    continue
-                log.skip(tid, lane, "frank_gate", "frank_gated", detail=why)
-                continue
-
-            # stage 5 — fire approval: requires_approval now honored from config.json
-            # (MUST 4 hardcode + `or lane == FIRE_LANE` removed 2026-08-23 per Frank directive)
-            fire_exempt = bool(policy.get("requires_approval"))
-            if fire_exempt and not os.path.exists(fire_approval_path(tid)):
-                handle_unapproved_fire(state, tid, lane, dry_run, log)
-                continue
-
-            # stage 5b — no probe, no dispatch (wq#1261 §4 item 1): every fleet-fires
-            # ticket must carry a machine-checkable re-verify condition before it ever
-            # reaches a worker. The legacy aq-row reference (wq#1234, `aq row: #<id>`)
-            # still counts — only a ticket with NEITHER form is refused.
-            if lane == FIRE_LANE:
-                detail = t.get("detail", "")
-                has_cmd_probe = fire_gate.parse_fire_probe(detail) is not None
-                has_aq_probe = fire_gate.parse_probe_ref(detail)[1] is not None
-                if not has_cmd_probe and not has_aq_probe:
-                    handle_no_probe_fire(state, tid, lane, dry_run, log)
-                    continue
-
-            # stage 5c — hold (wq#1461): checked before deps so a hold on a still
-            # deps-blocked ticket is named in the DecisionLog, not silently absorbed
-            # into deps_unmet. Structural — not a stall, another agent already claimed
-            # intent (see hold_reason docstring for the wq#1410/1409/1411 double-build
-            # history this exists to stop).
-            why = hold_reason(t)
-            if why:
-                log.skip(tid, lane, "hold", "held", detail=why)
-                continue
-
-            # stage 6 — deps (MUST 2)
-            unmet = unmet_deps(t, dep_cache)
-            if unmet:
-                log.skip(tid, lane, "deps", "deps_unmet", detail=",".join(unmet))
-                continue
-
-            # stages 7+9 share one live-unit read (MUST 6): units are the ground truth
-            try:
-                units = concurrency.list_running_units()
-            except concurrency.LumenRunError as e:
-                log.emit("halt", stage="concurrency", reason="lumen_run_unreachable",
-                         detail=str(e))  # fail toward under-subscription
-                break
-            if f"fworker-wq{tid}" in units:
-                log.skip(tid, lane, "already_running", "already_running")
-                continue
-
-            # stage 8 — budget (MUST 5): governor verdict + floors via router
-            model, skip_reason = candidate_model(t, tid)
-            if not model:
-                log.skip(tid, lane, "budget", skip_reason,
-                         detail="router has no rung for this ticket")
-                continue
-            pressure = pressure_cache.get(model)
-            if pressure is None:
-                pressure = governor_pressure(model)
-                pressure_cache[model] = pressure
-            if pressure == "deny":
-                log.skip(tid, lane, "budget", "governor_deny", model=model)
-                continue
-            burn = None  # (pools, allowed_concurrent) when the controller owns this ticket
-            # wq#2081: burn_rate/pacing meter Anthropic quota; a local-pool model draws none
-            # (models.yaml pools:[local], governor-exempt), so neither gate ever owns it.
-            is_local = concurrency.is_local_model(model)
-            if pressure == "tight" and not is_local:
-                model_pools = burn_rate.pools_for_model(model)
-                allowed, burn_detail = burn_allowed(model_pools)
-                if allowed is None:
-                    if not tight:  # no percent/resets_at anywhere: old binary clamp
-                        tight = True
-                        log.emit("tight_mode", model=model,
-                                 reason=f"pressure tight: max {tight_cfg['max_spawns_per_pass']} "
-                                        f"spawn(s), epri<={tight_cfg['min_pri']} only",
-                                 detail=burn_detail)
-                else:
-                    # wq#1699: scaled, not binary, and no pri filter — scarcity shows up
-                    # as a lower concurrency ceiling at stage 9 instead.
-                    burn = (model_pools, allowed)
-                    if model not in burn_logged:
-                        burn_logged.add(model)
-                        log.emit("burn_rate", model=model,
-                                 reason=f"pressure tight: burn-rate ceiling {allowed}",
-                                 detail=burn_detail)
-            if tight:
-                if spawned >= tight_cfg["max_spawns_per_pass"]:
-                    log.emit("halt", stage="spawn_cap",
-                             reason=f"tight-mode spawn cap reached ({spawned})")
-                    break
-                # wq#1699: gate on the aged effective priority the scan sorted on
-                # (wq#661), not raw pri — an aged p2 at ep1 sorts first and must pass.
-                if cand["epri"] > tight_cfg["min_pri"]:
-                    log.skip(tid, lane, "budget", "tight_pri", model=model,
-                             detail=f"epri {cand['epri']} (pri {cand['pri']}) > "
-                                    f"tight min_pri {tight_cfg['min_pri']}")
-                    continue
-
-            # stage 8b — weekly-budget pacing (wq#716): forward-looking, on top of the
-            # governor's own reactive floor above. Never blocks a Frank-approved fire ticket.
-            verdict = PACING_HOOK(cand["epri"], model, limits, pacing_cfg,
-                                  fire_exempt or is_local)  # wq#1699: epri; wq#2081: local exempt
-            if verdict.action != "ok":
-                log.skip(tid, lane, "budget", f"pacing_{verdict.action}", model=model,
-                         **verdict.as_fields())
-                handle_pacing_throttle(state, verdict, pacing_cfg, dry_run, log)
-                continue
-
-            # stage 9 — concurrency ceiling, local rung excluded (T4)
-            cloud = [u for u in units if not concurrency.is_local_unit(u)]
-            if is_local:
-                # wq#2081: a local rung is bounded by the boxes, not the cloud login — its own
-                # ceiling over local units, and a full local lane skips only local tickets
-                # (never `break`s past the cloud candidates behind it).
-                local_ceiling = cfg.get("local_ceiling", concurrency.LOCAL_CEILING)
-                if len(units) - len(cloud) >= local_ceiling:
-                    log.skip(tid, lane, "concurrency", "local_slots_full", model=model,
-                             detail=f"{len(units) - len(cloud)} local unit(s) at ceiling "
-                                    f"{local_ceiling}")
-                    continue
-            elif len(cloud) >= cfg["cloud_ceiling"]:
-                log.emit("halt", stage="concurrency", reason="no_slots",
-                         detail=f"{len(cloud)} cloud unit(s) at ceiling "
-                                f"{cfg['cloud_ceiling']}; next tick retries")
-                break
-            if burn is not None and len(cloud) >= burn[1]:
-                # wq#1699: the burn-rate ceiling is the concurrency the budget can sustain
-                # to its reset. A model on the pass pools only (every cloud model draws on
-                # them) -> same halt as cloud_ceiling: dispatch_health reads no_slots as
-                # healthy, and min_allowed>=1 means a worker is running. A model with its
-                # own extra pool (fable) -> skip only it; its tightness may come from that
-                # pool alone, so it must not halt tickets on unflagged pools behind it.
-                model_pools, allowed = burn
-                if model_pools == burn_rate.PASS_POOLS:
-                    log.emit("halt", stage="concurrency", reason="no_slots",
-                             detail=f"{len(cloud)} cloud unit(s) at burn-rate ceiling "
-                                    f"{allowed}; next tick retries")
-                    break
-                log.skip(tid, lane, "budget", "burn_rate_cap", model=model,
-                         detail=f"{len(cloud)} cloud unit(s) at {model} burn-rate "
-                                f"ceiling {allowed}")
-                continue
-
-            # stage 9b — harness-preflight stamp (§2c): a wave must not discover a
-            # permission gap three hours in when a two-minute preflight would have
-            # caught it before the first spawn. Unmigrated repos (no
-            # repos.d/<repo>.json) pass through unchanged — same additive-migration
-            # boundary permission_profiles.py draws for the render-at-dispatch pack
-            # itself. wq#1372: a stale/missing stamp (settings or preflight_cmds
-            # changed since the last proof) auto-reproves right here instead of
-            # stranding the lane until a human re-runs harness-preflight — see
-            # handle_stale_preflight(). wq#1408: the gate check itself can raise (a
-            # JSON typo in any profile fragment) — repo_gate_check caches that per
-            # repo per pass so it costs one exception, not one per ticket of that repo.
-            preflight_ok, preflight_reason, gate_errored = repo_gate_check(gate_cache, repo)
-            if not preflight_ok:
-                if gate_errored:
-                    handle_profile_unreadable(state, tid, lane, repo, preflight_reason,
-                                               dry_run, log)
-                    continue
-                if not handle_stale_preflight(state, tid, lane, repo, preflight_reason,
-                                               dry_run, log):
-                    continue
-            elif preflight_reason:
-                # wq#1409 §3.2: soft-stale — profile unchanged, settings churned.
-                # Dispatch on the existing proof; say so once per repo per pass and
-                # reseal so the next pass reads it as plain fresh.
-                handle_soft_stale_preflight(gate_cache, tid, lane, repo, preflight_reason,
-                                             dry_run, log)
-
-            # stage 10 — spawn via the existing stack (MUST 7: router owns repo + tuple)
-            if dry_run:
-                spawned += 1  # count so dry-run reports caps honestly
-                log.emit("would_spawn", ticket=tid, lane=lane, model=model, repo=repo)
-                continue
-            unit = spawner.dispatch_one(tid, repo)
-            if unit is None:
-                log.emit("error", stage="spawn", ticket=tid, lane=lane,
-                         reason="spawn_failed", model=model)
-                ntfy(f"dispatcher: spawn failed for wq#{tid} ({lane}) — see dispatcher.log")
-                continue
-            spawned += 1
-            state["lane_counts"][lane] = state["lane_counts"].get(lane, 0) + 1
-            spawn_loop_guard.record_spawn(state, tid)  # wq#1703, before the save below
-            save_state(state)  # §9: written after each spawn, atomically
-            log.emit("spawn", ticket=tid, lane=lane, model=model, repo=repo, unit=unit)
-            if i < len(candidates) - 1:
-                time.sleep(random.uniform(*STAGGER))  # same stagger doctrine as spawner
+            r = _gate_candidate(ctx, cand)
+        except concurrency.LumenRunError as e:
+            log.emit("halt", stage="concurrency", reason="lumen_run_unreachable",
+                     detail=str(e))  # fail toward under-subscription
+            halted = True
+            break
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as e:  # noqa: BLE001 — wq#1408 §3.1: quarantine boundary
-            log.skip(tid, lane, "unhandled", "quarantined", detail=repr(e)[:300])
-            quarantined.append(tid)
+            log.skip(cand["id"], cand["lane"], "unhandled", "quarantined", detail=repr(e)[:300])
+            ctx.quarantined.append(cand["id"])
             continue
+        if r:
+            ready[r["part"]].append(r)
+
+    # admit: local first — free compute is never queued behind a budget decision, and a
+    # cloud stop cannot precede a local ticket
+    stopped = {"local": None, "cloud": None}
+    for part in () if halted else ("local", "cloud"):
+        stopped[part] = _run_partition(ctx, part, ready[part])
+        if stopped[part] in ("kill_switch", "lumen_run_unreachable"):
+            break
 
     dispatchable = len(candidates) - count_structural_skips(log.events)
-    return {"candidates": len(candidates), "spawned": spawned, "tight": tight,
-            "burn_ceiling": {",".join(k): v[0] for k, v in burn_cache.items()},
+    dispatchable_pool = {p: len(ready[p]) - ctx.lane_capped[p] for p in ready}
+    return {"candidates": len(candidates), "spawned": sum(ctx.spawned.values()),
+            "tight": ctx.psi_tight or ctx.cloud_tight,
+            "burn_ceiling": {",".join(k): v[0] for k, v in ctx.burn_cache.items()},
             "frank_active": frank_is_active, "frank_active_detail": frank_active_detail,
-            "quarantined": len(quarantined), "dispatchable": dispatchable,
-            "lint_scanned": lint_scanned, "lint_flagged": lint_flagged}
+            "quarantined": len(ctx.quarantined), "dispatchable": dispatchable,
+            "lint_scanned": ctx.lint_scanned, "lint_flagged": ctx.lint_flagged,
+            # wq#2088: per-pool view, so a local stall cannot hide behind a healthy cloud
+            "dispatchable_local": dispatchable_pool["local"],
+            "dispatchable_cloud": dispatchable_pool["cloud"],
+            "dispatchable_unpooled": max(0, dispatchable - sum(dispatchable_pool.values())),
+            "spawned_local": ctx.spawned["local"], "spawned_cloud": ctx.spawned["cloud"],
+            "local_slots_full": ctx.local_slots_full,
+            "stopped_local_reason": stopped["local"],
+            "stopped_cloud_reason": stopped["cloud"]}
 
 
 def run_pass(dry_run=False):

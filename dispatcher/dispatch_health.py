@@ -12,6 +12,9 @@ dispatcher.
 A pass is UNHEALTHY if:
   - It emitted an `error` event (any stage — config error, or any other unhandled
     crash inside the _do_pass loop, wq#1374) and has NO `pass_end` (hard abort).
+  - (wq#2088) Its `pass_end` carries per-pool counters and either pool has
+    dispatchable_<pool>>0 with spawned_<pool>=0, unless the local lane is full
+    (`local_slots_full`) or the cloud partition stopped at no_slots. Otherwise:
   - Its `pass_end` has spawned=0 AND dispatchable>0 AND dry_run=false AND no
     `halt stage=concurrency reason=no_slots` in the same pass (= the dispatcher COULD
     have spawned but didn't, and it wasn't because all slots were full). `dispatchable`
@@ -132,6 +135,21 @@ def parse_log_tail(log_path, n_lines):
     return events
 
 
+def _pool_stalls(end, has_no_slots_halt):
+    """Stall descriptions for a partitioned pass_end (wq#2088), empty when healthy."""
+    stalled = []
+    if end.get("dispatchable_local", 0) > 0 and end.get("spawned_local", 0) == 0 \
+       and not end.get("local_slots_full"):
+        stalled.append(f"local spawned=0 dispatchable={end['dispatchable_local']}")
+    if end.get("dispatchable_cloud", 0) > 0 and end.get("spawned_cloud", 0) == 0 \
+       and not has_no_slots_halt:
+        stalled.append(f"cloud spawned=0 dispatchable={end['dispatchable_cloud']}")
+    if end.get("dispatchable_unpooled", 0) > 0 and end.get("spawned", 0) == 0 \
+       and not has_no_slots_halt:
+        stalled.append(f"unrouted spawned=0 dispatchable={end['dispatchable_unpooled']}")
+    return stalled
+
+
 def classify_passes(events, now=None):
     """Group events by pass_id, classify each pass as healthy/unhealthy.
 
@@ -156,6 +174,7 @@ def classify_passes(events, now=None):
         spawned = 0
         candidates = 0
         dispatchable = None
+        pool_end = None  # wq#2088: per-pool counters from a partitioned pass_end
         has_no_slots_halt = False
         pass_start_ts = None
 
@@ -172,6 +191,8 @@ def classify_passes(events, now=None):
                 spawned = ev.get("spawned", 0)
                 candidates = ev.get("candidates", 0)
                 dispatchable = ev.get("dispatchable")
+                if "dispatchable_local" in ev:
+                    pool_end = ev
             if event == "halt" and ev.get("stage") == "concurrency" \
                and "no_slots" in (ev.get("reason") or ""):
                 has_no_slots_halt = True
@@ -209,7 +230,17 @@ def classify_passes(events, now=None):
         # excludes structural skips (lane_unmapped etc.); fall back to raw `candidates`
         # for a pass_end predating the field.
         effective_dispatchable = dispatchable if dispatchable is not None else candidates
-        if has_pass_end and spawned == 0 and effective_dispatchable > 0 \
+        # wq#2088: a partitioned pass_end is judged per pool, so a local stall cannot hide
+        # behind a healthy cloud (or the reverse). A full local lane is the local analogue
+        # of the cloud no_slots stop.
+        stalled = _pool_stalls(pool_end, has_no_slots_halt) if pool_end and not is_dry_run \
+            else []
+        if has_pass_end and stalled:
+            results.append((pid, ts, "unhealthy",
+                            f"{', '.join(stalled)} candidates={candidates} "
+                            f"(not concurrency-limited)"))
+            continue
+        if has_pass_end and pool_end is None and spawned == 0 and effective_dispatchable > 0 \
            and not has_no_slots_halt and not is_dry_run:
             results.append((pid, ts, "unhealthy",
                             f"spawned=0 dispatchable={effective_dispatchable} "

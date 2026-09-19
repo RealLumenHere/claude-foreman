@@ -3,6 +3,8 @@
   "max_spawns_per_pass": 10,
   "cloud_ceiling": 10,
   "local_ceiling": 12,
+  "local_max_spawns_per_pass": 12,
+  "pass_deadline_s": 240,
   "tight_mode": {
     "max_spawns_per_pass": 1,
     "min_pri": 1,

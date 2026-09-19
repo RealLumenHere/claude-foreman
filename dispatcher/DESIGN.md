@@ -270,6 +270,18 @@ waits for capacity (the next tick is 20 min away and waiting would hold the sloc
 `lumen-run` unreachable → `LumenRunError` → treated as zero slots (fail toward
 under-subscription, same as spawner).
 
+**Two partitions (wq#2088, `research/DISPATCH_STALL_RCA.md` §4).** A pass gates every
+candidate once (`_gate_candidate`: stages 3–7 plus model resolution — nothing pool
+specific), splits the survivors by `concurrency.is_local_model`, and admits **local
+first** (`_admit_local`), then cloud (`_admit_cloud`). Local answers to `local_ceiling`
+and `local_max_spawns_per_pass` (default `local_ceiling`) only — no governor, burn-rate,
+pacing, cloud_ceiling or cloud spawn cap. A cloud stop (`no_slots`, spawn cap,
+`pass_deadline_s`) ends the cloud partition, never the local one. PSI pressure is box
+pressure and throttles both. One slock and one daemon: two daemons would race on
+`state.json` (RCA §4.2 option A). `pass_end` carries `dispatchable_/spawned_` for
+`local`/`cloud` plus `local_slots_full` and `stopped_{local,cloud}_reason`;
+`dispatch_health` judges each pool on those.
+
 ## 8. Logging + tracing (MUST 9)
 
 **dispatcher.log** — append-only JSONL at `/home/lumen/foreman/dispatcher.log` (the

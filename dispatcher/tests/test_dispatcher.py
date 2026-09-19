@@ -2640,3 +2640,101 @@ def test_full_local_lane_skips_local_only_and_cloud_still_spawns(denv, monkeypat
     assert fd.run_pass() == 0
     assert [s["reason"] for s in log_events(denv, "skip")] == ["local_slots_full"]
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [cloud]
+
+
+# ---- wq#2088: one pass, two partitions, pool-scoped stops -----------------------------
+
+def _pass_end(denv):
+    return log_events(denv, "pass_end")[-1]
+
+
+def test_local_partition_runs_before_cloud_stop(denv):
+    """wq#2088: a cloud ticket sorted FIRST hits the cloud ceiling and stops the cloud
+    partition (stop no_slots). The local ticket scanned behind it still spawns — the
+    old single loop `break`-ed past it."""
+    write_config(denv, cloud_ceiling=1)
+    _seed_running(["fworker-wq999991"])
+    add_ticket("cloud first in scan order", pri=1)
+    local = add_ticket("local behind a cloud stop", pri=2, model="qwen36-local")
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [local]
+    end = _pass_end(denv)
+    assert (end["spawned_local"], end["spawned_cloud"]) == (1, 0)
+    assert end["stopped_cloud_reason"] == "no_slots" and end["stopped_local_reason"] is None
+
+
+def test_local_saturates_past_the_cloud_spawn_cap(denv):
+    """wq#2088: max_spawns_per_pass caps the cloud pool only; the local lane fills to
+    local_max_spawns_per_pass in one pass even with the cloud cap already spent."""
+    write_config(denv, max_spawns_per_pass=1, cloud_ceiling=5, local_ceiling=4,
+                 local_max_spawns_per_pass=3)
+    cloud = [add_ticket(f"cloud {i}", pri=1) for i in range(2)]
+    local = [add_ticket(f"local {i}", pri=2, model="qwen36-local") for i in range(4)]
+    assert fd.run_pass() == 0
+    spawned = [e["ticket"] for e in log_events(denv, "spawn")]
+    assert sorted(spawned) == sorted(local[:3] + cloud[:1])
+    end = _pass_end(denv)
+    assert (end["spawned_local"], end["spawned_cloud"], end["spawned"]) == (3, 1, 4)
+    assert end["stopped_local_reason"] == "spawn_cap" and end["stopped_cloud_reason"] == "spawn_cap"
+
+
+def test_cloud_gates_never_touch_local(denv):
+    """wq#2088: critical burn-rate with the cloud ceiling reached: the cloud partition is
+    held (no_slots at the burn-rate ceiling), the local partition spawns untouched."""
+    denv["gov_state"].write_text(json.dumps(_burn_gov(96, 4, 96, 100, severity="critical")))
+    _seed_running(["fworker-wq999991", "fworker-wq999992"])
+    local = [add_ticket(f"local {i}", pri=2, model="qwen36-local") for i in range(2)]
+    add_ticket("cloud held", pri=1)
+    assert fd.run_pass() == 0
+    assert sorted(e["ticket"] for e in log_events(denv, "spawn")) == sorted(local)
+    end = _pass_end(denv)
+    assert end["dispatchable_local"] == 2 and end["spawned_local"] == 2
+    assert end["dispatchable_cloud"] == 1 and end["spawned_cloud"] == 0
+
+
+def test_pass_end_split_counters(denv):
+    """wq#2088: pass_end reports each pool's dispatchable/spawned; unrouted defects are
+    counted under neither pool, and the parts sum to `dispatchable`."""
+    add_ticket("local one", model="qwen36-local")
+    add_ticket("cloud one")
+    add_ticket("bad archetype", model=None, archetype="build")
+    assert fd.run_pass() == 0
+    end = _pass_end(denv)
+    assert (end["dispatchable_local"], end["dispatchable_cloud"]) == (1, 1)
+    assert (end["spawned_local"], end["spawned_cloud"]) == (1, 1)
+    assert end["dispatchable_unpooled"] == 1
+    assert end["dispatchable"] == 3 and end["local_slots_full"] == 0
+
+
+def test_lane_cap_holds_across_partitions_within_one_pass(denv):
+    """wq#2088: the gate reads lane_counts before any spawn, so the cap must be enforced
+    again at admission or one pass overshoots max_per_day."""
+    write_config(denv, lanes={"testlane": {"enabled": True, "max_per_day": 2}})
+    for i in range(3):
+        add_ticket(f"local {i}", model="qwen36-local")
+    assert fd.run_pass() == 0
+    assert len(log_events(denv, "spawn")) == 2
+    assert [s["reason"] for s in log_events(denv, "skip")] == ["lane_cap"]
+    end = _pass_end(denv)
+    assert end["spawned_local"] == 2 and end["dispatchable_local"] == 2
+
+
+def test_local_slots_full_pass_is_healthy_but_local_stall_is_not(denv, monkeypatch):
+    """wq#2088: dispatch_health judges each pool. A full local lane (local_slots_full) is
+    healthy; local dispatchable>0 with zero local spawns and no full lane is a stall even
+    while the cloud pool spawns."""
+    import dispatch_health
+    write_config(denv, local_ceiling=1)
+    _seed_running(["fworker-wq999991"])
+    monkeypatch.setattr(fd.concurrency, "is_local_unit", lambda u: u == "fworker-wq999991")
+    add_ticket("local overflow", pri=1, model="qwen36-local")
+    add_ticket("cloud rides on", pri=2)
+    assert fd.run_pass() == 0
+    events = [json.loads(l) for l in (denv["tmp"] / "dispatcher.log").read_text().splitlines()
+              if l.strip()]
+    assert [v for _, _, v, _ in dispatch_health.classify_passes(events)] == ["healthy"]
+
+    events = [dict(e, local_slots_full=0) if e["event"] == "pass_end" else e for e in events]
+    verdicts = dispatch_health.classify_passes(events)
+    assert [v for _, _, v, _ in verdicts] == ["unhealthy"]
+    assert verdicts[0][3].startswith("local spawned=0 dispatchable=1")
