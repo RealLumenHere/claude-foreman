@@ -64,12 +64,16 @@ def add_ticket(env, title="scratch crash-before-charge ticket"):
 # ---- integration: a real git-plumbing crash reaches the new handler ------------------
 
 def test_worktree_add_crash_writes_uncharged_harness_defect_record(tmp_path):
-    # `repo` is deliberately NOT a git repository at all -- make_worktree()'s own
+    # `repo` is deliberately NOT a git repository at all -- a regular FILE, which git
+    # can never resolve from any TMPDIR (a bare directory under tmp_path gets walked up
+    # to the worktree's own .git and ADOPTED, leaking chore/wq1-scratch-* branches;
+    # wq#2012, wq#2034) -- make_worktree()'s own
     # `git worktree add` call fails for real, hits its `raise RuntimeError(f"git
     # worktree add failed: ...")` (fworker.py, wq#649's own repro shape), and nothing
     # upstream of cmd_run's outer except catches it.
     repo = str(tmp_path / "not_a_repo")
-    os.makedirs(repo)
+    with open(repo, "w") as f:
+        f.write("not a git repository\n")
 
     env, runs_root, worktrees_root = base_env(tmp_path)
     ticket_id = add_ticket(env)

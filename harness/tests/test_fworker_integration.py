@@ -582,7 +582,10 @@ def test_unrecoverable_worktree_failure_releases_claim_not_dangling(tmp_path):
     ticket_id = wq_add(env, "scratch unrecoverable ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
     not_a_repo = str(tmp_path / "not_a_git_repo")
-    os.makedirs(not_a_repo, exist_ok=True)
+    # a regular FILE, not a directory: a bare dir under tmp_path is walked up to the
+    # worktree's own .git and adopted, leaking chore/wq1-scratch-* branches (wq#2034).
+    with open(not_a_repo, "w") as f:
+        f.write("not a git repository\n")
 
     result = run_fworker(env, ticket_id, not_a_repo, "success", archetype="mechanical-edit")
     assert result.returncode == fworker.EXIT_CRASH, result.stdout + result.stderr
