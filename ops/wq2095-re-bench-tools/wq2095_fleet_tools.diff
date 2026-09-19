@@ -1,0 +1,25 @@
+--- a/context/fleet_tools.yaml (before)
++++ b/context/fleet_tools.yaml (after)
+@@ -3,3 +3,3 @@
+-updated: 2026-09-11
++updated: 2026-09-19
+@@ end of file (after commander_mcp group) @@
++
++  re_bench_hardware:
++    desc: "Frank's OWN RE/hardware bench inventory (wq#2095). CHECK THIS BEFORE proposing any purchase — SPI programmers, clips and analyzers are already owned (wq#160: 'NO PURCHASE NEEDED'). Physical items have no path; they live on Frank's bench and on/near maksoor (the RE workstation)."
++    tools:
++      - name: pi-pico-serprog (PREFERRED SPI programmer)
++        use: "Raspberry Pi Pico(s) running pico-serprog firmware = flashrom SPI programmer. Natively 3.3V, so no CH341A 5V-damage risk. Use this first for any 3.3V SPI NOR flash. A 1.8V chip needs a level shifter."
++        invoke: "hold BOOTSEL, copy the pico-serprog UF2 to the RPI-RP2 drive   |   flashrom -p serprog:dev=/dev/ttyACM0:115200 -c '<chip>' -r dump.bin   (pin map: see pico-serprog README)"
++      - name: ch341a-programmer
++        use: "CH341A USB SPI programmer (owned). CAUTION: stock boards drive 5V I/O — for a 3.3V chip use the voltage mod or a 3.3V clone, or use the Pico instead. Not for 1.8V chips without an adapter. maksoor udev 60-re-programmers already covers it."
++        invoke: "flashrom -p ch341a_spi -c '<chip>' -r dump.bin   (read twice, compare checksums, before any write)"
++      - name: soic-clips (SOIC-8 / SOIC-16)
++        use: "SOIC-8 and SOIC-16 test clips (owned) for in-circuit SPI flash access without desoldering. Fits SOIC only — WSON/QFN packages need a different approach. Read the chip part number off the board first: it gives package and voltage."
++        invoke: "clip onto the chip with the board UNPOWERED (or powered by the programmer only), then flashrom via pico-serprog or ch341a-programmer above. Try in-system flashrom BEFORE any clip work."
++      - name: sigrok / logic analyzer
++        use: "sigrok-cli + PulseView installed on maksoor for protocol capture/decode (SPI/I2C/UART). maksoor udev 60-re-programmers covers Saleae/Bus Pirate/FTDI adapters; verify which analyzer is physically attached with lsusb on maksoor before assuming."
++        invoke: "sigrok-cli --scan   |   pulseview   (on maksoor, via its RDP session)"
++      - name: maksoor RE workstation toolset
++        use: "maksoor = primary RE workstation (replaces Thor for RE; lumen_state.py current maksoor for address/facts). Installed: ghidra, cutter, radare2, binwalk, unblob, foremost, flashrom, rkdeveloptool, upgrade_tool, adb/fastboot/jadx/apktool/scrcpy, mtkclient, edl, heimdall, sunxi-fel, sigrok/pulseview, openocd, dfu-util, stlink, stm32flash, avrdude, edid-decode/ddcutil/i2c-tools, and /opt/re-venv (pyserial pyusb capstone unicorn keystone pwntools frida esptool pyocd). Check here before proposing to install or buy an RE tool."
++        invoke: "lumen_state.py current maksoor   (full list + udev rules)   |   GUI over RDP, address/user per that output"
