@@ -1,0 +1,10 @@
+[Unit]
+Description=Run signal engine daily at 06:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+Unit=lumen-signal-engine.service
+
+[Install]
+WantedBy=timers.target

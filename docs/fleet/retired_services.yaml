@@ -52,9 +52,10 @@
   reason: 8-unit research mill retired; unit files moved to /etc/systemd/system/DISABLED-research-mill.bak/
   ticket: wq#1112 (healer_watch_table.yaml + lumen_self_healer.py stale-target guard), wq#1099 (found)
   guards:
-    - lumen_self_healer.py `units:` table: cleaned by wq#1112.
-    - lumen_self_healer.py `FALLBACK_TABLE` (baked-in emergency table used only
-        if healer_watch_table.yaml is unreadable at startup): missed by
+    - "lumen_self_healer.py `units:` table": cleaned by wq#1112.
+    - "lumen_self_healer.py `FALLBACK_TABLE`": >
+        baked-in emergency table, used only if healer_watch_table.yaml is
+        unreadable at startup — missed by
         wq#1112, still names all three ghosts + lumen-vip-api's port. Not an
         active restart-loop risk today — the wq#1112 not-found/masked guard
         in check_all() also covers units sourced from FALLBACK_TABLE, so a
@@ -195,3 +196,65 @@
         lumen-split-watch.timer (wq#1643) and lumen-rerank-thread-watch.timer
         (wq#1656/1762) are also still `enabled` today. See ISSUE-LOG #377,
         #378.
+
+- name: signal-engine
+  units: [lumen-signal-engine.timer, lumen-signal-engine.service]
+  load_state: loaded   # confirmed via `systemctl cat` 2026-09-19 — timer still
+                        # enabled and firing daily 06:00 UTC; see "apply status"
+  retired_on: "2026-09-19"
+  reason: >
+    Dead-green producer: green oneshot every day since May, 1 prompt submitted
+    since June, 0 in September. Its sink `http://localhost:8099/vip`
+    (signal_engine.py:20) went away with the research mill on 2026-08-28, and
+    submit_vip() swallows the refused connection, so the unit still exits 0.
+    Both remaining sources are dead or broken too — Reddit's public JSON
+    returns 403 to non-OAuth clients (all 10 subs), and the HackerNews Algolia
+    query uses a boolean `OR` that advancedSyntax does not support, so
+    fetch_hn_signals has matched nothing since it was written; 3 of the 5
+    competitor RSS feeds are 404/unreachable.
+    Scoped as retire-vs-rewire. RETIRE, decisively: every prompt it emits asks
+    for publication-ready marketing copy with an affiliate/monetization angle,
+    and the standing content policy is "NO publishing of any kind" (Ghost CMS
+    deleted 2026-05 for legal reasons) — so rewiring it into the live
+    research_prompts queue would spend fleet inference producing the one
+    artifact class policy forbids. The proposed sink is also already fed by two
+    healthy producers, sia-news-pull (news_* lane) and lumen-scout.
+    Full evidence and source probes: ops/wq2039-signal-engine-retire/RUNBOOK.md.
+  ticket: wq#2039 (decision + artifacts), research/DSH_EVAL.md §7 (found)
+  data:
+    files:
+      - /home/lumen/scratch/signal_engine_done.json   # dedup keyset, last 500; leave
+      - /home/lumen/scratch/signal_engine.log         # leave, it is the evidence
+      - /home/lumen/logs/.stamp.lumen-signal-engine   # removed by remove-units.sh
+    disposition: >
+      Nothing downstream reads any of it — the VIP queue it fed no longer
+      exists. Kept as evidence rather than deleted.
+  guards:
+    - "cron_deadman.py (wq#1184)": >
+        tracks /home/lumen/logs/.stamp.lumen-signal-engine via the generated
+        99-cron-stamp.conf drop-in. Removing the timer cannot page: check()
+        derives each stamp's threshold from `systemctl list-timers`, and with
+        no timer `intervals.get(unit)` is None -> continue
+        (ops/wq1184-gatus-health-checks/cron_deadman.py:110-115). The stamp and
+        the "lumen-signal-engine": "ok" row in deadman_state.json are cleared
+        by remove-units.sh as tidy-up, not as alert suppression.
+    - "lumen_self_healer.py": >
+        never watched this unit — absent from healer_watch_table.yaml and from
+        FALLBACK_TABLE. The `:8099` port-check at lumen_self_healer.py:57 is
+        lumen-vip-api's, not this unit's; it is already owned by wq#1739 with a
+        reviewed diff in ops/wq1643-split-watch-retire-agent5/. Not re-filed.
+    - "minerva LUMEN_STATE_FALLBACK": >
+        /home/lumen/minerva/minerva_proposal.py still lists lumen-signal-engine
+        (and lumen-prompt-engine/lumen-persona-engine, retired 2026-08-28) as
+        live pipelines in the hand-maintained fallback used when
+        lumen_state.txt is missing or >6h stale — stamped "verified
+        2026-09-18". Live file is outside this repo; filed as wq#2042.
+    - "apply status 2026-09-19 (wq#2039)": >
+        NOT YET APPLIED — this record is a decision, not a host state. Unlike
+        the three retirements stranded on the root gap (ISSUE-LOG #377, #378),
+        step 1 here needs no root: applying
+        ops/wq2039-signal-engine-retire/signal_engine.diff to
+        /home/lumen/agent/signal_engine.py makes the engine a logged no-op on
+        its own, from any lane with that path in --add-dir. remove-units.sh is
+        tidy-up that may strand; the retirement does not depend on it.
+        Apply ticket: wq#2041 (step 1 diff, step 2 units).

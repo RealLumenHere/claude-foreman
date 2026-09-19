@@ -1,0 +1,51 @@
+wq#2039 — make /home/lumen/agent/signal_engine.py a self-documenting no-op.
+
+Defence in depth only: remove-units.sh in this directory is the actual
+retirement. This hunk stops a hand-run (`python3 signal_engine.py`) or a
+restored unit from resuming a daily POST to a sink that was retired 2026-08-28,
+and puts the reason where the next reader lands.
+
+The file is 302 lines; both hunks use context read verbatim from the live file
+on 2026-09-19. Apply from a lane with /home/lumen/agent in scope:
+
+    cp /home/lumen/agent/signal_engine.py /home/lumen/agent/signal_engine.py.bak.$(date +%Y%m%d_%H%M%S)
+    patch --dry-run -p1 -d/ < ops/wq2039-signal-engine-retire/signal_engine.diff
+    patch -p1 -d/ < ops/wq2039-signal-engine-retire/signal_engine.diff
+    python3 -m py_compile /home/lumen/agent/signal_engine.py
+
+--- a/home/lumen/agent/signal_engine.py
++++ b/home/lumen/agent/signal_engine.py
+@@ -1,6 +1,21 @@
+ #!/usr/bin/env python3
+ """
++RETIRED 2026-09-19 (wq#2039). Do not revive without reading
++foreman/ops/wq2039-signal-engine-retire/RUNBOOK.md and
++foreman/docs/fleet/retired_services.yaml (name: signal-engine).
++
++Three reasons, any one sufficient: (1) every prompt below asks for
++publication-ready marketing copy with an affiliate angle, and the standing
++content policy is "NO publishing of any kind" since the Ghost CMS was deleted
++2026-05 for legal reasons; (2) the sink `http://localhost:8099/vip` went away
++with the 8-unit research mill on 2026-08-28; (3) the sources are dead or
++broken — Reddit returns 403 to non-OAuth clients, the HN Algolia query uses a
++boolean `OR` that advancedSyntax does not support (so it has matched nothing
++since it was written), and 3 of the 5 competitor feeds are 404/unreachable.
++
++Kept on disk as the source of record. `run()` below is unreachable.
++
+ signal_engine.py — Lumen's real-time content signal system
+ Replaces static topic bank with actual market intelligence.
+
+ Runs daily at 06:00 UTC. Sources:
+@@ -298,4 +313,10 @@
+     log(f"=== Done. Submitted {submitted} signal-driven VIP prompts ===")
+
+ if __name__ == "__main__":
+-    run()
++    # wq#2039: retired. Exit 0 so a stray hand-run or a restored unit is a
++    # no-op rather than a daily burst of refused connections. Removing the
++    # systemd units (ops/wq2039-signal-engine-retire/remove-units.sh) is the
++    # real retirement; this is the second line of defence.
++    print("signal_engine.py: RETIRED 2026-09-19 (wq#2039) — no-op. "
++          "See foreman/docs/fleet/retired_services.yaml (name: signal-engine).")
++    raise SystemExit(0)

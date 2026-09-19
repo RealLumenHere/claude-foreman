@@ -1,0 +1,10 @@
+[Unit]
+Description=Lumen Signal Engine — daily real-time content intelligence
+After=network.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/agent/signal_engine.py
+StandardOutput=append:/home/lumen/scratch/signal_engine.log
+StandardError=append:/home/lumen/scratch/signal_engine.log
