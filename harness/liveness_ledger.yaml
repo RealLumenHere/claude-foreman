@@ -6,6 +6,14 @@
 # last LIVE verification, not the mint date.
 
 credentials:
+  claude-oauth:
+    path: /home/lumen/.claude/.credentials.json  # claudeAiOauth.{expiresAt,refreshTokenExpiresAt}
+    scope: Claude Max OAuth session (every fworker, messenger brain on anthropic backend, governor usage poll)
+    scheme: claude_oauth
+    expiry: claudeAiOauth.refreshTokenExpiresAt (ms); ~30d lifetime from last `claude auth login`
+    remint: ssh lumen@100.117.66.102 'claude auth login'
+    last_verified: 2026-09-19
+    probe: sentinel probe-credential-expiry (wq#1694) — WARN <=72h, URGENT <=24h
   github-frank:
     path: /home/lumen/.secrets/github-frank.token
     scope: frankstupak PAT (repo read/admin as Frank); canonical, consumers point here

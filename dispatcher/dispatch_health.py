@@ -231,6 +231,75 @@ def classify_passes(events, now=None):
     return results
 
 
+# wq#1694: a stall page must name the cause, not the symptom. On 2026-09-10 the Max
+# OAuth session expired; this page said "spawned=0 dispatchable=57" and a human read
+# five tools to learn "logged out". stall_cause() names (a) the dominant skip reason
+# of the latest scored pass, (b) for governor_deny, the governor's own reason string,
+# (c) a dead/expiring Claude session. Everything here is fail-open: a cause lookup
+# that errors never suppresses or delays the page itself.
+GOVERNOR_CLI = os.environ.get("FOREMAN_GOVERNOR_CLI",
+                              "/home/lumen/foreman/governor/foreman_usaged.py")
+CRED_PROBE_DIR = os.environ.get("FOREMAN_CRED_PROBE_DIR", "/home/lumen/sentinel/probes")
+
+
+def _governor_reason(model):
+    try:
+        r = subprocess.run([sys.executable, GOVERNOR_CLI, "can-dispatch", model],
+                           capture_output=True, text=True, timeout=30)
+        d = json.loads(r.stdout or "{}")
+        return "; ".join(d.get("reasons") or []) or ("allow" if d.get("allow") else "deny, no reason given")
+    except Exception as e:
+        return f"governor query failed: {type(e).__name__}"
+
+
+def _cred_module():
+    """Load credential_expiry from CRED_PROBE_DIR by explicit file path (never via
+    sys.path, so a stale path entry cannot substitute another copy)."""
+    try:
+        import importlib.util
+        path = os.path.join(CRED_PROBE_DIR, "credential_expiry.py")
+        if not os.path.exists(path):
+            return None
+        spec = importlib.util.spec_from_file_location("_wq1694_credential_expiry", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def stall_cause(events):
+    """Return (cause_text, cred_cause_bool). Never raises."""
+    parts, cred = [], False
+    try:
+        last_pid = None
+        for ev in reversed(events):
+            if ev.get("event") == "pass_end" and (ev.get("pass_id") or "").startswith("fdisp-"):
+                last_pid = ev["pass_id"]
+                break
+        skips = [ev for ev in events if ev.get("pass_id") == last_pid and ev.get("event") == "skip"]
+        counts = {}
+        for ev in skips:
+            counts[ev.get("reason") or "?"] = counts.get(ev.get("reason") or "?", 0) + 1
+        if counts:
+            top = sorted(counts.items(), key=lambda kv: -kv[1])[:3]
+            parts.append("dominant skip: " + ", ".join(f"{k} x{v}" for k, v in top))
+        if "governor_deny" in counts:
+            models = sorted({ev.get("model") for ev in skips
+                             if ev.get("reason") == "governor_deny" and ev.get("model")})
+            for m in models[:2]:
+                parts.append(f"governor_deny {m}: {_governor_reason(m)}")
+    except Exception as e:
+        parts.append(f"skip analysis failed: {type(e).__name__}")
+    ce = _cred_module()
+    if ce is not None:
+        line = ce.cause_line()
+        if line:
+            parts.insert(0, line)
+            cred = True
+    return " | ".join(parts), cred
+
+
 def check_health(log_path, threshold, dry_run=False, dedup_seconds=None, ladder=True):
     """Main check. Returns (alarm_fired, detail_string).
 
@@ -300,12 +369,21 @@ def check_health(log_path, threshold, dry_run=False, dedup_seconds=None, ladder=
 
     # Fire.
     reasons = "; ".join(r for _, _, _, r in recent)
+    cause, cred_cause = stall_cause(events)
     msg = (f"Dispatcher STALLED: last {threshold} passes all unhealthy. "
-           f"Backlog not moving.\n{reasons}")
+           f"Backlog not moving.\n{cause + chr(10) if cause else ''}{reasons}")
 
     if dry_run:
         print(f"WOULD ALERT: {msg}")
         return True, f"ALARM (dry-run):\n" + "\n".join(detail_lines)
+
+    # wq#1694 item 4: when the credential alarm already owns this incident, the stall is
+    # a symptom — append it to that aq row instead of opening a second urgent page.
+    ce = _cred_module() if cred_cause else None
+    if ce is not None and ce.attach_symptom("dispatch-stall", msg.replace("\n", " | ")):
+        state["last_alert_ts"] = now_iso
+        save_state(state)
+        return True, "ALARM ATTACHED to open probe-credential-expiry fire:\n" + "\n".join(detail_lines)
 
     _ntfy(msg)
     state["last_alert_ts"] = now_iso
