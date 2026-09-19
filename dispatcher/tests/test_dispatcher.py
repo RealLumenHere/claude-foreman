@@ -28,6 +28,7 @@ import foreman_dispatcher as fd  # noqa: E402
 import concurrency  # noqa: E402
 import router  # noqa: E402
 import spawner  # noqa: E402
+import burn_rate  # noqa: E402
 import pacing  # noqa: E402
 import circuit_breaker  # noqa: E402
 import runaway  # noqa: E402
@@ -135,6 +136,11 @@ def denv(tmp_path, monkeypatch):
     # dispatcher/runtime/spawn_reserve.db when FOREMAN_SPAWN_RESERVE_DB is unset.
     # Isolated per test exactly like test_spawner.py's spawner_env fixture (wq#1815).
     monkeypatch.setattr(spawner, "SPAWN_RESERVE_DB", str(tmp_path / "spawn_reserve.db"))
+    # wq#2003, same class as wq#1994: burn_rate reads measured rates from
+    # dispatcher/observed_burn.json in whatever checkout the suite runs from (wq#1722
+    # writer). Pin it to a missing file so every ceiling asserted here is computed
+    # from burn_rate.py's documented defaults, never from production measurements.
+    monkeypatch.setattr(burn_rate, "OBSERVED_PATH", str(tmp_path / "no-observed-burn.json"))
     monkeypatch.setattr(concurrency, "LUMEN_RUN_BIN", lumen_run)
     monkeypatch.setitem(router.LANE_REPO, "testlane", str(repo_dir))
     monkeypatch.setitem(router.LANE_REPO, "fleet-fires", str(repo_dir))
