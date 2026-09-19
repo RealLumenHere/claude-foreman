@@ -57,6 +57,23 @@ def run():
         "in litellm.",
         "Wrap the gateway in a cache; this doesn’t add a new litellm route "
         "for bge-m3.",
+        # wq#2025: the line above with one modal swapped - each of these hard-
+        # rejected under wq#2022's enumerated auxiliary list (wq#2023 repro),
+        # including the apostrophe-less and uncontracted spellings.
+        "Wrap the gateway in a cache; this shouldn't add a new litellm route "
+        "for bge-m3.",
+        "Wrap the gateway in a cache; this wouldn't add a new litellm route "
+        "for bge-m3.",
+        "Wrap the gateway in a cache; this can't add a new litellm route "
+        "for bge-m3.",
+        "Wrap the gateway in a cache; this couldn't add a new litellm route "
+        "for bge-m3.",
+        "Wrap the gateway in a cache; this mustn't add a new litellm route "
+        "for bge-m3.",
+        "Wrap the gateway in a cache; this cant add a new litellm route "
+        "for bge-m3.",
+        "Wrap the gateway in a cache; this cannot add a new litellm route "
+        "for bge-m3.",
     ]
     for text in false_positive_cases:
         conflict, route = minerva_dedup.route_conflict(text)
@@ -79,6 +96,14 @@ def run():
         "Add observability to the fleet dashboard so stalls surface earlier and "
         "cost per turn is visible per lane. Separately, register qwen36-local "
         "as a new litellm route for judge traffic.",
+        # wq#2025: a real add whose clause carries an ordinary word ending in
+        # "nt". The cheap way to generalize the contraction check - apostrophe
+        # optional, as the old doesn'?t / don'?t entries had it - reads these
+        # as negations and drops a genuine duplicate on the floor.
+        "Add a persistent litellm route for bge-m3 so the embedding pool "
+        "survives gateway restarts.",
+        "Add a different litellm route named claude-max-sonnet for the "
+        "escalation rung.",
     ]
     for text in true_positive_cases:
         conflict, route = minerva_dedup.route_conflict(text)

@@ -143,9 +143,25 @@ _ROUTE_KEYWORD_RE = re.compile(r'litellm|model.list|gateway route|model pool|rou
 # full of dotted version numbers ("glm-5.3-flash-local") and splitting there
 # would cut a true positive's route name in half.
 _CLAUSE_SPLIT_RE = re.compile(r'[;:,!?\n()]|\.(?=\s|$)')
+# wq#2025: that list was an enumeration of auxiliaries, and it enumerated the
+# wrong half - "this shouldn't add a new litellm route for bge-m3" (same
+# sentence as the wq#2022 case, one modal swapped) still hard-rejected, as did
+# wouldn't / couldn't / can't / mustn't (wq#2023 repro,
+# reports/2023_probe_negation.py). English keeps making more contractions, so
+# match the contraction instead of the verb it attaches to: every contracted
+# negation ends in "n't". Bare "not" then covers every uncontracted "<aux> not"
+# form, which the old per-verb "does not"/"is not"/"will not" entries were only
+# spelling out; "cannot" is the one negation that is neither, so it stays
+# literal. The apostrophe is required in the general arm and optional only for
+# stems whose bare "nt" spelling is unambiguous - a general \w+n'?t swallows
+# ordinary words ("persistent", "different") and would suppress REAL conflicts,
+# a worse failure than the one being fixed (measured in
+# reports/2025_probe_negation_contraction.py: 2 false negatives).
 _NEGATION_RE = re.compile(
-    r"\b(not|no|never|doesn'?t|does not|don'?t|do not|isn'?t|is not|aren'?t|"
-    r"won'?t|will not|without|rather than|instead of)\b"
+    r"\b(?:\w+n't|"
+    r"(?:do|does|did|is|are|was|were|wo|ca|sha|has|have|had|could|would|"
+    r"should|must|might|need|ought|ai)nt|"
+    r"not|cannot|no|never|without|rather than|instead of)\b"
 )
 
 
