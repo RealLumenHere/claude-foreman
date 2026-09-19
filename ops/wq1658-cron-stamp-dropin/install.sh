@@ -13,6 +13,14 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 BIN=/home/lumen/bin
 
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile "$SRC/lumen_cron_stamp_dropin_gen.py" "$BIN/lumen-cron-stamp-dropin-gen"
+  vcontains "$BIN/unit-drift" "lumen-cron-stamp-dropin-gen"
+  vdone
+fi
+
 echo "== installing lumen-cron-stamp-dropin-gen =="
 cp "$SRC/lumen_cron_stamp_dropin_gen.py" "$BIN/lumen-cron-stamp-dropin-gen"
 chmod 755 "$BIN/lumen-cron-stamp-dropin-gen"

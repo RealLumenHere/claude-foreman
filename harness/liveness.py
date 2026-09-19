@@ -401,7 +401,47 @@ def wq_field(id, col, val):
 # registry — the closed vocabulary a `Liveness:` line may use (§5, §6, §13)
 # ---------------------------------------------------------------------------
 
+# wq#1696: an ops bundle is live only when its own `install.sh --verify` says so on
+# the box. Runs the PRIMARY tree's copy (what is merged), read-only by contract
+# (ops/_verify.sh). Refuses bundles whose install.sh has no --verify handler: a
+# script that does not know the flag would ignore it and INSTALL.
+OPS_ROOT = os.environ.get("FOREMAN_OPS_ROOT", "/home/lumen/foreman/ops")
+OPS_VERIFY_TIMEOUT_S = 60
+
+
+def _has_verify_handler(install_sh):
+    try:
+        with open(install_sh) as f:
+            head = f.read(20000)
+    except OSError:
+        return False
+    return ('= --verify ]' in head) or ('--verify)' in head)
+
+
+def ops_verified(bundle):
+    import re as _re
+    if not _re.fullmatch(r"wq\d+-[A-Za-z0-9._-]+", bundle or "") or ".." in bundle:
+        return UNKNOWN, f"bad bundle name {bundle!r}"
+    inst = os.path.join(OPS_ROOT, bundle, "install.sh")
+    if not os.path.exists(inst):
+        return UNKNOWN, f"{bundle}: no install.sh"
+    if not _has_verify_handler(inst):
+        return UNKNOWN, f"{bundle}: install.sh has no --verify handler (ops/VERIFY_CONTRACT.md)"
+    try:
+        p = subprocess.run(["bash", inst, "--verify"], capture_output=True, text=True,
+                           timeout=OPS_VERIFY_TIMEOUT_S, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return UNKNOWN, f"{bundle}: --verify timed out"
+    tail = " ".join((p.stdout or "").split())[-200:]
+    if p.returncode == 0:
+        return SATISFIED, f"{bundle}: {tail}"
+    if p.returncode == 1:
+        return STILL_BLOCKED, f"{bundle}: {tail}"
+    return UNKNOWN, f"{bundle}: --verify rc={p.returncode} {tail}"
+
+
 PROBES = {
+    "ops_verified": ops_verified,
     "cred_alive": cred_alive,
     "ts_key_expiry_disabled": ts_key_expiry_disabled,
     "repo_is": repo_is,

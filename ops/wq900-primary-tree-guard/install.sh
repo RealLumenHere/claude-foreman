@@ -10,7 +10,17 @@
 # restores it.
 set -euo pipefail
 
-SRC="$(dirname "$0")"
+SRC="$(cd "$(dirname "$0")" && pwd)"
+
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vunit_file "$SRC/primary-tree-guard.service" /etc/systemd/system/primary-tree-guard.service
+  vunit_file "$SRC/primary-tree-guard.timer" /etc/systemd/system/primary-tree-guard.timer
+  venabled primary-tree-guard.timer
+  vactive primary-tree-guard.timer
+  vdone
+fi
 
 cp "$SRC/primary-tree-guard.service" "$SRC/primary-tree-guard.timer" /etc/systemd/system/
 systemctl daemon-reload

@@ -131,16 +131,59 @@ def file_verify_pass(shipped_id, *, pr=None, author_model=None, manifest=None, d
     shipped_repo = router.repo_for_ticket(t)
     if shipped_repo:
         detail += f"\n\nVerify repo: {shipped_repo}"
-    out.update(verifier=rung.as_dict(), verifier_note=note, title=title, pr=pr_ref)
+    # wq#1696 item 3: a fix that ships as an ops bundle is verified on the BOX, never in
+    # the worktree. The verify ticket carries ops_verified(<bundle>) so the liveness
+    # gate itself checks the installed target.
+    liveness = None
+    bundles = ops_bundles_cited(t)
+    if bundles:
+        ready = [b for b in bundles if _bundle_has_verify(b)]
+        if ready:
+            liveness = ", ".join(f"ops_verified({b})" for b in ready[:3])
+            detail += ("\n\nOps bundle(s): verify the LIVE target with `bash /home/lumen/foreman/ops/"
+                       f"<bundle>/install.sh --verify` (exit 0 = live). Liveness: {liveness}")
+        missing = [b for b in bundles if b not in ready]
+        if missing:
+            detail += ("\n\nBundle(s) without a --verify handler: " + ", ".join(missing) +
+                       ". Add one per ops/VERIFY_CONTRACT.md before confirming; a repo-only "
+                       "check does not count (wq#1696).")
+    out.update(verifier=rung.as_dict(), verifier_note=note, title=title, pr=pr_ref, liveness=liveness)
     if dry_run:
         return out
-    p = router.wq("add", "--lane", str(pol.get("lane", "build")), "--pri", str(pol.get("pri", 2)),
-                  "--title", title, "--detail", detail, "--deps", str(shipped_id),
-                  "--model", rung.model, "--effort", rung.effort or "", "--archetype", "verify-pass")
+    args = ["add", "--lane", str(pol.get("lane", "build")), "--pri", str(pol.get("pri", 2)),
+            "--title", title, "--detail", detail, "--deps", str(shipped_id),
+            "--model", rung.model, "--effort", rung.effort or "", "--archetype", "verify-pass"]
+    if liveness:
+        args += ["--liveness", liveness]
+    p = router.wq(*args)
     m = re.search(r"added task (\d+)", p.stdout)
     out["filed"] = int(m.group(1)) if m else None
     out["wq"] = (p.stdout + p.stderr).strip()
     return out
+
+
+OPS_ROOT = os.environ.get("FOREMAN_OPS_ROOT", "/home/lumen/foreman/ops")
+_OPS_RE = re.compile(r"(?:foreman/)?ops/(wq\d+-[A-Za-z0-9._-]+)")
+
+
+def ops_bundles_cited(t):
+    """ops/wqNNNN-*/ bundle dirs a shipped ticket cites in notes/detail/deliverable."""
+    text = " ".join(str(t.get(k) or "") for k in ("notes", "detail", "deliverable"))
+    seen = []
+    for m in _OPS_RE.finditer(text):
+        b = m.group(1).rstrip(".,;:/")
+        if b not in seen and os.path.isdir(os.path.join(OPS_ROOT, b)):
+            seen.append(b)
+    return seen
+
+
+def _bundle_has_verify(bundle):
+    try:
+        with open(os.path.join(OPS_ROOT, bundle, "install.sh")) as f:
+            head = f.read(20000)
+    except OSError:
+        return False
+    return ('= --verify ]' in head) or ('--verify)' in head)
 
 
 def _pr_from_notes(notes):
