@@ -43,6 +43,20 @@ def run():
         "through the same LiteLLM model pool as every other local model.",
         "Evaluate claude-max-sonnet output quality against the local judge rung "
         "for agreement scoring, sampled from the LiteLLM gateway route logs.",
+        # wq#2022 (wq#2021's live repro): the proposal pre-empts the wq#2019
+        # rejection reason in words, and the disclaiming "add" lands within 60
+        # chars of both a route keyword and a live model_name.
+        "Add semantic caching to the LiteLLM gateway route table; this doesn't "
+        "add a new model, just wraps existing route bge-m3 with a cache layer.",
+        # Same shape with no punctuation splitting the disclaimer off, so only
+        # the negation check clears these three. The last one carries a curly
+        # apostrophe, which is what LLM-written proposal text actually emits.
+        "Rework the LiteLLM gateway route table so it does not add qwen36-local "
+        "a second time.",
+        "Ship a cache layer rather than register route claude-max-sonnet again "
+        "in litellm.",
+        "Wrap the gateway in a cache; this doesn’t add a new litellm route "
+        "for bge-m3.",
     ]
     for text in false_positive_cases:
         conflict, route = minerva_dedup.route_conflict(text)
@@ -54,6 +68,17 @@ def run():
     true_positive_cases = [
         'Add model glm-5.3-flash-local as a new LiteLLM route for local judge traffic.',
         'Register a new litellm route named qwen36-local pointing at the Isis llama-server.',
+        # wq#2022: a real route add is still caught when an earlier clause
+        # happens to contain a negation - the negation check is clause-scoped,
+        # so it must not swallow the add in the clause that follows.
+        "This isn't a router rewrite; add model bge-m3 to the LiteLLM "
+        "model_list as a new route.",
+        # wq#2022: the add is in the second sentence, behind an unrelated first
+        # add-intent verb - the rejected "only look at the first verb" fix
+        # shape misses this one.
+        "Add observability to the fleet dashboard so stalls surface earlier and "
+        "cost per turn is visible per lane. Separately, register qwen36-local "
+        "as a new litellm route for judge traffic.",
     ]
     for text in true_positive_cases:
         conflict, route = minerva_dedup.route_conflict(text)
@@ -65,7 +90,14 @@ def run():
         for f in failures:
             print(' -', f)
         return 1
-    print(f'OK: {len(false_positive_cases)} false positives cleared, '
+    # wq#2021 noted the old summary overstated coverage: a case with no
+    # add-intent verb returns False before the window logic runs, so it proves
+    # nothing about the gate. Count the ones that actually reach it.
+    exercised = sum(1 for t in false_positive_cases
+                    if minerva_dedup._ADD_INTENT_RE.search(t.lower()))
+    print(f'OK: {len(false_positive_cases)} false positives cleared '
+          f'({exercised} of them reach the add-intent window logic; the rest '
+          f'have no add-intent verb and clear trivially), '
           f'{len(true_positive_cases)} true positives still caught')
     return 0
 

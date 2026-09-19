@@ -129,6 +129,24 @@ _ADD_INTENT_RE = re.compile(
     r'\b(add|adding|create|creating|register|registering|onboard|onboarding|'
     r'introduce|introducing)\b'
 )
+_ROUTE_KEYWORD_RE = re.compile(r'litellm|model.list|gateway route|model pool|route')
+# wq#2022: the +/-60 window above is proximity, not intent, so it still fired on
+# a verb that explicitly DISCLAIMS a route add - "...this doesn't add a new
+# model, just wraps existing route bge-m3..." put a second "add" within 60 chars
+# of both a route keyword and a live model_name and hard-rejected a caching
+# proposal (wq#2021 repro). Two cheap constraints make the verb govern the name
+# instead of merely sitting near it: the name must follow the verb inside the
+# verb's OWN clause, and no negation may stand between the clause opening and
+# the name. Clause bounds are punctuation, which is also what separates a
+# disclaimer from the sentence it disclaims.
+# A period only ends a clause when whitespace/EOS follows it - model_names are
+# full of dotted version numbers ("glm-5.3-flash-local") and splitting there
+# would cut a true positive's route name in half.
+_CLAUSE_SPLIT_RE = re.compile(r'[;:,!?\n()]|\.(?=\s|$)')
+_NEGATION_RE = re.compile(
+    r"\b(not|no|never|doesn'?t|does not|don'?t|do not|isn'?t|is not|aren'?t|"
+    r"won'?t|will not|without|rather than|instead of)\b"
+)
 
 
 def route_conflict(text):
@@ -136,21 +154,40 @@ def route_conflict(text):
 
     Only true when the proposal's actual change is ADDING a route by that
     name - naming an existing model to use it for something else is not a
-    duplicate of that model's route (wq#2019)."""
+    duplicate of that model's route (wq#2019), and neither is saying the
+    change does *not* add one (wq#2022)."""
     try:
         import yaml
         cfg = yaml.safe_load(open(LITELLM_CONFIG))
         names = [m.get('model_name', '') for m in cfg.get('model_list', []) if m.get('model_name')]
     except Exception:
         return False, None
-    low = (text or '').lower()
+    low = (text or '').lower().replace('’', "'")
     for m in _ADD_INTENT_RE.finditer(low):
-        window = low[max(0, m.start() - 60): m.end() + 60]
-        if not re.search(r'litellm|model.list|gateway route|model pool|route', window):
+        # Clause containing the verb, clipped to the original +/-60 proximity
+        # radius: the clause keeps an unrelated far-away "LiteLLM" out of the
+        # keyword check, the radius keeps a long clause from re-admitting it.
+        clause_start = max((p.end() for p in _CLAUSE_SPLIT_RE.finditer(low, 0, m.start())),
+                           default=0)
+        nxt = _CLAUSE_SPLIT_RE.search(low, m.end())
+        clause_end = nxt.start() if nxt else len(low)
+        lo = max(clause_start, m.start() - 60)
+        hi = min(clause_end, m.end() + 60)
+        if not _ROUTE_KEYWORD_RE.search(low, lo, hi):
+            continue
+        if _NEGATION_RE.search(low, lo, m.start()):
             continue
         for n in sorted(names, key=len, reverse=True):
-            if len(n) >= 6 and n.lower() in window:
-                return True, n
+            if len(n) < 6:
+                continue
+            at = low.find(n.lower(), m.end(), hi)
+            if at < 0:
+                continue
+            # "add a cache rather than route bge-m3" - the verb reaches the
+            # name but is negated on the way there.
+            if _NEGATION_RE.search(low, m.end(), at):
+                continue
+            return True, n
     return False, None
 
 

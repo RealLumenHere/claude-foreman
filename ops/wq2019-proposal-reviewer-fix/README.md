@@ -23,9 +23,20 @@ quality routing, memory orchestration citing `glm-5.3-flash-local`, `qwen36-loca
 **Fix** (`minerva_dedup.py`): a conflict now requires an explicit add/create/
 register/onboard/introduce intent verb, with the route name inside the same local
 text window (±60 chars) as that verb and a route/model keyword — not co-occurrence
-anywhere in a multi-hundred-word proposal. See `test_route_conflict.py`: 4
-paraphrased real false-positive shapes now clear, 2 genuine duplicate-route-add
-proposals are still caught.
+anywhere in a multi-hundred-word proposal.
+
+**Fix, round 2** (wq#2022, adjudicating wq#2021's CONTRADICT): the ±60 window alone
+was still proximity, not intent. A proposal that *disclaims* a route add — "…this
+doesn't add a new model, just wraps existing route `bge-m3`…" — put a second `add`
+within 60 chars of both a keyword and a live `model_name` and was hard-rejected,
+the exact class of proposal wq#2019 exists to protect. The window is now clipped to
+the verb's own clause, the route name must *follow* the verb inside it, and a
+negation (`not|doesn't|isn't|without|rather than|instead of|…`) anywhere inside that
+span, on either side of the verb, kills the match. See `test_route_conflict.py`: 8
+false-positive shapes clear (5 of which actually reach the window logic — wq#2021
+noted the original 4 included 3 that returned early on no verb at all), 4 genuine
+duplicate-route-add proposals still caught, including one behind a negated clause.
+Full adjudication: `reports/2022_judgment_wq2021_contradict_wq2019_route_conflict.md`.
 
 ## Bug 2 — stale hardware-infeasibility
 
