@@ -1,0 +1,755 @@
+{
+ "seed": 1920,
+ "tasks": [
+  {
+   "arrival": 0.0,
+   "id": 0,
+   "service": 0.972
+  },
+  {
+   "arrival": 0.009,
+   "id": 1,
+   "service": 1.453
+  },
+  {
+   "arrival": 0.054,
+   "id": 2,
+   "service": 1.007
+  },
+  {
+   "arrival": 0.084,
+   "id": 3,
+   "service": 0.711
+  },
+  {
+   "arrival": 0.122,
+   "id": 4,
+   "service": 1.232
+  },
+  {
+   "arrival": 0.22,
+   "id": 5,
+   "service": 0.791
+  },
+  {
+   "arrival": 0.224,
+   "id": 6,
+   "service": 0.51
+  },
+  {
+   "arrival": 0.336,
+   "id": 7,
+   "service": 0.902
+  },
+  {
+   "arrival": 0.337,
+   "id": 8,
+   "service": 1.111
+  },
+  {
+   "arrival": 0.358,
+   "id": 9,
+   "service": 0.614
+  },
+  {
+   "arrival": 0.474,
+   "id": 10,
+   "service": 1.24
+  },
+  {
+   "arrival": 0.486,
+   "id": 11,
+   "service": 0.639
+  },
+  {
+   "arrival": 0.575,
+   "id": 12,
+   "service": 0.991
+  },
+  {
+   "arrival": 0.597,
+   "id": 13,
+   "service": 1.09
+  },
+  {
+   "arrival": 0.602,
+   "id": 14,
+   "service": 0.917
+  },
+  {
+   "arrival": 0.607,
+   "id": 15,
+   "service": 0.984
+  },
+  {
+   "arrival": 0.622,
+   "id": 16,
+   "service": 1.046
+  },
+  {
+   "arrival": 0.64,
+   "id": 17,
+   "service": 0.689
+  },
+  {
+   "arrival": 0.641,
+   "id": 18,
+   "service": 0.62
+  },
+  {
+   "arrival": 0.655,
+   "id": 19,
+   "service": 0.57
+  },
+  {
+   "arrival": 0.68,
+   "id": 20,
+   "service": 0.69
+  },
+  {
+   "arrival": 0.766,
+   "id": 21,
+   "service": 1.004
+  },
+  {
+   "arrival": 0.781,
+   "id": 22,
+   "service": 0.739
+  },
+  {
+   "arrival": 0.788,
+   "id": 23,
+   "service": 0.618
+  },
+  {
+   "arrival": 0.792,
+   "id": 24,
+   "service": 1.383
+  },
+  {
+   "arrival": 0.986,
+   "id": 25,
+   "service": 0.952
+  },
+  {
+   "arrival": 0.997,
+   "id": 26,
+   "service": 1.454
+  },
+  {
+   "arrival": 1.05,
+   "id": 27,
+   "service": 1.218
+  },
+  {
+   "arrival": 1.318,
+   "id": 28,
+   "service": 0.999
+  },
+  {
+   "arrival": 1.384,
+   "id": 29,
+   "service": 1.412
+  },
+  {
+   "arrival": 1.413,
+   "id": 30,
+   "service": 1.217
+  },
+  {
+   "arrival": 1.463,
+   "id": 31,
+   "service": 0.58
+  },
+  {
+   "arrival": 1.534,
+   "id": 32,
+   "service": 0.834
+  },
+  {
+   "arrival": 1.554,
+   "id": 33,
+   "service": 1.159
+  },
+  {
+   "arrival": 1.642,
+   "id": 34,
+   "service": 0.6
+  },
+  {
+   "arrival": 1.676,
+   "id": 35,
+   "service": 0.642
+  },
+  {
+   "arrival": 1.767,
+   "id": 36,
+   "service": 1.079
+  },
+  {
+   "arrival": 1.771,
+   "id": 37,
+   "service": 1.365
+  },
+  {
+   "arrival": 1.845,
+   "id": 38,
+   "service": 0.838
+  },
+  {
+   "arrival": 1.885,
+   "id": 39,
+   "service": 1.219
+  },
+  {
+   "arrival": 1.964,
+   "id": 40,
+   "service": 1.003
+  },
+  {
+   "arrival": 5.0,
+   "id": 41,
+   "service": 0.767
+  },
+  {
+   "arrival": 10.0,
+   "id": 42,
+   "service": 1.396
+  },
+  {
+   "arrival": 15.0,
+   "id": 43,
+   "service": 1.431
+  },
+  {
+   "arrival": 20.0,
+   "id": 44,
+   "service": 1.338
+  },
+  {
+   "arrival": 25.0,
+   "id": 45,
+   "service": 0.791
+  },
+  {
+   "arrival": 30.0,
+   "id": 46,
+   "service": 1.018
+  },
+  {
+   "arrival": 35.0,
+   "id": 47,
+   "service": 1.131
+  },
+  {
+   "arrival": 40.0,
+   "id": 48,
+   "service": 0.944
+  },
+  {
+   "arrival": 45.0,
+   "id": 49,
+   "service": 1.382
+  },
+  {
+   "arrival": 50.0,
+   "id": 50,
+   "service": 1.133
+  },
+  {
+   "arrival": 55.0,
+   "id": 51,
+   "service": 1.363
+  },
+  {
+   "arrival": 55.097,
+   "id": 52,
+   "service": 0.656
+  },
+  {
+   "arrival": 55.111,
+   "id": 53,
+   "service": 0.661
+  },
+  {
+   "arrival": 55.145,
+   "id": 54,
+   "service": 0.663
+  },
+  {
+   "arrival": 55.233,
+   "id": 55,
+   "service": 0.823
+  },
+  {
+   "arrival": 55.272,
+   "id": 56,
+   "service": 1.365
+  },
+  {
+   "arrival": 55.331,
+   "id": 57,
+   "service": 0.997
+  },
+  {
+   "arrival": 55.4,
+   "id": 58,
+   "service": 1.475
+  },
+  {
+   "arrival": 55.42,
+   "id": 59,
+   "service": 1.422
+  },
+  {
+   "arrival": 55.434,
+   "id": 60,
+   "service": 0.921
+  },
+  {
+   "arrival": 55.476,
+   "id": 61,
+   "service": 0.527
+  },
+  {
+   "arrival": 55.717,
+   "id": 62,
+   "service": 0.526
+  },
+  {
+   "arrival": 55.723,
+   "id": 63,
+   "service": 1.171
+  },
+  {
+   "arrival": 55.77,
+   "id": 64,
+   "service": 1.246
+  },
+  {
+   "arrival": 55.806,
+   "id": 65,
+   "service": 0.705
+  },
+  {
+   "arrival": 55.815,
+   "id": 66,
+   "service": 1.286
+  },
+  {
+   "arrival": 55.97,
+   "id": 67,
+   "service": 0.698
+  },
+  {
+   "arrival": 56.028,
+   "id": 68,
+   "service": 0.645
+  },
+  {
+   "arrival": 56.045,
+   "id": 69,
+   "service": 0.612
+  },
+  {
+   "arrival": 56.046,
+   "id": 70,
+   "service": 1.012
+  },
+  {
+   "arrival": 56.111,
+   "id": 71,
+   "service": 1.352
+  },
+  {
+   "arrival": 56.138,
+   "id": 72,
+   "service": 0.71
+  },
+  {
+   "arrival": 56.144,
+   "id": 73,
+   "service": 0.597
+  },
+  {
+   "arrival": 56.187,
+   "id": 74,
+   "service": 1.184
+  },
+  {
+   "arrival": 56.217,
+   "id": 75,
+   "service": 1.356
+  },
+  {
+   "arrival": 56.277,
+   "id": 76,
+   "service": 1.024
+  },
+  {
+   "arrival": 56.29,
+   "id": 77,
+   "service": 1.196
+  },
+  {
+   "arrival": 56.364,
+   "id": 78,
+   "service": 0.646
+  },
+  {
+   "arrival": 56.441,
+   "id": 79,
+   "service": 0.537
+  },
+  {
+   "arrival": 56.496,
+   "id": 80,
+   "service": 0.773
+  },
+  {
+   "arrival": 56.516,
+   "id": 81,
+   "service": 1.298
+  },
+  {
+   "arrival": 56.582,
+   "id": 82,
+   "service": 1.454
+  },
+  {
+   "arrival": 56.651,
+   "id": 83,
+   "service": 1.369
+  },
+  {
+   "arrival": 56.662,
+   "id": 84,
+   "service": 1.421
+  },
+  {
+   "arrival": 56.739,
+   "id": 85,
+   "service": 0.632
+  },
+  {
+   "arrival": 56.823,
+   "id": 86,
+   "service": 1.391
+  },
+  {
+   "arrival": 56.861,
+   "id": 87,
+   "service": 1.482
+  },
+  {
+   "arrival": 56.913,
+   "id": 88,
+   "service": 0.678
+  },
+  {
+   "arrival": 56.915,
+   "id": 89,
+   "service": 0.637
+  },
+  {
+   "arrival": 56.96,
+   "id": 90,
+   "service": 1.092
+  },
+  {
+   "arrival": 56.99,
+   "id": 91,
+   "service": 1.432
+  },
+  {
+   "arrival": 60.0,
+   "id": 92,
+   "service": 0.827
+  },
+  {
+   "arrival": 65.0,
+   "id": 93,
+   "service": 1.424
+  },
+  {
+   "arrival": 70.0,
+   "id": 94,
+   "service": 1.445
+  },
+  {
+   "arrival": 75.0,
+   "id": 95,
+   "service": 0.675
+  },
+  {
+   "arrival": 80.0,
+   "id": 96,
+   "service": 0.786
+  },
+  {
+   "arrival": 85.0,
+   "id": 97,
+   "service": 1.115
+  },
+  {
+   "arrival": 90.0,
+   "id": 98,
+   "service": 0.849
+  },
+  {
+   "arrival": 95.0,
+   "id": 99,
+   "service": 1.446
+  },
+  {
+   "arrival": 100.0,
+   "id": 100,
+   "service": 1.422
+  },
+  {
+   "arrival": 105.0,
+   "id": 101,
+   "service": 0.68
+  },
+  {
+   "arrival": 110.0,
+   "id": 102,
+   "service": 1.487
+  },
+  {
+   "arrival": 110.017,
+   "id": 103,
+   "service": 0.626
+  },
+  {
+   "arrival": 110.018,
+   "id": 104,
+   "service": 1.085
+  },
+  {
+   "arrival": 110.154,
+   "id": 105,
+   "service": 0.507
+  },
+  {
+   "arrival": 110.177,
+   "id": 106,
+   "service": 1.333
+  },
+  {
+   "arrival": 110.178,
+   "id": 107,
+   "service": 0.755
+  },
+  {
+   "arrival": 110.2,
+   "id": 108,
+   "service": 1.285
+  },
+  {
+   "arrival": 110.23,
+   "id": 109,
+   "service": 0.737
+  },
+  {
+   "arrival": 110.315,
+   "id": 110,
+   "service": 1.347
+  },
+  {
+   "arrival": 110.382,
+   "id": 111,
+   "service": 1.489
+  },
+  {
+   "arrival": 110.441,
+   "id": 112,
+   "service": 1.49
+  },
+  {
+   "arrival": 110.446,
+   "id": 113,
+   "service": 0.529
+  },
+  {
+   "arrival": 110.52,
+   "id": 114,
+   "service": 1.431
+  },
+  {
+   "arrival": 110.669,
+   "id": 115,
+   "service": 1.328
+  },
+  {
+   "arrival": 110.753,
+   "id": 116,
+   "service": 1.476
+  },
+  {
+   "arrival": 110.765,
+   "id": 117,
+   "service": 1.461
+  },
+  {
+   "arrival": 110.913,
+   "id": 118,
+   "service": 1.23
+  },
+  {
+   "arrival": 110.934,
+   "id": 119,
+   "service": 0.75
+  },
+  {
+   "arrival": 110.942,
+   "id": 120,
+   "service": 1.077
+  },
+  {
+   "arrival": 110.976,
+   "id": 121,
+   "service": 1.074
+  },
+  {
+   "arrival": 111.027,
+   "id": 122,
+   "service": 1.166
+  },
+  {
+   "arrival": 111.043,
+   "id": 123,
+   "service": 0.77
+  },
+  {
+   "arrival": 111.056,
+   "id": 124,
+   "service": 1.377
+  },
+  {
+   "arrival": 111.078,
+   "id": 125,
+   "service": 0.799
+  },
+  {
+   "arrival": 111.106,
+   "id": 126,
+   "service": 1.177
+  },
+  {
+   "arrival": 111.183,
+   "id": 127,
+   "service": 1.227
+  },
+  {
+   "arrival": 111.195,
+   "id": 128,
+   "service": 1.484
+  },
+  {
+   "arrival": 111.39,
+   "id": 129,
+   "service": 1.092
+  },
+  {
+   "arrival": 111.395,
+   "id": 130,
+   "service": 1.473
+  },
+  {
+   "arrival": 111.428,
+   "id": 131,
+   "service": 0.836
+  },
+  {
+   "arrival": 111.447,
+   "id": 132,
+   "service": 1.393
+  },
+  {
+   "arrival": 111.46,
+   "id": 133,
+   "service": 1.408
+  },
+  {
+   "arrival": 111.503,
+   "id": 134,
+   "service": 0.632
+  },
+  {
+   "arrival": 111.569,
+   "id": 135,
+   "service": 1.475
+  },
+  {
+   "arrival": 111.581,
+   "id": 136,
+   "service": 0.521
+  },
+  {
+   "arrival": 111.588,
+   "id": 137,
+   "service": 1.125
+  },
+  {
+   "arrival": 111.629,
+   "id": 138,
+   "service": 1.018
+  },
+  {
+   "arrival": 111.678,
+   "id": 139,
+   "service": 1.037
+  },
+  {
+   "arrival": 111.763,
+   "id": 140,
+   "service": 1.172
+  },
+  {
+   "arrival": 111.841,
+   "id": 141,
+   "service": 0.75
+  },
+  {
+   "arrival": 111.947,
+   "id": 142,
+   "service": 1.097
+  },
+  {
+   "arrival": 115.0,
+   "id": 143,
+   "service": 0.567
+  },
+  {
+   "arrival": 120.0,
+   "id": 144,
+   "service": 0.681
+  },
+  {
+   "arrival": 125.0,
+   "id": 145,
+   "service": 0.994
+  },
+  {
+   "arrival": 130.0,
+   "id": 146,
+   "service": 1.396
+  },
+  {
+   "arrival": 135.0,
+   "id": 147,
+   "service": 0.939
+  },
+  {
+   "arrival": 140.0,
+   "id": 148,
+   "service": 0.65
+  },
+  {
+   "arrival": 145.0,
+   "id": 149,
+   "service": 1.268
+  }
+ ]
+}

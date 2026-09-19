@@ -1,0 +1,1216 @@
+{
+ "arm": "baseline",
+ "workers_fixed": 3,
+ "metrics": {
+  "tasks": 150,
+  "makespan_s": 146.28,
+  "p50_turnaround_s": 5.36,
+  "p95_turnaround_s": 12.09,
+  "mean_turnaround_s": 5.76,
+  "max_turnaround_s": 13.85,
+  "worker_seconds": 438.8,
+  "peak_workers": 3
+ },
+ "per_task": [
+  {
+   "id": 0,
+   "arrival": 0.0,
+   "service": 0.972,
+   "completed": 1.0224434989504516,
+   "turnaround": 1.0224446719512343,
+   "worker": 0
+  },
+  {
+   "id": 1,
+   "arrival": 0.009,
+   "service": 1.453,
+   "completed": 1.5036687420215458,
+   "turnaround": 1.4946705730017276,
+   "worker": 1
+  },
+  {
+   "id": 2,
+   "arrival": 0.054,
+   "service": 1.007,
+   "completed": 1.108026860980317,
+   "turnaround": 1.0540287790391594,
+   "worker": 2
+  },
+  {
+   "id": 3,
+   "arrival": 0.084,
+   "service": 0.711,
+   "completed": 1.7335430150851607,
+   "turnaround": 1.6495447389632463,
+   "worker": 0
+  },
+  {
+   "id": 4,
+   "arrival": 0.122,
+   "service": 1.232,
+   "completed": 2.340136303100735,
+   "turnaround": 2.218137660969049,
+   "worker": 2
+  },
+  {
+   "id": 5,
+   "arrival": 0.22,
+   "service": 0.791,
+   "completed": 2.2947912209201604,
+   "turnaround": 2.0747926260530947,
+   "worker": 1
+  },
+  {
+   "id": 6,
+   "arrival": 0.224,
+   "service": 0.51,
+   "completed": 2.243652595905587,
+   "turnaround": 2.019653865996748,
+   "worker": 0
+  },
+  {
+   "id": 7,
+   "arrival": 0.336,
+   "service": 0.902,
+   "completed": 3.1457564081065357,
+   "turnaround": 2.809758141996339,
+   "worker": 0
+  },
+  {
+   "id": 8,
+   "arrival": 0.337,
+   "service": 1.111,
+   "completed": 3.405945041915402,
+   "turnaround": 3.0689471099171786,
+   "worker": 1
+  },
+  {
+   "id": 9,
+   "arrival": 0.358,
+   "service": 0.614,
+   "completed": 2.954225552966818,
+   "turnaround": 2.5962270489037036,
+   "worker": 2
+  },
+  {
+   "id": 10,
+   "arrival": 0.474,
+   "service": 1.24,
+   "completed": 4.194325174903497,
+   "turnaround": 3.720326895987615,
+   "worker": 2
+  },
+  {
+   "id": 11,
+   "arrival": 0.486,
+   "service": 0.639,
+   "completed": 3.7848547799512744,
+   "turnaround": 3.2988562370054426,
+   "worker": 0
+  },
+  {
+   "id": 12,
+   "arrival": 0.575,
+   "service": 0.991,
+   "completed": 4.397044911980629,
+   "turnaround": 3.822046385100111,
+   "worker": 1
+  },
+  {
+   "id": 13,
+   "arrival": 0.597,
+   "service": 1.09,
+   "completed": 4.8749612860847265,
+   "turnaround": 4.277962374102325,
+   "worker": 0
+  },
+  {
+   "id": 14,
+   "arrival": 0.602,
+   "service": 0.917,
+   "completed": 5.111449755961075,
+   "turnaround": 4.50945104910247,
+   "worker": 2
+  },
+  {
+   "id": 15,
+   "arrival": 0.607,
+   "service": 0.984,
+   "completed": 5.381205050973222,
+   "turnaround": 4.774206600926816,
+   "worker": 1
+  },
+  {
+   "id": 16,
+   "arrival": 0.622,
+   "service": 1.046,
+   "completed": 5.921055278042331,
+   "turnaround": 5.299056289924309,
+   "worker": 0
+  },
+  {
+   "id": 17,
+   "arrival": 0.64,
+   "service": 0.689,
+   "completed": 5.800551522988826,
+   "turnaround": 5.160552997039631,
+   "worker": 2
+  },
+  {
+   "id": 18,
+   "arrival": 0.641,
+   "service": 0.62,
+   "completed": 6.001329600112513,
+   "turnaround": 5.360330656930804,
+   "worker": 1
+  },
+  {
+   "id": 19,
+   "arrival": 0.655,
+   "service": 0.57,
+   "completed": 6.370666360016912,
+   "turnaround": 5.715667977025732,
+   "worker": 2
+  },
+  {
+   "id": 20,
+   "arrival": 0.68,
+   "service": 0.69,
+   "completed": 6.611201165011153,
+   "turnaround": 5.931202731961385,
+   "worker": 0
+  },
+  {
+   "id": 21,
+   "arrival": 0.766,
+   "service": 1.004,
+   "completed": 7.005377019988373,
+   "turnaround": 6.239378425121307,
+   "worker": 1
+  },
+  {
+   "id": 22,
+   "arrival": 0.781,
+   "service": 0.739,
+   "completed": 7.109767825109884,
+   "turnaround": 6.32876939694956,
+   "worker": 2
+  },
+  {
+   "id": 23,
+   "arrival": 0.788,
+   "service": 0.618,
+   "completed": 7.229299673112109,
+   "turnaround": 6.441300949955359,
+   "worker": 0
+  },
+  {
+   "id": 24,
+   "arrival": 0.792,
+   "service": 1.383,
+   "completed": 8.38852104311809,
+   "turnaround": 7.596522630091757,
+   "worker": 1
+  },
+  {
+   "id": 25,
+   "arrival": 0.986,
+   "service": 0.952,
+   "completed": 8.061836298089474,
+   "turnaround": 7.075837269924581,
+   "worker": 2
+  },
+  {
+   "id": 26,
+   "arrival": 0.997,
+   "service": 1.454,
+   "completed": 8.683434491977096,
+   "turnaround": 7.686435763930902,
+   "worker": 0
+  },
+  {
+   "id": 27,
+   "arrival": 1.05,
+   "service": 1.218,
+   "completed": 9.27997458493337,
+   "turnaround": 8.229976225923746,
+   "worker": 2
+  },
+  {
+   "id": 28,
+   "arrival": 1.318,
+   "service": 0.999,
+   "completed": 9.387651147088036,
+   "turnaround": 8.069653074925766,
+   "worker": 1
+  },
+  {
+   "id": 29,
+   "arrival": 1.384,
+   "service": 1.412,
+   "completed": 10.095535286935046,
+   "turnaround": 8.711537218032404,
+   "worker": 0
+  },
+  {
+   "id": 30,
+   "arrival": 1.413,
+   "service": 1.217,
+   "completed": 10.497118538012728,
+   "turnaround": 9.084120247920975,
+   "worker": 2
+  },
+  {
+   "id": 31,
+   "arrival": 1.463,
+   "service": 0.58,
+   "completed": 9.967745302943513,
+   "turnaround": 8.5047465360146,
+   "worker": 1
+  },
+  {
+   "id": 32,
+   "arrival": 1.534,
+   "service": 0.834,
+   "completed": 10.801851727068424,
+   "turnaround": 9.267853327080607,
+   "worker": 1
+  },
+  {
+   "id": 33,
+   "arrival": 1.554,
+   "service": 1.159,
+   "completed": 11.25467096711509,
+   "turnaround": 9.700671958042308,
+   "worker": 0
+  },
+  {
+   "id": 34,
+   "arrival": 1.642,
+   "service": 0.6,
+   "completed": 11.097214631037787,
+   "turnaround": 9.455216424997896,
+   "worker": 2
+  },
+  {
+   "id": 35,
+   "arrival": 1.676,
+   "service": 0.642,
+   "completed": 11.443958709947765,
+   "turnaround": 9.767960142089054,
+   "worker": 1
+  },
+  {
+   "id": 36,
+   "arrival": 1.767,
+   "service": 1.079,
+   "completed": 12.176342532038689,
+   "turnaround": 10.409344013074413,
+   "worker": 2
+  },
+  {
+   "id": 37,
+   "arrival": 1.771,
+   "service": 1.365,
+   "completed": 12.619775206083432,
+   "turnaround": 10.848776874082162,
+   "worker": 0
+  },
+  {
+   "id": 38,
+   "arrival": 1.845,
+   "service": 0.838,
+   "completed": 12.282050637062639,
+   "turnaround": 10.437052303897216,
+   "worker": 1
+  },
+  {
+   "id": 39,
+   "arrival": 1.885,
+   "service": 1.219,
+   "completed": 13.39544001989998,
+   "turnaround": 11.5104413800966,
+   "worker": 2
+  },
+  {
+   "id": 40,
+   "arrival": 1.964,
+   "service": 1.003,
+   "completed": 13.285153804114088,
+   "turnaround": 11.321155178047716,
+   "worker": 1
+  },
+  {
+   "id": 41,
+   "arrival": 5.0,
+   "service": 0.767,
+   "completed": 13.386877814074978,
+   "turnaround": 8.38687951094471,
+   "worker": 0
+  },
+  {
+   "id": 42,
+   "arrival": 10.0,
+   "service": 1.396,
+   "completed": 14.681301091099158,
+   "turnaround": 4.681302747922018,
+   "worker": 1
+  },
+  {
+   "id": 43,
+   "arrival": 15.0,
+   "service": 1.431,
+   "completed": 16.46303932298906,
+   "turnaround": 1.463040909031406,
+   "worker": 1
+  },
+  {
+   "id": 44,
+   "arrival": 20.0,
+   "service": 1.338,
+   "completed": 21.353609363082796,
+   "turnaround": 1.3536109270062298,
+   "worker": 2
+  },
+  {
+   "id": 45,
+   "arrival": 25.0,
+   "service": 0.791,
+   "completed": 25.80505665903911,
+   "turnaround": 0.8050582660362124,
+   "worker": 2
+  },
+  {
+   "id": 46,
+   "arrival": 30.0,
+   "service": 1.018,
+   "completed": 31.03178423596546,
+   "turnaround": 1.0317862529773265,
+   "worker": 2
+  },
+  {
+   "id": 47,
+   "arrival": 35.0,
+   "service": 1.131,
+   "completed": 36.139570933999494,
+   "turnaround": 1.1395723971072584,
+   "worker": 1
+  },
+  {
+   "id": 48,
+   "arrival": 40.0,
+   "service": 0.944,
+   "completed": 40.94469391112216,
+   "turnaround": 0.9446957351174206,
+   "worker": 1
+  },
+  {
+   "id": 49,
+   "arrival": 45.0,
+   "service": 1.382,
+   "completed": 46.40130383707583,
+   "turnaround": 1.4013049930799752,
+   "worker": 1
+  },
+  {
+   "id": 50,
+   "arrival": 50.0,
+   "service": 1.133,
+   "completed": 51.14479415793903,
+   "turnaround": 1.1447960690129548,
+   "worker": 1
+  },
+  {
+   "id": 51,
+   "arrival": 55.0,
+   "service": 1.363,
+   "completed": 56.365591988898814,
+   "turnaround": 1.3655933081172407,
+   "worker": 0
+  },
+  {
+   "id": 52,
+   "arrival": 55.097,
+   "service": 0.656,
+   "completed": 55.75884746410884,
+   "turnaround": 0.6618490440975862,
+   "worker": 1
+  },
+  {
+   "id": 53,
+   "arrival": 55.111,
+   "service": 0.661,
+   "completed": 55.80137625406496,
+   "turnaround": 0.6903773909769981,
+   "worker": 2
+  },
+  {
+   "id": 54,
+   "arrival": 55.145,
+   "service": 0.663,
+   "completed": 56.421940576983616,
+   "turnaround": 1.2769417450949518,
+   "worker": 1
+  },
+  {
+   "id": 55,
+   "arrival": 55.233,
+   "service": 0.823,
+   "completed": 56.624461635015905,
+   "turnaround": 1.3914625789113373,
+   "worker": 2
+  },
+  {
+   "id": 56,
+   "arrival": 55.272,
+   "service": 1.365,
+   "completed": 57.73069829097949,
+   "turnaround": 2.458699826031925,
+   "worker": 0
+  },
+  {
+   "id": 57,
+   "arrival": 55.331,
+   "service": 0.997,
+   "completed": 57.41907798196189,
+   "turnaround": 2.0880795929171114,
+   "worker": 1
+  },
+  {
+   "id": 58,
+   "arrival": 55.4,
+   "service": 1.475,
+   "completed": 58.09960507811047,
+   "turnaround": 2.69960675192997,
+   "worker": 2
+  },
+  {
+   "id": 59,
+   "arrival": 55.42,
+   "service": 1.422,
+   "completed": 58.84117796411738,
+   "turnaround": 3.4211796051077528,
+   "worker": 1
+  },
+  {
+   "id": 60,
+   "arrival": 55.434,
+   "service": 0.921,
+   "completed": 58.65183807001449,
+   "turnaround": 3.2178395799212183,
+   "worker": 0
+  },
+  {
+   "id": 61,
+   "arrival": 55.476,
+   "service": 0.527,
+   "completed": 58.62676651310176,
+   "turnaround": 3.1507681499011824,
+   "worker": 2
+  },
+  {
+   "id": 62,
+   "arrival": 55.717,
+   "service": 0.526,
+   "completed": 59.152869164943695,
+   "turnaround": 3.435871133061127,
+   "worker": 2
+  },
+  {
+   "id": 63,
+   "arrival": 55.723,
+   "service": 1.171,
+   "completed": 59.82293621497229,
+   "turnaround": 4.099937269927935,
+   "worker": 0
+  },
+  {
+   "id": 64,
+   "arrival": 55.77,
+   "service": 1.246,
+   "completed": 60.08732145698741,
+   "turnaround": 4.317323181098324,
+   "worker": 1
+  },
+  {
+   "id": 65,
+   "arrival": 55.806,
+   "service": 0.705,
+   "completed": 59.85797234205529,
+   "turnaround": 4.0519740859568145,
+   "worker": 2
+  },
+  {
+   "id": 66,
+   "arrival": 55.815,
+   "service": 1.286,
+   "completed": 61.10907119396143,
+   "turnaround": 5.294072950901466,
+   "worker": 0
+  },
+  {
+   "id": 67,
+   "arrival": 55.97,
+   "service": 0.698,
+   "completed": 60.55612478405237,
+   "turnaround": 4.586126411072911,
+   "worker": 2
+  },
+  {
+   "id": 68,
+   "arrival": 56.028,
+   "service": 0.645,
+   "completed": 60.73245952511206,
+   "turnaround": 4.704460652943702,
+   "worker": 1
+  },
+  {
+   "id": 69,
+   "arrival": 56.045,
+   "service": 0.612,
+   "completed": 61.16823778208345,
+   "turnaround": 5.123239298043771,
+   "worker": 2
+  },
+  {
+   "id": 70,
+   "arrival": 56.046,
+   "service": 1.012,
+   "completed": 61.74455418204889,
+   "turnaround": 5.698555782992393,
+   "worker": 1
+  },
+  {
+   "id": 71,
+   "arrival": 56.111,
+   "service": 1.352,
+   "completed": 62.46119998092763,
+   "turnaround": 6.350201217025521,
+   "worker": 0
+  },
+  {
+   "id": 72,
+   "arrival": 56.138,
+   "service": 0.71,
+   "completed": 61.87835908890702,
+   "turnaround": 5.7403612840343285,
+   "worker": 2
+  },
+  {
+   "id": 73,
+   "arrival": 56.144,
+   "service": 0.597,
+   "completed": 62.34167640097439,
+   "turnaround": 6.197677732067184,
+   "worker": 1
+  },
+  {
+   "id": 74,
+   "arrival": 56.187,
+   "service": 1.184,
+   "completed": 63.06247321492992,
+   "turnaround": 6.875475180020558,
+   "worker": 2
+  },
+  {
+   "id": 75,
+   "arrival": 56.217,
+   "service": 1.356,
+   "completed": 63.69782064692117,
+   "turnaround": 7.480822361020373,
+   "worker": 1
+  },
+  {
+   "id": 76,
+   "arrival": 56.277,
+   "service": 1.024,
+   "completed": 63.48533962992951,
+   "turnaround": 7.208341283958404,
+   "worker": 0
+  },
+  {
+   "id": 77,
+   "arrival": 56.29,
+   "service": 1.196,
+   "completed": 64.25858969194815,
+   "turnaround": 7.968591230958701,
+   "worker": 2
+  },
+  {
+   "id": 78,
+   "arrival": 56.364,
+   "service": 0.646,
+   "completed": 64.13144512008876,
+   "turnaround": 7.767446884013715,
+   "worker": 0
+  },
+  {
+   "id": 79,
+   "arrival": 56.441,
+   "service": 0.537,
+   "completed": 64.23492712411098,
+   "turnaround": 7.793928705962372,
+   "worker": 1
+  },
+  {
+   "id": 80,
+   "arrival": 56.496,
+   "service": 0.773,
+   "completed": 64.90453528799117,
+   "turnaround": 8.408536471003664,
+   "worker": 0
+  },
+  {
+   "id": 81,
+   "arrival": 56.516,
+   "service": 1.298,
+   "completed": 65.5330275921151,
+   "turnaround": 9.017028797013687,
+   "worker": 1
+  },
+  {
+   "id": 82,
+   "arrival": 56.582,
+   "service": 1.454,
+   "completed": 65.71267970092595,
+   "turnaround": 9.130681106990203,
+   "worker": 2
+  },
+  {
+   "id": 83,
+   "arrival": 56.651,
+   "service": 1.369,
+   "completed": 66.27362378290854,
+   "turnaround": 9.622626048117873,
+   "worker": 0
+  },
+  {
+   "id": 84,
+   "arrival": 56.662,
+   "service": 1.421,
+   "completed": 66.95413013896905,
+   "turnaround": 10.292131823033095,
+   "worker": 1
+  },
+  {
+   "id": 85,
+   "arrival": 56.739,
+   "service": 0.632,
+   "completed": 66.34477402199991,
+   "turnaround": 9.60577560501546,
+   "worker": 2
+  },
+  {
+   "id": 86,
+   "arrival": 56.823,
+   "service": 1.391,
+   "completed": 67.66477078595199,
+   "turnaround": 10.84177235709317,
+   "worker": 0
+  },
+  {
+   "id": 87,
+   "arrival": 56.861,
+   "service": 1.482,
+   "completed": 67.82685918710195,
+   "turnaround": 10.965860436936843,
+   "worker": 2
+  },
+  {
+   "id": 88,
+   "arrival": 56.913,
+   "service": 0.678,
+   "completed": 67.63227360602468,
+   "turnaround": 10.719275349926207,
+   "worker": 1
+  },
+  {
+   "id": 89,
+   "arrival": 56.915,
+   "service": 0.637,
+   "completed": 68.26941631990485,
+   "turnaround": 11.354418264040724,
+   "worker": 1
+  },
+  {
+   "id": 90,
+   "arrival": 56.96,
+   "service": 1.092,
+   "completed": 68.75688421796076,
+   "turnaround": 11.796885979091748,
+   "worker": 0
+  },
+  {
+   "id": 91,
+   "arrival": 56.99,
+   "service": 1.432,
+   "completed": 69.2589697490912,
+   "turnaround": 12.268971309056504,
+   "worker": 2
+  },
+  {
+   "id": 92,
+   "arrival": 60.0,
+   "service": 0.827,
+   "completed": 69.09653278090991,
+   "turnaround": 9.096534695941955,
+   "worker": 1
+  },
+  {
+   "id": 93,
+   "arrival": 65.0,
+   "service": 1.424,
+   "completed": 70.18098528892733,
+   "turnaround": 5.180987317115068,
+   "worker": 0
+  },
+  {
+   "id": 94,
+   "arrival": 70.0,
+   "service": 1.445,
+   "completed": 71.45546123804525,
+   "turnaround": 1.4554628590121865,
+   "worker": 2
+  },
+  {
+   "id": 95,
+   "arrival": 75.0,
+   "service": 0.675,
+   "completed": 75.69195504393429,
+   "turnaround": 0.6919568309094757,
+   "worker": 1
+  },
+  {
+   "id": 96,
+   "arrival": 80.0,
+   "service": 0.786,
+   "completed": 80.81049249204807,
+   "turnaround": 0.8104944829829037,
+   "worker": 2
+  },
+  {
+   "id": 97,
+   "arrival": 85.0,
+   "service": 1.115,
+   "completed": 86.12542682792991,
+   "turnaround": 1.1254286670591682,
+   "worker": 0
+  },
+  {
+   "id": 98,
+   "arrival": 90.0,
+   "service": 0.849,
+   "completed": 90.87047259509563,
+   "turnaround": 0.8704738670494407,
+   "worker": 1
+  },
+  {
+   "id": 99,
+   "arrival": 95.0,
+   "service": 1.446,
+   "completed": 96.45767573290505,
+   "turnaround": 1.4576772740110755,
+   "worker": 0
+  },
+  {
+   "id": 100,
+   "arrival": 100.0,
+   "service": 1.422,
+   "completed": 101.42412153305486,
+   "turnaround": 1.4241230499465019,
+   "worker": 2
+  },
+  {
+   "id": 101,
+   "arrival": 105.0,
+   "service": 0.68,
+   "completed": 105.6819082070142,
+   "turnaround": 0.6819098340347409,
+   "worker": 1
+  },
+  {
+   "id": 102,
+   "arrival": 110.0,
+   "service": 1.487,
+   "completed": 111.52484849095345,
+   "turnaround": 1.5248493358958513,
+   "worker": 0
+  },
+  {
+   "id": 103,
+   "arrival": 110.017,
+   "service": 0.626,
+   "completed": 110.6674060691148,
+   "turnaround": 0.6504076321069192,
+   "worker": 1
+  },
+  {
+   "id": 104,
+   "arrival": 110.018,
+   "service": 1.085,
+   "completed": 111.12854872690514,
+   "turnaround": 1.1105505210980766,
+   "worker": 2
+  },
+  {
+   "id": 105,
+   "arrival": 110.154,
+   "service": 0.507,
+   "completed": 111.17452105996199,
+   "turnaround": 1.0205222869794852,
+   "worker": 1
+  },
+  {
+   "id": 106,
+   "arrival": 110.177,
+   "service": 1.333,
+   "completed": 112.46165372501127,
+   "turnaround": 2.284655088933178,
+   "worker": 2
+  },
+  {
+   "id": 107,
+   "arrival": 110.178,
+   "service": 0.755,
+   "completed": 111.92964359698817,
+   "turnaround": 1.751645647993314,
+   "worker": 1
+  },
+  {
+   "id": 108,
+   "arrival": 110.2,
+   "service": 1.285,
+   "completed": 112.80994452210143,
+   "turnaround": 2.6099462690297486,
+   "worker": 0
+  },
+  {
+   "id": 109,
+   "arrival": 110.23,
+   "service": 0.737,
+   "completed": 112.66676415107213,
+   "turnaround": 2.436765832109373,
+   "worker": 1
+  },
+  {
+   "id": 110,
+   "arrival": 110.315,
+   "service": 1.347,
+   "completed": 113.80874605593272,
+   "turnaround": 3.493747719973328,
+   "worker": 2
+  },
+  {
+   "id": 111,
+   "arrival": 110.382,
+   "service": 1.489,
+   "completed": 114.15588353504427,
+   "turnaround": 3.7738852209709535,
+   "worker": 1
+  },
+  {
+   "id": 112,
+   "arrival": 110.441,
+   "service": 1.49,
+   "completed": 114.3000409330707,
+   "turnaround": 3.8590425531063204,
+   "worker": 0
+  },
+  {
+   "id": 113,
+   "arrival": 110.446,
+   "service": 0.529,
+   "completed": 114.33789791096933,
+   "turnaround": 3.8918993049263975,
+   "worker": 2
+  },
+  {
+   "id": 114,
+   "arrival": 110.52,
+   "service": 1.431,
+   "completed": 115.58702839608304,
+   "turnaround": 5.0670302640833,
+   "worker": 1
+  },
+  {
+   "id": 115,
+   "arrival": 110.669,
+   "service": 1.328,
+   "completed": 115.62818330992013,
+   "turnaround": 4.959184896893802,
+   "worker": 0
+  },
+  {
+   "id": 116,
+   "arrival": 110.753,
+   "service": 1.476,
+   "completed": 115.814054437913,
+   "turnaround": 5.061055978087708,
+   "worker": 2
+  },
+  {
+   "id": 117,
+   "arrival": 110.765,
+   "service": 1.461,
+   "completed": 117.04813573812135,
+   "turnaround": 6.283137736041098,
+   "worker": 1
+  },
+  {
+   "id": 118,
+   "arrival": 110.913,
+   "service": 1.23,
+   "completed": 116.85829105507582,
+   "turnaround": 5.945292544027794,
+   "worker": 0
+  },
+  {
+   "id": 119,
+   "arrival": 110.934,
+   "service": 0.75,
+   "completed": 116.56415060302243,
+   "turnaround": 5.630152234001088,
+   "worker": 2
+  },
+  {
+   "id": 120,
+   "arrival": 110.942,
+   "service": 1.077,
+   "completed": 117.64125796989538,
+   "turnaround": 6.69925965395943,
+   "worker": 2
+  },
+  {
+   "id": 121,
+   "arrival": 110.976,
+   "service": 1.074,
+   "completed": 117.93239950295538,
+   "turnaround": 6.9564011569842705,
+   "worker": 0
+  },
+  {
+   "id": 122,
+   "arrival": 111.027,
+   "service": 1.166,
+   "completed": 118.21424435800873,
+   "turnaround": 7.187245975017547,
+   "worker": 1
+  },
+  {
+   "id": 123,
+   "arrival": 111.043,
+   "service": 0.77,
+   "completed": 118.4114015318919,
+   "turnaround": 7.368403256002807,
+   "worker": 2
+  },
+  {
+   "id": 124,
+   "arrival": 111.056,
+   "service": 1.377,
+   "completed": 119.30952447792515,
+   "turnaround": 8.253526399010795,
+   "worker": 0
+  },
+  {
+   "id": 125,
+   "arrival": 111.078,
+   "service": 0.799,
+   "completed": 119.01335805794224,
+   "turnaround": 7.935360277051103,
+   "worker": 1
+  },
+  {
+   "id": 126,
+   "arrival": 111.106,
+   "service": 1.177,
+   "completed": 119.58854694408365,
+   "turnaround": 8.482548608124262,
+   "worker": 2
+  },
+  {
+   "id": 127,
+   "arrival": 111.183,
+   "service": 1.227,
+   "completed": 120.24050223897211,
+   "turnaround": 9.05750383595749,
+   "worker": 1
+  },
+  {
+   "id": 128,
+   "arrival": 111.195,
+   "service": 1.484,
+   "completed": 120.79364688601345,
+   "turnaround": 9.598647888116545,
+   "worker": 0
+  },
+  {
+   "id": 129,
+   "arrival": 111.39,
+   "service": 1.092,
+   "completed": 120.6806481720414,
+   "turnaround": 9.290649582063779,
+   "worker": 2
+  },
+  {
+   "id": 130,
+   "arrival": 111.395,
+   "service": 1.473,
+   "completed": 121.71367077110335,
+   "turnaround": 10.318672420941297,
+   "worker": 1
+  },
+  {
+   "id": 131,
+   "arrival": 111.428,
+   "service": 0.836,
+   "completed": 121.51674816291779,
+   "turnaround": 10.088750060953203,
+   "worker": 2
+  },
+  {
+   "id": 132,
+   "arrival": 111.447,
+   "service": 1.393,
+   "completed": 122.18673452595249,
+   "turnaround": 10.739736474046481,
+   "worker": 0
+  },
+  {
+   "id": 133,
+   "arrival": 111.46,
+   "service": 1.408,
+   "completed": 122.92486410797574,
+   "turnaround": 11.464865799024707,
+   "worker": 2
+  },
+  {
+   "id": 134,
+   "arrival": 111.503,
+   "service": 0.632,
+   "completed": 122.34577757189982,
+   "turnaround": 10.842779262948781,
+   "worker": 1
+  },
+  {
+   "id": 135,
+   "arrival": 111.569,
+   "service": 1.475,
+   "completed": 123.66187824006192,
+   "turnaround": 12.092879867082459,
+   "worker": 0
+  },
+  {
+   "id": 136,
+   "arrival": 111.581,
+   "service": 0.521,
+   "completed": 122.86687213391997,
+   "turnaround": 11.285873200051483,
+   "worker": 1
+  },
+  {
+   "id": 137,
+   "arrival": 111.588,
+   "service": 1.125,
+   "completed": 123.9919674640987,
+   "turnaround": 12.403968831047422,
+   "worker": 1
+  },
+  {
+   "id": 138,
+   "arrival": 111.629,
+   "service": 1.018,
+   "completed": 123.94296174193732,
+   "turnaround": 12.313962706089015,
+   "worker": 2
+  },
+  {
+   "id": 139,
+   "arrival": 111.678,
+   "service": 1.037,
+   "completed": 124.69901934498921,
+   "turnaround": 13.02103108198196,
+   "worker": 0
+  },
+  {
+   "id": 140,
+   "arrival": 111.763,
+   "service": 1.172,
+   "completed": 125.11501252790913,
+   "turnaround": 13.352013387985522,
+   "worker": 2
+  },
+  {
+   "id": 141,
+   "arrival": 111.841,
+   "service": 0.75,
+   "completed": 124.7420562140178,
+   "turnaround": 12.90105732811243,
+   "worker": 1
+  },
+  {
+   "id": 142,
+   "arrival": 111.947,
+   "service": 1.097,
+   "completed": 125.79611765407026,
+   "turnaround": 13.849119071077553,
+   "worker": 0
+  },
+  {
+   "id": 143,
+   "arrival": 115.0,
+   "service": 0.567,
+   "completed": 125.30919596692547,
+   "turnaround": 10.309197563910857,
+   "worker": 1
+  },
+  {
+   "id": 144,
+   "arrival": 120.0,
+   "service": 0.681,
+   "completed": 125.79609031998552,
+   "turnaround": 5.796091153984889,
+   "worker": 2
+  },
+  {
+   "id": 145,
+   "arrival": 125.0,
+   "service": 0.994,
+   "completed": 126.30332858092152,
+   "turnaround": 1.303330175112933,
+   "worker": 1
+  },
+  {
+   "id": 146,
+   "arrival": 130.0,
+   "service": 1.396,
+   "completed": 131.4004351401236,
+   "turnaround": 1.4004361680708826,
+   "worker": 2
+  },
+  {
+   "id": 147,
+   "arrival": 135.0,
+   "service": 0.939,
+   "completed": 135.9470774969086,
+   "turnaround": 0.9470795919187367,
+   "worker": 2
+  },
+  {
+   "id": 148,
+   "arrival": 140.0,
+   "service": 0.65,
+   "completed": 140.65561712905765,
+   "turnaround": 0.6556187958922237,
+   "worker": 2
+  },
+  {
+   "id": 149,
+   "arrival": 145.0,
+   "service": 1.268,
+   "completed": 146.2826560139656,
+   "turnaround": 1.2826573769561946,
+   "worker": 2
+  }
+ ]
+}
