@@ -1,0 +1,5 @@
+scanner: /home/lumen/worktrees/wq2151-a1/ops/wq1609-minerva-contradiction-scan
+dead-value index entries: 87
+prefilter candidates (distinct docs): 3617
+elapsed: 160.4s
+hits: 0 total, 0 action, 0 info, across 0 chunk(s)

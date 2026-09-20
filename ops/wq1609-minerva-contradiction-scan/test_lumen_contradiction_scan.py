@@ -45,6 +45,10 @@ FACTS = [
     ("f10", "ddr4_2933_32g", "price", "133", "2026-09-09", "config"),
     ("f11", "isis", "unit", "lumen-brain.service", "2026-08-15", "config"),
     ("f12", "isis", "unit", "lumen-brain2.service", None, "config"),
+    ("f13", "isis", "service_state", "UP", "2026-09-05", "status"),
+    ("f14", "isis", "service_state", "DEGRADED", None, "status"),
+    ("f15", "hathor", "fan_state", "AUTO", "2026-08-10", "status"),
+    ("f16", "hathor", "fan_state", "ON", None, "status"),
 ]
 
 
@@ -143,6 +147,23 @@ def test_a_shouted_hyphenated_compound_is_not_self_identifying():
     assert lcs.self_identifying("lumen-brain.service")
 
 
+def test_common_word_values_are_recognised_by_word_not_by_length():
+    """wq#2151: the risky class is 'the value is also ordinary English', not
+    'the value is short'. P3 and OFFLINE are the control: two characters and
+    eight, neither of them a word prose uses without meaning the status."""
+    for word in ("UP", "up", "down", "on", "off", "new", "old", "free", "live"):
+        assert lcs.common_word(word)
+    for token in ("P3", "OFFLINE", "DECOMMISSIONED", "embeddings-host",
+                  "100.88.71.47", "AUTO"):
+        assert not lcs.common_word(token)
+
+
+def test_common_word_values_match_case_exactly():
+    assert lcs.boundary_re("UP", case_exact=True).search("service_state: UP")
+    assert not lcs.boundary_re("UP", case_exact=True).search("set up the container")
+    assert lcs.boundary_re("OFFLINE").search("hathor is offline")
+
+
 # ------------------------------------------------------------------- matching
 
 def scan_line(db_path, line):
@@ -171,6 +192,48 @@ def test_generic_value_requires_a_predicate_cue(db):
     assert scan_line(db, "thor: the dead 24-port switch was reflashed") == []
     assert [h["predicate"] for h in scan_line(db, "hathor power_plug: P3")] \
         == ["power_plug"]
+
+
+def scan_in_section(db_path, line, section):
+    return lcs.scan_text(line, index_of(db_path), "t:1", lcs.TIER_PROPOSAL,
+                         subject_context=section)
+
+
+def test_english_prose_does_not_match_a_common_word_value(db):
+    """The eight of nine corpus hits wq#2151 was filed for (§8.1): isis's
+    service_state closed UP, and every hit was the preposition 'up' in a
+    research section that happened to name Isis and a service. wq#1775 narrowed
+    this for the corpus tier; these lines go through the *fleet* matcher, where
+    the same four false positives were measured in the daily scan."""
+    section = "## Isis service plan\nisis hosts the embedding service\n"
+    for line in ("Spin up a **FastAPI** orchestrator for the Isis service",
+                 "6. **Set up the Docker container** for the memory service",
+                 "Deploy the micro-service on **Isis** and bring it up"):
+        assert scan_in_section(db, line, section) == []
+
+
+def test_common_word_value_hits_when_the_line_quotes_the_status(db):
+    hits = scan_in_section(db, "isis service_state: UP", "")
+    assert [(h["subject"], h["dead_value"]) for h in hits] == [("isis", "UP")]
+
+
+def test_common_word_value_keeps_its_inherited_cue_and_subject(db):
+    """Only case narrows here. A common-word value still takes its subject and
+    its predicate cue from the enclosing section, like every other bare label —
+    the line-local cue rule wq#2151 also weighed was dropped: it removed one
+    further corpus hit that case already removes, and it would have silenced
+    `# pbox status` / `the scheduler stayed active` in a fleet doc."""
+    section = "## isis service_state\n"
+    assert [h["dead_value"] for h in
+            scan_in_section(db, "isis reported UP again", section)] == ["UP"]
+
+
+def test_changelog_suppressor_respects_the_case_of_a_common_current_value(db):
+    """hathor.fan_state is now `ON`, so a line quoting the dead `AUTO` is still
+    a contradiction when the only `on` in it is the English preposition."""
+    hits = scan_line(db, "hathor fan_state AUTO, on the rear intake")
+    assert [h["dead_value"] for h in hits] == ["AUTO"]
+    assert scan_line(db, "hathor fan_state AUTO -> ON since 2026-08-10") == []
 
 
 def test_narrative_value_is_never_string_matched(db):
@@ -239,6 +302,22 @@ def test_yaml_value_inherits_the_subject_from_its_block_key(db, tmp_path):
     assert [(h["subject"], h["dead_value"]) for h in hits] == [("hathor", "P3")]
 
 
+def test_a_common_word_value_is_read_in_the_case_the_yaml_wrote_it(db, tmp_path):
+    """A YAML artifact that shouts the dead value still reports; one that uses
+    the word in a prose field does not. This is the `bes.yaml` shape from the
+    live scan: `alert_desc: "… vault standby slot down"` against a dead
+    `status = DOWN` (wq#2151)."""
+    quoted = tmp_path / "storage_manifest.yaml"
+    quoted.write_text("isis:\n  service_state: UP\n")
+    hits = lcs.scan_files(index_of(db), artifacts=((str(quoted), lcs.TIER_TICKET),))
+    assert [(h["subject"], h["dead_value"]) for h in hits] == [("isis", "UP")]
+
+    prose = tmp_path / "machines.yaml"
+    prose.write_text('isis:\n  service_state:\n    alert: "bring it up after"\n')
+    assert lcs.scan_files(index_of(db),
+                          artifacts=((str(prose), lcs.TIER_TICKET),)) == []
+
+
 def test_block_context_does_not_reach_a_sibling_block(db, tmp_path):
     manifest = tmp_path / "storage_manifest.yaml"
     manifest.write_text("hathor:\n  power_plug: P5\nseshat:\n  power_plug: P3\n")
@@ -262,8 +341,8 @@ def test_notes_are_scanned_and_revoked_notes_are_skipped(db):
 def test_scan_reports_reach_versus_the_old_ip_only_filter(db, tmp_path):
     add_note(db, "n1", "nephthys is the embeddings-host for recall")
     result = lcs.scan(db, artifacts=())
-    assert result["closed_facts"] == 7
-    assert result["index_size"] == 5
+    assert result["closed_facts"] == 9
+    assert result["index_size"] == 7
     assert result["ip_only_size"] == 1
     assert result["actionable"] == 1
     assert "note_row" in lcs.render(result)
@@ -299,7 +378,7 @@ def test_cli_json_output_and_exit_codes(db, capsys):
     add_note(db, "n1", "nephthys is the embeddings-host for recall")
     assert lcs.main(["--db", db, "--json", "--no-files"]) == 0
     payload = capsys.readouterr().out
-    assert '"index_size": 5' in payload
+    assert '"index_size": 7' in payload
     assert lcs.main(["--db", db, "--strict", "--no-files"]) == 1
     assert lcs.main(["--db", "/nonexistent/minerva.db", "--no-files"]) == 2
 
@@ -422,29 +501,18 @@ def test_the_hypothetical_suppressor_is_corpus_only(db, tmp_path):
 
 def test_a_short_shouted_value_must_be_shouted_in_the_prose_too(db):
     """Measured 2026-09-20: all four hits that survived the first two
-    narrowings were isis.service_state='UP' matching the English `up`."""
-    conn = sqlite3.connect(db)
-    conn.execute(
-        "insert into state_facts (id, subject, predicate, value, valid_from,"
-        " valid_to, ingested_at, fact_class) values"
-        " ('f20','isis','service_state','UP','2026-06-01','2026-09-01',"
-        "  '2026-06-01','status')"
-    )
-    conn.execute(
-        "insert into state_facts (id, subject, predicate, value, valid_from,"
-        " valid_to, ingested_at, fact_class) values"
-        " ('f21','isis','service_state','DEGRADED','2026-06-01',null,"
-        "  '2026-06-01','status')"
-    )
-    conn.commit()
-    conn.close()
-
+    narrowings were isis.service_state='UP' matching the English `up`.
+    The fixture's f13/f14 are that fact."""
     english = "Spin up a fine-tuning service on Isis or an external GPU node\n"
     assert corpus_hits(db, [(7, PROSE_DOC, english)], entry_values={"UP"})[0] == []
     shouted = "isis service_state is UP per the last check\n"
     assert len(corpus_hits(db, [(7, PROSE_DOC, shouted)], entry_values={"UP"})[0]) == 1
-    # Fleet artifacts keep the case-insensitive match they were measured with.
-    assert len(lcs.scan_text(english, index_of(db), "FLEET_MAP.md:1",
+    # The fleet tiers no longer differ here: wq#1775 left them case-insensitive
+    # as unmeasured, and wq#2151 measured them — 32 hits to 28, four false
+    # positives of exactly this shape, none of them real.
+    assert lcs.scan_text(english, index_of(db), "FLEET_MAP.md:1",
+                         lcs.TIER_PROPOSAL) == []
+    assert len(lcs.scan_text(shouted, index_of(db), "FLEET_MAP.md:1",
                              lcs.TIER_PROPOSAL)) == 1
 
 

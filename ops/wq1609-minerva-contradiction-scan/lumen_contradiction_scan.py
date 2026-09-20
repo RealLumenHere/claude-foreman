@@ -22,7 +22,10 @@ A structured value is matched globally only when its shape is unique enough to
 carry its own subject (IPv4, MAC, dotted host, absolute path, systemd unit,
 URL). Every other token — `active`, `retired`, `dead`, `133` — is matched only
 on a line/note that also names the fact's subject, because those words carry no
-subject on their own.
+subject on their own. A value that is also an ordinary English word (`UP`,
+`DOWN`, `FREE`) is matched **case-exactly**, in every tier: the shouted `UP` of
+a status table is not the `up` of "set up the container", and case is the only
+thing that says so (wq#2151, COMMON_WORD_VALUES).
 
 Three suppressors run on each candidate hit:
 
@@ -118,6 +121,25 @@ SELF_IDENTIFYING = (
     re.compile(r"^[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+\.[A-Za-z]{2,}$"),
 )
 
+# Dead values that are also ordinary English words (wq#2151). `UP` is a real
+# `isis.service_state` value and also the preposition in "spin up a FastAPI
+# orchestrator", and subject-plus-cue is no scope at all for a word that any
+# prose *about* the subject contains — it was 8 of 9 corpus hits on 2026-09-20
+# and 4 of 32 fleet-tier hits the same day. These match case-exactly everywhere:
+# SHOUTED_SHORT_RE below does the same job for the corpus only, and stops at 4
+# characters, so `ONLINE` and `RUNNING` in a note or a YAML file need this.
+# Membership test is "the lowercase form is an ordinary English word a technical
+# document uses without asserting a status", which is why `P3` and `OK` are
+# absent (short but not English) and `free`/`live`/`down` are present (longer,
+# but English) — length is the wrong axis.
+COMMON_WORD_VALUES = frozenset({
+    "active", "all", "bad", "busy", "closed", "cold", "dead", "done", "down",
+    "empty", "free", "full", "good", "high", "hot", "idle", "in", "inactive",
+    "live", "local", "low", "main", "new", "no", "none", "off", "old", "on",
+    "open", "out", "ready", "remote", "running", "set", "stopped", "unused",
+    "up", "used", "yes",
+})
+
 NEGATION_RE = re.compile(
     r"\bwas\b|\bwere\b|\bformerly\b|\bpreviously\b|\bused to\b|\bno longer\b"
     r"|\bretired\b|\bdecommission|\bsupersed|\breplaced by\b|\bdeprecat"
@@ -145,6 +167,8 @@ HYPOTHETICAL_RE = re.compile(
 # case-insensitive matcher: `UP` is `isis.service_state`, `up` is the word in
 # "spin up a container". Measured 2026-09-20 — every one of the four hits that
 # survived the first two narrowings was this (README, Measured corpus reach).
+# Corpus-only, and a superset of COMMON_WORD_VALUES only below 5 characters:
+# it is what still covers `OK`, `EOL`, `RMA` — shouted, short, not English.
 SHOUTED_SHORT_RE = re.compile(r"^[A-Z]{2,4}$")
 
 # A markdown table row is an assertion in a fleet artifact and a worked example
@@ -246,16 +270,27 @@ def subject_tokens(subject):
     return sorted(t for t in forms if len(t) >= 3)
 
 
-def boundary_re(value):
+def common_word(value):
+    """Whether a value is also an ordinary English word, so its appearance in a
+    sentence says nothing on its own (wq#2151). See COMMON_WORD_VALUES."""
+    return value.lower() in COMMON_WORD_VALUES
+
+
+def boundary_re(value, case_exact=False):
     """Word boundaries that respect the value alphabet. `100.88.71.47` must not
     match inside `100.88.71.470` and `active` must not match `inactive`, but a
     sentence-final `100.88.71.47.` and a YAML `hathor:` must still match — so a
-    dot only blocks when something alphanumeric follows it."""
+    dot only blocks when something alphanumeric follows it.
+
+    Matching is case-insensitive except for common-word values, where the case
+    the fact recorded is the only signal left that a status is being quoted:
+    the shouted `UP` of a service table is a different token from the `up` of
+    "set up the Docker container"."""
     return re.compile(
         r"(?<![A-Za-z0-9_-])(?<![A-Za-z0-9]\.)"
         + re.escape(value)
         + r"(?![A-Za-z0-9_-])(?!\.[A-Za-z0-9])",
-        re.IGNORECASE,
+        0 if case_exact else re.IGNORECASE,
     )
 
 
@@ -295,7 +330,8 @@ def build_dead_value_index(conn):
         if pred in VOLATILE_PREDICATES or not is_structured(val, fclass):
             continue
         current = open_now.get((subj, pred))
-        value_re = boundary_re(val)
+        word_like = common_word(val)
+        value_re = boundary_re(val, case_exact=word_like)
         # `hathor.power_plug` closed 'P3' and reopened as 'P3 (relabelled …)' is
         # an annotation, not a supersession: the value is still live.
         if current is not None and value_re.search(current):
@@ -312,7 +348,8 @@ def build_dead_value_index(conn):
                 "value_re": value_re,
                 "subject_res": [boundary_re(t) for t in subject_tokens(subj)],
                 "cue_res": [boundary_re(c) for c in predicate_cues(pred)],
-                "current_res": [boundary_re(t) for t in changelog_tokens(current)],
+                "current_res": [boundary_re(t, case_exact=common_word(t))
+                                for t in changelog_tokens(current)],
                 # The same boundaries, case-sensitive. Corpus-only (§4.2).
                 "case_re": re.compile(value_re.pattern),
             }

@@ -656,3 +656,62 @@ also a function word — any prose *about* the subject contains it. Filed as wq#
 The §4.2 verdict is unchanged and now has a second independent pass behind it: **0 true
 positives**, twice. The blocker is precision, not reach — a third of the corpus already
 reaches the matcher.
+
+### 8.2 The common-word fix, 2026-09-20 (wq#2151)
+
+Filed off §8.1's hit list and worked the same afternoon, by which point half of it had
+already been fixed by someone else. **wq#1775 landed its corpus tier in between**, carrying
+a narrowing of this very class — a 2-4 character all-caps value must be shouted in the
+prose too (`SHOUTED_SHORT_RE`, corpus-only, measured on the same four surviving hits).
+Two lanes reading the same §8.1 evidence reached the same diagnosis within hours; the
+rebase is where that surfaced, not the dispatch.
+
+So the corpus half is already closed, and this branch neither loses nor regains reach on it
+(`ops/wq1713-pgvector-invalidation/measure_corpus_reach.py`, which since wq#1775 calls the
+shipped `scan_corpus()` rather than a copy):
+
+| | main | this branch |
+|---|---|---|
+| dead-value index entries | 87 | 87 |
+| prefilter candidates | 3,617 | 3,617 |
+| corpus action hits | 0 | 0 |
+
+What wq#1775 deliberately did *not* touch is the fleet tiers, and it said why in its own
+test: *"Fleet artifacts keep the case-insensitive match they were measured with."* Not a
+judgement that they were clean — an admission that nobody had looked. This ticket looked.
+`lumen-contradiction-scan --json` over notes and fleet artifacts, read-only, 2026-09-20,
+438 closed facts, index 87 both times: **32 hits → 28**, four removals, nothing added.
+
+| removed | why it was wrong |
+|---|---|
+| `archival_notes:6d29bb85c4b9` `sia.status = 'UP'` | *"- 3 containers up"* |
+| `LIVE_FLEET_STATE.md:19,20` `isis.service_state = 'UP'` (info) | the word inside two hardware inventory lines |
+| `fleet/inventory/machines/bes.yaml:7` `bes.status = 'DOWN'` | `alert_desc: "bes unreachable — … vault standby slot down"` |
+
+Four false positives, no true positive lost. That last one is why the shipped rule is a
+word list rather than wq#1775's length gate promoted to the fleet tiers: `DOWN` sits in a
+file the scanner may open a *ticket* against, and `ONLINE`, `RUNNING` and `ACTIVE` are all
+past four characters. `COMMON_WORD_VALUES` is the axis the failure actually has — an
+English word — and `SHOUTED_SHORT_RE` keeps covering what it does not: `OK`, `EOL`, `RMA`,
+shouted and short and not words.
+
+Of the ticket's three options, (a) ships, (b) was implemented and then dropped, (c) is
+rejected.
+
+**(b), the line-local predicate cue, was measured and withdrawn.** Requiring the cue on the
+matched line rather than in the enclosing section removed exactly one further corpus hit
+against the pre-wq#1775 matcher — one that case-exactness removes anyway
+(`corpus_reach_pre_wq1775.txt`: 9 hits; cue-rule-only: 8; case-only: 1) — and zero fleet
+hits. Its one measured effect on the other side was to break
+`test_prose_subject_may_not_come_from_an_enclosing_heading`: `# pbox status` followed by
+*"the scheduler stayed active throughout"* in a fleet-internal doc, which wq#1775 asserts
+is a hit. A rule whose measured benefit is zero and whose measured cost is a deliberate
+behaviour elsewhere does not ship. The theoretical case for it survives — it is the only
+rule that would fire on a common word recorded in *lowercase*, where case-exactness is a
+no-op — but `UP` does not exercise it and neither did anything else in 32 hits, so it goes
+back on the shelf until something measures it.
+
+**(c), a minimum-length gate, is rejected on the evidence:** length is the wrong axis.
+`P3`, `E1` and `OK` are as short as `UP` and carry none of the risk, while `free`, `live`
+and `down` are longer than the gate would have to be. What makes `UP` dangerous is not that
+it is two characters, it is that it is a word English prose uses about anything.

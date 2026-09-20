@@ -1,0 +1,9 @@
+hits: before 32, after 28
+-1 ('/home/lumen/fleet/inventory/machines/bes.yaml:7', 'bes', 'status', 'DOWN', 'action')
+     monitoring: {interval_s: 60, alert: true, alert_desc: "bes unreachable — awareness watchdog + Grafana + vault standby slot down", gatus: true}
+-1 ('/home/lumen/minerva/context/LIVE_FLEET_STATE.md:19', 'isis', 'service_state', 'UP', 'info')
+     - **hathor** — **hardware**=Apple MacPro6,1, sn F5KR806KF9VN, BootROM 474.0.0.0.0 (2023-01-13 — one behind isis/nephthys 481); Xeon E5-2697 v2 12C/24T
+-1 ('/home/lumen/minerva/context/LIVE_FLEET_STATE.md:20', 'isis', 'service_state', 'UP', 'info')
+     - **isis** — **hardware**=Apple MacPro6,1, sn F5KQT0GKF9VM, BootROM 481.0.0.0.0 (2023-10-07); Xeon E5-2697 v2 12C/24T; dual FirePro D300 (Curacao XT) 
+-1 ('archival_notes:6d29bb85c4b9', 'sia', 'status', 'UP', 'action')
+     - 3 containers up

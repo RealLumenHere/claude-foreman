@@ -34,7 +34,8 @@ for subj, pred, val, fclass in closed:
         reasons["skipped: multi-token value"] += 1
     else:
         current = open_now.get((subj, pred))
-        if current is not None and lcs.boundary_re(val).search(current):
+        matcher = lcs.boundary_re(val, case_exact=lcs.common_word(val))
+        if current is not None and matcher.search(current):
             reasons["skipped: value still live in the current value"] += 1
         else:
             reasons["INDEXED"] += 1

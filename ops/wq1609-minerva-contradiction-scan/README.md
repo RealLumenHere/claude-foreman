@@ -28,8 +28,9 @@ reopened as `P3 (relabelled …)` is an annotation, not a supersession).
 
 | value | example | match rule |
 |---|---|---|
-| self-identifying | `100.88.71.47`, `lumen-brain.service`, `embeddings-host`, `DECOMMISSIONED` | matched anywhere — the token carries its own subject |
-| bare label / common word | `active`, `dead`, `P3`, `E1` | matched only where the fact's **subject** *and* a **predicate cue** are in scope |
+| self-identifying | `100.88.71.47`, `lumen-brain.service`, `embeddings-host` | matched anywhere — the token carries its own subject |
+| bare label | `P3`, `E1`, `AUTO`, `DECOMMISSIONED` | matched only where the fact's **subject** *and* a **predicate cue** are in scope (a shouted word says nothing about *which* thing is decommissioned — wq#1629, wq#1781) |
+| common English word | `UP`, `DOWN`, `FREE`, `LIVE` | as above, but **case-exact** in every tier — the `up` of "spin up a container" is not the `UP` of a status table (wq#2151) |
 | prose | anything >60 chars or `fact_class=narrative` | **never string-matched** |
 
 The predicate cue is what keeps the bare labels honest: `thor … dead` is only a
@@ -39,6 +40,25 @@ produced 22 hits, nearly all of them notes that merely contained the word
 `100.88.71.47` does not match inside `100.88.71.470` and `active` does not match
 inside `inactive`, while a sentence-final `100.88.71.47.` and a YAML `hathor:`
 still do.
+
+Subject-plus-cue is not enough when the value is *itself* an English word
+(`COMMON_WORD_VALUES`, wq#2151). `isis.service_state` closed `UP`, and on
+2026-09-20 eight of the nine corpus hits were the preposition — *"Spin up a
+FastAPI orchestrator"*, *"Set up the Docker container"* — in research sections
+that happen to mention Isis and a service. Any prose *about* a subject contains
+such a word, so case becomes the signal: a common-word value matches only in the
+case the fact recorded it, in every tier. The corpus narrowing below does this
+for shouted values under five characters; the word list is what carries `ONLINE`,
+`RUNNING` and a note or YAML file, and what keeps the axis honest — `P3` and `OK`
+are shorter than `free` and `live` and carry none of the risk. Scope is otherwise
+unchanged: subject and cue may both still come from the enclosing section.
+
+Measured on the daily scan (notes + fleet artifacts), main versus the change:
+**32 hits → 28**, four removals, nothing added — `sia.status = 'UP'` against
+*"- 3 containers up"*, two informational `isis.service_state = 'UP'` inside
+`LIVE_FLEET_STATE.md` hardware lines, and `bes.status = 'DOWN'` inside a
+`bes.yaml` alert string. All four false, none real
+(`ops/wq2151-contradiction-scan-common-words/`).
 
 Scope of "in scope": a prose line matches on its own line, with the subject
 allowed to come from its enclosing YAML block key or nearest markdown heading; a
@@ -88,7 +108,9 @@ corpus-only, because a matcher tuned on the fleet's terse artifacts measured
   node's state 200 lines below.
 - **shouted-short values must be shouted in the prose** — a 2-4 character
   all-caps value (`UP`, `OK`, `IDLE`) matches case-sensitively. Found by
-  re-measuring, not predicted: see *Measured corpus reach* below.
+  re-measuring, not predicted: see *Measured corpus reach* below. wq#2151 then
+  took the same idea to every tier for values that are English words, so what
+  is corpus-only here is the non-word remainder: `OK`, `EOL`, `RMA`.
 - **hypothetical suppressor** — conditional or definitional mood (`if`,
   `would`, `fraction of`, `e.g.`, `defined as`, a markdown table row in
   failure-mode vocabulary) is not an assertion. The fleet tiers keep exactly

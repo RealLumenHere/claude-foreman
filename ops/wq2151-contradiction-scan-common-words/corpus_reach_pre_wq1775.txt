@@ -1,0 +1,22 @@
+dead-value index entries: 87
+prefilter candidates (distinct docs): 3617
+elapsed: 164.8s
+hits: 9 total, 9 action, 0 info
+  research_docs:98363:151  hathor.status = 'OFFLINE' (now 'inactive')
+      | **Node failure** – Isis or Hathor offline. | Pipeline stalls. | Graph includes fallback sub‑graphs that can run the final synthesis on Lum
+  research_docs:94023:38  isis.service_state = 'UP' (now 'DEGRADED')
+      | **Integration Path** | 1. Deploy the micro‑service on **Isis** (Mac Pro 6,1) where the Qwen3‑32B model can be leveraged for *task‑matching
+  research_docs:95501:42  isis.service_state = 'UP' (now 'DEGRADED')
+      | **Docker containers** | Wrap the prompting logic in a lightweight “quality‑service” container exposing a `/evaluate` HTTP endpoint; the co
+  research_docs:97549:49  isis.service_state = 'UP' (now 'DEGRADED')
+      During inference, the reasoner runs once per input, adding only a small overhead (a few million parameters, easily served on a CPU‑only node
+  research_docs:98134:104  isis.service_state = 'UP' (now 'DEGRADED')
+      **Caveat:** This requires the serving stack to expose hidden states. Lumen's setup with LiteLLM does not natively do this. A realistic alter
+  research_docs:90298:125  isis.service_state = 'UP' (now 'DEGRADED')
+      Because `Isis` and `Hathor` are already reachable via Tailscale, spin up a **FastAPI** orchestrator on `lumen` that dispatches a prompt to e
+  research_docs:98472:249  isis.service_state = 'UP' (now 'DEGRADED')
+      6. **Set up the Docker container** for the memory service so it can live on Hathor or Isis (where the GPU/embedding models run) while Lumen'
+  research_docs:92705:69  isis.service_state = 'UP' (now 'DEGRADED')
+      2. **Fine‑tuning Service** – Spin up a `pytorch/pytorch:2.3-cuda12.1` image (run on Isis or an external GPU node).
+  research_docs:93360:100  isis.service_state = 'UP' (now 'DEGRADED')
+      | **Docker** | Isolates each graph‑world‑model service (e.g., a PyTorch GNN server) on the **Isis** node (Mac Pro 6,1, Qwen3‑32B). | Allows 
