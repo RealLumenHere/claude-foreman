@@ -169,12 +169,14 @@ def make_child(tmp_path, leak):
     return [sys.executable, str(p)]
 
 
-def run(tmp_path, monkeypatch, leak, env):
+def run(tmp_path, monkeypatch, leak, env, extra_args=()):
     alarms = []
     monkeypatch.setattr(fworker, "mask_alarm",
                         lambda tid, att, labels, records=None: alarms.append(labels))
+    # extra_args ride on the child's argv the way --add-dir rides on the CLI's:
+    # ignored by the script, read back by run_child to learn what it granted.
     _state, _code, events, _killed, _cpu, _pid = fworker.run_child(
-        make_child(tmp_path, leak), REPO_ROOT, env,
+        make_child(tmp_path, leak) + list(extra_args), REPO_ROOT, env,
         max_turns=50, wall_clock_s=30, ticket_id=999290, attempt=1,
         frame_gap_s=10, post_result_grace_s=1)
     return alarms, json.dumps(events)
@@ -345,6 +347,26 @@ def test_granted_dirs_are_read_back_off_the_child_command_line():
         "prompt", "claude-opus-5", "xhigh", "/tmp/settings.json",
         add_dirs=["/home/lumen/kb", "/home/lumen/bin"])
     assert fworker.granted_dirs(cmd) == ["/home/lumen/kb", "/home/lumen/bin"]
+
+
+def test_run_child_screens_against_the_dirs_its_own_argv_granted(
+        tmp_path, monkeypatch):
+    """wq#2309: the grant is read off the argv inside run_child, so nothing below the
+    unit tests pins that the stream path actually uses it — cwd would screen clean in
+    every one of them. Drive the real thing with real `git grep`: one stream, run
+    twice, paging or quiet purely on whether the repo holding the text was granted.
+    """
+    value = "sk-ant-" + "oat01-committed-only-in-the-granted-repo"
+    granted = _repo(tmp_path / "kb", {"runbook.md": f"the runbook quotes {value}\n"})
+    leak = f"read the runbook: {value}"
+
+    ungranted, _ = run(tmp_path, monkeypatch, leak, dict(os.environ))
+    assert ungranted and "sk-key" in ungranted[0]
+
+    quiet, dump = run(tmp_path, monkeypatch, leak, dict(os.environ),
+                      extra_args=["--add-dir", granted])
+    assert quiet == []
+    assert value not in dump    # masked either way — screening gates only the page
 
 
 def test_the_same_shape_pages_when_it_is_the_childs_real_token(
