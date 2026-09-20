@@ -54,6 +54,13 @@ ticket, the wq#1677/wq#1774 pattern: a follow-up deploy ticket runs
 `install.sh` from a session with systemd reach, then `install.sh --verify`
 proves convergence.
 
+Deployed 2026-09-20 (wq#2193). Workers can reach systemd through
+`lumen-run start --name <slug> -- <script>` (allowlisted; a transient unit whose
+`sudo` calls succeed), which is the route `install.sh` ran through: 17 tests
+passed, both units installed, timer enabled and active, next run 2026-09-21
+06:42 UTC, live report `I1 stale-chunks=21 · I2 orphan-chunks=0 · FK cascades
+True`. `install.sh --verify` then printed `VERIFY OK` (exit 0).
+
 ## Not shipped here
 
 `handoff verify` wiring (the README's other option) — `/home/lumen/bin` is a
