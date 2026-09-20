@@ -1,0 +1,15 @@
+--- a/agent/healer_watch_table.yaml
++++ b/agent/healer_watch_table.yaml
+@@ -18,10 +18,8 @@
+   lumen-memoryd:         {kind: systemd, policy: restart, owner: memory,    holddown_flag: /home/lumen/agents/holddowns/lumen-memoryd.json}
+   mcp-gateway:           {kind: systemd, policy: restart, owner: hands,     holddown_flag: /home/lumen/agents/holddowns/mcp-gateway.json}
+   desktop-commander-mcp: {kind: systemd, policy: restart, owner: hands,     holddown_flag: /home/lumen/agents/holddowns/desktop-commander-mcp.json}
+-  # wq#971: LPP added now that wq#967 makes it safe (healer never fights an
+-  # active hold-down). Restart MUST go through lpp-restart, never bare systemctl.
+-  # Frozen-but-active (wq#908 shape) is probe-pokemon-liveness territory, not ours.
+-  lumen-pokemon-live:    {kind: systemd, policy: restart, owner: lpp,       holddown_flag: /home/lumen/agents/holddowns/lumen-pokemon-live.json, restart_cmd: /home/lumen/bin/lpp-restart}
++  # wq#1892 (2026-09-20): lumen-pokemon-live row removed — unit masked
++  # 2026-09-13 (docs/fleet/retired_services.yaml, wq#2073); nothing to restart.
+   ntfy:                  {kind: docker,  policy: restart, owner: alerting,  holddown_flag: /home/lumen/agents/holddowns/ntfy.json}
+   litellm:               {kind: docker,  policy: restart, owner: inference, holddown_flag: /home/lumen/agents/holddowns/litellm.json}
+   ollama:                {kind: systemd, policy: restart, owner: memory,    holddown_flag: /home/lumen/agents/holddowns/ollama.json}
