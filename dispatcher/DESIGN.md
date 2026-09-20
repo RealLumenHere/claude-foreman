@@ -282,6 +282,23 @@ pressure and throttles both. One slock and one daemon: two daemons would race on
 `local`/`cloud` plus `local_slots_full` and `stopped_{local,cloud}_reason`;
 `dispatch_health` judges each pool on those.
 
+**Gate objects and the ready metric (DISPATCH_REBUILD step 8).** The pool-independent
+stages are `gates.GATES`, an ordered list of small `Gate` classes (order =
+DISPATCH_DISSECTION §2.2, frozen by `test_gates_replay.py`); each returns `PASS` or a
+`Fail(stage, reason, detail, terminal, recheck_after, fingerprint_inputs)` and the loop logs one
+`skip` per failed ticket. `dispatchable_<pool>` is `len(ready[pool]) - lane_capped[pool]`
+(`dispatchable` is their sum, `ready_<pool>` is `len(ready)`), so a new gate reason can never
+read as a stall. Health's rule: `ready_pool > 0 and spawned_pool == 0` with no slots-full or
+partition-stop (`kill_switch`, `no_slots`, `local_paused`) explanation. Human-lane tickets are
+not scanned as candidates (`sweep_human_lanes` keeps the wq#1478 liveness auto-close).
+`harness_defect_hold` ignores a `failure.json` older than the ticket's last
+model/archetype/needs edit (witness: `state["harness_defect_seen"]`); the second spawn-loop
+trip in 24 h blocks the ticket `SPAWN_LOOP: <last release note>`
+(`state["spawn_loop_trips"]`). `--dry-run` takes no lock; a stale preflight stamp skips that
+repo for the pass and is reproved after `slock_release` in the same process, under a per-repo
+`foreman-reprove-<repo>` lock. Levers: `FOREMAN_DISPATCH_HYGIENE=legacy` (lock/reprove/
+human-lane scan), `FOREMAN_CHARGE_MODE=legacy` (harness-defect edit rule, spawn-loop block).
+
 ## 8. Logging + tracing (MUST 9)
 
 **dispatcher.log** — append-only JSONL at `/home/lumen/foreman/dispatcher.log` (the

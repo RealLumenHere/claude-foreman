@@ -14,15 +14,16 @@ A pass is UNHEALTHY if:
     crash inside the _do_pass loop, wq#1374) and has NO `pass_end` (hard abort).
   - (wq#2088) Its `pass_end` carries per-pool counters and either pool has
     dispatchable_<pool>>0 with spawned_<pool>=0, unless the local lane is full
-    (`local_slots_full`) or the cloud partition stopped at no_slots. Otherwise:
+    (`local_slots_full`), the cloud partition stopped at no_slots, or a partition stopped
+    on purpose (kill switch, local pause). dispatchable_<pool> is the READY count (step 8:
+    tickets that cleared every gate), so an all-gated queue is healthy by construction.
+    Otherwise:
   - Its `pass_end` has spawned=0 AND dispatchable>0 AND dry_run=false AND no
     `halt stage=concurrency reason=no_slots` in the same pass (= the dispatcher COULD
-    have spawned but didn't, and it wasn't because all slots were full). `dispatchable`
-    (wq#1410, research/NIGHTLY_DISPATCH_RESILIENCE.md §3.3.1) is candidates minus
-    structural skips (lane_unmapped, nodispatch_marker, frank_gated, deps_unmet,
-    runaway_stuck, not_open, vanished) — a candidates>0 pass full of structurally
-    undispatchable tickets is not a stall. Falls back to raw `candidates` when a
-    pass_end predates this field (pre-migration log tail).
+    have spawned but didn't, and it wasn't because all slots were full). This is the
+    legacy rule for a `pass_end` that predates the per-pool fields (`dispatchable` was
+    then candidates minus a list of structural skip reasons, wq#1410); it falls back to
+    raw `candidates` for one that predates `dispatchable` too (pre-migration log tail).
   - It has a `pass_start` with no matching `pass_end` and that `pass_start` is older
     than TIMEOUT_START_SEC (600s, matching the dispatch service's TimeoutStartSec —
     the hung-wq-lock case, wq#1410 §3.3.1 item 1).
@@ -135,18 +136,27 @@ def parse_log_tail(log_path, n_lines):
     return events
 
 
+# A partition that stopped for one of these did so on purpose: spawning nothing is the
+# designed answer, not a stall (kill switch, cloud/burn ceiling, local circuit-breaker pause).
+PARTITION_STOPS = ("kill_switch", "no_slots", "local_paused")
+
+
 def _pool_stalls(end, has_no_slots_halt):
-    """Stall descriptions for a partitioned pass_end (wq#2088), empty when healthy."""
+    """Stall descriptions for a partitioned pass_end, empty when healthy.
+
+    Step 8 rule: ready_pool > 0 and spawned_pool == 0 and no slots-full / partition-stop
+    explanation. `dispatchable_<pool>` is len(ready) - lane_capped, the tickets that cleared
+    every gate, so a gate reason nobody listed can never read as a stall. There is no
+    `unpooled` branch any more: nothing that failed a gate is counted, and a passing ticket
+    always has a pool. Old pass_end lines without per-pool fields never reach this function
+    (classify_passes falls back to the top-level `dispatchable`)."""
     stalled = []
-    if end.get("dispatchable_local", 0) > 0 and end.get("spawned_local", 0) == 0 \
-       and not end.get("local_slots_full") and not end.get("local_paused"):
-        stalled.append(f"local spawned=0 dispatchable={end['dispatchable_local']}")
-    if end.get("dispatchable_cloud", 0) > 0 and end.get("spawned_cloud", 0) == 0 \
-       and not has_no_slots_halt:
-        stalled.append(f"cloud spawned=0 dispatchable={end['dispatchable_cloud']}")
-    if end.get("dispatchable_unpooled", 0) > 0 and end.get("spawned", 0) == 0 \
-       and not has_no_slots_halt:
-        stalled.append(f"unrouted spawned=0 dispatchable={end['dispatchable_unpooled']}")
+    for pool, full in (("local", bool(end.get("local_slots_full"))),
+                       ("cloud", has_no_slots_halt)):
+        ready = end.get(f"dispatchable_{pool}", 0)
+        if ready > 0 and end.get(f"spawned_{pool}", 0) == 0 and not full \
+           and end.get(f"stopped_{pool}_reason") not in PARTITION_STOPS:
+            stalled.append(f"{pool} spawned=0 dispatchable={ready}")
     return stalled
 
 

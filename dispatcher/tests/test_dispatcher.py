@@ -1227,7 +1227,12 @@ def test_unmapped_lane_skipped(denv):
 
 def test_stale_preflight_auto_reproves_and_spawns(denv, monkeypatch):
     """wq#1372: a stale stamp must not strand the lane — a clean re-prove writes a
-    fresh stamp and the ticket dispatches in the same pass, no human re-run needed."""
+    fresh stamp and the ticket dispatches in the same pass, no human re-run needed.
+
+    Step 8 moved the reprove out of the pass lock (test_step8_hygiene.py covers the default:
+    the ticket waits one pass); FOREMAN_DISPATCH_HYGIENE=legacy is the rollback lever and
+    keeps this same-pass behaviour, which is what this test now pins."""
+    monkeypatch.setenv("FOREMAN_DISPATCH_HYGIENE", "legacy")
     tid = add_ticket("stale stamp, clean reprove")
     monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
                          lambda repo: (False, "stale preflight stamp for repo"))
@@ -1259,8 +1264,12 @@ def test_stale_preflight_reprove_failure_alerts_instead_of_silent_skip(denv, mon
             repo, ok=False, reason="live proof found permission denials",
             static_failures=[], denials=["This command requires approval: foo"]))
     assert fd.run_pass() == 0
+    # step 8: the ticket's one decision line is the deferral; the reprove's verdict follows
+    # the pass (after slock release) as an `info`, not a second skip for the same ticket
     skips = log_events(denv, "skip", ticket=tid)
-    assert len(skips) == 1 and skips[0]["reason"] == "reprove_failed"
+    assert len(skips) == 1 and skips[0]["reason"] == "no_fresh_stamp"
+    failed = [e for e in log_events(denv, "info") if e.get("reason") == "reprove_failed"]
+    assert len(failed) == 1 and failed[0]["ticket"] == tid
     assert lumen_calls(denv) == []
     lines = ntfy_lines(denv)
     assert len(lines) == 1 and "reprove failed" in lines[0] and "repo" in lines[0]
@@ -2484,10 +2493,10 @@ def test_auto_tag_is_idempotent_and_appends_a_newly_cited_dir(denv, monkeypatch)
     assert notes_of(denv, tid).count("capability_lint:") == 2
 
 
-def test_capability_skips_are_structural_in_pass_end(denv, monkeypatch):
-    """§2.2: all four reasons subtract from `dispatchable` so the watchdog can still
-    tell a real stall (dispatchable>0, spawned=0) from a queue of correctly-refused
-    tickets (NIGHTLY_DISPATCH_RESILIENCE §3.3.1)."""
+def test_capability_skips_are_not_dispatchable_in_pass_end(denv, monkeypatch):
+    """§2.2: a capability-refused ticket never reaches `ready`, so it is not counted in
+    `dispatchable` and the watchdog can still tell a real stall (dispatchable>0, spawned=0)
+    from a queue of correctly-refused tickets (NIGHTLY_DISPATCH_RESILIENCE §3.3.1)."""
     _lint_roster(monkeypatch)
     _apply_dir(monkeypatch)
     add_ticket("secret", detail="cat /home/lumen/secrets/reddit.env")
@@ -2500,7 +2509,6 @@ def test_capability_skips_are_structural_in_pass_end(denv, monkeypatch):
     end = log_events(denv, "pass_end")[0]
     assert end["candidates"] == 3 and end["dispatchable"] == 1
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [ok]
-    assert set(fd.CAPABILITY_SKIP_REASONS) <= fd.STRUCTURAL_SKIP_REASONS
 
 
 def test_warn_mode_is_the_rollback(denv, monkeypatch):
@@ -2575,7 +2583,8 @@ def _errored_result(repo, exc="FileNotFoundError(2, 'No such file or directory')
 
 def test_transient_reprove_error_retries_then_succeeds_without_paging(denv, monkeypatch):
     """(iii) shim fails twice then succeeds: two retries logged, third attempt writes
-    the stamp, ticket spawns this pass, zero pages."""
+    the stamp, ticket spawns on the next pass (step 8: the reprove runs after the lock),
+    zero pages."""
     tid = add_ticket("transient reprove, recovers on 3rd")
     monkeypatch.setattr(harness_preflight, "dispatch_gate_check",
                          lambda repo: (False, "stale preflight stamp for repo"))
@@ -2589,14 +2598,17 @@ def test_transient_reprove_error_retries_then_succeeds_without_paging(denv, monk
     monkeypatch.setattr(harness_preflight, "preflight", flaky)
     assert fd.run_pass() == 0
     assert len(calls) == 3 and slept == [30, 120]
-    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
-    assert log_events(denv, "skip", ticket=tid) == []
+    assert log_events(denv, "spawn") == []  # deferred past the lock, so not this pass
+    assert [s["reason"] for s in log_events(denv, "skip", ticket=tid)] == ["no_fresh_stamp"]
     retries = [e for e in log_events(denv, "info") if e.get("reason") == "reprove_retry"]
     assert len(retries) == 2 and "FileNotFoundError" in retries[0]["detail"]
     reproved = [e for e in log_events(denv, "info") if e.get("reason") == "auto_reproved"]
     assert len(reproved) == 1 and "attempt 3" in reproved[0]["detail"]
     assert ntfy_lines(denv) == []
     assert "repo" not in fd.load_state()["preflight_ntfy"]
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check", lambda repo: (True, ""))
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]  # fresh stamp: spawns
 
 
 def test_transient_reprove_error_three_times_pages_urgent_with_exception(denv, monkeypatch):
@@ -2612,8 +2624,9 @@ def test_transient_reprove_error_three_times_pages_urgent_with_exception(denv, m
     assert len(lines) == 1
     assert "-p urgent" in lines[0] and "FileNotFoundError" in lines[0]
     skips = log_events(denv, "skip", ticket=tid)
-    assert len(skips) == 1 and skips[0]["reason"] == "reprove_failed"
-    assert "attempts=3" in skips[0]["detail"]
+    assert len(skips) == 1 and skips[0]["reason"] == "no_fresh_stamp"
+    failed = [e for e in log_events(denv, "info") if e.get("reason") == "reprove_failed"]
+    assert len(failed) == 1 and "attempts=3" in failed[0]["detail"]
     assert lumen_calls(denv) == []
     entry = fd.load_state()["preflight_ntfy"]["repo"]
     assert entry["attempts"] == 3 and "FileNotFoundError" in entry["last_error"]
@@ -2663,8 +2676,10 @@ def test_reprove_success_after_page_sends_recovered_ntfy(denv, monkeypatch):
     assert fd.run_pass() == 0
     lines = ntfy_lines(denv)
     assert len(lines) == 2 and "-p default" in lines[1] and "Recovered:" in lines[1]
-    assert tid2 in [e["ticket"] for e in log_events(denv, "spawn")]
     assert "repo" not in fd.load_state()["preflight_ntfy"]
+    monkeypatch.setattr(harness_preflight, "dispatch_gate_check", lambda repo: (True, ""))
+    assert fd.run_pass() == 0  # step 8: the reprove ran after the lock; this pass spawns
+    assert tid2 in [e["ticket"] for e in log_events(denv, "spawn")]
 
 
 def test_preflight_ntfy_dict_entries_survive_load_state(denv):
@@ -2715,12 +2730,6 @@ def test_soft_stale_dry_run_logs_but_does_not_reseal(denv, monkeypatch):
     assert [e for e in log_events(denv, "info") if e.get("reason") == "stamp_soft_stale"]
     assert resealed == []
     assert log_events(denv, "would_spawn")
-
-
-def test_repo_mismatch_and_route_unassigned_are_structural():
-    import foreman_dispatcher as fd
-    assert {"repo_mismatch", "route_unassigned"} <= fd.STRUCTURAL_SKIP_REASONS
-    assert "tight_pri" not in fd.STRUCTURAL_SKIP_REASONS  # pressure is a real stall signal
 
 
 # ---- wq#2081: local-pool tickets are exempt from the Anthropic-quota gates ------------
@@ -2825,8 +2834,9 @@ def test_cloud_gates_never_touch_local(denv):
 
 
 def test_pass_end_split_counters(denv):
-    """wq#2088: pass_end reports each pool's dispatchable/spawned; unrouted defects are
-    counted under neither pool, and the parts sum to `dispatchable`."""
+    """wq#2088: pass_end reports each pool's dispatchable/spawned. Step 8: a ticket that
+    failed a gate (here an unroutable archetype) is counted nowhere, there is no `unpooled`
+    bucket, and `dispatchable` is the per-pool sum, which is len(ready)."""
     add_ticket("local one", model="qwen36-local")
     add_ticket("cloud one")
     add_ticket("bad archetype", model=None, archetype="build")
@@ -2834,8 +2844,9 @@ def test_pass_end_split_counters(denv):
     end = _pass_end(denv)
     assert (end["dispatchable_local"], end["dispatchable_cloud"]) == (1, 1)
     assert (end["spawned_local"], end["spawned_cloud"]) == (1, 1)
-    assert end["dispatchable_unpooled"] == 1
-    assert end["dispatchable"] == 3 and end["local_slots_full"] == 0
+    assert "dispatchable_unpooled" not in end
+    assert end["candidates"] == 3 and end["dispatchable"] == 2 and end["local_slots_full"] == 0
+    assert (end["ready_local"], end["ready_cloud"]) == (1, 1)
 
 
 def test_lane_cap_holds_across_partitions_within_one_pass(denv):

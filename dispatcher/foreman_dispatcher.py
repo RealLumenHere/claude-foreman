@@ -40,8 +40,7 @@ Decision-log events (one JSON object per line, file + stdout):
                            column (wq#1438 slice C, §2.1 auto-tag). The four capability
                            SKIP reasons it can raise instead are cited_path_unreachable,
                            node_unknown, capability_denied_by_policy and
-                           needs_unresolved — all structural (see
-                           STRUCTURAL_SKIP_REASONS). FOREMAN_NEEDS_LINT_MODE=warn is
+                           needs_unresolved. FOREMAN_NEEDS_LINT_MODE=warn is
                            the rollback: derive and log, decide nothing.
   tight_mode               governor pressure flipped the pass into tight-mode
   error                    config/spawn/langfuse/pass failures
@@ -73,6 +72,7 @@ import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
 import local_capacity   # noqa: E402  # wq#2130: per-backend local slots + local pause
 import runaway          # noqa: E402
+import self_heal        # noqa: E402  # charge_mode_legacy(): FOREMAN_CHARGE_MODE rollback lever
 import spawn_loop_guard  # noqa: E402  # wq#1703: restart-loop breaker
 import psi_pressure     # noqa: E402  # wq#844
 import burn_rate        # noqa: E402  # wq#1669: burn-rate spawn controller
@@ -82,6 +82,7 @@ import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refu
 import capability_lint    # noqa: E402  # wq#1437 BROKER_WIRING §2.1 slice B (warn)
 import capability         # noqa: E402  # wq#1438 BROKER_WIRING §2.2 slice C (pre-skip)
 import liveness_clear     # noqa: E402  # wq#1478 LIVENESS_GATE §12.4: stale Frank-gates auto-clear
+import gates              # noqa: E402  # DISPATCH_REBUILD step 8: the ordered gate objects
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -134,52 +135,23 @@ STAGGER = (spawner.STAGGER_MIN_S, spawner.STAGGER_MAX_S)
 REPO_HINT_LANE = "auto"
 
 # 'user' is Frank's action/decision queue — physical work, purchases, reboots, repo-disposition
-# calls. Human-owned, NEVER worker-dispatchable, so it must skip as frank_gated (a recognized
-# human-owned skip already excluded from `dispatchable`) instead of lane_unmapped, which looked
-# like a routing defect and buried 53 of Frank's real to-dos in noise.
+# calls. Human-owned, NEVER worker-dispatchable. Step 8: scan_candidates no longer emits them at
+# all; the HumanLane gate stays as the second wall and skips as frank_gated (never lane_unmapped,
+# which looked like a routing defect and buried 53 of Frank's real to-dos in noise).
 HUMAN_LANES = {"user", "user-projects", "frank-re", "frank-hw", "frank-funding", "frank-cred"}
 
-# wq#1410 (research/NIGHTLY_DISPATCH_RESILIENCE.md §1.6, §3.3.1): a candidate skipped
-# for one of these reasons was never going to spawn regardless of dispatcher health —
-# the ticket/lane is structurally undispatchable, not stalled. pass_end's `dispatchable`
-# count excludes them so the watchdog can tell a real stall (dispatchable>0, spawned=0)
-# from a backlog of lane_unmapped noise (33-38 of every 43-59 candidates historically).
+# DISPATCH_REBUILD step 8: `dispatchable` used to be candidates minus an allowlist of skip
+# reasons (wq#1410 STRUCTURAL_SKIP_REASONS), so every new gate reason read as a stall until
+# someone remembered to add it (harness_defect_hold was the fourth recurrence, F7). It is
+# now the READY set by construction: len(ready[pool]) - lane_capped[pool], see _do_pass.
 
-# wq#1438 (BROKER_WIRING.md §2.2): the four ways stage 3.7 refuses a candidate. The
-# doc names three as structural; `node_unknown` is the same class (preflight can
-# return it, and a ticket naming a node the fleet has never heard of is exactly as
-# undispatchable as one citing a path nobody can reach), so all four are — otherwise
-# the watchdog reads a queue full of correctly-refused tickets as a dispatcher stall.
-CAPABILITY_SKIP_REASONS = (
-    capability.REASON_CAPABILITY_DENIED_BY_POLICY,
-    capability.REASON_NEEDS_UNRESOLVED,
-    capability.REASON_CITED_PATH_UNREACHABLE,
-    capability.REASON_NODE_UNKNOWN,
-)
-STRUCTURAL_SKIP_REASONS = frozenset({
-    "lane_unmapped", "nodispatch_marker", "frank_gated", "deps_unmet",
-    "runaway_stuck", "not_open", "vanished", "fire_unapproved", "fire_no_probe",
-    "held",  # wq#1461: a live `wq hold` — structural, not a stall (see hold_reason)
-    # 2026-09-08: a ticket whose title names a repo its lane cannot land in, or that
-    # the router has no rung for, is a ticket defect — it will never spawn until the
-    # ticket is re-laned/re-routed. Counting them as dispatchable made the watchdog
-    # page "STALLED — recovery FAILED, needs you" (aq#1098 x7) on a drained queue.
-    "repo_mismatch", "route_unassigned",
-    # wq#1703: a ticket the spawn-loop guard is holding is refused on purpose, the same
-    # class as runaway_stuck — counting it as dispatchable would make the watchdog read
-    # a working breaker as a dispatcher stall.
-    "spawn_loop",
-    # wq#2047: a lane at its configured max_per_day (pilot=3) refuses on purpose until the
-    # UTC day rolls over — nothing the dispatcher or recovery ladder can change. Counted
-    # as dispatchable, 12 capped pilot tickets read as "dispatchable=12 spawned=0" every
-    # pass and the watchdog reported a stall on a dispatcher that was working.
-    "lane_cap",
-} | set(CAPABILITY_SKIP_REASONS))
+# FOREMAN_DISPATCH_HYGIENE=legacy restores the pre-step-8 pass shape: dry-run takes the
+# lock, the stale-preflight reprove runs inside it, human-lane tickets are gate candidates.
+HYGIENE_ENV = "FOREMAN_DISPATCH_HYGIENE"
 
 
-def count_structural_skips(events):
-    return sum(1 for ev in events
-               if ev.get("event") == "skip" and ev.get("reason") in STRUCTURAL_SKIP_REASONS)
+def hygiene_legacy():
+    return os.environ.get(HYGIENE_ENV) == "legacy"
 
 
 FRANK_TITLE_RE = re.compile(r"\[frank gate\]|\[manual\]|owner\s*=\s*frank", re.I)
@@ -363,7 +335,7 @@ def load_state(now=None):
     fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {},
              "runaway_ntfy": {}, "preflight_ntfy": {}, "gate_error_ntfy": {},
              "harness_defect_ntfy": {}, "capability_ntfy": {}, "spawn_loop_ntfy": {},
-             "spawn_ledger": {}}
+             "spawn_ledger": {}, "spawn_loop_trips": {}, "harness_defect_seen": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -382,25 +354,21 @@ def load_state(now=None):
     # wq#1703: {tid: [{ts, attempts}]} — a list per ticket, not a single timestamp, so it
     # prunes on its own window rather than through _prune_dedup.
     spawn_ledger = spawn_loop_guard.prune_ledger(st.get("spawn_ledger"), now)
-    if st.get("day") != today:  # UTC day rollover resets lane counts, not the ledgers (§6.3)
-        return {"day": today, "lane_counts": {}, "fire_ntfy": fire,
-                "pacing_ntfy": pacing_ntfy, "runaway_ntfy": runaway_ntfy,
-                "preflight_ntfy": preflight_ntfy, "gate_error_ntfy": gate_error_ntfy,
-                "harness_defect_ntfy": harness_defect_ntfy,
-                "capability_ntfy": capability_ntfy, "spawn_loop_ntfy": spawn_loop_ntfy,
-                "spawn_ledger": spawn_ledger}
+    # step 8: {tid: [iso ts]} loop episodes on a 24 h window; {tid: {fp, mtime_ns}} is the
+    # harness-defect edit witness (runaway.harness_defect_ticket_ids prunes its own keys).
+    spawn_loop_trips = spawn_loop_guard.prune_trips(st.get("spawn_loop_trips"), now)
+    seen = st.get("harness_defect_seen")
     counts = st.get("lane_counts")
-    return {"day": today,
-            "lane_counts": counts if isinstance(counts, dict) else {},
-            "fire_ntfy": fire,
-            "pacing_ntfy": pacing_ntfy,
-            "runaway_ntfy": runaway_ntfy,
-            "preflight_ntfy": preflight_ntfy,
-            "gate_error_ntfy": gate_error_ntfy,
+    # UTC day rollover resets lane counts, not the ledgers (§6.3)
+    if st.get("day") != today or not isinstance(counts, dict):
+        counts = {}
+    return {"day": today, "lane_counts": counts, "fire_ntfy": fire,
+            "pacing_ntfy": pacing_ntfy, "runaway_ntfy": runaway_ntfy,
+            "preflight_ntfy": preflight_ntfy, "gate_error_ntfy": gate_error_ntfy,
             "harness_defect_ntfy": harness_defect_ntfy,
-            "capability_ntfy": capability_ntfy,
-            "spawn_loop_ntfy": spawn_loop_ntfy,
-            "spawn_ledger": spawn_ledger}
+            "capability_ntfy": capability_ntfy, "spawn_loop_ntfy": spawn_loop_ntfy,
+            "spawn_ledger": spawn_ledger, "spawn_loop_trips": spawn_loop_trips,
+            "harness_defect_seen": seen if isinstance(seen, dict) else {}}
 
 
 def save_state(st):
@@ -683,8 +651,8 @@ def handle_capability_skip(state, tid, lane, reason, detail, dry_run, log):
     LAUNCH_FAILURE before anything noticed.
 
     Deduped per (reason, ticket): a ticket that gets its dir tag applied and then trips
-    a DIFFERENT capability wall is a new fact and pages again. Always returns True —
-    the caller's `continue`."""
+    a DIFFERENT capability wall is a new fact and pages again. Returns the skip reason
+    (truthy), which is the caller's `continue`."""
     log.skip(tid, lane, "capability", reason, detail=detail)
     now = _utcnow()
     key = f"{reason}:{tid}"
@@ -692,26 +660,26 @@ def handle_capability_skip(state, tid, lane, reason, detail, dry_run, log):
     if last:
         try:
             if now - datetime.fromisoformat(last) < timedelta(hours=FIRE_NTFY_DEDUP_H):
-                return True  # already pinged Frank within 24h — never flood
+                return reason  # already pinged Frank within 24h — never flood
         except ValueError:
             pass
     if dry_run:
         log.emit("would_ntfy", ticket=tid, lane=lane, reason=reason)
-        return True
+        return reason
     ntfy(f"wq#{tid} ({lane}) not dispatchable: {reason} — {detail}. No worker was "
          f"spawned. Rewrite the ticket (or add the tag by hand) and it dispatches on "
          f"the next pass.", priority="high",
          title="foreman dispatcher: capability pre-skip")
     state["capability_ntfy"][key] = now.isoformat(timespec="seconds")
     save_state(state)
-    return True
+    return reason
 
 
 def enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
     """Stage 3.7 ENFORCEMENT half — the churn killer (wq#1438, BROKER_WIRING.md §2.2).
 
-    Returns True when the candidate must be skipped. The order is the doc's, and the
-    order matters: `refused` and `unresolved` are facts about the ticket TEXT that no
+    Returns the skip reason (truthy) when the candidate must be skipped, else None. The
+    order is the doc's, and the order matters: `refused` and `unresolved` are facts about the ticket TEXT that no
     grant can fix, so they are answered before preflight is asked anything, and
     `preflight` is asked over `ticket.needs ∪ lint.tags` so a path this very pass is
     about to grant does not read as unreachable. Auto-tagging happens last, only for a
@@ -727,7 +695,7 @@ def enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
     (preflight, the real-reach check, still runs and still decides); it gets one
     `needs_advisory` note and no ntfy. Rollback: FOREMAN_CAPABILITY_ADVISORY=off."""
     if not capability_lint.enforcing():
-        return False
+        return None
     try:
         if derived is not None and derived.refused:
             return handle_capability_skip(
@@ -765,7 +733,7 @@ def enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
     except Exception as e:  # noqa: BLE001 — see docstring
         log.emit("capability_lint_error", ticket=tid, lane=lane, stage="enforce",
                  reason=repr(e)[:300])
-    return False
+    return None
 
 
 PACING_HOOK = pacing.decide  # seam: tests replace to prove the dispatcher <-> pacing wiring
@@ -797,33 +765,56 @@ def handle_pacing_throttle(state, verdict, pacing_cfg, dry_run, log):
 
 # ---- candidate scan (§3 stage 2: read-only, effective_pri order) ---------------------
 
+def _scan_lane(lane, log):
+    """One lane's open tickets as scan rows; [] after logging a `wq list` failure."""
+    try:
+        p = subprocess.run([WQ_BIN, "list", lane, "--status", "open",
+                            "--sort", "effective"],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.emit("error", stage="scan", lane=lane, reason=f"wq list failed: {e}")
+        return []
+    if p.returncode != 0:
+        log.emit("error", stage="scan", lane=lane,
+                 reason=f"wq list rc={p.returncode}: {p.stderr.strip()}")
+        return []
+    rows = []
+    for line in p.stdout.splitlines():
+        m = LIST_LINE_RE.match(line)
+        if not m:
+            continue
+        tid, tlane, pri, ep, status = m.groups()
+        if status != "open" or tlane != lane:
+            continue
+        rows.append({"id": int(tid), "lane": lane, "pri": int(pri),
+                     "epri": int(ep) if ep is not None else int(pri)})
+    return rows
+
+
 def scan_candidates(cfg, log):
+    """Open tickets of every enabled lane, `(epri, id)` sorted. Human-owned lanes are never
+    candidates (step 8): a `frank_gated` line per Frank's to-do per pass was 13 of the 120
+    candidates and the F7 counting hazard — see sweep_human_lanes for what they still get."""
     out = []
     for lane, policy in sorted(cfg["lanes"].items()):
         if not policy.get("enabled"):
             continue  # allowlist: disabled lanes are never scanned (§4)
-        try:
-            p = subprocess.run([WQ_BIN, "list", lane, "--status", "open",
-                                "--sort", "effective"],
-                               capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            log.emit("error", stage="scan", lane=lane, reason=f"wq list failed: {e}")
+        if lane in HUMAN_LANES and not hygiene_legacy():
             continue
-        if p.returncode != 0:
-            log.emit("error", stage="scan", lane=lane,
-                     reason=f"wq list rc={p.returncode}: {p.stderr.strip()}")
-            continue
-        for line in p.stdout.splitlines():
-            m = LIST_LINE_RE.match(line)
-            if not m:
-                continue
-            tid, tlane, pri, ep, status = m.groups()
-            if status != "open" or tlane != lane:
-                continue
-            out.append({"id": int(tid), "lane": lane, "pri": int(pri),
-                        "epri": int(ep) if ep is not None else int(pri)})
+        out.extend(_scan_lane(lane, log))
     out.sort(key=lambda c: (c["epri"], c["id"]))  # wq#661 aging respected across lanes
     return out
+
+
+def sweep_human_lanes(cfg, log):
+    """wq#1478 LIVENESS_GATE §12.4 for the lanes scan_candidates no longer emits: a Frank-gate
+    whose premise is already met on live state is closed before Frank sees it. That hook ran
+    as the human-lane gate's first act, so dropping the candidates would have dropped it too.
+    Can only close, never dispatch; a non-closing verdict is silent."""
+    for lane, policy in sorted(cfg["lanes"].items()):
+        if policy.get("enabled") and lane in HUMAN_LANES:
+            for row in _scan_lane(lane, log):
+                _liveness_autoclosed(row["id"], None, log)
 
 
 # ---- fire-ticket approval (§5, MUST 4) -----------------------------------------------
@@ -931,20 +922,41 @@ def handle_harness_defect_hold(state, tid, lane, summary, dry_run, log):
     save_state(state)
 
 
-def handle_spawn_loop(state, tid, lane, info, dry_run, log):
+def handle_spawn_loop(state, tid, lane, info, dry_run, log, t=None):
     """wq#1703: stop re-spawning a ticket that has burned SPAWN_LOOP_MAX spawns inside
     the guard's window without one attempt finishing, and open an aq row so the loop is
     visible. Both breakers above key on an artifact the worker writes (attempt-N.json,
     failure.json); this one keys on the spawn itself, which is the only thing still
     observable when the worker dies before writing either (ISSUE-LOG #283: wq#1543
-    spawned 31x in 3h that way). Never blocks the ticket — the burst ages out of the
-    window, or a finished attempt lifts the guard and hands it to the wq#718 breaker."""
+    spawned 31x in 3h that way). The first trip only skips — the burst ages out of the
+    window, or a finished attempt lifts the guard and hands it to the wq#718 breaker.
+
+    Step 8: the roll-off used to repeat forever. Each loop episode is recorded once
+    (info["new_trip"]); the SECOND inside 24 h blocks the ticket with
+    `SPAWN_LOOP: <last release note from t>` and always pages, since a block is a state
+    change the 24 h ntfy dedup must not swallow. FOREMAN_CHARGE_MODE=legacy: skip only."""
     detail = (f"{info['spawns']} spawns since {info['since']}, "
               f"{info['attempts']} finished attempts")
     log.skip(tid, lane, "spawn_loop", "spawn_loop", detail=detail)
     now = _utcnow()
+    blocked = None
+    if not self_heal.charge_mode_legacy():
+        if info.get("new_trip") and not dry_run:
+            spawn_loop_guard.record_trip(state, tid, now)
+            save_state(state)
+        if info.get("trips_24h", 0) >= spawn_loop_guard.BLOCK_ON_TRIP:
+            reason = spawn_loop_guard.block_reason((t or {}).get("notes"))
+            if dry_run:
+                log.emit("would_block", ticket=tid, lane=lane, reason=reason)
+            elif spawn_loop_guard.block_ticket(tid, reason, WQ_BIN):
+                blocked = reason
+                log.emit("spawn_loop_blocked", ticket=tid, lane=lane, reason=reason,
+                         trips_24h=info["trips_24h"])
+            else:
+                log.emit("error", stage="spawn_loop", ticket=tid, lane=lane,
+                         reason="block_failed", detail=reason)
     last = state["spawn_loop_ntfy"].get(str(tid))
-    if last:
+    if last and not blocked:
         try:
             if now - datetime.fromisoformat(last) < timedelta(hours=FIRE_NTFY_DEDUP_H):
                 return  # already filed + pinged within 24h — never flood
@@ -956,10 +968,15 @@ def handle_spawn_loop(state, tid, lane, info, dry_run, log):
     filed = spawn_loop_guard.aq_row(tid, info)
     log.emit("aq_row", ticket=tid, lane=lane, stage="spawn_loop",
              reason="filed" if filed else "aq_add_failed", detail=detail)
-    ntfy(f"wq#{tid} ({lane}) is in a spawn loop: {detail}. Dispatcher has stopped "
-         f"re-spawning it and opened an aq row — look for a worker dying before it "
-         f"writes attempt-N.json.", priority="high",
-         title="foreman dispatcher: spawn loop")
+    if blocked:
+        ntfy(f"wq#{tid} ({lane}) tripped the spawn-loop guard twice in 24h: {detail}. "
+             f"Blocked it ({blocked}) — it needs a human look, not another respawn.",
+             priority="high", title="foreman dispatcher: spawn loop blocked")
+    else:
+        ntfy(f"wq#{tid} ({lane}) is in a spawn loop: {detail}. Dispatcher has stopped "
+             f"re-spawning it and opened an aq row — look for a worker dying before it "
+             f"writes attempt-N.json.", priority="high",
+             title="foreman dispatcher: spawn loop")
     state["spawn_loop_ntfy"][str(tid)] = now.isoformat(timespec="seconds")
     save_state(state)
 
@@ -981,7 +998,8 @@ def _reprove_once(repo):
             repo, ok=False, reason=f"preflight raised: {e!r}", static_failures=[], denials=[])
 
 
-def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
+def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log, defer=None,
+                           post_lock=False):
     """wq#1372: dispatch_gate_check() failing used to just mean `continue` forever —
     a repo's worker-settings.json or preflight_cmds changing made its stamp stale and
     the lane sat idle, silently, until a human noticed and re-ran harness-preflight by
@@ -999,22 +1017,76 @@ def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
                   these was the wq#1407 PATH bug and each one silently cost an hour.
     preflight_ntfy[repo] is {ts, attempts, last_error, paged}; a clean proof after a
     page sends a default-priority "Recovered:" ntfy so the aq row can auto-resolve.
-    Returns True when the repo now has a fresh stamp."""
+    Returns True when the repo now has a fresh stamp.
+
+    Step 8 lock hygiene: this ladder can run 420 s and used to run INSIDE the pass's slock, so
+    every other pass read lock_busy for as long. With `defer` (a list; _spawn passes the pass's
+    own) a stale stamp is instead recorded once per repo, the ticket skips as no_fresh_stamp,
+    and run_pass calls this again with `post_lock=True` after slock_release, same process. That
+    call logs `info` events, not a second `skip` for a ticket already decided. A reprove
+    already running elsewhere (per-repo slock) is left to that run. --dry-run, `defer=None`
+    and FOREMAN_DISPATCH_HYGIENE=legacy keep the in-lock behaviour."""
     name = harness_preflight.permission_profiles.repo_name(repo)
     now = _utcnow()
+
+    def skip(why, detail):
+        if post_lock:
+            log.emit("info", stage="preflight", reason=why, ticket=tid, lane=lane, detail=detail)
+        else:
+            log.skip(tid, lane, "preflight", why, detail=detail)
+
     last = state["preflight_ntfy"].get(name)
     if last:
         try:
             if now - _ledger_ts(last) < timedelta(hours=PREFLIGHT_REPROVE_COOLDOWN_H):
-                log.skip(tid, lane, "preflight", "no_fresh_stamp", detail=reason)
+                skip("no_fresh_stamp", reason)
                 return False
         except (TypeError, ValueError, AttributeError):
             pass
     if dry_run:
         log.emit("would_ntfy", ticket=tid, lane=lane, reason="preflight_reprove", repo=name)
-        log.skip(tid, lane, "preflight", "no_fresh_stamp", detail=reason)
+        skip("no_fresh_stamp", reason)
         return False
+    if defer is not None and not post_lock and not hygiene_legacy():
+        if all(d[2] != repo for d in defer):
+            defer.append((tid, lane, repo, reason))
+        skip("no_fresh_stamp", f"{reason} (reprove runs after the pass lock is released)")
+        return False
+    reprove_lock = None
+    if post_lock:
+        reprove_lock = f"foreman-reprove-{name}"
+        holder = f"foreman-dispatcher:{os.getpid()}"
+        p = subprocess.run([SLOCK_BIN, "acquire", reprove_lock, "--holder", holder,
+                            "--ttl", str(REPROVE_LADDER_BUDGET_S // 60 + 3)],
+                           capture_output=True, text=True, timeout=30)
+        if p.returncode != 0:
+            log.emit("info", stage="preflight", reason="reprove_in_flight", ticket=tid,
+                     lane=lane, detail=f"{name}: another pass holds {reprove_lock}")
+            return False
+    try:
+        return _reprove_stale(state, tid, lane, repo, name, reason, now, last, log, skip,
+                              post_lock)
+    finally:
+        if reprove_lock:
+            subprocess.run([SLOCK_BIN, "release", reprove_lock, "--holder",
+                            f"foreman-dispatcher:{os.getpid()}"],
+                           capture_output=True, text=True, timeout=30)
 
+
+def _commit_preflight_ntfy(state, name, entry, post_lock):
+    """Set (or, entry=None, clear) state["preflight_ntfy"][name] and save. After the lock is
+    released other passes write state.json while a reprove runs for minutes, so a post-lock
+    commit re-reads it first rather than overwriting their lane counts with this pass's copy."""
+    target = load_state() if post_lock else state
+    if entry is None:
+        target["preflight_ntfy"].pop(name, None)
+    else:
+        target["preflight_ntfy"][name] = entry
+    save_state(target)
+
+
+def _reprove_stale(state, tid, lane, repo, name, reason, now, last, log, skip, post_lock=False):
+    """The reprove ladder of handle_stale_preflight (wq#1409 §2.2); `skip` is its decision line."""
     was_paged = isinstance(last, dict) and bool(last.get("paged"))
     started = time.monotonic()
     attempts = 0
@@ -1038,8 +1110,7 @@ def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
     if result.ok:
         log.emit("info", stage="preflight", reason="auto_reproved",
                  detail=f"{name}: stale stamp ({reason}) reproved clean on attempt {attempts}")
-        state["preflight_ntfy"].pop(name, None)
-        save_state(state)
+        _commit_preflight_ntfy(state, name, None, post_lock)
         if was_paged:
             ntfy(f"Recovered: preflight reprove for {name} succeeded (attempt {attempts}); "
                  f"wq#{tid} ({lane}) dispatching.",
@@ -1057,12 +1128,10 @@ def handle_stale_preflight(state, tid, lane, repo, reason, dry_run, log):
              f"every other {name} ticket idle until the next pass after "
              f"{PREFLIGHT_REPROVE_COOLDOWN_H}h.",
              priority="urgent", title="foreman dispatcher: preflight reprove erroring")
-    state["preflight_ntfy"][name] = {"ts": now.isoformat(timespec="seconds"),
-                                     "attempts": attempts, "last_error": problems[:300],
-                                     "paged": True}
-    save_state(state)
-    log.skip(tid, lane, "preflight", "reprove_failed",
-             detail=f"{problems} (attempts={attempts})")
+    _commit_preflight_ntfy(state, name, {"ts": now.isoformat(timespec="seconds"),
+                                         "attempts": attempts, "last_error": problems[:300],
+                                         "paged": True}, post_lock)
+    skip("reprove_failed", f"{problems} (attempts={attempts})")
     return False
 
 
@@ -1220,6 +1289,7 @@ class _PassCtx:
         self.local_paused = False    # wq#2130: circuit_breaker's local pause is active
         self.lint_scanned = self.lint_flagged = 0  # wq#1437 stage 3.7 (warn): measurement only
         self.quarantined = []
+        self.deferred_reproves = []  # step 8: (tid, lane, repo, reason) reproved after slock release
 
     def refresh_units(self):
         self.units = concurrency.list_running_units()
@@ -1276,174 +1346,14 @@ class _PassCtx:
 
 def _gate_candidate(ctx, cand):
     """Stages 3-7 + model resolution — nothing here depends on which pool the ticket draws
-    from. Returns a ready record, or None once the skip has been logged."""
-    cfg, log, state, dry_run = ctx.cfg, ctx.log, ctx.state, ctx.dry_run
-    tid, lane = cand["id"], cand["lane"]
-
-    # stage 3 — lane policy (MUST 5 lane caps; wq#713 repo mapping, MUST 7)
-    policy = cfg["lanes"][lane]
-    if state["lane_counts"].get(lane, 0) >= policy["max_per_day"]:
-        log.skip(tid, lane, "lane_policy", "lane_cap",
-                 detail=f"max_per_day={policy['max_per_day']} reached")
+    from. Runs gates.GATES in DISPATCH_DISSECTION §2.2 order; the first Fail has already
+    been logged as one `skip` event. Returns a ready record, or None."""
+    g = gates.GateInput(sys.modules[__name__], ctx, cand)
+    if gates.run(g) is not gates.PASS:
         return None
-    if lane in HUMAN_LANES:
-        # wq#1478 (LIVENESS_GATE.md §12.4): a Frank-gate whose premise is already
-        # met on live state is closed here, before Frank sees it. Cheap by
-        # construction (only known-tagged tickets, TTL-cached); any other verdict
-        # falls through to the unchanged skip. Can only close, never dispatch.
-        if _liveness_autoclosed(tid, None, log):
-            return None
-        log.skip(tid, lane, "frank_gate", "frank_gated",
-                 detail="human-owned lane (Frank's action/decision queue) — not worker-dispatchable")
-        return None
-    repo = router.repo_for_lane(lane)
-    if not repo and lane != REPO_HINT_LANE:
-        log.skip(tid, lane, "lane_policy", "lane_unmapped",
-                 detail="no LANE_REPO entry — never guess a repo")
-        return None
-
-    try:
-        t = router.wq_show(tid)
-    except SystemExit:
-        if _terminating:
-            raise
-        log.skip(tid, lane, "scan", "vanished")
-        return None
-    except subprocess.TimeoutExpired:
-        # wq#1408 §1.5: an sqlite-lock hang here used to wedge the whole pass
-        # (TimeoutStartSec=600 SIGTERM, no pass_end, no error line). router.wq()
-        # now bounds it at 30s; treat the same as "couldn't find the ticket".
-        log.skip(tid, lane, "scan", "vanished", detail="wq show timed out")
-        return None
-    if t.get("status") != "open":
-        log.skip(tid, lane, "scan", "not_open", detail=t.get("status"))
-        return None
-
-    # wq#433: the lane resolved a repo above, but if the TITLE names a different
-    # one the lane is wrong and dispatching would hand the worker a tree without
-    # any of the paths its ticket cites (ISSUE-LOG #56 class). Skip loudly instead.
-    mismatch = router.repo_mismatch(t)
-    if mismatch:
-        log.skip(tid, lane, "lane_policy", "repo_mismatch", detail=mismatch)
-        return None
-
-    # wq#1094/wq#1123: 'auto' has no single LANE_REPO entry (repo-sweeps target
-    # different repos, wq#830) — but a repo-sweep ticket carries its exact
-    # target repo in its own detail (repo_sweep.py wrote it there). router's
-    # shared resolver reads that back instead of guessing; anything else in
-    # 'auto' still refuses. wq#1331: the same resolver now also honours a
-    # ticket's own needs:repo tag (and wq#1220's verify-repo hint) AHEAD of the
-    # lane default, so it runs for every ticket, not just unmapped lanes — for a
-    # plain lane ticket it returns exactly the LANE_REPO path already in `repo`.
-    repo = router.repo_for_ticket(t) or repo
-    if not repo:
-        log.skip(tid, lane, "lane_policy", "lane_unmapped",
-                 detail="no LANE_REPO entry — never guess a repo")
-        return None
-
-    # stage 3.7 — capability (wq#1437 derive / wq#1438 enforce,
-    # BROKER_WIRING.md §2.1-§2.2). In front of the holds by design: a held
-    # ticket must still be linted and auto-tagged, because that is exactly
-    # what lets the hold below release (§2.2 last para — otherwise
-    # auto-tagging a held ticket never lets it run), and the corpus this is
-    # tuned on is mostly blocked/held tickets (§0, "26 of the 37 are
-    # blocked").
-    ctx.lint_scanned += 1
-    derived = lint_capability(tid, t, lane, repo, log)
-    if derived:
-        ctx.lint_flagged += 1
-    if enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
-        return None
-
-    # stage 3.5 — runaway (wq#718): a ticket stuck below RUNAWAY_MAX_ATTEMPTS
-    # cycles without reaching done is skipped every pass, not re-attempted forever
-    if tid in ctx.stuck:
-        handle_runaway_stuck(state, tid, lane, ctx.stuck[tid]["attempts"], dry_run, log)
-        return None
-
-    # stage 3.5b — harness-defect hold (wq#1415): a SpawnRefused preflight
-    # refusal never writes an attempt-N.json (fworker.py handle_spawn_refused —
-    # "attempt not charged"), so it never trips the attempt-count runaway check
-    # just above; without this it got re-claimed on every event-driven refill
-    # kick instead of the timer's 20-min cadence. See
-    # runaway.harness_defect_ticket_ids().
-    if tid in ctx.harness_defects:
-        handle_harness_defect_hold(state, tid, lane,
-                                   ctx.harness_defects[tid]["summary"], dry_run, log)
-        return None
-
-    # stage 3.5c — spawn-loop guard (wq#1703): neither breaker above sees a
-    # worker that dies before writing attempt-N.json OR failure.json, so count
-    # this dispatcher's own spawns instead. See spawn_loop_guard.looping().
-    spawn_loop = spawn_loop_guard.looping(state, tid)
-    if spawn_loop:
-        handle_spawn_loop(state, tid, lane, spawn_loop, dry_run, log)
-        return None
-
-    # stage 3.6 — epic/tracker parents (wq#428): a rollup is never dispatchable work
-    why = nodispatch_reason(t)
-    if why:
-        log.skip(tid, lane, "nodispatch", "nodispatch_marker", detail=why)
-        return None
-
-    # stage 4 — Frank-gate (MUST 3): never claimed, no override flag
-    why = frank_gate_reason(t)
-    if why:
-        if _liveness_autoclosed(tid, t, log):  # wq#1478 §12.4, same as stage 3
-            return None
-        log.skip(tid, lane, "frank_gate", "frank_gated", detail=why)
-        return None
-
-    # stage 5 — fire approval: requires_approval now honored from config.json
-    # (MUST 4 hardcode + `or lane == FIRE_LANE` removed 2026-08-23 per Frank directive)
-    fire_exempt = bool(policy.get("requires_approval"))
-    if fire_exempt and not os.path.exists(fire_approval_path(tid)):
-        handle_unapproved_fire(state, tid, lane, dry_run, log)
-        return None
-
-    # stage 5b — no probe, no dispatch (wq#1261 §4 item 1): every fleet-fires
-    # ticket must carry a machine-checkable re-verify condition before it ever
-    # reaches a worker. The legacy aq-row reference (wq#1234, `aq row: #<id>`)
-    # still counts — only a ticket with NEITHER form is refused.
-    if lane == FIRE_LANE:
-        detail = t.get("detail", "")
-        has_cmd_probe = fire_gate.parse_fire_probe(detail) is not None
-        has_aq_probe = fire_gate.parse_probe_ref(detail)[1] is not None
-        if not has_cmd_probe and not has_aq_probe:
-            handle_no_probe_fire(state, tid, lane, dry_run, log)
-            return None
-
-    # stage 5c — hold (wq#1461): checked before deps so a hold on a still
-    # deps-blocked ticket is named in the DecisionLog, not silently absorbed
-    # into deps_unmet. Structural — not a stall, another agent already claimed
-    # intent (see hold_reason docstring for the wq#1410/1409/1411 double-build
-    # history this exists to stop).
-    why = hold_reason(t)
-    if why:
-        log.skip(tid, lane, "hold", "held", detail=why)
-        return None
-
-    # stage 6 — deps (MUST 2)
-    unmet = unmet_deps(t, ctx.dep_cache)
-    if unmet:
-        log.skip(tid, lane, "deps", "deps_unmet", detail=",".join(unmet))
-        return None
-
-    # stage 7 — units are the ground truth (MUST 6); one read per pass, not per candidate
-    if ctx.units is None:
-        ctx.refresh_units()
-    if f"fworker-wq{tid}" in ctx.units:
-        log.skip(tid, lane, "already_running", "already_running")
-        return None
-
-    # the partition point: the model decides which pool's gates the ticket answers to
-    model, skip_reason = candidate_model(t, tid)
-    if not model:
-        log.skip(tid, lane, "budget", skip_reason,
-                 detail="router has no rung for this ticket")
-        return None
-    return {"cand": cand, "t": t, "repo": repo, "policy": policy, "fire_exempt": fire_exempt,
-            "model": model, "part": "local" if concurrency.is_local_model(model) else "cloud"}
+    return {"cand": cand, "t": g.t, "repo": g.repo, "policy": g.policy,
+            "fire_exempt": g.fire_exempt, "model": g.model,
+            "part": "local" if concurrency.is_local_model(g.model) else "cloud"}
 
 
 def _tight_pri_skip(ctx, r):
@@ -1607,7 +1517,7 @@ def _spawn(ctx, r):
                                        ctx.dry_run, log)
             return False
         if not handle_stale_preflight(state, tid, lane, repo, preflight_reason,
-                                       ctx.dry_run, log):
+                                       ctx.dry_run, log, defer=ctx.deferred_reproves):
             return False
     elif preflight_reason:
         # wq#1409 §3.2: soft-stale — profile unchanged, settings churned.
@@ -1727,7 +1637,7 @@ def _run_partition(ctx, part, ready):
     return None
 
 
-def _do_pass(cfg, log, state, dry_run):
+def _do_pass(cfg, log, state, dry_run, deferred=None):
     candidates = scan_candidates(cfg, log)
     tight_cfg = cfg["tight_mode"]
     tight = False
@@ -1745,7 +1655,14 @@ def _do_pass(cfg, log, state, dry_run):
     try:
         # wq#1415: ditto — a SpawnRefused loop never writes attempt-N.json, so it never
         # shows up in `stuck` above; degrade the same way (no holds this pass) on error.
-        harness_defects = runaway.harness_defect_ticket_ids()
+        # step 8: state["harness_defect_seen"] is the edit witness (mutated in place, saved
+        # below when it changed); a failure.json older than an edit no longer holds.
+        seen_before = json.dumps(state.get("harness_defect_seen"), sort_keys=True)
+        harness_defects = runaway.harness_defect_ticket_ids(
+            state.setdefault("harness_defect_seen", {}))
+        if not dry_run and json.dumps(state["harness_defect_seen"],
+                                      sort_keys=True) != seen_before:
+            save_state(state)
     except Exception as e:  # noqa: BLE001 — see docstring above
         log.emit("error", stage="runaway", reason="harness_defect_ticket_ids_failed",
                  detail=repr(e)[:300])
@@ -1807,6 +1724,15 @@ def _do_pass(cfg, log, state, dry_run):
     ctx = _PassCtx(cfg, log, state, dry_run)
     ctx.stuck, ctx.harness_defects, ctx.psi_tight = stuck, harness_defects, tight
     ctx.limits, ctx.pacing_cfg, ctx.burn_cfg, ctx.burn_obs = limits, pacing_cfg, burn_cfg, burn_obs
+    if deferred is not None:
+        ctx.deferred_reproves = deferred
+
+    if not hygiene_legacy():
+        try:
+            sweep_human_lanes(cfg, log)
+        except Exception as e:  # noqa: BLE001 — the liveness sweep only ever closes; never load-bearing
+            log.emit("error", stage="liveness", reason="human_lane_sweep_failed",
+                     detail=repr(e)[:300])
 
     # gate: every pool-independent stage, once per candidate, in scan order
     ready = {"local": [], "cloud": []}
@@ -1841,18 +1767,21 @@ def _do_pass(cfg, log, state, dry_run):
         if stopped[part] in ("kill_switch", "lumen_run_unreachable"):
             break
 
-    dispatchable = len(candidates) - count_structural_skips(log.events)
+    # step 8 (F7): dispatchable is the READY set, not candidates minus a list of reasons that
+    # has to learn every new gate. A ticket that passed every gate but lost its lane's daily
+    # allowance mid-run is explained, so it is not counted.
     dispatchable_pool = {p: len(ready[p]) - ctx.lane_capped[p] for p in ready}
     return {"candidates": len(candidates), "spawned": sum(ctx.spawned.values()),
             "tight": ctx.psi_tight or ctx.cloud_tight,
             "burn_ceiling": {",".join(k): v[0] for k, v in ctx.burn_cache.items()},
             "frank_active": frank_is_active, "frank_active_detail": frank_active_detail,
-            "quarantined": len(ctx.quarantined), "dispatchable": dispatchable,
+            "quarantined": len(ctx.quarantined),
+            "dispatchable": sum(dispatchable_pool.values()),  # old readers; = the per-pool sum
+            "ready_local": len(ready["local"]), "ready_cloud": len(ready["cloud"]),
             "lint_scanned": ctx.lint_scanned, "lint_flagged": ctx.lint_flagged,
             # wq#2088: per-pool view, so a local stall cannot hide behind a healthy cloud
             "dispatchable_local": dispatchable_pool["local"],
             "dispatchable_cloud": dispatchable_pool["cloud"],
-            "dispatchable_unpooled": max(0, dispatchable - sum(dispatchable_pool.values())),
             "spawned_local": ctx.spawned["local"], "spawned_cloud": ctx.spawned["cloud"],
             "local_slots_full": ctx.local_slots_full,
             "local_paused": ctx.local_paused,
@@ -1885,12 +1814,18 @@ def run_pass(dry_run=False):
         ntfy(f"dispatcher: bad lane config ({bad}) — lane(s) disabled, "
              f"other lanes proceeding. Details: {'; '.join(lane_warnings)}",
              priority="high", title="dispatcher config warning")
-    ok, holder = slock_acquire()  # stage 1
+    # stage 1. Step 8: a --dry-run has zero side effects, so it takes no lock — it neither
+    # blocks a real pass (lock_busy) nor is refused by one.
+    if dry_run and not hygiene_legacy():
+        ok, holder = True, None
+    else:
+        ok, holder = slock_acquire()
     if not ok:
         log.emit("halt", stage="lock", reason="lock_busy")
         return 0
 
     rc = 0
+    deferred = []
     try:
 
         # stage 0.5 (wq#718): dead-man's switch. wq#1408: moved inside this try — it
@@ -1912,14 +1847,26 @@ def run_pass(dry_run=False):
                      **local_stats)
         log.emit("pass_start", dry_run=dry_run, config_path=CONFIG_PATH,
                  config_sha=config_sha)
-        summary = _do_pass(cfg, log, load_state(), dry_run)
+        state = load_state()
+        summary = _do_pass(cfg, log, state, dry_run, deferred)
         log.emit("pass_end", **summary)
     except Exception as e:  # noqa: BLE001 — pass boundary: log + ntfy, never silent
         log.emit("error", stage="pass", reason=f"unhandled: {e!r}")
         ntfy(f"dispatcher: pass {pass_id} crashed: {e!r}")
         rc = 1
     finally:
-        slock_release(holder)
+        if holder:
+            slock_release(holder)
+        # step 8: stale-stamp reproves deferred by _spawn run here, after the lock is free —
+        # a 420 s ladder inside it made every other pass read lock_busy. The pass's decisions
+        # are already logged; this only refreshes stamps for the NEXT pass.
+        for tid, lane, repo, reason in deferred:
+            try:
+                handle_stale_preflight(load_state(), tid, lane, repo, reason, dry_run, log,
+                                       post_lock=True)
+            except Exception as e:  # noqa: BLE001 — never lose the Langfuse emit below
+                log.emit("error", stage="preflight", reason="deferred_reprove_failed",
+                         detail=repr(e)[:300])
         try:
             shipped = LANGFUSE_EMIT(pass_id, log.events)
             if shipped is None:

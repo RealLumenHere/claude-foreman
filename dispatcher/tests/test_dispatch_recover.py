@@ -90,52 +90,63 @@ def iso(dt):
     return dt.isoformat(timespec="seconds")
 
 
-# ---- dispatchable computation (foreman_dispatcher.py) -----------------------------------
+# ---- step 8: dispatchable is the ready set, not a list of skip reasons ------------------
 
-def test_structural_skip_reasons_excluded_from_dispatchable():
-    events = [
-        {"event": "skip", "reason": "lane_unmapped"},
-        {"event": "skip", "reason": "nodispatch_marker"},
-        {"event": "skip", "reason": "frank_gated"},
-        {"event": "skip", "reason": "deps_unmet"},
-        {"event": "skip", "reason": "runaway_stuck"},
-        {"event": "skip", "reason": "not_open"},
-        {"event": "skip", "reason": "vanished"},
-        {"event": "skip", "reason": "fire_unapproved"},
-        {"event": "skip", "reason": "fire_no_probe"},
-        {"event": "skip", "reason": "lane_cap"},       # wq#2047: daily quota is structural
-        {"event": "skip", "reason": "governor_deny"},  # NOT structural — budget skip
-        {"event": "spawn"},
-    ]
-    assert fd.count_structural_skips(events) == 10
+def test_structural_skip_allowlist_is_gone():
+    """F7: every new gate reason read as a stall until someone added it to the allowlist."""
+    for name in ("STRUCTURAL_SKIP_REASONS", "count_structural_skips", "CAPABILITY_SKIP_REASONS"):
+        assert not hasattr(fd, name), name
 
 
-def test_fire_gate_skips_excluded_from_dispatchable():
-    # wq#1423: a backlog entirely of fire tickets stuck on a Frank action
-    # (missing approval or missing fire_probe) must not look dispatchable —
-    # neither skip is fixable by the dispatcher/recovery ladder, same as frank_gated.
-    events = [
-        {"event": "skip", "reason": "fire_unapproved"},
-        {"event": "skip", "reason": "fire_no_probe"},
-        {"event": "skip", "reason": "fire_unapproved"},
-    ]
-    candidates = len(events)
-    dispatchable = candidates - fd.count_structural_skips(events)
-    assert dispatchable == 0
+def _pool_end(**kw):
+    end = {"candidates": 120, "spawned": 0, "dispatchable": 0, "dispatchable_local": 0,
+           "dispatchable_cloud": 0, "spawned_local": 0, "spawned_cloud": 0,
+           "local_slots_full": 0, "local_paused": False, "stopped_local_reason": None,
+           "stopped_cloud_reason": None}
+    end.update(kw)
+    return {"extra_end": end}
 
 
-def test_lane_capped_backlog_is_not_dispatchable():
-    # wq#2047: 12 pilot tickets all skipped lane_cap (max_per_day=3) must not read as
-    # dispatchable=12 spawned=0 — that was a false stall on a healthy dispatcher.
-    events = [{"event": "skip", "reason": "lane_cap"} for _ in range(12)]
-    assert len(events) - fd.count_structural_skips(events) == 0
+def _classify(env, spawned=0, **kw):
+    write_lines(env["log_path"], _pass_lines("fdisp-p1", iso(datetime.now(timezone.utc)),
+                                             spawned=spawned, **kw))
+    return dh.classify_passes(dh.parse_log_tail(env["log_path"], dh.TAIL_LINES))[0]
 
 
-def test_dispatchable_zero_when_all_skips_structural():
-    events = [{"event": "skip", "reason": r} for r in fd.STRUCTURAL_SKIP_REASONS]
-    candidates = len(events)
-    dispatchable = candidates - fd.count_structural_skips(events)
-    assert dispatchable == 0
+def test_all_gated_queue_is_healthy(env):
+    """120 candidates, every one gated (ready empty): healthy, whatever the gate reasons."""
+    assert _classify(env, dispatchable=None, **_pool_end())[2] == "healthy"
+
+
+def test_stale_unpooled_field_no_longer_pages(env):
+    """The pre-step-8 pass_end that carried dispatchable_unpooled=1 (harness_defect_hold,
+    F7) must not read as a stall any more: that branch is dropped."""
+    verdict = _classify(env, dispatchable=1, **_pool_end(dispatchable_unpooled=1))
+    assert verdict[2] == "healthy", verdict
+
+
+@pytest.mark.parametrize("end,healthy", [
+    ({"dispatchable_local": 3}, False),
+    ({"dispatchable_cloud": 2}, False),
+    ({"dispatchable_local": 3, "local_slots_full": 2}, True),
+    ({"dispatchable_local": 3, "stopped_local_reason": "local_paused"}, True),
+    ({"dispatchable_cloud": 2, "stopped_cloud_reason": "no_slots"}, True),
+    ({"dispatchable_cloud": 2, "stopped_cloud_reason": "kill_switch"}, True),
+    ({"dispatchable_local": 3, "spawned_local": 1}, True),
+])
+def test_ready_pool_rule(env, end, healthy):
+    """ready_pool > 0 and spawned_pool == 0 and no slots-full / partition-stop explanation."""
+    verdict = _classify(env, dispatchable=sum((end.get("dispatchable_local", 0),
+                                               end.get("dispatchable_cloud", 0))),
+                        **_pool_end(**end))
+    assert (verdict[2] == "healthy") is healthy, verdict
+
+
+def test_partition_stop_for_the_other_pool_does_not_excuse_a_stall(env):
+    """A cloud no_slots stop explains cloud; a ready local ticket still stalls."""
+    verdict = _classify(env, dispatchable=3, **_pool_end(dispatchable_local=3,
+                                                         stopped_cloud_reason="no_slots"))
+    assert verdict[2] == "unhealthy" and "local spawned=0" in verdict[3], verdict
 
 
 # ---- classifier: rule 2 uses dispatchable, not raw candidates ---------------------------
@@ -807,6 +818,99 @@ def test_rung1_preflight_uses_bounded_ladder_timeout(monkeypatch):
     assert ok is True
     assert seen["timeout"] == dr.LADDER_RUNG_TIMEOUT_S
     assert seen["timeout"] < 580, "must not regress to the old unbounded 580s timeout"
+
+
+# ---- step 8: rung 1 detached, rung 2 non-blocking ---------------------------------------
+
+class _Done:
+    def __init__(self, stdout="", returncode=0, stderr=""):
+        self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
+
+
+def test_rung1_launches_harness_preflight_detached_via_lumen_run(monkeypatch):
+    """The health tick has a 60 s budget; --all runs minutes. It must go through
+    `lumen-run start`, never as a foreground child, and report the unit it started."""
+    seen = []
+    monkeypatch.setattr(dr.subprocess, "run",
+                        lambda cmd, **kw: seen.append(cmd) or _Done("UNIT=lumen-job-recover-preflight-1\n"))
+    ok, detail = dr.rung1_preflight(dry_run=False)
+
+    assert ok is True and len(seen) == 1
+    cmd = seen[0]
+    assert cmd[:2] == [dr.LUMEN_RUN_BIN, "start"] and "--" in cmd
+    inner = cmd[cmd.index("--") + 1:]
+    assert dr.HARNESS_PREFLIGHT_CLI in inner and "--all" in inner
+    assert "unit=lumen-job-recover-preflight-1" in detail and "next tick" in detail
+
+
+def test_rung1_reports_a_failed_launch(monkeypatch):
+    monkeypatch.setattr(dr.subprocess, "run", lambda cmd, **kw: _Done("", 1, "no systemd-run"))
+    ok, detail = dr.rung1_preflight(dry_run=False)
+    assert ok is False and "rc=1" in detail
+
+
+def test_rung1_dry_run_launches_nothing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dr.subprocess, "run", lambda *a, **k: calls.append(1))
+    ok, detail = dr.rung1_preflight(dry_run=True)
+    assert ok is True and calls == [] and "lumen-run" in detail
+
+
+def test_next_tick_checks_the_stamp_before_rung2(env, monkeypatch):
+    """Tick 1 launches; tick 2 (unit finished) records the stamp check in the ladder
+    history, then runs rung 2 in the same tick."""
+    monkeypatch.setattr(dr.subprocess, "run",
+                        lambda cmd, **kw: _Done("UNIT=lumen-job-recover-preflight-1\n"))
+    monkeypatch.setitem(dr.RUNGS, 1, ("harness-preflight --all", dr.rung1_preflight))
+    monkeypatch.setitem(dr.RUNGS, 2, ("restart", lambda dry_run: (True, "restarted (stub)")))
+    monkeypatch.setattr(dr, "check_stamps",
+                        lambda fix=True, dry_run=False, budget=None: dr._check("stamps", True, "all fresh"))
+    r1 = dr.advance()
+    assert r1["rung"] == 1 and dr.load_state()["preflight_launch"]["unit"] == "lumen-job-recover-preflight-1"
+
+    monkeypatch.setattr(dr.subprocess, "run", lambda cmd, **kw: _Done("DONE:0\n"))
+    r2 = dr.advance()
+    st = dr.load_state()
+    assert r2["rung"] == 2 and st["preflight_launch"] is None
+    checks = [h for h in st["history"] if h["name"] == "preflight stamp check"]
+    assert len(checks) == 1 and checks[0]["ok"] is True and "all fresh" in checks[0]["detail"]
+
+
+def test_ladder_waits_while_the_detached_preflight_is_still_running(env, monkeypatch):
+    monkeypatch.setattr(dr.subprocess, "run",
+                        lambda cmd, **kw: _Done("UNIT=lumen-job-recover-preflight-1\n"))
+    monkeypatch.setitem(dr.RUNGS, 1, ("harness-preflight --all", dr.rung1_preflight))
+    dr.advance()
+    monkeypatch.setattr(dr.subprocess, "run", lambda cmd, **kw: _Done("RUNNING\n"))
+    waiting = dr.advance()
+    assert waiting["action"] == "waiting" and waiting["rung"] == 1
+    assert dr.load_state()["rung"] == 1, "must not escalate past a proof that has not finished"
+
+
+def test_ladder_stops_waiting_after_preflight_wait_s(env, monkeypatch):
+    monkeypatch.setattr(dr.subprocess, "run",
+                        lambda cmd, **kw: _Done("UNIT=lumen-job-recover-preflight-1\n"))
+    monkeypatch.setitem(dr.RUNGS, 1, ("harness-preflight --all", dr.rung1_preflight))
+    monkeypatch.setitem(dr.RUNGS, 2, ("restart", lambda dry_run: (True, "restarted (stub)")))
+    monkeypatch.setattr(dr, "check_stamps",
+                        lambda fix=True, dry_run=False, budget=None: dr._check("stamps", False, "STALE"))
+    dr.advance()
+    monkeypatch.setattr(dr, "PREFLIGHT_WAIT_S", 0)
+    monkeypatch.setattr(dr.subprocess, "run", lambda cmd, **kw: _Done("RUNNING\n"))
+    r = dr.advance()
+    assert r["rung"] == 2, "a hung unit must not pin the ladder at rung 1 forever"
+    check = [h for h in dr.load_state()["history"] if h["name"] == "preflight stamp check"][0]
+    assert check["ok"] is False
+
+
+def test_rung2_starts_the_service_without_blocking(monkeypatch):
+    """`systemctl start` on a oneshot waits for the whole pass; --no-block queues the job."""
+    seen = []
+    monkeypatch.setattr(dr.subprocess, "run", lambda cmd, **kw: seen.append(cmd) or _Done())
+    ok, _ = dr.rung2_restart(dry_run=False)
+    start = [c for c in seen if "start" in c][0]
+    assert ok and "--no-block" in start and start[-1] == dr.DISPATCH_SERVICE
+    assert not any("--no-block" in c for c in seen if "restart" in c)
 
 
 def test_rung2_restart_splits_budget_across_both_calls(monkeypatch):

@@ -1,0 +1,121 @@
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 11}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 12}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 390}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "frank-hw", "reason": "frank_gated", "stage": "frank_gate", "ticket": 418}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user-projects", "reason": "frank_gated", "stage": "frank_gate", "ticket": 501}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 855}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "simpill", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 1105}
+{"detail": "model 'DECOMPOSE' rejected by the CLI (model_not_found/404)", "event": "skip", "lane": "build", "reason": "harness_defect_hold", "stage": "harness_defect", "ticket": 1146}
+{"detail": "dir(/home/lumen/agent) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "pokemon", "reason": "needs_unresolved", "stage": "capability", "ticket": 1176}
+{"detail": "1190", "event": "skip", "lane": "pokemon", "reason": "deps_unmet", "stage": "deps", "ticket": 1191}
+{"detail": "1190", "event": "skip", "lane": "pokemon", "reason": "deps_unmet", "stage": "deps", "ticket": 1192}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1204}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1207}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 1304}
+{"detail": "dir(/home/lumen/messenger) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "ops", "reason": "needs_unresolved", "stage": "capability", "ticket": 1350}
+{"detail": "'reboot' is a v2 verb: no fleet-exec grant exists for it", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1401}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "frank-re", "reason": "frank_gated", "stage": "frank_gate", "ticket": 1432}
+{"detail": "dir(/home/lumen/scratch/worktrees) deny:prefix (/home/lumen/scratch/worktrees)", "event": "skip", "lane": "build", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1446}
+{"detail": "dir(/home/lumen/.secrets/gatus-external.env) deny:prefix (/home/lumen/.secrets)", "event": "skip", "lane": "build", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1466}
+{"detail": "dir(/home/lumen/.secrets/bak/) deny:prefix (/home/lumen/.secrets)", "event": "skip", "lane": "build", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1467}
+{"detail": "'sudo' is a v2 verb: no fleet-exec grant exists for it", "event": "skip", "lane": "fleet", "reason": "needs_unresolved", "stage": "capability", "ticket": 1481}
+{"detail": "dir(/home/lumen/scratch/worktrees) deny:prefix (/home/lumen/scratch/worktrees)", "event": "skip", "lane": "ops", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1490}
+{"detail": "dir(/home/lumen) deny:path (/home/lumen)", "event": "skip", "lane": "ops", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1491}
+{"detail": "418", "event": "skip", "lane": "fleet", "reason": "deps_unmet", "stage": "deps", "ticket": 1509}
+{"detail": "418", "event": "skip", "lane": "fleet", "reason": "deps_unmet", "stage": "deps", "ticket": 1510}
+{"detail": "dir(/home/lumen/minerva) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1540}
+{"detail": "'adb' is a v2 verb: no fleet-exec grant exists for it", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1561}
+{"detail": "title names /home/lumen/pokemon but lane 'build' maps to /home/lumen/foreman \u2014 re-lane the ticket (or pass --repo); a worker in /home/lumen/foreman gets READ-only access to /home/lumen/pokemon and cannot land there", "event": "skip", "lane": "build", "reason": "repo_mismatch", "stage": "lane_policy", "ticket": 1578}
+{"detail": "title names /home/lumen/pokemon but lane 'build' maps to /home/lumen/foreman \u2014 re-lane the ticket (or pass --repo); a worker in /home/lumen/foreman gets READ-only access to /home/lumen/pokemon and cannot land there", "event": "skip", "lane": "build", "reason": "repo_mismatch", "stage": "lane_policy", "ticket": 1584}
+{"detail": "dir(/home/lumen/agent) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1617}
+{"detail": "dir(/home/lumen/agent/.env) deny:basename (*.env); dir(/home/lumen/.secrets/github-frank.token) deny:prefix (/home/lumen/.secrets)", "event": "skip", "lane": "fleet", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1619}
+{"detail": "dir(/home/lumen) deny:path (/home/lumen)", "event": "skip", "lane": "build", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1630}
+{"detail": "cited path /home/lumen/fleet-memory/facts does not exist (not guessed)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1635}
+{"detail": "'reboot' is a v2 verb: no fleet-exec grant exists for it", "event": "skip", "lane": "pokemon", "reason": "needs_unresolved", "stage": "capability", "ticket": 1660}
+{"detail": "dir(/home/lumen) deny:path (/home/lumen)", "event": "skip", "lane": "fleet", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1690}
+{"detail": "dir(/home/lumen/scratch/worktrees/bin-fix-wq1672-forge-token-lookup-drift) deny:prefix (/home/lumen/scratch/worktrees)", "event": "skip", "lane": "build", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1697}
+{"detail": "dir(/home/lumen/minerva) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1706}
+{"detail": "dir(/home/lumen/projects) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1726}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1732}
+{"detail": "dir(/home/lumen/minerva/context) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1759}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1768}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1772}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1775}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1783}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1784}
+{"detail": "dir(/home/lumen/minerva) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md); dir(/home/lumen/agent) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1788}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1819}
+{"detail": "dir(/home/lumen/worktrees/wq1744-kb-a1) deny:prefix (/home/lumen/worktrees)", "event": "skip", "lane": "fleet", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1831}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1834}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1837}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 1879}
+{"detail": "dir(/home/lumen/agent) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1892}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 1904}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 1919}
+{"detail": "1891", "event": "skip", "lane": "build", "reason": "deps_unmet", "stage": "deps", "ticket": 1931}
+{"detail": "'sudo' is a v2 verb: no fleet-exec grant exists for it; 'shutdown' is a v2 verb: no fleet-exec grant exists for it", "event": "skip", "lane": "fleet", "reason": "needs_unresolved", "stage": "capability", "ticket": 1981}
+{"detail": "dir(/home/lumen/backups) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1999}
+{"detail": "title marker ([EPIC]/[DO NOT CLAIM])", "event": "skip", "lane": "build", "reason": "nodispatch_marker", "stage": "nodispatch", "ticket": 2038}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2065}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2068}
+{"detail": "dir(/home/lumen/.claude/projects/-home-lumen-worktrees-wq1992-a4/e6236dbb-1310-4c8b-9870-3df851fde2f6.jsonl) deny:prefix (/home/lumen/.claude)", "event": "skip", "lane": "build", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 2070}
+{"detail": "title names /home/lumen/pokemon but lane 'fleet' maps to /home/lumen/foreman \u2014 re-lane the ticket (or pass --repo); a worker in /home/lumen/foreman gets READ-only access to /home/lumen/pokemon and cannot land there", "event": "skip", "lane": "fleet", "reason": "repo_mismatch", "stage": "lane_policy", "ticket": 2073}
+{"detail": "dir(/home/lumen/.secrets/) deny:prefix (/home/lumen/.secrets); dir(/home/lumen/worktrees) deny:prefix (/home/lumen/worktrees)", "event": "skip", "lane": "fleet", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 2089}
+{"detail": "wq gate unmet (gate: or recorded as fixtures with evidence missing)", "event": "skip", "lane": "fleet", "reason": "frank_gated", "stage": "frank_gate", "ticket": 2119}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 339}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "frank-hw", "reason": "frank_gated", "stage": "frank_gate", "ticket": 358}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "pokemon", "reason": "runaway_stuck", "stage": "runaway", "ticket": 511}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 558}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "build", "reason": "runaway_stuck", "stage": "runaway", "ticket": 619}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "frank-re", "reason": "frank_gated", "stage": "frank_gate", "ticket": 1429}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "frank-re", "reason": "frank_gated", "stage": "frank_gate", "ticket": 1452}
+{"detail": "418", "event": "skip", "lane": "fleet", "reason": "deps_unmet", "stage": "deps", "ticket": 1511}
+{"detail": "dir(/home/lumen/langfuse) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 1555}
+{"detail": "5 attempts, still not done", "event": "skip", "lane": "fleet", "reason": "runaway_stuck", "stage": "runaway", "ticket": 1691}
+{"detail": "3 spawns since 2026-09-20T11:30:15+00:00, 1 finished attempts", "event": "skip", "lane": "build", "reason": "spawn_loop", "stage": "spawn_loop", "ticket": 1692}
+{"detail": "dir(/home/lumen) deny:path (/home/lumen)", "event": "skip", "lane": "ops", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1782}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "user", "reason": "frank_gated", "stage": "frank_gate", "ticket": 1914}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 1933}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 1934}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 1939}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 1941}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 1952}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 1953}
+{"detail": "3 spawns since 2026-09-20T12:48:43+00:00, 0 finished attempts", "event": "skip", "lane": "build", "reason": "spawn_loop", "stage": "spawn_loop", "ticket": 1956}
+{"detail": "dir(/home/lumen/agent/.env) deny:basename (*.env)", "event": "skip", "lane": "build", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 1975}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 1983}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 1984}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 1985}
+{"detail": "dir(/home/lumen/langfuse) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "fleet", "reason": "needs_unresolved", "stage": "capability", "ticket": 2000}
+{"detail": "held by 'orch-agentforge-eval-cee666' until 2026-09-21 00:56:56Z", "event": "skip", "lane": "build", "reason": "held", "stage": "hold", "ticket": 2026}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2036}
+{"detail": "dir(/home/lumen/agent) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "ops", "reason": "needs_unresolved", "stage": "capability", "ticket": 2041}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2051}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2056}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2063}
+{"detail": "dir(/home/lumen/langfuse) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "fleet", "reason": "needs_unresolved", "stage": "capability", "ticket": 2064}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2071}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 2076}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 2077}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 2078}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 2079}
+{"detail": "dir(/home/lumen/agents/alert-queue) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md); dir(/home/lumen/agents/command-receiver) is not under allow.read_dirs \u2014 propose by PR to fleet-exe", "event": "skip", "lane": "fleet", "reason": "needs_unresolved", "stage": "capability", "ticket": 2104}
+{"detail": "cited path /home/lumen/logs/lumen-public-guardian- does not exist (not guessed)", "event": "skip", "lane": "build", "reason": "needs_unresolved", "stage": "capability", "ticket": 2107}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2110}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2111}
+{"detail": "dir(/home/lumen) deny:path (/home/lumen)", "event": "skip", "lane": "fleet", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 2114}
+{"detail": "'sudo' is a v2 verb: no fleet-exec grant exists for it", "event": "skip", "lane": "fleet", "reason": "needs_unresolved", "stage": "capability", "ticket": 2117}
+{"detail": "dir(/home/lumen/agent) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md); dir(/home/lumen/sentinel/config) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: ", "event": "skip", "lane": "fleet", "reason": "needs_unresolved", "stage": "capability", "ticket": 2118}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 2124}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 2125}
+{"detail": "max_per_day=3 reached", "event": "skip", "lane": "pilot", "reason": "lane_cap", "stage": "lane_policy", "ticket": 2126}
+{"detail": "human-owned lane (Frank's action/decision queue) \u2014 not worker-dispatchable", "event": "skip", "lane": "frank-funding", "reason": "frank_gated", "stage": "frank_gate", "ticket": 160}
+{"detail": "title names /home/lumen/pstack but lane 'research' maps to /home/lumen/foreman \u2014 re-lane the ticket (or pass --repo); a worker in /home/lumen/foreman gets READ-only access to /home/lumen/pstack and cannot land there", "event": "skip", "lane": "research", "reason": "repo_mismatch", "stage": "lane_policy", "ticket": 1078}
+{"detail": "cited path /home/lumen/dgm/pairwise_reweight.py does not exist (not guessed)", "event": "skip", "lane": "fleet", "reason": "needs_unresolved", "stage": "capability", "ticket": 1944}
+{"detail": "dir(/home/lumen/minerva) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "ops", "reason": "needs_unresolved", "stage": "capability", "ticket": 2042}
+{"detail": "dir(/home/lumen/worktrees/wq2097-a1/_kb) deny:prefix (/home/lumen/worktrees)", "event": "skip", "lane": "ops", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 2100}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2103}
+{"detail": "no LANE_REPO entry \u2014 never guess a repo", "event": "skip", "lane": "auto", "reason": "lane_unmapped", "stage": "lane_policy", "ticket": 2112}
+{"detail": "dir(/home/lumen/research/harnessrouter-ref/src/docs) fresh secret-sweep hit at /home/lumen/research/harnessrouter-ref/src/docs/self-hosting-guide.md:118; dir(/home/lumen/research_prompts/.scratch) fresh secret-sweep hit at /home/lumen/resea", "event": "skip", "lane": "fleet", "reason": "capability_denied_by_policy", "stage": "capability", "ticket": 2120}
+{"detail": "dir(/home/lumen/agent) is not under allow.read_dirs \u2014 propose by PR to fleet-exec-policy.yaml allow: (BROKER_GRANT_COVERAGE.md)", "event": "skip", "lane": "fleet", "reason": "needs_unresolved", "stage": "capability", "ticket": 2067}
+{"burn_ceiling": {}, "candidates": 120, "dispatchable": 1, "dispatchable_cloud": 0, "dispatchable_local": 0, "dispatchable_unpooled": 1, "event": "pass_end", "frank_active": false, "frank_active_detail": "no orch- session rows in agent_sessions", "lint_flagged": 51, "lint_scanned": 70, "local_slots_full": 0, "pass_id": "fdisp-20260920T141053Z-4161920", "quarantined": 0, "spawned": 0, "spawned_cloud": 0, "spawned_local": 0, "stopped_cloud_reason": null, "stopped_local_reason": null, "tight": false, "ts": "2026-09-20T14:11:14+00:00"}

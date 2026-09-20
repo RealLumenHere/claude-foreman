@@ -10,9 +10,12 @@ touching DISPATCH_DISARM.
 
 Rungs (state in runtime/recover_state.json):
   1. `harness-preflight --all` every migrated repo — fixes a stale/broken stamp
-     (§1.4/§1.3), the most common real-world stall cause.
-  2. `systemctl restart` the dispatch timer + `start` the service — fixes a wedged
-     unit or a timer that stopped firing.
+     (§1.4/§1.3), the most common real-world stall cause. Launched DETACHED via lumen-run
+     (step 8); the next tick records whether the stamps are fresh, waiting up to
+     PREFLIGHT_WAIT_S for the unit, before rung 2 runs.
+  2. `systemctl restart` the dispatch timer + `start --no-block` the service — fixes a
+     wedged unit or a timer that stopped firing; --no-block so the rung does not wait
+     for the whole oneshot pass.
   3. json-parse config.json and every permission-profiles/*.json (incl. repos.d/)
      and name the first file that fails to parse (§1.5 :891 class). Fixes nothing;
      it makes the next human step a `path:line`, not a grep session.
@@ -41,6 +44,7 @@ CLI:
 import argparse
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -69,6 +73,10 @@ DISPATCH_SERVICE = os.environ.get("FOREMAN_DISPATCH_SERVICE", "lumen-foreman-dis
 DISARM_PATH = os.environ.get("FOREMAN_DISPATCH_DISARM",
                              "/home/lumen/autonomy/DISPATCH_DISARM")
 DISABLE_ENV = "FOREMAN_RECOVER_DISABLE"
+LUMEN_RUN_BIN = os.environ.get("FOREMAN_LUMEN_RUN_BIN", "/home/lumen/bin/lumen-run")
+# rung 1 is a detached harness-preflight --all; the next tick waits this long for its unit to
+# finish before judging the stamps (a live proof is capped at ~330 s per stale repo).
+PREFLIGHT_WAIT_S = int(os.environ.get("FOREMAN_RECOVER_PREFLIGHT_WAIT_S", "900"))
 # wq#1410 §3.3.3: resolved here (not left open forever like row aq#794, count=145
 # since 08-23) so bin/aq_escalate.py's DISPATCHER STALLED rule sees a per-incident
 # count on the next open row, the same "resolve -> next row starts fresh" pattern
@@ -115,7 +123,8 @@ def _ntfy(msg, priority="default", title=RECOVERED_TITLE):
 # ---- state.json: {"rung": N, "stopped": bool, "started_at": iso, "history": [...]} ---
 
 def _fresh_state():
-    return {"rung": 0, "stopped": False, "started_at": None, "history": []}
+    return {"rung": 0, "stopped": False, "started_at": None, "history": [],
+            "preflight_launch": None}
 
 
 def load_state():
@@ -132,6 +141,8 @@ def load_state():
     fresh["started_at"] = st.get("started_at")
     hist = st.get("history")
     fresh["history"] = hist if isinstance(hist, list) else []
+    launch = st.get("preflight_launch")
+    fresh["preflight_launch"] = launch if isinstance(launch, dict) else None
     return fresh
 
 
@@ -148,17 +159,49 @@ def save_state(st):
 # ---- rungs -----------------------------------------------------------------------------
 
 def rung1_preflight(dry_run):
-    """harness-preflight --all every migrated repo (fixes the stamp class, §1.4)."""
+    """harness-preflight --all every migrated repo (fixes the stamp class, §1.4).
+
+    Step 8: launched DETACHED through lumen-run, not a foreground call. --all can take
+    minutes (a live `claude -p` proof per stale repo) while this runs inside the health
+    unit's 60 s budget, so the old foreground call either timed out having proved nothing
+    or held the health tick. The rung now returns as soon as the unit is up; advance()
+    checks the stamps on the NEXT tick (see _settle_preflight_launch)."""
     cmd = [sys.executable, HARNESS_PREFLIGHT_CLI, "--all", "--claude-bin", CLAUDE_BIN]
+    launch = [LUMEN_RUN_BIN, "start", "--name", "recover-preflight", "--"] + cmd
     if dry_run:
-        return True, "DRY-RUN would run: " + " ".join(cmd)
+        return True, "DRY-RUN would run: " + " ".join(launch)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=LADDER_RUNG_TIMEOUT_S)
+        p = subprocess.run(launch, capture_output=True, text=True, timeout=LADDER_RUNG_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return False, f"harness-preflight --all failed to run: {e!r}"
-    ok = p.returncode == 0
-    tail = (p.stdout + p.stderr).strip()[-1500:]
-    return ok, f"harness-preflight --all rc={p.returncode}\n{tail}"
+        return False, f"harness-preflight --all failed to launch: {e!r}"
+    tail = (p.stdout + p.stderr).strip()[-500:]
+    if p.returncode != 0:
+        return False, f"lumen-run start rc={p.returncode}: {tail}"
+    m = re.search(r"UNIT=(\S+)", p.stdout)
+    return True, (f"harness-preflight --all launched detached (unit={m.group(1) if m else '?'}); "
+                  f"stamps are checked on the next tick")
+
+
+def _settle_preflight_launch(launch):
+    """Rung 1's next tick. Returns (settled, ok, detail): settled=False while the detached
+    unit is still RUNNING and younger than PREFLIGHT_WAIT_S — the ladder waits rather than
+    escalating past a proof that has not finished. Otherwise ok says every migrated repo has
+    a fresh stamp now (a read-only check_stamps(fix=False), no reprove of its own)."""
+    unit, age = launch.get("unit"), None
+    try:
+        age = (_utcnow() - datetime.fromisoformat(launch["ts"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        pass
+    if unit and unit != "?" and (age is None or age < PREFLIGHT_WAIT_S):
+        try:
+            p = subprocess.run([LUMEN_RUN_BIN, "status", unit], capture_output=True,
+                               text=True, timeout=15)
+            if p.stdout.strip() == "RUNNING":
+                return False, False, f"{unit} still RUNNING after {int(age or 0)}s"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    c = check_stamps(fix=False)
+    return True, c["ok"], f"unit {unit or '?'} finished; stamps: {c['detail']}"[:1000]
 
 
 def rung2_restart(dry_run):
@@ -171,8 +214,10 @@ def rung2_restart(dry_run):
     `(ALL) NOPASSWD: ALL`), so `sudo -n` is the fix -- same posture as lumen-run's
     `sudo -n systemd-run` pattern elsewhere in this fleet.
     """
+    # step 8: `start` on a oneshot blocks until the whole pass finishes (minutes), long
+    # past this rung's budget; --no-block queues the start job and returns at once.
     cmds = [["sudo", "-n", "systemctl", "restart", DISPATCH_TIMER],
-            ["sudo", "-n", "systemctl", "start", DISPATCH_SERVICE]]
+            ["sudo", "-n", "systemctl", "start", "--no-block", DISPATCH_SERVICE]]
     if dry_run:
         return True, "DRY-RUN would run: " + " && ".join(" ".join(c) for c in cmds)
     details = []
@@ -255,6 +300,18 @@ def advance(dry_run=False):
                 "detail": f"DISPATCH_DISARM present ({DISARM_PATH}) — ladder paused, "
                           "not advancing (never touched by this module)"}
 
+    launch = st.get("preflight_launch")
+    if launch:  # rung 1 launched harness-preflight detached on the previous tick
+        settled, stamps_ok, stamp_detail = _settle_preflight_launch(launch)
+        if not settled:
+            return {"action": "waiting", "rung": st["rung"], "detail": stamp_detail}
+        st["preflight_launch"] = None
+        if not dry_run:
+            st["history"].append({"ts": _utcnow().isoformat(timespec="seconds"), "rung": 1,
+                                  "name": "preflight stamp check", "ok": stamps_ok,
+                                  "detail": stamp_detail})
+            save_state(st)
+
     next_rung = st["rung"] + 1
     if next_rung > MAX_RUNG:
         st["stopped"] = True
@@ -276,6 +333,10 @@ def advance(dry_run=False):
         if not st.get("started_at"):
             st["started_at"] = _utcnow().isoformat(timespec="seconds")
         st["rung"] = next_rung
+        launched = re.search(r"unit=(\S+?)\)", detail) if next_rung == 1 and ok else None
+        if launched:
+            st["preflight_launch"] = {"ts": _utcnow().isoformat(timespec="seconds"),
+                                      "unit": launched.group(1)}
         st["history"].append({"ts": _utcnow().isoformat(timespec="seconds"),
                               "rung": next_rung, "name": name, "ok": ok,
                               "detail": detail[:2000]})

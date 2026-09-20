@@ -186,7 +186,23 @@ def hold_released(rec, ticket):
     return capability.covered_by(paths, add_dirs)
 
 
-def harness_defect_ticket_ids():
+def edit_fingerprint(ticket):
+    """What a model/archetype/needs edit changes. `wq show` prints a NULL column as "None"."""
+    return "|".join((_pinned(ticket, "model"), _pinned(ticket, "archetype"),
+                     _pinned(ticket, "needs")))
+
+
+def _edited_since_failure(seen, tid, ticket, mtime_ns):
+    """True when `ticket` was edited after the failure.json stamped `mtime_ns` was first
+    observed. Records the fingerprint the first time a given failure.json is seen."""
+    fp, ent = edit_fingerprint(ticket), seen.get(str(tid))
+    if not isinstance(ent, dict) or ent.get("mtime_ns") != mtime_ns:
+        seen[str(tid)] = {"fp": fp, "mtime_ns": mtime_ns}
+        return False
+    return ent.get("fp") != fp
+
+
+def harness_defect_ticket_ids(seen=None):
     """{ticket_id: {"summary", "status", "lane"}} for every open ticket whose most
     recent failure.json is still triaged HARNESS_DEFECT (wq#1415).
 
@@ -202,24 +218,43 @@ def harness_defect_ticket_ids():
     ticket's own last recorded triage instead of an attempt count; it clears itself as
     soon as a later attempt gets past preflight (a fresh non-HARNESS_DEFECT failure.json,
     or `done`/`blocked` takes the ticket out of `open`) — or, since wq#1438, as soon as
-    hold_released() can prove the paths the refusal named are now granted."""
+    hold_released() can prove the paths the refusal named are now granted.
+
+    DISPATCH_REBUILD step 8: a failure.json older than the ticket's last model/archetype/needs
+    edit no longer holds it. wq keeps no edit timestamp and failure.json records none of those
+    columns, so `seen` (the dispatcher's state["harness_defect_seen"], mutated in place — the
+    caller saves it) is the witness: the first time a given failure.json is observed its
+    ticket's edit fingerprint is recorded against the file's mtime; a later pass that finds a
+    different fingerprint under the SAME mtime knows the ticket was edited after the failure.
+    A new failure.json (new mtime) re-records. An edit made between the failure and its first
+    observation is invisible — passes run every 5 min, so that window is short.
+    seen=None or FOREMAN_CHARGE_MODE=legacy keeps the pre-step-8 rule."""
     held = {}
+    track = seen is not None and not self_heal.charge_mode_legacy()
+    defect_ids = set()
     for tid in candidate_ticket_ids():
         fpath = os.path.join(self_heal.RUNS_ROOT, f"wq{tid}", "failure.json")
         try:
             with open(fpath) as f:
                 rec = json.load(f)
+            mtime_ns = os.stat(fpath).st_mtime_ns
         except (OSError, ValueError):
             continue
         if rec.get("triage") != "HARNESS_DEFECT":
             continue
+        defect_ids.add(str(tid))
         t = self_heal.wq_show(tid)
         if t.get("status") != "open":
             continue
         if hold_released(rec, t):  # wq#1438 §2.2: the cited paths are granted now
             continue
+        if track and _edited_since_failure(seen, tid, t, mtime_ns):
+            continue
         held[tid] = {"summary": rec.get("summary"), "status": t.get("status"),
                      "lane": t.get("lane")}
+    if track:
+        for key in [k for k in seen if k not in defect_ids]:
+            del seen[key]  # the ticket no longer has a HARNESS_DEFECT failure.json
     return held
 
 
