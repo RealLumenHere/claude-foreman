@@ -39,9 +39,10 @@ probes:
     subjects: known-in-store
     interval_days: 7
   os_kernel:
-    command: "uname -r / lsb_release -ds / pkg version query"
-    predicates: [kernel, os]
-    predicates_pattern: "*_version"
+    # wq#2192: `uname -s` answered os/*_version with "Linux" and clobbered
+    # them; only the kernel release is observable here.
+    command: "uname -r"
+    predicates: [kernel]
     subjects: known-in-store
     interval_days: 7
   plug_map:
@@ -97,7 +98,6 @@ predicates:
   ollama_version:
     class: config
     closes_on_decommission: true
-    probe: os_kernel
   # Identity / hardware — a decommissioned Mac still has 64 GB. Stay open.
   role:
     class: identity
@@ -138,9 +138,6 @@ predicates:
   os:
     class: config
     closes_on_decommission: false
-    probe: os_kernel
-    verify_interval_days: 7
-    source_kind: observed
   kernel:
     class: config
     closes_on_decommission: false
@@ -196,6 +193,3 @@ patterns:
   - match: "*_version"
     class: config
     closes_on_decommission: true
-    probe: os_kernel
-    verify_interval_days: 7
-    source_kind: observed

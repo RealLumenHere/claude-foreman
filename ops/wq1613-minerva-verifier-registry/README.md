@@ -20,6 +20,10 @@ oldest status-class facts 67/67/61/61/58 days unverified), §3.3 (registry desig
   (`tailscale status --json`), `fleet_inventory` (`fleet-inv get`), `service_state`
   (`systemctl is-active` over ssh), `node_storage` (`lsblk -J` / `dmidecode --type 17`),
   `os_kernel` (`uname -r`), `plug_map` (`plug-ctl status`), `endpoint_live` (HTTP GET).
+- A probe that cannot observe a fact returns unknown and the sweep writes nothing (wq#2192):
+  `os_kernel` answers only `kernel`; `service_state` probes only values that are systemd
+  unit names and only ever confirms. `repair_clobbered_facts.py` undoes rows the earlier
+  probes wrote (`uname -s` -> `Linux`, `systemctl is-active <status text>` -> `inactive`).
 
 ## Reconciliation contract (§3.2, §3.4)
 

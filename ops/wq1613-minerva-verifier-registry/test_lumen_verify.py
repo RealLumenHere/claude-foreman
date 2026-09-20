@@ -214,6 +214,72 @@ def test_sweep_dry_run_does_not_write(conn, registry, monkeypatch):
     assert get_fact(conn, fid)["last_confirmed_at"] != iso(NOW)
 
 
+# ------------------------------------------------- wq#2192 no-clobber guards
+
+def no_run(argv, timeout=20):
+    raise AssertionError(f"probe must not run {argv}")
+
+
+@pytest.mark.parametrize("predicate", ["ollama_version", "netdata_version", "os"])
+def test_os_kernel_probe_observes_nothing_but_kernel(monkeypatch, predicate):
+    # `uname -s` used to answer these with "Linux" and overwrite the real value.
+    monkeypatch.setattr(lv, "run", no_run)
+    facts = [{"predicate": predicate, "value": "0.32.6"}]
+    observed, error = lv.probe_os_kernel("isis", facts)[("isis", predicate)]
+    assert observed is None and error
+
+
+def test_os_kernel_probe_still_reads_kernel(monkeypatch):
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (0, "6.8.0-1\n", ""))
+    facts = [{"predicate": "kernel", "value": "6.8.0-0"}]
+    assert lv.probe_os_kernel("lumen", facts)[("lumen", "kernel")] == ("6.8.0-1", None)
+
+
+def test_registry_assigns_no_probe_to_unobservable_predicates(registry):
+    for predicate in ("ollama_version", "netdata_version", "os"):
+        assert registry.probe_id(predicate) is None
+    assert registry.probe_id("kernel") == "os_kernel"
+
+
+def test_service_state_probe_ignores_free_text_status(monkeypatch):
+    # `systemctl is-active RESTORED` prints "inactive"; that used to become the fact.
+    monkeypatch.setattr(lv, "run", no_run)
+    facts = [{"predicate": "status", "value": "RESTORED"}]
+    observed, error = lv.probe_service_state("bes", facts)[("bes", "status")]
+    assert observed is None and error
+
+
+def test_service_state_probe_unit_name_only_confirms(monkeypatch):
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (0, "active\n", ""))
+    facts = [{"predicate": "nginx_status", "value": "nginx.service"}]
+    assert lv.probe_service_state("lumen", facts)[("lumen", "nginx_status")] == (
+        "nginx.service", None)
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (3, "inactive\n", ""))
+    observed, error = lv.probe_service_state("lumen", facts)[("lumen", "nginx_status")]
+    assert observed is None and "inactive" in error
+
+
+def test_sweep_leaves_status_and_version_facts_untouched(conn, registry, monkeypatch):
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (3, "inactive\n", ""))
+    status = seed(conn, "bes", "status", "RESTORED", age_days=5, fact_class="status")
+    version = seed(conn, "isis", "ollama_version", "0.32.6", age_days=30, fact_class="config")
+    os_fact = seed(conn, "bes", "os", "Ubuntu Server 26.04", age_days=30, fact_class="config")
+    result = lv.sweep(conn, registry, now=NOW)
+    assert result["counts"]["superseded"] == 0
+    for fid, value in ((status, "RESTORED"), (version, "0.32.6"),
+                       (os_fact, "Ubuntu Server 26.04")):
+        row = get_fact(conn, fid)
+        assert row["valid_to"] is None and row["value"] == value
+    assert conn.execute("SELECT count(*) FROM state_facts").fetchone()[0] == 3
+
+
+def test_reconcile_blank_observation_is_unknown(conn, registry):
+    fid = seed(conn, "hathor", "tailscale_ip", "100.1.1.1", age_days=5,
+               source_kind="observed")
+    assert lv.reconcile(conn, get_fact(conn, fid), "tailscale_ip", "  ", None, NOW) == "unknown"
+    assert get_fact(conn, fid)["valid_to"] is None
+
+
 # --------------------------------------------------------------- node_liveness
 
 def test_probe_node_liveness_unreachable_is_offline_not_error(monkeypatch):

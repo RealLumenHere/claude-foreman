@@ -215,19 +215,34 @@ def _ssh_argv(node, remote_argv):
             node, "--", *remote_argv]
 
 
+UNIT_NAME_RE = re.compile(
+    r"[A-Za-z0-9:_.@\\-]+\.(service|socket|timer|mount|path|target)"
+)
+
+
 def probe_service_state(subject, facts):
+    """A `status` / `*_status` fact holds free text (RESTORED, healthy, ...), not
+    a unit name, so `systemctl is-active <value>` reports "inactive" for a
+    non-unit and the sweep wrote that over the real value (wq#2192). Only a
+    value that IS a unit name is probed, and an active unit confirms the fact
+    (observed == value); anything else is unknown, never a new value.
+    """
     result = {}
     for f in facts:
+        key = (subject, f["predicate"])
         unit = f["value"]
+        if not UNIT_NAME_RE.fullmatch(unit or ""):
+            result[key] = (None, f"value {unit[:40]!r} is not a systemd unit name")
+            continue
         argv = ["systemctl", "is-active", unit]
         rc, out, err = run(argv if subject == "lumen" else _ssh_argv(subject, argv))
         out = out.strip()
         if rc in (255, 99):
-            result[(subject, f["predicate"])] = (None, f"ssh {subject}: {err[:120]}")
-        elif out:
-            result[(subject, f["predicate"])] = (out, None)
+            result[key] = (None, f"ssh {subject}: {err[:120]}")
+        elif out == "active":
+            result[key] = (unit, None)
         else:
-            result[(subject, f["predicate"])] = (None, f"rc={rc} no output")
+            result[key] = (None, f"{unit} is {out or 'unknown'} (rc={rc})")
     return result
 
 
@@ -260,9 +275,17 @@ def probe_node_storage(subject, facts):
 
 
 def probe_os_kernel(subject, facts):
+    """Only `kernel` (uname -r) is answerable. `uname -s` ("Linux") was once
+    returned for every other predicate and overwrote ollama_version, *_version
+    and os facts (wq#2192); those now come back unknown.
+    """
     result = {}
     for f in facts:
-        argv = ["uname", "-r"] if f["predicate"] == "kernel" else ["uname", "-s"]
+        if f["predicate"] != "kernel":
+            result[(subject, f["predicate"])] = (
+                None, f"os_kernel cannot observe {f['predicate']}")
+            continue
+        argv = ["uname", "-r"]
         rc, out, err = run(argv if subject == "lumen" else _ssh_argv(subject, argv))
         out = out.strip()
         if rc != 0 or not out:
@@ -350,7 +373,7 @@ def file_conflict(subject, predicate, old_value, observed, probe_id):
 def reconcile(conn, fact, probe_id, observed, error, now):
     vid = str(uuid.uuid4())
     ts = now.isoformat(timespec="seconds")
-    if error is not None or observed is None:
+    if error is not None or observed is None or not str(observed).strip():
         outcome = "unknown"
     elif observed == fact["value"]:
         outcome = "confirmed"

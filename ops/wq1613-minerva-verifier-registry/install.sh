@@ -4,11 +4,13 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-python3 -m pytest -q "$HERE/test_lumen_verify.py"
+python3 -m pytest -q "$HERE/test_lumen_verify.py" "$HERE/test_repair_clobbered_facts.py"
 
 install -m 0755 "$HERE/lumen_verify.py" /home/lumen/bin/lumen-verify
 mkdir -p /home/lumen/minerva/verify
 install -m 0644 "$HERE/registry.yaml" /home/lumen/minerva/verify/registry.yaml
+# wq#2192: after the fixed probes are in place, undo earlier clobbers (idempotent).
+python3 "$HERE/repair_clobbered_facts.py" --apply
 sudo install -m 0644 "$HERE/lumen-state-verify.service" /etc/systemd/system/lumen-state-verify.service
 sudo install -m 0644 "$HERE/lumen-state-verify.timer" /etc/systemd/system/lumen-state-verify.timer
 sudo systemctl daemon-reload
