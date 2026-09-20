@@ -37,6 +37,21 @@ def test_shipped_config_block_is_valid():
     assert lint.validate_local_backends(cfg) == ([], [])
 
 
+def test_shipped_config_carries_the_measured_prefill_rates():
+    """wq#2185: measured 2026-09-20; the dispatcher passes them as FOREMAN_PREFILL_TPS."""
+    rows = json.load(open(os.path.join(DISPATCHER_DIR, "config.json")))["local_backends"]
+    assert {n: rows[n]["prefill_tps"] for n in
+            ("hathor-llama8b", "nephthys-qwen14b", "qwen36-local")} == {
+        "hathor-llama8b": 13.6, "nephthys-qwen14b": 7.4, "qwen36-local": 60}
+
+
+def test_prefill_tps_is_optional_but_must_be_a_positive_number():
+    assert check({"hathor-llama8b": leaf(prefill_tps=13.6)}) == ([], [])
+    for bad in (0, -1, "13.6", None, True):
+        fails, _ = check({"hathor-llama8b": leaf(prefill_tps=bad)})
+        assert len(fails) == 1 and "prefill_tps" in fails[0], bad
+
+
 def test_bad_leaf_fields_fail():
     fails, _ = check({"hathor-llama8b": leaf(slots=0, served_ctx="big", first_frame_s=None,
                                              health_url="hathor:11434")})

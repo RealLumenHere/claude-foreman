@@ -213,6 +213,12 @@ def first_frame_timeout(model):
     return charging.first_frame_timeout_s(is_local_rung(model))
 
 
+def local_cli_profile(model):
+    """wq#2185: local-rung workers get the restricted CLI profile unless
+    FOREMAN_CHARGE_MODE=legacy or FOREMAN_LOCAL_CLI_PROFILE=off."""
+    return charging.local_cli_profile_on(is_local_rung(model))
+
+
 # wq#687: silent-downgrade detection. The DeepSeek "best practices" doc that
 # prompted this was mostly filter-evasion junk, but one real concern hid in it:
 # "am I silently getting a weaker model than I asked for?" The honest answer is
@@ -1211,7 +1217,7 @@ def _ensure_worktree_tmpdir(worktree):
     return tmp_dir
 
 
-def build_env(worker_id, model, effort, worktree, ticket_id):
+def build_env(worker_id, model, effort, worktree, ticket_id, cli_profile=False):
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_BASE_URL", None)
@@ -1262,6 +1268,8 @@ def build_env(worker_id, model, effort, worktree, ticket_id):
         env["ANTHROPIC_BASE_URL"] = LITELLM_BASE_URL
         env["ANTHROPIC_AUTH_TOKEN"] = read_litellm_key()
         env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+    if cli_profile:
+        env.update(local_profile_env())
     return env
 
 
@@ -1300,8 +1308,35 @@ def resolve_worker_settings(repo, ticket_id):
     return settings_file
 
 
+# wq#2185: the local-rung CLI profile. The Claude CLI's own request (default system
+# prompt, the full built-in tool catalogue, MCP tool definitions) was ~14k of the 18.5k
+# tokens a Mac had to prefill before the first frame; the two local archetypes only need
+# these six tools. Not `--bare`: the action gate and stop gate hooks must keep running.
+LOCAL_CLI_TOOLS = "Bash,Read,Edit,Write,Grep,Glob"
+LOCAL_CLI_FLAGS = ("--tools", LOCAL_CLI_TOOLS, "--strict-mcp-config",
+                   "--exclude-dynamic-system-prompt-sections")
+
+
+LOCAL_BACKGROUND_MODEL = "deepseek-v4-flash"
+
+
+def local_profile_env():
+    """Env half of the local CLI profile (all measured against 2.1.276, see
+    cli_calibration.py). The CLI's session-title call is a second ~2.4k-token request
+    that took the box's second slot: DISABLE_TERMINAL_TITLE stops it, and any other
+    small/fast-model call is routed to a cheap non-Mac model the scoped gateway key
+    allows. CLAUDE.md files, auto-memory and the git-status/instructions blocks are the
+    CLI's per-machine context: the slim prompt is self-contained, and the fleet
+    CLAUDE.md's interactive busy-key protocol is wrong for a headless worker."""
+    return {"CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+            "ANTHROPIC_SMALL_FAST_MODEL": LOCAL_BACKGROUND_MODEL,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": LOCAL_BACKGROUND_MODEL,
+            "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS": "1"}
+
+
 def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=None,
-                      resume_session=None, claude_bin="claude"):
+                      resume_session=None, claude_bin="claude", local_profile=False):
     cmd = [claude_bin, "-p", prompt]
     if model:
         cmd += ["--model", model]
@@ -1314,6 +1349,8 @@ def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=N
     for d in add_dirs:
         cmd += ["--add-dir", d]
     cmd += ["--output-format", "stream-json", "--verbose", "--include-hook-events"]
+    if local_profile:
+        cmd += list(LOCAL_CLI_FLAGS)
     if resume_session:
         cmd += ["--resume", resume_session]
     return cmd
@@ -2401,12 +2438,25 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
                                      acceptance_doc=acceptance_doc, rework=rework)
     # wq#2128: a prompt that cannot fit the served context is a harness fault, refused
     # before any token is spent and never charged (SpawnRefused writes no attempt record).
+    # wq#2185: the size gate counts the CLI's own fixed request too (the local profile's
+    # measured overhead), and a prompt that cannot prefill inside the first-frame budget
+    # at the backend's measured rate is refused the same way, before Mac time is spent.
+    cli_profile = local_cli_profile(args.model)
+    prompt_tokens_est = charging.prompt_tokens_est(prompt, cli_profile)
+    # wq#2128: an explicit --frame-gap-timeout keeps the single pre-split window.
+    first_frame_s = (None if charging.legacy_mode() or args.frame_gap_timeout is not None
+                     else first_frame_timeout(args.model))
     over_ctx = (None if charging.legacy_mode() or not is_local_rung(args.model)
-                else charging.prompt_over_ctx(prompt))
+                else charging.prompt_over_ctx(prompt, cli_profile=cli_profile))
     if over_ctx:
         raise SpawnRefused("PROMPT_OVER_CTX", over_ctx, worktree=worktree)
+    over_budget = (charging.prompt_over_budget(prompt_tokens_est, first_frame_s)
+                   if is_local_rung(args.model) else None)
+    if over_budget:
+        raise SpawnRefused("PROMPT_OVER_BUDGET", over_budget, worktree=worktree)
 
-    env = build_env(worker_id, args.model, args.effort, worktree, ticket_id)
+    env = build_env(worker_id, args.model, args.effort, worktree, ticket_id,
+                    cli_profile=cli_profile)
     if grant_path:
         # wq#1332: fleet-exec's OWN enforcement step 1 re-derives this sha256 from
         # the file it reads — this env var is the tamper check, not a convenience.
@@ -2444,7 +2494,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     settings_file = resolve_worker_settings(args.repo, ticket_id)
     cmd = build_claude_cmd(steer or prompt, args.model, args.effort, settings_file,
                             add_dirs=add_dirs, max_turns=max_turns,
-                            resume_session=resume_session, claude_bin=args.claude_bin)
+                            resume_session=resume_session, claude_bin=args.claude_bin,
+                            local_profile=cli_profile)
 
     log(f"attempt {attempt}: spawning {' '.join(shlex.quote(c) for c in cmd[:6])}... "
         f"cwd={worktree} max_turns={max_turns} wall_clock={wall_clock}s")
@@ -2460,9 +2511,6 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # FOREMAN_GATEWAY_LANES (default empty: no lane, so every ticket keeps spawning
     # claude -p directly until an operator opts one in — harness/GATEWAY_CANARY.md).
     run_fn = run_child_gateway if gateway_lane_enabled(ticket.get("lane")) else run_child
-    # wq#2128: an explicit --frame-gap-timeout keeps the single pre-split window.
-    first_frame_s = (None if charging.legacy_mode() or args.frame_gap_timeout is not None
-                     else first_frame_timeout(args.model))
     state, exit_code, events, killed_reason, cpu_s, child_pid = run_fn(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
         frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace,
@@ -2604,12 +2652,15 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     charged_to, failure_cause = charging.classify_charge(
         classification, turns=state.turns, is_local=is_local_rung(args.model),
         killed_reason=killed_reason, events=events,
-        result_text=state.result_text if isinstance(state.result_text, str) else None)
+        result_text=state.result_text if isinstance(state.result_text, str) else None,
+        prompt_tokens=prompt_tokens_est, prefill_tps=charging.prefill_tps(),
+        first_frame_s=first_frame_s)
     attempt_record = {
         "ticket": ticket_id, "attempt": attempt, "worker_id": worker_id,
         "charged_to": charged_to, "failure_cause": failure_cause,
         "first_frame_s": first_frame_s, "prompt_profile": local_tmpl and os.path.basename(local_tmpl),
-        "prompt_tokens_est": charging.estimate_tokens(prompt),
+        "prompt_tokens_est": prompt_tokens_est, "prefill_tps": charging.prefill_tps(),
+        "local_cli_profile": cli_profile,
         "worktree": worktree, "branch": branch, "model": args.model, "effort": args.effort,
         "grant_sha256": grant_sha,
         "observed_model": state.model,

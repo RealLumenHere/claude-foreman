@@ -232,7 +232,8 @@ class LocalCapacity:
         return best
 
     def spawn_env(self, model):
-        """{FOREMAN_FIRST_FRAME_S, FOREMAN_SERVED_CTX} for a spawn on `model`; {} when the
+        """{FOREMAN_FIRST_FRAME_S, FOREMAN_SERVED_CTX, FOREMAN_PREFILL_TPS} for a spawn on
+        `model` (each only when the row carries it); {} when the
         model has no local_backends row. Callers pass the resolved member, never the group
         (a group row carries no budget of its own)."""
         name = base_name(model)
@@ -244,6 +245,9 @@ class LocalCapacity:
             env["FOREMAN_FIRST_FRAME_S"] = str(e["first_frame_s"])
         if isinstance(e.get("served_ctx"), int):
             env["FOREMAN_SERVED_CTX"] = str(e["served_ctx"])
+        tps = e.get("prefill_tps")
+        if isinstance(tps, (int, float)) and not isinstance(tps, bool) and tps > 0:
+            env["FOREMAN_PREFILL_TPS"] = str(tps)
         return env
 
     def snapshot(self):

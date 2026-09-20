@@ -117,9 +117,15 @@ def main():
                 # wq#954: the Bash output cap moved to this env var (fworker.py
                 # build_env()); dump it too or a test can never prove it reached
                 # the child, only that build_env()'s return value carried it.
-                "BASH_MAX_OUTPUT_LENGTH")
+                "BASH_MAX_OUTPUT_LENGTH",
+                # wq#2185: the local CLI profile's env half.
+                "CLAUDE_CODE_DISABLE_TERMINAL_TITLE", "ANTHROPIC_SMALL_FAST_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_DISABLE_CLAUDE_MDS",
+                "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS")
+        dump = {k: os.environ[k] for k in keys if k in os.environ}
+        dump["_argv"] = argv[2:]  # past `-p <prompt>`
         with open(env_dump_path, "w") as f:
-            json.dump({k: os.environ[k] for k in keys if k in os.environ}, f)
+            json.dump(dump, f)
 
     # shim 3 (RELIABILITY_SPEC.md §F): instant death BEFORE the init frame — no
     # stream-json at all, no hook lifecycle. LAUNCH_FAILURE evidence is precisely the

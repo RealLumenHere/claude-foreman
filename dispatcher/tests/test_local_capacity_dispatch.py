@@ -213,6 +213,17 @@ def test_group_row_carries_no_spawn_env():
                                                  "FOREMAN_SERVED_CTX": "16384"}
 
 
+def test_prefill_tps_rides_the_spawn_env_when_the_row_has_one():
+    """wq#2185: fworker refuses a spawn whose prompt cannot prefill inside first_frame_s."""
+    rows = {"hathor-llama8b": dict(BACKENDS["hathor-llama8b"], prefill_tps=13.6),
+            "nephthys-qwen14b": dict(BACKENDS["nephthys-qwen14b"], prefill_tps=0),
+            "local-worker": BACKENDS["local-worker"]}
+    cap = local_capacity.LocalCapacity(rows, lambda: [], probe=lambda u: True)
+    assert cap.spawn_env("hathor-llama8b")["FOREMAN_PREFILL_TPS"] == "13.6"
+    assert "FOREMAN_PREFILL_TPS" not in cap.spawn_env("nephthys-qwen14b")
+    assert "FOREMAN_PREFILL_TPS" not in cap.spawn_env("local-worker")
+
+
 # ---- group resolution (wq#2154) ---------------------------------------------------------
 
 def test_group_ticket_spawns_on_a_member_with_that_members_env(denv, monkeypatch):

@@ -170,7 +170,7 @@ def validate_local_backends(cfg):
     """wq#2130: check config.json's `local_backends` block. Absent is valid (the dispatcher
     then keeps the static `local_ceiling`). Returns (fails, warns).
 
-    A leaf row is {health_url, slots, served_ctx, first_frame_s} for a Mac-local model in
+    A leaf row is {health_url, slots, served_ctx, first_frame_s, prefill_tps?} for a Mac-local model in
     research/models.yaml; a group row is {group: [leaf names], served_ctx?, first_frame_s?}.
     Keys starting with `_` are notes."""
     block = cfg.get("local_backends")
@@ -200,6 +200,10 @@ def validate_local_backends(cfg):
         for key in ("slots", "served_ctx", "first_frame_s"):
             if not _pos_int(e.get(key)):
                 fails.append(f"{where}.{key} must be a positive integer")
+        tps = e.get("prefill_tps")
+        if "prefill_tps" in e and not (isinstance(tps, (int, float))
+                                       and not isinstance(tps, bool) and tps > 0):
+            fails.append(f"{where}.prefill_tps must be a positive number (tokens/s)")
     for name, e in groups.items():
         where = f"local_backends.{name}"
         members = e["group"]
