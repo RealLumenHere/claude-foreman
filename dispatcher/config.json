@@ -3,6 +3,13 @@
   "max_spawns_per_pass": 10,
   "cloud_ceiling": 10,
   "local_ceiling": 12,
+  "local_backends": {
+    "_note": "wq#2130: per-backend local capacity (dispatcher/local_capacity.py). slots = concurrent workers the box can serve (ollama NUM_PARALLEL); served_ctx = context the backend really serves; first_frame_s = fworker first-frame budget; health_url is probed once per pass (2 s). local-worker is the LiteLLM group: free slots = sum over its healthy members. local_ceiling above is only an upper clamp. Rollback: FOREMAN_LOCAL_CAPACITY=static. Hosts per research/DISPATCH_FIX_RESEARCH.md s2; slots/ctx are the wq#2130 defaults until the orchestrator supplies live values.",
+    "hathor-llama8b": {"health_url": "http://100.80.71.13:11434/api/ps", "slots": 2, "served_ctx": 32768, "first_frame_s": 1500},
+    "nephthys-qwen14b": {"health_url": "http://100.98.74.87:11434/api/ps", "slots": 2, "served_ctx": 32768, "first_frame_s": 1500},
+    "qwen36-local": {"health_url": "http://100.100.129.24:8095/health", "slots": 2, "served_ctx": 8192, "first_frame_s": 1500},
+    "local-worker": {"group": ["hathor-llama8b", "nephthys-qwen14b", "qwen36-local"], "served_ctx": 32768, "first_frame_s": 1500}
+  },
   "local_max_spawns_per_pass": 12,
   "pass_deadline_s": 240,
   "tight_mode": {

@@ -216,7 +216,9 @@ def wait_for_slot(prefix, ceiling, max_wait_s):
         waited += SLOT_POLL_S
 
 
-def dispatch_one(ticket_id, repo):
+def dispatch_one(ticket_id, repo, env=None):
+    """`env` (wq#2130): extra KEY=VALUE pairs for the worker process. lumen-run forwards only
+    PATH into the unit, so router.dispatch_cmd puts them in front of the fworker command."""
     t = router.wq_show(ticket_id)
     model = t.get("model")
     if model in (None, "", "None"):
@@ -234,7 +236,8 @@ def dispatch_one(ticket_id, repo):
         log(f"wq#{ticket_id} attempt {attempt}: spawn reservation already held — "
             f"duplicate spawn, refusing before Popen (E.5)")
         return None
-    cmd = router.dispatch_cmd(ticket_id, repo)
+    cmd = (router.dispatch_cmd(ticket_id, repo, env=env) if env
+           else router.dispatch_cmd(ticket_id, repo))
     log(f"spawning wq#{ticket_id}: {' '.join(cmd)}")
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)

@@ -37,16 +37,64 @@ CLOUD_CEILING = 3
 # wrongly eat into the cloud ceiling this module exists to protect. FOREMAN_RESEARCH
 # §8: "ceiling 3 cloud workers + N local-rung workers (local unlimited by Anthropic,
 # bounded by Lumen CPU instead)".
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
+#
+# wq#2130: the sets are read from research/models.yaml pools instead of a hand-kept tuple.
+# `local` = the Macs (counted in Mac slots); `cheap_cloud` = deepseek-v4-flash, a paid
+# vendor API: exempt from every Anthropic gate like the Macs, but NOT a Mac slot.
+MODELS_YAML = os.environ.get(
+    "FOREMAN_MODELS_YAML",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "research", "models.yaml"))
+_FALLBACK_LOCAL = ("qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
+_FALLBACK_CHEAP_CLOUD = ("deepseek-v4-flash",)
+# LiteLLM model group over the Macs (dispatcher/local_capacity.py); not a models.yaml row.
+LOCAL_GROUP_MODELS = ("local-worker",)
+
+
+def _pool_models(pool, fallback, path=None):
+    """Ids of models.yaml rows whose `pools` list `pool`; `fallback` when the file or the
+    PyYAML import is unusable — this module is imported by the governor-adjacent paths
+    and must never fail on a missing dependency."""
+    try:
+        import yaml
+        with open(path or MODELS_YAML) as f:
+            rows = (yaml.safe_load(f) or {}).get("models") or []
+        found = tuple(m["id"] for m in rows
+                      if isinstance(m, dict) and pool in (m.get("pools") or []))
+    except Exception:  # noqa: BLE001 — runs at import; yaml.YAMLError is not a ValueError
+        return tuple(fallback)
+    return found or tuple(fallback)
+
+
+LOCAL_POOL_MODELS = _pool_models("local", _FALLBACK_LOCAL) + LOCAL_GROUP_MODELS
+CHEAP_CLOUD_MODELS = _pool_models("cheap_cloud", _FALLBACK_CHEAP_CLOUD)
+# Everything that never draws on the Anthropic login (observed-burn, governor, partition).
+ANTHROPIC_EXEMPT_MODELS = LOCAL_POOL_MODELS + CHEAP_CLOUD_MODELS
 
 # wq#2081: local-rung ceiling — bounded by the Macs' hardware, never by Anthropic quota
 # (models.yaml concurrency.local_max; config.json local_ceiling overrides it per host).
 LOCAL_CEILING = 12
 
 
+def _in(model, names):
+    return bool(model) and any(model.startswith(p) for p in names)
+
+
+def is_mac_local_model(model):
+    """True when `model` runs on a Mac (models.yaml pool `local`): the only class that
+    occupies a Mac slot."""
+    return _in(model, LOCAL_POOL_MODELS)
+
+
+def is_cheap_cloud_model(model):
+    """True for the paid-vendor rung (models.yaml pool `cheap_cloud`, deepseek-v4-flash)."""
+    return _in(model, CHEAP_CLOUD_MODELS)
+
+
 def is_local_model(model):
-    """True when `model` is a governor-exempt local-pool route (zero Anthropic quota)."""
-    return bool(model) and any(model.startswith(p) for p in LOCAL_POOL_MODELS)
+    """True when `model` is a governor-exempt route (zero Anthropic quota): a Mac-local
+    model or the cheap_cloud class. Decides the dispatcher partition and the governor
+    exemption; use is_mac_local_model() when the question is Mac slots."""
+    return _in(model, ANTHROPIC_EXEMPT_MODELS)
 
 # `lumen-run list` unit column, e.g. "lumen-job-fworker-wq616-1786850106.service".
 # Non-greedy name capture so a numeric ticket-id slug (fworker-wq616) doesn't get

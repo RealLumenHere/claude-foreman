@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, DISPATCHER_DIR)
+sys.path.insert(0, os.path.join(DISPATCHER_DIR, "..", "harness"))
+import concurrency  # noqa: E402
 import vlogs_mirror  # noqa: E402
 
 CONFIG_PATH = os.environ.get("FOREMAN_DISPATCHER_CONFIG",
@@ -155,8 +157,83 @@ def load_db_lane_counts(db_path):
     return open_counts, all_counts
 
 
+def _pos_int(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 1
+
+
+def validate_local_backends(cfg):
+    """wq#2130: check config.json's `local_backends` block. Absent is valid (the dispatcher
+    then keeps the static `local_ceiling`). Returns (fails, warns).
+
+    A leaf row is {health_url, slots, served_ctx, first_frame_s} for a Mac-local model in
+    research/models.yaml; a group row is {group: [leaf names], served_ctx?, first_frame_s?}.
+    Keys starting with `_` are notes."""
+    block = cfg.get("local_backends")
+    if block is None:
+        return [], []
+    if not isinstance(block, dict):
+        return ["local_backends must be an object"], []
+    fails, warns = [], []
+    leaves, groups = {}, {}
+    for name, e in block.items():
+        if name.startswith("_"):
+            continue
+        if not isinstance(e, dict):
+            fails.append(f"local_backends.{name} must be an object")
+        elif "group" in e:
+            groups[name] = e
+        else:
+            leaves[name] = e
+    for name, e in leaves.items():
+        where = f"local_backends.{name}"
+        if not concurrency.is_mac_local_model(name):
+            fails.append(f"{where}: not a Mac-local model in research/models.yaml pools "
+                         f"(local) — the dispatcher would never consult it")
+        url = e.get("health_url")
+        if not (isinstance(url, str) and url.startswith(("http://", "https://"))):
+            fails.append(f"{where}.health_url must be an http(s) URL")
+        for key in ("slots", "served_ctx", "first_frame_s"):
+            if not _pos_int(e.get(key)):
+                fails.append(f"{where}.{key} must be a positive integer")
+    for name, e in groups.items():
+        where = f"local_backends.{name}"
+        members = e["group"]
+        if not concurrency.is_mac_local_model(name):
+            fails.append(f"{where}: group name is not a local-pool model "
+                         f"(concurrency.LOCAL_GROUP_MODELS) — it would route to the cloud partition")
+        if not (isinstance(members, list) and members
+                and all(isinstance(m, str) for m in members)):
+            fails.append(f"{where}.group must be a non-empty list of backend names")
+            continue
+        for m in members:
+            if m not in leaves:
+                fails.append(f"{where}.group member {m!r} is not a leaf local_backends row")
+        stray = sorted(set(e) & {"health_url", "slots"})
+        if stray:
+            fails.append(f"{where}: a group row takes no {', '.join(stray)} (members carry them)")
+        for key in ("served_ctx", "first_frame_s"):
+            if key in e and not _pos_int(e[key]):
+                fails.append(f"{where}.{key} must be a positive integer")
+    ceiling = cfg.get("local_ceiling")
+    total = sum(e["slots"] for e in leaves.values() if _pos_int(e.get("slots")))
+    if _pos_int(ceiling) and total > ceiling:
+        warns.append(f"local_backends slots sum to {total} but local_ceiling is {ceiling}: "
+                     f"the ceiling clamps live capacity")
+    return fails, warns
+
+
+def load_local_backends_lint(config_path):
+    """validate_local_backends over config.json at HEAD, like the lanes (wq#772)."""
+    try:
+        cfg = json.loads(_git_show_committed(config_path))
+    except ValueError as e:
+        raise LintError(f"config {config_path}: invalid JSON in committed config: {e}")
+    return validate_local_backends(cfg) if isinstance(cfg, dict) else ([], [])
+
+
 def lint(config_path=None, db_path=None, lane_state_path=None):
-    """Compare committed config.json lanes against queue.db lanes.
+    """Compare committed config.json lanes against queue.db lanes, and validate the
+    committed `local_backends` block (wq#2130).
 
     Returns (fails, warns) — each a list of detail strings.
     """
@@ -182,7 +259,8 @@ def lint(config_path=None, db_path=None, lane_state_path=None):
         if all_counts.get(lane, 0) == 0:
             warns.append(f"lane={lane!r} has a config.json entry but 0 tickets in queue.db")
 
-    return fails, warns
+    backend_fails, backend_warns = load_local_backends_lint(config_path or CONFIG_PATH)
+    return fails + backend_fails, warns + backend_warns
 
 
 def check_cmd(dry_run=False):

@@ -139,7 +139,7 @@ def _pool_stalls(end, has_no_slots_halt):
     """Stall descriptions for a partitioned pass_end (wq#2088), empty when healthy."""
     stalled = []
     if end.get("dispatchable_local", 0) > 0 and end.get("spawned_local", 0) == 0 \
-       and not end.get("local_slots_full"):
+       and not end.get("local_slots_full") and not end.get("local_paused"):
         stalled.append(f"local spawned=0 dispatchable={end['dispatchable_local']}")
     if end.get("dispatchable_cloud", 0) > 0 and end.get("spawned_cloud", 0) == 0 \
        and not has_no_slots_halt:

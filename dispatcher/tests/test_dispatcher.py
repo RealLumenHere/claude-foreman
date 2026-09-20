@@ -32,6 +32,7 @@ import spawner  # noqa: E402
 import burn_rate  # noqa: E402
 import pacing  # noqa: E402
 import circuit_breaker  # noqa: E402
+import local_capacity  # noqa: E402
 import runaway  # noqa: E402
 import spawn_loop_guard  # noqa: E402
 import self_heal  # noqa: E402
@@ -144,6 +145,10 @@ def denv(tmp_path, monkeypatch):
     # from burn_rate.py's documented defaults, never from production measurements.
     monkeypatch.setattr(burn_rate, "OBSERVED_PATH", str(tmp_path / "no-observed-burn.json"))
     monkeypatch.setattr(concurrency, "LUMEN_RUN_BIN", lumen_run)
+    # wq#2130: the local pause + backend cooldown files live under dispatcher/runtime/ —
+    # keep every test off the production copies.
+    monkeypatch.setattr(local_capacity, "LOCAL_PAUSE_PATH", str(tmp_path / "local_pause.json"))
+    monkeypatch.setattr(local_capacity, "COOLDOWN_PATH", str(tmp_path / "backend_cooldown.json"))
     monkeypatch.setitem(router.LANE_REPO, "testlane", str(repo_dir))
     monkeypatch.setitem(router.LANE_REPO, "fleet-fires", str(repo_dir))
     router.load_manifest(force=True)

@@ -71,6 +71,7 @@ import spawner         # noqa: E402
 import concurrency     # noqa: E402
 import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
+import local_capacity   # noqa: E402  # wq#2130: per-backend local slots + local pause
 import runaway          # noqa: E402
 import spawn_loop_guard  # noqa: E402  # wq#1703: restart-loop breaker
 import psi_pressure     # noqa: E402  # wq#844
@@ -1191,6 +1192,8 @@ class _PassCtx:
         self.stuck, self.harness_defects = {}, {}
         self.units = None            # live fworker units; None = re-read before next use
         self.unit_is_local = {}      # unit -> bool, one `wq show` per unit per pass
+        self.unit_model = {}         # unit -> model, same lifetime (local units only)
+        self._capacity = None        # wq#2130: LocalCapacity, probes once per pass
         self.psi_tight = False       # box pressure: throttles both partitions
         self.cloud_tight = False     # no-resets_at governor fallback: cloud only
         self.limits, self.pacing_cfg = {}, {}
@@ -1199,6 +1202,7 @@ class _PassCtx:
         self.spawned = {"local": 0, "cloud": 0}
         self.lane_capped = {"local": 0, "cloud": 0}
         self.local_slots_full = 0
+        self.local_paused = False    # wq#2130: circuit_breaker's local pause is active
         self.lint_scanned = self.lint_flagged = 0  # wq#1437 stage 3.7 (warn): measurement only
         self.quarantined = []
 
@@ -1216,6 +1220,30 @@ class _PassCtx:
             else:
                 cloud += 1
         return local, cloud
+
+    def local_unit_models(self):
+        """Model of every running local unit (wq#2130) — what LocalCapacity subtracts
+        from a backend's slots. Same per-pass `wq show` cache discipline as unit_counts."""
+        models = []
+        for u in self.units or []:
+            if u not in self.unit_is_local:
+                self.unit_is_local[u] = concurrency.is_local_unit(u)
+            if not self.unit_is_local[u]:
+                continue
+            if u not in self.unit_model:
+                m = concurrency.TICKET_UNIT_RE.match(u)
+                self.unit_model[u] = concurrency.ticket_model(m.group("id")) if m else None
+            models.append(self.unit_model[u])
+        return models
+
+    def capacity(self):
+        """The pass's LocalCapacity, or None under FOREMAN_LOCAL_CAPACITY=static."""
+        if local_capacity.capacity_mode() == "static":
+            return None
+        if self._capacity is None:
+            self._capacity = local_capacity.LocalCapacity(
+                self.cfg.get("local_backends"), self.local_unit_models)
+        return self._capacity
 
     def burn_allowed(self, pools):
         if pools not in self.burn_cache:
@@ -1426,6 +1454,18 @@ def _admit_local(ctx, r):
         ctx.log.skip(tid, lane, "concurrency", "local_slots_full", model=model,
                      detail=f"{n_local} local unit(s) at ceiling {local_ceiling}")
         return False
+    # wq#2130: local_ceiling above is now only the upper clamp. A model with a local_backends
+    # row is sized by its own live slots; one without (cheap_cloud, or config not yet carrying
+    # the block) and FOREMAN_LOCAL_CAPACITY=static keep the ceiling as the only bound.
+    cap = ctx.capacity()
+    if cap is not None and cap.knows(model):
+        free = cap.free_slots(model)
+        if free <= 0:
+            ctx.local_slots_full += 1
+            ctx.log.skip(tid, lane, "concurrency", "local_slots_full", model=model,
+                         detail=f"{model}: 0 free slot(s) (backend full, probe failed or "
+                                f"cooling down)")
+            return False
     return True
 
 
@@ -1551,7 +1591,12 @@ def _spawn(ctx, r):
         return False
     if sum(ctx.spawned.values()):
         time.sleep(random.uniform(*STAGGER))  # same stagger doctrine as spawner
-    unit = spawner.dispatch_one(tid, repo)
+    # wq#2130: a Mac-local spawn tells fworker its backend's first-frame budget and served
+    # ctx (FOREMAN_FIRST_FRAME_S / FOREMAN_SERVED_CTX); other spawns keep the 2-arg call.
+    cap = ctx.capacity() if r["part"] == "local" else None
+    spawn_env = cap.spawn_env(model) if cap is not None else {}
+    unit = (spawner.dispatch_one(tid, repo, env=spawn_env) if spawn_env
+            else spawner.dispatch_one(tid, repo))
     if unit is None:
         log.emit("error", stage="spawn", ticket=tid, lane=lane,
                  reason="spawn_failed", model=model)
@@ -1578,6 +1623,14 @@ def _run_partition(ctx, part, ready):
     else:
         cap = cfg["max_spawns_per_pass"]
     admit = _admit_local if part == "local" else _admit_cloud
+    if part == "local":
+        # wq#2130: the per-pool circuit breaker's local trip pauses this partition only
+        pause = local_capacity.read_pause() if local_capacity.capacity_mode() == "live" else None
+        if pause is not None:
+            ctx.local_paused = True
+            log.emit("halt", stage="local_pause", reason=str(pause.get("reason"))[:300],
+                     until=pause.get("until"))
+            return "local_paused"
     for r in ready:
         cand = r["cand"]
         tid, lane = cand["id"], cand["lane"]
@@ -1766,6 +1819,7 @@ def _do_pass(cfg, log, state, dry_run):
             "dispatchable_unpooled": max(0, dispatchable - sum(dispatchable_pool.values())),
             "spawned_local": ctx.spawned["local"], "spawned_cloud": ctx.spawned["cloud"],
             "local_slots_full": ctx.local_slots_full,
+            "local_paused": ctx.local_paused,
             "stopped_local_reason": stopped["local"],
             "stopped_cloud_reason": stopped["cloud"]}
 
@@ -1815,6 +1869,11 @@ def run_pass(dry_run=False):
                       f"({breaker_stats['failures']}/{breaker_stats['total']} attempts)")
             log.emit("halt", stage="circuit_breaker", reason=reason, **breaker_stats)
             return 0
+        # wq#2130: the local pool trips on its own window and only pauses the local partition
+        local_tripped, local_stats = circuit_breaker.check_and_trip_local(dry_run=dry_run)
+        if local_tripped:
+            log.emit("info", stage="circuit_breaker_local", reason="local_pause_written",
+                     **local_stats)
         log.emit("pass_start", dry_run=dry_run, config_path=CONFIG_PATH,
                  config_sha=config_sha)
         summary = _do_pass(cfg, log, load_state(), dry_run)

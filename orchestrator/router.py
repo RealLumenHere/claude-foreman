@@ -1041,7 +1041,7 @@ def repo_for_ticket(ticket_id_or_dict):
     return repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
 
 
-def dispatch_cmd(ticket_id, repo=None, *, manifest=None):
+def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None):
     """The fworker command for a ticket whose tuple is already on the ticket (or gets
     assigned now). Mirrors design/T2A §2.
 
@@ -1087,6 +1087,10 @@ def dispatch_cmd(ticket_id, repo=None, *, manifest=None):
         # fire_gate.runtime_exceeded()'s in-process watchdog never getting scheduled.
         inner = (["timeout", "--signal=TERM", f"--kill-after={FIRE_MAX_RUNTIME_KILL_AFTER_S}",
                   str(FIRE_MAX_RUNTIME_S)] + inner)
+    if env:
+        # wq#2130: lumen-run forwards only PATH into the unit; per-spawn settings ride in
+        # front of the worker command (dispatcher: FOREMAN_FIRST_FRAME_S / FOREMAN_SERVED_CTX)
+        inner = ["env"] + [f"{k}={v}" for k, v in sorted(env.items())] + inner
     cmd += inner
     return cmd
 
