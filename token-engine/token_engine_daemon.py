@@ -77,7 +77,10 @@ MASK_PATTERNS = [
     ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{30,}")),
     ("github_token", re.compile(_B + r"(?:github_pat_)[A-Za-z0-9_]{20,}")),
     ("cloudflare_token", re.compile(_B + r"cfut_?[A-Za-z0-9_.-]{6,}")),
-    ("sk_key", re.compile(_B + r"sk-[a-zA-Z-]*[A-Za-z0-9_-]{16,}")),
+    # wq#2300: same prefix shape as masking.py, where a greedy `[a-zA-Z-]*` kept
+    # part of the body in the replacement. Detect-only here, so this copy leaked
+    # nothing — it moves to keep the two readable as one rule.
+    ("sk_key", re.compile(_B + r"sk-(?:[a-zA-Z]+-)*[A-Za-z0-9_-]{16,}")),
     ("slack_token", re.compile(_B + r"xox[bpasr]-[A-Za-z0-9-]{8,}")),
     ("aws_key_id", re.compile(_B + r"AKIA[0-9A-Z]{16}")),
     # wq#2288: keep in lockstep with harness/masking.py — a called identifier

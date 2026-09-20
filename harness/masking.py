@@ -46,7 +46,16 @@ PATTERNS = [
      r"\1MASKED"),
     ("github", re.compile(_B + r"(github_pat_)[A-Za-z0-9_]{20,}"), r"\1MASKED"),
     ("cloudflare", re.compile(_B + r"(cfut_?)[A-Za-z0-9_.-]{6,}"), r"\1MASKED"),
-    ("sk-key", re.compile(_B + r"(sk-[a-zA-Z-]*)[A-Za-z0-9_-]{16,}"), r"\1MASKED"),
+    # wq#2300: the prefix repeats WHOLE dash-terminated letter groups (`sk-`,
+    # `sk-ant-`, `sk-or-v1-`) instead of a greedy `[a-zA-Z-]*`. Greedy, group 1 ran
+    # as far as the `{16,}` body would allow, so a body opening with a long letter
+    # run was partly kept: `sk-ant-` + 24 letters masked to `sk-ant-xxxxxxxxMASKED`,
+    # printing 8 characters of the secret into the artefact. The same 8 went into
+    # scan()'s `prefix` — the field contracted to hold no value — and left
+    # `value_sha256_12` computed over a truncated body, so the "sha256 a candidate
+    # and compare" instruction every rotation ticket carries could never match.
+    ("sk-key", re.compile(_B + r"(sk-(?:[a-zA-Z]+-)*)[A-Za-z0-9_-]{16,}"),
+     r"\1MASKED"),
     ("slack", re.compile(_B + r"(xox[bpasr]-)[A-Za-z0-9-]{8,}"), r"\1MASKED"),
     ("aws", re.compile(_B + r"(AKIA)[0-9A-Z]{16}"), r"\1MASKED"),
     # No boundary here on purpose: this one keys off an English word, not a prefix,

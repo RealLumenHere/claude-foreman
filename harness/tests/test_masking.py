@@ -160,6 +160,51 @@ def test_masked_ndjson_line_still_parses():
 
 PW = "hunter2-hunter2-hunter2"
 
+# wq#2300: (label, the prefix the mask may keep, a sample that starts with it). The
+# prefix is the non-secret part a rotation worker reads to know WHICH credential
+# fired — `ghp_`, `AKIA`, a key name; everything after it is the credential. Samples
+# are the constants above, so this table cannot drift from the fixtures the rest of
+# the suite uses, and the kv one splits at the boundary its rule reads.
+BODIES = [
+    ("github", "ghp_", GHP),
+    ("github", "github_pat_", GHPAT),
+    ("cloudflare", "cfut_", CFUT),
+    ("sk-key", "sk-ant-", SK),
+    ("slack", "xoxb-", XOXB),
+    ("aws", "AKIA", AKIA),
+    ("kv-secret", 'TOKEN="', 'TOKEN="' + PW),
+]
+
+
+def test_the_mask_keeps_the_prefix_and_no_character_of_the_body():
+    """wq#2300: a greedy prefix group prints part of the secret. `sk-[a-zA-Z-]*` ran
+    as far as the `{16,}` floor would allow, so a body opening with a long letter run
+    was partly kept: `sk-ant-` + 24 letters masked to the prefix plus EIGHT characters
+    of the body, written into every artefact derived from the stream. It also broke
+    identification — those 8 landed in scan()'s `prefix`, the field contracted to hold
+    no value, and `value_sha256_12` was then taken over the 16-char remainder, so
+    hashing the real token (what every rotation ticket instructs its worker to do)
+    could not match.
+
+    The invariant is stated for EVERY rule, with the same label-coverage assert as the
+    fixed-point test above: what survives a mask is exactly the declared prefix.
+    """
+    assert {label for label, _, _ in BODIES} == {l for l, _, _ in masking.PATTERNS}
+    for label, prefix, sample in BODIES:
+        body = sample[len(prefix):]
+        text = f"x {sample} y"
+        masked, hits = masking.mask_text(text)
+        assert hits == [label], f"{label}: sample no longer fires ({hits})"
+        assert masked == f"x {prefix}MASKED y", f"{label}: mask kept part of the body"
+
+        _, records = masking.scan(text)
+        assert [r["label"] for r in records] == [label]
+        assert records[0]["prefix"] == prefix, f"{label}: record widened the prefix"
+        # the WHOLE body is hashed, so hashing a candidate can identify the credential
+        assert records[0]["value_len"] == len(body)
+        assert records[0]["value_sha256_12"] == hashlib.sha256(
+            body.encode()).hexdigest()[:12], f"{label}: hash is over a truncated body"
+
 
 def test_a_called_identifier_is_not_a_credential():
     # the exact line that fired the tripwire on wq#2284 and opened wq#2288

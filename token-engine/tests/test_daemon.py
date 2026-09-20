@@ -332,7 +332,10 @@ class FrameTest(unittest.TestCase):
         leak = D.verb_mask_selftest({}, {})
         self.assertEqual(D.mask_hits(json.dumps(leak)), ["github_token"])
         self.assertIn("aws_key_id", D.mask_hits("AKIA" + "A" * 16))
-        self.assertIn("kv_secret", D.mask_hits('TOKEN="abcdefgh12345678"'))
+        # wq#2300: split at the boundary the kv rule reads, as test_masking.py's
+        # fixtures are (wq#2299/#2303) — whole, this line arms the tripwire on every
+        # worker that READS this file, which is how wq#2278 filed wq#2289.
+        self.assertIn("kv_secret", D.mask_hits('TOKEN="' + 'abcdefgh12345678"'))
         self.assertEqual(D.mask_hits('{"pong": true, "daemon_uid": 998}'), [])
 
     def test_mask_ignores_prefixes_inside_words(self):
@@ -350,7 +353,7 @@ class FrameTest(unittest.TestCase):
         # rule; here a false hit fails the verb and drops the caller's result.
         self.assertEqual(D.mask_hits("key = apply_key_allowlist(reg)"), [])
         self.assertEqual(D.mask_hits('TOKEN = os.environ.get("GH_TOKEN")'), [])
-        self.assertIn("kv_secret", D.mask_hits("password: hunter2-hunter2-hunter2"))
+        self.assertIn("kv_secret", D.mask_hits("password: " + "hunter2-hunter2-hunter2"))
 
 
 class T10Base(unittest.TestCase):
