@@ -4,6 +4,18 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vfile "$HERE/lumen_verify.py" /home/lumen/bin/lumen-verify
+  vfile "$HERE/registry.yaml" /home/lumen/minerva/verify/registry.yaml
+  vunit_file "$HERE/lumen-state-verify.service" /etc/systemd/system/lumen-state-verify.service
+  vunit_file "$HERE/lumen-state-verify.timer" /etc/systemd/system/lumen-state-verify.timer
+  venabled lumen-state-verify.timer
+  vactive lumen-state-verify.timer
+  vdone
+fi
+
 python3 -m pytest -q "$HERE/test_lumen_verify.py" "$HERE/test_repair_clobbered_facts.py"
 
 install -m 0755 "$HERE/lumen_verify.py" /home/lumen/bin/lumen-verify
