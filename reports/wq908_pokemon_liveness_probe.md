@@ -166,15 +166,19 @@ natural restart) to light up the dashboard tile and heartbeat watch for this pro
 
 ## Diff — `/home/lumen/sentinel/config/config.yaml`
 
+The gatus push token was pasted in literally when this report was written; wq#2116
+redacted it. It is the shared `5-probes` token and it is in this repo's git history,
+so it rotates with the rest of wq#1466's scope.
+
 ```diff
    - name: probe-storage-integrity
      group: 5-probes
-     token: "sntl-probe-7f3a9c1e"
+     token: "***REDACTED-wq2116***"
      heartbeat: { interval: 50m }
      alerts: [{type: ntfy, send-on-resolved: true, description: "Fleet storage/mount integrity probe failed (missing mount / degraded array / config drift) — wq#421"}]
 +  - name: probe-pokemon-liveness
 +    group: 5-probes
-+    token: "sntl-probe-7f3a9c1e"
++    token: "***REDACTED-wq2116***"
 +    heartbeat: { interval: 50m }
 +    alerts: [{type: ntfy, send-on-resolved: true, description: "lumen-pokemon-live ActiveState=active but no turn_summary progress (or service down) — wq#908, systemd active proved nothing during the 08-23 12h freeze"}]
 ```

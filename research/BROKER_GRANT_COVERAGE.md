@@ -95,6 +95,77 @@ not touched, no collision), `fworker.resolve_exec_grant`, guard.sh, the never-li
 | /home/lumen/kb (base add_dir, already granted) | 28 | 1 | kb/gatus/gatus.env (basename) |
 | /home/lumen/mailbot (base add_dir, already granted) | 63 | 1 | mailbot/.dev.vars:1 `DEEPSEEK_API_KEY=sk-4…` |
 
+### 3.1 Every base add_dir (2026-09-20, wq#2116)
+
+The §3 table sampled candidate roots. This is the same sweep over the roots every worker
+already holds — `agents.yaml` base `add_dir`, no ticket needed to read them.
+
+| root | files | hits | verdict |
+|---|---|---|---|
+| /home/lumen/kb | 31 | 0 | clean (wq#1483 moved `gatus/gatus.env` out) |
+| /home/lumen/pokemon | 3189 | 0 | clean |
+| /home/lumen/mailbot | 78 | 1 | `evals/run.mjs:118` — `process.env` read, false positive (wq#2115) |
+| /home/lumen/bin | 400 | 2 | `probe_wq616.py:55,61` — `…-dummy` fixture literal (wq#2115) |
+| /home/lumen/projects/nest | 3202 | 2 | `build/nle-initramfs-root/etc/ssl/certs/*.pem` — CA bundle (3 certs) + CRL bundle (3 CRLs), zero `PRIVATE KEY` blocks, `*.pem` basename false positive |
+| /home/lumen/agents/work-queue | 1009 | 8 | **real** — `_runs/fleet{9,12}-*.jsonl` transcripts quote the live gatus push token back; §3.2 |
+| /home/lumen/foreman | 24705 | 348 | §3.2 |
+
+Live non-test source hits under foreman, triaged one by one — all four are false positives,
+no credential literal in live foreman source:
+
+| file:line | shape | verdict |
+|---|---|---|
+| `despag/app.py:100` | `kv_secret` | `API_TOKEN` = `_load_or_create_token()` — the RHS is a call, not a value; the token is read from a 0600 file (`app.py:92-97`) |
+| `claude-shim/claude_shim.py:83` | `kv_secret` | `API_KEY` = `_load_or_create_api_key()` — same, generated + written 0600 (`claude_shim.py:75-80`) |
+| `research/headroom_proxy_gate.py:42` | `sk_key` | `SYNTHETIC_BEARER` — literal says `not-a-real-credential`, it is the gate's negative control |
+| `events/fworker-wq1482-a3.jsonl:37,38` | `gh_pat` | `ghp_` + `A-Z0-9` in order — a worker event quoting the canonical alphabet fixture |
+
+The first two are a third false-positive class, distinct from wq#2115's two: `kv_secret`
+matches a **Python identifier or call** on the right of `=`, because `_load_or_create_token`
+is 21 characters of `[A-Za-z0-9_]`. Noted on wq#2115 so one owner fixes one regex.
+
+Two hits were **real**, both copies of `/home/lumen/sentinel/config/config.yaml` pasted into
+git-tracked foreman files — `ops/wq897-litellm-auth-monitor-probe/gatus_config.diff:4,9` and
+`reports/wq908_pokemon_liveness_probe.md:172,177`. Same value in both, and the same value the
+`_runs` snapshot of the live config carries, so it is the shared `5-probes` gatus push token,
+not a placeholder. Redacted here; the value is in git history, so it rotates with wq#1466.
+
+### 3.2 `_runs/` snapshots launder the allow list — retention pass required
+
+323 of foreman's 348 hits are under `_runs/<ticket>/snapshots/`, and they are not fixture
+noise. `action_gate.snapshot()` takes a verbatim pre-image of every AMBER-classified file
+edit, so a worker that edits a credential file copies it whole into foreman — and foreman is
+every worker's `--add-dir`. What is actually sitting there:
+
+- `20260907T145802Z-…sentinel_config_config.yaml` and `20260909T074301Z-…` — two full copies
+  of the 38-token gatus config (§3 row: **NO**, wq#1466), 76 hits.
+- 15+ copies of `…home_lumen_agent_.env` — the live `GITHUB_TOKEN` (§3 row: **NO**), 3 hits each.
+- `*-git-state.txt` — `git diff` of a dirty worktree, whatever the edit put in it.
+
+So the decision for scope item (3) is **yes, this needs its own pass**, and not because the
+files are old: the allow list refuses `dir(/home/lumen/agent)` and `dir(/home/lumen/sentinel/config)`
+by name, and `_runs/` hands a worker the contents anyway. Frozen historical record is a fine
+reason to keep an artifact, not a reason to keep it inside a read grant.
+
+Two halves, split by who can do them:
+
+1. **Source** (done here): `snapshot()` routes every artifact through `_stow()`, which asks
+   `read_dir_sweep`'s own globs + patterns whether the bytes are credential-shaped. If they
+   are, the pre-image goes to `~/.secrets/gate-snapshots` at 0600 — outside every `add_dir` —
+   and the snapdir gets a path-only `.held-out` pointer. Rollback still works; the grant
+   no longer reaches the bytes. An import failure counts as sensitive (fail closed).
+2. **History**: the 57 existing run directories still hold the old copies, and
+   `/home/lumen/agents/work-queue/_runs` holds 8 more — the same gatus token, quoted back
+   inside worker transcripts, in a second base `add_dir`. Neither is git-tracked (foreman:
+   `git ls-files _runs` = 0; work-queue is not a repo), so this is a local-disk purge, not
+   a history rewrite — out of a worker's reach (`rm` outside the worktree is denied by
+   guard.sh). Filed as a follow-up ticket.
+
+A transcript is the harder half of that second bucket: `_stow` cannot help there, because
+the token reaches the JSONL as ordinary tool output, not as a snapshot. The durable fix for
+it is the same one wq#1466 is already scoped to do — take the literal out of
+`sentinel/config/config.yaml` so there is nothing for a worker to read and echo.
+
 ## 4. Test-to-failure
 
 | # | case | result |

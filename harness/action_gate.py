@@ -22,6 +22,7 @@ Fail-closed like guard.sh: any internal error in hook mode = exit 2. A failed
 AMBER snapshot BLOCKS (executing without the snapshot violates the invariant —
 the Miko class is exactly "destructive action with no pre-image on disk").
 """
+import fnmatch
 import json
 import os
 import re
@@ -29,6 +30,12 @@ import shutil
 import subprocess
 import sys
 import time
+
+try:  # credential shapes — one list, two consumers (read_dir_sweep is the owner)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import read_dir_sweep as _rds
+except Exception:  # never let a sibling import break a fail-closed hook
+    _rds = None
 
 GATE_RULES_ENV = "FOREMAN_GATE_RULES"
 SNAPDIR_ENV = "FOREMAN_GATE_SNAPDIR"
@@ -38,6 +45,13 @@ WORKER_ID = os.environ.get("FOREMAN_WORKER", "unknown")
 RULES_BASENAME = ".fworker-rules.yaml"
 SNAP_FILE_CAP = 64 * 1024 * 1024      # per-file copy cap
 SNAP_DB_CAP = 200 * 1024 * 1024       # sqlite db copy cap
+# wq#2116: the snapdir lives under /home/lumen/foreman/_runs, and foreman is every
+# worker's --add-dir. A verbatim pre-image of a file that is deliberately OFF every
+# read grant (agent/.env, sentinel/config/config.yaml) therefore launders that file
+# back into the grant, and keeps doing so long after the live file is fixed. Such a
+# pre-image goes here instead: 0600, outside every --add-dir root.
+SNAP_VAULT = os.environ.get("FOREMAN_GATE_SNAP_VAULT",
+                            os.path.expanduser("~/.secrets/gate-snapshots"))
 
 RED_MSG = ("ACTION BLOCKED: destructive operation requires review. "
            "Your context has been preserved for a reviewing agent.")
@@ -399,6 +413,46 @@ def _run(cmd, cwd=None, timeout=15):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 
+def _is_sensitive(path=None, text=None):
+    """Would read_dir_sweep flag this artifact as a credential? A failed import counts
+    as yes: the vault is a safe place for any pre-image, the snapdir is not."""
+    if _rds is None:
+        return True
+    if path is not None:
+        if any(fnmatch.fnmatch(os.path.basename(path), g) for g in _rds.BASENAME_GLOBS):
+            return True
+        # the sweep's own reader, so both tools skip the same symlinks/binaries/oversize
+        text = _rds._read_text(path)
+    if not text:
+        return False
+    return any(rx.search(text) for _, rx in _rds.PATTERNS)
+
+
+def _stow(d, name, src=None, text=None):
+    """Write one pre-image artifact and return its path. A credential-shaped artifact
+    goes to SNAP_VAULT at 0600 instead of the snapdir, and `d` gets a path-only pointer
+    in place of the bytes — the pre-image still exists for rollback, it just stops being
+    readable through the foreman read grant (wq#2116)."""
+    if not _is_sensitive(path=src, text=text):
+        dst = os.path.join(d, name)
+        if src is not None:
+            shutil.copy2(src, dst)
+        else:
+            open(dst, "w").write(text)
+        return dst
+    os.makedirs(SNAP_VAULT, exist_ok=True, mode=0o700)
+    dst = os.path.join(SNAP_VAULT, f"{WORKER_ID}-{name}")
+    if src is not None:
+        shutil.copy2(src, dst)
+    else:
+        open(dst, "w").write(text)
+    os.chmod(dst, 0o600)
+    with open(os.path.join(d, f"{name}.held-out"), "w") as f:
+        f.write(f"credential-shaped pre-image of {src or name} kept out of the snapdir\n"
+                f"vault (0600): {dst}\n")
+    return dst
+
+
 def _extract_file_targets(cmd):
     """Best-effort absolute-path targets of an in-place mutation command."""
     out = []
@@ -418,57 +472,45 @@ def snapshot(kind, payload, cwd):
     if kind == "path":
         p = payload
         if os.path.getsize(p) <= SNAP_FILE_CAP:
-            dst = os.path.join(d, f"{ts}-{_sanitize(p)}")
-            shutil.copy2(p, dst)
-            arts.append(dst)
+            arts.append(_stow(d, f"{ts}-{_sanitize(p)}", src=p))
         else:
             raise RuntimeError(f"pre-image {p} exceeds {SNAP_FILE_CAP} cap")
     elif kind == "files":
         for p in _extract_file_targets(payload)[:8]:
             if os.path.getsize(p) <= SNAP_FILE_CAP:
-                dst = os.path.join(d, f"{ts}-{_sanitize(p)}")
-                shutil.copy2(p, dst)
-                arts.append(dst)
+                arts.append(_stow(d, f"{ts}-{_sanitize(p)}", src=p))
         if not arts:
             kind = "git"  # nothing extractable — fall through to tree-state record
     if kind == "git":
-        dst = os.path.join(d, f"{ts}-git-state.txt")
-        with open(dst, "w") as f:
-            for args in (["rev-parse", "HEAD"], ["status", "--porcelain"],
-                         ["diff"], ["diff", "--staged"], ["stash", "create"]):
-                r = _run(["git", *args], cwd=cwd)
-                f.write(f"$ git {' '.join(args)}\n{r.stdout}{r.stderr}\n")
-        arts.append(dst)
+        # `git diff` of a dirty worktree carries whatever the edit put there, so the
+        # state record is stowed by content like every other artifact (wq#2116).
+        body = []
+        for args in (["rev-parse", "HEAD"], ["status", "--porcelain"],
+                     ["diff"], ["diff", "--staged"], ["stash", "create"]):
+            r = _run(["git", *args], cwd=cwd)
+            body.append(f"$ git {' '.join(args)}\n{r.stdout}{r.stderr}\n")
+        arts.append(_stow(d, f"{ts}-git-state.txt", text="".join(body)))
     elif kind == "sqlite":
         m = re.search(r'(/[^\s;|&"\']+\.(?:db|sqlite3?))\b', payload)
         if m and os.path.isfile(m.group(1)):
             p = m.group(1)
             if os.path.getsize(p) > SNAP_DB_CAP:
                 raise RuntimeError(f"db {p} exceeds snapshot cap")
-            dst = os.path.join(d, f"{ts}-{_sanitize(p)}")
-            shutil.copy2(p, dst)
-            arts.append(dst)
+            arts.append(_stow(d, f"{ts}-{_sanitize(p)}", src=p))
     elif kind == "pkg-pip":
         r = _run(["pip3", "freeze"], timeout=30)
-        dst = os.path.join(d, f"{ts}-pip-freeze.txt")
-        open(dst, "w").write(r.stdout)
-        arts.append(dst)
+        arts.append(_stow(d, f"{ts}-pip-freeze.txt", text=r.stdout))
     elif kind == "pkg-dpkg":
         r = _run(["dpkg-query", "-W", "-f", "${Package} ${Version}\n"], timeout=30)
-        dst = os.path.join(d, f"{ts}-dpkg-list.txt")
-        open(dst, "w").write(r.stdout)
-        arts.append(dst)
+        arts.append(_stow(d, f"{ts}-dpkg-list.txt", text=r.stdout))
     elif kind == "unit":
         m = re.search(r'systemctl\s+(?:stop|disable|mask)\s+([A-Za-z0-9@._-]+)', payload)
         if m:
+            # systemctl show prints Environment=, which is a credential surface
             r = _run(["systemctl", "show", m.group(1), "--no-pager"], timeout=15)
-            dst = os.path.join(d, f"{ts}-unit-{_sanitize(m.group(1))}.txt")
-            open(dst, "w").write(r.stdout)
-            arts.append(dst)
+            arts.append(_stow(d, f"{ts}-unit-{_sanitize(m.group(1))}.txt", text=r.stdout))
     elif kind == "note":
-        dst = os.path.join(d, f"{ts}-note.txt")
-        open(dst, "w").write(payload)
-        arts.append(dst)
+        arts.append(_stow(d, f"{ts}-note.txt", text=payload))
     return arts
 
 

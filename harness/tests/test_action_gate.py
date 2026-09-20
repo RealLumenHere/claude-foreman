@@ -150,6 +150,61 @@ def test_amber_snapshot_failure_blocks(tmp_path, monkeypatch):
     assert "BLOCKED" in err
 
 
+# ---------------- wq#2116: credential pre-images stay out of the snapdir ----
+
+FAKE_PAT = "ghp_" + "Zq7" + "x" * 33          # gh_pat shape, not a real token
+
+
+def _amber_edit(tmp_path, target, snapdir, vault):
+    return run_hook({"tool_name": "Edit", "tool_input": {"file_path": str(target)},
+                     "cwd": str(tmp_path)},
+                    {ag.SNAPDIR_ENV: str(snapdir), "FOREMAN_EVENTS_DIR": str(tmp_path),
+                     "FOREMAN_GATE_SNAP_VAULT": str(vault)})
+
+
+def test_credential_preimage_goes_to_vault_not_snapdir(tmp_path):
+    """The snapdir sits inside foreman, which is every worker's --add-dir. A .env
+    pre-image must leave a pointer there and the bytes somewhere else."""
+    target = tmp_path / "agent.env"
+    target.write_text(f"GITHUB_TOKEN={FAKE_PAT}\n")
+    snapdir, vault = tmp_path / "snaps", tmp_path / "vault"
+    rc, _ = _amber_edit(tmp_path, target, snapdir, vault)
+    assert rc == 0
+    snaps = list(snapdir.iterdir())
+    assert [s.name.endswith(".held-out") for s in snaps] == [True], snaps
+    assert FAKE_PAT not in snaps[0].read_text()
+    stowed = list(vault.iterdir())
+    assert [s.read_text() for s in stowed] == [f"GITHUB_TOKEN={FAKE_PAT}\n"]
+    assert oct(stowed[0].stat().st_mode)[-3:] == "600"
+
+
+def test_credential_basename_alone_diverts(tmp_path):
+    """`.env` is a credential by convention — no token in the body required."""
+    target = tmp_path / "prod.env"
+    target.write_text("FEATURE_FLAG=1\n")
+    snapdir, vault = tmp_path / "snaps", tmp_path / "vault"
+    rc, _ = _amber_edit(tmp_path, target, snapdir, vault)
+    assert rc == 0
+    assert [p.name.endswith(".held-out") for p in snapdir.iterdir()] == [True]
+    assert [p.read_text() for p in vault.iterdir()] == ["FEATURE_FLAG=1\n"]
+
+
+def test_clean_preimage_still_lands_in_snapdir(tmp_path):
+    """No divert for ordinary files: rollback keeps working where it always did."""
+    target = tmp_path / "config.yaml"
+    target.write_text("original: true\n")
+    snapdir, vault = tmp_path / "snaps", tmp_path / "vault"
+    rc, _ = _amber_edit(tmp_path, target, snapdir, vault)
+    assert rc == 0
+    assert [s.read_text() for s in snapdir.iterdir()] == ["original: true\n"]
+    assert not vault.exists()
+
+
+def test_is_sensitive_fails_closed_without_the_sweep(monkeypatch):
+    monkeypatch.setattr(ag, "_rds", None)
+    assert ag._is_sensitive(text="nothing interesting here")
+
+
 # ---------------- Layer 3: project rules additive ----------------
 
 MIKO_RULES = textwrap.dedent("""\
