@@ -1,0 +1,67 @@
+# BEGIN GENERATED inference_nodes.yaml v1 — edit the registry, not this block
+- model_name: hathor-llama8b
+  litellm_params:
+    model: openai/llama3.1:8b
+    api_base: http://100.80.71.13:11434/v1
+    api_key: none
+    timeout: 1560
+    stream_timeout: 1560
+    num_retries: 0
+    max_parallel_requests: 2
+  model_info: {mode: chat, description: "llama3.1:8b on hathor (ollama), 2 slots x 32768 served"}
+- model_name: nephthys-qwen14b
+  litellm_params:
+    model: openai/qwen3:14b
+    api_base: http://100.98.74.87:11434/v1
+    api_key: none
+    timeout: 2460
+    stream_timeout: 2460
+    num_retries: 0
+    extra_body: {"reasoning": {"effort": "none"}}
+    max_parallel_requests: 2
+  model_info: {mode: chat, description: "qwen3:14b on nephthys (ollama), 2 slots x 32768 served"}
+- model_name: qwen36-local
+  litellm_params:
+    model: openai/qwen3.6-35b-a3b
+    api_base: http://100.100.129.24:8095/v1
+    api_key: sk-none
+    timeout: 960
+    stream_timeout: 960
+    num_retries: 0
+    max_parallel_requests: 2
+  model_info: {mode: chat, description: "Qwen3.6-35B-A3B-Q4_K_M.gguf on isis (llama-server), 2 slots x 8192 served"}
+- model_name: local-worker
+  litellm_params:
+    model: openai/llama3.1:8b
+    api_base: http://100.80.71.13:11434/v1
+    api_key: none
+    timeout: 1560
+    stream_timeout: 1560
+    num_retries: 0
+    max_parallel_requests: 2
+    cooldown_time: 900
+  model_info: {mode: chat, id: local-worker-hathor, max_input_tokens: 28672, max_output_tokens: 4096, description: "llama3.1:8b on hathor (ollama), 2 slots x 32768 served"}
+- model_name: local-worker
+  litellm_params:
+    model: openai/qwen3:14b
+    api_base: http://100.98.74.87:11434/v1
+    api_key: none
+    timeout: 2460
+    stream_timeout: 2460
+    num_retries: 0
+    extra_body: {"reasoning": {"effort": "none"}}
+    max_parallel_requests: 2
+    cooldown_time: 900
+  model_info: {mode: chat, id: local-worker-nephthys, max_input_tokens: 28672, max_output_tokens: 4096, description: "qwen3:14b on nephthys (ollama), 2 slots x 32768 served"}
+- model_name: local-worker
+  litellm_params:
+    model: openai/qwen3.6-35b-a3b
+    api_base: http://100.100.129.24:8095/v1
+    api_key: sk-none
+    timeout: 960
+    stream_timeout: 960
+    num_retries: 0
+    max_parallel_requests: 2
+    cooldown_time: 900
+  model_info: {mode: chat, id: local-worker-isis, max_input_tokens: 4096, max_output_tokens: 4096, description: "Qwen3.6-35B-A3B-Q4_K_M.gguf on isis (llama-server), 2 slots x 8192 served"}
+# END GENERATED

@@ -15,6 +15,7 @@ families:                 # a model blob + how it is served. NOT a box.
     port: 8095
     health_path: /health
     swap: unit
+    gateway_model: qwen3.6-35b-a3b   # optional (wq#2251): the served alias LiteLLM addresses; default blob
   hathor-llama8b:
     blob: "llama3.1:8b"
     serving: ollama
@@ -27,6 +28,9 @@ families:                 # a model blob + how it is served. NOT a box.
     port: 11434
     health_path: /api/ps
     swap: implicit
+    # optional (wq#2251): ollama auto-enables qwen3 thinking without an effort; at 1.6 tok/s a
+    # thinking turn took 12 min (wq#2127). Emitted verbatim into the gateway deployment.
+    extra_body: {reasoning: {effort: none}}
 
 nodes:
   hathor:
