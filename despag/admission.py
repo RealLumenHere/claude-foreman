@@ -72,7 +72,9 @@ import governor_core  # noqa: E402 — governor/governor_core.py's evaluate_disp
 # fworker.py:148 LOCAL_POOL_MODELS / app.py:57's own duplicate of the same constant —
 # despag does not import fworker's router module for this, same reasoning as app.py's
 # comment: small and static, not worth a dependency.
+# BEGIN GENERATED inference_nodes.yaml v1 — edit the registry, not this block
 LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
+# END GENERATED
 
 
 def is_local_model(model: str | None) -> bool:

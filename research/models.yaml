@@ -165,8 +165,10 @@ models:
     # see the nephthys-qwen3-14b row below. MODEL_ROUTING_AUDIT.md §3 F4.
     efforts: []             # backend thinking flags pinned per-alias in litellm config instead
     trust: "mechanical-edit, probe-build, verify-DRAFTS. PR-only + sonnet-5 verify gate. Lower --max-turns."
-  - id: qwen36-local
-    status: down   # 2026-09-02: Ollama not serving reliably — re-enable when fixed
+  # wq#2250: the local rows (qwen36-local, nephthys-qwen14b, hathor-llama8b, local-worker) are
+  # GENERATED from research/inference_nodes.yaml (`fleet-node render`) at BEGIN GENERATED below.
+  # The notes here are their history; change the registry, not the rows.
+  # qwen36-local, status down: 2026-09-02: Ollama not serving reliably — re-enable when fixed
     # wq#750: dropped from the lumen-model-watchdog roster 2026-08-11 when
     # llama-qwen36.service was stopped on Lumen (resource-offload directive); the LiteLLM
     # entry was never repointed, though -- it still targets Isis (100.100.129.24:11434).
@@ -188,46 +190,56 @@ models:
     # (ops/wq1623-qwen36-queue-guard/audit_rung_timeout.py, hand-merge pending on the gateway
     # node). FLEET_COST_PLAN.md's three "after D2/D3" routing moves onto this rung are gated
     # on this fix landing too, not just D2/D3.
-    pools: [local]
-    context_tokens: 8192    # wq#2070: Isis serves 8192 ctx/req -- crashes on 15-22k fworker prompts. SMALL prompts only.
+    # context_tokens 8192 (wq#2070): Isis serves 8192 ctx/req -- crashes on 15-22k fworker prompts. SMALL prompts only.
     # wq#2133: served_ctx = what the backend serves NOW (context_length in Ollama /api/ps;
     # dispatcher/config.json local_backends.<name>.served_ctx is the dispatcher's copy).
     # context_tokens above/below stays the wq#2070 declared figure. Isis is unreachable
     # (wq#2140), so 8192 is its last measured value; config.json's 32768 is the post-fix
     # target and is NOT verified. Leaves the primary routing slot until Isis is back and
     # serving >= 32k.
-    served_ctx: 8192
-    efforts: []
-    trust: "mechanical-edit only, gated. Offline-survival tier."
   # wq#2074 2026-09-19: the two warm local boxes that CAN hold a full fworker prompt. Same
   # CLI-invocation shape as qwen36-local: fworker.is_local_model() matches the id, build_env
   # points claude at the LiteLLM gateway (ANTHROPIC_BASE_URL) instead of claude.ai OAuth.
   # Registered here so `wq add/edit --model` (wq#1442 known_models) accepts them. The scoped
   # 'foreman-local-rung' LiteLLM key must list these model names (gateway-side, not in git).
-  - id: nephthys-qwen14b
-    status: LIVE-local
-    pools: [local]
-    context_tokens: 40960   # wq#2070: holds full fworker prompts (15-22k). Standard-engineering-capable.
-    served_ctx: 32768       # wq#2133 2026-09-20: /api/ps context_length on 100.98.74.87:11434 (qwen3:14b)
-    efforts: []
-    trust: "standard-engineering + the mechanical-edit/probe-build local set. PR-only + sonnet-5 verify gate. Lower --max-turns."
+  # nephthys-qwen14b context_tokens 40960 (wq#2070): holds full fworker prompts (15-22k).
+  # hathor-llama8b context_tokens 131072 (wq#2070): llama3.1:8b, holds anything.
+  # served_ctx (wq#2133 2026-09-20): /api/ps context_length on 100.98.74.87:11434 (qwen3:14b) and
+  # 100.80.71.13:11434 (llama3.1:8b).
+  # wq#2133: local-worker is the LiteLLM group over the three Macs (dispatcher/config.json
+  # local_backends.local-worker; dispatcher/local_capacity.py resolves it to a member at admit
+  # time, so no worker ever runs AS local-worker). Its ctx is the smallest a member that is
+  # up can serve, which is what LiteLLM's pre-call check enforces (model_info.max_input_tokens);
+  # the render takes the min over members that are not down or retired.
+  # BEGIN GENERATED inference_nodes.yaml v1 — edit the registry, not this block
   - id: hathor-llama8b
     status: LIVE-local
     pools: [local]
-    context_tokens: 131072  # wq#2070: llama3.1:8b, holds anything.
-    served_ctx: 32768       # wq#2133 2026-09-20: /api/ps context_length on 100.80.71.13:11434 (llama3.1:8b)
+    context_tokens: 131072
+    served_ctx: 32768
     efforts: []
     trust: "standard-engineering + the mechanical-edit/probe-build local set. PR-only + sonnet-5 verify gate. Lower --max-turns."
-  # wq#2133: the LiteLLM group over the three Macs above (dispatcher/config.json
-  # local_backends.local-worker; dispatcher/local_capacity.py resolves it to a member at admit
-  # time, so no worker ever runs AS local-worker). Its ctx is the smallest a member that is
-  # up can serve, which is what LiteLLM's pre-call check enforces (model_info.max_input_tokens).
+  - id: nephthys-qwen14b
+    status: LIVE-local
+    pools: [local]
+    context_tokens: 40960
+    served_ctx: 32768
+    efforts: []
+    trust: "standard-engineering + the mechanical-edit/probe-build local set. PR-only + sonnet-5 verify gate. Lower --max-turns."
+  - id: qwen36-local
+    status: down
+    pools: [local]
+    context_tokens: 8192
+    served_ctx: 8192
+    efforts: []
+    trust: "mechanical-edit only, gated. Offline-survival tier."
   - id: local-worker
     status: LIVE-local
     pools: [local]
-    served_ctx: 32768       # min over the live members (hathor, nephthys); qwen36-local is out of service
+    served_ctx: 32768
     efforts: []
     trust: "mechanical-edit + probe-build primary rung. PR-only + sonnet-5 verify gate (verify_pass.local_author_always). standard-engineering only behind local_standard_engineering."
+  # END GENERATED
   - id: nephthys-qwen3-14b
     status: RETIRED          # wq#589 2026-08-22: Nephthys decommissioned, LiteLLM entry
                               # removed. wq#777 2026-08-23 live probe: host unreachable

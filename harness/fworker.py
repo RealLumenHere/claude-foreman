@@ -153,7 +153,9 @@ FIRE_ARCHETYPE = "fire-response"
 # governor/governor_core.py's LOCAL_POOL_MODELS and orchestrator/judgment.py's
 # LOCAL_POOL_MODELS — deliberately excludes nephthys-qwen3-14b (fallback brain only,
 # not a wq worker per models.yaml).
+# BEGIN GENERATED inference_nodes.yaml v1 — edit the registry, not this block
 LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
+# END GENERATED
 # archetypes agents.yaml marks `local:` for — the only work the local rung is trusted
 # with (FOREMAN_RESEARCH §9). Enforced here too (defense-in-depth) so an explicit
 # --model/--archetype override can't dispatch a local-pool model outside what the

@@ -16,12 +16,14 @@ families:                 # a model blob + how it is served. NOT a box.
     health_path: /health
     swap: unit
     gateway_model: qwen3.6-35b-a3b   # optional (wq#2251): the served alias LiteLLM addresses; default blob
+    context_tokens: 8192           # models.yaml declared window (wq#2070): Isis serves 8192/req, SMALL prompts only
   hathor-llama8b:
     blob: "llama3.1:8b"
     serving: ollama
     port: 11434
     health_path: /api/ps
     swap: implicit
+    context_tokens: 131072         # models.yaml declared window (wq#2070): llama3.1:8b
   nephthys-qwen14b:
     blob: "qwen3:14b"
     serving: ollama
@@ -31,6 +33,7 @@ families:                 # a model blob + how it is served. NOT a box.
     # optional (wq#2251): ollama auto-enables qwen3 thinking without an effort; at 1.6 tok/s a
     # thinking turn took 12 min (wq#2127). Emitted verbatim into the gateway deployment.
     extra_body: {reasoning: {effort: none}}
+    context_tokens: 40960          # models.yaml declared window (wq#2070): holds full fworker prompts
 
 nodes:
   hathor:

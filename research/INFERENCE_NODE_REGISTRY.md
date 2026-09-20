@@ -194,6 +194,13 @@ so hand-written neighbours survive:
 
 Notes that matter:
 
+- **Built (wq#2250):** targets 2, 3 and 5 live in `harness/node_render.py`, entered through
+  `python3 harness/fleet_node.py render [--check|--apply]`. JSON has no comments, so
+  `dispatcher/config.json` carries the sentinels as `_generated_begin` / `_generated_end` string
+  keys inside `local_backends`. `render --check` (exit 2 on drift) is enforced in the suite by
+  `dispatcher/tests/test_node_render.py::test_render_check_against_the_real_repo_exits_zero`; the
+  repo has no other CI runner. Families may carry an optional `context_tokens` (the declared
+  window models.yaml shows).
 - **`harness/concurrency.py` needs no renderer.** It already derives from
   `research/models.yaml` (`_pool_models`, line 54), so regenerating target 3 fixes it
   for free. Leave it alone; a sixth copy is the bug this ticket exists to kill.
