@@ -18,7 +18,11 @@ Diff read: mailbot `31fc00f` (cherry-pick of `d16d9d4`/`c6972d1`), on `main`. Fi
 5. Nits: `needs-frank` help says `--since 7d`, argparse default is `30d` (`mail_recall.py:182`); no way to mark a flagged row handled, so it lists for the full window.
 
 ## Probes
-`ops/wq1204-verify/probe_needs_frank.py` extracts the real regexes from `leakfilter.js` and runs 22 cases: 6 mismatches (5 over-fire, 1 miss). `node` was refused at runtime by the worker gate ("This command requires approval") despite `Bash(node *)` in `harness/worker-settings.json:13`, so the regexes ran under Python `re` (same syntax for these patterns).
+The original `ops/wq1204-verify/probe_needs_frank.py` scraped the regex literals out of `leakfilter.js` and ran 22 cases under Python `re`: 6 mismatches (5 over-fire, 1 miss). It was retired in wq#2171: a Python transcription of JS regex literals does not prove worker behaviour, and it broke once wq#2147 put comments inside `NEEDS_FRANK_RES`. Its coverage now lives in mailbot probes that import the production module:
+- `/home/lumen/mailbot/ops/wq2147-verify/probe.mjs` — the classifier cases, `safeFallback`/`SAFE_CLOSERS`, and the thread-keyed `alreadyFlagged` source assertions.
+- `/home/lumen/mailbot/ops/wq2164-verify/probe_pronoun_overfire.mjs` — the wq#2168 pronoun negatives.
+
+`ops/wq1204-verify/run_mailbot_probes.sh` runs both. (`node` was refused at runtime by the worker gate, "This command requires approval", so the Python port was the original workaround; the runner needs a shell where `node` is allowed.)
 
 ## Suggested fix shape (not implemented; verify-pass)
 - Replace `SAFE_CLOSERS` with owner-free closers (or take a `frankHandoff` arg and use owner closers only then).
