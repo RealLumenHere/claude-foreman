@@ -1,0 +1,11 @@
+#!/bin/sh
+# fleet-node — add / retire / render / lint for the inference node registry (wq#2241, wq#2253).
+# Wrapper over foreman/harness/fleet_node.py, named like fleet-inv and fleet-exec. Install:
+#   install -m 0755 ops/fleet-node/fleet-node /home/lumen/bin/fleet-node
+#
+#   fleet-node add    NODE --family F [--slots N] [--power-policy cold|warm|always-on] [--yes]
+#   fleet-node retire NODE [--force] [--power off|leave] [--yes]
+#   fleet-node render [--check | --apply]      fleet-node lint
+# add/retire stop after a five-target dry-run diff unless given --yes. Lumen is headless, so from
+# another box: ssh lumen@100.117.66.102 'fleet-node retire nephthys'
+exec python3 /home/lumen/foreman/harness/fleet_node.py "$@"

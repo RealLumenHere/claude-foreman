@@ -99,8 +99,10 @@ def _read(root, rel):
 def render_dispatcher(reg, root):
     rows, members = [], []
     for b in backends(reg):
+        if b["state"] == "draining":   # design §5.2: a draining node's slots leave the dispatcher's view
+            continue
         fam, m = b["family"], b["model"]
-        url = f"http://{_need(b, b, 'ip', 'node.tailscale_ip')}:{_need(b, fam, 'port', 'family')}" \
+        url =f"http://{_need(b, b, 'ip', 'node.tailscale_ip')}:{_need(b, fam, 'port', 'family')}" \
               f"{_need(b, fam, 'health_path', 'family')}"
         row = {"health_url": url, "slots": _need(b, m, "slots", "model"),
                "served_ctx": _need(b, m, "served_ctx", "model"),

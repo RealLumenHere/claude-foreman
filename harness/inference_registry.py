@@ -107,9 +107,12 @@ class FleetInventory:
         rows = (line.split("\t") for line in out.splitlines() if line.strip())
         return {r[1]: r[0] for r in rows if len(r) >= 2}
 
-    def tailscale_ip(self, name):
-        rc, out = self._run("get", name, "network.tailscale_ip")
+    def get(self, name, key):
+        rc, out = self._run("get", name, key)
         return out.strip() if rc == 0 and out.strip() else None
+
+    def tailscale_ip(self, name):
+        return self.get(name, "network.tailscale_ip")
 
 
 class Finding:
