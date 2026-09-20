@@ -33,6 +33,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from action_gate import LoopTracker, is_permission_denial  # noqa: E402
+import masking  # noqa: E402  (wq#2275: transcript masking at read time)
 
 # v2 (wq#1436, BROKER_WIRING.md §2.5): adds `refused` and fills unreachable_paths /
 # inferred_needs on a spawn refusal, which v1 always wrote empty. Additive — every v1
@@ -450,13 +451,17 @@ _HARNESS_PREFIXES = ("INFRA_CRASH:", "WORK_BLOCKED:", "LIMIT_HIT:",
 
 
 def _load_transcript(session_id):
+    # wq#2275 (T6): the CLI's own transcript is written by the child, so it can't be
+    # masked at write time — mask at this read instead, so failure.json and every
+    # replay artefact derived here stays credential-free. run_child() already alarmed
+    # on the same frames when they streamed through stdout; no second alarm here.
     events = []
     for path in glob.glob(os.path.expanduser(
             f"~/.claude/projects/*/{session_id}.jsonl")):
         try:
             with open(path) as f:
                 for line in f:
-                    line = line.strip()
+                    line = masking.mask_text(line.strip())[0]
                     if line:
                         try:
                             events.append(json.loads(line))

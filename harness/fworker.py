@@ -63,6 +63,7 @@ import scratch_grant
 import agents_spec
 import fire_gate
 import charging
+import masking
 
 # wq#1332 (WORKER_EXEC_CAPABILITY_GAP.md §2.4): fleet_exec_policy.py lives in the
 # lumen-bin repo alongside the fleet-exec broker it backs, not in foreman — same
@@ -670,6 +671,40 @@ def ntfy(title, msg, priority="default"):
                         capture_output=True, text=True, timeout=10)
     except Exception:
         pass
+
+
+def mask_alarm(ticket_id, attempt, labels):
+    """wq#2275 (T6): a mask hit is an ALARM, not a save (instinct 4). The credential
+    already reached the model's context — CLI 2.1.233 has no pre-model rewrite lever
+    (research/SMARTCRUSHER_HOOK.md) — so the artefacts are clean but the token is
+    burned and must be rotated same-day. Page ntfy AND file a rotation ticket; both
+    best-effort so an alerting failure never takes down the attempt itself."""
+    labels = sorted(labels)
+    tag = ",".join(labels)
+    ntfy("foreman MASK HIT",
+         f"wq#{ticket_id} attempt {attempt}: {tag} credential(s) masked in child "
+         f"stream — token reached model context and is BURNED; rotate today",
+         priority="high")
+    try:
+        p = wq("add", "--lane", "fleet", "--pri", "1",
+               "--title", f"[rotation] burned credential in wq#{ticket_id} "
+                          f"transcript ({tag})",
+               "--detail", f"wq#2275 mask tripwire: mask-secrets pattern(s) {tag} "
+                           f"fired on wq#{ticket_id} attempt {attempt}'s stream-json. "
+                           f"Artefacts on disk are masked, but the value reached the "
+                           f"model context, so per instinct 4 it is burned. Identify "
+                           f"the credential (masked prefix is preserved in "
+                           f"{run_dir(ticket_id)} artefacts), rotate it today, and "
+                           f"close the leak path that printed it.",
+               "--no-probe", "rotation is a manual credential action; "
+                             "no deterministic liveness probe exists")
+        out = ((p.stdout or "") + (p.stderr or "")).strip()
+        if p.returncode != 0 and "DUPLICATE" not in out:
+            log(f"WARN: rotation ticket add failed for wq#{ticket_id}: {out[:200]}")
+        else:
+            log(f"MASK HIT wq#{ticket_id} attempt {attempt}: {tag} — rotation ticket filed")
+    except Exception as e:  # noqa: BLE001
+        log(f"WARN: rotation ticket add crashed for wq#{ticket_id}: {e!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -1767,6 +1802,7 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
     response_id = None
     killed_reason = None
     exit_code = None
+    mask_alarmed = set()  # wq#2275: pattern labels already alarmed this attempt
     start = time.time()
     deadline = start + wall_clock_s
     last_event = start
@@ -1814,8 +1850,15 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
                     buf = []
                     if raw.startswith("data:"):
                         last_event = time.time()
+                        # wq#2275 (T6): same pre-parse masking as run_child() — the
+                        # gateway stream feeds the identical artefact chain.
+                        payload, mask_hits = masking.mask_text(raw[len("data:"):].strip())
+                        new_hits = [h for h in mask_hits if h not in mask_alarmed]
+                        if new_hits:
+                            mask_alarmed.update(new_hits)
+                            mask_alarm(ticket_id, attempt, new_hits)
                         try:
-                            ev = json.loads(raw[len("data:"):].strip())
+                            ev = json.loads(payload)
                         except json.JSONDecodeError:
                             continue
                         raw_events.append(ev)
@@ -1898,6 +1941,7 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     # detection latency stays a fraction of the window instead of the flat 5s floor.
     poll_timeout = max(0.25, min(5, frame_gap_s, post_result_grace_s) / 4)
     first_frame_seen = first_frame_s is None
+    mask_alarmed = set()         # wq#2275: pattern labels already alarmed this attempt
 
     while True:
         now = time.time()
@@ -1951,6 +1995,15 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         last_event = time.time()
         if not line:
             continue
+        # wq#2275 (T6): mask BEFORE parse — raw_events/state and everything derived
+        # from them (attempt notes, episode store, failure.json, ntfy, PR text) only
+        # ever see the masked line. The model already saw the real value (no CLI
+        # lever rewrites a tool result), so a hit is an alarm, not a save.
+        line, mask_hits = masking.mask_text(line)
+        new_hits = [h for h in mask_hits if h not in mask_alarmed]
+        if new_hits:
+            mask_alarmed.update(new_hits)
+            mask_alarm(ticket_id, attempt, new_hits)
         try:
             frame = json.loads(line)
         except json.JSONDecodeError:
