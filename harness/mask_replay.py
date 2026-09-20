@@ -138,6 +138,14 @@ def corpus(ticket_id):
     "some tool printed this", where a snapshot names the file. Ordering it after the
     other three means it adds the values nothing else recorded, and re-attributes
     nothing.
+
+    wq#2318 is the case that needs the transcript. A snapshot of an edited file is the
+    PRE-image, so a value the worker WROTE is in none of the snapshots frozen before
+    its alarm — it lands in the next freeze, after it. Triaging that alarm by cutting
+    the corpus off at the alarm second scores zero and still does not mean the context
+    was clean: the Edit's new_string put the value there, and only the transcript
+    records it. Bracket such an alarm between the pre- and post-image of the file being
+    edited, and keep the transcript in the corpus.
     """
     items, run = {}, os.path.join(RUNS_ROOT, f"wq{ticket_id}")
     snaps = os.path.join(run, "snapshots")
