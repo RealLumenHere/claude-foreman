@@ -114,7 +114,7 @@ WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 # wq#617 orchestrator tier: routing (tuple assignment) + verify-pass filing.
 ORCH_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "orchestrator"))
-# wq#1183 pattern-C memory: episodic append + distilled-fact recall (memory/README.md).
+# wq#1183/wq#1635 memory: episodic append + archival commit (memory/README.md).
 MEMORY_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "memory"))
 ROUTER_CLI = os.environ.get("FOREMAN_ROUTER_CLI", os.path.join(ORCH_DIR, "router.py"))
 JUDGMENT_CLI = os.environ.get("FOREMAN_JUDGMENT_CLI", os.path.join(ORCH_DIR, "judgment.py"))
@@ -825,7 +825,7 @@ PROMPT_FORGE_DIR = os.path.normpath(os.path.join(HARNESS_DIR, "..", "prompt-forg
 
 
 def _memory_import(name):
-    """Import a memory/ module (episodic, recall) fail-open: fleet memory is
+    """Import a memory/ module (episodic) fail-open: fleet memory is
     strictly additive (wq#1183) — a missing or broken memory tree must never
     fail an attempt or a prompt build."""
     if MEMORY_DIR not in sys.path:
@@ -842,13 +842,27 @@ def _prompt_forge_import(name):
 
 
 def append_episode_event(ticket_id, event):
-    """wq#1183 episodic memory: append-only per-run log, the distiller's input.
+    """wq#1183 episodic memory: append-only per-run log.
     Best-effort by contract (memory/README.md failure posture)."""
     try:
         _memory_import("episodic").append_event(ticket_id, event,
                                                  runs_root=RUNS_ROOT)
     except Exception as e:
         log(f"episode append failed (non-fatal): {e!r}")
+
+
+def commit_episode_to_archive(ticket_id):
+    """wq#1635: at attempt end the episode reaches a store sessions actually
+    read — a deterministic digest committed to archival_notes via minerva's
+    lumen_episode.py (memoryd first, trust from the $WQ_AGENT lane claim).
+    episode.jsonl stays behind as raw evidence with a 30d sweep. Supersedes
+    the never-run memory/distill.py pipeline (now memory/attic/). Best-effort."""
+    try:
+        episodic = _memory_import("episodic")
+        episodic.commit_to_archive(ticket_id, runs_root=RUNS_ROOT)
+        episodic.sweep_episodes(runs_root=RUNS_ROOT)
+    except Exception as e:
+        log(f"episode archive commit failed (non-fatal): {e!r}")
 
 
 def assistant_text_tail(transcript_events, n=6, each_chars=1500):
@@ -867,28 +881,13 @@ def assistant_text_tail(transcript_events, n=6, each_chars=1500):
 
 
 def distilled_memory_block(ticket_id, ticket):
-    """wq#1183 recall: top-k distilled facts for the worker prompt prelude,
-    scoped to fleet + this ticket's repo when one is declared, plus (wq#1636)
-    subject-scoped live state for every subject the ticket's minerva notes
-    mention — the replacement for a worker re-running `claude_context.sh
-    --core` for the same facts. Each source is independently fail-open:
-    prompt assembly never depends on either the distilled-fact store or
-    minerva being reachable."""
+    """(wq#1636) subject-scoped live state for every subject the ticket's
+    minerva notes mention — the replacement for a worker re-running
+    `claude_context.sh --core` for the same facts. Fail-open: prompt assembly
+    never depends on minerva being reachable. (The wq#1183 distilled-fact
+    recall source was retired by wq#1635 — the fact store was never built, so
+    it only ever contributed an empty block.)"""
     blocks = []
-    try:
-        recall = _memory_import("recall")
-        scopes = {"fleet"}
-        repo = (ticket.get("repo") or "").strip()
-        if repo:
-            scopes.add(f"repo:{os.path.basename(repo)}")
-        lane = (ticket.get("lane") or "").strip()
-        if lane:
-            scopes.add(f"lane:{lane}")
-        block = recall.render_block(recall.top_facts(scopes=scopes))
-        if block:
-            blocks.append(block)
-    except Exception:
-        pass
     try:
         block = _prompt_forge_import("fleet_context").ticket_state_block(ticket_id)
         if block:
@@ -2658,9 +2657,9 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     write_usage_sidecar(ticket_id, attempt, usage_record)
 
     # wq#1183 episodic memory: one attempt_end event per attempt into the
-    # append-only per-run episode log. This — not the attempt record — is what
-    # memory/distill.py reads, so it carries the narrative (result text +
-    # assistant tail) alongside the mechanical outcome. Best-effort.
+    # append-only per-run episode log. It carries the narrative (result text +
+    # assistant tail) alongside the mechanical outcome — the input the wq#1635
+    # archival commit digests from. Best-effort.
     append_episode_event(ticket_id, {
         "type": "attempt_end", "attempt": attempt, "worker_id": worker_id,
         "lane": ticket.get("lane"), "title": ticket.get("title"),
@@ -2673,6 +2672,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
                         if isinstance(state.result_text, str) else "")[:4000],
         "assistant_tail": assistant_text_tail(events),
     })
+    commit_episode_to_archive(ticket_id)
 
     # wq#749: reconcile()'s SUCCESS/DEGRADED_SUCCESS branch calls `wq done` — wrong
     # for a ticket the worker itself already blocked. Terminal here, no retry, no
