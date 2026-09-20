@@ -1,0 +1,11 @@
+id: p2_ports
+kind: probe-build
+test_cmd: python3 -m unittest discover -s tests -q
+protected: [tests/test_probe.py, data/ss.txt]
+prompt: |
+  Build a small probe. Create `probe_ports.py` in the repo root. Usage:
+  `python3 probe_ports.py data/ss.txt`. The file is `ss -ltn` output. Print one line of JSON
+  (`json.dumps`): an object with `"ports"` (sorted list of unique listening port numbers,
+  ints) and `"loopback_only"` (sorted list of ports that are bound only to loopback,
+  127.0.0.1 or [::1], and to no other address). Standard library only.
+  Check with `python3 -m unittest discover -s tests -q`.

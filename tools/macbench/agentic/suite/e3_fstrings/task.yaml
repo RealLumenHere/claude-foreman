@@ -1,0 +1,8 @@
+id: e3_fstrings
+kind: mechanical-edit
+test_cmd: python3 -m unittest discover -s tests -q
+protected: [tests/test_messages.py]
+prompt: |
+  In `pkg/messages.py`, convert every old-style `%` string formatting expression to an
+  f-string. Behaviour must not change: every function returns exactly the same text as
+  before. Check your work with `python3 -m unittest discover -s tests -q`.

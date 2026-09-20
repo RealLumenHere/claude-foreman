@@ -1,0 +1,83 @@
+# Seed matrix (wq#2246). Order = cheapest information first. Replace with the rows from
+# research/MAC_CPU_MODEL_SHORTLIST.md when that lands; the runner does not care where
+# the rows came from. Rows run top to bottom and resume across restarts.
+#
+# flags: threads, ctx (TOTAL context; llama-server splits it over `slots`), slots, batch,
+# kv_type (f16|q8_0|q4_0), thinking (off = chat_template_kwargs enable_thinking=false /
+# ollama think=false), extra_args (llama-server passthrough, e.g. flash attention).
+# ollama takes threads/ctx/batch only: kv_type and slots are server-wide there.
+#
+# Not verified from the worker sandbox (no ssh): the isis llama-qwen36.service flags and the
+# GGUF blob path. Slots/ctx below follow research/QWEN36_LOCAL_WORKER_SERVING.md s2.3; copy
+# `--model` and any extra flags from the real unit (`systemctl cat llama-qwen36.service` on
+# isis) into `gguf:` / `extra_args:` before the first run. A llama-server row whose GGUF is
+# missing and has no `fetch` is recorded as row_skipped, never guessed at.
+defaults:
+  llama-server: {threads: 12, ctx: 65536, slots: 2, kv_type: f16, thinking: off}
+  ollama: {threads: 12, ctx: 32768, thinking: off}
+
+rows:
+  - id: qwen36-35b-a3b-q4km-t12
+    model: qwen3.6-35b-a3b
+    quant: Q4_K_M
+    engine: llama-server
+    size_gb: 21.7
+    gguf: qwen3.6-35b-a3b-Q4_K_M.gguf      # relative to the node's models_dir, or absolute
+    variants: {Q4_0: qwen3.6-35b-a3b-Q4_0.gguf, Q8_0: qwen3.6-35b-a3b-Q8_0.gguf}
+    flags: {threads: 12}
+    agentic: {model: qwen36-local}         # gateway alias, when one points at this row
+
+  - id: qwen36-35b-a3b-q4km-t20
+    model: qwen3.6-35b-a3b
+    quant: Q4_K_M
+    engine: llama-server
+    size_gb: 21.7
+    gguf: qwen3.6-35b-a3b-Q4_K_M.gguf
+    variants: {Q4_0: qwen3.6-35b-a3b-Q4_0.gguf, Q8_0: qwen3.6-35b-a3b-Q8_0.gguf}
+    flags: {threads: 20}
+
+  - id: qwen3-coder-30b-a3b-q4km
+    model: qwen3-coder
+    quant: Q4_K_M
+    engine: ollama
+    tag: qwen3-coder:30b
+    size_gb: 19
+    variants: {Q4_0: "qwen3-coder:30b-a3b-q4_0", Q8_0: "qwen3-coder:30b-a3b-q8_0"}
+
+  - id: gpt-oss-20b-mxfp4
+    model: gpt-oss
+    quant: MXFP4
+    engine: ollama
+    tag: gpt-oss:20b
+    size_gb: 14
+
+  - id: gemma4-26b-a4b-q4
+    model: gemma4-26b-a4b
+    quant: Q4
+    engine: ollama
+    tag: gemma4:26b                        # tag NOT verified: a wrong tag fails the pull -> row_error
+    size_gb: 17
+
+  # "the same best row at Q4_0 and Q8_0": resolved at run time to the best measured
+  # candidate above, cloned onto each quant listed in that row's `variants`.
+  - id: quant-sweep
+    sweep:
+      of: [qwen36-35b-a3b-q4km-t12, qwen36-35b-a3b-q4km-t20, qwen3-coder-30b-a3b-q4km,
+           gpt-oss-20b-mxfp4, gemma4-26b-a4b-q4]
+      quants: [Q4_0, Q8_0]
+      metric: decode_tps
+
+  # dense controls (already measured: 13.6/11 and 7.4/3.8 tok/s prefill/decode)
+  - id: llama31-8b-q4km
+    model: llama3.1
+    quant: Q4_K_M
+    engine: ollama
+    tag: llama3.1:8b
+    size_gb: 5
+
+  - id: qwen3-14b-q4km
+    model: qwen3
+    quant: Q4_K_M
+    engine: ollama
+    tag: qwen3:14b
+    size_gb: 9.3

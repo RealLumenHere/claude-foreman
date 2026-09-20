@@ -1,0 +1,8 @@
+id: e2_default
+kind: mechanical-edit
+test_cmd: python3 -m unittest discover -s tests -q
+protected: [tests/test_default.py]
+prompt: |
+  The default request timeout is 30 seconds. Change it to 45 seconds. The number appears
+  in the code (more than one place) and in the README; update every place so they agree.
+  Check your work with `python3 -m unittest discover -s tests -q`.

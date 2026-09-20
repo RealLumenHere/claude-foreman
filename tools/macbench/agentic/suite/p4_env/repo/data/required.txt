@@ -1,0 +1,5 @@
+# required environment
+DATABASE_URL
+API_KEY
+
+SECRET_TOKEN

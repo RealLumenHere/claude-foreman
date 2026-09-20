@@ -1,0 +1,10 @@
+id: p1_disk
+kind: probe-build
+test_cmd: python3 -m unittest discover -s tests -q
+protected: [tests/test_probe.py, data/df.txt]
+prompt: |
+  Build a small probe. Create `probe_disk.py` in the repo root. Usage:
+  `python3 probe_disk.py data/df.txt`. The file is `df -P` output. Print one line of JSON
+  (`json.dumps`): a list of objects `{"mount": <Mounted on>, "use_pct": <int>}` for every
+  filesystem whose Capacity is 80% or more, sorted by use_pct descending, ties by mount
+  ascending. Standard library only. Check with `python3 -m unittest discover -s tests -q`.

@@ -1,0 +1,32 @@
+# Bench targets. `ssh` is user@host for node commands (null = run on this host).
+# Serving-group membership is NOT listed here: it is read from dispatcher/config.json
+# (local_backends.local-worker.group) so it cannot drift.
+#
+# Facts verified 2026-09-20: hathor/nephthys/isis host+user from the wq#2127 sampler,
+# wadjet host from lumen_state via the wq#2246 orchestrator note. Not verified: the ssh
+# user for wadjet (assumed to follow the <node>@<ip> pattern - the preflight ssh probe
+# fails loudly if wrong), models_dir and llama_server_bin per node (df always includes /
+# so the 30 GB guard still holds when models_dir is null), and plug ids.
+nodes:
+  wadjet:
+    host: 100.116.217.15          # LAN 192.168.8.173; MacPro6,1; no smart plug
+    ssh: wadjet@100.116.217.15
+    models_dir: null
+    plug: null
+    # RAPL PL1 was lowered to 45 W on 2026-07-10: set it back to 75 W for parity before
+    # benching (macbench never changes it - no power actions).
+  isis:
+    host: 100.100.129.24
+    ssh: isis@100.100.129.24
+    models_dir: null
+    plug: null
+  hathor:
+    host: 100.80.71.13
+    ssh: hathor@100.80.71.13
+    models_dir: null
+    plug: null
+  nephthys:
+    host: 100.98.74.87
+    ssh: nephthys@100.98.74.87
+    models_dir: null
+    plug: null

@@ -1,0 +1,11 @@
+id: p3_logs
+kind: probe-build
+test_cmd: python3 -m unittest discover -s tests -q
+protected: [tests/test_probe.py, data/app.log]
+prompt: |
+  Build a small probe. Create `probe_logs.py` in the repo root. Usage:
+  `python3 probe_logs.py data/app.log`. Each line is `<ISO timestamp> <LEVEL> <message>`.
+  Count lines whose LEVEL field is exactly ERROR (not just mentioning the word) per hour.
+  Print one line per hour that has at least one, in chronological order, formatted as
+  `<YYYY-MM-DDTHH> <count>` (for example `2026-09-01T13 2`). Standard library only.
+  Check with `python3 -m unittest discover -s tests -q`.

@@ -1,0 +1,9 @@
+id: e4_thread_param
+kind: mechanical-edit
+test_cmd: python3 -m unittest discover -s tests -q
+protected: [tests/test_pipeline.py]
+prompt: |
+  Add a keyword-only parameter `prefix` (a string, default "") to `run` in
+  `pkg/pipeline.py` and thread it down through `stage_a` and `stage_b` to `emit`, so every
+  emitted line starts with the prefix. With the default, behaviour is unchanged.
+  Check your work with `python3 -m unittest discover -s tests -q`.

@@ -1,0 +1,12 @@
+id: p4_env
+kind: probe-build
+test_cmd: python3 -m unittest discover -s tests -q
+protected: [tests/test_probe.py, data/required.txt, data/env.json, data/env_ok.json]
+prompt: |
+  Build a small probe. Create `probe_env.py` in the repo root. Usage:
+  `python3 probe_env.py data/required.txt data/env.json`. The first file lists required
+  variable names, one per line (blank lines and lines starting with # are ignored). The
+  second is a JSON object of the environment. A variable is missing if it is absent or its
+  value is the empty string. If any are missing, print them one per line, sorted, and exit
+  with status 1. Otherwise print `ok` and exit 0. Standard library only.
+  Check with `python3 -m unittest discover -s tests -q`.

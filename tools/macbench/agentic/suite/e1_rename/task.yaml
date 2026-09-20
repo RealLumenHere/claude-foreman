@@ -1,0 +1,8 @@
+id: e1_rename
+kind: mechanical-edit
+test_cmd: python3 -m unittest discover -s tests -q
+protected: [tests/test_rename.py]
+prompt: |
+  Rename the function `fetch_row` to `load_row` everywhere in this repo: the definition
+  and every caller. Do not leave a compatibility alias behind. `fetch_many` keeps its name.
+  Check your work with `python3 -m unittest discover -s tests -q`.
