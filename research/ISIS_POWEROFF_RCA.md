@@ -242,6 +242,35 @@ python3 ops/memgrep.py /home/lumen/glance/assets/plugs.json isis 0
 Sensor index → SMC key is not stable across kernels; `smc_probe.py labels <node>` resolves it
 before every read rather than hardcoding `temp98` = `Te0T`.
 
+## 8a. P6 resolved — wq#2156 (2026-09-20)
+
+The P6 guard bug is fixed in lumen-bin PR #115
+(http://100.121.17.5:3000/lumen/lumen-bin/pulls/115, merged; `/home/lumen/bin`
+fast-forwarded to 15f15b6, so the live timer runs the fix). `guard_blocked()` in
+`power-remediate` compared the whole `remediation_hold` value against the literal
+cleared set, so isis's prose fact `"off - cleared 2026-09-18: isis is the WARM
+standby LLM by design, MUST stay on+ready to serve the fleet..."` read as an
+active hold and every isis tick since 09-18 was guard-blocked
+(`/home/lumen/var/power-remediate/power-remediate.log` lines 545-546, 553-554).
+
+The guard now judges only the leading word of the value, per the ticket's
+preference for fixing the guard over normalising the fact (the prose-valued
+pattern will recur on other nodes):
+
+```python
+hold = (facts.get("remediation_hold") or "").strip().lower()
+first_word = re.split(r"[^a-z_]+", hold, 1)[0] if hold else ""
+if hold and first_word not in ("off", "clear", "cleared", "none"):
+    return True, f"remediation_hold={facts['remediation_hold']!r}"
+```
+
+`off`/`clear`/`cleared`/`none` as the first word means no hold; any other first
+word (`on`, and notably `offline` — token split, not prefix match) still blocks,
+fail-safe toward holding. Four regression cases were added to
+`power-remediate selftest`, including isis's literal fact value; live selftest
+after the fast-forward: 0 FAIL. isis's fact value itself is left as-is — the
+prose carries the warm-standby rationale and the guard now reads it correctly.
+
 ## 9. Method notes
 
 - No load test was run on isis. It was not needed: netdata's retained series already contain the
