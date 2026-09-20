@@ -25,10 +25,17 @@ regenerated manifest is a separate decision and nothing here makes it.
    `array_missing|undeclared|level_changed|members_changed` (arrays keyed by md-UUID; the
    mdadm and lsblk UUID forms normalize to the same value), and
    `mount_missing|undeclared|fstype_changed|uuid_changed|device_missing`.
-4. **FLEET_MAP.md.** It flags `fleet_map_stale` when the newest open fact in the store
-   is more than 2 days newer than the file's mtime, and `fleet_map_value_missing` when
-   the map names a node but not that node's current `tailscale_ip`/`lan_ip`. The store
-   value's IP token is used, since values carry provenance prose.
+4. **FLEET_MAP.md.** It flags `fleet_map_stale` when the newest open
+   `tailscale_ip`/`lan_ip` fact is more than 2 days newer than the file's mtime, and
+   `fleet_map_value_missing` when the map names a node but not that node's current
+   `tailscale_ip`/`lan_ip`. The store value's IP token is used, since values carry
+   provenance prose. Both are scoped to the predicates the map actually reconciles —
+   measured against the whole store (wq#1800) the lag tracked unrelated churn and the
+   map read stale forever. A subject whose newest open `status` starts with
+   retired/removed/superseded/decommissioned/torn-down is skipped: its last IP stays
+   open in the store forever, so otherwise the map is asked to re-adopt dead hardware
+   (wq#1800: `p12`, a plug SUPERSEDED since 2026-08-07, matched inside prose).
+   `OFFLINE`/`inactive` are not retirement — a node that is off still belongs.
 5. **Raise (`--apply`, what the timer runs).** A drift set it hasn't seen before
    produces one aq row (`aq add storage-manifest-drift drift …`) and one build-lane wq
    ticket with a fixed title. The same drift set is not re-raised. wq also refuses a

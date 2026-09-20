@@ -306,6 +306,42 @@ def test_ip_prefix_does_not_count_as_carried(tmp_path):
     assert kinds(findings) == [("fleet_map_value_missing", "tailscale_ip")]
 
 
+def test_retired_subject_missing_ip_is_not_drift(tmp_path):
+    # wq#1800: p12 is a smart plug, SUPERSEDED since 2026-08-07, matched only
+    # inside a prose plug list. be3600 is OFFLINE — down, not gone, still roster.
+    db = tmp_path / "m.db"
+    make_db(db, [
+        ("1", "p12", "lan_ip", "192.168.8.111", "2026-07-16T00:00:00Z", None),
+        ("2", "p12", "status", "SUPERSEDED", "2026-08-07T00:00:00Z", None),
+        ("3", "be3600", "lan_ip", "192.168.0.1 (grade B)", "2026-09-10T00:00:00Z", None),
+        ("4", "be3600", "status", "OFFLINE", "2026-09-10T00:00:00Z", None),
+        ("5", "pbox", "lan_ip", "192.168.8.50", "2026-07-01T00:00:00Z", None),
+        ("6", "pbox", "status", "decommissioned-unstable", "2026-08-01T00:00:00Z", None),
+    ])
+    fmap = tmp_path / "FLEET_MAP.md"
+    fmap.write_text("| be3600 | VERIFY |\np1 khepri + p12 wadjet unmonitored\npbox\n")
+    findings, _ = smd.check_fleet_map(str(fmap), str(db))
+    assert [(f["node"], f["live"]) for f in findings
+            if f["kind"] == "fleet_map_value_missing"] == [("be3600", "192.168.0.1")]
+
+
+def test_stale_check_ignores_non_roster_predicate_churn(tmp_path):
+    # wq#1800: the newest open fact in the live store was
+    # `fleet-workstream frank_todo_order`, which the map never carries.
+    db = tmp_path / "m.db"
+    make_db(db, [
+        ("1", "bes", "tailscale_ip", "100.64.0.7", "2026-09-01T00:00:00+00:00", None),
+        ("2", "fleet-workstream", "frank_todo_order", "x", "2026-09-20T00:00:00+00:00", None),
+    ])
+    fmap = tmp_path / "FLEET_MAP.md"
+    fmap.write_text("bes 100.64.0.7\n")
+    ts = smd.parse_ts("2026-09-05T00:00:00+00:00").timestamp()
+    os.utime(fmap, (ts, ts))
+    findings, info = smd.check_fleet_map(str(fmap), str(db))
+    assert info["store_newest"] == "2026-09-01T00:00:00+00:00"
+    assert findings == []
+
+
 # ------------------------------------------------------------- raise + state
 
 @pytest.fixture
