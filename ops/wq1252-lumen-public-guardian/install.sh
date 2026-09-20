@@ -13,6 +13,22 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/services/lumen-public-guardian
 SECRET=/home/lumen/.secrets/lpg-probe-hmac
 
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
+# The sudoers grant is root-only 0440, unreadable to lumen, so it is not checked here.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  for f in guardian.py checks_email.py checks_stream.py schema_parse.py config.json; do
+    vfile "$SRC/$f" "$DEST/$f"
+  done
+  vfile "$SRC/mail-probe/wrangler.toml" "$DEST/mail-probe/wrangler.toml"
+  vfile "$SRC/mail-probe/src/worker.js" "$DEST/mail-probe/src/worker.js"
+  vunit_file "$SRC/lumen-public-guardian.service" /etc/systemd/system/lumen-public-guardian.service
+  vunit_file "$SRC/lumen-public-guardian.timer" /etc/systemd/system/lumen-public-guardian.timer
+  venabled lumen-public-guardian.timer
+  vactive lumen-public-guardian.timer
+  vdone
+fi
+
 echo "== code -> $DEST =="
 install -d -o lumen -g lumen -m 755 "$DEST" "$DEST/mail-probe/src" \
         /home/lumen/logs /home/lumen/.secrets
