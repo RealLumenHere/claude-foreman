@@ -35,6 +35,29 @@ AQ_SOURCE = "read-dir-sweep"
 # file names that are a credential by convention regardless of content
 BASENAME_GLOBS = ("*.env", ".env*", "*.token", "*.key", "*.pem", "id_*", "*.p12", "*.pfx",
                   "*.kdbx", ".netrc", ".git-credentials", "*.secret", "*.secrets")
+# wq#2115: the label half of `kv_secret` is shape-based, not an enumerated keyword list.
+# A human pasting a credential dump labels it however the source service's docs print it —
+# `Signing Secret:`, `Verifaction Token:` (sic) — so any `<word> secret|token|key` counts,
+# and the words may be separated by a SPACE, not only [_-]. An exact list missed 3 live
+# credentials on the same line it caught one on (messenger leak, wq#1483).
+KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd)"
+# one qualifier word, ended by a separator OR a camelCase hump (`client_`, `Signing `,
+# `client` of `clientSecret`) — the hump test is case-SENSITIVE inside the (?i) pattern,
+# which is what keeps `monkey:`/`hockey:` out while letting `apiKey:` in. Two letters
+# minimum: a one-letter qualifier is an English article, and `a key: …`/`not a token: …`
+# prose was 79 of the 93 lines this rule newly matched across the worker add-dirs.
+KV_WORD = r"[A-Za-z][A-Za-z0-9]{1,20}(?:[ _-]{1,2}|(?-i:(?=[A-Z])))"
+# a public key is not a credential, and infra dirs are full of them
+KV_NOT_PUBLIC = r"(?!pub(?:lic)?[ _-]{0,2}key\b)"
+# bare `key` is deliberately absent here: `key:` alone is ordinary YAML/JSON, it needs a
+# qualifier word in front of it (`api key`, `signing key`) to read as a credential label.
+KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer)"
+KV_LABEL = (r"(?:" + KV_WORD + r")?" + KV_NOT_PUBLIC + KV_WORD + KV_NOUN + r"|" + KV_BARE)
+# an env-var reference or a path to a key file is a POINTER to a credential, not one:
+# `secret = process.env.X`, `master key: /home/lumen/.ssh/id_ed25519`. The key file
+# itself is caught by BASENAME_GLOBS where it lives.
+KV_NOT_A_CREDENTIAL = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
+                       r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
 # content shapes; first match per line wins. `kv_secret` needs a value of 20+ chars so
 # `api_key: os.environ/X` (LiteLLM's env-ref form) and `api_key: sk-none` do not fire.
 PATTERNS = (
@@ -45,9 +68,8 @@ PATTERNS = (
     ("slack", re.compile(r"\b(?:xox[bpsa]|xapp)-[A-Za-z0-9-]{20,}")),
     ("privkey", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY")),
     ("kv_secret", re.compile(
-        r"(?i)\b(?:api[_-]?key|secret[_-]?key|client[_-]?secret|password|passwd|"
-        r"auth[_-]?token|access[_-]?token|api[_-]?token|bearer)\b\s*[:=]\s*"
-        r"['\"]?(?!os\.environ)(?!\$\{?[A-Z_])(?!<)(?!\*{3})[A-Za-z0-9_\-./+]{20,}")),
+        r"(?i)\b(?:" + KV_LABEL + r")\b\s*[:=]\s*"
+        r"['\"]?" + KV_NOT_A_CREDENTIAL + r"[A-Za-z0-9_\-./+]{20,}")),
 )
 SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
                        "site-packages", ".cache"})
@@ -190,7 +212,12 @@ def _main(argv=None):
         aq_alert(new_hits)
         total = sum(len(r.get("hits") or []) for r in report.values())
         print(f"read_dir_sweep: wrote {RUNTIME_PATH} — {total} hits, {len(new_hits)} new")
-        return 1 if total else 0
+        # wq#2115: a FINDING is not a FAILURE. This mode runs as a systemd oneshot, and
+        # a hit-driven exit 1 marks lumen-read-dir-sweep.service failed and skips its
+        # ExecStartPost cron stamp — i.e. a found secret looks exactly like a broken
+        # sweep. The finding channel is the runtime payload + aq; keep the exit code for
+        # the sweep genuinely not running. Interactive/CI mode below still exits 1.
+        return 0
     roots = list(a.roots)
     if a.policy:
         roots += policy_read_dirs()

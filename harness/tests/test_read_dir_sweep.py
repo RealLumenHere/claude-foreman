@@ -53,11 +53,41 @@ def test_credential_basenames_are_hits(tmp_path, name):
     ("-----BEGIN PRIVATE KEY-----", "privkey"),
     ('"Token: xapp-1-A0B0BRS436F-1234567890123-abcdefghij"', "slack"),
     ("password: Correct-Horse-Battery-Staple-2026", "kv_secret"),
+    # wq#2115: the label is whatever the source service's docs print — space-separated
+    # compounds and synonyms the old fixed keyword list did not enumerate. All three of
+    # these sat on the same messenger line (wq#1483) the old pattern only half-caught.
+    ("Client Secret: 8f7e6d5c4b3a2918071625344352", "kv_secret"),
+    ("Signing Secret: 0123456789abcdef0123456789ab", "kv_secret"),
+    ("Verifaction Token: abcdefghijklmnopqrstuvwx", "kv_secret"),
+    ("DB Password = hunter2-hunter2-hunter2-hunter2", "kv_secret"),
+    ("refresh-token: 1zz0gLongLookingRefreshTokenValue", "kv_secret"),
+    ("clientSecret: 8f7e6d5c4b3a2918071625344352", "kv_secret"),
+    ("PrivateKey = aGVsbG8gd29ybGRhYmNkZWZnaGlqaw", "kv_secret"),
 ])
 def test_content_shapes(tmp_path, line, kind):
     _write(tmp_path, "f.txt", line + "\n")
     hits, _ = rds.sweep_root(str(tmp_path))
     assert [h[2] for h in hits] == [kind]
+
+
+@pytest.mark.parametrize("line", [
+    "key: value-that-is-quite-long-here",       # bare `key` is ordinary YAML, not a label
+    "max_tokens: 40960000000000000000000000",   # `token` only inside a longer word
+    "The secret to good code: write tests for every branch of it",
+    "monkey: abcdefghijklmnopqrstuvwxyz",       # no separator, no camel hump
+    "PublicKey = aGVsbG8gd29ybGRhYmNkZWZnaGlqaw",
+    "public_key: AAAAB3NzaC1yc2EAAAADAQABAAABgQ",
+    "pub_key = serialization.load_pem_public_key",
+    "Fleet master key: /home/lumen/.ssh/id_ed25519",   # a path to the key, not the key
+    "const secret = env.MAIL_PROBE_SECRET_VALUE;",
+    "secret = process.env.MAIL_PROBE_SECRET_VAL",
+    "api_key = os.getenv('OPENROUTER_API_KEY_X')",
+    "sed -i 's|<a key: bacTIkbOHNwlyQEsTVmT|x|'",     # one-letter qualifier is prose
+])
+def test_broadened_label_does_not_fire_on_ordinary_lines(tmp_path, line):
+    _write(tmp_path, "f.txt", line + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
 
 
 def test_binary_and_git_skipped(tmp_path):
@@ -117,6 +147,18 @@ def test_aq_alert_calls_aq_add_per_new_hit(tmp_path, monkeypatch):
     rds.aq_alert(new_hits, aq_bin=str(fake_aq))
     assert len(calls) == 1
     assert calls[0][:3] == [str(fake_aq), "add", rds.AQ_SOURCE]
+
+
+def test_write_runtime_mode_exits_zero_on_a_hit(tmp_path, monkeypatch):
+    """wq#2115: a finding is not a failure — a hit-driven exit 1 would mark
+    lumen-read-dir-sweep.service failed and skip its cron stamp every day."""
+    root = tmp_path / "root"
+    _write(root, "prod.env", "nothing\n")
+    monkeypatch.setattr(rds, "RUNTIME_PATH", str(tmp_path / "runtime" / "sweep.json"))
+    monkeypatch.setattr(rds, "AQ_BIN", str(tmp_path / "no-aq"))
+    monkeypatch.setattr(rds, "policy_read_dirs", lambda *a, **k: [str(root)])
+    assert rds._main(["--write-runtime"]) == 0
+    assert rds._main([str(root)]) == 1  # interactive mode still exits 1 on hits
 
 
 def test_aq_alert_noop_without_new_hits_or_binary(tmp_path, monkeypatch):
