@@ -37,6 +37,7 @@ credentials:
     probe: cred_alive(/home/lumen/.secrets/tailscale-api.key, https://api.tailscale.com/api/v2/tailnet/-/devices)
   cf-dns-edit:
     path: /home/lumen/.secrets/cf-dns-edit.token
+    token_type: user  # user-owned: /user/tokens/verify answered 200 (2026-09-07)
     scope: Cloudflare Zone DNS Edit (lumennode.uk)
     verify_url: https://api.cloudflare.com/client/v4/user/tokens/verify
     scheme: bearer
@@ -44,6 +45,7 @@ credentials:
     probe: cred_alive(/home/lumen/.secrets/cf-dns-edit.token, https://api.cloudflare.com/client/v4/user/tokens/verify)
   cf-email-routing:
     path: /home/lumen/.secrets/cf-email-routing.token
+    token_type: user  # user-owned: /user/tokens/verify answered 200 (2026-09-07)
     scope: Cloudflare Email Routing Addresses+Rules Edit (was listed PENDING in claude_credentials.md — it exists and verifies)
     verify_url: https://api.cloudflare.com/client/v4/user/tokens/verify
     scheme: bearer
@@ -51,11 +53,21 @@ credentials:
     probe: cred_alive(/home/lumen/.secrets/cf-email-routing.token, https://api.cloudflare.com/client/v4/user/tokens/verify)
   cf-deploy:
     path: /home/lumen/mailbot/.cf_deploy_token
-    scope: Cloudflare Workers Scripts:Edit + D1:Edit (mailbot deploy; every E1-schema/E1-version heal in LUMEN_PUBLIC_RUNBOOK.md:176 shells wrangler with this token)
-    verify_url: https://api.cloudflare.com/client/v4/user/tokens/verify
+    token_type: account  # wq#2109: an ACCOUNT-owned token. /user/tokens/verify 401s for these
+    scope: Cloudflare Workers Scripts:Edit on account 3f413ce0… (mailbot deploy/rollback, LUMEN_PUBLIC_RUNBOOK.md:84). NOT D1 — see scope_probes.d1_edit
+    verify_url: https://api.cloudflare.com/client/v4/accounts/3f413ce08c3163f99984a78720fa8b97/tokens/verify
     scheme: bearer
-    last_verified: 2026-09-20  # DEAD — 401 Invalid API Token (wq#2105); Frank re-mint queued as wq#2106
-    probe: cred_alive(/home/lumen/mailbot/.cf_deploy_token, https://api.cloudflare.com/client/v4/user/tokens/verify)
+    last_verified: 2026-09-20  # ALIVE — account verify 200 status=active; workers/scripts/lumen-mailbot 200 (wq#2109)
+    probe: cred_alive(/home/lumen/mailbot/.cf_deploy_token, https://api.cloudflare.com/client/v4/accounts/3f413ce08c3163f99984a78720fa8b97/tokens/verify)
+    scope_probes:
+      # A token verify says the token lives, never which scopes it carries. The E1-schema
+      # heal (LUMEN_PUBLIC_RUNBOOK.md:41,48-49) shells `wrangler d1 export` +
+      # `d1 migrations apply --remote`, so D1 is a separate liveness fact and gets its own
+      # probe against the lumen-mail database (wrangler.toml d1_databases.database_id).
+      # 2026-09-20: STILL_BLOCKED, 401 code 10000 (no D1 scope) — this, not a dead token,
+      # is why the wq#1517 heal reported "backup failed / migrations NOT applied". Frank
+      # adds D1:Edit under wq#2106; this probe closes it.
+      d1_edit: cred_alive(/home/lumen/mailbot/.cf_deploy_token, https://api.cloudflare.com/client/v4/accounts/3f413ce08c3163f99984a78720fa8b97/d1/database/06f40caf-79a6-4d70-9e4b-d036d58cdb00)
   cerebras:
     path: /home/lumen/agent/.env  # CEREBRAS_API_KEY
     scope: Cerebras inference (gpt-oss-120b judge rung)
@@ -95,9 +107,15 @@ bindings:
   843: json_gte(/home/lumen/foreman/dispatcher/config.json, cloud_ceiling, 5)
   855: service_active(fleet-update-check.timer@lumen)
   1008: path_exists(/home/lumen/secrets/reddit.env)
-  # wq#2105: was path_exists(), which stayed SATISFIED straight through the token's
-  # silent death — a no-expiry API token fails a file-existence check open forever.
-  1269: cred_alive(/home/lumen/mailbot/.cf_deploy_token, https://api.cloudflare.com/client/v4/user/tokens/verify)
+  # wq#2105: was path_exists(), which stayed SATISFIED straight through anything that
+  # could happen to the token — a no-expiry API token fails a file-existence check open
+  # forever. wq#2109: the verify URL must match the token type; this one is account-owned,
+  # so /user/tokens/verify 401s on a perfectly live token (that 401 is what made wq#2105
+  # call it dead). 1269 closed on its Workers half; its D1 half is carried by 2106 below.
+  1269: cred_alive(/home/lumen/mailbot/.cf_deploy_token, https://api.cloudflare.com/client/v4/accounts/3f413ce08c3163f99984a78720fa8b97/tokens/verify)
+  # wq#2106 re-scoped by wq#2109: not a re-mint (the token is alive) but "add D1:Edit".
+  # Satisfied the moment the token can read the lumen-mail database.
+  2106: cred_alive(/home/lumen/mailbot/.cf_deploy_token, https://api.cloudflare.com/client/v4/accounts/3f413ce08c3163f99984a78720fa8b97/d1/database/06f40caf-79a6-4d70-9e4b-d036d58cdb00)
   1338: pr_merged(lumen/mailbot, 3)
   1344: pr_merged(lumen/claude-foreman, 186, closed)
   1358: pr_merged(lumen/mailbot, 5)

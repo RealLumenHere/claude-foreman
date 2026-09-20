@@ -96,9 +96,17 @@ def _sh(argv, timeout=SSH_TIMEOUT_S, cwd=None):
 # probes — each returns (verdict, detail); detail never contains a secret value
 # ---------------------------------------------------------------------------
 
+CF_USER_VERIFY = "https://api.cloudflare.com/client/v4/user/tokens/verify"
+
+
 def cred_alive(path, verify_url, scheme="bearer"):
     """Credential file present AND verify_url answers 2xx with it. scheme is the
-    Authorization prefix: bearer (CF, TS, GitHub PATs all accept it) or token."""
+    Authorization prefix: bearer (CF, TS, GitHub PATs all accept it) or token.
+
+    The verify URL must match the token's type. Cloudflare's /user/tokens/verify only
+    knows user-owned tokens and answers 401 "Invalid API Token" for a live account-owned
+    one (wq#2105 read that 401 as a dead token and paged Frank for a re-mint), so a 401
+    from that endpoint carries the account-endpoint hint rather than a bare rejection."""
     if not os.path.exists(path):
         return STILL_BLOCKED, f"{path} missing"
     tok = _read_secret(path)
@@ -109,7 +117,10 @@ def cred_alive(path, verify_url, scheme="bearer"):
     if 200 <= status < 300:
         return SATISFIED, f"{os.path.basename(path)} present, verify {status}"
     if status in (401, 403):
-        return STILL_BLOCKED, f"{os.path.basename(path)} rejected ({status})"
+        hint = (" — if this is an account-owned token, verify it at "
+                "/accounts/<account_id>/tokens/verify (wq#2109)"
+                if verify_url == CF_USER_VERIFY else "")
+        return STILL_BLOCKED, f"{os.path.basename(path)} rejected ({status}){hint}"
     return UNKNOWN, f"verify http {status}"
 
 

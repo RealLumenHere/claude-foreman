@@ -168,6 +168,22 @@ def test_pr_merged_probe(monkeypatch, tmp_path):
     assert liveness.run("pr_merged", "a/b, 1, merged, bitbucket")[0] == liveness.UNKNOWN
 
 
+def test_cred_alive_names_the_account_endpoint_on_a_user_verify_401(monkeypatch, tmp_path):
+    """wq#2109: a 401 from Cloudflare's user-token endpoint is as likely to mean
+    'account-owned token, wrong endpoint' as 'dead token' — wq#2105 read it as death and
+    paged Frank for a re-mint of a live token. The detail has to name the alternative."""
+    tok = tmp_path / "cf.token"; tok.write_text("account-owned-secret")
+    monkeypatch.setattr(liveness, "_http", lambda *a, **k: (401, '{"code": 1000}'))
+    v, d = liveness.cred_alive(str(tok), liveness.CF_USER_VERIFY)
+    assert v == liveness.STILL_BLOCKED
+    assert "/accounts/<account_id>/tokens/verify" in d and "account-owned-secret" not in d
+
+    acct = "https://api.cloudflare.com/client/v4/accounts/abc/tokens/verify"
+    assert "accounts/<account_id>" not in liveness.cred_alive(str(tok), acct)[1]
+    monkeypatch.setattr(liveness, "_http", lambda *a, **k: (200, "{}"))
+    assert liveness.cred_alive(str(tok), acct)[0] == liveness.SATISFIED
+
+
 def test_file_contains_and_json_gte_probes(tmp_path):
     f = tmp_path / "settings.json"; f.write_text('{"allow": ["Read", "Skill"], "cloud_ceiling": 10, "n": {"m": 2}}')
     v, d = liveness.run("file_contains", f"{f}, Skill")
