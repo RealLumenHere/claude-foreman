@@ -8,6 +8,7 @@ import sys
 
 HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS = os.path.join(HARNESS_DIR, "worker-settings.json")
+BASE_PROFILE = os.path.join(HARNESS_DIR, "permission-profiles", "base.json")
 
 
 def test_settings_json_parses():
@@ -107,6 +108,29 @@ def test_process_inspection_is_pid_targeted_not_a_full_dump():
         allow = json.load(f)["permissions"]["allow"]
     assert "Bash(ps *)" not in allow
     assert "Bash(ps -p *)" in allow
+
+
+def test_unit_restart_goes_through_lumen_run_not_a_bare_systemctl():
+    """wq#1350 (wq#1347 follow-up): `Bash(systemctl restart lumen-messenger)` sits on both
+    packs since wq#1323, but a worker that runs it bare still gets polkit's "Access denied
+    ... requires interactive authentication" — the worker is lumen, not root, and the
+    escalation verb is denied in this same profile. So that entry never restarts anything
+    on its own; the detached transient unit is what does, and it has to stay allow-listed
+    in BOTH packs or every mutating-systemd ticket becomes unrunnable.
+
+    Live on 2026-09-20 from this lane: the bare form exited 1 on polkit, then
+    `lumen-run start --root -- systemctl restart lumen-messenger` moved lumen-messenger
+    MainPID 1307246 -> 3271120 with /health back at 200."""
+    with open(SETTINGS) as f:
+        settings_allow = json.load(f)["permissions"]["allow"]
+    with open(BASE_PROFILE) as f:
+        base = json.load(f)
+    for allow in (settings_allow, base["allow"]):
+        assert "Bash(/home/lumen/bin/lumen-run *)" in allow
+    assert "Bash(sudo *)" in base["deny"]
+    # the comment carries the workaround to whoever reads the inert-looking allow entry
+    assert "Bash(systemctl restart lumen-messenger)" in base["allow"]
+    assert "lumen-run start --root" in base["_comment"]
 
 
 def test_env_dump_denied_not_merely_unlisted():

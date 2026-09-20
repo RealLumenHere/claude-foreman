@@ -1,5 +1,5 @@
 {
-  "_comment": "ISSUE-SOLUTIONS-fable.md §2b — inspection verbs, git read ops, lumen_busy, wq CLI. Every repo profile includes this one. THIS FILE, not worker-settings.json, is where a cross-toolchain allow rule goes: for a repo with a repos.d/ declaration the rendered pack REPLACES worker-settings.json's allow list (permission_profiles.py:84), so a rule added only there is inert (wq#1376).",
+  "_comment": "ISSUE-SOLUTIONS-fable.md §2b — inspection verbs, git read ops, lumen_busy, wq CLI. Every repo profile includes this one. THIS FILE, not worker-settings.json, is where a cross-toolchain allow rule goes: for a repo with a repos.d/ declaration the rendered pack REPLACES worker-settings.json's allow list (permission_profiles.py:84), so a rule added only there is inert (wq#1376). `Bash(systemctl restart lumen-messenger)` below is allowed by Claude but still refused by polkit ('requires interactive authentication') because the worker runs as lumen, not root, and `Bash(sudo *)` is denied: restart a unit through `/home/lumen/bin/lumen-run start --root -- systemctl restart <unit>` instead (wq#1350).",
   "allow": [
     "Read",
     "Grep",
