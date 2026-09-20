@@ -58,6 +58,9 @@ EXTRA_REPOS = [
     # repo (foreman) wins, and every to-be-created path under the repo is reported by
     # capability_lint as "does not exist".
     "/home/lumen/fleet/inventory",
+    # wq#1540: minerva has no lane either, so a needs:repo(/home/lumen/minerva) ticket
+    # was dispatched into a foreman worktree it cannot edit (ISSUE-LOG #477's class).
+    "/home/lumen/minerva",
 ]
 
 TITLE_PREFIX = "[repo-sweep] "

@@ -9,9 +9,16 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import primary_tree_guard as ptg
 import agents_spec
+
+
+@pytest.fixture(autouse=True)
+def _isolated_dirty_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(ptg, "DIRTY_STATE_PATH", str(tmp_path / "dirty.json"))
 
 
 def make_primary(tmp_path, name="primary"):
@@ -174,3 +181,91 @@ def test_cli_check_restores_and_dedups_alerts(tmp_path, monkeypatch):
     (repo / "f.txt").write_text("dirty again\n")
     assert ptg.main(["check", "--repo", str(repo)]) == 1
     assert len(alerts) == 3
+
+
+def test_primary_trees_default_includes_minerva(monkeypatch):
+    # wq#1540: minerva has no router.LANE_REPO entry; only the static list reaches it.
+    monkeypatch.delenv("FOREMAN_PRIMARY_TREES", raising=False)
+    assert "/home/lumen/minerva" in ptg.primary_trees()
+
+
+def test_dirty_under_24h_does_not_page(tmp_path, monkeypatch):
+    repo, _ = make_primary(tmp_path)
+    (repo / "f.txt").write_text("edit\n")
+    alerts = []
+    monkeypatch.setattr(ptg, "alert", lambda t, m: alerts.append((t, m)))
+    state = {}
+    assert ptg.check_dirty_age(repos=[str(repo)], state=state) == []
+    assert alerts == [] and str(repo) in state
+
+
+def test_dirty_over_24h_pages_once_then_repeats_daily(tmp_path, monkeypatch):
+    repo, _ = make_primary(tmp_path)
+    (repo / "f.txt").write_text("edit\n")
+    alerts = []
+    monkeypatch.setattr(ptg, "alert", lambda t, m: alerts.append((t, m)))
+    state = {}
+    t0 = os.path.getmtime(repo / "f.txt")
+
+    stale = ptg.check_dirty_age(repos=[str(repo)], state=state, now=t0 + 25 * 3600)
+    assert len(stale) == 1 and stale[0]["paged"] and stale[0]["files"] == 1
+    assert len(alerts) == 1 and "wq#1540" in alerts[0][0] and "f.txt" in alerts[0][1]
+
+    # next timer run an hour later: still stale, no second page
+    stale = ptg.check_dirty_age(repos=[str(repo)], state=state, now=t0 + 26 * 3600)
+    assert len(stale) == 1 and not stale[0]["paged"] and len(alerts) == 1
+
+    # a day after the page: re-page
+    ptg.check_dirty_age(repos=[str(repo)], state=state, now=t0 + 50 * 3600)
+    assert len(alerts) == 2
+
+
+def test_dirty_age_survives_file_rewrites(tmp_path, monkeypatch):
+    # A daemon rewriting a tracked data file bumps its mtime; the first-seen time in
+    # state must keep the age from resetting.
+    repo, _ = make_primary(tmp_path)
+    (repo / "f.txt").write_text("edit\n")
+    monkeypatch.setattr(ptg, "alert", lambda t, m: None)
+    t0 = os.path.getmtime(repo / "f.txt")
+    state = {}
+    ptg.check_dirty_age(repos=[str(repo)], state=state, now=t0)
+    (repo / "f.txt").write_text("edit again\n")
+    stale = ptg.check_dirty_age(repos=[str(repo)], state=state, now=t0 + 25 * 3600)
+    assert len(stale) == 1
+
+
+def test_dirty_age_dates_first_sighting_from_file_mtime(tmp_path, monkeypatch):
+    # Empty state (fresh deploy, wiped /tmp) must not grant already-old edits
+    # another 24h.
+    repo, _ = make_primary(tmp_path)
+    (repo / "f.txt").write_text("edit\n")
+    old = os.path.getmtime(repo / "f.txt") - 3 * 86400
+    os.utime(repo / "f.txt", (old, old))
+    monkeypatch.setattr(ptg, "alert", lambda t, m: None)
+    stale = ptg.check_dirty_age(repos=[str(repo)], state={})
+    assert len(stale) == 1 and stale[0]["age_s"] >= 3 * 86400
+
+
+def test_clean_tree_and_untracked_files_are_not_dirty(tmp_path, monkeypatch):
+    repo, git = make_primary(tmp_path)
+    (repo / "dropping.txt").write_text("untracked\n")
+    monkeypatch.setattr(ptg, "alert", lambda t, m: pytest.fail("paged"))
+    state = {str(repo): {"since": 0, "paged": 0}}
+    assert ptg.check_dirty_age(repos=[str(repo)], state=state, now=10 * 86400) == []
+    assert state == {}, "clean tree must drop its episode"
+
+
+def test_cli_check_pages_stale_dirty_and_exits_1(tmp_path, monkeypatch, capsys):
+    repo, _ = make_primary(tmp_path)
+    (repo / "f.txt").write_text("edit\n")
+    old = os.path.getmtime(repo / "f.txt") - 2 * 86400
+    os.utime(repo / "f.txt", (old, old))
+    monkeypatch.setattr(ptg, "STATE_PATH", str(tmp_path / "state.json"))
+    alerts = []
+    monkeypatch.setattr(ptg, "alert", lambda t, m: alerts.append(t))
+
+    assert ptg.main(["check", "--repo", str(repo)]) == 1
+    assert ptg.main(["check", "--repo", str(repo)]) == 1
+    assert alerts == ["PRIMARY tree dirty >24h (wq#1540)"]
+    assert "STALE" in capsys.readouterr().out
+    assert ptg.main(["status", "--repo", str(repo)]) == 1

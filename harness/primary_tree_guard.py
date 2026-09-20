@@ -15,18 +15,28 @@ module is two of the three walls (guard.sh's wq#900 deny class is the first):
   - post-run mode: fworker calls check_and_restore_all() after every child exits,
     so a worker that evaded the guard is caught within seconds of finishing.
 
-Exit codes (CLI): 0 = all primaries on default branch (or restored this run),
-1 = at least one still drifted, 2 = internal error.
+wq#1540 adds a fourth signal: a primary with modified tracked files for longer
+than 24h pages, on its default branch or not. Uncommitted edits in a live tree run
+as production without review and vanish with the next stray reset; the check lands
+in `check_dirty_age`.
+
+Exit codes (CLI): 0 = all primaries on default branch (or restored this run) and
+none dirty past 24h, 1 = at least one still drifted or stale-dirty, 2 = internal
+error.
 """
 import json
 import os
 import subprocess
 import sys
+import time
 
 HARNESS_DIR = os.path.dirname(os.path.abspath(__file__))
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 STATE_PATH = os.environ.get("PRIMARY_TREE_GUARD_STATE",
                             "/tmp/.primary-tree-guard.state")
+DIRTY_STATE_PATH = os.environ.get("PRIMARY_TREE_DIRTY_STATE",
+                                  "/tmp/.primary-tree-dirty.state")
+DIRTY_PAGE_AFTER_S = 24 * 3600
 
 # Static mirror of router.LANE_REPO's values + /home/lumen/bin (repo_sweep's
 # EXTRA_REPOS). The import below is authoritative; this list exists so a broken
@@ -58,6 +68,10 @@ STATIC_PRIMARY_TREES = [
     "/home/lumen/kb",
     "/home/lumen/projects/nest",
     "/home/lumen/agents/work-queue",
+    # wq#1540: minerva's primary sat on nine uncommitted tracked-file edits from
+    # several tickets (wq#1383/#1501...) until wq#1535 tripped over it. It is a
+    # standalone repo with no router.LANE_REPO entry, so only this list reaches it.
+    "/home/lumen/minerva",
 ]
 
 
@@ -167,17 +181,75 @@ def check_and_restore_all(repos=None, restore=True, do_alert=True, context="",
     return drifted
 
 
-def _load_state():
+def dirty_files(repo):
+    """Modified tracked paths (untracked droppings excluded, as in check_tree)."""
+    out = _git(repo, "status", "--porcelain", "--untracked-files=no").stdout
+    return [line[3:].split(" -> ")[-1] for line in out.splitlines() if len(line) > 3]
+
+
+def check_dirty_age(repos=None, now=None, max_age=DIRTY_PAGE_AFTER_S, state=None,
+                    do_alert=True):
+    """wq#1540: page for every primary whose tracked files have stayed modified
+    longer than max_age, once per max_age while it stays that way.
+
+    `state` ({repo: {"since", "paged"}}) is mutated in place: first-seen time is
+    remembered so a daemon rewriting a data file cannot keep resetting the age, and
+    a clean tree drops its entry. A tree seen dirty for the first time is dated from
+    its oldest modified file's mtime, so a wiped /tmp state (reboot) or the first
+    run after deploy does not grant another 24h to edits that are already old.
+    Returns the stale results: {repo, files, age_s, paged}."""
+    now = time.time() if now is None else now
+    state = {} if state is None else state
+    stale, seen = [], set()
+    for repo in (repos if repos is not None else primary_trees()):
+        if check_tree(repo)["error"]:
+            continue
+        try:
+            files = dirty_files(repo)
+        except Exception:
+            continue
+        if not files:
+            continue
+        seen.add(repo)
+        entry = state.get(repo) or {}
+        since = entry.get("since")
+        if since is None:
+            mtimes = [os.path.getmtime(os.path.join(repo, f)) for f in files
+                      if os.path.exists(os.path.join(repo, f))]
+            since = min(mtimes) if mtimes else now
+        age = now - since
+        paged = entry.get("paged", 0)
+        due = age >= max_age and now - paged >= max_age
+        if due:
+            paged = now
+            if do_alert:
+                alert("PRIMARY tree dirty >24h (wq#1540)",
+                      f"{repo} has had {len(files)} modified tracked file(s) for "
+                      f"{age / 3600:.0f}h, e.g. {', '.join(files[:3])}. Uncommitted "
+                      f"edits in a live tree run unreviewed and are lost to the next "
+                      f"reset — land them via lumen-pr (code) or untrack + .gitignore "
+                      f"(data).")
+        state[repo] = {"since": since, "paged": paged}
+        if age >= max_age:
+            stale.append({"repo": repo, "files": len(files), "age_s": age,
+                          "paged": due})
+    for repo in list(state):
+        if repo not in seen:
+            state.pop(repo)
+    return stale
+
+
+def _load_state(path=None):
     try:
-        with open(STATE_PATH) as f:
+        with open(path or STATE_PATH) as f:
             return json.load(f)
     except Exception:
         return {}
 
 
-def _save_state(state):
+def _save_state(state, path=None):
     try:
-        with open(STATE_PATH, "w") as f:
+        with open(path or STATE_PATH, "w") as f:
             json.dump(state, f)
     except Exception:
         pass
@@ -205,6 +277,11 @@ def main(argv=None):
                 rc = 1
             else:
                 print(f"OK       {repo}: {r['head']}")
+        for s in check_dirty_age(repos=a.repo, state=_load_state(DIRTY_STATE_PATH),
+                                 do_alert=False):
+            print(f"STALE    {s['repo']}: {s['files']} modified tracked file(s), "
+                  f"dirty {s['age_s'] / 3600:.0f}h")
+            rc = 1
         return rc
 
     # check mode: dedup un-restorable drift alerts across timer runs the same way
@@ -238,6 +315,13 @@ def main(argv=None):
         if repo not in seen:
             state.pop(repo)
     _save_state(state)
+
+    dirty_state = _load_state(DIRTY_STATE_PATH)
+    for s in check_dirty_age(repos=a.repo, state=dirty_state):
+        still_bad += 1
+        print(f"STALE    {s['repo']}: {s['files']} modified tracked file(s), "
+              f"dirty {s['age_s'] / 3600:.0f}h")
+    _save_state(dirty_state, DIRTY_STATE_PATH)
     return 1 if still_bad else 0
 
 

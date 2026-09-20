@@ -408,3 +408,8 @@ def test_aq_key_splits_back_into_repo_and_verdict():
 def test_fleet_inventory_is_a_managed_repo():
     # wq#1453-1456: needs:repo(/home/lumen/fleet/inventory) must resolve (router.needs_repo_hint).
     assert "/home/lumen/fleet/inventory" in repo_sweep.managed_repos()
+
+
+def test_minerva_is_a_managed_repo():
+    # wq#1540: needs:repo(/home/lumen/minerva) must resolve (router.needs_repo_hint).
+    assert "/home/lumen/minerva" in repo_sweep.managed_repos()

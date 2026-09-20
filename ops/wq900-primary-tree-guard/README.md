@@ -22,5 +22,12 @@ Three walls, one per layer:
    tracked files, alerts (dedup'd per drift episode) either way. Catches drift
    from anything that isn't an fworker child (manual sessions, other hosts).
 
+4. **Stale-dirty page (wq#1540)** — the same timer pages when any primary (now
+   including `/home/lumen/minerva`) has had modified tracked files for >24h,
+   on any branch, and re-pages daily while it stays that way. First-seen time
+   lives in `/tmp/.primary-tree-dirty.state` (`PRIMARY_TREE_DIRTY_STATE`); a tree
+   seen dirty with no record is dated from its oldest modified file's mtime. Clear
+   it by landing the edits via lumen-pr, or untracking + `.gitignore`-ing data files.
+
 Install (root, via `lumen-run --root`): `./install.sh`
 Manual check: `python3 /home/lumen/foreman/harness/primary_tree_guard.py status`

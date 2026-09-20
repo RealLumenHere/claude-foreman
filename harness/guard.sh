@@ -193,7 +193,8 @@ Bash)
     # for exactly those two trees — added to both.
     # wq#1761 (ISSUE-LOG #313): same gap, third default add_dir — work-queue (the
     # sqlite store + wq CLI backing the fleet task queue) — added to both here too.
-    PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest:/home/lumen/agents/work-queue}
+    # wq#1540: minerva (standalone repo, no LANE_REPO entry) likewise, in both.
+    PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest:/home/lumen/agents/work-queue:/home/lumen/minerva}
     # wq#1256 (#19 sync-live guard): git clean -f/--force is just as destructive
     # to a live tree as checkout/reset — it discards untracked files with no
     # undo. The sanctioned path for resyncing a primary is /home/lumen/bin/sync-live
@@ -362,7 +363,7 @@ Read|Edit|Write|Grep|Glob)
       # wq#1752 (ISSUE-LOG #302): kb + shallow nest archive added, same gap as the
       # Bash PRIMARY_TREES wall above.
       # wq#1761 (ISSUE-LOG #313): work-queue added, same gap, third default add_dir.
-      WRITE_PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest:/home/lumen/agents/work-queue}
+      WRITE_PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest:/home/lumen/agents/work-queue:/home/lumen/minerva}
       IFS=':' read -ra WPT_ARR <<< "$WRITE_PRIMARY_TREES"
       for ptree in "${WPT_ARR[@]}"; do
         [ -n "$ptree" ] || continue
