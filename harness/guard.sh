@@ -150,6 +150,39 @@ Bash)
     if printf '%s' "$target" | grep -qE '\bgit\b.*\blfs\b +(pull|fetch)\b'; then
       block "git lfs pull/fetch denied from cron/fworker context (wq#1297: large pulls are manual off-peak only — bridge risk)" "$RAW_CMD"
     fi
+
+    # ---- wq#2274: credential-EMITTING command shapes ----
+    # The path denies above stop READING credential files; nothing stopped the
+    # commands whose normal output prints a live token into a transcript. wq#2243
+    # burned a GitHub PAT exactly this way: a remote listing printed a clone's
+    # remote URL, token embedded, into an orchestrator transcript (ISSUE-LOG #537).
+    # DENY, never rewrite: the pipeline-rewrite lever was retired by wq#954 (see
+    # the cap note below) — piping subshells the left side, and the cd/export/
+    # source exemptions that required were the entire residual leak.
+    # Sanctioned shape (instinct 4, mask-before-print): the same statement piped
+    # through /home/lumen/bin/mask-secrets is allowed — it redacts secret values
+    # before they reach the transcript. Statements are split on ;/&/newline but
+    # NOT on |, so the pipe relationship to mask-secrets survives the split and
+    # an unmasked sibling statement in the same command line still blocks.
+    MASKED_RE='\|[[:space:]]*(/home/lumen/bin/)?mask-secrets($|[^-[:alnum:]_])'
+    while IFS= read -r stmt; do
+      [ -n "$stmt" ] || continue
+      if printf '%s' "$stmt" | grep -qE "$MASKED_RE"; then continue; fi
+      if printf '%s' "$stmt" | grep -qE '\bgit\b[^|]*\bremote\b[^|]*((^| )-v\b|--verbose\b|(^| )get-url\b)'; then
+        block "credential-emitting shape: git remote -v/--verbose/get-url denied (wq#2274 — a remote URL can embed a token; wq#2243 leaked a PAT exactly this way). Pipe through /home/lumen/bin/mask-secrets or report path-only" "$RAW_CMD"
+      fi
+      if printf '%s' "$stmt" | grep -qE '\bgit\b[^|]*\bconfig\b[^|]*((^| )-l\b|--list\b|--get-urlmatch\b)'; then
+        block "credential-emitting shape: git config -l/--list/--get-urlmatch denied (wq#2274 — config dumps can embed credential.helper values and tokenized URLs). Pipe through /home/lumen/bin/mask-secrets" "$RAW_CMD"
+      fi
+      # env is a dump only when nothing follows it (or only a pipe/redirect does):
+      # `env VAR=x cmd` runs a command with one var set and emits nothing — allowed.
+      if printf '%s' "$stmt" | grep -qE '(^|[^[:alnum:]_./-])env[[:space:]]*($|[|>])'; then
+        block "credential-emitting shape: env dump denied (wq#2274 — the environment holds live tokens). Pipe through /home/lumen/bin/mask-secrets; env VAR=x cmd stays allowed" "$RAW_CMD"
+      fi
+      if printf '%s' "$stmt" | grep -qE '(^|[^[:alnum:]_./-])printenv($|[^-[:alnum:]_])'; then
+        block "credential-emitting shape: printenv denied (wq#2274 — prints raw env values, name-free so masking can miss them). Pipe through /home/lumen/bin/mask-secrets" "$RAW_CMD"
+      fi
+    done <<< "$(printf '%s' "$target" | tr ';&' '\n\n')"
     if printf '%s' "$target" | grep -qE '\brm\b'; then
       HAS_R=0; HAS_F=0
       printf '%s' "$target" | grep -qE '\brm\b[^|;]*(-[a-zA-Z]*r[a-zA-Z]*\b|--recursive\b)' && HAS_R=1
@@ -333,7 +366,7 @@ Read|Edit|Write|Grep|Glob)
   for CHECK_PATH in "$FILE_PATH" "$GREP_PATH"; do
     [ -n "$CHECK_PATH" ] || continue
     case "$CHECK_PATH" in
-      *.env|*.credentials.json|*claude_credentials.md|*claude_credentials.md.*|/home/lumen/minerva/context/sections/*credentials*|/home/lumen/minerva/context/sections.json|/home/lumen/minerva/context/sections.json.*|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*)
+      *.env|*.credentials.json|*claude_credentials.md|*claude_credentials.md.*|/home/lumen/minerva/context/sections/*credentials*|/home/lumen/minerva/context/sections.json|/home/lumen/minerva/context/sections.json.*|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*|/var/lib/token-engine|/var/lib/token-engine/*)
         block "denied path: $CHECK_PATH" "$CHECK_PATH" ;;
     esac
   done

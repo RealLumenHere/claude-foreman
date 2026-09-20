@@ -23,6 +23,7 @@
       "Bash(docker logs*)",
       "Bash(curl *)",
       "Bash(/home/lumen/bin/lumen_busy *)",
+      "Bash(/home/lumen/bin/mask-secrets)",
       "Bash(cat *)",
       "Bash(ls *)",
       "Bash(head *)",

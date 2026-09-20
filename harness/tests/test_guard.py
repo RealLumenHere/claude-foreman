@@ -140,6 +140,29 @@ MUST_BLOCK = [
     ("Bash", {"command": "docker pull ollama/ollama"}),
     ("Bash", {"command": "git lfs pull"}),
     ("Bash", {"command": "git lfs fetch --all"}),
+    # wq#2274: credential-EMITTING command shapes — the wq#2243 leak class (a
+    # remote listing printed a PAT-embedding URL into a transcript, ISSUE-LOG #537).
+    ("Bash", {"command": "git remote -v"}),
+    ("Bash", {"command": "git remote --verbose"}),
+    ("Bash", {"command": "git remote get-url origin"}),
+    ("Bash", {"command": "ssh bes 'git remote -v'"}),
+    ("Bash", {"command": "git -C /home/lumen/simpill remote -v"}),
+    ("Bash", {"command": "git config --list"}),
+    ("Bash", {"command": "git config -l"}),
+    ("Bash", {"command": "git config --get-urlmatch http https://github.com"}),
+    ("Bash", {"command": "env"}),
+    ("Bash", {"command": "env | grep -i token"}),
+    ("Bash", {"command": "env > /tmp/e.txt"}),
+    ("Bash", {"command": "printenv"}),
+    ("Bash", {"command": "printenv GITHUB_TOKEN"}),
+    # mask-secrets exempts only the statement it is piped onto — an unmasked
+    # sibling statement, a redirect instead of a pipe, or a lookalike name still block.
+    ("Bash", {"command": "echo ok | mask-secrets; git remote -v"}),
+    ("Bash", {"command": "git remote -v > /tmp/remotes.txt"}),
+    ("Bash", {"command": "git remote -v | mask-secrets-fake"}),
+    # wq#2274: token-engine state dir is credential-bearing — Read/Grep denied.
+    ("Read", {"file_path": "/var/lib/token-engine/ledger.json"}),
+    ("Grep", {"pattern": "token", "path": "/var/lib/token-engine"}),
 ]
 
 MUST_ALLOW = [
@@ -171,6 +194,19 @@ MUST_ALLOW = [
     # wq#1297: only pull is denied — inspection verbs stay usable from a worker.
     ("Bash", {"command": "ollama list"}),
     ("Bash", {"command": "ollama show llama3:70b"}),
+    # wq#2274: instinct 4's mask-before-print shape must run — the same emitting
+    # statement piped through mask-secrets is the sanctioned form.
+    ("Bash", {"command": "git remote -v | /home/lumen/bin/mask-secrets"}),
+    ("Bash", {"command": "git remote get-url origin | mask-secrets"}),
+    ("Bash", {"command": "git config --list | /home/lumen/bin/mask-secrets"}),
+    ("Bash", {"command": "env | /home/lumen/bin/mask-secrets"}),
+    ("Bash", {"command": "printenv | /home/lumen/bin/mask-secrets"}),
+    # Non-emitting verbs in the same families stay usable.
+    ("Bash", {"command": "git remote add lumenfork https://github.com/RealLumenHere/simpill.git"}),
+    ("Bash", {"command": "git config user.name 'Lumen Industries'"}),
+    ("Bash", {"command": "git config --get user.email"}),
+    # env as a runner (sets one var, emits nothing) is not a dump.
+    ("Bash", {"command": "env PYTHONPATH=. python3 -m pytest -x"}),
 ]
 
 
@@ -190,6 +226,20 @@ def test_must_allow():
         if rc != 0:
             failures.append((tool, inp, rc, stderr))
     assert not failures, f"expected exit 0 (allow), got: {failures}"
+
+
+def test_wq2274_block_message_names_the_verb():
+    # GATE (wq#2274): a credential-emitting shape is refused with a message that
+    # names the verb, so the worker knows which segment to mask or drop.
+    for cmd, verb in [
+        ("git remote -v", "git remote"),
+        ("git config --list", "git config -l/--list"),
+        ("env", "env dump"),
+        ("printenv", "printenv"),
+    ]:
+        rc, stderr = run_guard("Bash", {"command": cmd})
+        assert rc == 2, (cmd, rc, stderr)
+        assert verb in stderr, (cmd, stderr)
 
 
 def test_malformed_stdin_fails_closed():

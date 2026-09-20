@@ -14,6 +14,7 @@
     "Bash(/home/lumen/bin/fleet-search *)",
     "Bash(/home/lumen/bin/fleet-exec *)",
     "Bash(/home/lumen/bin/lumen_busy *)",
+    "Bash(/home/lumen/bin/mask-secrets)",
     "Bash(docker ps*)",
     "Bash(docker logs*)",
     "Bash(curl *)",
