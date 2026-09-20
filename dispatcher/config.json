@@ -123,9 +123,10 @@
       "note": "Gated manual safety lane (wq#1011 / R2 section 10.4). Enumerated so lane/config-drift checks see it as present, but never auto-claimed: enabled:false makes the dispatcher scan allowlist skip it (foreman_dispatcher.py eligible-scan). Holds Frank-gated safety builds like wq#709 lumen-guardian (a systemctl-poweroff thermal/MCE daemon) that must be built deliberately under review, never auto-dispatched to an arbitrary worker."
     },
     "simpill": {
-      "enabled": false,
+      "enabled": true,
+      "multi_repo": true,
       "max_per_day": 999,
-      "note": "wq#2133: disabled - orchestrator/router.py LANE_REPO has no simpill row, so every ticket parked as lane_unmapped. Re-enable together with the LANE_REPO row once Frank names the repo (open decision on wq#2127); dispatch_config_lint FAILs an enabled lane without one."
+      "note": "wq#2242: Jay's repos (SkinnnyJay/*) are watched by jay-watch, which files one ticket per upstream event carrying its own needs repo(<managed clone>) tag. multi_repo:true is why the lane needs no LANE_REPO row (gates.LaneRepo, dispatch_config_lint.validate_lane_repos); a simpill ticket without a resolvable repo tag still parks as lane_unmapped. Clones and the watched-repo list: harness/simpill_repos.json. History: wq#2133 disabled the lane while it had no repo mapping."
     },
     "mailbot": {
       "enabled": true,

@@ -53,4 +53,11 @@ def test_shipped_config_has_no_enabled_lane_without_a_repo():
     with open(os.path.join(DISPATCHER_DIR, "config.json")) as f:
         cfg = json.load(f)
     assert lint.validate_lane_repos(cfg) == []
-    assert cfg["lanes"]["simpill"]["enabled"] is False
+    assert cfg["lanes"]["simpill"]["enabled"] is True
+    assert cfg["lanes"]["simpill"]["multi_repo"] is True
+
+
+def test_multi_repo_lane_is_exempt_only_with_a_real_true():
+    assert lint.validate_lane_repos(lanes(simpill={"enabled": True, "multi_repo": True})) == []
+    fails = lint.validate_lane_repos(lanes(simpill={"enabled": True, "multi_repo": "yes"}))
+    assert len(fails) == 1 and "'simpill'" in fails[0]

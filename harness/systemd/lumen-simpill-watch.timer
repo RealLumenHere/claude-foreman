@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#2242 simpill_watch every 15 min (same cadence as jay-watch)
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=60
+Persistent=true
+Unit=lumen-simpill-watch.service
+
+[Install]
+WantedBy=timers.target

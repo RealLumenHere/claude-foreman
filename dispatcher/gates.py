@@ -114,12 +114,14 @@ class HumanLane(Gate):
 
 class LaneRepo(Gate):
     """wq#713 repo mapping (MUST 7): a lane with no LANE_REPO row never guesses a repo.
-    `auto` resolves per ticket in RepoResolve below."""
+    `auto` and any lane whose config policy declares `multi_repo: true` (wq#2242, simpill)
+    resolve per ticket in RepoResolve below."""
     name = "lane_repo"
 
     def check(self, g):
         g.repo = g.fd.router.repo_for_lane(g.lane)
-        if not g.repo and g.lane != g.fd.REPO_HINT_LANE:
+        multi_repo = g.lane == g.fd.REPO_HINT_LANE or g.policy.get("multi_repo") is True
+        if not g.repo and not multi_repo:
             return Fail("lane_policy", "lane_unmapped", terminal=True,
                         detail="no LANE_REPO entry — never guess a repo",
                         fingerprint_inputs=("lane", "needs", "detail"), parkable=True)

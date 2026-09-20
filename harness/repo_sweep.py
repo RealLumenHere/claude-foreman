@@ -70,9 +70,20 @@ TITLE_PREFIX = "[repo-sweep] "
 _DETAIL_REPO_RE = re.compile(r"^Automated sweep detected \S+ in (\S+)\.")
 
 
+def _simpill_clones():
+    """wq#2242: the simpill lane's managed clones (harness/simpill_repos.json). They are a valid
+    needs:repo(...) target but deliberately NOT swept for divergence: the watcher owns them."""
+    try:
+        sys.path.insert(0, HARNESS_DIR)
+        import simpill_watch  # noqa: E402
+        return simpill_watch.managed_clones()
+    except Exception:
+        return set()
+
+
 def managed_repos():
     """The exact repo universe a sweep can file a ticket against."""
-    return _lane_repos() | set(EXTRA_REPOS)
+    return _lane_repos() | set(EXTRA_REPOS) | _simpill_clones()
 
 
 def repo_hint(title, detail):

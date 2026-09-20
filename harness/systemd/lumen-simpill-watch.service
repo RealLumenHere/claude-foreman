@@ -1,0 +1,14 @@
+[Unit]
+Description=wq#2242 simpill_watch — sync the managed clones of Jay's repos and file one lane=simpill ticket per new upstream event (deduped per repo + head commit)
+Documentation=file:///home/lumen/foreman/harness/simpill_watch.py
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman
+Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/simpill_watch.py
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=600
+Nice=10

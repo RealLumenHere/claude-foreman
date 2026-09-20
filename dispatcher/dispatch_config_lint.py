@@ -236,7 +236,8 @@ def validate_lane_repos(cfg):
     parks such a lane's tickets as lane_unmapped forever (`no LANE_REPO entry — never guess a
     repo`), so an enabled lane the router cannot map is a defect, not a policy. Exempt: the
     human-owned lanes (never worker-dispatchable) and REPO_HINT_LANE (`auto`, whose tickets
-    carry their own repo). Returns fails."""
+    carry their own repo), and any lane declaring `"multi_repo": true` (wq#2242: one lane over
+    several repos, each ticket names its own via needs repo(...)). Returns fails."""
     import foreman_dispatcher  # noqa: PLC0415 — heavy; only this check needs the lane sets
     import router  # noqa: PLC0415
     lanes = cfg.get("lanes")
@@ -247,6 +248,8 @@ def validate_lane_repos(cfg):
         if not (isinstance(policy, dict) and policy.get("enabled") is True):
             continue
         if lane in foreman_dispatcher.HUMAN_LANES or lane == foreman_dispatcher.REPO_HINT_LANE:
+            continue
+        if policy.get("multi_repo") is True:
             continue
         if not router.repo_for_lane(lane):
             fails.append(f"lane={lane!r} is enabled but has no LANE_REPO row in "
