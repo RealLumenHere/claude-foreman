@@ -93,6 +93,39 @@ def values(index):
 
 # ------------------------------------------------------------------- the index
 
+def add_fact(db_path, fid, subj, pred, val, valid_to, fclass):
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "insert into state_facts (id, subject, predicate, value, valid_from,"
+        " valid_to, ingested_at, fact_class) values (?,?,?,?,?,?,?,?)",
+        (fid, subj, pred, val, "2026-06-01", valid_to, "2026-06-01", fclass),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_value_still_open_under_a_renamed_predicate_is_not_dead(db):
+    # wq#1782: gameboy.ts_ip closed in a bulk close, gameboy.tailscale_ip
+    # still holds the same address.
+    add_fact(db, "g1", "gameboy", "ts_ip", "100.118.56.59", "2026-09-10", "config")
+    add_fact(db, "g2", "gameboy", "tailscale_ip", "100.118.56.59", None, "config")
+    assert "100.118.56.59" not in values(index_of(db))
+
+
+def test_renamed_predicate_rule_is_scoped_to_the_same_subject(db):
+    add_fact(db, "g1", "gameboy", "ts_ip", "100.118.56.59", "2026-09-10", "config")
+    add_fact(db, "g2", "kiosk", "tailscale_ip", "100.118.56.59", None, "config")
+    assert "100.118.56.59" in values(index_of(db))
+
+
+def test_renamed_predicate_rule_does_not_rescue_bare_labels(db):
+    add_fact(db, "g1", "gameboy", "status", "active", "2026-09-10", "status")
+    add_fact(db, "g2", "gameboy", "service_state", "active", None, "status")
+    assert ("gameboy", "status") in {
+        (e["subject"], e["predicate"]) for e in index_of(db)
+    }
+
+
 def test_index_reaches_beyond_ip_shaped_values(db):
     got = values(index_of(db))
     assert {"embeddings-host", "100.88.71.47", "active", "P3",

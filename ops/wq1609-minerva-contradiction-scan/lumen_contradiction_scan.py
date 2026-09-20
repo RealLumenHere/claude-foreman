@@ -317,10 +317,12 @@ def changelog_tokens(current):
 def build_dead_value_index(conn):
     """One entry per closed fact whose value is structured enough to match."""
     open_now = {}
+    open_by_subject = {}
     for subj, pred, val in conn.execute(
         "select subject, predicate, value from state_facts where valid_to is null"
     ):
         open_now[(subj, pred)] = val
+        open_by_subject.setdefault(subj, []).append(val)
 
     index = []
     for fid, subj, pred, val, valid_to, fclass in conn.execute(
@@ -335,6 +337,17 @@ def build_dead_value_index(conn):
         # `hathor.power_plug` closed 'P3' and reopened as 'P3 (relabelled …)' is
         # an annotation, not a supersession: the value is still live.
         if current is not None and value_re.search(current):
+            continue
+        # The same value re-asserted under another predicate name is a rename,
+        # not a supersession (wq#1782): `gameboy.ts_ip` closed 100.118.56.59 in a
+        # bulk close while `gameboy.tailscale_ip` still holds it, so every doc
+        # quoting the address was flagged although it is the live value. Only
+        # self-identifying values carry enough on their own to say "same thing";
+        # a bare label like `active` under a different predicate proves nothing.
+        if not word_like and self_identifying(val) and any(
+            other and value_re.search(other)
+            for other in open_by_subject.get(subj, ())
+        ):
             continue
         index.append(
             {
