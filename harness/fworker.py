@@ -770,6 +770,13 @@ ROTATION_TITLE_PREFIX = "[rotation] burned credential in wq#"
 # The same text also appears mid-title on the verify pass a rotation ticket spawns:
 # `[verify] wq#2294 [rotation] burned credential in wq#2284 transcript (github)`.
 
+# wq#2332: the settle tool the rotation ticket has to name. A worker handed only
+# "sha256 a candidate and compare" rebuilds mask_replay's corpus walk by hand — that
+# is an hour of an xhigh worker, and the hand-grep re-arms the alarm it is answering.
+# Absolute because the answering worker's cwd is its own lane's worktree, which is not
+# necessarily this repo; mask_replay resolves the tracked tree from its own __file__.
+MASK_REPLAY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mask_replay.py")
+
 
 def rotation_chain_refire(ticket_id, attempt, tag, hits_path):
     """wq#2299: True when this alarm fired inside an investigation of one of the
@@ -844,13 +851,21 @@ def mask_alarm(ticket_id, attempt, labels, records=None):
                "--detail", f"wq#2275 mask tripwire: mask-secrets pattern(s) {tag} "
                            f"fired on wq#{ticket_id} attempt {attempt}'s stream-json. "
                            f"Artefacts on disk are masked, but the value reached the "
-                           f"model context, so per instinct 4 it is burned. Identify "
-                           f"the credential from {hits_path} — each record carries the "
-                           f"kept prefix, the value's length, 12 hex of its sha256 "
-                           f"(sha256 a candidate and compare; the value itself is "
-                           f"nowhere on disk) and a masked context window showing the "
-                           f"command or file it printed from. Rotate it today and "
-                           f"close that leak path.",
+                           f"model context, so per instinct 4 it is burned. FIRST run "
+                           f"`python3 {MASK_REPLAY} {ticket_id}` (wq#2307): it replays "
+                           f"that run's frozen corpus under the rules live when this "
+                           f"fired, names every value by sha256 against the tracked "
+                           f"tree, and reports how many are unaccounted. Zero "
+                           f"unaccounted means committed text, not a credential — "
+                           f"settle the row on that evidence, rotate nothing. Reading "
+                           f"the artefacts by hand instead is what re-arms this alarm "
+                           f"and files the next ticket (wq#2290 -> #2297 -> #2303). "
+                           f"The same evidence raw is in {hits_path}: each record "
+                           f"carries the kept prefix, the value's length, 12 hex of "
+                           f"its sha256 (sha256 a candidate and compare; the value "
+                           f"itself is nowhere on disk) and a masked context window "
+                           f"showing the command or file it printed from. Rotate "
+                           f"whatever is unaccounted today, and close that leak path.",
                "--no-probe", "rotation is a manual credential action; "
                              "no deterministic liveness probe exists")
         out = ((p.stdout or "") + (p.stderr or "")).strip()

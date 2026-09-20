@@ -513,3 +513,18 @@ def test_an_ordinary_ticket_still_files_a_rotation_ticket(tmp_path, monkeypatch)
         tmp_path, monkeypatch, "[token-engine T10] remaining verbs", 2278)
     assert [c[0] for c in calls] == ["add"]
     assert pages and pages[0][1] == "high"
+
+
+def test_the_rotation_ticket_names_the_settle_tool(tmp_path, monkeypatch):
+    """wq#2332: the ticket must send its worker to mask_replay.py, not only to the raw
+    records. wq#2307 built the tool that settles these rows from the frozen corpus; the
+    ticket text predates it and described the hand path alone, so wq#2332's worker
+    rebuilt that corpus walk from scratch — and the hand-grep it prescribes is itself
+    what re-arms the alarm (wq#2290 -> #2297 -> #2303). The run id must be in the
+    command: the tool takes it as its only required argument."""
+    _, calls = alarm_with_title(
+        tmp_path, monkeypatch, "[token-engine T10] remaining verbs", 2278)
+    (add,) = [c for c in calls if c[0] == "add"]
+    detail = next(x for x in add if "wq#2275 mask tripwire" in str(x))
+    assert f"{fworker.MASK_REPLAY} 2278" in detail
+    assert os.path.exists(fworker.MASK_REPLAY)  # a pointer to nothing costs the hour
