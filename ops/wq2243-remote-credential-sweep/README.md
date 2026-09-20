@@ -15,10 +15,20 @@ session transcript. Treat that token as burned.
   `user:pass@`) regardless of token format, plus known token prefixes
   (`ghp_`, `github_pat_`, `gho_`, `ghs_`, `ghu_`, `glpat-`) anywhere in the URL.
   `ssh://git@` and `git@host:path` are not flagged (username only).
-- `--fix` rewrites each hit to the token-free URL via `git config --file`;
-  fetch/push then go through the credential helper the other clones use.
-- Output is `STATUS config-path remote=NAME key=url|pushurl` only. The URL is
-  never printed. `--notify` pages ntfy with repo paths only.
+- Userinfo ends at the last `@` before the first `/`, so a raw `@` in a
+  password leaves no fragment. Also parsed: `[remote "x"] url = ...` on one
+  line, and `[url "https://tok@host/"] insteadOf = ...` (the credential is in
+  the section header; reported as `remote=url#N key=url-section`).
+- `--fix` rewrites each hit to the token-free URL via `git config --file`
+  (url-section headers are edited as text, so the token never enters an argv);
+  fetch/push then go through the credential helper the other clones use. A
+  `ghp_`/`github_pat_`/... token in the query or fragment is dropped with its
+  param. A token in the path cannot be stripped: it is reported as
+  `UNSTRIPPABLE`, left in place, and keeps paging until someone fixes it.
+- Output is `STATUS config-path remote=NAME key=url|pushurl|url-section`
+  (STATUS = FIXED, EMBEDDED, UNSTRIPPABLE). The URL is never printed.
+  `--notify` pages ntfy once per run with repo paths only, for URLs that stay
+  embedded and for FIXED ones (the token stays valid until rotated).
 - Exit 1 only while something remains embedded.
 
 `install.sh` installs an hourly `remote-credential-sweep.timer` running

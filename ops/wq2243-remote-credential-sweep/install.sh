@@ -16,7 +16,7 @@ if [ "${1:-}" = --verify ]; then
   vdone
 fi
 
-cp"$SRC/remote-credential-sweep.service" "$SRC/remote-credential-sweep.timer" /etc/systemd/system/
+cp "$SRC/remote-credential-sweep.service" "$SRC/remote-credential-sweep.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now remote-credential-sweep.timer
 

@@ -109,6 +109,122 @@ class ScanTests(unittest.TestCase):
         self.assertIn(os.path.realpath(repo), msg)
         self.assertNotIn(FAKE, msg)
 
+    def capture_pages(self):
+        pages = []
+        real_run = subprocess.run
+
+        def fake(cmd, **kw):
+            if cmd[0] == rcs.NTFY_BIN:
+                pages.append(" ".join(cmd))
+                return real_run(["true"])
+            return real_run(cmd, **kw)
+
+        rcs.subprocess.run = fake
+        self.addCleanup(setattr, rcs.subprocess, "run", real_run)
+        return pages
+
+    def append_config(self, repo, text):
+        with open(os.path.join(repo, ".git", "config"), "a", encoding="utf-8") as f:
+            f.write(text)
+
+    def git_config(self, repo, *args):
+        return subprocess.run(["git", "config", *args], cwd=repo, capture_output=True, text=True).stdout.strip()
+
+    def test_notify_pages_on_fixed_url(self):
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, f"https://{FAKE}@github.com/o/r.git")
+        pages = self.capture_pages()
+        self.assertEqual(rcs.main(["scan", "--root", self.root, "--fix", "--notify"]), 0)
+        self.assertEqual(len(pages), 1)
+        self.assertIn(os.path.realpath(repo), pages[0])
+        self.assertIn("stripped", pages[0])
+        self.assertNotIn(FAKE, pages[0])
+        self.assertEqual(self.git_config(repo, "remote.lumenfork.url"), "https://github.com/o/r.git")
+        # the token is gone from the config, so the next run is quiet
+        self.assertEqual(rcs.main(["scan", "--root", self.root, "--fix", "--notify"]), 0)
+        self.assertEqual(len(pages), 1)
+
+    def test_notify_mixed_fixed_and_embedded_pages_once(self):
+        init_repo(os.path.join(self.root, "a"), f"https://{FAKE}@github.com/o/r.git")
+        init_repo(os.path.join(self.root, "b"), f"https://github.com/o/{FAKE}/r.git")
+        pages = self.capture_pages()
+        self.assertEqual(rcs.main(["scan", "--root", self.root, "--fix", "--notify"]), 1)
+        self.assertEqual(len(pages), 1)
+        self.assertIn("stripped", pages[0])
+        self.assertIn("credential in git remote URL", pages[0])
+
+    def test_raw_at_in_password_leaves_no_fragment(self):
+        self.assertEqual(rcs.strip_userinfo("https://user:pa@ss@host/o/r"), "https://host/o/r")
+        self.assertEqual(rcs.strip_userinfo("https://user:pa@ss@host"), "https://host")
+        self.assertIsNone(rcs.strip_userinfo("https://host/o/r@v1"))
+        self.assertIsNone(rcs.strip_userinfo("https://@host/o/r"))
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, "https://user:pa@ss@host/o/r")
+        n, _ = self.run_scan(fix=True)
+        self.assertEqual(n, 0)
+        self.assertEqual(self.git_config(repo, "remote.lumenfork.url"), "https://host/o/r")
+
+    def test_token_in_query_or_fragment_is_stripped(self):
+        self.assertEqual(rcs.strip_credentials(f"https://github.com/o/r.git?t={FAKE}&x=1"), "https://github.com/o/r.git?x=1")
+        self.assertEqual(rcs.strip_credentials(f"https://github.com/o/r.git?t={FAKE}"), "https://github.com/o/r.git")
+        self.assertEqual(rcs.strip_credentials(f"https://github.com/o/r.git#{FAKE}"), "https://github.com/o/r.git")
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, f"https://github.com/o/r.git?t={FAKE}")
+        n, out = self.run_scan(fix=True)
+        self.assertEqual((n, out.count("FIXED")), (0, 1))
+        self.assertEqual(self.git_config(repo, "remote.lumenfork.url"), "https://github.com/o/r.git")
+
+    def test_token_in_path_is_reported_distinctly_and_left_alone(self):
+        url = f"https://github.com/{FAKE}/r.git"
+        self.assertFalse(rcs.strippable(url))
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, url)
+        n, out = self.run_scan(fix=True)
+        self.assertEqual(n, 1)
+        self.assertIn("UNSTRIPPABLE", out)
+        self.assertNotIn("FIXED", out)
+        self.assertNotIn(FAKE, out)
+        self.assertEqual(self.git_config(repo, "remote.lumenfork.url"), url)
+
+    def test_same_line_remote_section_parsed(self):
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, "https://github.com/o/r.git")
+        self.append_config(repo, f'[remote "oneline"] url = https://{FAKE}@github.com/o/r.git\n')
+        n, out = self.run_scan()
+        self.assertEqual(n, 1)
+        self.assertIn("remote=oneline key=url", out)
+        self.assertNotIn(FAKE, out)
+        n, _ = self.run_scan(fix=True)
+        self.assertEqual(n, 0)
+        self.assertEqual(self.git_config(repo, "remote.oneline.url"), "https://github.com/o/r.git")
+
+    def test_url_insteadof_section_with_token_found_and_fixed(self):
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, "https://github.com/o/r.git")
+        self.git_config(repo, f"url.https://{FAKE}@github.com/.insteadOf", "gh:")
+        self.git_config(repo, "url.https://github.com/.pushInsteadOf", "ghp:")
+        n, out = self.run_scan()
+        self.assertEqual(n, 1)
+        self.assertIn("remote=url#1 key=url-section", out)
+        self.assertNotIn(FAKE, out)
+        n, out = self.run_scan(fix=True)
+        self.assertEqual(n, 0)
+        self.assertEqual(out.count("FIXED"), 1)
+        rules = self.git_config(repo, "--get-regexp", "^url\\..*insteadof$")
+        self.assertNotIn(FAKE, rules)
+        self.assertIn("url.https://github.com/.insteadof gh:", rules)
+        self.assertEqual(self.run_scan(fix=True), (0, ""))
+
+    def test_same_line_url_section_fixed(self):
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, "https://github.com/o/r.git")
+        self.append_config(repo, f'[url "https://u:{OPAQUE}@host/"] insteadOf = h:\n')
+        mode = os.stat(os.path.join(repo, ".git", "config")).st_mode
+        n, _ = self.run_scan(fix=True)
+        self.assertEqual(n, 0)
+        self.assertEqual(self.git_config(repo, "--get", "url.https://host/.insteadof"), "h:")
+        self.assertEqual(os.stat(os.path.join(repo, ".git", "config")).st_mode, mode)
+
     def test_main_exit_codes(self):
         init_repo(os.path.join(self.root, "r"), f"https://{FAKE}@github.com/o/r.git")
         self.assertEqual(rcs.main(["scan", "--root", self.root]), 1)
