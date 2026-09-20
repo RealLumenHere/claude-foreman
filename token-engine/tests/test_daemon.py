@@ -227,7 +227,10 @@ class PrVerbTest(unittest.TestCase):
         self.assertEqual((ok, rule, decision), (False, "body_outside_root", "deny"))
 
     def test_credential_shaped_body_denied(self):
-        p = self.body("here is a leak ghp_abcdefghijklmnop123456\n")
+        # 36-char body, the real ghp_ width: wq#2292 raised the floor from 20 and
+        # widened its own canary (verb_mask_selftest) but not this fixture, which
+        # left the test red on main.
+        p = self.body("here is a leak ghp_" + "abcdefgh" * 4 + "abcd\n")
         ok, rule, *_, decision = D.handle(
             self.preq("pr-comment", ["lumen/lumen-bin", "7", p],
                       kind="pr_comment"), self.peer)
@@ -340,6 +343,13 @@ class FrameTest(unittest.TestCase):
                      '{"reason": "risk-assessment-framework"}',
                      '{"reason": "ghp_MASKED"}'):
             self.assertEqual(D.mask_hits(text), [], text)
+
+    def test_mask_does_not_read_a_called_identifier_as_a_secret(self):
+        # wq#2288: this shape cost a pri-1 rotation ticket in the harness copy of the
+        # rule; here a false hit fails the verb and drops the caller's result.
+        self.assertEqual(D.mask_hits("key = apply_key_allowlist(reg)"), [])
+        self.assertEqual(D.mask_hits('TOKEN = os.environ.get("GH_TOKEN")'), [])
+        self.assertIn("kv_secret", D.mask_hits("password: hunter2-hunter2-hunter2"))
 
 
 if __name__ == "__main__":

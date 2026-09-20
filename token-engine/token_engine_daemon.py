@@ -76,8 +76,12 @@ MASK_PATTERNS = [
     ("sk_key", re.compile(_B + r"sk-[a-zA-Z-]*[A-Za-z0-9_-]{16,}")),
     ("slack_token", re.compile(_B + r"xox[bpasr]-[A-Za-z0-9-]{8,}")),
     ("aws_key_id", re.compile(_B + r"AKIA[0-9A-Z]{16}")),
+    # wq#2288: keep in lockstep with harness/masking.py — a called identifier
+    # (`key = apply_key_allowlist(reg)`) is not a credential, and here a false hit
+    # does not just page: it fails the broker verb and drops the result.
     ("kv_secret", re.compile(
-        r'(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT)["\s]*[:=]["\s]*[A-Za-z0-9._-]{12,}',
+        r'(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT)["\s]*[:=]["\s]*'
+        r'[A-Za-z0-9._-]{12,}(?![A-Za-z0-9._-]|\()',
         re.IGNORECASE)),
 ]
 

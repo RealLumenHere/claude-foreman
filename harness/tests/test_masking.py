@@ -7,6 +7,7 @@ NDJSON frames — the same plumbing test_loop_break_integration.py rides — and
 asserts the synthetic ghp_ value is absent from every returned event while the
 alarm fired exactly once.
 """
+import hashlib
 import json
 import os
 import sys
@@ -91,6 +92,78 @@ def test_masked_ndjson_line_still_parses():
     assert GHP not in json.dumps(reparsed)
 
 
+# --- wq#2288: the record that lets a rotation ticket name the credential ------------
+
+PW = "hunter2-hunter2-hunter2"
+
+
+def test_a_called_identifier_is_not_a_credential():
+    # the exact line that fired the tripwire on wq#2284 and opened wq#2288
+    masked, hits = masking.mask_text("        key = apply_key_allowlist(reg)")
+    assert hits == [] and masked == "        key = apply_key_allowlist(reg)"
+    masked, hits = masking.mask_text(
+        'GH_TOKEN = os.environ.get("FOREMAN_GH_TOKEN", "/home/lumen/.secrets/gh.token")')
+    assert hits == []
+
+
+def test_real_kv_secrets_still_fire():
+    for text in (f"password: {PW}", f'"api_key": "{PW}"', f"GITEA_TOKEN={PW}",
+                 f"Signing Secret: {PW}", f"clientSecret: {PW}"):
+        masked, hits = masking.mask_text(text)
+        assert hits == ["kv-secret"], text
+        assert PW not in masked, text
+
+
+def test_scan_stays_in_lockstep_with_mask_text():
+    text = f"remote https://x:{GHP}@github.com and {SK} and {AKIA} and password: {PW}"
+    masked, hits = masking.mask_text(text)
+    scanned, records = masking.scan(text)
+    assert scanned == masked
+    assert [r["label"] for r in records] == hits
+
+
+def test_scan_records_identify_without_storing_the_value():
+    scanned, records = masking.scan(f"$ litellm --config x.yaml\npassword: {PW}\n")
+    assert [r["label"] for r in records] == ["kv-secret"]
+    rec = records[0]
+    assert rec["prefix"] == "password: "
+    assert rec["value_len"] == len(PW)
+    assert rec["value_sha256_12"] == hashlib.sha256(PW.encode()).hexdigest()[:12]
+    # the record names the credential and its leak path, and carries neither value
+    assert PW not in json.dumps(records) and PW not in scanned
+    assert "litellm --config x.yaml" in rec["context"]
+    assert "password: MASKED" in rec["context"]
+
+
+def test_scan_context_is_cut_after_masking_not_before():
+    # wq#1441's shape: a second credential inside the context window must arrive
+    # already masked, never truncated into a usable fragment.
+    _, records = masking.scan(f"password: {PW} " + "x" * 40 + f" remote https://x:{GHP}@h")
+    context = records[0]["context"]
+    assert GHP not in context and GHP[-20:] not in context
+    assert "ghp_MASKED" in context
+
+
+def test_scan_skips_a_value_an_earlier_pattern_already_masked():
+    # `token: ghp_...` is one credential, not two: after the github pass the kv-secret
+    # pattern sees `ghp_MASKED`, which is too short to match. The records must agree.
+    scanned, records = masking.scan(f"token: {GHP}")
+    assert [r["label"] for r in records] == ["github"]
+    assert scanned == "token: ghp_MASKED"
+
+
+def test_write_mask_hits_appends_and_holds_no_value(tmp_path, monkeypatch):
+    monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
+    _, records = masking.scan(f"password: {PW}")
+    path = fworker.write_mask_hits(4242, 1, records)
+    path = fworker.write_mask_hits(4242, 1, records)   # second alarm, same attempt
+    with open(path) as f:
+        written = json.load(f)
+    assert len(written) == 2
+    assert all(r["ts"] and r["label"] == "kv-secret" for r in written)
+    assert PW not in json.dumps(written)
+
+
 def make_leaky_child(tmp_path):
     """A child that emits a tool_result containing a synthetic ghp_ token, twice
     (alarm must still fire once), then a clean result frame."""
@@ -116,7 +189,8 @@ def make_leaky_child(tmp_path):
 def test_run_child_masks_stream_and_alarms_once(tmp_path, monkeypatch):
     alarms = []
     monkeypatch.setattr(fworker, "mask_alarm",
-                        lambda tid, att, labels: alarms.append((tid, att, labels)))
+                        lambda tid, att, labels, records=None:
+                        alarms.append((tid, att, labels, records)))
     state, exit_code, events, killed_reason, cpu_s, pid = fworker.run_child(
         make_leaky_child(tmp_path), str(tmp_path), dict(os.environ),
         max_turns=50, wall_clock_s=30, ticket_id=999998, attempt=1,
@@ -126,11 +200,19 @@ def test_run_child_masks_stream_and_alarms_once(tmp_path, monkeypatch):
     assert GHP not in dump
     assert "ghp_MASKED" in dump
     # alarm fired exactly once for the github label despite two leaky frames
-    assert alarms == [(999998, 1, ["github"])]
+    assert [(t, a, labels) for t, a, labels, _ in alarms] == [(999998, 1, ["github"])]
+    # and it carried the record that names the token: prefix + digest, no value
+    (record,) = alarms[0][3]
+    assert record["label"] == "github" and record["prefix"] == "ghp_"
+    assert record["value_sha256_12"] == hashlib.sha256(
+        GHP[len("ghp_"):].encode()).hexdigest()[:12]
+    assert "tool_result" in record["context"]
+    assert GHP not in json.dumps(alarms)
 
 
-def test_mask_alarm_pages_and_files_rotation_ticket(monkeypatch):
+def test_mask_alarm_pages_and_files_rotation_ticket(tmp_path, monkeypatch):
     pages, adds = [], []
+    monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
 
     class P:
         returncode = 0
@@ -141,7 +223,13 @@ def test_mask_alarm_pages_and_files_rotation_ticket(monkeypatch):
                         lambda title, msg, priority="default":
                         pages.append((title, priority)))
     monkeypatch.setattr(fworker, "wq", lambda *a, **k: adds.append(a) or P())
-    fworker.mask_alarm(1234, 2, ["github"])
+    _, records = masking.scan(f"remote https://x:{GHP}@github.com")
+    fworker.mask_alarm(1234, 2, ["github"], records)
     assert pages and pages[0][0] == "foreman MASK HIT" and pages[0][1] == "high"
     assert adds and adds[0][0] == "add"
     assert any("rotation" in str(x) for x in adds[0])
+    # the ticket must point at the records, or it arrives unidentifiable (wq#2288)
+    hits_path = os.path.join(str(tmp_path), "wq1234", "mask-hits-2.json")
+    assert any(hits_path in str(x) for x in adds[0])
+    with open(hits_path) as f:
+        assert json.load(f)[0]["prefix"] == "ghp_"

@@ -675,7 +675,31 @@ def ntfy(title, msg, priority="default"):
         pass
 
 
-def mask_alarm(ticket_id, attempt, labels):
+def write_mask_hits(ticket_id, attempt, records):
+    """wq#2288: persist the redacted forensics for an alarm next to attempt-N.json and
+    return the path. Without this the rotation ticket names only a pattern label, and
+    the credential cannot be identified at all — which is exactly how wq#2288 (the
+    first tripwire firing, on wq#2284) arrived unactionable. Records hold a prefix, a
+    length, 12 hex of sha256 and masked context; no value. Best-effort by contract."""
+    path = os.path.join(run_dir(ticket_id), f"mask-hits-{attempt}.json")
+    try:
+        try:
+            with open(path) as f:
+                prior = json.load(f)
+        except (OSError, ValueError):
+            prior = []
+        stamped = [dict(r, ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+                   for r in records or []]
+        tmp = f"{path}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(prior + stamped, f, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:  # noqa: BLE001
+        log(f"WARN: mask-hit record write failed for wq#{ticket_id}: {e!r}")
+    return path
+
+
+def mask_alarm(ticket_id, attempt, labels, records=None):
     """wq#2275 (T6): a mask hit is an ALARM, not a save (instinct 4). The credential
     already reached the model's context — CLI 2.1.233 has no pre-model rewrite lever
     (research/SMARTCRUSHER_HOOK.md) — so the artefacts are clean but the token is
@@ -683,6 +707,7 @@ def mask_alarm(ticket_id, attempt, labels):
     best-effort so an alerting failure never takes down the attempt itself."""
     labels = sorted(labels)
     tag = ",".join(labels)
+    hits_path = write_mask_hits(ticket_id, attempt, records)
     ntfy("foreman MASK HIT",
          f"wq#{ticket_id} attempt {attempt}: {tag} credential(s) masked in child "
          f"stream — token reached model context and is BURNED; rotate today",
@@ -695,9 +720,12 @@ def mask_alarm(ticket_id, attempt, labels):
                            f"fired on wq#{ticket_id} attempt {attempt}'s stream-json. "
                            f"Artefacts on disk are masked, but the value reached the "
                            f"model context, so per instinct 4 it is burned. Identify "
-                           f"the credential (masked prefix is preserved in "
-                           f"{run_dir(ticket_id)} artefacts), rotate it today, and "
-                           f"close the leak path that printed it.",
+                           f"the credential from {hits_path} — each record carries the "
+                           f"kept prefix, the value's length, 12 hex of its sha256 "
+                           f"(sha256 a candidate and compare; the value itself is "
+                           f"nowhere on disk) and a masked context window showing the "
+                           f"command or file it printed from. Rotate it today and "
+                           f"close that leak path.",
                "--no-probe", "rotation is a manual credential action; "
                              "no deterministic liveness probe exists")
         out = ((p.stdout or "") + (p.stderr or "")).strip()
@@ -1858,11 +1886,15 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
                         last_event = time.time()
                         # wq#2275 (T6): same pre-parse masking as run_child() — the
                         # gateway stream feeds the identical artefact chain.
-                        payload, mask_hits = masking.mask_text(raw[len("data:"):].strip())
+                        raw_payload = raw[len("data:"):].strip()
+                        payload, mask_hits = masking.mask_text(raw_payload)
                         new_hits = [h for h in mask_hits if h not in mask_alarmed]
                         if new_hits:
                             mask_alarmed.update(new_hits)
-                            mask_alarm(ticket_id, attempt, new_hits)
+                            # wq#2288: re-scan the raw line for the redacted record —
+                            # only on an alarm, so the hot path stays mask_text().
+                            mask_alarm(ticket_id, attempt, new_hits,
+                                       masking.scan(raw_payload)[1])
                         try:
                             ev = json.loads(payload)
                         except json.JSONDecodeError:
@@ -2005,11 +2037,14 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         # from them (attempt notes, episode store, failure.json, ntfy, PR text) only
         # ever see the masked line. The model already saw the real value (no CLI
         # lever rewrites a tool result), so a hit is an alarm, not a save.
+        raw_line = line
         line, mask_hits = masking.mask_text(line)
         new_hits = [h for h in mask_hits if h not in mask_alarmed]
         if new_hits:
             mask_alarmed.update(new_hits)
-            mask_alarm(ticket_id, attempt, new_hits)
+            # wq#2288: re-scan the raw line for the redacted record — only on an
+            # alarm, so the per-line hot path stays a plain mask_text().
+            mask_alarm(ticket_id, attempt, new_hits, masking.scan(raw_line)[1])
         try:
             frame = json.loads(line)
         except json.JSONDecodeError:

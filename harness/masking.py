@@ -15,12 +15,15 @@ The patterns mirror /home/lumen/bin/mask-secrets (the instinct-4 house set). Kee
 the two in lockstep: a pattern added there must be added here the same day. They
 are no longer character-identical — sed -E is POSIX ERE with no lookbehind, so the
 word boundary below is spelled `(^|[^A-Za-z0-9])` with a shifted capture group
-there and `(?<![A-Za-z0-9])` here. Same language, different syntax.
+there and `(?<![A-Za-z0-9])` here. Same language, different syntax. kv-secret is
+also narrower here until wq#2313 carries its tail lookahead across, which costs the
+sed copy a false alarm, never a missed mask.
 
 Masking operates on the raw NDJSON line, not the parsed frame: the replacement
 alphabet ([A-Za-z0-9._-] and the literal MASKED) contains no JSON metacharacters,
 so a masked line parses exactly like the original.
 """
+import hashlib
 import re
 
 # wq#2292: a prefix only counts at a word boundary. Without `(?<![A-Za-z0-9])` the
@@ -48,11 +51,23 @@ PATTERNS = [
     ("aws", re.compile(_B + r"(AKIA)[0-9A-Z]{16}"), r"\1MASKED"),
     # No boundary here on purpose: this one keys off an English word, not a prefix,
     # and `(?<![A-Za-z0-9])` would stop matching the camelCase leak shapes that are
-    # the whole point of it (`githubToken: ...`, `apiKey = ...`).
+    # the whole point of it (`githubToken: ...`, `apiKey = ...`). The boundary it
+    # does need is a TRAILING one (wq#2288): without it `key = apply_key_allowlist(reg)`
+    # (node_render_gateway.py:418) reads as a 19-char secret, which is what fired the
+    # tripwire on wq#2284 and cost another pri-1 rotate-today ticket. A value that is
+    # immediately called is a function, never a credential — and the charset half of
+    # the lookahead is what makes the `\(` half hold, since a greedy run would
+    # otherwise just backtrack one character and match anyway.
+
     ("kv-secret", re.compile(
-        r'((TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT)["\s]*[:=]["\s]*)[A-Za-z0-9._-]{12,}',
+        r'((TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT)["\s]*[:=]["\s]*)'
+        r'[A-Za-z0-9._-]{12,}(?![A-Za-z0-9._-]|\()',
         re.IGNORECASE), r"\1MASKED"),
 ]
+
+
+CONTEXT_CHARS = 120   # masked context kept either side of a hit
+PREFIX_CHARS = 48     # of the kept, non-secret prefix
 
 
 def mask_text(text):
@@ -63,3 +78,48 @@ def mask_text(text):
         if n and label not in hits:
             hits.append(label)
     return text, hits
+
+
+def scan(text):
+    """(masked_text, [hit record]) — wq#2288. mask_text() answers "did a credential
+    print?"; scan() answers "WHICH one?", which is what a rotation ticket needs and
+    what the first tripwire ticket (wq#2288, fired on wq#2284) could not answer: the
+    labels were all that ever reached disk, so nothing in the run dir identified the
+    burned value.
+
+    A record carries the kept prefix (the part the mask leaves — a key name, `ghp_`,
+    `AKIA`), the value's length, and 12 hex of its sha256: enough to NAME the
+    credential by hashing a candidate, never enough to use it. `context` is a window
+    of the FULLY masked line, so it shows the command or file the value printed from
+    — the leak path — with every pattern in the window already replaced. The window is
+    cut after masking, never before: cutting first is what let a token escape the
+    replace in wq#1441 (see tests/test_read_dir_sweep.py).
+    """
+    matches, cur = [], text
+    for label, rx, repl in PATTERNS:
+        # finditer then sub on the same string, pattern by pattern, so the records
+        # follow exactly the sequence of substitutions mask_text() performs: a value
+        # an earlier pattern already shortened to `<prefix>MASKED` no longer matches
+        # a later one, and must not be recorded as if it had.
+        for m in rx.finditer(cur):
+            matches.append((label, m.group(1), m.group(0)[len(m.group(1)):]))
+        cur = rx.sub(repl, cur)
+
+    records, cursor = [], {}
+    for label, prefix, value in matches:
+        marker = prefix + "MASKED"
+        at = cur.find(marker, cursor.get(marker, 0))
+        if at < 0:
+            context = ""   # a later pattern reshaped the prefix; degrade, never leak
+        else:
+            cursor[marker] = at + len(marker)
+            context = cur[max(0, at - CONTEXT_CHARS):at + len(marker) + CONTEXT_CHARS]
+        records.append({
+            "label": label,
+            "prefix": prefix[-PREFIX_CHARS:],
+            "value_len": len(value),
+            "value_sha256_12": hashlib.sha256(
+                value.encode("utf-8", "replace")).hexdigest()[:12],
+            "context": context,
+        })
+    return cur, records
