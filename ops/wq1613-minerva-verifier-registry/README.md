@@ -63,3 +63,14 @@ overnight work), per §3.3.
   rendering (#5, wq#1612) are separate tickets.
 - `narrative` and `price`/market predicates have no class default and are never swept
   (§3.9) — prose lifecycle and `VOLATILE_HALFLIFE` own those respectively.
+
+## Deployed 2026-09-20 (wq#2203)
+
+wq#2202 found `install.sh --verify` exiting 1: `/home/lumen/bin/lumen-verify` and
+`/home/lumen/minerva/verify/registry.yaml` still held the pre-wq#2192 probes, so the
+`lumen-state-verify` timer kept clobbering `status`/`*_version`/`os` facts. `install.sh` was
+run as a detached `lumen-run` unit (28 tests passed, `repair_clobbered_facts.py --apply`
+repaired 0 facts, units installed, timer enabled). `install.sh --verify` now prints
+`VERIFY OK`. The closing `sweep --dry-run --json` shows `fleet_inventory` rows as `unknown`
+(never mutating): `probe_fleet_inventory` passes `--json` to `fleet-inv get`, which rejects
+it (`lumen_verify.py:194`, ISSUE-LOG #500).
