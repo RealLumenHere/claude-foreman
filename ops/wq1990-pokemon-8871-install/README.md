@@ -44,3 +44,11 @@ journalctl -u lumen-pokemon-live -u lumen-kiosk-idle --since "-5min" --no-pager
 
 A real restart must show `lumen-pokemon-live` active with a fresh event and no
 `lumen-kiosk-idle` start in the journal (the wq#1661 defect this ticket ends).
+
+## Superseded (wq#2219)
+
+wq#2073 re-masked `lumen-pokemon-live.service` after this bundle's unmask ran it
+19h / 8478 brain calls. This bundle deliberately has no `install.sh --verify`
+(ops/VERIFY_CONTRACT.md wq#1696): its end state is an unmasked unit, and a handler
+asserting that would flag the intended mask as drift daily. The record of the mask
+is the `lpp (lumen-pokemon-live)` entry in `docs/fleet/retired_services.yaml`.
