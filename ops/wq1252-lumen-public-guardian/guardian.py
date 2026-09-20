@@ -243,6 +243,12 @@ def run_once(cfg, only=None, dry_run=False, force=False, now=None):
     registry = build_registry(cfg)
     results = []
 
+    # A check that left the registry (retired surface) must not keep publishing
+    # its last status — a stale RED would hold `overall` red forever.
+    if not only:
+        state["checks"] = {cid: cs for cid, cs in state.get("checks", {}).items()
+                           if cid in registry}
+
     for check_id, spec in sorted(registry.items()):
         if only and check_id not in only:
             continue

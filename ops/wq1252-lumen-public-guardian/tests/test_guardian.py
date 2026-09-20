@@ -331,7 +331,8 @@ def test_a_check_that_raises_becomes_red_not_a_crash(monkeypatch, tmp_path):
     assert published["overall"] == guardian.RED
 
 
-def test_registry_covers_every_check_the_ticket_names():
+def test_registry_covers_every_check_the_ticket_names(monkeypatch):
+    monkeypatch.setattr(checks_stream, "unit_load_state", lambda unit: "loaded")
     cfg = json.load(open(os.path.join(SRC, "config.json")))
     reg = guardian.build_registry(cfg)
     assert set(reg) == {
@@ -339,6 +340,75 @@ def test_registry_covers_every_check_the_ticket_names():
         "E5-recall", "E6-suppressed",
         "S1-public", "S2-unit", "S3-tunnel", "S4-local",
     }
+
+
+@pytest.mark.parametrize("load", ["masked", "not-found"])
+def test_retired_live_unit_drops_its_checks_but_keeps_the_tunnel(monkeypatch, load):
+    monkeypatch.setattr(checks_stream, "unit_load_state", lambda unit: load)
+    cfg = json.load(open(os.path.join(SRC, "config.json")))
+    reg = guardian.build_registry(cfg)
+    assert not {"S1-public", "S2-unit", "S4-local"} & set(reg)
+    assert "S3-tunnel" in reg and "E1-version" in reg
+
+
+def test_uninspectable_unit_is_not_treated_as_retired(monkeypatch):
+    monkeypatch.setattr(checks_stream, "systemctl", lambda args, timeout=20: (1, "boom"))
+    assert checks_stream.unit_load_state("x.service") is None
+    monkeypatch.setattr(checks_stream, "unit_load_state", lambda unit: None)
+    cfg = json.load(open(os.path.join(SRC, "config.json")))
+    assert "S1-public" in guardian.build_registry(cfg)
+
+
+def test_a_retired_check_stops_publishing_its_stale_red(monkeypatch, tmp_path):
+    cfg = json.load(open(os.path.join(SRC, "config.json")))
+    cfg["state_path"] = str(tmp_path / "state.json")
+    cfg["status_path"] = str(tmp_path / "status.json")
+    cfg["status_push_map"] = str(tmp_path / "nope.json")
+    guardian.save_state(cfg["state_path"], {"checks": {
+        "S2-unit": {"status": guardian.RED, "consecutive_red": 9, "heal_step": 1,
+                    "last_run": 0, "last_alert": 0, "fire_ticket": "wq#1"}}})
+    monkeypatch.setattr(guardian, "build_registry", lambda c: {})
+    monkeypatch.setattr(guardian, "ntfy", lambda *a, **k: True)
+    guardian.run_once(cfg, force=True)
+    published = json.load(open(cfg["status_path"]))
+    assert "S2-unit" not in published["checks"]
+    assert published["overall"] == guardian.OK
+
+
+def _e1_cfg(tmp_path):
+    cfg = json.load(open(os.path.join(SRC, "config.json")))
+    e = cfg["email"]
+    for key in ("cf_account_id_file", "d1_id_file", "d1_token_file",
+                "cf_deploy_token_file"):
+        p = tmp_path / key
+        p.write_text("x")
+        e[key] = str(p)
+    return cfg
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_rejected_deploy_token_says_so_and_is_unconfigured_not_red(
+        monkeypatch, tmp_path, code):
+    import urllib.error
+
+    def deny(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, code, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(checks_email.urllib.request, "urlopen", deny)
+    r = checks_email.check_e1_version(_e1_cfg(tmp_path))
+    assert r.status == guardian.UNCONFIGURED
+    assert f"HTTP {code}" in r.detail and "mint a new one" in r.detail
+
+
+def test_other_workers_api_errors_stay_red_via_the_raise_path(monkeypatch, tmp_path):
+    import urllib.error
+
+    def boom(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 500, "oops", {}, None)
+
+    monkeypatch.setattr(checks_email.urllib.request, "urlopen", boom)
+    with pytest.raises(urllib.error.HTTPError):
+        checks_email.check_e1_version(_e1_cfg(tmp_path))
 
 
 def test_config_paths_are_absolute():

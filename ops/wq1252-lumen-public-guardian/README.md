@@ -54,6 +54,13 @@ A check that *cannot run* (missing credential) reports `UNCONFIGURED`, never
 `ok`, and nags once a day. Silent disablement is the failure mode this whole
 service exists to prevent.
 
+A rejected Workers-read token (HTTP 401/403 from Cloudflare) is also
+`UNCONFIGURED`, and the detail names the token file to replace. A masked or
+deleted `lumen-pokemon-live.service` drops `S1`/`S2`/`S4` from the pass (logged
+each run, re-armed the moment the unit loads again) — a retired stream is an
+operator decision, and restarting a masked unit cannot heal it. `S3-tunnel`
+keeps running: cloudflared carries every public hostname.
+
 ## Who watches the watchdog
 
 The unit stamps `/home/lumen/logs/.stamp.lumen-public-guardian.service` on every

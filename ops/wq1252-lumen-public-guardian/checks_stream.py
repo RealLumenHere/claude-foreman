@@ -224,8 +224,19 @@ STREAM_HEALS = [
 ]
 
 
+RETIRED_LOAD_STATES = ("masked", "not-found")
+LIVE_AGENT_CHECKS = ("S1-public", "S2-unit", "S4-local")
+
+
+def unit_load_state(unit):
+    """systemd LoadState for `unit`, or None when systemctl cannot say. A
+    unit we cannot inspect is never treated as retired."""
+    rc, out = systemctl(["show", "-p", "LoadState", "--value", unit])
+    return out.strip() if rc == 0 and out.strip() else None
+
+
 def registry(cfg):
-    return {
+    reg = {
         "S1-public": {"fn": check_s1_public, "interval_s": 0, "heals": STREAM_HEALS},
         "S2-unit": {"fn": check_s2_unit, "interval_s": 0,
                     "heals": [STREAM_HEALS[0]]},
@@ -234,3 +245,15 @@ def registry(cfg):
         "S4-local": {"fn": check_s4_local, "interval_s": 0,
                      "heals": [STREAM_HEALS[0]]},
     }
+    # A masked or deleted live-agent unit is an operator decision (see
+    # docs/fleet/retired_services.yaml), not an outage: S1/S2/S4 would go RED
+    # every cycle, run a `systemctl restart` that cannot succeed, then open a
+    # fire nobody can close. Re-evaluated every pass, so unmasking re-arms them.
+    unit = _cfg(cfg)["unit"]
+    load = unit_load_state(unit)
+    if load in RETIRED_LOAD_STATES:
+        print(f"guardian: {'/'.join(LIVE_AGENT_CHECKS)} not run — {unit} is {load} "
+              f"(retired); they re-arm when the unit loads again")
+        for check_id in LIVE_AGENT_CHECKS:
+            del reg[check_id]
+    return reg

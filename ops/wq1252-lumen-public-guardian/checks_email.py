@@ -96,6 +96,17 @@ def valid_probe_tokens(secret, now=None, window_s=1800, back=2):
 # E1 — deploy version + D1 schema
 
 
+class DeployTokenRejected(Exception):
+    """The token file exists but Cloudflare refuses it. A bare os.path.exists()
+    gate cannot tell that from a working token, and the raw HTTPError it
+    produced ('HTTP Error 401') never said which credential to replace."""
+
+    def __init__(self, path, code):
+        super().__init__(f"deploy token {path} rejected by Cloudflare (HTTP {code}) "
+                         f"— revoked, expired or missing Workers Scripts:Read; "
+                         f"mint a new one")
+
+
 def _live_version(cfg):
     """Newest deployment version id for the mailbot worker, or None if we have
     no token that can read it."""
@@ -107,8 +118,13 @@ def _live_version(cfg):
            f"/workers/scripts/{e['worker_name']}/deployments")
     req = urllib.request.Request(
         url, headers={"Authorization": f"Bearer {_read(token_file)}"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        out = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            out = json.load(r)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise DeployTokenRejected(token_file, exc.code) from exc
+        raise
     deployments = (out.get("result") or {}).get("deployments") or []
     if not deployments:
         return None
@@ -128,7 +144,12 @@ def check_e1_version(cfg):
         return Result("E1-version", UNCONFIGURED,
                       f"no Workers-read token at {e.get('cf_deploy_token_file')} — "
                       f"deployed version cannot be read")
-    live = _live_version(cfg)
+    try:
+        live = _live_version(cfg)
+    except DeployTokenRejected as exc:
+        # Cannot run, not broken: UNCONFIGURED nags daily with this text, where
+        # RED would page every 15 cycles and open a fire no worker can close.
+        return Result("E1-version", UNCONFIGURED, str(exc))
     if not live:
         return Result("E1-version", RED, "Cloudflare returned no deployments for "
                       f"{e['worker_name']}")
