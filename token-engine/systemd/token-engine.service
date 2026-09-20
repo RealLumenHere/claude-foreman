@@ -1,0 +1,38 @@
+# token-engine broker daemon (wq#2270, TOKEN_ENGINE_DESIGN.md §1 + §5.5).
+# Installed by token-engine/install.sh; code runs from the root-owned copy in
+# /usr/local/lib/token-engine so uid lumen cannot edit what uid tokeneng runs.
+[Unit]
+Description=Lumen token-engine credential broker (wq#2270)
+After=network.target
+
+[Service]
+Type=simple
+User=tokeneng
+# Primary group token-client so RuntimeDirectory and the socket land 0750/0660
+# group-shared with clients; secret files are chmod 0600 tokeneng:tokeneng by
+# install.sh and the daemon's UMask, so the group grants socket access only.
+Group=token-client
+ExecStart=/usr/bin/python3 /usr/local/lib/token-engine/token_engine_daemon.py
+Restart=always
+RestartSec=2
+UMask=0077
+
+# /run/token-engine — socket dir, traversable by token-client only.
+RuntimeDirectory=token-engine
+RuntimeDirectoryMode=0750
+# /var/lib/token-engine (0700 tokeneng:tokeneng) is created by install.sh, not
+# StateDirectory=, so systemd never re-chowns the secret store to the unit's
+# group; it is carved writable below for future minter/revocation state.
+
+# Hardening set required by wq#2270 (f).
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryDenyWriteExecute=yes
+# Dual audit sink (fleet-exec:112-114) lives under the foreman events dir; the
+# only writable path outside StateDirectory/RuntimeDirectory.
+ReadWritePaths=/home/lumen/foreman/events /var/lib/token-engine
+
+[Install]
+WantedBy=multi-user.target

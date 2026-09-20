@@ -1118,7 +1118,11 @@ def resolve_exec_grant(ticket_id, attempt, needs, wall_clock_s, worktree=None):
         os.chmod(path, 0o600)
     with open(path, "wb") as f:
         f.write(raw)
-    os.chmod(path, 0o400)
+    # 0444 not 0400: the token-engine daemon (uid tokeneng) re-reads and
+    # re-hashes this file itself rather than trusting the worker
+    # (TOKEN_ENGINE_DESIGN.md §1.3, wq#2270). It holds no secret; the sha env
+    # var remains the tamper check.
+    os.chmod(path, 0o444)
     return grant, fleet_exec_policy.sha256_bytes(raw), path
 
 
