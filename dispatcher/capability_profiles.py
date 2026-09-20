@@ -26,10 +26,13 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import yaml
+
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(DISPATCHER_DIR, ".."))
 sys.path.insert(0, DISPATCHER_DIR)
 sys.path.insert(0, os.path.join(REPO_ROOT, "harness"))
+import charging  # noqa: E402
 import inference_registry  # noqa: E402
 import self_heal  # noqa: E402
 
@@ -39,13 +42,27 @@ DEMOTE_BELOW = 0.30
 PROPOSE_AT = 0.50
 SUCCESS_CLASSES = ("SUCCESS", "DEGRADED_SUCCESS")
 PROPOSALS_NAME = "capability_proposals.json"
+NOT_CAPABILITY_EVIDENCE = (charging.CHARGE_RUNG, charging.CHARGE_HARNESS)
 
 _RUN_DIR_RE = re.compile(r"^wq(\d+)$")
 _NODE_RE = re.compile(r"^  ([\w.-]+):\s*(?:#.*)?$")
 _FAMILY_RE = re.compile(r"^\s*- family:\s*([\w.-]+)")
 _CAPS_RE = re.compile(r"^(\s*)capabilities:\s*(?:#.*)?$")
-_ROW_RE = re.compile(r"^(\s+)([\w-]+)(:\s*)\{(.*)\}(\s*(?:#.*)?)$")
+_ROW_RE = re.compile(r"^(\s+)([\w-]+)(:\s*)(\{.*)$")
 _BARE_RE = re.compile(r"^[A-Za-z][\w-]*$")
+
+
+def _split_flow_row(rest):
+    """(mapping, tail) for text that starts with a one-line flow mapping; the tail is whatever
+    follows the closing brace (spacing, a comment). None when it is not one."""
+    try:
+        node = yaml.compose(rest, Loader=yaml.SafeLoader)
+    except yaml.YAMLError:
+        return None
+    if not (isinstance(node, yaml.MappingNode) and node.flow_style):
+        return None
+    end = node.end_mark.index
+    return yaml.safe_load(rest[:end]) or {}, rest[end:]
 
 
 def _finished_at(rec, path):
@@ -60,7 +77,9 @@ def _finished_at(rec, path):
 
 def collect(now, window_days=WINDOW_DAYS):
     """{(model, archetype): [n, successes]} over the window. A record with no model, archetype
-    or classification (unreadable, or a signal-kill stub) is not evidence."""
+    or classification (unreadable, or a signal-kill stub) is not evidence, and neither is one
+    charged to the rung or the harness: a backend fault says nothing about the model's ability,
+    and counting it would demote a row that then never routes again to earn its way back."""
     cutoff = now - window_days * 86400
     tally = {}
     try:
@@ -74,6 +93,8 @@ def collect(now, window_days=WINDOW_DAYS):
         for path, rec in self_heal.attempt_records(int(m.group(1))):
             model, archetype, cls = rec.get("model"), rec.get("archetype"), rec.get("classification")
             if not (model and archetype and cls) or _finished_at(rec, path) < cutoff:
+                continue
+            if rec.get("charged_to") in NOT_CAPABILITY_EVIDENCE:
                 continue
             cell = tally.setdefault((model, archetype), [0, 0])
             cell[0] += 1
@@ -112,15 +133,19 @@ def plan(reg, tally, now, window_days=WINDOW_DAYS):
 def _scalar(v):
     if isinstance(v, bool):
         return "true" if v else "false"
-    if isinstance(v, str) and not _BARE_RE.match(v):
-        return json.dumps(v)
-    return str(v)
+    if v is None:
+        return "null"
+    if isinstance(v, str):
+        bare = _BARE_RE.match(v) and yaml.safe_load(v) == v
+        return v if bare else json.dumps(v)
+    if isinstance(v, (int, float)):
+        return str(v)
+    return json.dumps(v)
 
 
 def apply_edits(text, edits):
     """Merge `edits` into the matching one-line capability rows of the registry text. A row
     that is not a one-line flow mapping raises RegistryError rather than being skipped."""
-    import yaml
     todo, node, family, caps_indent, in_nodes = dict(edits), None, None, None, False
     out = []
     for line in text.split("\n"):
@@ -138,12 +163,13 @@ def apply_edits(text, edits):
                 caps_indent = None
             elif caps_indent is not None:
                 row = _ROW_RE.match(line)
-                key = (node, family, row.group(2)) if row else None
+                flow = _split_flow_row(row.group(4)) if row else None
+                key = (node, family, row.group(2)) if flow else None
                 if key in todo:
-                    merged = yaml.safe_load("{" + row.group(4) + "}")
+                    merged, tail = flow
                     merged.update(todo.pop(key))
                     body = ", ".join(f"{k}: {_scalar(v)}" for k, v in merged.items())
-                    line = f"{row.group(1)}{row.group(2)}{row.group(3)}{{{body}}}{row.group(5)}"
+                    line = f"{row.group(1)}{row.group(2)}{row.group(3)}{{{body}}}{tail}"
         out.append(line)
     if todo:
         raise inference_registry.RegistryError(

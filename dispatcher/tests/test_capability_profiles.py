@@ -8,6 +8,7 @@ import sys
 import time
 
 import pytest
+import yaml
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 DISPATCHER_DIR = os.path.dirname(TESTS_DIR)
@@ -156,3 +157,42 @@ def test_cli_prints_the_proposal(env, capsys, monkeypatch):
     assert capability_profiles.main(["refresh", "--path", reg]) == 0
     out = capsys.readouterr().out
     assert "PROPOSAL" in out and "qwen36-local" in out and "1 promotion proposals" in out
+
+
+@pytest.mark.parametrize("charge", ["rung", "harness"])
+def test_backend_charged_attempts_are_not_evidence(env, charge):
+    runs, reg = env
+    seed(runs, *TRUSTED, successes=0, total=10)
+    for i in range(10):
+        rec = runs / f"wq{9000 + i}" / "attempt-1.json"
+        rec.write_text(json.dumps({**json.loads(rec.read_text()), "charged_to": charge}))
+    assert capability_profiles.collect(NOW) == {}
+    res = capability_profiles.refresh(path=reg, now=NOW)
+    assert res["demoted"] == [] and row(reg, *TRUSTED)["trusted"] is True
+
+
+def test_ticket_and_uncharged_records_still_count_beside_rung_faults(env):
+    runs, reg = env
+    seed(runs, *TRUSTED, successes=0, total=10)
+    seed(runs, *TRUSTED, successes=0, total=10, first_id=9200)
+    for i in range(10):
+        rec = runs / f"wq{9200 + i}" / "attempt-1.json"
+        rec.write_text(json.dumps({**json.loads(rec.read_text()), "charged_to": "rung"}))
+    for i in range(5):
+        rec = runs / f"wq{9000 + i}" / "attempt-1.json"
+        rec.write_text(json.dumps({**json.loads(rec.read_text()), "charged_to": "ticket"}))
+    assert capability_profiles.collect(NOW) == {(TRUSTED[0], TRUSTED[1]): [10, 0]}
+
+
+def test_scalars_round_trip_through_apply_edits():
+    text = ("nodes:\n  n1:\n    models:\n      - family: f1\n        capabilities:\n"
+            "          arch: {trusted: true, note: null, s1: 'null', s2: 'true', s3: \"a: b\","
+            " ratio: 0.5} # keep } this\n")
+    out = capability_profiles.apply_edits(
+        text, {("n1", "f1", "arch"): {"n": 12, "nothing": None, "word": "null", "flag": "true",
+                                      "plain": "measured", "txt": "x, y: {z}"}})
+    got = yaml.safe_load(out)["nodes"]["n1"]["models"][0]["capabilities"]["arch"]
+    assert got == {"trusted": True, "note": None, "s1": "null", "s2": "true", "s3": "a: b",
+                   "ratio": 0.5, "n": 12, "nothing": None, "word": "null", "flag": "true",
+                   "plain": "measured", "txt": "x, y: {z}"}
+    assert out.rstrip("\n").endswith("} # keep } this")
