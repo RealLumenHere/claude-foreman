@@ -528,3 +528,77 @@ def test_dashboard_data_reads_the_store_read_only(denv):
     names = {r[0] for r in con.execute("SELECT name FROM sqlite_master")}
     con.close()
     assert "dispatch_gate" not in names                     # ... and the read did not create it
+
+
+# ---- wq#2212: never park a verdict drawn from a transient wq failure --------------------
+
+def _failing_wq_show(monkeypatch, tid):
+    real = router.wq_show
+
+    def show(i):
+        if int(i) == tid:
+            raise SystemExit(f"router: no such ticket {i}")
+        return real(i)
+    monkeypatch.setattr(router, "wq_show", show)
+    return real
+
+
+def test_transient_dep_read_failure_is_not_parked(denv, monkeypatch):
+    dep = add_ticket("the dep, already done")
+    db_exec(denv, "UPDATE tasks SET status='done' WHERE id=?", (dep,))
+    child = add_ticket("needs the dep", deps=str(dep))
+    real = _failing_wq_show(monkeypatch, dep)
+    assert fd.run_pass() == 0
+    assert gate_store.parked_rows() == {}
+    skips = [e for e in log_events(denv) if e["event"] == "skip" and e["ticket"] == child]
+    assert [(e["reason"], e.get("parked")) for e in skips] == [("deps_unmet", None)]
+
+    monkeypatch.setattr(router, "wq_show", real)   # the read recovers: dispatched, not sat out
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv) if e["event"] == "spawn"] == [child]
+
+
+def test_real_unmet_dep_still_parks(denv):
+    dep = add_ticket("[FRANK GATE] the dep stays open")
+    add_ticket("needs the dep", deps=str(dep))
+    assert fd.run_pass() == 0
+    assert gate_store.by_reason() == {"frank_gated": 1, "deps_unmet": 1}
+
+
+def test_transient_route_failure_is_not_parked(denv, monkeypatch):
+    tid = add_ticket("unrouted", model=None)
+
+    def boom(*a, **kw):
+        raise SystemExit("router: no such ticket")
+    monkeypatch.setattr(router, "assign", boom)
+    assert fd.run_pass() == 0
+    assert gate_store.parked_rows() == {}
+    skips = [e for e in log_events(denv) if e["event"] == "skip" and e["ticket"] == tid]
+    assert [(e["reason"], e.get("parked")) for e in skips] == [("route_unreadable", None)]
+
+
+def test_park_fingerprints_the_snapshot_the_gate_judged(denv):
+    import types
+    import gates
+    tid = add_ticket("[FRANK GATE] as judged")
+    snap = router.wq_show(tid)
+    wq("edit", str(tid), "--title", "[FRANK GATE] edited after the gate read")
+    log = types.SimpleNamespace(emit=lambda *a, **k: None)
+    g = types.SimpleNamespace(tid=tid, lane="testlane", t=snap, log=log,
+                              ctx=types.SimpleNamespace(dry_run=False, gate_salt=""), fd=fd)
+    res = gates.Fail("frank_gate", "frank_gated", fingerprint_inputs=("title",), parkable=True)
+    assert gates._park(g, res)
+    row = gate_store.parked_rows()[tid]
+    assert row["fingerprint"] == gate_store.fingerprint(tid, ("title",), row=snap)
+    assert row["fingerprint"] != gate_store.fingerprint(tid, ("title",))   # not the NEW title
+    assert gate_store.is_parked(tid, gate_store.fingerprint(tid, ("title",))) is False
+
+
+def test_lever_off_empties_the_janitors_inputs(denv, monkeypatch):
+    tid = add_ticket("[FRANK GATE] hold")
+    assert gate_store.park(tid, "repo_mismatch", gate_store.fingerprint(tid, ("title",)))
+    assert set(gate_store.parked_rows()) == {tid}
+    assert list(gate_store.rows_by_reason()) == ["repo_mismatch"]
+    monkeypatch.setenv("FOREMAN_GATE_STORE", "off")
+    assert gate_store.parked_rows() == {} and gate_store.rows_by_reason() == {}
+    assert gate_store.by_reason() == {"repo_mismatch": 1}   # the read-only status view stays

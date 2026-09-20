@@ -539,9 +539,14 @@ def hold_reason(t):
     return f"held by '{hold_by}' until {hold_expires}Z"
 
 
+DEP_UNREADABLE = "unreadable"  # dep_cache status of a dep whose `wq show` failed this pass
+
+
 def unmet_deps(t, cache):
     """Dep ids not in status=done (MUST 2). A missing dep ticket counts as unmet —
-    fail closed. wq claim --id re-checks authoritatively (DESIGN §3 TOCTOU)."""
+    fail closed. wq claim --id re-checks authoritatively (DESIGN §3 TOCTOU). A dep whose
+    `wq show` failed is unmet too, cached as DEP_UNREADABLE so the Deps gate can tell that
+    verdict is a transient read failure (never parked) from a real status."""
     deps = t.get("deps") or ""
     if deps in ("", "None"):
         return []
@@ -554,11 +559,14 @@ def unmet_deps(t, cache):
             except SystemExit:
                 if _terminating:
                     raise
-                status = "missing"
+                status = DEP_UNREADABLE
             cache[d] = status
         if status != "done":
             unmet.append(d)
     return unmet
+
+
+ROUTE_UNREADABLE = "route_unreadable"  # candidate_model skip reason: router.assign raised SystemExit
 
 
 def candidate_model(t, tid):
@@ -581,7 +589,7 @@ def candidate_model(t, tid):
     except SystemExit:
         if _terminating:
             raise
-        return None, "route_unassigned"
+        return None, ROUTE_UNREADABLE  # router.wq_show failed: not a verdict on the ticket
     except router.ManifestError as e:
         ntfy(f"dispatcher: wq#{tid} has an unroutable archetype ({e}) — skipped "
              f"every pass until fixed", priority="high", title="dispatcher bad archetype")

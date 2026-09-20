@@ -17,7 +17,8 @@ The table lives in the wq sqlite db next to `tasks` (create-if-missing, WAL, eve
 short transaction, 5 s busy timeout). FAIL-OPEN, always: any sqlite/OS error reads as "not
 parked", so a broken store degrades to the pre-step-11 behaviour (evaluate everything) and can
 never hide a ticket. FOREMAN_GATE_STORE=off turns parking off entirely (rollback lever,
-DISPATCH_REBUILD_SPEC §5 item 8); `by_reason` and the janitor's reads still work.
+DISPATCH_REBUILD_SPEC §5 item 8); the janitor's inputs (`parked_rows`, `rows_by_reason`) read
+empty, while the read-only status views (`by_reason`, `due`) still work.
 """
 import hashlib
 import json
@@ -141,12 +142,14 @@ def _fingerprint(con, row, inputs, salt):
     return hashlib.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def fingerprint(ticket, inputs=(), salt=""):
-    """Hash of `inputs` (+ CORE_INPUTS) of the ticket as it is NOW, or None when the row cannot
-    be read (missing ticket, sqlite error) — callers treat None as "do not park"."""
+def fingerprint(ticket, inputs=(), salt="", row=None):
+    """Hash of `inputs` (+ CORE_INPUTS) of the ticket as it is NOW — or of `row`, the caller's
+    own snapshot of it (`wq show --json` carries the sqlite column names and types) — or None
+    when the row cannot be read (missing ticket, sqlite error): callers treat None as "do not
+    park". A dep's status is always read live."""
     def go(con):
-        row = _ticket_rows(con, [ticket]).get(int(ticket))
-        return _fingerprint(con, row, inputs, salt) if row else None
+        r = row or _ticket_rows(con, [ticket]).get(int(ticket))
+        return _fingerprint(con, r, inputs, salt) if r else None
     return _with_con(go, None)
 
 
@@ -223,9 +226,9 @@ def is_parked(ticket, fingerprint, now=None):
 
 
 def parked_rows(ids=None):
-    """{ticket: row dict} of every park row (or the given ids). {} on error."""
+    """{ticket: row dict} of every park row (or the given ids). {} on error or store off."""
     ids = None if ids is None else [int(i) for i in ids]
-    if ids is not None and not ids:
+    if not enabled() or (ids is not None and not ids):
         return {}
 
     def go(con):
@@ -258,7 +261,11 @@ def by_reason():
 
 
 def rows_by_reason():
-    """{reason: [row dict + title]} for parked open tickets — the janitor's digest input."""
+    """{reason: [row dict + title]} for parked open tickets — the janitor's digest input.
+    {} on error or store off (rows left from before the switch must not be acted on)."""
+    if not enabled():
+        return {}
+
     def go(con):
         out = {}
         for r in con.execute(

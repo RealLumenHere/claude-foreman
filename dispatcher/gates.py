@@ -320,8 +320,12 @@ class Deps(Gate):
     def check(self, g):
         unmet = g.fd.unmet_deps(g.t, g.ctx.dep_cache)
         if unmet:
+            # gate_store adds each dep's status to the fingerprint, so a verdict drawn from a
+            # failed `wq show` of a dep is not parked: the fingerprint would carry the dep's
+            # real status and never change when the read recovers
+            readable = all(g.ctx.dep_cache.get(d) != g.fd.DEP_UNREADABLE for d in unmet)
             return Fail("deps", "deps_unmet", detail=",".join(unmet), fingerprint_inputs=("deps",),
-                        parkable=True)  # gate_store adds each dep's status to the fingerprint
+                        parkable=readable)
         return PASS
 
 
@@ -345,6 +349,8 @@ class Route(Gate):
     def check(self, g):
         g.model, skip_reason = g.fd.candidate_model(g.t, g.tid)
         if not g.model:
+            if skip_reason == g.fd.ROUTE_UNREADABLE:  # transient router failure: re-derive next pass
+                return Fail("budget", skip_reason, detail="router.assign could not read the ticket")
             return Fail("budget", skip_reason, detail="router has no rung for this ticket",
                         terminal=True, fingerprint_inputs=("model", "effort", "archetype"),
                         parkable=True)
@@ -368,7 +374,11 @@ def _park(g, res):
     if not store.enabled():
         return None
     try:
-        fp = store.fingerprint(g.tid, res.fingerprint_inputs, getattr(g.ctx, "gate_salt", ""))
+        # from the g.t snapshot the gate judged, not a fresh read: an edit between the two must
+        # leave the park fingerprint stale so the next pass re-evaluates (gates before
+        # TicketLoad have no snapshot yet and read the row)
+        fp = store.fingerprint(g.tid, res.fingerprint_inputs, getattr(g.ctx, "gate_salt", ""),
+                               row=g.t)
         return store.park(g.tid, res.reason, fp, inputs=res.fingerprint_inputs, lane=g.lane,
                           terminal=res.terminal, recheck_after=res.recheck_after,
                           detail=res.detail)
