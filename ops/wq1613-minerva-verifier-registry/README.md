@@ -74,3 +74,11 @@ repaired 0 facts, units installed, timer enabled). `install.sh --verify` now pri
 `VERIFY OK`. The closing `sweep --dry-run --json` shows `fleet_inventory` rows as `unknown`
 (never mutating): `probe_fleet_inventory` passes `--json` to `fleet-inv get`, which rejects
 it (`lumen_verify.py:194`, ISSUE-LOG #500).
+
+## Redeployed 2026-09-20 (wq#2208)
+
+wq#2207 found the wq#2203 deploy stale: wq#2204's e09ca18 (endpoint/storage probes no longer
+clobber `url`/`port`/`ram`/`storage` facts) landed after it, so the live `lumen-verify` was one
+commit behind and `install.sh --verify` exited 1. Once wq#2206 confirmed wq#2204, `install.sh`
+was rerun as a detached `lumen-run` unit (42 tests passed, `repair_clobbered_facts.py` repaired
+0 facts, exit 0) and `install.sh --verify` printed `VERIFY OK` (also as a unit, exit 0).
