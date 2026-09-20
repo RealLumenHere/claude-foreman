@@ -140,8 +140,9 @@ def merge_allowlist(current, reg):
 # --- litellm_config.yaml splice -------------------------------------------------------------
 
 def _model_list_chunks(lines):
-    """(start, end, model_name) per model_list item; end is exclusive, and the last item stops at
-    the next top-level key."""
+    """(chunks, stop, indent): chunks is (start, end, model_name) per model_list item, end
+    exclusive, the last item stopping at the next top-level key. `indent` is the item indent taken
+    from the first `- ` under model_list ("" for column-0 lists, "  " for the usual layout)."""
     head = next((i for i, ln in enumerate(lines) if re.match(r"model_list:\s*(#.*)?$", ln)), None)
     if head is None:
         raise GatewayError("litellm config has no top-level model_list:")
@@ -150,13 +151,20 @@ def _model_list_chunks(lines):
         if re.match(r"[A-Za-z_]", lines[i]):
             stop = i
             break
-    starts = [i for i in range(head + 1, stop) if lines[i].startswith("- ")]
+    first = next((re.match(r"( *)- ", lines[i]) for i in range(head + 1, stop)
+                  if re.match(r" *- ", lines[i])), None)
+    indent = first.group(1) if first else ""
+    starts = [i for i in range(head + 1, stop) if re.match(rf"{indent}- ", lines[i])]
     chunks = []
     for n, s in enumerate(starts):
         e = starts[n + 1] if n + 1 < len(starts) else stop
-        name = re.match(r"- model_name:\s*(\S+)", lines[s])
+        name = re.match(rf"{indent}- model_name:\s*(\S+)", lines[s])
         chunks.append((s, e, name.group(1) if name else None))
-    return chunks, stop
+    return chunks, stop, indent
+
+
+def _indented(block_lines, indent):
+    return [indent + ln if ln else ln for ln in block_lines]
 
 
 def splice_block(text, block, owned):
@@ -176,13 +184,14 @@ def splice_block(text, block, owned):
         dup = sorted(n for _, _, n in _model_list_chunks(outside)[0] if n in owned)
         if dup:
             raise GatewayError(f"registry-owned model_name(s) also defined outside the block: {dup}")
-        out = lines[:b] + new_block + lines[e + 1:]
+        indent = lines[b][:len(lines[b]) - len(lines[b].lstrip())]
+        out = lines[:b] + _indented(new_block, indent) + lines[e + 1:]
     else:
-        chunks, stop = _model_list_chunks(lines)
+        chunks, stop, indent = _model_list_chunks(lines)
         drop = [(s, e) for s, e, n in chunks if n in owned]
         at = drop[0][0] if drop else stop
         keep = [ln for i, ln in enumerate(lines) if not any(s <= i < e for s, e in drop)]
-        out = keep[:at] + new_block + keep[at:]  # every dropped item starts at or after `at`
+        out = keep[:at] + _indented(new_block, indent) + keep[at:]  # every dropped item starts at or after `at`
     return "\n".join(out) + "\n"
 
 
@@ -333,14 +342,19 @@ def _save_key_models(models, backup_dir):
     return path
 
 
+def newest_key_backup(backup_dir=None):
+    d = backup_dir or os.path.dirname(LITELLM_CONFIG)
+    found = sorted(glob.glob(os.path.join(d, "foreman-local-rung.models.bak-*.json")))
+    return found[-1] if found else None
+
+
 def rollback_key_allowlist(key_file=None, admin_key_file=None, base_url=None, http=_http,
                            backup_dir=None):
     """Put the newest saved pre-change models list back on the key."""
-    d = backup_dir or os.path.dirname(LITELLM_CONFIG)
-    found = sorted(glob.glob(os.path.join(d, "foreman-local-rung.models.bak-*.json")))
-    if not found:
+    newest = newest_key_backup(backup_dir)
+    if not newest:
         raise GatewayError("no saved foreman-local-rung models list to roll back to")
-    with open(found[-1]) as f:
+    with open(newest) as f:
         models = json.load(f)
     base = (base_url or LITELLM_BASE_URL).rstrip("/")
     scoped = _read_secret(key_file or KEY_FILE)
@@ -354,7 +368,7 @@ def rollback_key_allowlist(key_file=None, admin_key_file=None, base_url=None, ht
         raise GatewayError(_mask(e, scoped, admin)) from None
     if status != 200:
         raise GatewayError(f"/key/update answered {status}")
-    return {"restored": found[-1], "models": models}
+    return {"restored": newest, "models": models}
 
 
 # --- CLI ------------------------------------------------------------------------------------
@@ -364,7 +378,7 @@ def main(argv=None):
     ap.add_argument("cmd", choices=("render", "apply", "rollback"))
     ap.add_argument("--registry")
     ap.add_argument("--check", action="store_true", help="render: exit 2 if the committed block drifted")
-    ap.add_argument("--dry-run", action="store_true", help="apply: show the change, touch nothing")
+    ap.add_argument("--dry-run", action="store_true", help="apply/rollback: show the change, touch nothing")
     ap.add_argument("--no-restart", action="store_true")
     ap.add_argument("--force-restart", action="store_true", help="restart even when the config was unchanged")
     ap.add_argument("--block-path", default=BLOCK_PATH)
@@ -372,6 +386,9 @@ def main(argv=None):
     args = ap.parse_args(argv)
     try:
         if args.cmd == "rollback":
+            if args.dry_run:
+                print(json.dumps({"would_restore": newest_backup(args.config), "key_models_backup": newest_key_backup()}))
+                return 0
             print(json.dumps(rollback_litellm(args.config)))
             print(json.dumps({k: v for k, v in rollback_key_allowlist().items() if k != "models"}))
             print("restart the gateway to load the restored config", file=sys.stderr)

@@ -56,9 +56,23 @@ litellm_settings:
 """
 
 
+_head, _tail = HAND_CONFIG.split("litellm_settings:")
+_items = _head.split("model_list:\n")[1]
+INDENTED_CONFIG = "model_list:\n" + "".join(f"  {ln}\n" for ln in _items.splitlines()) + "litellm_settings:" + _tail
+
+
 @pytest.fixture
 def reg():
     return copy.deepcopy(ir.load())
+
+
+@pytest.fixture
+def icfg(tmp_path):
+    d = tmp_path / "agent"
+    d.mkdir()
+    p = d / "litellm_config.yaml"
+    p.write_text(INDENTED_CONFIG)
+    return str(p)
 
 
 @pytest.fixture
@@ -202,6 +216,48 @@ def test_owned_name_outside_sentinels_is_refused(reg, cfg):
     with pytest.raises(g.GatewayError, match="also defined outside the block"):
         g.apply_litellm(reg, cfg)
     assert open(cfg).read() == text
+
+
+ADOPTED_NAMES = [
+    "gemma4-e4b-local", "hathor-llama8b", "nephthys-qwen14b", "qwen36-local",
+    "local-worker", "local-worker", "local-worker", "qwen36-live", "deepseek-v4-flash"]
+
+
+def test_indented_first_apply_adopts_and_reindents_block(reg, icfg):
+    assert g.apply_litellm(reg, icfg)["changed"]
+    text = open(icfg).read()
+    assert names(text) == ADOPTED_NAMES
+    assert "hand-written, will be adopted" not in text
+    assert "  - model_name: qwen36-live   # unowned: must survive adoption" in text
+    assert f"  {g.BEGIN}\n" in text and f"  {g.END}\n" in text
+    assert yaml.safe_load(text)["litellm_settings"] == {"drop_params": True}
+    assert all(ln.startswith("  ") for ln in text.split("litellm_settings:")[0].splitlines()[1:])
+
+
+def test_indented_sentinel_replace_is_idempotent_and_tracks_registry(reg, icfg):
+    g.apply_litellm(reg, icfg)
+    once = open(icfg).read()
+    assert g.apply_litellm(reg, icfg) == {"changed": False, "backup": None}
+    smaller = copy.deepcopy(reg)
+    del smaller["nodes"]["nephthys"]
+    assert g.apply_litellm(smaller, icfg)["changed"]
+    assert "100.98.74.87" not in open(icfg).read()
+    assert g.apply_litellm(reg, icfg)["changed"]
+    assert open(icfg).read() == once
+
+
+def test_indented_owned_name_outside_sentinels_is_refused(reg, icfg):
+    g.apply_litellm(reg, icfg)
+    text = open(icfg).read().replace(
+        "litellm_settings:", "  - model_name: hathor-llama8b\n    litellm_params: {model: x}\nlitellm_settings:")
+    open(icfg, "w").write(text)
+    with pytest.raises(g.GatewayError, match="also defined outside the block"):
+        g.apply_litellm(reg, icfg)
+    assert open(icfg).read() == text
+
+
+def test_committed_block_stays_column_zero(reg):
+    assert g.render_litellm(reg).splitlines()[1].startswith("- model_name:")
 
 
 def test_unbalanced_sentinels_are_refused(reg, cfg):
@@ -374,6 +430,19 @@ def test_cli_render_writes_then_check_passes_and_detects_drift(tmp_path, capsys)
     assert g.main(["render", "--check", "--block-path", out]) == 0
     open(out, "a").write("# drift\n")
     assert g.main(["render", "--check", "--block-path", out]) == 2
+
+
+def test_cli_rollback_dry_run_touches_nothing(reg, cfg, capsys, monkeypatch):
+    monkeypatch.setattr(g, "LITELLM_CONFIG", cfg)
+    g.apply_litellm(reg, cfg)
+    generated = open(cfg).read()
+    before = sorted(os.listdir(os.path.dirname(cfg)))
+    capsys.readouterr()
+    assert g.main(["rollback", "--dry-run", "--config", cfg]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["would_restore"].startswith(cfg + ".bak-")
+    assert open(cfg).read() == generated
+    assert sorted(os.listdir(os.path.dirname(cfg))) == before
 
 
 def test_cli_dry_run_touches_nothing(cfg, capsys):
