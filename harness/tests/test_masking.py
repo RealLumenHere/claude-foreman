@@ -19,11 +19,23 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import fworker
 import masking
 
-# Synthetic, never-live values shaped like the real thing.
+# Synthetic, never-live values shaped like the real thing. Every one is SPLIT at its
+# prefix so the source line does not match the rule it exercises: merely READING this
+# file would otherwise trip the wq#2275 tripwire and file a pri-1 "rotate today" ticket
+# per label. wq#2299 did this for test_token_injection.py; the four constants below were
+# already split, but cloudflare/slack/kv-secret stayed whole in SECRETS and still fired
+# three labels at HEAD — see test_this_file_reads_without_tripping_the_mask_tripwire.
+# The concatenation leaves the runtime bytes identical, so the rules still get their
+# real shape at assert time.
 GHP = "ghp_" + "A1b2C3d4E5f6G7h8J9k0A1b2C3d4E5f6G7h8"
 GHPAT = "github_pat_" + "11ABCDE0Y" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4y5Z6"
 SK = "sk-ant-" + "x" * 24
 AKIA = "AKIA" + "ABCDEFGHIJKLMNOP"
+CFUT = "cfut_" + "v1.0-abcdefghijklmnopqrstuvwxyz0123456789"
+XOXB = "xoxb-" + "1234567890-abcdefgh"
+# The kv rule keys off the NAME, so the split has to fall between `TOKEN="` and the
+# value — that is the boundary the rule reads, and `'` is not in its body charset.
+KV_LINE = 'GITEA_TOKEN="' + 'hunter2-hunter2-hunter2"'
 
 # wq#2292: strings that LOOK like a prefix rule but are not credentials. Each one
 # is a real shape that reached a stream and cost a pri-1 rotation ticket or a
@@ -51,11 +63,11 @@ FALSE_POSITIVES = [
 SECRETS = [
     ("github", f'v = "{GHP}"'),
     ("github", f'v = "{GHPAT}"'),
-    ("cloudflare", 'v = "cfut_v1.0-abcdefghijklmnopqrstuvwxyz0123456789"'),
+    ("cloudflare", f'v = "{CFUT}"'),
     ("sk-key", f'v = "{SK}"'),
-    ("slack", 'v = "xoxb-1234567890-abcdefgh"'),
+    ("slack", f'v = "{XOXB}"'),
     ("aws", f'v = "{AKIA}"'),
-    ("kv-secret", 'GITEA_TOKEN="hunter2-hunter2-hunter2"'),
+    ("kv-secret", KV_LINE),
 ]
 
 
@@ -206,6 +218,24 @@ def test_masking_module_output_does_not_re_arm_on_its_own_source():
         source = fh.read()
     _, records = masking.scan(source)
     assert records == [], _describe(records)
+
+
+def test_this_file_reads_without_tripping_the_mask_tripwire():
+    """wq#2303: a worker READING the mask test suite must not page Frank at pri 1.
+
+    The two tests above pin the doctrine corpus and the module's own source; this
+    pins the third file every mask ticket necessarily reads. wq#2299's chain guard
+    only suppresses the child ticket when the CURRENT ticket is already a rotation
+    ticket, so on an ORDINARY ticket these literals still file one pri-1 rotate-today
+    row per label — three of them at the time this test was written (cloudflare,
+    slack, kv-secret). Assert the real file on disk, not a fixture string: the read
+    that fires is of the file.
+    """
+    with open(os.path.abspath(__file__), errors="replace") as fh:
+        source = fh.read()
+    masked, records = masking.scan(source)
+    assert records == [], _describe(records)
+    assert masked == source
 
 
 def test_scan_stays_in_lockstep_with_mask_text():
