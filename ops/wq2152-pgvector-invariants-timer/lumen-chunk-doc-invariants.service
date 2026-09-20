@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily pgvector chunk/doc invariant check — aq row on I1/I2 regression (wq#2152)
+Documentation=file:///home/lumen/foreman/ops/wq2152-pgvector-invariants-timer/README.md
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+; --state is explicit: the script's default state.json would land un-namespaced
+; next to the installed binary in /home/lumen/bin (wq#1788 secondary finding).
+ExecStart=/home/lumen/bin/check-pgvector-invariants --raise-aq --state /home/lumen/state/pgvector-invariants.json
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lumen-chunk-doc-invariants

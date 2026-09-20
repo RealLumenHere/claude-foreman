@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily pgvector chunk/doc invariant check (wq#2152) — I1 drifted 19->21 unwatched
+
+[Timer]
+; 20 min after lumen-contradiction-scan (06:20) so the two daily Minerva
+; passes never contend for the same connection window.
+OnCalendar=*-*-* 06:40:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -160,5 +160,68 @@ class StateTests(unittest.TestCase):
             self.assertIsNone(m.load_state(path))
 
 
+class MainTests(unittest.TestCase):
+    """main()-level coverage (wq#1788/wq#2152): a Postgres failure at any point —
+    connect or query — must print UNAVAILABLE and return 0, never raise, so the
+    daily timer and handoff verify are never taken down by an outage."""
+
+    class _ClosableConn(FakeConn):
+        def __init__(self, results):
+            super().__init__(results)
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class _QueryFailConn:
+        def __init__(self):
+            self.closed = False
+
+        def cursor(self):
+            cur = unittest.mock.Mock()
+            cur.execute.side_effect = RuntimeError("relation does not exist")
+            return cur
+
+        def close(self):
+            self.closed = True
+
+    def _run_main(self, argv=None):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = m.main(argv or [])
+        return rc, out.getvalue()
+
+    def test_connect_failure_warns_and_exits_0(self):
+        with unittest.mock.patch.object(
+                m, "connect", side_effect=OSError("connection refused")):
+            rc, out = self._run_main()
+        self.assertEqual(rc, 0)
+        self.assertIn("UNAVAILABLE", out)
+        self.assertIn("connection refused", out)
+
+    def test_query_failure_warns_exits_0_and_closes_conn(self):
+        conn = self._QueryFailConn()
+        with unittest.mock.patch.object(m, "connect", return_value=conn):
+            rc, out = self._run_main()
+        self.assertEqual(rc, 0)
+        self.assertIn("UNAVAILABLE", out)
+        self.assertIn("relation does not exist", out)
+        self.assertTrue(conn.closed)
+
+    def test_success_prints_report_and_exits_0(self):
+        conn = self._ClosableConn([
+            (0, 0, 0),
+            [("research_chunks_doc_id_fkey",
+              "FOREIGN KEY (doc_id) REFERENCES research_docs(id) ON DELETE CASCADE")],
+        ])
+        with unittest.mock.patch.object(m, "connect", return_value=conn):
+            rc, out = self._run_main()
+        self.assertEqual(rc, 0)
+        self.assertIn("I1 stale-chunks=0", out)
+        self.assertTrue(conn.closed)
+
+
 if __name__ == "__main__":
     unittest.main()
