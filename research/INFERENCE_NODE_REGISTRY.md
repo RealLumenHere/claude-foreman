@@ -413,12 +413,19 @@ observations and that a machine "sits on whatever plug happened to be free". Cut
 wrong plug is the one failure in this design that can take down a box nobody asked to
 touch. Thor is excluded structurally: it has no registry row and never will.
 
+Built in `dispatcher/node_power.py` (wq#2254). The interlock runs **before step 1**, while
+the box is still up: by step 5 ssh is gone and the plug reads standby watts, so the same
+three checks at step 6 could never pass. Step 6 re-reads the plug binding only. A refusal
+changes nothing (no state move, no unit stop).
+
 Every power action is logged to `lumen_state` as `<node>.power_action` (timestamp, verb,
 plug, trigger, the starvation counters that justified it) and to the dispatcher's pass
 log. Cross-pass counters live in `_runs/power_state.json`
-(`{node: {starved_passes, idle_passes, last_wake_ts, last_drain_ts, wakes_today}}`),
-beside the other dispatcher state under `FOREMAN_RUNS_ROOT`
-(`orchestrator/judgment.py:37`).
+(`{node: {starved_passes, idle_passes, last_wake_ts, last_drain_ts, wakes_today, wake_log,
+excluded_until}}`), beside the other dispatcher state under `FOREMAN_RUNS_ROOT`
+(`orchestrator/judgment.py:37`). `wakes_today` is the count of `wake_log` entries in the
+last 24 h, a rolling window: a calendar-day counter would allow two quotas in a 24 h span
+that crosses midnight.
 
 ### 6.5 Kill switch
 

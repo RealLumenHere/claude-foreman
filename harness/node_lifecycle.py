@@ -30,7 +30,7 @@ import inference_registry as ir  # noqa: E402
 import node_render as nr  # noqa: E402
 import node_render_gateway as ng  # noqa: E402
 import registry_edit as ed  # noqa: E402
-from node_ports import SystemPorts  # noqa: E402
+from node_ports import PortError, SystemPorts  # noqa: E402
 
 BLOCK_REL = "ops/inference-registry/litellm_local_block.yaml"
 NODE_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -607,7 +607,7 @@ def retire(ctx, node, family=None, power="leave", force=False, drain_deadline_s=
     if power == "off":
         try:
             ports.power_off(node)
-        except NotImplementedError as e:
+        except (NotImplementedError, PortError) as e:
             out(f"WARN --power off skipped: {e}")
     return 0
 

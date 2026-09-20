@@ -1476,6 +1476,29 @@ def _admit_local(ctx, r):
     return True
 
 
+def _node_power_step(ctx, ready):
+    """wq#2254 (INFERENCE_NODE_REGISTRY §6): wake a cold node on sustained local starvation, power one
+    down when idle. Runs after admissions so the counters see this pass's outcome; never load-bearing —
+    a failure is logged and the pass carries on. FOREMAN_NODE_POWER=off logs decisions and moves no AC."""
+    try:
+        cap = ctx.capacity()
+        if cap is None:      # FOREMAN_LOCAL_CAPACITY=static has no health view to judge starvation by
+            return
+        import node_power    # lazy: pulls harness/inference_registry (PyYAML), which must not gate a pass
+
+        def running():
+            ctx.refresh_units()  # admissions above spawned units
+            return ctx.local_unit_models()
+        sig = node_power.Signals(ctx.local_slots_full, cap.free_slots, running,
+                                 max(0, len(ready["local"]) - ctx.spawned["local"]))
+        node_power.run(sig, dry_run=ctx.dry_run,
+                       emit=lambda kind, **kw: ctx.log.emit("info", stage="node_power", what=kind, **kw))
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:  # noqa: BLE001
+        ctx.log.emit("error", stage="node_power", reason="step_failed", detail=repr(e)[:300])
+
+
 def _admit_cloud(ctx, r):
     """Stages 8/8b/9 for a cloud model: governor verdict, burn-rate, pacing, cloud_ceiling.
     A stop here is a stop of the cloud partition only. Returns True to proceed to spawn,
@@ -1834,6 +1857,9 @@ def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None):
         stopped[part] = _run_partition(ctx, part, ready[part])
         if stopped[part] in ("kill_switch", "lumen_run_unreachable"):
             break
+
+    if not halted:
+        _node_power_step(ctx, ready)
 
     # step 8 (F7): dispatchable is the READY set, not candidates minus a list of reasons that
     # has to learn every new gate. A ticket that passed every gate but lost its lane's daily

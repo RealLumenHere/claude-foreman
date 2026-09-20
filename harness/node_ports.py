@@ -29,6 +29,7 @@ SLOT_CTX = 32768                     # QWEN36_LOCAL_WORKER_SERVING.md §2.3: 32k
 BENCH_PROMPT_TOKENS = 4000           # §3: warm prompt eval on a ~4k-token prompt
 CONCURRENT_REQUESTS, CONCURRENT_PROMPT_TOKENS = 4, 1000
 QUARANTINE_DAYS = 30
+PLUG_CTL = os.environ.get("FOREMAN_PLUG_CTL", "/home/lumen/bin/plug-ctl")
 
 
 class PortError(Exception):
@@ -332,8 +333,27 @@ class SystemPorts:
         with open(path, "w") as f:
             json.dump(data, f)
 
+    def plug(self, plug_id, verb):
+        """`plug-ctl <pN> on|off|watts` -> (rc, stdout). plug-ctl names plugs in lower case; the registry
+        copies fleet-inv's spelling verbatim."""
+        try:
+            p = subprocess.run([PLUG_CTL, plug_id.lower(), verb], capture_output=True, text=True, timeout=90)
+        except (OSError, subprocess.TimeoutExpired):
+            return 255, ""
+        return p.returncode, p.stdout
+
     def power_off(self, node):
-        raise NotImplementedError("the §6.3 power-down sequence is child ticket C6; not built yet")
+        """`retire --power off`: the §6.3 sequence minus the state moves (retire owns `state: retired`),
+        interlock first, plug-ctl off last (dispatcher/node_power.py)."""
+        sys.path.insert(0, os.path.join(ir.REPO_ROOT, "dispatcher"))
+        import node_power
+        result = node_power.NodePower(ports=self, registry_path=ir.REGISTRY_YAML).power_down(
+            node, "fleet-node retire --power off", manage_state=False)
+        if not result["ok"]:
+            raise PortError(f"{node}: power-down refused or aborted; the plug was left ON (see the power_* log lines)")
+
+    def now(self):
+        return time.time()
 
     def sleep(self, seconds):
         time.sleep(seconds)
