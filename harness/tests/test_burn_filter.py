@@ -210,6 +210,54 @@ def test_reading_ordinary_source_does_not_page():
     assert burned == [] and benign
 
 
+def _tracked_modules():
+    out = subprocess.run(
+        ["git", "-C", REPO_ROOT, "ls-files", "harness/*.py", "dispatcher/*.py"],
+        capture_output=True, text=True)
+    if out.returncode:
+        return []
+    return [os.path.join(REPO_ROOT, p) for p in out.stdout.split()]
+
+
+def _sweep(runner):
+    """Read every tracked module the way a worker does. Returns the ones that still
+    match a pattern and the ones that would page, sharing one provenance cache."""
+    matched, pages, cache = [], [], {}
+    for path in _tracked_modules():
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        labels = masking.mask_text(text)[1]
+        if not labels:
+            continue
+        matched.append(os.path.relpath(path, REPO_ROOT))
+        burned, _ = burn_filter.classify(
+            burn_filter.matched_values(text, labels), set(), REPO_ROOT,
+            runner=runner, cache=cache)
+        if burned:
+            pages.append((os.path.relpath(path, REPO_ROOT), burned))
+    return matched, pages
+
+
+def test_no_tracked_module_pages_when_a_worker_reads_it():
+    """wq#2314/wq#2253: read 8 of that run was harness/node_render_gateway.py, whose
+    `key = apply_key_allowlist(reg)` read as a 19-char secret and filed a pri-1
+    rotate-today ticket 34 s in. test_reading_ordinary_source_does_not_page pins one
+    file and skips when that file stops matching; doctrine has every worker read the
+    tree, so the invariant is tree-wide — opening any tracked module must not page.
+    """
+    matched = _tracked_modules()
+    if not matched:
+        pytest.skip("not a git checkout")
+    _, pages = _sweep(subprocess.run)
+    assert pages == [], "reading tracked source pages: %s" % pages
+    # ...and the zero is screening's doing, not a corpus that matches nothing: blind
+    # the provenance check and the same sweep must page, or this test proves nothing.
+    blinded, blind_pages = _sweep(FakeGrep())
+    assert blind_pages, (
+        "sweep is vacuous: %d files match a pattern, none page unaccounted"
+        % len(blinded))
+
+
 def test_the_same_shape_pages_when_it_is_the_childs_real_token(
         tmp_path, monkeypatch):
     """Identical string, identical provenance answer — but this time it is the
