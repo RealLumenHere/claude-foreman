@@ -13,6 +13,8 @@ import os
 import sys
 import textwrap
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import fworker
 import masking
@@ -112,6 +114,48 @@ def test_real_kv_secrets_still_fire():
         masked, hits = masking.mask_text(text)
         assert hits == ["kv-secret"], text
         assert PW not in masked, text
+
+
+# wq#2296: the two tests above pin the false-positive shapes we already know, as
+# string literals. They cannot catch the next one, and the next one arrives by a
+# route peculiar to this rule: writing a false positive DOWN creates another
+# instance of it. Doctrine makes every worker read kb/ISSUE-LOG.md before it
+# changes anything, so that file is the one input reliably in some worker's context
+# on every ticket — and it is where each of these gets documented, quoted verbatim.
+# The unanchored `{6,}` rule therefore fired on the rows describing itself: rows
+# 548/554/568 quote `highs_solver`, and the module's own `ghp_MASKED` output appears
+# there too, which is how wq#2282 -> #2292 -> #2296 grew into 24 open pri-1
+# "rotate today" tickets, each an xhigh worker rediscovering that `ghs_solver` is a
+# repo name. Scanning the live corpus is the only gate that closes that loop: the
+# next shape someone writes into the log fails here, not in the ticket queue.
+DOCTRINE_CORPUS = "/home/lumen/kb/ISSUE-LOG.md"
+
+
+def _describe(records):
+    """Name the offenders without quoting one: scan() records carry the kept prefix,
+    a length and 12 hex of sha256, and a context window cut from FULLY masked text."""
+    return "corpus re-arms the alarm: " + "; ".join(
+        "{label} {prefix}<{value_len} chars, sha {value_sha256_12}> in {context!r}"
+        .format(**r) for r in records)
+
+
+@pytest.mark.skipif(not os.path.exists(DOCTRINE_CORPUS),
+                    reason="kb/ISSUE-LOG.md not on this host")
+def test_doctrine_corpus_does_not_re_arm_the_alarm():
+    with open(DOCTRINE_CORPUS, errors="replace") as fh:
+        corpus = fh.read()
+    _, records = masking.scan(corpus)
+    assert records == [], _describe(records)
+
+
+def test_masking_module_output_does_not_re_arm_on_its_own_source():
+    """The module documents its own replacement text and its own prefix list. If
+    either reads as a credential, every artefact it has already masked re-arms the
+    alarm the next time a worker reads it."""
+    with open(masking.__file__.replace(".pyc", ".py"), errors="replace") as fh:
+        source = fh.read()
+    _, records = masking.scan(source)
+    assert records == [], _describe(records)
 
 
 def test_scan_stays_in_lockstep_with_mask_text():
