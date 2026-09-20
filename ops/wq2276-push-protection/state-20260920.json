@@ -1,0 +1,210 @@
+[
+ {
+  "repo": "RealLumenHere/interview-prep",
+  "forge": "github",
+  "scope": "ALLOW",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "enabled",
+  "push_protection": "enabled",
+  "state": "protected"
+ },
+ {
+  "repo": "RealLumenHere/questfree",
+  "forge": "github",
+  "scope": "ALLOW",
+  "private": true,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "RealLumenHere/simpill-utils",
+  "forge": "github",
+  "scope": "ALLOW",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "enabled",
+  "push_protection": "enabled",
+  "state": "protected"
+ },
+ {
+  "repo": "frankstupak/.github",
+  "forge": "github",
+  "scope": "PUBLIC",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/acp-llm-cli",
+  "forge": "github",
+  "scope": "PUBLIC",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/agent-orchestrator",
+  "forge": "github",
+  "scope": "PUBLIC",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/claude-command-center",
+  "forge": "github",
+  "scope": "ALLOW",
+  "private": true,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/interview-prep",
+  "forge": "github",
+  "scope": "PUBLIC",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/lumen-blog",
+  "forge": "github",
+  "scope": "PUBLIC",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/lumen-content",
+  "forge": "github",
+  "scope": "PUBLIC",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/lumen-plays-pokemon",
+  "forge": "github",
+  "scope": "ALLOW",
+  "private": true,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/rom-transfer-tmp",
+  "forge": "github",
+  "scope": "NEVER",
+  "private": true,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "owner-queued",
+  "note": "NEVER-class repo: agents may not write; owner must enable"
+ },
+ {
+  "repo": "frankstupak/simpill-utils",
+  "forge": "github",
+  "scope": "PUBLIC",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/supergateway",
+  "forge": "github",
+  "scope": "PUBLIC",
+  "private": false,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "needs-fix"
+ },
+ {
+  "repo": "frankstupak/winforge",
+  "forge": "github",
+  "scope": "NEVER",
+  "private": true,
+  "admin": true,
+  "secret_scanning": "unknown",
+  "push_protection": "unknown",
+  "state": "owner-queued",
+  "note": "NEVER-class repo: agents may not write; owner must enable"
+ },
+ {
+  "repo": "lumen/claude-foreman",
+  "forge": "gitea",
+  "scope": "ALLOW",
+  "state": "forge-unsupported",
+  "note": "Gitea has no secret scanning/push protection; pre-receive hook is the follow-up"
+ },
+ {
+  "repo": "lumen/fleet-inventory",
+  "forge": "gitea",
+  "scope": "ALLOW",
+  "state": "forge-unsupported",
+  "note": "Gitea has no secret scanning/push protection; pre-receive hook is the follow-up"
+ },
+ {
+  "repo": "lumen/lumen-bin",
+  "forge": "gitea",
+  "scope": "ALLOW",
+  "state": "forge-unsupported",
+  "note": "Gitea has no secret scanning/push protection; pre-receive hook is the follow-up"
+ },
+ {
+  "repo": "lumen/lumen-messenger",
+  "forge": "gitea",
+  "scope": "ALLOW",
+  "state": "forge-unsupported",
+  "note": "Gitea has no secret scanning/push protection; pre-receive hook is the follow-up"
+ },
+ {
+  "repo": "lumen/mailbot",
+  "forge": "gitea",
+  "scope": "ALLOW",
+  "state": "forge-unsupported",
+  "note": "Gitea has no secret scanning/push protection; pre-receive hook is the follow-up"
+ },
+ {
+  "repo": "lumen/minerva",
+  "forge": "gitea",
+  "scope": "ALLOW",
+  "state": "forge-unsupported",
+  "note": "Gitea has no secret scanning/push protection; pre-receive hook is the follow-up"
+ },
+ {
+  "repo": "lumen/mission-control",
+  "forge": "gitea",
+  "scope": "ALLOW",
+  "state": "forge-unsupported",
+  "note": "Gitea has no secret scanning/push protection; pre-receive hook is the follow-up"
+ },
+ {
+  "repo": "lumen/questfree",
+  "forge": "gitea",
+  "scope": "ALLOW",
+  "state": "forge-unsupported",
+  "note": "Gitea has no secret scanning/push protection; pre-receive hook is the follow-up"
+ }
+]
