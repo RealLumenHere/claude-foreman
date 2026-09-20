@@ -862,10 +862,24 @@ def mask_alarm(ticket_id, attempt, labels, records=None):
         log(f"WARN: rotation ticket add crashed for wq#{ticket_id}: {e!r}")
 
 
-def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_root,
+def granted_dirs(cmd):
+    """The --add-dir paths in a built child command line (wq#2319).
+
+    Read back off the argv rather than threaded down as another parameter: cmd is
+    already what run_child()/run_child_gateway() were handed, and it is the exact
+    grant the CLI enforces, so the provenance screen and the child cannot disagree
+    about which directories were readable.
+    """
+    return [cmd[i + 1] for i, a in enumerate(cmd)
+            if a == "--add-dir" and i + 1 < len(cmd)]
+
+
+def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
                      ticket_id, attempt):
     """wq#2290: alarm on a mask hit only when the matched text is actually a live
-    credential (burn_filter), not a credential-shaped string in the repo's source.
+    credential (burn_filter), not a credential-shaped string in the source of any
+    repo the child was granted (`repo_roots`, wq#2319 — the worktree alone left the
+    doctrine log unaccounted, so it paged on its own rows).
 
     Masking already happened — this gates only the ntfy page and the rotation
     ticket. Sits where wq#2288's re-scan does, off the hot path: nothing here runs
@@ -887,7 +901,7 @@ def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_root,
             if unscreened:
                 pending[label] = unscreened
             seen.update(found)
-        burned, benign = burn_filter.classify(pending, live_secrets, repo_root)
+        burned, benign = burn_filter.classify(pending, live_secrets, repo_roots)
         # A label mask_text() reported but whose value cannot be recovered from the
         # raw line is unexplainable, so it pages — the same default as an unknown
         # value. In practice this is a label that fired only on an earlier pattern's
@@ -2012,6 +2026,7 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
     mask_alarmed = set()  # wq#2275: pattern labels already alarmed this attempt
     burn_seen = set()     # wq#2290: matched strings already screened this attempt
     live_secrets = burn_filter.live_secret_values(env)
+    repo_roots = None    # wq#2319: resolved on the first mask hit (screen_mask_hits)
     start = time.time()
     deadline = start + wall_clock_s
     last_event = start
@@ -2063,8 +2078,11 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
                         # gateway stream feeds the identical artefact chain.
                         raw_payload = raw[len("data:"):].strip()
                         payload, mask_hits = masking.mask_text(raw_payload)
+                        if mask_hits and repo_roots is None:
+                            repo_roots = burn_filter.provenance_roots(
+                                cwd, granted_dirs(cmd))
                         screen_mask_hits(mask_hits, raw_payload, mask_alarmed,
-                                         burn_seen, live_secrets, cwd,
+                                         burn_seen, live_secrets, repo_roots,
                                          ticket_id, attempt)
                         try:
                             ev = json.loads(payload)
@@ -2153,6 +2171,7 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     mask_alarmed = set()         # wq#2275: pattern labels already alarmed this attempt
     burn_seen = set()            # wq#2290: matched strings already screened this attempt
     live_secrets = burn_filter.live_secret_values(env)
+    repo_roots = None    # wq#2319: resolved on the first mask hit (screen_mask_hits)
 
     while True:
         now = time.time()
@@ -2212,8 +2231,10 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         # lever rewrites a tool result), so a hit is an alarm, not a save.
         raw_line = line
         line, mask_hits = masking.mask_text(line)
+        if mask_hits and repo_roots is None:
+            repo_roots = burn_filter.provenance_roots(cwd, granted_dirs(cmd))
         screen_mask_hits(mask_hits, raw_line, mask_alarmed, burn_seen,
-                         live_secrets, cwd, ticket_id, attempt)
+                         live_secrets, repo_roots, ticket_id, attempt)
         try:
             frame = json.loads(line)
         except json.JSONDecodeError:

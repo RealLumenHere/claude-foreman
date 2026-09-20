@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 
 import pytest
@@ -37,7 +38,9 @@ class FakeGrep:
 
     def __call__(self, argv, **kwargs):
         self.calls.append(argv)
-        needle = argv[-1]
+        # wq#2319: the value is the `-e` operand, not the last word — a pathspec
+        # follows it so a grant is only excused by text under the granted dir.
+        needle = argv[argv.index("-e") + 1] if "-e" in argv else argv[-1]
         return subprocess.CompletedProcess(
             argv, 0 if needle in self.committed else 1)
 
@@ -256,6 +259,92 @@ def test_no_tracked_module_pages_when_a_worker_reads_it():
     assert blind_pages, (
         "sweep is vacuous: %d files match a pattern, none page unaccounted"
         % len(blinded))
+
+
+# --- provenance across every granted dir (wq#2319) --------------------------
+
+def _repo(path, files):
+    """A git repo at `path` with `files` ({relpath: text}) committed."""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    for rel, text in files.items():
+        f = path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+    subprocess.run(["git", "-C", str(path), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(path), "-c", "user.email=t@t", "-c",
+                    "user.name=t", "commit", "-qm", "fixture"], check=True)
+    return str(path)
+
+
+def test_provenance_roots_keeps_granted_repos_and_drops_the_rest(tmp_path):
+    worktree = _repo(tmp_path / "wt", {"a.py": "x = 1\n"})
+    granted = _repo(tmp_path / "kb", {"log.md": "y\n"})
+    # Like /tmp/fworker-<id> and /home/lumen/agents/work-queue: granted, but with no
+    # repo above it, so it has no committed text to excuse anything. tmp_path is not
+    # usable here — pytest roots it inside this very checkout.
+    with tempfile.TemporaryDirectory(dir="/tmp") as scratch:
+        roots = burn_filter.provenance_roots(worktree, [granted, scratch])
+    assert roots == [worktree, granted]
+
+
+def test_provenance_roots_puts_the_worktree_first_and_dedups(tmp_path):
+    worktree = _repo(tmp_path / "wt", {"a.py": "x = 1\n"})
+    roots = burn_filter.provenance_roots(worktree, [worktree, None])
+    assert roots == [worktree]
+
+
+def test_value_committed_only_in_another_granted_repo_is_benign(tmp_path):
+    """wq#2319: three sk-key values in wq#2288's 22:36 alarm were prose from
+    /home/lumen/kb/ISSUE-LOG.md:657 — committed text in a repo that is not the
+    worktree. Screening against the worktree alone left them unaccounted, so the
+    doctrine log every worker is ordered to read paged on its own rows, and the
+    pri-1 ticket it filed sent the next worker to read it again.
+    """
+    value = "sk-ant-" + "oat01-committed-in-the-doctrine-log"
+    worktree = _repo(tmp_path / "wt", {"a.py": "x = 1\n"})
+    doctrine = _repo(tmp_path / "kb", {"ISSUE-LOG.md": f"| 569 | quoting {value} |\n"})
+    detail = burn_filter.matched_values(f"read: {value}")
+    assert burn_filter.classify(detail, set(), [worktree])[0] == ["sk-key"]
+    assert burn_filter.classify(detail, set(), [worktree, doctrine]) == ([], ["sk-key"])
+
+
+def test_a_value_in_no_granted_repo_still_pages(tmp_path):
+    """The widened screen must not become a blanket excuse."""
+    value = "sk-ant-" + "oat01-tracked-by-absolutely-nothing"
+    roots = [_repo(tmp_path / "wt", {"a.py": "x = 1\n"}),
+             _repo(tmp_path / "kb", {"log.md": "unrelated\n"})]
+    detail = burn_filter.matched_values(f"leaked {value}")
+    assert burn_filter.classify(detail, set(), roots)[0] == ["sk-key"]
+
+
+def test_a_grant_does_not_extend_to_the_rest_of_its_repo(tmp_path):
+    """/home/lumen/projects/nest is one directory of the /home/lumen/projects repo.
+    Text from a sibling project the child could not read must not excuse its hit, so
+    the granted dir is searched as given rather than widened to the repo root."""
+    value = "sk-ant-" + "oat01-only-in-a-sibling-project"
+    repo = _repo(tmp_path / "projects", {"other/x.py": f'k = "{value}"\n',
+                                         "nest/y.py": "k = 1\n"})
+    granted = os.path.join(repo, "nest")
+    detail = burn_filter.matched_values(f"read: {value}")
+    assert burn_filter.classify(detail, set(), [granted])[0] == ["sk-key"]
+    assert burn_filter.classify(detail, set(), [repo]) == ([], ["sk-key"])
+
+
+def test_extra_roots_cost_nothing_once_a_value_is_accounted_for(tmp_path):
+    """First hit wins: the argv exposure of an unaccounted value must not grow with
+    the number of directories the child was granted (instinct 4)."""
+    value = "sk-ant-" + "oat01-committed-in-the-first-root"
+    grep = FakeGrep(committed=[value])
+    burn_filter.is_committed_literal(value, ["/r1", "/r2", "/r3"], runner=grep)
+    assert len(grep.calls) == 1
+
+
+def test_granted_dirs_are_read_back_off_the_child_command_line():
+    cmd = fworker.build_claude_cmd(
+        "prompt", "claude-opus-5", "xhigh", "/tmp/settings.json",
+        add_dirs=["/home/lumen/kb", "/home/lumen/bin"])
+    assert fworker.granted_dirs(cmd) == ["/home/lumen/kb", "/home/lumen/bin"]
 
 
 def test_the_same_shape_pages_when_it_is_the_childs_real_token(

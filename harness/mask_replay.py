@@ -32,13 +32,14 @@ nothing at the model's context — only hashes leave this module — which is pr
 the property that makes a "no rotation" verdict worth signing.
 
 This is the after-the-fact twin of harness/burn_filter.py (wq#2290), which screens the
-same way live, before the alarm pages. Two deliberate differences, both of which is why
-this does not just call it: burn_filter answers yes/no for a running attempt and puts
-the value in a `git grep` argv to do it (its own docstring flags the instinct-4 shape),
-while a rotation ticket needs the value NAMED — which file and line already carry it —
-over a corpus that is read once, so the tree is loaded in-process and nothing leaves
-this module. It also accounts against the kb doctrine log, which burn_filter cannot see
-from the single `repo_root` fworker hands it.
+same way live, before the alarm pages. The deliberate difference, and why this does not
+just call it: burn_filter answers yes/no for a running attempt and puts the value in a
+`git grep` argv to do it (its own docstring flags the instinct-4 shape), while a
+rotation ticket needs the value NAMED — which file and line already carry it — over a
+corpus that is read once, so the tree is loaded in-process and nothing leaves this
+module. Accounting against the kb doctrine log was a second difference until wq#2319:
+burn_filter now screens against every directory the child was granted, which is where
+the tickets this tool settles were coming from.
 
 No value is ever printed or returned: a record carries the kept prefix, the value's
 length, 12 hex of its sha256, and the matching line with the value spliced out.

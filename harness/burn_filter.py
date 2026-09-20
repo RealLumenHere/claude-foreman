@@ -31,11 +31,23 @@ Two questions, cheapest first, and the order matters for instinct 4:
 1. Is the matched text one of the credentials the harness itself handed this child?
    Those are the values genuinely at risk of reaching the model. In-process set
    comparison — a live secret is NEVER passed to a subprocess argv here.
-2. Otherwise, does the matched text appear verbatim in the repo's tracked source?
-   Then it is committed text the reader was entitled to see, not a runtime secret.
+2. Otherwise, does the matched text appear verbatim in the tracked source of any repo
+   the child was allowed to read? Then it is committed text the reader was entitled
+   to see, not a runtime secret.
 
 Anything else is unknown provenance and alarms. The default is to alarm: a value we
 cannot account for is treated as burned.
+
+Question 2 means EVERY granted repo, not just the worktree (wq#2319). A worker reads
+across its --add-dir roots, and doctrine orders every one of them to read
+/home/lumen/kb/ISSUE-LOG.md before changing anything — a log whose rows quote the
+credential shapes that filed the rotation backlog. Screening against the worktree
+alone, those rows are unaccounted, so the log pages on its own text and the ticket it
+files sends the next worker to read it again. That is the wq#2278 -> #2290 -> #2299 ->
+#2319 chain: replaying wq#2288's 22:36 alarm, all three sk-key values are prose from
+ISSUE-LOG.md:657 (`risk-asse...`-family words the then-unanchored `sk-` prefix ran
+into), `in_worktree=False in_kb=True`. Counting kb as the source it is turns that
+attempt's `burned=['sk-key']` into `burned=[]`.
 
 Masking itself is unchanged — artefacts stay redacted either way. This only gates
 the ntfy page and the rotation ticket.
@@ -55,6 +67,7 @@ _NON_SECRET_PREFIXES = ("/", "~", "./", "http://", "https://")
 
 MIN_SECRET_LEN = 12
 GIT_GREP_TIMEOUT_S = 20
+GIT_REV_PARSE_TIMEOUT_S = 5
 
 
 def matched_values(text, labels=None):
@@ -102,25 +115,74 @@ def live_secret_values(env):
     return live
 
 
-def is_committed_literal(value, repo_root, runner=subprocess.run):
-    """True if `value` appears verbatim in a tracked file under repo_root.
+def _as_roots(repo_roots):
+    """One root or many, as a list. Accepts the pre-wq#2319 single-string form."""
+    if not repo_roots:
+        return []
+    if isinstance(repo_roots, str):
+        return [repo_roots]
+    return [r for r in repo_roots if r]
+
+
+def provenance_roots(cwd, add_dirs=(), runner=subprocess.run):
+    """The granted directories whose committed text can excuse a mask hit.
+
+    `cwd` first: it is the worktree the child is working in, so it explains the most
+    hits for the least work, and the rest of the list is only consulted when it does
+    not. A directory that is not inside a git repo (the wq scratch dir,
+    /home/lumen/agents/work-queue) has no committed text and is dropped here rather
+    than costing a failed `git grep` per matched value.
+
+    Each surviving directory is kept AS GRANTED, never widened to its repo root:
+    /home/lumen/projects/nest sits in the /home/lumen/projects repo, and text from a
+    sibling project the child could not read must not excuse its hit.
+
+    Callers resolve this on the first mask hit, not at attempt start: most attempts
+    never match a pattern at all, so the `git rev-parse` per granted dir would be
+    pure waste on the common path — and run_child()'s only subprocess before the
+    first hit is meant to be the child itself (wq#1284 pins its Popen kwargs).
+    """
+    roots, seen = [], set()
+    for d in [cwd, *add_dirs]:
+        if not d or d in seen:
+            continue
+        seen.add(d)
+        try:
+            p = runner(["git", "-C", d, "rev-parse", "--is-inside-work-tree"],
+                       capture_output=True, timeout=GIT_REV_PARSE_TIMEOUT_S)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if p.returncode == 0:
+            roots.append(d)
+    return roots
+
+
+def is_committed_literal(value, repo_roots, runner=subprocess.run):
+    """True if `value` appears verbatim in a tracked file under any of `repo_roots`.
 
     Callers MUST have ruled the value out as a live secret first (classify does):
     this puts the value in a subprocess argv, which is exactly the shape instinct 4
-    forbids for a real credential.
+    forbids for a real credential. That is also why the roots are tried in order and
+    the first hit returns: for a value that IS accounted for, the extra roots cost
+    nothing, and the argv exposure of an unaccounted value does not grow with how
+    many directories the child was granted.
+
+    `-e` marks the value as the pattern and `-- .` bounds the search to the granted
+    directory, so a value is only excused by text the child could actually read.
     """
-    if not repo_root:
-        return False
-    try:
-        p = runner(["git", "-C", repo_root, "grep", "--quiet", "--fixed-strings",
-                    "-I", "--", value],
-                   capture_output=True, timeout=GIT_GREP_TIMEOUT_S)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return p.returncode == 0
+    for root in _as_roots(repo_roots):
+        try:
+            p = runner(["git", "-C", root, "grep", "--quiet", "--fixed-strings",
+                        "-I", "-e", value, "--", "."],
+                       capture_output=True, timeout=GIT_GREP_TIMEOUT_S)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if p.returncode == 0:
+            return True
+    return False
 
 
-def classify(detail, live, repo_root, runner=subprocess.run, cache=None):
+def classify(detail, live, repo_roots, runner=subprocess.run, cache=None):
     """Split mask labels into (burned, benign).
 
     `detail` is matched_values()'s {label: [matched strings]}. A label is
@@ -138,7 +200,7 @@ def classify(detail, live, repo_root, runner=subprocess.run, cache=None):
         accounted = True
         for match in matches:
             if match not in cache:
-                cache[match] = is_committed_literal(match, repo_root, runner=runner)
+                cache[match] = is_committed_literal(match, repo_roots, runner=runner)
             if not cache[match]:
                 accounted = False
                 break
