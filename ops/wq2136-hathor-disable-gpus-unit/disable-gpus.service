@@ -1,0 +1,9 @@
+[Unit]
+Description=Disable 2GB FirePro GPUs (too small for LLM) - headless CPU-only node
+After=multi-user.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'for p in 0000:02:00.0 0000:06:00.0; do echo -n $p > /sys/bus/pci/drivers/amdgpu/unbind 2>/dev/null; echo 1 > /sys/bus/pci/devices/$p/remove 2>/dev/null; done'
+[Install]
+WantedBy=multi-user.target
