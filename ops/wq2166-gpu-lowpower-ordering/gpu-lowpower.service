@@ -1,0 +1,19 @@
+[Unit]
+# wq#2166 — boot reconciler and the fleet's headline GPU-power check.
+#
+# The per-card gpu-lowpower@cardN.service instances do the ordered work. This unit
+# runs once at multi-user.target, waits (bounded) for EXPECTED_CARDS, re-applies, and
+# READS BACK every card. It exits non-zero when any card is not at low, so
+# `systemctl is-active gpu-lowpower.service` stops being green while nothing is
+# applied — the wq#2166 defect.
+Description=Force D300 GPUs to low power (reconcile and verify)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/gpu-lowpower
+ExecStart=/usr/local/sbin/gpu-lowpower.sh
+
+[Install]
+WantedBy=multi-user.target

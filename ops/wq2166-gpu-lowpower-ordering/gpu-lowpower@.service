@@ -1,0 +1,12 @@
+[Unit]
+# wq#2166 — per-card applier. 99-gpu-lowpower.rules starts one instance per amdgpu
+# DRM card as the card appears, so the knob is written when it exists rather than
+# whenever multi-user.target happens to be reached. This is the ordering fix.
+Description=Force %i to low GPU power (dpm=low)
+BindsTo=sys-subsystem-drm-devices-%i.device
+After=sys-subsystem-drm-devices-%i.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/gpu-lowpower.sh --card %i

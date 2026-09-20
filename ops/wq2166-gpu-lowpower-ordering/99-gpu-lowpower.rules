@@ -1,0 +1,12 @@
+# wq#2166 — start the low-power applier when an amdgpu card appears, not when
+# multi-user.target is reached.
+#
+# hathor's boot of 2026-08-31 reached multi-user.target at monotonic 139.3s, 119s
+# after the second D300 enumerated at 20.7s, so the unmatched-glob bug stayed hidden.
+# On 2026-09-19 (kernel 7.0.0-31) multi-user.target came at 17.8s and the cards at
+# 18.2s / 19.2s: the unit lost the race by 0.4s and 1.3s. Nothing about the ordering
+# ever guaranteed the cards existed — the old boot was just slow.
+#
+# TAG+="systemd" makes systemd track the card as sys-subsystem-drm-devices-cardN.device;
+# SYSTEMD_WANTS then pulls in the per-card instance, which is ordered After= that device.
+ACTION=="add", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="amdgpu", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gpu-lowpower@%k.service"
