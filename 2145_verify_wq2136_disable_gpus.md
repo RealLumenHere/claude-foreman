@@ -1,5 +1,11 @@
 # wq#2145 — verify of wq#2136 (7a00cca, hathor disable-gpus unit)
 
+> **Follow-ups closed by wq#2157 (2026-09-20).** The runbook was replaced with a retirement note, as
+> the Contradiction section below asked. `--verify` no longer checks that the unit is *installed*, so
+> the "expected to exit 1" note below is obsolete: it now asserts the retired state and exits 0 when
+> hathor and nephthys are disabled/inactive/unwanted with both D300s amdgpu-bound. It was executed —
+> see `ops/tests/test_wq2136_disable_gpus_verify.py`.
+
 Verdict: **CONFIRMED on the static claim, NOT CONFIRMED live.** The quoting defect is fixed in the
 shipped unit; whether hathor or nephthys run it could not be checked from a worker. The unit should not
 be installed at all (see Contradiction).
