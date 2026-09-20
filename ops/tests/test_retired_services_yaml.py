@@ -61,6 +61,16 @@ class RetiredServicesYamlTest(unittest.TestCase):
             f"no apply-status guard row: {guard_keys}",
         )
 
+    def test_lpp_entry_records_the_mask_and_its_ticket(self):
+        # wq#2218: lumen-pokemon-live was unmasked in good faith because no
+        # record said why it was masked (wq#2073).
+        entry = next((e for e in self.doc if e["name"].startswith("lpp")), None)
+        self.assertIsNotNone(entry, "wq#2218 LPP entry missing")
+        self.assertIn("lumen-pokemon-live.service", entry["units"])
+        self.assertEqual(entry["load_state"], "masked")
+        self.assertEqual(entry["retired_on"], "2026-09-13")
+        self.assertIn("wq#2073", entry["ticket"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

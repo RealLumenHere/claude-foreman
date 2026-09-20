@@ -197,6 +197,39 @@
         (wq#1656/1762) are also still `enabled` today. See ISSUE-LOG #377,
         #378.
 
+- name: lpp (lumen-pokemon-live)
+  units: [lumen-pokemon-live.service, lpp-watchdog.timer]
+  load_state: masked   # lumen-pokemon-live.service: symlink -> /dev/null in fleet-units
+                        # snapshot 68e1eaa (2026-09-19); lpp-watchdog.timer is disabled,
+                        # not masked
+  retired_on: "2026-09-13"
+  reason: >
+    lumen-pokemon-live.service was masked on 2026-09-13 with the reason recorded
+    nowhere — wq#1895 found it already masked, cause undocumented. wq#1990 read
+    that as a leftover and unmasked it in good faith on 2026-09-18
+    (ops/wq1990-pokemon-8871-install/apply.sh:11-20,38-41,60). The unit then ran
+    19h and made 8478 brain calls, saturating isis and dropping Frank's MCP
+    sessions (wq#2073 RCA, pokemon reports/2073_lpp_resurrection_rca.md). A mask
+    on a fleet unit is a decision, not debris: do NOT unmask
+    lumen-pokemon-live without reading this entry and the wq#2073 RCA first.
+  ticket: wq#2073 (RCA), wq#2218 (this record), wq#1990 (the unmask that caused it), wq#1895 (found it masked)
+  guards:
+    - "lpp-watchdog.timer": >
+        disabled since 2026-08-21, so nothing restarts the unit behind the
+        mask's back. Not masked; a `systemctl enable` would re-arm it.
+    - "repo tombstone (pokemon repo, wq#2073 pokemon-side fix)": >
+        checked-in DECOMMISSIONED.md, a boot gate, and AssertPathExists= on the
+        unit, so an unmask alone no longer starts the stream. Not visible in the
+        /home/lumen/pokemon checkout when this entry was written (2026-09-20,
+        `git log --all -- DECOMMISSIONED.md` empty) — confirm it has landed
+        there before relying on it.
+    - "unit-drift check (wq#2218)": >
+        prints an advisory for every masked unit with no entry in this file, so
+        a mask with unrecorded provenance is named in the report instead of
+        reading as a leftover. Applies to lumen-guardian-lpp.service and
+        lpp-restart.service, also masked, whose reason this entry does not
+        cover.
+
 - name: signal-engine
   units: [lumen-signal-engine.timer, lumen-signal-engine.service]
   load_state: loaded   # confirmed via `systemctl cat` 2026-09-19 — timer still
