@@ -47,6 +47,11 @@ RULES:
     credential-printing command, so it is deliberately off the allowlist.
   If a shape you legitimately need is refused, say so plainly in your final summary (name
   the exact command) so the allowlist can be widened — do not burn attempts around it.
+- Create and patch files with the Write and Edit tools, never with shell heredocs
+  (`python3 - <<EOF`, `cat > f <<EOF`). The Claude CLI refuses a heredoc whose body has a
+  brace next to a quote ("contains brace with quote character (expansion obfuscation)")
+  and that refusal is not retryable; the safety gate also reads heredoc text as commands
+  (wq#2138). Bash is for running things, not for authoring files.
 - Bash output is capped at 2000 characters per result (wq#954) and the tail is dropped —
   tool results are ~40-50% of a session's cost. Narrow commands yourself with
   `head`/`tail`/`grep -n` instead of dumping everything; stderr counts toward the same

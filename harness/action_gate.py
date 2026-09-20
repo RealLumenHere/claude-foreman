@@ -194,6 +194,90 @@ def _norm(cmd):
     return re.sub(r'\s+', ' ', cmd.replace('\n', ' ').replace('\t', ' '))
 
 
+# wq#2138: the body of a QUOTED heredoc (<<'EOF') is inert text — the shell never
+# expands or executes it — so prose inside it ("never rm -rf /") must not read as a
+# command. Masking is limited to consumers that only store or forward the body
+# (cat/tee/python/git/...): a body fed to a shell, sqlite3, psql, ssh etc. is code,
+# and the RED table must keep seeing it. Any unrecognised consumer, any command
+# substitution around the heredoc, or a missing terminator leaves the command whole.
+_HEREDOC_INERT_CONSUMERS = frozenset({
+    "cat", "tee", "cd", "git", "gh", "jq", "grep", "head", "tail", "wc", "sort",
+    "wq", "lumen-pr", "python", "python3"})
+_PY_VERSIONED = re.compile(r'^python3?\.\d+$')
+_HEREDOC_START = re.compile(r'(?<!<)<<(?!<)(-?)\s*(?:\'([^\'\n]+)\'|"([^"\n]+)"|\\(\w+)|(\w+))')
+
+
+def _scan_heredoc_line(line):
+    """Walk one command line outside quotes. Returns (segments, heredocs, subst):
+    the simple commands split on unquoted ; | & ( ) { }, each heredoc start as
+    (delim, quoted, strip_tabs), and whether a $( or backtick appeared."""
+    segments, heredocs, subst = [], [], False
+    quote, cur, i = None, [], 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            if ch == '\\' and quote == '"':
+                cur.append(line[i:i + 2]); i += 2; continue
+            if ch == quote:
+                quote = None
+            cur.append(ch); i += 1; continue
+        if ch == '\\':
+            cur.append(line[i:i + 2]); i += 2; continue
+        if ch in '\'"':
+            quote = ch; cur.append(ch); i += 1; continue
+        m = _HEREDOC_START.match(line, i)
+        if m:
+            heredocs.append((m.group(2) or m.group(3) or m.group(4) or m.group(5),
+                             bool(m.group(2) or m.group(3) or m.group(4)),
+                             m.group(1) == "-"))
+            cur.append(' '); i = m.end(); continue
+        if ch == '`' or line.startswith('$(', i):
+            subst = True
+        if ch in ';|&(){}':
+            segments.append(''.join(cur)); cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    segments.append(''.join(cur))
+    return segments, heredocs, subst
+
+
+def _inert_consumer(segment):
+    m = re.match(r'\s*(?:\w+=\S*\s+)*(\S+)', segment)
+    if not m:
+        return True          # empty segment (e.g. after `&&`) consumes nothing
+    word = os.path.basename(m.group(1))
+    return word in _HEREDOC_INERT_CONSUMERS or bool(_PY_VERSIONED.match(word))
+
+
+def strip_quoted_heredoc_bodies(cmd):
+    """cmd with the bodies of quoted, inert-consumer heredocs removed. The command
+    line itself (redirect targets, arguments) is kept, so `cat > /etc/x <<'EOF'`
+    still classifies on the `> /etc/x`."""
+    if '<<' not in cmd:
+        return cmd
+    lines = cmd.split('\n')
+    out, i = [], 0
+    while i < len(lines):
+        segments, heredocs, subst = _scan_heredoc_line(lines[i])
+        out.append(lines[i]); i += 1
+        if not heredocs:
+            continue
+        inert = not subst and all(_inert_consumer(s) for s in segments)
+        for delim, quoted, strip_tabs in heredocs:
+            j = i
+            while j < len(lines) and (lines[j].lstrip('\t') if strip_tabs else lines[j]) != delim:
+                j += 1
+            if j >= len(lines):
+                break        # unterminated: not a heredoc we can bound, scan it all
+            if not (quoted and inert):
+                out.extend(lines[i:j + 1])
+            else:
+                out.append(lines[j])
+            i = j + 1
+    return '\n'.join(out)
+
+
 def _red_rm_rf(target):
     """rm -rf pointing at / or at protected roots — separate from the regex table
     because it needs path inspection, not just pattern presence."""
@@ -319,7 +403,11 @@ def classify_bash(cmd, rules):
     """Returns (verdict, reason, snap). verdict in RED|AMBER|GREEN.
     snap = (kind, cmd) for AMBER. RED checked first; project rules additive."""
     targets = (cmd, _norm(cmd))
-    for target in targets:
+    # wq#2138: only the builtin destructive table and the rm -rf root check see the
+    # heredoc-stripped text; tamper, research-gate, flash and project rules stay
+    # loose-over-precise on the raw command.
+    stripped = strip_quoted_heredoc_bodies(cmd)
+    for target in (stripped, _norm(stripped)):
         for pat, reason in BUILTIN_RED:
             if reason is None:
                 continue
@@ -328,6 +416,7 @@ def classify_bash(cmd, rules):
         r = _red_rm_rf(target)
         if r:
             return "RED", r, None
+    for target in targets:
         # gate-tamper: any mutation touching a rules file is RED
         if RULES_BASENAME.rsplit(".", 1)[0] in target and _MUTATION_MARKERS.search(target):
             return "RED", "mutation of .fworker-rules.yaml (gate tamper)", None
@@ -575,6 +664,25 @@ def is_permission_denial(text):
     return bool(text) and bool(PERMISSION_DENIAL_RE.search(text))
 
 
+# wq#2138: Claude Code's own shell-safety rule ("...contains brace with quote
+# character (expansion obfuscation)") refuses python heredocs whose body carries a
+# brace next to a quote. Retrying the heredoc reads as a loop, but the cure is a tool
+# switch, not a smarter retry: the first such refusal is a STEER (fworker resumes the
+# session once with this text), and only a refusal AFTER the steer counts toward a
+# kill — charged to the harness like a permission refusal, not to the ticket.
+SHELL_REFUSAL_RE = re.compile(r"brace with quote character|expansion obfuscation", re.I)
+SHELL_REFUSAL_STEER = (
+    "The Claude CLI refused your last shell command (brace-with-quote / expansion "
+    "obfuscation rule). That rule is not retryable. Stop creating or patching files "
+    "through shell heredocs (`python3 - <<EOF`, `cat > f <<EOF`): create files with "
+    "the Write tool and change them with the Edit tool, then continue the ticket.")
+
+
+def is_shell_refusal(text):
+    """True when `text` is the CLI's brace-with-quote shell refusal."""
+    return bool(text) and bool(SHELL_REFUSAL_RE.search(text))
+
+
 class LoopTracker:
     """Feeds on the same stream-json frames RunState.observe() sees. Triggers
     when the agent is demonstrably retrying a failed approach without change:
@@ -586,8 +694,10 @@ class LoopTracker:
       - the same file is Read N times with no successful mutation in between.
     observe() returns a reason string when tripped, else None."""
 
-    def __init__(self, threshold=None):
+    def __init__(self, threshold=None, steered=False):
         self.n = threshold or int(os.environ.get("FOREMAN_LOOP_THRESHOLD", "3"))
+        self.steered = steered     # the one shell-refusal steer is already spent
+        self.steer = None          # steer text the caller must deliver (wq#2138)
         self.pending = {}          # tool_use_id -> (tool, class_sig, file_path)
         self.fail_counts = {}      # class_sig -> count (reset on successful mutation)
         self.perm_counts = {}      # class_sig -> permission-refusal count (tracks fail_counts)
@@ -661,16 +771,22 @@ class LoopTracker:
                     if self.recent:
                         self.recent[-1]["failed"] = True
                     raw_err = self._result_text(b)
+                    if is_shell_refusal(raw_err) and not self.steered:
+                        self.steered = True
+                        self.steer = SHELL_REFUSAL_STEER
+                        self.fail_counts[sig] -= 1
+                        return None
+                    harness_refusal = is_permission_denial(raw_err) or is_shell_refusal(raw_err)
                     # wq#1107: keyed off the RAW result text, not the normalized esig —
                     # _error_sig() keeps only the last 240 chars, and a long compound
                     # denial can push the marker phrase out of that tail.
-                    if is_permission_denial(raw_err):
+                    if harness_refusal:
                         self.perm_counts[sig] = self.perm_counts.get(sig, 0) + 1
                     esig = self._error_sig(raw_err)
                     if esig:
                         self.error_counts[esig] = self.error_counts.get(esig, 0) + 1
                         if self.error_counts[esig] >= self.n:
-                            kind = "PERMISSION" if is_permission_denial(raw_err) else None
+                            kind = "PERMISSION" if harness_refusal else None
                             return self._trip(
                                 f"same error {self.error_counts[esig]}x: {esig[:120]!r}", kind)
                     if self.fail_counts[sig] >= self.n:

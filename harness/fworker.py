@@ -1858,6 +1858,11 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
                 killed_reason = "loop_break"
                 log(f"LOOP BREAK: {loop_reason} — stopping session, handoff to follow")
                 break
+            if loop_tracker.steer:
+                # wq#2138: a -p child has no stdin, so the one steer rides a --resume.
+                killed_reason = "steer"
+                log("STEER: CLI shell refusal — stopping session to resume it with the hint")
+                break
         if frame.get("type") == "rate_limit_event" and frame.get("status") == "rejected":
             report_limit_event(frame)
         if frame.get("type") == "result":
@@ -2224,7 +2229,7 @@ def run_fire_ticket(args):
         return EXIT_FIRE_APPLY_INCOMPLETE
 
 
-def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
+def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=None):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
     archetype = args.archetype or "standard-engineering"
@@ -2332,9 +2337,9 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         return EXIT_DEFERRED
     env[action_gate.SNAPDIR_ENV] = os.path.join(run_dir(ticket_id), "snapshots")
     env[action_gate.HANDOFF_ENV] = run_dir(ticket_id)
-    loop_tracker = action_gate.LoopTracker()
+    loop_tracker = action_gate.LoopTracker(steered=bool(steer))
     settings_file = resolve_worker_settings(args.repo, ticket_id)
-    cmd = build_claude_cmd(prompt, args.model, args.effort, settings_file,
+    cmd = build_claude_cmd(steer or prompt, args.model, args.effort, settings_file,
                             add_dirs=add_dirs, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin)
 
@@ -2356,6 +2361,12 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None):
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
         frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace,
         loop_tracker=loop_tracker)
+    if killed_reason == "steer" and state.session_id:
+        # wq#2138: same attempt number — a harness-side refusal must not cost the
+        # ticket an attempt. The resumed tracker is `steered`, so a second refusal
+        # is a real loop_break, classified PERMISSION_LOOP (harness defect).
+        return do_attempt(args, attempt, resume_session=state.session_id,
+                           prior_worktree=worktree, steer=loop_tracker.steer)
     if killed_reason == "loop_break":
         # Layer 2 handoff: "SESSION PAUSED: repeated unsuccessful approach detected.
         # Your work has been preserved for a reviewing agent." — written to the run
