@@ -63,16 +63,23 @@ keeps running: cloudflared carries every public hostname.
 
 ## Who watches the watchdog
 
-The unit stamps `/home/lumen/logs/.stamp.lumen-public-guardian.service` on every
+The unit stamps `/home/lumen/logs/.stamp.lumen-public-guardian` on every
 successful pass (`ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n`).
 `lumen-cron-deadman` (wq#1184) alerts when a stamp is older than 2× its timer
-cadence — 4 minutes here, detected on the deadman's next 10-minute sweep.
+cadence — 4 minutes here, detected on the deadman's next 10-minute sweep. A
+timer that is disabled or stopped has no next elapse and so no cadence; the
+deadman alerts on its stamp once it is over an hour old (wq#2107 — the guardian
+sat disabled 2026-09-13..09-20 without a page before this).
 
 ## Install
 
 ```
-sudo /home/lumen/bin/lumen-run --root /home/lumen/foreman/ops/wq1252-lumen-public-guardian/install.sh
+/home/lumen/bin/lumen-run start --root --name lpg-install -- /usr/bin/bash /home/lumen/foreman/ops/wq1252-lumen-public-guardian/install.sh
 ```
+
+Re-enabling a disabled timer is the same detached shape:
+`lumen-run start --root -- /usr/bin/systemctl enable --now lumen-public-guardian.timer`.
+Run `guardian.py run --dry-run` first — it must show `E1-version` ok.
 
 Installs to `/home/lumen/services/lumen-public-guardian/`, generates the probe
 HMAC secret if absent, writes a two-line `sudoers.d` grant for exactly the two

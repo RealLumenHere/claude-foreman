@@ -28,12 +28,22 @@ STAMP_DIR = "/home/lumen/logs"
 STAMP_PREFIX = ".stamp."
 STATE_PATH = "/home/lumen/foreman/ops/wq1184-gatus-health-checks/deadman_state.json"
 NTFY_BIN = "/home/lumen/bin/ntfy-send"
+UNARMED_GRACE_S = 3600
+
+
+def _row_unit(row):
+    activates = row.get("activates", "")
+    name = activates[:-len(".service")] if activates.endswith(".service") else activates
+    return name or row.get("unit", "")[:-len(".timer")]
 
 
 def load_timer_intervals():
-    """unit-name (no .service/.timer suffix) -> interval in seconds, derived
-    from next-elapse minus last-trigger. Skips timers that haven't fired yet
-    (last == 0) — nothing to compare a stamp against."""
+    """(intervals, unarmed). intervals: unit-name (no .service/.timer suffix)
+    -> interval in seconds, derived from next-elapse minus last-trigger; timers
+    that haven't fired yet (last == 0) are skipped — nothing to compare a stamp
+    against. unarmed: units whose timer is loaded but has no next elapse, i.e.
+    disabled or stopped (wq#2107: lumen-public-guardian.timer sat disabled for a
+    week because a timer with no next elapse produced no cadence and no alert)."""
     try:
         out = subprocess.run(
             ["systemctl", "list-timers", "--all", "-o", "json"],
@@ -41,21 +51,17 @@ def load_timer_intervals():
         ).stdout
     except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
         print(f"cron_deadman: systemctl list-timers failed: {exc}", file=sys.stderr)
-        return {}
+        return {}, set()
 
-    intervals = {}
+    intervals, unarmed = {}, set()
     for row in json.loads(out):
         last = row.get("last") or 0
         next_ = row.get("next") or 0
-        if not last or not next_ or next_ <= last:
-            continue
-        interval_s = (next_ - last) / 1_000_000
-        activates = row.get("activates", "")
-        name = activates[:-len(".service")] if activates.endswith(".service") else activates
-        if not name:
-            name = row.get("unit", "")[:-len(".timer")]
-        intervals[name] = interval_s
-    return intervals
+        if not next_:
+            unarmed.add(_row_unit(row))
+        elif last and next_ > last:
+            intervals[_row_unit(row)] = (next_ - last) / 1_000_000
+    return intervals, unarmed
 
 
 def find_stamps(stamp_dir):
@@ -97,7 +103,7 @@ def ntfy(priority, title, msg, dry_run):
 
 
 def check(stamp_dir, state_path, dry_run):
-    intervals = load_timer_intervals()
+    intervals, unarmed = load_timer_intervals()
     stamps = find_stamps(stamp_dir)
     state = load_state(state_path)
     now = time.time()
@@ -105,12 +111,18 @@ def check(stamp_dir, state_path, dry_run):
 
     for unit, mtime in stamps.items():
         interval_s = intervals.get(unit)
-        if interval_s is None:
+        if interval_s is None and unit in unarmed:
+            # No cadence to derive, but the timer is loaded and not scheduled:
+            # a stamp this old on a disarmed timer is a silently dead job.
+            threshold, why = UNARMED_GRACE_S, "timer is not armed (disabled/stopped)"
+        elif interval_s is None:
             # Stamp exists but no matching timer found (renamed/removed unit,
             # or timer hasn't fired twice yet to establish a cadence) — skip,
             # don't guess at a threshold.
             continue
-        threshold = 2 * interval_s
+        else:
+            threshold = 2 * interval_s
+            why = f"2x its ~{interval_s:.0f}s cadence"
         age = now - mtime
         was_stale = state.get(unit) == "stale"
         is_stale = age > threshold
@@ -118,7 +130,7 @@ def check(stamp_dir, state_path, dry_run):
         if is_stale and not was_stale:
             ntfy("urgent", f"Dead-man: {unit} stale",
                  f"{unit} stamp is {age:.0f}s old (threshold {threshold:.0f}s, "
-                 f"2x its ~{interval_s:.0f}s cadence) — wq#1184",
+                 f"{why}) — wq#1184",
                  dry_run)
             changed = True
         elif was_stale and not is_stale:
