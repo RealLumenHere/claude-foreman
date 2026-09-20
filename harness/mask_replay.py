@@ -97,18 +97,60 @@ LEGACY_PATTERNS = [
 
 CURRENT_PATTERNS = [(label, rx) for label, rx, _ in masking.PATTERNS]
 
+GIT_TIMEOUT_S = 20
+HISTORY_DEPTH = 50
+
+
+def _window(text, offset=None, limit=None):
+    """The 1-indexed `offset`..`offset+limit` line window of `text`, or all of it."""
+    if text is None or offset is None:
+        return text
+    start = max(0, int(offset) - 1)
+    return "".join(text.splitlines(keepends=True)[start:start + int(limit)])
+
 
 def _read(path, offset=None, limit=None):
     """Text of `path`, or the 1-indexed `offset`..`offset+limit` line window of it."""
     try:
         with open(path, errors="replace") as fh:
-            lines = fh.readlines()
+            text = fh.read()
     except OSError:
         return None
-    if offset is None:
-        return "".join(lines)
-    start = max(0, int(offset) - 1)
-    return "".join(lines[start:start + int(limit)])
+    return _window(text, offset, limit)
+
+
+def _git(repo, *args):
+    """stdout of a git command, or "" — history lookups are best-effort evidence."""
+    try:
+        proc = subprocess.run(["git", "-C", repo, *args],
+                              capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout
+
+
+def blob_at_size(path, size):
+    """`path`'s text from the revision where it was exactly `size` bytes, else None.
+
+    The read cache records the file's size at read time, and several of the files a
+    rotation run reads are the harness's own masking code, which that very run is
+    editing. Re-cutting the window from today's file then reports lines the model
+    never saw: replaying wq#2291 off the live tree attributed two sk-key values to
+    masking.py:52 and test_masking.py:49, comment lines written 18 minutes AFTER the
+    alarm, while the read itself was of a 2137B file that no longer exists on disk.
+    Size is enough to identify the revision — it is a fingerprint of the exact bytes,
+    checked against history rather than assumed.
+    """
+    top = _git(os.path.dirname(path) or ".", "rev-parse", "--show-toplevel").strip()
+    if not top:
+        return None
+    rel = os.path.relpath(path, top)
+    for sha in _git(top, "log", f"-{HISTORY_DEPTH}", "--format=%h", "--",
+                    rel).split():
+        at = _git(top, "cat-file", "-s", f"{sha}:{rel}").strip()
+        if at.isdigit() and int(at) == size:
+            return _git(top, "show", f"{sha}:{rel}")
+    return None
 
 
 def session_ids(ticket_id):
@@ -130,9 +172,11 @@ def corpus(ticket_id):
 
     Four sources, in the order they explain a hit: the gate snapshots (exact frozen
     bytes of a read or written file), the run/event records, the read cache — which
-    holds no content, only `{path, offset, limit}` per Read call, so the window is
-    re-cut from the file now — and last the CLI transcript. A file edited since then
-    re-cuts imperfectly; the snapshots are the authority and are listed first.
+    holds no content, only `{path, offset, limit, fp}` per Read call, so the window is
+    re-cut — and last the CLI transcript. `fp` carries the file's size as read, so a
+    file edited since is re-cut from the history revision that matched that size; when
+    no revision does, the window is keyed `read-stale:` and the record it produces is
+    evidence of nothing. The snapshots are still the authority and are listed first.
 
     The transcript goes last on purpose. It is the most complete source (it is the
     model's context verbatim) but the least legible — a hit attributed to it says only
@@ -172,15 +216,37 @@ def corpus(ticket_id):
                 rec = json.loads(line)
             except ValueError:
                 continue
-            text = _read(rec.get("path", ""), rec.get("offset"), rec.get("limit"))
+            text, kind = _recut(rec)
             if text:
-                items[f"read:{rec['path']}@{rec.get('offset')}"] = text
+                items[f"{kind}:{rec['path']}@{rec.get('offset')}"] = text
     for sid in sessions:
         for path in sorted(glob.glob(os.path.join(PROJECTS_ROOT, "*", f"{sid}.jsonl"))):
             text = _read(path)
             if text:
                 items[f"transcript:{sid}"] = text
     return items
+
+
+def _recut(rec):
+    """(window, source kind) for one read-cache record.
+
+    `read` means these are the bytes the model saw — the file is unchanged, the
+    revision that held them was found, or the record predates `fp` and cannot be
+    checked. `read-stale` means it is today's text standing in for bytes that are
+    gone.
+    """
+    path, offset, limit = rec.get("path", ""), rec.get("offset"), rec.get("limit")
+    was = (rec.get("fp") or ":").split(":")[0]
+    try:
+        live = os.path.getsize(path)
+    except OSError:
+        return None, "read"
+    if not was.isdigit() or int(was) == live:
+        return _read(path, offset, limit), "read"
+    historical = blob_at_size(path, int(was))
+    if historical is not None:
+        return _window(historical, offset, limit), "read"
+    return _read(path, offset, limit), "read-stale"
 
 
 def tracked_text(repo=REPO_ROOT, extra=DOCTRINE_TRACKED):
@@ -314,6 +380,7 @@ def replay(ticket_id, patterns=None, tracked=None, items=None):
                 "value_sha256_12": hashlib.sha256(
                     value.encode("utf-8", "replace")).hexdigest()[:12],
                 "first_seen_in": source,
+                "faithful": not source.startswith("read-stale:"),
                 "accounted_in": account(value, tracked),
                 "still_matches_today": value in today,
                 # Splice this value out, then mask whatever else the line holds. On an
@@ -335,9 +402,15 @@ def unaccounted(records):
     worktree edit that never landed in the shape the snapshot froze, so there is no
     tree text to match it against. Only what survives both screens is worth an
     instinct-4 rotation.
+
+    A record from an unfaithful re-cut is not one of them: it was scored off text
+    that replaced what the run actually read, so it can no more demand a rotation
+    than it can excuse one. It stays in the report, marked, because the gap it names
+    is real — that window's true bytes are simply unrecoverable from this run.
     """
     return [r for r in records
-            if not r["accounted_in"] and r["still_matches_today"]]
+            if r.get("faithful", True)
+            and not r["accounted_in"] and r["still_matches_today"]]
 
 
 def report(ticket_id, records, out=sys.stdout):
@@ -345,7 +418,9 @@ def report(ticket_id, records, out=sys.stdout):
     print(f"wq#{ticket_id}: {len(records)} credential-shaped values in the run's "
           f"model context, {len(loose)} unaccounted", file=out)
     for rec in records:
-        if rec["accounted_in"]:
+        if not rec.get("faithful", True):
+            mark = "re-cut"
+        elif rec["accounted_in"]:
             mark = "tracked"
         elif not rec["still_matches_today"]:
             mark = "rule-fixed"
@@ -362,6 +437,11 @@ def report(ticket_id, records, out=sys.stdout):
     else:
         print("\nNo rotation: every value is committed text, or a string today's "
               "masking.PATTERNS no longer reads as a credential.", file=out)
+    recut = [r for r in records if not r.get("faithful", True)]
+    if recut:
+        print(f"{len(recut)} value(s) marked re-cut were scored off a file that has "
+              f"changed since the run read it, with no revision left at the size it "
+              f"read; they are neither evidence of a burn nor of a fixture.", file=out)
     return 1 if loose else 0
 
 

@@ -13,8 +13,10 @@ transcript held 13 credential-shaped strings and every one of them is committed
 source.
 """
 import hashlib
+import io
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -166,6 +168,77 @@ def test_corpus_covers_snapshots_run_records_events_and_the_read_cache(tmp_path,
     assert read_item == FIXTURE
     records = mask_replay.replay(4242, tracked={}, items=items)
     assert {r["label"] for r in records} == {"kv-secret", "github"}
+
+
+# --- re-cutting a read from the bytes the model saw --------------------------
+
+def git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c",
+                    "user.name=t", *args], check=True, capture_output=True)
+
+
+def read_record(path, offset, limit, size):
+    return json.dumps({"path": str(path), "offset": str(offset),
+                       "limit": str(limit), "fp": f"{size}:1:1.1"}) + "\n"
+
+
+def test_a_read_of_an_unchanged_file_is_recut_live(tmp_path, monkeypatch):
+    run = write_run(tmp_path, 4242, "sess-1")
+    read = tmp_path / "read_me.py"
+    (tmp_path / "events" / "read_cache" / "sess-1.jsonl").write_text(
+        read_record(read, 2, 1, read.stat().st_size))
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(run.parent))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    items = mask_replay.corpus(4242)
+    assert next(v for k, v in items.items() if k.startswith("read:")) == FIXTURE
+
+
+def test_a_changed_file_is_recut_from_the_revision_it_was_read_at(tmp_path,
+                                                                  monkeypatch):
+    """wq#2324: replaying wq#2291 off the live tree attributed two sk-key values to
+    comment lines written 18 minutes AFTER the alarm, in a file that had grown from
+    2137B to 11693B — the run's own edits to the masker it was investigating. The
+    recorded size names the revision that held the bytes actually read."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    src = repo / "src.py"
+    src.write_text("filler\n" + FIXTURE)
+    was = src.stat().st_size
+    git(repo, "add", "src.py")
+    git(repo, "commit", "-qm", "as read")
+    src.write_text("filler\n" + CALLED_IDENT + "a comment added after the run\n")
+    assert src.stat().st_size != was
+
+    run = write_run(tmp_path, 4242, "sess-1")
+    (tmp_path / "events" / "read_cache" / "sess-1.jsonl").write_text(
+        read_record(src, 2, 1, was))
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(run.parent))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    items = mask_replay.corpus(4242)
+    assert next(v for k, v in items.items() if k.startswith("read:")) == FIXTURE
+
+
+def test_a_window_whose_bytes_are_gone_is_marked_stale(tmp_path, monkeypatch):
+    """No revision ever held that size, so the window is today's text standing in for
+    what the run read. It is reported, and it neither demands nor excuses a rotation:
+    counting it as a burn would rotate a live credential over a line written after
+    the fact, and counting it as accounted would hide one."""
+    run = write_run(tmp_path, 4242, "sess-1")
+    read = tmp_path / "read_me.py"
+    (tmp_path / "events" / "read_cache" / "sess-1.jsonl").write_text(
+        read_record(read, 2, 1, read.stat().st_size + 4096))
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(run.parent))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    items = mask_replay.corpus(4242)
+    assert [k for k in items if k.startswith("read")][0].startswith("read-stale:")
+    records = mask_replay.replay(4242, tracked={}, items=items)
+    stale = [r for r in records if not r["faithful"]]
+    assert [r["label"] for r in stale] == ["kv-secret"]
+    assert stale[0] not in mask_replay.unaccounted(records)
+    out = io.StringIO()
+    mask_replay.report(4242, records, out=out)
+    assert "[re-cut]" in out.getvalue()
 
 
 def test_cli_exits_2_when_the_run_left_nothing_to_replay(tmp_path, monkeypatch):
