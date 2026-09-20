@@ -114,3 +114,19 @@ That repo has no remote (fleet ISSUE-LOG #16) and had wq#1250's work in flight
 when this landed, so the change lives in its working tree rather than in a
 branch here. If a merge ever loses it, `E2` reports "no inbound at all" and the
 runbook names this as the first thing to check.
+
+## Deployed 2026-09-20 (wq#2197)
+
+The timer had been disabled since 09-13 because `lumen-pokemon-live.service` is
+masked (retired), which made `S1`/`S2`/`S4` red every cycle (wq#2107, PR 750).
+With those checks standing down, `install.sh` was applied as root: the installed
+`/home/lumen/services/lumen-public-guardian` matches this directory (`diff -rq`
+shows only the unit files, tests and README, which the installer does not copy),
+`guardian.py selftest` passes with 8 checks registered
+(`E1-schema E1-version E2-roundtrip E3-deepseek E4-sync E5-recall E6-suppressed
+S3-tunnel`), `lumen-public-guardian.timer` is `enabled` and `active` (2 min
+cadence, last service run `Result=success`), and `guardian.py status` shows no
+`S1`/`S2`/`S4` entry. `E2-roundtrip` reads `unconfigured` (`checks_email.py:329-361`:
+no probe secret, or no probe round trip has ever completed), which nags daily
+but never heals or fires. If the pokemon unit is ever
+unmasked, `S1`/`S2`/`S4` re-arm on their own.
