@@ -23,6 +23,16 @@ LIVE=/home/lumen/minerva
 BACKUP_DIR=/home/lumen/backups/wq1528
 DEST_DIR=/etc/systemd/system/minerva-proposal.service.d
 
+if [ "${1:-}" = --verify ]; then
+    . "$HERE/../_verify.sh"
+    vfile "$HERE/minerva_factpack.py" "$LIVE/minerva_factpack.py"
+    # minerva_verify.py is re-shipped by later bundles (wq1529, wq1927, wq1997), so a byte
+    # compare would report permanent false drift; check the marker this bundle patched in.
+    vcontains "$LIVE/minerva_verify.py" "VERIFY_JUDGE_CTX_CHARS., .23000."
+    vunit_file "$HERE/zz-wq1528-judge-window.conf" "$DEST_DIR/zz-wq1528-judge-window.conf"
+    vdone
+fi
+
 declare -A PRE=(
   [minerva_factpack.py]=bae99c75326fd9ca2d43fb641faa8307c9c6b11ca58f9b093c214d5fadf3d525
   [minerva_verify.py]=f34011293af3174e813c0ae11f0155c6f5c55977f83b8d3987cb21a38731d351
