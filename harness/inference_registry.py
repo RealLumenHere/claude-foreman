@@ -195,7 +195,7 @@ def _lint_node(name, node, fams, out):
         for key in ("slots", "served_ctx", "first_frame_s"):
             if not _num_ok(m.get(key)):
                 out.append(Finding("error", "schema", f"{where}: {key} must be a positive number"))
-        for key in ("prefill_tps", "decode_tps", "load_s"):
+        for key in ("prefill_tps", "decode_tps", "load_s", "unit_stop_s"):
             if m.get(key) is not None and not _num_ok(m[key]):
                 out.append(Finding("error", "schema", f"{where}: {key} must be null (unmeasured) or > 0"))
         for cap, c in (m.get("capabilities") or {}).items():

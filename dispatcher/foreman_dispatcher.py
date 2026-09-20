@@ -1457,7 +1457,7 @@ def _admit_local(ctx, r):
     if cap is None:
         r["member"] = local_capacity.first_member(ctx.cfg.get("local_backends"), model)
     elif cap.is_group(model):
-        member = cap.pick_member(model)
+        member = _routed_member(ctx, r, cap, model) or cap.pick_member(model)
         if member is None:
             ctx.local_slots_full += 1
             ctx.log.skip(tid, lane, "concurrency", "local_slots_full", model=model,
@@ -1474,6 +1474,67 @@ def _admit_local(ctx, r):
                                 f"cooling down)")
             return False
     return True
+
+
+def _prompt_estimate(t):
+    """Lower bound on the prompt fworker will build: the ticket's own text plus the local CLI's fixed
+    request. The rendered prompt is longer, so this only ever under-filters a small-ctx backend."""
+    import charging
+    return charging.prompt_tokens_est(f"{t.get('title') or ''}\n{t.get('detail') or ''}", cli_profile=True)
+
+
+def _routed_member(ctx, r, cap, group):
+    """wq#2255 (INFERENCE_NODE_REGISTRY §7.1): the group member the registry ranks best for this ticket's
+    archetype — trusted, served_ctx clearing the prompt estimate, highest measured success then prefill_tps —
+    that has a free slot. The member is the backend id (what local_capacity accounts slots under); the
+    FAMILY.NODE name goes in the log. None falls through to pick_member: the registry is a preference layered
+    on the group, never a new way for a local ticket to be refused."""
+    try:
+        import inference_registry
+        import model_swap
+        t = r["t"]
+        members = set(cap._members(local_capacity.base_name(group)) or [])
+        ticket = {"archetype": t.get("archetype"), "prompt_tokens_est": _prompt_estimate(t)}
+        pick = model_swap.route(inference_registry.load(), ticket,
+                                usable=lambda c: c["backend"] in members and cap.free_slots(c["backend"]) > 0)
+        if pick is None:
+            return None
+        ctx.log.emit("info", stage="model_route", ticket=r["cand"]["id"], model=pick["model"],
+                     member=pick["backend"], swap=pick["swap"], skipped=pick["skipped"])
+        return pick["backend"]
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:  # noqa: BLE001
+        ctx.log.emit("error", stage="model_route", reason="route_failed", detail=repr(e)[:300])
+        return None
+
+
+def _model_swap_step(ctx, ready):
+    """wq#2255 (INFERENCE_NODE_REGISTRY §7.3): swap the resident llama-server model on a node when the
+    admission conditions hold. Runs after admissions so the in-flight count includes this pass's spawns;
+    never load-bearing. FOREMAN_MODEL_SWAP=off logs decisions and moves no unit."""
+    try:
+        if ctx.capacity() is None:
+            return
+        import inference_registry
+        import model_swap
+        reg = inference_registry.load()
+        counts = {}
+
+        def in_flight(node):   # asked only for a node with a swappable model, so a registry with none costs no lumen-run call
+            if not counts:
+                ctx.refresh_units()  # admissions above spawned units
+                counts.update(model_swap.in_flight_by_node(reg, ctx.local_unit_models()))
+            return counts.get(node, 0)
+        pending = [{"archetype": r["t"].get("archetype"), "prompt_tokens_est": _prompt_estimate(r["t"])}
+                   for r in ready["local"] if not r.get("spawned")]
+        sig = model_swap.Signals(in_flight, pending)
+        model_swap.run(sig, dry_run=ctx.dry_run,
+                       emit=lambda kind, **kw: ctx.log.emit("info", stage="model_swap", what=kind, **kw))
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:  # noqa: BLE001
+        ctx.log.emit("error", stage="model_swap", reason="step_failed", detail=repr(e)[:300])
 
 
 def _node_power_step(ctx, ready):
@@ -1637,6 +1698,7 @@ def _spawn(ctx, r):
         ntfy(f"dispatcher: spawn failed for wq#{tid} ({lane}) — see dispatcher.log")
         return False
     ctx.spawned[r["part"]] += 1
+    r["spawned"] = True  # wq#2255: the swap step counts only tickets still waiting
     ctx.units = None  # re-read: the next admission must see this worker
     state["lane_counts"][lane] = state["lane_counts"].get(lane, 0) + 1
     spawn_loop_guard.record_spawn(state, tid)  # wq#1703, before the save below
@@ -1860,6 +1922,7 @@ def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None):
 
     if not halted:
         _node_power_step(ctx, ready)
+        _model_swap_step(ctx, ready)
 
     # step 8 (F7): dispatchable is the READY set, not candidates minus a list of reasons that
     # has to learn every new gate. A ticket that passed every gate but lost its lane's daily
