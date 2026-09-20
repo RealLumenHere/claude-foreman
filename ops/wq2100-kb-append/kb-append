@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# kb-append <branch> [kb-path]: the sanctioned land path for kb (wq#2100). kb has no
+# origin, so lumen-pr cannot land it and sync-live refuses it. Workers commit a row
+# branch in a kb worktree; this rebases that branch onto kb master (in a throwaway
+# worktree, never touching the primary's HEAD) and fast-forwards the primary to it.
+#
+# Uncommitted tracked edits in the primary are handled first: a file whose content is
+# already a blob on the branch is reset (the branch carries it); anything else is
+# snapshot-committed so no backlog is lost. Untracked files are never touched.
+set -euo pipefail
+
+BRANCH=${1:-}
+KB=${2:-/home/lumen/kb}
+[ -n "$BRANCH" ] || { echo "usage: kb-append <branch> [kb-path]" >&2; exit 1; }
+
+git -C "$KB" rev-parse --verify -q "refs/heads/$BRANCH" >/dev/null \
+  || { echo "REFUSE: no branch $BRANCH in $KB" >&2; exit 1; }
+[ "$(git -C "$KB" symbolic-ref --short HEAD)" = master ] \
+  || { echo "REFUSE: $KB is not on master" >&2; exit 1; }
+
+# 1. primary backlog
+snap=0
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  cur=$(git -C "$KB" hash-object "$KB/$f")
+  if git -C "$KB" rev-list "master..$BRANCH" -- "$f" \
+       | while read -r c; do git -C "$KB" rev-parse "$c:$f" 2>/dev/null; done \
+       | grep -qx "$cur"; then
+    git -C "$KB" checkout -- "$f"
+    echo "reset $f (content already on $BRANCH)"
+  else
+    git -C "$KB" add -- "$f"; snap=1
+  fi
+done < <(git -C "$KB" diff --name-only)
+if [ "$snap" = 1 ]; then
+  git -C "$KB" commit -q -m "kb: snapshot uncommitted tracked edits before kb-append $BRANCH"
+  echo "snapshot-committed remaining backlog"
+fi
+
+# 2. rebase in a throwaway worktree, then ff the primary
+tmp=$(mktemp -d)
+trap 'git -C "$KB" worktree remove --force "$tmp" >/dev/null 2>&1 || true' EXIT
+git -C "$KB" worktree add -q --detach "$tmp" "$BRANCH"
+if ! git -C "$tmp" rebase -q master >/dev/null 2>&1; then
+  git -C "$tmp" rebase --abort >/dev/null 2>&1 || true
+  echo "REFUSE: $BRANCH does not rebase cleanly onto master — fix conflicts on the branch" >&2
+  exit 1
+fi
+new=$(git -C "$tmp" rev-parse HEAD)
+git -C "$KB" merge -q --ff-only "$new"
+echo "landed $BRANCH -> master $(git -C "$KB" rev-parse --short HEAD)"
