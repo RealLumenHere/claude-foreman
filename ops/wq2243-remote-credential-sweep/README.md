@@ -14,17 +14,25 @@ session transcript. Treat that token as burned.
 - Flags any http(s)/ftp remote `url`/`pushurl` with userinfo (`token@`,
   `user:pass@`) regardless of token format, plus known token prefixes
   (`ghp_`, `github_pat_`, `gho_`, `ghs_`, `ghu_`, `glpat-`) anywhere in the URL.
+  A prefix counts only at a non-alphanumeric boundary with a token-length body,
+  so `highs_solver.git` and `ghp_notes.git` are not tokens.
   `ssh://git@` and `git@host:path` are not flagged (username only).
+- Values are decoded like git does (quotes, `\"`, `#`/`;` comments): git quotes
+  any value with `#` or `;`, so `url = "https://u:pw#1@host/"` is still flagged.
 - Userinfo ends at the last `@` before the first `/`, so a raw `@` in a
   password leaves no fragment. Also parsed: `[remote "x"] url = ...` on one
   line, and `[url "https://tok@host/"] insteadOf = ...` (the credential is in
   the section header; reported as `remote=url#N key=url-section`).
-- `--fix` rewrites each hit to the token-free URL via `git config --file`
-  (url-section headers are edited as text, so the token never enters an argv);
-  fetch/push then go through the credential helper the other clones use. A
+- `--fix` rewrites each hit to the token-free URL by editing the config line
+  as text (the token never enters an argv); a repeated `url`/`pushurl` under one
+  remote is fixed entry by entry and clean siblings are left alone. Fetch/push
+  then go through the credential helper the other clones use. A
   `ghp_`/`github_pat_`/... token in the query or fragment is dropped with its
   param. A token in the path cannot be stripped: it is reported as
-  `UNSTRIPPABLE`, left in place, and keeps paging until someone fixes it.
+  `UNSTRIPPABLE` and left in place; `--notify` pages it once (worded "cannot
+  auto-strip", state in `--state`, default
+  `~/.local/state/remote-credential-sweep/paged-unstrippable`) and again only if
+  it clears and recurs or a new one appears. Exit stays 1 while it remains.
 - Output is `STATUS config-path remote=NAME key=url|pushurl|url-section`
   (STATUS = FIXED, EMBEDDED, UNSTRIPPABLE). The URL is never printed.
   `--notify` pages ntfy once per run with repo paths only, for URLs that stay

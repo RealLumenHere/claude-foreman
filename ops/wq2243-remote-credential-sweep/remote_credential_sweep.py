@@ -23,8 +23,10 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass, field
 
 DEFAULT_ROOT = "/home/lumen"
+DEFAULT_STATE = "/home/lumen/.local/state/remote-credential-sweep/paged-unstrippable"
 NTFY_BIN = "/home/lumen/bin/ntfy-send"
 EXCLUDE_DIR_NAMES = {"node_modules", ".venv", "venv", "__pycache__"}
 URL_KEYS = ("url", "pushurl")
@@ -33,7 +35,12 @@ URL_KEYS = ("url", "pushurl")
 # carry a username only, not a secret, so they are not matched.
 SCHEME_RE = re.compile(r"^(?P<scheme>(?:https?|ftps?)://)(?P<rest>.*)$", re.I | re.S)
 URL_PARTS_RE = re.compile(r"^(?P<base>[^?#]*)(?:\?(?P<query>[^#]*))?(?:#(?P<frag>.*))?$", re.S)
-TOKEN_PREFIX_RE = re.compile(r"(ghp_|github_pat_|gho_|ghs_|ghu_|glpat-)[A-Za-z0-9_-]+")
+# A prefix only counts at a word boundary and with a token-length body, so repo
+# names like `highs_solver` (`ghs_` inside a word) and `ghp_notes` (too short)
+# are not tokens. Real bodies: gh?_ 36, github_pat_ 82, glpat- 20 chars.
+TOKEN_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:(?:ghp_|gho_|ghs_|ghu_)[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,})"
+)
 # `[section]`, `[section "sub"]`, optionally followed on the same line by `key = val`.
 SECTION_RE = re.compile(r'^\s*\[\s*(?P<sec>[A-Za-z][A-Za-z0-9-]*)(?:\s+"(?P<sub>(?:[^"\\]|\\.)*)")?\s*\](?P<rest>.*)$')
 KEY_RE = re.compile(r"^\s*(?P<key>[A-Za-z]+)\s*=\s*(?P<val>.*?)\s*$")
@@ -100,31 +107,81 @@ def _escape(sub):
     return sub.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def parse_urls(text):
-    """Yield (name, key, url) for every URL-bearing entry in git config text.
+_VALUE_ESCAPES = {"n": "\n", "t": "\t", "b": "\b"}
 
-    Remote `url`/`pushurl` values yield (remote, key, value). A `[url "<sub>"]`
-    header yields (`url#N`, URL_SECTION_KEY, sub) since its subsection IS a URL
-    prefix; N is the header's ordinal, so the name never carries the secret.
-    Handles `[remote "x"] url = ...` on one line.
+
+def _parse_value(raw):
+    """Decode a raw git config value: quotes, backslash escapes, `#`/`;` comments.
+
+    git quotes any value holding `#` or `;`, so `url = "https://u:pw#1@h/"`
+    must be unquoted before SCHEME_RE can see the scheme.
+    """
+    out, quoted, protect, i = [], False, 0, 0
+    while i < len(raw):
+        c = raw[i]
+        if c == "\\" and i + 1 < len(raw):
+            i += 1
+            out.append(_VALUE_ESCAPES.get(raw[i], raw[i]))
+            protect = len(out)
+        elif c == '"':
+            quoted = not quoted
+            protect = len(out)
+        elif c in "#;" and not quoted:
+            break
+        else:
+            out.append(c)
+            if quoted:
+                protect = len(out)
+        i += 1
+    while len(out) > protect and out[-1].isspace():
+        out.pop()
+    return "".join(out)
+
+
+def _encode_value(val):
+    """Inverse of _parse_value: quote when git would (`#`, `;`, edge whitespace)."""
+    body = _escape(val)
+    return f'"{body}"' if any(c in val for c in "#;") or val != val.strip() else body
+
+
+@dataclass(frozen=True)
+class Entry:
+    """One URL-bearing config entry; lineno + span locate its text for rewriting."""
+    name: str
+    key: str
+    url: str = field(repr=False)
+    lineno: int
+    span: tuple
+
+
+def parse_urls(text):
+    """Yield an Entry for every URL-bearing entry in git config text.
+
+    Remote `url`/`pushurl` values yield (remote, key, decoded value); each
+    repeated key is its own entry. A `[url "<sub>"]` header yields
+    (`url#N`, URL_SECTION_KEY, sub) since its subsection IS a URL prefix; N is
+    the header's ordinal, so the name never carries the secret. Handles
+    `[remote "x"] url = ...` on one line.
     """
     section = sub = None
     n_url = 0
-    for line in text.splitlines():
+    for lineno, line in enumerate(text.splitlines()):
+        base = 0
         s = SECTION_RE.match(line)
         if s:
             section = s.group("sec").lower()
             sub = _unescape(s.group("sub")) if s.group("sub") is not None else None
             if section == "url" and sub is not None:
                 n_url += 1
-                yield f"url#{n_url}", URL_SECTION_KEY, sub
-            line = s.group("rest")
+                yield Entry(f"url#{n_url}", URL_SECTION_KEY, sub, lineno, s.span("sub"))
+            base, line = s.start("rest"), s.group("rest")
         elif line.lstrip().startswith("["):
             section = sub = None
             continue
         k = KEY_RE.match(line)
         if section == "remote" and sub and k and k.group("key").lower() in URL_KEYS:
-            yield sub, k.group("key").lower(), k.group("val")
+            a, b = k.span("val")
+            yield Entry(sub, k.group("key").lower(), _parse_value(k.group("val")), lineno, (base + a, base + b))
 
 
 def resolve_config(git_entry):
@@ -171,19 +228,20 @@ def iter_configs(root):
 
 
 def scan_config(cfg):
-    """Return [(name, key, strippable)] for credential-bearing URLs in one config file."""
+    """Return [(entry, strippable)] for credential-bearing URLs in one config file."""
     try:
         with open(cfg, encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError:
         return []
-    return [(n, k, strippable(u)) for n, k, u in parse_urls(text) if has_credential(u)]
+    return [(e, strippable(e.url)) for e in parse_urls(text) if has_credential(e.url)]
 
 
-def rewrite_url_header(cfg, name, clean):
-    """Replace the subsection of the `[url "..."]` header numbered `name` with clean.
+def rewrite_span(cfg, lineno, span, text):
+    """Replace span of line `lineno` in cfg with text.
 
-    Edited as text so the credential never travels through a child's argv.
+    Edited as text so the credential never travels through a child's argv, and
+    so one of several repeated `url`/`pushurl` entries can be fixed alone.
     """
     try:
         with open(cfg, encoding="utf-8", errors="surrogateescape", newline="") as f:
@@ -191,17 +249,10 @@ def rewrite_url_header(cfg, name, clean):
         mode = os.stat(cfg).st_mode & 0o7777
     except OSError:
         return False
-    n = 0
-    for i, line in enumerate(lines):
-        s = SECTION_RE.match(line)
-        if s and s.group("sec").lower() == "url" and s.group("sub") is not None:
-            n += 1
-            if f"url#{n}" == name:
-                a, b = s.span("sub")
-                lines[i] = line[:a] + _escape(clean) + line[b:]
-                break
-    else:
+    if lineno >= len(lines):
         return False
+    a, b = span
+    lines[lineno] = lines[lineno][:a] + text + lines[lineno][b:]
     tmp = cfg + ".sweep-tmp"
     try:
         with open(tmp, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
@@ -215,37 +266,34 @@ def rewrite_url_header(cfg, name, clean):
     return True
 
 
-def fix_config(cfg, name, key):
+def fix_config(cfg, entry):
     """Rewrite one URL entry token-free. Returns True on success."""
     with open(cfg, encoding="utf-8", errors="replace") as f:
-        url = next((u for n, k, u in parse_urls(f.read()) if n == name and k == key), None)
-    clean = strip_credentials(url) if url else None
+        cur = next((e for e in parse_urls(f.read())
+                    if (e.lineno, e.name, e.key) == (entry.lineno, entry.name, entry.key)), None)
+    clean = strip_credentials(cur.url) if cur else None
     if clean is None or has_credential(clean):
         return False
-    if key == URL_SECTION_KEY:
-        return rewrite_url_header(cfg, name, clean)
-    res = subprocess.run(
-        ["git", "config", "--file", cfg, f"remote.{name}.{key}", clean],
-        capture_output=True, check=False,
-    )
-    return res.returncode == 0
+    encode = _escape if cur.key == URL_SECTION_KEY else _encode_value
+    return rewrite_span(cfg, cur.lineno, cur.span, encode(clean))
 
 
-def scan(root, fix=False, out=sys.stdout, fixed_out=None):
-    """Report credential-bearing URLs; return the configs still embedded.
+def scan(root, fix=False, out=sys.stdout, findings_out=None):
+    """Report credential-bearing URLs; return the configs still unresolved.
 
-    Configs whose credential was stripped are appended to fixed_out if given.
+    Every finding is appended to findings_out, if given, as
+    (status, cfg, name, key) with status FIXED, EMBEDDED or UNSTRIPPABLE.
     """
     unresolved = []
     for cfg in iter_configs(root):
-        for name, key, can_strip in scan_config(cfg):
-            fixed = fix and can_strip and fix_config(cfg, name, key)
-            if fixed and fixed_out is not None:
-                fixed_out.append(cfg)
+        for entry, can_strip in scan_config(cfg):
+            fixed = fix and can_strip and fix_config(cfg, entry)
+            status = "FIXED" if fixed else "EMBEDDED" if can_strip else "UNSTRIPPABLE"
             if not fixed:
                 unresolved.append(cfg)
-            status = "FIXED" if fixed else "EMBEDDED" if can_strip else "UNSTRIPPABLE"
-            print(f"{status} {cfg} remote={name} key={key}", file=out)
+            if findings_out is not None:
+                findings_out.append((status, cfg, entry.name, entry.key))
+            print(f"{status} {cfg} remote={entry.name} key={entry.key}", file=out)
     return unresolved
 
 
@@ -253,19 +301,59 @@ def _repos(configs):
     return " ".join(sorted({c.rsplit("/", 2)[0] if c.endswith("/.git/config") else os.path.dirname(c) for c in configs}))
 
 
-def notify(configs, fixed=()):
-    """Page once per run with repo paths only (never the URL).
+def notify(configs, fixed=(), stuck=()):
+    """Page once per run with repo paths only (never the URL); True if a page went out.
 
     A FIXED URL still pages: the token stays valid until it is rotated.
+    `stuck` is a token in the URL path, which no run can strip.
     """
     parts = []
     if configs:
         parts.append(f"credential in git remote URL: {_repos(configs)}")
     if fixed:
         parts.append(f"credential stripped from git remote URL, rotate the token: {_repos(fixed)}")
-    if parts:
-        subprocess.run([NTFY_BIN, "-p", "high", "-T", "secret leak", "; ".join(parts)],
-                       capture_output=True, check=False)
+    if stuck:
+        parts.append(f"credential in git remote URL path, cannot auto-strip (edit by hand, rotate the token; paged once): {_repos(stuck)}")
+    if not parts:
+        return False
+    res = subprocess.run([NTFY_BIN, "-p", "high", "-T", "secret leak", "; ".join(parts)],
+                         capture_output=True, check=False)
+    return res.returncode == 0
+
+
+def _load_state(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return {ln.rstrip("\n") for ln in f if ln.strip()}
+    except OSError:
+        return set()
+
+
+def _save_state(path, keys):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("".join(f"{k}\n" for k in sorted(keys)))
+    except OSError:
+        pass
+
+
+def notify_findings(findings, state_path):
+    """Page for `findings`, but an UNSTRIPPABLE entry only the first time it is seen.
+
+    An unstrippable URL never changes on its own, so re-paging it hourly is noise.
+    The state file holds `config-path<TAB>remote<TAB>key` of entries already
+    paged, pruned to the ones still present so a recurrence pages again.
+    """
+    seen = _load_state(state_path)
+    stuck = {f"{c}\t{n}\t{k}": c for st, c, n, k in findings if st == "UNSTRIPPABLE"}
+    new = {key: cfg for key, cfg in stuck.items() if key not in seen}
+    embedded = [c for st, c, _, _ in findings if st == "EMBEDDED"]
+    fixed = [c for st, c, _, _ in findings if st == "FIXED"]
+    paged = notify(embedded, fixed, list(new.values()))
+    keep = (seen & stuck.keys()) | (new.keys() if paged else set())
+    if keep != seen:
+        _save_state(state_path, keep)
 
 
 def main(argv=None):
@@ -274,13 +362,16 @@ def main(argv=None):
     s = sub.add_parser("scan")
     s.add_argument("--root", default=DEFAULT_ROOT)
     s.add_argument("--fix", action="store_true", help="rewrite each URL token-free")
-    s.add_argument("--notify", action="store_true", help="ntfy the repo paths if any URL stayed embedded or was FIXED")
+    s.add_argument("--notify", action="store_true",
+                   help="ntfy the repo paths if any URL stayed embedded or was FIXED, or a path token is new")
+    s.add_argument("--state", default=DEFAULT_STATE, help="where --notify remembers UNSTRIPPABLE entries it paged")
     args = ap.parse_args(argv)
-    fixed = []
-    unresolved = scan(args.root, fix=args.fix, fixed_out=fixed)
-    print(f"remote-credential-sweep: embedded={len(unresolved)} fixed={len(fixed)}")
-    if args.notify and (unresolved or fixed):
-        notify(unresolved, fixed)
+    findings = []
+    unresolved = scan(args.root, fix=args.fix, findings_out=findings)
+    fixed = sum(1 for st, *_ in findings if st == "FIXED")
+    print(f"remote-credential-sweep: embedded={len(unresolved)} fixed={fixed}")
+    if args.notify:
+        notify_findings(findings, args.state)
     return 1 if unresolved else 0
 
 

@@ -1,5 +1,6 @@
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,12 +38,38 @@ class StripTests(unittest.TestCase):
     def test_prefix_token_without_userinfo_still_flagged(self):
         self.assertTrue(rcs.has_credential(f"https://github.com/o/r.git?t={FAKE}"))
 
+    def test_prefix_inside_repo_name_is_not_a_token(self):
+        for u in ("https://github.com/org/highs_solver.git", "https://github.com/org/ghp_notes.git",
+                  "https://github.com/org/xghp_" + "A" * 36 + ".git", "https://github.com/org/ghs_x.git"):
+            self.assertFalse(rcs.has_credential(u), u)
+
+    def test_real_token_shapes_still_flagged_at_a_boundary(self):
+        for tok in (FAKE, "gho_" + "A" * 36, "github_pat_" + "A1_" * 20, "glpat-" + "a-b_" * 6):
+            self.assertTrue(rcs.has_credential(f"https://github.com/o/{tok}/r.git"), tok)
+            self.assertTrue(rcs.has_credential(f"https://github.com/o/r.git?t={tok}"), tok)
+
+    def test_parse_value_decodes_git_quoting(self):
+        self.assertEqual(rcs._parse_value('"https://u:pw#1@h/"'), "https://u:pw#1@h/")
+        self.assertEqual(rcs._parse_value(r'"https://u:p\"w\\1@h/;x"'), 'https://u:p"w\\1@h/;x')
+        self.assertEqual(rcs._parse_value("https://h/o/r   # note"), "https://h/o/r")
+        self.assertEqual(rcs._parse_value('https://h/o/r ; note'), "https://h/o/r")
+        self.assertEqual(rcs._parse_value('"a " '), "a ")
+
+    def test_encode_value_round_trips(self):
+        for v in ("https://h/o/r", "https://h/o/r#frag", "https://h/o;r", 'https://h/"q"\\', " lead"):
+            self.assertEqual(rcs._parse_value(rcs._encode_value(v)), v)
+
 
 class ScanTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = self._tmp.name
         self.addCleanup(self._tmp.cleanup)
+        self._state = tempfile.TemporaryDirectory()
+        self.addCleanup(self._state.cleanup)
+        patched = os.path.join(self._state.name, "paged")
+        self.addCleanup(setattr, rcs, "DEFAULT_STATE", rcs.DEFAULT_STATE)
+        rcs.DEFAULT_STATE = patched
 
     def run_scan(self, fix=False):
         out = io.StringIO()
@@ -224,6 +251,116 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(n, 0)
         self.assertEqual(self.git_config(repo, "--get", "url.https://host/.insteadof"), "h:")
         self.assertEqual(os.stat(os.path.join(repo, ".git", "config")).st_mode, mode)
+
+    def test_quoted_url_value_flagged_and_fixed(self):
+        for pw in ("pw#1", "pw;1"):
+            with self.subTest(pw=pw):
+                repo = os.path.join(self.root, "r" + str(abs(hash(pw))))
+                init_repo(repo, f"https://user:{pw}@host/o/r")
+                with open(os.path.join(repo, ".git", "config"), encoding="utf-8") as f:
+                    self.assertIn('url = "https://user:', f.read())  # git quoted it
+                n, out = self.run_scan()
+                self.assertEqual((n, out.count("EMBEDDED")), (1, 1))
+                self.assertNotIn(pw, out)
+                self.assertEqual(self.run_scan(fix=True)[0], 0)
+                self.assertEqual(self.git_config(repo, "remote.lumenfork.url"), "https://host/o/r")
+                self.assertEqual(self.run_scan(), (0, ""))
+                shutil.rmtree(repo)
+
+    def test_quoted_clean_url_with_fragment_left_alone(self):
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, "https://host/o/r#frag")
+        self.assertEqual(self.run_scan(fix=True), (0, ""))
+        self.assertEqual(self.git_config(repo, "remote.lumenfork.url"), "https://host/o/r#frag")
+
+    def test_fix_keeps_quoting_when_clean_url_needs_it(self):
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, f"https://user:pw@host/o/r#frag")
+        self.assertEqual(self.run_scan(fix=True)[0], 0)
+        self.assertEqual(self.git_config(repo, "remote.lumenfork.url"), "https://host/o/r#frag")
+
+    def test_repo_named_like_a_token_prefix_is_not_paged(self):
+        init_repo(os.path.join(self.root, "a"), "https://github.com/org/highs_solver.git")
+        init_repo(os.path.join(self.root, "b"), "https://github.com/org/ghp_notes.git", name="n")
+        pages = self.capture_pages()
+        self.assertEqual(rcs.main(["scan", "--root", self.root, "--fix", "--notify"]), 0)
+        self.assertEqual(pages, [])
+
+    def test_unstrippable_pages_once_then_stays_quiet(self):
+        a = os.path.join(self.root, "a")
+        init_repo(a, f"https://github.com/o/{FAKE}/r.git")
+        pages = self.capture_pages()
+        args = ["scan", "--root", self.root, "--fix", "--notify"]
+        self.assertEqual(rcs.main(args), 1)  # still a leak: exit stays 1
+        self.assertEqual(len(pages), 1)
+        self.assertIn("cannot auto-strip", pages[0])
+        self.assertIn(os.path.realpath(a), pages[0])
+        self.assertNotIn(FAKE, pages[0])
+        self.assertEqual(rcs.main(args), 1)
+        self.assertEqual(len(pages), 1)
+        # a second stuck repo pages, naming only itself
+        b = os.path.join(self.root, "b")
+        init_repo(b, f"https://github.com/o/{FAKE}/r.git")
+        self.assertEqual(rcs.main(args), 1)
+        self.assertEqual(len(pages), 2)
+        self.assertIn(os.path.realpath(b), pages[1])
+        self.assertNotIn(os.path.realpath(a), pages[1])
+
+    def test_unstrippable_pages_again_after_it_clears_and_recurs(self):
+        repo = os.path.join(self.root, "a")
+        init_repo(repo, f"https://github.com/o/{FAKE}/r.git")
+        pages = self.capture_pages()
+        args = ["scan", "--root", self.root, "--notify"]
+        rcs.main(args)
+        self.git_config(repo, "remote.lumenfork.url", "https://github.com/o/r.git")
+        self.assertEqual(rcs.main(args), 0)
+        self.git_config(repo, "remote.lumenfork.url", f"https://github.com/o/{FAKE}/r.git")
+        rcs.main(args)
+        self.assertEqual(len(pages), 2)
+
+    def test_unstrippable_page_failure_is_retried(self):
+        init_repo(os.path.join(self.root, "a"), f"https://github.com/o/{FAKE}/r.git")
+        real_run = subprocess.run
+        rcs.subprocess.run = lambda cmd, **kw: real_run(["false"])
+        self.addCleanup(setattr, rcs.subprocess, "run", real_run)
+        rcs.main(["scan", "--root", self.root, "--notify"])
+        rcs.subprocess.run = real_run
+        pages = self.capture_pages()
+        rcs.main(["scan", "--root", self.root, "--notify"])
+        self.assertEqual(len(pages), 1)
+
+    def test_fixed_and_embedded_still_page_every_run_but_stuck_only_once(self):
+        init_repo(os.path.join(self.root, "a"), f"https://github.com/o/{FAKE}/r.git")
+        init_repo(os.path.join(self.root, "b"), f"https://{FAKE}@github.com/o/r.git")
+        pages = self.capture_pages()
+        args = ["scan", "--root", self.root, "--fix", "--notify"]
+        rcs.main(args)
+        rcs.main(args)
+        self.assertEqual(len(pages), 1)  # b fixed on run 1; a paged on run 1 only
+        self.assertIn("stripped", pages[0])
+        self.assertIn("cannot auto-strip", pages[0])
+
+    def test_repeated_url_entries_each_fixed(self):
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, f"https://{FAKE}@github.com/o/r.git")
+        self.git_config(repo, "--add", "remote.lumenfork.url", f"https://u:{OPAQUE}@host/o/r")
+        n, out = self.run_scan()
+        self.assertEqual((n, out.count("EMBEDDED")), (2, 2))
+        n, out = self.run_scan(fix=True)
+        self.assertEqual((n, out.count("FIXED")), (0, 2))
+        self.assertEqual(self.git_config(repo, "--get-all", "remote.lumenfork.url").splitlines(),
+                         ["https://github.com/o/r.git", "https://host/o/r"])
+        self.assertEqual(self.run_scan(), (0, ""))
+
+    def test_repeated_entry_fix_leaves_clean_sibling_alone(self):
+        repo = os.path.join(self.root, "r")
+        init_repo(repo, "https://github.com/o/clean.git", key="pushurl")
+        self.git_config(repo, "--add", "remote.lumenfork.pushurl", f"https://{FAKE}@github.com/o/r.git")
+        self.git_config(repo, "--add", "remote.lumenfork.pushurl", "https://github.com/o/also-clean.git")
+        self.assertEqual(self.run_scan(fix=True)[0], 0)
+        self.assertEqual(self.git_config(repo, "--get-all", "remote.lumenfork.pushurl").splitlines(),
+                         ["https://github.com/o/clean.git", "https://github.com/o/r.git",
+                          "https://github.com/o/also-clean.git"])
 
     def test_main_exit_codes(self):
         init_repo(os.path.join(self.root, "r"), f"https://{FAKE}@github.com/o/r.git")
