@@ -599,3 +599,60 @@ Numbers superseded by this pass, for anyone reading the older documents: `resear
 (`MINERVA_PIPELINE_MAP.md` §1.8, 2026-09-10); "0 orphans" still holds and is now known to be
 structural; "the healthiest store here" (`MINERVA_STALENESS_REVIEW.md` §1.3) holds for mode
 A and does not hold for mode B.
+
+### 8.1 Re-measurement, 2026-09-20 (wq#1772)
+
+Everything above is a correct account of 2026-09-11 and is left standing as one — §2.3's
+own argument. This is the same three measurements re-run nine days and 898 documents later,
+read-only, by the same route. I1/I2 now come from wq#1776's shipped checker
+(`ops/wq1776-pgvector-chunk-doc-invariants/check_chunk_doc_invariants.py --json`, run
+without `--raise-aq` so it persists nothing) rather than hand-typed SQL.
+
+| | 2026-09-11 | 2026-09-20 |
+|---|---|---|
+| I1 stale chunks | 19 | **21** |
+| I1 docs affected | — | 21 |
+| I2 orphan chunks | 0 | 0 |
+| `research_chunks_doc_id_fkey` | `confdeltype='c'` | `confdeltype='c'`, `confupdtype='a'` |
+| docs · chunks | 10,566 · 19,771 | 11,464 · 21,552 |
+| corpus bytes | 86.2 MB | 93.9 MB |
+| `mtime` range | 07-12 … 09-10 | 07-12 … 09-20 |
+| docs older than 90d · under `foreman/` | 0 · 0 | 0 · 0 |
+| dead-value index entries | 64 | 87 |
+| prefilter candidates | 2,862 of 10,566 (27%) | 3,617 of 11,464 (32%) |
+| elapsed | 110.8s | 168.0s |
+| hits | 5 action, 0 info | 9 action, 0 info |
+| true positives | 0 | **0** |
+
+**I1 is still violated and drifting.** Two more stale chunks in nine days, against 8.5%
+corpus growth — a slow leak, not a one-off window. wq#1776's checker is installed
+(`/home/lumen/bin/check-pgvector-invariants`, 2026-09-18) and its `install.sh:3` ships no
+timer by design, so the drift is measurable on demand and watched by nothing;
+`lumen-chunk-doc-invariants.timer` is `inactive`. Nine days of drift went unnoticed until
+this pass re-ran the numbers by hand — wiring filed as wq#2152, behind wq#1788.
+`lumen-contradiction-scan.timer` has since gone `active` (it was `inactive` on 09-11).
+
+**I2 is still 0, and the guarantee re-read in full this pass** is
+`FOREIGN KEY (doc_id) REFERENCES research_docs(id) ON DELETE CASCADE` — confirmed twice
+independently, from `pg_constraint.confdeltype` and from `pg_get_constraintdef`.
+
+**Reach: wq#1781's fix worked, and uncovered a worse class underneath.** All four
+hyphenated-compound false positives from 09-11 (`POWERED-DOWN`, `POWERED-ON`,
+`LIVE-VERIFIED`) are gone. The fifth survives unchanged — `hathor.status = 'OFFLINE'` in the
+same hypothetical failure-mode table. The other eight hits are one new failure mode:
+
+`isis.service_state` closed `UP → DEGRADED`. `UP` is two characters, so `self_identifying()`
+(`:146`) correctly declines to treat it as self-identifying and scopes it to its subject.
+The scope test is subject-token **and** predicate-cue present in the enclosing section, and
+`boundary_re()` (`:188`) compiles case-insensitively — so `\bUP\b` matches the English
+preposition. All eight hits are the word "up" in ordinary prose that happens to sit in a
+section mentioning Isis and a service: *"Spin up a FastAPI orchestrator"*, *"Set up the
+Docker container"*, *"Spin up a `pytorch/pytorch:2.3-cuda12.1` image"*.
+
+This is not wq#1781 recurring. There the value was wrongly unscoped; here it is correctly
+scoped and still wrong, because subject-plus-cue is far too weak a scope for a value that is
+also a function word — any prose *about* the subject contains it. Filed as wq#2151.
+
+The §4.2 verdict is unchanged and now has a second independent pass behind it: **0 true
+positives**, twice. The blocker is precision, not reach — a third of the corpus already
+reaches the matcher.
