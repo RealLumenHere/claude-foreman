@@ -278,31 +278,40 @@ def test_doctrine_corpus_does_not_re_arm_the_alarm():
     assert records == [], _describe(records)
 
 
-def test_masking_module_output_does_not_re_arm_on_its_own_source():
-    """The module documents its own replacement text and its own prefix list. If
-    either reads as a credential, every artefact it has already masked re-arms the
-    alarm the next time a worker reads it."""
-    with open(masking.__file__.replace(".pyc", ".py"), errors="replace") as fh:
-        source = fh.read()
-    _, records = masking.scan(source)
-    assert records == [], _describe(records)
+# wq#2310: the corpus test above has a twin that kept being rediscovered one file at
+# a time — wq#2296 pinned masking.py, wq#2303 pinned this file — while the file that
+# actually fired wq#2310 went unpinned. That was harness/fworker.py: wq#2291 read it
+# five times in one attempt, and its `token = read_oauth_token()` shapes matched the
+# rule deployed that minute. The invariant is not per-file. Everything the alarm is
+# built out of gets read BY the worker the alarm sends, so no file on that path may
+# read as a credential — the ticket the tripwire files is itself a stream that the
+# tripwire watches.
+REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+ALARM_READ_PATH = [
+    "harness/masking.py",        # the rules, and the comments quoting the shapes
+    "harness/burn_filter.py",    # they must not match
+    "harness/fworker.py",        # mask_alarm / screen_mask_hits / write_mask_hits
+    "harness/tests/test_masking.py",
+    "harness/tests/test_burn_filter.py",
+    "harness/tests/test_token_injection.py",  # wq#2299: the oauth fixtures
+    "token-engine/token_engine_daemon.py",    # the mirror of PATTERNS
+    "token-engine/gate_replay.sh",            # and its tripwire probe
+]
 
 
-def test_this_file_reads_without_tripping_the_mask_tripwire():
-    """wq#2303: a worker READING the mask test suite must not page Frank at pri 1.
+@pytest.mark.parametrize("rel", ALARM_READ_PATH)
+def test_the_alarms_own_read_path_does_not_re_arm_it(rel):
+    """Reading any of these must not page Frank at pri 1.
 
-    The two tests above pin the doctrine corpus and the module's own source; this
-    pins the third file every mask ticket necessarily reads. wq#2299's chain guard
-    only suppresses the child ticket when the CURRENT ticket is already a rotation
-    ticket, so on an ORDINARY ticket these literals still file one pri-1 rotate-today
-    row per label — three of them at the time this test was written (cloudflare,
-    slack, kv-secret). Assert the real file on disk, not a fixture string: the read
-    that fires is of the file.
+    wq#2299's chain guard only suppresses the CHILD ticket when the current ticket is
+    already a rotation ticket; on an ordinary ticket a literal here still files one
+    pri-1 rotate-today row per label. Assert the real file on disk rather than a
+    fixture string — the read that fires is of the file.
     """
-    with open(os.path.abspath(__file__), errors="replace") as fh:
+    with open(os.path.join(REPO, rel), errors="replace") as fh:
         source = fh.read()
     masked, records = masking.scan(source)
-    assert records == [], _describe(records)
+    assert records == [], f"{rel} " + _describe(records)
     assert masked == source
 
 
