@@ -84,8 +84,10 @@ def test_cited_path_inside_roots_passes(tmp_path):
         ["/home/lumen/kb"], [])
 
 
-def test_cited_path_outside_roots_refused(tmp_path):
+def test_cited_path_outside_roots_refused(tmp_path, monkeypatch):
     # the exact wq#1152 signature: the ticket cites a repo the sandbox cannot reach.
+    # wq#2184: held only with the advisory lever off; with it on the mention dispatches.
+    monkeypatch.setenv("FOREMAN_CAPABILITY_ADVISORY", "off")
     with pytest.raises(fworker.SpawnRefused) as e:
         fworker.assert_spawn_paths(
             999, "flash it with /home/lumen/nle-flasher/flash.sh",

@@ -57,6 +57,7 @@ import action_gate
 import failure_record
 import needs as needs_mod
 import capability
+import capability_lint
 import agents_spec
 import fire_gate
 import charging
@@ -1011,8 +1012,12 @@ def assert_spawn_capability(ticket_id, ticket, worktree, repo, add_dirs, ticket_
     address the nodes its needs tags name, and get the grant those tags ask for?
     Refused before spawn rather than after a burned attempt.
     FOREMAN_NEEDS_DISABLE=1 downgrades to log-only (rollback)."""
+    # wq#2184: the lint's advisory bucket, from the same pass the dispatcher ran — a
+    # prose-mentioned path the lint let through must not be refused here for reach.
     v = capability.preflight(ticket, repo, add_dirs, ticket_needs, worktree=worktree,
-                             policy_path=FLEET_EXEC_POLICY_PATH)
+                             policy_path=FLEET_EXEC_POLICY_PATH,
+                             advisory_paths=capability_lint.advisory_paths_for(
+                                 ticket, repo, add_dirs))
     if v.downgraded:
         log(f"wq#{ticket_id}: {v.summary}")
         return v

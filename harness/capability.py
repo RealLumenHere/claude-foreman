@@ -133,10 +133,14 @@ def cited_paths(detail):
 # path reachability (moved body of fworker.assert_spawn_paths, wq#1331 §3.2)
 # ---------------------------------------------------------------------------
 
-def path_problems(detail, roots, needs_dirs):
+def path_problems(detail, roots, needs_dirs, advisory_paths=()):
     """(problems, unreachable_paths). Every needs:dir must exist as a directory and
     every /home/lumen/ literal the detail cites must be inside roots — a cited path
-    outside the reachable set is the exact wq#1152 signature."""
+    outside the reachable set is the exact wq#1152 signature.
+
+    wq#2184: a cited literal in `advisory_paths` (the lint's advisory bucket) is a prose
+    mention, not a request, so being unreachable does not hold the ticket; it dispatches
+    with no grant for it. A needs:dir the ticket asked for is never skipped this way."""
     problems = []
     unreachable = []
     for d in needs_dirs or []:
@@ -145,6 +149,8 @@ def path_problems(detail, roots, needs_dirs):
             unreachable.append(d)
     roots = [r for r in roots if r]
     for p in cited_paths(detail):
+        if p in advisory_paths:
+            continue
         if not any(_under(p, r) for r in roots):
             problems.append(f"cited path {p} outside worktree ∪ add_dirs")
             if p not in unreachable:
@@ -270,20 +276,30 @@ def policy_grants(needs, policy_path=None):
 # ---------------------------------------------------------------------------
 
 def preflight(ticket, repo, add_dirs, needs, worktree=None, policy_path=None,
-              state_output=None, ssh_hosts=None):
+              state_output=None, ssh_hosts=None, advisory_paths=()):
     """Can a worker for this ticket reach what the ticket cites and do what it asks?
 
     `ticket` is a wq row (only `detail` is read). `worktree` is the worker's own tree
     when there is one — at dispatch time there is not, and repo ∪ add_dirs is the
     reachable set. Checks run cheapest-first and the first failure wins, so a ticket
     that cites an unreachable path AND names an unknown node reports the path: fixing
-    the reason a verdict names is always a step forward."""
+    the reason a verdict names is always a step forward.
+
+    `advisory_paths` (wq#2184) is the lint's advisory bucket for this ticket
+    (`Derived.advisory_paths` / `capability_lint.advisory_paths_for`) — both walls pass
+    the same classification. Ignored under FOREMAN_CAPABILITY_ADVISORY=off, so the
+    lever restores the hold here even for a caller holding a stale set. node_unknown
+    and policy refusals are untouched."""
     if needs is None:
         needs = needs_mod.Needs([])
     detail = (ticket or {}).get("detail", "") if hasattr(ticket, "get") else (ticket or "")
     roots = [worktree, repo] + list(add_dirs or [])
+    if advisory_paths:
+        import capability_lint  # local, as effective_add_dirs: no import cycle
+        if not capability_lint.advisory_enabled():
+            advisory_paths = ()
 
-    problems, unreachable = path_problems(detail, roots, needs.dirs)
+    problems, unreachable = path_problems(detail, roots, needs.dirs, advisory_paths)
     if problems:
         return _verdict(REASON_CITED_PATH_UNREACHABLE, "; ".join(problems),
                         unreachable_paths=unreachable)

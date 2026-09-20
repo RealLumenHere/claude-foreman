@@ -26,7 +26,8 @@ import needs as needs_mod  # noqa: E402
 
 # sha256 of the exact source segment of each function BEFORE liveness landed
 # (captured 2026-09-07 from capability.py 7e2036f1..., see LIVENESS_GATE.md §9 iii).
-PRE_LIVENESS_FN_SHA = {"policy_grants": "7edf6f40ee0d5c82", "preflight": "48bda835f17157e9"}
+# preflight re-pinned wq#2184 (advisory_paths param); liveness still does not touch it.
+PRE_LIVENESS_FN_SHA = {"policy_grants": "7edf6f40ee0d5c82", "preflight": "cdddd9f2725e8f49"}
 
 DETAIL = ("Do the thing.\n"
           "Needs: ssh(isis), dir(/home/lumen/foreman)\n"

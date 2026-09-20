@@ -64,7 +64,7 @@ objects and a gated ticket is PARKED with a reason instead of re-derived every f
 | capability: secret denies + sweep hit | KEEP, fail-closed | add basename denies `.fleet_pw`, `.git-credentials*`, `.netrc`, `*.pw` |
 | capability: dir not in allow.read_dirs, path missing, worktree mention, home-root non-secret file | FIX to advisory | dispatch; write `needs_advisory` note; no ntfy |
 | capability: v2 verb | FIX | hard only inside fenced code / an imperative step line; prose mention = advisory |
-| cited_path_unreachable, node_unknown (capability.preflight) | KEEP | unchanged; they test the worker's real reach |
+| cited_path_unreachable, node_unknown (capability.preflight) | KEEP + wq#2184 | node_unknown and an explicit `needs` dir that cannot be reached stay hard. A cited path the lint classed advisory (above) is skipped by preflight at both walls (dispatcher enforce, fworker spawn) via `advisory_paths`; `FOREMAN_CAPABILITY_ADVISORY=off` restores the hold at both |
 | runaway_stuck | FIX | ticket-charged attempts only, 7-day window, reset when model or archetype changes |
 | harness_defect_hold | KEEP + fix | ignore a failure.json older than the ticket's last model/archetype/needs edit |
 | spawn_loop | FIX | second trip inside 24 h sets status blocked, reason `SPAWN_LOOP: <last release note>` |

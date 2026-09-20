@@ -134,10 +134,16 @@ class Derived:
     """Three deciding buckets plus one that decides nothing. `tags` is (name, arg)
     pairs in needs.py's vocabulary. `advisory` (DISPATCH_REBUILD_SPEC §1.1) is what the
     lint noticed but will not hold a ticket for: the dispatcher records it on the
-    ticket and dispatches anyway."""
+    ticket and dispatches anyway. `advisory_paths` (wq#2184) is the cited paths behind
+    the dir-shaped advisory findings, as cited: the set the second wall
+    (capability.preflight) does not hold for, so both walls read one classification."""
 
-    def __init__(self, tags=(), unresolved=(), refused=(), advisory=()):
+    def __init__(self, tags=(), unresolved=(), refused=(), advisory=(), advisory_paths=()):
         self.tags, self.unresolved, self.refused, self.advisory = [], [], [], []
+        self.advisory_paths = []
+        for p in advisory_paths:
+            if p not in self.advisory_paths:
+                self.advisory_paths.append(p)
         for t in tags:
             if t not in self.tags:
                 self.tags.append(t)
@@ -545,16 +551,23 @@ def cited_paths(text):
     return out
 
 
-def _advise(advisory, legacy_bucket, msg):
+def _advise(advisory, legacy_bucket, msg, advisory_paths=None, path=None):
     """wq#2131: a finding that is advisory by default. Under
     FOREMAN_CAPABILITY_ADVISORY=off it lands in `legacy_bucket`, the bucket it held the
-    ticket in before the split."""
-    (advisory if advisory_enabled() else legacy_bucket).append(msg)
+    ticket in before the split. wq#2184: the cited `path` behind an advisory finding is
+    recorded in `advisory_paths`, which is what tells preflight not to hold for it."""
+    if not advisory_enabled():
+        legacy_bucket.append(msg)
+        return
+    advisory.append(msg)
+    if advisory_paths is not None and path not in advisory_paths:
+        advisory_paths.append(path)
 
 
 def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, sweep=None,
-                 ticket_id=None, advisory=None):
+                 ticket_id=None, advisory=None, advisory_paths=None):
     advisory = advisory if advisory is not None else []
+    advisory_paths = advisory_paths if advisory_paths is not None else []
     roots = [r for r in [repo, *add_dirs] if r]
     for p in cited_paths(text):
         if any(_under(p, r) for r in roots):
@@ -565,7 +578,8 @@ def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, s
                 continue  # wq#1697 fix 1: this ticket's own (past or future) worktree
         why = worktree_mention(p)
         if why:
-            _advise(advisory, refused, f"dir({p}) {why}")   # a mention, not a secret
+            # a mention, not a secret
+            _advise(advisory, refused, f"dir({p}) {why}", advisory_paths, p)
             continue
         why = dir_denied(p)
         if why:
@@ -576,17 +590,20 @@ def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, s
             d = normalise_closure_dir(p)   # wq#1535: to-be-created file, reach = parent
             if d is None:
                 _advise(advisory, unresolved,
-                        f"closure artifact {p}: parent directory does not exist (not guessed)")
+                        f"closure artifact {p}: parent directory does not exist (not guessed)",
+                        advisory_paths, p)
                 continue
         if d is None:
-            _advise(advisory, unresolved, f"cited path {p} does not exist (not guessed)")
+            _advise(advisory, unresolved, f"cited path {p} does not exist (not guessed)",
+                    advisory_paths, p)
             continue
         why = dir_denied(d)
         if why:
             # p already cleared every secret rule above, so a file whose parent is the
             # home root is a non-secret home-root file, not a credential
             if d != _norm(p) and d in DIR_DENY_EXACT:
-                _advise(advisory, refused, f"dir({d}) {why} (via home-root file {p})")
+                _advise(advisory, refused, f"dir({d}) {why} (via home-root file {p})",
+                        advisory_paths, p)
             else:
                 refused.append(f"dir({d}) {why}")
             continue
@@ -595,7 +612,8 @@ def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, s
         allow_root = allowed_read_dir(d, policy)
         if allow_root is None:
             _advise(advisory, unresolved,
-                    f"dir({d}) is not under allow.read_dirs — {ALLOW_HINT}")
+                    f"dir({d}) is not under allow.read_dirs — {ALLOW_HINT}",
+                    advisory_paths, p)
             continue
         if sweep_stale(sweep):
             unresolved.append(f"dir({d}) read_dir_sweep is missing or >"
@@ -774,14 +792,35 @@ def derive(ticket, repo=None, add_dirs=(), roster=None, policy=None, sweep=None)
     roster = roster if roster is not None else load_roster()
     policy = policy if policy is not None else load_policy()
     sweep = sweep if sweep is not None else load_sweep()
-    tags, unresolved, refused, advisory = [], [], [], []
+    tags, unresolved, refused, advisory, advisory_paths = [], [], [], [], []
     _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=policy, sweep=sweep,
-                ticket_id=ticket_id, advisory=advisory)
+                ticket_id=ticket_id, advisory=advisory, advisory_paths=advisory_paths)
     _derive_ssh(text, roster, tags, unresolved, policy=policy)
     _derive_restart(text, roster, policy, tags, unresolved, refused)
     _derive_copy(text, roster, policy, tags, unresolved)
     _derive_v2(text, unresolved, advisory)
-    return Derived(tags, unresolved, refused, advisory)
+    return Derived(tags, unresolved, refused, advisory, advisory_paths)
+
+
+def advisory_paths_for(ticket, repo, add_dirs, policy=None, sweep=None):
+    """wq#2184: the cited paths the lint classifies advisory, for a caller that has no
+    `Derived` — fworker's spawn-time wall. It runs the very `_derive_dirs` pass `derive`
+    runs (roster, ssh, restart and copy have no bearing on a path), so the two walls
+    cannot put one path in different buckets.
+
+    Empty unless the lint enforces and the advisory lever is on, and empty on ANY error:
+    the second wall then holds exactly as it did before wq#2184."""
+    if not (enforcing() and advisory_enabled()):
+        return []
+    try:
+        advisory_paths = []
+        _derive_dirs(ticket_text(ticket), repo, list(add_dirs or ()), [], [], [],
+                     policy=policy if policy is not None else load_policy(),
+                     sweep=sweep if sweep is not None else load_sweep(),
+                     ticket_id=(ticket or {}).get("id"), advisory_paths=advisory_paths)
+        return advisory_paths
+    except Exception:  # noqa: BLE001 — fail closed: no advisory paths, wall holds
+        return []
 
 
 # ---- corpus scan (tuning, §2.1 "tune against the real corpus") -----------------

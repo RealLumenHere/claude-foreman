@@ -46,13 +46,13 @@ CORPUS = [
      "dispatchable"),   # wq#2131: 'reboot' mid-sentence is a prose mention -> advisory
     # wq#1441: deny is the default. /home/lumen/agent carries live tokens (agent/.env
     # + .env.bak.*) and backups/ is not a swept read root — neither gets an auto grant.
-    # wq#2131: that is an advisory now, not a needs_unresolved hold; what stops the
-    # ticket is preflight, which tests the worker's real reach and is unchanged.
+    # wq#2131: that is an advisory now, not a needs_unresolved hold; wq#2184: and preflight
+    # honours the same advisory bucket, so the ticket dispatches with no grant for the dir.
     # A cited path UNDER allow.read_dirs (.npm-global/bin, research_prompts) lands
     # dispatchable with the dir tag.
-    (1402, "agent notes", "read the config under /home/lumen/agent", "cited_path_unreachable"),
+    (1402, "agent notes", "read the config under /home/lumen/agent", "dispatchable"),
     (1403, "wq proposal backups",
-     "write to /home/lumen/backups/wq-proposals nightly", "cited_path_unreachable"),
+     "write to /home/lumen/backups/wq-proposals nightly", "dispatchable"),
     (1407, "Fix preflight claude spawn under systemd PATH",
      "PATH lacks /home/lumen/.npm-global/bin so every auto-reprove fails",
      "dispatchable"),
@@ -74,7 +74,9 @@ def test_each_ticket_lands_in_the_predicted_column(tid, title, detail, column):
     r = capability_replay.replay(t, repo="/home/lumen/foreman", roster=ROSTER,
                                  sweep=fresh_sweep())
     assert r["column"] == column
-    if column == "dispatchable":
+    if tid in (1402, 1403):
+        assert r["advisory"] and not r["apply"]   # advisory path: NO grant, nothing written
+    elif column == "dispatchable":
         # the dir tag is what makes the path reachable; the replay names what the
         # dispatcher WOULD write, and writes nothing itself.
         assert r["apply"] and all(a.startswith("dir(") for a in r["apply"])

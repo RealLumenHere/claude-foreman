@@ -2316,11 +2316,10 @@ def test_nonexistent_cited_path_is_unresolved_not_guessed(denv, monkeypatch):
     assert lumen_calls(denv) == [] and needs_of(denv, tid) == ""
 
 
-def test_nonexistent_cited_path_is_advisory_and_preflight_still_decides(denv, monkeypatch):
-    """wq#2131: the missing path is no longer the lint's hold, but preflight tests the
-    worker's real reach and is unchanged — a cited path outside repo ∪ add_dirs still
-    stops the ticket there, as cited_path_unreachable, with no needs_advisory note
-    (a skipped ticket is not dispatched with anything)."""
+def test_nonexistent_cited_path_is_advisory_at_both_walls(denv, monkeypatch):
+    """wq#2131 made the missing path advisory in the lint; wq#2184 makes preflight (the
+    second wall, same call the dispatcher makes) honour that bucket too. The ticket
+    dispatches with one needs_advisory note, no grant for the path, and no ntfy."""
     _lint_roster(monkeypatch)
     _apply_dir(monkeypatch)
     tid = add_ticket("ops: fix the thing",
@@ -2329,9 +2328,10 @@ def test_nonexistent_cited_path_is_advisory_and_preflight_still_decides(denv, mo
 
     assert fd.run_pass() == 0
 
-    skips = log_events(denv, "skip", ticket=tid)
-    assert len(skips) == 1 and skips[0]["reason"] == "cited_path_unreachable"
-    assert lumen_calls(denv) == [] and "needs_advisory" not in notes_of(denv, tid)
+    assert log_events(denv, "skip", ticket=tid) == []
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert notes_of(denv, tid).count("needs_advisory[") == 1
+    assert needs_of(denv, tid) == "" and ntfy_lines(denv) == []
     assert log_events(denv, "capability_lint", ticket=tid)[0]["advisory"]
 
 
@@ -2491,7 +2491,8 @@ def test_capability_skips_are_structural_in_pass_end(denv, monkeypatch):
     _lint_roster(monkeypatch)
     _apply_dir(monkeypatch)
     add_ticket("secret", detail="cat /home/lumen/secrets/reddit.env")
-    add_ticket("ghost", detail="see /home/lumen/no-such-dir-at-all/x")
+    # an EXPLICIT request the worker cannot reach is a real block (wq#2184), unlike a mention
+    add_ticket("ghost", detail="Needs: dir(/home/lumen/no-such-dir-at-all)")
     ok = add_ticket("ordinary candidate that cites nothing")
 
     assert fd.run_pass() == 0

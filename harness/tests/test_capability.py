@@ -264,6 +264,7 @@ def test_fworker_uses_this_module_and_keeps_no_second_copy():
 
 def test_fworker_spawn_assert_raises_from_the_verdict(tmp_path, monkeypatch):
     monkeypatch.setattr(fworker, "FLEET_EXEC_POLICY_PATH", policy_path(tmp_path))
+    monkeypatch.setenv("FOREMAN_CAPABILITY_ADVISORY", "off")   # wq#2184: else advisory
     with pytest.raises(fworker.SpawnRefused) as e:
         fworker.assert_spawn_paths(1436, "see /home/lumen/nle-flasher/flash.sh",
                                    str(tmp_path), "/home/lumen/foreman", [], [])

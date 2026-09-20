@@ -27,8 +27,9 @@ Columns, in the dispatcher's own order:
                                   dispatched anyway, one needs_advisory note, no ntfy
 
 `lint_clear` is the lint's verdict alone (no refused/unresolved), before preflight. An
-advisory dir the worker cannot reach is lint_clear but lands on cited_path_unreachable:
-preflight tests the worker's real reach and is unchanged by wq#2131.
+advisory dir the worker cannot reach is lint_clear and, since wq#2184, dispatchable too:
+preflight is handed the lint's `advisory_paths` and does not hold for a prose mention.
+A needs:dir the ticket asked for, and every deny-listed path, still lands on a refusal.
 """
 import argparse
 import json
@@ -79,7 +80,8 @@ def replay(ticket, repo=None, roster=None, policy=None, sweep=None):
                 "detail": "; ".join(derived.unresolved)}
     needs = capability.effective_needs(ticket, derived)
     add_dirs = capability.effective_add_dirs(ticket.get("archetype"), needs)
-    verdict = capability.preflight(ticket, repo, add_dirs, needs)
+    verdict = capability.preflight(ticket, repo, add_dirs, needs,
+                                   advisory_paths=derived.advisory_paths)
     if not verdict.ok:
         return {**out, "column": verdict.reason, "detail": verdict.summary}
     applied = capability_lint.appliable_tags(derived)

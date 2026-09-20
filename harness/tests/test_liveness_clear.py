@@ -28,12 +28,12 @@ PATCH = os.path.join(REPO, "ops", "wq1478-liveness-gate", "apply_wq_patch.py")
 # A drift here is NOT liveness's change — whoever changes these functions re-pins them
 # deliberately in their own PR.
 PINS = {
-    ("capability", "preflight"): "88e287edfbca948d",
+    ("capability", "preflight"): "8e3389ed43fc3af6",   # re-pinned wq#2184 (advisory_paths)
     ("capability", "policy_grants"): "16e2717ad09a896d",
     ("capability", "effective_needs"): "41c72c0c490ad732",
     ("capability", "effective_add_dirs"): "27b2e12bab76c1fd",
     ("fworker", "resolve_exec_grant"): "6504c41e248773e1",
-    ("fworker", "assert_spawn_capability"): "d360d9dc8186cec6",
+    ("fworker", "assert_spawn_capability"): "d94068f91c6bcf78",   # re-pinned wq#2184
 }
 
 
