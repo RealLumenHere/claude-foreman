@@ -80,6 +80,7 @@ import vlogs_mirror      # noqa: E402  # wq#1416
 import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refusal
 import capability_lint    # noqa: E402  # wq#1437 BROKER_WIRING §2.1 slice B (warn)
 import capability         # noqa: E402  # wq#1438 BROKER_WIRING §2.2 slice C (pre-skip)
+import capability_proposal  # noqa: E402  # wq#1697: one keyed aq grant proposal per path
 import liveness_clear     # noqa: E402  # wq#1478 LIVENESS_GATE §12.4: stale Frank-gates auto-clear
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
@@ -362,7 +363,7 @@ def load_state(now=None):
     fresh = {"day": today, "lane_counts": {}, "fire_ntfy": {}, "pacing_ntfy": {},
              "runaway_ntfy": {}, "preflight_ntfy": {}, "gate_error_ntfy": {},
              "harness_defect_ntfy": {}, "capability_ntfy": {}, "spawn_loop_ntfy": {},
-             "spawn_ledger": {}}
+             "grant_proposals": {}, "spawn_ledger": {}}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -378,6 +379,7 @@ def load_state(now=None):
     harness_defect_ntfy = _prune_dedup(st.get("harness_defect_ntfy"), now, FIRE_NTFY_DEDUP_H)
     capability_ntfy = _prune_dedup(st.get("capability_ntfy"), now, FIRE_NTFY_DEDUP_H)
     spawn_loop_ntfy = _prune_dedup(st.get("spawn_loop_ntfy"), now, FIRE_NTFY_DEDUP_H)
+    grant_proposals = _prune_dedup(st.get("grant_proposals"), now, FIRE_NTFY_DEDUP_H)
     # wq#1703: {tid: [{ts, attempts}]} — a list per ticket, not a single timestamp, so it
     # prunes on its own window rather than through _prune_dedup.
     spawn_ledger = spawn_loop_guard.prune_ledger(st.get("spawn_ledger"), now)
@@ -387,7 +389,7 @@ def load_state(now=None):
                 "preflight_ntfy": preflight_ntfy, "gate_error_ntfy": gate_error_ntfy,
                 "harness_defect_ntfy": harness_defect_ntfy,
                 "capability_ntfy": capability_ntfy, "spawn_loop_ntfy": spawn_loop_ntfy,
-                "spawn_ledger": spawn_ledger}
+                "grant_proposals": grant_proposals, "spawn_ledger": spawn_ledger}
     counts = st.get("lane_counts")
     return {"day": today,
             "lane_counts": counts if isinstance(counts, dict) else {},
@@ -399,6 +401,7 @@ def load_state(now=None):
             "harness_defect_ntfy": harness_defect_ntfy,
             "capability_ntfy": capability_ntfy,
             "spawn_loop_ntfy": spawn_loop_ntfy,
+            "grant_proposals": grant_proposals,
             "spawn_ledger": spawn_ledger}
 
 
@@ -706,6 +709,27 @@ def handle_capability_skip(state, tid, lane, reason, detail, dry_run, log):
     return True
 
 
+def file_grant_proposals(state, tid, unresolved, dry_run, log):
+    """wq#1697 fix 2: a needs_unresolved skip files ONE aq row per unresolved read root
+    (keyed on the path, not the ticket) instead of skipping silently every pass. The
+    24h state dedup keeps aq_add off the per-pass hot path; aq's (source,key) dedup
+    bumps the open row across tickets that need the same root."""
+    for path in capability_proposal.unresolved_dir_paths(unresolved):
+        key = capability_proposal.grant_key(path)
+        proposals = state.setdefault("grant_proposals", {})
+        if key in proposals:
+            continue
+        if dry_run:
+            log.emit("would_grant_proposal", ticket=tid, path=path, key=key)
+            continue
+        filed = capability_proposal.file_dir_grant(path, tid)
+        log.emit("grant_proposal", ticket=tid, path=path, key=key,
+                 reason="filed" if filed else "aq_add_failed")
+        if filed:
+            proposals[key] = _utcnow().isoformat(timespec="seconds")
+            save_state(state)
+
+
 def enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
     """Stage 3.7 ENFORCEMENT half — the churn killer (wq#1438, BROKER_WIRING.md §2.2).
 
@@ -729,6 +753,7 @@ def enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
                 state, tid, lane, capability.REASON_CAPABILITY_DENIED_BY_POLICY,
                 "; ".join(derived.refused), dry_run, log)
         if derived is not None and derived.unresolved:
+            file_grant_proposals(state, tid, derived.unresolved, dry_run, log)
             return handle_capability_skip(
                 state, tid, lane, capability.REASON_NEEDS_UNRESOLVED,
                 "; ".join(derived.unresolved), dry_run, log)

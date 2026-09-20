@@ -167,6 +167,8 @@ def denv(tmp_path, monkeypatch):
     aq_log = tmp_path / "aq.log"
     fake_aq = _script(bin_dir / "fake-aq", f"#!/usr/bin/env bash\necho \"$@\" >> {aq_log}\n")
     monkeypatch.setattr(spawn_loop_guard, "AQ_BIN", fake_aq)
+    import capability_proposal  # wq#1697: grant proposals go through the same fake aq
+    monkeypatch.setattr(capability_proposal, "AQ_BIN", fake_aq)
 
     return {"tmp": tmp_path, "repo": str(repo_dir), "approvals": approvals,
             "aq_log": aq_log,
@@ -2306,6 +2308,38 @@ def test_nonexistent_cited_path_is_unresolved_not_guessed(denv, monkeypatch):
     assert len(skips) == 1 and skips[0]["reason"] == "needs_unresolved"
     assert "does not exist" in skips[0]["detail"]
     assert lumen_calls(denv) == [] and needs_of(denv, tid) == ""
+
+
+def test_unresolved_read_root_files_one_keyed_grant_proposal_across_passes(denv, monkeypatch):
+    """wq#1697 fix 2: a needs_unresolved skip on a root outside allow.read_dirs opens ONE aq
+    row keyed on the PATH (two tickets, three passes, one row), carrying the exact diff."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    monkeypatch.setattr(fd.capability_lint, "allowed_read_dir", lambda d, policy: None)
+    t1 = add_ticket(f"ops: read {REACHABLE_DIR}")
+    t2 = add_ticket(f"ops: also read {REACHABLE_DIR}")
+
+    assert fd.run_pass() == 0
+    assert fd.run_pass() == 0
+
+    assert [e["reason"] for e in log_events(denv, "skip", ticket=t1)] == ["needs_unresolved"] * 2
+    assert log_events(denv, "skip", ticket=t2)
+    log_text = "\n".join(aq_rows(denv))  # the row body is multi-line (the diff)
+    starts = [r for r in aq_rows(denv) if r.startswith("add ")]
+    assert len(starts) == 1
+    assert f"add foreman-capability {fd.capability_proposal.grant_key(REACHABLE_DIR)} " in starts[0]
+    assert f"+    - {REACHABLE_DIR}" in log_text
+    assert lumen_calls(denv) == []
+
+
+def test_nonexistent_path_files_no_grant_proposal(denv, monkeypatch):
+    """A grant cannot fix a path that does not exist, so no row is opened for it."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    add_ticket("ops: fix the thing", detail="config in /home/lumen/no-such-dir-at-all/conf")
+
+    assert fd.run_pass() == 0
+    assert aq_rows(denv) == []
 
 
 def test_v2_verb_stays_unresolved_and_names_the_missing_verb(denv, monkeypatch):
