@@ -100,6 +100,38 @@ class LivenessTest(unittest.TestCase):
         rc, _ = self.run_main(deployments("2026-09-20T10:00:00Z", message="deadbeef1"))
         self.assertEqual(rc, 1)
 
+    def test_head_stamp_past_deploy_input_commit_is_current(self):
+        # wq#2214: deploy.sh stamps HEAD, which is a later non-deploy-input commit
+        head = git(self.repo, "rev-parse", "--short", "HEAD")
+        self.assertNotEqual(head, self.src_sha[:7])
+        rc, out = self.run_main(deployments("2026-09-20T10:00:00Z", message=head))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("at or past", out)
+
+    def test_stamp_of_ancestor_without_deploy_input_commit_is_stale(self):
+        commit(self.repo, "src/leakfilter.js", "c", "2026-09-20T19:00:00+00:00")
+        # deployed after the new commit, so the time rule alone would call this CURRENT
+        rc, out = self.run_main(deployments("2026-09-20T20:00:00Z", message=self.src_sha[:9]))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("predates", out)
+
+    def test_dirty_stamp_is_not_trusted(self):
+        head = git(self.repo, "rev-parse", "--short", "HEAD")
+        rc, out = self.run_main(deployments("2026-09-20T10:00:00Z", message=f"{head}-dirty"))
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("stamp", out)
+
+    def test_diverged_stamp_falls_back_to_time(self):
+        git(self.repo, "checkout", "-q", "-b", "side", self.src_sha)
+        side = commit(self.repo, "evals/side.md", "s", "2026-09-20T16:30:00+00:00")
+        git(self.repo, "checkout", "-q", "-")
+        commit(self.repo, "src/leakfilter.js", "c", "2026-09-20T19:00:00+00:00")
+        rc, out = self.run_main(deployments("2026-09-20T20:00:00Z", message=side[:9]))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("deployed", out)
+        rc, _ = self.run_main(deployments("2026-09-20T18:00:00Z", message=side[:9]))
+        self.assertEqual(rc, 1)
+
     def test_no_token_is_unconfirmed_and_never_calls_wrangler(self):
         def boom(*a):
             raise AssertionError("wrangler must not run without a token")

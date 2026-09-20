@@ -11,9 +11,13 @@ Exit codes: 0 CURRENT, 1 STALE (run /home/lumen/mailbot/deploy.sh), 3 UNCONFIRME
 
 The worker exposes no version endpoint, so "current" is judged by time: the newest
 deployment must be at or after the last commit touching a deploy input (src/,
-wrangler.toml, package*.json). If the newest deployment's message or tag carries that
-commit's sha (`wrangler deploy --message <sha>`), the match is exact instead. Limit of
-the time rule: a deploy cut from an older tree after the commit lands reads CURRENT.
+wrangler.toml, package*.json). If the newest deployment's message or tag carries a commit
+sha (deploy.sh stamps `wrangler deploy --message <HEAD sha>`), ancestry decides instead:
+CURRENT when the stamp is that deploy-input commit or a descendant of it, STALE when the
+stamp is a known ancestor without it (wq#2214: HEAD is often a later, non-deploy-input
+commit, so an exact-equality match never fires). Unresolvable, diverged, and `-dirty`
+stamps fall back to the time rule, whose limit is that a deploy cut from an older tree
+after the commit lands reads CURRENT.
 """
 import argparse
 import json
@@ -24,7 +28,7 @@ import sys
 from datetime import datetime
 
 DEPLOY_INPUTS = ("src", "wrangler.toml", "package.json", "package-lock.json")
-SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+SHA_RE = re.compile(r"\b([0-9a-f]{7,40})\b(-dirty)?")
 
 
 def parse_time(s):
@@ -70,12 +74,41 @@ def last_deploy_commit(repo, rev):
     return out[0], parse_time(out[1])
 
 
-def judge(deployment, sha, committed):
+def resolve_commit(repo, ref):
+    proc = subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                          capture_output=True, text=True)
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def is_ancestor(repo, ancestor, descendant):
+    """True/False from `git merge-base --is-ancestor`; None when git could not answer."""
+    rc = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", ancestor, descendant],
+                        capture_output=True).returncode
+    return {0: True, 1: False}.get(rc)
+
+
+def judge_stamp(repo, sha, stamp):
+    """Verdict from the sha deploy.sh stamped, or None when the stamp cannot decide."""
+    stamped = resolve_commit(repo, stamp)
+    if stamped is None:
+        return None
+    if is_ancestor(repo, sha, stamped):
+        return "CURRENT", f"deployment stamp {stamp[:12]} is at or past deploy-input commit {sha[:12]}"
+    if is_ancestor(repo, stamped, sha):
+        return "STALE", f"deployment stamp {stamp[:12]} predates deploy-input commit {sha[:12]}"
+    return None
+
+
+def judge(deployment, repo, sha, committed):
     """Return (verdict, reason)."""
     if trigger(deployment) == "rollback":
         raise ValueError("newest code deployment is a rollback; the live version is unknown")
-    if any(sha.startswith(s) or s.startswith(sha) for s in SHA_RE.findall(stamps(deployment))):
-        return "CURRENT", f"deployment stamp names {sha[:12]}"
+    verdicts = [
+        v for stamp, dirty in SHA_RE.findall(stamps(deployment)) if not dirty
+        if (v := judge_stamp(repo, sha, stamp))
+    ]
+    if verdicts:
+        return min(verdicts)  # "CURRENT" sorts before "STALE"
     deployed = parse_time(deployment["created_on"])
     if deployed >= committed:
         return "CURRENT", f"deployed {deployed.isoformat()} >= commit {committed.isoformat()}"
@@ -110,7 +143,7 @@ def main(argv=None, runner=run_wrangler):
             print(f"UNCONFIRMED: no deployments returned for {args.script}")
             return 3
         latest = newest(deployments)
-        verdict, reason = judge(latest, sha, committed)
+        verdict, reason = judge(latest, args.repo, sha, committed)
     except (ValueError, RuntimeError, KeyError, OSError, subprocess.SubprocessError) as e:
         print(f"UNCONFIRMED: {e}")
         return 3
