@@ -123,6 +123,29 @@ allow:
     # /home/lumen/minerva itself stays OFF this list (wq#1467). Sweep 2026-09-13:
     # research/minerva-ref files=2317 hits=0 (evidence in the PR body).
     - /home/lumen/research/minerva-ref
+    # DISPATCH_STALL_RCA follow-up (2026-09-20): pass fdisp-20260920T032217Z-215378 showed
+    # 139/139 candidates skipped at gate, none reaching pool admission (wq#2080/2081/2088
+    # partitioning never at fault). needs_unresolved on these roots accounted for a large
+    # share of the skips. Each swept individually with harness/read_dir_sweep.py just
+    # before this PR: zero hits on all ten. None overlap the deliberately-excluded roots
+    # above (agent/sentinel/minerva-parent/messenger/fleet).
+    - /home/lumen/logs                            # files=169 hits=0
+    - /home/lumen/services/lumen-public-guardian  # files=7 hits=0 (paired w/ /home/lumen/logs on ticket 1821)
+    - /home/lumen/maint/ui-drift                  # files=27 hits=0
+    - /home/lumen/glance                          # files=26 hits=0
+    - /home/lumen/actual-budget                   # files=8 hits=0
+    - /home/lumen/uplift                          # files=110 hits=0
+    - /home/lumen/autonomy/phase2                 # files=17 hits=0
+    - /home/lumen/.npm-global/bin                 # files=10 hits=0
+    - /home/lumen/scratch/dsh_eval/pilot_kit      # files=4 hits=0
+    - /home/lumen/.local/state/storage-manifest-drift  # files=4 hits=0
+    # NOT added, on evidence from the same sweep pass — leave needs_unresolved:
+    #   /home/lumen/langfuse (3 hits: .env / langfuse-web.env / langfuse-worker.env)
+    #   /home/lumen/backups (61 hits: live API keys, an RSA private key, Slack tokens)
+    #   /home/lumen/projects (58 hits: sk- keys, service-account private keys, a .env) —
+    #     too broad a root regardless; a narrow sub-root could be swept separately if needed
+    #   /home/lumen/agent, /home/lumen/minerva, /home/lumen/messenger, /home/lumen/sentinel/*
+    #     — already deliberately excluded above, unchanged by this PR
 
   # RESTART: unit globs per node the lint may tag restart(unit@node) for. Each entry
   # was verified per-target before listing (unit LoadState=loaded, `sudo -n true`
