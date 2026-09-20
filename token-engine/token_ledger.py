@@ -139,9 +139,48 @@ def _revoke_test_file(revoke):
         return False, f"unlink: {type(e).__name__}"
 
 
+def _revoke_litellm_key(revoke):
+    """T10 (wq#2278, §7 rank 5): POST /key/delete with the engine-held admin
+    key. 200 = deleted; 400/404 = the gateway no longer knows the key (already
+    deleted, or expired past its `duration`) — idempotent success. The handoff
+    file is unlinked first so a failed provider call still never leaves the
+    value readable outside the ledger."""
+    key_file = revoke.get("key_file")
+    if key_file:
+        try:
+            os.unlink(key_file)
+        except OSError:
+            pass
+    admin_file = os.path.join(state_dir(), "secrets",
+                              os.path.basename(str(revoke.get("admin_key_file") or
+                                                   "litellm-admin.token")))
+    try:
+        with open(admin_file) as f:
+            admin = f.read().strip()
+    except OSError:
+        return False, "admin key unreadable"
+    body = json.dumps({"keys": [revoke.get("key", "")]}).encode()
+    req = urllib.request.Request(
+        str(revoke.get("base_url", "http://localhost:4000")).rstrip("/") + "/key/delete",
+        data=body, method="POST",
+        headers={"Authorization": f"Bearer {admin}",
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        status = e.code
+    except (urllib.error.URLError, OSError) as e:
+        return False, f"unreachable: {type(e).__name__}"
+    if status in (200, 400, 404):
+        return True, f"http_{status}"
+    return False, f"http_{status}"
+
+
 REVOKERS = {
     "github-app": _revoke_github_app,
     "test-file": _revoke_test_file,
+    "litellm-key": _revoke_litellm_key,
 }
 
 
@@ -169,6 +208,33 @@ def revoke_ticket(ticket):
     else:
         MINTED.pop(str(ticket), None)
     return {"had_entries": had, "revoked": had - len(kept), "failed": len(kept)}
+
+
+def revoke_one(ticket, token_id):
+    """Revoke a single ledgered token by id, scoped to one ticket (the
+    gateway-key revoke verb). Same idempotency contract as revoke_ticket:
+    an id the ledger no longer holds reports found=0, not an error."""
+    path = _ticket_path(ticket)
+    entries = _load(path)
+    kept, found, failed = [], 0, 0
+    for e in entries:
+        if e.get("token_id") != str(token_id):
+            kept.append(e)
+            continue
+        found += 1
+        revoker = REVOKERS.get(e.get("provider"))
+        ok = False
+        if revoker is not None:
+            ok, _reason = revoker(e.get("revoke") or {})
+        if not ok:
+            failed += 1
+            kept.append(e)
+    _store(path, ticket, kept)
+    if kept:
+        MINTED[str(ticket)] = [e.get("token_id") for e in kept]
+    else:
+        MINTED.pop(str(ticket), None)
+    return {"found": found, "revoked": found - failed, "failed": failed}
 
 
 def reap_all():

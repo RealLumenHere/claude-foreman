@@ -12,6 +12,7 @@ evidence commands, not simulated here.
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -350,6 +351,287 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(D.mask_hits("key = apply_key_allowlist(reg)"), [])
         self.assertEqual(D.mask_hits('TOKEN = os.environ.get("GH_TOKEN")'), [])
         self.assertIn("kv_secret", D.mask_hits("password: hunter2-hunter2-hunter2"))
+
+
+class T10Base(unittest.TestCase):
+    """Shared fixture for the wq#2278 verbs: tempdir engine store, providers
+    config override, no network (http_json / subprocess.run stubbed per test).
+    Fixture values are concatenation-built so READING this file never matches
+    a mask pattern (wq#2290/wq#2289: attempt 1's rotation-ticket cascade was
+    exactly that)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.peer = (1234, 1000, 1000)
+        self.state = os.path.join(self.tmp.name, "state")
+        os.makedirs(os.path.join(self.state, "secrets"))
+        self.orig = {n: getattr(D, n) for n in
+                     ("SECRETS_DIR", "PROVIDERS_PATH", "POLICY_PATH",
+                      "SOCK_DIR", "BODY_ROOT", "http_json")}
+        D.SECRETS_DIR = self.state
+        D.SOCK_DIR = os.path.join(self.tmp.name, "run")
+        D.BODY_ROOT = self.tmp.name
+        D.PROVIDERS_PATH = os.path.join(self.tmp.name, "providers.json")
+        with open(D.PROVIDERS_PATH, "w") as f:
+            json.dump({
+                "providers": {"testprov": {"auth": "bearer",
+                                           "base_url": "https://api.example.com",
+                                           "token_file": "testprov.token"}},
+                "gateway": {"base_url": "http://localhost:4000",
+                            "admin_key_file": "litellm-admin.token",
+                            "max_budget_usd": 25.0, "max_ttl_s": 259200},
+                "plug_creds_file": "tapo.env",
+                "plugs": {"p9": "192.0.2.9"}}, f)
+        self.orig_sub = D.subprocess.run
+        os.environ["TOKEN_ENGINE_STATE_DIR"] = self.state
+        D.L.MINTED.clear()
+
+    def tearDown(self):
+        for n, v in self.orig.items():
+            setattr(D, n, v)
+        D.subprocess.run = self.orig_sub
+        del os.environ["TOKEN_ENGINE_STATE_DIR"]
+        self.tmp.cleanup()
+
+    def store(self, basename, content):
+        p = os.path.join(self.state, "secrets", basename)
+        with open(p, "w") as f:
+            f.write(content + "\n")
+        return p
+
+    def vreq(self, verb, argv, kind, node, extra_grant=None):
+        grant = {"ticket": "wq2270", "expires": "2099-01-01T00:00:00Z",
+                 "grants": [dict({"kind": kind, "node": node},
+                                 **(extra_grant or {}))]}
+        raw = json.dumps(grant).encode()
+        path = os.path.join(self.tmp.name, "grant.json")
+        with open(path, "wb") as f:
+            f.write(raw)
+        r = req(path, hashlib.sha256(raw).hexdigest(), verb=verb)
+        r["argv"] = argv
+        return r
+
+
+class ApiCallTest(T10Base):
+    def setUp(self):
+        super().setUp()
+        self.store("testprov.token", "tp-store-only-value")
+
+    def test_grant_scoped_per_provider(self):
+        # kind AND node derive from argv[0]: an api:testprov grant is useless
+        # against any other provider name.
+        r = self.vreq("api-call", ["otherprov", "GET", "/v1/x"],
+                      "api:testprov", "api:testprov")
+        ok, rule, *_, decision = D.handle(r, self.peer)
+        self.assertEqual((ok, rule, decision), (False, "grant_no_match", "deny"))
+
+    def test_unknown_provider_denied(self):
+        r = self.vreq("api-call", ["nosuch", "GET", "/v1/x"],
+                      "api:nosuch", "api:nosuch")
+        ok, rule, *_, decision = D.handle(r, self.peer)
+        self.assertEqual((ok, rule, decision), (False, "provider_unknown", "deny"))
+
+    def test_method_and_path_shapes(self):
+        for argv, want in ((["testprov", "TRACE", "/v1/x"], "argv_malformed"),
+                           (["testprov", "GET", "v1-no-slash"], "argv_malformed"),
+                           (["testprov", "GET", "/v1/../admin"], "argv_malformed"),
+                           (["testprov", "GET"], "argv_arity")):
+            ok, rule, *_ , _d = D.handle(
+                self.vreq("api-call", argv, "api:testprov", "api:testprov"), self.peer)
+            self.assertEqual((ok, rule), (False, want), argv)
+
+    def test_response_is_masked_and_carries_no_auth(self):
+        seen = {}
+
+        def fake_http(method, base, path, scheme, token, body=None):
+            seen.update(method=method, base=base, path=path, token=token)
+            return 200, {"echo": "ghp_" + "b" * 36, "note": "fine"}
+
+        D.http_json = fake_http
+        ok, rule, _, result, _ = D.handle(
+            self.vreq("api-call", ["testprov", "GET", "/v1/x"],
+                      "api:testprov", "api:testprov"), self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual(seen["token"], "tp-store-only-value")  # header built inside
+        self.assertEqual(result["status"], 200)
+        self.assertIn("MASKED", result["body"])              # rewrite, §2 api-call row
+        dumped = json.dumps(result, sort_keys=True)
+        self.assertNotIn(seen["token"], dumped)              # never the credential
+        self.assertNotIn("Authorization", dumped)            # never the header
+        self.assertEqual(D.mask_hits(dumped), [])            # tripwire would stay quiet
+        D.assert_response_schema({"ok": True, "verb": "api-call", "ticket": "wq2270",
+                                  "rule": "r", "reason": "", "result": result,
+                                  "elapsed_s": 0.0})
+
+    def test_body_file_must_be_json(self):
+        p = os.path.join(self.tmp.name, "body.txt")
+        with open(p, "w") as f:
+            f.write("not json")
+        ok, rule, *_ , _d = D.handle(
+            self.vreq("api-call", ["testprov", "POST", "/v1/x", p],
+                      "api:testprov", "api:testprov"), self.peer)
+        self.assertEqual((ok, rule), (False, "body_not_json"))
+
+
+class GatewayKeyTest(T10Base):
+    KEYVAL = "sk-" + "minted" * 5  # sk-key shaped at runtime, split in source
+
+    def setUp(self):
+        super().setUp()
+        self.store("litellm-admin.token", "adm-store-only-value")
+        self.orig_revokers = dict(D.L.REVOKERS)
+
+    def tearDown(self):
+        D.L.REVOKERS.clear()
+        D.L.REVOKERS.update(self.orig_revokers)
+        super().tearDown()
+
+    def mint(self, argv=("mint", "worker", "24h", "15.0")):
+        D.http_json = lambda *a, **k: (
+            200, {"key": self.KEYVAL, "expires": "2026-09-21T00:00:00Z"})
+        return D.handle(self.vreq("gateway-key", list(argv),
+                                  "gateway_admin", "gateway:litellm"), self.peer)
+
+    def test_mint_returns_id_expiry_path_never_the_value(self):
+        ok, rule, _, result, _ = self.mint()
+        self.assertTrue(ok, rule)
+        self.assertTrue(result["key_id"].startswith("gwk-"))
+        self.assertEqual(result["expires"], "2026-09-21T00:00:00Z")
+        dumped = json.dumps(result, sort_keys=True)
+        self.assertNotIn(self.KEYVAL, dumped)
+        self.assertEqual(D.mask_hits(dumped), [])
+        # the value reaches the client ONLY via the 0640 handoff file
+        with open(result["key_file"]) as f:
+            self.assertEqual(f.read().strip(), self.KEYVAL)
+        self.assertEqual(os.stat(result["key_file"]).st_mode & 0o777, 0o640)
+
+    def test_caps_enforced(self):
+        for argv, want in ((("mint", "w", "24h", "100"), "gateway_budget_cap"),
+                           (("mint", "w", "31d", "5"), "gateway_ttl_cap"),
+                           (("mint", "w", "forever", "5"), "argv_malformed")):
+            ok, rule, *_ , _d = self.mint(argv)
+            self.assertEqual((ok, rule), (False, want), argv)
+
+    def test_ticket_end_revokes_the_minted_key(self):
+        revoked = []
+        D.L.REVOKERS["litellm-key"] = lambda rv: (revoked.append(rv) or True, "ok")
+        ok, rule, _, result, _ = self.mint()
+        self.assertTrue(ok, rule)
+        ok2, rule2, _, r2, _ = D.handle(
+            self.vreq("ticket-end", [], "token_engine", "daemon"), self.peer)
+        self.assertTrue(ok2, rule2)
+        self.assertEqual((r2["had_entries"], r2["revoked"]), (1, 1))
+        self.assertEqual(revoked[0]["key"], self.KEYVAL)
+
+    def test_revoke_verb_is_idempotent(self):
+        D.L.REVOKERS["litellm-key"] = lambda rv: (True, "ok")
+        ok, _, _, result, _ = self.mint()
+        self.assertTrue(ok)
+        kid = result["key_id"]
+        ok, rule, _, r1, _ = D.handle(
+            self.vreq("gateway-key", ["revoke", kid],
+                      "gateway_admin", "gateway:litellm"), self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual((r1["found"], r1["revoked"]), (1, 1))
+        _, _, _, r2, _ = D.handle(
+            self.vreq("gateway-key", ["revoke", kid],
+                      "gateway_admin", "gateway:litellm"), self.peer)
+        self.assertEqual(r2["found"], 0)
+
+
+class PlugTest(T10Base):
+    def setUp(self):
+        super().setUp()
+        self.store("tapo.env", "TAPO_USER=u@example.com\nTAPO_PASS=plug-cred-value")
+
+    def test_kasa_gets_creds_via_env_never_argv(self):
+        calls = {}
+
+        def fake_run(argv, **kw):
+            calls["argv"], calls["env"] = argv, kw.get("env")
+            return subprocess.CompletedProcess(argv, 0, "Device state: True\n", "")
+
+        D.subprocess.run = fake_run
+        ok, rule, _, result, _ = D.handle(
+            self.vreq("plug", ["p9", "state"], "plug", "plug:p9"), self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual(result["state"], "on")
+        self.assertIn("192.0.2.9", calls["argv"])
+        self.assertNotIn("plug-cred-value", " ".join(calls["argv"]))  # /proc-safe
+        self.assertEqual(calls["env"]["KASA_PASSWORD"], "plug-cred-value")
+        self.assertEqual(D.mask_hits(json.dumps(result, sort_keys=True)), [])
+
+    def test_unmapped_and_malformed_plugs_denied(self):
+        ok, rule, *_ , _d = D.handle(
+            self.vreq("plug", ["p8", "on"], "plug", "plug:p8"), self.peer)
+        self.assertEqual((ok, rule), (False, "plug_unknown"))
+        ok, rule, *_ , _d = D.handle(
+            self.vreq("plug", ["lamp", "on"], "plug", "plug:lamp"), self.peer)
+        self.assertEqual((ok, rule), (False, "plug_malformed"))
+
+    def test_grant_scoped_per_plug(self):
+        ok, rule, *_ , _d = D.handle(
+            self.vreq("plug", ["p9", "on"], "plug", "plug:p1"), self.peer)
+        self.assertEqual((ok, rule), (False, "grant_no_match"))
+
+
+class SshRunTest(T10Base):
+    def setUp(self):
+        super().setUp()
+        self.key = self.store("fleet-ssh.key", "dummy-key-material")
+        D.POLICY_PATH = os.path.join(self.tmp.name, "policy.yaml")
+        with open(D.POLICY_PATH, "w") as f:
+            f.write("never:\n  nodes: []\nrun_readonly_cmds:\n  - uptime\n")
+
+    def test_ssh_runs_with_the_engine_key(self):
+        calls = {}
+
+        def fake_run(argv, **kw):
+            calls["argv"] = argv
+            return subprocess.CompletedProcess(argv, 0, "up 3 days", "")
+
+        D.subprocess.run = fake_run
+        ok, rule, _, result, _ = D.handle(
+            self.vreq("ssh-run", ["bes", "uptime"], "ssh", "bes",
+                      {"verbs": ["run"]}), self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual(result["exit_code"], 0)
+        i = calls["argv"].index("-i")
+        self.assertEqual(calls["argv"][i + 1], self.key)  # engine store, not ~/.ssh
+
+    def test_run_verb_required_in_grant(self):
+        ok, rule, *_ , _d = D.handle(
+            self.vreq("ssh-run", ["bes", "uptime"], "ssh", "bes",
+                      {"verbs": ["copy"]}), self.peer)
+        self.assertEqual((ok, rule), (False, "grant:no_ssh_run"))
+
+    def test_policy_readonly_allowlist_still_binds(self):
+        # same check_run fleet-exec applies: moving the key must not widen
+        # what a worker can execute.
+        ok, rule, *_ , _d = D.handle(
+            self.vreq("ssh-run", ["bes", "reboot"], "ssh", "bes",
+                      {"verbs": ["run"]}), self.peer)
+        self.assertEqual(ok, False)
+        self.assertTrue(rule.startswith("policy:"), rule)
+
+    def test_grant_scoped_per_node(self):
+        ok, rule, *_ , _d = D.handle(
+            self.vreq("ssh-run", ["maat", "uptime"], "ssh", "bes",
+                      {"verbs": ["run"]}), self.peer)
+        self.assertEqual((ok, rule), (False, "grant_no_match"))
+
+
+class MaskRewriteTest(unittest.TestCase):
+    def test_rewrite_output_never_retrips_the_tripwire(self):
+        dirty = ("cf token cfut_" + "abcdef123456" + " and pat ghp_" + "c" * 36 +
+                 " in one body")
+        clean = D.mask_rewrite(dirty)
+        self.assertIn("MASKED", clean)
+        self.assertEqual(D.mask_hits(clean), [])
+
+    def test_rewrite_leaves_clean_text_alone(self):
+        self.assertEqual(D.mask_rewrite("plain provider output"),
+                         "plain provider output")
 
 
 if __name__ == "__main__":

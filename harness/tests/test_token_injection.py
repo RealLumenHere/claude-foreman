@@ -78,8 +78,66 @@ def test_local_model_never_gets_the_static_oauth_bearer(tmp_path):
     token_file = tmp_path / "token"
     token_file.write_text(OAT)
     fw = reload_with(str(token_file))
+    fw.mint_gateway_key = lambda *a: None  # hermetic: no broker in unit tests
     env = fw.build_env("test-worker", "deepseek-v4-flash", None, str(tmp_path / "wt"), 1116)
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+
+
+# wq#2278 (T10): the local-pool gateway credential is a PER-TICKET key minted
+# through the token-engine broker; the long-lived virtual key file is only the
+# no-broker fallback. Both paths must keep the pop-then-set-exactly-one
+# discipline: of the four popped auth vars, a local dispatch re-adds exactly
+# ANTHROPIC_BASE_URL+ANTHROPIC_AUTH_TOKEN and a cloud dispatch exactly
+# CLAUDE_CODE_OAUTH_TOKEN.
+MINTED_KEY = "sk-" + "minted-per-ticket-dummy"
+FALLBACK_KEY = "sk-" + "long-lived-fallback-dummy"
+
+
+def local_fw(tmp_path, mint_result):
+    fw = reload_with(str(tmp_path / "no-such-token-file"))
+    litellm_file = tmp_path / "litellm"
+    litellm_file.write_text(FALLBACK_KEY + "\n")
+    fw.LITELLM_KEY_FILE = str(litellm_file)
+    fw.mint_gateway_key = lambda ticket_id, worker_id: mint_result
+    return fw
+
+
+def test_local_model_uses_the_minted_per_ticket_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", STALE_ANTHROPIC_KEY)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "stale-oauth-value")
+    fw = local_fw(tmp_path, MINTED_KEY)
+    env = fw.build_env("test-worker", "deepseek-v4-flash", None, str(tmp_path / "wt"), 1116)
+    assert env["ANTHROPIC_AUTH_TOKEN"] == MINTED_KEY
+    # pop-then-set-exactly-one: stale credentials popped, exactly one re-added
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+    creds = [k for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                         "CLAUDE_CODE_OAUTH_TOKEN") if k in env]
+    assert creds == ["ANTHROPIC_AUTH_TOKEN"]
+
+
+def test_local_model_falls_back_when_broker_is_down(tmp_path):
+    fw = local_fw(tmp_path, None)
+    env = fw.build_env("test-worker", "deepseek-v4-flash", None, str(tmp_path / "wt"), 1116)
+    assert env["ANTHROPIC_AUTH_TOKEN"] == FALLBACK_KEY
+
+
+def test_cloud_model_never_mints_a_gateway_key(tmp_path):
+    token_file = tmp_path / "token"
+    token_file.write_text(OAT)
+    fw = reload_with(str(token_file))
+    calls = []
+    fw.mint_gateway_key = lambda *a: calls.append(a) or MINTED_KEY
+    env = fw.build_env("test-worker", "claude-sonnet-5", "high", str(tmp_path / "wt"), 1116)
+    assert calls == []
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == OAT
+
+
+def test_mint_gateway_key_short_circuits_without_a_socket(tmp_path, monkeypatch):
+    fw = reload_with(str(tmp_path / "token"))
+    monkeypatch.setattr(fw, "TOKEN_ENGINE_SOCK", str(tmp_path / "no-broker.sock"))
+    assert fw.mint_gateway_key(1116, "test-worker") is None
 
 
 def test_read_oauth_token_strips_whitespace(tmp_path):

@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 import re
 import resource
 import shlex
+import socket
 import shutil
 import signal
 import subprocess
@@ -174,6 +175,13 @@ LITELLM_BASE_URL = os.environ.get("FOREMAN_LITELLM_BASE_URL", "http://localhost:
 # /home/lumen/.secrets/*.token. NEVER the LiteLLM master key.
 LITELLM_KEY_FILE = os.environ.get("FOREMAN_LITELLM_KEY_FILE",
                                    "/home/lumen/.secrets/foreman-litellm.token")
+# T10 (wq#2278, TOKEN_ENGINE_DESIGN.md §7 rank 5): per-ticket gateway key,
+# minted through the token-engine broker with a TTL and a budget and revoked
+# at ticket-end/daemon-start. The long-lived virtual key above becomes the
+# FALLBACK for hosts without a broker, and is removed once migration finishes.
+TOKEN_ENGINE_SOCK = os.environ.get("TOKEN_ENGINE_SOCK", "/run/token-engine/broker.sock")
+GATEWAY_KEY_TTL = os.environ.get("FOREMAN_GATEWAY_KEY_TTL", "24h")
+GATEWAY_KEY_BUDGET_USD = os.environ.get("FOREMAN_GATEWAY_KEY_BUDGET_USD", "15.0")
 
 
 def is_local_model(model):
@@ -308,6 +316,64 @@ def local_rung_gate(model, archetype):
 def read_litellm_key():
     with open(LITELLM_KEY_FILE) as f:
         return f.read().strip()
+
+
+def mint_gateway_key(ticket_id, worker_id):
+    """Per-ticket LiteLLM key via the token-engine broker (wq#2278, T10).
+    Returns the key value for THIS attempt's env, or None to fall back to the
+    long-lived key file — a dead broker degrades to the pre-T10 behaviour,
+    never to a failed dispatch. The broker frame carries only the key id,
+    expiry, and a handoff PATH (0640 tokeneng:token-client); the value is read
+    from that file and the file unlinked, so after this returns the key exists
+    in the attempt env and the daemon's ledger and nowhere else. Revocation is
+    the existing ticket-end/reaper path: the daemon ledgers the mint under
+    str(ticket_id), the same id guard.sh --lifecycle end sends."""
+    if not os.path.exists(TOKEN_ENGINE_SOCK):
+        return None
+    try:
+        expires = (datetime.now(timezone.utc) + timedelta(minutes=5)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        grant = {"ticket": str(ticket_id), "expires": expires,
+                 "grants": [{"kind": "gateway_admin", "node": "gateway:litellm"}]}
+        raw = json.dumps(grant, sort_keys=True).encode()
+        gpath = os.path.join(run_dir(ticket_id), "gateway-grant.json")
+        if os.path.exists(gpath):
+            os.chmod(gpath, 0o600)
+        with open(gpath, "wb") as f:
+            f.write(raw)
+        os.chmod(gpath, 0o444)  # daemon re-reads + re-hashes it as uid tokeneng
+        req = {"verb": "gateway-key",
+               "argv": ["mint", "worker", GATEWAY_KEY_TTL, GATEWAY_KEY_BUDGET_USD],
+               "ticket": str(ticket_id), "attempt": 1, "worker": worker_id,
+               "grant_file": gpath,
+               "grant_sha": fleet_exec_policy.sha256_bytes(raw)}
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(20)
+        s.connect(TOKEN_ENGINE_SOCK)
+        s.sendall((json.dumps(req) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        s.close()
+        resp = json.loads(buf.split(b"\n", 1)[0].decode())
+        if not resp.get("ok"):
+            log(f"gateway-key mint refused ({resp.get('rule')}: {resp.get('reason')}) "
+                f"— falling back to the long-lived key")
+            return None
+        result = resp.get("result") or {}
+        with open(result["key_file"]) as f:
+            key = f.read().strip()
+        os.unlink(result["key_file"])
+        log(f"gateway-key: minted {result.get('key_id')} ttl={GATEWAY_KEY_TTL} "
+            f"budget=${GATEWAY_KEY_BUDGET_USD} expires={result.get('expires')}")
+        return key or None
+    except Exception as e:
+        log(f"gateway-key mint failed ({type(e).__name__}: {e}) — falling back "
+            f"to the long-lived key")
+        return None
 
 def _envint(name, default):
     try:
@@ -1440,7 +1506,10 @@ def build_env(worker_id, model, effort, worktree, ticket_id, cli_profile=False):
     # leak the gateway vars into a later cloud dispatch on the same host/session.
     if is_local_model(model):
         env["ANTHROPIC_BASE_URL"] = LITELLM_BASE_URL
-        env["ANTHROPIC_AUTH_TOKEN"] = read_litellm_key()
+        # T10 (wq#2278): per-ticket key with TTL+budget when the broker is up;
+        # the long-lived virtual key is the no-broker fallback only.
+        env["ANTHROPIC_AUTH_TOKEN"] = (mint_gateway_key(ticket_id, worker_id)
+                                       or read_litellm_key())
         env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
     if cli_profile:
         env.update(local_profile_env())

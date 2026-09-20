@@ -1,0 +1,33 @@
+{
+  "_comment": "wq#2278 (T10): static side of the api-call/gateway-key/plug/ssh-run verbs, playing the role forges.json plays for the PR verbs — the CLIENT never names a base URL, token file, credential path, or plug IP; only this root-installed file does. Token/env files are basenames inside /var/lib/token-engine/secrets.",
+  "providers": {
+    "cloudflare": {
+      "auth": "bearer",
+      "base_url": "https://api.cloudflare.com/client/v4",
+      "token_file": "cloudflare-api.token"
+    },
+    "ebay": {
+      "auth": "ebay-client-credentials",
+      "base_url": "https://api.ebay.com",
+      "sandbox_base_url": "https://api.sandbox.ebay.com",
+      "env_file": "ebay.env",
+      "token_path": "/identity/v1/oauth2/token",
+      "scope": "https://api.ebay.com/oauth/api_scope"
+    }
+  },
+  "gateway": {
+    "base_url": "http://localhost:4000",
+    "admin_key_file": "litellm-admin.token",
+    "max_budget_usd": 25.0,
+    "max_ttl_s": 259200
+  },
+  "plug_creds_file": "tapo.env",
+  "plugs": {
+    "_comment": "IP map ported from bin/plug-ctl (KLAP unicast, Tapo P115). The plug<->box mapping stays hardware.power_hw.plug_id in the fleet inventory (wq#1456); this map is addresses only.",
+    "p1": "192.168.8.118", "p2": "192.168.8.220", "p3": "192.168.8.221",
+    "p4": "192.168.8.226", "p5": "192.168.8.170", "p6": "192.168.8.212",
+    "p7": "192.168.8.230", "p8": "192.168.8.152", "p9": "192.168.8.196",
+    "p10": "192.168.8.154", "p11": "192.168.8.115",
+    "p13": "192.168.8.181", "p14": "192.168.8.124"
+  }
+}

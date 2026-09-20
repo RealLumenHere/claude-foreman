@@ -28,9 +28,11 @@ T2 ships the broker skeleton with `ping` and `mask-selftest`; provider verbs
 (git-fetch, pr-open, gateway-key, …) land in T1/T4/T10 via VERBS below.
 """
 
+import base64
 import json
 import os
 import re
+import shlex
 import socket
 import struct
 import subprocess
@@ -39,6 +41,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet_exec_policy as P  # root-owned copy installed next to this file
@@ -87,6 +90,20 @@ MASK_PATTERNS = [
 ]
 
 RESPONSE_KEYS = {"ok", "verb", "ticket", "rule", "reason", "result", "elapsed_s"}
+
+
+def mask_rewrite(text):
+    """T10 (wq#2278): the api-call/plug/ssh-run verbs return provider output,
+    which can legitimately contain credential-shaped strings (a Cloudflare
+    verify response echoes token metadata; remote stdout is arbitrary). For
+    THOSE verbs masking is a rewrite applied to the body before framing —
+    design §2 row api-call, 'response body, masked' — and the outbound
+    tripwire in respond() stays the backstop: a rewritten body can no longer
+    match, so a tripwire hit still means a daemon bug, never business as
+    usual."""
+    for _name, pat in MASK_PATTERNS:
+        text = pat.sub(MASK, text)
+    return text
 
 
 def mask_hits(text):
@@ -605,6 +622,328 @@ def verb_pr_merge(req, grant):
             "branch_deleted": dcode // 100 == 2, "already": False}
 
 
+# ------------------------------------------------------------ T10 (wq#2278)
+# Remaining verbs + migration ranks 5-8 (design §2 rows api-call/gateway-key/
+# plug, §7 rank 3 ssh). providers.json is the static half, same contract as
+# forges.json: the client never names a base URL, credential file, or plug IP.
+
+# Env-overridable for the gate replay (a fake gateway on a loopback port);
+# the systemd unit sets nothing, so production reads the root-installed copy.
+PROVIDERS_PATH = os.environ.get(
+    "TOKEN_ENGINE_PROVIDERS_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "providers.json"))
+POLICY_PATH = os.environ.get("FLEET_EXEC_POLICY_PATH",
+                             "/home/lumen/foreman/harness/fleet-exec-policy.yaml")
+KASA_BIN = os.environ.get("TOKEN_ENGINE_KASA_BIN", "/home/lumen/.local/bin/kasa")
+SSH_BIN = os.environ.get("TOKEN_ENGINE_SSH_BIN", "ssh")
+API_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
+PROVIDER_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+API_PATH_RE = re.compile(r"^/[A-Za-z0-9._~/%?=&+:,@!*-]*$")
+PLUG_RE = re.compile(r"^p[0-9]{1,2}$")
+PLUG_ACTIONS = ("on", "off", "state")
+NODE_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+KEYNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+TTL_RE = re.compile(r"^([0-9]{1,4})([smhd])$")
+BUDGET_RE = re.compile(r"^[0-9]{1,4}(\.[0-9]{1,4})?$")
+_TTL_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+SSH_TIMEOUT_S = 90
+OUT_TAIL_BYTES = 1800
+
+# VERBS node sentinels: how handle() derives the grant (kind, node) from argv
+# when the resource is client-named. None keeps the T4 meaning (repo slug).
+NODE_FROM_ARGV = "<node-from-argv>"   # ssh-run: node name, kind stays "ssh"
+API_FROM_ARGV = "<api-from-argv>"     # api-call: kind AND node = api:<provider>
+PLUG_FROM_ARGV = "<plug-from-argv>"   # plug: node = plug:<name>
+
+
+def load_providers():
+    try:
+        with open(PROVIDERS_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def read_store(basename, what):
+    """One credential file from the engine store, by basename only. Deny, not
+    crash, when it is missing — the migration message names install.sh."""
+    path = os.path.join(SECRETS_DIR, "secrets", os.path.basename(basename))
+    try:
+        with open(path) as f:
+            value = f.read().strip()
+    except OSError:
+        raise Deny("token_unreadable",
+                   f"engine store has no readable {os.path.basename(basename)} "
+                   f"for {what} — run token-engine/install.sh to migrate it")
+    if not value:
+        raise Deny("token_empty", f"{os.path.basename(basename)} is empty")
+    return value
+
+
+def read_env_file(basename, what):
+    """KEY=VALUE lines from an engine-store env file (ports bin/ebay-token
+    load_env / the tapo.env plug-ctl sources)."""
+    out = {}
+    for line in read_store(basename, what).splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
+def _client_gid():
+    import grp
+    try:
+        return grp.getgrnam(CLIENT_GROUP).gr_gid
+    except KeyError:
+        return None
+
+
+def _handoff_write(key_id, value):
+    """The ONE sanctioned way a minted key value reaches the client side:
+    a 0640 tokeneng:token-client file under the runtime dir, path returned in
+    the frame, value never in it. fworker reads it into the worker env and
+    unlinks it; the ledger entry unlinks it again at revocation as a backstop.
+    O_EXCL: key_id is daemon-generated and unique, a collision is an attack."""
+    hdir = os.path.join(SOCK_DIR, "minted")
+    os.makedirs(hdir, exist_ok=True)
+    os.chmod(hdir, 0o750)  # explicit: the unit's UMask=0077 would strip group
+    gid = _client_gid()
+    if gid is not None:
+        try:
+            os.chown(hdir, -1, gid)
+        except PermissionError:
+            pass
+    path = os.path.join(hdir, key_id + ".key")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+    try:
+        if gid is not None:
+            try:
+                os.fchown(fd, -1, gid)
+            except PermissionError:
+                pass
+        os.fchmod(fd, 0o640)
+        os.write(fd, (value + "\n").encode())
+    finally:
+        os.close(fd)
+    return path
+
+
+def verb_gateway_key(req, grant):
+    """§7 rank 5: per-ticket LiteLLM virtual key with a TTL and a budget,
+    minted with the engine-held admin key (the long-lived 'foreman' virtual
+    key leaves worker env; fworker mints one of these per attempt instead).
+    Frame carries key id, expiry, and the handoff PATH — never the value; the
+    ledger revokes at ticket-end/reap like any other minted token."""
+    argv = req.get("argv") or []
+    if not argv or argv[0] not in ("mint", "revoke"):
+        raise Deny("argv_arity", "expected: mint <name> <ttl> <budget-usd> | revoke <key-id>")
+    cfg = load_providers().get("gateway", {})
+    if argv[0] == "revoke":
+        if len(argv) != 2 or not KEYNAME_RE.match(argv[1]):
+            raise Deny("argv_malformed", "revoke takes one key id")
+        r = L.revoke_one(str(req.get("ticket", "")), argv[1])
+        return r
+    if len(argv) != 4:
+        raise Deny("argv_arity", "expected: mint <name> <ttl> <budget-usd>")
+    name, ttl, budget = argv[1:4]
+    if not KEYNAME_RE.match(name):
+        raise Deny("argv_malformed", "key name fails shape check")
+    m = TTL_RE.match(ttl)
+    if not m:
+        raise Deny("argv_malformed", "ttl must be like 30m / 24h")
+    ttl_s = int(m.group(1)) * _TTL_UNIT_S[m.group(2)]
+    if ttl_s <= 0 or ttl_s > int(cfg.get("max_ttl_s", 259200)):
+        raise Deny("gateway_ttl_cap", f"ttl exceeds cap {cfg.get('max_ttl_s', 259200)}s")
+    if not BUDGET_RE.match(budget):
+        raise Deny("argv_malformed", "budget must be a decimal USD amount")
+    budget_usd = float(budget)
+    if budget_usd <= 0 or budget_usd > float(cfg.get("max_budget_usd", 25.0)):
+        raise Deny("gateway_budget_cap",
+                   f"budget exceeds cap {cfg.get('max_budget_usd', 25.0)} USD")
+    admin_file = cfg.get("admin_key_file", "litellm-admin.token")
+    admin = read_store(admin_file, "gateway-key mint")
+    base = str(cfg.get("base_url", "http://localhost:4000")).rstrip("/")
+    ticket = str(req.get("ticket", ""))
+    code, obj = http_json("POST", base, "/key/generate", "Bearer", admin,
+                          {"key_alias": f"{ticket}-{name}-{uuid.uuid4().hex[:6]}",
+                           "duration": ttl, "max_budget": budget_usd,
+                           "metadata": {"ticket": ticket,
+                                        "worker": str(req.get("worker", "")),
+                                        "minted_by": "token-engine"}})
+    if code // 100 != 2 or not isinstance(obj, dict) or not obj.get("key"):
+        raise Deny("gateway_error", f"key mint failed (HTTP {code}): {api_message(obj)}")
+    value = str(obj["key"])
+    key_id = "gwk-" + uuid.uuid4().hex[:12]
+    path = _handoff_write(key_id, value)
+    # Ledgered BEFORE the response leaves (an unledgered token is an
+    # unrevocable token); the revoke payload keeps the value in the 0600
+    # ledger only, per token_ledger's secrets discipline.
+    L.record_mint(ticket, "litellm-key", key_id, str(req.get("worker", "")),
+                  {"base_url": base, "key": value,
+                   "admin_key_file": admin_file, "key_file": path},
+                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    return {"key_id": key_id, "expires": str(obj.get("expires") or ""),
+            "budget_usd": budget_usd, "ttl": ttl, "key_file": path}
+
+
+def _ebay_access_token(pcfg):
+    """§7 rank 8: the eBay app credentials (the long-lived thing) live in the
+    engine store; the ~2h access token minted from them is cached under the
+    state dir, 0600 tokeneng. Ports bin/ebay-token mint()/get()."""
+    env = read_env_file(pcfg.get("env_file", "ebay.env"), "api-call ebay")
+    sandbox = "sand" in (env.get("EBAY_ENV", "production") or "").lower()
+    base = pcfg.get("sandbox_base_url") if sandbox else pcfg.get("base_url")
+    base = str(base or "https://api.ebay.com").rstrip("/")
+    cache = os.path.join(SECRETS_DIR, "secrets",
+                         ".ebay-access-%s.json" % ("sb" if sandbox else "prod"))
+    try:
+        with open(cache) as f:
+            t = json.load(f)
+        if t["obtained_at"] + int(t.get("expires_in", 7200)) - 90 > time.time():
+            return base, t["access_token"]
+    except (OSError, ValueError, KeyError):
+        pass
+    app_id, cert_id = env.get("EBAY_APP_ID"), env.get("EBAY_CERT_ID")
+    if not app_id or not cert_id:
+        raise Deny("token_unreadable", "ebay.env lacks EBAY_APP_ID/EBAY_CERT_ID")
+    cred = base64.b64encode(f"{app_id}:{cert_id}".encode()).decode()
+    data = urllib.parse.urlencode({
+        "grant_type": "client_credentials",
+        "scope": pcfg.get("scope", "https://api.ebay.com/oauth/api_scope")}).encode()
+    hreq = urllib.request.Request(
+        base + str(pcfg.get("token_path", "/identity/v1/oauth2/token")),
+        data=data, method="POST",
+        headers={"Authorization": "Basic " + cred,
+                 "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(hreq, timeout=HTTP_TIMEOUT_S) as resp:
+            t = json.load(resp)
+    except urllib.error.HTTPError as e:
+        raise Deny("gateway_error", f"ebay token mint failed (HTTP {e.code})")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise Deny("forge_unreachable", f"ebay token mint: {type(e).__name__}")
+    if not t.get("access_token"):
+        raise Deny("gateway_error", "ebay token response carried no access_token")
+    t["obtained_at"] = int(time.time())
+    fd = os.open(cache, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(t, f)
+    return base, t["access_token"]
+
+
+def verb_api_call(req, grant):
+    """Design §2 row api-call: <provider> <method> <path> [body-file]. Grant
+    kind api:<provider> (derived in handle()); body via file path, never argv;
+    response body mask-REWRITTEN before framing; the Authorization header is
+    built here and is structurally absent from the frame."""
+    argv = req.get("argv") or []
+    for tok in argv:
+        if P._METACHAR_RE.search(tok or ""):
+            raise Deny("argv_metachar", "argv token contains a shell metacharacter")
+    if len(argv) < 3 or len(argv) > 4:
+        raise Deny("argv_arity", "expected: <provider> <method> <path> [body-file]")
+    provider, method, path = argv[0], argv[1].upper(), argv[2]
+    pcfg = load_providers().get("providers", {}).get(provider)
+    if not isinstance(pcfg, dict):
+        raise Deny("provider_unknown", f"{provider!r} is not in providers.json")
+    if method not in API_METHODS:
+        raise Deny("argv_malformed", f"method must be one of {'/'.join(API_METHODS)}")
+    if not API_PATH_RE.match(path) or ".." in path:
+        raise Deny("argv_malformed", "path fails shape check")
+    body_obj = None
+    if len(argv) == 4:
+        text = read_worktree_file(argv[3], "body file")
+        try:
+            body_obj = json.loads(text)
+        except ValueError:
+            raise Deny("body_not_json", "body file must contain valid JSON")
+    if pcfg.get("auth") == "ebay-client-credentials":
+        base, token = _ebay_access_token(pcfg)
+    else:
+        base = str(pcfg.get("base_url", "")).rstrip("/")
+        if not base.startswith("https://"):
+            raise Deny("provider_unknown", f"{provider!r} has no https base_url")
+        token = read_store(pcfg.get("token_file", provider + ".token"),
+                           f"api-call {provider}")
+    code, obj = http_json(method, base, path, "Bearer", token, body_obj)
+    body_text = "" if obj is None else json.dumps(obj, sort_keys=True)
+    truncated = len(body_text) > BODY_MAX_BYTES
+    return {"provider": provider, "status": code,
+            "body": mask_rewrite(body_text[:BODY_MAX_BYTES]),
+            "truncated": truncated}
+
+
+def verb_plug(req, grant):
+    """Design §2 row plug: <name> on|off|state, node plug:<name>. Tapo creds
+    come from the engine store and reach kasa via KASA_USERNAME/KASA_PASSWORD
+    env (python-kasa's documented envvars) — never argv, so nothing lands in
+    /proc/*/cmdline."""
+    argv = req.get("argv") or []
+    if len(argv) != 2 or argv[1] not in PLUG_ACTIONS:
+        raise Deny("argv_arity", "expected: <plug> on|off|state")
+    name, action = argv
+    cfg = load_providers()
+    ip = cfg.get("plugs", {}).get(name)
+    if not PLUG_RE.match(name) or not isinstance(ip, str):
+        raise Deny("plug_unknown", f"{name!r} is not a mapped plug")
+    creds = read_env_file(cfg.get("plug_creds_file", "tapo.env"), "plug")
+    user, pw = creds.get("TAPO_USER"), creds.get("TAPO_PASS")
+    if not user or not pw:
+        raise Deny("token_unreadable", "tapo.env lacks TAPO_USER/TAPO_PASS")
+    env = {"PATH": "/usr/bin:/bin", "HOME": SECRETS_DIR,
+           "KASA_USERNAME": user, "KASA_PASSWORD": pw}
+    try:
+        p = subprocess.run([KASA_BIN, "--host", ip, action], env=env,
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Deny("plug_exec_failed", f"kasa: {type(e).__name__}")
+    out = ((p.stdout or "") + (p.stderr or ""))[-OUT_TAIL_BYTES:]
+    m = re.search(r"Device state:\s*(True|False)", out)
+    state = {"True": "on", "False": "off"}.get(m.group(1)) if m else ""
+    return {"plug": name, "action": action, "exit_code": p.returncode,
+            "state": state, "out": mask_rewrite(out)}
+
+
+def verb_ssh_run(req, grant):
+    """§7 rank 3: the fleet ssh key moves into the engine store, and the ssh
+    runs HERE, as uid tokeneng — the worker uid no longer holds a key that
+    reaches every node. Policy is deliberately identical to fleet-exec `run`
+    (same grant kind/verbs, same check_run readonly allowlist), so the move
+    changes who holds the key, never what a worker may execute."""
+    argv = req.get("argv") or []
+    if len(argv) < 2:
+        raise Deny("argv_arity", "expected: <node> <cmd> [args...]")
+    node, remote_argv = argv[0], argv[1:]
+    if not any("run" in (g.get("verbs") or [])
+               for g in P.find_grants(grant, "ssh", node)):
+        raise Deny("grant:no_ssh_run", f"no ssh grant for {node} with verb run")
+    try:
+        policy = P.load_policy(POLICY_PATH)
+    except P.PolicyError as e:
+        raise Deny("policy_unreadable", str(e))
+    ok, rule, reason = P.check_run(node, remote_argv, policy)
+    if not ok:
+        raise Deny(rule, reason)
+    key = os.path.join(SECRETS_DIR, "secrets", "fleet-ssh.key")
+    if not os.path.isfile(key):
+        raise Deny("token_unreadable",
+                   "engine store has no fleet-ssh.key — run token-engine/"
+                   "install.sh to migrate the worker ssh key")
+    cmd = [SSH_BIN, "-i", key, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+           "-o", "StrictHostKeyChecking=accept-new", node, "--",
+           *[shlex.quote(a) for a in remote_argv]]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=SSH_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Deny("ssh_exec_failed", f"ssh: {type(e).__name__}")
+    out = ((p.stdout or "") + (p.stderr or ""))[-OUT_TAIL_BYTES:]
+    return {"node": node, "exit_code": p.returncode, "out": mask_rewrite(out)}
+
+
 # verb -> (handler, grant kind, grant node). Every T2 verb needs a
 # {"kind": "token_engine", "node": "daemon"} grant entry; provider verbs added
 # by later children bring their own kinds per TOKEN_ENGINE_DESIGN.md §2.
@@ -624,6 +963,10 @@ VERBS = {
     "pr-files": (verb_pr_files, "pr_read", None),
     "pr-list": (verb_pr_list, "pr_read", None),
     "pr-merge": (verb_pr_merge, "pr_write", None),
+    "gateway-key": (verb_gateway_key, "gateway_admin", "gateway:litellm"),
+    "api-call": (verb_api_call, "api", API_FROM_ARGV),
+    "plug": (verb_plug, "plug", PLUG_FROM_ARGV),
+    "ssh-run": (verb_ssh_run, "ssh", NODE_FROM_ARGV),
 }
 
 
@@ -642,13 +985,31 @@ def handle(req, peer):
     if not WORKER_RE.match(worker):
         return False, "worker_malformed", "worker id fails shape check", {}, "deny"
     handler, kind, node = VERBS[verb]
+    argv = req.get("argv") or []
+    arg0 = argv[0] if argv and isinstance(argv[0], str) else ""
     if node is None:
         # PR verbs: the resource is the repo slug in argv[0] and the grant is
         # per-resource ({"kind": pr_*, "node": "repo:owner/name"}, design §2).
-        argv = req.get("argv") or []
-        if not argv or not isinstance(argv[0], str) or not REPO_RE.match(argv[0]):
+        if not REPO_RE.match(arg0):
             return False, "repo_malformed", "argv[0] must be owner/name", {}, "deny"
-        node = "repo:" + argv[0]
+        node = "repo:" + arg0
+    elif node == API_FROM_ARGV:
+        # api-call: BOTH the kind and the node are per-provider — a grant for
+        # api:cloudflare must not reach api:ebay (design §2, kind api:<provider>).
+        if not PROVIDER_RE.match(arg0):
+            return False, "provider_malformed", "argv[0] must name a provider", {}, "deny"
+        kind = node = "api:" + arg0
+    elif node == PLUG_FROM_ARGV:
+        if not PLUG_RE.match(arg0):
+            return False, "plug_malformed", "argv[0] must be a plug name (pN)", {}, "deny"
+        node = "plug:" + arg0
+    elif node == NODE_FROM_ARGV:
+        # ssh-run: same grant shape fleet-exec checks ({"kind": "ssh",
+        # "node": <name>, "verbs": [...]}); the verbs list is re-checked in
+        # the handler because find_grants matches kind+node only.
+        if not NODE_RE.match(arg0):
+            return False, "node_malformed", "argv[0] must be a fleet node name", {}, "deny"
+        node = arg0
     try:
         grant, why = P.load_grant(req.get("grant_file"), req.get("grant_sha"),
                                   req.get("ticket"), worker)

@@ -101,6 +101,36 @@ class LedgerTest(unittest.TestCase):
         for status, want in ((204, True), (401, True), (404, True), (500, False)):
             self.assertEqual(_gh_with_status(status)[0], want, status)
 
+    def test_litellm_key_idempotent_statuses_and_handoff_unlink(self):
+        # wq#2278: 200 = deleted, 400/404 = gateway already forgot the key;
+        # 500/network keep the entry ledgered. The handoff file dies on every
+        # attempt, success or not.
+        secrets = os.path.join(self.tmp.name, "secrets")
+        os.makedirs(secrets, exist_ok=True)
+        with open(os.path.join(secrets, "litellm-admin.token"), "w") as f:
+            f.write("adm-value\n")
+        for status, want in ((200, True), (400, True), (404, True), (500, False)):
+            handoff = os.path.join(self.tmp.name, "gwk-test.key")
+            with open(handoff, "w") as f:
+                f.write("value\n")
+            ok, reason = _litellm_with_status(status, handoff)
+            self.assertEqual(ok, want, status)
+            self.assertFalse(os.path.exists(handoff), status)
+
+    def test_litellm_key_admin_unreadable_fails_closed(self):
+        ok, reason = L._revoke_litellm_key({"key": "x", "base_url": "http://gw"})
+        self.assertFalse(ok)
+        self.assertIn("admin key", reason)
+
+    def test_revoke_one_scopes_to_the_named_token(self):
+        mint("2278", self.tmp.name, token_id="keep")
+        mint("2278", self.tmp.name, token_id="kill")
+        r = L.revoke_one("2278", "kill")
+        self.assertEqual(r, {"found": 1, "revoked": 1, "failed": 0})
+        self.assertEqual(L.MINTED["2278"], ["keep"])
+        self.assertEqual(L.revoke_one("2278", "kill"),
+                         {"found": 0, "revoked": 0, "failed": 0})
+
 
 def _gh_with_status(status):
     import unittest.mock as mock
@@ -115,6 +145,23 @@ def _gh_with_status(status):
     err = urllib.error.HTTPError("u", status, "m", {}, None)
     with mock.patch("urllib.request.urlopen", side_effect=err):
         return L._revoke_github_app({"token": "x"})
+
+
+def _litellm_with_status(status, handoff):
+    import unittest.mock as mock
+    import urllib.error
+    revoke = {"key": "value", "base_url": "http://gw",
+              "admin_key_file": "litellm-admin.token", "key_file": handoff}
+    if status == 200:
+        resp = mock.MagicMock()
+        resp.status = 200
+        resp.__enter__ = lambda s: resp
+        resp.__exit__ = lambda s, *a: False
+        with mock.patch("urllib.request.urlopen", return_value=resp):
+            return L._revoke_litellm_key(revoke)
+    err = urllib.error.HTTPError("u", status, "m", {}, None)
+    with mock.patch("urllib.request.urlopen", side_effect=err):
+        return L._revoke_litellm_key(revoke)
 
 
 if __name__ == "__main__":

@@ -47,6 +47,7 @@ install -D -m 0644 -o root -g root "$SRC/token_ledger.py" "$LIB/token_ledger.py"
 install -D -m 0644 -o root -g root "$POLICY_SRC" "$LIB/fleet_exec_policy.py"
 install -D -m 0755 -o root -g root "$SRC/te_client.py" "$LIB/te_client.py"
 install -D -m 0644 -o root -g root "$SRC/forges.json" "$LIB/forges.json"
+install -D -m 0644 -o root -g root "$SRC/providers.json" "$LIB/providers.json"
 
 # wq#2273 (T4, design §7 ranks 1/2/4): COPY the PR-verb tokens into the engine
 # store. Copy, not move — git push still authenticates off the old path until
@@ -58,6 +59,44 @@ for tok in github-frank.token github-lumen-classic.token gitea-lumen.token; do
             "/home/lumen/.secrets/$tok" "$STATE/secrets/$tok"
     fi
 done
+
+# wq#2278 (T10, design §7 ranks 5-8 + rank 3): migrate the remaining
+# inventory into the store. COPY, not move — the same T4 rule as the forge
+# tokens above: plug-ctl/power-remediate still source tapo.env, bin/ebay-token
+# still reads ebay.env, and fleet-exec still runs ssh itself until its
+# bin-repo change lands ssh-run delegation; deleting an original here would
+# break a live consumer (power remediation!) before its verb path exists.
+# Once every consumer is on verbs, re-run with TE_FINALIZE_MOVE=1 to shred the
+# originals — THAT is the step that makes ranks 5-8 unreadable by uid lumen.
+migrate() { # migrate <src> <dest-basename>
+    local src="$1" dest="$STATE/secrets/$2"
+    [ -f "$src" ] || { echo "skip: $src absent"; return 0; }
+    install -m 0600 -o tokeneng -g tokeneng "$src" "$dest"
+    if [ "${TE_FINALIZE_MOVE:-0}" = 1 ]; then
+        shred -u "$src" 2>/dev/null || rm -f "$src"
+        echo "moved $src -> $dest (original shredded)"
+    else
+        echo "copied $src -> $dest (original stays until its reader migrates)"
+    fi
+}
+migrate /home/lumen/secrets/ebay.env        ebay.env               # rank 8
+migrate /home/lumen/.config/tapo.env        tapo.env
+migrate "${CLOUDFLARE_TOKEN_SRC:-/home/lumen/.secrets/cloudflare-api.token}" \
+                                            cloudflare-api.token   # rank 7 (API token; tunnel cred stays root-only)
+migrate /home/lumen/.ssh/id_ed25519         fleet-ssh.key          # rank 3
+# Rank 5: the LiteLLM mint key is operator-held (never in a lumen-readable
+# file — ops/wq1747 credential hygiene), so it arrives via env at install
+# time: LITELLM_ADMIN_KEY=... lumen-run start --root -- bash install.sh
+if [ -n "${LITELLM_ADMIN_KEY:-}" ]; then
+    install -m 0600 -o tokeneng -g tokeneng /dev/null "$STATE/secrets/litellm-admin.token"
+    printf '%s\n' "$LITELLM_ADMIN_KEY" > "$STATE/secrets/litellm-admin.token"
+    echo "installed litellm-admin.token from env"
+else
+    echo "skip: LITELLM_ADMIN_KEY not set — gateway-key mint stays unavailable" \
+         "(fworker falls back to the long-lived virtual key)"
+fi
+# ssh-run runs ssh as uid tokeneng: it needs a writable ~/.ssh for known_hosts.
+install -d -m 0700 -o tokeneng -g tokeneng "$STATE/.ssh"
 
 # The daemon reads the per-repo identity map live (paths only, no secrets);
 # grant tokeneng traversal + read so a map edit needs no reinstall.
