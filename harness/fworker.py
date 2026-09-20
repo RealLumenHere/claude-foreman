@@ -171,6 +171,13 @@ LITELLM_BASE_URL = os.environ.get("FOREMAN_LITELLM_BASE_URL", "http://localhost:
 # /home/lumen/.secrets/*.token. NEVER the LiteLLM master key.
 LITELLM_KEY_FILE = os.environ.get("FOREMAN_LITELLM_KEY_FILE",
                                    "/home/lumen/.secrets/foreman-litellm.token")
+# T10 (wq#2278, TOKEN_ENGINE_DESIGN.md §7 rank 5): prefer a PER-TICKET LiteLLM
+# key minted by the token-engine broker with a duration and a budget, revoked at
+# attempt end; the static file above becomes the fallback for hosts where the
+# broker (or its gateway-key verb) is not installed yet.
+TOKEN_ENGINE_SOCK = os.environ.get("TOKEN_ENGINE_SOCK", "/run/token-engine/broker.sock")
+GATEWAY_KEY_TTL = os.environ.get("FOREMAN_GATEWAY_KEY_TTL", "24h")
+GATEWAY_KEY_BUDGET = os.environ.get("FOREMAN_GATEWAY_KEY_BUDGET", "15")
 
 
 def is_local_model(model):
@@ -305,6 +312,90 @@ def local_rung_gate(model, archetype):
 def read_litellm_key():
     with open(LITELLM_KEY_FILE) as f:
         return f.read().strip()
+
+
+def _te_broker_call(req, timeout=25):
+    """One JSON frame to the token-engine broker (token-engine/te_client.py
+    wire contract). Raises on any transport problem; callers fall back."""
+    import socket as _socket
+    s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(TOKEN_ENGINE_SOCK)
+        s.sendall((json.dumps(req) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+    finally:
+        s.close()
+    return json.loads(buf.split(b"\n", 1)[0].decode())
+
+
+def _te_gateway_grant(ticket_id):
+    """Self-issued gateway_admin grant for the broker's re-read (same trust
+    model as resolve_exec_grant — grants are fworker-attested, ISSUE-LOG 557
+    tracks binding them harder). 0444 so uid tokeneng can read it."""
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=10)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    grant = {"ticket": f"wq{ticket_id}", "expires": expires,
+             "grants": [{"kind": "gateway_admin", "node": "gateway:litellm"}]}
+    raw = json.dumps(grant, sort_keys=True).encode() + b"\n"
+    path = os.path.join(run_dir(ticket_id), "gateway-grant.json")
+    if os.path.exists(path):
+        os.chmod(path, 0o600)
+    with open(path, "wb") as f:
+        f.write(raw)
+    os.chmod(path, 0o444)
+    return path, fleet_exec_policy.sha256_bytes(raw)
+
+
+def _te_gateway_key(ticket_id, op, argv):
+    path, sha = _te_gateway_grant(ticket_id)
+    return _te_broker_call({
+        "verb": "gateway-key", "argv": [op] + argv, "ticket": f"wq{ticket_id}",
+        "attempt": 1, "worker": f"fworker-wq{ticket_id}",
+        "grant_file": path, "grant_sha": sha})
+
+
+def mint_ticket_gateway_key(ticket_id):
+    """Per-ticket key value, or None when the broker path is unavailable or
+    refuses — the caller then uses the long-lived static key unchanged. The
+    broker frame carries key id/expiry and a 0640 handoff file path, never the
+    key value (schema-asserted daemon-side); the value is read from the file."""
+    if not os.path.exists(TOKEN_ENGINE_SOCK):
+        return None
+    try:
+        resp = _te_gateway_key(ticket_id, "mint",
+                               [GATEWAY_KEY_TTL, GATEWAY_KEY_BUDGET])
+        if not resp.get("ok"):
+            log(f"wq#{ticket_id}: gateway-key mint denied "
+                f"[{resp.get('rule')}] — falling back to static key")
+            return None
+        with open(resp["result"]["key_file"]) as f:
+            key = f.read().strip()
+        log(f"wq#{ticket_id}: per-ticket gateway key "
+            f"{resp['result'].get('key_id')} expires {resp['result'].get('expires')}")
+        return key or None
+    except (OSError, ValueError, KeyError) as e:
+        log(f"wq#{ticket_id}: gateway-key mint unavailable ({type(e).__name__}) "
+            f"— falling back to static key")
+        return None
+
+
+def revoke_ticket_gateway_key(ticket_id):
+    """Best-effort attempt-end revocation; idempotent daemon-side. Never raises
+    — a broker outage must not change the attempt verdict."""
+    if not os.path.exists(TOKEN_ENGINE_SOCK):
+        return
+    try:
+        resp = _te_gateway_key(ticket_id, "revoke", [])
+        log(f"wq#{ticket_id}: gateway-key revoke "
+            f"{'ok' if resp.get('ok') else 'refused [' + str(resp.get('rule')) + ']'}")
+    except (OSError, ValueError) as e:
+        log(f"wq#{ticket_id}: gateway-key revoke unavailable ({type(e).__name__})")
 
 def _envint(name, default):
     try:
@@ -1319,7 +1410,10 @@ def build_env(worker_id, model, effort, worktree, ticket_id, cli_profile=False):
     # leak the gateway vars into a later cloud dispatch on the same host/session.
     if is_local_model(model):
         env["ANTHROPIC_BASE_URL"] = LITELLM_BASE_URL
-        env["ANTHROPIC_AUTH_TOKEN"] = read_litellm_key()
+        # T10 (wq#2278): per-ticket duration+budget key from the token-engine
+        # broker when it is up; the long-lived static key only as fallback.
+        env["ANTHROPIC_AUTH_TOKEN"] = (mint_ticket_gateway_key(ticket_id)
+                                       or read_litellm_key())
         env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
     if cli_profile:
         env.update(local_profile_env())
@@ -2622,6 +2716,11 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # so this snapshot is the session-exit reading regardless of how the child ended.
     rate_limits_exit = read_rate_limits_snapshot()
     elapsed = time.time() - t0
+    # T10 (wq#2278): the per-ticket gateway key dies with the attempt (steer
+    # resumes returned above and keep theirs; a re-attempt re-mints). Best
+    # effort — the daemon-start reaper (T9) covers a killed fworker.
+    if is_local_model(args.model):
+        revoke_ticket_gateway_key(ticket_id)
 
     # §C9 SUCCESS-BUT-STUCK: fworker forced this kill AFTER a real terminal result had
     # already landed — the resulting SIGTERM/SIGKILL exit code is expected, not a §D

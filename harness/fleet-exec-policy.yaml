@@ -230,3 +230,19 @@ copy_dirs:
 # bench is v2 (fleet-exec has no `bench` verb yet).
 bench_tools:
   thor: [adb, fastboot]
+
+# --- token-engine T10 verbs (wq#2278, TOKEN_ENGINE_DESIGN.md §2) -----------
+# Static policy AND grant: the daemon checks these sections before the grant
+# match, same deny-by-default posture as run_readonly_cmds above.
+
+# gateway-key ops the broker will perform against LiteLLM. Mint is per-ticket,
+# duration+budget capped; the key VALUE leaves via the 0640 handoff file, never
+# a response frame.
+gateway_admin_ops: [mint, revoke]
+
+# Providers api-call may reach. Each needs credential wiring in the daemon
+# (_provider_request) — listing one here without wiring still denies.
+api_providers: [cloudflare, ebay]
+
+# Smart plugs the plug verb may drive (names as plug-ctl knows them).
+plug_names: [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p13, p14]

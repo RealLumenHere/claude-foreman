@@ -37,6 +37,45 @@ chown -R tokeneng:tokeneng "$STATE/secrets"
 find "$STATE/secrets" -maxdepth 1 -type f -exec chmod 0600 {} +
 chmod 0700 "$STATE/secrets"
 
+# (T10, wq#2278) migrate ranks 5-8 + rank 3 into the store (design §7).
+# Default is COPY-ONLY: the lumen-readable original stays until every consumer
+# rides the broker. Re-run with CUTOVER=1 to remove the originals — that is the
+# moment the gate "unreadable by uid lumen" becomes true for each rank.
+CUTOVER="${CUTOVER:-0}"
+migrate() { # $1=src $2=dst-name-under-secrets
+    local src="$1" dst="$STATE/secrets/$2"
+    if [ ! -f "$src" ]; then echo "migrate: $src absent — skipped"; return 0; fi
+    install -D -m 0600 -o tokeneng -g tokeneng "$src" "$dst"
+    echo "migrated $src -> $dst"
+    if [ "$CUTOVER" = "1" ]; then rm -f "$src"; echo "cutover: removed $src"; fi
+}
+# rank 5 — LiteLLM ADMIN key (source path is operator-supplied: the repo never
+# hardcodes it; FOREMAN_LITELLM_ADMIN_KEY_FILE is the same env
+# node_render_gateway.py:46 uses). The per-ticket keys the daemon mints replace
+# the long-lived worker key at fworker.py's build_env.
+if [ -n "${FOREMAN_LITELLM_ADMIN_KEY_FILE:-}" ]; then
+    migrate "$FOREMAN_LITELLM_ADMIN_KEY_FILE" litellm-admin.token
+fi
+# rank 8 — eBay client credential env (bin/ebay-token:6). The daemon mints its
+# own access tokens from this; the lumen-readable token cache is not migrated
+# (it holds only ~2 h access tokens that expire on their own).
+migrate /home/lumen/secrets/ebay.env ebay.env
+# rank 7 — Cloudflare ADMIN API token for api-call (operator-supplied source;
+# the cloudflared TUNNEL credential stays root-owned — instinct #5 unchanged).
+if [ -n "${CLOUDFLARE_API_TOKEN_FILE:-}" ]; then
+    migrate "$CLOUDFLARE_API_TOKEN_FILE" cloudflare-api.token
+fi
+# rank 3 — the fleet ssh key fleet-exec's run_ssh used from uid lumen
+# (fleet-exec:49). ssh-exec runs the transport in the daemon; cutover here
+# additionally requires fleet-exec's run_ssh to be pointed at the broker first.
+install -d -m 0700 -o tokeneng -g tokeneng "$STATE/secrets/fleet-ssh"
+migrate "${FLEET_EXEC_SSH_KEY:-/home/lumen/.ssh/id_ed25519}" fleet-ssh/id_ed25519
+migrate "${FLEET_EXEC_SSH_KEY:-/home/lumen/.ssh/id_ed25519}.pub" fleet-ssh/id_ed25519.pub
+
+# T10 verbs read grant body-files from worker worktrees and the policy yaml
+# from the harness tree: traversal only, no read widening beyond world-readable.
+setfacl -m u:tokeneng:x /home/lumen/worktrees 2>/dev/null || true
+
 # Code runs from a root-owned copy: uid lumen must not be able to edit what uid
 # tokeneng executes, or the file-permission boundary is fiction. The policy
 # module is snapshotted from bin for the same reason.

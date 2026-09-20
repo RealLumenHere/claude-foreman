@@ -25,6 +25,18 @@ def _scratch_root_in_tmp(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_live_token_engine(monkeypatch, tmp_path):
+    """wq#2278: build_env on a local-pool model asks the LIVE token-engine broker
+    for a per-ticket gateway key when its socket exists. Point every test at a
+    nonexistent socket (mint falls back to the static key file with no I/O);
+    test_gateway_key_per_ticket.py overrides with its own fake broker."""
+    import fworker
+    # env var too: tests that importlib.reload(fworker) re-read it from os.environ.
+    monkeypatch.setenv("TOKEN_ENGINE_SOCK", str(tmp_path / "no-broker.sock"))
+    monkeypatch.setattr(fworker, "TOKEN_ENGINE_SOCK", str(tmp_path / "no-broker.sock"))
+
+
+@pytest.fixture(autouse=True)
 def _no_refill_kick(monkeypatch):
     """wq#2069: every fworker exit calls trigger_refill(), which sudo-starts the LIVE
     lumen-foreman-dispatch.service. Subprocess fworkers inherit os.environ, so this
