@@ -13,7 +13,7 @@ work-1701; export WQ_AGENT; ...; wq claim 1701`. Two failures were reported:
 
 ## What changed
 
-### 1. `wq whoami --register <name> --eval` (lumen-bin PR #94, unlanded — see below)
+### 1. `wq whoami --register <name> --eval` (lumen-bin PR #94, superseded by landed PR #116 — see below)
 
 New `--eval` flag on `whoami`. With `--register`, it routes every line EXCEPT
 `export WQ_AGENT=<sid>` through a local `out()` that goes to stderr instead of
@@ -31,16 +31,17 @@ Diff: `wq1720_wq_eval.diff` in this directory (commit `b1e839d` on
 `lumen-bin@feat/wq1720-session-boilerplate`, PR
 http://100.121.17.5:3000/lumen/lumen-bin/pulls/94).
 
-**Landed but not yet deployed to the primary.** `lumen-pr land` refuses:
-`/home/lumen/bin` (the primary `lumen-bin` checkout every orchestrator actually
-runs) carries 106 lines of pre-existing, unrelated uncommitted hunks to `wq`
-(wq#1538 — "deployed wq carries 9 tickets of live-only hunks", tracked
-separately). Landing now would silently supersede that work (wq#771/wq#792 guard,
-no override). PR #94 is open, pushed, green (14/14 `whoami`/`claim` tests pass);
-it needs wq#1538's primary-tree reconciliation (or `ops/wq1537-primary-file-deploy-sync`-style
-resync) before `lumen-pr land` will take it. **Until then `--eval` exists on this
-PR branch and in the ISSUE-LOG entry below, but not yet on the live
-`/home/lumen/bin/wq` a fresh session actually invokes.**
+**Landed and deployed to the primary (wq#1759, 2026-09-20).** PR #94 was first
+blocked by wq#1538 primary drift (106 lines of unrelated uncommitted hunks in `wq`),
+so the header shipped live while `--eval` did not exist where fresh sessions run —
+`wq: error: unrecognized arguments: --eval`, exit 2, empty stdout, `eval "$(...)"`
+silently a no-op (wq#1753 verify). Once the primary `wq` was clean again, PR #94 had
+gone stale (main +27 commits, gitea `mergeable=false`), so `b1e839d` was cherry-picked
+onto main (clean) and landed as lumen-bin PR #116
+(http://100.121.17.5:3000/lumen/lumen-bin/pulls/116); the primary fast-forwarded to
+`3a0beb6`. Check against the deployed primary:
+`python3 /home/lumen/bin/wq whoami --register x --eval 2>/dev/null` prints exactly
+`export WQ_AGENT=x-<6hex>`. PR #94 is superseded by #116.
 
 ### 2. `wq claim <numeric>` refusal naming `wq claim --id N`
 
