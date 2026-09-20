@@ -97,6 +97,21 @@ overrides the primary stall watchdog; `--post-result-grace SEC` (env
 before fworker force-kills a stuck-but-already-succeeded child (§C9). Both exist mainly
 so tests can run them fast — production defaults are fine left alone.
 
+**Dispatch rebuild step 4 (wq#2128), `charging.py`.** The frame-gap window is split:
+`FOREMAN_FRAME_GAP_S` (240) now applies only after the first model frame (system/init does
+not count); before it the first-frame budget rules — cloud 240, local `FOREMAN_FIRST_FRAME_S`
+(default 1500, passed per backend by the dispatcher). `--frame-gap-timeout` still means one
+single window. Every `attempt-N.json` carries `charged_to` (`ticket|rung|harness|budget`) and
+`failure_cause` (rule table: `research/DISPATCH_FIX_RESEARCH.md` 2.2). A `rung` charge (local
+HANG with no turns, LiteLLM 5xx/timeout/cooldown, backend unreachable, ctx overflow) releases
+the ticket to `open`, is not counted toward `MAX_ATTEMPTS`, and appends the backend
+(`FOREMAN_BACKEND`, else the model id) to `dispatcher/runtime/backend_cooldown.json` — 15 min,
+doubling to 2 h; if the ticket still ends blocked its reason starts `RUNG_FAULT:`. Local-rung
+`mechanical-edit`/`probe-build` tickets use the slim `prompts/local_<archetype>.md` (static
+prefix first) and are refused as a harness fault (uncharged) when the rendered prompt exceeds
+0.6 x `FOREMAN_SERVED_CTX` (default 32768) at chars/3.5 tokens. Rollback lever:
+`FOREMAN_CHARGE_MODE=legacy` turns all of it off.
+
 ## Lease reaper (wq#647, §E)
 
 wq's own lease-expiry reclaim only runs lazily, inside a `wq claim` call for the SAME

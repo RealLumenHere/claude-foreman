@@ -74,7 +74,9 @@ def make_scratch_env(tmp_path, ticket, scenario, extra=None):
 
 
 def wq_add(env, title):
-    p = subprocess.run([WQ_BIN, "add", "--title", title], capture_output=True, text=True, env=env)
+    # wq#2139: `wq add` refuses lane 'auto' (no LANE_REPO row); 'build' is mapped.
+    p = subprocess.run([WQ_BIN, "add", "--lane", "build", "--title", title],
+                       capture_output=True, text=True, env=env)
     assert p.returncode == 0, p.stdout + p.stderr
     # "added task 1 [auto]"
     return int(p.stdout.strip().split()[2])
@@ -397,7 +399,7 @@ def test_dep_preflight_defers_without_claiming_or_spawning(tmp_path):
     repo = make_scratch_repo(tmp_path)
     env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(tmp_path, 0, "success")
     dep_id = wq_add(env, "scratch dep ticket, left open on purpose")
-    p = subprocess.run([WQ_BIN, "add", "--title", "scratch dependent ticket",
+    p = subprocess.run([WQ_BIN, "add", "--lane", "build", "--title", "scratch dependent ticket",
                          "--deps", str(dep_id)], capture_output=True, text=True, env=env)
     assert p.returncode == 0, p.stdout + p.stderr
     ticket_id = int(p.stdout.strip().split()[2])
@@ -424,7 +426,7 @@ def test_dep_preflight_proceeds_once_dep_is_done(tmp_path):
                                 "test-setup dep ticket, no real work done"],
                                capture_output=True, text=True, env=env)
     assert dep_done.returncode == 0, dep_done.stdout + dep_done.stderr
-    p = subprocess.run([WQ_BIN, "add", "--title", "scratch dependent ticket, ready",
+    p = subprocess.run([WQ_BIN, "add", "--lane", "build", "--title", "scratch dependent ticket, ready",
                          "--deps", str(dep_id)], capture_output=True, text=True, env=env)
     assert p.returncode == 0, p.stdout + p.stderr
     ticket_id = int(p.stdout.strip().split()[2])

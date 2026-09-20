@@ -59,6 +59,7 @@ import needs as needs_mod
 import capability
 import agents_spec
 import fire_gate
+import charging
 
 # wq#1332 (WORKER_EXEC_CAPABILITY_GAP.md §2.4): fleet_exec_policy.py lives in the
 # lumen-bin repo alongside the fleet-exec broker it backs, not in foreman — same
@@ -184,6 +185,33 @@ def local_allowed_archetypes(model):
     return LOCAL_ALLOWED_ARCHETYPES
 
 
+# wq#2128: the rung a failed attempt can be charged to. deepseek-v4-flash rides the same
+# LiteLLM trust route but is a cloud model (cheap_cloud), so it keeps the cloud timeouts and
+# is never charged as a rung fault; `local-worker` is the LiteLLM group the dispatcher rebuild
+# (wq#2127) routes to the Macs.
+LOCAL_RUNG_MODELS = tuple(m for m in LOCAL_POOL_MODELS if m != "deepseek-v4-flash") + (
+    "local-worker",)
+# dispatcher/runtime/backend_cooldown.json — the dispatcher reads it to skip a cooling rung.
+BACKEND_COOLDOWN_FILE = os.environ.get(
+    "FOREMAN_BACKEND_COOLDOWN_FILE",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "dispatcher", "runtime", "backend_cooldown.json"))
+
+
+def is_local_rung(model):
+    return bool(model) and any(model.startswith(m) for m in LOCAL_RUNG_MODELS)
+
+
+def backend_key(model):
+    """Cooldown key: the dispatcher names the concrete box in FOREMAN_BACKEND when it
+    spawns a worker; without it the dispatched model id is the finest grain we know."""
+    return os.environ.get("FOREMAN_BACKEND") or model
+
+
+def first_frame_timeout(model):
+    return charging.first_frame_timeout_s(is_local_rung(model))
+
+
 # wq#687: silent-downgrade detection. The DeepSeek "best practices" doc that
 # prompted this was mostly filter-evasion junk, but one real concern hid in it:
 # "am I silently getting a weaker model than I asked for?" The honest answer is
@@ -282,7 +310,13 @@ def wall_clock_timeout(archetype):
 # 120-300s (above the slowest legit tool call) — wall-clock above is the secondary
 # ceiling. 600s predates §E and sat well outside that range; --frame-gap-timeout / this
 # env var override it per-run (tests need a fast one), the default now lives in-range.
+#
+# wq#2128: that one window is split. INACTIVITY_TIMEOUT_S (still FOREMAN_FRAME_GAP_S)
+# now applies only AFTER the first model frame. Before it, FIRST_FRAME_TIMEOUT_S rules:
+# cloud 240 (the old behaviour), local from FOREMAN_FIRST_FRAME_S (default 1500) because
+# prompt eval on the Macs is 8-15 tok/s. FOREMAN_CHARGE_MODE=legacy restores one window.
 INACTIVITY_TIMEOUT_S = _envint("FOREMAN_FRAME_GAP_S", 240)
+FIRST_FRAME_TIMEOUT_S = charging.CLOUD_FIRST_FRAME_S
 # §C9 SUCCESS-BUT-STUCK (#25629): once a terminal result frame has landed, a much
 # shorter grace covers the "process just won't exit" case — no more real work is
 # coming, so there is no reason to wait out the full frame-gap window before forcing it.
@@ -382,6 +416,8 @@ EXIT_LAUNCH_REFUSED = 21  # wq#1331: spawn preflight refused (repo mismatch / un
                           # cited path) — harness defect, attempt not charged
 EXIT_MODEL_NOT_FOUND = 22  # wq#1442: dispatched --model id/alias rejected by the CLI
                            # (model_not_found/404) — harness defect, attempt not charged
+EXIT_RUNG_FAULT = 23  # wq#2128: the model backend failed, not the ticket — released to open
+                      # uncharged, backend put on cooldown
 
 # wq#1261 (#13 item 3): expired/rework fire tickets re-dispatch at most FIRE_ATTEMPT_FENCE
 # times before the 3rd strike escalates to FRANK instead of running again. Only outcomes
@@ -1624,7 +1660,8 @@ def _observe_gateway_event(ev, state, loop_tracker):
 
 
 def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
-                       frame_gap_s=None, post_result_grace_s=None, loop_tracker=None):
+                       frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
+                       first_frame_s=None):
     """Gateway-backed sibling of run_child(): identical signature and identical
     6-tuple return (state, exit_code, raw_events, killed_reason, cpu_s, pid), so a
     caller's choice of which one to call is a plain conditional (PHASE2_WIRING_SPEC.md
@@ -1649,7 +1686,7 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
         fb_state, exit_code, raw_events, killed_reason, cpu_s, pid = run_child(
             cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             frame_gap_s=frame_gap_s, post_result_grace_s=post_result_grace_s,
-            loop_tracker=loop_tracker)
+            loop_tracker=loop_tracker, first_frame_s=first_frame_s)
         fb_state.gateway_backend = False
         fb_state.gateway_fallback = True
         fb_state.gateway_fallback_reason = reason
@@ -1746,7 +1783,8 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
 
 
 def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
-              frame_gap_s=None, post_result_grace_s=None, loop_tracker=None):
+              frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
+              first_frame_s=None):
     """Spawn, parse stream-json, enforce watchdogs. Returns (RunState, exit_code,
     raw_events, killed_reason, cpu_s, pid).
 
@@ -1757,6 +1795,11 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     is corroboration only (returned as cpu_s for the attempt record / LAUNCH_FAILURE
     triage), never a watchdog trigger — a child can legitimately burn near-zero CPU
     while waiting on a slow tool call.
+
+    wq#2128: first_frame_s splits the window. Until the first model frame (anything but
+    the CLI's system/init and retry chatter, see charging.is_model_frame) the run is held
+    to first_frame_s measured from spawn; frame_gap_s only applies after it. None keeps the
+    single pre-split window (legacy mode, and callers that pass an explicit frame_gap_s).
     """
     frame_gap_s = frame_gap_s if frame_gap_s is not None else INACTIVITY_TIMEOUT_S
     post_result_grace_s = (post_result_grace_s if post_result_grace_s is not None
@@ -1793,6 +1836,7 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     # short poll interval when either watchdog window is itself short (tests), so
     # detection latency stays a fraction of the window instead of the flat 5s floor.
     poll_timeout = max(0.25, min(5, frame_gap_s, post_result_grace_s) / 4)
+    first_frame_seen = first_frame_s is None
 
     while True:
         now = time.time()
@@ -1812,7 +1856,10 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         if done_seen_at is not None and now - done_seen_at >= POST_DONE_GRACE_S:
             killed_reason = "ticket_done"
             break
-        if now - last_event >= frame_gap_s:
+        if not first_frame_seen and now - start >= first_frame_s:
+            killed_reason = "first_frame"
+            break
+        if first_frame_seen and now - last_event >= frame_gap_s:
             killed_reason = "inactivity"
             break
         if now - last_heartbeat >= HEARTBEAT_INTERVAL_S:
@@ -1850,6 +1897,8 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             continue
         raw_events.append(frame)
         state.observe(frame)
+        if not first_frame_seen and charging.is_model_frame(frame):
+            first_frame_seen = True
         # Layer 2 (TIERED_INTELLIGENCE_DESIGN.md, wq#985): loop breaker. This is
         # what Frank had to do manually on the Miko — the harness does it for him.
         if loop_tracker is not None:
@@ -1872,8 +1921,9 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             break
 
     if killed_reason:
-        if killed_reason == "inactivity":
+        if killed_reason in ("inactivity", "first_frame"):
             state.hung = True
+            state.first_frame_timeout = killed_reason == "first_frame"
         elif killed_reason == "turns_exceeded":
             state.turns_exceeded = True
         _kill_proc_tree(proc)
@@ -1962,6 +2012,46 @@ def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None,
             .replace("{{WORKTREE}}", worktree)
             .replace("{{DISTILLED_MEMORY}}", memory_block)
             .replace("{{PRIOR_ATTEMPT_NOTES}}", prior_notes))
+
+
+def local_prompt_template(model, archetype):
+    """wq#2128: path of the slim local template for this dispatch, or None to use
+    worker.md. Only a local-rung model on a local-trusted archetype gets one, and
+    FOREMAN_CHARGE_MODE=legacy always gets worker.md."""
+    if charging.legacy_mode() or not is_local_rung(model):
+        return None
+    if archetype not in LOCAL_ALLOWED_ARCHETYPES:
+        return None
+    path = os.path.join(HARNESS_DIR, "prompts", f"local_{archetype}.md")
+    return path if os.path.exists(path) else None
+
+
+def load_local_prompt(tmpl_path, ticket_id, ticket, worktree, prior_notes_path=None,
+                       acceptance_doc=None, rework=None):
+    """Slim local prompt. Everything above the `---` line is static text with no
+    placeholders, so it is byte-identical across tickets and the backend's KV prefix
+    cache is reused; every per-ticket value (rework, contract, ticket, notes) sits after
+    it. One regex pass, so a `{{X}}` inside a ticket detail is never re-expanded.
+    No instincts pack, no distilled memory: the 4k-token target is the point."""
+    with open(tmpl_path) as f:
+        tmpl = f.read()
+    prior_notes = ""
+    if prior_notes_path and os.path.exists(prior_notes_path):
+        with open(prior_notes_path) as f:
+            prior_notes = f.read()
+    values = {
+        "REWORK": acceptance_mod.rework_block(rework) if rework else "",
+        "ACCEPTANCE_CONTRACT": (acceptance_mod.contract_block(acceptance_doc, worktree)
+                                 if acceptance_doc else ""),
+        "TICKET_ID": str(ticket_id), "TITLE": ticket.get("title", ""),
+        "DETAIL": ticket.get("detail", ""), "WORKTREE": worktree,
+        "PRIOR_ATTEMPT_NOTES": prior_notes,
+    }
+    head, sep, tail = tmpl.partition("\n---\n")
+    for key in [k for k, v in values.items() if not v]:
+        tail = tail.replace("{{%s}}\n\n" % key, "").replace("{{%s}}" % key, "")
+    tail = re.sub(r"\{\{(\w+)\}\}", lambda m: values.get(m.group(1), m.group(0)), tail)
+    return head + sep + tail
 
 
 # ---------------------------------------------------------------------------
@@ -2297,11 +2387,20 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     rework = (acceptance_mod.read_json(
         os.path.join(run_dir(ticket_id), acceptance_mod.REWORK_FILENAME))
         if evidence_rejected(ticket_id) else None)
-    prompt = load_worker_prompt(
-        ticket_id, ticket, worktree,
-        prior_notes_path if (attempt > 1 and not resume_session) else None,
-        acceptance_doc=acceptance_doc, rework=rework,
-    )
+    prior_notes_arg = prior_notes_path if (attempt > 1 and not resume_session) else None
+    local_tmpl = local_prompt_template(args.model, archetype)
+    if local_tmpl:
+        prompt = load_local_prompt(local_tmpl, ticket_id, ticket, worktree, prior_notes_arg,
+                                    acceptance_doc=acceptance_doc, rework=rework)
+    else:
+        prompt = load_worker_prompt(ticket_id, ticket, worktree, prior_notes_arg,
+                                     acceptance_doc=acceptance_doc, rework=rework)
+    # wq#2128: a prompt that cannot fit the served context is a harness fault, refused
+    # before any token is spent and never charged (SpawnRefused writes no attempt record).
+    over_ctx = (None if charging.legacy_mode() or not is_local_rung(args.model)
+                else charging.prompt_over_ctx(prompt))
+    if over_ctx:
+        raise SpawnRefused("PROMPT_OVER_CTX", over_ctx, worktree=worktree)
 
     env = build_env(worker_id, args.model, args.effort, worktree, ticket_id)
     if grant_path:
@@ -2357,10 +2456,13 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # FOREMAN_GATEWAY_LANES (default empty: no lane, so every ticket keeps spawning
     # claude -p directly until an operator opts one in — harness/GATEWAY_CANARY.md).
     run_fn = run_child_gateway if gateway_lane_enabled(ticket.get("lane")) else run_child
+    # wq#2128: an explicit --frame-gap-timeout keeps the single pre-split window.
+    first_frame_s = (None if charging.legacy_mode() or args.frame_gap_timeout is not None
+                     else first_frame_timeout(args.model))
     state, exit_code, events, killed_reason, cpu_s, child_pid = run_fn(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
         frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace,
-        loop_tracker=loop_tracker)
+        loop_tracker=loop_tracker, first_frame_s=first_frame_s)
     if killed_reason == "steer" and state.session_id:
         # wq#2138: same attempt number — a harness-side refusal must not cost the
         # ticket an attempt. The resumed tracker is `steered`, so a second refusal
@@ -2495,8 +2597,15 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         f"exit={exit_code} killed_reason={killed_reason} turns={state.turns} "
         f"elapsed={elapsed:.0f}s cpu_s={cpu_s:.1f} session_id={state.session_id}")
 
+    charged_to, failure_cause = charging.classify_charge(
+        classification, turns=state.turns, is_local=is_local_rung(args.model),
+        killed_reason=killed_reason, events=events,
+        result_text=state.result_text if isinstance(state.result_text, str) else None)
     attempt_record = {
         "ticket": ticket_id, "attempt": attempt, "worker_id": worker_id,
+        "charged_to": charged_to, "failure_cause": failure_cause,
+        "first_frame_s": first_frame_s, "prompt_profile": local_tmpl and os.path.basename(local_tmpl),
+        "prompt_tokens_est": charging.estimate_tokens(prompt),
         "worktree": worktree, "branch": branch, "model": args.model, "effort": args.effort,
         "grant_sha256": grant_sha,
         "observed_model": state.model,
@@ -2584,7 +2693,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         return EXIT_CLAIM_ERROR
 
     return reconcile(args, ticket_id, attempt, classification, state, events,
-                      worktree, state_path)
+                      worktree, state_path, charged_to=charged_to,
+                      failure_cause=failure_cause)
 
 
 def file_verify_pass(ticket_id, args):
@@ -2884,7 +2994,7 @@ def handle_resumable_failure(args, ticket_id, attempt, classification, state, ev
         file_verify_pass(ticket_id, args)
         return EXIT_OK
     write_prior_attempt_notes(ticket_id, attempt, worktree, events, classification)
-    if attempt < MAX_ATTEMPTS and state.session_id:
+    if charged_attempt_count(ticket_id, attempt) < MAX_ATTEMPTS and state.session_id:
         log(f"{classification}: attempt {attempt} < {MAX_ATTEMPTS}, resuming session "
             f"{state.session_id}")
         return do_attempt(args, attempt + 1, resume_session=state.session_id,
@@ -2892,7 +3002,8 @@ def handle_resumable_failure(args, ticket_id, attempt, classification, state, ev
     return handle_failure(args, ticket_id, attempt, classification, state, events, worktree)
 
 
-def reconcile(args, ticket_id, attempt, classification, state, events, worktree, state_path):
+def reconcile(args, ticket_id, attempt, classification, state, events, worktree, state_path,
+              charged_to=None, failure_cause=None):
     # SUCCESS/DEGRADED_SUCCESS only ever reach here when do_attempt() already verified
     # artifacts confirm the ticket landed (else it relabeled the classification
     # FALSE_COMPLETE before calling reconcile at all) — safe to trust directly.
@@ -2909,6 +3020,11 @@ def reconcile(args, ticket_id, attempt, classification, state, events, worktree,
 
     if classification == MODEL_NOT_FOUND:
         return handle_model_not_found(args, ticket_id, attempt, state, worktree)
+
+    # wq#2128: the backend failed, not the ticket — never the resume/retry ladder below.
+    if charged_to == charging.CHARGE_RUNG:
+        return handle_failure(args, ticket_id, attempt, classification, state, events,
+                               worktree, charged_to=charged_to, failure_cause=failure_cause)
 
     if classification in (FALSE_COMPLETE, INDETERMINATE, AUTH, HANG):
         return handle_resumable_failure(args, ticket_id, attempt, classification, state,
@@ -3115,10 +3231,69 @@ def handle_model_not_found(args, ticket_id, attempt, state, worktree):
     return EXIT_MODEL_NOT_FOUND
 
 
-def handle_failure(args, ticket_id, attempt, classification, state, events, worktree):
+def charged_attempt_count(ticket_id, attempt):
+    """wq#2128: attempts that count toward MAX_ATTEMPTS. A rung- or harness-charged
+    attempt does not; a record written before charged_to existed is a ticket charge.
+    FOREMAN_CHARGE_MODE=legacy: the attempt number itself, as before."""
+    if charging.legacy_mode():
+        return attempt
+    d = run_dir(ticket_id)
+    recs = []
+    for f in os.listdir(d):
+        if re.match(r"attempt-\d+\.json$", f):
+            try:
+                with open(os.path.join(d, f)) as fh:
+                    recs.append(json.load(fh))
+            except (OSError, ValueError):
+                recs.append({})
+    return max(1, charging.charged_attempts(recs))
+
+
+def handle_rung_fault(args, ticket_id, attempt, classification, cause, state, events,
+                       worktree):
+    """wq#2128: charged_to == rung. The backend failed (hang before any turn, LiteLLM
+    5xx/timeout/cooldown, unreachable, ctx overflow), so the attempt says nothing about
+    the ticket: cool the backend down, release the ticket to open, do not retry here (the
+    same backend would fail the same way) and do not count it toward MAX_ATTEMPTS.
+    If the ticket is already blocked (the worker blocked it itself) that block stands, but
+    its reason gets the RUNG_FAULT: prefix so nobody reads it as a work block."""
+    confirmed, _ = check_artifacts_done(ticket_id, worktree)
+    if confirmed:
+        return handle_resumable_failure(args, ticket_id, attempt, classification, state,
+                                         events, worktree)
+    backend = backend_key(args.model)
+    try:
+        entry = charging.mark_backend_cooldown(BACKEND_COOLDOWN_FILE, backend, cause)
+        cooldown = f"{backend} cooling until {entry['until']:.0f} (strike {entry['strikes']})"
+    except OSError as e:
+        cooldown = f"{backend} cooldown NOT recorded ({e})"
+        log(f"WARN: wq#2128 backend cooldown write failed: {e}")
+    line = (f"{charging.RUNG_FAULT_PREFIX} {classification}/{cause} on backend {backend}; "
+            f"attempt {attempt} not charged to the ticket; {cooldown}")
+    log(line)
+    ticket = wq_show(ticket_id)
+    if ticket.get("status") == "blocked":
+        prior = ticket.get("block_reason") or ticket.get("notes") or ""
+        wq_block(ticket_id, charging.rung_fault_reason(
+            prior if prior != "None" else f"{classification}/{cause} on backend {backend}"))
+    else:
+        p = wq("note", str(ticket_id), line)
+        if p.returncode != 0:
+            log(f"WARN: wq note append failed: {(p.stdout or p.stderr).strip()}")
+        wq_release(ticket_id)
+    ntfy("foreman RUNG_FAULT", f"wq#{ticket_id}: {classification}/{cause} on {backend} "
+         f"(attempt not charged)")
+    return EXIT_RUNG_FAULT
+
+
+def handle_failure(args, ticket_id, attempt, classification, state, events, worktree,
+                    charged_to=None, failure_cause=None):
     prior_notes_path = write_prior_attempt_notes(ticket_id, attempt, worktree, events,
                                                   classification)
-    if attempt < MAX_ATTEMPTS:
+    if charged_to == charging.CHARGE_RUNG:
+        return handle_rung_fault(args, ticket_id, attempt, classification, failure_cause,
+                                  state, events, worktree)
+    if charged_attempt_count(ticket_id, attempt) < MAX_ATTEMPTS:
         log(f"{classification}: attempt {attempt} < {MAX_ATTEMPTS}, restarting fresh worktree")
         return do_attempt(args, attempt + 1)
 
