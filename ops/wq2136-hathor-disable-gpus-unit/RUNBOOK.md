@@ -1,3 +1,8 @@
+> **HOLD - do not install (wq#2140, 2026-09-20).** isis is the only Mac where this unit actually ran, and isis now cuts its own
+> power under inference load (3 abrupt boot endings in 24 h). hathor and nephthys carry the broken copy, never ran it, still have both
+> GPUs on the bus, and are stable under the same load. Installing the corrected unit below would put the two healthy boxes into the isis
+> configuration. Wait for the wq#2140 RCA verdict. The unit is currently `disabled` on hathor and nephthys on purpose.
+
 # wq#2136 — hathor disable-gpus.service unbalanced quoting
 
 ## Finding (read-only, 2026-09-20)
