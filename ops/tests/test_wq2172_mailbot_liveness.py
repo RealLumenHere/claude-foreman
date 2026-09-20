@@ -122,6 +122,35 @@ class LivenessTest(unittest.TestCase):
             rc = cl.main(["--repo", self.repo], runner=fail)
         self.assertEqual(rc, 3)
 
+    def test_secret_change_after_commit_does_not_read_current(self):
+        deps = deployments("2026-09-20T15:00:00Z", "2026-09-20T17:00:00Z")
+        deps[0]["annotations"] = {"workers/triggered_by": "upload"}
+        deps[1]["annotations"] = {"workers/triggered_by": "secret"}
+        rc, out = self.run_main(deps)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("STALE", out)
+
+    def test_only_secret_deployments_is_unconfirmed(self):
+        deps = deployments("2026-09-20T17:00:00Z")
+        deps[0]["annotations"] = {"workers/triggered_by": "secret"}
+        rc, _ = self.run_main(deps)
+        self.assertEqual(rc, 3)
+
+    def test_newest_rollback_is_unconfirmed(self):
+        deps = deployments("2026-09-20T17:00:00Z")
+        deps[0]["annotations"] = {"workers/triggered_by": "rollback"}
+        rc, out = self.run_main(deps)
+        self.assertEqual(rc, 3, out)
+        self.assertIn("rollback", out)
+
+    def test_missing_wrangler_binary_is_unconfirmed_not_a_traceback(self):
+        def missing(repo, script):
+            raise FileNotFoundError("wrangler")
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "x"}), contextlib.redirect_stdout(buf):
+            rc = cl.main(["--repo", self.repo], runner=missing)
+        self.assertEqual(rc, 3)
+
     def test_token_value_never_printed(self):
         _, out = self.run_main(deployments("2026-09-20T16:30:00Z"), token="s3cr3t-tok")
         self.assertNotIn("s3cr3t-tok", out)
@@ -138,6 +167,44 @@ class LivenessTest(unittest.TestCase):
         sha, when = cl.last_deploy_commit(mailbot, "HEAD")
         self.assertEqual(len(sha), 40)
         self.assertIsNotNone(when.tzinfo)
+
+
+class InstallVerifyTest(unittest.TestCase):
+    """ops/VERIFY_CONTRACT.md: exit 0 ok, 1 MISS, 2 could not run; never installs."""
+    INSTALL = Path(__file__).resolve().parents[1] / "wq2172-mailbot-liveness" / "install.sh"
+
+    def run_install(self, exit_code, line, *args):
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d, "fake_check.py")
+            fake.write_text(f"import sys\nprint({line!r})\nprint('second line')\nsys.exit({exit_code})\n")
+            env = dict(os.environ, WQ2172_CHECK_LIVE=str(fake), WQ2172_TOKEN_FILE=str(Path(d, "none")))
+            p = subprocess.run(["bash", str(self.INSTALL), *args], env=env, capture_output=True, text=True)
+        return p.returncode, p.stdout + p.stderr
+
+    def test_current_is_ok(self):
+        rc, out = self.run_install(0, "CURRENT: x", "--verify")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("VERIFY OK", out)
+
+    def test_stale_is_miss_exit_1(self):
+        rc, out = self.run_install(1, "STALE: x", "--verify")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("MISS STALE: x", out)
+        self.assertNotIn("second line", out)
+
+    def test_unconfirmed_is_exit_2_not_a_miss(self):
+        rc, out = self.run_install(3, "UNCONFIRMED: no token", "--verify")
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn("MISS", out)
+
+    def test_without_verify_installs_nothing_and_fails(self):
+        rc, out = self.run_install(0, "CURRENT: x")
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn("CURRENT", out)
+
+    def test_handler_marker_is_visible_to_ops_verified(self):
+        head = self.INSTALL.read_text()[:20000]
+        self.assertIn('= --verify ]', head)
 
 
 if __name__ == "__main__":

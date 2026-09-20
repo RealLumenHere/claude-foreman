@@ -41,8 +41,18 @@ def parse_deployments(out):
     return deployments
 
 
+def trigger(deployment):
+    return (deployment.get("annotations") or {}).get("workers/triggered_by")
+
+
 def newest(deployments):
-    return max(deployments, key=lambda d: parse_time(d["created_on"]))
+    """Newest deployment that could have changed code. deploy.sh runs `wrangler secret put`
+    before `wrangler deploy`, and a secret change cuts a deployment of the *previous* code, so
+    a deploy that died between the two would otherwise read CURRENT."""
+    code = [d for d in deployments if trigger(d) != "secret"]
+    if not code:
+        raise ValueError("only secret-change deployments returned, no code upload to judge")
+    return max(code, key=lambda d: parse_time(d["created_on"]))
 
 
 def stamps(deployment):
@@ -62,6 +72,8 @@ def last_deploy_commit(repo, rev):
 
 def judge(deployment, sha, committed):
     """Return (verdict, reason)."""
+    if trigger(deployment) == "rollback":
+        raise ValueError("newest code deployment is a rollback; the live version is unknown")
     if any(sha.startswith(s) or s.startswith(sha) for s in SHA_RE.findall(stamps(deployment))):
         return "CURRENT", f"deployment stamp names {sha[:12]}"
     deployed = parse_time(deployment["created_on"])
@@ -74,7 +86,7 @@ def run_wrangler(repo, script):
     wrangler = os.path.join(repo, "node_modules", ".bin", "wrangler")
     proc = subprocess.run(
         [wrangler, "deployments", "list", "--name", script, "--json"],
-        cwd=repo, capture_output=True, text=True, timeout=120,
+        cwd=repo, capture_output=True, text=True, timeout=40,  # ops_verified kills --verify at 60s
     )
     if proc.returncode != 0:
         raise RuntimeError(f"wrangler exited {proc.returncode}: {proc.stderr.strip()[-300:]}")
@@ -99,7 +111,7 @@ def main(argv=None, runner=run_wrangler):
             return 3
         latest = newest(deployments)
         verdict, reason = judge(latest, sha, committed)
-    except (ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as e:
+    except (ValueError, RuntimeError, KeyError, OSError, subprocess.SubprocessError) as e:
         print(f"UNCONFIRMED: {e}")
         return 3
     print(f"{verdict}: {args.script} vs {args.rev} (last deploy-input commit {sha[:12]}): {reason}")

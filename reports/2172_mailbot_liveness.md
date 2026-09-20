@@ -38,6 +38,31 @@ commit reads CURRENT. The stamp follow-up below removes that.
 - `node mailbot/ops/wq2147-verify/probe.mjs` was refused ("requires approval", same as
   ISSUE-LOG #475), so the needsFrank() fix itself was not re-run here.
 
+## wq#2177 verify-pass (2026-09-20) — CONTRADICTED: the deployed worker is STALE
+
+Ran `bash ops/wq2172-mailbot-liveness/install.sh --verify` on the box (token read from
+`/home/lumen/mailbot/.cf_deploy_token` by the script, never printed):
+
+    MISS STALE: lumen-mailbot vs HEAD (last deploy-input commit 248c163a8b40):
+    deployed 2026-09-02T11:00:04Z < commit 2026-09-20T16:35:36Z        VERIFY FAIL (1)
+
+So the wq#2168 fix (`248c163`, merged as `30b9bb9`) is NOT live; the newest code upload predates it by
+18 days. Fix: `/home/lumen/mailbot/deploy.sh` (runs the eval gate, then `secret put` + `wrangler deploy`).
+`wrangler deployments list --name <w> --json` is confirmed in wrangler 4.106.0
+(`node_modules/wrangler/wrangler-dist/cli.js:350012`, JSON at `:350054`).
+
+Defects found in wq#2172 and fixed here:
+
+- The bundle had no `install.sh --verify`, so `ops_verified(wq2172-mailbot-liveness)` was UNKNOWN (wq#1696).
+  Added `install.sh`: 0 CURRENT, 1 `MISS STALE ...`, 2 could not check (check_live's 3 maps to 2).
+  Run through `harness/liveness.py:ops_verified` it returns STILL_BLOCKED with the line above.
+- `deploy.sh` runs `wrangler secret put` before `wrangler deploy`; a secret change cuts a deployment
+  of the old code, so a deploy that died between the two read CURRENT. `newest()` now skips
+  `workers/triggered_by == "secret"`; a newest `rollback` is UNCONFIRMED.
+- A missing `node`/wrangler raised `FileNotFoundError` uncaught (traceback, exit 1 = a false STALE).
+  `OSError` is now UNCONFIRMED.
+- wrangler timeout 120s exceeded `ops_verified`'s 60s kill; now 40s.
+
 ## ISSUE-LOG row (kb is a primary tree; workers cannot edit it, guard.sh wq#1719)
 
 | 476 | wq#2172: cannot confirm deployed lumen-mailbot is on 30b9bb9; also refused for a worker: `mailbot/node_modules/.bin/wrangler`, `node mailbot/ops/wq2147-verify/probe.mjs` (requires approval), `test -n "$VAR"` (simple_expansion) | wrangler needs CLOUDFLARE_API_TOKEN a worker never holds (instinct 4); worker.js has no version endpoint; deploy.sh passes no `--message`; wrangler/node not on the per-command allowlist | ops/wq2172-mailbot-liveness/check_live.py + 12 tests; follow-up to stamp deploys with the sha | OPEN |
