@@ -90,6 +90,71 @@ class HandleTest(unittest.TestCase):
         self.assertEqual((rule, decision), ("worker_malformed", "deny"))
 
 
+class TicketEndTest(unittest.TestCase):
+    """T9 (wq#2277): mint-test → ticket-end through the real handle() path."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path, self.sha = write_grant(self.tmp.name)
+        self.peer = (1234, 1000, 1000)
+        os.environ["TOKEN_ENGINE_STATE_DIR"] = self.tmp.name
+        os.environ["TOKEN_ENGINE_ALLOW_TEST_MINT"] = "1"
+        # SECRETS_DIR is read at import; re-point it for mint-test's live files.
+        self._old_secrets = D.SECRETS_DIR
+        D.SECRETS_DIR = self.tmp.name
+        D.L.MINTED.clear()
+
+    def tearDown(self):
+        D.SECRETS_DIR = self._old_secrets
+        del os.environ["TOKEN_ENGINE_STATE_DIR"]
+        del os.environ["TOKEN_ENGINE_ALLOW_TEST_MINT"]
+        self.tmp.cleanup()
+
+    def test_mint_test_disabled_without_env(self):
+        del os.environ["TOKEN_ENGINE_ALLOW_TEST_MINT"]
+        ok, rule, *_, decision = D.handle(
+            req(self.path, self.sha, verb="mint-test"), self.peer)
+        os.environ["TOKEN_ENGINE_ALLOW_TEST_MINT"] = "1"
+        self.assertFalse(ok)
+        self.assertEqual((rule, decision), ("verb_disabled", "deny"))
+
+    def test_mint_then_ticket_end_revokes_and_is_idempotent(self):
+        ok, _, _, result, _ = D.handle(
+            req(self.path, self.sha, verb="mint-test"), self.peer)
+        self.assertTrue(ok)
+        live = os.path.join(self.tmp.name, "test-provider",
+                            result["token_id"] + ".live")
+        self.assertTrue(os.path.exists(live))
+        self.assertIn("wq2270", D.L.MINTED)
+
+        ok, rule, _, result, decision = D.handle(
+            req(self.path, self.sha, verb="ticket-end"), self.peer)
+        self.assertTrue(ok)
+        self.assertEqual(decision, "allow")
+        self.assertEqual((result["had_entries"], result["revoked"],
+                          result["failed"]), (1, 1, 0))
+        self.assertFalse(os.path.exists(live))
+        self.assertNotIn("wq2270", D.L.MINTED)
+
+        ok, _, _, result, _ = D.handle(
+            req(self.path, self.sha, verb="ticket-end"), self.peer)
+        self.assertTrue(ok)
+        self.assertEqual(result, {"had_entries": 0, "revoked": 0, "failed": 0})
+
+    def test_ticket_end_scoped_to_grant_ticket(self):
+        ok, rule, *_, decision = D.handle(
+            req(self.path, self.sha, verb="ticket-end", ticket="wq9999"), self.peer)
+        self.assertFalse(ok)
+        self.assertEqual((rule, decision), ("grant:grant_ticket_mismatch", "deny"))
+
+    def test_mint_response_carries_no_token_value(self):
+        ok, _, _, result, _ = D.handle(
+            req(self.path, self.sha, verb="mint-test"), self.peer)
+        self.assertTrue(ok)
+        self.assertEqual(set(result), {"token_id", "provider"})
+        self.assertEqual(D.mask_hits(json.dumps(result)), [])
+
+
 class FrameTest(unittest.TestCase):
     def test_schema_accepts_documented_frame(self):
         D.assert_response_schema({"ok": True, "verb": "ping", "ticket": "wq2270",

@@ -41,6 +41,7 @@ chmod 0700 "$STATE/secrets"
 # tokeneng executes, or the file-permission boundary is fiction. The policy
 # module is snapshotted from bin for the same reason.
 install -D -m 0755 -o root -g root "$SRC/token_engine_daemon.py" "$LIB/token_engine_daemon.py"
+install -D -m 0644 -o root -g root "$SRC/token_ledger.py" "$LIB/token_ledger.py"
 install -D -m 0644 -o root -g root "$POLICY_SRC" "$LIB/fleet_exec_policy.py"
 
 # Dual audit sink (fleet-exec:112-114): tokeneng needs traversal into

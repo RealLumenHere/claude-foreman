@@ -39,11 +39,14 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet_exec_policy as P  # root-owned copy installed next to this file
+import token_ledger as L      # minted-token ledger + revocation (wq#2277 T9)
 
 SOCK_DIR = os.environ.get("TOKEN_ENGINE_RUNTIME_DIR", "/run/token-engine")
 SOCK_PATH = os.path.join(SOCK_DIR, "broker.sock")
 SECRETS_DIR = os.environ.get("TOKEN_ENGINE_STATE_DIR", "/var/lib/token-engine")
-CLIENT_GROUP = "token-client"
+# Overridable so a gate replay can run an env-scoped daemon as an ordinary
+# uid; the systemd unit sets neither env, so production keeps token-client.
+CLIENT_GROUP = os.environ.get("TOKEN_ENGINE_CLIENT_GROUP", "token-client")
 # Same dual audit sink as fleet-exec:112-114.
 AUDIT_PATH = os.environ.get("FLEET_EXEC_AUDIT_PATH",
                             "/home/lumen/foreman/events/fleet-exec.jsonl")
@@ -131,12 +134,50 @@ def verb_mask_selftest(req, grant):
     return {"leak": "ghp_" + "selftestselftest0000"}
 
 
+def verb_ticket_end(req, grant):
+    """§3.4: revoke every token minted for this ticket and drop it from the
+    in-memory map. Scope: load_grant already forced grant.ticket == req.ticket,
+    so a worker can only end its own ticket. Idempotent: a second call finds
+    no ledger and reports had_entries=0. Failed revocations stay ledgered for
+    the daemon-start reaper; they alert but do not fail the verb, because
+    SessionEnd must still complete."""
+    result = L.revoke_ticket(str(req.get("ticket", "")))
+    if result["failed"]:
+        notify("high", "token-engine revocation incomplete",
+               f"ticket={req.get('ticket')} failed={result['failed']} — "
+               "entries kept for the daemon-start reaper")
+    return result
+
+
+def verb_mint_test(req, grant):
+    """Test-provider mint so T9's revocation gate can run before T1's real
+    provider verbs land: a token is 'live' iff its marker file exists under
+    the state dir. Refused in handle() unless TOKEN_ENGINE_ALLOW_TEST_MINT=1
+    (the systemd unit never sets it). Returns the token id only — no token
+    value ever leaves the daemon (§1.2)."""
+    import hashlib
+    import uuid
+    token_value = uuid.uuid4().hex + uuid.uuid4().hex  # stays in this frame
+    token_id = "tetest-" + uuid.uuid4().hex[:12]
+    live_dir = os.path.join(SECRETS_DIR, "test-provider")
+    os.makedirs(live_dir, mode=0o700, exist_ok=True)
+    live_path = os.path.join(live_dir, token_id + ".live")
+    with open(live_path, "w") as f:
+        f.write(hashlib.sha256(token_value.encode()).hexdigest() + "\n")
+    L.record_mint(str(req.get("ticket", "")), "test-file", token_id,
+                  str(req.get("worker", "")), {"live_path": live_path},
+                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    return {"token_id": token_id, "provider": "test-file"}
+
+
 # verb -> (handler, grant kind, grant node). Every T2 verb needs a
 # {"kind": "token_engine", "node": "daemon"} grant entry; provider verbs added
 # by later children bring their own kinds per TOKEN_ENGINE_DESIGN.md §2.
 VERBS = {
     "ping": (verb_ping, "token_engine", "daemon"),
     "mask-selftest": (verb_mask_selftest, "token_engine", "daemon"),
+    "ticket-end": (verb_ticket_end, "token_engine", "daemon"),
+    "mint-test": (verb_mint_test, "token_engine", "daemon"),
 }
 
 
@@ -148,6 +189,9 @@ def handle(req, peer):
     verb = req.get("verb")
     if verb not in VERBS:
         return False, "verb_unknown", f"no such verb {verb!r}", {}, "deny"
+    if verb == "mint-test" and os.environ.get("TOKEN_ENGINE_ALLOW_TEST_MINT") != "1":
+        return False, "verb_disabled", \
+            "mint-test requires TOKEN_ENGINE_ALLOW_TEST_MINT=1 in the daemon env", {}, "deny"
     worker = str(req.get("worker", ""))
     if not WORKER_RE.match(worker):
         return False, "worker_malformed", "worker id fails shape check", {}, "deny"
@@ -226,6 +270,21 @@ def main():
         sys.exit("refusing to run as root: unit must set User=tokeneng")
     import grp
     client_gid = grp.getgrnam(CLIENT_GROUP).gr_gid
+    # §3.4 reaper: BEFORE accepting any connection, revoke every ledgered
+    # token. A kill -9'd worker never fires SessionEnd; its tokens die here.
+    # A reaper crash must not stop the broker (the ledger survives for the
+    # next start), but it must be loud.
+    try:
+        reaped = L.reap_all()
+        print(f"reaper: {reaped}", flush=True)
+        if reaped["failed"]:
+            notify("high", "token-engine reaper incomplete",
+                   f"failed={reaped['failed']} entries still ledgered — "
+                   "provider unreachable? will retry next daemon start")
+    except Exception as e:
+        print(f"reaper crashed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        notify("high", "token-engine reaper crashed", f"{type(e).__name__}: {e}")
+    os.makedirs(SOCK_DIR, mode=0o750, exist_ok=True)
     try:
         os.unlink(SOCK_PATH)
     except FileNotFoundError:

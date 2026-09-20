@@ -40,11 +40,31 @@ log_event() {
     >> "$EVENTS_DIR/$WORKER_ID.jsonl" 2>/dev/null
 }
 
+# wq#2277 (TOKEN_ENGINE_DESIGN.md §3.4): at SessionEnd, ask the token-engine
+# daemon to revoke every token it minted for this ticket. Strictly best-effort —
+# a dead broker, absent grant, or timeout must never block session end, because
+# the daemon-start reaper re-runs the same sweep for exactly those cases.
+revoke_minted_tokens() {
+  local sock="${TOKEN_ENGINE_SOCK:-/run/token-engine/broker.sock}"
+  local te_client="$(dirname "$0")/../token-engine/te_client.py"
+  [ -n "${FOREMAN_TICKET_ID:-}" ] || { log_event "ticket_end_skip_no_ticket"; return 0; }
+  [ -S "$sock" ] || { log_event "ticket_end_skip_no_broker"; return 0; }
+  [ -f "$te_client" ] || { log_event "ticket_end_skip_no_client"; return 0; }
+  if timeout 25 python3 "$te_client" --verb ticket-end \
+       --ticket "$FOREMAN_TICKET_ID" --worker "$WORKER_ID" >/dev/null 2>&1; then
+    log_event "ticket_end_revoked"
+  else
+    log_event "ticket_end_revoke_failed"
+  fi
+  return 0
+}
+
 # ---- lifecycle mode: --lifecycle start|stop|end ----
 if [ "${1:-}" = "--lifecycle" ]; then
   LIFECYCLE=${2:-}
   case "$LIFECYCLE" in
-    start|stop|end) log_event "$LIFECYCLE"; exit 0 ;;
+    end) log_event "$LIFECYCLE"; revoke_minted_tokens; exit 0 ;;
+    start|stop) log_event "$LIFECYCLE"; exit 0 ;;
     *) echo "guard.sh: unknown --lifecycle value '$LIFECYCLE' — fail-closed" >&2; exit 2 ;;
   esac
 fi
