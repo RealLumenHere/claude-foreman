@@ -1,0 +1,74 @@
+diff --git a/home/lumen/sentinel/probes/sentinel_probes.py.bak.20260920_pre_wq1122 b/home/lumen/sentinel/probes/sentinel_probes.py
+index 7c75332..f2cd006 100644
+--- a/home/lumen/sentinel/probes/sentinel_probes.py.bak.20260920_pre_wq1122
++++ b/home/lumen/sentinel/probes/sentinel_probes.py
+@@ -737,54 +737,9 @@ def probe_maat_vault():
+     except Exception as e:
+         return False, f"Vaultwarden /alive unreachable: {type(e).__name__}: {str(e)[:80]}", True
+ 
+-A5_SERVICES = ["lumen-planner", "lumen-generator", "lumen-evaluator"]
+-A5_STATE = Path("/home/lumen/services/agent5-ops/.a5_health_state.json")
+-A5_MIN_VOL, A5_DEAD_RATE, A5_REVIEW_BACKLOG = 6, 0.40, 5
+-
+-def probe_a5_health():
+-    """Port of services/agent5-ops/a5_health.py: split-trio active + interval
+-    dead-rate + review backlog. Reuses the same state file so interval deltas
+-    continue unbroken across the fold. Redis-unreachable stays fail-safe
+-    (original returned silently) — redis itself is healer+Gatus territory."""
+-    down = []
+-    for s in A5_SERVICES:
+-        stale = _stale_or_none(s, "probe-a5-health")
+-        if stale:
+-            return stale
+-        r = subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True, timeout=10)
+-        if r.stdout.strip() != "active":
+-            down.append(f"{s}={r.stdout.strip()}")
+-    if down:
+-        return False, "agent5 split service DOWN: " + ", ".join(down), True
+-    try:
+-        import redis as _redis
+-        rc = _redis.Redis(host="127.0.0.1", port=6379, db=5, decode_responses=True)
+-        cur = {q: rc.llen(f"lumen5:{q}") for q in ("plan_in","gen_in","eval_in","done","review","dead")}
+-    except Exception as e:
+-        return True, f"trio active; redis unreachable (fail-safe skip): {str(e)[:60]}", False
+-    try:
+-        last = json.loads(A5_STATE.read_text()).get("counts", {})
+-    except Exception:
+-        last = {}
+-    problems = []
+-    d_done = cur["done"] - last.get("done", cur["done"])
+-    d_dead = cur["dead"] - last.get("dead", cur["dead"])
+-    if d_done >= 0 and d_dead >= 0:
+-        vol = d_done + d_dead
+-        if vol >= A5_MIN_VOL and d_dead / vol >= A5_DEAD_RATE:
+-            problems.append(f"QUALITY DROP: dead rate {d_dead/vol:.0%} (dead+{d_dead}, done+{d_done})")
+-    if cur["review"] >= A5_REVIEW_BACKLOG:
+-        problems.append(f"review backlog {cur['review']} (judge not verdicting; drafts preserved)")
+-    try:
+-        tmp = str(A5_STATE) + ".tmp"
+-        with open(tmp, "w") as f:
+-            json.dump({"counts": {"done": cur["done"], "dead": cur["dead"]}, "queues": cur}, f, indent=2)
+-        os.replace(tmp, A5_STATE)
+-    except Exception as e:
+-        print(f"a5 state write failed (non-fatal): {e}")
+-    if problems:
+-        return False, "; ".join(problems)[:300], False
+-    return True, f"trio active, q(done={cur['done']},dead={cur['dead']},review={cur['review']})", False
++# probe-a5-health REMOVED (wq#1122): the agent5 split trio was retired
++# 2026-08-21, so its probe body and constants are gone. History: wq#1064
++# (aq#899 false CRITICAL), wq#1092 (stale-target guard), wq#1095 (unregistered).
+ 
+ BRAIN_DROPIN = "/etc/systemd/system/lumen-messenger.service.d/50-brain-claude.conf"
+ BRAIN_ENV = "/home/lumen/agent/.env"
+@@ -1036,9 +991,8 @@ PROBES = [
+     # 2026-08-21 and never coming back) -- that proof is wq#1095 itself, filed
+     # once, non-paging, exactly as designed. Proof obtained; no reason to keep
+     # spending a systemctl call every 30min on a check that can only ever
+-    # return the same STALE string. probe_a5_health() left intact below in
+-    # case A5 (or its guard-of-the-guard role) is ever needed again.
+-    # ("probe-a5-health",       probe_a5_health,       False),   # wq#969 fold, guarded wq#1092, disabled wq#1095
++    # return the same STALE string. Registration and probe_a5_health() body
++    # removed outright by wq#1122 (orchestrator direction of wq#1095).
+     ("probe-credential-expiry", probe_credential_expiry, "4h"),  # wq#1694; must run before brain-health
+     ("probe-brain-health",    probe_brain_health,    False),   # wq#969 fold
+     ("probe-invisible-work-watch", probe_invisible_work_watch, "7d"),  # wq#973

@@ -12,7 +12,7 @@ Run: python3 tests/test_probe_target_liveness.py
 import os, sys, importlib.util, subprocess, tempfile, json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PROBE_MOD_PATH = os.path.join(HERE, "..", "..", "sentinel", "probes", "sentinel_probes.py")
+PROBE_MOD_PATH = os.environ.get("SENTINEL_PROBES_PATH") or os.path.join(HERE, "..", "..", "sentinel", "probes", "sentinel_probes.py")
 
 _fails = []
 def check(name, cond, extra=""):
@@ -104,15 +104,13 @@ def scenario_different_units_file_separate_tickets():
     lines = open(cap).read().splitlines() if os.path.exists(cap) else []
     check("2 distinct tickets for 2 distinct units", len(lines) == 2, lines)
 
-def scenario_a5_health_reproduces_aq899_now_inert():
-    print("[a5-health] the literal aq#899 shape: all 3 A5_SERVICES not-found -> STALE not CRITICAL")
+def scenario_a5_health_removed():
+    print("[a5-health] wq#1122 removed probe_a5_health and its A5_* constants outright")
     d = tempfile.mkdtemp(prefix="ptl_")
     mod = load_fresh(os.path.join(d, "cap.jsonl"))
-    mod.subprocess.run = systemctl_show_stub("not-found")
-    ok, detail, critical = mod.probe_a5_health()
-    check("ok=True (was False x47 in aq#899)", ok is True, detail)
-    check("critical=False (was True -> ntfy_urgent every cycle)", critical is False, detail)
-    check("detail names the stale unit", "lumen-planner" in detail, detail)
+    check("probe_a5_health is gone", not hasattr(mod, "probe_a5_health"))
+    check("A5_SERVICES is gone", not hasattr(mod, "A5_SERVICES"))
+    check("not registered in PROBES", all(name != "probe-a5-health" for name, *_ in mod.PROBES))
 
 def scenario_state_drift_skips_stale_unit_without_flagging_problem():
     print("[state-drift] a retired unit in probe_state_drift's must-be-active list is skipped, not a problem")
@@ -143,7 +141,7 @@ def main():
                scenario_loaded_unit_passes_through,
                scenario_ticket_filed_once_deduped,
                scenario_different_units_file_separate_tickets,
-               scenario_a5_health_reproduces_aq899_now_inert,
+               scenario_a5_health_removed,
                scenario_state_drift_skips_stale_unit_without_flagging_problem):
         fn()
     print()
