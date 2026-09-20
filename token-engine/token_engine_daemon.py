@@ -73,6 +73,16 @@ WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # and the kv_secret carve-out: harness/masking.py.
 _B = r"(?<![A-Za-z0-9])"
 MASK = "MASKED"   # masking.MASK — the literal every replacement there ends in
+# wq#2297 kv_secret label vocabulary — the copy of harness/masking.py:_KV_* that the
+# daemon needs because it runs off that import path. See there for the reasoning.
+_KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd)"
+_KV_WORD = r"[A-Za-z][A-Za-z0-9]{1,20}(?:[ _-]{1,2}|(?-i:(?=[A-Z])))"
+_KV_NOT_PUBLIC = r"(?!pub(?:lic)?[ _-]{0,2}key\b)"
+_KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer)"
+_KV_LABEL = (r"(?:" + _KV_WORD + r")?" + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
+             + r"|" + _KV_BARE)
+_KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
+               r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
 MASK_PATTERNS = [
     ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{30,}")),
     ("github_token", re.compile(_B + r"(?:github_pat_)[A-Za-z0-9_]{20,}")),
@@ -83,11 +93,14 @@ MASK_PATTERNS = [
     ("sk_key", re.compile(_B + r"sk-(?:[a-zA-Z]+-)*[A-Za-z0-9_-]{16,}")),
     ("slack_token", re.compile(_B + r"xox[bpasr]-[A-Za-z0-9-]{8,}")),
     ("aws_key_id", re.compile(_B + r"AKIA[0-9A-Z]{16}")),
-    # wq#2288: keep in lockstep with harness/masking.py — a called identifier
-    # (`key = apply_key_allowlist(reg)`) is not a credential, and here a false hit
-    # does not just page: it fails the broker verb and drops the result.
+    # wq#2288/wq#2297: keep in lockstep with harness/masking.py — a called identifier
+    # (`key = apply_key_allowlist(reg)`) is not a credential, and neither is a noun
+    # buried in a longer word (`monkey:`) or a bare `key=`/`PAT =`. Here a false hit
+    # does not just page: it fails the broker verb and drops the result. The daemon
+    # runs as `tokeneng`, off the harness import path, so the vocabulary is copied
+    # rather than imported; test_masking.test_token_engine_mirror_agrees pins them.
     ("kv_secret", re.compile(
-        r'(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT)["\s]*[:=]["\s]*'
+        r'\b(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER +
         r'[A-Za-z0-9._-]{12,}(?![A-Za-z0-9._-]|\()',
         re.IGNORECASE)),
 ]

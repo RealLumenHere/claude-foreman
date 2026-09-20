@@ -35,6 +35,30 @@ import re
 # value, so what precedes it is `"`, `:`, `=`, `/` or space, never an alphanumeric.
 _B = r"(?<![A-Za-z0-9])"
 
+# wq#2297 kv-secret label vocabulary, ported from read_dir_sweep.py:38-60 (wq#2115).
+# A credential label is a NOUN, optionally qualified: `api key`, `Signing Secret`,
+# `clientSecret`. The qualifier ends in a separator or a camelCase hump.
+_KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd)"
+# The hump test is case-SENSITIVE via `(?-i:)` even though the rule as a whole is
+# IGNORECASE — that asymmetry is the whole trick: it admits `apiKey:` while refusing
+# `monkey:`. Two letters minimum, since a one-letter qualifier is an English article
+# ("a key: ..." is prose, not a leak).
+_KV_WORD = r"[A-Za-z][A-Za-z0-9]{1,20}(?:[ _-]{1,2}|(?-i:(?=[A-Z])))"
+# a public key is not a credential, and infra dirs are full of them
+_KV_NOT_PUBLIC = r"(?!pub(?:lic)?[ _-]{0,2}key\b)"
+# Nouns unambiguous enough to stand alone. `key` and `pat` are deliberately absent:
+# `key:` alone is ordinary YAML and an ordinary Python kwarg, and `PAT` alone is a
+# variable name — both need a qualifier in front to read as a credential label. The
+# `github_pat_` credential itself is caught by the dedicated github pattern above.
+_KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer)"
+_KV_LABEL = (r"(?:" + _KV_WORD + r")?" + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
+             + r"|" + _KV_BARE)
+# An env-var reference or a path is a POINTER to a credential, not the credential:
+# `secret = os.environ["X"]`, `master key: /home/lumen/.ssh/id_ed25519`. Masking the
+# pointer would hide the leak path the scan record exists to show.
+_KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
+               r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
+
 # (label, compiled pattern, replacement) — labels feed the alarm/rotation ticket.
 # Two labels may repeat (github); mask_text() de-duplicates.
 PATTERNS = [
@@ -58,18 +82,33 @@ PATTERNS = [
      r"\1MASKED"),
     ("slack", re.compile(_B + r"(xox[bpasr]-)[A-Za-z0-9-]{8,}"), r"\1MASKED"),
     ("aws", re.compile(_B + r"(AKIA)[0-9A-Z]{16}"), r"\1MASKED"),
-    # No boundary here on purpose: this one keys off an English word, not a prefix,
-    # and `(?<![A-Za-z0-9])` would stop matching the camelCase leak shapes that are
-    # the whole point of it (`githubToken: ...`, `apiKey = ...`). The boundary it
-    # does need is a TRAILING one (wq#2288): without it `key = apply_key_allowlist(reg)`
-    # (node_render_gateway.py:418) reads as a 19-char secret, which is what fired the
-    # tripwire on wq#2284 and cost another pri-1 rotate-today ticket. A value that is
-    # immediately called is a function, never a credential — and the charset half of
-    # the lookahead is what makes the `\(` half hold, since a greedy run would
-    # otherwise just backtrack one character and match anyway.
-
+    # This one keys off an English word rather than a prefix, so it needs a different
+    # boundary than `_B`. It needs a TRAILING one (wq#2288): without it
+    # `key = apply_key_allowlist(reg)` (node_render_gateway.py:418) reads as a 19-char
+    # secret. A value that is immediately called is a function, never a credential —
+    # and the charset half of the lookahead is what makes the `\(` half hold, since a
+    # greedy run would otherwise just backtrack one character and match anyway.
+    #
+    # wq#2297: the trailing boundary alone was not enough, because the LABEL half was a
+    # naked keyword alternation with no left boundary. `KEY` matched inside `monkey:`,
+    # and bare `KEY`/`PAT` matched the ordinary Python of `key = apply_key_allowlist(`,
+    # `FAKE_PAT = "..."` and `top = max(v, key=v.count)`. Reading source code therefore
+    # armed a pri-1 rotate-today alarm: 46 lines of harness/ alone matched, and the
+    # cascade cost four tickets (wq#2288 on wq#2284, wq#2292 on wq#2282, wq#2297 on
+    # wq#2290 — none of them a real credential).
+    #
+    # The label below is shape-based instead, ported from read_dir_sweep.py:38-60,
+    # which solved this for the at-rest sweep (wq#2115, after an exact keyword list
+    # missed 3 live credentials in wq#1483). The value floor stays 12, not that
+    # sweep's 20: this rule also REDACTS, and over-masking an artefact is free while
+    # under-masking one is not. Precision belongs in the label, not the floor.
+    #
+    # The sed copy in bin/mask-secrets cannot follow: POSIX ERE has no lookaround, so
+    # it can express none of this. It has already missed both earlier fixes and is the
+    # tool instinct 4 tells every agent to pipe through (ISSUE-LOG row 577).
     ("kv-secret", re.compile(
-        r'((TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT)["\s]*[:=]["\s]*)'
+        r'\b((?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*)'
+        + _KV_POINTER +
         r'[A-Za-z0-9._-]{12,}(?![A-Za-z0-9._-]|\()',
         re.IGNORECASE), r"\1MASKED"),
 ]

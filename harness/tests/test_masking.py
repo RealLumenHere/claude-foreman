@@ -36,6 +36,10 @@ XOXB = "xoxb-" + "1234567890-abcdefgh"
 # The kv rule keys off the NAME, so the split has to fall between `TOKEN="` and the
 # value — that is the boundary the rule reads, and `'` is not in its body charset.
 KV_LINE = 'GITEA_TOKEN="' + 'hunter2-hunter2-hunter2"'
+# wq#2297: needs no split — `PW` is not a credential label under any rule, and the
+# kv fixtures below interpolate it, so each source line breaks at `{` before the
+# body charset can start.
+PW = "hunter2-hunter2-hunter2"
 
 # wq#2292: strings that LOOK like a prefix rule but are not credentials. Each one
 # is a real shape that reached a stream and cost a pri-1 rotation ticket or a
@@ -69,6 +73,28 @@ SECRETS = [
     ("aws", f'v = "{AKIA}"'),
     ("kv-secret", KV_LINE),
 ]
+
+# wq#2297: the same list for the kv-secret rule, whose label half was a naked keyword
+# alternation. Every line here is ordinary source that the rule read as a credential,
+# arming a pri-1 rotate-today alarm; the cascade cost four tickets (wq#2288 on wq#2284,
+# wq#2292 on wq#2282, wq#2297 on wq#2290) and none of them found a credential.
+KV_FALSE_POSITIVES = [
+    f"monkey: {PW}",                                # `KEY` had no left boundary
+    f"hockey = {PW}",
+    "    top = max(set(verdicts), key=verdicts.count)",   # bare `key=` is a kwarg
+    '    FAKE_PAT = "sentinel-value-x"',                  # bare `PAT` is a var name
+    "        token = read_oauth_token()",                 # the wq#2290 shape
+    "        key = apply_key_allowlist(reg)",             # the wq#2284 shape
+    f"key: {PW}",                                   # bare `key:` is ordinary YAML
+    "token: os.environ.FOREMAN_GH_TOKEN",           # a pointer, not the credential
+    "public key: AAAAB3NzaC1yc2EAAAADAQ",           # a public key is not a secret
+]
+
+# and the shapes that must keep firing — a rule this narrow is only safe if it still
+# catches. Real leaks label the value with a qualified noun, in any separator style.
+KV_REAL = [f"password: {PW}", f'"api_key": "{PW}"', f"GITEA_TOKEN={PW}",
+           f"Signing Secret: {PW}", f"clientSecret: {PW}", f"apiKey: {PW}",
+           f"X-Api-Key: {PW}", f"signing key = {PW}"]
 
 
 def test_patterns_mask_and_label():
@@ -127,8 +153,12 @@ def test_token_engine_mirror_agrees():
                                     "token-engine"))
     import token_engine_daemon as ted
 
-    for text in FALSE_POSITIVES:
+    for text in FALSE_POSITIVES + KV_FALSE_POSITIVES:
         assert ted.mask_hits(text) == [], f"{text!r} trips the daemon tripwire"
+    # wq#2297: the daemon's kv_secret must also still CATCH, or the mirror passes by
+    # going blind — a false hit there fails the verb, a missed one leaks the result.
+    for text in KV_REAL:
+        assert ted.mask_hits(text), f"daemon stopped catching {text!r}"
     for real in (GHP, GHPAT, SK, AKIA):
         assert ted.mask_hits(f'v = "{real}"'), f"daemon stopped catching {real[:8]}"
         assert masking.mask_text(f'v = "{real}"')[1], f"masking stopped catching {real[:8]}"
@@ -157,8 +187,6 @@ def test_masked_ndjson_line_still_parses():
 
 
 # --- wq#2288: the record that lets a rotation ticket name the credential ------------
-
-PW = "hunter2-hunter2-hunter2"
 
 # wq#2300: (label, the prefix the mask may keep, a sample that starts with it). The
 # prefix is the non-secret part a rotation worker reads to know WHICH credential
@@ -215,12 +243,7 @@ def test_a_called_identifier_is_not_a_credential():
     assert hits == []
 
 
-def test_real_kv_secrets_still_fire():
-    for text in (f"password: {PW}", f'"api_key": "{PW}"', f"GITEA_TOKEN={PW}",
-                 f"Signing Secret: {PW}", f"clientSecret: {PW}"):
-        masked, hits = masking.mask_text(text)
-        assert hits == ["kv-secret"], text
-        assert PW not in masked, text
+# (the positive half of this rule is KV_REAL / test_a_qualified_noun_still_fires)
 
 
 # wq#2296: the two tests above pin the false-positive shapes we already know, as
@@ -319,6 +342,24 @@ def test_scan_skips_a_value_an_earlier_pattern_already_masked():
     scanned, records = masking.scan(f"token: {GHP}")
     assert [r["label"] for r in records] == ["github"]
     assert scanned == "token: ghp_MASKED"
+
+
+# --- wq#2297: the label half must not read ordinary source as a credential ----------
+
+def test_ordinary_source_is_not_a_credential_label():
+    for text in KV_FALSE_POSITIVES:
+        masked, hits = masking.mask_text(text)
+        assert hits == [], f"{text!r} falsely matched {hits}"
+        assert masked == text, f"{text!r} was rewritten to {masked!r}"
+
+
+def test_a_qualified_noun_still_fires():
+    """The narrowing is only safe if the rule still catches: a real leak labels its
+    value with a qualified noun, in whatever separator style the source service uses."""
+    for text in KV_REAL:
+        masked, hits = masking.mask_text(text)
+        assert hits == ["kv-secret"], text
+        assert PW not in masked, text
 
 
 def test_write_mask_hits_appends_and_holds_no_value(tmp_path, monkeypatch):
