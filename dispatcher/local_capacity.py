@@ -208,6 +208,12 @@ class LocalCapacity:
             return 0
         return max(0, self._slots(name) - running.get(name, 0))
 
+    def live_slots(self):
+        """Total slots of the concrete backends that answer their probe and are not cooling
+        down (group rows carry none of their own) — capacity ignoring what is running."""
+        return sum(self._slots(n) for n, e in self.backends.items()
+                   if isinstance(e, dict) and "health_url" in e and self.healthy(n))
+
     def _slots(self, name):
         s = self._entry(name).get("slots")
         return s if isinstance(s, int) and not isinstance(s, bool) and s > 0 else 0

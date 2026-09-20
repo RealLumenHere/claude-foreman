@@ -4,7 +4,8 @@
 Stdlib-only (no new dependency — matches the rest of this repo's http/urllib-only
 convention, e.g. foreman_dispatcher.py's Langfuse client). GET-only, two routes:
 
-  GET /              minimal HTML render of dashboard_data.snapshot()
+  GET /              minimal HTML render of dashboard_data.snapshot() (incl. the dispatch_gate
+                     parked-by-reason table and per-backend local slots, step 11)
   GET /api/snapshot  the same snapshot as JSON
 
 READ-ONLY BY CONSTRUCTION: dashboard_data.py never claims/releases/blocks a ticket,
@@ -64,6 +65,13 @@ def render_html(snap):
     rows_stuck = "".join(
         f"<tr><td>wq{tid}</td><td>{d['lane']}</td><td>{d['attempts']}</td>"
         f"<td>{d['status']}</td></tr>" for tid, d in stuck.items())
+    gate = snap.get("dispatch_gate") or {}
+    rows_gate = "".join(f"<tr><td>{reason}</td><td>{n}</td></tr>"
+                        for reason, n in sorted((gate.get("by_reason") or {}).items()))
+    rows_backends = "".join(
+        f"<tr><td>{name}</td><td>{'up' if b['healthy'] else 'DOWN' if b['healthy'] is False else '-'}"
+        f"</td><td>{b['running']}/{b['slots']}</td><td>{b['free']}</td></tr>"
+        for name, b in sorted((snap.get("local_backends") or {}).items()))
     armed_label = "ARMED" if cb["armed"] else "DISARMED"
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>foreman dispatch — mission control</title>
@@ -85,6 +93,13 @@ td, th {{ padding: .25rem .75rem; border: 1px solid #333; text-align: left; }}
 <h2>currently running ({len(snap['running'].get('workers', []))})</h2>
 <table><tr><th>ticket</th><th>lane</th><th>model</th><th>started</th><th>elapsed</th>
 <th>projected end</th></tr>{rows_running}</table>
+
+<h2>local backends (slots)</h2>
+<table><tr><th>backend</th><th>health</th><th>running/slots</th><th>free</th></tr>
+{rows_backends}</table>
+
+<h2>parked by the dispatcher ({gate.get('parked', 0)}{'' if gate.get('enabled', True) else ', store OFF'})</h2>
+<table><tr><th>gate reason</th><th>tickets</th></tr>{rows_gate}</table>
 
 <h2>queue depth by lane</h2>
 <table><tr><th>lane</th><th>open</th><th>eligible</th><th>blocked</th></tr>

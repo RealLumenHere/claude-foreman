@@ -9,6 +9,9 @@ docstring (wq#725) are the contract.
 ```bash
 sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-dispatch.service /etc/systemd/system/
 sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-dispatch.timer   /etc/systemd/system/
+sudo mkdir -p /etc/systemd/system/lumen-foreman-dispatch.timer.d
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-dispatch.timer.d/fast-burn.conf \
+        /etc/systemd/system/lumen-foreman-dispatch.timer.d/   # live cadence: 5 min, see below
 sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-dispatch.logrotate /etc/logrotate.d/lumen-foreman-dispatch
 sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-selfheal.service /etc/systemd/system/
 sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-selfheal.timer   /etc/systemd/system/
@@ -17,6 +20,13 @@ sudo systemctl daemon-reload
 systemctl is-enabled lumen-foreman-dispatch.timer   # expect: disabled
 systemctl is-enabled lumen-foreman-selfheal.timer   # expect: disabled
 ```
+
+**Cadence.** The unit file ships `OnUnitActiveSec=20min` (its original wq#715 cadence); the
+LIVE cadence is **5 minutes**, set by the `lumen-foreman-dispatch.timer.d/fast-burn.conf`
+drop-in (Frank, 2026-09-10) which is now committed here so a fresh install matches the box.
+Check with `systemctl cat lumen-foreman-dispatch.timer` (the drop-in shows as a second block)
+and `systemctl list-timers | grep dispatch`. To go back to 20 min, remove the drop-in and
+`sudo systemctl daemon-reload`.
 
 ## 2. Prove it inert (optional, recommended)
 
@@ -260,3 +270,37 @@ Rollback: `sudo systemctl disable --now lumen-foreman-burnrate.timer`. Deleting
 written) falls back to `burn_rate.py`'s measured-2026-09-10 config defaults —
 `load_observed()` treats an absent/unreadable file as "nothing measured yet", never
 as a zero rate.
+
+### Gate parking + dispatch janitor — `lumen-foreman-janitor` (wq#2134, DISPATCH_REBUILD step 11)
+
+Parking needs no install: `foreman_dispatcher.py` parks a ticket that fails a parkable gate in
+the `dispatch_gate` table of the wq db (created on first use) and skips it until it is edited or
+its `recheck_after` passes (`gate_store.py`'s docstring has the rules). Kill it with
+`FOREMAN_GATE_STORE=off` in the dispatch service environment. Inspect it with
+`python3 /home/lumen/foreman/dispatcher/gate_store.py status`.
+
+The janitor is a 15-min one-shot timer, staged like the others. It releases RUNG_FAULT blocks
+once their backend is healthy (batches of live slots x 2), relanes parked tickets whose title
+names one unambiguous repo, archives stale HARNESS_DEFECT holds, blocks second-trip spawn loops,
+and files ONE aq digest row per parked cause per UTC day. It never touches a secrets-denied
+ticket. The existing `dispatch-watchdog` timer is NOT touched here; it is retired separately once
+`dispatch_health` is shown to cover it.
+
+```bash
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-janitor.service /etc/systemd/system/
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-janitor.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+systemctl is-enabled lumen-foreman-janitor.timer   # expect: disabled
+```
+
+Prove it before enabling — a dry run decides and logs `would_*` lines and writes nothing:
+
+```bash
+python3 /home/lumen/foreman/dispatcher/dispatch_janitor.py run --once --dry-run
+tail -5 /home/lumen/foreman/dispatch_janitor.log
+```
+
+Enable (Tier-3, Frank only): `sudo systemctl enable --now lumen-foreman-janitor.timer`.
+Rollback: `sudo systemctl disable --now lumen-foreman-janitor.timer`, or `touch
+/home/lumen/autonomy/DISPATCH_DISARM`. Note `self_heal.py` also releases RUNG_FAULT blocks, in one
+go; run only one of the two releasers if batching matters.

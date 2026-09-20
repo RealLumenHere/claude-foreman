@@ -83,6 +83,7 @@ import capability_lint    # noqa: E402  # wq#1437 BROKER_WIRING §2.1 slice B (w
 import capability         # noqa: E402  # wq#1438 BROKER_WIRING §2.2 slice C (pre-skip)
 import liveness_clear     # noqa: E402  # wq#1478 LIVENESS_GATE §12.4: stale Frank-gates auto-clear
 import gates              # noqa: E402  # DISPATCH_REBUILD step 8: the ordered gate objects
+import gate_store         # noqa: E402  # DISPATCH_REBUILD step 11: dispatch_gate parking table
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -1290,6 +1291,7 @@ class _PassCtx:
         self.lint_scanned = self.lint_flagged = 0  # wq#1437 stage 3.7 (warn): measurement only
         self.quarantined = []
         self.deferred_reproves = []  # step 8: (tid, lane, repo, reason) reproved after slock release
+        self.gate_salt = ""          # step 11: config sha, mixed into every park fingerprint
 
     def refresh_units(self):
         self.units = concurrency.list_running_units()
@@ -1342,6 +1344,30 @@ class _PassCtx:
 
     def tight(self, part):
         return self.psi_tight or (part == "cloud" and self.cloud_tight)
+
+
+def _apply_parking(ctx, candidates):
+    """Step 11: drop tickets parked in dispatch_gate from the pass and unpark the ones whose
+    fingerprint changed or whose recheck_after passed. Returns (to_evaluate, n_parked).
+
+    Each unpark logs one `gate_unparked` line (a parked ticket logged once when parked, in
+    gates.run, and logs nothing until this). FAIL-OPEN: FOREMAN_GATE_STORE=off or any error
+    evaluates every candidate, exactly as before the store existed. A dry-run reads the store
+    and reports the same partition but deletes nothing."""
+    if not gate_store.enabled():
+        return candidates, 0
+    try:
+        evaluate, parked, released = gate_store.partition(candidates, ctx.gate_salt)
+        for cand, why, row in released:
+            if not ctx.dry_run:
+                gate_store.unpark(cand["id"])
+            ctx.log.emit("gate_unparked", ticket=cand["id"], lane=cand["lane"],
+                         reason=row["reason"], why=why, dry_run=ctx.dry_run)
+    except Exception as e:  # noqa: BLE001 — parking is an optimisation, never a decision
+        ctx.log.emit("error", stage="gate_store", reason="partition_failed",
+                     detail=repr(e)[:300])
+        return candidates, 0
+    return evaluate, len(parked)
 
 
 def _gate_candidate(ctx, cand):
@@ -1637,8 +1663,9 @@ def _run_partition(ctx, part, ready):
     return None
 
 
-def _do_pass(cfg, log, state, dry_run, deferred=None):
+def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None):
     candidates = scan_candidates(cfg, log)
+    scanned = len(candidates)
     tight_cfg = cfg["tight_mode"]
     tight = False
     # wq#1408 §3.1: these three preamble calls run once per pass, before any ticket is
@@ -1726,6 +1753,8 @@ def _do_pass(cfg, log, state, dry_run, deferred=None):
     ctx.limits, ctx.pacing_cfg, ctx.burn_cfg, ctx.burn_obs = limits, pacing_cfg, burn_cfg, burn_obs
     if deferred is not None:
         ctx.deferred_reproves = deferred
+    ctx.gate_salt = config_sha or ""
+    candidates, n_parked = _apply_parking(ctx, candidates)  # step 11: open minus parked
 
     if not hygiene_legacy():
         try:
@@ -1771,7 +1800,9 @@ def _do_pass(cfg, log, state, dry_run, deferred=None):
     # has to learn every new gate. A ticket that passed every gate but lost its lane's daily
     # allowance mid-run is explained, so it is not counted.
     dispatchable_pool = {p: len(ready[p]) - ctx.lane_capped[p] for p in ready}
-    return {"candidates": len(candidates), "spawned": sum(ctx.spawned.values()),
+    return {"candidates": scanned, "spawned": sum(ctx.spawned.values()),
+            # step 11: `evaluated` is what the gates actually ran on = scanned - parked
+            "evaluated": len(candidates), "parked": n_parked,
             "tight": ctx.psi_tight or ctx.cloud_tight,
             "burn_ceiling": {",".join(k): v[0] for k, v in ctx.burn_cache.items()},
             "frank_active": frank_is_active, "frank_active_detail": frank_active_detail,
@@ -1848,7 +1879,7 @@ def run_pass(dry_run=False):
         log.emit("pass_start", dry_run=dry_run, config_path=CONFIG_PATH,
                  config_sha=config_sha)
         state = load_state()
-        summary = _do_pass(cfg, log, state, dry_run, deferred)
+        summary = _do_pass(cfg, log, state, dry_run, deferred, config_sha)
         log.emit("pass_end", **summary)
     except Exception as e:  # noqa: BLE001 — pass boundary: log + ntfy, never silent
         log.emit("error", stage="pass", reason=f"unhandled: {e!r}")

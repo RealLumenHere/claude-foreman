@@ -1,0 +1,17 @@
+# lumen-foreman-janitor.timer — 15-min cadence for the dispatch janitor (wq#2134, step 11).
+# SHIPS DISABLED (Tier-3 — same posture as lumen-foreman-dispatch.timer): nothing runs until
+# `systemctl enable --now lumen-foreman-janitor.timer` is run by hand.
+# Instant rollback without systemd: `touch /home/lumen/autonomy/DISPATCH_DISARM` (shared kill
+# switch — dispatch_janitor.py checks the same file).
+[Unit]
+Description=15-min cadence for lumen-foreman-janitor (STAGED — enabled by hand; wq#2134)
+
+[Timer]
+OnBootSec=7min
+OnUnitActiveSec=15min
+RandomizedDelaySec=30
+# A missed window is skipped, never replayed in a burst.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

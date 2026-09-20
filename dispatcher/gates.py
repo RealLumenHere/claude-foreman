@@ -12,10 +12,15 @@ A gate that delegates to a handler which already logs its own decision line and 
 (runaway, harness-defect hold, spawn loop, fire approval, capability) returns a Fail with
 `logged=True` so the pipeline does not log it twice.
 
-`Fail` carries what the step-11 parking table needs and nothing else consumes yet:
+`Fail` carries what the step-11 parking table (gate_store.py) consumes:
   terminal            True when only a ticket rewrite / policy PR can change the verdict
   recheck_after       ISO timestamp when time alone can change the verdict (else None)
   fingerprint_inputs  the ticket columns whose edit re-opens the verdict
+  parkable            opt-in: the verdict is a pure function of the ticket + config + the clock,
+                      so `run()` may park the ticket and the scan skips it until the fingerprint
+                      changes or recheck_after passes. Gates that read live external state
+                      (runaway, harness-defect, spawn-loop, fire approval / no-probe, running units)
+                      never park: their handlers page/dedup on their own and self-clear.
 
 Gates reach the dispatcher's helpers through `g.fd` (the calling module, injected by
 `_gate_candidate`) rather than importing it: run as a script the dispatcher is `__main__`,
@@ -36,6 +41,7 @@ class Fail:
     recheck_after: object = None
     fingerprint_inputs: tuple = ()
     logged: bool = False           # the handler already wrote this decision's line
+    parkable: bool = False
 
 
 class _Pass:
@@ -85,7 +91,8 @@ class LaneCap(Gate):
     def check(self, g):
         if g.ctx.state["lane_counts"].get(g.lane, 0) >= g.policy["max_per_day"]:
             return Fail("lane_policy", "lane_cap", recheck_after=_next_utc_midnight(),
-                        detail=f"max_per_day={g.policy['max_per_day']} reached")
+                        detail=f"max_per_day={g.policy['max_per_day']} reached",
+                        parkable=True)
         return PASS
 
 
@@ -115,7 +122,7 @@ class LaneRepo(Gate):
         if not g.repo and g.lane != g.fd.REPO_HINT_LANE:
             return Fail("lane_policy", "lane_unmapped", terminal=True,
                         detail="no LANE_REPO entry — never guess a repo",
-                        fingerprint_inputs=("lane", "needs", "detail"))
+                        fingerprint_inputs=("lane", "needs", "detail"), parkable=True)
         return PASS
 
 
@@ -148,7 +155,7 @@ class RepoMismatch(Gate):
         mismatch = g.fd.router.repo_mismatch(g.t)
         if mismatch:
             return Fail("lane_policy", "repo_mismatch", detail=mismatch, terminal=True,
-                        fingerprint_inputs=("lane", "title"))
+                        fingerprint_inputs=("lane", "title"), parkable=True)
         return PASS
 
 
@@ -163,7 +170,7 @@ class RepoResolve(Gate):
         if not g.repo:
             return Fail("lane_policy", "lane_unmapped", terminal=True,
                         detail="no LANE_REPO entry — never guess a repo",
-                        fingerprint_inputs=("lane", "needs", "detail"))
+                        fingerprint_inputs=("lane", "needs", "detail"), parkable=True)
         return PASS
 
 
@@ -181,8 +188,15 @@ class Capability(Gate):
         reason = fd.enforce_capability(ctx.state, g.tid, g.t, g.lane, g.repo, g.derived,
                                        ctx.dry_run, g.log)
         if reason:
-            return Fail("capability", reason, terminal=True, logged=True,
-                        fingerprint_inputs=("title", "detail", "needs", "archetype"))
+            # only a denial / unresolved need is a fact about the ticket TEXT; an unreachable
+            # path or unknown node is a fact about the fleet and can clear without an edit
+            denied = fd.capability.REASON_CAPABILITY_DENIED_BY_POLICY
+            hard = (denied, fd.capability.REASON_NEEDS_UNRESOLVED)
+            # the secret wall (`denied`) is fail-closed and re-derived every pass, never
+            # parked: a deny-list or sweep change must bite at once, not after a 6 h flush
+            return Fail("capability", reason, terminal=reason in hard, logged=True,
+                        fingerprint_inputs=("title", "detail", "needs", "archetype"),
+                        parkable=reason != denied)
         return PASS
 
 
@@ -233,7 +247,7 @@ class Nodispatch(Gate):
         why = g.fd.nodispatch_reason(g.t)
         if why:
             return Fail("nodispatch", "nodispatch_marker", detail=why, terminal=True,
-                        fingerprint_inputs=("title",))
+                        fingerprint_inputs=("title",), parkable=True)
         return PASS
 
 
@@ -248,8 +262,11 @@ class FrankGate(Gate):
             return PASS
         if g.fd._liveness_autoclosed(g.tid, g.t, g.log):  # wq#1478 §12.4, same as HumanLane
             return Fail("frank_gate", "frank_gated", logged=True)
+        # marker / pending decision gate: only an edit (title, frank_response) changes them. An
+        # unmet wq `gate` path is a file check the ticket never sees change — never parked.
         return Fail("frank_gate", "frank_gated", detail=why,
-                    fingerprint_inputs=("title", "gate", "gate_type", "frank_response"))
+                    fingerprint_inputs=("title", "gate", "gate_type", "frank_response"),
+                    parkable=not why.startswith("wq gate unmet"))
 
 
 class FireApproval(Gate):
@@ -276,6 +293,7 @@ class FireProbe(Gate):
         if (fd.fire_gate.parse_fire_probe(detail) is None
                 and fd.fire_gate.parse_probe_ref(detail)[1] is None):
             fd.handle_no_probe_fire(g.ctx.state, g.tid, g.lane, g.ctx.dry_run, g.log)
+            # a fire safety refusal that pages on its own dedup ledger: re-derived every pass
             return Fail("fire_probe", "fire_no_probe", logged=True, fingerprint_inputs=("detail",))
         return PASS
 
@@ -290,7 +308,8 @@ class Hold(Gate):
         if why:
             expires = g.t.get("hold_expires")
             return Fail("hold", "held", detail=why, fingerprint_inputs=("hold_by", "hold_expires"),
-                        recheck_after=(expires.replace(" ", "T") + "Z") if expires else None)
+                        recheck_after=(expires.replace(" ", "T") + "Z") if expires else None,
+                        parkable=True)
         return PASS
 
 
@@ -301,7 +320,8 @@ class Deps(Gate):
     def check(self, g):
         unmet = g.fd.unmet_deps(g.t, g.ctx.dep_cache)
         if unmet:
-            return Fail("deps", "deps_unmet", detail=",".join(unmet), fingerprint_inputs=("deps",))
+            return Fail("deps", "deps_unmet", detail=",".join(unmet), fingerprint_inputs=("deps",),
+                        parkable=True)  # gate_store adds each dep's status to the fingerprint
         return PASS
 
 
@@ -326,7 +346,8 @@ class Route(Gate):
         g.model, skip_reason = g.fd.candidate_model(g.t, g.tid)
         if not g.model:
             return Fail("budget", skip_reason, detail="router has no rung for this ticket",
-                        terminal=True, fingerprint_inputs=("model", "effort", "archetype"))
+                        terminal=True, fingerprint_inputs=("model", "effort", "archetype"),
+                        parkable=True)
         return PASS
 
 
@@ -337,15 +358,46 @@ GATES = (LaneCap(), HumanLane(), LaneRepo(), TicketLoad(), RepoMismatch(), RepoR
          FireApproval(), FireProbe(), Hold(), Deps(), AlreadyRunning(), Route())
 
 
+def _park(g, res):
+    """Park a parkable Fail in gate_store; returns the row's recheck_after, or None when not
+    parked (not parkable, dry-run, store off, or any store error — fail-open: an unparked
+    ticket is simply evaluated again next pass)."""
+    if not res.parkable or g.ctx.dry_run:
+        return None
+    store = g.fd.gate_store
+    if not store.enabled():
+        return None
+    try:
+        fp = store.fingerprint(g.tid, res.fingerprint_inputs, getattr(g.ctx, "gate_salt", ""))
+        return store.park(g.tid, res.reason, fp, inputs=res.fingerprint_inputs, lane=g.lane,
+                          terminal=res.terminal, recheck_after=res.recheck_after,
+                          detail=res.detail)
+    except Exception as e:  # noqa: BLE001 — parking is an optimisation, never a decision
+        g.log.emit("error", stage="gate_store", ticket=g.tid, reason="park_failed",
+                   detail=repr(e)[:300])
+        return None
+
+
 def run(g, gates=None):
     """Walk the gates in order. Returns PASS, or the first Fail — already logged as one
-    `skip` event unless its handler logged it."""
+    `skip` event unless its handler logged it.
+
+    A parked Fail is logged ONCE, when it is parked: the skip line itself carries
+    `parked=True, recheck_after=...` (one line per decision stays true), or, for a handler that
+    already wrote its own line, one `gate_parked` event follows it. The scan then never shows
+    the ticket to the gates again until `gate_unparked`."""
     for gate in GATES if gates is None else gates:
         res = gate.check(g)
         if res is PASS:
             continue
+        recheck = _park(g, res)
         if not res.logged:
             extra = {} if res.detail is None else {"detail": res.detail}
+            if recheck:
+                extra.update(parked=True, recheck_after=recheck)
             g.log.skip(g.tid, g.lane, res.stage, res.reason, **extra)
+        elif recheck:
+            g.log.emit("gate_parked", ticket=g.tid, lane=g.lane, reason=res.reason,
+                       recheck_after=recheck)
         return res
     return PASS

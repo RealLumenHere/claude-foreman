@@ -299,6 +299,22 @@ repo for the pass and is reproved after `slock_release` in the same process, und
 `foreman-reprove-<repo>` lock. Levers: `FOREMAN_DISPATCH_HYGIENE=legacy` (lock/reprove/
 human-lane scan), `FOREMAN_CHARGE_MODE=legacy` (harness-defect edit rule, spawn-loop block).
 
+**Gate parking and the janitor (DISPATCH_REBUILD step 11).** A `Fail` marked `parkable` (a pure
+function of the ticket, config and clock) is written to the `dispatch_gate` table of the wq db
+by `gate_store.py`; `scan` then evaluates open minus parked. A parked ticket returns when its
+fingerprint changes (its gate inputs + lane/title/detail + each dep's status + the config sha) or
+`recheck_after` passes (lane_cap: next UTC midnight; held: hold expiry; terminal: 6 h; else 1 h).
+The park is logged once (`parked=true` on the `skip` line, or a `gate_parked` event after a
+handler's own line) and the return once (`gate_unparked`, `why=`); `pass_end` gains `evaluated`
+and `parked` (`candidates` stays the scan size). Never parked: the secret wall
+(`capability_denied_by_policy`), an unmet wq `gate` path, runaway / harness-defect / spawn-loop /
+fire approval / fire no-probe / already_running. Every store call is its own short WAL transaction with a 5 s busy
+timeout and FAILS OPEN (an error = not parked). `dispatch_janitor.py` (15-min timer, staged)
+releases RUNG_FAULT blocks in batches of live slots x 2, relanes on an unambiguous title repo
+marker, archives stale harness holds, blocks second-trip spawn loops and files one aq digest row
+per parked cause per UTC day; it never touches a secrets-denied ticket. Lever:
+`FOREMAN_GATE_STORE=off`.
+
 ## 8. Logging + tracing (MUST 9)
 
 **dispatcher.log** — append-only JSONL at `/home/lumen/foreman/dispatcher.log` (the

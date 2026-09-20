@@ -12,6 +12,8 @@ thing dispatch does.
 snapshot() sections:
   running        currently-live fworker units (ticket, lane, model, started_at,
                  elapsed_s, projected_end)
+  dispatch_gate  open tickets parked by the dispatcher, by gate reason (gate_store.by_reason)
+  local_backends per-backend {healthy, slots, running, free} from config `local_backends`
   queue_depth    per-lane {open, eligible, blocked} for every allowlisted lane
   failure_rate   rolling failure rate, overall + per-lane, 24h and 7d windows
   circuit_breaker  armed/tripped + the window stats behind that verdict
@@ -36,6 +38,8 @@ import runaway                  # noqa: E402
 import self_heal                # noqa: E402
 import concurrency              # noqa: E402
 import fworker                  # noqa: E402
+import gate_store               # noqa: E402
+import local_capacity           # noqa: E402
 
 WINDOWS_MIN = {"24h": 24 * 60, "7d": 7 * 24 * 60}
 
@@ -179,11 +183,38 @@ def budget_state():
              "cache_age_s", "updated_at")}
 
 
+def dispatch_gate_state():
+    """Step 11: open tickets parked by the dispatcher, by gate reason (gate_store.by_reason)."""
+    by_reason = gate_store.by_reason()
+    return {"enabled": gate_store.enabled(), "parked": sum(by_reason.values()),
+            "by_reason": by_reason}
+
+
+def local_backend_slots(running):
+    """Per-backend {healthy, slots, running, free} from config.json `local_backends`, `running`
+    being running_workers()'s result. {} when no backend is configured or config is invalid."""
+    try:
+        cfg, _warnings, _sha = fd.load_config()
+    except fd.ConfigError:
+        return {}
+    backends = cfg.get("local_backends")
+    if not isinstance(backends, dict) or not backends:
+        return {}
+    models = []
+    for w in running.get("workers", []):
+        if concurrency.is_local_unit(w["unit"]):
+            models.append(concurrency.unit_model(w["unit"]) or w.get("model"))
+    return local_capacity.LocalCapacity(backends, running=lambda: models).snapshot()
+
+
 def snapshot(now=None):
     now = now if now is not None else time.time()
+    running = running_workers(now)
     return {
         "generated_at": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
-        "running": running_workers(now),
+        "running": running,
+        "dispatch_gate": dispatch_gate_state(),
+        "local_backends": local_backend_slots(running),
         "queue_depth": queue_depth(),
         "failure_rate": failure_rate_report(now),
         "circuit_breaker": circuit_breaker_state(),
