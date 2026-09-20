@@ -889,6 +889,37 @@ def granted_dirs(cmd):
             if a == "--add-dir" and i + 1 < len(cmd)]
 
 
+def drop_stale_labels(burned, raw, ticket_id, attempt):
+    """wq#2327: labels of `burned` that the rule table ON DISK still reads in `raw`.
+
+    This process scored the line with the table it imported when the attempt
+    started. A rule narrowed since then — the storm's fixes landed at 22:54, 22:57,
+    23:09 and 23:31 on one evening — does not reach it, so a long attempt keeps
+    filing rotate-today tickets under a rule the fleet already retired. Re-scoring
+    against `masking.deployed()` is what makes a hot fix take effect on the runs in
+    flight, which is the only moment a mask fix is actually worth anything.
+
+    Drop only, never add. A label the deployed table finds and this one did not is a
+    value that was never masked out of the artefacts, and it has not been through
+    burn_filter's provenance screen either — paging on it would re-open the false
+    alarms this closes. It also keeps the failure direction right: `deployed()`
+    falls back to the imported module, so the worst case is today's behaviour.
+    """
+    live = masking.deployed()
+    if live is masking:
+        return burned
+    try:
+        labels = set(live.mask_text(raw)[1])
+    except Exception as e:  # noqa: BLE001
+        log(f"WARN: deployed-rule recheck failed ({e!r}) — alarming on all hits")
+        return burned
+    stale = sorted(h for h in burned if h not in labels)
+    if stale:
+        log(f"mask hit wq#{ticket_id} attempt {attempt}: {','.join(stale)} no longer "
+            f"matches the deployed rule table ({live.__file__}) — masked, no rotation")
+    return [h for h in burned if h in labels]
+
+
 def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
                      ticket_id, attempt):
     """wq#2290: alarm on a mask hit only when the matched text is actually a live
@@ -930,6 +961,7 @@ def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
     if benign:
         log(f"mask hit wq#{ticket_id} attempt {attempt}: {','.join(sorted(benign))} "
             f"matched committed source text, not a live credential — masked, no rotation")
+    burned = drop_stale_labels(burned, raw, ticket_id, attempt)
     if burned:
         alarmed.update(burned)
         # wq#2288: re-scan the raw line for the redacted record — only on an alarm.

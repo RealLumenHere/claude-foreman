@@ -24,7 +24,10 @@ alphabet ([A-Za-z0-9._-] and the literal MASKED) contains no JSON metacharacters
 so a masked line parses exactly like the original.
 """
 import hashlib
+import importlib.util
+import os
 import re
+import sys
 
 # wq#2292: a prefix only counts at a word boundary. Without `(?<![A-Za-z0-9])` the
 # `ghs_` in the repo name `highs_solver` reads as a token, and since the alarm is
@@ -118,6 +121,63 @@ CONTEXT_CHARS = 120   # masked context kept either side of a hit
 PREFIX_CHARS = 48     # of the kept, non-secret prefix
 
 MASK = "MASKED"       # the literal every replacement ends in
+
+# Built by concatenation on purpose: a literal `AKIA`+16 in this file would be a
+# credential-shaped string in tracked source, which is the exact class of text that
+# filed half the rotation backlog (wq#2299, tests/test_token_injection.py).
+_CANARY = "AKIA" + "Q" * 16
+
+try:
+    _st = os.stat(__file__)
+    _SELF = (os.path.abspath(__file__), _st.st_mtime_ns, _st.st_size)
+except OSError:      # pragma: no cover - source not on disk (zipimport, -c)
+    _SELF = None
+
+_DEPLOYED = {}
+
+
+def deployed(path=None):
+    """This module as its FILE defines it right now, not as the caller imported it.
+
+    wq#2327: an fworker process holds one attempt for up to two hours and scores
+    every line of that attempt's stream with the rule table it imported at spawn.
+    So a rule narrowed to kill a false positive does not reach the attempts already
+    running — they keep paging pri-1 and filing rotate-today tickets under the old
+    table for the rest of their life. That is most of the 2026-09-20 storm's tail,
+    dated: wq#2297's attempt started 22:37:43, and it filed wq#2327 (22:44:02),
+    wq#2356 (23:11:43) and wq#2366 (23:25:49) — all three after the chain guard
+    (345bf49, 22:57:04) and the provenance screen (281327c, 23:09:47) had landed,
+    all three carrying the pre-22:40 ticket template, and none of them a credential.
+
+    Reloading is deliberately one-directional at the call site (fworker only ever
+    DROPS a label the deployed table no longer reads, never adds one), so the worst
+    a stale or broken file can do is leave the caller on its own table.
+
+    Two guards, because silencing the tripwire is worse than a false page:
+    a fresh copy must execute, and it must still label `_CANARY`. Anything else —
+    a half-written deploy, an emptied PATTERNS — falls back to the imported module.
+    """
+    path = os.path.abspath(path or __file__)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return sys.modules[__name__]
+    key = (path, st.st_mtime_ns, st.st_size)
+    if key == _SELF:
+        return sys.modules[__name__]          # unchanged since import; nothing to load
+    hit = _DEPLOYED.get(path)
+    if hit and hit[0] == key:
+        return hit[1]
+    try:
+        spec = importlib.util.spec_from_file_location(f"{__name__}_deployed", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        if not mod.mask_text(_CANARY)[1]:
+            raise ValueError(f"{path} no longer masks the canary")
+    except Exception:  # noqa: BLE001 - any failure means keep the imported table
+        return sys.modules[__name__]
+    _DEPLOYED[path] = (key, mod)
+    return mod
 
 
 def _matches(rx, text):

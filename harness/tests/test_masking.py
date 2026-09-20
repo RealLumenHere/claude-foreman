@@ -528,3 +528,106 @@ def test_the_rotation_ticket_names_the_settle_tool(tmp_path, monkeypatch):
     detail = next(x for x in add if "wq#2275 mask tripwire" in str(x))
     assert f"{fworker.MASK_REPLAY} 2278" in detail
     assert os.path.exists(fworker.MASK_REPLAY)  # a pointer to nothing costs the hour
+
+
+# --- wq#2327: a rule narrowed mid-attempt must reach the attempts in flight ---------
+
+# The rule exactly as it was deployed when it filed wq#2327 at 22:44:02, appended to a
+# COPY of masking.py — a second table inside one process is the only way to hold "what
+# this process imported" and "what is on disk now" apart in a test.
+LEGACY_KV = """
+
+PATTERNS = PATTERNS + [("kv-secret", re.compile(
+    r'((TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT)["\\s]*[:=]["\\s]*)[A-Za-z0-9._-]{12,}',
+    re.IGNORECASE), r"\\1MASKED")]
+"""
+
+# wq#2327's burned "credential": a 19-char function name (node_render_gateway.py:418,
+# in 11 tracked files), read as a secret by the legacy rule's missing tail boundary.
+WQ2327_LINE = "        key = apply_key_allowlist(reg)"
+
+
+def masking_copy(tmp_path, extra=""):
+    """A loadable copy of masking.py at our own path, optionally with `extra` source
+    appended. Copying is what makes `deployed()` load: an unchanged file is returned
+    as the imported module, by identity, without a second exec."""
+    with open(masking.__file__, errors="replace") as fh:
+        source = fh.read()
+    path = tmp_path / "masking_copy.py"
+    path.write_text(source + extra)
+    return str(path)
+
+
+def test_deployed_is_the_imported_module_when_the_file_has_not_changed():
+    assert masking.deployed() is masking
+
+
+def test_deployed_loads_the_table_on_disk_not_the_imported_one(tmp_path):
+    path = masking_copy(tmp_path, LEGACY_KV)
+    live = masking.deployed(path)
+    assert live is not masking
+    assert live.mask_text(WQ2327_LINE)[1] == ["kv-secret"]   # the old table still fires
+    assert masking.mask_text(WQ2327_LINE)[1] == []           # today's does not
+    # cached on (path, mtime, size): unchanged is free, rewritten reloads
+    assert masking.deployed(path) is live
+    redeployed = masking_copy(tmp_path, LEGACY_KV + "\n# a later deploy\n")
+    assert masking.deployed(redeployed) is not live
+
+
+def test_a_deployed_file_that_stopped_masking_is_not_trusted(tmp_path):
+    """Silencing the tripwire is worse than a false page, so a file that no longer
+    labels the canary — an emptied table, a half-written deploy — is refused and the
+    caller keeps the table it imported."""
+    for extra in ("\nPATTERNS = []\n", "\nPATTERNS = [   # truncated deploy\n"):
+        assert masking.deployed(masking_copy(tmp_path, extra)) is masking
+
+
+def test_a_rule_narrowed_mid_attempt_stops_the_alarm(tmp_path, monkeypatch):
+    """wq#2327, the defect this closes. wq#2297's attempt started 22:37:43 and scored
+    every line for the next 56 minutes with the table it imported then. The kv rule was
+    narrowed at 22:54/23:31, the chain guard landed 22:57, the provenance screen 23:09
+    — and that attempt still filed wq#2327 (22:44), wq#2356 (23:11) and wq#2366 (23:25),
+    all three under the retired rule, none of them a credential.
+    """
+    alarms = []
+    monkeypatch.setattr(fworker, "mask_alarm",
+                        lambda tid, att, labels, records=None: alarms.append(labels))
+    real, copy = masking.deployed, masking_copy(tmp_path)
+    monkeypatch.setattr(masking, "deployed", lambda path=None: real(copy))
+    # `hits` is what the stale in-process table reported; the file on disk no longer
+    # reads the line as anything, so nothing pages and nothing is filed.
+    fworker.screen_mask_hits(["kv-secret"], WQ2327_LINE, set(), set(), set(),
+                             [os.path.dirname(masking.__file__)], 2327, 1)
+    assert alarms == []
+
+
+def test_a_hit_the_deployed_table_still_reads_pages_as_before(tmp_path, monkeypatch):
+    """The other direction: the recheck must not become a way for a mask hit to go
+    quiet. Same line, same stale caller — but the deployed table fires on it too."""
+    alarms = []
+    monkeypatch.setattr(fworker, "mask_alarm",
+                        lambda tid, att, labels, records=None: alarms.append(labels))
+    real, copy = masking.deployed, masking_copy(tmp_path, LEGACY_KV)
+    monkeypatch.setattr(masking, "deployed", lambda path=None: real(copy))
+    fworker.screen_mask_hits(["kv-secret"], WQ2327_LINE, set(), set(), set(),
+                             [os.path.dirname(masking.__file__)], 2327, 1)
+    assert alarms == [["kv-secret"]]
+
+
+def test_a_dropped_label_can_still_alarm_later_in_the_attempt(tmp_path, monkeypatch):
+    """Dropping is per line, not per attempt. `alarmed` is updated only for labels
+    that survive the recheck, so a label quieted on a line of source still pages on
+    the real credential forty turns later — the wq#2290 bookkeeping rule, kept."""
+    alarms, alarmed = [], set()
+    monkeypatch.setattr(fworker, "mask_alarm",
+                        lambda tid, att, labels, records=None: alarms.append(labels))
+    real, copy = masking.deployed, masking_copy(tmp_path)
+    monkeypatch.setattr(masking, "deployed", lambda path=None: real(copy))
+    repo = [os.path.dirname(masking.__file__)]
+    fworker.screen_mask_hits(["kv-secret"], WQ2327_LINE, alarmed, set(), set(),
+                             repo, 2327, 1)
+    assert (alarms, alarmed) == ([], set())
+    # `live` short-circuits provenance, so the second line needs no git grep
+    fworker.screen_mask_hits(["kv-secret"], f"password: {PW}", alarmed, set(), {PW},
+                             repo, 2327, 1)
+    assert alarms == [["kv-secret"]] and alarmed == {"kv-secret"}
