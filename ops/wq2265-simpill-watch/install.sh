@@ -14,6 +14,19 @@ set -euo pipefail
 
 SRC=/home/lumen/foreman/harness/systemd
 STATE=/home/lumen/foreman/dispatcher/runtime/simpill_seen.json
+REPOS=/home/lumen/foreman/harness/simpill_repos.json
+
+if [ "${1:-}" = --verify ]; then
+  . "$(cd "$(dirname "$0")" && pwd)/../_verify.sh"
+  vunit_file "$SRC/lumen-simpill-watch.service" /etc/systemd/system/lumen-simpill-watch.service
+  vunit_file "$SRC/lumen-simpill-watch.timer"   /etc/systemd/system/lumen-simpill-watch.timer
+  venabled   lumen-simpill-watch.timer
+  vactive    lumen-simpill-watch.timer
+  vcontains  "$STATE" '"baselined": *true'
+  vcontains  "$REPOS" '"fork_owner": *"[^"]+"'
+  vcontains  "$REPOS" '"us": *\[ *"[^"]+"'
+  vdone
+fi
 
 install -D -m 644 "$SRC/lumen-simpill-watch.service" /etc/systemd/system/lumen-simpill-watch.service
 install -D -m 644 "$SRC/lumen-simpill-watch.timer"   /etc/systemd/system/lumen-simpill-watch.timer
