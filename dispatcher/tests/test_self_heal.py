@@ -198,6 +198,162 @@ def test_non_infra_never_released(henv, reason, klass):
     assert log_events(henv, "heal", ticket=tid) == []
 
 
+# ---- wq#2129 (DISPATCH_REBUILD_SPEC step 5): RUNG_FAULT + charged_only -------------------
+
+RUNG_REASON = "RUNG_FAULT: HANG after 0 turns on local-worker; transcript=x"
+
+
+@pytest.fixture
+def rung_env(henv, monkeypatch):
+    """A `local_backends` config, a cooldown file path, and a probe stub."""
+    cfg = henv["tmp"] / "config.json"
+    cfg.write_text(json.dumps({"local_backends": {
+        "qwen-local": {"health_url": "http://qwen.invalid/health"}}}))
+    cooldown = henv["tmp"] / "backend_cooldown.json"
+    probes = []
+    monkeypatch.setattr(sh, "CONFIG_PATH", str(cfg))
+    monkeypatch.setattr(sh, "BACKEND_COOLDOWN_PATH", str(cooldown))
+    state = {"up": True}
+    monkeypatch.setattr(sh, "backend_answers",
+                        lambda url: probes.append(url) or state["up"])
+    return {"cooldown": cooldown, "probes": probes, "state": state}
+
+
+def pin_model(henv, tid, model):
+    con = sqlite3.connect(henv["wq_db"])
+    con.execute("UPDATE tasks SET model=? WHERE id=?", (model, tid))
+    con.commit()
+    con.close()
+
+
+def test_classify_block_learns_rung_fault(henv):
+    tid = add_ticket()
+    block_ticket(tid, RUNG_REASON)
+    klass, detail = sh.classify_block(sh.wq_show(tid))
+    assert klass == "RUNG_FAULT" and detail.startswith("HANG after 0 turns")
+
+
+def test_rung_fault_released_when_backend_healthy(henv, rung_env):
+    tid = add_ticket()
+    pin_model(henv, tid, "qwen-local")
+    block_ticket(tid, RUNG_REASON)
+
+    assert sh.run_pass() == 0
+
+    assert wq_show_field(tid, "status") == "open"
+    assert rung_env["probes"] == ["http://qwen.invalid/health"]
+    assert len(log_events(henv, "heal", ticket=tid)) == 1
+
+
+def test_rung_fault_release_ignores_block_age(henv, rung_env):
+    from datetime import timedelta
+    tid = add_ticket()
+    pin_model(henv, tid, "qwen-local")
+    block_ticket(tid, RUNG_REASON)
+    set_blocked_at(henv, tid, sh._utcnow() - timedelta(hours=6))  # far past STALE_AFTER_MIN
+
+    assert sh.run_pass() == 0
+
+    assert wq_show_field(tid, "status") == "open"
+    assert ntfy_lines(henv) == []
+
+
+def test_rung_fault_held_while_backend_in_cooldown(henv, rung_env):
+    tid = add_ticket()
+    pin_model(henv, tid, "qwen-local")
+    block_ticket(tid, RUNG_REASON)
+    until = sh._utcnow().timestamp() + 900
+    rung_env["cooldown"].write_text(json.dumps({"qwen-local": {"until": until}}))
+
+    assert sh.run_pass() == 0
+
+    assert wq_show_field(tid, "status") == "blocked"
+    assert log_events(henv, "skip", ticket=tid)[0]["reason"] == "rung_backend_in_cooldown"
+    assert rung_env["probes"] == []  # cooldown is checked before the network
+
+
+def test_rung_fault_released_once_the_cooldown_lapsed(henv, rung_env):
+    tid = add_ticket()
+    pin_model(henv, tid, "qwen-local")
+    block_ticket(tid, RUNG_REASON)
+    rung_env["cooldown"].write_text(
+        json.dumps({"qwen-local": {"until": sh._utcnow().timestamp() - 5}}))
+
+    assert sh.run_pass() == 0
+    assert wq_show_field(tid, "status") == "open"
+
+
+def test_rung_fault_held_while_health_url_does_not_answer(henv, rung_env):
+    tid = add_ticket()
+    pin_model(henv, tid, "qwen-local")
+    block_ticket(tid, RUNG_REASON)
+    rung_env["state"]["up"] = False
+
+    assert sh.run_pass() == 0
+
+    assert wq_show_field(tid, "status") == "blocked"
+    assert log_events(henv, "skip", ticket=tid)[0]["reason"] == "rung_backend_unhealthy"
+
+
+def test_rung_fault_held_when_backend_cannot_be_resolved(henv, rung_env):
+    tid = add_ticket()  # no pinned model, no attempt record naming one
+    block_ticket(tid, RUNG_REASON)
+
+    assert sh.run_pass() == 0
+
+    assert wq_show_field(tid, "status") == "blocked"
+    assert log_events(henv, "skip", ticket=tid)[0]["reason"] == "rung_backend_unresolved"
+
+
+def test_rung_fault_backend_falls_back_to_the_latest_attempt_model(henv, rung_env):
+    tid = add_ticket()
+    block_ticket(tid, RUNG_REASON)
+    d = henv["runs_root"] / f"wq{tid}"
+    d.mkdir()
+    (d / "attempt-1.json").write_text(json.dumps({"model": "qwen-local"}))
+
+    assert sh.run_pass() == 0
+    assert wq_show_field(tid, "status") == "open"
+
+
+def test_rung_fault_dry_run_does_not_release(henv, rung_env):
+    tid = add_ticket()
+    pin_model(henv, tid, "qwen-local")
+    block_ticket(tid, RUNG_REASON)
+
+    assert sh.run_pass(dry_run=True) == 0
+
+    assert wq_show_field(tid, "status") == "blocked"
+    assert len(log_events(henv, "would_heal", ticket=tid)) == 1
+
+
+def test_attempt_count_charged_only(henv, monkeypatch):
+    d = henv["runs_root"] / "wq7"
+    d.mkdir()
+    for i, rec in enumerate([{}, {"charged_to": "ticket"}, {"charged_to": "rung"},
+                             {"charged_to": "harness"}, {"charged_to": "budget"}], 1):
+        (d / f"attempt-{i}.json").write_text(json.dumps(rec))
+    (d / "attempt-9.json").write_text("not json")  # unreadable = ticket, like a bare name
+    assert sh.attempt_count(7) == 6
+    assert sh.attempt_count(7, charged_only=True) == 3
+    monkeypatch.setenv("FOREMAN_CHARGE_MODE", "legacy")
+    assert sh.attempt_count(7, charged_only=True) == 6
+
+
+def test_infra_crash_cap_ignores_rung_charged_attempts(henv):
+    tid = add_ticket()
+    block_ticket(tid, "INFRA_CRASH: LAUNCH_FAILURE after 2 attempts; transcript=x")
+    d = henv["runs_root"] / f"wq{tid}"
+    d.mkdir()
+    for i in range(1, sh.MAX_HEAL_ATTEMPTS + 1):
+        (d / f"attempt-{i}.json").write_text(json.dumps({"charged_to": "rung"}))
+
+    assert sh.run_pass() == 0
+
+    assert wq_show_field(tid, "status") == "open"
+    assert log_events(henv, "heal", ticket=tid)[0]["attempts"] == 0
+
+
 # ---- attempt cap ------------------------------------------------------------------------
 
 def test_heal_attempts_exhausted_notifies_and_leaves_blocked(henv):

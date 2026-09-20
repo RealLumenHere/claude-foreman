@@ -301,6 +301,130 @@ def test_null_db_attempt_column_degrades_to_file_count_only(renv):
 
 # ---- CLI ---------------------------------------------------------------------------------
 
+DAY = 86400
+
+
+def write_attempts(renv, tid, n, start=1, **fields):
+    """n attempt records carrying `fields` (charged_to, model, finished_at, ...)."""
+    d = renv["runs_root"] / f"wq{tid}"
+    d.mkdir(parents=True, exist_ok=True)
+    for i in range(start, start + n):
+        (d / f"attempt-{i}.json").write_text(json.dumps({"attempt": i, **fields}))
+
+
+def pin(tid, **cols):
+    conn = sqlite3.connect(os.environ["WQ_DB"])
+    try:
+        for col, val in cols.items():
+            conn.execute(f"UPDATE tasks SET {col}=? WHERE id=?", (val, tid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_five_rung_charged_attempts_are_not_stuck(renv):
+    tid = add_ticket()
+    write_attempts(renv, tid, 5, charged_to="rung")
+    pin(tid, attempt=5)  # the claims that produced those files
+    assert tid not in runaway.stuck_ticket_ids()
+
+
+def test_five_ticket_charged_attempts_are_stuck(renv):
+    tid = add_ticket()
+    write_attempts(renv, tid, 5, charged_to="ticket")
+    assert tid in runaway.stuck_ticket_ids()
+
+
+def test_records_without_charged_to_count_as_ticket(renv):
+    tid = add_ticket()
+    write_attempts(renv, tid, 5)
+    assert runaway.stuck_ticket_ids()[tid]["attempts"] == 5
+
+
+@pytest.mark.parametrize("cause", ["harness", "budget"])
+def test_other_non_ticket_causes_are_not_counted(renv, cause):
+    tid = add_ticket()
+    write_attempts(renv, tid, 4, charged_to="ticket")
+    write_attempts(renv, tid, 3, start=5, charged_to=cause)
+    assert tid not in runaway.stuck_ticket_ids()
+
+
+def test_mixed_charges_count_only_the_ticket_ones(renv):
+    tid = add_ticket()
+    write_attempts(renv, tid, 3, charged_to="rung")
+    write_attempts(renv, tid, 5, start=4, charged_to="ticket")
+    assert runaway.stuck_ticket_ids()[tid]["attempts"] == 5
+
+
+def test_attempts_older_than_the_window_do_not_count(renv):
+    import time
+    tid = add_ticket()
+    old = time.time() - (runaway.RUNAWAY_WINDOW_DAYS + 1) * DAY
+    write_attempts(renv, tid, 5, finished_at=old)
+    assert tid not in runaway.stuck_ticket_ids()
+
+    write_attempts(renv, tid, 1, start=6, finished_at=time.time())
+    assert tid not in runaway.stuck_ticket_ids()  # 1 in-window attempt, not 6
+
+
+def test_window_falls_back_to_file_mtime_without_a_timestamp(renv):
+    import time
+    tid = add_ticket()
+    write_attempts(renv, tid, 5)
+    old = time.time() - (runaway.RUNAWAY_WINDOW_DAYS + 1) * DAY
+    for f in (renv["runs_root"] / f"wq{tid}").glob("attempt-*.json"):
+        os.utime(f, (old, old))
+    assert tid not in runaway.stuck_ticket_ids()
+
+
+def test_attempts_older_than_the_last_model_edit_do_not_count(renv):
+    import time
+    tid = add_ticket()
+    pin(tid, model="claude-sonnet-5")
+    t = time.time()
+    write_attempts(renv, tid, 4, model="qwen3-coder-30b", finished_at=t - 600)
+    write_attempts(renv, tid, 4, start=5, model="claude-sonnet-5", finished_at=t - 60)
+    assert tid not in runaway.stuck_ticket_ids()  # 4 since the edit, 4 before it
+
+    write_attempts(renv, tid, 1, start=9, model="claude-sonnet-5", finished_at=t)
+    assert runaway.stuck_ticket_ids()[tid]["attempts"] == 5
+
+
+def test_attempts_older_than_the_last_archetype_edit_do_not_count(renv):
+    import time
+    tid = add_ticket()
+    pin(tid, archetype="mechanical-edit")
+    t = time.time()
+    write_attempts(renv, tid, 3, archetype="build", finished_at=t - 600)
+    write_attempts(renv, tid, 4, start=4, archetype="mechanical-edit", finished_at=t - 60)
+    assert tid not in runaway.stuck_ticket_ids()
+
+    write_attempts(renv, tid, 1, start=8, archetype="mechanical-edit", finished_at=t)
+    assert tid in runaway.stuck_ticket_ids()
+
+
+def test_unpinned_ticket_never_has_an_edit_boundary(renv):
+    import time
+    tid = add_ticket()
+    write_attempts(renv, tid, 5, model="whatever", archetype="build", finished_at=time.time())
+    assert tid in runaway.stuck_ticket_ids()
+
+
+def test_ghost_claims_still_trip_alongside_rung_attempts(renv):
+    """wq#1671 survives: claims beyond the file count are ticket-side evidence."""
+    tid = add_ticket()
+    write_attempts(renv, tid, 2, charged_to="rung")
+    pin(tid, attempt=8)  # 2 claims produced files, 6 produced nothing
+    assert runaway.stuck_ticket_ids()[tid]["attempts"] == 6
+
+
+def test_charge_mode_legacy_counts_every_file(renv, monkeypatch):
+    monkeypatch.setenv("FOREMAN_CHARGE_MODE", "legacy")
+    tid = add_ticket()
+    write_attempts(renv, tid, 5, charged_to="rung")
+    assert tid in runaway.stuck_ticket_ids()
+
+
 def test_cmd_list_stuck(renv, capsys):
     tid = add_ticket()
     make_attempts(renv, tid, 5)

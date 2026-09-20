@@ -24,6 +24,10 @@ This daemon scans `wq list --status blocked`, and for every INFRA_CRASH ticket:
 LIMIT_HIT, WORK_BLOCKED and HARNESS_DEFECT tickets are NEVER released by this daemon — no
 override, no exception; a block reason wq doesn't recognize (predates this feature, or
 Frank blocked it by hand) is treated the same conservative way as WORK_BLOCKED.
+RUNG_FAULT (DISPATCH_REBUILD_SPEC step 5) is the one other class this daemon releases: the
+rung (model backend) failed, not the ticket. Its release rule mirrors INFRA_CRASH but is
+keyed on backend health — the backend is out of runtime/backend_cooldown.json AND its
+config `local_backends` health URL answers — not on the block's age.
 HARNESS_DEFECT is listed in BLOCK_PREFIX_RE rather than left to that fallback so the
 class shows up as itself in `self_heal status`: releasing it would only re-run the ticket
 into the same refusal, so the release has to wait on a harness change landing first.
@@ -56,6 +60,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -76,6 +81,13 @@ WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 SLOCK_BIN = os.environ.get("FOREMAN_SLOCK_BIN", "/home/lumen/bin/slock")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 
+CONFIG_PATH = os.environ.get("FOREMAN_DISPATCHER_CONFIG",
+                             os.path.join(DISPATCHER_DIR, "config.json"))
+BACKEND_COOLDOWN_PATH = os.environ.get(
+    "FOREMAN_BACKEND_COOLDOWN",
+    os.path.join(DISPATCHER_DIR, "runtime", "backend_cooldown.json"))
+BACKEND_PROBE_TIMEOUT_S = 2
+
 SLOCK_SCOPE = "foreman-selfheal"
 SLOCK_TTL_MIN = "10"
 STALE_AFTER_MIN = int(os.environ.get("FOREMAN_SELFHEAL_STALE_MIN", "30"))
@@ -83,7 +95,7 @@ MAX_HEAL_ATTEMPTS = int(os.environ.get("FOREMAN_SELFHEAL_MAX_ATTEMPTS", "5"))
 STALE_NTFY_DEDUP_H = 6  # a still-stuck ticket only re-pings Frank every 6h, not every pass
 
 BLOCK_PREFIX_RE = re.compile(
-    r"^(INFRA_CRASH|WORK_BLOCKED|LIMIT_HIT|HARNESS_DEFECT):\s*(.*)$", re.S)
+    r"^(INFRA_CRASH|WORK_BLOCKED|LIMIT_HIT|HARNESS_DEFECT|RUNG_FAULT):\s*(.*)$", re.S)
 # wq#1330: fworker's block reason first line is now "<triage>: <one-line>; see
 # <failure.json path>" (WORKER_EXEC_CAPABILITY_GAP.md §4.2). The block CLASS this
 # daemon acts on moved into the failure.json the reason points at; the prefix map
@@ -229,11 +241,11 @@ def wq_show(tid):
     return out if isinstance(out, dict) and not out.get("error") else {}
 
 
-WQ_ROW_COLS = ("attempt", "status", "lane")
+WQ_ROW_COLS = ("attempt", "status", "lane", "model", "archetype")
 
 
 def wq_rows(ids):
-    """{tid: {"attempt", "status", "lane"}} for every id in `ids` in ONE read-only
+    """{tid: {"attempt", "status", "lane", "model", "archetype"}} for every id in `ids` in ONE read-only
     sqlite read of the wq DB (WQ_DB, same env var bin/wq honours). Ids with no row are
     absent from the result — the caller treats that as wq_show()'s `{}`.
 
@@ -299,7 +311,7 @@ def classify_block(ticket):
             with open(fj.group(1)) as f:
                 block_class = json.load(f).get("block_class")
             if block_class in ("INFRA_CRASH", "WORK_BLOCKED", "LIMIT_HIT",
-                               "HARNESS_DEFECT"):
+                               "HARNESS_DEFECT", "RUNG_FAULT"):
                 return block_class, t.group(2)
         except (OSError, ValueError):
             pass
@@ -317,14 +329,130 @@ def parse_blocked_at(raw):
         return None
 
 
-def attempt_count(tid):
-    """Read fworker's own attempt-N.json count (harness/fworker.py run_dir/
-    next_attempt_n) instead of a second counter this daemon would have to keep in sync."""
+def charge_mode_legacy():
+    """FOREMAN_CHARGE_MODE=legacy (DISPATCH_REBUILD_SPEC §5 item 8): every attempt-N.json
+    counts against the ticket again, whatever its charged_to says."""
+    return os.environ.get("FOREMAN_CHARGE_MODE", "").strip().lower() == "legacy"
+
+
+def attempt_records(tid):
+    """[(path, record)] for every live attempt-N.json of the ticket. An unreadable record
+    comes back as {} — it still counts as an attempt, exactly as the bare filename did."""
     d = os.path.join(RUNS_ROOT, f"wq{tid}")
     try:
-        return len([f for f in os.listdir(d) if ATTEMPT_FILE_RE.match(f)])
+        names = sorted(f for f in os.listdir(d) if ATTEMPT_FILE_RE.match(f))
     except OSError:
-        return 0
+        return []
+    out = []
+    for name in names:
+        path = os.path.join(d, name)
+        try:
+            with open(path) as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            rec = {}
+        out.append((path, rec if isinstance(rec, dict) else {}))
+    return out
+
+
+def charged_to(rec):
+    """Who an attempt is charged to. An absent field is `ticket`: every record written
+    before fworker learned charged_to (DISPATCH_REBUILD_SPEC step 4) was a ticket charge."""
+    return (rec or {}).get("charged_to") or "ticket"
+
+
+def attempt_count(tid, charged_only=False):
+    """Read fworker's own attempt-N.json count (harness/fworker.py run_dir/
+    next_attempt_n) instead of a second counter this daemon would have to keep in sync.
+
+    charged_only=True counts only attempts charged to the ticket (a rung/harness/budget
+    fault is not the ticket's failure); it is a plain file count under
+    FOREMAN_CHARGE_MODE=legacy."""
+    if not charged_only or charge_mode_legacy():
+        d = os.path.join(RUNS_ROOT, f"wq{tid}")
+        try:
+            return len([f for f in os.listdir(d) if ATTEMPT_FILE_RE.match(f)])
+        except OSError:
+            return 0
+    return sum(1 for _, rec in attempt_records(tid) if charged_to(rec) == "ticket")
+
+
+def local_backends():
+    """The `local_backends` block of the dispatcher config (model -> {health_url, ...});
+    {} when the config or the block is missing or unreadable."""
+    try:
+        with open(CONFIG_PATH) as f:
+            block = json.load(f).get("local_backends")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return block if isinstance(block, dict) else {}
+
+
+def _epoch(raw):
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    try:
+        return datetime.fromisoformat(str(raw)).timestamp()
+    except ValueError:
+        return None
+
+
+def backend_in_cooldown(name):
+    """True when `name` is in runtime/backend_cooldown.json (written by fworker's
+    handle_failure on a rung fault). An entry whose `until` has already passed is a
+    lapsed cooldown, not a present one; an entry with no readable expiry counts as
+    present. A missing or unreadable file means nothing is cooling down."""
+    try:
+        with open(BACKEND_COOLDOWN_PATH) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if isinstance(data, list):
+        return name in data
+    if not isinstance(data, dict) or name not in data:
+        return False
+    entry = data[name]
+    until = _epoch(entry.get("until")) if isinstance(entry, dict) else None
+    return until is None or until > _utcnow().timestamp()
+
+
+def backend_answers(url):
+    try:
+        with urllib.request.urlopen(url, timeout=BACKEND_PROBE_TIMEOUT_S) as resp:
+            return resp.status < 400
+    except (OSError, ValueError):
+        return False
+
+
+def rung_backend(ticket, tid):
+    """The local_backends key a RUNG_FAULT block belongs to: the ticket's pinned model,
+    else the model of its latest attempt record. None when neither names a configured
+    backend."""
+    known = local_backends()
+    candidates = [ticket.get("model")]
+    recs = attempt_records(tid)
+    if recs:
+        candidates.append(recs[-1][1].get("model"))
+    for name in candidates:
+        if name in known:
+            return name
+    return None
+
+
+def rung_backend_healthy(ticket, tid):
+    """(healthy, backend, why) for a RUNG_FAULT release: the backend is out of
+    backend_cooldown.json AND its config health URL answers. Never healthy when the
+    backend can't be resolved — releasing blind would only re-run the ticket into the
+    same fault."""
+    name = rung_backend(ticket, tid)
+    if name is None:
+        return False, None, "backend_unresolved"
+    if backend_in_cooldown(name):
+        return False, name, "backend_in_cooldown"
+    url = (local_backends().get(name) or {}).get("health_url")
+    if not url or not backend_answers(url):
+        return False, name, "backend_unhealthy"
+    return True, name, "healthy"
 
 
 # ---- the pass ---------------------------------------------------------------------------
@@ -369,12 +497,12 @@ def _do_pass(dry_run, log):
             continue
 
         klass, detail = classify_block(t)
-        if klass != "INFRA_CRASH":
+        if klass not in ("INFRA_CRASH", "RUNG_FAULT"):
             log.emit("skip", ticket=tid, reason="not_infra_crash",
                      klass=klass or "unmarked")
             continue
 
-        attempts = attempt_count(tid)
+        attempts = attempt_count(tid, charged_only=True)
         if attempts >= MAX_HEAL_ATTEMPTS:
             log.emit("skip", ticket=tid, reason="heal_attempts_exhausted",
                      attempts=attempts, max=MAX_HEAL_ATTEMPTS)
@@ -387,7 +515,14 @@ def _do_pass(dry_run, log):
         # blocked now — never stale — rather than stranding a legacy INFRA_CRASH forever.
         first_seen = parse_blocked_at(t.get("blocked_at")) or _utcnow()
         age_min = (_utcnow() - first_seen).total_seconds() / 60
-        if age_min >= STALE_AFTER_MIN:
+        if klass == "RUNG_FAULT":
+            # the rung broke, not the ticket: release keyed on the backend coming back,
+            # never on the block's age.
+            healthy, backend, why = rung_backend_healthy(t, tid)
+            if not healthy:
+                log.emit("skip", ticket=tid, reason=f"rung_{why}", backend=backend)
+                continue
+        elif age_min >= STALE_AFTER_MIN:
             log.emit("skip", ticket=tid, reason="stale_infra_crash",
                      age_min=round(age_min, 1), stale_after_min=STALE_AFTER_MIN)
             _maybe_ntfy_stale(state, tid, f"blocked {age_min:.0f}m ago and still "

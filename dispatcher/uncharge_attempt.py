@@ -18,14 +18,25 @@ exit code, and a classification from the pre-fix fallback buckets a thin/no-diff
 frame used to land in: CRASH, LAUNCH_FAILURE, INDETERMINATE) — pass --force to override
 that guard for a record whose evidence doesn't match.
 
+Bulk mode (DISPATCH_REBUILD_SPEC step 5/9): --cause rung re-charges historical attempts
+to the rung instead of the ticket. Records where the local model never produced a token
+(HANG with turns == 0 on a --model-prefix model) were counted against tickets by
+runaway/self_heal; this stamps them charged_to=rung IN PLACE — the filename, and so the
+attempt numbering, is untouched, and no record is ever deleted. Only a record whose
+charged_to is absent or `ticket` is touched, so a harness/budget/rung stamp fworker wrote
+is never overwritten and a re-run is a no-op.
+
 CLI:
   uncharge_attempt.py <ticket_id> --attempt N --reason "..."
   uncharge_attempt.py <ticket_id> --all --reason "..."     # every matching attempt-N.json
   add --dry-run to preview, --force to skip the fault-signature guard
+  uncharge_attempt.py --cause rung --model-prefix qwen [--classification HANG] [--turns 0]
+                      [--reason "..."] [--dry-run] [ticket_id]   # every ticket, or one
 """
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -34,6 +45,7 @@ sys.path.insert(0, DISPATCHER_DIR)
 import self_heal  # noqa: E402 — reuses RUNS_ROOT/ATTEMPT_FILE_RE, the same source of
                    # truth attempt_count()/stuck_ticket_ids() read.
 
+RUN_DIR_RE = re.compile(r"^wq(\d+)$")
 FAULT_CLASSIFICATIONS = {"CRASH", "LAUNCH_FAILURE", "INDETERMINATE"}
 MAX_FAULT_ELAPSED_S = 10
 MAX_FAULT_TURNS = 1
@@ -98,19 +110,79 @@ def uncharge_one(tid, n, reason, force, dry_run):
     return True, f"{src} -> {dst}"
 
 
+def matches_rung_fault(rec, model_prefix, classification, turns):
+    """A still-ticket-charged record whose model started with the prefix and that ended
+    in `classification` after exactly `turns` turns (turns == 0: no model output)."""
+    if self_heal.charged_to(rec) != "ticket":
+        return False
+    return (str(rec.get("model") or "").startswith(model_prefix)
+            and rec.get("classification") == classification
+            and rec.get("turns") == turns)
+
+
+def rung_charge_one(path, rec, reason, dry_run):
+    if dry_run:
+        return f"would charge to rung: {path}"
+    rec["charged_to"] = "rung"
+    rec["uncharged_reason"] = reason
+    rec["uncharged_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(rec, f, indent=2, default=str)
+    os.rename(tmp, path)
+    return f"charged to rung: {path}"
+
+
+def bulk_rung(args):
+    if not args.model_prefix:
+        print("--cause rung needs --model-prefix", file=sys.stderr)
+        return 2
+    if args.ticket_id is not None:
+        ids = [args.ticket_id]
+    else:
+        try:
+            names = os.listdir(self_heal.RUNS_ROOT)
+        except OSError:
+            names = []
+        ids = sorted(int(m.group(1)) for m in map(RUN_DIR_RE.match, names) if m)
+    reason = args.reason or "bulk: local-model HANG with no turns is a rung fault"
+    touched = 0
+    for tid in ids:
+        for path, rec in self_heal.attempt_records(tid):
+            if matches_rung_fault(rec, args.model_prefix, args.classification, args.turns):
+                print(rung_charge_one(path, rec, reason, args.dry_run))
+                touched += 1
+    print(f"{'would touch' if args.dry_run else 'touched'} {touched} attempt record(s) "
+          f"across {len(ids)} ticket dir(s)")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("ticket_id", type=int)
-    g = ap.add_mutually_exclusive_group(required=True)
+    ap.add_argument("ticket_id", type=int, nargs="?")
+    ap.add_argument("--cause", choices=["rung"],
+                    help="bulk mode: re-charge matching historical attempts to this cause")
+    ap.add_argument("--model-prefix", help="bulk mode: attempt record's model starts with")
+    ap.add_argument("--classification", default="HANG",
+                    help="bulk mode: attempt record's classification (default HANG)")
+    ap.add_argument("--turns", type=int, default=0,
+                    help="bulk mode: attempt record's turns (default 0)")
+    g = ap.add_mutually_exclusive_group()
     g.add_argument("--attempt", type=int, help="uncharge this one attempt number")
     g.add_argument("--all", action="store_true",
                    help="uncharge every attempt-N.json matching the fault signature")
-    ap.add_argument("--reason", required=True)
+    ap.add_argument("--reason")
     ap.add_argument("--force", action="store_true",
                      help="uncharge even if the record doesn't match the fault signature")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.cause:
+        return bulk_rung(args)
+    if args.ticket_id is None or not (args.attempt is not None or args.all) or not args.reason:
+        ap.error("ticket_id, one of --attempt/--all, and --reason are required "
+                 "(or use --cause rung)")
 
     targets = ([args.attempt] if args.attempt is not None
                else all_attempt_numbers(args.ticket_id))

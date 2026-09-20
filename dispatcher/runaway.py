@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(DISPATCHER_DIR, ".."))
@@ -33,6 +34,7 @@ import capability  # noqa: E402 — wq#1438 §2.2 hold release
 import capability_lint  # noqa: E402
 
 RUNAWAY_MAX_ATTEMPTS = int(os.environ.get("FOREMAN_RUNAWAY_MAX_ATTEMPTS", "5"))
+RUNAWAY_WINDOW_DAYS = int(os.environ.get("FOREMAN_RUNAWAY_WINDOW_DAYS", "7"))
 RUN_DIR_RE = re.compile(r"^wq(\d+)$")
 
 
@@ -49,6 +51,56 @@ def candidate_ticket_ids():
         if m:
             ids.append(int(m.group(1)))
     return ids
+
+
+def _pinned(row, col):
+    """A ticket's pinned model/archetype; `wq show` prints a NULL column as "None"."""
+    v = (row.get(col) or "").strip()
+    return "" if v == "None" else v
+
+
+def _attempt_time(path, rec):
+    for key in ("finished_at", "started_at"):
+        v = rec.get(key)
+        if isinstance(v, (int, float)):
+            return float(v)
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def _predates_edit(rec, model, archetype):
+    """True when the attempt ran under a different model/archetype than the ticket has
+    now. Only a pinned column can differ, and a record that never noted its model or
+    archetype (older shape) is never called stale."""
+    if model and rec.get("model") and model not in (rec.get("model"), rec.get("observed_model")):
+        return True
+    return bool(archetype and rec.get("archetype") and rec["archetype"] != archetype)
+
+
+def charged_attempts(tid, row, db_attempts, now=None):
+    """The attempt count the runaway breaker compares to its threshold.
+
+    Counts attempt files charged to the ticket (charged_to absent = ticket, so history
+    written before fworker stamped the field still counts), finished inside
+    RUNAWAY_WINDOW_DAYS, and newer than the last attempt that ran under a different
+    model or archetype than the ticket's current pin — wq keeps no edit timestamp, so
+    the attempt records are the only witness to an edit. A rung/harness/budget fault, an
+    attempt from before an edit, and an old attempt are not evidence the ticket is
+    unworkable.
+
+    The wq `attempt` column still catches claims that never wrote a file (wq#1671): its
+    surplus over the total file count is added on top. With every file ticket-charged and
+    in window this reduces to max(files, column), the pre-step-5 rule."""
+    now = now if now is not None else time.time()
+    horizon = now - RUNAWAY_WINDOW_DAYS * 86400
+    model, archetype = _pinned(row, "model"), _pinned(row, "archetype")
+    recs = [(_attempt_time(p, r), r) for p, r in self_heal.attempt_records(tid)]
+    edit_at = max((at for at, r in recs if _predates_edit(r, model, archetype)), default=0.0)
+    counted = sum(1 for at, r in recs
+                  if self_heal.charged_to(r) == "ticket" and at >= horizon and at > edit_at)
+    return counted + max(0, db_attempts - len(recs))
 
 
 def stuck_ticket_ids(threshold=None):
@@ -77,6 +129,10 @@ def stuck_ticket_ids(threshold=None):
     would double count and could false-positive a ticket that is legitimately still
     within budget.
 
+    DISPATCH_REBUILD_SPEC step 5: the file side of that max is charged_attempts() — only
+    ticket-charged attempts inside the window and after the last model/archetype edit —
+    unless FOREMAN_CHARGE_MODE=legacy, which restores the plain file count.
+
     wq#2082: the wq column for every candidate comes from ONE batched read
     (self_heal.wq_rows), not a `wq show` subprocess per RUNS_ROOT dir — that per-dir
     subprocess (wq#1671, 2026-09-18) grew with the run-dir count to 171s of a 197s pass
@@ -86,13 +142,15 @@ def stuck_ticket_ids(threshold=None):
     ids = candidate_ticket_ids()
     rows = self_heal.wq_rows(ids)
     for tid in ids:
-        n = self_heal.attempt_count(tid)
         t = rows.get(tid) or {}
         try:
             db_attempts = int(t.get("attempt") or 0)
         except (TypeError, ValueError):
             db_attempts = 0
-        effective = max(n, db_attempts)
+        if self_heal.charge_mode_legacy():
+            effective = max(self_heal.attempt_count(tid), db_attempts)
+        else:
+            effective = charged_attempts(tid, t, db_attempts)
         if effective < threshold:
             continue
         if t.get("status") == "done":

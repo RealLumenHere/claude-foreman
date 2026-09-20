@@ -61,6 +61,57 @@ def test_fault_record_is_renamed_not_deleted_and_stops_counting(runs):
     assert self_heal.attempt_count(869) == 0
 
 
+HANG = {"classification": "HANG", "turns": 0, "model": "qwen3-coder-30b", "exit_code": 1}
+
+
+def test_bulk_rung_stamps_matching_records_in_place(runs, capsys):
+    tmp_path, self_heal, ua, _ = runs
+    d = write(tmp_path, 10, 1, HANG)
+    write(tmp_path, 10, 2, {**HANG, "turns": 3})                      # model produced output
+    write(tmp_path, 10, 3, {**HANG, "model": "claude-sonnet-5"})      # wrong model
+    write(tmp_path, 11, 1, HANG)
+    assert self_heal.attempt_count(10, charged_only=True) == 3
+
+    assert ua.main(["--cause", "rung", "--model-prefix", "qwen"]) == 0
+
+    assert json.loads((d / "attempt-1.json").read_text())["charged_to"] == "rung"
+    assert "charged_to" not in json.loads((d / "attempt-2.json").read_text())
+    assert "charged_to" not in json.loads((d / "attempt-3.json").read_text())
+    assert self_heal.attempt_count(10, charged_only=True) == 2
+    assert self_heal.attempt_count(10) == 3          # never deleted, never renamed
+    assert self_heal.attempt_count(11, charged_only=True) == 0
+    assert "touched 2 attempt record(s)" in capsys.readouterr().out
+
+
+def test_bulk_rung_dry_run_prints_and_touches_nothing(runs, capsys):
+    tmp_path, self_heal, ua, _ = runs
+    d = write(tmp_path, 10, 1, HANG)
+    before = (d / "attempt-1.json").read_text()
+
+    assert ua.main(["--cause", "rung", "--model-prefix", "qwen", "--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    assert "would charge to rung" in out and "would touch 1" in out
+    assert (d / "attempt-1.json").read_text() == before
+
+
+def test_bulk_rung_never_overwrites_another_charge_and_is_idempotent(runs):
+    tmp_path, self_heal, ua, _ = runs
+    d = write(tmp_path, 10, 1, {**HANG, "charged_to": "harness"})
+    write(tmp_path, 10, 2, HANG)
+
+    assert ua.main(["--cause", "rung", "--model-prefix", "qwen", "10"]) == 0
+    assert ua.main(["--cause", "rung", "--model-prefix", "qwen", "10"]) == 0
+
+    assert json.loads((d / "attempt-1.json").read_text())["charged_to"] == "harness"
+    assert json.loads((d / "attempt-2.json").read_text())["charged_to"] == "rung"
+
+
+def test_bulk_rung_requires_a_model_prefix(runs):
+    _, _, ua, _ = runs
+    assert ua.main(["--cause", "rung"]) == 2
+
+
 def test_all_uncharges_only_fault_shaped_records(runs):
     tmp_path, self_heal, ua, fworker = runs
     real = {**WQ869_ATTEMPT_5, "turns": 40, "elapsed_s": 900.0, "classification": "FAILED"}
