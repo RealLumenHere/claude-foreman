@@ -1,0 +1,114 @@
+# Inference node registry (wq#2241 design, wq#2248 C1). Schema: research/INFERENCE_NODE_REGISTRY.md §2.1.
+# Loader + lint: harness/inference_registry.py. Seeded from the measured table in design §1
+# (2026-09-20, identical MacPro6,1 CPU-only). A null is "not yet measured", never zero.
+# plug_id and tailscale_ip are COPIES: fleet-inv is the authority and the lint fails on drift.
+version: 1
+
+# Frozen: the governor's prefix tuple (governor/governor_core.py:97). Adding a value here
+# without the governor changing is a LINT FAIL (design §4).
+governor_prefixes: [deepseek-v4-flash, qwen36-local, nephthys-qwen14b, hathor-llama8b]
+
+families:                 # a model blob + how it is served. NOT a box.
+  qwen36-local:
+    blob: Qwen3.6-35B-A3B-Q4_K_M.gguf
+    serving: llama-server
+    port: 8095
+    health_path: /health
+    swap: unit
+  hathor-llama8b:
+    blob: "llama3.1:8b"
+    serving: ollama
+    port: 11434
+    health_path: /api/ps
+    swap: implicit
+  nephthys-qwen14b:
+    blob: "qwen3:14b"
+    serving: ollama
+    port: 11434
+    health_path: /api/ps
+    swap: implicit
+
+nodes:
+  hathor:
+    state: live
+    tailscale_ip: 100.80.71.13
+    plug_id: P3                    # fleet-inv plugs (Frank 2026-08-22: P3 is hathor's plug)
+    power_policy: always-on
+    power_reason: "Frank 2026-09-20: hathor stays up while the group needs it"
+    cores: 12
+    ram_gb: 64
+    idle_watts: 86.6               # research/ISIS_POWEROFF_RCA.md:25
+    wake:
+      method: plug-ac
+      measured_ready_s: null
+      last_measured: null
+    models:
+      - family: hathor-llama8b
+        resident: true
+        slots: 2
+        served_ctx: 32768
+        first_frame_s: 1500
+        prefill_tps: 13.6
+        decode_tps: null
+        measured_at: 2026-09-20
+        load_s: null
+        capabilities:
+          mechanical-edit:      {trusted: true, source: declared, ref: "harness/fworker.py:160"}
+          probe-build:          {trusted: true, source: declared, ref: "harness/fworker.py:160"}
+          standard-engineering: {trusted: true, source: declared, ref: "harness/fworker.py:179-182"}
+
+  nephthys:
+    state: live
+    tailscale_ip: 100.98.74.87
+    plug_id: P2                    # fleet-inv plugs
+    power_policy: warm
+    power_reason: "seeded warm: serving today (wq#2127 measured it 2026-09-20)"
+    cores: 12                      # QWEN36_LOCAL_WORKER_SERVING.md: same core count on either SKU reading
+    ram_gb: 64                     # research/INVENTORY_RECONCILIATION.md:190
+    idle_watts: null               # never measured
+    wake:
+      method: plug-ac
+      measured_ready_s: null
+      last_measured: null
+    models:
+      - family: nephthys-qwen14b
+        resident: true
+        slots: 2
+        served_ctx: 32768
+        first_frame_s: 2400
+        prefill_tps: 7.4
+        decode_tps: null
+        measured_at: 2026-09-20
+        load_s: null
+        capabilities:
+          mechanical-edit:      {trusted: true, source: declared, ref: "harness/fworker.py:160"}
+          probe-build:          {trusted: true, source: declared, ref: "harness/fworker.py:160"}
+          standard-engineering: {trusted: true, source: declared, ref: "harness/fworker.py:179-182"}
+
+  isis:
+    state: down                    # out of service, wq#2140: probe fails, 0 slots (dispatcher/config.json:7)
+    tailscale_ip: 100.100.129.24
+    plug_id: p1                    # fleet-inv plugs (lowercase there; compared verbatim)
+    power_policy: warm
+    power_reason: "seeded warm: unit was enabled before wq#2140 took it out of service"
+    cores: 12
+    ram_gb: 64                     # research/LOCAL_MODEL_STRATEGY.md:358
+    idle_watts: 103.2              # research/ISIS_POWEROFF_RCA.md:25
+    wake:
+      method: plug-ac
+      measured_ready_s: null
+      last_measured: null
+    models:
+      - family: qwen36-local
+        resident: true
+        slots: 2
+        served_ctx: 8192           # last measured; config.json's 32768 is an unverified post-fix target
+        first_frame_s: 900
+        prefill_tps: 60            # bench 63
+        decode_tps: 10.9
+        measured_at: 2026-09-20
+        load_s: null
+        capabilities:
+          mechanical-edit:      {trusted: true,  source: declared, ref: "harness/fworker.py:160"}
+          probe-build:          {trusted: true,  source: declared, ref: "harness/fworker.py:160"}
+          standard-engineering: {trusted: false, source: declared, ref: "harness/fworker.py:179-182", reason: "8k served ctx cannot hold a full fworker prompt"}
