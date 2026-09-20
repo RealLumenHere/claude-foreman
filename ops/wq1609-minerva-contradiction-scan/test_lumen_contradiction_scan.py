@@ -304,6 +304,266 @@ def test_cli_json_output_and_exit_codes(db, capsys):
     assert lcs.main(["--db", "/nonexistent/minerva.db", "--no-files"]) == 2
 
 
+# ----------------------------------------------------------- corpus (wq#1775)
+
+class FakeCursor:
+    """Enough psycopg2 to exercise the corpus tier without Postgres: ILIKE is
+    case-insensitive containment, the chunk lookup is a span search, and
+    doc_contradictions enforces its UNIQUE(doc_id, fact_id, char_start)."""
+
+    def __init__(self, pg):
+        self.pg = pg
+        self._rows = []
+        self.rowcount = -1
+
+    def execute(self, sql, params=()):
+        self.pg.sql.append((" ".join(sql.split()), params))
+        low = sql.lower()
+        if "from research_docs" in low:
+            needles = [p.strip("%").lower() for p in params]
+            self._rows = [
+                (d[0], d[1], d[2]) for d in self.pg.docs
+                if all(n in (d[2] or "").lower() for n in needles)
+            ]
+        elif "from research_chunks" in low:
+            doc_id, char_start = params
+            self._rows = [
+                (ix,) for (did, ix, start, end) in self.pg.chunks
+                if did == doc_id and start <= char_start <= end
+            ]
+        elif low.startswith("insert into doc_contradictions"):
+            key = (params[0], params[2], params[9])
+            if key in self.pg.written_keys:
+                self.rowcount = 0
+            else:
+                self.pg.written_keys.add(key)
+                self.pg.rows.append(params)
+                self.rowcount = 1
+        else:
+            self._rows = []
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class FakePG:
+    def __init__(self, docs, chunks=()):
+        self.docs, self.chunks = docs, list(chunks)
+        self.sql, self.rows, self.written_keys = [], [], set()
+        self.closed = False
+
+    def cursor(self):
+        return FakeCursor(self)
+
+    def commit(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+FLEET_DOC = "/home/lumen/foreman/research/DISPATCH_REVIEW.md"
+PROSE_DOC = "/home/lumen/scratch/research_clean/intel_routing_survey_ab12.md"
+
+
+def corpus_hits(db, docs, chunks=(), monkeypatch=None, entry_values=None):
+    index = [e for e in index_of(db)
+             if entry_values is None or e["dead_value"] in entry_values]
+    pg = FakePG(docs, chunks)
+    hits, _ = lcs.scan_corpus(pg.cursor(), index)
+    return hits, pg
+
+
+def test_doc_kind_comes_from_the_path_never_the_content():
+    assert lcs.doc_kind(FLEET_DOC) == "fleet_internal"
+    assert lcs.doc_kind("/home/lumen/agents/work-queue/reports/r.md") == "fleet_internal"
+    assert lcs.doc_kind(PROSE_DOC) == "external_literature"
+    assert lcs.doc_kind("/x/news_ups_review_99.md") == "external_literature"
+    assert lcs.doc_kind("/home/lumen/scratch/research_clean/pe_summary.md") == "generated"
+
+
+def test_a_plain_corpus_assertion_is_still_a_hit(db):
+    hits, _ = corpus_hits(db, [(7, PROSE_DOC, "pbox status: active today\n")])
+    assert [(h["subject"], h["dead_value"], h["tier"]) for h in hits] == [
+        ("pbox", "active", "doc_row")]
+
+
+def test_hypothetical_mood_is_suppressed_in_the_corpus(db):
+    for line in (
+        "if pbox status were active the router would retry\n",
+        "the fraction of buckets where pbox status is active\n",
+        "e.g. a pbox status of active means the node answers\n",
+    ):
+        hits, _ = corpus_hits(db, [(7, PROSE_DOC, line)])
+        assert hits == [], line
+
+
+def test_a_failure_mode_table_row_is_not_an_assertion(db):
+    row = "| Node failure – pbox status active. | Pipeline stalls. |\n"
+    hits, _ = corpus_hits(db, [(7, PROSE_DOC, row)])
+    assert hits == []
+    # The same row without failure-mode vocabulary is an ordinary table cell.
+    hits, _ = corpus_hits(db, [(7, PROSE_DOC, "| pbox | status | active |\n")])
+    assert len(hits) == 1
+
+
+def test_the_hypothetical_suppressor_is_corpus_only(db, tmp_path):
+    """The fleet tiers keep exactly wq#1609's three suppressors: a conditional
+    line in an owned artifact still reports, because narrowing them was never
+    measured there."""
+    path = tmp_path / "FLEET_MAP.md"
+    path.write_text("if pbox status is active the router retries\n")
+    hits = lcs.scan_files(index_of(db), artifacts=((str(path), lcs.TIER_PROPOSAL),))
+    assert len(hits) == 1
+
+
+def test_a_short_shouted_value_must_be_shouted_in_the_prose_too(db):
+    """Measured 2026-09-20: all four hits that survived the first two
+    narrowings were isis.service_state='UP' matching the English `up`."""
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "insert into state_facts (id, subject, predicate, value, valid_from,"
+        " valid_to, ingested_at, fact_class) values"
+        " ('f20','isis','service_state','UP','2026-06-01','2026-09-01',"
+        "  '2026-06-01','status')"
+    )
+    conn.execute(
+        "insert into state_facts (id, subject, predicate, value, valid_from,"
+        " valid_to, ingested_at, fact_class) values"
+        " ('f21','isis','service_state','DEGRADED','2026-06-01',null,"
+        "  '2026-06-01','status')"
+    )
+    conn.commit()
+    conn.close()
+
+    english = "Spin up a fine-tuning service on Isis or an external GPU node\n"
+    assert corpus_hits(db, [(7, PROSE_DOC, english)], entry_values={"UP"})[0] == []
+    shouted = "isis service_state is UP per the last check\n"
+    assert len(corpus_hits(db, [(7, PROSE_DOC, shouted)], entry_values={"UP"})[0]) == 1
+    # Fleet artifacts keep the case-insensitive match they were measured with.
+    assert len(lcs.scan_text(english, index_of(db), "FLEET_MAP.md:1",
+                             lcs.TIER_PROPOSAL)) == 1
+
+
+def test_prose_subject_may_not_come_from_an_enclosing_heading(db):
+    content = "# pbox status\n\nthe scheduler stayed active throughout\n"
+    prose, _ = corpus_hits(db, [(7, PROSE_DOC, content)])
+    fleet, _ = corpus_hits(db, [(7, FLEET_DOC, content)])
+    assert prose == []
+    assert len(fleet) == 1
+    assert fleet[0]["doc_kind"] == "fleet_internal"
+
+
+def test_a_hit_is_localised_to_the_chunk_that_contains_it(db):
+    filler = "x" * 400 + "\n"
+    content = filler + "thoth tailscale_ip 100.88.71.47 in the runbook\n"
+    chunks = [(7, 0, 0, 400), (7, 1, 401, 900)]
+    hits, _ = corpus_hits(db, [(7, PROSE_DOC, content)], chunks)
+    assert len(hits) == 1
+    assert hits[0]["chunk_ix"] == 1
+    assert content[hits[0]["char_start"]:].startswith("100.88.71.47")
+
+
+def test_a_hit_outside_every_chunk_span_carries_a_null_chunk(db):
+    hits, _ = corpus_hits(
+        db, [(7, PROSE_DOC, "thoth tailscale_ip 100.88.71.47\n")], [(7, 0, 900, 950)]
+    )
+    assert hits[0]["chunk_ix"] is None
+
+
+def test_the_same_fact_at_the_same_offset_is_reported_once(db):
+    content = ("thoth tailscale_ip 100.88.71.47 here\n"
+               "thoth tailscale_ip 100.88.71.47 again\n")
+    hits, _ = corpus_hits(db, [(7, PROSE_DOC, content)])
+    assert len(hits) == 2
+    assert len({h["char_start"] for h in hits}) == 2
+
+
+def test_the_prefilter_asks_postgres_for_the_subject_too_when_scoped(db):
+    index = index_of(db)
+    pg = FakePG([])
+    cur = pg.cursor()
+    scoped = next(e for e in index if e["dead_value"] == "active")
+    free = next(e for e in index if e["dead_value"] == "100.88.71.47")
+    lcs.corpus_candidates(cur, scoped)
+    lcs.corpus_candidates(cur, free)
+    assert pg.sql[0][1] == ("%active%", "%pbox%")
+    assert pg.sql[1][1] == ("%100.88.71.47%",)
+
+
+def test_pgvector_unavailable_warns_and_leaves_the_sqlite_half_standing(db, monkeypatch):
+    add_note(db, "n1", "nephthys is the embeddings-host for recall")
+
+    def boom(readonly=True, env_path=None):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(lcs, "corpus_connect", boom)
+    result = lcs.scan(db, artifacts=(), corpus=True)
+    assert result["corpus"]["status"] == "skipped"
+    assert result["actionable"] == 1
+    assert "sqlite tiers above are unaffected" in lcs.render(result)
+    assert lcs.main(["--db", db, "--no-files", "--corpus"]) == 0
+
+
+def test_corpus_hits_never_turn_strict_red(db, monkeypatch):
+    pg = FakePG([(7, PROSE_DOC, "pbox status: active today\n")])
+    monkeypatch.setattr(lcs, "corpus_connect", lambda **kw: pg)
+    result = lcs.scan(db, artifacts=(), corpus=True)
+    assert result["actionable"] == 1
+    assert result["strict_actionable"] == 0
+    assert lcs.main(["--db", db, "--no-files", "--corpus", "--strict"]) == 0
+
+
+def test_corpus_is_read_only_unless_corpus_apply_is_asked_for(db, monkeypatch):
+    pg = FakePG([(7, PROSE_DOC, "pbox status: active today\n")])
+    monkeypatch.setattr(lcs, "corpus_connect", lambda **kw: pg)
+    result = lcs.scan(db, apply=True, artifacts=(), corpus=True)
+    assert pg.rows == []
+    assert result["corpus"]["written"] is None
+    assert not any("insert into doc_contradictions" in s for s, _ in pg.sql)
+
+
+def test_corpus_apply_writes_one_row_per_hit_idempotently(db, monkeypatch):
+    docs = [(7, PROSE_DOC, "pbox status: active today\n")]
+    pg = FakePG(docs, [(7, 3, 0, 100)])
+    monkeypatch.setattr(lcs, "corpus_connect", lambda **kw: pg)
+    first = lcs.scan(db, artifacts=(), corpus=True, corpus_apply=True)
+    assert first["corpus"]["written"] == 1
+    doc_id, chunk_ix, fact_id, subject, predicate, dead, current = pg.rows[0][:7]
+    assert (doc_id, chunk_ix, subject, predicate, dead, current) == (
+        7, 3, "pbox", "status", "active", "DECOMMISSIONED")
+
+    pg.sql.clear()
+    second = lcs.scan(db, artifacts=(), corpus=True, corpus_apply=True)
+    assert second["corpus"]["written"] == 0
+    ddl = [s for s, _ in pg.sql if s.startswith("create table")]
+    assert ddl and "references research_docs(id) on delete cascade" in ddl[0]
+    assert "on conflict (doc_id, fact_id, char_start) do nothing" in "\n".join(
+        s for s, _ in pg.sql)
+
+
+def test_corpus_apply_opens_a_writable_session_and_report_only_does_not(db, monkeypatch):
+    seen = []
+    monkeypatch.setattr(lcs, "corpus_connect",
+                        lambda readonly=True, env_path=None: seen.append(readonly)
+                        or FakePG([]))
+    lcs.scan(db, artifacts=(), corpus=True)
+    lcs.scan(db, artifacts=(), corpus=True, corpus_apply=True)
+    assert seen == [True, False]
+
+
+def test_corpus_env_is_parsed_without_leaking_it(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text('# comment\nLUMEN_PGVECTOR_HOST="127.0.0.1"\n\nBAD LINE\n'
+                   "LUMEN_PGVECTOR_PORT=5433\n")
+    parsed = lcs.corpus_env(str(env))
+    assert parsed == {"LUMEN_PGVECTOR_HOST": "127.0.0.1",
+                      "LUMEN_PGVECTOR_PORT": "5433"}
+
+
 # --------------------------------------------------------------- ticket filing
 
 def test_file_config_ticket_uses_the_real_wq_and_aq_argv_shapes(monkeypatch):

@@ -6,7 +6,9 @@ Documentation=file:///home/lumen/foreman/ops/wq1609-minerva-contradiction-scan/R
 Type=oneshot
 User=lumen
 Group=lumen
-ExecStart=/home/lumen/bin/lumen-contradiction-scan --apply
+; --corpus is report-only by design: no --corpus-apply here until measured
+; corpus precision clears zero (wq#1775 re-scope, PGVECTOR_INVALIDATION_CONTRACTS §4.2).
+ExecStart=/home/lumen/bin/lumen-contradiction-scan --apply --corpus
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=lumen-contradiction-scan

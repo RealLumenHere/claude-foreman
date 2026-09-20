@@ -35,6 +35,13 @@ Three suppressors run on each candidate hit:
 
 Artifact reach and the action tier each one gets (§3.5):
 
+  research_docs (pgvector corpus)      report only, behind --corpus  (wq#1775)
+                                        [the 11k-doc corpus no staleness
+                                        mechanism has ever reached. Same index,
+                                        same scan_text(), three narrowings
+                                        research prose needs (see below), and a
+                                        doc_contradictions writer that stays off
+                                        until measured precision clears zero]
   archival_notes                       note_contradictions row  (machine-fixed)
                                         [this is wq#1610: the 1686-row episodic
                                         layer had zero invalidation before this
@@ -48,14 +55,35 @@ Artifact reach and the action tier each one gets (§3.5):
   FLEET_MAP.md, playbooks              proposal in the report
   claude_memory.md, instincts.yaml     proposal only — standing law, never edited
 
+The corpus tier (`--corpus`, wq#1775) reuses all of the above unchanged and adds
+the three narrowings research prose needs, because a matcher tuned on the
+fleet's terse artifacts measured 0/5 precision against prose
+(research/PGVECTOR_INVALIDATION_CONTRACTS.md §4.2):
+
+  same-line subject  no heading widening outside doc_kind=fleet_internal. A
+                     60 KB report whose heading names a node is not asserting
+                     that node's state 200 lines further down.
+  hypothetical       a line in conditional or definitional mood ("if", "would",
+                     "fraction of", "e.g.", a failure-mode table row) is not an
+                     assertion -> skip.
+  shouted-short      a 2-4 char all-caps value matches case-sensitively: `up`
+                     in "spin up a container" is not isis.service_state = UP.
+
 Read-only by default. `--apply` performs only the machine tiers (note rows,
 state-regen, aq/wq); claude_memory.md and instincts.yaml are never written by
-this tool under any flag.
+this tool under any flag. The corpus is read-only under `--apply` too: the only
+corpus write that exists anywhere in this tool is the `doc_contradictions`
+sidecar insert, and it needs its own `--corpus-apply` flag, which the timer
+deliberately does not pass (wq#1775 re-scope: report-only until re-measurement
+clears zero true positives). No corpus file, row or embedding is ever touched.
 
 Exit 0 = ran clean, 2 = the scan itself broke, 1 = actionable hits (only with
---strict, so the daily timer does not flap red on a finding it already reported).
+--strict, and never for corpus hits, so a report-only tier cannot turn a timer
+red). pgvector being unreachable WARNs and leaves the exit code alone — the
+corpus half must never take the fleet-facing half down (§4.3).
 
   lumen-contradiction-scan [--json] [--apply] [--strict] [--db PATH]
+  lumen-contradiction-scan --corpus [--corpus-apply] [--corpus-env PATH]
   lumen-contradiction-scan --selftest
 """
 import argparse
@@ -65,6 +93,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 MINERVA_DB = os.environ.get("MINERVA_DB", "/home/lumen/minerva/minerva.db")
@@ -99,11 +128,40 @@ NEGATION_RE = re.compile(
 
 DATE_RE = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
 
+# The fourth suppressor, corpus-only (§4.2): conditional or definitional mood.
+# Research prose hypothesises, defines vocabulary and argues about scenarios
+# where a fleet artifact asserts, so this runs for --corpus and nowhere else —
+# the fleet tiers keep exactly the three suppressors wq#1609 measured.
+HYPOTHETICAL_RE = re.compile(
+    r"\bif\b|\bwould\b|\bcould\b|\bshould\b|\bmight\b|\bunless\b"
+    r"|\bsuppos(?:e|es|ing)\b|\bassum(?:e|es|ed|ing|ption)"
+    r"|\bhypothetic|\bscenario|\bfailure mode|\bwhat if\b|\bin the event\b"
+    r"|\bfor example\b|\be\.g\.|\bi\.e\.|\bfraction of\b|\bdefined as\b"
+    r"|\bimagine\b|\bsimulat",
+    re.IGNORECASE,
+)
+
+# A short shouted status token collides with ordinary English under the
+# case-insensitive matcher: `UP` is `isis.service_state`, `up` is the word in
+# "spin up a container". Measured 2026-09-20 — every one of the four hits that
+# survived the first two narrowings was this (README, Measured corpus reach).
+SHOUTED_SHORT_RE = re.compile(r"^[A-Z]{2,4}$")
+
+# A markdown table row is an assertion in a fleet artifact and a worked example
+# in a report; failure-mode vocabulary is what tells the two apart.
+TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+FAILURE_MODE_RE = re.compile(
+    r"\bfailure\b|\bfails?\b|\brisk\b|\bstalls?\b|\bmitigat|\bsymptom\b"
+    r"|\bfallback\b|\brecovery\b",
+    re.IGNORECASE,
+)
+
 TIER_NOTE = "note_row"
 TIER_REGEN = "regenerate"
 TIER_TICKET = "ticket"
 TIER_PROPOSAL = "proposal"
 TIER_PROPOSAL_ONLY = "proposal_only"
+TIER_DOC = "doc_row"
 
 FILE_ARTIFACTS = (
     ("/home/lumen/minerva/context/LIVE_FLEET_STATE.md", TIER_REGEN),
@@ -116,6 +174,9 @@ FILE_ARTIFACTS = (
     ("/home/lumen/instincts.yaml", TIER_PROPOSAL_ONLY),
 )
 
+# TIER_DOC's write action exists (write_doc_contradictions) but is not in this
+# set: it is reached only by the explicit --corpus-apply flag, never by --apply,
+# until measured corpus precision clears zero (wq#1775 re-scope).
 WRITE_TIERS = {TIER_NOTE, TIER_REGEN, TIER_TICKET}
 
 
@@ -252,6 +313,8 @@ def build_dead_value_index(conn):
                 "subject_res": [boundary_re(t) for t in subject_tokens(subj)],
                 "cue_res": [boundary_re(c) for c in predicate_cues(pred)],
                 "current_res": [boundary_re(t) for t in changelog_tokens(current)],
+                # The same boundaries, case-sensitive. Corpus-only (§4.2).
+                "case_re": re.compile(value_re.pattern),
             }
         )
     return index
@@ -267,6 +330,16 @@ def negated(text, dead_value):
                for m in NEGATION_RE.finditer(text))
 
 
+def hypothetical(text):
+    """Whether the line is in conditional or definitional mood, so the value in
+    it is vocabulary rather than a claim. `a powered-down dGPU reduces chassis
+    temperature` and `| Node failure – Isis or Hathor offline. | Pipeline
+    stalls. |` are both about a state, neither asserts one."""
+    if HYPOTHETICAL_RE.search(text):
+        return True
+    return bool(TABLE_ROW_RE.match(text) and FAILURE_MODE_RE.search(text))
+
+
 def earliest_date(text):
     dates = DATE_RE.findall(text)
     return min(("-".join(d) for d in dates), default=None)
@@ -279,14 +352,16 @@ def dated_before(text, valid_to):
     return bool(seen and seen < valid_to[:10])
 
 
-def scan_text(text, index, location, tier, subject_context="", changelog_context=""):
+def scan_text(text, index, location, tier, subject_context="", changelog_context="",
+              suppress_hypothetical=False):
     """Every hit the dead-value index finds in one line of text, with the
     suppressors already applied.
 
     `subject_context` widens *only* the subject test — a YAML value sits under
     its block key and a note's subject is often only in its title. Negation
     stays line-scoped; `changelog_context` widens the changelog suppressor to
-    the whole note, per §3.5."""
+    the whole note, per §3.5. `suppress_hypothetical` adds the corpus-only
+    fourth suppressor (§4.2); every fleet caller leaves it off."""
     hits = []
     for entry in index:
         if not entry["value_re"].search(text):
@@ -298,6 +373,8 @@ def scan_text(text, index, location, tier, subject_context="", changelog_context
             if not any(rx.search(scope) for rx in entry["cue_res"]):
                 continue
         if negated(text, entry["dead_value"]):
+            continue
+        if suppress_hypothetical and hypothetical(text):
             continue
         if any(rx.search(text) or (changelog_context and rx.search(changelog_context))
                for rx in entry["current_res"]):
@@ -388,6 +465,233 @@ def scan_notes(conn, index, window=2):
                 seen.add(hit["fact_id"])
                 hits.append(hit)
     return hits
+
+
+# ------------------------------------------------------------- corpus (wq#1775)
+
+CORPUS_ENV = os.environ.get("LUMEN_AGENT_ENV", "/home/lumen/agent/.env")
+
+DOC_KIND_FLEET = "fleet_internal"
+
+
+def doc_kind(filepath):
+    """Provenance from the path, deterministically, never from content (§5.1).
+    The `category` column cannot serve: `classify()` puts 96.2% of the corpus
+    in `other`.
+
+    Only `fleet_internal` keeps heading-widened subjects. The other three kinds
+    differ in how a contradiction *resolves* (§5.1), which is wq#1776's problem,
+    not this scanner's — here they behave alike, and saying so is cheaper than
+    a taxonomy the corpus has no signal for."""
+    p = (filepath or "").lower()
+    name = os.path.basename(p)
+    if ("/foreman/" in p or "/agents/work-queue/reports/" in p
+            or "/kb/" in p or "/docs/fleet/" in p):
+        return DOC_KIND_FLEET
+    if name.startswith(("intel_", "news_", "arxiv")) or "/papers/" in p:
+        return "external_literature"
+    if "/vendor/" in p or "/api-docs/" in p:
+        return "vendor_doc"
+    return "generated"
+
+
+def corpus_env(path=CORPUS_ENV):
+    env = {}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            env[key.strip()] = val.strip().strip('"').strip("'")
+    return env
+
+
+def corpus_connect(readonly=True, env_path=CORPUS_ENV):
+    """A psycopg2 connection to the pgvector corpus. Read-only by default and
+    for every path but `--corpus-apply`; `SET default_transaction_read_only`
+    makes "the corpus is not written" a property of the session rather than a
+    promise about the SQL below it."""
+    import psycopg2
+
+    env = corpus_env(env_path)
+    conn = psycopg2.connect(
+        host=env["LUMEN_PGVECTOR_HOST"], port=int(env["LUMEN_PGVECTOR_PORT"]),
+        dbname=env["LUMEN_PGVECTOR_DB"], user=env["LUMEN_PGVECTOR_USER"],
+        password=env["LUMEN_PGVECTOR_PASSWORD"],
+    )
+    if readonly:
+        cur = conn.cursor()
+        cur.execute("set default_transaction_read_only = on")
+        conn.commit()
+    return conn
+
+
+def corpus_candidates(cur, entry):
+    """The §4.2 prefilter: coarse containment in Postgres, exact matching in
+    Python on the survivors. A self-identifying value carries its own subject,
+    so containment alone makes a candidate; a bare label needs its subject in
+    the document too. 64 index entries against 11k docs is ~110s of sequential
+    ILIKE — affordable daily, never per-query."""
+    like = f"%{entry['dead_value']}%"
+    if entry["scoped"]:
+        cur.execute(
+            "select id, filepath, content from research_docs "
+            "where content ilike %s and content ilike %s",
+            (like, f"%{entry['subject']}%"),
+        )
+    else:
+        cur.execute(
+            "select id, filepath, content from research_docs where content ilike %s",
+            (like,),
+        )
+    return cur.fetchall()
+
+
+def chunk_at(cur, doc_id, char_start):
+    """The chunk containing an offset, or None when the hit falls outside every
+    chunk span. A 60 KB report with one superseded IP at character 41,000 has
+    one bad chunk and thirty good ones; penalising the document penalises all
+    thirty (§4.2)."""
+    cur.execute(
+        "select chunk_ix from research_chunks "
+        "where doc_id = %s and %s between char_start and char_end "
+        "order by chunk_ix limit 1",
+        (doc_id, char_start),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def scan_corpus(cur, index):
+    """Every corpus hit, localised to its chunk. Returns (hits, candidate_docs).
+
+    Matching is wq#1609's, unchanged, with the three prose narrowings: the
+    subject may not come from an enclosing heading outside `fleet_internal`,
+    short shouted values must be shouted in the text, and the hypothetical
+    suppressor runs."""
+    hits, seen, scanned = [], set(), set()
+    for entry in index:
+        for doc_id, filepath, content in corpus_candidates(cur, entry):
+            scanned.add(doc_id)
+            kind = doc_kind(filepath)
+            lines = (content or "").splitlines(keepends=True)
+            offset = 0
+            shouted = bool(SHOUTED_SHORT_RE.fullmatch(entry["dead_value"]))
+            for n, line in enumerate(lines, 1):
+                line_start, offset = offset, offset + len(line)
+                # Prose must shout it back: `up` in "spin up a container" is not
+                # isis.service_state, and case is the only thing that says so.
+                if shouted and not entry["case_re"].search(line):
+                    continue
+                found = scan_text(
+                    line, [entry], f"research_docs:{doc_id}:{n}", TIER_DOC,
+                    subject_context=(enclosing_context(lines, n - 1)
+                                     if kind == DOC_KIND_FLEET else ""),
+                    changelog_context=content,
+                    suppress_hypothetical=True,
+                )
+                if not found:
+                    continue
+                # scan_corpus matches one index entry at a time, so the value
+                # that hit is entry's and its offset is recoverable here rather
+                # than by threading positions through scan_text().
+                match = entry["value_re"].search(line)
+                char_start = line_start + (match.start() if match else 0)
+                for hit in found:
+                    key = (doc_id, hit["fact_id"], char_start)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    hit.update(doc_id=doc_id, filepath=filepath, doc_kind=kind,
+                               char_start=char_start, line_no=n)
+                    hits.append(hit)
+    for hit in hits:
+        hit["chunk_ix"] = chunk_at(cur, hit["doc_id"], hit["char_start"])
+    return hits, len(scanned)
+
+
+DOC_CONTRADICTIONS_TABLE = """
+create table if not exists doc_contradictions (
+  id            bigserial primary key,
+  doc_id        bigint not null references research_docs(id) on delete cascade,
+  chunk_ix      int,
+  fact_id       text not null,
+  subject       text not null,
+  predicate     text not null,
+  dead_value    text not null,
+  current_value text,
+  valid_to      text,
+  severity      text not null,
+  char_start    int,
+  excerpt       text,
+  detected_at   timestamptz not null default now(),
+  resolved_at   timestamptz,
+  unique (doc_id, fact_id, char_start)
+)"""
+
+DOC_CONTRADICTIONS_INDEX = (
+    "create index if not exists idx_doc_contra_open "
+    "on doc_contradictions (doc_id) where resolved_at is null"
+)
+
+
+def write_doc_contradictions(conn, hits):
+    """The only corpus write in this tool, and it is a sidecar: no research_docs
+    or research_chunks row is read-modify-written, nothing is deleted, nothing
+    is re-embedded. `fact_id` is a cross-database reference held by value
+    (state_facts lives in sqlite), and the scan re-derives every row from the
+    live index, so a dangling one self-heals on the next pass."""
+    cur = conn.cursor()
+    cur.execute(DOC_CONTRADICTIONS_TABLE)
+    cur.execute(DOC_CONTRADICTIONS_INDEX)
+    written = 0
+    for hit in hits:
+        cur.execute(
+            "insert into doc_contradictions (doc_id, chunk_ix, fact_id, subject,"
+            " predicate, dead_value, current_value, valid_to, severity,"
+            " char_start, excerpt) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "on conflict (doc_id, fact_id, char_start) do nothing",
+            (
+                hit["doc_id"], hit.get("chunk_ix"), hit["fact_id"], hit["subject"],
+                hit["predicate"], hit["dead_value"], hit["current_value"],
+                hit["valid_to"], hit["severity"], hit["char_start"], hit["excerpt"],
+            ),
+        )
+        written += max(cur.rowcount, 0)
+    conn.commit()
+    return written
+
+
+def corpus_tier(index, apply_writes=False, env_path=CORPUS_ENV):
+    """The corpus half of the scan. Returns (hits, meta) and never raises:
+    pgvector being unreachable WARNs and leaves the sqlite half alone (§4.3)."""
+    started = time.time()
+    try:
+        conn = corpus_connect(readonly=not apply_writes, env_path=env_path)
+    except Exception as exc:
+        # Type only: a connection error's text carries the DSN.
+        log(f"WARN: corpus tier skipped — pgvector unavailable ({type(exc).__name__})")
+        return [], {"status": "skipped", "reason": type(exc).__name__}
+    try:
+        hits, docs = scan_corpus(conn.cursor(), index)
+        meta = {
+            "status": "ok",
+            "candidate_docs": docs,
+            "bad_chunks": len({(h["doc_id"], h["chunk_ix"]) for h in hits}),
+            "elapsed_s": round(time.time() - started, 1),
+            "written": None,
+        }
+        if apply_writes:
+            meta["written"] = write_doc_contradictions(
+                conn, [h for h in hits if h["severity"] == "action"]
+            )
+        return hits, meta
+    except Exception as exc:
+        log(f"WARN: corpus tier failed — {type(exc).__name__}")
+        return [], {"status": "failed", "reason": type(exc).__name__}
+    finally:
+        conn.close()
 
 
 # -------------------------------------------------------------------- actions
@@ -494,14 +798,32 @@ def render(result):
         f"hits: {result['actionable']} actionable, {result['informational']} "
         f"informational, across {len(result['hits'])} total",
     ]
-    for tier in (TIER_NOTE, TIER_REGEN, TIER_TICKET, TIER_PROPOSAL, TIER_PROPOSAL_ONLY):
+    corpus = result.get("corpus", {"status": "off"})
+    if corpus["status"] == "ok":
+        lines.append(
+            f"corpus: {corpus['candidate_docs']} candidate doc(s) prefiltered, "
+            f"{corpus['bad_chunks']} chunk(s) implicated, {corpus['elapsed_s']}s"
+            + (f", {corpus['written']} doc_contradictions row(s) written"
+               if corpus.get("written") is not None else " (report-only)")
+        )
+    elif corpus["status"] in ("skipped", "failed"):
+        lines.append(f"corpus: {corpus['status']} ({corpus['reason']}) — "
+                     f"sqlite tiers above are unaffected")
+
+    for tier in (TIER_NOTE, TIER_REGEN, TIER_TICKET, TIER_PROPOSAL,
+                 TIER_PROPOSAL_ONLY, TIER_DOC):
         tier_hits = [h for h in result["hits"] if h["tier"] == tier]
         if not tier_hits:
             continue
         lines.append(f"\n[{tier}] {len(tier_hits)} hit(s)")
         for hit in tier_hits[:25]:
+            where = hit["location"]
+            if tier == TIER_DOC:
+                where = (f"{os.path.basename(hit['filepath'])}"
+                         f" chunk {hit['chunk_ix']} @{hit['char_start']}"
+                         f" [{hit['doc_kind']}]")
             lines.append(
-                f"  {hit['severity']:6} {hit['location']} — "
+                f"  {hit['severity']:6} {where} — "
                 f"{hit['subject']}.{hit['predicate']} = {hit['dead_value']!r} "
                 f"(closed {hit['valid_to']}, current {hit['current_value']!r})"
             )
@@ -512,7 +834,8 @@ def render(result):
     return "\n".join(lines)
 
 
-def scan(db_path, apply=False, artifacts=FILE_ARTIFACTS):
+def scan(db_path, apply=False, artifacts=FILE_ARTIFACTS, corpus=False,
+         corpus_apply=False, corpus_env_path=CORPUS_ENV):
     conn = connect(db_path, readonly=not apply)
     index = build_dead_value_index(conn)
     closed_values = [
@@ -525,6 +848,12 @@ def scan(db_path, apply=False, artifacts=FILE_ARTIFACTS):
     ip_only = sum(1 for v in closed_values if SELF_IDENTIFYING[0].fullmatch(v))
 
     hits = scan_notes(conn, index) + scan_files(index, artifacts)
+    corpus_meta = {"status": "off"}
+    if corpus:
+        corpus_hits, corpus_meta = corpus_tier(
+            index, apply_writes=corpus_apply, env_path=corpus_env_path
+        )
+        hits += corpus_hits
     result = {
         "closed_facts": closed,
         "index_size": len(index),
@@ -532,6 +861,11 @@ def scan(db_path, apply=False, artifacts=FILE_ARTIFACTS):
         "hits": hits,
         "actionable": sum(1 for h in hits if h["severity"] == "action"),
         "informational": sum(1 for h in hits if h["severity"] == "info"),
+        # --strict is the timer's red light, and a report-only tier must not be
+        # able to turn it on.
+        "strict_actionable": sum(1 for h in hits if h["severity"] == "action"
+                                 and h["tier"] != TIER_DOC),
+        "corpus": corpus_meta,
         "actions": {},
     }
 
@@ -569,7 +903,15 @@ def main(argv=None):
     ap.add_argument("--apply", action="store_true",
                     help="perform machine tiers (note rows, state-regen, aq/wq)")
     ap.add_argument("--strict", action="store_true",
-                    help="exit 1 when actionable hits exist")
+                    help="exit 1 when actionable non-corpus hits exist")
+    ap.add_argument("--corpus", action="store_true",
+                    help="also scan the pgvector research corpus (report-only)")
+    ap.add_argument("--corpus-apply", action="store_true",
+                    help="implies --corpus; insert doc_contradictions rows. OFF "
+                         "by default and not passed by the timer: corpus "
+                         "precision measured 0/5 (wq#1775 re-scope)")
+    ap.add_argument("--corpus-env", default=CORPUS_ENV,
+                    help="env file holding the LUMEN_PGVECTOR_* connection")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
 
@@ -578,7 +920,10 @@ def main(argv=None):
 
     try:
         result = scan(args.db, apply=args.apply,
-                      artifacts=() if args.no_files else FILE_ARTIFACTS)
+                      artifacts=() if args.no_files else FILE_ARTIFACTS,
+                      corpus=args.corpus or args.corpus_apply,
+                      corpus_apply=args.corpus_apply,
+                      corpus_env_path=args.corpus_env)
     except Exception as exc:
         print(f"SCAN_FAILED: {exc}", file=sys.stderr)
         return 2
@@ -587,7 +932,7 @@ def main(argv=None):
         print(json.dumps(result, indent=2, default=str))
     else:
         print(render(result))
-    return 1 if (args.strict and result["actionable"]) else 0
+    return 1 if (args.strict and result["strict_actionable"]) else 0
 
 
 if __name__ == "__main__":
