@@ -46,7 +46,8 @@ MODELS_YAML = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "research", "models.yaml"))
 _FALLBACK_LOCAL = ("qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
 _FALLBACK_CHEAP_CLOUD = ("deepseek-v4-flash",)
-# LiteLLM model group over the Macs (dispatcher/local_capacity.py); not a models.yaml row.
+# LiteLLM model group over the Macs (dispatcher/local_capacity.py). wq#2133: also a models.yaml
+# row now (pools: [local]) so routing rows can name it; MAC_POOL_MODELS dedupes the two sources.
 LOCAL_GROUP_MODELS = ("local-worker",)
 
 
@@ -65,7 +66,7 @@ def _pool_models(pool, fallback, path=None):
     return found or tuple(fallback)
 
 
-MAC_POOL_MODELS = _pool_models("local", _FALLBACK_LOCAL) + LOCAL_GROUP_MODELS
+MAC_POOL_MODELS = tuple(dict.fromkeys(_pool_models("local", _FALLBACK_LOCAL) + LOCAL_GROUP_MODELS))
 CHEAP_CLOUD_MODELS = _pool_models("cheap_cloud", _FALLBACK_CHEAP_CLOUD)
 # LOCAL_POOL_MODELS keeps its original meaning (wq#618): every trusted route that never draws
 # on the Anthropic login (observed-burn, governor, partition), deepseek included. The

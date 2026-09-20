@@ -58,6 +58,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import concurrency  # noqa: E402  # wq#2081: is_local_model for the governor-exempt local rung
 import repo_sweep  # noqa: E402  # wq#1123: shared repo_for_ticket() resolver
 import needs as needs_mod  # noqa: E402  # wq#1331: per-ticket needs:repo/needs:dir tags
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dispatcher"))
+import local_capacity  # noqa: E402  # wq#2133: the backend_cooldown.json reader the rung gate shares
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 MANIFEST_PATH = os.environ.get(
@@ -130,6 +132,13 @@ STATE_JSON = os.environ.get("FOREMAN_STATE_JSON", os.path.join(FOREMAN_ROOT, "st
 FWORKER = os.path.join(FOREMAN_ROOT, "harness", "fworker.py")
 
 EFFORT_LADDER = ["low", "medium", "high", "xhigh", "max"]
+
+# wq#2133: the LiteLLM group over the Macs (dispatcher/local_capacity.py resolves it to a
+# member at admit time) and the config.json block that names its members.
+LOCAL_WORKER = "local-worker"
+DISPATCHER_CONFIG = os.environ.get(
+    "FOREMAN_DISPATCHER_CONFIG",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dispatcher", "config.json"))
 
 # short name in routing/dominated tables -> full CLI id. Anything already starting with
 # "claude-" or listed as a local model id passes through unchanged.
@@ -281,6 +290,9 @@ class Manifest:
         self.effort_res = data.get("effort_resolution") or {}
         self.verify_policy = data.get("verify_pass") or {}
         self.judgment_policy = data.get("judgment") or {}
+        # wq#2133: flipped after the local tok/s numbers land; false = standard-engineering
+        # keeps its cloud-only row
+        self.local_standard_engineering = data.get("local_standard_engineering") is True
         self.check()
 
     # ---- dominated ---------------------------------------------------------------
@@ -360,7 +372,11 @@ class Manifest:
     def chain(self, archetype):
         if archetype not in self.routing:
             raise ManifestError(f"no routing row for archetype {archetype!r}")
-        return list(self.routing[archetype])
+        rungs = list(self.routing[archetype])
+        if (archetype == "standard-engineering" and self.local_standard_engineering
+                and not any(r.pool == "local" for r in rungs)):
+            rungs.insert(0, Rung(LOCAL_WORKER, None, "local"))
+        return rungs
 
     def refusal_landing(self, model, category):
         """Where the CLI's own refusal-fallback sends a (model, category) refusal.
@@ -457,14 +473,70 @@ def _condition_met(cond, fails, cross_subsystem, contradiction):
     return True
 
 
-def candidates(manifest, archetype, fails=0, cross_subsystem=False, contradiction=False):
+def _local_group_members(name):
+    """Member backends of the LiteLLM group `name` per config.json `local_backends`, else [].
+    Unreadable config = no group known: the rung is then judged by its own name only."""
+    try:
+        with open(DISPATCHER_CONFIG) as f:
+            row = ((json.load(f) or {}).get("local_backends") or {}).get(name)
+    except (OSError, ValueError, AttributeError):
+        return []
+    members = row.get("group") if isinstance(row, dict) else None
+    return [m for m in members if isinstance(m, str)] if isinstance(members, list) else []
+
+
+def availability_check(manifest, now=None):
+    """wq#2133: -> f(rung) -> None when the rung can be picked, else the reason it cannot.
+    A rung is out when its model's models.yaml status is not LIVE*, or when it is a local
+    backend present and unexpired in runtime/backend_cooldown.json. The `local-worker` group
+    is out only when every member is cooling down or not LIVE*. A model with no models.yaml
+    row is judged by cooldown alone. Rollback: FOREMAN_LOCAL_CAPACITY=static disables it."""
+    if local_capacity.capacity_mode() == "static":
+        return lambda rung: None
+    cooled = local_capacity.cooled_down_backends(now)
+
+    def status(model):
+        return (manifest.models.get(model) or {}).get("status")
+
+    def live(model):
+        st = status(model)
+        return st is None or str(st).startswith("LIVE")
+
+    def check(rung):
+        if rung.model == "DECOMPOSE":
+            return None
+        if not live(rung.model):
+            return f"{rung.model} status is {status(rung.model)!r}, not LIVE*"
+        if rung.pool != "local":
+            return None
+        if rung.model in cooled:
+            return f"{rung.model} is cooling down (backend_cooldown.json)"
+        members = _local_group_members(rung.model)
+        if members:
+            why = {m: ("cooling down" if m in cooled else f"status {status(m)!r}")
+                   for m in members if m in cooled or not live(m)}
+            if len(why) == len(members):
+                return f"every {rung.model} member is out: " + ", ".join(
+                    f"{m} {w}" for m, w in why.items())
+        return None
+    return check
+
+
+def candidates(manifest, archetype, fails=0, cross_subsystem=False, contradiction=False,
+               available_only=True):
     """The eligible chain for this ticket's facts, in preference order, dominated rungs
-    removed (defensively; check() already refuses manifests that contain them)."""
+    removed (defensively; check() already refuses manifests that contain them). With
+    available_only (wq#2133) rungs failing availability_check() are removed too; select()
+    passes False and applies the check itself, after the attempt-count walk, so a cooled-down
+    rung still counts as a position in the chain."""
+    usable = availability_check(manifest) if available_only else (lambda rung: None)
     out = []
     for r in manifest.chain(archetype):
         if not _condition_met(r.condition, fails, cross_subsystem, contradiction):
             continue
         if r.model != "DECOMPOSE" and manifest.is_dominated(r.model, r.effort, archetype):
+            continue
+        if usable(r):
             continue
         out.append(r)
     return out
@@ -478,6 +550,8 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
       tight = soft budget pressure -> NO effect here; the dispatcher answers it with the
               burn-rate concurrency ceiling instead (doctrine 3, wq#1723)
       deny  = governor refuses that model -> next model in the chain
+    A rung whose model status is not LIVE*, or whose local backend is cooling down, is
+    skipped the same way (availability_check, wq#2133).
     Escalation facts (fails, cross_subsystem, contradiction) unlock annotated rungs; when
     any escalation rung is unlocked it is preferred over the primary (that is what
     escalation means), still subject to pressure.
@@ -486,7 +560,9 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
     """
     pressure = pressure or (lambda m: "ok")
     reasons = []
-    cands = candidates(manifest, archetype, fails, cross_subsystem, contradiction)
+    cands = candidates(manifest, archetype, fails, cross_subsystem, contradiction,
+                       available_only=False)
+    unavailable = availability_check(manifest)
     if not cands:
         return None, [f"no eligible rung for {archetype}"]
     if cands[0].model == "DECOMPOSE":
@@ -517,6 +593,10 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
         if r.pool == "local" and not allow_local:
             reasons.append(f"skip {r}: local rung not allowed here")
             continue
+        why = unavailable(r)
+        if why:
+            reasons.append(f"skip {r}: {why}")
+            continue
         p = pressure(r.model) if r.pool == "cloud" else "ok"
         if p == "deny":
             reasons.append(f"skip {r}: governor denies {r.model}")
@@ -538,7 +618,7 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
         chosen = Rung(model, effort, r.pool, r.condition)
         reasons.append(f"selected {chosen.spec()}")
         return chosen, reasons
-    reasons.append("every rung denied or dominated")
+    reasons.append("every rung denied, dominated or unavailable")
     return None, reasons
 
 

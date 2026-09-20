@@ -18,7 +18,7 @@ pools:
   session:        {kind: five_hour,     source: oauth_usage, note: "account-global 5h rolling; opens on first metered message; weekday 05-11 PT burns faster"}
   weekly_all:     {kind: seven_day,     source: oauth_usage, note: "temporary raised ceiling ends 2026-08-19"}
   fable_weekly:   {kind: weekly_scoped, source: oauth_usage, match: "scope.model.display_name ~ /fable|mythos/", cap: "50% of weekly_all, included on Max since 2026-07-20"}
-  local:          {kind: none,          source: litellm,     note: "genuine local compute: qwen36-local, bounded by Isis (100.100.129.24) CPU/GPU only"}
+  local:          {kind: none,          source: litellm,     note: "genuine local compute: the local-worker group over hathor-llama8b, nephthys-qwen14b and qwen36-local (Isis 100.100.129.24, out of service), bounded by those boxes' CPU/GPU only"}
   cheap_cloud:    {kind: none,          source: litellm,     note: "wq#777 2026-08-23: split out of 'local' (MODEL_ROUTING_AUDIT.md F4). Paid external API behind the same LiteLLM gateway (deepseek-v4-flash -> api.deepseek.com): ZERO Anthropic quota and governor-exempt like genuine local compute, but bounded by the vendor's own rate limits, not Lumen/Isis hardware."}
   # P3 pins exact field names; CCC claude.ai limits[] is the fallback mapping (kind session|weekly_all|weekly_scoped, percent 0..100).
 
@@ -190,6 +190,13 @@ models:
     # on this fix landing too, not just D2/D3.
     pools: [local]
     context_tokens: 8192    # wq#2070: Isis serves 8192 ctx/req -- crashes on 15-22k fworker prompts. SMALL prompts only.
+    # wq#2133: served_ctx = what the backend serves NOW (context_length in Ollama /api/ps;
+    # dispatcher/config.json local_backends.<name>.served_ctx is the dispatcher's copy).
+    # context_tokens above/below stays the wq#2070 declared figure. Isis is unreachable
+    # (wq#2140), so 8192 is its last measured value; config.json's 32768 is the post-fix
+    # target and is NOT verified. Leaves the primary routing slot until Isis is back and
+    # serving >= 32k.
+    served_ctx: 8192
     efforts: []
     trust: "mechanical-edit only, gated. Offline-survival tier."
   # wq#2074 2026-09-19: the two warm local boxes that CAN hold a full fworker prompt. Same
@@ -201,14 +208,26 @@ models:
     status: LIVE-local
     pools: [local]
     context_tokens: 40960   # wq#2070: holds full fworker prompts (15-22k). Standard-engineering-capable.
+    served_ctx: 32768       # wq#2133 2026-09-20: /api/ps context_length on 100.98.74.87:11434 (qwen3:14b)
     efforts: []
     trust: "standard-engineering + the mechanical-edit/probe-build local set. PR-only + sonnet-5 verify gate. Lower --max-turns."
   - id: hathor-llama8b
     status: LIVE-local
     pools: [local]
     context_tokens: 131072  # wq#2070: llama3.1:8b, holds anything.
+    served_ctx: 32768       # wq#2133 2026-09-20: /api/ps context_length on 100.80.71.13:11434 (llama3.1:8b)
     efforts: []
     trust: "standard-engineering + the mechanical-edit/probe-build local set. PR-only + sonnet-5 verify gate. Lower --max-turns."
+  # wq#2133: the LiteLLM group over the three Macs above (dispatcher/config.json
+  # local_backends.local-worker; dispatcher/local_capacity.py resolves it to a member at admit
+  # time, so no worker ever runs AS local-worker). Its ctx is the smallest a member that is
+  # up can serve, which is what LiteLLM's pre-call check enforces (model_info.max_input_tokens).
+  - id: local-worker
+    status: LIVE-local
+    pools: [local]
+    served_ctx: 32768       # min over the live members (hathor, nephthys); qwen36-local is out of service
+    efforts: []
+    trust: "mechanical-edit + probe-build primary rung. PR-only + sonnet-5 verify gate (verify_pass.local_author_always). standard-engineering only behind local_standard_engineering."
   - id: nephthys-qwen3-14b
     status: RETIRED          # wq#589 2026-08-22: Nephthys decommissioned, LiteLLM entry
                               # removed. wq#777 2026-08-23 live probe: host unreachable
@@ -219,15 +238,17 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   # wq#777 2026-08-23 (MODEL_ROUTING_AUDIT.md F4): local-first. Measured 0/149 foreman
   # launches used the local rung though Isis was reachable the whole time; mechanical-edit
   # is the cheapest/highest-yield archetype measured (3/5 SUCCESS, 19 median turns, 42.4s
-  # for sonnet-5@low), so it carries the bounded downside best. qwen36-local is now
-  # primary; the local-authored diff still goes through the mandatory sonnet-5 verify-pass
-  # gate (verify_pass.local_author_always, already true -- unchanged by this ticket).
-  # sonnet-5@low then deepseek-v4-flash@local stay in the chain as-is -- router.py's
-  # wq#779 F3 fails-walk advances the base chain one rung per recorded fail, so a hung/dead
-  # Isis costs at most one failed attempt before a ticket lands on cloud sonnet, not a
-  # standing outage. See the qwen36-local model entry above for live-status caveats.
-  mechanical-edit:      [qwen36-local@local, sonnet-5@low, deepseek-v4-flash@local]
-  probe-build:          [sonnet-5@medium, haiku-4-5, deepseek-v4-flash@local]   # haiku row = CAL-1
+  # for sonnet-5@low), so it carries the bounded downside best. The local-authored diff
+  # still goes through the mandatory sonnet-5 verify-pass gate
+  # (verify_pass.local_author_always, true). router.py's wq#779 F3 fails-walk advances the
+  # base chain one rung per recorded fail, so a hung backend costs at most one failed
+  # attempt before a ticket lands on cloud sonnet, not a standing outage.
+  # wq#2133 (dispatch rebuild 10/12): the local rung is the `local-worker` group, not one
+  # box. router.select skips a rung whose model status is not LIVE* or whose backend sits in
+  # runtime/backend_cooldown.json, so a cooled-down group lands on the cloud rung behind it.
+  # qwen36-local (status down, 8k ctx) is no longer primary. probe-build's haiku row = CAL-1.
+  mechanical-edit:      [local-worker@local, sonnet-5@low]
+  probe-build:          [local-worker@local, sonnet-5@medium, haiku-4-5]
   standard-engineering: [sonnet-5@high,   sonnet-5@medium, opus-5@medium(escalate-on-fail)]
   rca-investigation:    [opus-5@xhigh,    opus-5@high, fable-5@high(2-fails-or-cross-subsystem)]
   novel-design:         [fable-5@high]    # design doc only; execution re-ticketed
@@ -236,6 +257,10 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   verify-pass:          [sonnet-5@high,   opus-5@high(on-contradiction)]
   fire-response:        [sonnet-5@high,   opus-5@high(escalate-on-fail)]   # wq#717 AUTO-5: fleet-fires manual-approval; never local (LOCAL_ALLOWED_ARCHETYPES excludes it)
   orchestrator:         [fable-5@high]    # fable-5@max reserved for hardest investigations until CAL data justifies more
+
+# wq#2133: when true, standard-engineering gets local-worker@local prepended (router.Manifest.chain).
+# Flip only after the local tok/s numbers: warm eval >= 40 tok/s, or the slim prompt under 6k tokens.
+local_standard_engineering: false
 
 dominated_never_select:
   - fable-5@low

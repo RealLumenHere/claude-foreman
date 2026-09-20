@@ -47,14 +47,14 @@ defaults:
 
 archetypes:
   mechanical-edit:
-    primary_tuple: qwen36-local@local
+    primary_tuple: local-worker@local
     max_turns: 600
     wall_clock_timeout_s: 3600
     local:
       max_turns: 10
 
   probe-build:
-    primary_tuple: sonnet-5@medium
+    primary_tuple: local-worker@local
     max_turns: 600
     wall_clock_timeout_s: 3600
     local:

@@ -12,6 +12,10 @@ CHECKS:
   WARN — a lane has a config.json entry but zero tickets in any status in queue.db.
          Not necessarily wrong (a lane can be provisioned ahead of tickets showing up),
          but worth surfacing.
+  FAIL — a lane is enabled in the committed config.json, is not human-owned and is not the
+         repo-hint lane, yet orchestrator/router.py LANE_REPO has no row for it (wq#2133:
+         its tickets would park as lane_unmapped forever). Also validates `local_backends`
+         (wq#2130).
 
 Any FAIL fires an ntfy alert (dedup 1h, same pattern as dispatch_health.py). WARN-only
 runs print detail but do not alert.
@@ -37,6 +41,7 @@ from datetime import datetime, timezone
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, DISPATCHER_DIR)
 sys.path.insert(0, os.path.join(DISPATCHER_DIR, "..", "harness"))
+sys.path.append(os.path.join(DISPATCHER_DIR, "..", "orchestrator"))
 import concurrency  # noqa: E402
 import vlogs_mirror  # noqa: E402
 
@@ -222,13 +227,41 @@ def validate_local_backends(cfg):
     return fails, warns
 
 
+def validate_lane_repos(cfg):
+    """wq#2133: FAIL for every enabled, non-human lane with no LANE_REPO row. The dispatcher
+    parks such a lane's tickets as lane_unmapped forever (`no LANE_REPO entry — never guess a
+    repo`), so an enabled lane the router cannot map is a defect, not a policy. Exempt: the
+    human-owned lanes (never worker-dispatchable) and REPO_HINT_LANE (`auto`, whose tickets
+    carry their own repo). Returns fails."""
+    import foreman_dispatcher  # noqa: PLC0415 — heavy; only this check needs the lane sets
+    import router  # noqa: PLC0415
+    lanes = cfg.get("lanes")
+    if not isinstance(lanes, dict):
+        return []
+    fails = []
+    for lane, policy in sorted(lanes.items()):
+        if not (isinstance(policy, dict) and policy.get("enabled") is True):
+            continue
+        if lane in foreman_dispatcher.HUMAN_LANES or lane == foreman_dispatcher.REPO_HINT_LANE:
+            continue
+        if not router.repo_for_lane(lane):
+            fails.append(f"lane={lane!r} is enabled but has no LANE_REPO row in "
+                         f"orchestrator/router.py — every ticket in it would park as "
+                         f"lane_unmapped; add the row or set enabled=false")
+    return fails
+
+
 def load_local_backends_lint(config_path):
-    """validate_local_backends over config.json at HEAD, like the lanes (wq#772)."""
+    """validate_local_backends over config.json at HEAD, like the lanes (wq#772), plus the
+    lane->repo check (wq#2133). Returns (fails, warns)."""
     try:
         cfg = json.loads(_git_show_committed(config_path))
     except ValueError as e:
         raise LintError(f"config {config_path}: invalid JSON in committed config: {e}")
-    return validate_local_backends(cfg) if isinstance(cfg, dict) else ([], [])
+    if not isinstance(cfg, dict):
+        return [], []
+    fails, warns = validate_local_backends(cfg)
+    return fails + validate_lane_repos(cfg), warns
 
 
 def lint(config_path=None, db_path=None, lane_state_path=None):
