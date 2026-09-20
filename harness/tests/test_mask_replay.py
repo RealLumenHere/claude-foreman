@@ -211,6 +211,22 @@ def test_a_transcript_record_masks_the_rest_of_its_line(tmp_path, monkeypatch):
     assert "b" * 24 not in line and "sk-ant-" in line and masking.MASK in line
 
 
+def test_a_hit_deep_in_a_transcript_line_reports_the_text_around_it():
+    """wq#2317: one transcript line is one JSONL record — tens of KB of it — so a
+    window cut from the line's HEAD names the record's parentUuid and never reaches the
+    value. `line` is the field that says WHERE the credential printed from, which on
+    this run is what separated eight burns from eight literals a worker typed into its
+    own Edit call. A line short enough to fit is still reported whole (the assertion in
+    test_a_record_carries_no_value_anywhere pins that)."""
+    record = ('{"parentUuid":"8d50dd6d","message":{"model":"claude-opus-5","content":'
+              '[{"type":"text","text":"' + "filler " * 200 + 'ran: ' + LIVE.strip()
+              + '"}]}}\n')
+    records = mask_replay.replay(0, tracked={}, items={"transcript:sess-1": record})
+    line = records[0]["line"]
+    assert "ran: export GITEA_TOKEN=" in line and "<kv-secret 32 chars>" in line
+    assert "parentUuid" not in line and line.startswith("…")
+
+
 def test_the_transcript_does_not_re_attribute_what_an_artefact_explains(tmp_path,
                                                                         monkeypatch):
     """Ordered last for a reason: a hit an artefact can name keeps that name, because

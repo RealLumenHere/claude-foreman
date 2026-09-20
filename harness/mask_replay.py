@@ -225,6 +225,31 @@ def _hits(patterns, text, skip_masked_output):
             yield label, m.group(1), m.group(0)[len(m.group(1)):]
 
 
+def _context(line, value, label):
+    """The masked text AROUND the hit — the leak path — not the head of its line.
+
+    wq#2317: the window used to be the line's first 160 characters, which is the same
+    thing on a source file and useless on a transcript, where one physical line is a
+    whole JSONL record. Every transcript-sourced record in the report opened
+    `{"parentUuid":"…","message":{"model":…` and never reached the value, so the one
+    field that says WHERE a credential printed from said nothing — and naming the
+    printing command is the difference between "8 unaccounted values" and "8 synthetic
+    literals this worker typed into its own Edit".
+
+    Masked first, cut second, per masking.scan()'s rule (wq#1441): cutting a raw window
+    first can hand back a credential the substitution never saw. Splicing the record's
+    own value out before the mask is what guarantees the marker to center on.
+    """
+    marker = f"<{label} {len(value)} chars>"
+    masked = masking.mask_text(line.replace(value, marker))[0]
+    at = masked.find(marker)
+    if at < 0:  # unreachable via the splice above; a head window still beats nothing
+        return masked[:masking.CONTEXT_CHARS]
+    start, end = max(0, at - masking.CONTEXT_CHARS), \
+        at + len(marker) + masking.CONTEXT_CHARS
+    return ("…" if start else "") + masked[start:end] + ("…" if end < len(masked) else "")
+
+
 def replay(ticket_id, patterns=None, tracked=None, items=None):
     """One record per distinct (label, value) the run put in front of the model.
 
@@ -260,8 +285,7 @@ def replay(ticket_id, patterns=None, tracked=None, items=None):
                 # masking is a fixed point), but a transcript line is raw: a record
                 # quoted into a ticket must not carry the credential NEXT to the one
                 # it is about.
-                "line": masking.mask_text(
-                    line.replace(value, f"<{label} {len(value)} chars>"))[0][:160],
+                "line": _context(line, value, label),
             })
     return records
 
