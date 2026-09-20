@@ -1,8 +1,8 @@
 {
   "owner": "SkinnnyJay",
   "clone_root": "/home/lumen/simpill",
-  "fork_owner": null,
-  "us": [],
+  "fork_owner": "frankstupak",
+  "us": ["frankstupak"],
   "repos": [
     "simpill-utils",
     "interview-prep",
