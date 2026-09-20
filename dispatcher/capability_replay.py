@@ -23,6 +23,12 @@ Columns, in the dispatcher's own order:
     cited_path_unreachable        preflight still refuses after the derived tags
     node_unknown                  ditto, for a node the fleet cannot address
     dispatchable                  clears the gate; `apply` names what would be written
+                                  `+advisory` = it carries advisory findings (wq#2131):
+                                  dispatched anyway, one needs_advisory note, no ntfy
+
+`lint_clear` is the lint's verdict alone (no refused/unresolved), before preflight. An
+advisory dir the worker cannot reach is lint_clear but lands on cited_path_unreachable:
+preflight tests the worker's real reach and is unchanged by wq#2131.
 """
 import argparse
 import json
@@ -62,7 +68,9 @@ def replay(ticket, repo=None, roster=None, policy=None, sweep=None):
         add_dirs=capability_lint.base_add_dirs(ticket.get("archetype")),
         roster=roster, policy=policy, sweep=sweep)
     out = {"id": ticket["id"], "status": ticket.get("status"), "repo": repo,
-           "mode": capability_lint.mode(), **derived.as_event()}
+           "mode": capability_lint.mode(), **derived.as_event(),
+           # the lint's own verdict, before preflight (the real-reach check) is asked
+           "lint_clear": not (derived.refused or derived.unresolved)}
     if derived.refused:
         return {**out, "column": capability.REASON_CAPABILITY_DENIED_BY_POLICY,
                 "detail": "; ".join(derived.refused)}
@@ -101,8 +109,13 @@ def main(argv=None):
             print(json.dumps(r))
         else:
             extra = f" apply={r['apply']}" if r.get("apply") else ""
+            if r["advisory"] and r["column"] == "dispatchable":
+                extra += " +advisory"
             print(f"wq#{r['id']} [{r['status']}] -> {r['column']}{extra}\n"
-                  f"    tags={r['tags']} detail={r['detail'][:160]}")
+                  f"    tags={r['tags']} lint_clear={r['lint_clear']} "
+                  f"detail={r['detail'][:160]}")
+            for a in r["advisory"]:
+                print(f"    advisory: {a[:160]}")
     return 1 if missing else 0
 
 

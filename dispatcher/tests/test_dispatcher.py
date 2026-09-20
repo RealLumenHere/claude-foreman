@@ -2183,9 +2183,10 @@ def test_capability_lint_warn_logs_one_event_per_candidate_and_applies_nothing(
     assert len(lints) == 1
     ev = lints[0]
     assert ev["ticket"] == tid and ev["mode"] == "warn" and ev["applied"] is False
-    assert ev["refused"] == [
-        "dir(/home/lumen/worktrees/wq1357-a1) deny:prefix (/home/lumen/worktrees)",
-        "restart(tailscaled@thor) policy:never.nodes (thor)"]
+    assert ev["refused"] == ["restart(tailscaled@thor) policy:never.nodes (thor)"]
+    # wq#2131: another ticket's worktree named in the text is a mention, not a secret
+    assert ev["advisory"] == [
+        "dir(/home/lumen/worktrees/wq1357-a1) deny:prefix (/home/lumen/worktrees)"]
     assert ev["tags"] == ["ssh(isis)"]
     # applies nothing: no needs write, no extra skip, the ticket still spawned
     assert needs_of(denv, tid) == ""
@@ -2297,10 +2298,12 @@ def test_cited_secret_is_refused_before_any_spawn(denv, monkeypatch):
 
 def test_nonexistent_cited_path_is_unresolved_not_guessed(denv, monkeypatch):
     """Row (iv), second half: the lint will not walk a missing path up to some
-    ancestor that does exist — that would be a guess (§2.1). The honest answer is
+    ancestor that does exist — that would be a guess (§2.1). With
+    FOREMAN_CAPABILITY_ADVISORY=off (wq#2131 rollback) the honest answer is still
     `needs_unresolved` with the lint's own text, and no spawn."""
     _lint_roster(monkeypatch)
     _apply_dir(monkeypatch)
+    monkeypatch.setenv("FOREMAN_CAPABILITY_ADVISORY", "off")
     tid = add_ticket("ops: fix the thing",
                      detail="the config lives in /home/lumen/no-such-dir-at-all/conf")
     add_needs_column(denv)
@@ -2311,6 +2314,109 @@ def test_nonexistent_cited_path_is_unresolved_not_guessed(denv, monkeypatch):
     assert len(skips) == 1 and skips[0]["reason"] == "needs_unresolved"
     assert "does not exist" in skips[0]["detail"]
     assert lumen_calls(denv) == [] and needs_of(denv, tid) == ""
+
+
+def test_nonexistent_cited_path_is_advisory_and_preflight_still_decides(denv, monkeypatch):
+    """wq#2131: the missing path is no longer the lint's hold, but preflight tests the
+    worker's real reach and is unchanged — a cited path outside repo ∪ add_dirs still
+    stops the ticket there, as cited_path_unreachable, with no needs_advisory note
+    (a skipped ticket is not dispatched with anything)."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket("ops: fix the thing",
+                     detail="the config lives in /home/lumen/no-such-dir-at-all/conf")
+    add_needs_column(denv)
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "cited_path_unreachable"
+    assert lumen_calls(denv) == [] and "needs_advisory" not in notes_of(denv, tid)
+    assert log_events(denv, "capability_lint", ticket=tid)[0]["advisory"]
+
+
+ADVISORY_ONLY_DETAIL = "the old flow needed a reboot after every change and we want that gone"
+
+
+def test_advisory_only_ticket_dispatches_with_one_note_and_no_ntfy(denv, monkeypatch):
+    """wq#2131 step 4: a ticket carrying only advisories is dispatched, gets exactly one
+    `needs_advisory` note (not one per pass), and pages nobody."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket("ops: simplify the upgrade flow", detail=ADVISORY_ONLY_DETAIL)
+    add_needs_column(denv)
+
+    assert fd.run_pass() == 0
+
+    assert log_events(denv, "skip", ticket=tid) == []
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [tid]
+    assert ntfy_lines(denv) == []
+    assert notes_of(denv, tid).count("needs_advisory[") == 1
+    assert "'reboot' is a v2 verb" in notes_of(denv, tid)
+    noted = log_events(denv, "capability_advisory_noted", ticket=tid)
+    assert len(noted) == 1 and noted[0]["dry_run"] is False
+
+    # next pass: same findings -> no second note, still no page
+    db_exec(denv, "UPDATE tasks SET status='open', claimed_by=NULL WHERE id=?", (tid,))
+    assert fd.run_pass() == 0
+    assert notes_of(denv, tid).count("needs_advisory[") == 1
+    assert len(log_events(denv, "capability_advisory_noted", ticket=tid)) == 1
+    assert ntfy_lines(denv) == []
+
+    # the findings change -> a fresh note for the new set
+    db_exec(denv, "UPDATE tasks SET status='open', claimed_by=NULL, detail=? WHERE id=?",
+            (ADVISORY_ONLY_DETAIL + "; adb used to be needed too", tid))
+    assert fd.run_pass() == 0
+    assert notes_of(denv, tid).count("needs_advisory[") == 2
+
+
+def test_advisory_note_is_not_written_in_dry_run(denv, monkeypatch):
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket("ops: simplify the upgrade flow", detail=ADVISORY_ONLY_DETAIL)
+    add_needs_column(denv)
+
+    assert fd.run_pass(dry_run=True) == 0
+
+    assert "needs_advisory" not in notes_of(denv, tid)
+    noted = log_events(denv, "capability_advisory_noted", ticket=tid)
+    assert len(noted) == 1 and noted[0]["dry_run"] is True
+    assert ntfy_lines(denv) == []
+
+
+def test_advisory_with_a_hard_finding_is_still_held_and_paged(denv, monkeypatch):
+    """Advisories never soften a hard bucket: a secret next to a prose mention is
+    refused whole, paged once, and gets no needs_advisory note."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    tid = add_ticket("ops: rotate", detail=ADVISORY_ONLY_DETAIL
+                     + "; the password is in /home/lumen/.fleet_pw")
+    add_needs_column(denv)
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "capability_denied_by_policy"
+    assert ".fleet_pw" in skips[0]["detail"]
+    assert lumen_calls(denv) == [] and "needs_advisory" not in notes_of(denv, tid)
+    assert len(ntfy_lines(denv)) == 1
+
+
+def test_advisory_lever_off_holds_the_prose_mention_again(denv, monkeypatch):
+    """FOREMAN_CAPABILITY_ADVISORY=off is the wq#2131 rollback: the bare prose mention
+    is a v2-verb `needs_unresolved` hold again, paged, with no note."""
+    _lint_roster(monkeypatch)
+    _apply_dir(monkeypatch)
+    monkeypatch.setenv("FOREMAN_CAPABILITY_ADVISORY", "off")
+    tid = add_ticket("ops: simplify the upgrade flow", detail=ADVISORY_ONLY_DETAIL)
+    add_needs_column(denv)
+
+    assert fd.run_pass() == 0
+
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "needs_unresolved"
+    assert lumen_calls(denv) == [] and "needs_advisory" not in notes_of(denv, tid)
+    assert len(ntfy_lines(denv)) == 1
 
 
 def test_v2_verb_stays_unresolved_and_names_the_missing_verb(denv, monkeypatch):

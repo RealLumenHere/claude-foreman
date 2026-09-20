@@ -1,14 +1,17 @@
 """wq#1437 (BROKER_WIRING.md §2.1, slice B): derive a ticket's capability needs
 from what it cites, deterministically.
 
-`derive(ticket) -> Derived(tags, unresolved, refused)`. Regex + lumen_state node
-resolution + the static broker policy; no LLM, no network, no guessing. Three
+`derive(ticket) -> Derived(tags, unresolved, refused, advisory)`. Regex + lumen_state
+node resolution + the static broker policy; no LLM, no network, no guessing. Four
 buckets, never merged:
 
   tags        derivable AND safe to auto-apply (read-only dir grants, ssh `run`,
               policy-bounded restart, copy into a node's lumen-drop)
   unresolved  an action verb or node the regexes saw but could not pin to one tag
   refused     a derived tag the DIR_DENY list or fleet-exec-policy.yaml forbids
+  advisory    (wq#2131) noticed, never held for: a dir outside allow.read_dirs, a
+              missing cited path, a worktree or non-secret home-root path, a v2 verb
+              in prose. Secrets (deny-list, fresh sweep hit) are never advisory.
 
 Slice B shipped the derivation in WARN mode (log the buckets, apply nothing). Slice C
 (wq#1438, §2.2) makes `apply-dir` the default: the buckets become dispatcher skip
@@ -52,6 +55,16 @@ DIR_DENY_PREFIXES = (
 DIR_DENY_EXACT = ("/home/lumen", "/")
 DIR_DENY_PATH_GLOBS = ("/home/lumen/agents/work-queue/queue.db*",)
 DIR_DENY_BASENAME_GLOBS = ("*.env", "*.token", "*.key", "*.pem", "id_*")
+# wq#2131 (DISPATCH_REBUILD_SPEC §1.1): credential files that live in the HOME ROOT, where
+# `/home/lumen` itself is in DIR_DENY_EXACT. Until now they were refused only by that
+# parent-dir accident, which the advisory split below removes for non-secret home-root
+# files. Added beside the original tuple, never into it: the original entries are frozen
+# (§5 item 2). Applied to the path AS CITED, before normalise_dir.
+DIR_DENY_BASENAME_GLOBS_HOME = (".fleet_pw", ".git-credentials*", ".netrc", "*.pw")
+# Denied paths that are a MENTION of somebody's worktree, not a secret: advisory unless
+# something else in the deny-list also hits the same path. They stay in
+# DIR_DENY_PREFIXES for every other reader of that tuple.
+WORKTREE_DENY_PREFIXES = ("/home/lumen/worktrees", "/home/lumen/scratch/worktrees")
 
 # wq#1535: closure artifacts. A ticket may cite a file that the WORK creates — the
 # factory's yellow-approval touch file is the shape that hit us (14 promoter tickets
@@ -118,10 +131,13 @@ DEFAULT_RESTART_NODE = "lumen"  # §2.1: "node omitted = lumen"
 
 
 class Derived:
-    """Three buckets. `tags` is (name, arg) pairs in needs.py's vocabulary."""
+    """Three deciding buckets plus one that decides nothing. `tags` is (name, arg)
+    pairs in needs.py's vocabulary. `advisory` (DISPATCH_REBUILD_SPEC §1.1) is what the
+    lint noticed but will not hold a ticket for: the dispatcher records it on the
+    ticket and dispatches anyway."""
 
-    def __init__(self, tags=(), unresolved=(), refused=()):
-        self.tags, self.unresolved, self.refused = [], [], []
+    def __init__(self, tags=(), unresolved=(), refused=(), advisory=()):
+        self.tags, self.unresolved, self.refused, self.advisory = [], [], [], []
         for t in tags:
             if t not in self.tags:
                 self.tags.append(t)
@@ -131,6 +147,9 @@ class Derived:
         for r in refused:
             if r not in self.refused:
                 self.refused.append(r)
+        for a in advisory:
+            if a not in self.advisory:
+                self.advisory.append(a)
 
     @property
     def tag_strings(self):
@@ -143,13 +162,15 @@ class Derived:
     def as_event(self):
         return {"tags": self.tag_strings,
                 "unresolved": list(self.unresolved),
-                "refused": list(self.refused)}
+                "refused": list(self.refused),
+                "advisory": list(self.advisory)}
 
     def __bool__(self):
-        return bool(self.tags or self.unresolved or self.refused)
+        return bool(self.tags or self.unresolved or self.refused or self.advisory)
 
     def __repr__(self):
-        return f"Derived(tags={self.tag_strings}, unresolved={self.unresolved}, refused={self.refused})"
+        return (f"Derived(tags={self.tag_strings}, unresolved={self.unresolved}, "
+                f"refused={self.refused}, advisory={self.advisory})")
 
 
 # ---- mode flag (rollback) ------------------------------------------------------
@@ -184,9 +205,45 @@ def enabled():
     return mode() != MODE_OFF
 
 
+def advisory_enabled():
+    """Rollback lever for the advisory split (DISPATCH_REBUILD_SPEC §5 item 8):
+    FOREMAN_CAPABILITY_ADVISORY=off puts every advisory finding back in the bucket it
+    lived in before wq#2131 (`refused` for worktree/home-root paths, `unresolved` for
+    the rest) and makes every v2 verb hard again. Default on. The new secret basename
+    denies are NOT behind this lever: taking a deny away is not a rollback."""
+    return (os.environ.get("FOREMAN_CAPABILITY_ADVISORY") or "on").strip().lower() != "off"
+
+
 def enforcing():
     """True when the buckets are dispatcher decisions, not just log lines (§2.2)."""
     return mode() in ENFORCING_MODES
+
+
+ADVISORY_NOTE_PREFIX = "needs_advisory"
+_ADVISORY_NOTE_MAX_ITEMS = 5
+_ADVISORY_NOTE_MAX_CHARS = 110
+
+
+def advisory_note(derived):
+    """(fingerprint, note_text) for the one `needs_advisory` note the dispatcher writes
+    on a ticket that dispatches with advisory findings. The fingerprint is a short hash
+    of the finding set, embedded in the text as `needs_advisory[<fp>]`, so a re-linted
+    ticket is recognised in its own notes (`advisory_noted`) and never re-noted per
+    pass; an edit that changes the findings changes the fingerprint and earns a fresh
+    note."""
+    import hashlib
+    items = list(derived.advisory)
+    fp = hashlib.sha1("\n".join(items).encode()).hexdigest()[:8]
+    shown = [i if len(i) <= _ADVISORY_NOTE_MAX_CHARS else i[:_ADVISORY_NOTE_MAX_CHARS - 1] + "…"
+             for i in items[:_ADVISORY_NOTE_MAX_ITEMS]]
+    more = len(items) - len(shown)
+    tail = f" (+{more} more)" if more > 0 else ""
+    return fp, (f"{ADVISORY_NOTE_PREFIX}[{fp}]: dispatched with {len(items)} advisory "
+                f"finding(s), not held: " + "; ".join(shown) + tail)
+
+
+def advisory_noted(notes, fingerprint):
+    return f"{ADVISORY_NOTE_PREFIX}[{fingerprint}]" in (notes or "")
 
 
 def appliable_tags(derived):
@@ -397,22 +454,39 @@ def _norm(path):
     return os.path.normpath(path)
 
 
-def dir_denied(path):
-    """(reason | None): the §2.1 hard-coded deny-list, applied to the path AS CITED
-    (before any normalisation) and again to the directory it normalises to."""
+def _deny_reason(path, skip_prefixes=()):
     p = _norm(path)
     if p in DIR_DENY_EXACT:
         return f"deny:path ({p})"
     for prefix in DIR_DENY_PREFIXES:
+        if prefix in skip_prefixes:
+            continue
         if p == prefix or p.startswith(prefix + os.sep):
             return f"deny:prefix ({prefix})"
     for glob in DIR_DENY_PATH_GLOBS:
         if fnmatch.fnmatch(p, glob):
             return f"deny:path_glob ({glob})"
     base = os.path.basename(p)
-    for glob in DIR_DENY_BASENAME_GLOBS:
+    for glob in DIR_DENY_BASENAME_GLOBS + DIR_DENY_BASENAME_GLOBS_HOME:
         if fnmatch.fnmatch(base, glob):
             return f"deny:basename ({glob})"
+    return None
+
+
+def dir_denied(path):
+    """(reason | None): the §2.1 hard-coded deny-list, applied to the path AS CITED
+    (before any normalisation) and again to the directory it normalises to."""
+    return _deny_reason(path)
+
+
+def worktree_mention(path):
+    """The cited path's reason string when it is denied ONLY because it sits under a
+    worktree root (an own/other-ticket worktree named in prose or in a failure trail),
+    else None. A path that also hits a secret rule (`.env` inside a worktree) is not a
+    mention: dir_denied still refuses it."""
+    why = dir_denied(path)
+    if why and _deny_reason(path, skip_prefixes=WORKTREE_DENY_PREFIXES) is None:
+        return why
     return None
 
 
@@ -471,8 +545,16 @@ def cited_paths(text):
     return out
 
 
+def _advise(advisory, legacy_bucket, msg):
+    """wq#2131: a finding that is advisory by default. Under
+    FOREMAN_CAPABILITY_ADVISORY=off it lands in `legacy_bucket`, the bucket it held the
+    ticket in before the split."""
+    (advisory if advisory_enabled() else legacy_bucket).append(msg)
+
+
 def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, sweep=None,
-                 ticket_id=None):
+                 ticket_id=None, advisory=None):
+    advisory = advisory if advisory is not None else []
     roots = [r for r in [repo, *add_dirs] if r]
     for p in cited_paths(text):
         if any(_under(p, r) for r in roots):
@@ -481,6 +563,10 @@ def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, s
             m = _OWN_WORKTREE_RE.match(p)
             if m and m.group("tid") == str(ticket_id):
                 continue  # wq#1697 fix 1: this ticket's own (past or future) worktree
+        why = worktree_mention(p)
+        if why:
+            _advise(advisory, refused, f"dir({p}) {why}")   # a mention, not a secret
+            continue
         why = dir_denied(p)
         if why:
             refused.append(f"dir({p}) {why}")
@@ -489,21 +575,27 @@ def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, s
         if d is None and closure_artifact(p):
             d = normalise_closure_dir(p)   # wq#1535: to-be-created file, reach = parent
             if d is None:
-                unresolved.append(f"closure artifact {p}: parent directory does not exist "
-                                  f"(not guessed)")
+                _advise(advisory, unresolved,
+                        f"closure artifact {p}: parent directory does not exist (not guessed)")
                 continue
         if d is None:
-            unresolved.append(f"cited path {p} does not exist (not guessed)")
+            _advise(advisory, unresolved, f"cited path {p} does not exist (not guessed)")
             continue
         why = dir_denied(d)
         if why:
-            refused.append(f"dir({d}) {why}")
+            # p already cleared every secret rule above, so a file whose parent is the
+            # home root is a non-secret home-root file, not a credential
+            if d != _norm(p) and d in DIR_DENY_EXACT:
+                _advise(advisory, refused, f"dir({d}) {why} (via home-root file {p})")
+            else:
+                refused.append(f"dir({d}) {why}")
             continue
         if any(_under(d, r) for r in roots):
             continue
         allow_root = allowed_read_dir(d, policy)
         if allow_root is None:
-            unresolved.append(f"dir({d}) is not under allow.read_dirs — {ALLOW_HINT}")
+            _advise(advisory, unresolved,
+                    f"dir({d}) is not under allow.read_dirs — {ALLOW_HINT}")
             continue
         if sweep_stale(sweep):
             unresolved.append(f"dir({d}) read_dir_sweep is missing or >"
@@ -605,10 +697,47 @@ def _derive_copy(text, roster, policy, tags, unresolved):
         tags.append(("copy", f"{node}:{d}"))
 
 
-def _derive_v2(text, unresolved):
+_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+_LIST_MARKER_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+_STEP_PREFIX_RE = re.compile(r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\[[ xX]\]\s+)?(?:\$\s+)?")
+# A line that OPENS with one of these is an instruction to the worker. The v2 verbs
+# themselves are here (`sudo systemctl ...`, `reboot isis`), so is the generic
+# run/execute family. "do", "must", "never" are deliberately absent: "do not reboot"
+# and "never sudo" are prose about the verb, which is the false positive this splits off.
+_IMPERATIVE_OPENERS = frozenset({
+    "run", "execute", "invoke", "issue", "perform", "trigger", "use", "then", "first",
+    "next", "finally", "sudo", "adb", "fastboot", "reboot", "poweroff", "shutdown",
+    "power-cycle", "power", "docker", "ssh", "restart", "install", "flash", "apply",
+    "stop", "start", "kill", "cycle"})
+
+
+def _v2_hard(text, pos):
+    """True when the v2 verb at `pos` is an instruction rather than a mention: it sits
+    inside a fenced code block, or its line starts with a list marker or an imperative
+    verb. A bare prose mention — negations included — is advisory."""
+    line_start = text.rfind("\n", 0, pos) + 1
+    in_fence = False
+    for line in text[:line_start].split("\n"):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+    line_end = text.find("\n", pos)
+    line = text[line_start:line_end if line_end != -1 else len(text)]
+    if in_fence or _FENCE_RE.match(line):
+        return True
+    if _LIST_MARKER_RE.match(line):
+        return True
+    words = line[_STEP_PREFIX_RE.match(line).end():].split(None, 1)
+    return bool(words) and words[0].lower().rstrip(":,") in _IMPERATIVE_OPENERS
+
+
+def _derive_v2(text, unresolved, advisory=None):
     for m in _V2_VERB_RE.finditer(text):
         verb = re.sub(r"\s+", " ", m.group("verb"))
-        unresolved.append(f"{verb!r} is a v2 verb: no fleet-exec grant exists for it")
+        msg = f"{verb!r} is a v2 verb: no fleet-exec grant exists for it"
+        if advisory is not None and advisory_enabled() and not _v2_hard(text, m.start()):
+            advisory.append(f"{msg} (prose mention, not an instruction)")
+        else:
+            unresolved.append(msg)
 
 
 # ---- entry point ---------------------------------------------------------------
@@ -645,14 +774,14 @@ def derive(ticket, repo=None, add_dirs=(), roster=None, policy=None, sweep=None)
     roster = roster if roster is not None else load_roster()
     policy = policy if policy is not None else load_policy()
     sweep = sweep if sweep is not None else load_sweep()
-    tags, unresolved, refused = [], [], []
+    tags, unresolved, refused, advisory = [], [], [], []
     _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=policy, sweep=sweep,
-                ticket_id=ticket_id)
+                ticket_id=ticket_id, advisory=advisory)
     _derive_ssh(text, roster, tags, unresolved, policy=policy)
     _derive_restart(text, roster, policy, tags, unresolved, refused)
     _derive_copy(text, roster, policy, tags, unresolved)
-    _derive_v2(text, unresolved)
-    return Derived(tags, unresolved, refused)
+    _derive_v2(text, unresolved, advisory)
+    return Derived(tags, unresolved, refused, advisory)
 
 
 # ---- corpus scan (tuning, §2.1 "tune against the real corpus") -----------------
@@ -696,7 +825,7 @@ def _main(argv=None):
     scanned = scan_queue(a.db, statuses)
     if a.ticket:
         scanned = [(t, d) for t, d in scanned if t["id"] == a.ticket]
-    n_tags = n_unres = n_ref = 0
+    n_tags = n_unres = n_ref = n_adv = 0
     for t, d in scanned:
         if d.tags:
             n_tags += 1
@@ -704,15 +833,18 @@ def _main(argv=None):
             n_unres += 1
         if d.refused:
             n_ref += 1
+        if d.advisory:
+            n_adv += 1
         if not d:
             continue
         if a.json:
             print(json.dumps({"id": t["id"], "status": t["status"], **d.as_event()}))
         else:
             print(f"wq#{t['id']} [{t['status']}] tags={d.tag_strings} "
-                  f"unresolved={len(d.unresolved)} refused={d.refused}")
+                  f"unresolved={len(d.unresolved)} refused={d.refused} "
+                  f"advisory={len(d.advisory)}")
     print(f"-- {len(scanned)} scanned: {n_tags} with tags, {n_unres} unresolved, "
-          f"{n_ref} refused")
+          f"{n_ref} refused, {n_adv} advisory")
     return 0
 
 

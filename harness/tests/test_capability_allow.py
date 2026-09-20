@@ -74,9 +74,10 @@ def test_dir_outside_allow_is_unresolved_with_the_hint():
     """wq#1451's live drill dir. Swept 2026-09-08: agent/.env + 20 .env.bak carry live
     tokens, so it is NOT on the allow list and must not auto-grant any more."""
     d = derive("read /home/lumen/agent/AGENTS.md line 1")
-    assert d.tag_strings == []
-    assert d.unresolved == ["dir(/home/lumen/agent) is not under allow.read_dirs — "
-                            + cl.ALLOW_HINT]
+    # wq#2131: still never auto-granted (no tag); the finding is advisory now, not a hold
+    assert d.tag_strings == [] and d.unresolved == [] and d.refused == []
+    assert d.advisory == ["dir(/home/lumen/agent) is not under allow.read_dirs — "
+                          + cl.ALLOW_HINT]
 
 
 def test_deny_list_still_beats_allow():
@@ -90,7 +91,9 @@ def test_missing_allow_section_allows_nothing():
     """An edited-away `allow:` must not restore the pre-wq#1441 open default."""
     pol = {k: v for k, v in POLICY.items() if k != "allow"}
     d = derive("read /home/lumen/research_prompts/x.md", policy=pol)
-    assert d.tag_strings == [] and "allow.read_dirs" in d.unresolved[0]
+    # wq#2131: nothing is granted; the not-in-allow finding moved to the advisory bucket
+    assert d.tag_strings == [] and d.unresolved == []
+    assert "allow.read_dirs" in d.advisory[0]
 
 
 # --- read_dir_sweep gate (wq#1482) -------------------------------------------------

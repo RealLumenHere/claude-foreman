@@ -116,7 +116,7 @@ CORPUS = [
         "Re-run 'lumen-pr land /home/lumen/worktrees/wq1357-a1 5 --merge' (or from any "
         "mailbot worktree) once wq#1338 clears.",
         [],
-        ["dir(/home/lumen/worktrees/wq1357-a1) deny:prefix (/home/lumen/worktrees)"],
+        [],   # wq#2131: another ticket's worktree is a mention -> advisory, see below
         [],
     ),
     (
@@ -159,7 +159,7 @@ CORPUS = [
         "notification / appops on its foreground channel).",
         [],
         [],
-        ["'adb' is a v2 verb"],
+        [],   # wq#2131: 'adb' mid-sentence is a prose mention -> advisory, see below
     ),
 ]
 
@@ -179,7 +179,7 @@ def test_real_corpus_rows(tid, detail, tags, refused, unresolved):
 def test_secret_citation_never_becomes_a_tag():
     """§0: 'any lint that derives needs:dir from cited paths without a deny-list hands
     a worker Frank's tokens on its first pass'. The negative, asserted directly."""
-    for detail, _ in [(c[1], c[0]) for c in CORPUS[:3]]:
+    for detail, _ in [(c[1], c[0]) for c in CORPUS[:2]]:
         d = derive(detail)
         assert not any("secret" in t or "worktrees" in t for t in d.tag_strings)
         assert d.refused
@@ -238,12 +238,13 @@ def test_cited_file_becomes_its_parent_dir():
     assert d.tag_strings == ["dir(/home/lumen/instructions/playbooks)"]
 
 
-def test_missing_path_is_unresolved_never_guessed():
-    """§2.1: 'a non-existent path is unresolved, not guessed' — no walking up to an
-    existing ancestor, which would widen the grant to a directory nobody cited."""
+def test_missing_path_is_advisory_never_guessed():
+    """§2.1: 'a non-existent path is not guessed' — no walking up to an existing
+    ancestor, which would widen the grant to a directory nobody cited. wq#2131: it is
+    advisory now, not a hold."""
     d = derive("write /home/lumen/mailbot/does/not/exist/yet.md")
-    assert d.tags == []
-    assert d.unresolved == [
+    assert d.tags == [] and d.unresolved == [] and d.refused == []
+    assert d.advisory == [
         "cited path /home/lumen/mailbot/does/not/exist/yet.md does not exist (not guessed)"]
 
 
@@ -263,9 +264,9 @@ def test_closure_artifact_with_missing_parent_is_still_not_guessed(monkeypatch):
                         ("/home/lumen/instructions/approvals/*.approved",
                          "/home/lumen/instructions/nowhere/*.approved"))
     d = derive("touch /home/lumen/instructions/nowhere/F1.approved")
-    assert d.tags == []
-    assert d.unresolved == ["closure artifact /home/lumen/instructions/nowhere/F1.approved: "
-                            "parent directory does not exist (not guessed)"]
+    assert d.tags == [] and d.unresolved == []
+    assert d.advisory == ["closure artifact /home/lumen/instructions/nowhere/F1.approved: "
+                          "parent directory does not exist (not guessed)"]
 
 
 def test_closure_artifact_glob_is_narrow():
@@ -273,9 +274,9 @@ def test_closure_artifact_glob_is_narrow():
     is still the ordinary not-guessed case (the doctrine is unchanged for everything
     else)."""
     d = derive("read /home/lumen/instructions/approvals/F55b260980679.md")
-    assert d.tags == []
-    assert d.unresolved == ["cited path /home/lumen/instructions/approvals/F55b260980679.md "
-                            "does not exist (not guessed)"]
+    assert d.tags == [] and d.unresolved == []
+    assert d.advisory == ["cited path /home/lumen/instructions/approvals/F55b260980679.md "
+                          "does not exist (not guessed)"]
 
 
 def test_closure_artifact_under_deny_prefix_is_refused_first(monkeypatch):
@@ -309,24 +310,26 @@ def test_own_worktree_citation_is_neither_tagged_nor_refused():
     assert d.tags == [] and d.refused == [] and d.unresolved == []
 
 
-def test_other_tickets_worktree_citation_still_refused():
+def test_other_tickets_worktree_citation_is_never_tagged():
     """The exemption is keyed to THIS ticket's id — citing a DIFFERENT ticket's
-    worktree (wq#1358's real corpus row above) must stay exactly as refused as
-    before this fix; own-worktree reach is not a door into anyone else's tree."""
+    worktree (wq#1358's real corpus row above) is never granted; own-worktree reach is
+    not a door into anyone else's tree. wq#2131: it is a mention, so advisory rather
+    than a hold."""
     d = cl.derive(
         {"id": 1358, "title": "t",
          "detail": "Re-run 'lumen-pr land /home/lumen/worktrees/wq1357-a1 5 --merge'"},
         roster=ROSTER, policy=POLICY, sweep=fresh_sweep())
-    assert d.tags == []
-    assert d.refused == ["dir(/home/lumen/worktrees/wq1357-a1) deny:prefix (/home/lumen/worktrees)"]
+    assert d.tags == [] and d.refused == []
+    assert d.advisory == ["dir(/home/lumen/worktrees/wq1357-a1) deny:prefix (/home/lumen/worktrees)"]
 
 
-def test_own_worktree_citation_with_no_ticket_id_still_refused():
+def test_own_worktree_citation_with_no_ticket_id_is_advisory_not_exempt():
     """A caller that derives without an id (e.g. an ad-hoc string, not a real queue
-    row) gets the old, safe behaviour — the exemption never fires on guesswork."""
+    row) gets no own-worktree exemption — the exemption never fires on guesswork."""
     d = cl.derive({"title": "t", "detail": "see /home/lumen/worktrees/wq1672-a3/foo.py"},
                   roster=ROSTER, policy=POLICY, sweep=fresh_sweep())
-    assert d.refused == ["dir(/home/lumen/worktrees/wq1672-a3/foo.py) deny:prefix (/home/lumen/worktrees)"]
+    assert d.refused == []
+    assert d.advisory == ["dir(/home/lumen/worktrees/wq1672-a3/foo.py) deny:prefix (/home/lumen/worktrees)"]
 
 
 def test_paths_already_reachable_need_no_tag():
@@ -484,7 +487,8 @@ def test_buckets_are_deduped_and_never_merged():
 
 def test_empty_ticket_derives_nothing():
     d = cl.derive({"title": "", "detail": None}, roster=ROSTER, policy=POLICY)
-    assert not d and d.as_event() == {"tags": [], "unresolved": [], "refused": []}
+    assert not d and d.as_event() == {"tags": [], "unresolved": [], "refused": [],
+                                      "advisory": []}
 
 
 def test_mode_defaults_to_apply_and_off_disables(monkeypatch):
@@ -544,3 +548,187 @@ def test_unreadable_policy_makes_no_refusal_and_no_copy_tag(monkeypatch):
     d = cl.derive({"title": "", "detail": "scp x isis:/home/isis/lumen-drop"},
                   roster=ROSTER, policy={})
     assert d.tags == [] and "not a copy_dirs entry" in d.unresolved[0]
+
+
+# --- wq#2131: secrets stay hard, everything else is advisory ---------------------
+
+HOME_ROOT_FILES = {"/home/lumen/.fleet_pw", "/home/lumen/.netrc", "/home/lumen/HANDOFF.md",
+                   "/home/lumen/.git-credentials"}
+
+
+@pytest.fixture
+def home_root_files(monkeypatch):
+    monkeypatch.setattr(cl, "_exists",
+                        lambda p: p in EXISTING_DIRS or p in EXISTING_FILES
+                        or p in HOME_ROOT_FILES)
+
+
+@pytest.mark.parametrize("path", [
+    "/home/lumen/.fleet_pw", "/home/lumen/.netrc", "/home/lumen/.git-credentials",
+    "/home/lumen/.git-credentials-old", "/home/lumen/backup/db.pw",
+    "/home/lumen/foreman/.netrc",
+])
+def test_new_secret_basenames_are_denied_as_cited(path):
+    assert cl.dir_denied(path), path
+    assert "deny:basename" in cl.dir_denied(path)
+
+
+@pytest.mark.parametrize("path", ["/home/lumen/.fleet_pw", "/home/lumen/.netrc",
+                                  "/home/lumen/.git-credentials"])
+def test_home_root_secret_is_refused_by_basename_not_the_parent_dir(path, home_root_files):
+    d = derive(f"the password is in {path}")
+    assert d.advisory == [] and d.tags == []
+    assert d.refused == [f"dir({path}) {cl.dir_denied(path)}"]
+    assert "basename" in d.refused[0] and "deny:path (/home/lumen)" not in d.refused[0]
+
+
+def test_missing_home_root_secret_is_refused_not_advisory():
+    d = derive("cat /home/lumen/.fleet_pw please")
+    assert d.refused and d.advisory == [] and d.unresolved == []
+
+
+def test_original_deny_entries_are_untouched():
+    assert cl.DIR_DENY_BASENAME_GLOBS == ("*.env", "*.token", "*.key", "*.pem", "id_*")
+    assert cl.DIR_DENY_EXACT == ("/home/lumen", "/")
+    assert "/home/lumen/worktrees" in cl.DIR_DENY_PREFIXES
+    assert "/home/lumen/.secrets" in cl.DIR_DENY_PREFIXES
+
+
+def test_home_root_non_secret_file_is_advisory(home_root_files):
+    d = derive("see /home/lumen/HANDOFF.md for context")
+    assert d.refused == [] and d.unresolved == [] and d.tags == []
+    assert len(d.advisory) == 1 and "/home/lumen/HANDOFF.md" in d.advisory[0]
+
+
+def test_dir_outside_allow_is_advisory():
+    d = derive("compare with how /home/lumen/mailbot does it")   # exists, not allow-listed
+    assert d.tags == [] and d.unresolved == [] and d.refused == []
+    assert len(d.advisory) == 1 and "not under allow.read_dirs" in d.advisory[0]
+
+
+@pytest.mark.parametrize("path", [
+    "/home/lumen/.secrets/x.txt", "/home/lumen/secrets/x.txt", "/home/lumen/.ssh/config",
+    "/home/lumen/.claude/settings.json", "/home/lumen/.config/gh/hosts.yml",
+    "/home/lumen/agents/work-queue/queue.db",
+])
+def test_deny_list_hits_are_never_advisory(path):
+    d = derive(f"read {path}")
+    assert d.refused and d.advisory == [], (path, d)
+
+
+@pytest.mark.parametrize("path", ["/home/lumen/worktrees/wq1-a1/.env",
+                                  "/home/lumen/scratch/worktrees/x/id_rsa",
+                                  "/home/lumen/worktrees/wq1-a1/.netrc"])
+def test_secret_inside_a_worktree_is_still_refused(path):
+    d = derive(f"look at {path}")
+    assert d.refused and d.advisory == [], (path, d)
+
+
+def test_fresh_sweep_hit_stays_refused():
+    sweep = fresh_sweep()
+    sweep["roots"]["/home/lumen/agent"]["hits"] = [{"path": "/home/lumen/agent/x.py",
+                                                    "line": 3}]
+    d = cl.derive({"title": "", "detail": "read /home/lumen/agent"},
+                  roster=ROSTER, policy=POLICY, sweep=sweep)
+    assert d.refused == ["dir(/home/lumen/agent) fresh secret-sweep hit at "
+                         "/home/lumen/agent/x.py:3"]
+    assert d.advisory == [] and d.tags == []
+
+
+def test_stale_sweep_stays_unresolved_fail_closed():
+    d = cl.derive({"title": "", "detail": "read /home/lumen/agent"},
+                  roster=ROSTER, policy=POLICY, sweep={"ts": "2020-01-01T00:00:00Z",
+                                                      "roots": {}})
+    assert d.tags == [] and d.advisory == [] and len(d.unresolved) == 1
+    assert "read_dir_sweep is missing" in d.unresolved[0]
+
+
+def test_lever_off_restores_the_pre_advisory_buckets(monkeypatch, home_root_files):
+    monkeypatch.setenv("FOREMAN_CAPABILITY_ADVISORY", "off")
+    assert not cl.advisory_enabled()
+    d = derive("see /home/lumen/HANDOFF.md and /home/lumen/mailbot and "
+               "/home/lumen/mailbot/nope.py and /home/lumen/worktrees/wq1357-a1\n"
+               "the box may need a reboot someday")
+    assert d.advisory == []
+    assert any("deny:path (/home/lumen)" in r for r in d.refused)
+    assert any("deny:prefix (/home/lumen/worktrees)" in r for r in d.refused)
+    assert any("not under allow.read_dirs" in u for u in d.unresolved)
+    assert any("does not exist" in u for u in d.unresolved)
+    assert any("'reboot' is a v2 verb" in u for u in d.unresolved)
+    monkeypatch.delenv("FOREMAN_CAPABILITY_ADVISORY")
+    assert cl.advisory_enabled()
+
+
+def test_new_secret_denies_survive_the_lever(monkeypatch):
+    monkeypatch.setenv("FOREMAN_CAPABILITY_ADVISORY", "off")
+    assert cl.dir_denied("/home/lumen/.fleet_pw")
+
+
+# v2 verb: hard only in fenced code / a list item / an imperative line -------------
+
+@pytest.mark.parametrize("detail", [
+    "Steps:\n```\nsudo systemctl restart foo\n```\n",
+    "Do this:\n- reboot the node when idle\n",
+    "1. shut it down with sudo shutdown -h\n",
+    "* verify first, then power-cycle the plug",
+    "reboot isis after the change",
+    "then sudo cat /etc/x",
+    "$ sudo whoami",
+    "- do NOT reboot thor",       # a list line is a step line, negation or not
+    "```sh\nfoo && reboot\n```",
+])
+def test_v2_verb_in_an_instruction_position_is_hard(detail):
+    d = derive(detail)
+    assert d.advisory == [] and any("v2 verb" in u for u in d.unresolved), d
+
+
+@pytest.mark.parametrize("detail", [
+    "The old flow needed a reboot after each change and we want to drop that.",
+    "Do not reboot the box; the watchdog handles it.",
+    "Never sudo in the worker sandbox.",
+    "wq#1571 HANGed under fworker; the worker likely hangs on sudo cat /etc/x",
+    "background: adb shell cmd notification is how the alert gets silenced",
+    "Context paragraph.\n\nWe considered a `docker restart` but rejected it.",
+])
+def test_v2_verb_prose_mention_is_advisory(detail):
+    d = derive(detail)
+    assert d.unresolved == [] and d.tags == [], d
+    assert d.advisory and all("v2 verb" in a and "prose mention" in a for a in d.advisory)
+
+
+def test_v2_verb_after_a_closed_fence_is_prose_again():
+    d = derive("```\nls\n```\nit used to reboot on its own")
+    assert d.unresolved == [] and len(d.advisory) == 1
+
+
+def test_v2_verb_in_prose_and_in_a_step_is_hard_for_the_step_only():
+    d = derive("We never want a reboot here.\n- run sudo systemctl daemon-reload\n")
+    assert len(d.unresolved) == 1 and "'sudo'" in d.unresolved[0]
+    assert len(d.advisory) == 1 and "'reboot'" in d.advisory[0]
+
+
+# advisory note --------------------------------------------------------------------
+
+def test_advisory_note_is_recognised_in_the_tickets_own_notes():
+    d = derive("compare with /home/lumen/mailbot")
+    fp, text = cl.advisory_note(d)
+    assert text.startswith(f"needs_advisory[{fp}]:") and "1 advisory finding(s)" in text
+    assert cl.advisory_noted(f"2026-09-20 10:00 {text}", fp)
+    assert not cl.advisory_noted("", fp) and not cl.advisory_noted(None, fp)
+
+
+def test_advisory_note_fingerprint_follows_the_findings():
+    a = cl.advisory_note(derive("compare with /home/lumen/mailbot"))[0]
+    b = cl.advisory_note(derive("compare with /home/lumen/mailbot and /home/lumen/pokemon"))[0]
+    assert a != b
+    assert a == cl.advisory_note(derive("compare with /home/lumen/mailbot"))[0]
+
+
+def test_advisory_note_is_bounded():
+    d = cl.Derived(advisory=[f"finding {i} " + "x" * 300 for i in range(12)])
+    _, text = cl.advisory_note(d)
+    assert len(text) < 900 and "(+7 more)" in text
+
+
+def test_advisory_alone_makes_the_derivation_truthy():
+    assert cl.Derived(advisory=["x"]) and not cl.Derived()

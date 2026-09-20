@@ -43,17 +43,19 @@ CORPUS = [
     (1401, "Maintenance-window scheduler",
      "doc /home/lumen/instructions/playbooks/maintenance-window.md ... and REBOOTS "
      "only if boot-safety triple-checked; reboot the node afterwards",
-     "needs_unresolved"),
+     "dispatchable"),   # wq#2131: 'reboot' mid-sentence is a prose mention -> advisory
     # wq#1441: deny is the default. /home/lumen/agent carries live tokens (agent/.env
-    # + .env.bak.*), backups/ and .npm-global/ are not swept read roots — all three
-    # now land in needs_unresolved with the propose-by-PR hint instead of an auto
-    # grant. A cited path UNDER allow.read_dirs still lands dispatchable (last row).
-    (1402, "agent notes", "read the config under /home/lumen/agent", "needs_unresolved"),
+    # + .env.bak.*) and backups/ is not a swept read root — neither gets an auto grant.
+    # wq#2131: that is an advisory now, not a needs_unresolved hold; what stops the
+    # ticket is preflight, which tests the worker's real reach and is unchanged.
+    # A cited path UNDER allow.read_dirs (.npm-global/bin, research_prompts) lands
+    # dispatchable with the dir tag.
+    (1402, "agent notes", "read the config under /home/lumen/agent", "cited_path_unreachable"),
     (1403, "wq proposal backups",
-     "write to /home/lumen/backups/wq-proposals nightly", "needs_unresolved"),
+     "write to /home/lumen/backups/wq-proposals nightly", "cited_path_unreachable"),
     (1407, "Fix preflight claude spawn under systemd PATH",
      "PATH lacks /home/lumen/.npm-global/bin so every auto-reprove fails",
-     "needs_unresolved"),
+     "dispatchable"),
     (9999, "allowed read root",
      "read /home/lumen/research_prompts and summarise", "dispatchable"),
 ]
@@ -81,16 +83,66 @@ def test_each_ticket_lands_in_the_predicted_column(tid, title, detail, column):
 def test_1401_names_the_v2_verb_that_holds_it():
     """The doc's §4 row-iv prediction ("1401 -> auto dir") predates the lint's v2-verb
     bucket. §2.4 is the governing text: a ticket that needs `reboot` stays
-    needs_unresolved with the missing verb named, "which is the honest state". The dir
-    tag is still derived — it is simply not applied to a ticket being skipped."""
+    needs_unresolved with the missing verb named, "which is the honest state" — when
+    the verb is an instruction (wq#2131: fenced code, a list item, an imperative
+    line). The dir tag is still derived — it is simply not applied to a ticket being
+    skipped."""
     tid, title, detail, _ = CORPUS[0]
-    r = capability_replay.replay({"id": tid, "title": title, "detail": detail,
+    r = capability_replay.replay({"id": tid, "title": title,
+                                  "detail": detail + "\n- reboot the node afterwards",
                                   "needs": None, "archetype": "standard-engineering"},
                                  repo="/home/lumen/foreman", roster=ROSTER,
                                  sweep=fresh_sweep())
     assert r["column"] == "needs_unresolved" and "reboot" in r["detail"]
     assert r["tags"] == ["dir(/home/lumen/instructions/playbooks)"]
-    assert "apply" not in r
+    assert "apply" not in r and not r["lint_clear"]
+
+
+def test_1401_prose_mention_of_the_verb_dispatches_with_an_advisory():
+    tid, title, detail, _ = CORPUS[0]
+    r = capability_replay.replay({"id": tid, "title": title, "detail": detail,
+                                  "needs": None, "archetype": "standard-engineering"},
+                                 repo="/home/lumen/foreman", roster=ROSTER,
+                                 sweep=fresh_sweep())
+    assert r["column"] == "dispatchable" and r["lint_clear"]
+    assert r["apply"] == ["dir(/home/lumen/instructions/playbooks)"]
+    assert len(r["advisory"]) == 1 and "'reboot'" in r["advisory"][0]
+
+
+def test_secret_citations_stay_refused_in_the_replay():
+    for tid, detail in [(1466, "rotate /home/lumen/.secrets/gatus-external.env"),
+                        (1491, "the password lives in /home/lumen/.fleet_pw"),
+                        (1619, "edit /home/lumen/agent/.env"),
+                        (1690, "copy /home/lumen/.netrc over")]:
+        r = capability_replay.replay({"id": tid, "title": "t", "detail": detail,
+                                      "needs": None, "archetype": "standard-engineering"},
+                                     repo="/home/lumen/foreman", roster=ROSTER,
+                                     sweep=fresh_sweep())
+        assert r["column"] == "capability_denied_by_policy", (tid, r)
+        assert not r["lint_clear"]
+
+
+def test_the_replay_prints_the_advisory_bucket(capsys, monkeypatch, tmp_path):
+    import sqlite3
+    db = tmp_path / "q.db"
+    con = sqlite3.connect(db)
+    con.execute("create table tasks (id integer, lane text, status text, title text, "
+                "detail text, needs text, archetype text)")
+    con.execute("insert into tasks values (7, 'foreman', 'open', 't', "
+                "'compare with /home/lumen/instructions/playbooks/maintenance-window.md "
+                "and the old flow needed a reboot', NULL, 'standard-engineering')")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(capability_lint, "load_roster", lambda *a, **k: ROSTER)
+    monkeypatch.setattr(capability_lint, "load_sweep", lambda *a, **k: fresh_sweep())
+    monkeypatch.setattr(capability_replay.router, "repo_for_ticket",
+                        lambda t: "/home/lumen/foreman")
+    assert capability_replay.main(["--db", str(db), "7"]) == 0
+    out = capsys.readouterr().out
+    assert "dispatchable" in out and "+advisory" in out and "lint_clear=True" in out
+    assert "advisory: 'reboot' is a v2 verb" in out
+    assert capability_replay.main(["--db", str(db), "--json", "7"]) == 0
+    assert '"advisory": ["\'reboot\'' in capsys.readouterr().out
 
 
 def test_the_replay_never_writes(monkeypatch):
@@ -106,14 +158,16 @@ def test_the_replay_never_writes(monkeypatch):
 
 @pytest.mark.skipif(not os.path.exists(LIVE_DB), reason="no live queue on this host")
 def test_live_replay_of_the_four_stuck_tickets():
-    """The drill on the real rows. Under wq#1441's explicit allow list none of the
-    four gets an auto grant: 1401 is held by its v2 verb, 1402/1403/1407 cite dirs
-    that are not swept read roots. Nothing is spawned and nothing is written — this
-    module has no code path that can do either."""
+    """The drill on the real rows. Under wq#1441's explicit allow list 1402/1403 get no
+    auto grant for the dirs they cite (not swept read roots); wq#2131 makes that an
+    advisory instead of a needs_unresolved hold, so what the replay may say about them
+    is `cited_path_unreachable` (preflight, the worker's real reach) or `dispatchable`
+    — never `needs_unresolved` for an advisory-only ticket. Nothing is spawned and
+    nothing is written — this module has no code path that can do either."""
     tickets = capability_replay.load_tickets([1401, 1402, 1403, 1407], LIVE_DB)
     assert {t["id"] for t in tickets} == {1401, 1402, 1403, 1407}
-    got = {t["id"]: capability_replay.replay(t) for t in tickets}
+    got = {t["id"]: capability_replay.replay(t, sweep=fresh_sweep()) for t in tickets}
     for tid in (1401, 1402, 1403, 1407):
-        assert got[tid]["column"] == "needs_unresolved", (tid, got[tid])
-        assert got[tid].get("apply", []) == []
-    assert any("allow.read_dirs" in u for u in got[1402]["unresolved"])
+        assert got[tid]["column"] in ("dispatchable", "cited_path_unreachable"), (tid, got[tid])
+        assert got[tid]["unresolved"] == [] and got[tid]["lint_clear"], (tid, got[tid])
+    assert any("allow.read_dirs" in a for a in got[1402]["advisory"])

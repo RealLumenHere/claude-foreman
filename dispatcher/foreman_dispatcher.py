@@ -721,7 +721,11 @@ def enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
     Fail-open on an internal exception (logged as capability_lint_error, ticket keeps
     its decision): fworker calls the same `capability.preflight` at spawn (§1
     belt-and-braces), so a crash here costs the slot burn this slice exists to save,
-    never a wrongly-granted capability. Rollback: FOREMAN_NEEDS_LINT_MODE=warn."""
+    never a wrongly-granted capability. Rollback: FOREMAN_NEEDS_LINT_MODE=warn.
+
+    wq#2131: a ticket whose derivation carries only `advisory` findings is dispatched
+    (preflight, the real-reach check, still runs and still decides); it gets one
+    `needs_advisory` note and no ntfy. Rollback: FOREMAN_CAPABILITY_ADVISORY=off."""
     if not capability_lint.enforcing():
         return False
     try:
@@ -747,6 +751,15 @@ def enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
                 log.emit("capability_applied", ticket=tid, lane=lane,
                          mode=capability_lint.mode(), dry_run=dry_run,
                          tags=[f"{n}({a})" for n, a in tags], needs=written)
+        if derived is not None and derived.advisory:
+            # wq#2131: advisory-only findings never hold a ticket and never page. One
+            # note per distinct finding set, recognised from the ticket's own notes.
+            fp, note = capability_lint.advisory_note(derived)
+            if not capability_lint.advisory_noted(t.get("notes"), fp):
+                if not dry_run:
+                    capability._wq("note", str(tid), note)
+                log.emit("capability_advisory_noted", ticket=tid, lane=lane,
+                         dry_run=dry_run, fingerprint=fp, advisory=list(derived.advisory))
     except Exception as e:  # noqa: BLE001 — see docstring
         log.emit("capability_lint_error", ticket=tid, lane=lane, stage="enforce",
                  reason=repr(e)[:300])
