@@ -63,6 +63,7 @@ import scratch_grant
 import agents_spec
 import fire_gate
 import charging
+import burn_filter
 import masking
 
 # wq#1332 (WORKER_EXEC_CAPABILITY_GAP.md §2.4): fleet_exec_policy.py lives in the
@@ -780,6 +781,51 @@ def mask_alarm(ticket_id, attempt, labels, records=None):
             log(f"MASK HIT wq#{ticket_id} attempt {attempt}: {tag} — rotation ticket filed")
     except Exception as e:  # noqa: BLE001
         log(f"WARN: rotation ticket add crashed for wq#{ticket_id}: {e!r}")
+
+
+def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_root,
+                     ticket_id, attempt):
+    """wq#2290: alarm on a mask hit only when the matched text is actually a live
+    credential (burn_filter), not a credential-shaped string in the repo's source.
+
+    Masking already happened — this gates only the ntfy page and the rotation
+    ticket. Sits where wq#2288's re-scan does, off the hot path: nothing here runs
+    until mask_text() has already reported a label.
+
+    Bookkeeping is per matched STRING, not per label: keying only on the label meant
+    the first hit of a label consumed that label's one alarm for the attempt, so a
+    benign fixture read at turn 2 would silently swallow a real burn at turn 40.
+    Labels still alarm at most once — `alarmed` — but only once BURNED.
+    """
+    fresh = [h for h in hits if h not in alarmed]
+    if not fresh:
+        return
+    try:
+        values = burn_filter.matched_values(raw, fresh)
+        pending = {}
+        for label, found in values.items():
+            unscreened = [v for v in found if v not in seen]
+            if unscreened:
+                pending[label] = unscreened
+            seen.update(found)
+        burned, benign = burn_filter.classify(pending, live_secrets, repo_root)
+        # A label mask_text() reported but whose value cannot be recovered from the
+        # raw line is unexplainable, so it pages — the same default as an unknown
+        # value. In practice this is a label that fired only on an earlier pattern's
+        # `MASKED` remnant, whose underlying value the earlier label already covers.
+        burned += [h for h in fresh if h not in values and h not in burned]
+    except Exception as e:  # noqa: BLE001
+        # Never let provenance screening swallow an alarm: on any failure fall back
+        # to the wq#2275 behaviour of treating every hit as burned.
+        log(f"WARN: burn_filter failed ({e!r}) — alarming on all hits")
+        burned, benign = fresh, []
+    if benign:
+        log(f"mask hit wq#{ticket_id} attempt {attempt}: {','.join(sorted(benign))} "
+            f"matched committed source text, not a live credential — masked, no rotation")
+    if burned:
+        alarmed.update(burned)
+        # wq#2288: re-scan the raw line for the redacted record — only on an alarm.
+        mask_alarm(ticket_id, attempt, burned, masking.scan(raw)[1])
 
 
 # ---------------------------------------------------------------------------
@@ -1882,6 +1928,8 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
     killed_reason = None
     exit_code = None
     mask_alarmed = set()  # wq#2275: pattern labels already alarmed this attempt
+    burn_seen = set()     # wq#2290: matched strings already screened this attempt
+    live_secrets = burn_filter.live_secret_values(env)
     start = time.time()
     deadline = start + wall_clock_s
     last_event = start
@@ -1933,13 +1981,9 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
                         # gateway stream feeds the identical artefact chain.
                         raw_payload = raw[len("data:"):].strip()
                         payload, mask_hits = masking.mask_text(raw_payload)
-                        new_hits = [h for h in mask_hits if h not in mask_alarmed]
-                        if new_hits:
-                            mask_alarmed.update(new_hits)
-                            # wq#2288: re-scan the raw line for the redacted record —
-                            # only on an alarm, so the hot path stays mask_text().
-                            mask_alarm(ticket_id, attempt, new_hits,
-                                       masking.scan(raw_payload)[1])
+                        screen_mask_hits(mask_hits, raw_payload, mask_alarmed,
+                                         burn_seen, live_secrets, cwd,
+                                         ticket_id, attempt)
                         try:
                             ev = json.loads(payload)
                         except json.JSONDecodeError:
@@ -2025,6 +2069,8 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     poll_timeout = max(0.25, min(5, frame_gap_s, post_result_grace_s) / 4)
     first_frame_seen = first_frame_s is None
     mask_alarmed = set()         # wq#2275: pattern labels already alarmed this attempt
+    burn_seen = set()            # wq#2290: matched strings already screened this attempt
+    live_secrets = burn_filter.live_secret_values(env)
 
     while True:
         now = time.time()
@@ -2084,12 +2130,8 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         # lever rewrites a tool result), so a hit is an alarm, not a save.
         raw_line = line
         line, mask_hits = masking.mask_text(line)
-        new_hits = [h for h in mask_hits if h not in mask_alarmed]
-        if new_hits:
-            mask_alarmed.update(new_hits)
-            # wq#2288: re-scan the raw line for the redacted record — only on an
-            # alarm, so the per-line hot path stays a plain mask_text().
-            mask_alarm(ticket_id, attempt, new_hits, masking.scan(raw_line)[1])
+        screen_mask_hits(mask_hits, raw_line, mask_alarmed, burn_seen,
+                         live_secrets, cwd, ticket_id, attempt)
         try:
             frame = json.loads(line)
         except json.JSONDecodeError:
