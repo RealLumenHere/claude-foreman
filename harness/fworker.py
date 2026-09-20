@@ -767,6 +767,8 @@ def write_mask_hits(ticket_id, attempt, records):
 
 
 ROTATION_TITLE_PREFIX = "[rotation] burned credential in wq#"
+# The same text also appears mid-title on the verify pass a rotation ticket spawns:
+# `[verify] wq#2294 [rotation] burned credential in wq#2284 transcript (github)`.
 
 
 def rotation_chain_refire(ticket_id, attempt, tag, hits_path):
@@ -788,17 +790,28 @@ def rotation_chain_refire(ticket_id, attempt, tag, hits_path):
     pages. Only the new ROW is suppressed. An unreadable title alarms normally — a
     guard that cannot prove it is on a chain must never be the thing that silences
     a burn.
+
+    wq#2308: the marker is matched anywhere in the title, not only at its start,
+    because every rotation ticket spawns a `[verify] wq#N [rotation] burned
+    credential in wq#M ...` row whose worker is sent to re-read the same run dir.
+    That corpus still fires: of 1331 frozen `_runs/wq2[23]*/snapshots/*` artefacts,
+    23 carry credential-shaped text at today's rules and 9 of those come back
+    `burned` from burn_filter, because a literal that WAS a committed fixture when
+    the snapshot froze (or a runtime id like `capability_proposal.grant_key()`'s
+    `grant-dir-<hash>`) is in no tracked file today, so provenance cannot account
+    for it. A prefix-only guard hands each of those 12 open verify rows a fresh
+    pri-1 child, which is the chain wq#2299 closed reopening one archetype over.
     """
     try:
         title = (wq_show(ticket_id).get("title") or "")
     except Exception as e:  # noqa: BLE001
         log(f"WARN: chain-guard lookup failed for wq#{ticket_id} ({e!r}) — alarming")
         return False
-    if not title.startswith(ROTATION_TITLE_PREFIX):
+    if ROTATION_TITLE_PREFIX not in title:
         return False
     wq("note", str(ticket_id),
-       f"wq#2275 tripwire re-fired on attempt {attempt} ({tag}) while investigating "
-       f"this rotation ticket; forensics appended to {hits_path}. No child rotation "
+       f"wq#2275 tripwire re-fired on attempt {attempt} ({tag}) while working "
+       f"this rotation row; forensics appended to {hits_path}. No child rotation "
        f"ticket filed (wq#2299 chain guard) — reading the artefacts this ticket "
        f"points at is what fired it.")
     ntfy("foreman MASK HIT (rotation chain)",

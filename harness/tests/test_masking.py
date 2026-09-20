@@ -483,6 +483,21 @@ def test_a_rotation_ticket_refire_is_noted_not_filed(tmp_path, monkeypatch):
     assert pages and pages[0][0] == "foreman MASK HIT (rotation chain)"
 
 
+def test_the_verify_pass_of_a_rotation_ticket_is_on_the_chain(tmp_path, monkeypatch):
+    """wq#2308: every rotation ticket spawns a verify row that carries the marker in
+    the MIDDLE of its title, and sends its worker back to the same run dir — where 9
+    of the frozen snapshots still come back `burned` (a fixture that has since been
+    split, a `grant-dir-<hash>` runtime id: real text, in no tracked file today). A
+    prefix-only guard gave each of those a fresh pri-1 child."""
+    pages, calls = alarm_with_title(
+        tmp_path, monkeypatch,
+        f"[verify] wq#2294 {fworker.ROTATION_TITLE_PREFIX}2284 transcript (github)",
+        2321)
+    assert [c[0] for c in calls] == ["note"]      # no `add`: no child ticket
+    assert calls[0][1] == "2321"                  # noted on the verify row itself
+    assert pages and pages[0][0] == "foreman MASK HIT (rotation chain)"
+
+
 def test_an_ordinary_ticket_still_files_a_rotation_ticket(tmp_path, monkeypatch):
     # the guard is scoped to the chain: any other ticket alarms exactly as before.
     pages, calls = alarm_with_title(
