@@ -1,5 +1,5 @@
 [Unit]
-Description=session-handoff — regenerate kb/SESSION-HANDOFF.md from live fleet state (wq#1294)
+Description=session-handoff — re-render the generated region of HANDOFF.md from live fleet state (wq#1294, wq#1630)
 After=network.target
 
 [Service]

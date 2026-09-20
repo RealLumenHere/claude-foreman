@@ -1,0 +1,13 @@
+--- a/minerva/context/claude_context.sh
++++ b/minerva/context/claude_context.sh
+@@ -28,6 +28,10 @@
+         exit 1
+     fi
+     /home/lumen/bin/handoff verify 2>/dev/null; echo
++    # wq#1630: re-render the generated region at the top of HANDOFF.md (in-flight claims, last
++    # landed PRs, detector stamps) so it is seconds old here, not up to 30 min — same pattern as
++    # fleet-tools-render below. Fail-open: a failed render keeps the previous (timestamped) region.
++    timeout 15 /home/lumen/bin/session-handoff --render >/dev/null 2>&1
+     if [ -f /home/lumen/HANDOFF.md ]; then
+         echo "===== HANDOFF.md (index — read after VERIFY above) ====="
+         cat /home/lumen/HANDOFF.md

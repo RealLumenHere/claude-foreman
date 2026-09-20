@@ -1,5 +1,11 @@
 # session-handoff (wq#1294)
 
+> **Superseded in part by wq#1630** (`ops/wq1630-handoff-merge/`): the tool no longer writes or
+> commits `kb/SESSION-HANDOFF.md`; it renders a marked generated region at the top of
+> `/home/lumen/HANDOFF.md` instead, and `claude_context.sh --core` re-renders it at boot.
+> Blocked-by-class and open-FRANK sections were dropped (`wq list --status blocked` covers the
+> first; frank gates are retired). Read the wq1630 README for the current behaviour.
+
 Resuming a fleet orchestrator session today costs ~10 turns of re-deriving
 state: querying the work queue for in-flight workers, scrolling landed PRs,
 grepping for blocked tickets, checking for open FRANK decisions, and reading
