@@ -116,8 +116,8 @@ def main(argv=None):
             print(f"wq#{r['id']} [{r['status']}] -> {r['column']}{extra}\n"
                   f"    tags={r['tags']} lint_clear={r['lint_clear']} "
                   f"detail={r['detail'][:160]}")
-            for a in r["advisory"]:
-                print(f"    advisory: {a[:160]}")
+            for note in r["advisory"]:
+                print(f"    advisory: {note[:160]}")
     return 1 if missing else 0
 
 

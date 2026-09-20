@@ -147,6 +147,27 @@ def test_the_replay_prints_the_advisory_bucket(capsys, monkeypatch, tmp_path):
     assert '"advisory": ["\'reboot\'' in capsys.readouterr().out
 
 
+def test_text_mode_survives_two_advisory_tickets(capsys, monkeypatch, tmp_path):
+    import sqlite3
+    db = tmp_path / "q.db"
+    con = sqlite3.connect(db)
+    con.execute("create table tasks (id integer, lane text, status text, title text, "
+                "detail text, needs text, archetype text)")
+    for tid in (7, 8):
+        con.execute("insert into tasks values (?, 'foreman', 'open', 't', "
+                    "'compare with /home/lumen/instructions/playbooks/maintenance-window.md "
+                    "and the old flow needed a reboot', NULL, 'standard-engineering')", (tid,))
+    con.commit()
+    con.close()
+    monkeypatch.setattr(capability_lint, "load_roster", lambda *a, **k: ROSTER)
+    monkeypatch.setattr(capability_lint, "load_sweep", lambda *a, **k: fresh_sweep())
+    monkeypatch.setattr(capability_replay.router, "repo_for_ticket",
+                        lambda t: "/home/lumen/foreman")
+    assert capability_replay.main(["--db", str(db), "7", "8"]) == 0
+    out = capsys.readouterr().out
+    assert "wq#7 " in out and "wq#8 " in out
+
+
 def test_the_replay_never_writes(monkeypatch):
     """No third writer: the dispatcher owns the `needs` column (§2.1/§3)."""
     import capability
