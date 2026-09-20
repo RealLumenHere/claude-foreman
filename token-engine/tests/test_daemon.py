@@ -331,6 +331,16 @@ class FrameTest(unittest.TestCase):
         self.assertIn("kv_secret", D.mask_hits('TOKEN="abcdefgh12345678"'))
         self.assertEqual(D.mask_hits('{"pong": true, "daemon_uid": 998}'), [])
 
+    def test_mask_ignores_prefixes_inside_words(self):
+        """wq#2292: a tripwire hit FAILS the verb, so `ghs_` inside the repo name
+        `highs_solver` must not match — that false positive is an outage, and it
+        already cost one pri-1 rotation ticket on the fworker copy of this set."""
+        for text in ('{"reason": "repo highs_solver has no remote"}',
+                     '{"reason": "clone ghp_notes.git"}',
+                     '{"reason": "risk-assessment-framework"}',
+                     '{"reason": "ghp_MASKED"}'):
+            self.assertEqual(D.mask_hits(text), [], text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

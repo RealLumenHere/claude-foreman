@@ -18,8 +18,22 @@ import masking
 
 # Synthetic, never-live values shaped like the real thing.
 GHP = "ghp_" + "A1b2C3d4E5f6G7h8J9k0A1b2C3d4E5f6G7h8"
+GHPAT = "github_pat_" + "11ABCDE0Y" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4y5Z6"
 SK = "sk-ant-" + "x" * 24
 AKIA = "AKIA" + "ABCDEFGHIJKLMNOP"
+
+# wq#2292: strings that LOOK like a prefix rule but are not credentials. Each one
+# is a real shape that reached a stream and cost a pri-1 rotation ticket or a
+# failed broker verb. Both in-repo copies of the house set must stay silent on
+# every one of them.
+FALSE_POSITIVES = [
+    # the exact string that fired on wq#2282: `ghs_solver` inside a repo name,
+    # from the ISSUE-LOG row documenting this same bug in remote_credential_sweep
+    "https://github.com/ERGO-Code/highs_solver.git flagged UNSTRIPPABLE",
+    "clone git@github.com:o/ghp_notes.git",          # right prefix, body too short
+    "the risk-assessment-framework doc needs review",  # `sk-` inside `risk-`
+    "ghp_MASKED and github_pat_MASKED",  # our OWN output must not re-arm the alarm
+]
 
 
 def test_patterns_mask_and_label():
@@ -28,6 +42,36 @@ def test_patterns_mask_and_label():
     assert GHP not in masked and SK not in masked and AKIA not in masked
     assert "ghp_MASKED" in masked
     assert set(hits) == {"github", "sk-key", "aws"}
+
+
+def test_github_pat_still_masked():
+    # not a `TOKEN=` context: kv-secret would otherwise eat the prefix too
+    masked, hits = masking.mask_text(f"remote https://x:{GHPAT}@github.com")
+    assert GHPAT not in masked and "github_pat_MASKED" in masked
+    assert hits == ["github"]   # one label even though two github rules exist
+
+
+def test_false_positives_never_alarm():
+    """wq#2292: the pri-1 rotation alarm must not fire on a repo name."""
+    for text in FALSE_POSITIVES:
+        masked, hits = masking.mask_text(text)
+        assert hits == [], f"{text!r} falsely matched {hits}"
+        assert masked == text, f"{text!r} was rewritten to {masked!r}"
+
+
+def test_token_engine_mirror_agrees():
+    """The daemon keeps its own copy of the house set (it runs as `tokeneng`, off
+    this import path). Drift between them is silent, so pin them to each other:
+    same verdict on every false positive AND on every real token."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..",
+                                    "token-engine"))
+    import token_engine_daemon as ted
+
+    for text in FALSE_POSITIVES:
+        assert ted.mask_hits(text) == [], f"{text!r} trips the daemon tripwire"
+    for real in (GHP, GHPAT, SK, AKIA):
+        assert ted.mask_hits(f'v = "{real}"'), f"daemon stopped catching {real[:8]}"
+        assert masking.mask_text(f'v = "{real}"')[1], f"masking stopped catching {real[:8]}"
 
 
 def test_clean_text_untouched():

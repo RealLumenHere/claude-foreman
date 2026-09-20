@@ -63,12 +63,19 @@ CONN_TIMEOUT_S = 10
 WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 # Mirror of /home/lumen/bin/mask-secrets, used as a tripwire (never a rewrite).
+# wq#2292: anchored on a word boundary, and the github bodies carry their real
+# lengths. Here the cost of a false positive is not just a wasted page — line 182
+# FAILS the verb and discards the result — so an unanchored `ghs_` matching inside
+# the repo name `highs_solver` is an availability bug, not just noise. Rationale
+# and the kv_secret carve-out: harness/masking.py.
+_B = r"(?<![A-Za-z0-9])"
 MASK_PATTERNS = [
-    ("github_token", re.compile(r"(?:ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{6,}")),
-    ("cloudflare_token", re.compile(r"cfut_?[A-Za-z0-9_.-]{6,}")),
-    ("sk_key", re.compile(r"sk-[a-zA-Z-]*[A-Za-z0-9_-]{16,}")),
-    ("slack_token", re.compile(r"xox[bpasr]-[A-Za-z0-9-]{8,}")),
-    ("aws_key_id", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{30,}")),
+    ("github_token", re.compile(_B + r"(?:github_pat_)[A-Za-z0-9_]{20,}")),
+    ("cloudflare_token", re.compile(_B + r"cfut_?[A-Za-z0-9_.-]{6,}")),
+    ("sk_key", re.compile(_B + r"sk-[a-zA-Z-]*[A-Za-z0-9_-]{16,}")),
+    ("slack_token", re.compile(_B + r"xox[bpasr]-[A-Za-z0-9-]{8,}")),
+    ("aws_key_id", re.compile(_B + r"AKIA[0-9A-Z]{16}")),
     ("kv_secret", re.compile(
         r'(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT)["\s]*[:=]["\s]*[A-Za-z0-9._-]{12,}',
         re.IGNORECASE)),
@@ -78,7 +85,11 @@ RESPONSE_KEYS = {"ok", "verb", "ticket", "rule", "reason", "result", "elapsed_s"
 
 
 def mask_hits(text):
-    return [name for name, pat in MASK_PATTERNS if pat.search(text)]
+    names = []
+    for name, pat in MASK_PATTERNS:
+        if pat.search(text) and name not in names:
+            names.append(name)
+    return names
 
 
 def assert_response_schema(frame):
@@ -143,7 +154,9 @@ def verb_ping(req, grant):
 def verb_mask_selftest(req, grant):
     """Deliberately returns a credential-shaped string so the outbound tripwire
     fires. Proves property 4 end to end without a real secret in play."""
-    return {"leak": "ghp_" + "selftestselftest0000"}
+    # wq#2292: 36-char body, the real ghp_ width. The old 20-char canary proved
+    # the tripwire caught a shape no live token actually has.
+    return {"leak": "ghp_" + "selftest" * 4 + "0000"}
 
 
 def verb_ticket_end(req, grant):
