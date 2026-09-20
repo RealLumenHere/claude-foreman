@@ -155,6 +155,157 @@ class TicketEndTest(unittest.TestCase):
         self.assertEqual(D.mask_hits(json.dumps(result)), [])
 
 
+class PrVerbTest(unittest.TestCase):
+    """T4 (wq#2273): PR verbs — node-from-argv grant matching, argv shape gate,
+    body-file safety, and handler behaviour against a stubbed forge. No network:
+    http_json is monkeypatched; the token store is a tempdir."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.peer = (1234, 1000, 1000)
+        self.path, self.sha = write_grant(
+            self.tmp.name, kind="pr_write", node="repo:lumen/lumen-bin")
+        self.orig_secrets = D.SECRETS_DIR
+        self.orig_http = D.http_json
+        self.orig_root = D.BODY_ROOT
+        # state dir and body root must be DISJOINT, as in production
+        # (/var/lib/token-engine vs /home/lumen) — the state-dir refusal test
+        # depends on it.
+        self.state = os.path.join(self.tmp.name, "state")
+        D.SECRETS_DIR = self.state
+        D.BODY_ROOT = self.tmp.name
+        os.makedirs(os.path.join(self.state, "secrets"))
+        for tok in ("gitea-lumen.token", "github-frank.token"):
+            with open(os.path.join(self.state, "secrets", tok), "w") as f:
+                f.write("ghp_" + "a" * 20 + "\n")
+
+    def tearDown(self):
+        D.SECRETS_DIR = self.orig_secrets
+        D.http_json = self.orig_http
+        D.BODY_ROOT = self.orig_root
+        self.tmp.cleanup()
+
+    def preq(self, verb, argv, kind="pr_write", node="repo:lumen/lumen-bin"):
+        path, sha = write_grant(self.tmp.name, kind=kind, node=node)
+        r = req(path, sha, verb=verb)
+        r["argv"] = argv
+        return r
+
+    def body(self, text="pr body\n", name="body.md"):
+        p = os.path.join(self.tmp.name, name)
+        with open(p, "w") as f:
+            f.write(text)
+        return p
+
+    def test_node_derived_from_argv_repo(self):
+        ok, rule, *_, decision = D.handle(
+            self.preq("pr-view", ["other/repo", "7"], kind="pr_read"), self.peer)
+        self.assertEqual((ok, rule, decision), (False, "grant_no_match", "deny"))
+
+    def test_malformed_repo_denied(self):
+        ok, rule, *_, decision = D.handle(
+            self.preq("pr-view", ["/etc/passwd", "7"], kind="pr_read"), self.peer)
+        self.assertEqual((ok, rule, decision), (False, "repo_malformed", "deny"))
+
+    def test_argv_metachar_denied(self):
+        ok, rule, *_, decision = D.handle(
+            self.preq("pr-comment", ["lumen/lumen-bin", "7", "x;rm"],
+                      kind="pr_comment"), self.peer)
+        self.assertEqual((ok, rule, decision), (False, "argv_metachar", "deny"))
+
+    def test_body_file_in_state_dir_denied(self):
+        tok = os.path.join(self.state, "secrets", "gitea-lumen.token")
+        ok, rule, *_, decision = D.handle(
+            self.preq("pr-comment", ["lumen/lumen-bin", "7", tok],
+                      kind="pr_comment"), self.peer)
+        self.assertEqual((ok, rule, decision), (False, "body_in_state_dir", "deny"))
+
+    def test_body_file_outside_root_denied(self):
+        ok, rule, *_, decision = D.handle(
+            self.preq("pr-comment", ["lumen/lumen-bin", "7", "/etc/hostname"],
+                      kind="pr_comment"), self.peer)
+        self.assertEqual((ok, rule, decision), (False, "body_outside_root", "deny"))
+
+    def test_credential_shaped_body_denied(self):
+        p = self.body("here is a leak ghp_abcdefghijklmnop123456\n")
+        ok, rule, *_, decision = D.handle(
+            self.preq("pr-comment", ["lumen/lumen-bin", "7", p],
+                      kind="pr_comment"), self.peer)
+        self.assertEqual((ok, rule, decision), (False, "body_mask_tripwire", "deny"))
+
+    def test_pr_open_creates_when_no_existing(self):
+        calls = []
+
+        def fake_http(method, base, path, scheme, token, body=None):
+            calls.append((method, path, body))
+            if method == "GET":
+                return 200, []
+            return 201, {"number": 12, "html_url": "http://forge/pr/12"}
+
+        D.http_json = fake_http
+        title, bodyf = self.body("feat(x): y\n", "t.txt"), self.body()
+        ok, rule, _, result, decision = D.handle(
+            self.preq("pr-open",
+                      ["lumen/lumen-bin", "feat/x", "main", title, bodyf]),
+            self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual((result["number"], result["action"]), (12, "created"))
+        self.assertEqual(calls[-1][0], "POST")
+        self.assertEqual(calls[-1][2]["head"], "feat/x")
+
+    def test_pr_open_updates_existing_matched_on_head_ref(self):
+        # wq#557 port: Gitea ignores head=, so the match must be client-side
+        # on head.ref — an open PR for a DIFFERENT branch must not be patched.
+        def fake_http(method, base, path, scheme, token, body=None):
+            if method == "GET":
+                return 200, [{"number": 3, "head": {"ref": "other-branch"}},
+                             {"number": 4, "head": {"ref": "feat/x"}}]
+            self.assertIn("/pulls/4", path)
+            return 200, {"number": 4, "html_url": "http://forge/pr/4"}
+
+        D.http_json = fake_http
+        title, bodyf = self.body("feat(x): y\n", "t.txt"), self.body()
+        ok, rule, _, result, _ = D.handle(
+            self.preq("pr-open",
+                      ["lumen/lumen-bin", "feat/x", "main", title, bodyf]),
+            self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual((result["number"], result["action"]), (4, "updated"))
+
+    def test_pr_merge_gitea_uses_do_and_delete_branch(self):
+        merged = {}
+
+        def fake_http(method, base, path, scheme, token, body=None):
+            if method == "GET" and path.endswith("/commits"):
+                return 200, [{"commit": {"message": "feat: x\n\nRefs: wq#1\n"}}]
+            if method == "GET":
+                return 200, {"state": "open", "merged": False, "title": "feat: x",
+                             "head": {"sha": "a" * 40, "ref": "feat/x"}}
+            merged.update(method=method, path=path, body=body)
+            return 200, {}
+
+        D.http_json = fake_http
+        ok, rule, _, result, _ = D.handle(
+            self.preq("pr-merge", ["lumen/lumen-bin", "9", "squash"]), self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual(merged["method"], "POST")
+        self.assertEqual(merged["body"]["do"], "squash")
+        self.assertTrue(merged["body"]["delete_branch_after_merge"])
+        self.assertEqual(merged["body"]["merge_message_field"], "Refs: wq#1")
+        self.assertTrue(result["merged"])
+
+    def test_result_leaves_stay_scalar(self):
+        # assert_response_schema forbids nested leaves; every PR verb result
+        # must pass it or respond() replaces the frame with an error.
+        D.http_json = lambda *a, **k: (200, [])
+        ok, rule, _, result, _ = D.handle(
+            self.preq("pr-list", ["lumen/lumen-bin"], kind="pr_read"), self.peer)
+        self.assertTrue(ok, rule)
+        D.assert_response_schema({"ok": True, "verb": "pr-list", "ticket": "wq2270",
+                                  "rule": "r", "reason": "", "result": result,
+                                  "elapsed_s": 0.0})
+
+
 class FrameTest(unittest.TestCase):
     def test_schema_accepts_documented_frame(self):
         D.assert_response_schema({"ok": True, "verb": "ping", "ticket": "wq2270",

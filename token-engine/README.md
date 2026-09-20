@@ -23,8 +23,15 @@ entry for the T2 verbs, audits to the fleet-exec dual sink with the ticket id,
 and passes every outbound frame through a response-schema assertion plus the
 mask-secrets patterns as a tripwire — a hit fails the verb and raises ntfy.
 
-T2 verbs are `ping` and `mask-selftest`; provider verbs (git, PR, gateway-key)
-land via T1/T4/T10 in the `VERBS` registry.
+T2 verbs are `ping` and `mask-selftest`. T4 (wq#2273) added the PR family —
+`pr-open` / `pr-update` / `pr-comment` / `pr-view` / `pr-checks` / `pr-files` /
+`pr-list` / `pr-merge` — granted per resource (`kind` `pr_write`/`pr_comment`/
+`pr_read`, `node` `repo:owner/name`, derived from `argv[0]`). Titles and bodies
+travel as FILE PATHS under `/home/lumen` (never argv, never inside the state
+dir, mask-tripwired before posting); results carry only scalars (PR number,
+url, normalised check counts). The forge, base URL and token file per slug come
+from root-installed `forges.json` + the identity map — never from the client.
+Remaining provider verbs (git, gateway-key) land via T1/T10.
 
 T9 (wq#2277, design §3.4) adds revocation: `ticket-end` revokes every token
 ledgered for the calling ticket (grant scoping means only its own) and drops it

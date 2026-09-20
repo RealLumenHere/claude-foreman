@@ -36,6 +36,9 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet_exec_policy as P  # root-owned copy installed next to this file
@@ -123,6 +126,15 @@ def audit(req, peer, decision, rule, **extra):
 
 # ---------------------------------------------------------------- verbs (T2)
 
+class Deny(Exception):
+    """A clean verb refusal: (rule, reason). handle() turns it into a deny
+    frame rather than the verb_crashed error path."""
+    def __init__(self, rule, reason):
+        super().__init__(reason)
+        self.rule = rule
+        self.reason = reason
+
+
 def verb_ping(req, grant):
     return {"pong": True, "daemon_uid": os.getuid(),
             "secrets_dir": SECRETS_DIR}
@@ -170,14 +182,424 @@ def verb_mint_test(req, grant):
     return {"token_id": token_id, "provider": "test-file"}
 
 
+# ------------------------------------------------------------- PR verbs (T4)
+# TOKEN_ENGINE_DESIGN.md §2 + §5.3 (wq#2273). The daemon — not the client —
+# picks the forge, the base URL and the token file for a repo slug: a client
+# that could name either would have the daemon post the credential to an
+# attacker's server. Titles and bodies arrive as FILE PATHS (never argv), so
+# nothing lands in /proc/*/cmdline and the metachar ban stays strict.
+
+FORGES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "forges.json")
+REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+NUMBER_RE = re.compile(r"^[0-9]{1,9}$")
+SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
+BODY_MAX_BYTES = 65536
+HTTP_TIMEOUT_S = 30
+# Body/title files must resolve under this root (worker worktrees and the
+# foreman tree live here) and never inside the engine's own state dir — a
+# body path into the secret store would post the credential as a PR body.
+BODY_ROOT = os.environ.get("TOKEN_ENGINE_BODY_ROOT", "/home/lumen")
+FOOTER_ASSIST = "Assisted-by: Claude (Anthropic) via Lumen Industries automation"
+FOOTER_RE = re.compile(
+    r"^(Refs|Assisted-by|Generated-by|BREAKING CHANGE|Co-authored-by):")
+
+
+def load_forges():
+    try:
+        with open(FORGES_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def identity_map_lookup(slug, cfg):
+    """Port of lumen-github-identity.sh `_lgi_map_lookup` (wq#525): exact-slug
+    `owner/repo = /path/to/token-file` lines. Only the BASENAME of the mapped
+    path is honoured — the engine serves tokens from its own store only."""
+    path = cfg.get("identity_map", "/home/lumen/infra/github/identity-map.conf")
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == slug:
+                    return os.path.basename(v.strip())
+    except OSError:
+        pass
+    return None
+
+
+def resolve_repo(slug):
+    """(api_base, auth_header_value_prefix, token, forge) for a repo slug, or
+    Deny. Mirrors the ladder lumen-pr used in-process before T4 — identity map
+    first, then the default per forge — with every file read from the engine
+    store, never /home/lumen/.secrets."""
+    cfg = load_forges()
+    owner = slug.split("/")[0]
+    if owner in cfg.get("gitea_owners", ["lumen"]):
+        base = cfg.get("gitea_url", "http://100.121.17.5:3000").rstrip("/") + "/api/v1"
+        token_file = cfg.get("gitea_token_file", "gitea-lumen.token")
+        scheme, forge = "token", "gitea"
+    else:
+        base = "https://api.github.com"
+        token_file = (identity_map_lookup(slug, cfg)
+                      or cfg.get("github_default_token_file", "github-frank.token"))
+        scheme, forge = "Bearer", "github"
+    path = os.path.join(SECRETS_DIR, "secrets", os.path.basename(token_file))
+    try:
+        with open(path) as f:
+            token = f.read().strip()
+    except OSError:
+        raise Deny("token_unreadable",
+                   f"engine store has no readable {os.path.basename(token_file)} "
+                   f"for {slug} — run token-engine/install.sh to migrate it")
+    if not token:
+        raise Deny("token_empty", f"{os.path.basename(token_file)} is empty")
+    return base, scheme, token, forge
+
+
+def http_json(method, base, path, scheme, token, body=None):
+    """(status_code, parsed_json_or_None). One place builds the Authorization
+    header; the token never appears in any error string. Content-Type json is
+    NOT optional (wq#557: Gitea binds a form-encoded body as empty fields and
+    answers a misleading 422)."""
+    req = urllib.request.Request(base + path, method=method)
+    req.add_header("Authorization", f"{scheme} {token}")
+    req.add_header("Accept", "application/json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, data=data, timeout=HTTP_TIMEOUT_S) as resp:
+            raw = resp.read()
+            code = resp.status
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        code = e.code
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        raise Deny("forge_unreachable", f"{method} {path}: {type(e).__name__}")
+    try:
+        return code, json.loads(raw.decode(errors="replace"))
+    except ValueError:
+        return code, None
+
+
+def api_message(obj):
+    if isinstance(obj, dict):
+        return str(obj.get("message") or "no message")[:200]
+    return "no message"
+
+
+def read_worktree_file(path, what):
+    """Body/title content from a client-named path, with the reads a hostile
+    client would try refused: outside BODY_ROOT, inside the engine state dir,
+    oversized, or carrying a credential shape (posting one as a PR body is an
+    exfil, and the mask patterns are the same tripwire respond() uses)."""
+    real = os.path.realpath(path)
+    state_real = os.path.realpath(SECRETS_DIR)
+    if not real.startswith(os.path.realpath(BODY_ROOT) + os.sep):
+        raise Deny("body_outside_root", f"{what} path is outside {BODY_ROOT}")
+    if real == state_real or real.startswith(state_real + os.sep):
+        raise Deny("body_in_state_dir", f"{what} path reaches the engine state dir")
+    try:
+        if os.path.getsize(real) > BODY_MAX_BYTES:
+            raise Deny("body_too_large", f"{what} exceeds {BODY_MAX_BYTES} bytes")
+        with open(real, errors="replace") as f:
+            text = f.read()
+    except OSError as e:
+        raise Deny("body_unreadable", f"{what}: {type(e).__name__}")
+    hits = mask_hits(text)
+    if hits:
+        raise Deny("body_mask_tripwire",
+                   f"{what} content matches mask patterns {hits} — refusing to "
+                   "post a credential-shaped string to a forge")
+    return text
+
+
+def pr_argv_shape(argv, spec):
+    """Shape gate for PR verbs, run before the grant check. `spec` is a list of
+    (name, regex_or_None) for required tokens; extra tokens are refused. The
+    metachar ban matches fleet_exec_policy.check_argv_shape; argv[0] here is a
+    repo slug, not a program name, so the basename rule does not apply."""
+    for tok in argv:
+        if P._METACHAR_RE.search(tok or ""):
+            raise Deny("argv_metachar", "argv token contains a shell metacharacter")
+    required = [s for s in spec if not s[0].startswith("[")]
+    if len(argv) < 1 + len(required) or len(argv) > 1 + len(spec):
+        names = " ".join(name for name, _ in spec)
+        raise Deny("argv_arity", f"expected: <repo> {names}"[:200])
+    for (name, rx), tok in zip(spec, argv[1:]):
+        if rx is not None and not rx.match(tok):
+            raise Deny("argv_malformed", f"{name} fails shape check")
+
+
+def _find_open_pr_for_head(base, scheme, token, slug, head):
+    """wq#557: Gitea IGNORES the head= filter (verified live — a non-matching
+    head still returns the full open list), so trusting it would dedup against
+    ANY open PR. Filter client-side on head.ref; harmless on GitHub."""
+    owner = slug.split("/")[0]
+    code, obj = http_json("GET", base,
+                          f"/repos/{slug}/pulls?state=open&head={owner}:{head}",
+                          scheme, token)
+    if code // 100 != 2 or not isinstance(obj, list):
+        raise Deny("forge_error", f"open-PR list failed (HTTP {code}): {api_message(obj)}")
+    for pr in obj:
+        if isinstance(pr, dict) and (pr.get("head") or {}).get("ref") == head:
+            return pr
+    return None
+
+
+def verb_pr_open(req, grant):
+    argv = req.get("argv") or []
+    pr_argv_shape(argv, [("head", None), ("base", None), ("title-file", None),
+                         ("body-file", None), ("[draft]", re.compile("^(draft|nodraft)$"))])
+    slug, head, base_branch, title_file, body_file = argv[:5]
+    draft = len(argv) > 5 and argv[5] == "draft"
+    title = read_worktree_file(title_file, "title file").strip()
+    body = read_worktree_file(body_file, "body file")
+    base, scheme, token, _forge = resolve_repo(slug)
+    existing = _find_open_pr_for_head(base, scheme, token, slug, head)
+    if existing is not None:
+        number = existing.get("number")
+        code, obj = http_json("PATCH", base, f"/repos/{slug}/pulls/{number}",
+                              scheme, token, {"title": title, "body": body})
+        if code // 100 != 2:
+            raise Deny("forge_error", f"PR update failed (HTTP {code}): {api_message(obj)}")
+        return {"number": int(number), "url": str(obj.get("html_url") or ""),
+                "action": "updated"}
+    payload = {"title": title, "body": body, "head": head,
+               "base": base_branch, "draft": draft}
+    code, obj = http_json("POST", base, f"/repos/{slug}/pulls", scheme, token, payload)
+    if code // 100 != 2 or not isinstance(obj, dict):
+        raise Deny("forge_error", f"PR create failed (HTTP {code}): {api_message(obj)}")
+    return {"number": int(obj.get("number")), "url": str(obj.get("html_url") or ""),
+            "action": "created"}
+
+
+def verb_pr_update(req, grant):
+    argv = req.get("argv") or []
+    pr_argv_shape(argv, [("number", NUMBER_RE), ("body-file", None),
+                         ("[title-file]", None)])
+    slug, number, body_file = argv[:3]
+    payload = {"body": read_worktree_file(body_file, "body file")}
+    if len(argv) > 3:
+        payload["title"] = read_worktree_file(argv[3], "title file").strip()
+    base, scheme, token, _forge = resolve_repo(slug)
+    code, obj = http_json("PATCH", base, f"/repos/{slug}/pulls/{number}",
+                          scheme, token, payload)
+    if code // 100 != 2 or not isinstance(obj, dict):
+        raise Deny("forge_error", f"PR update failed (HTTP {code}): {api_message(obj)}")
+    return {"number": int(number), "url": str(obj.get("html_url") or "")}
+
+
+def verb_pr_comment(req, grant):
+    argv = req.get("argv") or []
+    pr_argv_shape(argv, [("number", NUMBER_RE), ("body-file", None)])
+    slug, number, body_file = argv[:3]
+    body = read_worktree_file(body_file, "body file")
+    base, scheme, token, _forge = resolve_repo(slug)
+    code, obj = http_json("POST", base, f"/repos/{slug}/issues/{number}/comments",
+                          scheme, token, {"body": body})
+    if code // 100 != 2 or not isinstance(obj, dict):
+        raise Deny("forge_error", f"PR comment failed (HTTP {code}): {api_message(obj)}")
+    return {"id": int(obj.get("id") or 0), "url": str(obj.get("html_url") or "")}
+
+
+def verb_pr_view(req, grant):
+    argv = req.get("argv") or []
+    pr_argv_shape(argv, [("number", NUMBER_RE)])
+    slug, number = argv[:2]
+    base, scheme, token, forge = resolve_repo(slug)
+    code, obj = http_json("GET", base, f"/repos/{slug}/pulls/{number}", scheme, token)
+    if code // 100 != 2 or not isinstance(obj, dict):
+        raise Deny("forge_error", f"PR fetch failed (HTTP {code}): {api_message(obj)}")
+    head = obj.get("head") or {}
+    return {"number": int(number), "state": str(obj.get("state") or ""),
+            "merged": bool(obj.get("merged")), "draft": bool(obj.get("draft")),
+            "head_sha": str(head.get("sha") or ""),
+            "head_ref": str(head.get("ref") or ""),
+            "title": str(obj.get("title") or "")[:200],
+            "url": str(obj.get("html_url") or ""),
+            # GitHub: mergeable bool|null + mergeable_state enum. Gitea:
+            # mergeable bool only (wq#563 — the two are different contracts;
+            # the client's guard switches on forge).
+            "mergeable": obj.get("mergeable"),
+            "mergeable_state": obj.get("mergeable_state"),
+            "forge": forge}
+
+
+def verb_pr_checks(req, grant):
+    """Normalised CI state for a head sha: total/pending/failed/cancelled plus
+    pre-formatted detail lines. Ports lumen-pr's wq#557 forge split (Gitea has
+    NO check-runs endpoint — commit statuses only) and wq#986 (a Gitea queue
+    cancellation reports as status=failure with a 'cancelled' description; an
+    infra gap, not a failing check)."""
+    argv = req.get("argv") or []
+    pr_argv_shape(argv, [("head-sha", SHA_RE)])
+    slug, sha = argv[:2]
+    base, scheme, token, forge = resolve_repo(slug)
+    if forge == "gitea":
+        code, obj = http_json("GET", base, f"/repos/{slug}/commits/{sha}/statuses",
+                              scheme, token)
+        if code // 100 != 2 or not isinstance(obj, list):
+            raise Deny("forge_error", f"statuses fetch failed (HTTP {code}): {api_message(obj)}")
+        bad = [s for s in obj if s.get("status") in ("error", "failure")]
+        cancelled = [s for s in bad if "cancel" in str(s.get("description") or "").lower()]
+        failed = [s for s in bad if s not in cancelled]
+        pending = [s for s in obj if s.get("status") == "pending"]
+        total = len(obj)
+        failed_detail = "\n".join(
+            f"  FAILED: {s.get('context')} -> {s.get('status')}  {s.get('target_url') or ''}"
+            for s in failed)
+        cancelled_detail = "\n".join(
+            f"  CANCELLED (not a failure, wq#986): {s.get('context')} -> "
+            f"{s.get('description')}  {s.get('target_url') or ''}" for s in cancelled)
+    else:
+        code, obj = http_json("GET", base, f"/repos/{slug}/commits/{sha}/check-runs",
+                              scheme, token)
+        if code // 100 != 2 or not isinstance(obj, dict):
+            raise Deny("forge_error", f"check-runs fetch failed (HTTP {code}): {api_message(obj)}")
+        runs = obj.get("check_runs") or []
+        total = int(obj.get("total_count") or 0)
+        pending = [r for r in runs if r.get("status") != "completed"]
+        failed = [r for r in runs if r.get("conclusion")
+                  not in (None, "success", "neutral", "skipped")]
+        cancelled = []
+        failed_detail = "\n".join(
+            f"  FAILED: {r.get('name')} -> {r.get('conclusion')}  {r.get('html_url') or ''}"
+            for r in failed)
+        cancelled_detail = ""
+    return {"total": total, "pending": len(pending), "failed": len(failed),
+            "cancelled": len(cancelled), "failed_detail": failed_detail,
+            "cancelled_detail": cancelled_detail}
+
+
+def verb_pr_files(req, grant):
+    """Filenames a PR touches, previous_filename included (a rename lands a
+    DELETE of the old path — wq#864). Newline-joined string because response
+    result leaves must be scalars; complete=False past 5 pages (500 files)."""
+    argv = req.get("argv") or []
+    pr_argv_shape(argv, [("number", NUMBER_RE)])
+    slug, number = argv[:2]
+    base, scheme, token, _forge = resolve_repo(slug)
+    names, complete = [], True
+    for page in range(1, 6):
+        code, obj = http_json(
+            "GET", base, f"/repos/{slug}/pulls/{number}/files?per_page=100&page={page}",
+            scheme, token)
+        if code // 100 != 2 or not isinstance(obj, list):
+            raise Deny("forge_error", f"PR files fetch failed (HTTP {code}): {api_message(obj)}")
+        for f in obj:
+            if f.get("filename"):
+                names.append(str(f["filename"]))
+            if f.get("previous_filename"):
+                names.append(str(f["previous_filename"]))
+        if len(obj) < 100:
+            break
+    else:
+        complete = False
+    return {"files": "\n".join(names), "complete": complete}
+
+
+def verb_pr_list(req, grant):
+    argv = req.get("argv") or []
+    pr_argv_shape(argv, [])
+    slug = argv[0]
+    base, scheme, token, _forge = resolve_repo(slug)
+    code, obj = http_json("GET", base, f"/repos/{slug}/pulls?state=open", scheme, token)
+    if code // 100 != 2 or not isinstance(obj, list):
+        raise Deny("forge_error", f"PR list failed (HTTP {code}): {api_message(obj)}")
+    lines = [f"#{p.get('number')} {str(p.get('title') or '')[:120]} "
+             f"[{(p.get('head') or {}).get('ref')}]" for p in obj]
+    return {"prs": "\n".join(lines), "count": len(lines)}
+
+
+def _pr_footers(base, scheme, token, slug, number):
+    """§3 footers from the branch commits, deduped in order; GitHub's default
+    squash body would drop Refs:/Assisted-by: off main entirely."""
+    code, obj = http_json("GET", base, f"/repos/{slug}/pulls/{number}/commits",
+                          scheme, token)
+    footers, seen = [], set()
+    if code // 100 == 2 and isinstance(obj, list):
+        for c in obj:
+            msg = ((c.get("commit") or {}).get("message") or "")
+            for line in msg.splitlines():
+                if (FOOTER_RE.match(line) and line not in seen
+                        and not re.match(r"^Co-authored-by:.*[Cc]laude", line)):
+                    seen.add(line)
+                    footers.append(line)
+    return "\n".join(footers) or FOOTER_ASSIST
+
+
+def verb_pr_merge(req, grant):
+    """Merge an open PR. wq#557: the merge call diverges per forge — GitHub PUT
+    {merge_method, commit_title, commit_message, sha} then DELETE the head ref;
+    Gitea POST {do, merge_title_field, merge_message_field, head_commit_id}
+    with delete_branch_after_merge (its /git/refs has no DELETE)."""
+    argv = req.get("argv") or []
+    pr_argv_shape(argv, [("number", NUMBER_RE),
+                         ("method", re.compile("^(squash|merge)$"))])
+    slug, number, method = argv[:3]
+    base, scheme, token, forge = resolve_repo(slug)
+    code, obj = http_json("GET", base, f"/repos/{slug}/pulls/{number}", scheme, token)
+    if code // 100 != 2 or not isinstance(obj, dict):
+        raise Deny("forge_error", f"PR fetch failed (HTTP {code}): {api_message(obj)}")
+    if obj.get("merged"):
+        return {"merged": True, "sha": str((obj.get("merge_commit_sha") or ""))[:40],
+                "head_ref": str((obj.get("head") or {}).get("ref") or ""),
+                "branch_deleted": False, "already": True}
+    if obj.get("state") != "open":
+        raise Deny("pr_not_open", f"PR #{number} is {obj.get('state')!r}, not open")
+    title = str(obj.get("title") or "")
+    head = obj.get("head") or {}
+    head_sha, head_ref = str(head.get("sha") or ""), str(head.get("ref") or "")
+    footers = _pr_footers(base, scheme, token, slug, number)
+    if forge == "gitea":
+        payload = {"do": method, "merge_title_field": title,
+                   "merge_message_field": footers, "head_commit_id": head_sha,
+                   "delete_branch_after_merge": True}
+        code, obj = http_json("POST", base, f"/repos/{slug}/pulls/{number}/merge",
+                              scheme, token, payload)
+        if code // 100 != 2:
+            raise Deny("forge_error", f"{method} merge failed (HTTP {code}): {api_message(obj)}")
+        return {"merged": True, "sha": head_sha, "head_ref": head_ref,
+                "branch_deleted": True, "already": False}
+    payload = {"merge_method": method, "commit_title": title,
+               "commit_message": footers, "sha": head_sha}
+    code, obj = http_json("PUT", base, f"/repos/{slug}/pulls/{number}/merge",
+                          scheme, token, payload)
+    if code // 100 != 2 or not isinstance(obj, dict):
+        raise Deny("forge_error", f"{method} merge failed (HTTP {code}): {api_message(obj)}")
+    merge_sha = str(obj.get("sha") or "")
+    dcode, _dobj = http_json("DELETE", base, f"/repos/{slug}/git/refs/heads/{head_ref}",
+                             scheme, token)
+    return {"merged": True, "sha": merge_sha, "head_ref": head_ref,
+            "branch_deleted": dcode // 100 == 2, "already": False}
+
+
 # verb -> (handler, grant kind, grant node). Every T2 verb needs a
 # {"kind": "token_engine", "node": "daemon"} grant entry; provider verbs added
 # by later children bring their own kinds per TOKEN_ENGINE_DESIGN.md §2.
+# node=None means "derive from argv[0]": the PR verbs are granted per resource
+# as {"kind": pr_*, "node": "repo:owner/name"} (design §2), so handle() checks
+# the slug's shape and matches the grant against the repo actually named.
 VERBS = {
     "ping": (verb_ping, "token_engine", "daemon"),
     "mask-selftest": (verb_mask_selftest, "token_engine", "daemon"),
     "ticket-end": (verb_ticket_end, "token_engine", "daemon"),
     "mint-test": (verb_mint_test, "token_engine", "daemon"),
+    "pr-open": (verb_pr_open, "pr_write", None),
+    "pr-update": (verb_pr_update, "pr_write", None),
+    "pr-comment": (verb_pr_comment, "pr_comment", None),
+    "pr-view": (verb_pr_view, "pr_read", None),
+    "pr-checks": (verb_pr_checks, "pr_read", None),
+    "pr-files": (verb_pr_files, "pr_read", None),
+    "pr-list": (verb_pr_list, "pr_read", None),
+    "pr-merge": (verb_pr_merge, "pr_write", None),
 }
 
 
@@ -196,6 +618,13 @@ def handle(req, peer):
     if not WORKER_RE.match(worker):
         return False, "worker_malformed", "worker id fails shape check", {}, "deny"
     handler, kind, node = VERBS[verb]
+    if node is None:
+        # PR verbs: the resource is the repo slug in argv[0] and the grant is
+        # per-resource ({"kind": pr_*, "node": "repo:owner/name"}, design §2).
+        argv = req.get("argv") or []
+        if not argv or not isinstance(argv[0], str) or not REPO_RE.match(argv[0]):
+            return False, "repo_malformed", "argv[0] must be owner/name", {}, "deny"
+        node = "repo:" + argv[0]
     try:
         grant, why = P.load_grant(req.get("grant_file"), req.get("grant_sha"),
                                   req.get("ticket"), worker)
@@ -207,6 +636,8 @@ def handle(req, peer):
         return False, "grant_no_match", f"no grant for kind={kind} node={node}", {}, "deny"
     try:
         result = handler(req, grant)
+    except Deny as d:
+        return False, d.rule, d.reason, {}, "deny"
     except Exception as e:
         return False, "verb_crashed", f"{type(e).__name__}: {e}", {}, "error"
     return True, f"grant:{kind}", "ok", result, "allow"

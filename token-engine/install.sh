@@ -39,10 +39,32 @@ chmod 0700 "$STATE/secrets"
 
 # Code runs from a root-owned copy: uid lumen must not be able to edit what uid
 # tokeneng executes, or the file-permission boundary is fiction. The policy
-# module is snapshotted from bin for the same reason.
+# module is snapshotted from bin for the same reason. te_client.py is installed
+# too (wq#2273): lumen-pr calls the broker through this stable root-owned path
+# rather than a checkout it could edit.
 install -D -m 0755 -o root -g root "$SRC/token_engine_daemon.py" "$LIB/token_engine_daemon.py"
 install -D -m 0644 -o root -g root "$SRC/token_ledger.py" "$LIB/token_ledger.py"
 install -D -m 0644 -o root -g root "$POLICY_SRC" "$LIB/fleet_exec_policy.py"
+install -D -m 0755 -o root -g root "$SRC/te_client.py" "$LIB/te_client.py"
+install -D -m 0644 -o root -g root "$SRC/forges.json" "$LIB/forges.json"
+
+# wq#2273 (T4, design §7 ranks 1/2/4): COPY the PR-verb tokens into the engine
+# store. Copy, not move — git push still authenticates off the old path until
+# T1 (wq#2271) lands the credential-helper migration; deleting here would break
+# every push fleet-wide. T1 removes the originals.
+for tok in github-frank.token github-lumen-classic.token gitea-lumen.token; do
+    if [ -f "/home/lumen/.secrets/$tok" ]; then
+        install -m 0600 -o tokeneng -g tokeneng \
+            "/home/lumen/.secrets/$tok" "$STATE/secrets/$tok"
+    fi
+done
+
+# The daemon reads the per-repo identity map live (paths only, no secrets);
+# grant tokeneng traversal + read so a map edit needs no reinstall.
+if [ -f /home/lumen/infra/github/identity-map.conf ]; then
+    setfacl -m u:tokeneng:x /home/lumen/infra /home/lumen/infra/github
+    setfacl -m u:tokeneng:r /home/lumen/infra/github/identity-map.conf
+fi
 
 # Dual audit sink (fleet-exec:112-114): tokeneng needs traversal into
 # /home/lumen/foreman/events plus append on current and future *.jsonl there.

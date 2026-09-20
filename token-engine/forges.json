@@ -1,0 +1,8 @@
+{
+  "_comment": "wq#2273 (T4): forge + token-file map the daemon consults per repo slug. The CLIENT never names a base URL or token file — only this root-installed file does. Token files are basenames inside /var/lib/token-engine/secrets; identity_map is lumen-github-identity.sh's per-repo map (only the basename of a mapped path is honoured).",
+  "gitea_url": "http://100.121.17.5:3000",
+  "gitea_owners": ["lumen"],
+  "gitea_token_file": "gitea-lumen.token",
+  "github_default_token_file": "github-frank.token",
+  "identity_map": "/home/lumen/infra/github/identity-map.conf"
+}
