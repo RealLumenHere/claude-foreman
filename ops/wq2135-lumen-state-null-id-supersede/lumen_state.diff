@@ -1,0 +1,29 @@
+--- a/minerva/lumen_state.py
++++ b/minerva/lumen_state.py
+@@ -228,6 +228,26 @@
+         conn.execute("ALTER TABLE state_facts ADD COLUMN note TEXT")
+         conn.commit()
+     minerva_audit.ensure_table(conn)
++    _heal_null_ids(conn)
++
++def _heal_null_ids(conn):
++    """wq#2135: `id TEXT PRIMARY KEY` accepts NULL in SQLite, and a writer that
++    omitted `id` left rows whose id is NULL. `UPDATE ... WHERE id=?` never
++    matches NULL, so ingest could not close such a row on supersession, and the
++    new INSERT then tripped idx_sf_one_open (UNIQUE subject, predicate). Backfill
++    once, and add a trigger so no writer can insert an id-less row again. The
++    trigger's presence in sqlite_master gates the work, so an already-healed DB
++    (and every read-only caller) pays one SELECT."""
++    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' "
++                    "AND name='trg_state_facts_id_default'").fetchone():
++        return
++    conn.execute("UPDATE state_facts SET id=lower(hex(randomblob(16))) WHERE id IS NULL")
++    conn.execute('''CREATE TRIGGER IF NOT EXISTS trg_state_facts_id_default
++        AFTER INSERT ON state_facts WHEN NEW.id IS NULL
++        BEGIN
++            UPDATE state_facts SET id=lower(hex(randomblob(16))) WHERE rowid=NEW.rowid;
++        END''')
++    conn.commit()
+
+ def _migrate_verify(conn):
+     """wq#1608 / wq#1613: verification-evidence columns + audit table, added
