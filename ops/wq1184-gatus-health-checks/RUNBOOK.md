@@ -12,9 +12,10 @@ Idempotent. What it does (see `install.sh` for the exact commands):
    sqlite3 driver) into `/home/lumen/bin/gatus`. Upstream ships no binary
    releases, only a docker image — `go build` is the only route to a
    "single Go binary, no docker" install.
-2. Creates `/home/lumen/kb/gatus/{config.yaml,data/,gatus.env}`.
-   `gatus.env` is created 0600 with an empty `LITELLM_MASTER_KEY` if it
-   doesn't already exist — **never overwritten** on re-run.
+2. Creates `/home/lumen/kb/gatus/config.yaml,data/` (no secret in this dir --
+   kb is a base fworker add_dir, wq#1483) and
+   `/home/lumen/.secrets/gatus-litellm-master.env`, 0600 with an empty
+   `LITELLM_MASTER_KEY` if it doesn't already exist — **never overwritten** on re-run.
 3. Installs `gatus-ntfy-relay` and `lumen-cron-stamp` to `/home/lumen/bin/`.
 4. Installs all 4 new systemd units plus the updated
    `lumen-foreman-{dispatch,selfheal,health}.service` (stamp hook added),
@@ -27,11 +28,12 @@ Idempotent. What it does (see `install.sh` for the exact commands):
 
 1. Set the real key:
    ```
-   sudo -u lumen vim /home/lumen/kb/gatus/gatus.env
+   sudo -u lumen vim /home/lumen/.secrets/gatus-litellm-master.env
    # LITELLM_MASTER_KEY=<the LiteLLM proxy master/virtual key>
    ```
-   Never put this key in `config.yaml` or commit it — `gatus.env` is
-   `EnvironmentFile=-` in the unit, 0600, outside git.
+   Never put this key in `config.yaml` or commit it — the env file is
+   `EnvironmentFile=-` in the unit, 0600, under /home/lumen/.secrets/, outside git
+   and outside every fworker add_dir.
 2. Re-read the HARD BRIDGE RULES in `config.yaml`'s header if you're about
    to hand-edit it (HTTP-only, Tailscale/loopback only, the two forbidden
    router IPs, >=60s intervals, transitions-only alerting).

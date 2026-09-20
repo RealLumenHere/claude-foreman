@@ -13,7 +13,7 @@ Type=simple
 User=lumen
 WorkingDirectory=/home/lumen/kb/gatus
 Environment=GATUS_CONFIG_PATH=/home/lumen/kb/gatus/config.yaml
-EnvironmentFile=-/home/lumen/kb/gatus/gatus.env
+EnvironmentFile=-/home/lumen/.secrets/gatus-litellm-master.env
 ExecStart=/home/lumen/bin/gatus
 Restart=on-failure
 RestartSec=10

@@ -20,6 +20,11 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 GATUS_VERSION="v5.36.0"
 GATUS_BUILD_DIR="/home/lumen/build/gatus-${GATUS_VERSION}"
 KB_GATUS_DIR="/home/lumen/kb/gatus"
+# wq#1483: LITELLM_MASTER_KEY must NOT live under kb/gatus -- kb is a base fworker
+# add_dir (agents.yaml default add_dirs), so anything there is worker-readable by
+# every worker regardless of file mode. The key lives under /home/lumen/.secrets/
+# instead; only config.yaml (no secret) stays under kb/gatus.
+SECRETS_ENV="/home/lumen/.secrets/gatus-litellm-master.env"
 
 echo "== building gatus ${GATUS_VERSION} (go build, no docker) =="
 sudo -u lumen mkdir -p "$(dirname "$GATUS_BUILD_DIR")"
@@ -34,10 +39,10 @@ chmod 755 /home/lumen/bin/gatus
 echo "== kb config dir =="
 sudo -u lumen mkdir -p "$KB_GATUS_DIR/data"
 sudo -u lumen cp "$SRC/config.yaml" "$KB_GATUS_DIR/config.yaml"
-if [ ! -f "$KB_GATUS_DIR/gatus.env" ]; then
-  sudo -u lumen bash -c "printf 'LITELLM_MASTER_KEY=\n' > '$KB_GATUS_DIR/gatus.env'"
-  chmod 600 "$KB_GATUS_DIR/gatus.env"
-  echo "!! set LITELLM_MASTER_KEY in $KB_GATUS_DIR/gatus.env before enabling lumen-gatus.service"
+if [ ! -f "$SECRETS_ENV" ]; then
+  sudo -u lumen bash -c "printf 'LITELLM_MASTER_KEY=\n' > '$SECRETS_ENV'"
+  chmod 600 "$SECRETS_ENV"
+  echo "!! set LITELLM_MASTER_KEY in $SECRETS_ENV before enabling lumen-gatus.service"
 fi
 
 echo "== ntfy relay + cron-stamp helper =="
@@ -67,8 +72,8 @@ systemctl enable --now lumen-cron-deadman.timer
 cat <<'EOF'
 
 == lumen-gatus.service installed but NOT enabled ==
-1. Set LITELLM_MASTER_KEY in /home/lumen/kb/gatus/gatus.env (0600, already
-   created with an empty value).
+1. Set LITELLM_MASTER_KEY in /home/lumen/.secrets/gatus-litellm-master.env (0600,
+   already created with an empty value).
 2. Review /home/lumen/kb/gatus/config.yaml against the HARD BRIDGE RULES in
    its header, especially if you edit it later.
 3. systemctl enable --now lumen-gatus.service
