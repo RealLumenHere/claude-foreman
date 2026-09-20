@@ -66,6 +66,7 @@ from datetime import datetime, timedelta, timezone
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(DISPATCHER_DIR, ".."))
 sys.path.insert(0, DISPATCHER_DIR)
+import local_capacity  # noqa: E402
 import vlogs_mirror  # noqa: E402
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
@@ -388,32 +389,12 @@ def local_backends():
     return block if isinstance(block, dict) else {}
 
 
-def _epoch(raw):
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    try:
-        return datetime.fromisoformat(str(raw)).timestamp()
-    except ValueError:
-        return None
-
-
 def backend_in_cooldown(name):
-    """True when `name` is in runtime/backend_cooldown.json (written by fworker's
-    handle_failure on a rung fault). An entry whose `until` has already passed is a
-    lapsed cooldown, not a present one; an entry with no readable expiry counts as
-    present. A missing or unreadable file means nothing is cooling down."""
-    try:
-        with open(BACKEND_COOLDOWN_PATH) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return False
-    if isinstance(data, list):
-        return name in data
-    if not isinstance(data, dict) or name not in data:
-        return False
-    entry = data[name]
-    until = _epoch(entry.get("until")) if isinstance(entry, dict) else None
-    return until is None or until > _utcnow().timestamp()
+    """True when `name` is in runtime/backend_cooldown.json with an unexpired `until`.
+    Delegates to local_capacity.cooled_down_backends so the release gate and the
+    dispatcher read the file identically (bare epoch, {"until": ...}, `@effort` keys)."""
+    return local_capacity.base_name(name) in local_capacity.cooled_down_backends(
+        now=_utcnow().timestamp(), path=BACKEND_COOLDOWN_PATH)
 
 
 def backend_answers(url):

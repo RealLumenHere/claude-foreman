@@ -19,6 +19,7 @@ import pytest
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 DISPATCHER_DIR = os.path.dirname(TESTS_DIR)
 sys.path.insert(0, DISPATCHER_DIR)
+import local_capacity           # noqa: E402
 import self_heal as sh          # noqa: E402
 import notify_sinks             # noqa: E402
 
@@ -281,6 +282,26 @@ def test_rung_fault_released_once_the_cooldown_lapsed(henv, rung_env):
 
     assert sh.run_pass() == 0
     assert wq_show_field(tid, "status") == "open"
+
+
+@pytest.mark.parametrize("entry_key, entry_shape, expected", [
+    ("qwen-local", "epoch", False),          # bare epoch, lapsed
+    ("qwen-local", "epoch_future", True),    # bare epoch, future
+    ("qwen-local", "dict", False),           # {"until"}, lapsed
+    ("qwen-local", "dict_future", True),     # {"until"}, future
+    ("qwen-local@low", "dict", False),       # @effort key, lapsed
+    ("qwen-local@low", "dict_future", True), # @effort key, future
+])
+def test_backend_in_cooldown_matches_local_capacity_reader(
+        rung_env, entry_key, entry_shape, expected):
+    now = sh._utcnow().timestamp()
+    until = now + 3600 if entry_shape.endswith("_future") else now - 3600
+    entry = until if entry_shape.startswith("epoch") else {"until": until}
+    rung_env["cooldown"].write_text(json.dumps({entry_key: entry}))
+
+    assert sh.backend_in_cooldown("qwen-local") is expected
+    assert ("qwen-local" in local_capacity.cooled_down_backends(
+        now=now, path=str(rung_env["cooldown"]))) is expected
 
 
 def test_rung_fault_held_while_health_url_does_not_answer(henv, rung_env):
