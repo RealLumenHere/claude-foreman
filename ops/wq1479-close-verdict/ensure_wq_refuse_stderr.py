@@ -116,6 +116,7 @@ def verify(candidate):
     env = dict(os.environ)
     env["WQ_DB"] = os.path.join(d, "q.db")
     env["WQ_AGENT"] = "wq1479-verify"
+    env["WQ_FOREMAN_ROUTER"] = "/nonexistent/wq2144/router.py"  # wq#2139 lane guard fails open
 
     def wq(*args):
         return subprocess.run([sys.executable, candidate, *args],

@@ -181,7 +181,8 @@ def smoke_test(wq_path):
     proves it parses; this proves it still counts."""
     with tempfile.TemporaryDirectory() as tmp:
         db = os.path.join(tmp, "smoke.db")
-        env = dict(os.environ, WQ_DB=db, WQ_AGENT="wq841-ensure-smoke")
+        env = dict(os.environ, WQ_DB=db, WQ_AGENT="wq841-ensure-smoke",
+                   WQ_FOREMAN_ROUTER="/nonexistent/wq2144/router.py")  # wq#2139 guard fails open
 
         def run(*args):
             return subprocess.run([sys.executable, wq_path, *args], capture_output=True,

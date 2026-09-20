@@ -290,6 +290,7 @@ def verify(candidate):
 
     env = dict(os.environ)
     env["WQ_DB"] = os.path.join(d, "q.db")
+    env["WQ_FOREMAN_ROUTER"] = "/nonexistent/wq2144/router.py"  # wq#2139 lane guard fails open
     env["WQ_LUMEN_RUN_BIN"] = fake_bin
     env.setdefault("FAKE_RUNNING_UNITS", "")
 

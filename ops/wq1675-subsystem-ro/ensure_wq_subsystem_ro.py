@@ -409,6 +409,7 @@ def verify(cand_wq, cand_slock):
     d = tempfile.mkdtemp(prefix="wq1675-verify")
     env = dict(os.environ)
     env["WQ_DB"] = os.path.join(d, "q.db")
+    env["WQ_FOREMAN_ROUTER"] = "/nonexistent/wq2144/router.py"  # wq#2139 lane guard fails open
 
     def run(binary, *args, agent=None):
         e = dict(env)
