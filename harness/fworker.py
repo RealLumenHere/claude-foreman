@@ -699,6 +699,49 @@ def write_mask_hits(ticket_id, attempt, records):
     return path
 
 
+ROTATION_TITLE_PREFIX = "[rotation] burned credential in wq#"
+
+
+def rotation_chain_refire(ticket_id, attempt, tag, hits_path):
+    """wq#2299: True when this alarm fired inside an investigation of one of the
+    tripwire's OWN rotation tickets — record it on that ticket instead of filing a
+    child one.
+
+    Working a rotation ticket means reading the artefacts, the fixtures and the
+    transcript that fired it; on this stream that read IS the next hit. Filing a
+    fresh pri-1 ticket for it makes the tripwire self-sustaining: wq#2278 -> wq#2290
+    -> wq#2297/wq#2299 -> wq#2303/wq#2304, 34 rotation tickets with 22 still open
+    inside the hour, every one of them a committed test fixture rather than a live
+    credential (wq#2299's own value was an `sk-ant-oat01-<dummy>` fixture read out of
+    tests/test_token_injection.py). A chain has no natural end, and its pri-1 rows
+    are what buries the real burn when one comes.
+
+    The evidence is not lost: mask-hits-N.json is written either way, the ticket
+    already open on this credential gets a `wq note` pointing at it, and ntfy still
+    pages. Only the new ROW is suppressed. An unreadable title alarms normally — a
+    guard that cannot prove it is on a chain must never be the thing that silences
+    a burn.
+    """
+    try:
+        title = (wq_show(ticket_id).get("title") or "")
+    except Exception as e:  # noqa: BLE001
+        log(f"WARN: chain-guard lookup failed for wq#{ticket_id} ({e!r}) — alarming")
+        return False
+    if not title.startswith(ROTATION_TITLE_PREFIX):
+        return False
+    wq("note", str(ticket_id),
+       f"wq#2275 tripwire re-fired on attempt {attempt} ({tag}) while investigating "
+       f"this rotation ticket; forensics appended to {hits_path}. No child rotation "
+       f"ticket filed (wq#2299 chain guard) — reading the artefacts this ticket "
+       f"points at is what fired it.")
+    ntfy("foreman MASK HIT (rotation chain)",
+         f"wq#{ticket_id} attempt {attempt}: {tag} re-fired while working a rotation "
+         f"ticket — noted on wq#{ticket_id}, no new ticket; records in {hits_path}")
+    log(f"MASK HIT wq#{ticket_id} attempt {attempt}: {tag} — rotation-chain re-fire, "
+        f"noted on the ticket, no child ticket filed")
+    return True
+
+
 def mask_alarm(ticket_id, attempt, labels, records=None):
     """wq#2275 (T6): a mask hit is an ALARM, not a save (instinct 4). The credential
     already reached the model's context — CLI 2.1.233 has no pre-model rewrite lever
@@ -708,6 +751,8 @@ def mask_alarm(ticket_id, attempt, labels, records=None):
     labels = sorted(labels)
     tag = ",".join(labels)
     hits_path = write_mask_hits(ticket_id, attempt, records)
+    if rotation_chain_refire(ticket_id, attempt, tag, hits_path):
+        return
     ntfy("foreman MASK HIT",
          f"wq#{ticket_id} attempt {attempt}: {tag} credential(s) masked in child "
          f"stream — token reached model context and is BURNED; rotate today",

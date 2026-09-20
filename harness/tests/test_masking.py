@@ -320,10 +320,56 @@ def test_mask_alarm_pages_and_files_rotation_ticket(tmp_path, monkeypatch):
     _, records = masking.scan(f"remote https://x:{GHP}@github.com")
     fworker.mask_alarm(1234, 2, ["github"], records)
     assert pages and pages[0][0] == "foreman MASK HIT" and pages[0][1] == "high"
-    assert adds and adds[0][0] == "add"
-    assert any("rotation" in str(x) for x in adds[0])
+    # wq#2299 put a `wq show` (the chain guard's title lookup) ahead of the add, so
+    # pick the add out of the calls rather than assuming it is the first one.
+    (add,) = [c for c in adds if c[0] == "add"]
+    assert any("rotation" in str(x) for x in add)
     # the ticket must point at the records, or it arrives unidentifiable (wq#2288)
     hits_path = os.path.join(str(tmp_path), "wq1234", "mask-hits-2.json")
-    assert any(hits_path in str(x) for x in adds[0])
+    assert any(hits_path in str(x) for x in add)
     with open(hits_path) as f:
         assert json.load(f)[0]["prefix"] == "ghp_"
+
+
+def alarm_with_title(tmp_path, monkeypatch, title, ticket_id):
+    """Run mask_alarm against a ticket whose title is `title`; return (pages, calls)."""
+    pages, calls = [], []
+    monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
+
+    class P:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(fworker, "ntfy",
+                        lambda t, msg, priority="default": pages.append((t, priority, msg)))
+    monkeypatch.setattr(fworker, "wq", lambda *a, **k: calls.append(a) or P())
+    monkeypatch.setattr(fworker, "wq_show", lambda tid: {"title": title})
+    _, records = masking.scan(f"remote https://x:{GHP}@github.com")
+    fworker.mask_alarm(ticket_id, 1, ["github"], records)
+    return pages, calls
+
+
+def test_a_rotation_ticket_refire_is_noted_not_filed(tmp_path, monkeypatch):
+    """wq#2299: reading the artefacts a rotation ticket points at is the work, and on
+    this stream that read is the next hit. One child ticket per read makes the tripwire
+    self-sustaining — 34 rotation tickets, 22 still open, inside an hour."""
+    pages, calls = alarm_with_title(
+        tmp_path, monkeypatch,
+        f"{fworker.ROTATION_TITLE_PREFIX}2290 transcript (sk-key)", 2299)
+    assert [c[0] for c in calls] == ["note"]      # no `add`: no child ticket
+    assert calls[0][1] == "2299"                  # noted on the ticket being worked
+    # the evidence still lands, and the note says where
+    hits_path = os.path.join(str(tmp_path), "wq2299", "mask-hits-1.json")
+    with open(hits_path) as f:
+        assert json.load(f)[0]["prefix"] == "ghp_"
+    assert hits_path in calls[0][2]
+    assert pages and pages[0][0] == "foreman MASK HIT (rotation chain)"
+
+
+def test_an_ordinary_ticket_still_files_a_rotation_ticket(tmp_path, monkeypatch):
+    # the guard is scoped to the chain: any other ticket alarms exactly as before.
+    pages, calls = alarm_with_title(
+        tmp_path, monkeypatch, "[token-engine T10] remaining verbs", 2278)
+    assert [c[0] for c in calls] == ["add"]
+    assert pages and pages[0][1] == "high"
