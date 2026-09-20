@@ -76,6 +76,25 @@ def test_dry_run_writes_nothing(conn):
     assert open_value(conn, "bes", "status") == "inactive"
 
 
+def test_repair_restores_endpoint_and_node_storage_clobbers(conn):
+    # wq#2204: '200' over url/port, first-DIMM size over ram, lsblk byte sum over storage.
+    add(conn, "ollama", "port", "11434", "2026-08-01", T, "wq#797")
+    add(conn, "ollama", "port", "200", T, None, "verify:endpoint_live")
+    add(conn, "ollama", "url", "http://ollama:11434/", "2026-08-01", T, "wq#797")
+    add(conn, "ollama", "url", "200", T, None, "verify:endpoint_live")
+    add(conn, "isis", "ram", "64GB DDR5", "2026-08-01", T, "manual")
+    add(conn, "isis", "ram", "16GB", T, None, "verify:node_storage")
+    add(conn, "isis", "storage", "2x 1TB NVMe", "2026-08-01", T, "manual")
+    add(conn, "isis", "storage", "2000398934016", T, None, "verify:node_storage")
+    conn.commit()
+    assert len(rc.repair(conn, apply=True)) == 4
+    assert open_value(conn, "ollama", "port") == "11434"
+    assert open_value(conn, "ollama", "url") == "http://ollama:11434/"
+    assert open_value(conn, "isis", "ram") == "64GB DDR5"
+    assert open_value(conn, "isis", "storage") == "2x 1TB NVMe"
+    assert rc.repair(conn, apply=True) == []
+
+
 def test_repair_spares_legitimate_verifier_rows(conn):
     # kernel from os_kernel and a non-systemctl service_state value are real observations.
     add(conn, "lumen", "kernel", "Linux", T, None, "verify:os_kernel")

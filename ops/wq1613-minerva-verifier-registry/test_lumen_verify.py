@@ -308,3 +308,132 @@ def test_sweep_supersedes_stale_availability_when_node_goes_offline(conn, regist
     result = lv.sweep(conn, registry, now=NOW)
     assert result["counts"]["superseded"] == 1
     assert get_fact(conn, fid)["valid_to"] == iso(NOW)
+
+
+# ------------------------------------- wq#2204 endpoint_live / node_storage
+
+class FakeResp:
+    def __init__(self, status):
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def stub_urlopen(monkeypatch, status=200, exc=None):
+    import urllib.request
+
+    def fake(url, timeout=None):
+        if exc:
+            raise exc
+        return FakeResp(status)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+
+def test_endpoint_probe_confirms_with_fact_value_not_status(monkeypatch):
+    # The HTTP status ('200') used to be the observation and replaced url/port.
+    stub_urlopen(monkeypatch)
+    facts = [{"predicate": "port", "value": "11434"},
+             {"predicate": "url", "value": "http://ollama:11434/api"}]
+    result = lv.probe_endpoint_live("ollama", facts)
+    assert result[("ollama", "port")] == ("11434", None)
+    assert result[("ollama", "url")] == ("http://ollama:11434/api", None)
+
+
+def test_endpoint_probe_bad_status_or_failure_is_unknown(monkeypatch):
+    facts = [{"predicate": "port", "value": "11434"}]
+    stub_urlopen(monkeypatch, status=500)
+    observed, error = lv.probe_endpoint_live("ollama", facts)[("ollama", "port")]
+    assert observed is None and "500" in error
+    stub_urlopen(monkeypatch, exc=OSError("refused"))
+    observed, error = lv.probe_endpoint_live("ollama", facts)[("ollama", "port")]
+    assert observed is None and "refused" in error
+
+
+@pytest.mark.parametrize("predicate,value", [("url", "ollama on isis"), ("url", "file:///etc/passwd"),
+                                             ("port", "11434/tcp")])
+def test_endpoint_probe_skips_values_that_are_not_addresses(monkeypatch, predicate, value):
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", no_run)
+    observed, error = lv.probe_endpoint_live("x", [{"predicate": predicate, "value": value}])[("x", predicate)]
+    assert observed is None and error
+
+
+def dimm(*sizes):
+    return "".join(f"Memory Device\n\tSize: {s}\n\tLocator: DIMM\n" for s in sizes) + \
+        "Memory Device\n\tSize: No Module Installed\n"
+
+
+def lsblk(*disks):
+    import json
+    return json.dumps({"blockdevices": [{"name": n, "size": s, "type": t} for n, s, t in disks]})
+
+
+def run_returning(out):
+    return lambda argv, timeout=20: (0, out, "")
+
+
+@pytest.mark.parametrize("stored", ["64GB", "64 GB", "64GB DDR5 (4x16GB)"])
+def test_ram_probe_sums_all_dimms_and_confirms_stated_total(monkeypatch, stored):
+    monkeypatch.setattr(lv, "run", run_returning(dimm("16 GB", "16 GB", "16 GB", "16 GB")))
+    assert lv.probe_node_storage("lumen", [{"predicate": "ram", "value": stored}])[
+        ("lumen", "ram")] == (stored, None)
+
+
+def test_ram_probe_first_dimm_size_is_not_the_observation(monkeypatch):
+    monkeypatch.setattr(lv, "run", run_returning(dimm("16 GB", "16 GB", "16 GB", "16 GB")))
+    observed, error = lv.probe_node_storage("lumen", [{"predicate": "ram", "value": "128GB"}])[
+        ("lumen", "ram")]
+    assert observed is None and error
+
+
+def test_storage_probe_confirms_matching_size_only(monkeypatch):
+    disks = [("nvme0n1", 1000204886016, "disk"), ("nvme1n1", 1000204886016, "disk"),
+             ("loop0", 4096, "loop"), ("sr0", 1073741312, "rom")]
+    monkeypatch.setattr(lv, "run", run_returning(lsblk(*disks)))
+    facts = [{"predicate": "storage", "value": "2x 1TB NVMe RAID1"}]
+    assert lv.probe_node_storage("lumen", facts)[("lumen", "storage")] == (
+        "2x 1TB NVMe RAID1", None)
+    facts = [{"predicate": "storage", "value": "4TB spinning rust"}]
+    observed, error = lv.probe_node_storage("lumen", facts)[("lumen", "storage")]
+    assert observed is None and error
+    facts = [{"predicate": "storage", "value": "RAID1 mirror"}]
+    assert lv.probe_node_storage("lumen", facts)[("lumen", "storage")][0] is None
+
+
+def test_storage_probe_never_returns_a_byte_sum(monkeypatch):
+    monkeypatch.setattr(lv, "run", run_returning(lsblk(("sda", 500107862016, "disk"))))
+    for stored in ("500GB", "some free text", "1TB"):
+        observed, _ = lv.probe_node_storage("lumen", [{"predicate": "storage", "value": stored}])[
+            ("lumen", "storage")]
+        assert observed in (None, stored)
+
+
+def test_node_storage_probe_unparseable_and_unobservable_are_unknown(monkeypatch):
+    monkeypatch.setattr(lv, "run", run_returning("not json"))
+    assert lv.probe_node_storage("lumen", [{"predicate": "storage", "value": "1TB"}])[
+        ("lumen", "storage")][0] is None
+    monkeypatch.setattr(lv, "run", no_run)
+    assert lv.probe_node_storage("lumen", [{"predicate": "storage_layout", "value": "x"}])[
+        ("lumen", "storage_layout")][0] is None
+
+
+def test_sweep_leaves_url_port_ram_storage_untouched(conn, registry, monkeypatch):
+    stub_urlopen(monkeypatch, status=200)
+    monkeypatch.setattr(lv, "run", run_returning(lsblk(("sda", 500107862016, "disk"))))
+    ids = {
+        ("ollama", "port"): seed(conn, "ollama", "port", "11434", age_days=5, fact_class="config"),
+        ("ollama", "url"): seed(conn, "ollama", "url", "http://ollama:11434/", age_days=5,
+                                fact_class="config"),
+        ("isis", "storage"): seed(conn, "isis", "storage", "2TB free text", age_days=30,
+                                  fact_class="hardware"),
+        ("isis", "ram"): seed(conn, "isis", "ram", "128GB", age_days=30, fact_class="hardware"),
+    }
+    result = lv.sweep(conn, registry, now=NOW)
+    assert result["counts"]["superseded"] == 0
+    for fid in ids.values():
+        assert get_fact(conn, fid)["valid_to"] is None
+    assert conn.execute("SELECT count(*) FROM state_facts").fetchone()[0] == len(ids)

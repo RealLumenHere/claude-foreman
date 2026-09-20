@@ -246,31 +246,85 @@ def probe_service_state(subject, facts):
     return result
 
 
+SIZE_UNITS = {"T": 10**12, "TB": 10**12, "G": 10**9, "GB": 10**9, "M": 10**6, "MB": 10**6}
+SIZE_UNITS_BINARY = {"T": 2**40, "TB": 2**40, "TIB": 2**40, "G": 2**30, "GB": 2**30,
+                     "GIB": 2**30, "M": 2**20, "MB": 2**20, "MIB": 2**20}
+SIZE_TOKEN_RE = re.compile(
+    r"(?:(\d+)\s*[x×]\s*)?(\d+(?:\.\d+)?)\s*(TiB|GiB|MiB|TB|GB|MB|T|G|M)\b", re.I)
+SIZE_TOLERANCE = 0.05
+
+
+def _stated_size_candidates(text):
+    """Byte totals a free-text hardware value could be stating: each size token
+    on its own (`64GB DDR5 (4x16GB)` repeats one total) and all of them summed
+    (`1TB SSD + 1TB HDD`), each as decimal and as binary units."""
+    tokens = []
+    for count, amount, unit in SIZE_TOKEN_RE.findall(text or ""):
+        n = int(count or 1) * float(amount)
+        unit = unit.upper()
+        tokens.append((n * SIZE_UNITS.get(unit, SIZE_UNITS_BINARY[unit]),
+                       n * SIZE_UNITS_BINARY[unit]))
+    if not tokens:
+        return []
+    return [c for pair in tokens for c in pair] + [sum(t[0] for t in tokens),
+                                                    sum(t[1] for t in tokens)]
+
+
+def _size_matches(observed_bytes, stated):
+    return any(abs(observed_bytes - c) <= SIZE_TOLERANCE * c
+               for c in _stated_size_candidates(stated))
+
+
+def _confirm_size(subject, fact, observed_bytes, what):
+    """ram/storage hold free text (`64GB`, `2x 1TB NVMe RAID1`), so a measured
+    total is never the new value (wq#2204): it only confirms a stored value
+    that states a matching size, and anything else is unknown."""
+    key = (subject, fact["predicate"])
+    if not observed_bytes:
+        return {key: (None, f"no {what} observed")}
+    if _size_matches(observed_bytes, fact["value"]):
+        return {key: (fact["value"], None)}
+    return {key: (None, f"stored {fact['value'][:40]!r} does not state the observed "
+                        f"{what} ({observed_bytes} bytes)")}
+
+
+def _dmidecode_bytes(out):
+    """Total installed RAM: every DIMM's `Size:`, not just the first."""
+    total = 0
+    for amount, unit in re.findall(r"^\s*Size:\s*(\d+)\s*(GB|MB)\b", out, re.M):
+        total += int(amount) * SIZE_UNITS_BINARY[unit]
+    return total
+
+
+def _lsblk_bytes(out):
+    """Whole-disk capacity: top-level `disk` devices only, so partitions, loop
+    and optical devices are not counted twice or at all."""
+    devices = json.loads(out).get("blockdevices", [])
+    return sum(int(d.get("size") or 0) for d in devices if d.get("type") == "disk")
+
+
+NODE_STORAGE_OBSERVERS = {
+    "ram": (["dmidecode", "--type", "17"], _dmidecode_bytes, "RAM"),
+    "storage": (["lsblk", "-J", "-b", "-d", "-o", "NAME,SIZE,TYPE"], _lsblk_bytes, "disk"),
+}
+
+
 def probe_node_storage(subject, facts):
-    ram_argv = ["dmidecode", "--type", "17"]
-    lsblk_argv = ["lsblk", "-J"]
-    mdstat_argv = ["cat", "/proc/mdstat"]
     result = {}
     for f in facts:
-        argv = ram_argv if f["predicate"] == "ram" else lsblk_argv
+        key = (subject, f["predicate"])
+        if f["predicate"] not in NODE_STORAGE_OBSERVERS:
+            result[key] = (None, f"node_storage cannot observe {f['predicate']}")
+            continue
+        argv, measure, what = NODE_STORAGE_OBSERVERS[f["predicate"]]
         rc, out, err = run(argv if subject == "lumen" else _ssh_argv(subject, argv))
         if rc != 0:
-            result[(subject, f["predicate"])] = (None, f"ssh {subject}: {err[:120]}")
+            result[key] = (None, f"ssh {subject}: {err[:120]}")
             continue
-        if f["predicate"] == "ram":
-            sizes = re.findall(r"Size:\s*(\d+\s*[GM]B)", out)
-            result[(subject, f["predicate"])] = (
-                (sizes[0].replace(" ", "") if sizes else None),
-                None if sizes else "no Size field in dmidecode",
-            )
-        else:
-            try:
-                blk = json.loads(out)
-                total = sum(int(d.get("size") or 0) for d in blk.get("blockdevices", []))
-                result[(subject, f["predicate"])] = (str(total) if total else None,
-                                                       None if total else "empty lsblk")
-            except ValueError as e:
-                result[(subject, f["predicate"])] = (None, f"lsblk non-json: {e}")
+        try:
+            result.update(_confirm_size(subject, f, measure(out), what))
+        except ValueError as e:
+            result[key] = (None, f"{argv[0]} unparseable: {e}")
     return result
 
 
@@ -315,16 +369,38 @@ def probe_plug_map(subject, facts):
     return result
 
 
+def _endpoint_url(subject, fact):
+    value = (fact["value"] or "").strip()
+    if fact["predicate"] == "url":
+        return value if re.fullmatch(r"https?://\S+", value) else None
+    return f"http://{subject}:{value}/" if value.isdigit() else None
+
+
 def probe_endpoint_live(subject, facts):
+    """A url/port fact is the address itself, and an HTTP GET can only say the
+    address answers. The status code ('200') used to be returned as the
+    observation and superseded the stored url/port (wq#2204); a good GET now
+    confirms (observed == value), everything else is unknown.
+    """
     import urllib.request
     result = {}
     for f in facts:
-        url = f["value"] if f["predicate"] == "url" else f"http://{subject}:{f['value']}/"
+        key = (subject, f["predicate"])
+        url = _endpoint_url(subject, f)
+        if url is None:
+            result[key] = (None, f"value {f['value'][:40]!r} is not a probeable "
+                                 f"{f['predicate']}")
+            continue
         try:
             with urllib.request.urlopen(url, timeout=8) as resp:
-                result[(subject, f["predicate"])] = (str(resp.status), None)
+                status = resp.status
         except Exception as e:  # noqa: BLE001 - any transport failure is fail-open
-            result[(subject, f["predicate"])] = (None, f"{type(e).__name__}: {e}")
+            result[key] = (None, f"{type(e).__name__}: {e}")
+            continue
+        if 200 <= status < 400:
+            result[key] = (f["value"], None)
+        else:
+            result[key] = (None, f"GET {url} answered {status}")
     return result
 
 

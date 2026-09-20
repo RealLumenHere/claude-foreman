@@ -24,6 +24,10 @@ oldest status-class facts 67/67/61/61/58 days unverified), §3.3 (registry desig
   `os_kernel` answers only `kernel`; `service_state` probes only values that are systemd
   unit names and only ever confirms. `repair_clobbered_facts.py` undoes rows the earlier
   probes wrote (`uname -s` -> `Linux`, `systemctl is-active <status text>` -> `inactive`).
+- Same rule for wq#2204: `endpoint_live` returns the fact value on a good GET (never the HTTP
+  status), and `node_storage` only confirms a `ram`/`storage` value whose stated size matches the
+  measured total (all DIMMs, whole disks) -- otherwise unknown. The repair script also closes the
+  `verify:endpoint_live` (`200`) and `verify:node_storage` (first DIMM / byte sum) rows.
 
 ## Reconciliation contract (§3.2, §3.4)
 

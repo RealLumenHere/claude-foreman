@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""repair_clobbered_facts.py — wq#2192.
+"""repair_clobbered_facts.py — wq#2192, wq#2204.
 
-Undo what lumen_verify.py wrote before the probe fix: os_kernel answered every
-non-`kernel` predicate with "Linux" (uname -s) and service_state answered every
-`status` / `*_status` fact with a `systemctl is-active` word ("inactive").
+Undo what lumen_verify.py wrote before the probe fixes: os_kernel answered every
+non-`kernel` predicate with "Linux" (uname -s), service_state answered every
+`status` / `*_status` fact with a `systemctl is-active` word ("inactive"),
+endpoint_live wrote the HTTP status ("200") over url/port, and node_storage
+wrote the first DIMM size / an lsblk byte sum over ram/storage. Those last two
+probes can no longer supersede anything, so every open row they wrote is a clobber.
 
 For each still-open clobber row: close it, and reopen the fact the sweep
 superseded (same subject+predicate, valid_to == clobber.valid_from, not itself a
@@ -29,6 +32,9 @@ WHERE valid_to IS NULL AND (
   (source_ref = 'verify:os_kernel' AND predicate != 'kernel' AND value = 'Linux')
   OR (source_ref = 'verify:service_state'
       AND value IN ({",".join("?" * len(SYSTEMCTL_WORDS))}))
+  OR (source_ref = 'verify:endpoint_live' AND predicate IN ('url', 'port'))
+  OR (source_ref = 'verify:node_storage'
+      AND predicate IN ('ram', 'storage', 'storage_layout'))
 )
 ORDER BY subject, predicate
 """
