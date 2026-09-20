@@ -282,6 +282,12 @@ All filed. `wq#1619` already existed and is adopted as T8 rather than duplicated
 on the RealLumenHere/frankstupak accounts (outstanding from wq#2243); create the GitHub App and install it
 on the fleet repos; enable push protection where it needs an account owner.
 
+### 8.1 Landed
+
+| id | landed as | gate evidence |
+|---|---|---|
+| **T4** (wq#2273) | lumen-bin `1cd720f` "feat(lumen-pr): PR verbs via token-engine broker" (lumen-bin PR #117, merged to `main` 2026-09-20). `load_token`/`resolve_github_token` and all three secret-store token files are gone from `bin/lumen-pr`; every forge call is a broker verb (`pr-open`/`pr-update`/`pr-comment`/`pr-view`/`pr-checks`/`pr-files`/`pr-list`/`pr-merge`) over `/run/token-engine/broker.sock`, title/body staged as worktree file paths under `events/te-pr.*` — never argv — so `check_argv_shape`'s metachar ban stays strict. Push stays on the T1 credential-helper path. | `grep -nE 'github-frank\.token|github-lumen-classic\.token|gitea-lumen\.token|\.secrets|resolve_github_token' bin/lumen-pr` → no matches (the remaining textual hits for `Authorization`/`load_token` are two comments recording that those paths are gone). End-to-end: the PR that landed this very row was opened and then updated through the daemon's `pr-open` (find-or-create-or-update, §5.3); one audit line per call with `"ticket": "wq2273"` in `foreman/events/fleet-exec.jsonl` (dual sink, daemon `AUDIT_PATH`). |
+
 ---
 
 ## 9. What this design does not fix
