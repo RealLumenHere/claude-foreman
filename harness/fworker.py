@@ -215,6 +215,15 @@ def first_frame_timeout(model):
     return charging.first_frame_timeout_s(is_local_rung(model))
 
 
+def turn_gap_timeout(model):
+    """wq#2244: the inactivity gap after the first model frame. A local-rung model gets its
+    backend's turn budget; cloud, and FOREMAN_CHARGE_MODE=legacy, keep the single
+    INACTIVITY_TIMEOUT_S window."""
+    if charging.legacy_mode() or not is_local_rung(model):
+        return INACTIVITY_TIMEOUT_S
+    return charging.turn_gap_timeout_s(True)
+
+
 def local_cli_profile(model):
     """wq#2185: local-rung workers get the restricted CLI profile unless
     FOREMAN_CHARGE_MODE=legacy or FOREMAN_LOCAL_CLI_PROFILE=off."""
@@ -1824,6 +1833,7 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
             _gateway_cancel(response_id, connect_timeout=GATEWAY_CONNECT_TIMEOUT_S)
         if killed_reason == "inactivity":
             state.hung = True
+            state.silent_gap_s = round(time.time() - last_event, 1)
         # No local process to normalize a signal exit from — 143 (SIGTERM
         # convention, RELIABILITY_SPEC.md §D) is the honest equivalent of "this
         # watchdog stopped it", matching what a direct spawn's own
@@ -1975,6 +1985,8 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         if killed_reason in ("inactivity", "first_frame"):
             state.hung = True
             state.first_frame_timeout = killed_reason == "first_frame"
+            if killed_reason == "inactivity":
+                state.silent_gap_s = round(time.time() - last_event, 1)
         elif killed_reason == "turns_exceeded":
             state.turns_exceeded = True
         _kill_proc_tree(proc)
@@ -2457,6 +2469,9 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # wq#2128: an explicit --frame-gap-timeout keeps the single pre-split window.
     first_frame_s = (None if charging.legacy_mode() or args.frame_gap_timeout is not None
                      else first_frame_timeout(args.model))
+    # wq#2244: the gap between frames after the first one; local = the backend's turn budget.
+    turn_gap_s = (args.frame_gap_timeout if args.frame_gap_timeout is not None
+                  else turn_gap_timeout(args.model))
     over_ctx = (None if charging.legacy_mode() or not is_local_rung(args.model)
                 else charging.prompt_over_ctx(prompt, cli_profile=cli_profile))
     if over_ctx:
@@ -2524,7 +2539,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     run_fn = run_child_gateway if gateway_lane_enabled(ticket.get("lane")) else run_child
     state, exit_code, events, killed_reason, cpu_s, child_pid = run_fn(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
-        frame_gap_s=args.frame_gap_timeout, post_result_grace_s=args.post_result_grace,
+        frame_gap_s=turn_gap_s, post_result_grace_s=args.post_result_grace,
         loop_tracker=loop_tracker, first_frame_s=first_frame_s)
     if killed_reason == "steer" and state.session_id:
         # wq#2138: same attempt number — a harness-side refusal must not cost the
@@ -2660,16 +2675,17 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         f"exit={exit_code} killed_reason={killed_reason} turns={state.turns} "
         f"elapsed={elapsed:.0f}s cpu_s={cpu_s:.1f} session_id={state.session_id}")
 
+    gap_s = getattr(state, "silent_gap_s", None)
     charged_to, failure_cause = charging.classify_charge(
         classification, turns=state.turns, is_local=is_local_rung(args.model),
         killed_reason=killed_reason, events=events,
         result_text=state.result_text if isinstance(state.result_text, str) else None,
         prompt_tokens=prompt_tokens_est, prefill_tps=charging.prefill_tps(),
-        first_frame_s=first_frame_s)
+        first_frame_s=first_frame_s, gap_s=gap_s, turn_gap_s=turn_gap_s)
     attempt_record = {
         "ticket": ticket_id, "attempt": attempt, "worker_id": worker_id,
         "charged_to": charged_to, "failure_cause": failure_cause,
-        "first_frame_s": first_frame_s, "prompt_profile": local_tmpl and os.path.basename(local_tmpl),
+        "first_frame_s": first_frame_s, "gap_s": gap_s, "turn_gap_s": turn_gap_s, "prompt_profile": local_tmpl and os.path.basename(local_tmpl),
         "prompt_tokens_est": prompt_tokens_est, "prefill_tps": charging.prefill_tps(),
         "local_cli_profile": cli_profile,
         "worktree": worktree, "branch": branch, "model": args.model, "effort": args.effort,

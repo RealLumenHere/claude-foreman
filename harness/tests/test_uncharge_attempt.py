@@ -83,6 +83,34 @@ def test_bulk_rung_stamps_matching_records_in_place(runs, capsys):
     assert "touched 2 attempt record(s)" in capsys.readouterr().out
 
 
+def test_bulk_rung_failure_cause_and_any_turns_filter(runs, capsys):
+    """wq#2244: the turn-budget kills are HANG / hang_after_turns at 1 and 4 turns."""
+    tmp_path, self_heal, ua, _ = runs
+    hang = {**HANG, "failure_cause": "hang_after_turns"}
+    d = write(tmp_path, 12, 1, {**hang, "turns": 1})
+    write(tmp_path, 12, 2, {**hang, "turns": 4})
+    write(tmp_path, 12, 3, {**HANG, "turns": 2, "failure_cause": "crash_after_turns"})
+    write(tmp_path, 12, 4, {**HANG, "turns": 2})                      # no failure_cause
+
+    assert ua.main(["--cause", "rung", "--model-prefix", "qwen", "--turns", "any",
+                    "--failure-cause", "hang_after_turns", "--dry-run", "12"]) == 0
+    assert "would touch 2" in capsys.readouterr().out
+    assert ua.main(["--cause", "rung", "--model-prefix", "qwen", "--turns", "any",
+                    "--failure-cause", "hang_after_turns", "12"]) == 0
+
+    charged = [json.loads((d / f"attempt-{n}.json").read_text()).get("charged_to")
+               for n in (1, 2, 3, 4)]
+    assert charged == ["rung", "rung", None, None]
+    assert self_heal.attempt_count(12, charged_only=True) == 2
+
+
+def test_bulk_rung_default_turns_still_means_zero(runs):
+    tmp_path, _sh, ua, _ = runs
+    d = write(tmp_path, 13, 1, {**HANG, "turns": 1, "failure_cause": "hang_after_turns"})
+    assert ua.main(["--cause", "rung", "--model-prefix", "qwen", "13"]) == 0
+    assert "charged_to" not in json.loads((d / "attempt-1.json").read_text())
+
+
 def test_bulk_rung_dry_run_prints_and_touches_nothing(runs, capsys):
     tmp_path, self_heal, ua, _ = runs
     d = write(tmp_path, 10, 1, HANG)

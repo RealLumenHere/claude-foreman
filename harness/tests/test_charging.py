@@ -418,3 +418,153 @@ def test_cloud_hang_is_charged_to_the_ticket_and_records_the_fields(tmp_path):
     rec = json.load(open(os.path.join(runs_root, f"wq{ticket_id}", "attempt-1.json")))
     assert rec["killed_reason"] == "inactivity"
     assert rec["charged_to"] == "ticket" and rec["failure_cause"] == "hang_no_turns"
+
+
+# ---------- wq#2244: local inactivity gap = per-backend turn budget ----------
+
+def test_turn_gap_timeout_values(monkeypatch):
+    assert charging.turn_gap_timeout_s(False, env={"FOREMAN_TURN_GAP_S": "9"}) == 240
+    assert charging.turn_gap_timeout_s(True, env={}) == 1500
+    assert charging.turn_gap_timeout_s(True, env={"FOREMAN_FIRST_FRAME_S": "700"}) == 700
+    assert charging.turn_gap_timeout_s(True, env={"FOREMAN_FIRST_FRAME_S": "700",
+                                                  "FOREMAN_TURN_GAP_S": "1800"}) == 1800
+    assert charging.turn_gap_timeout_s(True, env={"FOREMAN_TURN_GAP_S": "junk"}) == 1500
+    monkeypatch.delenv("FOREMAN_CHARGE_MODE", raising=False)
+    monkeypatch.delenv("FOREMAN_TURN_GAP_S", raising=False)
+    monkeypatch.delenv("FOREMAN_FIRST_FRAME_S", raising=False)
+    assert fworker.turn_gap_timeout("hathor-llama8b") == 1500
+    assert fworker.turn_gap_timeout("claude-sonnet-5") == fworker.INACTIVITY_TIMEOUT_S == 240
+    monkeypatch.setenv("FOREMAN_TURN_GAP_S", "1800")
+    assert fworker.turn_gap_timeout("hathor-llama8b") == 1800
+    assert fworker.turn_gap_timeout("claude-sonnet-5") == 240
+
+
+def test_legacy_mode_restores_the_single_240s_gap(monkeypatch):
+    monkeypatch.setenv("FOREMAN_TURN_GAP_S", "1800")
+    monkeypatch.setenv("FOREMAN_CHARGE_MODE", "legacy")
+    assert fworker.turn_gap_timeout("hathor-llama8b") == fworker.INACTIVITY_TIMEOUT_S == 240
+    assert fworker.turn_gap_timeout("claude-sonnet-5") == 240
+
+
+def test_local_silent_gap_under_the_turn_budget_survives(tmp_path):
+    """Scaled 1:300 from 600 s of silence under a 1500 s budget: 2 s under a 5 s one."""
+    cmd = _child(tmp_path, INIT + ASSISTANT + "time.sleep(2)\n" + ASSISTANT + RESULT)
+    state, exit_code, _events, killed, _cpu, _pid = _run(cmd, tmp_path, frame_gap_s=5,
+                                                         first_frame_s=30)
+    assert killed is None and exit_code == 0
+    assert state.turns == 2 and not state.hung
+
+
+def test_local_silent_gap_is_killed_at_the_turn_budget(tmp_path):
+    cmd = _child(tmp_path, INIT + ASSISTANT + "time.sleep(60)\n")
+    t0 = time.time()
+    state, _exit, _events, killed, _cpu, _pid = _run(cmd, tmp_path, frame_gap_s=2,
+                                                     first_frame_s=30)
+    assert killed == "inactivity" and state.hung is True
+    assert 2 <= state.silent_gap_s < 4
+    assert time.time() - t0 < 10
+
+
+def test_cloud_worker_still_dies_at_the_cloud_gap(tmp_path, monkeypatch):
+    monkeypatch.setattr(fworker, "INACTIVITY_TIMEOUT_S", 2)
+    monkeypatch.setenv("FOREMAN_TURN_GAP_S", "1500")
+    monkeypatch.delenv("FOREMAN_CHARGE_MODE", raising=False)
+    gap = fworker.turn_gap_timeout("claude-sonnet-5")
+    assert gap == 2
+    cmd = _child(tmp_path, INIT + ASSISTANT + "time.sleep(60)\n")
+    t0 = time.time()
+    state, _exit, _events, killed, _cpu, _pid = _run(cmd, tmp_path, frame_gap_s=gap,
+                                                     first_frame_s=fworker.first_frame_timeout(
+                                                         "claude-sonnet-5"))
+    assert killed == "inactivity" and time.time() - t0 < 10
+    assert state.silent_gap_s < 2 * gap
+
+
+def test_row_local_turn_budget_kill_is_a_rung_fault():
+    """The measured 5m54s / 12m15s single turns, killed at a 1500 s budget."""
+    assert _charge("HANG", turns=4, is_local=True, killed_reason="inactivity",
+                   gap_s=1500.6, turn_gap_s=1500) == ("rung", "turn_budget_timeout")
+    assert _charge("HANG", turns=1, is_local=True, killed_reason="inactivity",
+                   gap_s=2999.0, turn_gap_s=1500) == ("rung", "turn_budget_timeout")
+
+
+def test_row_local_gap_far_beyond_the_budget_stays_on_the_ticket():
+    assert _charge("HANG", turns=4, is_local=True, killed_reason="inactivity",
+                   gap_s=3000, turn_gap_s=1500) == ("ticket", "hang_after_turns")
+    assert _charge("HANG", turns=4, is_local=True, killed_reason="inactivity",
+                   turn_gap_s=1500) == ("ticket", "hang_after_turns")
+
+
+def test_row_cloud_inactivity_stays_hang_after_turns():
+    assert _charge("HANG", turns=4, is_local=False, killed_reason="inactivity",
+                   gap_s=240.5, turn_gap_s=240) == ("ticket", "hang_after_turns")
+
+
+def test_legacy_mode_charges_a_local_turn_budget_kill_to_the_ticket():
+    assert _charge("HANG", turns=4, is_local=True, killed_reason="inactivity", gap_s=240.5,
+                   turn_gap_s=240, env={"FOREMAN_CHARGE_MODE": "legacy"}) == (
+        "ticket", "hang_after_turns")
+
+
+def test_local_turn_budget_kill_with_backend_noise_is_still_the_turn_budget():
+    assert _charge("HANG", turns=4, is_local=True, killed_reason="inactivity",
+                   gap_s=1500, turn_gap_s=1500, events=BACKEND_5XX) == ("rung", "turn_budget_timeout")
+
+
+def _local_silence_run(tmp_path, silence_s, extra):
+    repo = make_scratch_repo(tmp_path)
+    key_file = tmp_path / "litellm.token"
+    key_file.write_text("sk-test-foreman-key")
+    env, _db, _events, runs_root, _wt, _state = make_scratch_env(
+        tmp_path, 0, "mid_task_silence", extra={
+            "FOREMAN_LITELLM_KEY_FILE": str(key_file),
+            "FOREMAN_BACKEND": "hathor",
+            "FOREMAN_BACKEND_COOLDOWN_FILE": str(tmp_path / "backend_cooldown.json"),
+            "FAKE_CLAUDE_SILENCE_S": str(silence_s), **extra})
+    ticket_id = wq_add(env, "scratch local silence ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+    result = run_fworker(env, ticket_id, repo, "mid_task_silence", model="hathor-llama8b",
+                         effort="", archetype="mechanical-edit")
+    rec = json.load(open(os.path.join(runs_root, f"wq{ticket_id}", "attempt-1.json")))
+    return result, rec, env, ticket_id
+
+
+def test_local_worker_silent_past_the_turn_budget_is_a_rung_fault_end_to_end(tmp_path):
+    result, rec, env, ticket_id = _local_silence_run(tmp_path, 60, {
+        "FOREMAN_FIRST_FRAME_S": "30", "FOREMAN_TURN_GAP_S": "3", "FOREMAN_FRAME_GAP_S": "1"})
+    assert result.returncode == fworker.EXIT_RUNG_FAULT, result.stdout + result.stderr
+    assert rec["killed_reason"] == "inactivity" and rec["turns"] == 1
+    assert rec["charged_to"] == "rung" and rec["failure_cause"] == "turn_budget_timeout"
+    assert rec["turn_gap_s"] == 3 and 3 <= rec["gap_s"] < 6
+    assert wq_status(env, ticket_id) == "open"
+
+
+def test_local_worker_silent_inside_the_turn_budget_is_not_killed_at_the_cloud_gap(tmp_path):
+    """FOREMAN_FRAME_GAP_S=1 is the cloud gap: a local worker 4 s silent must not hit it."""
+    _result, rec, _env, _tid = _local_silence_run(tmp_path, 4, {
+        "FOREMAN_FIRST_FRAME_S": "30", "FOREMAN_TURN_GAP_S": "20", "FOREMAN_FRAME_GAP_S": "1"})
+    assert rec["killed_reason"] != "inactivity"
+    assert rec["turn_gap_s"] == 20 and rec["gap_s"] is None
+
+
+def test_local_turn_gap_defaults_to_first_frame_s_and_legacy_restores_the_single_gap(tmp_path):
+    _result, rec, _env, _tid = _local_silence_run(tmp_path, 60, {
+        "FOREMAN_FIRST_FRAME_S": "3", "FOREMAN_CHARGE_MODE": "legacy",
+        "FOREMAN_FRAME_GAP_S": "2"})
+    assert rec["killed_reason"] == "inactivity"
+    assert rec["turn_gap_s"] == 2 and rec["first_frame_s"] is None
+    assert rec["charged_to"] == "ticket" and rec["failure_cause"] == "hang_after_turns"
+
+
+def test_cloud_silence_dies_at_the_cloud_gap_end_to_end(tmp_path):
+    repo = make_scratch_repo(tmp_path)
+    env, _db, _events, runs_root, _wt, _state = make_scratch_env(
+        tmp_path, 0, "mid_task_silence", extra={
+            "FOREMAN_TURN_GAP_S": "600", "FOREMAN_FRAME_GAP_S": "2", "FAKE_CLAUDE_SILENCE_S": "60"})
+    ticket_id = wq_add(env, "scratch cloud silence ticket")
+    env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+    run_fworker(env, ticket_id, repo, "mid_task_silence")
+    rec = json.load(open(os.path.join(runs_root, f"wq{ticket_id}", "attempt-1.json")))
+    assert rec["killed_reason"] == "inactivity" and rec["turn_gap_s"] == 2
+    assert rec["charged_to"] == "ticket" and rec["failure_cause"] == "hang_after_turns"
+    assert 2 <= rec["gap_s"] < 4

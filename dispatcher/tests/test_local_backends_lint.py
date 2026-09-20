@@ -52,6 +52,14 @@ def test_prefill_tps_is_optional_but_must_be_a_positive_number():
         assert len(fails) == 1 and "prefill_tps" in fails[0], bad
 
 
+def test_turn_gap_s_is_optional_but_must_be_a_positive_integer():
+    """wq#2244: the per-backend inactivity budget between frames; defaults to first_frame_s."""
+    assert check({"hathor-llama8b": leaf(turn_gap_s=1800)}) == ([], [])
+    for bad in (0, -1, "1800", 1.5, None, True):
+        fails, _ = check({"hathor-llama8b": leaf(turn_gap_s=bad)})
+        assert len(fails) == 1 and "turn_gap_s" in fails[0], bad
+
+
 def test_bad_leaf_fields_fail():
     fails, _ = check({"hathor-llama8b": leaf(slots=0, served_ctx="big", first_frame_s=None,
                                              health_url="hathor:11434")})

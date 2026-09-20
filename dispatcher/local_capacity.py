@@ -238,7 +238,8 @@ class LocalCapacity:
         return best
 
     def spawn_env(self, model):
-        """{FOREMAN_FIRST_FRAME_S, FOREMAN_SERVED_CTX, FOREMAN_PREFILL_TPS} for a spawn on
+        """{FOREMAN_FIRST_FRAME_S, FOREMAN_TURN_GAP_S, FOREMAN_SERVED_CTX,
+        FOREMAN_PREFILL_TPS} for a spawn on
         `model` (each only when the row carries it); {} when the
         model has no local_backends row. Callers pass the resolved member, never the group
         (a group row carries no budget of its own)."""
@@ -249,6 +250,10 @@ class LocalCapacity:
         env = {}
         if isinstance(e.get("first_frame_s"), int):
             env["FOREMAN_FIRST_FRAME_S"] = str(e["first_frame_s"])
+        # wq#2244: the inactivity gap between frames after the first; fworker defaults it
+        # to first_frame_s, so a row only carries it to set a different turn budget.
+        if isinstance(e.get("turn_gap_s"), int) and e["turn_gap_s"] > 0:
+            env["FOREMAN_TURN_GAP_S"] = str(e["turn_gap_s"])
         if isinstance(e.get("served_ctx"), int):
             env["FOREMAN_SERVED_CTX"] = str(e["served_ctx"])
         tps = e.get("prefill_tps")

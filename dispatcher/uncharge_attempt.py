@@ -30,7 +30,8 @@ CLI:
   uncharge_attempt.py <ticket_id> --attempt N --reason "..."
   uncharge_attempt.py <ticket_id> --all --reason "..."     # every matching attempt-N.json
   add --dry-run to preview, --force to skip the fault-signature guard
-  uncharge_attempt.py --cause rung --model-prefix qwen [--classification HANG] [--turns 0]
+  uncharge_attempt.py --cause rung --model-prefix qwen [--classification HANG] [--turns 0|N|any]
+                      [--failure-cause hang_after_turns]
                       [--reason "..."] [--dry-run] [ticket_id]   # every ticket, or one
 """
 import argparse
@@ -110,14 +111,17 @@ def uncharge_one(tid, n, reason, force, dry_run):
     return True, f"{src} -> {dst}"
 
 
-def matches_rung_fault(rec, model_prefix, classification, turns):
+def matches_rung_fault(rec, model_prefix, classification, turns, failure_cause=None):
     """A still-ticket-charged record whose model started with the prefix and that ended
-    in `classification` after exactly `turns` turns (turns == 0: no model output)."""
+    in `classification` after exactly `turns` turns (turns == 0: no model output; None:
+    any turn count). wq#2244: `failure_cause`, when given, must equal the record's own."""
     if self_heal.charged_to(rec) != "ticket":
+        return False
+    if failure_cause is not None and rec.get("failure_cause") != failure_cause:
         return False
     return (str(rec.get("model") or "").startswith(model_prefix)
             and rec.get("classification") == classification
-            and rec.get("turns") == turns)
+            and (turns is None or rec.get("turns") == turns))
 
 
 def rung_charge_one(path, rec, reason, dry_run):
@@ -149,12 +153,17 @@ def bulk_rung(args):
     touched = 0
     for tid in ids:
         for path, rec in self_heal.attempt_records(tid):
-            if matches_rung_fault(rec, args.model_prefix, args.classification, args.turns):
+            if matches_rung_fault(rec, args.model_prefix, args.classification, args.turns,
+                                  args.failure_cause):
                 print(rung_charge_one(path, rec, reason, args.dry_run))
                 touched += 1
     print(f"{'would touch' if args.dry_run else 'touched'} {touched} attempt record(s) "
           f"across {len(ids)} ticket dir(s)")
     return 0
+
+
+def _turns_arg(value):
+    return None if value == "any" else int(value)
 
 
 def main(argv=None):
@@ -166,8 +175,10 @@ def main(argv=None):
     ap.add_argument("--model-prefix", help="bulk mode: attempt record's model starts with")
     ap.add_argument("--classification", default="HANG",
                     help="bulk mode: attempt record's classification (default HANG)")
-    ap.add_argument("--turns", type=int, default=0,
-                    help="bulk mode: attempt record's turns (default 0)")
+    ap.add_argument("--turns", type=_turns_arg, default=0,
+                    help="bulk mode: attempt record's turns (default 0; 'any' for every count)")
+    ap.add_argument("--failure-cause",
+                    help="bulk mode: attempt record's failure_cause (e.g. hang_after_turns)")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--attempt", type=int, help="uncharge this one attempt number")
     g.add_argument("--all", action="store_true",

@@ -20,6 +20,9 @@ tools, no MCP, one slot per worker), the calibrated CLI overhead in the size gat
 first-frame budget refusal (PROMPT_OVER_BUDGET) and the prompt_over_budget charge (the
 harness, not the rung, when we sent more than the box could prefill). Its own lever:
 FOREMAN_LOCAL_CLI_PROFILE=off restores the bare CLI command and the prompt-only gate.
+wq#2244 adds the local turn budget (turn_gap_timeout_s, FOREMAN_TURN_GAP_S) as the local
+inactivity gap and the turn_budget_timeout rung charge; legacy mode restores the single
+240 s gap and the ticket charge.
 """
 import fcntl
 import json
@@ -55,6 +58,12 @@ SHARED_BOX_FACTOR = 2
 
 CLOUD_FIRST_FRAME_S = 240
 DEFAULT_LOCAL_FIRST_FRAME_S = 1500
+# wq#2244: after the first frame a local box is still prefilling the new tokens and decoding
+# at 1.6-11 tok/s, so its inactivity gap is a per-backend TURN budget, not the cloud 240 s.
+# A local inactivity kill whose silent gap is under this many turn budgets is the rung's
+# fault; a gap far beyond it is not a slow box, it is a stuck worker.
+CLOUD_TURN_GAP_S = 240
+TURN_BUDGET_FAULT_FACTOR = 2
 
 # Classification names mirror classifier.py's string constants.
 _BACKEND_EVIDENCE_CLASSES = {"CRASH", "LAUNCH_FAILURE", "INDETERMINATE", "KILLED", "HANG"}
@@ -105,6 +114,16 @@ def first_frame_timeout_s(is_local, env=None):
     return _int_env("FOREMAN_FIRST_FRAME_S", DEFAULT_LOCAL_FIRST_FRAME_S, env)
 
 
+def turn_gap_timeout_s(is_local, env=None):
+    """The inactivity gap between frames once the first model frame has landed. Cloud stays
+    at 240. Local comes from FOREMAN_TURN_GAP_S (the dispatcher passes the backend's
+    turn_gap_s) and defaults to the first-frame budget: a turn on these boxes is the same
+    prefill-then-decode work the first frame is."""
+    if not is_local:
+        return CLOUD_TURN_GAP_S
+    return _int_env("FOREMAN_TURN_GAP_S", first_frame_timeout_s(True, env), env)
+
+
 def is_model_frame(frame):
     """The first frame that proves the backend produced output. The CLI's system/init
     frame (and api_retry chatter) is emitted before the first model call, so it says
@@ -152,9 +171,16 @@ def backend_fault_cause(events, result_text=None):
     return None
 
 
+def within_turn_budget(gap_s, turn_gap_s):
+    """True when a recorded silent gap is under twice the turn budget."""
+    if gap_s is None or not turn_gap_s:
+        return False
+    return gap_s < TURN_BUDGET_FAULT_FACTOR * turn_gap_s
+
+
 def classify_charge(classification, *, turns=0, is_local=False, killed_reason=None,
                     events=None, result_text=None, env=None, prompt_tokens=None,
-                    prefill_tps=None, first_frame_s=None):
+                    prefill_tps=None, first_frame_s=None, gap_s=None, turn_gap_s=None):
     """(charged_to, failure_cause) for one attempt, per FIX_RESEARCH 2.2.
 
     Order matters: budget and harness rows first (they are never the backend's fault),
@@ -163,7 +189,11 @@ def classify_charge(classification, *, turns=0, is_local=False, killed_reason=No
 
     wq#2185: a local first_frame kill whose own recorded prompt could not have prefilled
     inside the budget (prompt_tokens / prefill_tps > first_frame_s) is the harness's
-    fault, not the rung's: the box was healthy, we sent it too much."""
+    fault, not the rung's: the box was healthy, we sent it too much.
+
+    wq#2244: a local inactivity kill (any turn count) whose silent gap_s is under
+    TURN_BUDGET_FAULT_FACTOR x turn_gap_s is a slow box, a rung fault (turn_budget_timeout);
+    a gap far beyond the budget, or one with no recorded gap, stays hang_after_turns."""
     cls = classification
     cause = (cls or "").lower() or None
     if cls in ("SUCCESS", "DEGRADED_SUCCESS"):
@@ -181,6 +211,9 @@ def classify_charge(classification, *, turns=0, is_local=False, killed_reason=No
             evidence = backend_fault_cause(events, result_text)
             if evidence:
                 return CHARGE_RUNG, evidence
+        if (is_local and cls == "HANG" and killed_reason == "inactivity"
+                and within_turn_budget(gap_s, turn_gap_s)):
+            return CHARGE_RUNG, "turn_budget_timeout"
         if is_local and cls == "HANG" and turns == 0:
             return CHARGE_RUNG, ("first_frame_timeout" if killed_reason == "first_frame"
                                  else "hang_no_turns")

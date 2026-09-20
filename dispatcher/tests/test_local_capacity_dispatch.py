@@ -213,6 +213,17 @@ def test_group_row_carries_no_spawn_env():
                                                  "FOREMAN_SERVED_CTX": "16384"}
 
 
+def test_turn_gap_s_rides_the_spawn_env_when_the_row_has_one():
+    """wq#2244: absent, fworker defaults the turn budget to first_frame_s, so no env is set."""
+    rows = {"hathor-llama8b": dict(BACKENDS["hathor-llama8b"], turn_gap_s=1800),
+            "nephthys-qwen14b": dict(BACKENDS["nephthys-qwen14b"], turn_gap_s=0)}
+    cap = local_capacity.LocalCapacity(rows, lambda: [], probe=lambda u: True)
+    assert cap.spawn_env("hathor-llama8b")["FOREMAN_TURN_GAP_S"] == "1800"
+    assert "FOREMAN_TURN_GAP_S" not in cap.spawn_env("nephthys-qwen14b")
+    assert "FOREMAN_TURN_GAP_S" not in local_capacity.LocalCapacity(
+        BACKENDS, lambda: [], probe=lambda u: True).spawn_env("hathor-llama8b")
+
+
 def test_prefill_tps_rides_the_spawn_env_when_the_row_has_one():
     """wq#2185: fworker refuses a spawn whose prompt cannot prefill inside first_frame_s."""
     rows = {"hathor-llama8b": dict(BACKENDS["hathor-llama8b"], prefill_tps=13.6),
