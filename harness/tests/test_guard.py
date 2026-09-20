@@ -791,6 +791,39 @@ def test_primary_tree_write_edit_kb_and_nest_blocked_runtime_env(monkeypatch):
     assert not failures, f"expected clean wq#1719 block, got: {failures}"
 
 
+# ---- wq#1831: kb/ISSUE-LOG.md is the one sanctioned Edit target in a primary ----
+# kb has no remote and no lumen-pr flow, so the wall's "land it with lumen-pr"
+# remedy is unreachable there; since wq#1719 every worker's log row has landed via
+# shell redirect (ISSUE-LOG #349). The carve-out sanctions Edit — appends and
+# status flips — on exactly that file. Write (whole-file replace) stays blocked,
+# as does any other kb path and any unnormalized spelling of the log's path.
+def test_kb_issue_log_edit_allowed():
+    rc, stderr = run_guard(
+        "Edit", {"file_path": "/home/lumen/kb/ISSUE-LOG.md",
+                 "old_string": "| 478 | x |", "new_string": "| 478 | x |\n| 479 | y |"})
+    assert rc == 0, stderr
+
+
+def test_kb_issue_log_write_still_blocked():
+    rc, stderr = run_guard(
+        "Write", {"file_path": "/home/lumen/kb/ISSUE-LOG.md", "content": "clobbered"})
+    assert rc == 2 and "wq#1719" in stderr, stderr
+
+
+def test_kb_issue_log_unnormalized_path_still_blocked():
+    rc, stderr = run_guard(
+        "Edit", {"file_path": "/home/lumen/kb/x/../ISSUE-LOG.md",
+                 "old_string": "a", "new_string": "b"})
+    assert rc == 2 and "wq#1719" in stderr, stderr
+
+
+def test_kb_other_files_edit_still_blocked():
+    rc, stderr = run_guard(
+        "Edit", {"file_path": "/home/lumen/kb/CLAUDE.md",
+                 "old_string": "a", "new_string": "b"})
+    assert rc == 2 and "wq#1719" in stderr, stderr
+
+
 def test_primary_tree_branch_switch_blocked_kb_and_nest_fallback():
     # Same fallback-list gap, on the wq#900 git-verb wall (Bash), not just Edit/Write.
     failures = []

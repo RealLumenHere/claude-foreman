@@ -364,14 +364,32 @@ Read|Edit|Write|Grep|Glob)
       # Bash PRIMARY_TREES wall above.
       # wq#1761 (ISSUE-LOG #313): work-queue added, same gap, third default add_dir.
       WRITE_PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest:/home/lumen/agents/work-queue:/home/lumen/minerva}
+      # wq#1831: kb/ISSUE-LOG.md is the one sanctioned Edit target inside a primary
+      # tree. The wall's remedy ("land it with lumen-pr") is unreachable for kb — the
+      # repo has no remote and no PR flow, and a worker's filesystem bound cannot
+      # reach a kb worktree anyway (wq#1744's block) — so since wq#1719 every worker
+      # with a log row has appended it with a shell redirect instead (row 349 records
+      # the practice; rows 342-478 landed that way), which the doctrine REQUIRES of
+      # every worker that hits an issue. This carve-out makes the required act
+      # expressible with the intended tool. Edit only: appends and status flips
+      # (OPEN->FIXED, row 349's complaint) are the log's two write shapes, and both
+      # are Edits; Write stays blocked because whole-file replacement of the fleet's
+      # institutional memory is never a legitimate worker op. Exact-string match on
+      # the raw tool_input path, mirroring the wall it punches through — an
+      # unnormalized spelling ("kb/../kb/ISSUE-LOG.md") misses the carve-out and
+      # falls through to the block, i.e. fails closed.
+      if [ "$TOOL_NAME" = "Edit" ] && [ "$FILE_PATH" = "/home/lumen/kb/ISSUE-LOG.md" ]; then
+        :
+      else
       IFS=':' read -ra WPT_ARR <<< "$WRITE_PRIMARY_TREES"
       for ptree in "${WPT_ARR[@]}"; do
         [ -n "$ptree" ] || continue
         case "$FILE_PATH" in
           "$ptree"|"$ptree"/*)
-            block "Write/Edit inside PRIMARY tree $ptree denied (wq#1719/wq#900) — primary repo roots are read-only for workers; make this change in your own worktree${WORKTREE_ROOT:+ ($WORKTREE_ROOT)} and land it with lumen-pr" "$FILE_PATH" ;;
+            block "Write/Edit inside PRIMARY tree $ptree denied (wq#1719/wq#900) — primary repo roots are read-only for workers; the one exception is Edit on /home/lumen/kb/ISSUE-LOG.md (wq#1831); for anything else make the change in your own worktree${WORKTREE_ROOT:+ ($WORKTREE_ROOT)} and land it with lumen-pr" "$FILE_PATH" ;;
         esac
       done
+      fi
     fi
   fi
 
