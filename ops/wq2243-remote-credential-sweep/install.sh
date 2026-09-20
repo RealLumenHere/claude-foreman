@@ -6,7 +6,17 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 
-cp "$SRC/remote-credential-sweep.service" "$SRC/remote-credential-sweep.timer" /etc/systemd/system/
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vunit_file "$SRC/remote-credential-sweep.service" /etc/systemd/system/remote-credential-sweep.service
+  vunit_file "$SRC/remote-credential-sweep.timer" /etc/systemd/system/remote-credential-sweep.timer
+  venabled remote-credential-sweep.timer
+  vactive remote-credential-sweep.timer
+  vdone
+fi
+
+cp"$SRC/remote-credential-sweep.service" "$SRC/remote-credential-sweep.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now remote-credential-sweep.timer
 
