@@ -1,6 +1,9 @@
 {
   "profiles": ["base", "python", "shell"],
-  "extra_allow": [],
+  "extra_allow": [
+    "Bash(bash ops/wq1609-minerva-contradiction-scan/install.sh)",
+    "Bash(bash /home/lumen/foreman/ops/wq1609-minerva-contradiction-scan/install.sh)"
+  ],
   "verbs": [],
   "preflight_cmds": ["python3 -m pytest harness/tests/test_harness_preflight.py -q",
                       "python3 --version"]
