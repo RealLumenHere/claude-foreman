@@ -126,6 +126,18 @@ _COPY_RE = re.compile(
 _V2_VERB_RE = re.compile(
     r"(?<![\w/.-])(?P<verb>sudo|adb|fastboot|reboot|poweroff|shutdown|power-cycle|"
     r"docker\s+restart)(?![\w/.-])")
+# Unit mutation is not a v2 verb waiting on a broker grant — it has no holder at all.
+# `systemctl stop|disable|mask` is on the worker deny-list (worker-settings.json:107-109),
+# and the rest of a retirement (moving a root-owned file out of /etc/systemd/system,
+# daemon-reload) needs the root verb, denied on the same list; fleet-exec's `sudo_cmds`
+# is still v2 and covers restart|reload|start only. The second alternative catches the
+# ticket that says so in prose ("needs a lane with systemctl-mutate access") rather than
+# spelling the command out — which is the shape all four stranded tickets took.
+_UNIT_MUTATE_RE = re.compile(
+    r"(?<![\w/.-])(?:"
+    r"systemctl\s+(?:--[\w-]+(?:=\S+)?\s+)*(?:stop|disable|mask|unmask)(?![\w/.-])"
+    r"|systemctl[- ]mutate|mutate\s+(?:the\s+)?systemd"
+    r")")
 
 DEFAULT_RESTART_NODE = "lumen"  # §2.1: "node omitted = lumen"
 
@@ -748,6 +760,21 @@ def _v2_hard(text, pos):
     return bool(words) and words[0].lower().rstrip(":,") in _IMPERATIVE_OPENERS
 
 
+def _derive_unit_mutate(text, refused):
+    """Systemd unit mutation is `refused`, not `unresolved`, and — like a `never.restart`
+    target (:667) — refused even when the mention reads as prose: no lane in the fleet
+    holds the access, so naming the need is enough to make the ticket undispatchable to
+    any of them. Four unit-retirement tickets (wq#1643, wq#1656/#1762, wq#1779) each
+    reached a BUILD lane that could not run one step of them (ISSUE-LOG #377, #378)
+    because nothing here read that need out of the ticket text.
+    """
+    for m in _UNIT_MUTATE_RE.finditer(text):
+        what = re.sub(r"\s+", " ", m.group(0))
+        refused.append(
+            f"unit-mutate({what}): denied on every lane (worker-settings.json deny-list) "
+            "and fleet-exec has no grant for it — no execution path exists today")
+
+
 def _derive_v2(text, unresolved, advisory=None):
     for m in _V2_VERB_RE.finditer(text):
         verb = re.sub(r"\s+", " ", m.group("verb"))
@@ -798,6 +825,7 @@ def derive(ticket, repo=None, add_dirs=(), roster=None, policy=None, sweep=None)
     _derive_ssh(text, roster, tags, unresolved, policy=policy)
     _derive_restart(text, roster, policy, tags, unresolved, refused)
     _derive_copy(text, roster, policy, tags, unresolved)
+    _derive_unit_mutate(text, refused)
     _derive_v2(text, unresolved, advisory)
     return Derived(tags, unresolved, refused, advisory, advisory_paths)
 

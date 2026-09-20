@@ -457,6 +457,35 @@ def test_v2_verb_inside_a_name_is_not_unresolved(detail):
     assert not any("v2 verb" in u for u in d.unresolved), d.unresolved
 
 
+# --- unit mutation (wq#1779) ----------------------------------------------------
+
+@pytest.mark.parametrize("detail", [
+    # the four stranded retirement tickets' own words
+    "Build lanes cannot mutate systemd (house deny-list) — needs a lane with"
+    " systemctl-mutate access",
+    "systemctl-mutate: remove lumen-rerank-thread-watch.timer/.service",
+    "run systemctl disable --now lumen-dgm.timer, then archive the unit file",
+    "systemctl stop lumen-split-watch.timer before removing it",
+    "systemctl mask the unit so it cannot be pulled in again",
+])
+def test_unit_mutation_is_refused(detail):
+    d = derive(detail)
+    assert d.tags == []
+    assert any(u.startswith("unit-mutate(") for u in d.refused), d.refused
+
+
+@pytest.mark.parametrize("detail", [
+    # restart|reload|start keep their v1 grant path — not unit mutation
+    "systemctl restart lumen-alert-queue on isis",
+    # a verb glued into a name is a citation, not an instruction
+    "read /home/lumen/bin/unit-disable-helper.sh for the archive convention",
+    "the stop_reason column of the episode store",
+])
+def test_non_mutating_text_is_not_refused(detail):
+    d = derive(detail)
+    assert not any(u.startswith("unit-mutate(") for u in d.refused), d.refused
+
+
 # --- contract -------------------------------------------------------------------
 
 def test_derive_is_deterministic():

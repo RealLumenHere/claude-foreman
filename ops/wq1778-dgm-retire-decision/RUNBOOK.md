@@ -112,6 +112,29 @@ systemctl-mutate execution path for retirement work — a narrow sudoers-style
 grant, or a root-side runner the foreman hands unit-removal scripts to — not
 a fourth follow-up ticket.
 
+#### Fifth dispatch, and the dispatch loop closed (wq#1779 attempt a3, 2026-09-20)
+
+Re-verified live, one week on: `lumen-dgm.timer` is still `enabled`, its fragment is
+still `/etc/systemd/system/lumen-dgm.timer`, it fired again today
+(`start_time=[Sun 2026-09-20 17:00:00 UTC] ... status=0`), and
+`.dgm_history.jsonl` is at **101 lines** — 8 further DISCARD cycles since the 93 above,
+10 since the decision. `fleet-exec` still has no root verb
+(`fleet-exec-policy.yaml:205-211`: `sudo_cmds` is v2, restart/reload/start only), so
+steps 1–4 remain unrunnable here.
+
+What was fixable from a build lane was the *re-dispatch*, not the apply. Nothing in
+`capability_lint` read "needs a lane with systemctl-mutate access" as a capability need:
+`_V2_VERB_RE` (`harness/capability_lint.py:126`) lists sudo/adb/reboot/…, and
+`_SYSTEMCTL_RE:114` matches only the grantable restart|reload|start, so this ticket
+derived `refused=[]` and dispatched clean five times. `_derive_unit_mutate()` now puts
+unit mutation in `refused`, which `dispatcher/foreman_dispatcher.py:732` turns into a
+pre-spawn `CAPABILITY_DENIED_BY_POLICY` skip. Corpus scan flags exactly wq#1739,
+wq#1762 and this ticket — the three stranded retirements, nothing else.
+
+Consequence: this runbook will not be handed to another lane that cannot run it. Apply
+it from a session that holds root (Commander, via detached `systemd-run` per instinct 5),
+or build the execution path first. See ISSUE-LOG #484.
+
 Leave `/home/lumen/autonomy/agent5/` on disk untouched — registry, history,
 benchmark, and code are the archive (see `retired_services.yaml` data
 disposition). No redis drain needed: DGM sandboxes on db6 only and clears
