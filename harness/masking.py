@@ -69,12 +69,47 @@ PATTERNS = [
 CONTEXT_CHARS = 120   # masked context kept either side of a hit
 PREFIX_CHARS = 48     # of the kept, non-secret prefix
 
+MASK = "MASKED"       # the literal every replacement ends in
+
+
+def _matches(rx, text):
+    """Matches of `rx`, minus this module's own output read back (wq#2298).
+
+    Every replacement is `<kept prefix>MASKED`, and that output is itself
+    credential-shaped to several of the rules above: `cfut_MASKED` is `cfut_` plus
+    six legal body characters, `PAT: github_pat_MASKED` is a 17-char kv value, and
+    `sk-ant-xxxxxxxxMASKED` re-matches because the sk- prefix backtracks into its
+    own body. So a masked artefact re-armed the pri-1 alarm on every later read,
+    and the rotation ticket it filed was answered by a worker who grepped for
+    `ghp_MASKED` — which alarmed again. That loop cost wq#2282, #2288, #2292 and
+    #2298; the floors raised in wq#2292 only ended it for the two github rules.
+
+    A match that ENDS at the mask literal is our own output, never a secret: the
+    value is already gone. The cost is a real credential whose last six characters
+    are exactly `MASKED` (1 in 62**6 for a random token body), paid once, against
+    an alarm loop that fires forever and pages at pri-1 every time.
+    """
+    return [m for m in rx.finditer(text) if not m.group(0).endswith(MASK)]
+
+
+def _sub(rx, repl, text):
+    """(text, n) — rx.subn() over _matches() only, so mask_text() and scan() agree
+    on which matches are real without either re-deriving the rule."""
+    out, pos = [], 0
+    matches = _matches(rx, text)
+    for m in matches:
+        out.append(text[pos:m.start()])
+        out.append(m.expand(repl))
+        pos = m.end()
+    out.append(text[pos:])
+    return "".join(out), len(matches)
+
 
 def mask_text(text):
     """(masked_text, [labels that fired]). Order of labels follows PATTERNS."""
     hits = []
     for label, rx, repl in PATTERNS:
-        text, n = rx.subn(repl, text)
+        text, n = _sub(rx, repl, text)
         if n and label not in hits:
             hits.append(label)
     return text, hits
@@ -101,9 +136,9 @@ def scan(text):
         # follow exactly the sequence of substitutions mask_text() performs: a value
         # an earlier pattern already shortened to `<prefix>MASKED` no longer matches
         # a later one, and must not be recorded as if it had.
-        for m in rx.finditer(cur):
+        for m in _matches(rx, cur):
             matches.append((label, m.group(1), m.group(0)[len(m.group(1)):]))
-        cur = rx.sub(repl, cur)
+        cur = _sub(rx, repl, cur)[0]
 
     records, cursor = [], {}
     for label, prefix, value in matches:

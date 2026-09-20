@@ -69,6 +69,7 @@ WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # the repo name `highs_solver` is an availability bug, not just noise. Rationale
 # and the kv_secret carve-out: harness/masking.py.
 _B = r"(?<![A-Za-z0-9])"
+MASK = "MASKED"   # masking.MASK — the literal every replacement there ends in
 MASK_PATTERNS = [
     ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{30,}")),
     ("github_token", re.compile(_B + r"(?:github_pat_)[A-Za-z0-9_]{20,}")),
@@ -89,9 +90,15 @@ RESPONSE_KEYS = {"ok", "verb", "ticket", "rule", "reason", "result", "elapsed_s"
 
 
 def mask_hits(text):
+    # wq#2298: a match that ends at the mask literal is masking.py's own output read
+    # back (`cfut_MASKED`, `PAT: github_pat_MASKED`), not a credential. Here that
+    # difference is not just a false page: a hit fails the broker verb and drops the
+    # result, so a masked artefact quoted in a PR body would break every PR verb.
     names = []
     for name, pat in MASK_PATTERNS:
-        if pat.search(text) and name not in names:
+        if name in names:
+            continue
+        if any(not m.group(0).endswith(MASK) for m in pat.finditer(text)):
             names.append(name)
     return names
 

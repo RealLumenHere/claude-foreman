@@ -36,6 +36,26 @@ FALSE_POSITIVES = [
     "clone git@github.com:o/ghp_notes.git",          # right prefix, body too short
     "the risk-assessment-framework doc needs review",  # `sk-` inside `risk-`
     "ghp_MASKED and github_pat_MASKED",  # our OWN output must not re-arm the alarm
+    # wq#2298: the line that fired THIS ticket — wq#2292's worker grepping its own
+    # run dir for mask residue. Six legal body characters after `ghp_`, so the old
+    # floors read the mask literal as a token; the ticket that produced this string
+    # was itself a rotation ticket, which is how the loop kept paying for itself.
+    r'grep -rn "ghp_MASKED\|gho_MASKED\|ghu_MASKED\|ghs_MASKED\|ghr_MASKED'
+    r'\|github_pat_MASKED" /home/lumen/foreman/_runs/wq2282/',
+    "cfut_MASKED",                    # cloudflare: `MASKED` is 6 legal body chars
+    "PAT: github_pat_MASKED",         # kv-secret eats a masked github value
+    "sk-ant-xxxxxxxxMASKED",          # sk- backtracks into its own masked body
+]
+
+# One synthetic secret per RULE in PATTERNS, for the fixed-point property below.
+SECRETS = [
+    ("github", f'v = "{GHP}"'),
+    ("github", f'v = "{GHPAT}"'),
+    ("cloudflare", 'v = "cfut_v1.0-abcdefghijklmnopqrstuvwxyz0123456789"'),
+    ("sk-key", f'v = "{SK}"'),
+    ("slack", 'v = "xoxb-1234567890-abcdefgh"'),
+    ("aws", f'v = "{AKIA}"'),
+    ("kv-secret", 'GITEA_TOKEN="hunter2-hunter2-hunter2"'),
 ]
 
 
@@ -62,6 +82,31 @@ def test_false_positives_never_alarm():
         assert masked == text, f"{text!r} was rewritten to {masked!r}"
 
 
+def test_masking_never_re_arms_on_its_own_output():
+    """wq#2298: mask(mask(x)) must add nothing — masking is a fixed point after one
+    pass, for EVERY rule. A hit is a pri-1 rotate-today ticket whose worker reads
+    the masked artefacts, so a rule that matches `<prefix>MASKED` files a fresh
+    rotation ticket on every later read: wq#2282 -> #2292 -> #2298 were three of
+    them, all for values that were the literal `MASKED`. The label coverage assert
+    is the point of the test — a new pattern must prove it too."""
+    assert {label for label, _ in SECRETS} == {label for label, _, _ in masking.PATTERNS}
+    for label, text in SECRETS:
+        once, first = masking.mask_text(text)
+        assert first == [label], f"{label}: sample no longer fires ({first})"
+        twice, again = masking.mask_text(once)
+        assert again == [], f"{label}: masked output re-arms the alarm as {again}"
+        assert twice == once, f"{label}: second pass rewrote {once!r} to {twice!r}"
+        assert masking.scan(once)[1] == [], f"{label}: scan records its own output"
+
+
+def test_a_real_secret_next_to_a_masked_one_still_fires():
+    """The echo filter keys off the END of a match, so it must not swallow a live
+    token that merely shares a line with an already-masked one."""
+    masked, hits = masking.mask_text(f'prior: ghp_MASKED, current: {GHP}')
+    assert hits == ["github"] and GHP not in masked
+    assert masked == "prior: ghp_MASKED, current: ghp_MASKED"
+
+
 def test_token_engine_mirror_agrees():
     """The daemon keeps its own copy of the house set (it runs as `tokeneng`, off
     this import path). Drift between them is silent, so pin them to each other:
@@ -75,6 +120,11 @@ def test_token_engine_mirror_agrees():
     for real in (GHP, GHPAT, SK, AKIA):
         assert ted.mask_hits(f'v = "{real}"'), f"daemon stopped catching {real[:8]}"
         assert masking.mask_text(f'v = "{real}"')[1], f"masking stopped catching {real[:8]}"
+    # wq#2298: and the daemon must be silent on what masking.py WRITES, or quoting a
+    # masked artefact in a PR body fails the verb (line 182) instead of paging.
+    for label, text in SECRETS:
+        once = masking.mask_text(text)[0]
+        assert ted.mask_hits(once) == [], f"{label}: daemon trips on masked output"
 
 
 def test_clean_text_untouched():
