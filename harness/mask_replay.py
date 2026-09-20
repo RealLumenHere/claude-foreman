@@ -204,12 +204,48 @@ def tracked_text(repo=REPO_ROOT, extra=DOCTRINE_TRACKED):
     return blobs
 
 
+# wq#2326: a credential-shaped fixture gets SPLIT to keep the tripwire off its own
+# source — `"sk-ant-" + "oat01-padded"` at harness/tests/test_token_injection.py:24,
+# the split 345bf49 made so that reading that file would stop filing rotation
+# tickets. The runtime value still reaches the transcript whole, so a `find` over
+# the source misses it and the dummy reports as BURNED?: a rotate-today page for a
+# committed fixture, which is the same chain those splits were added to end.
+# Only a value whose body STRADDLES the seam is affected, which is why this hid for
+# so long — lines 21/22/25 of that file each keep a >=16-char body inside one
+# fragment and account fine, and line 24 alone is short enough to need `ant-` from
+# the left half. Seam whitespace is [ \t] and never a newline, so closing a seam
+# cannot move a line number; a concatenation split across LINES stays unaccounted,
+# which is the safe direction to fail.
+_SEAM = re.compile(r"[\"'][ \t]*\+?[ \t]*[\"']")
+_JOINED = {}
+
+
+def _seam_joined(text):
+    """`text` with same-line string-concatenation seams closed. Memoised: a value
+    that is unaccounted costs a pass over every tracked file, once per value."""
+    joined = _JOINED.get(text)
+    if joined is None:
+        joined = _JOINED[text] = _SEAM.sub("", text)
+    return joined
+
+
 def account(value, tracked):
-    """`path:line` of the first committed file holding this exact string, else None."""
+    """`path:line` of the first committed file holding this exact string, else None.
+
+    Falls back to the seam-closed view of each file, so a fixture assembled from
+    concatenated literals accounts for the whole value its runtime produces.
+    """
     for path, text in tracked.items():
         at = text.find(value)
         if at >= 0:
             return f"{path}:{text.count(chr(10), 0, at) + 1}"
+    for path, text in tracked.items():
+        if not _SEAM.search(text):
+            continue
+        joined = _seam_joined(text)
+        at = joined.find(value)
+        if at >= 0:
+            return f"{path}:{joined.count(chr(10), 0, at) + 1}"
     return None
 
 

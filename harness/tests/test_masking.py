@@ -51,6 +51,16 @@ FALSE_POSITIVES = [
     "https://github.com/ERGO-Code/highs_solver.git flagged UNSTRIPPABLE",
     "clone git@github.com:o/ghp_notes.git",          # right prefix, body too short
     "the risk-assessment-framework doc needs review",  # `sk-` inside `risk-`
+    # wq#2299's three sk-key hits, hash-matched back to their source by wq#2326:
+    # hyphenated prose from a PR body, in the line that was explaining this very
+    # bug. Every body is exactly 16 characters, because the greedy prefix gives
+    # back only as many letters as the floor demands — so a false positive always
+    # lands on the floor, where a length test cannot tell it from a short token.
+    # The digit run earns the second one its place: bodies admit digits, prefixes
+    # do not, so it is the only one of the three that exercises both charsets.
+    "`task-engine-daemon-restart`",
+    "`risk-assessment-matrix-2026`",
+    "`disk-usage-report-generator`",
     "ghp_MASKED and github_pat_MASKED",  # our OWN output must not re-arm the alarm
     # wq#2298: the line that fired THIS ticket — wq#2292's worker grepping its own
     # run dir for mask residue. Six legal body characters after `ghp_`, so the old

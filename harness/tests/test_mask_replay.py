@@ -79,6 +79,35 @@ def test_a_closed_pattern_defect_is_not_a_burn():
     assert mask_replay.unaccounted(records) == []
 
 
+def test_a_fixture_split_to_dodge_the_tripwire_still_accounts():
+    """wq#2326: the two defences have to agree. A credential-shaped fixture is split
+    across a concatenation so that reading its source stops filing rotation tickets
+    (345bf49), but the runtime value still reaches the transcript whole — so the
+    screen that asks "is this value committed?" must read the source the way Python
+    does. The body below straddles the seam, which is the only case that breaks: it
+    needs `ant-` from the left fragment to reach the 16-char floor, so a verbatim
+    find fails and the dummy reports BURNED?, paging a human to rotate a fixture."""
+    split = 'OAT_PADDED = "sk-ant-" + "oat01-padded"\n'
+    records = mask_replay.replay(0, tracked={"tests/test_token_injection.py": split},
+                                 items={"transcript:a": 'v = "sk-ant-oat01-padded"'})
+    assert [r["value_len"] for r in records] == [16]
+    assert records[0]["accounted_in"] == "tests/test_token_injection.py:1"
+    assert mask_replay.unaccounted(records) == []
+
+
+def test_closing_a_seam_cannot_move_a_line_number_or_invent_a_value():
+    """The seam pass rewrites the tree it reports line numbers from, so it is only
+    safe while it leaves newlines alone. It must also stay conservative about what
+    counts as a seam: a comma or a colon between two literals is a list or a dict,
+    not a concatenation, and joining those would manufacture a value no runtime ever
+    produces — an accounting that says "committed" for a live credential."""
+    tree = {"f.py": '\n\n\nA = "sk-ant-" + "oat01-padded"\n'}
+    assert mask_replay.account("ant-oat01-padded", tree) == "f.py:4"
+    for gap in ('", "', '": "', '" , "'):
+        pair = {"f.py": 'x = ["sk-ant-%soat01-padded"]\n' % gap}
+        assert mask_replay.account("ant-oat01-padded", pair) is None, gap
+
+
 def test_a_value_in_neither_screen_is_reported(tmp_path):
     records = mask_replay.replay(0, tracked={}, items={"snapshot:a": LIVE})
     assert records[0]["still_matches_today"] is True
@@ -244,6 +273,7 @@ def test_the_transcript_does_not_re_attribute_what_an_artefact_explains(tmp_path
 
 
 WQ2288_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2288")
+WQ2299_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2299")
 
 
 @pytest.mark.skipif(not os.path.isdir(WQ2288_RUN),
@@ -272,6 +302,29 @@ def test_the_live_rules_would_not_have_filed_wq2307():
     # what still matches is synthetic fixture text, which is burn_filter's screen
     assert all("tests/test_" in r["accounted_in"]
                for r in records if r["label"] == "kv-secret")
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2299_RUN),
+                    reason="wq#2299's run dir is not on this host")
+def test_wq2299_transcript_burned_nothing():
+    """wq#2326's verdict, pinned, under BOTH tables — the run is the one whose own
+    subject was the tripwire, so its corpus holds every dummy in
+    test_token_injection.py plus the PR prose explaining the bug. The three values
+    that filed wq#2326 are `task-engine-daemon-restart`, `risk-assessment-matrix-2026`
+    and `disk-usage-report-generator`, which is prose, and the fourth is the split
+    `OAT_PADDED` fixture. Nothing was rotated. A failure here means a value this run
+    saw has left the tree, or the seam pass stopped reading the split fixtures."""
+    for table in (None, mask_replay.CURRENT_PATTERNS):
+        records = mask_replay.replay(2299, patterns=table)
+        assert records, "wq#2299's artefacts should still reproduce the hit"
+        assert mask_replay.unaccounted(records) == []
+    # asserted against that one file, not against the whole tree: this test module
+    # now quotes the same split literal, and `account` returns the first tracked
+    # file holding the value — which sorts ahead of the fixture it is vouching for.
+    fixture = "harness/tests/test_token_injection.py"
+    with open(os.path.join(mask_replay.REPO_ROOT, fixture)) as fh:
+        assert mask_replay.account("ant-oat01-padded",
+                                   {fixture: fh.read()}) == f"{fixture}:24"
 
 
 def test_legacy_table_is_not_the_live_one():
