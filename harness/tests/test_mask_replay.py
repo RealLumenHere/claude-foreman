@@ -158,6 +158,75 @@ def test_cli_exit_code_separates_a_burn_from_a_fixture(tmp_path, monkeypatch):
     assert mask_replay.main(["4242"]) == 0
 
 
+# wq#2311: what a shell command printed. Split at the prefix, like test_masking.py —
+# the shape has to survive to assert time without the source line carrying it.
+PRINTED = "remote: https://" + "ghp_" + "Kq3mZ8" + "x" * 30 + "@github.com/o/r.git\n"
+TWO_ON_A_LINE = ("env: GH=" + "ghp_" + "A" * 36 + " SK=" + "sk-ant-" + "b" * 24 + "\n")
+
+
+def write_transcript(tmp_path, worktree, session, text):
+    """The CLI's layout: one directory per project, slugged from the worktree path."""
+    proj = tmp_path / "projects" / worktree.replace("/", "-")
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / f"{session}.jsonl").write_text(json.dumps({"text": text}) + "\n")
+    return tmp_path / "projects"
+
+
+def test_a_value_only_a_command_printed_is_found_in_the_transcript(tmp_path,
+                                                                   monkeypatch):
+    """wq#2311's gap. Masking runs before any artefact write, so a token in a Bash
+    stdout is on disk only as `<prefix>MASKED` — no snapshot, no Read, nothing for the
+    other three sources to find. Without the transcript this run replays clean and the
+    tool signs off on a burn."""
+    write_run(tmp_path, 4242, "sess-1")
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(tmp_path / "_runs"))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr(mask_replay, "PROJECTS_ROOT", str(tmp_path / "nowhere"))
+    without = mask_replay.replay(4242, tracked={})
+    assert not [r for r in without if r["prefix"] == "ghp_"]
+
+    root = write_transcript(tmp_path, "/home/lumen/worktrees/wq4242-a1", "sess-1",
+                            PRINTED)
+    monkeypatch.setattr(mask_replay, "PROJECTS_ROOT", str(root))
+    with_it = mask_replay.replay(4242, tracked={})
+    printed = [r for r in with_it if r["prefix"] == "ghp_"]
+    assert [r["first_seen_in"] for r in printed] == ["transcript:sess-1"]
+    assert printed[0]["value_len"] == 36 and printed[0]["still_matches_today"]
+    assert printed[0] in mask_replay.unaccounted(with_it)
+
+
+def test_a_transcript_record_masks_the_rest_of_its_line(tmp_path, monkeypatch):
+    """A raw line can hold two credentials. Splicing only the value the record is
+    about would print the other one into a ticket — the leak the whole tool exists to
+    avoid. Artefact lines are already masked, so this pass only ever bites here."""
+    write_run(tmp_path, 4242, "sess-1")
+    root = write_transcript(tmp_path, "/home/lumen/worktrees/wq4242-a1", "sess-1",
+                            TWO_ON_A_LINE)
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(tmp_path / "_runs"))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr(mask_replay, "PROJECTS_ROOT", str(root))
+    records = mask_replay.replay(4242, tracked={})
+    line = next(r["line"] for r in records if r["prefix"] == "ghp_")
+    assert "<github 36 chars>" in line
+    assert "b" * 24 not in line and "sk-ant-" in line and masking.MASK in line
+
+
+def test_the_transcript_does_not_re_attribute_what_an_artefact_explains(tmp_path,
+                                                                        monkeypatch):
+    """Ordered last for a reason: a hit an artefact can name keeps that name, because
+    `snapshot:<file>` tells the next reader where to look and `transcript:<id>` does
+    not."""
+    write_run(tmp_path, 4242, "sess-1")
+    root = write_transcript(tmp_path, "/home/lumen/worktrees/wq4242-a1", "sess-1",
+                            CALLED_IDENT)
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(tmp_path / "_runs"))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr(mask_replay, "PROJECTS_ROOT", str(root))
+    records = mask_replay.replay(4242, tracked={})
+    assert [r["first_seen_in"] for r in records
+            if r["label"] == "kv-secret"][0].startswith("snapshot:")
+
+
 WQ2288_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2288")
 
 

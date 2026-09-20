@@ -10,15 +10,26 @@ the answering worker's own reads re-arm the same alarm — wq#2278 -> #2290 -> #
 #2299 -> #2303 (ISSUE-LOG rows 568-571).
 
 The evidence is already on disk. A run leaves its snapshots (`_runs/wq<id>/snapshots`,
-the exact bytes a gated write or read froze), its event stream and its read cache (the
-file regions the Read tool pulled, `events/read_cache/<session>.jsonl`). Replaying that
-corpus under the rule set that was live WHEN THE TICKET WAS FILED reproduces the hit;
+the exact bytes a gated write or read froze), its event stream, its read cache (the
+file regions the Read tool pulled, `events/read_cache/<session>.jsonl`) and the CLI's
+own session transcript. Replaying that corpus under the rule set that was live WHEN
+THE TICKET WAS FILED reproduces the hit;
 hashing each matched value against the tracked tree then classifies it. A value that
 appears verbatim in a committed file is a fixture or a line of source — it cannot be a
 live credential, because the tree is public to every worker. A value nothing in the
 tree explains is the only shape that is actually burned, and the only one worth an
 instinct-4 rotation. That is wq#2290's burn_filter screen applied after the fact, to
 runs that predate it.
+
+The transcript is the only source that can answer the question the ticket actually
+asks — did a value reach the MODEL — for a value a shell command printed (wq#2311).
+Masking runs before any artefact write, so a token in a command's stdout is on disk
+only as `<prefix>MASKED`, in a snapshot of nothing and a read cache that never saw a
+Read call: the other three sources can be complete and still report a clean run. The
+CLI keeps what the model was actually sent in `~/.claude/projects/<slug>/<session>.
+jsonl`, unmasked, and a session id from episode.jsonl names it. Reading it here costs
+nothing at the model's context — only hashes leave this module — which is precisely
+the property that makes a "no rotation" verdict worth signing.
 
 This is the after-the-fact twin of harness/burn_filter.py (wq#2290), which screens the
 same way live, before the alarm pages. Two deliberate differences, both of which is why
@@ -39,6 +50,7 @@ Exit 0: every value is accounted for in the tree — nothing to rotate. Exit 1: 
 one is not. Exit 2: the run left no corpus to replay.
 """
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -59,6 +71,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # rotation backlog, so a replay that cannot see it reports them unaccounted.
 DOCTRINE_TRACKED = [os.environ.get("FOREMAN_DOCTRINE_LOG",
                                    "/home/lumen/kb/ISSUE-LOG.md")]
+
+# Where the CLI keeps session transcripts, one directory per project (the worktree
+# path with `/` replaced by `-`). Looked up by session id rather than by slug: a
+# resumed attempt keeps its id across worktrees, and the id is what episode.jsonl has.
+PROJECTS_ROOT = os.environ.get("CLAUDE_PROJECTS_ROOT",
+                               os.path.expanduser("~/.claude/projects"))
 
 # harness/masking.py at aa52797 — the rules that were live from 22:09 to 22:35 on
 # 2026-09-20, which is when most of the open rotation backlog was filed. Frozen
@@ -109,11 +127,17 @@ def session_ids(ticket_id):
 def corpus(ticket_id):
     """{source -> text} for everything wq<id>'s run left behind that the model saw.
 
-    Three sources, in the order they explain a hit: the gate snapshots (exact frozen
-    bytes of a read or written file), the run/event records, and the read cache — which
+    Four sources, in the order they explain a hit: the gate snapshots (exact frozen
+    bytes of a read or written file), the run/event records, the read cache — which
     holds no content, only `{path, offset, limit}` per Read call, so the window is
-    re-cut from the file now. A file edited since then re-cuts imperfectly; the
-    snapshots are the authority and are listed first.
+    re-cut from the file now — and last the CLI transcript. A file edited since then
+    re-cuts imperfectly; the snapshots are the authority and are listed first.
+
+    The transcript goes last on purpose. It is the most complete source (it is the
+    model's context verbatim) but the least legible — a hit attributed to it says only
+    "some tool printed this", where a snapshot names the file. Ordering it after the
+    other three means it adds the values nothing else recorded, and re-attributes
+    nothing.
     """
     items, run = {}, os.path.join(RUNS_ROOT, f"wq{ticket_id}")
     snaps = os.path.join(run, "snapshots")
@@ -131,7 +155,8 @@ def corpus(ticket_id):
             text = _read(os.path.join(EVENTS_DIR, name))
             if text:
                 items[f"events:{name}"] = text
-    for sid in session_ids(ticket_id):
+    sessions = session_ids(ticket_id)
+    for sid in sessions:
         cache = os.path.join(EVENTS_DIR, "read_cache", f"{sid}.jsonl")
         for line in (_read(cache) or "").splitlines():
             try:
@@ -141,6 +166,11 @@ def corpus(ticket_id):
             text = _read(rec.get("path", ""), rec.get("offset"), rec.get("limit"))
             if text:
                 items[f"read:{rec['path']}@{rec.get('offset')}"] = text
+    for sid in sessions:
+        for path in sorted(glob.glob(os.path.join(PROJECTS_ROOT, "*", f"{sid}.jsonl"))):
+            text = _read(path)
+            if text:
+                items[f"transcript:{sid}"] = text
     return items
 
 
@@ -216,7 +246,13 @@ def replay(ticket_id, patterns=None, tracked=None, items=None):
                 "first_seen_in": source,
                 "accounted_in": account(value, tracked),
                 "still_matches_today": value in today,
-                "line": line.replace(value, f"<{label} {len(value)} chars>")[:160],
+                # Splice this value out, then mask whatever else the line holds. On an
+                # artefact the second pass is a no-op (it is already masked, and
+                # masking is a fixed point), but a transcript line is raw: a record
+                # quoted into a ticket must not carry the credential NEXT to the one
+                # it is about.
+                "line": masking.mask_text(
+                    line.replace(value, f"<{label} {len(value)} chars>"))[0][:160],
             })
     return records
 
