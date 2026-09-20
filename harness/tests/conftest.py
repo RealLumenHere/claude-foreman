@@ -10,6 +10,21 @@ def _hallucination_guard_off(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_live_aq(monkeypatch, tmp_path):
+    """wq#1697: fworker's CAPABILITY_DENIED path files an aq row. No test may open one
+    on the live alert queue; capability_proposal fails open on a missing binary."""
+    import capability_proposal
+    monkeypatch.setattr(capability_proposal, "AQ_BIN", str(tmp_path / "no-aq"))
+
+
+@pytest.fixture(autouse=True)
+def _scratch_root_in_tmp(monkeypatch, tmp_path):
+    """wq#1697: build_env creates the wq scratch dir; keep it out of the real /tmp."""
+    import scratch_grant
+    monkeypatch.setattr(scratch_grant, "SCRATCH_ROOT", str(tmp_path / "scratch"))
+
+
+@pytest.fixture(autouse=True)
 def _no_refill_kick(monkeypatch):
     """wq#2069: every fworker exit calls trigger_refill(), which sudo-starts the LIVE
     lumen-foreman-dispatch.service. Subprocess fworkers inherit os.environ, so this

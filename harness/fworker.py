@@ -58,6 +58,8 @@ import failure_record
 import needs as needs_mod
 import capability
 import capability_lint
+import capability_proposal
+import scratch_grant
 import agents_spec
 import fire_gate
 import charging
@@ -1246,6 +1248,9 @@ def build_env(worker_id, model, effort, worktree, ticket_id, cli_profile=False):
     env["TMPDIR"] = tmp_dir
     env["TEMP"] = tmp_dir
     env["TMP"] = tmp_dir
+    # wq#1697: the /tmp/<agent>/ dir `wq claim` tells the worker to use is created here and
+    # handed to the CLI as an --add-dir (scratch_grant_dirs), so following wq is not a denial.
+    env["FOREMAN_SCRATCH_DIR"] = scratch_grant.ensure_scratch(env["WQ_AGENT"])
     # wq#900: registered primary trees for guard.sh's branch-freeze deny class —
     # computed here (router.LANE_REPO + static mirror) so the guard never depends
     # on an import at hook time.
@@ -1294,6 +1299,11 @@ def add_dirs_for(archetype, needs_dirs=None):
         if d not in out:
             out.append(d)
     return out
+
+def scratch_grant_dirs(ticket_id):
+    """wq#1697: the wq scratch dir for this ticket's owner identity, as an --add-dir."""
+    return [scratch_grant.scratch_dir(wq_identity(ticket_id))]
+
 
 def resolve_worker_settings(repo, ticket_id):
     """ISSUE-SOLUTIONS-fable.md §2b: render this repo's per-repo toolchain permission
@@ -2399,6 +2409,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # empty under FOREMAN_NEEDS_DISABLE=1 (rollback).
     ticket_needs = needs_mod.parse(ticket.get("needs"), ticket.get("detail", ""))
     add_dirs = add_dirs_for(archetype, ticket_needs.dirs)
+    add_dirs += [d for d in scratch_grant_dirs(ticket_id) if d not in add_dirs]
 
     if resume_session:
         worktree, branch = prior_worktree, None
@@ -3142,7 +3153,7 @@ def record_terminal_failure(ticket_id, attempt, classification, state, events,
         # wq#1331: a dir granted via needs:dir was reachable — without it triage would
         # wrongly re-propose the tag the ticket already carried.
         reachable = [worktree] + list(add_dirs_for(archetype or "standard-engineering",
-                                                    needs_dirs))
+                                                    needs_dirs)) + scratch_grant_dirs(ticket_id)
     except Exception:
         reachable = [worktree]
     rec = failure_record.build_failure_record(
@@ -3372,6 +3383,9 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
     log(f"BLOCKED [{block_class}/{rec['triage']}]: {reason}")
     if rec["triage"] != failure_record.TRIAGE_REAL_BLOCK:
         wq_block(ticket_id, reason)
+    # wq#1697 fix 3: a P0/P1 parked on a capability denial gets a visible aq row carrying
+    # the exact policy diff; fail-open, never eats the block.
+    capability_proposal.file_denied_row(ticket, rec, fpath)
     ntfy("foreman BLOCKED", f"wq#{ticket_id} [{block_class}]: {reason}", priority="high")
     return EXIT_BLOCKED
 
