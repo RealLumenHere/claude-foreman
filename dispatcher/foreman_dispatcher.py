@@ -1223,7 +1223,9 @@ class _PassCtx:
 
     def local_unit_models(self):
         """Model of every running local unit (wq#2130) — what LocalCapacity subtracts
-        from a backend's slots. Same per-pass `wq show` cache discipline as unit_counts."""
+        from a backend's slots. Same per-pass `wq show` cache discipline as unit_counts.
+        wq#2154: the unit's own --model wins over the ticket column, which keeps the group
+        name for a ticket the dispatcher resolved to a member."""
         models = []
         for u in self.units or []:
             if u not in self.unit_is_local:
@@ -1232,7 +1234,8 @@ class _PassCtx:
                 continue
             if u not in self.unit_model:
                 m = concurrency.TICKET_UNIT_RE.match(u)
-                self.unit_model[u] = concurrency.ticket_model(m.group("id")) if m else None
+                self.unit_model[u] = (concurrency.unit_model(u)
+                                      or (concurrency.ticket_model(m.group("id")) if m else None))
             models.append(self.unit_model[u])
         return models
 
@@ -1457,8 +1460,22 @@ def _admit_local(ctx, r):
     # wq#2130: local_ceiling above is now only the upper clamp. A model with a local_backends
     # row is sized by its own live slots; one without (cheap_cloud, or config not yet carrying
     # the block) and FOREMAN_LOCAL_CAPACITY=static keep the ceiling as the only bound.
+    # wq#2154: a group model (local-worker) is a routing name only. It is resolved to a member
+    # here — r["member"] then carries the slot accounting, the spawn env and the worker's
+    # --model — so the group name never reaches the governor CLI or fworker.
     cap = ctx.capacity()
-    if cap is not None and cap.knows(model):
+    if cap is None:
+        r["member"] = local_capacity.first_member(ctx.cfg.get("local_backends"), model)
+    elif cap.is_group(model):
+        member = cap.pick_member(model)
+        if member is None:
+            ctx.local_slots_full += 1
+            ctx.log.skip(tid, lane, "concurrency", "local_slots_full", model=model,
+                         detail=f"{model}: no healthy member with a free slot (all full, "
+                                f"probe failed or cooling down)")
+            return False
+        r["member"] = member
+    elif cap.knows(model):
         free = cap.free_slots(model)
         if free <= 0:
             ctx.local_slots_full += 1
@@ -1585,21 +1602,25 @@ def _spawn(ctx, r):
                                      ctx.dry_run, log)
 
     # stage 10 — spawn via the existing stack (MUST 7: router owns repo + tuple)
+    member = r.get("member")  # wq#2154: the backend a group ticket was resolved to
+    logged = {"member": member} if member else {}
     if ctx.dry_run:
         ctx.spawned[r["part"]] += 1  # count so dry-run reports caps honestly
-        log.emit("would_spawn", ticket=tid, lane=lane, model=model, repo=repo)
+        log.emit("would_spawn", ticket=tid, lane=lane, model=model, repo=repo, **logged)
         return False
     if sum(ctx.spawned.values()):
         time.sleep(random.uniform(*STAGGER))  # same stagger doctrine as spawner
     # wq#2130: a Mac-local spawn tells fworker its backend's first-frame budget and served
-    # ctx (FOREMAN_FIRST_FRAME_S / FOREMAN_SERVED_CTX); other spawns keep the 2-arg call.
+    # ctx (FOREMAN_FIRST_FRAME_S / FOREMAN_SERVED_CTX) — the member's, not the group's.
+    # wq#2154: a resolved member also rides as the worker's model (model_override); other
+    # spawns keep the 2-arg call.
     cap = ctx.capacity() if r["part"] == "local" else None
-    spawn_env = cap.spawn_env(model) if cap is not None else {}
-    unit = (spawner.dispatch_one(tid, repo, env=spawn_env) if spawn_env
-            else spawner.dispatch_one(tid, repo))
+    spawn_env = cap.spawn_env(member or model) if cap is not None else {}
+    kw = {k: v for k, v in (("env", spawn_env), ("model_override", member)) if v}
+    unit = spawner.dispatch_one(tid, repo, **kw)
     if unit is None:
         log.emit("error", stage="spawn", ticket=tid, lane=lane,
-                 reason="spawn_failed", model=model)
+                 reason="spawn_failed", model=model, **logged)
         ntfy(f"dispatcher: spawn failed for wq#{tid} ({lane}) — see dispatcher.log")
         return False
     ctx.spawned[r["part"]] += 1
@@ -1607,7 +1628,7 @@ def _spawn(ctx, r):
     state["lane_counts"][lane] = state["lane_counts"].get(lane, 0) + 1
     spawn_loop_guard.record_spawn(state, tid)  # wq#1703, before the save below
     save_state(state)  # §9: written after each spawn, atomically
-    log.emit("spawn", ticket=tid, lane=lane, model=model, repo=repo, unit=unit)
+    log.emit("spawn", ticket=tid, lane=lane, model=model, repo=repo, unit=unit, **logged)
     return True
 
 

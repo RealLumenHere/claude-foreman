@@ -1041,9 +1041,13 @@ def repo_for_ticket(ticket_id_or_dict):
     return repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
 
 
-def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None):
+def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None, model_override=None):
     """The fworker command for a ticket whose tuple is already on the ticket (or gets
     assigned now). Mirrors design/T2A §2.
+
+    model_override (wq#2154): the model the worker runs as, in place of the ticket's model
+    column. The dispatcher resolves the `local-worker` routing group to a member and spawns
+    on that; the column keeps the group name so a released ticket is re-resolved next pass.
 
     repo: explicit override. Omit it to derive the repo via repo_for_ticket() — LANE_REPO
     (wq#713) first, then a repo-sweep ticket's own repo hint (wq#1094/wq#1123) — raising
@@ -1064,6 +1068,8 @@ def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None):
         if not d.get("rung"):
             raise SystemExit(f"router: cannot route wq#{ticket_id}: {d['reasons']}")
         model, effort, arch = d["rung"]["model"], d["rung"]["effort"], d["archetype"]
+    if model_override:
+        model = model_override
     # RELIABILITY_SPEC.md §E: TimeoutStopSec>=60 on worker units so a `systemctl stop`/
     # unit-recycle sends SIGTERM and gives fworker's own child-kill escalation
     # (fworker.run_child, SIGTERM then SIGKILL) and the CLI's SessionEnd hooks time to

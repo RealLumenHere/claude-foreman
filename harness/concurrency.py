@@ -39,7 +39,7 @@ CLOUD_CEILING = 3
 # bounded by Lumen CPU instead)".
 #
 # wq#2130: the sets are read from research/models.yaml pools instead of a hand-kept tuple.
-# `local` = the Macs (counted in Mac slots); `cheap_cloud` = deepseek-v4-flash, a paid
+# `local` = the Macs (MAC_POOL_MODELS, counted in Mac slots); `cheap_cloud` = deepseek-v4-flash, a paid
 # vendor API: exempt from every Anthropic gate like the Macs, but NOT a Mac slot.
 MODELS_YAML = os.environ.get(
     "FOREMAN_MODELS_YAML",
@@ -65,10 +65,13 @@ def _pool_models(pool, fallback, path=None):
     return found or tuple(fallback)
 
 
-LOCAL_POOL_MODELS = _pool_models("local", _FALLBACK_LOCAL) + LOCAL_GROUP_MODELS
+MAC_POOL_MODELS = _pool_models("local", _FALLBACK_LOCAL) + LOCAL_GROUP_MODELS
 CHEAP_CLOUD_MODELS = _pool_models("cheap_cloud", _FALLBACK_CHEAP_CLOUD)
-# Everything that never draws on the Anthropic login (observed-burn, governor, partition).
-ANTHROPIC_EXEMPT_MODELS = LOCAL_POOL_MODELS + CHEAP_CLOUD_MODELS
+# LOCAL_POOL_MODELS keeps its original meaning (wq#618): every trusted route that never draws
+# on the Anthropic login (observed-burn, governor, partition), deepseek included. The
+# Mac-only set is MAC_POOL_MODELS.
+LOCAL_POOL_MODELS = MAC_POOL_MODELS + CHEAP_CLOUD_MODELS
+ANTHROPIC_EXEMPT_MODELS = LOCAL_POOL_MODELS
 
 # wq#2081: local-rung ceiling — bounded by the Macs' hardware, never by Anthropic quota
 # (models.yaml concurrency.local_max; config.json local_ceiling overrides it per host).
@@ -82,7 +85,7 @@ def _in(model, names):
 def is_mac_local_model(model):
     """True when `model` runs on a Mac (models.yaml pool `local`): the only class that
     occupies a Mac slot."""
-    return _in(model, LOCAL_POOL_MODELS)
+    return _in(model, MAC_POOL_MODELS)
 
 
 def is_cheap_cloud_model(model):
@@ -146,6 +149,27 @@ def ticket_model(ticket_id, wq_bin=None):
             v = v.strip()
             return v if v not in ("", "None") else None
     return None
+
+
+_UNIT_MODEL_RE = re.compile(r"fworker\.py\s+run\b.*?--model\s+([^\s;'\"]+)")
+
+
+def unit_model(name, timeout=5):
+    """`--model` on a running worker unit's fworker command line (wq#2154), read from
+    `systemctl show -p ExecStart --value lumen-job-<name>-*.service`. What a unit really
+    runs on can differ from its ticket's model column: the dispatcher spawns a `local-worker`
+    ticket on a concrete member and the column keeps the group name. None on any failure
+    (systemctl missing, timeout, no match) — callers fall back to the ticket column."""
+    try:
+        p = subprocess.run(["systemctl", "show", "-p", "ExecStart", "--value",
+                             f"lumen-job-{name}-*.service"],
+                            capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    m = _UNIT_MODEL_RE.search(p.stdout)
+    return m.group(1) if m else None
 
 
 def is_local_unit(name, model_lookup=ticket_model):

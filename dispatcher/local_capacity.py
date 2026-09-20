@@ -7,12 +7,16 @@ looked like one pool, and a dead box still "had room". This module sizes each ba
 its own from config.json `local_backends`:
 
     "hathor-llama8b": {"health_url": ..., "slots": 2, "served_ctx": 32768, "first_frame_s": 1500}
-    "local-worker":   {"group": [<backend names>], "first_frame_s": 1500, "served_ctx": 32768}
+    "local-worker":   {"group": [<backend names>]}
 
 `free_slots(model)` = slots - running units pinned/routed to that model, and 0 when the
 backend's health probe fails (2 s, once per pass, cached) or the backend is listed in
 runtime/backend_cooldown.json. A group entry (the LiteLLM `local-worker` group) is the sum
 over its healthy members, less the units running on the group name itself.
+
+The group name is a ROUTING name (wq#2154): `pick_member(group)` resolves it to a concrete
+member at admit time and the spawn carries the member as the worker's model, so neither the
+governor CLI nor fworker ever sees the group (they only know the per-host names).
 
 Also owns runtime/local_pause.json, the file circuit_breaker.py writes when the LOCAL pool
 trips and the dispatcher's local partition reads. It is a separate file from
@@ -47,6 +51,18 @@ def capacity_mode():
 def base_name(model):
     """`hathor-llama8b@low` -> `hathor-llama8b`; None stays None."""
     return model.split("@", 1)[0] if model else model
+
+
+def first_member(backends, group):
+    """First configured member of `group` with a row, or None. The static-mode resolver
+    (FOREMAN_LOCAL_CAPACITY=static has no health view): the group name still must not leave
+    the dispatcher."""
+    g = (backends or {}).get(base_name(group)) if isinstance(backends, dict) else None
+    members = g.get("group") if isinstance(g, dict) else None
+    for m in members if isinstance(members, list) else []:
+        if isinstance(m, str) and isinstance((backends or {}).get(m), dict):
+            return m
+    return None
 
 
 def http_probe(url, timeout=PROBE_TIMEOUT_S):
@@ -139,6 +155,9 @@ class LocalCapacity:
     def knows(self, model):
         return isinstance(self.backends.get(base_name(model)), dict)
 
+    def is_group(self, model):
+        return self._members(base_name(model)) is not None
+
     def _entry(self, name):
         e = self.backends.get(name)
         return e if isinstance(e, dict) else {}
@@ -193,26 +212,38 @@ class LocalCapacity:
         s = self._entry(name).get("slots")
         return s if isinstance(s, int) and not isinstance(s, bool) and s > 0 else 0
 
+    def pick_member(self, group):
+        """The backend a `group` ticket runs on (wq#2154): the healthy, not-cooling member
+        with the most free slots, ties in config order. None when `group` is not a group or
+        no member has a free slot. The group name is a routing name only — it must never
+        reach the governor, fworker or a unit's --model, so the caller spawns on this."""
+        name = base_name(group)
+        members = self._members(name)
+        if members is None or self.free_slots(name) <= 0:
+            return None
+        running = self._running_counts()
+        best, best_free = None, 0
+        for m in members:
+            if not (self.knows(m) and self.healthy(m)):
+                continue
+            free = self._slots(m) - running.get(m, 0)
+            if free > best_free:
+                best, best_free = m, free
+        return best
+
     def spawn_env(self, model):
         """{FOREMAN_FIRST_FRAME_S, FOREMAN_SERVED_CTX} for a spawn on `model`; {} when the
-        model has no local_backends row. A group's served ctx is the smallest healthy
-        member's — the request may land on any of them."""
+        model has no local_backends row. Callers pass the resolved member, never the group
+        (a group row carries no budget of its own)."""
         name = base_name(model)
-        if not self.knows(name):
+        if not self.knows(name) or self._members(name) is not None:
             return {}
         e = self._entry(name)
-        members = self._members(name)
-        ctx = e.get("served_ctx")
-        if members is not None:
-            live_ctx = [self._entry(m).get("served_ctx") for m in members
-                        if self.knows(m) and self.healthy(m)]
-            live_ctx = [c for c in live_ctx if isinstance(c, int)]
-            ctx = min(live_ctx) if live_ctx else ctx
         env = {}
         if isinstance(e.get("first_frame_s"), int):
             env["FOREMAN_FIRST_FRAME_S"] = str(e["first_frame_s"])
-        if isinstance(ctx, int):
-            env["FOREMAN_SERVED_CTX"] = str(ctx)
+        if isinstance(e.get("served_ctx"), int):
+            env["FOREMAN_SERVED_CTX"] = str(e["served_ctx"])
         return env
 
     def snapshot(self):

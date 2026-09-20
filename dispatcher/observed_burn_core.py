@@ -25,7 +25,7 @@ REPO_ROOT = os.path.normpath(os.path.join(DISPATCHER_DIR, ".."))
 sys.path.insert(0, DISPATCHER_DIR)
 sys.path.insert(0, os.path.join(REPO_ROOT, "harness"))
 from burn_rate import FABLE_POOL, PASS_POOLS  # noqa: E402,F401 (re-exported for callers)
-from concurrency import ANTHROPIC_EXEMPT_MODELS as LOCAL_POOL_MODELS  # noqa: E402  # wq#2130: deepseek stays exempt
+from concurrency import LOCAL_POOL_MODELS  # noqa: E402
 
 # Minimum worker-hours before a window's delta is trusted as a rate (ticket: ">=2
 # worker-hours") — below this, noise in the percent reading dominates the estimate.

@@ -30,11 +30,21 @@ def test_pool_falls_back_when_yaml_is_unusable(tmp_path):
     assert concurrency._pool_models("local", ("fb",), str(bad)) == ("fb",)
 
 
-def test_live_models_yaml_local_pool_is_the_three_macs_plus_group():
-    assert set(concurrency.LOCAL_POOL_MODELS) == {
+def test_live_models_yaml_mac_pool_is_the_three_macs_plus_group():
+    assert set(concurrency.MAC_POOL_MODELS) == {
         "qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker"}
     assert concurrency.CHEAP_CLOUD_MODELS == ("deepseek-v4-flash",)
-    assert "deepseek-v4-flash" not in concurrency.LOCAL_POOL_MODELS
+    assert "deepseek-v4-flash" not in concurrency.MAC_POOL_MODELS
+
+
+def test_local_pool_models_keeps_its_original_meaning_the_anthropic_exempt_set():
+    """wq#2154: LOCAL_POOL_MODELS is what observed_burn_core, governor and judgment have
+    always meant by it — deepseek included, the four original names all present."""
+    assert {"deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b",
+            "hathor-llama8b"} <= set(concurrency.LOCAL_POOL_MODELS)
+    assert concurrency.LOCAL_POOL_MODELS == concurrency.ANTHROPIC_EXEMPT_MODELS
+    assert set(concurrency.LOCAL_POOL_MODELS) == (set(concurrency.MAC_POOL_MODELS)
+                                                  | set(concurrency.CHEAP_CLOUD_MODELS))
 
 
 def test_deepseek_is_exempt_but_not_a_mac_slot():
@@ -57,6 +67,41 @@ def test_deepseek_unit_is_still_excluded_from_the_cloud_count():
     lookup = lambda tid: {"1": "deepseek-v4-flash", "2": "claude-sonnet-5"}.get(tid)  # noqa: E731
     assert concurrency.is_local_unit("fworker-wq1", lookup) is True
     assert concurrency.is_local_unit("fworker-wq2", lookup) is False
+
+
+EXEC_START = ("{ path=/bin/bash ; argv[]=/bin/bash -c PATH=/x; if command -v -- python3; then "
+              "{ env FOREMAN_FIRST_FRAME_S=1500 python3 /f/harness/fworker.py run --ticket 7 "
+              "--repo /r --model %s --effort high ; } fi ; ignore_errors=no ; }\n")
+
+
+def fake_systemctl(monkeypatch, stdout, returncode=0):
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return concurrency.subprocess.CompletedProcess(cmd, returncode, stdout, "")
+
+    monkeypatch.setattr(concurrency.subprocess, "run", run)
+    return calls
+
+
+def test_unit_model_reads_the_model_off_the_units_command_line(monkeypatch):
+    calls = fake_systemctl(monkeypatch, EXEC_START % "hathor-llama8b")
+    assert concurrency.unit_model("fworker-wq7") == "hathor-llama8b"
+    assert calls == [["systemctl", "show", "-p", "ExecStart", "--value",
+                      "lumen-job-fworker-wq7-*.service"]]
+
+
+def test_unit_model_is_none_when_it_cannot_tell(monkeypatch):
+    fake_systemctl(monkeypatch, "")
+    assert concurrency.unit_model("fworker-wq7") is None
+    fake_systemctl(monkeypatch, EXEC_START % "x", returncode=1)
+    assert concurrency.unit_model("fworker-wq7") is None
+
+    def boom(cmd, **kw):
+        raise concurrency.subprocess.TimeoutExpired(cmd, 5)
+    monkeypatch.setattr(concurrency.subprocess, "run", boom)
+    assert concurrency.unit_model("fworker-wq7") is None
 
 
 def test_observed_burn_still_treats_deepseek_as_non_anthropic():

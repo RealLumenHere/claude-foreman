@@ -217,6 +217,23 @@ def test_duplicate_refused_when_owner_unit_still_running(spawner_env, monkeypatc
     assert calls == [], "a live owner's reservation must still refuse the duplicate spawn"
 
 
+def test_model_override_is_what_the_governor_is_asked_and_the_worker_runs_as(
+        spawner_env, monkeypatch):
+    """wq#2154: a `local-worker` ticket the dispatcher resolved to a member — the governor
+    check and fworker's --model both get the override, never the ticket column's model
+    (`wq add` refuses the group name, so the column here is just some other model)."""
+    t = add_ticket("scratch spawner group ticket", model="hathor-llama8b")
+    asked = []
+    monkeypatch.setattr(spawner, "governor_allows", lambda m: asked.append(m) or True)
+
+    assert spawner.dispatch_one(t, spawner_env["repo"], model_override="nephthys-qwen14b")
+
+    assert asked == ["nephthys-qwen14b"]
+    argv = read_calls(spawner_env["log_file"])[0]["args"]
+    assert argv[argv.index("--model") + 1] == "nephthys-qwen14b"
+    assert router.wq_show(t)["model"] == "hathor-llama8b"
+
+
 def test_settle_spawn_clears_reservation(spawner_env):
     """wq#1893 settle half: once fworker has written attempt-N.json for (ticket,
     attempt) — harness/fworker.py's write_attempt_state calls this — the row must

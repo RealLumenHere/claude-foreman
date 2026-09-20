@@ -23,11 +23,15 @@ NEPH_URL = "http://nephthys.test/api/ps"
 BACKENDS = {
     "hathor-llama8b": {"health_url": HATHOR_URL, "slots": 2, "served_ctx": 32768,
                        "first_frame_s": 1500},
-    "nephthys-qwen14b": {"health_url": NEPH_URL, "slots": 2, "served_ctx": 32768,
-                         "first_frame_s": 1500},
-    "local-worker": {"group": ["hathor-llama8b", "nephthys-qwen14b"], "served_ctx": 32768,
-                     "first_frame_s": 1500},
+    "nephthys-qwen14b": {"health_url": NEPH_URL, "slots": 2, "served_ctx": 16384,
+                         "first_frame_s": 2400},
+    "local-worker": {"group": ["hathor-llama8b", "nephthys-qwen14b"]},
 }
+
+
+class Calls(list):
+    """[(ticket, env)] per spawn; `models` maps ticket -> the model_override it was given."""
+    models = None
 
 
 def probe_up(monkeypatch, *urls):
@@ -36,17 +40,25 @@ def probe_up(monkeypatch, *urls):
 
 
 def spawn_stub(denv, monkeypatch):
-    """Stand-in for spawner.dispatch_one. Returns the [(ticket, env-kwarg)] call list."""
-    calls = []
+    """Stand-in for spawner.dispatch_one. Returns the [(ticket, env-kwarg)] call list. The
+    spawned unit reports the model it was given as its own --model (what the real unit's
+    command line says); the ticket column keeps whatever the test put there."""
+    calls = Calls()
+    calls.models = {}
+    unit_models = {}
 
-    def dispatch_one(tid, repo, env=None):
+    def dispatch_one(tid, repo, env=None, model_override=None):
         units = json.loads(denv["units_state"].read_text())
         units.append(f"fworker-wq{tid}")
         denv["units_state"].write_text(json.dumps(units))
         calls.append((tid, env))
+        calls.models[tid] = model_override
+        if model_override:
+            unit_models[f"fworker-wq{tid}"] = model_override
         return f"lumen-job-fworker-wq{tid}-1"
 
     monkeypatch.setattr(spawner, "dispatch_one", dispatch_one)
+    monkeypatch.setattr(fd.concurrency, "unit_model", unit_models.get)
     return calls
 
 
@@ -193,13 +205,117 @@ def test_local_spawn_carries_first_frame_and_served_ctx_env(denv, monkeypatch):
                                    "FOREMAN_SERVED_CTX": "32768"}, cloud: None}
 
 
-def test_group_env_uses_the_smallest_healthy_member_ctx():
-    backends = json.loads(json.dumps(BACKENDS))
-    backends["nephthys-qwen14b"]["served_ctx"] = 8192
-    cap = local_capacity.LocalCapacity(backends, lambda: [], probe=lambda u: True)
-    assert cap.spawn_env("local-worker")["FOREMAN_SERVED_CTX"] == "8192"
-    cap = local_capacity.LocalCapacity(backends, lambda: [], probe=lambda u: u == HATHOR_URL)
-    assert cap.spawn_env("local-worker")["FOREMAN_SERVED_CTX"] == "32768"
+def test_group_row_carries_no_spawn_env():
+    """The group's budget comes from the resolved member; a group name spawns nothing."""
+    cap = local_capacity.LocalCapacity(BACKENDS, lambda: [], probe=lambda u: True)
+    assert cap.spawn_env("local-worker") == {}
+    assert cap.spawn_env("nephthys-qwen14b") == {"FOREMAN_FIRST_FRAME_S": "2400",
+                                                 "FOREMAN_SERVED_CTX": "16384"}
+
+
+# ---- group resolution (wq#2154) ---------------------------------------------------------
+
+def test_group_ticket_spawns_on_a_member_with_that_members_env(denv, monkeypatch):
+    """A local-worker ticket is spawned with model_override = a member and the env of that
+    member; the ticket column keeps the group name."""
+    write_config(denv, local_backends=BACKENDS)
+    probe_up(monkeypatch, HATHOR_URL, NEPH_URL)
+    calls = spawn_stub(denv, monkeypatch)
+    tid = add_ticket("group item", model="local-worker")
+    assert fd.run_pass() == 0
+    assert calls.models[tid] == "hathor-llama8b"    # tie on free slots: config order
+    assert dict(calls)[tid] == {"FOREMAN_FIRST_FRAME_S": "1500", "FOREMAN_SERVED_CTX": "32768"}
+    assert router.wq_show(tid)["model"] == "local-worker"
+    spawn = log_events(denv, "spawn")[0]
+    assert spawn["model"] == "local-worker" and spawn["member"] == "hathor-llama8b"
+
+
+def test_group_ticket_moves_to_nephthys_when_hathor_is_full(denv, monkeypatch):
+    write_config(denv, local_backends=BACKENDS)
+    probe_up(monkeypatch, HATHOR_URL, NEPH_URL)
+    calls = spawn_stub(denv, monkeypatch)
+    for i in range(2):
+        add_ticket(f"hathor item {i}", model="hathor-llama8b", pri=1)
+    grp = add_ticket("group item", model="local-worker", pri=2)
+    assert fd.run_pass() == 0
+    assert calls.models[grp] == "nephthys-qwen14b"
+    assert dict(calls)[grp] == {"FOREMAN_FIRST_FRAME_S": "2400", "FOREMAN_SERVED_CTX": "16384"}
+
+
+def test_group_ticket_logs_local_slots_full_when_every_member_is_down_or_cooling(
+        denv, monkeypatch):
+    write_config(denv, local_backends=BACKENDS)
+    probe_up(monkeypatch, NEPH_URL)                                   # hathor's probe fails
+    (denv["tmp"] / "backend_cooldown.json").write_text(json.dumps(
+        {"nephthys-qwen14b": {"until": time.time() + 600}}))          # nephthys is cooling
+    calls = spawn_stub(denv, monkeypatch)
+    add_ticket("group item", model="local-worker")
+    assert fd.run_pass() == 0
+    assert calls == []
+    assert [s["reason"] for s in log_events(denv, "skip")] == ["local_slots_full"]
+    assert _pass_end(denv)["local_slots_full"] == 1
+
+
+def test_pick_member_takes_the_most_free_then_config_order():
+    def cap(running, up=(HATHOR_URL, NEPH_URL)):
+        return local_capacity.LocalCapacity(BACKENDS, lambda: running, probe=lambda u: u in up)
+    assert cap([]).pick_member("local-worker") == "hathor-llama8b"          # tie: config order
+    assert cap(["hathor-llama8b"]).pick_member("local-worker") == "nephthys-qwen14b"
+    assert cap(["hathor-llama8b"] * 2).pick_member("local-worker") == "nephthys-qwen14b"
+    assert cap(["hathor-llama8b"] * 2 + ["nephthys-qwen14b"] * 2).pick_member(
+        "local-worker") is None
+    assert cap([], up=(HATHOR_URL,)).pick_member("local-worker") == "hathor-llama8b"
+    assert cap([], up=()).pick_member("local-worker") is None
+    assert cap([]).pick_member("hathor-llama8b") is None                     # not a group
+
+
+def test_static_lever_still_resolves_the_group_to_a_member(denv, monkeypatch):
+    """The rollback lever drops health and slots, not the rule that the group name never
+    leaves the dispatcher: the first configured member is used."""
+    monkeypatch.setenv("FOREMAN_LOCAL_CAPACITY", "static")
+    write_config(denv, local_backends=BACKENDS)
+    calls = spawn_stub(denv, monkeypatch)
+    tid = add_ticket("group item", model="local-worker")
+    assert fd.run_pass() == 0
+    assert calls.models[tid] == "hathor-llama8b"
+
+
+def test_unit_started_on_a_member_consumes_that_members_slot(denv, monkeypatch):
+    """A unit whose command line says --model hathor-llama8b for a ticket whose column says
+    local-worker occupies a hathor slot, not a group slot."""
+    write_config(denv, local_backends=BACKENDS)
+    probe_up(monkeypatch, HATHOR_URL, NEPH_URL)
+    calls = spawn_stub(denv, monkeypatch)
+    running = add_ticket("running group item", model="local-worker")
+    _seed_running([f"fworker-wq{running}"])
+    monkeypatch.setattr(fd.concurrency, "unit_model",
+                        lambda u: "hathor-llama8b" if u == f"fworker-wq{running}" else None)
+    for i in range(3):
+        add_ticket(f"hathor item {i}", model="hathor-llama8b")
+    assert fd.run_pass() == 0
+    assert len(calls) == 1          # hathor: 2 slots, one already held by the group ticket
+
+
+def test_local_unit_models_prefers_the_units_own_model_over_the_ticket_column(monkeypatch):
+    monkeypatch.setattr(fd.concurrency, "is_local_unit", lambda u: True)
+    monkeypatch.setattr(fd.concurrency, "ticket_model", lambda tid: "local-worker")
+    seen = []
+    monkeypatch.setattr(fd.concurrency, "unit_model",
+                        lambda u: seen.append(u) or {"fworker-wq1": "hathor-llama8b"}.get(u))
+    ctx = fd._PassCtx({}, None, {}, False)
+    ctx.units = ["fworker-wq1", "fworker-wq2"]
+    assert ctx.local_unit_models() == ["hathor-llama8b", "local-worker"]
+    ctx.local_unit_models()
+    assert seen == ["fworker-wq1", "fworker-wq2"]     # cached for the pass
+
+
+def test_dispatch_cmd_model_override_replaces_the_column_model(denv):
+    tid = add_ticket("group item", model="local-worker")
+    plain = router.dispatch_cmd(tid, denv["repo"])
+    over = router.dispatch_cmd(tid, denv["repo"], model_override="nephthys-qwen14b")
+    assert plain[plain.index("--model") + 1] == "local-worker"
+    assert over[over.index("--model") + 1] == "nephthys-qwen14b"
+    assert router.wq_show(tid)["model"] == "local-worker"
 
 
 def test_dispatch_cmd_puts_env_in_front_of_the_worker(denv):

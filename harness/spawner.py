@@ -216,11 +216,14 @@ def wait_for_slot(prefix, ceiling, max_wait_s):
         waited += SLOT_POLL_S
 
 
-def dispatch_one(ticket_id, repo, env=None):
+def dispatch_one(ticket_id, repo, env=None, model_override=None):
     """`env` (wq#2130): extra KEY=VALUE pairs for the worker process. lumen-run forwards only
-    PATH into the unit, so router.dispatch_cmd puts them in front of the fworker command."""
+    PATH into the unit, so router.dispatch_cmd puts them in front of the fworker command.
+    `model_override` (wq#2154): the concrete model to run as (a routing group resolved to a
+    member) — the governor check and the fworker --model both use it, never the ticket
+    column's group name."""
     t = router.wq_show(ticket_id)
-    model = t.get("model")
+    model = model_override or t.get("model")
     if model in (None, "", "None"):
         d = router.assign(ticket_id)
         if not d.get("rung"):
@@ -236,8 +239,8 @@ def dispatch_one(ticket_id, repo, env=None):
         log(f"wq#{ticket_id} attempt {attempt}: spawn reservation already held — "
             f"duplicate spawn, refusing before Popen (E.5)")
         return None
-    cmd = (router.dispatch_cmd(ticket_id, repo, env=env) if env
-           else router.dispatch_cmd(ticket_id, repo))
+    kw = {k: v for k, v in (("env", env), ("model_override", model_override)) if v}
+    cmd = router.dispatch_cmd(ticket_id, repo, **kw)
     log(f"spawning wq#{ticket_id}: {' '.join(cmd)}")
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
