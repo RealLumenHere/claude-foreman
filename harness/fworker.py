@@ -777,6 +777,51 @@ ROTATION_TITLE_PREFIX = "[rotation] burned credential in wq#"
 # necessarily this repo; mask_replay resolves the tracked tree from its own __file__.
 MASK_REPLAY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mask_replay.py")
 
+ROTATION_DETAIL_PATH = os.path.join(HARNESS_DIR, "prompts", "rotation-ticket.md")
+
+
+def rotation_detail(ticket_id, attempt, tag, hits_path):
+    """The rotation ticket's detail, read from disk PER ALARM (wq#2404).
+
+    The third thing this process froze at spawn. masking.deployed() reloads the rule
+    table and burn_filter.deployed() the screen, but the ticket TEXT was a literal in
+    this file, and a literal in a long-lived process is the version it was spawned
+    with: wq#2348 was filed at 23:01:44Z carrying the template 32aa000 had replaced at
+    22:40:21Z — 21 minutes earlier — because the process writing it had imported this
+    module at 22:14:43Z. The text is the only part of the alarm the answering worker
+    actually reads, and a stale one sends them down the hand-grep path (wq#2332) that
+    re-arms the alarm. A file is reloadable; this module is not.
+
+    Failure is one-directional, like both siblings: an unreadable, unexpanded or
+    gutted template never quiets the alarm, it only falls back to the frozen text
+    below, which carries the two pointers a row cannot be settled without — the
+    replay command and the forensics path (wq#2288 arrived without them and was
+    unactionable).
+    """
+    values = {"TICKET_ID": str(ticket_id), "ATTEMPT": str(attempt), "TAG": tag,
+              "MASK_REPLAY": MASK_REPLAY, "HITS_PATH": hits_path}
+    try:
+        with open(ROTATION_DETAIL_PATH) as f:
+            text = f.read().strip()
+        for key, value in values.items():
+            text = text.replace("{{%s}}" % key, value)
+        missing = [p for p in (f"{MASK_REPLAY} {ticket_id}", hits_path, tag)
+                   if p not in text]
+        if missing or "{{" in text:
+            raise ValueError(f"missing {missing or 'an expansion'}")
+        return text
+    except Exception as e:  # noqa: BLE001
+        log(f"WARN: rotation-ticket template unusable ({e!r}) — filing the frozen text")
+        return (f"wq#2275 mask tripwire: pattern(s) {tag} fired on wq#{ticket_id} "
+                f"attempt {attempt}'s stream-json. The artefacts are masked; the value "
+                f"reached the model context, so per instinct 4 it is burned. FIRST run "
+                f"`python3 {MASK_REPLAY} {ticket_id}` (wq#2307) — zero unaccounted "
+                f"values means committed text, not a credential: settle the row on that "
+                f"evidence and rotate nothing. The same evidence raw is in {hits_path} "
+                f"(prefix, length, 12 hex of sha256, masked context; no value). Rotate "
+                f"whatever is unaccounted today and close that leak path. "
+                f"[{ROTATION_DETAIL_PATH} was unreadable — text frozen at spawn]")
+
 
 def rotation_chain_refire(ticket_id, attempt, tag, hits_path):
     """wq#2299: True when this alarm fired inside an investigation of one of the
@@ -846,26 +891,12 @@ def mask_alarm(ticket_id, attempt, labels, records=None):
          priority="high")
     try:
         p = wq("add", "--lane", "fleet", "--pri", "1",
+               # The TITLE stays a literal here on purpose: the chain guard above
+               # matches ROTATION_TITLE_PREFIX in it, so a deployed file must not be
+               # able to rename a row out of its own chain.
                "--title", f"[rotation] burned credential in wq#{ticket_id} "
                           f"transcript ({tag})",
-               "--detail", f"wq#2275 mask tripwire: mask-secrets pattern(s) {tag} "
-                           f"fired on wq#{ticket_id} attempt {attempt}'s stream-json. "
-                           f"Artefacts on disk are masked, but the value reached the "
-                           f"model context, so per instinct 4 it is burned. FIRST run "
-                           f"`python3 {MASK_REPLAY} {ticket_id}` (wq#2307): it replays "
-                           f"that run's frozen corpus under the rules live when this "
-                           f"fired, names every value by sha256 against the tracked "
-                           f"tree, and reports how many are unaccounted. Zero "
-                           f"unaccounted means committed text, not a credential — "
-                           f"settle the row on that evidence, rotate nothing. Reading "
-                           f"the artefacts by hand instead is what re-arms this alarm "
-                           f"and files the next ticket (wq#2290 -> #2297 -> #2303). "
-                           f"The same evidence raw is in {hits_path}: each record "
-                           f"carries the kept prefix, the value's length, 12 hex of "
-                           f"its sha256 (sha256 a candidate and compare; the value "
-                           f"itself is nowhere on disk) and a masked context window "
-                           f"showing the command or file it printed from. Rotate "
-                           f"whatever is unaccounted today, and close that leak path.",
+               "--detail", rotation_detail(ticket_id, attempt, tag, hits_path),
                "--no-probe", "rotation is a manual credential action; "
                              "no deterministic liveness probe exists")
         out = ((p.stdout or "") + (p.stderr or "")).strip()
@@ -920,6 +951,91 @@ def drop_stale_labels(burned, raw, ticket_id, attempt):
     return [h for h in burned if h in labels]
 
 
+_MASK_STATE = {}
+
+
+def mask_state(ticket_id):
+    """The tripwire's dedup bookkeeping for a TICKET (wq#2404).
+
+    It used to be two sets local to run_child(), so it reset on every attempt — and
+    an fworker process does not: it holds the whole ticket, spawning attempt 2 into
+    the same interpreter that scored attempt 1. A retry therefore re-read the same
+    committed source and re-filed it. wq#2343 (23:00:04Z, attempt 1) and wq#2348
+    (23:01:44Z, attempt 2) are that pair: one run, 110 seconds apart, sharing the
+    `cloudflare` label, two pri-1 rotate-today rows for the same fixtures.
+
+    Keyed per ticket rather than process-global so the sets stay small and say what
+    they are; held in the IMPORTED module on purpose, since a hot-reloaded copy of
+    the alarm path would bring its own empty ones and dedup nothing.
+    """
+    return _MASK_STATE.setdefault(str(ticket_id), {"alarmed": set(), "seen": set()})
+
+
+def burned_labels(screen, fresh, raw, seen, live_secrets, repo_roots):
+    """(burned, benign, values) — how one provenance `screen` reads this line.
+
+    Factored out of screen_mask_hits so the imported screen and the DEPLOYED one
+    (drop_screened_out) are asked the same question the same way, rather than the
+    recheck re-deriving a near-copy that could disagree for reasons other than the
+    deploy.
+
+    `seen` is read, never written: both passes must judge the same set of unscreened
+    values, so the caller owns that bookkeeping and updates it once, after both.
+    """
+    values = screen.matched_values(raw, fresh)
+    pending, screened = {}, set(seen)
+    for label, found in values.items():
+        unscreened = [v for v in found if v not in screened]
+        if unscreened:
+            pending[label] = unscreened
+        screened.update(found)
+    burned, benign = screen.classify(pending, live_secrets, repo_roots)
+    # A label mask_text() reported but whose value cannot be recovered from the
+    # raw line is unexplainable, so it pages — the same default as an unknown
+    # value. In practice this is a label that fired only on an earlier pattern's
+    # `MASKED` remnant, whose underlying value the earlier label already covers.
+    burned += [h for h in fresh if h not in values and h not in burned]
+    return burned, benign, values
+
+
+def drop_screened_out(burned, fresh, raw, seen, live_secrets, repo_roots,
+                      ticket_id, attempt):
+    """wq#2404: labels of `burned` that the screen ON DISK also calls burned.
+
+    The sibling of drop_stale_labels, for the provenance screen instead of the rule
+    table. wq#2327 taught the table to reload; the screen kept freezing at spawn, so
+    281327c (23:09:47Z, screen against every granted root) and be9994d (23:44:19Z)
+    reached no run then in flight — and wq#2348, filed 23:01:44Z by a process that
+    imported burn_filter at 22:14:43Z, is ten committed-text values filed as a pri-1
+    rotate-today row.
+
+    Drop only, by intersection: a deployed screen can quiet a label this process
+    called burned, never raise one it called benign. A raise would page on a value
+    that has not been through this process's own screen, which is how the false-alarm
+    chain this closes started.
+
+    Two git greps per unaccounted value while a deploy is newer than this process —
+    paid only on a line that has already alarmed, never on the hot path. The passes
+    deliberately do not share classify()'s cache: is_committed_literal is exactly the
+    kind of thing a screen fix changes, and a shared cache would answer with the
+    version this process was spawned with, which is the bug.
+    """
+    screen = burn_filter.deployed()
+    if screen is burn_filter:
+        return burned
+    try:
+        live = burned_labels(screen, fresh, raw, seen, live_secrets, repo_roots)[0]
+    except Exception as e:  # noqa: BLE001
+        log(f"WARN: deployed-screen recheck failed ({e!r}) — alarming on all hits")
+        return burned
+    dropped = sorted(h for h in burned if h not in live)
+    if dropped:
+        log(f"mask hit wq#{ticket_id} attempt {attempt}: {','.join(dropped)} is "
+            f"accounted for by the deployed screen ({screen.__file__}) — masked, "
+            f"no rotation")
+    return [h for h in burned if h in live]
+
+
 def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
                      ticket_id, attempt):
     """wq#2290: alarm on a mask hit only when the matched text is actually a live
@@ -934,34 +1050,37 @@ def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
     Bookkeeping is per matched STRING, not per label: keying only on the label meant
     the first hit of a label consumed that label's one alarm for the attempt, so a
     benign fixture read at turn 2 would silently swallow a real burn at turn 40.
-    Labels still alarm at most once — `alarmed` — but only once BURNED.
+    Labels still alarm at most once — `alarmed` — but only once BURNED. Both sets
+    belong to the TICKET, not the attempt (wq#2404, mask_state): the caller holds
+    them across a retry, because the process does.
+
+    Two rechecks follow the screen, both drop-only, both against the code ON DISK
+    rather than the code this process imported: drop_screened_out for the screen
+    itself and drop_stale_labels for the rule table. Order does not matter — they
+    intersect — but the screen runs first so its log line names a label as benign
+    before the table's names it as retired.
     """
     fresh = [h for h in hits if h not in alarmed]
     if not fresh:
         return
     try:
-        values = burn_filter.matched_values(raw, fresh)
-        pending = {}
-        for label, found in values.items():
-            unscreened = [v for v in found if v not in seen]
-            if unscreened:
-                pending[label] = unscreened
-            seen.update(found)
-        burned, benign = burn_filter.classify(pending, live_secrets, repo_roots)
-        # A label mask_text() reported but whose value cannot be recovered from the
-        # raw line is unexplainable, so it pages — the same default as an unknown
-        # value. In practice this is a label that fired only on an earlier pattern's
-        # `MASKED` remnant, whose underlying value the earlier label already covers.
-        burned += [h for h in fresh if h not in values and h not in burned]
+        burned, benign, values = burned_labels(burn_filter, fresh, raw, seen,
+                                               live_secrets, repo_roots)
     except Exception as e:  # noqa: BLE001
         # Never let provenance screening swallow an alarm: on any failure fall back
         # to the wq#2275 behaviour of treating every hit as burned.
         log(f"WARN: burn_filter failed ({e!r}) — alarming on all hits")
-        burned, benign = fresh, []
+        burned, benign, values = fresh, [], {}
     if benign:
         log(f"mask hit wq#{ticket_id} attempt {attempt}: {','.join(sorted(benign))} "
             f"matched committed source text, not a live credential — masked, no rotation")
-    burned = drop_stale_labels(burned, raw, ticket_id, attempt)
+    if burned:
+        burned = drop_screened_out(burned, fresh, raw, seen, live_secrets,
+                                   repo_roots, ticket_id, attempt)
+        burned = drop_stale_labels(burned, raw, ticket_id, attempt)
+    # after both passes: they must judge the same set of unscreened values (wq#2290).
+    for found in values.values():
+        seen.update(found)
     if burned:
         alarmed.update(burned)
         # wq#2288: re-scan the raw line for the redacted record — only on an alarm.
@@ -2121,8 +2240,10 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
     response_id = None
     killed_reason = None
     exit_code = None
-    mask_alarmed = set()  # wq#2275: pattern labels already alarmed this attempt
-    burn_seen = set()     # wq#2290: matched strings already screened this attempt
+    # wq#2275/wq#2290, per TICKET since wq#2404: labels already alarmed and matched
+    # strings already screened. This process outlives the attempt; so does the dedup.
+    _mask = mask_state(ticket_id)
+    mask_alarmed, burn_seen = _mask["alarmed"], _mask["seen"]
     live_secrets = burn_filter.live_secret_values(env)
     repo_roots = None    # wq#2319: resolved on the first mask hit (screen_mask_hits)
     start = time.time()
@@ -2266,8 +2387,9 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     # detection latency stays a fraction of the window instead of the flat 5s floor.
     poll_timeout = max(0.25, min(5, frame_gap_s, post_result_grace_s) / 4)
     first_frame_seen = first_frame_s is None
-    mask_alarmed = set()         # wq#2275: pattern labels already alarmed this attempt
-    burn_seen = set()            # wq#2290: matched strings already screened this attempt
+    # wq#2404: the ticket's sets, not the attempt's — see mask_state().
+    _mask = mask_state(ticket_id)
+    mask_alarmed, burn_seen = _mask["alarmed"], _mask["seen"]
     live_secrets = burn_filter.live_secret_values(env)
     repo_roots = None    # wq#2319: resolved on the first mask hit (screen_mask_hits)
 

@@ -342,6 +342,9 @@ ALARM_READ_PATH = [
     "harness/masking.py",        # the rules, and the comments quoting the shapes
     "harness/burn_filter.py",    # they must not match
     "harness/fworker.py",        # mask_alarm / screen_mask_hits / write_mask_hits
+    "harness/live_code.py",      # wq#2404: how both of those reach a run in flight
+    # and the ticket's own text, which every answering worker reads first
+    "harness/prompts/rotation-ticket.md",
     "harness/tests/test_masking.py",
     "harness/tests/test_burn_filter.py",
     "harness/tests/test_token_injection.py",  # wq#2299: the oauth fixtures
@@ -480,6 +483,31 @@ def test_run_child_masks_stream_and_alarms_once(tmp_path, monkeypatch):
     assert GHP not in json.dumps(alarms)
 
 
+def test_a_retry_does_not_re_page_on_what_attempt_one_already_filed(
+        tmp_path, monkeypatch):
+    """wq#2404: the dedup sets were local to run_child(), so they reset on every
+    attempt — and the PROCESS does not reset, it holds the whole ticket. wq#2343
+    (attempt 1) and wq#2348 (attempt 2) are one run 110 seconds apart, sharing the
+    `cloudflare` label, two pri-1 rotate-today rows for the same committed fixtures.
+    Same stream, two attempts, one alarm."""
+    alarms = []
+    monkeypatch.setattr(fworker, "mask_alarm",
+                        lambda tid, att, labels, records=None:
+                        alarms.append((tid, att, labels)))
+    child = make_leaky_child(tmp_path)
+    for attempt in (1, 2):
+        fworker.run_child(child, str(tmp_path), dict(os.environ), max_turns=50,
+                          wall_clock_s=30, ticket_id=999997, attempt=attempt,
+                          frame_gap_s=10, post_result_grace_s=1)
+    assert alarms == [(999997, 1, ["github"])]
+    # a different ticket in the same process keeps its own sets — the dedup is the
+    # ticket's, not the fleet's.
+    fworker.run_child(child, str(tmp_path), dict(os.environ), max_turns=50,
+                      wall_clock_s=30, ticket_id=999996, attempt=1,
+                      frame_gap_s=10, post_result_grace_s=1)
+    assert alarms[-1] == (999996, 1, ["github"])
+
+
 def test_mask_alarm_pages_and_files_rotation_ticket(tmp_path, monkeypatch):
     pages, adds = [], []
     monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
@@ -579,6 +607,49 @@ def test_the_rotation_ticket_names_the_settle_tool(tmp_path, monkeypatch):
     detail = next(x for x in add if "wq#2275 mask tripwire" in str(x))
     assert f"{fworker.MASK_REPLAY} 2278" in detail
     assert os.path.exists(fworker.MASK_REPLAY)  # a pointer to nothing costs the hour
+
+
+def test_a_template_fix_reaches_a_run_in_flight(tmp_path, monkeypatch):
+    """wq#2404: the ticket TEXT was the third thing frozen at spawn. wq#2348 was filed
+    23:01:44Z carrying the template 32aa000 replaced at 22:40:21Z, because the process
+    writing it imported fworker at 22:14:43Z — and the text is the only part of the
+    alarm the answering worker reads. Reading it per alarm is what makes an edit land
+    on the runs already going."""
+    tmpl = tmp_path / "rotation-ticket.md"
+    tmpl.write_text("pattern(s) {{TAG}} on wq#{{TICKET_ID}} attempt {{ATTEMPT}}. "
+                    "Run `python3 {{MASK_REPLAY}} {{TICKET_ID}}`; records in "
+                    "{{HITS_PATH}}. A NEW INSTRUCTION, deployed mid-run.\n")
+    monkeypatch.setattr(fworker, "ROTATION_DETAIL_PATH", str(tmpl))
+    _, calls = alarm_with_title(
+        tmp_path, monkeypatch, "[token-engine T10] remaining verbs", 2404)
+    (add,) = [c for c in calls if c[0] == "add"]
+    detail = next(x for x in add if "A NEW INSTRUCTION" in str(x))
+    assert f"{fworker.MASK_REPLAY} 2404" in detail
+    assert "pattern(s) github on wq#2404 attempt 1." in detail
+
+
+@pytest.mark.parametrize("body", [
+    None,                                        # the deploy removed the file
+    "a template that forgot to name the replay tool or the records",
+    "{{TAG}} on wq#{{TICKET_ID}}: python3 {{MASK_REPLAY}} {{TICKET_ID}}, {{HITS_PAH}}",
+])
+def test_a_broken_template_still_files_an_actionable_row(
+        tmp_path, monkeypatch, body):
+    """One-directional, like both its siblings: a missing, gutted or half-expanded
+    template must not be able to quiet the alarm or strip the two pointers a rotation
+    row cannot be settled without — wq#2288 arrived without them and was unactionable.
+    It falls back to the text frozen in this process instead."""
+    tmpl = tmp_path / "rotation-ticket.md"
+    if body is not None:
+        tmpl.write_text(body)
+    monkeypatch.setattr(fworker, "ROTATION_DETAIL_PATH", str(tmpl))
+    pages, calls = alarm_with_title(
+        tmp_path, monkeypatch, "[token-engine T10] remaining verbs", 2404)
+    (add,) = [c for c in calls if c[0] == "add"]
+    detail = next(x for x in add if "wq#2275 mask tripwire" in str(x))
+    assert f"{fworker.MASK_REPLAY} 2404" in detail
+    assert os.path.join(str(tmp_path), "wq2404", "mask-hits-1.json") in detail
+    assert pages and pages[0][1] == "high"
 
 
 # --- wq#2327: a rule narrowed mid-attempt must reach the attempts in flight ---------

@@ -54,7 +54,9 @@ the ntfy page and the rotation ticket.
 """
 import re
 import subprocess
+import sys
 
+import live_code
 import masking
 
 # Env var names that carry a credential VALUE. Same vocabulary as masking's
@@ -206,3 +208,40 @@ def classify(detail, live, repo_roots, runner=subprocess.run, cache=None):
                 break
         (benign if accounted else burned).append(label)
     return burned, benign
+
+
+_SELF = live_code.fingerprint(__file__)
+
+# Not credential-shaped on purpose (masking.py:136): a real-looking literal in this
+# file would be read as a burn by the tripwire that reads this file.
+_CANARY = "burn-filter-canary-" + "0" * 12
+
+
+def _still_screens(mod):
+    """A deployed screen must still call a live secret burned.
+
+    The whole value of reloading here is DROPPING alarms, so the failure this guard
+    has to catch is a screen that drops all of them — an emptied classify, a
+    half-written deploy. Passing the canary as `live` short-circuits ahead of
+    is_committed_literal, so the self-test costs no subprocess.
+    """
+    burned, _ = mod.classify({"canary": [_CANARY]}, {_CANARY}, [])
+    return burned == ["canary"]
+
+
+def deployed(path=None):
+    """This screen as its FILE defines it right now (wq#2404, live_code).
+
+    The twin of masking.deployed(), for the other half of the alarm path. wq#2327
+    made the rule TABLE reload per call; the provenance screen kept freezing at spawn,
+    so the two fixes that taught it what a benign hit looks like — 281327c (screen
+    against every granted repo root) at 23:09:47Z and be9994d at 23:44:19Z — reached
+    no run then in flight. wq#2348, filed 23:01:44Z by a process that had imported
+    this module at 22:14:43Z, is what that costs: ten values, every one of them
+    committed text this screen now accounts for, filed as a pri-1 rotate-today row.
+
+    Used one-directionally at the call site (fworker.screen_mask_hits): a label stays
+    burned only if the deployed screen agrees, so a newer screen can quiet an alarm
+    but never raise one, and a screen that fails `_still_screens` quiets nothing.
+    """
+    return live_code.deployed(sys.modules[__name__], _SELF, _still_screens, path)

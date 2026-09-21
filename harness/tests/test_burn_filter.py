@@ -380,3 +380,107 @@ def test_the_same_shape_pages_when_it_is_the_childs_real_token(
     alarms, dump = run(tmp_path, monkeypatch, f"leaked {OAT}", env)
     assert alarms and "sk-key" in alarms[0]
     assert OAT not in dump
+
+
+# --- wq#2404: a screen fix must reach the runs already in flight -------------------
+
+# The screen as 281327c deployed it at 23:09:47Z, in one line: it accounts for text
+# this process's copy cannot, because it reads roots this copy never looked in.
+WIDER_SCREEN = """
+
+def is_committed_literal(value, repo_roots, runner=subprocess.run):
+    return True
+"""
+
+# the other direction: a deploy that accounts for nothing, so it calls every hit a
+# burn. Spelled out rather than left to the real `git grep`, so these tests assert the
+# recheck's logic and not what happens to be committed in this tree today.
+STRICTER_SCREEN = """
+
+def is_committed_literal(value, repo_roots, runner=subprocess.run):
+    return False
+"""
+
+# and its opposite, a deploy that stopped screening at all. Silencing the tripwire is
+# worse than a false page, so this one must be refused, not adopted.
+GUTTED_SCREEN = """
+
+def classify(detail, live, repo_roots, runner=subprocess.run, cache=None):
+    return [], list(detail)
+"""
+
+
+def burn_filter_copy(tmp_path, extra=""):
+    """A loadable copy of burn_filter.py at our own path, `extra` appended. Copying
+    is what makes deployed() load it: an unchanged file comes back by identity."""
+    with open(burn_filter.__file__, errors="replace") as fh:
+        source = fh.read()
+    path = tmp_path / "burn_filter_copy.py"
+    path.write_text(source + extra)
+    return str(path)
+
+
+def screen(tmp_path, monkeypatch, extra, burned_here):
+    """Run one alarming line through screen_mask_hits with the DEPLOYED screen being
+    a copy carrying `extra`, and this process's own screen answering `burned_here`
+    for provenance. Returns the labels that alarmed."""
+    alarms = []
+    monkeypatch.setattr(fworker, "mask_alarm",
+                        lambda tid, att, labels, records=None: alarms.append(labels))
+    monkeypatch.setattr(burn_filter, "is_committed_literal",
+                        lambda value, roots, runner=None: not burned_here)
+    real, copy = burn_filter.deployed, burn_filter_copy(tmp_path, extra)
+    monkeypatch.setattr(burn_filter, "deployed", lambda path=None: real(copy))
+    fworker.screen_mask_hits(["sk-key"], f"leaked {OAT}", set(), set(), set(),
+                             [REPO], 2404, 1)
+    return alarms
+
+
+def test_deployed_is_the_imported_screen_when_the_file_has_not_changed():
+    assert burn_filter.deployed() is burn_filter
+
+
+def test_a_screen_fix_reaches_a_run_in_flight(tmp_path, monkeypatch):
+    """The defect this closes. wq#2327 taught the rule TABLE to reload per call; the
+    provenance screen still froze at spawn, so 281327c (23:09:47Z) and be9994d
+    (23:44:19Z) reached no run then going. The process that filed wq#2348 at 23:01:44Z
+    had imported its screen at 22:14:43Z, and every one of the ten values it filed is
+    text the screen accounts for today."""
+    assert screen(tmp_path, monkeypatch, WIDER_SCREEN, burned_here=True) == []
+
+
+def test_the_deployed_screen_can_only_drop_an_alarm_never_raise_one(
+        tmp_path, monkeypatch):
+    """One-directional, like wq#2327's table recheck. A label the deployed screen
+    calls burned but this process already screened clean has not been through this
+    process's own provenance check, and paging on it re-opens the chain."""
+    assert screen(tmp_path, monkeypatch, STRICTER_SCREEN, burned_here=False) == []
+
+
+def test_a_hit_both_screens_call_burned_still_pages(tmp_path, monkeypatch):
+    """The recheck must not become a way for a real burn to go quiet."""
+    assert screen(tmp_path, monkeypatch, STRICTER_SCREEN, burned_here=True) == [["sk-key"]]
+
+
+def test_a_deployed_screen_that_stopped_screening_is_not_trusted(
+        tmp_path, monkeypatch):
+    """A half-written deploy or an emptied classify would quiet every alarm in the
+    fleet at once. The canary self-test refuses it and the caller keeps its own."""
+    assert burn_filter.deployed(burn_filter_copy(tmp_path, GUTTED_SCREEN)) is burn_filter
+    assert screen(tmp_path, monkeypatch, GUTTED_SCREEN, burned_here=True) == [["sk-key"]]
+
+
+def test_the_recheck_does_not_reuse_this_processs_provenance_answers(
+        tmp_path, monkeypatch):
+    """The two passes must not share classify()'s cache: a fix to is_committed_literal
+    is exactly what lands on this path, and a cache hit would answer with the version
+    the process was spawned with — the bug, one layer down."""
+    calls = []
+    monkeypatch.setattr(burn_filter, "is_committed_literal",
+                        lambda value, roots, runner=None: calls.append(value) or False)
+    real, copy = burn_filter.deployed, burn_filter_copy(tmp_path, WIDER_SCREEN)
+    monkeypatch.setattr(burn_filter, "deployed", lambda path=None: real(copy))
+    monkeypatch.setattr(fworker, "mask_alarm", lambda *a, **k: None)
+    fworker.screen_mask_hits(["sk-key"], f"leaked {OAT}", set(), set(), set(),
+                             [REPO], 2404, 1)
+    assert calls == [OAT]     # this process asked once; the deployed copy asked itself

@@ -25,6 +25,18 @@ def _scratch_root_in_tmp(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_mask_state():
+    """wq#2404: the tripwire's dedup sets live for the process, because an fworker
+    process lives for a whole ticket. A test process is many runs, and they share
+    ticket ids (999290 across test_burn_filter.py), so each test starts fresh —
+    otherwise test 2 reads test 1's already-alarmed label and stays silent."""
+    import fworker
+    fworker._MASK_STATE.clear()
+    yield
+    fworker._MASK_STATE.clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_refill_kick(monkeypatch):
     """wq#2069: every fworker exit calls trigger_refill(), which sudo-starts the LIVE
     lumen-foreman-dispatch.service. Subprocess fworkers inherit os.environ, so this
