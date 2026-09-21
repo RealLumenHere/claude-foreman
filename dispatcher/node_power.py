@@ -8,13 +8,18 @@ foreman_dispatcher._node_power_step. The 20-minute pass cadence is the primary a
 
     wake   starve_passes=2 consecutive passes with local_slots_full >= 2 AND every live node's backends at
            0 free slots, on a cold-policy node with measured_ready_s set, wakes_today < 4, and
-           now - last_drain_ts > 900. plug-ctl on, poll health to 2 * measured_ready_s.
+           now - last_drain_ts > 900. plug-ctl on, poll health to 2 * measured_ready_s, capped at
+           WAKE_DEADLINE_CAP_S so the wait and a failed wake's power-down fit the service's TimeoutStartSec=600
+           (a node with measured_ready_s >= the cap is not woken).
     drain  idle_passes=2 passes with zero units on the node and zero ready-but-unspawned local tickets,
            and now - last_wake_ts >= 3600. Six steps, in this order and no other (§6.3):
            1 state draining + render   2 confirm zero in-flight   3 systemctl stop <unit>
            4 poweroff                  5 wait for ssh to stop     6 plug-ctl off — strictly LAST.
            The MacPro6,1 auto-powers-on out of G3 (research/ISIS_POWEROFF_RCA.md:70), so cutting AC under
            a running OS is a power-cycle loop wearing the mask of a crash.
+           Any failure after step 4 has told the OS to halt goes to _stuck (down + excluded, plug left ON),
+           never back to live. A pass killed mid-drain leaves `draining`; step() recovers it first
+           (_recover_draining): live if ssh answers, else down + excluded.
 
 Interlock (§6.4), before any plug off: plug_id == `fleet-inv plugs`, ssh reports the expected hostname,
 plug watts non-zero and within 30% of idle_watts. It runs BEFORE step 1, while the box is still up: by
@@ -48,6 +53,12 @@ HEALTH_POLL_S = 15
 SSH_DOWN_DEADLINE_S, SSH_POLL_S = 180, 5
 SETTLE_S = 30                # ssh gone is early in the shutdown; let the OS halt before AC moves
 WATTS_TOLERANCE = 0.30
+# The whole dispatch pass runs under lumen-foreman-dispatch.service TimeoutStartSec=600 and a failed wake
+# then runs the power-down waits (ssh-down + settle) inside the same pass, so the health wait is capped to
+# what is left: a node whose 2 * measured_ready_s does not fit is not woken (a wake that cannot be watched
+# out is a wake that gets SIGTERMed mid-drain).
+PASS_TIMEOUT_S, PASS_RESERVE_S = 600, 120
+WAKE_DEADLINE_CAP_S = PASS_TIMEOUT_S - PASS_RESERVE_S - SSH_DOWN_DEADLINE_S - SETTLE_S - HEALTH_POLL_S
 
 
 class PowerError(Exception):
@@ -102,6 +113,12 @@ def parse_watts(out):
         return None
 
 
+def _ssh_hostname(ports, node):
+    """The short lower-case hostname `node` reports over ssh; None when ssh does not answer."""
+    rc, out = ports.ssh(node, "hostname", timeout=15)
+    return out.strip().split(".")[0].lower() if rc == 0 and out.strip() else None
+
+
 def interlock(ports, node, row):
     """§6.4: the reasons a plug-off on `node` is refused; [] when all three conditions hold."""
     fails = []
@@ -113,8 +130,7 @@ def interlock(ports, node, row):
     else:
         if not plug or inv_plug != plug:
             fails.append(f"registry plug_id {plug!r} but fleet-inv plugs has {inv_plug!r} for {node}")
-    rc, out = ports.ssh(node, "hostname", timeout=15)
-    host = out.strip().split(".")[0].lower() if rc == 0 and out.strip() else None
+    host = _ssh_hostname(ports, node)
     if host != node.lower():
         fails.append(f"ssh reports hostname {host!r}, expected {node!r}")
     idle = row.get("idle_watts")
@@ -217,6 +233,11 @@ class NodePower:
             for k in ("starved_passes", "idle_passes"):
                 e.setdefault(k, 0)
 
+        recovered = self._recover_draining(cold, state, now, dry_run)
+        if recovered:
+            save_state(state, self.state_path)
+            return recovered
+
         live_full = all(sig.free_slots(b["id"]) == 0
                         for n, r in nodes.items() if r.get("state") == "live"
                         for b in self._backends(reg, n))
@@ -247,6 +268,35 @@ class NodePower:
             save_state(state, self.state_path)
         return action
 
+    def _recover_draining(self, cold, state, now, dry_run):
+        """`draining` only exists inside a power_down; one still there at the top of a pass means that pass
+        was killed mid-drain (the service's TimeoutStartSec) and nothing else would ever move the node.
+        ssh answering as the node -> the OS is up: re-arm to live. Otherwise the OS may be off or merely
+        unreachable, which this cannot tell apart, so the node goes down and excluded and the plug is left
+        exactly as it is (plug off is never issued from here). Returns the recovery action, or None."""
+        for n, r in sorted(cold.items()):
+            if r.get("state") != "draining":
+                continue
+            if dry_run:
+                self.emit("power_decision", node=n, verb="recover", acted=False, blocked="dry_run")
+                continue
+            e = state[n]
+            up = _ssh_hostname(self.ports, n) == n.lower()
+            target = "live" if up else "down"
+            e["idle_passes"] = 0
+            if not up:
+                e["excluded_until"] = now + EXCLUDE_S
+            self.emit("power_error", node=n, reason="draining_orphan_recovered", to=target)
+            self._action(n, r, "recover", "orphaned_draining", to=target)
+            ok = True
+            try:
+                self._set_state(n, target)
+            except PowerError as err:
+                ok = False
+                self.emit("power_error", node=n, reason="render_failed", detail=str(err)[:200])
+            return {"node": n, "verb": "recover", "ok": ok, "to": target}
+        return None
+
     def _pick_wake(self, cold, state, now, starved):
         """The one node to wake, or None. Logs why a starved fleet did not wake (the decision, not the act)."""
         if not starved:
@@ -265,6 +315,8 @@ class NodePower:
             ready = (r.get("wake") or {}).get("measured_ready_s")
             if not (_num(ready) and ready > 0):
                 why.append("measured_ready_s unset")
+            elif ready >= WAKE_DEADLINE_CAP_S:
+                why.append(f"measured_ready_s {ready} >= {WAKE_DEADLINE_CAP_S}, the longest wake one pass can watch")
             if e["wakes_today"] >= MAX_WAKES_PER_DAY:
                 why.append(f"wakes_today {e['wakes_today']} >= {MAX_WAKES_PER_DAY}")
             if now - e.get("last_drain_ts", 0) <= COOL_S:
@@ -315,7 +367,8 @@ class NodePower:
             e["excluded_until"] = ports.now() + EXCLUDE_S
             self.emit("power_error", node=node, reason="plug_on_failed", rc=rc)
             return {"node": node, "verb": "wake", "ok": False, "why": "plug_on_failed"}
-        urls, deadline = self._health_urls(reg, node), row["wake"]["measured_ready_s"] * 2
+        urls = self._health_urls(reg, node)
+        deadline = min(row["wake"]["measured_ready_s"] * 2, WAKE_DEADLINE_CAP_S)
         t0 = ports.clock()
         while not all(ports.probe(u) for u in urls):
             if ports.clock() - t0 >= deadline:
@@ -331,7 +384,12 @@ class NodePower:
 
     def _wake_failed(self, reg, node, state, deadline):
         """A wake that half-works is worse than one that never started: mark it down, exclude it for a
-        day and power it back off through the same interlocked sequence as any other power-down."""
+        day and power it back off through the same interlocked sequence as any other power-down.
+
+        When ssh does not answer either, the interlock refuses and the plug stays ON. That is deliberate
+        (design §6.2 amended): a dead ssh cannot tell "the OS never booted" from "the OS is up and its
+        network is not", and AC cut under a running OS is the G3 power-cycle loop. The node sits down and
+        excluded with a power_refused line for a human; a stuck-on plug costs watts, a wrong cut costs hardware."""
         e = state[node]
         e["excluded_until"] = self.ports.now() + EXCLUDE_S
         self.emit("power_error", node=node, reason="wake_health_timeout", deadline_s=deadline)
@@ -357,6 +415,7 @@ class NodePower:
             self._action(node, row, "off_refused", trigger, reasons=fails)
             return result
         prior = row.get("state", "live")
+        halting = False
         try:
             if manage_state:
                 self._set_state(node, "draining")                            # 1
@@ -367,6 +426,7 @@ class NodePower:
                 rc, _ = ports.ssh(node, f"sudo -n systemctl stop {unit}.service", timeout=120)
                 if rc != 0:
                     raise PowerError(f"systemctl stop {unit} exited {rc}")
+            halting = True       # from here the OS may be off: a failure is _stuck, never a restore to live
             ports.ssh(node, "sudo -n systemctl poweroff", timeout=30)        # 4: the link may drop
             t0 = ports.clock()                                               # 5
             while ports.ssh(node, "true", timeout=10)[0] == 0:
@@ -382,6 +442,9 @@ class NodePower:
                 self._stuck(node, row, e, manage_state, f"plug-ctl off exited {rc}")
                 return result
         except (PowerError, OSError) as err:
+            if halting:
+                self._stuck(node, row, e, manage_state, str(err))
+                return result
             return self._abort(node, row, e, prior, manage_state, str(err), result)
         e["last_drain_ts"], e["idle_passes"] = ports.now(), 0
         self._action(node, row, "off", trigger, **(counters or {}))
@@ -405,7 +468,7 @@ class NodePower:
         return units
 
     def _abort(self, node, row, e, prior, manage_state, why, result):
-        """Before any AC moved: put the node back as it was and re-arm the idle counter."""
+        """Before the OS was told to halt: put the node back as it was and re-arm the idle counter."""
         self.emit("power_error", node=node, reason="power_down_aborted", detail=why[:200])
         e["idle_passes"] = 0
         if manage_state:

@@ -369,6 +369,17 @@ Sequence: `plug-ctl <plug_id> on` → poll the health URL every 15 s to a deadli
 timeout, `state: down`, `plug-ctl <plug_id> off`, one ISSUE-LOG line, and the node is
 excluded for 24 h. A wake that half-works is worse than one that never started.
 
+The `off` on timeout goes through the §6.3 sequence and the §6.4 interlock, so it happens
+only if the box still answers ssh as itself. If ssh is dead too (wq#2412), the interlock
+refuses and the plug stays **on**: a dead ssh cannot tell "the OS never booted" from "the
+OS is up and its network is not", and cutting AC under a running OS is the G3 power-cycle
+loop. The node is left `down`, excluded, with a `power_refused` line for a human. The
+health deadline is `min(2 * measured_ready_s, WAKE_DEADLINE_CAP_S)` (255 s), so the wait
+plus a failed wake's power-down fits `lumen-foreman-dispatch.service` `TimeoutStartSec=600`;
+a node with `measured_ready_s >= 255` is not woken. A pass killed mid-drain leaves `state:
+draining`; the next pass's `step()` sets it back to `live` if ssh answers, else `down` and
+excluded, and never touches the plug.
+
 **The pass cadence is the primary anti-flap mechanism.** `lumen-foreman-dispatch.timer`
 is `OnUnitActiveSec=20min` (`dispatcher/systemd/lumen-foreman-dispatch.timer:10`), so
 `starve_passes: 2` means ~40 minutes of sustained starvation before any AC moves. At

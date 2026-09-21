@@ -1,6 +1,6 @@
 """Design §8 T7 (cold wake) and T8 (drain, power-down, anti-flap) — wq#2254, C6 of wq#2241.
 
-A scratch repo root carries the real registry with isis turned into a cold node (measured_ready_s 300,
+A scratch repo root carries the real registry with isis turned into a cold node (measured_ready_s 120,
 idle 103.2 W, plug p1). FakePorts stands in for ssh, plug-ctl, fleet-inv, the health probe and lumen_state, keeps
 one ordered call log, and runs on virtual time (`sleep` advances the clock), so the ordering the design
 insists on (§6.3: plug-ctl off strictly last) is an assertion on that log.
@@ -111,7 +111,7 @@ class Env:
         head, tail = open(os.path.join(REPO, "research", "inference_nodes.yaml")).read().split(f"  {COLD}:\n")
         assert "\n  hathor:" not in tail and "\n  nephthys:" not in tail   # isis is the last row
         for old, new in (("state: down", "state: cold"), ("power_policy: warm", "power_policy: cold"),
-                         ("measured_ready_s: null", "measured_ready_s: 300")):
+                         ("measured_ready_s: null", "measured_ready_s: 120")):
             assert old in tail
             tail = tail.replace(old, new, 1)
         with open(self.registry, "w") as f:
@@ -204,7 +204,7 @@ def test_no_wake_while_a_live_member_has_a_free_slot_or_slots_full_is_one(env):
 
 
 def test_measured_ready_null_is_never_picked(env):
-    env.set_reg("measured_ready_s: 300", "measured_ready_s: null")
+    env.set_reg("measured_ready_s: 120", "measured_ready_s: null")
     env.starved(4)
     assert env.ports.plug_calls("on") == []
     assert any("measured_ready_s unset" in kw["reasons"] for kw in env.kinds("wake_blocked"))
@@ -408,6 +408,123 @@ def test_ssh_that_never_stops_answering_leaves_the_plug_on(env):
     assert env.ports.plug_calls("off") == []
     assert env.reg_state() == "down" and "excluded_until" in env.state()[COLD]
     assert any(kw["reason"] == "power_down_stuck" for kw in env.kinds("power_error"))
+
+
+def _plug_off_or_live_with_os_off(env):
+    """The invariant behind every failure test: plug off never with the OS answering, and never `live`
+    for a box whose OS was told to halt."""
+    return env.ports.plug_calls("off"), env.reg_state()
+
+
+def test_binding_flip_after_poweroff_is_stuck_not_restored_live(env):
+    awake(env)
+
+    def flip(cmd):
+        if "poweroff" in cmd:
+            env.ports.plugmap[COLD] = "p9"
+    env.ports.on_ssh = flip
+    assert idle_passes(env, 2) == {"node": COLD, "verb": "off", "ok": False}
+    assert _plug_off_or_live_with_os_off(env) == ([], "down")
+    assert "excluded_until" in env.state()[COLD]
+    assert any(kw["reason"] == "power_down_stuck" for kw in env.kinds("power_error"))
+    assert not env.kinds("power_error") or all(kw["reason"] != "power_down_aborted" for kw in env.kinds("power_error"))
+
+
+def test_plug_inventory_unreadable_after_poweroff_is_stuck(env):
+    awake(env)
+
+    def break_inventory(cmd):
+        if "poweroff" in cmd:
+            def boom():
+                raise OSError("fleet-inv gone")
+            env.ports.plugs = boom
+    env.ports.on_ssh = break_inventory
+    idle_passes(env, 2)
+    assert _plug_off_or_live_with_os_off(env) == ([], "down")
+    assert any(kw["reason"] == "power_down_stuck" for kw in env.kinds("power_error"))
+
+
+def test_a_pass_killed_mid_drain_is_recovered_live_when_ssh_answers(env):
+    awake(env)
+
+    def die(cmd):
+        if "systemctl stop" in cmd:
+            raise SystemExit(143)
+    env.ports.on_ssh = die
+    with pytest.raises(SystemExit):
+        idle_passes(env, 2)
+    assert env.reg_state() == "draining"
+    env.ports.on_ssh = None
+    act = env.one_pass()
+    assert act == {"node": COLD, "verb": "recover", "ok": True, "to": "live"}
+    assert env.reg_state() == "live" and env.ports.plug_calls("off") == []
+    assert env.state()[COLD]["idle_passes"] == 0
+    assert any(k["reason"] == "draining_orphan_recovered" for k in env.kinds("power_error"))
+    assert COLD_ID in json.loads(open(os.path.join(env.root, nr.DISPATCHER_CONFIG)).read())["local_backends"]
+
+
+def test_a_pass_killed_mid_drain_is_recovered_down_and_excluded_when_ssh_is_dead(env):
+    awake(env)
+
+    def die(cmd):
+        if "poweroff" in cmd:
+            raise SystemExit(143)
+    env.ports.on_ssh = die
+    with pytest.raises(SystemExit):
+        idle_passes(env, 2)
+    env.ports.on_ssh, env.ports.ssh_up[COLD] = None, False
+    act = env.one_pass()
+    assert act == {"node": COLD, "verb": "recover", "ok": True, "to": "down"}
+    assert env.reg_state() == "down" and env.state()[COLD]["excluded_until"] > env.ports.t
+    for _ in range(6):                                   # excluded: no wake, and no plug off ever
+        env.one_pass(slots_full=3, pending=3)
+    assert env.ports.plug_calls("off") == [] and env.ports.plug_calls("on") == []
+
+
+def test_recovery_is_read_only_under_dry_run(env):
+    awake(env)
+    import registry_edit as ed
+    with open(env.registry) as f:
+        text = f.read()
+    with open(env.registry, "w") as f:
+        f.write(ed.set_field(text, COLD, "state", "draining"))
+    before = env.state()
+    assert env.one_pass(dry_run=True) is None
+    assert env.reg_state() == "draining" and env.state() == before and env.ports.plug_calls("off") == []
+
+
+def test_wake_timeout_on_a_box_whose_os_never_booted_leaves_the_plug_on(env):
+    """Design §6.2 amended: with ssh dead the interlock cannot tell a dead OS from a dead network, so the
+    plug stays on; the node is down, excluded and the refusal is on the audit trail."""
+    env.ports.boot_s = 10 ** 6
+    env.ports.ssh_up[COLD] = False
+    env.starved()
+    assert env.ports.plug_calls("on") and env.ports.plug_calls("off") == []
+    assert env.reg_state() == "down" and env.state()[COLD]["excluded_until"] > env.ports.t
+    (refusal,) = env.kinds("power_refused")
+    assert refusal["trigger"] == "wake_failed" and any("ssh reports hostname None" in r for r in refusal["reasons"])
+    assert any(c[3]["verb"] == "off_refused" for c in env.ports.calls if c[0] == "state_write" and len(c) > 3)
+
+
+def test_wake_deadline_is_capped_to_what_a_pass_can_watch(env):
+    env.set_reg("measured_ready_s: 120", "measured_ready_s: 200")     # 2x = 400 > the cap
+    env.ports.boot_s = 10 ** 6
+    env.ports.ssh_up[COLD] = True
+    seen = []
+    probe = env.ports.probe
+    env.ports.probe = lambda u: seen.append(env.ports.t) or probe(u)
+    env.starved()
+    span = seen[-1] - seen[0]
+    assert np_.WAKE_DEADLINE_CAP_S - np_.HEALTH_POLL_S <= span <= np_.WAKE_DEADLINE_CAP_S
+    assert (np_.WAKE_DEADLINE_CAP_S + np_.HEALTH_POLL_S + np_.SSH_DOWN_DEADLINE_S + np_.SETTLE_S
+            + np_.PASS_RESERVE_S <= np_.PASS_TIMEOUT_S)
+
+
+def test_a_node_too_slow_to_watch_inside_a_pass_is_not_woken(env):
+    env.set_reg("measured_ready_s: 120", f"measured_ready_s: {np_.WAKE_DEADLINE_CAP_S}")
+    env.starved(4)
+    assert env.ports.plug_calls("on") == [] and env.reg_state() == "cold"
+    assert any("longest wake one pass can watch" in r for kw in env.kinds("wake_blocked") for r in kw["reasons"])
 
 
 def test_a_24_hour_oscillating_trace_makes_at_most_max_wakes_power_cycles(env):
