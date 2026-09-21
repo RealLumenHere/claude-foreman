@@ -445,6 +445,59 @@ def test_the_live_rules_would_not_have_filed_wq2335():
     assert mask_replay.replay(2253, patterns=mask_replay.CURRENT_PATTERNS) == []
 
 
+WQ2300_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2300")
+
+# The two `kv-secret` values mask-hits-1.json recorded for wq#2300 attempt 1, named as
+# a settled rotation ticket is allowed to name one: 12 hex of sha256, and a length.
+# Neither is a credential. The 17 is this masker's own output quoted back out of a
+# docstring explaining the rule — a forge prefix plus the literal the substitution
+# writes — and the 23 is the triple-`hunter2` joke fixture, which is why the bodies are
+# 17 and 23 where a live forge token's is 36. Spelled as hashes because a record must
+# never carry its value, and because a file that spelled them would re-arm the alarm it
+# is vouching for — the same reason the fixtures themselves are written split.
+WQ2300_KV = {"2c9e04df04aa": 17, "ae71c4cdf5d7": 23}
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2300_RUN),
+                    reason="wq#2300's run dir is not on this host")
+def test_wq2300_transcript_burned_nothing():
+    """wq#2336's verdict, pinned — and its twin wq#2332's, which settled the same
+    attempt's `cloudflare` and `sk-key` labels (row 596). wq#2300 was the run that FIXED
+    the sk- prefix bug, so it spent the attempt reading the masker's own source, its
+    fixtures and the doctrine rows describing earlier links of this chain; replaying its
+    artefacts under the rules live at 22:48–23:10 reproduces 20 credential-shaped
+    strings and accounts for every one in a committed file, so nothing was rotated. A
+    failure here means a value this run saw has left the tree and deserves a fresh look
+    — not that a credential was burned."""
+    records = mask_replay.replay(2300)
+    assert records, "wq#2300's artefacts should still reproduce the hit"
+    assert mask_replay.unaccounted(records) == []
+    kv = {r["value_sha256_12"]: r for r in records if r["label"] == "kv-secret"}
+    assert WQ2300_KV.items() <= {h: r["value_len"] for h, r in kv.items()}.items()
+    # the load-bearing half: `unaccounted` also forgives a value today's table stopped
+    # reading, and it stopped reading the 17, so that half would pass vacuously.
+    assert all(kv[h]["accounted_in"] for h in WQ2300_KV)
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2300_RUN),
+                    reason="wq#2300's run dir is not on this host")
+def test_the_live_rules_would_not_have_filed_wq2336():
+    """The leak path, closed, and closed in two places rather than one. The table shut
+    the masker's own output out: the 17 no longer matches any rule, because kv-secret's
+    value stopped ending on a masked body. The 23 still matches and always will — it is
+    a fixture whose whole point is to be credential-shaped — so what stops it is the
+    second screen, `burn_filter`, which pages only on a value it cannot find in a
+    committed file. Both shipped before this ticket was filed; the attempt kept paging
+    under the table it had imported at spawn, the hole wq#2327 closed."""
+    records = mask_replay.replay(2300, patterns=mask_replay.CURRENT_PATTERNS)
+    assert mask_replay.unaccounted(records) == []
+    assert len(records) < 20
+    kv = {r["value_sha256_12"]: r for r in records if r["label"] == "kv-secret"}
+    assert "2c9e04df04aa" not in kv
+    # what still matches is synthetic fixture text, which is burn_filter's screen
+    assert all("tests/test_" in r["accounted_in"] for r in kv.values())
+
+
 def test_legacy_table_is_not_the_live_one():
     """A future tightening of masking.PATTERNS must not silently rewrite history."""
     assert mask_replay.LEGACY_PATTERNS is not mask_replay.CURRENT_PATTERNS
