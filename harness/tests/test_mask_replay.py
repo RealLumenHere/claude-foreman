@@ -400,6 +400,51 @@ def test_wq2299_transcript_burned_nothing():
                                    {fixture: fh.read()}) == f"{fixture}:24"
 
 
+WQ2253_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2253")
+
+# The three `github` values wq#2253 attempt 1 put in front of the model, named the way
+# a settled rotation ticket is allowed to name one: 12 hex of sha256, and a length.
+# Bodies of 6, 6 and 8 characters — a live forge token's body is 36 — because all three
+# are doctrine-log prose about THIS false-positive class: an open-source solver's repo
+# name with a four-character forge prefix sitting mid-word (rows 568/570/574), this
+# module's own masked output quoted back (row 571), and the broker's tripwire probe
+# string. Spelled as hashes rather than as text on purpose, twice over: a record must
+# never carry its value, and the sentence that spells the mid-word prefix is the one
+# the PR broker refused to post in row 588.
+WQ2253_GITHUB = {"b8789db0c2da": 6, "20227a136ec3": 6, "d354caf95d3e": 8}
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2253_RUN),
+                    reason="wq#2253's run dir is not on this host")
+def test_wq2253_transcript_burned_nothing():
+    """wq#2335's verdict, pinned — and its twin wq#2314's, which settled the same run's
+    `kv-secret` label. The tripwire filed two pri-1 rotate-today tickets on this one
+    attempt at 22:51; replaying its artefacts under the rules live at 22:32 reproduces
+    9 credential-shaped strings and accounts for every one of them in a committed file,
+    so nothing was rotated. A failure here means a value this run saw has left the tree
+    and deserves a fresh look — not that a credential was burned."""
+    records = mask_replay.replay(2253)
+    assert records, "wq#2253's artefacts should still reproduce the hit"
+    assert mask_replay.unaccounted(records) == []
+    github = {r["value_sha256_12"]: r for r in records if r["label"] == "github"}
+    assert {h: r["value_len"] for h, r in github.items()} == WQ2253_GITHUB
+    # the load-bearing half: `unaccounted` also forgives a value today's table stopped
+    # reading, and today's table reads none of these, so it would pass vacuously.
+    assert all(r["accounted_in"] for r in github.values())
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2253_RUN),
+                    reason="wq#2253's run dir is not on this host")
+def test_the_live_rules_would_not_have_filed_wq2335():
+    """The leak path, closed, and closed harder than wq#2307's: the whole corpus of
+    this run scores ZERO under today's table, not merely fewer. Both defects that fired
+    it were shipped before the ticket was — the word boundary (wq#2292) stops a prefix
+    being read mid-word, and the 30-character body floor (same) stops a 6-character
+    doctrine-log quote being read as a token at all — yet the attempt kept paging under
+    the table it had imported at spawn, which is the hole wq#2327 later closed."""
+    assert mask_replay.replay(2253, patterns=mask_replay.CURRENT_PATTERNS) == []
+
+
 def test_legacy_table_is_not_the_live_one():
     """A future tightening of masking.PATTERNS must not silently rewrite history."""
     assert mask_replay.LEGACY_PATTERNS is not mask_replay.CURRENT_PATTERNS
