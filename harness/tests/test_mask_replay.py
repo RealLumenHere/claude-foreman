@@ -1024,6 +1024,78 @@ def test_the_live_rules_would_not_have_filed_wq2400():
         assert label in masking.mask_text(live)[1], live
 
 
+WQ2410_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2410")
+# The branch the dispatcher cut for wq#2410: `…-mask-batch-…` carries `sk-` one
+# character into a word, the wq#2400 boundary again, and nothing else explains it —
+# a branch name is in no committed file.
+WQ2410_BRANCH = ("c49a21526822", 16)
+# test_token_injection.py's dummy, reached through `git log`'s rendering of the
+# revision that still held it unsplit. The two tables cut the same text differently:
+# the legacy prefix is greedy enough to eat three characters of the body.
+WQ2410_OAT_LEGACY = ("88baf6a624d7", 30)
+WQ2410_OAT_TODAY = ("776834423b81", 33)
+WQ2410_OAT_IN = "harness/tests/test_token_injection.py:22"
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2410_RUN),
+                    reason="wq#2410's run dir is not on this host")
+def test_wq2410_transcript_burned_nothing():
+    """wq#2414's verdict, pinned: 20 values, no credential, no rotation.
+
+    Seventeen are the ISSUE-LOG snapshot paging on its own rows — this backlog writes
+    down the shapes it triages, so the log is the densest credential-shaped file in the
+    tree — and one is a `key =` assignment read out of mask_triage.py. The two that are
+    about this run are the ones asserted below.
+
+    A failure here means the branch name has appeared in a committed file (which would
+    move the pin rather than break the verdict), or the dummy that test_token_injection
+    holds has moved off line 22.
+    """
+    records = mask_replay.replay(2410)
+    assert len(records) == 20
+    assert mask_replay.unaccounted(records) == []
+    assert all(r.get("faithful", True) for r in records), "no window was re-cut"
+    loose = [r for r in records if r["accounted_in"] is None]
+    assert [(r["value_sha256_12"], r["value_len"]) for r in loose] == [WQ2410_BRANCH]
+    assert loose[0]["first_seen_in"] == "run:attempt-1.json"
+    assert not loose[0]["still_matches_today"], "the boundary fix retired this shape"
+    oat = [r for r in records if r["value_sha256_12"] == WQ2410_OAT_LEGACY[0]]
+    assert [r["value_len"] for r in oat] == [WQ2410_OAT_LEGACY[1]]
+    assert oat[0]["accounted_in"] == WQ2410_OAT_IN
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2410_RUN),
+                    reason="wq#2410's run dir is not on this host")
+def test_the_live_rules_would_not_have_filed_wq2414():
+    """Under today's table one value in this run even matches, and it is committed text.
+
+    The leak path that is NOT closed, named here so the next replay does not rediscover
+    it: the runtime screen tests the WHOLE match for verbatim presence in the tracked
+    tree (burn_filter.py:98 hands `m.group(0)` to is_committed_literal), while the house
+    mitigation for a fixture that arms the tripwire is to split its literal at exactly
+    the prefix seam — `"sk-ant-" + "oat01…"`, test_token_injection.py:16-25. The two
+    defeat each other: a fixture defended that way is invisible to the screen meant to
+    excuse it the moment a `git log`/`git show` renders the revision that still held it
+    whole, which is how wq#2410 alarmed on a dummy and filed wq#2414. mask_replay
+    accounts the body rather than the match, which is why the offline answer here and
+    the runtime one differ. Widening the runtime screen is its own ticket with its own
+    control — a wider tree is a wider excuse (ops/wq2359-rotation-triage/README.md:68).
+
+    A failure here means the boundary regressed, or the rules stopped firing at all.
+    """
+    records = mask_replay.replay(2410, patterns=mask_replay.CURRENT_PATTERNS)
+    assert mask_replay.unaccounted(records) == []
+    assert [(r["value_sha256_12"], r["value_len"]) for r in records] == [WQ2410_OAT_TODAY]
+    assert records[0]["accounted_in"] == WQ2410_OAT_IN
+    assert WQ2410_BRANCH[0] not in {r["value_sha256_12"] for r in records}
+    # Bodies unique to this file, per the note above wq#2400's pin: a string that also
+    # occurs in a run's corpus would make this file that run's first explanation.
+    for benign in ("branch feat/wq2414-mask-batch-triage-rotation",
+                   "dir /home/lumen/ops/wq2414-mask-batch-tooling"):
+        assert masking.mask_text(benign)[1] == [], benign
+    assert "sk-key" in masking.mask_text("sk-ant-" + "api03-wq2414-bound-value")[1]
+
+
 def test_legacy_table_is_not_the_live_one():
     """A future tightening of masking.PATTERNS must not silently rewrite history."""
     assert mask_replay.LEGACY_PATTERNS is not mask_replay.CURRENT_PATTERNS
