@@ -70,8 +70,9 @@ WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # lengths. Here the cost of a false positive is not just a wasted page — line 182
 # FAILS the verb and discards the result — so an unanchored `ghs_` matching inside
 # the repo name `highs_solver` is an availability bug, not just noise. Rationale
-# and the kv_secret carve-out: harness/masking.py.
-_B = r"(?<![A-Za-z0-9])"
+# and the kv_secret carve-out: harness/masking.py. wq#2400 added `_` to the class for
+# the same reason the alnums are there — a prefix after `_` is an identifier tail.
+_B = r"(?<![A-Za-z0-9_])"
 MASK = "MASKED"   # masking.MASK — the literal every replacement there ends in
 # wq#2297 kv_secret label vocabulary — the copy of harness/masking.py:_KV_* that the
 # daemon needs because it runs off that import path. See there for the reasoning.

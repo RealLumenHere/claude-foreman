@@ -69,6 +69,14 @@ FALSE_POSITIVES = [
     # was itself a rotation ticket, which is how the loop kept paying for itself.
     r'grep -rn "ghp_MASKED\|gho_MASKED\|ghu_MASKED\|ghs_MASKED\|ghr_MASKED'
     r'\|github_pat_MASKED" /home/lumen/foreman/_runs/wq2282/',
+    # wq#2400: the prefix one separator inside an identifier, which `(?<![A-Za-z0-9])`
+    # still read as a token. The first line is the fixture wq#2316 drafted for
+    # ops/wq2316-mask-secrets-boundary and dropped because the rule masked it; the
+    # snapshot of that draft then fired the slack alarm and filed a rotate-today ticket
+    # whose value was two English words.
+    "see notes_on_xoxb-plainword",
+    "reading my_cfut_settings_override",
+    "log_sk-report-generator-2026",
     "cfut_MASKED",                    # cloudflare: `MASKED` is 6 legal body chars
     "PAT: github_pat_MASKED",         # kv-secret eats a masked github value
     "sk-ant-xxxxxxxxMASKED",          # sk- backtracks into its own masked body
@@ -117,6 +125,11 @@ KV_REAL = [f"password: {PW}", f'"api_key": "{PW}"', f"GITEA_TOKEN={PW}",
 MASK_SUITE_SOURCES = [
     "tests/test_masking.py", "tests/test_mask_replay.py", "tests/test_token_injection.py",
     "masking.py", "mask_replay.py", "burn_filter.py",
+    # wq#2400: the mask-secrets bundle belongs to the same corpus — its four whole
+    # fixtures are what a run editing it (wq#2316) put in front of the model, and the
+    # alarm that followed cost this ticket.
+    "../ops/wq2316-mask-secrets-boundary/test_mask_secrets_boundary.py",
+    "../ops/wq2316-mask-secrets-boundary/mask-secrets",
 ]
 
 

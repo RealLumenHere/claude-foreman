@@ -940,6 +940,79 @@ def test_the_live_rules_would_not_have_filed_wq2348():
     assert masking.mask_text("ghs_" + "0" * 36)[1] == ["github"]
 
 
+WQ2316_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2316")
+# The one value of wq#2316's 26 that no committed file explains: 16 characters behind
+# `xoxb-`, two lowercase English dictionary words with a hyphen between them (11 + 4,
+# checked against /usr/share/dict/words without printing it). A live slack bot token's
+# body is two long digit runs and a 24-character base62 blob, ~40 characters; nothing
+# shaped like this is one, and it appears in no live env var and in no file under any
+# directory the run was granted.
+WQ2316_SLACK = ("d902a2b4f628", 16)
+WQ2316_DRAFT = ("snapshot:20260921T032623Z-home_lumen_worktrees_wq2316-a1_ops_"
+                "wq2316-mask-secrets-boundary_test_mask_secrets_boundary.py")
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2316_RUN),
+                    reason="wq#2316's run dir is not on this host")
+def test_wq2316_slack_hit_was_a_fixture_the_run_dropped():
+    """wq#2400's verdict, pinned: 26 values, no credential, no rotation.
+
+    The one record no committed file accounts for is the only interesting one, and it is
+    the rarest shape in this backlog — a fixture that was drafted and then DELETED before
+    the branch landed. The run was writing the parametrize list in
+    ops/wq2316-mask-secrets-boundary/test_mask_secrets_boundary.py that asserts prefixes
+    inside a word are untouched; the entry it drafted for `xox` masked instead of passing,
+    because the boundary spelled `_` as a delimiter, so the entry was dropped and the
+    landed file keeps the `cfut_` case alone. `account()` therefore has nothing to match:
+    the snapshot holds a line the tree never received. What settles it is the second
+    screen — today's table does not read that line as a credential at all (wq#2400 put
+    `_` in the boundary class), which is the same screen that settles a called identifier.
+
+    A failure here means the value has appeared in the tree, or the boundary regressed.
+    """
+    records = mask_replay.replay(2316)
+    assert len(records) == 26
+    slack = [r for r in records if r["value_sha256_12"] == WQ2316_SLACK[0]]
+    assert [(r["label"], r["value_len"]) for r in slack] == [("slack", WQ2316_SLACK[1])]
+    assert slack[0]["first_seen_in"] == WQ2316_DRAFT
+    assert slack[0]["accounted_in"] is None, "a dropped draft is in no committed file"
+    assert not slack[0]["still_matches_today"]
+    assert mask_replay.unaccounted(records) == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2316_RUN),
+                    reason="wq#2316's run dir is not on this host")
+def test_the_live_rules_would_not_have_filed_wq2400():
+    """The leak path, closed in the boundary both copies of the house set share.
+
+    wq#2292 anchored the prefixes at `(?<![A-Za-z0-9])` because `ghs_` inside the repo
+    name `highs_solver` had cost a rotation ticket. That class survived one separator
+    away: `_` continues an identifier, so `notes_on_xoxb-…` and `my_cfut_settings…` still
+    read as tokens and still paged pri-1. Three of this run's labels come from that file
+    (`cloudflare,kv-secret,slack`), and the value the alarm was about is two English
+    words in a test fixture.
+
+    The rules stay armed for a value the identifier actually LABELS, which is the shape a
+    real leak takes — the kv-secret rule keys on the English word and never reads this
+    boundary at all.
+    """
+    records = mask_replay.replay(2316, patterns=mask_replay.CURRENT_PATTERNS)
+    assert mask_replay.unaccounted(records) == []
+    assert WQ2316_SLACK[0] not in {r["value_sha256_12"] for r in records}
+    for tail in ("see notes_on_xoxb-plainword", "reading my_cfut_settings_override",
+                 "log_sk-report-generator-2026"):
+        assert masking.mask_text(tail)[1] == [], tail
+    # Bodies unique to this file on purpose: account() closes a same-line concatenation
+    # seam (wq#2326), so reusing test_masking.py's XOXB here would make THIS file the
+    # first tracked explanation of wq#2300's slack value and move that ticket's pin.
+    for label, live in (("slack", "xoxb-" + "9876543210-wq2400bound"),
+                        ("cloudflare", "cfut_" + "v1.0-" + "a" * 36),
+                        # the identifier-labelled shape: `_TOKEN=` is read by the rule
+                        # that keys on the noun, so the value is masked either way
+                        ("kv-secret", 'SLACK_BOT_TOKEN="' + 'wq2400-bound-value"')):
+        assert label in masking.mask_text(live)[1], live
+
+
 def test_legacy_table_is_not_the_live_one():
     """A future tightening of masking.PATTERNS must not silently rewrite history."""
     assert mask_replay.LEGACY_PATTERNS is not mask_replay.CURRENT_PATTERNS

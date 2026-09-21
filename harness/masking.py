@@ -14,8 +14,8 @@ page ntfy and open a rotation ticket (fworker.mask_alarm).
 The patterns mirror /home/lumen/bin/mask-secrets (the instinct-4 house set). Keep
 the two in lockstep: a pattern added there must be added here the same day. They
 are no longer character-identical — sed -E is POSIX ERE with no lookbehind, so the
-word boundary below is spelled `(^|[^A-Za-z0-9])` with a shifted capture group
-there and `(?<![A-Za-z0-9])` here. Same language, different syntax. kv-secret is
+word boundary below is spelled `(^|[^A-Za-z0-9_])` with a shifted capture group
+there and `(?<![A-Za-z0-9_])` here. Same language, different syntax. kv-secret is
 also narrower here until wq#2313 carries its tail lookahead across, which costs the
 sed copy a false alarm, never a missed mask.
 
@@ -35,8 +35,19 @@ import sys
 # on wq#2282, which had merely read the ISSUE-LOG row documenting the identical bug.
 # remote_credential_sweep.py:38-43 took the same boundary for the same reason
 # (wq#2263). The boundary never hides a real token — a credential is a standalone
-# value, so what precedes it is `"`, `:`, `=`, `/` or space, never an alphanumeric.
-_B = r"(?<![A-Za-z0-9])"
+# value, so what precedes it is `"`, `:`, `=`, `/`, `-` or space, never an
+# alphanumeric and never `_`.
+#
+# wq#2400: `_` belongs in that class, and leaving it out kept the SAME false positive
+# one character away. `see notes_on_xoxb-<two english words>` — a line in wq#2316's own
+# draft of ops/wq2316-mask-secrets-boundary/test_mask_secrets_boundary.py, in the
+# parametrize list asserting that prefixes inside a word are untouched — still read as
+# a slack token, armed the pri-1 alarm and filed this ticket. `_` never separates a
+# credential from what precedes it: it only continues an identifier, so a prefix glued
+# to one is the tail of a NAME (`notes_on_xoxb-`, `my_cfut_settings`), and a value that
+# really is labelled by that name (`SLACK_TOKEN=xoxb-…`) is caught by kv-secret below,
+# whose label half does not read `_B` at all.
+_B = r"(?<![A-Za-z0-9_])"
 
 # wq#2297 kv-secret label vocabulary, ported from read_dir_sweep.py:38-60 (wq#2115).
 # A credential label is a NOUN, optionally qualified: `api key`, `Signing Secret`,

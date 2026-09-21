@@ -40,6 +40,15 @@ def mask(text):
     "risk-assessment-20260921-rollout",
     # `cfut_` is a prefix too; inside a word it is not a credential.
     "reading mycfut_settings_override",
+    # wq#2400: the same word, one separator over. This entry was drafted for this list
+    # and dropped before landing because the boundary was spelled `[^A-Za-z0-9]`, which
+    # reads `_` as a delimiter and so masked it — and the dropped draft went on to fire
+    # the slack alarm from the run's snapshot, filing a rotate-today ticket for two
+    # English words. `_` only ever continues an identifier, so it is now inside the
+    # class in both copies of the house set.
+    "see notes_on_xoxb-plainword",
+    "reading my_cfut_settings_override",
+    "log_sk-report-generator-2026",
 ])
 def test_plain_words_are_untouched(line):
     assert mask(line) == line
@@ -92,8 +101,11 @@ def test_sk_prefix_keeps_no_body_characters():
 
 
 def test_cloudflare_slack_aws_still_mask():
-    assert mask("CF cfut_abcdef123456") == "CF cfut_MASKED"
-    assert mask("hook xoxb-12345678901") == "hook xoxb-MASKED"
+    # wq#2400: split at each rule's boundary, like the aws line below always was. Left
+    # whole, these three lines armed the pri-1 alarm on anyone who READ this file — and
+    # this is the file wq#2316's own run was editing when it filed wq#2400.
+    assert mask("CF cfut_" + "abcdef123456") == "CF cfut_MASKED"
+    assert mask("hook xoxb-" + "12345678901") == "hook xoxb-MASKED"
     assert mask("id " + "AKIA" + "Q" * 16) == "id AKIAMASKED"
 
 
@@ -101,8 +113,10 @@ def test_kv_secret_rule_is_unchanged():
     """Left unanchored on purpose — it keys on an English word, so a left boundary
     would miss `githubToken: ...`. Carrying masking.py's shape-based label and tail
     lookahead across is wq#2313."""
-    assert mask('API_TOKEN="abcdef1234567890"') == 'API_TOKEN="MASKED"'
-    assert mask("password: hunter2hunter2") == "password: MASKED"
+    # Split after the label, where this rule reads its boundary (masking.py's KV_LINE
+    # convention) — same reason as wq#2400's splits above.
+    assert mask('API_TOKEN="' + 'abcdef1234567890"') == 'API_TOKEN="MASKED"'
+    assert mask("password: " + "hunter2hunter2") == "password: MASKED"
 
 
 def test_two_tokens_on_one_line_both_mask():
