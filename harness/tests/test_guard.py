@@ -6,9 +6,11 @@ whitespace evasion; every allow class gets a straight pass.
 """
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import primary_tree_guard as ptg  # noqa: E402  # wq#1752 runtime-env simulation
@@ -284,6 +286,12 @@ def test_lifecycle_events_logged(tmp_path):
     env = dict(os.environ)
     env["FOREMAN_WORKER"] = "test-worker-lifecycle"
     env["FOREMAN_EVENTS_DIR"] = str(tmp_path)
+    # wq#2349: this suite runs INSIDE a worker session, whose env carries the real
+    # FOREMAN_TICKET_ID and a live broker socket — inherit them and the `end` phase
+    # fires a genuine ticket-end at the fleet daemon. Drop the ticket id so `end`
+    # takes the deterministic skip branch; the revoke path has its own tests below,
+    # against a fake socket.
+    env.pop("FOREMAN_TICKET_ID", None)
     payload = json.dumps({"session_id": "s-abc", "cwd": "/tmp", "effort": {"level": "high"}})
     for phase in ("start", "stop", "end"):
         p = subprocess.run([GUARD, "--lifecycle", phase], input=payload, capture_output=True, text=True, env=env)
@@ -291,7 +299,9 @@ def test_lifecycle_events_logged(tmp_path):
     events_file = tmp_path / "test-worker-lifecycle.jsonl"
     assert events_file.exists()
     lines = [json.loads(l) for l in events_file.read_text().splitlines() if l.strip()]
-    assert [l["event"] for l in lines] == ["start", "stop", "end"]
+    events = [l["event"] for l in lines]
+    # `end` also logs which way the §3.4 revoke went — here, skipped for lack of a ticket.
+    assert events == ["start", "stop", "end", "ticket_end_skip_no_ticket"]
     assert all(l["effort"] == "high" for l in lines)
     assert all(l["session_id"] == "s-abc" for l in lines)
 
@@ -936,3 +946,144 @@ def test_primary_tree_branch_switch_blocked_work_queue_fallback():
                             cwd="/home/lumen/agents/work-queue",
                             env_extra={"FOREMAN_PRIMARY_TREES": ""})
     assert rc == 2 and "wq#900" in stderr, stderr
+
+
+# ---- wq#2349: --lifecycle end must reach the broker with a grant ----
+# The SessionEnd revoke passed no grant and let te_client fall back to
+# FOREMAN_GRANT_FILE/_SHA, which are set only for a ticket with needs:ssh/copy/
+# restart tags — so the broker denied grant:grant_missing_env 283 times out of 283
+# and TOKEN_ENGINE_DESIGN.md §3.4 revocation never ran. These tests drive the real
+# guard.sh -> te_client.py path against a FAKE broker socket: TOKEN_ENGINE_SOCK is
+# always overridden, because an earlier pass of this suite ran against the live
+# /run/token-engine/broker.sock and wrote several hundred test-worker denials into
+# the fleet audit sink (events/fleet-exec.jsonl).
+
+class FakeBroker:
+    """Single-connection stand-in for the token-engine daemon: records the request
+    frame guard.sh's te_client actually sent, answers with `ok`."""
+
+    def __init__(self, path, ok=True):
+        self.path = path
+        self.ok = ok
+        self.requests = []
+        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._sock.bind(path)
+        self._sock.listen(4)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                return
+            with conn:
+                buf = b""
+                while b"\n" not in buf:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    buf += chunk
+                if not buf:
+                    continue
+                self.requests.append(json.loads(buf.split(b"\n", 1)[0].decode()))
+                resp = {"ok": self.ok, "verb": "ticket-end",
+                        "rule": "grant:token_engine" if self.ok else "grant:grant_missing_env",
+                        "reason": "ok" if self.ok else "grant validation failed",
+                        "result": {"revoked": [], "failed": []}}
+                conn.sendall((json.dumps(resp) + "\n").encode())
+
+    def close(self):
+        self._sock.close()
+
+
+def run_lifecycle_end(tmp_path, env_extra, ok=True):
+    """-> (returncode, logged events, request frames the fake broker received)."""
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    broker = FakeBroker(str(tmp_path / "b.sock"), ok=ok)
+    try:
+        env = dict(os.environ)
+        env["FOREMAN_WORKER"] = "test-worker-2349"
+        env["FOREMAN_EVENTS_DIR"] = str(events_dir)
+        env["TOKEN_ENGINE_SOCK"] = broker.path
+        for var in ("FOREMAN_TICKET_ID", "FOREMAN_TICKET_END_GRANT_FILE",
+                    "FOREMAN_TICKET_END_GRANT_SHA", "FOREMAN_GRANT_FILE",
+                    "FOREMAN_GRANT_SHA"):
+            env.pop(var, None)
+        env.update(env_extra)
+        payload = json.dumps({"session_id": "s-2349", "cwd": "/tmp",
+                              "effort": {"level": "high"}})
+        p = subprocess.run([GUARD, "--lifecycle", "end"], input=payload,
+                           capture_output=True, text=True, env=env)
+        lines = (events_dir / "test-worker-2349.jsonl").read_text().splitlines()
+        events = [json.loads(l)["event"] for l in lines if l.strip()]
+        return p.returncode, events, list(broker.requests)
+    finally:
+        broker.close()
+
+
+def write_ticket_end_grant_file(tmp_path, ticket="2349", worker="test-worker-2349"):
+    import hashlib
+    path = tmp_path / "ticket-end-grant-a1.json"
+    raw = json.dumps({"ticket": ticket, "attempt": 1, "worker": worker,
+                      "expires": "2099-01-01T00:00:00Z",
+                      "grants": [{"kind": "token_engine", "node": "daemon"}]},
+                     indent=2, sort_keys=True).encode() + b"\n"
+    path.write_bytes(raw)
+    return str(path), hashlib.sha256(raw).hexdigest()
+
+
+def test_ticket_end_sends_the_grant_reference(tmp_path):
+    """The regression: the frame that reaches the broker carries grant_file/grant_sha,
+    so load_grant has something to verify instead of failing grant_missing_env."""
+    gfile, gsha = write_ticket_end_grant_file(tmp_path)
+    rc, events, requests = run_lifecycle_end(tmp_path, {
+        "FOREMAN_TICKET_ID": "2349",
+        "FOREMAN_TICKET_END_GRANT_FILE": gfile,
+        "FOREMAN_TICKET_END_GRANT_SHA": gsha,
+    })
+    assert rc == 0
+    assert len(requests) == 1, requests
+    req = requests[0]
+    assert req["verb"] == "ticket-end"
+    assert req["ticket"] == "2349"
+    assert req["worker"] == "test-worker-2349"
+    assert req["grant_file"] == gfile and req["grant_sha"] == gsha
+    assert events == ["end", "ticket_end_revoked"]
+
+
+def test_ticket_end_without_a_grant_skips_instead_of_being_denied(tmp_path):
+    """The missing-grant path: no ticket-end grant in the env means the broker is
+    never called at all. Calling it anyway is what logged 283 grant_missing_env
+    denials into the fleet audit sink and hid the fact that §3.4 never ran."""
+    rc, events, requests = run_lifecycle_end(tmp_path, {"FOREMAN_TICKET_ID": "2349"})
+    assert rc == 0
+    assert requests == []
+    assert events == ["end", "ticket_end_skip_no_grant"]
+
+
+def test_ticket_end_does_not_fall_back_to_the_exec_grant(tmp_path):
+    """An exec grant (needs:ssh/copy/restart) holds no {token_engine, daemon} entry,
+    so borrowing it would only trade grant_missing_env for grant_no_match."""
+    gfile, gsha = write_ticket_end_grant_file(tmp_path)
+    rc, events, requests = run_lifecycle_end(tmp_path, {
+        "FOREMAN_TICKET_ID": "2349",
+        "FOREMAN_GRANT_FILE": gfile,
+        "FOREMAN_GRANT_SHA": gsha,
+    })
+    assert requests == []
+    assert events == ["end", "ticket_end_skip_no_grant"]
+
+
+def test_ticket_end_denial_is_logged_and_never_blocks_session_end(tmp_path):
+    gfile, gsha = write_ticket_end_grant_file(tmp_path)
+    rc, events, requests = run_lifecycle_end(tmp_path, {
+        "FOREMAN_TICKET_ID": "2349",
+        "FOREMAN_TICKET_END_GRANT_FILE": gfile,
+        "FOREMAN_TICKET_END_GRANT_SHA": gsha,
+    }, ok=False)
+    assert rc == 0
+    assert len(requests) == 1
+    assert events == ["end", "ticket_end_revoke_failed"]

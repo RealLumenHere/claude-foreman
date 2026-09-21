@@ -44,14 +44,27 @@ log_event() {
 # daemon to revoke every token it minted for this ticket. Strictly best-effort —
 # a dead broker, absent grant, or timeout must never block session end, because
 # the daemon-start reaper re-runs the same sweep for exactly those cases.
+#
+# wq#2349: the grant is passed EXPLICITLY, from the pair fworker's
+# write_ticket_end_grant publishes per attempt. Passing none let te_client default
+# to FOREMAN_GRANT_FILE/_SHA — the exec grant, which fworker sets only for a ticket
+# with needs:ssh/copy/restart tags — so the broker denied grant:grant_missing_env
+# on 283 of 283 calls and §3.4 revocation never ran once. No fallback to that grant
+# either: it carries ssh/copy/restart kinds, never {token_engine, daemon}, so it
+# would only trade grant_missing_env for grant_no_match. Unset means SKIP rather
+# than call-and-be-denied: one quiet denial per session is what hid this.
 revoke_minted_tokens() {
   local sock="${TOKEN_ENGINE_SOCK:-/run/token-engine/broker.sock}"
   local te_client="$(dirname "$0")/../token-engine/te_client.py"
+  local grant_file="${FOREMAN_TICKET_END_GRANT_FILE:-}"
+  local grant_sha="${FOREMAN_TICKET_END_GRANT_SHA:-}"
   [ -n "${FOREMAN_TICKET_ID:-}" ] || { log_event "ticket_end_skip_no_ticket"; return 0; }
   [ -S "$sock" ] || { log_event "ticket_end_skip_no_broker"; return 0; }
   [ -f "$te_client" ] || { log_event "ticket_end_skip_no_client"; return 0; }
+  [ -n "$grant_file" ] && [ -n "$grant_sha" ] || { log_event "ticket_end_skip_no_grant"; return 0; }
   if timeout 25 python3 "$te_client" --verb ticket-end \
-       --ticket "$FOREMAN_TICKET_ID" --worker "$WORKER_ID" >/dev/null 2>&1; then
+       --ticket "$FOREMAN_TICKET_ID" --worker "$WORKER_ID" \
+       --grant-file "$grant_file" --grant-sha "$grant_sha" >/dev/null 2>&1; then
     log_event "ticket_end_revoked"
   else
     log_event "ticket_end_revoke_failed"

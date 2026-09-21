@@ -1387,6 +1387,57 @@ def resolve_exec_grant(ticket_id, attempt, needs, wall_clock_s, worktree=None):
     return grant, fleet_exec_policy.sha256_bytes(raw), path
 
 
+# wq#2349: how long past the wall-clock ceiling the ticket-end grant stays valid.
+# SessionEnd fires after the child exits — which for a watchdog kill is at the
+# ceiling itself — so a lease of exactly wall_clock_s would expire during the very
+# hook it exists for. The margin holds only {token_engine, daemon}, whose verbs
+# revoke this ticket's own tokens, so widening it de-privileges nothing.
+TICKET_END_GRANT_MARGIN_S = 1800
+
+
+def write_ticket_end_grant(ticket_id, attempt, worker_id, wall_clock_s):
+    """The grant guard.sh --lifecycle end needs to call the broker's ticket-end verb
+    (TOKEN_ENGINE_DESIGN.md §3.4). -> (path, sha256), or (None, None) if it could not
+    be written — best-effort like mint_gateway_key: a missing grant costs a revoke
+    (the daemon-start reaper still sweeps), never a dispatch.
+
+    This is deliberately NOT resolve_exec_grant's grant. That one is minted only for a
+    ticket carrying needs:ssh/copy/restart tags — almost none do — so the SessionEnd
+    hook, which passed no grant at all and let te_client fall back to
+    FOREMAN_GRANT_FILE, denied on grant:grant_missing_env for 283 of 283 ticket-end
+    calls (events/fleet-exec.jsonl) and §3.4 revocation had never once run. Ending a
+    ticket is a lifecycle op every attempt is entitled to, not an exec capability, so
+    it gets its own grant with exactly the {token_engine, daemon} kind handle() looks
+    up, bound to this ticket AND this worker id: load_grant then forces
+    grant.ticket == req.ticket, so the verb can only revoke what this attempt minted.
+
+    One file per attempt, not one per ticket: a previous attempt's SessionEnd hook can
+    still fire after the next attempt has started, and a shared path would leave that
+    hook's FOREMAN_TICKET_END_GRANT_SHA pointing at rewritten bytes (grant_sha_mismatch
+    — the same fail-closed denial in a new costume)."""
+    try:
+        expires = (datetime.now(timezone.utc)
+                   + timedelta(seconds=wall_clock_s + TICKET_END_GRANT_MARGIN_S)
+                   ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        grant = {"ticket": str(ticket_id), "attempt": attempt, "worker": worker_id,
+                 "expires": expires,
+                 "grants": [{"kind": "token_engine", "node": "daemon"}]}
+        path = os.path.join(run_dir(ticket_id), f"ticket-end-grant-a{attempt}.json")
+        raw = json.dumps(grant, indent=2, sort_keys=True).encode() + b"\n"
+        if os.path.exists(path):
+            os.chmod(path, 0o600)
+        with open(path, "wb") as f:
+            f.write(raw)
+        # 0444 for the same reason grant.json above is: uid tokeneng re-reads and
+        # re-hashes the file itself rather than trusting the caller's sha.
+        os.chmod(path, 0o444)
+        return path, fleet_exec_policy.sha256_bytes(raw)
+    except OSError as e:
+        log(f"wq#{ticket_id}: ticket-end grant not written ({type(e).__name__}: {e}) "
+            f"— session-end revocation will skip, reaper still sweeps")
+        return None, None
+
+
 def make_worktree(repo, ticket_id, attempt, title, archetype):
     """RELIABILITY_SPEC.md §D + wq#649: the branch name embeds the attempt number
     from the start (previously only a retry-fallback appended it), since attempt 1's
@@ -2821,6 +2872,13 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         env["FOREMAN_GRANT_SHA"] = grant_sha
         env["FOREMAN_ATTEMPT"] = str(attempt)
         env["FLEET_EXEC_WORKER_AUDIT_PATH"] = os.path.join(EVENTS_DIR, f"{worker_id}.jsonl")
+    # wq#2349: written for EVERY attempt, grant_path or not — the SessionEnd revoke is
+    # a lifecycle op, not one of the exec capabilities above.
+    te_grant_path, te_grant_sha = write_ticket_end_grant(ticket_id, attempt, worker_id,
+                                                          wall_clock)
+    if te_grant_path:
+        env["FOREMAN_TICKET_END_GRANT_FILE"] = te_grant_path
+        env["FOREMAN_TICKET_END_GRANT_SHA"] = te_grant_sha
     # §1c: the Stop hook reads these — which ticket this session owns, and where its
     # per-session block counter lives (capped, so it can never wedge a session).
     env["FOREMAN_TICKET_ID"] = str(ticket_id)

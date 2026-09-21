@@ -168,6 +168,20 @@ host, so a worktree cannot quietly fall back to a stored credential.
 ticket's entry from its in-memory map. Ticket-end revocation must be idempotent and must also run from a
 reaper on daemon start, because a killed worker never fires `SessionEnd`.
 
+**The ticket-end grant is its own grant (wq#2349).** Ending a ticket is a lifecycle op every attempt is
+entitled to, not an exec capability, so it must not ride on the `needs:ssh/copy/restart` grant
+`fworker.resolve_exec_grant` mints. It did, implicitly: `guard.sh` passed no grant reference, `te_client`
+defaulted to `FOREMAN_GRANT_FILE`/`FOREMAN_GRANT_SHA`, and almost no ticket carries an exec-shaped needs
+tag — so the broker denied `grant:grant_missing_env` on **283 of 283** ticket-end calls
+(`events/fleet-exec.jsonl`) and §3.4 revocation had never run once; the daemon-start reaper was the only
+path that had ever revoked anything. `fworker.write_ticket_end_grant` now writes one grant per attempt
+(`_runs/wq<id>/ticket-end-grant-a<n>.json`, 0444, lease = wall clock + 30 min because `SessionEnd` fires
+*after* the child exits) holding exactly `{kind: token_engine, node: daemon}` and bound to this ticket and
+worker id, and publishes it as `FOREMAN_TICKET_END_GRANT_FILE`/`_SHA`. `load_grant` then forces
+`grant.ticket == req.ticket`, so the verb can only revoke what this attempt minted. With those vars unset
+`guard.sh` **skips** rather than calling and being denied — one denial per session is what kept this
+invisible for 283 of them.
+
 ---
 
 ## 4. Short-lived, narrow tokens per provider
