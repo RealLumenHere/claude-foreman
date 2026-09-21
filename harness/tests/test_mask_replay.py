@@ -847,6 +847,99 @@ def test_the_live_rules_would_not_have_filed_wq2354():
     assert mask_replay.unaccounted(records) == []
 
 
+WQ2348_LABELS = ("cloudflare", "github", "kv-secret")
+WQ2348_TRANSCRIPT = "transcript:bc57c139-6203-424b-b273-ed24a7053fe5"
+
+# The ten values wq#2278 ATTEMPT 2 put in front of the model under the three labels that
+# filed wq#2348, named the way a settled rotation ticket is allowed to name one: 12 hex
+# of sha256, and a length. Three are this masker's own substitution literal read back —
+# behind a `cfut_` prefix, behind a forge one, and a third time with the forge prefix
+# inside the value the kv rule keeps (6, 6 and 17). Six are Python the attempt read:
+# `os.path.join`, `os.environ.get`, and the names of four called functions
+# (`read_oauth_token`, `_ebay_access_token`, `apply_key_allowlist`, and the tail of an
+# open-source solver's repo name behind a forge prefix). The tenth is the joke fixture
+# wq#2336's row names, quoted out of this very file. A live Cloudflare token's body is 40
+# characters and a forge token's is 36; the longest here is 23.
+WQ2348_ATTEMPT_2 = {
+    ("cloudflare", "20227a136ec3"): 6,
+    ("github", "20227a136ec3"): 6,
+    ("github", "b8789db0c2da"): 6,
+    ("kv-secret", "2c9e04df04aa"): 17,
+    ("kv-secret", "eb522505a0e3"): 19,
+    ("kv-secret", "166e2282ed20"): 16,
+    ("kv-secret", "00ef0d630506"): 18,
+    ("kv-secret", "ceb969f320cb"): 14,
+    ("kv-secret", "e6e7cef12b65"): 12,
+    ("kv-secret", "ae71c4cdf5d7"): 23,
+}
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2278_RUN),
+                    reason="wq#2278's run dir is not on this host")
+def test_wq2278_attempt_2_alarm_burned_nothing():
+    """wq#2348's verdict, pinned: three labels, ten values, no credential, no rotation.
+
+    The twin of wq#2343 one attempt later — the tripwire filed that ticket for attempt 1
+    at 22:59:54Z and this one for attempt 2 at 23:01:44Z, 110 seconds apart, off the same
+    run and sharing the `cloudflare` label. The per-attempt alarm set resets at the
+    attempt boundary while the corpus that fires it does not: a retry re-reads the same
+    committed source and pages again.
+
+    Scored against attempt 2's OWN transcript rather than the run's whole corpus, because
+    that is the premise the ticket asserts — that the value reached the model context. It
+    did; what reached it was this module's output and three identifiers.
+
+    A failure here means one of these values has left the tree, and the run deserves a
+    fresh look."""
+    items = mask_replay.corpus(2278)
+    assert WQ2348_TRANSCRIPT in items, "attempt 2's own context must be in the corpus"
+    records = mask_replay.replay(2278,
+                                 items={WQ2348_TRANSCRIPT: items[WQ2348_TRANSCRIPT]})
+    got = {(r["label"], r["value_sha256_12"]): r
+           for r in records if r["label"] in WQ2348_LABELS}
+    assert {k: r["value_len"] for k, r in got.items()} == WQ2348_ATTEMPT_2
+    # every one of them is committed text, so burn_filter's screen would hold it benign
+    assert all(r["accounted_in"] for r in got.values())
+    # the two the masker wrote itself, tied to the literal rather than spelled
+    mask = hashlib.sha256(masking.MASK.encode()).hexdigest()[:12]
+    prefixed = hashlib.sha256(("github_pat_" + masking.MASK).encode()).hexdigest()[:12]
+    assert {("cloudflare", mask), ("github", mask),
+            ("kv-secret", prefixed)} <= set(WQ2348_ATTEMPT_2)
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2278_RUN),
+                    reason="wq#2278's run dir is not on this host")
+def test_the_live_rules_would_not_have_filed_wq2348():
+    """The leak path, closed before the ticket was filed and closed in three places, one
+    per label. The mask literal stopped vouching for itself (masking.py:200, 22:54:46);
+    the prefix stopped being read mid-word (wq#2292, 22:35:49); and a called function
+    stopped being read as a stored value, which is the `(?!...|\\()` tail of the kv rule.
+    Today the three labels have nothing left to fire on in the whole of attempt 2's
+    context.
+
+    It fired anyway at 23:01:44Z because the process scoring the stream had imported its
+    rule table at 22:14:43Z, when attempt 1 spawned, and held it across the attempt
+    boundary — the hole wq#2327 closed for the table. The ticket text is the receipt: it
+    carries the pre-22:40 template that 32aa000 replaced 21 minutes before it was
+    written.
+
+    One of the ten still matches and always will — the joke fixture, whose whole point is
+    to be credential-shaped — so what stops it is the second screen, burn_filter, which
+    pages only on a value it cannot find in a committed file."""
+    items = mask_replay.corpus(2278)
+    records = mask_replay.replay(2278, patterns=mask_replay.CURRENT_PATTERNS,
+                                 items={WQ2348_TRANSCRIPT: items[WQ2348_TRANSCRIPT]})
+    live = [r for r in records if r["label"] in WQ2348_LABELS]
+    assert {r["value_sha256_12"] for r in live} == {"ae71c4cdf5d7"}
+    assert all("tests/test_" in r["accounted_in"] for r in live)
+    for own_output in ("cfut_" + masking.MASK, "github_pat_" + masking.MASK):
+        assert masking.mask_text(own_output)[1] == []
+    assert masking.mask_text("hi" + "ghs_solver")[1] == []
+    # and each rule is still armed for a body that is not one of those
+    assert masking.mask_text("github_pat_" + "0" * 24)[1] == ["github"]
+    assert masking.mask_text("ghs_" + "0" * 36)[1] == ["github"]
+
+
 def test_legacy_table_is_not_the_live_one():
     """A future tightening of masking.PATTERNS must not silently rewrite history."""
     assert mask_replay.LEGACY_PATTERNS is not mask_replay.CURRENT_PATTERNS
