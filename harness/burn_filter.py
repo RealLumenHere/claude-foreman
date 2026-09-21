@@ -55,6 +55,7 @@ the ntfy page and the rotation ticket.
 import re
 import subprocess
 import sys
+import types
 
 import live_code
 import masking
@@ -70,6 +71,22 @@ _NON_SECRET_PREFIXES = ("/", "~", "./", "http://", "https://")
 MIN_SECRET_LEN = 12
 GIT_GREP_TIMEOUT_S = 20
 GIT_REV_PARSE_TIMEOUT_S = 5
+
+
+class Hit(str):
+    """A matched string that also remembers its body: the match minus the pattern's
+    fixed prefix (group 1 of every masking.PATTERNS rule).
+
+    Still the whole match as far as equality, hashing and the provenance cache go, so
+    a caller that never asks for `.body` sees plain text. A plain `str` handed to
+    classify() has no body and is screened whole, as before wq#2415.
+    """
+    __slots__ = ("body",)
+
+    def __new__(cls, whole, body):
+        self = super().__new__(cls, whole)
+        self.body = body
+        return self
 
 
 def matched_values(text, labels=None):
@@ -95,7 +112,7 @@ def matched_values(text, labels=None):
         if labels is not None and label not in labels:
             continue
         for m in rx.finditer(text):
-            out.setdefault(label, []).append(m.group(0))
+            out.setdefault(label, []).append(Hit(m.group(0), m.group(0)[len(m.group(1)):]))
     return out
 
 
@@ -184,12 +201,34 @@ def is_committed_literal(value, repo_roots, runner=subprocess.run):
     return False
 
 
+def _is_accounted(match, repo_roots, runner):
+    """`match` whole, else its body when it carries one long enough to mean something.
+
+    The body lookup adds no argv exposure: the body is a substring of the whole match
+    that was just put there.
+    """
+    if is_committed_literal(match, repo_roots, runner=runner):
+        return True
+    body = getattr(match, "body", "")
+    return (len(body) >= MIN_SECRET_LEN and body != match
+            and is_committed_literal(body, repo_roots, runner=runner))
+
+
 def classify(detail, live, repo_roots, runner=subprocess.run, cache=None):
     """Split mask labels into (burned, benign).
 
     `detail` is matched_values()'s {label: [matched strings]}. A label is
     burned if ANY of its matches is live or unaccounted for — one real token in a
     line of otherwise harmless text is still a burn.
+
+    A match not found whole is retried as its body (wq#2415). The house mitigation for
+    a fixture that arms the tripwire is to split its literal at the prefix seam
+    (`"sk-ant-" + "oat01-..."`), which keeps the source unmatched but leaves no
+    verbatim whole match in the tree — while a `git log` still prints the revision that
+    held it whole. Only the body is on disk, and mask_replay/mask_triage already
+    account the body for the same reason. The retry is bounded below by MIN_SECRET_LEN
+    so a short body cannot excuse a match by coincidence, and it runs after the live
+    check, so it never gets the chance to excuse a credential the child was handed.
     """
     cache = {} if cache is None else cache
     burned, benign = [], []
@@ -202,7 +241,7 @@ def classify(detail, live, repo_roots, runner=subprocess.run, cache=None):
         accounted = True
         for match in matches:
             if match not in cache:
-                cache[match] = is_committed_literal(match, repo_roots, runner=runner)
+                cache[match] = _is_accounted(match, repo_roots, runner)
             if not cache[match]:
                 accounted = False
                 break
@@ -214,7 +253,8 @@ _SELF = live_code.fingerprint(__file__)
 
 # Not credential-shaped on purpose (masking.py:136): a real-looking literal in this
 # file would be read as a burn by the tripwire that reads this file.
-_CANARY = "burn-filter-canary-" + "0" * 12
+_CANARY_PREFIX = "burn-filter-canary-"
+_CANARY = _CANARY_PREFIX + "0" * 12
 
 
 def _still_screens(mod):
@@ -224,9 +264,27 @@ def _still_screens(mod):
     has to catch is a screen that drops all of them — an emptied classify, a
     half-written deploy. Passing the canary as `live` short-circuits ahead of
     is_committed_literal, so the self-test costs no subprocess.
+
+    wq#2415 widened what counts as committed text (a match is also accounted by its
+    body), and a wider tree is a wider excuse: the control has to be re-planted and
+    re-run over the widened screen (ops/wq2359-rotation-triage/README.md:68-75) or a
+    screen that excuses everything reads as a screen that found nothing burned. So
+    the same canary is also run through the body retry with an in-process runner:
+    with nothing committed it must still burn, and with only the body committed it
+    must clear — the second half is what proves the first is not a screen that
+    burns everything.
     """
     burned, _ = mod.classify({"canary": [_CANARY]}, {_CANARY}, [])
-    return burned == ["canary"]
+    if burned != ["canary"]:
+        return False
+    hit = mod.Hit(_CANARY, _CANARY[len(_CANARY_PREFIX):])
+    for committed, want in ((set(), ["canary"]), ({hit.body}, [])):
+        def runner(argv, committed=committed, **_):
+            return types.SimpleNamespace(
+                returncode=0 if argv[argv.index("-e") + 1] in committed else 1)
+        if mod.classify({"canary": [hit]}, set(), ["/"], runner=runner)[0] != want:
+            return False
+    return True
 
 
 def deployed(path=None):

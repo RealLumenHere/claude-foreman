@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 
 import pytest
 
@@ -116,8 +117,86 @@ def test_provenance_lookups_are_cached_across_lines():
     for _ in range(3):
         detail = burn_filter.matched_values(line)
         burn_filter.classify(detail, set(), REPO, runner=grep, cache=cache)
-    # one lookup per distinct matched string, not per line
-    assert len(grep.calls) == len(cache)
+    # one lookup per distinct matched string (whole, then body), not per line
+    assert len(grep.calls) == 2 * len(cache)
+
+
+# --- split-literal fixtures (wq#2415) ---------------------------------------
+
+def _needles(grep):
+    return [argv[argv.index("-e") + 1] for argv in grep.calls]
+
+
+def test_split_literal_fixture_is_accounted_by_its_body():
+    """wq#2414: the tree holds `"sk-ant-" + "oat01-..."`, so only the body is verbatim
+    on disk, yet `git log` prints the revision that held the value whole."""
+    body = OAT[len("sk-ant-"):]
+    detail = burn_filter.matched_values(f"+OAT = {OAT}")
+    burned, benign = burn_filter.classify(
+        detail, set(), REPO, runner=FakeGrep(committed=[body]))
+    assert burned == [] and benign == ["sk-key"]
+
+
+def test_the_body_retry_still_burns_a_value_the_tree_never_held():
+    grep = FakeGrep(committed=[])
+    burned, _ = burn_filter.classify(
+        burn_filter.matched_values(OAT), set(), REPO, runner=grep)
+    assert burned == ["sk-key"]
+    assert _needles(grep) == [OAT, OAT[len("sk-ant-"):]]
+
+
+def test_a_live_value_is_not_excused_by_its_body_being_committed():
+    body = OAT[len("sk-ant-"):]
+    grep = FakeGrep(committed=[body])
+    burned, _ = burn_filter.classify(
+        burn_filter.matched_values(OAT), {OAT}, REPO, runner=grep)
+    assert burned == ["sk-key"] and grep.calls == []
+
+
+def test_a_short_body_cannot_excuse_a_match():
+    """cfut_ bodies are only 6 characters: too little to be told from other text."""
+    value = burn_filter.Hit("cfut_" + "abcdef", "abcdef")
+    grep = FakeGrep(committed=["abcdef"])
+    burned, _ = burn_filter.classify({"cloudflare": [value]}, set(), REPO, runner=grep)
+    assert burned == ["cloudflare"]
+
+
+def test_a_plain_string_is_still_screened_whole():
+    grep = FakeGrep(committed=[OAT[len("sk-ant-"):]])
+    burned, _ = burn_filter.classify({"sk-key": [str(OAT)]}, set(), REPO, runner=grep)
+    assert burned == ["sk-key"] and _needles(grep) == [OAT]
+
+
+def test_hit_is_the_whole_match_to_everything_but_body():
+    hit = burn_filter.matched_values(OAT)["sk-key"][0]
+    assert hit == OAT and hash(hit) == hash(OAT) and hit.body == OAT[len("sk-ant-"):]
+
+
+def test_the_screen_control_covers_the_body_retry():
+    assert burn_filter._still_screens(burn_filter)
+
+    class Excuses(types.ModuleType):
+        """A screen widened until it clears everything."""
+        Hit = burn_filter.Hit
+        _CANARY = burn_filter._CANARY
+        _CANARY_PREFIX = burn_filter._CANARY_PREFIX
+
+        @staticmethod
+        def classify(detail, live, roots, runner=None, cache=None):
+            return ([], list(detail)) if not any(
+                s in m for m in sum(detail.values(), []) for s in live) else (list(detail), [])
+
+    assert not burn_filter._still_screens(Excuses("excuses"))
+
+
+def test_the_committed_split_fixture_is_accounted_in_the_real_tree():
+    """The dummy wq#2414 was about, against the real tree: whole value not verbatim
+    anywhere, body verbatim in harness/tests/test_token_injection.py."""
+    value = "sk-ant-" + "oat01-dummy-test-token"
+    assert not burn_filter.is_committed_literal(value, REPO_ROOT)
+    burned, _ = burn_filter.classify(
+        burn_filter.matched_values(value), set(), REPO_ROOT)
+    assert burned == []
 
 
 # --- is_committed_literal against the real tree -----------------------------
@@ -356,7 +435,9 @@ def test_run_child_screens_against_the_dirs_its_own_argv_granted(
     every one of them. Drive the real thing with real `git grep`: one stream, run
     twice, paging or quiet purely on whether the repo holding the text was granted.
     """
-    value = "sk-ant-" + "oat01-committed-only-in-the-granted-repo"
+    # wq#2415: a body spelled contiguously anywhere in this checkout would now account
+    # for the value, this file's own source included, so the body is split too.
+    value = "sk-ant-" + "oat01-committed-only-" + "in-the-granted-repo"
     granted = _repo(tmp_path / "kb", {"runbook.md": f"the runbook quotes {value}\n"})
     leak = f"read the runbook: {value}"
 
@@ -386,10 +467,18 @@ def test_the_same_shape_pages_when_it_is_the_childs_real_token(
 
 # The screen as 281327c deployed it at 23:09:47Z, in one line: it accounts for text
 # this process's copy cannot, because it reads roots this copy never looked in.
+#
+# Both stand-ins answer for the real `git grep` only and defer to the original lookup
+# for anything else (`_still_screens` drives the screen with an in-process runner), so
+# they model a screen with a different TREE rather than a screen that has stopped
+# looking — which the wq#2415 control refuses on its own.
 WIDER_SCREEN = """
 
+_tree_lookup = is_committed_literal
+
+
 def is_committed_literal(value, repo_roots, runner=subprocess.run):
-    return True
+    return runner is subprocess.run or _tree_lookup(value, repo_roots, runner=runner)
 """
 
 # the other direction: a deploy that accounts for nothing, so it calls every hit a
@@ -397,8 +486,18 @@ def is_committed_literal(value, repo_roots, runner=subprocess.run):
 # recheck's logic and not what happens to be committed in this tree today.
 STRICTER_SCREEN = """
 
+_tree_lookup = is_committed_literal
+
+
 def is_committed_literal(value, repo_roots, runner=subprocess.run):
-    return False
+    return runner is not subprocess.run and _tree_lookup(value, repo_roots, runner=runner)
+"""
+
+# a widened tree so wide it clears everything, control included: refused, not adopted
+EXCUSES_ALL_SCREEN = """
+
+def is_committed_literal(value, repo_roots, runner=subprocess.run):
+    return True
 """
 
 # and its opposite, a deploy that stopped screening at all. Silencing the tripwire is
@@ -470,6 +569,14 @@ def test_a_deployed_screen_that_stopped_screening_is_not_trusted(
     assert screen(tmp_path, monkeypatch, GUTTED_SCREEN, burned_here=True) == [["sk-key"]]
 
 
+def test_a_deployed_screen_that_excuses_everything_is_not_trusted(
+        tmp_path, monkeypatch):
+    """wq#2415: the body retry widened what counts as committed. A deploy that clears
+    the re-planted canary too has learned nothing about burns, so it is refused."""
+    assert burn_filter.deployed(burn_filter_copy(tmp_path, EXCUSES_ALL_SCREEN)) is burn_filter
+    assert screen(tmp_path, monkeypatch, EXCUSES_ALL_SCREEN, burned_here=True) == [["sk-key"]]
+
+
 def test_the_recheck_does_not_reuse_this_processs_provenance_answers(
         tmp_path, monkeypatch):
     """The two passes must not share classify()'s cache: a fix to is_committed_literal
@@ -483,4 +590,5 @@ def test_the_recheck_does_not_reuse_this_processs_provenance_answers(
     monkeypatch.setattr(fworker, "mask_alarm", lambda *a, **k: None)
     fworker.screen_mask_hits(["sk-key"], f"leaked {OAT}", set(), set(), set(),
                              [REPO], 2404, 1)
-    assert calls == [OAT]     # this process asked once; the deployed copy asked itself
+    # this process asked once (whole, then body); the deployed copy asked itself
+    assert calls == [OAT, OAT[len("sk-ant-"):]]
