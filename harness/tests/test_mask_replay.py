@@ -562,6 +562,79 @@ def test_the_live_rules_would_not_have_filed_wq2336():
     assert all("tests/test_" in r["accounted_in"] for r in kv.values())
 
 
+WQ1819_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq1819")
+
+# The one `kv-secret` value wq#1819 attempt 8 put in front of its model. Unlike every
+# other pin in this file the identity is not asserted as a bare hash constant: the
+# value is a PUBLIC PYTHON IDENTIFIER, so the test can name it outright and hash it
+# back, which is a strictly stronger pin. A bare constant only says "unchanged since
+# someone looked"; this says what the string IS, and fails loudly if a future rule ever
+# re-reads a different string into this slot.
+WQ1819_KV_IDENTIFIER = b"read_oauth_token"
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ1819_RUN),
+                    reason="wq#1819's run dir is not on this host")
+def test_wq1819_transcript_burned_nothing():
+    """wq#2347's verdict, pinned. The ticket reads `kv-secret fired on wq#1819 attempt
+    8's stream-json ... rotate it today`; nothing was rotated, because the "credential"
+    is the name of a function.
+
+    The alarm matched `token = read_oauth_token()` at harness/fworker.py:1542 — label
+    `token =`, body `read_oauth_token`, 16 characters, which clears the legacy rule's
+    12-character floor. The legacy kv rule had no tail lookahead, so it could not tell
+    an assignment's VALUE from the head of a CALL, and a call to a function whose job
+    is to read a token is the single most credential-shaped line a codebase can hold.
+
+    Attempt 8 ran `nephthys-qwen14b` (attempt-8.json), a local model, and was killed on
+    wall-clock after 7 turns — so the bytes reached a model on this host and no further,
+    which is not a mitigation but is worth recording next to the verdict."""
+    records = mask_replay.replay(1819)
+    assert mask_replay.unaccounted(records) == []
+    assert len(records) == 1
+    kv, = records
+    assert kv["label"] == "kv-secret"
+    assert kv["value_len"] == len(WQ1819_KV_IDENTIFIER) == 16
+    assert kv["value_sha256_12"] == hashlib.sha256(
+        WQ1819_KV_IDENTIFIER).hexdigest()[:12]
+    # a call, not a value: the recorded line keeps the `()` the rule failed to look at
+    assert kv["line"].endswith("()")
+    # committed source, hence public to every worker, hence not a secret
+    assert kv["accounted_in"].startswith("despag/backends/claude_max.py:")
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ1819_RUN),
+                    reason="wq#1819's run dir is not on this host")
+def test_the_live_rules_would_not_have_filed_wq2347():
+    """The leak path, closed, and closed twice. kv-secret's tail lookahead (wq#2288)
+    ends a match on `(?![A-Za-z0-9._-]|\\()`, so a call can no longer be read as a
+    value and the whole corpus now scores zero. Were it ever to match again, the second
+    screen holds independently: `burn_filter` pages only on a value it cannot find in a
+    committed file, and this one is in two.
+
+    Zero is per-corpus rather than per-label, so this also forecloses the sibling
+    tickets that would otherwise be filed against this run under the other labels."""
+    assert mask_replay.replay(1819, patterns=mask_replay.CURRENT_PATTERNS) == []
+    assert mask_replay.replay(1819)[0]["still_matches_today"] is False
+
+
+def test_the_kv_tail_lookahead_separates_a_call_from_a_value():
+    """The one-line rule change that settles wq#2347, exercised directly rather than
+    only through wq#1819's corpus — the corpus pins the verdict, this pins the REASON,
+    and would survive the run dir being pruned off the host.
+
+    The lookahead must not buy its silence by going blind to the assignment it is there
+    to catch, so both halves are asserted: a call is ignored, the same label with a real
+    value is still masked."""
+    current = dict(mask_replay.CURRENT_PATTERNS)["kv-secret"]
+    assert not current.search("        token = read_oauth_token()")
+    assert current.search('        token = "' + "A" * 36 + '"')
+    # and the legacy table genuinely did fire on it — otherwise the pin above proves
+    # nothing about why the ticket was filed
+    legacy = dict(mask_replay.LEGACY_PATTERNS)["kv-secret"]
+    assert legacy.search("        token = read_oauth_token()")
+
+
 WQ2278_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2278")
 WQ2278_A1 = "docs/wq2278-token-engine-t10-remaining-verbs-and-mig-a1"
 
