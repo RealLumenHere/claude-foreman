@@ -413,16 +413,31 @@ WQ2253_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2253")
 # the PR broker refused to post in row 588.
 WQ2253_GITHUB = {"b8789db0c2da": 6, "20227a136ec3": 6, "d354caf95d3e": 8}
 
+# The three `sk-key` values from the same attempt — wq#2337, the third rotate-today
+# ticket this one read filed — named the same way, and worth naming separately because
+# the blanket `unaccounted` check passes whether they are present or absent.
+# Every body is exactly 16 characters, the legacy rule's own `{16,}` floor: each cleared
+# the bar by nothing. They are not keys but the tails of ordinary hyphenated English in
+# the doctrine log's row about THIS false-positive class, caught where a word happens to
+# end in the two letters before a hyphen — unanchored, the rule could not tell that from
+# a prefix. Spelled as hashes for the two reasons WQ2253_GITHUB is: a record must never
+# carry its value, and a sentence that spells one is what row 588's broker refused.
+WQ2253_SK_KEY = {"24d32cfa0c9d": 16, "157fdb29bd0d": 16, "78bcca60d790": 16}
+
+# The gate snapshot whose frozen bytes carried all three into context, written
+# 22:51:23 — one second before the alarm filed wq#2337.
+WQ2253_DOCTRINE_SNAPSHOT = "snapshot:20260920T225123Z-home_lumen_kb_ISSUE-LOG.md"
+
 
 @pytest.mark.skipif(not os.path.isdir(WQ2253_RUN),
                     reason="wq#2253's run dir is not on this host")
 def test_wq2253_transcript_burned_nothing():
-    """wq#2335's verdict, pinned — and its twin wq#2314's, which settled the same run's
-    `kv-secret` label. The tripwire filed two pri-1 rotate-today tickets on this one
-    attempt at 22:51; replaying its artefacts under the rules live at 22:32 reproduces
-    9 credential-shaped strings and accounts for every one of them in a committed file,
-    so nothing was rotated. A failure here means a value this run saw has left the tree
-    and deserves a fresh look — not that a credential was burned."""
+    """wq#2335's verdict, pinned — and those of its twins wq#2314 (`kv-secret`) and
+    wq#2337 (`sk-key`), which the tripwire filed against this same attempt. Three pri-1
+    rotate-today tickets off one run; replaying its artefacts under the rules live at
+    22:32 reproduces 9 credential-shaped strings and accounts for every one of them in a
+    committed file, so nothing was rotated. A failure here means a value this run saw
+    has left the tree and deserves a fresh look — not that a credential was burned."""
     records = mask_replay.replay(2253)
     assert records, "wq#2253's artefacts should still reproduce the hit"
     assert mask_replay.unaccounted(records) == []
@@ -431,6 +446,14 @@ def test_wq2253_transcript_burned_nothing():
     # the load-bearing half: `unaccounted` also forgives a value today's table stopped
     # reading, and today's table reads none of these, so it would pass vacuously.
     assert all(r["accounted_in"] for r in github.values())
+    sk_key = {r["value_sha256_12"]: r for r in records if r["label"] == "sk-key"}
+    assert {h: r["value_len"] for h, r in sk_key.items()} == WQ2253_SK_KEY
+    assert all(r["accounted_in"] for r in sk_key.values())
+    # wq#2337's leak path, pinned to an artefact rather than argued from timing: all
+    # three first reach the model in one gated read of the doctrine log. Snapshots sort
+    # first in the corpus and this run's other 19 are its own worktree files, so the
+    # source of these values is the log — not anything the attempt was editing.
+    assert {r["first_seen_in"] for r in sk_key.values()} == {WQ2253_DOCTRINE_SNAPSHOT}
 
 
 @pytest.mark.skipif(not os.path.isdir(WQ2253_RUN),
@@ -441,8 +464,45 @@ def test_the_live_rules_would_not_have_filed_wq2335():
     it were shipped before the ticket was — the word boundary (wq#2292) stops a prefix
     being read mid-word, and the 30-character body floor (same) stops a 6-character
     doctrine-log quote being read as a token at all — yet the attempt kept paging under
-    the table it had imported at spawn, which is the hole wq#2327 later closed."""
+    the table it had imported at spawn, which is the hole wq#2327 later closed.
+
+    Zero is per-corpus, not per-label, so this settles wq#2337's `sk-key` and wq#2314's
+    `kv-secret` on the same evidence: the boundary is what stops a mid-word prefix in
+    hyphenated prose, the one defect all three tickets share."""
     assert mask_replay.replay(2253, patterns=mask_replay.CURRENT_PATTERNS) == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2253_RUN),
+                    reason="wq#2253's run dir is not on this host")
+def test_wq2253_sk_key_is_absent_from_the_model_context():
+    """The assertion wq#2337's ticket text actually asks for, which no other test here
+    makes. `first_seen_in` cannot answer it — snapshots sort first in the corpus, so it
+    names where a value is EARLIEST, not where it is only. Scored source by source, all
+    three values live in the gate's full-file snapshot of the doctrine log and NOWHERE
+    else: the CLI transcript, 1.5MB of the model's context verbatim, carries none of
+    them, and the one doctrine-log read the run made returned a four-line window
+    starting one line below the row that holds them.
+
+    A snapshot freezes the whole file, a Read returns a window, and this alarm paged on
+    the difference — so the ticket's premise ("the value reached the model context") is
+    false here quite apart from the values being committed prose. Kept as a test rather
+    than a log row because it is the only cheap way to tell the two apart on the NEXT
+    alarm: a value in the transcript reached the model, a value only in a snapshot did
+    not, and the second class costs an xhigh worker an hour to re-derive."""
+    items = mask_replay.corpus(2253)
+    tracked = mask_replay.tracked_text()
+    found = {}
+    for source, text in items.items():
+        hits = {r["value_sha256_12"] for r
+                in mask_replay.replay(2253, tracked=tracked, items={source: text})
+                if r["label"] == "sk-key"}
+        if hits:
+            found[source] = hits
+    assert found == {WQ2253_DOCTRINE_SNAPSHOT: set(WQ2253_SK_KEY)}
+    assert [s for s in items if s.startswith("transcript:")], \
+        "the model's own context must be in the corpus for the above to mean anything"
+    reads = [s for s in items if "kb/ISSUE-LOG.md@" in s]
+    assert [s.rsplit("@", 1)[1] for s in reads] == ["658"]
 
 
 WQ2300_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2300")
