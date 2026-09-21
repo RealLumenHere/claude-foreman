@@ -154,16 +154,26 @@ def blob_at_size(path, size):
 
 
 def session_ids(ticket_id):
-    """Session ids the run reported, for the read caches keyed by them."""
+    """Session ids the run reported, for the read caches keyed by them.
+
+    Two sources. The event stream's `start` line names the session the moment the
+    attempt begins, so a run that was killed before `attempt_end` wrote episode.jsonl
+    still resolves (wq#2358); episode.jsonl adds any id a resumed attempt picked up.
+    """
     out = []
-    for line in (_read(os.path.join(RUNS_ROOT, f"wq{ticket_id}", "episode.jsonl"))
-                 or "").splitlines():
-        try:
-            sid = json.loads(line).get("session_id")
-        except ValueError:
-            continue
-        if sid and sid not in out:
-            out.append(sid)
+    streams = [os.path.join(EVENTS_DIR, name)
+               for name in sorted(os.listdir(EVENTS_DIR) if os.path.isdir(EVENTS_DIR)
+                                  else [])
+               if name.startswith(f"fworker-wq{ticket_id}-") and name.endswith(".jsonl")]
+    streams.append(os.path.join(RUNS_ROOT, f"wq{ticket_id}", "episode.jsonl"))
+    for path in streams:
+        for line in (_read(path) or "").splitlines():
+            try:
+                sid = json.loads(line).get("session_id")
+            except (ValueError, AttributeError):
+                continue
+            if sid and sid not in out:
+                out.append(sid)
     return out
 
 
@@ -282,7 +292,12 @@ def tracked_text(repo=REPO_ROOT, extra=DOCTRINE_TRACKED):
 # the left half. Seam whitespace is [ \t] and never a newline, so closing a seam
 # cannot move a line number; a concatenation split across LINES stays unaccounted,
 # which is the safe direction to fail.
-_SEAM = re.compile(r"[\"'][ \t]*\+?[ \t]*[\"']")
+# wq#2358: the two quotes are the SAME character. With `["']` on both sides, a left
+# literal that itself ends in a double quote (test_daemon.py:338's kv fixture) makes the
+# leftmost match the `"'` at the end of its body, which closes nothing and leaves the
+# real seam standing — so the whole string was never found and the fixture paged as
+# BURNED. A mixed-quote join (`"a" 'b'`) is no longer closed; that fails loud, not quiet.
+_SEAM = re.compile(r"([\"'])[ \t]*\+?[ \t]*\1")
 _JOINED = {}
 
 
@@ -352,19 +367,27 @@ def _context(line, value, label):
     return ("…" if start else "") + masked[start:end] + ("…" if end < len(masked) else "")
 
 
-def replay(ticket_id, patterns=None, tracked=None, items=None):
+def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
+           skip_masked=None):
     """One record per distinct (label, value) the run put in front of the model.
 
     Records are hash-only and ordered by corpus source, so the first record for a
     label is the earliest artefact that could have fired that label's alarm.
+
+    `verdict(label, prefix, value)` is called in-process with the value and returns a
+    dict merged into the record; it is the seam mask_triage classifies through
+    without the value ever leaving this loop. `skip_masked` says whether a match that
+    ends in the mask literal is dropped (see _hits); the default is what the bundled
+    LEGACY_PATTERNS need, and a caller replaying a historic table passes its own.
     """
     patterns = LEGACY_PATTERNS if patterns is None else patterns
     tracked = tracked_text() if tracked is None else tracked
     items = corpus(ticket_id) if items is None else items
-    legacy = patterns is LEGACY_PATTERNS
+    if skip_masked is None:
+        skip_masked = patterns is not LEGACY_PATTERNS
     records, seen = [], set()
     for source, text in items.items():
-        for label, prefix, value in _hits(patterns, text, skip_masked_output=not legacy):
+        for label, prefix, value in _hits(patterns, text, skip_masked_output=skip_masked):
             if (label, value) in seen:
                 continue
             seen.add((label, value))
@@ -390,6 +413,8 @@ def replay(ticket_id, patterns=None, tracked=None, items=None):
                 # it is about.
                 "line": _context(line, value, label),
             })
+            if verdict:
+                records[-1].update(verdict(label, prefix, value))
     return records
 
 

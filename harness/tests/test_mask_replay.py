@@ -114,6 +114,17 @@ def test_closing_a_seam_cannot_move_a_line_number_or_invent_a_value():
         assert mask_replay.account("ant-oat01-padded", pair) is None, gap
 
 
+def test_a_seam_after_a_literal_ending_in_a_double_quote_is_closed():
+    """wq#2358: token-engine/tests/test_daemon.py:338 splits `TOKEN="` from its body,
+    so the left literal ENDS in a `"`. The first seam pattern took that embedded `"'`
+    pair as the seam and left the real ` + ` standing: the body alone accounted, the
+    whole string did not, and burn_filter.classify() (which asks about the whole
+    match) called a committed fixture unaccounted."""
+    left, body = 'TOKEN="', 'abcdefgh12345678'
+    tree = {"f.py": "x = '" + left + "' + '" + body + "\"'\n"}
+    assert mask_replay.account(left + body, tree) == "f.py:1"
+
+
 def test_a_value_in_neither_screen_is_reported(tmp_path):
     records = mask_replay.replay(0, tracked={}, items={"snapshot:a": LIVE})
     assert records[0]["still_matches_today"] is True
