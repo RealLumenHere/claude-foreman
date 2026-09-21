@@ -30,6 +30,13 @@ value, and never the surrounding line either.
 
     python3 harness/mask_triage.py 2288                 # rotation ticket id
     python3 harness/mask_triage.py 2288 --source 2284   # name the run explicitly
+    python3 harness/mask_triage.py 2288 2289 2290       # a batch: one line per ticket
+
+A value HEAD's tree cannot explain is asked of the repo's history before it is called a
+burn (wq#2359): `accounted: history:<blob>` means an earlier revision of a tracked file
+held that exact string, which is what a run reading a worktree behind main was seeing.
+The history index is built only when a first pass leaves something unaccounted, and the
+control is re-run over it, since a wider tree is a wider excuse.
 
 Verdicts: ACCOUNTED (the exact string is committed text), RULE-FIXED (unexplained by
 the tree, but HEAD's table no longer reads it as a credential), RE-CUT (scored off a
@@ -47,6 +54,7 @@ import re
 import secrets
 import sqlite3
 import string
+import subprocess
 import sys
 import types
 
@@ -61,6 +69,7 @@ SOURCE_RE = re.compile(r"burned credential in wq#(\d+)")
 TREE = "<tracked>"  # the one "repo root" classify() is given; the runner ignores it
 
 FATAL = ("UNACCOUNTED", "LIVE")
+HISTORY_MAX_BLOB = 400_000  # a blob bigger than this is a binary or a vendored dump
 EXIT_CLEAN, EXIT_BURN, EXIT_UNRESOLVED, EXIT_CONTROL = 0, 1, 2, 3
 
 
@@ -193,9 +202,142 @@ def report(source, rows, out=None):
               "longer reads as a credential, or an unrecoverable re-cut.", file=out)
 
 
+def resolve(ticket, source=None, created_at=None):
+    """(source run, alarm time) for a rotation ticket: the overrides, else its row."""
+    row = ticket_row(ticket)
+    named = SOURCE_RE.search(row[0]) if row else None
+    return (source or (int(named.group(1)) if named else None),
+            created_at or (row[1] if row else None))
+
+
+def history_text(repo=mask_replay.REPO_ROOT, max_blob=HISTORY_MAX_BLOB):
+    """{history:<sha10> -> text} over every blob a ref of `repo` can reach.
+
+    Reachable, not every object in the store: a blob only a dropped commit or a bare
+    `git add` ever held is not something a reviewer can open, and "committed text" has
+    to mean text someone can go and read.
+
+    `tracked_text` accounts a value against HEAD's tree. A run that read a worktree
+    behind main, or a fixture on a branch that never landed, read committed text all
+    the same — and every reviewer of that revision could read it too, which is the
+    whole test for whether a string is a secret. wq#2359: 5 of the 16 values the
+    47-ticket rotation backlog could not account for are in this index, and clearing
+    them settled 9 of the 13 tickets that HEAD's tree alone left open.
+    """
+    listing = subprocess.run(["git", "-C", repo, "rev-list", "--all", "--objects"],
+                             capture_output=True, text=True).stdout
+    shas, seen = [], set()
+    for line in listing.splitlines():
+        sha = line.split(" ", 1)[0]
+        if len(sha) == 40 and sha not in seen:
+            seen.add(sha)
+            shas.append(sha)
+    if not shas:
+        return {}
+    out = subprocess.run(["git", "-C", repo, "cat-file", "--batch", "--buffer"],
+                         input=("\n".join(shas) + "\n").encode(),
+                         capture_output=True).stdout
+    blobs, pos = {}, 0
+    while pos < len(out):
+        nl = out.find(b"\n", pos)
+        fields = out[pos:nl].decode("utf-8", "replace").split() if nl > 0 else []
+        if len(fields) != 3:
+            break
+        kind, size = fields[1], int(fields[2])
+        if kind == "blob" and size <= max_blob:
+            blobs[f"history:{fields[0][:10]}"] = out[nl + 1:nl + 1 + size].decode(
+                "utf-8", "replace")
+        pos = nl + 1 + size + 1
+    return blobs
+
+
+def triage_ticket(ticket, args, cache):
+    """Triage one ticket. Returns (code, source, rules sha, rows).
+
+    `cache` carries what the batch shares: the tracked tree (read on first use), the
+    live values, each run's corpus, each masking.py revision, and the history index.
+    All of it is the same evidence however many tickets were filed off it, and
+    re-reading any of it per ticket is what made this a worker's hour.
+    """
+    live = cache.live
+    source, created_at = resolve(ticket, args.source, args.created_at)
+    if not source or not (created_at or args.rules_sha):
+        print(f"wq#{ticket}: cannot resolve the source run or date the alarm; "
+              f"pass --source and --created-at", file=sys.stderr)
+        return EXIT_UNRESOLVED, source, None, []
+
+    if source not in cache.corpora:
+        cache.corpora[source] = mask_replay.corpus(source)
+    items = cache.corpora[source]
+    if not items:
+        print(f"wq#{source}: no run artefacts under {mask_replay.RUNS_ROOT} — nothing "
+              f"to replay", file=sys.stderr)
+        return EXIT_UNRESOLVED, source, None, []
+
+    key = args.rules_sha or created_at
+    if key not in cache.tables:
+        cache.tables[key] = rules_at(created_at, args.repo, args.rules_sha)
+    then = cache.tables[key]
+    rule_sets = []
+    if then:
+        rule_sets.append(("created", then[1], then[2]))
+    else:
+        print(f"wq#{ticket}: no harness/masking.py revision at {created_at}; "
+              f"scoring under HEAD only", file=sys.stderr)
+    rule_sets.append(("head", mask_replay.CURRENT_PATTERNS, True))
+
+    sha = then[0] if then else None
+    tracked = cache.tracked()
+    if not control(rule_sets, tracked, live):
+        print("CONTROL FAILED: a planted ghp_+36 was not reported UNACCOUNTED under "
+              "these rules. No verdict is safe to read.", file=sys.stderr)
+        return EXIT_CONTROL, source, sha, []
+
+    rows = triage(source, rule_sets, tracked, items, live)
+    if exit_code(rows) == EXIT_CLEAN or args.no_history:
+        return exit_code(rows), source, sha, rows
+
+    # Only now is the history index worth its minute: every remaining value is one
+    # HEAD's tree cannot explain, which is exactly the question an older revision
+    # answers. The control is re-run over the widened tree — a bigger tree is a bigger
+    # chance to explain a real token away, so the tool has to prove again that it
+    # cannot.
+    if "text" not in cache.history:
+        cache.history["text"] = history_text(args.repo)
+    widened = {**tracked, **cache.history["text"]}
+    if not control(rule_sets, widened, live):
+        print("CONTROL FAILED: a planted ghp_+36 was accounted by the history index. "
+              "No verdict is safe to read.", file=sys.stderr)
+        return EXIT_CONTROL, source, sha, []
+    rows = triage(source, rule_sets, widened, items, live)
+    return exit_code(rows), source, sha, rows
+
+
+def batch_line(ticket, code, source, sha, rows):
+    """One ticket, one line: enough to settle a queue row, no value and no context."""
+    state = {EXIT_CLEAN: "CLEAN", EXIT_BURN: "ROTATE",
+             EXIT_UNRESOLVED: "UNRESOLVED", EXIT_CONTROL: "CONTROL-FAILED"}[code]
+    if code in (EXIT_UNRESOLVED, EXIT_CONTROL):
+        return f"wq#{ticket} run wq#{source or '?'} {state}"
+    fatal = sum(1 for r in rows if r["verdict"] in FATAL)
+    rules = ("created@" + sha[:8] + "," if sha else "") + "head"
+    return (f"wq#{ticket} run wq#{source} rules={rules} values={len(rows)} "
+            f"rotate={fatal} {state}")
+
+
+def batch_exit(codes):
+    """A batch that cannot trust its tool reports that first, then a burn, then a gap."""
+    for code in (EXIT_CONTROL, EXIT_BURN, EXIT_UNRESOLVED):
+        if code in codes:
+            return code
+    return EXIT_CLEAN
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("ticket", type=int, help="the [rotation] ticket id")
+    ap.add_argument("ticket", type=int, nargs="+",
+                    help="the [rotation] ticket id(s); two or more triage as a batch, "
+                         "one summary line each, sharing the tree and every corpus")
     ap.add_argument("--source", type=int,
                     help="ticket id of the run that fired (default: parsed from the "
                          "rotation ticket's title)")
@@ -207,48 +349,50 @@ def main(argv=None):
     ap.add_argument("--extra-tracked", action="append",
                     default=list(mask_replay.DOCTRINE_TRACKED))
     ap.add_argument("--json", action="store_true", help="rows as JSON, no report")
+    ap.add_argument("--no-history", action="store_true",
+                    help="score against HEAD's tree only: do not account a value "
+                         "against the revision of a tracked file that held it")
     args = ap.parse_args(argv)
 
-    row = ticket_row(args.ticket)
-    named = SOURCE_RE.search(row[0]) if row else None
-    source = args.source or (int(named.group(1)) if named else None)
-    created_at = args.created_at or (row[1] if row else None)
-    if not source or not (created_at or args.rules_sha):
-        print(f"wq#{args.ticket}: cannot resolve the source run or date the alarm; "
-              f"pass --source and --created-at", file=sys.stderr)
-        return EXIT_UNRESOLVED
+    tree = {}
 
-    items = mask_replay.corpus(source)
-    if not items:
-        print(f"wq#{source}: no run artefacts under {mask_replay.RUNS_ROOT} — nothing "
-              f"to replay", file=sys.stderr)
-        return EXIT_UNRESOLVED
+    def load_tracked():
+        if not tree:
+            tree["text"] = mask_replay.tracked_text(args.repo, args.extra_tracked)
+        return tree["text"]
 
-    rule_sets = []
-    then = rules_at(created_at, args.repo, args.rules_sha)
-    if then:
-        rule_sets.append(("created", then[1], then[2]))
-    else:
-        print(f"wq#{args.ticket}: no harness/masking.py revision at {created_at}; "
-              f"scoring under HEAD only", file=sys.stderr)
-    rule_sets.append(("head", mask_replay.CURRENT_PATTERNS, True))
+    cache = types.SimpleNamespace(tracked=load_tracked, corpora={}, tables={},
+                                  history={},
+                                  live=burn_filter.live_secret_values(os.environ))
+    results = []
+    for ticket in args.ticket:
+        results.append((ticket, *triage_ticket(ticket, args, cache)))
 
-    tracked = mask_replay.tracked_text(args.repo, args.extra_tracked)
-    live = burn_filter.live_secret_values(os.environ)
-    if not control(rule_sets, tracked, live):
-        print("CONTROL FAILED: a planted ghp_+36 was not reported UNACCOUNTED under "
-              "these rules. No verdict is safe to read.", file=sys.stderr)
-        return EXIT_CONTROL
+    if len(results) == 1:
+        ticket, code, source, sha, rows = results[0]
+        if code in (EXIT_UNRESOLVED, EXIT_CONTROL):
+            return code
+        if args.json:
+            json.dump(rows, sys.stdout, indent=2)
+            print()
+        else:
+            print(f"wq#{ticket} -> run wq#{source}; rules: "
+                  f"{'created@' + sha[:8] + ', ' if sha else ''}head; control ok")
+            report(source, rows)
+        return code
 
-    rows = triage(source, rule_sets, tracked, items, live)
     if args.json:
-        json.dump(rows, sys.stdout, indent=2)
+        json.dump([{"ticket": t, "source": s, "exit": c, "rules_sha": sha, "rows": rows}
+                   for t, c, s, sha, rows in results], sys.stdout, indent=2)
         print()
     else:
-        print(f"wq#{args.ticket} -> run wq#{source}; rules: "
-              f"{'created@' + then[0][:8] + ', ' if then else ''}head; control ok")
-        report(source, rows)
-    return exit_code(rows)
+        for ticket, code, source, sha, rows in results:
+            print(batch_line(ticket, code, source, sha, rows))
+        tally = [sum(1 for r in results if r[1] == code)
+                 for code in (EXIT_CLEAN, EXIT_BURN, EXIT_UNRESOLVED, EXIT_CONTROL)]
+        print(f"\n{len(results)} tickets: {tally[0]} clean, {tally[1]} to rotate, "
+              f"{tally[2]} unresolved, {tally[3]} control-failed")
+    return batch_exit({r[1] for r in results})
 
 
 if __name__ == "__main__":

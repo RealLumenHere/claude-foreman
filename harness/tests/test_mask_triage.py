@@ -24,6 +24,7 @@ import mask_triage
 # Split at the prefix, like test_mask_replay.py: the shape has to exist at assert time
 # without this source line carrying a whole token.
 PLANTED = "ghp" + "_" + "Q7xW2pL9" * 4 + "mK4n"
+UNCOMMITTED = "ghp" + "_" + "Z3kR8vT1" * 4 + "pQ7w"
 CALLED_IDENT = "        key = apply_key_allowlist(reg)\n"
 LEGACY = mask_replay.LEGACY_PATTERNS
 HEAD = mask_replay.CURRENT_PATTERNS
@@ -51,6 +52,15 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(mask_triage, "WQ_DB", str(tmp_path / "absent.db"))
     monkeypatch.setattr(mask_triage, "rules_at",
                         lambda *a, **k: ("abc12345", LEGACY, False))
+
+    # The history index is real git over a real repo. A test that is not about it gets
+    # an empty one rather than a minute of this checkout's object store.
+    real_history = mask_triage.history_text
+
+    def sandboxed(repo, **kwargs):
+        return real_history(repo, **kwargs) if str(repo).startswith(str(tmp_path)) else {}
+
+    monkeypatch.setattr(mask_triage, "history_text", sandboxed)
     return tmp_path
 
 
@@ -168,10 +178,172 @@ def test_exit_2_when_the_run_left_nothing_or_the_ticket_cannot_be_resolved(env):
     assert mask_triage.main(["9000"]) == mask_triage.EXIT_UNRESOLVED
 
 
+# --- the batch ------------------------------------------------------------------
+
+def test_a_batch_prints_one_line_per_ticket_and_burns_on_the_worst(env, monkeypatch,
+                                                                   capsys):
+    """wq#2359: 47 tickets off 16 runs. A batch that reported only the last verdict, or
+    exited 0 because the last ticket was clean, would close a row holding a real burn."""
+    run_dir(env, 4242, "sess-1", "x = '" + PLANTED + "'\n")
+    (env / "_runs" / "wq4343" / "snapshots").mkdir(parents=True)
+    (env / "_runs" / "wq4343" / "snapshots" / "20260920T222000Z-y.py").write_text(
+        "remote: https://" + UNCOMMITTED + "@host/o/r.git\n")
+    (env / "events" / "fworker-wq4343-a1.jsonl").write_text(json.dumps(
+        {"ts": "2026-09-20T22:19:34Z", "event": "start", "session_id": "sess-2"}) + "\n")
+    monkeypatch.setattr(mask_replay, "tracked_text",
+                        lambda *a, **k: {"tests/f.py": "y = '" + PLANTED + "'\n"})
+    monkeypatch.setattr(mask_triage, "ticket_row", lambda ticket, **k: (
+        f"[rotation] burned credential in wq#{4242 if ticket == 9000 else 4343} "
+        f"transcript (github)", "2026-09-20 22:15:40"))
+    code = mask_triage.main(["9000", "9001"])
+    out = capsys.readouterr()
+    assert code == mask_triage.EXIT_BURN
+    assert ("wq#9000 run wq#4242 rules=created@abc12345,head values=1 rotate=0 CLEAN"
+            in out.out)
+    assert ("wq#9001 run wq#4343 rules=created@abc12345,head values=1 rotate=1 ROTATE"
+            in out.out)
+    assert "2 tickets: 1 clean, 1 to rotate" in out.out
+    assert PLANTED not in out.out + out.err
+    assert UNCOMMITTED not in out.out + out.err
+
+
+def test_a_batch_reads_the_tree_and_each_corpus_once(env, monkeypatch):
+    """The whole point of the batch: 47 tickets must not mean 47 tree scans and 47
+    corpus loads, which is the cost that dispatched a worker per row instead."""
+    run_dir(env, 4242, "sess-1", "x = '" + PLANTED + "'\n")
+    trees, corpora = [], []
+    real_corpus = mask_replay.corpus
+    monkeypatch.setattr(mask_replay, "tracked_text",
+                        lambda *a, **k: trees.append(1) or {})
+    monkeypatch.setattr(mask_replay, "corpus",
+                        lambda source, **k: corpora.append(source) or real_corpus(source))
+    mask_triage.main(["9000", "9001", "9002", "--source", "4242",
+                      "--created-at", "2026-09-20 22:15:40"])
+    assert trees == [1] and corpora == [4242]
+
+
+def test_a_batch_that_resolves_nothing_never_reads_the_tree(env, monkeypatch):
+    """An unresolvable ticket is answered from its row; scanning the tracked tree to
+    say so is the expensive half of the run."""
+    monkeypatch.setattr(mask_replay, "tracked_text",
+                        lambda *a, **k: pytest.fail("batch scanned the tree"))
+    assert mask_triage.main(["9000", "9001"]) == mask_triage.EXIT_UNRESOLVED
+
+
+def test_a_batch_reports_a_failed_control_over_a_burn():
+    """Exit 1 says "rotate these". Exit 3 says "no verdict here is evidence" — when
+    both are true the batch has to say the second, or the burn list is read as complete."""
+    assert mask_triage.batch_exit({0, 1, 2, 3}) == mask_triage.EXIT_CONTROL
+    assert mask_triage.batch_exit({0, 1, 2}) == mask_triage.EXIT_BURN
+    assert mask_triage.batch_exit({0, 2}) == mask_triage.EXIT_UNRESOLVED
+    assert mask_triage.batch_exit({0}) == mask_triage.EXIT_CLEAN
+
+
+def test_a_batch_line_carries_the_count_and_never_a_value():
+    rows = mask_triage.triage(0, RULES, tracked={}, items={"a": "k = " + PLANTED + "\n"})
+    line = mask_triage.batch_line(2288, mask_triage.exit_code(rows), 2284, "abc12345ef",
+                                  rows)
+    assert line == ("wq#2288 run wq#2284 rules=created@abc12345,head values=1 rotate=1 "
+                    "ROTATE")
+    assert PLANTED not in line
+
+
 def test_the_source_run_is_parsed_from_the_rotation_title():
     m = mask_triage.SOURCE_RE.search(
         "[rotation] burned credential in wq#2284 transcript (kv-secret)")
     assert m and m.group(1) == "2284"
+
+
+# --- the revision that held it ----------------------------------------------------
+
+def commit_then_drop(tmp_path, body):
+    """A repo whose HEAD tree no longer holds `body`, but whose history does."""
+    repo = tmp_path / "hist"
+    (repo / "harness" / "tests").mkdir(parents=True)
+    git(repo, "2026-09-20T22:00:00", "init", "-q")
+    fixture = repo / "harness" / "tests" / "test_token_injection.py"
+    fixture.write_text(body)
+    git(repo, "2026-09-20T22:01:00", "add", "-A")
+    git(repo, "2026-09-20T22:01:00", "commit", "-qm", "fixture")
+    fixture.write_text("# the fixture was cut\n")
+    git(repo, "2026-09-20T22:02:00", "add", "-A")
+    git(repo, "2026-09-20T22:02:00", "commit", "-qm", "cut the fixture")
+    return repo
+
+
+def test_a_fixture_cut_from_head_is_still_accounted_by_its_own_revision(
+        env, monkeypatch, capsys):
+    """wq#2359: 12 of 16 values the backlog called UNACCOUNTED were this — a run read a
+    worktree behind main, and the string it read had been committed and then removed."""
+    repo = commit_then_drop(env, "SECRET = '" + PLANTED + "'\n")
+    run_dir(env, 4242, "sess-1", "x = '" + PLANTED + "'\n")
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    assert cli("--repo", str(repo)) == mask_triage.EXIT_CLEAN
+    out = capsys.readouterr().out
+    assert "[ACCOUNTED] github" in out and "accounted: history:" in out
+    assert PLANTED not in out
+
+
+def test_a_value_no_revision_ever_held_still_burns(env, monkeypatch, capsys):
+    """The history index is a wider excuse, so the burn path has to survive it."""
+    repo = commit_then_drop(env, "SECRET = 'unrelated-fixture-text'\n")
+    run_dir(env, 4242, "sess-1", "remote: https://" + PLANTED + "@host/o/r.git\n")
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    assert cli("--repo", str(repo)) == mask_triage.EXIT_BURN
+    assert "[UNACCOUNTED] github" in capsys.readouterr().out
+
+
+def test_no_history_scores_against_heads_tree_alone(env, monkeypatch):
+    repo = commit_then_drop(env, "SECRET = '" + PLANTED + "'\n")
+    run_dir(env, 4242, "sess-1", "x = '" + PLANTED + "'\n")
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    assert cli("--repo", str(repo), "--no-history") == mask_triage.EXIT_BURN
+
+
+def test_history_is_never_built_for_a_ticket_the_tree_already_explains(env, monkeypatch):
+    """The index costs a minute on a real repo. A clean first pass must not pay it."""
+    run_dir(env, 4242, "sess-1", "x = '" + PLANTED + "'\n")
+    monkeypatch.setattr(mask_replay, "tracked_text",
+                        lambda *a, **k: {"tests/f.py": "y = '" + PLANTED + "'\n"})
+    monkeypatch.setattr(mask_triage, "history_text",
+                        lambda *a, **k: pytest.fail("built the history index"))
+    assert cli() == mask_triage.EXIT_CLEAN
+
+
+def test_the_history_index_is_built_once_for_a_whole_batch(env, monkeypatch):
+    run_dir(env, 4242, "sess-1", "remote: https://" + PLANTED + "@host/o/r.git\n")
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    built = []
+    monkeypatch.setattr(mask_triage, "history_text",
+                        lambda *a, **k: built.append(1) or {})
+    monkeypatch.setattr(mask_triage, "ticket_row", lambda ticket, **k: (
+        "[rotation] burned credential in wq#4242 transcript (github)",
+        "2026-09-20 22:15:40"))
+    assert mask_triage.main(["9000", "9001", "9002"]) == mask_triage.EXIT_BURN
+    assert built == [1]
+
+
+def test_a_history_index_that_swallows_the_control_fails_the_run(env, monkeypatch,
+                                                                 capsys):
+    """If the index ever accounts for a value nothing committed — a stale cache, the
+    wrong repo — the control catches it before a verdict is printed."""
+    run_dir(env, 4242, "sess-1", "remote: https://" + PLANTED + "@host/o/r.git\n")
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    monkeypatch.setattr(mask_triage, "history_text",
+                        lambda *a, **k: {"history:deadbeef": "ghp" + "_"})
+    monkeypatch.setattr(mask_replay, "account",
+                        lambda value, tracked: "history:deadbeef" if tracked else None)
+    assert cli() == mask_triage.EXIT_CONTROL
+    out = capsys.readouterr()
+    assert "CONTROL FAILED" in out.err and "to rotate" not in out.out
+
+
+def test_history_text_reads_every_reachable_blob_and_skips_the_huge_ones(env):
+    repo = commit_then_drop(env, "SECRET = '" + PLANTED + "'\n")
+    blobs = mask_triage.history_text(str(repo))
+    assert any(PLANTED in text for text in blobs.values())
+    assert all(key.startswith("history:") for key in blobs)
+    assert mask_triage.history_text(str(repo), max_blob=1) == {}
 
 
 # --- the rule that was live -----------------------------------------------------
