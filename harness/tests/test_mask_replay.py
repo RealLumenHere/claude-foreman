@@ -29,8 +29,12 @@ import masking
 # identifier, a masked artefact read back, and a test fixture.
 CALLED_IDENT = "        key = apply_key_allowlist(reg)\n"
 OWN_OUTPUT = 'PAT: github_pat_MASKED and ghp_MASKED\n'
-FIXTURE = 'GITEA_TOKEN="hunter2-hunter2-hunter2"\n'
-LIVE = 'export GITEA_TOKEN="Zq7xW2pL9mK4nR8tY6vB3cF5hJ1dS0aG"\n'
+# wq#2356: split between `TOKEN="` and the body — the boundary the kv rule reads, and
+# `'` is not in its body charset — so this file's own source stops arming the tripwire.
+# The concatenation leaves the runtime bytes identical, so the replay still sees a whole
+# value in the items below, which is the half of the fixture the tests actually assert on.
+FIXTURE = 'GITEA_TOKEN="' + 'hunter2-hunter2-hunter2"\n'
+LIVE = 'export GITEA_TOKEN="' + 'Zq7xW2pL9mK4nR8tY6vB3cF5hJ1dS0aG"\n'
 
 
 def test_legacy_rules_fire_on_a_called_identifier_and_current_rules_do_not():
@@ -91,7 +95,7 @@ def test_a_fixture_split_to_dodge_the_tripwire_still_accounts():
     find fails and the dummy reports BURNED?, paging a human to rotate a fixture."""
     split = 'OAT_PADDED = "sk-ant-" + "oat01-padded"\n'
     records = mask_replay.replay(0, tracked={"tests/test_token_injection.py": split},
-                                 items={"transcript:a": 'v = "sk-ant-oat01-padded"'})
+                                 items={"transcript:a": 'v = "sk-ant-' + 'oat01-padded"'})
     assert [r["value_len"] for r in records] == [16]
     assert records[0]["accounted_in"] == "tests/test_token_injection.py:1"
     assert mask_replay.unaccounted(records) == []

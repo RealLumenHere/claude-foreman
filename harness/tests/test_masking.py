@@ -22,9 +22,10 @@ import masking
 # Synthetic, never-live values shaped like the real thing. Every one is SPLIT at its
 # prefix so the source line does not match the rule it exercises: merely READING this
 # file would otherwise trip the wq#2275 tripwire and file a pri-1 "rotate today" ticket
-# per label. wq#2299 did this for test_token_injection.py; the four constants below were
-# already split, but cloudflare/slack/kv-secret stayed whole in SECRETS and still fired
-# three labels at HEAD — see test_this_file_reads_without_tripping_the_mask_tripwire.
+# per label. wq#2299 did this for test_token_injection.py, 74dcb82 for the cloudflare and
+# slack constants here, and wq#2356 for the last three in test_mask_replay.py — whose
+# source still fired at HEAD. test_the_mask_suite_does_not_arm_its_own_tripwire now holds
+# the whole set to that rule, so the next inlined fixture fails a test instead of a lease.
 # The concatenation leaves the runtime bytes identical, so the rules still get their
 # real shape at assert time.
 GHP = "ghp_" + "A1b2C3d4E5f6G7h8J9k0A1b2C3d4E5f6G7h8"
@@ -105,6 +106,33 @@ KV_FALSE_POSITIVES = [
 KV_REAL = [f"password: {PW}", f'"api_key": "{PW}"', f"GITEA_TOKEN={PW}",
            f"Signing Secret: {PW}", f"clientSecret: {PW}", f"apiKey: {PW}",
            f"X-Api-Key: {PW}", f"signing key = {PW}"]
+
+
+# wq#2356: a worker investigating a mask alarm necessarily READS this file set, so a
+# fixture left whole in source arms the tripwire on the reader and files a pri-1
+# rotate-today ticket against a value that was never live. That is the loop ISSUE-LOG
+# rows 568-599 are made of — the wq#2275 cascade spent six tickets on it and found no
+# credential. The guard is on the SOURCE text, not the runtime value: split each fixture
+# at the boundary its rule reads (see KV_LINE) and the assertions are unaffected.
+MASK_SUITE_SOURCES = [
+    "tests/test_masking.py", "tests/test_mask_replay.py", "tests/test_token_injection.py",
+    "masking.py", "mask_replay.py", "burn_filter.py",
+]
+
+
+def test_the_mask_suite_does_not_arm_its_own_tripwire():
+    harness = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    offenders = {}
+    for rel in MASK_SUITE_SOURCES:
+        with open(os.path.join(harness, rel), errors="replace") as fh:
+            hits = masking.scan(fh.read())[1]
+        # label/prefix/length only — naming the value here would burn it for real
+        if hits:
+            offenders[rel] = [(h["label"], h["prefix"], h["value_len"]) for h in hits]
+    assert offenders == {}, (
+        "these sources carry a whole credential shape, so merely reading them files a "
+        "rotation ticket: %r — split each across a concatenation at the boundary its "
+        "rule reads, which leaves the runtime bytes identical" % offenders)
 
 
 def test_patterns_mask_and_label():
