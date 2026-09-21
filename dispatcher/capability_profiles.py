@@ -24,7 +24,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import yaml
 
@@ -138,8 +138,12 @@ def _scalar(v):
     if isinstance(v, str):
         bare = _BARE_RE.match(v) and yaml.safe_load(v) == v
         return v if bare else json.dumps(v)
+    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+        return ".nan" if v != v else (".inf" if v > 0 else "-.inf")
     if isinstance(v, (int, float)):
         return str(v)
+    if isinstance(v, (date, datetime)):
+        return v.isoformat()
     return json.dumps(v)
 
 
@@ -168,7 +172,7 @@ def apply_edits(text, edits):
                 if key in todo:
                     merged, tail = flow
                     merged.update(todo.pop(key))
-                    body = ", ".join(f"{k}: {_scalar(v)}" for k, v in merged.items())
+                    body = ", ".join(f"{_scalar(k)}: {_scalar(v)}" for k, v in merged.items())
                     line = f"{row.group(1)}{row.group(2)}{row.group(3)}{{{body}}}{tail}"
         out.append(line)
     if todo:

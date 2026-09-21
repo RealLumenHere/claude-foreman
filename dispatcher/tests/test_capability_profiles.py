@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 import time
+from datetime import date, datetime
 
 import pytest
 import yaml
@@ -196,3 +197,18 @@ def test_scalars_round_trip_through_apply_edits():
                    "ratio": 0.5, "n": 12, "nothing": None, "word": "null", "flag": "true",
                    "plain": "measured", "txt": "x, y: {z}"}
     assert out.rstrip("\n").endswith("} # keep } this")
+
+
+def test_dates_nonfinite_floats_and_unsafe_keys_round_trip():
+    text = ("nodes:\n  n1:\n    models:\n      - family: f1\n        capabilities:\n"
+            "          arch: {trusted: true, updated: 2026-09-01, seen: 2026-09-01 10:30:00,"
+            " hi: .inf, \"null\": 1, \"a b\": 2}\n")
+    out = capability_profiles.apply_edits(
+        text, {("n1", "f1", "arch"): {"n": 12, "lo": float("-inf"), "bad": float("nan"),
+                                      "true": 3, "y: z": 4}})
+    got = yaml.safe_load(out)["nodes"]["n1"]["models"][0]["capabilities"]["arch"]
+    bad = got.pop("bad")
+    assert isinstance(bad, float) and bad != bad
+    assert got == {"trusted": True, "updated": date(2026, 9, 1), "seen": datetime(2026, 9, 1, 10, 30),
+                   "hi": float("inf"), "null": 1, "a b": 2, "n": 12, "lo": float("-inf"),
+                   "true": 3, "y: z": 4}
