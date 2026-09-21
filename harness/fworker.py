@@ -26,6 +26,7 @@ Usage:
                [--worker-id ID] [--resume]
 """
 import argparse
+import hashlib
 import http.client
 import json
 import os
@@ -766,9 +767,15 @@ def write_mask_hits(ticket_id, attempt, records):
     return path
 
 
-ROTATION_TITLE_PREFIX = "[rotation] burned credential in wq#"
+ROTATION_TITLE_PREFIX = "[rotation] burned credential"
 # The same text also appears mid-title on the verify pass a rotation ticket spawns:
 # `[verify] wq#2294 [rotation] burned credential in wq#2284 transcript (github)`.
+#
+# wq#2341 stops the marker BEFORE the run id on purpose. A row filed since then is
+# keyed by the burned value (`[rotation] burned credential sha256:<12 hex> (github)`)
+# and names no run at all, while the 47 the storm filed — and every verify row they
+# spawned — still read `in wq#M transcript`. One marker both generations carry is what
+# keeps the chain guard covering the backlog it was written for.
 
 # wq#2332: the settle tool the rotation ticket has to name. A worker handed only
 # "sha256 a candidate and compare" rebuilds mask_replay's corpus walk by hand — that
@@ -874,15 +881,97 @@ def rotation_chain_refire(ticket_id, attempt, tag, hits_path):
     return True
 
 
+def burned_hashes(labels, records):
+    """sha256_12 of every distinct value recorded under a BURNED label (wq#2341).
+
+    `records` is masking.scan()'s re-scan of the whole raw line, so it also carries the
+    values of labels burn_filter screened as committed text. Keying the rotation row on
+    those would let a fixture sharing a line with a real token decide which row the
+    token dedupes into. Per label is the finest grain the screen actually decides at:
+    burn_filter.classify() burns a LABEL when any one of its matches is unaccounted.
+
+    Sorted and de-duplicated, because the key has to be the same for the same set of
+    values however many times, and in whatever order, the line printed them.
+    """
+    burned = set(labels)
+    return sorted({r.get("value_sha256_12") for r in records or []
+                   if r.get("label") in burned and r.get("value_sha256_12")})
+
+
+def rotation_title(ticket_id, tag, hashes):
+    """The rotation ticket's title — which IS its dedupe key (wq#2341).
+
+    Titled by the RUN, the same value printing in ten runs opened ten pri-1
+    rotate-today rows, each drawing an xhigh worker at roughly $6; 28 were open at once
+    on 2026-09-20. wq#2298 fixed the biggest source (the detector matching its own
+    output) but not the fan-out. Titled by the VALUE, `wq add` collapses the re-fires
+    itself: it refuses a title an undone ticket already carries.
+
+    That refusal is also what makes the dedupe safe. The hazard in a value-keyed key is
+    a credential that leaks AGAIN after it was rotated — it must page again, and a
+    dedupe that remembers forever would swallow it. wq's check compares against
+    `status != 'done'` (bin/wq cmd_add), so it only ever collapses into a row that is
+    still OPEN, i.e. one whose credential has not been rotated yet. A closed row is no
+    longer a match and the next leak of that value files a fresh page. Nothing here has
+    to carry a rotation epoch; the queue's own state is the epoch.
+
+    No hash falls back to the run-keyed title of every row filed before this: one row
+    per run is noisy, and it beats one row standing in for values we cannot show are
+    the same.
+    """
+    # Sorted and de-duplicated HERE too, not only in burned_hashes: a key that depends
+    # on the order a line happened to print two values in is not a key at all.
+    hashes = sorted(set(hashes or ()))
+    if not hashes:
+        return f"[rotation] burned credential in wq#{ticket_id} transcript ({tag})"
+    if len(hashes) == 1:
+        key = f"sha256:{hashes[0]}"
+    else:
+        # A set of values named by a hash OF their hashes: exact — a value added to or
+        # dropped from the set is a different row, and a value that has never been
+        # paged on must page — and bounded, where a title listing them grows with a
+        # fixture file's worth of matches. The cost of keying the SET is that a later
+        # alarm on a subset of it opens a second row: bounded by the distinct sets a
+        # leak path produces rather than by the runs that read it, and both rows are
+        # settled off the same hashes. One row per value instead would re-spend the
+        # xhigh worker per value on the multi-value alarms, which is the cost this is
+        # closing.
+        digest = hashlib.sha256("\n".join(hashes).encode()).hexdigest()[:12]
+        key = f"{len(hashes)} values set:{digest}"
+    return f"[rotation] burned credential {key} ({tag})"
+
+
+# `DUPLICATE — task 2310 [fleet/open] already has this title:` (bin/wq cmd_add). The id
+# is the row this value is ALREADY open on, which is where the run gets noted instead.
+WQ_DUPLICATE_RE = re.compile(r"DUPLICATE\b[^\n]*?\btask (\d+)")
+
+
 def mask_alarm(ticket_id, attempt, labels, records=None):
     """wq#2275 (T6): a mask hit is an ALARM, not a save (instinct 4). The credential
     already reached the model's context — CLI 2.1.233 has no pre-model rewrite lever
     (research/SMARTCRUSHER_HOOK.md) — so the artefacts are clean but the token is
     burned and must be rotated same-day. Page ntfy AND file a rotation ticket; both
-    best-effort so an alerting failure never takes down the attempt itself."""
+    best-effort so an alerting failure never takes down the attempt itself.
+
+    wq#2341: one row per burned VALUE, not per run that printed it. The forensics are
+    written before any of the three ways this can end in no new row (mask output, a
+    chain re-fire, a value already open), so evidence never depends on the judgement.
+    """
     labels = sorted(labels)
     tag = ",".join(labels)
     hits_path = write_mask_hits(ticket_id, attempt, records)
+    hashes = burned_hashes(labels, records)
+    if hashes and set(hashes).issubset(masking.SELF_OUTPUT_SHA12):
+        # wq#2339's triage recipe, run at the alarm instead of on the ticket it filed:
+        # every value here is this masker's own output read back, which is the
+        # synthetic-fixture shape that fired three rows during wq#2298's own run. The
+        # skip is all-or-nothing — one value the list cannot explain and the alarm
+        # stands, because a page held back is the failure this whole path exists to
+        # avoid.
+        log(f"mask hit wq#{ticket_id} attempt {attempt}: {tag} — every value is the "
+            f"mask literal by hash ({','.join(hashes)}), not a credential; records in "
+            f"{hits_path}, no page and no rotation ticket (wq#2339)")
+        return
     if rotation_chain_refire(ticket_id, attempt, tag, hits_path):
         return
     ntfy("foreman MASK HIT",
@@ -891,19 +980,27 @@ def mask_alarm(ticket_id, attempt, labels, records=None):
          priority="high")
     try:
         p = wq("add", "--lane", "fleet", "--pri", "1",
-               # The TITLE stays a literal here on purpose: the chain guard above
-               # matches ROTATION_TITLE_PREFIX in it, so a deployed file must not be
-               # able to rename a row out of its own chain.
-               "--title", f"[rotation] burned credential in wq#{ticket_id} "
-                          f"transcript ({tag})",
+               # The MARKER in the title stays a literal here on purpose: the chain
+               # guard above matches ROTATION_TITLE_PREFIX in it, so a deployed file
+               # must not be able to rename a row out of its own chain.
+               "--title", rotation_title(ticket_id, tag, hashes),
                "--detail", rotation_detail(ticket_id, attempt, tag, hits_path),
                "--no-probe", "rotation is a manual credential action; "
                              "no deterministic liveness probe exists")
         out = ((p.stdout or "") + (p.stderr or "")).strip()
-        if p.returncode != 0 and "DUPLICATE" not in out:
-            log(f"WARN: rotation ticket add failed for wq#{ticket_id}: {out[:200]}")
-        else:
+        dup = WQ_DUPLICATE_RE.search(out)
+        if p.returncode == 0:
             log(f"MASK HIT wq#{ticket_id} attempt {attempt}: {tag} — rotation ticket filed")
+        elif dup:
+            wq("note", dup.group(1),
+               f"wq#2275 tripwire: the same value(s) also fired on wq#{ticket_id} "
+               f"attempt {attempt} ({tag}); forensics appended to {hits_path}. No "
+               f"second rotation ticket filed (wq#2341 value dedupe) — this row is "
+               f"still open, so the credential is still unrotated. Rotate once, here.")
+            log(f"MASK HIT wq#{ticket_id} attempt {attempt}: {tag} — same value(s) "
+                f"already open as wq#{dup.group(1)}, run noted there (wq#2341)")
+        else:
+            log(f"WARN: rotation ticket add failed for wq#{ticket_id}: {out[:200]}")
     except Exception as e:  # noqa: BLE001
         log(f"WARN: rotation ticket add crashed for wq#{ticket_id}: {e!r}")
 

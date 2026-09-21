@@ -133,6 +133,37 @@ PREFIX_CHARS = 48     # of the kept, non-secret prefix
 
 MASK = "MASKED"       # the literal every replacement ends in
 
+
+def value_sha12(value):
+    """The 12 hex of sha256 that NAMES a value everywhere on the alarm path.
+
+    scan()'s record, mask_replay/mask_triage's rows and — since wq#2341 — the rotation
+    ticket's own title all have to derive it the same way, or a hash printed on a row
+    cannot be compared against a candidate, which is the one thing those records exist
+    to allow (wq#2288 arrived unactionable for exactly that reason).
+    """
+    return hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+# wq#2339/wq#2341: values that are this masker's OWN output read back, by hash. A hit
+# record matching one of these is the mask literal itself — a credential cannot survive
+# having been replaced by it — so an alarm carrying nothing else is not a burn and is
+# not worth a rotate-today row. wq#2298 stopped the table matching its own output, but
+# only for the table ON DISK: a process that imported an older one keeps scoring with
+# it for the life of the ticket (wq#2327, wq#2404), and the hash is what reaches the
+# hits file either way.
+#
+# The first two follow MASK because a self-match records the body AFTER the kept prefix
+# (`ghp_`+mask records `MASKED`; a kv label in front of a whole masked github value
+# records `github_pat_MASKED`). The third is the pre-wq#2300 sk- backtrack tail, whose
+# body that bug's greedy prefix truncated — no literal here can derive it; it is named
+# by the wq#2339 triage of the storm's own mask-hits files.
+SELF_OUTPUT_SHA12 = frozenset({
+    value_sha12(MASK),                     # 20227a136ec3
+    value_sha12("github_pat_" + MASK),     # 2c9e04df04aa
+    "f50f2d7b79dd",
+})
+
 # Built by concatenation on purpose: a literal `AKIA`+16 in this file would be a
 # credential-shaped string in tracked source, which is the exact class of text that
 # filed half the rotation backlog (wq#2299, tests/test_token_injection.py).
@@ -257,8 +288,7 @@ def scan(text):
             "label": label,
             "prefix": prefix[-PREFIX_CHARS:],
             "value_len": len(value),
-            "value_sha256_12": hashlib.sha256(
-                value.encode("utf-8", "replace")).hexdigest()[:12],
+            "value_sha256_12": value_sha12(value),
             "context": context,
         })
     return cur, records

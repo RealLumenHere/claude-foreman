@@ -194,7 +194,7 @@ def test_a_batch_prints_one_line_per_ticket_and_burns_on_the_worst(env, monkeypa
                         lambda *a, **k: {"tests/f.py": "y = '" + PLANTED + "'\n"})
     monkeypatch.setattr(mask_triage, "ticket_row", lambda ticket, **k: (
         f"[rotation] burned credential in wq#{4242 if ticket == 9000 else 4343} "
-        f"transcript (github)", "2026-09-20 22:15:40"))
+        f"transcript (github)", "2026-09-20 22:15:40", ""))
     code = mask_triage.main(["9000", "9001"])
     out = capsys.readouterr()
     assert code == mask_triage.EXIT_BURN
@@ -252,6 +252,28 @@ def test_the_source_run_is_parsed_from_the_rotation_title():
     m = mask_triage.SOURCE_RE.search(
         "[rotation] burned credential in wq#2284 transcript (kv-secret)")
     assert m and m.group(1) == "2284"
+
+
+def test_a_value_keyed_ticket_resolves_its_run_from_the_detail(monkeypatch):
+    """wq#2341: a row filed for a burned VALUE names no run in its title — that is what
+    lets ten runs share one row. The first of them is in the detail, where the template
+    has always written `fired on wq#N`, so triage still has a corpus to replay."""
+    monkeypatch.setattr(mask_triage, "ticket_row", lambda ticket, **k: (
+        "[rotation] burned credential sha256:20227a136ec3 (github)",
+        "2026-09-20 22:15:40",
+        "wq#2275 mask tripwire: mask-secrets pattern(s) github fired on wq#2284 "
+        "attempt 1's stream-json."))
+    assert mask_triage.resolve(9000) == (2284, "2026-09-20 22:15:40")
+
+
+def test_a_title_that_names_the_run_still_wins(monkeypatch):
+    """The backlog's rows carry BOTH: the run in the title and, since every detail is
+    written off the same template, a `fired on wq#N` under it. They agree today; if a
+    re-filed row ever made them disagree, the title is the one a reader is settling."""
+    monkeypatch.setattr(mask_triage, "ticket_row", lambda ticket, **k: (
+        "[rotation] burned credential in wq#4242 transcript (github)",
+        "2026-09-20 22:15:40", "... fired on wq#9999 attempt 1's stream-json."))
+    assert mask_triage.resolve(9000)[0] == 4242
 
 
 # --- the revision that held it ----------------------------------------------------
@@ -318,7 +340,7 @@ def test_the_history_index_is_built_once_for_a_whole_batch(env, monkeypatch):
                         lambda *a, **k: built.append(1) or {})
     monkeypatch.setattr(mask_triage, "ticket_row", lambda ticket, **k: (
         "[rotation] burned credential in wq#4242 transcript (github)",
-        "2026-09-20 22:15:40"))
+        "2026-09-20 22:15:40", ""))
     assert mask_triage.main(["9000", "9001", "9002"]) == mask_triage.EXIT_BURN
     assert built == [1]
 

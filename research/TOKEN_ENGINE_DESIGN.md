@@ -252,7 +252,9 @@ Two things this table refuses to pretend:
   *choose*, and into fworker's transcript path where it works unconditionally. Those are the two places it
   is real.
 - **Masking is not a control, it is an alarm.** Every `mask-secrets` hit anywhere should raise an ntfy and
-  open a rotation ticket, because a masked token is still a burned token (instinct #4).
+  open a rotation ticket, because a masked token is still a burned token (instinct #4). One ticket per burned
+  **value**, not per run that printed it (wq#2341): a repeat is a note on the row that is already open, and
+  only a row that was closed — the credential rotated — lets the same value page a fresh one.
 
 ---
 

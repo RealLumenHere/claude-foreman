@@ -66,6 +66,12 @@ import masking  # noqa: E402
 WQ_DB = os.environ.get("WQ_DB", "/home/lumen/agents/work-queue/queue.db")
 MASKING_REL = "harness/masking.py"
 SOURCE_RE = re.compile(r"burned credential in wq#(\d+)")
+# wq#2341 keys a rotation title by the burned VALUE, so rows filed since then name no
+# run at all — one ticket now stands for every run that printed the same credential.
+# The first of those runs is still in the DETAIL, where both the template and fworker's
+# frozen fallback have always written it as `fired on wq#N`; the later ones arrive as
+# notes. A title that does name a run still wins: the backlog is full of them.
+DETAIL_SOURCE_RE = re.compile(r"fired on wq#(\d+)")
 TREE = "<tracked>"  # the one "repo root" classify() is given; the runner ignores it
 
 FATAL = ("UNACCOUNTED", "LIVE")
@@ -74,12 +80,13 @@ EXIT_CLEAN, EXIT_BURN, EXIT_UNRESOLVED, EXIT_CONTROL = 0, 1, 2, 3
 
 
 def ticket_row(ticket_id, db=WQ_DB):
-    """(title, created_at) of a queue ticket, or None. Read-only: triage never edits."""
+    """(title, created_at, detail) of a queue ticket, or None. Read-only: never edits."""
     try:
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
         try:
-            return conn.execute("SELECT title, created_at FROM tasks WHERE id=?",
-                                (ticket_id,)).fetchone()
+            return conn.execute(
+                "SELECT title, created_at, detail FROM tasks WHERE id=?",
+                (ticket_id,)).fetchone()
         finally:
             conn.close()
     except sqlite3.Error:
@@ -205,7 +212,8 @@ def report(source, rows, out=None):
 def resolve(ticket, source=None, created_at=None):
     """(source run, alarm time) for a rotation ticket: the overrides, else its row."""
     row = ticket_row(ticket)
-    named = SOURCE_RE.search(row[0]) if row else None
+    named = (SOURCE_RE.search(row[0] or "")
+             or DETAIL_SOURCE_RE.search(row[2] or "")) if row else None
     return (source or (int(named.group(1)) if named else None),
             created_at or (row[1] if row else None))
 

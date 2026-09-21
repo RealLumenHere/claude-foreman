@@ -535,23 +535,48 @@ def test_mask_alarm_pages_and_files_rotation_ticket(tmp_path, monkeypatch):
         assert json.load(f)[0]["prefix"] == "ghp_"
 
 
-def alarm_with_title(tmp_path, monkeypatch, title, ticket_id):
-    """Run mask_alarm against a ticket whose title is `title`; return (pages, calls)."""
+class WqResult:
+    """What fworker.wq() hands back: the CLI's exit code and its two streams."""
+
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def duplicate_out(ticket, title):
+    """bin/wq cmd_add's refusal, verbatim in shape (wq#2341). The id in it is the row
+    this title is already open on, and it is the only place fworker learns which."""
+    return (f"DUPLICATE — task {ticket} [fleet/open] already has this title:\n"
+            f"  {title}\nUse --force to add anyway.")
+
+
+def github_records():
+    _, records = masking.scan(f"remote https://x:{GHP}@github.com")
+    return records
+
+
+def alarm(tmp_path, monkeypatch, ticket_id, records, labels=("github",),
+          add_result=None, title="[token-engine T10] remaining verbs"):
+    """mask_alarm on a ticket whose own title is `title`, with `wq add` answering
+    `add_result`. Returns (pages, calls): every ntfy and every wq argv, in order."""
     pages, calls = [], []
     monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
-
-    class P:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
     monkeypatch.setattr(fworker, "ntfy",
-                        lambda t, msg, priority="default": pages.append((t, priority, msg)))
-    monkeypatch.setattr(fworker, "wq", lambda *a, **k: calls.append(a) or P())
+                        lambda t, msg, priority="default":
+                        pages.append((t, priority, msg)))
+
+    def fake_wq(*args, **kwargs):
+        calls.append(args)
+        return add_result if (args[0] == "add" and add_result) else WqResult()
+
+    monkeypatch.setattr(fworker, "wq", fake_wq)
     monkeypatch.setattr(fworker, "wq_show", lambda tid: {"title": title})
-    _, records = masking.scan(f"remote https://x:{GHP}@github.com")
-    fworker.mask_alarm(ticket_id, 1, ["github"], records)
+    fworker.mask_alarm(ticket_id, 1, list(labels), records)
     return pages, calls
+
+
+def alarm_with_title(tmp_path, monkeypatch, title, ticket_id):
+    """Run mask_alarm against a ticket whose title is `title`; return (pages, calls)."""
+    return alarm(tmp_path, monkeypatch, ticket_id, github_records(), title=title)
 
 
 def test_a_rotation_ticket_refire_is_noted_not_filed(tmp_path, monkeypatch):
@@ -560,7 +585,7 @@ def test_a_rotation_ticket_refire_is_noted_not_filed(tmp_path, monkeypatch):
     self-sustaining — 34 rotation tickets, 22 still open, inside an hour."""
     pages, calls = alarm_with_title(
         tmp_path, monkeypatch,
-        f"{fworker.ROTATION_TITLE_PREFIX}2290 transcript (sk-key)", 2299)
+        "[rotation] burned credential in wq#2290 transcript (sk-key)", 2299)
     assert [c[0] for c in calls] == ["note"]      # no `add`: no child ticket
     assert calls[0][1] == "2299"                  # noted on the ticket being worked
     # the evidence still lands, and the note says where
@@ -579,10 +604,23 @@ def test_the_verify_pass_of_a_rotation_ticket_is_on_the_chain(tmp_path, monkeypa
     prefix-only guard gave each of those a fresh pri-1 child."""
     pages, calls = alarm_with_title(
         tmp_path, monkeypatch,
-        f"[verify] wq#2294 {fworker.ROTATION_TITLE_PREFIX}2284 transcript (github)",
+        "[verify] wq#2294 [rotation] burned credential in wq#2284 transcript (github)",
         2321)
     assert [c[0] for c in calls] == ["note"]      # no `add`: no child ticket
     assert calls[0][1] == "2321"                  # noted on the verify row itself
+    assert pages and pages[0][0] == "foreman MASK HIT (rotation chain)"
+
+
+def test_a_value_keyed_rotation_row_is_still_on_the_chain(tmp_path, monkeypatch):
+    """wq#2341 dropped the run id out of the title, so the chain marker had to stop
+    before it. Both generations are in the queue at once — 47 rows say `in wq#M
+    transcript`, everything filed since names a hash — and working either one is the
+    read that fires the next hit."""
+    pages, calls = alarm_with_title(
+        tmp_path, monkeypatch,
+        "[rotation] burned credential sha256:20227a136ec3 (github)", 2341)
+    assert [c[0] for c in calls] == ["note"]      # no `add`: no child ticket
+    assert calls[0][1] == "2341"
     assert pages and pages[0][0] == "foreman MASK HIT (rotation chain)"
 
 
@@ -650,6 +688,138 @@ def test_a_broken_template_still_files_an_actionable_row(
     assert f"{fworker.MASK_REPLAY} 2404" in detail
     assert os.path.join(str(tmp_path), "wq2404", "mask-hits-1.json") in detail
     assert pages and pages[0][1] == "high"
+
+
+# --- wq#2341: one rotation row per burned VALUE, not per run that printed it --------
+
+def test_the_rotation_title_is_the_value_not_the_run():
+    """The defect: titled by the run, one value printing in ten runs opened ten pri-1
+    rotate-today rows — 28 were open at once on 2026-09-20, each drawing an xhigh
+    worker. Titled by the value, `wq add`'s own title check collapses them."""
+    sha = github_records()[0]["value_sha256_12"]
+    first = fworker.rotation_title(2284, "github", [sha])
+    later = fworker.rotation_title(9999, "github", [sha])
+    assert first == later
+    assert sha in first
+    assert "wq#" not in first          # nothing run-specific left to split the row on
+    assert GHP not in first            # the title names the value, never carries it
+    # and the chain guard still recognises its own row (wq#2299/wq#2308)
+    assert fworker.ROTATION_TITLE_PREFIX in first
+
+
+def test_a_different_value_is_a_different_row():
+    """The dedupe may only ever collapse the SAME credential. A second value — or one
+    more value alongside the first — has never been paged on, and must be."""
+    a, b = "a" * 12, "b" * 12
+    titles = {fworker.rotation_title(1, "github", [a]),
+              fworker.rotation_title(1, "github", [b]),
+              fworker.rotation_title(1, "github", [a, b])}
+    assert len(titles) == 3
+    # a set is keyed by order-independent identity: the same two values, either way up
+    assert (fworker.rotation_title(1, "github", [a, b])
+            == fworker.rotation_title(1, "github", [b, a]))
+    assert "2 values" in fworker.rotation_title(1, "github", [a, b])
+
+
+def test_only_a_burned_label_keys_the_row():
+    """`records` is a re-scan of the whole line, so it also holds the values of labels
+    burn_filter screened as committed text. Keying on one of those would let a fixture
+    sharing a line with a real token decide which row the token dedupes into."""
+    _, records = masking.scan(f"remote https://x:{GHP}@github.com and {KV_LINE}")
+    assert {r["label"] for r in records} == {"github", "kv-secret"}
+    burned = fworker.burned_hashes(["github"], records)
+    assert burned == [r["value_sha256_12"] for r in records if r["label"] == "github"]
+
+
+def test_an_alarm_with_no_record_keeps_the_run_keyed_title(tmp_path, monkeypatch):
+    """write_mask_hits is best-effort by contract and scan() can come back empty. With
+    no hash there is nothing to prove two alarms are the same value, so the row falls
+    back to one per run — noisy, and still better than one row standing in for values
+    that were never shown to be the same."""
+    _, calls = alarm(tmp_path, monkeypatch, 2278, None)
+    (add,) = [c for c in calls if c[0] == "add"]
+    assert "[rotation] burned credential in wq#2278 transcript (github)" in add
+
+
+def test_the_same_value_in_a_later_run_is_a_note_not_a_second_row(tmp_path,
+                                                                  monkeypatch):
+    """The fan-out this closes. The second run still files — the queue is what decides
+    — and takes the DUPLICATE refusal as its answer: the run is recorded on the row
+    that is already open, which is where the rotation will happen."""
+    records = github_records()
+    title = fworker.rotation_title(2284, "github",
+                                   [records[0]["value_sha256_12"]])
+    pages, calls = alarm(tmp_path, monkeypatch, 2291, records,
+                         add_result=WqResult(1, duplicate_out(2310, title)))
+    assert [c[0] for c in calls] == ["add", "note"]
+    assert calls[0][calls[0].index("--title") + 1] == title   # same row, same title
+    assert calls[1][1] == "2310"                              # noted on the open row
+    note = calls[1][2]
+    assert "also fired on wq#2291 attempt 1" in note
+    hits_path = os.path.join(str(tmp_path), "wq2291", "mask-hits-1.json")
+    assert hits_path in note            # this run's forensics, not the first run's
+    with open(hits_path) as fh:
+        assert json.load(fh)[0]["prefix"] == "ghp_"
+    assert pages and pages[0][1] == "high"   # a burn still pages every time
+
+
+def test_an_add_refused_for_any_other_reason_is_loud(tmp_path, monkeypatch):
+    """Only a DUPLICATE carrying a row id is a dedupe. Anything else — a refused lane,
+    a gate, a drifted message — is a rotation row that did NOT get filed, and has to
+    say so rather than pass for a collapsed re-fire."""
+    _, calls = alarm(tmp_path, monkeypatch, 2291, github_records(),
+                     add_result=WqResult(1, "REFUSED: lane 'fleet' is not configured"))
+    assert [c[0] for c in calls] == ["add"]           # no note: nothing to note on
+
+
+@pytest.mark.skipif(not os.path.exists(fworker.WQ_BIN), reason="wq not on this host")
+def test_the_dedupe_is_scoped_to_rows_that_are_not_done():
+    """The hazard a value-keyed title carries: a credential that leaks AGAIN after it
+    was rotated must page again, and a key that remembers forever would swallow it.
+    Nothing in fworker decides that — `wq add` compares a new title against rows with
+    `status != 'done'` only, so a CLOSED rotation row is not a match and the next leak
+    of that value files a fresh pri-1. This pins the property the title shape leans on:
+    if wq ever dedupes over the whole table, this fails instead of a burn going quiet."""
+    with open(fworker.WQ_BIN, errors="replace") as fh:
+        source = fh.read()
+    assert "FROM tasks WHERE status!='done'" in source
+
+
+def test_an_alarm_of_nothing_but_the_mask_literal_files_nothing(tmp_path, monkeypatch):
+    """wq#2339's triage recipe, run at the alarm instead of on the row it filed. Every
+    value here is the masker's own output read back — the synthetic-fixture shape that
+    fired three rows during wq#2298's own run — and a value that has already been
+    replaced by the mask literal cannot be a credential."""
+    record = dict(github_records()[0],
+                  value_sha256_12=masking.value_sha12(masking.MASK))
+    pages, calls = alarm(tmp_path, monkeypatch, 2298, [record])
+    assert calls == [] and pages == []
+    # the forensics still land: the judgement never decides what evidence is kept
+    with open(os.path.join(str(tmp_path), "wq2298", "mask-hits-1.json")) as fh:
+        assert json.load(fh)[0]["value_sha256_12"] == masking.value_sha12(masking.MASK)
+
+
+def test_one_value_the_list_cannot_explain_keeps_the_alarm(tmp_path, monkeypatch):
+    """All-or-nothing on purpose: a real token sharing a line with masked output is
+    still a burn, and a page held back is the failure the whole path exists to avoid."""
+    records = github_records()
+    masked = dict(records[0], value_sha256_12=masking.value_sha12(masking.MASK))
+    pages, calls = alarm(tmp_path, monkeypatch, 2298, [masked] + records)
+    assert [c[0] for c in calls] == ["add"]
+    assert pages and pages[0][1] == "high"
+
+
+def test_the_self_output_hashes_are_the_ones_the_storm_named():
+    """wq#2339 read these three out of the storm's own mask-hits files. Two follow MASK
+    (a self-match records the body after the kept prefix); the third is the pre-wq#2300
+    sk- backtrack tail, whose truncated body no literal here can rebuild."""
+    assert masking.SELF_OUTPUT_SHA12 >= {"20227a136ec3", "2c9e04df04aa",
+                                         "f50f2d7b79dd"}
+    assert masking.value_sha12(masking.MASK) == "20227a136ec3"
+    # scan()'s record and the dedupe key have to be the same 12 hex, or a hash printed
+    # on a row cannot be compared against a candidate at all (wq#2288)
+    body = GHP[len("ghp_"):]
+    assert github_records()[0]["value_sha256_12"] == masking.value_sha12(body)
 
 
 # --- wq#2327: a rule narrowed mid-attempt must reach the attempts in flight ---------
