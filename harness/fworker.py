@@ -1482,7 +1482,7 @@ def resolve_exec_grant(ticket_id, attempt, needs, wall_clock_s, worktree=None):
         return None, None, None
     # wq#1436: the allow/deny half is capability.policy_grants — the same code the
     # dispatcher's pre-skip asks "would this be granted?". Only the lease and the
-    # 0400 file below are fworker's.
+    # 0444 file below are fworker's.
     grants, refused = capability.policy_grants(needs, policy_path=FLEET_EXEC_POLICY_PATH)
     if refused:
         raise SpawnRefused("CAPABILITY_DENIED_BY_POLICY", "; ".join(refused),

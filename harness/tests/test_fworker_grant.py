@@ -3,7 +3,7 @@
 Covers: a ticket with no exec-shaped needs gets no grant at all; ssh(node) is always
 grantable (argv allowlist is a per-invocation broker concern, not knowable at spawn
 time); copy/restart tags that the static policy forbids outright are a SpawnRefused
-(uncharged), never a silent downgrade; the written grant.json is 0400 and its sha256
+(uncharged), never a silent downgrade; the written grant.json is 0444 and its sha256
 matches what fleet_exec_policy.load_grant would recompute; FOREMAN_NEEDS_DISABLE=1 is
 the rollback (no grant, no refusal, needs-blind).
 """
@@ -154,7 +154,7 @@ def test_grant_file_is_0444_and_expires_from_wall_clock(tmp_path, monkeypatch):
 
 def test_grant_file_overwritable_on_second_attempt(tmp_path, monkeypatch):
     """A resume/retry re-resolves the grant (fresh lease) rather than being stuck
-    behind the first attempt's 0400 file."""
+    behind the first attempt's read-only (0444) file."""
     setup_policy(tmp_path, monkeypatch)
     n = needs_mod.parse("ssh(isis)")
     grant1, sha1, path1 = fworker.resolve_exec_grant(1332, 1, n, 3600)
