@@ -1024,6 +1024,19 @@ def test_the_live_rules_would_not_have_filed_wq2400():
         assert label in masking.mask_text(live)[1], live
 
 
+def _tree_only():
+    """The committed repo, with the shared doctrine log left out of the tracked view.
+
+    wq#2418, closing ISSUE-LOG row 630: a pin that asserts "this value is in no
+    committed file" cannot be scored against kb/ISSUE-LOG.md, because the row that
+    settles a rotation quotes the value it settled and accounts it on the next run —
+    row 629 did exactly that to WQ2410_BRANCH and turned the pin below red. The log
+    stays in the CLI's default view (a value the log explains is still explained); it
+    is only these pins, whose subject is an unaccounted value, that key off the tree.
+    """
+    return mask_replay.tracked_text(extra=[])
+
+
 WQ2410_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2410")
 # The branch the dispatcher cut for wq#2410: `…-mask-batch-…` carries `sk-` one
 # character into a word, the wq#2400 boundary again, and nothing else explains it —
@@ -1047,11 +1060,12 @@ def test_wq2410_transcript_burned_nothing():
     tree — and one is a `key =` assignment read out of mask_triage.py. The two that are
     about this run are the ones asserted below.
 
-    A failure here means the branch name has appeared in a committed file (which would
+    A failure here means the branch name has appeared in a committed FILE (which would
     move the pin rather than break the verdict), or the dummy that test_token_injection
-    holds has moved off line 22.
+    holds has moved off line 22. An ISSUE-LOG row quoting the branch body no longer
+    counts as that file — see _tree_only.
     """
-    records = mask_replay.replay(2410)
+    records = mask_replay.replay(2410, tracked=_tree_only())
     assert len(records) == 20
     assert mask_replay.unaccounted(records) == []
     assert all(r.get("faithful", True) for r in records), "no window was re-cut"
@@ -1083,7 +1097,8 @@ def test_the_live_rules_would_not_have_filed_wq2414():
 
     A failure here means the boundary regressed, or the rules stopped firing at all.
     """
-    records = mask_replay.replay(2410, patterns=mask_replay.CURRENT_PATTERNS)
+    records = mask_replay.replay(2410, patterns=mask_replay.CURRENT_PATTERNS,
+                                 tracked=_tree_only())
     assert mask_replay.unaccounted(records) == []
     assert [(r["value_sha256_12"], r["value_len"]) for r in records] == [WQ2410_OAT_TODAY]
     assert records[0]["accounted_in"] == WQ2410_OAT_IN
@@ -1094,6 +1109,109 @@ def test_the_live_rules_would_not_have_filed_wq2414():
                    "dir /home/lumen/ops/wq2414-mask-batch-tooling"):
         assert masking.mask_text(benign)[1] == [], benign
     assert "sk-key" in masking.mask_text("sk-ant-" + "api03-wq2414-bound-value")[1]
+
+
+WQ2417_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2417")
+# Both 16-char bodies are branch names, brute-forced at offset 39 of
+# `feat/wq2417-verify-wq-2415-mask-provenance-screen-grep-a1` and of the wq#2415
+# branch that run was verifying. `mask-` puts `sk-` one character into a word, so
+# every branch in this chain is a standing sk-key hit and none is in a committed file.
+WQ2417_BRANCH_RUN = ("1c3542d49e6b", 16)
+WQ2417_BRANCH_TX = ("148ab9072eee", 16)
+# wq#2417's own inline probe literal: `burn_filter.Hit('sk-ant-oat…', 'oat…')` typed
+# into a `python3 -c` that round-trips a Hit through copy/deepcopy/pickle. The two
+# tables cut the same 29 bytes at different seams, and that difference is wq#2418.
+WQ2417_OAT_LEGACY = ("c954aebcbad7", 19)
+WQ2417_OAT_TODAY = ("c0f411fd3188", 22)
+WQ2417_OAT_LITERAL_LEN = 29
+
+
+def _with_full_literal(ticket, patterns):
+    """Replay, adding sha256/len of the WHOLE match to each record.
+
+    Rides replay's in-process verdict seam, so the value is hashed where it is read
+    and never reaches a record, a PR body or this file.
+    """
+    def verdict(label, prefix, value):
+        whole = prefix + value
+        return {"full_sha12": hashlib.sha256(
+                    whole.encode("utf-8", "replace")).hexdigest()[:12],
+                "full_len": len(whole)}
+    return mask_replay.replay(ticket, patterns=patterns, tracked=_tree_only(),
+                              verdict=verdict)
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2417_RUN),
+                    reason="wq#2417's run dir is not on this host")
+def test_wq2417_transcript_burned_nothing():
+    """wq#2418's verdict under the table the ticket names: 20 values, 0 unaccounted.
+
+    Seventeen are the ISSUE-LOG snapshot paging on its own rows again. The three that
+    are about this run are asserted here, and none of them is a credential: two are
+    branch names, and the third is the run's own probe literal (see the test below,
+    which is the one that matters).
+    """
+    records = mask_replay.replay(2417, tracked=_tree_only())
+    assert len(records) == 20
+    assert mask_replay.unaccounted(records) == []
+    assert all(r.get("faithful", True) for r in records), "no window was re-cut"
+    loose = [r for r in records if r["accounted_in"] is None]
+    assert [(r["value_sha256_12"], r["value_len"]) for r in loose] == [
+        WQ2417_BRANCH_RUN, WQ2417_OAT_LEGACY, WQ2417_BRANCH_TX]
+    assert loose[0]["first_seen_in"] == "run:attempt-1.json"
+    assert not any(r["still_matches_today"] for r in loose)
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2417_RUN),
+                    reason="wq#2417's run dir is not on this host")
+def test_wq2418_alarm_value_is_one_literal_two_tables_cut_apart():
+    """The value wq#2418 is about survives today's table, and is the same 29 bytes.
+
+    `mask_replay.py 2417` (legacy table) answers 0 unaccounted; `mask_triage.py 2418
+    --source 2417`, which picks rules by the alarm's created_at, answers 1 UNACCOUNTED.
+    They do not disagree about any byte — the legacy prefix `[a-zA-Z-]*` is greedy
+    enough to eat `oat` off the front of the body, so the same match yields a 19-char
+    value there and a 22-char one here. Equal full-literal hashes are the proof.
+
+    29 characters end to end is the fact that settles the rotation: an issued
+    `sk-ant-oat01-`/`sk-ant-api03-` key carries a ~95-char body, this carries 16 past
+    the rule's `{16,}` floor, and burn_filter's live screen puts it in no environment
+    variable of the worker that replayed it.
+    """
+    legacy = _with_full_literal(2417, mask_replay.LEGACY_PATTERNS)
+    today = _with_full_literal(2417, mask_replay.CURRENT_PATTERNS)
+    oat = [r for r in legacy if r["value_sha256_12"] == WQ2417_OAT_LEGACY[0]]
+    assert [r["value_len"] for r in oat] == [WQ2417_OAT_LEGACY[1]]
+    assert [(r["value_sha256_12"], r["value_len"]) for r in today] == [WQ2417_OAT_TODAY]
+    assert today[0]["full_sha12"] == oat[0]["full_sha12"], "same bytes, different cut"
+    assert today[0]["full_len"] == oat[0]["full_len"] == WQ2417_OAT_LITERAL_LEN
+    assert today[0]["first_seen_in"] == oat[0]["first_seen_in"]
+    assert today[0]["accounted_in"] is None, "a literal typed at a prompt is in no file"
+    assert mask_replay.unaccounted(today) == today
+
+
+def test_a_recut_prefix_is_excused_as_a_closed_rule():
+    """The leak path wq#2418 found, pinned so a fix has a failing test to turn green.
+
+    `unaccounted()` excuses a record when `still_matches_today` is False, and that flag
+    asks whether today's table reproduces the identical VALUE STRING — not whether the
+    line still fires at all. Widening a prefix therefore launders every value it recuts
+    into `rule-fixed`, the same badge earned by a shape that was genuinely retired. Here
+    one line is credential-shaped under both tables and committed text under neither,
+    and the legacy replay still reports zero unaccounted.
+
+    Kept free of any run dir: the defect is in the accounting, not in wq#2417's corpus.
+    """
+    line = "h=b.Hit('sk-ant-" + "oat01-" + "z" * 16 + "')\n"
+    items = {"transcript:synthetic": line}
+    legacy = mask_replay.replay(0, tracked={}, items=items)
+    today = mask_replay.replay(0, patterns=mask_replay.CURRENT_PATTERNS,
+                               tracked={}, items=items)
+    assert [(r["prefix"], r["value_len"]) for r in legacy] == [("sk-ant-oat", 19)]
+    assert [(r["prefix"], r["value_len"]) for r in today] == [("sk-ant-", 22)]
+    assert not legacy[0]["still_matches_today"], "the recut, read as a retired shape"
+    assert mask_replay.unaccounted(today) == today, "today's table would page this"
+    assert mask_replay.unaccounted(legacy) == [], "and the legacy replay excuses it"
 
 
 def test_legacy_table_is_not_the_live_one():
