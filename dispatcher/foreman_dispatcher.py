@@ -214,7 +214,11 @@ def load_config(path=None):
         return v
 
     pos_int(cfg, "max_spawns_per_pass", "root")
-    pos_int(cfg, "cloud_ceiling", "root")
+    # wq#2426: cloud_ceiling 0 is a legal "cloud partition off" switch (the shape of
+    # Frank's 2026-09-21 stopgap, which this validator used to refuse outright).
+    ceiling = cfg.get("cloud_ceiling")
+    if not isinstance(ceiling, int) or isinstance(ceiling, bool) or ceiling < 0:
+        raise ConfigError(f"config {path}: root.cloud_ceiling must be a non-negative integer")
     for key in ("local_ceiling", "local_max_spawns_per_pass", "pass_deadline_s"):
         if key in cfg:
             pos_int(cfg, key, "root")
@@ -1323,6 +1327,7 @@ class _PassCtx:
         self.limits, self.pacing_cfg = {}, {}
         self.burn_cfg, self.burn_obs = {}, None
         self.burn_cache, self.burn_logged = {}, set()  # pools tuple -> (allowed | None, detail)
+        self.ceiling_cache, self.ceiling_logged = {}, set()  # wq#2426: pools tuple -> (ceiling, detail)
         self.spawned = {"local": 0, "cloud": 0}
         self.lane_capped = {"local": 0, "cloud": 0}
         self.local_slots_full = 0
@@ -1380,6 +1385,15 @@ class _PassCtx:
                 self.limits, self.cfg["cloud_ceiling"], self.burn_cfg,
                 observed=self.burn_obs, pools=pools)
         return self.burn_cache[pools]
+
+    def cloud_ceiling(self, pools):
+        """wq#2426: the budget-aware cloud ceiling for `pools` — config cloud_ceiling
+        tapered by the spendable budget above Frank's reserve (burn_rate.budget_ceiling).
+        Applies on every cloud admission, whatever the governor's pressure verdict."""
+        if pools not in self.ceiling_cache:
+            self.ceiling_cache[pools] = burn_rate.budget_ceiling(
+                self.limits, self.cfg["cloud_ceiling"], self.burn_cfg, pools=pools)
+        return self.ceiling_cache[pools]
 
     def tight(self, part):
         return self.psi_tight or (part == "cloud" and self.cloud_tight)
@@ -1579,8 +1593,7 @@ def _admit_cloud(ctx, r):
         return False
     burn = None  # (pools, allowed_concurrent) when the controller owns this ticket
     if pressure == "tight":
-        model_pools = burn_rate.pools_for_model(model)
-        allowed, burn_detail = ctx.burn_allowed(model_pools)
+        allowed, burn_detail = ctx.burn_allowed(burn_rate.pools_for_model(model))
         if allowed is None:
             if not ctx.cloud_tight:  # no percent/resets_at anywhere: old binary clamp
                 ctx.cloud_tight = True
@@ -1591,7 +1604,7 @@ def _admit_cloud(ctx, r):
         else:
             # wq#1699: scaled, not binary, and no pri filter — scarcity shows up
             # as a lower concurrency ceiling at stage 9 instead.
-            burn = (model_pools, allowed)
+            burn = (burn_rate.pools_for_model(model), allowed)
             if model not in ctx.burn_logged:
                 ctx.burn_logged.add(model)
                 log.emit("burn_rate", model=model,
@@ -1614,13 +1627,32 @@ def _admit_cloud(ctx, r):
         handle_pacing_throttle(state, verdict, ctx.pacing_cfg, ctx.dry_run, log)
         return False
 
-    # stage 9 — cloud concurrency ceiling; local units never count (T4)
+    # stage 9 — cloud concurrency ceiling; local units never count (T4).
+    # wq#2426: the ceiling is config cloud_ceiling tapered by spendable budget
+    # (burn_rate.budget_ceiling), on EVERY cloud admission — the burn-rate gate below
+    # only runs on governor `tight`, which on zeroed floors means `critical`, and the
+    # 2026-09-20/21 drain (weekly 80% -> 95%) happened entirely under `warning` at the
+    # flat 10. Same pool split as that gate: the pass pools bound the whole partition
+    # (halt), a narrowing from the fable pool alone skips only the fable ticket.
     _, n_cloud = ctx.unit_counts()
-    if n_cloud >= cfg["cloud_ceiling"]:
+    model_pools = burn_rate.pools_for_model(model)
+    pass_ceiling, _ = ctx.cloud_ceiling(burn_rate.PASS_POOLS)
+    model_ceiling, ceiling_detail = ctx.cloud_ceiling(model_pools)
+    if model_ceiling < cfg["cloud_ceiling"] and model not in ctx.ceiling_logged:
+        ctx.ceiling_logged.add(model)
+        log.emit("cloud_ceiling", model=model,
+                 reason=f"budget-aware cloud ceiling {model_ceiling} of "
+                        f"{cfg['cloud_ceiling']}", detail=ceiling_detail)
+    if n_cloud >= pass_ceiling:
         log.emit("halt", stage="concurrency", reason="no_slots",
-                 detail=f"{n_cloud} cloud unit(s) at ceiling "
-                        f"{cfg['cloud_ceiling']}; next tick retries")
+                 detail=f"{n_cloud} cloud unit(s) at ceiling {pass_ceiling} "
+                        f"(config {cfg['cloud_ceiling']}); next tick retries")
         return "no_slots"
+    if n_cloud >= model_ceiling:
+        log.skip(tid, lane, "budget", "cloud_ceiling_cap", model=model,
+                 detail=f"{n_cloud} cloud unit(s) at {model} budget ceiling "
+                        f"{model_ceiling} (config {cfg['cloud_ceiling']})")
+        return False
     if burn is not None and n_cloud >= burn[1]:
         # wq#1699: the burn-rate ceiling is the concurrency the budget can sustain
         # to its reset. A model on the pass pools only (every cloud model draws on
@@ -1933,6 +1965,8 @@ def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None):
             "evaluated": len(candidates), "parked": n_parked,
             "tight": ctx.psi_tight or ctx.cloud_tight,
             "burn_ceiling": {",".join(k): v[0] for k, v in ctx.burn_cache.items()},
+            # wq#2426: the budget-aware ceiling(s) stage 9 actually enforced this pass
+            "cloud_ceiling": {",".join(k): v[0] for k, v in ctx.ceiling_cache.items()},
             "frank_active": frank_is_active, "frank_active_detail": frank_active_detail,
             "quarantined": len(ctx.quarantined),
             "dispatchable": sum(dispatchable_pool.values()),  # old readers; = the per-pool sum

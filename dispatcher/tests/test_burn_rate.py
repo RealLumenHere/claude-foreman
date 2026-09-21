@@ -71,10 +71,16 @@ def test_cap_shrinks_when_projected_burn_exceeds_remaining():
     assert allowed == CFG["min_allowed"] == 1
 
 
-def test_near_empty_near_reset_still_allows_min():
+def test_near_empty_is_zero_even_near_reset():
+    """wq#2426: this used to allow min_allowed=1 ("the quota expires anyway"). 98% used
+    is 13% INTO Frank's 15% weekly reserve, which is not the fleet's quota to spend down;
+    at 95% on 2026-09-21 that floor of 1 churned 18 short workers an hour through it."""
     limits = {"weekly_all": {"percent": 98, "resets_at": "2026-09-10T11:00:00+00:00"}}
     allowed, _ = burn_rate.allowed_concurrent(limits, 10, CFG, now=NOW)
-    assert allowed == 1  # the quota expires anyway
+    assert allowed == 0
+    # scarce but above the reserve keeps the min_allowed floor (test above)
+    limits = {"weekly_all": {"percent": 84, "resets_at": "2026-09-10T11:00:00+00:00"}}
+    assert burn_rate.allowed_concurrent(limits, 10, CFG, now=NOW)[0] == 1
 
 
 def test_no_reliable_data_returns_none():
@@ -154,7 +160,8 @@ def test_fable_pool_narrows_only_the_fable_ceiling():
     fable, detail = burn_rate.allowed_concurrent(
         limits, 10, CFG, now=NOW, pools=burn_rate.pools_for_model("claude-fable-5"))
     assert sonnet == 10
-    assert fable == 1 and "fable_weekly_scoped" in detail
+    # wq#2426: 99% used is inside fable's 10% reserve -> 0, no longer min_allowed
+    assert fable == 0 and "fable_weekly_scoped" in detail
 
 
 # --- wq#1889: frank_active() and the reserve bump it triggers -------------------------

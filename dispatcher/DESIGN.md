@@ -270,6 +270,22 @@ waits for capacity (the next tick is 20 min away and waiting would hold the sloc
 `lumen-run` unreachable → `LumenRunError` → treated as zero slots (fail toward
 under-subscription, same as spawner).
 
+**The ceiling is budget-aware (wq#2426).** `cloud_ceiling` is the ceiling only while
+budget is plentiful. On every cloud admission stage 9 enforces
+`burn_rate.budget_ceiling`: per pool the model draws on, `spendable = remaining −
+FRANK_RESERVE_PCT`; at or below the reserve the ceiling is 0, under
+`burn_rate.ceiling_taper_pct[pool]` (session 10, weekly 30) it is
+`max(min_allowed, cloud_ceiling × spendable/taper)`, else `cloud_ceiling`; min over
+pools. It reads `percent` only, so a poll with no `resets_at` still clamps. The
+burn-rate controller (§ wq#1669/1699) stays the time-to-reset refinement and only runs
+on governor `tight`, which on Frank's zeroed floors means `critical`: the 2026-09-20/21
+drain (weekly_all 80% → 95%, 30–60 spawns/h) ran entirely under `warning` at the flat
+10, and at `critical` its `min_allowed` floor of 1 kept churning short tickets at 18
+spawns/h — it now also returns 0 at the reserve. `cloud_ceiling: 0` is a legal "cloud
+off" switch. Pass pools halt the partition (`no_slots`); a fable-pool narrowing skips
+only the fable ticket (`cloud_ceiling_cap`); the ceiling is logged once per model
+(`cloud_ceiling` event) and on `pass_end.cloud_ceiling`.
+
 **Two partitions (wq#2088, `research/DISPATCH_STALL_RCA.md` §4).** A pass gates every
 candidate once (`_gate_candidate`: stages 3–7 plus model resolution — nothing pool
 specific), splits the survivors by `concurrency.is_local_model`, and admits **local

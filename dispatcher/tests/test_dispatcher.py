@@ -49,8 +49,11 @@ FAKE_LUMEN_RUN = os.path.join(HARNESS_TESTS, "fake_lumen_run.py")
 
 HEALTHY_GOV = {"limits": {"session": {"percent": 10}, "weekly_all": {"percent": 10},
                           "fable_weekly_scoped": {"percent": 10}}}
-# session remaining 30%, floor 20, soft margin 15 -> 'tight' but not 'deny'
-TIGHT_GOV = {"limits": {"session": {"percent": 70}, "weekly_all": {"percent": 10},
+# session remaining 34%, floor 20, soft margin 15 -> 'tight' but not 'deny'. wq#2426: was
+# 70% used, which sits exactly on Frank's 30% session reserve and now reads as a budget
+# ceiling of 0; 66% leaves 4% spendable, so the ceiling is min_allowed (1) and these
+# fixtures still exercise tight_mode's binary clamp rather than the reserve.
+TIGHT_GOV = {"limits": {"session": {"percent": 66}, "weekly_all": {"percent": 10},
                         "fable_weekly_scoped": {"percent": 10}}}
 
 BASE_CONFIG = {
@@ -812,14 +815,21 @@ def test_burn_rate_cap_replaces_binary_tight_clamp(denv):
     assert len(adv) == 1 and "session=warning" in adv[0]["detail"]
 
 
-def test_burn_rate_cap_shrinks_when_burn_outruns_budget(denv):
-    # weekly 71% used with 100h to the reset projects past the budget -> min_allowed 1
+def test_burn_rate_cap_shrinks_when_burn_outruns_budget(denv, monkeypatch):
+    # weekly 60% used with 100h to the reset projects past the budget -> min_allowed 1
     # (pacing off: this test is about the burn-rate cap, not the wq#716 layer, which
-    # also fires on these numbers)
+    # also fires on these numbers). wq#2426: was 71% on the default floors, where the
+    # budget-aware cloud ceiling (14% spendable -> 3*14/30 -> 1) reads the same 1 and
+    # halts first; at 60% it reads 2, so the halt here is provably the burn-rate
+    # gate's. 60% is not `tight` on the default floors, so zero them and flag the pool
+    # critical (the live shape) to engage the controller.
+    _zero_floors(denv, monkeypatch)
     denv["pacing_cfg_path"].write_text(json.dumps(
         {"policy": "off", "min_elapsed_fraction": 0.02, "delay_min_pri": 1,
          "ntfy_dedup_hours": 6}))
-    denv["gov_state"].write_text(json.dumps(_burn_gov(10, 2, 71, 100)))
+    gov = _burn_gov(10, 2, 60, 100)
+    gov["limits"]["weekly_all"]["severity"] = "critical"
+    denv["gov_state"].write_text(json.dumps(gov))
     t1 = add_ticket("scarce p1 a", pri=1)
     add_ticket("scarce p1 b", pri=1)
     assert fd.run_pass() == 0
@@ -903,16 +913,28 @@ def _sec5_gov(weekly_severity):
         "fable_weekly_scoped": {"percent": 10}}}
 
 
-def test_sec5_zero_floors_warning_does_not_throttle(denv, monkeypatch):
+def test_sec5_zero_floors_warning_skips_tight_mode_not_the_budget_ceiling(denv, monkeypatch):
     """Walkthrough sec 5 numbers (2026-09-10 05:30Z-07:01Z) on Frank's zeroed floors:
     severity=warning everywhere used to clamp every pass to 1 spawn, pri<=1. Warning is
-    advisory on a zero-floor pool: no tight_mode, no burn_rate, p2 spawns to root cap."""
+    advisory on a zero-floor pool: no tight_mode, no burn_rate, no pri filter.
+
+    wq#2426: but not "spawns to root cap" any more. Session 80% used is 10% into
+    Frank's 30% session reserve, so the budget-aware cloud ceiling is 0 and the
+    partition halts before the first spawn — the exact numbers that drained weekly_all
+    80% -> 95% on 2026-09-20/21 under `warning` at the flat config ceiling."""
     _zero_floors(denv, monkeypatch)
     denv["gov_state"].write_text(json.dumps(_sec5_gov("warning")))
-    ids = [add_ticket(f"sec5 p2 {n}", pri=2) for n in range(4)]
+    [add_ticket(f"sec5 p2 {n}", pri=2) for n in range(4)]
     assert fd.run_pass() == 0
-    assert [e["ticket"] for e in log_events(denv, "spawn")] == ids[:3]
+    assert log_events(denv, "spawn") == []
     assert log_events(denv, "tight_mode") == [] and log_events(denv, "burn_rate") == []
+    assert [e for e in log_events(denv, "skip") if e["reason"] == "tight_pri"] == []
+    halts = log_events(denv, "halt")
+    assert len(halts) == 1 and halts[0]["reason"] == "no_slots"
+    assert "0 cloud unit(s) at ceiling 0 (config 3)" in halts[0]["detail"]
+    ceil = log_events(denv, "cloud_ceiling")
+    assert len(ceil) == 1 and ceil[0]["reason"] == "budget-aware cloud ceiling 0 of 3"
+    assert "session: spendable 0.0%" in ceil[0]["detail"]
 
 
 def test_sec5_zero_floors_critical_engages_scaled_ceiling(denv, monkeypatch):
@@ -928,21 +950,121 @@ def test_sec5_zero_floors_critical_engages_scaled_ceiling(denv, monkeypatch):
     nothing at all (80% used vs a 30% reserve). That is the reserve working as
     specified, not a regression: three concurrent workers on 2% of spendable weekly
     budget is exactly what it exists to stop. The controller opening the ceiling to
-    cloud_ceiling is covered by test_burn_rate_cap_replaces_binary_tight_clamp."""
+    cloud_ceiling is covered by test_burn_rate_cap_replaces_binary_tight_clamp.
+
+    wq#2426: and now 0, not 1. The session pool is 10% INTO its reserve, which is not
+    quota the controller may floor at min_allowed (that floor is for a scarce pool,
+    not an exhausted one), and the budget-aware cloud ceiling reads the same 0 — so the
+    partition halts on it before the burn-rate gate is reached."""
     _zero_floors(denv, monkeypatch)
     denv["gov_state"].write_text(json.dumps(_sec5_gov("critical")))
-    ids = [add_ticket(f"sec5 crit p2 {n}", pri=2) for n in range(4)]
+    [add_ticket(f"sec5 crit p2 {n}", pri=2) for n in range(4)]
     assert fd.run_pass() == 0
-    assert [e["ticket"] for e in log_events(denv, "spawn")] == ids[:1]
+    assert log_events(denv, "spawn") == []
     burn = log_events(denv, "burn_rate")
-    assert len(burn) == 1 and "burn-rate ceiling 1" in burn[0]["reason"]
+    assert len(burn) == 1 and "burn-rate ceiling 0" in burn[0]["reason"]
     assert log_events(denv, "tight_mode") == []
     # the discriminator against the binary clamp: p2 is never filtered out, it is
-    # ceiling-bound, so the pass ends on the burn-rate concurrency gate.
+    # ceiling-bound, so the pass ends on the concurrency gate.
     assert [e for e in log_events(denv, "skip") if e["reason"] == "tight_pri"] == []
     stops = log_events(denv, "halt")
     assert len(stops) == 1 and stops[0]["stage"] == "concurrency"
-    assert stops[0]["reason"] == "no_slots" and "burn-rate" in stops[0]["detail"]
+    assert stops[0]["reason"] == "no_slots" and "at ceiling 0 (config 3)" in stops[0]["detail"]
+
+
+def _pacing_off(denv):
+    denv["pacing_cfg_path"].write_text(json.dumps(
+        {"policy": "off", "min_elapsed_fraction": 0.02, "delay_min_pri": 1,
+         "ntfy_dedup_hours": 6}))
+
+
+def test_cloud_ceiling_clamps_to_zero_past_ninety_pct_weekly(denv, monkeypatch):
+    """wq#2426 — the wq#2127 acceptance's Check G caveat ("cloud ceiling not exercised")
+    written as a real test. weekly_all 94% used with three days to its reset, no
+    critical flag, Frank's zeroed floors: governor pressure is `ok`, the burn-rate
+    controller never runs, and until this ticket stage 9 enforced the flat config
+    ceiling of 10 (2026-09-20/21: 30-60 cloud spawns/hour from 80% to 95%). The
+    ceiling is budget-aware now: 6% remaining is under the 15% weekly reserve, so it
+    is 0 and the cloud partition halts before the first spawn — opus included. The
+    local ticket behind it still spawns (wq#2081/#2088)."""
+    _zero_floors(denv, monkeypatch)
+    _pacing_off(denv)
+    write_config(denv, cloud_ceiling=10, max_spawns_per_pass=10)
+    denv["gov_state"].write_text(json.dumps(_burn_gov(10, 3, 94, 72)))
+    add_ticket("opus at 94%", pri=1, model="claude-opus-5")
+    add_ticket("sonnet at 94%", pri=1)
+    local = add_ticket("local rides on", pri=2, model="qwen36-local")
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [local]
+    assert log_events(denv, "burn_rate") == [] and log_events(denv, "tight_mode") == []
+    ceil = log_events(denv, "cloud_ceiling")
+    assert len(ceil) == 1 and ceil[0]["reason"] == "budget-aware cloud ceiling 0 of 10"
+    assert ceil[0]["model"] == "claude-opus-5"
+    assert "weekly_all: spendable 0.0%" in ceil[0]["detail"]
+    halts = log_events(denv, "halt")
+    assert len(halts) == 1 and halts[0]["stage"] == "concurrency"
+    assert halts[0]["reason"] == "no_slots"
+    assert "0 cloud unit(s) at ceiling 0 (config 10)" in halts[0]["detail"]
+    end = _pass_end(denv)
+    assert end["cloud_ceiling"] == {"session,weekly_all": 0}
+    assert (end["spawned_cloud"], end["stopped_cloud_reason"]) == (0, "no_slots")
+    assert (end["spawned_local"], end["stopped_local_reason"]) == (1, None)
+
+
+def test_cloud_ceiling_tapers_toward_min_allowed_as_weekly_fills(denv, monkeypatch):
+    """wq#2426: between plentiful and the reserve the ceiling scales, it does not step.
+    weekly_all 76% used: 24% remaining, 9% above the 15% reserve, 9/30 of the taper
+    band -> 3 of the config 10. Three of four cloud tickets spawn, the fourth halts on
+    no_slots at ceiling 3 — with no governor flag needed to get there."""
+    _zero_floors(denv, monkeypatch)
+    _pacing_off(denv)
+    write_config(denv, cloud_ceiling=10, max_spawns_per_pass=10)
+    denv["gov_state"].write_text(json.dumps(_burn_gov(10, 3, 76, 72)))
+    ids = [add_ticket(f"taper {n}", pri=1) for n in range(4)]
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == ids[:3]
+    assert log_events(denv, "burn_rate") == []
+    ceil = log_events(denv, "cloud_ceiling")
+    assert len(ceil) == 1 and ceil[0]["reason"] == "budget-aware cloud ceiling 3 of 10"
+    halts = log_events(denv, "halt")
+    assert len(halts) == 1 and "3 cloud unit(s) at ceiling 3 (config 10)" in halts[0]["detail"]
+    assert _pass_end(denv)["cloud_ceiling"] == {"session,weekly_all": 3}
+
+
+def test_cloud_ceiling_fable_pool_narrows_only_the_fable_ticket(denv, monkeypatch):
+    """wq#2426 keeps wq#1699's pool split: fable_weekly_scoped at 92% (8% left, under
+    its 10% reserve) zeroes the fable ceiling while the pass pools are plentiful, so
+    the fable ticket is skipped (cloud_ceiling_cap) and sonnet behind it still spawns."""
+    _zero_floors(denv, monkeypatch)
+    _pacing_off(denv)
+    gov = _burn_gov(10, 3, 10, 72)
+    gov["limits"]["fable_weekly_scoped"]["percent"] = 92
+    denv["gov_state"].write_text(json.dumps(gov))
+    fable = add_ticket("fable held", pri=1, model="claude-fable-5-1")
+    sonnet = add_ticket("sonnet rides on", pri=2)
+    assert fd.run_pass() == 0
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [sonnet]
+    skips = [e for e in log_events(denv, "skip") if e["reason"] == "cloud_ceiling_cap"]
+    assert [e["ticket"] for e in skips] == [fable]
+    assert "claude-fable-5-1 budget ceiling 0 (config 3)" in skips[0]["detail"]
+    assert log_events(denv, "halt") == []
+    assert _pass_end(denv)["cloud_ceiling"] == {
+        "session,weekly_all": 3, "session,weekly_all,fable_weekly_scoped": 0}
+
+
+def test_cloud_ceiling_zero_is_cloud_off(denv):
+    """wq#2426: the shape of Frank's 2026-09-21 stopgap (`cloud_ceiling: 0`). load_config
+    used to refuse it as "must be a positive integer", so the stopgap could never have
+    taken effect; it is now a legal cloud-off switch that the local partition ignores."""
+    write_config(denv, cloud_ceiling=0)
+    add_ticket("cloud off", pri=1)
+    local = add_ticket("local on", pri=2, model="qwen36-local")
+    assert fd.run_pass() == 0
+    assert [e for e in log_events(denv, "error") if e.get("stage") == "config"] == []
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [local]
+    halts = log_events(denv, "halt")
+    assert len(halts) == 1 and halts[0]["reason"] == "no_slots"
+    assert "0 cloud unit(s) at ceiling 0 (config 0)" in halts[0]["detail"]
 
 
 def test_burn_rate_fable_tight_never_halts_unflagged_pools(denv, monkeypatch):
@@ -1029,7 +1151,11 @@ def test_burn_rate_fable_pool_skips_fable_only(denv, monkeypatch):
     denv["gov_state"].write_text(json.dumps({"limits": {
         "session": {"percent": 10, "resets_at": (now + timedelta(hours=4)).isoformat()},
         "weekly_all": {"percent": 10, "resets_at": (now + timedelta(hours=20)).isoformat()},
-        "fable_weekly_scoped": {"percent": 99, "severity": "critical",
+        # wq#2426: was 99%, which is inside fable's 10% reserve and now reads a budget
+        # ceiling of 0 (cloud_ceiling_cap fires first). 70% leaves 20% spendable: the
+        # budget ceiling is 2, the burn-rate ceiling (20%/100h over 0.75) is 1 -> the
+        # skip below is provably the burn-rate gate's.
+        "fable_weekly_scoped": {"percent": 70, "severity": "critical",
                                 "resets_at": (now + timedelta(hours=100)).isoformat()}}}))
     _zero_floors(denv, monkeypatch)
     denv["pacing_cfg_path"].write_text(json.dumps(  # isolate stage 9 from wq#716 pacing

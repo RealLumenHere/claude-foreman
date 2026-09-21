@@ -22,11 +22,16 @@
     "psi_some_deny": 25.0
   },
   "burn_rate": {
-    "_note": "wq#1669/wq#1699: when governor pressure is tight (soft margin, critical severity, or warning on a floored pool) the dispatcher enforces a concurrency ceiling = (remaining_pct / hours_to_reset) / avg_worker_pct_per_hour, min over the model's pools, clamped to [min_allowed, cloud_ceiling] (burn_rate.py). tight_mode above only owns PSI pressure and the no-resets_at fallback. session/weekly_all rates measured 2026-09-10 (1.24 / 0.31, rounded up); fable is an estimate. observed_burn.json overrides when present.",
+    "_note": "wq#1669/wq#1699: when governor pressure is tight (soft margin, critical severity, or warning on a floored pool) the dispatcher enforces a concurrency ceiling = (remaining_pct / hours_to_reset) / avg_worker_pct_per_hour, min over the model's pools, clamped to [min_allowed, cloud_ceiling] (burn_rate.py). tight_mode above only owns PSI pressure and the no-resets_at fallback. session/weekly_all rates measured 2026-09-10 (1.24 / 0.31, rounded up); fable is an estimate. observed_burn.json overrides when present. wq#2426: cloud_ceiling itself is budget-aware on EVERY cloud admission (burn_rate.budget_ceiling): once a pool's spendable budget (remaining above Frank's reserve, FRANK_RESERVE_PCT) drops under ceiling_taper_pct[pool], the ceiling is cloud_ceiling * spendable/taper floored at min_allowed, and 0 at the reserve itself. Weekly 80%->95% drained on 2026-09-20/21 at the flat 10 because `warning` is advisory on zeroed floors; at 95% the burn-rate floor of 1 still churned 18 spawns/h. Both gates now read 0 at the reserve.",
     "avg_worker_pct_per_hour": {
       "session": 1.5,
       "weekly_all": 0.35,
       "fable_weekly_scoped": 0.75
+    },
+    "ceiling_taper_pct": {
+      "session": 10,
+      "weekly_all": 30,
+      "fable_weekly_scoped": 30
     },
     "min_allowed": 1
   },

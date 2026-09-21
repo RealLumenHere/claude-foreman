@@ -10,8 +10,12 @@ land the remaining budget on the reset, per pool, min over pools.
 
     spend_rate (%/h)   = remaining_pct / hours_to_reset
     allowed_concurrent = clamp(min over pools of spend_rate / quota_per_worker_h,
-                               min_allowed, cloud_ceiling)
+                               min_allowed, cloud_ceiling)      (0 at/below the reserve)
     allowed_this_pass  = max(0, allowed_concurrent - running_cloud_units)
+
+wq#2426 adds budget_ceiling(): cloud_ceiling itself tapers toward min_allowed (then 0)
+as a pool's spendable budget nears Frank's reserve, on every cloud admission — not only
+when governor pressure is tight, which on zeroed floors means only `critical`.
 
 Properties (walkthrough sec 5): 17% weekly left with 4h to reset is ~7x the
 steady-state rate, so the cap opens toward the ceiling; 17% left with 100h to go
@@ -60,6 +64,18 @@ FRANK_RESERVE_PCT = {
 DEFAULT_AVG_WORKER_PCT_PER_HOUR = {"session": 1.5, "weekly_all": 0.35,
                                    "fable_weekly_scoped": 0.75}
 MIN_ALLOWED = 1
+# wq#2426: config.json cloud_ceiling is budget-aware, not flat. The night of 2026-09-20/21
+# weekly_all went 80% -> 95% at 30-60 cloud spawns/hour: the usage API said `warning`,
+# which is advisory on Frank's zeroed floors (router.governor_pressure, wq#1699), so the
+# burn-rate controller above never engaged and stage 9 enforced the flat 10. Once a pool's
+# SPENDABLE budget (remaining above FRANK_RESERVE_PCT) falls under this many percent, the
+# ceiling tapers linearly: ceiling * spendable/taper, floored at min_allowed while any
+# spendable budget is left, and 0 at the reserve itself (budget_ceiling below). Per pool:
+# the 5h session refills too fast for a wide band (and the burn-rate controller already
+# reads its horizon); the weekly pools are where a flat ceiling drains a week in four days.
+# Needs only `percent`, not `resets_at`, so it holds even when the poll is missing a horizon.
+DEFAULT_CEILING_TAPER_PCT = {"session": 10.0, "weekly_all": 30.0,
+                             "fable_weekly_scoped": 30.0}
 
 # wq#1889 (despag P2-3, wq#1883 C section): FRANK_RESERVE_PCT above is already
 # conservative (it's sized to cover Frank's own interactive use even when he's
@@ -135,14 +151,16 @@ def merge_config(block):
     """config.json's optional `burn_rate` block over the defaults. Fail-soft like
     pacing.load_config: a malformed field keeps its default, never fails the pass."""
     out = {"avg_worker_pct_per_hour": dict(DEFAULT_AVG_WORKER_PCT_PER_HOUR),
+           "ceiling_taper_pct": dict(DEFAULT_CEILING_TAPER_PCT),
            "min_allowed": MIN_ALLOWED}
     if not isinstance(block, dict):
         return out
-    rates = block.get("avg_worker_pct_per_hour")
-    if isinstance(rates, dict):
-        for pool, v in rates.items():
-            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
-                out["avg_worker_pct_per_hour"][pool] = float(v)
+    for key in ("avg_worker_pct_per_hour", "ceiling_taper_pct"):
+        rates = block.get(key)
+        if isinstance(rates, dict):
+            for pool, v in rates.items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                    out[key][pool] = float(v)
     ma = block.get("min_allowed")
     if isinstance(ma, int) and not isinstance(ma, bool) and ma >= 0:
         out["min_allowed"] = ma
@@ -163,14 +181,27 @@ def load_observed(path=None):
             if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0}
 
 
-def pool_spend_rate(limits, pool, now, active=False):
-    """remaining_pct / hours_to_reset for one pool, or None without reliable data
-    (missing percent/resets_at, already rolled over, bogus horizon) — never guess.
-    `active` (wq#1889's frank_active(now), computed once per allowed_concurrent call so
-    every pool it checks agrees on the same reading) swaps in FRANK_RESERVE_PCT_ACTIVE."""
+def pool_spendable(limits, pool, active=False):
+    """Pool-% workers may still spend: remaining above Frank's reserve, floored at 0.
+    None when the poll returned no percent for the pool. `active` (wq#1889) swaps in
+    FRANK_RESERVE_PCT_ACTIVE; callers read frank_active(now) once per pass so every pool
+    agrees on the same reading."""
     b = (limits or {}).get(pool) or {}
-    pct, resets_at = b.get("percent"), b.get("resets_at")
-    if pct is None or not resets_at:
+    pct = b.get("percent")
+    if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+        return None
+    reserve = (FRANK_RESERVE_PCT_ACTIVE if active else FRANK_RESERVE_PCT).get(pool, 0.0)
+    # spend only against budget ABOVE Frank's reserve: at/below the reserve, 0 (workers stop, Frank keeps his headroom)
+    return max(0.0, (100.0 - float(pct)) - reserve)
+
+
+def pool_spend_rate(limits, pool, now, active=False):
+    """spendable_pct / hours_to_reset for one pool, or None without reliable data
+    (missing percent/resets_at, already rolled over, bogus horizon) — never guess."""
+    b = (limits or {}).get(pool) or {}
+    resets_at = b.get("resets_at")
+    spendable = pool_spendable(limits, pool, active=active)
+    if spendable is None or not resets_at:
         return None
     try:
         reset_dt = datetime.fromisoformat(resets_at)
@@ -179,11 +210,43 @@ def pool_spend_rate(limits, pool, now, active=False):
     remaining_s = (reset_dt - now).total_seconds()
     if remaining_s <= 0 or remaining_s > WINDOW_S[pool]:
         return None
-    reserve = (FRANK_RESERVE_PCT_ACTIVE if active else FRANK_RESERVE_PCT).get(pool, 0.0)
-    # spend only against budget ABOVE Frank's reserve: at/below the reserve, rate->0 (workers stop, Frank keeps his headroom)
-    remaining_pct = max(0.0, (100.0 - float(pct)) - reserve)
     hours = max(remaining_s / 3600.0, 1.0 / 60.0)  # floor at 1 min: no div-by-~0 blowup
-    return remaining_pct / hours
+    return spendable / hours
+
+
+def budget_ceiling(limits, ceiling, cfg, now=None, pools=PASS_POOLS):
+    """(effective cloud ceiling, detail) — wq#2426: config cloud_ceiling scaled down by
+    the spendable budget of each of `pools`, min over pools. Per pool, with spendable =
+    remaining above Frank's reserve and taper = cfg ceiling_taper_pct[pool]:
+
+        spendable <= 0            -> 0       (the reserve is Frank's, not worker budget)
+        0 < spendable < taper     -> max(min_allowed, int(ceiling * spendable / taper))
+        spendable >= taper        -> ceiling (unchanged: budget is plentiful)
+
+    Reads only `percent`, so it still holds when the poll carried no `resets_at`; a pool
+    with no percent contributes nothing (a missing bucket is already the governor's call:
+    router.governor_pressure denies on a floored pool, passes a zero-floor one). With no
+    usable pool at all the config ceiling stands, exactly as before this existed."""
+    now = now or datetime.now(timezone.utc)
+    active, active_detail = frank_active(now)
+    tapers = cfg["ceiling_taper_pct"]
+    eff = ceiling
+    details = [f"frank_active={active} ({active_detail})"]
+    for pool in pools:
+        spendable = pool_spendable(limits, pool, active=active)
+        if spendable is None:
+            continue
+        taper = tapers.get(pool)
+        if spendable <= 0:
+            n = 0
+        elif taper and spendable < taper:
+            n = max(cfg["min_allowed"], int(ceiling * spendable / taper))
+        else:
+            n = ceiling
+        n = min(n, ceiling)
+        details.append(f"{pool}: spendable {spendable:.1f}% (taper {taper}) -> {n}")
+        eff = min(eff, n)
+    return eff, "; ".join(details)
 
 
 def allowed_concurrent(limits, ceiling, cfg, observed=None, now=None, pools=PASS_POOLS):
@@ -210,6 +273,13 @@ def allowed_concurrent(limits, ceiling, cfg, observed=None, now=None, pools=PASS
         best = n if best is None else min(best, n)
     if best is None:
         return None, f"no usable percent+resets_at in {','.join(pools)}; {details[0]}"
+    if best <= 0:
+        # wq#2426: a binding pool at/below Frank's reserve supports ZERO workers, not
+        # min_allowed. min_allowed is the floor for a scarce pool ("the quota expires
+        # anyway"); the reserve is not the fleet's quota. At weekly 95% on 2026-09-21
+        # the floor of 1 kept one slot open and short tickets churned through it at
+        # 18 spawns/hour, each paying a full prompt load out of Frank's headroom.
+        return 0, "; ".join(details)
     allowed = int(min(max(best, cfg["min_allowed"]), ceiling))
     return allowed, "; ".join(details)
 
