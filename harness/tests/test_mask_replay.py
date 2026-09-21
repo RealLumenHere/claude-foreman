@@ -558,6 +558,106 @@ def test_the_live_rules_would_not_have_filed_wq2336():
     assert all("tests/test_" in r["accounted_in"] for r in kv.values())
 
 
+WQ2278_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2278")
+WQ2278_A1 = "docs/wq2278-token-engine-t10-remaining-verbs-and-mig-a1"
+
+# The single `cloudflare` value wq#2278 attempt 1 put in front of the model, named the
+# way a settled rotation ticket is allowed to name one: 12 hex of sha256, and a length.
+# A live Cloudflare token's body is 40 characters; this body is 6 because it is this
+# masker's own output read back — the substitution literal behind a `cfut_` prefix,
+# quoted in the comment that explains this very class at harness/burn_filter.py:84.
+# The test asserts the hash against masking.MASK rather than spelling the string, for
+# the reason the fixtures elsewhere in this file are written split.
+WQ2278_CLOUDFLARE = {"20227a136ec3": 6}
+
+# What accounts nowhere in main's tree: gateway-key fixtures the attempt TYPED, in the
+# shape it typed them. The PR renamed and split them before it landed — the survivor is
+# `"sk-" + "minted" * 5` at token-engine/tests/test_daemon.py:480 — so a value the run
+# wrote itself is absent from the committed tree and reports as BURNED?. That is the
+# wq#2318 direction of the same gap: the snapshots hold pre-images, and only the
+# transcript records what the Edit put there.
+WQ2278_BRANCH_FIXTURES = {
+    "840881e18cbe": "token-engine/tests/test_daemon.py",
+    "78a2d56fb7d2": "harness/tests/test_gateway_key_per_ticket.py",
+    "df9937e539d8": "harness/tests/test_gateway_key_per_ticket.py",
+}
+
+
+def _blob(branch, rel):
+    """One file as `branch` has it, or None when the branch is gone from this host."""
+    p = subprocess.run(["git", "-C", mask_replay.REPO_ROOT, "show", f"{branch}:{rel}"],
+                       capture_output=True, text=True)
+    return p.stdout if p.returncode == 0 and p.stdout else None
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2278_RUN),
+                    reason="wq#2278's run dir is not on this host")
+def test_wq2278_cloudflare_hit_was_the_maskers_own_output():
+    """wq#2343's verdict, pinned: nothing Cloudflare-shaped was burned and nothing was
+    rotated. The tripwire filed a pri-1 rotate-today ticket at 22:59:54Z for a label
+    whose whole value is the six characters this module substitutes — the masked
+    artefact re-arming the rule that masked it, which is the loop masking.py:186-200
+    describes. wq#2290 and wq#2289 settled the same attempt's other two labels.
+
+    A failure here means the value behind that label is no longer the mask literal, and
+    the run deserves a fresh look."""
+    records = mask_replay.replay(2278)
+    assert records, "wq#2278's artefacts should still reproduce the hit"
+    cloudflare = {r["value_sha256_12"]: r for r in records if r["label"] == "cloudflare"}
+    assert {h: r["value_len"] for h, r in cloudflare.items()} == WQ2278_CLOUDFLARE
+    rec = cloudflare["20227a136ec3"]
+    assert rec["value_sha256_12"] == hashlib.sha256(
+        masking.MASK.encode()).hexdigest()[:12]
+    # committed text, and text today's table has stopped reading as a credential at all
+    assert rec["accounted_in"]
+    assert not rec["still_matches_today"]
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2278_RUN),
+                    reason="wq#2278's run dir is not on this host")
+def test_wq2278_unaccounted_values_are_fixtures_off_its_own_branch():
+    """The other half of the same verdict. Replayed against main alone this run reports
+    unaccounted values, which is what a rotate-today page is supposed to mean; every one
+    of them is a dummy the attempt wrote into its own test files, so adding those files
+    to the tracked corpus drives the count to zero under both tables. Nothing here was
+    reachable as a credential either way: wq#2278 ran claude-fable-5, which is absent
+    from LOCAL_POOL_MODELS (fworker.py:159), so build_env handed it the OAuth token and
+    never a gateway key."""
+    branch = {}
+    for rel in sorted(set(WQ2278_BRANCH_FIXTURES.values())):
+        text = _blob(WQ2278_A1, rel)
+        if text is None:
+            pytest.skip(f"{WQ2278_A1} is no longer on this host")
+        branch[f"{WQ2278_A1}:{rel}"] = text
+    items, tracked = mask_replay.corpus(2278), mask_replay.tracked_text()
+    for patterns in (mask_replay.LEGACY_PATTERNS, mask_replay.CURRENT_PATTERNS):
+        loose = mask_replay.unaccounted(
+            mask_replay.replay(2278, patterns=patterns, tracked=tracked, items=items))
+        assert {r["value_sha256_12"] for r in loose} <= set(WQ2278_BRANCH_FIXTURES)
+        with_branch = mask_replay.replay(2278, patterns=patterns, items=items,
+                                         tracked=dict(tracked, **branch))
+        assert mask_replay.unaccounted(with_branch) == []
+        accounted = {r["value_sha256_12"]: r["accounted_in"] for r in with_branch}
+        for sha, rel in WQ2278_BRANCH_FIXTURES.items():
+            if sha in accounted:
+                assert accounted[sha].startswith(f"{WQ2278_A1}:{rel}:")
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2278_RUN),
+                    reason="wq#2278's run dir is not on this host")
+def test_the_live_rules_would_not_have_filed_wq2343():
+    """The leak path, closed. The cloudflare rule still reads `cfut_` + six legal
+    characters, and `MASKED` is six legal characters, so what stops the masker vouching
+    for its own output is masking.py:200 dropping any match that ends in the literal.
+    With that in place the label this ticket is named for has no record left in the
+    run's whole corpus — there is nothing for it to fire on twice."""
+    records = mask_replay.replay(2278, patterns=mask_replay.CURRENT_PATTERNS)
+    assert not [r for r in records if r["label"] == "cloudflare"]
+    assert masking.mask_text("cfut_" + masking.MASK)[1] == []
+    # and the rule is still armed for a body that is not the literal
+    assert masking.mask_text("cfut_" + "0" * 24)[1] == ["cloudflare"]
+
+
 def test_legacy_table_is_not_the_live_one():
     """A future tightening of masking.PATTERNS must not silently rewrite history."""
     assert mask_replay.LEGACY_PATTERNS is not mask_replay.CURRENT_PATTERNS
