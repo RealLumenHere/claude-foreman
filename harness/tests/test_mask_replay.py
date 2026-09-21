@@ -562,6 +562,88 @@ def test_the_live_rules_would_not_have_filed_wq2336():
     assert all("tests/test_" in r["accounted_in"] for r in kv.values())
 
 
+WQ2254_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2254")
+
+# The one `kv-secret` value mask-hits-1.json recorded for wq#2254 attempt 1, named as a
+# settled rotation ticket is allowed to name one: 12 hex of sha256, and a length. It is
+# not a credential. It is the CLI's own notification slug — the `key` of a
+# `{"type":"system","subtype":"notification"}` frame whose `text` reads "Stop hook error
+# occurred · ctrl+o to see" — an identifier for a KIND of notification, which is why the
+# body is 15 characters where a live forge token's is 36. Rebuilt split for the reason
+# wq#2300's fixtures are written split: a file that spelled it would re-arm the alarm it
+# is vouching for.
+WQ2254_KV_SHA, WQ2254_KV_LEN = "f53b37bacf02", 15
+WQ2254_NOTIFICATION_KEY = "stop-" + "hook-" + "error"
+WQ2254_NOTIFICATION = ('{"type":"system","subtype":"notification","key":"'
+                       + WQ2254_NOTIFICATION_KEY
+                       + '","text":"Stop hook error occurred"}')
+
+
+def test_wq2254_alarm_value_is_the_clis_notification_slug():
+    """The identification wq#2365 asks for, done the only way the artefacts allow.
+
+    The record carries a hash and a length and never the value, so a candidate is
+    confirmed by hashing it and comparing — the instruction every rotation ticket
+    carries. This is the assertion that makes every verdict below about a named string
+    rather than about whatever happens to be missing from the corpus today."""
+    assert len(WQ2254_NOTIFICATION_KEY) == WQ2254_KV_LEN
+    assert hashlib.sha256(
+        WQ2254_NOTIFICATION_KEY.encode()).hexdigest()[:12] == WQ2254_KV_SHA
+
+
+def test_the_live_rules_would_not_have_filed_wq2365():
+    """The leak path, closed, and closed 7 minutes after this alarm fired.
+
+    The legacy table read bare `key` as a credential label, so the notification frame
+    below matched a naked keyword alternation. `2ccc21e` (23:31:22) replaced that with a
+    qualified noun — `key` alone is ordinary JSON and an ordinary kwarg, so it is
+    deliberately absent from `_KV_BARE` (masking.py:52-56) — and this alarm fired at
+    23:24:35, under the table the attempt had imported at spawn. That is the wq#2327
+    hole, for the fourth time. No run dir needed: the frame is the evidence."""
+    assert "kv-secret" in [
+        label for label, rx in mask_replay.LEGACY_PATTERNS
+        if rx.search(WQ2254_NOTIFICATION)]
+    masked, labels = masking.mask_text(WQ2254_NOTIFICATION)
+    assert labels == []
+    assert masked == WQ2254_NOTIFICATION
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2254_RUN),
+                    reason="wq#2254's run dir is not on this host")
+def test_wq2254_transcript_burned_nothing():
+    """wq#2365's verdict, pinned. Replaying the frozen artefacts under the legacy table
+    reproduces two credential-shaped strings and accounts for both in a committed file,
+    so nothing was rotated. Neither is the value that filed the ticket — that one is
+    settled separately below, because it is in no artefact at all."""
+    records = mask_replay.replay(2254)
+    assert records, "wq#2254's artefacts should still reproduce a hit"
+    assert mask_replay.unaccounted(records) == []
+    kv = [r for r in records if r["label"] == "kv-secret"]
+    assert kv and all(r["accounted_in"] for r in kv)
+    assert WQ2254_KV_SHA not in {r["value_sha256_12"] for r in records}
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2254_RUN),
+                    reason="wq#2254's run dir is not on this host")
+def test_wq2254_alarm_value_never_reached_the_model():
+    """wq#2393's open question, answered from this run rather than argued.
+
+    That ticket asks whether a snapshot-only alarm means (a) a stream line the CLI
+    transcript does not persist, or (b) something other than the stream reaching
+    mask_text. This alarm settles it as (a), because its own context window is a
+    `system`/`notification` frame — a shape only the stream carries — while the value is
+    in no corpus source, transcript included. The tripwire scores every raw line before
+    parse (fworker.py:2275-2284) on the premise that "the model already saw the real
+    value"; that premise does not hold for a frame the CLI emits to its own terminal UI,
+    and this is the first alarm to prove it with the frame in hand."""
+    items = mask_replay.corpus(2254)
+    assert any(name.startswith("transcript:") for name in items), (
+        "the model-context source must be present, or absence below proves nothing")
+    assert [name for name, text in items.items()
+            if WQ2254_NOTIFICATION_KEY in text] == []
+    assert mask_replay.replay(2254, patterns=mask_replay.CURRENT_PATTERNS) == []
+
+
 WQ1819_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq1819")
 
 # The one `kv-secret` value wq#1819 attempt 8 put in front of its model. Unlike every
