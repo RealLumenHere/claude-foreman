@@ -710,13 +710,20 @@ def test_wq2278_unaccounted_values_are_fixtures_off_its_own_branch():
     for patterns in (mask_replay.LEGACY_PATTERNS, mask_replay.CURRENT_PATTERNS):
         loose = mask_replay.unaccounted(
             mask_replay.replay(2278, patterns=patterns, tracked=tracked, items=items))
-        assert {r["value_sha256_12"] for r in loose} <= set(WQ2278_BRANCH_FIXTURES)
+        loose_shas = {r["value_sha256_12"] for r in loose}
+        assert loose_shas <= set(WQ2278_BRANCH_FIXTURES)
         with_branch = mask_replay.replay(2278, patterns=patterns, items=items,
                                          tracked=dict(tracked, **branch))
         assert mask_replay.unaccounted(with_branch) == []
         accounted = {r["value_sha256_12"]: r["accounted_in"] for r in with_branch}
+        # Pin the branch file only for a value main cannot explain on its own.
+        # `account` returns the FIRST committed file holding a string, so the moment
+        # main grows its own copy of one of these dummies — e5b6c92 landed one in
+        # ops/wq2316-mask-secrets-boundary/ — the branch corpus stops winning the
+        # lookup and this loop was asserting the outcome of a race. The verdict is
+        # unharmed, and strictly stronger: the value is committed text either way.
         for sha, rel in WQ2278_BRANCH_FIXTURES.items():
-            if sha in accounted:
+            if sha in accounted and sha in loose_shas:
                 assert accounted[sha].startswith(f"{WQ2278_A1}:{rel}:")
 
 
@@ -783,6 +790,61 @@ def test_the_live_rules_would_not_have_filed_wq2366():
     assert mask_replay.unaccounted(records) == []
     assert [r for r in records if r["label"] == "sk-key"] == []
     assert all("tests/test_" in r["accounted_in"] for r in records)
+
+
+# The one `slack` value mask-hits-1.json recorded for wq#2300 attempt 1, named the only
+# way a settled rotation ticket may name one: 12 hex of sha256, and a length. It is the
+# `xoxb-` fixture from harness/tests/test_masking.py — a body of two dash-joined groups
+# counting up through the digits and the head of the alphabet, where a live bot token
+# carries three. Spelled as a hash because a file that spelled it would re-arm the alarm
+# it is vouching for, which is the whole shape of the chain these rows keep closing.
+WQ2300_SLACK = ("2af11783433b", 19)
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2300_RUN),
+                    reason="wq#2300's run dir is not on this host")
+def test_wq2300_slack_label_burned_nothing():
+    """wq#2354's verdict, pinned — the third and last label off wq#2300 attempt 1, after
+    row 596's `cloudflare,sk-key` (wq#2332) and row 605's `kv-secret` (wq#2336). The
+    attempt was fixing the sk- prefix bug in the masker's own fixture file, where this
+    `xoxb-` value still sat WHOLE in SECRETS, so reading it put the fixture in front of
+    the model.
+
+    Two things make this record different from its siblings. Every artefact the run
+    wrote holds `xoxb-MASKED` and nothing else, so the transcript is the only source
+    that can both prove the value reached the model and name it (wq#2311) — pin it, or
+    a corpus that lost the transcript would report this run clean by going blind. And
+    the value still matches today's table: `unaccounted` forgives either a committed
+    value or one the rules stopped reading, and only the first screen applies here, so
+    the accounting is load-bearing rather than vacuous.
+    """
+    records = mask_replay.replay(2300)
+    slack = [r for r in records if r["label"] == "slack"]
+    assert [(r["value_sha256_12"], r["value_len"]) for r in slack] == [WQ2300_SLACK]
+    assert slack[0]["first_seen_in"].startswith("transcript:")
+    assert slack[0]["accounted_in"].startswith("harness/tests/test_masking.py:")
+    assert slack[0]["still_matches_today"]
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2300_RUN),
+                    reason="wq#2300's run dir is not on this host")
+def test_the_live_rules_would_not_have_filed_wq2354():
+    """The leak path, closed 2m10s after the ticket was filed and by the same run: the
+    alarm fired 23:10:03Z, wq#2300 filed this at 23:10:04Z, and 74dcb82 (23:12:14Z)
+    split the SECRETS entry that fired so it interpolates the already-split constant.
+    What holds that split in place is wq#2356's guard in test_masking.py —
+    `test_the_mask_suite_does_not_arm_its_own_tripwire` — which reads the whole mask
+    suite's source and requires zero hits. It is upstream of everything below.
+
+    Downstream, the live table alone would not have saved it — a fixture whose whole
+    point is to be credential-shaped still matches at HEAD. What stops the page is
+    burn_filter's screen on a value a committed file explains.
+    """
+    records = mask_replay.replay(2300, patterns=mask_replay.CURRENT_PATTERNS)
+    slack = [r for r in records if r["label"] == "slack"]
+    assert [(r["value_sha256_12"], r["value_len"]) for r in slack] == [WQ2300_SLACK]
+    assert slack[0]["accounted_in"]
+    assert mask_replay.unaccounted(records) == []
 
 
 def test_legacy_table_is_not_the_live_one():
