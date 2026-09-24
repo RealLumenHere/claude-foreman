@@ -1,0 +1,200 @@
+{"ans": "Ross Bagdasarian Sr.", "lat": 0.6949667930603027, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2"}
+{"ans": "Sunset Boulevard", "lat": 0.6008532047271729, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_33"}
+{"ans": "Henry Campbell-Bannerman", "lat": 1.162160873413086, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_40"}
+{"ans": "Exile", "lat": 0.8792343139648438, "lp": [0.0, 0.0], "err": null, "id": "tc_49"}
+{"ans": "Breast cancer", "lat": 0.7668423652648926, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_56"}
+{"ans": "Octopussy", "lat": 0.6027004718780518, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_69"}
+{"ans": "Mississippi", "lat": 0.7378747463226318, "lp": [0.0, 0.0], "err": null, "id": "tc_79"}
+{"ans": "Lauren Bacall", "lat": 0.7949435710906982, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_106"}
+{"ans": "Nikkei", "lat": 0.635563850402832, "lp": [0.0, 0.0], "err": null, "id": "tc_133"}
+{"ans": "Moonwalk", "lat": 0.8429856300354004, "lp": [0.0, 0.0], "err": null, "id": "tc_137"}
+{"ans": "1930s", "lat": 0.8463404178619385, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_149"}
+{"ans": "1912", "lat": 0.9316601753234863, "lp": [0.0, 0.0], "err": null, "id": "tc_165"}
+{"ans": "Mount Kilimanjaro", "lat": 0.9223480224609375, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_217"}
+{"ans": "Green", "lat": 0.7781574726104736, "lp": [0.0], "err": null, "id": "tc_219"}
+{"ans": "Niger", "lat": 0.7197990417480469, "lp": [0.0, 0.0], "err": null, "id": "tc_241"}
+{"ans": "Stansfield Turner", "lat": 0.7027492523193359, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_245"}
+{"ans": "My Fair Lady", "lat": 0.6840569972991943, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_261"}
+{"ans": "Adolf Hitler", "lat": 1.0078020095825195, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_267"}
+{"ans": "Richard Marx", "lat": 0.7971959114074707, "lp": [0.0, 0.0], "err": null, "id": "tc_276"}
+{"ans": "John Ford", "lat": 0.599146842956543, "lp": [0.0, 0.0], "err": null, "id": "tc_280"}
+{"ans": "Pink Floyd", "lat": 0.5346376895904541, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_282"}
+{"ans": "Highway 61", "lat": 0.6655924320220947, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_288"}
+{"ans": "Romania", "lat": 0.6416070461273193, "lp": [0.0, 0.0], "err": null, "id": "tc_298"}
+{"ans": "Wild Palms", "lat": 0.7559490203857422, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_304"}
+{"ans": "Fiddler on the Roof", "lat": 0.8488132953643799, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_316"}
+{"ans": "Mutiny on the Bounty", "lat": 0.5721621513366699, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_349"}
+{"ans": "Persons", "lat": 0.8781208992004395, "lp": [0.0, 0.0], "err": null, "id": "tc_379"}
+{"ans": "A Boojum", "lat": 0.9700448513031006, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_397"}
+{"ans": "Joshua", "lat": 0.7758808135986328, "lp": [0.0, 0.0], "err": null, "id": "tc_453"}
+{"ans": "Dangerous Minds", "lat": 0.8085551261901855, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_455"}
+{"ans": "Rudolph", "lat": 0.8581588268280029, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_510"}
+{"ans": "Architecture", "lat": 0.7604649066925049, "lp": [0.0, 0.0], "err": null, "id": "tc_515"}
+{"ans": "Rudolf Hess", "lat": 0.7748091220855713, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_517"}
+{"ans": "48 Hrs.", "lat": 0.6289174556732178, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_518"}
+{"ans": "J.G. Ballard", "lat": 0.92547607421875, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_538"}
+{"ans": "Japan", "lat": 0.480130672454834, "lp": [0.0], "err": null, "id": "tc_540"}
+{"ans": "Basketball", "lat": 0.6245591640472412, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_543"}
+{"ans": "Stars on 45", "lat": 0.9860849380493164, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_559"}
+{"ans": "Vancouver, British Columbia", "lat": 0.5043106079101562, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_561"}
+{"ans": "The Kentuckian", "lat": 0.7763874530792236, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_564"}
+{"ans": "The deep sea", "lat": 0.7161214351654053, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_585"}
+{"ans": "Coventry", "lat": 0.7328884601593018, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_586"}
+{"ans": "Manticore", "lat": 1.034970998764038, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_596"}
+{"ans": "The Cyclopes", "lat": 0.7355279922485352, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_604"}
+{"ans": "Jelly Roll Morton", "lat": 0.6970634460449219, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_626"}
+{"ans": "Peru", "lat": 0.7164475917816162, "lp": [0.0, 0.0], "err": null, "id": "tc_635"}
+{"ans": "27", "lat": 0.6977686882019043, "lp": [0.0], "err": null, "id": "tc_653"}
+{"ans": "Richard Noble", "lat": 0.6913485527038574, "lp": [0.0, 0.0], "err": null, "id": "tc_657"}
+{"ans": "Virginia", "lat": 1.080103874206543, "lp": [0.0], "err": null, "id": "tc_664"}
+{"ans": "Marshall Plan", "lat": 0.6002249717712402, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_665"}
+{"ans": "The Crow", "lat": 0.5612032413482666, "lp": [0.0, 0.0], "err": null, "id": "tc_672"}
+{"ans": "The Staple Singers", "lat": 0.9425690174102783, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_678"}
+{"ans": "MC Hammer", "lat": 0.5404644012451172, "lp": [0.0, 0.0], "err": null, "id": "tc_687"}
+{"ans": "Triumph and Disaster", "lat": 0.7837326526641846, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_690"}
+{"ans": "Elton John", "lat": 0.670604944229126, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_691"}
+{"ans": "Angola", "lat": 0.7624626159667969, "lp": [0.0, 0.0], "err": null, "id": "tc_704"}
+{"ans": "Upside Down", "lat": 0.9429636001586914, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_715"}
+{"ans": "Dark Blood", "lat": 0.6030805110931396, "lp": [0.0, 0.0], "err": null, "id": "tc_719"}
+{"ans": "David Hockney", "lat": 0.9113729000091553, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_723"}
+{"ans": "Gerard", "lat": 0.6372244358062744, "lp": [0.0, 0.0], "err": null, "id": "tc_725"}
+{"ans": "Chicago", "lat": 2.916059970855713, "lp": [0.0], "err": null, "id": "tc_731"}
+{"ans": "Grand Hotel", "lat": 0.7313785552978516, "lp": [0.0, 0.0], "err": null, "id": "tc_759"}
+{"ans": "Pocket cartoons", "lat": 0.8420443534851074, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_783"}
+{"ans": "Chris Evert", "lat": 0.6755709648132324, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_812"}
+{"ans": "Jock Hutchison", "lat": 0.5886318683624268, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_827"}
+{"ans": "Thailand", "lat": 0.5037341117858887, "lp": [0.0, 0.0], "err": null, "id": "tc_841"}
+{"ans": "Famous Players Film Company", "lat": 1.0626747608184814, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_847"}
+{"ans": "Edmund Hillary", "lat": 1.0258522033691406, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_866"}
+{"ans": "Seymour Hersh", "lat": 0.7249009609222412, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_875"}
+{"ans": "Jasper Conran", "lat": 0.7787046432495117, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_881"}
+{"ans": "Pepsi", "lat": 0.7384521961212158, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_886"}
+{"ans": "Carl Wilson", "lat": 0.7474222183227539, "lp": [0.0, 0.0], "err": null, "id": "tc_888"}
+{"ans": "Richard Dawson", "lat": 0.7070064544677734, "lp": [0.0, 0.0], "err": null, "id": "tc_905"}
+{"ans": "Trusty scout", "lat": 0.7565586566925049, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_935"}
+{"ans": "A bear", "lat": 0.6600222587585449, "lp": [0.0, 0.0], "err": null, "id": "tc_938"}
+{"ans": "All in the Family", "lat": 0.7735903263092041, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_945"}
+{"ans": "July 20, 1969", "lat": 0.838646650314331, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_954"}
+{"ans": "Brunei", "lat": 0.7219576835632324, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_955"}
+{"ans": "Photographer", "lat": 0.45958518981933594, "lp": [0.0, 0.0], "err": null, "id": "tc_962"}
+{"ans": "Petula Clark", "lat": 0.7367973327636719, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1004"}
+{"ans": "Kiefer Sutherland", "lat": 0.9837250709533691, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1007"}
+{"ans": "8", "lat": 0.5722393989562988, "lp": [0.0], "err": null, "id": "tc_1008"}
+{"ans": "Ty Cobb", "lat": 0.616246223449707, "lp": [0.0, 0.0], "err": null, "id": "tc_1009"}
+{"ans": "Jimi Hendrix", "lat": 0.5964348316192627, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1020"}
+{"ans": "Perry Mason", "lat": 0.838670015335083, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1023"}
+{"ans": "Donny Osmond", "lat": 0.57350754737854, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1028"}
+{"ans": "Mase", "lat": 0.9259011745452881, "lp": [0.0, 0.0], "err": null, "id": "tc_1029"}
+{"ans": "Beekeeping", "lat": 0.685687780380249, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1068"}
+{"ans": "Massachusetts", "lat": 0.6835978031158447, "lp": [0.0, 0.0], "err": null, "id": "tc_1069"}
+{"ans": "Benina International Airport is in Libya.", "lat": 0.8990423679351807, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1070"}
+{"ans": "Oprah Winfrey", "lat": 0.7588462829589844, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1098"}
+{"ans": "Leonard Nimoy", "lat": 0.9164073467254639, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1114"}
+{"ans": "Jennifer Aniston", "lat": 0.6371021270751953, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1115"}
+{"ans": "Tinker Bell", "lat": 1.069690465927124, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1120"}
+{"ans": "Nixon", "lat": 0.6292686462402344, "lp": [0.0, 0.0], "err": null, "id": "tc_1123"}
+{"ans": "Shine", "lat": 0.6929810047149658, "lp": [0.0, 0.0], "err": null, "id": "tc_1124"}
+{"ans": "Roger Corman", "lat": 0.5930275917053223, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1128"}
+{"ans": "Alien", "lat": 0.8885502815246582, "lp": [0.0, 0.0], "err": null, "id": "tc_1131"}
+{"ans": "George III", "lat": 0.6465919017791748, "lp": [0.0, 0.0], "err": null, "id": "tc_1152"}
+{"ans": "Ingrid Bergman", "lat": 0.8218064308166504, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1156"}
+{"ans": "The Full Monty", "lat": 0.7120227813720703, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1176"}
+{"ans": "Joan Crawford", "lat": 0.6704778671264648, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1179"}
+{"ans": "James Stewart", "lat": 0.7324728965759277, "lp": [0.0, 0.0], "err": null, "id": "tc_1181"}
+{"ans": "Fred Astaire", "lat": 0.7636096477508545, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1183"}
+{"ans": "The Chicken Ranch", "lat": 1.0117106437683105, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1189"}
+{"ans": "Peter O'Toole", "lat": 0.8017146587371826, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1210"}
+{"ans": "Daughter", "lat": 0.9855680465698242, "lp": [0.0, 0.0], "err": null, "id": "tc_1243"}
+{"ans": "Kim Clijsters", "lat": 0.6091787815093994, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1250"}
+{"ans": "Belgium", "lat": 0.6799221038818359, "lp": [0.0, 0.0], "err": null, "id": "tc_1254"}
+{"ans": "April 30", "lat": 0.569843053817749, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1284"}
+{"ans": "Colorado River", "lat": 0.5432229042053223, "lp": [0.0, 0.0], "err": null, "id": "tc_1313"}
+{"ans": "The Ryder Cup", "lat": 0.47515010833740234, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1321"}
+{"ans": "Vienna", "lat": 0.9769401550292969, "lp": [0.0, 0.0], "err": null, "id": "tc_1323"}
+{"ans": "24", "lat": 0.7439813613891602, "lp": [0.0], "err": null, "id": "tc_1324"}
+{"ans": "Guess Who's Coming to Dinner", "lat": 0.7340214252471924, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1328"}
+{"ans": "Gary Lewis and the Playboys", "lat": 0.6706647872924805, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1331"}
+{"ans": "Sweden", "lat": 0.7237067222595215, "lp": [0.0, 0.0], "err": null, "id": "tc_1333"}
+{"ans": "New Zealand", "lat": 0.6623170375823975, "lp": [0.0, 0.0], "err": null, "id": "tc_1340"}
+{"ans": "Yuri Andropov", "lat": 0.6196169853210449, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1341"}
+{"ans": "The baby buggy (stroller)", "lat": 0.7085921764373779, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1348"}
+{"ans": "Gda\u0144sk", "lat": 3.128756046295166, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1365"}
+{"ans": "Barbra Streisand", "lat": 0.7118396759033203, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1387"}
+{"ans": "Harrison Ford", "lat": 0.593008279800415, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1421"}
+{"ans": "Roger Maris", "lat": 0.6223959922790527, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1442"}
+{"ans": "Philadelphia Phillies", "lat": 0.8653542995452881, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1456"}
+{"ans": "4", "lat": 0.85585618019104, "lp": [0.0], "err": null, "id": "tc_1468"}
+{"ans": "Muhammad Ali", "lat": 0.9374380111694336, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1484"}
+{"ans": "Gothenburg", "lat": 0.7271499633789062, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1485"}
+{"ans": "Baltimore", "lat": 0.9364402294158936, "lp": [0.0], "err": null, "id": "tc_1516"}
+{"ans": "Basketball", "lat": 0.6813850402832031, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1535"}
+{"ans": "The Flash", "lat": 0.9520952701568604, "lp": [0.0, 0.0], "err": null, "id": "tc_1537"}
+{"ans": "Boston Braves", "lat": 0.8824079036712646, "lp": [0.0, 0.0], "err": null, "id": "tc_1542"}
+{"ans": "Splendor in the Grass", "lat": 0.9974455833435059, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1602"}
+{"ans": "Debra Winger", "lat": 0.758763313293457, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1606"}
+{"ans": "Dolenz, The Monkees", "lat": 0.6853978633880615, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1609"}
+{"ans": "Jack Webb", "lat": 0.5983588695526123, "lp": [0.0, 0.0], "err": null, "id": "tc_1620"}
+{"ans": "I Love Lucy", "lat": 0.7046759128570557, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1622"}
+{"ans": "John Astin", "lat": 0.7048039436340332, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1623"}
+{"ans": "None", "lat": 0.8325989246368408, "lp": [0.0], "err": null, "id": "tc_1635"}
+{"ans": "Woodrow Wilson", "lat": 0.5543947219848633, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1686"}
+{"ans": "Pete Sampras", "lat": 0.7027063369750977, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1693"}
+{"ans": "Sister-in-law", "lat": 0.9672112464904785, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1699"}
+{"ans": "Four years", "lat": 0.5319135189056396, "lp": [0.0, 0.0], "err": null, "id": "tc_1700"}
+{"ans": "I am sorry, I cannot answer that question. I am an AI assistant designed to provide helpful and harmless responses.", "lat": 0.5684125423431396, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1702"}
+{"ans": "French Open", "lat": 0.7357263565063477, "lp": [0.0, 0.0], "err": null, "id": "tc_1704"}
+{"ans": "Canoeing", "lat": 0.7187364101409912, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1730"}
+{"ans": "3", "lat": 0.5834231376647949, "lp": [0.0], "err": null, "id": "tc_1735"}
+{"ans": "Unwanted or irrelevant messages sent over the internet, typically to a large number of users, for advertising, phishing,", "lat": 0.8442044258117676, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1754"}
+{"ans": "United States", "lat": 0.6784043312072754, "lp": [0.0, 0.0], "err": null, "id": "tc_1773"}
+{"ans": "1905", "lat": 1.0483615398406982, "lp": [0.0, 0.0], "err": null, "id": "tc_1798"}
+{"ans": "Frank Harris", "lat": 0.8516135215759277, "lp": [0.0, 0.0], "err": null, "id": "tc_1816"}
+{"ans": "The Tide Is High", "lat": 0.6870372295379639, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1826"}
+{"ans": "Kansas City", "lat": 0.7596650123596191, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1858"}
+{"ans": "Columbus", "lat": 0.8927781581878662, "lp": [0.0, 0.0], "err": null, "id": "tc_1859"}
+{"ans": "1930s", "lat": 0.5448274612426758, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1865"}
+{"ans": "Red Sea", "lat": 0.5073304176330566, "lp": [0.0, 0.0], "err": null, "id": "tc_1867"}
+{"ans": "Elvis Presley", "lat": 0.6433324813842773, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1888"}
+{"ans": "China", "lat": 0.6558489799499512, "lp": [0.0], "err": null, "id": "tc_1914"}
+{"ans": "Elizabeth Emanuel", "lat": 0.8594064712524414, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1921"}
+{"ans": "Yasser Arafat", "lat": 0.7781312465667725, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_1924"}
+{"ans": "United Kingdom", "lat": 0.7128164768218994, "lp": [0.0, 0.0], "err": null, "id": "tc_1938"}
+{"ans": "Egypt", "lat": 0.7627246379852295, "lp": [0.0], "err": null, "id": "tc_1943"}
+{"ans": "Myanmar", "lat": 0.9407806396484375, "lp": [0.0, 0.0], "err": null, "id": "tc_1944"}
+{"ans": "Chaplin", "lat": 0.7312982082366943, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1945"}
+{"ans": "A nightclub", "lat": 0.5076687335968018, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1968"}
+{"ans": "On the roof", "lat": 0.4959452152252197, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1973"}
+{"ans": "World War II", "lat": 0.6630125045776367, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_1977"}
+{"ans": "2%", "lat": 0.7182996273040771, "lp": [0.0, 0.0], "err": null, "id": "tc_2020"}
+{"ans": "Maastricht", "lat": 0.6904528141021729, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_2031"}
+{"ans": "Reims", "lat": 0.5334112644195557, "lp": [0.0, 0.0], "err": null, "id": "tc_2032"}
+{"ans": "London", "lat": 0.7018091678619385, "lp": [0.0], "err": null, "id": "tc_2063"}
+{"ans": "Mickey Mouse was first drawn by Ub Iwerks in 1928. Walt Disney first supplied Mickey's voice", "lat": 0.8616371154785156, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2090"}
+{"ans": "Julie Andrews", "lat": 0.5388908386230469, "lp": [0.0, 0.0], "err": null, "id": "tc_2097"}
+{"ans": "Barbara Eden", "lat": 0.5111162662506104, "lp": [0.0, 0.0], "err": null, "id": "tc_2111"}
+{"ans": "Orange", "lat": 0.7674129009246826, "lp": [0.0], "err": null, "id": "tc_2114"}
+{"ans": "Atlantic", "lat": 1.0175364017486572, "lp": [0.0], "err": null, "id": "tc_2116"}
+{"ans": "Chess Records", "lat": 0.5161793231964111, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_2128"}
+{"ans": "Debbie Rowe", "lat": 0.8598918914794922, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_2145"}
+{"ans": "Philadelphia", "lat": 0.5013504028320312, "lp": [0.0], "err": null, "id": "tc_2167"}
+{"ans": "Mae West", "lat": 0.867966890335083, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_2182"}
+{"ans": "Bobby Vinton", "lat": 3.1536755561828613, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2191"}
+{"ans": "IS", "lat": 0.7756030559539795, "lp": [0.0], "err": null, "id": "tc_2202"}
+{"ans": "John F. Kennedy Stadium, Philadelphia", "lat": 0.701805830001831, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2208"}
+{"ans": "Apollo 17", "lat": 0.7434670925140381, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2218"}
+{"ans": "Ronald Reagan", "lat": 0.7748305797576904, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_2222"}
+{"ans": "Ezer Weizman", "lat": 0.6325750350952148, "lp": [0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2229"}
+{"ans": "Heinrich Himmler", "lat": 0.8092620372772217, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2236"}
+{"ans": "Ferdinand Marcos", "lat": 0.8079512119293213, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2244"}
+{"ans": "Earthquake", "lat": 0.6468157768249512, "lp": [0.0, 0.0], "err": null, "id": "tc_2250"}
+{"ans": "Texas", "lat": 0.7685630321502686, "lp": [0.0], "err": null, "id": "tc_2252"}
+{"ans": "Wisconsin", "lat": 0.6220386028289795, "lp": [0.0, 0.0], "err": null, "id": "tc_2256"}
+{"ans": "December", "lat": 0.9206247329711914, "lp": [0.0], "err": null, "id": "tc_2257"}
+{"ans": "Cora Crippen", "lat": 1.020033359527588, "lp": [0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2265"}
+{"ans": "16", "lat": 0.6521868705749512, "lp": [0.0], "err": null, "id": "tc_2270"}
+{"ans": "Cheyenne and Belle Fourche", "lat": 0.903057336807251, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2280"}
+{"ans": "1921", "lat": 0.688831090927124, "lp": [0.0, 0.0], "err": null, "id": "tc_2287"}
+{"ans": "New York City", "lat": 0.7866055965423584, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_2295"}
+{"ans": "President John F. Kennedy was assassinated on November 22, 1963, in Dallas, Texas, while riding", "lat": 1.0258610248565674, "lp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "err": null, "id": "tc_2299"}
+{"ans": "Batman", "lat": 0.6952745914459229, "lp": [0.0, 0.0], "err": null, "id": "tc_2300"}
+{"ans": "Lee Harvey Oswald", "lat": 0.6054632663726807, "lp": [0.0, 0.0, 0.0], "err": null, "id": "tc_2306"}

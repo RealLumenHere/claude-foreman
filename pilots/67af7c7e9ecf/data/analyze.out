@@ -1,0 +1,3 @@
+qwen36-local {'acc_base': 0.56, 'acc_treat': 0.56, 'same_answer': 1.0, 'call_errors': 0, 'with_logprobs': 200, 'auroc': 0.834, 'ci': (0.776670692431562, 0.8882828282828282), 'lat_med_base': 1.38, 'lat_med_treat': 1.408, 'lat_ratio': 1.021}
+deepseek-v4-flash {'acc_base': 0.79, 'acc_treat': 0.79, 'same_answer': 0.95, 'call_errors': 0, 'with_logprobs': 200, 'auroc': 0.5, 'ci': (0.5, 0.5), 'lat_med_base': 0.734, 'lat_med_treat': 0.731, 'lat_ratio': 0.996}
+ROUTING @30% escalation: weak_only=0.560 strong_only=0.790 uncertainty_routed=0.675 random_expected=0.629 oracle=0.735 gain_vs_random=+4.600 pts

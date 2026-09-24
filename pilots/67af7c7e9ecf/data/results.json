@@ -1,0 +1,42 @@
+{
+ "per_model": {
+  "qwen36-local": {
+   "acc_base": 0.56,
+   "acc_treat": 0.56,
+   "same_answer": 1.0,
+   "call_errors": 0,
+   "with_logprobs": 200,
+   "auroc": 0.8341112012987013,
+   "ci": [
+    0.776670692431562,
+    0.8882828282828282
+   ],
+   "lat_med_base": 1.3795047998428345,
+   "lat_med_treat": 1.4081261157989502,
+   "lat_ratio": 1.0207475290838977
+  },
+  "deepseek-v4-flash": {
+   "acc_base": 0.79,
+   "acc_treat": 0.79,
+   "same_answer": 0.95,
+   "call_errors": 0,
+   "with_logprobs": 200,
+   "auroc": 0.5,
+   "ci": [
+    0.5,
+    0.5
+   ],
+   "lat_med_base": 0.7340997457504272,
+   "lat_med_treat": 0.731338381767273,
+   "lat_ratio": 0.9962384349005168
+  }
+ },
+ "routing": {
+  "weak_only": 0.56,
+  "strong_only": 0.79,
+  "routed": 0.675,
+  "random_expected": 0.629,
+  "oracle": 0.735,
+  "gain_pts": 4.600000000000004
+ }
+}

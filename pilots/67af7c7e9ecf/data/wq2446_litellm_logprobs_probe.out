@@ -1,0 +1,33 @@
+cerebras-gptoss-pinned | OK | 0.26 | 0 | 0 | 
+cerebras-llama | OK | 0.35 | 0 | 0 | 
+cerebras-oss-120b | OK | 0.27 | 0 | 0 | 
+deepseek-chat | OK | 0.95 | 1 | 1 | Paris
+deepseek-v4-flash | OK | 0.76 | 1 | 1 | Paris
+deepseek-v4-pro | OK | 1.42 | 0 | 0 | 
+gemini-flash | ERR | 0.42 | 0 | 0 | {"error":{"message":"litellm.BadRequestError: GeminiException BadRequestError - {\n  \"error\": {\n    \"code\
+gemma4-e4b-local | OK | 22.66 | 0 | 0 | Paris
+glm-5.3-flash | OK | 0.32 | 0 | 0 | 
+glm-5.3-flash-local | ERR | 11.34 | 0 | 0 | {"error":{"message":"litellm.APIConnectionError: OllamaException - {\"error\":\"model 'hf.co/unsloth/GLM-5.3-F
+glm-5.3-flash-zai | OK | 1.68 | 0 | 0 | 
+granite-4.2-30b-instruct | ERR | 0.17 | 0 | 0 | {"error":{"message":"litellm.BadRequestError: OpenrouterException - {\"error\":{\"message\":\"ibm/granite-4-2-
+granite-4.2-8b-instruct | ERR | 0.15 | 0 | 0 | {"error":{"message":"litellm.BadRequestError: OpenrouterException - {\"error\":{\"message\":\"ibm/granite-4-2-
+grok-4.6 | ERR | 0.21 | 0 | 0 | {"error":{"message":"litellm.AuthenticationError: AuthenticationError: XaiException - {\"code\":\"unauthentica
+hathor-lfm-1b | ERR | 100.09 | 0 | 0 | timed out
+hathor-llama8b | ERR | 100.08 | 0 | 0 | timed out
+isis-qwen3-32b | ERR | 11.63 | 0 | 0 | {"error":{"message":"litellm.APIConnectionError: OllamaException - {\"error\":\"model 'hf.co/unsloth/Qwen3-32B
+isis-qwen36 | OK | 1.74 | 0 | 0 | Paris
+kimi-k3 | OK | 0.66 | 0 | 0 | 
+kimik3-0.4b-local | ERR | 0.13 | 0 | 0 | {"error":{"message":"litellm.AuthenticationError: AuthenticationError: OpenAIException - The api_key client op
+local-worker | ERR | 100.1 | 0 | 0 | timed out
+lumen-lfm2-1b | OK | 4.15 | 0 | 0 | Paris
+lumen-lfm2-thinking | OK | 2.28 | 0 | 0 | <think> Okay, let's 
+lumen-lfm2.5-2.6b | ERR | 100.07 | 0 | 0 | timed out
+messenger-chat | OK | 0.92 | 1 | 1 | Paris
+messenger-re | OK | 1.45 | 0 | 0 | 
+mistral-7b | ERR | 12.12 | 0 | 0 | {"error":{"message":"litellm.APIConnectionError: OllamaException - Cannot connect to host localhost:11434 ssl:
+nephthys-qwen14b | OK | 17.5 | 2 | 2 | Paris.
+openrouter-free | OK | 0.71 | 0 | 0 | 
+qwen36-live | OK | 0.35 | 2 | 2 | Paris
+qwen36-local | OK | 1.07 | 2 | 2 | Paris
+qwen38-9b-distill-local | ERR | 11.44 | 0 | 0 | {"error":{"message":"litellm.APIConnectionError: OllamaException - {\"error\":\"model 'hf.co/unsloth/Qwen3.8-9
+ternary-bonsai-27b | ERR | 11.18 | 0 | 0 | {"error":{"message":"litellm.APIConnectionError: OllamaException - {\"error\":\"model 'ternary-bonsai-27b:late
