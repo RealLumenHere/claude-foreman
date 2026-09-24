@@ -322,7 +322,11 @@ class WqCli:
         self._run("note", str(int(tid)), text)
 
     def done(self, tid, notes):
-        self._run("done", str(int(tid)), "--notes", notes)
+        # wq#2517: the only done() caller is decompose()'s parent auto-close, and a
+        # decomposed parent's evidence lives on its children — without --no-artifact
+        # wq#759's gate refuses the close (the notes name tickets, not a file/PR/sha).
+        self._run("done", str(int(tid)), "--notes", notes, "--no-artifact",
+                  "decomposed parent; the evidence lives on the done children")
 
 
 # ---------------------------------------------------------------------------

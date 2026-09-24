@@ -20,7 +20,9 @@ Guardrails, all fail-closed (a refusal files NOTHING):
              refusal, not a pass.
   completion parent deps = children. wq and the dispatcher's Deps gate already hold a ticket
              back until its deps are done, so the parent returns to the DECOMPOSE branch only
-             when every child is done; decompose() then sees "all children done" and closes it.
+             when every child is done; the dispatcher then closes it in the pass
+             (close_decomposed_parent, wq#2517) and decompose()'s own all-children-done
+             branch is the same close for a hand-run `decompose_planner.py --ticket`.
 
 Children are filed in dependency order; a failure part-way returns `failed` with the ids that
 were filed, leaves the parent UNLINKED and notes it, so a human sees a half-filed plan instead

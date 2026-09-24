@@ -639,21 +639,24 @@ def decomposer_enabled(cfg):
 
 
 def _decompose_children(tid):
-    """Ids of tickets carrying this parent's `Decomposed-from:` marker (decomposer.py's own
-    idempotency key), read-only from queue.db — the gates.py `_live_holds` read pattern.
-    Fail-CLOSED (None) on an unreadable db: a decomposer spawned blind could re-decompose a
-    parent whose children it simply could not see (the wq#1141 duplicate-worker collision)."""
+    """(id, status) of tickets carrying this parent's `Decomposed-from:` marker
+    (decomposer.py's own idempotency key), read-only from queue.db — the gates.py
+    `_live_holds` read pattern. Status rides along so dispatch_decomposer can tell
+    "already decomposed, children in flight" from "all children done, close the parent"
+    (wq#2517). Fail-CLOSED (None) on an unreadable db: a decomposer spawned blind could
+    re-decompose a parent whose children it simply could not see (the wq#1141
+    duplicate-worker collision)."""
     path = os.environ.get("WQ_DB", gates.WQ_DB_DEFAULT)
     try:
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
         try:
-            rows = con.execute("SELECT id FROM tasks WHERE detail LIKE ? ORDER BY id",
+            rows = con.execute("SELECT id, status FROM tasks WHERE detail LIKE ? ORDER BY id",
                                (f"%{decomposer.MARK_FROM}{int(tid)}\n%",)).fetchall()
         finally:
             con.close()
     except sqlite3.Error:
         return None
-    return [r[0] for r in rows]
+    return [(r[0], str(r[1])) for r in rows]
 
 
 def dispatch_decomposer(ctx, tid, t):
@@ -663,7 +666,8 @@ def dispatch_decomposer(ctx, tid, t):
 
     Every return is a gates.Fail: the parent never proceeds toward a worker spawn. On a
     successful spawn the unit files the children and links them as the parent's deps, so
-    the Deps gate holds the parent from the next pass until phase 3's tracking closes it.
+    the Deps gate holds the parent from the next pass; once every child is done the deps
+    clear, the parent lands back here and close_decomposed_parent() ends it (wq#2517).
     Guards fail closed and (except depth) never park — children, live units and the
     per-pass cap are live external state. decompose() re-checks children/depth itself;
     the dispatcher-side checks exist so an already-decomposed parent never even costs a
@@ -680,9 +684,11 @@ def dispatch_decomposer(ctx, tid, t):
                           detail="queue.db unreadable — cannot prove the parent is "
                                  "undecomposed, refusing to spawn (wq#1141)")
     if children:
+        if all(status == "done" for _, status in children):
+            return close_decomposed_parent(ctx, tid, [c for c, _ in children])
         return gates.Fail("decompose", "decompose_has_children",
                           detail="already decomposed into "
-                                 + ",".join(f"wq#{c}" for c in children[:8])
+                                 + ",".join(f"wq#{c}" for c, _ in children[:8])
                                  + " — never re-decomposed (wq#1141)")
     cap = decomposer_cfg(ctx.cfg).get("max_per_pass", 1)
     if ctx.decomposer_spawned >= cap:
@@ -710,6 +716,39 @@ def dispatch_decomposer(ctx, tid, t):
         return gates.Fail("decompose", "decomposer_spawn_failed", detail=err)
     ctx.decomposer_spawned += 1
     return gates.Fail("decompose", "decomposer_spawned", detail=unit)
+
+
+def close_decomposed_parent(ctx, tid, children):
+    """wq#2517 phase 3: every child is done, so the parent epic is delivered — close it
+    in the pass instead of spawning a decomposer to rediscover the same fact.
+    dispatch_decomposer refuses to spawn while children exist (wq#1141), so without this
+    a finished parent would clear its Deps gate and then sit on decompose_has_children
+    forever. The done-watch is the wq#992 refill kick: the last child's fworker kicks a
+    dispatch pass on exit and the 20-min timer backstops it, so no new watcher runs.
+
+    `--no-artifact` answers wq#759's evidence gate on the record: a decomposed parent's
+    evidence lives on its children, each already held to its own done gate. A refused
+    close (wq#1673 deliverable gate, ownership fence) pages and leaves the parent open
+    for a human — fail-open, never a crashed pass."""
+    listing = ", ".join(f"wq#{c}" for c in children)
+    if ctx.dry_run:
+        return gates.Fail("decompose", "would_close_decomposed_parent", detail=listing)
+    try:
+        p = subprocess.run(
+            [WQ_BIN, "done", str(tid),
+             "--notes", f"auto-closed (wq#2517): all {len(children)} sub-tickets done: "
+                        f"{listing}",
+             "--no-artifact", "decomposed parent; the evidence lives on the done children"],
+            capture_output=True, text=True, timeout=60)
+        err = None if p.returncode == 0 else (p.stderr or p.stdout).strip()[:300]
+    except (OSError, subprocess.TimeoutExpired) as e:
+        err = str(e)[:300]
+    if err is not None:
+        ntfy(f"dispatcher: auto-close of decomposed parent wq#{tid} refused — all "
+             f"children done ({listing}) but `wq done` failed; close it by hand",
+             priority="high", title="dispatcher decompose close failed")
+        return gates.Fail("decompose", "decompose_close_failed", detail=err)
+    return gates.Fail("decompose", "decomposed_parent_closed", detail=listing)
 
 
 def governor_pressure(model):
