@@ -346,7 +346,10 @@ class AlreadyRunning(Gate):
 
 class Route(Gate):
     """the partition point: the router's model decides which pool's gates the ticket answers
-    to. A ticket with no rung (or DECOMPOSE / an unroutable archetype) never spawns."""
+    to. A ticket with no rung (or an unroutable archetype) never spawns. A DECOMPOSE rung
+    goes to the decomposer (wq#2516) when `decomposer.enabled` is on in config — still a
+    Fail, since the parent itself never spawns a worker; with the switch off (the shipped
+    default) it skips exactly as the old route_unassigned did."""
     name = "route"
 
     def check(self, g):
@@ -354,6 +357,10 @@ class Route(Gate):
         if not g.model:
             if skip_reason == g.fd.ROUTE_UNREADABLE:  # transient router failure: re-derive next pass
                 return Fail("budget", skip_reason, detail="router.assign could not read the ticket")
+            if skip_reason == g.fd.ROUTE_DECOMPOSE:
+                if g.fd.decomposer_enabled(g.ctx.cfg):
+                    return g.fd.dispatch_decomposer(g.ctx, g.tid, g.t)
+                skip_reason = "route_unassigned"  # dark switch: skip exactly as before wq#2516
             return Fail("budget", skip_reason, detail="router has no rung for this ticket",
                         terminal=True, fingerprint_inputs=("model", "effort", "archetype"),
                         parkable=True)

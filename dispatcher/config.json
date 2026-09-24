@@ -1,15 +1,39 @@
 {
   "cadence_note": "cadence lives in the systemd timer, not here",
-  "max_spawns_per_pass": 10,
+  "max_spawns_per_pass": 8,
   "cloud_ceiling": 10,
   "local_ceiling": 12,
   "local_backends": {
     "_note": "wq#2130: per-backend local capacity (dispatcher/local_capacity.py). slots = concurrent workers the box can serve (ollama NUM_PARALLEL); served_ctx = context the backend really serves; first_frame_s = fworker first-frame budget; prefill_tps = measured prompt-eval tokens/s (2026-09-20), passed as FOREMAN_PREFILL_TPS so fworker refuses a spawn whose prompt_tokens_est / prefill_tps * 2 exceeds first_frame_s (wq#2185); health_url is probed once per pass (2 s). local-worker is the LiteLLM group: free slots = sum over its healthy members. local_ceiling above is only an upper clamp. Rollback: FOREMAN_LOCAL_CAPACITY=static. Hosts per research/DISPATCH_FIX_RESEARCH.md s2. wq#2154: the group is a routing name only - the dispatcher resolves it to a member at admit time (most free slots, ties in this order), so first_frame_s/served_ctx are read from the member and the group row carries none. Live values measured 2026-09-20; first_frame_s assumes a shared box (two prefills time-slice: a 250-token request took 352 s behind a 16k prefill). isis (qwen36-local) is out of service (wq#2140): its probe fails, so it contributes 0 slots - row left in place.",
-    "_generated_begin": "BEGIN GENERATED inference_nodes.yaml v1 — edit the registry, not this block",
-    "hathor-llama8b": {"health_url": "http://100.80.71.13:11434/api/ps", "slots": 2, "served_ctx": 32768, "first_frame_s": 1500, "prefill_tps": 13.6},
-    "nephthys-qwen14b": {"health_url": "http://100.98.74.87:11434/api/ps", "slots": 2, "served_ctx": 32768, "first_frame_s": 2400, "prefill_tps": 7.4},
-    "qwen36-local": {"health_url": "http://100.100.129.24:8095/health", "slots": 2, "served_ctx": 8192, "first_frame_s": 900, "prefill_tps": 60},
-    "local-worker": {"group": ["hathor-llama8b", "nephthys-qwen14b", "qwen36-local"]},
+    "_generated_begin": "BEGIN GENERATED inference_nodes.yaml v1 \u2014 edit the registry, not this block",
+    "hathor-llama8b": {
+      "health_url": "http://100.80.71.13:11434/api/ps",
+      "slots": 2,
+      "served_ctx": 32768,
+      "first_frame_s": 1500,
+      "prefill_tps": 13.6
+    },
+    "nephthys-qwen14b": {
+      "health_url": "http://100.98.74.87:11434/api/ps",
+      "slots": 2,
+      "served_ctx": 32768,
+      "first_frame_s": 2400,
+      "prefill_tps": 7.4
+    },
+    "qwen36-local": {
+      "health_url": "http://100.100.129.24:8095/health",
+      "slots": 2,
+      "served_ctx": 8192,
+      "first_frame_s": 900,
+      "prefill_tps": 60
+    },
+    "local-worker": {
+      "group": [
+        "hathor-llama8b",
+        "nephthys-qwen14b",
+        "qwen36-local"
+      ]
+    },
     "_generated_end": "END GENERATED"
   },
   "local_max_spawns_per_pass": 12,
@@ -20,6 +44,11 @@
     "psi_full_deny": 5.0,
     "psi_some_tight": 10.0,
     "psi_some_deny": 25.0
+  },
+  "decomposer": {
+    "_note": "wq#2516 phase 2 (parent wq#1146): when enabled, a DECOMPOSE-routed ticket spawns dispatcher/decompose_planner.py as a detached decomposer-wq<id> unit (gates.py Route -> foreman_dispatcher.dispatch_decomposer) instead of skipping route_unassigned; the planner files 2-8 sub-tickets behind its critic gate and links them as the parent's deps. SHIPS DARK: enabled false, and this file is read from HEAD (wq#772), so activation is a deliberate reviewed config commit — never a code deploy side effect. Off or absent, DECOMPOSE tickets skip exactly as before. max_per_pass caps decomposer units per dispatch pass; a parent that already has Decomposed-from children is never re-decomposed (wq#1141).",
+    "enabled": false,
+    "max_per_pass": 1
   },
   "burn_rate": {
     "_note": "wq#1669/wq#1699: when governor pressure is tight (soft margin, critical severity, or warning on a floored pool) the dispatcher enforces a concurrency ceiling = (remaining_pct / hours_to_reset) / avg_worker_pct_per_hour, min over the model's pools, clamped to [min_allowed, cloud_ceiling] (burn_rate.py). tight_mode above only owns PSI pressure and the no-resets_at fallback. session/weekly_all rates measured 2026-09-10 (1.24 / 0.31, rounded up); fable is an estimate. observed_burn.json overrides when present. wq#2426: cloud_ceiling itself is budget-aware on EVERY cloud admission (burn_rate.budget_ceiling): once a pool's spendable budget (remaining above Frank's reserve, FRANK_RESERVE_PCT) drops under ceiling_taper_pct[pool], the ceiling is cloud_ceiling * spendable/taper floored at min_allowed, and 0 at the reserve itself. Weekly 80%->95% drained on 2026-09-20/21 at the flat 10 because `warning` is advisory on zeroed floors; at 95% the burn-rate floor of 1 still churned 18 spawns/h. Both gates now read 0 at the reserve.",

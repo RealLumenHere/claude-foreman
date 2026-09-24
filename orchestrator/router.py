@@ -1216,6 +1216,24 @@ def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None, model_overrid
     return cmd
 
 
+DECOMPOSE_PLANNER = os.path.join(FOREMAN_ROOT, "dispatcher", "decompose_planner.py")
+DECOMPOSER_UNIT_PREFIX = "decomposer-wq"
+
+
+def decomposer_cmd(ticket_id):
+    """wq#2516 phase 2: the unit command for a DECOMPOSE-routed ticket — the same
+    lumen-run shape as dispatch_cmd's worker units, but running the wq#2515 planner
+    (dispatcher/decompose_planner.py) instead of an fworker: the parent needs sub-tickets
+    filed, not a worker session. Model + effort come from the `decomposer:` routing row
+    in research/models.yaml, read by the planner itself — never passed from here."""
+    return ["lumen-run", "start", "--name", f"{DECOMPOSER_UNIT_PREFIX}{int(ticket_id)}",
+            "--timeout-stop-sec", "90",
+            "--mem", WORKER_MEM_MAX, "--mem-high", WORKER_MEM_HIGH,
+            "--cpu", WORKER_CPU_QUOTA, "--tasks-max", WORKER_TASKS_MAX,
+            "--oom-policy", "stop",
+            "--", "python3", DECOMPOSE_PLANNER, "--ticket", str(int(ticket_id))]
+
+
 # ---- CLI -----------------------------------------------------------------------------
 
 def _pressure_from_args(args):

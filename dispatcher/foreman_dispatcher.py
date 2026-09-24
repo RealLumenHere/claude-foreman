@@ -54,6 +54,7 @@ import os
 import random
 import re
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -85,6 +86,7 @@ import capability_proposal  # noqa: E402  # wq#1697: one keyed aq grant proposal
 import liveness_clear     # noqa: E402  # wq#1478 LIVENESS_GATE §12.4: stale Frank-gates auto-clear
 import gates              # noqa: E402  # DISPATCH_REBUILD step 8: the ordered gate objects
 import gate_store         # noqa: E402  # DISPATCH_REBUILD step 11: dispatch_gate parking table
+import decomposer         # noqa: E402  # wq#2516: DECOMPOSE-rung consumer's guards (marker, depth)
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -226,6 +228,16 @@ def load_config(path=None):
     if not isinstance(tight, dict):
         raise ConfigError(f"config {path}: tight_mode must be an object")
     pos_int(tight, "max_spawns_per_pass", "tight_mode")
+    # wq#2516: the decomposer block is optional (absent = off), but a present block must
+    # be well-formed — a typo'd switch must fail loud, never silently read as off/on.
+    dec = cfg.get("decomposer")
+    if dec is not None:
+        if not isinstance(dec, dict):
+            raise ConfigError(f"config {path}: decomposer must be an object")
+        if not isinstance(dec.get("enabled"), bool):
+            raise ConfigError(f"config {path}: decomposer.enabled must be a boolean")
+        if "max_per_pass" in dec:
+            pos_int(dec, "max_per_pass", "decomposer")
     if not isinstance(tight.get("min_pri"), int) or isinstance(tight.get("min_pri"), bool):
         raise ConfigError(f"config {path}: tight_mode.min_pri must be an integer")
     lanes = cfg.get("lanes")
@@ -575,6 +587,10 @@ def unmet_deps(t, cache):
 
 
 ROUTE_UNREADABLE = "route_unreadable"  # candidate_model skip reason: router.assign raised SystemExit
+ROUTE_DECOMPOSE = "route_decompose"    # rung.model == DECOMPOSE — wq#2516 sends it to the decomposer
+                                       # when config `decomposer.enabled`; off, it skips exactly as
+                                       # the old route_unassigned did (the DECOMPOSE rung had no
+                                       # consumer at all before wq#2515/wq#2516)
 
 
 def candidate_model(t, tid):
@@ -603,9 +619,97 @@ def candidate_model(t, tid):
              f"every pass until fixed", priority="high", title="dispatcher bad archetype")
         return None, "bad_archetype"
     rung = d.get("rung")
-    if not rung or rung.get("model") == "DECOMPOSE":
+    if not rung:
         return None, "route_unassigned"
+    if rung.get("model") == "DECOMPOSE":
+        return None, ROUTE_DECOMPOSE
     return rung.get("model"), None
+
+
+def decomposer_cfg(cfg):
+    block = cfg.get("decomposer")
+    return block if isinstance(block, dict) else {}
+
+
+def decomposer_enabled(cfg):
+    """wq#2516: the DECOMPOSE rung's consumer switch. OFF BY DEFAULT and absent-means-off:
+    flipping it is a deliberate reviewed config commit (load_config reads HEAD, wq#772),
+    never a code deploy side effect."""
+    return decomposer_cfg(cfg).get("enabled") is True
+
+
+def _decompose_children(tid):
+    """Ids of tickets carrying this parent's `Decomposed-from:` marker (decomposer.py's own
+    idempotency key), read-only from queue.db — the gates.py `_live_holds` read pattern.
+    Fail-CLOSED (None) on an unreadable db: a decomposer spawned blind could re-decompose a
+    parent whose children it simply could not see (the wq#1141 duplicate-worker collision)."""
+    path = os.environ.get("WQ_DB", gates.WQ_DB_DEFAULT)
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = con.execute("SELECT id FROM tasks WHERE detail LIKE ? ORDER BY id",
+                               (f"%{decomposer.MARK_FROM}{int(tid)}\n%",)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    return [r[0] for r in rows]
+
+
+def dispatch_decomposer(ctx, tid, t):
+    """wq#2516 phase 2: consume the DECOMPOSE rung — spawn decompose_planner.py (wq#2515) as
+    a detached `decomposer-wq<tid>` unit instead of skipping the ticket as route_unassigned.
+    Only the Route gate calls this, and only when `decomposer.enabled` is on.
+
+    Every return is a gates.Fail: the parent never proceeds toward a worker spawn. On a
+    successful spawn the unit files the children and links them as the parent's deps, so
+    the Deps gate holds the parent from the next pass until phase 3's tracking closes it.
+    Guards fail closed and (except depth) never park — children, live units and the
+    per-pass cap are live external state. decompose() re-checks children/depth itself;
+    the dispatcher-side checks exist so an already-decomposed parent never even costs a
+    spawn (acceptance: never dispatched for a ticket that already has children)."""
+    lane = t.get("lane", "")
+    if decomposer.parse_depth(t.get("detail")) >= decomposer.MAX_DEPTH:
+        return gates.Fail("decompose", "decompose_depth", terminal=True,
+                          detail=f"already a decomposed child (depth >= "
+                                 f"{decomposer.MAX_DEPTH}) — recursion guard",
+                          fingerprint_inputs=("archetype", "detail"), parkable=True)
+    children = _decompose_children(tid)
+    if children is None:
+        return gates.Fail("decompose", "children_unreadable",
+                          detail="queue.db unreadable — cannot prove the parent is "
+                                 "undecomposed, refusing to spawn (wq#1141)")
+    if children:
+        return gates.Fail("decompose", "decompose_has_children",
+                          detail="already decomposed into "
+                                 + ",".join(f"wq#{c}" for c in children[:8])
+                                 + " — never re-decomposed (wq#1141)")
+    cap = decomposer_cfg(ctx.cfg).get("max_per_pass", 1)
+    if ctx.decomposer_spawned >= cap:
+        return gates.Fail("decompose", "decomposer_cap",
+                          detail=f"per-pass decomposer cap reached "
+                                 f"({ctx.decomposer_spawned}/{cap})")
+    unit = f"{router.DECOMPOSER_UNIT_PREFIX}{tid}"
+    try:
+        running = concurrency.list_running_units(router.DECOMPOSER_UNIT_PREFIX)
+    except concurrency.LumenRunError as e:
+        return gates.Fail("decompose", "decomposer_units_unreadable", detail=str(e)[:300])
+    if unit in running:
+        return gates.Fail("decompose", "decomposer_running", detail=f"{unit} is live")
+    if ctx.dry_run:
+        ctx.decomposer_spawned += 1  # count so dry-run reports the cap honestly
+        return gates.Fail("decompose", "would_spawn_decomposer", detail=unit)
+    try:
+        p = subprocess.run(router.decomposer_cmd(tid), capture_output=True, text=True,
+                           timeout=30)
+        err = None if p.returncode == 0 else (p.stderr or p.stdout).strip()[:300]
+    except (OSError, subprocess.TimeoutExpired) as e:
+        err = str(e)[:300]
+    if err is not None:
+        ntfy(f"dispatcher: decomposer spawn failed for wq#{tid} ({lane}) — see dispatcher.log")
+        return gates.Fail("decompose", "decomposer_spawn_failed", detail=err)
+    ctx.decomposer_spawned += 1
+    return gates.Fail("decompose", "decomposer_spawned", detail=unit)
 
 
 def governor_pressure(model):
@@ -1329,6 +1433,7 @@ class _PassCtx:
         self.burn_cache, self.burn_logged = {}, set()  # pools tuple -> (allowed | None, detail)
         self.ceiling_cache, self.ceiling_logged = {}, set()  # wq#2426: pools tuple -> (ceiling, detail)
         self.spawned = {"local": 0, "cloud": 0}
+        self.decomposer_spawned = 0  # wq#2516: decomposer units this pass, capped separately
         self.lane_capped = {"local": 0, "cloud": 0}
         self.local_slots_full = 0
         self.local_paused = False    # wq#2130: circuit_breaker's local pause is active
@@ -1976,6 +2081,8 @@ def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None):
             "dispatchable_local": dispatchable_pool["local"],
             "dispatchable_cloud": dispatchable_pool["cloud"],
             "spawned_local": ctx.spawned["local"], "spawned_cloud": ctx.spawned["cloud"],
+            "decomposer_spawned": ctx.decomposer_spawned,  # wq#2516
+
             "local_slots_full": ctx.local_slots_full,
             "local_paused": ctx.local_paused,
             "stopped_local_reason": stopped["local"],
