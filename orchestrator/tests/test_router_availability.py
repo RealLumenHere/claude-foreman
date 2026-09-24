@@ -188,7 +188,7 @@ def test_flag_true_puts_the_local_group_in_front(raw, scratch):
     assert pick(m, "standard-engineering") == "local-worker@local"
     cool(scratch, *GROUP)
     assert pick(m, "standard-engineering") == "claude-sonnet-5@high"
-    assert pick(m, "rca-investigation") == "claude-opus-5@xhigh"
+    assert pick(m, "rca-investigation") == "claude-opus-5-5@high"
 
 
 # ---- served ctx truth -----------------------------------------------------------------

@@ -27,9 +27,9 @@ SAMPLES = [
     ("wire standing checks to systemd timers", "", "fleet", "mechanical-edit", ("local-worker", None)),
     ("probe: CI hygiene for lumen-pr", "", "build", "probe-build", ("local-worker", None)),
     ("add conflict guard to lumen-pr", "", "build", "standard-engineering", ("claude-sonnet-5", "high")),
-    ("audit: why does lpp-watchdog bypass the guard", "", "pokemon", "rca-investigation", ("claude-opus-5", "xhigh")),
+    ("audit: why does lpp-watchdog bypass the guard", "", "pokemon", "rca-investigation", ("claude-opus-5-5", "high")),
     ("design lumen-memoryd new service", "", "memory", "novel-design", ("claude-fable-5", "high")),
-    ("research pack: agent farm prior art report", "", "research", "research-synthesis", ("claude-opus-5", "high")),
+    ("research pack: agent farm prior art report", "", "research", "research-synthesis", ("claude-opus-5-5", "medium")),
     ("fresh-eyes verify-pass of wq#600 fix", "", "build", "verify-pass", ("claude-sonnet-5", "high")),
     ("restart the auth service", "", "fleet-fires", "fire-response", ("claude-sonnet-5", "high")),
 ]
@@ -286,7 +286,7 @@ def test_escalation_rungs_need_their_facts(m):
     r, _ = router.select(m, "standard-engineering", fails=1)
     assert (r.model, r.effort) == ("claude-opus-5", "medium")
     r, _ = router.select(m, "rca-investigation", fails=1)
-    assert r.model == "claude-opus-5"
+    assert r.model == "claude-opus-5-5"
     r, _ = router.select(m, "rca-investigation", fails=2)
     assert (r.model, r.effort) == ("claude-fable-5", "high")
     r, _ = router.select(m, "rca-investigation", cross_subsystem=True)

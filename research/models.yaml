@@ -94,7 +94,65 @@ models:
         MODEL_ROUTING_AUDIT.md §3 F1/F2."
     api_price_mtok: {in: 5, out: 25}
     quirks: ["bio-flag -> refusal (no fallback)", "cyber-flag -> opus-4-8"]
-    trust: "RCA-investigation; research-synthesis; escalation target from sonnet."
+    trust: "escalation target from sonnet (standard-engineering, verify-pass, fire-response).
+      No longer the rca-investigation/research-synthesis primary as of wq#2450 — see
+      claude-opus-5-5 below — but stays LIVE and routed for those escalation rungs, and as
+      the refusal_fallback.default bio landing zone (it carries no bio classifier itself,
+      unlike opus-5-5 below, so it is still where a bio refusal from another model lands)."
+
+  - id: claude-opus-5-5
+    alias: opus-5-5          # NOT the default 'opus' alias (still claude-opus-5, see above) —
+                              # wq#2450 wires this in by archetype (routing: below), the same
+                              # pattern fable-5-1 used alongside fable-5.
+    status: LIVE              # wq#2450 2026-09-24: released + available, id 'claude-opus-5-5'
+      # confirmed at platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5 (fetched
+      # via fleet-search read, 2026-09-24).
+    context: 1M (auto-upgrade included on Max)   # inherited from opus-5's row; the model page's
+      # own context/output-limit table was not fetched (out of ticket scope) — treat this field
+      # as UNVERIFIED for opus-5-5 specifically until re-checked.
+    efforts: [low, medium, high, xhigh, max]
+    default_effort: medium   # CHANGED vs opus-5's `high`: the model's own vendor default is
+      # medium, not high — carrying over `high` is explicitly the documented anti-pattern
+      # (prompting guide: "effort level names don't correspond to the same amount of thinking
+      # across models... test several levels against your own evals rather than carrying over
+      # the setting you used on Claude Opus 5").
+    pools: [session, weekly_all]
+    burn:
+      est: "opus-class, cheaper than opus-5: api $4/$20 vs opus-5's $5/$25 (in/out per Mtok).
+        Vendor-measured 30%+ faster output-token generation and fewer tokens for the same
+        agentic-coding task vs opus-5 (prompting guide, 'Capabilities relevant to prompting')."
+      measured_tokens: null   # zero Lumen launches yet (wq#2450 is the adoption ticket)
+      measured: "UNMEASURED on this fleet (n=0). Vendor + third-party evidence only, all dated
+        2026-09-24: (1) Anthropic prompting guide — at default `medium` effort, opus-5-5 'matched
+        or beat Claude Opus 5 at high effort' on agentic coding/code-review, in fewer steps and
+        tokens, and sustains multi-hour unattended runs better than opus-5; on several coding
+        evals `low` 'comes close' to `medium`. (2) Sonarsource eval
+        (sonarsource.com/blog/claude-opus-5-5-an-evaluation, HumanEval+MBPP n=544): pass rate
+        87.7% vs opus-5's 88.6% (within 1pt) while writing 27.5% less code and using ~40% fewer
+        tokens; total static-analysis findings -42%, BLOCKER findings down across reliability
+        (-41%)/security (-53%)/maintainability (-20%); CAVEAT — bug density +12% and concurrency
+        findings +44%, so a diff this model authors is NOT measurably safer to skip a careful
+        verify-pass on. Route CAL-1 launches through the normal wq#750-style measurement before
+        trusting these vendor/third-party figures over fleet data."
+    api_price_mtok: {in: 4, out: 20, cache_write_5m: 5, cache_write_1h: 8, cache_read: 0.20}
+    quirks: ["thinking cannot be disabled at any effort (adaptive-only; opus-5 could disable it
+        at high or below) — a request carrying thinking.type=disabled or a manual budget 400s",
+      "forced tool_choice (any/<name>) is REJECTED (400) — auto + strict tool use only; say in
+        the prompt when a tool applies instead of forcing it",
+      "runs a biology safety classifier (new vs opus-5, same as fable-5.1's) PLUS the existing
+        cybersecurity one, so unlike opus-5 it CAN hard-refuse on bio — falls through to
+        refusal_fallback.default (bio -> claude-opus-5) same as any other refusing model; no
+        router.py change needed, opus-5-5 is not the opus-5 special-cased refusal-landing model",
+      "reasoning_extraction is a new refusal category (declines a request that pushes the model
+        to reproduce its internal reasoning as response text) — NOT server-side-fallback-retried
+        even where fallback is on",
+      "max_tokens: vendor recommends up to 128000 (its ceiling) for long agentic-coding turns so
+        thinking tokens have room; a limit sized for opus-5-with-thinking-off will truncate",
+      "cyber-flag -> opus-4-8 (same landing zone as opus-5)"]
+    trust: "rca-investigation; research-synthesis primary as of wq#2450 (was claude-opus-5;
+      MODEL_ROUTING_AUDIT.md §3 F1/F2's opus-5 numbers do not carry over — re-measure). NOT
+      routed for novel-design: that stays fable-5@high (see novel-design row in `routing:` for
+      the wq#2450 scoping call and why)."
 
   - id: claude-sonnet-5
     alias: sonnet
@@ -262,10 +320,21 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   mechanical-edit:      [local-worker@local, sonnet-5@low]
   probe-build:          [local-worker@local, sonnet-5@medium, haiku-4-5]
   standard-engineering: [sonnet-5@high,   sonnet-5@medium, opus-5@medium(escalate-on-fail)]
-  rca-investigation:    [opus-5@xhigh,    opus-5@high, fable-5@high(2-fails-or-cross-subsystem)]
+  # wq#2450 2026-09-24: rca-investigation + research-synthesis primary moved opus-5 -> opus-5-5.
+  # Effort rungs shifted down one notch (xhigh->high, high->medium), not carried over verbatim:
+  # the vendor prompting guide measured opus-5-5@medium matching/beating opus-5@high on
+  # coding/knowledge-work evals, and explicitly warns effort names don't carry the same
+  # thinking depth across model versions. UNMEASURED on this fleet (n=0) — re-run wq#750-style
+  # CAL-1 measurement once opus-5-5 has real launches; MODEL_ROUTING_AUDIT.md §3 F1/F2's opus-5
+  # numbers do not transfer. novel-design stays on fable-5@high, NOT moved to opus-5-5: it
+  # never routed through opus-5 in the first place (design-doc quality tradeoff, not a version
+  # bump — see fable-5's `trust:` line and the wq#750 measured note above it), so "route
+  # frontier tickets to opus-5-5 not opus-5" has nothing to swap here. Flag for Frank if the
+  # intent was actually to move novel-design's primary off fable-5 entirely.
+  rca-investigation:    [opus-5-5@high,  opus-5-5@medium, fable-5@high(2-fails-or-cross-subsystem)]
   novel-design:         [fable-5@high]    # design doc only; execution re-ticketed
   long-horizon-campaign: [DECOMPOSE]      # orchestrator splits; never one worker
-  research-synthesis:   [opus-5@high,     sonnet-5@high]
+  research-synthesis:   [opus-5-5@medium, sonnet-5@high]
   verify-pass:          [sonnet-5@high,   opus-5@high(on-contradiction)]
   fire-response:        [sonnet-5@high,   opus-5@high(escalate-on-fail)]   # wq#717 AUTO-5: fleet-fires manual-approval; never local (LOCAL_ALLOWED_ARCHETYPES excludes it)
   orchestrator:         [fable-5@high]    # fable-5@max reserved for hardest investigations until CAL data justifies more
@@ -304,7 +373,11 @@ effort_resolution:
   launch_pin_models: [fable-5, opus-4-8, opus-4-7]   # first run holds default until explicit --effort
   clear_pin: "pass explicit --effort (runs yW(), clears all pins globally)"
   ceilings:            # SRC OI/eqe/I_e exclusion lists
-    full_incl_xhigh_max: [fable-5, opus-5, opus-4-8, opus-4-7, sonnet-5]
+    full_incl_xhigh_max: [fable-5, opus-5, opus-5-5, opus-4-8, opus-4-7, sonnet-5]   # wq#2450:
+      # opus-5-5 supports xhigh/max per its prompting guide ("Reserve xhigh and max for work
+      # where you've measured a quality gain") but router.py's routing chains default it to
+      # medium/high (see `routing:` above) — this ladder documents the CLI's raw capability,
+      # not the fleet's routing choice.
     max_no_xhigh:        [opus-4-6, sonnet-4-6]      # xhigh silently -> high
     none:                [haiku-4-5]
   downgrade_rule: "unsupported max->high, unsupported xhigh->high (never adjacent tier)"

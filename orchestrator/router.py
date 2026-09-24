@@ -154,6 +154,7 @@ _FALLBACK_ALIASES = {
     # weight but never wrong — every entry here is also derivable from the yaml.
     "fable-5": "claude-fable-5", "fable": "claude-fable-5",
     "opus-5": "claude-opus-5", "opus": "claude-opus-5",
+    "opus-5-5": "claude-opus-5-5",   # wq#2450: 'opus' stays pinned to opus-5, not this
     "sonnet-5": "claude-sonnet-5", "sonnet": "claude-sonnet-5",
     "haiku-4-5": "claude-haiku-4-5", "haiku": "claude-haiku-4-5",
     "opus-4-8": "claude-opus-4-8", "opus-4-7": "claude-opus-4-7", "opus-4-6": "claude-opus-4-6",
