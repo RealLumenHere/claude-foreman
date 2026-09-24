@@ -196,6 +196,20 @@ reboots to full power-offs.
 Do **not** attach this to the three unexplained isis power losses. A black screen is not a power
 cut, and `ISIS_POWEROFF_RCA.md` ruled out every software cause it tested.
 
+**Status (wq#2509 attempt a2, 2026-09-24): blocked on dispatch, not answered.** The ticket was
+filed with `needs:` empty, so `fworker.resolve_exec_grant()` never wrote a `grant.json` for the
+attempt (`fworker.py:1820-1832`) and every `fleet-exec run <node>` call on isis/hathor/nephthys/
+khepri denied `grant_missing_env` before any argv was even evaluated — none of steps 1-3 above
+could be run, including the local-only half of step 3 (`/proc/sys/net/ipv4/tcp_congestion_control`
+sits outside the build worker's allowed dirs). Fixed the dispatch gap
+(`wq edit 2509 --needs "ssh(isis),ssh(hathor)"`) and released the ticket for redispatch rather than
+closing it: closing as "symptom never happened" without ever reading a journal would be a guess,
+not a verification (`kb/ISSUE-LOG.md` #670 has the full root cause). nephthys and khepri are not
+in `fleet-exec-policy.yaml`'s `ssh:` allowlist at all — that file lands only by PR, so reaching
+them needs a separate, reviewed policy change (mirroring the existing hathor-pilot entry) before
+a future attempt can cover all four named nodes; until then a redispatch can only check isis and
+hathor.
+
 ### T4 — fan rpm is measured, alarmed on nothing (`wq#2510`, lane `fleet`, p2, deps 2508)
 
 `ISIS_POWEROFF_RCA.md:84` proves netdata already retains
