@@ -44,6 +44,7 @@ import threading
 import traceback
 import queue
 import urllib.parse
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(__file__))
 from classifier import (
@@ -183,6 +184,14 @@ LITELLM_KEY_FILE = os.environ.get("FOREMAN_LITELLM_KEY_FILE",
 TOKEN_ENGINE_SOCK = os.environ.get("TOKEN_ENGINE_SOCK", "/run/token-engine/broker.sock")
 GATEWAY_KEY_TTL = os.environ.get("FOREMAN_GATEWAY_KEY_TTL", "24h")
 GATEWAY_KEY_BUDGET_USD = os.environ.get("FOREMAN_GATEWAY_KEY_BUDGET_USD", "15.0")
+
+# wq#2488: the reflexion critique riding the LiteLLM gateway is a System-1
+# summarisation call (turn attempt 1's tail into a briefing), not attempt work,
+# so it uses the same cheap_cloud rung (concurrency.py CHEAP_CLOUD_MODELS) the
+# rest of the harness already trusts for that class of call rather than a full
+# cloud model.
+CRITIQUE_MODEL = os.environ.get("FOREMAN_CRITIQUE_MODEL", "deepseek-v4-flash")
+CRITIQUE_TIMEOUT_S = 10
 
 
 def is_local_model(model):
@@ -1463,6 +1472,74 @@ def worktree_diff_is_empty(worktree):
     return p.returncode == 0
 
 
+def _last_tool_error_tail(transcript_events, n=1, each_chars=1500):
+    """Last n tool_result blocks flagged is_error — the sharpest "what broke"
+    signal in the transcript, alongside assistant_text_tail's narrative tail.
+    Mirrors assistant_text_tail's shape/contract."""
+    texts = []
+    for ev in transcript_events:
+        if ev.get("type") != "user":
+            continue
+        for block in (ev.get("message") or {}).get("content") or []:
+            if not (isinstance(block, dict) and block.get("type") == "tool_result"
+                    and block.get("is_error")):
+                continue
+            text = "\n".join(_content_text(block.get("content"))).strip()
+            if text:
+                texts.append(text[:each_chars])
+    return texts[-n:]
+
+
+def _critique_prior_attempt(classification, mechanical_tail, assistant_tail, tool_error_tail):
+    """wq#2488 (Orchestation 1 L858-913 Reflexion loop, minus its rewrite_node —
+    that's the worker's job, this only improves its briefing): one cheap-tier
+    LiteLLM call that turns attempt 1's raw tail into a WHAT FAILED / WHY / DO
+    DIFFERENTLY briefing for attempt 2, instead of leaving attempt 2 to infer a
+    root cause from 20 bare event names. FAIL-OPEN by contract (ticket step 4):
+    returns None on any error or past CRITIQUE_TIMEOUT_S — a critique failure
+    must never cost the retry, so the caller keeps writing the mechanical notes
+    it always has regardless of what happens here.
+    """
+    try:
+        key = read_litellm_key()
+    except OSError:
+        return None
+    system = (
+        "You write a terse failure briefing so a second attempt at a coding task "
+        "does not repeat the first attempt's mistake. Reply with AT MOST 15 lines "
+        "total, using exactly these three headings (each followed by 1-4 short "
+        "bullet lines) and nothing else - no preamble, no code fences:\n"
+        "WHAT FAILED\nWHY\nDO DIFFERENTLY"
+    )
+    user_parts = [f"classification: {classification}", ""]
+    if mechanical_tail:
+        user_parts += ["## last events", mechanical_tail, ""]
+    if assistant_tail:
+        user_parts += ["## final assistant text", "\n---\n".join(assistant_tail), ""]
+    if tool_error_tail:
+        user_parts += ["## last tool error", "\n---\n".join(tool_error_tail), ""]
+    body = json.dumps({
+        "model": CRITIQUE_MODEL,
+        "max_tokens": 500,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "\n".join(user_parts)},
+        ],
+    }).encode()
+    req = urllib.request.Request(
+        f"{LITELLM_BASE_URL}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=CRITIQUE_TIMEOUT_S) as resp:
+            data = json.loads(resp.read())
+        text = (data["choices"][0]["message"]["content"] or "").strip()
+    except Exception:
+        return None
+    return text or None
+
+
 def write_prior_attempt_notes(ticket_id, n, worktree, transcript_events, classification):
     d = run_dir(ticket_id)
     path = os.path.join(d, "prior-attempt-notes.md")
@@ -1474,17 +1551,37 @@ def write_prior_attempt_notes(ticket_id, n, worktree, transcript_events, classif
         diff_stat = p.stdout
     except Exception:
         pass
+    mechanical_lines = []
+    for ev in tail:
+        etype = ev.get("type", "?")
+        sub = ev.get("subtype", "")
+        mechanical_lines.append(f"- {etype} {sub}".rstrip())
     lines = [
         f"# Prior attempt {n} notes (wq#{ticket_id})",
         f"classification: {classification}",
         "",
         "## last events (mechanical tail, up to 20)",
     ]
-    for ev in tail:
-        etype = ev.get("type", "?")
-        sub = ev.get("subtype", "")
-        lines.append(f"- {etype} {sub}".rstrip())
+    lines += mechanical_lines
     lines += ["", "## git diff --stat (prior worktree)", "```", diff_stat.strip(), "```"]
+
+    # wq#2488: critique only the attempt that is actually about to be retried
+    # (MAX_ATTEMPTS=2, so that's n==1) - a doomed final failure gets no retry to
+    # brief and would just spend an LLM call on notes nobody reads.
+    if n == 1:
+        critique = None
+        try:
+            critique = _critique_prior_attempt(
+                classification,
+                "\n".join(mechanical_lines),
+                assistant_text_tail(transcript_events, n=1),
+                _last_tool_error_tail(transcript_events, n=1),
+            )
+        except Exception:
+            critique = None
+        if critique:
+            lines += ["", "## critique", critique]
+
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
     return path
