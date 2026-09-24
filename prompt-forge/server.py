@@ -14,6 +14,8 @@ Routes:
     POST /api/clarify    description → 1-3 clarifying questions (LLM; [] if down)
     POST /api/generate   full inputs → assembled prompt
     GET  /api/history    recent generations (newest first)
+    GET  /api/predict-next  predicted next research turn's category/filters
+                             (wq#2521, from recency-weighted history)
 
 Mutating surface is prompt generation only: nothing here claims tickets,
 writes fleet state, or runs commands. The only writes are history JSON files
@@ -31,6 +33,7 @@ from pathlib import Path
 
 import fleet_context
 import llm
+import next_turn_intent
 import templates
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -187,6 +190,9 @@ class Handler(BaseHTTPRequestHandler):
             })
         if path == "/api/history":
             return self._json(_history())
+        if path == "/api/predict-next":
+            history = next_turn_intent.load_history(STATE_DIR)
+            return self._json(next_turn_intent.predict_next_intent(history))
         return self._json({"error": "not found"}, 404)
 
     def do_POST(self):
