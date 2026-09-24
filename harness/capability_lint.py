@@ -76,8 +76,18 @@ WORKTREE_DENY_PREFIXES = ("/home/lumen/worktrees", "/home/lumen/scratch/worktree
 CLOSURE_ARTIFACT_GLOBS = ("/home/lumen/instructions/approvals/*.approved",)
 
 # fworker.py:820 — the same literal set assert_spawn_paths refuses on, so the lint and
-# the spawn assertion can never disagree about what a ticket cites.
+# the spawn assertion can never disagree about what a ticket cites. capability.cited_paths
+# delegates here. Punctuation that ends a sentence around a path is stripped after the
+# match; globs/ellipses simply end the literal early.
 _CITED_PATH_RE = re.compile(r"/home/lumen/[\w./~-]+")
+
+# wq#2528: a path the ticket talks ABOUT rather than one the worker must reach — the
+# fabricated secrets path a docs-fix quotes, the nonexistent path a verify ticket names.
+# Two forms: an explicit `mention:/home/lumen/...` token, and any /home/lumen/ literal
+# inside a one-line double-quoted span ("..." or “...”). A mention is dropped before
+# cited_paths sees the text, so it is neither checked nor granted: it never reaches
+# add_dirs, and a denied path stays denied the moment it is cited bare.
+_MENTION_RE = re.compile(r'mention:/home/lumen/[\w./~-]+|"[^"\n]*"|“[^”\n]*”')
 
 # wq#1697 fix 1: a ticket's OWN worktree, from a prior attempt, is not a citation of
 # someone else's live work — it is the exact path THIS ticket's next attempt reuses or
@@ -542,9 +552,10 @@ def normalise_closure_dir(path):
 
 
 def cited_paths(text):
-    """fworker.cited_paths (:828) over title+detail rather than detail alone."""
+    """fworker.cited_paths (:828) over title+detail rather than detail alone. Mentions
+    (_MENTION_RE, wq#2528) are blanked first, so they are never reach."""
     out = []
-    for m in _CITED_PATH_RE.finditer(text or ""):
+    for m in _CITED_PATH_RE.finditer(_MENTION_RE.sub(" ", text or "")):
         p = m.group(0).rstrip(".,;:")
         if p != "/home/lumen" and p not in out:
             out.append(p)

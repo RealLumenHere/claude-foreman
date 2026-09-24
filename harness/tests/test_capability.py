@@ -118,6 +118,24 @@ def test_cited_paths_strips_sentence_punctuation():
         "/home/lumen/kb/ISSUE-LOG.md", "/home/lumen/foreman/harness/guard.sh"]
 
 
+
+def test_quoted_and_mention_paths_are_not_cited():
+    # wq#2528: one parser for the lint and the spawn wall.
+    assert capability.cited_paths(
+        'doc says "see /home/lumen/.secrets/gitea_token" and mention:/home/lumen/nope; '
+        "edit /home/lumen/kb/ISSUE-LOG.md") == ["/home/lumen/kb/ISSUE-LOG.md"]
+
+
+def test_quoted_secrets_path_launches_unquoted_is_refused(tmp_path):
+    # wq#2528: the wq#1975 shape passes the spawn wall with no grant for the path.
+    quoted = 'fix the doc that says "token at /home/lumen/.secrets/gitea_token"'
+    v = pf(tmp_path, detail=quoted)
+    assert v.ok and v.unreachable_paths == []
+    v = pf(tmp_path, detail="fix the doc that says token at /home/lumen/.secrets/gitea_token")
+    assert v.reason == capability.REASON_CITED_PATH_UNREACHABLE
+    assert v.unreachable_paths == ["/home/lumen/.secrets/gitea_token"]
+
+
 # ---- node_unknown ----------------------------------------------------------------------
 
 def test_node_with_no_ssh_alias_refused(tmp_path):

@@ -624,6 +624,37 @@ def test_secret_inside_a_worktree_is_still_refused(path):
     assert d.refused and d.advisory == [], (path, d)
 
 
+# wq#2528: wq#1975's detail quoted the fabricated doc text it was fixing, secrets path
+# and all. A quoted or mention: path is talked about, not reached: no tag (so never an
+# add_dir), no refusal, no finding at all. The same path cited bare stays refused.
+@pytest.mark.parametrize("detail", [
+    'the doc claims "token lives at /home/lumen/.secrets/gitea_token (0600)" — false',
+    "the doc claims “token lives at /home/lumen/.secrets/gitea_token” — false",
+    "drop the fabricated mention:/home/lumen/.secrets/gitea_token citation",
+    'fixture "/home/lumen/nonexistent/thing.md" was never real',
+])
+def test_quoted_or_mention_path_is_not_reach(detail):
+    d = derive(detail)
+    assert d.tags == [] and d.refused == [] and d.unresolved == [] and d.advisory == [], d
+
+
+def test_bare_secret_beside_a_quoted_one_is_still_refused():
+    d = derive('the doc said "/home/lumen/.secrets/gitea_token"; '
+               "now read /home/lumen/secrets/reddit.env")
+    assert d.refused == ["dir(/home/lumen/secrets/reddit.env) deny:prefix "
+                         "(/home/lumen/secrets)"] and d.tags == []
+
+
+def test_unquoted_secret_is_still_refused():
+    d = derive("the doc claims the token lives at /home/lumen/.secrets/gitea_token")
+    assert d.refused and d.tags == []
+
+
+def test_quotes_do_not_span_lines():
+    d = derive('say "hi\nthen read /home/lumen/.secrets/x.txt\nand "bye"')
+    assert d.refused
+
+
 def test_fresh_sweep_hit_stays_refused():
     sweep = fresh_sweep()
     sweep["roots"]["/home/lumen/agent"]["hits"] = [{"path": "/home/lumen/agent/x.py",
