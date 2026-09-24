@@ -35,6 +35,29 @@ AQ_SOURCE = "read-dir-sweep"
 # file names that are a credential by convention regardless of content
 BASENAME_GLOBS = ("*.env", ".env*", "*.token", "*.key", "*.pem", "id_*", "*.p12", "*.pfx",
                   "*.kdbx", ".netrc", ".git-credentials", "*.secret", "*.secrets")
+# wq#2114: these globs matched the canonical name and nothing else, so every BACKUP of a
+# credential file was invisible -- `.git-credentials.bak.20260830_124941_pre_rotate_finish`
+# matched no glob at all. That is not an edge case: `.bak.<TS>_pre_<reason>` is the fleet's
+# universal convention before any risky edit (sentinel/config alone carries 24 copies of
+# one config), so the convention that exists to make changes safe was quietly producing
+# credential copies no basename rule could see. Strip a trailing backup suffix and re-test.
+BACKUP_SUFFIX = re.compile(
+    r"(?:\.bak[-.][^/]*|\.bak|~|\.orig|\.save|\.old|\.dpkg-(?:old|dist|new)|\.rpmsave)$",
+    re.IGNORECASE)
+
+
+def basename_candidates(name):
+    """The name itself, plus what it is a backup OF. Applied repeatedly so a doubly
+    suffixed copy (`id_ed25519.bak.20260101.orig`) still resolves to its origin."""
+    seen = [name]
+    cur = name
+    for _ in range(4):
+        stripped = BACKUP_SUFFIX.sub("", cur)
+        if stripped == cur or not stripped:
+            break
+        seen.append(stripped)
+        cur = stripped
+    return seen
 # wq#2115: the label half of `kv_secret` is shape-based, not an enumerated keyword list.
 # A human pasting a credential dump labels it however the source service's docs print it —
 # `Signing Secret:`, `Verifaction Token:` (sic) — so any `<word> secret|token|key` counts,
@@ -86,7 +109,10 @@ KV_SEP = r"(?:\s*[:=]\s*|\s+[-\u2013]\s+)"
 # content shapes; first match per line wins. `kv_secret` needs a value of 20+ chars so
 # `api_key: os.environ/X` (LiteLLM's env-ref form) and `api_key: sk-none` do not fire.
 PATTERNS = (
-    ("gh_pat", re.compile(r"\b(?:ghp_|github_pat_|gho_|ghs_|glpat-)[A-Za-z0-9_-]{20,}")),
+    # wq#2114: ghr_/ghu_ were absent here but present in the token-engine broker's copy —
+    # the three scanners disagreed on which GitHub prefixes exist. Widened to the union.
+    ("gh_pat", re.compile(
+        r"\b(?:ghp_|github_pat_|gho_|ghs_|ghr_|ghu_|glpat-)[A-Za-z0-9_-]{20,}")),
     ("sntl", re.compile(r"\bsntl-p[A-Za-z0-9_-]{8,}")),
     ("sk_key", re.compile(r"\bsk-(?:proj-|ant-|or-v1-|lf-)?[A-Za-z0-9_-]{24,}")),
     ("aws", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
@@ -128,7 +154,8 @@ def sweep_root(root):
         for f in sorted(fn):
             p = os.path.join(dp, f)
             nfiles += 1
-            if any(fnmatch.fnmatch(f, g) for g in BASENAME_GLOBS):
+            if any(fnmatch.fnmatch(c, g)
+                   for c in basename_candidates(f) for g in BASENAME_GLOBS):
                 hits.append((p, 0, "basename", f))
             text = _read_text(p)
             if text is None:

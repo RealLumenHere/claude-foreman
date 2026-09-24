@@ -117,6 +117,47 @@ def test_broadened_label_does_not_fire_on_ordinary_lines(tmp_path, line):
     assert hits == []
 
 
+@pytest.mark.parametrize("name", [
+    ".git-credentials.bak.20260830_124941_pre_rotate_finish",
+    "prod.env.bak.20260811_150332_pre_health",
+    "id_ed25519.bak.20260101.orig",
+    ".netrc~",
+    "server.key.old",
+    "creds.env.dpkg-old",
+])
+def test_backup_copies_of_credential_files_are_hits(tmp_path, name):
+    """wq#2114: the globs matched the canonical name only, so every backup of a
+    credential file was invisible. `.bak.<TS>_pre_<reason>` is the fleet's universal
+    convention before a risky edit, so the convention that exists to make changes safe
+    was quietly producing credential copies no basename rule could see."""
+    _write(tmp_path, name, "nothing token-shaped in here\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert [h[2] for h in hits] == ["basename"], f"{name} was not flagged"
+
+
+@pytest.mark.parametrize("name", [
+    "notes.txt.bak.20260101",
+    "app.py.bak",
+    "README.md",
+    "dispatcher.log.2.gz",
+])
+def test_backups_of_ordinary_files_stay_clean(tmp_path, name):
+    """Stripping the suffix must reveal a credential name, not flag every backup in the
+    tree — the fleet is full of .bak copies of ordinary files."""
+    _write(tmp_path, name, "ordinary content\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == [], f"{name} was flagged"
+
+
+@pytest.mark.parametrize("prefix", ["ghp_", "gho_", "ghs_", "ghr_", "ghu_", "glpat-"])
+def test_all_github_token_prefixes_are_caught(tmp_path, prefix):
+    """wq#2114 audit: ghr_/ghu_ were absent here but present in the token-engine
+    broker's copy, so the scanners disagreed on which prefixes exist."""
+    _write(tmp_path, "f.txt", f"token = {prefix}{'A' * 32}\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert "gh_pat" in [h[2] for h in hits], f"{prefix} not caught"
+
+
 def test_binary_and_git_skipped(tmp_path):
     _write(tmp_path, ".git/config", "url = https://ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345@x\n")
     with open(os.path.join(tmp_path, "blob.bin"), "wb") as f:
