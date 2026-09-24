@@ -18,6 +18,16 @@ fi
 python3 -m pytest -q "$HERE/test_lumen_contradiction_scan.py"
 
 install -m 0755 "$HERE/lumen_contradiction_scan.py" /home/lumen/bin/lumen-contradiction-scan
+
+# wq#2411: a build worker has no sudo, so the systemd steps below always abort the
+# script — but the scanner script itself is user-owned and needs no privilege to
+# redeploy. Without this exit, a python-only fix (e.g. wq#1782) lands in the repo
+# and never reaches the live timer until a human re-runs the full install, letting
+# the timer refile already-fixed contradictions as new tickets (wq#2411 was one).
+if [ "${1:-}" = --script-only ]; then
+  exit 0
+fi
+
 sudo install -m 0644 "$HERE/lumen-contradiction-scan.service" /etc/systemd/system/lumen-contradiction-scan.service
 sudo install -m 0644 "$HERE/lumen-contradiction-scan.timer" /etc/systemd/system/lumen-contradiction-scan.timer
 sudo systemctl daemon-reload
