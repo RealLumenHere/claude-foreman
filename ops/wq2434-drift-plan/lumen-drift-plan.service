@@ -1,0 +1,15 @@
+[Unit]
+Description=Regenerate per-rung drift calibration plans (wq#2434)
+Documentation=file:///home/lumen/foreman/ops/wq2434-drift-plan/README.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+WorkingDirectory=/home/lumen/minerva
+ExecStart=/usr/bin/python3 /home/lumen/minerva/drift_plan.py
+# Regeneration merges human calibration forward; it never alerts or gates.
+# Exit 2 means a human's overrides file is invalid and nothing was written.
+TimeoutStartSec=120
+Nice=10

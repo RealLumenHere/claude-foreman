@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly drift calibration plan regeneration (wq#2434)
+
+[Timer]
+OnCalendar=Mon 04:30
+RandomizedDelaySec=15m
+Persistent=true
+Unit=lumen-drift-plan.service
+
+[Install]
+WantedBy=timers.target

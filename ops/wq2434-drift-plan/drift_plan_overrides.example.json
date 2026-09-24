@@ -1,0 +1,17 @@
+{
+  "_comment": "Example only. Copy to /home/lumen/minerva/drift_plan_overrides.json and edit; install.sh does not install it, because shipping a default calibration would be fabricating one. Keys are real rung names from litellm_config.yaml; keys starting with _ are ignored, so this note is safe to keep. Run drift_plan.py --list-metrics for the catalog and its bounds.",
+  "cerebras-oss-120b": {
+    "daily_volume": 1200,
+    "eval_sampling_pct": 5.0,
+    "baseline_days": 14,
+    "observation_window": 30,
+    "min_sample_target": 384,
+    "reviewer": "frank",
+    "rollback_target": "deepseek-v4-pro",
+    "metrics": {
+      "latency_p95_s": 12.5,
+      "task_success_rate": 0.75,
+      "schema_conformance_rate": 0.95
+    }
+  }
+}
