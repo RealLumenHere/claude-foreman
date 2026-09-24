@@ -57,7 +57,32 @@ KV_LABEL = (r"(?:" + KV_WORD + r")?" + KV_NOT_PUBLIC + KV_WORD + KV_NOUN + r"|" 
 # `secret = process.env.X`, `master key: /home/lumen/.ssh/id_ed25519`. The key file
 # itself is caught by BASENAME_GLOBS where it lives.
 KV_NOT_A_CREDENTIAL = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
-                       r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
+                       r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)"
+                       # wq#2122: allowing a quoted label opened a new pointer shape --
+                       # `{"x-internal-key": BILLING_INTERNAL_KEY}` and
+                       # `{"env_key": "AZURE_OPENAI_API_KEY"}`, where the value is a
+                       # constant or the NAME of an env var, not its value. Both were
+                       # false positives in the first --policy run of this change.
+                       # Requires all-caps AND an underscore AND no lowercase, so a
+                       # hex/base64 credential (which carries mixed case or no
+                       # underscore) is still caught.
+                       # terminator, not end-of-line: the pointer is usually mid-line
+                       # (`{"x-internal-key": BILLING_INTERNAL_KEY}, timeout=3)`). Using a
+                       # terminator also means a credential that merely STARTS with an
+                       # all-caps run (`AAAA_BBBB-ccc123`) is still caught, because `-` is
+                       # not a terminator.
+                       r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?:[\"'`,;\s)}\]]|$))")
+# wq#2122: the label used to have to touch its separator, so the single most common
+# credential shape in the fleet -- standard JSON -- was invisible: in `"api_key": "<val>"`
+# the closing quote sits between the label and the colon. Same for a markdown-bold label
+# (`*Client Secret*:`, how Slack prints one) and a backtick-wrapped value.
+KV_LABEL_CLOSE = r"['\"*`]?"
+# `Signing Secret is: <val>` -- a connector word between label and colon. Enumerated, not
+# `\w+`, so an arbitrary sentence cannot bridge a prose `secret` to an unrelated long token.
+KV_CONNECTOR = r"(?:\s+(?:is|was|=))?"
+# `Signing Secret - <val>`. The dash REQUIRES surrounding whitespace: a bare `-` would make
+# `api-key-rotation-procedure-doc` read as label `api-key`, separator `-`, value the rest.
+KV_SEP = r"(?:\s*[:=]\s*|\s+[-\u2013]\s+)"
 # content shapes; first match per line wins. `kv_secret` needs a value of 20+ chars so
 # `api_key: os.environ/X` (LiteLLM's env-ref form) and `api_key: sk-none` do not fire.
 PATTERNS = (
@@ -68,8 +93,8 @@ PATTERNS = (
     ("slack", re.compile(r"\b(?:xox[bpsa]|xapp)-[A-Za-z0-9-]{20,}")),
     ("privkey", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY")),
     ("kv_secret", re.compile(
-        r"(?i)\b(?:" + KV_LABEL + r")\b\s*[:=]\s*"
-        r"['\"]?" + KV_NOT_A_CREDENTIAL + r"[A-Za-z0-9_\-./+]{20,}")),
+        r"(?i)\b(?:" + KV_LABEL + r")\b" + KV_LABEL_CLOSE + KV_CONNECTOR + KV_SEP +
+        r"['\"`]?" + KV_NOT_A_CREDENTIAL + r"[A-Za-z0-9_\-./+]{20,}")),
 )
 SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
                        "site-packages", ".cache"})

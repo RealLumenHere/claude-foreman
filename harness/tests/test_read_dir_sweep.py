@@ -63,6 +63,19 @@ def test_credential_basenames_are_hits(tmp_path, name):
     ("refresh-token: 1zz0gLongLookingRefreshTokenValue", "kv_secret"),
     ("clientSecret: 8f7e6d5c4b3a2918071625344352", "kv_secret"),
     ("PrivateKey = aGVsbG8gd29ybGRhYmNkZWZnaGlqaw", "kv_secret"),
+    # wq#2122: the label used to have to touch its separator, so these all passed
+    # unflagged. Standard JSON is the biggest miss -- the closing quote sits between
+    # the label and the colon, and JSON is how most of the fleet stores credentials.
+    ('"api_key": "8f7e6d5c4b3a2918071625344352"', "kv_secret"),
+    ('"signing_secret": "0123456789abcdef0123456789ab"', "kv_secret"),
+    ("*Client Secret*: 8f7e6d5c4b3a2918071625344352", "kv_secret"),   # Slack bold
+    ("Client Secret: `8f7e6d5c4b3a2918071625344352`", "kv_secret"),   # backtick value
+    ("Signing Secret is: 0123456789abcdef0123456789ab", "kv_secret"),
+    ("Signing Secret - 0123456789abcdef0123456789ab", "kv_secret"),
+    # the all-caps pointer guard must not swallow a credential that merely STARTS with
+    # an all-caps run -- `-` is not a value terminator, so this is still a hit
+    ("api_key: AAAA_BBBB-ccc123ddd456eee789fff", "kv_secret"),
+    ('"api_key": "AAAAB3NzaC1yc2EAAAADAQABAAABgQ"', "kv_secret"),
 ])
 def test_content_shapes(tmp_path, line, kind):
     _write(tmp_path, "f.txt", line + "\n")
@@ -83,6 +96,20 @@ def test_content_shapes(tmp_path, line, kind):
     "secret = process.env.MAIL_PROBE_SECRET_VAL",
     "api_key = os.getenv('OPENROUTER_API_KEY_X')",
     "sed -i 's|<a key: bacTIkbOHNwlyQEsTVmT|x|'",     # one-letter qualifier is prose
+    # wq#2122: the dash separator requires surrounding whitespace. Without that, a
+    # hyphenated identifier reads as label + separator + value and every kebab-case
+    # filename in the tree becomes a hit.
+    "api-key-rotation-procedure-documentation",
+    "client-secret-rotation-runbook-v2-draft",
+    # the connector list is enumerated, not \w+, so a sentence cannot bridge a prose
+    # `secret` to an unrelated long token further down the line
+    "The secret here is that abcdefghijklmnopqrstuvwxyz is not a credential",
+    # wq#2122: allowing a quoted label opened a new POINTER shape -- the value is a
+    # constant, or the NAME of an env var, not its value. Both of these were real
+    # false positives in the first --policy run of this change.
+    'headers={"x-internal-key": BILLING_INTERNAL_KEY}, timeout=3)',
+    '"azure": {"name": "Azure OpenAI", "env_key": "AZURE_OPENAI_API_KEY"},',
+    "api_key: SOME_CONSTANT_NAME_HERE",
 ])
 def test_broadened_label_does_not_fire_on_ordinary_lines(tmp_path, line):
     _write(tmp_path, "f.txt", line + "\n")
