@@ -1094,12 +1094,43 @@ def needs_repo_hint(ticket):
     return repo if repo and repo in repo_sweep.managed_repos() else None
 
 
+# wq#1446 (ISSUE-LOG #192, #33): a ticket whose deliverable lives in another managed repo
+# (wq#1440 -> lumen-bin) was dispatched into the lane's repo, so the evidence gate re-checked
+# every citation against a worktree that could never contain the change. The per-ticket
+# needs:repo() tag exists for this, but nobody remembers to write it. The ticket already
+# names its output: the `deliverable` column, or an explicit `Deliverable: /abs/path` line.
+# Same trust rule as needs_repo_hint: the path must sit inside a managed repo, so a stray
+# path cannot point dispatch at an arbitrary tree. FOREMAN_DELIVERABLE_REPO_DISABLE=1 turns
+# it off.
+_DELIVERABLE_MARK_RE = re.compile(r"(?im)\bdeliverables?\s*[:=]\s*`?(/[\w.@+-]+(?:/[\w.@+-]+)*)`?")
+
+
+def deliverable_repo_hint(ticket):
+    """The managed repo that holds the ticket's named deliverable, or None."""
+    if os.environ.get("FOREMAN_DELIVERABLE_REPO_DISABLE") == "1":
+        return None
+    paths = []
+    col = str(ticket.get("deliverable") or "").strip()
+    if col:
+        paths.append(col)
+    paths += _DELIVERABLE_MARK_RE.findall(ticket.get("detail") or "")
+    repos = sorted(repo_sweep.managed_repos(), key=len, reverse=True)
+    for raw in paths:
+        p = os.path.normpath(os.path.expanduser(raw))
+        if not os.path.isabs(p):
+            continue
+        for repo in repos:
+            if p == repo or p.startswith(repo + "/"):
+                return repo
+    return None
+
+
 def repo_for_ticket(ticket_id_or_dict):
     """The one resolver shared by dispatch_cmd and foreman_dispatcher._do_pass (wq#1123):
     a lane/title repo disagreement refuses outright (wq#433 — see repo_mismatch; a
     needs tag never papers over a mis-laned ticket, §5.2), then the ticket's own
     needs:repo tag (wq#1331 — the per-ticket override, ahead of every derived source),
-    then the verify-pass repo hint (wq#1220 — a verify ticket's own lane is a static
+    then the repo holding the ticket's named deliverable (wq#1446), then the verify-pass repo hint (wq#1220 — a verify ticket's own lane is a static
     policy default, not the repo it needs to verify), then LANE_REPO, then — for lanes
     LANE_REPO doesn't cover (e.g. 'auto') — the exact repo a repo-sweep ticket wrote
     into its own detail (repo_sweep.repo_hint). Returns None (never a guess) if none
@@ -1111,6 +1142,9 @@ def repo_for_ticket(ticket_id_or_dict):
     if repo_mismatch(t):
         return None
     repo = needs_repo_hint(t)
+    if repo:
+        return repo
+    repo = deliverable_repo_hint(t)
     if repo:
         return repo
     repo = verify_repo_hint(t.get("title", ""), t.get("detail", ""))
