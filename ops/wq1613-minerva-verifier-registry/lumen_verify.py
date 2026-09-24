@@ -532,9 +532,11 @@ def reconcile(conn, fact, probe_id, observed, error, now):
         return "unknown"
 
     outcome = res.get("outcome")
-    if outcome == "superseded":
-        # ingest() does not carry the probe id onto the new row, and lumen_state's
-        # staleness view treats a row with no verify_recipe as unverifiable.
+    if outcome in ("confirmed", "superseded"):
+        # ingest() carries no probe id onto the row, and lumen_state's staleness view
+        # labels a row with no verify_recipe UNVERIFIABLE however often a probe
+        # confirms it (14 of ~1000 open facts had one). A probe that just observed
+        # the fact owns it, so record that (wq#2150).
         conn.execute(
             "UPDATE state_facts SET verify_recipe=? WHERE subject=? AND predicate=? "
             "AND valid_to IS NULL AND verify_recipe IS NULL",

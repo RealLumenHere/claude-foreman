@@ -128,6 +128,7 @@ def test_reconcile_confirms_on_match(conn, registry):
     assert outcome == "confirmed"
     row = get_fact(conn, fid)
     assert row["last_confirmed_at"] == iso(NOW)
+    assert row["verify_recipe"] == "tailscale_ip"  # wq#2150: shows as verified, not UNVERIFIABLE
     assert row["valid_to"] is None
     verif = conn.execute("SELECT outcome FROM fact_verifications WHERE fact_id=?",
                           (fid,)).fetchone()
