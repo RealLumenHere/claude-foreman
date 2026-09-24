@@ -1,0 +1,97 @@
+{
+  "n": 1008,
+  "pos": 214,
+  "positive_statuses": [
+    "approved",
+    "staged",
+    "planned",
+    "applied_unverified",
+    "deployed",
+    "shipped"
+  ],
+  "negative_statuses": [
+    "reject"
+  ],
+  "primary_holdout": {
+    "n_train": 705,
+    "n_test": 303,
+    "pos_test": 27,
+    "base_rate_test": 0.089,
+    "baseline_static_rubric_auc": 0.898,
+    "baseline_eval_final_score_auc": 0.254,
+    "treatment_text_pattern_auc": 0.874,
+    "perm_p_value": 0.005,
+    "top_positive_terms": [
+      "timer",
+      "add",
+      "script",
+      "the",
+      "data",
+      "eval",
+      "audit",
+      "periodically"
+    ]
+  },
+  "rolling": [
+    {
+      "n_train": 554,
+      "n_test": 151,
+      "pos_test": 65,
+      "base_rate_test": 0.43,
+      "baseline_static_rubric_auc": 0.832,
+      "baseline_eval_final_score_auc": 0.192,
+      "treatment_text_pattern_auc": 0.696,
+      "perm_p_value": 0.005,
+      "top_positive_terms": [
+        "timer",
+        "script",
+        "data",
+        "eval",
+        "the",
+        "add",
+        "unit",
+        "python"
+      ]
+    },
+    {
+      "n_train": 705,
+      "n_test": 151,
+      "pos_test": 20,
+      "base_rate_test": 0.132,
+      "baseline_static_rubric_auc": 0.883,
+      "baseline_eval_final_score_auc": 0.271,
+      "treatment_text_pattern_auc": 0.868,
+      "perm_p_value": 0.005,
+      "top_positive_terms": [
+        "timer",
+        "add",
+        "script",
+        "the",
+        "data",
+        "eval",
+        "audit",
+        "periodically"
+      ]
+    },
+    {
+      "n_train": 856,
+      "n_test": 152,
+      "pos_test": 7,
+      "base_rate_test": 0.046,
+      "baseline_static_rubric_auc": 0.933,
+      "baseline_eval_final_score_auc": 0.238,
+      "treatment_text_pattern_auc": 0.901,
+      "perm_p_value": 0.005,
+      "top_positive_terms": [
+        "timer",
+        "upgrade",
+        "add",
+        "update",
+        "script",
+        "the",
+        "data",
+        "periodically"
+      ]
+    }
+  ]
+}
