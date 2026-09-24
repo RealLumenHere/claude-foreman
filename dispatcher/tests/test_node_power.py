@@ -87,7 +87,13 @@ class FakePorts:
         return list(self.running)
 
     def state_write(self, subject, predicate, value):
-        self.calls.append(("state_write", subject, predicate, json.loads(value)))
+        # power_action is JSON (json.dumps by _action); remediation_hold is deliberately a plain string
+        # (wq#1981 — power-remediate's guard reads its leading word as text, never JSON). Store either as-is.
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = value
+        self.calls.append(("state_write", subject, predicate, parsed))
 
     def now(self):
         return self.t
@@ -186,11 +192,22 @@ def test_wake_polls_health_then_records_the_action_in_lumen_state(env):
     env.starved()
     calls = env.ports.kinds()
     assert calls.index(("plug", "p1", "on")) < calls.index(next(c for c in calls if c[0] == "probe"))
-    (rec,) = [c for c in env.ports.calls if c[0] == "state_write"]
+    (rec,) = [c for c in env.ports.calls if c[0] == "state_write" and c[2] == "power_action"]
     assert rec[1:3] == (COLD, "power_action")
     assert rec[3]["verb"] == "on" and rec[3]["plug"] == "p1" and rec[3]["trigger"] == "starvation"
     assert rec[3]["starved_passes"] == 2 and rec[3]["local_slots_full"] == 3
     assert env.kinds("power_action")[0]["verb"] == "on"
+
+
+def test_wake_lifts_the_remediation_hold_before_ac_moves(env):
+    """wq#1981: power-remediate must not fight a wake it should instead help rescue if it stalls."""
+    act = env.starved()
+    hold_calls = [c for c in env.ports.calls if c[0] == "state_write" and c[2] == "remediation_hold"]
+    (hold,) = hold_calls
+    assert hold[1] == COLD and hold[3].startswith("off - ")
+    on_idx = env.ports.calls.index(("plug", "p1", "on"))
+    assert env.ports.calls.index(hold) < on_idx
+    assert act == {"node": COLD, "verb": "wake", "ok": True}
 
 
 def test_no_wake_while_a_live_member_has_a_free_slot_or_slots_full_is_one(env):
@@ -326,8 +343,12 @@ def test_six_steps_fire_in_order_with_plug_off_strictly_last(env):
     assert env.reg_state() == "cold"
     st = env.state()[COLD]
     assert st["last_drain_ts"] == env.ports.t and st["idle_passes"] == 0
-    (rec,) = [c for c in env.ports.calls if c[0] == "state_write" and c[3]["verb"] == "off"]
+    (rec,) = [c for c in env.ports.calls if c[0] == "state_write" and c[2] == "power_action"
+              and c[3]["verb"] == "off"]
     assert rec[1:3] == (COLD, "power_action") and rec[3]["plug"] == "p1"
+    (hold,) = [c for c in env.ports.calls if c[0] == "state_write" and c[2] == "remediation_hold"]
+    assert hold[1] == COLD and hold[3].startswith("on - ")
+    assert plug_off < calls.index(hold)  # wq#1981: held only after AC is actually off
 
 
 def test_draining_render_removes_the_node_from_the_dispatcher_view(env):
@@ -503,7 +524,12 @@ def test_wake_timeout_on_a_box_whose_os_never_booted_leaves_the_plug_on(env):
     assert env.reg_state() == "down" and env.state()[COLD]["excluded_until"] > env.ports.t
     (refusal,) = env.kinds("power_refused")
     assert refusal["trigger"] == "wake_failed" and any("ssh reports hostname None" in r for r in refusal["reasons"])
-    assert any(c[3]["verb"] == "off_refused" for c in env.ports.calls if c[0] == "state_write" and len(c) > 3)
+    assert any(c[3]["verb"] == "off_refused" for c in env.ports.calls
+               if c[0] == "state_write" and c[2] == "power_action" and len(c) > 3)
+    # wq#1981: the hold was lifted for this wake attempt and, since the plug stayed on with the node
+    # unresponsive, is deliberately left lifted — power-remediate is now free to try to rescue it.
+    (hold,) = [c for c in env.ports.calls if c[0] == "state_write" and c[2] == "remediation_hold"]
+    assert hold[3].startswith("off - ")
 
 
 def test_wake_deadline_is_capped_to_what_a_pass_can_watch(env):

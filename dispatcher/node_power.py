@@ -32,6 +32,15 @@ wakes_today counts the wake_log entries of the last 24 h (rolling, so midnight n
 Every action goes to lumen_state as <node>.power_action and to the pass log. Kill switch:
 FOREMAN_NODE_POWER=off (read per pass) keeps every decision logged and moves no AC, the same shape as
 FOREMAN_LOCAL_CAPACITY=static. Thor has no registry row and never gets one, so it can never be touched here.
+
+Coordination with bin/power-remediate (wq#637, a separate repo/system; wq#1981): that script wakes any
+node its own ping+ssh probe finds unreachable for 15 min sustained — which is exactly what step 6 above
+produces on purpose. Left alone the two fight: this module idles a node down, power-remediate's ladder
+sees it unreachable and WoLs/AC-cycles it back up. A successful drain (`power_down`) therefore writes
+<node>.remediation_hold = "on - ..." before returning; `wake()` writes it back to "off - ..." before AC
+moves. power-remediate's guard_blocked() already reads this predicate's leading word (any word but
+off/clear/cleared/none blocks its ladder) — that parser is unmodified here, so the value MUST be a plain
+string, never JSON like power_action above (see _hold_remediation).
 """
 import json
 import os
@@ -171,6 +180,20 @@ class NodePower:
             self.ports.state_write(node, "power_action", json.dumps(rec, sort_keys=True))
         except Exception as e:  # noqa: BLE001 — the audit mirror never blocks the action it records
             self.emit("power_error", node=node, reason="lumen_state_write_failed", detail=repr(e)[:200])
+
+    def _hold_remediation(self, node, on, reason):
+        """wq#1981: coordinate with bin/power-remediate (wq#637), which wakes any node its own reachability
+        probe finds unreachable for 15 min — exactly what a successful idle power-down produces. Its
+        guard_blocked() reads this predicate's LEADING WORD as plain text ("off"/"clear"/"cleared"/"none"
+        unblocks, anything else blocks); it is not this codebase and must not be edited to parse JSON, so
+        the value written here is deliberately a plain string, never json.dumps() like `power_action` above
+        — a JSON value starts with '{', which guard_blocked's word-split reads as an empty (blocking) first
+        word forever, so a JSON hold could never be cleared again."""
+        value = f"{'on' if on else 'off'} - {reason}"
+        try:
+            self.ports.state_write(node, "remediation_hold", value)
+        except Exception as e:  # noqa: BLE001 — the coordination mirror never blocks the action it records
+            self.emit("power_error", node=node, reason="remediation_hold_write_failed", detail=repr(e)[:200])
 
     def _backends(self, reg, node):
         import node_render as nr
@@ -362,6 +385,10 @@ class NodePower:
         e["wakes_today"] = len(e["wake_log"])
         save_state(state, self.state_path)
         self._action(node, row, "on", "starvation", **counters)
+        # wq#1981: lift the idle-down hold before AC moves, so power-remediate's own reachability probe
+        # is free to rescue this wake if it stalls (a wake that never boots looks identical to an
+        # unreachable node, and that is exactly the case power-remediate exists to fix).
+        self._hold_remediation(node, False, "node_power waking for work")
         rc, _ = ports.plug(row["plug_id"], "on")
         if rc != 0:
             e["excluded_until"] = ports.now() + EXCLUDE_S
@@ -448,6 +475,10 @@ class NodePower:
             return self._abort(node, row, e, prior, manage_state, str(err), result)
         e["last_drain_ts"], e["idle_passes"] = ports.now(), 0
         self._action(node, row, "off", trigger, **(counters or {}))
+        # wq#1981: AC is cut from here — power-remediate's own probe will see this node unreachable in
+        # 15 min and, unblocked, would WoL/AC-cycle it right back up, fighting the idle-down this call
+        # just performed. Hold it until `wake()` lifts this same predicate for real work.
+        self._hold_remediation(node, True, f"node_power idle drain, trigger={trigger}")
         if manage_state:
             try:
                 self._set_state(node, "cold")
