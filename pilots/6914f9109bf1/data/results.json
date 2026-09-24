@@ -1,0 +1,35 @@
+{
+ "drift": 1.0005393624420051,
+ "ngram-simple": {
+  "reason_ratio": 0.9309949385665194,
+  "copy_ratio": 1.0025968810732575,
+  "prefill_ratio": 1.0016415192991106,
+  "identical": "7/8",
+  "first_divergence_char": [
+   [
+    "R2",
+    303
+   ]
+  ],
+  "accept": 0.112,
+  "draft_n": 125
+ },
+ "ngram-map-k": {
+  "reason_ratio": 0.9925725598557671,
+  "copy_ratio": 0.9970736947393444,
+  "prefill_ratio": 0.9992494699908743,
+  "identical": "8/8",
+  "first_divergence_char": [],
+  "accept": 0.02857142857142857,
+  "draft_n": 35
+ },
+ "ngram-mod": {
+  "reason_ratio": 0.9944409886394645,
+  "copy_ratio": 1.0025856852062889,
+  "prefill_ratio": 1.0003570027868223,
+  "identical": "8/8",
+  "first_divergence_char": [],
+  "accept": null,
+  "draft_n": 0
+ }
+}

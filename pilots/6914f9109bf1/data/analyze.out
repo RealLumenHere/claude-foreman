@@ -1,0 +1,6 @@
+conn.log samples per config {'none': 66, 'ngram-simple': 69, 'ngram-map-k': 67, 'ngram-mod': 66, 'none2': 66} samples with an ollama client {}
+baseline decode tok/s: {'R1': 5.1, 'R2': 5.13, 'R3': 5.13, 'R4': 5.13, 'C1': 5.05, 'C2': 5.09, 'C3': 5.1, 'C4': 5.08}
+drift none2/none decode median: 1.001
+ngram-simple {'reason_ratio': 0.931, 'copy_ratio': 1.003, 'prefill_ratio': 1.002, 'identical': '7/8', 'first_divergence_char': [('R2', 303)], 'accept': 0.112, 'draft_n': 125}
+ngram-map-k {'reason_ratio': 0.993, 'copy_ratio': 0.997, 'prefill_ratio': 0.999, 'identical': '8/8', 'first_divergence_char': [], 'accept': 0.029, 'draft_n': 35}
+ngram-mod {'reason_ratio': 0.994, 'copy_ratio': 1.003, 'prefill_ratio': 1.0, 'identical': '8/8', 'first_divergence_char': [], 'accept': None, 'draft_n': 0}
