@@ -37,7 +37,7 @@ wired up.
 | `CEREBRAS_API_KEY` (name inferred) | Cerebras | `agents/work-queue/reports/1028_stale_sambanova_mapping.md:24`: `PROVIDER_TO_MODEL: {cerebras, mistral, openrouter, qwen, deepseek, gemini}` inside `agent/lumen_fleet_researcher.py`'s own provider map; `lumen-fleet-cerebras.service` runs that same script (`foreman/research/FLEET_SERVICE_ATLAS.md:230`) |
 | `MISTRAL_API_KEY` (name inferred) | Mistral | same `PROVIDER_TO_MODEL` map + `lumen-fleet-mistral.service` |
 | `GEMINI_API_KEY` (name inferred) | Google Gemini | same `PROVIDER_TO_MODEL` map lists `gemini` as a live provider (no retirement note, unlike sambanova) |
-| `GITEA_TOKEN` | Gitea (self-hosted) | `agents/work-queue/reports/wq859_renovate_gitea.md:25`: "The shared fleet `GITEA_TOKEN` (`/home/lumen/agent/.env`)" |
+| `GITEA_TOKEN` (VERIFY — unconfirmed live) | Gitea (self-hosted) | `wq show 859` notes: wq#859 (Renovate bot deploy, done 2026-08-23) — "dry run caught missing issue-scope on shared `GITEA_TOKEN`, fixed with a dedicated Renovate-only token." That confirms a shared `GITEA_TOKEN` existed in `agent/.env` as of that ticket, not that it's still live there today; needs operator confirmation before wiring rotation. |
 | GitHub PAT var (name unconfirmed — `GH_TOKEN`/`GITHUB_TOKEN`) | GitHub | ISSUE-LOG #1: "Dead GitHub token... PAT rotated to `agent/.env` only; canonical `.secrets` left orphaned" |
 
 **Not in `agent/.env`, out of scope for this rotation path:**
