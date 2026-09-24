@@ -205,7 +205,7 @@ ARCHETYPE_NUMBERS = {
 }
 ARCHETYPES = list(ARCHETYPE_NUMBERS.values())
 # routing rows that are not ticket archetypes: the foreman's own judgment sessions.
-EXTRA_ROUTING_ROWS = {"orchestrator"}
+EXTRA_ROUTING_ROWS = {"orchestrator", "decomposer"}  # wq#2515: planning row for the DECOMPOSE consumer
 
 # Soft-pressure margin: remaining% above the governor floor below which governor_pressure
 # reports 'tight'. Above it: 'ok'. Below the floor: 'deny'. 'tight' never changes the

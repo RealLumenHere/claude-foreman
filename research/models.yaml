@@ -338,6 +338,9 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   verify-pass:          [sonnet-5@high,   opus-5@high(on-contradiction)]
   fire-response:        [sonnet-5@high,   opus-5@high(escalate-on-fail)]   # wq#717 AUTO-5: fleet-fires manual-approval; never local (LOCAL_ALLOWED_ARCHETYPES excludes it)
   orchestrator:         [fable-5@high]    # fable-5@max reserved for hardest investigations until CAL data justifies more
+  decomposer:           [opus-5@medium, opus-5@high]  # wq#2515: the DECOMPOSE consumer's planning call
+                                          # (dispatcher/decompose_planner.py). Planning work, never
+                                          # xhigh; the planner clamps any out-of-band effort.
 
 # wq#2133: when true, standard-engineering gets local-worker@local prepended (router.Manifest.chain).
 # Flip only after the local tok/s numbers: warm eval >= 40 tok/s, or the slim prompt under 6k tokens.
