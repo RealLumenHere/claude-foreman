@@ -1,40 +1,25 @@
 """wq#1613 tests — verifier registry + lumen_verify sweep.
 
-Fixture DB mirrors the state_facts schema from wq#1632's test (§1.1 of that
-ticket's DESIGN.md); lumen_verify.migrate() adds the wq#1613 columns on top,
-which must be additive and idempotent (MINERVA_STALENESS_REVIEW.md §3.1).
+wq#2053: reconcile() now delegates to lumen_state.report_observation(), so the
+fixture DB is the store's REAL schema (lumen_state.init_schema) in a throwaway
+file, and lumen_state._now is pinned to NOW so timestamps stay deterministic.
+lumen_verify.migrate() still adds its columns on top, additive and idempotent
+(MINERVA_STALENESS_REVIEW.md section 3.1).
 """
 import os
 import sqlite3
+import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import lumen_verify as lv
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, lv.MINERVA_DIR)
+import lumen_state as ls  # noqa: E402
 
-SCHEMA = """
-CREATE TABLE state_facts (
-  id INTEGER PRIMARY KEY,
-  subject TEXT NOT NULL,
-  predicate TEXT NOT NULL,
-  value TEXT NOT NULL,
-  valid_from TEXT,
-  valid_to TEXT,
-  ingested_at TEXT,
-  invalidated_at TEXT,
-  source_ref TEXT,
-  confidence REAL,
-  episode_id TEXT,
-  half_life_days REAL,
-  last_confirmed_at TEXT,
-  fact_class TEXT,
-  render_tier TEXT
-);
-CREATE UNIQUE INDEX uq_open ON state_facts(subject, predicate)
-  WHERE valid_to IS NULL;
-"""
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 NOW = datetime(2026, 9, 10, 6, 0, 0, tzinfo=timezone.utc)
 
@@ -44,11 +29,15 @@ def iso(dt):
 
 
 @pytest.fixture
-def conn():
-    c = sqlite3.connect(":memory:")
+def conn(tmp_path, monkeypatch):
+    monkeypatch.setattr(ls, "DB", str(tmp_path / "test.db"))
+    monkeypatch.setattr(ls, "_now", lambda: NOW.isoformat())
+    ls.init_schema()
+    c = sqlite3.connect(ls.DB)
     c.row_factory = sqlite3.Row
-    c.executescript(SCHEMA)
-    return c
+    ls._migrate(c)
+    yield c
+    c.close()
 
 
 @pytest.fixture
@@ -62,14 +51,14 @@ def registry(tmp_path):
 def seed(conn, subject, predicate, value, age_days, fact_class="identity",
          source_kind=None, verify_interval_days=None):
     ts = iso(NOW - timedelta(days=age_days))
-    cur = conn.execute(
-        "INSERT INTO state_facts (subject, predicate, value, valid_from, "
+    fid = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO state_facts (id, subject, predicate, value, valid_from, "
         "ingested_at, last_confirmed_at, fact_class, source_ref) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        (subject, predicate, value, ts, ts, ts, fact_class, "seed"),
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (fid, subject, predicate, value, ts, ts, ts, fact_class, "seed"),
     )
     conn.commit()
-    fid = cur.lastrowid
     lv.migrate(conn)
     if source_kind:
         conn.execute("UPDATE state_facts SET source_kind=? WHERE id=?", (source_kind, fid))
@@ -278,6 +267,54 @@ def test_reconcile_blank_observation_is_unknown(conn, registry):
                source_kind="observed")
     assert lv.reconcile(conn, get_fact(conn, fid), "tailscale_ip", "  ", None, NOW) == "unknown"
     assert get_fact(conn, fid)["valid_to"] is None
+
+
+def test_reconcile_supersede_keeps_store_invariants(conn, registry):
+    """wq#2053: the supersede runs through ingest(), so it leaves the memory_audit
+    trail the old raw INSERT skipped, and the new row stays verifiable."""
+    fid = seed(conn, "hathor", "tailscale_ip", "100.1.1.1", age_days=5,
+               source_kind="observed")
+    assert lv.reconcile(conn, get_fact(conn, fid), "tailscale_ip", "100.1.1.2",
+                        None, NOW) == "superseded"
+    new = dict(conn.execute(
+        "SELECT * FROM state_facts WHERE subject='hathor' AND predicate='tailscale_ip' "
+        "AND valid_to IS NULL").fetchone())
+    assert new["verify_recipe"] == "tailscale_ip"
+    assert get_fact(conn, fid)["closed_by"] == new["id"]
+    audited = {r["action"] for r in conn.execute(
+        "SELECT action FROM memory_audit WHERE row_id=?", (new["id"],))}
+    assert "supersede" in audited
+    verif = conn.execute("SELECT outcome FROM fact_verifications WHERE fact_id=?",
+                         (fid,)).fetchone()
+    assert verif["outcome"] == "superseded"
+
+
+def test_reconcile_cannot_reopen_a_lifecycle_closed_node(conn, registry):
+    """wq#2053: the gap the ticket names. A stale sweep observing a value for a
+    decommissioned node's operational fact used to INSERT it as the open row."""
+    reg = ls.registry()
+    ls.ingest("khepri", reg["lifecycle"], reg["closing"][0])
+    assert ls.is_operational("caddy_status", reg)  # the gate only guards operational facts
+    fid = seed(conn, "khepri", "caddy_status", "active", age_days=5, fact_class="status",
+               source_kind="observed")  # legacy open row under a closed lifecycle
+    outcome = lv.reconcile(conn, get_fact(conn, fid), "service_state", "inactive",
+                           None, NOW)
+    assert outcome == "unknown"
+    open_rows = conn.execute(
+        "SELECT value FROM state_facts WHERE subject='khepri' AND predicate='caddy_status' "
+        "AND valid_to IS NULL").fetchall()
+    assert [r["value"] for r in open_rows] == ["active"]  # untouched, nothing new open
+    verif = conn.execute("SELECT outcome, detail FROM fact_verifications WHERE fact_id=?",
+                         (fid,)).fetchone()
+    assert verif["outcome"] == "unknown" and "LifecycleClosedError" in verif["detail"]
+
+
+def test_reconcile_error_still_logs_an_unknown_verification(conn, registry):
+    fid = seed(conn, "hathor", "tailscale_ip", "100.1.1.1", age_days=5)
+    lv.reconcile(conn, get_fact(conn, fid), "tailscale_ip", None, "tailscale rc=1", NOW)
+    verif = conn.execute("SELECT outcome, detail FROM fact_verifications WHERE fact_id=?",
+                         (fid,)).fetchone()
+    assert verif["outcome"] == "unknown" and verif["detail"] == "tailscale rc=1"
 
 
 # --------------------------------------------------------------- node_liveness

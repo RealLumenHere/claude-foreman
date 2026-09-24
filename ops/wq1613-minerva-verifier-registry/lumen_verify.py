@@ -12,14 +12,17 @@ when `evidence_age > COALESCE(fact.verify_interval_days, registry predicate
 interval, class default)` (status 3d, config 14d, identity 90d). Probes run
 batched per node, never per fact.
 
-Reconciliation contract (§3.2, §3.4), owned here because wq#1608's
-reconfirm-on-match reconciler had not landed at write time:
+Reconciliation contract (§3.2, §3.4): NOT owned here (wq#2053). reconcile()
+reports what a probe saw to lumen_state.report_observation() (wq#1608) and
+lets the real ingest() decide, so every write keeps the store invariants
+(lifecycle-closed gate, canonical predicate, out-of-order guard, memory_audit
+trail):
   match     -> reconfirmed: bump last_confirmed_at, clear contradicted_at.
   mismatch  -> superseded: close the old fact, open a new observed one --
                UNLESS the open fact is `frank_stated`, which is never
                auto-superseded. That case writes a `fact_verifications` row
                with outcome=unknown and files an aq row for a human.
-  error/absent -> unknown. Never mutates the fact (fail-open).
+  error/absent/refused-by-the-gate -> unknown. Never mutates the fact (fail-open).
 
   lumen_verify.py sweep [--db PATH] [--registry PATH] [--dry-run] [--json]
   lumen_verify.py sweep --now ISO8601   # deterministic for tests
@@ -40,6 +43,7 @@ MINERVA_DB = os.environ.get("MINERVA_DB", "/home/lumen/minerva/minerva.db")
 REGISTRY_PATH = os.environ.get(
     "PREDICATE_REGISTRY", "/home/lumen/minerva/verify/registry.yaml"
 )
+MINERVA_DIR = os.environ.get("MINERVA_DIR", "/home/lumen/minerva")
 AQ = "/home/lumen/bin/aq"
 WQ = "/home/lumen/bin/wq"
 
@@ -446,45 +450,67 @@ def file_conflict(subject, predicate, old_value, observed, probe_id):
     run([AQ, "add", "--source", "lumen-verify", "--severity", "warn", "--message", title])
 
 
-def reconcile(conn, fact, probe_id, observed, error, now):
-    vid = str(uuid.uuid4())
-    ts = now.isoformat(timespec="seconds")
-    if error is not None or observed is None or not str(observed).strip():
-        outcome = "unknown"
-    elif observed == fact["value"]:
-        outcome = "confirmed"
-    elif fact["source_kind"] == FRANK_STATED:
-        outcome = "unknown"
-        file_conflict(fact["subject"], fact["predicate"], fact["value"], observed, probe_id)
-    else:
-        outcome = "superseded"
+def _lumen_state():
+    """lumen_state is imported lazily: probes and --help must not need the store."""
+    if MINERVA_DIR not in sys.path:
+        sys.path.insert(0, MINERVA_DIR)
+    import lumen_state
+    return lumen_state
 
+
+def _log_unknown(conn, fact, probe_id, observed, detail, now):
+    """An 'unknown' outcome mutates no fact, but a fact_verifications row keeps
+    'checked, could not tell' distinct from 'never checked' (§2.3). The store
+    writes its own rows for confirmed / superseded / frank_stated conflicts."""
     conn.execute(
         "INSERT INTO fact_verifications "
         "(id, fact_id, subject, predicate, probe, observed, outcome, ts, detail) "
         "VALUES (?,?,?,?,?,?,?,?,?)",
-        (vid, fact["id"], fact["subject"], fact["predicate"], probe_id,
-         observed, outcome, ts, error),
+        (str(uuid.uuid4()), fact["id"], fact["subject"], fact["predicate"], probe_id,
+         observed, "unknown", now.isoformat(timespec="seconds"), detail),
     )
 
-    if outcome == "confirmed":
+
+def reconcile(conn, fact, probe_id, observed, error, now):
+    """Report `observed` for `fact` to lumen_state.report_observation() and
+    return the outcome: confirmed | superseded | unknown. This function never
+    compares old to new itself (MINERVA_STALENESS_REVIEW.md section 3.2)."""
+    if error is not None or observed is None or not str(observed).strip():
+        _log_unknown(conn, fact, probe_id, observed, error, now)
+        return "unknown"
+
+    ls = _lumen_state()
+    try:
+        res = ls.report_observation(
+            fact["subject"], fact["predicate"], str(observed), probe_id,
+            source_ref=f"verify:{probe_id}", conn=conn)
+    except ls.StateGateError as e:  # gate refused: nothing was written
+        _log_unknown(conn, fact, probe_id, observed,
+                     f"refused by state gate: {type(e).__name__}: {e}", now)
+        return "unknown"
+
+    if res.get("conflict"):  # frank_stated disagrees: ingest logged the row, a human decides
+        file_conflict(fact["subject"], fact["predicate"], res.get("stored"),
+                      observed, probe_id)
+        return "unknown"
+
+    outcome = res.get("outcome")
+    if outcome == "superseded":
+        # ingest() does not carry the probe id onto the new row, and lumen_state's
+        # staleness view treats a row with no verify_recipe as unverifiable.
         conn.execute(
-            "UPDATE state_facts SET last_confirmed_at=?, contradicted_at=NULL "
-            "WHERE id=?",
-            (ts, fact["id"]),
-        )
-    elif outcome == "superseded":
-        conn.execute(
-            "UPDATE state_facts SET valid_to=? WHERE id=?", (ts, fact["id"])
-        )
-        conn.execute(
-            "INSERT INTO state_facts (subject, predicate, value, valid_from, "
-            "ingested_at, source_ref, source_kind, verify_recipe, fact_class) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (fact["subject"], fact["predicate"], observed, ts, ts,
-             f"verify:{probe_id}", "observed", probe_id, fact["fact_class"]),
-        )
-    return outcome
+            "UPDATE state_facts SET verify_recipe=? WHERE subject=? AND predicate=? "
+            "AND valid_to IS NULL AND verify_recipe IS NULL",
+            (probe_id, res["subject"], res["predicate"]))
+        conn.commit()
+    if outcome in ("confirmed", "superseded"):
+        return outcome
+
+    # no open fact, or ingest filed it as a historical row: the current value did not change
+    _log_unknown(conn, fact, probe_id, observed,
+                 "state store did not apply it as current "
+                 f"(action={res.get('action', outcome)})", now)
+    return "unknown"
 
 
 # ------------------------------------------------------------------- sweep

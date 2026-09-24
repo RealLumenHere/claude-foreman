@@ -31,8 +31,12 @@ oldest status-class facts 67/67/61/61/58 days unverified), §3.3 (registry desig
 
 ## Reconciliation contract (§3.2, §3.4)
 
-wq#1608's reconfirm-on-match reconciler had not landed when this ticket was built, so the
-contract is implemented directly in `reconcile()`:
+The contract is owned by `lumen_state.report_observation()` (wq#1608), not by this script
+(wq#2053). `reconcile()` only reports what a probe saw and never compares old to new, so every
+write goes through the real `ingest()` and keeps its invariants: lifecycle-closed gate,
+canonical predicate resolution, out-of-order guard and the `memory_audit` trail. A write the
+gate refuses (for example an operational fact of a decommissioned node) is logged as `unknown`
+with the refusal in `detail`. Outcomes:
 
 - **match** -> `confirmed`: bump `last_confirmed_at`, clear `contradicted_at`.
 - **mismatch, `source_kind != frank_stated`** -> `superseded`: close the old fact, open a
@@ -43,8 +47,10 @@ contract is implemented directly in `reconcile()`:
   instinct, encoded in the schema instead of left to prose.
 - **probe error or absent observation** -> `unknown`, no fact mutation (fail-open per
   probe — one broken probe never supersedes anything).
+- A superseding row gets `verify_recipe` set to the probe id afterwards, because `ingest()`
+  does not carry it and lumen_state reads a row without one as unverifiable.
 
-Every path writes an append-only `fact_verifications` row, so "checked and matched" and
+Every path ends in an append-only `fact_verifications` row (written by `ingest()` for confirmed, superseded and frank_stated conflicts, by `reconcile()` for unknown), so "checked and matched" and
 "never checked" are now distinguishable (§2.3).
 
 ## Running it
