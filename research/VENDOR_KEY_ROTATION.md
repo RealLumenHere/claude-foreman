@@ -167,7 +167,7 @@ GH_TOKEN/PAT the fleet currently hand-rotates.
 
 ## Storage doctrine (matches existing fleet convention)
 
-Per `foreman/research/INFISICAL_EVAL.md:14-19` (citing
+Per `research/INFISICAL_EVAL.md:14-19` (citing
 `agents/work-queue/reports/vw_migration_306.md:6-7`): *".env files = RUNTIME
 source. VW = RECOVERY source of truth. Sync: human rotates in VW -> updates
 .env. Never the reverse."* This ticket extends that doctrine one level up:
@@ -210,7 +210,7 @@ for vendor in fleet_vendors:
 ```
 
 This mirrors the fleet's existing "cheap targeted detector" doctrine
-(`foreman/research/INFISICAL_EVAL.md:30-35`, citing
+(`research/INFISICAL_EVAL.md:30-35`, citing
 `kb/tooling-findings-review.md:1-8`) rather than introducing a new secrets
 platform — no Infisical, no second vault; this is a script + the root
 credentials above, wired into cron/systemd the same way
