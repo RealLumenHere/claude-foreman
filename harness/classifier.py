@@ -139,6 +139,9 @@ class RunState:
         self.turns = 0
         self.turns_exceeded = False
         self.saw_auth_failure = False
+        # wq#2525: CLI-too-old-for-this-model launch fault (see observe()'s api_error
+        # branch) — distinct from saw_model_not_found (bad --model id/alias).
+        self.saw_version_too_old = False
         self.saw_model_not_found = False
         # wq#1799: last non-empty assistant text block seen, so classify() can scrub
         # an API-error retry banner out of the SUCCESS path (§C1) — see
@@ -211,6 +214,17 @@ class RunState:
 
         if ftype == "api_error" or frame.get("api_error"):
             err = frame.get("error") or frame.get("api_error") or {}
+            # wq#2525: CLI 2.1.276+ emits api_error as a bare STRING (e.g.
+            # {"api_error": "claude_code_version_too_old", "api_error_code":
+            # "claude_code_version_too_old"}), not the dict shape every check below
+            # assumes — err.get(...) on a str raised AttributeError mid-stream, killing
+            # fworker in ~1s with no transcript before the terminal result frame (which
+            # would have carried the human-readable required-version text) was ever
+            # observed. Normalize to the dict shape so every check below still works,
+            # and fold in the sibling api_error_code field the CLI puts alongside it.
+            if not isinstance(err, dict):
+                err = {"type": err, "message": err}
+            api_error_code = frame.get("api_error_code")
             if err.get("rate_limits") is not None:
                 self.saw_limit = True
                 rl = err.get("rate_limits") or {}
@@ -223,6 +237,12 @@ class RunState:
             # from.
             if err.get("category") == "model_not_found" or err.get("type") == "not_found_error":
                 self.saw_model_not_found = True
+            # wq#2525: the CLI refusing to run a model because the installed CLI is
+            # below that model's minimum version — a launch-time fault, not a real
+            # model turn. Distinct from MODEL_NOT_FOUND (that's a bad --model
+            # id/alias; this is a version skew the fleet needs to upgrade for).
+            if err.get("type") == "claude_code_version_too_old" or api_error_code == "claude_code_version_too_old":
+                self.saw_version_too_old = True
 
         # api_retry (and any other frame) can carry error-category "rate_limit" at the
         # top level, or a bare 429, per RELIABILITY_SPEC.md §B.
@@ -302,6 +322,7 @@ class RunState:
             "turns": self.turns,
             "saw_auth_failure": self.saw_auth_failure,
             "saw_model_not_found": self.saw_model_not_found,
+            "saw_version_too_old": self.saw_version_too_old,
             "last_assistant_text": self.last_assistant_text,
             "usage": self.usage, "total_cost_usd": self.total_cost_usd,
             "duration_ms": self.duration_ms, "num_turns": self.num_turns,
@@ -402,6 +423,16 @@ def classify(state: RunState, exit_code=None, elapsed_s=None, diff_is_empty=None
     # harness-configuration shape never gets bucketed as an ordinary CRASH.
     if state.saw_model_not_found and state.turns <= 1:
         return MODEL_NOT_FOUND
+
+    # wq#2525: CLI too old for the dispatched model (api_error
+    # claude_code_version_too_old) — a launch-class fault, same bucket as
+    # turn_setup_failed above (LAUNCH_FAILURE is already uncharged, §"AUTO-7" in
+    # fworker.py's _INFRA_CRASH_CLASSIFICATIONS), not the generic CRASH catch-all
+    # below. state.result_text (captured by the ordinary result-frame branch, now
+    # that observe() no longer crashes on the string-shaped frame) carries the
+    # CLI's human-readable required-version text for whoever files the alert.
+    if state.saw_version_too_old:
+        return LAUNCH_FAILURE
 
     if subtype is not None:
         # A result frame arrived but matched none of the shapes above — still a coarse

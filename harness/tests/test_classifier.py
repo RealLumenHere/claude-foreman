@@ -563,3 +563,60 @@ def test_bare_404_status_is_model_not_found():
         {"type": "result", "subtype": "some_unforeseen_subtype"},
     ]
     assert run(frames, exit_code=1) == MODEL_NOT_FOUND
+
+
+# wq#2525: captured verbatim from CLI 2.1.276 (wq#2514/wq#2504, 2026-09-24 23:34Z) —
+# api_error rides as a bare STRING, not the dict shape every other api_error test above
+# assumes. observe()'s old `err.get(...)` raised AttributeError on this exact frame,
+# crashing fworker in ~1s with no transcript before the terminal result frame (below)
+# was ever observed.
+CAPTURED_VERSION_TOO_OLD_API_ERROR = {
+    "type": "api_error",
+    "api_error": "claude_code_version_too_old",
+    "api_error_code": "claude_code_version_too_old",
+}
+CAPTURED_VERSION_TOO_OLD_RESULT = {
+    "type": "result", "subtype": "error_during_execution", "is_error": True,
+    "result": "This model requires Claude Code version 2.1.280 or later "
+              "(current: 2.1.276). Please upgrade.",
+}
+
+
+def test_string_shaped_api_error_does_not_crash_observe():
+    # The bug: observe() must not raise on a string-shaped api_error frame.
+    st = RunState()
+    st.observe({"type": "system", "subtype": "init"})
+    st.observe(CAPTURED_VERSION_TOO_OLD_API_ERROR)
+    st.observe(CAPTURED_VERSION_TOO_OLD_RESULT)
+    assert st.saw_version_too_old is True
+
+
+def test_claude_code_version_too_old_is_launch_failure_not_crash():
+    frames = [
+        {"type": "system", "subtype": "init"},
+        CAPTURED_VERSION_TOO_OLD_API_ERROR,
+        CAPTURED_VERSION_TOO_OLD_RESULT,
+    ]
+    verdict = run(frames, exit_code=1)
+    assert verdict == LAUNCH_FAILURE
+    assert verdict != CRASH
+
+
+def test_version_too_old_result_text_survives_for_the_alert():
+    # The required-version text must still reach state.result_text (the alert's
+    # source) now that observe() no longer dies before the result frame arrives.
+    st = RunState()
+    for f in [{"type": "system", "subtype": "init"}, CAPTURED_VERSION_TOO_OLD_API_ERROR,
+              CAPTURED_VERSION_TOO_OLD_RESULT]:
+        st.observe(f)
+    assert "2.1.280" in st.result_text
+
+
+def test_string_shaped_api_error_other_code_does_not_set_version_too_old():
+    # A string-shaped api_error for a different (unmodeled) reason must not be
+    # misread as claude_code_version_too_old, and must still not crash observe().
+    st = RunState()
+    st.observe({"type": "system", "subtype": "init"})
+    st.observe({"type": "api_error", "api_error": "some_other_reason",
+                "api_error_code": "some_other_reason"})
+    assert st.saw_version_too_old is False
