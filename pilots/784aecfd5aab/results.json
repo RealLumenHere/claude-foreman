@@ -1,0 +1,701 @@
+{
+ "summary": {
+  "files": 64,
+  "sha256": "6013983ca17d75f3aa3d9ef652cd0ce163f5b9a39e3b8129e4025a97a94bca42",
+  "n": 30,
+  "median_A": 7018.5,
+  "median_B": 672.5,
+  "median_C": 112.5,
+  "ratio_C_over_B": 0.16728624535315986,
+  "ratio_C_over_A": 0.016029066039752085,
+  "mean_recall": 0.8113583638583639,
+  "mean_precision": 0.98,
+  "def_ok": 25,
+  "median_lsp_seconds_per_question": 0.024906396865844727,
+  "total_seconds": 12.098584175109863
+ },
+ "rows": [
+  {
+   "got_sites": [
+    [
+     "minerva_factory.py",
+     766
+    ],
+    [
+     "minerva_factory.py",
+     838
+    ]
+   ],
+   "name": "verify_deployment",
+   "A": 14743,
+   "B": 370,
+   "C": 159,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_salience.py",
+     234
+    ],
+    [
+     "lumen_salience.py",
+     235
+    ]
+   ],
+   "name": "_betacf",
+   "A": 7056,
+   "B": 372,
+   "C": 127,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_scout_expanded.py",
+     104
+    ],
+    [
+     "lumen_scout_expanded.py",
+     135
+    ],
+    [
+     "lumen_scout_expanded.py",
+     229
+    ]
+   ],
+   "name": "insert_intel",
+   "A": 3147,
+   "B": 660,
+   "C": 170,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 3,
+   "got": 3
+  },
+  {
+   "got_sites": [
+    [
+     "minerva_promote.py",
+     494
+    ]
+   ],
+   "name": "status",
+   "A": 28107,
+   "B": 20453,
+   "C": 21,
+   "recall": 0.08333333333333333,
+   "precision": 1.0,
+   "def_ok": false,
+   "truth": 12,
+   "got": 1
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_dream_digest.py",
+     113
+    ],
+    [
+     "lumen_dream_digest.py",
+     126
+    ],
+    [
+     "lumen_dream_digest.py",
+     318
+    ]
+   ],
+   "name": "_load",
+   "A": 6049,
+   "B": 505,
+   "C": 76,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 3,
+   "got": 3
+  },
+  {
+   "got_sites": [
+    [
+     "minerva_factory.py",
+     800
+    ],
+    [
+     "minerva_factory.py",
+     1089
+    ],
+    [
+     "minerva_factory.py",
+     1099
+    ]
+   ],
+   "name": "verify_proposal",
+   "A": 14743,
+   "B": 736,
+   "C": 139,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 3,
+   "got": 3
+  },
+  {
+   "got_sites": [
+    [
+     "minerva_verify_eval_v2.py",
+     82
+    ]
+   ],
+   "name": "drift",
+   "A": 2819,
+   "B": 4990,
+   "C": 56,
+   "recall": 0.5,
+   "precision": 1.0,
+   "def_ok": false,
+   "truth": 2,
+   "got": 1
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_dream.py",
+     383
+    ],
+    [
+     "lumen_dream_digest.py",
+     490
+    ]
+   ],
+   "name": "digest",
+   "A": 19360,
+   "B": 11641,
+   "C": 213,
+   "recall": 0.13333333333333333,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 15,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_coverage.py",
+     111
+    ],
+    [
+     "lumen_state.py",
+     411
+    ]
+   ],
+   "name": "staleness",
+   "A": 15971,
+   "B": 2567,
+   "C": 268,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_dream.py",
+     283
+    ],
+    [
+     "lumen_memoryd_detectors.py",
+     158
+    ]
+   ],
+   "name": "episodic_dupes_v2",
+   "A": 9691,
+   "B": 689,
+   "C": 93,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "minerva_factory.py",
+     402
+    ],
+    [
+     "minerva_factory.py",
+     412
+    ]
+   ],
+   "name": "_revert_litellm",
+   "A": 14743,
+   "B": 346,
+   "C": 105,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "memory_embed_guard.py",
+     206
+    ],
+    [
+     "memory_embed_guard.py",
+     209
+    ]
+   ],
+   "name": "clear_breadcrumb",
+   "A": 2123,
+   "B": 201,
+   "C": 46,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_episode.py",
+     132
+    ],
+    [
+     "lumen_episode.py",
+     133
+    ],
+    [
+     "lumen_federate.py",
+     712
+    ],
+    [
+     "lumen_recall2.py",
+     594
+    ],
+    [
+     "memory_embed_guard.py",
+     108
+    ]
+   ],
+   "name": "search_v3",
+   "A": 23494,
+   "B": 3411,
+   "C": 213,
+   "recall": 1.0,
+   "precision": 0.8,
+   "def_ok": true,
+   "truth": 4,
+   "got": 5
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_recall2.py",
+     562
+    ],
+    [
+     "lumen_salience.py",
+     506
+    ]
+   ],
+   "name": "archived_ids",
+   "A": 15897,
+   "B": 341,
+   "C": 112,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "minerva_factpack.py",
+     295
+    ],
+    [
+     "minerva_factpack.py",
+     402
+    ]
+   ],
+   "name": "tag_provenance",
+   "A": 4793,
+   "B": 553,
+   "C": 148,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "minerva_promote.py",
+     369
+    ],
+    [
+     "minerva_promote.py",
+     457
+    ],
+    [
+     "minerva_promote.py",
+     489
+    ]
+   ],
+   "name": "_plan",
+   "A": 6295,
+   "B": 666,
+   "C": 113,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 3,
+   "got": 3
+  },
+  {
+   "got_sites": [
+    [
+     "minerva_factpack.py",
+     354
+    ],
+    [
+     "minerva_factpack.py",
+     378
+    ]
+   ],
+   "name": "judge_digest",
+   "A": 4793,
+   "B": 710,
+   "C": 175,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "minerva_verify_eval_v2.py",
+     57
+    ]
+   ],
+   "name": "metrics",
+   "A": 6981,
+   "B": 2817,
+   "C": 57,
+   "recall": 0.25,
+   "precision": 1.0,
+   "def_ok": false,
+   "truth": 4,
+   "got": 1
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_state.py",
+     610
+    ]
+   ],
+   "name": "mark_state_projections_dirty",
+   "A": 19196,
+   "B": 369,
+   "C": 61,
+   "recall": 0.5,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 1
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_memoryd_detectors.py",
+     77
+    ],
+    [
+     "lumen_memoryd_detectors.py",
+     175
+    ]
+   ],
+   "name": "_lane",
+   "A": 16540,
+   "B": 621,
+   "C": 82,
+   "recall": 0.6666666666666666,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 3,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_federate.py",
+     735
+    ],
+    [
+     "lumen_prose_lifecycle.py",
+     380
+    ]
+   ],
+   "name": "index",
+   "A": 51764,
+   "B": 5572,
+   "C": 123,
+   "recall": 0.15384615384615385,
+   "precision": 1.0,
+   "def_ok": false,
+   "truth": 13,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_migrate.py",
+     95
+    ],
+    [
+     "lumen_migrate.py",
+     117
+    ],
+    [
+     "lumen_migrate.py",
+     169
+    ]
+   ],
+   "name": "_discover",
+   "A": 1659,
+   "B": 471,
+   "C": 86,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 3,
+   "got": 3
+  },
+  {
+   "got_sites": [
+    [
+     "state_value_split.py",
+     224
+    ],
+    [
+     "state_value_split.py",
+     280
+    ]
+   ],
+   "name": "_minerva",
+   "A": 3348,
+   "B": 381,
+   "C": 117,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "minerva_promote.py",
+     374
+    ],
+    [
+     "minerva_promote.py",
+     457
+    ],
+    [
+     "minerva_promote.py",
+     489
+    ]
+   ],
+   "name": "_intel",
+   "A": 6295,
+   "B": 701,
+   "C": 122,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 3,
+   "got": 3
+  },
+  {
+   "got_sites": [
+    [
+     "state_value_split.py",
+     115
+    ],
+    [
+     "state_value_split.py",
+     116
+    ]
+   ],
+   "name": "_normalise",
+   "A": 3348,
+   "B": 270,
+   "C": 107,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_state.py",
+     495
+    ],
+    [
+     "lumen_state.py",
+     548
+    ],
+    [
+     "lumen_state.py",
+     637
+    ],
+    [
+     "lumen_state.py",
+     909
+    ]
+   ],
+   "name": "is_operational",
+   "A": 13643,
+   "B": 679,
+   "C": 112,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 4,
+   "got": 4
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_episode.py",
+     145
+    ],
+    [
+     "lumen_recall2.py",
+     491
+    ],
+    [
+     "minerva_memory.py",
+     419
+    ]
+   ],
+   "name": "search",
+   "A": 142780,
+   "B": 9348,
+   "C": 216,
+   "recall": 0.05357142857142857,
+   "precision": 1.0,
+   "def_ok": false,
+   "truth": 56,
+   "got": 3
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_dream_digest.py",
+     264
+    ],
+    [
+     "lumen_dream_digest.py",
+     304
+    ],
+    [
+     "lumen_dream_digest.py",
+     373
+    ],
+    [
+     "lumen_dream_digest.py",
+     454
+    ]
+   ],
+   "name": "headline",
+   "A": 6049,
+   "B": 1361,
+   "C": 109,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 4,
+   "got": 4
+  },
+  {
+   "got_sites": [
+    [
+     "predicate_audit.py",
+     160
+    ],
+    [
+     "predicate_audit.py",
+     171
+    ]
+   ],
+   "name": "parse_answer",
+   "A": 2796,
+   "B": 359,
+   "C": 52,
+   "recall": 1.0,
+   "precision": 1.0,
+   "def_ok": true,
+   "truth": 2,
+   "got": 2
+  },
+  {
+   "got_sites": [
+    [
+     "lumen_scout_expanded.py",
+     33
+    ],
+    [
+     "lumen_scout_expanded.py",
+     35
+    ],
+    [
+     "lumen_scout_expanded.py",
+     100
+    ],
+    [
+     "lumen_scout_expanded.py",
+     131
+    ],
+    [
+     "lumen_scout_expanded.py",
+     225
+    ]
+   ],
+   "name": "is_off_domain_junk",
+   "A": 4647,
+   "B": 752,
+   "C": 158,
+   "recall": 1.0,
+   "precision": 0.6,
+   "def_ok": true,
+   "truth": 3,
+   "got": 5
+  }
+ ]
+}
