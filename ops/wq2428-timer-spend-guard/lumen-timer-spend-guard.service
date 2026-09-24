@@ -1,0 +1,8 @@
+[Unit]
+Description=wq#2428 audit every systemd timer for an ungated path into the Anthropic quota
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/wq2428-timer-spend-guard/timer_spend_audit.py --alert
+User=lumen

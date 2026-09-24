@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the timer spend guard daily (a new timer is the thing this catches, and timers are added by hand, not by the minute)
+
+[Timer]
+OnBootSec=15min
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
