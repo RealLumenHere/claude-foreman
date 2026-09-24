@@ -736,6 +736,86 @@ def test_primary_tree_allow_cases():
     assert not failures, f"expected exit 0 (allow), got: {failures}"
 
 
+# ---- wq#2504: git stash is a primary-tree reset (and with -u/-a a clean) ----
+# wq#2477 (ISSUE-LOG #663): `git stash -u` in the live foreman tree swept 73
+# untracked files into stash@{0} to get past lumen-pr land's dirty-tree refusal.
+
+STASH_MUST_BLOCK = [
+    ({"command": "git stash"}, PRIMARY),
+    ({"command": "git stash -u"}, PRIMARY),  # the wq#2477 shape
+    ({"command": "git stash --include-untracked"}, PRIMARY),
+    ({"command": "git stash -a"}, f"{PRIMARY}/harness"),
+    ({"command": "git stash --all"}, PRIMARY),
+    ({"command": "git stash -k"}, PRIMARY),
+    ({"command": "git stash push -u -m wq2081-land"}, PRIMARY),
+    ({"command": "git stash save wip"}, PRIMARY),
+    ({"command": "git stash -- harness/guard.sh"}, PRIMARY),
+    ({"command": "git stash apply"}, PRIMARY),
+    ({"command": "git stash pop"}, PRIMARY),
+    ({"command": "git stash drop stash@{0}"}, PRIMARY),  # the wq#2477 backup
+    ({"command": "git stash clear"}, PRIMARY),
+    ({"command": "git stash branch rescue"}, PRIMARY),
+    ({"command": "git  \tstash"}, PRIMARY),
+    ({"command": "git stash;true"}, PRIMARY),
+    ({"command": "git stash>/dev/null"}, PRIMARY),
+    ({"command": "(git stash)"}, PRIMARY),
+    ({"command": 'bash -c "git stash -u"'}, PRIMARY),
+    ({"command": "echo `git stash`"}, PRIMARY),
+    ({"command": f"git -C {PRIMARY} stash -u"}, WORKTREE),
+    ({"command": f"cd {PRIMARY} && git stash -u"}, WORKTREE),
+    ({"command": f"git --git-dir={PRIMARY}/.git stash"}, WORKTREE),
+    ({"command": "git -C /home/lumen/bin stash push"}, WORKTREE),
+    # wq#1316 chained-segment leak shape: an allowed verb (or a read-only stash)
+    # earlier in the line must not exempt a later stash segment.
+    ({"command": "git status && git stash -u"}, PRIMARY),
+    ({"command": "git stash list && git stash -u"}, PRIMARY),
+    ({"command": "git stash list; git stash pop"}, PRIMARY),
+    ({"command": "git merge --ff-only origin/main && git stash -u"}, PRIMARY),
+    ({"command": "git checkout -- f.txt && git stash"}, PRIMARY),
+    ({"command": "git stash show `git stash`"}, PRIMARY),
+    ({"command": f"git -C {PRIMARY} stash list && git -C {PRIMARY} stash -u"}, WORKTREE),
+]
+
+STASH_MUST_ALLOW = [
+    ({"command": "git stash list"}, PRIMARY),
+    ({"command": "git stash show -p stash@{0}"}, PRIMARY),
+    ({"command": "git stash show --include-untracked stash@{0}"}, PRIMARY),
+    ({"command": "git stash create"}, PRIMARY),
+    ({"command": "git show stash@{0}^3 --stat"}, PRIMARY),
+    ({"command": "git log -g --oneline refs/stash"}, PRIMARY),
+    ({"command": f"git -C {PRIMARY} stash list"}, WORKTREE),
+    ({"command": "git stash list && git status --short"}, PRIMARY),
+    # a worker's own worktree may stash (the env's tagged push/apply recipe)
+    ({"command": "git stash push -u -m wq2504-tag"}, WORKTREE),
+    ({"command": "git stash apply abc1234"}, WORKTREE),
+]
+
+
+def test_primary_tree_stash_blocked():
+    failures = []
+    for inp, cwd in STASH_MUST_BLOCK:
+        rc, stderr = run_guard("Bash", inp, cwd=cwd)
+        if rc != 2 or "wq#2504" not in stderr or "syntax error" in stderr:
+            failures.append((inp, cwd, rc, stderr))
+    assert not failures, f"expected clean wq#2504 block, got: {failures}"
+
+
+def test_primary_tree_stash_allow_cases():
+    failures = []
+    for inp, cwd in STASH_MUST_ALLOW:
+        rc, stderr = run_guard("Bash", inp, cwd=cwd)
+        if rc != 0:
+            failures.append((inp, cwd, rc, stderr))
+    assert not failures, f"expected exit 0 (allow), got: {failures}"
+
+
+def test_primary_tree_stash_reason_names_narrow_remedy():
+    rc, stderr = run_guard("Bash", {"command": "git stash -u"}, cwd=PRIMARY)
+    assert rc == 2
+    assert "ONLY the specific untracked paths the merge adds" in stderr
+    assert "never the whole tree" in stderr
+
+
 def test_primary_tree_env_override_respected():
     # A tree listed only via FOREMAN_PRIMARY_TREES is guarded too (fworker computes
     # the list from router.LANE_REPO at dispatch time).

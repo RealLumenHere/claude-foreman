@@ -8,6 +8,7 @@ covered in test_guard.py.
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -19,6 +20,8 @@ import agents_spec
 @pytest.fixture(autouse=True)
 def _isolated_dirty_state(tmp_path, monkeypatch):
     monkeypatch.setattr(ptg, "DIRTY_STATE_PATH", str(tmp_path / "dirty.json"))
+    monkeypatch.setattr(ptg, "STASH_STATE_PATH", str(tmp_path / "stash.json"))
+    monkeypatch.setattr(ptg, "AQ_BIN", str(tmp_path / "no-aq"))
 
 
 def make_primary(tmp_path, name="primary"):
@@ -269,3 +272,73 @@ def test_cli_check_pages_stale_dirty_and_exits_1(tmp_path, monkeypatch, capsys):
     assert alerts == ["PRIMARY tree dirty >24h (wq#1540)"]
     assert "STALE" in capsys.readouterr().out
     assert ptg.main(["status", "--repo", str(repo)]) == 1
+
+
+# ---- wq#2504: stale untracked-file stashes raise one aq row, never dropped ----
+
+def stash_untracked(repo, git, name="swept.md"):
+    (repo / name).write_text("untracked\n")
+    git("stash", "push", "-u", "-m", f"sweep {name}")
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "stash@{0}"],
+                          capture_output=True, text=True).stdout.strip()
+
+
+def test_stale_untracked_stash_alerts_once_and_is_kept(tmp_path, monkeypatch):
+    repo, git = make_primary(tmp_path)
+    sha = stash_untracked(repo, git)
+    rows = []
+    monkeypatch.setattr(ptg, "aq_alert", lambda k, t, b: rows.append((k, t, b)))
+    state = {}
+    now = time.time() + 25 * 3600
+
+    stale = ptg.check_stale_stashes(repos=[str(repo)], state=state, now=now)
+    assert len(stale) == 1 and stale[0]["alerted"] and stale[0]["files"] == 1
+    assert len(rows) == 1 and rows[0][0] == f"stale-stash-{sha[:12]}"
+    assert "wq#2504" in rows[0][1] and "nothing was dropped" in rows[0][2]
+
+    # next timer run: still reported, no second row
+    stale = ptg.check_stale_stashes(repos=[str(repo)], state=state, now=now + 3600)
+    assert len(stale) == 1 and not stale[0]["alerted"] and len(rows) == 1
+
+    # report only — the stash is still there
+    listed = subprocess.run(["git", "-C", str(repo), "stash", "list", "--format=%H"],
+                            capture_output=True, text=True).stdout.split()
+    assert listed == [sha]
+
+
+def test_fresh_or_tracked_only_stash_does_not_alert(tmp_path, monkeypatch):
+    repo, git = make_primary(tmp_path)
+    monkeypatch.setattr(ptg, "aq_alert", lambda k, t, b: pytest.fail("alerted"))
+    (repo / "f.txt").write_text("tracked edit\n")
+    git("stash", "push", "-m", "tracked only")
+    assert ptg.check_stale_stashes(repos=[str(repo)], state={},
+                                   now=time.time() + 5 * 86400) == []
+    stash_untracked(repo, git)
+    assert ptg.check_stale_stashes(repos=[str(repo)], state={}) == []  # < 24h
+
+
+def test_dropped_stash_leaves_state(tmp_path, monkeypatch):
+    repo, git = make_primary(tmp_path)
+    sha = stash_untracked(repo, git)
+    monkeypatch.setattr(ptg, "aq_alert", lambda k, t, b: True)
+    later = time.time() + 2 * 86400
+    state = {}
+    ptg.check_stale_stashes(repos=[str(repo)], state=state, now=later)
+    assert sha in state
+    git("stash", "drop", "-q")
+    ptg.check_stale_stashes(repos=[str(repo)], state=state, now=later)
+    assert state == {}
+
+
+def test_cli_stale_stash_reports_without_failing_run(tmp_path, monkeypatch, capsys):
+    # A stale stash may be a deliberate backup (wq#2477), so it must not fail the timer.
+    repo, git = make_primary(tmp_path)
+    stash_untracked(repo, git)
+    monkeypatch.setattr(ptg, "STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setattr(ptg, "STASH_ALERT_AFTER_S", 0)
+    rows = []
+    monkeypatch.setattr(ptg, "aq_alert", lambda k, t, b: rows.append(k))
+    assert ptg.main(["check", "--repo", str(repo)]) == 0
+    assert ptg.main(["check", "--repo", str(repo)]) == 0
+    assert len(rows) == 1
+    assert "STASH" in capsys.readouterr().out

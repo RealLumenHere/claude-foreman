@@ -20,6 +20,9 @@ than 24h pages, on its default branch or not. Uncommitted edits in a live tree r
 as production without review and vanish with the next stray reset; the check lands
 in `check_dirty_age`.
 
+wq#2504 adds a report-only fifth: a stash older than 24h that holds untracked
+files raises one aq row (`check_stale_stashes`). It never drops a stash.
+
 Exit codes (CLI): 0 = all primaries on default branch (or restored this run) and
 none dirty past 24h, 1 = at least one still drifted or stale-dirty, 2 = internal
 error.
@@ -37,6 +40,11 @@ STATE_PATH = os.environ.get("PRIMARY_TREE_GUARD_STATE",
 DIRTY_STATE_PATH = os.environ.get("PRIMARY_TREE_DIRTY_STATE",
                                   "/tmp/.primary-tree-dirty.state")
 DIRTY_PAGE_AFTER_S = 24 * 3600
+STASH_STATE_PATH = os.environ.get("PRIMARY_TREE_STASH_STATE",
+                                  "/tmp/.primary-tree-stash.state")
+STASH_ALERT_AFTER_S = 24 * 3600
+AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "/home/lumen/bin/aq")
+AQ_SOURCE = "primary-tree-guard"
 
 # Static mirror of router.LANE_REPO's values + /home/lumen/bin (repo_sweep's
 # EXTRA_REPOS). The import below is authoritative; this list exists so a broken
@@ -239,6 +247,80 @@ def check_dirty_age(repos=None, now=None, max_age=DIRTY_PAGE_AFTER_S, state=None
     return stale
 
 
+def aq_alert(key, title, body):
+    """Fail-open aq row; aq dedups on (source, key)."""
+    try:
+        p = subprocess.run([AQ_BIN, "add", AQ_SOURCE, key, title, body],
+                           capture_output=True, text=True, timeout=15)
+        return p.returncode == 0
+    except Exception:
+        return False
+
+
+def untracked_stashes(repo):
+    """Stash entries that carry untracked files (a third parent, from -u/-a):
+    [{sha, ref, ts, files}]. The stash ref lives in the common git dir, so a
+    primary also sees stashes made from its worktrees."""
+    out = _git(repo, "stash", "list", "--format=%H %ct %gd").stdout
+    found = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        sha, ts, ref = parts
+        u = _git(repo, "ls-tree", "-r", "--name-only", f"{sha}^3")
+        if u.returncode != 0 or not u.stdout.strip():
+            continue
+        found.append({"sha": sha, "ref": ref, "ts": int(ts),
+                      "files": len(u.stdout.splitlines())})
+    return found
+
+
+def check_stale_stashes(repos=None, now=None, max_age=None, state=None, do_alert=True):
+    """wq#2504: report every primary-tree stash older than max_age that holds
+    untracked files — the wq#2477 shape, where a `git stash -u` in the live tree
+    swept 73 untracked files away and was never popped. Report only: this never
+    drops or applies a stash (foreman's stash@{0} is wq#2477's restore backup).
+
+    `state` ({sha: alerted_ts}) is mutated in place so each stash raises one aq
+    row for its lifetime; entries for stashes no longer present are dropped.
+    Returns [{repo, sha, ref, files, age_s, alerted}]."""
+    now = time.time() if now is None else now
+    max_age = STASH_ALERT_AFTER_S if max_age is None else max_age
+    state = {} if state is None else state
+    stale, seen = [], set()
+    for repo in (repos if repos is not None else primary_trees()):
+        if check_tree(repo)["error"]:
+            continue
+        try:
+            stashes = untracked_stashes(repo)
+        except Exception:
+            continue
+        for s in stashes:
+            seen.add(s["sha"])
+            age = now - s["ts"]
+            if age < max_age:
+                continue
+            due = s["sha"] not in state
+            if due:
+                state[s["sha"]] = now
+                if do_alert:
+                    aq_alert(f"stale-stash-{s['sha'][:12]}",
+                             "PRIMARY tree stash with untracked files >24h (wq#2504)",
+                             f"{repo} {s['ref']} ({s['sha'][:12]}) is {age / 3600:.0f}h "
+                             f"old and holds {s['files']} untracked file(s) that are "
+                             f"no longer on disk unless restored. Inspect with "
+                             f"git -C {repo} show --stat {s['sha'][:12]}^3; restore "
+                             f"what is missing (add-only), then drop it deliberately. "
+                             f"Report only — nothing was dropped.")
+            stale.append({"repo": repo, "sha": s["sha"], "ref": s["ref"],
+                          "files": s["files"], "age_s": age, "alerted": due})
+    for sha in list(state):
+        if sha not in seen:
+            state.pop(sha)
+    return stale
+
+
 def _load_state(path=None):
     try:
         with open(path or STATE_PATH) as f:
@@ -282,6 +364,9 @@ def main(argv=None):
             print(f"STALE    {s['repo']}: {s['files']} modified tracked file(s), "
                   f"dirty {s['age_s'] / 3600:.0f}h")
             rc = 1
+        for s in check_stale_stashes(repos=a.repo, do_alert=False):
+            print(f"STASH    {s['repo']}: {s['ref']} holds {s['files']} untracked "
+                  f"file(s), {s['age_s'] / 3600:.0f}h old")
         return rc
 
     # check mode: dedup un-restorable drift alerts across timer runs the same way
@@ -322,6 +407,14 @@ def main(argv=None):
         print(f"STALE    {s['repo']}: {s['files']} modified tracked file(s), "
               f"dirty {s['age_s'] / 3600:.0f}h")
     _save_state(dirty_state, DIRTY_STATE_PATH)
+
+    # A stale stash does not fail the run: it can be a deliberate backup (wq#2477's
+    # stash@{0}), and the fix is a human's drop, so one aq row per stash is the signal.
+    stash_state = _load_state(STASH_STATE_PATH)
+    for s in check_stale_stashes(repos=a.repo, state=stash_state):
+        print(f"STASH    {s['repo']}: {s['ref']} holds {s['files']} untracked "
+              f"file(s), {s['age_s'] / 3600:.0f}h old")
+    _save_state(stash_state, STASH_STATE_PATH)
     return 1 if still_bad else 0
 
 

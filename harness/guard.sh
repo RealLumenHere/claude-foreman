@@ -305,13 +305,33 @@ Bash)
     # quoted paths, redirects) falls through to the deny below, per §3.3 of
     # research/WORKER_EXEC_CAPABILITY_GAP.md.
     PATH_SCOPED_GIT_RE='^[[:space:]]*git([[:space:]]+-C[[:space:]]+/[A-Za-z0-9._/-]+)?[[:space:]]+(checkout[[:space:]]+--|restore([[:space:]]+--staged)?)([[:space:]]+\.?[A-Za-z0-9_][A-Za-z0-9._/-]*)+[[:space:]]*$'
+    # wq#2504 (ISSUE-LOG #663, root cause of wq#2477): `git stash` was missing from
+    # this wall. It is a hard reset underneath, and with -u/-a also a clean of
+    # untracked files — the wq#2081 land step ran `git stash -u` in the live
+    # foreman tree to get past lumen-pr land's dirty-tree refusal, swept 73
+    # untracked files into stash@{0} and never popped it. Every stash form is
+    # denied in a primary (bare, push, save, -u/-a/-k, apply/pop/drop/clear/branch/
+    # store) except the read-only list/show and `create`, which builds a stash
+    # commit without touching the tree or the stash ref. The stash token must be a
+    # whole word, so `git show stash@{0}` (inspecting a backup) stays allowed.
+    GIT_STASH_RE='\bgit\b.*[[:space:]]stash($|[[:space:]<>`"'"'"'])'
+    GIT_STASH_RO_RE='\bgit\b.*[[:space:]]stash[[:space:]]+(list|show|create)($|[[:space:]<>`"'"'"'])'
     GIT_MOVE=0
+    GIT_STASH=0
     while IFS= read -r seg; do
       [ -n "$seg" ] || continue
       if printf '%s' "$seg" | grep -qE "$PATH_SCOPED_GIT_RE" \
           && ! printf '%s' "$seg" | grep -q '\.\.' \
           && ! printf '%s' "$seg" | grep -qE '(^|[[:space:]])(-b|-B|--orphan|--detach)([[:space:]]|$)'; then
         continue
+      fi
+      # One stash token per read-only segment: a second one (e.g. smuggled in
+      # backticks, which the segment split does not cut on) is judged on its own.
+      if printf '%s' "$seg" | grep -qE "$GIT_STASH_RE" \
+          && { ! printf '%s' "$seg" | grep -qE "$GIT_STASH_RO_RE" \
+               || [ "$(printf '%s' "$seg" | grep -oE '[[:space:]`]stash($|[[:space:]<>`"'"'"'])' | grep -c ^)" -gt 1 ]; }; then
+        GIT_STASH=1
+        break
       fi
       if printf '%s' "$seg" | grep -qE '\bgit\b.*\b(checkout|switch|restore|reset|rebase|pull|commit|cherry-pick|revert|am)\b'; then
         GIT_MOVE=1
@@ -331,17 +351,24 @@ Bash)
       fi
       if [ "$GIT_MOVE" = 1 ]; then break; fi
     done <<< "$(printf '%s' "$target" | tr '|;&()' '\n\n\n\n\n')"
-    if [ "$GIT_MOVE" = 1 ]; then
+    if [ "$GIT_MOVE" = 1 ] || [ "$GIT_STASH" = 1 ]; then
+      if [ "$GIT_STASH" = 1 ]; then
+        WALL_WHAT="git stash"
+        WALL_WHY="(wq#2504) — stash is a hard reset underneath and with -u/-a a clean of untracked files; wq#2477 lost 73 untracked files to one. If lumen-pr land or a merge is refused by untracked files, move or remove ONLY the specific untracked paths the merge adds (lumen-pr land prints them: rm -- <primary>/<path>), never the whole tree; read-only git stash list/show stay allowed"
+      else
+        WALL_WHAT="git branch/HEAD-moving or commit-creating verb"
+        WALL_WHY="(wq#900/wq#929) — primaries stay on their default branch and take new content only by deploy ff-merge; use sync-live to resync a primary, or do git work (and land it with lumen-pr) in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)"
+      fi
       HOOK_CWD=$(jfield '.cwd')
       IFS=':' read -ra PT_ARR <<< "$PRIMARY_TREES"
       for ptree in "${PT_ARR[@]}"; do
         [ -n "$ptree" ] || continue
         case "$HOOK_CWD" in
           "$ptree"|"$ptree"/*)
-            block "git branch/HEAD-moving or commit-creating verb inside PRIMARY tree $ptree denied (wq#900/wq#929) — primaries stay on their default branch and take new content only by deploy ff-merge; use sync-live to resync a primary, or do git work (and land it with lumen-pr) in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD" ;;
+            block "$WALL_WHAT inside PRIMARY tree $ptree denied $WALL_WHY" "$RAW_CMD" ;;
         esac
         if printf '%s' "$target" | grep -qE "(cd +|-C +|--git-dir[= ]|--work-tree[= ])[\"']?$ptree(/|['\" ;&|]|\$)"; then
-          block "git branch/HEAD-moving or commit-creating verb targeting PRIMARY tree $ptree denied (wq#900/wq#929) — primaries stay on their default branch and take new content only by deploy ff-merge; use sync-live to resync a primary, or do git work (and land it with lumen-pr) in your own worktree (deploy ff: only 'git merge --ff-only origin/<default>' is allowed here)" "$RAW_CMD"
+          block "$WALL_WHAT targeting PRIMARY tree $ptree denied $WALL_WHY" "$RAW_CMD"
         fi
       done
     fi
