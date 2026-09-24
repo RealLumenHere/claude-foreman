@@ -47,36 +47,34 @@ these units — it is the four below. That is what the guard is for.
 ## Fleet sweep, 2026-09-24 (full read, wq#2456)
 
 ```
-171 timers — cloud=4 unknown=25 pinned=0 clean=142
+172 timers — cloud=0 unknown=27 pinned=0 clean=145
 ```
 
-Two uninstantiated templates are excluded: one never fires, and `systemctl show` aborts
-its whole batch on the first template it is handed.
+Counts drift by a unit or two between runs as timers come and go; the shape is what
+matters. Uninstantiated templates are excluded: they never fire, and `systemctl show`
+aborts its whole batch on the first template it is handed.
 
-| unit | marker | model it selects |
+**No scheduled unit on this fleet reaches Anthropic ungated.** An earlier wq#2456 run
+reported `cloud=4`, and all four were the same false positive — a bare `"claude"` or
+`ANTHROPIC_API_KEY` sitting in a module-level constant collection, which is a string the
+script matches *against*, never a call:
+
+| unit | line | what it actually is |
 | --- | --- | --- |
-| `lumen-intel.service` | `lumen_intel.py:93,107` claude-cli | **none named** |
-| `lumen-signal-engine.service` | `signal_engine.py:47` claude-cli | **none named** |
-| `lumen-worklog.service` | `worklog_gen.py:17` claude-cli | **none named** |
-| `minerva-factory.service` | `minerva_factory.py:284` anthropic-key | n/a (SDK) |
+| `lumen-intel.service` | `lumen_intel.py:93,107` | `HIGH_VALUE` / `HOMELAB_SIGNALS` — repo-scoring keyword sets |
+| `lumen-signal-engine.service` | `signal_engine.py:47` | a topic keyword set |
+| `lumen-worklog.service` | `worklog_gen.py:17` | `EXCLUDE` — terms kept *out* of the ledger |
+| `minerva-factory.service` | `minerva_factory.py:284` | `FORBIDDEN_KEY_ENVS` — the fleet's own deny-list of Anthropic env vars |
 
-"None named" is the finding, not a gap in the scan: the three `claude` callers pass no
-`--model`, so each takes the CLI's account default — which on the Max OAuth sub is
-exactly the "scheduled service defaults to Max" this ticket exists to forbid. The scan
-proves it by absence, so `models_in_script` was added (wq#2456) and checked against a
-script that *does* name one: `/home/lumen/bin/gh-lane-worker` reports `claude-sonnet-5`.
+The last one is the tell: the audit flagged the guard that *enforces* this ticket's house
+rule as a violation of it. Reading `minerva_factory.py:278-284` settles the question the
+old text left open — that unit does not spend Anthropic quota, it is the thing that stops
+others from doing so, and its `EnvironmentFile` needed no inspection after all.
 
-A drop-in alone cannot repoint these three. The CLI takes its model as an argv flag,
-not an env var, so `ANTHROPIC_BASE_URL` would route them at a gateway that does not
-serve the default model id — breaking the unit instead of repointing it. Each needs its
-own argv changed to a local rung (`deepseek-v4-flash` / `qwen36-local`, harness/README.md
-§"Local rung") in the same change that adds the drop-in. Those three scripts live under
-`/home/lumen/{agent,personas}`, outside any worker's worktree and outside this repo.
-
-`minerva-factory` already carries `EnvironmentFile=/home/lumen/.secrets/litellm-service-keys/env/minerva-pipeline.env`
-— the house's key-by-EnvironmentFile convention, and plausibly already gateway-routed.
-The audit never opens an EnvironmentFile (instinct 4), so it cannot see a pin that lives
-in one and reports `cloud` conservatively. Confirm before changing anything there.
+So no repoint is owed. Had the deploy checklist been run as previously written, it would
+have appended `--model deepseek-v4-flash` to four keyword lists, corrupting three scoring
+dictionaries and the anti-Anthropic deny-list, and reported success. The fix is in the
+scanner, not in those scripts (`_const_collection_lines`, `timer_spend_audit.py:81`).
 
 The 25 `unknown` are the floor of this design, not unfinished work: 20 name an
 `EnvironmentFile` the audit will not open (instinct 4 — an env file is a credential
@@ -84,8 +82,15 @@ file), and 5 name a compiled binary (`curl`, `/bin/sleep`, `/usr/bin/install`,
 `/usr/bin/cloudflared`, `systemd-tmpfiles`) that is not a script to scan. Neither set
 shrinks with more privilege, so this sweep is finished, not partial.
 
-Four findings the first run produced were prose, not calls, and the tool now rejects
-all four shapes (see `tests/test_timer_spend_audit.py`):
+Two classes of phantom finding have now been retired, and they rhyme: a marker only
+counts where the script would *execute* it. The second class — a keyword inside a
+module constant — is suppressed for the membership shapes only (`"claude",` in a list,
+a bare `ANTHROPIC_API_KEY` name). A URL, an SDK import or a real argv inside the same
+constant still counts, so `CMDS = ["claude -p ..."]` is a finding and
+`ENDPOINTS = ("https://api.anthropic.com/...",)` is too.
+
+The first class was prose, not calls, and the tool rejects all four shapes
+(see `tests/test_timer_spend_audit.py`):
 
 - `wq:313` / `wq:408` — `` `claude --model opus-5` `` inside a docstring.
 - `retirement-audit:323` — `--owner claude`, an aq field.
@@ -117,24 +122,30 @@ What a worker still genuinely cannot do, all of it root:
    `grant_missing_env` — and its v1 verb set is `run`/`copy`/`restart` with no `sudo`
    verb anyway, so a minted grant would not have helped.
 2. re-arm the five stopped timers — same `systemctl start` wall.
-3. edit the three `claude`-calling scripts to name a local rung — they live under
-   `/home/lumen/{agent,personas}`, in no repo this worktree contains.
+Both walls were re-probed on 2026-09-24 and both still stand: `sudo -n true` is
+guard-hook denied (`denied verb`), and `systemctl start sia-news-pull.timer` returns
+`This command requires approval`. Neither is retryable (wq#1107).
 
-No drop-in was written: for the three CLI callers a drop-in without the matching argv
-change breaks the unit (see above), and for `minerva-factory` a pin may already exist
-inside an env file the audit is not allowed to read. Both would have been guesses.
+A third limit turned out not to exist. The old text listed "edit the three
+`claude`-calling scripts" as root work; there are no such callers, so nothing under
+`/home/lumen/{agent,personas}` needs editing. Reading those four lines is what dissolved
+the task — and `Read` reaches them fine from a worker even though `grep` on the same
+path is refused (ISSUE-LOG #318). The one path that stayed shut is
+`/home/lumen/.secrets/...` (`grep -c` on the env file, denied by wq#616), and the
+`minerva-factory` question it was meant to answer was settled from the script instead.
 
 ## Deploy checklist
 
 1. `bash install.sh` as `lumen` on Lumen with `sudo` available (re-runs the sweep, then
    installs and enables the guard timer). Idempotent.
-2. For each of the four `CLOUD` units: check `minerva-factory`'s env file for an
-   existing `ANTHROPIC_BASE_URL` first; for the other three, change the `claude` argv to
-   `--model deepseek-v4-flash` (or `qwen36-local`) **and** add a drop-in setting
-   `ANTHROPIC_BASE_URL=http://localhost:4000` with `EnvironmentFile=` supplying the key
-   — never inlined. Re-run `timer_spend_audit.py --strict`; each should read `pinned`.
+2. No repoint is owed — the sweep reports `cloud=0`. If a future run does report one,
+   the unit needs `ANTHROPIC_BASE_URL=http://localhost:4000` by drop-in with
+   `EnvironmentFile=` supplying the key (never inlined) and, if it calls the CLI, a
+   local rung in its argv too: the CLI takes `--model` as a flag, not an env var, so a
+   drop-in alone would route it at a gateway that does not serve its default model id.
+   Confirm the finding is a real call before changing a script — read the line.
 3. Re-arm the five stopped timers (command printed by `install.sh`). Verified still
    `enabled` + `inactive` on 2026-09-24.
-4. `python3 -m pytest tests -q` — 37 tests, no systemd needed. One of them `bash -n`s
+4. `python3 -m pytest tests -q` — 46 tests, no systemd needed. One of them `bash -n`s
    `install.sh`, since a worker cannot lint shell under `ops/` any other way
    (ISSUE-LOG #645).

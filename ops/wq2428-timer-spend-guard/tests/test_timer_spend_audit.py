@@ -101,6 +101,44 @@ def test_prose_about_claude_is_not_a_call(line):
     assert tsa.markers_in_script(line) == []
 
 
+@pytest.mark.parametrize("body", [
+    # signal_engine.py:47 and worklog_gen.py:17 — single-line keyword collections.
+    'EXCLUDE=("persona","brain","opus","claude","fable","anthropic","litellm")',
+    'KEYWORDS = ("ai","llm","ollama","mcp","claude","gpt","openai","anthropic")',
+    # minerva_factory.py:284 — the fleet's own deny-list of Anthropic env vars.
+    "FORBIDDEN_KEY_ENVS = ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY')",
+    # lumen_intel.py:88-101 — the same shape spread over several lines.
+    'HIGH_VALUE = {\n    "swe-bench", "claude", "gpt", "llama",\n    "deepseek",\n}',
+])
+def test_a_keyword_inside_a_constant_collection_is_not_a_call(body):
+    """All four CLOUD findings of the 2026-09-24 sweep were this shape (wq#2456)."""
+    assert tsa.markers_in_script(body) == []
+
+
+def test_a_constant_collection_does_not_swallow_the_rest_of_the_file():
+    """Depth tracking has to close the literal, or every later call goes unreported."""
+    body = 'EXCLUDE = ("claude", "gpt")\nsubprocess.run(["claude", "-p", prompt])'
+    assert tsa.markers_in_script(body) == [(2, "claude-cli")]
+
+
+def test_a_bracket_inside_a_quoted_keyword_does_not_open_a_block():
+    body = 'PATTERNS = ("a[",)\nsubprocess.run(["claude", "-p", prompt])'
+    assert tsa.markers_in_script(body) == [(2, "claude-cli")]
+
+
+@pytest.mark.parametrize("body", [
+    'ENDPOINTS = ("https://api.anthropic.com/v1/messages",)',
+    'CMDS = ["claude -p summarise"]',
+])
+def test_live_config_inside_a_constant_still_counts(body):
+    """Only membership shapes are suppressed — a URL or a real argv is still spend."""
+    assert tsa.markers_in_script(body)
+
+
+def test_a_key_lookup_outside_a_collection_is_still_a_finding():
+    assert tsa.markers_in_script('key = os.environ["ANTHROPIC_API_KEY"]')
+
+
 @pytest.mark.parametrize("line", [
     'rc, out, err = _run_under_unit_env(path, ["claude", "auth", "status"])',
     "claude --version",

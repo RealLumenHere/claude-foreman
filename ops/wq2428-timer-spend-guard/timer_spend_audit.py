@@ -55,14 +55,17 @@ EXEC_MARKERS = (
     ("anthropic-api", re.compile(r"api\.anthropic\.com")),
 )
 
+# The third element says whether the shape survives inside a constant data collection
+# (see _const_collection_lines). A bare word in a keyword set is a string the script
+# matches *against*; a URL or an SDK import in the same set is still live config.
 SCRIPT_MARKERS = (
     ("claude-cli", re.compile(r"(?:^|[\s\"'(\[=])(?:[\w./-]*/)?claude\s+"
-                              r"(?:-p\b|--print\b|--model\b|--output-format\b)")),
-    ("claude-cli", re.compile(r"[\"']claude[\"']\s*[,\]]")),
+                              r"(?:-p\b|--print\b|--model\b|--output-format\b)"), True),
+    ("claude-cli", re.compile(r"[\"']claude[\"']\s*[,\]]"), False),
     ("anthropic-sdk", re.compile(r"\b(?:import\s+anthropic|from\s+anthropic\b"
-                                 r"|anthropic\.Anthropic\()")),
-    ("anthropic-api", re.compile(r"api\.anthropic\.com")),
-    ("anthropic-key", re.compile(r"ANTHROPIC_(?:API_KEY|AUTH_TOKEN)")),
+                                 r"|anthropic\.Anthropic\()"), True),
+    ("anthropic-api", re.compile(r"api\.anthropic\.com"), True),
+    ("anthropic-key", re.compile(r"ANTHROPIC_(?:API_KEY|AUTH_TOKEN)"), False),
 )
 
 # The house docstring idiom names a command in backticks (`claude --model ...`).
@@ -77,6 +80,33 @@ _BACKTICKED = re.compile(r"`[^`]*`")
 _NON_BILLING = re.compile(r"claude[\"']?[\s,]+[\"']?"
                           r"(?:auth|mcp|doctor|config|update|install|migrate-installer"
                           r"|setup-token|--version|--help|-v\b|-h\b)")
+
+# A module constant assigned straight to a collection literal — HIGH_VALUE = {...},
+# EXCLUDE = (...), FORBIDDEN_KEY_ENVS = (...). Everything inside one is data the script
+# matches text against, so a bare "claude" there is a search term, not a call. All four
+# CLOUD findings of the 2026-09-24 sweep were this shape (wq#2456): three keyword sets
+# and, most tellingly, minerva_factory's FORBIDDEN_KEY_ENVS — the fleet's own
+# deny-list of Anthropic env vars, reported as an Anthropic spender.
+_CONST_OPENS = re.compile(r"^[A-Z][A-Z0-9_]{2,}\s*(?::[^=]+)?=\s*[\[({]")
+_STRINGS = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def _const_collection_lines(lines):
+    """Yield (lineno, stripped, in_constant) over already-de-prosed lines.
+
+    Depth is counted with string literals blanked, so a bracket inside a quoted
+    keyword cannot open or close the block.
+    """
+    depth = 0
+    for lineno, stripped in lines:
+        bare = _STRINGS.sub("", stripped)
+        opening = _CONST_OPENS.search(stripped) is not None
+        inside = depth > 0 or opening
+        if inside:
+            depth += sum(bare.count(c) for c in "[({")
+            depth -= sum(bare.count(c) for c in "])}")
+            depth = max(depth, 0)
+        yield lineno, stripped, inside
 
 # Interpreters: their own path never identifies what a unit calls, so the scanner
 # walks past them to the first argv element that is an actual file on disk.
@@ -191,10 +221,12 @@ def code_lines(text):
 def markers_in_script(text):
     """[(lineno, marker)] for a script body, prose excluded."""
     out = []
-    for lineno, stripped in code_lines(text):
-        for name, rx in SCRIPT_MARKERS:
+    for lineno, stripped, in_const in _const_collection_lines(code_lines(text)):
+        for name, rx, survives_const in SCRIPT_MARKERS:
             if rx.search(stripped):
                 if name == "claude-cli" and _NON_BILLING.search(stripped):
+                    continue
+                if in_const and not survives_const:
                     continue
                 out.append((lineno, name))
                 break
