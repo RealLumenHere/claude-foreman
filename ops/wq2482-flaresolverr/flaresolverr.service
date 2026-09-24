@@ -1,0 +1,37 @@
+# FlareSolverr (wq#2482) — loopback-bound challenge solver, last rung of the
+# fleet-search fetch ladder (T2, research/DIGEST_Fleet_searchability_md.md).
+# Same convention as ops/wq1299-phoenix-tracer/phoenix.service: single
+# container, systemd-managed, no compose/K3s (this fleet has no cluster —
+# `which k3s kubectl helm` -> rc=1, verified in the source research digest).
+[Unit]
+Description=FlareSolverr — Cloudflare/JS-challenge solver (wq#2482), loopback-only
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# Loopback bind only, hard requirement (instinct 6): FlareSolverr is an
+# unauthenticated fetch-any-URL service and must never be cloudflared- or
+# tailnet-exposed. -p 127.0.0.1:8191:8191 makes off-host access physically
+# impossible at the docker port-publish layer, not just firewalled.
+ExecStartPre=-/usr/bin/docker rm -f flaresolverr
+ExecStart=/usr/bin/docker run --rm --name flaresolverr \
+  -p 127.0.0.1:8191:8191 \
+  -e LOG_LEVEL=info \
+  -e TZ=UTC \
+  ghcr.io/flaresolverr/flaresolverr:latest
+ExecStop=/usr/bin/docker stop flaresolverr
+Restart=on-failure
+RestartSec=10
+
+# ~1Gi ceiling / 512Mi soft threshold for the bundled headless Chrome, per
+# ticket. MemoryHigh throttles (cgroup memory pressure) once RSS crosses the
+# soft value; MemoryMax is the hard OOM-kill ceiling — same mechanism phoenix
+# .service uses (ops/wq1299-phoenix-tracer/phoenix.service) so this container
+# cannot OOM the host even under a wedged Chrome instance.
+MemoryMax=1G
+MemoryHigh=512M
+
+[Install]
+WantedBy=multi-user.target

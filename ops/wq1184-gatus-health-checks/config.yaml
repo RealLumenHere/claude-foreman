@@ -152,3 +152,25 @@ endpoints:
         success-threshold: 2
         send-on-resolved: true
         description: "kb-mcp :8781 not accepting connections (wq#1184)"
+
+  # FlareSolverr (wq#2482) — last rung of the fleet-search fetch ladder
+  # (T1/T2, research/DIGEST_Fleet_searchability_md.md). GET / is a cheap
+  # liveness check (returns {"msg":"FlareSolverr is ready!",...}, HTTP 200)
+  # deliberately, NOT a POST /v1 challenge-solve — that spins up headless
+  # Chrome and hits a real remote site on every poll, same "don't do the
+  # expensive thing on every check" reasoning as ollama-isis-tags above.
+  # PREREQUISITE: ops/wq2482-flaresolverr/flaresolverr.service is staged but
+  # not installed by default — operator runs
+  # ops/wq2482-flaresolverr/install.sh. This probe reads FAIL until then.
+  - name: flaresolverr-liveness
+    group: fleet-hardening
+    url: "http://127.0.0.1:8191/"
+    interval: 5m
+    conditions:
+      - "[STATUS] == 200"
+    alerts:
+      - type: custom
+        failure-threshold: 3
+        success-threshold: 2
+        send-on-resolved: true
+        description: "flaresolverr.service unreachable on :8191 (wq#2482) — fleet-search T1 rung 4 will fail closed, not a mysterious tier-4 error"
