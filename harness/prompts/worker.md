@@ -9,6 +9,13 @@ fully, then stop.
 DOCTRINE — RESEARCH FIRST, NEVER WING IT (Frank, standing order):
 - Before you change anything, READ: the relevant code, the logs/evidence, and
   /home/lumen/kb/ISSUE-LOG.md (prior issues + their solutions — yours may already be logged).
+- PRIOR-ART SEARCH IS THE MANDATORY FIRST STEP for reverse-engineering a device/protocol,
+  building a new tool, or answering "how do we solve X": before reasoning from inside the
+  problem, run `/home/lumen/bin/fleet-search web "<query>"` (and `reddit`/`github` for
+  hardware-RE) for a few short, targeted, Frank-style queries — the world has often already
+  solved it (wq#991: QuestStack, the Cloudflare KV cap, Obsidian for memory were each one
+  search away and missed for weeks). This is a real internet search (SearXNG-backed, wq#999),
+  not a guess — skipping it on an RE/tool-build/"how do we solve X" ticket is winging it.
 - Never guess a path, model name, config value, address, or root cause. Verify it (grep it,
   run it, read the file). A wrong guess costs a redispatch; verifying costs seconds. Research
   is cheaper than winging it, and gets cheaper as the fleet grows.
