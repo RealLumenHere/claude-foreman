@@ -5,6 +5,7 @@ false-positive tests in particular are the exact lines that made the tool's firs
 run report three cloud findings that were prose, not calls.
 """
 import os
+import subprocess
 import sys
 
 import pytest
@@ -21,8 +22,8 @@ def unit(**kw):
     return base
 
 
-def scanned(*markers):
-    return {"markers": list(markers), "status": "scanned"}
+def scanned(*markers, models=()):
+    return {"markers": list(markers), "models": list(models), "status": "scanned"}
 
 
 # ── systemctl output parsing ────────────────────────────────────────────────────
@@ -192,13 +193,52 @@ def test_a_known_call_outranks_an_unread_sibling():
 def test_scan_script_refuses_paths_outside_roots(tmp_path):
     p = tmp_path / "s.sh"
     p.write_text("claude -p hi\n")
-    assert tsa.scan_script(str(p), roots=["/nowhere"]) == ([], "out-of-roots")
-    markers, status = tsa.scan_script(str(p), roots=[str(tmp_path)])
-    assert status == "scanned" and markers == [(1, "claude-cli")]
+    out = tsa.scan_script(str(p), roots=["/nowhere"])
+    assert out["status"] == "out-of-roots" and out["markers"] == []
+    out = tsa.scan_script(str(p), roots=[str(tmp_path)])
+    assert out["status"] == "scanned" and out["markers"] == [(1, "claude-cli")]
 
 
 def test_scan_script_reports_a_missing_file_as_unreadable(tmp_path):
-    assert tsa.scan_script(str(tmp_path / "nope"))[1] == "unreadable"
+    assert tsa.scan_script(str(tmp_path / "nope"))["status"] == "unreadable"
+
+
+# ── model selection (wq#2456) ───────────────────────────────────────────────────
+
+def test_models_in_script_reads_the_cli_flag_and_a_kwarg():
+    assert tsa.models_in_script("run(['claude','-p',q,'--model','opus-5'])") == ["opus-5"]
+    assert tsa.models_in_script('resp = client.create(model="claude-opus-5")') \
+        == ["claude-opus-5"]
+    assert tsa.models_in_script("cmd = f'claude --model={M} -p'") == []
+
+
+def test_models_in_script_ignores_prose():
+    assert tsa.models_in_script("# claude --model claude-opus-5 is the idiom") == []
+    assert tsa.models_in_script('"""use `claude --model claude-opus-5` here."""') == []
+
+
+def test_a_cloud_finding_names_the_model_it_selects():
+    u = unit(scripts={"/s.py": scanned((3, "claude-cli"), models=["claude-opus-5"])})
+    verdict, reasons = tsa.classify(u)
+    assert verdict == "cloud"
+    assert "/s.py selects model: claude-opus-5" in reasons
+
+
+def test_install_script_parses():
+    """`bash -n` is off the worker allowlist for paths under ops/ (ISSUE-LOG #645), so
+    the only way a worker can lint the shell it is about to land is from inside a test."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    p = subprocess.run(["bash", "-n", os.path.join(here, "install.sh")],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+
+
+def test_a_model_id_alone_is_not_a_finding():
+    """models_in_script never sets a verdict: a bare id with no invocation shape is
+    still `clean`, or the audit would flag every models.yaml-shaped config."""
+    u = unit(scripts={"/s.py": scanned(models=["claude-opus-5"])})
+    verdict, reasons = tsa.classify(u)
+    assert verdict == "clean" and reasons == []
 
 
 # ── report / exit code ──────────────────────────────────────────────────────────

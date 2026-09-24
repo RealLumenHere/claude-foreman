@@ -6,9 +6,9 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-# Full-read sweep first: the worker's own run could only read scripts under its
-# allowed dirs, so 104 of 171 timers came back `unknown`. As lumen, with every
-# ExecStart target readable, --strict is meaningful and this is the real audit.
+# Sweep first, so the install lands against a current picture rather than a remembered
+# one. The full-read run is not a privileged step (wq#2456, README "What a worker can
+# and cannot do") — it needs only that no --roots is passed. Everything below it is.
 python3 "$HERE/timer_spend_audit.py" --strict || true
 echo
 
@@ -20,11 +20,18 @@ systemctl list-timers lumen-timer-spend-guard.timer --no-pager --no-legend
 
 echo
 echo "Remaining manual steps (see README.md 'Deploy checklist'):"
-echo "  1. Repoint any CLOUD finding from the sweep above at the gateway"
-echo "     (ANTHROPIC_BASE_URL=http://localhost:4000 + a local rung), or prove it"
-echo "     needs Max and give it a budget check before it calls."
+echo "  1. Repoint the four CLOUD units the 2026-09-24 sweep named:"
+echo "     lumen-intel, lumen-signal-engine and lumen-worklog call claude with no"
+echo "     --model, so they take the account default off Max. A drop-in alone will"
+echo "     NOT fix them -- the model is an argv flag, not an env var, so each"
+echo "     script's argv needs --model deepseek-v4-flash as well as the"
+echo "     ANTHROPIC_BASE_URL=http://localhost:4000 drop-in (key via EnvironmentFile,"
+echo "     never inlined). minerva-factory may already be pinned inside its own"
+echo "     EnvironmentFile, which this audit will not open -- check before changing."
 echo "  2. Re-arm the five timers the 95% brake stopped on 2026-09-21:"
 echo "     sudo systemctl start lumen-ebay-watch.timer sia-news-pull.timer \\"
 echo "       lumen-scout.timer lumen-news-digest.timer motd-news.timer"
 echo "     (all five are still 'enabled'; the brake stopped the units, it did not"
-echo "      disable them — see README.md 'What actually stopped'.)"
+echo "      disable them, and all five audit clean -- see README.md 'What the"
+echo "      2026-09-21 brake actually stopped'. Re-confirmed enabled+inactive"
+echo "      2026-09-24.)"

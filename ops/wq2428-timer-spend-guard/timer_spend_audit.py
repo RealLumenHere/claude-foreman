@@ -80,6 +80,18 @@ _NON_BILLING = re.compile(r"claude[\"']?[\s,]+[\"']?"
 
 # Interpreters: their own path never identifies what a unit calls, so the scanner
 # walks past them to the first argv element that is an actual file on disk.
+# Model selection, read off the same de-prosed lines as the markers. Two shapes are
+# enough in practice: an explicit `--model X` / `model=X` / `"model": "X"` parameter,
+# and a bare vendor id sitting in the source. Anything else is left to the reader.
+MODEL_RXS = (
+    # The separator class covers both the shell form (`--model opus-5`, `--model=x`)
+    # and the argv-list form (`"--model", "opus-5"`) — a `{` is deliberately absent so
+    # an f-string placeholder reports nothing rather than a bogus id.
+    re.compile(r"--model[=\s,\"']+([\w.:/-]+)"),
+    re.compile(r"[\"']?\bmodel[\"']?\s*[:=]\s*[\"']([\w.:/-]+)[\"']"),
+    re.compile(r"\b(claude-(?:opus|sonnet|haiku|fable)[\w.-]*)"),
+)
+
 INTERPRETERS = ("python3", "python", "bash", "sh", "env", "node", "perl", "uv", "nice")
 
 MAX_SCRIPT_BYTES = 2 * 1024 * 1024
@@ -165,14 +177,21 @@ def markers_in_exec(tokens):
     return sorted(hits)
 
 
-def markers_in_script(text):
-    """[(lineno, marker)] for a script body, prose excluded."""
-    out = []
+def code_lines(text):
+    """(lineno, line) for a script body with prose cut: whole-line comments dropped,
+    backticked spans blanked. Both the marker scan and the model scan read through
+    this, so a docstring can never contribute to either."""
     for lineno, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
-        stripped = _BACKTICKED.sub(" ", stripped)
+        yield lineno, _BACKTICKED.sub(" ", stripped)
+
+
+def markers_in_script(text):
+    """[(lineno, marker)] for a script body, prose excluded."""
+    out = []
+    for lineno, stripped in code_lines(text):
         for name, rx in SCRIPT_MARKERS:
             if rx.search(stripped):
                 if name == "claude-cli" and _NON_BILLING.search(stripped):
@@ -180,6 +199,21 @@ def markers_in_script(text):
                 out.append((lineno, name))
                 break
     return out
+
+
+def models_in_script(text):
+    """Sorted model ids a script body selects.
+
+    A `cloud` verdict says a unit reaches Anthropic; it does not say what it asks for,
+    and the repoint differs by answer — a unit already naming a gateway rung needs only
+    ANTHROPIC_BASE_URL, one naming opus needs its argv changed too. The model is chosen
+    in the script's own argv (the CLI takes `--model`, not an env var), so no drop-in
+    can override it and the operator has to see it."""
+    found = set()
+    for _, stripped in code_lines(text):
+        for rx in MODEL_RXS:
+            found.update(m for m in rx.findall(stripped) if m)
+    return sorted(found)
 
 
 # ── script scanning ─────────────────────────────────────────────────────────────
@@ -195,21 +229,26 @@ def script_target(argv):
     return None
 
 
+def _scanned(markers, models, status):
+    return {"markers": markers, "models": models, "status": status}
+
+
 def scan_script(path, roots=None):
-    """([(lineno, marker)], status) for the script at `path`.
+    """{"markers": [(lineno, marker)], "models": [str], "status": str} for `path`.
 
     status is 'scanned' | 'unreadable' | 'out-of-roots'. `roots` restricts scanning
     to a prefix list — a sandboxed worker passes its own allowed dirs so that paths
     it cannot open are reported honestly instead of being probed."""
     if roots and not any(os.path.abspath(path).startswith(r) for r in roots):
-        return [], "out-of-roots"
+        return _scanned([], [], "out-of-roots")
     try:
         if os.path.getsize(path) > MAX_SCRIPT_BYTES:
-            return [], "unreadable"
+            return _scanned([], [], "unreadable")
         with open(path, "r", errors="replace") as f:
-            return markers_in_script(f.read()), "scanned"
+            text = f.read()
+        return _scanned(markers_in_script(text), models_in_script(text), "scanned")
     except Exception:
-        return [], "unreadable"
+        return _scanned([], [], "unreadable")
 
 
 # ── classification ──────────────────────────────────────────────────────────────
@@ -250,6 +289,9 @@ def classify(unit):
             for lineno, name in info["markers"]:
                 found.add(name)
                 reasons.append(f"{path}:{lineno} {name}")
+            if info["markers"] and info.get("models"):
+                reasons.append(f"{path} selects model: "
+                               + ", ".join(info["models"]))
         else:
             unread.append(f"{path} ({info['status']})")
     for ef in unit.get("environment_files", []):
@@ -335,8 +377,7 @@ def collect(roots=None):
         for a in argv:
             tgt = script_target(a)
             if tgt and tgt not in scripts:
-                markers, status = scan_script(tgt, roots)
-                scripts[tgt] = {"markers": markers, "status": status}
+                scripts[tgt] = scan_script(tgt, roots)
         units.append({
             "id": svc,
             "timer": timer,
