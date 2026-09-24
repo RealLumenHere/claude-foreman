@@ -44,6 +44,13 @@ systemctl is-active --quiet lumen-drift-plan.timer
 systemctl is-active --quiet lumen-dashboard
 python3 /home/lumen/minerva/drift_plan.py
 python3 -c "import json;d=json.load(open('/home/lumen/minerva/drift_plans/index.json'));assert d['counts']['total']>0,d;print('plans:',d['counts'])"
-curl -fsS --max-time 10 http://127.0.0.1:8123/api/v1/drift-plans \
-  | python3 -c "import json,sys;d=json.load(sys.stdin);assert d.get('available'),d;print('dashboard route ok:',d['counts'])"
+# `systemctl restart` returns when the unit is started, not when uvicorn is
+# listening — curl one millisecond later gets ECONNREFUSED and fails a health
+# check on a dashboard that is in fact fine (wq#2434 first install run).
+for _ in $(seq 30); do
+  curl -fsS --max-time 10 -o /tmp/wq2434-drift-route.json \
+    http://127.0.0.1:8123/api/v1/drift-plans && break
+  sleep 1
+done
+python3 -c "import json;d=json.load(open('/tmp/wq2434-drift-route.json'));assert d.get('available'),d;print('dashboard route ok:',d['counts'])"
 systemctl list-timers lumen-drift-plan.timer --no-pager --no-legend
