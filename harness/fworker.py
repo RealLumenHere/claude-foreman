@@ -1185,6 +1185,150 @@ def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
 
 
 # ---------------------------------------------------------------------------
+# wq#2393: the line is not the context
+#
+# The tripwire reads the child's PIPE, and the pipe carries three kinds of text:
+# frames the model produced, frames the model was handed, and everything else. The
+# third kind is not small. run_child merges the child's stderr into stdout (see the
+# Popen below), so every hook message, every warning the CLI writes and every byte a
+# hook's own subprocess leaks arrives on the same file descriptor as the stream; and
+# a real frame is an envelope whose siblings the CLI fills with its own bookkeeping,
+# none of which the model sees.
+#
+# wq#2253 is the case that named it. Its alarm's three values are on ONE line of the
+# doctrine log — line 657 of the pre-image the gate froze at 22:51:23 — and that line
+# is outside every window the model got: the run's one read of that file returned
+# lines 658 onward, the edit it then made patched from 659, and the whole 1.5MB
+# session transcript, which stores each frame's message verbatim, matches none of the
+# three. A value in no frame was in no context, so nothing was burned and the pri-1
+# rotate-today ticket was noise — but telling that apart cost a worker an hour of
+# replay, because the screen had no way to say where a hit came from.
+#
+# So: mask every line, as before (an artefact must never carry a credential, whatever
+# channel it arrived on), and page only on the part of a line the model actually
+# received. A hit anywhere else is logged, not filed.
+# ---------------------------------------------------------------------------
+
+# The two frame types that ARE context. `system`/`init` (cwd, tool list, mcp servers,
+# key source), `result` and the gateway's own response envelope are bookkeeping.
+MODEL_FACING_FRAMES = ("assistant", "user")
+
+
+def _content_text(content):
+    """Every string inside one message `content`, in order.
+
+    The blocks that reach the model whole: assistant text and thinking, the tool_use
+    input it emitted, the tool_result content handed back to it. A shape this does not
+    know is serialised rather than skipped — an unrecognised block is still in the
+    context window, and scoring it empty is the one error here that loses an alarm.
+    """
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, list):
+        out = []
+        for item in content:
+            out.extend(_content_text(item))
+        return out
+    if isinstance(content, dict):
+        kind = content.get("type")
+        if kind == "text":
+            return [content.get("text") or ""]
+        if kind == "thinking":
+            return [content.get("thinking") or ""]
+        if kind == "tool_use":
+            return _content_text(content.get("input"))
+        if kind == "tool_result":
+            return _content_text(content.get("content"))
+    return [json.dumps(content, default=str)]
+
+
+def _frame_content(frame):
+    """The context-bearing text of one canonical frame, or [] if it carries none."""
+    if not isinstance(frame, dict):
+        return []
+    if frame.get("type") == "result":
+        # A duplicate of the last assistant text rather than a fourth channel, and it
+        # would alarm on that frame first. Counted anyway: the cost of counting a copy
+        # is a second look at an alarm that was going to fire, and the cost of missing
+        # the one stream that ever emits only this is a credential nobody rotates.
+        result = frame.get("result")
+        return [result] if isinstance(result, str) else []
+    if frame.get("type") not in MODEL_FACING_FRAMES:
+        return []
+    message = frame.get("message")
+    return _content_text(message.get("content")) if isinstance(message, dict) else []
+
+
+def model_facing_text(raw):
+    """The part of one child stream line that entered the model's context.
+
+    "" means the line carried no context at all — it did not parse (stderr), or it
+    parsed into an envelope the model never receives. It does NOT mean the line was
+    empty or that masking should skip it; only that a hit on it is not a burn.
+    """
+    try:
+        frame = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    return "\n".join(_frame_content(frame))
+
+
+def gateway_facing_text(raw):
+    """model_facing_text for one gateway SSE data payload.
+
+    The UHP split is cleaner than the CLI's: `response.output` IS the turn — items the
+    model emitted and the tool outputs it was handed — while everything beside it is
+    the envelope despag computes (`id`, `usage`, and the `lumen.run_state` sidecar
+    _observe_gateway_event adopts wholesale). So the whole output list counts, item
+    metadata and all. Scoring it through _frames_from_lumen_output instead would score
+    only the two item types that mapper needs and silently lose the model's own text.
+
+    Streaming deltas carry the same text one fragment at a time and no output list of
+    their own, so they are taken as-is.
+    """
+    try:
+        ev = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(ev, dict):
+        return ""
+    parts = [json.dumps((ev.get("response") or {}).get("output") or [], default=str)]
+    parts.extend(v for k, v in ev.items() if k in ("delta", "text") and isinstance(v, str))
+    return "\n".join(parts)
+
+
+def screen_stream_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
+                       ticket_id, attempt, facing=model_facing_text):
+    """screen_mask_hits, scoped to the context (wq#2393). The only caller of the
+    screen from either read loop.
+
+    Labels are re-derived from the context rather than filtered off the raw line's
+    set: the same label can be armed by the envelope and by the message on one line,
+    and only the second is a burn. Everything the context does not explain is logged
+    under its own sentence — a value that never reached the model is a defect in the
+    harness's own plumbing, worth reading, but it is not a rotation. `alarmed` is
+    consulted here as well as in screen_mask_hits, so a label that already paged does
+    not then narrate every envelope it turns up in for the rest of the attempt.
+    """
+    fresh = [h for h in hits if h not in alarmed]
+    if not fresh:
+        return
+    context = facing(raw)
+    kept = set(masking.mask_text(context)[1]) if context else set()
+    outside = sorted({h for h in fresh if h not in kept})
+    if outside:
+        log(f"mask hit wq#{ticket_id} attempt {attempt}: {','.join(outside)} matched "
+            f"outside the model's context (merged stderr or frame envelope) — masked "
+            f"in every artefact, no page and no rotation ticket (wq#2393)")
+    inside = [h for h in fresh if h in kept]
+    if inside:
+        screen_mask_hits(inside, context, alarmed, seen, live_secrets, repo_roots,
+                         ticket_id, attempt)
+
+
+# ---------------------------------------------------------------------------
 # run-state persistence (design §8: attempt-N.json, prior-attempt-notes.md)
 # ---------------------------------------------------------------------------
 
@@ -2411,9 +2555,10 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
                         if mask_hits and repo_roots is None:
                             repo_roots = burn_filter.provenance_roots(
                                 cwd, granted_dirs(cmd))
-                        screen_mask_hits(mask_hits, raw_payload, mask_alarmed,
-                                         burn_seen, live_secrets, repo_roots,
-                                         ticket_id, attempt)
+                        screen_stream_hits(mask_hits, raw_payload, mask_alarmed,
+                                           burn_seen, live_secrets, repo_roots,
+                                           ticket_id, attempt,
+                                           facing=gateway_facing_text)
                         try:
                             ev = json.loads(payload)
                         except json.JSONDecodeError:
@@ -2558,14 +2703,17 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             continue
         # wq#2275 (T6): mask BEFORE parse — raw_events/state and everything derived
         # from them (attempt notes, episode store, failure.json, ntfy, PR text) only
-        # ever see the masked line. The model already saw the real value (no CLI
-        # lever rewrites a tool result), so a hit is an alarm, not a save.
+        # ever see the masked line. Masking stays whole-line: this pipe carries the
+        # child's stderr too, and an artefact must not keep a credential whatever
+        # channel printed it. The ALARM is narrower (wq#2393, screen_stream_hits) —
+        # a hit only pages once the value is in text the model actually received,
+        # since there the CLI has no lever to rewrite it and it is burned.
         raw_line = line
         line, mask_hits = masking.mask_text(line)
         if mask_hits and repo_roots is None:
             repo_roots = burn_filter.provenance_roots(cwd, granted_dirs(cmd))
-        screen_mask_hits(mask_hits, raw_line, mask_alarmed, burn_seen,
-                         live_secrets, repo_roots, ticket_id, attempt)
+        screen_stream_hits(mask_hits, raw_line, mask_alarmed, burn_seen,
+                           live_secrets, repo_roots, ticket_id, attempt)
         try:
             frame = json.loads(line)
         except json.JSONDecodeError:

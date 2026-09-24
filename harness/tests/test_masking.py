@@ -479,7 +479,9 @@ def test_run_child_masks_stream_and_alarms_once(tmp_path, monkeypatch):
     assert record["label"] == "github" and record["prefix"] == "ghp_"
     assert record["value_sha256_12"] == hashlib.sha256(
         GHP[len("ghp_"):].encode()).hexdigest()[:12]
-    assert "tool_result" in record["context"]
+    # wq#2393: the context is the text the frame handed the model, not the frame — the
+    # envelope's `tool_result` scaffolding is no longer part of what the record quotes
+    assert record["context"] == "remote: https://x:ghp_MASKED@github.com/o/r.git"
     assert GHP not in json.dumps(alarms)
 
 
@@ -923,3 +925,97 @@ def test_a_dropped_label_can_still_alarm_later_in_the_attempt(tmp_path, monkeypa
     fworker.screen_mask_hits(["kv-secret"], f"password: {PW}", alarmed, set(), {PW},
                              repo, 2327, 1)
     assert alarms == [["kv-secret"]] and alarmed == {"kv-secret"}
+
+
+# --- wq#2393: a line of the pipe is not the model's context ------------------
+# The screen used to take the whole raw line, and the pipe is wider than the stream:
+# run_child merges the child's stderr into it, and a real frame's envelope carries
+# fields the CLI writes for itself. wq#2253 paged pri-1 rotate-today on text in
+# neither — one line of the doctrine log that its read window began one line below.
+
+
+def _screen(raw, alarms, facing=None, alarmed=None):
+    """One trip through the read loop's screen. `live` carries PW so provenance
+    short-circuits and no test here shells out to git."""
+    kwargs = {"facing": facing} if facing else {}
+    fworker.screen_stream_hits(masking.mask_text(raw)[1], raw,
+                               set() if alarmed is None else alarmed, set(), {PW},
+                               [os.path.dirname(masking.__file__)], 2393, 1, **kwargs)
+    return alarms
+
+
+@pytest.fixture
+def alarms(monkeypatch):
+    fired = []
+    monkeypatch.setattr(fworker, "mask_alarm",
+                        lambda tid, att, labels, records=None: fired.append(labels))
+    return fired
+
+
+def test_a_credential_in_a_tool_result_still_pages(alarms):
+    """The wq#2311 shape, unchanged: a command printed it, the frame handed it to the
+    model, the CLI has no lever to take it back. This is the case the tripwire is for
+    and the scoping must not touch it."""
+    frame = {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "content": [{"type": "text",
+                                             "text": f"password: {PW}"}]}]}}
+    assert _screen(json.dumps(frame), alarms) == [["kv-secret"]]
+
+
+def test_the_same_value_in_the_frame_envelope_does_not_page(alarms):
+    """`toolUseResult` is the CLI's own record of what a tool did — it sits beside the
+    message on the same physical line and the model is handed none of it. Same value,
+    same line, same label: masked either way, filed only for the message."""
+    raw = json.dumps({
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "The file has been updated."}]},
+        "toolUseResult": {"structuredPatch": f"password: {PW}"}})
+    assert _screen(raw, alarms) == []
+    assert PW not in masking.mask_text(raw)[0]   # still redacted in every artefact
+
+
+def test_a_line_a_hook_printed_to_stderr_does_not_page(alarms):
+    """run_child's Popen merges stderr into stdout, so a guard message, a warning, or
+    anything a hook's own subprocess leaks arrives on the same descriptor as a frame.
+    None of it parses as one, and none of it reached the model."""
+    assert _screen(f"guard.sh: refusing to print password: {PW}", alarms) == []
+
+
+def test_an_init_envelope_does_not_page(alarms):
+    """The one frame that is all bookkeeping — cwd, tool list, mcp servers, key
+    source. The model gets a system prompt, never this."""
+    raw = json.dumps({"type": "system", "subtype": "init",
+                      "mcp_servers": [{"env": f"password: {PW}"}]})
+    assert _screen(raw, alarms) == []
+
+
+def test_a_gateway_output_item_pages_but_its_sidecar_does_not(alarms):
+    """Same rule on the despag path: `response.output` is the turn, the run_state
+    sidecar beside it is despag's own bookkeeping. The whole output list counts, not
+    just the two item types _frames_from_lumen_output maps — a message item is the
+    model's own text, and scoring only what that mapper needs would lose it."""
+    item = {"type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": f"password: {PW}"}]}
+    ev = {"type": "response.completed", "response": {"output": [item]}}
+    sidecar = {"type": "response.completed",
+               "response": {"output": [], "lumen": {"run_state": {
+                   "result_text": f"password: {PW}"}}}}
+    assert _screen(json.dumps(sidecar), alarms,
+                   facing=fworker.gateway_facing_text) == []
+    assert _screen(json.dumps(ev), alarms,
+                   facing=fworker.gateway_facing_text) == [["kv-secret"]]
+
+
+def test_a_label_the_envelope_armed_does_not_consume_the_attempts_alarm(alarms):
+    """The wq#2290 bookkeeping rule, kept across the narrowing: a label dropped for
+    being out of context must stay unalarmed, so the real burn forty turns later still
+    pages. Dropping it into `alarmed` would silently swallow that one."""
+    alarmed = set()
+    envelope = json.dumps({"type": "user", "message": {"content": []},
+                           "toolUseResult": f"password: {PW}"})
+    assert _screen(envelope, alarms, alarmed=alarmed) == [] and alarmed == set()
+    frame = {"type": "assistant", "message": {"content": [
+        {"type": "text", "text": f"password: {PW}"}]}}
+    assert _screen(json.dumps(frame), alarms, alarmed=alarmed) == [["kv-secret"]]
+    assert alarmed == {"kv-secret"}

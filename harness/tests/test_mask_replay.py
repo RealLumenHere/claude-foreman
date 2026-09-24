@@ -439,8 +439,10 @@ WQ2253_GITHUB = {"b8789db0c2da": 6, "20227a136ec3": 6, "d354caf95d3e": 8}
 # carry its value, and a sentence that spells one is what row 588's broker refused.
 WQ2253_SK_KEY = {"24d32cfa0c9d": 16, "157fdb29bd0d": 16, "78bcca60d790": 16}
 
-# The gate snapshot whose frozen bytes carried all three into context, written
-# 22:51:23 — one second before the alarm filed wq#2337.
+# The gate snapshot that holds all three — the pre-image of the edit the worker was
+# making, frozen 22:51:23, one second before the alarm filed wq#2337. Holding them is
+# not carrying them into context: wq#2393 puts all three on line 657, one line above
+# the read window and two above the edit hunk, so nothing here ever reached the model.
 WQ2253_DOCTRINE_SNAPSHOT = "snapshot:20260920T225123Z-home_lumen_kb_ISSUE-LOG.md"
 
 
@@ -518,6 +520,34 @@ def test_wq2253_sk_key_is_absent_from_the_model_context():
         "the model's own context must be in the corpus for the above to mean anything"
     reads = [s for s in items if "kb/ISSUE-LOG.md@" in s]
     assert [s.rsplit("@", 1)[1] for s in reads] == ["658"]
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2253_RUN),
+                    reason="wq#2253's run dir is not on this host")
+def test_wq2253_alarmed_on_the_line_below_every_window_the_model_got():
+    """wq#2393, the question the test above leaves open: a snapshot is a whole file,
+    so "only in the snapshot" still allows that some stream line carried the same
+    bytes. This closes it by locating the values inside the file.
+
+    All three are on ONE line, 657, and the run touched the doctrine log twice: a Read
+    that returned lines 658 onward and an Edit that patched from 659 (the hunk in the
+    transcript's own record of it). The alarm fired on the line immediately above both
+    windows — off by one from anything the model was handed. Nothing was burned.
+
+    The failing alternative was a stream line the transcript does not persist, and the
+    channel is real: run_child merges the child's stderr into the same pipe it reads
+    frames from, and a frame's envelope carries CLI bookkeeping beside the message. So
+    the screen now scores the message, not the line (fworker.screen_stream_hits), and
+    this row is the case that fix has to suppress.
+    """
+    with open(os.path.join(WQ2253_RUN, "snapshots",
+                           WQ2253_DOCTRINE_SNAPSHOT.split(":", 1)[1]),
+              errors="replace") as fh:
+        lines = fh.read().splitlines()
+    rule = dict(mask_replay.LEGACY_PATTERNS)["sk-key"]
+    assert {n for n, text in enumerate(lines, 1) if rule.search(text)} == {657}
+    records = mask_replay.replay(2253, items={WQ2253_DOCTRINE_SNAPSHOT: lines[656]})
+    assert {r["value_sha256_12"] for r in records} == set(WQ2253_SK_KEY)
 
 
 WQ2300_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2300")
