@@ -347,6 +347,14 @@ def test_local_prompt_is_slim_and_fits_the_default_ctx_gate(archetype):
     assert "INSTINCTS" not in text and "DISTILLED" not in text
 
 
+def test_local_probe_build_carries_the_prior_art_doctrine_in_the_cached_prefix():
+    """wq#2455: local dispatch branches around worker.md, so wq#2439's prior-art rule
+    only reaches probe-build if local_probe-build.md restates it — above the `---`, or
+    it would not be in the byte-identical prefix the backend's KV cache reuses."""
+    prefix = _render("probe-build", 1, TICKET_A).partition("\n---\n")[0]
+    assert "/home/lumen/bin/fleet-search" in prefix
+
+
 def test_local_prompt_fills_the_ticket_and_never_re_expands_placeholders():
     text = _render("mechanical-edit", 7, TICKET_B, notes=None)
     tail = text.partition("\n---\n")[2]

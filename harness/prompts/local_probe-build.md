@@ -18,6 +18,9 @@ HARD LIMITS:
 HOW TO WORK:
 - Read the code you will change before you change it. Never guess a path, name or config
   value; grep it or read it.
+- PRIOR ART FIRST: on a "how do we solve X", reverse-engineering, or new-tool question, run
+  `/home/lumen/bin/fleet-search web "<short query>"` (`github`/`reddit` for hardware) BEFORE
+  reasoning from inside the problem. The world has usually solved it already.
 - Run tools by full path: `/home/lumen/bin/wq`, `/home/lumen/bin/lumen-pr`. Bare names are
   not allowed and hang on a permission prompt.
 - Bash is allow-listed per command. If a command is refused ("requires approval" or

@@ -2704,6 +2704,15 @@ def local_prompt_template(model, archetype):
     return path if os.path.exists(path) else None
 
 
+# wq#2455: this branch bypasses worker.md, so worker.md's DOCTRINE block (wq#2439) does
+# NOT reach a local-rung dispatch — each local_*.md carries only the doctrine its own
+# archetype needs. local_probe-build.md restates the prior-art rule in ~45 tokens because
+# "probe and build" IS the RE/tool-build/"how do we solve X" shape the rule targets;
+# local_mechanical-edit.md deliberately omits it (a named mechanical edit is out of that
+# scope, and the 4k-token target is the point). Adding a third local archetype means
+# deciding this again — the doctrine does not arrive by inheritance here.
+
+
 def load_local_prompt(tmpl_path, ticket_id, ticket, worktree, prior_notes_path=None,
                        acceptance_doc=None, rework=None):
     """Slim local prompt. Everything above the `---` line is static text with no
