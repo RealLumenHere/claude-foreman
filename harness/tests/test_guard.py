@@ -165,6 +165,17 @@ MUST_BLOCK = [
     # wq#2274: token-engine state dir is credential-bearing — Read/Grep denied.
     ("Read", {"file_path": "/var/lib/token-engine/ledger.json"}),
     ("Grep", {"pattern": "token", "path": "/var/lib/token-engine"}),
+    # wq#2514: wq#2511 burned three github tokens by Reading git's credential store.
+    ("Read", {"file_path": "/home/lumen/.git-credentials"}),
+    ("Read", {"file_path": "/home/lumen/.git-credentials.bak.20260830"}),
+    ("Grep", {"pattern": "ghp_", "path": "/home/lumen/.git-credentials"}),
+    ("Read", {"file_path": "/home/lumen/.netrc"}),
+    ("Read", {"file_path": "/home/lumen/.fleet_pw"}),
+    ("Read", {"file_path": "/home/lumen/nas.pw"}),
+    ("Bash", {"command": "cat ~/.git-credentials"}),
+    ("Bash", {"command": "sha256sum /home/lumen/.git-credentials.bak.pre-gitea-rotate"}),
+    ("Bash", {"command": "head -1 /home/lumen/.netrc"}),
+    ("Bash", {"command": "cat .fleet_pw"}),
 ]
 
 MUST_ALLOW = [
@@ -196,6 +207,11 @@ MUST_ALLOW = [
     # wq#1297: only pull is denied — inspection verbs stay usable from a worker.
     ("Bash", {"command": "ollama list"}),
     ("Bash", {"command": "ollama show llama3:70b"}),
+    # wq#2514: the credential-store deny is on the store's file names, not the words.
+    ("Bash", {"command": "git config --get credential.helper"}),
+    ("Bash", {"command": "grep -n git-credential-store docs/auth.md"}),
+    ("Grep", {"pattern": "x", "path": f"{WORKTREE}/docs/netrc-notes.md"}),
+    ("Grep", {"pattern": "x", "path": f"{WORKTREE}/harness/pwgen.py"}),
     # wq#2274: instinct 4's mask-before-print shape must run — the same emitting
     # statement piped through mask-secrets is the sanctioned form.
     ("Bash", {"command": "git remote -v | /home/lumen/bin/mask-secrets"}),

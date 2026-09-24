@@ -96,6 +96,17 @@ PATTERNS = [
      r"\1MASKED"),
     ("slack", re.compile(_B + r"(xox[bpasr]-)[A-Za-z0-9-]{8,}"), r"\1MASKED"),
     ("aws", re.compile(_B + r"(AKIA)[0-9A-Z]{16}"), r"\1MASKED"),
+    # wq#2514: a credential embedded in a URL, `scheme://user:secret@host` — git's
+    # credential store is one per line. Ported from read_dir_sweep's url_basic_auth
+    # (wq#2479). Absent here, wq#2511's mask-hits context window printed a gitea token
+    # in the clear two lines above the github values it was quoting. Same exclusions:
+    # templates/env-refs, ALL_CAPS names and placeholder words are pointers, not values.
+    ("url-auth", re.compile(
+        r"\b([A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{1,64}:)"
+        r"(?![${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
+        r"(?!os\.environ|os\.getenv|(?:process\.)?env\.)"
+        r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
+        r"[^\s@/'\"`]{8,}(?=@[A-Za-z0-9\[])"), r"\1MASKED"),
     # This one keys off an English word rather than a prefix, so it needs a different
     # boundary than `_B`. It needs a TRAILING one (wq#2288): without it
     # `key = apply_key_allowlist(reg)` (node_render_gateway.py:418) reads as a 19-char

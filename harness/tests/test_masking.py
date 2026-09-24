@@ -41,6 +41,11 @@ KV_LINE = 'GITEA_TOKEN="' + 'hunter2-hunter2-hunter2"'
 # kv fixtures below interpolate it, so each source line breaks at `{` before the
 # body charset can start.
 PW = "hunter2-hunter2-hunter2"
+# wq#2514: git credential-store line shape. Split after the `:` so the source text
+# cannot match — the body charset stops at the quote.
+URL_USER = "https://lumen:"
+URL_HOST = "@100.64.0.9%3a3000"
+URL_AUTH = URL_USER + PW + URL_HOST
 
 # wq#2292: strings that LOOK like a prefix rule but are not credentials. Each one
 # is a real shape that reached a stream and cost a pri-1 rotation ticket or a
@@ -80,6 +85,14 @@ FALSE_POSITIVES = [
     "cfut_MASKED",                    # cloudflare: `MASKED` is 6 legal body chars
     "PAT: github_pat_MASKED",         # kv-secret eats a masked github value
     "sk-ant-xxxxxxxxMASKED",          # sk- backtracks into its own masked body
+    # wq#2514: url-auth pointers and placeholders, as read_dir_sweep excludes them
+    "https://lumen:${GITEA_TOKEN}@git.example",
+    "https://x-access-token:$TOKEN@github.com",
+    "postgres://app:GITEA_TOKEN_VALUE@db",
+    "https://user:password@example.com",
+    "https://lumen:MASKED@100.64.0.9",
+    "ssh://git@github.com:22/o/r.git",
+    "https://example.com:8443/path@v2",
 ]
 
 # One synthetic secret per RULE in PATTERNS, for the fixed-point property below.
@@ -90,6 +103,7 @@ SECRETS = [
     ("sk-key", f'v = "{SK}"'),
     ("slack", f'v = "{XOXB}"'),
     ("aws", f'v = "{AKIA}"'),
+    ("url-auth", URL_AUTH),
     ("kv-secret", KV_LINE),
 ]
 
@@ -169,6 +183,22 @@ def test_false_positives_never_alarm():
         masked, hits = masking.mask_text(text)
         assert hits == [], f"{text!r} falsely matched {hits}"
         assert masked == text, f"{text!r} was rewritten to {masked!r}"
+
+
+def test_a_credential_store_dump_leaves_no_value_in_the_context():
+    """wq#2514: wq#2511 read git's credential store. The github values were masked, but
+    the gitea line above them had no rule, so every hit record's context window
+    printed that token in the clear — the mask-hits file was itself a leak."""
+    hexbody = "3f" * 20
+    store = "\n".join([URL_USER + hexbody + URL_HOST,
+                       f"https://RealLumenHere:{GHP}@github.com",
+                       f"https://x-access-token:{GHP}@github.com",
+                       f"https://x:{GHPAT}@github.com"])
+    masked, records = masking.scan(store)
+    assert hexbody not in masked and GHP not in masked and GHPAT not in masked
+    assert [r["label"] for r in records] == ["github", "github", "github", "url-auth"]
+    for r in records:
+        assert hexbody not in r["context"] and GHP not in r["context"]
 
 
 def test_masking_never_re_arms_on_its_own_output():
@@ -251,8 +281,11 @@ BODIES = [
     ("sk-key", "sk-ant-", SK),
     ("slack", "xoxb-", XOXB),
     ("aws", "AKIA", AKIA),
+    ("url-auth", URL_USER, URL_USER + PW),
     ("kv-secret", 'TOKEN="', 'TOKEN="' + PW),
 ]
+# a rule whose match must be followed by something it does not consume
+BODY_SUFFIX = {"url-auth": URL_HOST}
 
 
 def test_the_mask_keeps_the_prefix_and_no_character_of_the_body():
@@ -271,10 +304,11 @@ def test_the_mask_keeps_the_prefix_and_no_character_of_the_body():
     assert {label for label, _, _ in BODIES} == {l for l, _, _ in masking.PATTERNS}
     for label, prefix, sample in BODIES:
         body = sample[len(prefix):]
-        text = f"x {sample} y"
+        suffix = BODY_SUFFIX.get(label, "")
+        text = f"x {sample}{suffix} y"
         masked, hits = masking.mask_text(text)
         assert hits == [label], f"{label}: sample no longer fires ({hits})"
-        assert masked == f"x {prefix}MASKED y", f"{label}: mask kept part of the body"
+        assert masked == f"x {prefix}MASKED{suffix} y", f"{label}: mask kept part of the body"
 
         _, records = masking.scan(text)
         assert [r["label"] for r in records] == [label]

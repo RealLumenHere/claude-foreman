@@ -162,6 +162,10 @@ Bash)
     if printf '%s' "$target" | grep -qE 'claude_credentials\.md|/home/lumen/minerva/context/sections/[^ ]*credentials|/home/lumen/minerva/context/sections\.json'; then
       block "denied path: credential file/copy (claude_credentials.md*, minerva context credential sections)" "$RAW_CMD"
     fi
+    # wq#2514: Bash twin of the git credential-store deny in the Read/Grep branch.
+    if printf '%s' "$target" | grep -qE '\.git-credentials|(^|[/[:space:]])\.netrc\b|\.fleet_pw\b'; then
+      block "denied path: git credential store (.git-credentials*, .netrc, .fleet_pw)" "$RAW_CMD"
+    fi
     if printf '%s' "$target" | grep -qE '\bdocker\b' && ! printf '%s' "$target" | grep -qE '\bdocker\b +(ps|logs)\b'; then
       block "docker denied except ps/logs" "$RAW_CMD"
     fi
@@ -427,6 +431,11 @@ Read|Edit|Write|Grep|Glob)
     [ -n "$CHECK_PATH" ] || continue
     case "$CHECK_PATH" in
       *.env|*.credentials.json|*claude_credentials.md|*claude_credentials.md.*|/home/lumen/minerva/context/sections/*credentials*|/home/lumen/minerva/context/sections.json|/home/lumen/minerva/context/sections.json.*|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*|/var/lib/token-engine|/var/lib/token-engine/*)
+        block "denied path: $CHECK_PATH" "$CHECK_PATH" ;;
+      # wq#2514: git's plaintext credential store and its .bak copies. Same set
+      # capability_lint.DIR_DENY_BASENAME_GLOBS_HOME hard-denies as a grant; without
+      # it here a Read by absolute path went through and burned every token in it.
+      */.git-credentials|*/.git-credentials.*|*/.netrc|*/.fleet_pw|*.pw)
         block "denied path: $CHECK_PATH" "$CHECK_PATH" ;;
     esac
   done
