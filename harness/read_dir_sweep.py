@@ -118,6 +118,19 @@ PATTERNS = (
     ("aws", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("slack", re.compile(r"\b(?:xox[bpsa]|xapp)-[A-Za-z0-9-]{20,}")),
     ("privkey", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY")),
+    # wq#2479: a credential embedded in a URL, scheme://user:secret@host. No label sits in
+    # front of the value, so kv_secret cannot see it (its label half never engages) and none
+    # of the other patterns has a URL shape. The match is the WHOLE `scheme://user:secret@`
+    # span: mask() keeps 4 chars and the scheme plus `://` is already 5+, so no character of
+    # the userinfo can reach the excerpt. Not a credential: an empty password, a template or
+    # env-ref (`${T}`, `$T`, `{pw}`, `%s`, `<pw>`, `os.environ`, ALL_CAPS_NAME) and the
+    # literal placeholder words docs use. `secret{8,}` keeps `user:pw@` and `a:b@` out.
+    ("url_basic_auth", re.compile(
+        r"\b[A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{1,64}:"
+        r"(?![${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
+        r"(?!os\.environ|os\.getenv|(?:process\.)?env\.)"
+        r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
+        r"[^\s@/'\"`]{8,}@(?=[A-Za-z0-9\[])")),
     ("kv_secret", re.compile(
         r"(?i)\b(?:" + KV_LABEL + r")\b" + KV_LABEL_CLOSE + KV_CONNECTOR + KV_SEP +
         r"['\"`]?" + KV_NOT_A_CREDENTIAL + r"[A-Za-z0-9_\-./+]{20,}")),

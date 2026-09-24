@@ -236,3 +236,64 @@ def test_aq_alert_noop_without_new_hits_or_binary(tmp_path, monkeypatch):
     rds.aq_alert([("/root", {"path": "/root/x", "line": 1, "kind": "basename",
                              "excerpt": "x"})], aq_bin=str(tmp_path / "does-not-exist"))
     assert calls == []
+
+
+# ---- wq#2479: credential embedded in a URL (scheme://user:secret@host) -------------------
+# Fixtures are assembled at runtime so no single source literal is itself credential-shaped
+# (the tripwire reads this file too, see kb/ISSUE-LOG rows 577/578).
+def _url(user, pw, scheme="https", host="100.64.0.7/git/repo.git"):
+    return scheme + "://" + user + ":" + pw + "@" + host
+
+
+@pytest.mark.parametrize("url", [
+    _url("lumen", "Kf3" + "x9Zq2Lm"),
+    _url("admin", "hunter" + "2hunter2", scheme="http"),
+    _url("app", "p" + "4ssw0rd-long-1", scheme="postgres", host="db.internal:5432/x"),
+    _url("x-access-token", "tok" + "en1234567890", scheme="HTTPS"),
+])
+def test_url_basic_auth_is_a_hit_and_masked(tmp_path, url):
+    _write(tmp_path, "remote.cfg", "url = " + url + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert [h[2] for h in hits] == ["url_basic_auth"]
+    excerpt = hits[0][3]
+    userinfo = url.split("://", 1)[1].split("@", 1)[0]
+    assert userinfo not in excerpt
+    assert userinfo.split(":", 1)[0] not in excerpt      # not even the user name
+    assert userinfo.split(":", 1)[1][:3] not in excerpt   # no password character survives
+
+
+@pytest.mark.parametrize("url", [
+    _url("user", ""),                                    # empty password
+    _url("user", "${GIT_" + "TOKEN}"),                   # env-ref
+    _url("user", "$TOKEN" + "VALUE"),
+    _url("{user}", "{pw" + "}"),                         # format template
+    _url("user", "%s" * 5),
+    _url("user", "<pass" + "word>"),                     # placeholder
+    _url("user", "pass" + "word"),                       # doc placeholder word
+    _url("user", "CHANGE" + "ME_TOKEN"),                 # ALL_CAPS pointer
+    _url("user", "os.environ" + "['X']"),
+    _url("user", "short"),                               # under the length floor
+    "https://host:8080/path@thing",
+    "ssh://git@github.com:22/org/repo.git",              # user only, no password
+    "https://example.com/a?b=c:d@efghijkl",              # colon and @ in the path, not userinfo
+    "mailto:someone@example.com",
+])
+def test_url_basic_auth_non_credentials_are_not_hits(tmp_path, url):
+    _write(tmp_path, "notes.md", "see " + url + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
+
+
+def test_url_basic_auth_masks_before_truncating(tmp_path):
+    pw = "Zq" + "8Lm2Kf3x9Wv7"
+    _write(tmp_path, "x.cfg", "y" * 100 + " " + _url("lumen", pw) + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits and all(pw not in h[3] and pw[:6] not in h[3] for h in hits)
+
+
+def test_url_basic_auth_does_not_shadow_a_prefixed_token(tmp_path):
+    """gh_pat is earlier in PATTERNS, so a PAT in the password slot keeps its own kind."""
+    pat = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"
+    _write(tmp_path, "r.cfg", _url("x-access-token", pat) + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert [h[2] for h in hits] == ["gh_pat"]
