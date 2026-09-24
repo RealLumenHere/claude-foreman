@@ -33,7 +33,11 @@ MIN_RESEARCH_TURNS = 2  # below this, there isn't enough signal to predict
 def load_history(state_dir=None, limit: int = 20) -> list[dict]:
     """Full history entries (not server.py's trimmed _history()), oldest
     first. Malformed or missing files are skipped/ignored — history is
-    advisory, never a hard dependency."""
+    advisory, never a hard dependency. "Malformed" covers both unparseable
+    JSON and valid JSON of the wrong shape: a file holding a list or a bare
+    scalar parses cleanly, so only a shape check keeps it from reaching
+    _is_research_turn()'s .get() and raising AttributeError out of
+    predict_next_intent() (wq#2522/wq#2523)."""
     hist_dir = Path(state_dir or DEFAULT_STATE_DIR) / "history"
     entries = []
     try:
@@ -42,9 +46,11 @@ def load_history(state_dir=None, limit: int = 20) -> list[dict]:
         return []
     for p in paths:
         try:
-            entries.append(json.loads(p.read_text()))
+            entry = json.loads(p.read_text())
         except (OSError, ValueError):
             continue
+        if isinstance(entry, dict):
+            entries.append(entry)
     return entries
 
 
