@@ -24,8 +24,10 @@ probes:
     subjects: known-in-store
     interval_days: 1
   fleet_inventory:
-    command: "fleet-inv get <subject>"
-    predicates: [lan_ip, ssh_user, power_plug]
+    # wq#2150: id kept (stored in fact_verifications.probe / verify_recipe). NOT `fleet-inv get`:
+    # fleet-inv reads these fields from state_facts, so it would confirm the store with itself.
+    command: "ssh <subject> ip -o -4 addr show; ssh -l <user> <subject> true"
+    predicates: [lan_ip, ssh_user]
     subjects: known-in-store
     interval_days: 1
   service_state:
@@ -145,11 +147,9 @@ predicates:
     verify_interval_days: 7
     source_kind: observed
   power_plug:
+    # wq#2150: no independent observation (plug-ctl labels are dated, fleet-inv's binding is declared)
     class: config
     closes_on_decommission: false
-    probe: fleet_inventory
-    verify_interval_days: 1
-    source_kind: observed
   powers_node:
     class: config
     closes_on_decommission: false

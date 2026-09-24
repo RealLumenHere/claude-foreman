@@ -347,6 +347,93 @@ def test_sweep_supersedes_stale_availability_when_node_goes_offline(conn, regist
     assert get_fact(conn, fid)["valid_to"] == iso(NOW)
 
 
+# ------------------------------------------------ wq#2150 fleet_inventory probe
+
+IP_OUT = ("1: lo    inet 127.0.0.1/8 scope host lo\n"
+          "2: eno1    inet 192.168.8.218/24 brd 192.168.8.255 scope global eno1\n"
+          "3: tailscale0    inet 100.75.1.108/32 scope global tailscale0\n")
+
+
+def test_fleet_inventory_never_reads_the_store_through_fleet_inv(monkeypatch):
+    """fleet-inv reads lan_ip/ssh.user from state_facts, so asking it would confirm
+    the store with itself. The probe must observe the node instead."""
+    seen = []
+
+    def fake_run(argv, timeout=20):
+        seen.append(argv)
+        return 0, IP_OUT, ""
+    monkeypatch.setattr(lv, "run", fake_run)
+    lv.probe_fleet_inventory("thoth", [{"predicate": "lan_ip", "value": "192.168.8.218"}])
+    assert seen and all(a[0] != "fleet-inv" for a in seen)
+    assert seen[0][0] == "ssh" and "addr" in seen[0]
+
+
+def test_fleet_inventory_lan_ip_confirms_only_an_address_the_node_has(monkeypatch):
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (0, IP_OUT, ""))
+    facts = [{"predicate": "lan_ip", "value": "192.168.8.218"}]
+    assert lv.probe_fleet_inventory("thoth", facts)[("thoth", "lan_ip")] == (
+        "192.168.8.218", None)
+    facts = [{"predicate": "lan_ip", "value": "192.168.8.99"}]
+    observed, error = lv.probe_fleet_inventory("thoth", facts)[("thoth", "lan_ip")]
+    assert observed is None and "not among" in error  # unknown, never a new value
+
+
+def test_fleet_inventory_lan_ip_ssh_failure_is_unknown(monkeypatch):
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (255, "", "timed out"))
+    observed, error = lv.probe_fleet_inventory(
+        "thoth", [{"predicate": "lan_ip", "value": "192.168.8.218"}])[("thoth", "lan_ip")]
+    assert observed is None and "timed out" in error
+
+
+def test_fleet_inventory_lan_ip_local_subject_runs_locally(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (seen.append(argv), (0, IP_OUT, ""))[1])
+    lv.probe_fleet_inventory("lumen", [{"predicate": "lan_ip", "value": "192.168.8.218"}])
+    assert seen[0][0] == "ip"
+
+
+def test_fleet_inventory_ssh_user_confirms_on_login_and_rejects_option_injection(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (seen.append(argv), (0, "", ""))[1])
+    ok = lv.probe_fleet_inventory("thoth", [{"predicate": "ssh_user", "value": "thoth"}])
+    assert ok[("thoth", "ssh_user")] == ("thoth", None)
+    assert seen[0][seen[0].index("-l") + 1] == "thoth"
+    seen.clear()
+    bad = lv.probe_fleet_inventory("thoth", [{"predicate": "ssh_user", "value": "-oProxyCommand=x"}])
+    assert bad[("thoth", "ssh_user")][0] is None and not seen  # never reaches ssh
+
+
+def test_fleet_inventory_ssh_user_login_failure_is_unknown(monkeypatch):
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (255, "", "Permission denied"))
+    observed, error = lv.probe_fleet_inventory(
+        "thoth", [{"predicate": "ssh_user", "value": "thoth"}])[("thoth", "ssh_user")]
+    assert observed is None and "Permission denied" in error
+
+
+def test_power_plug_has_no_probe(registry):
+    assert registry.probe_id("power_plug") is None
+    assert registry.probe_id("lan_ip") == "fleet_inventory"
+
+
+def test_sweep_skips_ssh_probes_for_closed_lifecycle_subjects(conn, registry, monkeypatch):
+    reg = ls.registry()
+    ls.ingest("wadjet", reg["lifecycle"], reg["closing"][-1])
+    ssh_calls = []
+    monkeypatch.setattr(lv, "run", lambda argv, timeout=20: (ssh_calls.append(argv),
+                                                            (255, "", "timeout"))[1])
+    fid = seed(conn, "wadjet", "lan_ip", "192.168.8.5", age_days=5)
+    alive = seed(conn, "thoth", "lan_ip", "192.168.8.218", age_days=5)
+    monkeypatch.setitem(lv.PROBES, "fleet_inventory",
+                        lambda subject, facts: {(subject, f["predicate"]): (f["value"], None)
+                                                for f in facts})
+    result = lv.sweep(conn, registry, now=NOW)
+    assert result["counts"]["skipped"] == 1 and result["counts"]["confirmed"] == 1
+    assert not ssh_calls
+    assert conn.execute("SELECT count(*) FROM fact_verifications WHERE fact_id=?",
+                        (fid,)).fetchone()[0] == 0  # nothing was checked, nothing logged
+    assert get_fact(conn, alive)["last_confirmed_at"] == iso(NOW)
+
+
 # ------------------------------------- wq#2204 endpoint_live / node_storage
 
 class FakeResp:

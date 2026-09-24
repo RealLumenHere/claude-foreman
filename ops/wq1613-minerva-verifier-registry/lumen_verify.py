@@ -194,23 +194,60 @@ def probe_tailscale_ip(subject, facts):
             for f in facts}
 
 
+SSH_USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+IPV4_RE = re.compile(r"\binet (\d{1,3}(?:\.\d{1,3}){3})/")
+
+
 def probe_fleet_inventory(subject, facts):
-    rc, out, err = run(["fleet-inv", "get", subject, "--json"])
-    if rc != 0:
-        return {(subject, f["predicate"]): (None, f"fleet-inv rc={rc}: {err[:120]}")
-                for f in facts}
-    try:
-        data = json.loads(out)
-    except ValueError as e:
-        return {(subject, f["predicate"]): (None, f"fleet-inv non-json: {e}")
-                for f in facts}
+    """`lan_ip` and `ssh_user`, observed on the node itself (wq#2150).
+
+    This probe used to run `fleet-inv get <subject> --json`, which fleet-inv
+    rejects (rc=2), so every fact came back unknown. The obvious repair -- read
+    `fleet-inv get <subject> network.lan_ip` -- would be worse than the bug:
+    fleet-inv reads network.lan_ip / ssh.user LIVE FROM state_facts (its YAML is
+    only a fallback), so it would hand the store's own value back and every
+    sweep would 'confirm' it, bumping last_confirmed_at with no evidence
+    (MINERVA_STALENESS_REVIEW.md 3.2: a probe must observe, not re-read). So the
+    node is asked instead, and only an observation that matches confirms:
+      lan_ip   the fact value is one of the node's IPv4 addresses (`ip -o -4 addr`)
+      ssh_user a BatchMode login as that user succeeds
+    Anything else, including a mismatch, is unknown: a multi-homed node's other
+    address is not proof the LAN address changed. `power_plug` has no
+    independent observation (plug-ctl labels are dated observations, fleet-inv's
+    plug binding is declared) and is no longer assigned to this probe.
+    """
     result = {}
+    addresses = None
     for f in facts:
-        val = data.get(f["predicate"])
-        result[(subject, f["predicate"])] = (
-            (str(val) if val is not None else None),
-            None if val is not None else f"{f['predicate']} absent from fleet-inv",
-        )
+        key = (subject, f["predicate"])
+        if f["predicate"] == "lan_ip":
+            if addresses is None:
+                argv = ["ip", "-o", "-4", "addr", "show"]
+                rc, out, err = run(argv if subject == "lumen" else _ssh_argv(subject, argv))
+                addresses = (None, f"ssh {subject}: {err[:120] or 'rc=%s' % rc}") if rc != 0 \
+                    else (IPV4_RE.findall(out), None)
+            found, why = addresses
+            if found is None:
+                result[key] = (None, why)
+            elif f["value"] in found:
+                result[key] = (f["value"], None)
+            else:
+                result[key] = (None, f"{f['value']} not among {subject} addresses {found}")
+        elif f["predicate"] == "ssh_user":
+            user = f["value"]
+            if not SSH_USER_RE.fullmatch(user or ""):
+                result[key] = (None, f"value {(user or '')[:40]!r} is not a login name")
+            elif subject == "lumen":
+                rc, out, err = run(["id", "-un"])
+                result[key] = (user, None) if rc == 0 and out.strip() == user else (
+                    None, f"local user is {out.strip() or 'unknown'!r}")
+            else:
+                rc, out, err = run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                                    "-l", user, subject, "--", "true"])
+                result[key] = (user, None) if rc == 0 else (
+                    None, f"ssh -l {user} {subject}: rc={rc} {err[:100]}")
+        else:
+            result[key] = (None, f"fleet_inventory cannot observe {f['predicate']}")
     return result
 
 
@@ -515,13 +552,36 @@ def reconcile(conn, fact, probe_id, observed, error, now):
 
 # ------------------------------------------------------------------- sweep
 
+SSH_PROBES = frozenset({"fleet_inventory", "service_state", "node_storage", "os_kernel"})
+
+
+def closed_subjects(conn):
+    """{subject: lifecycle value} for subjects whose open lifecycle fact closes them."""
+    ls = _lumen_state()
+    reg = ls.registry()
+    return {r["subject"]: r["value"] for r in conn.execute(
+        "SELECT subject, value FROM state_facts WHERE predicate=? AND valid_to IS NULL",
+        (reg["lifecycle"],)) if r["value"] in reg["closing"]}
+
+
 def sweep(conn, registry, now=None, dry_run=False):
     now = now or datetime.now(timezone.utc)
     migrate(conn)
     batches = due_facts(conn, registry, now)
-    counts = {"confirmed": 0, "superseded": 0, "unknown": 0}
+    counts = {"confirmed": 0, "superseded": 0, "unknown": 0, "skipped": 0}
     detail = []
+    closed = closed_subjects(conn)
     for (probe_id, subject), facts in batches.items():
+        if probe_id in SSH_PROBES and subject in closed:
+            # wq#2150: a retired/decommissioned node cannot answer; ssh would only
+            # time out and log an unknown per fact per sweep. Nothing was checked.
+            for f in facts:
+                counts["skipped"] += 1
+                detail.append({"subject": subject, "predicate": f["predicate"],
+                               "probe": probe_id, "value": f["value"], "observed": None,
+                               "outcome": "skipped",
+                               "error": f"{subject} is {closed[subject]}; not probed"})
+            continue
         try:
             observations = PROBES[probe_id](subject, facts)
         except Exception as e:  # noqa: BLE001 - fail-open: a broken probe never supersedes
