@@ -1,0 +1,12 @@
+# sha256[:12] of known-synthetic values that already sit in claude-foreman history
+# (audit 2026-09-24, wq#2286): test fixtures for the masker and the credential sweeps,
+# and the SYNTHETIC_BEARER probe constant. One per line.
+03aafb028d53
+0871f503a900
+3021d90eb943
+4528f0bd2a4c
+5654fc638a66
+9d6133be2daf
+b1cd796bd2ec
+e07ac677c9dc
+fac8b3c8a54a
