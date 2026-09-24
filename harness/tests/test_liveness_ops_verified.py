@@ -42,11 +42,14 @@ def test_live_target_satisfied(ops, tmp_path):
     assert v == liveness.SATISFIED and "VERIFY OK" in detail
 
 
-def test_drifted_target_still_blocked(ops, tmp_path):
-    live = tmp_path / "live.py"
-    live.write_text("x = 2\n")
-    d = _bundle(ops, "wq2-drift", f'if [ "${{1:-}}" = --verify ]; then . "$SRC/../_verify.sh"; '
-                                  f'vfile "$SRC/f.py" {live}; vfile "$SRC/f.py" {tmp_path}/absent; vdone; fi\n')
+def test_drifted_target_still_blocked(ops, tmp_path, monkeypatch):
+    # ops_verified keeps only the last 200 chars of --verify output, and each MISS line
+    # prints its target path. Absolute targets under a long TMPDIR push the first MISS
+    # out of that window, so the targets are relative to a chdir'd tmp_path (wq#2112).
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "live.py").write_text("x = 2\n")
+    d = _bundle(ops, "wq2-drift", 'if [ "${1:-}" = --verify ]; then . "$SRC/../_verify.sh"; '
+                                  'vfile "$SRC/f.py" live.py; vfile "$SRC/f.py" absent; vdone; fi\n')
     (d / "f.py").write_text("x = 1\n")
     v, detail = liveness.ops_verified("wq2-drift")
     assert v == liveness.STILL_BLOCKED
