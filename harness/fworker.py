@@ -1385,13 +1385,27 @@ def commit_episode_to_archive(ticket_id):
     read — a deterministic digest committed to archival_notes via minerva's
     lumen_episode.py (memoryd first, trust from the $WQ_AGENT lane claim).
     episode.jsonl stays behind as raw evidence with a 30d sweep. Supersedes
-    the never-run memory/distill.py pipeline (now memory/attic/). Best-effort."""
+    the never-run memory/distill.py pipeline (now memory/attic/). Best-effort.
+
+    wq#2442: the same digest also lands as an Obsidian note (memory/
+    obsidian_bridge.py) — Claude Projects turned out to be a folder nothing
+    read back; the Obsidian vault is the layer meant to actually persist
+    across chat sessions, so every ticket that reaches the archive writes
+    there too. Independently best-effort: a dead vault mount must not take
+    down the archival_notes commit or vice versa."""
     try:
         episodic = _memory_import("episodic")
-        episodic.commit_to_archive(ticket_id, runs_root=RUNS_ROOT)
+        digest = episodic.commit_to_archive(ticket_id, runs_root=RUNS_ROOT)
         episodic.sweep_episodes(runs_root=RUNS_ROOT)
     except Exception as e:
         log(f"episode archive commit failed (non-fatal): {e!r}")
+        return
+    if not digest:
+        return
+    try:
+        _memory_import("obsidian_bridge").write_note(ticket_id, digest)
+    except Exception as e:
+        log(f"obsidian note write failed (non-fatal): {e!r}")
 
 
 def assistant_text_tail(transcript_events, n=6, each_chars=1500):

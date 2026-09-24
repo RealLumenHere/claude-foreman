@@ -25,6 +25,7 @@ are preserved in `attic/` (see `attic/README.md`).
 |---|---|
 | `episodic.py` | append-only writer/reader for `RUNS_ROOT/wq<id>/episode.jsonl`; `digest_events()` + `commit_to_archive()` (episode → archival note); `sweep_episodes()` (30d retention) |
 | `cmt_retrieval.py` | (unchanged) retrieval helpers |
+| `obsidian_bridge.py` | wq#2442: the same archival digest, also written as an Obsidian vault note (`write_note`) and queried back (`search_notes`, `read_note`) — see `OBSIDIAN.md` |
 | `attic/` | superseded wq#1183 distiller: `distill.py`, `recall.py`, their tests |
 
 ## Paths / env
@@ -32,6 +33,8 @@ are preserved in `attic/` (see `attic/README.md`).
 - `FOREMAN_RUNS_ROOT` (default `/home/lumen/foreman/_runs`) — episode store.
 - `LUMEN_EPISODE_BIN` (default `/home/lumen/minerva/lumen_episode.py`) — the
   archival commit CLI.
+- `OBSIDIAN_VAULT_ROOT` (default `/home/lumen/obsidian-vault`) — the
+  Obsidian vault notes are written to (`OBSIDIAN.md`).
 
 ## Verify
 
