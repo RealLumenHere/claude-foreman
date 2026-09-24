@@ -55,11 +55,12 @@ FAULTS = [
     ("deps_unmet", "deps_unmet", None),
     ("already_running", "already_running", None),
     ("route_unassigned", "route_unassigned", None),
+    ("subsystem_held", "subsystem_held", None),
 ]
 GATE_ORDER = ["lane_cap", "human_lane", "lane_repo", "ticket_load", "repo_mismatch",
               "repo_resolve", "capability", "runaway", "harness_defect", "spawn_loop",
               "nodispatch", "frank_gate", "fire_approval", "fire_probe", "hold", "deps",
-              "already_running", "route"]
+              "already_running", "route", "subsystem"]
 FIRE_PROBE = 'fire_probe: {"cmd": "true", "clear_when_exit": 0}'
 
 
@@ -80,6 +81,7 @@ class World:
         monkeypatch.setattr(fd, "enforce_capability", self._enforce)
         monkeypatch.setattr(fd, "candidate_model", self._model)
         monkeypatch.setattr(fd, "_liveness_autoclosed", lambda *a, **k: False)
+        monkeypatch.setattr(gates, "_live_holds", lambda *a, **k: ({"fleet-ops": "other-worker"}, {}))
         monkeypatch.setattr(fd, "ntfy", lambda *a, **k: self.pings.append(a))
 
     def _show(self, tid):
@@ -107,6 +109,7 @@ class World:
             "deps": "900001" if "deps_unmet" in f else "",
             "hold_by": "orch" if "held" in f else "None",
             "hold_expires": "2999-01-01 00:00:00" if "held" in f else "None",
+            "subsystems": "fleet-ops" if "subsystem_held" in f else "",
             "detail": "" if "fire_no_probe" in f else FIRE_PROBE,
             "_mismatch": "title names another repo" if "repo_mismatch" in f else mismatch}
         if lane == FIRE and "fire_unapproved" not in f:

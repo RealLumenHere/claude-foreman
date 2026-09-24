@@ -27,6 +27,7 @@ Gates reach the dispatcher's helpers through `g.fd` (the calling module, injecte
 and `import foreman_dispatcher` from here would load a second copy with its own globals.
 """
 import os
+import sqlite3
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -359,11 +360,101 @@ class Route(Gate):
         return PASS
 
 
+WQ_DB_DEFAULT = "/home/lumen/agents/work-queue/queue.db"
+_WQ_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def _split_sub(tok):
+    """wq's own token grammar (bin/wq split_sub): '<base>:ro' reads, '<base>:rw' or bare
+    writes, any other suffix ('orch:build') is part of the name."""
+    if tok.endswith(":ro"):
+        return tok[:-3], "ro"
+    if tok.endswith(":rw"):
+        return tok[:-3], "rw"
+    return tok, "rw"
+
+
+def _parse_subs(text):
+    return [x.strip().lower() for x in (text or "").replace(",", " ").split() if x.strip()]
+
+
+def _live_holds(db_path=None):
+    """(writers {base: holder}, readers {base: [holders]}) for every unexpired subsystem lock,
+    read straight from wq's queue.db (read-only). Fail-open: an unreadable db returns nothing
+    held, because the claim itself still refuses a held subsystem; this gate only stops the
+    dispatcher paying for a worker that is certain to be refused."""
+    path = db_path or os.environ.get("WQ_DB", WQ_DB_DEFAULT)
+    now = datetime.now(timezone.utc).strftime(_WQ_FMT)
+    writers, readers = {}, {}
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        try:
+            for scope, holder in con.execute(
+                    "SELECT scope, holder FROM slocks WHERE expires_at >= ?", (now,)):
+                writers[scope] = holder
+            for scope, holder in con.execute(
+                    "SELECT scope, holder FROM slocks_ro WHERE expires_at >= ?", (now,)):
+                readers.setdefault(scope, []).append(holder)
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return {}, {}
+    return writers, readers
+
+
+class SubsystemHeld(Gate):
+    """stage 8 (wq#2089): a ticket whose declared subsystem is locked by another holder is
+    refused by `wq claim` (wq#582, no --force), so spawning its worker only burns a spawn.
+    Five research digests sharing subsystem `fleet-ops` were spawned in one pass on
+    2026-09-24; one claimed, four exited CLAIM_ERROR, and each ticket then tripped the
+    spawn-loop guard (3 spawns, 0 finished attempts) and sat stuck.
+
+    Two sources of conflict, wq's own rules: a live lock in queue.db (a writer blocks
+    everyone, a reader blocks only writers), and a sibling already made READY earlier in
+    this same pass, since the earlier one's lock does not exist until its worker claims.
+    Last in the order on purpose: it reserves only for a ticket that passed every other
+    gate. Live state, so never parked."""
+    name = "subsystem"
+
+    def check(self, g):
+        subs = _parse_subs((g.t or {}).get("subsystems"))
+        if not subs:
+            return PASS
+        me = f"fworker-wq{g.tid}"
+        writers, readers = _live_holds()
+        reserved = getattr(g.ctx, "subs_reserved", None)
+        if reserved is None:
+            reserved = g.ctx.subs_reserved = {}
+        blocked = []
+        for tok in subs:
+            base, mode = _split_sub(tok)
+            holder = writers.get(base)
+            if holder and holder != me:
+                blocked.append(f"{base} held by {holder}")
+                continue
+            if mode == "rw":
+                readers_other = [h for h in readers.get(base, ()) if h != me]
+                if readers_other:
+                    blocked.append(f"{base} read by {readers_other[0]}")
+                    continue
+            for other_tid, other_mode in reserved.get(base, ()):
+                if other_tid != g.tid and "rw" in (mode, other_mode):
+                    blocked.append(f"{base} reserved by wq#{other_tid} earlier this pass")
+                    break
+        if blocked:
+            return Fail("subsystem", "subsystem_held", detail="; ".join(blocked))
+        for tok in subs:
+            base, mode = _split_sub(tok)
+            reserved.setdefault(base, []).append((g.tid, mode))
+        return PASS
+
+
 # DISPATCH_DISSECTION §2.2, evaluation order. Reordering changes which reason a ticket that
 # trips two gates reports — the golden replay (test_gates_replay.py) is what holds it.
 GATES = (LaneCap(), HumanLane(), LaneRepo(), TicketLoad(), RepoMismatch(), RepoResolve(),
          Capability(), Runaway(), HarnessDefect(), SpawnLoop(), Nodispatch(), FrankGate(),
-         FireApproval(), FireProbe(), Hold(), Deps(), AlreadyRunning(), Route())
+         FireApproval(), FireProbe(), Hold(), Deps(), AlreadyRunning(), Route(),
+         SubsystemHeld())
 
 
 def _park(g, res):
