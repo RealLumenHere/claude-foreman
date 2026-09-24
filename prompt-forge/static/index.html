@@ -119,6 +119,8 @@ function inputs() {
   };
 }
 
+const PREDICT_CONFIDENCE_THRESHOLD = 0.6;
+
 api("/api/meta").then(m => {
   $("filters").innerHTML = Object.entries(m.filters).map(([k, v]) =>
     `<label><input type="checkbox" value="${k}"> ${v}</label>`).join("");
@@ -128,7 +130,25 @@ api("/api/meta").then(m => {
     $("slug").classList.toggle("hidden", !cont);
     $("slugLabel").classList.toggle("hidden", !cont);
   });
+  applyPrediction();
 }).catch(() => $("status").textContent = "meta load failed");
+
+// Advisory pre-ranking from GET /api/predict-next (wq#2524): pre-select the
+// predicted category/filters on load when confidence clears the threshold.
+// Never overrides what Frank types — this only sets initial form state.
+function applyPrediction() {
+  api("/api/predict-next").then(p => {
+    if (!p || !p.predicted_category || p.confidence < PREDICT_CONFIDENCE_THRESHOLD) return;
+    const catOpt = document.querySelector(`#category option[value="${p.predicted_category}"]`);
+    if (catOpt) $("category").value = p.predicted_category;
+    for (const f of p.predicted_filters || []) {
+      const box = document.querySelector(`#filters input[value="${f}"]`);
+      if (box) box.checked = true;
+    }
+    $("filters").dispatchEvent(new Event("change"));
+    $("status").textContent = `pre-ranked from ${p.based_on} recent research turns`;
+  }).catch(() => {});
+}
 
 $("go").onclick = async () => {
   const p = inputs();
