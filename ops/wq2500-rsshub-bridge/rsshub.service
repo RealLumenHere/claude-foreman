@@ -1,0 +1,25 @@
+[Unit]
+Description=wq#2500 RSSHub — GitHub Trending/release velocity feed for Miniflux
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sia
+WorkingDirectory=/home/sia/services/rsshub
+EnvironmentFile=/home/sia/services/rsshub/.env
+Environment=NODE_ENV=production
+Environment=PORT=1200
+Environment=LISTEN_INADDR_ANY=0
+Environment=CACHE_TYPE=memory
+Environment=CACHE_EXPIRE=900
+ExecStart=/usr/bin/node lib/index.js
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
