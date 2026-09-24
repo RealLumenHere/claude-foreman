@@ -587,6 +587,29 @@ def test_missing_home_root_secret_is_refused_not_advisory():
     assert d.refused and d.advisory == [] and d.unresolved == []
 
 
+def test_bare_credential_basename_without_path_prefix_is_refused():
+    """wq#2511: the ticket names `.git-credentials.bak.<ts>` in prose without ever
+    writing `/home/lumen/` immediately in front of it (the directory is mentioned in a
+    separate clause) — _CITED_PATH_RE alone would see no path at all, and the ticket
+    would dispatch to a build worker with no way to touch a credential file. It must
+    land in refused, the same as a fully cited path would."""
+    d = derive(
+        "Three backups under /home/lumen still hold a scheme://user:secret@host line: "
+        ".git-credentials.bak.20260830_124941_pre_rotate_finish (line 3). They sit "
+        "outside every allow.read_dirs root, so read_dir_sweep never sees them.")
+    assert d.tags == [] and d.advisory == [] and d.unresolved == []
+    assert any(".git-credentials.bak.20260830_124941_pre_rotate_finish" in r
+               and "deny:basename" in r for r in d.refused)
+
+
+def test_bare_credential_basename_still_ignored_when_plain_word():
+    """A word that merely contains a dot must not be treated as a bare credential
+    mention — only a basename that actually matches a DIR_DENY_BASENAME_GLOBS_HOME
+    glob (e.g. `.git-credentials*`, `.netrc`, `*.pw`) counts."""
+    d = derive("see release-notes.txt for the v1.2 changelog")
+    assert d.refused == [] and d.tags == [] and d.advisory == []
+
+
 def test_original_deny_entries_are_untouched():
     assert cl.DIR_DENY_BASENAME_GLOBS == ("*.env", "*.token", "*.key", "*.pem", "id_*")
     assert cl.DIR_DENY_EXACT == ("/home/lumen", "/")

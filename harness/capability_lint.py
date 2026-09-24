@@ -541,12 +541,36 @@ def normalise_closure_dir(path):
     return parent if _isdir(parent) else None
 
 
+_BARE_TOKEN_RE = re.compile(r"[^\s()]+")
+
+
+def _bare_credential_basenames(text):
+    """wq#2511: a ticket that names `.git-credentials.bak.<ts>` in prose — mentioning
+    `/home/lumen` separately, never as an immediate prefix on the filename — produces
+    no match from _CITED_PATH_RE, so dir_denied() never runs on it and the ticket
+    dispatches to a build worker that cannot touch credential files at all (it did,
+    twice). Catches bare (no `/`) filename-shaped tokens whose basename matches a
+    DIR_DENY_BASENAME_GLOBS_HOME glob, so they reach dir_denied() the same as a fully
+    cited path does."""
+    out = []
+    for tok in _BARE_TOKEN_RE.findall(text or ""):
+        tok = tok.rstrip(".,;:")  # trailing punctuation only — a leading "." is the
+        if not tok or "/" in tok:  # dotfile itself, e.g. ".git-credentials.bak...."
+            continue  # a real path is already caught by _CITED_PATH_RE
+        if any(fnmatch.fnmatch(tok, g) for g in DIR_DENY_BASENAME_GLOBS_HOME):
+            out.append(tok)
+    return out
+
+
 def cited_paths(text):
     """fworker.cited_paths (:828) over title+detail rather than detail alone."""
     out = []
     for m in _CITED_PATH_RE.finditer(text or ""):
         p = m.group(0).rstrip(".,;:")
         if p != "/home/lumen" and p not in out:
+            out.append(p)
+    for p in _bare_credential_basenames(text):
+        if p not in out:
             out.append(p)
     return out
 
