@@ -62,3 +62,7 @@ runtime/
 # full-suite transcript per repeat, regenerated on demand, never source.
 /.wq1991-verify/
 /.wq1991-verify.log
+
+# wq#2543/wq#2549: mask_replay.py's rotated-value ledger — runtime state (hashes,
+# timestamps, tickets, notes; never a raw value), not source.
+/rotated_ledger.json
