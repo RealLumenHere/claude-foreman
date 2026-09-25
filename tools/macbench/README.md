@@ -66,6 +66,15 @@ from the suite before scoring, so editing a test cannot pass a task. Per task:
 `tool_errors`, `wall_s`, `diff_files`, `diff_lines`, and the model the init frame reported.
 Summary: `agentic_score` = successes / 8, median turns, total wall, tool errors.
 
+Scoring never trusts a size+mtime cache. Both the test result and the diff can be read
+from one: CPython revalidates a `.pyc` on its source's mtime and size, and git skips
+reading a file whose mtime and size still match the index. A task prompt tells the model
+to run the test itself mid-session, and these tasks are single-line edits by design, so
+"the bytes changed but mtime and size did not" is a shape the suite actively invites. So
+`run_test()` purges every `__pycache__` and runs under `PYTHONDONTWRITEBYTECODE=1`, and
+`diff_stats()` stages into a scratch index built from scratch, hashing content rather
+than consulting the baseline commit's recorded stat.
+
 The gateway only serves aliases it is configured with, so an agentic score for a bench row
 needs an alias pointing at the bench endpoint (set `agentic.model` on the row and run
 `agentic --model <alias>`); `--base-url` points the suite at an engine's own

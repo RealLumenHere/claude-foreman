@@ -46,7 +46,8 @@ def build_repo(task, root):
     repo = os.path.join(root, task["id"])
     if os.path.exists(repo):
         shutil.rmtree(repo)
-    shutil.copytree(os.path.join(task["dir"], "repo"), repo)
+    shutil.copytree(os.path.join(task["dir"], "repo"), repo,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     with open(os.path.join(repo, ".git", "info", "exclude"), "a") as fh:
         fh.write("__pycache__/\n*.pyc\n")     # running the tests must not count as a diff
@@ -86,6 +87,23 @@ def parse_stream(text):
     return s
 
 
+def purge_bytecode(repo):
+    """Drop every `__pycache__` under `repo`.
+
+    CPython validates a `.pyc` against its source's mtime+size, so bytecode compiled by
+    an earlier run - the model's own mid-session self-check, or this suite's baseline
+    pass - is replayed whenever a later edit leaves those two unchanged (a same-second,
+    same-length edit, which the mechanical-edit tasks invite by construction). That
+    replays a stale pass or fail into the score. Purge before every scoring run.
+    """
+    for dirpath, dirnames, _ in os.walk(repo):
+        if "__pycache__" in dirnames:
+            shutil.rmtree(os.path.join(dirpath, "__pycache__"), ignore_errors=True)
+            dirnames.remove("__pycache__")
+        if ".git" in dirnames:
+            dirnames.remove(".git")
+
+
 def run_test(task, repo):
     """Restore protected test files from the suite, then run the task's test command."""
     for rel in task.get("protected", []):
@@ -93,17 +111,32 @@ def run_test(task, repo):
         dst = os.path.join(repo, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(src, dst)
+    purge_bytecode(repo)
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")   # and leave none behind
     try:
         p = subprocess.run(task["test_cmd"], shell=True, cwd=repo, capture_output=True,
-                           text=True, timeout=TEST_TIMEOUT_S)
+                           text=True, timeout=TEST_TIMEOUT_S, env=env)
         return p.returncode == 0, (p.stdout + p.stderr)[-400:]
     except subprocess.TimeoutExpired:
         return False, "test timed out"
 
 
 def diff_stats(repo, protected):
-    subprocess.run(["git", "add", "-A", "-N"], cwd=repo, capture_output=True)
-    p = subprocess.run(["git", "diff", "--numstat"], cwd=repo, capture_output=True, text=True)
+    """Files and non-protected lines changed against the baseline commit.
+
+    Staged into a scratch index built from scratch, so the comparison is HEAD's tree
+    against freshly hashed content. The repo's own index carries the stat data recorded
+    at baseline commit time, and git skips reading a file whose size and mtime still
+    match it - which a mtime-preserving write leaves true even when the bytes differ,
+    scoring a real edit as no diff at all (same stale-stat trap as `purge_bytecode`).
+    """
+    index = os.path.join(repo, ".git", "macbench-diff-index")
+    if os.path.exists(index):
+        os.remove(index)
+    env = dict(os.environ, GIT_INDEX_FILE=index)
+    subprocess.run(["git", "add", "-A"], cwd=repo, env=env, capture_output=True)
+    p = subprocess.run(["git", "diff", "--cached", "--numstat", "HEAD"], cwd=repo, env=env,
+                       capture_output=True, text=True)
     files = lines = 0
     for ln in p.stdout.splitlines():
         a, d, name = (ln.split("\t") + ["", "", ""])[:3]

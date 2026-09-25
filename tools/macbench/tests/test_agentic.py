@@ -32,6 +32,68 @@ def test_task_fails_on_baseline_and_passes_with_reference_solution(task, tmp_pat
     assert files > 0 and lines > 0
 
 
+def _same_size_same_mtime_task(tmp_path):
+    """A task whose fix is a one-character edit: source size and mtime stay put, so a
+    stale `.pyc` compiled before the fix still validates against it."""
+    task_dir = tmp_path / "task"
+    (task_dir / "repo" / "pkg").mkdir(parents=True)
+    (task_dir / "repo" / "tests").mkdir(parents=True)
+    (task_dir / "repo" / "pkg" / "__init__.py").write_text("")
+    (task_dir / "repo" / "pkg" / "config.py").write_text("V = 1\n")
+    (task_dir / "repo" / "tests" / "test_v.py").write_text(
+        "import unittest\nfrom pkg import config\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_v(self):\n        self.assertEqual(config.V, 2)\n")
+    return {"id": "stale", "dir": str(task_dir), "protected": ["tests/test_v.py"],
+            "test_cmd": "python3 -m unittest discover -s tests -q"}
+
+
+def _apply_fix_preserving_size_and_mtime(repo):
+    src = os.path.join(repo, "pkg", "config.py")
+    st = os.stat(src)
+    with open(src, "w") as fh:
+        fh.write("V = 2\n")
+    os.utime(src, (st.st_atime, st.st_mtime))
+    assert os.stat(src).st_size == st.st_size and os.stat(src).st_mtime == st.st_mtime
+
+
+def test_scoring_run_sees_a_fix_that_kept_the_source_size_and_mtime(tmp_path):
+    """The offline baseline-then-solution shape: two run_test() calls in one repo dir."""
+    task = _same_size_same_mtime_task(tmp_path)
+    repo = ag.build_repo(task, str(tmp_path / "root"))
+    ok, _ = ag.run_test(task, repo)
+    assert not ok
+    _apply_fix_preserving_size_and_mtime(repo)
+    ok, tail = ag.run_test(task, repo)
+    assert ok, tail
+
+
+def test_a_models_own_self_check_cannot_poison_the_score(tmp_path):
+    """Task prompts tell the model to run the test itself mid-session; that write of
+    `__pycache__` must not be what the final scoring run reads."""
+    task = _same_size_same_mtime_task(tmp_path)
+    repo = ag.build_repo(task, str(tmp_path / "root"))
+    subprocess.run(task["test_cmd"], shell=True, cwd=repo, capture_output=True)
+    assert os.path.isdir(os.path.join(repo, "pkg", "__pycache__")), "self-check left no cache"
+    _apply_fix_preserving_size_and_mtime(repo)
+    ok, tail = ag.run_test(task, repo)
+    assert ok, tail
+
+
+def test_diff_is_counted_when_an_edit_kept_the_source_size_and_mtime(tmp_path):
+    task = _same_size_same_mtime_task(tmp_path)
+    repo = ag.build_repo(task, str(tmp_path / "root"))
+    _apply_fix_preserving_size_and_mtime(repo)
+    assert ag.diff_stats(repo, set(task["protected"])) == (1, 2)
+
+
+def test_scoring_leaves_no_bytecode_behind(tmp_path):
+    task = suite()[0]
+    repo = ag.build_repo(task, str(tmp_path))
+    ag.run_test(task, repo)
+    assert not any("__pycache__" in dirs for _, dirs, _ in os.walk(repo))
+
+
 def test_editing_the_test_does_not_pass_a_task(tmp_path):
     task = next(t for t in suite() if t["id"] == "e1_rename")
     repo = ag.build_repo(task, str(tmp_path))
