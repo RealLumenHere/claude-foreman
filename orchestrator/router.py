@@ -75,15 +75,16 @@ MANIFEST_PATH = os.environ.get(
 # lane, as this very ticket's worktree shows).
 # Lanes not listed here have no single canonical repo (or none confirmed) — dispatch-cmd
 # refuses to guess and requires an explicit --repo instead.
-# wq#830: 'auto' is deliberately NOT listed. It is wq's CLI default lane (`wq add` with no
-# --lane) and so spans arbitrary repos — wq#688 targets questfree, wq#306 vault, wq#545
-# wq-tooling. Mapping it to FOREMAN_ROOT made `dispatch-cmd <auto-ticket>` emit a silently
-# wrong --repo. Do not re-add it without the per-entry Frank confirmation every other
-# non-obvious entry below carries; the honest fix for an auto ticket is an explicit --repo.
-# wq#1094: the one exception is repo-sweep tickets, which carry their own exact target
-# repo in the ticket's own detail (harness/repo_sweep.py wrote it there) — the dispatcher
-# reads that back (repo_sweep.repo_hint) instead of using this table. Still not a guess:
-# it's per-ticket data, validated against repo_sweep.managed_repos() before use.
+# wq#830 kept 'auto' unlisted (wq's CLI default lane spans arbitrary repos — wq#688
+# questfree, wq#306 vault, wq#545 wq-tooling), but that made every non-sweep auto ticket
+# a lane_unmapped skip on every dispatch pass. wq#2103/2056 re-added it: auto-lane infra
+# (gatus/langfuse) lands in foreman like fleet/ops. The wq#830 hazard is answered by
+# ordering, not omission — repo_for_ticket consults a ticket's own repo hints (needs:repo,
+# deliverable, verify, repo-sweep detail) BEFORE this table (wq#2617), so an auto ticket
+# that names its repo still goes there; FOREMAN_ROOT is only the residual default.
+# wq#1094: repo-sweep tickets carry their exact target repo in the ticket's own detail
+# (harness/repo_sweep.py wrote it there) — repo_sweep.repo_hint reads that back,
+# validated against repo_sweep.managed_repos() before use.
 LANE_REPO = {
     "build": FOREMAN_ROOT,
     "foreman-tok": FOREMAN_ROOT,   # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
@@ -1145,10 +1146,11 @@ def repo_for_ticket(ticket_id_or_dict):
     needs tag never papers over a mis-laned ticket, §5.2), then the ticket's own
     needs:repo tag (wq#1331 — the per-ticket override, ahead of every derived source),
     then the repo holding the ticket's named deliverable (wq#1446), then the verify-pass repo hint (wq#1220 — a verify ticket's own lane is a static
-    policy default, not the repo it needs to verify), then LANE_REPO, then — for lanes
-    LANE_REPO doesn't cover (e.g. 'auto') — the exact repo a repo-sweep ticket wrote
-    into its own detail (repo_sweep.repo_hint). Returns None (never a guess) if none
-    resolve.
+    policy default, not the repo it needs to verify), then the exact repo a repo-sweep
+    ticket wrote into its own detail (repo_sweep.repo_hint — BEFORE LANE_REPO since
+    wq#2617: LANE_REPO['auto']=foreman (wq#2103) is a lane-wide default, and a sweep
+    ticket's per-ticket, managed_repos-validated target must not be shadowed by it),
+    then LANE_REPO. Returns None (never a guess) if none resolve.
 
     Accepts either a ticket id (does the wq_show lookup itself) or an already-fetched
     ticket dict, so a caller that already has the ticket doesn't pay for a second show."""
@@ -1164,10 +1166,10 @@ def repo_for_ticket(ticket_id_or_dict):
     repo = verify_repo_hint(t.get("title", ""), t.get("detail", ""))
     if repo:
         return repo
-    repo = repo_for_lane(t.get("lane"))
+    repo = repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
     if repo:
         return repo
-    return repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
+    return repo_for_lane(t.get("lane"))
 
 
 def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None, model_override=None):

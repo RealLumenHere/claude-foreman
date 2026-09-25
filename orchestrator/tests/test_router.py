@@ -552,20 +552,23 @@ def test_lane_repo_nest_points_at_firmware_repo_not_archive_dir():
     assert router.repo_for_lane("nest") != "/home/lumen/projects/nest"
 
 
-# wq#830: 'auto' is wq's CLI default lane and spans arbitrary repos (wq#688 questfree,
-# wq#306 vault, wq#545 wq-tooling), so it must not resolve to FOREMAN_ROOT. Dispatching an
-# auto ticket without --repo has to fail loudly, not hand fworker the wrong tree.
-def test_auto_lane_has_no_canonical_repo():
-    assert router.repo_for_lane("auto") is None
+# wq#2103/2056 (1eb5c48) reversed wq#830: 'auto' now maps to FOREMAN_ROOT so auto-lane
+# infra tickets (gatus/langfuse) stop dying as lane_unmapped on every dispatch pass.
+# The wq#830 hazard (auto spans arbitrary repos) is answered by precedence instead
+# (wq#2617): every per-ticket repo hint — needs:repo, deliverable, verify, repo-sweep
+# detail — is consulted BEFORE the lane default, as the tests below prove.
+def test_auto_lane_defaults_to_foreman():
+    assert router.repo_for_lane("auto") == router.FOREMAN_ROOT
 
 
-def test_dispatch_cmd_auto_lane_without_repo_raises(monkeypatch):
+def test_dispatch_cmd_auto_lane_without_repo_dispatches_to_foreman(monkeypatch):
     monkeypatch.setattr(router, "wq_show", lambda tid: {
         "id": str(tid), "lane": "auto", "model": "claude-sonnet-5", "effort": "high",
-        "archetype": "standard-engineering",
+        "archetype": "standard-engineering", "title": "plain infra ticket", "detail": "",
     })
-    with pytest.raises(SystemExit, match="no LANE_REPO entry"):
-        router.dispatch_cmd(688)
+    cmd = router.dispatch_cmd(688)  # non-sweep auto ticket, no --repo
+    assert cmd[cmd.index("--repo") + 1] == router.FOREMAN_ROOT
+    # an explicit --repo still overrides the lane default
     cmd = router.dispatch_cmd(688, "/home/lumen/questfree")
     assert cmd[cmd.index("--repo") + 1] == "/home/lumen/questfree"
 
@@ -600,8 +603,14 @@ def test_repo_for_ticket_falls_back_to_repo_hint(monkeypatch):
     assert router.repo_for_ticket(t) == repo
 
 
-def test_repo_for_ticket_none_when_neither_resolves():
-    assert router.repo_for_ticket({"lane": "auto", "title": "plain ticket", "detail": ""}) is None
+def test_repo_for_ticket_plain_auto_ticket_gets_the_lane_default():
+    assert router.repo_for_ticket(
+        {"lane": "auto", "title": "plain ticket", "detail": ""}) == router.FOREMAN_ROOT
+
+
+def test_repo_for_ticket_none_when_nothing_resolves():
+    assert router.repo_for_ticket(
+        {"lane": "no-such-lane", "title": "plain ticket", "detail": ""}) is None
 
 
 # ---- wq#1496: the tests above all monkeypatch router.wq_show() to return a dict with a
