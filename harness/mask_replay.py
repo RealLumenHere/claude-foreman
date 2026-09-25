@@ -518,16 +518,37 @@ def record_rotated(sha256_12, ticket, note=None, path=None, rotated_at=None):
     return record
 
 
-def _hits(patterns, text, skip_masked_output):
-    """(label, prefix, value) per match. `skip_masked_output` drops a match that ends
-    in the mask literal — masking._matches' rule (wq#2298), true of the current table
-    and false of the legacy one, which is exactly why re-reading a masked artefact
-    used to re-arm the alarm."""
+def _spans(patterns, text, skip_masked_output):
+    """(label, prefix, value, start, end) per match. `skip_masked_output` drops a match
+    that ends in the mask literal — masking._matches' rule (wq#2298), true of the
+    current table and false of the legacy one, which is exactly why re-reading a masked
+    artefact used to re-arm the alarm."""
     for label, rx in patterns:
         for m in rx.finditer(text):
             if skip_masked_output and m.group(0).endswith(masking.MASK):
                 continue
-            yield label, m.group(1), m.group(0)[len(m.group(1)):]
+            yield label, m.group(1), m.group(0)[len(m.group(1)):], m.start(), m.end()
+
+
+def _hits(patterns, text, skip_masked_output):
+    """(label, prefix, value) per match; see _spans."""
+    for label, prefix, value, _, _ in _spans(patterns, text, skip_masked_output):
+        yield label, prefix, value
+
+
+# wq#2698: a pytest id joins its stacked parametrize ids with `-`, so the id `sk-key`
+# stacked on a residue id like `after-<rule name>` prints `sk-key-after-<rule name>`,
+# and the sk- rule (both tables) reads the words behind it as a 16-char body. Branch names do the same
+# (wq#2677's `...mask-alarm-record...`, ISSUE-LOG:657's `risk-asse...` family). No
+# issued sk- key has that body: every vendor format (`sk-ant-api03-`, `sk-proj-`,
+# `sk-or-v1-`, legacy `sk-` + 48 base62) is random base62/base64url that carries
+# digits or upper case. sk-key only — a kv-secret passphrase CAN be dash-joined words.
+_WORD_RUN = re.compile(r"[a-z]+(?:-[a-z]+)+")
+
+
+def word_run(label, value):
+    """True when an sk-key body is lower-case words joined by `-`: prose, not a key."""
+    return label == "sk-key" and bool(_WORD_RUN.fullmatch(value))
 
 
 def _context(line, value, label):
@@ -583,18 +604,26 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
             if (label, value) in seen:
                 continue
             seen.add((label, value))
-            line_at = text.rfind("\n", 0, text.find(prefix + value)) + 1
+            at = text.find(prefix + value)
+            line_at = text.rfind("\n", 0, at) + 1
             end = text.find("\n", line_at)
             line = text[line_at:end if end >= 0 else len(text)]
-            today_hits = [(p, v) for _, p, v in _hits(CURRENT_PATTERNS, line,
-                                                       skip_masked_output=True)]
+            today_spans = list(_spans(CURRENT_PATTERNS, line, skip_masked_output=True))
+            today_hits = [(p, v) for _, p, v, _, _ in today_spans]
+            # wq#2698: a span today's table does not touch is closed, whatever else the
+            # line holds. A transcript line is a whole JSONL record, so one live-shaped
+            # value anywhere in a tool result kept every other legacy hit in it open:
+            # wq#2697's `cfut_` + two glued mask literals, which today's table does not
+            # read at all, paged because a pytest id elsewhere in that output fired.
+            lo, hi = at - line_at, at - line_at + len(prefix + value)
+            untouched = not any(s < hi and e > lo for *_, s, e in today_spans)
             today = [v for _, v in today_hits]
             # wq#2423: a widened prefix that recuts this same span into a DIFFERENT
             # value string must not read as a retired rule. The line is only closed
             # when today's table stops firing on it altogether, or when whatever it
             # cuts today is itself already accounted for (tracked text, not this
             # exact-value comparison, which a recut always fails).
-            today_closed = not today_hits or any(
+            today_closed = untouched or any(
                 account(v, tracked, p) for p, v in today_hits)
             sha12 = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
             records.append({
@@ -607,6 +636,7 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
                 "accounted_in": account(value, tracked, prefix),
                 "still_matches_today": value in today,
                 "today_closed": today_closed,
+                "word_run": word_run(label, value),
                 "rotated": rotated.get(sha12),
                 # Splice this value out, then mask whatever else the line holds. On an
                 # artefact the second pass is a no-op (it is already masked, and
@@ -630,6 +660,8 @@ def unaccounted(records):
     tree text to match it against — or the ledger says it was rotated: a value that
     now 401s is settled no matter what the tree says about the string that used to
     work. Only what survives all three screens is worth an instinct-4 rotation.
+    An sk-key body that is dash-joined lower-case words (`word_run`, wq#2698) is
+    prose no issued key can spell, and is excused with them.
 
     A record from an unfaithful re-cut is not one of them: it was scored off text
     that replaced what the run actually read, so it can no more demand a rotation
@@ -639,6 +671,7 @@ def unaccounted(records):
     return [r for r in records
             if not r.get("rotated")
             and r.get("faithful", True)
+            and not r.get("word_run")
             and not r["accounted_in"] and not r.get("today_closed", not r["still_matches_today"])]
 
 
@@ -655,6 +688,8 @@ def report(ticket_id, records, out=sys.stdout):
             mark = "tracked"
         elif rec.get("today_closed", not rec["still_matches_today"]):
             mark = "rule-fixed"
+        elif rec.get("word_run"):
+            mark = "words"
         else:
             mark = "BURNED?"
         # wq#2695: a prefix is only non-secret under the rule that cut it. wq#2677's
@@ -673,8 +708,8 @@ def report(ticket_id, records, out=sys.stdout):
         print("\nROTATE: the values above marked BURNED? appear nowhere in the tracked "
               "tree. Hash a candidate against value_sha256_12 to name one.", file=out)
     else:
-        print("\nNo rotation: every value is committed text, or a string today's "
-              "masking.PATTERNS no longer reads as a credential.", file=out)
+        print("\nNo rotation: every value is committed text, a string today's "
+              "masking.PATTERNS no longer reads as a credential, or sk- prose.", file=out)
     recut = [r for r in records if not r.get("faithful", True)]
     if recut:
         print(f"{len(recut)} value(s) marked re-cut were scored off a file that has "

@@ -1461,6 +1461,45 @@ def test_a_line_today_truly_drops_is_still_excused():
     assert mask_replay.unaccounted(today_hits) == []
 
 
+def test_a_span_today_never_touches_is_closed_beside_a_live_hit():
+    """wq#2698: wq#2697's pytest output put `cfut_` + two glued mask literals on the
+    same JSONL line as a still-firing value. Today's table reads nothing at the cfut
+    span, but `today_closed` was judged over the whole line, so the live-shaped
+    neighbour kept it open and it paged BURNED?. The neighbour must still page."""
+    glue = "cfut_" + "MASKED" + "xoxb-MASKED"
+    live = "ghp_" + "Z1y2" * 9
+    items = {"transcript:synthetic": f"- {glue}\\n+ cfut_MASKED\\nFAILED x[{live}]\n"}
+    records = mask_replay.replay(0, tracked={}, items=items, rotated={})
+    seam = [r for r in records if r["label"] == "cloudflare" and r["value_len"] == 17]
+    assert seam, "fixture must fire the legacy cfut rule on the glued literals"
+    assert seam[0]["today_closed"]
+    assert [r["label"] for r in mask_replay.unaccounted(records)] == ["github"]
+
+
+# `"-".join`, not `"a" + "b"`: account() seam-joins a `+` split, so the wq#2697 id
+# would become committed text here and stop exercising the screen on replay.
+@pytest.mark.parametrize("body, prose", [
+    ("-".join(("after", "cloudflare")), True),
+    ("-".join(("mask", "alarm", "record", "a", "low")), True),
+    ("abcdefghijkl" + "mnopqrstuvwx", False),   # one run of letters: _SK_BODY's shape
+    ("-".join(("after", "cloudflare9")), False),
+    ("-".join(("after", "Cloudflare")), False),
+])
+def test_an_sk_body_of_dash_joined_words_is_prose(body, prose):
+    """wq#2698: pytest joins stacked ids with `-`, so `sk-key` + `after-<rule>` is an
+    sk- match with a 16-char body of words. No issued sk- key carries a body without
+    a digit or upper-case letter; anything else stays unaccounted."""
+    items = {"transcript:synthetic": "FAILED x[sk-" + "key-" + body + "]\n"}
+    records = mask_replay.replay(0, tracked={}, items=items, rotated={})
+    assert len(records) == 1, "fixture must fire the legacy sk- rule exactly once"
+    assert records[0]["word_run"] is prose
+    assert (mask_replay.unaccounted(records) == []) is prose
+
+
+def test_a_kv_passphrase_of_words_is_not_excused_as_prose():
+    assert not mask_replay.word_run("kv-secret", "correct-" + "horse-battery")
+
+
 def test_legacy_table_is_not_the_live_one():
     """A future tightening of masking.PATTERNS must not silently rewrite history."""
     assert mask_replay.LEGACY_PATTERNS is not mask_replay.CURRENT_PATTERNS
