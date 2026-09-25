@@ -56,6 +56,9 @@ SECRETS_DIR = os.environ.get("TOKEN_ENGINE_STATE_DIR", "/var/lib/token-engine")
 # Overridable so a gate replay can run an env-scoped daemon as an ordinary
 # uid; the systemd unit sets neither env, so production keeps token-client.
 CLIENT_GROUP = os.environ.get("TOKEN_ENGINE_CLIENT_GROUP", "token-client")
+# wq#2561: belt-and-suspenders alongside CLIENT_GROUP — see the setfacl call
+# in main() for why group-only access isn't enough.
+CLIENT_USER = os.environ.get("TOKEN_ENGINE_CLIENT_USER", "lumen")
 # Same dual audit sink as fleet-exec:112-114.
 AUDIT_PATH = os.environ.get("FLEET_EXEC_AUDIT_PATH",
                             "/home/lumen/foreman/events/fleet-exec.jsonl")
@@ -1387,6 +1390,19 @@ def main():
     srv.bind(SOCK_PATH)
     os.chown(SOCK_PATH, -1, client_gid)
     os.chmod(SOCK_PATH, 0o660)
+    # wq#2561: a `usermod -aG token-client lumen` grant never reaches a lumen
+    # process that was already running (forked before or fork()'d off a
+    # parent from before the grant) — Linux fixes a process's supplementary
+    # groups at fork/exec time and never re-reads /etc/group for it, so it
+    # keeps EACCES on connect() until that process (or its ancestor) restarts.
+    # A named-user ACL entry is matched against SO_PEERCRED's uid instead,
+    # which every lumen process has always had, so it grants access
+    # immediately on every daemon (re)start regardless of group-cache age.
+    try:
+        subprocess.run(["setfacl", "-m", f"u:{CLIENT_USER}:rw", SOCK_PATH], check=True)
+    except (OSError, subprocess.CalledProcessError) as e:
+        print(f"warning: setfacl u:{CLIENT_USER}:rw {SOCK_PATH} failed: {e}",
+              file=sys.stderr, flush=True)
     srv.listen(16)
     print(f"token-engine listening on {SOCK_PATH} uid={os.getuid()}", flush=True)
     while True:
