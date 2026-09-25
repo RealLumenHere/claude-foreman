@@ -92,8 +92,12 @@ WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # the repo name `highs_solver` is an availability bug, not just noise. Rationale
 # and the kv_secret carve-out: harness/masking.py. wq#2400 added `_` to the class for
 # the same reason the alnums are there — a prefix after `_` is an identifier tail.
-_B = r"(?<![A-Za-z0-9_])"
+# wq#2694: except directly after the mask literal, or `ghp_MASKED` + `ghp_<live>` passes
+# the tripwire and reaches the broker result. Rationale: masking._B.
 MASK = "MASKED"   # masking.MASK — the literal every replacement there ends in
+_AFTER_MASK = r"(?<=(?-i:" + MASK + r"))"
+_B = r"(?:" + _AFTER_MASK + r"|(?<![A-Za-z0-9_]))"
+_WB = r"(?:" + _AFTER_MASK + r"|\b)"
 
 
 def _body(charset, quant):
@@ -149,7 +153,7 @@ MASK_PATTERNS = [
     # runs as `tokeneng`, off the harness import path, so the vocabulary is copied
     # rather than imported; test_masking.test_token_engine_mirror_agrees pins them.
     ("kv_secret", re.compile(
-        r'\b(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER +
+        _WB + r'(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER +
         _KV_NOT_CALLED + _body(_KV_BODY, '{12,}'),
         re.IGNORECASE)),
 ]

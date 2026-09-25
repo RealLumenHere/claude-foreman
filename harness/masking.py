@@ -47,9 +47,22 @@ import live_code
 # to one is the tail of a NAME (`notes_on_xoxb-`, `my_cfut_settings`), and a value that
 # really is labelled by that name (`SLACK_TOKEN=xoxb-…`) is caught by kv-secret below,
 # whose label half does not read `_B` at all.
-_B = r"(?<![A-Za-z0-9_])"
-
+#
+# wq#2694: the one alphanumeric that IS a boundary is the end of our own mask literal.
+# `_body()` stops a run at the literal, so in `ghp_MASKED` + `ghp_<live>` the first
+# match dies under its floor and the live half must start on its own — which the class
+# refused, the character before it being the `D` of `MASKED`. Hits `[]`, token in the
+# clear, on every prefix rule (ops/wq2694-after-mask/probe_after_mask.py). The exception
+# is exact and case-sensitive: no identifier carries upper-case `MASKED` glued to a
+# credential prefix, and a value that sits there is a live token against our own output.
+# bin/mask-secrets spells the same exception as a `|MASKED` alternative (wq#2697).
+# The two rules keyed on a word (url-auth, kv-secret) open on `\b` and are blind at the
+# same position for the same reason, so they take it as `_WB`. Case-sensitive via
+# `(?-i:)` because kv-secret is IGNORECASE, for the reason `_body()` gives.
 MASK = "MASKED"       # the literal every replacement ends in
+_AFTER_MASK = r"(?<=(?-i:" + MASK + r"))"
+_B = r"(?:" + _AFTER_MASK + r"|(?<![A-Za-z0-9_]))"
+_WB = r"(?:" + _AFTER_MASK + r"|\b)"
 
 
 def _body(charset, quant):
@@ -176,7 +189,7 @@ PATTERNS = [
     # in the clear two lines above the github values it was quoting. Same exclusions:
     # templates/env-refs, ALL_CAPS names and placeholder words are pointers, not values.
     ("url-auth", re.compile(
-        r"\b([A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{1,64}:)"
+        _WB + r"([A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{1,64}:)"
         # wq#2704: `\\*` because a transcript is JSONL — a shell-escaped `\${VAR}`
         # arrives as `\\${VAR}`, which the bare class read as a 16-char credential.
         r"(?!\\*[${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
@@ -216,7 +229,7 @@ PATTERNS = [
     # it can express none of this. It has already missed both earlier fixes and is the
     # tool instinct 4 tells every agent to pipe through (ISSUE-LOG row 577).
     ("kv-secret", re.compile(
-        r'\b((?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*)'
+        _WB + r'((?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*)'
         + _KV_POINTER + _KV_NOT_CALLED + _body(_KV_BODY, '{12,}'),
         re.IGNORECASE), r"\1MASKED"),
 ]

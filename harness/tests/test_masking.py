@@ -287,8 +287,13 @@ def _adjacency_cases(prefix, body):
     # it the live half is not a url-auth credential and the case would test nothing.
     end = URL_HOST if prefix == URL_USER else ""
     live = prefix + body + end
+    # wq#2694: the mirror directions, masked text glued in FRONT of the live value. A
+    # URL userinfo is not a prefix this module keeps, so url-auth's residue is github's.
+    residue = ("ghp_" if prefix == URL_USER else prefix) + masking.MASK
     return [("own output glued to a live value", live + prefix + masking.MASK + end),
-            ("bare literal glued to a live value", prefix + body + masking.MASK + end)]
+            ("bare literal glued to a live value", prefix + body + masking.MASK + end),
+            ("own output glued in front of a live value", residue + live),
+            ("bare literal glued in front of a live value", masking.MASK + live)]
 
 
 def test_a_live_value_glued_to_masked_output_still_masks_and_alarms():
