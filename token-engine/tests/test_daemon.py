@@ -801,6 +801,43 @@ class HelperScriptTest(unittest.TestCase):
             self.assertEqual((p.returncode, p.stdout), (0, ""), p.stderr)
 
 
+class AclGrantTest(unittest.TestCase):
+    """wq#2566: rw on the socket is useless without x on its directory — both
+    setfacl calls must fire on every daemon start, no socket/root involved."""
+
+    def setUp(self):
+        self.orig_sock_dir = D.SOCK_DIR
+        self.orig_sock_path = D.SOCK_PATH
+        D.SOCK_DIR = "/run/token-engine"
+        D.SOCK_PATH = "/run/token-engine/broker.sock"
+        self.orig_sub = D.subprocess.run
+        self.calls = []
+        D.subprocess.run = lambda argv, **kw: self.calls.append(argv)
+
+    def tearDown(self):
+        D.SOCK_DIR = self.orig_sock_dir
+        D.SOCK_PATH = self.orig_sock_path
+        D.subprocess.run = self.orig_sub
+
+    def test_grants_socket_rw_and_dir_traversal(self):
+        D._grant_client_acls()
+        self.assertEqual(self.calls, [
+            ["setfacl", "-m", f"u:{D.CLIENT_USER}:rw", D.SOCK_PATH],
+            ["setfacl", "-m", f"u:{D.CLIENT_USER}:x", D.SOCK_DIR],
+        ])
+
+    def test_dir_acl_still_runs_if_socket_acl_fails(self):
+        def run(argv, **kw):
+            self.calls.append(argv)
+            if argv[2].startswith(f"u:{D.CLIENT_USER}:rw"):
+                raise D.subprocess.CalledProcessError(1, argv)
+        D.subprocess.run = run
+        D._grant_client_acls()  # must not raise
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[1],
+                         ["setfacl", "-m", f"u:{D.CLIENT_USER}:x", D.SOCK_DIR])
+
+
 class MaskRewriteTest(unittest.TestCase):
     def test_rewrite_output_never_retrips_the_tripwire(self):
         dirty = ("cf token cfut_" + "abcdef123456" + " and pat ghp_" + "c" * 36 +
