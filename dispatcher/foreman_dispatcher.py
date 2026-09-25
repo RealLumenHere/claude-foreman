@@ -77,6 +77,7 @@ import runaway          # noqa: E402
 import self_heal        # noqa: E402  # charge_mode_legacy(): FOREMAN_CHARGE_MODE rollback lever
 import spawn_loop_guard  # noqa: E402  # wq#1703: restart-loop breaker
 import psi_pressure     # noqa: E402  # wq#844
+import cpu_pressure     # noqa: E402  # wq#2631/wq#2647
 import burn_rate        # noqa: E402  # wq#1669: burn-rate spawn controller
 import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
 import vlogs_mirror      # noqa: E402  # wq#1416
@@ -2021,6 +2022,26 @@ def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None):
         tight = True
         log.emit("tight_mode", reason=psi_reason,
                  detail=f"PSI pressure: max {tight_cfg['max_spawns_per_pass']} "
+                        f"spawn(s), epri<={tight_cfg['min_pri']} only")
+
+    # wq#2631/wq#2647: PSI CPU pressure — mirrors the wq#844 memory-PSI block above,
+    # same shared admission_gate.check() a subprocess caller (dispatch-batch) uses.
+    try:
+        cpu_verdict, cpu_reason = cpu_pressure.check(tight_cfg)
+    except Exception as e:  # noqa: BLE001 — see docstring above
+        log.emit("error", stage="cpu_pressure", reason="cpu_check_failed",
+                 detail=repr(e)[:300])
+        cpu_verdict, cpu_reason = "ok", "cpu_check_error"
+    if cpu_verdict == "deny":
+        log.emit("halt", stage="cpu_pressure", reason=cpu_reason)
+        ntfy(f"dispatcher: CPU PSI hard stop — {cpu_reason}", priority="high",
+             title="dispatcher CPU halt")
+        return {"candidates": len(candidates), "spawned": 0, "tight": False,
+                "quarantined": 0, "cpu_halt": cpu_reason}
+    if cpu_verdict == "tight" and not tight:
+        tight = True
+        log.emit("tight_mode", reason=cpu_reason,
+                 detail=f"CPU pressure: max {tight_cfg['max_spawns_per_pass']} "
                         f"spawn(s), epri<={tight_cfg['min_pri']} only")
 
     try:
