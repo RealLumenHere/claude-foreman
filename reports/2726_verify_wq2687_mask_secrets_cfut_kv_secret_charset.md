@@ -24,8 +24,8 @@ kv-secret:  {12,}             -> {11,}[A-Za-z0-9]
 
 Intent (per commit message/comments): stop the greedy POSIX-ERE body class
 (which includes `.`/`_`/`-`) from swallowing a sentence-final period sitting
-right after this tool's own `MASKED` output, e.g. `cfut_MASKED.` ->
-previously `cfut_MASKED` (period silently dropped). The PR's own new test
+right after this tool's own `MASKED` output, e.g. `cfut_` + `MASKED.` ->
+previously `cfut_` + `MASKED` (period silently dropped). The PR's own new test
 (`test_trailing_punctuation_after_masked_literal_survives`) and all 30 tests
 in `test_mask_secrets_boundary.py` pass against the fixed script.
 
@@ -61,11 +61,11 @@ whole in a file every worker is doctrine-bound to read arms the mask
 tripwire on the reader.)
 
 ```
-'token ' + 'cfut_' + 'abcd1_'        + ' end'  -> 'token cfutMASKED_ end'   # trailing `_` leaks
-'token ' + 'cfut_' + 'abcd1efgh.'    + ' end'  -> 'token cfut_MASKED. end'  # trailing `.` leaks
-'token ' + 'cfut_' + 'abcd1efgh-'    + ' end'  -> 'token cfut_MASKED- end'  # trailing `-` leaks
-'TOKEN: ' + 'abcdefghijk_'           + ' end'  -> 'TOKEN: abcdefghijk_ end' # NOT MASKED AT ALL (12-char floor, ends in `_`)
-'TOKEN: ' + 'abcdefghijklmnop_'      + ' end'  -> 'TOKEN: MASKED_ end'      # trailing `_` leaks
+'token ' + 'cfut_' + 'abcd1_'        + ' end'  -> 'token cfut' + 'MASKED_' + ' end'   # trailing `_` leaks
+'token ' + 'cfut_' + 'abcd1efgh.'    + ' end'  -> 'token cfut_' + 'MASKED.' + ' end'  # trailing `.` leaks
+'token ' + 'cfut_' + 'abcd1efgh-'    + ' end'  -> 'token cfut_' + 'MASKED-' + ' end'  # trailing `-` leaks
+'TOKEN: ' + 'abcdefghijk_'           + ' end'  -> unchanged, NOT MASKED AT ALL (12-char floor, ends in `_`)
+'TOKEN: ' + 'abcdefghijklmnop_'      + ' end'  -> 'TOKEN: ' + 'MASKED_' + ' end'       # trailing `_` leaks
 ```
 
 Same inputs against the pre-fix script (commit `92e5fa6^`) and against
@@ -74,9 +74,9 @@ mask every case with zero leak, e.g.:
 
 ```python
 masking.mask_text('TOKEN: ' + 'abcdefghijk_' + ' end')
--> ('TOKEN: MASKED end', ['kv-secret'])
+-> ('TOKEN: ' + 'MASKED' + ' end', ['kv-secret'])
 masking.mask_text('token ' + 'cfut_' + 'abcd1_' + ' end')
--> ('token cfut_MASKED end', ['cloudflare'])
+-> ('token cfut_' + 'MASKED' + ' end', ['cloudflare'])
 ```
 
 So this is a genuine regression versus both the pre-fix sed mirror and the
