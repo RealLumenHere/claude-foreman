@@ -145,6 +145,20 @@ def test_the_truncation_retry_still_burns_a_cut_live_token():
     assert mask_replay.account("abcdefghijk...", tree) is None
 
 
+def test_a_preview_cut_under_the_floor_is_accounted_with_its_prefix():
+    """wq#2663: wq#2630's run printed `value[:14] + "..."` of a 22-char cfut_ fixture,
+    a 9-char body under the floor, and paged it as burned (sha256 740e963a761d)."""
+    fixture = "cfut_" + "wq2663" + "preview" + "fixture"
+    tree = {"tests/t.py": "X = '" + fixture + "'\n"}
+    printed = "  cloudflare   len=22  '" + fixture[:14] + "...'\n"
+    records = mask_replay.replay(0, tracked=tree, items={"transcript:a": printed})
+    assert [r["accounted_in"] for r in records] == ["tests/t.py:1"]
+    assert mask_replay.unaccounted(records) == []
+    # the prefix is what makes the stub specific: without it, or with a live head, None
+    assert mask_replay.account(fixture[5:14] + "...", tree) is None
+    assert mask_replay.account("Zq7xW2pL9...", tree, prefix="cfut_") is None
+
+
 def test_a_value_in_neither_screen_is_reported(tmp_path):
     records = mask_replay.replay(0, tracked={}, items={"snapshot:a": LIVE})
     assert records[0]["still_matches_today"] is True

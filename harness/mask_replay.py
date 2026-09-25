@@ -376,12 +376,13 @@ def _seam_joined(text):
     return joined
 
 
-def account(value, tracked):
+def account(value, tracked, prefix=""):
     """`path:line` of the first committed file holding this exact string, else None.
 
     Falls back to the seam-closed view of each file, so a fixture assembled from
-    concatenated literals accounts for the whole value its runtime produces, and then
-    to the value minus a trailing `...` (masking.untruncated, wq#2648).
+    concatenated literals accounts for the whole value its runtime produces, then
+    to the value minus a trailing `...` (masking.untruncated, wq#2648), then to that
+    cut with the rule's `prefix` attached (masking.untruncated_whole, wq#2663).
     """
     for path, text in tracked.items():
         at = text.find(value)
@@ -395,7 +396,10 @@ def account(value, tracked):
         if at >= 0:
             return f"{path}:{joined.count(chr(10), 0, at) + 1}"
     cut = masking.untruncated(value, TRUNCATED_FLOOR)
-    return account(cut, tracked) if cut else None
+    if cut:
+        return account(cut, tracked)
+    whole = masking.untruncated_whole(prefix, value, TRUNCATED_FLOOR)
+    return account(whole, tracked) if whole else None
 
 
 # wq#2557: a run that edits ANOTHER repo (wq#2555 fixed /home/lumen/minerva through a
@@ -592,7 +596,7 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
                 "value_sha256_12": sha12,
                 "first_seen_in": source,
                 "faithful": not source.startswith("read-stale:"),
-                "accounted_in": account(value, tracked),
+                "accounted_in": account(value, tracked, prefix),
                 "still_matches_today": value in today,
                 "rotated": rotated.get(sha12),
                 # Splice this value out, then mask whatever else the line holds. On an

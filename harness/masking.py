@@ -174,6 +174,23 @@ def untruncated(value, floor):
     return None
 
 
+# wq#2663: a printer that keeps `value[:14] + "..."` leaves a 9-char body after `cfut_`,
+# under any body floor, so a preview of a committed 22-char fixture paged as burned.
+# Retried WITH the rule's literal prefix the stub is only excused by text holding
+# `cfut_<those 9 chars>`, i.e. a token whose head is itself committed. The body keeps
+# its own floor so a long lead-in (`GITEA_TOKEN="`) cannot carry a 2-char stub.
+TRUNCATED_BODY_FLOOR = 6
+
+
+def untruncated_whole(prefix, body, floor):
+    """`prefix` + `body` minus a trailing ellipsis when the whole reaches `floor` and
+    the cut body reaches TRUNCATED_BODY_FLOOR, else None."""
+    cut = untruncated(body, TRUNCATED_BODY_FLOOR)
+    if cut and prefix and len(prefix + cut) >= floor:
+        return prefix + cut
+    return None
+
+
 # wq#2339/wq#2341: values that are this masker's OWN output read back, by hash. A hit
 # record matching one of these is the mask literal itself — a credential cannot survive
 # having been replaced by it — so an alarm carrying nothing else is not a burn and is

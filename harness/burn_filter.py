@@ -206,7 +206,9 @@ def _is_accounted(match, repo_roots, runner):
 
     The body lookup adds no argv exposure: the body is a substring of the whole match
     that was just put there. Neither does the last resort, the body minus a trailing
-    `...` (masking.untruncated, wq#2648): a printer that shortened a fixture.
+    `...` (masking.untruncated, wq#2648): a printer that shortened a fixture, retried
+    with the rule's prefix attached when the cut body alone is under the floor
+    (masking.untruncated_whole, wq#2663).
     """
     if is_committed_literal(match, repo_roots, runner=runner):
         return True
@@ -215,6 +217,8 @@ def _is_accounted(match, repo_roots, runner):
             and is_committed_literal(body, repo_roots, runner=runner)):
         return True
     cut = masking.untruncated(body or match, MIN_SECRET_LEN)
+    if not cut and body and match.endswith(body):
+        cut = masking.untruncated_whole(match[:-len(body)], body, MIN_SECRET_LEN)
     return bool(cut) and is_committed_literal(cut, repo_roots, runner=runner)
 
 

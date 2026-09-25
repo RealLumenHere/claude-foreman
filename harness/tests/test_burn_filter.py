@@ -182,6 +182,25 @@ def test_the_truncation_retry_still_burns_a_cut_unknown_value():
         == ["kv-secret"]
 
 
+def test_a_preview_cut_under_the_body_floor_is_accounted_with_its_prefix():
+    """wq#2663: `value[:14] + "..."` of a 22-char cfut_ fixture leaves a 9-char body."""
+    body = "wq2663" + "preview" + "fixture"
+    value = burn_filter.Hit("cfut_" + body[:9] + "...", body[:9] + "...")
+    grep = FakeGrep(committed=["cfut_" + body[:9]])
+    burned, benign = burn_filter.classify({"cloudflare": [value]}, set(), REPO, runner=grep)
+    assert burned == [] and benign == ["cloudflare"]
+    assert _needles(grep)[-1] == "cfut_" + body[:9]
+    # the body alone, without the rule's prefix, excuses nothing
+    grep = FakeGrep(committed=[body[:9]])
+    assert burn_filter.classify({"cloudflare": [value]}, set(), REPO, runner=grep)[0] \
+        == ["cloudflare"]
+    # nor does a long lead-in carry a stub under the body floor
+    stub = burn_filter.Hit('GITEA_TOKEN="' + "ab...", "ab...")
+    grep = FakeGrep(committed=['GITEA_TOKEN="' + "ab"])
+    assert burn_filter.classify({"kv-secret": [stub]}, set(), REPO, runner=grep)[0] \
+        == ["kv-secret"]
+
+
 def test_a_plain_string_is_still_screened_whole():
     grep = FakeGrep(committed=[OAT[len("sk-ant-"):]])
     burned, _ = burn_filter.classify({"sk-key": [str(OAT)]}, set(), REPO, runner=grep)
