@@ -32,7 +32,10 @@ PINS = {
     ("capability", "policy_grants"): "16e2717ad09a896d",
     ("capability", "effective_needs"): "41c72c0c490ad732",
     ("capability", "effective_add_dirs"): "27b2e12bab76c1fd",
-    ("fworker", "resolve_exec_grant"): "6504c41e248773e1",
+    ("fworker", "resolve_exec_grant"): "7fec5cd04368e6a5",   # re-pinned wq#2617: changed by
+                                                             # wq#2349 token-engine (3659614,
+                                                             # f07901d) + 05e9eec doc fix (0400
+                                                             # -> 0444), all deliberate
     ("fworker", "assert_spawn_capability"): "d94068f91c6bcf78",   # re-pinned wq#2184
 }
 
