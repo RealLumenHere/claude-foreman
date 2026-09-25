@@ -53,6 +53,17 @@ class HandleTest(unittest.TestCase):
         self.assertEqual(decision, "allow")
         self.assertTrue(result["pong"])
 
+    def test_ping_reports_self_fingerprint(self):
+        """wq#2567: the running daemon must report the sha256 of the source
+        main() it actually loaded, so deployed-vs-merged drift on this file
+        (ISSUE-LOG 595/695/697/698) is visible without systemctl/journalctl
+        archaeology."""
+        ok, _, _, result, _ = D.handle(req(self.path, self.sha), self.peer)
+        self.assertTrue(ok)
+        with open(D.__file__, "rb") as f:
+            expected = hashlib.sha256(f.read()).hexdigest()
+        self.assertEqual(result["self_sha256"], expected)
+
     def test_unknown_verb_denied(self):
         ok, rule, *_ , decision = D.handle(req(self.path, self.sha, verb="rm-rf"), self.peer)
         self.assertFalse(ok)

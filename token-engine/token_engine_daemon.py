@@ -31,6 +31,7 @@ helper, plus zero-crossing `git-fetch`/`git-push`.
 """
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -49,6 +50,19 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet_exec_policy as P  # root-owned copy installed next to this file
 import token_ledger as L      # minted-token ledger + revocation (wq#2277 T9)
+
+# wq#2567: fingerprint of the source main() actually loaded, so deployed-vs-
+# merged drift on this file (ISSUE-LOG rows 595/695/697/698) is visible from a
+# running daemon instead of needing systemctl-timestamp + journalctl archaeology.
+def _self_sha256():
+    try:
+        with open(os.path.abspath(__file__), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+SELF_SHA256 = _self_sha256()
 
 SOCK_DIR = os.environ.get("TOKEN_ENGINE_RUNTIME_DIR", "/run/token-engine")
 SOCK_PATH = os.path.join(SOCK_DIR, "broker.sock")
@@ -199,7 +213,7 @@ class Deny(Exception):
 
 def verb_ping(req, grant):
     return {"pong": True, "daemon_uid": os.getuid(),
-            "secrets_dir": SECRETS_DIR}
+            "secrets_dir": SECRETS_DIR, "self_sha256": SELF_SHA256}
 
 
 def verb_mask_selftest(req, grant):
@@ -1429,7 +1443,8 @@ def main():
     os.chmod(SOCK_PATH, 0o660)
     _grant_client_acls()
     srv.listen(16)
-    print(f"token-engine listening on {SOCK_PATH} uid={os.getuid()}", flush=True)
+    print(f"token-engine listening on {SOCK_PATH} uid={os.getuid()} "
+          f"self_sha256={SELF_SHA256}", flush=True)
     while True:
         conn, _ = srv.accept()
         try:
