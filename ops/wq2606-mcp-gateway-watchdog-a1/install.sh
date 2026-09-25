@@ -17,6 +17,23 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 GATEWAY_UNIT=${WQ2606_GATEWAY_UNIT:-desktop-commander-mcp}
 GATEWAY_PORT=${WQ2606_GATEWAY_PORT:-3100}
 
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vfile "$HERE/mcp-gateway-watchdog.sh" /home/lumen/bin/mcp-gateway-watchdog.sh
+  EXPECT_SERVICE=$(mktemp)
+  sed "s#--unit desktop-commander-mcp --port 3100#--unit ${GATEWAY_UNIT} --port ${GATEWAY_PORT}#" \
+    "$HERE/mcp-gateway-watchdog.service" > "$EXPECT_SERVICE"
+  vfile "$EXPECT_SERVICE" /etc/systemd/system/mcp-gateway-watchdog.service
+  rm -f "$EXPECT_SERVICE"
+  vunit_file "$HERE/mcp-gateway-watchdog.timer" /etc/systemd/system/mcp-gateway-watchdog.timer
+  venabled mcp-gateway-watchdog.timer
+  vactive mcp-gateway-watchdog.timer
+  vfile "$HERE/cloudflared-metrics.conf" /etc/systemd/system/cloudflared.service.d/wq2606-metrics.conf
+  vfile "$HERE/supergateway-logrotate.conf" /etc/logrotate.d/supergateway
+  vdone
+fi
+
 [ "$(id -u)" = 0 ] || { echo "must run as root (unit install + daemon-reload + restart)"; exit 1; }
 
 install -D -m 0755 "$HERE/mcp-gateway-watchdog.sh" /home/lumen/bin/mcp-gateway-watchdog.sh
