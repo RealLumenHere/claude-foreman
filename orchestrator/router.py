@@ -113,6 +113,7 @@ LANE_REPO = {
                              # ticket was skipped as lane_unmapped on every dispatch pass
                              # (research/NIGHTLY_DISPATCH_RESILIENCE.md §1.6, dispatcher.log).
     "ops": FOREMAN_ROOT,
+    "auto": FOREMAN_ROOT,          # wq#2103/2056: auto-lane infra (gatus/langfuse) lands in foreman, like fleet/ops
     "quest-repair-research": FOREMAN_ROOT,
     "fleet-fires": FOREMAN_ROOT,          # fires are fleet/infra work, run from foreman
     "research": FOREMAN_ROOT,             # cwd is FOREMAN_ROOT itself, so research docs land in
