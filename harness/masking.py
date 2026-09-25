@@ -368,6 +368,16 @@ def _matches(rx, text):
     front — is not, and alarms. `_body()` above is the structural half of the fix and
     carries every prefix rule; this half is what covers url-auth, which cannot take a
     bounded body (see there), and what stops the composed re-arm for all of them.
+
+    wq#2674 re-checked the specific shape that motivated this docstring's own citations
+    (kb/ISSUE-LOG.md row 724, `"...read back as cfut_" + "MASKED."`) plus the kv-secret
+    twin ("check whether kv-secret has the same exposure"): trailing prose punctuation
+    (`cfut_MASKED.`, `token: MASKED.`, `Signing Secret: MASKED).`) does not re-arm either
+    rule, because the bounded body in `_body()` already refuses to enter the literal at
+    all — there is no position left where a body run can absorb `MASKED` and then keep
+    going into the punctuation behind it. Confirmed no residual gap for any PATTERNS
+    label; regression pinned in test_masking.py::test_masked_output_with_prose_behind_it_does_not_re_arm,
+    which already parametrizes over every rule including kv-secret via ADJACENT.
     """
     return [m for m in rx.finditer(text)
             if not _OWN_TAIL.fullmatch(m.group(0)[len(m.group(1)):])]
