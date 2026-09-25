@@ -354,6 +354,22 @@ def test_the_wq2677_probe_password_masks_and_alarms():
         assert hits == ["kv-secret"] and WQ2677_PW not in masked
 
 
+# wq#2707: wq#2702's verify pass Wrote /tmp/fworker-wq2702/triple_glue_input.txt, the
+# github, aws and slack LIVE fixtures of ops/wq2697-mask-seam/probe_seam.py glued with no
+# separator. `[A-Za-z0-9_]` runs straight through `AKIA...xoxb`, so the tripwire paged the
+# whole 60-char run as one burned github body (sha256 6d4c27f66a96). Every fragment is
+# committed; the glue was not. Split at each rule's prefix so reading this file stays
+# silent; replay's seam join reassembles it.
+WQ2702_TRIPLE_GLUE = "ghp_" "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8" "AKIA" "QQQQQQQQQQQQQQQQ" "xoxb" "-12345678901"
+
+
+def test_the_wq2702_triple_glue_masks_as_one_github_value_and_alarms():
+    body = WQ2702_TRIPLE_GLUE[len("ghp_"):-len("-12345678901")]
+    assert len(body) == 60 and masking.value_sha12(body) == "6d4c27f66a96"
+    masked, hits = masking.mask_text(WQ2702_TRIPLE_GLUE)
+    assert "github" in hits and body not in masked
+
+
 def test_a_rules_output_inside_another_rules_value_is_still_ours():
     """The rules compose: url-auth reads a userinfo line the github rule has already
     masked, so its whole value is another rule's kept prefix plus the literal. That is
