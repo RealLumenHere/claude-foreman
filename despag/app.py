@@ -62,7 +62,7 @@ HARNESSES_FILE = DESPAG_DIR / "harnesses.yaml"
 LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker")
 # END GENERATED
 
-CLAUDE_BIN = os.environ.get("DESPAG_CLAUDE_BIN", "claude")
+CLAUDE_BIN = os.environ.get("DESPAG_CLAUDE_BIN", "/home/lumen/.npm-global/bin/claude")
 # Plain `/health` makes LiteLLM probe every configured deployment and can take
 # 15s+ (or hang) under load; `/health/liveliness` is the proxy's own fast liveness
 # check (no model calls) — what `compute_available` actually needs per request.
