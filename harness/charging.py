@@ -50,8 +50,8 @@ DEFAULT_SERVED_CTX = 32768
 # (fworker.LOCAL_CLI_FLAGS + local_profile_env), chars/3.5 like everything else here,
 # measured by `python3 harness/cli_calibration.py` on the CLI version below. A unit test
 # fails when the installed CLI differs, or a fresh measurement drifts from this number.
-CALIBRATED_CLI_VERSION = "2.1.276"
-LOCAL_CLI_OVERHEAD_TOKENS = 3925
+CALIBRATED_CLI_VERSION = "2.1.282"
+LOCAL_CLI_OVERHEAD_TOKENS = 3926
 # Two slots on one Mac prefill at once and time-slice: a 250-token request took 352 s
 # behind a 16k prefill (dispatcher/config.json local_backends note, wq#2130).
 SHARED_BOX_FACTOR = 2
