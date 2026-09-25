@@ -2354,9 +2354,10 @@ def _reader_thread(pipe, q):
 # which SIGTERMs the CHILD and then retries in-process (wq#1894).
 # ---------------------------------------------------------------------------
 
-# do_attempt() populates this right before spawning the child and marks it written
-# once that attempt's own write_attempt_state() call lands normally — the window this
-# covers is exactly "child in flight, no attempt-N.json yet", the wq#1852/1883 gap.
+# do_attempt() populates this at entry (wq#2617 — the claim is taken before do_attempt
+# runs, and the pre-spawn steps take real seconds) and marks it written once that
+# attempt's own write_attempt_state() call lands normally — the window this covers is
+# "claim held, no attempt-N.json yet", child in flight or not: the wq#1852/1883 gap.
 # Deliberately not wired into fire-mode's run_fire_child(): its attempt numbering is
 # tracked separately (run_fire_ticket's attempt_n) and run_child() there is always
 # called with attempt=1, so charging through this context would mislabel the record.
@@ -3386,6 +3387,17 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # actually inherited.
     claim_holder_at_start = ticket_holder(ticket)
 
+    worker_id = args.worker_id or f"fworker-wq{ticket_id}-a{attempt}"
+
+    # wq#2617: the claim is already ours (cmd_run took it before calling here), so the
+    # wq#1894 SIGTERM contract starts NOW, not at spawn time. The pre-spawn stretch
+    # below — governor gates, worktree plumbing, exec-grant resolution, acceptance
+    # pinning, prompt build with its fleet-context reads — takes real seconds; a unit
+    # stop landing in it used to find _SIGTERM_CTX empty and exit without charging or
+    # releasing, leaving the ticket claimed until lease expiry (the exact wq#1852 sit
+    # this handler exists to prevent).
+    set_sigterm_context(ticket_id, attempt, worker_id)
+
     allow, reason = can_dispatch(args.model)
     if not allow:
         log(f"governor DEFERRED dispatch: {reason} — releasing claim")
@@ -3407,8 +3419,6 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     else:
         max_turns = ARCHETYPE_MAX_TURNS.get(archetype, DEFAULT_MAX_TURNS)
     wall_clock = args.wall_clock_timeout or wall_clock_timeout(archetype)
-
-    worker_id = args.worker_id or f"fworker-wq{ticket_id}-a{attempt}"
 
     # wq#1331 (§3.2): the ticket's own needs:dir tags widen read context; needs:repo
     # was already honoured by the router before --repo reached us. parse() returns
@@ -3527,9 +3537,10 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     log(f"attempt {attempt}: spawning {' '.join(shlex.quote(c) for c in cmd[:6])}... "
         f"cwd={worktree} max_turns={max_turns} wall_clock={wall_clock}s")
 
-    # wq#1894: from here until this attempt's own write_attempt_state() lands below, an
-    # external SIGTERM (unit stop) must charge a minimal KILLED record and release the
-    # claim itself — see handle_external_sigterm().
+    # wq#1894: until this attempt's own write_attempt_state() lands below, an external
+    # SIGTERM (unit stop) must charge a minimal KILLED record and release the claim
+    # itself — see handle_external_sigterm(). The context is set at do_attempt entry
+    # (wq#2617); re-assert it here so a steer-resume recursion re-arms before its spawn.
     set_sigterm_context(ticket_id, attempt, worker_id)
     t0 = time.time()
     rate_limits_start = read_rate_limits_snapshot()
