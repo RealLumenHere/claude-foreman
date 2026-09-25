@@ -8,8 +8,10 @@ Credential-shaped literals are built by concatenation on purpose (masking.py:125
 a real-looking `ghp_` + 36 in tracked source is the exact class of text that filed half
 the rotation backlog (wq#2299).
 """
+import importlib.util
 import pathlib
 import subprocess
+import sys
 
 import pytest
 
@@ -112,15 +114,13 @@ def test_cloudflare_slack_aws_still_mask():
 def test_trailing_punctuation_after_masked_literal_survives():
     """wq#2687: cfut_ and kv-secret are the only two rules whose body charset
     includes `.`, so a greedy run starting on already-masked prose swallowed the
-    sentence-final period. Requiring the body's last char to be alnum ({5,} ->
-    {5,}[A-Za-z0-9], {11,} -> {11,}[A-Za-z0-9]) makes trailing punctuation
-    unmatchable by the run, so it is left in the output."""
+    sentence-final period. The sentinel (wq#2732) stops the run because the literal
+    is not in the charset while the rules run, so the period is never reachable.
+
+    Only the already-masked case is in scope. A `.` directly after a RAW value is
+    genuinely part of the run — masking.py eats it too, and matching it is the
+    lockstep this file exists to hold (test_matches_masking_py_exactly below)."""
     assert mask("reads back as cfut_MASKED.") == "reads back as cfut_MASKED."
-    # wq#2731: this literal must stay split at the `: ` the kv-secret rule reads —
-    # a whole unsplit "token: abcdefghijklmnop. Next sentence" re-arms the tripwire
-    # on every reader (test_masking.test_the_mask_suite_does_not_arm_its_own_tripwire).
-    assert mask("token: " + "abcdefghijklmnop. Next sentence") == \
-        "token: MASKED. Next sentence"
 
 
 def test_kv_secret_rule_is_unchanged():
@@ -165,14 +165,99 @@ def test_a_value_glued_behind_the_mask_literal_masks(residue, live, masked):
 
 
 @_GLUED
-def test_cloudflare_residue_over_masks_the_seam(live, masked):
-    """Diverges from masking.py, never toward a leak: cfut's body class spans the
-    literal and ERE cannot stop a run at it the way `_body()` does, so the rule
-    re-swallows the seam and everything behind it."""
-    assert mask("cfut_MASKED" + live) == "cfut_MASKED"
+def test_cloudflare_residue_does_not_swallow_the_seam(live, masked):
+    """Was the last divergence from masking.py: cfut's body class spans the literal,
+    so the rule re-swallowed the seam and the live value behind it into one match.
+    The sentinel closes it (wq#2732) — the literal is not in the charset while the
+    rules run, so the cfut_ run dies under its floor and the value masks on its own,
+    which is what `_body()`'s lookahead does."""
+    assert mask("cfut_MASKED" + live) == "cfut_MASKED" + masked
 
 
 @pytest.mark.parametrize("line", ["ghp_MASKEDghp_MASKED", "AKIAMASKEDMASKED x"])
 def test_own_output_glued_head_to_tail_stays_untouched(line):
     """The widened boundary must not turn a repeated artefact into a fresh match."""
     assert mask(line) == line
+
+
+# ---- wq#2726/wq#2732: a value whose LAST character is not alphanumeric ----
+
+# The population wq#2687's alnum-tail bound was written around was bodies ending in
+# alnum, and every fixture above is drawn from it — which is why 30 green tests shipped
+# a leak (wq#2630: a probe that cannot fail confirms and never falsifies). These are
+# the complement: cfut and kv-secret are the two rules whose charset holds `.`/`_`/`-`,
+# so they are the two whose values can end in one.
+@pytest.mark.parametrize("tail", [".", "_", "-"], ids=["dot", "under", "dash"])
+def test_a_cloudflare_value_ending_in_punctuation_masks_whole(tail):
+    """Forcing the body's last char to be alnum made POSIX leftmost-longest back off
+    to the longest alnum-ending prefix, printing the real final character next to the
+    mask (`cfut` + `MASKED_`, which loses the prefix underscore as well)."""
+    assert mask("tok cfut_" + "abcd1efgh" + tail + " end") == "tok cfut_MASKED end"
+
+
+@pytest.mark.parametrize("body", [
+    "abcdefghijk",      # 12 with the tail: exactly the rule's floor
+    "abcdefghijklmnop",  # comfortably over it
+], ids=["at-floor", "over-floor"])
+@pytest.mark.parametrize("tail", [".", "_", "-"], ids=["dot", "under", "dash"])
+def test_a_kv_value_ending_in_punctuation_masks_whole(body, tail):
+    """At the floor this was the worse half: no prefix of the run both cleared {11,}
+    and ended in alnum, so the rule did not fire at all and the shortest value it is
+    designed to catch went through bin/mask-secrets completely in the clear."""
+    assert mask("TOKEN: " + body + tail + " end") == "TOKEN: MASKED end"
+
+
+# ---- the oracle: harness/masking.py, which this script is a lockstep copy of ----
+
+_MASKING = pathlib.Path(__file__).resolve().parents[2] / "harness" / "masking.py"
+
+
+def _mask_text():
+    """Load the canonical masker by path, so the difference this file reports is the
+    sed script's and not an import-path accident. Skips when the bundle is installed
+    away from the repo (install.sh copies only mask-secrets)."""
+    if not _MASKING.exists():
+        pytest.skip("harness/masking.py not alongside this bundle")
+    # masking.py imports its sibling live_code, so harness/ has to be importable.
+    if str(_MASKING.parent) not in sys.path:
+        sys.path.insert(0, str(_MASKING.parent))
+    spec = importlib.util.spec_from_file_location("_masking_oracle", _MASKING)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.mask_text
+
+
+# Every shape the sed mirror claims to carry, INCLUDING the non-alnum tails the
+# committed suite had no case for. The kv lines stay on `TOKEN:`/`password:`, where
+# masking.py's shape-based label vocabulary and this copy's keyword list agree — the
+# label half is the divergence wq#2313 owns and this test is not about it.
+_LOCKSTEP = [
+    "tok ghp_" + _GH_BODY + " end",
+    "tok github_pat_" + _PAT_BODY + " end",
+    "tok sk-ant-" + _SK_BODY + " end",
+    "tok xoxb-" + "12345678901" + " end",
+    "tok " + "AKIA" + "Q" * 16 + " end",
+    "tok cfut_" + "abcdef123456" + " end",
+    "tok cfut_" + "abcd1efgh." + " end",
+    "tok cfut_" + "abcd1efgh_" + " end",
+    "tok cfut_" + "abcd1efgh-" + " end",
+    "TOKEN: " + "abcdefghijk_" + " end",
+    "TOKEN: " + "abcdefghijklmnop." + " end",
+    "password: " + "hunter2hunter2" + " end",
+    # our own output, alone and with a live value glued to it
+    "reads back as cfut_MASKED.",
+    "ghp_MASKED" + "AKIA" + "Q" * 16,
+    "cfut_MASKED" + "ghp_" + _GH_BODY,
+    "ghp_MASKEDghp_MASKED",
+    # the false positives both sides must refuse
+    "highs_solver and notes_on_xoxb-two words",
+    "my_cfut_settings is a filename",
+]
+
+
+@pytest.mark.parametrize("line", _LOCKSTEP, ids=range(len(_LOCKSTEP)))
+def test_matches_masking_py_exactly(line):
+    """The acceptance probe wq#2687 was missing. Its oracle is not derived from the
+    sed rules, so it can and does falsify: run against the alnum-tail script this
+    replaced, the punctuation-tail lines and all four glued-seam lines fail."""
+    assert mask(line) == _mask_text()(line)[0]
