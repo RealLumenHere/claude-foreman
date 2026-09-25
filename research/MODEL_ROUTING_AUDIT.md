@@ -37,13 +37,46 @@ Evidence grades used throughout: **A** = direct measurement over the complete po
 
 ## 1. Every model-dispatching surface on the fleet
 
-Enumerated from `systemctl list-unit-files`, the timer roster, `crontab -l`, and a
-fleet-wide grep for flagship CLI defaults (`--model opus|fable|best|claude-opus|claude-fable`
-over `agents/ services/ agent/ bin/ minerva/` — **zero hits**).
+**Enumeration scope (re-audited 2026-09-25, wq#2664 — read this before trusting the
+table as complete):** six instruments, three on-Lumen-process and three deploy/endpoint
+based. On-Lumen process instruments: `systemctl list-unit-files`, the timer roster, and
+`crontab -l`. Off-box-aware instruments added by this re-audit, closing the gap §1.1
+recorded: a search for every `wrangler.toml`/deploy manifest under the registered
+primaries this worktree has read access to (`foreman, mailbot, pokemon, work-queue, kb,
+bin, nest` — `UID_SPLIT_FWORKER.md:126`), and a content grep for provider endpoint
+strings/SDK imports (`api.deepseek.com`, `api.anthropic.com`, `api.openai.com`,
+`generativelanguage.googleapis.com`, `@anthropic-ai/`, `openai`) across those same
+roots. Plus the original fleet-wide grep for flagship CLI defaults
+(`--model opus|fable|best|claude-opus|claude-fable` over `agents/ services/ agent/ bin/
+minerva/` — **zero hits**).
 
-> **Scope caveat — this table is incomplete, added 2026-09-25 (wq#2661). See §1.1.**
-> It covers on-Lumen processes only. At least one fleet component with live model calls
-> is missing from it.
+**What this still does not cover:** any primary tree outside that registered read-access
+list — `questfree`, `pstack`, `mission-control`, `minerva`, `agent`, `logs`,
+`fleet/inventory` are registered primaries too (`primary_tree_guard.py:96-122`) but were
+not in this worktree's `--add-dir` grant, so the two new passes never searched them —
+and any integration that calls a model provider without a manifest or a matching
+endpoint string landing in a searched repo at all (e.g. a provider reached through a
+customer SDK wrapper whose import name isn't in the grep list above).
+
+The two new passes found two `wrangler.toml` manifests
+(`mailbot/wrangler.toml`, `foreman/ops/wq1252-lumen-public-guardian/mail-probe/
+wrangler.toml`) and 13 files matching the endpoint-string grep. Read individually: the
+second wrangler.toml (`lumen-mail-probe`) is a synthetic Cloudflare-cron sender with no
+model call of its own — `mail-probe/src/worker.js` contains no `deepseek`/`anthropic`/
+`openai` string beyond one code comment naming the mailbot pipeline it feeds. Of the 13
+endpoint-string hits, 4 are test fixtures for the files below, `models.yaml` is
+surface 1's own config (a comment on `deepseek-v4-flash`'s `api_base`, not a new call),
+and the rest are monitoring/probe code that duplicates a surface already in this table or
+in `FLEET_COST_PLAN.md`, not a new one: `foreman_usaged.py` and
+`ops/wq1252-lumen-public-guardian/checks_email.py`'s `check_e3_deepseek` both hit
+account-status endpoints (`/api/oauth/usage`, `/user/balance`) — balance/usage checks,
+not completions; `deepseek_connect_alert.py` is the D4 connect-failure monitor
+(`FLEET_COST_PLAN.md` §2); `oauth_passthrough_probe.py` and `headroom_proxy_gate.py` are
+research-tier proxy tooling that stands in for `api.anthropic.com`, not production
+dispatch; `cli_canary.py` matches on the `@anthropic-ai/claude-code` **package name**
+(checking the `claude` CLI is installed), not an API call; `wq1252...config.json` only
+holds the URL `checks_email.py` reads. **Net result: mailbot is the only surface this
+re-audit adds** — row 20 below.
 
 | # | Surface | Cadence | Model in use | Path | Anthropic quota | Cheapest-sufficient | Grade |
 |---|---|---|---|---|---|---|---|
@@ -66,6 +99,7 @@ over `agents/ services/ agent/ bin/ minerva/` — **zero hits**).
 | 17 | `lpp-watchdog.sh` | timer | **none** | — | no | n/a | B |
 | 18 | foreman dispatcher lanes (`dispatcher/config.json`) | 5 min | **no model choice** — `max_per_day` volume gate only | — | no | n/a | B |
 | 19 | research cron (`watcher_agent`, `radar_dispatcher`, `kb_dispatcher`, `watchdog`, `lumen_scout_expanded`) | cron | **none** — keyword/HTTP only | — | no | n/a | B |
+| 20 | mailbot (Cloudflare Worker, `mailbot/wrangler.toml:1-5`) — 4 DeepSeek calls/inbound email: `screenRomanticDrift` (`worker.js:323-362`), `runCritic` (`:246-306`), `generateReply` (`:176`), `generateNotesUpdate` (`:576`) | per inbound email | deepseek-v4-flash | direct `fetch("https://api.deepseek.com/...")`, **not** LiteLLM or the `claude` CLI | no | yes — already the cheapest cloud rung; a local accelerator can't reach it either, it's on the wrong side of the network (`CORAL_NEEDLE_TIER.md` §2.2/§5) | B |
 
 **Scope-2 verdict (always-on services): PASS.** Surfaces 6–8 and 12–17 are the always-on
 set. None of them dispatches an Anthropic model. Nothing to flag for opus/fable contact.
@@ -75,9 +109,13 @@ whole dataset with a clean success rate — 2/2 on novel-design, at the highest 
 burn (698s median wall-clock, 75.6s CPU, 64 turns). Its 0/2 on standard-engineering
 supports the manifest's own "never a volume worker" line. Leave as-is.
 
-### 1.1 Known gap: §1 enumerates on-Lumen processes only (wq#2661, 2026-09-25)
+### 1.1 History: the on-Lumen-process gap (wq#2661 found it, wq#2664 closed it, both 2026-09-25)
 
-**mailbot is missing from the table above and makes four live DeepSeek calls per
+**Status: CLOSED.** mailbot is now row 20 in §1's table, and §1's header states the
+enumeration scope explicitly. This subsection is kept as the record of how the gap was
+found and why the obvious fixes didn't work — read it for that, not as an open item.
+
+**mailbot was missing from the table above and makes four live DeepSeek calls per
 inbound email**, two of them classification gates:
 `screenRomanticDrift` (`mailbot/src/worker.js:323-362`, live at `:919`, binary
 `{"romantic_drift":boolean}`, `max_tokens:40`) and `runCritic` (`:246-306`, live at
@@ -105,16 +143,13 @@ matters because the obvious fix does not work:
   enumerates no surfaces at all — so this doc's "reproducible via
   `model_routing_audit.py`" claim applies to §2's numbers, never to §1's list.
 
-**Fix for the next audit** (wq#2664): enumerate from *deployment manifests plus endpoint
-strings*, not from the local process table alone. Concretely, add two passes — (i) every
-`wrangler.toml` / deploy manifest under the registered primaries
-(`foreman, mailbot, pokemon, work-queue, …`, the list `UID_SPLIT_FWORKER.md:126` already
-maintains), and (ii) a content grep for provider endpoints and SDK imports
-(`api.deepseek.com`, `api.anthropic.com`, `api.openai.com`,
-`generativelanguage.googleapis.com`, `@anthropic-ai/`, `openai`) across those same roots
-— and state the enumeration scope explicitly in §1 so a future reader can see what the
-table does not cover. Until that lands, read §1 as "every model-dispatching surface that
-runs as a process on Lumen."
+**Done by wq#2664:** enumerated from *deployment manifests plus endpoint strings*, not
+from the local process table alone — the two passes described in §1's header. Result:
+mailbot (row 20) was the only surface either pass found; everything else the passes
+matched was a duplicate of a surface already in this table or in `FLEET_COST_PLAN.md`
+(§1's header has the per-hit breakdown). mailbot's generative calls
+(`generateReply`/`generateNotesUpdate`), left unpriced by wq#2661/wq#2661's
+`CORAL_NEEDLE_TIER.md` pass, are now priced in `FLEET_COST_PLAN.md` §8.
 
 ---
 

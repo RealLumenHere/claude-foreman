@@ -7,6 +7,13 @@ Window pulled: 2026-08-06 04:47 to 2026-09-10 04:46 UTC (35 days), 307,242 rows.
 Written 2026-09-09 by session `work-cost-plan-60a32b`.
 Query files kept at `/home/lumen/scratch/costplan/q1..q6.sql` and `derive.py`.
 
+**Scope caveat, added 2026-09-25 (wq#2664).** `LiteLLM_SpendLogs` only sees traffic that
+passes through the LiteLLM gateway. mailbot (a Cloudflare Worker, `mailbot/wrangler.toml`)
+calls `api.deepseek.com` directly and never touches the gateway, so its spend is not in
+the $107.31 total, §1's table, or any figure below except §8, which prices it separately
+from code reads rather than from measured spend logs. Grade **B/C** there, not **A** —
+see §8 for why.
+
 ## 1. Where the money actually goes
 
 ### 35-day totals
@@ -303,3 +310,85 @@ Nothing here should be done before the one above it.
 - The `messages` column is empty on every row, so prompt contents could not be
   inspected from the database. The cache analysis is built from reading
   `prompt.ts` and `config.ts` instead.
+- mailbot, entirely — it bypasses the gateway these logs are pulled from. See §8.
+
+## 8. mailbot (wq#2664 — out-of-band spend, not in `LiteLLM_SpendLogs`)
+
+mailbot was absent from this doc until now — `grep -n mailbot` over it returned zero
+hits before this section (`MODEL_ROUTING_AUDIT.md` §1 row 20, `CORAL_NEEDLE_TIER.md`
+§2.2 have the enumeration story). It makes four `deepseek-v4-flash` calls per inbound
+email, all via direct `fetch("https://api.deepseek.com/...")` with a worker-held key —
+never through LiteLLM — so none of it shows up in §1's totals, the per-workload table in
+§4, or the budget governor's accounting. Everything below is priced from reading
+`mailbot/src/worker.js` and `leakfilter.js` (prompt byte counts, `max_tokens` caps),
+**grade B**, not measured from spend logs like the rest of this document. Volume is
+**grade C**: the only local signal is the D1 mirror `mailbot/mail.db` showing ~15
+inbound/day over 2026-09-01→09-03, but `sync_state.last_ts` is 2026-09-03 and
+`lumen-mail-sync` is `inactive/dead` (`FLEET_SERVICE_ATLAS.md:294`), so that sample is
+three weeks stale — pull live D1 numbers before treating either dollar figure below as
+current traffic, not this mirror.
+
+### Two gates already priced, two generative calls that weren't
+
+`CORAL_NEEDLE_TIER.md` §3 priced the two classification gates —
+`screenRomanticDrift` (≤1 call/inbound, ~770 worst-case input tokens, `max_tokens:40`,
+~$0.00016/call) and `runCritic` (≤2 calls/inbound, ~2065 worst-case input tokens,
+`max_tokens:300`, ~$0.00046/call) — at **≤$0.00108/inbound combined**, but flagged the
+generative calls as the ones that actually dominate mailbot's DeepSeek bill and left them
+unpriced (`CORAL_NEEDLE_TIER.md:203-208`). Same worst-case-per-call convention here (bytes
+read from source caps, `deepseek-v4-flash` measured rates from §3 above: $0.208/M input,
+$0.251/M output):
+
+| Call | System bytes (worst case) | User bytes (worst case) | Total input tok | Output tok | $/call | Calls per inbound |
+|---|---|---|---|---|---|---|
+| `generateReply` (`worker.js:176`) | `DEFAULT_PROMPT` 3,089 B (`:52-68`) + `HISTORY_RULE` 433 B + `NOTES_RULE` 387 B + one of `REGEN_ADDENDUM`/critic-note text ≤440 B + canary suffix ≈150 B ≈ **4,500 B** | header + notes (≤500 B) + up to 10 history messages × 700-char cap (`:194`) ≈7,300 B + attachment note + body (3,000 B cap, `sanitizeBody`) + tail ≈ **11,075 B** | (4,500+11,075)/4 ≈ **3,900** | ~400 (110-300 words instructed, `:56`/`:76`; `thinking: disabled` at `:155` so no hidden reasoning burn) | **~$0.00091** | 1-4 — base (`:971`) + optional red-tape regen (`:977`) + up to 2 critic-gate regens (`:1021`) |
+| `generateNotesUpdate` (`worker.js:576`) | `NOTES_SYSTEM` 696 B (`leakfilter.js:272`) | prior note ≤500 B + inbound 1,500 B cap + outbound 1,500 B cap ≈ **3,575 B** | (696+3,575)/4 ≈ **1,070** | ~125 (system prompt instructs "Max 500 characters", `leakfilter.js:272`; code backstops at a 600-char slice, `worker.js:599`) | **~$0.00025** | 1 (`:1181`, unconditional, `ctx.waitUntil`) |
+
+Combined per-inbound ceiling (every optional call firing, same convention
+`CORAL_NEEDLE_TIER.md` used): $0.00108 (the two gates) + 4×$0.00091 (`generateReply`) +
+$0.00025 (`generateNotesUpdate`) = **~$0.005/inbound**. Typical case (1 `generateReply`
+call, 1 `runCritic` call, drift screen firing): $0.00016+$0.00046+$0.00091+$0.00025 ≈
+**~$0.0018/inbound**.
+
+| Volume | Typical $/mo | Worst-case-ceiling $/mo |
+|---|---|---|
+| ~15/day (stale D1 mirror — re-pull before trusting) | ~$0.81 | ~$2.27 |
+| 100/day (generous, matches `CORAL_NEEDLE_TIER.md`'s own stress case) | ~$5.41 | ~$15.11 |
+
+### Prompt caching on `CRITIC_SYSTEM`: worth doing, not worth ticketing yet
+
+The ticket's specific ask: is `CRITIC_SYSTEM` (2,755 B/call, `worker.js:232-244`) a
+caching candidate the way `minerva_classifier`'s system prompt already is (§4 row
+"minerva classifier", $2.50/mo → $0.60/mo off the same lever)? **Yes, structurally** —
+`CRITIC_SYSTEM`, `DRIFT_SCREEN_SYSTEM` (`:316-321`), and `NOTES_SYSTEM`
+(`leakfilter.js:272`) are all sent byte-identical on every call, no per-call
+substitution. That is the textbook stable-prefix shape a provider-side or gateway-side
+cache is built for.
+
+**`generateReply`'s system prompt is *not* the same shape, and that's worth recording so
+nobody "fixes" it the same way by mistake.** `buildSystem()` (`worker.js:126-131`)
+substitutes `{{GRIEVANCE}}` (13 options) and `{{MODE}}` (8 options) into `DEFAULT_PROMPT`/
+`ANGRY_PROMPT` on every call — 104 combinations, chosen by `Math.random()` — and the
+first substitution lands at line 58, about a fifth of the way into the prompt. Prefix
+caching needs a byte-identical prefix; past that substitution point almost every call
+diverges, so only the short fixed opening (`:52-53`) would ever be eligible, which isn't
+enough prefix to matter.
+
+**Whether it's already happening is unverified, and that's the actual next step, not a
+routing change.** mailbot calls DeepSeek directly rather than through LiteLLM, so D1's
+gateway-level finding ("no row anywhere carries `prompt_cache_hit_tokens`") doesn't cover
+it either way — `worker.js`'s `callDeepSeek`/`runCritic`/`screenRomanticDrift` all log
+`finish_reason` and content length (`:167`) but never read `data.usage` for a cache-hit
+field, so there is zero fleet evidence either way for mailbot specifically. The concrete,
+cheap step: log `data?.usage?.prompt_cache_hit_tokens` (or whatever field DeepSeek's
+response actually carries) alongside the existing `finish_reason` log lines next time
+this file is touched, and read back a week of Worker logs before deciding whether a
+caching change is worth making.
+
+**Not filing a ticket for the instrumentation or a caching change.** At $0.81-$15.11/mo
+typical-to-ceiling, this sits in the same bracket `CORAL_NEEDLE_TIER.md` §3 already ruled
+too small to justify machinery beyond a config change — smaller in typical case than the
+$2.50/mo minerva_classifier bill that did get a caching fix, and even the worst-case
+ceiling at generous volume is under 10% of the fleet's $169.68/mo baseline (§5). Recorded
+here so the next person pricing mailbot starts from evidence instead of re-deriving it,
+same reasoning `CORAL_NEEDLE_TIER.md` §2.1 used for `article_ingest.py`.
