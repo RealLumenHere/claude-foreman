@@ -1,0 +1,16 @@
+# Install as: /etc/systemd/system/lumen-workers.slice
+# then: systemctl daemon-reload
+#
+# wq#2605 / MCP_CONTROL_PLANE_HA_DESIGN.md §3.3: cgroup home for job/worker
+# processes (lumen-run jobs, foreman fworker BUILD/verify sessions) so a worker
+# storm's CPU/IO/memory demand is capped relative to the control plane
+# (desktop-commander-mcp.service + cloudflared.service, weight 1000 each — see
+# desktop-commander-mcp.conf / cloudflared.conf in this directory) instead of
+# competing with it 1:1 on the default system.slice.
+[Unit]
+Description=Lumen worker job isolation (wq#2605)
+
+[Slice]
+CPUWeight=50
+IOWeight=50
+MemoryHigh=40G
