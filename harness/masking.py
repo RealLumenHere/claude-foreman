@@ -156,6 +156,24 @@ def value_sha12(value):
     return hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
 
 
+# wq#2648: a tool that shortens what it prints (`text[:24] + "..."`) cuts a committed
+# fixture mid-value, and `.` is in the kv-secret body charset, so the matched value is
+# `<fixture prefix>...` — held nowhere in the tree, while the prefix is. Accounting may
+# retry without the ellipsis: a truncated LIVE token's prefix is still in no committed
+# file, so it stays burned.
+TRUNCATION_MARK = "..."
+
+
+def untruncated(value, floor):
+    """`value` minus a trailing ellipsis if what is left is at least `floor` long, else
+    None — a stub that short could be excused by almost any text."""
+    if value.endswith(TRUNCATION_MARK):
+        cut = value[:-len(TRUNCATION_MARK)]
+        if len(cut) >= floor:
+            return cut
+    return None
+
+
 # wq#2339/wq#2341: values that are this masker's OWN output read back, by hash. A hit
 # record matching one of these is the mask literal itself — a credential cannot survive
 # having been replaced by it — so an alarm carrying nothing else is not a burn and is

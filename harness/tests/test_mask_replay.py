@@ -126,6 +126,25 @@ def test_a_seam_after_a_literal_ending_in_a_double_quote_is_closed():
     assert mask_replay.account(left + body, tree) == "f.py:1"
 
 
+def test_a_fixture_printed_cut_short_is_accounted_by_its_prefix():
+    """wq#2648: wq#2632's verify.py printed `text[:24] + "..."` of a committed kv
+    fixture. `.` is in the kv body charset, so the value was `<fixture prefix>...`,
+    which no file holds, and the replay filed a rotate-today row for a test string."""
+    tree = {"tests/t.py": FIXTURE}
+    printed = 'PASS fires+masks GITEA_TOKEN="' + 'hunter2-hunte...\n'
+    records = mask_replay.replay(0, tracked=tree, items={"transcript:a": printed})
+    assert [r["accounted_in"] for r in records] == ["tests/t.py:1"]
+    assert mask_replay.unaccounted(records) == []
+
+
+def test_the_truncation_retry_still_burns_a_cut_live_token():
+    """The cut prefix of a live token is in no file either, and a stub under the floor
+    is excused by nothing."""
+    tree = {"tests/t.py": FIXTURE + "abcdefghijk\n"}
+    assert mask_replay.account("Zq7xW2pL9mK4nR8...", tree) is None
+    assert mask_replay.account("abcdefghijk...", tree) is None
+
+
 def test_a_value_in_neither_screen_is_reported(tmp_path):
     records = mask_replay.replay(0, tracked={}, items={"snapshot:a": LIVE})
     assert records[0]["still_matches_today"] is True

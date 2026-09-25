@@ -205,13 +205,17 @@ def _is_accounted(match, repo_roots, runner):
     """`match` whole, else its body when it carries one long enough to mean something.
 
     The body lookup adds no argv exposure: the body is a substring of the whole match
-    that was just put there.
+    that was just put there. Neither does the last resort, the body minus a trailing
+    `...` (masking.untruncated, wq#2648): a printer that shortened a fixture.
     """
     if is_committed_literal(match, repo_roots, runner=runner):
         return True
     body = getattr(match, "body", "")
-    return (len(body) >= MIN_SECRET_LEN and body != match
-            and is_committed_literal(body, repo_roots, runner=runner))
+    if (len(body) >= MIN_SECRET_LEN and body != match
+            and is_committed_literal(body, repo_roots, runner=runner)):
+        return True
+    cut = masking.untruncated(body or match, MIN_SECRET_LEN)
+    return bool(cut) and is_committed_literal(cut, repo_roots, runner=runner)
 
 
 def classify(detail, live, repo_roots, runner=subprocess.run, cache=None):
@@ -272,18 +276,20 @@ def _still_screens(mod):
     the same canary is also run through the body retry with an in-process runner:
     with nothing committed it must still burn, and with only the body committed it
     must clear — the second half is what proves the first is not a screen that
-    burns everything.
+    burns everything. wq#2648's truncation retry is re-planted the same way, with the
+    canary printed cut short.
     """
     burned, _ = mod.classify({"canary": [_CANARY]}, {_CANARY}, [])
     if burned != ["canary"]:
         return False
-    hit = mod.Hit(_CANARY, _CANARY[len(_CANARY_PREFIX):])
-    for committed, want in ((set(), ["canary"]), ({hit.body}, [])):
-        def runner(argv, committed=committed, **_):
-            return types.SimpleNamespace(
-                returncode=0 if argv[argv.index("-e") + 1] in committed else 1)
-        if mod.classify({"canary": [hit]}, set(), ["/"], runner=runner)[0] != want:
-            return False
+    body = _CANARY[len(_CANARY_PREFIX):]
+    for hit in (mod.Hit(_CANARY, body), mod.Hit(_CANARY + "...", body + "...")):
+        for committed, want in ((set(), ["canary"]), ({body}, [])):
+            def runner(argv, committed=committed, **_):
+                return types.SimpleNamespace(
+                    returncode=0 if argv[argv.index("-e") + 1] in committed else 1)
+            if mod.classify({"canary": [hit]}, set(), ["/"], runner=runner)[0] != want:
+                return False
     return True
 
 

@@ -161,6 +161,27 @@ def test_a_short_body_cannot_excuse_a_match():
     assert burned == ["cloudflare"]
 
 
+def test_a_fixture_printed_cut_short_is_accounted_by_its_prefix():
+    """wq#2648: `text[:24] + "..."` of a committed fixture; `.` is body charset."""
+    body = OAT[len("sk-ant-"):]
+    value = burn_filter.Hit("GITEA_TOKEN=" + body[:12] + "...", body[:12] + "...")
+    grep = FakeGrep(committed=[body[:12]])  # git grep -F: the prefix is inside the fixture
+    burned, benign = burn_filter.classify({"kv-secret": [value]}, set(), REPO, runner=grep)
+    assert burned == [] and benign == ["kv-secret"]
+    assert _needles(grep)[-1] == body[:12]
+
+
+def test_the_truncation_retry_still_burns_a_cut_unknown_value():
+    value = burn_filter.Hit("TOKEN=" + "Zq7xW2pL9mK4...", "Zq7xW2pL9mK4...")
+    burned, _ = burn_filter.classify(
+        {"kv-secret": [value]}, set(), REPO, runner=FakeGrep(committed=["unrelated"]))
+    assert burned == ["kv-secret"]
+    short = burn_filter.Hit("TOKEN=" + "abcdefghijk...", "abcdefghijk...")
+    grep = FakeGrep(committed=["abcdefghijk"])
+    assert burn_filter.classify({"kv-secret": [short]}, set(), REPO, runner=grep)[0] \
+        == ["kv-secret"]
+
+
 def test_a_plain_string_is_still_screened_whole():
     grep = FakeGrep(committed=[OAT[len("sk-ant-"):]])
     burned, _ = burn_filter.classify({"sk-key": [str(OAT)]}, set(), REPO, runner=grep)

@@ -363,6 +363,7 @@ def tracked_text(repo=REPO_ROOT, extra=DOCTRINE_TRACKED):
 # real seam standing — so the whole string was never found and the fixture paged as
 # BURNED. A mixed-quote join (`"a" 'b'`) is no longer closed; that fails loud, not quiet.
 _SEAM = re.compile(r"([\"'])[ \t]*\+?[ \t]*\1")
+TRUNCATED_FLOOR = 12  # burn_filter.MIN_SECRET_LEN: the shortest body that can excuse a hit
 _JOINED = {}
 
 
@@ -379,7 +380,8 @@ def account(value, tracked):
     """`path:line` of the first committed file holding this exact string, else None.
 
     Falls back to the seam-closed view of each file, so a fixture assembled from
-    concatenated literals accounts for the whole value its runtime produces.
+    concatenated literals accounts for the whole value its runtime produces, and then
+    to the value minus a trailing `...` (masking.untruncated, wq#2648).
     """
     for path, text in tracked.items():
         at = text.find(value)
@@ -392,7 +394,8 @@ def account(value, tracked):
         at = joined.find(value)
         if at >= 0:
             return f"{path}:{joined.count(chr(10), 0, at) + 1}"
-    return None
+    cut = masking.untruncated(value, TRUNCATED_FLOOR)
+    return account(cut, tracked) if cut else None
 
 
 # wq#2557: a run that edits ANOTHER repo (wq#2555 fixed /home/lumen/minerva through a
