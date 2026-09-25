@@ -24,8 +24,8 @@ MANIFEST = os.path.join(ORCH_DIR, "..", "research", "models.yaml")
 
 # BUILD_PLAN §T3 verify: "assign 5 sample tickets across archetypes -> correct (model,effort)"
 SAMPLES = [
-    ("wire standing checks to systemd timers", "", "fleet", "mechanical-edit", ("local-worker", None)),
-    ("probe: CI hygiene for lumen-pr", "", "build", "probe-build", ("local-worker", None)),
+    ("wire standing checks to systemd timers", "", "fleet", "mechanical-edit", ("claude-sonnet-5", "low")),
+    ("probe: CI hygiene for lumen-pr", "", "build", "probe-build", ("claude-sonnet-5", "medium")),
     ("add conflict guard to lumen-pr", "", "build", "standard-engineering", ("claude-sonnet-5", "high")),
     ("audit: why does lpp-watchdog bypass the guard", "", "pokemon", "rca-investigation", ("claude-opus-5-5", "high")),
     ("design lumen-memoryd new service", "", "memory", "novel-design", ("claude-fable-5", "high")),
@@ -134,19 +134,20 @@ def test_classify_still_prefers_corroborated_expensive_archetype(m):
 
 
 def test_attempt_count_downgrades_probe_build_without_pressure(m):
-    # wq#2133: primary is local-worker@local; each recorded fail walks one rung.
+    # wq#2583: local-worker dropped from probe-build; primary is now sonnet-5@medium, and
+    # each recorded fail walks one rung toward the haiku floor.
     r0, _ = router.select(m, "probe-build", fails=0)
-    assert (r0.model, r0.pool) == ("local-worker", "local")
+    assert (r0.model, r0.effort) == ("claude-sonnet-5", "medium")
     r1, reasons = router.select(m, "probe-build", fails=1)
-    assert (r1.model, r1.effort) == ("claude-sonnet-5", "medium")
+    assert r1.model == "claude-haiku-4-5"
     assert any("attempt-count downgrade" in w for w in reasons)
     r2, _ = router.select(m, "probe-build", fails=2)
     assert r2.model == "claude-haiku-4-5"
 
 
 def test_attempt_count_downgrades_mechanical_edit_without_pressure(m):
-    # wq#2133: local-worker@local then sonnet-5@low; the walk stops at the last rung, so the
-    # cloud floor stays reachable however many fails are recorded.
+    # wq#2583: mechanical-edit's base chain is now a single cloud rung (local-worker
+    # dropped), so it never has a second position to walk to — fails just stays put.
     r1, _ = router.select(m, "mechanical-edit", fails=1)
     assert r1.model == "claude-sonnet-5" and r1.effort == "low" and r1.pool == "cloud"
     r2, _ = router.select(m, "mechanical-edit", fails=2)
@@ -163,15 +164,16 @@ def test_attempt_count_does_not_override_escalation_facts(m):
     assert (r.model, r.effort) == ("claude-fable-5", "high")
 
 
-def test_route_cli_probe_build_fails_1_walks_past_the_local_rung(m):
-    # `route probe-build --fails 1` with no --pressure (wq#2133: local-worker is the primary).
+def test_route_cli_probe_build_fails_1_walks_to_the_haiku_floor(m):
+    # `route probe-build --fails 1` with no --pressure (wq#2583: local-worker is gone, the
+    # base chain is sonnet-5@medium then haiku-4-5, so fails=1 already hits the floor).
     out = subprocess.run(
         [sys.executable, os.path.join(ORCH_DIR, "router.py"), "--manifest", MANIFEST,
          "route", "probe-build", "--fails", "1"],
         capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     d = json.loads(out.stdout)
-    assert d["rung"] == {"model": "claude-sonnet-5", "effort": "medium", "pool": "cloud",
+    assert d["rung"] == {"model": "claude-haiku-4-5", "effort": None, "pool": "cloud",
                          "condition": None}
 
 
@@ -266,15 +268,13 @@ def test_effort_down_helper_is_gone(m):
 
 
 def test_hard_deny_moves_to_next_model_not_lower_effort(m):
-    # wq#777: mechanical-edit's primary is the local pool, which is governor-exempt
-    # (pressure never applies to it) — a sonnet deny doesn't even need to be walked around.
+    # wq#2583: mechanical-edit is now cloud-only (local-worker dropped, NARROW verdict), so
+    # a sonnet deny has nowhere left to walk to.
     r, why = router.select(m, "mechanical-edit", pressure=lambda x: "deny" if "sonnet" in x else "ok")
-    assert r.model == "local-worker" and r.pool == "local"
+    assert r is None
+    assert why[-1] == "every rung denied, dominated or unavailable"
+    # probe-build still has the haiku floor below sonnet: a sonnet deny lands there
     r, _ = router.select(m, "probe-build", pressure=lambda x: "deny" if "sonnet" in x else "ok")
-    assert r.model == "local-worker" and r.pool == "local"
-    # with the local rung barred too, a sonnet deny lands on the haiku rung
-    r, _ = router.select(m, "probe-build", pressure=lambda x: "deny" if "sonnet" in x else "ok",
-                         allow_local=False)
     assert r.model == "claude-haiku-4-5" and r.effort is None
     r, why = router.select(m, "novel-design", pressure=lambda x: "deny")
     assert r is None
@@ -850,13 +850,14 @@ def test_pilot_lane_bias_cannot_pick_probe_build_over_analysis(m):
 
 
 def test_mechanical_edit_still_wins_when_nothing_analytical_is_evidenced(m):
-    # the guard is scoped: a true mechanical edit is untouched and still reaches the
-    # cheap local rung (this is the SAMPLES row at the top of the file).
+    # the guard is scoped: a true mechanical edit is untouched and still reaches its
+    # primary rung (this is the SAMPLES row at the top of the file; wq#2583 moved that
+    # rung to sonnet-5@low, off local-worker).
     arch, sig = router.classify_archetype("wire standing checks to systemd timers", "",
                                           "fleet", m)
     assert arch == "mechanical-edit", (arch, sig)
     rung, _ = router.select(m, arch)
-    assert rung.model == "local-worker"
+    assert (rung.model, rung.effort) == ("claude-sonnet-5", "low")
     # and the wq#779 F3 tie-break still lets the OTHER cheap archetype win on equal
     # evidence against a pricier one — that fix is not what misrouted these tickets.
     arch, _ = router.classify_archetype("the fix could bypass the probe safeguard", "",
@@ -962,9 +963,10 @@ def test_assign_and_verify_pass_fire_on_scratch_wq(tmp_path):
     assert d2["filed"] == d["filed"]          # idempotent
     d3 = json.loads(subprocess.run(J + ["verify-pass", "--for", str(nd)], capture_output=True, text=True, env=env).stdout)
     assert not d3["required"] and d3["filed"] is None
-    # dispatch-cmd carries the tuple through to fworker
+    # dispatch-cmd carries the tuple through to fworker (wq#2583: mechanical-edit's
+    # primary is now sonnet-5@low, off local-worker)
     cmd = subprocess.run(R + ["dispatch-cmd", str(ids[0][0]), "--repo", "/tmp/x"], capture_output=True, text=True, env=env).stdout
-    assert "--model local-worker --archetype mechanical-edit" in cmd
+    assert "--model claude-sonnet-5 --effort low --archetype mechanical-edit" in cmd
 
 
 # ---- wq#433 / ISSUE-LOG #56 class: lane says one repo, title says another. Dispatching

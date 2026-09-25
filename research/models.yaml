@@ -320,8 +320,15 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   # box. router.select skips a rung whose model status is not LIVE* or whose backend sits in
   # runtime/backend_cooldown.json, so a cooled-down group lands on the cloud rung behind it.
   # qwen36-local (status down, 8k ctx) is no longer primary. probe-build's haiku row = CAL-1.
-  mechanical-edit:      [local-worker@local, sonnet-5@low]
-  probe-build:          [local-worker@local, sonnet-5@medium, haiku-4-5]
+  # wq#2583 (NARROW verdict, research/LOCAL_RUNG_AUDIT_2576.md): local-worker dropped from
+  # both chains below. All-time 0/166 local fworker sessions SUCCESS across hathor-llama8b,
+  # nephthys-qwen14b, qwen36-local (FALSE_COMPLETE/HANG/CRASH/KILLED only); none of the 40
+  # local tickets closed in the last 30d was actually closed by a local session. Re-entry
+  # rule: local-worker returns to a chain only after a local-rung member passes the macbench
+  # agentic suite (wq#2246) at >=60% on mechanical-edit-shaped tasks with a FALSE_COMPLETE
+  # rate <=10%.
+  mechanical-edit:      [sonnet-5@low]
+  probe-build:          [sonnet-5@medium, haiku-4-5]
   standard-engineering: [sonnet-5@high,   sonnet-5@medium, opus-5@medium(escalate-on-fail)]
   # wq#2450 2026-09-24: rca-investigation + research-synthesis primary moved opus-5 -> opus-5-5.
   # Effort rungs shifted down one notch (xhigh->high, high->medium), not carried over verbatim:
