@@ -1,0 +1,13 @@
+# Install as: /etc/systemd/system/mcp-gateway-watchdog.service
+# wq#2606 — responsiveness watchdog, runs both probes each tick (mcp gateway +
+# cloudflared). Node-specific unit/port values go here per node; Lumen's are
+# below. Anubis/Bes/Nephthys: swap --unit desktop-commander-mcp for --unit
+# dc-gateway (MCP_CONTROL_PLANE_HA_DESIGN.md §3.2/§3.3), port stays 3100.
+[Unit]
+Description=MCP gateway watchdog (wq#2606 liveness probe, not PSI)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/lumen/bin/mcp-gateway-watchdog.sh --mode mcp --unit desktop-commander-mcp --port 3100
+ExecStart=/home/lumen/bin/mcp-gateway-watchdog.sh --mode cloudflared --unit cloudflared --port 20241

@@ -1,0 +1,11 @@
+# Install as: /etc/systemd/system/mcp-gateway-watchdog.timer
+[Unit]
+Description=Run mcp-gateway-watchdog every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
