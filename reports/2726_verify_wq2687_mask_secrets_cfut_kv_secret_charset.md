@@ -87,8 +87,8 @@ the PR merely failed to close.
 
 Cloudflare API tokens and generic `KEY=`/`SECRET=`/`TOKEN=` values are
 base64url-ish and can plausibly end in `_` or `-`; `.` is common in
-dotted-segment tokens. The floor-length total-miss case (`TOKEN:
-abcdefghijk_`) is the worse of the two: a 12-character secret — already the
+dotted-segment tokens. The floor-length total-miss case
+(`'TOKEN: ' + 'abcdefghijk_'`) is the worse of the two: a 12-character secret — already the
 *shortest* value this rule is designed to catch — passes through
 `mask-secrets` completely unredacted. This is the exact class of tool
 (`bin/mask-secrets`, `ops_verified(wq2316-mask-secrets-boundary)`) other
