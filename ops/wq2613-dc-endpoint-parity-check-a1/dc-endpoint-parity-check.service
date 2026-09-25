@@ -1,0 +1,18 @@
+# /etc/systemd/system/dc-endpoint-parity-check.service — wq#2613
+# Nightly comparison of supergateway/DC versions, dc-enforce-config output,
+# watchdog timer state, and unit drop-in hashes across every DC endpoint node
+# against Lumen (pref 1) as baseline. Per MCP_CONTROL_PLANE_HA_DESIGN.md §2:
+# "nightly parity check (versions/config)". Drift opens an aq row per
+# (node, axis); see dc-endpoint-parity-check.py for detail.
+[Unit]
+Description=DC endpoint parity check (wq#2613, nightly)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/bin/dc-endpoint-parity-check.py
+# Best-effort against nodes that may be briefly unreachable; a single node's
+# ssh timeout must not fail the whole run for the other nodes' checks.
+SuccessExitStatus=0 1

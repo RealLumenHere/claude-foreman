@@ -1,0 +1,31 @@
+--- a/context/fleet_tools.yaml (before)
++++ b/context/fleet_tools.yaml (after)
+@@ groups.commander_mcp.tools: append after existing entries @@
++
++      - name: mcp endpoint roster (wq#2613, MCP_CONTROL_PLANE_HA_DESIGN.md §3.1/§3.5)
++        use: >
++          The HA pool behind mcpw.lumennode.uk, preference order = failover order:
++          1. lumen (https://mcp-backend.lumennode.uk, tunnel 85e6c90f) — all fleet
++             tooling lives here, this is the normal case.
++          2. anubis (https://mcp-anubis.lumennode.uk) — prepared not deployed as of
++             wq#2607 (node/cloudflared install + DNS/Access still pending wq#2614).
++          3. bes (https://mcp-bes.lumennode.uk) — prepared not deployed as of wq#2608
++             (same wq#2614 DNS/Access dependency).
++          4. nephthys (https://mcp-failover.lumennode.uk, tunnel fea40cd1) — optional
++             pref-4, not counted toward N=3; units exist but were left
++             disabled after the node's 2026-09-18 un-retire (see
++             docs/fleet/UN_RETIRE_CHECKLIST.md).
++          `GET /pool` (behind the same OAuth bearer mcpw already uses) tells you
++          which node your hands are on: it returns the KV health table and the
++          currently `active` backend by name, so a session that lands mid-failover
++          knows without guessing whether a `start_process`/file path is landing on
++          Lumen's filesystem or a standby node's.
++          Failback semantics (§3.5): active flips to the next healthy backend within
++          ~60s of the current active failing 2 consecutive probes; it flips BACK to
++          a higher-preference backend (e.g. lumen) only after that backend has 2
++          consecutive healthy probes (2-3 min), not on the first sign of life — this
++          is deliberate hysteresis so a flapping node doesn't bounce the active
++          backend back and forth. PIDs/state started on a standby node during an
++          outage do not migrate back on failback; inspect them by ssh'ing the
++          standby directly (§3.5 point 3).
++        invoke: "https://mcpw.lumennode.uk/pool (GET, OAuth bearer) | per-node dc-gateway/health: https://mcp-<node>.lumennode.uk/mcp | nightly parity check: ops/wq2613-dc-endpoint-parity-check-a1/dc-endpoint-parity-check.py"

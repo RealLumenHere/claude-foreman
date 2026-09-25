@@ -1,0 +1,16 @@
+# /etc/systemd/system/dc-endpoint-parity-check.timer — wq#2613
+# Nightly cadence, offset from the mcp-gateway-watchdog 1-min timers and clear
+# of any other daily fleet timers (aq escalate runs on its own timer already;
+# this is deliberately a quiet-hours check, not a health probe, so once a day
+# is enough — dc-enforce-config output and unit drop-ins don't change between
+# deploys).
+[Unit]
+Description=Nightly DC endpoint parity check (wq#2613)
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
