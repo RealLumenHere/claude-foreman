@@ -1,7 +1,9 @@
 # MODEL_ROUTING_AUDIT.md — fleet-wide model-routing discipline (wq#750, CAL-1+)
 
 Measured 2026-08-22. Read-only audit: no rung was re-routed, no service was restarted.
-Every number below is reproducible with `python3 research/model_routing_audit.py`.
+§2's burn numbers are reproducible with `python3 research/model_routing_audit.py`; §1's
+surface enumeration is reproducible with `python3 research/model_routing_endpoint_grep.py`
+(added by wq#2681 — `model_routing_audit.py` enumerates no surfaces at all, §1.1).
 
 **Headline:** no fleet surface is flagship-by-default, and **no always-on service touches
 opus or fable** — the thing the ticket was most worried about does not happen. The real
@@ -37,9 +39,9 @@ Evidence grades used throughout: **A** = direct measurement over the complete po
 
 ## 1. Every model-dispatching surface on the fleet
 
-**Enumeration scope (re-audited 2026-09-25, wq#2664 — read this before trusting the
-table as complete):** six instruments, three on-Lumen-process and three deploy/endpoint
-based. On-Lumen process instruments: `systemctl list-unit-files`, the timer roster, and
+**Enumeration scope (re-audited 2026-09-25 by wq#2664, corrected the same day by wq#2681
+— read this before trusting the table as complete):** six instruments, three
+on-Lumen-process and three deploy/endpoint based. On-Lumen process instruments: `systemctl list-unit-files`, the timer roster, and
 `crontab -l`. Off-box-aware instruments added by this re-audit, closing the gap §1.1
 recorded: a search for every `wrangler.toml`/deploy manifest under the registered
 primaries this worktree has read access to (`foreman, mailbot, pokemon, work-queue, kb,
@@ -53,30 +55,76 @@ minerva/` — **zero hits**).
 **What this still does not cover:** any primary tree outside that registered read-access
 list — `questfree`, `pstack`, `mission-control`, `minerva`, `agent`, `logs`,
 `fleet/inventory` are registered primaries too (`primary_tree_guard.py:96-122`) but were
-not in this worktree's `--add-dir` grant, so the two new passes never searched them —
-and any integration that calls a model provider without a manifest or a matching
-endpoint string landing in a searched repo at all (e.g. a provider reached through a
-customer SDK wrapper whose import name isn't in the grep list above).
+not in wq#2664's `--add-dir` grant, so the two new passes never searched them. wq#2681's
+worktree *did* hold `minerva`, `agent` and `logs`, and ran the same six patterns over
+them as an out-of-scope falsification probe: **187 files match (147 of them source or
+config)** — `minerva/minerva_factory.py` and `minerva/judgearena_bench.py` among them, and
+`agent/` holds the live `litellm_config.yaml` plus orchestrator scripts. Row 21 below is
+the one that leaked into a searched root (via its `bin/` symlink) and is fixed here; a
+real enumeration of those three trees is its own pass — **wq#2741**, not done here.
+
+Nor does either pass cover any integration that calls a model provider without a manifest
+or a matching endpoint string landing in a searched repo at all (e.g. a provider reached
+through a customer SDK wrapper whose import name isn't in the grep list above).
 
 The two new passes found two `wrangler.toml` manifests
 (`mailbot/wrangler.toml`, `foreman/ops/wq1252-lumen-public-guardian/mail-probe/
-wrangler.toml`) and 13 files matching the endpoint-string grep. Read individually: the
-second wrangler.toml (`lumen-mail-probe`) is a synthetic Cloudflare-cron sender with no
-model call of its own — `mail-probe/src/worker.js` contains no `deepseek`/`anthropic`/
-`openai` string beyond one code comment naming the mailbot pipeline it feeds. Of the 13
-endpoint-string hits, 4 are test fixtures for the files below, `models.yaml` is
-surface 1's own config (a comment on `deepseek-v4-flash`'s `api_base`, not a new call),
-and the rest are monitoring/probe code that duplicates a surface already in this table or
-in `FLEET_COST_PLAN.md`, not a new one: `foreman_usaged.py` and
-`ops/wq1252-lumen-public-guardian/checks_email.py`'s `check_e3_deepseek` both hit
+wrangler.toml`). The second (`lumen-mail-probe`) is a synthetic Cloudflare-cron sender
+with no model call of its own — `mail-probe/src/worker.js` contains no `deepseek`/
+`anthropic`/`openai` string beyond one code comment naming the mailbot pipeline it feeds.
+
+**The endpoint-string population (corrected by wq#2681).** wq#2664 reported "13
+endpoint-string hits… read individually." That count is wrong and the read-through did
+not happen: the six patterns over those seven roots match **1,445 files**
+(`model_routing_endpoint_grep.py`, 2026-09-25). The population is only tractable once you
+say out loud which parts are not fleet code — wq#2664 never did:
+
+| bucket | files | why it is excluded |
+|---|---|---|
+| agent-session artifacts (`_runs/`, `events/`, `pilots/`, `*.jsonl`, `*.log`) | 1,327 | transcripts of agents discussing these endpoints, not code that calls them |
+| prose (`.md`, `.txt`, `.diff`) | 48 | docs and tickets |
+| data snapshots (`queue.db` and 17 of its backups, 11 `*.bak` copies of files already counted) | 29 | ticket text and superseded revisions |
+| vendored binary (`bin/trivy`) | 1 | third-party scanner binary |
+| **live source/config** | **40** | **the set that actually had to be read** |
+
+Only the bottom four rows are stable: the run-artifact bucket grows every time an agent
+runs (1,445 → 1,464 inside this session), so re-running will not reproduce the total and
+is not supposed to. `source` is the row to compare against.
+
+All 40 are enumerated with a per-file verdict in `model_routing_endpoint_grep.py`'s
+`ADJUDICATED` table; `--check` exits non-zero the moment a hit appears that nobody has
+ruled on. Do not re-run this pass with the box's `grep`: `/usr/bin/grep` here is
+**ugrep 7.8.4**, which honours `.gitignore` on `-r`, so the same pattern over
+`/home/lumen/foreman` (59 files) and over `/home/lumen/foreman/_runs` (1,277 files)
+disagree — that is most of the distance between wq#2664's number, wq#2675's 102 and the
+1,445 here (`kb/ISSUE-LOG.md`).
+
+Of the 40, the ones wq#2664 named do check out: `models.yaml` is surface 1's own config
+(a comment on `deepseek-v4-flash`'s `api_base`, not a new call); `foreman_usaged.py` and
+`ops/wq1252-lumen-public-guardian/checks_email.py`'s `check_e3_deepseek` hit
 account-status endpoints (`/api/oauth/usage`, `/user/balance`) — balance/usage checks,
 not completions; `deepseek_connect_alert.py` is the D4 connect-failure monitor
 (`FLEET_COST_PLAN.md` §2); `oauth_passthrough_probe.py` and `headroom_proxy_gate.py` are
 research-tier proxy tooling that stands in for `api.anthropic.com`, not production
 dispatch; `cli_canary.py` matches on the `@anthropic-ai/claude-code` **package name**
-(checking the `claude` CLI is installed), not an API call; `wq1252...config.json` only
-holds the URL `checks_email.py` reads. **Net result: mailbot is the only surface this
-re-audit adds** — row 20 below.
+(checking the `claude` CLI is installed), not an API call; `wq1252…config.json` only
+holds the URL `checks_email.py` reads. `claude-shim/claude_shim.py` has its own
+OpenAI-compatible handler but is dormant — `CLAUDE_SHIM_DESIGN.md:10` says
+`Status: DESIGN FOR REVIEW`, `claude-shim.service` is not installed and nothing listens
+on `:8091`. Nine more are test fixtures, four are LiteLLM config snippets, and the last
+eleven are the config generator `node_render_gateway.py` plus vendor-name string lists in
+spend guards, the gitea secret scanner, two report artifacts and mailbot's leak filter.
+
+**Net result — the corrected one: mailbot was not the only surface. Three more live
+dispatch surfaces sat unread in wq#2664's own grep population** and are now rows 21-23:
+`bin/minerva-factory` (a symlink into `minerva/minerva_factory.py`, hit at line 283, **on
+an active 6×/day timer**), `tools/council/council.yaml` → `tools/council/council.py`
+(`bin/research-council`, landed `e1a89d6` at 08:47, two hours *before* wq#2664's own
+commit `a15b19b`, so it was in the tree when the grep ran), and
+`harness/evals/worker-quality/promptfooconfig.yaml` (the wq#1300 promptfoo judge, landed
+`37f1f6c` on 2026-09-02). mailbot's own eval/probe harnesses
+(`mailbot/evals/lib/score.mjs`, `test_persona.mjs`, `test_dodge.mjs`) make the same direct
+DeepSeek call as the worker on the same key — folded into row 20's note, not separate rows.
 
 | # | Surface | Cadence | Model in use | Path | Anthropic quota | Cheapest-sufficient | Grade |
 |---|---|---|---|---|---|---|---|
@@ -100,20 +148,41 @@ re-audit adds** — row 20 below.
 | 18 | foreman dispatcher lanes (`dispatcher/config.json`) | 5 min | **no model choice** — `max_per_day` volume gate only | — | no | n/a | B |
 | 19 | research cron (`watcher_agent`, `radar_dispatcher`, `kb_dispatcher`, `watchdog`, `lumen_scout_expanded`) | cron | **none** — keyword/HTTP only | — | no | n/a | B |
 | 20 | mailbot (Cloudflare Worker, `mailbot/wrangler.toml:1-5`) — 4 DeepSeek calls/inbound email: `screenRomanticDrift` (`worker.js:323-362`), `runCritic` (`:246-306`), `generateReply` (`:176`), `generateNotesUpdate` (`:576`) | per inbound email | deepseek-v4-flash | direct `fetch("https://api.deepseek.com/...")`, **not** LiteLLM or the `claude` CLI | no | yes — already the cheapest cloud rung; a local accelerator can't reach it either, it's on the wrong side of the network (`CORAL_NEEDLE_TIER.md` §2.2/§5) | B |
+| 21 | `minerva-factory` (`minerva/minerva_factory.py`, symlinked `bin/minerva-factory`) — plans and `--apply`s minerva proposals | timer, 6×/day (`minerva-factory.timer`, `03,07,11,17,19,23:35 UTC`), `run 15 --apply` | `deepseek-v4-pro`; retries a give-up on `cerebras-oss-120b` (`minerva_factory.py:43,46,628-644`) | LiteLLM `:4000/v1/chat/completions` | no | yes — already a cheap rung | B |
+| 22 | research-council (`tools/council/council.py`, `bin/research-council`, wq#2628) — fans one prompt to N seats, then a chairman synthesizes | on demand (CLI, no timer/cron) | seats `claude-max-opus`, `gemini-flash`, `deepseek-v4-pro`, `kimi-k3` (off by default); chairman = first seat | LiteLLM (`COUNCIL_LITELLM_URL`, default `127.0.0.1:4000`) | no — the opus seat goes through `claude-shim`, which is not running (see §1 header), so that seat times out today | note only — a council is deliberately redundant | B |
+| 23 | worker-quality eval (`harness/evals/worker-quality/`, wq#1300) — promptfoo LLM-as-judge over the done-claim critic | on demand (`run_eval.sh`; no timer) | `WQ1300_JUDGE_MODEL`, default alias `claude-sonnet-5` | LiteLLM loopback, OpenAI-compatible (`promptfooconfig.yaml:14-20`) | no | yes | B |
 
-**Scope-2 verdict (always-on services): PASS.** Surfaces 6–8 and 12–17 are the always-on
-set. None of them dispatches an Anthropic model. Nothing to flag for opus/fable contact.
+**Note on row 20.** `mailbot/evals/lib/score.mjs`, `test_persona.mjs` and `test_dodge.mjs`
+issue the same `fetch("https://api.deepseek.com/chat/completions")` on the same worker key
+when run by hand. They are dev-run, not per-email, so they do not get their own row — but
+they are real spend and they were in wq#2664's grep population unnamed.
+
+**Scope-2 verdict (always-on services): PASS, re-checked by wq#2681.** Surfaces 6–8,
+12–17 and the newly-added 21 are the always-on set. None dispatches an Anthropic model:
+21 runs `deepseek-v4-pro`/`cerebras-oss-120b`. Rows 22 and 23 can dispatch
+`claude-max-opus` and `claude-sonnet-5`, but both are operator-invoked CLIs with no timer
+or cron entry, so the headline claim — no *always-on* service touches opus or fable —
+still holds. It is now a narrower claim than it reads: a human running
+`research-council` puts opus on the fleet's bill on demand.
+
+**Flagged, not fixed (wq#2681):** row 9 says `langfuse-ops/evaluator.py` is *inactive*,
+but `langfuse-evaluator.timer` is enabled and fired 14 minutes before this edit
+(`OnUnitActiveSec=15min`, `--sample-pct 5 --max-evals 20`). Whether it dispatches depends
+on trace volume in the window, which this pass did not measure — the cadence column is
+wrong either way. **wq#2742**, rather than guessed at here.
 
 **Note on surface 2 (fable-5@high judgment).** fable-5@high is also the only tuple in the
 whole dataset with a clean success rate — 2/2 on novel-design, at the highest measured
 burn (698s median wall-clock, 75.6s CPU, 64 turns). Its 0/2 on standard-engineering
 supports the manifest's own "never a volume worker" line. Leave as-is.
 
-### 1.1 History: the on-Lumen-process gap (wq#2661 found it, wq#2664 closed it, both 2026-09-25)
+### 1.1 History: the on-Lumen-process gap (wq#2661 found it, wq#2664 half-closed it, wq#2675 caught that, wq#2681 closed it — all 2026-09-25)
 
-**Status: CLOSED.** mailbot is now row 20 in §1's table, and §1's header states the
-enumeration scope explicitly. This subsection is kept as the record of how the gap was
-found and why the obvious fixes didn't work — read it for that, not as an open item.
+**Status: CLOSED.** mailbot is row 20, the three surfaces wq#2664 missed are rows 21-23,
+§1's header states the enumeration scope and the real population, and the pass now has a
+reproducer with a failing mode (`model_routing_endpoint_grep.py --check`). This subsection
+is kept as the record of how the gap was found and why the obvious fixes didn't work —
+read it for that, not as an open item.
 
 **mailbot was missing from the table above and makes four live DeepSeek calls per
 inbound email**, two of them classification gates:
@@ -144,12 +213,22 @@ matters because the obvious fix does not work:
   `model_routing_audit.py`" claim applies to §2's numbers, never to §1's list.
 
 **Done by wq#2664:** enumerated from *deployment manifests plus endpoint strings*, not
-from the local process table alone — the two passes described in §1's header. Result:
-mailbot (row 20) was the only surface either pass found; everything else the passes
-matched was a duplicate of a surface already in this table or in `FLEET_COST_PLAN.md`
-(§1's header has the per-hit breakdown). mailbot's generative calls
+from the local process table alone — the two passes described in §1's header. mailbot's
+generative calls
 (`generateReply`/`generateNotesUpdate`), left unpriced by wq#2661/wq#2661's
 `CORAL_NEEDLE_TIER.md` pass, are now priced in `FLEET_COST_PLAN.md` §8.
+
+**Corrected by wq#2681 (via wq#2675's CONTRADICT):** wq#2664 also claimed its
+endpoint-string pass returned 13 hits, "read individually," and that mailbot was the only
+surface it added. Both halves were wrong. The pass returns 1,445 files (40 of them live
+source/config); the read-through wq#2664 described did not happen, and doing it turned up
+rows 21-23. Two of the three would also have been caught by the *original*
+on-Lumen-process instruments this subsection blames for missing mailbot:
+`minerva-factory.timer` is in the timer roster and `bin/research-council` is a symlink in
+a searched root. So §1.1's root-cause story is incomplete as written — the instruments
+were not only structurally blind to edge workers, they were **not actually run to
+exhaustion**. The standing fix for that is the reproducer, not another prose assertion:
+`model_routing_endpoint_grep.py --check` fails on any hit without a recorded verdict.
 
 ---
 
