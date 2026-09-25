@@ -74,6 +74,20 @@ archetypes:
     primary_tuple: opus-5@high
     max_turns: 600
     wall_clock_timeout_s: 3600
+    # wq#2577: research-lane workers need read access into live fleet state to
+    # root-cause anything (restart storms, failed units) instead of filing an
+    # undiagnosed ticket — extends defaults.add_dirs with the agent/logs trees.
+    add_dirs:
+      - /home/lumen/agents/work-queue
+      - /home/lumen/mailbot
+      - /home/lumen/pokemon
+      - /home/lumen/bin
+      - /home/lumen/foreman
+      - /home/lumen/kb
+      - /home/lumen/projects/nest
+      - /home/lumen/agent
+      - /home/lumen/logs
+      - /home/lumen/minerva
 
   novel-design:
     primary_tuple: fable-5@high
@@ -84,6 +98,21 @@ archetypes:
     primary_tuple: opus-5@xhigh
     max_turns: 600
     wall_clock_timeout_s: 7200
+    # wq#2577: this is the "audit" archetype (router.py routes bare `audit` here) —
+    # same read-access extension as research-synthesis, so a "hard fleet audit"
+    # can actually read the unit's journal-adjacent state and agent/minerva logs
+    # instead of hitting the add-dir wall (wq#2570/2572/2573/2574 filed undiagnosed).
+    add_dirs:
+      - /home/lumen/agents/work-queue
+      - /home/lumen/mailbot
+      - /home/lumen/pokemon
+      - /home/lumen/bin
+      - /home/lumen/foreman
+      - /home/lumen/kb
+      - /home/lumen/projects/nest
+      - /home/lumen/agent
+      - /home/lumen/logs
+      - /home/lumen/minerva
 
   long-horizon-campaign:
     primary_tuple: DECOMPOSE

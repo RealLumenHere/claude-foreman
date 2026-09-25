@@ -277,7 +277,11 @@ Bash)
     # wq#1761 (ISSUE-LOG #313): same gap, third default add_dir — work-queue (the
     # sqlite store + wq CLI backing the fleet task queue) — added to both here too.
     # wq#1540: minerva (standalone repo, no LANE_REPO entry) likewise, in both.
-    PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest:/home/lumen/agents/work-queue:/home/lumen/minerva}
+    # wq#2577: /home/lumen/agent and /home/lumen/logs are now add_dirs for the
+    # audit/research-lane archetypes (agents.yaml rca-investigation,
+    # research-synthesis) so a fleet audit can read unit logs and agent state —
+    # same gap class, added to both.
+    PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest:/home/lumen/agents/work-queue:/home/lumen/minerva:/home/lumen/agent:/home/lumen/logs}
     # wq#1256 (#19 sync-live guard): git clean -f/--force is just as destructive
     # to a live tree as checkout/reset — it discards untracked files with no
     # undo. The sanctioned path for resyncing a primary is /home/lumen/bin/sync-live
@@ -478,7 +482,10 @@ Read|Edit|Write|Grep|Glob)
       # wq#1752 (ISSUE-LOG #302): kb + shallow nest archive added, same gap as the
       # Bash PRIMARY_TREES wall above.
       # wq#1761 (ISSUE-LOG #313): work-queue added, same gap, third default add_dir.
-      WRITE_PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest:/home/lumen/agents/work-queue:/home/lumen/minerva}
+      # wq#2577: /home/lumen/agent + /home/lumen/logs added, same gap — now
+      # add_dirs for the audit/research-lane archetypes (agents.yaml
+      # rca-investigation, research-synthesis).
+      WRITE_PRIMARY_TREES=${FOREMAN_PRIMARY_TREES:-/home/lumen/foreman:/home/lumen/bin:/home/lumen/pokemon:/home/lumen/questfree:/home/lumen/pstack:/home/lumen/mission-control:/home/lumen/kb:/home/lumen/projects/nest:/home/lumen/agents/work-queue:/home/lumen/minerva:/home/lumen/agent:/home/lumen/logs}
       # wq#1831: kb/ISSUE-LOG.md is the one sanctioned Edit target inside a primary
       # tree. The wall's remedy ("land it with lumen-pr") is unreachable for kb — the
       # repo has no remote and no PR flow, and a worker's filesystem bound cannot

@@ -80,6 +80,13 @@ STATIC_PRIMARY_TREES = [
     # several tickets (wq#1383/#1501...) until wq#1535 tripped over it. It is a
     # standalone repo with no router.LANE_REPO entry, so only this list reaches it.
     "/home/lumen/minerva",
+    # wq#2577: audit/research-lane archetypes (agents.yaml rca-investigation,
+    # research-synthesis) grant --add-dir read access into /home/lumen/agent and
+    # /home/lumen/logs so a fleet audit can root-cause a restart storm or failed
+    # unit. Neither is a git repo or a router.LANE_REPO entry, so — same gap class
+    # as work-queue/kb/nest above — only this static list write-freezes them.
+    "/home/lumen/agent",
+    "/home/lumen/logs",
 ]
 
 
