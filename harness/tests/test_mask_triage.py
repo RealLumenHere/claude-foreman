@@ -354,7 +354,7 @@ def test_a_history_index_that_swallows_the_control_fails_the_run(env, monkeypatc
     monkeypatch.setattr(mask_triage, "history_text",
                         lambda *a, **k: {"history:deadbeef": "ghp" + "_"})
     monkeypatch.setattr(mask_replay, "account",
-                        lambda value, tracked: "history:deadbeef" if tracked else None)
+                        lambda value, tracked, prefix="": "history:deadbeef" if tracked else None)
     assert cli() == mask_triage.EXIT_CONTROL
     out = capsys.readouterr()
     assert "CONTROL FAILED" in out.err and "to rotate" not in out.out

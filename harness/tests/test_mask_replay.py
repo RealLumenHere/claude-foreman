@@ -1276,16 +1276,19 @@ def _with_full_literal(ticket, patterns):
 @pytest.mark.skipif(not os.path.isdir(WQ2417_RUN),
                     reason="wq#2417's run dir is not on this host")
 def test_wq2417_transcript_burned_nothing():
-    """wq#2418's verdict under the table the ticket names: 20 values, 0 unaccounted.
+    """wq#2418's verdict under the table the ticket names: 20 values, 1 unaccounted.
 
-    Seventeen are the ISSUE-LOG snapshot paging on its own rows again. The three that
-    are about this run are asserted here, and none of them is a credential: two are
-    branch names, and the third is the run's own probe literal (see the test below,
-    which is the one that matters).
+    Seventeen are the ISSUE-LOG snapshot paging on its own rows again. Of the three
+    that are about this run, two are branch names; the third is the oat-prefixed
+    literal wq#2423 is about — today's table still fires on that line (it just cuts a
+    shorter span), so it is no longer waved through as "rule-fixed" (wq#2423). It was
+    excused as a closed rule before that fix; it pages now, which is the bug wq#2418
+    found and this ticket's `today_closed` field corrects.
     """
     records = mask_replay.replay(2417, tracked=_tree_only())
     assert len(records) == 20
-    assert mask_replay.unaccounted(records) == []
+    assert [r["value_sha256_12"] for r in mask_replay.unaccounted(records)] == [
+        WQ2417_OAT_LEGACY[0]]
     assert all(r.get("faithful", True) for r in records), "no window was re-cut"
     loose = [r for r in records if r["accounted_in"] is None]
     assert [(r["value_sha256_12"], r["value_len"]) for r in loose] == [
@@ -1323,14 +1326,15 @@ def test_wq2418_alarm_value_is_one_literal_two_tables_cut_apart():
 
 
 def test_a_recut_prefix_is_excused_as_a_closed_rule():
-    """The leak path wq#2418 found, pinned so a fix has a failing test to turn green.
+    """wq#2423: a widened prefix must not launder a live shape as a retired rule.
 
-    `unaccounted()` excuses a record when `still_matches_today` is False, and that flag
-    asks whether today's table reproduces the identical VALUE STRING — not whether the
-    line still fires at all. Widening a prefix therefore launders every value it recuts
-    into `rule-fixed`, the same badge earned by a shape that was genuinely retired. Here
-    one line is credential-shaped under both tables and committed text under neither,
-    and the legacy replay still reports zero unaccounted.
+    `still_matches_today` asks whether today's table reproduces the identical VALUE
+    STRING — a widened prefix always fails that, since it recuts the same span into a
+    different string. `unaccounted()` no longer keys off that flag directly; it keys
+    off `today_closed`, which is true only when today's table does not fire on the
+    LINE at all, or when whatever it cuts today is itself accounted for. Here one line
+    is credential-shaped under both tables and committed text under neither, so both
+    replays must page it — the legacy replay no longer gets to call this "rule-fixed".
 
     Kept free of any run dir: the defect is in the accounting, not in wq#2417's corpus.
     """
@@ -1342,8 +1346,30 @@ def test_a_recut_prefix_is_excused_as_a_closed_rule():
     assert [(r["prefix"], r["value_len"]) for r in legacy] == [("sk-ant-oat", 19)]
     assert [(r["prefix"], r["value_len"]) for r in today] == [("sk-ant-", 22)]
     assert not legacy[0]["still_matches_today"], "the recut, read as a retired shape"
+    assert not legacy[0]["today_closed"], "but the line still fires today, unaccounted"
     assert mask_replay.unaccounted(today) == today, "today's table would page this"
-    assert mask_replay.unaccounted(legacy) == [], "and the legacy replay excuses it"
+    assert mask_replay.unaccounted(legacy) == legacy, "and now so does the legacy replay"
+
+
+def test_a_line_today_truly_drops_is_still_excused():
+    """Re-planted control (ops/wq2359-rotation-triage/README.md:68-75): the wq#2423 fix
+    must still fall through to `rule-fixed` for a shape today's table genuinely drops —
+    a fixture pinned independent of any ticket corpus, so it can fail on its own.
+
+    Unlike the recut case above, this line's legacy label has no counterpart at all in
+    CURRENT_PATTERNS on the same line: today's table does not fire on it, so it is the
+    "does not fire on the LINE at all" branch of the fix, not the recut-and-accounted
+    one, and must stay excused.
+    """
+    line = "TOKEN = read_oauth_token_from_vault()\n"
+    items = {"transcript:synthetic": line}
+    legacy = mask_replay.replay(0, tracked={}, items=items)
+    assert legacy, "fixture must actually fire the legacy table, or this proves nothing"
+    today_hits = [r for r in legacy if not r["still_matches_today"]]
+    assert today_hits, "fixture must actually exercise a legacy-only shape"
+    for rec in today_hits:
+        assert rec["today_closed"], "a line today's table never touches stays excused"
+    assert mask_replay.unaccounted(today_hits) == []
 
 
 def test_legacy_table_is_not_the_live_one():
