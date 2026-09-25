@@ -1481,3 +1481,29 @@ def test_the_two_unrotated_wq2511_github_values_stay_unaccounted():
     assert ghp["rotated"] is None
     assert ghp in mask_replay.unaccounted(records)
     assert masking.MASK == "MASKED"
+
+
+WQ2650_VALUE = ("55e0c019e958", 33)
+
+
+def test_wq2650_value_is_the_wq2350_fixture_plus_a_regex_dot():
+    """wq#2650's rotation row, settled: no credential, nothing rotated.
+
+    wq#2638 attempt 1 grepped the ISSUE-LOG for wq#2350's concatenation fixture with a
+    regex `.` glued on (`grep -o -n ".\\{60\\}<fixture>.\\{40\\}"`). The cloudflare body
+    charset takes the `.`, so the match runs past the mask literal, masking._matches()
+    no longer reads it as its own output, and the tripwire filed wq#2650. That re-arm is
+    ISSUE-LOG row 724's direction (1), and wq#2638 owns the fix. Split at the seams below
+    so reading this file cannot fire the same alarm, and so account() finds the body here.
+    """
+    body = "REALSECRETVALUE123456" "cfut_" "MASKED" "."
+    assert (hashlib.sha256(body.encode()).hexdigest()[:12], len(body)) == WQ2650_VALUE
+    line = 'grep -o -n ".\\{60\\}' + "cfut_" + body + '\\{40\\}" kb/ISSUE-LOG.md'
+    records = mask_replay.replay(0, tracked={}, items={"transcript:a": line})
+    assert [(r["label"], r["value_sha256_12"], r["value_len"]) for r in records] \
+        == [("cloudflare",) + WQ2650_VALUE]
+    with open(__file__) as fh:
+        here = fh.read()
+    assert mask_replay.account(body, {"this": here}) is not None
+    for seamed in (l for l in here.splitlines() if "REALSECRETVALUE" in l):
+        assert masking.mask_text(seamed)[1] == [], seamed
