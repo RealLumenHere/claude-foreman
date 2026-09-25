@@ -1567,6 +1567,22 @@ def test_report_marks_a_rotated_value_rotated_not_burned():
     assert "rotated  : 2026-09-24T00:00:00Z (wq2514)" in text
 
 
+def test_report_masks_a_prefix_todays_rules_read_as_a_credential():
+    """wq#2695: the report printed wq#2677's legacy sk-key prefix, a slice of the
+    branch name `mask-alarm-record-a-low-confidence`, raw. Today's sk-key rule reads
+    it as a key, so replaying wq#2677 re-fired the tripwire on the replay run."""
+    prefix = "sk-" "alarm-record-a-low-con"
+    assert masking.mask_text(prefix)[1] == ["sk-key"]
+    records = [{"label": "sk-key", "prefix": prefix, "value_len": 16,
+                "value_sha256_12": "1619532ef427", "first_seen_in": "snapshot:a",
+                "accounted_in": None, "still_matches_today": False,
+                "today_closed": True, "rotated": None, "line": ""}]
+    out = io.StringIO()
+    mask_replay.report(0, records, out=out)
+    assert masking.mask_text(out.getvalue())[1] == []
+    assert "prefix='sk-" in out.getvalue()
+
+
 def test_a_settled_burn_makes_the_cli_exit_0(tmp_path, monkeypatch):
     """The AC1 shape wq#2514 filed this ticket over: a real, unaccounted burn that
     stays unaccounted forever without a ledger. Same fixtures as

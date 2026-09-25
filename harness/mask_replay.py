@@ -657,8 +657,12 @@ def report(ticket_id, records, out=sys.stdout):
             mark = "rule-fixed"
         else:
             mark = "BURNED?"
+        # wq#2695: a prefix is only non-secret under the rule that cut it. wq#2677's
+        # branch name (`...mask-alarm-record...`) was a legacy sk-key prefix, today's
+        # sk-key rule reads that as a key, and printing it raw paged the replay run.
+        prefix = masking.mask_text(rec["prefix"])[0]
         print(f"  [{mark}] {rec['label']} len={rec['value_len']} "
-              f"sha256={rec['value_sha256_12']} prefix={rec['prefix']!r}", file=out)
+              f"sha256={rec['value_sha256_12']} prefix={prefix!r}", file=out)
         print(f"      seen in : {rec['first_seen_in']}", file=out)
         print(f"      accounted: {rec['accounted_in']}", file=out)
         if rec.get("rotated"):

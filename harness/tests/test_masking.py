@@ -327,6 +327,22 @@ def test_the_wq2674_hand_probe_masks_its_live_half_and_alarms():
     assert masked == "cfut_" + masking.MASK + masking.MASK + "."
 
 
+# wq#2695: wq#2677's scratch probe (/tmp/fworker-wq2677/probe_suppressions.py) set its own
+# `PW` to this unhyphenated cousin of PW above and printed it behind `password:` and
+# `Signing Secret:` labels, so the tripwire paged it as a burned kv-secret (sha256
+# 76b8a571c3a0, len 21). The worker's own Write is the first place it appears in that
+# transcript. Committed here it is accounted text, and the label stays out of the literal
+# so reading this file stays silent.
+WQ2677_PW = "hunter2hunter2hunter2"
+
+
+def test_the_wq2677_probe_password_masks_and_alarms():
+    assert masking.value_sha12(WQ2677_PW) == "76b8a571c3a0"
+    for label in ("password: ", "Signing Secret: "):
+        masked, hits = masking.mask_text(label + WQ2677_PW)
+        assert hits == ["kv-secret"] and WQ2677_PW not in masked
+
+
 def test_a_rules_output_inside_another_rules_value_is_still_ours():
     """The rules compose: url-auth reads a userinfo line the github rule has already
     masked, so its whole value is another rule's kept prefix plus the literal. That is
