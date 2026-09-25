@@ -1,0 +1,68 @@
+--- a/home/lumen/bin/wq523_pat_residue.py
++++ b/home/lumen/bin/wq523_pat_residue.py
+@@ -297,6 +297,10 @@
+
+
+ def cmd_alert():
++    """wq#2572: this is the STANDING CHECK for the timer -- exit 1 on CRITICAL is
++    currently the ONLY thing that makes a finding visible (systemd -> OnFailure=
++    is a no-op under the finding-exit tag; lumen-failed-units' 5min sweep is the
++    real delivery path, and it only sees units still sitting in `systemctl --failed`).
++    That is exactly the "exit 1 = finding" wallpaper problem wq#2572 exists to fix:
++    once this unit moves to SuccessExitStatus=1 (Mode C, ops/wq2572-.../DESIGN.md),
++    it stops showing up in `systemctl --failed` at all, so lumen-failed-units would
++    never see -- and never report -- a live CRITICAL token. Self-alert here first,
++    independent of systemd state, the same way retirement-audit's emit_alerts() and
++    primary_tree_guard.py's alert() already do; aq dedups on (source,key) so repeat
++    runs of the SAME critical set don't spam.
+     """STANDING CHECK for the timer (wq#565).
+
+     --scan is the full inventory and exits 1 on ANY stray, which on a daily timer is 29
+@@ -335,6 +339,17 @@
+     print(f"pat-alert: {len(stray)} stray file(s) — {len(critical)} CRITICAL, "
+           f"{len(noted)} noted (dead tokens in mode-600 backups)")
+     for f, mode, why in critical:
+         print(f"  CRITICAL {mode} {f}  [{why}]")
++    if critical:
++        key = hashlib.sha256(",".join(sorted(f for f, _, _ in critical)).encode()).hexdigest()[:16]
++        title = f"pat-scan: {len(critical)} CRITICAL token residue file(s)"
++        detail = "; ".join(f"{f} [{why}]" for f, _, why in critical)[:1500]
++        try:
++            subprocess.run(["/home/lumen/bin/aq", "add", "pat-scan", key, title, detail,
++                            "--owner", "claude"], capture_output=True, text=True, timeout=20)
++        except Exception:
++            pass
++        try:
++            subprocess.run(["/home/lumen/bin/ntfy-send", "-t", "lumen-alerts", "-p", "high",
++                            "-T", title, detail], capture_output=True, text=True, timeout=15)
++        except Exception:
++            pass
+     if not critical:
+         print("  no stray file is world-readable or holds a live token")
+     if oversize:
+@@ -348,10 +363,16 @@
+
+
+ def main():
+-    if "--scan" in sys.argv:
+-        sys.exit(cmd_scan())
+-    if "--alert" in sys.argv:
+-        sys.exit(cmd_alert())
++    # wq#2572: an unhandled exception here used to fall through to Python's default
++    # exit code 1 -- IDENTICAL to cmd_alert()'s "found a CRITICAL" exit 1, so a crash
++    # (permission error mid-scan, disk full, etc.) and a real finding were indistinguishable
++    # from the outside. Give a crash its own code so SuccessExitStatus=1 (finding only,
++    # see the unit drop-in in this ops dir) never also swallows a real failure.
++    try:
++        if "--scan" in sys.argv:
++            sys.exit(cmd_scan())
++        if "--alert" in sys.argv:
++            sys.exit(cmd_alert())
++    except SystemExit:
++        raise
++    except Exception as e:
++        print(f"wq523_pat_residue: internal error: {e}", file=sys.stderr)
++        sys.exit(2)
+     index, oversize = build_index()
+     files = sorted(index)
+     canonical = canonical_set()

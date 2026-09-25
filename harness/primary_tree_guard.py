@@ -148,8 +148,14 @@ def restore_tree(repo, default):
 
 
 def alert(title, msg):
+    # wq#2572: ntfy-send's parser only recognizes -T/-p/-t (see ntfy-send:11-14) --
+    # the long forms below hit its `*) break` fallthrough and get swallowed into the
+    # message body with PRIO left at "default", so every alert() call here shipped
+    # with no real title and no urgency. This is the self-alert this ticket's guard
+    # exit-code contract depends on for primary-tree-guard's Mode C classification
+    # (SuccessExitStatus=1 is only safe once the guard actually alerts on its own).
     try:
-        subprocess.run([NTFY_BIN, "--title", title, "--priority", "urgent", msg],
+        subprocess.run([NTFY_BIN, "-T", title, "-p", "urgent", msg],
                        capture_output=True, text=True, timeout=10)
     except Exception:
         pass
