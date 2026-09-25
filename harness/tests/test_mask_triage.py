@@ -353,11 +353,20 @@ def test_a_history_index_that_swallows_the_control_fails_the_run(env, monkeypatc
     monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
     monkeypatch.setattr(mask_triage, "history_text",
                         lambda *a, **k: {"history:deadbeef": "ghp" + "_"})
-    monkeypatch.setattr(mask_replay, "account",
-                        lambda value, tracked, prefix="": "history:deadbeef" if tracked else None)
+    account_calls = []
+
+    def fake_account(value, tracked, prefix=""):
+        account_calls.append((value, tracked, prefix))
+        return "history:deadbeef" if tracked else None
+
+    monkeypatch.setattr(mask_replay, "account", fake_account)
     assert cli() == mask_triage.EXIT_CONTROL
     out = capsys.readouterr()
     assert "CONTROL FAILED" in out.err and "to rotate" not in out.out
+    # wq#2679: mask_replay.account gained a `prefix` positional arg (65866b0) — pin the
+    # stand-in to the same 3-arg call shape production actually uses, so a future
+    # signature drift fails loudly here instead of as a bare TypeError.
+    assert account_calls and all(len(call) == 3 for call in account_calls)
 
 
 def test_history_text_reads_every_reachable_blob_and_skips_the_huge_ones(env):
