@@ -116,8 +116,9 @@ def test_trailing_punctuation_after_masked_literal_survives():
     {5,}[A-Za-z0-9], {11,} -> {11,}[A-Za-z0-9]) makes trailing punctuation
     unmatchable by the run, so it is left in the output."""
     assert mask("reads back as cfut_MASKED.") == "reads back as cfut_MASKED."
-    # split at the `: ` the kv-secret rule reads, or this line arms the tripwire
-    # on every reader (test_masking.test_the_mask_suite_does_not_arm_its_own_tripwire)
+    # wq#2731: this literal must stay split at the `: ` the kv-secret rule reads —
+    # a whole unsplit "token: abcdefghijklmnop. Next sentence" re-arms the tripwire
+    # on every reader (test_masking.test_the_mask_suite_does_not_arm_its_own_tripwire).
     assert mask("token: " + "abcdefghijklmnop. Next sentence") == \
         "token: MASKED. Next sentence"
 
