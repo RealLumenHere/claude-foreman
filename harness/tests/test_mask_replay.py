@@ -1206,6 +1206,10 @@ def test_wq2410_transcript_burned_nothing():
     move the pin rather than break the verdict), or the dummy that test_token_injection
     holds has moved off line 22. An ISSUE-LOG row quoting the branch body no longer
     counts as that file — see _tree_only.
+
+    wq#2419 re-verified this pin against ISSUE-LOG row 629's own quote of
+    WQ2410_BRANCH (kb/ISSUE-LOG.md:724): _tree_only excludes the log, so the quote
+    does not re-account the value and the assertion below still holds.
     """
     records = mask_replay.replay(2410, tracked=_tree_only())
     assert len(records) == 20
