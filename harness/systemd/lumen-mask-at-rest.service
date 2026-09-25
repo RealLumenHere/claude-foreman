@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly at-rest credential mask sweep - CC transcripts + supergateway log (wq#2546)
+Documentation=file:///home/lumen/foreman/harness/mask_at_rest.py
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman/harness
+ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/mask_at_rest.py --store all

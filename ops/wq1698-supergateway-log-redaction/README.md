@@ -42,6 +42,32 @@ This worker's sandbox cannot write to `/etc/systemd/system/` or run
 ISSUE-LOG #68) — `apply.sh` is a proposal for Frank/an authorized deploy path
 to run, exactly like `wq829-fast-stop.conf` before it.
 
+## wq#2546 follow-up — the local file itself was still unmasked
+
+wq#2514's consumer scan (2026-09-25) found the live RealLumenHere PAT (fp
+27ec5cf7418a) inside `desktop-commander-mcp.log` — the very file this
+directory's fix created. Moving the body/chatter stream off Bes (above) never
+masked its contents; `StandardOutput=append:<path>` is a raw fd redirect, so
+nothing in the wq#1698 fix could have masked it.
+
+Two independent mitigations now cover this file:
+- `harness/mask_at_rest.py --store supergateway`, run nightly
+  (`harness/systemd/lumen-mask-at-rest.{service,timer}`) and on every burn
+  (`harness/mask_replay.py`'s `trigger_mask_at_rest()`), masks this file in
+  place after the fact — already landed (wq#2546 build a/c/d).
+- `wq2546-mask-body-log.conf` (this directory) stops the raw value from
+  landing at all: it routes the body/chatter stream through
+  `/home/lumen/bin/mask-secrets` before it hits the file, closing the window
+  between a secret being printed and the next mask sweep.
+
+`wq2546-mask-body-log.conf` and `apply-mask.sh` are proposals only, same
+posture as `apply.sh` above and for the same reason: this worker's sandbox
+cannot write `/etc/systemd/system/` or restart `desktop-commander-mcp` (the
+very gateway this session's tools ride), and the Commander path changes only
+via a careful, reviewed, detached `systemd-run` — never unattended. An
+operator with that authority runs `apply-mask.sh` once `no-body-logs-journald.conf`
+(wq#1698) is already live.
+
 ## What this does NOT cover
 
 - **Purging the 667 already-shipped token-shaped Bes rows and rotating
