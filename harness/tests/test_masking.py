@@ -129,6 +129,29 @@ KV_REAL = [f"password: {PW}", f'"api_key": "{PW}"', f"GITEA_TOKEN={PW}",
            f"Signing Secret: {PW}", f"clientSecret: {PW}", f"apiKey: {PW}",
            f"X-Api-Key: {PW}", f"signing key = {PW}"]
 
+# wq#2632: the call test's own two populations, kept apart from the lists above because
+# each asserts the OPPOSITE thing about the same `(`.
+#
+# Suppressed: a value that is a segmented identifier — `_`, `.`, or a camelCase hump —
+# immediately called. These are the eleven shapes a 485-file probe found the wq#2288
+# lookahead suppressing; every one of them carries a separator, which is what let the
+# test narrow from "next character" to "value shape".
+KV_CALLED_FALSE_POSITIVES = [
+    "        token = read_oauth_token()",
+    "        token = _read_gateway_token(ticket)",
+    "    master_key = key_file.read_text().strip()",
+    "        token = _ebay_access_token(cfg)",
+    "        token = readOauthToken()",
+    "        api_key = getDefaultApiKey(cfg)",
+]
+# Must FIRE: an OPAQUE body glued to a `(` — no separator, no hump, so nothing excuses
+# it as a call. Under wq#2288's trailing lookahead the whole match was dropped, so this
+# masked and alarmed before that PR and did neither after: a silent miss, not a
+# narrowing. Split at the `=` boundary the rule reads, like KV_LINE above.
+OPAQUE = "abcdefghijklmnop" + "123456"
+KV_OPAQUE_CALLS = ["TOKEN=" + OPAQUE + "(", "Signing Secret: " + OPAQUE + "(",
+                   "password: " + PW + "("]
+
 
 # wq#2356: a worker investigating a mask alarm necessarily READS this file set, so a
 # fixture left whole in source arms the tripwire on the reader and files a pri-1
@@ -234,8 +257,12 @@ def test_token_engine_mirror_agrees():
                                     "token-engine"))
     import token_engine_daemon as ted
 
-    for text in FALSE_POSITIVES + KV_FALSE_POSITIVES:
+    for text in FALSE_POSITIVES + KV_FALSE_POSITIVES + KV_CALLED_FALSE_POSITIVES:
         assert ted.mask_hits(text) == [], f"{text!r} trips the daemon tripwire"
+    # wq#2632: the daemon carried the same dropped-match gap, and there a miss does not
+    # page at all — it hands the unmasked result back through the broker verb.
+    for text in KV_OPAQUE_CALLS:
+        assert ted.mask_hits(text), f"daemon misses {text!r} entirely"
     # wq#2297: the daemon's kv_secret must also still CATCH, or the mirror passes by
     # going blind — a false hit there fails the verb, a missed one leaks the result.
     for text in KV_REAL:
@@ -448,6 +475,33 @@ def test_ordinary_source_is_not_a_credential_label():
         masked, hits = masking.mask_text(text)
         assert hits == [], f"{text!r} falsely matched {hits}"
         assert masked == text, f"{text!r} was rewritten to {masked!r}"
+
+
+# --- wq#2632: the call test suppresses calls, not everything next to a paren ---------
+
+def test_a_called_identifier_is_still_not_a_credential():
+    """The narrowing must not give back the false positive wq#2288 removed."""
+    for text in KV_CALLED_FALSE_POSITIVES:
+        masked, hits = masking.mask_text(text)
+        assert hits == [], f"{text!r} falsely matched {hits}"
+        assert masked == text, f"{text!r} was rewritten to {masked!r}"
+
+
+def test_an_opaque_value_glued_to_a_paren_still_alarms():
+    """wq#2322/wq#2632. This is the regression the ruling turns on, so it is written to
+    FAIL on the shipped wq#2288 rule rather than on some adjacent shape: each line here
+    is silent — no mask, no label, no record — under `(?![A-Za-z0-9._-]|\\()`, because a
+    greedy body that cannot back up into its own charset drops the whole match instead
+    of shortening it. A miss on this layer is an unalarmed credential in every
+    downstream artefact, which is strictly worse than the false positive the lookahead
+    was added for."""
+    for text in KV_OPAQUE_CALLS:
+        masked, hits = masking.mask_text(text)
+        assert hits == ["kv-secret"], f"{text!r} was missed entirely"
+        assert OPAQUE not in masked and PW not in masked, masked
+        assert masked.endswith("MASKED("), masked
+        # and the rotation ticket can still name the value it is about
+        assert masking.scan(text)[1][0]["value_sha256_12"]
 
 
 def test_a_qualified_noun_still_fires():

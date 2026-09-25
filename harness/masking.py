@@ -72,6 +72,28 @@ _KV_LABEL = (r"(?:" + _KV_WORD + r")?" + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
 # pointer would hide the leak path the scan record exists to show.
 _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
+# A value that is immediately CALLED is a function, not a credential. wq#2288 spelled
+# that as a trailing `(?![A-Za-z0-9._-]|\()`, which read the next character instead of
+# the value. Two consequences, both bad. The charset half was inert — the body run is
+# already greedy, so nothing followed it to backtrack for — and with it there the `\(`
+# half could not shorten the match either: the body would have had to give back a
+# character into its own charset, which the charset half forbids. So the whole match was
+# DROPPED. `TOKEN=<22 opaque chars>(` masked and alarmed before wq#2288 and did neither
+# after (wq#2322 verify-pass, wq#2632 ruling) — a silent miss on the layer instinct 4
+# calls an alarm, which is the one failure direction worse than the false positive.
+# The test now reads the VALUE. A called identifier is segmented: `read_oauth_token(`,
+# `key_file.read_text(`, `readOauthToken(`. A credential body is an undifferentiated
+# run. Every paren-adjacent match the old half suppressed across the repo carries a `_`
+# or a `.`, so requiring a separator or a camelCase hump costs nothing: the corpus hit
+# count is identical before and after, none of the suppressions is regained and no new
+# one appears (ops/wq2632-kv-paren/probe_paren.py, re-runnable).
+# `-` is absent from both charsets on purpose: no identifier contains one, so a dashed
+# value glued to a `(` is a credential, not a call.
+_KV_SEGMENTED = r"[A-Za-z_][A-Za-z0-9_.]*[_.][A-Za-z0-9_.]*"
+# case-SENSITIVE via `(?-i:)` under an IGNORECASE rule, same trick as _KV_WORD: the hump
+# only exists if the source really wrote `oauthToken`, not `OAUTHTOKEN`.
+_KV_HUMPED = r"(?-i:[A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*)"
+_KV_NOT_CALLED = r"(?!(?:" + _KV_SEGMENTED + r"|" + _KV_HUMPED + r")\()"
 
 # (label, compiled pattern, replacement) — labels feed the alarm/rotation ticket.
 # Two labels may repeat (github); mask_text() de-duplicates.
@@ -108,11 +130,11 @@ PATTERNS = [
         r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
         r"[^\s@/'\"`]{8,}(?=@[A-Za-z0-9\[])"), r"\1MASKED"),
     # This one keys off an English word rather than a prefix, so it needs a different
-    # boundary than `_B`. It needs a TRAILING one (wq#2288): without it
+    # boundary than `_B`. It needs a call test (wq#2288): without one,
     # `key = apply_key_allowlist(reg)` (node_render_gateway.py:418) reads as a 19-char
-    # secret. A value that is immediately called is a function, never a credential —
-    # and the charset half of the lookahead is what makes the `\(` half hold, since a
-    # greedy run would otherwise just backtrack one character and match anyway.
+    # secret. That test is _KV_NOT_CALLED, and it is a lookahead on the value's SHAPE,
+    # not on the character after it — see there for why the trailing form it replaces
+    # silently dropped opaque values instead of merely narrowing the rule (wq#2632).
     #
     # wq#2297: the trailing boundary alone was not enough, because the LABEL half was a
     # naked keyword alternation with no left boundary. `KEY` matched inside `monkey:`,
@@ -133,8 +155,8 @@ PATTERNS = [
     # tool instinct 4 tells every agent to pipe through (ISSUE-LOG row 577).
     ("kv-secret", re.compile(
         r'\b((?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*)'
-        + _KV_POINTER +
-        r'[A-Za-z0-9._-]{12,}(?![A-Za-z0-9._-]|\()',
+        + _KV_POINTER + _KV_NOT_CALLED +
+        r'[A-Za-z0-9._-]{12,}',
         re.IGNORECASE), r"\1MASKED"),
 ]
 

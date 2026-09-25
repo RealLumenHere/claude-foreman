@@ -104,6 +104,14 @@ _KV_LABEL = (r"(?:" + _KV_WORD + r")?" + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
              + r"|" + _KV_BARE)
 _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
+# wq#2632: the call test reads the VALUE's shape, not the character after it. The
+# trailing `(?![A-Za-z0-9._-]|\()` this replaces dropped the whole match for any value
+# glued to a `(`, so an opaque credential in that shape passed the tripwire silently —
+# here that means it reaches the broker result instead of failing the verb. Reasoning
+# and the 485-file probe: harness/masking.py.
+_KV_SEGMENTED = r"[A-Za-z_][A-Za-z0-9_.]*[_.][A-Za-z0-9_.]*"
+_KV_HUMPED = r"(?-i:[A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*)"
+_KV_NOT_CALLED = r"(?!(?:" + _KV_SEGMENTED + r"|" + _KV_HUMPED + r")\()"
 MASK_PATTERNS = [
     ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{30,}")),
     ("github_token", re.compile(_B + r"(?:github_pat_)[A-Za-z0-9_]{20,}")),
@@ -122,7 +130,7 @@ MASK_PATTERNS = [
     # rather than imported; test_masking.test_token_engine_mirror_agrees pins them.
     ("kv_secret", re.compile(
         r'\b(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER +
-        r'[A-Za-z0-9._-]{12,}(?![A-Za-z0-9._-]|\()',
+        _KV_NOT_CALLED + r'[A-Za-z0-9._-]{12,}',
         re.IGNORECASE)),
 ]
 
