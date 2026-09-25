@@ -51,7 +51,14 @@ LOG_PATH = os.environ.get("PRUNE_LOG", "/home/lumen/kb/logs/wq2620-prune-worktre
 # worktree named this way maps straight to a wq ticket id, no owner file needed.
 FWORKER_WT_RE = re.compile(r"^wq(\d+)-a\d+$")
 
-_TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
+# Two formats, deliberately separate (wq#2669). `_DB_TS_FMT` is what the wq
+# database actually stores: bin/wq:145 and bin/slock:43 both write every
+# `tasks.lease_expires` and `slocks(_ro).expires_at` with this constant. It is
+# not ISO-8601 — no `T`, no `Z` — and parsing db values with the log format is
+# the bug wq#2644 found: every real value failed to parse, so no lease or slock
+# ever read as expired. `_LOG_TS_FMT` is ours alone, for the JSONL run log.
+_DB_TS_FMT = "%Y-%m-%d %H:%M:%S"
+_LOG_TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def sh(args, timeout=120):
@@ -66,7 +73,7 @@ def sh(args, timeout=120):
 
 def _parse_ts(value):
     try:
-        return datetime.datetime.strptime(value, _TS_FMT)
+        return datetime.datetime.strptime(value, _DB_TS_FMT)
     except (TypeError, ValueError):
         return None
 
@@ -206,7 +213,9 @@ def wq_claim_is_live(ticket_id):
         return False, f"status={status}"
     if lease_expires:
         exp = _parse_ts(lease_expires)
-        if exp is not None and exp < _now_utc_naive():
+        if exp is None:
+            return True, f"status=claimed, lease={lease_expires} unparseable — fail closed"
+        if exp < _now_utc_naive():
             return False, f"claimed but lease expired {lease_expires}"
     return True, f"status=claimed, lease={lease_expires or 'none'}"
 
@@ -243,7 +252,9 @@ def slock_is_live(agent):
         if not expires_at:
             return True, f"slock held by {agent}, no expiry"
         exp = _parse_ts(expires_at)
-        if exp is None or exp > _now_utc_naive():
+        if exp is None:
+            return True, f"slock held by {agent}, expires {expires_at} unparseable — fail closed"
+        if exp > _now_utc_naive():
             return True, f"slock held by {agent}, expires {expires_at}"
     return False, f"owner={agent}, no live slock"
 
@@ -306,7 +317,7 @@ def human(n):
 
 
 def append_log(path, record):
-    record = dict(record, ts=time.strftime(_TS_FMT, time.gmtime()))
+    record = dict(record, ts=time.strftime(_LOG_TS_FMT, time.gmtime()))
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a") as f:

@@ -37,17 +37,27 @@ A worktree is only pruned if **all** of:
 Any read failure on the liveness check (db missing, unparseable) **fails closed**:
 treated as live, never pruned. An unreadable answer is not evidence of a safe one.
 
+Lease and slock expiry times are read with `_DB_TS_FMT` (`%Y-%m-%d %H:%M:%S`), the
+format `bin/wq:145` and `bin/slock:43` actually write. Keep it separate from
+`_LOG_TS_FMT`, which is only for the run log below — wq#2644 found the two had been
+collapsed into one ISO-8601 constant, so every stored timestamp failed to parse and
+nothing ever read as expired. `probe_wq2669_writer_format.py` checks the pruner still
+agrees with the writers at a pinned revision.
+
 Every run appends one JSON line to `/home/lumen/kb/logs/wq2620-prune-worktrees.jsonl`
 (`--log` to override), dry run or apply, so there is always a paper trail of what
 would have/did happen.
 
 ## Tests
 
-`python3 -m pytest tests -q` — 13 tests, each against a real throwaway git repo (no
+`python3 -m pytest tests -q` — 17 tests, each against a real throwaway git repo (no
 git mocking): merged+clean prunes, unmerged/dirty/locked all skip, a stray directory
 with no `.git` file is ignored, a primary checkout is never a candidate, a live wq
-claim or slock blocks pruning, an expired lease does not, a missing wq db fails
-closed, and `--apply` actually removes while dry-run never touches disk.
+claim or slock blocks pruning, an expired lease or slock does not, an unparseable one
+skips and says so, a missing wq db fails closed, and `--apply` actually removes while
+dry-run never touches disk. Every timestamp fixture is written in wq's stored format,
+spelled out in the test file rather than imported from the pruner, so a fixture cannot
+drift along with the constant it is supposed to check.
 
 ## Production dry run, 2026-09-25
 
