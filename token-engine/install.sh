@@ -49,16 +49,11 @@ install -D -m 0755 -o root -g root "$SRC/te_client.py" "$LIB/te_client.py"
 install -D -m 0644 -o root -g root "$SRC/forges.json" "$LIB/forges.json"
 install -D -m 0644 -o root -g root "$SRC/providers.json" "$LIB/providers.json"
 
-# wq#2273 (T4, design §7 ranks 1/2/4): COPY the PR-verb tokens into the engine
-# store. Copy, not move — git push still authenticates off the old path until
-# T1 (wq#2271) lands the credential-helper migration; deleting here would break
-# every push fleet-wide. T1 removes the originals.
-for tok in github-frank.token github-lumen-classic.token gitea-lumen.token; do
-    if [ -f "/home/lumen/.secrets/$tok" ]; then
-        install -m 0600 -o tokeneng -g tokeneng \
-            "/home/lumen/.secrets/$tok" "$STATE/secrets/$tok"
-    fi
-done
+# wq#2271 (T1, design §3.1): the git credential helper. Root-owned in PATH so
+# `credential.helper = token-engine` resolves for every uid; the per-worktree
+# config that selects it is written by fworker.make_worktree.
+install -D -m 0755 -o root -g root "$SRC/git-credential-token-engine" \
+    /usr/local/bin/git-credential-token-engine
 
 # wq#2278 (T10, design §7 ranks 5-8 + rank 3): migrate the remaining
 # inventory into the store. COPY, not move — the same T4 rule as the forge
@@ -79,6 +74,12 @@ migrate() { # migrate <src> <dest-basename>
         echo "copied $src -> $dest (original stays until its reader migrates)"
     fi
 }
+# wq#2273 (T4) copied the forge tokens in; wq#2271 (T1) turns them into
+# migrate() rows so TE_FINALIZE_MOVE=1 — once every clone pushes through the
+# helper — shreds the /home/lumen/.secrets originals (ranks 1/2/4).
+migrate /home/lumen/.secrets/github-frank.token         github-frank.token
+migrate /home/lumen/.secrets/github-lumen-classic.token github-lumen-classic.token
+migrate /home/lumen/.secrets/gitea-lumen.token          gitea-lumen.token
 migrate /home/lumen/secrets/ebay.env        ebay.env               # rank 8
 migrate /home/lumen/.config/tapo.env        tapo.env
 migrate "${CLOUDFLARE_TOKEN_SRC:-/home/lumen/.secrets/cloudflare-api.token}" \
@@ -132,4 +133,30 @@ fi
 grep -q "Permission denied" /tmp/te-eacces.err
 echo "OK: uid lumen -> EACCES on $STATE/secrets/.canary"
 ls -l /run/token-engine/broker.sock
+
+# wq#2271 (T1, design §3.2): token-free remotes. One immediate --fix pass
+# strips any userinfo/token from every clone's remote URLs (path-only output),
+# and the wq#2243 hourly detect+fix timer — never installed, ISSUE-LOG 540 —
+# goes live as the standing sweep.
+SWEEP_DIR="$(dirname "$SRC")/ops/wq2243-remote-credential-sweep"
+if [ -d "$SWEEP_DIR" ]; then
+    runuser -u lumen -- python3 "$SWEEP_DIR/remote_credential_sweep.py" \
+        scan --fix || true   # exit 1 = unstrippable finding; paged, not fatal
+    bash "$SWEEP_DIR/install.sh"
+else
+    echo "skip: $SWEEP_DIR absent — sweep --fix/timer not run" >&2
+fi
+
+# T1 finalize: with every worktree on the helper and the sweep clean, the
+# store-helper surface itself goes away — the global credential.helper=store
+# line and ~/.git-credentials are exactly the on-disk token copies the design
+# retires. Only under TE_FINALIZE_MOVE=1, same contract as the token moves.
+if [ "${TE_FINALIZE_MOVE:-0}" = 1 ]; then
+    runuser -u lumen -- git config --global --unset-all credential.helper || true
+    if [ -f /home/lumen/.git-credentials ]; then
+        shred -u /home/lumen/.git-credentials 2>/dev/null || rm -f /home/lumen/.git-credentials
+        echo "finalize: ~/.git-credentials shredded, global store helper removed"
+    fi
+fi
+
 echo "token-engine installed and active"

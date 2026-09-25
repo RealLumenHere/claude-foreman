@@ -24,8 +24,10 @@ Four properties, each enforced here, none delegated to the client:
      mask-secrets patterns as a tripwire: a hit FAILS the verb and raises ntfy —
      a masked token is a burned token, not a save (instinct #4).
 
-T2 ships the broker skeleton with `ping` and `mask-selftest`; provider verbs
-(git-fetch, pr-open, gateway-key, …) land in T1/T4/T10 via VERBS below.
+T2 shipped the broker skeleton with `ping` and `mask-selftest`; T4 the PR
+family, T9 revocation, T10 gateway-key/api-call/plug/ssh-run, and T1
+(wq#2271) the git family: `git-credential` behind the worktree credential
+helper, plus zero-crossing `git-fetch`/`git-push`.
 """
 
 import base64
@@ -33,6 +35,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import struct
 import subprocess
@@ -247,7 +250,11 @@ def verb_mint_test(req, grant):
 # attacker's server. Titles and bodies arrive as FILE PATHS (never argv), so
 # nothing lands in /proc/*/cmdline and the metachar ban stays strict.
 
-FORGES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "forges.json")
+# Env-overridable for the T1 gate replay (a fake forge on a loopback port),
+# same contract as PROVIDERS_PATH; the systemd unit sets nothing.
+FORGES_PATH = os.environ.get(
+    "TOKEN_ENGINE_FORGES_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "forges.json"))
 REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 NUMBER_RE = re.compile(r"^[0-9]{1,9}$")
 SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
@@ -639,6 +646,257 @@ def verb_pr_merge(req, grant):
             "branch_deleted": dcode // 100 == 2, "already": False}
 
 
+# -------------------------------------------------------- git verbs (T1)
+# TOKEN_ENGINE_DESIGN.md §3.1-3.2 (wq#2271) — the recurring leak (wq#2243 /
+# ISSUE-LOG 537). Two strengths, per the design's "build both" call:
+#   git-credential backs /usr/local/bin/git-credential-token-engine: the
+#     token crosses into the worker's git for the seconds of one fetch/push
+#     (§3.1's residual risk, bounded by TTL/scope/ticket-end revocation) but
+#     never touches a URL, config file, ~/.git-credentials, env, or history.
+#     The value travels by one-shot handoff FILE (the gateway-key pattern),
+#     never in the frame, so the outbound mask tripwire stays intact.
+#   git-fetch / git-push are the zero-crossing path: git runs HERE, as uid
+#     tokeneng. Fetch lands in a group-readable bare mirror under the runtime
+#     dir that the worker pulls from by PATH (file transport, no auth); push
+#     reads the worker's branch through a scratch bare repo and pushes with
+#     auth held in this process's env only.
+
+GIT_BIN = os.environ.get("TOKEN_ENGINE_GIT_BIN", "git")
+GIT_TIMEOUT_S = 300
+GIT_PROTOCOLS = ("https", "http")
+BRANCH_RE = re.compile(r"^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$")
+GIT_HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$")
+# git-push's default source: the calling ticket's worktree (fworker
+# make_worktree's naming). An explicit argv[2] must still live under this
+# root and outside the engine's own state.
+WORKTREES_ROOT = os.environ.get("FOREMAN_WORKTREES_ROOT", "/home/lumen/worktrees")
+
+
+def _b64url(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+
+def mint_github_app_token(app, slug, ticket, worker):
+    """§4 GitHub row: POST /app/installations/{id}/access_tokens — 1 h TTL,
+    scoped to exactly this repo with contents:write, ledgered as provider
+    github-app so ticket-end / the daemon-start reaper can DELETE
+    /installation/token. Dormant until forges.json carries a github_app
+    block (T0 prereq: no App installed yet — Frank's physical task)."""
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+    except ImportError:
+        raise Deny("github_app_unavailable",
+                   "forges.json names a github_app but the daemon's python "
+                   "has no cryptography module for the RS256 app JWT")
+    pem = read_store(app.get("private_key_file", "github-app.pem"),
+                     "github-app mint").encode()
+    key = serialization.load_pem_private_key(pem, password=None)
+    now = int(time.time())
+    header = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+    payload = _b64url(json.dumps({"iat": now - 60, "exp": now + 540,
+                                  "iss": str(app.get("app_id"))}).encode())
+    signing = header + b"." + payload
+    sig = _b64url(key.sign(signing, padding.PKCS1v15(), hashes.SHA256()))
+    jwt = (signing + b"." + sig).decode()
+    api = str(app.get("api_url", "https://api.github.com")).rstrip("/")
+    code, obj = http_json(
+        "POST", api, f"/app/installations/{app['installation_id']}/access_tokens",
+        "Bearer", jwt, {"repositories": [slug.split("/", 1)[1]],
+                        "permissions": {"contents": "write"}})
+    if code // 100 != 2 or not isinstance(obj, dict) or not obj.get("token"):
+        raise Deny("forge_error",
+                   f"app token mint failed (HTTP {code}): {api_message(obj)}")
+    token = str(obj["token"])
+    L.record_mint(str(ticket), "github-app", "ghapp-" + uuid.uuid4().hex[:12],
+                  str(worker), {"token": token, "api_url": api},
+                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    return token
+
+
+def resolve_git_remote(slug, ticket, worker):
+    """(clone_base_url, username, token, source) for git-over-HTTP on a repo
+    slug — the resolve_repo ladder (identity map first) aimed at the GIT
+    host rather than the API host. GitHub prefers a minted App installation
+    token when configured; until then the engine-held PAT — the same
+    in-memory crossing the fleet has today, minus every on-disk surface."""
+    cfg = load_forges()
+    owner = slug.split("/")[0]
+    if owner in cfg.get("gitea_owners", ["lumen"]):
+        base = cfg.get("gitea_url", "http://100.121.17.5:3000").rstrip("/")
+        token = read_store(cfg.get("gitea_token_file", "gitea-lumen.token"),
+                           f"git credential for {slug}")
+        return base, cfg.get("gitea_git_username", "lumen"), token, "engine-store"
+    base = cfg.get("github_git_url", "https://github.com").rstrip("/")
+    app = cfg.get("github_app")
+    if isinstance(app, dict) and app.get("installation_id"):
+        return base, "x-access-token", \
+            mint_github_app_token(app, slug, ticket, worker), "github-app"
+    token_file = (identity_map_lookup(slug, cfg)
+                  or cfg.get("github_default_token_file", "github-frank.token"))
+    return base, "x-access-token", \
+        read_store(token_file, f"git credential for {slug}"), "engine-store"
+
+
+def _run_git(args, cwd, auth=None):
+    """Run git as this uid with the credential in process env only — never
+    argv (/proc/*/cmdline is world-readable; /proc/<pid>/environ is 0400
+    tokeneng). HOME points into the engine state so uid lumen's global
+    config (credential.helper=store — the exact leak T1 retires) can never
+    be read; auth rides an http.extraheader Basic line via GIT_CONFIG_*."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+           "HOME": SECRETS_DIR, "GIT_TERMINAL_PROMPT": "0",
+           "GIT_CONFIG_NOSYSTEM": "1"}
+    pairs = [("safe.directory", "*")]
+    if auth:
+        cred = base64.b64encode(("%s:%s" % auth).encode()).decode()
+        pairs.append(("http.extraheader", "Authorization: Basic " + cred))
+    env["GIT_CONFIG_COUNT"] = str(len(pairs))
+    for i, (k, v) in enumerate(pairs):
+        env["GIT_CONFIG_KEY_%d" % i] = k
+        env["GIT_CONFIG_VALUE_%d" % i] = v
+    try:
+        return subprocess.run([GIT_BIN, *args], cwd=cwd, env=env,
+                              capture_output=True, text=True,
+                              timeout=GIT_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Deny("git_exec_failed", f"git: {type(e).__name__}")
+
+
+def _git_result(p, **extra):
+    return dict({"exit_code": p.returncode,
+                 "stderr": mask_rewrite((p.stderr or "")[-OUT_TAIL_BYTES:])},
+                **extra)
+
+
+def _group_share(root):
+    """chgrp token-client + setgid dirs / g+r files so uid lumen can fetch
+    from the mirror by path. core.sharedRepository=group keeps what git
+    creates later group-readable; the setgid bit keeps the group."""
+    gid = _client_gid()
+    for dirpath, dirnames, filenames in os.walk(root):
+        if gid is not None:
+            try:
+                os.chown(dirpath, -1, gid)
+            except PermissionError:
+                pass
+        os.chmod(dirpath, 0o2750)
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if gid is not None:
+                try:
+                    os.chown(path, -1, gid)
+                except PermissionError:
+                    pass
+            os.chmod(path, os.stat(path).st_mode & 0o777 | 0o040)
+
+
+def _git_argv_common(req, n_min, n_max, usage):
+    argv = req.get("argv") or []
+    if not (n_min <= len(argv) <= n_max):
+        raise Deny("argv_arity", usage)
+    return argv
+
+
+def verb_git_credential(req, grant):
+    """§3.1: answer git's credential `get` for the helper. argv = [slug,
+    protocol, host]; the helper derived the slug from the request path
+    (credential.useHttpPath=true) and the daemon refuses to serve a token
+    toward any host or scheme other than the forge it maps the slug to — a
+    git_read grant for repo:x/y cannot aim x/y's credential at a lookalike
+    host. The value leaves via a one-shot handoff file the helper reads and
+    unlinks; the frame carries the path and username only."""
+    argv = _git_argv_common(req, 3, 3, "expected: <owner/name> <protocol> <host>")
+    slug, protocol, host = argv
+    if protocol not in GIT_PROTOCOLS:
+        raise Deny("protocol_malformed", "protocol must be https or http")
+    if not GIT_HOST_RE.match(host):
+        raise Deny("host_malformed", "host fails shape check")
+    base, username, token, source = resolve_git_remote(
+        slug, str(req.get("ticket", "")), str(req.get("worker", "")))
+    want = urllib.parse.urlsplit(base)
+    if host != want.netloc:
+        raise Deny("host_mismatch",
+                   f"{slug} lives on {want.netloc} — refusing to serve its "
+                   f"credential toward {host}")
+    if protocol != want.scheme:
+        raise Deny("protocol_mismatch", f"{slug} is served over {want.scheme}")
+    path = _handoff_write("gitcred-" + uuid.uuid4().hex[:12], token)
+    return {"username": username, "credential_file": path, "source": source}
+
+
+def verb_git_fetch(req, grant):
+    """§3.1 strong path, read half — zero crossing. Fetch runs here; the
+    refs land in a bare mirror under the runtime dir, group-readable by
+    token-client, and the worker fetches from that PATH: file transport,
+    no credential, no network."""
+    argv = _git_argv_common(req, 1, 2, "expected: <owner/name> [branch]")
+    slug, branch = argv[0], (argv[1] if len(argv) == 2 else None)
+    if branch is not None and not BRANCH_RE.match(branch):
+        raise Deny("branch_malformed", "branch fails shape check")
+    base, username, token, source = resolve_git_remote(
+        slug, str(req.get("ticket", "")), str(req.get("worker", "")))
+    mdir = os.path.join(SOCK_DIR, "git")
+    os.makedirs(mdir, exist_ok=True)
+    mirror = os.path.join(mdir, slug.replace("/", "__") + ".git")
+    if not os.path.isdir(mirror):
+        p = _run_git(["init", "--bare", "--quiet", "--shared=group", mirror],
+                     cwd=mdir)
+        if p.returncode != 0:
+            raise Deny("git_exec_failed", "mirror init failed")
+    refspec = (f"+refs/heads/{branch}:refs/heads/{branch}" if branch
+               else "+refs/heads/*:refs/heads/*")
+    p = _run_git(["fetch", "--prune", f"{base}/{slug}.git", refspec],
+                 cwd=mirror, auth=(username, token))
+    _group_share(mirror)
+    return _git_result(p, mirror=mirror, source=source)
+
+
+def verb_git_push(req, grant):
+    """§3.1 strong path, write half — zero crossing. argv = [slug, branch,
+    src?]: the branch is read out of the source repo (default: the calling
+    ticket's worktree) through a scratch bare repo, then pushed with auth
+    that exists only in this process's env. The worker never sees the
+    token; the URL never carries userinfo; there is no --force spelling."""
+    argv = _git_argv_common(req, 2, 3, "expected: <owner/name> <branch> [src-repo]")
+    slug, branch = argv[0], argv[1]
+    if not BRANCH_RE.match(branch):
+        raise Deny("branch_malformed", "branch fails shape check")
+    if len(argv) == 3:
+        src = os.path.realpath(str(argv[2]))
+    else:
+        ticket = str(req.get("ticket", ""))
+        name = ticket if ticket.startswith("wq") else "wq" + ticket
+        src = os.path.realpath(os.path.join(
+            WORKTREES_ROOT, f"{name}-a{req.get('attempt') or 1}"))
+    root, state = os.path.realpath(BODY_ROOT), os.path.realpath(SECRETS_DIR)
+    if not (src + os.sep).startswith(root + os.sep) \
+            or (src + os.sep).startswith(state + os.sep):
+        raise Deny("src_outside_root", f"push source must live under {BODY_ROOT}")
+    if not os.path.isdir(src):
+        raise Deny("src_missing", f"no source repo at the {os.path.basename(src)} "
+                                  "worktree — name one as argv[2]")
+    base, username, token, source = resolve_git_remote(
+        slug, str(req.get("ticket", "")), str(req.get("worker", "")))
+    scratch = os.path.join(SOCK_DIR, "scratch-" + uuid.uuid4().hex[:8])
+    try:
+        p = _run_git(["init", "--bare", "--quiet", scratch], cwd=SOCK_DIR)
+        if p.returncode != 0:
+            raise Deny("git_exec_failed", "scratch init failed")
+        p = _run_git(["fetch", "--quiet", src,
+                      f"+refs/heads/{branch}:refs/heads/{branch}"], cwd=scratch)
+        if p.returncode != 0:
+            raise Deny("branch_unreadable",
+                       f"cannot read refs/heads/{branch} from the source: "
+                       + mask_rewrite((p.stderr or "")[-300:]))
+        p = _run_git(["push", f"{base}/{slug}.git",
+                      f"refs/heads/{branch}:refs/heads/{branch}"],
+                     cwd=scratch, auth=(username, token))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return _git_result(p, branch=branch, source=source)
+
+
 # ------------------------------------------------------------ T10 (wq#2278)
 # Remaining verbs + migration ranks 5-8 (design §2 rows api-call/gateway-key/
 # plug, §7 rank 3 ssh). providers.json is the static half, same contract as
@@ -980,6 +1238,9 @@ VERBS = {
     "pr-files": (verb_pr_files, "pr_read", None),
     "pr-list": (verb_pr_list, "pr_read", None),
     "pr-merge": (verb_pr_merge, "pr_write", None),
+    "git-credential": (verb_git_credential, "git_read", None),
+    "git-fetch": (verb_git_fetch, "git_read", None),
+    "git-push": (verb_git_push, "git_write", None),
     "gateway-key": (verb_gateway_key, "gateway_admin", "gateway:litellm"),
     "api-call": (verb_api_call, "api", API_FROM_ARGV),
     "plug": (verb_plug, "plug", PLUG_FROM_ARGV),
@@ -1005,8 +1266,8 @@ def handle(req, peer):
     argv = req.get("argv") or []
     arg0 = argv[0] if argv and isinstance(argv[0], str) else ""
     if node is None:
-        # PR verbs: the resource is the repo slug in argv[0] and the grant is
-        # per-resource ({"kind": pr_*, "node": "repo:owner/name"}, design §2).
+        # PR/git verbs: the resource is the repo slug in argv[0] and the grant
+        # is per-resource ({kind: pr_*|git_*, node: "repo:owner/name"}, §2).
         if not REPO_RE.match(arg0):
             return False, "repo_malformed", "argv[0] must be owner/name", {}, "deny"
         node = "repo:" + arg0

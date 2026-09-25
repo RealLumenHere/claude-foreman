@@ -624,6 +624,183 @@ class SshRunTest(T10Base):
         self.assertEqual((ok, rule), (False, "grant_no_match"))
 
 
+class GitVerbTest(unittest.TestCase):
+    """T1 (wq#2271): git-credential/git-fetch/git-push — grant scoping, host
+    pinning, the value-free frame + handoff file, and real git plumbing
+    against file:// remotes (no network, no real credential)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.peer = (1234, 1000, 1000)
+        self.orig = {k: getattr(D, k) for k in
+                     ("SECRETS_DIR", "SOCK_DIR", "BODY_ROOT", "FORGES_PATH",
+                      "CLIENT_GROUP", "resolve_git_remote")}
+        self.state = os.path.join(self.tmp.name, "state")
+        self.run_dir = os.path.join(self.tmp.name, "run")
+        os.makedirs(os.path.join(self.state, "secrets"))
+        os.makedirs(self.run_dir)
+        D.SECRETS_DIR = self.state
+        D.SOCK_DIR = self.run_dir
+        D.BODY_ROOT = self.tmp.name
+        D.FORGES_PATH = os.path.join(self.tmp.name, "forges.json")
+        import grp
+        D.CLIENT_GROUP = grp.getgrgid(os.getgid()).gr_name
+        # A credential-shaped value on purpose: the frame must stay clean
+        # even when the served token would trip the mask (it travels by
+        # handoff file, never in the frame).
+        self.token = "ghp_" + "f" * 36
+        with open(os.path.join(self.state, "secrets", "gitea-lumen.token"), "w") as f:
+            f.write(self.token + "\n")
+        with open(D.FORGES_PATH, "w") as f:
+            json.dump({"gitea_url": "http://127.0.0.1:3000",
+                       "gitea_owners": ["lumen"],
+                       "gitea_token_file": "gitea-lumen.token",
+                       "gitea_git_username": "lumen"}, f)
+
+    def tearDown(self):
+        for k, v in self.orig.items():
+            setattr(D, k, v)
+        self.tmp.cleanup()
+
+    def greq(self, verb, argv, kind="git_read", node="repo:lumen/proj"):
+        path, sha = write_grant(self.tmp.name, kind=kind, node=node)
+        r = req(path, sha, verb=verb)
+        r["argv"] = argv
+        return r
+
+    def _bare(self, rel):
+        path = os.path.join(self.tmp.name, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        subprocess.run(["git", "init", "--bare", "--quiet", path], check=True)
+        return path
+
+    def _src_repo(self, branch="feat/x"):
+        src = os.path.join(self.tmp.name, "src")
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        subprocess.run(["git", "init", "--quiet", "-b", branch, src], check=True)
+        subprocess.run(["git", "-C", src, "commit", "--allow-empty", "--quiet",
+                        "-m", "x"], env=env, check=True)
+        return src
+
+    def test_credential_serves_handoff_not_value(self):
+        ok, rule, _, result, decision = D.handle(
+            self.greq("git-credential",
+                      ["lumen/proj", "http", "127.0.0.1:3000"]), self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual(result["username"], "lumen")
+        with open(result["credential_file"]) as f:
+            self.assertEqual(f.read().strip(), self.token)
+        # the frame a client would see is mask-clean: value only in the file
+        frame = {"ok": ok, "verb": "git-credential", "ticket": "wq2270",
+                 "rule": rule, "reason": "ok", "result": result, "elapsed_s": 0.1}
+        D.assert_response_schema(frame)
+        self.assertEqual(D.mask_hits(json.dumps(frame)), [])
+
+    def test_credential_host_pinned(self):
+        ok, rule, *_, decision = D.handle(
+            self.greq("git-credential",
+                      ["lumen/proj", "http", "evil.example.com"]), self.peer)
+        self.assertEqual((ok, rule, decision), (False, "host_mismatch", "deny"))
+
+    def test_credential_protocol_pinned(self):
+        ok, rule, *_, decision = D.handle(
+            self.greq("git-credential",
+                      ["lumen/proj", "https", "127.0.0.1:3000"]), self.peer)
+        self.assertEqual((ok, rule, decision), (False, "protocol_mismatch", "deny"))
+
+    def test_push_needs_git_write_kind(self):
+        ok, rule, *_, decision = D.handle(
+            self.greq("git-push", ["lumen/proj", "main"], kind="git_read"),
+            self.peer)
+        self.assertEqual((ok, rule, decision), (False, "grant_no_match", "deny"))
+
+    def test_push_branch_shape_gate(self):
+        ok, rule, *_, decision = D.handle(
+            self.greq("git-push", ["lumen/proj", "--force"], kind="git_write"),
+            self.peer)
+        self.assertEqual((ok, rule, decision), (False, "branch_malformed", "deny"))
+
+    def test_push_src_outside_root_denied(self):
+        ok, rule, *_, decision = D.handle(
+            self.greq("git-push", ["lumen/proj", "main", "/etc"],
+                      kind="git_write"), self.peer)
+        self.assertEqual((ok, rule, decision), (False, "src_outside_root", "deny"))
+
+    def test_push_runs_in_daemon_and_lands_the_branch(self):
+        remote = self._bare("remotes/lumen/proj.git")
+        src = self._src_repo("feat/x")
+        D.resolve_git_remote = lambda slug, t, w: (
+            "file://" + os.path.join(self.tmp.name, "remotes"),
+            "lumen", self.token, "engine-store")
+        ok, rule, _, result, _d = D.handle(
+            self.greq("git-push", ["lumen/proj", "feat/x", src],
+                      kind="git_write"), self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual(result["exit_code"], 0, result)
+        p = subprocess.run(["git", "-C", remote, "rev-parse", "refs/heads/feat/x"],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        # no scratch repo left behind under the runtime dir
+        self.assertEqual([d for d in os.listdir(self.run_dir)
+                          if d.startswith("scratch-")], [])
+
+    def test_fetch_lands_in_group_readable_mirror(self):
+        remote = self._bare("remotes/lumen/proj.git")
+        src = self._src_repo("main")
+        subprocess.run(["git", "-C", src, "push", "--quiet", remote,
+                        "refs/heads/main:refs/heads/main"], check=True)
+        D.resolve_git_remote = lambda slug, t, w: (
+            "file://" + os.path.join(self.tmp.name, "remotes"),
+            "lumen", self.token, "engine-store")
+        ok, rule, _, result, _d = D.handle(
+            self.greq("git-fetch", ["lumen/proj", "main"]), self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual(result["exit_code"], 0, result)
+        p = subprocess.run(["git", "-C", result["mirror"], "rev-parse",
+                            "refs/heads/main"], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.stat(result["mirror"]).st_mode & 0o050)
+
+
+class HelperScriptTest(unittest.TestCase):
+    """The installed helper's pure pieces: request parsing, slug derivation,
+    and the store/erase no-op contract."""
+
+    HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                          "git-credential-token-engine")
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader("te_git_helper", cls.HELPER)
+        spec = importlib.util.spec_from_loader("te_git_helper", loader)
+        cls.H = importlib.util.module_from_spec(spec)
+        loader.exec_module(cls.H)
+
+    def test_slug_from_path(self):
+        self.assertEqual(self.H.slug_from_path("/lumen/foreman.git"), "lumen/foreman")
+        self.assertEqual(self.H.slug_from_path("frankstupak/lpp"), "frankstupak/lpp")
+        self.assertIsNone(self.H.slug_from_path(""))
+        self.assertIsNone(self.H.slug_from_path("/no-owner"))
+        self.assertIsNone(self.H.slug_from_path("/a/b/c"))
+
+    def test_parse_request_stops_at_blank_line(self):
+        import io
+        attrs = self.H.parse_request(io.StringIO(
+            "protocol=https\nhost=github.com\npath=o/r.git\n\nignored=1\n"))
+        self.assertEqual(attrs, {"protocol": "https", "host": "github.com",
+                                 "path": "o/r.git"})
+
+    def test_store_and_erase_are_noops(self):
+        for action in ("store", "erase"):
+            p = subprocess.run([sys.executable, self.HELPER, action],
+                               input="protocol=https\nhost=x\n\n",
+                               capture_output=True, text=True, timeout=20)
+            self.assertEqual((p.returncode, p.stdout), (0, ""), p.stderr)
+
+
 class MaskRewriteTest(unittest.TestCase):
     def test_rewrite_output_never_retrips_the_tripwire(self):
         dirty = ("cf token cfut_" + "abcdef123456" + " and pat ghp_" + "c" * 36 +

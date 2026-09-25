@@ -31,7 +31,40 @@ travel as FILE PATHS under `/home/lumen` (never argv, never inside the state
 dir, mask-tripwired before posting); results carry only scalars (PR number,
 url, normalised check counts). The forge, base URL and token file per slug come
 from root-installed `forges.json` + the identity map — never from the client.
-Remaining provider verbs (git) land via T1.
+
+T1 (wq#2271, design §3.1-3.2) adds the git family — the recurring leak
+(wq#2243 / ISSUE-LOG 537):
+
+- `git-credential <slug> <protocol> <host>` (`kind` `git_read`, `node`
+  `repo:owner/name`) backs `/usr/local/bin/git-credential-token-engine`, a
+  helper that forwards git's credential `get` line protocol to the broker and
+  never writes a file (`store`/`erase` are no-ops). The daemon pins the
+  host/scheme to the forge it maps the slug to and answers with a one-shot
+  handoff FILE (the gateway-key pattern) the helper reads and unlinks — the
+  frame stays value-free, the mask tripwire stays intact. fworker writes the
+  per-worktree config that selects it (`credential.helper` reset + `token-
+  engine`, `credential.useHttpPath=true` — worktree config, never
+  `~/.gitconfig`), so the token stops touching URLs, config, env, or history;
+  it crosses only into git's memory for one fetch/push (§3.1 residual risk).
+- `git-fetch <slug> [branch]` / `git-push <slug> <branch> [src]` (`git_read` /
+  `git_write`) are the zero-crossing path: git runs in the daemon as uid
+  tokeneng. Fetch lands in a group-readable bare mirror under the runtime dir
+  the worker pulls from by path; push reads the branch out of the calling
+  ticket's worktree (or `src`, bounded under `/home/lumen`) through a scratch
+  bare repo and pushes with auth held in daemon env only. No `--force`
+  spelling exists.
+- GitHub auth prefers a per-call App installation token (1 h TTL, repo-scoped,
+  ledgered `github-app` for ticket-end/reaper revocation) once forges.json
+  carries a `github_app` block; until that App exists (T0 prereq) the
+  engine-held PAT is served — the same in-memory crossing the fleet already
+  had, minus every on-disk surface. install.sh also runs the wq#2243 sweep
+  `--fix` and installs its hourly timer (ISSUE-LOG 540), and
+  `TE_FINALIZE_MOVE=1` additionally shreds the `/home/lumen/.secrets` forge
+  tokens, `~/.git-credentials`, and the global `credential.helper=store` line.
+- T1 gate: `gate_replay_t1.sh` (via `python3 tests/run_replay.py t1`) — push
+  through helper→broker→handoff against a Basic-auth loopback forge
+  (`tests/fake_git_forge.py`), userinfo-free remote, token absent from
+  config/env/sweep, handoff consumed.
 
 T10 (wq#2278, design §2 + §7 ranks 5-8) adds the rest of the inventory:
 

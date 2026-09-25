@@ -1,8 +1,11 @@
 {
   "_comment": "wq#2273 (T4): forge + token-file map the daemon consults per repo slug. The CLIENT never names a base URL or token file — only this root-installed file does. Token files are basenames inside /var/lib/token-engine/secrets; identity_map is lumen-github-identity.sh's per-repo map (only the basename of a mapped path is honoured).",
+  "_comment_t1": "wq#2271 (T1): github_git_url/gitea_git_username serve the git-credential/git-fetch/git-push verbs. Adding a github_app block {app_id, installation_id, private_key_file} switches GitHub git auth from the engine-held PAT to per-call 1h App installation tokens (T0 prereq: no App installed yet).",
   "gitea_url": "http://100.121.17.5:3000",
   "gitea_owners": ["lumen"],
   "gitea_token_file": "gitea-lumen.token",
+  "gitea_git_username": "lumen",
+  "github_git_url": "https://github.com",
   "github_default_token_file": "github-frank.token",
   "identity_map": "/home/lumen/infra/github/identity-map.conf"
 }

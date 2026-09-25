@@ -1909,6 +1909,36 @@ def write_ticket_end_grant(ticket_id, attempt, worker_id, wall_clock_s):
         return None, None
 
 
+def write_worktree_credential_config(worktree):
+    """T1 (wq#2271, TOKEN_ENGINE_DESIGN.md §3.1): route every git credential
+    lookup in this worktree through the token-engine helper. Written into the
+    per-worktree config file (config.worktree — auditable, never ~/.gitconfig
+    and never the repo config every other worktree shares). The empty helper
+    entry first is load-bearing: git ACCUMULATES credential.helper values
+    across config scopes, and the global scope still carries the store helper
+    (~/.git-credentials — the exact leak surface this ticket retires) until
+    the migration finalizes; an empty value resets the list so token-engine
+    is the only helper this worktree can reach. useHttpPath makes git send
+    the repo path with the request, which is how the daemon scopes the
+    credential per repo rather than per host.
+
+    Best-effort by design: a worktree without this config falls back to the
+    pre-T1 credential path, which must keep working until the deploy
+    finalizes (install.sh's TE_FINALIZE_MOVE) — failing the dispatch would
+    brick every lane on a git oddity."""
+    steps = [["config", "extensions.worktreeConfig", "true"],
+             ["config", "--worktree", "--replace-all", "credential.helper", ""],
+             ["config", "--worktree", "--add", "credential.helper", "token-engine"],
+             ["config", "--worktree", "credential.useHttpPath", "true"]]
+    for args in steps:
+        p = _git(worktree, *args)
+        if p.returncode != 0:
+            log(f"WARN: worktree credential config failed at 'git {' '.join(args)}' "
+                f"in {worktree}: {(p.stderr or '').strip()[:200]}")
+            return False
+    return True
+
+
 def make_worktree(repo, ticket_id, attempt, title, archetype):
     """RELIABILITY_SPEC.md §D + wq#649: the branch name embeds the attempt number
     from the start (previously only a retry-fallback appended it), since attempt 1's
@@ -1958,6 +1988,7 @@ def make_worktree(repo, ticket_id, attempt, title, archetype):
                 log(f"wq#{ticket_id} attempt {attempt}: adopting worktree left by a prior "
                     f"crashed attempt at the exact same (ticket, attempt) — {wt} ({branch})")
                 assert_worktree_repo(wt, repo, ticket_id)
+                write_worktree_credential_config(wt)
                 return wt, branch
             # not ours (or ours but on the wrong branch) — drop it so `worktree add` below
             # gets a clean path instead of failing on an already-existing directory.
@@ -1981,6 +2012,7 @@ def make_worktree(repo, ticket_id, attempt, title, archetype):
         # wq#1331 (§3.2): assert the tree we just made is of the repo the router
         # resolved, before any child is spawned against it.
         assert_worktree_repo(wt, repo, ticket_id)
+        write_worktree_credential_config(wt)
         return wt, branch
     finally:
         _slock_release(scope, holder)
