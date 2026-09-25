@@ -1,0 +1,35 @@
+# research-council config (wq#2628). Every model is a LiteLLM gateway alias — list them
+# with GET /v1/models. Add, drop, or swap a seat here; the orchestrator is model-agnostic.
+#
+# Seat state as probed 2026-09-25:
+#   claude    claude-max-opus goes through claude-shim (host :8091), which was not listening
+#             at build time, so the seat times out and the council runs without it. It
+#             comes back when the shim does. `claude-opus-5` (anthropic/) has no API key on
+#             the gateway.
+#   gemini    gemini-flash = gemini/gemini-2.5-flash. Swap to the pro alias when the
+#             gemini-access ticket (wq#2627) lands.
+#   deepseek  deepseek-v4-pro, direct DeepSeek API.
+#   gpt       no OpenAI-hosted GPT alias exists on the gateway. cerebras-oss-120b is
+#             OpenAI's open-weight gpt-oss-120b; replace it with an openrouter/openai/* alias
+#             once one is added to litellm_config.yaml.
+#   kimi      kimi-k3 via OpenRouter. Off by default; enable to widen the council.
+
+members:
+  - {seat: claude,   model: claude-max-opus,   timeout_s: 135}
+  - {seat: gemini,   model: gemini-flash}
+  - {seat: deepseek, model: deepseek-v4-pro}
+  - {seat: gpt,      model: cerebras-oss-120b}
+  - {seat: kimi,     model: kimi-k3, enabled: false}
+
+# Synthesis model, first one that answers wins. A chairman whose seat already failed in
+# the fan-out is skipped, so a dead backend costs one timeout, not two.
+chairman: [claude-max-opus, deepseek-v4-pro, kimi-k3, gemini-flash]
+
+min_responses: 2        # fewer successful members than this: no synthesis, exit 3
+# Reasoning tokens count against max_tokens. At 6000, deepseek-v4-pro spent the whole
+# budget thinking and returned empty content (finish_reason=length) on the first live run;
+# a 150-word ask alone used 2464 reasoning tokens. A seat's max_tokens overrides this.
+member_max_tokens: 32000
+chairman_max_tokens: 32000
+timeout_s: 300          # default per-call timeout; a member's timeout_s overrides it
+retry_429_s: 30         # one retry after this long on HTTP 429 (gemini free-tier RPM quota)
