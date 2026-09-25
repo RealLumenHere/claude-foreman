@@ -219,6 +219,62 @@ def test_corpus_covers_snapshots_run_records_events_and_the_read_cache(tmp_path,
     assert {r["label"] for r in records} == {"kv-secret", "github"}
 
 
+# --- wq#2677: what the rule declined to alarm on -----------------------------
+
+SUPPRESSED_CALL = "        token = read_" + "oauth_token()\n"
+
+
+def test_the_runs_own_suppression_rows_are_read_back(tmp_path, monkeypatch):
+    """The run's mask-hits file is the authority: those rows were written by the
+    process that read the stream, so they say what the table it was masking with
+    actually suppressed — and they exist on a run that never alarmed, which is the
+    case the whole record exists for."""
+    run = write_run(tmp_path, 4242, "sess-1")
+    (run / "mask-hits-1.json").write_text(json.dumps([
+        {"label": "kv-secret", "value_len": 23, "value_sha256_12": "abc123abc123",
+         "prefix": 'TOKEN="', "context": "", "ts": "2026-09-25T00:00:00Z"},
+        {"label": "kv-secret", "suppressed": "call", "value_len": 16,
+         "value_sha256_12": "166e2282ed20", "prefix": "token = ",
+         "ts": "2026-09-25T00:00:01Z"},
+    ]))
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(run.parent))
+    rows = mask_replay.suppressed_records(4242)
+    # the hit row in the same file is not a suppression and must not be reported as one
+    assert [(r["suppressed"], r["value_sha256_12"], r["derived"]) for r in rows] == [
+        ("call", "166e2282ed20", False)]
+    assert rows[0]["source"] == "mask-hits-1.json"
+    out = io.StringIO()
+    mask_replay.report_suppressed(4242, rows, out=out)
+    assert "recorded by the run" in out.getvalue()
+    assert "no rotation" in out.getvalue()
+
+
+def test_a_run_that_recorded_nothing_falls_back_to_deriving_from_the_corpus(tmp_path,
+                                                                            monkeypatch):
+    """A run older than wq#2677 wrote no suppression rows at all. Today's table over
+    the run's corpus is the only answer available, and it is marked `derived` because
+    a carve-out added since could not have been what went silent then."""
+    run = write_run(tmp_path, 4242, "sess-1")
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(run.parent))
+    rows = mask_replay.suppressed_records(4242, items={"snapshot:a": SUPPRESSED_CALL,
+                                                       "snapshot:b": SUPPRESSED_CALL})
+    # one row for the value however many artefacts carried it
+    assert [(r["suppressed"], r["derived"]) for r in rows] == [("call", True)]
+    assert "derived from today's table" in _report_text(4242, rows)
+    # and it stays out of the verdict: today's table scores the same corpus at zero,
+    # which is the silence these rows exist to explain (the legacy table above still
+    # fires on a called identifier, which is why it is the one the backlog is scored
+    # under).
+    assert mask_replay.replay(4242, patterns=mask_replay.CURRENT_PATTERNS, tracked={},
+                              items={"snapshot:a": SUPPRESSED_CALL}) == []
+
+
+def _report_text(ticket, rows):
+    out = io.StringIO()
+    mask_replay.report_suppressed(ticket, rows, out=out)
+    return out.getvalue()
+
+
 # --- re-cutting a read from the bytes the model saw --------------------------
 
 def git(repo, *args):

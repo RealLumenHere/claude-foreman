@@ -387,6 +387,15 @@ def main(argv=None):
             print(f"wq#{ticket} -> run wq#{source}; rules: "
                   f"{'created@' + sha[:8] + ', ' if sha else ''}head; control ok")
             report(source, rows)
+            # wq#2677: the other half of the question a triage is really asking. The
+            # rows above are what the rule read as a credential; these are what it
+            # DECLINED to, which until now left nothing behind at all — a suppressed
+            # candidate produced no mask, no label and no record, so an overbroad
+            # carve-out (wq#2288's lookahead, silent for a whole PR cycle) read as a
+            # clean run. Printed after the verdict and never folded into it: a
+            # suppression is audit, not a rotation.
+            mask_replay.report_suppressed(source,
+                                          mask_replay.suppressed_records(source))
         return code
 
     if args.json:

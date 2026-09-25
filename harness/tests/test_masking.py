@@ -362,6 +362,20 @@ def test_token_engine_mirror_agrees():
             assert ted.mask_hits(text), f"{label}: daemon blind to {case}"
         assert ted.mask_hits(prefix + masking.MASK + ".") == [], (
             f"{label}: daemon trips on prose behind the literal")
+    # wq#2677: and the two copies must agree on what they SUPPRESS, or the daemon's
+    # audit trail names a different set than the harness's mask-hits file for the same
+    # text. Here a carve-out gone overbroad does not merely stop paging, it stops
+    # failing the verb and rides the unmasked result out through the broker.
+    for reason, text, value in KV_SUPPRESSED:
+        mine = masking.suppressions(text)
+        theirs = ted.mask_suppressions(text)
+        assert [r["suppressed"] for r in theirs] == [reason], f"daemon: {text!r}"
+        assert ([(r["suppressed"], r["value_sha256_12"], r["value_len"]) for r in theirs]
+                == [(r["suppressed"], r["value_sha256_12"], r["value_len"])
+                    for r in mine]), f"copies disagree on {text!r}"
+        assert value not in json.dumps(theirs)
+    for text in KV_REAL + KV_OPAQUE_CALLS:
+        assert ted.mask_suppressions(text) == [], f"daemon: {text!r} is a hit, not a drop"
 
 
 def test_clean_text_untouched():
@@ -462,10 +476,16 @@ DOCTRINE_CORPUS = "/home/lumen/kb/ISSUE-LOG.md"
 
 def _describe(records):
     """Name the offenders without quoting one: scan() records carry the kept prefix,
-    a length and 12 hex of sha256, and a context window cut from FULLY masked text."""
+    a length and 12 hex of sha256, and a context window cut from FULLY masked text.
+
+    A wq#2677 suppression record carries no context (see masking.suppressions), so the
+    window is optional here — a failure message must not itself fail."""
     return "corpus re-arms the alarm: " + "; ".join(
-        "{label} {prefix}<{value_len} chars, sha {value_sha256_12}> in {context!r}"
-        .format(**r) for r in records)
+        "{label}{tag} {prefix}<{value_len} chars, sha {value_sha256_12}> in {context!r}"
+        .format(tag=" suppressed:" + r["suppressed"] if r.get("suppressed") else "",
+                context=r.get("context", ""),
+                **{k: v for k, v in r.items() if k != "context"})
+        for r in records)
 
 
 @pytest.mark.skipif(not os.path.exists(DOCTRINE_CORPUS),
@@ -598,6 +618,138 @@ def test_a_qualified_noun_still_fires():
         masked, hits = masking.mask_text(text)
         assert hits == ["kv-secret"], text
         assert PW not in masked, text
+
+
+# --- wq#2677: a suppression is RECORDED, not dropped ---------------------------------
+#
+# wq#2632 narrowed the call test and left the failure direction alone: every suppression
+# in the kv-secret rule still discards the match whole, so a credential-shaped value in
+# a suppressed position leaves no mask, no label and no record — the same bytes a clean
+# line leaves. That is what let wq#2288's lookahead go silent for a full PR cycle.
+# (reason, text, the value the rule declined to read) — split at the rule's boundary
+# like every other fixture here, so this source stays clean of credential shapes.
+KV_SUPPRESSED = [
+    ("pointer", "token: os.environ." + "FOREMAN_GH_TOKEN", "os.environ.FOREMAN_GH_TOKEN"),
+    ("public-key", "public key: AAAAB3Nza" + "C1yc2EAAAADAQ", "AAAAB3NzaC1yc2EAAAADAQ"),
+    ("call", "        token = read_" + "oauth_token()", "read_oauth_token"),
+    ("call", "    master_key = key_" + "file.read_text().strip()", "key_file.read_text"),
+    ("call", "        api_key = getDefault" + "ApiKey(cfg)", "getDefaultApiKey"),
+]
+
+
+@pytest.mark.parametrize("reason,text,value", KV_SUPPRESSED)
+def test_a_suppressed_candidate_leaves_a_record(reason, text, value):
+    """The rule's verdict is unchanged — no mask, no label — but it is now written down,
+    named by the same hash a hit record carries, so a candidate can be compared against
+    it. And no context: a suppressed value is NOT masked in the text it came from, so a
+    window cut around it would print in the clear the value the rule declined to mask."""
+    masked, hits = masking.mask_text(text)
+    assert (masked, hits) == (text, [])
+    records = masking.suppressions(text)
+    assert [r["suppressed"] for r in records] == [reason], records
+    rec = records[0]
+    assert rec["label"] == "kv-secret"
+    assert rec["value_len"] == len(value)
+    assert rec["value_sha256_12"] == hashlib.sha256(value.encode()).hexdigest()[:12]
+    assert "context" not in rec
+    assert value not in json.dumps(records)
+
+
+def test_what_the_rule_does_read_is_a_hit_and_never_a_suppression():
+    """The two lists are disjoint by construction: a candidate is only suppressed where
+    the real rule produces no overlapping match. A label that backtracks into a shorter
+    form the rule DOES read (`Signing Secret:` via the bare-noun arm) is a hit."""
+    for text in KV_REAL + KV_OPAQUE_CALLS:
+        assert masking.mask_text(text)[1] == ["kv-secret"], text
+        assert masking.suppressions(text) == [], text
+
+
+def test_suppressions_stay_out_of_scans_records_unless_asked():
+    """`records == []` is the assertion the alarm's own read-path tests make, and a
+    suppression must never be able to turn a clean file into an alarm — so it is opt-in.
+    """
+    text = "token = read_" + "oauth_token()"
+    assert masking.scan(text)[1] == []
+    records = masking.scan(text, include_suppressed=True)[1]
+    assert [r["suppressed"] for r in records] == ["call"]
+    assert masking.scan(text, include_suppressed=True)[0] == text
+
+
+def test_a_suppressed_record_cannot_key_a_rotation_ticket():
+    """The escalation predicate. Suppressed rows share the file and the label with real
+    hits — they ARE kv-secret candidates — so an unfiltered burned_hashes would title a
+    pri-1 rotate-today row after a value the rule deliberately did not mask, re-opening
+    by the back door the false-alarm class wq#2297/wq#2632 closed."""
+    text = f"password: {PW}\n" + "        token = read_" + "oauth_token()"
+    records = masking.scan(text, include_suppressed=True)[1]
+    assert {r.get("suppressed") for r in records} == {None, "call"}
+    hashes = fworker.burned_hashes(["kv-secret"], records)
+    assert hashes == [hashlib.sha256(PW.encode()).hexdigest()[:12]]
+    assert masking.value_sha12("read_oauth_token") not in hashes
+
+
+def test_note_suppressions_persists_once_per_value_on_a_run_that_never_alarmed(
+        tmp_path, monkeypatch):
+    """The case the trail exists for: nothing alarms, so nothing else writes anything.
+    Repeats collapse — a stream that suppresses the same pointer on every one of 20k
+    lines is one row, not 20k."""
+    monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
+    monkeypatch.setitem(fworker._MASK_STATE, "4677", {"alarmed": set(), "seen": set(),
+                                                      "suppressed": set()})
+    line = "        token = read_" + "oauth_token()"
+    assert masking.mask_text(line)[1] == []          # no hit: nothing else fires
+    assert fworker.note_suppressions(4677, 1, line)
+    assert fworker.note_suppressions(4677, 1, line) == []      # same value, no new row
+    with open(os.path.join(str(tmp_path), "wq4677", "mask-hits-1.json")) as f:
+        written = json.load(f)
+    assert [(r["label"], r["suppressed"]) for r in written] == [("kv-secret", "call")]
+    assert written[0]["ts"] and "context" not in written[0]
+
+
+def test_the_stream_screen_records_a_suppression_on_a_line_with_no_hits(
+        tmp_path, monkeypatch):
+    """Wired above screen_stream_hits' `not fresh` early return, which is the only way
+    it runs at all on the lines that matter — the ones that produced no label."""
+    monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
+    monkeypatch.setitem(fworker._MASK_STATE, "4678", {"alarmed": set(), "seen": set(),
+                                                      "suppressed": set()})
+    line = "        token = read_" + "oauth_token()"
+    fworker.screen_stream_hits([], line, set(), set(), set(), None, 4678, 1)
+    with open(os.path.join(str(tmp_path), "wq4678", "mask-hits-1.json")) as f:
+        assert [r["suppressed"] for r in json.load(f)] == ["call"]
+
+
+# wq#2630: an acceptance probe must be able to FAIL, so its input comes from outside the
+# population this fix was written around — not the hand-written lists above, but a
+# committed capture of a real run's stream window, and a rev-pinned read of a 240KB
+# source file at the revision that carried wq#2288's lookahead. Both are immutable, so
+# the probe is re-runnable; both score ZERO hits under today's table, which is exactly
+# the silence wq#2288 hid inside, and both must now name what was dropped.
+STREAM_WINDOW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures",
+                             "wq1819-attempt8-fworker-window.txt")
+PINNED_BLOB = ("65866b0", "harness/fworker.py")   # the commit before wq#2632's fix
+
+
+def test_a_clean_looking_stream_window_still_names_what_was_suppressed():
+    with open(STREAM_WINDOW, errors="replace") as fh:
+        text = fh.read()
+    assert masking.scan(text)[1] == []             # the window reads as clean...
+    records = masking.suppressions(text)           # ...and was not
+    assert [r["suppressed"] for r in records] == ["call"], _describe(records)
+    assert all(r["value_len"] >= 12 and r["value_sha256_12"] for r in records)
+
+
+def test_a_pinned_revision_of_a_real_source_file_names_what_was_suppressed():
+    sha, rel = PINNED_BLOB
+    import subprocess
+    got = subprocess.run(["git", "-C", REPO, "show", f"{sha}:{rel}"],
+                         capture_output=True, text=True)
+    if got.returncode != 0:
+        pytest.skip(f"{sha}:{rel} not in this clone")
+    assert masking.scan(got.stdout)[1] == []
+    records = masking.suppressions(got.stdout)
+    assert {r["suppressed"] for r in records} == {"call"}, _describe(records)
+    assert len({r["value_sha256_12"] for r in records}) == len(records)
 
 
 def test_write_mask_hits_appends_and_holds_no_value(tmp_path, monkeypatch):

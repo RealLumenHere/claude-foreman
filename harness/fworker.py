@@ -792,7 +792,15 @@ def write_mask_hits(ticket_id, attempt, records):
     return the path. Without this the rotation ticket names only a pattern label, and
     the credential cannot be identified at all — which is exactly how wq#2288 (the
     first tripwire firing, on wq#2284) arrived unactionable. Records hold a prefix, a
-    length, 12 hex of sha256 and masked context; no value. Best-effort by contract."""
+    length, 12 hex of sha256 and masked context; no value. Best-effort by contract.
+
+    wq#2677: the same file also carries SUPPRESSED records — a candidate the kv-secret
+    rule declined to read, tagged with the reason (pointer/call/public-key) and no
+    context, since a suppressed value is unmasked in the text it came from. They are
+    written by note_suppressions() rather than by an alarm, so the file can exist on a
+    run that never alarmed at all; that is the point, because a suppression that should
+    have been a hit looks exactly like a clean run from here (wq#2288/wq#2632). Nothing
+    that escalates may key on them — see burned_hashes."""
     path = os.path.join(run_dir(ticket_id), f"mask-hits-{attempt}.json")
     try:
         try:
@@ -809,6 +817,64 @@ def write_mask_hits(ticket_id, attempt, records):
     except Exception as e:  # noqa: BLE001
         log(f"WARN: mask-hit record write failed for wq#{ticket_id}: {e!r}")
     return path
+
+
+# wq#2677: a run that suppresses the same pointer on every line of a 20k-line stream
+# must not write 20k rows. Distinct (reason, value) pairs are what carry information —
+# the cap is per ticket and generous enough that hitting it is itself the signal a
+# carve-out has gone overbroad, which is the thing these records exist to show.
+SUPPRESSED_CAP = 64
+# Sits in the same sink as the (reason, sha12) keys, so the cap is announced once per
+# ticket without a second piece of state to keep in step.
+SUPPRESSED_CAP_KEY = ("cap", "")
+
+
+def note_suppressions(ticket_id, attempt, text):
+    """Record what the mask rules DECLINED to alarm on, once per distinct value.
+
+    The alarm path only ever wrote on a hit, so the one failure it could not see was
+    its own silence: wq#2288's lookahead suppressed every opaque value glued to a `(`
+    for a full PR cycle and nothing noticed, because a dropped match and clean text are
+    the same bytes downstream (wq#2322, wq#2632 option 3). This runs on every line the
+    tripwire reads — before the `not fresh` return in screen_stream_hits, so a run with
+    no hits at all still leaves the trail — and writes a row the first time a given
+    (reason, value) appears.
+
+    Scoped to the RAW line rather than the model-facing context (wq#2393) on purpose: a
+    suppression is not a page, so the narrowing that decides whether a value is burned
+    does not apply, and the question being answered — what did this rule table decline
+    to read — is about everything it judged.
+
+    The probe is this process's IMPORTED table, not masking.deployed(): the record
+    explains what THIS process suppressed, and a deployed-file check costs a stat per
+    stream line for an audit row that pages nobody (the reload in drop_stale_labels is
+    what keeps a hot fix reaching the runs that DO page).
+    """
+    try:
+        found = masking.suppressions(text)
+    except Exception as e:  # noqa: BLE001 - an audit row never breaks the read loop
+        log(f"WARN: suppression scan failed for wq#{ticket_id}: {e!r}")
+        return []
+    if not found:
+        return []
+    sink = mask_state(ticket_id).setdefault("suppressed", set())
+    fresh = []
+    for rec in found:
+        if len(sink) >= SUPPRESSED_CAP:
+            if SUPPRESSED_CAP_KEY not in sink:
+                sink.add(SUPPRESSED_CAP_KEY)   # say it once, then stay quiet
+                log(f"mask suppression wq#{ticket_id} attempt {attempt}: "
+                    f"{SUPPRESSED_CAP} distinct suppressed candidates recorded — "
+                    f"capped, later ones are not written")
+            break
+        key = (rec.get("suppressed"), rec.get("value_sha256_12"))
+        if key in sink:
+            continue
+        sink.add(key)
+        fresh.append(rec)
+    if fresh:
+        write_mask_hits(ticket_id, attempt, fresh)
+    return fresh
 
 
 ROTATION_TITLE_PREFIX = "[rotation] burned credential"
@@ -976,10 +1042,18 @@ def burned_hashes(labels, records):
 
     Sorted and de-duplicated, because the key has to be the same for the same set of
     values however many times, and in whatever order, the line printed them.
+
+    wq#2677: a record carrying `suppressed` is skipped outright. Suppressed rows share
+    this file and this label — they ARE kv-secret candidates — but they are the audit
+    trail of what the rule declined to alarm on, not a burn. Letting one into the key
+    would title a rotation ticket after a value the rule deliberately did not mask
+    (an `os.environ` pointer, a called identifier, a public key), i.e. re-open by the
+    back door exactly the false-alarm class wq#2297/wq#2632 closed.
     """
     burned = set(labels)
     return sorted({r.get("value_sha256_12") for r in records or []
-                   if r.get("label") in burned and r.get("value_sha256_12")})
+                   if not r.get("suppressed")
+                   and r.get("label") in burned and r.get("value_sha256_12")})
 
 
 def rotation_title(ticket_id, tag, hashes):
@@ -1156,7 +1230,12 @@ def mask_state(ticket_id):
     they are; held in the IMPORTED module on purpose, since a hot-reloaded copy of
     the alarm path would bring its own empty ones and dedup nothing.
     """
-    return _MASK_STATE.setdefault(str(ticket_id), {"alarmed": set(), "seen": set()})
+    return _MASK_STATE.setdefault(str(ticket_id),
+                                  {"alarmed": set(), "seen": set(),
+                                   # wq#2677: (reason, sha12) already written to
+                                   # mask-hits-N.json, so a pointer the stream repeats
+                                   # on every line is one row, not one per line.
+                                   "suppressed": set()})
 
 
 def burned_labels(screen, fresh, raw, seen, live_secrets, repo_roots):
@@ -1403,7 +1482,12 @@ def screen_stream_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
     harness's own plumbing, worth reading, but it is not a rotation. `alarmed` is
     consulted here as well as in screen_mask_hits, so a label that already paged does
     not then narrate every envelope it turns up in for the rest of the attempt.
+
+    wq#2677: the suppression trail is written HERE, above the early return, because it
+    is the one thing that has to happen on a line with no hits — that is the case the
+    trail exists for.
     """
+    note_suppressions(ticket_id, attempt, raw)
     fresh = [h for h in hits if h not in alarmed]
     if not fresh:
         return

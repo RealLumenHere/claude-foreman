@@ -127,6 +127,30 @@ _KV_SEGMENTED = r"[A-Za-z_][A-Za-z0-9_.]*[_.][A-Za-z0-9_.]*"
 _KV_HUMPED = r"(?-i:[A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*)"
 _KV_NOT_CALLED = r"(?!(?:" + _KV_SEGMENTED + r"|" + _KV_HUMPED + r")\()"
 _KV_BODY = r"[A-Za-z0-9._-]"
+# wq#2677: masking._kv_rule and its probes, mirrored. The daemon DOES get a
+# suppressed-but-seen channel, and it is the audit line rather than a mask-hits file:
+# this copy is detect-only and fails closed, so it has no run dir to write forensics
+# into, but it already writes one audit record per call to two sinks. A suppression
+# there costs one key on a line that is being written anyway, and without it the
+# daemon has the same blind spot the harness just closed — a carve-out that goes
+# overbroad here does not merely stop paging, it stops FAILING the verb, and the
+# unmasked result rides the broker response out (wq#2632's reasoning for this copy).
+_KV_LABEL_ANY = (r"(?:" + _KV_WORD + r")?" + _KV_WORD + _KV_NOUN + r"|" + _KV_BARE)
+
+
+def _kv_rule(label, guards):
+    return (r'\b((?:' + label + r')\b["\s]*[:=]["\s]*)' + guards
+            + _body(_KV_BODY, '{12,}'))
+
+
+_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED),
+                        re.IGNORECASE)
+_KV_CANDIDATE = re.compile(_kv_rule(_KV_LABEL_ANY, ""), re.IGNORECASE)
+_KV_SUPPRESSIONS = (
+    ("pointer", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_POINTER), re.IGNORECASE)),
+    ("call", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_CALLED), re.IGNORECASE)),
+    ("public-key", re.compile(_kv_rule(_KV_LABEL, ""), re.IGNORECASE)),
+)
 MASK_PATTERNS = [
     ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)"
                                 + _body(r"[A-Za-z0-9]", "{30,}"))),
@@ -148,10 +172,7 @@ MASK_PATTERNS = [
     # does not just page: it fails the broker verb and drops the result. The daemon
     # runs as `tokeneng`, off the harness import path, so the vocabulary is copied
     # rather than imported; test_masking.test_token_engine_mirror_agrees pins them.
-    ("kv_secret", re.compile(
-        r'\b(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER +
-        _KV_NOT_CALLED + _body(_KV_BODY, '{12,}'),
-        re.IGNORECASE)),
+    ("kv_secret", _KV_SECRET),
 ]
 
 RESPONSE_KEYS = {"ok", "verb", "ticket", "rule", "reason", "result", "elapsed_s"}
@@ -187,6 +208,36 @@ def mask_hits(text):
         if pat.search(text):
             names.append(name)
     return names
+
+
+def mask_suppressions(text):
+    """masking.suppressions, mirrored: what kv_secret DECLINED to read (wq#2677).
+
+    Detect-only here too, so this changes no verdict — a suppressed candidate stays
+    suppressed and the verb still succeeds. What it buys is that the suppression is
+    written down: respond() hangs these on the audit record, so a carve-out that has
+    gone overbroad shows up as a pile of audit rows instead of as a broker result that
+    quietly stopped being screened. No value, no context — reason, length and 12 hex of
+    sha256, the same fields the harness record carries, and for the same reason: a
+    suppressed value is by definition unmasked in the text it was read from.
+    """
+    live = [(m.end(1), m.end()) for m in _KV_SECRET.finditer(text)]
+    out, seen = [], set()
+    for m in _KV_CANDIDATE.finditer(text):
+        lo, hi = m.end(1), m.end()
+        if any(start < hi and lo < end for start, end in live):
+            continue
+        reasons = [n for n, rx in _KV_SUPPRESSIONS if not rx.match(text, m.start())]
+        if not reasons:
+            continue
+        value, reason = text[lo:hi], "+".join(reasons)
+        sha12 = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
+        if (reason, sha12) in seen:
+            continue
+        seen.add((reason, sha12))
+        out.append({"rule": "kv_secret", "suppressed": reason,
+                    "value_len": len(value), "value_sha256_12": sha12})
+    return out
 
 
 def assert_response_schema(frame):
@@ -1360,9 +1411,14 @@ def respond(conn, req, peer, ok, rule, reason, result, decision, t0):
              "ticket": str(req.get("ticket", "")), "rule": rule,
              "reason": reason, "result": result,
              "elapsed_s": round(time.monotonic() - t0, 3)}
+    suppressed = []
     try:
         assert_response_schema(frame)
-        hits = mask_hits(json.dumps(frame, sort_keys=True))
+        body = json.dumps(frame, sort_keys=True)
+        hits = mask_hits(body)
+        # wq#2677: read the outbound frame for what the rule declined to alarm on, on
+        # the same text and in the same breath as the tripwire itself.
+        suppressed = mask_suppressions(body)
     except ValueError as e:
         frame.update(ok=False, rule="response_schema", reason=str(e), result={})
         decision, hits = "error", []
@@ -1377,9 +1433,12 @@ def respond(conn, req, peer, ok, rule, reason, result, decision, t0):
                f"verb={frame['verb']} ticket={frame['ticket']} patterns={hits} "
                "— treat as a burned credential, rotate today")
     try:
+        # The suppression key is omitted entirely when nothing was suppressed, so the
+        # audit line only grows on the calls that have something to say.
+        extra = {"mask_suppressed": suppressed} if suppressed else {}
         audit(req, peer, decision, frame["rule"],
               exit_code=0 if frame["ok"] else 1,
-              elapsed_s=frame["elapsed_s"])
+              elapsed_s=frame["elapsed_s"], **extra)
     except OSError as e:
         frame.update(ok=False, rule="audit_unwritable", reason=str(e), result={})
     conn.sendall((json.dumps(frame, sort_keys=True) + "\n").encode())

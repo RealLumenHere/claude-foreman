@@ -642,6 +642,61 @@ def unaccounted(records):
             and not r["accounted_in"] and not r.get("today_closed", not r["still_matches_today"])]
 
 
+def suppressed_records(ticket_id, items=None):
+    """What the rule DECLINED to alarm on during wq<id>'s run (wq#2677).
+
+    Two sources, in the order that can answer honestly. First the run's own
+    mask-hits-N.json: those rows were written by the process that read the stream, so
+    they say what the table it was masking with actually suppressed, and they exist
+    even when the run never alarmed — which is the case the whole record exists for
+    (a suppression leaves no mask, no label and no hit record, so silence downstream).
+
+    Second, and only when the run left no such row, today's table re-derived over the
+    corpus. That is a proxy: it answers what the CURRENT rule would decline to read in
+    text the run put in front of the model, which for a run that predates wq#2677 is
+    the only answer available. `derived` marks the difference, because a carve-out
+    added since the run would show up here and could not have been what went silent.
+    """
+    rows, run = [], os.path.join(RUNS_ROOT, f"wq{ticket_id}")
+    for path in sorted(glob.glob(os.path.join(run, "mask-hits-*.json"))):
+        try:
+            with open(path) as fh:
+                written = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        rows += [dict(r, source=os.path.basename(path), derived=False)
+                 for r in written if isinstance(r, dict) and r.get("suppressed")]
+    if rows:
+        return rows
+    for source, text in (corpus(ticket_id) if items is None else items).items():
+        rows += [dict(r, source=source, derived=True)
+                 for r in masking.suppressions(text)]
+    seen, out = set(), []
+    for row in rows:
+        key = (row.get("suppressed"), row.get("value_sha256_12"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def report_suppressed(ticket_id, rows, out=sys.stdout):
+    """One line per suppressed candidate. Never a rotation: a suppression is the rule
+    working as written, and the question it answers is whether it was written right —
+    a pile of rows under one reason is an overbroad carve-out, which is what wq#2288's
+    lookahead was and what nothing could see until these rows existed."""
+    if not rows:
+        return
+    kind = "derived from today's table" if rows[0].get("derived") else "recorded by the run"
+    print(f"\nwq#{ticket_id}: {len(rows)} candidate(s) the kv-secret rule suppressed "
+          f"({kind}) — audit only, no rotation:", file=out)
+    for row in rows:
+        print(f"  [{row['suppressed']}] {row.get('label', 'kv-secret')} "
+              f"len={row['value_len']} sha256={row['value_sha256_12']} "
+              f"prefix={row.get('prefix', '')!r} in {row.get('source', '?')}", file=out)
+
+
 def report(ticket_id, records, out=sys.stdout):
     loose = unaccounted(records)
     print(f"wq#{ticket_id}: {len(records)} credential-shaped values in the run's "
@@ -719,10 +774,25 @@ def main(argv=None):
     ap.add_argument("--repo", default=REPO_ROOT)
     ap.add_argument("--extra-tracked", action="append", default=DOCTRINE_TRACKED)
     ap.add_argument("--json", action="store_true", help="records as JSON, no report")
+    ap.add_argument("--suppressed", action="store_true",
+                    help="only what the kv-secret rule declined to alarm on in this "
+                         "run (wq#2677): audit trail, always exits 0")
     ap.add_argument("--rotated-ledger", default=ROTATED_LEDGER_PATH,
                     help="path to the rotated-value ledger (default: %(default)s)")
     args = ap.parse_args(argv)
 
+    if args.suppressed:
+        # wq#2677: answered before the expensive half, and before the corpus is even
+        # built — a run that recorded its own suppressions needs neither the corpus nor
+        # the tracked tree, since nothing here is a verdict. Only the fallback for a run
+        # older than wq#2677 pays for the corpus, inside suppressed_records.
+        dropped = suppressed_records(args.ticket)
+        if args.json:
+            json.dump(dropped, sys.stdout, indent=2)
+            print()
+        else:
+            report_suppressed(args.ticket, dropped)
+        return 0
     items = corpus(args.ticket)
     if not items:
         print(f"wq#{args.ticket}: no run artefacts under {RUNS_ROOT} — nothing to "
@@ -738,10 +808,16 @@ def main(argv=None):
         items=items,
         rotated=load_rotated_ledger(args.rotated_ledger))
     if args.json:
+        # wq#2677: `--json` keeps its list shape — a caller reading it today gets what
+        # it got yesterday, and asks for the suppression trail with --suppressed.
         json.dump(records, sys.stdout, indent=2)
         print()
         return 1 if unaccounted(records) else 0
-    return report(args.ticket, records)
+    code = report(args.ticket, records)
+    # Printed after the verdict and never mixed into it: a suppression is audit, so it
+    # must not be able to move the exit code, which is the rotation verdict.
+    report_suppressed(args.ticket, suppressed_records(args.ticket, items=items))
+    return code
 
 
 if __name__ == "__main__":
