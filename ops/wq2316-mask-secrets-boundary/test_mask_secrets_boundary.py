@@ -109,6 +109,17 @@ def test_cloudflare_slack_aws_still_mask():
     assert mask("id " + "AKIA" + "Q" * 16) == "id AKIAMASKED"
 
 
+def test_trailing_punctuation_after_masked_literal_survives():
+    """wq#2687: cfut_ and kv-secret are the only two rules whose body charset
+    includes `.`, so a greedy run starting on already-masked prose swallowed the
+    sentence-final period. Requiring the body's last char to be alnum ({5,} ->
+    {5,}[A-Za-z0-9], {11,} -> {11,}[A-Za-z0-9]) makes trailing punctuation
+    unmatchable by the run, so it is left in the output."""
+    assert mask("reads back as cfut_MASKED.") == "reads back as cfut_MASKED."
+    assert mask("token: abcdefghijklmnop. Next sentence") == \
+        "token: MASKED. Next sentence"
+
+
 def test_kv_secret_rule_is_unchanged():
     """Left unanchored on purpose — it keys on an English word, so a left boundary
     would miss `githubToken: ...`. Carrying masking.py's shape-based label and tail
