@@ -124,3 +124,41 @@ def test_two_tokens_on_one_line_both_mask():
     second token separated from the first by a single delimiter."""
     line = "a=ghp_" + _GH_BODY + ",b=ghp_" + _GH_BODY
     assert mask(line) == "a=ghp_MASKED,b=ghp_MASKED"
+
+
+# ---- wq#2697: a live value glued behind this tool's own output ----
+
+# ids= on both lists: pytest's default id is the parameter itself, which would print
+# the credential-shaped fixture into every failure summary this file ever produces.
+_GLUED = pytest.mark.parametrize("live, masked", [
+    ("ghp_" + _GH_BODY, "ghp_MASKED"),
+    ("AKIA" + "Q" * 16, "AKIAMASKED"),
+    ("xoxb-" + "12345678901", "xoxb-MASKED"),
+    ("sk-ant-" + _SK_BODY, "sk-ant-MASKED"),
+], ids=["github", "aws", "slack", "sk-key"])
+
+
+@pytest.mark.parametrize("residue", ["ghp_MASKED", "MASKED"],
+                         ids=["after-github", "after-bare"])
+@_GLUED
+def test_a_value_glued_behind_the_mask_literal_masks(residue, live, masked):
+    """The char in front of the live value is the `D` of `MASKED`, an identifier char,
+    so `(^|[^A-Za-z0-9_])` refused the position and the value came out in the clear.
+    Port of masking.py's `_AFTER_MASK` (wq#2638, ISSUE-LOG row 788): directly after
+    the literal is a boundary.
+    """
+    assert mask(residue + live) == residue + masked
+
+
+@_GLUED
+def test_cloudflare_residue_over_masks_the_seam(live, masked):
+    """Diverges from masking.py, never toward a leak: cfut's body class spans the
+    literal and ERE cannot stop a run at it the way `_body()` does, so the rule
+    re-swallows the seam and everything behind it."""
+    assert mask("cfut_MASKED" + live) == "cfut_MASKED"
+
+
+@pytest.mark.parametrize("line", ["ghp_MASKEDghp_MASKED", "AKIAMASKEDMASKED x"])
+def test_own_output_glued_head_to_tail_stays_untouched(line):
+    """The widened boundary must not turn a repeated artefact into a fresh match."""
+    assert mask(line) == line
