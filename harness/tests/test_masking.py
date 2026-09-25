@@ -312,6 +312,21 @@ def test_masked_output_with_prose_behind_it_does_not_re_arm():
         assert masked == text, f"{label}: rewrote {text!r} to {masked!r}"
 
 
+# wq#2685: the probe wq#2674 typed by hand into `python3 -c` — the `cfut_<live>cfut_MASKED`
+# shape from masking._body's docstring with `<live>` spelled as a placeholder word and a
+# prose `.` behind it. It reached the stream-json whole, so the tripwire paged it as a
+# burned cloudflare value (sha256 e86d1f06f41a, len 21 under the legacy table). Committed
+# here it is accounted text; split at the kept prefix so reading this file stays silent.
+WQ2674_PROBE = "cfut_" "someTokencfut_MASKED."
+
+
+def test_the_wq2674_hand_probe_masks_its_live_half_and_alarms():
+    assert masking.value_sha12(WQ2674_PROBE[len("cfut_"):]) == "e86d1f06f41a"
+    masked, hits = masking.mask_text(WQ2674_PROBE)
+    assert hits == ["cloudflare"] and "someToken" not in masked
+    assert masked == "cfut_" + masking.MASK + masking.MASK + "."
+
+
 def test_a_rules_output_inside_another_rules_value_is_still_ours():
     """The rules compose: url-auth reads a userinfo line the github rule has already
     masked, so its whole value is another rule's kept prefix plus the literal. That is
