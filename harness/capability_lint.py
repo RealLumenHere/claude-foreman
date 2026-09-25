@@ -668,13 +668,18 @@ def _add_restart(node, unit, roster, policy, tags, unresolved, refused, context,
     "restart tailscaled on thor" is a deterministic deny row, test iii), then
     `allow` (tag), then: an explicit shape (`restart(u@n)` tag form, `systemctl
     restart u`) that is neither -> unresolved; a prose shape (`restart u on n`)
-    that is neither -> unresolved only when `u` is unit-shaped, else nothing."""
+    that is neither -> unresolved only when `u` is unit-shaped, else nothing. An
+    unknown node is unresolved only in the tag form; in a prose shape the trailing
+    word is English ("... on failure"), not a node (wq#2626) — unless the roster is
+    empty (state store unreachable), where no mention can be told apart and all fail
+    closed."""
     why = restart_refusal(node, unit, policy)
     if why:
         refused.append(f"restart({unit}@{node}) {why}")
         return
     if not roster.known(node):
-        unresolved.append(f"{context}: node {node!r} is not a lumen_state subject")
+        if explicit or not roster.names:
+            unresolved.append(f"{context}: node {node!r} is not a lumen_state subject")
         return
     if allowed_restart(node, unit, policy) is not None:
         tags.append(("restart", f"{unit}@{node}"))

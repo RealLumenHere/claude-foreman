@@ -384,8 +384,8 @@ RESTART_ROWS = [
     ("systemctl restart vaultwarden-lumen", [],
      ["restart(vaultwarden-lumen@lumen) policy:never.restart[lumen] (vaultwarden*)"], []),
     ("restart postgres on maat", [], ["restart(postgres@maat) policy:never.restart[maat] (*)"], []),
-    # unknown node: unresolved, never defaulted to lumen
-    ("restart ollama on nowhere", [], [], ["node 'nowhere' is not a lumen_state subject"]),
+    # unknown node in the tag form: unresolved, never defaulted to lumen
+    ("restart(ollama@nowhere)", [], [], ["node 'nowhere' is not a lumen_state subject"]),
     # prose without one of the three explicit shapes: nothing at all
     ("we should probably restart the messenger at some point", [], [], []),
 ]
@@ -396,6 +396,39 @@ def test_restart_shapes(detail, tags, refused, unresolved):
     d = derive(detail)
     assert d.tag_strings == tags
     assert d.refused == refused
+    for want in unresolved:
+        assert any(want in u for u in d.unresolved), d.unresolved
+
+
+@pytest.mark.parametrize("detail", [
+    "restart dc-gateway on first-call failure",
+    "restart ollama on nowhere",
+    "systemctl restart ollama.service on boot-time",
+])
+def test_restart_prose_with_non_node_trailing_word_derives_nothing(detail):
+    """wq#2626: `<verb> <unit> on <word>` where the word is not a fleet node is
+    English, not a node mention — no tag, no unresolved, so the broker never parks it."""
+    d = derive(detail)
+    assert d.tag_strings == []
+    assert d.refused == []
+    assert d.unresolved == []
+
+
+def test_restart_tag_form_with_bogus_node_stays_unresolved():
+    d = derive("Needs: restart(dc-gateway@first-call)")
+    assert d.tag_strings == []
+    assert any("node 'first-call' is not a lumen_state subject" in u
+               for u in d.unresolved), d.unresolved
+
+
+@pytest.mark.parametrize("detail,tags,unresolved", [
+    ("restart ollama.service on isis", ["restart(ollama@isis)"], []),
+    ("restart foo-bar.service on isis", [], ["restart(foo-bar@isis) is not on allow.restart[isis]"]),
+])
+def test_restart_prose_with_real_node_unchanged(detail, tags, unresolved):
+    d = derive(detail)
+    assert d.tag_strings == tags
+    assert len(d.unresolved) == len(unresolved)
     for want in unresolved:
         assert any(want in u for u in d.unresolved), d.unresolved
 
