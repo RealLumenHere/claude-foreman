@@ -41,7 +41,7 @@ different signals; this ticket adds the liveness one, per
   supergateway instance is covered too. Also a wq#2546 secrets-at-rest
   mitigation: the log holds unmasked tool-call bodies (wq#1698's finding),
   so bounding its size bounds how much of that sits on disk.
-- `apply.sh` — root-run installer (this worker's sandbox cannot write
+- `install.sh` — root-run installer (this worker's sandbox cannot write
   `/etc/systemd/system/*` or run `daemon-reload`/`systemctl restart` as root,
   same constraint as wq#1698, wq#1990, wq#1501 before it): installs the
   script to `/home/lumen/bin/`, the timer+units to `/etc/systemd/system/`,
@@ -49,12 +49,18 @@ different signals; this ticket adds the liveness one, per
   restarts `cloudflared` once (detached via `systemd-run`, quiet-window
   guarded, health-checked) to pick up `--metrics`. Does **not** restart the
   gateway unit itself — no reason to bounce it during rollout, the watchdog's
-  own probe is what restarts it from here on.
+  own probe is what restarts it from here on. Added by wq#2637's verify pass:
+  `install.sh --verify` (ops/VERIFY_CONTRACT.md, wq#1696) — read-only, checks
+  the watchdog script, both units, the cloudflared drop-in and the logrotate
+  config against what's actually live, and enabled+active on the timer. Runs
+  clean today for the `/home/lumen/bin` copy but reports `VERIFY FAIL (6)`
+  for everything else, since none of the root-owned artifacts are installed
+  yet (see "What this does NOT cover" below).
 - `/home/lumen/bin/mcp-gateway-watchdog.sh` — this worker's sandbox *can*
   write to `/home/lumen/bin` (non-privileged, unlike `/etc`), so the script
-  is already deployed there live, executable, ready for `apply.sh` to wire
+  is already deployed there live, executable, ready for `install.sh` to wire
   the timer to it. It is byte-identical to the copy in this directory
-  (`apply.sh` reinstalls the same source, so a future run is idempotent).
+  (`install.sh` reinstalls the same source, so a future run is idempotent).
 
 `mcp-pressure-guard.sh` and its timer are untouched — this is an addition on
 the responsiveness axis, not a replacement.
@@ -110,17 +116,17 @@ A second run confirms `--mode cloudflared` (`GET /ready`) resets its fail
 counter to 0 against a healthy mock. Output: `ALL CHECKS PASSED (2 restarts
 recorded, flap alert fired, cooldown honored, recovery reset fails)`.
 
-Once `apply.sh` runs on a real node (Frank/an authorized deploy path — same
+Once `install.sh` runs on a real node (Frank/an authorized deploy path — same
 carve-out as wq#1698), the live kill-`-STOP` drill in the ticket becomes
 runnable and should be executed there before this is treated as fully
 verified in production; that's out of this worker's reach, not skipped.
 
 ## What this does NOT cover
 
-- Actually running `apply.sh` on Lumen or any endpoint node — needs root,
+- Actually running `install.sh` on Lumen or any endpoint node — needs root,
   outside this worker's sandbox (same carve-out as wq#1698/wq#1990/wq#1501).
   Filed as the physical/authorized-deploy follow-up, not a blocker on this
   ticket (full-autonomy instinct's Frank carve-out).
 - Rolling this out to Anubis/Bes/Nephthys — depends on §3.2 (node bring-up)
-  landing first; `apply.sh` already takes `WQ2606_GATEWAY_UNIT=dc-gateway`
+  landing first; `install.sh` already takes `WQ2606_GATEWAY_UNIT=dc-gateway`
   for when it does.
