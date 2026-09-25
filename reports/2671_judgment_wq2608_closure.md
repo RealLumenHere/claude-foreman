@@ -117,8 +117,17 @@ Per wq#2630's precedent I am **not** proposing a new metric — `wq closure-qual
 cannot see this and should not be taught to. The rule belongs where workers already
 read, as a one-liner: *a script you cannot run against the real target still gets a
 logic exercise against fake paths before you close — "no grant to deploy" is not "no
-way to test."* Proposed for instincts via the normal proposal-only path; not
-self-applied.
+way to test."*
+
+It is recorded in ISSUE-LOG #776, which every ticket reads by doctrine. It is **not**
+filed as an instincts candidate, and that is a gap rather than a choice:
+`minerva/dream/instincts_candidates.yaml` is the proposal-only sink instinct 7 points
+at, but `lumen_dream.write_instincts` (`lumen_dream.py:144`) rewrites it in place every
+run from a deterministic harvest over *episodes* — so a hand-appended candidate is
+destroyed on the next dream pass (`lumen_dream_digest.py:64` says so outright). There
+is no durable hand-authored sink for a rule of this shape. Flagged here rather than
+written somewhere it would silently vanish; instincts.yaml is not self-edited either
+way.
 
 ## Summary for the chain
 
@@ -130,4 +139,6 @@ self-applied.
   it would have left the first-deploy bug in place. Row 766 corrected.
 - New committed exercise: `test_rollback_restore_branches.py`, with the pre-fix blob as
   a regression witness so it cannot silently stop detecting the bug.
-- Fresh-instance verify ticket filed on the fix.
+- Fresh-instance verify ticket filed on the fix: **wq#2680**.
+- Side finding: there is no durable hand-authored sink for an instincts candidate —
+  `dream/instincts_candidates.yaml` is regenerated in place every run. ISSUE-LOG #777.
