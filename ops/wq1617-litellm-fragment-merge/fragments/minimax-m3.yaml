@@ -1,0 +1,43 @@
+# wq#1617 — minimax-m3 candidate rung, extracted from the stale
+# .staged.minimax-m3 full-file copy (written 2026-07-31, quarantined by this
+# ticket — see ../README.md) before that file is archived. minimax-m3 never
+# landed in the live config, so quarantining the staged file would otherwise
+# lose it outright.
+#
+# Original evaluation notes (2026-07-31, OpenRouter):
+#   latency (judge prompt, n=3): 2.03 / 3.26 avg / 5.01 s
+#   burst 5/5 OK, 0.81-1.95s. tool_calls OK. json_schema strict OK.
+#   QUOTA (wq#410 lesson): OpenRouter key is PAID tier, limit: null,
+#     limit_remaining: null, is_free_tier: false — no daily request cap,
+#     spend is the only limit (not a gemini-flash-style 20/day trap).
+#   CONTEXT: advertised 1,048,576 but top_provider ceiling is 524,288 —
+#     treat 524288 as the real max; max_completion_tokens 512000.
+#   REASONING-TOKEN TRAP: M3 always emits reasoning tokens (63-179 on a
+#     ~90-token answer). `reasoning: {exclude:true}`/`{enabled:false}` only
+#     HIDE them — they are still generated, billed, and count against
+#     max_tokens. A 200-token cap truncated a judge verdict mid-JSON in
+#     testing; hence max_tokens 1024, not 256.
+#   Separate vendor = separate rate bucket from deepseek/cerebras (wq#389
+#     cooldown fix rationale). NOT in router_settings.fallbacks.
+#
+# VERIFY BEFORE MERGE (this is the exact lesson wq#1617 exists to enforce):
+#   the $0.30/M-in / $1.20/M-out / $0.06/M-cached-read rate below is carried
+#   forward from the 2026-07-31 evaluation comment, not re-checked against
+#   OpenRouter's current price list. Confirm current pricing (same way
+#   wq#1591 caught the Z.ai promo-vs-list-rate gap) before merging this
+#   fragment — do not trust a 2-month-old comment as current truth.
+model_list:
+  - model_name: minimax-m3
+    litellm_params:
+      model: openrouter/minimax/minimax-m3
+      api_base: https://openrouter.ai/api/v1
+      api_key: os.environ/OPENROUTER_API_KEY
+      max_tokens: 1024
+      timeout: 120
+    model_info:
+      mode: chat
+      supports_function_calling: true
+      supports_vision: true
+      input_cost_per_token: 0.0000003           # $0.30 / M tokens (VERIFY, see above)
+      output_cost_per_token: 0.0000012          # $1.20 / M tokens (VERIFY, see above)
+      cache_read_input_token_cost: 0.00000006   # $0.06 / M tokens (VERIFY, see above)
