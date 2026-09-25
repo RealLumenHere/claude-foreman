@@ -705,8 +705,6 @@ def test_the_live_rules_would_not_have_filed_wq2336():
     assert all("tests/test_" in r["accounted_in"] for r in kv.values())
 
 
-WQ1819_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq1819")
-
 # The one `kv-secret` value wq#1819 attempt 8 put in front of its model. Unlike every
 # other pin in this file the identity is not asserted as a bare hash constant: the
 # value is a PUBLIC PYTHON IDENTIFIER, so the test can name it outright and hash it
@@ -715,9 +713,57 @@ WQ1819_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq1819")
 # re-reads a different string into this slot.
 WQ1819_KV_IDENTIFIER = b"read_oauth_token"
 
+# wq#2678: the corpus these two tests replay, frozen into the tree.
+#
+# `corpus(1819)` reads a LIVE run dir, and a live input cannot pin a historical
+# verdict. On 2026-09-25 an unrelated lane (wq1819-a10) had its newer `fworker.py`
+# frozen into `_runs/wq1819/snapshots/`, and that one snapshot of a file nobody here
+# was reasoning about took the record count from 1 to 3 and moved this identifier's
+# `accounted_in` off `fworker.py` onto a judgment doc that merely quotes it. Neither
+# movement says anything about masking; both would turn this test red, or quietly
+# green for the wrong reason, on a day no rule changed. That is the anti-pattern
+# wq#2630 names, and the pin is the cure the ticket asks for.
+#
+# The fixture is not an excerpt somebody chose: it is the exact 200-line window
+# attempt 8's `Read` put in front of `nephthys-qwen14b`, keyed in the live corpus as
+# WQ1819_WINDOW and recorded in that session's read cache as
+# `offset=1300 limit=200 fp=200188:...`, re-cut from git history at the recorded size.
+# Not hand-trimmed around the hit on purpose — a window cut down to the one line the
+# rule fires on could not fail, where these 200 lines can: widen the kv rule and the
+# other 199 get their say.
+WQ1819_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "fixtures", "wq1819-attempt8-fworker-window.txt")
+WQ1819_FIXTURE_REL = "harness/tests/fixtures/wq1819-attempt8-fworker-window.txt"
+WQ1819_FIXTURE_SHA = "e91b65845d1dd341e1cc0a2a3bbeb0c0ae7bf9ab51cf4ada3367e85fdd7e61ee"
+WQ1819_WINDOW = "read:/home/lumen/foreman/harness/fworker.py@1300#git-history"
 
-@pytest.mark.skipif(not os.path.isdir(WQ1819_RUN),
-                    reason="wq#1819's run dir is not on this host")
+
+def wq1819_corpus():
+    """attempt 8's window, under its live-corpus key, checked against its hash.
+
+    The hash is the half that makes this a pin rather than a file: `replay` would
+    happily score an edited fixture, and a fixture anyone can edit re-opens exactly
+    the hole the live run dir had."""
+    with io.open(WQ1819_FIXTURE, encoding="utf-8") as fh:
+        text = fh.read()
+    assert hashlib.sha256(text.encode("utf-8")).hexdigest() == WQ1819_FIXTURE_SHA, \
+        f"{WQ1819_FIXTURE_REL} was edited; the wq#1819 verdict is no longer pinned"
+    return {WQ1819_WINDOW: text}
+
+
+def wq1819_tracked():
+    """The committed tree MINUS the fixture above.
+
+    Committing the window makes the tree hold a second copy of `read_oauth_token`, and
+    `account()` names the first tracked file holding a value — so left in, the fixture
+    would account for its own contents and `unaccounted() == []` would be a tautology
+    over a file this test wrote. Dropping it keeps that assertion a claim about the
+    real tree."""
+    tracked = mask_replay.tracked_text()
+    tracked.pop(WQ1819_FIXTURE_REL, None)
+    return tracked
+
+
 def test_wq1819_transcript_burned_nothing():
     """wq#2347's verdict, pinned. The ticket reads `kv-secret fired on wq#1819 attempt
     8's stream-json ... rotate it today`; nothing was rotated, because the "credential"
@@ -733,21 +779,20 @@ def test_wq1819_transcript_burned_nothing():
     wall-clock after 7 turns — so the bytes reached a model on this host and no further,
     which is not a mitigation but is worth recording next to the verdict.
 
-    wq#2673: this used to pin `len(records) == 1`. `account()` names the FIRST tracked
-    file holding a value (mask_replay.py:380), so both the count and the exact
-    `accounted_in` path shift whenever an unrelated file enters the tracked root and
-    happens to contain another 16+-char identifier or a second copy of this one's text
-    (e.g. a later ISSUE-LOG/judgment doc quoting `read_oauth_token`). wq#2347's actual
-    verdict was never a count, it was `unaccounted(records) == []` — every kv-secret hit
-    resolves to committed, public source. That's what stays pinned; the identifier this
-    ticket is about is asserted by name and content, not by being the only thing found."""
-    records = mask_replay.replay(1819)
+    wq#2673 dropped `len(records) == 1` because `account()` names the FIRST tracked file
+    holding a value (mask_replay.py:379), so the count drifted with whatever else landed
+    in the corpus. wq#2678 puts the count back and fixes the drift at its source: the
+    input is now the pinned window, not a live run dir (see WQ1819_FIXTURE), so one hit
+    is a fact about attempt 8's context rather than about what got snapshotted today.
+    `unaccounted(records) == []` is the verdict proper and is still scored against the
+    live tree — that one SHOULD move if the identifier ever stops being public source."""
+    records = mask_replay.replay(1819, items=wq1819_corpus(),
+                                 tracked=wq1819_tracked())
     assert mask_replay.unaccounted(records) == []
-    kv_by_hash = {r["value_sha256_12"]: r
-                  for r in records if r["label"] == "kv-secret"}
-    digest = hashlib.sha256(WQ1819_KV_IDENTIFIER).hexdigest()[:12]
-    assert digest in kv_by_hash
-    kv = kv_by_hash[digest]
+    assert len(records) == 1
+    kv = records[0]
+    assert kv["label"] == "kv-secret"
+    assert kv["value_sha256_12"] == hashlib.sha256(WQ1819_KV_IDENTIFIER).hexdigest()[:12]
     assert kv["value_len"] == len(WQ1819_KV_IDENTIFIER) == 16
     # a call, not a value: the recorded line keeps the `()` the rule failed to look at
     assert kv["line"].endswith("()")
@@ -756,8 +801,6 @@ def test_wq1819_transcript_burned_nothing():
     assert kv["accounted_in"]
 
 
-@pytest.mark.skipif(not os.path.isdir(WQ1819_RUN),
-                    reason="wq#1819's run dir is not on this host")
 def test_the_live_rules_would_not_have_filed_wq2347():
     """The leak path, closed, and closed twice. kv-secret's tail lookahead (wq#2288)
     ends a match on `(?![A-Za-z0-9._-]|\\()`, so a call can no longer be read as a
@@ -766,9 +809,41 @@ def test_the_live_rules_would_not_have_filed_wq2347():
     committed file, and this one is in two.
 
     Zero is per-corpus rather than per-label, so this also forecloses the sibling
-    tickets that would otherwise be filed against this run under the other labels."""
-    assert mask_replay.replay(1819, patterns=mask_replay.CURRENT_PATTERNS) == []
-    assert mask_replay.replay(1819)[0]["still_matches_today"] is False
+    tickets that would otherwise be filed against this run under the other labels.
+
+    wq#2678: same pinned window as the test above, and for the same reason — `[0]` over
+    a live corpus was reading whichever record a snapshot happened to sort first, so the
+    `still_matches_today` half was asserting about an arbitrary row. Pinned, there is
+    one row and it is the one the docstring is about; the claim is now over all of
+    them."""
+    items, tracked = wq1819_corpus(), wq1819_tracked()
+    assert mask_replay.replay(1819, patterns=mask_replay.CURRENT_PATTERNS,
+                              items=items, tracked=tracked) == []
+    records = mask_replay.replay(1819, items=items, tracked=tracked)
+    assert records
+    assert all(r["still_matches_today"] is False for r in records)
+
+
+def test_the_wq1819_pin_refuses_an_edited_window(tmp_path, monkeypatch):
+    """The guard in `wq1819_corpus` has to be able to fail, or the two tests above are
+    pinned to a file rather than to bytes.
+
+    Appending one more credential-shaped line is the exact drift wq#2678 was filed for —
+    a snapshot of a newer `fworker.py` adding called identifiers nobody reviewed — so
+    that is what the probe appends. The window must be rejected before `replay` ever
+    scores it; a fixture that scores first and mismatches later is just a slower live
+    corpus."""
+    with io.open(WQ1819_FIXTURE, encoding="utf-8") as fh:
+        edited = fh.read() + '\n        key = read_litellm_key()\n'
+    stray = tmp_path / "wq1819-window.txt"
+    stray.write_text(edited, encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "WQ1819_FIXTURE", str(stray))
+    with pytest.raises(AssertionError, match="no longer pinned"):
+        wq1819_corpus()
+    # and the appended line is a real extra hit, so the rejection is not vacuous —
+    # scored directly, the edited window is the 2-record corpus the guard refuses
+    assert len(mask_replay.replay(1819, items={WQ1819_WINDOW: edited},
+                                  tracked=wq1819_tracked())) == 2
 
 
 def test_the_kv_tail_lookahead_separates_a_call_from_a_value():

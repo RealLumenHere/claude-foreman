@@ -1,0 +1,200 @@
+
+def _ensure_worktree_tmpdir(worktree):
+    """wq#1915(B): every tool that falls back to tempfile.gettempdir()/$TMPDIR must
+    land inside the worktree, or it hits guard.sh's write-outside-worktree denial
+    (CAPABILITY_DENIED -- wq#1852/wq#1889, 2 attempts each, both refused 3x on exactly
+    this). Returns the created dir's path. 0700: scratch may contain ticket-specific
+    intermediate output, no reason to leave it group/other readable.
+
+    Also excludes it via the repo's git info/exclude. wq#1915's own text says "the
+    worktree's info/exclude", but structurally a worktree has no info/exclude of its
+    own -- `git -C <worktree> rev-parse --git-path info/exclude` resolves to the ONE
+    shared file in the common gitdir (verified: every worktree of this repo resolves
+    to the same path). That is the correct target anyway: a tracked .gitignore line
+    would need its own PR to land before the very first worker that needs it could
+    rely on it, and every other worktree of this repo wants .tmp/ ignored too.
+    Idempotent (checked-then-appended) so calling this once per attempt is cheap and
+    safe under concurrent attempts on different tickets sharing the same repo."""
+    tmp_dir = os.path.join(worktree, ".tmp")
+    os.makedirs(tmp_dir, mode=0o700, exist_ok=True)
+    os.chmod(tmp_dir, 0o700)  # exist_ok path may have pre-existed with a looser mode
+    try:
+        # cwd=worktree, not `-C worktree`: git's --git-path prints a path relative to
+        # the CALLING process's cwd (verified empirically -- `-C` does not make the
+        # output relative to its own target), so resolving against our own known
+        # `worktree` via os.path.join below is only correct if git's relative output
+        # is ALSO relative to that same directory.
+        p = subprocess.run(["git", "rev-parse", "--git-path", "info/exclude"],
+                           capture_output=True, text=True, timeout=10, cwd=worktree)
+        if p.returncode == 0 and p.stdout.strip():
+            exclude_path = os.path.normpath(os.path.join(worktree, p.stdout.strip()))
+            existing = ""
+            if os.path.exists(exclude_path):
+                with open(exclude_path) as f:
+                    existing = f.read()
+            if TMP_EXCLUDE_PATTERN not in existing.splitlines():
+                with open(exclude_path, "a") as f:
+                    if existing and not existing.endswith("\n"):
+                        f.write("\n")
+                    f.write(f"{TMP_EXCLUDE_PATTERN}\n")
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"WARN: could not add {TMP_EXCLUDE_PATTERN!r} to git info/exclude for "
+            f"{worktree}: {e!r}")
+    return tmp_dir
+
+
+def build_env(worker_id, model, effort, worktree, ticket_id, cli_profile=False):
+    env = dict(os.environ)
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_BASE_URL", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    env.pop("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", None)
+    # T4/T2b: the two auth paths are mutually exclusive by pool — a local-pool model
+    # gets the LiteLLM gateway vars below and never the cloud static bearer, a cloud
+    # model gets the static bearer and never the gateway vars.
+    if not is_local_model(model):
+        token = read_oauth_token()
+        if token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        else:
+            log(f"WARN: no static oauth token at {OAUTH_TOKEN_FILE} — falling back to the "
+                f"shared login (refresh-race exposure, FOREMAN_RESEARCH.md §8)")
+    env["HOME"] = "/home/lumen"
+    env["FOREMAN_WORKER"] = worker_id
+    # wq#1116: the worker closes the ticket fworker claimed, so it must carry the identity that
+    # claimed it — not its own per-attempt worker_id, which never matched the holder.
+    env["WQ_AGENT"] = wq_identity(ticket_id)
+    env["FOREMAN_EVENTS_DIR"] = EVENTS_DIR
+    env["FOREMAN_WORKTREE_ROOT"] = worktree
+    # wq#1915(B): scratch goes under $TMPDIR, which is inside your worktree.
+    tmp_dir = _ensure_worktree_tmpdir(worktree)
+    env["TMPDIR"] = tmp_dir
+    env["TEMP"] = tmp_dir
+    env["TMP"] = tmp_dir
+    # wq#1697: the /tmp/<agent>/ dir `wq claim` tells the worker to use is created here and
+    # handed to the CLI as an --add-dir (scratch_grant_dirs), so following wq is not a denial.
+    env["FOREMAN_SCRATCH_DIR"] = scratch_grant.ensure_scratch(env["WQ_AGENT"])
+    # wq#900: registered primary trees for guard.sh's branch-freeze deny class —
+    # computed here (router.LANE_REPO + static mirror) so the guard never depends
+    # on an import at hook time.
+    env["FOREMAN_PRIMARY_TREES"] = ":".join(primary_tree_guard.primary_trees())
+    if effort:
+        env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+    env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "500000"
+    env["BASH_MAX_OUTPUT_LENGTH"] = BASH_MAX_OUTPUT_LENGTH
+    env["CLAUDE_CODE_ENABLE_TELEMETRY"] = "1"
+    env["OTEL_METRICS_EXPORTER"] = "otlp"
+    env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/protobuf"
+    env["OTEL_EXPORTER_OTLP_ENDPOINT"] = OTEL_ENDPOINT
+    env["OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"] = "cumulative"
+    env["OTEL_METRIC_EXPORT_INTERVAL"] = "60000"
+    # T4 (BUILD_PLAN.md §T4): per-worker ONLY, never global — this env dict is built
+    # fresh per attempt and only ever handed to THIS attempt's `claude -p` child, never
+    # merged back into fworker's own process env, so a local-rung attempt can never
+    # leak the gateway vars into a later cloud dispatch on the same host/session.
+    if is_local_model(model):
+        env["ANTHROPIC_BASE_URL"] = LITELLM_BASE_URL
+        env["ANTHROPIC_AUTH_TOKEN"] = read_litellm_key()
+        env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+    if cli_profile:
+        env.update(local_profile_env())
+    return env
+
+
+# wq#1245: workers (esp. verify tickets) must be able to READ the fleet's primary trees to verify
+# cross-repo work and reach live env/config. Writes stay in the worktree by harness discipline +
+# primary_tree_guard; this only widens read/context access.
+# wq#1301: default list now sourced from agents.yaml's `defaults.add_dirs` (name kept
+# for existing callers/tests). add_dirs_for() below resolves the per-archetype list —
+# every archetype uses this same default today, but a future archetype-specific
+# add_dirs entry in agents.yaml takes effect without another fworker.py change.
+WORKER_ADD_DIRS = _AGENTS.default_add_dirs
+
+
+def add_dirs_for(archetype, needs_dirs=None):
+    """Per-archetype --add-dir list (wq#1301), unioned with the ticket's own
+    needs:dir tags (wq#1331 §3.2 — read context only; landing still goes through the
+    worktree). needs_dirs is already empty when FOREMAN_NEEDS_DISABLE=1 because
+    needs.parse() returned nothing."""
+    base = _AGENTS.get(archetype).add_dirs if archetype in _AGENTS else WORKER_ADD_DIRS
+    out = list(base)
+    for d in needs_dirs or []:
+        if d not in out:
+            out.append(d)
+    return out
+
+def scratch_grant_dirs(ticket_id):
+    """wq#1697: the wq scratch dir for this ticket's owner identity, as an --add-dir."""
+    return [scratch_grant.scratch_dir(wq_identity(ticket_id))]
+
+
+def resolve_worker_settings(repo, ticket_id):
+    """ISSUE-SOLUTIONS-fable.md §2b: render this repo's per-repo toolchain permission
+    profile (permission-profiles/repos.d/<repo>.json) into the ticket's run_dir, unioned
+    from the shared profile fragments. A repo with no profile declaration yet falls back
+    to the static SETTINGS_FILE unchanged — no regression for repos not yet migrated.
+    """
+    settings_file, digest = permission_profiles.resolve_settings_file(
+        repo, SETTINGS_FILE, run_dir(ticket_id))
+    if digest:
+        log(f"wq#{ticket_id}: rendered permission profile {digest[:12]} -> {settings_file}")
+    return settings_file
+
+
+# wq#2185: the local-rung CLI profile. The Claude CLI's own request (default system
+# prompt, the full built-in tool catalogue, MCP tool definitions) was ~14k of the 18.5k
+# tokens a Mac had to prefill before the first frame; the two local archetypes only need
+# these six tools. Not `--bare`: the action gate and stop gate hooks must keep running.
+LOCAL_CLI_TOOLS = "Bash,Read,Edit,Write,Grep,Glob"
+LOCAL_CLI_FLAGS = ("--tools", LOCAL_CLI_TOOLS, "--strict-mcp-config",
+                   "--exclude-dynamic-system-prompt-sections")
+
+
+LOCAL_BACKGROUND_MODEL = "deepseek-v4-flash"
+
+
+def local_profile_env():
+    """Env half of the local CLI profile (all measured against 2.1.276, see
+    cli_calibration.py). The CLI's session-title call is a second ~2.4k-token request
+    that took the box's second slot: DISABLE_TERMINAL_TITLE stops it, and any other
+    small/fast-model call is routed to a cheap non-Mac model the scoped gateway key
+    allows. CLAUDE.md files, auto-memory and the git-status/instructions blocks are the
+    CLI's per-machine context: the slim prompt is self-contained, and the fleet
+    CLAUDE.md's interactive busy-key protocol is wrong for a headless worker."""
+    return {"CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+            "ANTHROPIC_SMALL_FAST_MODEL": LOCAL_BACKGROUND_MODEL,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": LOCAL_BACKGROUND_MODEL,
+            "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS": "1"}
+
+
+def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=None,
+                      resume_session=None, claude_bin="claude", local_profile=False):
+    cmd = [claude_bin, "-p", prompt]
+    if model:
+        cmd += ["--model", model]
+    if effort:
+        cmd += ["--effort", effort]
+    if max_turns:
+        cmd += ["--max-turns", str(max_turns)]
+    cmd += ["--settings", settings_file]
+    cmd += ["--permission-mode", "acceptEdits"]
+    for d in add_dirs:
+        cmd += ["--add-dir", d]
+    cmd += ["--output-format", "stream-json", "--verbose", "--include-hook-events"]
+    if local_profile:
+        cmd += list(LOCAL_CLI_FLAGS)
+    if resume_session:
+        cmd += ["--resume", resume_session]
+    return cmd
+
+
+# ---------------------------------------------------------------------------
+# stream reader — background thread so the main loop can enforce inactivity /
+# wall-clock / turn-ceiling / heartbeat without blocking on a readline().
+# ---------------------------------------------------------------------------
+
+def _reader_thread(pipe, q):
+    """RELIABILITY_SPEC.md §A/§F (#25670, shim 14-15, wq#648/S3): `pipe` is a
+    `text=True, bufsize=1` TextIOWrapper over the child's stdout. Its readline() already
