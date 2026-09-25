@@ -3,3 +3,9 @@
 # CARD.md and REPORT.md, and build_sample.py rebuilds it from minerva.db on Lumen.
 */sample.json
 */graph.db
+
+# wq#2575: per-run raw data/scratch dirs and failed-form-check report copies —
+# regenerable, not the pilot's committed CARD.md/REPORT.md record.
+*/data/
+*/work/
+*/*.formfail

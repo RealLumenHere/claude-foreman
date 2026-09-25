@@ -66,3 +66,17 @@ runtime/
 # wq#2543/wq#2549: mask_replay.py's rotated-value ledger — runtime state (hashes,
 # timestamps, tickets, notes; never a raw value), not source.
 /rotated_ledger.json
+
+# wq#2575: reports/research are markdown source; ad-hoc .txt run dumps are scratch
+/reports/*.txt
+/research/*.txt
+
+# wq#2575: dispatch janitor runtime log/state, regenerated each run — not source
+/dispatch_janitor.log
+/dispatch_janitor/
+
+# wq#2575: real per-install secret env; committed template is lumen-despag.env.example
+/harness/systemd/lumen-despag.env
+
+# wq#2575: cron deadman runtime state, not source
+/ops/wq1184-gatus-health-checks/deadman_state.json
