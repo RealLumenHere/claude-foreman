@@ -1,0 +1,28 @@
+[Unit]
+Description=Lumen Status Monitor
+After=network.target
+# wq#2570: with no StartLimit*, Restart=always respawned this unit at a flat 5s
+# forever (NRestarts=3197 across 2026-08-31..09-16) instead of ever giving up and
+# alerting. StartLimitBurst attempts inside StartLimitIntervalSec now trips the
+# unit to "failed" for a genuinely persistent fault, which fires OnFailure= below
+# — the same ntfy-onfailure@%i.service + aq dedup path used fleet-wide (see e.g.
+# ops/wq1704-missing-watchdogs, ops/wq1652-cfd-actuator), so the alert is deduped
+# by the shared "svc-fail-<unit>" aq key rather than a bespoke one here.
+StartLimitIntervalSec=1800
+StartLimitBurst=10
+OnFailure=ntfy-onfailure@%n.service
+
+[Service]
+Type=simple
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/agent/lumen_status_monitor.py
+Restart=always
+# Exponential backoff from RestartSec up to RestartMaxDelaySec over RestartSteps
+# restarts, so a fault that keeps recurring spaces itself out instead of
+# hot-looping at a flat 5s.
+RestartSec=5
+RestartSteps=9
+RestartMaxDelaySec=300
+
+[Install]
+WantedBy=multi-user.target
