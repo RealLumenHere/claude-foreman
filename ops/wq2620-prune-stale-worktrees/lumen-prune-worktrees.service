@@ -1,0 +1,8 @@
+[Unit]
+Description=wq#2620 prune landed/abandoned worktrees under scratch/worktrees and worktrees
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/wq2620-prune-stale-worktrees/prune_worktrees.py --apply
+User=lumen

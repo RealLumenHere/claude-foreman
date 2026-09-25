@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the stale-worktree pruner daily (worktrees accumulate slowly; no need for tighter than daily)
+
+[Timer]
+OnBootSec=20min
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
