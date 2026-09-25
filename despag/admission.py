@@ -264,6 +264,15 @@ def check_admission(model: str, *, running_claude_max: int, now: _dt.datetime | 
         # up already uses, still under the operator's upper clamp.
         allowed = min(cfg["min_allowed"], DESPAG_MAX_CLAUDE_CONCURRENT)
         detail = f"{detail}; failing closed to min_allowed={allowed}"
+        # wq#2617: the fail-closed floor must not out-admit the reserve. wq#2426
+        # (c95a8cd) zeroed allowed_concurrent at/below Frank's reserve, but that path
+        # needs resets_at; budget_ceiling reads only `percent`, so the same
+        # reserve-breached account with resets_at missing would otherwise get
+        # min_allowed=1 here while the fully-informed path gets 0 — the exact
+        # "missing data admits MORE" bypass the wq#1868 posture above forbids.
+        allowed, taper_detail = burn_rate.budget_ceiling(limits, allowed, cfg,
+                                                          now=now, pools=pools)
+        detail = f"{detail}; budget_ceiling -> {allowed} ({taper_detail})"
     if running_claude_max >= allowed:
         return {"allow": False,
                 "reasons": [f"burn-rate concurrency ceiling reached: allowed={allowed} "

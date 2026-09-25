@@ -77,10 +77,12 @@ def _mock_state(monkeypatch, *, limits, stale=False, floors=None, stop_active=Fa
 def test_reserve_honoured_remaining_below_reserve_refuses(monkeypatch):
     """Session at 75% used (25% remaining) clears the governor's own floor (20%) —
     evaluate_dispatch alone would allow it — but FRANK_RESERVE_PCT reserves 30% of
-    the session for Frank's interactive chat (burn_rate.py:54-58), so the spend rate
-    above the reserve is 0 and allowed_concurrent clamps to burn_rate.MIN_ALLOWED
-    (1): one turn already running must be refused, proving the reserve — not just
-    the governor floor — is what's gating."""
+    the session for Frank's interactive chat, and since wq#2426 (c95a8cd) a pool
+    at/below the reserve supports ZERO workers, not min_allowed's floor of 1: the
+    2026-09-20/21 night showed that floor churning short tickets through one slot at
+    18 spawns/hour out of Frank's headroom (burn_rate.allowed_concurrent). So even
+    the FIRST turn is refused, proving the reserve — not just the governor floor —
+    is what's gating."""
     resets_at = (NOW + dt.timedelta(hours=1)).isoformat()
     limits = {
         "session": {"percent": 75, "resets_at": resets_at, "severity": "normal"},
@@ -89,11 +91,9 @@ def test_reserve_honoured_remaining_below_reserve_refuses(monkeypatch):
     _mock_state(monkeypatch, limits=limits, stale=False)
 
     first = admission.check_admission("claude-sonnet-5", running_claude_max=0, now=NOW)
-    assert first["allow"] is True  # one slot exists (min_allowed=1) even under reserve
-
-    second = admission.check_admission("claude-sonnet-5", running_claude_max=1, now=NOW)
-    assert second["allow"] is False
-    assert "concurrency ceiling" in second["reasons"][0]
+    assert first["allow"] is False
+    assert "concurrency ceiling" in first["reasons"][0]
+    assert "allowed=0" in first["reasons"][0]
 
 
 def test_reserve_not_yet_breached_allows_more_than_one(monkeypatch):
@@ -141,7 +141,10 @@ def test_missing_resets_at_does_not_loosen_a_reserve_breached_account(monkeypatc
     test_reserve_honoured_remaining_below_reserve_refuses (session 75% used, i.e. 25%
     remaining against a 30% reserve) must not admit MORE turns merely because resets_at
     is missing. Under wq#1865's clamp this allowed 7 concurrent claude-max turns while
-    the reserve-respecting path allowed 1."""
+    the reserve-respecting path allowed 1. Since wq#2426 the reserve-respecting ceiling
+    is 0 (not min_allowed's 1), so the resets_at-less shape must land on 0 too — the
+    fail-closed min_allowed floor gets run through burn_rate.budget_ceiling, which
+    needs only `percent` (admission.py's allowed-is-None branch, wq#2617)."""
     with_resets = {
         "session": {"percent": 75, "resets_at": (NOW + dt.timedelta(hours=1)).isoformat(),
                     "severity": "normal"},
@@ -163,7 +166,7 @@ def test_missing_resets_at_does_not_loosen_a_reserve_breached_account(monkeypatc
                 allowed = running + 1
         return allowed
 
-    assert _ceiling(with_resets) == 1
+    assert _ceiling(with_resets) == 0
     assert _ceiling(without_resets) == _ceiling(with_resets)
 
 
