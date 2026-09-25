@@ -47,9 +47,34 @@ import live_code
 # to one is the tail of a NAME (`notes_on_xoxb-`, `my_cfut_settings`), and a value that
 # really is labelled by that name (`SLACK_TOKEN=xoxb-…`) is caught by kv-secret below,
 # whose label half does not read `_B` at all.
-_B = r"(?<![A-Za-z0-9_])"
+#
+# wq#2638 (second pass): the class has to make ONE exception, for the character this
+# module itself writes. `_body()` below stops a body run at the mask literal, which
+# closed the leak where a live value swallowed the masked value behind it — and opened
+# its mirror. `cfut_MASKED` + `cfut_<live>`, masked residue glued in FRONT of a live
+# token, used to mask and alarm as one long match; with the bounded body the first
+# `cfut_` matches nothing and the second is refused by this boundary, because the
+# character before it is the `D` of our own literal. Silent leak, and a REGRESSION:
+# probed against e681514^ the same text masks and alarms for cloudflare, slack and aws
+# (ops/wq2638-adjacency/probe_adjacency.py, re-runnable, and its corpus half scores
+# kb/ISSUE-LOG.md pinned at de4e158 for what the exception costs on prose nobody wrote
+# for it: hit set unchanged, and 0 of 4480 seamed lines blind against 3587 before).
+# So a position directly after the literal is
+# a boundary too. It costs nothing the class was buying: the false positive it exists
+# to stop is a prefix inside a NAME (`highs_solver`, `notes_on_xoxb-`), and an
+# identifier does not have upper-case `MASKED` in it — while a value that does sit
+# there is, by construction, a live token against this module's own output.
+#
+# The two rules below that key off a word rather than a fixed prefix (kv-secret,
+# url-auth) open on `\b` instead, and it blinds them the same way — `ghp_MASKED` glued
+# in front of `https://user:<live>@host` left the url-auth rule with no boundary and no
+# match. `_WB` is the same exception for them.
+_MASK_LITERAL = "MASKED"    # named before _B, which reads it; MASK is the export
+_AFTER_MASK = r"(?<=(?-i:" + _MASK_LITERAL + r"))"
+_B = r"(?:" + _AFTER_MASK + r"|(?<![A-Za-z0-9_]))"
+_WB = r"(?:" + _AFTER_MASK + r"|\b)"
 
-MASK = "MASKED"       # the literal every replacement ends in
+MASK = _MASK_LITERAL  # the literal every replacement ends in
 
 
 def _body(charset, quant):
@@ -176,7 +201,7 @@ PATTERNS = [
     # in the clear two lines above the github values it was quoting. Same exclusions:
     # templates/env-refs, ALL_CAPS names and placeholder words are pointers, not values.
     ("url-auth", re.compile(
-        r"\b([A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{1,64}:)"
+        _WB + r"([A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{1,64}:)"
         r"(?![${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
         r"(?!os\.environ|os\.getenv|(?:process\.)?env\.)"
         r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
@@ -214,7 +239,7 @@ PATTERNS = [
     # it can express none of this. It has already missed both earlier fixes and is the
     # tool instinct 4 tells every agent to pipe through (ISSUE-LOG row 577).
     ("kv-secret", re.compile(
-        r'\b((?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*)'
+        _WB + r'((?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*)'
         + _KV_POINTER + _KV_NOT_CALLED + _body(_KV_BODY, '{12,}'),
         re.IGNORECASE), r"\1MASKED"),
 ]

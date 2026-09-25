@@ -239,6 +239,16 @@ def test_masking_never_re_arms_on_its_own_output():
         assert again == [], f"{label}: masked output re-arms the alarm as {again}"
         assert twice == once, f"{label}: second pass rewrote {once!r} to {twice!r}"
         assert masking.scan(once)[1] == [], f"{label}: scan records its own output"
+        # wq#2638 (second pass): `_B`/`_WB` now count a position directly after the
+        # mask literal as a boundary, so that masked residue cannot blind the rule for
+        # a live value glued behind it. The shape that pays for that exception is our
+        # own output repeated with no separator — what a re-read artefact or a `grep -o`
+        # tail holds — where the second copy is exactly a value sitting after the
+        # literal. It must still be silent, or the wq#2282->#2298 rotation loop is back.
+        chained = once + once
+        out, hits = masking.mask_text(chained)
+        assert hits == [] and out == chained, (
+            f"{label}: own output twice over re-arms as {hits}")
 
 
 def test_a_real_secret_next_to_a_masked_one_still_fires():
@@ -271,23 +281,41 @@ def _adjacency_cases(prefix, body):
     """(name, text) per direction. `own` is what masking.py writes; a leak case glues
     a LIVE value to the front of it, with and without the second kept prefix — the
     first is two values of one rule concatenated, the second is what a whole-match
-    masker (bin/mask-secrets, token_engine_daemon.mask_rewrite) leaves behind."""
+    masker (bin/mask-secrets, token_engine_daemon.mask_rewrite) leaves behind.
+
+    The last two are the same seam read the other way round, which is the half wq#2638
+    fixed first and broke second: masked residue in FRONT of a live value. `_body()`
+    stops the leading match at the literal, and the boundary in front of the live half
+    then saw our own `D` and refused it — so `cfut_MASKEDcfut_<live>` masked nothing and
+    said nothing, where the same text before that fix masked and alarmed."""
     # url-auth's value ENDS at its `@host`, so each of its values carries one: without
     # it the live half is not a url-auth credential and the case would test nothing.
     end = URL_HOST if prefix == URL_USER else ""
     live = prefix + body + end
+    # url-auth's own output ends at that `@host` rather than at the literal, so the
+    # residue in front of it has to come from a rule whose output does — any of them.
+    residue = ("ghp_" if prefix == URL_USER else prefix) + masking.MASK
     return [("own output glued to a live value", live + prefix + masking.MASK + end),
-            ("bare literal glued to a live value", prefix + body + masking.MASK + end)]
+            ("bare literal glued to a live value", prefix + body + masking.MASK + end),
+            ("own output glued in front of a live value", residue + live),
+            ("bare literal glued in front of a live value", masking.MASK + live)]
 
 
 def test_a_live_value_glued_to_masked_output_still_masks_and_alarms():
-    """wq#2638, the leak half. wq#2298 dropped any match ENDING in the mask literal as
-    this module's own output. Every body class here can spell `MASKED`, so a live value
-    with an already-masked one glued straight to it — a log tail, a diff hunk, JSON with
-    no whitespace, repeated `grep -o` output — was ONE match ending in the literal, and
-    the drop took the live half with it: `cfut_<live>cfut_MASKED` returned hits `[]` and
-    the value in the clear. The alarm went silent in the exact case instinct 4 exists to
-    catch. The coverage assert is the point: a new rule must prove both directions."""
+    """wq#2638, the leak half, in BOTH orders. wq#2298 dropped any match ENDING in the
+    mask literal as this module's own output. Every body class here can spell `MASKED`,
+    so a live value with an already-masked one glued straight to it — a log tail, a diff
+    hunk, JSON with no whitespace, repeated `grep -o` output — was ONE match ending in
+    the literal, and the drop took the live half with it: `cfut_<live>cfut_MASKED`
+    returned hits `[]` and the value in the clear.
+
+    Bounding the body closed that and opened the mirror, which this test exists to keep
+    closed: with the leading match stopped at the literal, the live half behind it was
+    refused by a word boundary that read our own `D` as an identifier character, so
+    `cfut_MASKEDcfut_<live>` went silent too — and that one is a regression, the same
+    text masks and alarms at e681514^. The alarm went silent in the exact case instinct
+    4 exists to catch. The coverage assert is the point: a new rule must prove every
+    direction."""
     assert {label for label, _, _ in ADJACENT} == {
         label for label, _, _ in masking.PATTERNS}
     for label, prefix, body in ADJACENT:

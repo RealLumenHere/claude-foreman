@@ -92,8 +92,16 @@ WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # the repo name `highs_solver` is an availability bug, not just noise. Rationale
 # and the kv_secret carve-out: harness/masking.py. wq#2400 added `_` to the class for
 # the same reason the alnums are there — a prefix after `_` is an identifier tail.
-_B = r"(?<![A-Za-z0-9_])"
-MASK = "MASKED"   # masking.MASK — the literal every replacement there ends in
+# wq#2638 (second pass): a position directly after the mask literal is a boundary too,
+# or the bounded body in _body() below turns masked residue glued in FRONT of a live
+# token into a silent miss — and a miss here hands the unmasked result back through the
+# broker verb. See harness/masking.py:_B for why the exception is free.
+# `_WB` is the same exception for kv_secret, which opens on a word and not a prefix.
+_MASK_LITERAL = "MASKED"   # named before _B, which reads it; MASK is the export
+_AFTER_MASK = r"(?<=(?-i:" + _MASK_LITERAL + r"))"
+_B = r"(?:" + _AFTER_MASK + r"|(?<![A-Za-z0-9_]))"
+_WB = r"(?:" + _AFTER_MASK + r"|\b)"
+MASK = _MASK_LITERAL  # masking.MASK — the literal every replacement there ends in
 
 
 def _body(charset, quant):
@@ -149,7 +157,7 @@ MASK_PATTERNS = [
     # runs as `tokeneng`, off the harness import path, so the vocabulary is copied
     # rather than imported; test_masking.test_token_engine_mirror_agrees pins them.
     ("kv_secret", re.compile(
-        r'\b(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER +
+        _WB + r'(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER +
         _KV_NOT_CALLED + _body(_KV_BODY, '{12,}'),
         re.IGNORECASE)),
 ]
