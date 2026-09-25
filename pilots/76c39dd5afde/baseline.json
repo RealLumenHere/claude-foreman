@@ -1,0 +1,27 @@
+{
+  "attempts_scored": 364,
+  "grounding": {
+    "fail": 79,
+    "pass": 178
+  },
+  "grounding_fail_kind": {
+    "unresolved_citation": 26,
+    "other": 53
+  },
+  "grounding_first_pass_rate": 0.693,
+  "quality_gate_fail": 107,
+  "quality_gate_fail_degenerate_lt200": 107,
+  "tasks_done_unique": 198,
+  "tasks_requeued_unique": 44,
+  "tasks_rejected_unique": 22,
+  "rejected_with_unresolved_gt0": 8,
+  "task_success_rate": 0.75,
+  "failed_attempts": 186,
+  "addressable_failed_attempts": 79,
+  "addressable_share_of_attempts": 0.217,
+  "local_retrieval_injections": 251,
+  "local_retrieval_chars_median": 3865,
+  "web_search": {
+    "no_augmentation": 251
+  }
+}
