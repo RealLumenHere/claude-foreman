@@ -731,19 +731,29 @@ def test_wq1819_transcript_burned_nothing():
 
     Attempt 8 ran `nephthys-qwen14b` (attempt-8.json), a local model, and was killed on
     wall-clock after 7 turns — so the bytes reached a model on this host and no further,
-    which is not a mitigation but is worth recording next to the verdict."""
+    which is not a mitigation but is worth recording next to the verdict.
+
+    wq#2673: this used to pin `len(records) == 1`. `account()` names the FIRST tracked
+    file holding a value (mask_replay.py:380), so both the count and the exact
+    `accounted_in` path shift whenever an unrelated file enters the tracked root and
+    happens to contain another 16+-char identifier or a second copy of this one's text
+    (e.g. a later ISSUE-LOG/judgment doc quoting `read_oauth_token`). wq#2347's actual
+    verdict was never a count, it was `unaccounted(records) == []` — every kv-secret hit
+    resolves to committed, public source. That's what stays pinned; the identifier this
+    ticket is about is asserted by name and content, not by being the only thing found."""
     records = mask_replay.replay(1819)
     assert mask_replay.unaccounted(records) == []
-    assert len(records) == 1
-    kv, = records
-    assert kv["label"] == "kv-secret"
+    kv_by_hash = {r["value_sha256_12"]: r
+                  for r in records if r["label"] == "kv-secret"}
+    digest = hashlib.sha256(WQ1819_KV_IDENTIFIER).hexdigest()[:12]
+    assert digest in kv_by_hash
+    kv = kv_by_hash[digest]
     assert kv["value_len"] == len(WQ1819_KV_IDENTIFIER) == 16
-    assert kv["value_sha256_12"] == hashlib.sha256(
-        WQ1819_KV_IDENTIFIER).hexdigest()[:12]
     # a call, not a value: the recorded line keeps the `()` the rule failed to look at
     assert kv["line"].endswith("()")
-    # committed source, hence public to every worker, hence not a secret
-    assert kv["accounted_in"].startswith("despag/backends/claude_max.py:")
+    # committed source, hence public to every worker, hence not a secret — wherever a
+    # tracked file happens to hold it; the path itself is not pinned (see docstring)
+    assert kv["accounted_in"]
 
 
 @pytest.mark.skipif(not os.path.isdir(WQ1819_RUN),
