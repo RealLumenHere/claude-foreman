@@ -1395,9 +1395,18 @@ def main():
     # parent from before the grant) — Linux fixes a process's supplementary
     # groups at fork/exec time and never re-reads /etc/group for it, so it
     # keeps EACCES on connect() until that process (or its ancestor) restarts.
-    # A named-user ACL entry is matched against SO_PEERCRED's uid instead,
-    # which every lumen process has always had, so it grants access
-    # immediately on every daemon (re)start regardless of group-cache age.
+    # A named-user ACL entry is matched by the kernel's ordinary connect()-time
+    # permission check against the caller's fsuid — not via SO_PEERCRED, which
+    # this daemon reads only after accept() to identify an already-admitted
+    # peer. fsuid is not cached the way supplementary groups are, so the u:
+    # entry grants access immediately on every daemon (re)start regardless of
+    # how old the client process's group cache is.
+    #
+    # DEPLOY: this file runs from /usr/local/lib/token-engine (service unit
+    # ExecStart), NOT from the repo — editing it here changes nothing until
+    # install.sh is re-run as root AND token-engine is restarted. Landing
+    # without that step is what made wq#2561 closable-while-false (wq#2562,
+    # ISSUE-LOG rows 595/695/697 are all this same drift on this same file).
     try:
         subprocess.run(["setfacl", "-m", f"u:{CLIENT_USER}:rw", SOCK_PATH], check=True)
     except (OSError, subprocess.CalledProcessError) as e:
