@@ -1699,3 +1699,47 @@ def test_wq2687_corpus_burned_nothing():
     loose = mask_replay.unaccounted(
         mask_replay.replay(2687, tracked=tracked, items=items, rotated={}))
     assert sorted(r["value_sha256_12"] for r in loose) == sorted(v[0] for v in values)
+
+
+WQ2702_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2702")
+WQ2702_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2702_values.py")
+
+
+def _wq2702_values():
+    with open(WQ2702_FIXTURES) as fh:
+        text = fh.read()
+    scope = {}
+    exec(compile(text, WQ2702_FIXTURES, "exec"), scope)
+    return text, scope["WQ2702_VALUES"]
+
+
+def test_wq2702_pins_are_their_hashes_and_read_silently():
+    text, values = _wq2702_values()
+    assert len(values) == 1
+    for sha, _label, value in values:
+        assert masking.value_sha12(value) == sha
+    assert masking.mask_text(text)[1] == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2702_RUN),
+                    reason="wq#2702's run dir is not on this host")
+def test_wq2702_corpus_burned_nothing():
+    """wq#2706's verdict, pinned: 22 values, none a credential, nothing rotated.
+
+    The one the replay called BURNED? is a probe wq#2702 typed into its own Write; see
+    the fixture module's header. Removing it must bring exactly that one back.
+    """
+    _, values = _wq2702_values()
+    items = mask_replay.corpus(2702)
+    tracked = _tree_only()
+    for common in mask_replay.foreign_repos(items):
+        tracked.update(mask_replay.committed_text(common))
+    records = mask_replay.replay(2702, tracked=tracked, items=items, rotated={})
+    assert len(records) == 22
+    assert mask_replay.unaccounted(records) == []
+
+    rel = os.path.relpath(WQ2702_FIXTURES, mask_replay.REPO_ROOT)
+    tracked.pop(rel)
+    loose = mask_replay.unaccounted(
+        mask_replay.replay(2702, tracked=tracked, items=items, rotated={}))
+    assert sorted(r["value_sha256_12"] for r in loose) == sorted(v[0] for v in values)
