@@ -21,6 +21,8 @@ import agents_spec
 def _isolated_dirty_state(tmp_path, monkeypatch):
     monkeypatch.setattr(ptg, "DIRTY_STATE_PATH", str(tmp_path / "dirty.json"))
     monkeypatch.setattr(ptg, "STASH_STATE_PATH", str(tmp_path / "stash.json"))
+    monkeypatch.setattr(ptg, "UNTRACKED_STATE_PATH", str(tmp_path / "untracked.json"))
+    monkeypatch.setattr(ptg, "BEHIND_STATE_PATH", str(tmp_path / "behind.json"))
     monkeypatch.setattr(ptg, "AQ_BIN", str(tmp_path / "no-aq"))
 
 
@@ -192,6 +194,14 @@ def test_primary_trees_default_includes_minerva(monkeypatch):
     assert "/home/lumen/minerva" in ptg.primary_trees()
 
 
+def test_primary_trees_default_includes_fleet_inventory(monkeypatch):
+    # wq#2618: repo_sweep.EXTRA_REPOS (wq#1453-1456) already covered the fleet
+    # inventory SoT repo for divergence sweeps; this guard's registry had not,
+    # so a dirty/behind fleet-inventory tree paged nowhere.
+    monkeypatch.delenv("FOREMAN_PRIMARY_TREES", raising=False)
+    assert "/home/lumen/fleet/inventory" in ptg.primary_trees()
+
+
 def test_dirty_under_24h_does_not_page(tmp_path, monkeypatch):
     repo, _ = make_primary(tmp_path)
     (repo / "f.txt").write_text("edit\n")
@@ -342,3 +352,174 @@ def test_cli_stale_stash_reports_without_failing_run(tmp_path, monkeypatch, caps
     assert ptg.main(["check", "--repo", str(repo)]) == 0
     assert len(rows) == 1
     assert "STASH" in capsys.readouterr().out
+
+
+# ---- wq#2618: untracked deploy artifacts >24h page too (git status --porcelain's
+# other half — check_dirty_age deliberately skips untracked, see its docstring) ----
+
+def test_untracked_dropping_under_24h_does_not_page(tmp_path, monkeypatch):
+    repo, _ = make_primary(tmp_path)
+    (repo / "dropped.py").write_text("new file\n")
+    alerts = []
+    monkeypatch.setattr(ptg, "alert", lambda t, m: alerts.append((t, m)))
+    state = {}
+    assert ptg.check_untracked_age(repos=[str(repo)], state=state) == []
+    assert alerts == [] and str(repo) in state
+
+
+def test_untracked_dropping_over_24h_pages_once_then_repeats_daily(tmp_path, monkeypatch):
+    repo, _ = make_primary(tmp_path)
+    (repo / "drift_plan.py").write_text("deploy artifact\n")
+    alerts = []
+    monkeypatch.setattr(ptg, "alert", lambda t, m: alerts.append((t, m)))
+    state = {}
+    t0 = os.path.getmtime(repo / "drift_plan.py")
+
+    stale = ptg.check_untracked_age(repos=[str(repo)], state=state, now=t0 + 25 * 3600)
+    assert len(stale) == 1 and stale[0]["paged"] and stale[0]["files"] == 1
+    assert len(alerts) == 1 and "wq#2618" in alerts[0][0]
+    assert "drift_plan.py" in alerts[0][1]
+
+    stale = ptg.check_untracked_age(repos=[str(repo)], state=state, now=t0 + 26 * 3600)
+    assert len(stale) == 1 and not stale[0]["paged"] and len(alerts) == 1
+
+    ptg.check_untracked_age(repos=[str(repo)], state=state, now=t0 + 50 * 3600)
+    assert len(alerts) == 2
+
+
+def test_gitignored_untracked_dropping_never_pages(tmp_path, monkeypatch):
+    # The prescribed fix (add it to .gitignore, minerva 4854d86-style) must clear
+    # the condition, not just rename it.
+    repo, git = make_primary(tmp_path)
+    (repo / ".gitignore").write_text("drift_plan.py\n")
+    git("add", ".gitignore")
+    git("commit", "-qm", "ignore drift_plan.py")
+    (repo / "drift_plan.py").write_text("deploy artifact\n")
+    monkeypatch.setattr(ptg, "alert", lambda t, m: pytest.fail("paged"))
+    assert ptg.check_untracked_age(repos=[str(repo)], state={},
+                                   now=time.time() + 5 * 86400) == []
+
+
+def test_committing_the_dropping_clears_the_episode(tmp_path, monkeypatch):
+    repo, git = make_primary(tmp_path)
+    (repo / "drift_plan.py").write_text("deploy artifact\n")
+    monkeypatch.setattr(ptg, "alert", lambda t, m: None)
+    state = {str(repo): {"since": 0, "paged": 0}}
+    git("add", "drift_plan.py")
+    git("commit", "-qm", "land it")
+    assert ptg.check_untracked_age(repos=[str(repo)], state=state,
+                                   now=10 * 86400) == []
+    assert state == {}
+
+
+# ---- wq#2618: a primary sitting behind origin/<default> >24h pages — the exact
+# wq#2600 shape (landed PRs never fast-forwarded into the tree the fleet runs) ----
+
+def make_primary_with_origin(tmp_path, name="primary"):
+    """A primary clone plus a bare 'origin' remote, so behind_count() has a real
+    refs/remotes/origin/<default> to compare against."""
+    bare = tmp_path / f"{name}-origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    repo, git = make_primary(tmp_path, name=name)
+    git("remote", "add", "origin", str(bare))
+    git("push", "-q", "origin", "main")
+    git("branch", "-q", "--set-upstream-to=origin/main", "main")
+    # The bare repo's own HEAD symref defaults to init.defaultBranch (often
+    # "master"), which push never touches — leave it pointing at a ref that was
+    # never pushed and a later `git clone` of the bare repo fails to check
+    # anything out ("remote HEAD refers to nonexistent ref").
+    subprocess.run(["git", "-C", str(bare), "symbolic-ref", "HEAD", "refs/heads/main"],
+                   check=True)
+    return repo, git, bare
+
+
+def advance_origin(bare, repo, git, tmp_path):
+    """Push one more commit from a throwaway clone so origin/main moves ahead of
+    `repo`'s HEAD without touching repo's own working tree."""
+    clone_dir = tmp_path / "origin-advancer"
+    subprocess.run(["git", "clone", "-q", str(bare), str(clone_dir)], check=True)
+    subprocess.run(["git", "-C", str(clone_dir), "config", "user.email", "test@test"],
+                   check=True)
+    subprocess.run(["git", "-C", str(clone_dir), "config", "user.name", "test"],
+                   check=True)
+    (clone_dir / "g.txt").write_text("v2\n")
+    subprocess.run(["git", "-C", str(clone_dir), "add", "g.txt"], check=True)
+    subprocess.run(["git", "-C", str(clone_dir), "commit", "-qm", "advance"], check=True)
+    subprocess.run(["git", "-C", str(clone_dir), "push", "-q", "origin", "main"],
+                   check=True)
+    subprocess.run(["git", "-C", str(repo), "fetch", "-q", "origin"], check=True)
+
+
+def test_behind_count_none_when_no_origin_ref(tmp_path):
+    repo, _ = make_primary(tmp_path)
+    assert ptg.behind_count(str(repo), "main") is None
+
+
+def test_behind_count_zero_when_in_sync(tmp_path):
+    repo, git, bare = make_primary_with_origin(tmp_path)
+    assert ptg.behind_count(str(repo), "main") == 0
+
+
+def test_behind_under_24h_does_not_page(tmp_path, monkeypatch):
+    repo, git, bare = make_primary_with_origin(tmp_path)
+    advance_origin(bare, repo, git, tmp_path)
+    alerts = []
+    monkeypatch.setattr(ptg, "alert", lambda t, m: alerts.append((t, m)))
+    state = {}
+    assert ptg.check_behind_age(repos=[str(repo)], state=state) == []
+    assert alerts == [] and str(repo) in state
+
+
+def test_behind_over_24h_pages_once_then_repeats_daily(tmp_path, monkeypatch):
+    repo, git, bare = make_primary_with_origin(tmp_path)
+    advance_origin(bare, repo, git, tmp_path)
+    alerts = []
+    monkeypatch.setattr(ptg, "alert", lambda t, m: alerts.append((t, m)))
+    state = {}
+    now = time.time()
+
+    stale = ptg.check_behind_age(repos=[str(repo)], state=state, now=now + 25 * 3600)
+    assert len(stale) == 1 and stale[0]["paged"] and stale[0]["behind"] == 1
+    assert len(alerts) == 1 and "wq#2618" in alerts[0][0]
+    assert "ffprimary" in alerts[0][1]
+
+    stale = ptg.check_behind_age(repos=[str(repo)], state=state, now=now + 26 * 3600)
+    assert len(stale) == 1 and not stale[0]["paged"] and len(alerts) == 1
+
+    ptg.check_behind_age(repos=[str(repo)], state=state, now=now + 50 * 3600)
+    assert len(alerts) == 2
+
+
+def test_fast_forwarding_clears_the_behind_episode(tmp_path, monkeypatch):
+    repo, git, bare = make_primary_with_origin(tmp_path)
+    advance_origin(bare, repo, git, tmp_path)
+    monkeypatch.setattr(ptg, "alert", lambda t, m: None)
+    state = {str(repo): {"since": 0, "paged": 0}}
+    git("merge", "-q", "--ff-only", "origin/main")
+    assert ptg.check_behind_age(repos=[str(repo)], state=state, now=10 * 86400) == []
+    assert state == {}
+
+
+def test_cli_check_pages_stale_untracked_and_behind(tmp_path, monkeypatch, capsys):
+    repo, git, bare = make_primary_with_origin(tmp_path)
+    advance_origin(bare, repo, git, tmp_path)
+    (repo / "drift_plan.py").write_text("deploy artifact\n")
+    old = time.time() - 2 * 86400
+    os.utime(repo / "drift_plan.py", (old, old))
+    monkeypatch.setattr(ptg, "STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setattr(ptg, "UNTRACKED_STATE_PATH",
+                        str(tmp_path / "untracked-preseeded.json"))
+    monkeypatch.setattr(ptg, "BEHIND_STATE_PATH",
+                        str(tmp_path / "behind-preseeded.json"))
+    ptg._save_state({str(repo): {"since": old, "paged": 0}},
+                    str(tmp_path / "untracked-preseeded.json"))
+    ptg._save_state({str(repo): {"since": old, "paged": 0}},
+                    str(tmp_path / "behind-preseeded.json"))
+    alerts = []
+    monkeypatch.setattr(ptg, "alert", lambda t, m: alerts.append(t))
+
+    assert ptg.main(["check", "--repo", str(repo)]) == 1
+    out = capsys.readouterr().out
+    assert "UNTRACKED" in out and "BEHIND" in out
+    assert "PRIMARY tree has untracked files >24h (wq#2618)" in alerts
+    assert "PRIMARY tree behind origin >24h (wq#2618)" in alerts

@@ -23,9 +23,30 @@ in `check_dirty_age`.
 wq#2504 adds a report-only fifth: a stash older than 24h that holds untracked
 files raises one aq row (`check_stale_stashes`). It never drops a stash.
 
-Exit codes (CLI): 0 = all primaries on default branch (or restored this run) and
-none dirty past 24h, 1 = at least one still drifted or stale-dirty, 2 = internal
-error.
+wq#2618 adds two more, closing the exact gap wq#2600 found: /home/lumen/minerva
+sat 2 behind / 1 unpushed, with three tickets' worth of uncommitted edits, for
+5+ days, because nothing here watched either shape.
+
+  - `check_dirty_age` (wq#1540) only ever looked at MODIFIED TRACKED files
+    (`--untracked-files=no`, deliberate — wq#634's PXPIPE_CANARY.md class of
+    untracked droppings never blocked a branch restore, and
+    test_clean_tree_and_untracked_files_are_not_dirty pins that for the restore
+    path). But an ops install.sh dropping a NEW file straight into a primary
+    tree (minerva's drift_plan.py+drift_plans/ before 4854d86 gitignored them)
+    is untracked too, and nothing paged on THAT going stale. `check_untracked_age`
+    is the untracked-file sixth, same first-seen/state/edge-clear shape as
+    check_dirty_age, so `git status --porcelain` non-empty for >24h now pages
+    either way it's non-empty.
+  - `check_behind_age` is the seventh: a primary whose HEAD sits behind
+    origin/<default> for >24h — a landed PR that never reached the tree the
+    fleet actually runs (wq#2573/#2596's reflector fixes, dead 5+ days).
+    repo_sweep+aq_escalate already ticket this for its own (smaller, count-
+    gated, ~12h) repo set; this is the same signal on primary_trees()' full
+    registry with the ticket's literal 24h wall-clock threshold.
+
+Exit codes (CLI): 0 = all primaries on default branch (or restored this run),
+none dirty/untracked past 24h, and none behind origin past 24h; 1 = at least
+one still drifted or stale; 2 = internal error.
 """
 import json
 import os
@@ -43,6 +64,12 @@ DIRTY_PAGE_AFTER_S = 24 * 3600
 STASH_STATE_PATH = os.environ.get("PRIMARY_TREE_STASH_STATE",
                                   "/tmp/.primary-tree-stash.state")
 STASH_ALERT_AFTER_S = 24 * 3600
+UNTRACKED_STATE_PATH = os.environ.get("PRIMARY_TREE_UNTRACKED_STATE",
+                                      "/tmp/.primary-tree-untracked.state")
+UNTRACKED_PAGE_AFTER_S = 24 * 3600
+BEHIND_STATE_PATH = os.environ.get("PRIMARY_TREE_BEHIND_STATE",
+                                   "/tmp/.primary-tree-behind.state")
+BEHIND_PAGE_AFTER_S = 24 * 3600
 AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "/home/lumen/bin/aq")
 AQ_SOURCE = "primary-tree-guard"
 
@@ -87,6 +114,11 @@ STATIC_PRIMARY_TREES = [
     # as work-queue/kb/nest above — only this static list write-freezes them.
     "/home/lumen/agent",
     "/home/lumen/logs",
+    # wq#2618: repo_sweep.EXTRA_REPOS (wq#1453-1456) already covers the fleet
+    # inventory SoT repo for branch-divergence sweeps; this guard's own registry
+    # had never picked it up, so a dirty/behind fleet-inventory tree paged
+    # nowhere. No router.LANE_REPO entry, same gap class as the rest of this list.
+    "/home/lumen/fleet/inventory",
 ]
 
 
@@ -260,6 +292,139 @@ def check_dirty_age(repos=None, now=None, max_age=DIRTY_PAGE_AFTER_S, state=None
     return stale
 
 
+def untracked_files(repo):
+    """Untracked paths only (`git ls-files --others --exclude-standard`), the half
+    of `git status --porcelain` check_dirty_age deliberately excludes. This is the
+    wq#2600 shape: an ops install.sh drops a new file straight into a primary tree
+    (minerva's drift_plan.py+drift_plans/ before they were gitignored in 4854d86)
+    and it never gets committed or ignored, so it sits there unreviewed."""
+    out = _git(repo, "ls-files", "--others", "--exclude-standard").stdout
+    return [line for line in out.splitlines() if line]
+
+
+def check_untracked_age(repos=None, now=None, max_age=UNTRACKED_PAGE_AFTER_S,
+                        state=None, do_alert=True):
+    """wq#2618: page for every primary with untracked (non-ignored) paths that
+    have sat for longer than max_age. Same first-seen/state/edge-clear shape as
+    check_dirty_age — see untracked_files() for why this is a separate check
+    rather than dropping check_dirty_age's --untracked-files=no (that flag is
+    pinned by test_clean_tree_and_untracked_files_are_not_dirty for the
+    branch-restore-safety question, a different concern from this one).
+    Returns the stale results: {repo, files, age_s, paged}."""
+    now = time.time() if now is None else now
+    state = {} if state is None else state
+    stale, seen = [], set()
+    for repo in (repos if repos is not None else primary_trees()):
+        if check_tree(repo)["error"]:
+            continue
+        try:
+            files = untracked_files(repo)
+        except Exception:
+            continue
+        if not files:
+            continue
+        seen.add(repo)
+        entry = state.get(repo) or {}
+        since = entry.get("since")
+        if since is None:
+            mtimes = [os.path.getmtime(os.path.join(repo, f)) for f in files
+                      if os.path.exists(os.path.join(repo, f))]
+            since = min(mtimes) if mtimes else now
+        age = now - since
+        paged = entry.get("paged", 0)
+        due = age >= max_age and now - paged >= max_age
+        if due:
+            paged = now
+            if do_alert:
+                alert("PRIMARY tree has untracked files >24h (wq#2618)",
+                      f"{repo} has had {len(files)} untracked file(s) for "
+                      f"{age / 3600:.0f}h, e.g. {', '.join(files[:3])}. Likely an "
+                      f"ops install.sh deploy artifact that was never committed "
+                      f"or gitignored — commit it (lumen-pr) or add it to "
+                      f"{repo}/.gitignore (minerva 4854d86 is the template).")
+        state[repo] = {"since": since, "paged": paged}
+        if age >= max_age:
+            stale.append({"repo": repo, "files": len(files), "age_s": age,
+                          "paged": due})
+    for repo in list(state):
+        if repo not in seen:
+            state.pop(repo)
+    return stale
+
+
+def behind_count(repo, default):
+    """Commits origin/<default> has that HEAD lacks, or None if that's unknown
+    (no origin/<default> ref locally — never fetched, or no such branch upstream).
+    Unknown is never treated as zero. No fetch here: same convention as
+    repo_sweep/repo_reconcile, which read the last-known remote-tracking ref
+    rather than fetching from inside a tight guard loop."""
+    p = _git(repo, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{default}")
+    if p.returncode != 0:
+        return None
+    p = _git(repo, "rev-list", "--count", f"HEAD..origin/{default}")
+    if p.returncode != 0:
+        return None
+    try:
+        return int(p.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _head_commit_time(repo):
+    """Unix timestamp of HEAD's own commit, or None. Local HEAD stopped advancing
+    at this instant, so it is a real lower bound on "how long behind" — the same
+    backdating role dirty_files()'s mtimes play for check_dirty_age: a wiped /tmp
+    state must not grant already-old drift a fresh 24h window."""
+    p = _git(repo, "log", "-1", "--format=%ct", "HEAD")
+    try:
+        return int(p.stdout.strip())
+    except ValueError:
+        return None
+
+
+def check_behind_age(repos=None, now=None, max_age=BEHIND_PAGE_AFTER_S, state=None,
+                     do_alert=True):
+    """wq#2618: page for every primary whose HEAD has sat behind origin/<default>
+    for longer than max_age — the wq#2600 shape where a landed PR (wq#2573/#2596's
+    reflector fixes) never reached the tree the fleet actually runs because
+    nothing fast-forwarded it. Same first-seen/state/edge-clear shape as
+    check_dirty_age. Returns the stale results: {repo, behind, age_s, paged}."""
+    now = time.time() if now is None else now
+    state = {} if state is None else state
+    stale, seen = [], set()
+    for repo in (repos if repos is not None else primary_trees()):
+        t = check_tree(repo)
+        if t["error"] or not t["default"]:
+            continue
+        n = behind_count(repo, t["default"])
+        if not n:
+            continue
+        seen.add(repo)
+        entry = state.get(repo) or {}
+        since = entry.get("since")
+        if since is None:
+            since = _head_commit_time(repo)
+            if since is None:
+                since = now
+        age = now - since
+        paged = entry.get("paged", 0)
+        due = age >= max_age and now - paged >= max_age
+        if due:
+            paged = now
+            if do_alert:
+                alert("PRIMARY tree behind origin >24h (wq#2618)",
+                      f"{repo} is {n} commit(s) behind origin/{t['default']} for "
+                      f"{age / 3600:.0f}h — landed PRs are not reaching the tree "
+                      f"the fleet runs. lumen-pr ffprimary {repo}")
+        state[repo] = {"since": since, "paged": paged}
+        if age >= max_age:
+            stale.append({"repo": repo, "behind": n, "age_s": age, "paged": due})
+    for repo in list(state):
+        if repo not in seen:
+            state.pop(repo)
+    return stale
+
+
 def aq_alert(key, title, body):
     """Fail-open aq row; aq dedups on (source, key)."""
     try:
@@ -377,6 +542,17 @@ def main(argv=None):
             print(f"STALE    {s['repo']}: {s['files']} modified tracked file(s), "
                   f"dirty {s['age_s'] / 3600:.0f}h")
             rc = 1
+        for s in check_untracked_age(repos=a.repo,
+                                     state=_load_state(UNTRACKED_STATE_PATH),
+                                     do_alert=False):
+            print(f"UNTRACKED {s['repo']}: {s['files']} untracked file(s), "
+                  f"{s['age_s'] / 3600:.0f}h old")
+            rc = 1
+        for s in check_behind_age(repos=a.repo, state=_load_state(BEHIND_STATE_PATH),
+                                  do_alert=False):
+            print(f"BEHIND   {s['repo']}: {s['behind']} commit(s) behind origin, "
+                  f"{s['age_s'] / 3600:.0f}h")
+            rc = 1
         for s in check_stale_stashes(repos=a.repo, do_alert=False):
             print(f"STASH    {s['repo']}: {s['ref']} holds {s['files']} untracked "
                   f"file(s), {s['age_s'] / 3600:.0f}h old")
@@ -420,6 +596,20 @@ def main(argv=None):
         print(f"STALE    {s['repo']}: {s['files']} modified tracked file(s), "
               f"dirty {s['age_s'] / 3600:.0f}h")
     _save_state(dirty_state, DIRTY_STATE_PATH)
+
+    untracked_state = _load_state(UNTRACKED_STATE_PATH)
+    for s in check_untracked_age(repos=a.repo, state=untracked_state):
+        still_bad += 1
+        print(f"UNTRACKED {s['repo']}: {s['files']} untracked file(s), "
+              f"{s['age_s'] / 3600:.0f}h old")
+    _save_state(untracked_state, UNTRACKED_STATE_PATH)
+
+    behind_state = _load_state(BEHIND_STATE_PATH)
+    for s in check_behind_age(repos=a.repo, state=behind_state):
+        still_bad += 1
+        print(f"BEHIND   {s['repo']}: {s['behind']} commit(s) behind origin, "
+              f"{s['age_s'] / 3600:.0f}h")
+    _save_state(behind_state, BEHIND_STATE_PATH)
 
     # A stale stash does not fail the run: it can be a deliberate backup (wq#2477's
     # stash@{0}), and the fix is a human's drop, so one aq row per stash is the signal.
