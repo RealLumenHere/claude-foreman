@@ -249,6 +249,83 @@ def test_a_real_secret_next_to_a_masked_one_still_fires():
     assert masked == "prior: ghp_MASKED, current: ghp_MASKED"
 
 
+# wq#2638: (label, kept prefix, live body) — the two halves of a match, so a test can
+# glue this masker's own output onto a live value and back. The prefixes are the ones
+# masking.PATTERNS keeps; the bodies are the SECRETS fixtures above with that prefix
+# taken off, so nothing new that is credential-shaped enters this file.
+ADJACENT = [
+    ("github", "ghp_", GHP[len("ghp_"):]),
+    ("github", "github_pat_", GHPAT[len("github_pat_"):]),
+    ("cloudflare", "cfut_", CFUT[len("cfut_"):]),
+    ("sk-key", "sk-ant-", SK[len("sk-ant-"):]),
+    ("slack", "xoxb-", XOXB[len("xoxb-"):]),
+    ("aws", "AKIA", AKIA[len("AKIA"):]),
+    ("kv-secret", 'GITEA_TOKEN="', PW),
+    # url-auth's value is anchored on the `@host` that follows it, so its adjacency
+    # cases put the masked half INSIDE the value instead of behind it.
+    ("url-auth", URL_USER, PW),
+]
+
+
+def _adjacency_cases(prefix, body):
+    """(name, text) per direction. `own` is what masking.py writes; a leak case glues
+    a LIVE value to the front of it, with and without the second kept prefix — the
+    first is two values of one rule concatenated, the second is what a whole-match
+    masker (bin/mask-secrets, token_engine_daemon.mask_rewrite) leaves behind."""
+    # url-auth's value ENDS at its `@host`, so each of its values carries one: without
+    # it the live half is not a url-auth credential and the case would test nothing.
+    end = URL_HOST if prefix == URL_USER else ""
+    live = prefix + body + end
+    return [("own output glued to a live value", live + prefix + masking.MASK + end),
+            ("bare literal glued to a live value", prefix + body + masking.MASK + end)]
+
+
+def test_a_live_value_glued_to_masked_output_still_masks_and_alarms():
+    """wq#2638, the leak half. wq#2298 dropped any match ENDING in the mask literal as
+    this module's own output. Every body class here can spell `MASKED`, so a live value
+    with an already-masked one glued straight to it — a log tail, a diff hunk, JSON with
+    no whitespace, repeated `grep -o` output — was ONE match ending in the literal, and
+    the drop took the live half with it: `cfut_<live>cfut_MASKED` returned hits `[]` and
+    the value in the clear. The alarm went silent in the exact case instinct 4 exists to
+    catch. The coverage assert is the point: a new rule must prove both directions."""
+    assert {label for label, _, _ in ADJACENT} == {
+        label for label, _, _ in masking.PATTERNS}
+    for label, prefix, body in ADJACENT:
+        for case, text in _adjacency_cases(prefix, body):
+            masked, hits = masking.mask_text(text)
+            assert body not in masked, f"{label}: {case} LEAKS the live value"
+            assert hits == [label], f"{label}: {case} alarms {hits}, wanted [{label}]"
+
+
+def test_masked_output_with_prose_behind_it_does_not_re_arm():
+    """wq#2638, the noisy half. `cfut_MASKED.` re-fired cloudflare: the body charset
+    admits ordinary trailing punctuation, so the match ran one character PAST the
+    literal and no longer ended in it — the wq#2298 loop, back for any rule whose
+    charset was widened after that fix. A sentence quoting a masked value is what every
+    rotation ticket and every verify-pass note is made of."""
+    for label, prefix, body in ADJACENT:
+        del body
+        tail = URL_HOST if prefix == URL_USER else ""
+        text = "the value read back as " + prefix + masking.MASK + tail + "."
+        masked, hits = masking.mask_text(text)
+        assert hits == [], f"{label}: prose behind the literal re-arms as {hits}"
+        assert masked == text, f"{label}: rewrote {text!r} to {masked!r}"
+
+
+def test_a_rules_output_inside_another_rules_value_is_still_ours():
+    """The rules compose: url-auth reads a userinfo line the github rule has already
+    masked, so its whole value is another rule's kept prefix plus the literal. That is
+    this module's own output two rules deep and must stay silent — while the same shape
+    with a live value in FRONT of the inner prefix is a leak and must alarm."""
+    composed = f"remote {URL_USER}ghp_{masking.MASK}{URL_HOST}"
+    masked, hits = masking.mask_text(composed)
+    assert hits == [] and masked == composed
+
+    live = f"remote {URL_USER}{PW}ghp_{masking.MASK}{URL_HOST}"
+    masked, hits = masking.mask_text(live)
+    assert hits == ["url-auth"] and PW not in masked
+
+
 def test_token_engine_mirror_agrees():
     """The daemon keeps its own copy of the house set (it runs as `tokeneng`, off
     this import path). Drift between them is silent, so pin them to each other:
@@ -275,6 +352,16 @@ def test_token_engine_mirror_agrees():
     for label, text in SECRETS:
         once = masking.mask_text(text)[0]
         assert ted.mask_hits(once) == [], f"{label}: daemon trips on masked output"
+    # wq#2638: and both adjacency directions, or the tripwire goes blind on a live
+    # token exactly when the text around it carries masked residue — which an outbound
+    # PR body or a quoted log tail routinely does. url-auth has no rule in this copy.
+    for label, prefix, body in ADJACENT:
+        if prefix == URL_USER:
+            continue
+        for case, text in _adjacency_cases(prefix, body):
+            assert ted.mask_hits(text), f"{label}: daemon blind to {case}"
+        assert ted.mask_hits(prefix + masking.MASK + ".") == [], (
+            f"{label}: daemon trips on prose behind the literal")
 
 
 def test_clean_text_untouched():

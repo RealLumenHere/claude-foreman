@@ -94,6 +94,20 @@ WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # the same reason the alnums are there — a prefix after `_` is an identifier tail.
 _B = r"(?<![A-Za-z0-9_])"
 MASK = "MASKED"   # masking.MASK — the literal every replacement there ends in
+
+
+def _body(charset, quant):
+    """masking._body (wq#2638): a body run that cannot cross the mask literal.
+
+    Detect-only here, but the bug is worse in this copy than in masking.py's: a body
+    class that swallows an already-masked value behind a live one made the whole thing
+    one match ENDING in the literal, and the `endswith` screen in mask_hits() below
+    then read it as this fleet's own output. The tripwire went silent on a live token
+    (cloudflare, sk-key, github_pat_ and slack all reproduced) exactly when the text it
+    was screening also carried masked residue — which outbound PR bodies and quoted log
+    tails routinely do. Case-sensitive literal for the reason masking._body gives.
+    """
+    return r"(?:(?!(?-i:" + MASK + r"))" + charset + r")" + quant
 # wq#2297 kv_secret label vocabulary — the copy of harness/masking.py:_KV_* that the
 # daemon needs because it runs off that import path. See there for the reasoning.
 _KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd)"
@@ -112,16 +126,22 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
 _KV_SEGMENTED = r"[A-Za-z_][A-Za-z0-9_.]*[_.][A-Za-z0-9_.]*"
 _KV_HUMPED = r"(?-i:[A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*)"
 _KV_NOT_CALLED = r"(?!(?:" + _KV_SEGMENTED + r"|" + _KV_HUMPED + r")\()"
+_KV_BODY = r"[A-Za-z0-9._-]"
 MASK_PATTERNS = [
-    ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{30,}")),
-    ("github_token", re.compile(_B + r"(?:github_pat_)[A-Za-z0-9_]{20,}")),
-    ("cloudflare_token", re.compile(_B + r"cfut_?[A-Za-z0-9_.-]{6,}")),
+    ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)"
+                                + _body(r"[A-Za-z0-9]", "{30,}"))),
+    ("github_token", re.compile(_B + r"(?:github_pat_)"
+                                + _body(r"[A-Za-z0-9_]", "{20,}"))),
+    ("cloudflare_token", re.compile(_B + r"cfut_?"
+                                    + _body(r"[A-Za-z0-9_.-]", "{6,}"))),
     # wq#2300: same prefix shape as masking.py, where a greedy `[a-zA-Z-]*` kept
     # part of the body in the replacement. Detect-only here, so this copy leaked
     # nothing — it moves to keep the two readable as one rule.
-    ("sk_key", re.compile(_B + r"sk-(?:[a-zA-Z]+-)*[A-Za-z0-9_-]{16,}")),
-    ("slack_token", re.compile(_B + r"xox[bpasr]-[A-Za-z0-9-]{8,}")),
-    ("aws_key_id", re.compile(_B + r"AKIA[0-9A-Z]{16}")),
+    ("sk_key", re.compile(_B + r"sk-(?:[a-zA-Z]+-)*"
+                          + _body(r"[A-Za-z0-9_-]", "{16,}"))),
+    ("slack_token", re.compile(_B + r"xox[bpasr]-"
+                               + _body(r"[A-Za-z0-9-]", "{8,}"))),
+    ("aws_key_id", re.compile(_B + r"AKIA" + _body(r"[0-9A-Z]", "{16}"))),
     # wq#2288/wq#2297: keep in lockstep with harness/masking.py — a called identifier
     # (`key = apply_key_allowlist(reg)`) is not a credential, and neither is a noun
     # buried in a longer word (`monkey:`) or a bare `key=`/`PAT =`. Here a false hit
@@ -130,7 +150,7 @@ MASK_PATTERNS = [
     # rather than imported; test_masking.test_token_engine_mirror_agrees pins them.
     ("kv_secret", re.compile(
         r'\b(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER +
-        _KV_NOT_CALLED + r'[A-Za-z0-9._-]{12,}',
+        _KV_NOT_CALLED + _body(_KV_BODY, '{12,}'),
         re.IGNORECASE)),
 ]
 
@@ -152,15 +172,19 @@ def mask_rewrite(text):
 
 
 def mask_hits(text):
-    # wq#2298: a match that ends at the mask literal is masking.py's own output read
-    # back (`cfut_MASKED`, `PAT: github_pat_MASKED`), not a credential. Here that
-    # difference is not just a false page: a hit fails the broker verb and drops the
-    # result, so a masked artefact quoted in a PR body would break every PR verb.
+    # wq#2298 kept masking.py's own output (`cfut_MASKED`, `PAT: github_pat_MASKED`)
+    # from failing the verb here — a hit does not just page, it fails the broker verb
+    # and drops the result, so a masked artefact quoted in a PR body would break every
+    # PR verb. It did that by ignoring any match ENDING in the literal, which wq#2638
+    # showed also ignores a live token with masked text glued behind it. The screen is
+    # gone because _body() made it structural: a bounded body cannot reach the literal,
+    # so masked residue no longer matches at ALL, and everything that still matches is
+    # a hit. test_masking.test_token_engine_mirror_agrees pins both halves.
     names = []
     for name, pat in MASK_PATTERNS:
         if name in names:
             continue
-        if any(not m.group(0).endswith(MASK) for m in pat.finditer(text)):
+        if pat.search(text):
             names.append(name)
     return names
 

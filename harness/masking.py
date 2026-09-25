@@ -49,6 +49,44 @@ import live_code
 # whose label half does not read `_B` at all.
 _B = r"(?<![A-Za-z0-9_])"
 
+MASK = "MASKED"       # the literal every replacement ends in
+
+
+def _body(charset, quant):
+    """`charset` + `quant`, except the run may not cross the mask literal (wq#2638).
+
+    Every body class below is wide enough to spell `MASKED`, so a greedy run starting
+    at a live value swallowed the `<prefix>MASKED` sitting directly behind it and the
+    whole thing became ONE match ending in the literal — which wq#2298's fixed-point
+    filter then dropped, secret included. Reproduced live: `cfut_<live>cfut_MASKED`
+    masked to nothing, hits `[]`, the value printed in the clear with no alarm; same
+    for sk-key, github_pat_ and slack. The rule the filter wanted ("a match that ends
+    at the literal is our own output") is only true of a match that IS our own output,
+    and a charset that can cross the literal is what breaks the implication.
+
+    Bounding the body restores it structurally: the run stops at the literal, so the
+    live half matches on its own and alarms, and the masked half behind it is left as
+    it was. It also ends the other half of the break — `cfut_MASKED.` re-fired the
+    alarm because the trailing prose `.` is a legal body character, so the match ran
+    one past the literal and no longer ended in it.
+
+    The cost is a real body that CONTAINS `MASKED` (not merely ends in it): it is
+    truncated at the literal and, below the floor, stops matching. For a random base62
+    body that is ~1 in 62**6 per position, the same order of cost wq#2298 already
+    priced in, and it is paid in the direction that alarms rather than the one that
+    goes silent.
+
+    The literal is matched case-SENSITIVELY (`(?-i:)`) even where the rule around it
+    is IGNORECASE: kv-secret is, and a case-blind lookahead there would also stop the
+    body at ordinary English — a passphrase holding the word `unmasked` would be cut
+    at it, under-masking a live value to buy nothing, since only the exact upper-case
+    literal is ever this module's output. (The example is described rather than
+    written out for the reason test_the_mask_suite_does_not_arm_its_own_tripwire
+    gives: a whole credential shape in tracked source files a rotation ticket.)
+    """
+    return r"(?:(?!(?-i:" + MASK + r"))" + charset + r")" + quant
+
+
 # wq#2297 kv-secret label vocabulary, ported from read_dir_sweep.py:38-60 (wq#2115).
 # A credential label is a NOUN, optionally qualified: `api key`, `Signing Secret`,
 # `clientSecret`. The qualifier ends in a separator or a camelCase hump.
@@ -94,6 +132,16 @@ _KV_SEGMENTED = r"[A-Za-z_][A-Za-z0-9_.]*[_.][A-Za-z0-9_.]*"
 # only exists if the source really wrote `oauthToken`, not `OAUTHTOKEN`.
 _KV_HUMPED = r"(?-i:[A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*)"
 _KV_NOT_CALLED = r"(?!(?:" + _KV_SEGMENTED + r"|" + _KV_HUMPED + r")\()"
+_KV_BODY = r"[A-Za-z0-9._-]"
+
+# The fixed token prefixes, named once so the rules below and _OWN_TAIL cannot drift:
+# what a rule KEEPS is what the next rule reads back glued to the mask literal.
+_PRE_GH = r"ghp_|gho_|ghu_|ghs_|ghr_"
+_PRE_GHPAT = r"github_pat_"
+_PRE_CFUT = r"cfut_?"
+_PRE_SK = r"sk-(?:[a-zA-Z]+-)*"
+_PRE_SLACK = r"xox[bpasr]-"
+_PRE_AWS = r"AKIA"
 
 # (label, compiled pattern, replacement) — labels feed the alarm/rotation ticket.
 # Two labels may repeat (github); mask_text() de-duplicates.
@@ -102,10 +150,12 @@ PATTERNS = [
     # underscores. The old {6,} floor also matched this module's OWN output
     # (`ghp_MASKED` is 6 legal chars), so every already-masked artefact re-armed
     # the alarm on the next read — the floors below end that loop too.
-    ("github", re.compile(_B + r"(ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{30,}"),
-     r"\1MASKED"),
-    ("github", re.compile(_B + r"(github_pat_)[A-Za-z0-9_]{20,}"), r"\1MASKED"),
-    ("cloudflare", re.compile(_B + r"(cfut_?)[A-Za-z0-9_.-]{6,}"), r"\1MASKED"),
+    ("github", re.compile(_B + r"(" + _PRE_GH + r")"
+                          + _body(r"[A-Za-z0-9]", "{30,}")), r"\1MASKED"),
+    ("github", re.compile(_B + r"(" + _PRE_GHPAT + r")"
+                          + _body(r"[A-Za-z0-9_]", "{20,}")), r"\1MASKED"),
+    ("cloudflare", re.compile(_B + r"(" + _PRE_CFUT + r")"
+                              + _body(r"[A-Za-z0-9_.-]", "{6,}")), r"\1MASKED"),
     # wq#2300: the prefix repeats WHOLE dash-terminated letter groups (`sk-`,
     # `sk-ant-`, `sk-or-v1-`) instead of a greedy `[a-zA-Z-]*`. Greedy, group 1 ran
     # as far as the `{16,}` body would allow, so a body opening with a long letter
@@ -114,10 +164,12 @@ PATTERNS = [
     # scan()'s `prefix` — the field contracted to hold no value — and left
     # `value_sha256_12` computed over a truncated body, so the "sha256 a candidate
     # and compare" instruction every rotation ticket carries could never match.
-    ("sk-key", re.compile(_B + r"(sk-(?:[a-zA-Z]+-)*)[A-Za-z0-9_-]{16,}"),
+    ("sk-key", re.compile(_B + r"(" + _PRE_SK + r")"
+                          + _body(r"[A-Za-z0-9_-]", "{16,}")), r"\1MASKED"),
+    ("slack", re.compile(_B + r"(" + _PRE_SLACK + r")"
+                         + _body(r"[A-Za-z0-9-]", "{8,}")), r"\1MASKED"),
+    ("aws", re.compile(_B + r"(" + _PRE_AWS + r")" + _body(r"[0-9A-Z]", "{16}")),
      r"\1MASKED"),
-    ("slack", re.compile(_B + r"(xox[bpasr]-)[A-Za-z0-9-]{8,}"), r"\1MASKED"),
-    ("aws", re.compile(_B + r"(AKIA)[0-9A-Z]{16}"), r"\1MASKED"),
     # wq#2514: a credential embedded in a URL, `scheme://user:secret@host` — git's
     # credential store is one per line. Ported from read_dir_sweep's url_basic_auth
     # (wq#2479). Absent here, wq#2511's mask-hits context window printed a gitea token
@@ -128,6 +180,14 @@ PATTERNS = [
         r"(?![${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
         r"(?!os\.environ|os\.getenv|(?:process\.)?env\.)"
         r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
+        # The one rule that must NOT take _body(): it is anchored on the `@` ahead of
+        # it, so the body cannot run past the credential into whatever follows, and
+        # there is nothing for a bound to save it from. A bound would instead stop the
+        # body at a literal INSIDE the value (`user:<live>MASKED@host`, what a sed
+        # pass over the same line leaves behind) and then fail the `@` lookahead
+        # outright — no match, no alarm. _matches() carries the fixed point here: the
+        # self-output body (`MASKED`) is six characters, under the floor, so only the
+        # exact-output test can fire, and only on our own output. (wq#2638)
         r"[^\s@/'\"`]{8,}(?=@[A-Za-z0-9\[])"), r"\1MASKED"),
     # This one keys off an English word rather than a prefix, so it needs a different
     # boundary than `_B`. It needs a call test (wq#2288): without one,
@@ -155,16 +215,13 @@ PATTERNS = [
     # tool instinct 4 tells every agent to pipe through (ISSUE-LOG row 577).
     ("kv-secret", re.compile(
         r'\b((?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*)'
-        + _KV_POINTER + _KV_NOT_CALLED +
-        r'[A-Za-z0-9._-]{12,}',
+        + _KV_POINTER + _KV_NOT_CALLED + _body(_KV_BODY, '{12,}'),
         re.IGNORECASE), r"\1MASKED"),
 ]
 
 
 CONTEXT_CHARS = 120   # masked context kept either side of a hit
 PREFIX_CHARS = 48     # of the kept, non-secret prefix
-
-MASK = "MASKED"       # the literal every replacement ends in
 
 
 def value_sha12(value):
@@ -275,6 +332,14 @@ def deployed(path=None):
     return live_code.deployed(sys.modules[__name__], _SELF, _still_masks, path)
 
 
+# What this table can leave behind a kept prefix: the mask literal, optionally behind
+# prefixes the table itself kept when an inner rule masked first. Only the FIXED token
+# prefixes are ours to recognise — a kv label or a URL userinfo is arbitrary text, so
+# admitting either would hand any match an excuse to be called our own output.
+_OWN_TAIL = re.compile(r"(?:" + "|".join(
+    (_PRE_GH, _PRE_GHPAT, _PRE_CFUT, _PRE_SK, _PRE_SLACK, _PRE_AWS)) + r")*" + MASK)
+
+
 def _matches(rx, text):
     """Matches of `rx`, minus this module's own output read back (wq#2298).
 
@@ -287,12 +352,25 @@ def _matches(rx, text):
     `ghp_MASKED` — which alarmed again. That loop cost wq#2282, #2288, #2292 and
     #2298; the floors raised in wq#2292 only ended it for the two github rules.
 
-    A match that ENDS at the mask literal is our own output, never a secret: the
-    value is already gone. The cost is a real credential whose last six characters
-    are exactly `MASKED` (1 in 62**6 for a random token body), paid once, against
-    an alarm loop that fires forever and pages at pri-1 every time.
+    wq#2638: "ends at the mask literal" was the wrong test, and it dropped live
+    credentials. A body class wide enough to spell `MASKED` runs straight through the
+    literal, so `cfut_<live token>cfut_MASKED` — a live value with an already-masked
+    one glued to its tail, which is any log tail, diff hunk or separator-free JSON —
+    is ONE match ending in the literal. Dropping it dropped the live half too:
+    hits `[]`, value in the clear, no alarm.
+
+    The test is now what the rule always meant: after the kept prefix, the rest of the
+    match must be OUR output and nothing else — mask literal, optionally behind the
+    prefixes this table itself keeps (`_OWN_TAIL`). Those stack because the rules
+    compose: url-auth reading a line the github rule already masked sees
+    `https://x:ghp_MASKED`, whose tail is another rule's kept prefix and the literal,
+    while `https://x:<live password>MASKED` — the same shape with a live value in
+    front — is not, and alarms. `_body()` above is the structural half of the fix and
+    carries every prefix rule; this half is what covers url-auth, which cannot take a
+    bounded body (see there), and what stops the composed re-arm for all of them.
     """
-    return [m for m in rx.finditer(text) if not m.group(0).endswith(MASK)]
+    return [m for m in rx.finditer(text)
+            if not _OWN_TAIL.fullmatch(m.group(0)[len(m.group(1)):])]
 
 
 def _sub(rx, repl, text):
