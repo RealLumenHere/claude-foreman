@@ -13,8 +13,8 @@ valid web research, so nothing is quarantined: they are excluded from RAG instea
 |---|---|
 | `grounding_verdict.py` | `parse_header()` (indexer), `migrate` (dump then additive DDL), `backfill` (runs `fleet_grounding.check` per doc), `status`, `RAG_FILTER_SQL` |
 | `patch_index_research.py` | anchored, idempotent patcher that makes `index_research.py` write both columns from the `grounding:` header |
-| `test_grounding_verdict.py` | 21 tests, fake connection + injected `check`, no live DB |
-| `install.sh` | tests, then `install -m 0755` to `/home/lumen/bin/research-grounding-verdict` |
+| `test_grounding_verdict.py` | 26 tests, fake connection + injected `check`, no live DB |
+| `install.sh` | `--verify` (wq#1696 contract), else tests then `install -m 0755` to `/home/lumen/bin/research-grounding-verdict` |
 
 ## Column semantics
 
@@ -57,6 +57,16 @@ worker and are the open part of this ticket.
    d.content_hash` join where a reader uses `research_chunks`.
 5. `research-grounding-verdict status` — per-verdict counts; the `NULL` row should go
    to ~0 after backfill.
+
+## Verify
+
+`bash install.sh --verify` (wq#1696 contract, read-only) checks steps 1 and 2 together:
+both copies of `grounding_verdict.py` byte-identical, the two wq#2066 markers present in
+the live `index_research.py`, and both columns present in `research_docs`. Checking the
+DB half is the point — wq#2554 was a tree that had step 2 without step 1, which a
+file-only verify calls live while the next daily index run dies on `UndefinedColumn`
+after paying for the embeddings. `BIN`, `MINERVA` and `QUERY` override the live paths
+(the tests drive the handler against a temp root that way).
 
 Rollback: the columns are additive and nothing else reads them until step 4, so
 reverting step 4 restores prior retrieval; `ALTER TABLE research_docs DROP COLUMN` is

@@ -4,6 +4,7 @@ no live fleet_grounding: `check` is injected, the connection is a fake.
 """
 import ast
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -199,6 +200,83 @@ class PatcherTests(unittest.TestCase):
     def test_drifted_file_aborts_untouched(self):
         with self.assertRaises(SystemExit):
             pir.patch(INDEXER_FIXTURE.replace("asserted_at)\n    VALUES", "asserted_at, x)\n    VALUES"))
+
+
+class InstallVerifyTests(unittest.TestCase):
+    """wq#2554: install.sh --verify must catch a tree that has the indexer patch
+    (README step 2) but not the migration (step 1) — the state that crashed the
+    2026-09-25 daily index run on UndefinedColumn."""
+
+    HERE = os.path.dirname(os.path.abspath(__file__))
+    INSTALL = os.path.join(HERE, "install.sh")
+
+    def _root(self, *, db_has_columns=True, patched=True, copied=True):
+        root = tempfile.mkdtemp()
+        bin_d = os.path.join(root, "bin")
+        retrieval = os.path.join(root, "minerva", "retrieval")
+        os.makedirs(bin_d)
+        os.makedirs(retrieval)
+        src = os.path.join(self.HERE, "grounding_verdict.py")
+        with open(src) as f:
+            tool = f.read()
+        for dst in [os.path.join(bin_d, "research-grounding-verdict")] + (
+                [os.path.join(retrieval, "grounding_verdict.py")] if copied else []):
+            with open(dst, "w") as f:
+                f.write(tool)
+        indexer = "import os\n"
+        if patched:
+            indexer += ("from grounding_verdict import parse_header as doc_grounding\n"
+                        "SQL = 'grounding_verdict=EXCLUDED.grounding_verdict'\n")
+        with open(os.path.join(retrieval, "index_research.py"), "w") as f:
+            f.write(indexer)
+        query = os.path.join(bin_d, "minerva-query")
+        rows = "(1 rows)" if db_has_columns else "(0 rows)"
+        with open(query, "w") as f:
+            f.write("#!/bin/sh\necho '?column?'\necho '%s'\n" % rows)
+        os.chmod(query, 0o755)
+        return root
+
+    def _verify(self, root):
+        env = dict(os.environ,
+                   BIN=os.path.join(root, "bin"),
+                   MINERVA=os.path.join(root, "minerva"),
+                   QUERY=os.path.join(root, "bin", "minerva-query"))
+        return subprocess.run(["bash", self.INSTALL, "--verify"],
+                              env=env, capture_output=True, text=True)
+
+    def test_fully_deployed_tree_passes(self):
+        r = self._verify(self._root())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("VERIFY OK", r.stdout)
+
+    def test_missing_migration_fails_even_though_files_match(self):
+        r = self._verify(self._root(db_has_columns=False))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("MISS db column absent: research_docs.grounding_verdict", r.stdout)
+        self.assertIn("MISS db column absent: research_docs.asserts_fleet_state", r.stdout)
+
+    def test_unpatched_indexer_and_uncopied_module_are_reported(self):
+        r = self._verify(self._root(patched=False, copied=False))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("MISS absent:", r.stdout)
+        self.assertIn("parse_header", r.stdout)
+
+    def test_verify_installs_nothing(self):
+        root = self._root()
+        stamp = os.path.join(root, "bin", "research-grounding-verdict")
+        before = os.stat(stamp).st_mtime_ns
+        self._verify(root)
+        self.assertEqual(os.stat(stamp).st_mtime_ns, before)
+
+    def test_unreachable_db_exits_two(self):
+        root = self._root()
+        query = os.path.join(root, "bin", "minerva-query")
+        with open(query, "w") as f:
+            f.write("#!/bin/sh\nexit 3\n")
+        os.chmod(query, 0o755)
+        r = self._verify(root)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("VERIFY ERROR", r.stdout)
 
 
 if __name__ == "__main__":
