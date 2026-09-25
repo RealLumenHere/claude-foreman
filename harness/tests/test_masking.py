@@ -84,7 +84,15 @@ FALSE_POSITIVES = [
     "log_sk-report-generator-2026",
     "cfut_MASKED",                    # cloudflare: `MASKED` is 6 legal body chars
     "PAT: github_pat_MASKED",         # kv-secret eats a masked github value
-    "sk-ant-xxxxxxxxMASKED",          # sk- backtracks into its own masked body
+    "sk-ant-MASKED",                  # a masked sk value under no label
+    "api key: sk-ant-MASKED",         # ...and eaten by kv-secret, a 13-char value
+    "https://lumen:cfut_MASKED@100.64.0.9",   # url-auth eats a masked cloudflare one
+    # wq#2638: the wide body charsets read trailing prose as value characters, so a
+    # masked value quoted mid-sentence re-armed the pri-1 alarm and rewrote the
+    # sentence. Ending at the literal is not enough; the match has to BE our output,
+    # punctuation and all.
+    "the value read back as cfut_MASKED.",
+    "PAT: github_pat_MASKED...",
     # wq#2514: url-auth pointers and placeholders, as read_dir_sweep excludes them
     "https://lumen:${GITEA_TOKEN}@git.example",
     "https://x-access-token:$TOKEN@github.com",
@@ -324,6 +332,82 @@ def test_a_rules_output_inside_another_rules_value_is_still_ours():
     live = f"remote {URL_USER}{PW}ghp_{masking.MASK}{URL_HOST}"
     masked, hits = masking.mask_text(live)
     assert hits == ["url-auth"] and PW not in masked
+
+
+def test_a_live_value_glued_BEHIND_masked_output_still_masks_and_alarms():
+    """wq#2638, second pass: the same concatenation read the other way round.
+
+    The first pass fixed the leak by bounding every body so it could not cross the
+    literal. That closed the two cases the ticket named and opened this one, which it
+    did not: with the body bounded, `cfut_MASKED<live token>` has no match at all — the
+    leading run cannot reach its floor, and the wq#2292 word boundary then refuses to
+    start a second match against the `D` of the literal. No mask, no alarm, on a shape
+    that masked correctly before the ticket was filed (ops/wq2638-fixed-point/
+    probe_rev.py scores cf32737, the
+    bounded revision and this one; the bounded one is the only one that goes quiet
+    here). Unbounded, the leading run swallows the live half and the whole span is
+    replaced — lossier to read, never silent.
+
+    `ghp_` is the standing exception and is NOT this ticket's regression: it fails
+    identically at cf32737, because the github body charset has no `_`, so the leading
+    match cannot reach its 30-char floor either way. Asserted as it behaves so the day
+    it is fixed this test says so.
+    """
+    for label, prefix, body in ADJACENT:
+        if prefix in (URL_USER, "ghp_"):
+            continue   # url-auth's value is anchored on its `@host`, not glued
+        masked, hits = masking.mask_text(prefix + masking.MASK + prefix + body)
+        assert hits == [label], f"{label}: a live value behind a mask alarms {hits}"
+        if label == "kv-secret":
+            # The leading match's body eats the SECOND label (`"` ends it, `TOKEN` does
+            # not), so the value behind is left unlabelled and stays in the artefact —
+            # as it did at cf32737, before this ticket. It alarms, which is what this
+            # layer owes (instinct 4); a bounded body would remove it here and go
+            # silent on `<label>="MASKED<live value>`, one shape over, which is the
+            # trade this ticket exists to refuse.
+            assert body in masked
+            continue
+        assert body not in masked, f"{label}: the live value survived in {masked!r}"
+    known_gap, hits = masking.mask_text("ghp_" + masking.MASK + GHP)
+    assert GHP in known_gap and hits == [], (
+        "the ghp_ word-boundary gap closed — fix this test, not the rule")
+
+
+def test_a_live_body_that_contains_the_literal_is_still_masked_whole():
+    """wq#2638, second pass: `MASKED` inside a live body is not a seam.
+
+    A bounded body cuts the match at the literal, so the tail behind it printed in the
+    clear (`cfut_<6 chars>MASKED<the rest>`), and if the literal fell before the floor
+    there was no match and no alarm at all. Rare per random body, but it is the failure
+    direction instinct 4 forbids, and the bound bought nothing that the match-level
+    test does not already give. Every value here masks whole.
+    """
+    for label, prefix, body in ADJACENT:
+        if prefix == URL_USER:
+            continue   # anchored value; main's `bare literal` case covers it
+        for cut in (0, 6):
+            text = prefix + body[:cut] + masking.MASK + body[cut:]
+            masked, hits = masking.mask_text(text)
+            assert hits == [label], f"{label}: literal at {cut} alarms {hits}"
+            assert body not in masked, f"{label}: value survived in {masked!r}"
+
+
+def test_a_body_run_against_the_literal_is_not_excused():
+    """The one shape wq#2638 deliberately does NOT quiet, stated so the next reader
+    does not "fix" it: a run of ordinary body characters glued to the literal.
+
+    That is what the pre-wq#2300 sk-key bug wrote (`sk-ant-`, eight characters of the
+    live body, then the literal) and it is byte-for-byte what a live value concatenated
+    in front of masked output looks like — no test on the TEXT can quiet one without
+    swallowing the other, which is exactly how wq#2298's filter came to drop a live
+    credential. So it fires, and the eight surviving characters are re-masked, which is
+    the right outcome for a value that really was half-printed. The historical value is
+    excused one layer up instead, by hash: masking.SELF_OUTPUT_SHA12 carries that
+    storm's tail, where the excuse names ONE value and cannot generalise into a leak.
+    """
+    masked, hits = masking.mask_text("sk-ant-" + "xxxxxxxx" + masking.MASK)
+    assert hits == ["sk-key"] and masked == "sk-MASKED"
+    assert "f50f2d7b79dd" in masking.SELF_OUTPUT_SHA12
 
 
 def test_token_engine_mirror_agrees():
