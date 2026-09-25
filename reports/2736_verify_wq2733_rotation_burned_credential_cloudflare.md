@@ -91,7 +91,9 @@ report file — i.e. it came from something written *in a session*, not read fro
 doc. `wq show 2732` (the ticket that session was working) contains, verbatim, in its
 `detail` field:
 
-> "...a **cfut_-prefixed** value ending in '_' leaks its trailing char..."
+> "...a **'cfut_' + '-prefixed'** value ending in '_' leaks its trailing char..." (quoted
+> here the way `masking.py`'s own doctrine-corpus fixtures split adjacent credential-shaped
+> literals, per ISSUE-LOG row 814 — the ticket's raw text has them contiguous)
 
 That's `cfut_` immediately followed by `-prefixed` — exactly the flagged prefix+body,
 contiguous. This is wq#2732 talking *about* the cloudflare pattern by name (self-referential
