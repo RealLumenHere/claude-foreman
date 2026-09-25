@@ -24,6 +24,15 @@ DOCTRINE — RESEARCH FIRST, NEVER WING IT (Frank, standing order):
   Record the issue; deliver the solution.
 - "Done" means demonstrated: tests run and pass, evidence cited (file:line, test output) in
   your done notes. A claimed done the critic rejects is worse than an honest block.
+- AN ACCEPTANCE PROBE MUST BE ABLE TO FAIL (wq#2630). If your fix takes a scope parameter
+  (a root, a dir list, a repo, a host, a model pool), probe at least one input from OUTSIDE
+  that parameter's default — for --add-dir-aware code that means a granted non-cwd
+  directory, /home/lumen/kb/ISSUE-LOG.md being the read doctrine guarantees on every
+  ticket. A probe drawn only from the population the fix was designed around confirms and
+  never falsifies (wq#2290 probed 35 tracked files under cwd for a cwd-scoped fix, so it
+  could not have failed; the boundary it missed paged 35 minutes later as wq#2319). Pin the
+  probe's input to something immutable — a committed fixture, a rev-pinned read — never a
+  live mutable file in another repo; an unpinned probe is not re-runnable evidence.
 
 RULES:
 - Your PATH does not include /home/lumen/bin — invoke `wq`/`lumen-pr` by full path
