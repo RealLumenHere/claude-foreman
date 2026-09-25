@@ -354,6 +354,32 @@ def test_the_wq2677_probe_password_masks_and_alarms():
         assert hits == ["kv-secret"] and WQ2677_PW not in masked
 
 
+# wq#2705: wq#2702's verifier glued three fixtures with no separator — the github body
+# from ops/wq2316-mask-secrets-boundary, `AKIA` + 16 `Q`, and `xoxb-` + `12345678901` —
+# and wrote the line to a /tmp scratch file. The github rule swallows everything up to
+# the `-`, so the tripwire paged a 60-char github value (sha256 6d4c27f66a96) that no
+# committed file held, and the slack body alone (254aa248acb4) as a second rotation row.
+# Both are synthetic. Split at every prefix a rule reads, so reading this file stays
+# silent; the seam-closed view in mask_replay.account still finds the whole value.
+WQ2702_TRIPLE_GLUE = "gh" "p_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8AKIA" "QQQQQQQQQQQQQQQQxo" "xb-12345678901"
+WQ2702_SLACK_BODY = WQ2702_TRIPLE_GLUE[-len("12345678901"):]
+
+
+def test_the_wq2702_triple_glue_masks_its_github_half():
+    body = WQ2702_TRIPLE_GLUE[len("ghp_"):-len("-12345678901")]
+    assert masking.value_sha12(body) == "6d4c27f66a96"
+    assert masking.value_sha12(WQ2702_SLACK_BODY) == "254aa248acb4"
+    masked, hits = masking.mask_text(WQ2702_TRIPLE_GLUE)
+    assert "github" in hits and body not in masked
+
+
+@pytest.mark.xfail(strict=True, reason="wq#2720: the github body swallows `xoxb`, so the "
+                   "slack rule never sees its prefix and the slack body stays in the clear")
+def test_the_wq2702_triple_glue_masks_its_slack_half():
+    masked, _ = masking.mask_text(WQ2702_TRIPLE_GLUE)
+    assert WQ2702_SLACK_BODY not in masked
+
+
 def test_a_rules_output_inside_another_rules_value_is_still_ours():
     """The rules compose: url-auth reads a userinfo line the github rule has already
     masked, so its whole value is another rule's kept prefix plus the literal. That is
