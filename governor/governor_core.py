@@ -94,7 +94,9 @@ def is_fable_model(model):
 # T4 (BUILD_PLAN.md §T4, wq#618): the LiteLLM local rung — same trusted-route set as
 # orchestrator/judgment.py's LOCAL_POOL_MODELS. Deliberately excludes
 # nephthys-qwen3-14b (fallback brain only, not a wq worker per models.yaml).
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
+# local-worker (wq#2565): the LiteLLM group alias is dispatchable, so it must be
+# governor-exempt like the family ids it resolves to.
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker")
 
 
 def is_local_model(model):

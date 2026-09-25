@@ -97,6 +97,28 @@ def test_node_suffixed_id_stays_exempt_under_the_naming_rule(reg):
             assert fworker.is_local_model(probe)
 
 
+def test_every_local_rung_model_is_local_model():
+    """wq#2565: the router selects rungs from LOCAL_RUNG_MODELS, so every rung id must also
+    pass is_local_model — otherwise build_env() takes the cloud OAuth path and the dispatch
+    dies on Anthropic's API with model_not_found. local-worker was the silent exception."""
+    assert len(set(fworker.LOCAL_RUNG_MODELS)) == len(fworker.LOCAL_RUNG_MODELS)
+    for m in fworker.LOCAL_RUNG_MODELS:
+        assert fworker.is_local_model(m), m
+
+
+def test_local_worker_group_alias_is_local_at_every_predicate_site():
+    """wq#2565: the group alias the dispatcher emits (--model local-worker) must ride the
+    LiteLLM gateway path at every site that branches on it, effort suffix or not."""
+    admission = _site("despag.admission")
+    app = _site("despag.app")
+    for probe in ("local-worker", "local-worker@local"):
+        assert fworker.is_local_model(probe), probe
+        assert fworker.is_local_rung(probe), probe
+        assert governor_core.is_local_model(probe), probe
+        assert admission.is_local_model(probe), probe
+        assert app._is_local_model(probe), probe
+
+
 def test_at_sign_as_node_separator_fails_lint_quoting_the_reason(reg):
     bad = copy.deepcopy(reg)
     bad["nodes"]["hathor"]["models"][0]["id"] = "hathor-llama8b@hathor"

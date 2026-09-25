@@ -14,7 +14,7 @@ HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HARNESS_DIR)
 import inference_registry as ir  # noqa: E402
 
-GOVERNOR = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
+GOVERNOR = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker")
 PLUGS = {"hathor": "P3", "nephthys": "P2", "isis": "p1"}
 IPS = {"hathor": "100.80.71.13", "nephthys": "100.98.74.87", "isis": "100.100.129.24"}
 

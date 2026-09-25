@@ -59,7 +59,7 @@ HARNESSES_FILE = DESPAG_DIR / "harnesses.yaml"
 # the task-execution runner, out of scope for this ticket); the two model pools are
 # duplicated here deliberately small and static, not lifted as a dependency.
 # BEGIN GENERATED inference_nodes.yaml v1 — edit the registry, not this block
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker")
 # END GENERATED
 
 CLAUDE_BIN = os.environ.get("DESPAG_CLAUDE_BIN", "claude")

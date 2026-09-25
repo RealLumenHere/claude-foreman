@@ -158,7 +158,7 @@ FIRE_ARCHETYPE = "fire-response"
 # LOCAL_POOL_MODELS — deliberately excludes nephthys-qwen3-14b (fallback brain only,
 # not a wq worker per models.yaml).
 # BEGIN GENERATED inference_nodes.yaml v1 — edit the registry, not this block
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker")
 # END GENERATED
 # archetypes agents.yaml marks `local:` for — the only work the local rung is trusted
 # with (FOREMAN_RESEARCH §9). Enforced here too (defense-in-depth) so an explicit
@@ -214,8 +214,10 @@ def local_allowed_archetypes(model):
 # LiteLLM trust route but is a cloud model (cheap_cloud), so it keeps the cloud timeouts and
 # is never charged as a rung fault; `local-worker` is the LiteLLM group the dispatcher rebuild
 # (wq#2127) routes to the Macs.
-LOCAL_RUNG_MODELS = tuple(m for m in LOCAL_POOL_MODELS if m != "deepseek-v4-flash") + (
-    "local-worker",)
+# the explicit + ("local-worker",) keeps the group a rung even if the registry render
+# ever drops it from LOCAL_POOL_MODELS again; dict.fromkeys dedupes the overlap (wq#2565).
+LOCAL_RUNG_MODELS = tuple(dict.fromkeys(
+    tuple(m for m in LOCAL_POOL_MODELS if m != "deepseek-v4-flash") + ("local-worker",)))
 # dispatcher/runtime/backend_cooldown.json — the dispatcher reads it to skip a cooling rung.
 BACKEND_COOLDOWN_FILE = os.environ.get(
     "FOREMAN_BACKEND_COOLDOWN_FILE",

@@ -39,7 +39,7 @@ STATE_JSON = router.STATE_JSON
 JUDGMENT_STATE = os.environ.get("FOREMAN_JUDGMENT_STATE",
                                 os.path.join(RUNS_ROOT, "judgment.json"))
 # BEGIN GENERATED inference_nodes.yaml v1 — edit the registry, not this block
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b")
+LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker")
 # END GENERATED
 
 

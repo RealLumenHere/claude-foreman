@@ -6,7 +6,11 @@ version: 1
 
 # Frozen: the governor's prefix tuple (governor/governor_core.py:97). Adding a value here
 # without the governor changing is a LINT FAIL (design §4).
-governor_prefixes: [deepseek-v4-flash, qwen36-local, nephthys-qwen14b, hathor-llama8b]
+# local-worker (wq#2565): the LiteLLM group alias the dispatcher routes to the Macs — a
+# dispatchable id, so it must ride the gateway auth path and be governor-exempt like the
+# family ids it resolves to. Absent here, fworker's is_local_model() said cloud and the
+# dispatch died on Anthropic's API with model_not_found.
+governor_prefixes: [deepseek-v4-flash, qwen36-local, nephthys-qwen14b, hathor-llama8b, local-worker]
 
 families:                 # a model blob + how it is served. NOT a box.
   qwen36-local:
