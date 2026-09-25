@@ -1362,6 +1362,43 @@ def serve_conn(conn):
     respond(conn, req, peer, ok, rule, reason, result, decision, t0)
 
 
+def _grant_client_acls():
+    """wq#2561: a `usermod -aG token-client lumen` grant never reaches a lumen
+    process that was already running (forked before or fork()'d off a parent
+    from before the grant) — Linux fixes a process's supplementary groups at
+    fork/exec time and never re-reads /etc/group for it, so it keeps EACCES
+    on connect() until that process (or its ancestor) restarts. A named-user
+    ACL entry is matched by the kernel's ordinary connect()-time permission
+    check against the caller's fsuid — not via SO_PEERCRED, which this daemon
+    reads only after accept() to identify an already-admitted peer. fsuid is
+    not cached the way supplementary groups are, so the u: entry grants
+    access immediately on every daemon (re)start regardless of how old the
+    client process's group cache is.
+
+    DEPLOY: this file runs from /usr/local/lib/token-engine (service unit
+    ExecStart), NOT from the repo — editing it here changes nothing until
+    install.sh is re-run as root AND token-engine is restarted. Landing
+    without that step is what made wq#2561 closable-while-false (wq#2562,
+    ISSUE-LOG rows 595/695/697 are all this same drift on this same file).
+    """
+    try:
+        subprocess.run(["setfacl", "-m", f"u:{CLIENT_USER}:rw", SOCK_PATH], check=True)
+    except (OSError, subprocess.CalledProcessError) as e:
+        print(f"warning: setfacl u:{CLIENT_USER}:rw {SOCK_PATH} failed: {e}",
+              file=sys.stderr, flush=True)
+    # wq#2566: the socket ACL above is useless without traversal on the
+    # directory that holds it — the kernel path walk needs x on SOCK_DIR
+    # before it ever looks at the socket inode, and SOCK_DIR is 0750
+    # tokeneng:token-client with no uid ACL, so it hits the exact same
+    # stale-supplementary-group problem the socket ACL fixed. `x` only,
+    # never `r` — a uid must not be able to list SOCK_DIR/minted.
+    try:
+        subprocess.run(["setfacl", "-m", f"u:{CLIENT_USER}:x", SOCK_DIR], check=True)
+    except (OSError, subprocess.CalledProcessError) as e:
+        print(f"warning: setfacl u:{CLIENT_USER}:x {SOCK_DIR} failed: {e}",
+              file=sys.stderr, flush=True)
+
+
 def main():
     if os.getuid() == 0:
         sys.exit("refusing to run as root: unit must set User=tokeneng")
@@ -1390,28 +1427,7 @@ def main():
     srv.bind(SOCK_PATH)
     os.chown(SOCK_PATH, -1, client_gid)
     os.chmod(SOCK_PATH, 0o660)
-    # wq#2561: a `usermod -aG token-client lumen` grant never reaches a lumen
-    # process that was already running (forked before or fork()'d off a
-    # parent from before the grant) — Linux fixes a process's supplementary
-    # groups at fork/exec time and never re-reads /etc/group for it, so it
-    # keeps EACCES on connect() until that process (or its ancestor) restarts.
-    # A named-user ACL entry is matched by the kernel's ordinary connect()-time
-    # permission check against the caller's fsuid — not via SO_PEERCRED, which
-    # this daemon reads only after accept() to identify an already-admitted
-    # peer. fsuid is not cached the way supplementary groups are, so the u:
-    # entry grants access immediately on every daemon (re)start regardless of
-    # how old the client process's group cache is.
-    #
-    # DEPLOY: this file runs from /usr/local/lib/token-engine (service unit
-    # ExecStart), NOT from the repo — editing it here changes nothing until
-    # install.sh is re-run as root AND token-engine is restarted. Landing
-    # without that step is what made wq#2561 closable-while-false (wq#2562,
-    # ISSUE-LOG rows 595/695/697 are all this same drift on this same file).
-    try:
-        subprocess.run(["setfacl", "-m", f"u:{CLIENT_USER}:rw", SOCK_PATH], check=True)
-    except (OSError, subprocess.CalledProcessError) as e:
-        print(f"warning: setfacl u:{CLIENT_USER}:rw {SOCK_PATH} failed: {e}",
-              file=sys.stderr, flush=True)
+    _grant_client_acls()
     srv.listen(16)
     print(f"token-engine listening on {SOCK_PATH} uid={os.getuid()}", flush=True)
     while True:
