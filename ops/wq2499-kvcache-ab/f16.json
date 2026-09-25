@@ -1,0 +1,37 @@
+{
+  "label": "f16-baseline",
+  "host": "http://100.98.74.87:11434",
+  "model": "qwen3:14b",
+  "version": "0.32.6",
+  "measured_at": "2026-09-25T03:40:53Z",
+  "runs": [
+    {
+      "prompt_tokens": 529,
+      "prefill_tps": 8.04,
+      "gen_tokens": 64,
+      "decode_tps": 4.82,
+      "load_s": 16.0,
+      "total_s": 95.1
+    },
+    {
+      "prompt_tokens": 529,
+      "prefill_tps": 8.04,
+      "gen_tokens": 64,
+      "decode_tps": 4.8,
+      "load_s": 0.3,
+      "total_s": 79.5
+    },
+    {
+      "prompt_tokens": 529,
+      "prefill_tps": 8.14,
+      "gen_tokens": 64,
+      "decode_tps": 4.79,
+      "load_s": 0.3,
+      "total_s": 78.7
+    }
+  ],
+  "prefill_tps": 8.09,
+  "decode_tps": 4.79,
+  "loaded_size_gib": 19.31,
+  "context_length": 32768
+}

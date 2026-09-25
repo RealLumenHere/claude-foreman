@@ -84,7 +84,7 @@ nodes:
         served_ctx: 32768
         first_frame_s: 2400
         prefill_tps: 7.4
-        decode_tps: null
+        decode_tps: 4.79               # wq#2499 arm A: f16 KV, no FA, 529-tok prompt (prefill 8.09 there); research/KV_CACHE_Q8_NEPHTHYS.md
         measured_at: 2026-09-20
         load_s: null
         capabilities:
