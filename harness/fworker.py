@@ -55,6 +55,7 @@ from classifier import (
 )
 from oom_forensics import oom_journal_evidence
 import acceptance as acceptance_mod
+import deferral_gate
 import hallucination_guard
 import action_gate
 import failure_record
@@ -678,6 +679,33 @@ def wq_heartbeat(ticket_id):
     wq("heartbeat", str(ticket_id))
 
 
+def apply_deferral_gate(ticket_id, notes):
+    """wq#2597: the notes, with any deferred AC work filed as its own ticket and cited.
+
+    Never raises. The gate exists to stop deferred work from disappearing, and a gate that
+    can fail a close would trade that leak for a worse one: a finished ticket left claimed
+    and open because `wq add` had a bad minute.
+
+    The scan happens BEFORE the row is read, so a closure that defers nothing — nearly all of
+    them — adds no wq call to the close path at all.
+    """
+    if not deferral_gate.scan(notes, ticket_id):
+        return notes
+    row = wq_show(ticket_id)
+    probe = None
+    m = re.search(r"^Liveness:\s*(.+)$", row.get("detail") or "", re.MULTILINE)
+    if m:
+        probe = m.group(1).strip()
+    try:
+        return deferral_gate.enforce(
+            ticket_id, notes, run_wq=lambda argv: wq(*[str(x) for x in argv]),
+            lane=(row.get("lane") or "build"), pri=(row.get("pri") or 2),
+            probe=probe, log=log)
+    except Exception as e:  # noqa: BLE001 — see docstring: the close outranks the gate
+        log(f"wq#{ticket_id}: deferral gate errored, closing with original notes: {e}")
+        return notes
+
+
 def wq_done(ticket_id, notes, no_artifact_reason=None, unlanded_reason=None):
     """Close the ticket. `no_artifact_reason` is the CALLER's own assertion that this
     ticket has no code artifact to cite, plus the reason why — only a caller that knows
@@ -688,7 +716,12 @@ def wq_done(ticket_id, notes, no_artifact_reason=None, unlanded_reason=None):
     main (a run-dir artifact), so "land it and retry" can never be satisfied. Asserted up
     front rather than retried on a refusal text-match, for wq#1925's reason: the refusal
     text cannot tell a deliberately-unlanded path from one that merely has not landed yet.
+
+    wq#2597: notes that defer part of the AC get the deferred work filed as its own ticket
+    before the close, because wq#2583 deferred an AC bullet in exactly these notes and
+    nothing carried it (harness/deferral_gate.py).
     """
+    notes = apply_deferral_gate(ticket_id, notes)
     extra = ["--unlanded", unlanded_reason] if unlanded_reason else []
     p = wq("done", str(ticket_id), "--notes", notes, *extra)
     if p.returncode != 0:
