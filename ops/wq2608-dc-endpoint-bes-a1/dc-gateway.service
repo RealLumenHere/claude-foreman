@@ -1,0 +1,36 @@
+[Unit]
+Description=Desktop Commander MCP via Supergateway (Bes)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=bes
+Environment=PATH=/home/bes/.npm-global/bin:/usr/bin:/bin
+ExecStartPre=-/usr/bin/python3 /home/bes/bin/dc-enforce-config.py
+ExecStart=/home/bes/.npm-global/bin/supergateway --stdio "/home/bes/.npm-global/bin/desktop-commander" --port 3100 --outputTransport streamableHttp --streamableHttpPath /mcp --cors --healthEndpoint /health --sessionTimeout 600000
+OOMPolicy=continue
+
+# wq#2608: Bes is a 16G box shared with HA monitor/mosquitto/Grafana (not a
+# dedicated control-plane node like Lumen) -- capped far below Lumen's
+# MemoryHigh=20G/MemoryMax=26G (desktop-commander-mcp.service, verified via
+# `systemctl cat` 2026-09-25) so a Commander session here can't starve the
+# other tenants it shares the box with.
+MemoryHigh=3G
+MemoryMax=4G
+MemorySwapMax=1G
+
+# T1 hardening (MCP_CONTROL_PLANE_HA_DESIGN.md §3.3, same properties wq#2605
+# made persistent for Lumen's desktop-commander-mcp.service): control-plane
+# process gets priority over whatever else runs on the box.
+CPUWeight=1000
+IOWeight=1000
+Nice=-5
+OOMScoreAdjust=-900
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
