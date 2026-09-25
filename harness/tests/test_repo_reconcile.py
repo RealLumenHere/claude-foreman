@@ -468,3 +468,25 @@ def test_refuses_when_branch_is_not_checked_out(tmp_path):
     rc, out = run("reconcile", "--repo", work, "--no-fetch", "--apply")
     assert rc == 2, out
     assert "un-checked-out" in out
+
+
+def test_status_reports_no_upstream_instead_of_crashing(tmp_path):
+    """wq#913: pstack has an `origin` remote (an upstream fork's default branch, origin/main)
+    but is locally checked out on `master`, which origin has no branch named after. Comparing
+    against a remote ref that does not exist used to raise out of rev-list/rev-parse and read
+    as ERROR (exit 2) — the sweep then treated that crash as a divergence needing a ticket,
+    daily. It should classify as NO_UPSTREAM (exit 40) instead: a stable, known state, not a
+    git failure."""
+    work = str(tmp_path / "work")
+    subprocess.run(["git", "init", "--initial-branch=master", work], check=True,
+                   capture_output=True)
+    git(work, "config", "user.email", "test@lumen.local")
+    git(work, "config", "user.name", "test")
+    commit(work, "file.txt", "base\n", "base")
+    git(work, "remote", "add", "origin", str(tmp_path / "nonexistent.git"))
+
+    rc, out = run("status", "--repo", work, "--branch", "master", "--remote", "origin",
+                  "--no-fetch")
+    assert rc == 40, out
+    assert "NO_UPSTREAM" in out
+    assert "no such remote" in out or "has no branch" in out

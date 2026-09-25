@@ -99,9 +99,10 @@ import time
 IN_SYNC, SAFE_RESET, REDUNDANT_AHEAD, CONTENT_DIVERGED, BEHIND_ONLY, ERROR = (
     "IN_SYNC", "SAFE_RESET", "REDUNDANT_AHEAD", "CONTENT_DIVERGED", "BEHIND_ONLY", "ERROR")
 PR_PENDING = "PR_PENDING"
+NO_UPSTREAM = "NO_UPSTREAM"
 
 EXIT = {IN_SYNC: 0, SAFE_RESET: 10, REDUNDANT_AHEAD: 11, PR_PENDING: 12,
-        CONTENT_DIVERGED: 20, BEHIND_ONLY: 30, ERROR: 2}
+        CONTENT_DIVERGED: 20, BEHIND_ONLY: 30, NO_UPSTREAM: 40, ERROR: 2}
 
 DEFAULT_REPO = os.environ.get("FOREMAN_RECONCILE_REPO", "/home/lumen/pokemon")
 
@@ -191,6 +192,19 @@ def inspect(repo, branch="main", remote="origin", fetch=True):
     remote_ref = f"{remote}/{branch}"
     if fetch:
         git(repo, "fetch", remote, check=False)
+    if not git_ok(repo, "rev-parse", "--verify", "--quiet", remote_ref):
+        # wq#913: a repo with no tracked upstream for this branch (no such remote, or the
+        # remote never got a branch of this name) has nothing to compare against. That is
+        # a known, stable state — not a git failure — so it gets its own verdict instead
+        # of raising out of counts()/rev-parse below and reading as ERROR to the sweep.
+        return {
+            "repo": repo, "branch": branch, "remote_ref": remote_ref,
+            "ahead": 0, "behind": 0, "preserved_on": "",
+            "local_head": git(repo, "rev-parse", branch),
+            "remote_head": "", "local_tree": "", "remote_tree": "",
+            "base": "", "touched": [],
+            "verdict": NO_UPSTREAM,
+        }
     behind, ahead = counts(repo, branch, remote_ref)
     local_tree = git(repo, "rev-parse", f"{branch}^{{tree}}")
     remote_tree = git(repo, "rev-parse", f"{remote_ref}^{{tree}}")
@@ -221,6 +235,11 @@ def inspect(repo, branch="main", remote="origin", fetch=True):
 
 def explain(st):
     v = st["verdict"]
+    if v == NO_UPSTREAM:
+        return (f"{st['branch']} has no {st['remote_ref']} to compare against — this repo "
+                f"has no such remote, or the remote has no branch of this name. Not this "
+                f"tool's job to fix: either wire up the remote (`git push -u {st['remote_ref'].split('/')[0]} "
+                f"{st['branch']}`) or park it as intentionally local-only.")
     if v == IN_SYNC:
         return f"{st['branch']} == {st['remote_ref']} at {st['local_head'][:7]}. Nothing to do."
     if v == BEHIND_ONLY:

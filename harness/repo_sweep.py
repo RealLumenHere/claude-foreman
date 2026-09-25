@@ -114,7 +114,7 @@ AQ_SOURCE = "repo-sweep"
 # no ticket, so a new verdict has to arrive in the same wave as the exit code — wq#975 is
 # the one that added 11, wq#1472 the one that added 12.
 VERDICTS = {10: "SAFE_RESET", 11: "REDUNDANT_AHEAD", 12: "PR_PENDING",
-            20: "CONTENT_DIVERGED", 30: "BEHIND_ONLY"}
+            20: "CONTENT_DIVERGED", 30: "BEHIND_ONLY", 40: "NO_UPSTREAM"}
 
 
 def aq_key(repo, verdict):
@@ -188,18 +188,27 @@ def _detect_branch_and_remote(repo):
     """Return (branch, remote) for the repo's default integration branch.
 
     The sweep cares about the deployment branch (main or master), not whatever
-    feature branch HEAD happens to be on.  Checks origin/main first, then
-    origin/master, then falls back to the HEAD branch's tracking remote.
+    feature branch HEAD happens to be on. Checks main/master first, but only a
+    candidate that ALSO exists as a local branch here — wq#913: pstack has
+    origin/main (an upstream fork's default branch) but is locally checked out
+    on `master`, and picking "main" from the remote alone sent repo_reconcile
+    comparing origin/main against a local `main` ref that does not exist,
+    which raised out of rev-list and read as ERROR to the sweep. Falls back to
+    the HEAD branch's tracking remote, same as before.
     """
     try:
-        # Prefer the canonical deployment branch name.
         for candidate in ("main", "master"):
+            local = subprocess.run(
+                ["git", "-C", repo, "rev-parse", "--verify", "--quiet", candidate],
+                capture_output=True, text=True, timeout=10)
+            if local.returncode != 0:
+                continue
             p = subprocess.run(
                 ["git", "-C", repo, "rev-parse", "--verify", f"origin/{candidate}"],
                 capture_output=True, text=True, timeout=10)
             if p.returncode == 0:
                 return candidate, "origin"
-        # No origin/main or origin/master — try HEAD branch's remote.
+        # No local main/master with a matching origin branch — use HEAD branch's remote.
         branch = subprocess.run(
             ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True, text=True, timeout=10).stdout.strip()
