@@ -26,6 +26,7 @@ import time
 
 STAMP_DIR = "/home/lumen/logs"
 STAMP_PREFIX = ".stamp."
+RUN_STATE_PREFIX = ".state."
 STATE_PATH = "/home/lumen/foreman/ops/wq1184-gatus-health-checks/deadman_state.json"
 NTFY_BIN = "/home/lumen/bin/ntfy-send"
 UNARMED_GRACE_S = 3600
@@ -76,6 +77,30 @@ def find_stamps(stamp_dir):
     return stamps
 
 
+def find_run_states(stamp_dir):
+    """wq#2573: units may additionally drop /home/lumen/logs/.state.<unit> —
+    a JSON {"status": "ok"|"error", "detail": ...} written by the job itself
+    on EVERY exit path (success or failure). This exists because a
+    Type=oneshot service's ExecStartPost= (the source of the plain .stamp.
+    file) never runs when ExecStart exits non-zero, so an in-script
+    fail-loud exit is invisible to the age-based staleness check below for
+    up to 2x the unit's cadence. Only consulted for units that already have
+    an ordinary stamp (same opt-in coverage model)."""
+    if not os.path.isdir(stamp_dir):
+        return {}
+    states = {}
+    for fname in os.listdir(stamp_dir):
+        if not fname.startswith(RUN_STATE_PREFIX):
+            continue
+        unit = fname[len(RUN_STATE_PREFIX):]
+        try:
+            with open(os.path.join(stamp_dir, fname)) as f:
+                states[unit] = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+    return states
+
+
 def load_state(path):
     try:
         with open(path) as f:
@@ -105,6 +130,7 @@ def ntfy(priority, title, msg, dry_run):
 def check(stamp_dir, state_path, dry_run):
     intervals, unarmed = load_timer_intervals()
     stamps = find_stamps(stamp_dir)
+    run_states = find_run_states(stamp_dir)
     state = load_state(state_path)
     now = time.time()
     changed = False
@@ -141,10 +167,28 @@ def check(stamp_dir, state_path, dry_run):
 
         state[unit] = "stale" if is_stale else "ok"
 
+        rs = run_states.get(unit)
+        if rs is not None:
+            run_key = f"{unit}:run"
+            is_error = rs.get("status") == "error"
+            was_error = state.get(run_key) == "error"
+            if is_error and not was_error:
+                ntfy("urgent", f"Dead-man: {unit} reported failure",
+                     f"{unit}'s last run reported status=error: "
+                     f"{str(rs.get('detail', ''))[:300]} — wq#2573",
+                     dry_run)
+                changed = True
+            elif was_error and not is_error:
+                ntfy("high", f"Dead-man: {unit} run recovered",
+                     f"{unit}'s last run reported status=ok — wq#2573", dry_run)
+                changed = True
+            state[run_key] = "error" if is_error else "ok"
+
     # Drop state for stamps that no longer exist (unit retired / stamp wrapper removed).
-    for unit in list(state):
-        if unit not in stamps:
-            del state[unit]
+    for key in list(state):
+        base = key[:-len(":run")] if key.endswith(":run") else key
+        if base not in stamps:
+            del state[key]
             changed = True
 
     if changed and not dry_run:

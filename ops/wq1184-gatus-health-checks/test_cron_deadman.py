@@ -61,3 +61,41 @@ def test_stamp_without_any_timer_still_skipped(tmp_path, monkeypatch):
     _stamp(tmp_path, "gone", 30 * 86400)
     state, sent = _run(tmp_path, monkeypatch, [])
     assert state == {} and sent == []
+
+
+def _run_state(tmp_path, unit, status, detail=""):
+    p = tmp_path / f".state.{unit}"
+    p.write_text(json.dumps({"status": status, "detail": detail}))
+
+
+def test_fresh_stamp_with_error_run_state_pages_immediately(tmp_path, monkeypatch):
+    # wq#2573: a Type=oneshot unit that fails loud never runs ExecStartPost,
+    # so the plain stamp stays fresh (touched on a PRIOR success) while the
+    # job's own .state.<unit> reports the failure. This must page without
+    # waiting on the 2x-cadence staleness threshold.
+    _stamp(tmp_path, "lumen-reflector", 60)
+    _run_state(tmp_path, "lumen-reflector", "error", "http_401: bad key")
+    now_us = int(time.time() * US)
+    rows = [{"unit": "lumen-reflector.timer", "activates": "lumen-reflector.service",
+             "last": now_us - 7 * 86400 * US, "next": now_us}]
+    state, sent = _run(tmp_path, monkeypatch, rows)
+    assert state["lumen-reflector"] == "ok"
+    assert state["lumen-reflector:run"] == "error"
+    assert sent == ["Dead-man: lumen-reflector reported failure"]
+
+
+def test_error_run_state_pages_once_until_recovered(tmp_path, monkeypatch):
+    _stamp(tmp_path, "z", 60)
+    _run_state(tmp_path, "z", "error", "boom")
+    rows = [{"unit": "z.timer", "activates": "z.service", "next": 0, "last": 0}]
+    _, sent1 = _run(tmp_path, monkeypatch, rows)
+    assert sent1 == ["Dead-man: z reported failure"]
+
+    # still erroring on the next check: no repeat page (dedup).
+    _, sent2 = _run(tmp_path, monkeypatch, rows)
+    assert sent2 == []
+
+    # recovers: exactly one recovery notice.
+    _run_state(tmp_path, "z", "ok")
+    _, sent3 = _run(tmp_path, monkeypatch, rows)
+    assert sent3 == ["Dead-man: z run recovered"]
