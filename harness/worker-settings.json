@@ -19,6 +19,7 @@
       "Bash(/home/lumen/bin/lumen-run *)",
       "Bash(/home/lumen/bin/fleet-search *)",
       "Bash(/home/lumen/bin/fleet-exec *)",
+      "Bash(/home/lumen/bin/lumen_state.py *)",
       "Bash(docker ps*)",
       "Bash(docker logs*)",
       "Bash(curl *)",

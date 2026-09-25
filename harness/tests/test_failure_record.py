@@ -72,6 +72,40 @@ def test_compound_denial_uses_the_refused_segment():
     assert denied[0]["node"] == "thor"
 
 
+# wq#2691: direct invocation of the lumen_state.py shim (a bash-shebang script at
+# /home/lumen/bin/lumen_state.py, not a *.py Claude Code can pattern-match against
+# "Bash(python3 *)") isn't matched by any worker-settings.json allow entry, so the
+# CLI's own classifier denies it outright — plain "requires approval" for the direct
+# form, and a compound "multiple operations" refusal for the `bash lumen_state.py`
+# form. Neither is a wq#2579-style structural refusal (no for/while/cd/heredoc
+# marker in the reason text); both are ordinary allowlist misses, fixed by adding
+# "Bash(/home/lumen/bin/lumen_state.py *)" to worker-settings.json.
+LUMEN_STATE_DIRECT_REFUSAL = "This command requires approval"
+LUMEN_STATE_BASH_WRAPPED_REFUSAL = (
+    "This Bash command contains multiple operations. The following part "
+    "requires approval: bash /home/lumen/bin/lumen_state.py current hathor")
+
+
+def test_lumen_state_direct_invocation_denial_is_plain_not_structural():
+    ev = denial_events("/home/lumen/bin/lumen_state.py current hathor",
+                       text=LUMEN_STATE_DIRECT_REFUSAL)
+    denied, _, _ = fr.extract_denied_calls(ev, node_map=NODE_MAP)
+    assert len(denied) == 1
+    d = denied[0]
+    assert d["refusal"] == "requires approval"
+    assert fr._structural_kind(d["reason_text"]) is None
+
+
+def test_lumen_state_bash_wrapped_denial_uses_the_refused_segment():
+    ev = denial_events("bash /home/lumen/bin/lumen_state.py current hathor",
+                       text=LUMEN_STATE_BASH_WRAPPED_REFUSAL)
+    denied, _, _ = fr.extract_denied_calls(ev, node_map=NODE_MAP)
+    assert len(denied) == 1
+    d = denied[0]
+    assert d["argv0"] == "bash"
+    assert fr._structural_kind(d["reason_text"]) is None
+
+
 def test_blocked_path_lands_in_unreachable_paths():
     # wq#1152 signature: a Read outside worktree ∪ add-dirs.
     ev = denial_events(None, text=PATH_BLOCK, tool="Read",
