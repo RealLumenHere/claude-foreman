@@ -586,8 +586,16 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
             line_at = text.rfind("\n", 0, text.find(prefix + value)) + 1
             end = text.find("\n", line_at)
             line = text[line_at:end if end >= 0 else len(text)]
-            today = [v for _, _, v in _hits(CURRENT_PATTERNS, line,
-                                            skip_masked_output=True)]
+            today_hits = [(p, v) for _, p, v in _hits(CURRENT_PATTERNS, line,
+                                                       skip_masked_output=True)]
+            today = [v for _, v in today_hits]
+            # wq#2423: a widened prefix that recuts this same span into a DIFFERENT
+            # value string must not read as a retired rule. The line is only closed
+            # when today's table stops firing on it altogether, or when whatever it
+            # cuts today is itself already accounted for (tracked text, not this
+            # exact-value comparison, which a recut always fails).
+            today_closed = not today_hits or any(
+                account(v, tracked, p) for p, v in today_hits)
             sha12 = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
             records.append({
                 "label": label,
@@ -598,6 +606,7 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
                 "faithful": not source.startswith("read-stale:"),
                 "accounted_in": account(value, tracked, prefix),
                 "still_matches_today": value in today,
+                "today_closed": today_closed,
                 "rotated": rotated.get(sha12),
                 # Splice this value out, then mask whatever else the line holds. On an
                 # artefact the second pass is a no-op (it is already masked, and
@@ -630,7 +639,7 @@ def unaccounted(records):
     return [r for r in records
             if not r.get("rotated")
             and r.get("faithful", True)
-            and not r["accounted_in"] and r["still_matches_today"]]
+            and not r["accounted_in"] and not r.get("today_closed", not r["still_matches_today"])]
 
 
 def report(ticket_id, records, out=sys.stdout):
@@ -644,7 +653,7 @@ def report(ticket_id, records, out=sys.stdout):
             mark = "re-cut"
         elif rec["accounted_in"]:
             mark = "tracked"
-        elif not rec["still_matches_today"]:
+        elif rec.get("today_closed", not rec["still_matches_today"]):
             mark = "rule-fixed"
         else:
             mark = "BURNED?"
