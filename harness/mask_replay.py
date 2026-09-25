@@ -163,6 +163,54 @@ def blob_at_size(path, size):
     return None
 
 
+def _stat_fp(path):
+    """The `stat -c '%s:%Y:%.9Y'` fingerprint guard.sh writes to the read cache, or
+    None if `path` doesn't exist. Recomputed on a snapshot copy this confirms the
+    copy is byte-for-byte the file a read-cache record names, not just same-sized:
+    `shutil.copy2` (action_gate._stow) preserves mtime to the nanosecond, so a
+    snapshot's fp only equals the recorded one when it is the exact pre-image.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    whole, frac = divmod(st.st_mtime_ns, 1_000_000_000)
+    return f"{st.st_size}:{whole}:{whole}.{frac:09d}"
+
+
+def _sanitize_name(path):
+    """action_gate._sanitize's transform, duplicated rather than imported: a
+    snapshot filename is `<timestamp>-<sanitized path>`, and matching it here must
+    not pull in action_gate's own runtime (vault paths, WORKER_ID, gate state)."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", path.strip("/"))[:120]
+
+
+def snapshot_for(ticket_id, path, fp):
+    """(text, snapshot name) of `ticket_id`'s own frozen pre-image of `path` at
+    `fp`, else (None, None).
+
+    This is the run's OWN gate snapshot (`_runs/wq<id>/snapshots/`, the AMBER
+    pre-image action_gate.snapshot() takes before a mutating command runs), not a
+    same-sized guess reconstructed from git history: a git revision that happens to
+    match the recorded size might not be the one this run actually read, where a
+    byte-exact fp match against the run's own pre-image can only be that run's
+    bytes. Preferred over `blob_at_size` for exactly that reason. Newest first, in
+    case the run froze the same path more than once.
+    """
+    if not fp:
+        return None, None
+    snaps = os.path.join(RUNS_ROOT, f"wq{ticket_id}", "snapshots")
+    if not os.path.isdir(snaps):
+        return None, None
+    suffix = f"-{_sanitize_name(path)}"
+    for name in sorted((n for n in os.listdir(snaps) if n.endswith(suffix)),
+                       reverse=True):
+        full = os.path.join(snaps, name)
+        if _stat_fp(full) == fp:
+            return _read(full), name
+    return None, None
+
+
 def session_ids(ticket_id):
     """Session ids the run reported, for the read caches keyed by them.
 
@@ -236,9 +284,9 @@ def corpus(ticket_id):
                 rec = json.loads(line)
             except ValueError:
                 continue
-            text, kind = _recut(rec)
+            text, kind, provenance = _recut(rec, ticket_id)
             if text:
-                items[f"{kind}:{rec['path']}@{rec.get('offset')}"] = text
+                items[f"{kind}:{rec['path']}@{rec.get('offset')}#{provenance}"] = text
     for sid in sessions:
         for path in sorted(glob.glob(os.path.join(PROJECTS_ROOT, "*", f"{sid}.jsonl"))):
             text = _read(path)
@@ -247,26 +295,33 @@ def corpus(ticket_id):
     return items
 
 
-def _recut(rec):
-    """(window, source kind) for one read-cache record.
+def _recut(rec, ticket_id=None):
+    """(window, source kind, provenance) for one read-cache record.
 
     `read` means these are the bytes the model saw — the file is unchanged, the
-    revision that held them was found, or the record predates `fp` and cannot be
-    checked. `read-stale` means it is today's text standing in for bytes that are
-    gone.
+    run's own frozen pre-image matched byte-for-byte, a git revision at the
+    recorded size was found, or the record predates `fp` and cannot be checked.
+    `read-stale` means it is today's text standing in for bytes that are gone.
+    `provenance` names which of those four resolved it, so the corpus key (and
+    from there the report's `first_seen_in`) can say so honestly either way.
     """
     path, offset, limit = rec.get("path", ""), rec.get("offset"), rec.get("limit")
-    was = (rec.get("fp") or ":").split(":")[0]
+    fp = rec.get("fp")
+    was = (fp or ":").split(":")[0]
     try:
         live = os.path.getsize(path)
     except OSError:
-        return None, "read"
+        return None, "read", "live"
     if not was.isdigit() or int(was) == live:
-        return _read(path, offset, limit), "read"
+        return _read(path, offset, limit), "read", "live"
+    if ticket_id is not None:
+        text, name = snapshot_for(ticket_id, path, fp)
+        if text is not None:
+            return _window(text, offset, limit), "read", f"snapshot:{name}"
     historical = blob_at_size(path, int(was))
     if historical is not None:
-        return _window(historical, offset, limit), "read"
-    return _read(path, offset, limit), "read-stale"
+        return _window(historical, offset, limit), "read", "git-history"
+    return _read(path, offset, limit), "read-stale", "unresolved"
 
 
 def tracked_text(repo=REPO_ROOT, extra=DOCTRINE_TRACKED):

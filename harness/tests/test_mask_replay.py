@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -254,6 +255,30 @@ def test_a_window_whose_bytes_are_gone_is_marked_stale(tmp_path, monkeypatch):
     out = io.StringIO()
     mask_replay.report(4242, records, out=out)
     assert "[re-cut]" in out.getvalue()
+
+
+def test_a_changed_file_resolves_from_the_runs_own_snapshot_before_git_history(
+        tmp_path, monkeypatch):
+    """wq#2370: the run's own frozen pre-image is stronger evidence than a same-sized
+    git revision, and it is the only source available at all when the read happened
+    outside any git history (a scratch path, or an edit that never landed). A
+    byte-exact fp match against the snapshot names the run's own bytes, not merely a
+    same-sized candidate — so it is tried, and wins, before blob_at_size."""
+    run = write_run(tmp_path, 4242, "sess-1")
+    read = tmp_path / "scratch.txt"
+    read.write_text(FIXTURE)
+    fp = mask_replay._stat_fp(read)
+    snap_name = f"20260920T000005Z-{mask_replay._sanitize_name(str(read))}"
+    shutil.copy2(read, run / "snapshots" / snap_name)
+    read.write_text(CALLED_IDENT)  # the file has since changed underneath the replay
+    (tmp_path / "events" / "read_cache" / "sess-1.jsonl").write_text(
+        json.dumps({"path": str(read), "offset": "1", "limit": "1", "fp": fp}) + "\n")
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(run.parent))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    items = mask_replay.corpus(4242)
+    key = next(k for k in items if k.startswith("read:") and "scratch.txt" in k)
+    assert key.endswith(f"#snapshot:{snap_name}")
+    assert items[key] == FIXTURE
 
 
 def test_a_value_committed_in_another_repo_the_run_read_is_accounted(tmp_path,
@@ -559,7 +584,11 @@ def test_wq2253_sk_key_is_absent_from_the_model_context():
     assert [s for s in items if s.startswith("transcript:")], \
         "the model's own context must be in the corpus for the above to mean anything"
     reads = [s for s in items if "kb/ISSUE-LOG.md@" in s]
-    assert [s.rsplit("@", 1)[1] for s in reads] == ["658"]
+    assert [s.rsplit("@", 1)[1].split("#", 1)[0] for s in reads] == ["658"]
+    # wq#2370: ISSUE-LOG.md changes constantly and this run left no frozen
+    # pre-image of it, so the window is neither the run's own snapshot nor any
+    # git revision at its recorded size — labelled unresolved, not silently live.
+    assert [s.rsplit("#", 1)[1] for s in reads] == ["unresolved"]
 
 
 @pytest.mark.skipif(not os.path.isdir(WQ2253_RUN),
