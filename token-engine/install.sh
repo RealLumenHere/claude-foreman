@@ -55,6 +55,15 @@ install -D -m 0644 -o root -g root "$SRC/providers.json" "$LIB/providers.json"
 install -D -m 0755 -o root -g root "$SRC/git-credential-token-engine" \
     /usr/local/bin/git-credential-token-engine
 
+# wq#2272 (T3, design §3.3): the fleet pre-push wall. Root-owned dir + hook —
+# uid lumen must not be able to edit or replace what core.hooksPath selects
+# (guard.sh's primary-tree freeze is the model: the wall lives outside what a
+# worker can write). fworker points each worker worktree at it; the global
+# flip for every other clone happens at TE_FINALIZE_MOVE below, together with
+# retiring the store helper the hook exists to catch.
+install -d -m 0755 -o root -g root "$LIB/hooks"
+install -D -m 0755 -o root -g root "$SRC/hooks/pre-push" "$LIB/hooks/pre-push"
+
 # wq#2278 (T10, design §7 ranks 5-8 + rank 3): migrate the remaining
 # inventory into the store. COPY, not move — the same T4 rule as the forge
 # tokens above: plug-ctl/power-remediate still source tapo.env, bin/ebay-token
@@ -152,6 +161,11 @@ fi
 # line and ~/.git-credentials are exactly the on-disk token copies the design
 # retires. Only under TE_FINALIZE_MOVE=1, same contract as the token moves.
 if [ "${TE_FINALIZE_MOVE:-0}" = 1 ]; then
+    # wq#2272 (T3): once the store helper is gone, every clone of uid lumen —
+    # primaries included — goes behind the pre-push wall. Not before: until
+    # finalize, primaries legitimately push through the global helper the hook
+    # would refuse.
+    runuser -u lumen -- git config --global core.hooksPath "$LIB/hooks"
     runuser -u lumen -- git config --global --unset-all credential.helper || true
     if [ -f /home/lumen/.git-credentials ]; then
         shred -u /home/lumen/.git-credentials 2>/dev/null || rm -f /home/lumen/.git-credentials

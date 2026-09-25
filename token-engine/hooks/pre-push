@@ -1,0 +1,104 @@
+#!/bin/sh
+# wq#2272 (T3, TOKEN_ENGINE_DESIGN.md §3.3): fleet pre-push wall.
+# Installed root-owned at /usr/local/lib/token-engine/hooks (install.sh) and
+# selected via core.hooksPath — per-worktree by fworker now, globally at
+# TE_FINALIZE_MOVE (the same contract as retiring the store helper, because
+# until then primaries still legitimately push through the global helper).
+#
+# git calls this with $1 = remote name, $2 = remote URL, refs on stdin.
+# Two refusals, both credential walls, neither about ref content:
+#   1. any URL carrying userinfo (*://*@*) — a token in a remote URL is the
+#      recurring leak class (wq#2243, ISSUE-LOG 537); even a VALID embedded
+#      credential is refused, tokens travel only through the broker.
+#   2. an http(s) push to a known forge host whose credential.helper does not
+#      resolve to token-engine — blocks the quiet fallback to a stored
+#      credential (global store helper / ~/.git-credentials) that the
+#      per-worktree reset entry is supposed to have cut off.
+set -u
+
+URL="${2:-}"
+
+case "$URL" in
+  *://*@*)
+    echo "pre-push: remote URL carries userinfo — refusing (wq#2262)." >&2
+    echo "pre-push: strip the credential from the remote (remote_credential_sweep --fix);" >&2
+    echo "pre-push: credentials come from the token-engine helper (wq#2271), never the URL." >&2
+    exit 1
+    ;;
+esac
+
+# Helper check only makes sense where a credential helper is consulted at all.
+case "$URL" in
+  http://*|https://*) ;;
+  *) exit 0 ;;
+esac
+
+# host[:port] of the push URL (userinfo is impossible here — refused above).
+HOSTPORT="${URL#*://}"
+HOSTPORT="${HOSTPORT%%/*}"
+
+# Known forge hosts: the root-installed forge map (gitea_url / github_git_url),
+# github.com always. Env override is for the gate replay's loopback forge.
+FORGES="${TOKEN_ENGINE_FORGES_PATH:-/usr/local/lib/token-engine/forges.json}"
+KNOWN="github.com"
+if [ -r "$FORGES" ]; then
+  KNOWN=$(python3 -c '
+import json, sys
+from urllib.parse import urlsplit
+hosts = {"github.com"}
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    pass
+else:
+    for k in ("gitea_url", "github_git_url"):
+        v = d.get(k)
+        if v:
+            hosts.add(urlsplit(v).netloc)
+hosts.discard("")
+print("\n".join(sorted(hosts)))' "$FORGES" 2>/dev/null || echo "github.com")
+fi
+
+MATCH=0
+for h in $KNOWN; do
+  [ "$HOSTPORT" = "$h" ] && { MATCH=1; break; }
+done
+
+if [ "$MATCH" = 1 ]; then
+  # Resolve credential.helper the way git does: scopes accumulate in order and
+  # an empty value resets the list (the reset entry fworker writes first is
+  # exactly what cuts off the inherited global store helper).
+  RESOLVED=$(git config --get-all credential.helper 2>/dev/null | awk '
+    $0 == "" { delete seen; n = 0; next }
+    { seen[n++] = $0 }
+    END { for (i = 0; i < n; i++) print seen[i] }')
+  if [ -z "$RESOLVED" ]; then
+    echo "pre-push: push to forge host $HOSTPORT with no credential helper — refusing (wq#2262)." >&2
+    echo "pre-push: the sanctioned path is credential.helper = token-engine (wq#2271, design §3.1)." >&2
+    exit 1
+  fi
+  while IFS= read -r h; do
+    case "$h" in
+      token-engine|/usr/local/bin/git-credential-token-engine) ;;
+      *)
+        echo "pre-push: push to forge host $HOSTPORT but credential.helper resolves to '$h'," >&2
+        echo "pre-push: not token-engine — refusing (wq#2262): a stored credential must not" >&2
+        echo "pre-push: quietly carry a push the broker never saw (TOKEN_ENGINE_DESIGN.md §3.3)." >&2
+        exit 1
+        ;;
+    esac
+  done <<EOF
+$RESOLVED
+EOF
+fi
+
+# core.hooksPath shadows the repo's own hooks dir entirely; chain to a real
+# repo-local pre-push (samples aside) so this wall never silences one. Checks
+# above already passed and stdin (the ref list) is untouched for the chainee.
+REPO_HOOKS="$(git rev-parse --git-common-dir 2>/dev/null)/hooks"
+SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+if [ -x "$REPO_HOOKS/pre-push" ] && [ "$REPO_HOOKS" != "$SELF_DIR" ]; then
+  exec "$REPO_HOOKS/pre-push" "$@"
+fi
+
+exit 0

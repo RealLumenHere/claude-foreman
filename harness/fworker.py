@@ -1922,6 +1922,12 @@ def write_worktree_credential_config(worktree):
     the repo path with the request, which is how the daemon scopes the
     credential per repo rather than per host.
 
+    T3 (wq#2272, design §3.3) adds core.hooksPath → the root-installed hooks
+    dir, whose pre-push refuses userinfo URLs and any forge push whose
+    resolved credential.helper is not token-engine. Written even where the
+    dir is not installed yet: git treats a missing hooksPath as hookless, so
+    the entry is inert until install.sh lands the wall.
+
     Best-effort by design: a worktree without this config falls back to the
     pre-T1 credential path, which must keep working until the deploy
     finalizes (install.sh's TE_FINALIZE_MOVE) — failing the dispatch would
@@ -1929,7 +1935,9 @@ def write_worktree_credential_config(worktree):
     steps = [["config", "extensions.worktreeConfig", "true"],
              ["config", "--worktree", "--replace-all", "credential.helper", ""],
              ["config", "--worktree", "--add", "credential.helper", "token-engine"],
-             ["config", "--worktree", "credential.useHttpPath", "true"]]
+             ["config", "--worktree", "credential.useHttpPath", "true"],
+             ["config", "--worktree", "core.hooksPath",
+              "/usr/local/lib/token-engine/hooks"]]
     for args in steps:
         p = _git(worktree, *args)
         if p.returncode != 0:
