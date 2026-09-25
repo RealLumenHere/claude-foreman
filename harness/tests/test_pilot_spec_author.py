@@ -197,12 +197,38 @@ def test_parse_draft_reads_a_fenced_reply():
     assert psa.parse_draft('no json here') == {}
 
 
+def validate_card(path):
+    with open(path) as fh:
+        card = fh.read()
+    sections = {}
+    for heading, key in psa.HEADINGS.items():
+        bounds = psa._section_bounds(card.splitlines(), heading)
+        if bounds:
+            sections[key] = section_text(card, heading)
+    return card, psa.validate(sections)
+
+
 def test_real_runner_authored_spec_passes_the_validator():
     """Outside-the-design-population probe: a committed card a runner wrote by hand,
     cited in wq#2690 as a legitimate fill-in. The validator must accept it."""
-    with open(RUNNER_FILLED_CARD) as fh:
-        card = fh.read()
+    card, problems = validate_card(RUNNER_FILLED_CARD)
     assert psa.unfilled_sections(card) == []
-    sections = {key: section_text(card, heading)
-                for heading, key in psa.HEADINGS.items()}
-    assert psa.validate(sections) == []
+    assert problems == []
+
+
+# wq#2728: every committed pilots/*/CARD.md the validator accepted BEFORE the binding
+# rules landed, enumerated rather than discovered so the list cannot silently shrink.
+# Nine of the 49 committed cards validate clean; the other 40 predate wq#2690 and were
+# already rejected, which is what gives this probe the room to fail — a tightening that
+# over-rejects real prose lands here first. Cards are immutable artifacts, so a failure
+# here means the validator changed, not the fixture.
+ACCEPTED_CARDS = [
+    '0a0c3351a80e', '0eed2f5bdb92', '4e727fa5f99a', '67af7c7e9ecf', '7187e39f4cbf',
+    '77b652487b4e', '7c516dfb1a14', '7ef838ffc9f5', '9d95766f5f43',
+]
+
+
+@pytest.mark.parametrize('pilot', ACCEPTED_CARDS)
+def test_already_accepted_cards_stay_accepted(pilot):
+    _, problems = validate_card(os.path.join(REPO, 'pilots', pilot, 'CARD.md'))
+    assert problems == []
