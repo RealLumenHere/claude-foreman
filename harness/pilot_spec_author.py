@@ -77,11 +77,50 @@ COMPARATOR = re.compile(
     r'(>=|<=|>|<|\bat least\b|\bat most\b|\bbeats?\b|\bfaster\b|\bslower\b|'
     r'\bhigher\b|\blower\b|\bfewer\b|\bmore\b|\bless\b|\breduces?\b|\bcuts?\b|'
     r'\bincreases?\b)', re.I)
+# wq#2728: a win condition has to BIND a number. Presence of a keyword is not the test —
+# "5 things are listed below in the report" carries both `below` and `5`, and the two have
+# nothing to do with each other, so it fixed nothing and validated clean. The comparator
+# must govern a numeral. Two shapes are real: comparator-then-numeral (">= 97 percent",
+# "at least 40 percent", "threshold of 200 ms", and pilots/9d95766f5f43's ">= baseline
+# mean + 2.0"), and numeral-then-trailing-comparator ("200 ms or less", "40 percent
+# faster"). The gap between the halves may name the other operand but not cross a clause
+# boundary: a comma or an `and`/`which` means the number belongs to a different claim.
+# Residual, accepted: a comparator bound to a quantity that is not the metric ("over 2000
+# paired runs") still passes. Binding is what regex can honestly police; which quantity is
+# the metric is not.
+_WIN_GAP = (r'(?:(?!\b(?:and|or|but|which|that|while|if|then|unless|when)\b)'
+            r'[^\d,;:.!?\n]){0,28}')
+_WIN_OP = (r'(?:>=|<=|=>|=<|>|<|\bat least\b|\bat most\b|\bthreshold\b|\bbelow\b|'
+           r'\babove\b|\bunder\b|\bover\b|\bwithin\b|\bbeats?\b|'
+           r'\bno (?:more|less|fewer) than\b|\b(?:more|less|fewer|greater) than\b)')
+_WIN_UNIT = (r'(?:\s*(?:%|percent|points?|pp|ms|s|sec(?:onds?)?|min(?:utes?)?|x|'
+             r'notes?|rows?|draws?))?')
+_WIN_TRAILING = (r'(?:\bor (?:less|fewer|more|better|higher|lower|faster|slower)\b|'
+                 r'\b(?:faster|slower|lower|higher|better|fewer|more)\b)')
 WIN_CONDITION = re.compile(
-    r'(\bwin\b|\bcounts as\b|\bthreshold\b|>=|<=|>|<|\bat least\b|\bat most\b|'
-    r'\bbelow\b|\babove\b)', re.I)
-PINNED_SAMPLE = re.compile(
-    r'(/[\w.\-]+/[\w.\-/]*|\b[0-9a-f]{64}\b|\b\d+\s+\w+)')
+    _WIN_OP + _WIN_GAP + r'\d' + r'|\d' + _WIN_UNIT + r'\s*' + _WIN_TRAILING, re.I)
+
+# A path or a sha256 names the bytes both arms read, so no prose around it can un-name
+# them. Split out from the count pin below because only the count is withdrawable.
+PINNED_IDENTITY = re.compile(r'(/[\w.\-]+/[\w.\-/]*|\b[0-9a-f]{64}\b)')
+# A row/query count is the weakest pin the prompt accepts, and it pins only while it is
+# exact and constant. wq#2728: "roughly 50 notes pulled fresh from the live queue each
+# run count varies day to day" matched on the bare "50 notes" token while saying twice
+# that the sample is not the same twice.
+PINNED_COUNT = re.compile(r'\b\d+\s+\w+')
+# Exactness is structural: the approximator has to be adjacent to the numeral it weakens,
+# so this reads the number's own modifiers rather than scanning the section for bad words.
+APPROXIMATE_COUNT = re.compile(
+    r'((?:\b(?:roughly|approximately|approx|about|around|some|several|a few|nearly|'
+    r'up to|as many as|on the order of)\b\W{0,3}|~\s*)\d+'
+    r'|\d+\s*(?:\+|-?ish\b|or so\b))', re.I)
+# Constancy: a closed class of non-constancy predicates. Any of them makes "50 notes" a
+# fresh 50 notes per run, which is a sample size, not a fixed sample.
+RESAMPLED = re.compile(
+    r'\b(var(?:y|ies|ying)|differs?|fluctuates?|re-?sampled?|'
+    r'chang(?:e|es|ing)\s+(?:between|each|every|per|from)|'
+    r'(?:each|every|per)\s+(?:run|day|attempt|invocation)|'
+    r'fresh(?:ly)?|whatever|as available|not\s+(?:fixed|pinned|the same))\b', re.I)
 # A line that plausibly runs, not a sentence about running: an interpreter, a script
 # path, or an invocation carrying a flag. Prose passes a bare "word word word" regex,
 # which is how "measure the judge the way we do today" once counted as a baseline.
@@ -197,9 +236,21 @@ def validate(sections):
         if not WIN_CONDITION.search(metric):
             problems.append('primary_metric: no win condition fixed before the run')
 
+    # An identity pin ends the question. A count pin has to survive its own sentence.
     sample = (sections.get('fixed_sample') or '').strip()
-    if sample and not PINNED_SAMPLE.search(sample):
-        problems.append('fixed_sample: not pinned — give a path, a count, or a sha256')
+    if sample and not PINNED_IDENTITY.search(sample):
+        approximate = APPROXIMATE_COUNT.search(sample)
+        resampled = RESAMPLED.search(sample)
+        if not PINNED_COUNT.search(sample):
+            problems.append('fixed_sample: not pinned — give a path, a count, or a sha256')
+        elif approximate:
+            problems.append(f'fixed_sample: not pinned — the count is approximate '
+                            f'("{approximate.group(0).strip()}"); give an exact count, '
+                            f'an absolute path, or a sha256')
+        elif resampled:
+            problems.append(f'fixed_sample: not pinned — the sample is described as '
+                            f'changing between runs ("{resampled.group(0)}"); both arms '
+                            f'must read one frozen sample')
 
     for arm in ('baseline', 'treatment'):
         val = (sections.get(arm) or '').strip()

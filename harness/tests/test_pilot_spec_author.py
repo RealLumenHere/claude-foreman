@@ -49,6 +49,14 @@ GOOD_SPEC = {
 }
 GOOD_DRAFT = json.dumps(GOOD_SPEC)
 
+# wq#2728 — the two drafts that validated clean while contradicting themselves. Each one
+# carries the keyword the section's check looked for ("50 notes" for the pin, "below" and
+# "5" for the win condition) and says in the same breath that the thing is not fixed.
+# Committed verbatim from the ticket so the probe is re-runnable, not paraphrased.
+KEYWORD_ONLY_SAMPLE = ('roughly 50 notes pulled fresh from the live queue each run '
+                       'count varies day to day')
+KEYWORD_ONLY_METRIC = '5 things are listed below in the report for review'
+
 VAGUE_DRAFT = json.dumps({
     'hypothesis': 'the smaller rung seems promising and could improve judging overall',
     'primary_metric': 'judge quality, measured appropriately as the run goes along',
@@ -144,6 +152,43 @@ def test_validator_flags_each_unfalsifiable_shape():
         {**psa.parse_draft(GOOD_DRAFT), 'fixed_sample': 'recent judge notes from the queue'}))
     assert any('no runnable command' in p for p in psa.validate(
         {**psa.parse_draft(GOOD_DRAFT), 'baseline': 'measure the judge the way we do today'}))
+
+
+def test_validator_rejects_keyword_only_match_on_fixed_sample():
+    """wq#2728: "50 notes" is not a pin when the same sentence says the count varies.
+    The rest of the draft is the good one, so a non-empty result can only be the sample."""
+    problems = psa.validate({**psa.parse_draft(GOOD_DRAFT),
+                             'fixed_sample': KEYWORD_ONLY_SAMPLE})
+    assert problems
+    assert all(p.startswith('fixed_sample:') for p in problems), problems
+    assert any('not pinned' in p for p in problems)
+
+
+def test_validator_rejects_keyword_only_match_on_primary_metric():
+    """wq#2728: `below` and `5` both appear and neither binds the other, so this names
+    no win condition at all."""
+    problems = psa.validate({**psa.parse_draft(GOOD_DRAFT),
+                             'primary_metric': KEYWORD_ONLY_METRIC})
+    assert problems
+    assert all(p.startswith('primary_metric:') for p in problems), problems
+    assert any('no win condition' in p for p in problems)
+
+
+@pytest.mark.parametrize('key,text', [
+    # A count pin with no path in sight — the weakest shape the prompt still accepts.
+    ('fixed_sample', '400 notes in the judge queue export of 2026-09-01, one row per '
+                     'note, both arms read the same 400'),
+    ('primary_metric', 'Timeout rate as a percent of runs. Win, fixed before the run: '
+                       'treatment rate below 2 percent.'),
+    ('primary_metric', 'Median wall-clock seconds per note; win fixed before the run: '
+                       'treatment is 25 percent faster than baseline.'),
+    ('primary_metric', 'Judge latency in ms per note, threshold of 200 ms to win, '
+                       'fixed before the run.'),
+])
+def test_validator_still_accepts_legitimate_binding_shapes(key, text):
+    """The tightening in wq#2728 must reject unbound keywords, not bound ones stated in
+    prose the GOOD_SPEC shape does not cover."""
+    assert psa.validate({**psa.parse_draft(GOOD_DRAFT), key: text}) == []
 
 
 def test_parse_draft_reads_a_fenced_reply():
