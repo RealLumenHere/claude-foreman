@@ -1,0 +1,25 @@
+# wq#2471 — merge into the live LiteLLM proxy config
+# (/home/lumen/agent/litellm_config.yaml — NOT in this repo, lives on the
+# gateway node; same hand-merge convention as wq#897/wq#948/wq#1295/wq#1406/
+# wq#1590/wq#2627). Deploy steps: README.md next to this file.
+#
+# Closes the "No fallback model group found for original model_group=<x>"
+# dead-end for two groups whose retries currently exhaust with no landing:
+#
+#   gemini-flash        -> free-tier 20 RPD, 114x/24h (wq#2065). Same entry
+#                           wq#2627 PART 1 already proposed; adopted here
+#                           because it had not landed in the live config.
+#   nephthys-qwen14b     -> live local family (NOT the retired
+#                           nephthys-qwen3-14b MCP brain, wq#589), dispatched
+#                           directly by dispatcher/config.json:10 outside the
+#                           local-worker group. 18x/24h, never reaches its
+#                           qwen36-local sibling.
+#
+# VERIFY on deploy: recent LiteLLM proxies read `router_settings.fallbacks`;
+# older builds read `litellm_settings.fallbacks`. Merge into whichever the
+# live config already uses. Append to any existing fallbacks list, don't
+# replace it.
+router_settings:
+  fallbacks:
+    - gemini-flash: [cerebras-oss-120b]
+    - nephthys-qwen14b: [qwen36-local]
