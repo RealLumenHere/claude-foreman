@@ -41,6 +41,10 @@ Enumerated from `systemctl list-unit-files`, the timer roster, `crontab -l`, and
 fleet-wide grep for flagship CLI defaults (`--model opus|fable|best|claude-opus|claude-fable`
 over `agents/ services/ agent/ bin/ minerva/` — **zero hits**).
 
+> **Scope caveat — this table is incomplete, added 2026-09-25 (wq#2661). See §1.1.**
+> It covers on-Lumen processes only. At least one fleet component with live model calls
+> is missing from it.
+
 | # | Surface | Cadence | Model in use | Path | Anthropic quota | Cheapest-sufficient | Grade |
 |---|---|---|---|---|---|---|---|
 | 1 | foreman worker dispatch (`router.py` + `models.yaml` + `fworker.py`) | per ticket claim | sonnet-5 ×111, opus-5 ×34, fable-5 ×4 | `claude` CLI, OAuth | **yes** | partly — §3 F1/F2 | A |
@@ -70,6 +74,47 @@ set. None of them dispatches an Anthropic model. Nothing to flag for opus/fable 
 whole dataset with a clean success rate — 2/2 on novel-design, at the highest measured
 burn (698s median wall-clock, 75.6s CPU, 64 turns). Its 0/2 on standard-engineering
 supports the manifest's own "never a volume worker" line. Leave as-is.
+
+### 1.1 Known gap: §1 enumerates on-Lumen processes only (wq#2661, 2026-09-25)
+
+**mailbot is missing from the table above and makes four live DeepSeek calls per
+inbound email**, two of them classification gates:
+`screenRomanticDrift` (`mailbot/src/worker.js:323-362`, live at `:919`, binary
+`{"romantic_drift":boolean}`, `max_tokens:40`) and `runCritic` (`:246-306`, live at
+`:1009`/`:1034`, 6-boolean fail-closed QA gate, `max_tokens:300`), plus the generative
+`generateReply` (`:176`) and `generateNotesUpdate` (`:576`). Model is
+`deepseek-v4-flash` on all four, reached by direct
+`fetch("https://api.deepseek.com/chat/completions")` with a worker-held key — **not via
+LiteLLM and not via the `claude` CLI**, so it also sits outside the gateway's usage
+accounting. Found by wq#2625's verify of wq#2623; scored and priced in
+`research/CORAL_NEEDLE_TIER.md` §2.2/§3/§5.
+
+The root cause is the enumeration method, not the grep scope, and the distinction
+matters because the obvious fix does not work:
+
+- All four instruments named above — `systemctl list-unit-files`, the timer roster,
+  `crontab -l`, and the CLI-flag grep — are **on-Lumen process** instruments. mailbot is
+  a Cloudflare Worker (`mailbot/wrangler.toml:1-5`) running at the edge with no unit, no
+  timer and no cron entry, so all four are structurally blind to it.
+- Adding `mailbot/` to the §1 grep's path list would **not** have caught it: that grep's
+  pattern is `--model opus|fable|best|…`, a CLI-flag shape that mailbot's source does not
+  contain. Any component that calls a provider HTTP endpoint directly is invisible to a
+  CLI-flag pattern no matter which directories it is pointed at.
+- `model_routing_audit.py` does not cover the gap either. It reads `_runs/`, the queue DB
+  and the messenger DB (`model_routing_audit.py:32-37`) to compute burn statistics, and
+  enumerates no surfaces at all — so this doc's "reproducible via
+  `model_routing_audit.py`" claim applies to §2's numbers, never to §1's list.
+
+**Fix for the next audit** (wq#2664): enumerate from *deployment manifests plus endpoint
+strings*, not from the local process table alone. Concretely, add two passes — (i) every
+`wrangler.toml` / deploy manifest under the registered primaries
+(`foreman, mailbot, pokemon, work-queue, …`, the list `UID_SPLIT_FWORKER.md:126` already
+maintains), and (ii) a content grep for provider endpoints and SDK imports
+(`api.deepseek.com`, `api.anthropic.com`, `api.openai.com`,
+`generativelanguage.googleapis.com`, `@anthropic-ai/`, `openai`) across those same roots
+— and state the enumeration scope explicitly in §1 so a future reader can see what the
+table does not cover. Until that lands, read §1 as "every model-dispatching surface that
+runs as a process on Lumen."
 
 ---
 
