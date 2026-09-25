@@ -86,6 +86,46 @@ running the *same* `_verdict_from()` — ADOPT->accept, WATCH->defer, SKIP->
 rejected_aged. One verdict function, two producers; a pilot is not a special case
 downstream, which is what makes 3.4 (ship-through to PLAN) free.
 
+### 3.1a Who fills the five spec sections — the generator, never the runner (wq#2690)
+
+The card's Hypothesis / Primary metric / Fixed sample / Baseline / Treatment
+sections are the runnable pilot. `build_card()` filled only the metadata table and
+the two proposal-text sections, so those five shipped as template comments with no
+owner. Four pilots parked on that gap over several weeks: wq#1933 and wq#1953 (no
+card at all), wq#2124 and wq#2654 (card present, all five blank — ISSUE-LOG #257,
+#779). Practice had split three ways and nothing settled it: some runners filled the
+spec in themselves from the proposal before the first scored call (wq#2432, wq#1791,
+wq#1902), which only works when that runner's own worktree write happens to be
+permitted — wq#2654's first attempt was KILLED for exactly this move, because the
+card lives under `/home/lumen/foreman`, a primary tree `guard.sh` blocks worker
+writes on; other runners correctly refused to guess a measurement plan and blocked,
+after which nothing else ever filled the card.
+
+Doctrine, from here:
+
+1. **The generator owns the spec.** `harness/pilot_spec_author.fill_card()` authors
+   the five sections at card-generation time from the proposal's own
+   `title` / `decision_reason` / `current_state` / `proposed_change`, via the same
+   LiteLLM gateway the wq#1559 enforced re-run already uses. The card arrives
+   complete; no runner edit is needed, so the write-permission conflict disappears.
+2. **A runner still never hand-fills a card.** The earlier "edit it before the run"
+   clause is not a licence to invent a measurement plan. If the spec is missing or
+   carries the DO-NOT-RUN banner below, the runner blocks the ticket and cites it.
+3. **Fail loud, never blank, never block card creation.** A draft is validated
+   (`validate()`): falsifiable hypothesis with a comparison and a number, a primary
+   metric with a win condition fixed before the run, a pinned sample, and a runnable
+   command in each arm. A rejected draft is re-asked once with the reasons attached.
+   If the second draft is also bad, or the gateway is down, the card is still written
+   — with a `SPEC AUTHORING FAILED … DO NOT RUN` banner and the rejected draft quoted
+   in place of each section. Refusing to write the card would recreate the failure
+   this fixes: the pilot vanishes and nothing closes the loop. A loud broken card is
+   visible, reviewable, and still un-runnable under (2).
+
+Wiring: three lines in `build_card()` (`sys.path.insert` on
+`/home/lumen/foreman/harness`, import, `fill_card`). `minerva_defer_review.py` lives
+in the `/home/lumen/minerva` repo, outside a foreman worker's sandbox, so the module
+and its tests land here and the import lands there.
+
 ### 3.2 Reaper: re-run once, retire only on the second miss
 
 `_verdict_from()` gains a third return state. No `RECOMMENDATION:` line now means

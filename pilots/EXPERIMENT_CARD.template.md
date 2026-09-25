@@ -2,7 +2,10 @@
 
 Experiment card. Generated {{GENERATED}} by `minerva_defer_review` (wq#1559).
 This card is the spec: a runner should be able to execute the pilot from it without
-asking a question. Edit it before the run if it is wrong; never edit it during.
+asking a question. The five spec sections below are authored by the generator, not
+by the runner (wq#2690, `research/DEFER_PILOT_LANE.md` §3.1a): a runner that finds
+them missing, or finds a DO-NOT-RUN banner, blocks the ticket rather than inventing
+a measurement plan. Never edit the card during a run.
 
 | | |
 |---|---|
