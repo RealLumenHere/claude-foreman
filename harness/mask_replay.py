@@ -58,6 +58,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import masking  # noqa: E402
@@ -66,6 +67,15 @@ FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_runs"))
 EVENTS_DIR = os.environ.get("FOREMAN_EVENTS_DIR", os.path.join(FOREMAN_ROOT, "events"))
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# wq#2543: wq#2514 AC1 (this tool exits 0) is unreachable for a REAL burn, because
+# rotating the value does not remove it from the run's frozen corpus — replay would
+# keep reporting it forever. The ledger is the settlement: one entry per rotated
+# value, keyed by the same hash `unaccounted()` already carries, holding nothing an
+# attacker could use. It lives under foreman state (not this repo) because it is
+# runtime fact recorded by whoever confirmed the rotation, not code.
+ROTATED_LEDGER_PATH = os.environ.get(
+    "FOREMAN_ROTATED_LEDGER", os.path.join(FOREMAN_ROOT, "rotated_ledger.json"))
 
 # Committed, but in the kb repo rather than this one, and read by nearly every run:
 # its rows quote the very shapes (`ghs_solver`, `sk-ant-oat01-…`) that filed half the
@@ -330,6 +340,54 @@ def account(value, tracked):
     return None
 
 
+def load_rotated_ledger(path=None):
+    """{value_sha256_12 -> record} for every settled rotation, or {} if none yet.
+
+    Written by the operator/orch via `record-rotated` (below) once a rotation is
+    CONFIRMED — the old value now returns 401 — never by a replay run itself. Only
+    the hash, a timestamp and the confirming ticket are ever stored; the file holds
+    nothing that could re-arm the alarm it settles.
+    """
+    path = ROTATED_LEDGER_PATH if path is None else path
+    try:
+        with open(path) as fh:
+            records = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return {r["value_sha256_12"]: r for r in records if r.get("value_sha256_12")}
+
+
+def record_rotated(sha256_12, ticket, note=None, path=None, rotated_at=None):
+    """Append one ledger entry, de-duplicated on `sha256_12`. Returns the record.
+
+    Takes a hash, never a value — the caller (the operator/orch that just confirmed
+    the rotation) reads `sha256_12` off a prior mask_replay BURNED? record, not off
+    the credential itself.
+    """
+    path = ROTATED_LEDGER_PATH if path is None else path
+    try:
+        with open(path) as fh:
+            records = json.load(fh)
+    except (OSError, ValueError):
+        records = []
+    record = {
+        "value_sha256_12": sha256_12,
+        "rotated_at": rotated_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ticket": str(ticket),
+    }
+    if note:
+        record["note"] = note
+    records = [r for r in records if r.get("value_sha256_12") != sha256_12]
+    records.append(record)
+    dirname = os.path.dirname(path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
+    with open(path, "w") as fh:
+        json.dump(records, fh, indent=2)
+        fh.write("\n")
+    return record
+
+
 def _hits(patterns, text, skip_masked_output):
     """(label, prefix, value) per match. `skip_masked_output` drops a match that ends
     in the mask literal — masking._matches' rule (wq#2298), true of the current table
@@ -368,7 +426,7 @@ def _context(line, value, label):
 
 
 def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
-           skip_masked=None):
+           skip_masked=None, rotated=None):
     """One record per distinct (label, value) the run put in front of the model.
 
     Records are hash-only and ordered by corpus source, so the first record for a
@@ -379,10 +437,14 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
     without the value ever leaving this loop. `skip_masked` says whether a match that
     ends in the mask literal is dropped (see _hits); the default is what the bundled
     LEGACY_PATTERNS need, and a caller replaying a historic table passes its own.
+    `rotated` is the {value_sha256_12 -> ledger record} map (default: the on-disk
+    ledger) that settles a value already rotated, regardless of what the tree or
+    today's rules say about it.
     """
     patterns = LEGACY_PATTERNS if patterns is None else patterns
     tracked = tracked_text() if tracked is None else tracked
     items = corpus(ticket_id) if items is None else items
+    rotated = load_rotated_ledger() if rotated is None else rotated
     if skip_masked is None:
         skip_masked = patterns is not LEGACY_PATTERNS
     records, seen = [], set()
@@ -396,16 +458,17 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
             line = text[line_at:end if end >= 0 else len(text)]
             today = [v for _, _, v in _hits(CURRENT_PATTERNS, line,
                                             skip_masked_output=True)]
+            sha12 = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
             records.append({
                 "label": label,
                 "prefix": prefix.strip()[-masking.PREFIX_CHARS:],
                 "value_len": len(value),
-                "value_sha256_12": hashlib.sha256(
-                    value.encode("utf-8", "replace")).hexdigest()[:12],
+                "value_sha256_12": sha12,
                 "first_seen_in": source,
                 "faithful": not source.startswith("read-stale:"),
                 "accounted_in": account(value, tracked),
                 "still_matches_today": value in today,
+                "rotated": rotated.get(sha12),
                 # Splice this value out, then mask whatever else the line holds. On an
                 # artefact the second pass is a no-op (it is already masked, and
                 # masking is a fixed point), but a transcript line is raw: a record
@@ -419,14 +482,15 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
 
 
 def unaccounted(records):
-    """Records that are neither committed text nor a closed pattern defect.
+    """Records that are neither committed text, a closed pattern defect, nor rotated.
 
-    Two things explain a legacy hit benignly. The value is in the tracked tree, or
+    Three things explain a legacy hit benignly. The value is in the tracked tree,
     today's table no longer reads that string as a credential at all — the second
     covers the dominant class, a called identifier (`base, token = _resolve()`) in a
     worktree edit that never landed in the shape the snapshot froze, so there is no
-    tree text to match it against. Only what survives both screens is worth an
-    instinct-4 rotation.
+    tree text to match it against — or the ledger says it was rotated: a value that
+    now 401s is settled no matter what the tree says about the string that used to
+    work. Only what survives all three screens is worth an instinct-4 rotation.
 
     A record from an unfaithful re-cut is not one of them: it was scored off text
     that replaced what the run actually read, so it can no more demand a rotation
@@ -434,7 +498,8 @@ def unaccounted(records):
     is real — that window's true bytes are simply unrecoverable from this run.
     """
     return [r for r in records
-            if r.get("faithful", True)
+            if not r.get("rotated")
+            and r.get("faithful", True)
             and not r["accounted_in"] and r["still_matches_today"]]
 
 
@@ -443,7 +508,9 @@ def report(ticket_id, records, out=sys.stdout):
     print(f"wq#{ticket_id}: {len(records)} credential-shaped values in the run's "
           f"model context, {len(loose)} unaccounted", file=out)
     for rec in records:
-        if not rec.get("faithful", True):
+        if rec.get("rotated"):
+            mark = "ROTATED"
+        elif not rec.get("faithful", True):
             mark = "re-cut"
         elif rec["accounted_in"]:
             mark = "tracked"
@@ -455,6 +522,9 @@ def report(ticket_id, records, out=sys.stdout):
               f"sha256={rec['value_sha256_12']} prefix={rec['prefix']!r}", file=out)
         print(f"      seen in : {rec['first_seen_in']}", file=out)
         print(f"      accounted: {rec['accounted_in']}", file=out)
+        if rec.get("rotated"):
+            print(f"      rotated  : {rec['rotated'].get('rotated_at')} "
+                  f"({rec['rotated'].get('ticket')})", file=out)
         print(f"      line     : {rec['line']}", file=out)
     if loose:
         print("\nROTATE: the values above marked BURNED? appear nowhere in the tracked "
@@ -470,7 +540,38 @@ def report(ticket_id, records, out=sys.stdout):
     return 1 if loose else 0
 
 
+def main_record_rotated(argv):
+    """`record-rotated` subcommand: the operator/orch's tool for settling a burn.
+
+    Run once a rotation is CONFIRMED (the old value now returns 401). Takes the
+    hash off a prior mask_replay BURNED? record — never the value — so this tool
+    cannot leak the credential it is settling.
+    """
+    ap = argparse.ArgumentParser(
+        prog="mask_replay.py record-rotated",
+        description=main_record_rotated.__doc__.splitlines()[0])
+    ap.add_argument("--sha256-12", required=True, dest="sha256_12",
+                    help="value_sha256_12 from a prior mask_replay BURNED? record")
+    ap.add_argument("--ticket", required=True,
+                    help="ticket that confirmed the rotation")
+    ap.add_argument("--note", default=None)
+    ap.add_argument("--rotated-at", default=None,
+                    help="UTC timestamp the rotation was confirmed at "
+                         "(%%Y-%%m-%%dT%%H:%%M:%%SZ); default: now")
+    ap.add_argument("--rotated-ledger", default=ROTATED_LEDGER_PATH)
+    args = ap.parse_args(argv)
+    record = record_rotated(args.sha256_12, args.ticket, note=args.note,
+                            path=args.rotated_ledger, rotated_at=args.rotated_at)
+    print(f"recorded rotation: sha256={record['value_sha256_12']} "
+          f"ticket={record['ticket']} at={record['rotated_at']}")
+    return 0
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["record-rotated"]:
+        return main_record_rotated(argv[1:])
+
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("ticket", type=int, help="ticket id of the run that fired")
     ap.add_argument("--rules", choices=("legacy", "current"), default="legacy",
@@ -479,6 +580,8 @@ def main(argv=None):
     ap.add_argument("--repo", default=REPO_ROOT)
     ap.add_argument("--extra-tracked", action="append", default=DOCTRINE_TRACKED)
     ap.add_argument("--json", action="store_true", help="records as JSON, no report")
+    ap.add_argument("--rotated-ledger", default=ROTATED_LEDGER_PATH,
+                    help="path to the rotated-value ledger (default: %(default)s)")
     args = ap.parse_args(argv)
 
     items = corpus(args.ticket)
@@ -490,7 +593,8 @@ def main(argv=None):
         args.ticket,
         patterns=LEGACY_PATTERNS if args.rules == "legacy" else CURRENT_PATTERNS,
         tracked=tracked_text(args.repo, args.extra_tracked),
-        items=items)
+        items=items,
+        rotated=load_rotated_ledger(args.rotated_ledger))
     if args.json:
         json.dump(records, sys.stdout, indent=2)
         print()

@@ -1252,4 +1252,144 @@ def test_legacy_table_is_not_the_live_one():
         legacy[1].pattern != current[1].pattern
         for legacy, current in zip(mask_replay.LEGACY_PATTERNS,
                                    mask_replay.CURRENT_PATTERNS))
+
+
+# --- wq#2543: the rotated-value ledger ----------------------------------------
+#
+# wq#2514 AC1 (mask_replay exits 0) is unreachable for a real burn: rotating the
+# value never removes it from the run's frozen corpus, so an unrotated replay would
+# report it forever. These pin the settlement — a ledger entry keyed by the same
+# hash the report already carries, holding no value, that turns a rotated hit from
+# BURNED? into ROTATED and drops it out of `unaccounted()`.
+
+SHA_A = hashlib.sha256(b"Zq7xW2pL9mK4nR8tY6vB3cF5hJ1dS0aG").hexdigest()[:12]
+
+
+def test_load_rotated_ledger_returns_empty_for_a_missing_file(tmp_path):
+    assert mask_replay.load_rotated_ledger(str(tmp_path / "nope.json")) == {}
+
+
+def test_load_rotated_ledger_returns_empty_for_unparseable_json(tmp_path):
+    bad = tmp_path / "ledger.json"
+    bad.write_text("not json")
+    assert mask_replay.load_rotated_ledger(str(bad)) == {}
+
+
+def test_record_rotated_writes_a_seedable_entry(tmp_path):
+    path = tmp_path / "rotated_ledger.json"
+    record = mask_replay.record_rotated(
+        "6901490c4d03", "wq2514",
+        note="Gitea token id9 (mailbot-bootstrap-20260902), rotated+deleted by "
+             "orch-b2-creds",
+        path=str(path), rotated_at="2026-09-24T00:00:00Z")
+    assert record["value_sha256_12"] == "6901490c4d03"
+    on_disk = json.loads(path.read_text())
+    assert on_disk == [record]
+    # only a hash, a timestamp, a ticket and a note ever reach the ledger
+    assert set(record) == {"value_sha256_12", "rotated_at", "ticket", "note"}
+
+
+def test_record_rotated_dedupes_on_the_same_hash(tmp_path):
+    path = tmp_path / "rotated_ledger.json"
+    mask_replay.record_rotated("abc123abc123", "wq1", path=str(path),
+                               rotated_at="2026-09-01T00:00:00Z")
+    second = mask_replay.record_rotated("abc123abc123", "wq2", path=str(path),
+                                        rotated_at="2026-09-02T00:00:00Z")
+    on_disk = json.loads(path.read_text())
+    assert on_disk == [second]
+    assert on_disk[0]["ticket"] == "wq2"
+
+
+def test_load_rotated_ledger_round_trips_record_rotated(tmp_path):
+    path = tmp_path / "rotated_ledger.json"
+    mask_replay.record_rotated("6901490c4d03", "wq2514", path=str(path),
+                               rotated_at="2026-09-24T00:00:00Z")
+    ledger = mask_replay.load_rotated_ledger(str(path))
+    assert ledger["6901490c4d03"]["ticket"] == "wq2514"
+
+
+def test_a_ledgered_value_is_rotated_not_unaccounted():
+    ledger = {SHA_A: {"value_sha256_12": SHA_A, "rotated_at": "2026-09-24T00:00:00Z",
+                       "ticket": "wq2514"}}
+    records = mask_replay.replay(0, tracked={}, items={"snapshot:a": LIVE},
+                                 rotated=ledger)
+    assert records[0]["value_sha256_12"] == SHA_A
+    assert records[0]["rotated"] == ledger[SHA_A]
+    assert mask_replay.unaccounted(records) == []
+
+
+def test_an_unledgered_value_is_still_unaccounted():
+    """No hash in the ledger means no free pass — only wq#2514 asked to make an
+    exception, not to disable the check."""
+    records = mask_replay.replay(0, tracked={}, items={"snapshot:a": LIVE},
+                                 rotated={})
+    assert records[0]["rotated"] is None
+    assert mask_replay.unaccounted(records) == records
+
+
+def test_replay_defaults_to_loading_the_on_disk_ledger(tmp_path, monkeypatch):
+    path = tmp_path / "rotated_ledger.json"
+    mask_replay.record_rotated(SHA_A, "wq2514", path=str(path),
+                               rotated_at="2026-09-24T00:00:00Z")
+    monkeypatch.setattr(mask_replay, "ROTATED_LEDGER_PATH", str(path))
+    records = mask_replay.replay(0, tracked={}, items={"snapshot:a": LIVE})
+    assert records[0]["rotated"]["ticket"] == "wq2514"
+
+
+def test_report_marks_a_rotated_value_rotated_not_burned():
+    ledger = {SHA_A: {"value_sha256_12": SHA_A, "rotated_at": "2026-09-24T00:00:00Z",
+                       "ticket": "wq2514"}}
+    records = mask_replay.replay(0, tracked={}, items={"snapshot:a": LIVE},
+                                 rotated=ledger)
+    out = io.StringIO()
+    exit_code = mask_replay.report(0, records, out=out)
+    text = out.getvalue()
+    assert exit_code == 0
+    assert "[ROTATED]" in text
+    assert "BURNED?" not in text
+    assert "rotated  : 2026-09-24T00:00:00Z (wq2514)" in text
+
+
+def test_a_settled_burn_makes_the_cli_exit_0(tmp_path, monkeypatch):
+    """The AC1 shape wq#2514 filed this ticket over: a real, unaccounted burn that
+    stays unaccounted forever without a ledger. Same fixtures as
+    test_cli_exit_code_separates_a_burn_from_a_fixture, but this time the loose
+    value is a rotated one, and the run must exit 0 rather than page again."""
+    write_run(tmp_path, 4242, "sess-1")
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(tmp_path / "_runs"))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    assert mask_replay.main(["4242"]) == 1
+
+    kv_sha = hashlib.sha256(b"hunter2-hunter2-hunter2").hexdigest()[:12]
+    ledger = tmp_path / "rotated_ledger.json"
+    mask_replay.record_rotated(kv_sha, "wq4242", path=str(ledger),
+                               rotated_at="2026-09-24T00:00:00Z")
+    assert mask_replay.main(["4242", "--rotated-ledger", str(ledger)]) == 0
+
+
+def test_record_rotated_cli_subcommand_never_takes_a_value(tmp_path):
+    path = tmp_path / "rotated_ledger.json"
+    exit_code = mask_replay.main([
+        "record-rotated", "--sha256-12", "6901490c4d03", "--ticket", "wq2514",
+        "--note", "Gitea token id9, rotated+deleted by orch-b2-creds",
+        "--rotated-ledger", str(path)])
+    assert exit_code == 0
+    ledger = mask_replay.load_rotated_ledger(str(path))
+    assert ledger["6901490c4d03"]["ticket"] == "wq2514"
+
+
+def test_the_two_unrotated_wq2511_github_values_stay_unaccounted():
+    """Frank confirmed (GitHub console) that the two GitHub PATs from wq#2511 —
+    27ec5cf7418a and b7fe1ad62725 — are NOT rotated yet. A ledger seeded only with
+    the Gitea entry must not excuse them."""
+    ledger = {"6901490c4d03": {"value_sha256_12": "6901490c4d03",
+                               "rotated_at": "2026-09-24T00:00:00Z",
+                               "ticket": "wq2514"}}
+    items = {"snapshot:a": PRINTED}
+    records = mask_replay.replay(0, tracked={}, items=items, rotated=ledger)
+    ghp = next(r for r in records if r["prefix"] == "ghp_")
+    assert ghp["value_sha256_12"] != "6901490c4d03"
+    assert ghp["rotated"] is None
+    assert ghp in mask_replay.unaccounted(records)
     assert masking.MASK == "MASKED"
