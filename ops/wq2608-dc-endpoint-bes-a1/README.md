@@ -32,6 +32,12 @@ rule rather than creating a new tunnel.
   patch, `cloudflared tunnel ingress validate`, daemon-reload, enable+start,
   health-checks `:3100/health`, then detached-restarts `cloudflared`
   (quiet-window guarded — Bes's tunnel carries other live hostnames).
+  `rollback.sh`'s two restore blocks are exercised without root or systemd by
+  `test_rollback_restore_branches.py` (`python3 test_rollback_restore_branches.py`);
+  its `DC_UNIT` block shipped with its `if`/`else` bodies swapped and was fixed
+  under wq#2671 (ISSUE-LOG #766). The `DC_UNIT` and `CFD_CONFIG` blocks are
+  deliberately *not* symmetric — don't "tidy" them to match; see the comment at
+  the `DC_UNIT` block and the test's docstring for why.
 - `dns_access_setup.sh` — DNS CNAME + CF Access app, split into its two
   *different* credentials (see below).
 - `ssh_fleet_keys.sh` — generates an ed25519 identity for the `bes` user and
