@@ -1417,8 +1417,12 @@ def respond(conn, req, peer, ok, rule, reason, result, decision, t0):
         body = json.dumps(frame, sort_keys=True)
         hits = mask_hits(body)
         # wq#2677: read the outbound frame for what the rule declined to alarm on, on
-        # the same text and in the same breath as the tripwire itself.
-        suppressed = mask_suppressions(body)
+        # the same text the tripwire just screened. Its own try: an audit row is not a
+        # verdict, so it may never be the reason a verb fails or a frame goes unsent.
+        try:
+            suppressed = mask_suppressions(body)
+        except Exception:  # noqa: BLE001
+            suppressed = []
     except ValueError as e:
         frame.update(ok=False, rule="response_schema", reason=str(e), result={})
         decision, hits = "error", []
