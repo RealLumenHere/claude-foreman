@@ -885,6 +885,54 @@ def test_title_probe_word_still_wins_probe_build(m):
     assert arch == "probe-build", (arch, sig)
 
 
+# ---- wq#2615: a design-doc PATH citation is a reference, not a design deliverable ----
+
+# wq#2607 verbatim (token id elided): one of the nine MCP-HA provisioning tickets whose
+# detail opens by citing the HA design doc. Every one routed novel-design -> fable-5@high
+# off that citation until this fix; the deliverable is provisioning, not a design.
+WQ2607_TITLE = "DC endpoint on Anubis: dc-gateway + own cloudflared tunnel + Access app"
+WQ2607_DETAIL = (
+    "Design /home/lumen/instructions/drafts/MCP_CONTROL_PLANE_HA_DESIGN.md §3.2. Anubis "
+    "(i5 4C/8T, 32G, 3w uptime, load 0.5; verified 2026-09-25 no node, no cloudflared). "
+    "Steps: install node LTS; npm i -g supergateway@3.4.3 "
+    "@wonderwhy-er/desktop-commander@0.2.46 (pin = Lumen's, verified); copy "
+    "dc-enforce-config.py; unit dc-gateway.service (copy of Lumen desktop-commander-mcp "
+    "incl. T1 drop-in hardening) on :3100 stateless; T2 watchdog + timer; cloudflared "
+    "install, 'cloudflared tunnel create anubis-mcp' on ANUBIS (not Lumen — the 06-29 "
+    "gotcha), ingress mcp-anubis.lumennode.uk -> http://localhost:3100, DNS CNAME "
+    "<uuid>.cfargotunnel.com via DNS API using the ANUBIS uuid; CF Access self-hosted "
+    "app mcp-anubis.lumennode.uk with policy = existing 'Worker service token' "
+    "<token-id> (pattern of mcp-failover 06-29); prove 403 without token, 200 "
+    "tools/list with token.")
+
+
+def test_wq2607_design_doc_citation_does_not_win_novel_design(m):
+    arch, sig = router.classify_archetype(WQ2607_TITLE, WQ2607_DETAIL, "fleet", m)
+    assert arch != "novel-design", (arch, sig)
+
+
+def test_design_doc_filename_or_path_is_not_a_design_signal(m):
+    # same reference class, in a TITLE: filename / path-component mentions don't count.
+    for title in ("update the provisioning steps to match DESIGN.md",
+                  "sync the runbook with docs/design/overview.md"):
+        arch, sig = router.classify_archetype(title, "", "", m)
+        assert arch != "novel-design", (title, arch, sig)
+
+
+def test_design_intent_still_wins_from_title_or_detail(m):
+    # prose intent in the title, unchanged
+    arch, _ = router.classify_archetype("design doc for the new alert daemon", "", "", m)
+    assert arch == "novel-design"
+    # detail-only prose intent — the wq#1669 line holds; this is why the fix is a
+    # reference-shape guard on the pattern, not a title-only gate (wq#1725 style), which
+    # would send this ticket back to mechanical-edit/qwen36-local.
+    arch, sig = router.classify_archetype(
+        "governor spawn rate is wrong",
+        "Design the replacement pacing curve and document the interface decision.",
+        "", m)
+    assert arch == "novel-design", (arch, sig)
+
+
 def test_replay_no_filed_ticket_with_analysis_evidence_is_a_mechanical_edit(m):
     """ACCEPTANCE (wq#1707): over every filed ticket, no row whose text carries CORROBORATED
     novel-design / rca-investigation / research-synthesis evidence may classify as

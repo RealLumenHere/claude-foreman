@@ -637,7 +637,16 @@ _RUBRIC = [
                      r"\bre-?check\b", r"\beval gate\b", r"\baudit of (the )?fix\b"]),
     ("long-horizon-campaign", [r"\bcampaign\b", r"\bmulti-session\b", r"\bcheckpoint",
                                r"\buplift\b", r"\bpivot\b", r"\bchain\b"]),
-    ("novel-design", [r"\bdesign( doc)?\b", r"\bnew (service|subsystem|daemon)\b",
+    # wq#2615: the design signal must not fire on a design-doc CITATION — nine MCP-HA
+    # provisioning tickets whose detail opened "Design /home/.../MCP_CONTROL_PLANE_HA_
+    # DESIGN.md §3.2" all routed novel-design -> fable-5@high off that one reference.
+    # CLASS: keyword classifiers fire on references, not intent. The guards drop a match
+    # that is part of a path/filename (DESIGN.md, docs/design/...) or takes a path
+    # argument ("design[ doc] /path/..."); prose intent ("Design the replacement pacing
+    # curve", wq#1669) still counts, from title OR detail — a title-only gate here would
+    # re-misroute wq#1669-shaped tickets to mechanical-edit.
+    ("novel-design", [r"(?<!/)\bdesign( doc)?\b(?!\.md)(?!/)(?!( doc)?\s+\S*/)",
+                      r"\bnew (service|subsystem|daemon)\b",
                       r"\barchitect", r"\binterface decision", r"\bwiring\b.*\bnew\b"]),
     ("rca-investigation", [r"\baudit\b", r"\bwhy\b", r"\bbypass", r"\bincident\b",
                            r"\broot cause\b", r"\brca\b", r"\binvestigat", r"\bescape\b",
