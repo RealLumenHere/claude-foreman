@@ -84,6 +84,23 @@ def test_fresh_stamp_with_error_run_state_pages_immediately(tmp_path, monkeypatc
     assert sent == ["Dead-man: lumen-reflector reported failure"]
 
 
+def test_error_run_state_pages_before_a_cadence_is_known(tmp_path, monkeypatch):
+    # wq#2596: timer is loaded and armed but has never fired (last == 0), so no
+    # interval can be derived -- the state of every timer between a
+    # daemon-reload/reboot and its first run. The cadence loop has nothing to
+    # measure a stamp against and skips the unit; the immediate-page path must
+    # still fire, or a reported failure in that window is lost in silence.
+    _stamp(tmp_path, "lumen-reflector", 60)
+    _run_state(tmp_path, "lumen-reflector", "error", "uncaught RuntimeError: database is locked")
+    rows = [{"unit": "lumen-reflector.timer", "activates": "lumen-reflector.service",
+             "last": 0, "next": int(time.time() * US) + 86400 * US}]
+    state, sent = _run(tmp_path, monkeypatch, rows)
+    assert sent == ["Dead-man: lumen-reflector reported failure"]
+    assert state["lumen-reflector:run"] == "error"
+    # No cadence => no stale/ok verdict on the stamp itself, only the run key.
+    assert "lumen-reflector" not in state
+
+
 def test_error_run_state_pages_once_until_recovered(tmp_path, monkeypatch):
     _stamp(tmp_path, "z", 60)
     _run_state(tmp_path, "z", "error", "boom")

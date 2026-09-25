@@ -80,7 +80,9 @@ def find_stamps(stamp_dir):
 def find_run_states(stamp_dir):
     """wq#2573: units may additionally drop /home/lumen/logs/.state.<unit> —
     a JSON {"status": "ok"|"error", "detail": ...} written by the job itself
-    on EVERY exit path (success or failure). This exists because a
+    on every exit path (success or failure) — which means, as wq#2596 found the
+    hard way, that the job needs a top-level exception guard and not just a
+    write at each exit it deliberately takes. This exists because a
     Type=oneshot service's ExecStartPost= (the source of the plain .stamp.
     file) never runs when ExecStart exits non-zero, so an in-script
     fail-loud exit is invisible to the age-based staleness check below for
@@ -127,13 +129,44 @@ def ntfy(priority, title, msg, dry_run):
         print(f"cron_deadman: ntfy-send failed: {exc}", file=sys.stderr)
 
 
+def check_run_states(stamps, run_states, state, dry_run):
+    """wq#2596: this page is deliberately NOT nested in the cadence loop below.
+    It used to be, and inherited that loop's `continue` for a unit whose timer
+    exists but has no derivable interval yet (loaded, armed, `last == 0` — the
+    state of every timer after a daemon-reload or reboot until it fires once).
+    A unit reporting status=error in that window was skipped in silence, which
+    is the same class of hole as the one wq#2596 fixed on the writing side: the
+    immediate-page path has to be independent of the stamp-age machinery it was
+    added to bypass, so it runs for any stamped unit, cadence known or not."""
+    changed = False
+    for unit in stamps:
+        rs = run_states.get(unit)
+        if rs is None:
+            continue
+        run_key = f"{unit}:run"
+        is_error = rs.get("status") == "error"
+        was_error = state.get(run_key) == "error"
+        if is_error and not was_error:
+            ntfy("urgent", f"Dead-man: {unit} reported failure",
+                 f"{unit}'s last run reported status=error: "
+                 f"{str(rs.get('detail', ''))[:300]} — wq#2573",
+                 dry_run)
+            changed = True
+        elif was_error and not is_error:
+            ntfy("high", f"Dead-man: {unit} run recovered",
+                 f"{unit}'s last run reported status=ok — wq#2573", dry_run)
+            changed = True
+        state[run_key] = "error" if is_error else "ok"
+    return changed
+
+
 def check(stamp_dir, state_path, dry_run):
     intervals, unarmed = load_timer_intervals()
     stamps = find_stamps(stamp_dir)
     run_states = find_run_states(stamp_dir)
     state = load_state(state_path)
     now = time.time()
-    changed = False
+    changed = check_run_states(stamps, run_states, state, dry_run)
 
     for unit, mtime in stamps.items():
         interval_s = intervals.get(unit)
@@ -166,23 +199,6 @@ def check(stamp_dir, state_path, dry_run):
             changed = True
 
         state[unit] = "stale" if is_stale else "ok"
-
-        rs = run_states.get(unit)
-        if rs is not None:
-            run_key = f"{unit}:run"
-            is_error = rs.get("status") == "error"
-            was_error = state.get(run_key) == "error"
-            if is_error and not was_error:
-                ntfy("urgent", f"Dead-man: {unit} reported failure",
-                     f"{unit}'s last run reported status=error: "
-                     f"{str(rs.get('detail', ''))[:300]} — wq#2573",
-                     dry_run)
-                changed = True
-            elif was_error and not is_error:
-                ntfy("high", f"Dead-man: {unit} run recovered",
-                     f"{unit}'s last run reported status=ok — wq#2573", dry_run)
-                changed = True
-            state[run_key] = "error" if is_error else "ok"
 
     # Drop state for stamps that no longer exist (unit retired / stamp wrapper removed).
     for key in list(state):
