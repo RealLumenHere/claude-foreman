@@ -54,13 +54,16 @@ LOCAL_GROUP_MODELS = ("local-worker",)
 def _pool_models(pool, fallback, path=None):
     """Ids of models.yaml rows whose `pools` list `pool`; `fallback` when the file or the
     PyYAML import is unusable — this module is imported by the governor-adjacent paths
-    and must never fail on a missing dependency."""
+    and must never fail on a missing dependency. Rows with `status: DARK` are staged but
+    not deployed (wq#2627: gemini-3-flash awaiting its gateway key) and are excluded —
+    a staged rung must not join the governor-exempt/parity sets until it is routable."""
     try:
         import yaml
         with open(path or MODELS_YAML) as f:
             rows = (yaml.safe_load(f) or {}).get("models") or []
         found = tuple(m["id"] for m in rows
-                      if isinstance(m, dict) and pool in (m.get("pools") or []))
+                      if isinstance(m, dict) and pool in (m.get("pools") or [])
+                      and str(m.get("status", "")).upper() != "DARK")
     except Exception:  # noqa: BLE001 — runs at import; yaml.YAMLError is not a ValueError
         return tuple(fallback)
     return found or tuple(fallback)

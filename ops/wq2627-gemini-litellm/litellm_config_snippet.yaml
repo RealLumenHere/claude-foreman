@@ -1,0 +1,58 @@
+# wq#2627 — merge into the live LiteLLM proxy config
+# (/home/lumen/agent/litellm_config.yaml — NOT in this repo, lives on the gateway
+# node; same hand-merge convention as wq#897/wq#948/wq#1295/wq#1406/wq#1590).
+# Deploy steps + verification: README.md next to this file.
+# Research + path decision: research/GEMINI_ACCESS.md (wq#2627, closes wq#2580).
+#
+# Two independent parts:
+#   PART 1 (fallback fix) is deployable IMMEDIATELY — no new key needed. It fixes
+#     wq#2580's dead-end: gemini-flash is the terminal fallback for the
+#     lumen-lfm2-1b / cerebras-oss-120b / cerebras-llama chains, so its free-tier
+#     429s (20 RPD on gemini-2.5-flash) currently drop ~51% of arriving requests.
+#   PART 2 (paid rungs) activates once Frank's paid AI Studio key lands in the
+#     gateway env as GEMINI_API_KEY_PAID (Tier 1: link billing account, instant).
+
+# ── PART 1: stop the 429 dead-end ────────────────────────────────────────────
+# VERIFY on deploy: on recent LiteLLM proxies `fallbacks` sits under
+# router_settings; older builds read litellm_settings.fallbacks. Check
+# `litellm --version` / existing config shape and merge into whichever the live
+# config already uses. Append to any existing fallbacks list, don't replace.
+router_settings:
+  fallbacks:
+    - gemini-flash: [cerebras-oss-120b]
+
+# ── PART 2: paid gemini rungs (needs GEMINI_API_KEY_PAID in gateway env) ─────
+model_list:
+  # UPGRADE the existing gemini-flash entry in place: keep the model_name (its
+  # consumers — quota_mgr, quality_gate, watchdog, verify, librechat — keep
+  # working unchanged), swap the free-tier gemini-2.5-flash for the current paid
+  # flash and point api_key at the new env var.
+  - model_name: gemini-flash
+    litellm_params:
+      model: gemini/gemini-3.8-flash        # $0.75/M in, $3.75/M out through 2026-12-31
+      api_key: os.environ/GEMINI_API_KEY_PAID
+      num_retries: 1
+      timeout: 300
+    model_info: {mode: chat, description: "Gemini 3.8 Flash, paid AI Studio Tier 1 (wq#2627); was free-tier gemini-2.5-flash at 20 RPD"}
+
+  # NEW: cheap high-volume rung for judge/watchdog-class calls.
+  - model_name: gemini-flash-lite
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite   # $0.30/M in, $2.50/M out
+      api_key: os.environ/GEMINI_API_KEY_PAID
+      num_retries: 1
+      timeout: 300
+    model_info: {mode: chat, description: "Gemini 3.5 Flash-Lite, paid Tier 1 (wq#2627): high-volume cheap calls"}
+
+  # NEW: the research tier — what Frank actually uses Gemini for. Registered in
+  # research/models.yaml as gemini-3-flash's sibling row; see GEMINI_ACCESS.md.
+  # Grounding with Google Search (5k free grounded req/month, then $14/1k) is a
+  # paid-tier tool on this model — enable per-request via tools=[{googleSearch:{}}]
+  # from the caller, not pinned here.
+  - model_name: gemini-pro-research
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview  # $2/M in, $12/M out
+      api_key: os.environ/GEMINI_API_KEY_PAID
+      num_retries: 1
+      timeout: 600
+    model_info: {mode: chat, description: "Gemini 3.1 Pro (preview), paid Tier 1 (wq#2627): research-synthesis backend"}

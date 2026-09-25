@@ -226,6 +226,27 @@ models:
     # see the nephthys-qwen3-14b row below. MODEL_ROUTING_AUDIT.md §3 F4.
     efforts: []             # backend thinking flags pinned per-alias in litellm config instead
     trust: "mechanical-edit, probe-build, verify-DRAFTS. PR-only + sonnet-5 verify gate. Lower --max-turns."
+  - id: gemini-3-flash
+    status: DARK             # wq#2627 2026-09-25: staged, NOT selectable. Flips to LIVE-local when
+                              # Frank's paid AI Studio key (GEMINI_API_KEY_PAID, usage Tier 1) lands
+                              # on the gateway and ops/wq2627-gemini-litellm/ PART 2 is merged.
+                              # Replaces the free-tier gemini-flash story: wq#2580 measured that rung
+                              # at 51% 429s (free tier = 20 RPD on gemini-2.5-flash, NOT the 250 RPD
+                              # wq#233 recorded). Research + path decision: research/GEMINI_ACCESS.md.
+    pools: [cheap_cloud]     # paid external API behind the LiteLLM gateway, same class as
+                              # deepseek-v4-flash above: zero Anthropic quota, governor-exempt,
+                              # bounded by vendor rate limits (Tier 1: $10/10min spend cap).
+    # LiteLLM aliases (ops/wq2627-gemini-litellm/litellm_config_snippet.yaml):
+    #   gemini-flash        -> gemini/gemini-3.8-flash        ($0.75/$3.75 per M through 2026)
+    #   gemini-flash-lite   -> gemini/gemini-3.5-flash-lite   ($0.30/$2.50 per M)
+    #   gemini-pro-research -> gemini/gemini-3.1-pro-preview  ($2/$12 per M) — the research tier
+    api_price_mtok: {in: 0.75, out: 3.75}   # gemini-flash alias; doubles 2027-01-01 per pricing page
+    efforts: []              # thinking is model-side; no CLI effort ladder — not a CC worker
+    trust: "research-synthesis DRAFTS + judge/watchdog/quality-gate calls via LiteLLM
+      (gemini-pro-research for research, gemini-flash-lite for volume). NEVER an fworker
+      session model — joins no routing chain, same treatment as deepseek-v4-flash.
+      Grounded web research via Google Search tool (5k free grounded req/month) once paid.
+      CLI-OAuth / Antigravity quota stays OUT of the gateway: ToS-ban risk, GEMINI_ACCESS.md §(a)."
   # wq#2250: the local rows (qwen36-local, nephthys-qwen14b, hathor-llama8b, local-worker) are
   # GENERATED from research/inference_nodes.yaml (`fleet-node render`) at BEGIN GENERATED below.
   # The notes here are their history; change the registry, not the rows.
