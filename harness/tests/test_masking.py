@@ -632,6 +632,33 @@ def test_a_rotation_ticket_refire_is_noted_not_filed(tmp_path, monkeypatch):
     assert pages and pages[0][0] == "foreman MASK HIT (rotation chain)"
 
 
+def test_a_chain_guard_note_failure_does_not_crash_the_attempt(tmp_path, monkeypatch):
+    """wq#2629: the sibling wq("add", ...) branch a few lines below is wrapped in
+    try/except specifically so 'an alerting failure never takes down the attempt
+    itself' (mask_alarm's own docstring) — the chain-guard branch above it was not.
+    mask_alarm() runs synchronously inside the gateway/line read loops with no
+    enclosing try/except at that level, so a flaky wq note call (DB lock
+    contention, transient I/O) must not raise out of it."""
+    warnings = []
+    monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
+    monkeypatch.setattr(fworker, "log", lambda msg: warnings.append(msg))
+    monkeypatch.setattr(fworker, "ntfy", lambda *a, **k: None)
+
+    def raising_wq(*args, **kwargs):
+        if args[0] == "note":
+            raise RuntimeError("wq note: database is locked")
+        return WqResult()
+
+    monkeypatch.setattr(fworker, "wq", raising_wq)
+    monkeypatch.setattr(
+        fworker, "wq_show",
+        lambda tid: {"title": "[rotation] burned credential in wq#2290 transcript (sk-key)"})
+
+    fworker.mask_alarm(2299, 1, ["sk-key"], github_records())  # must not raise
+
+    assert any("WARN" in w for w in warnings)
+
+
 def test_the_verify_pass_of_a_rotation_ticket_is_on_the_chain(tmp_path, monkeypatch):
     """wq#2308: every rotation ticket spawns a verify row that carries the marker in
     the MIDDLE of its title, and sends its worker back to the same run dir — where 9

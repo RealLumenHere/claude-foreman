@@ -945,16 +945,23 @@ def rotation_chain_refire(ticket_id, attempt, tag, hits_path):
         return False
     if ROTATION_TITLE_PREFIX not in title:
         return False
-    wq("note", str(ticket_id),
-       f"wq#2275 tripwire re-fired on attempt {attempt} ({tag}) while working "
-       f"this rotation row; forensics appended to {hits_path}. No child rotation "
-       f"ticket filed (wq#2299 chain guard) — reading the artefacts this ticket "
-       f"points at is what fired it.")
-    ntfy("foreman MASK HIT (rotation chain)",
-         f"wq#{ticket_id} attempt {attempt}: {tag} re-fired while working a rotation "
-         f"ticket — noted on wq#{ticket_id}, no new ticket; records in {hits_path}")
-    log(f"MASK HIT wq#{ticket_id} attempt {attempt}: {tag} — rotation-chain re-fire, "
-        f"noted on the ticket, no child ticket filed")
+    try:
+        wq("note", str(ticket_id),
+           f"wq#2275 tripwire re-fired on attempt {attempt} ({tag}) while working "
+           f"this rotation row; forensics appended to {hits_path}. No child rotation "
+           f"ticket filed (wq#2299 chain guard) — reading the artefacts this ticket "
+           f"points at is what fired it.")
+        ntfy("foreman MASK HIT (rotation chain)",
+             f"wq#{ticket_id} attempt {attempt}: {tag} re-fired while working a rotation "
+             f"ticket — noted on wq#{ticket_id}, no new ticket; records in {hits_path}")
+        log(f"MASK HIT wq#{ticket_id} attempt {attempt}: {tag} — rotation-chain re-fire, "
+            f"noted on the ticket, no child ticket filed")
+    except Exception as e:  # noqa: BLE001
+        # wq#2629: mirrors the wq("add", ...) branch below — an alerting failure here
+        # must not raise out of the read loop mask_alarm() runs inside (mask_alarm's
+        # own docstring: "both best-effort so an alerting failure never takes down the
+        # attempt itself"). The chain decision itself (no new row) still stands.
+        log(f"WARN: rotation-chain note/page failed for wq#{ticket_id}: {e!r}")
     return True
 
 
