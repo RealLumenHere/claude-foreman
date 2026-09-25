@@ -496,7 +496,7 @@ def make_leaky_child(tmp_path):
 def test_run_child_masks_stream_and_alarms_once(tmp_path, monkeypatch):
     alarms = []
     monkeypatch.setattr(fworker, "mask_alarm",
-                        lambda tid, att, labels, records=None:
+                        lambda tid, att, labels, records=None, session_id=None:
                         alarms.append((tid, att, labels, records)))
     state, exit_code, events, killed_reason, cpu_s, pid = fworker.run_child(
         make_leaky_child(tmp_path), str(tmp_path), dict(os.environ),
@@ -528,7 +528,7 @@ def test_a_retry_does_not_re_page_on_what_attempt_one_already_filed(
     Same stream, two attempts, one alarm."""
     alarms = []
     monkeypatch.setattr(fworker, "mask_alarm",
-                        lambda tid, att, labels, records=None:
+                        lambda tid, att, labels, records=None, session_id=None:
                         alarms.append((tid, att, labels)))
     child = make_leaky_child(tmp_path)
     for attempt in (1, 2):
@@ -919,7 +919,7 @@ def test_a_rule_narrowed_mid_attempt_stops_the_alarm(tmp_path, monkeypatch):
     """
     alarms = []
     monkeypatch.setattr(fworker, "mask_alarm",
-                        lambda tid, att, labels, records=None: alarms.append(labels))
+                        lambda tid, att, labels, records=None, session_id=None: alarms.append(labels))
     real, copy = masking.deployed, masking_copy(tmp_path)
     monkeypatch.setattr(masking, "deployed", lambda path=None: real(copy))
     # `hits` is what the stale in-process table reported; the file on disk no longer
@@ -934,7 +934,7 @@ def test_a_hit_the_deployed_table_still_reads_pages_as_before(tmp_path, monkeypa
     quiet. Same line, same stale caller — but the deployed table fires on it too."""
     alarms = []
     monkeypatch.setattr(fworker, "mask_alarm",
-                        lambda tid, att, labels, records=None: alarms.append(labels))
+                        lambda tid, att, labels, records=None, session_id=None: alarms.append(labels))
     real, copy = masking.deployed, masking_copy(tmp_path, LEGACY_KV)
     monkeypatch.setattr(masking, "deployed", lambda path=None: real(copy))
     fworker.screen_mask_hits(["kv-secret"], WQ2327_LINE, set(), set(), set(),
@@ -948,7 +948,7 @@ def test_a_dropped_label_can_still_alarm_later_in_the_attempt(tmp_path, monkeypa
     the real credential forty turns later — the wq#2290 bookkeeping rule, kept."""
     alarms, alarmed = [], set()
     monkeypatch.setattr(fworker, "mask_alarm",
-                        lambda tid, att, labels, records=None: alarms.append(labels))
+                        lambda tid, att, labels, records=None, session_id=None: alarms.append(labels))
     real, copy = masking.deployed, masking_copy(tmp_path)
     monkeypatch.setattr(masking, "deployed", lambda path=None: real(copy))
     repo = [os.path.dirname(masking.__file__)]
@@ -982,7 +982,7 @@ def _screen(raw, alarms, facing=None, alarmed=None):
 def alarms(monkeypatch):
     fired = []
     monkeypatch.setattr(fworker, "mask_alarm",
-                        lambda tid, att, labels, records=None: fired.append(labels))
+                        lambda tid, att, labels, records=None, session_id=None: fired.append(labels))
     return fired
 
 

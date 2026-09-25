@@ -795,6 +795,39 @@ MASK_REPLAY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mask_rep
 
 ROTATION_DETAIL_PATH = os.path.join(HARNESS_DIR, "prompts", "rotation-ticket.md")
 
+# wq#2546 (BUILD d): the at-rest masker mask_alarm triggers on a live hit — see
+# trigger_mask_at_rest() below.
+MASK_AT_REST = os.path.join(HARNESS_DIR, "mask_at_rest.py")
+
+
+def trigger_mask_at_rest(session_id):
+    """wq#2546: best-effort, fire-and-forget at-rest mask of the CC transcript the
+    instant a live alarm tells us a value just reached it — no reason to wait for
+    the nightly sweep (lumen-mask-at-rest.timer) when we already know which file.
+
+    Detached (start_new_session=True) and never waited on: this runs from inside
+    the hot stream-read loop (screen_mask_hits, mid-attempt), and mask_at_rest.py
+    does its own off-box restic snapshot before masking — seconds, not
+    milliseconds. Blocking here would eat into the same wall-clock/inactivity
+    budget the alarm's own attempt is racing. Output discarded; a dead or missing
+    script degrades to "the nightly timer catches it next", never to a crash of
+    the attempt whose alarm triggered it.
+
+    `session_id=None` (the alarm fired before the CLI's init frame named one, or
+    the hit came from the merged-stderr/envelope path) falls through to
+    mask_at_rest's own default — the whole transcripts tree, not just one file —
+    which is the correct fallback, not a special case to detect here.
+    """
+    try:
+        args = [sys.executable, MASK_AT_REST, "--store",
+               "transcripts" if session_id else "all"]
+        if session_id:
+            args += ["--session", session_id]
+        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except Exception as e:  # noqa: BLE001
+        log(f"WARN: mask_at_rest trigger failed: {e!r}")
+
 
 def rotation_detail(ticket_id, attempt, tag, hits_path):
     """The rotation ticket's detail, read from disk PER ALARM (wq#2404).
@@ -955,7 +988,7 @@ def rotation_title(ticket_id, tag, hashes):
 WQ_DUPLICATE_RE = re.compile(r"DUPLICATE\b[^\n]*?\btask (\d+)")
 
 
-def mask_alarm(ticket_id, attempt, labels, records=None):
+def mask_alarm(ticket_id, attempt, labels, records=None, session_id=None):
     """wq#2275 (T6): a mask hit is an ALARM, not a save (instinct 4). The credential
     already reached the model's context — CLI 2.1.233 has no pre-model rewrite lever
     (research/SMARTCRUSHER_HOOK.md) — so the artefacts are clean but the token is
@@ -965,7 +998,14 @@ def mask_alarm(ticket_id, attempt, labels, records=None):
     wq#2341: one row per burned VALUE, not per run that printed it. The forensics are
     written before any of the three ways this can end in no new row (mask output, a
     chain re-fire, a value already open), so evidence never depends on the judgement.
+
+    wq#2546 (BUILD d): also kicks a detached at-rest mask of the CC transcript this
+    session is writing to — the disk copy this alarm just proved is unmasked, not
+    later, and unconditionally (before the self-output/chain-refire/dedupe branches
+    below, which only decide whether a NEW ROW is filed, never whether the file on
+    disk gets cleaned up).
     """
+    trigger_mask_at_rest(session_id)
     labels = sorted(labels)
     tag = ",".join(labels)
     hits_path = write_mask_hits(ticket_id, attempt, records)
@@ -1143,7 +1183,7 @@ def drop_screened_out(burned, fresh, raw, seen, live_secrets, repo_roots,
 
 
 def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
-                     ticket_id, attempt):
+                     ticket_id, attempt, session_id=None):
     """wq#2290: alarm on a mask hit only when the matched text is actually a live
     credential (burn_filter), not a credential-shaped string in the source of any
     repo the child was granted (`repo_roots`, wq#2319 — the worktree alone left the
@@ -1190,7 +1230,8 @@ def screen_mask_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
     if burned:
         alarmed.update(burned)
         # wq#2288: re-scan the raw line for the redacted record — only on an alarm.
-        mask_alarm(ticket_id, attempt, burned, masking.scan(raw)[1])
+        mask_alarm(ticket_id, attempt, burned, masking.scan(raw)[1],
+                  session_id=session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1309,7 +1350,7 @@ def gateway_facing_text(raw):
 
 
 def screen_stream_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
-                       ticket_id, attempt, facing=model_facing_text):
+                       ticket_id, attempt, facing=model_facing_text, session_id=None):
     """screen_mask_hits, scoped to the context (wq#2393). The only caller of the
     screen from either read loop.
 
@@ -1334,7 +1375,7 @@ def screen_stream_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
     inside = [h for h in fresh if h in kept]
     if inside:
         screen_mask_hits(inside, context, alarmed, seen, live_secrets, repo_roots,
-                         ticket_id, attempt)
+                         ticket_id, attempt, session_id=session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -2695,7 +2736,8 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
                         screen_stream_hits(mask_hits, raw_payload, mask_alarmed,
                                            burn_seen, live_secrets, repo_roots,
                                            ticket_id, attempt,
-                                           facing=gateway_facing_text)
+                                           facing=gateway_facing_text,
+                                           session_id=state.session_id)
                         try:
                             ev = json.loads(payload)
                         except json.JSONDecodeError:
@@ -2850,7 +2892,8 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         if mask_hits and repo_roots is None:
             repo_roots = burn_filter.provenance_roots(cwd, granted_dirs(cmd))
         screen_stream_hits(mask_hits, raw_line, mask_alarmed, burn_seen,
-                           live_secrets, repo_roots, ticket_id, attempt)
+                           live_secrets, repo_roots, ticket_id, attempt,
+                           session_id=state.session_id)
         try:
             frame = json.loads(line)
         except json.JSONDecodeError:

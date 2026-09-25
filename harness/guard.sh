@@ -166,6 +166,19 @@ Bash)
     if printf '%s' "$target" | grep -qE '\.git-credentials|(^|[/[:space:]])\.netrc\b|\.fleet_pw\b'; then
       block "denied path: git credential store (.git-credentials*, .netrc, .fleet_pw)" "$RAW_CMD"
     fi
+    # wq#2546: the Read/Grep deny below already covers these two paths for the
+    # Read/Grep/Glob tools; this is the Bash-side twin — same class as the
+    # .secrets/.git-credentials denies just above, because `cat`/`tail`/`grep`
+    # over a raw path is invisible to the file-path checks those tools carry.
+    # Both stores hold values masking.py never touches (they are written by the
+    # `claude` binary and by supergateway, not by anything in this repo) and
+    # wq#2514's consumer scan found the live RealLumenHere PAT in both.
+    if printf '%s' "$target" | grep -qE "$HOME/\.claude/projects\b|/home/[a-z]+/\.claude/projects\b"; then
+      block "denied path: CC session transcripts (~/.claude/projects — unmasked model-context store, wq#2546)" "$RAW_CMD"
+    fi
+    if printf '%s' "$target" | grep -qE '/home/lumen/logs/supergateway\b'; then
+      block "denied path: supergateway gateway log (unmasked tool-call bodies, wq#2546)" "$RAW_CMD"
+    fi
     if printf '%s' "$target" | grep -qE '\bdocker\b' && ! printf '%s' "$target" | grep -qE '\bdocker\b +(ps|logs)\b'; then
       block "docker denied except ps/logs" "$RAW_CMD"
     fi
@@ -430,7 +443,7 @@ Read|Edit|Write|Grep|Glob)
   for CHECK_PATH in "$FILE_PATH" "$GREP_PATH"; do
     [ -n "$CHECK_PATH" ] || continue
     case "$CHECK_PATH" in
-      *.env|*.credentials.json|*claude_credentials.md|*claude_credentials.md.*|/home/lumen/minerva/context/sections/*credentials*|/home/lumen/minerva/context/sections.json|/home/lumen/minerva/context/sections.json.*|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*|/var/lib/token-engine|/var/lib/token-engine/*)
+      *.env|*.credentials.json|*claude_credentials.md|*claude_credentials.md.*|/home/lumen/minerva/context/sections/*credentials*|/home/lumen/minerva/context/sections.json|/home/lumen/minerva/context/sections.json.*|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*|/var/lib/token-engine|/var/lib/token-engine/*|/home/lumen/logs/supergateway|/home/lumen/logs/supergateway/*)
         block "denied path: $CHECK_PATH" "$CHECK_PATH" ;;
       # wq#2514: git's plaintext credential store and its .bak copies. Same set
       # capability_lint.DIR_DENY_BASENAME_GLOBS_HOME hard-denies as a grant; without

@@ -133,6 +133,17 @@ MUST_BLOCK = [
     # of a direct Read.
     ("Grep", {"pattern": ".", "path": "/home/lumen/.secrets/foreman-fire-approval.token"}),
     ("Glob", {"pattern": "*", "path": "/home/lumen/.secrets"}),
+    # wq#2546: CC session transcripts and the supergateway gateway log are two more
+    # unmasked-at-rest stores (harness/masking.py's write path never touches either
+    # one — they're written by the `claude` binary and by supergateway, not by
+    # anything in this repo); wq#2514's consumer scan found a live PAT in both.
+    ("Read", {"file_path": "/home/lumen/.claude/projects/-home-lumen-foreman/abc123.jsonl"}),
+    ("Grep", {"pattern": "token", "path": "/home/lumen/.claude/projects/-home-lumen-foreman/abc123.jsonl"}),
+    ("Bash", {"command": "cat /home/lumen/.claude/projects/-home-lumen-foreman/abc123.jsonl"}),
+    ("Bash", {"command": "tail -f /home/lumen/.claude/projects/-home-lumen-foreman/abc123.jsonl"}),
+    ("Read", {"file_path": "/home/lumen/logs/supergateway/desktop-commander-mcp.log"}),
+    ("Bash", {"command": "cat /home/lumen/logs/supergateway/desktop-commander-mcp.log"}),
+    ("Bash", {"command": "grep ghp_ /home/lumen/logs/supergateway/desktop-commander-mcp.log.2.gz"}),
     # wq#1297: large pulls (ollama/podman/git-lfs) are manual off-peak only, never
     # from a cron/fworker context — this hook only ever fires for that context.
     ("Bash", {"command": "ollama pull llama3:70b"}),

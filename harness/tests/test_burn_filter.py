@@ -251,7 +251,8 @@ def make_child(tmp_path, leak):
 def run(tmp_path, monkeypatch, leak, env, extra_args=()):
     alarms = []
     monkeypatch.setattr(fworker, "mask_alarm",
-                        lambda tid, att, labels, records=None: alarms.append(labels))
+                        lambda tid, att, labels, records=None, session_id=None:
+                        alarms.append(labels))
     # extra_args ride on the child's argv the way --add-dir rides on the CLI's:
     # ignored by the script, read back by run_child to learn what it granted.
     _state, _code, events, _killed, _cpu, _pid = fworker.run_child(
@@ -525,7 +526,8 @@ def screen(tmp_path, monkeypatch, extra, burned_here):
     for provenance. Returns the labels that alarmed."""
     alarms = []
     monkeypatch.setattr(fworker, "mask_alarm",
-                        lambda tid, att, labels, records=None: alarms.append(labels))
+                        lambda tid, att, labels, records=None, session_id=None:
+                        alarms.append(labels))
     monkeypatch.setattr(burn_filter, "is_committed_literal",
                         lambda value, roots, runner=None: not burned_here)
     real, copy = burn_filter.deployed, burn_filter_copy(tmp_path, extra)
