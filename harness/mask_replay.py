@@ -340,6 +340,74 @@ def account(value, tracked):
     return None
 
 
+# wq#2557: a run that edits ANOTHER repo (wq#2555 fixed /home/lumen/minerva through a
+# linked worktree, per ISSUE-LOG #687) reads that repo's committed prose, and
+# `tracked_text` only knew this one. A comment in minerva's index_research.py —
+# `~4 chars/token = <an English phrase>` — paged as BURNED? for want of a tree to find it
+# in. Only repos the run actually read from are loaded, not the whole managed universe
+# (~190 MB across repo_sweep.managed_repos()).
+FOREIGN_BLOB_CAP = 1 << 20
+
+
+def _common_dir(path):
+    """Absolute git common dir holding `path` (shared by every linked worktree), or ""."""
+    d = path if os.path.isdir(path) else os.path.dirname(path)
+    return _git(d or ".", "rev-parse", "--path-format=absolute",
+                "--git-common-dir").strip()
+
+
+def foreign_repos(items, repo=REPO_ROOT):
+    """Git common dirs of every repo other than `repo` that the run Read a file from."""
+    own = _common_dir(repo)
+    found = set()
+    for source in items:
+        kind, _, rest = source.partition(":")
+        if kind in ("read", "read-stale"):
+            common = _common_dir(rest.rsplit("@", 1)[0])
+            if common and common != own:
+                found.add(common)
+    return sorted(found)
+
+
+def committed_text(common_dir):
+    """{abs path -> text} of the blobs at the primary checkout's HEAD.
+
+    Committed blobs, not the working tree, and the PRIMARY checkout's HEAD, not the
+    linked worktree the run edited: a value the worker wrote into its own branch is
+    exactly what must stay unaccounted until it lands.
+    """
+    top = os.path.dirname(common_dir) if common_dir.endswith("/.git") else common_dir
+    listing = _git(common_dir, "ls-tree", "-r", "-z", "--long", "HEAD")
+    wanted = []
+    for entry in listing.split("\0"):
+        meta, _, rel = entry.partition("\t")
+        parts = meta.split()
+        if len(parts) == 4 and parts[1] == "blob" and parts[3].isdigit() \
+                and int(parts[3]) <= FOREIGN_BLOB_CAP:
+            wanted.append((parts[2], rel))
+    if not wanted:
+        return {}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", common_dir, "cat-file", "--batch"],
+            input="".join(f"{sha}\n" for sha, _ in wanted).encode(),
+            capture_output=True, timeout=GIT_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    out, at, blobs = proc.stdout, 0, {}
+    for _, rel in wanted:
+        nl = out.find(b"\n", at)
+        header = out[at:nl].split()
+        if len(header) != 3 or not header[2].isdigit():
+            break
+        size = int(header[2])
+        body = out[nl + 1:nl + 1 + size]
+        at = nl + 1 + size + 1
+        if b"\0" not in body:
+            blobs[os.path.join(top, rel)] = body.decode("utf-8", "replace")
+    return blobs
+
+
 def load_rotated_ledger(path=None):
     """{value_sha256_12 -> record} for every settled rotation, or {} if none yet.
 
@@ -589,10 +657,13 @@ def main(argv=None):
         print(f"wq#{args.ticket}: no run artefacts under {RUNS_ROOT} — nothing to "
               f"replay", file=sys.stderr)
         return 2
+    tracked = tracked_text(args.repo, args.extra_tracked)
+    for common in foreign_repos(items, args.repo):
+        tracked.update(committed_text(common))
     records = replay(
         args.ticket,
         patterns=LEGACY_PATTERNS if args.rules == "legacy" else CURRENT_PATTERNS,
-        tracked=tracked_text(args.repo, args.extra_tracked),
+        tracked=tracked,
         items=items,
         rotated=load_rotated_ledger(args.rotated_ledger))
     if args.json:

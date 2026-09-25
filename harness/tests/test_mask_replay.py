@@ -256,6 +256,46 @@ def test_a_window_whose_bytes_are_gone_is_marked_stale(tmp_path, monkeypatch):
     assert "[re-cut]" in out.getvalue()
 
 
+def test_a_value_committed_in_another_repo_the_run_read_is_accounted(tmp_path,
+                                                                     monkeypatch, capsys):
+    """wq#2557: wq#2555 edited minerva through a linked worktree, and a comment
+    committed on minerva's main paged as BURNED? because only this repo's tree was
+    searched. The primary checkout's HEAD accounts it; a value that exists only on
+    the worker's own branch stays unaccounted."""
+    repo = tmp_path / "minerva"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / "src.py").write_text("filler\n" + FIXTURE)
+    git(repo, "add", "src.py")
+    git(repo, "commit", "-qm", "landed")
+    wt = tmp_path / "wt"
+    git(repo, "worktree", "add", "-q", "-b", "wip", str(wt))
+    src = wt / "src.py"
+    src.write_text("filler\n" + FIXTURE + LIVE)
+    git(wt, "commit", "-qam", "worker's own edit")
+
+    run = write_run(tmp_path, 4242, "sess-1")
+    (tmp_path / "events" / "read_cache" / "sess-1.jsonl").write_text(
+        read_record(src, 1, 3, src.stat().st_size))
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(run.parent))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    items = mask_replay.corpus(4242)
+    common = mask_replay.foreign_repos(items)
+    assert [os.path.realpath(c) for c in common] == [os.path.realpath(repo / ".git")]
+
+    records = mask_replay.replay(4242, tracked=mask_replay.committed_text(common[0]),
+                                 items=items)
+    by_len = {r["value_len"]: r for r in records if r["label"] == "kv-secret"}
+    assert by_len[23]["accounted_in"].endswith("minerva/src.py:2")
+    assert [r["value_len"] for r in mask_replay.unaccounted(records)] == [32]
+
+    capsys.readouterr()
+    assert mask_replay.main(["4242", "--json"]) == 1
+    cli = json.loads(capsys.readouterr().out)
+    assert [r["value_len"] for r in mask_replay.unaccounted(cli)] == [32]
+
+
 def test_cli_exits_2_when_the_run_left_nothing_to_replay(tmp_path, monkeypatch):
     """Exit 2, never 0: "no artefacts" must not read as "nothing was burned"."""
     monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(tmp_path / "_runs"))
