@@ -102,3 +102,13 @@ agentic runs beyond the hathor baseline were not executed live. Unverified input
 flagged in the yaml: the isis unit's exact flags and GGUF path, `models_dir` and
 `llama_server_bin` per node, wadjet's ssh user, plug ids, the gemma4 tag. wadjet needs
 RAPL PL1 back at 75 W before benching (macbench never changes it).
+
+A `needs:ssh(wadjet)` dispatch tag alone does not fix this (wq#2636, ISSUE-LOG #757):
+`mb_node.py`'s remote-exec path shells raw `ssh user@host …` (`tools/macbench/mb_node.py:97`),
+never fleet-exec, and raw `ssh` is categorically absent from the BUILD sandbox's Bash
+allowlist regardless of any grant. Separately, `fleet-exec-policy.yaml`'s `allow.ssh` list
+does not include wadjet at all, and even a listed node only permits `run_readonly_cmds`
+probes — never script execution — so widening that policy would not unblock this script
+either. The live run needs either a `bench` verb added to fleet-exec (routing macbench's
+remote launch/poll/copy-results through the broker) or an operator running
+`macbench.py run --node wadjet` directly from a shell with real ssh.
