@@ -107,6 +107,12 @@ allow:
     # is in research/harnessrouter-ref/README.md.
     - /home/lumen/projects/de-spaghettifier
     - /home/lumen/research/harnessrouter-ref
+    # wq#2610 (control-plane HA): the mcpw OAuth Worker source (mcp-oauth-worker, worker
+    # lumen-mcp). Not its own repo, lives inside the projects archive tree; only this
+    # subdir is granted. Swept 2026-09-25 with harness/read_dir_sweep.py:
+    # /home/lumen/projects/mcp-oauth-worker files=13 hits=0 (wrangler.toml carries vars,
+    # no secrets; CF token stays in .secrets per wq#2614).
+    - /home/lumen/projects/mcp-oauth-worker
     # wq#1738 / wq#1614 (entry is /home/lumen/minerva/eval at the top of this list, moved there
     # by 4dfb16e): minerva golden sets + bench scripts only. /home/lumen/minerva itself
     # stays OFF this list (wq#1467: credentials mirrored into context/sections). Sub-root
