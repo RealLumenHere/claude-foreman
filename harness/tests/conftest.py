@@ -43,3 +43,9 @@ def _no_refill_kick(monkeypatch):
     keeps the suite from kicking production passes. test_wq992_refill.py delenv's it
     for the tests that exercise the kick path (they fake subprocess.run)."""
     monkeypatch.setenv("FOREMAN_NO_REFILL", "1")
+
+
+@pytest.fixture(autouse=True)
+def _scratch_cli_canary(monkeypatch, tmp_path):
+    """wq#2527: spawner -> router reads the canary cache; never the live one in a test."""
+    monkeypatch.setenv("FOREMAN_CLI_CANARY", str(tmp_path / "cli_canary.json"))

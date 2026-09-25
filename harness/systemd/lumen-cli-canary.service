@@ -1,0 +1,16 @@
+[Unit]
+Description=wq#2527 cli_canary run — probe each live claude-* ladder model whose (installed claude-code version, model) entry is missing or >24h old; the router holds a rung that fails
+Documentation=file:///home/lumen/foreman/dispatcher/cli_canary.py
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman
+Environment=PATH=/home/lumen/.npm-global/bin:/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+# exit 1 = a model failed its canary (the router is already holding it); not a unit failure
+SuccessExitStatus=1
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/cli_canary.py run
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=1200
+Nice=10

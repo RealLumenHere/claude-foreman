@@ -1,0 +1,14 @@
+[Unit]
+Description=wq#2527 cli_canary drift — installed claude-code vs npm latest; one aq row (cli_canary/claude-code-behind) when behind and a live rung needs the newer CLI
+Documentation=file:///home/lumen/foreman/dispatcher/cli_canary.py
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman
+Environment=PATH=/home/lumen/.npm-global/bin:/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/lumen/foreman/dispatcher/cli_canary.py drift
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=300
+Nice=10

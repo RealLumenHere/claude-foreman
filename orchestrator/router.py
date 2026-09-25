@@ -60,6 +60,7 @@ import repo_sweep  # noqa: E402  # wq#1123: shared repo_for_ticket() resolver
 import needs as needs_mod  # noqa: E402  # wq#1331: per-ticket needs:repo/needs:dir tags
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dispatcher"))
 import local_capacity  # noqa: E402  # wq#2133: the backend_cooldown.json reader the rung gate shares
+import cli_canary  # noqa: E402  # wq#2527: holds a rung the installed claude CLI can't drive
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 MANIFEST_PATH = os.environ.get(
@@ -491,9 +492,12 @@ def availability_check(manifest, now=None):
     A rung is out when its model's models.yaml status is not LIVE*, or when it is a local
     backend present and unexpired in runtime/backend_cooldown.json. The `local-worker` group
     is out only when every member is cooling down or not LIVE*. A model with no models.yaml
-    row is judged by cooldown alone. Rollback: FOREMAN_LOCAL_CAPACITY=static disables it."""
+    row is judged by cooldown alone. Rollback: FOREMAN_LOCAL_CAPACITY=static disables it.
+    wq#2527: a claude-* rung is also out while cli_canary says the installed CLI cannot drive
+    its model (FOREMAN_CLI_CANARY_MODE=off is that half's own rollback)."""
+    canary = cli_canary.gate(manifest.models)
     if local_capacity.capacity_mode() == "static":
-        return lambda rung: None
+        return lambda rung: None if rung.model == "DECOMPOSE" else canary(rung.model)
     cooled = local_capacity.cooled_down_backends(now)
 
     def status(model):
@@ -509,7 +513,7 @@ def availability_check(manifest, now=None):
         if not live(rung.model):
             return f"{rung.model} status is {status(rung.model)!r}, not LIVE*"
         if rung.pool != "local":
-            return None
+            return canary(rung.model)
         if rung.model in cooled:
             return f"{rung.model} is cooling down (backend_cooldown.json)"
         members = _local_group_members(rung.model)

@@ -72,6 +72,7 @@ import concurrency     # noqa: E402
 import pacing          # noqa: E402
 import circuit_breaker  # noqa: E402
 import local_capacity   # noqa: E402  # wq#2130: per-backend local slots + local pause
+import cli_canary       # noqa: E402  # wq#2527: installed-CLI canary hold
 import runaway          # noqa: E402
 import self_heal        # noqa: E402  # charge_mode_legacy(): FOREMAN_CHARGE_MODE rollback lever
 import spawn_loop_guard  # noqa: E402  # wq#1703: restart-loop breaker
@@ -587,6 +588,7 @@ def unmet_deps(t, cache):
 
 
 ROUTE_UNREADABLE = "route_unreadable"  # candidate_model skip reason: router.assign raised SystemExit
+CLI_CANARY_HELD = "cli_canary_held"    # wq#2527: the ticket's model fails the installed-CLI canary
 ROUTE_DECOMPOSE = "route_decompose"    # rung.model == DECOMPOSE — wq#2516 sends it to the decomposer
                                        # when config `decomposer.enabled`; off, it skips exactly as
                                        # the old route_unassigned did (the DECOMPOSE rung had no
@@ -607,6 +609,10 @@ def candidate_model(t, tid):
     that one ticket a skip, never the pass."""
     m = t.get("model")
     if m and m != "None":
+        # wq#2527: a tuple written before its model's canary failed must wait, not launch into
+        # claude_code_version_too_old. assign() below already routes around a held rung.
+        if cli_canary.held(m, router.load_manifest().models):
+            return None, CLI_CANARY_HELD
         return m, None
     try:
         d = router.assign(tid, dry_run=True)
@@ -620,6 +626,8 @@ def candidate_model(t, tid):
         return None, "bad_archetype"
     rung = d.get("rung")
     if not rung:
+        if any(cli_canary.HOLD_TAG in str(r) for r in d.get("reasons") or []):
+            return None, CLI_CANARY_HELD   # not a verdict on the ticket: never park it
         return None, "route_unassigned"
     if rung.get("model") == "DECOMPOSE":
         return None, ROUTE_DECOMPOSE

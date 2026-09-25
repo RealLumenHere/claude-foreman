@@ -104,6 +104,9 @@ models:
     alias: opus-5-5          # NOT the default 'opus' alias (still claude-opus-5, see above) —
                               # wq#2450 wires this in by archetype (routing: below), the same
                               # pattern fable-5-1 used alongside fable-5.
+    min_claude_code: 2.1.280  # wq#2527: the API's own answer to CLI 2.1.276 (wq#2525 captured
+      # frame): "This model requires Claude Code version 2.1.280 or later". cli_canary holds
+      # the rung below it and the daily drift check files an aq row.
     status: LIVE              # wq#2450 2026-09-24: released + available, id 'claude-opus-5-5'
       # confirmed at platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5 (fetched
       # via fleet-search read, 2026-09-24).

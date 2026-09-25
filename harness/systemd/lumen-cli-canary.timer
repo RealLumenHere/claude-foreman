@@ -1,0 +1,10 @@
+[Unit]
+Description=wq#2527 cli_canary every 15 min — a CLI version change or a new ladder model is a cache miss, so it is probed within one tick; fresh entries cost nothing
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=lumen-cli-canary.service
+
+[Install]
+WantedBy=timers.target

@@ -20,3 +20,10 @@ os.environ["WQ_FOREMAN_ROUTER"] = "/nonexistent/wq2144/router.py"
 def _scratch_wq_db(tmp_path_factory, monkeypatch):
     if "WQ_DB" not in os.environ:
         monkeypatch.setenv("WQ_DB", str(tmp_path_factory.mktemp("wqdb") / "empty_wq.db"))
+
+
+@pytest.fixture(autouse=True)
+def _scratch_cli_canary(tmp_path_factory, monkeypatch):
+    """wq#2527: the router and dispatcher read the canary cache; the live one must not hold a
+    rung inside a test that isn't about it."""
+    monkeypatch.setenv("FOREMAN_CLI_CANARY", str(tmp_path_factory.mktemp("canary") / "c.json"))

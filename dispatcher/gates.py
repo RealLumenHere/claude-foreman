@@ -357,6 +357,9 @@ class Route(Gate):
         if not g.model:
             if skip_reason == g.fd.ROUTE_UNREADABLE:  # transient router failure: re-derive next pass
                 return Fail("budget", skip_reason, detail="router.assign could not read the ticket")
+            if skip_reason == g.fd.CLI_CANARY_HELD:  # clears once the CLI can drive the model
+                return Fail("budget", skip_reason, detail="installed claude CLI cannot drive "
+                            f"{g.t.get('model')} (dispatcher/cli_canary.py status)")
             if skip_reason == g.fd.ROUTE_DECOMPOSE:
                 if g.fd.decomposer_enabled(g.ctx.cfg):
                     return g.fd.dispatch_decomposer(g.ctx, g.tid, g.t)

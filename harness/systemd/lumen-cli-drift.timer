@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#2527 cli_canary drift daily
+
+[Timer]
+OnCalendar=*-*-* 06:10:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=lumen-cli-drift.service
+
+[Install]
+WantedBy=timers.target

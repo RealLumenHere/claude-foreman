@@ -1,0 +1,10 @@
+[Unit]
+Description=wq#2527 cli_canary on ladder edit or CLI install — models.yaml rewritten, or npm replacing the global claude-code package
+
+[Path]
+PathChanged=/home/lumen/foreman/research/models.yaml
+PathModified=/home/lumen/.npm-global/lib/node_modules/@anthropic-ai
+Unit=lumen-cli-canary.service
+
+[Install]
+WantedBy=paths.target
