@@ -1652,3 +1652,50 @@ def test_wq2650_value_is_the_wq2350_fixture_plus_a_regex_dot():
     assert mask_replay.account(body, {"this": here}) is not None
     for seamed in (l for l in here.splitlines() if "REALSECRETVALUE" in l):
         assert masking.mask_text(seamed)[1] == [], seamed
+
+
+WQ2687_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2687")
+WQ2687_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2687_values.py")
+
+
+def _wq2687_values():
+    with open(WQ2687_FIXTURES) as fh:
+        text = fh.read()
+    scope = {}
+    exec(compile(text, WQ2687_FIXTURES, "exec"), scope)
+    return text, scope["WQ2687_VALUES"]
+
+
+def test_wq2687_pins_are_their_hashes_and_read_silently():
+    """The pins name the values they claim to, and reading the file pages nothing."""
+    text, values = _wq2687_values()
+    assert len(values) == 12
+    for sha, _label, value in values:
+        assert masking.value_sha12(value) == sha
+    assert masking.mask_text(text)[1] == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2687_RUN),
+                    reason="wq#2687's run dir is not on this host")
+def test_wq2687_corpus_burned_nothing():
+    """wq#2701's verdict, pinned: 44 values, none a credential, nothing rotated.
+
+    The row's own two kv-secret values (set d68eb822ead9) were already settled — one
+    tracked, one rule-fixed. The twelve the replay still called BURNED? are wq#2687's
+    unlanded fixtures, its branch name and two sequential `sed` probes; see the
+    fixture module's header. Removing it must bring exactly those twelve back.
+    """
+    _, values = _wq2687_values()
+    items = mask_replay.corpus(2687)
+    tracked = _tree_only()
+    for common in mask_replay.foreign_repos(items):
+        tracked.update(mask_replay.committed_text(common))
+    records = mask_replay.replay(2687, tracked=tracked, items=items, rotated={})
+    assert len(records) == 44
+    assert mask_replay.unaccounted(records) == []
+
+    rel = os.path.relpath(WQ2687_FIXTURES, mask_replay.REPO_ROOT)
+    tracked.pop(rel)
+    loose = mask_replay.unaccounted(
+        mask_replay.replay(2687, tracked=tracked, items=items, rotated={}))
+    assert sorted(r["value_sha256_12"] for r in loose) == sorted(v[0] for v in values)

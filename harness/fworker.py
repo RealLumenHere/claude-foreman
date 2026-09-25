@@ -1764,9 +1764,26 @@ def distilled_memory_block(ticket_id, ticket):
     return "\n\n".join(blocks)
 
 
+# The branch is `<type>/wq<id>-<slug>-a<attempt>`; the slug is judged inside that frame
+# so a word the neighbours complete into a credential is caught too.
+SLUG_FRAME = ("wq0-", "-a99")
+
+
 def slugify(text, maxlen=40):
-    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return s[:maxlen] or "ticket"
+    """Branch slug of a ticket title, minus any word that makes it read as a credential.
+
+    wq#2701: wq#2687's title `mask-secrets (bin, sed mirror): cfut_/kv-secret ...`
+    slugged to `...-mirror-cfut-...`, which today's cloudflare rule reads as a token.
+    The branch name prints in every git status and run record, so the tripwire paged
+    it as a burned credential on each attempt. A title about a credential shape is
+    exactly the ticket most likely to carry one, so the slug drops such words instead.
+    """
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:maxlen]
+    kept = []
+    for word in s.split("-"):
+        if not masking.mask_text("-".join(kept + [word]).join(SLUG_FRAME))[1]:
+            kept.append(word)
+    return "-".join(kept) or "ticket"
 
 
 def _git(cwd, *args):
