@@ -177,7 +177,9 @@ PATTERNS = [
     # templates/env-refs, ALL_CAPS names and placeholder words are pointers, not values.
     ("url-auth", re.compile(
         r"\b([A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{1,64}:)"
-        r"(?![${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
+        # wq#2704: `\\*` because a transcript is JSONL — a shell-escaped `\${VAR}`
+        # arrives as `\\${VAR}`, which the bare class read as a 16-char credential.
+        r"(?!\\*[${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
         r"(?!os\.environ|os\.getenv|(?:process\.)?env\.)"
         r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
         # The one rule that must NOT take _body(): it is anchored on the `@` ahead of

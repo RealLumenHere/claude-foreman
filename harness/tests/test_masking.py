@@ -87,6 +87,9 @@ FALSE_POSITIVES = [
     "sk-ant-xxxxxxxxMASKED",          # sk- backtracks into its own masked body
     # wq#2514: url-auth pointers and placeholders, as read_dir_sweep excludes them
     "https://lumen:${GITEA_TOKEN}@git.example",
+    # wq#2704: the same pointer shell-escaped, as a JSONL transcript spells it
+    r"https://lumen:\${GITEA_TOKEN}@git.example",
+    r"https://lumen:\\${GITEA_TOKEN}@git.example",
     "https://x-access-token:$TOKEN@github.com",
     "postgres://app:GITEA_TOKEN_VALUE@db",
     "https://user:password@example.com",
@@ -206,6 +209,14 @@ def test_false_positives_never_alarm():
         masked, hits = masking.mask_text(text)
         assert hits == [], f"{text!r} falsely matched {hits}"
         assert masked == text, f"{text!r} was rewritten to {masked!r}"
+
+
+def test_url_auth_escape_exclusion_is_not_a_backslash_blanket():
+    """wq#2704: the backslashes excused ahead of `${` must not excuse a live value that
+    merely starts with one — only the escaped pointer is a pointer."""
+    for text in (URL_USER + "\\" + PW + URL_HOST, URL_USER + "\\\\" + PW + URL_HOST):
+        masked, hits = masking.mask_text(text)
+        assert hits == ["url-auth"] and PW not in masked, (text, hits)
 
 
 def test_a_credential_store_dump_leaves_no_value_in_the_context():
