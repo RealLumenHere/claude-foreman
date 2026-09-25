@@ -54,6 +54,11 @@ RULES:
     credential-printing command, so it is deliberately off the allowlist.
   If a shape you legitimately need is refused, say so plainly in your final summary (name
   the exact command) so the allowlist can be widened — do not burn attempts around it.
+- No shell loops (`for`/`while`), no `cd`-then-relative-path in the same compound command
+  — both are Claude CLI structural refusals ("Contains for_statement", "reads a file by a
+  relative path after a cd ... Read() deny rule"), not allowlist gaps, so retrying or
+  widening the allowlist never fixes them (wq#2564/wq#2579). Use an absolute path instead
+  of `cd &&`, and replace a loop with multiple calls or a Python/grep one-liner.
 - Create and patch files with the Write and Edit tools, never with shell heredocs
   (`python3 - <<EOF`, `cat > f <<EOF`). The Claude CLI refuses a heredoc whose body has a
   brace next to a quote ("contains brace with quote character (expansion obfuscation)")

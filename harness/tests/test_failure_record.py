@@ -97,6 +97,42 @@ def test_plain_tool_error_is_not_a_denial():
     assert "assertionerror" in sig
 
 
+# ---- structural refusals (wq#2579: for/while loop, cd+relative-path, heredoc) ------------
+
+FOR_LOOP_REFUSAL = (
+    "This command requires approval: Contains for_statement, which is not allowed")
+CD_RELATIVE_PATH_REFUSAL = (
+    "This command requires approval: grep reads a file by a relative path after a "
+    "cd in a compound command; which file that is cannot be resolved statically "
+    "while a Read() deny rule is configured, so this needs approval.")
+
+
+def test_structural_for_loop_is_not_misattributed_to_an_allowed_command():
+    # wq#2564: this exact shape was misattributed to argv0=grep/cut, both already on
+    # worker-settings.json, so triage never named the real (unfixable-by-allowlist)
+    # cause.
+    ev = denial_events(
+        "for i in 1 2 3; do python3 router.py assign $i 2>&1 | grep -o ticket; done",
+        text=FOR_LOOP_REFUSAL)
+    denied, _, _ = fr.extract_denied_calls(ev, node_map=NODE_MAP)
+    assert len(denied) == 1
+    d = denied[0]
+    assert d["argv0"] == "for_loop"
+    assert d["refusal"] == "structural:for_loop"
+    assert "for_statement" in d["reason_text"]
+
+
+def test_structural_cd_relative_path_is_not_misattributed_to_an_allowed_command():
+    ev = denial_events("cd /home/lumen/kb && grep -n pat ISSUE-LOG.md",
+                       text=CD_RELATIVE_PATH_REFUSAL)
+    denied, _, _ = fr.extract_denied_calls(ev, node_map=NODE_MAP)
+    assert len(denied) == 1
+    d = denied[0]
+    assert d["argv0"] == "cd_relative_path"
+    assert d["refusal"] == "structural:cd_relative_path"
+    assert "relative path after a cd" in d["reason_text"]
+
+
 # ---- inferred needs (§4.1 map, node resolution never guessed) ---------------------------
 
 def test_infer_needs_ssh_resolved_node():
@@ -187,6 +223,25 @@ def test_triage_default_is_unknown_never_silent():
     t, head = _triage(classification="CRASH")
     assert t == "UNKNOWN"
     assert "CRASH" in head
+
+
+def test_triage_structural_for_loop_names_the_mechanical_signature():
+    # wq#2564/wq#2579: previously fell to TRIAGE_UNKNOWN "no mechanical signature
+    # matched" — the head must now name the structural cause, not an allowed argv0.
+    ev = denial_events("for i in 1 2 3; do echo $i; done", text=FOR_LOOP_REFUSAL)
+    t, head = _triage(events=ev)
+    assert t == "CAPABILITY_DENIED"
+    assert "for_loop" in head
+    assert "no mechanical signature matched" not in head
+
+
+def test_triage_structural_cd_relative_path_names_the_mechanical_signature():
+    ev = denial_events("cd /home/lumen/kb && grep -n pat ISSUE-LOG.md",
+                       text=CD_RELATIVE_PATH_REFUSAL)
+    t, head = _triage(events=ev)
+    assert t == "CAPABILITY_DENIED"
+    assert "cd_relative_path" in head
+    assert "no mechanical signature matched" not in head
 
 
 # ---- record + write + reason line -------------------------------------------------------

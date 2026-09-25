@@ -67,6 +67,31 @@ _IP_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 _COMPOUND_DENIAL_RE = re.compile(r"following parts? requires? approval:\s*(.+)",
                                  re.I | re.S)
 _PATH_REFUSAL_RE = re.compile(r"blocked\.?\s*for security", re.I)
+
+# wq#2579: these are Claude Code's own structural shell-safety checks, not allowlist
+# misses — they refuse the WHOLE command regardless of whether every segment is on
+# worker-settings.json, so _COMPOUND_DENIAL_RE never matches their text and
+# _denied_segment() used to fall back to argv0-of-the-whole-command, misattributing
+# the refusal to whatever token happened to come first (wq#2564: "grep"/"cut", both
+# already allow-listed). Recognized by the CLI's own reason text instead.
+_STRUCTURAL_KINDS = (
+    ("for_loop", re.compile(r"Contains for_statement", re.I)),
+    ("while_loop", re.compile(r"Contains while_statement", re.I)),
+    ("cd_relative_path", re.compile(
+        r"relative path after a cd in a compound command", re.I)),
+    ("heredoc_brace_quote", re.compile(
+        r"brace with quote character|expansion obfuscation", re.I)),
+)
+
+
+def _structural_kind(text):
+    """The wq#2579 structural-refusal tag matching `text`, or None."""
+    for kind, pat in _STRUCTURAL_KINDS:
+        if pat.search(text or ""):
+            return kind
+    return None
+
+
 _TRACEBACK_RE = re.compile(
     r"Traceback \(most recent call last\)|^\s*at .+\(.+:\d+:\d+\)", re.M)
 _TEST_BUILD_RE = re.compile(
@@ -206,15 +231,35 @@ def extract_denied_calls(events, node_map=None, reachable_roots=None):
                 sig = LoopTracker._error_sig(text)
                 if sig:
                     last_error_sig = sig
-                if not is_permission_denial(text):
+                structural_kind = _structural_kind(text)
+                # wq#2579: a structural refusal (heredoc brace-quote especially) is not
+                # guaranteed to contain "requires approval" — is_permission_denial() alone
+                # would drop it, same as action_gate.LoopTracker's own
+                # is_permission_denial(...) or is_shell_refusal(...) check.
+                if not (is_permission_denial(text) or structural_kind):
                     continue
                 path_refusal = bool(_PATH_REFUSAL_RE.search(text))
-                refusal = "blocked_path" if path_refusal else "requires approval"
-                argv = _argv(_denied_segment(text, ti.get("command") or ""))
-                argv0 = os.path.basename(argv[0]) if argv else (tool or "?")
+                if structural_kind:
+                    refusal = f"structural:{structural_kind}"
+                elif path_refusal:
+                    refusal = "blocked_path"
+                else:
+                    refusal = "requires approval"
+                if structural_kind:
+                    # the whole command was refused as a structural unit — argv0-of-the
+                    # -whole-command is not the cause (wq#2564: misattributed to grep/cut,
+                    # both already allow-listed); tag it with the structural kind instead
+                    # and keep the CLI's own reason text for a human to read.
+                    argv0 = structural_kind
+                    argv = _argv(ti.get("command") or "")[:6]
+                    reason_text = text.strip().splitlines()[0][:200]
+                else:
+                    argv = _argv(_denied_segment(text, ti.get("command") or ""))
+                    argv0 = os.path.basename(argv[0]) if argv else (tool or "?")
+                    reason_text = None
                 target = None
                 node = None
-                if tool == "Bash" and argv:
+                if tool == "Bash" and argv and not structural_kind:
                     node = _target_node(argv, node_map)
                     target = node or _raw_target(argv)
                 if path_refusal:
@@ -234,7 +279,7 @@ def extract_denied_calls(events, node_map=None, reachable_roots=None):
                 else:
                     denied[key] = {"tool": tool, "argv0": argv0, "target": target,
                                    "node": node, "refusal": refusal, "count": 1,
-                                   "argv": argv[:6]}
+                                   "argv": argv[:6], "reason_text": reason_text}
     return list(denied.values()), unreachable, last_error_sig
 
 
@@ -334,10 +379,24 @@ def triage(classification, trip_kind, denied_calls, unreachable_paths,
     capability_hits = [d for d in denied_calls
                        if d.get("argv0") in _CAPABILITY_ARGV0
                        or d.get("refusal") == "blocked_path"]
+    # wq#2579: a structural refusal (for/while loop, cd+relative-path, heredoc
+    # brace-quote) is a Claude CLI shell-safety rule, not a missing allowlist entry —
+    # name it explicitly so the head matches a mechanical signature instead of
+    # falling through to "no mechanical signature matched" (wq#2564).
+    structural_hits = [d for d in denied_calls
+                       if (d.get("refusal") or "").startswith("structural:")]
     needs = infer_needs(denied_calls, unreachable_paths)
-    if trip_kind == "PERMISSION" or capability_hits or unreachable_paths:
+    if trip_kind == "PERMISSION" or capability_hits or unreachable_paths or structural_hits:
         n = sum(d["count"] for d in denied_calls) or 1
-        if needs:
+        if structural_hits:
+            kinds = sorted({d["refusal"].split(":", 1)[1] for d in structural_hits})
+            reasons = "; ".join(sorted({d["reason_text"] for d in structural_hits
+                                        if d.get("reason_text")}))
+            head = (f"structural refusal {n}x: {', '.join(kinds)} — Claude CLI "
+                    f"shell-safety rule, not an allowlist gap")
+            if reasons:
+                head += f" ({reasons})"
+        elif needs:
             head = f"{', '.join(needs)} refused {n}x"
         elif denied_calls:
             head = f"permission-refused {n}x ({denied_calls[0]['argv0']})"
@@ -400,8 +459,12 @@ def build_failure_record(ticket, attempts, classification, block_class,
                                   "expected_repo": expected_repo, "match": None})
     verdict, one_line = triage(classification, trip_kind, denied, unreachable,
                                wt, events, worker_block_reason=worker_block_reason)
-    denied_out = [{k: d[k] for k in ("tool", "argv0", "target", "refusal", "count")}
-                  for d in denied]
+    denied_out = []
+    for d in denied:
+        row = {k: d[k] for k in ("tool", "argv0", "target", "refusal", "count")}
+        if d.get("reason_text"):
+            row["reason_text"] = d["reason_text"]
+        denied_out.append(row)
     structured = {"unreachable_paths": unreachable, "refused": [],
                   "inferred_needs": infer_needs(denied, unreachable)}
     if spawn_refusal is not None:
