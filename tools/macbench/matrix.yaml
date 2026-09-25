@@ -36,6 +36,48 @@ rows:
     variants: {Q4_0: qwen3.6-35b-a3b-Q4_0.gguf, Q8_0: qwen3.6-35b-a3b-Q8_0.gguf}
     flags: {threads: 20}
 
+  # wq#2495 (O2 L906-916, digest R26): flash attention + KV cache dtype + batch sweep
+  # against the qwen36-35b-a3b-q4km baseline row above (defaults kv_type f16, no -fa,
+  # stock batch). Flags per research/MAC_CPU_MODEL_SHORTLIST.md:412,475 and
+  # research/DIGEST_Orchestation_2_md.md:176 (`-fa on`, `--cache-type-k/-v q8_0|q4_0`,
+  # `-b 2048 -ub 2048`). ubatch has no matrix.yaml flag key (mb_matrix.py FLAG_KEYS), so
+  # it rides in extra_args as `--ubatch-size`.
+  - id: qwen36-35b-a3b-q4km-fa-f16
+    model: qwen3.6-35b-a3b
+    quant: Q4_K_M
+    engine: llama-server
+    size_gb: 21.7
+    gguf: qwen3.6-35b-a3b-Q4_K_M.gguf
+    variants: {Q4_0: qwen3.6-35b-a3b-Q4_0.gguf, Q8_0: qwen3.6-35b-a3b-Q8_0.gguf}
+    flags: {threads: 12, extra_args: ["-fa", "on"]}
+
+  - id: qwen36-35b-a3b-q4km-fa-q8_0
+    model: qwen3.6-35b-a3b
+    quant: Q4_K_M
+    engine: llama-server
+    size_gb: 21.7
+    gguf: qwen3.6-35b-a3b-Q4_K_M.gguf
+    variants: {Q4_0: qwen3.6-35b-a3b-Q4_0.gguf, Q8_0: qwen3.6-35b-a3b-Q8_0.gguf}
+    flags: {threads: 12, kv_type: q8_0, extra_args: ["-fa", "on"]}
+
+  - id: qwen36-35b-a3b-q4km-fa-q8_0-b2048
+    model: qwen3.6-35b-a3b
+    quant: Q4_K_M
+    engine: llama-server
+    size_gb: 21.7
+    gguf: qwen3.6-35b-a3b-Q4_K_M.gguf
+    variants: {Q4_0: qwen3.6-35b-a3b-Q4_0.gguf, Q8_0: qwen3.6-35b-a3b-Q8_0.gguf}
+    flags: {threads: 12, kv_type: q8_0, batch: 2048, extra_args: ["-fa", "on", "--ubatch-size", "2048"]}
+
+  - id: qwen36-35b-a3b-q4km-fa-q4_0-b2048
+    model: qwen3.6-35b-a3b
+    quant: Q4_K_M
+    engine: llama-server
+    size_gb: 21.7
+    gguf: qwen3.6-35b-a3b-Q4_K_M.gguf
+    variants: {Q4_0: qwen3.6-35b-a3b-Q4_0.gguf, Q8_0: qwen3.6-35b-a3b-Q8_0.gguf}
+    flags: {threads: 12, kv_type: q4_0, batch: 2048, extra_args: ["-fa", "on", "--ubatch-size", "2048"]}
+
   - id: qwen3-coder-30b-a3b-q4km
     model: qwen3-coder
     quant: Q4_K_M
