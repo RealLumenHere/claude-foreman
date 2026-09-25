@@ -104,6 +104,11 @@ _KV_LABEL = (r"(?:" + _KV_WORD + r")?" + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
              + r"|" + _KV_BARE)
 _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
+# wq#2632: the called-identifier exclusion, asserted at the value's START. As a
+# trailing `(?!...|\()` it failed every length the floor admits instead of ending the
+# match early, so any opaque value one character before a `(` went undetected —
+# here that is a silent leak of the broker result, not just a missed page.
+_KV_CALL = r"(?![A-Za-z_][A-Za-z0-9_]{0,23}[._][A-Za-z0-9._]{1,23}\()"
 MASK_PATTERNS = [
     ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{30,}")),
     ("github_token", re.compile(_B + r"(?:github_pat_)[A-Za-z0-9_]{20,}")),
@@ -114,15 +119,15 @@ MASK_PATTERNS = [
     ("sk_key", re.compile(_B + r"sk-(?:[a-zA-Z]+-)*[A-Za-z0-9_-]{16,}")),
     ("slack_token", re.compile(_B + r"xox[bpasr]-[A-Za-z0-9-]{8,}")),
     ("aws_key_id", re.compile(_B + r"AKIA[0-9A-Z]{16}")),
-    # wq#2288/wq#2297: keep in lockstep with harness/masking.py — a called identifier
-    # (`key = apply_key_allowlist(reg)`) is not a credential, and neither is a noun
-    # buried in a longer word (`monkey:`) or a bare `key=`/`PAT =`. Here a false hit
+    # wq#2288/wq#2297/wq#2632: keep in lockstep with harness/masking.py — a called
+    # identifier (`token = read_oauth_token()`) is not a credential, and neither is a
+    # noun buried in a longer word (`monkey:`) or a bare `key=`/`PAT =`. Here a false hit
     # does not just page: it fails the broker verb and drops the result. The daemon
     # runs as `tokeneng`, off the harness import path, so the vocabulary is copied
     # rather than imported; test_masking.test_token_engine_mirror_agrees pins them.
     ("kv_secret", re.compile(
-        r'\b(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER +
-        r'[A-Za-z0-9._-]{12,}(?![A-Za-z0-9._-]|\()',
+        r'\b(?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*' + _KV_POINTER + _KV_CALL +
+        r'[A-Za-z0-9._-]{12,}',
         re.IGNORECASE)),
 ]
 

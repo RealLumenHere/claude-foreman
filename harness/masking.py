@@ -16,7 +16,7 @@ the two in lockstep: a pattern added there must be added here the same day. They
 are no longer character-identical — sed -E is POSIX ERE with no lookbehind, so the
 word boundary below is spelled `(^|[^A-Za-z0-9_])` with a shifted capture group
 there and `(?<![A-Za-z0-9_])` here. Same language, different syntax. kv-secret is
-also narrower here until wq#2313 carries its tail lookahead across, which costs the
+also narrower here until wq#2313 carries its lookarounds across, which costs the
 sed copy a false alarm, never a missed mask.
 
 Masking operates on the raw NDJSON line, not the parsed frame: the replacement
@@ -73,6 +73,34 @@ _KV_LABEL = (r"(?:" + _KV_WORD + r")?" + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
 _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
 
+# A value that is immediately CALLED is a function, never a credential:
+# `token = read_oauth_token()` is the wq#2290 shape, and bare `token` is a label
+# (_KV_BARE) so nothing else in this rule stops it.
+#
+# wq#2288 spelled that as a TRAILING `(?![A-Za-z0-9._-]|\()`, and wq#2632 found it
+# is a hole rather than a narrowing. The charset half is inert — the value run below
+# is greedy, so the character after a maximal match is never in its class and the
+# assertion always holds — which leaves `|\(` as the entire behaviour. A negative
+# lookahead there does not END the match early, it fails EVERY length the floor
+# admits and drops the match completely: an opaque 22-char value under a `TOKEN=`
+# label, one character before a `(`, scored `([], no mask)` — not truncated, not
+# partly masked, no alarm at all, in the layer instinct 4 reads as "a hit is an
+# ALARM, not a save". The same input against d8c593a^ masked and alarmed, so it was
+# a regression, and a silent miss is the one direction this rule may not fail in.
+#
+# So the test is the SHAPE of the callee, asserted where the value starts instead of
+# after it: a call names a function, so the text before `(` is a dotted or snake_case
+# identifier. `hunter2-hunter2-hunter2` is not one. The length cap is what keeps a
+# dotted CREDENTIAL out of the suppression — a JWT is three base64url segments joined
+# by `.`, identifier-shaped and far longer than any callee worth excusing.
+#
+# What this still lets through is masked, which is free (see the floor note below),
+# and does not page: burn_filter's provenance screen resolves `read_oauth_token` to
+# committed source and reports it accounted, not burned. That screen did not exist
+# when wq#2288 tightened the pattern — it is wq#2290, the ticket this suppression was
+# filed against — so the pattern no longer has to carry the alarm's precision alone.
+_KV_CALL = r"(?![A-Za-z_][A-Za-z0-9_]{0,23}[._][A-Za-z0-9._]{1,23}\()"
+
 # (label, compiled pattern, replacement) — labels feed the alarm/rotation ticket.
 # Two labels may repeat (github); mask_text() de-duplicates.
 PATTERNS = [
@@ -108,11 +136,8 @@ PATTERNS = [
         r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
         r"[^\s@/'\"`]{8,}(?=@[A-Za-z0-9\[])"), r"\1MASKED"),
     # This one keys off an English word rather than a prefix, so it needs a different
-    # boundary than `_B`. It needs a TRAILING one (wq#2288): without it
-    # `key = apply_key_allowlist(reg)` (node_render_gateway.py:418) reads as a 19-char
-    # secret. A value that is immediately called is a function, never a credential —
-    # and the charset half of the lookahead is what makes the `\(` half hold, since a
-    # greedy run would otherwise just backtrack one character and match anyway.
+    # boundary than `_B` — and a called-identifier exclusion the prefix rules do not,
+    # which is _KV_CALL above (wq#2288, narrowed by wq#2632).
     #
     # wq#2297: the trailing boundary alone was not enough, because the LABEL half was a
     # naked keyword alternation with no left boundary. `KEY` matched inside `monkey:`,
@@ -133,8 +158,8 @@ PATTERNS = [
     # tool instinct 4 tells every agent to pipe through (ISSUE-LOG row 577).
     ("kv-secret", re.compile(
         r'\b((?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*)'
-        + _KV_POINTER +
-        r'[A-Za-z0-9._-]{12,}(?![A-Za-z0-9._-]|\()',
+        + _KV_POINTER + _KV_CALL +
+        r'[A-Za-z0-9._-]{12,}',
         re.IGNORECASE), r"\1MASKED"),
 ]
 

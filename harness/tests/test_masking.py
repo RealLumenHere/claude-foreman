@@ -121,6 +121,10 @@ KV_FALSE_POSITIVES = [
     f"key: {PW}",                                   # bare `key:` is ordinary YAML
     "token: os.environ.FOREMAN_GH_TOKEN",           # a pointer, not the credential
     "public key: AAAAB3NzaC1yc2EAAAADAQ",           # a public key is not a secret
+    # wq#2632: a DOTTED callee. `token` is a bare label, so the called-identifier
+    # exclusion is the only thing holding these down, and narrowing it must not lose them.
+    "        token = self.read_oauth_token()",
+    "        token = broker.client.fetch_oauth(scope)",
 ]
 
 # and the shapes that must keep firing — a rule this narrow is only safe if it still
@@ -238,7 +242,7 @@ def test_token_engine_mirror_agrees():
         assert ted.mask_hits(text) == [], f"{text!r} trips the daemon tripwire"
     # wq#2297: the daemon's kv_secret must also still CATCH, or the mirror passes by
     # going blind — a false hit there fails the verb, a missed one leaks the result.
-    for text in KV_REAL:
+    for text in KV_REAL + KV_PAREN_ADJACENT:
         assert ted.mask_hits(text), f"daemon stopped catching {text!r}"
     for real in (GHP, GHPAT, SK, AKIA):
         assert ted.mask_hits(f'v = "{real}"'), f"daemon stopped catching {real[:8]}"
@@ -328,7 +332,33 @@ def test_a_called_identifier_is_not_a_credential():
     assert hits == []
 
 
-# (the positive half of this rule is KV_REAL / test_a_qualified_noun_still_fires)
+# wq#2632: the same exclusion must not swallow an OPAQUE value that happens to sit one
+# character before a `(`. Written as a trailing `(?![A-Za-z0-9._-]|\()` it did: the
+# charset half is inert against a greedy run, so the whole effect was `|\(`, and a
+# negative lookahead after the value fails every length the {12,} floor admits rather
+# than ending the match early. The result was no match at all — not a truncated mask, a
+# SILENT MISS in the layer whose hits are alarms (instinct 4), and a regression from
+# d8c593a^, which masked and alarmed on this exact input.
+JWT = "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiJsdW1lbiJ9." + "dBjftJeZ4CVPmB92K27u"
+KV_PAREN_ADJACENT = [
+    f"GITEA_TOKEN={PW}(",                  # the reported shape, verbatim
+    f'"api_key": "{PW}(x)"',
+    f"password: {PW}(2026)",
+    # a credential that IS identifier-shaped: three dot-joined base64url segments. The
+    # length cap on _KV_CALL is the only thing separating it from a dotted callee.
+    f"Authorization token: {JWT}(",
+]
+
+
+@pytest.mark.parametrize("text", KV_PAREN_ADJACENT)
+def test_a_value_next_to_an_open_paren_still_masks_and_alarms(text):
+    masked, hits = masking.mask_text(text)
+    assert hits == ["kv-secret"], f"{text!r} is no longer detected at all"
+    assert PW not in masked and JWT not in masked, "value survived into the artefact"
+    assert "MASKED(" in masked, "the mask did not stop at the paren"
+
+
+# (the rest of the positive half is KV_REAL / test_a_qualified_noun_still_fires)
 
 
 # wq#2296: the two tests above pin the false-positive shapes we already know, as

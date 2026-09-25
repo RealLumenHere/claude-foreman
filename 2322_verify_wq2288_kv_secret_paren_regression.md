@@ -104,3 +104,13 @@ carry this lookahead) but the failure mode is a silent miss, not noise.
 | ISSUE-LOG **#730** appended | Records the trailing-lookahead miss and its scope, per doctrine |
 | **wq#2632** filed, pri 1, `deps=2288`, `claude-opus-5@high` | Judgment ticket per archetype-8 protocol: decide the fix (narrow the lookahead to require an *identifier-shaped* prefix before treating `(` as a function call, vs. accept the gap and document it, vs. add a paren-adjacency-specific pattern) |
 | wq#2288 left `done`, PR#815/`32aa000` left as-is, not reopened or edited here | Verify-only per archetype 8 — do not re-implement; opus-5@high judgment decides disposition |
+
+## Disposition (wq#2632, 2026-09-25)
+
+Option 1 — **narrow the lookahead** — taken, and moved to where the value STARTS rather
+than after it: `masking._KV_CALL`. The report's reading of the mechanism holds, with one
+addition: a negative lookahead after a `{12,}` run is retried at every admitted length,
+which is *why* the miss is total rather than a truncation. Option 3 (mask but suppress
+only the escalation) was rejected as already built — `burn_filter.classify()` is that
+carve-out, and it postdates wq#2288, so the pattern never needed to carry the alarm's
+precision alone. Details and the two side findings: ISSUE-LOG row 745.
