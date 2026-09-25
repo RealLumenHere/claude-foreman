@@ -1,0 +1,41 @@
+# /etc/systemd/system/dc-gateway.service (ANUBIS)
+#
+# wq#2607: Anubis DC endpoint, per MCP_CONTROL_PLANE_HA_DESIGN.md §3.2 — "byte-copy
+# of Lumen's desktop-commander-mcp unit minus Lumen paths, plus §3.3 hardening."
+# Base ExecStart/Restart/OOMPolicy below is Lumen's LIVE effective unit (fetched via
+# `fleet-exec run lumen -- systemctl cat desktop-commander-mcp`, 2026-09-25 — merges
+# Lumen's session-timeout.conf drop-in, which is the current production ExecStart:
+# no --sessionTimeout flag, stateless). Lumen-specific drop-ins NOT carried over:
+#   - path.conf (wq#2565 git-credential-token-engine fix — Lumen-only PATH issue)
+#   - session-timeout.conf's MemoryHigh/Max tuning history (T5810-specific incident,
+#     wq#380) — Anubis starts at the same conservative 8G/12G values since this is a
+#     fresh 32G host with no prior OOM history; revisit after a burn-in period.
+# T1 hardening (§3.3) ships as the separate drop-in dc-gateway-hardening.conf, not
+# baked in here, matching how Lumen itself carries hardening as drop-ins.
+#
+# NOT YET DEPLOYED — see ../wq2607-dc-endpoint-anubis/README.md for why and for the
+# exact remaining commands (node/npm/systemd/cloudflared install requires either a
+# fleet-exec sudo verb, which is unshipped v2 tooling, or a session with real shell
+# access to Anubis — this BUILD worker's grant is ssh(lumen, run) only, wq#2607
+# evidence + kb/ISSUE-LOG.md #740).
+
+[Unit]
+Description=Desktop Commander MCP via Supergateway (Anubis DC endpoint)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=anubis
+Environment=PATH=/home/anubis/.npm-global/bin:/usr/bin:/bin
+ExecStartPre=-/usr/bin/python3 /home/anubis/bin/dc-enforce-config.py
+ExecStart=/home/anubis/.npm-global/bin/supergateway --stdio "/home/anubis/.npm-global/bin/desktop-commander" --port 3100 --outputTransport streamableHttp --streamableHttpPath /mcp --cors --healthEndpoint /health
+OOMPolicy=continue
+MemoryHigh=8G
+MemoryMax=12G
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

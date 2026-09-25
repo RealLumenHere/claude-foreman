@@ -1,0 +1,12 @@
+# /etc/systemd/system/mcp-gateway-watchdog.timer (ANUBIS) — wq#2607 T2, 1-min cadence
+# per MCP_CONTROL_PLANE_HA_DESIGN.md §3.3.
+[Unit]
+Description=Run wq#2607 dc-gateway/cloudflared watchdog every minute (Anubis)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

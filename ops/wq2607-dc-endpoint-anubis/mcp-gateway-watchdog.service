@@ -1,0 +1,11 @@
+# /etc/systemd/system/mcp-gateway-watchdog.service (ANUBIS) — wq#2607 T2 oneshot,
+# invoked by mcp-gateway-watchdog.timer. Needs passwordless `sudo systemctl restart
+# dc-gateway|cloudflared` for the anubis user (visudo NOPASSWD line, see README.md).
+[Unit]
+Description=wq#2607 dc-gateway/cloudflared responsiveness watchdog (Anubis)
+After=network.target dc-gateway.service
+
+[Service]
+Type=oneshot
+User=anubis
+ExecStart=/home/anubis/bin/mcp-gateway-watchdog.sh

@@ -1,0 +1,11 @@
+# Ingress addition for Anubis's cloudflared config.yml — wq#2607, per
+# MCP_CONTROL_PLANE_HA_DESIGN.md §3.2: "ingress mcp-anubis.lumennode.uk ->
+# http://localhost:3100". Tunnel is created FRESH on Anubis (not copied from Lumen —
+# `cloudflared tunnel create` must run ON the node whose UUID will own the ingress;
+# running it on Lumen and pointing DNS/ingress at Anubis is the 06-29 gotcha this
+# design doc's §3.2 names explicitly). Full tunnel-create + DNS steps are in README.md
+# since they need real Anubis shell access this BUILD worker's grant does not have.
+ingress:
+  - hostname: mcp-anubis.lumennode.uk
+    service: http://localhost:3100
+  - service: http_status:404

@@ -1,0 +1,10 @@
+--- a/context/fleet_tools.yaml (before)
++++ b/context/fleet_tools.yaml (after)
+@@ end of file (after commander_mcp group) @@
++
++  mcp_ha_endpoints:
++    desc: "wq#2607/wq#2610 control-plane HA (MCP_CONTROL_PLANE_HA_DESIGN.md): per-node Desktop Commander gateways behind the mcpw Worker router. NOT a live pool yet — Lumen is still the only member; this entry tracks the second (Anubis) endpoint as it comes up so `claude_context.sh --core` reflects reality, not the design doc's target state."
++    tools:
++      - name: mcp-anubis (DC endpoint, prepared not deployed)
++        use: "Second node in the HA pool per §3.2. Node/npm/systemd/cloudflared install and the CF Access app are NOT done — this BUILD worker's fleet-exec grant is ssh(lumen, run) only, no anubis exec, and fleet-exec v1 has no sudo verb for install-class ops (kb/ISSUE-LOG.md #740). Units, watchdog and the enforce-config copy are staged and reviewed in foreman ops/wq2607-dc-endpoint-anubis/; DNS/Access need the wq#2614 CF token."
++        invoke: "once deployed: https://mcp-anubis.lumennode.uk/mcp behind CF Access service token e23d092b-c2d2-4093-b1ec-ecd1a08ec2c0 (reused from mcp-failover's pattern) | remaining commands: ops/wq2607-dc-endpoint-anubis/README.md"
