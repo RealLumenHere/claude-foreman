@@ -44,13 +44,14 @@ the tickets this tool settles were coming from.
 No value is ever printed or returned: a record carries the kept prefix, the value's
 length, 12 hex of its sha256, and the matching line with the value spliced out.
 
-    python3 harness/mask_replay.py 2288            # legacy rules (what fired)
-    python3 harness/mask_replay.py 2288 --rules current
+    python3 harness/mask_replay.py 2288             # auto: dated by the run's own start
+    python3 harness/mask_replay.py 2288 --rules legacy   # force the table that filed it
 
 Exit 0: every value is accounted for in the tree — nothing to rotate. Exit 1: at least
 one is not. Exit 2: the run left no corpus to replay.
 """
 import argparse
+import calendar
 import glob
 import hashlib
 import json
@@ -106,6 +107,13 @@ LEGACY_PATTERNS = [
 ]
 
 CURRENT_PATTERNS = [(label, rx) for label, rx, _ in masking.PATTERNS]
+
+# wq#2715 (ISSUE-LOG row 793, wq#2696): the instant LEGACY_PATTERNS retired. A run
+# that started at or after this is scored under CURRENT_PATTERNS by --rules auto,
+# never the frozen table above, which does not know today's shapes exist.
+LEGACY_CUTOFF_ISO = "2026-09-20T22:35:00Z"
+LEGACY_CUTOFF_S = calendar.timegm(
+    time.strptime(LEGACY_CUTOFF_ISO, "%Y-%m-%dT%H:%M:%SZ"))
 
 GIT_TIMEOUT_S = 20
 HISTORY_DEPTH = 50
@@ -293,6 +301,47 @@ def corpus(ticket_id):
             if text:
                 items[f"transcript:{sid}"] = text
     return items
+
+
+def _parse_ts(value):
+    """Epoch seconds for a `ts` field: an ISO-8601 `...Z` string (the event stream's
+    own format) or an already-numeric epoch, else None."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    try:
+        return calendar.timegm(time.strptime(value, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
+
+def earliest_event_ts(items):
+    """Epoch seconds of the earliest `ts` in any `events:`-sourced corpus text, or
+    None if the run left nothing timestamped to date it by.
+
+    The per-attempt event stream's first record (`event: start`) times the moment
+    the worker picked the ticket up — already loaded into `items` by `corpus()`, so
+    this re-parses text already in hand rather than re-reading the run's files.
+    Deciding `--rules auto` (wq#2715) from this, rather than from wall-clock `now`,
+    keeps a replay run days later still dated by when the TICKET fired, not by when
+    someone got around to checking it.
+    """
+    earliest = None
+    for source, text in items.items():
+        if not source.startswith("events:"):
+            continue
+        for line in text.splitlines():
+            try:
+                ts = _parse_ts(json.loads(line).get("ts"))
+            except (ValueError, AttributeError):
+                continue
+            if ts is not None and (earliest is None or ts < earliest):
+                earliest = ts
+    return earliest
 
 
 def _recut(rec, ticket_id=None):
@@ -717,9 +766,11 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("ticket", type=int, help="ticket id of the run that fired")
-    ap.add_argument("--rules", choices=("legacy", "current"), default="legacy",
-                    help="legacy (default): the pre-2026-09-20T22:35 table that filed "
-                         "the backlog; current: today's masking.PATTERNS")
+    ap.add_argument("--rules", choices=("auto", "legacy", "current"), default="auto",
+                    help="auto (default, wq#2715): current for a run that started at "
+                         f"or after the legacy table's {LEGACY_CUTOFF_ISO} retirement, "
+                         "legacy for one before it or one whose start can't be dated; "
+                         "legacy/current: force a table regardless of the run's date")
     ap.add_argument("--repo", default=REPO_ROOT)
     ap.add_argument("--extra-tracked", action="append", default=DOCTRINE_TRACKED)
     ap.add_argument("--json", action="store_true", help="records as JSON, no report")
@@ -732,12 +783,28 @@ def main(argv=None):
         print(f"wq#{args.ticket}: no run artefacts under {RUNS_ROOT} — nothing to "
               f"replay", file=sys.stderr)
         return 2
+    started = earliest_event_ts(items)
+    same_day = started is not None and started >= LEGACY_CUTOFF_S
+    if args.rules == "auto":
+        rules = "current" if same_day else "legacy"
+        started_str = (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started))
+                       if started is not None else "unknown")
+        print(f"wq#{args.ticket}: --rules auto -> {rules} (run started {started_str}, "
+              f"legacy table retired {LEGACY_CUTOFF_ISO})", file=sys.stderr)
+    else:
+        rules = args.rules
+        if rules == "legacy" and same_day:
+            print(f"wq#{args.ticket}: WARNING --rules legacy forced on a run that "
+                  f"started {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(started))}, "
+                  f"at or after the table's {LEGACY_CUTOFF_ISO} retirement — this "
+                  "replays the WRONG table for this ticket's own date (ISSUE-LOG row "
+                  "793, wq#2696)", file=sys.stderr)
     tracked = tracked_text(args.repo, args.extra_tracked)
     for common in foreign_repos(items, args.repo):
         tracked.update(committed_text(common))
     records = replay(
         args.ticket,
-        patterns=LEGACY_PATTERNS if args.rules == "legacy" else CURRENT_PATTERNS,
+        patterns=LEGACY_PATTERNS if rules == "legacy" else CURRENT_PATTERNS,
         tracked=tracked,
         items=items,
         rotated=load_rotated_ledger(args.rotated_ledger))

@@ -202,6 +202,73 @@ def write_run(tmp_path, ticket, session):
     return run
 
 
+def write_dated_run(tmp_path, ticket, session, start_ts):
+    """`write_run`'s fixture, but with a real `start` event carrying `start_ts` — the
+    wq#2715 case, a run whose own event stream can date it."""
+    run = write_run(tmp_path, ticket, session)
+    events = tmp_path / "events"
+    (events / f"fworker-wq{ticket}-a1.jsonl").write_text(
+        json.dumps({"ts": start_ts, "event": "start", "session_id": session}) + "\n"
+        + OWN_OUTPUT)
+    return run
+
+
+def test_auto_rules_dates_a_same_day_ticket_to_the_current_table(tmp_path, monkeypatch,
+                                                                  capsys):
+    """wq#2715 (ISSUE-LOG row 793, wq#2696): the default used to be the retired legacy
+    table regardless of the run's own date, so a same-day ticket silently misreplayed —
+    surfacing noise the ticket never fired on and omitting the values it exists to
+    check. CALLED_IDENT only fires as kv-secret under LEGACY_PATTERNS (see
+    test_legacy_rules_fire_on_a_called_identifier_and_current_rules_do_not); a run that
+    started well after the legacy table's 2026-09-20T22:35 retirement must be scored
+    under CURRENT_PATTERNS with NO --rules flag, so that snapshot must produce nothing."""
+    write_dated_run(tmp_path, 4343, "sess-1", "2026-09-25T13:30:03Z")
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(tmp_path / "_runs"))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    capsys.readouterr()
+    mask_replay.main(["4343", "--json"])
+    out, err = capsys.readouterr()
+    records = json.loads(out)
+    assert not any(r["first_seen_in"].startswith("snapshot:") for r in records)
+    assert "--rules auto -> current" in err
+
+
+def test_auto_rules_keeps_legacy_for_a_run_before_the_cutoff(tmp_path, monkeypatch,
+                                                              capsys):
+    """The other side of the same boundary: a run dated before the retirement must
+    still replay under the table that was actually live when it fired."""
+    write_dated_run(tmp_path, 4344, "sess-1", "2026-09-19T00:00:00Z")
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(tmp_path / "_runs"))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    capsys.readouterr()
+    mask_replay.main(["4344", "--json"])
+    out, err = capsys.readouterr()
+    records = json.loads(out)
+    assert any(r["first_seen_in"].startswith("snapshot:") and r["label"] == "kv-secret"
+              for r in records)
+    assert "--rules auto -> legacy" in err
+
+
+def test_forcing_legacy_on_a_same_day_run_warns(tmp_path, monkeypatch, capsys):
+    """Forcing `--rules legacy` is still allowed (replaying what actually fired an old
+    ticket needs it), but doing so on a run dated at/after the retirement must say so
+    loudly — this is the silent-misreplay shape wq#2696 found, now an explicit warning
+    instead of a clean report that never examined the ticket's own defining values."""
+    write_dated_run(tmp_path, 4345, "sess-1", "2026-09-25T13:30:03Z")
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(tmp_path / "_runs"))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
+    capsys.readouterr()
+    mask_replay.main(["4345", "--rules", "legacy", "--json"])
+    out, err = capsys.readouterr()
+    records = json.loads(out)
+    assert any(r["first_seen_in"].startswith("snapshot:") and r["label"] == "kv-secret"
+              for r in records)
+    assert "WARNING --rules legacy forced" in err
+
+
 def test_corpus_covers_snapshots_run_records_events_and_the_read_cache(tmp_path,
                                                                        monkeypatch):
     """The read cache is the only source that names a file the run merely READ and
