@@ -1,0 +1,10 @@
+--- a/agent/healer_watch_table.yaml
++++ b/agent/healer_watch_table.yaml
+@@ -13,7 +13,8 @@
+ # mtime change each cycle; a malformed table keeps the last good one and pages.
+ units:
+-  redis-server:          {kind: systemd, policy: restart, owner: core,      holddown_flag: /home/lumen/agents/holddowns/redis-server.json}
++  # wq#2713 (2026-09-25): redis-server row removed — LoadState=not-found
++  # (retired between the wq#1644 sweep on 2026-09-10 and this ticket); nothing to restart.
+   lumen-messenger:       {kind: systemd, policy: restart, owner: product,   holddown_flag: /home/lumen/agents/holddowns/lumen-messenger.json}
+   cloudflared:           {kind: systemd, policy: restart, owner: edge,      holddown_flag: /home/lumen/agents/holddowns/cloudflared.json}
