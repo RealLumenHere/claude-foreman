@@ -75,15 +75,24 @@ MANIFEST_PATH = os.environ.get(
 # lane, as this very ticket's worktree shows).
 # Lanes not listed here have no single canonical repo (or none confirmed) — dispatch-cmd
 # refuses to guess and requires an explicit --repo instead.
-# wq#830: 'auto' is deliberately NOT listed. It is wq's CLI default lane (`wq add` with no
-# --lane) and so spans arbitrary repos — wq#688 targets questfree, wq#306 vault, wq#545
-# wq-tooling. Mapping it to FOREMAN_ROOT made `dispatch-cmd <auto-ticket>` emit a silently
-# wrong --repo. Do not re-add it without the per-entry Frank confirmation every other
-# non-obvious entry below carries; the honest fix for an auto ticket is an explicit --repo.
-# wq#1094: the one exception is repo-sweep tickets, which carry their own exact target
-# repo in the ticket's own detail (harness/repo_sweep.py wrote it there) — the dispatcher
-# reads that back (repo_sweep.repo_hint) instead of using this table. Still not a guess:
-# it's per-ticket data, validated against repo_sweep.managed_repos() before use.
+# 'auto' (wq's CLI default lane, `wq add` with no --lane) spans arbitrary repos — wq#688
+# targeted questfree, wq#306 vault, wq#545 wq-tooling — so wq#830 (d14677e) dropped it from
+# this table after a FOREMAN_ROOT default made `dispatch-cmd <auto-ticket>` emit a silently
+# wrong --repo. 1eb5c48 (wq#2103/2056, 2026-09-25) put it back so auto-lane infra tickets
+# stop dying as lane_unmapped (12 were stuck that way), and that default immediately
+# swallowed the per-ticket sweep repo (ISSUE-LOG #841, wq#2753). The contract since
+# wq#2753 (3d33058), which repo_for_ticket implements and test_router.py pins:
+#   1. per-ticket data outranks this table for EVERY lane — a `needs: repo` tag, a
+#      deliverable path, a "lands via lumen-pr against <repo>" line, a verify-repo line or
+#      a repo-sweep target in the ticket's own text (each validated against
+#      repo_sweep.managed_repos() before use, so still never a guess);
+#   2. only then the lane default below — for 'auto' that is FOREMAN_ROOT, on the
+#      wq#2103 reading that an auto ticket naming no repo at all is fleet/infra work like
+#      the fleet/ops lanes.
+# So an auto ticket whose deliverable lives in another repo must SAY so (any of the
+# hints in 1); one that stays silent is routed to foreman, not refused. wq#2773: this
+# paragraph used to still carry the wq#830 "do not re-add" warning against the live
+# entry below; the entry has not had the per-entry Frank confirmation the others carry.
 LANE_REPO = {
     "build": FOREMAN_ROOT,
     "foreman-tok": FOREMAN_ROOT,   # Frank confirmed repo path 2026-08-21 (DESIGN §12.1)
