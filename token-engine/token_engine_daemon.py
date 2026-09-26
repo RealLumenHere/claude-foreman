@@ -162,7 +162,8 @@ def _body(charset, quant, foreign=""):
 # hump requires a Capitalised word behind it, up to eight qualifiers, an env-identifier
 # form at floor 8, a wider body charset, `'` quotes, an XML rule. Reasoning there and
 # in ops/wq2806-config-shape-mask/DESIGN.md.
-_KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd|(?<=_)pass|salt)"
+# `key` is a NAMED group so the identifier guard below can be conditional on it.
+_KV_NOUN = r"(?:secret|token|(?P<kn>key)|credentials?|passphrase|password|passwd|(?<=_)pass|salt)"
 # wq#2806: one-letter segments are fine behind `_`/`-` (`X_API_KEY`); the two-letter
 # minimum only guards the SPACE separator, where a lone letter is an English article.
 _KV_WORD = r"(?:[A-Za-z][A-Za-z0-9]{0,20}[_-]{1,2}|[A-Za-z][A-Za-z0-9]{1,20}(?: {1,2}|(?-i:(?=[A-Z][a-z]))))"
@@ -204,21 +205,20 @@ _KV_SEP = r'\b["\' \t]*[:=]["\' \t]*'
 _KV_LABEL_ANY = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_WORD + _KV_NOUN + r"|" + _KV_BARE)
 
 
-_KV_KEY_LABEL = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_NOT_PUBLIC + _KV_WORD + r"key")
 _KV_IDENT_VALUE = r"_*[a-z0-9]+(?:_[a-z0-9]+)+"
-_KV_NOT_IDENT = (r"(?!(?:" + _KV_KEY_LABEL + r")" + r'\b["\' \t]*[:=]["\' \t]*'
-                 + r"(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!#$%^*@~]))")
+# conditional on the `kn` group, matching harness/masking.py (wq#2806 perf fix)
+_KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!#$%^*@~])))")
 
 
-def _kv_rule(label, guards, floor="{12,}", pre=""):
+def _kv_rule(label, guards, floor="{12,}"):
     # wq#2694 landed after this mirror's base: the leading boundary must accept the
     # position right after our own mask literal too (_WB), matching harness/masking.py.
-    return (_WB + pre + r'((?:' + label + r')' + _KV_SEP + r')' + guards
+    return (_WB + r'((?:' + label + r')' + _KV_SEP + r')' + guards
             + _body(_KV_BODY, floor))
 
 
-_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED,
-                                 pre=_KV_NOT_IDENT), re.IGNORECASE)
+_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED + _KV_NOT_IDENT),
+                        re.IGNORECASE)
 _KV_SECRET_ENV = re.compile(_kv_rule(_KV_ENV_LABEL, _KV_POINTER + _KV_NOT_CALLED, "{8,}"))
 _XML_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd|pass|salt)"
 _XML_TAG = (r"(?:[A-Za-z0-9._\-]*[._\-])?" + _XML_NOUN + r"(?:[._\-][A-Za-z0-9._\-]*)?")
@@ -228,7 +228,7 @@ _KV_SUPPRESSIONS = (
     ("pointer", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_POINTER), re.IGNORECASE)),
     ("call", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_CALLED), re.IGNORECASE)),
     ("public-key", re.compile(_kv_rule(_KV_LABEL, ""), re.IGNORECASE)),
-    ("identifier", re.compile(_kv_rule(_KV_LABEL_ANY, "", pre=_KV_NOT_IDENT), re.IGNORECASE)),
+    ("identifier", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_IDENT), re.IGNORECASE)),
 )
 MASK_PATTERNS = [
     ("github_token", re.compile(_B + r"(?:" + _PRE_GH + r")"

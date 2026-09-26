@@ -168,7 +168,8 @@ def _body(charset, quant, foreign=""):
 # compose file, 64 hex, in the clear); it is bare below because that is how it is
 # labelled, and a prose `salt:` followed by a 12-char opaque run is not a shape the
 # fleet corpus holds.
-_KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd|(?<=_)pass|salt)"
+# `key` is a NAMED group so the identifier guard below can be conditional on it.
+_KV_NOUN = r"(?:secret|token|(?P<kn>key)|credentials?|passphrase|password|passwd|(?<=_)pass|salt)"
 # The hump test is case-SENSITIVE via `(?-i:)` even though the rule as a whole is
 # IGNORECASE — that asymmetry is the whole trick: it admits `apiKey:` while refusing
 # `monkey:`. Two letters minimum, since a one-letter qualifier is an English article
@@ -281,15 +282,16 @@ _KV_SEP = r'\b["\' \t]*[:=]["\' \t]*'
 # Guarded for `key` labels ONLY (a password may well be `my_db_pass_1`), tested from
 # the rule's START as a lookahead over label+separator+value, and recorded as
 # suppression "identifier" so an overbroad reading shows up as rows, not silence.
-_KV_KEY_LABEL = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_NOT_PUBLIC + _KV_WORD
-                 + r"key")
 _KV_IDENT_VALUE = r"_*[a-z0-9]+(?:_[a-z0-9]+)+"   # `_stale_probe_tickets` is one too
-_KV_NOT_IDENT = (r"(?!(?:" + _KV_KEY_LABEL + r")" + r'\b["\' \t]*[:=]["\' \t]*'
-                 + r"(?-i:" + _KV_IDENT_VALUE + r")(?!" + r"[A-Za-z0-9._\-+/=:!#$%^*@~]"
-                 + r"))")
+# A CONDITIONAL on the `kn` group (Python `(?(name)yes)`): it only runs once a label has
+# matched and only when that label's noun was `key`. The first cut of this guard was a
+# lookahead at the rule's START that re-ran the whole depth-7 label grammar at every
+# word boundary of the line; on a 1.2 MB Commander log line that doubled the rule's cost
+# (450 ms -> 890 ms) and the all-rules sweep of /home/lumen/logs did not finish.
+_KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!#$%^*@~])))")
 
 
-def _kv_rule(label, guards, floor="{12,}", pre=""):
+def _kv_rule(label, guards, floor="{12,}"):
     """The kv-secret rule, parameterised by which of its suppressions are in force.
 
     wq#2677: the rule and the probe that records what it suppressed are built from one
@@ -307,12 +309,12 @@ def _kv_rule(label, guards, floor="{12,}", pre=""):
     (test_every_label_sees_the_real_token_not_an_earlier_mask), and a stop at
     position zero would refuse it outright, floor and all.
     """
-    return (_WB + pre + r'((?:' + label + r')' + _KV_SEP + r')' + guards
+    return (_WB + r'((?:' + label + r')' + _KV_SEP + r')' + guards
             + _body(_KV_BODY, floor))
 
 
-_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED,
-                                 pre=_KV_NOT_IDENT), re.IGNORECASE)
+_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED + _KV_NOT_IDENT),
+                        re.IGNORECASE)
 # wq#2806: the env-identifier form of the same rule, floor 8 (see _KV_ENV_LABEL). It
 # shares the label string "kv-secret" the way the two github rules share theirs: one
 # alarm class, one rotation-ticket shape, one set of suppressions to reason about.
@@ -348,8 +350,7 @@ _KV_SUPPRESSIONS = (
     ("pointer", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_POINTER), re.IGNORECASE)),
     ("call", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_CALLED), re.IGNORECASE)),
     ("public-key", re.compile(_kv_rule(_KV_LABEL, ""), re.IGNORECASE)),
-    ("identifier", re.compile(_kv_rule(_KV_LABEL_ANY, "", pre=_KV_NOT_IDENT),
-                              re.IGNORECASE)),
+    ("identifier", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_IDENT), re.IGNORECASE)),
 )
 SUPPRESSED_LABEL = "kv-secret"   # the only rule that carries suppressions today
 
