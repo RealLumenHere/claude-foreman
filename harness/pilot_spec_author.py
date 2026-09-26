@@ -80,8 +80,43 @@ COMPARATOR = re.compile(
 WIN_CONDITION = re.compile(
     r'(\bwin\b|\bcounts as\b|\bthreshold\b|>=|<=|>|<|\bat least\b|\bat most\b|'
     r'\bbelow\b|\babove\b)', re.I)
-PINNED_SAMPLE = re.compile(
+# wq#2728: NUMBER and WIN_CONDITION were tested for PRESENCE anywhere in the section,
+# so "5 things are listed below in the report for review" validated clean — `5` and
+# `below` are both there, and neither is a claim. A win condition is a number that is
+# the OPERAND of a comparator: within two tokens of it, on either side, with an
+# optional sign (`>= 0.65`, `at least 20 percent`, `20% fewer`, `>= +10% relative`,
+# `threshold of 3`). Not a stop-list: the shape is what is required, not what is
+# forbidden.
+_COMPARATOR_WORDS = (
+    r'(?:>=|<=|>|<|≥|≤|\bat\s+least\b|\bat\s+most\b|\bbelow\b|\babove\b|\bunder\b|'
+    r'\bover\b|\bwithin\b|\bbeats?\b|\bfaster\b|\bslower\b|\bhigher\b|\blower\b|'
+    r'\bfewer\b|\bmore\b|\bless\b|\bbetter\b|\bworse\b|\breduces?\b|\bcuts?\b|'
+    r'\bincreases?\b|\bdrops?\b|\brises?\b|\bimproves?\b|\bthreshold\b)')
+NUMERIC_CLAIM = re.compile(
+    r'(?:' + _COMPARATOR_WORDS + r'(?:\s+[^\s\d]+){0,2}\s*[+\-~]?\s*\d'
+    r'|\d[^\s]*(?:\s+[^\s\d]+){0,2}\s+' + _COMPARATOR_WORDS + r')', re.I)
+# wq#2728: the same gap on the sample. `\b\d+\s+\w+` was one of three alternatives, so
+# "roughly 50 notes pulled fresh from the live queue each run, count varies day to day"
+# pinned on the bare token `50 notes` while saying in the same breath that the count
+# is not fixed. A path or a sha256 names the set outright; a count only fixes a sample
+# together with the selection rule that makes both arms draw the SAME rows — first N
+# by id, ORDER BY, LIMIT, a seed, an id or row range.
+PINNED_SOURCE = re.compile(r'(/[\w.\-]+/[\w.\-/]*|\b[0-9a-f]{64}\b)')
+PINNED_COUNT = re.compile(r'\b\d+\s+\w+')
+SELECTION_RULE = re.compile(
+    r'(\b(?:first|top|last|oldest|newest|earliest|latest)\s+\d+\b|'
+    r'\b(?:ordered|order|sorted|sort)\s+by\b|\blimit\s+\d+\b|\b[nN]\s*=\s*\d+|'
+    r'\bseed(?:ed)?\b|\b(?:ids?|rows?|lines?)\s+\d+\s*(?:-|–|\.\.|to)\s*\d+\b)', re.I)
+PINNED_SAMPLE = re.compile(  # kept for callers that only want "does it name something"
     r'(/[\w.\-]+/[\w.\-/]*|\b[0-9a-f]{64}\b|\b\d+\s+\w+)')
+
+
+def pinned_sample(text):
+    """True when both arms can draw the same rows from what `text` says."""
+    return bool(PINNED_SOURCE.search(text)
+                or (PINNED_COUNT.search(text) and SELECTION_RULE.search(text)))
+
+
 # A line that plausibly runs, not a sentence about running: an interpreter, a script
 # path, or an invocation carrying a flag. Prose passes a bare "word word word" regex,
 # which is how "measure the judge the way we do today" once counted as a baseline.
@@ -111,7 +146,8 @@ Answer with ONE JSON object and nothing else, with exactly these five string key
 "primary_metric": ONE number. Name it, name its unit, and state what counts as a
   win BEFORE the run (a comparator and a number).
 "fixed_sample": exactly what both arms run against, PINNED — an absolute path, a
-  row/query count, or a sha256. Both arms see the same sample or the run is void.
+  sha256, or a row/query count WITH the rule that picks the rows (first N by id,
+  ORDER BY, LIMIT N, a seed). Both arms see the same sample or the run is void.
 "baseline": the shell command(s) that measure what Lumen does today, run before the
   treatment exists so the baseline cannot be tuned to lose. Commands only, one per
   line, no prose.
@@ -196,10 +232,14 @@ def validate(sections):
             problems.append('primary_metric: no number to win or lose by')
         if not WIN_CONDITION.search(metric):
             problems.append('primary_metric: no win condition fixed before the run')
+        elif NUMBER.search(metric) and not NUMERIC_CLAIM.search(metric):
+            problems.append('primary_metric: the number is not the operand of the win '
+                            'condition — state it as `>= N unit` / `at least N unit`')
 
     sample = (sections.get('fixed_sample') or '').strip()
-    if sample and not PINNED_SAMPLE.search(sample):
-        problems.append('fixed_sample: not pinned — give a path, a count, or a sha256')
+    if sample and not pinned_sample(sample):
+        problems.append('fixed_sample: not pinned — give a path, a sha256, or a count '
+                        'with the selection rule (first N by id, ORDER BY, LIMIT, seed)')
 
     for arm in ('baseline', 'treatment'):
         val = (sections.get(arm) or '').strip()

@@ -161,3 +161,39 @@ def test_real_runner_authored_spec_passes_the_validator():
     sections = {key: section_text(card, heading)
                 for heading, key in psa.HEADINGS.items()}
     assert psa.validate(sections) == []
+
+
+# wq#2728: two of validate()'s per-section checks tested for keyword/digit PRESENCE
+# rather than the keyword being load-bearing, so a draft that contradicts its own
+# claim shipped as a clean card (no banner). Both strings are the ticket's verbatim
+# repros and are committed here as the fixtures the structural checks are pinned to.
+WQ2728_FIXED_SAMPLE = ('roughly 50 notes pulled fresh from the live queue each run count '
+                       'varies day to day')
+WQ2728_PRIMARY_METRIC = '5 things are listed below in the report for review'
+
+
+def test_validator_rejects_keyword_only_match_on_fixed_sample():
+    problems = psa.validate({**psa.parse_draft(GOOD_DRAFT),
+                             'fixed_sample': WQ2728_FIXED_SAMPLE})
+    assert problems, 'a count with no selection rule is not a pin'
+    assert any(p.startswith('fixed_sample: not pinned') for p in problems), problems
+    # the positive control: a count IS a pin once the rule that picks the rows is there
+    assert not [p for p in psa.validate({**psa.parse_draft(GOOD_DRAFT), 'fixed_sample':
+                'first 50 notes by id from the judge queue table, ordered by id'})
+                if p.startswith('fixed_sample')]
+
+
+def test_validator_rejects_keyword_only_match_on_primary_metric():
+    problems = psa.validate({**psa.parse_draft(GOOD_DRAFT),
+                             'primary_metric': WQ2728_PRIMARY_METRIC})
+    assert problems, 'a digit and a comparator that are not one claim is not a win condition'
+    assert any(p.startswith('primary_metric') for p in problems), problems
+    # the shapes real cards use must still pass: a bare ratio, a signed relative gain,
+    # a percentage in front of its comparator, a threshold phrase
+    for metric in ('ROC-AUC, unitless. Win: treatment AUC >= 0.65 and >= baseline + 0.05',
+                   'conversion rate on the pinned runs, win >= +10% relative',
+                   'tokens per task; a win is the treatment using 20% fewer tokens',
+                   'failures per 100 runs, threshold of 3 counts as a win'):
+        assert not [p for p in psa.validate({**psa.parse_draft(GOOD_DRAFT),
+                                             'primary_metric': metric})
+                    if p.startswith('primary_metric')], metric
