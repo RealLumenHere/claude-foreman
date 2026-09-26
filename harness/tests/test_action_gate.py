@@ -19,6 +19,7 @@ GATE = os.path.join(os.path.dirname(__file__), "..", "action_gate.py")
 def run_hook(payload, env_extra=None):
     env = dict(os.environ)
     env.pop(ag.GATE_RULES_ENV, None)
+    env.setdefault("FOREMAN_JUDGE_SHADOW", "0")  # wq#2797: hermetic by default, no live judge calls
     env.update(env_extra or {})
     p = subprocess.run([sys.executable, GATE, "hook"], input=json.dumps(payload),
                        capture_output=True, text=True, env=env, timeout=60)
@@ -84,6 +85,142 @@ def test_rules_file_tamper_blocked(tmp_path):
         rc, err = run_hook(payload, {ag.HANDOFF_ENV: str(tmp_path),
                                      "FOREMAN_EVENTS_DIR": str(tmp_path)})
         assert rc == 2, f"rules tamper not blocked: {payload}"
+
+
+# ---------------- wq#2797: shadow-mode judge wiring (observe-only) ----------
+
+FAKE_JUDGE_OK = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import json, sys
+    print(json.dumps({"tier": "High", "verdict": "deny", "conditions": [],
+                       "rationale": "fake judge for test", "model": "fake-model",
+                       "latency_s": 0.01}))
+    sys.exit(1)
+""")
+
+# Mirrors bin/judge's resolve_model()/litellm_key() early-exit shape: writes only to
+# stderr and exits 3 with EMPTY stdout (a misconfigured pin file or missing key --
+# never reaches call_judge at all). Distinct from the FAIL_CLOSED shape below.
+FAKE_JUDGE_MISCONFIGURED = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import sys
+    sys.stderr.write("judge: no model configured.\\n")
+    sys.exit(3)
+""")
+
+# Mirrors bin/judge's own fail_closed() shape: a real JSON body on stdout with
+# verdict == "FAIL_CLOSED", exit 3 (timeout / unreachable model / unparseable reply).
+FAKE_JUDGE_FAIL_CLOSED = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import json, sys
+    print(json.dumps({"verdict": "FAIL_CLOSED", "reason": "model unreachable",
+                       "model": "fake-model", "note": "no cloud fallback by design"}))
+    sys.exit(3)
+""")
+
+FAKE_JUDGE_TOUCH = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import json, os, sys
+    open(os.environ["FAKE_JUDGE_TOUCHFILE"], "w").close()
+    print(json.dumps({"tier": "Low", "verdict": "allow", "conditions": [],
+                       "rationale": "fake", "model": "fake", "latency_s": 0.01}))
+    sys.exit(0)
+""")
+
+
+def _fake_judge(tmp_path, name, script):
+    p = tmp_path / name
+    p.write_text(script)
+    p.chmod(0o755)
+    return str(p)
+
+
+def _events(tmp_path, worker):
+    path = tmp_path / f"{worker}.jsonl"
+    return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_shadow_judge_logs_without_changing_red_verdict(tmp_path):
+    judge = _fake_judge(tmp_path, "fake_judge_ok.py", FAKE_JUDGE_OK)
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_SHADOW": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "shadow-ok"})
+    assert rc == 2  # RED verdict/exit code is untouched by the shadow call
+    assert "ACTION BLOCKED" in err
+    kinds = [e["event"] for e in _events(tmp_path, "shadow-ok")]
+    assert kinds == ["gate_red_block", "judge_shadow"]
+    shadow = _events(tmp_path, "shadow-ok")[1]
+    assert shadow["judge_verdict"] == "deny"
+    assert shadow["judge_tier"] == "High"
+    assert shadow["gate_reason"] == "mkfs (filesystem create destroys contents)"
+
+
+def test_shadow_judge_disabled_skips_the_call(tmp_path):
+    touchfile = tmp_path / "touched"
+    judge = _fake_judge(tmp_path, "fake_judge_touch.py", FAKE_JUDGE_TOUCH)
+    rc, _ = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_SHADOW": "0", "FOREMAN_JUDGE_BIN": judge,
+        "FAKE_JUDGE_TOUCHFILE": str(touchfile), "FOREMAN_WORKER": "shadow-off"})
+    assert rc == 2
+    assert not touchfile.exists(), "judge binary was invoked despite FOREMAN_JUDGE_SHADOW=0"
+    assert [e["event"] for e in _events(tmp_path, "shadow-off")] == ["gate_red_block"]
+
+
+def test_shadow_judge_misconfigured_never_blocks_the_gate(tmp_path):
+    judge = _fake_judge(tmp_path, "fake_judge_bad.py", FAKE_JUDGE_MISCONFIGURED)
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_SHADOW": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "shadow-misconfig"})
+    assert rc == 2  # a misconfigured judge must never change the gate's own verdict
+    assert "ACTION BLOCKED" in err
+    events = _events(tmp_path, "shadow-misconfig")
+    assert [e["event"] for e in events] == ["gate_red_block", "judge_shadow"]
+    assert events[1]["judge_verdict"] is None  # empty stdout parses to {}: no verdict key
+
+
+def test_shadow_judge_fail_closed_is_logged_as_such(tmp_path):
+    judge = _fake_judge(tmp_path, "fake_judge_failclosed.py", FAKE_JUDGE_FAIL_CLOSED)
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_SHADOW": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "shadow-failclosed"})
+    assert rc == 2  # still untouched -- FAIL_CLOSED from the judge is itself a shadow signal
+    assert "ACTION BLOCKED" in err
+    events = _events(tmp_path, "shadow-failclosed")
+    assert [e["event"] for e in events] == ["gate_red_block", "judge_shadow"]
+    assert events[1]["judge_verdict"] == "FAIL_CLOSED"
+
+
+def test_shadow_judge_missing_binary_logs_error_not_exception(tmp_path):
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_SHADOW": "1", "FOREMAN_JUDGE_BIN": str(tmp_path / "no-such-binary"),
+        "FOREMAN_WORKER": "shadow-missing"})
+    assert rc == 2  # a broken/absent judge binary must never crash or change the gate
+    assert "ACTION BLOCKED" in err
+    kinds = [e["event"] for e in _events(tmp_path, "shadow-missing")]
+    assert kinds == ["gate_red_block", "judge_shadow_error"]
+
+
+def test_shadow_judge_never_fires_on_green_or_amber(tmp_path):
+    touchfile = tmp_path / "touched"
+    judge = _fake_judge(tmp_path, "fake_judge_touch2.py", FAKE_JUDGE_TOUCH)
+    base = {ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+            "FOREMAN_JUDGE_SHADOW": "1", "FOREMAN_JUDGE_BIN": judge,
+            "FAKE_JUDGE_TOUCHFILE": str(touchfile)}
+    rc, _ = run_hook(bash_payload("ls -la /tmp"), base)
+    assert rc == 0
+    assert not touchfile.exists(), "judge invoked on a GREEN command"
+    target = tmp_path / "config.yaml"
+    target.write_text("x: 1\n")
+    rc, _ = run_hook({"tool_name": "Edit", "tool_input": {"file_path": str(target)},
+                      "cwd": str(tmp_path)},
+                     {**base, ag.SNAPDIR_ENV: str(tmp_path / "snaps")})
+    assert rc == 0
+    assert not touchfile.exists(), "judge invoked on an AMBER command"
 
 
 # ---------------- Layer 1: GREEN passes ----------------

@@ -56,6 +56,19 @@ SNAP_VAULT = os.environ.get("FOREMAN_GATE_SNAP_VAULT",
 RED_MSG = ("ACTION BLOCKED: destructive operation requires review. "
            "Your context has been preserved for a reviewing agent.")
 
+# wq#2797 (wq#2788 Phase 1b) -- shadow-mode judge wiring. Kill switch: set
+# FOREMAN_JUDGE_SHADOW=0 to disable without redeploying; default ON so the shadow
+# actually starts observing real RED decisions. --timeout is kept well under
+# bin/judge's own 240s default: this runs synchronously inside a PreToolUse hook,
+# and Phase 0 bench put hathor-llama8b at p50 14.7s/p95 17.3s once warm, so 30s
+# gives headroom without letting a stuck call hang every RED-blocked tool call.
+JUDGE_BIN = os.environ.get("FOREMAN_JUDGE_BIN", "/home/lumen/bin/judge")
+JUDGE_SHADOW_TIMEOUT = int(os.environ.get("FOREMAN_JUDGE_SHADOW_TIMEOUT", "30"))
+
+
+def _judge_shadow_enabled():
+    return os.environ.get("FOREMAN_JUDGE_SHADOW", "1") != "0"
+
 # --------------------------------------------------------------------------
 # Layer 1 — builtin classification lists. Regexes run against BOTH the raw
 # command and a whitespace-collapsed copy (same evasion posture as guard.sh).
@@ -641,6 +654,47 @@ def write_red_handoff(tool_name, detail, reason, rules):
         return None
 
 
+def shadow_judge(tool_name, detail, reason, rules):
+    """wq#2797 (wq#2788 Phase 1b) -- on every RED, also ask the central judge and
+    log its verdict, WITHOUT changing action_gate's own RED exit code or RED_MSG.
+    This is a pure observation: it lets wq#2801's tier-policy sign-off and
+    wq#2800's calibration work compare the judge against real production RED
+    decisions before anything is allowed to gate on it (wq#2798, not this ticket).
+
+    bin/judge already logs every call -- success or FAIL_CLOSED -- to
+    minerva.db judge_verdicts, so there is nothing else to persist here beyond
+    a local event for correlation with the RED handoff. Best-effort: any
+    failure (judge down, timeout, bad JSON) is caught and logged, never raised
+    -- a broken shadow observer must never turn into a broken gate."""
+    if not _judge_shadow_enabled():
+        return None
+    ctx_parts = []
+    if rules.get("project"):
+        ctx_parts.append(f"project={rules['project']}")
+    if rules.get("hardware_class"):
+        ctx_parts.append(f"hardware_class={rules['hardware_class']}")
+    if rules.get("prose_rules"):
+        ctx_parts.append("project_rules: " + " | ".join(rules["prose_rules"][:10]))
+    if rules.get("context"):
+        ctx_parts.append("project_context: " + " | ".join(rules["context"][:10]))
+    context = "; ".join(ctx_parts)
+    kind = "bash" if tool_name == "Bash" else "file_write"
+    try:
+        p = subprocess.run(
+            [JUDGE_BIN, "--actor", WORKER_ID, "--kind", kind,
+             "--command", detail[:4000], "--context", context[:2000],
+             "--gate-verdict", "RED", "--timeout", str(JUDGE_SHADOW_TIMEOUT)],
+            capture_output=True, text=True, timeout=JUDGE_SHADOW_TIMEOUT + 15)
+        out = json.loads(p.stdout) if p.stdout.strip() else {}
+        _log_event("judge_shadow", gate_reason=reason, judge_verdict=out.get("verdict"),
+                    judge_tier=out.get("tier"), judge_latency_s=out.get("latency_s"),
+                    judge_rationale=out.get("rationale"), exit_code=p.returncode)
+        return out
+    except Exception as e:  # noqa: BLE001 -- shadow observation must never break the gate
+        _log_event("judge_shadow_error", gate_reason=reason, error=str(e)[:200])
+        return None
+
+
 # --------------------------------------------------------------------------
 # Layer 2 — LoopTracker (used by fworker.run_child)
 # --------------------------------------------------------------------------
@@ -846,6 +900,7 @@ def hook_main():
         if verdict == "RED":
             handoff = write_red_handoff(tool_name, detail, reason, rules)
             _log_event("gate_red_block", reason=reason, snippet=detail[:200], handoff=handoff)
+            shadow_judge(tool_name, detail, reason, rules)  # wq#2797: observe-only, never gates
             hc = rules.get("hardware_class")
             if hc and ("project rule" in reason or rules.get("red_patterns")):
                 print(f"ACTION BLOCKED: project rule prohibits this on hardware_class={hc}. "
