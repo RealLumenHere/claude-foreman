@@ -77,11 +77,47 @@ COMPARATOR = re.compile(
     r'(>=|<=|>|<|\bat least\b|\bat most\b|\bbeats?\b|\bfaster\b|\bslower\b|'
     r'\bhigher\b|\blower\b|\bfewer\b|\bmore\b|\bless\b|\breduces?\b|\bcuts?\b|'
     r'\bincreases?\b)', re.I)
-WIN_CONDITION = re.compile(
-    r'(\bwin\b|\bcounts as\b|\bthreshold\b|>=|<=|>|<|\bat least\b|\bat most\b|'
-    r'\bbelow\b|\babove\b)', re.I)
-PINNED_SAMPLE = re.compile(
-    r'(/[\w.\-]+/[\w.\-/]*|\b[0-9a-f]{64}\b|\b\d+\s+\w+)')
+# wq#2728: a win condition is a number BOUND to a comparison, not a comparator word
+# and a digit loose somewhere in the same section. The old rule tested for either
+# token anywhere, so "5 things are listed below in the report for review" scored a win
+# condition off `below` and a `5` twenty characters away. Two shapes count now:
+#   - the comparator carrying its own operand — ">= 0.65", "at least 40 percent",
+#     "0.65 or higher" — the number is what the comparator compares against;
+#   - an explicit win declaration ("win", "threshold", "counts as") sharing a clause
+#     with a number, which is how real cards phrase a multi-term win rule
+#     (pilots/9d95766f5f43: "Win condition ...: treatment mean >= baseline mean + 2.0").
+BOUND_COMPARATOR = re.compile(
+    r'((?:>=|<=|=>|=<|>|<)\s*[-+]?\d'
+    r'|\b(?:at least|at most|no more than|no fewer than|fewer than|more than|'
+    r'greater than|less than|below|above|under|over|within|beats?|exceeds?|'
+    r'faster than|slower than|higher than|lower than)\b'
+    r'(?:\s+[\w%$/()+-]+){0,3}?\s+[-+]?\$?\d'
+    r'|\b\d[\d.,]*\s*%?\s+or\s+(?:more|less|fewer|better|higher|lower|faster|slower|'
+    r'above|below)\b)', re.I)
+WIN_WORD = re.compile(r'(\bwins?\b|\bwinning\b|\bcounts as\b|\bthreshold\b|\btarget\b)', re.I)
+CLAUSE = re.compile(r'[.;\n]')
+
+# wq#2728: "pinned" is a claim about reproducibility — a second run reconstructs the
+# same sample. A path or a sha256 says that; an EXACT count says it too, but an
+# approximated one ("roughly 50 notes") does not, and no count says it in a section
+# that declares the sample changes between runs. The old rule matched the bare
+# "50 notes" token inside "roughly 50 notes pulled fresh from the live queue each run
+# count varies day to day" and called that pinned.
+PATH_OR_SHA = re.compile(r'(/[\w.\-]+/[\w.\-/]*|\b[0-9a-f]{64}\b)')
+COUNT = re.compile(r'\b\d[\d,]*\s+\w+')
+# Matched against the text PRECEDING a count, so it only ever reads that count's own
+# quantifier — "50 notes about billing" keeps its pin.
+APPROXIMATOR = re.compile(
+    r'(~|\b(?:roughly|rough|about|approximately|approx|around|circa|some|nearly|'
+    r'up to|at least|at most|or so|give or take|order of)\W*)$', re.I)
+# Text that asserts its own sample is not reproducible. Not a stopword list for one
+# phrasing: every alternative here is an explicit statement that the contents differ
+# from run to run, which contradicts any pin cited alongside it.
+UNPINNED_CLAIM = re.compile(
+    r'(\bvar(?:y|ies|ying|iable)\b|\bfluctuates?\b|\bdiffers? (?:each|per|from)\b|'
+    r'\bday to day\b|\brun to run\b|\bat random\b|\brandomly\b|\bwhatever\b|'
+    r'\b(?:fresh|new|different)(?:ly)?\s+(?:\w+\s+){0,4}?(?:each|every|per)\s+'
+    r'(?:run|time|day)\b)', re.I)
 # A line that plausibly runs, not a sentence about running: an interpreter, a script
 # path, or an invocation carrying a flag. Prose passes a bare "word word word" regex,
 # which is how "measure the judge the way we do today" once counted as a baseline.
@@ -164,6 +200,24 @@ def parse_draft(text):
             if k in SECTIONS and isinstance(v, (str, int, float))}
 
 
+def has_win_condition(metric):
+    """True when the metric fixes a number to beat, not merely mentions both parts."""
+    if BOUND_COMPARATOR.search(metric):
+        return True
+    return any(WIN_WORD.search(clause) and NUMBER.search(clause)
+               for clause in CLAUSE.split(metric))
+
+
+def is_pinned(sample):
+    """True when the sample text names something a second run reproduces exactly."""
+    if UNPINNED_CLAIM.search(sample):
+        return False
+    if PATH_OR_SHA.search(sample):
+        return True
+    return any(not APPROXIMATOR.search(sample[:m.start()])
+               for m in COUNT.finditer(sample))
+
+
 def validate(sections):
     """Every reason this draft is not a runnable spec. Empty list means it is one."""
     problems = []
@@ -194,11 +248,11 @@ def validate(sections):
     if metric:
         if not NUMBER.search(metric):
             problems.append('primary_metric: no number to win or lose by')
-        if not WIN_CONDITION.search(metric):
+        if not has_win_condition(metric):
             problems.append('primary_metric: no win condition fixed before the run')
 
     sample = (sections.get('fixed_sample') or '').strip()
-    if sample and not PINNED_SAMPLE.search(sample):
+    if sample and not is_pinned(sample):
         problems.append('fixed_sample: not pinned — give a path, a count, or a sha256')
 
     for arm in ('baseline', 'treatment'):

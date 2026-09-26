@@ -58,6 +58,13 @@ VAGUE_DRAFT = json.dumps({
 })
 
 
+# wq#2728, verbatim from the escalation: two drafts that used to validate clean
+# because a keyword and a digit were merely PRESENT. Each contradicts its own section.
+KEYWORD_ONLY_SAMPLE = ('roughly 50 notes pulled fresh from the live queue each run '
+                       'count varies day to day')
+KEYWORD_ONLY_METRIC = '5 things are listed below in the report for review'
+
+
 def replies(*texts):
     """A gateway stub that hands back one canned reply per call, then repeats the last."""
     calls = []
@@ -144,6 +151,39 @@ def test_validator_flags_each_unfalsifiable_shape():
         {**psa.parse_draft(GOOD_DRAFT), 'fixed_sample': 'recent judge notes from the queue'}))
     assert any('no runnable command' in p for p in psa.validate(
         {**psa.parse_draft(GOOD_DRAFT), 'baseline': 'measure the judge the way we do today'}))
+
+
+def test_validator_rejects_keyword_only_match_on_fixed_sample():
+    """wq#2728 repro 1: the old rule read the bare `50 notes` token as a pin, in a
+    sentence that says outright the count is different every run."""
+    sections = {**psa.parse_draft(GOOD_DRAFT), 'fixed_sample': KEYWORD_ONLY_SAMPLE}
+    problems = psa.validate(sections)
+    assert problems
+    assert any('fixed_sample' in p for p in problems)
+
+
+def test_validator_rejects_keyword_only_match_on_primary_metric():
+    """wq#2728 repro 2: `below` and a stray `5` used to add up to a win condition in
+    a sentence that names no metric, no unit and nothing to beat."""
+    sections = {**psa.parse_draft(GOOD_DRAFT), 'primary_metric': KEYWORD_ONLY_METRIC}
+    problems = psa.validate(sections)
+    assert problems
+    assert any('primary_metric' in p for p in problems)
+
+
+def test_pinning_and_win_conditions_still_pass_in_their_real_shapes():
+    """The other half of the gap: tightening must not start rejecting the shapes real
+    cards use. Each of these must remain a clean draft."""
+    for sample in ('/home/lumen/foreman/pilots/fixtures/judge_notes.jsonl, both arms',
+                   '400 notes drawn once and committed; both arms read the same file',
+                   'sha256 ' + 'a' * 64 + ' — the frozen extract both arms read'):
+        assert psa.validate({**psa.parse_draft(GOOD_DRAFT), 'fixed_sample': sample}) == []
+    for metric in ('verdict agreement in percent; win: treatment >= 97 percent',
+                   'median latency in ms per note; win is at least 40 percent faster',
+                   'ROC-AUC on the pinned set; win threshold 0.65, fixed before the run',
+                   'accepted proposals per 100 draws; win: treatment mean beats '
+                   'baseline mean by 2.0 accepted/100'):
+        assert psa.validate({**psa.parse_draft(GOOD_DRAFT), 'primary_metric': metric}) == []
 
 
 def test_parse_draft_reads_a_fenced_reply():
