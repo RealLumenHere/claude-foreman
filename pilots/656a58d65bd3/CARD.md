@@ -1,8 +1,11 @@
 # PILOT 656a58d65bd3 — Add graph-text hybrid memory layer for multi-hop QA
 
-Experiment card. Generated 2026-09-20T09:14:03+00:00 by `minerva_defer_review` (wq#1559).
+Experiment card. Generated 2026-09-25T20:34:39+00:00 by `minerva_defer_review` (wq#1559).
 This card is the spec: a runner should be able to execute the pilot from it without
-asking a question. Edit it before the run if it is wrong; never edit it during.
+asking a question. The five spec sections below are authored by the generator, not
+by the runner (wq#2690, `research/DEFER_PILOT_LANE.md` §3.1a): a runner that finds
+them missing, or finds a DO-NOT-RUN banner, blocks the ticket rather than inventing
+a measurement plan. Never edit the card during a run.
 
 | | |
 |---|---|
@@ -16,41 +19,34 @@ asking a question. Edit it before the run if it is wrong; never edit it during.
 
 ## Why this is a pilot and not a research prompt
 
-The technique is promising but requires significant effort and touches the retrieval pipeline; existing eval harnesses (DGM, pelican_bench) can validate impact, but we should first prototype on a subset to measure benefit before committing.
+Deferred for a measurement; pilot wq#2124, card /home/lumen/foreman/pilots/656a58d65bd3/CARD.md. Original: The technique is promising but requires significant effort and touches the retrieval pipeline; existing eval harnesses (DGM, pelican_bench) can validate impact, but we should first prototype on a subset to measure benefit before committing.
 
 The question above is empirical: its answer is a number that does not exist yet.
 Desk research can only report what someone else measured on other hardware.
 
 ## Hypothesis
 
-<!-- One falsifiable sentence. "X beats Y on metric M by at least N" — not "X is
-promising". If it cannot be written this way the pilot is not ready to run. -->
+Graph-augmented retrieval beats pgvector-only retrieval on multi-hop answer accuracy by at least 10 percentage points.
 
 ## Primary metric
 
-<!-- ONE number. Name it, name its unit, name what counts as a win BEFORE running.
-A pilot that picks its metric after seeing the numbers has measured nothing. -->
+Multi-hop answer accuracy, in percentage points (correct answers / total queries). Win is treatment accuracy >= baseline accuracy + 10pp on the pinned sample.
 
 ## Fixed sample
 
-<!-- Exactly what the baseline and the treatment both run against. Pin it: a path,
-a row count, a sha256 where the set can drift. Both arms see the same sample or the
-comparison is void. -->
+/home/lumen/foreman/pilots/656a58d65bd3/multihop_eval.jsonl, 200 multi-hop queries with gold answers (sha256 pinned in CARD.md).
 
 ## Baseline (measure FIRST)
 
-<!-- The command that measures what Lumen does today. Run this before building the
-treatment, so the baseline cannot be tuned to lose. -->
-
 ```
+python /home/lumen/foreman/pilots/656a58d65bd3/run_eval.py --queries /home/lumen/foreman/pilots/656a58d65bd3/multihop_eval.jsonl --retriever pgvector --rerank lumen-rerank --out /home/lumen/foreman/pilots/656a58d65bd3/baseline.jsonl
 ```
 
 ## Treatment
 
-<!-- The smallest thing that tests the hypothesis. Not the full proposal — the
-cheapest build that produces the primary metric. -->
-
 ```
+python /home/lumen/foreman/pilots/656a58d65bd3/build_graph.py --papers /home/lumen/foreman/pilots/656a58d65bd3/papers/ --db /home/lumen/foreman/pilots/656a58d65bd3/graph.sqlite
+python /home/lumen/foreman/pilots/656a58d65bd3/run_eval.py --queries /home/lumen/foreman/pilots/656a58d65bd3/multihop_eval.jsonl --retriever pgvector+graph --graph /home/lumen/foreman/pilots/656a58d65bd3/graph.sqlite --rerank lumen-rerank --out /home/lumen/foreman/pilots/656a58d65bd3/treatment.jsonl
 ```
 
 ## Kill criteria

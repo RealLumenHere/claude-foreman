@@ -1,8 +1,11 @@
 # PILOT 2cfb144423c8 — Implement PI-Mem parallel-iterative memory module for long research documents
 
-Experiment card. Generated 2026-09-15T09:15:14+00:00 by `minerva_defer_review` (wq#1559).
+Experiment card. Generated 2026-09-25T20:34:34+00:00 by `minerva_defer_review` (wq#1559).
 This card is the spec: a runner should be able to execute the pilot from it without
-asking a question. Edit it before the run if it is wrong; never edit it during.
+asking a question. The five spec sections below are authored by the generator, not
+by the runner (wq#2690, `research/DEFER_PILOT_LANE.md` §3.1a): a runner that finds
+them missing, or finds a DO-NOT-RUN banner, blocks the ticket rather than inventing
+a measurement plan. Never edit the card during a run.
 
 | | |
 |---|---|
@@ -16,41 +19,33 @@ asking a question. Edit it before the run if it is wrong; never edit it during.
 
 ## Why this is a pilot and not a research prompt
 
-No experiment/eval harness exists to measure whether the technique actually improves Lumen's long-context reasoning, and the Memory v2 system is still in active iteration (P3). The paper's method is unproven for Lumen's specific workload and scale.
+Deferred for a measurement; pilot wq#1933, card /home/lumen/foreman/pilots/2cfb144423c8/CARD.md. Original: No experiment/eval harness exists to measure whether the technique actually improves Lumen's long-context reasoning, and the Memory v2 system is still in active iteration (P3). The paper's method is unproven for Lumen's specific workload and scale.
 
 The question above is empirical: its answer is a number that does not exist yet.
 Desk research can only report what someone else measured on other hardware.
 
 ## Hypothesis
 
-<!-- One falsifiable sentence. "X beats Y on metric M by at least N" — not "X is
-promising". If it cannot be written this way the pilot is not ready to run. -->
+PI-Mem iterative compression beats single-pass embedding on recall@5 of the correct source document for long research queries by at least 0.10 absolute.
 
 ## Primary metric
 
-<!-- ONE number. Name it, name its unit, name what counts as a win BEFORE running.
-A pilot that picks its metric after seeing the numbers has measured nothing. -->
+recall@5 — fraction of 40 held-out long-document queries whose correct source document appears in the top-5 retrieved chunks; win is treatment recall@5 >= baseline recall@5 + 0.10.
 
 ## Fixed sample
 
-<!-- Exactly what the baseline and the treatment both run against. Pin it: a path,
-a row count, a sha256 where the set can drift. Both arms see the same sample or the
-comparison is void. -->
+/home/lumen/foreman/pilots/2cfb144423c8/sample/ — 20 research documents each >32k tokens and 40 queries (2 per doc), pinned by sha256 manifest at /home/lumen/foreman/pilots/2cfb144423c8/sample/MANIFEST.sha256.
 
 ## Baseline (measure FIRST)
 
-<!-- The command that measures what Lumen does today. Run this before building the
-treatment, so the baseline cannot be tuned to lose. -->
-
 ```
+/home/lumen/foreman/pilots/2cfb144423c8/run_baseline.sh
 ```
 
 ## Treatment
 
-<!-- The smallest thing that tests the hypothesis. Not the full proposal — the
-cheapest build that produces the primary metric. -->
-
 ```
+/home/lumen/foreman/pilots/2cfb144423c8/run_pimem.sh
 ```
 
 ## Kill criteria

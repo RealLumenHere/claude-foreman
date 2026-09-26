@@ -1,8 +1,11 @@
 # PILOT 1b7e443bb0fa — Adopt DWM-style action-effect separation in planning
 
-Experiment card. Generated 2026-09-17T09:14:19+00:00 by `minerva_defer_review` (wq#1559).
+Experiment card. Generated 2026-09-25T20:34:36+00:00 by `minerva_defer_review` (wq#1559).
 This card is the spec: a runner should be able to execute the pilot from it without
-asking a question. Edit it before the run if it is wrong; never edit it during.
+asking a question. The five spec sections below are authored by the generator, not
+by the runner (wq#2690, `research/DEFER_PILOT_LANE.md` §3.1a): a runner that finds
+them missing, or finds a DO-NOT-RUN banner, blocks the ticket rather than inventing
+a measurement plan. Never edit the card during a run.
 
 | | |
 |---|---|
@@ -16,41 +19,46 @@ asking a question. Edit it before the run if it is wrong; never edit it during.
 
 ## Why this is a pilot and not a research prompt
 
-The paper is conceptual and not a concrete tool; applicability to Lumen's specific pipelines is uncertain, and existing eval harnesses already measure improvements. Defer until a concrete integration path is identified.
+Deferred for a measurement; pilot wq#1953, card /home/lumen/foreman/pilots/1b7e443bb0fa/CARD.md. Original: The paper is conceptual and not a concrete tool; applicability to Lumen's specific pipelines is uncertain, and existing eval harnesses already measure improvements. Defer until a concrete integration path is identified.
 
 The question above is empirical: its answer is a number that does not exist yet.
 Desk research can only report what someone else measured on other hardware.
 
 ## Hypothesis
 
-<!-- One falsifiable sentence. "X beats Y on metric M by at least N" — not "X is
-promising". If it cannot be written this way the pilot is not ready to run. -->
+On a pinned 50-task planning log, DWM-style action-effect separation (dwm_separator.py) beats raw-observation planner on planning_revision_rate by at least 10 percent fewer revisions per task.
 
 ## Primary metric
 
-<!-- ONE number. Name it, name its unit, name what counts as a win BEFORE running.
-A pilot that picks its metric after seeing the numbers has measured nothing. -->
+planning_revision_rate: mean number of planner re-invocations per task required before the emitted plan passes the existing validator; win = dwm arm mean is <= 0.90 x baseline arm mean (i.e., >=10% fewer revisions/task) on the same 50-task pinned log; unit = revisions per task.
 
 ## Fixed sample
 
-<!-- Exactly what the baseline and the treatment both run against. Pin it: a path,
-a row count, a sha256 where the set can drift. Both arms see the same sample or the
-comparison is void. -->
+/home/lumen/foreman/pilots/1b7e443bb0fa/card.md plus /data/lumen/logs/planner_tasks_50.jsonl (exactly 50 rows, sha256 pinned at run start by both arms; both arms must consume the same file).
 
 ## Baseline (measure FIRST)
 
-<!-- The command that measures what Lumen does today. Run this before building the
-treatment, so the baseline cannot be tuned to lose. -->
-
 ```
+sha256sum /data/lumen/logs/planner_tasks_50.jsonl
+python3 /data/lumen/lumen-planner/run_eval.py --tasks /data/lumen/logs/planner_tasks_50.jsonl --mode raw-observation --out /tmp/baseline_plan.json
+python3 /data/lumen/lumen-planner/score_revisions.py --plan /tmp/baseline_plan.json --tasks /data/lumen/logs/planner_tasks_50.jsonl --out /tmp/baseline_score.json
 ```
 
 ## Treatment
 
-<!-- The smallest thing that tests the hypothesis. Not the full proposal — the
-cheapest build that produces the primary metric. -->
-
 ```
+sha256sum /data/lumen/logs/planner_tasks_50.jsonl
+cat > /data/lumen/dwm_separator.py <<'PY'
+import json,sys
+for line in sys.stdin:
+    rec=json.loads(line)
+    rec['action_effect']=rec.get('action_delta',{})
+    rec['env_effect']={k:v for k,v in rec.get('state_delta',{}).items() if k not in rec.get('action_delta',{})}
+    print(json.dumps(rec))
+PY
+python3 /data/lumen/dwm_separator.py < /data/lumen/logs/planner_tasks_50.jsonl > /tmp/decomposed_50.jsonl
+python3 /data/lumen/lumen-planner/run_eval.py --tasks /tmp/decomposed_50.jsonl --mode dwm-separated --out /tmp/dwm_plan.json
+python3 /data/lumen/lumen-planner/score_revisions.py --plan /tmp/dwm_plan.json --tasks /data/lumen/logs/planner_tasks_50.jsonl --out /tmp/dwm_score.json
 ```
 
 ## Kill criteria
