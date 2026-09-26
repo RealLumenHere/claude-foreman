@@ -49,3 +49,12 @@ def _no_refill_kick(monkeypatch):
 def _scratch_cli_canary(monkeypatch, tmp_path):
     """wq#2527: spawner -> router reads the canary cache; never the live one in a test."""
     monkeypatch.setenv("FOREMAN_CLI_CANARY", str(tmp_path / "cli_canary.json"))
+
+
+@pytest.fixture(autouse=True)
+def _no_mask_at_rest_sweep(monkeypatch):
+    """2026-09-26: mask_alarm() -> trigger_mask_at_rest() Popens a detached, REAL
+    `mask_at_rest.py --store all` (whole store + offsite restic). test_masking.py calls
+    mask_alarm directly, so every suite run of a masking ticket leaked a sweep into the
+    worker's cgroup (wq#2720: 96 of them). Tests that exercise the trigger fake Popen."""
+    monkeypatch.setenv("FOREMAN_NO_MASK_AT_REST", "1")

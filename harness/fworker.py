@@ -923,9 +923,19 @@ def trigger_mask_at_rest(session_id):
     mask_at_rest's own default — the whole transcripts tree, not just one file —
     which is the correct fallback, not a special case to detect here.
     """
+    # 2026-09-26: FOREMAN_NO_MASK_AT_REST=1 (same shape as FOREMAN_NO_REFILL, wq#2069)
+    # keeps a test process from launching a REAL store sweep. test_masking.py calls
+    # mask_alarm() directly; every pytest run of a masking ticket spawned a detached
+    # `--store all` (whole store + offsite restic) from the worktree, and wq#2720's
+    # worker left 96 of them throttling in its 4-core cgroup — root cpu PSI 96% while
+    # the box sat 73% idle, and the dispatcher's cpu_pressure gate halted every pass.
+    # mask_at_rest.py also takes a single-flight lock (MASK_AT_REST_LOCK), so a second
+    # sweep launched while one is running exits 0 immediately instead of stacking.
+    if os.environ.get("FOREMAN_NO_MASK_AT_REST") == "1":
+        return
     try:
-        args = [sys.executable, MASK_AT_REST, "--store",
-               "transcripts" if session_id else "all"]
+        args = ["nice", "-n", "10", sys.executable, MASK_AT_REST, "--store",
+                "transcripts" if session_id else "all"]
         if session_id:
             args += ["--session", session_id]
         subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

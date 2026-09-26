@@ -85,10 +85,42 @@ RESTIC_TIMEOUT_S = 120
 
 STATE_PATH = os.environ.get("MASK_AT_REST_STATE",
                             os.path.join(FOREMAN_ROOT, "mask_at_rest_state.json"))
+# 2026-09-26: single-flight. fworker.trigger_mask_at_rest fires on every live alarm and
+# the nightly timer runs the same sweep; two of them at once only double the restic and
+# scan load (96 stacked `--store all` runs pinned wq#2720's worker cgroup at its quota
+# and halted the dispatcher). Held for the whole run; a second invocation that finds it
+# busy logs and exits 0 — the running sweep covers the same store, so nothing is lost.
+LOCK_PATH = os.environ.get("MASK_AT_REST_LOCK",
+                           os.path.join(FOREMAN_ROOT, "runtime", "mask_at_rest.lock"))
 
 
 def log(msg):
     print(f"[mask_at_rest] {msg}", file=sys.stderr)
+
+
+def acquire_lock(path=None):
+    """Non-blocking exclusive flock on LOCK_PATH. Returns the open file (keep it
+    referenced for the run) or None when another run holds it. A lock dir that cannot
+    be created or a filesystem without flock fails OPEN: the sweep still runs, since a
+    missed mask is worse than a doubled one."""
+    import fcntl
+    path = path or LOCK_PATH
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fh = open(path, "a+")
+    except OSError as e:
+        log(f"WARN: lock {path} unavailable ({e!r}); running unlocked")
+        return object()
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    try:
+        fh.seek(0); fh.truncate(); fh.write(f"{os.getpid()} {time.time():.0f}\n"); fh.flush()
+    except OSError:
+        pass
+    return fh
 
 
 def _load_state():
@@ -271,6 +303,11 @@ def main(argv=None):
                          "targeted call), instead of the whole projects tree")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+
+    lock = acquire_lock()
+    if lock is None:
+        log(f"another mask_at_rest run holds {LOCK_PATH}; skipping (it covers the store)")
+        return 0
 
     run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     rotated = mask_replay.load_rotated_ledger()
