@@ -169,6 +169,10 @@ def test_validator_rejects_keyword_only_match_on_primary_metric():
     problems = psa.validate(sections)
     assert problems
     assert any('primary_metric' in p for p in problems)
+    # The same shape with the stray number moved next to `below` — near-miss drafts
+    # must not slip through the gap the fix leaves between comparator and operand.
+    assert psa.validate({**psa.parse_draft(GOOD_DRAFT),
+                         'primary_metric': '5 things are listed below in the report 5'})
 
 
 def test_pinning_and_win_conditions_still_pass_in_their_real_shapes():

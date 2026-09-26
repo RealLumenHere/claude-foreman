@@ -82,7 +82,9 @@ COMPARATOR = re.compile(
 # token anywhere, so "5 things are listed below in the report for review" scored a win
 # condition off `below` and a `5` twenty characters away. Two shapes count now:
 #   - the comparator carrying its own operand — ">= 0.65", "at least 40 percent",
-#     "0.65 or higher" — the number is what the comparator compares against;
+#     "0.65 or higher" — the number is what the comparator compares against. The
+#     two-token window is the whole point: widen it and "listed below in the report 5"
+#     scores a threshold again;
 #   - an explicit win declaration ("win", "threshold", "counts as") sharing a clause
 #     with a number, which is how real cards phrase a multi-term win rule
 #     (pilots/9d95766f5f43: "Win condition ...: treatment mean >= baseline mean + 2.0").
@@ -91,7 +93,7 @@ BOUND_COMPARATOR = re.compile(
     r'|\b(?:at least|at most|no more than|no fewer than|fewer than|more than|'
     r'greater than|less than|below|above|under|over|within|beats?|exceeds?|'
     r'faster than|slower than|higher than|lower than)\b'
-    r'(?:\s+[\w%$/()+-]+){0,3}?\s+[-+]?\$?\d'
+    r'(?:\s+[\w%$/()+-]+){0,2}?\s+[-+]?\$?\d'
     r'|\b\d[\d.,]*\s*%?\s+or\s+(?:more|less|fewer|better|higher|lower|faster|slower|'
     r'above|below)\b)', re.I)
 WIN_WORD = re.compile(r'(\bwins?\b|\bwinning\b|\bcounts as\b|\bthreshold\b|\btarget\b)', re.I)
