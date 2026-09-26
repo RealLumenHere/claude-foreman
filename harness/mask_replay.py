@@ -425,25 +425,50 @@ def _seam_joined(text):
     return joined
 
 
-def account(value, tracked, prefix=""):
-    """`path:line` of the first committed file holding this exact string, else None.
-
-    Falls back to the seam-closed view of each file, so a fixture assembled from
-    concatenated literals accounts for the whole value its runtime produces, then
-    to the value minus a trailing `...` (masking.untruncated, wq#2648), then to that
-    cut with the rule's `prefix` attached (masking.untruncated_whole, wq#2663).
-    """
+def _find(needle, tracked):
+    """`path:line` of the first tracked file holding `needle`, else None."""
     for path, text in tracked.items():
-        at = text.find(value)
+        at = text.find(needle)
         if at >= 0:
             return f"{path}:{text.count(chr(10), 0, at) + 1}"
     for path, text in tracked.items():
         if not _SEAM.search(text):
             continue
         joined = _seam_joined(text)
-        at = joined.find(value)
+        at = joined.find(needle)
         if at >= 0:
             return f"{path}:{joined.count(chr(10), 0, at) + 1}"
+    return None
+
+
+# wq#2740: the direct path searched the BODY alone and never checked that the rule's
+# `prefix` sat in front of the hit, so the cloudflare row `sha256:a745825001bc` — whose
+# value is the 9-char ordinary word `-prefixed` — accounted to 24 unrelated tracked files
+# (`vendor-`, `dash-`, `env-var-` + that word) while the string `_hits` actually cut,
+# prefix and body glued, was in NONE of them. wq#2733 closed that row "committed text, no
+# rotation" on one of those coincidences, citing a file with no `cfut` in it. The same
+# coincidence would have cleared a genuinely leaked prefix+body pair.
+# `burn_filter._is_accounted` already had the rule this lacked: the whole match first, the
+# body alone only once it reaches MIN_SECRET_LEN, "so a short body cannot excuse a match by
+# coincidence" (burn_filter.py:216, :237-239). Same floor, so a body long enough to be a
+# credible secret still accounts on its own (the split-at-the-prefix-seam mitigation that
+# leaves only the body on disk keeps working, ISSUE-LOG rows 814/822), and only a body too
+# short to mean anything alone now has to show up with its prefix attached. Fails toward
+# unaccounted, i.e. loud.
+def account(value, tracked, prefix=""):
+    """`path:line` of the first committed file holding this exact string, else None.
+
+    A body under TRUNCATED_FLOOR is only accounted where `prefix` immediately precedes
+    it, never on its own. Falls back to the seam-closed view of each file, so a fixture
+    assembled from concatenated literals accounts for the whole value its runtime
+    produces, then to the value minus a trailing `...` (masking.untruncated, wq#2648),
+    then to that cut with the rule's `prefix` attached (masking.untruncated_whole,
+    wq#2663).
+    """
+    needle = prefix + value if prefix and len(value) < TRUNCATED_FLOOR else value
+    hit = _find(needle, tracked)
+    if hit:
+        return hit
     cut = masking.untruncated(value, TRUNCATED_FLOOR)
     if cut:
         return account(cut, tracked)

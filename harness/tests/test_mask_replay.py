@@ -159,6 +159,40 @@ def test_a_preview_cut_under_the_floor_is_accounted_with_its_prefix():
     assert mask_replay.account("Zq7xW2pL9...", tree, prefix="cfut_") is None
 
 
+def test_a_short_body_is_only_accounted_with_its_prefix_in_front():
+    """wq#2740: the direct path searched the body ALONE, so the cloudflare row
+    sha256:a745825001bc — value `-prefixed`, nine chars of ordinary English — accounted to
+    24 tracked files that merely say `vendor-` + that word, and wq#2733 closed the row "no
+    rotation, committed text" on one of them (a file holding no `cfut` at all). The same
+    coincidence clears a genuinely leaked prefix+body pair, which is why
+    burn_filter._is_accounted already demanded the whole match for a body under
+    MIN_SECRET_LEN (burn_filter.py:216)."""
+    prefix, body = "cfut_", "-prefixed"
+    prose = {"doc.md": "none of the vendor" + body + " patterns fire here\n"}
+    assert mask_replay.account(body, prose, prefix) is None
+    assert mask_replay.account(body, prose) == "doc.md:1"  # no prefix: value is the match
+    records = mask_replay.replay(0, tracked=prose,
+                                 items={"transcript:a": "a " + prefix + body + " value\n"})
+    assert [r["value_sha256_12"] for r in records] == ["a745825001bc"]
+    assert [r["accounted_in"] for r in records] == [None]
+    assert mask_replay.unaccounted(records) == records
+    leaked = {"doc.md": "X = '" + prefix + body + "'\n"}
+    assert mask_replay.account(body, leaked, prefix) == "doc.md:1"
+
+
+def test_a_body_at_the_floor_still_accounts_without_its_prefix():
+    """The prefix requirement has to stop at MIN_SECRET_LEN: the house mitigation splits a
+    fixture at the prefix seam and leaves only the body committed (ISSUE-LOG rows 814/822,
+    where the label wrapped onto the line above its value), so a body long enough to be a
+    credible secret must keep excusing itself with no prefix anywhere near it."""
+    body = "abcdefghijkl"
+    assert len(body) == mask_replay.TRUNCATED_FLOOR
+    tree = {"reports/r.md": "TOKEN: " + body + "\n"}
+    assert mask_replay.account(body, tree, prefix="TOKEN: ") == "reports/r.md:1"
+    wrapped = {"reports/r.md": "TOKEN:\n" + body + "\n"}
+    assert mask_replay.account(body, wrapped, prefix="TOKEN: ") == "reports/r.md:2"
+
+
 def test_a_value_in_neither_screen_is_reported(tmp_path):
     records = mask_replay.replay(0, tracked={}, items={"snapshot:a": LIVE})
     assert records[0]["still_matches_today"] is True
