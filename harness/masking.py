@@ -118,6 +118,9 @@ _KV_NOT_PUBLIC = r"(?!pub(?:lic)?[ _-]{0,2}key\b)"
 _KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer)"
 _KV_LABEL = (r"(?:" + _KV_WORD + r")?" + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
              + r"|" + _KV_BARE)
+# The same label with the public-key carve-out taken back out — one of the three
+# inputs suppressions() below needs to see what this rule declined to read (wq#2677).
+_KV_LABEL_ANY = (r"(?:" + _KV_WORD + r")?" + _KV_WORD + _KV_NOUN + r"|" + _KV_BARE)
 # An env-var reference or a path is a POINTER to a credential, not the credential:
 # `secret = os.environ["X"]`, `master key: /home/lumen/.ssh/id_ed25519`. Masking the
 # pointer would hide the leak path the scan record exists to show.
@@ -146,6 +149,43 @@ _KV_SEGMENTED = r"[A-Za-z_][A-Za-z0-9_.]*[_.][A-Za-z0-9_.]*"
 _KV_HUMPED = r"(?-i:[A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*)"
 _KV_NOT_CALLED = r"(?!(?:" + _KV_SEGMENTED + r"|" + _KV_HUMPED + r")\()"
 _KV_BODY = r"[A-Za-z0-9._-]"
+
+
+def _kv_rule(label, guards):
+    """The kv-secret rule, parameterised by which of its suppressions are in force.
+
+    wq#2677: the rule and the probe that records what it suppressed are built from one
+    string so they cannot drift. A carve-out added to the rule but not to the probe
+    would be invisible to the audit trail the probe exists to produce, which is the
+    failure mode this closes — not a variant of it.
+    wq#2694 landed on main after this branch's base: the leading boundary must accept
+    the position right after our own mask literal too (_WB), not just a plain \b, or a
+    kv-secret label glued behind "MASKED" goes blind the same way url-auth did.
+    """
+    return (_WB + r'((?:' + label + r')\b["\s]*[:=]["\s]*)' + guards
+            + _body(_KV_BODY, '{12,}'))
+
+
+_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED),
+                        re.IGNORECASE)
+# wq#2677: the same rule with EVERY suppression removed. All three — _KV_NOT_PUBLIC in
+# the label, _KV_POINTER and _KV_NOT_CALLED in front of the body — are negative
+# lookaheads, so a suppressed candidate is not a narrowed match, it is no match at all:
+# no mask, no label, no record, byte-identical to clean text. That is why wq#2288's
+# trailing lookahead could go silent on every opaque value glued to an open paren for a
+# full PR cycle with nothing on the alarm path noticing (wq#2322, wq#2632 ruling). This
+# probe is what turns that silence into a row.
+_KV_CANDIDATE = re.compile(_kv_rule(_KV_LABEL_ANY, ""), re.IGNORECASE)
+# reason -> the rule carrying ONLY that suppression. A candidate the variant fails to
+# match at the same start is one that suppression dropped. Tested independently rather
+# than in sequence, so a value two of them refuse is named by both instead of by
+# whichever happened to be written first.
+_KV_SUPPRESSIONS = (
+    ("pointer", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_POINTER), re.IGNORECASE)),
+    ("call", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_CALLED), re.IGNORECASE)),
+    ("public-key", re.compile(_kv_rule(_KV_LABEL, ""), re.IGNORECASE)),
+)
+SUPPRESSED_LABEL = "kv-secret"   # the only rule that carries suppressions today
 
 # The fixed token prefixes, named once so the rules below and _OWN_TAIL cannot drift:
 # what a rule KEEPS is what the next rule reads back glued to the mask literal.
@@ -228,10 +268,7 @@ PATTERNS = [
     # The sed copy in bin/mask-secrets cannot follow: POSIX ERE has no lookaround, so
     # it can express none of this. It has already missed both earlier fixes and is the
     # tool instinct 4 tells every agent to pipe through (ISSUE-LOG row 577).
-    ("kv-secret", re.compile(
-        _WB + r'((?:' + _KV_LABEL + r')\b["\s]*[:=]["\s]*)'
-        + _KV_POINTER + _KV_NOT_CALLED + _body(_KV_BODY, '{12,}'),
-        re.IGNORECASE), r"\1MASKED"),
+    ("kv-secret", _KV_SECRET, r"\1MASKED"),
 ]
 
 
@@ -421,7 +458,56 @@ def mask_text(text):
     return text, hits
 
 
-def scan(text):
+def suppressions(text):
+    """[record] for every kv-secret candidate a suppression DROPPED (wq#2677).
+
+    wq#2632 narrowed the call test and left the failure direction alone: a candidate a
+    suppression refuses leaves no mask, no label and no scan record, and a dropped
+    match is indistinguishable from clean text. So an overbroad carve-out reads as
+    silence — which is exactly how wq#2288's lookahead survived a whole PR cycle while
+    suppressing every opaque value glued to a `(`. A record per suppression makes the
+    carve-out's cost countable after the fact: mask_triage can ask what the rule
+    decided not to alarm on, and an overbroad one shows up as a pile of rows.
+
+    The record carries the suppression reason alongside the same three fields a hit
+    record identifies a value by — prefix, value_len, value_sha256_12. It carries NO
+    `context`: a suppressed candidate is by definition not masked in the output text,
+    so a window cut around it would print in the clear the very value the rule declined
+    to mask, which would make the audit trail a leak. The hash still names the value
+    for anyone holding a candidate to compare.
+
+    A record is emitted only where the real rule produces no overlapping match, so a
+    label that backtracks into a shorter form the rule DOES read (`Signing Secret:`
+    via the bare-noun arm) is a hit, not a suppression. De-duplicated per call by
+    (reason, value): one line repeating a pointer ten times is one thing suppressed.
+    """
+    kept = [(m.end(1), m.end()) for m in _matches(_KV_SECRET, text)]
+    records, seen = [], set()
+    for m in _matches(_KV_CANDIDATE, text):
+        lo, hi = m.end(1), m.end()
+        if any(start < hi and lo < end for start, end in kept):
+            continue
+        reasons = [name for name, rx in _KV_SUPPRESSIONS if not rx.match(text, m.start())]
+        if not reasons:
+            # The rule reads this span some other way (a different start, or _matches
+            # screening our own output there). Nothing was suppressed; record nothing
+            # rather than a row no reason explains.
+            continue
+        value, reason = text[lo:hi], "+".join(reasons)
+        if (reason, value) in seen:
+            continue
+        seen.add((reason, value))
+        records.append({
+            "label": SUPPRESSED_LABEL,
+            "suppressed": reason,
+            "prefix": m.group(1)[-PREFIX_CHARS:],
+            "value_len": len(value),
+            "value_sha256_12": value_sha12(value),
+        })
+    return records
+
+
+def scan(text, include_suppressed=False):
     """(masked_text, [hit record]) — wq#2288. mask_text() answers "did a credential
     print?"; scan() answers "WHICH one?", which is what a rotation ticket needs and
     what the first tripwire ticket (wq#2288, fired on wq#2284) could not answer: the
@@ -435,6 +521,13 @@ def scan(text):
     — the leak path — with every pattern in the window already replaced. The window is
     cut after masking, never before: cutting first is what let a token escape the
     replace in wq#1441 (see tests/test_read_dir_sweep.py).
+
+    `include_suppressed` appends suppressions()'s rows — what the rule decided NOT to
+    alarm on (wq#2677). It is OFF by default because an empty record list is the
+    assertion the alarm's own read-path tests make ("this file does not read as a
+    credential"), and a suppression is precisely not that: it must never be able to
+    turn a clean file into an alarm. Callers that want the audit trail ask for it; the
+    escalation predicates (fworker.burned_hashes) skip every row carrying `suppressed`.
     """
     matches, cur = [], text
     for label, rx, repl in PATTERNS:
@@ -462,4 +555,8 @@ def scan(text):
             "value_sha256_12": value_sha12(value),
             "context": context,
         })
+    if include_suppressed:
+        # Read off the RAW text, not `cur`: a suppressed candidate is unmasked in both,
+        # but the raw text is what the rule actually judged.
+        records.extend(suppressions(text))
     return cur, records
