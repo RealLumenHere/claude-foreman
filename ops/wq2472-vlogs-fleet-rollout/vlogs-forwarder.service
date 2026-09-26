@@ -1,0 +1,17 @@
+[Unit]
+Description=Ship journald to Bes VictoriaLogs (wq#857/wq#2051/wq#2472)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# wq#2472: no fleet node except Lumen has a `lumen` user, so run as a transient
+# least-privilege user that can read the system journal, with its own state dir.
+DynamicUser=yes
+SupplementaryGroups=systemd-journal
+StateDirectory=vlogs-forwarder
+Environment=VLOGS_URL=http://100.110.156.91:9428
+Environment=CURSOR_FILE=/var/lib/vlogs-forwarder/cursor
+ExecStart=/usr/bin/python3 /opt/vlogs-forwarder/forward-journal.py
+StandardOutput=journal
+StandardError=journal

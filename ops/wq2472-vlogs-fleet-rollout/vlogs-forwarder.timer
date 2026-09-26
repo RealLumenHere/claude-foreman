@@ -1,0 +1,9 @@
+[Unit]
+Description=Ship journald to Bes VictoriaLogs every 60s (wq#2472)
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=60
+
+[Install]
+WantedBy=timers.target
