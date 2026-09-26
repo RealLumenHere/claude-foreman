@@ -9,7 +9,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(__file__))
 import remote_credential_sweep as rcs
 
-FAKE = "ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE0000"
+FAKE = "<REDACTED-wq523 sha256:b1cd796bd2ec>"
 OPAQUE = "0123456789abcdef0123456789abcdef01234567"
 
 
