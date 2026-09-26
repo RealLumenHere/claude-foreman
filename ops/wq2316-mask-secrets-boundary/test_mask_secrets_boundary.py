@@ -207,6 +207,53 @@ def test_a_kv_value_ending_in_punctuation_masks_whole(body, tail):
     assert mask("TOKEN: " + body + tail + " end") == "TOKEN: MASKED end"
 
 
+# ---- wq#2760: a password embedded in a DSN, with no label this copy knows ----
+
+# Split after `user:`, the boundary the rule reads, so this source cannot match it
+# (test_masking.py's URL_USER convention): reading this file must not arm the tripwire.
+_DSN_PW = "realsecretvalue123"
+_DSN = pytest.mark.parametrize("head, tail", [
+    ("DATABASE_URL=postgresql://lumen:", "@lumen-pgvector:5432/litellm"),
+    ("REDIS_URL=rediss://default:", "@cache.internal:6380/0"),
+    ("MONGODB_URI=mongodb+srv://app:", "@cluster0.example.net/db?retryWrites=true"),
+    ("AMQP_URL=amqp://guest:", "@rabbit:5672/vhost"),
+    ("mysql://root:", "@10.0.0.5:3306/app"),               # bare, no label at all
+    ("url='postgres://svc:", "@db'"),                       # quoted value
+    ("redis://:", "@[::1]:6379"),                           # empty user, IPv6 host
+], ids=["database-url", "redis-url", "mongodb-uri", "amqp-url", "bare", "quoted",
+        "empty-user"])
+
+
+@_DSN
+def test_a_dsn_password_masks_and_keeps_user_and_host(head, tail):
+    """The wq#2700 leak: `DATABASE_URL` is no credential label, so nothing fired."""
+    assert mask(head + _DSN_PW + tail) == head + "MASKED" + tail
+
+
+@pytest.mark.parametrize("pw", ["short7!", "${PGPASSWORD}", "password"],
+                         ids=["under-floor", "env-ref", "placeholder"])
+def test_the_dsn_rule_is_wider_than_masking_py(pw):
+    """No floor, no pointer/placeholder exclusions: masking.py passes these because a
+    hit there pages pri-1; this copy only redacts, so it takes the leak-proof side."""
+    assert mask("postgres://u:" + pw + "@db/x") == "postgres://u:MASKED@db/x"
+
+
+def test_a_raw_at_in_the_dsn_password_masks_whole():
+    """Unencoded `@` in the password: a first-`@` cut would print the rest of it."""
+    line = "postgresql://u:" + "p@ss" + "wordvalue9@db.host/x"
+    assert mask(line) == "postgresql://u:MASKED@db.host/x"
+
+
+@pytest.mark.parametrize("line", [
+    "ssh://git@github.com:22/o/r.git",           # user, no password
+    "https://example.com:8443/path@v2",          # port, then a path `@`
+    "see https://docs.example/a:b c@d",          # space ends the run
+    "postgres://u:MASKED@db/x",                  # our own output reads back unchanged
+])
+def test_dsn_shaped_non_credentials_are_untouched(line):
+    assert mask(line) == line
+
+
 # ---- the oracle: harness/masking.py, which this script is a lockstep copy of ----
 
 _MASKING = pathlib.Path(__file__).resolve().parents[2] / "harness" / "masking.py"
@@ -244,6 +291,13 @@ _LOCKSTEP = [
     "TOKEN: " + "abcdefghijk_" + " end",
     "TOKEN: " + "abcdefghijklmnop." + " end",
     "password: " + "hunter2hunter2" + " end",
+    # wq#2760: DSN passwords, labelled, bare, empty-user, and holding a raw `@`
+    "DATABASE_URL=postgresql://lumen:" + "realsecretvalue123@host:5432/db",
+    "REDIS_URL=redis://default:" + "realsecretvalue123@cache:6379/0",
+    "tok mysql://root:" + "realsecretvalue123@10.0.0.5/app end",
+    "tok redis://:" + "realsecretvalue123@cache end",
+    "tok postgresql://u:" + "p@sswordvalue9@db.host/x end",
+    "tok https://lumen:MASKED@100.64.0.9 end",
     # our own output, alone and with a live value glued to it
     "reads back as cfut_MASKED.",
     "ghp_MASKED" + "AKIA" + "Q" * 16,

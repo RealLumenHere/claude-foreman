@@ -33,6 +33,7 @@ literals quoted in the ticket text, because the point of the port is lockstep:
 | `sk-` | `(sk-[a-zA-Z-]*)` | `(sk-([a-zA-Z]+-)*)` | wq#2300: the greedy form kept 8 characters of a real secret in the output and in `scan()`'s `prefix` field |
 | `cfut_`, `xox`, `AKIA` | unanchored | anchored | same one-line transform; wq#2313 asks for it and leaving them divergent would not be lockstep |
 | kv-secret | unanchored | unchanged | keys on an English word, not a prefix — anchoring would miss `githubToken: ...` |
+| url-auth (wq#2760) | absent | `scheme://user:<pw>@host`, user may be empty, `<pw>` may hold `@`, no floor | a DSN under an unlabelled name (`DATABASE_URL=postgresql://…`) printed in the clear and burned a rotated password (wq#2700); wider than masking.py on purpose — no floor, no placeholder exclusions |
 
 The kv-secret rule stays divergent on purpose. Carrying masking.py's shape-based label and
 tail lookahead across is **wq#2313**, which also owns the `echo` guard. Until then this copy

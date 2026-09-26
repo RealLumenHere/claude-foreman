@@ -219,6 +219,21 @@ def test_url_auth_escape_exclusion_is_not_a_backslash_blanket():
         assert hits == ["url-auth"] and PW not in masked, (text, hits)
 
 
+@pytest.mark.parametrize("head, tail", [
+    ("DATABASE_URL=postgresql://lumen:", "@lumen-pgvector:5432/litellm"),
+    ("REDIS_URL=rediss://default:", "@cache.internal:6380/0"),
+    ("mongodb+srv://app:", "@cluster0.example.net/db"),
+    ("redis://:", "@cache:6379"),                   # no user: the old {1,64} refused it
+    ("postgresql://u:p@ss", "@db.host/x"),          # raw `@`: the old body cut at it
+], ids=["database-url", "redis-url", "mongodb", "empty-user", "raw-at"])
+def test_a_dsn_password_masks_and_alarms(head, tail):
+    """wq#2760: the DSN shapes behind wq#2700's leak. The last two were misses here too,
+    so the alarm path was as blind to them as bin/mask-secrets."""
+    masked, hits = masking.mask_text(head + PW + tail)
+    assert hits == ["url-auth"] and PW not in masked and "p@ss" not in masked
+    assert masked.endswith("MASKED" + tail)
+
+
 def test_a_credential_store_dump_leaves_no_value_in_the_context():
     """wq#2514: wq#2511 read git's credential store. The github values were masked, but
     the gitea line above them had no rule, so every hit record's context window

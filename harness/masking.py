@@ -228,8 +228,16 @@ PATTERNS = [
     # (wq#2479). Absent here, wq#2511's mask-hits context window printed a gitea token
     # in the clear two lines above the github values it was quoting. Same exclusions:
     # templates/env-refs, ALL_CAPS names and placeholder words are pointers, not values.
+    #
+    # wq#2760: two DSN shapes it missed, both leaks. `redis://:<pw>@host` carries a
+    # password with NO user, so the `{1,64}` user floor refused the line outright. And a
+    # raw `@` inside the password (`u:p@ss...@host`, unencoded, which DSN parsers take
+    # up to the LAST `@` — urllib's rpartition) cut the body at the first `@`, under
+    # the floor: no match, value in the clear. The body now admits `@` and backtracks
+    # to the last `@host` before a `/` or space, over-masking a query-string `@` at
+    # worst.
     ("url-auth", re.compile(
-        _WB + r"([A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{1,64}:)"
+        _WB + r"([A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{0,64}:)"
         # wq#2704: `\\*` because a transcript is JSONL — a shell-escaped `\${VAR}`
         # arrives as `\\${VAR}`, which the bare class read as a 16-char credential.
         r"(?!\\*[${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
@@ -243,7 +251,7 @@ PATTERNS = [
         # outright — no match, no alarm. _matches() carries the fixed point here: the
         # self-output body (`MASKED`) is six characters, under the floor, so only the
         # exact-output test can fire, and only on our own output. (wq#2638)
-        r"[^\s@/'\"`]{8,}(?=@[A-Za-z0-9\[])"), r"\1MASKED"),
+        r"[^\s/'\"`]{8,}(?=@[A-Za-z0-9\[])"), r"\1MASKED"),
     # This one keys off an English word rather than a prefix, so it needs a different
     # boundary than `_B`. It needs a call test (wq#2288): without one,
     # `key = apply_key_allowlist(reg)` (node_render_gateway.py:418) reads as a 19-char
