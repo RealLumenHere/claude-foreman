@@ -136,7 +136,7 @@ DeepSeek call as the worker on the same key — folded into row 20's note, not s
 | 6 | `brain_healthcheck.py` | every 5 min (288/day) | `messenger-chat` → deepseek-v4-flash, `max_tokens:300` | LiteLLM | no | cheap but wrong target — §3 F5 | A |
 | 7 | `lumen_model_watchdog.py` | every ~10 min | 5 cloud + 1 local probes, `max_tokens:5` | LiteLLM | no | yes | A |
 | 8 | `minerva/model_audit.py` | timer | same cloud roster | LiteLLM | no | yes | B |
-| 9 | `langfuse-ops/evaluator.py` (LLM-as-judge, 5% sample) | inactive | mistral-small | LiteLLM | no | yes | B |
+| 9 | `langfuse-ops/evaluator.py` (LLM-as-judge, 5% sample) | ~4h effective (15min poll, `journalctl -u langfuse-evaluator.service`: 12 of 204 fires over 2026-09-23 16:16→2026-09-26 00:31 dispatched, always at :31 past hours 00/04/08/12/16/20 UTC) | mistral-small | LiteLLM | no | yes | A |
 | 10 | LPP brain (`pokemon/src/config.ts`) | per game turn | primary `cerebras-oss-120b`; escalate `deepseek-v4-pro`; actRetry + summarize `deepseek-v4-flash`; vision `lumen-vision` | LiteLLM | no | note only, wq#726 | B |
 | 11 | `research/article_ingest.py` | every 15 min | deepseek-v4-flash | LiteLLM | no | yes | B |
 | 12 | `lumen_self_healer.py` | ~10 min | **none** — docker/systemd restarts only | — | no | n/a | B |
@@ -157,19 +157,28 @@ issue the same `fetch("https://api.deepseek.com/chat/completions")` on the same 
 when run by hand. They are dev-run, not per-email, so they do not get their own row — but
 they are real spend and they were in wq#2664's grep population unnamed.
 
-**Scope-2 verdict (always-on services): PASS, re-checked by wq#2681.** Surfaces 6–8,
-12–17 and the newly-added 21 are the always-on set. None dispatches an Anthropic model:
-21 runs `deepseek-v4-pro`/`cerebras-oss-120b`. Rows 22 and 23 can dispatch
-`claude-max-opus` and `claude-sonnet-5`, but both are operator-invoked CLIs with no timer
-or cron entry, so the headline claim — no *always-on* service touches opus or fable —
-still holds. It is now a narrower claim than it reads: a human running
-`research-council` puts opus on the fleet's bill on demand.
+**Scope-2 verdict (always-on services): PASS, re-checked by wq#2681, row 9 folded in by
+wq#2742.** Surfaces 6–9, 12–17 and the newly-added 21 are the always-on set. None
+dispatches an Anthropic model: 9 dispatches via LiteLLM (row 9's `mistral-small` model
+column predates the `JUDGE_FOR_ORIGIN` remap to `deepseek-chat`/`cerebras-llama`,
+`kb/ISSUE-LOG.md` #312/wq#1648 — either way, not Anthropic), 21 runs
+`deepseek-v4-pro`/`cerebras-oss-120b`.
+Rows 22 and 23 can dispatch `claude-max-opus` and `claude-sonnet-5`, but both are
+operator-invoked CLIs with no timer or cron entry, so the headline claim — no *always-on*
+service touches opus or fable — still holds. It is now a narrower claim than it reads: a
+human running `research-council` puts opus on the fleet's bill on demand.
 
-**Flagged, not fixed (wq#2681):** row 9 says `langfuse-ops/evaluator.py` is *inactive*,
-but `langfuse-evaluator.timer` is enabled and fired 14 minutes before this edit
-(`OnUnitActiveSec=15min`, `--sample-pct 5 --max-evals 20`). Whether it dispatches depends
-on trace volume in the window, which this pass did not measure — the cadence column is
-wrong either way. **wq#2742**, rather than guessed at here.
+**Resolved (wq#2681 flagged, wq#2742 measured):** row 9 previously said
+`langfuse-ops/evaluator.py` is *inactive*. It is not — `langfuse-evaluator.timer` polls
+every 15 min but only dispatches when its trace-eligibility check finds sampled work.
+Measured directly from `journalctl -u langfuse-evaluator.service` over the full retained
+journal window (2026-09-23 16:16 → 2026-09-26 00:31, 204 fires): 12 fires dispatched real
+judge calls (1–3 traces each, 19 traces total), and every single dispatch landed at :31
+past an hour divisible by 4 (00:31/04:31/08:31/12:31/16:31/20:31 UTC) — a real ~4h
+effective cadence riding under the 15min poll, not noise. It therefore belongs in the
+Scope-2 always-on set (folded in above) rather than being excluded on the assumption it
+never fires. It does not change the "no always-on service touches opus/fable" headline:
+row 9's judge model is not an Anthropic model either way.
 
 **Note on surface 2 (fable-5@high judgment).** fable-5@high is also the only tuple in the
 whole dataset with a clean success rate — 2/2 on novel-design, at the highest measured
