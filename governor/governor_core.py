@@ -110,11 +110,18 @@ def _remaining(bucket):
 
 
 def _parse_iso(ts):
+    """ISO-8601 string or epoch seconds. The wire's rate_limit_info.resetsAt is
+    an epoch int (wq#1819); live_blocks written before that may be ISO."""
     if not ts:
         return None
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+        try:
+            return _dt.datetime.fromtimestamp(ts, tz=_dt.timezone.utc)
+        except (ValueError, OSError, OverflowError):
+            return None
     try:
         return _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    except ValueError:
+    except (ValueError, AttributeError):
         return None
 
 
@@ -250,12 +257,21 @@ def evaluate_dispatch(model, *, limits, floors, now_utc, stop_active, stale,
     return {"allow": True, "local_only": False, "reasons": []}
 
 
+def unwrap_rate_limit_frame(frame):
+    """wq#1819: accept the raw wire frame (fields under rate_limit_info) or the
+    already-unwrapped inner dict fworker passes."""
+    if isinstance(frame, dict) and isinstance(frame.get("rate_limit_info"), dict):
+        return frame["rate_limit_info"]
+    return frame or {}
+
+
 def classify_rate_limit_event(frame):
     """Mirrors CLAUDE_CLI_INTERNALS.md §E's LIMIT-vs-CRASH classifier for a
     single rate_limit_event frame. Returns "LIMIT" or "allowed" (this
     governor never sees CRASH — that's a worker-harness concern; T1 only
     needs to recognize a wall hit to fold it into live_blocks).
     """
+    frame = unwrap_rate_limit_frame(frame)
     status = frame.get("status")
     if status == "rejected":
         return "LIMIT"

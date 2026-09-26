@@ -393,6 +393,7 @@ def cmd_report_event(args):
     except json.JSONDecodeError as e:
         print(f"invalid JSON: {e}", file=sys.stderr)
         return 2
+    frame = core.unwrap_rate_limit_frame(frame)
     verdict = core.classify_rate_limit_event(frame)
     if verdict != "LIMIT":
         print(json.dumps({"recorded": False, "verdict": verdict}))

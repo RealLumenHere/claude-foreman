@@ -3088,8 +3088,13 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
                 killed_reason = "steer"
                 log("STEER: CLI shell refusal — stopping session to resume it with the hint")
                 break
-        if frame.get("type") == "rate_limit_event" and frame.get("status") == "rejected":
-            report_limit_event(frame)
+        # wq#1819: the wire nests status/resetsAt/rateLimitType under
+        # rate_limit_info; the flat read never matched, so no rejection ever
+        # reached the governor. Unwrap and hand the governor the inner dict.
+        if frame.get("type") == "rate_limit_event":
+            rl_info = frame.get("rate_limit_info") or frame
+            if rl_info.get("status") == "rejected":
+                report_limit_event(rl_info)
         if frame.get("type") == "result":
             result_seen_at = time.time()
         if state.turns >= turn_backstop:

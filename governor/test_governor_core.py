@@ -429,3 +429,30 @@ def test_floors_zeroed_helper():
     sched = dict(ZERO_FLOORS, fable_floor_schedule=[{"until_pt": "2099-01-01T00:00", "min_remaining_pct": 30}])
     assert core.floors_zeroed("claude-fable-5", sched, NOW) is False
     assert core.floors_zeroed("claude-sonnet-5", sched, NOW) is True
+
+
+# wq#1819: captured wire frame, foreman/_runs/fbuild-625.jsonl:2, status -> rejected
+WIRE_REJECTED = {"type": "rate_limit_event",
+                 "rate_limit_info": {"status": "rejected", "resetsAt": 1787223600,
+                                     "rateLimitType": "seven_day", "utilization": 0.57,
+                                     "isUsingOverage": False}}
+
+
+def test_parse_iso_accepts_epoch_int():
+    rt = core._parse_iso(int(NOW.timestamp()) + 3600)
+    assert rt is not None and rt > NOW
+    assert core._parse_iso(True) is None
+
+
+def test_classify_nested_wire_frame_and_unwrapped():
+    assert core.classify_rate_limit_event(WIRE_REJECTED) == "LIMIT"
+    assert core.classify_rate_limit_event(WIRE_REJECTED["rate_limit_info"]) == "LIMIT"
+    allowed = {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed_warning"}}
+    assert core.classify_rate_limit_event(allowed) == "allowed"
+
+
+def test_evaluate_dispatch_live_block_epoch_int_does_not_raise():
+    d = core.evaluate_dispatch("claude-sonnet-5", limits=limits_of(), floors=ZERO_FLOORS,
+                               now_utc=NOW, stop_active=False, stale=True,
+                               live_blocks={"seven_day": int(NOW.timestamp()) + 3600})
+    assert d["allow"] is False
