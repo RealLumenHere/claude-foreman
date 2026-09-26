@@ -1,0 +1,153 @@
+{
+  "model": "hathor-llama8b",
+  "n": 8,
+  "traces_per_item": 3,
+  "baseline": {
+    "accuracy": 0.75,
+    "wall_s": 27.556047439575195,
+    "results": [
+      {
+        "id": "q1",
+        "got": "391",
+        "expected": "391",
+        "correct": true
+      },
+      {
+        "id": "q2",
+        "got": "66.67",
+        "expected": "40",
+        "correct": false
+      },
+      {
+        "id": "q3",
+        "got": "1",
+        "expected": "2",
+        "correct": false
+      },
+      {
+        "id": "q4",
+        "got": "55",
+        "expected": "55",
+        "correct": true
+      },
+      {
+        "id": "q5",
+        "got": "7",
+        "expected": "7",
+        "correct": true
+      },
+      {
+        "id": "q6",
+        "got": "12",
+        "expected": "12",
+        "correct": true
+      },
+      {
+        "id": "q7",
+        "got": "9",
+        "expected": "9",
+        "correct": true
+      },
+      {
+        "id": "q8",
+        "got": "9",
+        "expected": "9",
+        "correct": true
+      }
+    ]
+  },
+  "treatment": {
+    "accuracy": 0.625,
+    "wall_s": 16.72773003578186,
+    "results": [
+      {
+        "id": "q1",
+        "traces": [
+          "391",
+          "391",
+          "391"
+        ],
+        "got": "391",
+        "expected": "391",
+        "correct": true
+      },
+      {
+        "id": "q2",
+        "traces": [
+          "66.67",
+          "66.67",
+          "66.67"
+        ],
+        "got": "66.67",
+        "expected": "40",
+        "correct": false
+      },
+      {
+        "id": "q3",
+        "traces": [
+          "1",
+          "1",
+          "1"
+        ],
+        "got": "1",
+        "expected": "2",
+        "correct": false
+      },
+      {
+        "id": "q4",
+        "traces": [
+          "55",
+          "55",
+          "55"
+        ],
+        "got": "55",
+        "expected": "55",
+        "correct": true
+      },
+      {
+        "id": "q5",
+        "traces": [
+          "7",
+          "7",
+          "7"
+        ],
+        "got": "7",
+        "expected": "7",
+        "correct": true
+      },
+      {
+        "id": "q6",
+        "traces": [
+          "12",
+          "12",
+          "12"
+        ],
+        "got": "12",
+        "expected": "12",
+        "correct": true
+      },
+      {
+        "id": "q7",
+        "traces": [
+          "9.6",
+          "9.60",
+          "9"
+        ],
+        "got": "9.6",
+        "expected": "9",
+        "correct": false
+      },
+      {
+        "id": "q8",
+        "traces": [
+          "9",
+          "9",
+          "9"
+        ],
+        "got": "9",
+        "expected": "9",
+        "correct": true
+      }
+    ]
+  }
+}

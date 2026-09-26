@@ -1,0 +1,13 @@
+{
+  "note": "Pinned fixed sample for pilot cff0549a5319 (wq#1901). 8 short-answer prompts with an exact-match ground truth, chosen to be easy to grade programmatically. Same 8 prompts are used for baseline and treatment arms.",
+  "items": [
+    {"id": "q1", "prompt": "What is 17 * 23? Answer with only the number.", "answer": "391"},
+    {"id": "q2", "prompt": "A train travels 60 miles in 90 minutes. What is its speed in miles per hour? Answer with only the number.", "answer": "40"},
+    {"id": "q3", "prompt": "If a farmer has 3 sheep and all but 2 die, how many sheep are left? Answer with only the number.", "answer": "2"},
+    {"id": "q4", "prompt": "What is the sum of the first 10 positive integers? Answer with only the number.", "answer": "55"},
+    {"id": "q5", "prompt": "Sally has 5 apples. She gives away 2 and buys 4 more. How many apples does she have? Answer with only the number.", "answer": "7"},
+    {"id": "q6", "prompt": "What is 144 divided by 12? Answer with only the number.", "answer": "12"},
+    {"id": "q7", "prompt": "A book costs $12. It is discounted by 25%. What is the new price in dollars? Answer with only the number.", "answer": "9"},
+    {"id": "q8", "prompt": "How many letters are in the word 'consensus'? Answer with only the number.", "answer": "9"}
+  ]
+}
