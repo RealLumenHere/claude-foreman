@@ -1,0 +1,2 @@
+73a74
+> -A PREROUTING -i tailscale0 -p tcp -m tcp --dport 3100 -m comment --comment wq2808-commander-3100-tailnet-drop -j DROP
