@@ -99,8 +99,47 @@ _AFTER_MASK = r"(?<=(?-i:" + MASK + r"))"
 _B = r"(?:" + _AFTER_MASK + r"|(?<![A-Za-z0-9_]))"
 _WB = r"(?:" + _AFTER_MASK + r"|\b)"
 
+# masking._PRE_* (wq#2720): the fixed token prefixes, named once so the rules below
+# and _body's foreign-prefix guard cannot drift.
+_PRE_GH = r"ghp_|gho_|ghu_|ghs_|ghr_"
+_PRE_GHPAT = r"github_pat_"
+_PRE_CFUT = r"cfut_?"
+_PRE_SK = r"sk-(?:[a-zA-Z]+-)*"
+_PRE_SLACK = r"xox[bpasr]-"
+_PRE_AWS = r"AKIA"
 
-def _body(charset, quant):
+# masking._PREFIXES_BY_LABEL, keyed by this copy's rule names. kv_secret is absent
+# on purpose, in both directions: it owns no fixed prefix, and it takes no foreign
+# stop either — wq#2720 tried that and reverted it, because a labelled value that
+# legitimately IS another rule's shape (`TOKEN: AKIA<junk failing AWS's charset>`)
+# must still resolve via kv_secret's opaque fallback, and a stop at position zero
+# silently drops it instead.
+_PREFIXES_BY_LABEL = {
+    "github_token": (_PRE_GH, _PRE_GHPAT),
+    "cloudflare_token": (_PRE_CFUT,),
+    "sk_key": (_PRE_SK,),
+    "slack_token": (_PRE_SLACK,),
+    "aws_key_id": (_PRE_AWS,),
+}
+
+
+def _foreign_prefixes(label):
+    """masking._foreign_prefixes (wq#2720): every fixed prefix except `label`'s own.
+
+    Rationale there: a wide body run starting on a real prefix (`ghp_`) otherwise
+    swallows the NEXT rule's fixed prefix mid-run (`AKIA`, the letters of `xoxb-`),
+    leaving that rule blind to its own prefix. Verified live in THIS copy (wq#2802):
+    mask_hits on the wq#2702 triple-glue fixture returned ['github_token'] only, and
+    mask_rewrite left `MASKED-<slack body>` with the slack body in the clear.
+    Own-label prefixes stay excluded so `cfut_<live>cfut_MASKED` (wq#2638) still
+    composes as one rule reading its own repeated prefix.
+    """
+    others = [p for name, prefixes in _PREFIXES_BY_LABEL.items() if name != label
+              for p in prefixes]
+    return r"(?:" + "|".join(others) + r")"
+
+
+def _body(charset, quant, foreign=""):
     """masking._body (wq#2638): a body run that cannot cross the mask literal.
 
     Detect-only here, but the bug is worse in this copy than in masking.py's: a body
@@ -110,8 +149,13 @@ def _body(charset, quant):
     (cloudflare, sk-key, github_pat_ and slack all reproduced) exactly when the text it
     was screening also carried masked residue — which outbound PR bodies and quoted log
     tails routinely do. Case-sensitive literal for the reason masking._body gives.
+
+    `foreign` (wq#2720) is another rule's prefix alternation, or "": stopped the same
+    way and for the same reason as MASK, case-sensitively regardless of the
+    surrounding rule's flags, since a fixed prefix like `AKIA` is never case-folded.
     """
-    return r"(?:(?!(?-i:" + MASK + r"))" + charset + r")" + quant
+    stop = MASK + (r"|" + foreign if foreign else "")
+    return r"(?:(?!(?-i:" + stop + r"))" + charset + r")" + quant
 # wq#2297 kv_secret label vocabulary — the copy of harness/masking.py:_KV_* that the
 # daemon needs because it runs off that import path. See there for the reasoning.
 _KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd)"
@@ -158,20 +202,27 @@ _KV_SUPPRESSIONS = (
     ("public-key", re.compile(_kv_rule(_KV_LABEL, ""), re.IGNORECASE)),
 )
 MASK_PATTERNS = [
-    ("github_token", re.compile(_B + r"(?:ghp_|gho_|ghu_|ghs_|ghr_)"
-                                + _body(r"[A-Za-z0-9]", "{30,}"))),
-    ("github_token", re.compile(_B + r"(?:github_pat_)"
-                                + _body(r"[A-Za-z0-9_]", "{20,}"))),
-    ("cloudflare_token", re.compile(_B + r"cfut_?"
-                                    + _body(r"[A-Za-z0-9_.-]", "{6,}"))),
+    ("github_token", re.compile(_B + r"(?:" + _PRE_GH + r")"
+                                + _body(r"[A-Za-z0-9]", "{30,}",
+                                        _foreign_prefixes("github_token")))),
+    ("github_token", re.compile(_B + r"(?:" + _PRE_GHPAT + r")"
+                                + _body(r"[A-Za-z0-9_]", "{20,}",
+                                        _foreign_prefixes("github_token")))),
+    ("cloudflare_token", re.compile(_B + _PRE_CFUT
+                                    + _body(r"[A-Za-z0-9_.-]", "{6,}",
+                                            _foreign_prefixes("cloudflare_token")))),
     # wq#2300: same prefix shape as masking.py, where a greedy `[a-zA-Z-]*` kept
     # part of the body in the replacement. Detect-only here, so this copy leaked
     # nothing — it moves to keep the two readable as one rule.
-    ("sk_key", re.compile(_B + r"sk-(?:[a-zA-Z]+-)*"
-                          + _body(r"[A-Za-z0-9_-]", "{16,}"))),
-    ("slack_token", re.compile(_B + r"xox[bpasr]-"
-                               + _body(r"[A-Za-z0-9-]", "{8,}"))),
-    ("aws_key_id", re.compile(_B + r"AKIA" + _body(r"[0-9A-Z]", "{16}"))),
+    ("sk_key", re.compile(_B + _PRE_SK
+                          + _body(r"[A-Za-z0-9_-]", "{16,}",
+                                  _foreign_prefixes("sk_key")))),
+    ("slack_token", re.compile(_B + _PRE_SLACK
+                               + _body(r"[A-Za-z0-9-]", "{8,}",
+                                       _foreign_prefixes("slack_token")))),
+    ("aws_key_id", re.compile(_B + _PRE_AWS
+                              + _body(r"[0-9A-Z]", "{16}",
+                                      _foreign_prefixes("aws_key_id")))),
     # wq#2288/wq#2297: keep in lockstep with harness/masking.py — a called identifier
     # (`key = apply_key_allowlist(reg)`) is not a credential, and neither is a noun
     # buried in a longer word (`monkey:`) or a bare `key=`/`PAT =`. Here a false hit
@@ -180,6 +231,13 @@ MASK_PATTERNS = [
     # rather than imported; test_masking.test_token_engine_mirror_agrees pins them.
     ("kv_secret", _KV_SECRET),
 ]
+
+# masking._MAX_PASSES (wq#2720): one pass is not always enough — a body stopped
+# early at a foreign prefix leaves that prefix's rule a fresh shot, but only if it
+# has not already run earlier in the same traversal, and no static ordering covers
+# both glue directions. Capped at len(MASK_PATTERNS): each pass frees at most one
+# more rule in a chain of glued prefixes.
+_MAX_PASSES = len(MASK_PATTERNS)
 
 RESPONSE_KEYS = {"ok", "verb", "ticket", "rule", "reason", "result", "elapsed_s"}
 
@@ -193,8 +251,14 @@ def mask_rewrite(text):
     tripwire in respond() stays the backstop: a rewritten body can no longer
     match, so a tripwire hit still means a daemon bug, never business as
     usual."""
-    for _name, pat in MASK_PATTERNS:
-        text = pat.sub(MASK, text)
+    for _ in range(_MAX_PASSES):
+        changed = False
+        for _name, pat in MASK_PATTERNS:
+            text, n = pat.subn(MASK, text)
+            if n:
+                changed = True
+        if not changed:
+            break
     return text
 
 
@@ -207,12 +271,24 @@ def mask_hits(text):
     # gone because _body() made it structural: a bounded body cannot reach the literal,
     # so masked residue no longer matches at ALL, and everything that still matches is
     # a hit. test_masking.test_token_engine_mirror_agrees pins both halves.
+    #
+    # wq#2720/wq#2802: substitute as we detect, over the same up-to-_MAX_PASSES
+    # passes as mask_rewrite(), for masking.scan()'s reason — a body stopped early
+    # at a foreign prefix frees that prefix for its own rule, but only behind the
+    # MASKED boundary the substitution leaves, and possibly a whole pass later.
+    # Searching the raw text per pattern found ['github_token'] alone on the
+    # wq#2702 triple-glue fixture.
     names = []
-    for name, pat in MASK_PATTERNS:
-        if name in names:
-            continue
-        if pat.search(text):
-            names.append(name)
+    for _ in range(_MAX_PASSES):
+        changed = False
+        for name, pat in MASK_PATTERNS:
+            text, n = pat.subn(MASK, text)
+            if n:
+                changed = True
+                if name not in names:
+                    names.append(name)
+        if not changed:
+            break
     return names
 
 

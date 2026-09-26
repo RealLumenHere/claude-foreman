@@ -477,6 +477,15 @@ def test_token_engine_mirror_agrees():
             assert ted.mask_hits(text), f"{label}: daemon blind to {case}"
         assert ted.mask_hits(prefix + masking.MASK + ".") == [], (
             f"{label}: daemon trips on prose behind the literal")
+    # wq#2802: wq#2720's foreign-prefix stop, mirrored. Before the port the daemon's
+    # github body swallowed `AKIA` and the letters of `xoxb-` whole: mask_hits on the
+    # triple glue returned ['github_token'] alone and mask_rewrite left
+    # `MASKED-<slack body>` with the slack body in the clear.
+    assert ted.mask_hits(WQ2702_TRIPLE_GLUE) == [
+        "github_token", "aws_key_id", "slack_token"], "daemon swallows glued prefixes"
+    rewritten = ted.mask_rewrite(WQ2702_TRIPLE_GLUE)
+    assert WQ2702_SLACK_BODY not in rewritten, "daemon rewrite leaks the slack body"
+    assert "AKIA" not in rewritten
     # wq#2677: and the two copies must agree on what they SUPPRESS, or the daemon's
     # audit trail names a different set than the harness's mask-hits file for the same
     # text. Here a carve-out gone overbroad does not merely stop paging, it stops
