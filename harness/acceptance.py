@@ -526,6 +526,14 @@ def _ops_deploy_evidence(entry, abspath):
                        f"match one shipped in {art_dir}")
     if not os.path.isfile(target):
         return False, f"deploy_target {target} does not exist"
+    # wq#2762 (ISSUE-LOG #859, closes wq#1734's verify-pass escalation): a deploy_target
+    # inside the artifact's own directory byte-matches itself and passes with zero real
+    # deployment — reject that before the walk, not after.
+    real_target = os.path.realpath(target)
+    real_art_dir = os.path.realpath(art_dir)
+    if real_target == real_art_dir or real_target.startswith(real_art_dir + os.sep):
+        return False, (f"deploy_target {target} resolves inside {art_dir} — the artifact's own "
+                       f"shipped payload cannot prove its own delivery")
     target_hash = _sha256(target)
     for root, _dirs, files in os.walk(art_dir):
         for name in files:
@@ -533,8 +541,34 @@ def _ops_deploy_evidence(entry, abspath):
                 continue
             cand = os.path.join(root, name)
             if target_hash is not None and _sha256(cand) == target_hash:
-                return True, f"{target} byte-matches {cand}"
+                return _ops_deploy_verify(entry, target, cand)
     return False, f"deploy_target {target} matches no file shipped in {art_dir}"
+
+
+# wq#2762 (ISSUE-LOG #859): a deploy_target byte-match only proves the artifact's payload
+# reached *some* file — it proves nothing about (a) whether the ticket's premise about the
+# target's live state still held at deploy time (wq#2713: healer coverage dropped for a
+# LIVE redis-server on a false retired-unit premise) or (b) whether the install was tried
+# read-only first (wq#2472: install.sh chowned to a 'lumen' user that only exists on
+# Lumen). Require a 'deploy_verify' field naming both, checked structurally per wq#2630
+# ("a probe must be able to fail") so a bare non-empty string can't satisfy it.
+_DEPLOY_VERIFY_PREMISE_RE = re.compile(r"premise\s*:\s*\S")
+_DEPLOY_VERIFY_PROBE_RE = re.compile(r"probe\s*:\s*\S")
+
+
+def _ops_deploy_verify(entry, target, cand):
+    verify = str(entry.get("deploy_verify") or "").strip()
+    if not verify:
+        return False, (f"{target} byte-matches {cand}, but that only proves the payload "
+                       f"reached a file, not that the ticket's premise about the target's "
+                       f"live state still held or that the install was tried read-only "
+                       f"first; add a 'deploy_verify' field naming both a 'premise: "
+                       f"<re-check against live state>' and a 'probe: <dry-run/read-only "
+                       f"check against the real target>'")
+    if not (_DEPLOY_VERIFY_PREMISE_RE.search(verify) and _DEPLOY_VERIFY_PROBE_RE.search(verify)):
+        return False, (f"deploy_verify {verify!r} must name both a 'premise: <re-check>' and "
+                       f"a 'probe: <dry-run/read-only check>' against the real target")
+    return True, f"{target} byte-matches {cand}; deploy_verify={verify!r}"
 
 
 # wq#2753 (ISSUE-LOG #728): a legitimately cross-repo change (wq#2624 landed in
