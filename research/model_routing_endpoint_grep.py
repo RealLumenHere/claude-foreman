@@ -72,6 +72,9 @@ ADJUDICATED = {
     "foreman/research/headroom_proxy_gate.py": "research proxy — same",
     "foreman/dispatcher/cli_canary.py": "package name — checks @anthropic-ai/claude-code is installed",
     "foreman/harness/node_render_gateway.py": "config generator — emits openai/<model> aliases for local rungs",
+    # wq#2743: the reproducer matches its own patterns, so --check was red on a clean
+    # main from the moment it landed (de5b586) — a gate that cannot be green gates nothing.
+    "foreman/research/model_routing_endpoint_grep.py": "self — this reproducer's own pattern table; no call",
     "foreman/claude-shim/claude_shim.py": "dormant — CLAUDE_SHIM_DESIGN.md:10 'DESIGN FOR REVIEW'; claude-shim.service not installed, :8091 not listening",
     # --- spend guards / scanners that read provider names, never dispatch ---
     "foreman/ops/wq1406-paid-fallback-guard/audit_fallback_chains.py": "allowlist — paid-provider prefixes",
