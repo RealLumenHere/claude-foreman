@@ -393,11 +393,12 @@ def test_the_wq2702_triple_glue_masks_its_github_half():
     assert "github" in hits and body not in masked
 
 
-@pytest.mark.xfail(strict=True, reason="wq#2720: the github body swallows `xoxb`, so the "
-                   "slack rule never sees its prefix and the slack body stays in the clear")
 def test_the_wq2702_triple_glue_masks_its_slack_half():
-    masked, _ = masking.mask_text(WQ2702_TRIPLE_GLUE)
+    """wq#2720: the github body stops before `xoxb-` (a foreign prefix) instead of
+    swallowing it, so the slack rule gets its own shot at the leftover text."""
+    masked, hits = masking.mask_text(WQ2702_TRIPLE_GLUE)
     assert WQ2702_SLACK_BODY not in masked
+    assert "slack" in hits
 
 
 def test_a_rules_output_inside_another_rules_value_is_still_ours():
