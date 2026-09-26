@@ -99,7 +99,9 @@
       "Bash(npm install *)",
       "Bash(npx *)",
       "Bash(node_modules/.bin/*)",
-      "Bash(ln -s *)"
+      "Bash(ln -s *)",
+      "mcp__keenable__search_web_pages",
+      "mcp__keenable__fetch_page_content"
     ],
     "deny": [
       "Bash(*reboot*)",
