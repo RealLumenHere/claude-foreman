@@ -23,35 +23,47 @@ Desk research can only report what someone else measured on other hardware.
 
 ## Hypothesis
 
-<!-- One falsifiable sentence. "X beats Y on metric M by at least N" — not "X is
-promising". If it cannot be written this way the pilot is not ready to run. -->
+A conformal cascade (answer with local `lumen-lfm2-1b` first, escalate to
+`deepseek-v4-flash` only when a calibrated nonconformity score is exceeded) cuts
+strong-model calls by at least 30% vs. always calling the strong model, while
+losing no more than 3 accuracy points on TriviaQA.
 
 ## Primary metric
 
-<!-- ONE number. Name it, name its unit, name what counts as a win BEFORE running.
-A pilot that picks its metric after seeing the numbers has measured nothing. -->
+Accuracy (exact/alias match, fraction correct) at a fixed strong-model call
+budget. Win = treatment accuracy within 3 points of baseline AND strong-model
+call fraction <= 0.70.
 
 ## Fixed sample
 
-<!-- Exactly what the baseline and the treatment both run against. Pin it: a path,
-a row count, a sha256 where the set can drift. Both arms see the same sample or the
-comparison is void. -->
+200-row TriviaQA rc.nocontext slice reused from pilot 67af7c7e9ecf
+(`pilots/67af7c7e9ecf/data/sample.jsonl`, sha256
+005ee24de2177a10ad988744b532184c87a6ff4972ced4e9836fa8184a2ac3bf), split
+deterministically: rows 1-40 -> `data/calib.jsonl` (threshold calibration,
+sha256 cd70aed100248cbcfd45bcdeb0bf960564722afc3530bde744e1eb1a0bac8a05), rows
+41-200 -> `data/sample.jsonl` (scored, sha256
+9f0e5d1336251e3581b0979c32d96b7a263dcbecbf8f49451a43c11e1dbfd1d2). Both arms
+score the same `data/sample.jsonl`. Run capped at the first 15 scored rows
+(`PILOT_LIMIT` in `run.py`) once the weak model's calibration failure (see
+REPORT.md) made a full 160-row run moot.
 
 ## Baseline (measure FIRST)
 
-<!-- The command that measures what Lumen does today. Run this before building the
-treatment, so the baseline cannot be tuned to lose. -->
-
 ```
+python3 pilots/992fcdd0fdfc/run.py baseline
 ```
+Every row answered by `deepseek-v4-flash` alone (today's fixed-assignment
+behavior) -> `data/baseline.jsonl`.
 
 ## Treatment
 
-<!-- The smallest thing that tests the hypothesis. Not the full proposal — the
-cheapest build that produces the primary metric. -->
-
 ```
+python3 pilots/992fcdd0fdfc/run.py treatment
 ```
+`conformal_cascade.calibrate()` computes a nonconformity threshold from
+`data/calib.jsonl`, then `conformal_cascade.route()` answers each row with
+`lumen-lfm2-1b` first and escalates to `deepseek-v4-flash` when the score
+exceeds threshold -> `data/treatment.jsonl`.
 
 ## Kill criteria
 
