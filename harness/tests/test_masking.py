@@ -1609,3 +1609,18 @@ def test_the_env_form_and_the_general_form_record_one_hit():
     _, records = masking.scan("NTFY_PASS=" + PW)
     assert [r["label"] for r in records] == ["kv-secret"]
     assert records[0]["value_sha256_12"] == masking.value_sha12(PW)
+
+
+def test_a_mixed_case_blob_does_not_stall_the_kv_rule():
+    """wq#2806: a 554 KB base64 blob in a Commander log line took the kv rule past 8 s
+    per 64 KB window, because a hump word could end at any capital inside a mixed-case
+    run and the label nesting multiplied the readings. Every word alternative now ends
+    at a point the text fixes, so the cost is linear. 200 KB, deterministic content."""
+    import random, time
+    rnd = random.Random(2806)
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    blob = "".join(rnd.choice(alphabet) for _ in range(200_000))
+    t = time.time()
+    masked, hits = masking.mask_text('{"stdout": "' + blob + '"}')
+    assert time.time() - t < 3.0
+    assert hits == []

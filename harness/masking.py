@@ -184,7 +184,14 @@ _KV_NOUN = r"(?:secret|token|(?P<kn>key)|credentials?|passphrase|password|passwd
 # `clientSecret`, `APIKey`), never by another capital.
 # wq#2806: one-letter segments are fine behind `_`/`-` (`X_API_KEY`); the two-letter
 # minimum only guards the SPACE separator, where a lone letter is an English article.
-_KV_WORD = r"(?:[A-Za-z][A-Za-z0-9]{0,20}[_-]{1,2}|[A-Za-z][A-Za-z0-9]{1,20}(?: {1,2}|(?-i:(?=[A-Z][a-z]))))"
+# wq#2806 (perf, second pass): every alternative ends at a point the text FIXES — the
+# first `_`/`-`, the first space, or the first capital — so a word has one reading and
+# the `{0,7}` nesting cannot multiply. The earlier hump form `[A-Za-z0-9]{1,20}(?=[A-Z][a-z])`
+# could end at ANY capital inside a mixed-case run, and a 554 KB base64 blob in a
+# Commander log line (humps every few characters) took the rule past 8 s per window
+# and stalled the sweep. Hump words are camelCase segments: `api`, `Key`, `client`,
+# `OA`+`uth`, `API`; never a bare `Key` at the start (a bare noun stays _KV_BARE only).
+_KV_WORD = r"(?:[A-Za-z][A-Za-z0-9]{0,20}[_-]{1,2}|[A-Za-z][A-Za-z0-9]{1,20} {1,2}|(?-i:(?:[A-Z][a-z0-9]+|[A-Z]{2,3}[a-z0-9]*|[a-z][a-z0-9]+)(?=[A-Z][a-z])))"
 # a public key is not a credential, and infra dirs are full of them
 _KV_NOT_PUBLIC = r"(?!pub(?:lic)?[ _-]{0,2}key\b)"
 # Nouns unambiguous enough to stand alone. `key` and `pat` are deliberately absent:
