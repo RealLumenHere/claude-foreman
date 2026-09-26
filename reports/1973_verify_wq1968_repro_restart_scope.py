@@ -28,7 +28,7 @@ def sha256(v):
 
 class State:
     def __init__(self):
-        self.raw = "sk-usersvckey123456"
+        self.raw = "sk-" + "usersvckey123456"
         self.regen_calls = 0
 
 

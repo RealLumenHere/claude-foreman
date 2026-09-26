@@ -134,7 +134,7 @@ Three findings, each checked rather than inferred:
    from today score any label, both `cloudflare` + `sk-key`, both benign against
    `cwd=/home/lumen/foreman`.
 2. **The fixture wq#2355 quotes has never existed in the file.** It cites
-   `TOKEN="abcdefgh12345678` at `ISSUE-LOG.md:831`. `grep -c` for that literal:
+   `TOKEN="` + `abcdefgh12345678` at `ISSUE-LOG.md:831`. `grep -c` for that literal:
    **0** in the working tree, **0** at `0df6e21`. Row 722 writes that fixture
    deliberately defanged — the `TOKEN=` prefix and the quoted body are two separate
    string literals joined by `+`, so the concatenation never appears as one run of

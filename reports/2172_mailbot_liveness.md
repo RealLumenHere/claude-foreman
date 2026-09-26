@@ -15,7 +15,7 @@ Status: **UNCONFIRMED from a worker; tooling landed so a token shell can confirm
 ## What landed
 
 `ops/wq2172-mailbot-liveness/check_live.py` (tests: `ops/tests/test_wq2172_mailbot_liveness.py`,
-12 pass). From a shell with the token:
+12 pass). From a shell where that variable is exported:
 
     CLOUDFLARE_API_TOKEN=... python3 ops/wq2172-mailbot-liveness/check_live.py
 

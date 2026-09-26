@@ -171,7 +171,7 @@ def test_rotate_one_happy_path(tmp_path, fake_proxy, restart_calls):
 
     assert result["status"] == "rotated"
     assert old_raw not in env_file.read_text()
-    assert "sk-new-test-alias-1" in env_file.read_text()
+    assert "sk-" + "new-test-alias-1" in env_file.read_text()
     assert oct(env_file.stat().st_mode)[-3:] == "600"
     assert result["units_restarted"] == ["myservice.service"]
     assert result["verify_ok"] is True
@@ -215,7 +215,7 @@ def test_old_value_not_found_on_disk(tmp_path, fake_proxy):
     state, base_url = fake_proxy
     args, _home, _unit_dir = make_args(tmp_path, base_url)
 
-    state.add("ghost-alias", "sk-notanywhereonthisbox")
+    state.add("ghost-alias", "sk-" + "notanywhereonthisbox")
     result = rotate.rotate_one("ghost-alias", args, "test-master-key")
     assert result["status"] == "old_value_not_found_on_disk"
 
@@ -225,7 +225,7 @@ def test_never_restart_list_skips_unit(tmp_path, fake_proxy, restart_calls):
     args, home, unit_dir = make_args(tmp_path, base_url)
     args.never_restart_file.write_text("myservice.service\n")
 
-    old_raw = "sk-neverrestartval12"
+    old_raw = "sk-" + "neverrestartval12"
     state.add("skip-alias", old_raw)
     env_file = home / "service.env"
     env_file.write_text(old_raw)
@@ -247,7 +247,7 @@ def test_user_scoped_unit_gets_a_user_scoped_restart(tmp_path, fake_proxy, resta
     state, base_url = fake_proxy
     args, home, unit_dir = make_args(tmp_path, base_url)
 
-    old_raw = "sk-userscopedvalue12"
+    old_raw = "sk-" + "userscopedvalue12"
     state.add("user-alias", old_raw)
 
     # Env file lives where this fleet actually keeps them — nowhere near
@@ -274,7 +274,7 @@ def test_system_and_user_units_each_get_their_own_scope(tmp_path, fake_proxy, re
     state, base_url = fake_proxy
     args, home, unit_dir = make_args(tmp_path, base_url)
 
-    old_raw = "sk-mixedscopevalue12"
+    old_raw = "sk-" + "mixedscopevalue12"
     state.add("mixed-alias", old_raw)
     env_file = home / "shared.env"
     env_file.write_text(old_raw)
@@ -302,7 +302,7 @@ def test_restart_failure_records_state_and_does_not_re_regenerate(tmp_path, fake
 
     monkeypatch.setattr(rotate.subprocess, "run", boom)
 
-    old_raw = "sk-restartfailvalue1"
+    old_raw = "sk-" + "restartfailvalue1"
     state.add("fail-alias", old_raw)
     env_file = home / "service.env"
     env_file.write_text(old_raw)

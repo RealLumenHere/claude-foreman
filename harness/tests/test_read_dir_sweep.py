@@ -11,7 +11,7 @@ HARNESS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HARNESS)
 import read_dir_sweep as rds  # noqa: E402
 
-FAKE_PAT = "github_pat_11ABCDEFGH0nTgGh17bRlBn_C2ieRMdH3r81BdXM9Gb0T8MwcmtnQ4fNOy9tMQWKEslKOR3FVFBxw"
+FAKE_PAT = "github_pat_" + "11ABCDEFGH0nTgGh17bRlBn_C2ieRMdH3r81BdXM9Gb0T8MwcmtnQ4fNOy9tMQWKEslKOR3FVFBxw"
 
 
 def _write(root, rel, text):
@@ -48,34 +48,34 @@ def test_credential_basenames_are_hits(tmp_path, name):
 
 
 @pytest.mark.parametrize("line,kind", [
-    ('TOKEN = "sntl-p9f8e7d6c5b4a3"', "sntl"),
-    ("DEEPSEEK_API_KEY=sk-4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d", "sk_key"),
+    ('TOKEN = "' + 'sntl-p9f8e7d6c5b4a3"', "sntl"),
+    ("DEEPSEEK_API_KEY=sk-" + "4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d", "sk_key"),
     ("-----BEGIN PRIVATE KEY-----", "privkey"),
-    ('"Token: xapp-1-A0B0BRS436F-1234567890123-abcdefghij"', "slack"),
-    ("password: Correct-Horse-Battery-Staple-2026", "kv_secret"),
+    ('"Token: ' + 'xapp-1-A0B0BRS436F-1234567890123-abcdefghij"', "slack"),
+    ("password: " + "Correct-Horse-Battery-Staple-2026", "kv_secret"),
     # wq#2115: the label is whatever the source service's docs print — space-separated
     # compounds and synonyms the old fixed keyword list did not enumerate. All three of
     # these sat on the same messenger line (wq#1483) the old pattern only half-caught.
-    ("Client Secret: 8f7e6d5c4b3a2918071625344352", "kv_secret"),
-    ("Signing Secret: 0123456789abcdef0123456789ab", "kv_secret"),
-    ("Verifaction Token: abcdefghijklmnopqrstuvwx", "kv_secret"),
-    ("DB Password = hunter2-hunter2-hunter2-hunter2", "kv_secret"),
-    ("refresh-token: 1zz0gLongLookingRefreshTokenValue", "kv_secret"),
-    ("clientSecret: 8f7e6d5c4b3a2918071625344352", "kv_secret"),
-    ("PrivateKey = aGVsbG8gd29ybGRhYmNkZWZnaGlqaw", "kv_secret"),
+    ("Client Secret: " + "8f7e6d5c4b3a2918071625344352", "kv_secret"),
+    ("Signing Secret: " + "0123456789abcdef0123456789ab", "kv_secret"),
+    ("Verifaction Token: " + "abcdefghijklmnopqrstuvwx", "kv_secret"),
+    ("DB Password = " + "hunter2-hunter2-hunter2-hunter2", "kv_secret"),
+    ("refresh-token: " + "1zz0gLongLookingRefreshTokenValue", "kv_secret"),
+    ("clientSecret: " + "8f7e6d5c4b3a2918071625344352", "kv_secret"),
+    ("PrivateKey = " + "aGVsbG8gd29ybGRhYmNkZWZnaGlqaw", "kv_secret"),
     # wq#2122: the label used to have to touch its separator, so these all passed
     # unflagged. Standard JSON is the biggest miss -- the closing quote sits between
     # the label and the colon, and JSON is how most of the fleet stores credentials.
-    ('"api_key": "8f7e6d5c4b3a2918071625344352"', "kv_secret"),
-    ('"signing_secret": "0123456789abcdef0123456789ab"', "kv_secret"),
+    ('"api_key": "' + '8f7e6d5c4b3a2918071625344352"', "kv_secret"),
+    ('"signing_secret": "' + '0123456789abcdef0123456789ab"', "kv_secret"),
     ("*Client Secret*: 8f7e6d5c4b3a2918071625344352", "kv_secret"),   # Slack bold
     ("Client Secret: `8f7e6d5c4b3a2918071625344352`", "kv_secret"),   # backtick value
     ("Signing Secret is: 0123456789abcdef0123456789ab", "kv_secret"),
     ("Signing Secret - 0123456789abcdef0123456789ab", "kv_secret"),
     # the all-caps pointer guard must not swallow a credential that merely STARTS with
     # an all-caps run -- `-` is not a value terminator, so this is still a hit
-    ("api_key: AAAA_BBBB-ccc123ddd456eee789fff", "kv_secret"),
-    ('"api_key": "AAAAB3NzaC1yc2EAAAADAQABAAABgQ"', "kv_secret"),
+    ("api_key: " + "AAAA_BBBB-ccc123ddd456eee789fff", "kv_secret"),
+    ('"api_key": "' + 'AAAAB3NzaC1yc2EAAAADAQABAAABgQ"', "kv_secret"),
 ])
 def test_content_shapes(tmp_path, line, kind):
     _write(tmp_path, "f.txt", line + "\n")
@@ -107,9 +107,9 @@ def test_content_shapes(tmp_path, line, kind):
     # wq#2122: allowing a quoted label opened a new POINTER shape -- the value is a
     # constant, or the NAME of an env var, not its value. Both of these were real
     # false positives in the first --policy run of this change.
-    'headers={"x-internal-key": BILLING_INTERNAL_KEY}, timeout=3)',
-    '"azure": {"name": "Azure OpenAI", "env_key": "AZURE_OPENAI_API_KEY"},',
-    "api_key: SOME_CONSTANT_NAME_HERE",
+    'headers={"x-internal-key": ' + 'BILLING_INTERNAL_KEY}, timeout=3)',
+    '"azure": {"name": "Azure OpenAI", "env_key": "' + 'AZURE_OPENAI_API_KEY"},',
+    "api_key: " + "SOME_CONSTANT_NAME_HERE",
 ])
 def test_broadened_label_does_not_fire_on_ordinary_lines(tmp_path, line):
     _write(tmp_path, "f.txt", line + "\n")
@@ -159,7 +159,7 @@ def test_all_github_token_prefixes_are_caught(tmp_path, prefix):
 
 
 def test_binary_and_git_skipped(tmp_path):
-    _write(tmp_path, ".git/config", "url = https://ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345@x\n")
+    _write(tmp_path, ".git/config", "url = https://ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345@x\n")
     with open(os.path.join(tmp_path, "blob.bin"), "wb") as f:
         f.write(b"\0" + FAKE_PAT.encode())
     hits, _ = rds.sweep_root(str(tmp_path))

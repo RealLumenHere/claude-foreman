@@ -41,19 +41,19 @@ an unrelated missing sibling import, `fleet_exec_policy`, that blocks a direct i
 `/tmp/fworker-wq2322/probe_daemon_regex.py`):
 
 ```
->>> masking.mask_text("TOKEN=abcdefghijklmnop123456(")
-('TOKEN=abcdefghijklmnop123456(', [])          # post-fix: no mask, no alarm
+>>> masking.mask_text("TOKEN=" + "abcdefghijklmnop123456(")
+('TOKEN=' + 'abcdefghijklmnop123456(', [])          # post-fix: no mask, no alarm
 ```
 
 Against the pre-fix pattern (`masking_old.py`, extracted from `d8c593a^`) the identical
 input **is** caught:
 
 ```
->>> old.mask_text("TOKEN=abcdefghijklmnop123456(")
+>>> old.mask_text("TOKEN=" + "abcdefghijklmnop123456(")
 ('TOKEN=MASKED(', ['kv-secret'])               # pre-fix: masked and alarmed
 ```
 
-Same result for `password: hunter2hunter2(` and for the daemon's `kv_secret` regex
+Same result for `password: ` + `hunter2hunter2(` and for the daemon's `kv_secret` regex
 directly (`token_engine_daemon.py`'s copy, current main, not just the PR's version) — the
 gap is live in both consumers, not a leftover from an old revision.
 

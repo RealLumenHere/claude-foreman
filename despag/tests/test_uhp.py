@@ -293,7 +293,7 @@ def test_failed_admission_frees_the_idempotency_key(runner_client):
     import asyncio
 
     app_module, _ = runner_client
-    headers = {**_auth(app_module), "Idempotency-Key": "released-again"}
+    headers = {**_auth(app_module), "Idempotency-Key": "r" + "eleased-again"}
     with TestClient(app_module.app) as c:
         r1 = c.post("/v1/responses", headers=headers,
                     json={"input": "hi", "metadata": {"session_id": "hsess_never-existed"}})
@@ -416,7 +416,7 @@ def test_blocking_rate_limited_turn_sidecar_reports_saw_limit(runner_client):
 
 def test_stream_idempotency_key_replays_settled_output(runner_client):
     app_module, _ = runner_client
-    headers = {**_auth(app_module), "Idempotency-Key": "stream-retry"}
+    headers = {**_auth(app_module), "Idempotency-Key": "s" + "tream-retry"}
     with TestClient(app_module.app) as c:
         r1 = c.post("/v1/responses", headers=headers, json={"input": "hi", "stream": True})
         assert r1.status_code == 200, r1.text

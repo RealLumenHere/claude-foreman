@@ -74,13 +74,13 @@ def test_local_rung_gate_is_a_noop_for_cloud_models():
 
 def test_build_env_wires_gateway_vars_for_local_model(tmp_path, monkeypatch):
     key_file = tmp_path / "litellm.token"
-    key_file.write_text("sk-test-foreman-key")
+    key_file.write_text("sk-" + "test-foreman-key")
     monkeypatch.setattr(fworker, "LITELLM_KEY_FILE", str(key_file))
 
     env = fworker.build_env("wid", "deepseek-v4-flash", "medium", "/tmp/wt", 1116)
 
     assert env["ANTHROPIC_BASE_URL"] == fworker.LITELLM_BASE_URL
-    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-test-foreman-key"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-" + "test-foreman-key"
     assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
     assert "ANTHROPIC_API_KEY" not in env
 
@@ -121,7 +121,7 @@ def test_local_max_turns_lower_than_cloud_defaults_for_trusted_archetypes():
 def test_local_rung_end_to_end_wires_env_and_files_sonnet_verify_pass(tmp_path):
     repo = make_scratch_repo(tmp_path)
     key_file = tmp_path / "litellm.token"
-    key_file.write_text("sk-test-foreman-key")
+    key_file.write_text("sk-" + "test-foreman-key")
     env_dump = tmp_path / "child_env.json"
     env, wq_db, events_dir, runs_root, worktrees_root, _state_file = make_scratch_env(
         tmp_path, 0, "success",
@@ -141,7 +141,7 @@ def test_local_rung_end_to_end_wires_env_and_files_sonnet_verify_pass(tmp_path):
     # gateway env — not just build_env()'s return value in isolation.
     dumped = json.loads(env_dump.read_text())
     assert dumped.get("ANTHROPIC_BASE_URL") == "http://localhost:4000"
-    assert dumped.get("ANTHROPIC_AUTH_TOKEN") == "sk-test-foreman-key"
+    assert dumped.get("ANTHROPIC_AUTH_TOKEN") == "sk-" + "test-foreman-key"
     assert dumped.get("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1"
     assert "ANTHROPIC_API_KEY" not in dumped
     # wq#954: the Bash output cap is an env var now, so it only works if it survives

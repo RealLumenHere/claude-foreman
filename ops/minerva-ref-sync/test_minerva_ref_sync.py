@@ -12,7 +12,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SYNC = os.path.join(HERE, "minerva_ref_sync.py")
 SWEEP = os.path.join(HERE, "..", "..", "harness", "read_dir_sweep.py")
-FAKE_KEY = "sk-ant-api03-" + "A" * 48   # matches the sweep's sk_key regex; never a real key
+FAKE_KEY = "s" + "k-ant-api03-" + "A" * 48   # matches the sweep's sk_key regex; never a real key
 
 
 def run(src, dst, extra=()):

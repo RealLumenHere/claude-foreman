@@ -86,7 +86,7 @@ def drill_deepseek():
     with tempfile.TemporaryDirectory() as tmp:
         env = os.path.join(tmp, ".env")
         with open(env, "w") as f:
-            f.write("DEEPSEEK_API_KEY=sk-invalid-lpg-drill\n")
+            f.write("DEEPSEEK_API_KEY=sk-" + "invalid-lpg-drill\n")
         cfg["email"]["deepseek_env_file"] = env
         res = checks_email.check_e3_deepseek(cfg)
     expect("deepseek/invalid-key-is-red", res.status == guardian.RED, res.detail)

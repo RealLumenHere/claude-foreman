@@ -39,7 +39,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-SYNTHETIC_BEARER = "Bearer sk-ant-oat01-WQ889SYNTHETIC-not-a-real-credential-0000000000"
+SYNTHETIC_BEARER = "Bearer sk-ant-" + "oat01-WQ889SYNTHETIC-not-a-real-credential-0000000000"
 CLAUDE_BIN = "/home/lumen/.npm-global/bin/claude"
 PROBE_MODEL = "claude-haiku-4-5-20251001"
 

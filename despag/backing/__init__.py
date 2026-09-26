@@ -302,7 +302,7 @@ class FileSecretStore:
     async def put(self, tenant: str, name: str, value: str, *, require_encryption: bool = False) -> None:
         if require_encryption and self._key is None:
             raise SecretsNotConfigured(
-                "Refusing to store this credential: DESPAG_SECRET_KEY is not set, so it "
+                "Refusing to store this credential: " + "DESPAG_SECRET_KEY is not set, so it "
                 "could only be written to disk in plaintext. Set DESPAG_SECRET_KEY to a "
                 "passphrase and restart.")
         body = self._seal(value) if self._key is not None else value

@@ -81,7 +81,7 @@ def test_profile_env_routes_the_background_model_and_stops_the_title_call(tmp_pa
 def test_the_child_really_gets_the_profile_flags_and_env(tmp_path):
     repo = make_scratch_repo(tmp_path)
     key_file = tmp_path / "litellm.token"
-    key_file.write_text("sk-test-foreman-key")
+    key_file.write_text("sk-" + "test-foreman-key")
     dump = tmp_path / "child.json"
     env, *_ = make_scratch_env(tmp_path, 0, "success", extra={
         "FOREMAN_LITELLM_KEY_FILE": str(key_file), "FAKE_CLAUDE_ENV_DUMP": str(dump)})
@@ -101,7 +101,7 @@ def test_the_child_really_gets_the_profile_flags_and_env(tmp_path):
 def test_under_the_lever_the_child_gets_neither_flags_nor_env(tmp_path, extra_env):
     repo = make_scratch_repo(tmp_path)
     key_file = tmp_path / "litellm.token"
-    key_file.write_text("sk-test-foreman-key")
+    key_file.write_text("sk-" + "test-foreman-key")
     dump = tmp_path / "child.json"
     env, *_ = make_scratch_env(tmp_path, 0, "success", extra=dict(
         extra_env, FOREMAN_LITELLM_KEY_FILE=str(key_file), FAKE_CLAUDE_ENV_DUMP=str(dump)))
@@ -203,7 +203,7 @@ def test_a_calibrated_mechanical_edit_prompt_clears_every_configured_backend():
 def test_over_budget_spawn_is_refused_uncharged_without_a_cooldown(tmp_path):
     repo = make_scratch_repo(tmp_path)
     key_file = tmp_path / "litellm.token"
-    key_file.write_text("sk-test-foreman-key")
+    key_file.write_text("sk-" + "test-foreman-key")
     cooldown = tmp_path / "backend_cooldown.json"
     env, _db, _events, runs_root, _wt, _state = make_scratch_env(
         tmp_path, 0, "success", extra={
@@ -225,7 +225,7 @@ def test_over_budget_spawn_is_refused_uncharged_without_a_cooldown(tmp_path):
 def test_legacy_mode_never_refuses_on_budget(tmp_path):
     repo = make_scratch_repo(tmp_path)
     key_file = tmp_path / "litellm.token"
-    key_file.write_text("sk-test-foreman-key")
+    key_file.write_text("sk-" + "test-foreman-key")
     env, *_ = make_scratch_env(tmp_path, 0, "success", extra={
         "FOREMAN_LITELLM_KEY_FILE": str(key_file), "FOREMAN_FIRST_FRAME_S": "60",
         "FOREMAN_PREFILL_TPS": "13.6", "FOREMAN_CHARGE_MODE": "legacy"})

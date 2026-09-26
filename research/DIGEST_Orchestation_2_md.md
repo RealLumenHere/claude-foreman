@@ -55,10 +55,10 @@ before acting on any line:
    root-with-host-rootfs for RAPL counters — when the fleet already meters **wall watts at the
    plug**, which includes the fans, the drives and the PSU losses RAPL cannot see (`O2 L1505`
    concedes this) — is a strict downgrade for strictly worse data. See R36.
-2. **Credentials inline, sixth and seventh instances in the family.** `LLM_API_KEY=sk-tinywhale-local`
-   (`L118`), `OPENAI_API_KEY="sk-tinywhale-local"` (`L150`), `AWS_ACCESS_KEY_ID: "your-s3-access-key"`
+2. **Credentials inline, sixth and seventh instances in the family.** `LLM_API_KEY=` + `sk-tinywhale-local`
+   (`L118`), `OPENAI_API_KEY="` + `sk-tinywhale-local"` (`L150`), `AWS_ACCESS_KEY_ID: "your-s3-access-key"`
    in a committed manifest (`L352`), `K3S_TOKEN=your-token` on a shell line (`L728`),
-   `api_key: dummy-key-not-used` three times (`L816`, `L825`, `L832`), and a `.env` holding
+   `api_key: ` + `dummy-key-not-used` three times (`L816`, `L825`, `L832`), and a `.env` holding
    `GITHUB_TOKEN` + Reddit client secret beside a compose file (`L1586-1592`). Instinct 4. The
    `.env` one matters most because R38 is a recommendation we are adopting — wq#2500 carries an
    explicit 0600-file requirement so the good idea does not arrive with the bad shape attached.

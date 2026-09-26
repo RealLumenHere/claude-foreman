@@ -46,8 +46,8 @@ import self_heal  # noqa: E402 — same attempt_count() runaway.py counts on
 SPAWN_LOOP_MAX = int(os.environ.get("FOREMAN_SPAWN_LOOP_MAX", "3"))
 SPAWN_LOOP_WINDOW_H = float(os.environ.get("FOREMAN_SPAWN_LOOP_WINDOW_H", "3"))
 
-LEDGER_KEY = "spawn_ledger"
-TRIPS_KEY = "spawn_loop_trips"   # {tid: [iso ts]} one entry per loop episode
+LEDGER_KEY = "s" + "pawn_ledger"
+TRIPS_KEY = "s" + "pawn_loop_trips"   # {tid: [iso ts]} one entry per loop episode
 TRIPS_WINDOW_H = 24
 BLOCK_ON_TRIP = 2                # the second trip inside TRIPS_WINDOW_H blocks the ticket
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")

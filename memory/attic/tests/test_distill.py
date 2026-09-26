@@ -53,7 +53,7 @@ def test_parse_caps_at_max_facts():
 
 def test_parse_drops_secretlike_facts():
     raw = _facts_json([
-        {"fact": "the key is sk-abc123def456ghi789", "scope": "fleet"},
+        {"fact": "the key is sk-" + "abc123def456ghi789", "scope": "fleet"},
         {"fact": "auth uses Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
          "scope": "fleet"},
         {"fact": "api_key= lives in the env file", "scope": "fleet"},

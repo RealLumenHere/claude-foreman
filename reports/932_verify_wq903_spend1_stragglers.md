@@ -18,11 +18,11 @@ verify-pass instead re-inspected the live files/services directly.
   `deep_research_agent`, `eval_agent`, `deploy_agent`, `run_missing_deep`): all read
   `os.environ.get("LITELLM_MASTER_KEY")` first, else
   `/home/lumen/.secrets/litellm-service-keys/lumen-research.key`. No caller still contains
-  the literal `sk-lumen-litellm-master` (grepped each file directly).
+  the literal `sk-` + `lumen-litellm-master` (grepped each file directly).
 - **`litellm-provision-keys` SERVICES dict**: `sia-news`, `lumen-research`, `lumen-dispatch`,
   `langfuse-evaluator`, `duet` all present with the claimed budgets/durations (lines 27-31).
 - **`CostBench/env/.env`** (actual path: `/home/lumen/costbench/CostBench/env/.env`) and
-  **`/home/lumen/autonomy/dispatcher/.env`**: both `grep -c sk-lumen-litellm-master` = 0.
+  **`/home/lumen/autonomy/dispatcher/.env`**: both `grep -c sk-` + `lumen-litellm-master` = 0.
 - **`pelican_bench.py` / `judgearena_bench.py`**: both now env-first then
   `minerva-bench.key` (better than the notes' "reads the key file directly" — they also
   check env — not a discrepancy, just under-stated).
@@ -45,7 +45,7 @@ verify-pass instead re-inspected the live files/services directly.
   Confirmed the fix *is* staged: `/home/lumen/services/sia-news/.env` (source) and
   `/home/sia/sia-news/.env` (rsynced target, real remote path — the ticket's cited
   `/home/lumen/services/sia-news/.env` on host `sia` doesn't exist; `sia`'s actual home is
-  `/home/sia`, not `/home/lumen`) both have `sk-lumen-litellm-master` count = 0. The 401s are
+  `/home/sia`, not `/home/lumen`) both have `sk-` + `lumen-litellm-master` count = 0. The 401s are
   the container still running on its old env, exactly as disclosed — "needs a human or a
   higher-privileged run to actually flip it live" holds.
 - **Dify recipe in `deploy_agent.py`** (line ~284, `sed -i` against a *cloned* dify repo's

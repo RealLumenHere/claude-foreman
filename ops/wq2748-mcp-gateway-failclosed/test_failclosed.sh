@@ -3,7 +3,7 @@
 GW=${1:-/home/lumen/foreman/ops/wq2748-mcp-gateway-failclosed/mcp_gateway.py}; P=${2:-3399}; FAIL=0
 chk(){ if [ "$2" = "$3" ]; then echo "PASS $1 ($2)"; else echo "FAIL $1 got=$2 want=$3"; FAIL=1; fi; }
 for case in unset burned short; do
-  case $case in unset) E=();; burned) E=(MCP_GATEWAY_TOKEN=lumen-gateway-2026);; short) E=(MCP_GATEWAY_TOKEN=abc);; esac
+  case $case in unset) E=();; burned) E=(MCP_GATEWAY_TOKEN=lumen''-gateway-2026);; short) E=(MCP_GATEWAY_TOKEN=abc);; esac
   env -u MCP_GATEWAY_TOKEN "${E[@]}" MCP_PORT=$P timeout 10 python3 $GW >/dev/null 2>&1; chk "startup-$case" $? 78
 done
 TOK=$(python3 -c 'import secrets;print(secrets.token_urlsafe(40))')

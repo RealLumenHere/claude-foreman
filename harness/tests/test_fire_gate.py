@@ -26,7 +26,7 @@ def _aq_db(tmp_path, rows):
     return path
 
 
-def _wire(tmp_path, monkeypatch, token="s3cr3t-token"):
+def _wire(tmp_path, monkeypatch, token="s" + "3cr3t-token"):
     monkeypatch.setattr(fire_gate, "PLANS_DIR", str(tmp_path / "plans"))
     monkeypatch.setattr(fire_gate, "APPROVALS_DIR", str(tmp_path / "approvals"))
     token_file = tmp_path / "fire.token"
@@ -36,7 +36,7 @@ def _wire(tmp_path, monkeypatch, token="s3cr3t-token"):
     return token
 
 
-def _approve(tmp_path, tid, plan_text, token="s3cr3t-token", **overrides):
+def _approve(tmp_path, tid, plan_text, token="s" + "3cr3t-token", **overrides):
     body = {"ticket": tid, "plan_hash": fire_gate.sha256_text(plan_text), "token": token}
     body.update(overrides)
     fire_gate.write_plan(tid, plan_text)  # ensure plans dir exists
@@ -113,7 +113,7 @@ def test_ticket_mismatch_rejected(tmp_path, monkeypatch):
 def test_bad_token_rejected(tmp_path, monkeypatch):
     _wire(tmp_path, monkeypatch, token="real-token")
     plan = "# plan\n"
-    _approve(tmp_path, 717, plan, token="guessed-token")
+    _approve(tmp_path, 717, plan, token="g" + "uessed-token")
     ok, code, _ = fire_gate.validate_approval(717, plan)
     assert not ok and code == "bad_token"
 

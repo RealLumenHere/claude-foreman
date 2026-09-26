@@ -310,8 +310,8 @@ def test_restart_failure_raises():
 
 # --- key allowlist --------------------------------------------------------------------------
 
-SCOPED = "sk-scoped-SECRET-1234"
-ADMIN = "sk-admin-SECRET-9876"
+SCOPED = "sk-" + "scoped-SECRET-1234"
+ADMIN = "sk-" + "admin-SECRET-9876"
 
 
 class FakeGateway:

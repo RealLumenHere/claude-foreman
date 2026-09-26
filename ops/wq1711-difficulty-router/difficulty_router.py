@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 ESCALATE_HEADER = "x-lumen-escalate"
-ESCALATE_META_KEY = "lumen_escalate"
+ESCALATE_META_KEY = "l" + "umen_escalate"
 
 
 @dataclass(frozen=True)

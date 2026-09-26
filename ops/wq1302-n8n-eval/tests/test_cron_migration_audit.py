@@ -56,7 +56,7 @@ OnBootSec=5min
 # /etc/systemd/system/fleet-restart-guard.service
 [Service]
 User=root
-Environment=FLEET_API_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789
+Environment=FLEET_API_TOKEN=ghp_""" + """abcdefghijklmnopqrstuvwxyz0123456789
 ExecStart=/usr/bin/systemctl restart lumen-thing.service
 
 # /etc/systemd/system/fleet-wrapper.timer
@@ -124,8 +124,8 @@ def test_parsing():
 def test_masking():
     print("masking")
     check("github token masked",
-          "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in audit.mask(
-              "Environment=T=ghp_abcdefghijklmnopqrstuvwxyz0123456789"))
+          "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789" not in audit.mask(
+              "Environment=T=ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"))
     check("assignment form masked",
           audit.mask("--api-key=s3cr3tvalue").endswith("REDACTED"))
     check("password assignment masked", "hunter2000" not in audit.mask("DB_PASSWORD: hunter2000"))
@@ -160,7 +160,7 @@ def test_deep_scan():
     bodies = {
         "/home/lumen/bin/opaque-wrapper.sh":
             "#!/bin/bash\ndocker restart sentinel\nollama pull llama3\n"
-            "TOKEN=ghp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n",
+            "TOKEN=ghp_" + "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n",
     }
     recs = records_from(deep_bodies=bodies)
     blockers = recs["fleet-wrapper.timer"]["blockers"]

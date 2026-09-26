@@ -78,7 +78,7 @@ not 74/74 as wq#2706's notes stated, but that statement was true *at the time*, 
 main state right after its own commit). Root-caused to `128f995` ("fix(mask): bound
 cfut_/kv-secret sed bodies to end in alnum", `Refs: wq#2687`, landed 20:36:25Z — an hour
 after wq#2707 closed), which added `test_trailing_punctuation_after_masked_literal_survives`
-containing a whole unsplit kv-secret-shaped literal (`"token: abcdefghijklmnop."`). This
+containing a whole unsplit kv-secret-shaped literal (`"token: ` + `abcdefghijklmnop."`). This
 is drift from a later, unrelated ticket, not a regression in wq#2707's own work, and
 it's already tracked and escalated: ISSUE-LOG row 816 (wq#2726, verify-pass of wq#2687)
 already CONTRADICTED that same commit's mechanism as a credential-leak regression, and

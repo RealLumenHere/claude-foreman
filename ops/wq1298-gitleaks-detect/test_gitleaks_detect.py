@@ -26,7 +26,7 @@ def check(name, cond, extra=""):
 
 
 def make_finding(fingerprint, rule="aws-access-key", file="config.py", line=12,
-                  commit="deadbeef1234", secret="AKIA-SHOULD-NEVER-LEAK"):
+                  commit="deadbeef1234", secret="A" + "KIA-SHOULD-NEVER-LEAK"):
     return {
         "Fingerprint": fingerprint, "RuleID": rule, "File": file,
         "StartLine": line, "Commit": commit, "Secret": secret, "Match": secret,
@@ -52,7 +52,7 @@ def test_find_repos():
 
 
 def test_redact_never_leaks_secret():
-    findings = [make_finding("fp1", secret="ghp_realtoken1234567890")]
+    findings = [make_finding("fp1", secret="g" + "hp_realtoken1234567890")]
     view = gd.redact(findings)
     dumped = json.dumps(view)
     check("redacted view has no Secret field", "Secret" not in view[0])

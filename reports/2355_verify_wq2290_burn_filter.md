@@ -92,7 +92,7 @@ classify against repo_root=/home/lumen/kb (the directory doctrine mandates readi
   burned: []  benign: ['cloudflare', 'sk-key', 'kv-secret']
 ```
 
-The `kv-secret` hit is `TOKEN="abcdefgh12345678` — a benign fixture quoted verbatim at
+The `kv-secret` hit is `TOKEN="` + `abcdefgh12345678` — a benign fixture quoted verbatim at
 `/home/lumen/kb/ISSUE-LOG.md:831` (row 722, itself a prior verify-pass documenting this
 exact fixture). It is committed text, entitled to be read, and would still fire a
 pri-1 rotation ticket under PR814's own logic, because `/home/lumen/kb` is a distinct

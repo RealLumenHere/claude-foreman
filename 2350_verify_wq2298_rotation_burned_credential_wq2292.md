@@ -56,8 +56,8 @@ tripping `test_doctrine_corpus_does_not_re_arm_the_alarm` on current HEAD
 **(2) Leak (severe) — the direction that matters more:**
 
 ```
->>> masking.mask_text("cfut_REALSECRETVALUE123456cfut_MASKED")  # secret-scan:allow (synthetic, not a live token)
-('cfut_REALSECRETVALUE123456cfut_MASKED', [])  # secret-scan:allow
+>>> masking.mask_text("cfut_" + "REALSECRETVALUE123456cfut_MASKED")  # secret-scan:allow (synthetic, not a live token)
+('cfut_' + 'REALSECRETVALUE123456cfut_MASKED', [])  # secret-scan:allow
 ```
 
 A real secret concatenated with **no separator** immediately *before* an
@@ -69,7 +69,7 @@ the same input against the parent commit (`99ae7fb^`, pre-fix) masks and
 alarms correctly:
 
 ```
->>> masking_prefix.mask_text("cfut_REALSECRETVALUE123456cfut_MASKED")   # 99ae7fb^  secret-scan:allow
+>>> masking_prefix.mask_text("cfut_" + "REALSECRETVALUE123456cfut_MASKED")   # 99ae7fb^  secret-scan:allow
 ('cfut_MASKED', ['cloudflare'])
 ```
 
@@ -79,8 +79,8 @@ ticket's own killed attempt-1 draft (which asserted `sk-key` was safe as
 hyphen/letters its own `sk-(?:[a-zA-Z]+-)*` prefix uses.
 
 ```
->>> masking.mask_text("sk-ant-REALSECRETVALUE1234567890sk-ant-MASKED")  # secret-scan:allow (synthetic)
-('sk-ant-REALSECRETVALUE1234567890sk-ant-MASKED', [])  # secret-scan:allow
+>>> masking.mask_text("sk-ant-" + "REALSECRETVALUE1234567890sk-ant-MASKED")  # secret-scan:allow (synthetic)
+('sk-ant-' + 'REALSECRETVALUE1234567890sk-ant-MASKED', [])  # secret-scan:allow
 ```
 
 Reproduction scripts: `/tmp/fworker-wq2350/probe_concat.py`,

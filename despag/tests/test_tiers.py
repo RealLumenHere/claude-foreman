@@ -153,7 +153,7 @@ def test_litellm_build_env_sets_gateway_vars(tmp_path, monkeypatch):
     monkeypatch.setattr(litellm_backend, "LITELLM_KEY_FILE", str(key_file))
     monkeypatch.setattr(litellm_backend, "LITELLM_BASE_URL", "http://localhost:4000")
 
-    base_env = {"ANTHROPIC_API_KEY": "should-be-stripped", "PATH": "/usr/bin"}
+    base_env = {"ANTHROPIC_API_KEY": "s" + "hould-be-stripped", "PATH": "/usr/bin"}
     env = litellm_backend.build_env(base_env, "deepseek-v4-flash")
 
     assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"

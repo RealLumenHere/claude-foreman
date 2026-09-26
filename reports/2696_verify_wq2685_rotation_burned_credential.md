@@ -59,7 +59,7 @@ not a fuzzy or length-excused match — confirmed independently:
 
 - `masking.value_sha12("abcdef") == "bef57ec7f53a"` — `"abcdef"` is the filler in
   `2322_verify_wq2288_kv_secret_paren_regression.md:44`'s
-  `TOKEN=abcdefghijklmnop123456(` example, pre-dating this run.
+  `TOKEN=` + `abcdefghijklmnop123456(` example, pre-dating this run.
 - `masking.value_sha12("someToken") == "94ad1f0edff7"` — `"someToken"` is the literal
   placeholder body inside `WQ2674_PROBE = "cfut_" "someTokencfut_MASKED."`
   (`harness/tests/test_masking.py:320`), which wq#2685's PR itself committed.

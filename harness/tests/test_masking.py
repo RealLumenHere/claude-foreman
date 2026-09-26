@@ -10,6 +10,7 @@ alarm fired exactly once.
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import textwrap
 
@@ -162,30 +163,55 @@ KV_OPAQUE_CALLS = ["TOKEN=" + OPAQUE + "(", "Signing Secret: " + OPAQUE + "(",
 # rows 568-599 are made of — the wq#2275 cascade spent six tickets on it and found no
 # credential. The guard is on the SOURCE text, not the runtime value: split each fixture
 # at the boundary its rule reads (see KV_LINE) and the assertions are unaffected.
-MASK_SUITE_SOURCES = [
-    "tests/test_masking.py", "tests/test_mask_replay.py", "tests/test_token_injection.py",
-    "masking.py", "mask_replay.py", "burn_filter.py",
-    # wq#2400: the mask-secrets bundle belongs to the same corpus — its four whole
-    # fixtures are what a run editing it (wq#2316) put in front of the model, and the
-    # alarm that followed cost this ticket.
-    "../ops/wq2316-mask-secrets-boundary/test_mask_secrets_boundary.py",
-    "../ops/wq2316-mask-secrets-boundary/mask-secrets",
-]
+# wq#2749: the corpus was an 8-path hand-list (this file, mask_replay/masking/burn_filter,
+# test_token_injection, the wq#2316 bundle — wq#2400) and the population outside it grew
+# every time a verify or judgment report quoted a shape: wq#2739's probe found 18 such
+# files under reports/ and ops/ at fa8784d, one of them carrying the very kv-secret
+# shape wq#2731 had been closed on. The guard now walks EVERY committed text file, so a
+# new report cannot join the population silently — it fails here, where it lands.
+REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+
+# A shape a committed file must keep whole, excused by exact (label, prefix, value_len)
+# — never by bare path, so a second shape in the same file still fires. Empty: every
+# committed fixture reads silently today (split at the boundary its rule reads, see
+# KV_LINE and harness/tests/fixtures/wq2687_values.py). A row added here needs the reason
+# beside it and the value's sha256[:12] pinned in a fixture module the row cites.
+TRIPWIRE_CORPUS_EXCUSED = {}
+
+
+def tripwire_corpus(repo=REPO_ROOT):
+    """(rel, text) for every committed text file — `git ls-files`, binaries skipped."""
+    paths = subprocess.run(["git", "-C", repo, "ls-files", "-z"],
+                           capture_output=True, check=True).stdout.split(b"\0")
+    for rel in paths:
+        rel = rel.decode("utf-8", "replace")
+        if not rel:
+            continue
+        try:
+            with open(os.path.join(repo, rel), "rb") as fh:
+                raw = fh.read()
+        except OSError:  # a path the index knows that is not on disk here
+            continue
+        if b"\0" in raw[:8000]:
+            continue
+        yield rel, raw.decode("utf-8", "replace")
 
 
 def test_the_mask_suite_does_not_arm_its_own_tripwire():
-    harness = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     offenders = {}
-    for rel in MASK_SUITE_SOURCES:
-        with open(os.path.join(harness, rel), errors="replace") as fh:
-            hits = masking.scan(fh.read())[1]
+    for rel, text in tripwire_corpus():
+        hits = masking.scan(text)[1]
         # label/prefix/length only — naming the value here would burn it for real
-        if hits:
-            offenders[rel] = [(h["label"], h["prefix"], h["value_len"]) for h in hits]
+        shapes = {(h["label"], h["prefix"], h["value_len"]) for h in hits}
+        shapes -= TRIPWIRE_CORPUS_EXCUSED.get(rel, set())
+        if shapes:
+            offenders[rel] = sorted(shapes)
     assert offenders == {}, (
-        "these sources carry a whole credential shape, so merely reading them files a "
-        "rotation ticket: %r — split each across a concatenation at the boundary its "
-        "rule reads, which leaves the runtime bytes identical" % offenders)
+        "these committed files carry a whole credential shape, so merely reading them "
+        "files a rotation ticket: %r — split each across a concatenation at the boundary "
+        "its rule reads (`\"sk-\" + \"...\"`, `` `TOKEN=\"` + `...` `` in prose), which "
+        "leaves the runtime bytes identical; ops/wq2739-tripwire-corpus/scan_tree.py "
+        "runs the same walk at a pinned rev" % offenders)
 
 
 def test_patterns_mask_and_label():

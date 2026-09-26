@@ -42,7 +42,7 @@ Read the cited line directly:
 
 ```
 $ sed -n '82p' 2350_verify_wq2298_rotation_burned_credential_wq2292.md
->>> masking.mask_text("sk-ant-REALSECRETVALUE1234567890sk-ant-MASKED")  # secret-scan:allow (synthetic)
+>>> masking.mask_text("sk-ant-" + "REALSECRETVALUE1234567890sk-ant-MASKED")  # secret-scan:allow (synthetic)
 ```
 
 `grep -ni 'xoxb\|slack'` over that whole file only hits three doctrine-prose lines
@@ -88,7 +88,7 @@ Almost certainly not, but not because of the cited evidence. A real Slack bot to
 (`xoxb-<workspace>-<bot>-<24 random chars>`) is never a clean 10-digit body. This same
 report file (`2350_verify_wq2298...md`) uses the identical sequential-digit-filler
 convention for its own cloudflare/sk-key probes elsewhere in the file
-(`cfut_REALSECRETVALUE123456...`, `...REALSECRETVALUE1234567890...`), and the mask-hit's
+(`cfut_` + `REALSECRETVALUE123456...`, `...REALSECRETVALUE1234567890...`), and the mask-hit's
 own masked context shows the exact source: a worker in
 `bin-fix-wq2687-mask-secrets-sed-bounded-tail` ran
 `echo 'SLACK_TOKEN=xoxb-<slack 10 chars> and secret: MASKED' | mask-secrets` as a

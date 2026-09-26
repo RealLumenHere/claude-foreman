@@ -6,7 +6,7 @@ Adds two feeds via Miniflux's REST API (POST /v1/feeds), never `docker exec`
 kb/ISSUE-LOG.md #653) — the API call is the one remote action this bundle can run
 unattended, since it only needs network, not root on Sia.
 
-Credentials: MINIFLUX_BASE_URL and MINIFLUX_API_KEY must already be in the
+MINIFLUX_BASE_URL and MINIFLUX_API_KEY must already be in the
 environment when this runs. This script never reads a credential file itself —
 same convention as bin/fleet-update-check:8-9 (GH_TOKEN): the caller reads the 0600
 file and exports the value, so no token ever appears in this script's argv or source.

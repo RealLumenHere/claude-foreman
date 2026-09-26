@@ -6,6 +6,7 @@
 # last LIVE verification, not the mint date.
 
 credentials:
+  # keyed by credential NAME; the value lives at `path`, never here (wq#2749)
   claude-oauth:
     path: /home/lumen/.claude/.credentials.json  # claudeAiOauth.{expiresAt,refreshTokenExpiresAt}
     scope: Claude Max OAuth session (every fworker, messenger brain on anthropic backend, governor usage poll)

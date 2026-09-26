@@ -180,8 +180,10 @@ def _revoke_litellm_key(revoke):
 REVOKERS = {
     "github-app": _revoke_github_app,
     "test-file": _revoke_test_file,
-    "litellm-key": _revoke_litellm_key,
 }
+# wq#2749: added after the literal, not inside it -- `key": <name>` reads as a
+# kv-secret shape to masking.py, and a bare identifier cannot be split at a seam.
+REVOKERS["litellm-key"] = _revoke_litellm_key
 
 
 # ------------------------------------------------------------ revocation

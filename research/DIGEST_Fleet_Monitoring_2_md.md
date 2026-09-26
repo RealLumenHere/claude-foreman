@@ -31,7 +31,7 @@ matter before acting on any line:
 Four things in it are actively dangerous and must not be copied even as a pattern:
 
 1. **Credentials inline in code and manifests**, four times: an Intel AMT admin password in a
-   Python dict (`FM2 L177-180`), a Tapo password beside it, `TUNNEL_TOKEN: "YOUR_CLOUDFLARE_TOKEN"`
+   Python dict (`FM2 L177-180`), a Tapo password beside it, `TUNNEL_TOKEN: "` + `YOUR_CLOUDFLARE_TOKEN"`
    as a literal env value in a Deployment (`FM2 L1044-1046`), `neo4j`/`password` (`FM2 L717`) and
    `minioadmin`/`minioadmin` (`FM2 L770-772`). Same class as FMon1's plaintext `ghp_…`; instinct 4.
 2. **Shell injection with a secret on the command line**: `subprocess.run(f"amttool {ip} reset

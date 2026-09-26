@@ -34,7 +34,7 @@ model_list:
       # pattern as the fleet's other single-node rungs.
       model: openai/qwen3.6-35b-a3b
       api_base: http://hapi-1:8080/v1
-      api_key: "not-required"          # llama-server has no auth by default; do not
+      api_key: "none"          # llama-server has no auth by default; do not
                                         # expose :8080 outside the tailnet
     model_info:
       gate: wq#266

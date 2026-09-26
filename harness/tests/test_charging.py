@@ -389,7 +389,7 @@ def test_prompt_size_gate_uses_chars_over_3_5_and_0_6_of_served_ctx():
 def test_local_first_frame_hang_releases_ticket_uncharged_and_cools_the_backend(tmp_path):
     repo = make_scratch_repo(tmp_path)
     key_file = tmp_path / "litellm.token"
-    key_file.write_text("sk-test-foreman-key")
+    key_file.write_text("sk-" + "test-foreman-key")
     cooldown = tmp_path / "backend_cooldown.json"
     env, _db, _events, runs_root, _wt, _state = make_scratch_env(
         tmp_path, 0, "hang", extra={
@@ -522,7 +522,7 @@ def test_local_turn_budget_kill_with_backend_noise_is_still_the_turn_budget():
 def _local_silence_run(tmp_path, silence_s, extra):
     repo = make_scratch_repo(tmp_path)
     key_file = tmp_path / "litellm.token"
-    key_file.write_text("sk-test-foreman-key")
+    key_file.write_text("sk-" + "test-foreman-key")
     env, _db, _events, runs_root, _wt, _state = make_scratch_env(
         tmp_path, 0, "mid_task_silence", extra={
             "FOREMAN_LITELLM_KEY_FILE": str(key_file),

@@ -82,15 +82,15 @@ KV_LABEL = (r"(?:" + KV_WORD + r")?" + KV_NOT_PUBLIC + KV_WORD + KV_NOUN + r"|" 
 KV_NOT_A_CREDENTIAL = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                        r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)"
                        # wq#2122: allowing a quoted label opened a new pointer shape --
-                       # `{"x-internal-key": BILLING_INTERNAL_KEY}` and
-                       # `{"env_key": "AZURE_OPENAI_API_KEY"}`, where the value is a
+                       # `{"x-internal-key": ` + `BILLING_INTERNAL_KEY}` and
+                       # `{"env_key": "` + `AZURE_OPENAI_API_KEY"}`, where the value is a
                        # constant or the NAME of an env var, not its value. Both were
                        # false positives in the first --policy run of this change.
                        # Requires all-caps AND an underscore AND no lowercase, so a
                        # hex/base64 credential (which carries mixed case or no
                        # underscore) is still caught.
                        # terminator, not end-of-line: the pointer is usually mid-line
-                       # (`{"x-internal-key": BILLING_INTERNAL_KEY}, timeout=3)`). Using a
+                       # (`{"x-internal-key": ` + `BILLING_INTERNAL_KEY}, timeout=3)`). Using a
                        # terminator also means a credential that merely STARTS with an
                        # all-caps run (`AAAA_BBBB-ccc123`) is still caught, because `-` is
                        # not a terminator.

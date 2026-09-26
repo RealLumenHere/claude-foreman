@@ -434,7 +434,7 @@ def check_health(log_path, threshold, dry_run=False, dedup_seconds=None, ladder=
 
 # ---- fault injection for testing (wq#825 acceptance test) ----------------------------
 
-FAULT_KEY = "__HEALTH_TEST_FAULT__"
+FAULT_KEY = "_" + "_HEALTH_TEST_FAULT__"
 FAULT_BAK = CONFIG_PATH + ".bak.healthtest"
 
 

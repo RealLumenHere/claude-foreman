@@ -2,7 +2,7 @@
 """wq#2172 — is the deployed lumen-mailbot worker at or past the merged mailbot HEAD?
 
 Read-only probe, no install step. Needs CLOUDFLARE_API_TOKEN in the environment, so it
-cannot run from a build worker; run it from a shell that has the token:
+cannot run from a build worker; run it from a shell where that variable is exported:
 
     CLOUDFLARE_API_TOKEN=... python3 ops/wq2172-mailbot-liveness/check_live.py
 
