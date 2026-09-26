@@ -158,14 +158,31 @@ def _body(charset, quant, foreign=""):
     return r"(?:(?!(?-i:" + stop + r"))" + charset + r")" + quant
 # wq#2297 kv_secret label vocabulary — the copy of harness/masking.py:_KV_* that the
 # daemon needs because it runs off that import path. See there for the reasoning.
-_KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd)"
-_KV_WORD = r"[A-Za-z][A-Za-z0-9]{1,20}(?:[ _-]{1,2}|(?-i:(?=[A-Z])))"
+# wq#2806: grammar widened in lockstep with masking.py — `_pass`/`salt` nouns, the
+# hump requires a Capitalised word behind it, up to eight qualifiers, an env-identifier
+# form at floor 8, a wider body charset, `'` quotes, an XML rule. Reasoning there and
+# in ops/wq2806-config-shape-mask/DESIGN.md.
+_KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd|(?<=_)pass|salt)"
+# wq#2806: one-letter segments are fine behind `_`/`-` (`X_API_KEY`); the two-letter
+# minimum only guards the SPACE separator, where a lone letter is an English article.
+_KV_WORD = r"(?:[A-Za-z][A-Za-z0-9]{0,20}[_-]{1,2}|[A-Za-z][A-Za-z0-9]{1,20}(?: {1,2}|(?-i:(?=[A-Z][a-z]))))"
 _KV_NOT_PUBLIC = r"(?!pub(?:lic)?[ _-]{0,2}key\b)"
-_KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer)"
-_KV_LABEL = (r"(?:" + _KV_WORD + r")?" + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
+_KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer|salt)"
+_KV_DEPTH = r"{0,7}"
+_KV_LABEL = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
              + r"|" + _KV_BARE)
+_KV_ENV_LABEL = (r"(?-i:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*"
+                 r"_(?:PASSWORD|PASSWD|PASSPHRASE|PASS|SECRET|TOKEN|SALT"
+                 r"|(?:ENCRYPTION|SECRET|API|ACCESS|AUTH|PRIVATE|MASTER|SIGNING)KEY))")
 _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
-               r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
+               r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)"
+               r"(?![A-Za-z][A-Za-z0-9+.\-]*://)"
+               # shell default-expansion `${FLEET_EXEC_SSH_KEY:-/path}` reads as label +
+               # `:` + `-/path` now that labels go three deep (wq#2278 replay corpus);
+               # no credential opens with the `:-` `:=` `:+` `:?` operator character.
+               r"(?![-+?=])"
+               r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
+               r"|placeholder|xxxx+)\b)")
 # wq#2632: the call test reads the VALUE's shape, not the character after it. The
 # trailing `(?![A-Za-z0-9._-]|\()` this replaces dropped the whole match for any value
 # glued to a `(`, so an opaque credential in that shape passed the tripwire silently —
@@ -174,7 +191,8 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
 _KV_SEGMENTED = r"[A-Za-z_][A-Za-z0-9_.]*[_.][A-Za-z0-9_.]*"
 _KV_HUMPED = r"(?-i:[A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*)"
 _KV_NOT_CALLED = r"(?!(?:" + _KV_SEGMENTED + r"|" + _KV_HUMPED + r")\()"
-_KV_BODY = r"[A-Za-z0-9._-]"
+_KV_BODY = r"[A-Za-z0-9._\-+/=:!#$%^*@~]"
+_KV_SEP = r'\b["\' \t]*[:=]["\' \t]*'
 # wq#2677: masking._kv_rule and its probes, mirrored. The daemon DOES get a
 # suppressed-but-seen channel, and it is the audit line rather than a mask-hits file:
 # this copy is detect-only and fails closed, so it has no run dir to write forensics
@@ -183,23 +201,34 @@ _KV_BODY = r"[A-Za-z0-9._-]"
 # daemon has the same blind spot the harness just closed — a carve-out that goes
 # overbroad here does not merely stop paging, it stops FAILING the verb, and the
 # unmasked result rides the broker response out (wq#2632's reasoning for this copy).
-_KV_LABEL_ANY = (r"(?:" + _KV_WORD + r")?" + _KV_WORD + _KV_NOUN + r"|" + _KV_BARE)
+_KV_LABEL_ANY = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_WORD + _KV_NOUN + r"|" + _KV_BARE)
 
 
-def _kv_rule(label, guards):
+_KV_KEY_LABEL = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_NOT_PUBLIC + _KV_WORD + r"key")
+_KV_IDENT_VALUE = r"_*[a-z0-9]+(?:_[a-z0-9]+)+"
+_KV_NOT_IDENT = (r"(?!(?:" + _KV_KEY_LABEL + r")" + r'\b["\' \t]*[:=]["\' \t]*'
+                 + r"(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!#$%^*@~]))")
+
+
+def _kv_rule(label, guards, floor="{12,}", pre=""):
     # wq#2694 landed after this mirror's base: the leading boundary must accept the
     # position right after our own mask literal too (_WB), matching harness/masking.py.
-    return (_WB + r'((?:' + label + r')\b["\s]*[:=]["\s]*)' + guards
-            + _body(_KV_BODY, '{12,}'))
+    return (_WB + pre + r'((?:' + label + r')' + _KV_SEP + r')' + guards
+            + _body(_KV_BODY, floor))
 
 
-_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED),
-                        re.IGNORECASE)
+_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED,
+                                 pre=_KV_NOT_IDENT), re.IGNORECASE)
+_KV_SECRET_ENV = re.compile(_kv_rule(_KV_ENV_LABEL, _KV_POINTER + _KV_NOT_CALLED, "{8,}"))
+_XML_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd|pass|salt)"
+_XML_TAG = (r"(?:[A-Za-z0-9._\-]*[._\-])?" + _XML_NOUN + r"(?:[._\-][A-Za-z0-9._\-]*)?")
+_XML_SECRET = re.compile(r"(<" + _XML_TAG + r">)[^<\s]{8,}(?=</)", re.IGNORECASE)
 _KV_CANDIDATE = re.compile(_kv_rule(_KV_LABEL_ANY, ""), re.IGNORECASE)
 _KV_SUPPRESSIONS = (
     ("pointer", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_POINTER), re.IGNORECASE)),
     ("call", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_CALLED), re.IGNORECASE)),
     ("public-key", re.compile(_kv_rule(_KV_LABEL, ""), re.IGNORECASE)),
+    ("identifier", re.compile(_kv_rule(_KV_LABEL_ANY, "", pre=_KV_NOT_IDENT), re.IGNORECASE)),
 )
 MASK_PATTERNS = [
     ("github_token", re.compile(_B + r"(?:" + _PRE_GH + r")"
@@ -229,6 +258,8 @@ MASK_PATTERNS = [
     # does not just page: it fails the broker verb and drops the result. The daemon
     # runs as `tokeneng`, off the harness import path, so the vocabulary is copied
     # rather than imported; test_masking.test_token_engine_mirror_agrees pins them.
+    ("xml_secret", _XML_SECRET),
+    ("kv_secret", _KV_SECRET_ENV),
     ("kv_secret", _KV_SECRET),
 ]
 

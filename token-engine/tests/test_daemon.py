@@ -556,7 +556,7 @@ class GatewayKeyTest(T10Base):
 class PlugTest(T10Base):
     def setUp(self):
         super().setUp()
-        self.store("tapo.env", "TAPO_USER=u@example.com\nTAPO_PASS=plug-cred-value")
+        self.store("tapo.env", "TAPO_USER=u@example.com\nTAPO_PASS=" + "plug-cred-value")
 
     def test_kasa_gets_creds_via_env_never_argv(self):
         calls = {}

@@ -159,29 +159,82 @@ def _body(charset, quant, foreign=""):
 # wq#2297 kv-secret label vocabulary, ported from read_dir_sweep.py:38-60 (wq#2115).
 # A credential label is a NOUN, optionally qualified: `api key`, `Signing Secret`,
 # `clientSecret`. The qualifier ends in a separator or a camelCase hump.
-_KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd)"
+#
+# wq#2806: `pass` only as an IDENTIFIER segment behind `_` (`NTFY_PASS`, `WEBAPP_PASS`,
+# `TAPO_PASS` — two live agent/.env values printed in the clear under the old
+# vocabulary), never in prose or a hyphenated compound: `first pass:` has a space in
+# front, `verify-pass:` (harness/agents.yaml, a lane name) a dash, `bypass` no separator,
+# and the lookbehind refuses all three. `salt` is langfuse's API-key hashing secret (`SALT:` in its
+# compose file, 64 hex, in the clear); it is bare below because that is how it is
+# labelled, and a prose `salt:` followed by a 12-char opaque run is not a shape the
+# fleet corpus holds.
+_KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd|(?<=_)pass|salt)"
 # The hump test is case-SENSITIVE via `(?-i:)` even though the rule as a whole is
 # IGNORECASE — that asymmetry is the whole trick: it admits `apiKey:` while refusing
 # `monkey:`. Two letters minimum, since a one-letter qualifier is an English article
 # ("a key: ..." is prose, not a leak).
-_KV_WORD = r"[A-Za-z][A-Za-z0-9]{1,20}(?:[ _-]{1,2}|(?-i:(?=[A-Z])))"
+#
+# wq#2806: the hump is `(?=[A-Z][a-z])`, not `(?=[A-Z])`. A bare upper-case lookahead
+# consumes nothing, so an ALL_CAPS identifier could be split ANYWHERE: `PUBLIC_KEY`
+# read as `PUBL` + `IC_` + `KEY`, which slips past _KV_NOT_PUBLIC (it is tested at the
+# start of the LAST qualifier, and `IC_` is not `public`). The depth-2 cap hid this;
+# with deeper labels it masked `LANGFUSE_PUBLIC_KEY`, and `PUBLIC_KEY=<v>` alone
+# matched on main already. A real hump is followed by a Capitalised word (`apiKey`,
+# `clientSecret`, `APIKey`), never by another capital.
+# wq#2806: one-letter segments are fine behind `_`/`-` (`X_API_KEY`); the two-letter
+# minimum only guards the SPACE separator, where a lone letter is an English article.
+_KV_WORD = r"(?:[A-Za-z][A-Za-z0-9]{0,20}[_-]{1,2}|[A-Za-z][A-Za-z0-9]{1,20}(?: {1,2}|(?-i:(?=[A-Z][a-z]))))"
 # a public key is not a credential, and infra dirs are full of them
 _KV_NOT_PUBLIC = r"(?!pub(?:lic)?[ _-]{0,2}key\b)"
 # Nouns unambiguous enough to stand alone. `key` and `pat` are deliberately absent:
 # `key:` alone is ordinary YAML and an ordinary Python kwarg, and `PAT` alone is a
 # variable name — both need a qualifier in front to read as a credential label. The
 # `github_pat_` credential itself is caught by the dedicated github pattern above.
-_KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer)"
-_KV_LABEL = (r"(?:" + _KV_WORD + r")?" + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
+_KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer|salt)"
+# wq#2806: the label used to be `(WORD)? WORD NOUN` — at most two qualifiers — and it
+# opens on `\b`. `_` is a word character, so a label can only ever be read from its
+# FIRST segment, and a fleet identifier is 3-6 segments deep:
+# `LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY`, `MCP_PG_READER_PASSWORD`,
+# `R2_SECRET_ACCESS_KEY`, `CLAUDE_SHIM_API_KEY` — all live, all printed in the clear
+# by this rule while the cruder sed copy (unanchored on the noun) read every one of
+# them. Up to eight qualifiers now. The public-key carve-out keeps its place directly
+# before the LAST qualifier, the only position it can occupy since the noun is last,
+# so `..._PUBLIC_KEY` is refused at any depth (ops/wq2806-config-shape-mask/DESIGN.md).
+_KV_DEPTH = r"{0,7}"
+_KV_LABEL = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_NOT_PUBLIC + _KV_WORD + _KV_NOUN
              + r"|" + _KV_BARE)
 # The same label with the public-key carve-out taken back out — one of the three
 # inputs suppressions() below needs to see what this rule declined to read (wq#2677).
-_KV_LABEL_ANY = (r"(?:" + _KV_WORD + r")?" + _KV_WORD + _KV_NOUN + r"|" + _KV_BARE)
+_KV_LABEL_ANY = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_WORD + _KV_NOUN + r"|" + _KV_BARE)
+# wq#2806: an env-file identifier — ALL_CAPS, at least one `_` qualifier, ending in a
+# STRONG noun. `KEY` and `PAT` stay out (`SORT_KEY=`, `PARTITION_KEY=` are ordinary
+# config), and the whole thing is case-sensitive so no prose reaches it. This label is
+# unambiguous enough to take a floor of 8 instead of 12: `MONGO_INITDB_ROOT_PASSWORD`
+# and `WEBAPP_PASS` are 10 and 11 characters, live, and were under the general floor.
+_KV_ENV_LABEL = (r"(?-i:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*"
+                 r"_(?:PASSWORD|PASSWD|PASSPHRASE|PASS|SECRET|TOKEN|SALT"
+                 # a glued noun, ALL_CAPS so no hump can split it: Kibana's
+                 # `XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY` (dify compose, live).
+                 # Only behind a qualifier that names a credential — `HOCKEY` stays out.
+                 r"|(?:ENCRYPTION|SECRET|API|ACCESS|AUTH|PRIVATE|MASTER|SIGNING)KEY))")
 # An env-var reference or a path is a POINTER to a credential, not the credential:
 # `secret = os.environ["X"]`, `master key: /home/lumen/.ssh/id_ed25519`. Masking the
 # pointer would hide the leak path the scan record exists to show.
+# wq#2806: a URL joins the list, because `:` and `/` are now body characters and
+# `api key: https://docs.example/keys` would otherwise reach the floor.
 _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
-               r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)")
+               r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)"
+               r"(?![A-Za-z][A-Za-z0-9+.\-]*://)"
+               # a redaction or template placeholder, the set url-auth already refuses:
+               # `***REDACTED***`, `%s`, `your-token-here`, `changeme`. Two of them sat
+               # in committed diffs/digests and armed the tripwire the moment `*` joined
+               # the body charset and the env form's floor dropped to 8.
+               # shell default-expansion `${FLEET_EXEC_SSH_KEY:-/path}` reads as label +
+               # `:` + `-/path` now that labels go three deep (wq#2278 replay corpus);
+               # no credential opens with the `:-` `:=` `:+` `:?` operator character.
+               r"(?![-+?=])"
+               r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
+               r"|placeholder|xxxx+)\b)")
 # A value that is immediately CALLED is a function, not a credential. wq#2288 spelled
 # that as a trailing `(?![A-Za-z0-9._-]|\()`, which read the next character instead of
 # the value. Two consequences, both bad. The charset half was inert — the body run is
@@ -204,10 +257,39 @@ _KV_SEGMENTED = r"[A-Za-z_][A-Za-z0-9_.]*[_.][A-Za-z0-9_.]*"
 # only exists if the source really wrote `oauthToken`, not `OAUTHTOKEN`.
 _KV_HUMPED = r"(?-i:[A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*)"
 _KV_NOT_CALLED = r"(?!(?:" + _KV_SEGMENTED + r"|" + _KV_HUMPED + r")\()"
-_KV_BODY = r"[A-Za-z0-9._-]"
+# wq#2806: `[A-Za-z0-9._-]` was the charset of the TOKENS the rule was written for.
+# A fleet PASSWORD carries `+ ! # : / =` (GITEA_PASSWORD, live: the body stopped at its
+# `+` and the mask kept the 12 characters behind it; GHOST_ADMIN_KEY is `id:secret` and
+# the 64-char secret half survived whole). An explicit allow-list, still with no
+# whitespace, quote, backtick or `, ; ( ) [ ] { } < > | \ & ?`, so the delimiters of
+# JSON, YAML, shell and Python still end a value and _KV_NOT_CALLED keeps its meaning.
+_KV_BODY = r"[A-Za-z0-9._\-+/=:!#$%^*@~]"
+# wq#2806: the quote class around the separator admits `'` — `password: 'v'` is the
+# YAML style, and the old `["\s]*` never opened on it.
+# The whitespace is `[ \t]`, not `\s`: a label whose value sits on the NEXT line is a
+# YAML mapping (`verify-pass:\n    primary_tuple: ...`), and the old class read the
+# first key of that mapping as the value.
+_KV_SEP = r'\b["\' \t]*[:=]["\' \t]*'
 
 
-def _kv_rule(label, guards):
+# wq#2806: a `key`-labelled snake_case CONSTANT is an identifier, not a credential.
+# `PROBE_TICKETS_FILED_KEY = "probe_tickets_filed_x"` (a dict key name, sentinel_probes
+# .diff) reached the rule the moment labels could be read three segments deep — `key`
+# is the one noun that names a config/dict slot as often as a credential, which is why
+# it was never allowed bare. The value shape decides: all-lowercase words joined by
+# `_` with nothing else is how source names things and how no provider mints keys.
+# Guarded for `key` labels ONLY (a password may well be `my_db_pass_1`), tested from
+# the rule's START as a lookahead over label+separator+value, and recorded as
+# suppression "identifier" so an overbroad reading shows up as rows, not silence.
+_KV_KEY_LABEL = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_NOT_PUBLIC + _KV_WORD
+                 + r"key")
+_KV_IDENT_VALUE = r"_*[a-z0-9]+(?:_[a-z0-9]+)+"   # `_stale_probe_tickets` is one too
+_KV_NOT_IDENT = (r"(?!(?:" + _KV_KEY_LABEL + r")" + r'\b["\' \t]*[:=]["\' \t]*'
+                 + r"(?-i:" + _KV_IDENT_VALUE + r")(?!" + r"[A-Za-z0-9._\-+/=:!#$%^*@~]"
+                 + r"))")
+
+
+def _kv_rule(label, guards, floor="{12,}", pre=""):
     """The kv-secret rule, parameterised by which of its suppressions are in force.
 
     wq#2677: the rule and the probe that records what it suppressed are built from one
@@ -225,12 +307,31 @@ def _kv_rule(label, guards):
     (test_every_label_sees_the_real_token_not_an_earlier_mask), and a stop at
     position zero would refuse it outright, floor and all.
     """
-    return (_WB + r'((?:' + label + r')\b["\s]*[:=]["\s]*)' + guards
-            + _body(_KV_BODY, '{12,}'))
+    return (_WB + pre + r'((?:' + label + r')' + _KV_SEP + r')' + guards
+            + _body(_KV_BODY, floor))
 
 
-_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED),
-                        re.IGNORECASE)
+_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED,
+                                 pre=_KV_NOT_IDENT), re.IGNORECASE)
+# wq#2806: the env-identifier form of the same rule, floor 8 (see _KV_ENV_LABEL). It
+# shares the label string "kv-secret" the way the two github rules share theirs: one
+# alarm class, one rotation-ticket shape, one set of suppressions to reason about.
+_KV_SECRET_ENV = re.compile(_kv_rule(_KV_ENV_LABEL, _KV_POINTER + _KV_NOT_CALLED,
+                                     "{8,}"))
+# wq#2806: XML — `<password>v</password>`, ClickHouse's users.d/*.xml (the wq#2754
+# leak: cat-ing it mid-rotation printed the new password in the clear under every rule
+# above, because no `:`/`=` follows the label). The tag name carries a credential noun
+# as a segment (`<password>`, `<password_sha256_hex>`, `<access_key>`, `<api-token>`);
+# the body is XML text, so it cannot hold `<`, and it is anchored on the `</` that closes
+# it — the url-auth argument: an anchored body cannot run past its value, so it takes no
+# _body() bound, and `_matches()` screens `<password>MASKED</password>` as own output.
+_XML_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd|pass|salt)"
+_XML_TAG = (r"(?:[A-Za-z0-9._\-]*[._\-])?" + _XML_NOUN
+            + r"(?:[._\-][A-Za-z0-9._\-]*)?")
+# No leading boundary: `<` is not a word character, so `\b` can never sit in front of
+# it, and nothing that precedes a `<` can be the tail of an identifier — the `<` IS
+# the boundary, on both sides of our own mask literal (wq#2694).
+_XML_SECRET = re.compile(r"(<" + _XML_TAG + r">)[^<\s]{8,}(?=</)", re.IGNORECASE)
 # wq#2677: the same rule with EVERY suppression removed. All three — _KV_NOT_PUBLIC in
 # the label, _KV_POINTER and _KV_NOT_CALLED in front of the body — are negative
 # lookaheads, so a suppressed candidate is not a narrowed match, it is no match at all:
@@ -247,6 +348,8 @@ _KV_SUPPRESSIONS = (
     ("pointer", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_POINTER), re.IGNORECASE)),
     ("call", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_CALLED), re.IGNORECASE)),
     ("public-key", re.compile(_kv_rule(_KV_LABEL, ""), re.IGNORECASE)),
+    ("identifier", re.compile(_kv_rule(_KV_LABEL_ANY, "", pre=_KV_NOT_IDENT),
+                              re.IGNORECASE)),
 )
 SUPPRESSED_LABEL = "kv-secret"   # the only rule that carries suppressions today
 
@@ -312,6 +415,12 @@ PATTERNS = [
         # self-output body (`MASKED`) is six characters, under the floor, so only the
         # exact-output test can fire, and only on our own output. (wq#2638)
         r"[^\s/'\"`]{8,}(?=@[A-Za-z0-9\[])"), r"\1MASKED"),
+    # wq#2806: XML text bodies (see _XML_SECRET) and the env-identifier kv form, which
+    # runs BEFORE the general kv-secret so the stricter label claims the line first; a
+    # value both would read is masked once and recorded once (scan() sees `MASKED`
+    # behind the label on the second rule and _matches() screens it).
+    ("xml-secret", _XML_SECRET, r"\1MASKED"),
+    ("kv-secret", _KV_SECRET_ENV, r"\1MASKED"),
     # This one keys off an English word rather than a prefix, so it needs a different
     # boundary than `_B`. It needs a call test (wq#2288): without one,
     # `key = apply_key_allowlist(reg)` (node_render_gateway.py:418) reads as a 19-char

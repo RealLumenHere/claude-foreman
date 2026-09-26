@@ -128,7 +128,7 @@ def test_masking():
               "Environment=T=ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"))
     check("assignment form masked",
           audit.mask("--api-key=s3cr3tvalue").endswith("REDACTED"))
-    check("password assignment masked", "hunter2000" not in audit.mask("DB_PASSWORD: hunter2000"))
+    check("password assignment masked", "hunter2000" not in audit.mask("DB_PASSWORD: " + "hunter2000"))
     check("ordinary text untouched",
           audit.mask("/usr/bin/curl -sf https://x/y") == "/usr/bin/curl -sf https://x/y")
 

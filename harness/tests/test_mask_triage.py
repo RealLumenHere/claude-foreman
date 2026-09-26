@@ -297,7 +297,7 @@ def test_a_fixture_cut_from_head_is_still_accounted_by_its_own_revision(
         env, monkeypatch, capsys):
     """wq#2359: 12 of 16 values the backlog called UNACCOUNTED were this — a run read a
     worktree behind main, and the string it read had been committed and then removed."""
-    repo = commit_then_drop(env, "SECRET = '" + PLANTED + "'\n")
+    repo = commit_then_drop(env, "SECRET = \'" + "" + PLANTED + "\'\n")
     run_dir(env, 4242, "sess-1", "x = '" + PLANTED + "'\n")
     monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
     assert cli("--repo", str(repo)) == mask_triage.EXIT_CLEAN
@@ -308,7 +308,7 @@ def test_a_fixture_cut_from_head_is_still_accounted_by_its_own_revision(
 
 def test_a_value_no_revision_ever_held_still_burns(env, monkeypatch, capsys):
     """The history index is a wider excuse, so the burn path has to survive it."""
-    repo = commit_then_drop(env, "SECRET = 'unrelated-fixture-text'\n")
+    repo = commit_then_drop(env, "SECRET = \'" + "unrelated-fixture-text\'\n")
     run_dir(env, 4242, "sess-1", "remote: https://" + PLANTED + "@host/o/r.git\n")
     monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
     assert cli("--repo", str(repo)) == mask_triage.EXIT_BURN
@@ -316,7 +316,7 @@ def test_a_value_no_revision_ever_held_still_burns(env, monkeypatch, capsys):
 
 
 def test_no_history_scores_against_heads_tree_alone(env, monkeypatch):
-    repo = commit_then_drop(env, "SECRET = '" + PLANTED + "'\n")
+    repo = commit_then_drop(env, "SECRET = \'" + "" + PLANTED + "\'\n")
     run_dir(env, 4242, "sess-1", "x = '" + PLANTED + "'\n")
     monkeypatch.setattr(mask_replay, "tracked_text", lambda *a, **k: {})
     assert cli("--repo", str(repo), "--no-history") == mask_triage.EXIT_BURN
@@ -370,7 +370,7 @@ def test_a_history_index_that_swallows_the_control_fails_the_run(env, monkeypatc
 
 
 def test_history_text_reads_every_reachable_blob_and_skips_the_huge_ones(env):
-    repo = commit_then_drop(env, "SECRET = '" + PLANTED + "'\n")
+    repo = commit_then_drop(env, "SECRET = \'" + "" + PLANTED + "\'\n")
     blobs = mask_triage.history_text(str(repo))
     assert any(PLANTED in text for text in blobs.values())
     assert all(key.startswith("history:") for key in blobs)

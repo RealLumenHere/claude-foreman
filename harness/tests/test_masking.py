@@ -47,6 +47,11 @@ PW = "hunter2-hunter2-hunter2"
 URL_USER = "https://lumen:"
 URL_HOST = "@100.64.0.9%3a3000"
 URL_AUTH = URL_USER + PW + URL_HOST
+# wq#2806: XML text body, the ClickHouse users.d shape. Split at the `>` the rule
+# reads; the body cannot contain `<`, so the source line never closes the tag.
+XML_OPEN = "<password>"
+XML_CLOSE = "</password>"
+XML_LINE = XML_OPEN + PW + XML_CLOSE
 
 # wq#2292: strings that LOOK like a prefix rule but are not credentials. Each one
 # is a real shape that reached a stream and cost a pri-1 rotation ticket or a
@@ -108,6 +113,7 @@ SECRETS = [
     ("slack", f'v = "{XOXB}"'),
     ("aws", f'v = "{AKIA}"'),
     ("url-auth", URL_AUTH),
+    ("xml-secret", XML_LINE),
     ("kv-secret", KV_LINE),
 ]
 
@@ -125,13 +131,35 @@ KV_FALSE_POSITIVES = [
     f"key: {PW}",                                   # bare `key:` is ordinary YAML
     "token: os.environ.FOREMAN_GH_TOKEN",           # a pointer, not the credential
     "public key: AAAAB3NzaC1yc2EAAAADAQ",           # a public key is not a secret
+    # wq#2806: shapes the widened grammar must still refuse
+    f"LANGFUSE_PUBLIC_KEY={PW}",                    # public at any depth
+    f"PUBLIC_KEY={PW}",                             # ...and ALL_CAPS cannot hump-split
+    f"first pass: {PW}",                            # `pass` is prose here
+    f"verify-pass:\n    primary_tuple: {PW}",       # a YAML mapping, not a value
+    "api key: https://docs.example/keys/rotate",   # a URL is a pointer
+    'token: "***REDACTED-PLACEHOLDER***"',         # a redaction placeholder
+    "K3S_TOKEN=your-token-goes-here",              # a template placeholder
+    'PROBE_TICKETS_FILED_KEY = "_stale_probe_tickets_x"',   # a `key`-labelled identifier
+    'migrate "${FLEET_EXEC_SSH_KEY:-/home/lumen/.ssh/id_ed25519}" x',   # shell default expansion
+    "SORT_KEY=" + "abc123def",                     # `KEY` is not a strong noun: floor 12
 ]
 
 # and the shapes that must keep firing — a rule this narrow is only safe if it still
 # catches. Real leaks label the value with a qualified noun, in any separator style.
 KV_REAL = [f"password: {PW}", f'"api_key": "{PW}"', f"GITEA_TOKEN={PW}",
            f"Signing Secret: {PW}", f"clientSecret: {PW}", f"apiKey: {PW}",
-           f"X-Api-Key: {PW}", f"signing key = {PW}"]
+           f"X-Api-Key: {PW}", f"signing key = {PW}",
+           # wq#2806: the config-file shapes the survey found live and unmasked
+           # (ops/wq2806-config-shape-mask/DESIGN.md). Deep env identifiers,
+           f"LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: {PW}",
+           f"MCP_PG_READER_PASSWORD={PW}", f"R2_SECRET_ACCESS_KEY={PW}",
+           f"CLAUDE_SHIM_API_KEY={PW}", f"XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: {PW}",
+           # the `_PASS` and `SALT` nouns, a PascalCase hump, single quotes,
+           f"NTFY_PASS={PW}", f"SALT: {PW}", f"APIKey: {PW}", f"password: '{PW}'",
+           # punctuation a real password carries, which used to end the body early,
+           "GITEA_PASSWORD=" + "hunter2+hunter2=hunter2!", "GHOST_ADMIN_KEY=" + "0123456789ab:" + PW,
+           # and the env form's floor of 8.
+           "MONGO_INITDB_ROOT_PASSWORD: " + "hunter2000", 'WEBAPP_PASS="' + "hunter2#00" + '"']
 
 # wq#2632: the call test's own two populations, kept apart from the lists above because
 # each asserts the OPPOSITE thing about the same `(`.
@@ -316,7 +344,11 @@ ADJACENT = [
     # url-auth's value is anchored on the `@host` that follows it, so its adjacency
     # cases put the masked half INSIDE the value instead of behind it.
     ("url-auth", URL_USER, PW),
+    # xml-secret is anchored the same way, on the `</` behind its value.
+    ("xml-secret", XML_OPEN, PW),
 ]
+# a rule whose value is anchored on text it does not consume, per kept prefix
+ANCHORED_END = {URL_USER: URL_HOST, XML_OPEN: XML_CLOSE}
 
 
 def _adjacency_cases(prefix, body):
@@ -326,11 +358,14 @@ def _adjacency_cases(prefix, body):
     masker (bin/mask-secrets, token_engine_daemon.mask_rewrite) leaves behind."""
     # url-auth's value ENDS at its `@host`, so each of its values carries one: without
     # it the live half is not a url-auth credential and the case would test nothing.
-    end = URL_HOST if prefix == URL_USER else ""
+    end = ANCHORED_END.get(prefix, "")
     live = prefix + body + end
     # wq#2694: the mirror directions, masked text glued in FRONT of the live value. A
     # URL userinfo is not a prefix this module keeps, so url-auth's residue is github's.
     residue = ("ghp_" if prefix == URL_USER else prefix) + masking.MASK
+    # ...and an XML residue is a whole masked element, closing tag included.
+    if prefix == XML_OPEN:
+        residue += XML_CLOSE
     return [("own output glued to a live value", live + prefix + masking.MASK + end),
             ("bare literal glued to a live value", prefix + body + masking.MASK + end),
             ("own output glued in front of a live value", residue + live),
@@ -534,10 +569,11 @@ BODIES = [
     ("slack", "xoxb-", XOXB),
     ("aws", "AKIA", AKIA),
     ("url-auth", URL_USER, URL_USER + PW),
+    ("xml-secret", XML_OPEN, XML_OPEN + PW),
     ("kv-secret", 'TOKEN="', 'TOKEN="' + PW),
 ]
 # a rule whose match must be followed by something it does not consume
-BODY_SUFFIX = {"url-auth": URL_HOST}
+BODY_SUFFIX = {"url-auth": URL_HOST, "xml-secret": XML_CLOSE}
 
 
 def test_the_mask_keeps_the_prefix_and_no_character_of_the_body():
@@ -1534,3 +1570,42 @@ def test_a_label_the_envelope_armed_does_not_consume_the_attempts_alarm(alarms):
         {"type": "text", "text": f"password: {PW}"}]}}
     assert _screen(json.dumps(frame), alarms, alarmed=alarmed) == [["kv-secret"]]
     assert alarmed == {"kv-secret"}
+
+
+# --- wq#2806: config-file shapes ---------------------------------------------------
+
+def test_config_file_shapes_mask_whole():
+    """The survey's five defects, one line each: every value masks with no run of it
+    left behind the mask (the partial-mask class: `GITEA_PASSWORD` kept twelve
+    characters after its `+`, `GHOST_ADMIN_KEY` kept the secret half after its `:`)."""
+    for line in KV_REAL:
+        masked, hits = masking.mask_text(line)
+        value = line.split("=", 1)[-1] if "=" in line else line.split(": ", 1)[-1]
+        value = value.strip("'\"")
+        assert hits == ["kv-secret"], (line, hits)
+        assert "MASKED" in masked and value[-6:] not in masked, (line, masked)
+
+
+def test_an_xml_password_masks_and_keeps_both_tags():
+    masked, hits = masking.mask_text("<users><langfuse>" + XML_LINE + "</langfuse></users>")
+    assert hits == ["xml-secret"] and PW not in masked
+    assert masked == "<users><langfuse><password>MASKED</password></langfuse></users>"
+    # a hashed password is still a secret-bearing tag; an empty or short element is not
+    assert masking.mask_text("<password_sha256_hex>" + PW + "</password_sha256_hex>")[1]
+    assert masking.mask_text("<password></password><password>short</password>")[1] == []
+
+
+def test_a_key_labelled_identifier_is_a_recorded_suppression():
+    """wq#2806: `KEY = "snake_case_constant"` is how source names a dict slot. It is
+    refused for `key` labels only, and the refusal leaves a row (wq#2677's rule)."""
+    line = 'PROBE_TICKETS_FILED_KEY = "_stale_probe_tickets_filed"'
+    assert masking.mask_text(line) == (line, [])
+    assert [r["suppressed"] for r in masking.suppressions(line)] == ["identifier"]
+    # the same value under a strong noun is a credential
+    assert masking.mask_text('DB_PASSWORD = "' + "my_db_pass_word_1")[1] == ["kv-secret"]
+
+
+def test_the_env_form_and_the_general_form_record_one_hit():
+    _, records = masking.scan("NTFY_PASS=" + PW)
+    assert [r["label"] for r in records] == ["kv-secret"]
+    assert records[0]["value_sha256_12"] == masking.value_sha12(PW)

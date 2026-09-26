@@ -1342,12 +1342,14 @@ def test_the_live_rules_would_not_have_filed_wq2348():
 
     One of the ten still matches and always will — the joke fixture, whose whole point is
     to be credential-shaped — so what stops it is the second screen, burn_filter, which
-    pages only on a value it cannot find in a committed file."""
+    pages only on a value it cannot find in a committed file. wq#2806 added a second:
+    the daemon suite's `TAPO_PASS=` fixture, which the `_PASS` noun now reads and which
+    is likewise committed (token-engine/tests/test_daemon.py)."""
     items = mask_replay.corpus(2278)
     records = mask_replay.replay(2278, patterns=mask_replay.CURRENT_PATTERNS,
                                  items={WQ2348_TRANSCRIPT: items[WQ2348_TRANSCRIPT]})
     live = [r for r in records if r["label"] in WQ2348_LABELS]
-    assert {r["value_sha256_12"] for r in live} == {"ae71c4cdf5d7"}
+    assert {r["value_sha256_12"] for r in live} == {"ae71c4cdf5d7", "7b58e14cabd1"}
     assert all("tests/test_" in r["accounted_in"] for r in live)
     for own_output in ("cfut_" + masking.MASK, "github_pat_" + masking.MASK):
         assert masking.mask_text(own_output)[1] == []

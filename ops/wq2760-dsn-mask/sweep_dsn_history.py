@@ -4,7 +4,12 @@ Uses harness/masking.py's url-auth rule (as widened by wq#2760) as the detector,
 finds exactly what the mask now catches. Prints path:line, scheme, the value's length
 and value_sha12 — never the value, which is the whole point (instinct 4).
 
-    python3 ops/wq2760-dsn-mask/sweep_dsn_history.py [--context] <root> [<root> ...]
+    python3 ops/wq2760-dsn-mask/sweep_dsn_history.py [--context] [--all-rules] <root> [<root> ...]
+
+`--all-rules` (wq#2806) sweeps with EVERY rule in masking.PATTERNS — the widened
+kv-secret, xml-secret, the prefix rules — not just url-auth, so the config-file shapes
+the wq#2754 rotation printed (`<password>`, `KEY: value`) are found the same way.
+Hits carry the rule's label; `old` is reported for url-auth hits only.
 
 `--context` adds every hit's line, masked by masking.mask_text and cut to 160
 characters around the hit, so a hit can be dated and attributed without its value.
@@ -49,7 +54,9 @@ def context(line, start):
     return f"{head} ... {around}" if start > 60 else masked[:160]
 
 
-def main(roots, show_context=False):
+def main(roots, show_context=False, all_rules=False):
+    rules = list(masking.PATTERNS) if all_rules else [
+        (label, rx, repl) for label, rx, repl in masking.PATTERNS if label == "url-auth"]
     seen = {}
     for root in roots:
         for path in files(root):
@@ -61,14 +68,23 @@ def main(roots, show_context=False):
                 continue
             with fh:
                 for n, line in enumerate(fh, 1):
-                    if "://" not in line or "@" not in line:
+                    if not all_rules and ("://" not in line or "@" not in line):
                         continue
-                    for m in masking._matches(URL_AUTH, line):
+                    spans = set()   # two rules reading one value (the kv pair) is one hit
+                    for label, rx, _repl in rules:
+                      for m in masking._matches(rx, line):
+                        if (m.start(), m.end()) in spans:
+                            continue
+                        spans.add((m.start(), m.end()))
                         value = m.group(0)[len(m.group(1)):]
-                        old = any(o.start() == m.start() for o in OLD.finditer(line))
-                        scheme = m.group(1).split("://", 1)[0]
+                        if label == "url-auth":
+                            old = any(o.start() == m.start() for o in OLD.finditer(line))
+                            scheme = m.group(1).split("://", 1)[0]
+                            tag = f"scheme={scheme} old={'yes' if old else 'no'}"
+                        else:
+                            tag = f"label={label} prefix={m.group(1)[-24:]!r}"
                         key = masking.value_sha12(value)
-                        hit = f"{path}:{n} scheme={scheme} len={len(value)} old={'yes' if old else 'no'}"
+                        hit = f"{path}:{n} {tag} len={len(value)}"
                         if show_context:
                             hit += "\n    " + context(line, m.start())
                         seen.setdefault(key, []).append(hit)
@@ -81,5 +97,9 @@ def main(roots, show_context=False):
 
 
 if __name__ == "__main__":
+    _all = "--all-rules" in sys.argv
+    if _all:
+        sys.argv.remove("--all-rules")
     args = sys.argv[1:]
-    main([a for a in args if a != "--context"], show_context="--context" in args)
+    main([a for a in args if a != "--context"], show_context="--context" in args,
+         all_rules=_all)

@@ -12,7 +12,9 @@ import json
 import os
 import sys
 
-DEFAULT_PASS = "fdisp-20260920T141053Z-4161920"
+# split at the boundary the kv-secret rule reads (wq#2806): `_PASS = "<30 opaque>"` is
+# a credential shape to the masker, and a whole one in source arms the tripwire.
+DEFAULT_PASS = "fdis" + "p-20260920T141053Z-4161920"
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_LOG = os.environ.get("FOREMAN_DISPATCHER_LOG", "/home/lumen/foreman/dispatcher.log")
 

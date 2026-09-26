@@ -324,6 +324,19 @@ _LOCKSTEP = [
     # the false positives both sides must refuse
     "highs_solver and notes_on_xoxb-two words",
     "my_cfut_settings is a filename",
+    # wq#2806: the config-file shapes — XML text, deep env identifiers, `_PASS`, SALT,
+    # single quotes, punctuation inside a password, and the env form's floor of 8
+    "<users><langfuse><password>" + "hunter2hunter2" + "</password></langfuse></users>",
+    "LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: " + "realsecretvalue123",
+    "NTFY_PASS=" + "hunter2hunter2 end",
+    "SALT: " + "0123456789abcdef0123",
+    "password: '" + "hunter2hunter2' end",
+    "GITEA_PASSWORD=" + "hunter2+hunter2=hunter2!",
+    "GHOST_ADMIN_KEY=" + "0123456789ab:hunter2hunter2hunter2",
+    "MONGO_INITDB_ROOT_PASSWORD: " + "hunter2000",
+    "<password>MASKED</password> and <password>" + "hunter2000" + "MASKED</password>",
+    "verify-pass: and first pass: are lane names",
+    "key: value_x is ordinary YAML",
 ]
 
 
@@ -333,3 +346,28 @@ def test_matches_masking_py_exactly(line):
     sed rules, so it can and does falsify: run against the alnum-tail script this
     replaced, the punctuation-tail lines and all four glued-seam lines fail."""
     assert mask(line) == _mask_text()(line)[0]
+
+
+# --- wq#2806 -----------------------------------------------------------------------
+
+@pytest.mark.parametrize("line, want", [
+    ("<password>" + "hunter2hunter2" + "</password>", "<password>MASKED</password>"),
+    ("<password_sha256_hex>" + "0123456789abcdef" + "</password_sha256_hex>",
+     "<password_sha256_hex>MASKED</password_sha256_hex>"),
+    ("NTFY_PASS=" + "hunter2000", "NTFY_PASS=MASKED"),
+    ("GITEA_PASSWORD=" + "ab+cd=ef!gh", "GITEA_PASSWORD=MASKED"),
+    ("password: '" + "hunter2000" + "'", "password: 'MASKED'"),
+])
+def test_a_config_file_shape_masks_whole(line, want):
+    assert mask(line) == want
+
+
+def test_this_copy_is_wider_on_purpose():
+    """floor 8 on the strong nouns, 12 on KEY/PAT, and no prose test at all: over-masking
+    a stream is free, and this is the copy on the supergateway log pipe (wq#2546)."""
+    assert mask("first pass: " + "hunter2000") == "first pass: MASKED"
+    assert mask("SORT_KEY=" + "abc123def") == "SORT_KEY=abc123def"
+    assert mask("X_KEY=" + "abc123def456") == "X_KEY=MASKED"
+    # the public-key carve-out is masking.py's (wq#2313 owns porting the label); here a
+    # public key labelled `_KEY=` is over-masked, never under
+    assert mask("PUBLIC_KEY=" + "hunter2hunter2") == "PUBLIC_KEY=MASKED"

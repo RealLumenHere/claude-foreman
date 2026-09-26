@@ -69,13 +69,19 @@ KV_NOUN = r"(?:secret|token|key|credentials?|passphrase|password|passwd)"
 # which is what keeps `monkey:`/`hockey:` out while letting `apiKey:` in. Two letters
 # minimum: a one-letter qualifier is an English article, and `a key: …`/`not a token: …`
 # prose was 79 of the 93 lines this rule newly matched across the worker add-dirs.
-KV_WORD = r"[A-Za-z][A-Za-z0-9]{1,20}(?:[ _-]{1,2}|(?-i:(?=[A-Z])))"
+# wq#2806: the hump wants a Capitalised word behind it, or an ALL_CAPS label splits
+# anywhere (`PUBL` + `IC_` + `KEY` slipped past KV_NOT_PUBLIC); see harness/masking.py.
+# wq#2806: one-letter segments are fine behind `_`/`-` (`X_API_KEY`); the two-letter
+# minimum only guards the SPACE separator, where a lone letter is an English article.
+KV_WORD = r"(?:[A-Za-z][A-Za-z0-9]{0,20}[_-]{1,2}|[A-Za-z][A-Za-z0-9]{1,20}(?: {1,2}|(?-i:(?=[A-Z][a-z]))))"
 # a public key is not a credential, and infra dirs are full of them
 KV_NOT_PUBLIC = r"(?!pub(?:lic)?[ _-]{0,2}key\b)"
 # bare `key` is deliberately absent here: `key:` alone is ordinary YAML/JSON, it needs a
 # qualifier word in front of it (`api key`, `signing key`) to read as a credential label.
 KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer)"
-KV_LABEL = (r"(?:" + KV_WORD + r")?" + KV_NOT_PUBLIC + KV_WORD + KV_NOUN + r"|" + KV_BARE)
+# wq#2806: up to eight qualifiers — `\b` cannot open mid-identifier, so a two-deep cap
+# made `LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY` invisible (harness/masking.py).
+KV_LABEL = (r"(?:" + KV_WORD + r"){0,7}" + KV_NOT_PUBLIC + KV_WORD + KV_NOUN + r"|" + KV_BARE)
 # an env-var reference or a path to a key file is a POINTER to a credential, not one:
 # `secret = process.env.X`, `master key: /home/lumen/.ssh/id_ed25519`. The key file
 # itself is caught by BASENAME_GLOBS where it lives.
