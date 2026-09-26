@@ -247,6 +247,12 @@ def test_ops_install_citation_without_deploy_target_is_rejected(worktree):
     assert "deploy_target" in ac2["observed"]
 
 
+_DEPLOY_VERIFY = ("premise: re-checked lumen_state.py's lifecycle-closure bug is still "
+                  "live on the target before deploying; "
+                  "probe: dry-run diff of install.sh's cp against the live target showed "
+                  "only the intended file changing")
+
+
 def test_ops_install_citation_with_matching_deploy_target_is_accepted(worktree, tmp_path):
     art_dir = _write_ops_artifact(worktree)
     live = tmp_path / "target" / "lumen_state.py"
@@ -257,9 +263,71 @@ def test_ops_install_citation_with_matching_deploy_target_is_accepted(worktree, 
         _acceptance_doc(),
         {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
                       {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
-                       "deploy_target": str(live)}]},
+                       "deploy_target": str(live), "deploy_verify": _DEPLOY_VERIFY}]},
         str(worktree), base_ref="main")
     assert result["ok"], result["failed"]
+
+
+def test_ops_install_citation_with_self_referential_deploy_target_is_rejected(worktree):
+    """wq#2762 (ISSUE-LOG #859, closes wq#1734): pointing deploy_target at the artifact's
+    own shipped payload byte-matches itself and would pass with zero real deployment."""
+    art_dir = _write_ops_artifact(worktree)
+    self_target = art_dir / "lumen_state.py"
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                       "deploy_target": str(self_target), "deploy_verify": _DEPLOY_VERIFY}]},
+        str(worktree), base_ref="main")
+    assert not result["ok"]
+    ac2 = [f for f in result["failed"] if f["id"] == "AC2"][0]
+    assert "resolves inside" in ac2["observed"]
+
+
+def test_ops_install_citation_with_matching_deploy_target_but_no_deploy_verify_is_rejected(
+        worktree, tmp_path):
+    """wq#2762 (ISSUE-LOG #859): a byte-match alone proves delivery, not that the ticket's
+    premise still held or that the install was tried read-only first (wq#2713, wq#2472)."""
+    art_dir = _write_ops_artifact(worktree)
+    live = tmp_path / "target" / "lumen_state.py"
+    live.parent.mkdir()
+    live.write_text("# fixed lifecycle closure logic\n")
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                       "deploy_target": str(live)}]},
+        str(worktree), base_ref="main")
+    assert not result["ok"]
+    ac2 = [f for f in result["failed"] if f["id"] == "AC2"][0]
+    assert "deploy_verify" in ac2["observed"]
+
+
+@pytest.mark.parametrize("deploy_verify", [
+    "premise: checked the target is still live",  # no probe: half
+    "probe: dry-run diff came back clean",  # no premise: half
+    "verified everything works fine before deploying",  # bare non-empty string, no structure
+])
+def test_ops_install_citation_with_incomplete_deploy_verify_is_rejected(
+        worktree, tmp_path, deploy_verify):
+    """wq#2762 (ISSUE-LOG #859, per wq#2630 'a probe must be able to fail'): deploy_verify
+    is checked structurally so a bare claim can't satisfy it — both halves are required."""
+    art_dir = _write_ops_artifact(worktree)
+    live = tmp_path / "target" / "lumen_state.py"
+    live.parent.mkdir()
+    live.write_text("# fixed lifecycle closure logic\n")
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                       "deploy_target": str(live), "deploy_verify": deploy_verify}]},
+        str(worktree), base_ref="main")
+    assert not result["ok"]
+    ac2 = [f for f in result["failed"] if f["id"] == "AC2"][0]
+    assert "deploy_verify" in ac2["observed"]
 
 
 def test_ops_install_citation_with_stale_deploy_target_is_rejected(worktree, tmp_path):
@@ -647,7 +715,7 @@ def test_ops_deploy_check_replays_correctly_from_a_run_dir_evidence_file(
     acceptance.write_json(os.path.join(str(run_dir), acceptance.EVIDENCE_FILENAME), {
         "criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
-                      "deploy_target": str(live)}]})
+                      "deploy_target": str(live), "deploy_verify": _DEPLOY_VERIFY}]})
     evidence = acceptance.read_evidence(str(worktree), run_dir=str(run_dir))
     result = acceptance.verify(_acceptance_doc(), evidence, str(worktree), base_ref="main")
     assert result["ok"], result["failed"]
