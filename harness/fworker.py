@@ -181,6 +181,11 @@ LITELLM_BASE_URL = os.environ.get("FOREMAN_LITELLM_BASE_URL", "http://localhost:
 # /home/lumen/.secrets/*.token. NEVER the LiteLLM master key.
 LITELLM_KEY_FILE = os.environ.get("FOREMAN_LITELLM_KEY_FILE",
                                    "/home/lumen/.secrets/foreman-litellm.token")
+# wq#2831: Keenable.ai web-search MCP endpoint (api.keenable.ai/mcp). The key file
+# is dropped by Frank (0600, outside the repo) after he signs up for the free tier —
+# missing file means "not provisioned yet", not an error, so callers must tolerate None.
+KEENABLE_TOKEN_FILE = os.environ.get("FOREMAN_KEENABLE_TOKEN_FILE",
+                                      "/home/lumen/.secrets/keenable.token")
 # T10 (wq#2278, TOKEN_ENGINE_DESIGN.md §7 rank 5): per-ticket gateway key,
 # minted through the token-engine broker with a TTL and a budget and revoked
 # at ticket-end/daemon-start. The long-lived virtual key above becomes the
@@ -332,6 +337,16 @@ def local_rung_gate(model, archetype):
 def read_litellm_key():
     with open(LITELLM_KEY_FILE) as f:
         return f.read().strip()
+
+
+def read_keenable_key():
+    """wq#2831: None (not a raised error) when the key isn't provisioned yet, so
+    dispatch degrades to no-search rather than failing every attempt."""
+    try:
+        with open(KEENABLE_TOKEN_FILE) as f:
+            return f.read().strip() or None
+    except FileNotFoundError:
+        return None
 
 
 def mint_gateway_key(ticket_id, worker_id):
@@ -2372,6 +2387,12 @@ def build_env(worker_id, model, effort, worktree, ticket_id, cli_profile=False):
         env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
     if cli_profile:
         env.update(local_profile_env())
+    # wq#2831: KEENABLE_API_KEY backs KEENABLE_MCP_CONFIG's Authorization header;
+    # unset means the CLI's MCP handshake fails closed (no key file yet) rather than
+    # dispatching with a bad Authorization header.
+    keenable_key = read_keenable_key()
+    if keenable_key:
+        env["KEENABLE_API_KEY"] = keenable_key
     return env
 
 
@@ -2426,6 +2447,15 @@ LOCAL_CLI_FLAGS = ("--tools", LOCAL_CLI_TOOLS, "--strict-mcp-config",
 
 LOCAL_BACKGROUND_MODEL = "deepseek-v4-flash"
 
+# wq#2831: Keenable.ai web-search MCP endpoint, passed via --mcp-config rather than a
+# repo-root .mcp.json — ISSUE-LOG #862 found Write(".mcp.json") refused as a sensitive
+# file with no human to approve it in an unattended worker session. The Authorization
+# header expands ${KEENABLE_API_KEY} from the attempt env (build_env), never inlined
+# here; an unset var means the CLI no-ops the server rather than sending a bad header.
+KEENABLE_MCP_CONFIG = json.dumps({"mcpServers": {"keenable": {
+    "type": "http", "url": "https://api.keenable.ai/mcp",
+    "headers": {"Authorization": "Bearer ${KEENABLE_API_KEY}"}}}})
+
 
 def local_profile_env():
     """Env half of the local CLI profile (all measured against 2.1.276, see
@@ -2456,6 +2486,7 @@ def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=N
     for d in add_dirs:
         cmd += ["--add-dir", d]
     cmd += ["--output-format", "stream-json", "--verbose", "--include-hook-events"]
+    cmd += ["--mcp-config", KEENABLE_MCP_CONFIG]
     if local_profile:
         cmd += list(LOCAL_CLI_FLAGS)
     if resume_session:
