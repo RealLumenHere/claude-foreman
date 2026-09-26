@@ -1,6 +1,6 @@
 ## What
 
-Adds `2601_judgment_wq2568_fleet_search_web_cache_staleness.md`: the judgment on wq#2599's
+Adds `reports/2601_judgment_wq2568_fleet_search_web_cache_staleness.md`: the judgment on wq#2599's
 CONTRADICTED verify-pass verdict against wq#2568 (lumen-bin PR#134). No code changes — the
 fix itself is dispatched as wq#2603 against `/home/lumen/bin`.
 
