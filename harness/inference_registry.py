@@ -198,6 +198,8 @@ def _lint_node(name, node, fams, out):
         for key in ("prefill_tps", "decode_tps", "load_s", "unit_stop_s"):
             if m.get(key) is not None and not _num_ok(m[key]):
                 out.append(Finding("error", "schema", f"{where}: {key} must be null (unmeasured) or > 0"))
+        if "local_worker_group" in m and not isinstance(m["local_worker_group"], bool):
+            out.append(Finding("error", "schema", f"{where}: local_worker_group must be a boolean"))
         for cap, c in (m.get("capabilities") or {}).items():
             if not isinstance(c, dict) or not isinstance(c.get("trusted"), bool):
                 out.append(Finding("error", "schema", f"{where}.capabilities.{cap}: needs boolean trusted"))

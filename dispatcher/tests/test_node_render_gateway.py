@@ -106,18 +106,34 @@ def test_render_is_deterministic_and_sentinel_wrapped(reg):
 
 
 def test_render_pins_then_group_one_deployment_per_served_model(reg):
+    # wq#2796: hathor is dedicated to the judge (local_worker_group: false) and does not join
+    # the local-worker group, even though it still gets its own pin below.
     items = block_items(reg)
     assert [i["model_name"] for i in items] == [
-        "hathor-llama8b", "nephthys-qwen14b", "qwen36-local", "local-worker", "local-worker", "local-worker"]
+        "hathor-llama8b", "nephthys-qwen14b", "qwen36-local", "local-worker", "local-worker"]
     grp = [i for i in items if i["model_name"] == "local-worker"]
-    assert [i["model_info"]["id"] for i in grp] == [
-        "local-worker-hathor", "local-worker-nephthys", "local-worker-isis"]
-    hathor = grp[0]
-    assert hathor["litellm_params"]["api_base"] == "http://100.80.71.13:11434/v1"
-    assert hathor["litellm_params"]["model"] == "openai/llama3.1:8b"
-    assert hathor["litellm_params"]["max_parallel_requests"] == 2
-    assert hathor["litellm_params"]["timeout"] == 1500 + g.TIMEOUT_MARGIN_S
-    assert hathor["model_info"]["max_input_tokens"] == 32768 - g.OUTPUT_HEADROOM
+    assert [i["model_info"]["id"] for i in grp] == ["local-worker-nephthys", "local-worker-isis"]
+    nephthys = grp[0]
+    assert nephthys["litellm_params"]["api_base"] == "http://100.98.74.87:11434/v1"
+    assert nephthys["litellm_params"]["model"] == "openai/qwen3:14b"
+    assert nephthys["litellm_params"]["max_parallel_requests"] == 2
+    assert nephthys["litellm_params"]["timeout"] == 2400 + g.TIMEOUT_MARGIN_S
+    assert nephthys["model_info"]["max_input_tokens"] == 32768 - g.OUTPUT_HEADROOM
+
+
+def test_hathor_dedicated_out_of_group_but_keeps_its_pin(reg):
+    """wq#2796: batch/fworker traffic through the `local-worker` alias must not be able to land
+    on hathor's ollama slots and contend with a synchronous judge call (research/RISK_TIERED_
+    JUDGE.md §4). Falsifiable: flipping the flag back to True must restore the old 3-member group."""
+    items = block_items(reg)
+    pins = [i for i in items if i["model_name"] == "hathor-llama8b"]
+    assert len(pins) == 1  # still individually addressable, e.g. by bin/judge's JUDGE_MODEL_PIN
+    group_ids = [i["model_info"]["id"] for i in items if i["model_name"] == "local-worker"]
+    assert "local-worker-hathor" not in group_ids
+
+    reg["nodes"]["hathor"]["models"][0]["local_worker_group"] = True
+    restored = [i["model_info"]["id"] for i in block_items(reg) if i["model_name"] == "local-worker"]
+    assert "local-worker-hathor" in restored
 
 
 def test_render_carries_registry_family_options(reg):
@@ -163,7 +179,7 @@ def test_first_apply_adopts_hand_written_items_and_keeps_neighbours(reg, cfg):
     text = open(cfg).read()
     assert names(text) == [
         "gemma4-e4b-local", "hathor-llama8b", "nephthys-qwen14b", "qwen36-local",
-        "local-worker", "local-worker", "local-worker", "qwen36-live", "deepseek-v4-flash"]
+        "local-worker", "local-worker", "qwen36-live", "deepseek-v4-flash"]
     assert "hand-written, will be adopted" not in text
     assert "qwen36-live   # unowned: must survive adoption" in text
     assert yaml.safe_load(text)["litellm_settings"] == {"drop_params": True}
@@ -220,7 +236,7 @@ def test_owned_name_outside_sentinels_is_refused(reg, cfg):
 
 ADOPTED_NAMES = [
     "gemma4-e4b-local", "hathor-llama8b", "nephthys-qwen14b", "qwen36-local",
-    "local-worker", "local-worker", "local-worker", "qwen36-live", "deepseek-v4-flash"]
+    "local-worker", "local-worker", "qwen36-live", "deepseek-v4-flash"]
 
 
 def test_indented_first_apply_adopts_and_reindents_block(reg, icfg):

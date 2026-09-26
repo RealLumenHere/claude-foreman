@@ -45,7 +45,7 @@ nodes:
     tailscale_ip: 100.80.71.13
     plug_id: P3                    # fleet-inv plugs (Frank 2026-08-22: P3 is hathor's plug)
     power_policy: always-on
-    power_reason: "Frank 2026-09-20: hathor stays up while the group needs it"
+    power_reason: "Frank 2026-09-20: hathor stays up while the group needs it (wq#2796 2026-09-26: dedicated to the judge instead, still always-on)"
     cores: 12
     ram_gb: 64
     idle_watts: 86.6               # research/ISIS_POWEROFF_RCA.md:25
@@ -63,6 +63,12 @@ nodes:
         decode_tps: null
         measured_at: 2026-09-20
         load_s: null
+        # wq#2796: dedicated to the judge (research/RISK_TIERED_JUDGE.md §4) -- excluded from the
+        # `local-worker` LiteLLM least-busy group so batch/fworker traffic can't land on Hathor's
+        # 2 ollama slots and contend with a synchronous judge call. Still individually addressable
+        # as `hathor-llama8b` (bin/judge's pin) and still counted for dispatcher/models.yaml local
+        # capacity -- this flag affects target 1 (gateway model_list) only.
+        local_worker_group: false
         capabilities:
           mechanical-edit:      {trusted: true, source: declared, ref: "harness/fworker.py:160"}
           probe-build:          {trusted: true, source: declared, ref: "harness/fworker.py:160"}

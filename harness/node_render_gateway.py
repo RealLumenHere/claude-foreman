@@ -114,12 +114,16 @@ def _entry(node_name, node, m, fam, group):
 
 
 def render_litellm(reg):
-    """The sentinel-wrapped model_list items: one pin per served model, then the local-worker group."""
+    """The sentinel-wrapped model_list items: one pin per served model, then the local-worker group.
+    A model whose registry entry sets `local_worker_group: false` (wq#2796) still gets its pin but
+    is left out of the group loop, so nothing calling the `local-worker` alias can land on it."""
     served = list(_served(reg))
     lines = [BEGIN]
-    for group in (False, True):
-        for node_name, node, m, fam in served:
-            lines += _entry(node_name, node, m, fam, group)
+    for node_name, node, m, fam in served:
+        lines += _entry(node_name, node, m, fam, False)
+    for node_name, node, m, fam in served:
+        if m.get("local_worker_group", True):
+            lines += _entry(node_name, node, m, fam, True)
     lines.append(END)
     return "\n".join(lines) + "\n"
 
