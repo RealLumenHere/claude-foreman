@@ -207,7 +207,10 @@ def run_verify(node_out, node_rc=None):
                 cat "$STUB_DIR/$node.out"
             """))
         os.chmod(stub, os.stat(stub).st_mode | stat.S_IEXEC)
-        env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"], STUB_DIR=tmp)
+        # Pin the node set to the stubs this harness wrote, so the default roster in
+        # install.sh can grow (khepri, wq#2178) without every case probing a missing stub.
+        env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"], STUB_DIR=tmp,
+                   GPU_LOWPOWER_NODES=" ".join(sorted(set(node_out) | set(node_rc))))
         return subprocess.run(["bash", INSTALL, "--verify"], env=env,
                               capture_output=True, text=True)
 
@@ -257,6 +260,13 @@ class VerifyContract(unittest.TestCase):
         r = run_verify({"nephthys": node_probe()}, node_rc={"hathor": 255})
         self.assertEqual(r.returncode, 2, r.stdout)
         self.assertIn("ERR cannot probe hathor", r.stdout)
+
+    def test_default_nodes_cover_every_bundle_host(self):
+        # wq#2178: khepri got the bundle; ops-deploy-drift only alarms on the default set.
+        with open(INSTALL) as fh:
+            line = next(l for l in fh if l.startswith("NODES="))
+        for node in ("hathor", "nephthys", "khepri"):
+            self.assertIn(node, line)
 
     def test_verify_marker_is_present_for_the_drift_sweep(self):
         with open(INSTALL) as fh:

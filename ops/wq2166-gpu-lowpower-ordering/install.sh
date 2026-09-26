@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wq#2166 — gpu-lowpower ordering fix for the dual-D300 Mac Pro nodes (hathor, nephthys).
+# wq#2166 — gpu-lowpower ordering fix for the dual-GPU Mac Pro nodes (hathor, nephthys, khepri).
 #
 #   install.sh --verify   read-only, from Lumen: are the nodes actually at dpm=low, and
 #                         do the installed files byte-match this bundle?
@@ -13,7 +13,7 @@
 # RUNBOOK.md for the two-command apply.
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
-NODES="${GPU_LOWPOWER_NODES:-hathor nephthys}"
+NODES="${GPU_LOWPOWER_NODES:-hathor nephthys khepri}"  # khepri added wq#2178 (wq#2180: bundle before any serving role)
 EXPECTED_CARDS="${EXPECTED_CARDS:-2}"
 
 SH_DST=/usr/local/sbin/gpu-lowpower.sh
