@@ -1233,20 +1233,25 @@ def landing_repo_hint(ticket):
     if os.environ.get("FOREMAN_LANDING_REPO_DISABLE") == "1":
         return None
     repos = sorted(repo_sweep.managed_repos(), key=len, reverse=True)
+    found = []
     for m in _LANDING_REPO_RE.finditer(ticket.get("detail") or ""):
         target = m.group("target").rstrip(".")  # sentence-final period is not path
         if not target:
             continue
+        hit = None
         if os.path.isabs(target):
             p = os.path.normpath(target)
-            for repo in repos:
-                if p == repo or p.startswith(repo + "/"):
-                    return repo
+            hit = next((r for r in repos if p == r or p.startswith(r + "/")), None)
         else:
             named = [r for r in repos if os.path.basename(r) == target]
             if len(named) == 1:
-                return named[0]
-    return None
+                hit = named[0]
+        if hit and hit not in found:
+            found.append(hit)
+    # A detail that quotes another ticket's landing sentence (wq#2753's own detail
+    # quotes wq#2624's 'against /home/lumen/bin' and then says 'on foreman') names
+    # two repos. First-match picked the quoted one; two distinct targets = no hint.
+    return found[0] if len(found) == 1 else None
 
 
 def repo_for_ticket(ticket_id_or_dict):

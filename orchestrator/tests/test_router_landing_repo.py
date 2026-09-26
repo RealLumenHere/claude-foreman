@@ -77,3 +77,16 @@ def test_needs_and_deliverable_hints_still_outrank_the_landing_phrase():
     tk = t(detail="Deliverable: /home/lumen/pokemon/tool.py\n"
                   "Lands via lumen-pr against /home/lumen/bin.")
     assert router.repo_for_ticket(tk) == "/home/lumen/pokemon"
+
+
+def test_quoted_other_ticket_landing_is_ambiguous_not_first_match():
+    # wq#2753's own detail: quotes wq#2624's sentence, then names its own repo
+    tk = t(lane="build", detail="wq#2624's ticket said 'lands via lumen-pr against "
+           "/home/lumen/bin' but ran in foreman. Land via lumen-pr on foreman "
+           "(dispatcher/foreman_dispatcher.py + harness/acceptance.py).")
+    assert router.landing_repo_hint(tk) is None
+
+
+def test_same_repo_named_twice_still_resolves():
+    tk = t(detail="Lands via lumen-pr against /home/lumen/bin/x. Then land via lumen-pr on bin.")
+    assert router.landing_repo_hint(tk) == BIN
