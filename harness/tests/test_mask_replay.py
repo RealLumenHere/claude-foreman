@@ -1873,7 +1873,8 @@ def test_wq2687_pins_are_their_hashes_and_read_silently():
     assert masking.mask_text(text)[1] == []
 
 
-def _assert_corpus_pinned(ticket_id, fixture_path, records_pin, fixture_shas):
+def _assert_corpus_pinned(ticket_id, fixture_path, records_pin, fixture_shas,
+                          patterns=None):
     """wq#2765 (wq#2755's shape): the pin is a hash SET, not a count or a path.
 
     Both `test_wq*_corpus_burned_nothing` pins score the live run dir and the live
@@ -1885,12 +1886,15 @@ def _assert_corpus_pinned(ticket_id, fixture_path, records_pin, fixture_shas):
     run saw has not silently left it), nothing is unaccounted, and with the fixture
     module removed whatever comes loose is a subset of what it pins — which it must
     explain on its own, so a second copy elsewhere in the tree changes nothing.
+    `patterns` is the table the run is scored under: None (legacy) for a run before
+    LEGACY_CUTOFF_ISO, CURRENT_PATTERNS for one after it (wq#2795).
     """
     items = mask_replay.corpus(ticket_id)
     tracked = _tree_only()
     for common in mask_replay.foreign_repos(items):
         tracked.update(mask_replay.committed_text(common))
-    records = mask_replay.replay(ticket_id, tracked=tracked, items=items, rotated={})
+    records = mask_replay.replay(ticket_id, patterns=patterns, tracked=tracked,
+                                 items=items, rotated={})
     shas = {r["value_sha256_12"] for r in records}
     assert records_pin <= shas, sorted(records_pin - shas)
     assert fixture_shas <= shas, sorted(fixture_shas - shas)
@@ -1899,7 +1903,8 @@ def _assert_corpus_pinned(ticket_id, fixture_path, records_pin, fixture_shas):
     rel = os.path.relpath(fixture_path, mask_replay.REPO_ROOT)
     fixture_text = tracked.pop(rel)
     loose = mask_replay.unaccounted(
-        mask_replay.replay(ticket_id, tracked=tracked, items=items, rotated={}))
+        mask_replay.replay(ticket_id, patterns=patterns, tracked=tracked, items=items,
+                           rotated={}))
     loose_shas = {r["value_sha256_12"] for r in loose}
     assert loose_shas <= fixture_shas, sorted(loose_shas - fixture_shas)
     return records, {rel: fixture_text}
@@ -1958,5 +1963,37 @@ def test_wq2702_corpus_burned_nothing():
     values = scope["WQ2702_VALUES"]
     _, fixture = _assert_corpus_pinned(2702, WQ2702_FIXTURES, scope["WQ2702_RECORDS"],
                                        {v[0] for v in values})
+    for sha, _label, value in values:
+        assert mask_replay.account(value, fixture), sha
+
+
+WQ2720_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2720")
+WQ2720_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2720_values.py")
+
+
+def test_wq2720_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ2720_FIXTURES)
+    values = scope["WQ2720_VALUES"]
+    assert len(values) == 1
+    for sha, _label, value in values:
+        assert masking.value_sha12(value) == sha
+    assert masking.mask_text(text)[1] == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2720_RUN),
+                    reason="wq#2720's run dir is not on this host")
+def test_wq2720_corpus_burned_nothing():
+    """wq#2795's verdict, pinned: none of the values a credential, nothing rotated.
+
+    wq#2720 started after the legacy cutoff, so it replays under today's table. The one
+    value the replay called BURNED? is a probe wq#2720 typed into its own command; see
+    the fixture module's header, which must explain it by itself.
+    """
+    _, scope = _load_fixture_module(WQ2720_FIXTURES)
+    values = scope["WQ2720_VALUES"]
+    fixture_shas = {v[0] for v in values}
+    _, fixture = _assert_corpus_pinned(2720, WQ2720_FIXTURES, scope["WQ2720_RECORDS"],
+                                       fixture_shas,
+                                       patterns=mask_replay.CURRENT_PATTERNS)
     for sha, _label, value in values:
         assert mask_replay.account(value, fixture), sha

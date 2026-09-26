@@ -73,6 +73,12 @@ RULES:
   brace next to a quote ("contains brace with quote character (expansion obfuscation)")
   and that refusal is not retryable; the safety gate also reads heredoc text as commands
   (wq#2138). Bash is for running things, not for authoring files.
+- Never type a whole credential-shaped literal (`TOKEN: <body>`, `AKIA…`, `ghp_…`,
+  `sk-ant-…`) into a command or file, not even an obvious dummy for a masking probe: the
+  tripwire cannot tell your dummy from a leak, and each one files a pri-1 rotation row
+  (wq#2795: a `TOKEN: AKIA<lowercase>1234` probe in `python3 -c`). Split it at the prefix
+  seam (`"AKI" "A..."`, `"gh" "p_..."`) or build it at runtime (`"Q" * 16`), and reuse
+  a committed fixture where one exists.
 - Bash output is capped at 2000 characters per result (wq#954) and the tail is dropped —
   tool results are ~40-50% of a session's cost. Narrow commands yourself with
   `head`/`tail`/`grep -n` instead of dumping everything; stderr counts toward the same
