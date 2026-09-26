@@ -22,3 +22,31 @@ WQ2687_VALUES = (
     ("2706fe11e718", "sk-key", "-cf" "ut-kv-secr-a1"),
     ("97f01d9ff3e2", "sk-key", "-cf" "ut-kv-secr-a2"),
 )
+
+# wq#2765: two more values the wq#2740 rule (cab2c41: a body under the floor accounts
+# only with its prefix in front) brought back as BURNED?: ordinary words the fworker's
+# own PR body wrote right after the label's prefix — `cfut` + `-prefix` and `cfut_` +
+# `-style` — which a bare-body lookup had cleared by coincidence. Rows are
+# (sha256[:12] of the body, label, prefix, prefix+body); the string is split one
+# character into the prefix so reading this file pages nothing, and the seam-closed
+# view mask_replay.account reads makes the pair whole again.
+WQ2687_PROSE = (
+    ("333aa9c1f664", "cloudflare", "cfut", "cf" "ut-prefix"),
+    ("131a95eb6af8", "cloudflare", "cfut_", "cf" "ut_-style"),
+)
+
+# wq#2765: every (hash-only) record the replay reproduces from wq#2687's faithful
+# artefacts — the 44 the wq#2701 verdict counted plus attempt 3's (20:32-20:37Z, after
+# the count was pinned at b28a936 18:59Z). test_wq2687_corpus_burned_nothing asserts
+# containment, not a count: a new artefact may ADD a record (it is caught by
+# `unaccounted` if it matters), but none of these may leave.
+WQ2687_RECORDS = frozenset((
+    "012d7baf3dee", "077e211841b8", "131a95eb6af8", "1fc04aae4c07", "1fd882463874", "20227a136ec3",
+    "20227a136ec3", "21e60eb807e5", "2706fe11e718", "2b7631697dda", "333aa9c1f664", "34e1b54e5c8c",
+    "38de98f38239", "3c1c495ff227", "416784616b2f", "41a7ba8ea8a1", "4634d1ff2af5", "4788ae148eb0",
+    "4a20506e0864", "57f614878f60", "6711a24c460a", "6fbcdb8df881", "73b942907b52", "76880d60191a",
+    "7f45a25d5811", "81220b6ada8d", "8f4f46e5efef", "97f01d9ff3e2", "a32aebae4867", "a3a2ea7af7a6",
+    "a4bc51f68eca", "a745825001bc", "ad1416ae1ef9", "b8789db0c2da", "b8b2abf0547b", "c775e7b757ed",
+    "c8c07793d6f8", "cdd92de0ef4c", "cde0fb0dec14", "dd65eea0329d", "de20960ffcae", "eb522505a0e3",
+    "f0ff05bc0020", "f39dac6cbaba", "f50f2d7b79dd", "ff1fd85b7adb", "ffa2b4e40c8d",
+))

@@ -643,8 +643,31 @@ def test_the_live_rules_would_not_have_filed_wq2307():
     assert mask_replay.unaccounted(records) == []
     assert len(records) < 13
     # what still matches is synthetic fixture text, which is burn_filter's screen
-    assert all("tests/test_" in r["accounted_in"]
-               for r in records if r["label"] == "kv-secret")
+    _assert_kv_hits_are_test_fixtures(2288)
+
+
+def _tests_only(tracked=None):
+    """The committed tree narrowed to test modules, for a pin whose claim is "a test
+    fixture explains this" rather than "something in the tree does".
+
+    wq#2765: `account` returns the FIRST tracked file holding a value, in `git
+    ls-files` order, so a landed report that quotes a dummy (6778336 put
+    2667_verify_wq2630_judgment_wq2290_closure.md at the repo ROOT, which sorts ahead
+    of harness/) wins the lookup and `"tests/test_" in accounted_in` starts scoring a
+    race. Scored against the test files alone the verdict is the same and stronger:
+    the fixture explains the value whatever else in the tree also does.
+    """
+    tracked = mask_replay.tracked_text() if tracked is None else tracked
+    return {path: text for path, text in tracked.items() if "tests/test_" in path}
+
+
+def _assert_kv_hits_are_test_fixtures(ticket_id):
+    records = mask_replay.replay(ticket_id, patterns=mask_replay.CURRENT_PATTERNS,
+                                 tracked=_tests_only())
+    kv = [r for r in records if r["label"] == "kv-secret"]
+    assert kv, "the fixture text should still reproduce the kv-secret hit"
+    for r in kv:
+        assert r["accounted_in"] and "tests/test_" in r["accounted_in"], r
 
 
 @pytest.mark.skipif(not os.path.isdir(WQ2299_RUN),
@@ -859,7 +882,7 @@ def test_the_live_rules_would_not_have_filed_wq2336():
     kv = {r["value_sha256_12"]: r for r in records if r["label"] == "kv-secret"}
     assert "2c9e04df04aa" not in kv
     # what still matches is synthetic fixture text, which is burn_filter's screen
-    assert all("tests/test_" in r["accounted_in"] for r in kv.values())
+    _assert_kv_hits_are_test_fixtures(2300)
 
 
 # The one `kv-secret` value wq#1819 attempt 8 put in front of its model. Unlike every
@@ -1042,6 +1065,15 @@ WQ2278_BRANCH_FIXTURES = {
     "840881e18cbe": "token-engine/tests/test_daemon.py",
     "78a2d56fb7d2": "harness/tests/test_gateway_key_per_ticket.py",
     "df9937e539d8": "harness/tests/test_gateway_key_per_ticket.py",
+    # wq#2765 (ISSUE-LOG row 787, root cause): the branch's MINTED/STATIC gateway-key
+    # dummies (test_gateway_key_per_ticket.py:23-24, whole on the branch, landed on
+    # main renamed `-dummy` in ef8f568), cut by the LEGACY sk-key rule at `sk-<letters
+    # and dashes>` so what it reports is the 16-char tail of each. wq#2423 (34d1529)
+    # stopped excusing them as a retired rule — today's table recuts the same span
+    # into a value main does not hold either — so they surfaced as loose, and the
+    # only committed copy is the branch's, which is what this map is for.
+    "3a455b3d761c": "harness/tests/test_gateway_key_per_ticket.py",
+    "27ca921139e8": "harness/tests/test_gateway_key_per_ticket.py",
 }
 
 
@@ -1815,47 +1847,84 @@ WQ2687_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2687")
 WQ2687_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2687_values.py")
 
 
-def _wq2687_values():
-    with open(WQ2687_FIXTURES) as fh:
+def _load_fixture_module(path):
+    with open(path) as fh:
         text = fh.read()
     scope = {}
-    exec(compile(text, WQ2687_FIXTURES, "exec"), scope)
+    exec(compile(text, path, "exec"), scope)
+    return text, scope
+
+
+def _wq2687_values():
+    text, scope = _load_fixture_module(WQ2687_FIXTURES)
     return text, scope["WQ2687_VALUES"]
 
 
 def test_wq2687_pins_are_their_hashes_and_read_silently():
     """The pins name the values they claim to, and reading the file pages nothing."""
-    text, values = _wq2687_values()
-    assert len(values) == 12
+    text, scope = _load_fixture_module(WQ2687_FIXTURES)
+    values, prose = scope["WQ2687_VALUES"], scope["WQ2687_PROSE"]
+    assert len(values) == 12 and len(prose) == 2
     for sha, _label, value in values:
         assert masking.value_sha12(value) == sha
+    for sha, _label, prefix, whole in prose:
+        assert whole.startswith(prefix)
+        assert masking.value_sha12(whole[len(prefix):]) == sha
     assert masking.mask_text(text)[1] == []
+
+
+def _assert_corpus_pinned(ticket_id, fixture_path, records_pin, fixture_shas):
+    """wq#2765 (wq#2755's shape): the pin is a hash SET, not a count or a path.
+
+    Both `test_wq*_corpus_burned_nothing` pins score the live run dir and the live
+    tree, and both moved with no code change: wq#2687's attempt 3 ran after its count
+    was pinned (44 -> 47), and a second committed copy of wq#2702's dummy (d38a94d)
+    meant popping the fixture module brought nothing back. Each drift erased the one
+    signal the test carries, so the assertions are now the ones a new artefact
+    cannot move: every pinned record is still reproduced from the corpus (a value the
+    run saw has not silently left it), nothing is unaccounted, and with the fixture
+    module removed whatever comes loose is a subset of what it pins — which it must
+    explain on its own, so a second copy elsewhere in the tree changes nothing.
+    """
+    items = mask_replay.corpus(ticket_id)
+    tracked = _tree_only()
+    for common in mask_replay.foreign_repos(items):
+        tracked.update(mask_replay.committed_text(common))
+    records = mask_replay.replay(ticket_id, tracked=tracked, items=items, rotated={})
+    shas = {r["value_sha256_12"] for r in records}
+    assert records_pin <= shas, sorted(records_pin - shas)
+    assert fixture_shas <= shas, sorted(fixture_shas - shas)
+    assert mask_replay.unaccounted(records) == []
+
+    rel = os.path.relpath(fixture_path, mask_replay.REPO_ROOT)
+    fixture_text = tracked.pop(rel)
+    loose = mask_replay.unaccounted(
+        mask_replay.replay(ticket_id, tracked=tracked, items=items, rotated={}))
+    loose_shas = {r["value_sha256_12"] for r in loose}
+    assert loose_shas <= fixture_shas, sorted(loose_shas - fixture_shas)
+    return records, {rel: fixture_text}
 
 
 @pytest.mark.skipif(not os.path.isdir(WQ2687_RUN),
                     reason="wq#2687's run dir is not on this host")
 def test_wq2687_corpus_burned_nothing():
-    """wq#2701's verdict, pinned: 44 values, none a credential, nothing rotated.
+    """wq#2701's verdict, pinned: none of the values a credential, nothing rotated.
 
     The row's own two kv-secret values (set d68eb822ead9) were already settled — one
     tracked, one rule-fixed. The twelve the replay still called BURNED? are wq#2687's
-    unlanded fixtures, its branch name and two sequential `sed` probes; see the
-    fixture module's header. Removing it must bring exactly those twelve back.
+    unlanded fixtures, its branch name and two sequential `sed` probes, and two more
+    are prose words glued to a prefix; see the fixture module's header. The module
+    must explain each of them by itself (see _assert_corpus_pinned).
     """
-    _, values = _wq2687_values()
-    items = mask_replay.corpus(2687)
-    tracked = _tree_only()
-    for common in mask_replay.foreign_repos(items):
-        tracked.update(mask_replay.committed_text(common))
-    records = mask_replay.replay(2687, tracked=tracked, items=items, rotated={})
-    assert len(records) == 44
-    assert mask_replay.unaccounted(records) == []
-
-    rel = os.path.relpath(WQ2687_FIXTURES, mask_replay.REPO_ROOT)
-    tracked.pop(rel)
-    loose = mask_replay.unaccounted(
-        mask_replay.replay(2687, tracked=tracked, items=items, rotated={}))
-    assert sorted(r["value_sha256_12"] for r in loose) == sorted(v[0] for v in values)
+    _, scope = _load_fixture_module(WQ2687_FIXTURES)
+    values, prose = scope["WQ2687_VALUES"], scope["WQ2687_PROSE"]
+    fixture_shas = {v[0] for v in values} | {p[0] for p in prose}
+    _, fixture = _assert_corpus_pinned(2687, WQ2687_FIXTURES,
+                                       scope["WQ2687_RECORDS"], fixture_shas)
+    for sha, _label, value in values:
+        assert mask_replay.account(value, fixture), sha
+    for sha, _label, prefix, whole in prose:
+        assert mask_replay.account(whole[len(prefix):], fixture, prefix), sha
 
 
 WQ2702_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2702")
@@ -1863,10 +1932,7 @@ WQ2702_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2702_va
 
 
 def _wq2702_values():
-    with open(WQ2702_FIXTURES) as fh:
-        text = fh.read()
-    scope = {}
-    exec(compile(text, WQ2702_FIXTURES, "exec"), scope)
+    text, scope = _load_fixture_module(WQ2702_FIXTURES)
     return text, scope["WQ2702_VALUES"]
 
 
@@ -1881,22 +1947,16 @@ def test_wq2702_pins_are_their_hashes_and_read_silently():
 @pytest.mark.skipif(not os.path.isdir(WQ2702_RUN),
                     reason="wq#2702's run dir is not on this host")
 def test_wq2702_corpus_burned_nothing():
-    """wq#2706's verdict, pinned: 22 values, none a credential, nothing rotated.
+    """wq#2706's verdict, pinned: none of the values a credential, nothing rotated.
 
     The one the replay called BURNED? is a probe wq#2702 typed into its own Write; see
-    the fixture module's header. Removing it must bring exactly that one back.
+    the fixture module's header. The module must explain it by itself — test_masking.py
+    has quoted the same glue since d38a94d, which is why "removing the module brings
+    it back" stopped being true (see _assert_corpus_pinned).
     """
-    _, values = _wq2702_values()
-    items = mask_replay.corpus(2702)
-    tracked = _tree_only()
-    for common in mask_replay.foreign_repos(items):
-        tracked.update(mask_replay.committed_text(common))
-    records = mask_replay.replay(2702, tracked=tracked, items=items, rotated={})
-    assert len(records) == 22
-    assert mask_replay.unaccounted(records) == []
-
-    rel = os.path.relpath(WQ2702_FIXTURES, mask_replay.REPO_ROOT)
-    tracked.pop(rel)
-    loose = mask_replay.unaccounted(
-        mask_replay.replay(2702, tracked=tracked, items=items, rotated={}))
-    assert sorted(r["value_sha256_12"] for r in loose) == sorted(v[0] for v in values)
+    _, scope = _load_fixture_module(WQ2702_FIXTURES)
+    values = scope["WQ2702_VALUES"]
+    _, fixture = _assert_corpus_pinned(2702, WQ2702_FIXTURES, scope["WQ2702_RECORDS"],
+                                       {v[0] for v in values})
+    for sha, _label, value in values:
+        assert mask_replay.account(value, fixture), sha
