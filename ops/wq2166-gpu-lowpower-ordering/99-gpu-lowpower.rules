@@ -7,6 +7,16 @@
 # 18.2s / 19.2s: the unit lost the race by 0.4s and 1.3s. Nothing about the ordering
 # ever guaranteed the cards existed — the old boot was just slow.
 #
-# TAG+="systemd" makes systemd track the card as sys-subsystem-drm-devices-cardN.device;
-# SYSTEMD_WANTS then pulls in the per-card instance, which is ordered After= that device.
-ACTION=="add", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="amdgpu", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gpu-lowpower@%k.service"
+# TAG+="systemd" makes systemd track the card; SYSTEMD_WANTS then pulls in the
+# per-card instance, which is ordered After= that device.
+#
+# wq#2178 (found on hathor before first apply):
+#   * DEVTYPE=="drm_minor" is required. KERNEL=="card[0-9]*" also matches the connector
+#     nodes (card1-DP-1 .. card2-DP-12 on a D300 pair, DEVTYPE=drm_connector), and
+#     DRIVERS=="amdgpu" still matches them through the parent walk. Without this every
+#     boot starts one instance per connector, none of which can find the dpm knob.
+#   * SYSTEMD_ALIAS is required. /usr/lib/udev/rules.d/99-systemd.rules only creates
+#     sys-subsystem-*-devices-* aliases for net and bluetooth, so the
+#     sys-subsystem-drm-devices-%i.device that gpu-lowpower@.service BindsTo= never
+#     existed; each instance would wait out the device job timeout and fail.
+ACTION=="add", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ENV{DEVTYPE}=="drm_minor", DRIVERS=="amdgpu", TAG+="systemd", ENV{SYSTEMD_ALIAS}+="/sys/subsystem/drm/devices/%k", ENV{SYSTEMD_WANTS}+="gpu-lowpower@%k.service"

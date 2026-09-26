@@ -266,5 +266,32 @@ class VerifyContract(unittest.TestCase):
                         "--verify handler must precede every install step")
 
 
+class UdevRuleContract(unittest.TestCase):
+    """wq#2178: two rule defects found on hathor before the first apply.
+
+    hathor exposes card1, card2 AND twelve connector nodes card1-DP-1 .. card2-DP-12
+    (DEVTYPE=drm_connector) that also match KERNEL=="card[0-9]*" and DRIVERS=="amdgpu".
+    And 99-systemd.rules only aliases sys-subsystem-{net,bluetooth}-devices-*, so the
+    BindsTo= target in gpu-lowpower@.service must be created by this rule or it never exists.
+    """
+
+    def setUp(self):
+        with open(os.path.join(BUNDLE, "99-gpu-lowpower.rules")) as fh:
+            self.rules = [l for l in fh.read().splitlines()
+                          if l.strip() and not l.lstrip().startswith("#")]
+        with open(os.path.join(BUNDLE, "gpu-lowpower@.service")) as fh:
+            self.tmpl = fh.read()
+
+    def test_single_rule(self):
+        self.assertEqual(len(self.rules), 1, self.rules)
+
+    def test_rule_excludes_connectors(self):
+        self.assertIn('ENV{DEVTYPE}=="drm_minor"', self.rules[0])
+
+    def test_rule_creates_the_device_the_template_binds_to(self):
+        self.assertIn("BindsTo=sys-subsystem-drm-devices-%i.device", self.tmpl)
+        self.assertIn('ENV{SYSTEMD_ALIAS}+="/sys/subsystem/drm/devices/%k"', self.rules[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2, argv=[sys.argv[0], *sys.argv[1:]])
