@@ -1213,16 +1213,54 @@ def deliverable_repo_hint(ticket):
     return None
 
 
+# wq#2753 (ISSUE-LOG #728; 4th of the #33/#125/#192 class): wq#2624's detail said
+# "Lands via lumen-pr against /home/lumen/bin." — the natural phrasing tickets use for
+# their landing repo — but no hint parsed it, so lane 'auto' fell through and the ticket
+# dispatched into a foreman worktree whose evidence gate could never verify a lumen-bin
+# citation. Same trust rule as deliverable_repo_hint: a path must sit inside a managed
+# repo; a bare name ("foreman", "bin") resolves only when it matches the basename of
+# exactly one managed repo. Only the instruction-shaped forms match — past-tense
+# "landed via lumen-pr ..." is a ticket narrating history, not naming its own target.
+# FOREMAN_LANDING_REPO_DISABLE=1 turns it off.
+_LANDING_REPO_RE = re.compile(
+    r"(?i)\bland(?:s|ing)?\s+via\s+lumen-pr\s+(?:against|on|to|in)\s+"
+    r"`?(?P<target>/?[\w.@+-]+(?:/[\w.@+-]+)*)`?")
+
+
+def landing_repo_hint(ticket):
+    """The managed repo a 'land(s) via lumen-pr against/on <target>' sentence in the
+    ticket's detail names, or None (never a guess)."""
+    if os.environ.get("FOREMAN_LANDING_REPO_DISABLE") == "1":
+        return None
+    repos = sorted(repo_sweep.managed_repos(), key=len, reverse=True)
+    for m in _LANDING_REPO_RE.finditer(ticket.get("detail") or ""):
+        target = m.group("target").rstrip(".")  # sentence-final period is not path
+        if not target:
+            continue
+        if os.path.isabs(target):
+            p = os.path.normpath(target)
+            for repo in repos:
+                if p == repo or p.startswith(repo + "/"):
+                    return repo
+        else:
+            named = [r for r in repos if os.path.basename(r) == target]
+            if len(named) == 1:
+                return named[0]
+    return None
+
+
 def repo_for_ticket(ticket_id_or_dict):
     """The one resolver shared by dispatch_cmd and foreman_dispatcher._do_pass (wq#1123):
     a lane/title repo disagreement refuses outright (wq#433 — see repo_mismatch; a
     needs tag never papers over a mis-laned ticket, §5.2), then the ticket's own
     needs:repo tag (wq#1331 — the per-ticket override, ahead of every derived source),
-    then the repo holding the ticket's named deliverable (wq#1446), then the verify-pass repo hint (wq#1220 — a verify ticket's own lane is a static
-    policy default, not the repo it needs to verify), then LANE_REPO, then — for lanes
-    LANE_REPO doesn't cover (e.g. 'auto') — the exact repo a repo-sweep ticket wrote
-    into its own detail (repo_sweep.repo_hint). Returns None (never a guess) if none
-    resolve.
+    then the repo holding the ticket's named deliverable (wq#1446), then the repo a
+    'lands via lumen-pr against/on ...' sentence in the detail names (wq#2753), then the verify-pass repo hint (wq#1220 — a verify ticket's own lane is a static
+    policy default, not the repo it needs to verify), then the exact repo a repo-sweep
+    ticket wrote into its own detail (repo_sweep.repo_hint — per-ticket data, so ahead
+    of the lane default since wq#2753; 1eb5c48 mapping 'auto' into LANE_REPO had put
+    the foreman default in front of it), then LANE_REPO. Returns None (never a guess)
+    if none resolve.
 
     Accepts either a ticket id (does the wq_show lookup itself) or an already-fetched
     ticket dict, so a caller that already has the ticket doesn't pay for a second show."""
@@ -1235,13 +1273,19 @@ def repo_for_ticket(ticket_id_or_dict):
     repo = deliverable_repo_hint(t)
     if repo:
         return repo
+    repo = landing_repo_hint(t)
+    if repo:
+        return repo
     repo = verify_repo_hint(t.get("title", ""), t.get("detail", ""))
     if repo:
         return repo
-    repo = repo_for_lane(t.get("lane"))
+    # wq#2753: the sweep's own per-ticket repo (wq#1094) must outrank the lane default —
+    # 1eb5c48 (wq#2103) mapped 'auto' into LANE_REPO, which silently rerouted every
+    # [repo-sweep] auto-lane ticket to foreman regardless of the repo the sweep named.
+    repo = repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
     if repo:
         return repo
-    return repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
+    return repo_for_lane(t.get("lane"))
 
 
 def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None, model_override=None):

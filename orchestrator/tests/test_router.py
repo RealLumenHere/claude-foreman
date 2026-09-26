@@ -555,14 +555,16 @@ def test_lane_repo_nest_points_at_firmware_repo_not_archive_dir():
 # wq#830: 'auto' is wq's CLI default lane and spans arbitrary repos (wq#688 questfree,
 # wq#306 vault, wq#545 wq-tooling), so it must not resolve to FOREMAN_ROOT. Dispatching an
 # auto ticket without --repo has to fail loudly, not hand fworker the wrong tree.
-def test_auto_lane_has_no_canonical_repo():
-    assert router.repo_for_lane("auto") is None
+def test_auto_lane_defaults_to_foreman():
+    # 1eb5c48 (wq#2103): auto-lane infra lands in foreman, like fleet/ops — but only
+    # as the LAST resort; every per-ticket hint outranks it (wq#2753).
+    assert router.repo_for_lane("auto") == router.FOREMAN_ROOT
 
 
-def test_dispatch_cmd_auto_lane_without_repo_raises(monkeypatch):
+def test_dispatch_cmd_unmapped_lane_without_repo_raises(monkeypatch):
     monkeypatch.setattr(router, "wq_show", lambda tid: {
-        "id": str(tid), "lane": "auto", "model": "claude-sonnet-5", "effort": "high",
-        "archetype": "standard-engineering",
+        "id": str(tid), "lane": "no-such-lane", "model": "claude-sonnet-5",
+        "effort": "high", "archetype": "standard-engineering",
     })
     with pytest.raises(SystemExit, match="no LANE_REPO entry"):
         router.dispatch_cmd(688)
@@ -601,7 +603,10 @@ def test_repo_for_ticket_falls_back_to_repo_hint(monkeypatch):
 
 
 def test_repo_for_ticket_none_when_neither_resolves():
-    assert router.repo_for_ticket({"lane": "auto", "title": "plain ticket", "detail": ""}) is None
+    # lane 'auto' resolves foreman since 1eb5c48 (wq#2103); a lane outside LANE_REPO
+    # is the remaining no-hint shape and must still refuse rather than guess.
+    assert router.repo_for_ticket({"lane": "no-such-lane", "title": "plain ticket",
+                                   "detail": ""}) is None
 
 
 # ---- wq#1496: the tests above all monkeypatch router.wq_show() to return a dict with a
