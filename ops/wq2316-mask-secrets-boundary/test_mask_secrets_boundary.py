@@ -111,6 +111,18 @@ def test_cloudflare_slack_aws_still_mask():
     assert mask("id " + "AKIA" + "Q" * 16) == "id AKIAMASKED"
 
 
+def test_a_glued_prefix_does_not_swallow_the_next_rules_prefix():
+    """wq#2720: `ghp_<body>AKIA<16>xoxb-<body>`, glued with no separator (wq#2702's
+    verifier), used to run github's body straight through `AKIA` and the letters
+    `xoxb`, stopping only at the `-` — the slack rule never saw its `xoxb-` prefix and
+    its body printed in the clear (`ghp_MASKED-12345678901`). Both live bodies must be
+    gone, and it must not matter which prefix comes first."""
+    fwd = mask("ghp_" + _GH_BODY + "AKIA" + "Q" * 16 + "xoxb-" + "12345678901")
+    assert _GH_BODY not in fwd and "Q" * 16 not in fwd and "12345678901" not in fwd
+    rev = mask("xoxb-" + "12345678901" + "AKIA" + "Q" * 16)
+    assert "12345678901" not in rev and "Q" * 16 not in rev
+
+
 def test_trailing_punctuation_after_masked_literal_survives():
     """wq#2687: cfut_ and kv-secret are the only two rules whose body charset
     includes `.`, so a greedy run starting on already-masked prose swallowed the
@@ -303,6 +315,12 @@ _LOCKSTEP = [
     "ghp_MASKED" + "AKIA" + "Q" * 16,
     "cfut_MASKED" + "ghp_" + _GH_BODY,
     "ghp_MASKEDghp_MASKED",
+    # wq#2720: a wide body swallowing a DIFFERENT rule's fixed prefix whole, not just
+    # running into it — no separator between any of the three, both glue orders.
+    "ghp_" + _GH_BODY + "AKIA" + "Q" * 16 + "xoxb-" + "12345678901",
+    "xoxb-" + "12345678901" + "AKIA" + "Q" * 16,
+    "cfut_" + "v1.0-abcdefghijklmnopqrstuvwxyz0123456789" + "AKIA" + "Q" * 16,
+    "sk-ant-" + _SK_BODY + "xoxb-" + "12345678901",
     # the false positives both sides must refuse
     "highs_solver and notes_on_xoxb-two words",
     "my_cfut_settings is a filename",

@@ -40,6 +40,30 @@ tail lookahead across is **wq#2313**, which also owns the `echo` guard. Until th
 over-masks an already-masked value when a credential label precedes it (`"pat": "MASKED"`),
 which costs a false alarm, never a missed mask.
 
+## wq#2720 — a wide body swallowing a DIFFERENT rule's prefix
+
+`ghp_<body>AKIA<16>xoxb-<body>`, glued with no separator, ran github's `[A-Za-z0-9]{30,}`
+straight through `AKIA` and the letters `xoxb`, stopping only at the `-` that charset can't
+cross — the slack rule never saw its `xoxb-` prefix and its body printed in the clear
+(`ghp_MASKED-<slack body>`). Same shape for any rule whose charset covers another's prefix
+letters (cloudflare's and sk-key's underscore/dash charsets cover all five others).
+
+POSIX ERE has no lookahead, so a body can't be told "stop before AKIA" directly. Before each
+of the five fixed-prefix rules runs, every OTHER rule's prefix is marked with a byte no
+charset contains (STX, `\x02`), the rule runs, and the mark is stripped again immediately —
+so a greedy run halts at the mark instead of reading through it, and the wq#2292/wq#2400
+false-positive fixes stay intact because the mark never survives to the NEXT rule's own
+boundary check. One cycle only fixes the swallow, not the fixed left-to-right order it
+exposes (slack runs before aws, so it can't yet see the boundary aws's masking is about to
+create for it in the same pass); the whole program now runs through itself six times, one
+per fixed-prefix family, mirroring masking.py's `mask_text()`/`scan()` looping over
+`PATTERNS` until a pass changes nothing.
+
+kv-secret deliberately gets NO bracket. It is the fallback for a labelled value that IS
+another rule's shape (`API_KEY: sk-ant-<token>`, `TOKEN: AKIA<lowercase junk that fails AWS's
+own charset>`), and a mark at position zero would refuse it outright, floor and all — a real
+leak, not a false-positive trade. Confirmed live before reverting it.
+
 ## Install
 
 Worker sessions cannot run this — `/home/lumen/bin` is a primary tree (guard.sh, wq#1719)
