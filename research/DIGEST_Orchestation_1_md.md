@@ -125,7 +125,7 @@ fleet with no Kubernetes; **REJECT** = do not build; **NEW** = genuine uncovered
 | R16 | `L516-544`, `L669-735` | Prometheus → Alertmanager → webhook → event bus → an SRE agent that remediates | **HAVE (better)** | `dispatcher/self_heal.py` (wq#725) classifies every block as INFRA_CRASH / LIMIT_HIT / WORK_BLOCKED / HARNESS_DEFECT / RUNG_FAULT and releases **only** the two classes where retry is sound. The doc's SRE agent just deletes pods and power-cycles boxes on alert. Monitoring generally: `DIGEST_Fleet_monitoring_1_md.md` |
 | R17 | `L858-913` | Reflexion: critique the failure, rewrite, retry, cap at 3 | **NEW → T1** | the retry loop exists (`harness/fworker.py:414` `MAX_ATTEMPTS = 2`) and it feeds attempt 2 a `prior-attempt-notes.md` — but `harness/fworker.py:1466-1489` writes only event **type** names and `git diff --stat`. No analysis of *why*. §5 T1 |
 | R18 | `L915-974` | one Grafana pane over Prometheus + ArgoCD + NATS + Neo4j | **REJECT as specified** | three of the four data sources do not exist here. Monitoring is `DIGEST_Fleet_monitoring_1_md.md`'s scope |
-| R19 | `L818-856`, `L1115-1117` | GraphRAG / LightRAG relational memory over Neo4j | **REJECT** | `neo4j` not installed; the fleet's knowledge store is already designed and running (`research/BRAIN_KNOWLEDGE_STORE.md`, wq#2442 Obsidian memory verified in `2453_verify_wq2442_obsidian_memory.md`) |
+| R19 | `L818-856`, `L1115-1117` | GraphRAG / LightRAG relational memory over Neo4j | **REJECT** | `neo4j` not installed; the fleet's knowledge store is already designed and running (`research/BRAIN_KNOWLEDGE_STORE.md`, wq#2442 Obsidian memory verified in `reports/2453_verify_wq2442_obsidian_memory.md`) |
 | R20 | `L1119-1121` | Mem0 as an episodic-memory layer between LiteLLM and the agents | **REJECT — re-invention** | `mem0` is importable but unused; the fleet has an episode store, `claude_memory.md`, and the continual-learning pipeline. Also collides with instinct 7: Mem0 auto-injects learned facts, and consolidation here is proposal-only |
 | R21 | `L976-994` | cognitive isolation — give each role only the tools its role needs | **HAVE** | that is precisely `harness/worker-settings.json` (per-command Bash allow-list) + `--add-dir` bounding + per-lane settings. The doc's insight is the fleet's existing design |
 | R22 | `L1031-1054` | 3-agent debate (Proponent / Skeptic / Moderator) to kill hallucination | **REJECT on cost** | `harness/hallucination_guard.py` already does self-consistency at n=5 with `min_agree`, logprob low-confidence spans (`:105`), and `check_claim`/`claims_from` grounding claims against **cited sources** (`:237-293`). Source-grounding beats a Skeptic's opinion, and the debate is ~7 calls per verdict |
@@ -324,7 +324,7 @@ assertion — cite it separately.
 7. **Stop re-proposing episodic-memory products.** `mem0` is already importable here and
    deliberately unused: the fleet has an episode store, `claude_memory.md`, the
    continual-learning pipeline and the wq#2442 Obsidian store (verified,
-   `2453_verify_wq2442_obsidian_memory.md`). Mem0's auto-injection of learned facts also
+   `reports/2453_verify_wq2442_obsidian_memory.md`). Mem0's auto-injection of learned facts also
    conflicts with instinct 7's proposal-only rule.
 8. **Do not reach for DinD or OpenHands** (`O1 L76-117`, `L1105-1109`). `harness/guard.sh` denies
    `docker` except `ps`/`logs`, the worktree + allow-list sandbox is stricter than the doc's

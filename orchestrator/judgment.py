@@ -123,7 +123,10 @@ def file_verify_pass(shipped_id, *, pr=None, author_model=None, manifest=None, d
         f"verifier: {rung.spec()} ({note}). Read the PR/diff cold, try to break it, run "
         f"its probe, and either confirm on the board or contradict with evidence. A "
         f"contradiction escalates to {pol.get('escalate_on_contradiction', 'opus-5@high')} "
-        f"and is a judgment trigger. Do NOT re-implement; verify."
+        f"and is a judgment trigger. Do NOT re-implement; verify. Any writeup (verify or "
+        f"judgment) belongs at foreman `reports/<this-ticket-id>_verify_wq{shipped_id}_"
+        f"<slug>.md` (`_judgment_` in place of `_verify_` on an escalation) — never the "
+        f"repo root (wq#2805)."
     )
     # wq#1220: this ticket files under the static verify_pass policy lane (below), not
     # wq#{shipped_id}'s own lane, so router.repo_for_ticket() would otherwise resolve

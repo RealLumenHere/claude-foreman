@@ -1,7 +1,7 @@
 ## What
 
 wq#2591 — judgment on wq#2587's CONTRADICT of wq#2569 (lumen-bin PR#131). Adds
-`2591_judgment_wq2569_fleet_search_github_rate_limit.md`. Docs only; no code in this repo
+`reports/2591_judgment_wq2569_fleet_search_github_rate_limit.md`. Docs only; no code in this repo
 changes.
 
 **Verdict: wq#2569 is NOT reopened. Corrected fast-follow filed as wq#2598 (pri 1,
