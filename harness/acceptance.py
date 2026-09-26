@@ -537,6 +537,54 @@ def _ops_deploy_evidence(entry, abspath):
     return False, f"deploy_target {target} matches no file shipped in {art_dir}"
 
 
+# wq#2753 (ISSUE-LOG #728): a legitimately cross-repo change (wq#2624 landed in
+# lumen-bin while its gate ran in a foreman worktree) could never cite anything —
+# _check_citation only accepted files in the LOCAL worktree's diff. A citation entry may
+# now carry {"repo": "/abs/managed/repo", "rev": "<sha>"} and is then checked entirely
+# against that repo: the rev must be a landed commit (ancestor of main — immutable and
+# re-runnable per wq#2630, never a live working tree), its own diff must touch the cited
+# file, and the cited lines must exist in the file as committed at that rev.
+_REV_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _crossrepo_citation(entry, rel, start, end):
+    repo = os.path.realpath(str(entry.get("repo") or ""))
+    rev = str(entry.get("rev") or "").strip()
+    try:
+        try:
+            import repo_sweep
+        except ImportError:  # stop_gate loads this module from outside harness/
+            import sys
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import repo_sweep
+        managed = {os.path.realpath(p) for p in repo_sweep.managed_repos()}
+    except Exception as e:  # fail closed: an unreadable repo list must not widen the gate
+        return False, f"cross-repo citation: managed-repo list unavailable ({e!r})"
+    if repo not in managed:
+        return False, f"cross-repo citation: {repo} is not a managed repo"
+    if not _REV_RE.match(rev):
+        return False, "cross-repo citation needs a 'rev' commit sha pinning the landed change"
+    for ref in ("origin/main", "main", "origin/HEAD"):
+        p = _git(repo, "merge-base", "--is-ancestor", rev, ref)
+        if p and p.returncode == 0:
+            break
+    else:
+        return False, f"{rev} has not landed on {repo}'s main"
+    p = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", rev)
+    if not p or p.returncode != 0:
+        return False, f"cannot read {rev}'s diff in {repo}"
+    if os.path.normpath(rel) not in {os.path.normpath(n) for n in p.stdout.splitlines()
+                                     if n.strip()}:
+        return False, f"{rel} is not touched by {repo}@{rev}"
+    p = _git(repo, "show", f"{rev}:{rel}")
+    if not p or p.returncode != 0:
+        return False, f"{rel} does not exist at {repo}@{rev}"
+    n_lines = len(p.stdout.splitlines())
+    if start < 1 or end < start or end > n_lines:
+        return False, f"{rel}@{rev} has {n_lines} lines; cited {start}-{end}"
+    return True, f"{rel}:{start}-{end} in {repo}@{rev}"
+
+
 def _check_citation(entry, worktree, changed):
     cite = str(entry.get("citation") or "").strip()
     m = _CITATION_RE.match(cite)
@@ -545,6 +593,9 @@ def _check_citation(entry, worktree, changed):
     rel = m.group("path")
     start = int(m.group("start"))
     end = int(m.group("end") or start)
+    if entry.get("repo"):
+        ok, why = _crossrepo_citation(entry, rel, start, end)
+        return ok, why, ""
     abspath = os.path.realpath(os.path.join(worktree, rel))
     if not abspath.startswith(os.path.realpath(worktree) + os.sep):
         return False, "citation path escapes the worktree", ""

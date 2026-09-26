@@ -83,6 +83,11 @@ class World:
         monkeypatch.setattr(fd, "_liveness_autoclosed", lambda *a, **k: False)
         monkeypatch.setattr(gates, "_live_holds", lambda *a, **k: ({"fleet-ops": "other-worker"}, {}))
         monkeypatch.setattr(fd, "ntfy", lambda *a, **k: self.pings.append(a))
+        # wq#2753: the replay world is hermetic except these two, which read the live
+        # host's /proc/pressure — a loaded machine (e.g. a parallel pytest run) halted
+        # the golden pass at cpu_pressure and failed the test spuriously.
+        monkeypatch.setattr(fd.psi_pressure, "check", lambda cfg=None: ("ok", ""))
+        monkeypatch.setattr(fd.cpu_pressure, "check", lambda cfg=None: ("ok", ""))
 
     def _show(self, tid):
         return self.tickets.get(int(tid)) or {"status": "open"}  # a dep: open, i.e. unmet
