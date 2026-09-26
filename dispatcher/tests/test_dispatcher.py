@@ -565,6 +565,32 @@ def test_frank_gate_title_variants(denv):
     assert lumen_calls(denv) == []
 
 
+def test_cf_rotation_hold_title_skipped(denv):
+    """wq#2782 (ISSUE-LOG 850 rule c): an open [rotation] row naming cloudflare must
+    never dispatch to a fire-and-forget worker while Frank's CF-rotation hold stands —
+    the second wall behind the tripwire filing these `--frank-gated` outright, for a
+    row (like wq#2738) that predates that fix. Probed against BOTH shapes
+    `rotation_title()` emits: the plain filed row and the `[verify] wq#N ...` row its
+    settle spawns."""
+    held = [
+        add_ticket("[rotation] burned credential sha256:a745825001bc (cloudflare)"),
+        add_ticket("[rotation] burned credential 2 values set:abcdef012345 "
+                   "(cloudflare,github)"),
+        add_ticket("[verify] wq#3001 [rotation] burned credential in wq#2999 "
+                   "transcript (cloudflare)"),
+    ]
+    # falsifiable control: a rotation row that does NOT name cloudflare is ordinary
+    # work and must dispatch — proves the check is scoped to the CF pattern, not to
+    # every [rotation] title.
+    clean = add_ticket("[rotation] burned credential sha256:deadbeef0001 (github)")
+    assert fd.run_pass() == 0
+    skips = {s["ticket"]: s["reason"] for s in log_events(denv, "skip")}
+    for tid in held:
+        assert skips.get(tid) == "frank_gated"
+    assert clean not in skips
+    assert [e["ticket"] for e in log_events(denv, "spawn")] == [clean]
+
+
 def test_pending_gate_type_skipped(denv):
     tid = add_ticket("decision-gated ticket")
     add_decision_gate_columns(denv)

@@ -1107,6 +1107,24 @@ def rotation_title(ticket_id, tag, hashes):
 # is the row this value is ALREADY open on, which is where the run gets noted instead.
 WQ_DUPLICATE_RE = re.compile(r"DUPLICATE\b[^\n]*?\btask (\d+)")
 
+# wq#2782 (ISSUE-LOG 850 rule c): Frank's 2026-09-25 hold on ALL CF-resource rotation —
+# the mcpw/Commander outage traced back to an unattended CF token rotation that deleted
+# every Cloudflare Access app on the account. A rotation row this tripwire hands a
+# fire-and-forget worker is exactly what that hold forbids, so any row naming a
+# Cloudflare credential has to come in FRANK-GATED, not open. `cloudflare` is the one
+# masking label built for the purpose (cfut_ user tokens, masking.py), but a CF API
+# token/zone id/account id caught by variable name lands under the generic kv-secret
+# label instead — that only shows up in the record's masked `context` window, never in
+# the label itself — so both are checked.
+CF_ROTATION_RE = re.compile(r"cloudflare", re.I)
+
+
+def is_cf_rotation(labels, records):
+    """True when this alarm's rotation row names a Cloudflare-shaped credential (wq#2782)."""
+    if any(CF_ROTATION_RE.search(label) for label in labels):
+        return True
+    return any(CF_ROTATION_RE.search(r.get("context") or "") for r in records or ())
+
 
 def mask_alarm(ticket_id, attempt, labels, records=None, session_id=None):
     """wq#2275 (T6): a mask hit is an ALARM, not a save (instinct 4). The credential
@@ -1148,14 +1166,21 @@ def mask_alarm(ticket_id, attempt, labels, records=None, session_id=None):
          f"stream — token reached model context and is BURNED; rotate today",
          priority="high")
     try:
-        p = wq("add", "--lane", "fleet", "--pri", "1",
+        add_args = ["add", "--lane", "fleet", "--pri", "1",
                # The MARKER in the title stays a literal here on purpose: the chain
                # guard above matches ROTATION_TITLE_PREFIX in it, so a deployed file
                # must not be able to rename a row out of its own chain.
                "--title", rotation_title(ticket_id, tag, hashes),
                "--detail", rotation_detail(ticket_id, attempt, tag, hits_path),
                "--no-probe", "rotation is a manual credential action; "
-                             "no deterministic liveness probe exists")
+                             "no deterministic liveness probe exists"]
+        if is_cf_rotation(labels, records):
+            # wq#2782: ISSUE-LOG 850 rule c holds ALL CF-resource rotation — file this
+            # row frank_gated so the dispatcher's TicketLoad gate (status != "open")
+            # refuses it outright, on top of the dispatcher's own CF-rotation title
+            # check (foreman_dispatcher.frank_gate_reason) for any row this misses.
+            add_args.append("--frank-gated")
+        p = wq(*add_args)
         out = ((p.stdout or "") + (p.stderr or "")).strip()
         dup = WQ_DUPLICATE_RE.search(out)
         if p.returncode == 0:

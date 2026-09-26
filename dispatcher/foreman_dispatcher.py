@@ -166,6 +166,17 @@ FRANK_TITLE_RE = re.compile(r"\[frank gate\]|\[manual\]|owner\s*=\s*frank", re.I
 # back with an empty diff and was judged FALSE_COMPLETE (three lanes burnt that way
 # before this gate). The marker was written in the title all along; nothing read it.
 NODISPATCH_TITLE_RE = re.compile(r"\[epic\]|\[do[ -]?not[ -]?claim\]", re.I)
+# wq#2782 (ISSUE-LOG 850 rule c): Frank's 2026-09-25 hold on ALL CF-resource rotation —
+# the mcpw/Commander outage traced back to an unattended CF token rotation that deleted
+# every Cloudflare Access app on the account. `rotation_title()` (harness/fworker.py)
+# always puts the tripwire's mask label(s) in parens at the end of a `[rotation]` row's
+# title (and the marker mid-title on the `[verify]` row it spawns), so a row whose tag
+# names cloudflare is caught by title alone. The wq#2275 tripwire now files these
+# `--frank-gated` (fworker.mask_alarm/is_cf_rotation), which the TicketLoad gate above
+# already refuses (status != "open") — this is the second wall, for a row that predates
+# that fix (wq#2738) or that some other path re-opens. No override: lifting the hold
+# means deleting this check once ISSUE-LOG 850 is closed.
+CF_ROTATION_HOLD_RE = re.compile(r"\[rotation\].*\bcloudflare\b", re.I)
 # wq list line: `[ 12] lane p1 ep0 open     title...` (ep tag only when it differs)
 LIST_LINE_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)\s+p(\d+)(?:\s+ep(\d+))?\s+(\S+)")
 
@@ -507,6 +518,8 @@ def frank_gate_reason(t):
     title = t.get("title") or ""
     if FRANK_TITLE_RE.search(title):
         return "title marker ([FRANK GATE]/[manual]/owner=frank)"
+    if CF_ROTATION_HOLD_RE.search(title):
+        return "CF-resource rotation hold (ISSUE-LOG 850 rule c, Frank 2026-09-25)"
     gate_type = t.get("gate_type") or ""
     if gate_type not in ("", "None") and (t.get("frank_response") or "None") in ("", "None"):
         return f"decision gate '{gate_type}' pending (no frank_response)"

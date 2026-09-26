@@ -996,6 +996,43 @@ def alarm_with_title(tmp_path, monkeypatch, title, ticket_id):
     return alarm(tmp_path, monkeypatch, ticket_id, github_records(), title=title)
 
 
+# ---- wq#2782 (ISSUE-LOG 850 rule c): CF-resource rotation hold ----------------------
+
+def test_is_cf_rotation_matches_the_cloudflare_label():
+    _, records = masking.scan(f"CF_API_TOKEN={CFUT}")
+    assert fworker.is_cf_rotation(["cloudflare"], records)
+
+
+def test_is_cf_rotation_matches_a_cf_resource_under_another_label():
+    # A CF value the generic kv-secret rule catches by variable name never gets the
+    # `cloudflare` label — only the masked context window names it.
+    records = [{"label": "kv-secret", "context": 'CLOUDFLARE_ZONE_ID="…MASKED'}]
+    assert fworker.is_cf_rotation(["kv-secret"], records)
+
+
+def test_is_cf_rotation_is_false_for_an_unrelated_burn():
+    _, records = masking.scan(f"remote https://x:{GHP}@github.com")
+    assert not fworker.is_cf_rotation(["github"], records)
+
+
+def test_mask_alarm_files_a_cloudflare_row_frank_gated(tmp_path, monkeypatch):
+    """wq#2782: the row wq#2275's tripwire files for a cloudflare-shaped credential
+    must come in `--frank-gated` so the dispatcher's TicketLoad gate refuses it (status
+    != "open") while ISSUE-LOG 850's hold stands — no unattended worker may touch it."""
+    _, records = masking.scan(f"CF_API_TOKEN={CFUT}")
+    _, calls = alarm(tmp_path, monkeypatch, 2782001, records, labels=("cloudflare",))
+    (add,) = [c for c in calls if c[0] == "add"]
+    assert "--frank-gated" in add
+
+
+def test_mask_alarm_leaves_an_unrelated_row_open(tmp_path, monkeypatch):
+    """Falsifiable control for the above: a github burn is not Frank's CF hold and
+    must file as an ordinary open row (no `--frank-gated`)."""
+    _, calls = alarm(tmp_path, monkeypatch, 2782002, github_records(), labels=("github",))
+    (add,) = [c for c in calls if c[0] == "add"]
+    assert "--frank-gated" not in add
+
+
 def test_a_rotation_ticket_refire_is_noted_not_filed(tmp_path, monkeypatch):
     """wq#2299: reading the artefacts a rotation ticket points at is the work, and on
     this stream that read is the next hit. One child ticket per read makes the tripwire
