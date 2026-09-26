@@ -976,6 +976,80 @@ def assign(ticket_id, *, archetype=None, manifest=None, pressure=None, dry_run=F
     return decision
 
 
+# wq#2581: mirrors harness/fworker.py's LOCAL_POOL_MODELS/LOCAL_RUNG_MODELS, deliberately.
+# foreman_dispatcher.py (escalate_off_local's other caller) has no import path to a worker
+# script, and this codebase already keeps several independently hand-tuned copies of
+# "which models count as local" (fworker.py's own comment names governor/governor_core.py's
+# and orchestrator/judgment.py's as two more, each deliberately different -- e.g. fworker's
+# excludes deepseek-v4-flash as cheap_cloud, not local-rung). Rather than force one shared
+# list on consumers that differ on purpose, this is its own copy for escalate_off_local's
+# specific question ("is this ticket's CURRENT model one fworker would charge as a local-
+# rung fault"), kept in lockstep by test_router.py::test_local_rung_models_mirrors_fworker
+# -- same mirrored-copy-plus-pinning-test pattern as the token-engine daemon's masking
+# vocabulary (harness/masking.py / token-engine/token_engine_daemon.py).
+LOCAL_RUNG_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b",
+                          "hathor-llama8b", "local-worker")
+LOCAL_RUNG_MODELS = tuple(dict.fromkeys(
+    tuple(m for m in LOCAL_RUNG_POOL_MODELS if m != "deepseek-v4-flash") + ("local-worker",)))
+
+
+def is_local_rung(model):
+    """Same predicate/definition as harness/fworker.py:is_local_rung -- mirrored, not
+    imported (see LOCAL_RUNG_MODELS above). escalate_off_local's callers use this to
+    decide whether a ticket is even a candidate for local->cloud escalation."""
+    return bool(model) and any(model.startswith(m) for m in LOCAL_RUNG_MODELS)
+
+
+ESCALATED_MARKER = "ESCALATED local->"   # wq#2581: notes substring, the idempotence guard
+
+
+def escalate_off_local(ticket_id, reason, manifest=None):
+    """wq#2581: a local-rung ticket that exhausts its attempts never otherwise reaches a
+    cloud model -- fworker.py's own retry ladder keeps re-running args.model unchanged,
+    and the dispatcher's SPAWN_LOOP guard just blocks it too. 30d measured (research/
+    LOCAL_RUNG_AUDIT_2576.md): 58/103 local tickets blocked, 0/166 local sessions
+    all-time classified SUCCESS. Handing an exhausted local ticket UP to the next
+    non-local rung in its own archetype chain (rather than sideways to a different local
+    rung, and rather than just giving up) is a call select() can already make correctly
+    with allow_local=False -- this wraps that call plus the wq edit/note/release side
+    effects so both callers (fworker.py's handle_failure, foreman_dispatcher.py's
+    handle_spawn_loop) get one answer instead of two ad hoc ones.
+
+    Idempotent per ticket: a ticket whose notes already carry the ESCALATED_MARKER is
+    never escalated again, so a ticket that fails again on its NEW (necessarily
+    non-local, since allow_local=False can never select one) rung falls through to an
+    ordinary block instead of being walked further -- no ping-pong back to local, and no
+    silent re-escalation past the caller's own is_local_rung() gate.
+
+    Returns (True, "<model>@<effort>") on a written escalation (ticket is now `open`,
+    not blocked, on the new rung), or (False, "<why not>") if there was nothing to
+    escalate to (chain has no rung after local, or nothing local to escalate FROM) or
+    the ticket was already escalated once. A caller still blocks as normal on False.
+    """
+    t = wq_show(ticket_id)
+    if ESCALATED_MARKER in (t.get("notes") or ""):
+        return False, "already escalated once (notes marker present)"
+    arch = t.get("archetype")
+    if not arch or arch == "None":
+        return False, "no archetype set on the ticket, cannot select a next rung"
+    manifest = manifest or load_manifest()
+    try:
+        rung, reasons = select(manifest, arch, fails=1, allow_local=False)
+    except ManifestError as e:
+        return False, f"bad archetype {arch!r}: {e}"
+    if rung is None or rung.model == "DECOMPOSE":
+        return False, f"no non-local rung after local for archetype {arch} ({'; '.join(reasons)})"
+    p = wq("edit", str(ticket_id), "--model", rung.model, "--effort", rung.effort or "")
+    if p.returncode != 0:
+        return False, f"wq edit failed: {(p.stdout or p.stderr).strip()}"
+    spec = f"{rung.model}@{rung.effort or ''}"
+    wq("note", str(ticket_id), f"{ESCALATED_MARKER}{spec} after {reason}")
+    p_rel = wq("release", str(ticket_id))
+    if p_rel.returncode != 0:
+        return False, f"escalated model to {spec} but wq release failed: {(p_rel.stdout or p_rel.stderr).strip()}"
+    return True, spec
+
+
 # RELIABILITY_SPEC.md §E: "systemd-run units: MemoryMax + MemoryHigh + TasksMax +
 # CPUQuota; OOMPolicy=stop" on every fworker-wq<ID> unit (wq#648/S3 — none of these were
 # wired into dispatch_cmd before this; lumen-run has supported the flags since wq#613,

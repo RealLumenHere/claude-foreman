@@ -1175,3 +1175,99 @@ def test_governor_pressure_missing_bucket_on_zero_floor_pool_is_not_deny(tmp_pat
     floors.write_text(json.dumps({"session_min_remaining_pct": 20, "weekly_all_min_remaining_pct": 0,
                                   "fable_weekly_min_remaining_pct": 0, "soft_margin_pct": 0}))
     assert router.governor_pressure("claude-sonnet-5", state_path=str(st), governor_cli=str(gov)) == "deny"
+
+
+# wq#2581: is_local_rung is a deliberate mirror of harness/fworker.py's own copy (see
+# router.py's comment on LOCAL_RUNG_MODELS for why it isn't imported/shared). This test is
+# the pin: if fworker.py's copy ever changes, this fails loudly instead of the two silently
+# drifting apart -- same pattern as test_token_engine_mirror_agrees in test_masking.py.
+
+def _fworker_local_rung_models():
+    harness_dir = os.path.join(ORCH_DIR, "..", "harness")
+    sys.path.insert(0, harness_dir)
+    import fworker  # noqa: PLC0415
+    return fworker.LOCAL_RUNG_MODELS
+
+
+def test_local_rung_models_mirrors_fworker():
+    assert set(router.LOCAL_RUNG_MODELS) == set(_fworker_local_rung_models())
+
+
+def test_is_local_rung_matches_fworker_is_local_rung():
+    harness_dir = os.path.join(ORCH_DIR, "..", "harness")
+    sys.path.insert(0, harness_dir)
+    import fworker  # noqa: PLC0415
+    for m in ("qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker",
+              "deepseek-v4-flash", "claude-sonnet-5", "claude-opus-5", "", None,
+              "qwen36-local-something-suffixed"):
+        assert router.is_local_rung(m) == fworker.is_local_rung(m), m
+
+
+# wq#2581: router.escalate_off_local -- hands an exhausted local-rung ticket to the next
+# non-local rung in its archetype chain instead of leaving it for a caller to block.
+
+def _stub_wq_show(monkeypatch, ticket):
+    monkeypatch.setattr(router, "wq_show", lambda tid: dict(ticket))
+
+
+def _capture_wq_calls(monkeypatch):
+    calls = []
+
+    def fake_wq(*args):
+        calls.append(args)
+        class R:
+            returncode = 0
+            stdout = "edited" if args[0] == "edit" else ""
+            stderr = ""
+        return R()
+    monkeypatch.setattr(router, "wq", fake_wq)
+    return calls
+
+
+def test_escalate_off_local_writes_next_rung_and_releases(monkeypatch):
+    ticket = {"id": 9001, "archetype": "mechanical-edit", "notes": ""}
+    _stub_wq_show(monkeypatch, ticket)
+    calls = _capture_wq_calls(monkeypatch)
+    manifest = router.load_manifest()
+
+    escalated, detail = router.escalate_off_local(9001, reason="FALSE_COMPLETE",
+                                                   manifest=manifest)
+
+    assert escalated is True
+    assert "@" in detail
+    kinds = [c[0] for c in calls]
+    assert "edit" in kinds
+    assert "note" in kinds
+    assert "release" in kinds
+    edit_call = next(c for c in calls if c[0] == "edit")
+    assert "--model" in edit_call
+    model = edit_call[edit_call.index("--model") + 1]
+    assert not router.is_local_rung(model), (
+        f"escalate_off_local must never write a local model back, got {model!r}")
+    note_call = next(c for c in calls if c[0] == "note")
+    assert any(router.ESCALATED_MARKER in a for a in note_call)
+
+
+def test_escalate_off_local_is_idempotent_per_ticket(monkeypatch):
+    ticket = {"id": 9002, "archetype": "mechanical-edit",
+              "notes": f"{router.ESCALATED_MARKER}claude-sonnet-5@low after FALSE_COMPLETE"}
+    _stub_wq_show(monkeypatch, ticket)
+    calls = _capture_wq_calls(monkeypatch)
+
+    escalated, detail = router.escalate_off_local(9002, reason="FALSE_COMPLETE")
+
+    assert escalated is False
+    assert "already escalated" in detail
+    assert calls == []  # no wq edit/note/release fired the second time
+
+
+def test_escalate_off_local_declines_with_no_archetype(monkeypatch):
+    ticket = {"id": 9003, "archetype": None, "notes": ""}
+    _stub_wq_show(monkeypatch, ticket)
+    calls = _capture_wq_calls(monkeypatch)
+
+    escalated, detail = router.escalate_off_local(9003, reason="FALSE_COMPLETE")
+
+    assert escalated is False
+    assert "archetype" in detail
+    assert calls == []

@@ -47,6 +47,9 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 "orchestrator"))
+import router  # noqa: E402 -- wq#2581: escalate_off_local() shared with foreman_dispatcher.py
 from classifier import (
     RunState, classify, parse_worker_sentinel,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
@@ -518,6 +521,7 @@ EXIT_LAUNCH_REFUSED = 21  # wq#1331: spawn preflight refused (repo mismatch / un
 EXIT_MODEL_NOT_FOUND = 22  # wq#1442: dispatched --model id/alias rejected by the CLI
                            # (model_not_found/404) — harness defect, attempt not charged
 EXIT_RUNG_FAULT = 23  # wq#2128: the model backend failed, not the ticket — released to open
+EXIT_LOCAL_ESCALATED = 24  # wq#2581: local rung exhausted, handed to a cloud rung — released to open
                       # uncharged, backend put on cooldown
 
 # wq#1261 (#13 item 3): expired/rework fire tickets re-dispatch at most FIRE_ATTEMPT_FENCE
@@ -4498,6 +4502,29 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
         needs_dirs=needs_mod.parse(ticket.get("needs"), ticket.get("detail", "")).dirs)
     block_class = rec["block_class"]
     reason = failure_record.block_reason_line(rec, fpath)
+
+    # wq#2581: a local-rung ticket that reaches here otherwise never sees a stronger
+    # model -- MAX_ATTEMPTS above always reruns args.model unchanged, so the retry ladder
+    # never walks up. Hand it to the next non-local rung in its own archetype chain
+    # instead of blocking it, UNLESS the triage says a stronger model can't help anyway:
+    # REAL_BLOCK (the worker itself decided this needs a human/real decision),
+    # CAPABILITY_DENIED (a sandbox policy denial -- no model gets past that), or a cited
+    # path the sandbox couldn't reach (same reasoning as CAPABILITY_DENIED: an escalated
+    # model hits the identical wall). router.escalate_off_local is itself idempotent
+    # per ticket (a notes marker), so this can never ping-pong a ticket back to local.
+    if (is_local_rung(args.model)
+            and rec["triage"] != failure_record.TRIAGE_REAL_BLOCK
+            and rec["triage"] != failure_record.TRIAGE_CAPABILITY_DENIED
+            and not rec.get("unreachable_paths")):
+        escalated, detail = router.escalate_off_local(ticket_id, reason=classification)
+        if escalated:
+            log(f"ESCALATED [{classification}]: wq#{ticket_id} local rung exhausted -> "
+                f"{detail}, released to open instead of blocked")
+            ntfy(f"wq#{ticket_id} local rung exhausted ({classification}) — escalated "
+                 f"to {detail} instead of blocking", title="foreman: local rung escalated")
+            return EXIT_LOCAL_ESCALATED
+        log(f"local rung exhausted but not escalating: {detail}")
+
     log(f"BLOCKED [{block_class}/{rec['triage']}]: {reason}")
     if rec["triage"] != failure_record.TRIAGE_REAL_BLOCK:
         wq_block(ticket_id, reason)
@@ -4723,15 +4750,18 @@ def main():
     args = ap.parse_args()
     rc = args.func(args)
     # wq#992-B: a terminal verdict that vacated a cloud slot chains the next ticket now,
-    # rather than leaving the slot idle until the 20-min timer. Only the two run-outcomes
-    # that mean "this worker ran and freed its slot" — a verified done and an
-    # attempts-exhausted block. Pre-claim deferrals (deps/governor/claim) never occupied
-    # the slot meaningfully, and LIMIT means the whole login is throttled (a kicked pass
-    # would just be governor-denied), so neither kicks. Fail-open, after the exit code is
+    # rather than leaving the slot idle until the 20-min timer. The three run-outcomes
+    # that mean "this worker ran and freed its slot" — a verified done, an
+    # attempts-exhausted block, and (wq#2581) a local-rung ticket just escalated onto a
+    # cloud rung, which is immediately dispatchable and gains nothing from waiting for
+    # the timer. Pre-claim deferrals (deps/governor/claim) never occupied the slot
+    # meaningfully, and LIMIT means the whole login is throttled (a kicked pass would
+    # just be governor-denied), so neither kicks. Fail-open, after the exit code is
     # fixed so it can't perturb the outcome.
-    if getattr(args, "func", None) is cmd_run and rc in (EXIT_OK, EXIT_BLOCKED):
+    if getattr(args, "func", None) is cmd_run and rc in (EXIT_OK, EXIT_BLOCKED, EXIT_LOCAL_ESCALATED):
         trigger_refill(getattr(args, "ticket", "?"),
-                       "done" if rc == EXIT_OK else "blocked")
+                       {EXIT_OK: "done", EXIT_BLOCKED: "blocked",
+                        EXIT_LOCAL_ESCALATED: "escalated"}[rc])
     sys.exit(rc if isinstance(rc, int) else 0)
 
 

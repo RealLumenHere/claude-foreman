@@ -282,6 +282,14 @@ def test_only_a_rung_charge_reaches_the_cooldown_writer(tmp_path, monkeypatch):
     monkeypatch.setattr(fworker, "wq", lambda *a, **k: type("P", (), {
         "returncode": 0, "stdout": "", "stderr": ""})())
     monkeypatch.setattr(fworker, "ntfy", lambda *a, **k: None)
+    # wq#2581: this test's model IS a local rung (LOCAL="hathor-llama8b"), so without this
+    # it would also exercise escalate_off_local -- which calls router.wq_show (a
+    # DIFFERENT function object than fworker.wq_show above, real subprocess unless
+    # stubbed) for a ticket id that only exists in this test, raising SystemExit. Not
+    # what this test is about (it's the cooldown-file behavior, see docstring); decline
+    # escalation so this exercises the same ordinary-block path it always has.
+    monkeypatch.setattr(fworker.router, "escalate_off_local",
+                        lambda *a, **k: (False, "not under test"))
     charged_to, cause = _kill(prompt_tokens=21_000, prefill_tps=13.6)
     assert (charged_to, cause) == (charging.CHARGE_HARNESS, "prompt_over_budget")
     args = type("A", (), {"model": LOCAL, "repo": "/nowhere", "archetype": "mechanical-edit"})()

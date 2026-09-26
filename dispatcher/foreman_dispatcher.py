@@ -1130,29 +1130,50 @@ def handle_spawn_loop(state, tid, lane, info, dry_run, log, t=None):
     Step 8: the roll-off used to repeat forever. Each loop episode is recorded once
     (info["new_trip"]); the SECOND inside 24 h blocks the ticket with
     `SPAWN_LOOP: <last release note from t>` and always pages, since a block is a state
-    change the 24 h ntfy dedup must not swallow. FOREMAN_CHARGE_MODE=legacy: skip only."""
+    change the 24 h ntfy dedup must not swallow. FOREMAN_CHARGE_MODE=legacy: skip only.
+
+    wq#2581: a ticket whose CURRENT model is a local rung gets one more option before
+    that second-trip block -- router.escalate_off_local hands it to the next non-local
+    rung in its own archetype chain instead, on the same reasoning fworker.py's own
+    exhaustion path uses (a local ticket that fails never otherwise reaches a cloud
+    model). Idempotent per ticket (notes marker) and itself decides when there is
+    nothing to escalate to, in which case this falls through to the ordinary block."""
     detail = (f"{info['spawns']} spawns since {info['since']}, "
               f"{info['attempts']} finished attempts")
     log.skip(tid, lane, "spawn_loop", "spawn_loop", detail=detail)
     now = _utcnow()
     blocked = None
+    escalated_to = None
     if not self_heal.charge_mode_legacy():
         if info.get("new_trip") and not dry_run:
             spawn_loop_guard.record_trip(state, tid, now)
             save_state(state)
         if info.get("trips_24h", 0) >= spawn_loop_guard.BLOCK_ON_TRIP:
             reason = spawn_loop_guard.block_reason((t or {}).get("notes"))
+            model = (t or {}).get("model")
             if dry_run:
-                log.emit("would_block", ticket=tid, lane=lane, reason=reason)
-            elif spawn_loop_guard.block_ticket(tid, reason, WQ_BIN):
-                blocked = reason
-                log.emit("spawn_loop_blocked", ticket=tid, lane=lane, reason=reason,
-                         trips_24h=info["trips_24h"])
+                verb = "would_escalate" if router.is_local_rung(model) else "would_block"
+                log.emit(verb, ticket=tid, lane=lane, reason=reason)
             else:
-                log.emit("error", stage="spawn_loop", ticket=tid, lane=lane,
-                         reason="block_failed", detail=reason)
+                if router.is_local_rung(model):
+                    esc_reason = (f"SPAWN_LOOP ({info['spawns']} spawns since "
+                                  f"{info['since']}, no finished attempt)")
+                    ok, esc_detail = router.escalate_off_local(tid, reason=esc_reason)
+                    if ok:
+                        escalated_to = esc_detail
+                        log.emit("spawn_loop_escalated", ticket=tid, lane=lane,
+                                 to=escalated_to, trips_24h=info["trips_24h"])
+                if escalated_to:
+                    pass
+                elif spawn_loop_guard.block_ticket(tid, reason, WQ_BIN):
+                    blocked = reason
+                    log.emit("spawn_loop_blocked", ticket=tid, lane=lane, reason=reason,
+                             trips_24h=info["trips_24h"])
+                else:
+                    log.emit("error", stage="spawn_loop", ticket=tid, lane=lane,
+                             reason="block_failed", detail=reason)
     last = state["spawn_loop_ntfy"].get(str(tid))
-    if last and not blocked:
+    if last and not (blocked or escalated_to):
         try:
             if now - datetime.fromisoformat(last) < timedelta(hours=FIRE_NTFY_DEDUP_H):
                 return  # already filed + pinged within 24h — never flood
@@ -1160,6 +1181,19 @@ def handle_spawn_loop(state, tid, lane, info, dry_run, log, t=None):
             pass
     if dry_run:
         log.emit("would_ntfy", ticket=tid, lane=lane, reason="spawn_loop")
+        return
+    if escalated_to:
+        # wq#2581: the dispatcher WILL keep dispatching this ticket (on its new rung) —
+        # no aq row, since spawn_loop_guard.aq_message()'s fixed text ("stopped
+        # re-spawning it... skips every pass") would be false here. Still worth a
+        # low-priority note (a self-healing action, not a human-needed one), and still
+        # bypasses the ntfy dedup above like a block does — a rung change is a state
+        # change too.
+        ntfy(f"wq#{tid} ({lane}) spawn-loop guard tripped twice in 24h on a local rung: "
+             f"{detail}. Escalated to {escalated_to} instead of blocking.",
+             title="foreman dispatcher: spawn loop escalated")
+        state["spawn_loop_ntfy"][str(tid)] = now.isoformat(timespec="seconds")
+        save_state(state)
         return
     filed = spawn_loop_guard.aq_row(tid, info)
     log.emit("aq_row", ticket=tid, lane=lane, stage="spawn_loop",
