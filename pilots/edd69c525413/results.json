@@ -1,0 +1,188 @@
+{
+  "sample_sha256": "e3934d7f2074c2281986fbd2eecee730c1ebb262419b4afcaa651a8b5378733c",
+  "k": 2,
+  "classifications": {
+    "e1": "episodic",
+    "e2": "episodic",
+    "e3": "episodic",
+    "e4": "episodic",
+    "e5": "episodic",
+    "s1": "semantic",
+    "s2": "semantic",
+    "s3": "semantic",
+    "s4": "semantic",
+    "s5": "semantic",
+    "s6": "semantic",
+    "s7": "semantic",
+    "p1": "procedural",
+    "p2": "procedural",
+    "p3": "procedural",
+    "p4": "procedural",
+    "p5": "procedural"
+  },
+  "baseline": {
+    "contamination_rate": 0.6666666666666666,
+    "recall_at_gold": 1.0,
+    "n": 6,
+    "per_question": [
+      {
+        "id": "q1",
+        "retrieved": [
+          "e4",
+          "p3"
+        ],
+        "gold": [
+          "e4"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": [
+          "p3"
+        ]
+      },
+      {
+        "id": "q2",
+        "retrieved": [
+          "s4",
+          "e3"
+        ],
+        "gold": [
+          "s4"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": [
+          "e3"
+        ]
+      },
+      {
+        "id": "q3",
+        "retrieved": [
+          "p1",
+          "e5"
+        ],
+        "gold": [
+          "p1"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": [
+          "e5"
+        ]
+      },
+      {
+        "id": "q4",
+        "retrieved": [
+          "s3"
+        ],
+        "gold": [
+          "s3"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": []
+      },
+      {
+        "id": "q5",
+        "retrieved": [
+          "e2",
+          "s6"
+        ],
+        "gold": [
+          "e2"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": [
+          "s6"
+        ]
+      },
+      {
+        "id": "q6",
+        "retrieved": [
+          "p5",
+          "p3"
+        ],
+        "gold": [
+          "p5"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": []
+      }
+    ]
+  },
+  "treatment": {
+    "contamination_rate": 0.0,
+    "recall_at_gold": 1.0,
+    "n": 6,
+    "per_question": [
+      {
+        "id": "q1",
+        "retrieved": [
+          "e4",
+          "e1"
+        ],
+        "gold": [
+          "e4"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": []
+      },
+      {
+        "id": "q2",
+        "retrieved": [
+          "s4",
+          "s5"
+        ],
+        "gold": [
+          "s4"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": []
+      },
+      {
+        "id": "q3",
+        "retrieved": [
+          "p1"
+        ],
+        "gold": [
+          "p1"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": []
+      },
+      {
+        "id": "q4",
+        "retrieved": [
+          "s3"
+        ],
+        "gold": [
+          "s3"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": []
+      },
+      {
+        "id": "q5",
+        "retrieved": [
+          "e2",
+          "e5"
+        ],
+        "gold": [
+          "e2"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": []
+      },
+      {
+        "id": "q6",
+        "retrieved": [
+          "p5",
+          "p3"
+        ],
+        "gold": [
+          "p5"
+        ],
+        "gold_retrieved": true,
+        "off_role_in_result": []
+      }
+    ]
+  },
+  "delta_contamination_rate": -0.6666666666666666,
+  "delta_recall_at_gold": 0.0
+}

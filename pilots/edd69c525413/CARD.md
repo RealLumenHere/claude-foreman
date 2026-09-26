@@ -21,36 +21,50 @@ Memory v2 P3 is still actively consolidating; without an eval harness or stable 
 The question above is empirical: its answer is a number that does not exist yet.
 Desk research can only report what someone else measured on other hardware.
 
+## Node substitution (disclosed, precedent: a7d04e5ebe7d / wq#1570)
+
+`wq show 1935` -> `needs :` blank, so `fleet-exec grant` denies with
+`grant:grant_missing_env` (`research/DEFER_PILOT_LANE.md:76`) regardless of
+`fleet-exec-policy.yaml` already listing hathor in `allow.ssh`; there is
+also no fleet-exec verb for arbitrary exec on hathor even with a grant.
+Both arms run on Lumen instead, in-process, stdlib only. This pilot has no
+wall-clock-sensitive metric (pure CPU token matching), so the substitution
+does not bias the comparison.
+
 ## Hypothesis
 
-<!-- One falsifiable sentence. "X beats Y on metric M by at least N" — not "X is
-promising". If it cannot be written this way the pilot is not ready to run. -->
+Classifying each memory fact into episodic/semantic/procedural and
+filtering retrieval to a query's target role reduces cross-role
+contamination in the top-k result set versus today's role-blind
+token-overlap retriever (`memory/cmt_retrieval.retrieve_single_trace`), with
+no loss of recall on the gold fact.
 
 ## Primary metric
 
-<!-- ONE number. Name it, name its unit, name what counts as a win BEFORE running.
-A pilot that picks its metric after seeing the numbers has measured nothing. -->
+`contamination_rate` — fraction of queries whose top-k retrieved set
+contains a fact from a role other than the query's target role. Win: the
+treatment's rate is materially lower than baseline's with no drop in the
+secondary `recall_at_gold` metric.
 
 ## Fixed sample
 
-<!-- Exactly what the baseline and the treatment both run against. Pin it: a path,
-a row count, a sha256 where the set can drift. Both arms see the same sample or the
-comparison is void. -->
+17 hand-built facts (5 episodic / 7 semantic / 5 procedural) x 6 queries,
+each tagged with a target role and one gold fact id.
+`pilots/edd69c525413/sample.json`, sha256
+`e3934d7f2074c2281986fbd2eecee730c1ebb262419b4afcaa651a8b5378733c`. Both
+arms run against this exact sample in one process, baseline first.
 
 ## Baseline (measure FIRST)
 
-<!-- The command that measures what Lumen does today. Run this before building the
-treatment, so the baseline cannot be tuned to lose. -->
-
 ```
+python3 pilots/edd69c525413/run_pilot.py   # baseline arm: role=None
 ```
 
 ## Treatment
 
-<!-- The smallest thing that tests the hypothesis. Not the full proposal — the
-cheapest build that produces the primary metric. -->
-
 ```
+python3 pilots/edd69c525413/run_pilot.py   # treatment arm: role=q["role"]
+# implementation: memory/role_retrieval.py (classify_role, retrieve_with_role_filter)
 ```
 
 ## Kill criteria
