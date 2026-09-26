@@ -23,7 +23,7 @@ only partially. Five grammar defects, none a missing keyword:
 Found on the way: the hump lookahead `(?=[A-Z])` consumed nothing, so an ALL_CAPS label
 could be split anywhere and `PUBLIC_KEY=<v>` slipped the public-key carve-out on main.
 
-## What changed (PR #TBD)
+## What changed (PR #1158, #1159, #1160, #1161)
 - `harness/masking.py`: `xml-secret` rule; label depth 0–7 with one-letter `_` segments;
   body allow-list `[A-Za-z0-9._\-+/=:!#$%^*@~]`; `'` quotes; whitespace no longer
   crosses a newline; `_pass`/`salt` nouns; hump requires a Capitalised word; an
@@ -51,8 +51,29 @@ url-auth rule while the file did. Rules edited after a unit start never reach th
 ways), and the detached restart is the documented next step after any mask-secrets edit.
 
 ## Sweep
-`sweep_dsn_history.py --all-rules --context /home/lumen/logs` (2.8 GB): see the
-Disposition section below.
+`sweep_dsn_history.py --all-rules --context /home/lumen/logs` (2.8 GB). Two earlier runs
+stalled on one Commander log line (a 554 KB base64 blob) — that was the kv rule's hump
+word, which could end at any capital of a mixed-case run; PR #1161 ends every word at a
+point the text fixes (0.37 s on that line now) and PR #1160 moved the identifier guard
+behind the label (890 -> 520 ms on the 1.2 MB line). The run of record:
+`/tmp/sec-2-9d0da3/sweep_logs.txt`, 51 distinct values, all in supergateway/.
 
 ## Disposition
-(filled at close)
+Every value hashed against every credential a rule or the survey reads in the live config
+set (850 hashes: agent/, .secrets/, compose files, litellm config, container XML, gh/git
+credentials):
+- **11 matched a live file.** Five are the LiteLLM provider keys in
+  agent/litellm_config.yaml (Cerebras, DeepSeek, Gemini, Mistral, OpenRouter), 11-12
+  occurrences each in the pre-pipe rotation log.1 — someone cat'd the config through
+  Commander before wq#2546. The langfuse `<password>` and `SALT` are this session's own
+  reads through the pipe while it still ran the old sed (no XML rule); the rest matched
+  gate snapshots (rotated in wq#2754/2777), and the LITELLM_MASTER_KEY hit is an old key.
+- **40 matched nothing live**: fixtures from this session's own test runs (DEFAULT_PASS,
+  TAPO_PASS, K3S_TOKEN, PROBE_TICKETS_FILED_KEY, SECRET =), the wq#2777 DSNs (old=yes),
+  dead GITEA/NTFY/Mongo values, two ghp_ tokens (token-engine store is unreadable from
+  lumen; verify there — wq#2827).
+- **Scrubbed**: desktop-commander-mcp.log (in place, same inode, the pipe kept appending),
+  .log.1 (atomic swap) and .log.3.gz (recompressed) through the new mask-secrets at
+  10:06Z; the all-rules sweep over the directory is now `distinct_values=0`.
+- **Rotation decision** for the five provider keys is wq#2827 (exposure: 0600 lumen file
+  on the host that holds the plaintext config; no other reader).
