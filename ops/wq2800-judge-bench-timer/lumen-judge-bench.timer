@@ -1,0 +1,10 @@
+[Unit]
+Description=wq#2800 weekly judge drift-bench schedule (SHIPPED DISABLED -- enable with: sudo systemctl enable --now lumen-judge-bench.timer)
+
+[Timer]
+OnCalendar=Sun *-*-* 20:00:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

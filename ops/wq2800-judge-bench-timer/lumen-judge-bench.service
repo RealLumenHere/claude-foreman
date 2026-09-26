@@ -1,0 +1,10 @@
+[Unit]
+Description=wq#2800 weekly judge drift-bench (155-case golden set vs bench_baseline.json; alerts aq lane 'judge' on false_allow_count>0 or accuracy drop >0.1) -- SHIPPED DISABLED, Frank arms it
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman/judge
+ExecStart=/usr/bin/python3 /home/lumen/foreman/judge/judge_bench_drift.py
+MemoryMax=1G
+Nice=10
