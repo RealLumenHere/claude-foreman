@@ -32,6 +32,10 @@ OLD = re.compile(URL_AUTH.pattern.replace(r"]{0,64}:)", r"]{1,64}:)")
                  .replace(r"[^\s/'\"`]{8,}", r"[^\s@/'\"`]{8,}"))
 assert OLD.pattern.count("{1,64}") == 1 and r"[^\s@/" in OLD.pattern, "old rule drifted"
 SKIP_DIRS ={".git", "node_modules", "__pycache__", ".venv", "venv"}
+# wq#2806: every rule in PATTERNS needs one of these substrings, so a line without any is
+# skipped before the expensive rules run. Without it the --all-rules sweep of
+# /home/lumen/logs (2.8 GB) had not finished after 40 minutes at 100% CPU.
+PREFILTER = re.compile(r"(?i)secret|token|key|pass|salt|credential|://|gh[pours]_|github_pat_|cfut|sk-|xox[bpasr]-|AKIA")
 MAX_BYTES = 64 << 20
 
 
@@ -69,6 +73,8 @@ def main(roots, show_context=False, all_rules=False):
             with fh:
                 for n, line in enumerate(fh, 1):
                     if not all_rules and ("://" not in line or "@" not in line):
+                        continue
+                    if all_rules and not PREFILTER.search(line):
                         continue
                     spans = set()   # two rules reading one value (the kv pair) is one hit
                     for label, rx, _repl in rules:
