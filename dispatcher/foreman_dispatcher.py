@@ -210,6 +210,31 @@ def _git_show_committed(path):
     return git("show", f"HEAD:{relpath}"), sha
 
 
+def config_blob_sha(path=None):
+    """Blob sha of the config as COMMITTED at HEAD (`git rev-parse HEAD:<path>`) — changes
+    only when the config's CONTENT changes, unlike the commit sha, which moves on every
+    unrelated merge to the repo. wq#2127 step 12: this is the gate-parking salt. Salting
+    the park fingerprints with the commit sha meant every foreman merge (several an hour)
+    unparked every parked ticket and re-ran the whole gate pipeline over them — the step-11
+    parking then only held between merges, and `gate_unparked why=fingerprint_changed`
+    fired for all ~40 parked tickets per merge (10k+ events in a week against 258 parks).
+    Returns "" (no salt) when git cannot answer, matching the pre-fix empty default."""
+    path = path or CONFIG_PATH
+    abspath = os.path.abspath(path)
+    repo_dir = os.path.dirname(abspath)
+    try:
+        toplevel = subprocess.run(["git", "-C", repo_dir, "rev-parse", "--show-toplevel"],
+                                  capture_output=True, text=True, timeout=10)
+        if toplevel.returncode != 0:
+            return ""
+        relpath = os.path.relpath(abspath, toplevel.stdout.strip())
+        p = subprocess.run(["git", "-C", repo_dir, "rev-parse", f"HEAD:{relpath}"],
+                           capture_output=True, text=True, timeout=10)
+        return p.stdout.strip() if p.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
 def load_config(path=None):
     """Returns (cfg, lane_warnings, sha) — sha is the commit the config was read from
     (wq#772: pass_start logging, 'what config is live' answerable from the log alone)."""
@@ -1535,7 +1560,7 @@ class _PassCtx:
         self.lint_scanned = self.lint_flagged = 0  # wq#1437 stage 3.7 (warn): measurement only
         self.quarantined = []
         self.deferred_reproves = []  # step 8: (tid, lane, repo, reason) reproved after slock release
-        self.gate_salt = ""          # step 11: config sha, mixed into every park fingerprint
+        self.gate_salt = ""          # step 11: config BLOB sha, mixed into every park fingerprint
 
     def refresh_units(self):
         self.units = concurrency.list_running_units()
@@ -2019,7 +2044,7 @@ def _run_partition(ctx, part, ready):
     return None
 
 
-def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None):
+def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None, gate_salt=None):
     candidates = scan_candidates(cfg, log)
     scanned = len(candidates)
     tight_cfg = cfg["tight_mode"]
@@ -2129,7 +2154,8 @@ def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None):
     ctx.limits, ctx.pacing_cfg, ctx.burn_cfg, ctx.burn_obs = limits, pacing_cfg, burn_cfg, burn_obs
     if deferred is not None:
         ctx.deferred_reproves = deferred
-    ctx.gate_salt = config_sha or ""
+    # step 11 salt: the config BLOB sha (content), not the commit sha — see config_blob_sha().
+    ctx.gate_salt = gate_salt if gate_salt is not None else (config_sha or "")
     candidates, n_parked = _apply_parking(ctx, candidates)  # step 11: open minus parked
 
     if not hygiene_legacy():
@@ -2260,10 +2286,11 @@ def run_pass(dry_run=False):
         if local_tripped:
             log.emit("info", stage="circuit_breaker_local", reason="local_pause_written",
                      **local_stats)
+        gate_salt = config_blob_sha(CONFIG_PATH)
         log.emit("pass_start", dry_run=dry_run, config_path=CONFIG_PATH,
-                 config_sha=config_sha)
+                 config_sha=config_sha, config_blob=gate_salt)
         state = load_state()
-        summary = _do_pass(cfg, log, state, dry_run, deferred, config_sha)
+        summary = _do_pass(cfg, log, state, dry_run, deferred, config_sha, gate_salt)
         log.emit("pass_end", **summary)
     except Exception as e:  # noqa: BLE001 — pass boundary: log + ntfy, never silent
         log.emit("error", stage="pass", reason=f"unhandled: {e!r}")

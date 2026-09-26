@@ -3093,3 +3093,31 @@ def test_local_slots_full_pass_is_healthy_but_local_stall_is_not(denv, monkeypat
     verdicts = dispatch_health.classify_passes(events)
     assert [v for _, _, v, _ in verdicts] == ["unhealthy"]
     assert verdicts[0][3].startswith("local spawned=0 dispatchable=1")
+
+
+def test_gate_salt_is_config_blob_not_commit(denv):
+    # wq#2127 step 12: the step-11 park fingerprint salt must be the config's blob sha, so an
+    # unrelated commit to the repo (several land per hour) does not unpark every parked
+    # ticket. The commit sha still goes to pass_start as config_sha (wq#772 provenance).
+    assert fd.run_pass() == 0
+    first = log_events(denv, "pass_start")[-1]
+    want_blob = subprocess.run(["git", "-C", str(denv["tmp"]), "rev-parse", "HEAD:config.json"],
+                               capture_output=True, text=True, check=True).stdout.strip()
+    assert first["config_blob"] == want_blob
+    assert first["config_blob"] != first["config_sha"]
+    # an unrelated commit: commit sha moves, blob (and therefore the salt) does not
+    (denv["tmp"] / "unrelated.txt").write_text("merge noise\n")
+    subprocess.run(["git", "-C", str(denv["tmp"]), "add", "unrelated.txt"], check=True)
+    subprocess.run(["git", "-C", str(denv["tmp"]), "commit", "-q", "-m", "unrelated"], check=True)
+    assert fd.run_pass() == 0
+    second = log_events(denv, "pass_start")[-1]
+    assert second["config_sha"] != first["config_sha"]
+    assert second["config_blob"] == first["config_blob"]
+    # a real config edit moves the blob
+    write_config(denv, cloud_ceiling=BASE_CONFIG.get("cloud_ceiling", 3))
+    denv["cfg_path"].write_text(denv["cfg_path"].read_text() + "\n")
+    commit_config(denv["tmp"], "whitespace edit")
+    assert fd.run_pass() == 0
+    third = log_events(denv, "pass_start")[-1]
+    assert third["config_blob"] != first["config_blob"]
+    assert fd.config_blob_sha(str(denv["cfg_path"])) == third["config_blob"]
