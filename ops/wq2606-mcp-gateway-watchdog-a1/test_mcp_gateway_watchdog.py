@@ -138,6 +138,38 @@ def main():
         failures.append(f"fails counter did not reset on recovery, got {fails_val!r}")
 
     final_restarts = restarts()
+
+    # --- wq#2745: mode=mcpw probes the mcpw path via a full `initialize`
+    # handshake and must alert without ever calling RESTART_CMD, even past
+    # the fail threshold (mcpw is not a unit this host owns/restarts).
+    token_file = os.path.join(tmpdir, "mcpw.token")
+    with open(token_file, "w") as f:
+        f.write("test-bearer-token\n")
+
+    mcpw_env = dict(env)
+    mcpw_env["WATCHDOG_MCPW_URL"] = f"http://127.0.0.1:{port}/mcp"
+
+    def run_mcpw():
+        return subprocess.run(
+            ["bash", SCRIPT, "--mode", "mcpw", "--unit", "test-mcpw",
+             "--token-file", token_file],
+            env=mcpw_env, capture_output=True, text=True,
+        )
+
+    STATE["healthy"] = False
+    run_mcpw()
+    run_mcpw()
+    run_mcpw()
+    if restarts() != final_restarts:
+        failures.append("mode=mcpw called RESTART_CMD -- it must never auto-touch mcpw")
+
+    STATE["healthy"] = True
+    run_mcpw()
+    fails_file_mcpw = os.path.join(state_dir, "test-mcpw.fails")
+    fails_val_mcpw = open(fails_file_mcpw).read().strip() if os.path.exists(fails_file_mcpw) else "?"
+    if fails_val_mcpw != "0":
+        failures.append(f"mode=mcpw fails counter did not reset on recovery, got {fails_val_mcpw!r}")
+
     srv.shutdown()
     shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -146,7 +178,7 @@ def main():
         for f in failures:
             print(" -", f)
         sys.exit(1)
-    print(f"ALL CHECKS PASSED ({final_restarts} restarts recorded, flap alert fired, cooldown honored, recovery reset fails)")
+    print(f"ALL CHECKS PASSED ({final_restarts} restarts recorded, flap alert fired, cooldown honored, recovery reset fails, mode=mcpw alert-only verified)")
 
 
 if __name__ == "__main__":
