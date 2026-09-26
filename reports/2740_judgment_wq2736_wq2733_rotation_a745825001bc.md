@@ -135,6 +135,13 @@ cloudflare: {"value_sha256_12": "a745825001bc", "prefix": "cfut_", "value_len": 
              "first_seen_in": "transcript:b58ea02f-2594-42c1-bf15-5592f37ca89b"}
 ```
 
+Re-running the probe against landed main now reports
+`ops/wq2740-account-prefix-adjacency/split_2732_detail.py:22` instead — this ticket's own
+probe holds the pair as a seam-split literal, and `git ls-files` puts `ops/` before
+`reports/`. Both paths are true accountings of the same string; which one wins is just tree
+order, and the side effect is welcome: the value is now pinned in the tree the way
+`harness/tests/fixtures/wq2702_values.py` pins wq#2702's, so this row cannot page again.
+
 B is a **true** citation and the first one this row has ever had: wq#2736's merged report
 quotes the pattern in seam-split form, and the seam pass closes it, so the committed tree
 really does hold this value — as documentation, in the file that diagnosed it.
