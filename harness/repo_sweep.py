@@ -61,6 +61,14 @@ EXTRA_REPOS = [
     # wq#1540: minerva has no lane either, so a needs:repo(/home/lumen/minerva) ticket
     # was dispatched into a foreman worktree it cannot edit (ISSUE-LOG #477's class).
     "/home/lumen/minerva",
+    # wq#2853 (ISSUE-LOG #881): the storage-audit fleet agent had no lane and, unlike
+    # the two entries above, was never a git repo at all -- it was tracked only by
+    # hand-copied *.bak snapshots, so a ticket targeting it dispatched into a foreman
+    # worktree that could never satisfy a citation gate for it. git-initialized
+    # (local main, no remote -- repo_reconcile's NO_UPSTREAM verdict, wq#913, is the
+    # sanctioned shape for a local-only repo) so needs:repo() and cross-repo citations
+    # both work going forward.
+    "/home/lumen/agents/storage-audit",
 ]
 
 TITLE_PREFIX = "[repo-sweep] "
