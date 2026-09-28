@@ -258,6 +258,27 @@ class Nodispatch(Gate):
         return PASS
 
 
+class NeedsWindow(Gate):
+    """wq#2915 (wq#1401 item 1): a ticket titled [needs-window] only dispatches inside the
+    fleet maintenance window, with enough time left to safely start (lumen_window.gate).
+    Ships DARK behind `needs_window.enabled` in config — absent/false is a pure no-op,
+    same contract as decomposer.enabled. FAIL CLOSED: an unreadable lumen_window module
+    or config skips the ticket exactly as if the window were closed. Never parked: window
+    state (halted/running ops written by other window consumers) is live external state,
+    not a pure function of the ticket + config + clock."""
+    name = "needs_window"
+
+    def check(self, g):
+        if not g.fd.needs_window_enabled(g.ctx.cfg):
+            return PASS
+        if not g.fd.needs_window_marker(g.t):
+            return PASS
+        why = g.fd.needs_window_reason(g.t)
+        if why:
+            return Fail("needs_window", "needs_window_closed", detail=why)
+        return PASS
+
+
 class FrankGate(Gate):
     """stage 4 (MUST 3): a title marker, pending decision gate or unmet wq gate path. Never
     claimed, no override flag."""
@@ -466,8 +487,8 @@ class SubsystemHeld(Gate):
 # DISPATCH_DISSECTION §2.2, evaluation order. Reordering changes which reason a ticket that
 # trips two gates reports — the golden replay (test_gates_replay.py) is what holds it.
 GATES = (LaneCap(), HumanLane(), LaneRepo(), TicketLoad(), RepoMismatch(), RepoResolve(),
-         Capability(), Runaway(), HarnessDefect(), SpawnLoop(), Nodispatch(), FrankGate(),
-         FireApproval(), FireProbe(), Hold(), Deps(), AlreadyRunning(), Route(),
+         Capability(), Runaway(), HarnessDefect(), SpawnLoop(), Nodispatch(), NeedsWindow(),
+         FrankGate(), FireApproval(), FireProbe(), Hold(), Deps(), AlreadyRunning(), Route(),
          SubsystemHeld())
 
 

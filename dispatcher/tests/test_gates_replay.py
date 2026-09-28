@@ -59,8 +59,8 @@ FAULTS = [
 ]
 GATE_ORDER = ["lane_cap", "human_lane", "lane_repo", "ticket_load", "repo_mismatch",
               "repo_resolve", "capability", "runaway", "harness_defect", "spawn_loop",
-              "nodispatch", "frank_gate", "fire_approval", "fire_probe", "hold", "deps",
-              "already_running", "route", "subsystem"]
+              "nodispatch", "needs_window", "frank_gate", "fire_approval", "fire_probe",
+              "hold", "deps", "already_running", "route", "subsystem"]
 FIRE_PROBE = 'fire_probe: {"cmd": "true", "clear_when_exit": 0}'
 
 

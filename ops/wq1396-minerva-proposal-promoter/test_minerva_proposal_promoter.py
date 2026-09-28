@@ -102,10 +102,15 @@ def main():
             check("cve proposal filed to build lane", row["lane"] == "build")
             check("cve archetype standard-engineering", row["archetype"] == "standard-engineering")
             check("cve detail carries rollback", "Restore prior binary" in row["detail"])
+            # wq#2915 (wq#1401 item 5): "Upgrade Gitea ..." is disruptive -> [needs-window]
+            check("disruptive (upgrade) proposal gets the needs-window marker",
+                  row["title"].startswith("[needs-window]"), row["title"])
 
         if props["p-feature"]["ticket"]:
             row = fetchall(wq_db, "SELECT * FROM tasks WHERE id=?", (props["p-feature"]["ticket"],))[0]
             check("feature proposal filed P3", row["pri"] == 3, f"pri={row['pri']}")
+            check("non-disruptive proposal has no needs-window marker",
+                  not row["title"].startswith("[needs-window]"), row["title"])
 
         n_tasks_after_first = len(fetchall(wq_db, "SELECT * FROM tasks"))
 

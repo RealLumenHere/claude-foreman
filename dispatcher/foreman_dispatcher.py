@@ -114,6 +114,7 @@ GOVERNOR_STATE = os.environ.get("FOREMAN_STATE_JSON",
                                 os.path.join(FOREMAN_ROOT, "state.json"))
 LANGFUSE_ENV = os.environ.get("FOREMAN_LANGFUSE_ENV",
                               "/home/lumen/.secrets/langfuse-foreman.env")
+LUMEN_WINDOW_PATH = os.environ.get("FOREMAN_LUMEN_WINDOW", "/home/lumen/bin/lumen_window.py")
 
 SLOCK_SCOPE = "foreman-dispatcher"
 SLOCK_TTL_MIN = "30"
@@ -167,6 +168,11 @@ FRANK_TITLE_RE = re.compile(r"\[frank gate\]|\[manual\]|owner\s*=\s*frank", re.I
 # back with an empty diff and was judged FALSE_COMPLETE (three lanes burnt that way
 # before this gate). The marker was written in the title all along; nothing read it.
 NODISPATCH_TITLE_RE = re.compile(r"\[epic\]|\[do[ -]?not[ -]?claim\]", re.I)
+
+# wq#2915 (wq#1401 item 1): a ticket that must only run inside the fleet maintenance
+# window carries this title marker, same convention as NODISPATCH_TITLE_RE above.
+NEEDS_WINDOW_TITLE_RE = re.compile(r"\[needs[ -]?window\]", re.I)
+NEEDS_WINDOW_NAME = "fleet"
 # wq#2782 (ISSUE-LOG 850 rule c): Frank's 2026-09-25 hold on ALL CF-resource rotation —
 # the mcpw/Commander outage traced back to an unattended CF token rotation that deleted
 # every Cloudflare Access app on the account. `rotation_title()` (harness/fworker.py)
@@ -677,6 +683,63 @@ def candidate_model(t, tid):
     if rung.get("model") == "DECOMPOSE":
         return None, ROUTE_DECOMPOSE
     return rung.get("model"), None
+
+
+def _lumen_window_module():
+    """Load lumen_window.py by explicit file path (dispatch_health._cred_module's pattern,
+    wq#1694): it lives in bin/, outside this repo, so there is no package to import
+    normally and sys.path would risk picking up a stale copy. Returns None on any load
+    failure — the caller's fail-closed contract does the rest (wq#2915 item 1)."""
+    try:
+        import importlib.util
+        if not os.path.exists(LUMEN_WINDOW_PATH):
+            return None
+        spec = importlib.util.spec_from_file_location("_wq2915_lumen_window", LUMEN_WINDOW_PATH)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def needs_window_marker(t):
+    """wq#2915 item 1: True when the ticket carries the [needs-window] title marker."""
+    return bool(NEEDS_WINDOW_TITLE_RE.search(t.get("title") or ""))
+
+
+def needs_window_reason(t):
+    """Non-None detail when a [needs-window] ticket must be skipped this pass: the fleet
+    window is closed, or open with too little time left to safely start anything in it
+    (lumen_window.gate's TOO_LATE check, est_sec=0 — the dispatcher has no per-ticket
+    runtime estimate, so this only guards against starting with mere seconds left).
+
+    FAIL CLOSED (wq#1401 item 1): a missing lumen_window.py, or any failure loading or
+    reading its config/state, reads as closed. The only way a needs-window ticket ever
+    dispatches is a live lumen_window.gate() call that actually answers OK."""
+    mod = _lumen_window_module()
+    if mod is None:
+        return "lumen_window module unreadable — fail closed"
+    try:
+        wcfg = mod.load_config()
+        state = mod.load_state()
+        code, msg = mod.gate(wcfg, state, NEEDS_WINDOW_NAME, mod.now_utc())
+    except Exception as e:  # noqa: BLE001
+        return f"lumen_window config/state unreadable: {e!r} — fail closed"
+    if code != mod.OK:
+        return msg
+    return None
+
+
+def needs_window_cfg(cfg):
+    block = cfg.get("needs_window")
+    return block if isinstance(block, dict) else {}
+
+
+def needs_window_enabled(cfg):
+    """wq#2915: the [needs-window] skip's consumer switch. OFF BY DEFAULT and
+    absent-means-off, same dark-ship contract as decomposer_enabled below — activation is
+    a deliberate reviewed config commit, never a code deploy side effect."""
+    return needs_window_cfg(cfg).get("enabled") is True
 
 
 def decomposer_cfg(cfg):

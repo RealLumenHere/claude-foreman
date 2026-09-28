@@ -51,6 +51,21 @@ SECURITY_RE = re.compile(
 ADDED_RE = re.compile(r"added task (\d+)")
 DUPLICATE_RE = re.compile(r"DUPLICATE — task (\d+)")
 
+# wq#2915 (wq#1401 item 5): a proposal that upgrades or restarts fleet software/nodes is
+# disruptive — it must only ever run inside the fleet maintenance window, never mid-day on
+# a live lane. Broad on purpose, same posture as SECURITY_RE: a proposal wrongly held for
+# the window costs one Monday-morning delay; one wrongly left on a live lane costs an
+# outage. gates.py's NeedsWindow gate is what actually enforces the hold (wq#2915 item 1);
+# this only applies the [needs-window] marker so that gate has something to act on.
+DISRUPTIVE_RE = re.compile(
+    r"\bupgrade[ds]?\b|\breboot(?:s|ed|ing)?\b|\brestart(?:s|ed|ing)?\b"
+    r"|\bpower.cycl|\bfirmware\b|\bkernel\b|apt (?:upgrade|dist-upgrade)"
+    r"|\bsystemctl restart\b|\bservice restart\b",
+    re.IGNORECASE,
+)
+
+NEEDS_WINDOW_MARKER = "[needs-window]"
+
 PRI_SECURITY = 1
 PRI_FEATURE = 3
 LANE = "build"
@@ -73,6 +88,11 @@ def ensure_ticket_column(conn):
 def classify_kind(title, proposed_change, current_state):
     blob = " ".join(x or "" for x in (title, proposed_change, current_state))
     return "security" if SECURITY_RE.search(blob) else "feature"
+
+
+def is_disruptive(title, proposed_change, current_state):
+    blob = " ".join(x or "" for x in (title, proposed_change, current_state))
+    return bool(DISRUPTIVE_RE.search(blob))
 
 
 def marker(proposal_id):
@@ -116,11 +136,15 @@ def file_ticket(wq_bin, wq_db, row, dry_run):
     kind = classify_kind(row["title"], row["proposed_change"], row["current_state"])
     pri = PRI_SECURITY if kind == "security" else PRI_FEATURE
     detail = build_detail(row)
+    title = row["title"] or f"(untitled minerva proposal {row['id']})"
+    disruptive = is_disruptive(row["title"], row["proposed_change"], row["current_state"])
+    if disruptive:
+        title = f"{NEEDS_WINDOW_MARKER} {title}"
     args = [
         wq_bin, "add",
         "--lane", LANE,
         "--pri", str(pri),
-        "--title", row["title"] or f"(untitled minerva proposal {row['id']})",
+        "--title", title,
         "--detail", detail,
         "--archetype", ARCHETYPE,
     ]
