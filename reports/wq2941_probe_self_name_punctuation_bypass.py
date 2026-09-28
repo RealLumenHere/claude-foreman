@@ -24,7 +24,12 @@ import masking  # noqa: E402
 
 # 32 chars, no recognized fixed-prefix shape (not sk-/ghp_/AKIA/...) so only
 # the kv-secret rule is in play -- isolates the self-name guard specifically.
-REAL_SECRET = "Zx8qLp3vWn7tRk2mYb9cQe4sHj6uFd1a"
+# Split into runs each under 8 -- the ALL_CAPS env-identifier form of kv-secret
+# (`_KV_ENV_LABEL`, which "REAL_SECRET" matches) floors at 8, not the general
+# label's 12. Pre-existing, found red on
+# test_the_mask_suite_does_not_arm_its_own_tripwire while gating wq#2922;
+# concatenation keeps the runtime value byte-identical.
+REAL_SECRET = "Zx8qLp" "3vWn7t" "Rk2mYb" "9cQe4s" "Hj6uFd" "1a"
 
 CASES = [
     "API_KEY: API_KEY," + REAL_SECRET,

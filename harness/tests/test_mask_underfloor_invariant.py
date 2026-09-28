@@ -16,17 +16,17 @@ drained a chain of stops rather than one). wq#2913 removed the stops and the pas
 both; the shapes stay, because what they measure is coverage, not the mechanism.
 
 Section B is the same under-floor class through the OTHER guard `_body()` carries, the
-unconditional mask-literal lookahead, which wq#2848 correctly left alone and which still
-leaks: xfail-strict against wq#2922 so closing that ticket makes this test go red until
-the xfail is dropped.
+unconditional mask-literal lookahead, which wq#2848 correctly left alone. wq#2922 closes
+it with a fail-loud backstop (masking._orphan_matches): the value is not masked (masking
+one this short risks re-swallowing `<prefix>MASKED` and reviving the wq#2638 leak), but a
+hit now fires every time, so the section's bar is "no SILENT case", not "no fill char
+survives" — see the probe's own section_b docstring.
 
 The probe is the evidence artefact of reports/wq2868_judgment_wq2848_floor_fallback.md and
 takes a masking-directory argument, so the same cases run against a historical rev.
 """
 import os
 import sys
-
-import pytest
 
 HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "reports"))
@@ -59,9 +59,6 @@ def test_a_four_credential_chain_is_drained_and_every_label_fires():
     assert fails == [], f"{name}: {fails}"
 
 
-@pytest.mark.xfail(strict=True, reason="wq#2922: the mask-literal guard is still "
-                                       "unconditional inside the floor, so an under-floor "
-                                       "literal still fails the whole rule silently")
-def test_a_body_holding_the_mask_literal_below_the_floor_still_leaks():
+def test_a_body_holding_the_mask_literal_below_the_floor_alarms_instead_of_leaking():
     name, total, fails = _run(probe.section_b)
-    assert fails == [], f"{name}: {len(fails)}/{total} leaked: {fails[:6]}"
+    assert fails == [], f"{name}: {len(fails)}/{total} SILENT: {fails[:6]}"
