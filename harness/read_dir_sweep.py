@@ -204,6 +204,24 @@ def policy_read_dirs(path=POLICY_PATH):
     return list(((data.get("allow") or {}).get("read_dirs")) or [])
 
 
+AGENTS_SPEC_PATH = os.environ.get("FOREMAN_AGENTS_SPEC",
+                                  os.path.join(HARNESS_DIR, "agents.yaml"))
+
+
+def worker_add_dirs(path=AGENTS_SPEC_PATH):
+    """wq#2119: `allow.read_dirs` above is the fleet-exec BROKER grant list and was the
+    only thing this sweep covered — but every worker also gets `defaults.add_dirs` from
+    agents.yaml unconditionally (agents_spec.py / fworker.py WORKER_ADD_DIRS), a second,
+    separate read-grant surface this sweep never touched. That's how two credential-shaped
+    lines sat unswept in /home/lumen/agents/work-queue/_runs (a default add_dir) until a
+    manual audit found them. Folded into write_runtime()'s default roots below so the
+    daily sweep covers both grant mechanisms, not just the broker one."""
+    import yaml
+    with open(path) as f:
+        data = yaml.safe_load(f.read()) or {}
+    return list((data.get("defaults") or {}).get("add_dirs") or [])
+
+
 def _now_iso():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -229,13 +247,22 @@ def _prev_hit_keys(prev_roots):
 
 
 def write_runtime(roots=None, runtime_path=None):
-    """Sweep every `allow.read_dirs` root (or `roots`), write the masked report to
-    `runtime_path` (wq#1482: lumen-read-dir-sweep.timer's daily payload), and return
-    `(report, new_hits)`. `new_hits` are hits whose (root, path, line, kind) was not
-    present in the PREVIOUS runtime write, so a rerun of an already-known hit does
-    not re-alert every day — only a hit that is new since the last sweep does."""
+    """Sweep every `allow.read_dirs` root plus every `defaults.add_dirs` root (or
+    `roots`), write the masked report to `runtime_path` (wq#1482:
+    lumen-read-dir-sweep.timer's daily payload), and return `(report, new_hits)`.
+    `new_hits` are hits whose (root, path, line, kind) was not present in the PREVIOUS
+    runtime write, so a rerun of an already-known hit does not re-alert every day —
+    only a hit that is new since the last sweep does."""
     runtime_path = runtime_path or RUNTIME_PATH
-    roots = list(roots) if roots is not None else policy_read_dirs()
+    if roots is not None:
+        roots = list(roots)
+    else:
+        # wq#2119: add_dirs folded in alongside read_dirs — see worker_add_dirs().
+        seen = []
+        for r in policy_read_dirs() + worker_add_dirs():
+            if r not in seen:
+                seen.append(r)
+        roots = seen
     prev = None
     try:
         with open(runtime_path) as f:
