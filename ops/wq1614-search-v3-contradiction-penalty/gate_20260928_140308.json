@@ -1,0 +1,117 @@
+{
+  "mode": "gate",
+  "ts": "2026-09-28T14:07:42Z",
+  "w_contra": 0.5,
+  "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+  "baseline_artifact": "/home/lumen/minerva/eval/results_wq1614_w1_20260928_1406.json",
+  "treatment_artifact": "/home/lumen/minerva/eval/results_wq1614_w0.5_20260928_1407.json",
+  "trap_at1_rate": {
+    "baseline": 0.25,
+    "treatment": 0.25,
+    "delta": 0.0,
+    "n_trap_rows": 16
+  },
+  "headline": {
+    "baseline": {
+      "n": 239,
+      "R@1": 0.715,
+      "R@5": 0.895,
+      "R@10": 0.925,
+      "MRR": 0.793
+    },
+    "treatment": {
+      "n": 239,
+      "R@1": 0.715,
+      "R@5": 0.895,
+      "R@10": 0.925,
+      "MRR": 0.793
+    }
+  },
+  "checks": [
+    {
+      "check": "golden_sha_matches_frozen",
+      "ok": true,
+      "detail": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7"
+    },
+    {
+      "check": "baseline_control_ok",
+      "ok": true,
+      "detail": {
+        "9001": {
+          "cls": "control-hit",
+          "raw_rank": 1
+        },
+        "9002": {
+          "cls": "control-miss",
+          "raw_rank": null
+        }
+      }
+    },
+    {
+      "check": "treatment_control_ok",
+      "ok": true,
+      "detail": {
+        "9001": {
+          "cls": "control-hit",
+          "raw_rank": 1
+        },
+        "9002": {
+          "cls": "control-miss",
+          "raw_rank": null
+        }
+      }
+    },
+    {
+      "check": "trap_at1_no_rise",
+      "ok": true,
+      "detail": {
+        "baseline": 0.25,
+        "treatment": 0.25,
+        "baseline_qids": [
+          230,
+          238,
+          241,
+          243
+        ],
+        "treatment_qids": [
+          230,
+          238,
+          241,
+          243
+        ]
+      }
+    },
+    {
+      "check": "abstention_pass_rate_no_drop",
+      "ok": true,
+      "detail": {
+        "baseline": 0.5,
+        "treatment": 0.5
+      }
+    },
+    {
+      "check": "headline_r1_no_drop",
+      "ok": true,
+      "detail": {
+        "baseline": 0.715,
+        "treatment": 0.715
+      }
+    },
+    {
+      "check": "headline_mrr_no_drop",
+      "ok": true,
+      "detail": {
+        "baseline": 0.793,
+        "treatment": 0.793
+      }
+    },
+    {
+      "check": "no_class_r1_regression_over_2pt",
+      "ok": true,
+      "detail": {}
+    }
+  ],
+  "pass": true,
+  "trap_at1_moved": false,
+  "verdict": "INERT \u2014 penalty is safe but moves nothing; per the ticket the contradiction INDEX is not reaching the trap notes, fix the index not the weight"
+}

@@ -108,3 +108,23 @@ Artifact: `gate_20260928_134734.json`. At `W_CONTRA=0.5`:
 
 `/home/lumen/minerva/lumen_recall2.py` was left untouched. Follow-up is wq#3017: scope the
 penalty to queries that ask about the dead fact, or retire the bundle.
+
+## 7. Query-scoped rework, 2026-09-28 (wq#3017): PASS (INERT), installed
+
+A contradiction row now demotes its note only when the query names the row's subject and
+either a word of its predicate or its dead value (`_asks_about`; README "Query-scoped").
+`W_CONTRA` stays `0.5`. `install.sh` ran unmodified. Artifact: `gate_20260928_140308.json`.
+
+- Every check passed. R@1 0.715, MRR 0.793 and `trap@1` 0.25 are unchanged. No query in the
+  239-query headline changed rank in either direction (per-query diff of
+  `results_wq1614_w1_20260928_1406.json` vs `results_wq1614_w0.5_20260928_1407.json`),
+  and that includes qids 142 and 236.
+- On the frozen fixture the rule fires on 4 of 257 golden queries: 11 and 12 (thor fan),
+  195 and 235 (lumen ollama). The blanket version had already left all four at the same rank.
+- The verdict is INERT, as §3 predicted: the trap@1 queries ask about nothing in this
+  hardware-state index. The remedy is widening the index, not the weight. That is filed as
+  wq#3030.
+
+`install.sh` installed the file (backup `lumen_recall2.py.bak.20260928_140308_pre_wq1614`),
+and `install.sh --verify` returns VERIFY OK. The verify markers are now the scope markers,
+so the rejected blanket version fails the check.

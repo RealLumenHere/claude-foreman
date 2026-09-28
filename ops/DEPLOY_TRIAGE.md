@@ -68,7 +68,7 @@ Five tickets carry everything that needs doing; nothing is left merely described
 | --- | --- | --- |
 | wq#3002 | wq901, wq1298, wq1373, wq1406, wq1633, wq1652, wq1705, wq2086 | all 8 need root for systemd units on Lumen — same capability, same probe shape |
 | wq#3003 | wq2500 (Sia), wq2607 (Anubis), wq2608 (Bes), wq2851 (MacPro group) | all 4 need root on another node |
-| wq#3004 | wq1614, wq1632, wq2027 | all 3 write `/home/lumen/minerva` in place. **Outcome 2026-09-28:** wq2027 + wq1632 deployed (VERIFY OK; minerva #47, lumen-bin #177); wq1614 REJECTED by its golden gate, live untouched → wq#3017 |
+| wq#3004 | wq1614, wq1632, wq2027 | all 3 write `/home/lumen/minerva` in place. **Outcome 2026-09-28:** wq2027 + wq1632 deployed (VERIFY OK; minerva #47, lumen-bin #177); wq1614 REJECTED by its golden gate, live untouched → wq#3017. **wq#3017, 2026-09-28:** query-scoped rework passed the gate (INERT) and was installed; VERIFY OK |
 | wq#3005 | the 9 LIVE_DRIFT bundles | reconcile, never reinstall — several drifted on purpose |
 | wq#3006 | wq2904, wq2676 | live gateway/context edits, no installable file |
 
@@ -86,7 +86,7 @@ Already owned elsewhere: `wq1554-langfuse-lag-monitor` → wq#1555 (blocked),
 | `wq1298-gitleaks-detect` | DEPLOY | wq#3002 | service, timer and gitleaks_detect.py all absent; no gitleaks unit live. The ticket's 'LANDED by orchestrator' note is about the merge, not the box. |
 | `wq1373-cf-token-liveness` | DEPLOY | wq#3002 | all 4 payload files absent, no unit. The failure it was written for -- a dead Access token nobody noticed -- is still undetected. |
 | `wq1406-paid-fallback-guard` | DEPLOY | wq#3002 | all 6 payload files absent and the live gateway config carries no paid_fallback_alert callback, so the runaway-spend class is unguarded. |
-| `wq1614-search-v3-contradiction-penalty` | DEPLOY | wq#3004 | the penalty is not live and never was. /home/lumen/minerva/lumen_recall2.py is 609 lines with zero MEMORY_V4_W_CONTRA and zero note_contradictions references; the bundle's copy is 694 lines with both. The content index called this PARTIAL because the filename matches -- the file is simply a different, older file. |
+| `wq1614-search-v3-contradiction-penalty` | LIVE | no action | in-place library edit, live since 2026-09-28 (wq#3017). The blanket penalty was gate-rejected under wq#3004; the query-scoped rework passed the golden gate unmodified (gate_20260928_140308.json, INERT: no metric moved) and was installed by install.sh. --verify checks the _asks_about scope markers, so the rejected blanket version fails it. |
 | `wq1632-lumen-state-lifecycle` | DEPLOY | wq#3004 | state_lifecycle.py and registry.seed.yaml both absent from every indexed root and no lifecycle entry point exists in bin/. |
 | `wq1633-minerva-projection-dirty-flag` | DEPLOY | wq#3002 | projection_state.py is live byte-identical but lumen-federate-reindex.path and .service are absent, so the dirty flag is written and nothing watches it. Half-deployed. |
 | `wq1652-cfd-actuator` | DEPLOY | wq#3002 | all 4 payload files absent and no actuator unit. 415h unshipped, but cloudflared still has no single actuator, so the need stands. |

@@ -11,12 +11,12 @@ mirror, the gate that must pass before it lands, and the install that runs the g
 ## What this adds
 
 - `lumen_recall2.py` — the patched file (`lumen_recall2.wq1614.diff` is the change against
-  `/home/lumen/research/minerva-ref/lumen_recall2.py` @ `31aa3504…`). A note carrying at
-  least one OPEN `note_contradictions` row has its fused score multiplied by
+  minerva `42d8c2a:lumen_recall2.py` @ `d185ce3c…`). A note carrying an OPEN
+  `note_contradictions` row **that the query asks about** has its fused score multiplied by
   `MEMORY_V4_W_CONTRA` (default `0.5`; `1.0` = off).
 - `contra_penalty_eval.py` — `reach` (index-coverage diagnostic, no DB) and `gate` (the
   adoption gate: two `recall_bench.py` runs over the frozen golden set).
-- `test_contra_penalty.py` — 13 tests, self-contained, no `minerva.db`.
+- `test_contra_penalty.py` — 18 tests, self-contained, no `minerva.db`.
 - `install.sh` — drift gate → reach → unit tests → **golden-set gate on the live corpus** →
   only then copy the file in.
 - `reach_20260913.json` — the reach diagnostic as run on 2026-09-13.
@@ -29,6 +29,17 @@ dead fact (*"ssh nephthys at 100.98.74.87, then …"*). The procedure is still t
 we have; dropping the note loses it. `0.5` demotes, cannot make a note unreachable, and
 preserves the relative order of the contradicted set among itself
 (`test_penalty_is_soft_not_a_filter`).
+
+**Query-scoped (wq#3017).** The first version multiplied every contradicted note on every
+query, and the golden gate rejected it (`gate_20260928_134734.json`: R@1 0.715→0.707,
+knowledge-update −16.6pt). qid 142's gold note carries an open nephthys/`ts_ip` row. The
+query is about re-provisioning with a fleet auth key and never mentions nephthys, but it lost
+its rank-1 answer anyway. A row now fires only when the query names its **subject** and
+either a word of its **predicate** or its **dead value** (`_asks_about`). Subject alone
+is not enough: *"ssh into nephthys"* wants the procedure. Predicate or value alone is not
+enough either: `status` and `dead` are ordinary English. On the frozen golden set the rule
+fires on 4 of 257 queries (qids 11, 12, 195, 235), and the blanket version left all four at
+the same rank. qids 142 and 236 match no row (`test_real_fixture_scoping_on_the_rejected_qids`).
 
 **Not the freshness prior returning.** `W_REC` stays `0.00` — blanket freshness was measured
 to cost recall (the wq#574 block in `lumen_recall2.py`). This fires only on notes we hold

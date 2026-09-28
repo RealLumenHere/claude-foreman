@@ -43,6 +43,7 @@ def _pinned_base():
 
 MIRROR = _pinned_base()
 FIXTURE = '/home/lumen/minerva/eval/fixtures/note_contradictions_20260913.json'
+GOLDEN = '/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl'
 
 # 3-dim unit vectors: cosine against the query vector [1,0,0] is the first element.
 NOTES = [
@@ -100,10 +101,12 @@ def build_corpus(path, contradicted=(), open_col='resolved_at', with_table=True)
     conn.execute("INSERT INTO state_facts VALUES ('f1','nephthys','ts_ip','1.2.3.4',NULL)")
     if with_table:
         conn.execute(f'CREATE TABLE note_contradictions (id INTEGER PRIMARY KEY, '
-                     f'note_id TEXT, fact_id TEXT, dead_value TEXT, {open_col} TEXT)')
+                     f'note_id TEXT, fact_id TEXT, subject TEXT, predicate TEXT, '
+                     f'dead_value TEXT, {open_col} TEXT)')
         for i, nid in enumerate(contradicted, 1):
             conn.execute('INSERT INTO note_contradictions (id, note_id, fact_id, '
-                         'dead_value) VALUES (?,?,?,?)', (i, nid, f'fact{i}', 'dead'))
+                         'subject, predicate, dead_value) VALUES (?,?,?,?,?,?)',
+                         (i, nid, f'fact{i}', 'widget', 'fan_status', 'seized'))
     conn.commit()
     conn.close()
 
@@ -132,7 +135,14 @@ def load_module(path, name, db, env):
     return mod
 
 
-def scores(mod, query='procedure for the widget'):
+# Every corpus row is the dead fact (widget, fan_status, seized). ASKS names the
+# subject and a predicate word, so it asks about that fact; PROC names only the
+# subject -- the wq#3017 qid-142 shape, where the note is wanted for its procedure.
+ASKS = 'widget fan procedure'
+PROC = 'procedure for the widget'
+
+
+def scores(mod, query=ASKS):
     return {h['id']: h['score'] for h in mod.search_v3(query, top_k=10)}
 
 
@@ -150,14 +160,14 @@ class ContraPenaltyTest(unittest.TestCase):
         build_corpus(self.db, contradicted=['n1aaaa', 'n2bbbb'])
         base = load_module(MIRROR, 'lr_mirror', self.db, {})
         new = load_module(PATCHED, 'lr_patched', self.db, {'MEMORY_V4_W_CONTRA': '1.0'})
-        self.assertEqual(base.search_v3('procedure for the widget', top_k=10),
-                         new.search_v3('procedure for the widget', top_k=10))
+        self.assertEqual(base.search_v3(ASKS, top_k=10),
+                         new.search_v3(ASKS, top_k=10))
 
     def test_w_contra_1_emits_no_contra_key(self):
         build_corpus(self.db, contradicted=['n1aaaa'])
         new = load_module(PATCHED, 'lr_patched', self.db, {'MEMORY_V4_W_CONTRA': '1.0'})
         self.assertTrue(all('_contra' not in h
-                            for h in new.search_v3('procedure for the widget')))
+                            for h in new.search_v3(ASKS)))
 
     # ── the penalty itself ────────────────────────────────────────────────────
     def test_penalty_halves_only_contradicted_scores(self):
@@ -172,9 +182,9 @@ class ContraPenaltyTest(unittest.TestCase):
     def test_penalty_demotes_the_contradicted_top_hit(self):
         build_corpus(self.db, contradicted=['n1aaaa'])
         base = load_module(PATCHED, 'lr_off', self.db, {'MEMORY_V4_W_CONTRA': '1.0'})
-        self.assertEqual(base.search_v3('procedure for the widget')[0]['id'], 'n1aaaa')
+        self.assertEqual(base.search_v3(ASKS)[0]['id'], 'n1aaaa')
         pen = load_module(PATCHED, 'lr_on', self.db, {'MEMORY_V4_W_CONTRA': '0.5'})
-        order = [h['id'] for h in pen.search_v3('procedure for the widget')]
+        order = [h['id'] for h in pen.search_v3(ASKS)]
         self.assertNotEqual(order[0], 'n1aaaa')
         self.assertEqual(order[0], 'n2bbbb')
 
@@ -184,8 +194,8 @@ class ContraPenaltyTest(unittest.TestCase):
         build_corpus(self.db, contradicted=[n[0] for n in NOTES])
         base = load_module(PATCHED, 'lr_off', self.db, {'MEMORY_V4_W_CONTRA': '1.0'})
         pen = load_module(PATCHED, 'lr_on', self.db, {'MEMORY_V4_W_CONTRA': '0.5'})
-        b_order = [h['id'] for h in base.search_v3('procedure for the widget')]
-        p_hits = pen.search_v3('procedure for the widget')
+        b_order = [h['id'] for h in base.search_v3(ASKS)]
+        p_hits = pen.search_v3(ASKS)
         self.assertEqual([h['id'] for h in p_hits], b_order)
         self.assertTrue(all(h['_contra'] == 0.5 for h in p_hits))
         self.assertTrue(all(h['score'] > 0 for h in p_hits))
@@ -211,7 +221,7 @@ class ContraPenaltyTest(unittest.TestCase):
         resolved_at. Both must resolve to the same penalty."""
         build_corpus(self.db, contradicted=['n1aaaa'], open_col='cleared_at')
         pen = load_module(PATCHED, 'lr_on', self.db, {'MEMORY_V4_W_CONTRA': '0.5'})
-        hits = {h['id']: h for h in pen.search_v3('procedure for the widget')}
+        hits = {h['id']: h for h in pen.search_v3(ASKS)}
         self.assertEqual(hits['n1aaaa']['_contra'], 0.5)
         self.assertNotIn('_contra', hits['n2bbbb'])
 
@@ -239,11 +249,13 @@ class ContraPenaltyTest(unittest.TestCase):
         build_corpus(self.db, contradicted=['n3cccc'])
         fx = os.path.join(self.tmp.name, 'fx.json')
         with open(fx, 'w') as fh:
-            json.dump([{'note_id': 'n1aaaa', 'resolved_at': None},
-                       {'note_id': 'n2bbbb', 'resolved_at': '2026-09-13'}], fh)
+            fact = {'subject': 'widget', 'predicate': 'fan_status',
+                    'dead_value': 'seized'}
+            json.dump([dict(fact, note_id='n1aaaa', resolved_at=None),
+                       dict(fact, note_id='n2bbbb', resolved_at='2026-09-13')], fh)
         pen = load_module(PATCHED, 'lr_fx', self.db,
                           {'MEMORY_V4_W_CONTRA': '0.5', 'MEMORY_V4_CONTRA_FIXTURE': fx})
-        hits = {h['id']: h for h in pen.search_v3('procedure for the widget')}
+        hits = {h['id']: h for h in pen.search_v3(ASKS)}
         self.assertEqual(hits['n1aaaa']['_contra'], 0.5)   # open in fixture
         self.assertNotIn('_contra', hits['n2bbbb'])        # resolved in fixture
         self.assertNotIn('_contra', hits['n3cccc'])        # table ignored
@@ -258,8 +270,62 @@ class ContraPenaltyTest(unittest.TestCase):
         with open(FIXTURE) as fh:
             rows = json.load(fh)
         expect = {r['note_id'] for r in rows if r.get('resolved_at') is None}
-        self.assertEqual(pen._fixture_contradicted(), expect)
+        self.assertEqual({r[0] for r in pen._fixture_rows()}, expect)
         self.assertEqual(len(expect), 17)                  # 20 rows, 17 notes
+        self.assertEqual(len(pen._fixture_rows()), 20)
+
+    # ── query scope (wq#3017) ─────────────────────────────────────────────────
+    def test_subject_only_query_does_not_penalize(self):
+        """The procedure-around-one-dead-fact shape: naming the subject is not
+        asking about the dead fact."""
+        build_corpus(self.db, contradicted=['n1aaaa'])
+        base = load_module(PATCHED, 'lr_off', self.db, {'MEMORY_V4_W_CONTRA': '1.0'})
+        pen = load_module(PATCHED, 'lr_on', self.db, {'MEMORY_V4_W_CONTRA': '0.5'})
+        self.assertEqual(pen.search_v3(PROC), base.search_v3(PROC))
+
+    def test_predicate_without_subject_does_not_penalize(self):
+        build_corpus(self.db, contradicted=['n1aaaa'])
+        pen = load_module(PATCHED, 'lr_on', self.db, {'MEMORY_V4_W_CONTRA': '0.5'})
+        self.assertTrue(all('_contra' not in h
+                            for h in pen.search_v3('gadget fan status procedure')))
+
+    def test_subject_plus_dead_value_penalizes(self):
+        build_corpus(self.db, contradicted=['n1aaaa'])
+        pen = load_module(PATCHED, 'lr_on', self.db, {'MEMORY_V4_W_CONTRA': '0.5'})
+        hits = {h['id']: h for h in pen.search_v3('is the widget still seized')}
+        self.assertEqual(hits['n1aaaa']['_contra'], 0.5)
+
+    def test_asks_about_word_boundaries(self):
+        mod = load_module(PATCHED, 'lr_ask', self.db, {'MEMORY_V4_W_CONTRA': '0.5'})
+
+        def asks(q, *row):
+            return mod._asks_about(set(mod._words(q)), q.lower(), *row)
+        row = ('llama33-local', 'status', 'LIVE-VERIFIED')
+        self.assertTrue(asks('is llama33-local still live-verified', *row))
+        self.assertTrue(asks('llama33-local status', *row))
+        self.assertFalse(asks('llama33 status', *row))        # half the subject
+        self.assertFalse(asks('llama33-local config', *row))  # no predicate/value
+        self.assertFalse(asks('thorough status', 'thor', 'fan_status', 'dead'))
+
+    def test_real_fixture_scoping_on_the_rejected_qids(self):
+        """Pinned probe: the frozen golden set (sha-checked by install.sh) and the
+        frozen 20260913 fixture. qid 142 and 236 are the two the blanket multiply
+        broke -- no fixture row may fire on them -- while a query from outside the
+        golden set that does ask about nephthys's dead IP must still fire."""
+        if not (os.path.exists(FIXTURE) and os.path.exists(GOLDEN)):
+            self.skipTest('frozen fixture/golden not present')
+        mod = load_module(PATCHED, 'lr_fx3', self.db,
+                          {'MEMORY_V4_W_CONTRA': '0.5',
+                           'MEMORY_V4_CONTRA_FIXTURE': FIXTURE})
+        with open(GOLDEN) as fh:
+            golden = {q['qid']: q['query']
+                      for q in (json.loads(l) for l in fh if l.strip())}
+        all_ids = {r[0] for r in mod._fixture_rows()}
+        self.assertEqual(mod._contradicted(None, all_ids, golden[142]), set())
+        self.assertEqual(mod._contradicted(None, all_ids, golden[236]), set())
+        self.assertEqual(
+            mod._contradicted(None, all_ids, "what is nephthys's tailscale ip"),
+            {'27424d3dad48', '1bcdc57e8686'})
 
 
 class GateShimTest(unittest.TestCase):

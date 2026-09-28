@@ -21,7 +21,9 @@ if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh"
   vcontains "$LIVE" "^W_CONTRA = float\(os.environ.get\('MEMORY_V4_W_CONTRA'"
   vcontains "$LIVE" "FROM note_contradictions"
-  vcontains "$LIVE" "contra = _contradicted\(conn, "
+  # wq#3017: the query-scoped penalty, not the blanket multiply the gate rejected.
+  vcontains "$LIVE" "^def _asks_about\(q_words, q_lower, subject, predicate, dead_value\)"
+  vcontains "$LIVE" "_contradicted\(conn, set\(cand.keys\(\)\), query\)"
   vdone
 fi
 

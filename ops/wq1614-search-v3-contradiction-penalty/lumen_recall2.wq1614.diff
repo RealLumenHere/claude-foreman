@@ -1,6 +1,6 @@
 --- minerva-live/lumen_recall2.py
 +++ wq1614/lumen_recall2.py
-@@ -403,6 +403,88 @@
+@@ -403,6 +403,114 @@
  SALIENCE_ON = os.environ.get('MEMORY_V4_SALIENCE', '0') == '1'
  ARCHIVE_FILTER = os.environ.get('MEMORY_V4_ARCHIVE_FILTER', '0') == '1'
  
@@ -8,8 +8,8 @@
 +# WHY (MINERVA_STALENESS_REVIEW §3.7 fix #9): wq#1610 detects notes that assert a
 +# state_facts value we have since closed and writes them to note_contradictions.
 +# Detection alone changes nothing a caller sees -- the stale note still ranks where
-+# it ranked. This multiplies the fused score of any note carrying an OPEN
-+# contradiction row by W_CONTRA.
++# it ranked. This multiplies by W_CONTRA the fused score of a note carrying an
++# OPEN contradiction row that the query asks about (_asks_about, wq#3017).
 +#
 +# SOFT, not a filter. A contradicted note is usually a good procedure wrapped
 +# around one dead fact ("ssh nephthys at 100.98.74.87, then ...") -- the procedure
@@ -29,7 +29,7 @@
 +# scan happened to have written that minute. Rows are the note_contradictions
 +# export shape; open == resolved_at/cleared_at null.
 +CONTRA_FIXTURE = os.environ.get('MEMORY_V4_CONTRA_FIXTURE', '')
-+_CONTRA_FIXTURE_CACHE = {'path': None, 'ids': None}
++_CONTRA_FIXTURE_CACHE = {'path': None, 'rows': None}
 +
 +
 +def _contra_open_col(conn):
@@ -48,20 +48,45 @@
 +    return None
 +
 +
-+def _fixture_contradicted():
-+    ids = _CONTRA_FIXTURE_CACHE['ids']
-+    if ids is None or _CONTRA_FIXTURE_CACHE['path'] != CONTRA_FIXTURE:
++def _fixture_rows():
++    rows = _CONTRA_FIXTURE_CACHE['rows']
++    if rows is None or _CONTRA_FIXTURE_CACHE['path'] != CONTRA_FIXTURE:
 +        import json
 +        with open(CONTRA_FIXTURE) as fh:
-+            rows = json.load(fh)
-+        ids = {r['note_id'] for r in rows
-+               if r.get('resolved_at') is None and r.get('cleared_at') is None}
-+        _CONTRA_FIXTURE_CACHE.update(path=CONTRA_FIXTURE, ids=ids)
-+    return ids
++            rows = [(r['note_id'], r['subject'], r['predicate'], r['dead_value'])
++                    for r in json.load(fh)
++                    if r.get('resolved_at') is None and r.get('cleared_at') is None]
++        _CONTRA_FIXTURE_CACHE.update(path=CONTRA_FIXTURE, rows=rows)
++    return rows
 +
 +
-+def _contradicted(conn, nids):
-+    """Subset of `nids` carrying at least one OPEN note_contradictions row.
++def _words(text):
++    return re.findall(r'[a-z0-9]+', (text or '').lower())
++
++
++def _asks_about(q_words, q_lower, subject, predicate, dead_value):
++    """True when the query asks about THIS dead fact, not merely near it.
++
++    wq#3017: the blanket multiply was rejected by the golden gate. qid 142's gold
++    note carries a live nephthys/ts_ip row, and a query about re-provisioning with
++    a fleet auth key -- which never mentions nephthys or its IP -- lost its rank-1
++    answer to it. So a row fires only when the query names its subject AND either
++    a word of its predicate or its dead value ("nephthys ip", "is llama33-local
++    still live-verified"). Subject alone is not enough ("ssh into nephthys" wants
++    the procedure, the dead IP inside it is incidental), and predicate or value
++    alone is not either: 'status' and 'dead' are ordinary English.
++    """
++    subj = _words(subject)
++    if not subj or not all(w in q_words for w in subj):
++        return False
++    if any(len(w) >= 2 and w in q_words for w in _words(predicate)):
++        return True
++    dv = (dead_value or '').strip().lower()
++    return len(dv) >= 2 and dv in q_lower
++
++
++def _contradicted(conn, nids, query):
++    """Subset of `nids` with an OPEN note_contradictions row `query` asks about.
 +
 +    Fail-open by construction: if the table is absent (the #1610 scan is not
 +    installed on this box) or the query raises, the result is the empty set and
@@ -69,38 +94,40 @@
 +    """
 +    if not nids:
 +        return set()
-+    if CONTRA_FIXTURE:
-+        try:
-+            return _fixture_contradicted() & set(nids)
-+        except Exception:
-+            return set()
 +    try:
-+        col = _contra_open_col(conn)
-+        if col is None:
-+            return set()
-+        nids = list(nids)
-+        ph = ','.join('?' * len(nids))
-+        return {r[0] for r in conn.execute(
-+            f'SELECT DISTINCT note_id FROM note_contradictions '
-+            f'WHERE {col} IS NULL AND note_id IN ({ph})', nids)}
-+    except sqlite3.Error:
++        if CONTRA_FIXTURE:
++            rows = [r for r in _fixture_rows() if r[0] in nids]
++        else:
++            col = _contra_open_col(conn)
++            if col is None:
++                return set()
++            nids = list(nids)
++            ph = ','.join('?' * len(nids))
++            rows = conn.execute(
++                f'SELECT note_id, subject, predicate, dead_value '
++                f'FROM note_contradictions '
++                f'WHERE {col} IS NULL AND note_id IN ({ph})', nids).fetchall()
++    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
 +        return set()
++    q_words, q_lower = set(_words(query)), query.lower()
++    return {r[0] for r in rows if _asks_about(q_words, q_lower, r[1], r[2], r[3])}
 +
  
  def _search_v3_impl(query, top_k=10):
      # wq#2895: this runs INSIDE lumen-memoryd on every /recall. Before, any raise
-@@ -530,6 +612,10 @@
+@@ -530,6 +638,11 @@
          if q_ents:
              ent_scores = _entity_scores(conn, q_ents, set(cand.keys()))
  
 +    # wq#1614: one query for the whole candidate pool, skipped entirely when the
 +    # penalty is off, so "off" costs nothing rather than costing a no-op SELECT.
-+    contra = _contradicted(conn, set(cand.keys())) if W_CONTRA != 1.0 else set()
++    contra = (_contradicted(conn, set(cand.keys()), query)
++              if W_CONTRA != 1.0 else set())
 +
      scored = []
      for r in rows:
          blob_toks = set(_tokens((r['title'] or '') + ' ' + (r['content'] or '')[:2500]))
-@@ -546,12 +632,22 @@
+@@ -546,12 +659,22 @@
          fused = W_D * d + W_LEX * lex + W_G * g + W_REC * rec
          if ENTITY_ON:
              fused += ENTITY_W * ent
@@ -129,7 +156,7 @@
      if FED_ON:
          scored.extend(_federated(conn, query, q_toks, q_emb, now_ts))
      # wq#576 salience: ADDITIVE and NON-FILTERING (a multiplicative/filtering usage
-@@ -604,6 +700,7 @@
+@@ -604,6 +727,7 @@
  if __name__ == '__main__':
      q = ' '.join(sys.argv[1:]) or 'test query'
      for i, h in enumerate(search_v3(q), 1):

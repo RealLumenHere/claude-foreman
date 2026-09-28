@@ -192,12 +192,12 @@ REGISTER: dict[str, dict] = {
         reason="fetch_source.py absent from every indexed root; the eligibility gate it "
                "backs cannot be running."),
     "wq1614-search-v3-contradiction-penalty": dict(
-        disposition=KEEP_DEPLOY, follow_up="wq#3004",
-        reason="the penalty is not live and never was. /home/lumen/minerva/lumen_recall2.py "
-               "is 609 lines with zero MEMORY_V4_W_CONTRA and zero note_contradictions "
-               "references; the bundle's copy is 694 lines with both. The content index "
-               "called this PARTIAL because the filename matches -- the file is simply a "
-               "different, older file."),
+        disposition=KEEP_LIVE, follow_up=None,
+        reason="in-place library edit, live since 2026-09-28 (wq#3017). The blanket "
+               "penalty was gate-rejected under wq#3004; the query-scoped rework passed "
+               "the golden gate unmodified (gate_20260928_140308.json, INERT: no metric "
+               "moved) and was installed by install.sh. --verify checks the _asks_about "
+               "scope markers, so the rejected blanket version fails it."),
     "wq1704-missing-watchdogs": dict(
         disposition=KEEP_LIVE,
         units=["lumen-spof-daemons.timer", "lumen-spof-restarts.timer",
