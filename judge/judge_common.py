@@ -172,6 +172,39 @@ def parse_verdict(raw_text):
             "rationale": str(rationale)}, None
 
 
+def verify_model_registered(model, key=None, timeout=10):
+    """wq#2904: a model name with no matching litellm_config.yaml model_list
+    entry returns ProxyModelNotFoundError on every call -- and call_judge()
+    below catches that as an ordinary per-case error, not a loud startup
+    failure. That is exactly how minerva-bench-2 burned 169 silent calls on
+    wq2821-judge-llama8b over 5 days (fleet-audit-2, 2026-09-28) before
+    anyone noticed: judge_bench.py logged each one as a printed PARSE_FAIL
+    line, no aq page, no fail-closed queue entry.
+
+    Callers should invoke this once per model before the run loop and fail
+    loud on a miss, the same "fail loud now, not N calls in" discipline
+    litellm_key() already uses. Returns None if `model` is registered on the
+    gateway, else an error string -- never raises."""
+    try:
+        key = key or litellm_key()
+    except Exception as e:
+        return f"cannot load LiteLLM key to check model registration: {e}"
+    req = urllib.request.Request(
+        f"{LITELLM_BASE}/models",
+        headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read())
+    except Exception as e:
+        return f"could not reach gateway to verify model registration ({type(e).__name__}: {e})"
+    ids = {m.get("id") for m in body.get("data", [])}
+    if model not in ids:
+        return (f"model {model!r} is not registered on the LiteLLM gateway "
+                f"({LITELLM_BASE}/models) -- add it to litellm_config.yaml's "
+                f"model_list before referencing it (wq#2904 class)")
+    return None
+
+
 def call_judge(model, case, timeout=240, max_tokens=400, key=None):
     """One synchronous call to the LiteLLM gateway. Returns dict with:
     verdict (dict|None), error (str|None), latency_s, raw (str), model."""
