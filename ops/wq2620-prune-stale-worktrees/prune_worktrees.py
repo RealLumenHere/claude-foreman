@@ -21,9 +21,13 @@ prunes it ONLY if all of:
       with an unexpired lease) or a live slock (lumen-pr's `.owners/<name>`
       record under scratch/worktrees, holder has an unexpired row in `slocks`
       or `slocks_ro`).
-  (e) the branch tip commit is at least `--grace-days` old (default 7,
-      wq#2909) — a same-day merge gets one week to be reverted before its
-      worktree is gone for good.
+  (e) it LANDED at least `--grace-days` ago (default 7, wq#2909) — a merge gets
+      one week to be reverted before its worktree is gone for good. "Landed"
+      means the date of the commit that brought the branch onto the default
+      branch, or the wq ticket's `done_at` for a `wqNNNN-aN` worktree —
+      whichever is later. Not the branch tip's own commit date: that is only a
+      lower bound on landing time, so a branch committed long before it merged
+      got no grace period at all (wq#2934 found this, wq#2942 fixed it).
 Any read failure on the liveness checks (b/d) or the age check (e) fails
 CLOSED — treated as live/too-new, never pruned — since an unreadable answer is
 not evidence of a safe one.
@@ -187,23 +191,101 @@ def is_merged(repo, branch, default):
     return rc == 0
 
 
-def merge_age_days(repo, branch):
-    """Days since `branch`'s tip commit, or None if the commit date can't be
-    read (fails closed at the call site — an unknown age is never old enough).
-    wq#2909: the janitor pruned a merged+clean worktree the moment `is_merged`
-    went true, with no window for a same-day revert to still find it. Using the
-    branch tip's own commit date (not wall-clock "run time") means a worktree
-    whose branch merged a week ago reads as a week old on every run, not just
-    the runs that happen to fire after the wait."""
-    rc, out, _ = sh(["git", "-C", repo, "log", "-1", "--format=%ct", branch])
+def commit_ts(repo, rev):
+    """Naive-UTC committer date of `rev`, or None if it can't be read."""
+    rc, out, _ = sh(["git", "-C", repo, "log", "-1", "--format=%ct", rev])
     if rc != 0 or not out.strip():
         return None
     try:
-        committed = datetime.datetime.fromtimestamp(int(out.strip()), datetime.timezone.utc)
+        return datetime.datetime.fromtimestamp(
+            int(out.strip()), datetime.timezone.utc).replace(tzinfo=None)
     except (ValueError, OverflowError, OSError):
         return None
-    age = _now_utc_naive() - committed.replace(tzinfo=None)
-    return age.total_seconds() / 86400.0
+
+
+def landing_commit(repo, branch, default):
+    """The commit that brought `branch` onto origin/<default>: the oldest commit
+    that both descends from `branch`'s tip and is reachable from
+    origin/<default>. For a `--no-ff` merge that is the merge commit itself; for
+    a fast-forward, where no merge commit exists anywhere, it is the next commit
+    pushed onto the default branch — later than the true landing, so erring
+    toward more protection, not less.
+
+    None when the range is empty: `branch`'s tip IS origin/<default>'s tip, and
+    git then holds no record at all of when it got there (a fast-forward writes
+    no commit of its own). That case falls back to `done_at` below."""
+    rc, out, _ = sh(["git", "-C", repo, "rev-list", "--ancestry-path",
+                      f"{branch}..origin/{default}"])
+    if rc != 0:
+        return None
+    revs = out.split()
+    return revs[-1] if revs else None
+
+
+def wq_done_at(ticket_id):
+    """Naive-UTC `tasks.done_at` for a ticket, or None if there is no row, no
+    `done_at` yet, or the db can't be read. bin/wq:363 writes it with `utcnow()`
+    in `_DB_TS_FMT`, the same format every other timestamp here is parsed with.
+
+    A None here is "this source has nothing to say", not "prune it" — an
+    unreadable db still fails closed, because `wq_claim_is_live` treats exactly
+    that condition as a live claim before `classify` can ever return prune."""
+    conn = _db_conn()
+    if conn is None:
+        return None
+    try:
+        row = conn.execute("SELECT done_at FROM tasks WHERE id=?",
+                            (ticket_id,)).fetchone()
+    except Exception:
+        return None
+    finally:
+        conn.close()
+    return _parse_ts(row[0]) if row else None
+
+
+def landing_age_days(repo, branch, default, wt_name=None):
+    """(days_since_landing, source) — how long ago `branch`'s work became
+    reachable from origin/<default> — or (None, why) when nothing readable says.
+    Fails closed at the call site: an unknown age is never old enough.
+
+    wq#2909 added this grace period so a same-day merge keeps its worktree for a
+    week. wq#2934 proved it measured the wrong clock: it read the branch TIP's
+    own commit date, and a commit date is only a LOWER bound on landing time. A
+    branch whose work was committed ten days before it finally merged — blocked,
+    on hold, or reopened, 50 of the last 2000 done tickets in the wq db — read
+    as ten days old and was prunable the instant the merge landed. Zero revert
+    window: precisely the bug wq#2909 was filed against, reached by another
+    route.
+
+    So take the LATEST timestamp any source can evidence, which is the smallest
+    age and so the most protection:
+      * the landing commit's date — git's only record of the merge event;
+      * `tasks.done_at` for a `wqNNNN-aN` fworker worktree — the fleet's record
+        of when its ticket actually closed, and the only source that covers the
+        one case git cannot (a fast-forward still sitting at the default
+        branch's tip);
+      * the branch tip's commit date — wq#2934's clock, demoted to the floor it
+        always was. Being <= the other two it never wins the max; it is only
+        what remains for a branch that never diverged, where there was no
+        landing event to date in the first place."""
+    cands = []
+    lc = landing_commit(repo, branch, default)
+    if lc:
+        ts = commit_ts(repo, lc)
+        if ts:
+            cands.append((ts, f"landing commit {lc[:8]}"))
+    m = FWORKER_WT_RE.match(wt_name or "")
+    if m:
+        ts = wq_done_at(int(m.group(1)))
+        if ts:
+            cands.append((ts, f"wq#{m.group(1)} done_at"))
+    ts = commit_ts(repo, branch)
+    if ts:
+        cands.append((ts, "branch tip commit, no landing event on record"))
+    if not cands:
+        return None, "no landing commit, no wq done_at, unreadable tip commit date"
+    ts, source = max(cands, key=lambda c: c[0])
+    return (_now_utc_naive() - ts).total_seconds() / 86400.0, source
 
 
 # ── liveness (criterion (b): not a live wq claim or slock) ──────────────────
@@ -300,14 +382,15 @@ def classify(path, repo, registry, default, scratch_root, grace_days):
         return "skip", "uncommitted or untracked changes present"
     if not is_merged(repo, info["branch"], default):
         return "skip", f"branch {info['branch']!r} has commits not in origin/{default}"
-    age = merge_age_days(repo, info["branch"])
-    if age is None:
-        return "skip", f"branch {info['branch']!r} commit date unreadable — fail closed"
-    if age < grace_days:
-        return "skip", (f"merged into origin/{default}, only {age:.1f}d old "
-                         f"(grace period {grace_days}d)")
-
     name = os.path.basename(path)
+    age, age_src = landing_age_days(repo, info["branch"], default, name)
+    if age is None:
+        return "skip", (f"branch {info['branch']!r} landing date unreadable "
+                         f"({age_src}) — fail closed")
+    if age < grace_days:
+        return "skip", (f"merged into origin/{default}, only {age:.1f}d since landing "
+                         f"per {age_src} (grace period {grace_days}d)")
+
     m = FWORKER_WT_RE.match(name)
     if m:
         live, why = wq_claim_is_live(int(m.group(1)))
@@ -404,8 +487,10 @@ def main(argv=None):
     ap.add_argument("--no-fetch", action="store_true",
                      help="skip `git fetch --prune origin`; use current local refs")
     ap.add_argument("--grace-days", type=float, default=7,
-                     help="wq#2909: only prune a merged+clean worktree once its "
-                          "branch tip is at least this many days old (default 7)")
+                     help="wq#2909: only prune a merged+clean worktree once it "
+                          "LANDED at least this many days ago — landing commit "
+                          "date or wq done_at, whichever is later, never the "
+                          "branch tip's own commit date (wq#2942; default 7)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--log", default=LOG_PATH)
     args = ap.parse_args(argv)

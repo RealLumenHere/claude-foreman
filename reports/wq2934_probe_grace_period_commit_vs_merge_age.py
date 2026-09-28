@@ -6,12 +6,17 @@ Claim under test (from prune_worktrees.py's own docstring and README): "a
 same-day merge gets one week to be reverted before its worktree is gone for
 good."
 
-`merge_age_days()` measures age from the branch tip's OWN commit timestamp,
+`merge_age_days()` measured age from the branch tip's OWN commit timestamp,
 not from when the branch actually became an ancestor of origin/main. This
 probe builds a branch whose last commit is dated 10 days in the past (a
 ticket that did its work, then sat blocked/on-hold for a while) and merges
 it into origin/main just now (today) -- i.e. a merge that, by the fix's own
 stated goal, should get a fresh 7-day revert window starting at merge time.
+
+wq#2942 fixed it: `landing_age_days()` now reads the date of the commit that
+brought the branch onto origin/main (or the wq ticket's `done_at`), so this
+probe went from exit 1 to exit 0. It is kept as the regression check -- it
+still fails against the tip-commit clock it was written to catch.
 
 Run: python3 reports/wq2934_probe_grace_period_commit_vs_merge_age.py
 Exit 0 = grace period held (claim upheld). Exit 1 = pruned immediately on a
@@ -73,9 +78,11 @@ def main():
     is_anc = subprocess.run(
         ["git", "-C", work, "merge-base", "--is-ancestor", branch, "origin/main"]
     ).returncode == 0
-    age = pw.merge_age_days(work, branch)
+    tip_age = (pw._now_utc_naive() - pw.commit_ts(work, branch)).total_seconds() / 86400
+    age, source = pw.landing_age_days(work, branch, "main", "wq9099-a1")
     print(f"branch merged into origin/main just now: {is_anc}")
-    print(f"merge_age_days() reports: {age:.2f} days (tip commit was authored 10d ago)")
+    print(f"tip-commit clock (wq#2909, the bug): {tip_age:.2f} days")
+    print(f"landing clock (wq#2942, the fix):    {age:.2f} days, per {source}")
 
     [r] = pw.run([root], apply=False, fetch=False)  # default grace_days=7
     print(f"classify() action={r['action']!r} reason={r['reason']!r}")

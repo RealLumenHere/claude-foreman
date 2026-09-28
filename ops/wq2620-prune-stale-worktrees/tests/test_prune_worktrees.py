@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -30,10 +31,20 @@ def wq_ts(**delta):
     return t.strftime(WQ_TS_FMT)
 
 
-def git(*args, cwd):
-    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+def git(*args, cwd, env=None):
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=env)
     assert r.returncode == 0, f"git {args} failed: {r.stderr}"
     return r.stdout
+
+
+def dated_env(days_ago):
+    """Env that stamps the commit git makes with it `days_ago` days in the past —
+    author and committer both, since `%ct` reads the committer date."""
+    ts = str(int(time.time()) - int(days_ago * 86400))
+    env = dict(os.environ)
+    env["GIT_AUTHOR_DATE"] = ts
+    env["GIT_COMMITTER_DATE"] = ts
+    return env
 
 
 def make_repo(tmp_path, name="origin-src"):
@@ -65,6 +76,47 @@ def add_worktree(repo, root, name, branch, ahead=False, dirty=False, base_branch
         with open(os.path.join(wt, "f.txt"), "a") as f:
             f.write("uncommitted\n")
     return wt
+
+
+def land_late(repo, root, name, branch, commit_days_ago, land_days_ago, ff=False):
+    """A worktree whose unique commit is `commit_days_ago` old but which only
+    LANDED on origin/main `land_days_ago` ago — the wq#2934 divergence, built
+    out of real git dates and real ancestry rather than a patched clock.
+
+    `ff=True` fast-forwards instead of merging, leaving the branch tip as
+    origin/main's own tip: no commit anywhere dates that landing, so
+    `landing_age_days` has only `done_at` (or the tip) left to read."""
+    os.makedirs(root, exist_ok=True)
+    wt = os.path.join(root, name)
+    git("worktree", "add", "-q", "-b", branch, wt, "main", cwd=repo)
+    with open(os.path.join(wt, "g.txt"), "w") as f:
+        f.write("ticket work\n")
+    cenv = dated_env(commit_days_ago)
+    git("add", "g.txt", cwd=wt, env=cenv)
+    git("commit", "-q", "-m", "ticket work, then blocked", cwd=wt, env=cenv)
+    if ff:
+        git("merge", "-q", "--ff-only", branch, cwd=repo)
+    else:
+        git("merge", "-q", "--no-ff", "-m", f"merge {branch}", branch,
+            cwd=repo, env=dated_env(land_days_ago))
+    git("push", "-q", "origin", "main", cwd=repo)
+    git("fetch", "-q", "origin", cwd=repo)
+    return wt
+
+
+def wq_db_with_done_at(tmp_path, monkeypatch, ticket_id, done_at):
+    """A synthetic queue db where `ticket_id` is done at `done_at`."""
+    import sqlite3
+    db = tmp_path / "queue.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE tasks(id INTEGER PRIMARY KEY, status TEXT, "
+                 "lease_expires TEXT, done_at TEXT)")
+    conn.execute("INSERT INTO tasks(id, status, lease_expires, done_at) "
+                 "VALUES (?, 'done', NULL, ?)", (ticket_id, done_at))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(pw, "WQ_DB", str(db))
+    return db
 
 
 @pytest.fixture
@@ -285,25 +337,117 @@ def test_merged_worktree_within_grace_period_is_skipped(tmp_path, repo):
     assert "grace period" in r["reason"]
 
 
-def test_merged_worktree_past_grace_period_is_prunable(tmp_path, repo, monkeypatch):
-    """Same branch, but its tip commit date is monkeypatched to 8 days ago —
-    old enough to clear a 7-day grace period."""
+def test_merged_worktree_past_grace_period_is_prunable(tmp_path, repo):
+    """Same shape, real git dates: committed 20 days ago AND landed 10 days ago,
+    so the landing clock itself is past a 7-day grace period. Replaces a version
+    that reached 8 days by monkeypatching the age function, which never
+    exercised git ancestry at all (the wq#2934 test-suite gap)."""
     root = tmp_path / "worktrees"
-    add_worktree(repo, root, "wq9021-a1", "feat/wq9021-a1-old-merge")
-    real_merge_age_days = pw.merge_age_days
-    monkeypatch.setattr(pw, "merge_age_days",
-                         lambda repo, branch: 8.0 if branch == "feat/wq9021-a1-old-merge"
-                         else real_merge_age_days(repo, branch))
+    land_late(repo, root, "wq9021-a1", "feat/wq9021-a1-old-merge",
+              commit_days_ago=20, land_days_ago=10)
     [r] = pw.run([str(root)], apply=False, fetch=False)
-    assert r["action"] == "prune"
+    assert r["action"] == "prune", r["reason"]
+
+
+def test_late_landing_gets_the_full_grace_period(tmp_path, repo):
+    """wq#2934 regression, the contradiction wq#2942 fixes. A branch whose only
+    commit is 10 days old — work done, then blocked — but which lands RIGHT NOW
+    must get a fresh 7-day revert window. Under the tip-commit clock it read as
+    10 days old and was prunable the instant the merge landed: zero protection.
+    The reason must name the landing commit, not the tip, or the right answer
+    arrived via the wrong clock."""
+    root = tmp_path / "worktrees"
+    land_late(repo, root, "wq9023-a1", "feat/wq9023-a1-blocked-then-landed",
+              commit_days_ago=10, land_days_ago=0)
+    [r] = pw.run([str(root)], apply=False, fetch=False)  # default grace_days=7
+    assert r["action"] == "skip", r["reason"]
+    assert "grace period" in r["reason"]
+    assert "landing commit" in r["reason"]
+
+
+def test_landing_age_diverges_from_tip_commit_age(tmp_path, repo):
+    """The two clocks, side by side on one branch: the tip reads 10 days, the
+    landing reads ~0. wq#2909 used the first; only the second answers 'how long
+    has a revert had to find this worktree'."""
+    root = tmp_path / "worktrees"
+    branch = "feat/wq9024-a1-two-clocks"
+    land_late(repo, root, "wq9024-a1", branch, commit_days_ago=10, land_days_ago=0)
+    tip_age = (pw._now_utc_naive() - pw.commit_ts(str(repo), branch)).total_seconds() / 86400
+    age, source = pw.landing_age_days(str(repo), branch, "main", "wq9024-a1")
+    assert 9.9 < tip_age < 10.1
+    assert age < 0.1, (age, source)
+    assert source.startswith("landing commit")
+
+
+def test_fast_forward_landing_falls_back_to_wq_done_at(tmp_path, repo, monkeypatch):
+    """The one case git cannot date: a fast-forward whose branch tip is still
+    origin/main's tip, so no commit anywhere records the landing. For a
+    `wqNNNN-aN` worktree the ticket's own `done_at` covers it — here the work
+    was committed 10 days ago but the ticket only closed now."""
+    root = tmp_path / "worktrees"
+    land_late(repo, root, "wq9025-a1", "feat/wq9025-a1-ff-just-closed",
+              commit_days_ago=10, land_days_ago=0, ff=True)
+    wq_db_with_done_at(tmp_path, monkeypatch, 9025, wq_ts(minutes=-5))
+    [r] = pw.run([str(root)], apply=False, fetch=False)
+    assert r["action"] == "skip", r["reason"]
+    assert "grace period" in r["reason"]
+    assert "done_at" in r["reason"]
+
+
+def test_fast_forward_landing_with_an_old_done_at_is_prunable(tmp_path, repo, monkeypatch):
+    """Same fast-forward, same absent git evidence — but the ticket closed 10
+    days ago, so the grace period really has elapsed. Without this the test
+    above would also pass a fix that simply never prunes."""
+    root = tmp_path / "worktrees"
+    land_late(repo, root, "wq9026-a1", "feat/wq9026-a1-ff-long-closed",
+              commit_days_ago=10, land_days_ago=0, ff=True)
+    wq_db_with_done_at(tmp_path, monkeypatch, 9026, wq_ts(days=-10))
+    [r] = pw.run([str(root)], apply=False, fetch=False)
+    assert r["action"] == "prune", r["reason"]
+
+
+def test_done_at_wins_over_an_older_landing_commit(tmp_path, repo, monkeypatch):
+    """Both clocks readable and disagreeing: landed 10 days ago, but the ticket
+    was reopened and only closed now. The LATEST evidence wins, because the
+    smallest age is the most protection — a reopened ticket has had no week."""
+    root = tmp_path / "worktrees"
+    land_late(repo, root, "wq9027-a1", "feat/wq9027-a1-reopened",
+              commit_days_ago=20, land_days_ago=10)
+    wq_db_with_done_at(tmp_path, monkeypatch, 9027, wq_ts(minutes=-5))
+    [r] = pw.run([str(root)], apply=False, fetch=False)
+    assert r["action"] == "skip", r["reason"]
+    assert "done_at" in r["reason"]
+
+
+def test_late_landing_protects_a_non_fworker_scratch_worktree(tmp_path, repo, monkeypatch):
+    """Out of the population the fix was designed around (wq#2630): a
+    lumen-pr scratch worktree, whose name is not `wqNNNN-aN`, so no `done_at`
+    can ever be read for it. The landing-commit clock has to carry that case on
+    its own or the fix only ever protected fworker worktrees."""
+    root = tmp_path / "scratch" / "worktrees"
+    wt_name = "myrepo-feat-wq9028-late"
+    land_late(repo, root, wt_name, "feat/wq9028-late",
+              commit_days_ago=10, land_days_ago=0)
+    owners = root / ".owners"
+    os.makedirs(owners, exist_ok=True)
+    (owners / wt_name).write_text("agent=some-session-1\ncreated=now\n")
+    monkeypatch.setattr(pw, "WQ_DB", str(tmp_path / "no-such.db"))
+    [r] = pw.run([str(root)], apply=False, fetch=False)
+    assert r["action"] == "skip", r["reason"]
+    assert "grace period" in r["reason"]
+    assert "landing commit" in r["reason"]
 
 
 def test_unreadable_commit_date_fails_closed(tmp_path, repo, monkeypatch):
+    """No source can date the landing: the real fail-closed branch, reached by
+    breaking the commit-date read rather than by stubbing out the age function."""
     root = tmp_path / "worktrees"
     add_worktree(repo, root, "wq9022-a1", "feat/wq9022-a1-noage")
-    monkeypatch.setattr(pw, "merge_age_days", lambda repo, branch: None)
+    monkeypatch.setattr(pw, "commit_ts", lambda repo, rev: None)
+    monkeypatch.setattr(pw, "WQ_DB", str(tmp_path / "no-such.db"))
     [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "skip"
+    assert "landing date unreadable" in r["reason"]
     assert "fail closed" in r["reason"]
 
 

@@ -12,7 +12,7 @@ python3 prune_worktrees.py                    # dry run, human summary
 python3 prune_worktrees.py --json             # dry run, full JSON
 python3 prune_worktrees.py --apply            # actually `git worktree remove`
 python3 prune_worktrees.py --no-fetch         # skip `git fetch --prune`, use local refs
-python3 prune_worktrees.py --grace-days N     # wait N days after merge before pruning (default 7)
+python3 prune_worktrees.py --grace-days N     # wait N days after landing before pruning (default 7)
 ```
 
 A worktree is only pruned if **all** of:
@@ -26,13 +26,36 @@ A worktree is only pruned if **all** of:
 3. **Registered and unlocked** — present in `git worktree list --porcelain` (the
    authoritative source; the directory listing alone never confirms prunability),
    not `locked`, not `detached`.
-4. **Past the grace period** — the branch tip commit is at least `--grace-days`
-   old (default **7**, wq#2909). A branch that merged moments ago is left
-   alone even though it already passes checks 1-3, so a same-day revert still
-   finds its worktree intact. The commit date is read straight off the branch
-   tip (`git log -1 --format=%ct`), not wall-clock run time, so the age is the
-   same on every run regardless of when the timer happens to fire. An
-   unreadable commit date fails closed — skipped, not guessed old enough.
+4. **Past the grace period** — it **landed** at least `--grace-days` ago
+   (default **7**, wq#2909). A branch that merged moments ago is left alone even
+   though it already passes checks 1-3, so a same-day revert still finds its
+   worktree intact.
+
+   The landing time is the **latest** timestamp any source can evidence, which
+   is the smallest age and so the most protection (`landing_age_days`):
+   - the **landing commit**'s date — the oldest commit that both descends from
+     the branch tip and is reachable from `origin/<default>`
+     (`git rev-list --ancestry-path <branch>..origin/<default>`, last line). For
+     a `--no-ff` merge that is the merge commit; for a fast-forward, the next
+     commit pushed onto the default branch.
+   - **`tasks.done_at`** for a `wqNNNN-aN` worktree — when its ticket actually
+     closed. This is the only source covering the case git cannot: a
+     fast-forward whose branch tip is *still* the default branch's tip leaves no
+     commit dating the landing.
+   - the **branch tip**'s own commit date — a floor, not the answer. It is what
+     remains for a branch that never diverged, where no landing event exists to
+     date.
+
+   wq#2909 originally used the branch tip alone. A commit date is only a *lower*
+   bound on landing time, so a branch committed ten days before it merged read
+   as ten days old and was prunable the instant the merge landed — zero revert
+   window, the same bug wq#2909 was filed against. wq#2934 reproduced it,
+   wq#2942 fixed it. Residual gap, by construction: a fast-forward still at the
+   default branch's tip, in a *non*-fworker worktree (no `done_at`), falls back
+   to the tip date. Git records nothing else there.
+
+   No readable landing date at all fails closed — skipped, not guessed old
+   enough.
 5. **No live claim on it** —
    - `/home/lumen/worktrees/wqNNNN-aN`: ticket `NNNN` in the wq db
      (`/home/lumen/agents/work-queue/queue.db`) is not `status='claimed'` with an
@@ -42,9 +65,11 @@ A worktree is only pruned if **all** of:
      `slocks_ro`. No owner record at all (predates the ownership guard) means no
      claim to check — it still has to clear checks 1-3.
 
-Any read failure on the liveness check (db missing, unparseable) or the commit-date
+Any read failure on the liveness check (db missing, unparseable) or the landing-date
 check **fails closed**: treated as live (or too new), never pruned. An unreadable
-answer is not evidence of a safe one.
+answer is not evidence of a safe one. An unreadable wq db makes `done_at` contribute
+nothing to the landing clock rather than failing closed there — the liveness check
+already treats that same condition as a live claim, so no prune can get past it.
 
 Lease and slock expiry times are read with `_DB_TS_FMT` (`%Y-%m-%d %H:%M:%S`), the
 format `bin/wq:145` and `bin/slock:43` actually write. Keep it separate from
@@ -59,17 +84,30 @@ would have/did happen.
 
 ## Tests
 
-`python3 -m pytest tests -q` — 20 tests, each against a real throwaway git repo (no
+`python3 -m pytest tests -q` — 26 tests, each against a real throwaway git repo (no
 git mocking): merged+clean prunes, unmerged/dirty/locked all skip, a stray directory
 with no `.git` file is ignored, a primary checkout is never a candidate, a live wq
 claim or slock blocks pruning, an expired lease or slock does not, an unparseable one
 skips and says so, a missing wq db fails closed, and `--apply` actually removes while
 dry-run never touches disk. Every timestamp fixture is written in wq's stored format,
 spelled out in the test file rather than imported from the pruner, so a fixture cannot
-drift along with the constant it is supposed to check. wq#2909 added three more: a
-just-merged branch stays inside the default 7-day grace period, the same branch
-prunes once its tip is monkeypatched 8 days old, and an unreadable commit date fails
-closed.
+drift along with the constant it is supposed to check.
+
+wq#2909 added the grace-period tests; wq#2942 rebuilt them on real git dates after
+wq#2934 found the suite never exercised a branch whose commit date and landing date
+diverge (the "past grace period" case reached 8 days by monkeypatching the age
+function, so no git ancestry ran at all). The 26th test count now covers: a branch
+committed 10 days ago but landed just now keeps its full window *and* says
+`landing commit` in the reason (the wq#2934 regression); the same divergence on a
+non-fworker scratch worktree, where no `done_at` exists, so the landing-commit clock
+has to carry it alone; a fast-forward still at main's tip falling back to `done_at`,
+and the same fast-forward pruning when that `done_at` is 10 days old (without which a
+fix that simply never prunes would pass); `done_at` beating an older landing commit on
+a reopened ticket; and a landing date no source can read failing closed.
+
+`reports/wq2934_probe_grace_period_commit_vs_merge_age.py` is the standalone
+reproducer, kept as a regression check: it exits 1 against the tip-commit clock and 0
+against the landing clock.
 
 ## Production dry run, 2026-09-25
 
