@@ -602,17 +602,32 @@ def _hits(patterns, text, skip_masked_output):
     through masking.raw_matches() — multi-pass, own-output screened — instead of one
     raw finditer per rule, which missed every value a glued prefix frees on a later
     pass (wq#2875: wq#2848's aws and slack hits never reached its own replay)."""
+    for label, prefix, value, _lo, _hi in _located(patterns, text, skip_masked_output):
+        yield label, prefix, value
+
+
+def _located(patterns, text, skip_masked_output):
+    """_hits() with the raw span each value was cut from: (label, prefix, value, lo, hi),
+    `text[lo:hi]` running from the end of the kept prefix.
+
+    wq#3048: today's table also yields masking._orphan_spans(), the rows scan() appends
+    for wq#2922's backstop. Without them the tripwire could page on an orphan (wq#3037's
+    `AKIA<filler>MASKEDAKIA` overfire probe, sha256:72458136d6c6) and this replay would
+    report "0 unaccounted" having never scored it. An orphan's value is joined across the
+    mask literal, so it is not a substring of the line; the span is what locates it.
+    """
     if patterns is CURRENT_PATTERNS and skip_masked_output:
-        yield from masking.raw_matches(text)[0]
+        yield from masking.read(text)
+        yield from masking._orphan_spans(text)
         return
     for label, rx in patterns:
         for m in rx.finditer(text):
             if skip_masked_output and m.group(0).endswith(masking.MASK):
                 continue
-            yield label, m.group(1), m.group(0)[len(m.group(1)):]
+            yield label, m.group(1), m.group(0)[len(m.group(1)):], m.end(1), m.end()
 
 
-def _context(line, value, label):
+def _context(line, value, label, length=None):
     """The masked text AROUND the hit — the leak path — not the head of its line.
 
     wq#2317: the window used to be the line's first 160 characters, which is the same
@@ -626,9 +641,20 @@ def _context(line, value, label):
     Masked first, cut second, per masking.scan()'s rule (wq#1441): cutting a raw window
     first can hand back a credential the substitution never saw. Splicing the record's
     own value out before the mask is what guarantees the marker to center on.
+
+    wq#3048: `value` is the raw span, which for an orphan row is not the joined value
+    the record hashes, so `length` carries the record's own value_len. Every other
+    orphan on the line is spliced too: mask_text() never masks one (that is the
+    backstop's contract), so a window around one orphan would print its neighbours —
+    wq#3037's probe lines carry five on one line.
     """
-    marker = f"<{label} {len(value)} chars>"
-    masked = masking.mask_text(line.replace(value, marker))[0]
+    marker = f"<{label} {len(value) if length is None else length} chars>"
+    line = line.replace(value, marker)
+    cut = len(line)
+    for other, _p, _v, lo, hi in sorted(masking._orphan_spans(line), key=lambda s: -s[3]):
+        if lo < cut:  # right to left; an overlap is clipped to what is already spliced
+            line, cut = line[:lo] + f"<{other} orphan>" + line[min(hi, cut):], lo
+    masked = masking.mask_text(line)[0]
     at = masked.find(marker)
     if at < 0:  # unreachable via the splice above; a head window still beats nothing
         return masked[:masking.CONTEXT_CHARS]
@@ -661,12 +687,12 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
         skip_masked = patterns is not LEGACY_PATTERNS
     records, seen = [], set()
     for source, text in items.items():
-        for label, prefix, value in _hits(patterns, text, skip_masked_output=skip_masked):
+        for label, prefix, value, lo, hi in _located(patterns, text, skip_masked):
             if (label, value) in seen:
                 continue
             seen.add((label, value))
-            line_at = text.rfind("\n", 0, text.find(prefix + value)) + 1
-            end = text.find("\n", line_at)
+            line_at = text.rfind("\n", 0, lo) + 1
+            end = text.find("\n", hi)
             line = text[line_at:end if end >= 0 else len(text)]
             today_hits = [(p, v) for _, p, v in _hits(CURRENT_PATTERNS, line,
                                                        skip_masked_output=True)]
@@ -686,7 +712,10 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
                 "value_sha256_12": sha12,
                 "first_seen_in": source,
                 "faithful": not source.startswith("read-stale:"),
-                "accounted_in": account(value, tracked, prefix),
+                # An orphan's value is joined across the mask literal, so the file it
+                # printed from can only ever hold its raw span (wq#3048).
+                "accounted_in": account(value, tracked, prefix) or (
+                    text[lo:hi] != value and _find(prefix + text[lo:hi], tracked)) or None,
                 "still_matches_today": value in today,
                 "today_closed": today_closed,
                 "rotated": rotated.get(sha12),
@@ -695,7 +724,7 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
                 # masking is a fixed point), but a transcript line is raw: a record
                 # quoted into a ticket must not carry the credential NEXT to the one
                 # it is about.
-                "line": _context(line, value, label),
+                "line": _context(line, text[lo:hi], label, len(value)),
             })
             if verdict:
                 records[-1].update(verdict(label, prefix, value))

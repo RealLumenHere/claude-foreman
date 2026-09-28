@@ -698,6 +698,17 @@ def _orphan_matches(text):
     second half is either short enough itself or is the START of another rule's own
     prefix, which this rule's charset cannot run through), alone.
     """
+    return [(label, prefix, value) for label, prefix, value, _lo, _hi in _orphan_spans(text)]
+
+
+def _orphan_spans(text):
+    """_orphan_matches() with offsets: (label, prefix, value, lo, hi), read()'s shape.
+
+    wq#3048: `value` is `before + after`, joined across the tail between them, so it
+    is not a substring of `text` and a caller that has to FIND it (mask_replay cutting
+    the line an orphan printed on) cannot. `text[lo:hi]` is the raw run from the end of
+    the kept prefix through `after`, tail included.
+    """
     found = []
     for label, rx, guarded_star, floor in _ORPHAN_PATTERNS:
         for m in rx.finditer(text):
@@ -707,9 +718,10 @@ def _orphan_matches(text):
             tail = _OWN_TAIL.match(text, m.end())
             if not tail:
                 continue  # short for an unrelated reason — not this class
-            after = guarded_star.match(text, tail.end()).group(0)
-            if len(before) + len(after) >= floor:
-                found.append((label, m.group(1), before + after))
+            after = guarded_star.match(text, tail.end())
+            if len(before) + len(after.group(0)) >= floor:
+                found.append((label, m.group(1), before + after.group(0),
+                              m.end(1), after.end()))
     return found
 
 

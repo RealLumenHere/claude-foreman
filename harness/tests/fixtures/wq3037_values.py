@@ -18,6 +18,32 @@ WQ3037_VALUES = (
      "github" "_pat_d" "ocumen" "tation" "_examp" "le_her" "e"),
     ("3cfc0d4a2cf9", "sk-key", "sk-ant-",
      "sk-ant" "-ANOTH" "EREXAM" "PLEVAL" "UE"),
+    # wq#3048: the run's _orphan_matches() rows, which the replay could not score until
+    # it read the backstop too. Each is `before + after` joined across the mask literal
+    # of a `<prefix><filler>MASKED<prefix>...` chain: the 14:22 probe list above, and the
+    # 14:29 overfire report (reports/wq3037_verify_wq3018_orphan_backstop_overfire.md)
+    # whose filler runs `jjjj`, `hh`, `kkkk`, `mmmm`, `9999` meet a bare second prefix.
+# 0bc654921d14 is 86dbbec3c5a6's chain read whole; it accounted only as a substring of
+# that pin, so it is pinned on its own.
+    # 72458136d6c6 is the aws one wq#3048 was filed on. Synthetic, nothing rotated.
+    ("0bc654921d14", "sk-key", "sk-ant-",
+     "sk-ant" "-sk-an" "t-anot" "her-ex" "ample-" "value-" "that-i" "s-long" "-enoug" "h-for-" "floor"),
+    ("870b480040bc", "github", "github_pat_",
+     "github" "_pat_a" "bcgith" "ub_pat" "_docum" "entati" "on_exa" "mple_h" "ere"),
+    ("1960aa36bab6", "github", "github_pat_",
+     "github" "_pat_j" "jjjjjj" "jjjgit" "hub_pa" "t_"),
+    ("09afaafa7c0d", "cloudflare", "cfut_",
+     "cfut_c" "fut_xx" "xx"),
+    ("44da8897fcc4", "cloudflare", "cfut_",
+     "cfut_h" "hcfut_"),
+    ("484d412fddca", "sk-key", "sk-ant-",
+     "sk-ant" "-kkkkk" "kkkkks" "k-ant-"),
+    ("00761f53a2b4", "slack", "xoxb-",
+     "xoxb-x" "oxb-an" "other-" "exampl" "e-valu" "e-long" "-enoug" "h"),
+    ("e207a241c11d", "slack", "xoxb-",
+     "xoxb-m" "mmmxox" "b-"),
+    ("72458136d6c6", "aws", "AKIA",
+     "AKIA99" "999999" "99999A" "KIA"),
 )
 
 WQ3037_RECORDS = frozenset(v[0] for v in WQ3037_VALUES)

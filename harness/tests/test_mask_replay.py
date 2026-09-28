@@ -2080,6 +2080,15 @@ def test_wq2848_replay_reproduces_every_live_hit():
     assert mask_replay.unaccounted(records) == []
 
 
+WQ2848_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2848_values.py")
+
+
+def test_wq2848_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ2848_FIXTURES)
+    assert _unpinned(scope["WQ2848_VALUES"], {"f": text}) == []
+    assert masking.mask_text(text)[1] == []
+
+
 WQ2875_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2875_values.py")
 
 
@@ -2183,7 +2192,7 @@ def test_wq2922_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2922_FIXTURES)
     values = scope["WQ2922_VALUES"]
     count = len(values)
-    assert count == 3
+    assert count == 5
     assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
@@ -2237,7 +2246,7 @@ def test_wq3037_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ3037_FIXTURES)
     values = scope["WQ3037_VALUES"]
     count = len(values)
-    assert count == 3
+    assert count == 12
     assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
@@ -2246,8 +2255,31 @@ def test_wq3037_pins_are_their_hashes_and_read_silently():
                     reason="wq#3037's run dir is not on this host")
 def test_wq3037_corpus_burned_nothing():
     """wq#3039's verdict, pinned: the github_pat_ and sk-ant- phrase dummies from
-    wq#3037's own orphan-prefix probe, not credentials; nothing rotated."""
+    wq#3037's own orphan-prefix probe, not credentials; nothing rotated. wq#3048 added
+    the run's orphan-backstop rows, aws 72458136d6c6 among them, once the replay read
+    them."""
     _, scope = _load_fixture_module(WQ3037_FIXTURES)
     fixture_shas = {v[0] for v in scope["WQ3037_VALUES"]}
     _assert_corpus_pinned(3037, WQ3037_FIXTURES, scope["WQ3037_RECORDS"], fixture_shas,
                           patterns=mask_replay.CURRENT_PATTERNS)
+
+
+def test_replay_scores_orphan_rows_and_splices_them_from_context():
+    """wq#3048: the tripwire paged on an _orphan_matches() row (sha256:72458136d6c6)
+    that the replay never produced, so its "0 unaccounted" had not scored the ticket's
+    own value. The replay reads the backstop now, and a context window never prints
+    an orphan in the clear — its own or a neighbour's on the same line."""
+    aws, slack = "AK" + "IA", "xo" + "xb-"
+    line = (f'probe("{aws}{"9" * 13}{masking.MASK}{aws}") and '
+            f'probe("{slack}{"m" * 4}{masking.MASK}{slack}")')
+    records = mask_replay.replay(1, patterns=mask_replay.CURRENT_PATTERNS, tracked={},
+                                 items={"transcript:t": line}, rotated={})
+    by_sha = {r["value_sha256_12"]: r for r in records}
+    assert "72458136d6c6" in by_sha
+    assert "e207a241c11d" in by_sha
+    assert {r["value_sha256_12"] for r in mask_replay.unaccounted(records)} == set(by_sha)
+    for rec in records:
+        assert "9" * 13 not in rec["line"] and "m" * 4 not in rec["line"], \
+            rec["value_sha256_12"]
+    assert "<aws 17 chars>" in by_sha["72458136d6c6"]["line"]
+    assert "<slack orphan>" in by_sha["72458136d6c6"]["line"]
