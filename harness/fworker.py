@@ -72,6 +72,7 @@ import fire_gate
 import charging
 import burn_filter
 import masking
+import cf_hold  # wq#2843: the CF-rotation hold shape, shared with foreman_dispatcher.py
 
 # wq#1332 (WORKER_EXEC_CAPABILITY_GAP.md §2.4): fleet_exec_policy.py lives in the
 # lumen-bin repo alongside the fleet-exec broker it backs, not in foreman — same
@@ -1085,7 +1086,7 @@ def burned_hashes(labels, records):
                    and r.get("label") in burned and r.get("value_sha256_12")})
 
 
-def rotation_title(ticket_id, tag, hashes):
+def rotation_title(ticket_id, tag, hashes, cf_held=False):
     """The rotation ticket's title — which IS its dedupe key (wq#2341).
 
     Titled by the RUN, the same value printing in ten runs opened ten pri-1
@@ -1105,12 +1106,24 @@ def rotation_title(ticket_id, tag, hashes):
     No hash falls back to the run-keyed title of every row filed before this: one row
     per run is noisy, and it beats one row standing in for values we cannot show are
     the same.
+
+    wq#2843: `cf_held` appends cf_hold.TITLE_MARKER. The title carries the mask LABELS
+    and nothing else, so a CF credential caught by variable name (`CF_API_TOKEN` under
+    the generic `kv-secret` label) named no CF resource anywhere in it — and the
+    dispatcher's second wall reads the title alone, so it could not hold the very row
+    the tripwire had just recognised. The marker goes at the END, after the label
+    parens: `ROTATION_TITLE_PREFIX` (the chain guard) and mask_triage.SOURCE_RE both
+    match from the front and a suffix leaves them untouched. It is part of the dedupe
+    key like everything else in the title, which is correct — the same value burning
+    twice produces the same marker.
     """
     # Sorted and de-duplicated HERE too, not only in burned_hashes: a key that depends
     # on the order a line happened to print two values in is not a key at all.
     hashes = sorted(set(hashes or ()))
+    suffix = f" {cf_hold.TITLE_MARKER}" if cf_held else ""
     if not hashes:
-        return f"[rotation] burned credential in wq#{ticket_id} transcript ({tag})"
+        return (f"[rotation] burned credential in wq#{ticket_id} transcript "
+                f"({tag}){suffix}")
     if len(hashes) == 1:
         key = f"sha256:{hashes[0]}"
     else:
@@ -1125,7 +1138,7 @@ def rotation_title(ticket_id, tag, hashes):
         # closing.
         digest = hashlib.sha256("\n".join(hashes).encode()).hexdigest()[:12]
         key = f"{len(hashes)} values set:{digest}"
-    return f"[rotation] burned credential {key} ({tag})"
+    return f"[rotation] burned credential {key} ({tag}){suffix}"
 
 
 # `DUPLICATE — task 2310 [fleet/open] already has this title:` (bin/wq cmd_add). The id
@@ -1141,14 +1154,18 @@ WQ_DUPLICATE_RE = re.compile(r"DUPLICATE\b[^\n]*?\btask (\d+)")
 # token/zone id/account id caught by variable name lands under the generic kv-secret
 # label instead — that only shows up in the record's masked `context` window, never in
 # the label itself — so both are checked.
-CF_ROTATION_RE = re.compile(r"cloudflare", re.I)
+#
+# wq#2843: the shape itself now lives in cf_hold.py, because keying on the literal word
+# `cloudflare` missed the abbreviated variable names the fleet actually uses
+# (`CF_API_TOKEN=` in ops/wq2608-dc-endpoint-bes-a1/dns_access_setup.sh:46) — wq#2787's
+# verify pass, ISSUE-LOG 869.
 
 
 def is_cf_rotation(labels, records):
     """True when this alarm's rotation row names a Cloudflare-shaped credential (wq#2782)."""
-    if any(CF_ROTATION_RE.search(label) for label in labels):
+    if cf_hold.names_cf_resource(*labels):
         return True
-    return any(CF_ROTATION_RE.search(r.get("context") or "") for r in records or ())
+    return cf_hold.names_cf_resource(*[r.get("context") for r in records or ()])
 
 
 def mask_alarm(ticket_id, attempt, labels, records=None, session_id=None):
@@ -1191,19 +1208,23 @@ def mask_alarm(ticket_id, attempt, labels, records=None, session_id=None):
          f"stream — token reached model context and is BURNED; rotate today",
          priority="high")
     try:
+        cf_held = is_cf_rotation(labels, records)
         add_args = ["add", "--lane", "fleet", "--pri", "1",
                # The MARKER in the title stays a literal here on purpose: the chain
                # guard above matches ROTATION_TITLE_PREFIX in it, so a deployed file
                # must not be able to rename a row out of its own chain.
-               "--title", rotation_title(ticket_id, tag, hashes),
+               "--title", rotation_title(ticket_id, tag, hashes, cf_held=cf_held),
                "--detail", rotation_detail(ticket_id, attempt, tag, hits_path),
                "--no-probe", "rotation is a manual credential action; "
                              "no deterministic liveness probe exists"]
-        if is_cf_rotation(labels, records):
+        if cf_held:
             # wq#2782: ISSUE-LOG 850 rule c holds ALL CF-resource rotation — file this
             # row frank_gated so the dispatcher's TicketLoad gate (status != "open")
             # refuses it outright, on top of the dispatcher's own CF-rotation title
             # check (foreman_dispatcher.frank_gate_reason) for any row this misses.
+            # wq#2843: that title check is why the title carries the marker too — the
+            # labels alone name no CF resource when the value was caught by variable
+            # name, so without it the second wall reads a row it cannot recognise.
             add_args.append("--frank-gated")
         p = wq(*add_args)
         out = ((p.stdout or "") + (p.stderr or "")).strip()

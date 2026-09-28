@@ -254,6 +254,15 @@ def test_the_source_run_is_parsed_from_the_rotation_title():
     assert m and m.group(1) == "2284"
 
 
+def test_the_cf_hold_marker_does_not_hide_the_source_run():
+    """wq#2843: a row under Frank's CF hold carries `[cf-hold]` appended to the title so
+    the dispatcher can recognise it. Triage reads the run from the front of the same
+    string, and must still find it."""
+    m = mask_triage.SOURCE_RE.search(
+        "[rotation] burned credential in wq#2284 transcript (kv-secret) [cf-hold]")
+    assert m and m.group(1) == "2284"
+
+
 def test_a_value_keyed_ticket_resolves_its_run_from_the_detail(monkeypatch):
     """wq#2341: a row filed for a burned VALUE names no run in its title — that is what
     lets ten runs share one row. The first of them is in the detail, where the template

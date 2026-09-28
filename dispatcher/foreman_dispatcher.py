@@ -76,6 +76,7 @@ import cli_canary       # noqa: E402  # wq#2527: installed-CLI canary hold
 import runaway          # noqa: E402
 import self_heal        # noqa: E402  # charge_mode_legacy(): FOREMAN_CHARGE_MODE rollback lever
 import spawn_loop_guard  # noqa: E402  # wq#1703: restart-loop breaker
+import cf_hold          # noqa: E402  # wq#2843: CF-rotation hold shape, shared with fworker
 import psi_pressure     # noqa: E402  # wq#844
 import cpu_pressure     # noqa: E402  # wq#2631/wq#2647
 import burn_rate        # noqa: E402  # wq#1669: burn-rate spawn controller
@@ -176,7 +177,12 @@ NODISPATCH_TITLE_RE = re.compile(r"\[epic\]|\[do[ -]?not[ -]?claim\]", re.I)
 # already refuses (status != "open") — this is the second wall, for a row that predates
 # that fix (wq#2738) or that some other path re-opens. No override: lifting the hold
 # means deleting this check once ISSUE-LOG 850 is closed.
-CF_ROTATION_HOLD_RE = re.compile(r"\[rotation\].*\bcloudflare\b", re.I)
+#
+# wq#2843: the CF half of the pattern is cf_hold.CF_NAMED, the same string the tripwire
+# reads, so the two walls can no longer disagree about what "CF resource" means — they
+# did, and the one this wall missed was a `CF_API_TOKEN` (ISSUE-LOG 869). It also matches
+# cf_hold.TITLE_MARKER, which is how a row whose labels name no CF resource is held here.
+CF_ROTATION_HOLD_RE = re.compile(r"\[rotation\].*" + cf_hold.CF_NAMED, re.I)
 # wq list line: `[ 12] lane p1 ep0 open     title...` (ep tag only when it differs)
 LIST_LINE_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)\s+p(\d+)(?:\s+ep(\d+))?\s+(\S+)")
 

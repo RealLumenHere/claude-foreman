@@ -26,6 +26,7 @@ sys.path.insert(0, DISPATCHER_DIR)
 sys.path.insert(0, os.path.join(REPO, "orchestrator"))
 sys.path.insert(0, os.path.join(REPO, "harness"))
 import foreman_dispatcher as fd  # noqa: E402
+import fworker  # noqa: E402  # wq#2843: the titles the mask tripwire actually emits
 import concurrency  # noqa: E402
 import router  # noqa: E402
 import spawner  # noqa: E402
@@ -589,6 +590,38 @@ def test_cf_rotation_hold_title_skipped(denv):
         assert skips.get(tid) == "frank_gated"
     assert clean not in skips
     assert [e["ticket"] for e in log_events(denv, "spawn")] == [clean]
+
+
+def test_cf_rotation_hold_holds_a_row_that_never_says_cloudflare(denv):
+    """wq#2843 (ISSUE-LOG 869): the second wall used to key on the literal word, so the
+    row the tripwire files for a `CF_API_TOKEN` — labelled kv-secret, `cloudflare`
+    nowhere in its title — walked straight through it. The held titles here are built by
+    `fworker.rotation_title()` itself, so this is the real cross-wall probe: what the
+    first wall EMITS is what the second wall is asked to hold.
+
+    Controls: an unrelated burn and two CF-prefixed identifiers that are not Cloudflare
+    (`CFG_`, `CFLAG`) must all still dispatch, which is what stops the widening from
+    turning every [rotation] row into Frank's."""
+    marked = fworker.rotation_title(2843, "kv-secret", ["ae71c4cdf5d7"], cf_held=True)
+    assert "cloudflare" not in marked.lower()   # the probe cannot pass on the word
+    held = [
+        add_ticket(marked),
+        add_ticket(fworker.rotation_title(2843, "kv-secret", [], cf_held=True)),
+        # a hand-filed row that names the credential in its title instead of a marker
+        add_ticket("[rotation] rotate CF_ZONE_ID + CF_ACCOUNT_ID after the Access rebuild"),
+    ]
+    clean = [
+        add_ticket("[rotation] burned credential sha256:deadbeef0002 (kv-secret)"),
+        add_ticket("[rotation] rotate CFG_SECRET in the watchdog config"),
+        add_ticket("[rotation] drop the stale CFLAG_TOKEN from agents.yaml"),
+    ]
+    assert fd.run_pass() == 0
+    skips = {s["ticket"]: s["reason"] for s in log_events(denv, "skip")}
+    for tid in held:
+        assert skips.get(tid) == "frank_gated"
+    assert [tid for tid in clean if skips.get(tid) == "frank_gated"] == []
+    spawned = {e["ticket"] for e in log_events(denv, "spawn")}
+    assert spawned and spawned <= set(clean)
 
 
 def test_pending_gate_type_skipped(denv):

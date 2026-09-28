@@ -17,6 +17,7 @@ import textwrap
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import cf_hold
 import fworker
 import masking
 
@@ -42,6 +43,12 @@ KV_LINE = 'GITEA_TOKEN="' + 'hunter2-hunter2-hunter2"'
 # kv fixtures below interpolate it, so each source line breaks at `{` before the
 # body charset can start.
 PW = "hunter2-hunter2-hunter2"
+# wq#2843: the abbreviated CF variable name the fleet's own config uses —
+# `ops/wq2608-dc-endpoint-bes-a1/dns_access_setup.sh:46` sets `CF_API_TOKEN=`. Split at
+# the same `="` boundary as KV_LINE above. This fixture is the whole point of the
+# wq#2787 verify pass: the word `cloudflare` appears nowhere in it, so a probe built on
+# it cannot pass by matching that literal (wq#2630).
+CF_KV_LINE = 'CF_API_TOKEN="' + PW + '"'
 # wq#2514: git credential-store line shape. Split after the `:` so the source text
 # cannot match — the body charset stops at the quote.
 URL_USER = "https://lumen:"
@@ -1103,6 +1110,67 @@ def test_mask_alarm_leaves_an_unrelated_row_open(tmp_path, monkeypatch):
     _, calls = alarm(tmp_path, monkeypatch, 2782002, github_records(), labels=("github",))
     (add,) = [c for c in calls if c[0] == "add"]
     assert "--frank-gated" not in add
+
+
+# ---- wq#2843: the hold also reads an abbreviated CF_ variable name (ISSUE-LOG 869) ---
+# Every probe below is keyed on `CF_API_TOKEN`/`CF_ZONE_ID`, never on `cloudflare` or
+# `CLOUDFLARE_*`: wq#2782's two tests both fed the check an input containing the literal
+# word, so they passed against a regex that was only ever `r"cloudflare"` and could not
+# have failed on the shape the ticket claimed to cover (wq#2630, wq#2787).
+
+def test_is_cf_rotation_matches_an_abbreviated_cf_variable_name():
+    """The shape the fleet's live config actually uses. It carries the generic
+    kv-secret label and a context window with no `cloudflare` in it, so wq#2782's
+    literal check answered False and the row filed OPEN to an unattended worker."""
+    _, records = masking.scan(CF_KV_LINE)
+    assert [r["label"] for r in records] == ["kv-secret"]
+    # the probe cannot pass by matching the word: it is in neither input nor record
+    assert "cloudflare" not in (CF_KV_LINE + json.dumps(records)).lower()
+    assert fworker.is_cf_rotation(["kv-secret"], records)
+
+
+def test_is_cf_rotation_matches_a_cf_name_inside_a_longer_identifier():
+    """`WQ_CF_ZONE_ID` — the shape is looked for behind any non-alphanumeric, not behind
+    a `\\b`, which would not fire after the `_` of a prefixed name."""
+    assert fworker.is_cf_rotation(
+        ["kv-secret"], [{"label": "kv-secret", "context": "WQ_CF_ZONE_ID=MASKED"}])
+
+
+@pytest.mark.parametrize("context", [
+    'CFG_SECRET="MASKED"',      # config, not Cloudflare
+    'CFLAG_TOKEN="MASKED"',     # no separator behind `CF`
+    'NETCF_TOKEN="MASKED"',     # `CF_` only as the tail of another word
+    'PERF_KEY="MASKED"',
+])
+def test_is_cf_rotation_ignores_unrelated_cf_prefixed_identifiers(context):
+    """Falsifiable control for the widening: the separator directly behind `CF` is the
+    whole discriminator, and these four must still file as ordinary open rows."""
+    assert not fworker.is_cf_rotation(["kv-secret"],
+                                      [{"label": "kv-secret", "context": context}])
+
+
+def test_mask_alarm_frank_gates_a_cf_api_token_row(tmp_path, monkeypatch):
+    """End to end on the reproduction from ISSUE-LOG 869: label kv-secret, no
+    `cloudflare` anywhere, and the row must still come in `--frank-gated` AND carry the
+    hold marker in its title — the dispatcher's second wall reads the title alone."""
+    _, records = masking.scan(CF_KV_LINE)
+    _, calls = alarm(tmp_path, monkeypatch, 2843001, records, labels=("kv-secret",))
+    (add,) = [c for c in calls if c[0] == "add"]
+    assert "--frank-gated" in add
+    title = add[add.index("--title") + 1]
+    assert "cloudflare" not in title.lower()
+    assert cf_hold.TITLE_MARKER in title
+
+
+def test_the_hold_marker_is_a_suffix_the_title_readers_ignore():
+    """wq#2341's dedupe key and the chain guard both keep working: the marker is
+    appended, so the row is still prefixed by ROTATION_TITLE_PREFIX and the unheld title
+    is the same string without it."""
+    sha = hashlib.sha256(b"cf").hexdigest()[:12]
+    held = fworker.rotation_title(2843, "kv-secret", [sha], cf_held=True)
+    assert held.startswith(fworker.ROTATION_TITLE_PREFIX)
+    assert held == f"{fworker.rotation_title(2843, 'kv-secret', [sha])} " \
+                   f"{cf_hold.TITLE_MARKER}"
 
 
 def test_a_rotation_ticket_refire_is_noted_not_filed(tmp_path, monkeypatch):
