@@ -17,7 +17,7 @@ fi
 
 python3 -m pytest -q "$HERE/test_lumen_contradiction_scan.py"
 
-install -m 0755 "$HERE/lumen_contradiction_scan.py" /home/lumen/bin/lumen-contradiction-scan
+"$HERE/../wq2856-atomic-install/install-script" -m 0755 "$HERE/lumen_contradiction_scan.py" /home/lumen/bin/lumen-contradiction-scan
 
 # wq#2411: a build worker has no sudo, so the systemd steps below always abort the
 # script — but the scanner script itself is user-owned and needs no privilege to
