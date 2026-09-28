@@ -59,6 +59,12 @@ def seed_minerva_db(path):
              "L", "Roll back the tag.", "deploy_ready", "2026-09-03T06:05:00Z"),
             ("p-pending", "Not ready yet", "intel-3", "n/a", "n/a",
              "L", "n/a", "pending", "2026-09-03T06:10:00Z"),
+            # wq#3028 (wq#2935 finding on wq#2915): docs-only change, no service is
+            # recreated or restarted — must stay untagged even though DISRUPTIVE_RE
+            # is now broader.
+            ("p-docs", "Fix a typo in the onboarding README", "intel-4",
+             "README has a stale link.", "Correct the link text and reword a sentence.",
+             "S", "Revert the doc commit.", "deploy_ready", "2026-09-03T06:15:00Z"),
         ],
     )
     con.commit()
@@ -109,7 +115,15 @@ def main():
         if props["p-feature"]["ticket"]:
             row = fetchall(wq_db, "SELECT * FROM tasks WHERE id=?", (props["p-feature"]["ticket"],))[0]
             check("feature proposal filed P3", row["pri"] == 3, f"pri={row['pri']}")
-            check("non-disruptive proposal has no needs-window marker",
+            # wq#3028 (wq#2935 finding on wq#2915): "Bump the container tag." recreates a
+            # live service with no upgrade/restart/reboot token — must now be tagged.
+            check("disruptive (container bump) proposal gets the needs-window marker",
+                  row["title"].startswith("[needs-window]"), row["title"])
+
+        check("docs proposal got a ticket", bool(props["p-docs"]["ticket"]))
+        if props["p-docs"]["ticket"]:
+            row = fetchall(wq_db, "SELECT * FROM tasks WHERE id=?", (props["p-docs"]["ticket"],))[0]
+            check("docs-only proposal has no needs-window marker",
                   not row["title"].startswith("[needs-window]"), row["title"])
 
         n_tasks_after_first = len(fetchall(wq_db, "SELECT * FROM tasks"))

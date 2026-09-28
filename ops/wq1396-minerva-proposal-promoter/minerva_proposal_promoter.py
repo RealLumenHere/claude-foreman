@@ -57,10 +57,19 @@ DUPLICATE_RE = re.compile(r"DUPLICATE — task (\d+)")
 # the window costs one Monday-morning delay; one wrongly left on a live lane costs an
 # outage. gates.py's NeedsWindow gate is what actually enforces the hold (wq#2915 item 1);
 # this only applies the [needs-window] marker so that gate has something to act on.
+# wq#3028 (wq#2935 finding on wq#2915): the original word list only caught
+# upgrade/reboot/restart tokens, so a container/image bump ("Bump the container tag.")
+# that recreates a live service slipped through untagged. A running service can be
+# recreated or restarted without the word "restart" ever appearing — image/tag/digest
+# bumps, `docker compose up/pull`, and daemon version pins/migrations all do it. Extended,
+# same broad-on-purpose posture.
 DISRUPTIVE_RE = re.compile(
     r"\bupgrade[ds]?\b|\breboot(?:s|ed|ing)?\b|\brestart(?:s|ed|ing)?\b"
     r"|\bpower.cycl|\bfirmware\b|\bkernel\b|apt (?:upgrade|dist-upgrade)"
-    r"|\bsystemctl restart\b|\bservice restart\b",
+    r"|\bsystemctl restart\b|\bservice restart\b"
+    r"|\bbump(?:s|ed|ing)?\b|\bimage.tag\b|\bcontainer.tag\b|\bdigest\b"
+    r"|\bcompose (?:pull|up)\b|\brecreat(?:e[sd]?|ing)\b|\bmigrat(?:e[sd]?|ion[s]?)\b"
+    r"|\bversion.pin(?:s|ned|ning)?\b",
     re.IGNORECASE,
 )
 
