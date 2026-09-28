@@ -679,6 +679,76 @@ def _check_citation(entry, worktree, changed):
     return True, f"{rel}:{start}-{end} in diff", ""
 
 
+# wq#3035 (wq#2922 root cause): _check_citation above proves a citation matches the
+# WORKER'S OWN branch diff — proof the claim is not hallucinated, nothing more. It is
+# right to stay branch-scoped for the ordinary per-attempt replay (verify(), called from
+# fworker.verify_done): the cited code legitimately exists only in the branch while an
+# attempt is still in flight. But citing file:line in an unmerged branch satisfied `done`
+# exactly as well as citing landed code — wq#2922 closed done (attempt-3 SUCCESS,
+# proof_type=citation) while the vulnerability it documented stayed open on main for
+# days. _crossrepo_citation already demands its rev be an ancestor of the OTHER repo's
+# main; the same-repo path never made the same demand, which is backwards. This is the
+# missing landed-check, meant to run once — at the done transition
+# (fworker.check_artifacts_done) — never during the ordinary attempt replay.
+def citation_landed_on_main(entry, worktree):
+    """Same-repo citation (no 'repo' field — cross-repo already pins and checks its own
+    landed rev via _crossrepo_citation), re-resolved against THIS repo's own landed main
+    instead of the branch diff. Returns (ok, why)."""
+    if entry.get("repo"):
+        return True, "cross-repo citation already pins and checks its own landed rev"
+    cite = str(entry.get("citation") or "").strip()
+    m = _CITATION_RE.match(cite)
+    if not m:
+        return False, f"citation {cite!r} is not file:line"
+    rel = m.group("path")
+    start = int(m.group("start"))
+    end = int(m.group("end") or start)
+    saw_ref = False
+    for ref in ("origin/main", "main", "origin/HEAD"):
+        rv = _git(worktree, "rev-parse", "--verify", "--quiet", ref)
+        if not rv:
+            return False, "git unavailable while checking landing"
+        if rv.returncode != 0:
+            continue
+        saw_ref = True
+        e = _git(worktree, "cat-file", "-e", f"{ref}:{rel}")
+        if not e:
+            return False, "git unavailable while checking landing"
+        if e.returncode != 0:
+            return False, f"{rel} does not exist on {ref} — cited from an unmerged branch"
+        show = _git(worktree, "show", f"{ref}:{rel}")
+        if not show or show.returncode != 0:
+            return False, f"{rel} could not be read from {ref}"
+        n_lines = len(show.stdout.splitlines())
+        if start < 1 or end < start or end > n_lines:
+            return False, f"{rel}@{ref} has {n_lines} lines; cited {start}-{end}"
+        return True, f"{rel}:{start}-{end} landed on {ref}"
+    if not saw_ref:
+        return False, "no main/origin/main ref resolvable to check landing against"
+    return False, "citation could not be checked against a landed ref"
+
+
+def citations_landed(pinned, evidence, worktree):
+    """Every proof_type=citation criterion's evidence, re-checked against landed main —
+    the done-time counterpart to verify()'s branch-scoped per-attempt check. Returns
+    (ok, failed): failed is a list of {"id", "why"}."""
+    failed = []
+    by_id = {str(e.get("id")): e for e in ((evidence or {}).get("criteria") or [])
+             if isinstance(e, dict) and e.get("id")}
+    for c in (pinned or {}).get("criteria") or []:
+        if c.get("proof_type") != "citation":
+            continue
+        cid = str(c.get("id"))
+        entry = by_id.get(cid)
+        if entry is None:
+            failed.append({"id": cid, "why": "no evidence entry to check against main"})
+            continue
+        ok, why = citation_landed_on_main(entry, worktree)
+        if not ok:
+            failed.append({"id": cid, "why": why})
+    return not failed, failed
+
+
 def verify(acceptance, evidence, worktree, base_ref="origin/main", evidence_dir=None,
            runner=subprocess.run, claim_check=None):
     """Harness-side verdict on a worker's done claim. Never trusts a logged exit code:

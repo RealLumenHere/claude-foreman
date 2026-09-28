@@ -569,6 +569,49 @@ def test_pinned_origin_sha_survives_this_tickets_own_merge_into_main(
     assert (ok, escalated) == (True, False)
 
 
+# ---------------------------------------------------------------------------
+# wq#3035 (wq#2922 root cause) — a citation must land on main before `done` closes, not
+# merely satisfy the per-attempt replay against the worker's own branch diff.
+# ---------------------------------------------------------------------------
+
+def test_check_artifacts_done_refuses_a_citation_that_only_exists_on_the_unmerged_branch(
+        worktree, gated):
+    """A commit that merely NAMES the ticket is not proof the CITED fix landed — the
+    git-log grep alone cannot tell a landed fix from a landed mention. impl.py lives only
+    on feat/evidence here, exactly like wq#2922's fix did on its own branch for days."""
+    gated["status"] = "claimed"
+    _git(worktree, "checkout", "-q", "main")
+    (worktree / "note.txt").write_text("progress note\n")
+    _git(worktree, "add", "-A")
+    _git(worktree, "commit", "-q", "-m", "wq#4242 progress note, fix incoming")
+    decoy_sha = _git(worktree, "rev-parse", "HEAD").stdout.strip()
+    _git(worktree, "update-ref", "refs/remotes/origin/main", decoy_sha)
+    _git(worktree, "checkout", "-q", "feat/evidence")
+    _write_evidence(worktree, [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                               {"id": "AC2", "citation": "impl.py:3"}])
+    assert fworker.check_artifacts_done(4242, str(worktree)) == (False, None)
+
+
+def test_check_artifacts_done_accepts_a_citation_once_the_branch_is_actually_merged(
+        worktree, gated):
+    """The inverse: once feat/evidence is actually merged into main, the same citation
+    resolves on origin/main and check_artifacts_done confirms the landing — the gate can
+    both fail and pass (wq#2630)."""
+    gated["status"] = "claimed"
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    _git(worktree, "add", "-A")
+    _git(worktree, "commit", "-q", "-m", "wq#4242 fix probe")
+    _git(worktree, "checkout", "-q", "main")
+    _git(worktree, "merge", "-q", "--no-ff", "feat/evidence", "-m", "wq#4242 merge")
+    merge_sha = _git(worktree, "rev-parse", "HEAD").stdout.strip()
+    _git(worktree, "update-ref", "refs/remotes/origin/main", merge_sha)
+    _git(worktree, "checkout", "-q", "feat/evidence")
+    _write_evidence(worktree, [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                               {"id": "AC2", "citation": "impl.py:3"}])
+    ok, sha = fworker.check_artifacts_done(4242, str(worktree))
+    assert (ok, sha) == (True, merge_sha)
+
+
 def test_the_gate_can_be_switched_off_without_a_code_change(worktree, gated, monkeypatch):
     monkeypatch.setenv("FOREMAN_EVIDENCE_GATE", "0")
     assert fworker.verify_done(4242, str(worktree), 1, base_ref="main") == (True, False)

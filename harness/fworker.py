@@ -4265,7 +4265,25 @@ def check_artifacts_done(ticket_id, worktree):
              "--grep", rf"wq#{ticket_id}\b"],
             capture_output=True, text=True, timeout=15)
         if p.returncode == 0 and p.stdout.strip():
-            return True, p.stdout.split()[0]
+            sha = p.stdout.split()[0]
+            # wq#3035 (wq#2922 root cause): a commit merely NAMING this ticket is not
+            # proof the CITED fix landed — a docs/progress commit mentioning "wq#N"
+            # satisfies this grep exactly as well as the real fix does. Re-check every
+            # proof_type=citation criterion's evidence against origin/main itself
+            # (never the branch diff verify() uses, which is legitimately still open
+            # mid-attempt) before trusting the grep hit.
+            rd = run_dir(ticket_id)
+            pinned = acceptance_mod.pinned_doc(rd)
+            if pinned and pinned.get("criteria"):
+                evidence = acceptance_mod.read_evidence(worktree, run_dir=rd)
+                landed_ok, failed = acceptance_mod.citations_landed(pinned, evidence, worktree)
+                if not landed_ok:
+                    reasons = "; ".join(f"{f['id']}: {f['why']}" for f in failed)
+                    log(f"wq#{ticket_id}: commit {sha[:12]} mentions this ticket, but "
+                        f"citation evidence does not resolve on origin/main ({reasons}) "
+                        f"— not confirmed done")
+                    return False, None
+            return True, sha
     except Exception:
         pass
     return False, None
