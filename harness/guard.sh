@@ -179,6 +179,15 @@ Bash)
     if printf '%s' "$target" | grep -qE '/home/lumen/logs/supergateway\b'; then
       block "denied path: supergateway gateway log (unmasked tool-call bodies, wq#2546)" "$RAW_CMD"
     fi
+    # wq#2980: Bash twin of the agent/.env and litellm_config.yaml.* Read/Grep denies.
+    # wq#2975 a2 ran `python3 -c` over agent/.env and the config backups, printing the
+    # live Langfuse secret whole (6cf8c0a3e6a1) and as an 8...6 "masked" slice
+    # (b21310999254) — a slice is still 14 chars of the key. The .env backups and the
+    # litellm_config.yaml.* copies carry the same value. The plain litellm_config.yaml
+    # stays open to Bash for a narrow `grep -n model_name`.
+    if printf '%s' "$target" | grep -qE '(/home/lumen|~|\$HOME|\$\{HOME\})/agent/\.env\b|litellm_config\.yaml\.[[:alnum:]_]'; then
+      block "denied path: agent/.env* or a litellm_config.yaml.* copy (live Langfuse secret inside, wq#2980)" "$RAW_CMD"
+    fi
     if printf '%s' "$target" | grep -qE '\bdocker\b' && ! printf '%s' "$target" | grep -qE '\bdocker\b +(ps|logs)\b'; then
       block "docker denied except ps/logs" "$RAW_CMD"
     fi
@@ -493,7 +502,7 @@ Read|Edit|Write|Grep|Glob)
   for CHECK_PATH in "$FILE_PATH" "$GREP_PATH"; do
     [ -n "$CHECK_PATH" ] || continue
     case "$CHECK_PATH" in
-      *.env|*.credentials.json|*claude_credentials.md|*claude_credentials.md.*|/home/lumen/minerva/context/sections/*credentials*|/home/lumen/minerva/context/sections.json|/home/lumen/minerva/context/sections.json.*|/home/lumen/agent/.env|/home/lumen/agent/.env/*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*|/var/lib/token-engine|/var/lib/token-engine/*|/home/lumen/logs/supergateway|/home/lumen/logs/supergateway/*)
+      *.env|*.credentials.json|*claude_credentials.md|*claude_credentials.md.*|/home/lumen/minerva/context/sections/*credentials*|/home/lumen/minerva/context/sections.json|/home/lumen/minerva/context/sections.json.*|/home/lumen/agent/.env|/home/lumen/agent/.env/*|/home/lumen/agent/.env.*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*|/var/lib/token-engine|/var/lib/token-engine/*|/home/lumen/logs/supergateway|/home/lumen/logs/supergateway/*)
         block "denied path: $CHECK_PATH" "$CHECK_PATH" ;;
       # wq#2514: git's plaintext credential store and its .bak copies. Same set
       # capability_lint.DIR_DENY_BASENAME_GLOBS_HOME hard-denies as a grant; without

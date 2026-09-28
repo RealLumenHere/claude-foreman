@@ -146,6 +146,15 @@ MUST_BLOCK = [
     ("Read", {"file_path": "/home/lumen/logs/supergateway/desktop-commander-mcp.log"}),
     ("Bash", {"command": "cat /home/lumen/logs/supergateway/desktop-commander-mcp.log"}),
     ("Bash", {"command": "grep ghp_ /home/lumen/logs/supergateway/desktop-commander-mcp.log.2.gz"}),
+    # wq#2980: wq#2975 a2 printed the live Langfuse secret from agent/.env and the
+    # litellm_config.yaml.* copies through `python3 -c`, which no Read deny sees.
+    ("Read", {"file_path": "/home/lumen/agent/.env.bak.20260928T094444_pre_wq2975"}),
+    ("Bash", {"command": "grep -n LANGFUSE /home/lumen/agent/.env"}),
+    ("Bash", {"command": "python3 -c \"print(open('/home/lumen/agent/.env').read())\""}),
+    ("Bash", {"command": "sed -n 55,65p ~/agent/.env.bak.20260928_091755_wq2928"}),
+    ("Bash", {"command": "bash -c 'cat $HOME/agent/.env'"}),
+    ("Bash", {"command": "sed -n 370,380p /home/lumen/agent/litellm_config.yaml.bak.20260928T094441_pre_wq2975"}),
+    ("Bash", {"command": "python3 -c \"open('/home/lumen/agent/litellm_config.yaml.wq236_proposed')\""}),
     # wq#1297: large pulls (ollama/podman/git-lfs) are manual off-peak only, never
     # from a cron/fworker context — this hook only ever fires for that context.
     ("Bash", {"command": "ollama pull llama3:70b"}),
@@ -246,6 +255,10 @@ MUST_ALLOW = [
     # files in that dir stay reachable.
     ("Bash", {"command": "grep -n model_name /home/lumen/agent/litellm_config.yaml"}),
     ("Grep", {"pattern": "x", "path": "/home/lumen/agent/router.py"}),
+    # wq#2980: the Bash twin names agent/.env* and the config's copies, nothing wider.
+    ("Bash", {"command": "grep -n model_name /home/lumen/agent/litellm_config.yaml | head -5"}),
+    ("Bash", {"command": "grep -c ^ /home/lumen/agent/.environment_notes.md"}),
+    ("Bash", {"command": "ls /home/lumen/worktrees/wq999-a1/.env.example"}),
 ]
 
 
