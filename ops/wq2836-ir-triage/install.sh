@@ -8,6 +8,17 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile      "$SRC/ir_triage.py"            /home/lumen/minerva/ir_triage.py
+  vunit_file "$SRC/lumen-ir-triage.service" /etc/systemd/system/lumen-ir-triage.service
+  vunit_file "$SRC/lumen-ir-triage.timer"   /etc/systemd/system/lumen-ir-triage.timer
+  venabled   lumen-ir-triage.timer
+  vactive    lumen-ir-triage.timer
+  vdone
+fi
+
 echo "== script -> /home/lumen/minerva/ir_triage.py =="
 install -o lumen -g lumen -m 755 "$SRC/ir_triage.py" /home/lumen/minerva/ir_triage.py
 
