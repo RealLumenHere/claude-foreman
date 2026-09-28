@@ -132,15 +132,75 @@ class LivenessTest(unittest.TestCase):
         rc, _ = self.run_main(deployments("2026-09-20T18:00:00Z", message=side[:9]))
         self.assertEqual(rc, 1)
 
-    def test_no_token_is_unconfirmed_and_never_calls_wrangler(self):
-        def boom(*a):
-            raise AssertionError("wrangler must not run without a token")
+    def run_no_env_token(self, token_file, runner):
+        """main() with no CLOUDFLARE_API_TOKEN exported, so the --token-file path decides."""
         buf = io.StringIO()
         with mock.patch.dict(os.environ, {}, clear=False), contextlib.redirect_stdout(buf):
             os.environ.pop("CLOUDFLARE_API_TOKEN", None)
-            rc = cl.main(["--repo", self.repo], runner=boom)
+            rc = cl.main(["--repo", self.repo, "--token-file", str(token_file)], runner=runner)
+        return rc, buf.getvalue()
+
+    def write_token_file(self, body, mode=0o600):
+        path = Path(self.tmp.name) / "cf_token"
+        path.write_text(body)
+        path.chmod(mode)
+        return path
+
+    def test_no_token_is_unconfirmed_and_never_calls_wrangler(self):
+        def boom(*a):
+            raise AssertionError("wrangler must not run without a token")
+        rc, out = self.run_no_env_token(Path(self.tmp.name) / "absent", boom)
         self.assertEqual(rc, 3)
-        self.assertIn("UNCONFIRMED", buf.getvalue())
+        self.assertIn("UNCONFIRMED", out)
+
+    def test_token_file_is_used_when_env_var_is_unset(self):
+        seen = {}
+
+        def runner(repo, script):
+            seen["token"] = os.environ.get("CLOUDFLARE_API_TOKEN")
+            return json.dumps(deployments("2026-09-20T16:30:00Z"))
+
+        rc, out = self.run_no_env_token(self.write_token_file("from-file-tok\n"), runner)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("CURRENT", out)
+        self.assertEqual(seen["token"], "from-file-tok")  # trailing newline stripped
+
+    def test_world_readable_token_file_is_refused(self):
+        def boom(*a):
+            raise AssertionError("a burned token file must not be used")
+        rc, out = self.run_no_env_token(self.write_token_file("tok", mode=0o644), boom)
+        self.assertEqual(rc, 3)
+        self.assertIn("chmod 600", out)
+
+    def test_empty_token_file_is_refused(self):
+        def boom(*a):
+            raise AssertionError("an empty token file must not be used")
+        rc, out = self.run_no_env_token(self.write_token_file("\n"), boom)
+        self.assertEqual(rc, 3)
+        self.assertIn("is empty", out)
+
+    def test_token_file_body_is_never_printed(self):
+        rc, out = self.run_no_env_token(
+            self.write_token_file("s3cr3t-from-file"),
+            lambda repo, script: json.dumps(deployments("2026-09-20T16:30:00Z")),
+        )
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("s3cr3t-from-file", out)
+
+    def test_exported_env_token_wins_over_the_file(self):
+        seen = {}
+
+        def runner(repo, script):
+            seen["token"] = os.environ.get("CLOUDFLARE_API_TOKEN")
+            return json.dumps(deployments("2026-09-20T16:30:00Z"))
+
+        path = self.write_token_file("from-file-tok")
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "from-env-tok"}), \
+                contextlib.redirect_stdout(buf):
+            rc = cl.main(["--repo", self.repo, "--token-file", str(path)], runner=runner)
+        self.assertEqual(rc, 0, buf.getvalue())
+        self.assertEqual(seen["token"], "from-env-tok")
 
     def test_empty_deployments_is_unconfirmed(self):
         rc, out = self.run_main([])

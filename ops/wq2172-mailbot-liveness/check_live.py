@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """wq#2172 — is the deployed lumen-mailbot worker at or past the merged mailbot HEAD?
 
-Read-only probe, no install step. Needs CLOUDFLARE_API_TOKEN in the environment, so it
-cannot run from a build worker; run it from a shell where that variable is exported:
+Read-only probe, no install step. It needs a Cloudflare token, which it takes from
+CLOUDFLARE_API_TOKEN when exported and otherwise reads out of --token-file (default
+/home/lumen/mailbot/.cf_deploy_token, 0600). Reading that file rather than requiring an
+export is what lets a credential-less shell run the check at all: four tickets in a row
+(wq#2164, wq#2168, wq#2172, wq#2175) stopped here because no operator was around to
+export the variable, while install.sh --verify had been reading the same file all along.
+The token is loaded into the child environment and never printed or logged.
 
-    CLOUDFLARE_API_TOKEN=... python3 ops/wq2172-mailbot-liveness/check_live.py
+    python3 ops/wq2172-mailbot-liveness/check_live.py
 
 Exit codes: 0 CURRENT, 1 STALE (run /home/lumen/mailbot/deploy.sh), 3 UNCONFIRMED
 (no token, wrangler failed, or no deployments returned). Never prints the token.
@@ -29,6 +34,31 @@ from datetime import datetime
 
 DEPLOY_INPUTS = ("src", "wrangler.toml", "package.json", "package-lock.json")
 SHA_RE = re.compile(r"\b([0-9a-f]{7,40})\b(-dirty)?")
+TOKEN_FILE_DEFAULT = "/home/lumen/mailbot/.cf_deploy_token"
+
+
+def load_token(path):
+    """Put the token from `path` into the environment. Returns a path-only reason on failure.
+
+    A token file readable by group or other is refused rather than used: a credential that
+    wide is already burned, and silently riding it would hide that. The value itself is
+    never returned, printed, or put in a message.
+    """
+    try:
+        mode = os.stat(path).st_mode
+    except OSError as e:
+        return f"{path} is unreadable ({e.strerror})"
+    if mode & 0o077:
+        return f"{path} is group/world-readable; chmod 600 it (and rotate, it is burned)"
+    try:
+        with open(path) as fh:
+            token = fh.read().strip()
+    except OSError as e:
+        return f"{path} is unreadable ({e.strerror})"
+    if not token:
+        return f"{path} is empty"
+    os.environ["CLOUDFLARE_API_TOKEN"] = token
+    return None
 
 
 def parse_time(s):
@@ -131,11 +161,14 @@ def main(argv=None, runner=run_wrangler):
     ap.add_argument("--repo", default="/home/lumen/mailbot")
     ap.add_argument("--script", default="lumen-mailbot")
     ap.add_argument("--rev", default="HEAD", help="mailbot revision the worker should include")
+    ap.add_argument("--token-file", default=os.environ.get("WQ2172_TOKEN_FILE", TOKEN_FILE_DEFAULT),
+                    help="0600 file holding the Cloudflare token, used when the env var is unset")
     args = ap.parse_args(argv)
 
     if not os.environ.get("CLOUDFLARE_API_TOKEN"):
-        print("UNCONFIRMED: CLOUDFLARE_API_TOKEN is not set; export it and rerun")
-        return 3
+        if reason := load_token(args.token_file):
+            print(f"UNCONFIRMED: CLOUDFLARE_API_TOKEN is not set and {reason}")
+            return 3
     try:
         sha, committed = last_deploy_commit(args.repo, args.rev)
         deployments = parse_deployments(runner(args.repo, args.script))

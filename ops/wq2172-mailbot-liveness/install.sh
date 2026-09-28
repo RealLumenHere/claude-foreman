@@ -2,19 +2,15 @@
 # wq#2172 — nothing to install. This bundle is a probe: is the deployed lumen-mailbot
 # worker at or past the last mailbot commit that touches a deploy input?
 #   install.sh --verify   exit 0 CURRENT, 1 STALE (MISS line), 2 could not check
-# The Cloudflare token comes from $CLOUDFLARE_API_TOKEN, else /home/lumen/mailbot/.cf_deploy_token
-# (read here, never printed). Fix for STALE: /home/lumen/mailbot/deploy.sh.
+# The Cloudflare token comes from $CLOUDFLARE_API_TOKEN, else the file named by
+# $WQ2172_TOKEN_FILE — check_live.py reads it (and refuses one that is group/world-readable),
+# so this wrapper never touches the value. Fix for STALE: /home/lumen/mailbot/deploy.sh.
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
-TOKEN_FILE="${WQ2172_TOKEN_FILE:-/home/lumen/mailbot/.cf_deploy_token}"
 CHECK="${WQ2172_CHECK_LIVE:-$SRC/check_live.py}"  # overridable so tests never reach Cloudflare
 
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
-  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] && [ -r "$TOKEN_FILE" ]; then
-    CLOUDFLARE_API_TOKEN="$(<"$TOKEN_FILE")"
-    export CLOUDFLARE_API_TOKEN
-  fi
   rc=0
   out="$(python3 "$CHECK" 2>&1)" || rc=$?
   case "$rc" in
