@@ -853,8 +853,8 @@ def test_note_supersession_index_reaches_an_unrelated_open_note(db):
         "new1", "pgvector migration status: DONE, backfill complete",
         title="pgvector-migration",
     )
-    add_note(db, "n3", "Runbook: if pgvector-migration reports STALLED, "
-             "re-run the chunker.")
+    add_note(db, "n3", "Runbook: if pgvector-migration status is still "
+             "STALLED, re-run the chunker.")
     conn = lcs.connect(db, readonly=True)
     idx = lcs.build_dead_value_index(conn) + lcs.build_note_supersession_index(conn)
     hits = lcs.scan_notes(conn, idx)
@@ -870,3 +870,71 @@ def test_note_supersession_ignores_notes_with_no_predecessor(db):
     idx = lcs.build_note_supersession_index(conn)
     conn.close()
     assert idx == []
+
+
+# --------------------------------------------- wq#3053 false-positive shapes
+
+def test_note_supersession_does_not_harvest_a_bare_acronym(db):
+    """wq#3041 judgment case A/B: `PR` is a shouted 2+ char token that matched
+    the old bare NOTE_STATUS_RE shape test, but it is not a status word. An
+    unrelated open note that separately says "PR" must not be flagged."""
+    add_superseding_pair(
+        db, "old1", "wq1610-widening: opened a PR for the index change",
+        "new1", "wq1610-widening: merged, no PR pending",
+        title="wq1610-widening",
+    )
+    add_note(db, "n3", "wq1610-widening: reviewers asked for a follow-up PR.")
+    conn = lcs.connect(db, readonly=True)
+    note_idx = lcs.build_note_supersession_index(conn)
+    idx = lcs.build_dead_value_index(conn) + note_idx
+    hits = [h for h in lcs.scan_notes(conn, idx) if h["fact_id"].startswith("note:")]
+    conn.close()
+    assert note_idx == []
+    assert hits == []
+
+
+def test_note_supersession_does_not_bleed_across_subjects_via_generic_title(db):
+    """wq#3041 judgment case D: two notes titled "... status update" share no
+    real subject, only the generic words "status"/"update". A dead value
+    harvested from one (hathor's CI) must not flag the other (isis)."""
+    add_superseding_pair(
+        db, "old1", "hathor GPU status update: CI red on the driver bump, TODO retest",
+        "new1", "hathor GPU status update: driver bump verified, tests green",
+        title="hathor GPU status update",
+    )
+    add_note(db, "n3", "isis status update: CI green on main, no action needed.")
+    conn = lcs.connect(db, readonly=True)
+    note_idx = lcs.build_note_supersession_index(conn)
+    idx = lcs.build_dead_value_index(conn) + note_idx
+    hits = [h for h in lcs.scan_notes(conn, idx) if h["fact_id"].startswith("note:")]
+    conn.close()
+    assert note_idx == []
+    assert hits == []
+
+
+def test_note_supersession_entries_are_excluded_from_file_tiers(db, tmp_path):
+    """wq#3053 item 4: even a value that does clear the status allowlist,
+    subject and cue gates must not reach the ticket/regenerate file tiers --
+    a note-sourced entry firing there could auto-file a wq ticket or trigger a
+    state regen off free note prose. Only scan_notes sees it. The artifact
+    below is built so the entry WOULD hit scan_files if it weren't excluded
+    (proving the assertion isn't vacuous), then scan() itself is checked."""
+    add_superseding_pair(
+        db, "old1", "scout-x ingestion pipeline status: OUTAGE since 04:10",
+        "new1", "scout-x ingestion pipeline status: RESOLVED at 06:40",
+        title="scout-x",
+    )
+    artifact = tmp_path / "scout-x.yaml"
+    artifact.write_text("scout_x:\n  status: OUTAGE since 04:10\n")
+    conn = lcs.connect(db, readonly=True)
+    note_index = lcs.build_note_supersession_index(conn)
+    conn.close()
+    assert [e["dead_value"] for e in note_index] == ["OUTAGE"]
+    # Sanity: this entry does hit scan_files when handed to it directly --
+    # the exclusion is enforced by scan(), not by scan_files itself.
+    direct_hits = lcs.scan_files(note_index, artifacts=[(str(artifact), lcs.TIER_TICKET)])
+    assert direct_hits
+
+    result = lcs.scan(db, artifacts=[(str(artifact), lcs.TIER_TICKET)])
+    ticket_hits = [h for h in result["hits"] if h["tier"] == lcs.TIER_TICKET]
+    assert ticket_hits == []
