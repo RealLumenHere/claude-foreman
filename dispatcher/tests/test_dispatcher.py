@@ -39,7 +39,6 @@ import spawn_loop_guard  # noqa: E402
 import self_heal  # noqa: E402
 import notify_sinks  # noqa: E402
 import psi_pressure  # noqa: E402
-import cpu_pressure  # noqa: E402
 import repo_sweep  # noqa: E402
 import harness_preflight  # noqa: E402
 import capability_lint  # noqa: E402
@@ -121,15 +120,7 @@ def denv(tmp_path, monkeypatch):
     # the real default honest.
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "warn")
     monkeypatch.delenv("FAKE_GOVERNOR_DENY", raising=False)
-    # wq#844 PSI check reads the real host's /proc/pressure/memory by default — point it
-    # at a nonexistent path so these tests aren't at the mercy of the box's live memory
-    # pressure (fail-open: psi_pressure._parse_psi() -> {} -> verdict "ok").
-    monkeypatch.setattr(psi_pressure, "PSI_PATH", str(tmp_path / "no-such-psi-file"))
-    # wq#2771: same fail-open trick for cpu_pressure (wq#2631/wq#2647) — it reads the
-    # real host's /proc/pressure/cpu by default with no override here, so any test that
-    # calls fd.run_pass() was at the mercy of the box's live CPU load and failed outright
-    # (stage=cpu_pressure halt before admission) whenever some_avg60 crossed 30%.
-    monkeypatch.setattr(cpu_pressure, "PSI_PATH", str(tmp_path / "no-such-cpu-psi-file"))
+    # Host PSI (memory + cpu) is pinned fail-open for every test in conftest.py (wq#2774).
 
     monkeypatch.setattr(fd, "CONFIG_PATH", str(cfg_path))
     monkeypatch.setattr(fd, "STATE_PATH", str(tmp_path / "dstate.json"))
@@ -1563,26 +1554,21 @@ def test_auto_lane_repo_sweep_ticket_dispatches_via_repo_hint(denv, monkeypatch)
     assert f"fworker-wq{tid}" in args
 
 
-def test_auto_lane_non_sweep_ticket_uses_lane_default(denv, monkeypatch):
-    """wq#2818: 1eb5c48 (wq#2103/2056, 2026-09-25) gave 'auto' a LANE_REPO default
-    (FOREMAN_ROOT in production) for auto-lane infra tickets that name no repo at all —
-    superseding wq#1094's original 'auto has no LANE_REPO row' premise, which
-    test_router.py's test_auto_lane_defaults_to_foreman now pins instead. A plain (not
-    repo-sweep-shaped) auto ticket must dispatch via that lane default, not sit
-    lane_unmapped forever and not accidentally match the repo-sweep hint meant only for
-    tickets repo_sweep.py itself filed (wq#2753)."""
+def test_auto_lane_non_sweep_ticket_still_unmapped(denv):
+    """A plain 'auto'-lane ticket (not repo-sweep-shaped) must refuse rather than guess a
+    repo (wq#713 MUST 7): LANE_REPO['auto'] exists only so repo-sweep-shaped infra tickets
+    resolve, via repo_sweep.repo_hint ahead of the lane default. wq#2818 (03:48Z) had
+    rewritten this test to expect a dispatch to the lane default; wq#2870 (04:07Z, PR#1192)
+    restored the refusal in gates.LaneRepo/router.repo_for_ticket, so the rewrite was left
+    asserting the retired behaviour. The lane-default positive case stays covered by
+    test_router.py::test_auto_lane_defaults_to_foreman and the repo-sweep resolution test."""
     write_config(denv, lanes={**BASE_CONFIG["lanes"],
                               "auto": {"enabled": True, "max_per_day": 10}})
-    lane_default_repo = denv["repo"]
-    monkeypatch.setitem(router.LANE_REPO, "auto", lane_default_repo)
     tid = add_ticket("just an ordinary auto-lane ticket", lane="auto")
     assert fd.run_pass() == 0
-    assert log_events(denv, "skip", ticket=tid) == []
-    calls = lumen_calls(denv)
-    assert len(calls) == 1
-    args = calls[0]["args"]
-    assert args[args.index("--repo") + 1] == lane_default_repo
-    assert f"fworker-wq{tid}" in args
+    skips = log_events(denv, "skip", ticket=tid)
+    assert len(skips) == 1 and skips[0]["reason"] == "lane_unmapped"
+    assert lumen_calls(denv) == []
 
 
 def test_lane_repo_mismatch_skipped_not_dispatched(denv):

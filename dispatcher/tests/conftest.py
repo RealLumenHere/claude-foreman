@@ -10,8 +10,13 @@ without its own scratch WQ_DB would fingerprint and park real ticket ids in the 
 every test starts with WQ_DB pointing at an empty per-test file (fixtures that build a real
 scratch db, like `denv`, override it)."""
 import os
+import sys
 
 import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import cpu_pressure  # noqa: E402
+import psi_pressure  # noqa: E402
 
 os.environ["WQ_FOREMAN_ROUTER"] = "/nonexistent/wq2144/router.py"
 
@@ -37,3 +42,15 @@ def _scratch_cli_canary(tmp_path_factory, monkeypatch):
     """wq#2527: the router and dispatcher read the canary cache; the live one must not hold a
     rung inside a test that isn't about it."""
     monkeypatch.setenv("FOREMAN_CLI_CANARY", str(tmp_path_factory.mktemp("canary") / "c.json"))
+
+
+@pytest.fixture(autouse=True)
+def _no_host_psi(tmp_path_factory, monkeypatch):
+    """wq#2774: psi_pressure (wq#844) and cpu_pressure (wq#2631/wq#2647) read the host's
+    /proc/pressure by default, so on a loaded box every run_pass() halted before admission and
+    ~200 tests failed. Point both at a missing file (fail-open -> "ok"), in-process and for any
+    subprocess; tests about pressure set their own PSI_PATH over this."""
+    missing = tmp_path_factory.mktemp("psi") / "absent"
+    for mod, env in ((psi_pressure, "PSI_MEMORY_PATH"), (cpu_pressure, "PSI_CPU_PATH")):
+        monkeypatch.setattr(mod, "PSI_PATH", str(missing))
+        monkeypatch.setenv(env, str(missing))

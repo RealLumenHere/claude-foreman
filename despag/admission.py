@@ -264,6 +264,17 @@ def check_admission(model: str, *, running_claude_max: int, now: _dt.datetime | 
         # up already uses, still under the operator's upper clamp.
         allowed = min(cfg["min_allowed"], DESPAG_MAX_CLAUDE_CONCURRENT)
         detail = f"{detail}; failing closed to min_allowed={allowed}"
+        # wq#2426 made a pool at/below Frank's reserve support ZERO workers, not
+        # min_allowed — and that verdict needs only `percent`. So a poll that lost
+        # resets_at must not turn a reserve-breached account back into "one turn":
+        # that is the wq#1868 loosening again, one slot wide. Percent alone is enough to
+        # keep the zero.
+        active, _ = burn_rate.frank_active(now)
+        breached = [p for p in pools
+                    if burn_rate.pool_spendable(limits, p, active=active) == 0.0]
+        if breached:
+            allowed = 0
+            detail = f"{detail}; {','.join(breached)} at/below Frank reserve -> 0"
     if running_claude_max >= allowed:
         return {"allow": False,
                 "reasons": [f"burn-rate concurrency ceiling reached: allowed={allowed} "

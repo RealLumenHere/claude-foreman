@@ -78,9 +78,9 @@ def test_reserve_honoured_remaining_below_reserve_refuses(monkeypatch):
     """Session at 75% used (25% remaining) clears the governor's own floor (20%) —
     evaluate_dispatch alone would allow it — but FRANK_RESERVE_PCT reserves 30% of
     the session for Frank's interactive chat (burn_rate.py:54-58), so the spend rate
-    above the reserve is 0 and allowed_concurrent clamps to burn_rate.MIN_ALLOWED
-    (1): one turn already running must be refused, proving the reserve — not just
-    the governor floor — is what's gating."""
+    above the reserve is 0. Since wq#2426 that is ZERO workers, not burn_rate.MIN_ALLOWED
+    (the reserve is Frank's, not the fleet's quota): even the first turn is refused,
+    proving the reserve — not just the governor floor — is what's gating."""
     resets_at = (NOW + dt.timedelta(hours=1)).isoformat()
     limits = {
         "session": {"percent": 75, "resets_at": resets_at, "severity": "normal"},
@@ -89,7 +89,8 @@ def test_reserve_honoured_remaining_below_reserve_refuses(monkeypatch):
     _mock_state(monkeypatch, limits=limits, stale=False)
 
     first = admission.check_admission("claude-sonnet-5", running_claude_max=0, now=NOW)
-    assert first["allow"] is True  # one slot exists (min_allowed=1) even under reserve
+    assert first["allow"] is False  # wq#2426: no slot at all under the reserve
+    assert "allowed=0" in first["reasons"][0]
 
     second = admission.check_admission("claude-sonnet-5", running_claude_max=1, now=NOW)
     assert second["allow"] is False
@@ -141,7 +142,7 @@ def test_missing_resets_at_does_not_loosen_a_reserve_breached_account(monkeypatc
     test_reserve_honoured_remaining_below_reserve_refuses (session 75% used, i.e. 25%
     remaining against a 30% reserve) must not admit MORE turns merely because resets_at
     is missing. Under wq#1865's clamp this allowed 7 concurrent claude-max turns while
-    the reserve-respecting path allowed 1."""
+    the reserve-respecting path allowed 1 (0 since wq#2426; the equality below is what must hold)."""
     with_resets = {
         "session": {"percent": 75, "resets_at": (NOW + dt.timedelta(hours=1)).isoformat(),
                     "severity": "normal"},
@@ -163,7 +164,7 @@ def test_missing_resets_at_does_not_loosen_a_reserve_breached_account(monkeypatc
                 allowed = running + 1
         return allowed
 
-    assert _ceiling(with_resets) == 1
+    assert _ceiling(with_resets) == 0  # wq#2426: at the reserve the ceiling is zero, not min_allowed
     assert _ceiling(without_resets) == _ceiling(with_resets)
 
 

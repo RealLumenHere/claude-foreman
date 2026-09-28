@@ -20,9 +20,18 @@ RESET = "2026-09-24T11:00:00+00:00"  # the Thursday weekly reset, ~73h out
 
 @pytest.fixture(autouse=True)
 def _frank_inactive_by_default(monkeypatch, tmp_path_factory):
-    """Same isolation as test_burn_rate.py: the real frank_active() must degrade to
-    inactive rather than read this box's live queue.db."""
-    monkeypatch.setenv("WQ_DB", str(tmp_path_factory.mktemp("wq2426") / "no-such-db"))
+    """Same isolation as test_burn_rate.py: point WQ_DB at a VALID db with an empty
+    agent_sessions table so the real frank_active() reads cleanly and answers inactive,
+    rather than reading this box's live queue.db. wq#1931: an unreadable db (the old
+    "no-such-db" path) now means ACTIVE, which would zero every ceiling asserted here."""
+    import sqlite3
+    db = tmp_path_factory.mktemp("wq2426") / "empty-sessions.db"
+    con = sqlite3.connect(str(db))
+    con.execute("CREATE TABLE agent_sessions(session_id TEXT PRIMARY KEY, base_name TEXT NOT NULL,"
+                " host TEXT, pid INTEGER, first_seen TEXT, last_seen TEXT)")
+    con.commit()
+    con.close()
+    monkeypatch.setenv("WQ_DB", str(db))
 
 
 def _limits(weekly, session=10, fable=None):
