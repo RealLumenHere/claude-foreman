@@ -115,6 +115,12 @@ def diff():
 # and wq#1482 (read-dir-sweep) class — code correct, tests green, timer never
 # installed. staged_drift() closes it by walking the repo side instead of the live
 # side, so "staged" is a state the check can name rather than a silence.
+#
+# wq#1931: lumen-despag.service is on this list until the operator installs the hardened
+# tracked unit AND removes /etc/systemd/system/lumen-despag.service.d/10-operator.conf
+# (its PATH/ReadWritePaths/IPAddress resets are folded into the unit now). Installing the
+# unit without removing the drop-in is harmless (same values); removing the drop-in
+# without installing the unit brings back the egress-blocking IPAddressDeny.
 
 def staged_paths():
     """Unit files committed under any <foreman>/*/systemd/ dir, as (basename, abspath).

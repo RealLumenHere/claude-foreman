@@ -19,7 +19,17 @@ os.environ["WQ_FOREMAN_ROUTER"] = "/nonexistent/wq2144/router.py"
 @pytest.fixture(autouse=True)
 def _scratch_wq_db(tmp_path_factory, monkeypatch):
     if "WQ_DB" not in os.environ:
-        monkeypatch.setenv("WQ_DB", str(tmp_path_factory.mktemp("wqdb") / "empty_wq.db"))
+        db = tmp_path_factory.mktemp("wqdb") / "empty_wq.db"
+        # wq#1931: burn_rate.frank_active() now fails ACTIVE on any read error, and a
+        # db with no agent_sessions table is a read error. A valid-but-empty table is
+        # the honest "no orchestrator session" fixture.
+        import sqlite3 as _sq
+        _c = _sq.connect(str(db))
+        _c.execute("CREATE TABLE agent_sessions(session_id TEXT PRIMARY KEY, base_name TEXT NOT NULL,"
+                   " host TEXT, pid INTEGER, first_seen TEXT, last_seen TEXT)")
+        _c.commit()
+        _c.close()
+        monkeypatch.setenv("WQ_DB", str(db))
 
 
 @pytest.fixture(autouse=True)

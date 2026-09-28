@@ -13,7 +13,9 @@ After=network-online.target
 Type=simple
 User=lumen
 WorkingDirectory=/home/lumen/foreman
-Environment=PATH=/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+# npm-global first: the `claude` CLI lives there (ISSUE-LOG #374); the spawned children
+# resolve it via PATH even though app.py:65 now defaults CLAUDE_BIN absolute (wq#1891).
+Environment=PATH=/home/lumen/.npm-global/bin:/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
 # 0600, operator-created from harness/systemd/lumen-despag.env.example — see that
 # file for the key reference (token, data dir, concurrency cap, wall-clock, port).
 EnvironmentFile=/home/lumen/foreman/harness/systemd/lumen-despag.env
@@ -34,9 +36,16 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/lumen/worktrees -/home/lumen/despag-data
-IPAddressAllow=localhost
-IPAddressDeny=any
+# wq#1931: the claude CLI writes its session/config/cache dirs under $HOME (the operator
+# drop-in's exact list). The token file is listed by path, not its directory: with
+# app.py no longer chmod-ing an existing token it is only READ, so this entry only
+# matters for first-boot creation.
+ReadWritePaths=/home/lumen/worktrees -/home/lumen/despag-data /home/lumen/.claude /home/lumen/.cache /home/lumen/.config /home/lumen/.secrets/despag-api.token
+# NO IPAddressAllow/IPAddressDeny (wq#1931 defect 2): they filter EGRESS for the whole
+# cgroup, so every spawned `claude` child lost api.anthropic.com and the turn hung in
+# ep_poll forever. The listen side needs no firewall: the bind is hardcoded 127.0.0.1
+# (despag/__main__.py:31-32). If a listen guard is ever wanted, assert the host in
+# uvicorn, do not use a cgroup firewall.
 
 [Install]
 WantedBy=multi-user.target
