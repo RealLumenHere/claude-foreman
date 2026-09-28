@@ -171,10 +171,18 @@ def _body(charset, quant, foreign=""):
     one past the literal and no longer ended in it.
 
     The cost is a real body that CONTAINS `MASKED` (not merely ends in it): it is
-    truncated at the literal and, below the floor, stops matching. For a random base62
-    body that is ~1 in 62**6 per position, the same order of cost wq#2298 already
-    priced in, and it is paid in the direction that alarms rather than the one that
-    goes silent.
+    truncated at the literal and, below the floor, stops matching — and a `{floor,}`
+    match is all-or-nothing, so "truncated below the floor" means the WHOLE rule fails
+    to match, not a shorter one. wq#2922 measured what that actually costs: unlike the
+    foreign-prefix guard below, which wq#2848 could defer past the floor because a
+    stop there can only shorten a match, deferring THIS guard would let a body swallow
+    `<prefix>MASKED` again and hand the match back to the fixed-point filter this
+    docstring's own reproduction describes — so the guard has to stay unconditional,
+    and for a random base62 body that is ~1 in 62**6 per position, it goes silent, not
+    loud: hits `[]`, no record, the token in the clear (wq#2868 probe section B, 96/96
+    SILENT). `_orphan_hits` (below PATTERNS) is what actually pays the cost in the
+    alarming direction: where this guard blocks a match that would otherwise have
+    reached the rule's floor, it alarms instead of leaving the position unread.
 
     The literal is matched case-SENSITIVELY (`(?-i:)`) even where the rule around it
     is IGNORECASE: kv-secret is, and a case-blind lookahead there would also stop the
@@ -555,6 +563,119 @@ PATTERNS = [
 ]
 
 
+# wq#2922: orphan-prefix backstop.
+#
+# `_body()` carries two guards. wq#2848 deferred the FOREIGN one past each rule's own
+# floor, so a foreign shape can only shorten a match, never kill one outright. The
+# MASK-literal guard (wq#2638) is a sibling of that guard in the same function, and it
+# is still unconditional inside the floor — correctly so, since deferring IT would let
+# a body swallow `<prefix>MASKED` whole and hand the match back to `_matches()`'s
+# fixed-point filter, which drops it, secret included (the exact leak wq#2638 fixed).
+# So a real token whose body happens to contain this module's own output literal at
+# any offset below the rule's floor still fails the WHOLE `{floor,}` match — not a
+# shorter one, none at all — and passes through with no mask and no record
+# (wq#2868 probe section B: 96/96 SILENT, identical on every rev tried, including the
+# revs before wq#2848 and wq#2720 ever touched this function). Nothing about the
+# mechanism is specific to the literal, either: a collector that slices a field to a
+# fixed display budget BEFORE calling mask() (wq#2846) leaves the same shape behind —
+# a real prefix with fewer than `floor` real characters after it — for an unrelated
+# reason. Both are the same failure as seen from here: a `{floor,}` match is
+# all-or-nothing, so "not enough body" and "the whole rule" are the same event.
+#
+# The fix is not to bound less — an unbounded body is what handed wq#2638 the leak it
+# closed, and copying wq#2848's deferral here reopens exactly that hole for the mask
+# literal specifically. Instead: where masking cannot safely happen (the guard means
+# there is no reliable end to the value to replace), ALARM instead of staying silent.
+#
+# A rule's own prefix is fixed and rare enough to name on sight (`ghp_`, `AKIA`,
+# `cfut_`, `sk-`, `xoxb-`); what makes a body "should have matched" is that the SAME
+# floor is reachable without either guard — i.e. a real credential shape was sitting
+# there and only the guard stood between it and a match. Requiring that (rather than
+# alarming on any short body at all) is what keeps this quiet on a body that is
+# genuinely too short to be anything — `ghp_notes` in a repo path (5 of 30 required,
+# unguarded) reads as prose, not a truncated secret, the same call the rule's own
+# floor already makes for a body with no guard in the way at all.
+#
+# The prefix is matched on its own, separately from the body, and always to its
+# GREEDY maximum — never re-fitted to whatever length would let the body clear the
+# floor. sk-key's prefix is the one variable-length shape here (`sk-(?:[a-zA-Z]+-)*`);
+# letting IT backtrack to feed the body is how a stale masked residue like
+# `sk-ant-xxxxxxxxMASKED` (an OLD, pre-wq#2300 mask artefact, kept in
+# test_masking.py's FALSE_POSITIVES on purpose) would misread as a live orphan: with
+# the greedy prefix `sk-ant-` kept fixed, the raw body behind it is 14 characters,
+# under sk-key's 16-character floor, so the backstop correctly reads it as "too short"
+# and never reaches the own-output question at all.
+#
+# What does reach that question is screened by `_OWN_TAIL`, exactly as `_matches()`
+# screens a real match: `cfut_MASKED`'s raw, unguarded body IS exactly cloudflare's
+# 6-character floor, so it clears the reachability test, and `_OWN_TAIL` is what keeps
+# this module's own prior output from re-arming its own backstop.
+#
+# The record this produces mirrors `suppressions()`'s shape — label, prefix,
+# value_len, value_sha256_12, no `context` — for the same reason given there
+# (masking.py:~774-781 above): the value is not masked in the output, so a context
+# window would print the very thing the record exists to alarm on without leaking.
+# Unlike a suppression, this record is never excused: `fworker.burned_hashes` skips a
+# record only when it carries `suppressed`, and this one never does, so it escalates
+# like any other hit.
+# _SHAPES_BY_LABEL flattens to exactly the six fixed-prefix PATTERNS entries, in the
+# same order (both built from the same dict, github's two shapes first) — asserted
+# below rather than trusted, since a silent mismatch here would pair a rule with the
+# WRONG guarded regex and either miss real orphans or manufacture false ones.
+_FIXED_PREFIX_SHAPES = [(label, prefix, charset, quant)
+                        for label, shapes in _SHAPES_BY_LABEL.items()
+                        for prefix, charset, quant in shapes]
+assert [label for label, _, _, _ in _FIXED_PREFIX_SHAPES] == [
+    lbl for lbl, _rx, _repl in PATTERNS[:len(_FIXED_PREFIX_SHAPES)]]
+
+# kv-secret, url-auth and xml-secret carry no orphan backstop: kv-secret's label is a
+# keyword, not a fixed string ("a boundary-qualified known prefix" does not apply, and
+# wq#2720 already gave it no foreign stop by design — see _kv_rule's own docstring);
+# url-auth and xml-secret take no bounded body at all (see PATTERNS above), so neither
+# can under-run its own floor the way a `{floor,}` fixed-prefix rule can.
+_ORPHAN_RULES = [
+    (label, re.compile(_B + r"(" + prefix + r")"), re.compile(charset + quant), guarded_rx)
+    for (label, prefix, charset, quant), (_glabel, guarded_rx, _repl)
+    in zip(_FIXED_PREFIX_SHAPES, PATTERNS[:len(_FIXED_PREFIX_SHAPES)])
+]
+
+
+def _orphan_hits(text):
+    """[(label, prefix_text, value)] — every position in `text` where a fixed-prefix
+    rule's own floor is reachable WITHOUT its guards but the real, guarded rule does
+    not match: the guard is the only thing standing between here and a real hit, so
+    it is reported as one instead of read as clean text (wq#2922). See the block
+    comment above `_ORPHAN_RULES` for the full reasoning."""
+    out = []
+    for label, prefix_rx, raw_body_rx, guarded_rx in _ORPHAN_RULES:
+        for pm in prefix_rx.finditer(text):
+            start, prefix_end = pm.start(), pm.end(1)
+            if guarded_rx.match(text, start):
+                continue   # the real rule already has this position
+            bm = raw_body_rx.match(text, prefix_end)
+            if not bm:
+                continue   # genuinely too short even without the guard(s)
+            value = text[prefix_end:bm.end()]
+            # own output, at the START of `value` (`_OWN_TAIL`, prefix-matched rather
+            # than full: the raw body is unguarded, so a rule whose charset admits `.`,
+            # `_` or `-` runs past the literal — `cfut_MASKED.` (wq#2674) and
+            # `cfutMASKED_` (wq#2726's leftmost-longest quirk, reports/2732) are both
+            # committed as accounted-for residue, not live leaks), with AT MOST one
+            # character behind it — "a sentence quoting a masked value" (test_masked_
+            # output_with_prose_behind_it_does_not_re_arm's own docstring), never
+            # more. That one-char cap is what tells `ghp_MASKED` + a single trailing
+            # character apart from `ghp_MASKED` + 24 more live body characters (probe
+            # section B's off-0 cases): both start with an own-tail match, but only
+            # the first is plausibly incidental — the second is exactly the shape
+            # this backstop exists to alarm on, so it must not be excused by an
+            # own-tail match that only explains its first six characters.
+            tail_m = _OWN_TAIL.match(value)
+            if tail_m and len(value) - tail_m.end() <= 1:
+                continue   # our own output, read back
+            out.append((label, pm.group(1), value))
+    return out
+
+
 CONTEXT_CHARS = 120   # masked context kept either side of a hit
 PREFIX_CHARS = 48     # of the kept, non-secret prefix
 
@@ -747,7 +868,15 @@ _MAX_PASSES = len(PATTERNS)
 
 def mask_text(text):
     """(masked_text, [labels that fired]). Order of labels follows PATTERNS, by
-    first pass fired."""
+    first pass fired, then any orphan-prefix label (wq#2922) that fired on neither.
+
+    An orphan hit adds its label here — not just to scan()'s records — because the
+    caller's whole alarm path (fworker.screen_mask_hits) gates on THIS list: nothing
+    downstream ever asks scan() a question mask_text() did not already say yes to.
+    `text` itself is untouched by an orphan hit, per _orphan_hits' own docstring: there
+    is no reliable end to the value to replace it with, so this function alarms
+    instead of guessing one.
+    """
     hits = []
     for _ in range(_MAX_PASSES):
         changed = False
@@ -759,6 +888,9 @@ def mask_text(text):
                     hits.append(label)
         if not changed:
             break
+    for label, _prefix, _value in _orphan_hits(text):
+        if label not in hits:
+            hits.append(label)
     return text, hits
 
 
@@ -863,6 +995,12 @@ def scan(text, include_suppressed=False):
     escalation predicates (fworker.burned_hashes) skip every row carrying `suppressed`.
     Runs the same up-to-`_MAX_PASSES` passes as mask_text() (wq#2720), so a value a
     foreign-prefix stop freed up on pass 2 is recorded here too, not just masked.
+
+    wq#2922: an orphan-prefix hit (`_orphan_hits`) always appends a record here, ON by
+    default and unlike a suppression — the opposite of "the rule decided not to alarm",
+    it is "the rule could not safely mask, so it alarms instead". No `context` key: the
+    value is not masked in `cur`, so a window around it would print the very thing the
+    record exists to flag (the same reason suppressions() gives above its own record).
     """
     matches, cur = raw_matches(text)
     records, cursor = [], {}
@@ -880,6 +1018,13 @@ def scan(text, include_suppressed=False):
             "value_len": len(value),
             "value_sha256_12": value_sha12(value),
             "context": context,
+        })
+    for label, prefix, value in _orphan_hits(cur):
+        records.append({
+            "label": label,
+            "prefix": prefix[-PREFIX_CHARS:],
+            "value_len": len(value),
+            "value_sha256_12": value_sha12(value),
         })
     if include_suppressed:
         # Read off the RAW text, not `cur`: a suppressed candidate is unmasked in both,

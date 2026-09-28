@@ -15,17 +15,23 @@ kv-secret as host (the rule wq#2720 deliberately gave no foreign stop), url-auth
 of stops rather than one).
 
 Section B is the same under-floor class through the OTHER guard `_body()` carries, the
-unconditional mask-literal lookahead, which wq#2848 correctly left alone and which still
-leaks: xfail-strict against wq#2922 so closing that ticket makes this test go red until
-the xfail is dropped.
+unconditional mask-literal lookahead, which wq#2848 correctly left alone. wq#2922 closes
+it with an orphan-prefix backstop (masking.py, `_orphan_hits`) rather than deferring the
+guard: the guard stays unconditional (deferring it would reopen wq#2638), and a position
+it blocks that would otherwise have reached the rule's floor alarms — gains a label in
+mask_text()'s hits and a record in scan() — instead of staying silent. It does not also
+mask: there is no reliable end to the value to bound a replacement on, so the fill
+character section_b() injects to detect a REWRITE is still present in the output text by
+design, and section_b()'s raw `fails` list (built around exactly that check) stays 96
+long. What the fix changes is each entry's `hits=` tail, which reads `SILENT` only when
+mask_text() found nothing at all — that substring is the "0 SILENT" wq#2922's acceptance
+line names, and is what the test below actually asserts on.
 
 The probe is the evidence artefact of reports/wq2868_judgment_wq2848_floor_fallback.md and
 takes a masking-directory argument, so the same cases run against a historical rev.
 """
 import os
 import sys
-
-import pytest
 
 HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "reports"))
@@ -58,9 +64,11 @@ def test_a_four_credential_chain_is_drained_and_every_label_fires():
     assert fails == [], f"{name}: {fails}"
 
 
-@pytest.mark.xfail(strict=True, reason="wq#2922: the mask-literal guard is still "
-                                       "unconditional inside the floor, so an under-floor "
-                                       "literal still fails the whole rule silently")
-def test_a_body_holding_the_mask_literal_below_the_floor_still_leaks():
+def test_a_body_holding_the_mask_literal_below_the_floor_still_alarms():
     name, total, fails = _run(probe.section_b)
-    assert fails == [], f"{name}: {len(fails)}/{total} leaked: {fails[:6]}"
+    # Every case still shows up in `fails` (the fill character is not masked — see the
+    # module docstring), so the real assertion is on the `hits=` tail: SILENT means
+    # mask_text() found nothing at all, which is the wq#2922 leak; any other value
+    # means the orphan-prefix backstop named a label for it.
+    silent = [f for f in fails if f.endswith("hits=SILENT")]
+    assert silent == [], f"{name}: {len(silent)}/{total} still SILENT: {silent[:6]}"

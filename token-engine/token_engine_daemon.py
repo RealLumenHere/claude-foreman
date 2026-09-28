@@ -376,6 +376,60 @@ MASK_PATTERNS = [
 # more rule in a chain of glued prefixes.
 _MAX_PASSES = len(MASK_PATTERNS)
 
+# masking._ORPHAN_RULES/_orphan_hits (wq#2922): the mask-literal guard in `_body()`
+# is unconditional inside a rule's own floor (correctly so — deferring it the way
+# wq#2848 deferred the FOREIGN guard would let a body swallow `<prefix>MASKED`
+# whole again, the exact leak wq#2638 closed). So a real token whose body happens
+# to contain this copy's own output literal below the rule's floor still fails the
+# whole `{floor,}` match and reaches the broker result unmasked, with mask_hits()
+# reporting nothing — the same silent class masking.py had (wq#2868 probe section
+# B), mirrored here since this copy carries the identical guard.
+#
+# The backstop: a fixed prefix whose raw, UNGUARDED body would have reached this
+# rule's own floor, where the real (guarded) rule still does not match, is reported
+# as a hit anyway — detect-only, same as every other rule in this file, so nothing
+# here masks. Screened by `_ORPHAN_OWN_TAIL` the way masking.py's `_orphan_hits`
+# is, prefix-matched rather than full and tolerant of at most one trailing
+# character (`cfut_MASKED.`, `cfutMASKED_` — see masking.py's own comment above
+# `_ORPHAN_RULES` for the full reasoning and the committed shapes that motivate the
+# one-character cap).
+_ORPHAN_OWN_TAIL = re.compile(r"(?:" + "|".join(
+    (_PRE_GH, _PRE_GHPAT, _PRE_CFUT, _PRE_SK, _PRE_SLACK, _PRE_AWS)) + r")*" + MASK)
+
+_FIXED_PREFIX_SHAPES = [(label, prefix, charset, quant)
+                        for label, shapes in _SHAPES_BY_LABEL.items()
+                        for prefix, charset, quant in shapes]
+assert [label for label, _, _, _ in _FIXED_PREFIX_SHAPES] == [
+    lbl for lbl, _rx, _repl in MASK_PATTERNS[:len(_FIXED_PREFIX_SHAPES)]]
+
+_ORPHAN_RULES = [
+    (label, re.compile(_B + r"(" + prefix + r")"), re.compile(charset + quant), guarded_rx)
+    for (label, prefix, charset, quant), (_glabel, guarded_rx, _repl)
+    in zip(_FIXED_PREFIX_SHAPES, MASK_PATTERNS[:len(_FIXED_PREFIX_SHAPES)])
+]
+
+
+def _orphan_hits(text):
+    """masking._orphan_hits, mirrored: [name] for every fixed-prefix rule whose own
+    floor was reachable without its guards but the real, guarded rule did not match
+    at that position. Detect-only, like the rest of this file — no rewrite."""
+    names = []
+    for label, prefix_rx, raw_body_rx, guarded_rx in _ORPHAN_RULES:
+        for pm in prefix_rx.finditer(text):
+            start, prefix_end = pm.start(), pm.end(1)
+            if guarded_rx.match(text, start):
+                continue
+            bm = raw_body_rx.match(text, prefix_end)
+            if not bm:
+                continue
+            value = text[prefix_end:bm.end()]
+            tail_m = _ORPHAN_OWN_TAIL.match(value)
+            if tail_m and len(value) - tail_m.end() <= 1:
+                continue
+            if label not in names:
+                names.append(label)
+    return names
+
 RESPONSE_KEYS = {"ok", "verb", "ticket", "rule", "reason", "result", "elapsed_s"}
 
 
@@ -426,6 +480,9 @@ def mask_hits(text):
                     names.append(name)
         if not changed:
             break
+    for name in _orphan_hits(text):
+        if name not in names:
+            names.append(name)
     return names
 
 
