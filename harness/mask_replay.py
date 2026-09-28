@@ -694,16 +694,22 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
             line_at = text.rfind("\n", 0, lo) + 1
             end = text.find("\n", hi)
             line = text[line_at:end if end >= 0 else len(text)]
-            today_hits = [(p, v) for _, p, v in _hits(CURRENT_PATTERNS, line,
-                                                       skip_masked_output=True)]
-            today = [v for _, v in today_hits]
+            today_located = list(_located(CURRENT_PATTERNS, line, True))
+            today = [v for _, _, v, _at, _to in today_located]
             # wq#2423: a widened prefix that recuts this same span into a DIFFERENT
             # value string must not read as a retired rule. The line is only closed
-            # when today's table stops firing on it altogether, or when whatever it
-            # cuts today is itself already accounted for (tracked text, not this
-            # exact-value comparison, which a recut always fails).
-            today_closed = not today_hits or any(
-                account(v, tracked, p) for p, v in today_hits)
+            # when today's table stops firing on THIS SPAN, or when whatever it cuts
+            # there is itself already accounted for (tracked text, not this exact-value
+            # comparison, which a recut always fails).
+            # wq#3076: scored against every hit on the line, one accounted hit used to
+            # excuse every other hit however unrelated (wq#3062). Score only hits whose
+            # span overlaps this record's own (lo, hi) and require all of them
+            # accounted — all([]) is True, which also covers "today's table doesn't
+            # fire on this span at all".
+            span_lo, span_hi = lo - line_at, hi - line_at
+            today_closed = all(
+                account(v, tracked, p) for _, p, v, at, to in today_located
+                if at < span_hi and to > span_lo)
             sha12 = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
             records.append({
                 "label": label,

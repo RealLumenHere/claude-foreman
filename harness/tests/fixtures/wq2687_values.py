@@ -7,6 +7,11 @@
 #     whose slug `...-mirror-cfut-...` today's cloudflare rule reads as a token — the
 #     leak path fworker.slugify now closes;
 #   - a sequential fixture named by hash from its masked `sed` probe (2 rows).
+# wq#3076: two more kv-secret bodies (last 2 rows), same shape as the `sed` probe pair
+# above — sequential-alphabet test echoes (`echo 'SECRET=...' | mask-secrets`) from two
+# different wq#2687 attempt worktrees (`...-sed-bound`, `...-sed-bounded-tail`). The
+# line-wide `today_closed` used to excuse them via an unrelated accounted hit further
+# down the same JSONL line; scoring only the hit's own span surfaces them on their own.
 # Pinned by test_mask_replay.py::test_wq2687_corpus_burned_nothing.
 WQ2687_VALUES = (
     ("012d7baf3dee", "cloudflare", "settings.override."),
@@ -21,6 +26,8 @@ WQ2687_VALUES = (
     ("c8c07793d6f8", "kv-secret", "abcdefghijklm."),
     ("2706fe11e718", "sk-key", "-cf" "ut-kv-secr-a1"),
     ("97f01d9ff3e2", "sk-key", "-cf" "ut-kv-secr-a2"),
+    ("7f45a25d5811", "kv-secret", 'abcdef' '123456' '.'),
+    ("ad1416ae1ef9", "kv-secret", 'abcdef' 'ghijkl' '9'),
 )
 
 # wq#2765: two more values the wq#2740 rule (cab2c41: a body under the floor accounts

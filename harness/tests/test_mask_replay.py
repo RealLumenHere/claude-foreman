@@ -1079,6 +1079,11 @@ WQ2278_BRANCH_FIXTURES = {
     # the whole run behind `sk-` (31 and 32 chars).
     "e50b5e28e576": "harness/tests/test_gateway_key_per_ticket.py",
     "20cb115bcd84": "harness/tests/test_gateway_key_per_ticket.py",
+    # wq#3076: today_closed scored per-span instead of the whole line surfaces one more
+    # of the branch's own test_daemon.py dummies (`"sk-" + "minted" * 5` at :172, same
+    # survivor named above) that the old line-wide any() had excused via an unrelated
+    # accounted hit further down the same transcript line.
+    "d9e73c81d79a": "token-engine/tests/test_daemon.py",
 }
 
 
@@ -1895,7 +1900,7 @@ def test_wq2687_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2687_FIXTURES)
     values, prose = scope["WQ2687_VALUES"], scope["WQ2687_PROSE"]
     counts = (len(values), len(prose))
-    assert counts == (12, 2)
+    assert counts == (14, 2)
     assert _unpinned([*values, *prose]) == []
     assert masking.mask_text(text)[1] == []
 
@@ -1946,7 +1951,10 @@ def test_wq2687_corpus_burned_nothing():
     tracked, one rule-fixed. The twelve the replay still called BURNED? are wq#2687's
     unlanded fixtures, its branch name and two sequential `sed` probes, and two more
     are prose words glued to a prefix; see the fixture module's header. The module
-    must explain each of them by itself (see _assert_corpus_pinned).
+    must explain each of them by itself (see _assert_corpus_pinned). wq#3076 adds two
+    more kv-secret bodies from the same `mask-secrets` sed-script test echoes, on two
+    different worktree attempts, that the old line-wide today_closed used to excuse
+    via an unrelated accounted hit on the same line.
     """
     _, scope = _load_fixture_module(WQ2687_FIXTURES)
     values, prose = scope["WQ2687_VALUES"], scope["WQ2687_PROSE"]
@@ -2213,7 +2221,7 @@ def test_wq3021_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ3021_FIXTURES)
     values = scope["WQ3021_VALUES"]
     count = len(values)
-    assert count == 2
+    assert count == 14
     assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
@@ -2222,7 +2230,11 @@ def test_wq3021_pins_are_their_hashes_and_read_silently():
                     reason="wq#3021's run dir is not on this host")
 def test_wq3021_corpus_burned_nothing():
     """wq#3029's verdict, pinned: probe_sk7.py's runtime-built aws and github dummies
-    from wq#3021's own verify-pass, not credentials; nothing rotated."""
+    from wq#3021's own verify-pass, not credentials; nothing rotated. wq#3076 adds the
+    11 sk-key dummies the same repr(case) dump printed for the sk-/sk-proj-/sk-ant-
+    prefixes, which today_closed's old line-wide any() used to excuse via the two
+    already-pinned aws/github hits on the same JSONL line — scoping to the hit's own
+    span (wq#3076) surfaces them on their own."""
     _, scope = _load_fixture_module(WQ3021_FIXTURES)
     fixture_shas = {v[0] for v in scope["WQ3021_VALUES"]}
     _assert_corpus_pinned(3021, WQ3021_FIXTURES, scope["WQ3021_RECORDS"], fixture_shas,
@@ -2263,19 +2275,22 @@ def test_wq2120_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2120_FIXTURES)
     values = scope["WQ2120_VALUES"]
     count = len(values)
-    assert count == 2
+    assert count == 6
     assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
 
 def test_wq2120_pins_are_the_sweep_acks_wq2120_reviewed():
-    """The pins are the same spans read_dir_sweep already acked as upstream doc
-    placeholders, not a fresh judgment. Fingerprints only, never values."""
+    """The FIRST TWO pins are the same spans read_dir_sweep already acked as upstream
+    doc placeholders, not a fresh judgment. Fingerprints only, never values. The four
+    wq#3076 added (today_closed's per-span rescore) are a different concern entirely —
+    mask_replay's own corpus, not read_dir_sweep's reviewed-hit ledger — so they are
+    out of scope for this check."""
     import read_dir_sweep
     _, scope = _load_fixture_module(WQ2120_FIXTURES)
     kv = dict(read_dir_sweep.PATTERNS)["kv_secret"]
     fps = set()
-    for pin in scope["WQ2120_VALUES"]:
+    for pin in scope["WQ2120_VALUES"][:2]:
         m = kv.search(pin[-1])
         fps.add(read_dir_sweep.reviewed_hit_fingerprint(m.group(0)) if m else None)
     assert fps == {"527602abdce7", "aea20d56e205"}
@@ -2287,7 +2302,9 @@ def test_wq2120_pins_are_the_sweep_acks_wq2120_reviewed():
 def test_wq2120_corpus_burned_nothing():
     """wq#3055's verdict, pinned: the HR auth-password and secret-key values are
     placeholders from the upstream harnessrouter self-hosting guide, not credentials;
-    nothing rotated."""
+    nothing rotated. wq#3076 adds the four values a per-span today_closed surfaces from
+    wq#2120's own read_dir_sweep test-suite parametrize dump on the same transcript
+    line — also not credentials, also nothing rotated."""
     _, scope = _load_fixture_module(WQ2120_FIXTURES)
     fixture_shas = {v[0] for v in scope["WQ2120_VALUES"]}
     _assert_corpus_pinned(2120, WQ2120_FIXTURES, scope["WQ2120_RECORDS"], fixture_shas,
