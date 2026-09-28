@@ -365,6 +365,23 @@ SSH_ROWS = [
     ("live version today (ssh the node, or lumen_state current)", [],
      ["names ssh as an instruction with no resolvable node"]),
     ("ssh each node and confirm uptime", [], ["names ssh as an instruction with no resolvable node"]),
+    # wq#3001: retrospective/idiomatic prose after ssh must stay prose (the indefinite
+    # words are held only when a machine noun follows)
+    ("we tried ssh a few times before it worked", [], []),
+    ("you can ssh any time after the window", [], []),
+    ("ssh some of them failed with a timeout", [], []),
+    ("it took ssh an hour to reconnect", [], []),
+    ("ssh a lot less than before", [], []),
+    # ...but the authored-instruction reading of the same words is still held
+    ("ssh a node and read the unit", [], ["names ssh as an instruction with no resolvable node"]),
+    ("ssh any host that answers", [], ["names ssh as an instruction with no resolvable node"]),
+    # wq#3001 secondary: preposition + determiner + machine noun is the same instruction
+    ("ssh into the node and check", [], ["names ssh as an instruction with no resolvable node"]),
+    ("ssh onto each box in turn", [], ["names ssh as an instruction with no resolvable node"]),
+    ("ssh to the host and tail the log", [], ["names ssh as an instruction with no resolvable node"]),
+    # preposition without a determiner+noun stays prose (wq#879 row above), incl. bare 'into'
+    ("ssh into it and tail", [], []),
+    ("ssh to a few of them", [], []),
 ]
 
 

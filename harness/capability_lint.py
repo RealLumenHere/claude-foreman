@@ -137,7 +137,52 @@ DEFAULT_RESTART_NODE = "lumen"  # §2.1: "node omitted = lumen"
 # lint finding at all, then burned every attempt on runtime `ssh` denials). A closed
 # set, not a heuristic: no real fleet subject can ever equal one of these words, so this
 # can never mask a genuine node mention the way a broader guess would.
-_SSH_GENERIC_TARGETS = frozenset({"the", "a", "an", "each", "every", "any", "that", "this", "some"})
+_SSH_GENERIC_TARGETS = frozenset({"the", "each", "every", "that", "this"})
+
+# wq#3001 (verify wq#2999 CONTRADICT of wq#2991): the indefinite words are NOT safe to hold
+# unconditionally. "a"/"an"/"any"/"some" are the commonest tokens after a verb in English
+# and dominate retrospective prose ("we tried ssh a few times", "ssh any time", "ssh some
+# of them") — a false `unresolved` there parks a ticket exactly like a real capability gap.
+# They count as an authored instruction only when the very next word names a machine
+# ("ssh a node", "ssh any host"). The strong determiners above have no such prose reading.
+_SSH_INDEFINITE_TARGETS = frozenset({"a", "an", "any", "some"})
+# wq#3001 secondary: "ssh into/onto/to the node" — the single-token capture in _SSH_RE
+# lands on the preposition, which fell through as prose (the wq#2914 silent-drop class
+# with a different filler word). Held only when a determiner AND a machine noun follow;
+# "ssh to bes" (named node, wq#879 prose row) is unchanged.
+_SSH_PREPOSITIONS = frozenset({"to", "into", "onto"})
+_SSH_NODE_NOUNS = frozenset({
+    "node", "nodes", "host", "hosts", "box", "boxes", "machine", "machines",
+    "server", "servers", "target", "targets", "worker", "workers", "peer", "peers",
+})
+_NEXT_WORDS_RE = re.compile(r"\s+([A-Za-z][\w-]*)")
+
+
+def _next_words(text, pos, n=2):
+    """The next `n` lowercased words after `pos` (a match end), for the ssh determiner
+    gate. Words only: punctuation or end of text stops the walk."""
+    out = []
+    for _ in range(n):
+        m = _NEXT_WORDS_RE.match(text, pos)
+        if not m:
+            break
+        out.append(m.group(1).lower())
+        pos = m.end()
+    return out
+
+
+def _ssh_generic_target(text, m):
+    """True when `ssh <x>` is an authored instruction naming no resolvable node."""
+    low = m.group("host").lower()
+    nxt = _next_words(text, m.end())
+    if low in _SSH_GENERIC_TARGETS:
+        return True
+    if low in _SSH_INDEFINITE_TARGETS:
+        return bool(nxt) and nxt[0] in _SSH_NODE_NOUNS
+    if low in _SSH_PREPOSITIONS:
+        return (len(nxt) >= 2 and nxt[1] in _SSH_NODE_NOUNS
+                and (nxt[0] in _SSH_GENERIC_TARGETS or nxt[0] in _SSH_INDEFINITE_TARGETS))
+    return False
 
 
 class Derived:
@@ -650,7 +695,7 @@ def _derive_ssh(text, roster, tags, unresolved, policy=None):
                 continue
         elif roster.known(host):
             node = host
-        elif host.lower() in _SSH_GENERIC_TARGETS:
+        elif _ssh_generic_target(text, m):
             # wq#2991: "ssh the node" — a real instruction, deliberately unresolvable by
             # regex (which node varies per item/checklist entry). Held, not guessed: the
             # ticket needs an explicit needs:ssh(<node>) per target, or — since a sandbox
