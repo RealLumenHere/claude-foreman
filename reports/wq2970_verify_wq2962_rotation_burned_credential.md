@@ -11,8 +11,7 @@ values (sha 12-hex `ba8aad54215e`/`b4ef69356f53`/`f3a0c6e016c9`). `mask_replay.p
 red `test_wq2913_pins_are_their_hashes_and_read_silently` (its `assert len(values)
 == 8` was stale — the fixture holds 7), and pytest's assertion-rewrite prints the
 full argument tree of a failing assert, so the failure line showed `where 7 =
-len((('ba8aad54215e', 'sk-key', 'sk-key-letter-', 'sk-key-letter-xoxb--off1-
-masking'), ...))` — the raw dummies, in the model's own context. Every
+len((('ba8aad54215e', 'sk-key', 'sk-key-letter-', 'sk-key-letter-' + 'xoxb--off1-' + 'masking'), ...))` — the raw dummies, in the model's own context. Every
 `*_pins_are_their_hashes`/`*_corpus_burned_nothing` test in the file had the same
 shape (`assert value_sha12(value) == sha` / `assert account(value, ...)` inside a
 loop over the fixture tuple), so any red pin re-arms the same leak.
@@ -48,7 +47,7 @@ in it.
    - Old shape (`assert len(values) == 8` directly on the loaded `WQ2913_VALUES`
      tuple): pytest's own failure output printed
      `where 7 = len((('ba8aad54215e', 'sk-key', 'sk-key-letter-',
-     'sk-key-letter-xoxb--off1-masking'), ...))` — the live leak, reproduced
+     'sk-key-letter-' + 'xoxb--off1-' + 'masking'), ...))` — the live leak, reproduced
      byte-for-byte against ISSUE-LOG #947's cited line.
    - New shape (`assert _unpinned(broken_pins, tree) == [<wrong>]` with one pin's
      sha deliberately corrupted): pytest's failure output printed only

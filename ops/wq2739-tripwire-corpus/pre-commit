@@ -1,0 +1,18 @@
+#!/bin/bash
+# wq#2981: git pre-commit hook — refuses a commit that stages a file carrying a whole
+# credential shape. test_the_mask_suite_does_not_arm_its_own_tripwire
+# (harness/tests/test_masking.py) only catches this AFTER it lands on main; by then
+# the next worker on any mask ticket trips over it (ISSUE-LOG #951: two instances
+# twenty minutes apart). This runs the identical walk scan_tree.py does over a
+# committed rev, but against the INDEX — what is about to be committed — so the
+# refusal happens before the bad blob ever reaches history. install.sh --install-hook
+# wires this into $(git rev-parse --git-common-dir)/hooks/pre-commit.
+#
+# No-op (exit 0) for a repo that does not carry the mask suite, so this hook is safe
+# to install anywhere a foreman-style tree might get nested — it only fires where
+# harness/masking.py actually exists to fire from.
+set -eu
+REPO="$(git rev-parse --show-toplevel)"
+SCAN="$REPO/ops/wq2739-tripwire-corpus/scan_tree.py"
+[ -f "$SCAN" ] && [ -f "$REPO/harness/masking.py" ] || exit 0
+exec python3 "$SCAN" "$REPO" --staged

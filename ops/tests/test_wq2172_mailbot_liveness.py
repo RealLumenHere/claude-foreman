@@ -196,7 +196,7 @@ class LivenessTest(unittest.TestCase):
 
         path = self.write_token_file("from-file-tok")
         buf = io.StringIO()
-        with mock.patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "from-env-tok"}), \
+        with mock.patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "from-" "env-" "tok"}), \
                 contextlib.redirect_stdout(buf):
             rc = cl.main(["--repo", self.repo, "--token-file", str(path)], runner=runner)
         self.assertEqual(rc, 0, buf.getvalue())

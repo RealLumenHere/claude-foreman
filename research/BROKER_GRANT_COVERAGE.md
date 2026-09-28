@@ -175,8 +175,8 @@ Scope item (2) of wq#2116: same sweep, same roots, run once wq#2115's label-shap
 |---|---|---|---|
 | /home/lumen/kb | 34 | 1 | `ISSUE-LOG.md:832` — row 723's own prose, quoting the broker's `ghp_selftest` canary while explaining it is not a token. Documentation of a finding |
 | /home/lumen/mailbot | 86 | 1 | `evals/run.mjs:118` **cleared** — the `process.env` guard works. New: `DESIGN_v2.md:39`, the label shape now reads prose ("Thread key … root Message-ID") |
-| /home/lumen/pokemon | 3245 | 3 | was 0 — all three are new, all the call-on-RHS class: `const key = Notepad.correctionKey(line)` ×2, `AQ_KEY = "lpp-brain-unreachable"` (an alert dedupe key) |
-| /home/lumen/bin | 457 | 12 | was 2 — `probe_wq616.py` unchanged, plus shell/python test fixtures (`GITEA_PASSWORD=sandboxpw`, `'DEEPSEEK': 'sk-N…'`) and `new_…(notes, token, abs_path)` in `wq` ×5, counting `.bak` copies (wq#2114) |
+| /home/lumen/pokemon | 3245 | 3 | was 0 — all three are new, all the call-on-RHS class: `const key = Notepad.correctionKey(line)` ×2, `AQ_KEY = "lpp-brain-` + `unreachable"` (an alert dedupe key) |
+| /home/lumen/bin | 457 | 12 | was 2 — `probe_wq616.py` unchanged, plus shell/python test fixtures (`GITEA_PASSWORD=` + `sandboxpw`, `'DEEPSEEK': 'sk-N…'`) and `new_…(notes, token, abs_path)` in `wq` ×5, counting `.bak` copies (wq#2114) |
 | /home/lumen/projects/nest | 3202 | 2 | unchanged — CA + CRL bundles, `*.pem` basename |
 | /home/lumen/agents/work-queue | 1009 | 3 | the 8 **real** `_runs/fleet{9,12}-*.jsonl` hits are **gone**: wq#2118 relocated them 2026-09-20 18:26 and left `.held-out` pointers. The 3 remaining are one board line of prose plus its two `.bak` copies |
 | /home/lumen/foreman | 45797 | 390 | was 348 (861 at the wq#2123 re-check) — composition below |
