@@ -25,7 +25,7 @@ appears that the previous completed run did not see.
 
 Usage: ir_triage.py [--collect-only] [--dry] [--force]
 """
-import argparse, glob, hashlib, json, os, re, sqlite3, sys, time, urllib.request
+import argparse, glob, hashlib, json, os, re, sqlite3, subprocess, sys, time, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,6 +45,14 @@ DECISION_REASON = ('ir-triage lane (wq#2836): review-only incident plan, never '
                    'auto-applied. Ship to act on it, Reject to dismiss.')
 
 AQ_LIMIT = 40
+# wq#2907 guard class: a held minerva.db lock must not hard-fail the unit
+# (2026-09-28: the wq#2895 leaked lock made this lane exit 1 for 35 min —
+# same restart/alert-spam class as wq#2570/2571). Retry with backoff, then
+# ONE deduped aq row and exit 0; the seen-set is not advanced, so the next
+# timer fire retries the whole pass.
+AQ_BIN = '/home/lumen/bin/aq'
+DB_TIMEOUT_S = 30
+LOCK_BACKOFF_S = (5, 15, 45)
 # The first live pass (proposal deddbcfcba55) returned 17 steps and overran the
 # 2000-char proposed_change column mid-step.
 MAX_STEPS = 8
@@ -291,11 +299,42 @@ def to_proposal(result):
     }
 
 
-def save(pid, source_id, prop, result, db=None, out_dir=None):
-    """Insert the proposal row + markdown. Returns False if pid already exists."""
-    now = datetime.now(timezone.utc).isoformat()
-    c = sqlite3.connect(db or MINERVA_DB, timeout=30)
+def _is_locked(e):
+    return isinstance(e, sqlite3.OperationalError) and (
+        'locked' in str(e) or 'busy' in str(e))
+
+
+def alert_db_locked(message):
+    """One deduped aq row (source=ir-triage, key=minerva-db-locked) instead of a
+    failed-unit page. Best-effort: a missing aq binary only logs."""
     try:
+        subprocess.run([AQ_BIN, 'add', 'ir-triage', 'minerva-db-locked',
+                        'ir-triage: minerva.db locked, pass skipped', message],
+                       check=False, timeout=30)
+    except OSError as e:
+        log(f'aq unavailable ({e}); lock alert dropped')
+
+
+def save(pid, source_id, prop, result, db=None, out_dir=None):
+    """Insert the proposal row + markdown, retrying a held write lock with
+    backoff (wq#2907) so a short contention window never fails the pass.
+    Returns False if pid already exists."""
+    for delay in LOCK_BACKOFF_S:
+        try:
+            return _save_once(pid, source_id, prop, result, db, out_dir)
+        except sqlite3.OperationalError as e:
+            if not _is_locked(e):
+                raise
+            log(f'minerva.db locked on save; retrying in {delay}s')
+            time.sleep(delay)
+    return _save_once(pid, source_id, prop, result, db, out_dir)
+
+
+def _save_once(pid, source_id, prop, result, db=None, out_dir=None):
+    now = datetime.now(timezone.utc).isoformat()
+    c = sqlite3.connect(db or MINERVA_DB, timeout=DB_TIMEOUT_S)
+    try:
+        c.execute('PRAGMA busy_timeout=%d' % (DB_TIMEOUT_S * 1000))
         cur = c.execute(
             '''INSERT OR IGNORE INTO proposals
                (id, parent_id, title, source_intel_id, current_state, proposed_change,
@@ -390,7 +429,18 @@ def main(argv=None):
     if a.collect_only:
         print(json.dumps(collect(), indent=1))
         return 0
-    outcome = run(dry=a.dry, force=a.force)
+    try:
+        outcome = run(dry=a.dry, force=a.force)
+    except sqlite3.OperationalError as e:
+        if not _is_locked(e):
+            raise
+        # wq#2907: lock still held after save()'s backoff (or a collect read hit
+        # it). Exit 0 — the aq row is the alert, the unit must not go failed,
+        # and the unadvanced seen-set makes the next timer fire retry.
+        log(f'database locked after retries; skipping this pass: {e}')
+        alert_db_locked(f'held lock outlasted retries ({e}); '
+                        'seen-set not advanced, next timer fire retries')
+        return 0
     return 1 if outcome == 'llm_error' else 0
 
 

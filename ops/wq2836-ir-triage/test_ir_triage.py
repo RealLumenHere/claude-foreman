@@ -197,3 +197,70 @@ def test_explanation_stays_valid_json_under_cap(env):
     s = it.explanation(result)
     assert len(s) <= 4000
     json.loads(s)
+
+
+PROPOSAL_LLM_ARGS = (['aq#1'], ['aq#1'],
+                     [{'action': 'a', 'artifact': 'x.service', 'cites': ['aq#1']}])
+
+
+def test_save_retries_a_transient_lock_then_lands(env, monkeypatch):
+    """wq#2907: a lock that clears within the backoff schedule costs a retry, not the pass."""
+    add_alert(env / 'alerts.db', 'spof-watch', 'timer:b', 'Dead-man: backup', priority='urgent')
+    monkeypatch.setattr(it, 'LOCK_BACKOFF_S', (0,))
+    calls, real = [], it._save_once
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError('database is locked')
+        return real(*a, **k)
+
+    monkeypatch.setattr(it, '_save_once', flaky)
+    assert it.run(llm=StubLLM(*PROPOSAL_LLM_ARGS)) == 'proposed'
+    assert len(calls) == 2
+    assert sqlite3.connect(env / 'minerva.db').execute(
+        'SELECT count(*) FROM proposals').fetchone()[0] == 1
+
+
+def test_held_write_lock_exhausts_retries_then_raises(env, monkeypatch):
+    """A lock held past every backoff step still raises out of save() (main converts it)."""
+    add_alert(env / 'alerts.db', 'spof-watch', 'timer:b', 'Dead-man: backup', priority='urgent')
+    monkeypatch.setattr(it, 'LOCK_BACKOFF_S', (0, 0))
+    monkeypatch.setattr(it, 'DB_TIMEOUT_S', 0.05)
+    blocker = sqlite3.connect(env / 'minerva.db')
+    blocker.execute('BEGIN IMMEDIATE')
+    blocker.execute("INSERT INTO proposals(id) VALUES('block')")
+    try:
+        with pytest.raises(sqlite3.OperationalError, match='locked'):
+            it.run(llm=StubLLM(*PROPOSAL_LLM_ARGS))
+    finally:
+        blocker.rollback()
+        blocker.close()
+    assert not (env / 'state.json').exists()  # seen-set untouched -> next fire retries
+
+
+def test_main_exits_zero_and_files_one_aq_row_on_held_lock(env, monkeypatch):
+    """wq#2907 guard class (wq#2570/2571): the unit must not go failed on a held
+    lock — exit 0 and let the deduped aq row be the alert."""
+    alerts = []
+    monkeypatch.setattr(it, 'run', lambda **k: (_ for _ in ()).throw(
+        sqlite3.OperationalError('database is locked')))
+    monkeypatch.setattr(it, 'alert_db_locked', alerts.append)
+    assert it.main([]) == 0
+    assert len(alerts) == 1 and 'retries' in alerts[0]
+
+
+def test_main_still_raises_a_non_lock_operational_error(env, monkeypatch):
+    monkeypatch.setattr(it, 'run', lambda **k: (_ for _ in ()).throw(
+        sqlite3.OperationalError('no such table: proposals')))
+    with pytest.raises(sqlite3.OperationalError, match='no such table'):
+        it.main([])
+
+
+def test_alert_db_locked_shells_out_to_aq_add(env, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(it.subprocess, 'run',
+                        lambda argv, **k: seen.setdefault('argv', argv))
+    it.alert_db_locked('held lock outlasted retries')
+    assert seen['argv'][:4] == [it.AQ_BIN, 'add', 'ir-triage', 'minerva-db-locked']
+    assert seen['argv'][5] == 'held lock outlasted retries'
