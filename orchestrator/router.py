@@ -163,7 +163,7 @@ _FALLBACK_ALIASES = {
     # wq#1329: only used if models.yaml is missing/unparseable at import time (keeps the
     # CLI usable for e.g. --help). Once load_manifest() runs successfully this is dead
     # weight but never wrong — every entry here is also derivable from the yaml.
-    "fable-5": "claude-fable-5", "fable": "claude-fable-5",
+    "fable-5": "claude-fable-5-1", "fable": "claude-fable-5-1", "fable-5-1": "claude-fable-5-1",
     "opus-5": "claude-opus-5", "opus": "claude-opus-5",
     "opus-5-5": "claude-opus-5-5",   # wq#2450: 'opus' stays pinned to opus-5, not this
     "sonnet-5": "claude-sonnet-5", "sonnet": "claude-sonnet-5",
