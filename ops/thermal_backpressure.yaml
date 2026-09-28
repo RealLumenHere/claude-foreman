@@ -1,0 +1,68 @@
+# wq#2484: thermal backpressure. Loaded and validated by ops/thermal_backpressure.py.
+#
+# Signal: CPU package temperature (coretemp Package_id_0), read from each node's existing
+# netdata. All five netdata nodes carry the chart (2026-09-28). A node is hot when the mean
+# over `sustain_min` crosses raise_c; it cools only when that mean drops below clear_c.
+# Between the two lines the state carries, so a reading sitting on either line cannot flap.
+sensor:
+  chart_prefix: sensors.temperature_coretemp
+  chart_suffix: _Package_id_0_input
+sustain_min: 5
+
+# The hold is an slock lease the guard refreshes every poll (timer: 5 min). If the guard
+# dies, the lease runs out and the dispatcher resumes on its own. The dispatcher gate
+# (dispatcher/gates.py SubsystemHeld) is fail-open too, so this matches its posture.
+holder: thermal-backpressure
+hold_ttl_min: 20
+
+# wq#2510's MacPro fan-floor alarm (ops/fan_floor_alarm.py) is a second trigger: its
+# per-node verdicts come from `check`, and this guard keeps their state. A node is held
+# while either trigger is hot.
+fan_floor: true
+
+# Thresholds come from each node's own history, not the 80 C OptiPlex figure in the source
+# doc. `thermal_backpressure.py observe <node>` recomputes them over 5-min means:
+#   raise_c = ceil(max) + 3: above every 5-min mean the node has sustained in normal work,
+#             so ordinary heavy load never holds it
+#   clear_c = floor(p99):    back down to the level the node sits under 99% of the time
+# Observed 2026-09-28 over all retained netdata history:
+#   lumen  37 d  p50 52.2  p99 70.0  max 75.1 (09-25T04:35)  -> 79 / 70
+#   isis   36 d  p50 51.2  p99 73.8  max 75.6 (09-06T07:15)  -> 79 / 73
+# hathor, nephthys and khepri got netdata on 2026-09-28 (wq#2844) and had 15 minutes of
+# history, so they borrow isis's numbers: same MacPro6,1 chassis. Re-run `observe` once
+# they have a week and replace these.
+#
+# hold_subsystems defaults to the node name, the token wq#2510 already uses. A ticket is
+# only held if it declares one of these in `subsystems`.
+nodes:
+  lumen:
+    netdata: 100.117.66.102:19999
+    raise_c: 79
+    clear_c: 70
+    action: hold
+  isis:
+    netdata: 100.100.129.24:19999
+    raise_c: 79
+    clear_c: 73
+    action: hold
+  hathor:
+    netdata: 100.80.71.13:19999
+    raise_c: 79
+    clear_c: 73
+    action: hold
+  nephthys:
+    netdata: 100.98.74.87:19999
+    raise_c: 79
+    clear_c: 73
+    action: hold
+  khepri:
+    netdata: 100.120.16.78:19999
+    raise_c: 79
+    clear_c: 73
+    action: hold
+  # Instinct 2: Thor may only notify. load_config() refuses any hold for it, by name or by
+  # address. No netdata on Thor today, so this entry only carries the fan-floor verdict
+  # through to an aq row if a source ever appears.
+  thor:
+    netdata: null
+    action: notify

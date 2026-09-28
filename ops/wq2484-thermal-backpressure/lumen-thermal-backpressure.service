@@ -1,0 +1,10 @@
+[Unit]
+Description=Thermal backpressure: hold a hot node's subsystem, release on cooldown (wq#2484)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/thermal_backpressure.py poll
+Nice=5
