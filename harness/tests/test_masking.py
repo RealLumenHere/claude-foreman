@@ -214,7 +214,19 @@ REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 # committed fixture reads silently today (split at the boundary its rule reads, see
 # KV_LINE and harness/tests/fixtures/wq2687_values.py). A row added here needs the reason
 # beside it and the value's sha256[:12] pinned in a fixture module the row cites.
-TRIPWIRE_CORPUS_EXCUSED = {}
+TRIPWIRE_CORPUS_EXCUSED = {
+    # wq#3036: test_burn_filter.py's tree-wide anti-vacuity sweep
+    # (test_no_tracked_module_pages_when_a_worker_reads_it) reads every tracked
+    # harness/*.py + dispatcher/*.py file and keeps the ones that still match a mask
+    # pattern; wq#2288/wq#2297 cleaned every prior match (`key = apply_key_allowlist(reg)`
+    # and kin, wq#2314) out of that tree, leaving the sweep's own corpus empty, which its
+    # anti-vacuity guard (wq#2630) correctly refuses to pass. wq3036_sweep_corpus.py
+    # restores one real, committed, non-live match for it to screen — the value's
+    # sha256[:12] (bf43137fb255) is pinned in that module's own docstring.
+    "harness/tests/fixtures/wq3036_sweep_corpus.py": {
+        ("kv-secret", "pending_rotation_secret = ", 29),
+    },
+}
 
 
 def tripwire_corpus(repo=REPO_ROOT):
