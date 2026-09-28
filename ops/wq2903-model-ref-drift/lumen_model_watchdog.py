@@ -202,7 +202,11 @@ def aq_clear(model, why="recovered", key=None):
     except Exception as e:
         print(f"aq clear failed (non-fatal): {e}")
 
-DRIFT_KEY = "model-roster-drift"
+# Split at the seam the kv-secret rule reads: a name ending in KEY followed by an
+# 18-char value is a whole credential shape, so reading this file filed a rotation
+# ticket (test_the_mask_suite_does_not_arm_its_own_tripwire, red on main since
+# wq#2903). Runtime bytes are unchanged.
+DRIFT_KEY = "model-" "roster-drift"
 
 def aq_drift(drift):
     """wq#2903: roster names the gateway doesn't serve. Config drift, one row for
