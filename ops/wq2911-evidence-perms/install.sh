@@ -20,8 +20,14 @@ else
   exit 1
 fi
 
-# Nothing under _runs is served to another user (no ACL, no non-lumen reader; wq#2911).
+# The one non-lumen reader under _runs is uid tokeneng, which re-reads the 0444 grants
+# (grant.json, gateway-grant.json, ticket-end-grant-aN.json) by path. So: run dirs 0711
+# (traverse, never list), grants untouched, everything else owner-only (wq#2911).
 RUNS=/home/lumen/foreman/_runs
-find "$RUNS" -type f -perm -o+r -exec chmod o-r,g-r {} +
-find "$RUNS" -mindepth 1 -maxdepth 1 -type d -name 'wq*' -perm -o+r -exec chmod 0700 {} +
-echo "_runs: world-readable files left: $(find "$RUNS" -type f -perm -o+r | grep -c ^ || true)"
+GRANT="$RUNS/wq[0-9]+/[^/]*grant[^/]*\.json"   # run-dir root only; snapshots are not grants
+find "$RUNS" -regextype posix-extended -type f -perm -o+r ! -regex "$GRANT" \
+  -exec chmod go-rwx {} +
+find "$RUNS" -mindepth 2 -type d -perm -o+r -exec chmod 0700 {} +
+find "$RUNS" -mindepth 1 -maxdepth 1 -type d -name 'wq*' ! -perm 0711 -exec chmod 0711 {} +
+echo "_runs: world-readable non-grant files left:" \
+  "$(find "$RUNS" -regextype posix-extended -type f -perm -o+r ! -regex "$GRANT" | grep -c ^ || true)"

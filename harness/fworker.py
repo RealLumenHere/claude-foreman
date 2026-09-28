@@ -831,7 +831,7 @@ def write_mask_hits(ticket_id, attempt, records):
         stamped = [dict(r, ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
                    for r in records or []]
         tmp = f"{path}.tmp"
-        with open(tmp, "w") as f:
+        with open(acceptance_mod.private_open(tmp), "w") as f:
             json.dump(prior + stamped, f, indent=2)
         os.replace(tmp, path)
     except Exception as e:  # noqa: BLE001
@@ -1585,10 +1585,13 @@ def screen_stream_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
 
 def run_dir(ticket_id):
     d = os.path.join(RUNS_ROOT, f"wq{ticket_id}")
-    # wq#2911: owner-only. Transcripts and replay logs under here carry whatever a worker
-    # printed; chmod too, since exist_ok leaves a pre-existing dir at its old mode.
-    os.makedirs(d, mode=0o700, exist_ok=True)
-    os.chmod(d, 0o700)
+    # wq#2911: transcripts and replay logs under here carry whatever a worker printed.
+    # 0711, not 0700: uid tokeneng re-reads the 0444 grants by path (0700 denied every
+    # ticket-end as grant:grant_unreadable), so it must traverse but never list; the
+    # files themselves are 0600 via acceptance.private_open. chmod too, since exist_ok
+    # leaves a pre-existing dir at its old mode.
+    os.makedirs(d, mode=0o711, exist_ok=True)
+    os.chmod(d, 0o711)
     return d
 
 
@@ -1607,7 +1610,7 @@ def write_attempt_state(ticket_id, n, state):
     d = run_dir(ticket_id)
     path = os.path.join(d, f"attempt-{n}.json")
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(acceptance_mod.private_open(tmp), "w") as f:
         json.dump(state, f, indent=2, default=str)
     os.rename(tmp, path)
     _settle_spawn_reservation(ticket_id, n)
@@ -1697,7 +1700,7 @@ def write_usage_sidecar(ticket_id, n, record):
     d = run_dir(ticket_id)
     path = os.path.join(d, f"usage-{n}.json")
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(acceptance_mod.private_open(tmp), "w") as f:
         json.dump(record, f, indent=2, default=str)
     os.rename(tmp, path)
     return path
@@ -1827,7 +1830,7 @@ def write_prior_attempt_notes(ticket_id, n, worktree, transcript_events, classif
         if critique:
             lines += ["", "## critique", critique]
 
-    with open(path, "w") as f:
+    with open(acceptance_mod.private_open(path), "w") as f:
         f.write("\n".join(lines) + "\n")
     return path
 
@@ -3464,7 +3467,7 @@ def run_fire_ticket(args):
             if evidence is not None:
                 evidence_path = os.path.join(run_dir(ticket_id), "fire_probe_evidence.json")
                 tmp = evidence_path + ".tmp"
-                with open(tmp, "w") as f:
+                with open(acceptance_mod.private_open(tmp), "w") as f:
                     json.dump(evidence, f, indent=2, default=str)
                 os.rename(tmp, evidence_path)
             notes = ("condition cleared: re-verify found the originating probe no "
@@ -3772,7 +3775,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         # dir so prior-attempt notes and (future L4) review both find it.
         hpath = os.path.join(run_dir(ticket_id), f"loop-handoff-attempt-{attempt}.md")
         try:
-            with open(hpath, "w") as hf:
+            with open(acceptance_mod.private_open(hpath), "w") as hf:
                 hf.write(f"# SESSION PAUSED — repeated unsuccessful approach detected\n\n"
                          f"ticket: wq#{ticket_id} attempt {attempt} worker {worker_id}\n\n"
                          f"{loop_tracker.report()}\n")

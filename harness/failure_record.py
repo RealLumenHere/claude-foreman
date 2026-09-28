@@ -494,7 +494,10 @@ def build_failure_record(ticket, attempts, classification, block_class,
 def write_failure_record(run_dir_path, record):
     path = os.path.join(run_dir_path, FAILURE_FILENAME)
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    # wq#2911: 0600 like every file under _runs (acceptance.private_open).
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with open(fd, "w") as f:
         json.dump(record, f, indent=2, default=str)
     os.rename(tmp, path)
     return path

@@ -261,9 +261,20 @@ def doc_hash(doc):
         json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def private_open(path, append=False):
+    """Open `path` for writing as 0600 (truncating unless `append`); also tightens a
+    pre-existing file, which O_CREAT's mode argument alone would leave at its old bits
+    (wq#2911). Every file under _runs goes through here: the run dir is 0711 so uid
+    tokeneng can reach its grants, which makes any 0644 file in it readable by name."""
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    os.fchmod(fd, 0o600)
+    return fd
+
+
 def write_json(path, doc):
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(private_open(tmp), "w") as f:
         json.dump(doc, f, indent=2, sort_keys=True)
         f.write("\n")
     os.replace(tmp, path)
@@ -463,13 +474,6 @@ def _tail(text, n=OUTPUT_TAIL_LINES):
     lines = (text or "").splitlines()
     return "\n".join(lines[-n:])
 
-
-def private_open(path):
-    """Open `path` for writing as 0600, truncating; also tightens a pre-existing file,
-    which O_CREAT's mode argument alone would leave at its old bits (wq#2911)."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
-    return fd
 
 
 def _replay(criterion, worktree, evidence_dir, runner):

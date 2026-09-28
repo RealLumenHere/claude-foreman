@@ -56,7 +56,11 @@ def append_event(ticket_id, event, runs_root=None):
     record = dict(event)
     record.setdefault("ts", time.time())
     record.setdefault("ticket", int(ticket_id))
-    with open(path, "a") as f:
+    # wq#2911: 0600 — the run dir is traversable by uid tokeneng, so a 0644 episode
+    # log there is readable by anyone who knows its name.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.fchmod(fd, 0o600)
+    with open(fd, "a") as f:
         f.write(json.dumps(record, default=str) + "\n")
     return path
 

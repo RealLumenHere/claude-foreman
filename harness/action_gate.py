@@ -520,7 +520,10 @@ def classify_file_tool(tool_name, file_path, rules):
 
 def _snapdir():
     d = os.environ.get(SNAPDIR_ENV) or os.path.join("/tmp", f"gate-snapshots-{WORKER_ID}")
-    os.makedirs(d, exist_ok=True)
+    # wq#2911: pre-images are copies of whatever the worker was about to touch; owner-only
+    # dir, so the 0644 copies inside stay unreachable from the 0711 run dir.
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    os.chmod(d, 0o700)
     return d
 
 
