@@ -1,0 +1,27 @@
+# wq#2851: MacPro6,1 AER-storm leading-indicator alarm. Loaded by aer_storm_alarm.py.
+#
+# Threshold starting point (see REPORT.md for the full replay and its limits):
+# wq#2776's FINDING gave nephthys's per-boot HOURLY 'PCIe Bus Error' counts —
+# healthy boot 0 topped out at 5/hr; the three boots that then died ran 33-1986/hr,
+# rising into the death (boot -3's last hour: 69/hr; boot -1's last hour: 870/hr).
+# An AER "storm" is bursty, not uniform, so a 15-minute window sees a sub-hour
+# spike, not 1/4 of the hourly rate. raise_above=30 in 15 min sits comfortably
+# above the 5/hr (~1.25 per 15min) healthy ceiling and comfortably below what a
+# single burst inside a 69-1986/hr hour produces. clear_at_or_below is set at
+# half of raise_above (15) for hysteresis, so a count sitting right at the
+# boundary does not flap the alarm open/closed every 5-minute check.
+rule:
+  window_min: 15
+  raise_above: 30
+  clear_at_or_below: 15
+
+# The four MacPro6,1 nodes — same set as bin/power-remediate's ELIGIBLE allowlist
+# and ops/fan_floor_alarm.yaml's `nodes:` block (the ticket's "not a second
+# roster": same four names). ssh host is the bare tailscale MagicDNS hostname,
+# the same convention ops/wq2613-dc-endpoint-parity-check-a1/dc-endpoint-parity-check.py
+# uses for these nodes.
+nodes:
+  isis: isis
+  hathor: hathor
+  khepri: khepri
+  nephthys: nephthys
