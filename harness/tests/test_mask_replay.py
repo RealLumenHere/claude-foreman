@@ -2285,8 +2285,9 @@ def test_wq2120_pins_are_the_sweep_acks_wq2120_reviewed():
 @pytest.mark.skipif(not os.path.isdir(WQ2120_RUN),
                     reason="wq#2120's run dir is not on this host")
 def test_wq2120_corpus_burned_nothing():
-    """wq#3055's verdict, pinned: HR_AUTH_PASSWORD= / HR_SECRET_KEY= placeholders
-    from the upstream harnessrouter self-hosting guide, not credentials; nothing rotated."""
+    """wq#3055's verdict, pinned: the HR auth-password and secret-key values are
+    placeholders from the upstream harnessrouter self-hosting guide, not credentials;
+    nothing rotated."""
     _, scope = _load_fixture_module(WQ2120_FIXTURES)
     fixture_shas = {v[0] for v in scope["WQ2120_VALUES"]}
     _assert_corpus_pinned(2120, WQ2120_FIXTURES, scope["WQ2120_RECORDS"], fixture_shas,
