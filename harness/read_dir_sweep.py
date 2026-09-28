@@ -107,7 +107,14 @@ KV_NOT_A_CREDENTIAL = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                        # terminator also means a credential that merely STARTS with an
                        # all-caps run (`AAAA_BBBB-ccc123`) is still caught, because `-` is
                        # not a terminator.
-                       r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?:[\"'`,;\s)}\]]|$))")
+                       r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?:[\"'`,;\s)}\]]|$))"
+                       # wq#2993: a value whose body run ENDS at the fleet's own mask
+                       # literal (`token = ghp_` + `MASKED`) is mask output read back,
+                       # never a live secret — same exception masking.py keys on MASK.
+                       # `(?-i:)` because kv_secret compiles IGNORECASE and the literal
+                       # is exact upper-case; a body that merely CONTAINS it
+                       # (`xMASKEDy...`) is still caught.
+                       r"(?-i:(?![A-Za-z0-9_\-./+]*MASKED(?![A-Za-z0-9_\-./+])))")
 # wq#2122: the label used to have to touch its separator, so the single most common
 # credential shape in the fleet -- standard JSON -- was invisible: in `"api_key": "<val>"`
 # the closing quote sits between the label and the colon. Same for a markdown-bold label
@@ -121,15 +128,28 @@ KV_CONNECTOR = r"(?:\s+(?:is|was|=))?"
 KV_SEP = r"(?:\s*[:=]\s*|\s+[-\u2013]\s+)"
 # content shapes; first match per line wins. `kv_secret` needs a value of 20+ chars so
 # `api_key: os.environ/X` (LiteLLM's env-ref form) and `api_key: sk-none` do not fire.
+# wq#2993: a body run that ENDS at the fleet's own mask literal is mask output read
+# back (`ghp_` + 16 quoted chars + `MASKED` in a mask_at_rest context window), never a
+# live token — masking.py keys the same exception on MASK. Interpolated into each
+# prefixed pattern with that pattern's own body class; tail-only and case-sensitive,
+# so `ghp_MASKEDx…` (literal mid-run) and a lower-case `masked` still page.
+def _not_mask_tail(body_class):
+    return r"(?!" + body_class + r"*MASKED(?!" + body_class + r"))"
+
+
 PATTERNS = (
     # wq#2114: ghr_/ghu_ were absent here but present in the token-engine broker's copy —
     # the three scanners disagreed on which GitHub prefixes exist. Widened to the union.
     ("gh_pat", re.compile(
-        r"\b(?:ghp_|github_pat_|gho_|ghs_|ghr_|ghu_|glpat-)[A-Za-z0-9_-]{20,}")),
-    ("sntl", re.compile(r"\bsntl-p[A-Za-z0-9_-]{8,}")),
-    ("sk_key", re.compile(r"\bsk-(?:proj-|ant-|or-v1-|lf-)?[A-Za-z0-9_-]{24,}")),
-    ("aws", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    ("slack", re.compile(r"\b(?:xox[bpsa]|xapp)-[A-Za-z0-9-]{20,}")),
+        r"\b(?:ghp_|github_pat_|gho_|ghs_|ghr_|ghu_|glpat-)"
+        + _not_mask_tail(r"[A-Za-z0-9_-]") + r"[A-Za-z0-9_-]{20,}")),
+    ("sntl", re.compile(r"\bsntl-p" + _not_mask_tail(r"[A-Za-z0-9_-]")
+                        + r"[A-Za-z0-9_-]{8,}")),
+    ("sk_key", re.compile(r"\bsk-(?:proj-|ant-|or-v1-|lf-)?"
+                          + _not_mask_tail(r"[A-Za-z0-9_-]") + r"[A-Za-z0-9_-]{24,}")),
+    ("aws", re.compile(r"\bAKIA(?![0-9A-Z]{10}MASKED\b)[0-9A-Z]{16}\b")),
+    ("slack", re.compile(r"\b(?:xox[bpsa]|xapp)-" + _not_mask_tail(r"[A-Za-z0-9-]")
+                         + r"[A-Za-z0-9-]{20,}")),
     ("privkey", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY")),
     # wq#2479: a credential embedded in a URL, scheme://user:secret@host. No label sits in
     # front of the value, so kv_secret cannot see it (its label half never engages) and none
@@ -141,6 +161,12 @@ PATTERNS = (
     ("url_basic_auth", re.compile(
         r"\b[A-Za-z][A-Za-z0-9+.\-]+://[^\s:/@'\"`]{1,64}:"
         r"(?![${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
+        # wq#2993: a password ENDING in the fleet's mask literal is mask output read
+        # back (`ghp_MASKED@`, the kept prefix glued to MASK) — the placeholder test
+        # above only sees a value that IS the word. Case-sensitive on purpose, same
+        # reasoning as masking.py's MASK exception: nothing legitimate carries
+        # upper-case MASKED as the tail of a secret body.
+        r"(?![^\s@/'\"`]*MASKED@)"
         r"(?!os\.environ|os\.getenv|(?:process\.)?env\.)"
         r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
         r"[^\s@/'\"`]{8,}@(?=[A-Za-z0-9\[])")),
@@ -156,6 +182,29 @@ MASK_KEEP = 4
 
 def mask(token):
     return token[:MASK_KEEP] + "…" if len(token) > MASK_KEEP else "…"
+
+
+# wq#2993: a mask FINDING is a report ABOUT a credential, not a credential. mask_at_rest
+# writes one JSONL row per value it masked (_runs/mask_at_rest/<ts>.jsonl) and the eval
+# gate keeps the same rows one level down (_runs/<ticket>/mask-hits-<n>.json). The value
+# in a row is already hash + MASKED, but the row keeps a verbatim `context` window for
+# triage, and what that window quotes — test_masking.py parametrize fixture literals
+# above all — reads as a credential to every content pattern here (119 of foreman's 390
+# hits were ONE mask_at_rest log; 33 more the mask-hits copies). Same design call as
+# wq#2120's fixture-fingerprint allowlist: the fleet's own report artifacts, pinned by
+# PATH SHAPE (exactly one level under a `_runs` component), are exempt from content
+# patterns only — BASENAME_GLOBS still apply, and the same bytes copied anywhere else
+# still page, which is what keeps the exemption falsifiable.
+def is_mask_report(path):
+    parts = os.path.normpath(path).split(os.sep)
+    if "_runs" not in parts[:-1]:
+        return False
+    rel = parts[parts.index("_runs") + 1:]
+    if len(rel) != 2:
+        return False
+    if rel[0] == "mask_at_rest" and rel[1].endswith(".jsonl"):
+        return True
+    return fnmatch.fnmatch(rel[1], "mask-hits-*.json")
 
 
 def _read_text(path):
@@ -183,6 +232,8 @@ def sweep_root(root):
             if any(fnmatch.fnmatch(c, g)
                    for c in basename_candidates(f) for g in BASENAME_GLOBS):
                 hits.append((p, 0, "basename", f))
+            if is_mask_report(p):
+                continue
             text = _read_text(p)
             if text is None:
                 continue
