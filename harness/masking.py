@@ -521,6 +521,12 @@ PATTERNS = [
         r"(?!\\*[${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
         r"(?!os\.environ|os\.getenv|(?:process\.)?env\.)"
         r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
+        # wq#2931: a `<name>` template placeholder anywhere before the first `@`, not
+        # just at the start — `ghp_` glued to `<body>` is how a docstring spells "a
+        # github value here", and wq#2913's own docstring paged pri-1 on it. `<`/`>` are
+        # illegal unencoded in RFC 3986 userinfo and in every token alphabet, so no live
+        # value carries one; a placeholder past a raw `@` still masks.
+        r"(?![^\s/'\"`@]*<[A-Za-z_][A-Za-z0-9_-]*>)"
         # The one rule that must NOT take _body(): it is anchored on the `@` ahead of
         # it, so the body cannot run past the credential into whatever follows, and
         # there is nothing for a bound to save it from. A bound would instead stop the

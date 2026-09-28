@@ -109,6 +109,9 @@ FALSE_POSITIVES = [
     "https://lumen:MASKED@100.64.0.9",
     "ssh://git@github.com:22/o/r.git",
     "https://example.com:8443/path@v2",
+    # wq#2931: a placeholder glued behind a token prefix (split so this file stays quiet)
+    "remote https://x:" "tok_<body>@host",
+    "https://lumen:" "gh" "p_<value>@git.example",
 ]
 
 # One synthetic secret per RULE in PATTERNS, for the fixed-point property below.
@@ -278,6 +281,13 @@ def test_url_auth_escape_exclusion_is_not_a_backslash_blanket():
     for text in (URL_USER + "\\" + PW + URL_HOST, URL_USER + "\\\\" + PW + URL_HOST):
         masked, hits = masking.mask_text(text)
         assert hits == ["url-auth"] and PW not in masked, (text, hits)
+
+
+def test_url_auth_placeholder_exclusion_stops_at_the_first_at():
+    """wq#2931: a `<name>` placeholder only excuses the userinfo it sits in. One past a
+    raw `@` is inside a DSN password, and the live half ahead of it must still mask."""
+    masked, hits = masking.mask_text(URL_USER + PW + "@x<tag>" + URL_HOST)
+    assert hits == ["url-auth"] and PW not in masked, hits
 
 
 @pytest.mark.parametrize("head, tail", [
