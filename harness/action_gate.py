@@ -69,6 +69,24 @@ JUDGE_SHADOW_TIMEOUT = int(os.environ.get("FOREMAN_JUDGE_SHADOW_TIMEOUT", "30"))
 def _judge_shadow_enabled():
     return os.environ.get("FOREMAN_JUDGE_SHADOW", "1") != "0"
 
+# wq#2798 (wq#2788 Phase 1d) -- live enforcement cutover. Kill switch default OFF:
+# wq#2801 (Frank's own sign-off on the tier policy drafted in
+# research/RISK_TIERED_JUDGE.md#7) has not landed as of this change, and shadow-mode
+# (wq#2797) has logged only a handful of real RED calls so far -- nowhere near the
+# review window the policy sign-off assumes. "A judge that has never seen a single
+# real production decision does not get to start enforcing on day one" (wq#2788
+# research note) applies just as much to a freshly-confirmed policy as to a
+# freshly-shipped model. The code path below is real, tested, and fail-closed
+# today; flipping FOREMAN_JUDGE_ENFORCE=1 once wq#2801 closes is the only action
+# left to go live -- not a code change.
+JUDGE_ENFORCE_ENV = "FOREMAN_JUDGE_ENFORCE"
+JUDGE_ENFORCE_TIMEOUT = int(os.environ.get("FOREMAN_JUDGE_ENFORCE_TIMEOUT",
+                                            str(JUDGE_SHADOW_TIMEOUT)))
+
+
+def _judge_enforce_enabled():
+    return os.environ.get(JUDGE_ENFORCE_ENV, "0") == "1"
+
 # --------------------------------------------------------------------------
 # Layer 1 — builtin classification lists. Regexes run against BOTH the raw
 # command and a whitespace-collapsed copy (same evasion posture as guard.sh).
@@ -654,20 +672,13 @@ def write_red_handoff(tool_name, detail, reason, rules):
         return None
 
 
-def shadow_judge(tool_name, detail, reason, rules):
-    """wq#2797 (wq#2788 Phase 1b) -- on every RED, also ask the central judge and
-    log its verdict, WITHOUT changing action_gate's own RED exit code or RED_MSG.
-    This is a pure observation: it lets wq#2801's tier-policy sign-off and
-    wq#2800's calibration work compare the judge against real production RED
-    decisions before anything is allowed to gate on it (wq#2798, not this ticket).
-
-    bin/judge already logs every call -- success or FAIL_CLOSED -- to
-    minerva.db judge_verdicts, so there is nothing else to persist here beyond
-    a local event for correlation with the RED handoff. Best-effort: any
-    failure (judge down, timeout, bad JSON) is caught and logged, never raised
-    -- a broken shadow observer must never turn into a broken gate."""
-    if not _judge_shadow_enabled():
-        return None
+def _call_judge_bin(tool_name, detail, reason, rules, timeout):
+    """Raw subprocess call to bin/judge -- shared by shadow_judge (wq#2797,
+    observe-only) and enforce_judge_verdict (wq#2798, live). Returns
+    (returncode_or_None, parsed_json_or_None, error_str_or_None); a non-None
+    error means the call itself failed (timeout, unreachable model, bad JSON)
+    and the caller must treat that the same as an explicit FAIL_CLOSED verdict
+    -- never retry, never guess."""
     ctx_parts = []
     if rules.get("project"):
         ctx_parts.append(f"project={rules['project']}")
@@ -683,16 +694,111 @@ def shadow_judge(tool_name, detail, reason, rules):
         p = subprocess.run(
             [JUDGE_BIN, "--actor", WORKER_ID, "--kind", kind,
              "--command", detail[:4000], "--context", context[:2000],
-             "--gate-verdict", "RED", "--timeout", str(JUDGE_SHADOW_TIMEOUT)],
-            capture_output=True, text=True, timeout=JUDGE_SHADOW_TIMEOUT + 15)
+             "--gate-verdict", "RED", "--timeout", str(timeout)],
+            capture_output=True, text=True, timeout=timeout + 15)
         out = json.loads(p.stdout) if p.stdout.strip() else {}
-        _log_event("judge_shadow", gate_reason=reason, judge_verdict=out.get("verdict"),
-                    judge_tier=out.get("tier"), judge_latency_s=out.get("latency_s"),
-                    judge_rationale=out.get("rationale"), exit_code=p.returncode)
-        return out
-    except Exception as e:  # noqa: BLE001 -- shadow observation must never break the gate
-        _log_event("judge_shadow_error", gate_reason=reason, error=str(e)[:200])
+        return p.returncode, out, None
+    except Exception as e:  # noqa: BLE001 -- a broken judge call must never raise into the gate
+        return None, None, str(e)
+
+
+def shadow_judge(tool_name, detail, reason, rules):
+    """wq#2797 (wq#2788 Phase 1b) -- on every RED, also ask the central judge and
+    log its verdict, WITHOUT changing action_gate's own RED exit code or RED_MSG.
+    This is a pure observation: it lets wq#2801's tier-policy sign-off and
+    wq#2800's calibration work compare the judge against real production RED
+    decisions before anything is allowed to gate on it. Only called when
+    enforcement (wq#2798, enforce_judge_verdict below) is OFF -- once enforcement
+    is on, enforce_judge_verdict makes the one live call itself instead.
+
+    bin/judge already logs every call -- success or FAIL_CLOSED -- to
+    minerva.db judge_verdicts, so there is nothing else to persist here beyond
+    a local event for correlation with the RED handoff. Best-effort: any
+    failure (judge down, timeout, bad JSON) is caught and logged, never raised
+    -- a broken shadow observer must never turn into a broken gate."""
+    if not _judge_shadow_enabled():
         return None
+    rc, out, err = _call_judge_bin(tool_name, detail, reason, rules, JUDGE_SHADOW_TIMEOUT)
+    if err is not None:
+        _log_event("judge_shadow_error", gate_reason=reason, error=err[:200])
+        return None
+    _log_event("judge_shadow", gate_reason=reason, judge_verdict=out.get("verdict"),
+                judge_tier=out.get("tier"), judge_latency_s=out.get("latency_s"),
+                judge_rationale=out.get("rationale"), exit_code=rc)
+    return out
+
+
+def stage_judge_conditions(conditions, tool_name, detail, cwd):
+    """wq#2798 -- stage the safeguards an allow-with-conditions verdict named,
+    BEFORE the caller lets the action through (same invariant AMBER already
+    enforces: never execute unsnapshotted). A condition whose text names a
+    snapshot/rollback/backup safeguard reuses the exact pre-image mechanism
+    AMBER uses for this tool_name. A condition this gate cannot mechanically
+    stage on disk (e.g. "Frank notified", "declared maintenance window") is
+    paged to aq instead of silently dropped. Raises on a snapshot failure --
+    the caller must fail closed, matching the AMBER snapshot invariant. An
+    empty conditions list is itself a judge-contract gap, not a safe default,
+    so it still gets a baseline pre-image."""
+    if tool_name == "Bash":
+        kind, payload = "files", detail
+    else:
+        kind, payload = ("path", detail) if os.path.isfile(detail) else ("git", detail)
+    staged = []
+    for c in (conditions or ["(none named by judge — baseline snapshot)"]):
+        cl = c.lower()
+        if "snapshot" in cl or "rollback" in cl or "backup" in cl or not conditions:
+            staged.append({"condition": c, "artifacts": snapshot(kind, payload, cwd)})
+        else:
+            _page_unstaged_condition(c, tool_name, detail)
+            staged.append({"condition": c, "artifacts": ["aq:judge"]})
+    return staged
+
+
+def _page_unstaged_condition(condition, tool_name, detail):
+    """Best-effort page for a named condition action_gate has no mechanical way
+    to stage on disk. Must never raise -- a paging failure is not a reason to
+    fail closed on an action the judge already approved."""
+    try:
+        subprocess.run(
+            ["aq", "add", "judge", f"judge-condition-{WORKER_ID}",
+             f"judge allow-with-conditions named a safeguard action_gate cannot "
+             f"stage on disk: {condition}",
+             f"tool={tool_name} detail={detail[:200]}"],
+            timeout=10, capture_output=True)
+    except Exception:  # noqa: BLE001 -- paging is best-effort, never the gate's problem
+        pass
+
+
+def enforce_judge_verdict(tool_name, detail, reason, rules, cwd):
+    """wq#2798 (wq#2788 Phase 1d) -- Layer 4 live. Only reached when
+    FOREMAN_JUDGE_ENFORCE=1 (default off, see JUDGE_ENFORCE_ENV above). Turns a
+    RED verdict into deny (today's hard block, unchanged) or allow/
+    allow-with-conditions per the judge, staging the named conditions before
+    letting the action through. Fail-closed, no exceptions: a FAIL_CLOSED
+    verdict, a broken judge call, an unrecognised verdict string, or a failed
+    condition-staging attempt all come back as "deny" here so the caller falls
+    through to the ordinary unconditional RED block."""
+    rc, out, err = _call_judge_bin(tool_name, detail, reason, rules, JUDGE_ENFORCE_TIMEOUT)
+    if err is not None or not out or out.get("verdict") not in (
+            "allow", "deny", "allow-with-conditions"):
+        _log_event("judge_enforce_fail_closed", gate_reason=reason,
+                    error=err or f"no/invalid verdict: {out!r}", exit_code=rc)
+        return {"action": "deny", "why": "judge FAIL_CLOSED", "judge": out}
+    verdict = out["verdict"]
+    _log_event("judge_enforce", gate_reason=reason, judge_verdict=verdict,
+                judge_tier=out.get("tier"), judge_rationale=out.get("rationale"),
+                exit_code=rc)
+    if verdict == "deny":
+        return {"action": "deny", "why": "judge denied", "judge": out}
+    if verdict == "allow":
+        return {"action": "allow", "judge": out}
+    try:
+        staged = stage_judge_conditions(out.get("conditions") or [], tool_name, detail, cwd)
+    except Exception as e:  # noqa: BLE001 -- a staging failure must fail closed, never raise
+        _log_event("judge_enforce_condition_stage_failed", gate_reason=reason,
+                    error=str(e)[:200])
+        return {"action": "deny", "why": f"condition staging failed: {e}", "judge": out}
+    return {"action": "allow-with-conditions", "judge": out, "staged": staged}
 
 
 # --------------------------------------------------------------------------
@@ -900,7 +1006,17 @@ def hook_main():
         if verdict == "RED":
             handoff = write_red_handoff(tool_name, detail, reason, rules)
             _log_event("gate_red_block", reason=reason, snippet=detail[:200], handoff=handoff)
-            shadow_judge(tool_name, detail, reason, rules)  # wq#2797: observe-only, never gates
+            if _judge_enforce_enabled():
+                outcome = enforce_judge_verdict(tool_name, detail, reason, rules, cwd)
+                if outcome["action"] in ("allow", "allow-with-conditions"):
+                    _log_event(f"gate_judge_{outcome['action'].replace('-', '_')}",
+                                reason=reason, judge=outcome.get("judge"),
+                                staged=outcome.get("staged"))
+                    return 0
+                _log_event("gate_judge_deny", reason=reason, why=outcome.get("why"),
+                            judge=outcome.get("judge"))
+            else:
+                shadow_judge(tool_name, detail, reason, rules)  # wq#2797: observe-only when enforcement is off
             hc = rules.get("hardware_class")
             if hc and ("project rule" in reason or rules.get("red_patterns")):
                 print(f"ACTION BLOCKED: project rule prohibits this on hardware_class={hc}. "

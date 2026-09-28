@@ -223,6 +223,130 @@ def test_shadow_judge_never_fires_on_green_or_amber(tmp_path):
     assert not touchfile.exists(), "judge invoked on an AMBER command"
 
 
+# ---------------- wq#2798: live enforcement cutover (Layer 4) ---------------
+
+FAKE_JUDGE_ALLOW = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import json, sys
+    print(json.dumps({"tier": "Low", "verdict": "allow", "conditions": [],
+                       "rationale": "fake allow", "model": "fake-model", "latency_s": 0.01}))
+    sys.exit(0)
+""")
+
+FAKE_JUDGE_ALLOW_WITH_CONDITIONS = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import json, sys
+    print(json.dumps({"tier": "Medium", "verdict": "allow-with-conditions",
+                       "conditions": ["snapshot before executing", "notify Frank"],
+                       "rationale": "fake conditional", "model": "fake-model",
+                       "latency_s": 0.01}))
+    sys.exit(2)
+""")
+
+
+def test_judge_enforce_off_by_default_still_hard_blocks_even_if_judge_would_allow(tmp_path):
+    """The kill switch: FOREMAN_JUDGE_ENFORCE unset must leave today's behavior
+    untouched even when a live judge is configured and would allow the action --
+    wq#2801 (Frank's tier-policy sign-off) has not landed, so enforcement must
+    default to inert."""
+    judge = _fake_judge(tmp_path, "fake_judge_allow.py", FAKE_JUDGE_ALLOW)
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_BIN": judge, "FOREMAN_WORKER": "enforce-off"})
+    assert rc == 2, "RED must still hard-block when FOREMAN_JUDGE_ENFORCE is unset"
+    assert "ACTION BLOCKED" in err
+    assert [e["event"] for e in _events(tmp_path, "enforce-off")] == ["gate_red_block"]
+
+
+def test_judge_enforce_allow_lets_the_action_through(tmp_path):
+    judge = _fake_judge(tmp_path, "fake_judge_allow.py", FAKE_JUDGE_ALLOW)
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "enforce-allow"})
+    assert rc == 0, f"judge allow must let the action through: {err}"
+    kinds = [e["event"] for e in _events(tmp_path, "enforce-allow")]
+    assert kinds == ["gate_red_block", "judge_enforce", "gate_judge_allow"]
+
+
+def test_judge_enforce_deny_still_hard_blocks(tmp_path):
+    judge = _fake_judge(tmp_path, "fake_judge_deny.py", FAKE_JUDGE_OK)  # verdict: deny
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "enforce-deny"})
+    assert rc == 2
+    assert "ACTION BLOCKED" in err
+    kinds = [e["event"] for e in _events(tmp_path, "enforce-deny")]
+    assert kinds == ["gate_red_block", "judge_enforce", "gate_judge_deny"]
+
+
+def test_judge_enforce_fail_closed_still_hard_blocks(tmp_path):
+    """Fail-closed preserved, no exceptions: judge FAIL_CLOSED = today's hard
+    RED block, unconditionally."""
+    judge = _fake_judge(tmp_path, "fake_judge_failclosed.py", FAKE_JUDGE_FAIL_CLOSED)
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "enforce-failclosed"})
+    assert rc == 2
+    assert "ACTION BLOCKED" in err
+    kinds = [e["event"] for e in _events(tmp_path, "enforce-failclosed")]
+    assert kinds == ["gate_red_block", "judge_enforce_fail_closed", "gate_judge_deny"]
+
+
+def test_judge_enforce_missing_binary_fails_closed(tmp_path):
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": str(tmp_path / "no-such-binary"),
+        "FOREMAN_WORKER": "enforce-missing"})
+    assert rc == 2
+    assert "ACTION BLOCKED" in err
+    kinds = [e["event"] for e in _events(tmp_path, "enforce-missing")]
+    assert kinds == ["gate_red_block", "judge_enforce_fail_closed", "gate_judge_deny"]
+
+
+def test_judge_enforce_allow_with_conditions_stages_snapshot_before_allowing(tmp_path):
+    target = tmp_path / "secret.token"
+    target.write_text("pre-image content\n")
+    judge = _fake_judge(tmp_path, "fake_judge_cond.py", FAKE_JUDGE_ALLOW_WITH_CONDITIONS)
+    rc, err = run_hook(bash_payload(f"shred -u {target}"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        ag.SNAPDIR_ENV: str(tmp_path / "snaps"),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "enforce-conditions"})
+    assert rc == 0, f"allow-with-conditions must let the action through once staged: {err}"
+    events = _events(tmp_path, "enforce-conditions")
+    kinds = [e["event"] for e in events]
+    assert kinds == ["gate_red_block", "judge_enforce", "gate_judge_allow_with_conditions"]
+    staged = events[-1]["staged"]
+    conditions = [s["condition"] for s in staged]
+    assert "snapshot before executing" in conditions
+    assert "notify Frank" in conditions
+    snap_entry = next(s for s in staged if s["condition"] == "snapshot before executing")
+    assert snap_entry["artifacts"], "snapshot condition produced no pre-image artifact"
+
+
+def test_judge_enforce_condition_staging_failure_fails_closed(tmp_path):
+    """The AMBER invariant applies to Layer 4 too: a condition action_gate
+    cannot actually stage on disk must fail closed, never silently pass
+    through. Forced here by pointing the snapshot at a cwd that does not
+    exist, so the git-fallback pre-image (no extractable file target in the
+    command) cannot run."""
+    judge = _fake_judge(tmp_path, "fake_judge_cond.py", FAKE_JUDGE_ALLOW_WITH_CONDITIONS)
+    missing_cwd = str(tmp_path / "does-not-exist")
+    rc, err = run_hook(bash_payload("wipefs -a /dev/sdc", cwd=missing_cwd), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        ag.SNAPDIR_ENV: str(tmp_path / "snaps"),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "enforce-stage-fail"})
+    assert rc == 2, "a failed condition staging must fail closed, not allow through"
+    assert "ACTION BLOCKED" in err
+    kinds = [e["event"] for e in _events(tmp_path, "enforce-stage-fail")]
+    assert kinds == ["gate_red_block", "judge_enforce", "judge_enforce_condition_stage_failed",
+                      "gate_judge_deny"]
+
+
 # ---------------- Layer 1: GREEN passes ----------------
 
 GREEN_CASES = [
