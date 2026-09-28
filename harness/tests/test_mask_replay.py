@@ -1833,14 +1833,16 @@ def test_wq2650_value_is_the_wq2350_fixture_plus_a_regex_dot():
     so reading this file cannot fire the same alarm, and so account() finds the body here.
     """
     body = "REALSECRETVALUE123456" "cfut_" "MASKED" "."
-    assert (hashlib.sha256(body.encode()).hexdigest()[:12], len(body)) == WQ2650_VALUE
+    pin = (hashlib.sha256(body.encode()).hexdigest()[:12], len(body))
+    assert pin == WQ2650_VALUE
     line = 'grep -o -n ".\\{60\\}' + "cfut_" + body + '\\{40\\}" kb/ISSUE-LOG.md'
     records = mask_replay.replay(0, tracked={}, items={"transcript:a": line})
     assert [(r["label"], r["value_sha256_12"], r["value_len"]) for r in records] \
         == [("cloudflare",) + WQ2650_VALUE]
     with open(__file__) as fh:
         here = fh.read()
-    assert mask_replay.account(body, {"this": here}) is not None
+    accounted = mask_replay.account(body, {"this": here})
+    assert accounted is not None
     for seamed in (l for l in here.splitlines() if "REALSECRETVALUE" in l):
         assert masking.mask_text(seamed)[1] == [], seamed
 
@@ -1857,6 +1859,27 @@ def _load_fixture_module(path):
     return text, scope
 
 
+def _unpinned(pins, tree=None):
+    """The shas of the pins that don't hold, never their values (wq#2962).
+
+    A bare `assert` over a pin tuple lets pytest's assertion rewrite print the dummy
+    it compared: wq#2955 ran the red wq2913 pin test, `assert len(values) == 8` printed
+    the whole tuple, and the tripwire burned three committed dummies. So every pin check
+    goes through here and a failing test names hashes and counts only. A pin is
+    (sha, label, value) or (sha, label, prefix, prefix + value); with `tree` the value
+    must also be accounted there.
+    """
+    bad = []
+    for pin in pins:
+        sha, whole = pin[0], pin[-1]
+        prefix = pin[2] if len(pin) == 4 else ""
+        body = whole[len(prefix):]
+        if not (whole.startswith(prefix) and masking.value_sha12(body) == sha
+                and (tree is None or mask_replay.account(body, tree, prefix))):
+            bad.append(sha)
+    return bad
+
+
 def _wq2687_values():
     text, scope = _load_fixture_module(WQ2687_FIXTURES)
     return text, scope["WQ2687_VALUES"]
@@ -1866,12 +1889,9 @@ def test_wq2687_pins_are_their_hashes_and_read_silently():
     """The pins name the values they claim to, and reading the file pages nothing."""
     text, scope = _load_fixture_module(WQ2687_FIXTURES)
     values, prose = scope["WQ2687_VALUES"], scope["WQ2687_PROSE"]
-    assert len(values) == 12 and len(prose) == 2
-    for sha, _label, value in values:
-        assert masking.value_sha12(value) == sha
-    for sha, _label, prefix, whole in prose:
-        assert whole.startswith(prefix)
-        assert masking.value_sha12(whole[len(prefix):]) == sha
+    counts = (len(values), len(prose))
+    assert counts == (12, 2)
+    assert _unpinned([*values, *prose]) == []
     assert masking.mask_text(text)[1] == []
 
 
@@ -1928,10 +1948,7 @@ def test_wq2687_corpus_burned_nothing():
     fixture_shas = {v[0] for v in values} | {p[0] for p in prose}
     _, fixture = _assert_corpus_pinned(2687, WQ2687_FIXTURES,
                                        scope["WQ2687_RECORDS"], fixture_shas)
-    for sha, _label, value in values:
-        assert mask_replay.account(value, fixture), sha
-    for sha, _label, prefix, whole in prose:
-        assert mask_replay.account(whole[len(prefix):], fixture, prefix), sha
+    assert _unpinned([*values, *prose], fixture) == []
 
 
 WQ2702_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2702")
@@ -1945,9 +1962,9 @@ def _wq2702_values():
 
 def test_wq2702_pins_are_their_hashes_and_read_silently():
     text, values = _wq2702_values()
-    assert len(values) == 1
-    for sha, _label, value in values:
-        assert masking.value_sha12(value) == sha
+    count = len(values)
+    assert count == 1
+    assert _unpinned(values) == []
     assert masking.mask_text(text)[1] == []
 
 
@@ -1965,8 +1982,7 @@ def test_wq2702_corpus_burned_nothing():
     values = scope["WQ2702_VALUES"]
     _, fixture = _assert_corpus_pinned(2702, WQ2702_FIXTURES, scope["WQ2702_RECORDS"],
                                        {v[0] for v in values})
-    for sha, _label, value in values:
-        assert mask_replay.account(value, fixture), sha
+    assert _unpinned(values, fixture) == []
 
 
 WQ2720_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2720")
@@ -1976,9 +1992,9 @@ WQ2720_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2720_va
 def test_wq2720_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2720_FIXTURES)
     values = scope["WQ2720_VALUES"]
-    assert len(values) == 1
-    for sha, _label, value in values:
-        assert masking.value_sha12(value) == sha
+    count = len(values)
+    assert count == 1
+    assert _unpinned(values) == []
     assert masking.mask_text(text)[1] == []
 
 
@@ -1997,8 +2013,7 @@ def test_wq2720_corpus_burned_nothing():
     _, fixture = _assert_corpus_pinned(2720, WQ2720_FIXTURES, scope["WQ2720_RECORDS"],
                                        fixture_shas,
                                        patterns=mask_replay.CURRENT_PATTERNS)
-    for sha, _label, value in values:
-        assert mask_replay.account(value, fixture), sha
+    assert _unpinned(values, fixture) == []
 
 
 WQ2787_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2787")
@@ -2008,9 +2023,9 @@ WQ2787_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2787_va
 def test_wq2787_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2787_FIXTURES)
     values = scope["WQ2787_VALUES"]
-    assert len(values) == 1
-    for sha, _label, value in values:
-        assert masking.value_sha12(value) == sha
+    count = len(values)
+    assert count == 1
+    assert _unpinned(values) == []
     assert masking.mask_text(text)[1] == []
 
 
@@ -2027,8 +2042,7 @@ def test_wq2787_corpus_burned_nothing():
     _, fixture = _assert_corpus_pinned(2787, WQ2787_FIXTURES, scope["WQ2787_RECORDS"],
                                        fixture_shas,
                                        patterns=mask_replay.CURRENT_PATTERNS)
-    for sha, _label, value in values:
-        assert mask_replay.account(value, fixture), sha
+    assert _unpinned(values, fixture) == []
 
 
 def test_replay_reads_what_the_tripwire_reads_on_a_glued_line():
@@ -2066,9 +2080,7 @@ WQ2875_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2875_va
 
 def test_wq2875_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2875_FIXTURES)
-    for sha, _label, value in scope["WQ2875_VALUES"]:
-        assert masking.value_sha12(value) == sha
-        assert mask_replay.account(value, {"f": text})
+    assert _unpinned(scope["WQ2875_VALUES"], {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
 
@@ -2083,12 +2095,22 @@ def test_wq2913_pins_are_their_hashes_and_read_silently():
     # ("the seven values..."). wq#2936 wrote 8 here — the eighth value its ISSUE-LOG
     # row counts is the one the kb log already accounted for, so it was deliberately
     # not pinned, and this test has been red since it landed.
-    assert len(values) == 7
-    for sha, _label, prefix, whole in values:
-        assert whole.startswith(prefix)
-        assert masking.value_sha12(whole[len(prefix):]) == sha
-        assert mask_replay.account(whole[len(prefix):], {"f": text}, prefix), sha
+    count = len(values)
+    assert count == 7
+    assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
+
+
+def test_a_failing_pin_names_hashes_not_values():
+    """wq#2962: the tuple pytest printed for wq#2955 fires the tripwire; what a failing
+    pin check prints now does not, and still says which pin broke."""
+    text, scope = _load_fixture_module(WQ2913_FIXTURES)
+    values = scope["WQ2913_VALUES"]
+    assert masking.mask_text(repr(values))[1] != []
+    broken = [("0" * 12,) + values[0][1:], *values[1:]]
+    report = _unpinned(broken, {"f": text})
+    assert report == ["0" * 12]
+    assert masking.mask_text(repr(report))[1] == []
 
 
 @pytest.mark.skipif(not os.path.isdir(WQ2913_RUN),
@@ -2109,11 +2131,9 @@ WQ2922_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2922_va
 def test_wq2922_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2922_FIXTURES)
     values = scope["WQ2922_VALUES"]
-    assert len(values) == 2
-    for sha, _label, prefix, whole in values:
-        assert whole.startswith(prefix)
-        assert masking.value_sha12(whole[len(prefix):]) == sha
-        assert mask_replay.account(whole[len(prefix):], {"f": text}, prefix), sha
+    count = len(values)
+    assert count == 2
+    assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
 
