@@ -94,7 +94,7 @@ def test_digest_failure_kind_and_why_fallback():
         _attempt(1, "INDETERMINATE", assistant_tail=["last words"]),
     ])
     assert d["kind"] == "session"
-    assert d["why"] == "last words"
+    assert d["why"].startswith("last words [episode: ")
     assert d["failed"] == ["attempt 1: INDETERMINATE"]
 
 
@@ -119,6 +119,47 @@ def test_commit_to_archive_invokes_cli(tmp_path, monkeypatch):
     (cmd,) = calls
     assert cmd[1] == "/fake/lumen_episode.py" and cmd[2] == "commit"
     assert cmd[cmd.index("--summary") + 1] == d["summary"]
+
+
+def test_digest_ref_is_the_ticket_not_a_path(tmp_path):
+    """wq#2901: memoryd derives the lane from source_ref=wq#N and its SOURCE_REF_RE
+    takes nothing else, so a path here made every fleet episode unattributable."""
+    d = episodic.digest_events(2901, [_attempt(1, "SUCCESS", title="t")],
+                               runs_root=str(tmp_path))
+    assert d["ref"] == "wq#2901"
+    # the path is evidence, not attribution: kept, but out of the ref
+    assert d["evidence"] == str(tmp_path / "wq2901" / "episode.jsonl")
+    assert d["evidence"] in d["why"]
+
+
+def test_digest_evidence_honours_runs_root(tmp_path):
+    """The old ref called episode_path() without runs_root, so it named a file that
+    did not exist whenever FOREMAN_RUNS_ROOT was overridden."""
+    d = episodic.digest_events(5, [_attempt(1, "OOM")], runs_root=str(tmp_path))
+    assert str(tmp_path) in d["evidence"]
+    assert episodic.DEFAULT_RUNS_ROOT not in d["evidence"]
+
+
+def test_commit_to_archive_passes_ticket_ref_to_cli(tmp_path):
+    episodic.append_event(2901, _attempt(1, "SUCCESS", title="t"),
+                          runs_root=str(tmp_path))
+    calls = []
+    import unittest.mock as _m
+    with _m.patch.object(episodic.subprocess, "run",
+                         side_effect=lambda cmd, **kw: calls.append(cmd)):
+        episodic.commit_to_archive(2901, runs_root=str(tmp_path),
+                                   episode_bin="/fake/lumen_episode.py")
+    (cmd,) = calls
+    assert cmd[cmd.index("--ref") + 1] == "wq#2901"
+
+
+def test_episode_bin_resolves_per_call(tmp_path, monkeypatch):
+    """wq#2901: the test suite points LUMEN_EPISODE_BIN at a stub long after this
+    module is imported; a module constant would ignore it and hit the live store."""
+    monkeypatch.setenv("LUMEN_EPISODE_BIN", str(tmp_path / "stub.py"))
+    assert episodic.episode_bin_path() == str(tmp_path / "stub.py")
+    monkeypatch.delenv("LUMEN_EPISODE_BIN")
+    assert episodic.episode_bin_path() == episodic.DEFAULT_LUMEN_EPISODE_BIN
 
 
 def test_commit_to_archive_noop_without_events(tmp_path, monkeypatch):

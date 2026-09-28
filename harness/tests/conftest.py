@@ -52,6 +52,19 @@ def _scratch_cli_canary(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_live_episode_commit(monkeypatch, tmp_path):
+    """wq#2901: the shim tests run fworker end to end, so commit_episode_to_archive
+    fires for real against the LIVE minerva.db — 67 notes, 430 audit write rows and
+    319 memoryd rejects a day under agent `fworker-wq1`, all from pytest (same class
+    as wq#2784). Point the CLI at a no-op stub: the commit path still runs a real
+    binary under subprocess.run(check=True), it just cannot reach the store. Tests
+    that assert on the CLI pass episode_bin= themselves."""
+    stub = tmp_path / "lumen_episode_stub.py"
+    stub.write_text("import sys\nsys.exit(0)\n")
+    monkeypatch.setenv("LUMEN_EPISODE_BIN", str(stub))
+
+
+@pytest.fixture(autouse=True)
 def _no_mask_at_rest_sweep(monkeypatch):
     """2026-09-26: mask_alarm() -> trigger_mask_at_rest() Popens a detached, REAL
     `mask_at_rest.py --store all` (whole store + offsite restic). test_masking.py calls

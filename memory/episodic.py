@@ -87,8 +87,17 @@ def read_events(ticket_id, runs_root=None):
 # wq#1635: episode -> archival_notes, deterministically (no LLM)
 # ---------------------------------------------------------------------------
 
+DEFAULT_LUMEN_EPISODE_BIN = "/home/lumen/minerva/lumen_episode.py"
 LUMEN_EPISODE_BIN = os.environ.get(
-    "LUMEN_EPISODE_BIN", "/home/lumen/minerva/lumen_episode.py")
+    "LUMEN_EPISODE_BIN", DEFAULT_LUMEN_EPISODE_BIN)
+
+
+def episode_bin_path():
+    """wq#2901: resolved per call, not per import. fworker imports this module once
+    and lives a whole ticket, and the test suite sets LUMEN_EPISODE_BIN from an
+    autouse fixture that runs long after import — a module constant would ignore it
+    and keep writing to the live store."""
+    return os.environ.get("LUMEN_EPISODE_BIN") or DEFAULT_LUMEN_EPISODE_BIN
 
 _SUCCESS_CLASSIFICATIONS = ("SUCCESS", "DEGRADED_SUCCESS")
 # PRs land on Gitea (/owner/repo/pulls/N) or GitHub (/owner/repo/pull/N).
@@ -100,7 +109,7 @@ def _cli_item(text):
     return re.sub(r"[,;]+", " ", str(text)).strip()
 
 
-def digest_events(ticket_id, events):
+def digest_events(ticket_id, events, runs_root=None):
     """Deterministic digest of a ticket's attempt_end events — the extraction
     step wq#1183 wanted an LLM for, done mechanically: summary/changed/failed/
     why are lifted straight from fields fworker already recorded. Returns None
@@ -137,6 +146,16 @@ def digest_events(ticket_id, events):
     tags = ["fleet", "fworker", f"wq{ticket_id}"]
     if last.get("lane"):
         tags.append(_cli_item(last["lane"]))
+    # wq#2901: the source_ref must be `wq#N` — memoryd derives the lane from the
+    # ticket and its SOURCE_REF_RE takes nothing else (kernel.py:22), so a path
+    # here was an unattributable write on every fleet episode. The path is raw
+    # evidence, so it moves into `why` rather than being dropped. (It also used to
+    # be computed without runs_root, i.e. wrong under FOREMAN_RUNS_ROOT.)
+    evidence = episode_path(ticket_id, runs_root)
+    if why:
+        why = f"{why} [episode: {evidence}]"
+    else:
+        why = f"[episode: {evidence}]"
     return {
         "summary": summary[:200],
         "changed": changed,
@@ -145,7 +164,8 @@ def digest_events(ticket_id, events):
         "kind": ("code-ship" if classification in _SUCCESS_CLASSIFICATIONS
                  else "session"),
         "tags": tags,
-        "ref": episode_path(ticket_id),
+        "ref": f"wq#{ticket_id}",
+        "evidence": evidence,
     }
 
 
@@ -154,12 +174,18 @@ def commit_to_archive(ticket_id, runs_root=None, episode_bin=None, timeout=30):
     (which tries memoryd /commit first — trust derives from the wq claim named
     in $WQ_AGENT — and falls back to a direct audited write). Returns the
     digest on commit, None when there was nothing to commit. Callers hold the
-    fail-open contract: fworker wraps this in try/except."""
-    digest = digest_events(ticket_id, read_events(ticket_id, runs_root))
+    fail-open contract: fworker wraps this in try/except.
+
+    wq#2901: --ref is `wq#N`, which is what memoryd needs to derive the lane from
+    the claim this worker holds on that ticket. Passing the episode PATH here made
+    every fleet episode unattributable (design
+    minerva/v4/research/fworker_lane_attribution.md D2)."""
+    digest = digest_events(ticket_id, read_events(ticket_id, runs_root),
+                           runs_root=runs_root)
     if digest is None:
         return None
     cmd = [
-        sys.executable, episode_bin or LUMEN_EPISODE_BIN, "commit",
+        sys.executable, episode_bin or episode_bin_path(), "commit",
         "--summary", digest["summary"],
         "--changed", ", ".join(digest["changed"]),
         "--failed", ", ".join(digest["failed"]),
