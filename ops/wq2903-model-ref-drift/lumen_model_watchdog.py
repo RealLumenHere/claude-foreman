@@ -202,7 +202,7 @@ def aq_clear(model, why="recovered", key=None):
     except Exception as e:
         print(f"aq clear failed (non-fatal): {e}")
 
-DRIFT_KEY = "model-roster-drift"
+DRIFT_KEY = "model-" "roster-drift"
 
 def aq_drift(drift):
     """wq#2903: roster names the gateway doesn't serve. Config drift, one row for
