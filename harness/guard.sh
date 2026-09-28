@@ -500,6 +500,13 @@ Read|Edit|Write|Grep|Glob)
       # it here a Read by absolute path went through and burned every token in it.
       */.git-credentials|*/.git-credentials.*|*/.netrc|*/.fleet_pw|*.pw)
         block "denied path: $CHECK_PATH" "$CHECK_PATH" ;;
+      # wq#2951: the LiteLLM config carries the live Langfuse secret as a literal under
+      # environment_variables (ISSUE-LOG 904/914), and a whole-file Read/Grep dumped it
+      # into wq#2904's and wq#2914's context, burning 6cf8c0a3e6a1 twice. Bash stays
+      # open so a narrow `grep -n model_name` still works. Lift this once the literal
+      # is an env reference (wq#2916's rotation runbook).
+      /home/lumen/agent/litellm_config.yaml|/home/lumen/agent/litellm_config.yaml.*)
+        block "denied path: $CHECK_PATH (literal Langfuse secret inside, wq#2951; grep the lines you need via Bash)" "$CHECK_PATH" ;;
     esac
   done
 

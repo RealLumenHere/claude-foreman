@@ -189,6 +189,10 @@ MUST_BLOCK = [
     ("Bash", {"command": "sha256sum /home/lumen/.git-credentials.bak.pre-gitea-rotate"}),
     ("Bash", {"command": "head -1 /home/lumen/.netrc"}),
     ("Bash", {"command": "cat .fleet_pw"}),
+    # wq#2951: whole-file Read/Grep of the LiteLLM config burned the Langfuse secret.
+    ("Read", {"file_path": "/home/lumen/agent/litellm_config.yaml"}),
+    ("Read", {"file_path": "/home/lumen/agent/litellm_config.yaml.bak"}),
+    ("Grep", {"pattern": "LANGFUSE", "path": "/home/lumen/agent/litellm_config.yaml"}),
 ]
 
 MUST_ALLOW = [
@@ -238,6 +242,10 @@ MUST_ALLOW = [
     ("Bash", {"command": "git config --get user.email"}),
     # env as a runner (sets one var, emits nothing) is not a dump.
     ("Bash", {"command": "env PYTHONPATH=. python3 -m pytest -x"}),
+    # wq#2951: the config deny is Read/Grep only — a narrow Bash grep and the other
+    # files in that dir stay reachable.
+    ("Bash", {"command": "grep -n model_name /home/lumen/agent/litellm_config.yaml"}),
+    ("Grep", {"pattern": "x", "path": "/home/lumen/agent/router.py"}),
 ]
 
 
