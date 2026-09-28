@@ -47,19 +47,28 @@ import subprocess
 import sys
 
 KB_DIR = "/home/lumen/kb"
-ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|")
-_LIST = r"((?:\s*(?:[/,&]|and)\s*#?\d+)*)"  # "see rows 38/147/148", "rows 131, 142"
-CITE_RE = re.compile(r"(?:see|per|cf\.?)\s+rows?\s+#?(\d+)" + _LIST, re.I)
-SEE_RE = re.compile(r"see\s+rows?\s+#?(\d+)" + _LIST, re.I)
-_NUM_RE = re.compile(r"\d+")
+# wq#2891: trailing lowercase letter is a disambiguation suffix on a duplicated
+# row number (887 -> 887b, per reports/2857_policy_issue_log_row_disambiguation.md),
+# not a new numbering scheme -- keep it optional so a bare row is still matched.
+ROW_RE = re.compile(r"^\|\s*(\d+[a-z]?)\s*\|")
+_LIST = r"((?:\s*(?:[/,&]|and)\s*#?\d+[a-z]?)*)"  # "see rows 38/147/148", "rows 131, 142"
+CITE_RE = re.compile(r"(?:see|per|cf\.?)\s+rows?\s+#?(\d+[a-z]?)" + _LIST, re.I)
+SEE_RE = re.compile(r"see\s+rows?\s+#?(\d+[a-z]?)" + _LIST, re.I)
+_NUM_RE = re.compile(r"\d+[a-z]?")
+
+
+def _sort_key(num):
+    """Numeric-then-suffix ordering: '887' < '887b' < '888'."""
+    m = re.match(r"(\d+)([a-z]?)", num)
+    return (int(m.group(1)), m.group(2))
 
 
 def targets(pattern, text):
     """Every row number `pattern` cites in `text`, list forms expanded."""
     out = set()
     for head, rest in pattern.findall(text):
-        out.add(int(head))
-        out.update(int(n) for n in _NUM_RE.findall(rest))
+        out.add(head)
+        out.update(_NUM_RE.findall(rest))
     return out
 
 
@@ -75,12 +84,13 @@ def load(rev, path):
 
 
 def rows(lines):
-    """row number -> list of (1-based line number, full row text)."""
+    """row number (string, may carry a disambiguation suffix like '887b') ->
+    list of (1-based line number, full row text)."""
     found = {}
     for n, text in enumerate(lines, 1):
         m = ROW_RE.match(text)
         if m:
-            found.setdefault(int(m.group(1)), []).append((n, text))
+            found.setdefault(m.group(1), []).append((n, text))
     return found
 
 
@@ -92,16 +102,16 @@ def _findings(found):
     on, since a plain append never shifts an existing row's line number in
     this append-only log but the formatted text embeds 'L<n>' regardless.
     """
-    for num in sorted(found):
+    for num in sorted(found, key=_sort_key):
         if len(found[num]) > 1:
             at = ", ".join(f"L{ln}" for ln, _ in found[num])
             yield (
                 f"DUP:{num}:{len(found[num])}",
                 f"DUP      row {num} defined {len(found[num])}x ({at})",
             )
-    for num in sorted(found):
+    for num in sorted(found, key=_sort_key):
         for line_no, text in found[num]:
-            for target in sorted(targets(CITE_RE, text) - set(found)):
+            for target in sorted(targets(CITE_RE, text) - set(found), key=_sort_key):
                 yield (
                     f"DANGLING:{num}:{target}",
                     f"DANGLING row {num} (L{line_no}) -> 'see row {target}': no such row",
@@ -109,7 +119,7 @@ def _findings(found):
             # A back-reference is written the same way a citation is, so accept the
             # same shapes: "row 824", "Rows 824/825", "row #824" all count.
             back = re.compile(rf"rows?\s+#?{num}\b", re.I)
-            for target in sorted(targets(SEE_RE, text) & set(found)):
+            for target in sorted(targets(SEE_RE, text) & set(found), key=_sort_key):
                 if not any(back.search(t) for _, t in found[target]):
                     yield (
                         f"ONEWAY:{num}:{target}",

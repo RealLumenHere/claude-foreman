@@ -1,9 +1,9 @@
 {
-  "captured": "2026-09-28T04:35:54Z",
-  "captured_by": "wq#2877",
-  "kb_head_at_capture": "4892cf35affb6c575bc457bd06d926e8815b0f5a",
-  "note": "Pinned backlog of known pointer-integrity findings (wq#2817 filed these as a follow-up rather than renumbering the live log). This file only grows shorter via a deliberate rebaseline after a cleanup; alarm_new_findings.py alarms on anything found beyond this set. Re-pinned by wq#2877, which widened probe_pointers.py's citation regex: the ONEWAY:164:147, ONEWAY:164:148 and ONEWAY:884:109 keys are prose that was always in the log and that the old all-lowercase regex could not read, not new collisions. DUP:887:2 and DUP:889:2 ARE new colliding appends, landed by other lanes on 2026-09-28 while wq#2877 was in flight; they are folded in under wq#2857's policy (no silent swallow: they are triaged for the suffix-disambiguation pass reports/2857_policy_issue_log_row_disambiguation.md defers, and the follow-up ticket is cited in wq#2877's ruling).",
-  "count": 133,
+  "captured": "2026-09-28T04:59:07Z",
+  "captured_by": "wq#2891",
+  "kb_head_at_capture": "70ef27ea8eccdf66bdf707c77572168469ac9f14",
+  "note": "Re-pinned by wq#2891, which suffixed the later occurrence of both DUP:887:2 (row 887 -> 887b) and DUP:889:2 (row 889 -> 889b) per reports/2857_policy_issue_log_row_disambiguation.md, and widened ROW_RE/CITE_RE/SEE_RE/_NUM_RE to accept an optional trailing lowercase suffix so a suffixed row stays tracked instead of going invisible to DUP/DANGLING/ONE-WAY. Both keys dropped out (confirmed RESOLVED by alarm_new_findings.py before this recapture) rather than being folded in as backlog.",
+  "count": 131,
   "keys": [
     "DUP:109:2",
     "DUP:111:2",
@@ -132,8 +132,6 @@
     "DUP:882:2",
     "DUP:884:3",
     "DUP:885:2",
-    "DUP:887:2",
-    "DUP:889:2",
     "ONEWAY:164:147",
     "ONEWAY:164:148",
     "ONEWAY:164:38",

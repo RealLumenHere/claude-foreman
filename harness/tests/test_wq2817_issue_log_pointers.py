@@ -135,6 +135,25 @@ def test_a_capitalized_back_reference_still_counts_as_one():
     ]) == []
 
 
+# ---- wq#2891: the suffix wq#2857 mandated for disambiguating a duplicate row ----
+
+def test_a_suffixed_row_is_tracked_and_the_duplicate_it_resolves_is_gone():
+    """887 -> 887b (wq#2857 policy): the suffixed row must be a row in its own
+    right, not invisible, or DUP/DANGLING/ONE-WAY can't see it at all."""
+    out = findings([
+        "| 887 | first occurrence | cause | fix | OPEN |",
+        "| 887b | second occurrence, suffixed to disambiguate | cause | fix | OPEN |",
+    ])
+    assert out == [], out
+
+
+def test_a_suffixed_row_can_still_be_cited_and_can_still_dangle():
+    out = findings(["| 10 | symptom | cause | fix | see row 887b |"])
+    assert out == [
+        "DANGLING row 10 (L1) -> 'see row 887b': no such row"
+    ], out
+
+
 def test_capitalized_citation_is_seen_in_the_live_corpus_at_a_pinned_rev():
     """Acceptance probe from outside the fixture population (wq#2630).
 
@@ -151,9 +170,9 @@ def test_capitalized_citation_is_seen_in_the_live_corpus_at_a_pinned_rev():
     if blob.returncode != 0:
         pytest.skip("kb rev 05ab855 unavailable")
     found = probe.rows(blob.stdout.splitlines())
-    row_80 = [t for _, t in found[80]]
+    row_80 = [t for _, t in found["80"]]
     assert len(row_80) == 1 and "ee row 109" in row_80[0], row_80
-    assert probe.targets(probe.CITE_RE, row_80[0]) == {109}
+    assert probe.targets(probe.CITE_RE, row_80[0]) == {"109"}
     total = sum(len(probe.targets(probe.CITE_RE, t))
                 for v in found.values() for _, t in v)
     assert total >= 34, total  # shipped regex saw 3 of these
