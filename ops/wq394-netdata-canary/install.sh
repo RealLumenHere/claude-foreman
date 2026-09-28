@@ -7,6 +7,24 @@
 # fanout is a separate, not-yet-built follow-up, see reports/wq394_netdata_canary.md).
 set -euo pipefail
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, and it must come BEFORE
+# the positional-arg line below, which would otherwise swallow --verify as the
+# tailscale IP.
+if [ "${1:-}" = --verify ]; then
+  SRC="$(cd "$(dirname "$0")" && pwd)"
+  . "$SRC/../_verify.sh"
+  vfile      "$SRC/sampler.py" /usr/local/lib/wq394-netdata-canary/sampler.py
+  vfile      "$SRC/analyze.py" /usr/local/lib/wq394-netdata-canary/analyze.py
+  vunit_file "$SRC/wq394-netdata-sampler.service" \
+             /etc/systemd/system/wq394-netdata-sampler.service
+  vunit_file "$SRC/wq394-netdata-sampler.timer" \
+             /etc/systemd/system/wq394-netdata-sampler.timer
+  venabled   wq394-netdata-sampler.timer
+  vactive    wq394-netdata-sampler.timer
+  vactive    netdata.service
+  vdone
+fi
+
 TAILSCALE_IP="${1:?usage: install.sh <tailscale-ip-of-this-host>}"
 
 # 1. Install (native package via kickstart), agent-only.

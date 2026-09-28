@@ -12,6 +12,17 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 STAMP=$(date -u +%Y%m%d_%H%M%S)
 
 LIVE=/home/lumen/minerva/lumen_recall2.py
+
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step
+# -- in particular before the golden-set gate, which is far too heavy for a
+# liveness timer. lumen_recall2.py is edited in place by later search work, so
+# the contract is the penalty knob this ticket added, not byte-equality.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vcontains "$LIVE" 'MEMORY_V4_W_CONTRA'
+  vcontains "$LIVE" 'note_contradictions'
+  vdone
+fi
 GOLDEN=/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl
 GOLDEN_SHA=8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7
 FIXTURE=/home/lumen/minerva/eval/fixtures/note_contradictions_20260913.json

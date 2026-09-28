@@ -60,6 +60,43 @@ vcontains() {
   grep -qE -- "$re" "$f" || _vmiss "marker /$re/ missing in $f"
 }
 
+# --- other fleet nodes (wq#2985) --------------------------------------------
+# A bundle that installs onto Anubis, Bes, Sia or the MacPro6,1 group has no
+# local target at all, so vfile/vactive can only ever report it absent. wq#1732
+# read exactly that and filed three live bundles as PENDING. These reach the
+# node that actually runs the payload. Still read-only: every remote command is
+# a query, and an unreachable node is ERR (exit 2), never a MISS — "I could not
+# look" must not read as "it is not deployed".
+_VSSH="ssh -o BatchMode=yes -o ConnectTimeout=8"
+
+# vremote_up HOST — HOST answers at all. Call once before the per-file checks.
+vremote_up() {
+  local h="$1"
+  $_VSSH "$h" true 2>/dev/null || { echo "ERR unreachable: $h"; _V_ERR=1; return 1; }
+}
+
+# vremote_file HOST SRC DST — DST on HOST is byte-identical to local SRC.
+vremote_file() {
+  local h="$1" src="$2" dst="$3" want got
+  [ -r "$src" ] || { echo "ERR source unreadable: $src"; _V_ERR=1; return; }
+  want="$(sha256sum "$src" | cut -d' ' -f1)"
+  got="$($_VSSH "$h" "sha256sum '$dst' 2>/dev/null | cut -d' ' -f1" 2>/dev/null || true)"
+  case "$got" in
+    "$want") ;;
+    "")      _vmiss "$h: absent $dst" ;;
+    *)       _vmiss "$h: differs $dst (from $(basename "$src"))" ;;
+  esac
+}
+
+# vremote_unit HOST UNIT — UNIT is enabled and active on HOST.
+vremote_unit() {
+  local h="$1" u="$2" st
+  st="$($_VSSH "$h" "systemctl is-enabled '$u' 2>/dev/null" 2>/dev/null || true)"
+  case "$st" in enabled|static|alias) ;; *) _vmiss "$h: $u not enabled (${st:-unknown})";; esac
+  st="$($_VSSH "$h" "systemctl is-active '$u' 2>/dev/null" 2>/dev/null || true)"
+  case "$st" in active|activating) ;; *) _vmiss "$h: $u not active (${st:-unknown})";; esac
+}
+
 # vdone — print the verdict and exit with the contract code.
 vdone() {
   if [ "$_V_ERR" -ne 0 ]; then echo "VERIFY ERROR"; exit 2; fi

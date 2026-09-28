@@ -15,6 +15,21 @@ BUILD_DIR="/home/lumen/build/gitleaks"
 BIN_DEST="/home/lumen/bin/gitleaks"
 CRON_DEST="/home/lumen/bin/gitleaks-detect-cron"
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# The gitleaks binary itself is built from whatever tag was current at install
+# time, so it is checked for presence only -- there is no shipped copy to
+# byte-compare it against.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  [ -x "$BIN_DEST" ] || _vmiss "absent: $BIN_DEST"
+  vfile      "$SRC/gitleaks_detect.py"     "$CRON_DEST"
+  vunit_file "$SRC/gitleaks-detect.service" /etc/systemd/system/gitleaks-detect.service
+  vunit_file "$SRC/gitleaks-detect.timer"   /etc/systemd/system/gitleaks-detect.timer
+  venabled   gitleaks-detect.timer
+  vactive    gitleaks-detect.timer
+  vdone
+fi
+
 echo "== resolving latest gitleaks release tag =="
 GITLEAKS_TAG=$(sudo -u lumen git ls-remote --tags --refs --sort='-v:refname' \
   https://github.com/gitleaks/gitleaks.git 'v*' | head -1 | sed 's#.*refs/tags/##')

@@ -39,6 +39,31 @@ fi
 Helpers are in `ops/_verify.sh`. Reference bundles: `wq900-primary-tree-guard`
 (units + enabled + active) and `wq1658-cron-stamp-dropin` (binary + a patched file).
 
+### Bundles that do not install onto Lumen
+
+A bundle whose payload lands on another node (`wq2286-gitea-secret-scan` on Anubis,
+`wq2472-vlogs-fleet-rollout` on seven nodes) cannot be checked locally at all — a
+local-only handler reports it absent however live it is. Use `vremote_up HOST`,
+`vremote_file HOST SRC DST` and `vremote_unit HOST UNIT`, and gate each node on
+`vremote_up` so an unreachable node is **ERR (exit 2), never MISS**. "I could not
+look" must not read as "it is not deployed" (wq#2985).
+
+### Bundles that are retired or superseded
+
+Keep the bundle and give it a handler with the sense inverted: assert the
+replacement is live and the retired names stayed absent, then refuse to install
+behind a `WQ<n>_FORCE_*` env var. `wq858-trivy-weekly-scan`, `wq1299-phoenix-tracer`
+and `wq1396-minerva-proposal-promoter` are the worked examples. Without this, the
+next content-index audit reads the bundle as ABSENT and files it for deploy — which
+for wq1396 would have double-filed every CVE proposal.
+
+### ABSENT is not a disposition
+
+A content index (`ops-deploy-drift`) reports ABSENT for anything it did not find,
+including bundles that install outside its 13 roots, on another node, or under a
+renamed unit. Never deploy on an ABSENT verdict alone; pair it with a live signal
+the index cannot fake. `ops/DEPLOY_TRIAGE.md` is the register that rule produced.
+
 ## What consumes it
 
 - **Liveness probe** `ops_verified(<bundle>)` (harness/liveness.py). It runs the
@@ -56,5 +81,11 @@ Helpers are in `ops/_verify.sh`. Reference bundles: `wq900-primary-tree-guard`
 
 ## Backfill
 
-wq#1732 audits the existing bundles. For each bundle that should stay live, add a
-`--verify` handler, then confirm with `bash ops/<bundle>/install.sh --verify`.
+wq#1732 audited the existing bundles; wq#2985 triaged the 36 it left untracked and
+added the 23 missing handlers, so all 36 now answer `--verify`. Dispositions and
+the evidence behind each are in `ops/DEPLOY_TRIAGE.md`, generated from
+`ops/deploy_triage.py`. `python3 ops/deploy_triage.py --check` re-derives every
+live signal and exits 1 when one has rotted.
+
+For any bundle still without a handler: add one, then confirm with
+`bash ops/<bundle>/install.sh --verify`.

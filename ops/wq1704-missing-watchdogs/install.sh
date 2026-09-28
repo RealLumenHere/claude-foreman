@@ -8,6 +8,21 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 CHECKS=(daemons roundtrip restarts timers)
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step
+# -- in particular before the pytest gate below, which is not read-only enough
+# to run from a liveness timer.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile "$SRC/fleet_spof_watch.py" /home/lumen/bin/fleet-spof-watch
+  for c in "${CHECKS[@]}"; do
+    vunit_file "$SRC/lumen-spof-$c.service" "/etc/systemd/system/lumen-spof-$c.service"
+    vunit_file "$SRC/lumen-spof-$c.timer"   "/etc/systemd/system/lumen-spof-$c.timer"
+    venabled   "lumen-spof-$c.timer"
+    vactive    "lumen-spof-$c.timer"
+  done
+  vdone
+fi
+
 echo "== gate: the suite must pass before anything is installed =="
 sudo -u lumen python3 -m pytest "$SRC/tests" -q
 

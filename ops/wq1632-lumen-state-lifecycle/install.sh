@@ -6,6 +6,16 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REG=/home/lumen/minerva/verify/registry.yaml
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# registry.yaml is shared with wq#1613 and merged, never clobbered, so it is
+# checked for the lifecycle predicates this bundle seeds rather than byte-compared.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vfile     "$HERE/state_lifecycle.py" /home/lumen/bin/lumen-state-lifecycle
+  vcontains "$REG" 'lifecycle'
+  vdone
+fi
+
 install -m 0755 "$HERE/state_lifecycle.py" /home/lumen/bin/lumen-state-lifecycle
 
 # 1. registry: seed file first (never clobber an existing one — shared with wq#1613),

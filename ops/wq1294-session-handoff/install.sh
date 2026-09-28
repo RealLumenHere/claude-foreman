@@ -4,7 +4,17 @@
 # (this repo's convention for privileged unit installs — see ops/wq900-primary-tree-guard).
 set -euo pipefail
 
-SRC="$(dirname "$0")"
+SRC="$(cd "$(dirname "$0")" && pwd)"
+
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vunit_file "$SRC/session-handoff.service" /etc/systemd/system/session-handoff.service
+  vunit_file "$SRC/session-handoff.timer"   /etc/systemd/system/session-handoff.timer
+  venabled   session-handoff.timer
+  vactive    session-handoff.timer
+  vdone
+fi
 
 cp "$SRC/session-handoff.service" "$SRC/session-handoff.timer" /etc/systemd/system/
 systemctl daemon-reload

@@ -12,6 +12,20 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# The service runs harness/langfuse_lag_monitor.py straight from the foreman
+# primary tree, so there is no deploy copy to compare -- only the units are ours.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vunit_file "$SRC/langfuse-lag-monitor.service" \
+             /etc/systemd/system/langfuse-lag-monitor.service
+  vunit_file "$SRC/langfuse-lag-monitor.timer" \
+             /etc/systemd/system/langfuse-lag-monitor.timer
+  venabled   langfuse-lag-monitor.timer
+  vactive    langfuse-lag-monitor.timer
+  vdone
+fi
+
 echo "== systemd units =="
 install -m 644 "$SRC/langfuse-lag-monitor.service" /etc/systemd/system/langfuse-lag-monitor.service
 install -m 644 "$SRC/langfuse-lag-monitor.timer" /etc/systemd/system/langfuse-lag-monitor.timer

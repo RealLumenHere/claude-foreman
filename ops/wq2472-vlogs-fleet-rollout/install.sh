@@ -4,6 +4,27 @@
 # which already run their own forwarder units.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step
+# AND before the root check, so a liveness timer can run it as the lumen user.
+# This is a per-node bundle that refuses on Lumen and Bes, so a Lumen-local
+# check would report it absent however complete the rollout is -- that is
+# exactly what wq#1732 recorded. It asks the nodes it was rolled out to
+# (wq#2472 done notes). An unreachable node is ERR, never MISS.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  for h in anubis hathor isis maat sobek thoth khepri; do
+    vremote_up "$h" || continue
+    vremote_file "$h" "$HERE/forward-journal.py"     /opt/vlogs-forwarder/forward-journal.py
+    vremote_file "$h" "$HERE/vlogs-forwarder.service" \
+                      /etc/systemd/system/vlogs-forwarder.service
+    vremote_file "$h" "$HERE/vlogs-forwarder.timer" \
+                      /etc/systemd/system/vlogs-forwarder.timer
+    vremote_unit "$h" vlogs-forwarder.timer
+  done
+  vdone
+fi
+
 [ "$(id -u)" = 0 ] || { echo "must run as root"; exit 1; }
 command -v python3 >/dev/null || { echo "REFUSING: no python3"; exit 1; }
 getent group systemd-journal >/dev/null || { echo "REFUSING: no systemd-journal group"; exit 1; }

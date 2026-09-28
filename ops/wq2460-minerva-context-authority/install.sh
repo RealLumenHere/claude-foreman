@@ -12,6 +12,18 @@ MIRROR=/home/lumen/research/minerva-ref
 BK=/home/lumen/backups/wq2460
 F=minerva_verify.py
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# install.sh:20 already treats a 'wq#2460' marker in the live file as "installed";
+# this reuses that same signal rather than inventing a second, weaker one.
+# Byte-equality is wrong here: minerva_verify.py is edited in place by later
+# tickets, so an equal file would mean nothing had landed since.
+if [ "${1:-}" = --verify ]; then
+    . "$HERE/../_verify.sh"
+    vcontains "$LIVE/$F" 'wq#2460'
+    vcontains "$LIVE/$F" 'AUTHORITATIVE|STALE|UNVERIFIED'
+    vdone
+fi
+
 if [ "${1:-}" = "rollback" ]; then
     cp -v "$BK/$F.bak" "$LIVE/$F"
     echo "wq2460 ROLLBACK OK"; exit 0

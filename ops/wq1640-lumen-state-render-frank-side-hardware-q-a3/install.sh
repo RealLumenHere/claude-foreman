@@ -12,6 +12,19 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vfile      "$HERE/prefs_block.py" /home/lumen/minerva/prefs_block.py
+  vunit_file "$HERE/prefs-block-check.service" \
+             /etc/systemd/system/prefs-block-check.service
+  vunit_file "$HERE/prefs-block-check.timer" \
+             /etc/systemd/system/prefs-block-check.timer
+  venabled   prefs-block-check.timer
+  vactive    prefs-block-check.timer
+  vdone
+fi
+
 python3 -m pytest -q "$HERE/test_prefs_block.py"
 
 # 1. prefs_block.py module (idempotent overwrite; content-identical if the BUILD

@@ -47,6 +47,19 @@ FETCH_TARGET=/home/lumen/minerva/fetch_source.py
 SWEEP_TARGET=/home/lumen/minerva/sweep_empty_source_proposals.py
 QUARANTINE_TARGET=/home/lumen/minerva/quarantine_fabricated_notes.py
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# fetch_source.py is ours outright and byte-compares. The two library files are
+# edited in place by later tickets too, so they are checked by the marker this
+# ticket added, not by equality.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vfile     "$HERE/fetch_source.py" "$FETCH_TARGET"
+  vfile     "$HERE/sweep_empty_source_proposals.py" "$SWEEP_TARGET"
+  vfile     "$HERE/quarantine_fabricated_notes.py"  "$QUARANTINE_TARGET"
+  vcontains "$PROPOSAL_TARGET" 'fetch_source|source.grounding|empty url'
+  vdone
+fi
+
 cp "$PROPOSAL_TARGET" "$PROPOSAL_TARGET.bak.wq2027"
 cp "$VERIFY_TARGET" "$VERIFY_TARGET.bak.wq2027"
 cp "$PROPOSAL_SRC" "$PROPOSAL_TARGET"

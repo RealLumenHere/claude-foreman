@@ -13,6 +13,22 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# The library half went in live from the BUILD session; the two units did not,
+# which is the whole gap this handler exists to name.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vfile      "$HERE/projection_state.py" /home/lumen/minerva/projection_state.py
+  vfile      "$HERE/state-regen"         /home/lumen/bin/state-regen
+  vunit_file "$HERE/lumen-federate-reindex.path" \
+             /etc/systemd/system/lumen-federate-reindex.path
+  vunit_file "$HERE/lumen-federate-reindex.service" \
+             /etc/systemd/system/lumen-federate-reindex.service
+  venabled   lumen-federate-reindex.path
+  vactive    lumen-federate-reindex.path
+  vdone
+fi
+
 python3 -m pytest -q "$HERE/test_projection_state.py"
 
 # 1. projection_state.py module (idempotent overwrite; content-identical if step 1

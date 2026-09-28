@@ -8,8 +8,21 @@
 #    so the now-rarely-exercised path can't rot silently.
 set -euo pipefail
 
-SRC="$(dirname "$0")"
+SRC="$(cd "$(dirname "$0")" && pwd)"
 CONF=/home/lumen/etc/ntfy-send.conf
+
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# Two halves, and only one of them landed: the config edit is a marker check,
+# the canary is a unit pair.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vcontains  "$CONF" '^NTFY_OOB_PRIORITIES="?urgent"?$'
+  vunit_file "$SRC/ntfy-oob-canary.service" /etc/systemd/system/ntfy-oob-canary.service
+  vunit_file "$SRC/ntfy-oob-canary.timer"   /etc/systemd/system/ntfy-oob-canary.timer
+  venabled   ntfy-oob-canary.timer
+  vactive    ntfy-oob-canary.timer
+  vdone
+fi
 
 grep -q '^NTFY_OOB_PRIORITIES=' "$CONF" || { echo "install: NTFY_OOB_PRIORITIES not in $CONF" >&2; exit 1; }
 sed -i 's/^NTFY_OOB_PRIORITIES=.*/NTFY_OOB_PRIORITIES="urgent"/' "$CONF"

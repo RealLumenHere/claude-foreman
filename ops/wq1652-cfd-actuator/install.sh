@@ -6,6 +6,21 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile      "$SRC/cfd_actuator.py" /home/lumen/bin/cfd-actuator
+  vunit_file "$SRC/lumen-cfd-actuator.service" \
+             /etc/systemd/system/lumen-cfd-actuator.service
+  vunit_file "$SRC/lumen-cfd-actuator.timer" \
+             /etc/systemd/system/lumen-cfd-actuator.timer
+  venabled   lumen-cfd-actuator.timer
+  vactive    lumen-cfd-actuator.timer
+  [ -e /etc/sudoers.d/lumen-cfd-actuator ] \
+    || _vmiss "absent: /etc/sudoers.d/lumen-cfd-actuator"
+  vdone
+fi
+
 echo "== script -> /home/lumen/bin/cfd-actuator =="
 install -o lumen -g lumen -m 755 "$SRC/cfd_actuator.py" /home/lumen/bin/cfd-actuator
 install -d -o lumen -g lumen -m 755 /home/lumen/state /home/lumen/state/cfd-actuator

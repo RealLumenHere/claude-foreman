@@ -18,6 +18,24 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 BIN=/home/lumen/bin
 STATE_DIR=/home/lumen/agents/guard-meta-watchdog
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# The timer is deliberately enabled-but-not-started by install.sh (the first run
+# should be a dry-run an operator reads), so enablement is the live signal here,
+# not activity.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vfile      "$HERE/staged/guard_meta_watchdog.py"  "$BIN/guard_meta_watchdog.py"
+  # wq#1657 owns this list and wins when present, so ours is a fallback the
+  # installer skips. Presence is the contract; byte-equality would be a false MISS.
+  [ -e "$BIN/guard-finding-exit.list" ] || _vmiss "absent: $BIN/guard-finding-exit.list"
+  vunit_file "$HERE/staged/lumen-guard-meta-watchdog.service" \
+             /etc/systemd/system/lumen-guard-meta-watchdog.service
+  vunit_file "$HERE/staged/lumen-guard-meta-watchdog.timer" \
+             /etc/systemd/system/lumen-guard-meta-watchdog.timer
+  venabled   lumen-guard-meta-watchdog.timer
+  vdone
+fi
+
 [ "$(id -u)" = 0 ] || { echo "must run as root (unit install + enable)"; exit 1; }
 
 python3 "$HERE/test_guard_meta_watchdog.py" >/dev/null 2>&1 \

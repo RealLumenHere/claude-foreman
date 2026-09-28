@@ -31,6 +31,19 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 DEDUP_TARGET=/home/lumen/minerva/minerva_dedup.py
 PROPOSAL_TARGET=/home/lumen/minerva/minerva_proposal.py
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# These are in-place library edits, and later tickets (wq#2027 and onward) edit
+# the same two files, so a byte-compare would report MISS for every fix that
+# landed AFTER this one. The contract here is that this ticket's two behaviours
+# are still present.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vcontains "$DEDUP_TARGET"    'route_conflict'
+  vcontains "$DEDUP_TARGET"    'add|create|register|onboard|introduce'
+  vcontains "$PROPOSAL_TARGET" 'MacPro6,1'
+  vdone
+fi
+
 cp "$DEDUP_TARGET" "$DEDUP_TARGET.bak.wq2019"
 cp "$PROPOSAL_TARGET" "$PROPOSAL_TARGET.bak.wq2019"
 cp "$HERE/minerva_dedup.py" "$DEDUP_TARGET"

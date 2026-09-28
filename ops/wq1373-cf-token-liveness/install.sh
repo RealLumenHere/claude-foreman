@@ -7,6 +7,20 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/services/cf-token-liveness
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile      "$SRC/cf_token_liveness.py" "$DEST/cf_token_liveness.py"
+  vfile      "$SRC/tokens.json"          "$DEST/tokens.json"
+  vunit_file "$SRC/cf-token-liveness.service" \
+             /etc/systemd/system/cf-token-liveness.service
+  vunit_file "$SRC/cf-token-liveness.timer" \
+             /etc/systemd/system/cf-token-liveness.timer
+  venabled   cf-token-liveness.timer
+  vactive    cf-token-liveness.timer
+  vdone
+fi
+
 echo "== code -> $DEST =="
 install -d -o lumen -g lumen -m 755 "$DEST"
 for f in cf_token_liveness.py tokens.json; do

@@ -6,6 +6,21 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# The alert callback half lives in the gateway config, not in a file we ship,
+# so it is checked by marker.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vunit_file "$HERE/paid-spend-tripwire.service" \
+             /etc/systemd/system/paid-spend-tripwire.service
+  vunit_file "$HERE/paid-spend-tripwire.timer" \
+             /etc/systemd/system/paid-spend-tripwire.timer
+  venabled   paid-spend-tripwire.timer
+  vactive    paid-spend-tripwire.timer
+  vcontains  /home/lumen/agent/litellm_config.yaml 'paid_fallback_alert'
+  vdone
+fi
+
 sudo install -m 0644 "$HERE/paid-spend-tripwire.service" /etc/systemd/system/paid-spend-tripwire.service
 sudo install -m 0644 "$HERE/paid-spend-tripwire.timer" /etc/systemd/system/paid-spend-tripwire.timer
 sudo systemctl daemon-reload

@@ -11,6 +11,22 @@ AGENT_DIR=/home/lumen/agent
 ARCHIVE_DIR="$AGENT_DIR/staged-archive"
 DATE_TAG=$(date -u +%Y%m%d)
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# This bundle deploys no file: it quarantines the stale full-file .staged.*
+# copies of the live gateway config so none can be applied wholesale. The
+# contract is therefore the absence of those copies, not the presence of ours,
+# which is why the content index read it as ABSENT and wq#1732 filed it PENDING.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  if [ ! -d "$AGENT_DIR" ]; then
+    echo "ERR unreadable: $AGENT_DIR (run this on the gateway node)"; _V_ERR=1; vdone
+  fi
+  n="$(find "$AGENT_DIR" -maxdepth 1 -name '*.staged.*' 2>/dev/null | wc -l || true)"
+  [ "$n" = 0 ] || _vmiss "$n un-quarantined .staged.* config copy(ies) in $AGENT_DIR"
+  [ -d "$ARCHIVE_DIR" ] || _vmiss "absent: $ARCHIVE_DIR"
+  vdone
+fi
+
 sudo -u lumen mkdir -p "$ARCHIVE_DIR"
 
 for f in "$AGENT_DIR"/litellm_config.yaml.staged.*; do

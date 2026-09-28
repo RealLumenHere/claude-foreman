@@ -26,6 +26,31 @@ KB_GATUS_DIR="/home/lumen/kb/gatus"
 # instead; only config.yaml (no secret) stays under kb/gatus.
 SECRETS_ENV="/home/lumen/.secrets/gatus-litellm-master.env"
 
+# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
+# Two things this must NOT do, both of which would make it lie:
+#   * lumen-gatus.service is installed but deliberately not enabled (it would
+#     false-page before LITELLM_MASTER_KEY is set), so only the relay and the
+#     dead-man are checked for enablement.
+#   * $SECRETS_ENV is checked for existence only, never read -- it holds a key.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile      "$SRC/config.yaml"  "$KB_GATUS_DIR/config.yaml"
+  vfile      "$SRC/ntfy_relay.py" /home/lumen/bin/gatus-ntfy-relay
+  vfile      "$SRC/cron_stamp.sh" /home/lumen/bin/lumen-cron-stamp
+  vunit_file "$SRC/gatus.service" /etc/systemd/system/lumen-gatus.service
+  vunit_file "$SRC/gatus-ntfy-relay.service" \
+             /etc/systemd/system/lumen-gatus-ntfy-relay.service
+  vunit_file "$SRC/lumen-cron-deadman.service" \
+             /etc/systemd/system/lumen-cron-deadman.service
+  vunit_file "$SRC/lumen-cron-deadman.timer" \
+             /etc/systemd/system/lumen-cron-deadman.timer
+  venabled   lumen-gatus-ntfy-relay.service
+  venabled   lumen-cron-deadman.timer
+  vactive    lumen-cron-deadman.timer
+  [ -e "$SECRETS_ENV" ] || _vmiss "absent: $SECRETS_ENV"
+  vdone
+fi
+
 echo "== building gatus ${GATUS_VERSION} (go build, no docker) =="
 sudo -u lumen mkdir -p "$(dirname "$GATUS_BUILD_DIR")"
 if [ ! -d "$GATUS_BUILD_DIR/.git" ]; then
