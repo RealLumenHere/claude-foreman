@@ -360,6 +360,11 @@ SSH_ROWS = [
     # host-shaped but unknown: reported, never guessed
     ("ssh isis-2 for the second box", [], ["node 'isis-2' is not a lumen_state subject"]),
     ("ssh 100.99.99.99 for the probe", [], ["no single lumen_state subject for that ip"]),
+    # wq#2991 (wq#2914's real text): "ssh the node" is an authored instruction with a
+    # generic-determiner object — unresolvable by regex, never silently dropped as prose
+    ("live version today (ssh the node, or lumen_state current)", [],
+     ["names ssh as an instruction with no resolvable node"]),
+    ("ssh each node and confirm uptime", [], ["names ssh as an instruction with no resolvable node"]),
 ]
 
 
