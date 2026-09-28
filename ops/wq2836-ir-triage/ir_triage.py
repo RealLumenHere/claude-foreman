@@ -97,8 +97,11 @@ def collect_aq(db=None):
     for r in rows:
         if RANK.get(str(r['priority']).lower(), 0) < 4 and r['source'] not in SECURITY_SOURCES:
             continue
+        # mask() first, THEN the display budget (wq#2846/wq#2872): cutting the raw message
+        # at 200 can land inside a token, leaving a prefix plus a body run under masking.py's
+        # rule floor, which no later mask() call can recognize any more.
         text = (f"{r['title'] or r['key']} (x{r['count']}, first {r['first_ts']}, "
-                f"priority {r['priority']}) {(r['message'] or '')[:200]}")
+                f"priority {r['priority']}) {mask(r['message'])[:200]}")
         out.append(frag(f"aq#{r['id']}", f"aq:{r['source']}", r['last_ts'], text))
         if len(out) >= AQ_LIMIT:
             break
@@ -129,7 +132,7 @@ def collect_trivy(report_dir=None):
     except ValueError:
         return [frag(f'trivy:{stamp}', 'lumen-trivy-weekly', ts,
                      'weekly host rootfs CVE scan produced no parseable report, so host '
-                     f'CVE coverage is blind this week: {raw.strip()[:250]}')]
+                     f'CVE coverage is blind this week: {mask(raw.strip())[:250]}')]
     vulns = [v for res in doc.get('Results') or [] for v in res.get('Vulnerabilities') or []]
     sev = {s: [v for v in vulns if v.get('Severity') == s] for s in ('CRITICAL', 'HIGH')}
     if not (sev['CRITICAL'] or sev['HIGH']):

@@ -87,6 +87,34 @@ def test_fragment_text_is_masked(env):
     assert 'leaked' in text  # masked by harness/masking.py, not withheld by the fallback
 
 
+def test_long_alert_message_is_masked_before_the_display_cut(env):
+    """wq#2846/wq#2872: the collector's own display budget used to slice the raw message
+    BEFORE frag() masked it, so a token straddling the cut kept its prefix and a body run
+    too short for masking.py's {30,} floor -- live bytes into a persisted proposal. The db
+    is passed explicitly: this path must hold for a collector aimed off its module default."""
+    secret = 'gh' + 'p_' + 'Q' * 36
+    # The filler ends in a space on purpose: masking.py's rules need a word boundary in
+    # front of the prefix, so filler glued straight onto the token would make the secret
+    # unmaskable at full length too and confound the truncation being tested.
+    add_alert(env / 'alerts.db', 'guard-fired', 'g', 'tripwire',
+              message=f"{'x ' * 88}{secret} trailing context past the budget")
+    text = it.collect_aq(db=env / 'alerts.db')[0]['text']
+    assert secret[:20] not in text  # prefix + 16 body chars, 14 short of the floor
+    assert 'ghp_MASKED' in text
+
+
+def test_fatal_trivy_report_is_masked_before_the_display_cut(env):
+    """Same reversal in collect_trivy()'s unparseable-report branch (raw.strip()[:250]),
+    probed through an explicit report_dir rather than the module default."""
+    secret = 'sk-' + 'Q' * 40
+    # 240 chars of filler puts the 250-char cut 7 body chars in, under the {16,} sk-key
+    # floor; a cut landing past the floor would be masked even in the old order.
+    (env / 'trivy' / 'trivy_20260927_090312.json').write_text(f"{'y ' * 120}{secret} tail\n")
+    [f] = it.collect_trivy(report_dir=env / 'trivy')
+    assert secret[:10] not in f['text']
+    assert 'sk-MASKED' in f['text']
+
+
 def test_trivy_fatal_report_is_a_fragment(env):
     (env / 'trivy' / 'trivy_20260927_090312.json').write_text(TRIVY_FATAL)
     [f] = it.collect_trivy()
