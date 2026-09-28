@@ -74,21 +74,23 @@ _PRE_SK = r"sk-(?:[a-zA-Z]+-)*"
 _PRE_SLACK = r"xox[bpasr]-"
 _PRE_AWS = r"AKIA"
 
-# label -> the prefix alternatives it OWNS, for _foreign_prefixes below. The two
-# github patterns share a label, so a body run belonging to either one may still
-# cross the other's prefix (wq#2638's own-tail composing already covers that case).
-_PREFIXES_BY_LABEL = {
-    "github": (_PRE_GH, _PRE_GHPAT),
-    "cloudflare": (_PRE_CFUT,),
-    "sk-key": (_PRE_SK,),
-    "slack": (_PRE_SLACK,),
-    "aws": (_PRE_AWS,),
+# label -> the (prefix, charset, floor quantifier) shapes it OWNS, for
+# _foreign_prefixes below. The two github patterns share a label, so a body run
+# belonging to either one may still cross the other's prefix (wq#2638's own-tail
+# composing already covers that case).
+_SHAPES_BY_LABEL = {
+    "github": ((_PRE_GH, r"[A-Za-z0-9]", "{30,}"),
+               (_PRE_GHPAT, r"[A-Za-z0-9_]", "{20,}")),
+    "cloudflare": ((_PRE_CFUT, r"[A-Za-z0-9_.-]", "{6,}"),),
+    "sk-key": ((_PRE_SK, r"[A-Za-z0-9_-]", "{16,}"),),
+    "slack": ((_PRE_SLACK, r"[A-Za-z0-9-]", "{8,}"),),
+    "aws": ((_PRE_AWS, r"[0-9A-Z]", "{16}"),),
 }
 
 
 def _foreign_prefixes(label):
-    """Every fixed token prefix except `label`'s own, joined as a lookahead
-    alternation (wq#2720).
+    """Every OTHER rule's full matchable shape — prefix AND its own floor-quantified
+    body, not the bare prefix alone (wq#2848) — joined as a lookahead alternation.
 
     `_body()`'s charsets are wide enough to spell another rule's prefix — github's
     `[A-Za-z0-9]` covers `AKIA` and the letters of `xoxb-` whole, cloudflare's and
@@ -109,10 +111,33 @@ def _foreign_prefixes(label):
     Own-label prefixes are excluded on purpose: `cfut_<live>cfut_MASKED` (wq#2638)
     must still compose as ONE rule reading its own repeated prefix, not stop early
     and leave the live half unmasked.
+
+    wq#2848: the FULL shape, not the bare prefix, is what has to match here. A bare
+    `AKIA`/`cfut_` substring inside an otherwise-ordinary body is not a foreign
+    token — it is four or five characters of noise — and stopping for it anyway
+    truncates the run short of the RULE'S OWN floor, which fails the whole match and
+    leaves the entire real token (prefix included) in the clear: measured live,
+    a github-shaped body carrying a bare `AKIA`/`cfut` substring at offset 5, 12,
+    20 or 28 leaked 200/200 trials each (verify-pass wq#2803, /home/lumen/scratch/
+    repo-verify/mask_probe.py). Requiring the foreign rule's own prefix-plus-floor
+    to match at that position — exactly the shape its own PATTERNS entry would
+    need to alarm on it — means noise that merely LOOKS like a prefix is read
+    through as ordinary body text instead. `_body()` below pairs this with an
+    unconditional floor-length prefix run so the two fixes compose: even where a
+    foreign shape genuinely does overlap (cloudflare's charset is a superset of
+    plain alnum, so `cfut` followed by 6+ alnum chars always "matches" its shape),
+    the stop cannot fire before this rule's own floor is already satisfied.
     """
-    others = [p for name, prefixes in _PREFIXES_BY_LABEL.items() if name != label
-              for p in prefixes]
+    others = [r"(?:" + prefix + r")" + charset + quant
+              for name, shapes in _SHAPES_BY_LABEL.items() if name != label
+              for prefix, charset, quant in shapes]
     return r"(?:" + "|".join(others) + r")"
+
+
+# wq#2848: `quant` is always one of `{N,}` (open floor) or `{N}` (exact), never a
+# bounded range — parsed here rather than threaded through as separate arguments so
+# every _body() call site keeps reading like the rule's own PATTERNS entry.
+_QUANT_RE = re.compile(r"^\{(\d+)(,)?\}$")
 
 
 def _body(charset, quant, foreign=""):
@@ -147,13 +172,34 @@ def _body(charset, quant, foreign=""):
     written out for the reason test_the_mask_suite_does_not_arm_its_own_tripwire
     gives: a whole credential shape in tracked source files a rotation ticket.)
 
-    `foreign` (wq#2720) is another rule's prefix alternation, or "": stopped the
-    same way and for the same reason as MASK, case-sensitively regardless of the
-    surrounding rule's own flags, since a fixed prefix like `AKIA` or `xoxb-` is
-    never case-folded either.
+    `foreign` (wq#2720) is another rule's full-shape alternation (wq#2848), or "":
+    stopped the same way and for the same reason as MASK, case-sensitively regardless
+    of the surrounding rule's own flags, since a fixed prefix like `AKIA` or `xoxb-`
+    is never case-folded either.
+
+    wq#2848: a foreign stop truncating the run below THIS rule's own floor is the
+    other half of the regression the full-shape fix above does not cover on its
+    own — cloudflare's body charset is a superset of plain alnum, so a github body
+    carrying a bare `cfut` substring followed by 6+ ordinary characters genuinely
+    satisfies cloudflare's full shape too, and the stop would still fire early. So
+    the first `floor` characters of the run are matched WITHOUT the foreign check
+    at all (only the MASK guard, always active) — a foreign shape cannot even be
+    considered until this rule's own match already reaches its floor, at which
+    point stopping short never drops the whole token, only the part beyond the
+    floor a later pass can still pick up. `quant` with no comma (aws's exact `{16}`)
+    has no floor-relative "beyond" at all, so it skips the foreign guard entirely —
+    consistent with today's rules, since none of the other prefixes contain a
+    character in aws's own `[0-9A-Z]` body charset for it to ever matter.
     """
-    stop = MASK + (r"|" + foreign if foreign else "")
-    return r"(?:(?!(?-i:" + stop + r"))" + charset + r")" + quant
+    mask_guard = r"(?:(?!(?-i:" + MASK + r"))" + charset + r")"
+    if not foreign:
+        return mask_guard + quant
+    floor, open_ended = _QUANT_RE.match(quant).groups()
+    run = mask_guard + r"{" + floor + r"}"
+    if open_ended:
+        both_guard = r"(?:(?!(?-i:" + MASK + r"|" + foreign + r"))" + charset + r")"
+        run += both_guard + r"*"
+    return run
 
 
 # wq#2297 kv-secret label vocabulary, ported from read_dir_sweep.py:38-60 (wq#2115).
