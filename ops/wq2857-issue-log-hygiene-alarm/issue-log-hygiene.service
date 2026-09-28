@@ -1,0 +1,10 @@
+[Unit]
+Description=issue-log-hygiene — alarm on a new kb/ISSUE-LOG.md pointer finding vs the pinned baseline (wq#2857)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'set -o pipefail; /usr/bin/python3 /home/lumen/foreman/ops/wq2817-issue-log-pointer-integrity/alarm_new_findings.py | tee /home/lumen/logs/.issue-log-hygiene.laststate'
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+User=lumen
+Group=lumen

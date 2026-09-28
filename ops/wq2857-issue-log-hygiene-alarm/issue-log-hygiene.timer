@@ -1,0 +1,10 @@
+[Unit]
+Description=issue-log-hygiene — check kb/ISSUE-LOG.md for a new pointer-integrity finding every 30 minutes (wq#2857)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

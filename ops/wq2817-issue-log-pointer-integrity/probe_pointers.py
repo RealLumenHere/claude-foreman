@@ -53,27 +53,46 @@ def rows(lines):
     return found
 
 
-def check(found):
-    failures = []
+def _findings(found):
+    """Yield (key, text) for every failure check() would report.
+
+    key is check()'s finding stripped of line numbers, e.g. 'DUP:836:2' or
+    'ONEWAY:164:38' -- the stable identity wq#2857's baseline alarm diffs
+    on, since a plain append never shifts an existing row's line number in
+    this append-only log but the formatted text embeds 'L<n>' regardless.
+    """
     for num in sorted(found):
         if len(found[num]) > 1:
             at = ", ".join(f"L{ln}" for ln, _ in found[num])
-            failures.append(f"DUP      row {num} defined {len(found[num])}x ({at})")
+            yield (
+                f"DUP:{num}:{len(found[num])}",
+                f"DUP      row {num} defined {len(found[num])}x ({at})",
+            )
     for num in sorted(found):
         for line_no, text in found[num]:
             for target in {int(t) for t in SEE_RE.findall(text)}:
                 if target not in found:
-                    failures.append(
-                        f"DANGLING row {num} (L{line_no}) -> 'see row {target}': no such row"
+                    yield (
+                        f"DANGLING:{num}:{target}",
+                        f"DANGLING row {num} (L{line_no}) -> 'see row {target}': no such row",
                     )
                     continue
                 back = re.compile(rf"row {num}\b")
                 if not any(back.search(t) for _, t in found[target]):
-                    failures.append(
+                    yield (
+                        f"ONEWAY:{num}:{target}",
                         f"ONE-WAY  row {num} (L{line_no}) -> 'see row {target}': "
-                        f"row {target} never mentions row {num}"
+                        f"row {target} never mentions row {num}",
                     )
-    return failures
+
+
+def check(found):
+    return [text for _, text in _findings(found)]
+
+
+def finding_keys(found):
+    """wq#2857: finding identities only, for a baseline diff (see _findings)."""
+    return {key for key, _ in _findings(found)}
 
 
 def main():
