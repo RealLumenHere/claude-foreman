@@ -39,7 +39,6 @@ import spawn_loop_guard  # noqa: E402
 import self_heal  # noqa: E402
 import notify_sinks  # noqa: E402
 import psi_pressure  # noqa: E402
-import cpu_pressure  # noqa: E402
 import repo_sweep  # noqa: E402
 import harness_preflight  # noqa: E402
 import capability_lint  # noqa: E402
@@ -121,15 +120,7 @@ def denv(tmp_path, monkeypatch):
     # the real default honest.
     monkeypatch.setenv("FOREMAN_NEEDS_LINT_MODE", "warn")
     monkeypatch.delenv("FAKE_GOVERNOR_DENY", raising=False)
-    # wq#844 PSI check reads the real host's /proc/pressure/memory by default — point it
-    # at a nonexistent path so these tests aren't at the mercy of the box's live memory
-    # pressure (fail-open: psi_pressure._parse_psi() -> {} -> verdict "ok").
-    monkeypatch.setattr(psi_pressure, "PSI_PATH", str(tmp_path / "no-such-psi-file"))
-    # wq#2771: same fail-open trick for cpu_pressure (wq#2631/wq#2647) — it reads the
-    # real host's /proc/pressure/cpu by default with no override here, so any test that
-    # calls fd.run_pass() was at the mercy of the box's live CPU load and failed outright
-    # (stage=cpu_pressure halt before admission) whenever some_avg60 crossed 30%.
-    monkeypatch.setattr(cpu_pressure, "PSI_PATH", str(tmp_path / "no-such-cpu-psi-file"))
+    # Host PSI (memory + cpu) is pinned fail-open for every test in conftest.py (wq#2774).
 
     monkeypatch.setattr(fd, "CONFIG_PATH", str(cfg_path))
     monkeypatch.setattr(fd, "STATE_PATH", str(tmp_path / "dstate.json"))
