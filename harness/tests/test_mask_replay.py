@@ -2089,15 +2089,29 @@ WQ2913_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2913_va
 
 
 def test_wq2913_pins_are_their_hashes_and_read_silently():
+    """wq#2955: coverage of row 924's eight, not a count of one set.
+
+    A count was the wrong invariant twice over. wq#2936 hardcoded
+    `len(WQ2913_VALUES) == 8` against a 7-tuple fixture and shipped red; wq#2962 took
+    it down to 7 to match what was there, which made the test green by agreeing with
+    the omission — sha 41964b438456 is its own replay record, not a duplicate the kb
+    log had already covered, and `_assert_corpus_pinned`'s pop-check frees it and finds
+    it in no pin. Meanwhile a count says nothing at all about the thing that actually
+    broke: which set a value belongs to, which the rule table decides and keeps
+    changing.
+
+    So the pin is coverage. Row 924's eight hashes are a closed historical fact — what
+    wq#2913's live tripwire reported — and every one of them must still be pinned by
+    one of the two sets. A rule change may move a tuple between the sets, or add a
+    re-cut hash to WQ2913_VALUES (960404a added three), but it can never drop one of
+    the eight out of the file without failing here.
+    """
     text, scope = _load_fixture_module(WQ2913_FIXTURES)
-    values = scope["WQ2913_VALUES"]
-    # wq#2913: seven, which is what the fixture holds and what its own header says
-    # ("the seven values..."). wq#2936 wrote 8 here — the eighth value its ISSUE-LOG
-    # row counts is the one the kb log already accounted for, so it was deliberately
-    # not pinned, and this test has been red since it landed.
-    count = len(values)
-    assert count == 7
-    assert _unpinned(values, {"f": text}) == []
+    values, retired = scope["WQ2913_VALUES"], scope["WQ2913_RULE_RETIRED"]
+    pinned = {v[0] for v in values}
+    assert not pinned & {v[0] for v in retired}
+    assert scope["WQ2913_ROW_924"] <= pinned | {v[0] for v in retired}
+    assert _unpinned(values + retired, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
 
@@ -2113,15 +2127,46 @@ def test_a_failing_pin_names_hashes_not_values():
     assert masking.mask_text(repr(report))[1] == []
 
 
+def test_wq2913_retired_pins_are_not_cut_by_todays_table():
+    """wq#2955: the pins wq#2936 could not keep, kept as the reason it could not.
+
+    Two rule changes retired seven of row 924's eight between wq#2913's run and now:
+    05e65ce (wq#2931) taught url-auth to refuse a `<name>` placeholder body, and
+    960404a (wq#2960) let the rules take the union of their spans, so the three pytest
+    ids read as slack and the three probe outputs end in the mask literal and are
+    dropped. wq#2936 asked the replay for hashes the table had just stopped producing.
+
+    Asserting the refusal by HASH, not by an empty scan, is what makes the split
+    reversible and precise: the three pytest-id lines are still cut, just into a
+    different value (the re-cut `mask_replay.replay` calls `today_closed`), so `scan()
+    == []` would be false for them and true for the others for unrelated reasons.
+    Narrow either rule and the retired hash reappears here, naming the tuple to move
+    back into WQ2913_VALUES. The one tuple this is weak for is the url-auth pin, whose
+    rule anchors on an `@host` the pinned string stops short of, so scanning it alone
+    would fire on nothing whatever wq#2931 did; that one is carried by
+    test_wq2913_corpus_burned_nothing, which replays the corpus line in full.
+    """
+    _, scope = _load_fixture_module(WQ2913_FIXTURES)
+    for sha, _label, _prefix, whole in scope["WQ2913_RULE_RETIRED"]:
+        assert sha not in {h["value_sha256_12"] for h in masking.scan(whole)[1]}, sha
+
+
 @pytest.mark.skipif(not os.path.isdir(WQ2913_RUN),
                     reason="wq#2913's run dir is not on this host")
 def test_wq2913_corpus_burned_nothing():
     """wq#2936's verdict, pinned: pytest ids, probe output and a docstring placeholder
-    from wq#2913's own work, not credentials; nothing rotated."""
+    from wq#2913's own work, not credentials; nothing rotated. wq#2955: seven of the
+    eight are pinned by the test above instead — today's table does not cut them, so
+    the replay cannot reproduce them, and asserting their absence here is what keeps
+    the two sets from silently drifting back together.
+    """
     _, scope = _load_fixture_module(WQ2913_FIXTURES)
     fixture_shas = {v[0] for v in scope["WQ2913_VALUES"]}
-    _assert_corpus_pinned(2913, WQ2913_FIXTURES, scope["WQ2913_RECORDS"], fixture_shas,
-                          patterns=mask_replay.CURRENT_PATTERNS)
+    records, _ = _assert_corpus_pinned(2913, WQ2913_FIXTURES, scope["WQ2913_RECORDS"],
+                                       fixture_shas,
+                                       patterns=mask_replay.CURRENT_PATTERNS)
+    shas = {r["value_sha256_12"] for r in records}
+    assert not shas & {v[0] for v in scope["WQ2913_RULE_RETIRED"]}
 
 
 WQ2922_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2922")
