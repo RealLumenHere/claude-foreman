@@ -1,0 +1,38 @@
+[
+  {
+    "archetype": "standard-engineering",
+    "detail": "POLICY (Frank 2026-09-03; doc /home/lumen/instructions/playbooks/maintenance-window.md; state fleet.maintenance_window): dedicated window Mon 02:00-05:00 America/Los_Angeles for batched maintenance/upgrades/restarts, and REBOOTS only if boot-safety triple-checked. BUILD: (1) a way to mark a ticket needs-maintenance-window (a maint-window lane OR a needs-window tag) so the normal dispatcher SKIPS it during active hours. (2) a scheduler: a systemd timer with OnCalendar anchored to America/Los_Angeles (Mon 02:00) that MUST track DST, not a hardcoded UTC offset; it drains the maint-window queue, runs each op, and HARD-STOPS by 05:00 PT (never start an op that cannot finish and verify before 05:00). (3) REBOOT BOOT-SAFETY GATE, required before any reboot: (a) every needed service is enabled, not just active; (b) no pending config/unit change blocks boot (systemd-analyze verify clean, fstab and network sane); (c) node auto-returns: AC-restore on, or a confirmed remote power/console path exists. NEVER reboot a node whose auto-return is unknown (thoth and apis lessons). Any check fails: skip the reboot, alert, do not proceed. (4) fail-safe: an op that errors stops the batch and alerts via ntfy, never cascades; a stall or failure in-window SCREAMS (ties wq#1369). (5) route wq#1396 disruptive proposals (upgrades, reboots) to this queue instead of live lanes. RESEARCH FIRST: dispatcher skip logic, systemd OnCalendar timezone support, existing reboot/power tooling (plug-ctl, per-node AC-restore facts). Done: disruptive tickets defer to the window; scheduler runs them Mon 02:00-05:00 PT; reboot gate enforced and tested; hard-stop enforced; promoter routes here.\n[NO-PROBE: Frank must choose between an in-window slot and an explicit authorisation to edit the live dispatcher now; no deterministic check can decide that]",
+    "id": 1401,
+    "lane": "build",
+    "needs": "dir(/home/lumen/instructions/playbooks)",
+    "status": "done",
+    "title": "Maintenance-window scheduler: batch disruptive ops into Mon 02:00-05:00 PT with reboot-safety gate"
+  },
+  {
+    "archetype": "standard-engineering",
+    "detail": "EXECUTION MODEL (2026-09-27): this batch runs THROUGH the maintenance-window queue, not from a worker sandbox. Scheduler shipped (lumen-window, PR#160, timers live). Once wq#2914 lands the manifest, this ticket files the ops with `lumen-window queue add --window fleet ...` and the Mon 02:00 PT drain runs them. cloudflared and any other control-plane item is tagged control-plane: the drain reports it, Frank drives it (control-plane rule 3). Do not run any upgrade directly.\n\nSurfaced by the Minerva update feed (Cord chat 2026-09-03), all deferred here because they restart live services. Route each through the maintenance window (wq#1401) after boot/restart-safety check. PRIORITY ORDER by exposure: (1) cloudflared 2026.7.3->2026.8.3 \u2014 PUBLIC internet ingress for all lumennode.uk services (highest exposure, unlike tailnet-only Gitea); (2) LiteLLM two MEDIUM advisories \u2014 :4000 gateway every Minerva+fleet LLM call routes through, verify no config break on recreate; (3) Tailscale 1.102.2->1.102.3 \u2014 mesh every node, upgrade node-by-node NOT fleet-wide-at-once (a bad tailscale push can sever remote access \u2014 do lumen last); (4) Home Assistant (Bes) HIGH advisory \u2014 plug control; (5) netdata HIGH fleet-wide agents; (6) n8n HIGH automation; (7) esphome HIGH plug firmware; (8) Ollama 0.32.6->0.33.2 (Lumen/Isis/Hathor). Gitea already done (1.27.3, this session). For EACH: check current vs target live, backup/snapshot, upgrade, verify service healthy + a real call, rollback ready. Do NOT batch all in one night if it risks overrun \u2014 cloudflared+LiteLLM+Tailscale first window, rest next. RESEARCH FIRST per item (breaking changes). Per-item research and rollback/verify manifest: wq#2914 deliverable (foreman/research/wq1402_upgrade_batch_manifest.md).",
+    "id": 1402,
+    "lane": "build",
+    "needs": "",
+    "status": "open",
+    "title": "Maintenance-window upgrade batch: cloudflared/Tailscale/LiteLLM/HA/netdata/n8n/esphome/Ollama (Minerva feed 2026-09-03)"
+  },
+  {
+    "archetype": "standard-engineering",
+    "detail": "Open item punted from the Cord chat (2026-09-03): after the digest reorder (RUNNING VERSIONS first) + judge-window raise (14000->20000), confirm the grounded re-run actually cleared the judge guard. If judge is STILL low / 23 proposals still fail (wq#1386), the remaining gap is in minerva_verify.py claim extraction \u2014 the judge cannot entail against claims it never extracted from the digest. Investigate minerva_verify.py JUDGE/entail path + verification_log rows for the failing proposals (e.g. netdata) to see WHY citation/judge score is 0. Backups at /home/lumen/backups/wq-proposals/. Done = judge yield confirmed on the re-run, claim-extraction gap fixed if present, wq#1386 resolved or precisely re-scoped.",
+    "id": 1403,
+    "lane": "build",
+    "needs": "",
+    "status": "blocked",
+    "title": "Minerva judge: confirm grounded re-run cleared the guard; fix minerva_verify claim extraction (wq#1386: 23 proposals still fail judge)"
+  },
+  {
+    "archetype": "standard-engineering",
+    "detail": "Design: research/NIGHTLY_DISPATCH_RESILIENCE.md (PR#282, read whole doc first) \u00a71.3 + \u00a76.1. (a) harness/harness_preflight.py:247 spawns bare 'claude'; lumen-foreman-dispatch.service PATH lacks /home/lumen/.npm-global/bin so every wq#1372 auto-reprove fails FileNotFoundError (dispatcher.log auto_reproved count = 0 ever). Add CLAUDE_BIN = env FOREMAN_CLAUDE_BIN default /home/lumen/.npm-global/bin/claude (same default as fworker.py:2566) and use it at :253; ALSO add .npm-global/bin to the unit Environment=PATH. (b) harness/fworker.py:532 calls ntfy-send with --title/--priority; bin/ntfy-send:12-16 only parses -T/-p, so 162 LAUNCH_FAILURE alerts/48h went out at default priority with the title in the body. Use -T/-p. (c) test: grep -rn '\"claude\"' harness dispatcher orchestrator returns no bare spawn; test that run_live_proof under PATH=/usr/bin:/bin resolves the binary. Done: dispatcher.log shows auto_reproved from a timer-driven pass; lumen-fleet shows a LAUNCH_FAILURE with a real title and priority high.",
+    "id": 1407,
+    "lane": "build",
+    "needs": "",
+    "status": "done",
+    "title": "Fix preflight claude spawn under systemd PATH; fworker ntfy flags"
+  }
+]

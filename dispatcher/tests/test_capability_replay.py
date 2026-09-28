@@ -5,10 +5,15 @@ column with zero spawns". All four are `blocked`, so a real dispatcher pass refu
 at `not_open` before stage 3.7 is reached — the replay harness asks stage 3.7 directly.
 
 Two layers here. The synthetic rows carry the same shape as the real four and pin the
-predicted column deterministically (no queue, no fleet). The live-queue test is the
-drill itself, skipped when the queue is absent so this file still runs anywhere.
+predicted column deterministically (no queue, no fleet). The drill itself replays a
+pinned snapshot of the real four rows (fixtures/four_stuck_tickets.json, wq#2921 — the
+live queue.db is mutable and the tickets' text drifts, which used to fail this test
+whenever it did); a separate, non-gating smoke test reads the live queue.db directly and
+xfails instead of gating when drift changes the verdict.
 """
+import json
 import os
+import sqlite3
 import sys
 
 import pytest
@@ -22,6 +27,10 @@ import capability_lint  # noqa: E402
 import capability_replay  # noqa: E402
 
 LIVE_DB = "/home/lumen/agents/work-queue/queue.db"
+# wq#2921: the four-ticket drill replays a pinned snapshot (fixtures/four_stuck_tickets.json,
+# see fixtures/build_four_tickets_fixture.py to refresh it), not this mutable live file — the
+# live db is only read by the separate, non-gating smoke test below.
+FOUR_TICKETS_FIXTURE = os.path.join(TESTS_DIR, "fixtures", "four_stuck_tickets.json")
 ROSTER = capability_lint.Roster(names=["lumen", "isis", "thor"], ips={})
 
 
@@ -179,14 +188,49 @@ def test_the_replay_never_writes(monkeypatch):
                                  repo="/home/lumen/foreman", roster=ROSTER)
 
 
+def _fixture_db(tmp_path, fixture_path=FOUR_TICKETS_FIXTURE):
+    """A scratch queue.db seeded from a pinned fixture, schema-matched to what
+    capability_replay.load_tickets reads (id, lane, status, title, detail, needs, archetype)."""
+    rows = json.load(open(fixture_path))
+    db = tmp_path / "four_tickets.db"
+    con = sqlite3.connect(db)
+    con.execute("create table tasks (id integer, lane text, status text, title text, "
+                "detail text, needs text, archetype text)")
+    for r in rows:
+        con.execute("insert into tasks (id, lane, status, title, detail, needs, archetype) "
+                    "values (:id, :lane, :status, :title, :detail, :needs, :archetype)", r)
+    con.commit()
+    con.close()
+    return str(db)
+
+
+def test_replay_of_the_four_stuck_tickets_fixture(tmp_path):
+    """The drill on a pinned snapshot of the real rows (wq#2921: the live db drifts out from
+    under this test — ticket 1402 was rewritten 2026-09-03 and no longer cites a path outside
+    allow.read_dirs, so the assertion below moved off 1402 specifically and onto "one of the
+    four" — the invariant the drill actually exercises: under wq#1441's explicit allow list, a
+    cited path that is not a swept read root gets an advisory (wq#2131), never a
+    needs_unresolved hold. Nothing is spawned and nothing is written — this module has no code
+    path that can do either. Re-run fixtures/build_four_tickets_fixture.py to refresh the
+    snapshot if the four tickets' real text is deliberately updated."""
+    tickets = capability_replay.load_tickets([1401, 1402, 1403, 1407], _fixture_db(tmp_path))
+    assert {t["id"] for t in tickets} == {1401, 1402, 1403, 1407}
+    got = {t["id"]: capability_replay.replay(t, sweep=fresh_sweep()) for t in tickets}
+    for tid in (1401, 1402, 1403, 1407):
+        assert got[tid]["column"] in ("dispatchable", "cited_path_unreachable"), (tid, got[tid])
+        assert got[tid]["unresolved"] == [] and got[tid]["lint_clear"], (tid, got[tid])
+    assert any("allow.read_dirs" in a for t in got.values() for a in t["advisory"]), got
+
+
 @pytest.mark.skipif(not os.path.exists(LIVE_DB), reason="no live queue on this host")
-def test_live_replay_of_the_four_stuck_tickets():
-    """The drill on the real rows. Under wq#1441's explicit allow list 1402/1403 get no
-    auto grant for the dirs they cite (not swept read roots); wq#2131 makes that an
-    advisory instead of a needs_unresolved hold, so what the replay may say about them
-    is `cited_path_unreachable` (preflight, the worker's real reach) or `dispatchable`
-    — never `needs_unresolved` for an advisory-only ticket. Nothing is spawned and
-    nothing is written — this module has no code path that can do either."""
+@pytest.mark.xfail(reason="wq#2921: live smoke only — the four tickets' real text can drift "
+                          "(e.g. 1402 rewritten 2026-09-03) without that being a bug; this "
+                          "flags drift for a human, it must never gate the build",
+                   strict=False)
+def test_live_smoke_of_the_four_stuck_tickets():
+    """Non-gating: same drill, read straight off the live queue.db. An xfail here is a nudge
+    to refresh fixtures/four_stuck_tickets.json (fixtures/build_four_tickets_fixture.py), not
+    a build break — the deterministic drill above is what gates."""
     tickets = capability_replay.load_tickets([1401, 1402, 1403, 1407], LIVE_DB)
     assert {t["id"] for t in tickets} == {1401, 1402, 1403, 1407}
     got = {t["id"]: capability_replay.replay(t, sweep=fresh_sweep()) for t in tickets}
