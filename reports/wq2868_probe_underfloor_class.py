@@ -89,7 +89,14 @@ def section_a():
 
 def section_b():
     """The same under-floor class through the MASK-literal guard wq#2848 left inside
-    the floor.  A real body holding the literal below the floor: does the rule fire?"""
+    the floor.  A real body holding the literal below the floor: does the rule fire?
+
+    wq#2922: the fix is a fail-LOUD backstop, not a mask — a value this short may be
+    mostly the literal itself, and masking it risks re-swallowing `<prefix>MASKED`
+    and reviving the wq#2638 leak (see masking._orphan_matches). So the bar is not
+    "no fill char survives" (it always will: this class is never redacted, by
+    design) but "a hit fires" — SILENT is the only failure this section still
+    counts, exactly as wq#2868's report names it."""
     fails, total = [], 0
     for label, pre, cs, floor, open_floor, fill in RULES:
         if not all(c in cs for c in masking.MASK):
@@ -98,11 +105,9 @@ def section_b():
         for off in range(0, floor):
             body = fill * off + masking.MASK + fill * (blen - len(masking.MASK) - off)
             total += 1
-            # The injected literal is in the input, so "did MASK appear" says nothing
-            # here; a surviving fill char is the only usable signal.
             masked, hits = masking.mask_text("x " + pre + body + " y")
-            if fill in masked:
-                fails.append(f"{label}/off{off}/hits={hits or 'SILENT'}")
+            if not hits:
+                fails.append(f"{label}/off{off}/SILENT")
     return "B under-floor via MASK guard (leak = fail)", total, fails
 
 

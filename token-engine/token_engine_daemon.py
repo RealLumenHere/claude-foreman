@@ -256,6 +256,23 @@ MASK_PATTERNS = [
     ("kv_secret", _KV_SECRET, r"\1" + MASK),
 ]
 
+# masking._ORPHAN_SHAPES, mirrored (wq#2922): the six fixed-prefix rules above,
+# named again (rule name, prefix, body charset, floor) so the orphan-prefix
+# backstop's floor and charset cannot drift from MASK_PATTERNS.
+_ORPHAN_SHAPES = [
+    ("github_token", _PRE_GH, r"[A-Za-z0-9]", 30),
+    ("github_token", _PRE_GHPAT, r"[A-Za-z0-9_]", 20),
+    ("cloudflare_token", _PRE_CFUT, r"[A-Za-z0-9_.-]", 6),
+    ("sk_key", _PRE_SK, r"[A-Za-z0-9_-]", 16),
+    ("slack_token", _PRE_SLACK, r"[A-Za-z0-9-]", 8),
+    ("aws_key_id", _PRE_AWS, r"[0-9A-Z]", 16),
+]
+_ORPHAN_PATTERNS = [
+    (name, re.compile(_B + r"(" + prefix + r")(" + _body(charset, "*") + r")"),
+     re.compile(_body(charset, "*")), floor)
+    for name, prefix, charset, floor in _ORPHAN_SHAPES
+]
+
 # masking._OWN_TAIL / _PRE_ANY / _PRE_LONGEST, mirrored (wq#2913).
 _OWN_TAIL = re.compile(r"(?:" + "|".join(
     (_PRE_GH, _PRE_GHPAT, _PRE_CFUT, _PRE_SK, _PRE_SLACK, _PRE_AWS)) + r")*" + MASK)
@@ -279,6 +296,32 @@ RESPONSE_KEYS = {"ok", "verb", "ticket", "rule", "reason", "result", "elapsed_s"
 
 def _own_output(m):
     return bool(_OWN_TAIL.fullmatch(m.group(0)[len(m.group(1)):]))
+
+
+def _orphan_matches(text):
+    """masking._orphan_matches, mirrored (wq#2922): a boundary-qualified known
+    prefix whose guarded body run falls short of its rule's own floor because the
+    MASK literal sits in the middle of it. Detect-only, same as the rest of this
+    copy — never masks (a value this short may be mostly the mask literal itself,
+    and rewriting it risks re-swallowing `<prefix>MASK` in mask_rewrite()), only
+    alarms, and only once the two real halves either side of the literal, put back
+    together, would have reached the floor — see masking._orphan_matches for why a
+    bare "does the charset continue" check is wrong (ordinary prose resuming right
+    behind an already-masked value must not re-arm this).
+    """
+    found = []
+    for name, rx, guarded_star, floor in _ORPHAN_PATTERNS:
+        for m in rx.finditer(text):
+            before = m.group(2)
+            if len(before) >= floor:
+                continue
+            tail = _OWN_TAIL.match(text, m.end())
+            if not tail:
+                continue
+            after = guarded_star.match(text, tail.end()).group(0)
+            if len(before) + len(after) >= floor:
+                found.append(name)
+    return found
 
 
 def _merged(spans):
@@ -386,6 +429,12 @@ def mask_hits(text):
     # resolves itself by seeing the literal on a later pass.
     names = []
     for name, _lo, _hi in mask_read(text):
+        if name not in names:
+            names.append(name)
+    # wq#2922: a fixed-prefix rule's floored body fails to match AT ALL (not just
+    # short) when the MASK literal sits inside it below the floor, so mask_read()
+    # above never sees it — this is the backstop that still fails the verb on it.
+    for name in _orphan_matches(text):
         if name not in names:
             names.append(name)
     return names
