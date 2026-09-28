@@ -6,16 +6,18 @@ notes. Full corpus scan and the full masking suite both go green at that commit.
 
 ## What wq#2822 shipped (PR#1164, merged `56a720da03` / on-`main` as `53d4efa`)
 
-Three one-line edits, all defusing a whole `"sk-lumen-litellm-master"` credential
-shape (the confirmed-dead May-2026 LiteLLM master-key placeholder) that had landed as
-a literal string in three files, arming `test_the_mask_suite_does_not_arm_its_own_tripwire`
-(wq#2749's whole-tree tripwire-corpus walk, `54129aa`/`7456b22`) on mere read:
+Three one-line edits, all defusing a whole `"sk-" + "lumen-litellm-master"`
+(concatenated) credential shape (the confirmed-dead May-2026 LiteLLM master-key
+placeholder) that had landed as a literal string in three files, arming
+`test_the_mask_suite_does_not_arm_its_own_tripwire` (wq#2749's whole-tree
+tripwire-corpus walk, `54129aa`/`7456b22`) on mere read:
 
 - `judge/build_eval_growth.py:440` — the `redteam-10` case's embedded curl body:
-  `"sk-lumen-litellm-master"` → `"key-lumen-litellm-master"`.
+  `"sk-" + "lumen-litellm-master"` (concatenated) → `"key-lumen-litellm-master"`.
 - `judge/judge_eval_set.jsonl` — same replacement in the already-generated eval row.
 - `reports/2756_rotation_triage.md:19` — prose citation split at the prefix boundary:
-  `` `"sk-lumen-litellm-master"` `` → `` `"sk-"` + `"lumen-litellm-master"` `` (concatenated).
+  `` `"sk-" + "lumen-litellm-master"` `` (concatenated, was previously one whole
+  literal) → `` `"sk-"` + `"lumen-litellm-master"` `` (concatenated).
 
 ## Adversarial checks run
 
