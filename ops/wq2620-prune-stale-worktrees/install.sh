@@ -6,6 +6,15 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vunit_file "$HERE/lumen-prune-worktrees.service" /etc/systemd/system/lumen-prune-worktrees.service
+  vunit_file "$HERE/lumen-prune-worktrees.timer" /etc/systemd/system/lumen-prune-worktrees.timer
+  venabled lumen-prune-worktrees.timer
+  vactive lumen-prune-worktrees.timer
+  vdone
+fi
+
 # Dry run first, so the install lands against a current picture.
 python3 "$HERE/prune_worktrees.py" || true
 echo
