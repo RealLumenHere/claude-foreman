@@ -101,8 +101,16 @@ def _cases():
             for off in sorted(o for o in offs if 0 <= o <= hi):
                 body = fill * off + f + fill * (hi - off)
                 out.append(pytest.param(label, pre, body, fill, f, off,
-                                        id=f"{idlabel}-{f}-off{off}"))
+                                        id=f"{idlabel}+{f}+off{off}"))
     return out
+
+
+def test_case_ids_read_silently():
+    """wq#2936: a `-`-joined id (`sk-key-letter-` + a foreign prefix + `-off3-masking`)
+    is itself credential-shaped, so every FAILED line that printed one paged the tripwire.
+    `+` is in no rule's body charset, so it ends every run at the part boundary."""
+    ids = "\n".join(f"[{p.id}-{name}]" for p in _cases() for name, _ in IMPLS)
+    assert masking.mask_text(ids)[1] == []
 
 
 def _sed(text):

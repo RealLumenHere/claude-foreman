@@ -2068,3 +2068,29 @@ def test_wq2875_pins_are_their_hashes_and_read_silently():
         assert masking.value_sha12(value) == sha
         assert mask_replay.account(value, {"f": text})
     assert masking.mask_text(text)[1] == []
+
+
+WQ2913_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2913")
+WQ2913_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2913_values.py")
+
+
+def test_wq2913_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ2913_FIXTURES)
+    values = scope["WQ2913_VALUES"]
+    assert len(values) == 8
+    for sha, _label, prefix, whole in values:
+        assert whole.startswith(prefix)
+        assert masking.value_sha12(whole[len(prefix):]) == sha
+        assert mask_replay.account(whole[len(prefix):], {"f": text}, prefix), sha
+    assert masking.mask_text(text)[1] == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2913_RUN),
+                    reason="wq#2913's run dir is not on this host")
+def test_wq2913_corpus_burned_nothing():
+    """wq#2936's verdict, pinned: pytest ids, probe output and a docstring placeholder
+    from wq#2913's own work, not credentials; nothing rotated."""
+    _, scope = _load_fixture_module(WQ2913_FIXTURES)
+    fixture_shas = {v[0] for v in scope["WQ2913_VALUES"]}
+    _assert_corpus_pinned(2913, WQ2913_FIXTURES, scope["WQ2913_RECORDS"], fixture_shas,
+                          patterns=mask_replay.CURRENT_PATTERNS)
