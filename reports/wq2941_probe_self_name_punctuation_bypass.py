@@ -24,7 +24,10 @@ import masking  # noqa: E402
 
 # 32 chars, no recognized fixed-prefix shape (not sk-/ghp_/AKIA/...) so only
 # the kv-secret rule is in play -- isolates the self-name guard specifically.
-REAL_SECRET = "Zx8qLp3vWn7tRk2mYb9cQe4sHj6uFd1a"
+# wq#2972: split right at the `="` boundary the kv-secret rule reads (same
+# technique as KV_LINE in the test corpus) so this fixture's own name+value
+# shape doesn't arm the tripwire it demonstrates a bypass of.
+REAL_SECRET = "" + "Zx8qLp3vWn7tRk2mYb9cQe4sHj6uFd1a"
 
 CASES = [
     "API_KEY: API_KEY," + REAL_SECRET,
