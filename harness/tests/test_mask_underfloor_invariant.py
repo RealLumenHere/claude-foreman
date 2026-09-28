@@ -40,6 +40,7 @@ HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "reports"))
 import wq2868_probe_underfloor_class as probe  # noqa: E402
 import wq3018_probe_orphan_backstop_on_main as onmain  # noqa: E402
+import wq3051_probe_orphan_prefix_reopen as reopen  # noqa: E402
 # The probe puts harness/ on the path for its own `import masking`; reuse it.
 import masking  # noqa: E402
 
@@ -95,6 +96,46 @@ def test_the_daemon_mirror_closes_the_same_under_floor_class():
     just go unrecorded, it hands an unmasked broker result back."""
     name, total, fails = _run(onmain.mirrored)
     assert fails == [], f"{name}: {len(fails)}/{total} SILENT: {fails[:6]}"
+
+
+def test_an_already_masked_placeholder_glued_to_a_second_prefix_stays_quiet():
+    """wq#3051, contradicting wq#3018: the sweep above is 14 files that happen to hold
+    no zero-gap `<prefix>MASKED<prefix>` join, which is a fact about those 14 files and
+    not a property of the design (wq#2630 by name). This corpus is built from outside
+    them, one case per rule per prefix its own charset can run through, and every case
+    asserts mask_text() returned its input byte-for-byte first — so a hit is
+    attributable to the backstop and to nothing in PATTERNS."""
+    name, total, fails = _run(reopen.reopen)
+    assert fails == [], f"{name}: {len(fails)}/{total} alarmed: {fails[:6]}"
+
+
+def test_the_daemon_mirror_is_also_quiet_on_a_second_prefix():
+    """The copy that matters: read_worktree_file() denies a PR post on any hit."""
+    name, total, fails = _run(reopen.daemon_reopen)
+    assert fails == [], f"{name}: {len(fails)}/{total} alarmed: {fails[:6]}"
+
+
+def test_quieting_the_second_prefix_did_not_quiet_the_under_floor_class():
+    """The other side of the wq#3051 trade, in both copies: a tightening that buys
+    section 1 by going silent on the 96 real leaks has re-opened wq#2922."""
+    for section in (reopen.underfloor, reopen.daemon_underfloor):
+        name, total, fails = _run(section)
+        assert fails == [], f"{name}: {len(fails)}/{total} SILENT: {fails[:6]}"
+
+
+def test_the_second_link_of_the_chain_is_still_read_in_its_own_right():
+    """Declining to count the trailing prefix is only sound because `_B`'s _AFTER_MASK
+    lookbehind admits a prefix sitting directly behind the literal, so that mention is
+    already a match of its own. This is the case that falsifies that if it is wrong."""
+    name, total, fails = _run(reopen.second_link)
+    assert fails == [], f"{name}: {len(fails)}/{total}: {fails[:6]}"
+
+
+def test_the_backstop_is_quiet_outside_the_files_wq3018_swept():
+    """Rev-pinned committed text wq#3018's own quiet() never read — including wq#3037's
+    report, whose subject is the adjacency this rule was mis-reading."""
+    name, total, fails = _run(reopen.outside)
+    assert fails == [], f"{name}: {len(fails)}/{total} files alarmed: {fails[:6]}"
 
 
 def test_the_orphan_table_has_not_drifted_from_the_rules_it_backs():

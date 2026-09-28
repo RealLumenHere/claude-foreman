@@ -308,6 +308,11 @@ def _orphan_matches(text):
     together, would have reached the floor — see masking._orphan_matches for why a
     bare "does the charset continue" check is wrong (ordinary prose resuming right
     behind an already-masked value must not re-arm this).
+
+    wq#3051: and why the trailing run must not RE-OPEN on a known prefix. This copy is
+    the one that matters for that — read_worktree_file() turns a hit here into
+    Deny("body_mask_tripwire", ...) on a worker's own PR title or body, and the shape
+    it was over-firing on is a PR body discussing masked output.
     """
     found = []
     for name, rx, guarded_star, floor in _ORPHAN_PATTERNS:
@@ -318,6 +323,8 @@ def _orphan_matches(text):
             tail = _OWN_TAIL.match(text, m.end())
             if not tail:
                 continue
+            if _PRE_ANY.match(text, tail.end()):
+                continue  # a second mention opens there — not this body resuming
             after = guarded_star.match(text, tail.end()).group(0)
             if len(before) + len(after) >= floor:
                 found.append(name)

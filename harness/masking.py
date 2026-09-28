@@ -694,9 +694,35 @@ def _orphan_matches(text):
     guard to keep quiet. The probe this backstop closes (section B) always leaves at
     least 9 real characters on one side of the injected literal or the other, so the
     combined-floor test catches every one of its 96 cases while leaving a lone
-    trailing period, or a legitimate `<prefix>MASKED<prefix>MASKED` chain (whose
-    second half is either short enough itself or is the START of another rule's own
-    prefix, which this rule's charset cannot run through), alone.
+    trailing period alone.
+
+    wq#3037/wq#3051: those two tests were not enough, and this docstring used to be the
+    reason nobody looked — it claimed a `<prefix>MASKED<prefix>` chain was already safe
+    because "this rule's charset cannot run through" the second prefix. That is false
+    for five of the six rows: a prefix's own characters are a subset of its own body
+    charset by construction, and only github's `[A-Za-z0-9]` excludes anything (the `_`
+    in `ghp_`). So the trailing run walked straight into the second mention and lent its
+    length to the first, and `<prefix><under-floor fill>MASKED<prefix>` alarmed with no
+    credential in it anywhere — a table cell, two redacted samples concatenated with no
+    delimiter, a report about this very rule. That is not free: the daemon mirror of
+    this function is what `token_engine_daemon.read_worktree_file` reads a PR title and
+    body through, and one hit there is `Deny("body_mask_tripwire", ...)`, so a worker
+    writing about masked-output adjacency could be refused its own PR.
+
+    Hence the third test: the trailing run must not RE-OPEN. A known fixed prefix
+    starting exactly where our own output ended is a new mention, not this body
+    resuming, and its characters are not this match's to count. The POSITION is the
+    whole argument. A prefix sitting there is preceded by the mask literal, which is
+    the one place `_B`'s `_AFTER_MASK` lookbehind admits a prefix glued to what is in
+    front of it — so that second mention is already read as a match in its own right,
+    by this loop and by PATTERNS, and counting it here counts it twice. A prefix
+    appearing LATER inside the trailing run is glued to body characters instead, `_B`
+    refuses it, and nothing else will read it, so the run keeps it: that is the wq#2702
+    glue `read()`'s phase 2 exists for, and it stays body here. What the test gives up
+    is a live body that contains `MASKED` and then, immediately behind it, one of the
+    six prefixes, with too little left after that prefix to reach its own floor —
+    rarer than the 1-in-62**6 the literal already costs, and paid to close a false
+    Deny that is reachable on the landing path today.
     """
     found = []
     for label, rx, guarded_star, floor in _ORPHAN_PATTERNS:
@@ -707,6 +733,8 @@ def _orphan_matches(text):
             tail = _OWN_TAIL.match(text, m.end())
             if not tail:
                 continue  # short for an unrelated reason — not this class
+            if _PRE_ANY.match(text, tail.end()):
+                continue  # a second mention opens there — not this body resuming
             after = guarded_star.match(text, tail.end()).group(0)
             if len(before) + len(after) >= floor:
                 found.append((label, m.group(1), before + after))
