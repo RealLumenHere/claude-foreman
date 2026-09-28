@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SepAlarm</string>
+    <string name="tile_label">Phone link</string>
+    <string name="channel_fgs">Monitoring (silent)</string>
+    <string name="fgs_title">Watching phone link</string>
+    <string name="status_connected">CONNECTED</string>
+    <string name="status_separated">SEPARATED</string>
+    <string name="status_unknown">Starting…</string>
+    <string name="status_no_permission">Grant Bluetooth permission to monitor</string>
+    <string name="dismiss">DISMISS</string>
+</resources>
