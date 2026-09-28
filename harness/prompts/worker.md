@@ -78,7 +78,10 @@ RULES:
   tripwire cannot tell your dummy from a leak, and each one files a pri-1 rotation row
   (wq#2795: a `TOKEN: AKIA<lowercase>1234` probe in `python3 -c`). Split it at the prefix
   seam (`"AKI" "A..."`, `"gh" "p_..."`) or build it at runtime (`"Q" * 16`), and reuse
-  a committed fixture where one exists.
+  a committed fixture where one exists. An env-style assignment counts too: any name
+  ending in TOKEN/KEY/SECRET/PASSWORD/PAT, then `=` or `:`, then 12+ word characters
+  fires kv-secret, however fake the body (wq#2839: an `abcdef0123…` hex run after
+  `CF_API_TOKEN=`). Keep the body out of the literal: `"CF_API_TOKEN=" + "ab" * 18`.
 - Bash output is capped at 2000 characters per result (wq#954) and the tail is dropped —
   tool results are ~40-50% of a session's cost. Narrow commands yourself with
   `head`/`tail`/`grep -n` instead of dumping everything; stderr counts toward the same

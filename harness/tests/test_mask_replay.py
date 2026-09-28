@@ -1999,3 +1999,33 @@ def test_wq2720_corpus_burned_nothing():
                                        patterns=mask_replay.CURRENT_PATTERNS)
     for sha, _label, value in values:
         assert mask_replay.account(value, fixture), sha
+
+
+WQ2787_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2787")
+WQ2787_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2787_values.py")
+
+
+def test_wq2787_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ2787_FIXTURES)
+    values = scope["WQ2787_VALUES"]
+    assert len(values) == 1
+    for sha, _label, value in values:
+        assert masking.value_sha12(value) == sha
+    assert masking.mask_text(text)[1] == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2787_RUN),
+                    reason="wq#2787's run dir is not on this host")
+def test_wq2787_corpus_burned_nothing():
+    """wq#2839's verdict, pinned: the one BURNED? value is a probe wq#2787 typed, not
+    a credential, nothing rotated. Scored under today's table (started after the
+    legacy cutoff); the fixture module's header must explain it by itself.
+    """
+    _, scope = _load_fixture_module(WQ2787_FIXTURES)
+    values = scope["WQ2787_VALUES"]
+    fixture_shas = {v[0] for v in values}
+    _, fixture = _assert_corpus_pinned(2787, WQ2787_FIXTURES, scope["WQ2787_RECORDS"],
+                                       fixture_shas,
+                                       patterns=mask_replay.CURRENT_PATTERNS)
+    for sha, _label, value in values:
+        assert mask_replay.account(value, fixture), sha
