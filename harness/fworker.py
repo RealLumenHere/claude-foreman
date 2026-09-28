@@ -1585,7 +1585,10 @@ def screen_stream_hits(hits, raw, alarmed, seen, live_secrets, repo_roots,
 
 def run_dir(ticket_id):
     d = os.path.join(RUNS_ROOT, f"wq{ticket_id}")
-    os.makedirs(d, exist_ok=True)
+    # wq#2911: owner-only. Transcripts and replay logs under here carry whatever a worker
+    # printed; chmod too, since exist_ok leaves a pre-existing dir at its old mode.
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    os.chmod(d, 0o700)
     return d
 
 
@@ -4184,12 +4187,14 @@ def verify_done(ticket_id, worktree, attempt, base_ref="origin/main"):
         return True, False
 
     try:
-        os.makedirs(ev_dir, exist_ok=True)
+        os.makedirs(ev_dir, mode=0o700, exist_ok=True)
         # wq#1905: source the just-snapshotted run_dir copy, not the worktree — it is
         # the one this replay actually verified against.
         src = os.path.join(rd, acceptance_mod.EVIDENCE_FILENAME)
         if os.path.isfile(src):
-            shutil.copy2(src, os.path.join(ev_dir, acceptance_mod.EVIDENCE_FILENAME))
+            dst = os.path.join(ev_dir, acceptance_mod.EVIDENCE_FILENAME)
+            shutil.copy2(src, dst)
+            os.chmod(dst, 0o600)
     except OSError:
         pass
 

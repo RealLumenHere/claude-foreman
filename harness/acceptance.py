@@ -363,7 +363,9 @@ def snapshot_evidence(worktree, run_dir):
     src = os.path.join(worktree, EVIDENCE_FILENAME)
     try:
         if os.path.isfile(src):
-            shutil.copy2(src, os.path.join(run_dir, EVIDENCE_FILENAME))
+            dst = os.path.join(run_dir, EVIDENCE_FILENAME)
+            shutil.copy2(src, dst)
+            os.chmod(dst, 0o600)   # wq#2911: copy2 carries the worktree's 0644 over
     except OSError:
         pass
 
@@ -462,6 +464,14 @@ def _tail(text, n=OUTPUT_TAIL_LINES):
     return "\n".join(lines[-n:])
 
 
+def private_open(path):
+    """Open `path` for writing as 0600, truncating; also tightens a pre-existing file,
+    which O_CREAT's mode argument alone would leave at its old bits (wq#2911)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    return fd
+
+
 def _replay(criterion, worktree, evidence_dir, runner):
     """Run the criterion's command ourselves. Returns (ok, observed, output_tail, log)."""
     cmd = criterion.get("cmd") or ""
@@ -489,9 +499,11 @@ def _replay(criterion, worktree, evidence_dir, runner):
     log_path = None
     if evidence_dir:
         try:
-            os.makedirs(evidence_dir, exist_ok=True)
+            # wq#2911: a replay log holds whatever the command printed, fixture tokens
+            # included — owner-only, like every other file under _runs.
+            os.makedirs(evidence_dir, mode=0o700, exist_ok=True)
             log_path = os.path.join(evidence_dir, f"replay-{criterion['id']}.log")
-            with open(log_path, "w") as f:
+            with open(private_open(log_path), "w") as f:
                 f.write(f"$ {cmd}\n{merged}\n[exit {p.returncode}]\n")
         except OSError:
             log_path = None
