@@ -171,6 +171,64 @@ def test_value_open_on_two_subjects_is_subject_scoped_despite_looking_self_ident
     assert entry["scoped"] is True
 
 
+def test_value_open_on_exactly_one_other_subject_is_subject_scoped(db):
+    """wq#2878: wq#2850 shipped a `>=2 open subjects => shared` threshold, but
+    wq#2812's own incident had exactly ONE other node on the dead build ('any
+    node still legitimately on -30 ... now false-positives'), so the threshold
+    sat above the bug's minimum reproduction and it kept firing. One other live
+    subject is already proof the value isn't an identifier."""
+    add_fact(db, "k1", "sobek", "kernel", "7.0.0-30-generic", "2026-09-26", "config")
+    add_fact(db, "k2", "sobek", "kernel", "7.0.0-31-generic", None, "config")
+    add_fact(db, "k3", "nephthys", "kernel", "7.0.0-30-generic", None, "config")
+    entry = next(e for e in index_of(db) if e["dead_value"] == "7.0.0-30-generic")
+    assert entry["scoped"] is True
+    assert scan_line(db, "kernel: '7.0.0-30-generic'") == []
+
+
+def test_one_sharer_shared_value_still_flags_a_line_naming_the_closed_subject(db):
+    """Positive control for the N=1 case: scoping must still be able to fire."""
+    add_fact(db, "k1", "sobek", "kernel", "7.0.0-30-generic", "2026-09-26", "config")
+    add_fact(db, "k2", "sobek", "kernel", "7.0.0-31-generic", None, "config")
+    add_fact(db, "k3", "nephthys", "kernel", "7.0.0-30-generic", None, "config")
+    hits = scan_line(db, "sobek kernel: 7.0.0-30-generic")
+    assert [(h["subject"], h["predicate"]) for h in hits] == [("sobek", "kernel")]
+
+
+def test_shared_value_predicates_are_scoped_with_no_live_sharer_at_all(db):
+    """wq#2878: a state-store census alone leaves the class open in its steady
+    state. Once a fleet-wide bump closes -30 on every node, nobody is open on it,
+    the sharer count is zero, and a kernel string is no more of an identifier
+    than it was mid-rollout — so the predicate classes wq#2850 named (kernel, os,
+    *_version, bios, model) are scoped by construction, not by census."""
+    add_fact(db, "k1", "sobek", "kernel", "7.0.0-30-generic", "2026-09-26", "config")
+    add_fact(db, "k2", "sobek", "kernel", "7.0.0-34-generic", None, "config")
+    entry = next(e for e in index_of(db) if e["dead_value"] == "7.0.0-30-generic")
+    assert entry["scoped"] is True
+    assert scan_line(db, "kernel: '7.0.0-30-generic'") == []
+    assert [h["predicate"] for h in scan_line(db, "sobek kernel 7.0.0-30-generic")] \
+        == ["kernel"]
+
+
+@pytest.mark.parametrize(
+    "predicate,shared",
+    [("kernel", True), ("kernel_version", True), ("os", True), ("os_version", True),
+     ("bios", True), ("firmware_rev", True), ("model", True), ("agent_version", True),
+     ("tailscale_ip", False), ("unit", False), ("power_plug", False), ("role", False),
+     ("osd_count", False), ("hostname", False)],
+)
+def test_shared_value_predicate_pattern(predicate, shared):
+    assert bool(lcs.SHARED_VALUE_PREDICATE_RE.search(predicate)) is shared
+
+
+def test_a_unique_self_identifying_value_stays_unscoped(db):
+    """The other side of the trade: an address nobody else holds, under a
+    predicate that is not shared vocabulary, must still match anywhere — the
+    wq#2878 widening may not turn the scan off."""
+    entry = next(e for e in index_of(db) if e["dead_value"] == "100.88.71.47")
+    assert entry["scoped"] is False
+    assert [h["subject"] for h in scan_line(db, "ssh 100.88.71.47")] == ["thoth"]
+
+
 def test_a_shouted_status_word_is_not_self_identifying():
     """wq#1629 split prose status values into tokens, so the index is now full
     of words like RETIRED. Uppercase says nothing about WHICH subject is

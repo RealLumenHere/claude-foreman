@@ -111,6 +111,19 @@ TOKEN_RE = re.compile(r"^[A-Za-z0-9._:/@\-]+$")
 # month's eBay price is not fleet staleness.
 VOLATILE_PREDICATES = {"price", "actual_load", "pr_count"}
 
+# Predicates whose values are fleet vocabulary rather than identifiers: a kernel
+# build, OS release, BIOS/firmware revision, hardware model or any `*_version` is
+# shared across subjects by construction, so it is matched subject-scoped no
+# matter how many digits and separators self_identifying() sees in its shape
+# (wq#2850 item 1, wq#2878). Derived-from-the-state-store sharing still covers
+# every other predicate; this is the floor for the classes that can never carry
+# a subject, including after a fleet-wide bump closes the old value everywhere
+# and the live sharer count drops to zero.
+SHARED_VALUE_PREDICATE_RE = re.compile(
+    r"^(?:kernel|os|distro|bios|firmware|model)(?:_\w+)?$|(?:^|_)version$",
+    re.IGNORECASE,
+)
+
 # Shapes that carry their own subject, so they may be matched anywhere.
 SELF_IDENTIFYING = (
     re.compile(r"^\d{1,3}(\.\d{1,3}){3}$"),
@@ -326,14 +339,13 @@ def build_dead_value_index(conn):
         open_by_subject.setdefault(subj, []).append(val)
         open_subjects_by_value.setdefault(val, set()).add(subj)
 
-    # A value simultaneously OPEN on two or more subjects can't be carrying a
-    # subject of its own (wq#2850): a kernel build, OS version, or BIOS/model
-    # string is fleet vocabulary, not an identifier, however many digits or
-    # separators self_identifying() sees in its shape. nephthys.yaml quoting
-    # '7.0.0-30-generic' isn't a claim about sobek just because sobek once
-    # closed that same string — every other node still open on -30 makes it
-    # shared, so it is matched subject-scoped like any ordinary word.
-    shared_values = {v for v, subs in open_subjects_by_value.items() if len(subs) >= 2}
+    # A value still OPEN on any OTHER subject can't be carrying a subject of its
+    # own (wq#2850 item 2): nephthys.yaml quoting '7.0.0-30-generic' isn't a claim
+    # about sobek just because sobek once closed that same string, so it is matched
+    # subject-scoped like any ordinary word. wq#2878 lowered this from ">=2 subjects
+    # open on the value": wq#2812's incident had exactly ONE other node still on
+    # -30, so a >=2 threshold sat above the bug's own minimum reproduction and left
+    # it firing unchanged through the patched path.
 
     index = []
     for fid, subj, pred, val, valid_to, fclass in conn.execute(
@@ -360,6 +372,10 @@ def build_dead_value_index(conn):
             for other in open_by_subject.get(subj, ())
         ):
             continue
+        shared = bool(
+            SHARED_VALUE_PREDICATE_RE.search(pred)
+            or open_subjects_by_value.get(val, frozenset()) - {subj}
+        )
         index.append(
             {
                 "fact_id": fid,
@@ -368,7 +384,7 @@ def build_dead_value_index(conn):
                 "dead_value": val,
                 "current_value": current,
                 "valid_to": valid_to,
-                "scoped": not self_identifying(val) or val in shared_values,
+                "scoped": not self_identifying(val) or shared,
                 "value_re": value_re,
                 "subject_res": [boundary_re(t) for t in subject_tokens(subj)],
                 "cue_res": [boundary_re(c) for c in predicate_cues(pred)],
