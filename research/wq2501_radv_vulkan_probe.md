@@ -67,7 +67,13 @@ That does not yet show a win for anything the fleet serves; see "What this does 
 `research/DIGEST_Orchestation_1_md.md` section 1 said every GPU line is void because `compute stack:
 none`. Amended there: true for CUDA/ROCm/OpenCL, not for Vulkan.
 
-## Suggested next probe (not run)
+## Suggested next probe (not run, and optional)
+
+**Context that limits its value:** `fleet.compute_direction` (Frank, 2026-08-10) says the Mac Pro 6,1
+fleet is being wound down, at most two kept as spares, and that no new Mac Pro roles, upgrades or
+purchases should be proposed. So this probe's main worth is correcting the record (Vulkan does work
+on these cards) and settling whether a *kept* spare would benefit. It is not a case for building
+GPU offload into the Mac Pros. No follow-up ticket was filed for that reason.
 
 qwen3:8b Q4_K_M with `-ngl` split across both GPUs (about 5.2 GB in 5.5 GiB), no flash attention,
 under `guarded_run.sh` with a 5 min soak, comparing pp512/pp2048 against the CPU path on the same
