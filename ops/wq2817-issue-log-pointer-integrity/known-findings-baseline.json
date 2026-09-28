@@ -1,11 +1,10 @@
 {
-  "captured": "2026-09-28T06:10:00Z",
-  "captured_by": "wq#2894",
+  "captured": "2026-09-28T05:38:00Z",
+  "captured_by": "wq#2896",
   "kb_head_at_capture": "d1d6dedbde0fe9cd3984954530596bc53607d476",
-  "note": "Re-pinned by wq#2894, which dropped CITE_RE's verb requirement (see probe_pointers.py's docstring): the checker now reads 494 cross-row references instead of 38, so findings that were always in the corpus became visible. Four were real dangling pointers and were FIXED in kb/ISSUE-LOG.md rather than folded in here -- rows 891/892 -> 889 (row 889 restored from wq#2878's report, which filed it; the append was lost) and row 220 -> 206b (pre-suffix notation for row 206 item (b), rewritten). One is folded in as backlog: DANGLING:854:923, where no row 923 ever existed and the intended target is not recoverable -- triaged to its own ticket rather than guessed, per README's rebaselining rule. kb has no origin, so ISSUE-LOG edits land when session-handoff.timer sweeps the live tree (every 30 min): kb_head_at_capture d1d6ded carries the row 889 and row 220 fixes, and rows 893/894 followed in the next sweep -- neither adds a finding, the keys here are from the live file.",
-  "count": 132,
+  "note": "Re-pinned by wq#2896: row 854's citation \"rows 812/817/923\" rewritten to rows that exist (812/817, plus 787/836 which log the same five test_mask_replay.py failures); row 923 never existed and its intended target was unrecoverable, recorded in the row. DANGLING:854:923 dropped out as RESOLVED; no other key changed. kb_head_at_capture predates the edit, which lands via session-handoff.timer's sweep (kb has no origin).",
+  "count": 131,
   "keys": [
-    "DANGLING:854:923",
     "DUP:109:2",
     "DUP:111:2",
     "DUP:113:2",
