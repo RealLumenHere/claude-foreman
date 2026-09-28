@@ -46,10 +46,8 @@ if [ ! -f "$SECRETS_ENV" ]; then
 fi
 
 echo "== ntfy relay + cron-stamp helper =="
-sudo -u lumen cp "$SRC/ntfy_relay.py" /home/lumen/bin/gatus-ntfy-relay
-chmod 755 /home/lumen/bin/gatus-ntfy-relay
-sudo -u lumen cp "$SRC/cron_stamp.sh" /home/lumen/bin/lumen-cron-stamp
-chmod 755 /home/lumen/bin/lumen-cron-stamp
+sudo -u lumen "$SRC/../wq2856-atomic-install/install-script" -m 0755 "$SRC/ntfy_relay.py" /home/lumen/bin/gatus-ntfy-relay
+sudo -u lumen "$SRC/../wq2856-atomic-install/install-script" -m 0755 "$SRC/cron_stamp.sh" /home/lumen/bin/lumen-cron-stamp
 
 echo "== systemd units =="
 cp "$SRC/gatus.service" /etc/systemd/system/lumen-gatus.service

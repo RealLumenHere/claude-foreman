@@ -22,8 +22,7 @@ if [ "${1:-}" = --verify ]; then
 fi
 
 echo "== installing lumen-cron-stamp-dropin-gen =="
-cp "$SRC/lumen_cron_stamp_dropin_gen.py" "$BIN/lumen-cron-stamp-dropin-gen"
-chmod 755 "$BIN/lumen-cron-stamp-dropin-gen"
+"$SRC/../wq2856-atomic-install/install-script" -m 0755 "$SRC/lumen_cron_stamp_dropin_gen.py" "$BIN/lumen-cron-stamp-dropin-gen"
 
 echo "== dry-run plan against current fleet state =="
 python3 "$BIN/lumen-cron-stamp-dropin-gen" plan

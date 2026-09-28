@@ -12,6 +12,8 @@ import sys
 import tempfile
 import threading
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import primary_tree_guard as ptg  # noqa: E402  # wq#1752 runtime-env simulation
 
@@ -1194,3 +1196,57 @@ def test_ticket_end_denial_is_logged_and_never_blocks_session_end(tmp_path):
     assert rc == 0
     assert len(requests) == 1
     assert events == ["end", "ticket_end_revoke_failed"]
+
+
+# ---- wq#2856: in-place overwrite of a live bin script ----
+
+def _bin_dir(tmp_path):
+    b = tmp_path / "bin"
+    b.mkdir()
+    (b / "re-sync").write_text("#!/bin/bash\n")
+    (b / "link").symlink_to(b / "re-sync")
+    return str(b)
+
+
+@pytest.mark.parametrize("cmd", [
+    "cp /tmp/x {b}/re-sync",
+    "cp -p /tmp/x \"{b}/re-sync\"",
+    "cp -f /tmp/a /tmp/re-sync {b}",
+    "cp -t {b} /tmp/re-sync",
+    "ssh lumen@host 'cp /tmp/x {b}/re-sync'",
+    "cp /tmp/x {b}/link",
+    "cat /tmp/x > {b}/re-sync",
+    "echo ok && printf x >{b}/re-sync",
+])
+def test_bin_inplace_overwrite_blocked(tmp_path, cmd):
+    b = _bin_dir(tmp_path)
+    rc, err = run_guard("Bash", {"command": cmd.format(b=b)},
+                        env_extra={"FOREMAN_GUARD_BIN_DIR": b})
+    assert rc == 2, err
+    assert "wq#2856" in err and "install-script" in err
+
+
+@pytest.mark.parametrize("cmd", [
+    "cp /tmp/x {b}/brand-new",
+    "cp -p {b}/re-sync {b}/re-sync.bak",
+    "cp /tmp/x {b}/.re-sync.tmp && mv -f {b}/.re-sync.tmp {b}/re-sync",
+    "/home/lumen/bin/install-script /tmp/x {b}/re-sync",
+    "cp {b}/re-sync /tmp/copy",
+    "echo hi >> {b}/re-sync",
+    "ls {b} 2>/dev/null",
+    "scp /tmp/x host:{b}/re-sync",
+    "cp /tmp/x /tmp/elsewhere",
+])
+def test_bin_non_overwrite_allowed(tmp_path, cmd):
+    b = _bin_dir(tmp_path)
+    rc, err = run_guard("Bash", {"command": cmd.format(b=b)},
+                        env_extra={"FOREMAN_GUARD_BIN_DIR": b})
+    assert rc == 0, err
+
+
+def test_bin_inplace_overwrite_blocked_on_real_default_dir():
+    # No FOREMAN_GUARD_BIN_DIR: the default must be the live /home/lumen/bin,
+    # probed with a file tracked in that repo.
+    assert os.path.isfile("/home/lumen/bin/wq")
+    rc, err = run_guard("Bash", {"command": "cp /tmp/x /home/lumen/bin/wq"})
+    assert rc == 2 and "wq#2856" in err

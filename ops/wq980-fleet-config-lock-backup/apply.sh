@@ -6,5 +6,4 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/bin/fleet-safe-write
 
-cp "$HERE/fleet-safe-write.sh" "$DEST"
-echo "installed: $DEST"
+"$HERE/../wq2856-atomic-install/install-script" -m 0755 "$HERE/fleet-safe-write.sh" "$DEST"

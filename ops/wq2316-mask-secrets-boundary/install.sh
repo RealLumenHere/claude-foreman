@@ -26,8 +26,7 @@ if [ -e "$DST" ] && ! cmp -s "$SRC/mask-secrets" "$DST"; then
   echo "previous version kept at $DST.pre-wq2316"
 fi
 
-cp "$SRC/mask-secrets" "$DST"
-chmod 755 "$DST"
+"$SRC/../wq2856-atomic-install/install-script" -m 0755 "$SRC/mask-secrets" "$DST"
 
 echo "installed $DST"
 echo "gate:  echo 'repo highs_solver' | $DST      # must print unchanged"

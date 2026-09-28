@@ -45,15 +45,14 @@ if [ -e "$BIN" ]; then
 fi
 
 # ---- apply (script half) --------------------------------------------------------------
-cp "$SRC/minerva_presentation_stability.py" "$BIN"
-chmod 0755 "$BIN"
+"$SRC/../wq2856-atomic-install/install-script" -m 0755 "$SRC/minerva_presentation_stability.py" "$BIN"
 
 # ---- health: the installed copy must pass its own invariants and read the live corpus --
 if python3 "$BIN" --selftest && python3 "$BIN" --dry-run >/dev/null; then
   echo "wq2086 install: $BIN deployed and healthy"
 else
   if [ "$had_bin" = 1 ]; then
-    cp -p "$(ls -t "$BAK"/minerva-presentation-stability.bak.* | head -1)" "$BIN"
+    "$SRC/../wq2856-atomic-install/install-script" -m 0755 "$(ls -t "$BAK"/minerva-presentation-stability.bak.* | head -1)" "$BIN"
   else
     rm -f "$BIN"
   fi

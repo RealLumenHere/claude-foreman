@@ -35,8 +35,7 @@ chmod 755 "$BIN_DEST"
 "$BIN_DEST" version || true
 
 echo "== deploying cron script =="
-sudo -u lumen cp "$SRC/gitleaks_detect.py" "$CRON_DEST"
-chmod 755 "$CRON_DEST"
+sudo -u lumen "$SRC/../wq2856-atomic-install/install-script" -m 0755 "$SRC/gitleaks_detect.py" "$CRON_DEST"
 
 echo "== installing systemd units =="
 cp "$SRC/gitleaks-detect.service" "$SRC/gitleaks-detect.timer" /etc/systemd/system/

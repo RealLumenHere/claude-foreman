@@ -257,6 +257,52 @@ Bash)
       fi
     fi
 
+    # ---- wq#2856: never overwrite a live bin script in place ----
+    # `cp new /home/lumen/bin/x` (or `> /home/lumen/bin/x`) rewrites x's existing
+    # inode; a timer's bash still running x resumes on the NEW bytes at the OLD
+    # offset (lumen-re-sync.service, 2026-09-28T03:25:42Z: "LOCK: unbound
+    # variable"). Only an overwrite of an EXISTING regular file is denied — a
+    # fresh file, a .bak copy, or cp to x.tmp then mv all stay allowed.
+    BIN_DIR=${FOREMAN_GUARD_BIN_DIR:-/home/lumen/bin}
+    while IFS= read -r stmt; do
+      [ -n "$stmt" ] || continue
+      DSTS=()
+      if printf '%s' "$stmt" | grep -qE '(^|[^[:alnum:]_./-])cp[[:space:]]'; then
+        read -ra W <<< "$(printf '%s' "$stmt" | sed -E 's/^.*(^|[^[:alnum:]_./-])cp[[:space:]]+//' | tr -d "\"'()")"
+        OPERANDS=(); TDIR=
+        for ((i = 0; i < ${#W[@]}; i++)); do
+          case "${W[i]}" in
+            -t|--target-directory) TDIR=${W[i+1]:-}; i=$((i + 1)) ;;
+            --target-directory=*) TDIR=${W[i]#*=} ;;
+            -*) ;;
+            *) OPERANDS+=("${W[i]}") ;;
+          esac
+        done
+        if [ -n "$TDIR" ]; then
+          for s in "${OPERANDS[@]}"; do DSTS+=("$TDIR/$(basename "$s")"); done
+        elif [ ${#OPERANDS[@]} -ge 2 ]; then
+          d=${OPERANDS[-1]}
+          if [ -d "$d" ]; then
+            for s in "${OPERANDS[@]:0:${#OPERANDS[@]}-1}"; do DSTS+=("$d/$(basename "$s")"); done
+          else
+            DSTS+=("$d")
+          fi
+        fi
+      fi
+      # `>` truncates the same inode too; `>>` and `2>` are left alone.
+      while IFS= read -r r; do
+        [ -n "$r" ] && DSTS+=("$r")
+      done <<< "$(printf '%s' "$stmt" | grep -oE '(^|[^>0-9&])>[[:space:]]*[^[:space:]>|&]+' | sed -E 's/^[^>]*>[[:space:]]*//' | tr -d "\"'")"
+      for d in "${DSTS[@]}"; do
+        d=${d/#\~/$HOME}; d=${d/#\$HOME/$HOME}; d=${d/#\$\{HOME\}/$HOME}
+        [ -L "$d" ] && d=$(readlink -f "$d")
+        case "$d" in "$BIN_DIR"/*) ;; *) continue ;; esac
+        if [ -f "$d" ]; then
+          block "in-place overwrite of live script $d denied (wq#2856 — a running timer/unit keeps reading the same inode and executes the new bytes at the old offset). Install by rename: /home/lumen/bin/install-script <src> $d (repo copy: /home/lumen/foreman/ops/wq2856-atomic-install/install-script), or cp to $d.tmp then mv -f" "$RAW_CMD"
+        fi
+      done
+    done <<< "$(printf '%s' "$target" | tr ';&|' '\n\n\n')"
+
     # ---- wq#900: PRIMARY trees are branch-frozen for workers ----
     # A worker's raw `git checkout` in /home/lumen/foreman put the live dispatcher
     # timers on a feature branch (audit 2026-08-23; same class hit /home/lumen/bin,
