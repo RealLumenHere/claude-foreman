@@ -1,0 +1,8 @@
+{
+  "_why": "wq#2821: a LiteLLM rung name is not a model identity. On 2026-09-28 the wq#2815 bake-off re-tagged a qwen2.5-coder build as llama3.1:8b on hathor, so the pinned judge rung silently served a different model. bin/judge checks the served weights blob against this file and fails closed on mismatch.",
+  "hathor-llama8b": {
+    "ollama": "http://100.80.71.13:11434",
+    "tag": "llama3.1:8b",
+    "blob_sha256": "667b0c1932bc6ffc593ed1d03f895bf2dc8dc6df21db3042284a6f4416b06a29"
+  }
+}

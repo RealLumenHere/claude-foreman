@@ -210,3 +210,35 @@ def load_eval_set(path="/home/lumen/foreman/judge/judge_eval_set.jsonl"):
             if line:
                 cases.append(json.loads(line))
     return cases
+
+
+IDENTITY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUDGE_MODEL_IDENTITY.json")
+_FROM_RE = re.compile(r'^FROM\s+\S*sha256[-:]([0-9a-f]{64})', re.MULTILINE)
+
+
+def verify_model_identity(model, required=False, timeout=5):
+    """wq#2821: confirm the rung `model` is actually serving the pinned weights.
+    Returns None if verified (or not listed and not required), else an error
+    string -- callers treat any error as FAIL_CLOSED. A rung name alone proves
+    nothing: the backing tag on the node can be re-pointed under it."""
+    try:
+        ident = json.load(open(IDENTITY_FILE)).get(model)
+    except Exception as e:
+        return f"identity file unreadable: {e}"
+    if not ident:
+        return f"no identity pin for {model} in {IDENTITY_FILE}" if required else None
+    try:
+        req = urllib.request.Request(
+            f"{ident['ollama']}/api/show",
+            data=json.dumps({"model": ident["tag"]}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            mf = json.loads(resp.read()).get("modelfile", "")
+    except Exception as e:
+        return f"identity check failed ({type(e).__name__}: {e})"
+    m = _FROM_RE.search(mf)
+    got = m.group(1) if m else None
+    if got != ident["blob_sha256"]:
+        return (f"model identity mismatch: {model} -> {ident['tag']} serves blob "
+                f"{(got or 'unknown')[:12]}, pinned {ident['blob_sha256'][:12]}")
+    return None
