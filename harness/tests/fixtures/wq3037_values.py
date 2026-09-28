@@ -18,6 +18,13 @@ WQ3037_VALUES = (
      "github" "_pat_d" "ocumen" "tation" "_examp" "le_her" "e"),
     ("3cfc0d4a2cf9", "sk-key", "sk-ant-",
      "sk-ant" "-ANOTH" "EREXAM" "PLEVAL" "UE"),
+    # wq#3040 (slack set:da27bce124b6): the same probe's `xoxb-` + MASKED + `xoxb-`
+    # + phrase link. 977ab277cd08 is the body; the tripwire's other hash, 00761f53a2b4,
+    # is this same string with `xoxb-` attached. Rule-fixed today, pinned anyway so a
+    # later widening of the slack rule cannot reopen it. Split inside the prefix:
+    # `xoxb-` plus one character alone trips the orphan-prefix backstop.
+    ("977ab277cd08", "slack", "xoxb-",
+     "xo" "xb-ano" "ther-e" "xample" "-value" "-long-" "enough"),
 )
 
 WQ3037_RECORDS = frozenset(v[0] for v in WQ3037_VALUES)

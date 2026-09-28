@@ -82,6 +82,10 @@ RULES:
   ending in TOKEN/KEY/SECRET/PASSWORD/PAT, then `=` or `:`, then 12+ word characters
   fires kv-secret, however fake the body (wq#2839: an `abcdef0123…` hex run after
   `CF_API_TOKEN=`). Keep the body out of the literal: `"CF_API_TOKEN=" + "ab" * 18`.
+  Every prefix masking.PATTERNS knows counts (`github_pat_`, `xoxb-`, `cfut_`, …), and
+  a `MASKED` in front does not neuter the next link: `<prefix>MASKED<prefix><phrase>`
+  fires on its second link, English phrase or not (wq#3040: wq#3037's orphan-chain
+  probes). Build every link at runtime: `p = "xo" "xb-"; p + "MASKED" + p + "x" * 20`.
 - Bash output is capped at 2000 characters per result (wq#954) and the tail is dropped —
   tool results are ~40-50% of a session's cost. Narrow commands yourself with
   `head`/`tail`/`grep -n` instead of dumping everything; stderr counts toward the same
