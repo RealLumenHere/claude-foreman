@@ -304,3 +304,34 @@ Enable (Tier-3, Frank only): `sudo systemctl enable --now lumen-foreman-janitor.
 Rollback: `sudo systemctl disable --now lumen-foreman-janitor.timer`, or `touch
 /home/lumen/autonomy/DISPATCH_DISARM`. Note `self_heal.py` also releases RUNG_FAULT blocks, in one
 go; run only one of the two releasers if batching matters.
+
+### Mortician — `lumen-foreman-mortician` (wq#2486, terminal-failure triage)
+
+A daily one-shot timer, staged like the others. It sweeps terminally-failed wq rows
+(blocked past the 48h grace window and not a still-healable RUNG_FAULT, plus
+rejected/cancelled/retired), classifies each ONCE into the `morgue` table (UNIQUE
+ticket_id + step-wise markers, the `bin/aq_escalate.py` exactly-once discipline), writes
+one proposal-only lesson file to `/home/lumen/minerva/dream/morgue/` (instinct 7 — Frank
+reviews, nothing auto-edits memory), and appends one `[mortician] ... do-not-redispatch`
+note to the row. The janitor's RUNG_FAULT releaser skips any row the mortician has
+triaged (`mortician.is_triaged`), so a recorded death is never auto-retried.
+
+```bash
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-mortician.service /etc/systemd/system/
+sudo cp /home/lumen/foreman/dispatcher/systemd/lumen-foreman-mortician.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+systemctl is-enabled lumen-foreman-mortician.timer   # expect: disabled
+```
+
+Prove it before enabling — a dry run classifies and prints `would_*` lines, writes no rows,
+no files, no notes:
+
+```bash
+python3 /home/lumen/foreman/dispatcher/mortician.py --dry-run
+```
+
+Enable (Tier-3, Frank only): `sudo systemctl enable --now lumen-foreman-mortician.timer`.
+Rollback: `sudo systemctl disable --now lumen-foreman-mortician.timer`, or `touch
+/home/lumen/autonomy/DISPATCH_DISARM` (mortician checks the same kill switch). Reopening a
+triaged ticket stays a deliberate act: the mortician never changes status, and its note
+names the recorded cause so whoever reopens argues with the evidence, not the void.

@@ -1,0 +1,20 @@
+# lumen-foreman-mortician.timer — daily cadence for the mortician (wq#2486).
+# SHIPS DISABLED (Tier-3 — same posture as lumen-foreman-janitor.timer): nothing runs until
+# `systemctl enable --now lumen-foreman-mortician.timer` is run by hand.
+# Instant rollback without systemd: `touch /home/lumen/autonomy/DISPATCH_DISARM` (shared kill
+# switch — mortician.py main() checks the same file).
+# Daily is deliberate: the population is rows older than MORT_GRACE_HOURS (48h default), so
+# there is nothing a tighter cadence would catch sooner, and the exactly-once morgue table
+# makes an extra run a no-op anyway.
+[Unit]
+Description=Daily cadence for lumen-foreman-mortician (STAGED — enabled by hand; wq#2486)
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=24h
+RandomizedDelaySec=15min
+# A missed window is skipped, never replayed in a burst.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

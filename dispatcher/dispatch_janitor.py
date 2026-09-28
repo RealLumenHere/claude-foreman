@@ -45,6 +45,7 @@ import capability_lint  # noqa: E402
 import foreman_dispatcher as fd  # noqa: E402 — load_config(), HUMAN_LANES
 import gate_store  # noqa: E402
 import local_capacity  # noqa: E402
+import mortician  # noqa: E402 — is_triaged(): never release a row the mortician closed (wq#2486)
 import router  # noqa: E402
 import runaway  # noqa: E402
 import self_heal  # noqa: E402
@@ -141,6 +142,11 @@ def release_rung_faults(log, dry_run):
             continue
         klass, detail = self_heal.classify_block(t)
         if klass != "RUNG_FAULT":
+            continue
+        if mortician.is_triaged(tid):
+            # wq#2486: the mortician recorded why this row died and marked it
+            # do-not-redispatch; a retry storm is exactly what that verdict forbids.
+            log.emit("skip", stage="release", ticket=tid, reason="mortician_triaged")
             continue
         if secret_denied(t):
             log.emit("skip", stage="release", ticket=tid, reason="secret_denied")
