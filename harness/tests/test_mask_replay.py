@@ -2424,6 +2424,34 @@ def test_wq3078_corpus_burned_nothing():
                           patterns=mask_replay.CURRENT_PATTERNS)
 
 
+WQ3076_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq3076")
+WQ3076_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq3076_values.py")
+
+
+def test_wq3076_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ3076_FIXTURES)
+    values = scope["WQ3076_VALUES"]
+    count = len(values)
+    assert count == 3
+    assert _unpinned(values, {"f": text}) == []
+    assert masking.mask_text(text)[1] == []
+    assert [r[0] for r in masking._orphan_matches(text)] == []
+    # the sk- pair is the one WQ2278_BRANCH_FIXTURES already names by hash
+    assert {v[0] for v in values if v[1] == "sk-key"} <= set(WQ2278_BRANCH_FIXTURES)
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ3076_RUN),
+                    reason="wq#3076's run dir is not on this host")
+def test_wq3076_corpus_burned_nothing():
+    """wq#3082's verdict, pinned: wq#3076 `git show`ed wq#2278's unmerged branch and
+    printed its MINTED/STATIC gateway-key dummies, and its own probe script held a
+    dict label the kv-secret rule reads; not credentials, nothing rotated."""
+    _, scope = _load_fixture_module(WQ3076_FIXTURES)
+    fixture_shas = {v[0] for v in scope["WQ3076_VALUES"]}
+    _assert_corpus_pinned(3076, WQ3076_FIXTURES, scope["WQ3076_RECORDS"], fixture_shas,
+                          patterns=mask_replay.CURRENT_PATTERNS)
+
+
 def test_replay_scores_orphan_rows_and_splices_them_from_context():
     """wq#3048: the tripwire paged on an _orphan_matches() row (sha256:72458136d6c6)
     that the replay never produced, so its "0 unaccounted" had not scored the ticket's
