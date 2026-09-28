@@ -19,3 +19,7 @@ and how to read the grade log, lives at
   (stage 2) against the same card/run.
 - `lib_common.sh` — shared JSON/logging helpers, sourced by the above.
 - `grades/resale_grades.csv` — the per-card resale-grade log.
+- `guarded_run.sh`, `gpu_hold.sh` — wq#2842: run a GPU load with the low-power clamp lifted on the
+  card under test, a live thermal abort, and a guaranteed put-back. `monitor_sysfs.sh` now samples every card.
+- `../../scripts/wq2842_grade_on_rig.sh` — Lumen-side driver: preflight / run / collect; grades land in
+  /home/lumen/re/common/gpu-grades/.
