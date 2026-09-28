@@ -317,6 +317,31 @@ def test_url_auth_placeholder_glued_behind_a_live_value_still_masks(live, tag):
     assert hits == ["url-auth"] and live not in masked, (live, tag, hits)
 
 
+@pytest.mark.parametrize("live", [
+    "abc123-def456_ghi789-",   # three free short segments: 21 live characters
+    "my-pass_w0rd-",           # short segments closed by `_`/`-`, not a token prefix
+    "aaaaaa-bbbbbb-cccccc-",   # three full-width segments
+])
+def test_url_auth_placeholder_prefix_is_not_free_segments(live):
+    """wq#2977: wq#2954 bounded the excused head at "a token prefix" but wrote it as up
+    to three free lowercase segments, so a live head shaped like segments still rode in
+    front of the annotation unmasked. The head is now the _PRE_* vocabulary or one
+    short segment."""
+    masked, hits = masking.mask_text(URL_USER + live + "<x>" + URL_HOST)
+    assert hits == ["url-auth"] and live not in masked, (live, hits)
+
+
+@pytest.mark.parametrize("prefix", [
+    "gh" "p_", "github_pat_", "cf" "ut_", "sk-ant-", "sk-or-", "xox" "b-", "AK" "IA", "tok_", "",
+])
+def test_url_auth_pure_placeholder_behind_a_token_prefix_is_still_excused(prefix):
+    """wq#2977: the tightening must not re-open wq#2931 — a placeholder that IS the whole
+    body, behind any vocabulary prefix or one short segment, is documentation, not a
+    credential."""
+    text = URL_USER + prefix + "<value>" + URL_HOST
+    assert masking.mask_text(text) == (text, [])
+
+
 @pytest.mark.parametrize("head, tail", [
     ("DATABASE_URL=postgresql://lumen:", "@lumen-pgvector:5432/litellm"),
     ("REDIS_URL=rediss://default:", "@cache.internal:6380/0"),

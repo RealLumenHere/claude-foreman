@@ -411,7 +411,13 @@ PATTERNS = [
         # `sk-ant-`). Excusing a placeholder anywhere in the body let a live value
         # glued to an annotation (`<live><truncated>@host`, a hand-redaction that
         # left the live head in place) through with no mask and no alarm.
-        r"(?!(?:[a-z][a-z0-9]{0,5}[_-]){0,3}<[A-Za-z_][A-Za-z0-9_-]*>@)"
+        # wq#2977: "a token prefix" is the closed vocabulary this table keeps (_PRE_*)
+        # or ONE short lowercase segment (`tok_`); the earlier `{0,3}` of free segments
+        # let a live head of up to 21 characters (`abc123-def456_ghi789-<x>@host`) ride
+        # in front of the annotation unmasked, with no alarm.
+        r"(?!(?:(?:" + _PRE_GH + r")|(?:" + _PRE_GHPAT + r")|(?:" + _PRE_CFUT + r")|(?:"
+        + _PRE_SK + r")|(?:" + _PRE_SLACK + r")|(?:" + _PRE_AWS + r")|[a-z][a-z0-9]{0,5}[_-])?"
+        r"<[A-Za-z_][A-Za-z0-9_-]*>@)"
         # The one rule that must NOT take _body(): it is anchored on the `@` ahead of
         # it, so the body cannot run past the credential into whatever follows, and
         # there is nothing for a bound to save it from. A bound would instead stop the
