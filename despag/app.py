@@ -94,8 +94,20 @@ def _load_or_create_token() -> str:
     token_path = Path(os.environ.get("DESPAG_API_TOKEN_FILE", "~/.secrets/despag-api.token")).expanduser()
     if not token_path.exists():
         token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        token_path.write_text(secrets.token_urlsafe(32))
-    token_path.chmod(0o600)
+        # 0600 from the first byte (no write-then-chmod window), and the only chmod
+        # this function ever needs (wq#1931 defect 1).
+        fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(secrets.token_urlsafe(32))
+    else:
+        # wq#1931 defect 1: chmod on EVERY start raised OSError 30 (EROFS) under the
+        # unit's ProtectHome=read-only and the service never came up. An existing token
+        # is only inspected: a wrong mode is a loud warning, never a crash, and never a
+        # write.
+        mode = token_path.stat().st_mode & 0o777
+        if mode & 0o077:
+            logging.getLogger("despag").warning(
+                "token file %s is mode %o, expected 0600 — fix it out of band", token_path, mode)
     return token_path.read_text().strip()
 
 

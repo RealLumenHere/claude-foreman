@@ -108,23 +108,26 @@ _PRE_SK = r"sk-(?:[a-zA-Z]+-)*"
 _PRE_SLACK = r"xox[bpasr]-"
 _PRE_AWS = r"AKIA"
 
-# masking._PREFIXES_BY_LABEL, keyed by this copy's rule names. kv_secret is absent
+# masking._SHAPES_BY_LABEL, keyed by this copy's rule names. kv_secret is absent
 # on purpose, in both directions: it owns no fixed prefix, and it takes no foreign
 # stop either — wq#2720 tried that and reverted it, because a labelled value that
 # legitimately IS another rule's shape (`TOKEN: AKIA<junk failing AWS's charset>`)
 # must still resolve via kv_secret's opaque fallback, and a stop at position zero
 # silently drops it instead.
-_PREFIXES_BY_LABEL = {
-    "github_token": (_PRE_GH, _PRE_GHPAT),
-    "cloudflare_token": (_PRE_CFUT,),
-    "sk_key": (_PRE_SK,),
-    "slack_token": (_PRE_SLACK,),
-    "aws_key_id": (_PRE_AWS,),
+_SHAPES_BY_LABEL = {
+    "github_token": ((_PRE_GH, r"[A-Za-z0-9]", "{30,}"),
+                     (_PRE_GHPAT, r"[A-Za-z0-9_]", "{20,}")),
+    "cloudflare_token": ((_PRE_CFUT, r"[A-Za-z0-9_.-]", "{6,}"),),
+    "sk_key": ((_PRE_SK, r"[A-Za-z0-9_-]", "{16,}"),),
+    "slack_token": ((_PRE_SLACK, r"[A-Za-z0-9-]", "{8,}"),),
+    "aws_key_id": ((_PRE_AWS, r"[0-9A-Z]", "{16}"),),
 }
 
 
 def _foreign_prefixes(label):
-    """masking._foreign_prefixes (wq#2720): every fixed prefix except `label`'s own.
+    """masking._foreign_prefixes (wq#2720/wq#2848): every OTHER rule's full
+    matchable shape except `label`'s own — prefix AND its own floor-quantified
+    body, not the bare prefix alone.
 
     Rationale there: a wide body run starting on a real prefix (`ghp_`) otherwise
     swallows the NEXT rule's fixed prefix mid-run (`AKIA`, the letters of `xoxb-`),
@@ -133,14 +136,39 @@ def _foreign_prefixes(label):
     mask_rewrite left `MASKED-<slack body>` with the slack body in the clear.
     Own-label prefixes stay excluded so `cfut_<live>cfut_MASKED` (wq#2638) still
     composes as one rule reading its own repeated prefix.
+
+    wq#2848: a bare prefix substring (four or five ordinary characters) is not a
+    foreign token, and stopping for it anyway truncates the run below the rule's
+    OWN floor — which fails the match outright and drops the entire real token,
+    fixed prefix included, with no hit at all. Requiring the full shape here (the
+    same requirement `_body()` below pairs with a mandatory floor-length prefix)
+    means noise that merely looks like another rule's prefix reads through as
+    ordinary body text instead of truncating the match. See masking.py's docstring
+    for the measured before/after (verify-pass wq#2803).
     """
-    others = [p for name, prefixes in _PREFIXES_BY_LABEL.items() if name != label
-              for p in prefixes]
+    others = [r"(?:" + prefix + r")" + charset + quant
+              for name, shapes in _SHAPES_BY_LABEL.items() if name != label
+              for prefix, charset, quant in shapes]
     return r"(?:" + "|".join(others) + r")"
 
 
+def _foreign_bare_prefixes(label):
+    """masking._foreign_bare_prefixes (wq#2899): every OTHER rule's bare prefix,
+    for `_floored_absorb` — what a foreign rule keeps in its own replacement
+    (`\\1` + MASK) is just its prefix, not its full shape, so recognising that
+    rule's already-masked residue needs the prefix alone."""
+    others = [p for name, shapes in _SHAPES_BY_LABEL.items() if name != label
+              for p, _charset, _quant in shapes]
+    return r"(?:" + "|".join(others) + r")"
+
+
+_QUANT_RE = re.compile(r"^\{(\d+)(,)?\}$")
+
+
 def _body(charset, quant, foreign=""):
-    """masking._body (wq#2638): a body run that cannot cross the mask literal.
+    """masking._body (wq#2638/wq#2848): a body run that cannot cross the mask
+    literal, and (when `foreign` is given) cannot be truncated below its own floor
+    by a foreign-shape stop either.
 
     Detect-only here, but the bug is worse in this copy than in masking.py's: a body
     class that swallows an already-masked value behind a live one made the whole thing
@@ -150,41 +178,68 @@ def _body(charset, quant, foreign=""):
     was screening also carried masked residue — which outbound PR bodies and quoted log
     tails routinely do. Case-sensitive literal for the reason masking._body gives.
 
-    `foreign` (wq#2720) is another rule's prefix alternation, or "": stopped the same
-    way and for the same reason as MASK, case-sensitively regardless of the
-    surrounding rule's flags, since a fixed prefix like `AKIA` is never case-folded.
+    `foreign` (wq#2720) is another rule's full-shape alternation (wq#2848), or "":
+    stopped the same way and for the same reason as MASK, case-sensitively regardless
+    of the surrounding rule's flags, since a fixed prefix like `AKIA` is never
+    case-folded.
+
+    wq#2848: the first `floor` characters of the run (parsed out of `quant`) are
+    matched with ONLY the MASK guard, never the foreign one — a foreign shape cannot
+    truncate the match before this rule's own floor is even satisfied, which is what
+    let a bare foreign-prefix substring inside an otherwise-ordinary body fail the
+    WHOLE match (below floor -> no match at all -> the real token, prefix included,
+    printed in the clear). Needed because the two guards alone are not enough on their
+    own: cloudflare's body charset is a superset of plain alnum, so a github body
+    carrying a bare `cfut` substring followed by 6+ ordinary characters genuinely
+    satisfies cloudflare's full shape too. See masking.py:_body for the full reasoning
+    and the measured probe (verify-pass wq#2803); mirrored byte-for-byte here.
     """
-    stop = MASK + (r"|" + foreign if foreign else "")
-    return r"(?:(?!(?-i:" + stop + r"))" + charset + r")" + quant
+    mask_guard = r"(?:(?!(?-i:" + MASK + r"))" + charset + r")"
+    if not foreign:
+        return mask_guard + quant
+    floor, open_ended = _QUANT_RE.match(quant).groups()
+    run = mask_guard + r"{" + floor + r"}"
+    if open_ended:
+        both_guard = r"(?:(?!(?-i:" + MASK + r"|" + foreign + r"))" + charset + r")"
+        run += both_guard + r"*"
+    return run
 
 
-def _floored_absorb(label, charset, floor):
-    """masking._floored_absorb (wq#2899): a live `charset` run SHORTER than
-    `floor`, directly in front of a DIFFERENT rule's prefix and this module's own
-    mask literal. `_body`'s `foreign` guard (wq#2720) stops a run before a
-    foreign prefix so that rule gets its own shot at it — but once it has HAD
-    that shot and left `<foreign prefix>MASKED` sitting there, stopping again
-    buys nothing: the floor quantifier is all-or-nothing, so a gap under `floor`
-    failed the WHOLE match and stayed in the clear, sandwiched between this
-    rule's own prefix and the neighbour's already-masked residue.
+def _floored_absorb(label, charset):
+    """masking._floored_absorb (wq#2899): a live `charset` run of any length,
+    directly in front of a DIFFERENT rule's prefix and this module's own mask
+    literal — i.e. that other rule's own match, already run and replaced.
 
-    This requires the LITERAL foreign prefix text immediately before `MASKED`
-    (not just bare `MASKED`) — the five fixed-prefix rules below now keep their
-    own prefix in the replacement (`\\1` + MASK, matching masking.py) precisely
-    so this can tell "a neighbour rule already ran here" from "this rule's own
-    prefix backtracked into its own masked output" (`sk-ant-xxxxxxxxMASKED`,
-    FALSE_POSITIVES in test_masking.py) — the latter has no foreign prefix text
-    in front of the literal, so it can never satisfy this alternative. A bare-MASK
-    version of this check was tried and reverted: it could not distinguish the
-    two shapes once the foreign prefix was gone, and tripped on the daemon's own
-    output (wq#2899 daemon mirror, caught by test_token_engine_mirror_agrees).
+    wq#2848's `_body()` fix above stops a foreign shape from truncating a run
+    below THIS rule's floor by skipping the foreign check for the first `floor`
+    characters — but only within a single pass's left-to-right traversal.
+    cloudflare_token runs BEFORE sk_key in MASK_PATTERNS, so by the time sk_key's
+    turn comes, a live `cfut_<body>` embedded in its own body has already been
+    consumed and replaced with `cfut_` + MASK — a literal `MASKED` sits where
+    wq#2848's floor-relative skip needed live charset characters, and `_body`'s
+    unconditional MASK guard (always active, floor or no floor) still stops the
+    run dead there. The floor quantifier is all-or-nothing, so a gap under
+    `floor` before that point failed the WHOLE match and stayed in the clear,
+    sandwiched between this rule's own prefix and the neighbour's already-masked
+    residue.
 
-    Bounded at `floor - 1` so it never fires where the main alternative in
-    `_floored_body` already matches on its own.
+    Requires the LITERAL foreign prefix immediately before MASKED (via
+    `_foreign_bare_prefixes`, not `_foreign_prefixes`'s full shape — a bare
+    `MASKED` behind a kept prefix has no more real body characters for a floor
+    to apply to) so this can tell a neighbour's residue from this rule's own
+    prior output glued to its own prefix (`sk-ant-xxxxxxxxMASKED`,
+    FALSE_POSITIVES in test_masking.py) — that shape has no foreign prefix text
+    in front of the literal, so it can never satisfy this alternative. This is
+    also why the five fixed-prefix rules below now capture and keep their own
+    prefix (`\\1` + MASK) instead of erasing prefix and body together: a bare
+    whole-match MASK replacement (the daemon's previous behaviour) left no
+    prefix text for this rule to key on, and a first cut of this fix that
+    dropped the prefix requirement tripped on the daemon's own output
+    (caught by test_token_engine_mirror_agrees).
     """
     foreign = _foreign_prefixes(label)
-    return (_body(charset, "{0," + str(floor - 1) + "}", foreign)
-            + r"(?:" + foreign + r")" + MASK)
+    return (_body(charset, "{0,}", foreign)
+            + _foreign_bare_prefixes(label) + MASK)
 
 
 def _floored_body(label, charset, floor):
@@ -192,7 +247,7 @@ def _floored_body(label, charset, floor):
     a shorter run absorbing a neighbour's already-masked residue."""
     foreign = _foreign_prefixes(label)
     normal = _body(charset, "{" + str(floor) + ",}", foreign)
-    return r"(?:" + normal + r"|" + _floored_absorb(label, charset, floor) + r")"
+    return r"(?:" + normal + r"|" + _floored_absorb(label, charset) + r")"
 # wq#2297 kv_secret label vocabulary — the copy of harness/masking.py:_KV_* that the
 # daemon needs because it runs off that import path. See there for the reasoning.
 # wq#2806: grammar widened in lockstep with masking.py — `_pass`/`salt` nouns, the

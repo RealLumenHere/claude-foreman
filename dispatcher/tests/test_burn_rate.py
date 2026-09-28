@@ -20,13 +20,20 @@ CFG = burn_rate.merge_config(None)
 def _frank_inactive_by_default(monkeypatch, tmp_path_factory):
     """wq#1889 added a frank_active(now) read inside allowed_concurrent — every test
     below predates that signal and hard-codes its expected numbers against the plain
-    FRANK_RESERVE_PCT reserve. Point WQ_DB at a path that doesn't exist so the REAL
-    frank_active() degrades to (False, ...) deterministically, rather than falling
-    through to its real default (this BOX's live queue.db), which would make these
-    arithmetic tests depend on whether some orch-* session happens to be fresh at
-    whatever moment the suite runs. Tests that pass their own db_path, or that exercise
-    the bump itself, override this explicitly."""
-    monkeypatch.setenv("WQ_DB", str(tmp_path_factory.mktemp("wq1889_default") / "no-such-db"))
+    FRANK_RESERVE_PCT reserve. Point WQ_DB at a VALID db whose agent_sessions table has
+    no rows, so the real frank_active() reads cleanly and answers inactive
+    deterministically, rather than falling through to this BOX's live queue.db (which
+    would make these arithmetic tests depend on whether an orch-* session happens to be
+    fresh). wq#1931: a missing/unreadable db no longer means inactive (it fails ACTIVE),
+    so the old "path that does not exist" trick would now bump every reserve here.
+    Tests that pass their own db_path, or exercise the bump itself, override this."""
+    db = tmp_path_factory.mktemp("wq1889_default") / "empty-sessions.db"
+    con = sqlite3.connect(str(db))
+    con.execute("CREATE TABLE agent_sessions(session_id TEXT PRIMARY KEY, base_name TEXT NOT NULL,"
+                " host TEXT, pid INTEGER, first_seen TEXT, last_seen TEXT)")
+    con.commit()
+    con.close()
+    monkeypatch.setenv("WQ_DB", str(db))
 
 
 # sec 5: session 80% used -> 50% (wq#1889: shifted down by the 30% session reserve so
@@ -224,12 +231,53 @@ def test_frank_active_picks_the_freshest_of_several_orch_rows(tmp_path):
     assert active is True and "orch-fresh-2" in detail
 
 
-def test_frank_active_unreadable_db_degrades_to_inactive_not_a_raise(tmp_path):
-    """Unlike admission.py's LIMIT wall, this signal is an enhancement on an
-    already-safe floor (wq#1883 C.5), so a broken read must degrade quietly to
-    inactive, never raise or fail closed to a refusal."""
+def test_frank_active_unreadable_db_fails_active_not_a_raise(tmp_path):
+    """wq#1931: a read that cannot see the operator must NOT lower the reserve. Missing
+    db, no table, garbage file: each returns active=True with the reason, never raises."""
     active, detail = burn_rate.frank_active(NOW, db_path=str(tmp_path / "does-not-exist.db"))
-    assert active is False and "unreadable" in detail
+    assert active is True and "unreadable" in detail and "ACTIVE" in detail
+    empty = tmp_path / "no-table.db"
+    sqlite3.connect(str(empty)).close()
+    active, detail = burn_rate.frank_active(NOW, db_path=str(empty))
+    assert active is True and "unreadable" in detail
+    junk = tmp_path / "junk.db"
+    junk.write_bytes(b"not a sqlite file" * 64)
+    active, detail = burn_rate.frank_active(NOW, db_path=str(junk))
+    assert active is True and "unreadable" in detail
+
+
+def test_frank_active_non_sqlite_errors_also_fail_active(tmp_path, monkeypatch):
+    """The except is `Exception`, not `sqlite3.Error`: an OSError from a sandbox is the
+    same blindness (wq#1931)."""
+    def boom(*a, **k):
+        raise OSError(30, "Read-only file system")
+    monkeypatch.setattr(burn_rate.sqlite3, "connect", boom)
+    active, detail = burn_rate.frank_active(NOW, db_path=str(tmp_path / "x.db"))
+    assert active is True and "OSError" in detail
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory write bits")
+def test_frank_active_wal_db_in_readonly_dir_without_shm_fails_active(tmp_path):
+    """The lumen-despag.service shape: a WAL-mode db in a read-only directory with no
+    -shm/-wal side files. Whatever sqlite decides (read it, or refuse), the answer must
+    never be the old wrong direction: a STALE orch row would be False on a clean read,
+    so this uses a FRESH one — True either way, and never a raise."""
+    d = tmp_path / "ro"
+    d.mkdir()
+    db = _agent_sessions_db(d, [("orch-live", _idle(1))])
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.commit()
+    con.close()
+    for side in (db + "-wal", db + "-shm"):
+        if os.path.exists(side):
+            os.remove(side)
+    os.chmod(d, 0o555)
+    try:
+        active, _detail = burn_rate.frank_active(NOW, db_path=db)
+    finally:
+        os.chmod(d, 0o755)
+    assert active is True
 
 
 def test_frank_active_reads_wq_db_env_per_call(tmp_path, monkeypatch):

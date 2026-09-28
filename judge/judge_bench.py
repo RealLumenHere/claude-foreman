@@ -22,7 +22,7 @@ import statistics
 import sys
 
 sys.path.insert(0, "/home/lumen/foreman/judge")
-from judge_common import call_judge, load_eval_set, TIERS, litellm_key
+from judge_common import call_judge, load_eval_set, TIERS, litellm_key, verify_model_registered
 
 MINERVA_DB = "/home/lumen/minerva/minerva.db"
 DEFAULT_MODELS = "isis-qwen3-32b,qwen36-local,hathor-llama8b"
@@ -118,11 +118,20 @@ def main():
     cases = load_eval_set(args.eval)
     print(f"eval set: {len(cases)} cases from {args.eval}", flush=True)
     litellm_key()  # fail loud now, not 17 calls in
+    models = [m.strip() for m in args.models.split(",")]
+    bad = {m: verify_model_registered(m) for m in models}
+    bad = {m: err for m, err in bad.items() if err}
+    if bad:
+        # wq#2904: a model_group missing from litellm_config.yaml must fail the
+        # whole run loudly, not silently degrade into N per-case PARSE_FAILs
+        # that nobody pages on (fleet-audit-2: 169 rows/5d, unnoticed).
+        for m, err in bad.items():
+            print(f"ERROR: {m}: {err}", file=sys.stderr)
+        sys.exit(1)
     conn = db_init()
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
     summaries = []
-    for model in args.models.split(","):
-        model = model.strip()
+    for model in models:
         print(f"\n=== {model} ===", flush=True)
         rows = run_model(model, cases, conn, ts)
         s = summarize(model, rows)

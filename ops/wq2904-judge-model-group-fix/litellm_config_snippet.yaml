@@ -1,0 +1,32 @@
+# wq#2904 -- merge this ONE entry into /home/lumen/agent/litellm_config.yaml's
+# model_list, anywhere outside the "# BEGIN/END GENERATED inference_nodes.yaml"
+# sentinel block (that block is registry-rendered, hand-edits there are
+# overwritten on next `fleet-node render --apply`). The house convention for
+# a hand-added alias onto an existing backend is qwen36-live next to
+# qwen36-local in the live file -- this follows the same shape, placed
+# immediately before the qwen36-live entry.
+#
+# Root cause (fleet-audit-2, 2026-09-28): LiteLLM_SpendLogs shows key alias
+# minerva-bench-2 calling model=wq2821-judge-llama8b -- ProxyModelNotFoundError,
+# 169 rows/5d, last 2026-09-28 04:23Z. wq#2821 (judge/judge_common.py commit
+# 67987ef) pinned the central judge's identity check to the EXISTING
+# hathor-llama8b rung (judge/JUDGE_MODEL_PIN, judge/JUDGE_MODEL_IDENTITY.json)
+# and never registered a distinct "wq2821-judge-llama8b" model_name anywhere
+# in this repo -- whatever minerva-bench-2's own caller is (outside this
+# worktree's --add-dir reach, could not inspect it directly) was written
+# against a model name that was never wired to a backend. Same backend
+# (llama3.1:8b on hathor, ollama) as hathor-llama8b below -- just given its
+# own alias so the caller's existing model name resolves without a code
+# change on the minerva side.
+- model_name: wq2821-judge-llama8b
+  litellm_params:
+    model: openai/llama3.1:8b
+    api_base: http://100.80.71.13:11434/v1
+    api_key: none
+    timeout: 1560
+    stream_timeout: 1560
+    num_retries: 0
+    max_parallel_requests: 2
+  model_info:
+    mode: chat
+    description: "wq#2904: judge-identity-pinned alias for hathor-llama8b (llama3.1:8b on hathor, ollama) -- added because minerva-bench-2 called this name and it had never been registered (ProxyModelNotFoundError, 169 rows/5d)."

@@ -123,6 +123,29 @@ def test_a_glued_prefix_does_not_swallow_the_next_rules_prefix():
     assert "12345678901" not in rev and "Q" * 16 not in rev
 
 
+# wq#2848 (verify-pass wq#2803): a BARE foreign-prefix substring — four or five
+# ordinary characters, not a matchable foreign token — must never mark the run and
+# truncate it below the rule's OWN floor. Below the floor the whole `{N,}` match
+# fails outright in this sed mirror too (the marked byte is excluded from every
+# rule's charset, same as masking.py's lookahead), so the real token, fixed prefix
+# included, passed through with no `MASKED` at all. One case per open-floor rule,
+# both offsets safely below floor — mirrors harness/tests/test_masking.py's
+# test_a_bare_foreign_prefix_substring_does_not_drop_the_whole_token.
+@pytest.mark.parametrize("prefix, floor, noise", [
+    ("ghp_", 30, "AKIA"),
+    ("ghp_", 30, "cfut"),
+    ("cfut_", 6, "AKIA"),
+    ("sk-", 16, "AKIA"),
+    ("xoxb-", 8, "AKIA"),
+])
+@pytest.mark.parametrize("offset", [2, 5])
+def test_a_bare_foreign_prefix_substring_does_not_drop_the_whole_token(prefix, floor, noise, offset):
+    fill = "Q" * (floor + 6)
+    body = fill[:offset] + noise + fill[offset:]
+    masked = mask(prefix + body)
+    assert body not in masked
+
+
 def test_trailing_punctuation_after_masked_literal_survives():
     """wq#2687: cfut_ and kv-secret are the only two rules whose body charset
     includes `.`, so a greedy run starting on already-masked prose swallowed the

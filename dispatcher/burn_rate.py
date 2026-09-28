@@ -109,10 +109,10 @@ def frank_active(now, db_path=None):
     idle here: a false negative. That is safe by construction, not just by luck:
     FRANK_RESERVE_PCT already overstates a worker's fair share to cover Frank's own
     interactive use (:52-57), so a false negative here only returns dispatch to that
-    already-conservative floor — never to an unguarded one. The same posture covers a
-    read failure (missing db, locked file, corrupt schema): degrade to (False, ...), not
-    a fail-closed refusal, because raising the reserve is a refinement on an
-    already-safe baseline, not the safety-critical gate admission.py's LIMIT wall is.
+    already-conservative floor — never to an unguarded one. A READ FAILURE (missing db,
+    locked file, corrupt schema, read-only sandbox) is different: it returns
+    (True, ...) since wq#1931 — "cannot see the operator" is treated as "operator
+    present" (a higher reserve), never as a refusal and never as a raise.
     """
     path = db_path or os.environ.get("WQ_DB", WQ_DB_DEFAULT)
     try:
@@ -123,8 +123,16 @@ def frank_active(now, db_path=None):
             ).fetchall()
         finally:
             con.close()
-    except sqlite3.Error as e:
-        return False, f"agent_sessions unreadable ({e}) — treating as inactive"
+    except Exception as e:  # noqa: BLE001 — ANY read failure, not only sqlite3.Error
+        # wq#1931 defect 3: the fail direction is ACTIVE. Under a sandboxed unit
+        # (lumen-despag.service: ProtectHome=read-only) the WAL/-shm side files cannot be
+        # created, so this read fails SYSTEMATICALLY — and returning inactive there
+        # lowered the reserve exactly when the operator could not be seen. "The reserve
+        # already overstates a fair share" (wq#1883 C.5) does not hold for a read that
+        # can never succeed; the conservative reading of "cannot see Frank" is "Frank is
+        # there". Both consumers (dispatcher pass + despag admission) call this one
+        # function, so both get the same direction.
+        return True, f"agent_sessions unreadable ({type(e).__name__}: {e}) — treating as ACTIVE (fail-safe)"
     freshest_name, freshest_idle = None, None
     for base_name, last_seen in rows:
         try:
