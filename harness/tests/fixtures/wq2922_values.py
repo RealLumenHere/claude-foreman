@@ -28,6 +28,12 @@ WQ2922_VALUES = (
     ("807399bef03a", "cloudflare", "cfut", "cf" "ut_QQQQQ"),
     ("53a1492afd3b", "kv-secret", 'REAL_SECRET = "',
      'REAL_SECRET = "' 'Zx8qLp3' 'vWn7'),
+    # wq#3048: an _orphan_matches() row the replay could not see until it read the
+    # backstop (which postdates this run, so it never fired): the Q-filled ghp_ dummy
+    # the probe printed as `v = ...`, joined across the mask literal, so no file holds
+    # it whole.
+    ("ef5cdbc0ba92", "github", "ghp_",
+     "ghp_QQ" "QQQQQQ" "QQQQQQ" "QQQQQQ" "QQQQQQ" "QQQQQQ" "QQQQQQ"),
 )
 
 # The records the replay reproduces from wq#2922's corpus under today's table.

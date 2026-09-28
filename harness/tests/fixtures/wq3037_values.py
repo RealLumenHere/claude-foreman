@@ -26,5 +26,10 @@ WQ3037_VALUES = (
     ("977ab277cd08", "slack", "xoxb-",
      "xo" "xb-ano" "ther-e" "xample" "-value" "-long-" "enough"),
 )
+# wq#3048: the run's ten context-less mask-hits rows (aws 72458136d6c6 among them,
+# `AKIA` + a 13-char `9` filler + MASKED + a bare `AKIA`) are _orphan_matches() rows
+# from `<prefix><filler>MASKED<prefix>` chains. None is pinned: since the backstop
+# stopped re-opening on a second prefix, today's table reads none of them, and
+# mask_replay lists them as recorded-but-not-reproduced.
 
 WQ3037_RECORDS = frozenset(v[0] for v in WQ3037_VALUES)

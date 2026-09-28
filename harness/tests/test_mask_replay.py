@@ -2183,7 +2183,7 @@ def test_wq2922_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2922_FIXTURES)
     values = scope["WQ2922_VALUES"]
     count = len(values)
-    assert count == 3
+    assert count == 4
     assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
@@ -2253,3 +2253,46 @@ def test_wq3037_corpus_burned_nothing():
     fixture_shas = {v[0] for v in scope["WQ3037_VALUES"]}
     _assert_corpus_pinned(3037, WQ3037_FIXTURES, scope["WQ3037_RECORDS"], fixture_shas,
                           patterns=mask_replay.CURRENT_PATTERNS)
+
+
+def test_replay_scores_orphan_rows_and_splices_them_from_context():
+    """wq#3048: the tripwire paged on an _orphan_matches() row (sha256:72458136d6c6)
+    that the replay never produced, so its "0 unaccounted" had not scored the ticket's
+    own value. The replay reads the backstop now, and a context window never prints
+    an orphan in the clear — its own or a neighbour's on the same line. A filler that
+    resumes after the literal, not a second prefix, is the shape that still fires."""
+    aws, slack = "AK" + "IA", "xo" + "xb-"
+    line = (f'probe("{aws}{"9" * 13}{masking.MASK}{"9" * 5}") and '
+            f'probe("{slack}{"m" * 4}{masking.MASK}{"m" * 12}")')
+    orphans = {masking.value_sha12(v): label
+               for label, _p, v, _lo, _hi in masking._orphan_spans(line)}
+    assert sorted(orphans.values()) == ["aws", "slack"]
+    records = mask_replay.replay(1, patterns=mask_replay.CURRENT_PATTERNS, tracked={},
+                                 items={"transcript:t": line}, rotated={})
+    by_sha = {r["value_sha256_12"]: r for r in records}
+    assert set(orphans) <= set(by_sha)
+    assert {r["value_sha256_12"] for r in mask_replay.unaccounted(records)} == set(by_sha)
+    for rec in records:
+        assert "9" * 5 not in rec["line"] and "m" * 4 not in rec["line"], \
+            rec["value_sha256_12"]
+    aws_row = by_sha[next(s for s, label in orphans.items() if label == "aws")]
+    assert "<aws 18 chars>" in aws_row["line"] and "<slack orphan>" in aws_row["line"]
+
+
+def test_report_names_recorded_hits_the_replay_cannot_reproduce(tmp_path, monkeypatch):
+    """wq#3048: a row the tripwire recorded but today's table does not read (a
+    since-narrowed rule, or a source the replay cannot see) used to drop out of the
+    report with no trace; it is listed now, as audit, without moving the exit code."""
+    run = tmp_path / "wq1"
+    run.mkdir()
+    (run / "mask-hits-1.json").write_text(json.dumps([
+        {"label": "aws", "prefix": "AK" + "IA", "value_len": 17,
+         "value_sha256_12": "72458136d6c6"},
+        {"label": "kv-secret", "suppressed": "pointer", "prefix": "x", "value_len": 1,
+         "value_sha256_12": "000000000000"},
+    ]))
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(tmp_path))
+    assert mask_replay.unreproduced(1, []) == [("aws", "72458136d6c6")]
+    out = io.StringIO()
+    assert mask_replay.report_unreproduced(1, [], out=out) is None
+    assert "72458136d6c6" in out.getvalue() and "000000000000" not in out.getvalue()

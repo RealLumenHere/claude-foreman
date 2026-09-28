@@ -724,6 +724,17 @@ def _orphan_matches(text):
     rarer than the 1-in-62**6 the literal already costs, and paid to close a false
     Deny that is reachable on the landing path today.
     """
+    return [(label, prefix, value) for label, prefix, value, _lo, _hi in _orphan_spans(text)]
+
+
+def _orphan_spans(text):
+    """_orphan_matches() with offsets: (label, prefix, value, lo, hi), read()'s shape.
+
+    wq#3048: `value` is `before + after`, joined across the tail between them, so it
+    is not a substring of `text` and a caller that has to FIND it (mask_replay cutting
+    the line an orphan printed on) cannot. `text[lo:hi]` is the raw run from the end of
+    the kept prefix through `after`, tail included.
+    """
     found = []
     for label, rx, guarded_star, floor in _ORPHAN_PATTERNS:
         for m in rx.finditer(text):
@@ -735,9 +746,10 @@ def _orphan_matches(text):
                 continue  # short for an unrelated reason — not this class
             if _PRE_ANY.match(text, tail.end()):
                 continue  # a second mention opens there — not this body resuming
-            after = guarded_star.match(text, tail.end()).group(0)
-            if len(before) + len(after) >= floor:
-                found.append((label, m.group(1), before + after))
+            after = guarded_star.match(text, tail.end())
+            if len(before) + len(after.group(0)) >= floor:
+                found.append((label, m.group(1), before + after.group(0),
+                              m.end(1), after.end()))
     return found
 
 
