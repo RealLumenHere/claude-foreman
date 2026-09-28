@@ -1,0 +1,19 @@
+model_list:
+- model_name: cerebras-llama
+  litellm_params:
+    model: cerebras/llama3.1-8b
+- model_name: deepseek-v4-flash
+  litellm_params:
+    model: deepseek/deepseek-chat
+- model_name: deepseek-v4-pro
+  litellm_params:
+    model: deepseek/deepseek-reasoner
+- model_name: hathor-llama8b
+  litellm_params:
+    model: ollama_chat/llama3.1:8b
+- model_name: mistral-small
+  litellm_params:
+    model: mistral/mistral-small-latest
+- model_name: local
+  litellm_params:
+    model: ollama_chat/qwen3:8b

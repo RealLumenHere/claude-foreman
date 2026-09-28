@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily model-ref-lint (wq#2903)
+
+[Timer]
+OnCalendar=*-*-* 05:20:00
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

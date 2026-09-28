@@ -1,0 +1,11 @@
+[Unit]
+Description=model-ref-lint: every referenced gateway model exists in LiteLLM model_list (wq#2903)
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/home/lumen/bin/model-ref-lint --aq
+# exit 1 = drift found and filed to aq; that is the lint working, not the unit failing
+SuccessExitStatus=1
+Nice=10
+TimeoutStartSec=10m
