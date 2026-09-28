@@ -32,7 +32,7 @@ application of the same instruction.
    (`git checkout main -- <files>`); worktree is clean. This proves the pin is not
    vacuous — it demonstrably can fail, and did, on the code it's meant to catch.
 4. **Direct mechanism check.** Independently reproduced the retirement claim against
-   `masking.scan()` outside the test harness: `scan("sk-key-letter-xoxb--off1-masking")`
+   `masking.scan()` outside the test harness: `scan("sk-key-letter-" + "xoxb--off1-" + "masking")`
    returns only `{'567fd51d9d8a'}` (label `slack`, prefix `xoxb-`) — the retired sk-key
    hash `ba8aad54215e` does not appear, because the slack rule now claims the span first
    (960404a, "mask the union of every rule's spans"). Matches the fixture's own comment
