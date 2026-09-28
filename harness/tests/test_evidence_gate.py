@@ -285,6 +285,25 @@ def test_ops_install_citation_with_self_referential_deploy_target_is_rejected(wo
     assert "resolves inside" in ac2["observed"]
 
 
+def test_ops_install_citation_with_hardlinked_self_deploy_target_is_rejected(worktree, tmp_path):
+    """wq#2813: a hard link outside art_dir to the artifact's own shipped payload survives
+    the realpath check (a hard link has no single real path) and is still zero deployment."""
+    art_dir = _write_ops_artifact(worktree)
+    linked = tmp_path / "target" / "lumen_state.py"
+    linked.parent.mkdir()
+    os.link(art_dir / "lumen_state.py", linked)
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                       "deploy_target": str(linked), "deploy_verify": _DEPLOY_VERIFY}]},
+        str(worktree), base_ref="main")
+    assert not result["ok"]
+    ac2 = [f for f in result["failed"] if f["id"] == "AC2"][0]
+    assert "hard link" in ac2["observed"]
+
+
 def test_ops_install_citation_with_matching_deploy_target_but_no_deploy_verify_is_rejected(
         worktree, tmp_path):
     """wq#2762 (ISSUE-LOG #859): a byte-match alone proves delivery, not that the ticket's

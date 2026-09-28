@@ -534,6 +534,20 @@ def _ops_deploy_evidence(entry, abspath):
     if real_target == real_art_dir or real_target.startswith(real_art_dir + os.sep):
         return False, (f"deploy_target {target} resolves inside {art_dir} — the artifact's own "
                        f"shipped payload cannot prove its own delivery")
+    # wq#2813: realpath does not see through a hard link — a deploy_target outside art_dir
+    # that shares an inode with a shipped file is still the artifact's own payload, not a
+    # deployed copy. Checked against every shipped file before any byte-match, so a duplicate
+    # payload elsewhere in the artifact cannot launder it.
+    for root, _dirs, files in os.walk(art_dir):
+        for name in files:
+            cand = os.path.join(root, name)
+            try:
+                same = os.path.samefile(target, cand)
+            except OSError:
+                same = False
+            if same:
+                return False, (f"deploy_target {target} is a hard link to {cand} — the "
+                               f"artifact's own shipped payload cannot prove its own delivery")
     target_hash = _sha256(target)
     for root, _dirs, files in os.walk(art_dir):
         for name in files:
