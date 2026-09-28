@@ -156,6 +156,39 @@ def _body(charset, quant, foreign=""):
     return r"(?:(?!(?-i:" + stop + r"))" + charset + r")" + quant
 
 
+def _floored_absorb(label, charset, floor):
+    """(wq#2899) a live `charset` run SHORTER than `floor`, sitting directly in
+    front of a DIFFERENT rule's prefix and this module's own mask literal.
+
+    `_body`'s `foreign` guard (wq#2720) stops a run before a foreign prefix so
+    that rule gets its own shot at it in this pass or a later one. But once it
+    HAS had that shot and left `<foreign prefix>MASKED` sitting there, stopping
+    again buys nothing: the floor quantifier is all-or-nothing, so a gap under
+    `floor` failed the WHOLE match and stayed in the clear forever, sandwiched
+    between this rule's own prefix and the neighbour's already-masked residue.
+    wq#2848's class-wide probe found this 6/1900: an sk- token whose body embeds
+    `cfut_`/`cfut` or leads with `xoxb-` masked the embedded token and left 3-17
+    characters of the sk- head in the clear, because sk-key's own `{16,}` floor
+    was never reachable once the foreign stop cut the run short.
+
+    Bounded at `floor - 1`: at or above that length the main alternative in
+    `_floored_body` already matches the span on its own, so the two can never
+    both fire on the same text.
+    """
+    foreign = _foreign_prefixes(label)
+    return (_body(charset, "{0," + str(floor - 1) + "}", foreign)
+            + r"(?:" + foreign + r")" + MASK)
+
+
+def _floored_body(label, charset, floor):
+    """`charset` reaching `floor` on its own (the ordinary case), or a shorter run
+    that absorbs a neighbouring rule's already-masked residue instead of stopping
+    short of its own floor — see `_floored_absorb`."""
+    foreign = _foreign_prefixes(label)
+    normal = _body(charset, "{" + str(floor) + ",}", foreign)
+    return r"(?:" + normal + r"|" + _floored_absorb(label, charset, floor) + r")"
+
+
 # wq#2297 kv-secret label vocabulary, ported from read_dir_sweep.py:38-60 (wq#2115).
 # A credential label is a NOUN, optionally qualified: `api key`, `Signing Secret`,
 # `clientSecret`. The qualifier ends in a separator or a camelCase hump.
@@ -369,14 +402,12 @@ PATTERNS = [
     # (`ghp_MASKED` is 6 legal chars), so every already-masked artefact re-armed
     # the alarm on the next read — the floors below end that loop too.
     ("github", re.compile(_B + r"(" + _PRE_GH + r")"
-                          + _body(r"[A-Za-z0-9]", "{30,}",
-                                  _foreign_prefixes("github"))), r"\1MASKED"),
+                          + _floored_body("github", r"[A-Za-z0-9]", 30)), r"\1MASKED"),
     ("github", re.compile(_B + r"(" + _PRE_GHPAT + r")"
-                          + _body(r"[A-Za-z0-9_]", "{20,}",
-                                  _foreign_prefixes("github"))), r"\1MASKED"),
+                          + _floored_body("github", r"[A-Za-z0-9_]", 20)), r"\1MASKED"),
     ("cloudflare", re.compile(_B + r"(" + _PRE_CFUT + r")"
-                              + _body(r"[A-Za-z0-9_.-]", "{6,}",
-                                      _foreign_prefixes("cloudflare"))), r"\1MASKED"),
+                              + _floored_body("cloudflare", r"[A-Za-z0-9_.-]", 6)),
+     r"\1MASKED"),
     # wq#2300: the prefix repeats WHOLE dash-terminated letter groups (`sk-`,
     # `sk-ant-`, `sk-or-v1-`) instead of a greedy `[a-zA-Z-]*`. Greedy, group 1 ran
     # as far as the `{16,}` body would allow, so a body opening with a long letter
@@ -386,11 +417,9 @@ PATTERNS = [
     # `value_sha256_12` computed over a truncated body, so the "sha256 a candidate
     # and compare" instruction every rotation ticket carries could never match.
     ("sk-key", re.compile(_B + r"(" + _PRE_SK + r")"
-                          + _body(r"[A-Za-z0-9_-]", "{16,}",
-                                  _foreign_prefixes("sk-key"))), r"\1MASKED"),
+                          + _floored_body("sk-key", r"[A-Za-z0-9_-]", 16)), r"\1MASKED"),
     ("slack", re.compile(_B + r"(" + _PRE_SLACK + r")"
-                         + _body(r"[A-Za-z0-9-]", "{8,}",
-                                 _foreign_prefixes("slack"))), r"\1MASKED"),
+                         + _floored_body("slack", r"[A-Za-z0-9-]", 8)), r"\1MASKED"),
     ("aws", re.compile(_B + r"(" + _PRE_AWS + r")"
                        + _body(r"[0-9A-Z]", "{16}", _foreign_prefixes("aws"))),
      r"\1MASKED"),
