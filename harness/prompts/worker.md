@@ -82,6 +82,10 @@ RULES:
   ending in TOKEN/KEY/SECRET/PASSWORD/PAT, then `=` or `:`, then 12+ word characters
   fires kv-secret, however fake the body (wq#2839: an `abcdef0123…` hex run after
   `CF_API_TOKEN=`). Keep the body out of the literal: `"CF_API_TOKEN=" + "ab" * 18`.
+  Building it at runtime keeps it out of the command, not out of the output: a masking
+  probe that prints its own input (`print(repr(case))`) hands the whole dummy to the
+  model and fires anyway (wq#3026: 17 values from wq#3021's `probe_sk*.py`). Print only
+  what masking returns — the masked text and its hit labels — or a case index.
 - Bash output is capped at 2000 characters per result (wq#954) and the tail is dropped —
   tool results are ~40-50% of a session's cost. Narrow commands yourself with
   `head`/`tail`/`grep -n` instead of dumping everything; stderr counts toward the same
