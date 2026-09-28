@@ -1563,16 +1563,26 @@ def test_auto_lane_repo_sweep_ticket_dispatches_via_repo_hint(denv, monkeypatch)
     assert f"fworker-wq{tid}" in args
 
 
-def test_auto_lane_non_sweep_ticket_still_unmapped(denv):
-    """A plain 'auto'-lane ticket (not repo-sweep-shaped) must still refuse rather than
-    guess — the repo hint only ever applies to tickets repo_sweep.py itself filed."""
+def test_auto_lane_non_sweep_ticket_uses_lane_default(denv, monkeypatch):
+    """wq#2818: 1eb5c48 (wq#2103/2056, 2026-09-25) gave 'auto' a LANE_REPO default
+    (FOREMAN_ROOT in production) for auto-lane infra tickets that name no repo at all —
+    superseding wq#1094's original 'auto has no LANE_REPO row' premise, which
+    test_router.py's test_auto_lane_defaults_to_foreman now pins instead. A plain (not
+    repo-sweep-shaped) auto ticket must dispatch via that lane default, not sit
+    lane_unmapped forever and not accidentally match the repo-sweep hint meant only for
+    tickets repo_sweep.py itself filed (wq#2753)."""
     write_config(denv, lanes={**BASE_CONFIG["lanes"],
                               "auto": {"enabled": True, "max_per_day": 10}})
+    lane_default_repo = denv["repo"]
+    monkeypatch.setitem(router.LANE_REPO, "auto", lane_default_repo)
     tid = add_ticket("just an ordinary auto-lane ticket", lane="auto")
     assert fd.run_pass() == 0
-    skips = log_events(denv, "skip", ticket=tid)
-    assert len(skips) == 1 and skips[0]["reason"] == "lane_unmapped"
-    assert lumen_calls(denv) == []
+    assert log_events(denv, "skip", ticket=tid) == []
+    calls = lumen_calls(denv)
+    assert len(calls) == 1
+    args = calls[0]["args"]
+    assert args[args.index("--repo") + 1] == lane_default_repo
+    assert f"fworker-wq{tid}" in args
 
 
 def test_lane_repo_mismatch_skipped_not_dispatched(denv):
