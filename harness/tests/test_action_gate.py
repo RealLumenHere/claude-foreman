@@ -829,3 +829,64 @@ def test_loop_paged_read_is_progress_not_loop():
         t.observe(tu("Read", f"s{i}", file_path="/x/big.py", offset=300, limit=300))
         trip = t.observe(tr(f"s{i}", error=False, text="page"))
     assert trip and "re-read big.py" in trip
+
+
+# ---------------- wq#2869: tier ceiling on the enforce path -----------------
+
+def _judge_says(tier, verdict, conditions=()):
+    return textwrap.dedent(f"""\
+        #!/usr/bin/env python3
+        import json, sys
+        print(json.dumps({{"tier": {tier!r}, "verdict": {verdict!r},
+                           "conditions": {list(conditions)!r}, "rationale": "fake",
+                           "model": "fake-model", "latency_s": 0.01}}))
+        sys.exit(0)
+    """).replace("'None'", "None")
+
+
+@pytest.mark.parametrize("tier,verdict,conds", [
+    ("EXTREMELY HIGH", "allow", ()),
+    ("EXTREMELY HIGH", "allow-with-conditions", ("snapshot before executing",)),
+    ("High", "allow", ()),
+    ("High", "allow-with-conditions", ("declared maintenance window", "Frank notified")),
+    (None, "allow", ()),
+    ("Catastrophic", "allow", ()),
+])
+def test_tier_ceiling_severe_or_unknown_tier_never_auto_allows(tmp_path, tier, verdict, conds):
+    judge = _fake_judge(tmp_path, "fake_judge_tier.py", _judge_says(tier, verdict, conds))
+    worker = "tier-ceiling"
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": worker})
+    assert rc == 2, f"{tier}/{verdict} must stay a hard RED block: {err}"
+    assert "ACTION BLOCKED" in err
+    kinds = [e["event"] for e in _events(tmp_path, worker)]
+    assert kinds == ["gate_red_block", "judge_enforce", "gate_judge_deny"]
+
+
+def test_tier_ceiling_medium_bare_allow_is_forced_to_snapshot(tmp_path):
+    target = tmp_path / "secret.token"
+    target.write_text("pre-image content\n")
+    judge = _fake_judge(tmp_path, "fake_judge_medium.py", _judge_says("Medium", "allow"))
+    worker = "tier-medium"
+    rc, err = run_hook(bash_payload(f"shred -u {target}"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        ag.SNAPDIR_ENV: str(tmp_path / "snaps"),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": worker})
+    assert rc == 0, err
+    events = _events(tmp_path, worker)
+    assert [e["event"] for e in events] == ["gate_red_block", "judge_enforce",
+                                            "gate_judge_allow_with_conditions"]
+    staged = events[-1]["staged"]
+    assert any("forced: Medium tier" in s["condition"] and s["artifacts"] for s in staged)
+
+
+def test_tier_ceiling_low_allow_unchanged(tmp_path):
+    judge = _fake_judge(tmp_path, "fake_judge_low.py", _judge_says("Low-Medium", "allow"))
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "tier-low"})
+    assert rc == 0, err

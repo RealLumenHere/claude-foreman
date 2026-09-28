@@ -84,6 +84,9 @@ JUDGE_ENFORCE_TIMEOUT = int(os.environ.get("FOREMAN_JUDGE_ENFORCE_TIMEOUT",
                                             str(JUDGE_SHADOW_TIMEOUT)))
 
 
+JUDGE_TIERS = ("Low", "Low-Medium", "Medium", "High", "EXTREMELY HIGH")
+
+
 def _judge_enforce_enabled():
     return os.environ.get(JUDGE_ENFORCE_ENV, "0") == "1"
 
@@ -785,11 +788,29 @@ def enforce_judge_verdict(tool_name, detail, reason, rules, cwd):
                     error=err or f"no/invalid verdict: {out!r}", exit_code=rc)
         return {"action": "deny", "why": "judge FAIL_CLOSED", "judge": out}
     verdict = out["verdict"]
+    tier = out.get("tier")
     _log_event("judge_enforce", gate_reason=reason, judge_verdict=verdict,
-                judge_tier=out.get("tier"), judge_rationale=out.get("rationale"),
+                judge_tier=tier, judge_rationale=out.get("rationale"),
                 exit_code=rc)
     if verdict == "deny":
         return {"action": "deny", "why": "judge denied", "judge": out}
+    # wq#2869 tier ceiling: the tier bounds what the verdict may do, whatever the
+    # verdict string says. A self-contradicting "allow" on a severe tier is the
+    # exact false-allow shape the bench measures, so the tier wins.
+    #   unknown/missing tier -> deny (fail closed)
+    #   EXTREMELY HIGH       -> deny (Frank only)
+    #   High                 -> deny (needs a declared maintenance window + Frank
+    #                           notified; action_gate cannot stage either, so it
+    #                           stays a hard block until a window gate is wired)
+    #   Medium + allow       -> allow-with-conditions (a snapshot is mandatory)
+    if tier not in JUDGE_TIERS:
+        return {"action": "deny", "why": f"judge tier missing/unknown: {tier!r}", "judge": out}
+    if tier in ("EXTREMELY HIGH", "High"):
+        return {"action": "deny", "why": f"tier ceiling: {tier} never auto-allows", "judge": out}
+    if verdict == "allow" and tier == "Medium":
+        verdict = "allow-with-conditions"
+        out = dict(out, conditions=list(out.get("conditions") or []) +
+                   ["snapshot before executing (forced: Medium tier)"])
     if verdict == "allow":
         return {"action": "allow", "judge": out}
     try:
