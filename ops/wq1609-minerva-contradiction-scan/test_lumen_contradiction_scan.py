@@ -156,6 +156,21 @@ def test_bare_labels_and_common_words_stay_subject_scoped(db):
         assert next(e for e in idx if e["dead_value"] == value)["scoped"] is True
 
 
+def test_value_open_on_two_subjects_is_subject_scoped_despite_looking_self_identifying(db):
+    """wq#2850: a kernel string has digits and dots so self_identifying() says
+    True, but nephthys.yaml:22 quoting '7.0.0-30-generic' was flagged as
+    sobek's dead kernel although sobek is never named in the file. sobek closing
+    -30 doesn't make -30 sobek's alone: nephthys and thoth are both still open
+    on it, so two live subjects sharing the string proves it's fleet
+    vocabulary, not an identifier."""
+    add_fact(db, "k1", "sobek", "kernel", "7.0.0-30-generic", "2026-09-26", "config")
+    add_fact(db, "k2", "sobek", "kernel", "7.0.0-34-generic", None, "config")
+    add_fact(db, "k3", "nephthys", "kernel", "7.0.0-30-generic", None, "config")
+    add_fact(db, "k4", "thoth", "kernel", "7.0.0-30-generic", None, "config")
+    entry = next(e for e in index_of(db) if e["dead_value"] == "7.0.0-30-generic")
+    assert entry["scoped"] is True
+
+
 def test_a_shouted_status_word_is_not_self_identifying():
     """wq#1629 split prose status values into tokens, so the index is now full
     of words like RETIRED. Uppercase says nothing about WHICH subject is
@@ -225,6 +240,30 @@ def test_generic_value_requires_a_predicate_cue(db):
     assert scan_line(db, "thor: the dead 24-port switch was reflashed") == []
     assert [h["predicate"] for h in scan_line(db, "hathor power_plug: P3")] \
         == ["power_plug"]
+
+
+def test_shared_kernel_string_does_not_flag_a_file_that_never_names_the_closed_subject(db):
+    """wq#2812/wq#2850 regression: nephthys.yaml quotes the shared kernel
+    build sobek closed, but never mentions sobek (grep -c sobek == 0 on the
+    real file). Every node still legitimately on -30 must not false-positive
+    on sobek's supersession."""
+    add_fact(db, "k1", "sobek", "kernel", "7.0.0-30-generic", "2026-09-26", "config")
+    add_fact(db, "k2", "sobek", "kernel", "7.0.0-34-generic", None, "config")
+    add_fact(db, "k3", "nephthys", "kernel", "7.0.0-30-generic", None, "config")
+    add_fact(db, "k4", "thoth", "kernel", "7.0.0-30-generic", None, "config")
+    assert scan_line(db, "kernel: '7.0.0-30-generic'") == []
+
+
+def test_shared_kernel_string_still_flags_a_line_naming_the_closed_subject(db):
+    """Positive control: a line that actually claims sobek is still on the
+    dead kernel build must still flag — subject scoping must be able to
+    fail, not just always pass (wq#2630)."""
+    add_fact(db, "k1", "sobek", "kernel", "7.0.0-30-generic", "2026-09-26", "config")
+    add_fact(db, "k2", "sobek", "kernel", "7.0.0-34-generic", None, "config")
+    add_fact(db, "k3", "nephthys", "kernel", "7.0.0-30-generic", None, "config")
+    add_fact(db, "k4", "thoth", "kernel", "7.0.0-30-generic", None, "config")
+    hits = scan_line(db, "sobek kernel: 7.0.0-30-generic")
+    assert [h["subject"] for h in hits] == ["sobek"]
 
 
 def scan_in_section(db_path, line, section):
