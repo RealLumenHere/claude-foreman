@@ -236,6 +236,30 @@ on a report-only tier), 2 = the scan broke. pgvector being unreachable is a
 WARN, not a failure. `--corpus` adds ~110s to the run; the unit is
 `Type=oneshot`, which has no start timeout.
 
+## wq#3030 — note-supersession widening
+
+`ops/wq1614-search-v3-contradiction-penalty/REPORT.md` §3 measured the index at
+20 rows over 5 predicates (`ts_ip`, `status`, `ollama_version`, `fan_status`,
+`power_plug`) — all fleet-hardware, because `build_dead_value_index()` reads
+only `state_facts`. None of the four wq#1614 trap@1 queries (a scout-X
+ingestion outage, the power dashboard, a restic checkpoint, the pgvector
+migration) names a fleet-hardware subject, so none could ever enter the index
+through that path, no matter how the query-scoping in wq#3017 was tuned.
+
+`build_note_supersession_index()` reads `archival_notes.supersedes` instead —
+a lineage column the schema has carried since this scanner shipped
+(`add_note(..., superseded_by=...)` in the test fixtures) but that no code
+here ever read. A note that supersedes another is the same closed-value
+relationship `state_facts` carries for a fleet host, just recorded as note
+lineage: the predecessor's shouted status tokens (`OUTAGE`, `CRITICAL`,
+`STALLED`) that do not reappear in the successor are dead, scoped to whichever
+slug the two titles share. Same suppressors' spirit (a status word still
+present in the successor is a changelog, not a live claim); no minerva.db
+access from this worktree, so the widening is unit-tested against a synthetic
+fixture (`test_lumen_contradiction_scan.py`, 5 new tests) rather than measured
+against the live trap qids — that measurement needs the wq#1614 gate run from
+a lane with `/home/lumen/minerva` granted (kb/ISSUE-LOG.md #993).
+
 ## Install
 
 ```

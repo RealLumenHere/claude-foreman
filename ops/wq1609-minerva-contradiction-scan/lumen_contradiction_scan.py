@@ -85,6 +85,15 @@ Exit 0 = ran clean, 2 = the scan itself broke, 1 = actionable hits (only with
 red). pgvector being unreachable WARNs and leaves the exit code alone — the
 corpus half must never take the fleet-facing half down (§4.3).
 
+wq#3030: the dead-value index also reads `archival_notes.supersedes`
+(build_note_supersession_index), not just `state_facts`. The reach diagnostic
+in ops/wq1614-search-v3-contradiction-penalty/REPORT.md §3 measured the index
+covering only 5 fleet-hardware predicates (ts_ip, status, ollama_version,
+fan_status, power_plug) and none of the wq#1614 trap@1 queries — they are
+project/infra narrative (an ingestion outage, a dashboard, a backup
+checkpoint, a migration) that never had a state_facts subject and so could
+never reach the index through build_dead_value_index() alone.
+
   lumen-contradiction-scan [--json] [--apply] [--strict] [--db PATH]
   lumen-contradiction-scan --corpus [--corpus-apply] [--corpus-env PATH]
   lumen-contradiction-scan --selftest
@@ -192,6 +201,12 @@ FAILURE_MODE_RE = re.compile(
     r"|\bfallback\b|\brecovery\b",
     re.IGNORECASE,
 )
+
+# wq#3030: a shouted status token in note prose, generalising the state_facts
+# side's bare-label/shouted-word handling (COMMON_WORD_VALUES, SHOUTED_SHORT_RE)
+# to note-to-note supersession, which carries no length ceiling because it is
+# always subject-scoped before it is ever matched (build_note_supersession_index).
+NOTE_STATUS_RE = re.compile(r"^[A-Z][A-Z0-9_-]{1,}$")
 
 TIER_NOTE = "note_row"
 TIER_REGEN = "regenerate"
@@ -394,6 +409,94 @@ def build_dead_value_index(conn):
                 "case_re": re.compile(value_re.pattern),
             }
         )
+    return index
+
+
+# --------------------------------------------------- note-supersession index
+
+def _note_status_tokens(text):
+    """Shouted status-shaped tokens in note prose: `OUTAGE`, `CRITICAL`,
+    `RESOLVED`. Same alphabet as a state_facts value (TOKEN_RE); unlike
+    COMMON_WORD_VALUES/SHOUTED_SHORT_RE this carries no length ceiling, because
+    a note-sourced entry is always subject-scoped before scan_text ever reaches
+    the value (build_note_supersession_index)."""
+    tokens = set()
+    for raw in re.split(r"[^A-Za-z0-9._:/@-]+", text or ""):
+        tok = raw.strip(".,:;()[]'\"")
+        if tok and NOTE_STATUS_RE.fullmatch(tok):
+            tokens.add(tok)
+    return tokens
+
+
+def _note_subject_tokens(text):
+    """Lowercase slug-shaped identifiers in a note title: `scout-x`,
+    `power-dashboard`, `restic`, `pgvector`. Same >=3-char floor
+    subject_tokens() uses for a state_facts subject; PREDICATE_STOPWORDS keeps
+    ordinary connective words out."""
+    tokens = set()
+    for raw in re.split(r"[^A-Za-z0-9-]+", (text or "").lower()):
+        if len(raw) >= 3 and raw not in PREDICATE_STOPWORDS:
+            tokens.add(raw)
+    return tokens
+
+
+def build_note_supersession_index(conn):
+    """Dead-value entries mined from `archival_notes.supersedes`, never from
+    `state_facts` (wq#3030).
+
+    wq#1610 only ever read state_facts, so a claim that lives *only* in a
+    note — scout-X's ingestion outage, the power dashboard, a restic checkpoint,
+    the pgvector migration — has no fleet subject and could never enter
+    build_dead_value_index(). Every wq#1614 trap@1 query the reach diagnostic
+    named is exactly this shape (REPORT.md §3): project/infra narrative, not
+    fleet-hardware state.
+
+    A note that supersedes another is asserting the same closed-value
+    relationship build_dead_value_index reads out of state_facts, just carried
+    in note lineage: the predecessor's shouted status tokens that do not
+    reappear in the successor are dead, scoped to whatever slug the two titles
+    share. `supersedes` already exists in the schema (test_lumen_contradiction_
+    scan.py's SCHEMA, `add_note(..., superseded_by=...)`); nothing before this
+    read it."""
+    index = []
+    rows = conn.execute(
+        "select id, title, content, supersedes from archival_notes "
+        "where revoked_at is null and superseded_by is null "
+        "and supersedes is not null and supersedes != ''"
+    )
+    for new_id, new_title, new_content, old_id in rows:
+        old_row = conn.execute(
+            "select title, content from archival_notes where id = ?", (old_id,)
+        ).fetchone()
+        if old_row is None:
+            continue
+        old_title, old_content = old_row
+        subjects = _note_subject_tokens(old_title) & _note_subject_tokens(new_title)
+        if not subjects:
+            continue
+        old_text = f"{old_title or ''}\n{old_content or ''}"
+        new_text = f"{new_title or ''}\n{new_content or ''}"
+        dead_tokens = _note_status_tokens(old_text) - _note_status_tokens(new_text)
+        for subject in sorted(subjects):
+            for val in sorted(dead_tokens):
+                value_re = boundary_re(val, case_exact=True)
+                predicate = val.lower()
+                index.append(
+                    {
+                        "fact_id": f"note:{old_id}",
+                        "subject": subject,
+                        "predicate": predicate,
+                        "dead_value": val,
+                        "current_value": None,
+                        "valid_to": None,
+                        "scoped": True,
+                        "value_re": value_re,
+                        "subject_res": [boundary_re(t) for t in subject_tokens(subject)],
+                        "cue_res": [boundary_re(c) for c in predicate_cues(predicate)],
+                        "current_res": [],
+                        "case_re": re.compile(value_re.pattern),
+                    }
+                )
     return index
 
 
@@ -914,7 +1017,7 @@ def render(result):
 def scan(db_path, apply=False, artifacts=FILE_ARTIFACTS, corpus=False,
          corpus_apply=False, corpus_env_path=CORPUS_ENV):
     conn = connect(db_path, readonly=not apply)
-    index = build_dead_value_index(conn)
+    index = build_dead_value_index(conn) + build_note_supersession_index(conn)
     closed_values = [
         r[0] for r in conn.execute(
             "select value from state_facts where valid_to is not null"

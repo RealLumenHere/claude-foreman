@@ -71,9 +71,10 @@ def db(tmp_path):
 def add_note(db_path, note_id, content, title="", **kw):
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "insert into archival_notes (id, title, content, revoked_at, superseded_by)"
-        " values (?,?,?,?,?)",
-        (note_id, title, content, kw.get("revoked_at"), kw.get("superseded_by")),
+        "insert into archival_notes (id, title, content, revoked_at, superseded_by,"
+        " supersedes) values (?,?,?,?,?,?)",
+        (note_id, title, content, kw.get("revoked_at"), kw.get("superseded_by"),
+         kw.get("supersedes")),
     )
     conn.commit()
     conn.close()
@@ -791,3 +792,81 @@ def test_file_config_ticket_uses_the_real_wq_and_aq_argv_shapes(monkeypatch):
     assert aq_cmd[2] == "lumen-contradiction-scan"
     assert aq_cmd[3] == "storage_manifest.yaml"
     assert aq_cmd[4] == title
+
+
+# ------------------------------------------------- note-supersession (wq#3030)
+
+def add_superseding_pair(db_path, old_id, old_content, new_id, new_content,
+                         title=""):
+    """A note pair wired both directions, the way the real lineage is: the
+    predecessor's `superseded_by` points at the successor (what scan_notes'
+    own candidate filter excludes it on) and the successor's `supersedes`
+    points back (what build_note_supersession_index reads)."""
+    add_note(db_path, old_id, old_content, title=title, superseded_by=new_id)
+    add_note(db_path, new_id, new_content, title=title, supersedes=old_id)
+
+
+def test_note_supersession_widens_the_index_beyond_state_facts(db):
+    """The trap gap: a project/ops claim that only ever lived in a note has no
+    state_facts subject, so build_dead_value_index() alone never sees it."""
+    add_superseding_pair(
+        db, "old1", "scout-x ingestion pipeline status: OUTAGE since 04:10",
+        "new1", "scout-x ingestion pipeline status: RESOLVED at 06:40",
+        title="scout-x",
+    )
+    conn = lcs.connect(db, readonly=True)
+    idx = lcs.build_note_supersession_index(conn)
+    conn.close()
+    assert [(e["subject"], e["dead_value"]) for e in idx] == [("scout-x", "OUTAGE")]
+
+
+def test_note_supersession_requires_a_shared_subject_slug(db):
+    add_note(db, "old1", "status: OUTAGE", title="scout-x", superseded_by="new1")
+    add_note(db, "new1", "status: RESOLVED", title="unrelated-dashboard",
+             supersedes="old1")
+    conn = lcs.connect(db, readonly=True)
+    idx = lcs.build_note_supersession_index(conn)
+    conn.close()
+    assert idx == []
+
+
+def test_note_supersession_drops_a_status_word_still_present_in_the_successor(db):
+    """A changelog-style successor that repeats the old status while narrating
+    the transition is not asserting it is still live."""
+    add_superseding_pair(
+        db, "old1", "restic checkpoint: CRITICAL, missed the hourly run",
+        "new1", "restic checkpoint: was CRITICAL, now OK after rerun",
+        title="restic-pokemon",
+    )
+    conn = lcs.connect(db, readonly=True)
+    idx = lcs.build_note_supersession_index(conn)
+    conn.close()
+    assert [e["dead_value"] for e in idx] == []
+
+
+def test_note_supersession_index_reaches_an_unrelated_open_note(db):
+    """End to end: the widened index (state_facts + note supersession) flags an
+    open note that still asserts a status a superseding note retired -- a
+    subject/predicate no state_facts row ever carried."""
+    add_superseding_pair(
+        db, "old1", "pgvector migration status: STALLED on chunk backfill",
+        "new1", "pgvector migration status: DONE, backfill complete",
+        title="pgvector-migration",
+    )
+    add_note(db, "n3", "Runbook: if pgvector-migration reports STALLED, "
+             "re-run the chunker.")
+    conn = lcs.connect(db, readonly=True)
+    idx = lcs.build_dead_value_index(conn) + lcs.build_note_supersession_index(conn)
+    hits = lcs.scan_notes(conn, idx)
+    conn.close()
+    assert [(h["location"], h["subject"], h["dead_value"]) for h in hits] == [
+        ("archival_notes:n3", "pgvector-migration", "STALLED"),
+    ]
+
+
+def test_note_supersession_ignores_notes_with_no_predecessor(db):
+    add_note(db, "n1", "status: OUTAGE", title="scout-x")
+    conn = lcs.connect(db, readonly=True)
+    idx = lcs.build_note_supersession_index(conn)
+    conn.close()
+    assert idx == []
