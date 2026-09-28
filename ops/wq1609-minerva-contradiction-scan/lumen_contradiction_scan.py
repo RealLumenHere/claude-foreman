@@ -202,11 +202,46 @@ FAILURE_MODE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# wq#3030: a shouted status token in note prose, generalising the state_facts
-# side's bare-label/shouted-word handling (COMMON_WORD_VALUES, SHOUTED_SHORT_RE)
-# to note-to-note supersession, which carries no length ceiling because it is
-# always subject-scoped before it is ever matched (build_note_supersession_index).
+# wq#3030 shipped this as a bare shape test (^[A-Z][A-Z0-9_-]+$) with no status
+# vocabulary behind it, so it harvested any shouted acronym in note prose --
+# `PR` alone was 667/6611 (10%) of the matches over kb/ISSUE-LOG.md, and 89% of
+# all matches were not status words (wq#3041 judgment,
+# reports/wq3041_judgment_wq3030_note_status_false_positive.md). Subject-scoping
+# does not guard this: it limits WHERE a value is attributed, not WHETHER it is
+# a status. wq#3053 replaces the shape test with an allowlist (NOTE_STATUS_WORDS)
+# of the fleet's actual status vocabulary, generalising the state_facts side's
+# bare-label/shouted-word handling (COMMON_WORD_VALUES, SHOUTED_SHORT_RE) to
+# note-to-note supersession.
 NOTE_STATUS_RE = re.compile(r"^[A-Z][A-Z0-9_-]{1,}$")
+
+NOTE_STATUS_WORDS = frozenset({
+    "OUTAGE", "CRITICAL", "STALLED", "RESOLVED", "OK", "DONE",
+    "DEGRADED", "DOWN", "UP", "FAILED", "FAILING", "BLOCKED",
+    "DEAD", "ACTIVE", "INACTIVE", "PENDING", "CLOSED", "OPEN",
+    "WORKING", "BROKEN", "FIXED", "STABLE", "UNSTABLE",
+    "ERROR", "WARNING", "HEALTHY", "UNHEALTHY", "ONLINE", "OFFLINE",
+    "RUNNING", "STOPPED", "PAUSED", "TIMEOUT", "ABORTED", "CANCELLED",
+    "COMPLETE", "COMPLETED", "QUEUED", "SKIPPED", "PASS", "FAIL",
+    "PASSED", "SUCCESS", "SUCCEEDED", "MERGED", "DEPLOYED",
+    "ROLLBACK", "VERIFIED", "UNVERIFIED", "EXPIRED", "REVOKED",
+    "DISABLED", "ENABLED", "RETIRED", "REPLACED", "SUPERSEDED",
+})
+
+# The real cue gate wq#3041 found missing: predicate_cues(val.lower()) just
+# echoed the value back, so "subject + cue" was really just "subject" for any
+# short token. These are independent of the value itself -- prose actually
+# making a status claim about a subject, not merely containing the acronym.
+NOTE_STATUS_CUE_WORDS = ("status", "state", "outage", "condition", "health")
+
+# Generic note-title words that are not slug-shaped subject identifiers.
+# "... status update" titles were the wq#3041 cross-subject bleed vector: two
+# unrelated notes ("hathor GPU status update", "isis status update") shared
+# subject tokens "status"/"update" and nothing else, so a dead value harvested
+# from one fired on the other.
+NOTE_GENERIC_TITLE_WORDS = frozenset({
+    "status", "update", "updates", "notes", "note", "fleet", "report",
+    "reports", "summary", "checkpoint", "runbook",
+})
 
 TIER_NOTE = "note_row"
 TIER_REGEN = "regenerate"
@@ -415,15 +450,15 @@ def build_dead_value_index(conn):
 # --------------------------------------------------- note-supersession index
 
 def _note_status_tokens(text):
-    """Shouted status-shaped tokens in note prose: `OUTAGE`, `CRITICAL`,
-    `RESOLVED`. Same alphabet as a state_facts value (TOKEN_RE); unlike
-    COMMON_WORD_VALUES/SHOUTED_SHORT_RE this carries no length ceiling, because
-    a note-sourced entry is always subject-scoped before scan_text ever reaches
-    the value (build_note_supersession_index)."""
+    """Shouted status tokens in note prose: `OUTAGE`, `CRITICAL`, `RESOLVED`.
+    Must be shape-plausible (NOTE_STATUS_RE) AND real status vocabulary
+    (NOTE_STATUS_WORDS, wq#3053) -- the shape test alone matched any shouted
+    acronym (`PR`, `CI`, `TODO`), which was 89% of all matches over fleet prose
+    (wq#3041 judgment)."""
     tokens = set()
     for raw in re.split(r"[^A-Za-z0-9._:/@-]+", text or ""):
         tok = raw.strip(".,:;()[]'\"")
-        if tok and NOTE_STATUS_RE.fullmatch(tok):
+        if tok and NOTE_STATUS_RE.fullmatch(tok) and tok in NOTE_STATUS_WORDS:
             tokens.add(tok)
     return tokens
 
@@ -432,10 +467,14 @@ def _note_subject_tokens(text):
     """Lowercase slug-shaped identifiers in a note title: `scout-x`,
     `power-dashboard`, `restic`, `pgvector`. Same >=3-char floor
     subject_tokens() uses for a state_facts subject; PREDICATE_STOPWORDS keeps
-    ordinary connective words out."""
+    ordinary connective words out. NOTE_GENERIC_TITLE_WORDS additionally drops
+    generic note-structure words ("status", "update", ...) that are not
+    identifiers of anything -- two unrelated notes sharing only "status
+    update" in their titles is not a shared subject (wq#3041 judgment, case D)."""
     tokens = set()
     for raw in re.split(r"[^A-Za-z0-9-]+", (text or "").lower()):
-        if len(raw) >= 3 and raw not in PREDICATE_STOPWORDS:
+        if (len(raw) >= 3 and raw not in PREDICATE_STOPWORDS
+                and raw not in NOTE_GENERIC_TITLE_WORDS):
             tokens.add(raw)
     return tokens
 
@@ -453,9 +492,11 @@ def build_note_supersession_index(conn):
 
     A note that supersedes another is asserting the same closed-value
     relationship build_dead_value_index reads out of state_facts, just carried
-    in note lineage: the predecessor's shouted status tokens that do not
-    reappear in the successor are dead, scoped to whatever slug the two titles
-    share. `supersedes` already exists in the schema (test_lumen_contradiction_
+    in note lineage: the predecessor's shouted status tokens (NOTE_STATUS_WORDS,
+    not any shouted acronym -- wq#3053) that do not reappear in the successor
+    are dead, scoped to whatever slug-shaped subject the two titles share
+    (NOTE_GENERIC_TITLE_WORDS excludes generic non-identifiers like "status").
+    `supersedes` already exists in the schema (test_lumen_contradiction_
     scan.py's SCHEMA, `add_note(..., superseded_by=...)`); nothing before this
     read it."""
     index = []
@@ -492,7 +533,11 @@ def build_note_supersession_index(conn):
                         "scoped": True,
                         "value_re": value_re,
                         "subject_res": [boundary_re(t) for t in subject_tokens(subject)],
-                        "cue_res": [boundary_re(c) for c in predicate_cues(predicate)],
+                        # Not predicate_cues(predicate): that just echoed the
+                        # value back (predicate == val.lower()), so "subject +
+                        # cue" was really just "subject" for any short token
+                        # (wq#3041 judgment). This is independent of the value.
+                        "cue_res": [boundary_re(c) for c in NOTE_STATUS_CUE_WORDS],
                         "current_res": [],
                         "case_re": re.compile(value_re.pattern),
                     }
@@ -1017,7 +1062,15 @@ def render(result):
 def scan(db_path, apply=False, artifacts=FILE_ARTIFACTS, corpus=False,
          corpus_apply=False, corpus_env_path=CORPUS_ENV):
     conn = connect(db_path, readonly=not apply)
-    index = build_dead_value_index(conn) + build_note_supersession_index(conn)
+    state_index = build_dead_value_index(conn)
+    note_index = build_note_supersession_index(conn)
+    # Note-sourced entries stay out of scan_files (the ticket/regenerate file
+    # tiers, wq#3053 item 4): they are harvested from free note prose with no
+    # typed status column behind them, so a residual false positive there must
+    # not be able to auto-file a wq ticket or trigger a state regen. They are
+    # still matched against notes themselves, where the intended recall gain
+    # (a note-only claim contradicting a still-open note) lives.
+    index = state_index + note_index
     closed_values = [
         r[0] for r in conn.execute(
             "select value from state_facts where valid_to is not null"
@@ -1027,7 +1080,7 @@ def scan(db_path, apply=False, artifacts=FILE_ARTIFACTS, corpus=False,
     # What lumen_dream.superseded_ips() saw: IP_RE.fullmatch over closed values.
     ip_only = sum(1 for v in closed_values if SELF_IDENTIFYING[0].fullmatch(v))
 
-    hits = scan_notes(conn, index) + scan_files(index, artifacts)
+    hits = scan_notes(conn, index) + scan_files(state_index, artifacts)
     corpus_meta = {"status": "off"}
     if corpus:
         corpus_hits, corpus_meta = corpus_tier(
