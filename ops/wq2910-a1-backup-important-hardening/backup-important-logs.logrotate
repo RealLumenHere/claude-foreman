@@ -1,0 +1,17 @@
+# Install as: /etc/logrotate.d/lumen-backup-important
+# wq#2910: /home/lumen/logs/backup-important.log.1 was observed >2GB
+# (pat-scan skips it as OVERSIZE) because the log has no rotation cap.
+# copytruncate: the unit's StandardOutput/StandardError=append: fd is opened
+# by systemd (as root) before it drops to User=lumen (wq#2052,
+# 50-quiet-journal.conf), so the file must stay at the same inode across a
+# run rather than being renamed out from under that fd.
+/home/lumen/logs/backup-important.log {
+    size 50M
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0644 root root
+}
