@@ -3,23 +3,45 @@
 
 Self-contained: builds a tiny archival corpus in a temp sqlite file and stubs the
 embedding functions, so nothing here reads minerva.db. The identity test loads the
-UNPATCHED mirror module alongside the patched one and compares their output on the
+UNPATCHED base module alongside the patched one and compares their output on the
 same corpus -- "1.0 is off" is demonstrated against the real previous code, not
 asserted against a re-implementation of it.
 
+The base is a rev-pinned read of minerva's git history (the commit the patch was
+re-derived against, wq#3004), not the live file: once install.sh has run, the live
+file IS the patched one and the identity test would compare it with itself.
+
 Run:  python3 test_contra_penalty.py
 """
+import atexit
+import hashlib
 import importlib.util
 import json
 import os
 import sqlite3
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
 
-MIRROR = '/home/lumen/research/minerva-ref/lumen_recall2.py'
+BASE_REV = '42d8c2a:lumen_recall2.py'
+BASE_SHA = 'd185ce3c1e2bcf0c3259881ca8d3d9a8fef8b21c3635ab5f3e6435bf3ea1a1c7'
 PATCHED = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lumen_recall2.py')
+
+
+def _pinned_base():
+    src = subprocess.run(['git', '-C', '/home/lumen/minerva', 'show', BASE_REV],
+                         capture_output=True, check=True).stdout
+    assert hashlib.sha256(src).hexdigest() == BASE_SHA, 'pinned base drifted'
+    fd, path = tempfile.mkstemp(suffix='_lumen_recall2_base.py')
+    with os.fdopen(fd, 'wb') as fh:
+        fh.write(src)
+    atexit.register(os.unlink, path)
+    return path
+
+
+MIRROR = _pinned_base()
 FIXTURE = '/home/lumen/minerva/eval/fixtures/note_contradictions_20260913.json'
 
 # 3-dim unit vectors: cosine against the query vector [1,0,0] is the first element.

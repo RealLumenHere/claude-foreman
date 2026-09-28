@@ -92,3 +92,19 @@ Load-bearing ones:
   `lumen_recall2` into `sys.modules` so `recall_bench`'s own import resolves to it, and pass
   `MEMORY_V4_W_CONTRA` / `MEMORY_V4_CONTRA_FIXTURE` through) verified against a stand-in
   bench, since the real one needs the DB.
+
+## 6. Gate result, 2026-09-28 (wq#3004): REJECT, not installed
+
+First live run of `install.sh`. The patch was re-derived onto minerva `42d8c2a` first,
+because the 09-13 mirror base had gone stale and shipping it would have reverted wq#2895.
+Artifact: `gate_20260928_134734.json`. At `W_CONTRA=0.5`:
+
+- `trap@1` stayed at 0.25 with the same qids. The prediction in §3 held.
+- R@1 went 0.715 → 0.707 and MRR 0.793 → 0.787. The `knowledge-update` class lost
+  16.6pt and `build` lost 3.1pt. The gate fails on those three checks.
+- qid 142 dropped from rank 1 out of top-k. Its gold note `27424d3dad48` is itself in the
+  contradiction set (nephthys `ts_ip` 100.98.74.87), which is the "good procedure around
+  one dead fact" case from §1. A blanket multiply does not survive it.
+
+`/home/lumen/minerva/lumen_recall2.py` was left untouched. Follow-up is wq#3017: scope the
+penalty to queries that ask about the dead fact, or retire the bundle.

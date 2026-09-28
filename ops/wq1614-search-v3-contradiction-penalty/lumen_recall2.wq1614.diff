@@ -1,4 +1,4 @@
---- minerva-ref/lumen_recall2.py
+--- minerva-live/lumen_recall2.py
 +++ wq1614/lumen_recall2.py
 @@ -403,6 +403,88 @@
  SALIENCE_ON = os.environ.get('MEMORY_V4_SALIENCE', '0') == '1'
@@ -88,8 +88,8 @@
 +
  
  def _search_v3_impl(query, top_k=10):
-     LAST_STATS.update(skipped_bad_emb=0, dense_scanned=0, failopen_v2=False)
-@@ -518,6 +600,10 @@
+     # wq#2895: this runs INSIDE lumen-memoryd on every /recall. Before, any raise
+@@ -530,6 +612,10 @@
          if q_ents:
              ent_scores = _entity_scores(conn, q_ents, set(cand.keys()))
  
@@ -100,7 +100,7 @@
      scored = []
      for r in rows:
          blob_toks = set(_tokens((r['title'] or '') + ' ' + (r['content'] or '')[:2500]))
-@@ -534,12 +620,22 @@
+@@ -546,12 +632,22 @@
          fused = W_D * d + W_LEX * lex + W_G * g + W_REC * rec
          if ENTITY_ON:
              fused += ENTITY_W * ent
@@ -129,7 +129,7 @@
      if FED_ON:
          scored.extend(_federated(conn, query, q_toks, q_emb, now_ts))
      # wq#576 salience: ADDITIVE and NON-FILTERING (a multiplicative/filtering usage
-@@ -592,6 +688,7 @@
+@@ -604,6 +700,7 @@
  if __name__ == '__main__':
      q = ' '.join(sys.argv[1:]) or 'test query'
      for i, h in enumerate(search_v3(q), 1):

@@ -13,22 +13,26 @@ STAMP=$(date -u +%Y%m%d_%H%M%S)
 
 LIVE=/home/lumen/minerva/lumen_recall2.py
 
-# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step
-# -- in particular before the golden-set gate, which is far too heavy for a
-# liveness timer. lumen_recall2.py is edited in place by later search work, so
-# the contract is the penalty knob this ticket added, not byte-equality.
+# wq#1696 deploy-verify contract (wq#2985, markers tightened by wq#3004). Read-only,
+# before any install step -- in particular before the golden-set gate, which is far
+# too heavy for a liveness timer. Markers, not a byte compare: the file is edited in
+# place and other lanes keep editing it (wq#2895 landed first).
 if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh"
-  vcontains "$LIVE" 'MEMORY_V4_W_CONTRA'
-  vcontains "$LIVE" 'note_contradictions'
+  vcontains "$LIVE" "^W_CONTRA = float\(os.environ.get\('MEMORY_V4_W_CONTRA'"
+  vcontains "$LIVE" "FROM note_contradictions"
+  vcontains "$LIVE" "contra = _contradicted\(conn, "
   vdone
 fi
+
 GOLDEN=/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl
 GOLDEN_SHA=8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7
 FIXTURE=/home/lumen/minerva/eval/fixtures/note_contradictions_20260913.json
-# sha256 of /home/lumen/research/minerva-ref/lumen_recall2.py that lumen_recall2.py
-# here was patched from (mirror read 2026-09-13). Recorded, not guessed.
-BASE_SHA=31aa35044560a6512e6e466834974174b54a2a67d01b3418e5e91453348e3f84
+# sha256 of the live /home/lumen/minerva/lumen_recall2.py (minerva main 42d8c2a,
+# after wq#2895's conn-close split) that lumen_recall2.py here was re-derived from
+# on 2026-09-28 (wq#3004). The first base, the minerva-ref mirror 31aa3504..., had
+# gone stale: shipping that copy would have reverted wq#2895.
+BASE_SHA=d185ce3c1e2bcf0c3259881ca8d3d9a8fef8b21c3635ab5f3e6435bf3ea1a1c7
 W=${W_CONTRA:-0.5}
 
 say() { printf '\n== %s\n' "$*"; }

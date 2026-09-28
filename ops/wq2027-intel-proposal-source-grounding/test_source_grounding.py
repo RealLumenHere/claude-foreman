@@ -32,8 +32,10 @@ import tempfile
 from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VERIFY_PATH = os.path.join(HERE, "..", "wq1997-external-advisory-check", "minerva_verify.py")
-PROPOSAL_PATH = os.path.join(HERE, "..", "wq2019-proposal-reviewer-fix", "minerva_proposal.py")
+# wq#3004: the bundle ships its own copies, re-derived against live minerva
+# (the wq1997/wq2019 sibling copies predate wq#2430/wq#2460/wq#2905).
+VERIFY_PATH = os.path.join(HERE, "minerva_verify.py")
+PROPOSAL_PATH = os.path.join(HERE, "minerva_proposal.py")
 
 # --- load minerva_verify.py standalone (same pattern as test_external_advisory_check.py) ---
 _v_spec = importlib.util.spec_from_file_location("minerva_verify", VERIFY_PATH)
@@ -203,8 +205,12 @@ def main():
     # ------------------------------------------------------------------
     mv.semantic_citation_score = lambda claims, context: (
         1.0, [(c, 1.0, "ok") for c in claims], None)
-    mv.judge_entailment_uq = lambda claims, context: (
+    mv.judge_entailment_uq = lambda claims, context, **kw: (
         1.0, ["SUPPORTED"] * len(claims), "", None, [1.0] * len(claims))
+    # wq#2460/wq#2430 layers read the live state/episode stores and factpack
+    # handoff; stub them off so this proves the wq#2027 wiring only.
+    mv.context_authority_labels = lambda claims: (None, None)
+    mv._factpack_evidence_for = lambda answer: None
 
     # backward compatibility: no source_url/subject_claim_text passed -> the
     # new layer must not activate at all (every pre-existing call site).

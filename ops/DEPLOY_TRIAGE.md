@@ -68,7 +68,7 @@ Five tickets carry everything that needs doing; nothing is left merely described
 | --- | --- | --- |
 | wq#3002 | wq901, wq1298, wq1373, wq1406, wq1633, wq1652, wq1705, wq2086 | all 8 need root for systemd units on Lumen — same capability, same probe shape |
 | wq#3003 | wq2500 (Sia), wq2607 (Anubis), wq2608 (Bes), wq2851 (MacPro group) | all 4 need root on another node |
-| wq#3004 | wq1614, wq1632, wq2027 | all 3 write `/home/lumen/minerva` in place |
+| wq#3004 | wq1614, wq1632, wq2027 | all 3 write `/home/lumen/minerva` in place. **Outcome 2026-09-28:** wq2027 + wq1632 deployed (VERIFY OK; minerva #47, lumen-bin #177); wq1614 REJECTED by its golden gate, live untouched → wq#3017 |
 | wq#3005 | the 9 LIVE_DRIFT bundles | reconcile, never reinstall — several drifted on purpose |
 | wq#3006 | wq2904, wq2676 | live gateway/context edits, no installable file |
 

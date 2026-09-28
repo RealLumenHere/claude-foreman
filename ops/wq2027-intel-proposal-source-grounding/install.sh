@@ -9,12 +9,12 @@
 #
 # Three changes, all additive / fail-closed, all OFF-impact when a row
 # already has a real url+summary (Deploy section below has the full list):
-#   1. minerva_proposal.get_candidates() (ops/wq2019-proposal-reviewer-fix/
-#      minerva_proposal.py) refuses to surface a classified_intel row with an
-#      empty url or summary — it is not eligible to seed a proposal.
+#   1. minerva_proposal.get_candidates() (./minerva_proposal.py) refuses to
+#      surface a classified_intel row with an empty url or summary — it is
+#      not eligible to seed a proposal.
 #   2. minerva_verify.source_grounding_check() / verify(source_url=,
-#      source_summary=, subject_claim_text=) (ops/wq1997-external-advisory-
-#      check/minerva_verify.py) checks the subject exists (GitHub repo API)
+#      source_summary=, subject_claim_text=) (./minerva_verify.py) checks
+#      the subject exists (GitHub repo API)
 #      and that the proposal's claim about it is supported by the fetched
 #      summary — fail-closed, flips passed True->False only, backward
 #      compatible (no-op unless a caller opts in).
@@ -32,38 +32,57 @@
 # scratch/research/intel_new_github_repo__roshanrameshhub_agentforge_01a87c.md
 # cited a repo tree that does not exist in the real repo.
 #
-# Primary deploy is git: land this PR and let lumen-pr fast-forward
-# /home/lumen/minerva (same convention as wq#1997/wq#2005/wq#2010/wq#2019's
-# minerva_verify.py / minerva_proposal.py fixes). This script is the
-# change-safety replay for a host where that ff has not happened: backup ->
-# apply the shipped files -> import-health -> auto-revert on fail.
+# wq#3004: this used to copy the whole wq#2019/wq#1997 sibling files over
+# live. By 2026-09-28 live had moved on (wq#2430 TTL gate, wq#2460 authority
+# labels, wq#2905 reasoning_effort, the summary-grounded prompt), so that copy
+# would have reverted all of them. minerva_proposal.py / minerva_verify.py here
+# are live minerva 42d8c2a plus the wq#2027 hunks only, and step 0 refuses to
+# install over a live file that is no longer that base. This script is
+# backup -> drift gate -> apply -> import-health -> auto-revert on fail.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PROPOSAL_SRC="$HERE/../wq2019-proposal-reviewer-fix/minerva_proposal.py"
-VERIFY_SRC="$HERE/../wq1997-external-advisory-check/minerva_verify.py"
 PROPOSAL_TARGET=/home/lumen/minerva/minerva_proposal.py
 VERIFY_TARGET=/home/lumen/minerva/minerva_verify.py
 FETCH_TARGET=/home/lumen/minerva/fetch_source.py
 SWEEP_TARGET=/home/lumen/minerva/sweep_empty_source_proposals.py
 QUARANTINE_TARGET=/home/lumen/minerva/quarantine_fabricated_notes.py
 
-# wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
-# fetch_source.py is ours outright and byte-compares. The two library files are
-# edited in place by later tickets too, so they are checked by the marker this
-# ticket added, not by equality.
+# wq#1696 deploy-verify contract (wq#2985, markers tightened by wq#3004).
+# Read-only, before any install step. New files byte-compare; the two library
+# files are edited in place by later tickets too, so they are checked by the
+# markers this ticket added, not by equality.
 if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh"
-  vfile     "$HERE/fetch_source.py" "$FETCH_TARGET"
-  vfile     "$HERE/sweep_empty_source_proposals.py" "$SWEEP_TARGET"
-  vfile     "$HERE/quarantine_fabricated_notes.py"  "$QUARANTINE_TARGET"
-  vcontains "$PROPOSAL_TARGET" 'fetch_source|source.grounding|empty url'
+  vfile "$HERE/fetch_source.py" "$FETCH_TARGET"
+  vfile "$HERE/sweep_empty_source_proposals.py" "$SWEEP_TARGET"
+  vfile "$HERE/quarantine_fabricated_notes.py" "$QUARANTINE_TARGET"
+  vcontains "$PROPOSAL_TARGET" "^def _ensure_intel_source_columns\("
+  vcontains "$PROPOSAL_TARGET" "AND summary IS NOT NULL AND trim\(summary\) != ''"
+  vcontains "$PROPOSAL_TARGET" "source_url=url, source_summary=summary"
+  vcontains "$VERIFY_TARGET" "^def source_grounding_check\("
+  vcontains "$VERIFY_TARGET" "subject_claim_text: str = ''"
   vdone
 fi
 
+# 0. drift gate: sha256 of the live files these copies were re-derived from
+#    (minerva main 42d8c2a, 2026-09-28). Nothing is modified on a mismatch.
+PROPOSAL_BASE=0eaae7edd9ef82dba28a857727afc8c1b37af19be87b5bd1cda5ac15fdfb0475
+VERIFY_BASE=77d5d81c96af32d1025c7f2b4e753df7f09b2081c8a31afa1606b24bf2ceaae4
+for pair in "$PROPOSAL_TARGET:$PROPOSAL_BASE" "$VERIFY_TARGET:$VERIFY_BASE"; do
+  f=${pair%%:*}; want=${pair##*:}
+  got=$(sha256sum "$f" | cut -d' ' -f1)
+  if [ "$got" != "$want" ]; then
+    echo "REFUSING: $f is not the patch base (live $got, base $want)." >&2
+    echo "Either wq2027 is already installed or another lane moved the file;" >&2
+    echo "re-derive the wq#2027 hunks against it and re-record the base. Nothing was modified." >&2
+    exit 3
+  fi
+done
+
 cp "$PROPOSAL_TARGET" "$PROPOSAL_TARGET.bak.wq2027"
 cp "$VERIFY_TARGET" "$VERIFY_TARGET.bak.wq2027"
-cp "$PROPOSAL_SRC" "$PROPOSAL_TARGET"
-cp "$VERIFY_SRC" "$VERIFY_TARGET"
+cp "$HERE/minerva_proposal.py" "$PROPOSAL_TARGET"
+cp "$HERE/minerva_verify.py" "$VERIFY_TARGET"
 cp "$HERE/fetch_source.py" "$FETCH_TARGET"
 cp "$HERE/sweep_empty_source_proposals.py" "$SWEEP_TARGET"
 cp "$HERE/quarantine_fabricated_notes.py" "$QUARANTINE_TARGET"
@@ -75,6 +94,10 @@ spec = importlib.util.spec_from_file_location('minerva_verify', '$VERIFY_TARGET'
 mv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mv)
 sys.modules['minerva_verify'] = mv
+# keep the probe's verify() rows out of the live verification_log / verify.log
+import pathlib, tempfile
+mv.DB = ':memory:'
+mv.LOG = pathlib.Path(tempfile.mkdtemp(prefix='wq2027_health_')) / 'verify.log'
 assert callable(getattr(mv, 'source_grounding_check', None))
 assert callable(getattr(mv, 'subject_exists', None))
 assert mv.SOURCE_GROUNDING_CHECK_ENABLED is True  # flag defaults ON
@@ -83,7 +106,9 @@ assert mv.SOURCE_GROUNDING_CHECK_ENABLED is True  # flag defaults ON
 # local-model/network availability (same technique the sibling installs use)
 mv.subject_exists = lambda url: False
 mv.semantic_citation_score = lambda claims, context: (1.0, [(c, 1.0, 'ok') for c in claims], None)
-mv.judge_entailment_uq = lambda claims, context: (1.0, ['SUPPORTED'] * len(claims), '', None, [1.0] * len(claims))
+mv.judge_entailment_uq = lambda claims, context, **kw: (1.0, ['SUPPORTED'] * len(claims), '', None, [1.0] * len(claims))
+mv.context_authority_labels = lambda claims: (None, None)
+mv._factpack_evidence_for = lambda answer: None
 r = mv.verify('Lumen runs LangGraph.', 'Lumen runs LangGraph.', subject='wq2027_health', mode='semantic',
               source_url='https://github.com/x/nope', source_summary='n/a', subject_claim_text='claim about x')
 assert r['passed'] is False and 'subject_not_found' in (r['reason'] or ''), r

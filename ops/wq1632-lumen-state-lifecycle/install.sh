@@ -5,24 +5,29 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REG=/home/lumen/minerva/verify/registry.yaml
+BIN=/home/lumen/bin/lumen-state-lifecycle
 
 # wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
 # registry.yaml is shared with wq#1613 and merged, never clobbered, so it is
-# checked for the lifecycle predicates this bundle seeds rather than byte-compared.
+# checked for the lifecycle predicates rather than byte-compared.
 if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh"
-  vfile     "$HERE/state_lifecycle.py" /home/lumen/bin/lumen-state-lifecycle
-  vcontains "$REG" 'lifecycle'
+  vfile     "$HERE/state_lifecycle.py" "$BIN"
+  vcontains "$REG" "closes_on_decommission: true"
   vdone
 fi
 
-install -m 0755 "$HERE/state_lifecycle.py" /home/lumen/bin/lumen-state-lifecycle
+install -m 0755 "$HERE/state_lifecycle.py" "$BIN"
 
-# 1. registry: seed file first (never clobber an existing one — shared with wq#1613),
-#    then merge the live predicate vocabulary in.
+# 1. registry: seed file only if none exists (shared with wq#1613, never clobbered).
+#    The merge of the live predicate vocabulary is opt-in (--seed-registry) since
+#    wq#3004: registry.yaml is now wq#1613's curated, commented, git-tracked file,
+#    and seed-registry would append every unregistered live predicate (639 on
+#    2026-09-28) as class=config and rewrite the file through yaml.safe_dump,
+#    dropping its comments.
 mkdir -p /home/lumen/minerva/verify
 [ -e "$REG" ] || install -m 0644 "$HERE/registry.seed.yaml" "$REG"
-/home/lumen/bin/lumen-state-lifecycle seed-registry
+[ "${1:-}" = --seed-registry ] && "$BIN" seed-registry
 
 # 2. dry-run report
 /home/lumen/bin/lumen-state-lifecycle backfill

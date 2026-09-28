@@ -23,6 +23,12 @@ overlap, confirmed live against the GitHub trees API).
 
 ## The fix — three parts, all fail-closed
 
+> **Deployed 2026-09-28 (wq#3004), from this directory's own `minerva_proposal.py` /
+> `minerva_verify.py`, not the sibling copies named below.** By then the sibling
+> copies predated wq#2430, wq#2460 and wq#2905 on live, so the wq#2027 hunks were
+> re-derived onto minerva `42d8c2a` (landed as minerva PR #47). `install.sh`
+> drift-gates on that base and answers `--verify`.
+
 **1. Eligibility gate** (`minerva_proposal.py`, patched in place at
 `ops/wq2019-proposal-reviewer-fix/minerva_proposal.py` — that directory is
 the live tracked copy this file has moved through since wq#2019; the pattern
