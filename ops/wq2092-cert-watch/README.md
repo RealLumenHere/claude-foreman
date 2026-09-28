@@ -26,6 +26,15 @@ lumen-run start --root -- bash /home/lumen/foreman/ops/wq2092-cert-watch/install
 python3 /home/lumen/services/lumen-cert-watch/cert_watch.py run --dry-run
 ```
 
+Deployed 2026-09-28 (28 cloudflared-fronted hostnames discovered from the live
+ingress, all `ok`). `install.sh --verify` answers the wq#1696 deploy-verify
+contract read-only, so `ops-deploy-drift` alerts authoritatively if the timer
+ever stops or the installed copy drifts:
+
+```
+bash /home/lumen/foreman/ops/wq2092-cert-watch/install.sh --verify
+```
+
 Rollback: `systemctl disable --now lumen-cert-watch.timer`, remove
 `/etc/systemd/system/lumen-cert-watch.{service,timer}` and
 `/home/lumen/services/lumen-cert-watch/`. Nothing else is mutated.

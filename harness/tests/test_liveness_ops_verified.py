@@ -76,5 +76,20 @@ def test_registered_in_closed_vocabulary():
 
 def test_reference_bundles_carry_handler():
     ops_dir = os.path.dirname(VERIFY_SH)
-    for b in ("wq1658-cron-stamp-dropin", "wq900-primary-tree-guard"):
+    for b in ("wq1658-cron-stamp-dropin", "wq900-primary-tree-guard",
+              # wq#2092: landed 2026-09-19 with no handler, so its timer could sit
+              # inactive for nine days with nothing able to page on it.
+              "wq2092-cert-watch"):
         assert liveness._has_verify_handler(os.path.join(ops_dir, b, "install.sh")), b
+
+
+def test_cert_watch_handler_reaches_a_real_verdict(monkeypatch):
+    """The wq#2092 handler must actually run to a contract verdict, not be skipped
+    as handler-less (UNKNOWN). Read-only by contract, so this is safe on the box:
+    it reports SATISFIED when the bundle is deployed and STILL_BLOCKED when it is
+    not — either is a real answer; UNKNOWN means the handler is gone or broken."""
+    monkeypatch.setattr(liveness, "OPS_ROOT",
+                        os.path.join(os.path.dirname(os.path.dirname(HERE)), "ops"))
+    verdict, detail = liveness.ops_verified("wq2092-cert-watch")
+    assert verdict in (liveness.SATISFIED, liveness.STILL_BLOCKED), detail
+    assert "VERIFY" in detail, detail

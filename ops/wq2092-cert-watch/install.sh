@@ -8,6 +8,23 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/services/lumen-cert-watch
 
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install
+# step. Added by wq#2092's own close pass: the bundle landed 2026-09-19 with no
+# handler, so ops-deploy-drift could only guess at it heuristically and never
+# opened an aq row — the same blind spot wq#2932 found on backup-important, and
+# the reason lumen-cert-watch.timer sat inactive for nine days unnoticed.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile "$SRC/cert_watch.py" "$DEST/cert_watch.py"
+  # targets.json is operator-edited, so match the shape, not the bytes.
+  vcontains "$DEST/targets.json" '"extra"'
+  vunit_file "$SRC/lumen-cert-watch.service" /etc/systemd/system/lumen-cert-watch.service
+  vunit_file "$SRC/lumen-cert-watch.timer" /etc/systemd/system/lumen-cert-watch.timer
+  vactive lumen-cert-watch.timer
+  venabled lumen-cert-watch.timer
+  vdone
+fi
+
 mkdir -p "$DEST"
 install -o lumen -g lumen -m 755 "$SRC/cert_watch.py" "$DEST/cert_watch.py"
 # targets.json is operator-edited (extra internal endpoints): never overwrite it.
