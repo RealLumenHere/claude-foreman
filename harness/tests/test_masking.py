@@ -290,6 +290,21 @@ def test_url_auth_placeholder_exclusion_stops_at_the_first_at():
     assert hits == ["url-auth"] and PW not in masked, hits
 
 
+@pytest.mark.parametrize("live", [
+    PW,                               # no separator before the annotation
+    PW + "-",                         # separator, but the segment is no prefix
+    "gh" "p_" + "A1b2C3d4E5f6G7h8",   # a real token prefix, then a live head
+    "gh" "p_" + "abc_def_ghi_jkl_",   # prefix-shaped segments, more than a prefix
+])
+@pytest.mark.parametrize("tag", ["<truncated>", "<redacted-rest>"])
+def test_url_auth_placeholder_glued_behind_a_live_value_still_masks(live, tag):
+    """wq#2954: a placeholder excuses the body only when it IS the body, behind at
+    most a token prefix. A live value glued to an annotation (an app's truncation
+    marker, a hand-redaction that left the live head in place) must still mask."""
+    masked, hits = masking.mask_text(URL_USER + live + tag + URL_HOST)
+    assert hits == ["url-auth"] and live not in masked, (live, tag, hits)
+
+
 @pytest.mark.parametrize("head, tail", [
     ("DATABASE_URL=postgresql://lumen:", "@lumen-pgvector:5432/litellm"),
     ("REDIS_URL=rediss://default:", "@cache.internal:6380/0"),

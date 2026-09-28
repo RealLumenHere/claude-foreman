@@ -397,12 +397,15 @@ PATTERNS = [
         r"(?!\\*[${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
         r"(?!os\.environ|os\.getenv|(?:process\.)?env\.)"
         r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
-        # wq#2931: a `<name>` template placeholder anywhere before the first `@`, not
-        # just at the start — `ghp_` glued to `<body>` is how a docstring spells "a
-        # github value here", and wq#2913's own docstring paged pri-1 on it. `<`/`>` are
-        # illegal unencoded in RFC 3986 userinfo and in every token alphabet, so no live
-        # value carries one; a placeholder past a raw `@` still masks.
-        r"(?![^\s/'\"`@]*<[A-Za-z_][A-Za-z0-9_-]*>)"
+        # wq#2931: a `<name>` template placeholder behind a token prefix — `ghp_` glued
+        # to `<body>` is how a docstring spells "a github value here", and wq#2913's
+        # own docstring paged pri-1 on it. wq#2954: the placeholder must BE the rest of
+        # the body, running straight to the `@`, and only a prefix may precede it:
+        # short lowercase segments each closed by `_`/`-` (`ghp_`, `github_pat_`,
+        # `sk-ant-`). Excusing a placeholder anywhere in the body let a live value
+        # glued to an annotation (`<live><truncated>@host`, a hand-redaction that
+        # left the live head in place) through with no mask and no alarm.
+        r"(?!(?:[a-z][a-z0-9]{0,5}[_-]){0,3}<[A-Za-z_][A-Za-z0-9_-]*>@)"
         # The one rule that must NOT take _body(): it is anchored on the `@` ahead of
         # it, so the body cannot run past the credential into whatever follows, and
         # there is nothing for a bound to save it from. A bound would instead stop the

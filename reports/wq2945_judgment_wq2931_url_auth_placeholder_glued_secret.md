@@ -70,11 +70,14 @@ checkout (not a copy):
 ```
 $ python3 reports/wq2945_probe_url_auth_placeholder_glued_secret.py
 FAIL: 2/2 real secrets survived unmasked:
-  line='https://lumen:ghp_A1b2C3d4E5f6G7h8<truncated>@100.64.0.9'
+  line='https://lumen:' 'ghp_A1b2C3d4E5f6G7h8<truncated>@100.64.0.9'
     hits=[] leaked=True
-  line='remote https://x:ghp_A1b2C3d4E5f6G7h8<redacted-rest>@git.example'
+  line='remote https://x:' 'ghp_A1b2C3d4E5f6G7h8<redacted-rest>@git.example'
     hits=[] leaked=True
 ```
+
+(wq#2954: each `line=` is split at the `user:` seam so this report does not arm the
+tripwire once the fix masks the shape; the probe printed each as one string.)
 
 (`REAL_SECRET` is `"gh" + "p_" + "A1b2C3d4E5f6G7h8"`, built at runtime and
 split at the prefix seam per instinct 4 — token-alphabet-shaped, 20 chars,
