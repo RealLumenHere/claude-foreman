@@ -22,11 +22,26 @@ wq#2740 happened to mistype, so it read 3 of the corpus's 34 cross-row citations
 38/147/148" were all invisible, so the class of defect this probe exists to catch
 could recur in any of them silently.
 
-DANGLING now runs over every citation verb -- a pointer at a row that does not
-exist is a defect whether the prose says see, per or cf. ONE-WAY deliberately
-stays on "see row N" alone: it is a heuristic about *correction* pointers, and
-"per row N" means "as row N requires", not "correcting row N". Widening ONE-WAY
-too takes the live corpus from 2 findings to 31, all of them noise.
+wq#2894 (judgment on wq#2892's contradiction) dropped the verb requirement
+entirely. wq#2877 replaced one hardcoded verb with three and claimed to cover
+"whatever verb introduces it", but the corpus's commonest cross-row reference
+carries no verb at all -- the parenthetical "(row 80)" / "(rows 131, 142)" form,
+and the bare narrative "same class as row 82". A DANGLING pointer does not care
+how the prose introduces it, so CITE_RE now matches "row N" wherever it appears.
+Measured on kb rev 70ef27e before choosing between that and a narrower
+"(row N)"-only branch: verb-required read 38 pointers / 0 dangling, an explicit
+paren branch 156 / 1, verb-less 482 / 4 -- and all 4 are real (row 220 -> 206b,
+row 854 -> 923, rows 891 and 892 -> 889 after wq#2891 renamed it 889b), with the
+paren-only variant seeing just one of them because the corpus also writes
+"(fleet pw rotation, row 206b)", where the paren is nowhere near the word "row".
+The only false positive verb-less matching produced was "grows 330s per repo" --
+"rows?" inside "grows" -- hence the \b anchor; with it, 0 false positives across
+850 rows.
+
+ONE-WAY deliberately stays on "see row N" alone: it is a heuristic about
+*correction* pointers, and "per row N" means "as row N requires", not "correcting
+row N". Widening ONE-WAY too takes the live corpus from 2 findings to 31, all of
+them noise -- and to ~480 under a verb-less rule.
 
 Widening the regex adds findings that were always in the corpus but unread, so
 wq#2857's known-findings-baseline.json was re-pinned in the same commit: an
@@ -52,9 +67,19 @@ KB_DIR = "/home/lumen/kb"
 # not a new numbering scheme -- keep it optional so a bare row is still matched.
 ROW_RE = re.compile(r"^\|\s*(\d+[a-z]?)\s*\|")
 _LIST = r"((?:\s*(?:[/,&]|and)\s*#?\d+[a-z]?)*)"  # "see rows 38/147/148", "rows 131, 142"
-CITE_RE = re.compile(r"(?:see|per|cf\.?)\s+rows?\s+#?(\d+[a-z]?)" + _LIST, re.I)
-SEE_RE = re.compile(r"see\s+rows?\s+#?(\d+[a-z]?)" + _LIST, re.I)
+# wq#2894: no verb. \b keeps "rows?" from matching inside "grows 330s per repo".
+CITE_RE = re.compile(r"\brows?\s+#?(\d+[a-z]?)" + _LIST, re.I)
+SEE_RE = re.compile(r"\bsee\s+rows?\s+#?(\d+[a-z]?)" + _LIST, re.I)
 _NUM_RE = re.compile(r"\d+[a-z]?")
+# wq#2894: a row number inside a code span is quoted text, not a pointer -- rows
+# about pointer defects quote the bad pointer (row 893: "`(row 9999 ...)` -> 0
+# pointers checked"), and every such row would otherwise dangle by construction.
+_CODE_SPAN_RE = re.compile(r"`[^`]*`")
+
+
+def prose(text):
+    """`text` with code spans blanked, so a quoted "row N" is not read as a citation."""
+    return _CODE_SPAN_RE.sub(" ", text)
 
 
 def _sort_key(num):
@@ -66,7 +91,7 @@ def _sort_key(num):
 def targets(pattern, text):
     """Every row number `pattern` cites in `text`, list forms expanded."""
     out = set()
-    for head, rest in pattern.findall(text):
+    for head, rest in pattern.findall(prose(text)):
         out.add(head)
         out.update(_NUM_RE.findall(rest))
     return out
@@ -114,13 +139,13 @@ def _findings(found):
             for target in sorted(targets(CITE_RE, text) - set(found), key=_sort_key):
                 yield (
                     f"DANGLING:{num}:{target}",
-                    f"DANGLING row {num} (L{line_no}) -> 'see row {target}': no such row",
+                    f"DANGLING row {num} (L{line_no}) -> 'row {target}': no such row",
                 )
             # A back-reference is written the same way a citation is, so accept the
             # same shapes: "row 824", "Rows 824/825", "row #824" all count.
-            back = re.compile(rf"rows?\s+#?{num}\b", re.I)
+            back = re.compile(rf"\brows?\s+#?{num}\b", re.I)
             for target in sorted(targets(SEE_RE, text) & set(found), key=_sort_key):
-                if not any(back.search(t) for _, t in found[target]):
+                if not any(back.search(prose(t)) for _, t in found[target]):
                     yield (
                         f"ONEWAY:{num}:{target}",
                         f"ONE-WAY  row {num} (L{line_no}) -> 'see row {target}': "

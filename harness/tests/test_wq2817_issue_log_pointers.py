@@ -112,9 +112,9 @@ def test_every_target_in_a_list_citation_is_checked():
         "| 11 | other | cause | fix | row 10 above |",
     ])
     assert sorted(out) == [
-        "DANGLING row 10 (L1) -> 'see row 4242': no such row",
-        "DANGLING row 10 (L1) -> 'see row 4243': no such row",
-        "DANGLING row 10 (L1) -> 'see row 4244': no such row",
+        "DANGLING row 10 (L1) -> 'row 4242': no such row",
+        "DANGLING row 10 (L1) -> 'row 4243': no such row",
+        "DANGLING row 10 (L1) -> 'row 4244': no such row",
     ], out
 
 
@@ -150,29 +150,77 @@ def test_a_suffixed_row_is_tracked_and_the_duplicate_it_resolves_is_gone():
 def test_a_suffixed_row_can_still_be_cited_and_can_still_dangle():
     out = findings(["| 10 | symptom | cause | fix | see row 887b |"])
     assert out == [
-        "DANGLING row 10 (L1) -> 'see row 887b': no such row"
+        "DANGLING row 10 (L1) -> 'row 887b': no such row"
     ], out
 
 
-def test_capitalized_citation_is_seen_in_the_live_corpus_at_a_pinned_rev():
+# ---- wq#2894: the citation shapes that carry no verb at all ----
+
+def test_a_parenthetical_citation_is_a_citation():
+    """wq#2892's contradiction: 99 of the corpus's cross-row references are
+    "(row N)", which the verb-anchored regex could not see at all."""
+    out = findings(["| 10 | symptom | cause | fix | typo during a rename (row 4242) |"])
+    assert out == ["DANGLING row 10 (L1) -> 'row 4242': no such row"], out
+
+
+def test_a_bare_narrative_mention_is_a_citation():
+    """The other verb-less shape, outside parentheses: "same class as row N"."""
+    out = findings(["| 10 | symptom | cause | fix | same class as row 4242 |"])
+    assert len(out) == 1 and out[0].startswith("DANGLING row 10"), out
+
+
+def test_a_parenthetical_list_citation_checks_every_target():
+    out = findings(["| 10 | symptom | cause | fix | (live run-dir drift, rows 11/4242) |",
+                    "| 11 | other | cause | fix | row 10 above |"])
+    assert out == ["DANGLING row 10 (L1) -> 'row 4242': no such row"], out
+
+
+def test_rows_inside_another_word_is_not_a_citation():
+    """The one false positive verb-less matching produced on the live corpus:
+    "it grows 330s per newly-migrated repo" -- "rows" inside "grows"."""
+    assert findings(["| 10 | symptom | cause | it grows 330s per repo | OPEN |"]) == []
+
+
+def test_a_row_number_quoted_in_a_code_span_is_not_a_citation():
+    """A row documenting a pointer defect quotes the bad pointer (row 893 quotes
+    its own `(row 9999 ...)` fixture); reading that as a pointer makes every such
+    row dangle by construction."""
+    assert findings([
+        "| 10 | symptom | cause | minimal pair: `(row 9999 ...)` -> PASS | OPEN |"
+    ]) == []
+
+
+def test_a_parenthetical_citation_that_resolves_raises_nothing():
+    """Precision check: the widening must not turn the 98 resolvable parenthetical
+    references in the live corpus into findings."""
+    assert findings(["| 10 | symptom | cause | fix (row 11) | OPEN |",
+                     "| 11 | other | cause | fix | OPEN |"]) == []
+
+
+def test_a_verbless_dangling_citation_is_seen_in_the_live_corpus_at_a_pinned_rev():
     """Acceptance probe from outside the fixture population (wq#2630).
 
-    kb/ISSUE-LOG.md row 80 at kb rev 05ab855 carries a sentence-initial citation of
-    row 109. The shipped checker read 3 pointers in that whole file; it must now read
-    row 80's. Rev-pinned, so this stays re-runnable after the live log moves on.
+    kb/ISSUE-LOG.md row 220 at kb rev 70ef27e cites "(fleet pw rotation, row 206b)"
+    and no row 206b exists -- a real dangling pointer that every verb-anchored cut of
+    this checker, wq#2877's included, read as no pointer at all. Rev-pinned to the tip
+    wq#2892 measured, so the evidence stays re-runnable after the live log moves on
+    (it has: wq#2894 rewrote that citation to "row 206 item (b)").
     """
     try:
         blob = subprocess.run(
-            ["git", "-C", probe.KB_DIR, "show", "05ab855:ISSUE-LOG.md"],
+            ["git", "-C", probe.KB_DIR, "show", "70ef27e:ISSUE-LOG.md"],
             capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:  # kb repo not on this box
         pytest.skip(f"kb repo unavailable: {exc}")
     if blob.returncode != 0:
-        pytest.skip("kb rev 05ab855 unavailable")
+        pytest.skip("kb rev 70ef27e unavailable")
     found = probe.rows(blob.stdout.splitlines())
     row_80 = [t for _, t in found["80"]]
     assert len(row_80) == 1 and "ee row 109" in row_80[0], row_80
-    assert probe.targets(probe.CITE_RE, row_80[0]) == {"109"}
+    assert "109" in probe.targets(probe.CITE_RE, row_80[0])
+    assert "206b" not in found
+    assert any(f.startswith("DANGLING row 220") and "206b" in f
+               for f in probe.check(found)), "verb-less DANGLING went blind"
     total = sum(len(probe.targets(probe.CITE_RE, t))
                 for v in found.values() for _, t in v)
-    assert total >= 34, total  # shipped regex saw 3 of these
+    assert total >= 479, total  # verb-anchored read 38 of these, the first cut 3

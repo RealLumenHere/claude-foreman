@@ -57,6 +57,26 @@ mistyped pointer, caught in one timer cycle instead of surfacing days later in a
 downstream ticket. See `ops/wq2857-issue-log-hygiene-alarm/README.md` for install and
 rebaseline instructions.
 
+## Amendment (wq#2894): the suffix namespace already had an occupant
+
+Older rows write `row 206b` to mean *item (b) of row 206* — row 206 ends in a
+"FLAGGED for the orchestrator: (a) … (b) …" list, and row 220 cites its (b), the fleet
+password rotation, as `row 206b`. Under the suffix convention above that same string
+now reads as "the second row numbered 206", which is an unrelated row (guard.sh's rm-rf
+false positive). wq#2894's widened checker found it as a dangling pointer and the
+citation was rewritten to `row 206 item (b)`.
+
+So: an item-letter reference must be written `row N item (b)`, never `row Nb`. The
+suffix form means a disambiguated row and nothing else.
+
+wq#2894 also found the reverse error, and it is the more expensive one: wq#2891
+suffixed row 889 → `889b` on a stale `DUP:889:2` baseline key that the probe already did
+not report at kb `4892cf3`. There was no duplicate to disambiguate, so the rename simply
+deleted the row number two live citations (rows 891, 892) depended on — the exact failure
+mode the "no straight renumbering, ever" decision above exists to prevent. Before
+suffixing a row, re-run `probe_pointers.py` against the current kb tip and confirm the
+`DUP:<n>:2` key is live *now*; a baseline key is a record of the past, not a work order.
+
 ## Scope note
 
 This ticket's deliverable is the alarm (`ops/wq2857-issue-log-hygiene-alarm/`,
