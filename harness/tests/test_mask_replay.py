@@ -2203,3 +2203,27 @@ def test_wq2922_corpus_burned_nothing():
     fixture_shas = {v[0] for v in scope["WQ2922_VALUES"]}
     _assert_corpus_pinned(2922, WQ2922_FIXTURES, scope["WQ2922_RECORDS"], fixture_shas,
                           patterns=mask_replay.CURRENT_PATTERNS)
+
+
+WQ3021_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq3021")
+WQ3021_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq3021_values.py")
+
+
+def test_wq3021_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ3021_FIXTURES)
+    values = scope["WQ3021_VALUES"]
+    count = len(values)
+    assert count == 2
+    assert _unpinned(values, {"f": text}) == []
+    assert masking.mask_text(text)[1] == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ3021_RUN),
+                    reason="wq#3021's run dir is not on this host")
+def test_wq3021_corpus_burned_nothing():
+    """wq#3029's verdict, pinned: probe_sk7.py's runtime-built aws and github dummies
+    from wq#3021's own verify-pass, not credentials; nothing rotated."""
+    _, scope = _load_fixture_module(WQ3021_FIXTURES)
+    fixture_shas = {v[0] for v in scope["WQ3021_VALUES"]}
+    _assert_corpus_pinned(3021, WQ3021_FIXTURES, scope["WQ3021_RECORDS"], fixture_shas,
+                          patterns=mask_replay.CURRENT_PATTERNS)
