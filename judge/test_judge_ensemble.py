@@ -50,3 +50,13 @@ def test_ambiguous_ts_prefix_is_refused():
                 (TS_B, "a", "d1", "deny", "deny", 1.0)])
     with pytest.raises(SystemExit):
         je.load_run(conn, "a@2026-09-28")
+
+
+def test_zero_intersection_raises_clear_systemexit_not_zerodivisionerror():
+    conn = _db([
+        (TS_A, "a", "d1", "deny", "deny", 1.0),
+        (TS_B, "b", "d2", "deny", "deny", 1.0),
+    ])
+    with pytest.raises(SystemExit, match="no overlapping cases between members"):
+        je.ensemble_stats([je.load_run(conn, "a@2026-09-28T03:47"),
+                           je.load_run(conn, "b@2026-09-28T06")])

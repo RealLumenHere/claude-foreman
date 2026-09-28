@@ -49,6 +49,8 @@ def p95(values):
 
 def ensemble_stats(runs):
     shared = sorted(set.intersection(*(set(r) for r in runs)))
+    if not shared:
+        raise SystemExit("no overlapping cases between members")
     cases = []
     for cid in shared:
         members = [r[cid] for r in runs]
