@@ -1,0 +1,51 @@
+# wq#2510: MacPro6,1 fan-floor alarm. Loaded and validated by ops/fan_floor_alarm.py.
+#
+# Signature (research/ISIS_POWEROFF_RCA.md:84-105): Te0T held above 80 C while fan1 never
+# leaves the SMC floor (790 rpm). Before mbpfan (wq#2508) that is the "SMC floor under load"
+# state isis sat in for two days; after it, mbpfan pins the fan at >= 1100 rpm
+# (ops/mbpfan/mbpfan.conf), so fan1 under 1000 means mbpfan died or never took the fan.
+rule:
+  te0t_above_c: 80
+  fan_below_rpm: 1000
+  # One RCA bucket. ISIS_POWEROFF_RCA.md:84 read the condition off netdata hourly averages
+  # (group=average, ~66 min each); every bucket of the 09-18 -> 09-20 window with fan at the
+  # floor averaged Te0T > 80 (:89-93). The alarm fires when one such hour-long average would.
+  sustain_min: 60
+  # Clear only once the hour-long mean drops below 78 C, or the fan leaves the floor. At the
+  # 790 rpm floor Te0T idles right on the raise line (78.8 C at 0.7% cpu, ISIS_POWEROFF_RCA.md
+  # :179; 79.8 / 80.7 C, research/MBPFAN_MACPRO61.md:53-54). Clearing at 80 raised six times
+  # across the 09-18/09-19 replay, clearing below 78 raises four, each after a real cool-down
+  # or reboot (ops/tests/test_wq2510_fan_floor_alarm.py).
+  te0t_clear_below_c: 78
+
+# Where the verdict goes: wq#2484's thermal-backpressure guard polls `fan_floor_alarm.py
+# check --json` and owns the hold and its single aq row per transition. This alarm pages
+# nobody itself; there is no second notification path.
+consumer: wq#2484
+
+nodes:
+  isis:
+    netdata: 100.100.129.24:19999
+    action: hold
+    hold_subsystem: isis
+  hathor:
+    netdata: 100.80.71.13:19999
+    action: hold
+    hold_subsystem: hathor
+  nephthys:
+    netdata: 100.98.74.87:19999
+    action: hold
+    hold_subsystem: nephthys
+  khepri:
+    netdata: 100.120.16.78:19999
+    action: hold
+    hold_subsystem: khepri
+  # THOR IS THE HARD RULE (instinct 2, wq#1016): never restarted, never interrupted. The
+  # alarm may only notify on Thor; fan_floor_alarm.py refuses to load a config that omits
+  # this entry, or gives thor or any node at Thor's address (100.112.151.100) an action other
+  # than notify or a hold_subsystem. Thor has no netdata today (:19999 does not answer), so
+  # this entry is inert until a source exists; thor-thermal-watchdog remains Thor's
+  # authoritative thermal alert.
+  thor:
+    netdata: null
+    action: notify
