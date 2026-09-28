@@ -1,0 +1,13 @@
+# lumen-ir-triage.timer — hourly incident triage pass (wq#2836). The model is
+# only called when a fragment ID appears that the last completed pass did not
+# see, so a quiet hour costs one sqlite read.
+[Unit]
+Description=Hourly Lumen IR triage pass (wq#2836)
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

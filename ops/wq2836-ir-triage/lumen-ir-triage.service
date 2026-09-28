@@ -1,0 +1,25 @@
+# lumen-ir-triage.service — one pass of the read-only, proposal-only incident
+# triage lane (wq#2836). Reads the aq alert queue, lumen-failed-units state and
+# the weekly Trivy report; writes one minerva proposal row when new evidence
+# appears. The filesystem is read-only except /home/lumen/minerva.
+[Unit]
+Description=Lumen IR triage: X-MASIR evidence/correlate/plan roles -> minerva proposal (wq#2836)
+Documentation=file:///home/lumen/foreman/ops/wq2836-ir-triage/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+# Same key pair minerva-proposal rides (wq#721: the later file wins), so the
+# lane spends on the existing minerva-pipeline LiteLLM key, not a new route.
+EnvironmentFile=/home/lumen/agent/.env
+EnvironmentFile=-/home/lumen/.secrets/litellm-service-keys/env/minerva-pipeline.env
+Environment=IR_TRIAGE_MODEL=deepseek-v4-flash
+ExecStart=/usr/bin/python3 /home/lumen/minerva/ir_triage.py
+TimeoutStartSec=900
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/lumen/minerva
