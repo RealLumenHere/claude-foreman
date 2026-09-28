@@ -21,6 +21,10 @@ picking up where the last left off. Five properties matter before acting on any 
   The second statement is the true one — `research/wq2076_macpro_gpu_recon.md` found GCN 1.0
   Curacao XT / Tahiti LE parts with **`compute stack: none`** on all three online Macs. So
   every GPU-scheduling line in `O1 L168-208` is void, retracted by the author 900 lines later.
+  **Correction (wq#2501, 2026-09-28):** "none" holds for CUDA, ROCm and OpenCL only. Mesa RADV
+  Vulkan enumerates both Tahiti LE cards on nephthys and llama.cpp runs on them (3.2-3.5x CPU
+  prefill on a 1.7B model, no flash attention). The K3s `nodeSelector` lines stay void; "no usable
+  GPU" does not. See `research/wq2501_radv_vulkan_probe.md`.
 - **Fourth doc in the family to assume Kubernetes.** `which k3s kubectl helm argocd` returns
   nothing on lumen (verified live this run; only `/usr/local/bin/ollama` answered). Roughly
   600 of 1129 lines — every K3s manifest, Helm install, ArgoCD Application, ServiceMonitor,
@@ -241,8 +245,8 @@ reasoning at `O1 L1074-1084`.
 
 **Problem and the honest framing.** The doc proposes `exo` to pool the Mac Pros' RAM into one
 large-model endpoint. The prize is real: three online Macs at 64 GB
-(`research/inference_nodes.yaml:46,74,102`) = 192 GB, no usable GPU on any of them
-(`research/wq2076_macpro_gpu_recon.md` — `compute stack: none` on all three), and isis is
+(`research/inference_nodes.yaml:46,74,102`) = 192 GB, no CUDA/ROCm/OpenCL GPU compute on any of them
+(`research/wq2076_macpro_gpu_recon.md` — `compute stack: none` on all three; Vulkan works, see `research/wq2501_radv_vulkan_probe.md`), and isis is
 currently capped at 8192-token contexts, "SMALL prompts only" (`inference_nodes.yaml:19`). No
 document in `research/` or `kb/` has ever evaluated pooled inference — a genuine miss. But the
 workload is network-bound (§2: 200 Gb/s fabric in the one working public example; HN reporting

@@ -1,0 +1,7 @@
+rc=0
+cmd_rc=0
+aborted=0
+timed_out=0
+restore=ok
+max_temp_c=62.0
+reason=
