@@ -1,5 +1,7 @@
 # wq#2787: verify-pass of wq#2782 (mask tripwire: file cloudflare rotation rows frank-gated)
 
+> Fixture elision (wq#2822 class): the 36-char value quoted in the commands and output below is shown as `<FIXTURE36>` (sha256[:12] `30f8df099069`) so this report does not arm the mask tripwire when read. It is not present in any live file.
+
 **Verdict: CONTRADICT.** wq#2782's fix files a `[rotation]` row frank-gated (and refuses
 its dispatch) only when the mask hit names Cloudflare by the literal substring
 `cloudflare`. The fleet's own live config already leaks a CF credential under a name
@@ -39,7 +41,7 @@ Reproduced end to end against the shipped code, no modifications:
 $ python3 -c "
 import sys; sys.path.insert(0, 'harness')
 import masking
-_, records = masking.scan('CF_API_TOKEN=abcdef0123456789abcdef0123456789abcd')
+_, records = masking.scan('CF_API_TOKEN=<FIXTURE36>')
 print(records)
 "
 [{'label': 'kv-secret', 'prefix': 'CF_API_TOKEN=', 'value_len': 36,
