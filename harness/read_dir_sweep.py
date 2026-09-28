@@ -18,6 +18,7 @@ printed is a credential burned (instincts tier 0 MASK BEFORE PRINT).
 """
 import datetime
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -158,6 +159,37 @@ def mask(token):
     return token[:MASK_KEEP] + "…" if len(token) > MASK_KEEP else "…"
 
 
+# wq#2120: this sweep had NO false-positive mechanism at all — wq523_pat_residue.py grew
+# its own fingerprint ack list post-wq1642, but a `dir()` grant here has failed closed on
+# ANY hit under the cited root since wq#1482, with no way to clear a hit once a human has
+# actually read it and confirmed it isn't a credential. wq#2115's broadened kv_secret shape
+# turned up 3 such hits (none live) that now permanently block every dir() grant under
+# their two roots. Fingerprinted on the exact matched span (sha256[:12], same convention as
+# FALSE_POSITIVE_FINGERPRINTS in wq523_pat_residue.py) rather than by path, so a genuinely
+# new secret landing on the same line or file still fires fresh. Values are DELIBERATELY not
+# reproduced in this comment: this file scans read-grant roots for exactly this shape, and a
+# literal here would make it flag its own source.
+REVIEWED_HIT_FINGERPRINTS = {
+    # research/harnessrouter-ref/src/docs/self-hosting-guide.md:118 — HR_AUTH_PASSWORD=
+    # placeholder in the upstream self-hosting doc mirror; hyphenated English words, zero
+    # digits, sits in a bash example telling the reader what to substitute in
+    "527602abdce7",
+    # research/harnessrouter-ref/src/docs/self-hosting-guide.md:541 — HR_SECRET_KEY=,
+    # same doc, same placeholder shape
+    "aea20d56e205",
+    # research_prompts/.scratch/autorandr_Makefile:71 — `desktop-file-edit --remove-key=`,
+    # a real label/value CLI-flag shape, not a secret
+    "ba3880ebd497",
+}
+
+
+def reviewed_hit_fingerprint(matched_text):
+    """sha256(matched_text)[:12] — the identity a reviewed-hit ack is keyed on. Never
+    call this on anything before it's been reviewed by a human; it exists to let a
+    CONFIRMED non-secret stop re-blocking dir() grants, not to auto-clear new hits."""
+    return hashlib.sha256(matched_text.encode()).hexdigest()[:12]
+
+
 def _read_text(path):
     try:
         if os.path.islink(path) or os.path.getsize(path) > MAX_FILE_BYTES:
@@ -190,6 +222,8 @@ def sweep_root(root):
                 for kind, rx in PATTERNS:
                     m = rx.search(line)
                     if m:
+                        if reviewed_hit_fingerprint(m.group(0)) in REVIEWED_HIT_FINGERPRINTS:
+                            break  # wq#2120: reviewed non-secret, not a live hit
                         # mask BEFORE truncating: a cut token would escape the replace
                         masked = line.replace(m.group(0), mask(m.group(0)))
                         hits.append((p, i, kind, masked.strip()[:120]))

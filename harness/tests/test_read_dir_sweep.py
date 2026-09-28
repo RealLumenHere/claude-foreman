@@ -228,6 +228,7 @@ def test_write_runtime_mode_exits_zero_on_a_hit(tmp_path, monkeypatch):
     monkeypatch.setattr(rds, "RUNTIME_PATH", str(tmp_path / "runtime" / "sweep.json"))
     monkeypatch.setattr(rds, "AQ_BIN", str(tmp_path / "no-aq"))
     monkeypatch.setattr(rds, "policy_read_dirs", lambda *a, **k: [str(root)])
+    monkeypatch.setattr(rds, "worker_add_dirs", lambda *a, **k: [])
     assert rds._main(["--write-runtime"]) == 0
     assert rds._main([str(root)]) == 1  # interactive mode still exits 1 on hits
 
@@ -300,3 +301,31 @@ def test_url_basic_auth_does_not_shadow_a_prefixed_token(tmp_path):
     _write(tmp_path, "r.cfg", _url("x-access-token", pat) + "\n")
     hits, _ = rds.sweep_root(str(tmp_path))
     assert [h[2] for h in hits] == ["gh_pat"]
+
+
+def test_reviewed_hit_fingerprint_suppresses_only_that_exact_match(tmp_path, monkeypatch):
+    """wq#2120: this sweep had no ack mechanism for a hit a human has actually reviewed
+    and confirmed is not a credential, so a `dir()` grant under a root with one residual
+    kv_secret hit stayed refused forever (capability_lint.py fails closed on ANY sweep
+    hit under the cited root). REVIEWED_HIT_FINGERPRINTS keys the ack to the exact
+    matched span, not the path or line, so a genuinely different secret on the very same
+    line still fires."""
+    line = "Signing Secret: " + "0123456789abcdef0123456789ab"
+    _write(tmp_path, "f.txt", line + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert [h[2] for h in hits] == ["kv_secret"]
+
+    for kind, rx in rds.PATTERNS:
+        m = rx.search(line)
+        if m:
+            break
+    fp = rds.reviewed_hit_fingerprint(m.group(0))
+    monkeypatch.setattr(rds, "REVIEWED_HIT_FINGERPRINTS",
+                         rds.REVIEWED_HIT_FINGERPRINTS | {fp})
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
+
+    other_line = "Signing Secret: " + "ffeeddccbbaa99887766554433221100"
+    _write(tmp_path, "g.txt", other_line + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert [h[2] for h in hits] == ["kv_secret"]
