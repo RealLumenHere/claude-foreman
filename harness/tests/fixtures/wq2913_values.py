@@ -26,23 +26,26 @@ WQ2913_VALUES = (
     ("567fd51d9d8a", "slack", "xoxb-", "xo" "xb--off1-masking"),
     ("376086870b7f", "slack", "xoxb-", "xo" "xb--off3-masking"),
     ("f36b7dd79665", "slack", "xoxb-", "xo" "xb--off5-masking"),
-    # The eighth value of row 924, which wq#2936 counted and never wrote a tuple for: a
-    # shorter truncation-cut of the off1 id, where sk-key opens its prefix group one
-    # segment earlier (`sk-key-`) and the 16-char body stops at `--off`. It was accounted
-    # only by substring overlap with the off1 tuple, which is why nobody missed it.
-    ("41964b438456", "sk-key", "sk-key-", "s" "k-key-letter-xo" "xb--off"),
+    # wq#2924 re-cut row 924's eighth value (retired below): with `key-` no longer a
+    # qualifier, sk-key keeps `sk-` and its value runs up to where slack's match starts.
+    ("80ddc9fffb71", "sk-key", "sk-", "s" "k-key-letter-"),
 )
 
 # What wq#2913's live tripwire cut and today's table will not cut again. These belong in
 # no set keyed on CURRENT_PATTERNS: the replay cannot reproduce them from any tree, so
-# asking it to is how wq#2936 shipped red. Two rule changes retired them, both landed
-# after wq#2913 ran and before or just after wq#2936 pinned them:
+# asking it to is how wq#2936 shipped red. Three rule changes retired them, the first two
+# landing after wq#2913 ran and before or just after wq#2936 pinned them:
 #  - 960404a (wq#2960, "mask the union of every rule's spans") re-cut the six sk-key
 #    values. The three pytest ids now read as slack (above); the three probe_sk outputs
 #    end in the mask literal and are dropped outright.
 #  - 05e65ce (wq#2931, "skip url-auth bodies holding a placeholder",
 #    harness/masking.py:524) taught url-auth to refuse a body holding a `<name>` template
 #    placeholder — 57 seconds before wq#2936's own commits landed.
+#  - wq#2924 cut sk-'s qualifiers down to the ones providers issue, retiring the eighth
+#    value: a shorter truncation-cut of the off1 id where sk-key read `key-` as a
+#    qualifier (`sk-key-`) and its 16-char body stopped at `--off`. wq#2936 counted it
+#    and never wrote a tuple for it; it was accounted only by substring overlap with the
+#    off1 tuple, which is why nobody missed it.
 # Pinned by test_wq2913_retired_pins_are_not_cut_by_todays_table, which asserts the
 # refusal rather than the value: revert or narrow either rule and it fails, naming the
 # tuple to move back up.
@@ -54,6 +57,7 @@ WQ2913_RULE_RETIRED = (
     ("b4ef69356f53", "sk-key", "sk-", "s" "k-zzzxo" "xb-MASKED"),
     ("f3a0c6e016c9", "sk-key", "sk-", "s" "k-zzzzzxo" "xb-MASKED"),
     ("9fbe965f997e", "url-auth", "https://x:", "https://x:" "gh" "p_<body>"),
+    ("41964b438456", "sk-key", "sk-key-", "s" "k-key-letter-xo" "xb--off"),
 )
 
 # The eight values ISSUE-LOG row 924 accounts for wq#2913, and the one thing here no rule

@@ -57,10 +57,8 @@ RULES = [
     # in PATTERNS, one on each side, so both glue directions apply). wq#2899 closed it
     # with a per-rule absorb alternative; wq#2913 closed it structurally instead — with
     # every rule reading the ORIGINAL text there is no already-masked residue inside a
-    # body for anything to stop at. The digit fill stays too: it is what isolates this
-    # class from the
-    # separate, pre-existing, letter-only prefix-continuation shape documented at
-    # `_SK_LETTER_EXCLUDES_OWN_PREFIX` below, which this ticket does not touch.
+    # body for anything to stop at. The digit fill stays too: it isolates this class
+    # from the letter-only prefix-continuation shape SK_LETTER_RULE also covers.
     ("sk-key", _SK, ALNUM + "_-", 16, False, "9"),
     ("slack", _XOX, ALNUM + "-", 8, False, "Q"),
     ("aws", _AKIA, UPDIG, 16, True, "Q"),
@@ -74,20 +72,10 @@ FOREIGN = [_AKIA, _CFUT, _CFUT + "_", _SK, _XOX, _GH, _GHPAT]
 # fill above cannot exercise.
 SK_LETTER_RULE = ("sk-key", _SK, ALNUM + "_-", 16, False, "z")
 
-# wq#2899: a letter-led fill in front of sk-key's OWN prefix text (`sk-`, not a
-# foreign one) is a different, pre-existing shape this ticket does not fix: the
-# prefix group is `sk-(?:[a-zA-Z]+-)*`, and a letters-then-dash fill immediately
-# in front of a SECOND `sk-` completes one more repetition of that group whole
-# (`sk-` + `<letters>` + `sk-` reads as two whole "letters-then-dash" units), so
-# the fill is absorbed into the KEPT prefix rather than the masked body — visible
-# in the output, not merely mis-labelled.
-#
-# wq#2913 fixed that absorption for every FOREIGN prefix by refusing to let a
-# qualifier unit contain one (masking._PRE_NOT_SK), which is why the other entries
-# in FOREIGN now run for the letter fill too. sk-key's OWN `sk-` stays excluded,
-# because refusing it there would break wq#2638's own-repeated-prefix composing —
-# `sk-<live>sk-MASKED` has to stay one rule reading its own repeated prefix.
-_SK_LETTER_EXCLUDES_OWN_PREFIX = {_SK}
+# wq#2924: the letter fill runs against sk-key's OWN `sk-` too. It used to be
+# excluded: under the old open `sk-(?:[a-zA-Z]+-)*` prefix, `sk-` + letters + `sk-`
+# read as two whole qualifier units, so the letters went into the KEPT prefix and
+# printed. The prefix is now one qualifier from a fixed vocabulary.
 
 
 def _cases():
@@ -96,8 +84,6 @@ def _cases():
         blen = floor if exact else floor + 12
         for f in FOREIGN:
             if not all(c in cs for c in f):
-                continue
-            if fill == "z" and f in _SK_LETTER_EXCLUDES_OWN_PREFIX:
                 continue
             hi = blen - len(f)
             offs = {0, 1, 3, 5, floor - len(f), floor - 1, floor, floor + 1, hi}
@@ -127,6 +113,21 @@ IMPLS = [
     ("daemon", lambda t: ted.mask_rewrite(t)),
     ("sed", _sed),
 ]
+
+
+_SK_QUALIFIERS = ["", "ant-", "or-", "proj-", "svcacct-", "admin-", "None-"]
+
+
+@pytest.mark.parametrize("impl_name, impl", IMPLS, ids=[i[0] for i in IMPLS])
+@pytest.mark.parametrize("qual", _SK_QUALIFIERS, ids=lambda q: q.rstrip("-") or "bare")
+@pytest.mark.parametrize("gap", ["zz-", "zzzz" + _SK, "zzz-zz-", "zz" + _XOX])
+def test_sk_key_keeps_only_a_known_qualifier(impl_name, impl, qual, gap):
+    """wq#2924: a letters-then-dash run at the head of an sk- body is body, not prefix.
+
+    Under the open `sk-(?:[a-zA-Z]+-)*` prefix every one of these gaps was read as a
+    further qualifier and printed; a provider qualifier is still kept."""
+    masked = impl("x " + _SK + qual + gap + "9" * 20 + " y")
+    assert masked == "x " + _SK + qual + masking.MASK + " y", impl_name
 
 
 @pytest.mark.parametrize("impl_name, impl", IMPLS, ids=[i[0] for i in IMPLS])

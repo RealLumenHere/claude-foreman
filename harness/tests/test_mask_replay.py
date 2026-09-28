@@ -1074,6 +1074,11 @@ WQ2278_BRANCH_FIXTURES = {
     # only committed copy is the branch's, which is what this map is for.
     "3a455b3d761c": "harness/tests/test_gateway_key_per_ticket.py",
     "27ca921139e8": "harness/tests/test_gateway_key_per_ticket.py",
+    # wq#2924: the same two dummies under today's table, which keeps only a provider
+    # qualifier, so their letter-and-dash words are body now and the hashed value is
+    # the whole run behind `sk-` (31 and 32 chars).
+    "e50b5e28e576": "harness/tests/test_gateway_key_per_ticket.py",
+    "20cb115bcd84": "harness/tests/test_gateway_key_per_ticket.py",
 }
 
 
@@ -2135,6 +2140,7 @@ def test_wq2913_retired_pins_are_not_cut_by_todays_table():
     960404a (wq#2960) let the rules take the union of their spans, so the three pytest
     ids read as slack and the three probe outputs end in the mask literal and are
     dropped. wq#2936 asked the replay for hashes the table had just stopped producing.
+    wq#2924 retired the eighth by keeping only provider qualifiers on `sk-`.
 
     Asserting the refusal by HASH, not by an empty scan, is what makes the split
     reversible and precise: the three pytest-id lines are still cut, just into a
@@ -2156,7 +2162,7 @@ def test_wq2913_retired_pins_are_not_cut_by_todays_table():
 def test_wq2913_corpus_burned_nothing():
     """wq#2936's verdict, pinned: pytest ids, probe output and a docstring placeholder
     from wq#2913's own work, not credentials; nothing rotated. wq#2955: seven of the
-    eight are pinned by the test above instead — today's table does not cut them, so
+    eight (all eight since wq#2924) are pinned by the test above instead — today's table does not cut them, so
     the replay cannot reproduce them, and asserting their absence here is what keeps
     the two sets from silently drifting back together.
     """

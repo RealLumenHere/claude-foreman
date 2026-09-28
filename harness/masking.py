@@ -72,22 +72,17 @@ _PRE_GHPAT = r"github_pat_"
 _PRE_CFUT = r"cfut_?"
 _PRE_SLACK = r"xox[bpasr]-"
 _PRE_AWS = r"AKIA"
-# wq#2913: `sk-`'s qualifier repetition (`sk-`, `sk-ant-`, `sk-or-v1-`) is the one
-# prefix group in this table that is not a fixed literal, so it is the one that can
-# grow INTO the body — and a kept prefix is by definition the part a mask prints. A
-# `[a-zA-Z]+-` unit is satisfied by any letters ending in a dash, so a body that
-# happens to open with letters and then carries a DIFFERENT rule's prefix hands the
-# whole run to group 1: a letters-led body leading into the slack prefix kept that
-# prefix and the letters in front of it, and printed those body letters
-# (test_mask_foreign_prefix_matrix, the letter-fill sk-key cases at offsets 1, 3 and
-# 5). A unit may therefore
-# not contain the start of another rule's prefix. That can only SHORTEN the kept
-# prefix — i.e. only widen coverage — which is the direction wq#2913 exists to hold.
-# Before this, the wq#2899 absorb alternative covered the same shape on a later pass;
-# there are no later passes now.
-_PRE_NOT_SK = r"(?:" + "|".join(
-    (_PRE_GH, _PRE_GHPAT, _PRE_CFUT, _PRE_SLACK, _PRE_AWS)) + r")"
-_PRE_SK = r"sk-(?:(?:(?!" + _PRE_NOT_SK + r")[a-zA-Z])+-)*"
+# wq#2924: `sk-` takes at most ONE qualifier, and only one a provider actually
+# issues: Anthropic `ant`, OpenRouter `or`, OpenAI `proj`/`svcacct`/`admin`/`None`.
+# The prefix used to repeat any `[a-zA-Z]+-` unit, the one prefix in this table that
+# was not a fixed literal, so it grew INTO the body — and a kept prefix is the part a
+# mask prints. Any body opening with letters then a dash handed those letters to
+# group 1: `sk-proj-` + a base64url body that happens to open `Ab-` printed `Ab`, and
+# a letters-led body running into a second `sk-` printed everything before it.
+# wq#2913 refused a FOREIGN prefix inside a unit, which fixed that shape for the
+# other rules and left sk-key's own. A fixed vocabulary closes the class: an unknown
+# qualifier is now masked as body, which only widens coverage.
+_PRE_SK = r"sk-(?:(?:ant|or|proj|svcacct|admin|None)-)?"
 
 
 def _body(charset, quant):

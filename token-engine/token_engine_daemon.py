@@ -106,13 +106,10 @@ _PRE_GHPAT = r"github_pat_"
 _PRE_CFUT = r"cfut_?"
 _PRE_SLACK = r"xox[bpasr]-"
 _PRE_AWS = r"AKIA"
-# masking._PRE_NOT_SK/_PRE_SK (wq#2913): `sk-`'s qualifier repetition is the one
-# prefix group here that is not a fixed literal, so it is the one that can grow into
-# the body and print body characters as a kept prefix. A unit may not contain the
-# start of another rule's prefix. Reasoning: harness/masking.py.
-_PRE_NOT_SK = r"(?:" + "|".join(
-    (_PRE_GH, _PRE_GHPAT, _PRE_CFUT, _PRE_SLACK, _PRE_AWS)) + r")"
-_PRE_SK = r"sk-(?:(?:(?!" + _PRE_NOT_SK + r")[a-zA-Z])+-)*"
+# masking._PRE_SK (wq#2924): at most one qualifier, from the vocabulary providers
+# issue. An open `[a-zA-Z]+-` repetition grew into the body and printed body letters
+# as a kept prefix. Reasoning: harness/masking.py.
+_PRE_SK = r"sk-(?:(?:ant|or|proj|svcacct|admin|None)-)?"
 
 
 def _body(charset, quant):

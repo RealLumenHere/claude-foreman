@@ -85,8 +85,9 @@ this rule's prefix + any length of its own charset + one of the OTHER rules' bar
 a `*` characters back to satisfy a required literal suffix. The trailing list excludes the
 rule's own prefix for the same wq#2638 reason the mark line above it does; a letters-only gap
 immediately in front of a SECOND, coincidental `sk-` (not a foreign rule's prefix) is a
-separate, pre-existing quirk of the greedy `sk-([a-zA-Z]+-)*` prefix, tracked as wq#2924, not
-fixed here.
+separate quirk of the greedy `sk-([a-zA-Z]+-)*` prefix. wq#2924 fixed it in masking.py, which
+this copy now delegates to, by limiting the prefix to one provider qualifier
+(`sk-(?:(?:ant|or|proj|svcacct|admin|None)-)?`).
 
 ## Install
 

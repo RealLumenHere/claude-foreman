@@ -103,10 +103,8 @@ def test_sk_prefix_keeps_no_body_characters():
     """
     assert mask("auth sk-ant-" + _SK_BODY) == "auth sk-ant-MASKED"
     assert mask("auth sk-" + _SK_BODY) == "auth sk-MASKED"
-    # `[a-zA-Z]+-` repeats WHOLE letter groups, so `v1-` is body, not prefix: the
-    # kept prefix stops at `sk-or-`. masking.py's own comment calls this one
-    # `sk-or-v1-`, but both copies compile to the same stop — lockstep holds, and
-    # keeping less of the prefix can only ever keep less of the secret.
+    # One qualifier from a fixed vocabulary (wq#2924), so `v1-` is body, not prefix:
+    # the kept prefix stops at `sk-or-`.
     assert mask("auth sk-or-v1-" + _SK_BODY) == "auth sk-or-MASKED"
 
 
