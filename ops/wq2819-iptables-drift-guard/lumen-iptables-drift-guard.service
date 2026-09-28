@@ -1,0 +1,10 @@
+[Unit]
+Description=wq#2819 -- reconcile /etc/iptables/rules.v4 against live iptables
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /home/lumen/services/lumen-iptables-drift-guard/iptables_drift_guard.py run
+StandardOutput=journal
+StandardError=journal
