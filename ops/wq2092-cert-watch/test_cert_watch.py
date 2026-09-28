@@ -115,12 +115,58 @@ class CheckHostTests(unittest.TestCase):
         self.assertIn("renewed", ntfy.call_args.args[0])
         resolve.assert_called_once_with(7, "cert renewed")
 
-    def test_unreachable_recorded_without_cert_alert(self):
+    def unreachable(self, prev):
         with mock.patch.object(cw, "fetch_not_after", return_value=(None, "boom")), \
-             mock.patch.object(cw, "ntfy") as ntfy:
-            entry = cw.check_host("h.example", 443, {"tier": "7d"}, NOW, dry_run=False)
-        self.assertEqual(entry["tier"], "unreachable")
+             mock.patch.object(cw, "ntfy") as ntfy, \
+             mock.patch.object(cw, "aq_ingest") as ingest, \
+             mock.patch.object(cw, "aq_resolve") as resolve:
+            entry = cw.check_host("h.example", 443, prev, NOW, dry_run=False)
+        return entry, ntfy, ingest, resolve
+
+    def test_unreachable_recorded_without_cert_alert(self):
+        entry, ntfy, ingest, resolve = self.unreachable({})
+        self.assertEqual(entry["tier"], "unreachable")  # never seen good
+        self.assertEqual(entry["error"], "boom")
         ntfy.assert_not_called()
+        ingest.assert_not_called()
+        resolve.assert_not_called()
+
+    def test_unreachable_carries_prev_tier_and_aq_id_forward(self):
+        """wq#2983: a failed fetch must not erase what the last good run knew."""
+        prev = {"tier": "7d", "not_after": NOW + 5 * DAY, "days_left": 5.0, "aq_id": 7}
+        entry, _, _, _ = self.unreachable(prev)
+        self.assertEqual(entry["tier"], "7d")
+        self.assertEqual(entry["aq_id"], 7)
+        self.assertEqual(entry["not_after"], prev["not_after"])
+        self.assertEqual(entry["days_left"], 5.0)
+        self.assertEqual(entry["error"], "boom")
+        self.assertEqual(entry["error_count"], 1)
+
+    def test_consecutive_unreachable_runs_count_up(self):
+        entry, _, _, _ = self.unreachable({"tier": "7d", "error_count": 2, "error": "boom"})
+        self.assertEqual(entry["error_count"], 3)
+
+    def test_wq2983_a_unreachable_then_same_tier_does_not_repage(self):
+        """A: 7d alert -> failed fetch -> same 7d cert must stay silent."""
+        entry, ntfy, ingest, _ = self.check(5, {})           # first sight in 7d
+        ntfy.assert_called_once()
+        ingest.assert_called_once()
+        entry, _, _, _ = self.unreachable(entry)             # transient failure
+        entry, ntfy, ingest, _ = self.check(5, entry)        # same cert, reachable
+        self.assertEqual(entry["tier"], "7d")
+        self.assertEqual(entry["aq_id"], 7)
+        ntfy.assert_not_called()
+        ingest.assert_not_called()
+
+    def test_wq2983_b_unreachable_then_renewal_resolves_aq(self):
+        """B: 7d alert -> failed fetch -> renewed cert must notify and resolve."""
+        entry, _, _, _ = self.check(5, {})
+        entry, _, _, _ = self.unreachable(entry)
+        entry, ntfy, _, resolve = self.check(90, entry)
+        self.assertEqual(entry["tier"], "ok")
+        self.assertIsNone(entry["aq_id"])
+        self.assertIn("renewed", ntfy.call_args.args[0])
+        resolve.assert_called_once_with(7, "cert renewed")
 
     def test_dry_run_skips_aq(self):
         with mock.patch.object(cw, "fetch_not_after", return_value=(NOW + 3 * DAY, None)), \
@@ -205,14 +251,17 @@ class RunTests(unittest.TestCase):
 
     def test_all_unreachable_sends_one_aggregate_notice(self):
         with tempfile.TemporaryDirectory() as tmp:
+            kw = dict(cf_config="x", targets_path=os.path.join(tmp, "n.json"),
+                      state_path=os.path.join(tmp, "s.json"), now=NOW)
             with mock.patch.object(cw, "read_cloudflared_hosts",
                                    return_value=(["a.example", "b.example"], None)), \
                  mock.patch.object(cw, "fetch_not_after", return_value=(None, "down")), \
                  mock.patch.object(cw, "ntfy") as ntfy:
-                cw.run(cf_config="x", targets_path=os.path.join(tmp, "n.json"),
-                       state_path=os.path.join(tmp, "s.json"), now=NOW)
-        ntfy.assert_called_once()
-        self.assertIn("2 endpoint(s) unreachable", ntfy.call_args.args[0])
+                cw.run(**kw)
+                ntfy.assert_called_once()
+                self.assertIn("2 endpoint(s) unreachable", ntfy.call_args.args[0])
+                cw.run(**kw)  # still down: the transition already fired
+                self.assertEqual(ntfy.call_count, 1)
 
     def test_no_targets_returns_1(self):
         with tempfile.TemporaryDirectory() as tmp:

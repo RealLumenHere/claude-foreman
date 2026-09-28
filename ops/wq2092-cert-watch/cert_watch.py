@@ -21,7 +21,9 @@ expired or self-signed leaf, not to be refused by it.
 Transition-based (kb/ISSUE-LOG.md #10 pattern, as ops/wq1397-gitea-version-check):
 an alert fires only when a host moves to a *more severe* tier than last
 alerted, so a standing 7-day warning pages once, not every run; a renewal
-clears the tier and sends a "renewed" notice. Alerts go to the aq queue
+clears the tier and sends a "renewed" notice. An unreachable run carries the
+last known tier/not_after/aq_id forward (wq#2983) so it cannot forge either
+transition. Alerts go to the aq queue
 (source=cert-watch, dedup per host) and to ntfy. Read-only: no cert or
 endpoint is touched; state is one JSON file.
 
@@ -196,7 +198,15 @@ def check_host(host, port, prev, now, dry_run):
     new state entry, alerting on a move to a more severe tier."""
     not_after, error = fetch_not_after(host, port)
     if error:
-        return {"tier": "unreachable", "error": error}
+        # wq#2983: a failed fetch says nothing about the cert, so the entry keeps
+        # the last known tier/not_after/aq_id and only records the error. Dropping
+        # them reset prev_sev to 0, which re-paged the standing alert on the next
+        # good run and orphaned the aq row when the next good run was a renewal.
+        entry = dict(prev)
+        entry["error"] = error
+        entry["error_count"] = prev.get("error_count", 0) + 1
+        entry.setdefault("tier", "unreachable")  # never seen good: no tier to keep
+        return entry
 
     days_left = (not_after - now) / 86400
     tier = classify(days_left)
@@ -253,9 +263,13 @@ def run(cf_config=DEFAULT_CF_CONFIG, targets_path=DEFAULT_TARGETS, extra=(),
         key = f"{host}:{port}"
         entry = check_host(host, port, prev_hosts.get(key, {}), now, dry_run)
         new_hosts[key] = entry
-        if entry["tier"] == "unreachable" and prev_hosts.get(key, {}).get("tier") != "unreachable":
+        # error_count is the run of consecutive failures, so ==1 is the transition
+        # (the tier no longer changes on a failed fetch — see check_host).
+        if entry.get("error") and entry["error_count"] == 1:
             newly_unreachable.append(f"{key} ({entry['error']})")
-        print(f"cert-watch: {key} tier={entry['tier']} days_left={entry.get('days_left', '-')}")
+        stale = f" error={entry['error']}" if entry.get("error") else ""
+        print(f"cert-watch: {key} tier={entry['tier']} "
+              f"days_left={entry.get('days_left', '-')}{stale}")
 
     # One aggregated notice: cloudflared down makes every host unreachable at once.
     if newly_unreachable:
