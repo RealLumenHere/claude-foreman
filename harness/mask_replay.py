@@ -596,7 +596,15 @@ def _hits(patterns, text, skip_masked_output):
     """(label, prefix, value) per match. `skip_masked_output` drops a match that ends
     in the mask literal — masking._matches' rule (wq#2298), true of the current table
     and false of the legacy one, which is exactly why re-reading a masked artefact
-    used to re-arm the alarm."""
+    used to re-arm the alarm.
+
+    Today's table with the skip on is exactly what the tripwire runs, so it reads
+    through masking.raw_matches() — multi-pass, own-output screened — instead of one
+    raw finditer per rule, which missed every value a glued prefix frees on a later
+    pass (wq#2875: wq#2848's aws and slack hits never reached its own replay)."""
+    if patterns is CURRENT_PATTERNS and skip_masked_output:
+        yield from masking.raw_matches(text)[0]
+        return
     for label, rx in patterns:
         for m in rx.finditer(text):
             if skip_masked_output and m.group(0).endswith(masking.MASK):

@@ -713,6 +713,35 @@ def suppressions(text):
     return records
 
 
+def raw_matches(text):
+    """([(label, prefix, value)], masked_text) — the matches scan() records, in its order.
+
+    wq#2875: mask_replay used to re-derive this with one finditer per rule over the raw
+    text, which never sees a value only freed on a later pass (wq#2720). wq#2848's
+    `ghp_<body>AKIA<16>xoxb-<body>` probe fired aws and slack live while the replay read
+    github alone, so its "0 unaccounted" never scored the ticket's own two values. The
+    replay now reads through this, so it cannot disagree with the tripwire it audits.
+    """
+    matches, cur = [], text
+    for _ in range(_MAX_PASSES):
+        changed = False
+        for label, rx, repl in PATTERNS:
+            # finditer then sub on the same string, pattern by pattern, so the
+            # records follow exactly the sequence of substitutions mask_text()
+            # performs: a value an earlier pattern already shortened to
+            # `<prefix>MASKED` no longer matches a later one, and must not be
+            # recorded as if it had.
+            found = _matches(rx, cur)
+            if found:
+                changed = True
+            for m in found:
+                matches.append((label, m.group(1), m.group(0)[len(m.group(1)):]))
+            cur = _sub(rx, repl, cur)[0]
+        if not changed:
+            break
+    return matches, cur
+
+
 def scan(text, include_suppressed=False):
     """(masked_text, [hit record]) — wq#2288. mask_text() answers "did a credential
     print?"; scan() answers "WHICH one?", which is what a rotation ticket needs and
@@ -737,24 +766,7 @@ def scan(text, include_suppressed=False):
     Runs the same up-to-`_MAX_PASSES` passes as mask_text() (wq#2720), so a value a
     foreign-prefix stop freed up on pass 2 is recorded here too, not just masked.
     """
-    matches, cur = [], text
-    for _ in range(_MAX_PASSES):
-        changed = False
-        for label, rx, repl in PATTERNS:
-            # finditer then sub on the same string, pattern by pattern, so the
-            # records follow exactly the sequence of substitutions mask_text()
-            # performs: a value an earlier pattern already shortened to
-            # `<prefix>MASKED` no longer matches a later one, and must not be
-            # recorded as if it had.
-            found = _matches(rx, cur)
-            if found:
-                changed = True
-            for m in found:
-                matches.append((label, m.group(1), m.group(0)[len(m.group(1)):]))
-            cur = _sub(rx, repl, cur)[0]
-        if not changed:
-            break
-
+    matches, cur = raw_matches(text)
     records, cursor = [], {}
     for label, prefix, value in matches:
         marker = prefix + "MASKED"

@@ -52,7 +52,7 @@ floor in full; only the pre-mask slice is short):
 | collector | crafted input | cut point | result |
 |---|---|---|---|
 | `collect_aq` | `'gh' + 'p_' + 'Q'*36` (44-char token, prefix+36-body, floor 30) glued 180 chars into a `guard-fired` alert `message` | `message[:200]` | fragment text ends `...ghp_QQQQQQQQQQQQQQQQ` — 20 live chars (prefix + 16-char body, 14 short of the `{30,}` floor) in the clear, `hits=[]` |
-| `collect_trivy` | `'sk-' + 'Q'*40` glued into a FATAL trivy report body | `raw.strip()[:250]` | fragment text ends `...sk-QQQQQQQQQQQQQQQQ` — 19 live chars (prefix + 16-char body) in the clear |
+| `collect_trivy` | `'sk-' + 'Q'*40` glued into a FATAL trivy report body | `raw.strip()[:250]` | fragment text ends `...sk-` + 16 `Q`s — 19 live chars (prefix + 16-char body) in the clear |
 
 Scripts: `/tmp/fworker-wq2846/probe_truncate_mask.py`, `/tmp/fworker-wq2846/probe_trivy_truncate_mask.py`
 (both import the shipped `ir_triage.py` and `harness/masking.py` directly, no reimplementation).

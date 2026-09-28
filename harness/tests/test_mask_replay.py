@@ -2029,3 +2029,42 @@ def test_wq2787_corpus_burned_nothing():
                                        patterns=mask_replay.CURRENT_PATTERNS)
     for sha, _label, value in values:
         assert mask_replay.account(value, fixture), sha
+
+
+def test_replay_reads_what_the_tripwire_reads_on_a_glued_line():
+    """wq#2875: one finditer per rule missed the aws and slack values a truncated github
+    match frees on a later pass, so wq#2848's replay never scored its own ticket's hits."""
+    line = ("ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8" + "AKI" + "A" + "Q" * 16
+            + "xox" + "b-" + "1234567890" + "1")
+    live = [(r["label"], r["value_sha256_12"]) for r in masking.scan(line)[1]]
+    assert [label for label, _ in live] == ["github", "aws", "slack"]
+    records = mask_replay.replay(0, patterns=mask_replay.CURRENT_PATTERNS, tracked={},
+                                 items={"transcript:probe": line}, rotated={})
+    assert [(r["label"], r["value_sha256_12"]) for r in records] == live
+
+
+WQ2848_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2848")
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2848_RUN),
+                    reason="wq#2848's run dir is not on this host")
+def test_wq2848_replay_reproduces_every_live_hit():
+    """wq#2875's verdict, pinned: every value the tripwire recorded (github, aws, slack,
+    all from one glued `printf` probe) is reproduced by the replay and accounted for."""
+    with open(os.path.join(WQ2848_RUN, "mask-hits-1.json")) as fh:
+        fired = {r["value_sha256_12"] for r in json.load(fh) if "suppressed" not in r}
+    assert fired == {"76b4100ba253", "e69bbe113521", "254aa248acb4"}
+    records = mask_replay.replay(2848, patterns=mask_replay.CURRENT_PATTERNS, rotated={})
+    assert fired <= {r["value_sha256_12"] for r in records}
+    assert mask_replay.unaccounted(records) == []
+
+
+WQ2875_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2875_values.py")
+
+
+def test_wq2875_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ2875_FIXTURES)
+    for sha, _label, value in scope["WQ2875_VALUES"]:
+        assert masking.value_sha12(value) == sha
+        assert mask_replay.account(value, {"f": text})
+    assert masking.mask_text(text)[1] == []
