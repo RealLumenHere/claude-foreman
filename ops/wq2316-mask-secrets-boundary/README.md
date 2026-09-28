@@ -64,6 +64,30 @@ another rule's shape (`API_KEY: sk-ant-<token>`, `TOKEN: AKIA<lowercase junk tha
 own charset>`), and a mark at position zero would refuse it outright, floor and all — a real
 leak, not a false-positive trade. Confirmed live before reverting it.
 
+## wq#2899 — a foreign rule's ALREADY-masked residue still undershoots the next rule's floor
+
+wq#2848 (not documented here yet — see the `_PROG` header comment) changed the wq#2720 mark
+from a bare prefix to the foreign rule's FULL shape, so a stray 4-5 character substring that
+merely spells another rule's prefix no longer truncates a real token below its own floor. That
+fix only helps while the foreign token is still LIVE. Once that rule has already run (earlier
+in this file's fixed order, or an earlier one of the six passes) and replaced its span with
+`<its own kept prefix>MASKED`, the next rule's charset still can't cross the mask literal (no
+charset ever contains `\x01`), so a live gap shorter than the current rule's floor — sandwiched
+between this rule's own prefix and the neighbour's already-masked residue — still failed the
+whole match and stayed in the clear: an sk- token whose body embeds `cfut_`/`cfut` or leads
+with `xoxb-` leaked 3-17 characters of its own head. wq#2848's class-wide probe flagged this
+6/1900, identical on the pre-2720 masker.
+
+One absorb line per open-floor rule (not AWS — its `[0-9A-Z]` charset can't spell any other
+rule's lowercase/underscore/dash prefix), run right after that rule's own strip: boundary +
+this rule's prefix + any length of its own charset + one of the OTHER rules' bare kept prefix
++ `\x01` collapses to boundary + prefix + `\x01`. No mark byte needed — POSIX ERE already gives
+a `*` characters back to satisfy a required literal suffix. The trailing list excludes the
+rule's own prefix for the same wq#2638 reason the mark line above it does; a letters-only gap
+immediately in front of a SECOND, coincidental `sk-` (not a foreign rule's prefix) is a
+separate, pre-existing quirk of the greedy `sk-([a-zA-Z]+-)*` prefix, tracked as wq#2924, not
+fixed here.
+
 ## Install
 
 Worker sessions cannot run this — `/home/lumen/bin` is a primary tree (guard.sh, wq#1719)

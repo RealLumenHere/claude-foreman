@@ -134,6 +134,18 @@ def _foreign_prefixes(label):
     return r"(?:" + "|".join(others) + r")"
 
 
+def _foreign_bare_prefixes(label):
+    """Every OTHER rule's bare prefix (pre-wq#2848 `_foreign_prefixes`), for
+    `_floored_absorb`: what a foreign rule KEEPS in its own replacement
+    (`\\1MASKED`) is just its prefix, not its full shape, so recognising that
+    rule's already-masked residue needs the prefix alone — the full shape from
+    `_foreign_prefixes` above would need `floor` more real body characters
+    after the prefix, which a literal `MASKED` behind it is not."""
+    others = [p for name, shapes in _SHAPES_BY_LABEL.items() if name != label
+              for p, _charset, _quant in shapes]
+    return r"(?:" + "|".join(others) + r")"
+
+
 # wq#2848: `quant` is always one of `{N,}` (open floor) or `{N}` (exact), never a
 # bounded range — parsed here rather than threaded through as separate arguments so
 # every _body() call site keeps reading like the rule's own PATTERNS entry.
@@ -200,6 +212,50 @@ def _body(charset, quant, foreign=""):
         both_guard = r"(?:(?!(?-i:" + MASK + r"|" + foreign + r"))" + charset + r")"
         run += both_guard + r"*"
     return run
+
+
+def _floored_absorb(label, charset):
+    """(wq#2899) a live `charset` run of ANY length, sitting directly in front of a
+    DIFFERENT rule's prefix and this module's own mask literal — i.e. that other
+    rule's own match, already run and replaced.
+
+    wq#2848's `_body()` fix (above) stops a foreign shape from truncating a run
+    below THIS rule's floor by skipping the foreign check for the first `floor`
+    characters — but only within a SINGLE PASS's traversal order. cloudflare runs
+    BEFORE sk-key in PATTERNS, so by the time sk-key's turn comes, a live
+    `cfut_<body>` embedded in its own body has already been consumed and replaced
+    with `cfut_MASKED` — a literal `MASKED` sits where wq#2848's floor-relative
+    skip needed live charset characters, and `_body`'s unconditional MASK guard
+    (always active, floor or no floor) still stops the run dead there. The floor
+    quantifier is all-or-nothing, so a gap under `floor` before that point failed
+    the WHOLE match and stayed in the clear forever, sandwiched between this
+    rule's own prefix and the neighbour's already-masked residue. wq#2848's
+    class-wide probe found this 6/1900: an sk- token whose body embeds
+    `cfut_`/`cfut` or leads with `xoxb-` masked the embedded token and left 3-17
+    characters of the sk- head in the clear.
+
+    Requiring the LITERAL foreign prefix immediately before `MASKED` (not bare
+    `MASKED` alone) is what lets this absorb a neighbour's residue without also
+    matching this rule's own prior output glued to its own prefix
+    (`sk-ant-xxxxxxxxMASKED`, FALSE_POSITIVES below) — that shape has no foreign
+    prefix text in front of the literal, so it can never satisfy this alternative.
+    No upper bound on the gap: `_body()`'s own MASK guard already stops it before
+    it could run into anything but the neighbour's kept prefix, and `_matches()`'s
+    own-tail screen (unaffected by this change) still drops a resulting match that
+    turns out to be pure own-output.
+    """
+    foreign = _foreign_prefixes(label)
+    return (_body(charset, "{0,}", foreign)
+            + _foreign_bare_prefixes(label) + MASK)
+
+
+def _floored_body(label, charset, floor):
+    """`charset` reaching `floor` on its own (the ordinary case), or a shorter run
+    that absorbs a neighbouring rule's already-masked residue instead of stopping
+    short of its own floor — see `_floored_absorb`."""
+    foreign = _foreign_prefixes(label)
+    normal = _body(charset, "{" + str(floor) + ",}", foreign)
+    return r"(?:" + normal + r"|" + _floored_absorb(label, charset) + r")"
 
 
 # wq#2297 kv-secret label vocabulary, ported from read_dir_sweep.py:38-60 (wq#2115).
@@ -415,14 +471,12 @@ PATTERNS = [
     # (`ghp_MASKED` is 6 legal chars), so every already-masked artefact re-armed
     # the alarm on the next read — the floors below end that loop too.
     ("github", re.compile(_B + r"(" + _PRE_GH + r")"
-                          + _body(r"[A-Za-z0-9]", "{30,}",
-                                  _foreign_prefixes("github"))), r"\1MASKED"),
+                          + _floored_body("github", r"[A-Za-z0-9]", 30)), r"\1MASKED"),
     ("github", re.compile(_B + r"(" + _PRE_GHPAT + r")"
-                          + _body(r"[A-Za-z0-9_]", "{20,}",
-                                  _foreign_prefixes("github"))), r"\1MASKED"),
+                          + _floored_body("github", r"[A-Za-z0-9_]", 20)), r"\1MASKED"),
     ("cloudflare", re.compile(_B + r"(" + _PRE_CFUT + r")"
-                              + _body(r"[A-Za-z0-9_.-]", "{6,}",
-                                      _foreign_prefixes("cloudflare"))), r"\1MASKED"),
+                              + _floored_body("cloudflare", r"[A-Za-z0-9_.-]", 6)),
+     r"\1MASKED"),
     # wq#2300: the prefix repeats WHOLE dash-terminated letter groups (`sk-`,
     # `sk-ant-`, `sk-or-v1-`) instead of a greedy `[a-zA-Z-]*`. Greedy, group 1 ran
     # as far as the `{16,}` body would allow, so a body opening with a long letter
@@ -432,11 +486,9 @@ PATTERNS = [
     # `value_sha256_12` computed over a truncated body, so the "sha256 a candidate
     # and compare" instruction every rotation ticket carries could never match.
     ("sk-key", re.compile(_B + r"(" + _PRE_SK + r")"
-                          + _body(r"[A-Za-z0-9_-]", "{16,}",
-                                  _foreign_prefixes("sk-key"))), r"\1MASKED"),
+                          + _floored_body("sk-key", r"[A-Za-z0-9_-]", 16)), r"\1MASKED"),
     ("slack", re.compile(_B + r"(" + _PRE_SLACK + r")"
-                         + _body(r"[A-Za-z0-9-]", "{8,}",
-                                 _foreign_prefixes("slack"))), r"\1MASKED"),
+                         + _floored_body("slack", r"[A-Za-z0-9-]", 8)), r"\1MASKED"),
     ("aws", re.compile(_B + r"(" + _PRE_AWS + r")"
                        + _body(r"[0-9A-Z]", "{16}", _foreign_prefixes("aws"))),
      r"\1MASKED"),

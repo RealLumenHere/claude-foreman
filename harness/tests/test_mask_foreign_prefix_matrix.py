@@ -46,37 +46,62 @@ ALNUM = string.ascii_letters + string.digits
 UPDIG = string.ascii_uppercase + string.digits
 
 # label, token prefix, body charset, floor, exact-length?, fill char.
-# sk-key fills with a DIGIT: its prefix is sk-(?:[a-zA-Z]+-)*, so a leading letters+hyphen
-# run is kept visible by design (sk-ant-, sk-proj-) — identical before and after wq#2720,
-# not part of this class.
 RULES = [
     ("github", _GH, ALNUM, 30, False, "Q"),
     ("github_pat", _GHPAT, ALNUM + "_", 20, False, "Q"),
     ("cloudflare", _CFUT + "_", ALNUM + "_.-", 6, False, "Q"),
+    # wq#2899: sk-key now ALSO runs with a LETTER fill (SK_LETTER_RULE below), on top
+    # of the digit fill here — this class truncates the run below sk-key's own floor
+    # regardless of what the fill character is, since the foreign rule's already-masked
+    # residue is what stops it either way (cloudflare and slack both run around sk-key
+    # in PATTERNS, one on each side, so both glue directions apply). `_floored_absorb`
+    # closes it. The digit fill stays too: it is what isolates this class from the
+    # separate, pre-existing, letter-only prefix-continuation shape documented at
+    # `_SK_LETTER_EXCLUDES_OWN_PREFIX` below, which this ticket does not touch.
     ("sk-key", _SK, ALNUM + "_-", 16, False, "9"),
     ("slack", _XOX, ALNUM + "-", 8, False, "Q"),
     ("aws", _AKIA, UPDIG, 16, True, "Q"),
 ]
 FOREIGN = [_AKIA, _CFUT, _CFUT + "_", _SK, _XOX, _GH, _GHPAT]
 
-# Known residual, NOT part of this class: sk-key bodies that embed a cloudflare prefix leave
-# a short tail (cloudflare runs first in PATTERNS). Identical on the pre-wq#2720 masker; tracked
-# in its own ticket, so the sk-key cases here fill with a digit and skip that shape.
+# wq#2899: a second fill for sk-key ALONE, letter-led instead of digit-led — its
+# prefix (sk-(?:[a-zA-Z]+-)*) is the one shape in RULES that can read a fill
+# character as part of its OWN prefix group rather than its body, which is a
+# distinct way to reach the same "run truncated below the floor" class the digit
+# fill above cannot exercise.
+SK_LETTER_RULE = ("sk-key", _SK, ALNUM + "_-", 16, False, "z")
+
+# wq#2899: a letter-led fill in front of sk-key's OWN prefix text (`sk-`, not a
+# foreign one) is a different, pre-existing shape this ticket does not fix: the
+# prefix group is `sk-(?:[a-zA-Z]+-)*`, and a letters-then-dash fill immediately
+# in front of a SECOND `sk-` completes one more repetition of that group whole
+# (`sk-` + `<letters>` + `sk-` reads as two whole "letters-then-dash" units), so
+# the fill is absorbed into the KEPT prefix rather than the masked body — visible
+# in the output, not merely mis-labelled. This is `_foreign_bare_prefixes`
+# excluding sk-key's own shape on purpose (wq#2638's own-repeated-prefix
+# composing needs that exclusion), so `_floored_absorb` cannot key off it the way
+# it does for a genuinely foreign prefix. A foreign rule's own already-masked
+# residue (cloudflare, slack, github, aws) does not have this shape at all, so
+# every OTHER case in FOREIGN is unaffected and stays covered below.
+_SK_LETTER_EXCLUDES_OWN_PREFIX = {_SK}
 
 
 def _cases():
     out = []
-    for label, pre, cs, floor, exact, fill in RULES:
+    for label, pre, cs, floor, exact, fill in RULES + [SK_LETTER_RULE]:
         blen = floor if exact else floor + 12
         for f in FOREIGN:
             if not all(c in cs for c in f):
                 continue
+            if fill == "z" and f in _SK_LETTER_EXCLUDES_OWN_PREFIX:
+                continue
             hi = blen - len(f)
             offs = {0, 1, 3, 5, floor - len(f), floor - 1, floor, floor + 1, hi}
+            idlabel = label if fill != "z" else label + "-letter"
             for off in sorted(o for o in offs if 0 <= o <= hi):
                 body = fill * off + f + fill * (hi - off)
                 out.append(pytest.param(label, pre, body, fill, f, off,
-                                        id=f"{label}-{f}-off{off}"))
+                                        id=f"{idlabel}-{f}-off{off}"))
     return out
 
 
