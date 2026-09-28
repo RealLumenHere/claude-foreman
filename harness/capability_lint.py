@@ -129,6 +129,16 @@ _V2_VERB_RE = re.compile(
 
 DEFAULT_RESTART_NODE = "lumen"  # §2.1: "node omitted = lumen"
 
+# wq#2991: "ssh the node" (wq#2914's actual detail text) is an authored ssh INSTRUCTION
+# whose object is a generic determiner, never a real hostname — unlike the prose corpus
+# rows _host_shaped's docstring tunes against ("bare ssh itself", "ran ssh to bes") this
+# is imperative, not retrospective, so it must not fall into the same silent "prose"
+# bucket (wq#2914 was dispatched to a sandbox worker 5x on exactly this text with no
+# lint finding at all, then burned every attempt on runtime `ssh` denials). A closed
+# set, not a heuristic: no real fleet subject can ever equal one of these words, so this
+# can never mask a genuine node mention the way a broader guess would.
+_SSH_GENERIC_TARGETS = frozenset({"the", "a", "an", "each", "every", "any", "that", "this", "some"})
+
 
 class Derived:
     """Three deciding buckets plus one that decides nothing. `tags` is (name, arg)
@@ -640,6 +650,18 @@ def _derive_ssh(text, roster, tags, unresolved, policy=None):
                 continue
         elif roster.known(host):
             node = host
+        elif host.lower() in _SSH_GENERIC_TARGETS:
+            # wq#2991: "ssh the node" — a real instruction, deliberately unresolvable by
+            # regex (which node varies per item/checklist entry). Held, not guessed: the
+            # ticket needs an explicit needs:ssh(<node>) per target, or — since a sandbox
+            # worker cannot invoke ssh directly and the fleet-exec broker only covers
+            # allow-listed targets — an orchestrator (research/WORKER_EXEC_CAPABILITY_GAP.md
+            # §2.1: "There is no headless orchestrator-class runner today").
+            unresolved.append(
+                f"ssh {host}: names ssh as an instruction with no resolvable node — file "
+                f"an explicit needs:ssh(<node>) tag per target, or route this ticket to an "
+                f"orchestrator (a sandbox worker cannot invoke ssh directly)")
+            continue
         elif _host_shaped(host) or m.group("user"):
             unresolved.append(f"ssh {host}: node {host!r} is not a lumen_state subject")
             continue
