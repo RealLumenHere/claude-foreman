@@ -1,10 +1,24 @@
 # D300 GPU resale-validation SOP (wq#2714)
 
-Grades AMD FirePro D300 (Tahiti/Pitcairn, GCN 1.0, Mac Pro 6,1 module) cards
+Grades AMD FirePro D300 (Pitcairn/Curacao XT, GCN 1.0, Mac Pro 6,1 module) cards
 good-vs-bad for resale, and records a per-card result. Built for the
 hardware-resale plan in wq#2444. Designed to generalize to future parts
 machines: swap the rig, the tool binaries, and `--expected-gpu`, keep the
 three-stage shape.
+
+## Which card is which (wq#2444)
+
+A card that reports `TAHITI` is not a D300. Check `lspci -nn` and
+`/sys/class/drm/card*/device/mem_info_vram_total` before grading or listing:
+
+| card | chip | PCI id | VRAM | `--expected-gpu` | fleet boxes (lumen_state) |
+|------|------|--------|------|------------------|---------------------------|
+| D300 | Pitcairn / Curacao XT | 1002:6810 | 2 GB | `PITCAIRN` | isis, hathor |
+| D500 | Tahiti LE | 1002:679e | 3 GB | `TAHITI` | nephthys, khepri |
+| D700 | Tahiti XT | 1002:6798 | 6 GB | `TAHITI` | none owned |
+
+lumen_state records nephthys/khepri as "both D300s"; the PCI id says D500.
+Listing a D500 pair as D300 leaves roughly $25-100 per pair on the table.
 
 ## Rig assumptions
 
@@ -37,8 +51,7 @@ Runs, in order, stopping at the first FAIL (no point soaking a card that
 already failed VRAM):
 
 1. **bind_check.sh** -- `vulkaninfo --summary` must mention
-   `--expected-gpu` (default `PITCAIRN`; some D300 units report as `TAHITI`
-   -- pass the right one), and `clinfo` must list at least one OpenCL
+   `--expected-gpu` (default `PITCAIRN`), and `clinfo` must list at least one OpenCL
    device. FAIL here means the card/riser/slot didn't come up at the driver
    level -- stop, don't burn soak hours on it.
 2. **vram_test.sh** -- runs `memtest_vulkan` for `--vram-seconds`. Any

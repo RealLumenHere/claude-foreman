@@ -45,26 +45,24 @@ fi
 
 log "wq#2714 resale validation start: serial=$SERIAL outdir=$OUTDIR"
 
-if ! "$HERE/bind_check.sh" "$OUTDIR" "$EXPECTED_GPU"; then
-  echo "$SERIAL,$RUN_TS,bind_check,FAIL,\"see $OUTDIR/bind_check.json\",$OUTDIR" >> "$GRADE_LOG"
-  log "HEADLESS GRADE: FAIL at bind_check"
-  echo "HEADLESS_GRADE=FAIL stage=bind_check outdir=$OUTDIR"
+# Every stage exits nonzero for both FAIL and TOOL_MISSING so the chain stops
+# either way; the grade row must carry the stage's own result from its JSON,
+# or a rig missing a binary logs a scrap-grade FAIL against the card (wq#2716).
+run_stage() {
+  local stage="$1"; shift
+  "$HERE/$stage.sh" "$@" && return 0
+  local result
+  result=$(jq -r '.result // empty' "$OUTDIR/$stage.json" 2>/dev/null || true)
+  result="${result:-FAIL}"
+  echo "$SERIAL,$RUN_TS,$stage,$result,\"see $OUTDIR/$stage.json\",$OUTDIR" >> "$GRADE_LOG"
+  log "HEADLESS GRADE: $result at $stage"
+  echo "HEADLESS_GRADE=$result stage=$stage outdir=$OUTDIR"
   exit 1
-fi
+}
 
-if ! "$HERE/vram_test.sh" "$OUTDIR" "$VRAM_SECONDS"; then
-  echo "$SERIAL,$RUN_TS,vram_test,FAIL,\"see $OUTDIR/vram_test.json\",$OUTDIR" >> "$GRADE_LOG"
-  log "HEADLESS GRADE: FAIL at vram_test"
-  echo "HEADLESS_GRADE=FAIL stage=vram_test outdir=$OUTDIR"
-  exit 1
-fi
-
-if ! "$HERE/compute_soak.sh" "$OUTDIR" "$SOAK_SECONDS" "$MAX_TEMP_C"; then
-  echo "$SERIAL,$RUN_TS,compute_soak,FAIL,\"see $OUTDIR/compute_soak.json\",$OUTDIR" >> "$GRADE_LOG"
-  log "HEADLESS GRADE: FAIL at compute_soak"
-  echo "HEADLESS_GRADE=FAIL stage=compute_soak outdir=$OUTDIR"
-  exit 1
-fi
+run_stage bind_check "$OUTDIR" "$EXPECTED_GPU"
+run_stage vram_test "$OUTDIR" "$VRAM_SECONDS"
+run_stage compute_soak "$OUTDIR" "$SOAK_SECONDS" "$MAX_TEMP_C"
 
 echo "$SERIAL,$RUN_TS,compute_soak,PASS,\"headless clean; manual visual gate pending\",$OUTDIR" >> "$GRADE_LOG"
 log "HEADLESS GRADE: PASS -- proceed to manual visual gate"
