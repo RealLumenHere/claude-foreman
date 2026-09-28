@@ -19,4 +19,14 @@
 #     sys-subsystem-*-devices-* aliases for net and bluetooth, so the
 #     sys-subsystem-drm-devices-%i.device that gpu-lowpower@.service BindsTo= never
 #     existed; each instance would wait out the device job timeout and fail.
-ACTION=="add", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ENV{DEVTYPE}=="drm_minor", DRIVERS=="amdgpu", TAG+="systemd", ENV{SYSTEMD_ALIAS}+="/sys/subsystem/drm/devices/%k", ENV{SYSTEMD_WANTS}+="gpu-lowpower@%k.service"
+#
+# wq#2852 (nephthys, boot of 2026-09-27): ACTION!="remove", not ACTION=="add". udev
+# re-runs every rule on each uevent, and amdgpu sends `change` uevents on the card minor
+# (drm hotplug). A rule that only matched `add` left that event without the systemd tag
+# or the alias; PID1 checks the *current* tag on every non-remove event (systemd v255
+# src/core/device.c:762-769) and clears the device's found bit when it is missing
+# (:1196-1199). The .device unit went dead, BindsTo= stopped gpu-lowpower@card1 while
+# it was still waiting for its knob, and the SIGTERM left it failed. Upstream's
+# 99-systemd.rules tags net/bluetooth the same way: skip remove, tag everything else.
+# SYSTEMD_WANTS does not re-run an instance that is already active (device.c:610-615).
+ACTION!="remove", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ENV{DEVTYPE}=="drm_minor", DRIVERS=="amdgpu", TAG+="systemd", ENV{SYSTEMD_ALIAS}+="/sys/subsystem/drm/devices/%k", ENV{SYSTEMD_WANTS}+="gpu-lowpower@%k.service"

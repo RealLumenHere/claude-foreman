@@ -169,7 +169,7 @@ class Applier(unittest.TestCase):
 
 
 def node_probe(level="low", state="battery", active="active", status="0",
-               cards=("card1", "card2"), shas=None, drop=()):
+               cards=("card1", "card2"), shas=None, drop=(), failed=()):
     """Build what the --verify probe prints on a node."""
     lines = []
     for c in cards:
@@ -178,6 +178,7 @@ def node_probe(level="low", state="battery", active="active", status="0",
             lines.append("state=%s:%s" % (c, state))
     lines.append("active=" + active)
     lines.append("status=" + status)
+    lines.extend("failed=" + u for u in failed)
     for dst, src in DSTS.items():
         if dst in drop:
             lines.append("sha=%s:" % dst)
@@ -250,6 +251,14 @@ class VerifyContract(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("is-active=failed", r.stdout)
 
+    def test_nephthys_as_found_on_2026_09_27_fails(self):
+        """wq#2852: both cards low, reconciler active/0, gpu-lowpower@card1 failed."""
+        found = node_probe(failed=("gpu-lowpower@card1.service",))
+        r = run_verify({"hathor": node_probe(), "nephthys": found})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("nephthys: gpu-lowpower@card1.service failed", r.stdout)
+        self.assertNotIn("hathor", r.stdout)
+
     def test_drifted_file_fails(self):
         drifted = {"/usr/local/sbin/gpu-lowpower.sh": "0" * 64}
         r = run_verify({"hathor": node_probe(shas=drifted), "nephthys": node_probe()})
@@ -301,6 +310,47 @@ class UdevRuleContract(unittest.TestCase):
     def test_rule_creates_the_device_the_template_binds_to(self):
         self.assertIn("BindsTo=sys-subsystem-drm-devices-%i.device", self.tmpl)
         self.assertIn('ENV{SYSTEMD_ALIAS}+="/sys/subsystem/drm/devices/%k"', self.rules[0])
+
+    def test_rule_keeps_the_tag_on_change_events(self):
+        """wq#2852: an add-only rule drops the systemd tag and alias on a `change`
+        uevent, PID1 marks the .device dead, and BindsTo= SIGTERMs the instance."""
+        self.assertTrue(self.rules[0].startswith('ACTION!="remove", '), self.rules[0])
+        self.assertNotIn('ACTION=="add"', self.rules[0])
+
+
+class ProbeFailedInstances(unittest.TestCase):
+    """wq#2852: the --verify probe must report failed gpu-lowpower@ instances whether
+    or not systemctl prefixes the row with its failed-unit bullet."""
+
+    def run_probe(self, listing):
+        with open(INSTALL) as fh:
+            body = fh.read()
+        start = body.index("_probe='") + len("_probe='")
+        probe = body[start:body.index("\n'\n", start)]
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = os.path.join(tmp, "systemctl")
+            with open(stub, "w") as fh:
+                fh.write('#!/usr/bin/env bash\n[ "$1" = list-units ] && cat "$LISTING"\nexit 0\n')
+            os.chmod(stub, os.stat(stub).st_mode | stat.S_IEXEC)
+            with open(os.path.join(tmp, "listing"), "w") as fh:
+                fh.write(listing)
+            env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"],
+                       LISTING=os.path.join(tmp, "listing"))
+            r = subprocess.run(["bash", "-c", probe], env=env, capture_output=True, text=True)
+        return [l for l in r.stdout.splitlines() if l.startswith("failed=")]
+
+    def test_bulleted_row(self):
+        row = "● gpu-lowpower@card1.service loaded failed failed Force card1 to low GPU power\n"
+        self.assertEqual(self.run_probe(row), ["failed=gpu-lowpower@card1.service"])
+
+    def test_plain_rows(self):
+        rows = ("gpu-lowpower@card1.service loaded failed failed Force card1\n"
+                "gpu-lowpower@card2.service loaded failed failed Force card2\n")
+        self.assertEqual(self.run_probe(rows), ["failed=gpu-lowpower@card1.service",
+                                                "failed=gpu-lowpower@card2.service"])
+
+    def test_nothing_failed(self):
+        self.assertEqual(self.run_probe(""), [])
 
 
 if __name__ == "__main__":

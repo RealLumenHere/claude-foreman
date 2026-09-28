@@ -21,7 +21,7 @@ UNIT_DST=/etc/systemd/system/gpu-lowpower.service
 TMPL_DST=/etc/systemd/system/gpu-lowpower@.service
 RULE_DST=/etc/udev/rules.d/99-gpu-lowpower.rules
 
-# One round-trip per node. Every command is read-only: four cats, two systemctl
+# One round-trip per node. Every command is read-only: four cats, three systemctl
 # queries, four sha256sums.
 _probe='
 for f in /sys/class/drm/card[0-9]*/device/power_dpm_force_performance_level; do
@@ -34,6 +34,8 @@ done
 a=$(systemctl is-active gpu-lowpower.service 2>/dev/null); [ -n "$a" ] || a=absent
 printf "active=%s\n" "$a"
 printf "status=%s\n" "$(systemctl show gpu-lowpower.service -p ExecMainStatus --value 2>/dev/null)"
+systemctl list-units --all --plain --no-legend --state=failed "gpu-lowpower@*" 2>/dev/null |
+  grep -o "gpu-lowpower@[^ ]*\.service" | sed "s/^/failed=/"
 for p in /usr/local/sbin/gpu-lowpower.sh /etc/systemd/system/gpu-lowpower.service /etc/systemd/system/gpu-lowpower@.service /etc/udev/rules.d/99-gpu-lowpower.rules; do
   printf "sha=%s:%s\n" "$p" "$(sha256sum "$p" 2>/dev/null | cut -d" " -f1)"
 done
@@ -73,6 +75,14 @@ EOF_ST
     [ "$active" = active ] || _vmiss "$n: gpu-lowpower.service is-active=$active (want active)"
     [ "${status:-none}" = 0 ] || _vmiss "$n: gpu-lowpower.service ExecMainStatus=${status:-none} (want 0)"
 
+    # wq#2852: a green reconciler hid a failed per-card instance on nephthys.
+    while IFS= read -r u; do
+      [ -n "$u" ] || continue
+      _vmiss "$n: $u failed (systemctl --failed must stay empty)"
+    done <<EOF_FAILED
+$(printf '%s\n' "$out" | sed -n 's/^failed=//p')
+EOF_FAILED
+
     for pair in "$SH_DST=gpu-lowpower.sh" "$UNIT_DST=gpu-lowpower.service" \
                 "$TMPL_DST=gpu-lowpower@.service" "$RULE_DST=99-gpu-lowpower.rules"; do
       dst="${pair%%=*}"; src="$SRC/${pair#*=}"
@@ -106,6 +116,9 @@ install -m0644 "$SRC/99-gpu-lowpower.rules"  "$RULE_DST"
 
 systemctl daemon-reload
 udevadm control --reload
+# wq#2852: an instance killed by the old add-only rule stays failed until reset; the
+# trigger below then re-runs it through SYSTEMD_WANTS.
+systemctl reset-failed 'gpu-lowpower@*' 2>/dev/null || true
 udevadm trigger --subsystem-match=drm --action=add
 systemctl enable gpu-lowpower.service
 systemctl restart gpu-lowpower.service

@@ -68,13 +68,45 @@ bash ops/wq2166-gpu-lowpower-ordering/install.sh --verify
 ```
 
 Read-only. Exit 0 only when every card on hathor and nephthys reads `low`/`battery`, the
-unit is `active` with `ExecMainStatus=0`, and all four files byte-match this bundle.
+unit is `active` with `ExecMainStatus=0`, no `gpu-lowpower@` instance is failed
+(wq#2852), and all four files byte-match this bundle.
 Until the apply lands it exits 1 — that is the alarm this ticket existed to create, and
 `ops-deploy-drift` will keep one `ops-drift:wq2166-gpu-lowpower-ordering` row open until
 someone clears it.
 
 nephthys is in `NODES` too. It is correct today on v3, so `--verify` will flag it as
 drifted from the bundle until it is upgraded; apply the same two commands there.
+
+## wq#2852: failed instance after boot (nephthys, 2026-09-27)
+
+`gpu-lowpower@card1.service` ended `killed, status=15/TERM ... Failed with result
+signal` while the reconciler passed and both cards read low. There was no card removal.
+
+Cause: the rule matched `ACTION=="add"` only. udev re-runs every rule on each uevent,
+and amdgpu sends `change` uevents on the card minor (drm hotplug). On that event the
+device had no `systemd` tag and no alias. PID1 checks the *current* tag on every
+non-remove uevent (systemd v255 `src/core/device.c:762-769`) and clears the device's
+found bit when it is missing (`:1196-1199`). So the `.device` unit went dead and
+`BindsTo=` stopped the instance. If the instance is still in `apply_card`'s
+`CARD_WAIT_SECS` knob wait, the stop kills it and the unit fails. If it has already
+exited, the stop is clean, and the instance goes `inactive` without an error.
+
+Fix: the rule matches `ACTION!="remove"`, the same pattern as upstream `99-systemd.rules`
+for net/bluetooth. `BindsTo=` stays because a real card removal should still stop the
+instance. `SuccessExitStatus=SIGTERM` was rejected: it would hide the spurious stop,
+not prevent it. `--verify` now fails on any failed `gpu-lowpower@` instance, and the
+install step runs `reset-failed` on stale instances before it re-triggers.
+
+Live check on a node after apply. This needs no reboot. The trigger must be `change`:
+`--action=add` re-matched the old rule too, so it cannot reproduce the bug.
+
+```
+ssh <node> 'systemctl is-active sys-subsystem-drm-devices-card1.device gpu-lowpower@card1.service'
+ssh <node> 'sudo udevadm trigger --action=change /sys/class/drm/card1 && sleep 2 && systemctl is-active sys-subsystem-drm-devices-card1.device gpu-lowpower@card1.service; systemctl --failed --no-legend'
+```
+
+The old rule prints `inactive` for both units after the trigger. The fixed rule prints
+`active` for both, and the failed list is empty.
 
 ## Reversibility
 
