@@ -117,18 +117,44 @@ wouldn't.
 
 ## Install
 
+Deployed 2026-09-28 by wq#2943. It was **not** deployed when wq#2910 closed —
+the bundle sat ABSENT 0/2 for a day, found by wq#2932's verify-pass
+(`reports/wq2932_verify_wq2910_undeployed_ops_bundle.md`,
+`reports/2943_judgment_wq2910_undeployed_ops_bundle.md`).
+
 ```
-lumen-run --root -- bash /home/lumen/foreman/ops/wq2910-a1-backup-important-hardening/install.sh
+/home/lumen/bin/lumen-run start --root --name wq2910-install -- \
+  bash /home/lumen/foreman/ops/wq2910-a1-backup-important-hardening/install.sh
 ```
 
-Verify: `logrotate -d /etc/logrotate.d/lumen-backup-important` (dry run),
-`systemctl cat lumen-backup-important.service | grep OnFailure`. Rollback
-command is printed by `install.sh` itself.
+(The line this README shipped with, `lumen-run --root -- bash ...`, is not a
+shape today's `lumen-run` accepts: `--root` is a flag of the `start` verb.)
+
+Verify — read-only, and the wq#1696 contract handler is the authoritative one:
+
+```
+bash ops/wq2910-a1-backup-important-hardening/install.sh --verify   # exit 0 = live
+logrotate -d /etc/logrotate.d/lumen-backup-important                # dry run
+systemctl cat lumen-backup-important.service | grep OnFailure
+```
+
+Rollback command is printed by `install.sh` itself.
+
+`install.sh --verify` (added by wq#2943 per `ops/VERIFY_CONTRACT.md`) is what
+lets `ops-deploy-drift --aq` page when this bundle stops being live; without it
+the drift sweep only reported it heuristically and never opened an aq row.
+
+Note on the logrotate file: the box already carried an untracked, hand-written
+`/etc/logrotate.d/lumen-backup-important` (`weekly`, `rotate 8`, no size cap) —
+which is why `install.sh --verify` reported it as *differs*, not *absent*, and
+why the log still reached 2.35GB between weekly rotations. This bundle
+supersedes it with a 50M size cap.
 
 ## Left open
 
-Filed as ISSUE-LOG row 917: the stderr-capture patch and root-cause
-confirmation need a follow-up ticket dispatched with
+The stderr-capture patch (item 1) is still open and still correctly deferred —
+wq#2943 did not touch it. It needs a follow-up ticket dispatched with
 `/home/lumen/services` as a worktree or `--add-dir` grant (or a
 docker/root-capable lane), pointed at
 `/home/lumen/services/backup/scripts/backup-important.sh` and its `env.sh`.
+It is on the record as ISSUE-LOG row 917.
