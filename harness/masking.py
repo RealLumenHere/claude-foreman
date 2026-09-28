@@ -64,95 +64,33 @@ _AFTER_MASK = r"(?<=(?-i:" + MASK + r"))"
 _B = r"(?:" + _AFTER_MASK + r"|(?<![A-Za-z0-9_]))"
 _WB = r"(?:" + _AFTER_MASK + r"|\b)"
 
-# The fixed token prefixes, named once so the rules below, _OWN_TAIL and _body's
-# foreign-prefix guard (wq#2720) cannot drift: what a rule KEEPS is what the next
-# rule reads back glued to the mask literal.
+# The fixed token prefixes, named once so the rules below and _OWN_TAIL cannot
+# drift: what a rule KEEPS is what the next rule reads back glued to the mask
+# literal.
 _PRE_GH = r"ghp_|gho_|ghu_|ghs_|ghr_"
 _PRE_GHPAT = r"github_pat_"
 _PRE_CFUT = r"cfut_?"
-_PRE_SK = r"sk-(?:[a-zA-Z]+-)*"
 _PRE_SLACK = r"xox[bpasr]-"
 _PRE_AWS = r"AKIA"
-
-# label -> the (prefix, charset, floor quantifier) shapes it OWNS, for
-# _foreign_prefixes below. The two github patterns share a label, so a body run
-# belonging to either one may still cross the other's prefix (wq#2638's own-tail
-# composing already covers that case).
-_SHAPES_BY_LABEL = {
-    "github": ((_PRE_GH, r"[A-Za-z0-9]", "{30,}"),
-               (_PRE_GHPAT, r"[A-Za-z0-9_]", "{20,}")),
-    "cloudflare": ((_PRE_CFUT, r"[A-Za-z0-9_.-]", "{6,}"),),
-    "sk-key": ((_PRE_SK, r"[A-Za-z0-9_-]", "{16,}"),),
-    "slack": ((_PRE_SLACK, r"[A-Za-z0-9-]", "{8,}"),),
-    "aws": ((_PRE_AWS, r"[0-9A-Z]", "{16}"),),
-}
-
-
-def _foreign_prefixes(label):
-    """Every OTHER rule's full matchable shape — prefix AND its own floor-quantified
-    body, not the bare prefix alone (wq#2848) — joined as a lookahead alternation.
-
-    `_body()`'s charsets are wide enough to spell another rule's prefix — github's
-    `[A-Za-z0-9]` covers `AKIA` and the letters of `xoxb-` whole, cloudflare's and
-    sk-key's underscore/dash charsets cover all of them. A greedy run that starts
-    on a real, boundary-qualified prefix (`ghp_`) does not stop at the NEXT rule's
-    prefix just because it could: `ghp_<body>AKIA<16>xoxb-<body>` ran straight
-    through `AKIA` and the letters `xoxb`, stopping only at the `-` a bare `[A-Za-z
-    0-9]` charset can't cross. What is left behind is `-<slack body>` with no
-    `xoxb-` for the slack rule to key on, so mask_text() reported `['github']` and
-    the slack half of the same probe printed in the clear (wq#2705's verifier hit
-    this by accident gluing three committed fixtures with no separator).
-    Stopping the run one prefix short is exactly wq#2638's own MASK-literal
-    guard, generalised: a body may not cross a spot where a DIFFERENT credential
-    legitimately starts, so that rule gets its own shot at it afterward. The
-    truncated match still ends in this rule's own kept prefix, so `_matches()`'s
-    own-tail check is untouched, and the boundary the next rule needs is our own
-    `MASKED` output — `_AFTER_MASK` already admits that position (wq#2694).
-    Own-label prefixes are excluded on purpose: `cfut_<live>cfut_MASKED` (wq#2638)
-    must still compose as ONE rule reading its own repeated prefix, not stop early
-    and leave the live half unmasked.
-
-    wq#2848: the FULL shape, not the bare prefix, is what has to match here. A bare
-    `AKIA`/`cfut_` substring inside an otherwise-ordinary body is not a foreign
-    token — it is four or five characters of noise — and stopping for it anyway
-    truncates the run short of the RULE'S OWN floor, which fails the whole match and
-    leaves the entire real token (prefix included) in the clear: measured live,
-    a github-shaped body carrying a bare `AKIA`/`cfut` substring at offset 5, 12,
-    20 or 28 leaked 200/200 trials each (verify-pass wq#2803, /home/lumen/scratch/
-    repo-verify/mask_probe.py). Requiring the foreign rule's own prefix-plus-floor
-    to match at that position — exactly the shape its own PATTERNS entry would
-    need to alarm on it — means noise that merely LOOKS like a prefix is read
-    through as ordinary body text instead. `_body()` below pairs this with an
-    unconditional floor-length prefix run so the two fixes compose: even where a
-    foreign shape genuinely does overlap (cloudflare's charset is a superset of
-    plain alnum, so `cfut` followed by 6+ alnum chars always "matches" its shape),
-    the stop cannot fire before this rule's own floor is already satisfied.
-    """
-    others = [r"(?:" + prefix + r")" + charset + quant
-              for name, shapes in _SHAPES_BY_LABEL.items() if name != label
-              for prefix, charset, quant in shapes]
-    return r"(?:" + "|".join(others) + r")"
+# wq#2913: `sk-`'s qualifier repetition (`sk-`, `sk-ant-`, `sk-or-v1-`) is the one
+# prefix group in this table that is not a fixed literal, so it is the one that can
+# grow INTO the body — and a kept prefix is by definition the part a mask prints. A
+# `[a-zA-Z]+-` unit is satisfied by any letters ending in a dash, so a body that
+# happens to open with letters and then carries a DIFFERENT rule's prefix hands the
+# whole run to group 1: a letters-led body leading into the slack prefix kept that
+# prefix and the letters in front of it, and printed those body letters
+# (test_mask_foreign_prefix_matrix, the letter-fill sk-key cases at offsets 1, 3 and
+# 5). A unit may therefore
+# not contain the start of another rule's prefix. That can only SHORTEN the kept
+# prefix — i.e. only widen coverage — which is the direction wq#2913 exists to hold.
+# Before this, the wq#2899 absorb alternative covered the same shape on a later pass;
+# there are no later passes now.
+_PRE_NOT_SK = r"(?:" + "|".join(
+    (_PRE_GH, _PRE_GHPAT, _PRE_CFUT, _PRE_SLACK, _PRE_AWS)) + r")"
+_PRE_SK = r"sk-(?:(?:(?!" + _PRE_NOT_SK + r")[a-zA-Z])+-)*"
 
 
-def _foreign_bare_prefixes(label):
-    """Every OTHER rule's bare prefix (pre-wq#2848 `_foreign_prefixes`), for
-    `_floored_absorb`: what a foreign rule KEEPS in its own replacement
-    (`\\1MASKED`) is just its prefix, not its full shape, so recognising that
-    rule's already-masked residue needs the prefix alone — the full shape from
-    `_foreign_prefixes` above would need `floor` more real body characters
-    after the prefix, which a literal `MASKED` behind it is not."""
-    others = [p for name, shapes in _SHAPES_BY_LABEL.items() if name != label
-              for p, _charset, _quant in shapes]
-    return r"(?:" + "|".join(others) + r")"
-
-
-# wq#2848: `quant` is always one of `{N,}` (open floor) or `{N}` (exact), never a
-# bounded range — parsed here rather than threaded through as separate arguments so
-# every _body() call site keeps reading like the rule's own PATTERNS entry.
-_QUANT_RE = re.compile(r"^\{(\d+)(,)?\}$")
-
-
-def _body(charset, quant, foreign=""):
+def _body(charset, quant):
     """`charset` + `quant`, except the run may not cross the mask literal (wq#2638).
 
     Every body class below is wide enough to spell `MASKED`, so a greedy run starting
@@ -184,78 +122,17 @@ def _body(charset, quant, foreign=""):
     written out for the reason test_the_mask_suite_does_not_arm_its_own_tripwire
     gives: a whole credential shape in tracked source files a rotation ticket.)
 
-    `foreign` (wq#2720) is another rule's full-shape alternation (wq#2848), or "":
-    stopped the same way and for the same reason as MASK, case-sensitively regardless
-    of the surrounding rule's own flags, since a fixed prefix like `AKIA` or `xoxb-`
-    is never case-folded either.
-
-    wq#2848: a foreign stop truncating the run below THIS rule's own floor is the
-    other half of the regression the full-shape fix above does not cover on its
-    own — cloudflare's body charset is a superset of plain alnum, so a github body
-    carrying a bare `cfut` substring followed by 6+ ordinary characters genuinely
-    satisfies cloudflare's full shape too, and the stop would still fire early. So
-    the first `floor` characters of the run are matched WITHOUT the foreign check
-    at all (only the MASK guard, always active) — a foreign shape cannot even be
-    considered until this rule's own match already reaches its floor, at which
-    point stopping short never drops the whole token, only the part beyond the
-    floor a later pass can still pick up. `quant` with no comma (aws's exact `{16}`)
-    has no floor-relative "beyond" at all, so it skips the foreign guard entirely —
-    consistent with today's rules, since none of the other prefixes contain a
-    character in aws's own `[0-9A-Z]` body charset for it to ever matter.
+    wq#2913: the MASK literal is the ONLY thing that stops a body run. The
+    foreign-prefix stop this parameter used to carry (wq#2720, narrowed by wq#2848,
+    patched again by wq#2899) is gone with the whole stop-based design — see
+    mask_text() for why a stop can only ever subtract coverage, and what replaced it.
     """
-    mask_guard = r"(?:(?!(?-i:" + MASK + r"))" + charset + r")"
-    if not foreign:
-        return mask_guard + quant
-    floor, open_ended = _QUANT_RE.match(quant).groups()
-    run = mask_guard + r"{" + floor + r"}"
-    if open_ended:
-        both_guard = r"(?:(?!(?-i:" + MASK + r"|" + foreign + r"))" + charset + r")"
-        run += both_guard + r"*"
-    return run
+    return r"(?:(?!(?-i:" + MASK + r"))" + charset + r")" + quant
 
 
-def _floored_absorb(label, charset):
-    """(wq#2899) a live `charset` run of ANY length, sitting directly in front of a
-    DIFFERENT rule's prefix and this module's own mask literal — i.e. that other
-    rule's own match, already run and replaced.
-
-    wq#2848's `_body()` fix (above) stops a foreign shape from truncating a run
-    below THIS rule's floor by skipping the foreign check for the first `floor`
-    characters — but only within a SINGLE PASS's traversal order. cloudflare runs
-    BEFORE sk-key in PATTERNS, so by the time sk-key's turn comes, a live
-    `cfut_<body>` embedded in its own body has already been consumed and replaced
-    with `cfut_MASKED` — a literal `MASKED` sits where wq#2848's floor-relative
-    skip needed live charset characters, and `_body`'s unconditional MASK guard
-    (always active, floor or no floor) still stops the run dead there. The floor
-    quantifier is all-or-nothing, so a gap under `floor` before that point failed
-    the WHOLE match and stayed in the clear forever, sandwiched between this
-    rule's own prefix and the neighbour's already-masked residue. wq#2848's
-    class-wide probe found this 6/1900: an sk- token whose body embeds
-    `cfut_`/`cfut` or leads with `xoxb-` masked the embedded token and left 3-17
-    characters of the sk- head in the clear.
-
-    Requiring the LITERAL foreign prefix immediately before `MASKED` (not bare
-    `MASKED` alone) is what lets this absorb a neighbour's residue without also
-    matching this rule's own prior output glued to its own prefix
-    (`sk-ant-xxxxxxxxMASKED`, FALSE_POSITIVES below) — that shape has no foreign
-    prefix text in front of the literal, so it can never satisfy this alternative.
-    No upper bound on the gap: `_body()`'s own MASK guard already stops it before
-    it could run into anything but the neighbour's kept prefix, and `_matches()`'s
-    own-tail screen (unaffected by this change) still drops a resulting match that
-    turns out to be pure own-output.
-    """
-    foreign = _foreign_prefixes(label)
-    return (_body(charset, "{0,}", foreign)
-            + _foreign_bare_prefixes(label) + MASK)
-
-
-def _floored_body(label, charset, floor):
-    """`charset` reaching `floor` on its own (the ordinary case), or a shorter run
-    that absorbs a neighbouring rule's already-masked residue instead of stopping
-    short of its own floor — see `_floored_absorb`."""
-    foreign = _foreign_prefixes(label)
-    normal = _body(charset, "{" + str(floor) + ",}", foreign)
-    return r"(?:" + normal + r"|" + _floored_absorb(label, charset) + r")"
+def _floored_body(charset, floor):
+    """`charset` reaching `floor`, the ordinary open-floor body."""
+    return _body(charset, "{" + str(floor) + ",}")
 
 
 # wq#2297 kv-secret label vocabulary, ported from read_dir_sweep.py:38-60 (wq#2115).
@@ -418,13 +295,12 @@ def _kv_rule(label, guards, floor="{12,}"):
     wq#2694 landed on main after this branch's base: the leading boundary must accept
     the position right after our own mask literal too (_WB), not just a plain \b, or a
     kv-secret label glued behind "MASKED" goes blind the same way url-auth did.
-    wq#2720 deliberately does NOT give this body a foreign-prefix stop: unlike the
-    fixed-prefix rules below, a labelled value that simply IS another rule's shape
-    (`"API_KEY": "sk-ant-<token>"`) must still resolve here too — burn_filter.
-    matched_values() runs every rule against the ORIGINAL text specifically so
-    kv-secret sees the real value behind a label sk-key already masked elsewhere
-    (test_every_label_sees_the_real_token_not_an_earlier_mask), and a stop at
-    position zero would refuse it outright, floor and all.
+    wq#2720 gave this body no foreign-prefix stop while every fixed-prefix rule had
+    one — a labelled value that simply IS another rule's shape (`"API_KEY":
+    "sk-ant-<token>"`) has to resolve HERE too, and a stop at position zero would
+    refuse it outright, floor and all. wq#2913 made that exception the rule: no body
+    anywhere takes a foreign stop, and every rule reads the ORIGINAL text the way
+    burn_filter.matched_values() always did (see mask_text()).
     """
     return (_WB + r'((?P<kl>' + label + r')' + _KV_SEP + r')' + guards
             + _body(_KV_BODY, floor))
@@ -480,11 +356,11 @@ PATTERNS = [
     # (`ghp_MASKED` is 6 legal chars), so every already-masked artefact re-armed
     # the alarm on the next read — the floors below end that loop too.
     ("github", re.compile(_B + r"(" + _PRE_GH + r")"
-                          + _floored_body("github", r"[A-Za-z0-9]", 30)), r"\1MASKED"),
+                          + _floored_body(r"[A-Za-z0-9]", 30)), r"\1MASKED"),
     ("github", re.compile(_B + r"(" + _PRE_GHPAT + r")"
-                          + _floored_body("github", r"[A-Za-z0-9_]", 20)), r"\1MASKED"),
+                          + _floored_body(r"[A-Za-z0-9_]", 20)), r"\1MASKED"),
     ("cloudflare", re.compile(_B + r"(" + _PRE_CFUT + r")"
-                              + _floored_body("cloudflare", r"[A-Za-z0-9_.-]", 6)),
+                              + _floored_body(r"[A-Za-z0-9_.-]", 6)),
      r"\1MASKED"),
     # wq#2300: the prefix repeats WHOLE dash-terminated letter groups (`sk-`,
     # `sk-ant-`, `sk-or-v1-`) instead of a greedy `[a-zA-Z-]*`. Greedy, group 1 ran
@@ -495,11 +371,11 @@ PATTERNS = [
     # `value_sha256_12` computed over a truncated body, so the "sha256 a candidate
     # and compare" instruction every rotation ticket carries could never match.
     ("sk-key", re.compile(_B + r"(" + _PRE_SK + r")"
-                          + _floored_body("sk-key", r"[A-Za-z0-9_-]", 16)), r"\1MASKED"),
+                          + _floored_body(r"[A-Za-z0-9_-]", 16)), r"\1MASKED"),
     ("slack", re.compile(_B + r"(" + _PRE_SLACK + r")"
-                         + _floored_body("slack", r"[A-Za-z0-9-]", 8)), r"\1MASKED"),
+                         + _floored_body(r"[A-Za-z0-9-]", 8)), r"\1MASKED"),
     ("aws", re.compile(_B + r"(" + _PRE_AWS + r")"
-                       + _body(r"[0-9A-Z]", "{16}", _foreign_prefixes("aws"))),
+                       + _body(r"[0-9A-Z]", "{16}")),
      r"\1MASKED"),
     # wq#2514: a credential embedded in a URL, `scheme://user:secret@host` — git's
     # credential store is one per line. Ported from read_dir_sweep's url_basic_auth
@@ -689,6 +565,25 @@ def deployed(path=None):
 _OWN_TAIL = re.compile(r"(?:" + "|".join(
     (_PRE_GH, _PRE_GHPAT, _PRE_CFUT, _PRE_SK, _PRE_SLACK, _PRE_AWS)) + r")*" + MASK)
 
+# Any fixed token prefix, and the longest one, for read()'s inside-a-span re-read.
+_PRE_ANY = re.compile(r"(?:" + "|".join(
+    (_PRE_GH, _PRE_GHPAT, _PRE_CFUT, _PRE_SK, _PRE_SLACK, _PRE_AWS)) + r")")
+_PRE_LONGEST = len("github_pat_")
+
+
+def _unbounded(rx):
+    """`rx` with its leading word boundary removed, or `rx` unchanged if it opens on
+    a character that is its own boundary (xml-secret's `<`).
+
+    Derived from the compiled rule rather than declared beside it, so it cannot
+    drift from the rule it is a variant of. read() uses this ONLY inside text a
+    boundary-qualified rule already claimed — see there for why that is sound.
+    """
+    for boundary in (_B, _WB):
+        if rx.pattern.startswith(boundary):
+            return re.compile(rx.pattern[len(boundary):], rx.flags)
+    return rx
+
 
 def _matches(rx, text):
     """Matches of `rx`, minus this module's own output read back (wq#2298).
@@ -729,52 +624,233 @@ def _matches(rx, text):
     label; regression pinned in test_masking.py::test_masked_output_with_prose_behind_it_does_not_re_arm,
     which already parametrizes over every rule including kv-secret via ADJACENT.
     """
-    return [m for m in rx.finditer(text)
-            if not _OWN_TAIL.fullmatch(m.group(0)[len(m.group(1)):])]
+    return [m for m in rx.finditer(text) if not _own_output(m)]
 
 
-def _sub(rx, repl, text):
-    """(text, n) — rx.subn() over _matches() only, so mask_text() and scan() agree
-    on which matches are real without either re-deriving the rule."""
+def _own_output(m):
+    """`m` is this module's own replacement read back — see _matches()."""
+    return bool(_OWN_TAIL.fullmatch(m.group(0)[len(m.group(1)):]))
+
+
+# The same rules with their leading boundary dropped, for read()'s second phase.
+_INNER = [(label, _unbounded(rx)) for label, rx, _repl in PATTERNS]
+
+
+def read(text):
+    """[(label, prefix, value, start, end)] — every PATTERNS rule read INDEPENDENTLY
+    over `text`, in PATTERNS order; `start`/`end` bound the part a mask REDACTS,
+    i.e. the match minus the prefix the replacement keeps (wq#2913).
+
+    Every rule's replacement is `\\1MASKED`, so group 1 is the kept prefix and the
+    rest of the match is the value — one shape, so one span rule for all of them.
+
+    Two phases, and the second one is why a plain union is not enough on its own.
+
+    Phase 1 is the union the ticket describes: each rule, boundary-qualified, over
+    the whole original text.
+
+    Phase 2 re-reads INSIDE what phase 1 already claimed, with the leading word
+    boundary dropped, starting at every fixed token prefix that begins there. The
+    boundary (`_B`, wq#2292/wq#2400) refuses a prefix glued to an alphanumeric or
+    `_`, because in ORDINARY text that is an identifier tail — `notes_on_xoxb-`,
+    `highs_solver` — and the false positive costs a rotation ticket. Inside a span,
+    the text is not ordinary: another rule has already read those characters as
+    credential body, so a prefix sitting there is a prefix, not a word tail, and
+    that is precisely the wq#2702 glue the first union misses. `ghp_<body>AKIA<16>
+    xoxb-<body>`: github's `[A-Za-z0-9]` body runs through `AKIA` and the letters
+    of `xoxb` and stops only at the `-`, and `xoxb-` is then preceded by an
+    alphanumeric, so the slack rule declines it and `-<slack body>` prints in the
+    clear. Phase 2 finds `xoxb-` inside github's span and slack reads the rest.
+
+    Phase 2 can only ADD spans and labels, never remove either, so it keeps the
+    monotonicity that makes mask_text() fail-closed. It repeats until it finds no
+    new match; each round must add a match it has not already seen, and matches are
+    finite, so it terminates. Candidate offsets come from `_PRE_ANY` rather than
+    from every offset in the span: a fixed prefix is the whole class of thing the
+    boundary can wrongly refuse, and scanning a long kv-secret value character by
+    character is the shape that took a rule past 8 s per window in wq#2806.
+
+    The reported `value` stops where the next credential starts, even though the
+    SPAN does not. That split is the whole lesson of the design this replaces: a
+    stop at a foreign prefix was right about NAMING and wrong about MASKING, and
+    wq#2720 used one mechanism for both, so the naming it wanted cost the coverage
+    it could not afford. Here the span runs to the end of the greedy match (nothing
+    is ever uncovered) while the value a record hashes runs only to the start of the
+    first match found inside it — so `ghp_<body>AKIA<16>xoxb-<body>`, where github's
+    `[A-Za-z0-9]` run swallows the two tokens behind it, still hashes github's own
+    36 characters and not a 60-character composite no rotation worker could match a
+    candidate against (test_mask_replay.py::test_wq2848_replay_reproduces_every
+    _live_hit replays a real run dir's recorded hashes through exactly this).
+    """
+    found, seen = [], set()
+
+    def keep(index, label, m):
+        key = (index, m.start(), m.end())
+        if key in seen:
+            return False
+        seen.add(key)
+        found.append((index, label, m.group(1), m.start(), m.end(1), m.end()))
+        return True
+
+    for index, (label, rx, _repl) in enumerate(PATTERNS):
+        for m in _matches(rx, text):
+            keep(index, label, m)
+
+    spans = _merged([(lo, hi) for _i, _l, _p, _s, lo, hi in found])
+    while True:
+        grew = False
+        for lo, hi in spans:
+            stop = min(len(text), hi + _PRE_LONGEST)
+            for at in [p.start() for p in _PRE_ANY.finditer(text, lo, stop)]:
+                if at > hi:
+                    break
+                for index, (label, rx) in enumerate(_INNER):
+                    m = rx.match(text, at)
+                    if m and not _own_output(m) and keep(index, label, m):
+                        grew = True
+        if not grew:
+            break
+        spans = _merged([(lo, hi) for _i, _l, _p, _s, lo, hi in found])
+
+    found.sort(key=lambda row: (row[0], row[4]))
+    starts = sorted(start for _i, _l, _p, start, _lo, _hi in found)
+    kept, seen_span = [], set()
+    for row in found:
+        _index, label, prefix, _start, lo, hi = row
+        if (label, lo, hi) in seen_span or _redundant(text, lo, hi, found):
+            continue
+        seen_span.add((label, lo, hi))
+        names = min([s for s in starts if lo < s < hi], default=hi)
+        kept.append((label, prefix, text[lo:names], lo, hi))
+    return kept
+
+
+def _redundant(text, lo, hi, found):
+    """`text[lo:hi]` says nothing the matches strictly inside it do not already say.
+
+    This is `_matches()`'s own-output screen (wq#2298, wq#2638) applied to the text
+    THIS pass is about to mask rather than to masking already on the page, and under
+    a union it has to be: a wide rule reading a value that is itself another rule's
+    whole credential is the composition those tickets describe, and only the
+    sequential sweep used to resolve it for free. A git remote whose userinfo
+    password IS a github token is ONE burn: url-auth reads that whole token as its
+    value, github reads the token's body as its own, and before wq#2913 url-auth
+    simply saw the kept prefix and the literal by the time its turn came and
+    screened itself. (The shape is described rather than written out for the reason
+    test_the_mask_suite_does_not_arm_its_own_tripwire gives.) Kept as two, it files
+    two rotation tickets
+    under two hashes for one credential — the ticket-storm shape wq#2282/wq#2288/
+    wq#2292/wq#2298 cost four tickets to end.
+
+    Only the CONTAINER is ever dropped: the substitution uses matches STRICTLY
+    inside this one (contained and shorter), so github, which has nothing inside it,
+    reads as 36 live characters and stays. Two matches over the identical span
+    explain nothing about each other and neither is dropped here — the same-span,
+    same-label pair (kv-secret's env form and its general form on one line) is
+    de-duplicated by label in read() instead.
+
+    It cannot re-open the hole wq#2913 closed. Dropping a container drops only the
+    characters of its span that the inner matches do not already cover, and the
+    screen passes only when those characters spell `(<fixed token prefix>)*MASKED`.
+    A fixed prefix is this table's declared NON-secret part — what every rule's
+    `\\1MASKED` replacement keeps on purpose — so no live character of any value
+    loses coverage to this screen (test_a_container_screen_never_uncovers_a_live
+    _character).
+    """
+    inner = _merged([(a, b) for _i, _l, _p, _v, a, b in found
+                     if lo <= a and b <= hi and (b - a) < (hi - lo)])
+    if not inner:
+        return False
+    shown = _redact(text[lo:hi], [(a - lo, b - lo) for a, b in inner])
+    return bool(_OWN_TAIL.fullmatch(shown))
+
+
+def _merged(spans):
+    """`spans` sorted, with overlapping and touching ones fused into one."""
+    merged = []
+    for lo, hi in sorted(spans):
+        if merged and lo <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    return [(lo, hi) for lo, hi in merged]
+
+
+def _redact(text, spans):
+    """`text` with every span in `_merged()` output replaced by the mask literal."""
     out, pos = [], 0
-    matches = _matches(rx, text)
-    for m in matches:
-        out.append(text[pos:m.start()])
-        out.append(m.expand(repl))
-        pos = m.end()
+    for lo, hi in spans:
+        out.append(text[pos:lo])
+        out.append(MASK)
+        pos = hi
     out.append(text[pos:])
-    return "".join(out), len(matches)
+    return "".join(out)
 
 
-# wq#2720: one pass through PATTERNS is not always enough. A body stopped early at
-# a foreign prefix (_foreign_prefixes) leaves that prefix's own rule a fresh shot
-# at it — but only if that rule has not already run earlier in THIS pass. `AKIA`
-# glued directly in front of `xoxb-`, behind a github body: github's truncated
-# match frees `AKIA`, aws (listed after slack) masks it and leaves the `MASKED`
-# boundary slack's `_B` needs — but slack already ran, found nothing, one rule
-# earlier in the same traversal. No static ordering of PATTERNS satisfies both
-# glue directions (`AKIA` before `xoxb-` and the reverse both occur), so a second
-# pass is what finds it. Capped at len(PATTERNS): every pass can free at most one
-# more rule in a chain, and a chain of glued prefixes cannot be longer than the
-# number of rules.
-_MAX_PASSES = len(PATTERNS)
+def _remap(index, spans):
+    """Where `index` (an offset into the original text) lands in `_redact()`'s output.
+
+    An index INSIDE a span maps to that span's own literal — there is no finer
+    position left to point at once the characters are gone.
+    """
+    delta = 0
+    for lo, hi in spans:
+        if hi <= index:
+            delta += (hi - lo) - len(MASK)
+        elif lo <= index:
+            return lo - delta
+        else:
+            break
+    return index - delta
 
 
 def mask_text(text):
-    """(masked_text, [labels that fired]). Order of labels follows PATTERNS, by
-    first pass fired."""
+    """(masked_text, [labels that fired]). Order of labels follows PATTERNS.
+
+    wq#2913: every rule reads the ORIGINAL text and the output redacts the UNION of
+    what they found. Coverage is therefore monotone in the rule table — it is at
+    least each single rule's own coverage — which is what makes this fail-CLOSED by
+    construction.
+
+    What it replaces was a sequential sweep, each rule reading the previous rule's
+    output, with a foreign-prefix stop (wq#2720) keeping one rule's greedy body from
+    swallowing the position where another rule's credential starts, and a second and
+    third pass (wq#2720, again wq#2848, again wq#2899) re-running the table to pick
+    up what a stop had freed. The class that design could not escape, and the reason
+    it was patched three times: A STOP CAN ONLY SUBTRACT COVERAGE, AND NOTHING
+    RE-ADDS IT. A full foreign shape past the rule's floor stopped the run, the
+    foreign rule masked only its own shape, and the remainder — github charset, no
+    prefix of its own — had nothing left to key on, so no later pass could pick it
+    up. Measured on wq#2848's own fix at 200/200 trials: a github body, a full AWS
+    shape, an 8-character tail, and the tail printed in the clear
+    (kb/reports/wq2868_mask_stop_judgment.md, probe wq2868_tail_probe.py).
+
+    A union has no stop to subtract with. The glued case wq#2720 was built for is
+    covered because slack finds `xoxb-…` on the original text on its own and
+    github's span covers the rest; the wq#2899 case is covered because sk-key reads
+    the live `cfut_…` inside its own body rather than a neighbour's `MASKED`
+    residue; and the wq#2848 noise cases are covered because there is no stop to
+    truncate anything below a floor. No foreign-shape table to keep in sync with
+    PATTERNS, no floor arithmetic, no pass cap.
+
+    The per-rule MASK-literal guard (wq#2638) stays: the input may ALREADY carry
+    this module's output (a quoted log tail, an outbound PR body), and a body run
+    that crosses the literal makes a live value and an already-masked one into one
+    match that `_matches()` then screens away whole. `_matches()`'s own-tail screen
+    stays with it, for the same input.
+
+    The cost is one the union direction always pays: where two rules read the same
+    characters (`token: ghp_<body>` is a github token AND a kv-secret value), both
+    labels fire and the merged span redacts the wider of the two, so the inner
+    rule's kept prefix goes with it. More masking and more alarms, never less.
+    """
+    found = read(text)
     hits = []
-    for _ in range(_MAX_PASSES):
-        changed = False
-        for label, rx, repl in PATTERNS:
-            text, n = _sub(rx, repl, text)
-            if n:
-                changed = True
-                if label not in hits:
-                    hits.append(label)
-        if not changed:
-            break
-    return text, hits
+    for label, _prefix, _value, _lo, _hi in found:
+        if label not in hits:
+            hits.append(label)
+    spans = _merged([(lo, hi) for _l, _p, _v, lo, hi in found])
+    return _redact(text, spans), hits
 
 
 def suppressions(text):
@@ -834,25 +910,15 @@ def raw_matches(text):
     `ghp_<body>AKIA<16>xoxb-<body>` probe fired aws and slack live while the replay read
     github alone, so its "0 unaccounted" never scored the ticket's own two values. The
     replay now reads through this, so it cannot disagree with the tripwire it audits.
+
+    wq#2913: `read()` is that agreement now — one traversal, on the original text,
+    shared with mask_text() and scan(), so none of the three can re-derive the rule
+    differently from the other two.
     """
-    matches, cur = [], text
-    for _ in range(_MAX_PASSES):
-        changed = False
-        for label, rx, repl in PATTERNS:
-            # finditer then sub on the same string, pattern by pattern, so the
-            # records follow exactly the sequence of substitutions mask_text()
-            # performs: a value an earlier pattern already shortened to
-            # `<prefix>MASKED` no longer matches a later one, and must not be
-            # recorded as if it had.
-            found = _matches(rx, cur)
-            if found:
-                changed = True
-            for m in found:
-                matches.append((label, m.group(1), m.group(0)[len(m.group(1)):]))
-            cur = _sub(rx, repl, cur)[0]
-        if not changed:
-            break
-    return matches, cur
+    found = read(text)
+    spans = _merged([(lo, hi) for _l, _p, _v, lo, hi in found])
+    return ([(label, prefix, value) for label, prefix, value, _lo, _hi in found],
+            _redact(text, spans))
 
 
 def scan(text, include_suppressed=False):
@@ -876,19 +942,24 @@ def scan(text, include_suppressed=False):
     credential"), and a suppression is precisely not that: it must never be able to
     turn a clean file into an alarm. Callers that want the audit trail ask for it; the
     escalation predicates (fworker.burned_hashes) skip every row carrying `suppressed`.
-    Runs the same up-to-`_MAX_PASSES` passes as mask_text() (wq#2720), so a value a
-    foreign-prefix stop freed up on pass 2 is recorded here too, not just masked.
+    Reads through `read()`, the same single traversal mask_text() masks from (wq#2913),
+    so the records and the masked text cannot disagree about what fired.
+
+    wq#2913: the context window is cut at the value's OWN masked offset, mapped
+    through the merged spans, rather than found by searching the masked text for
+    `<prefix>MASKED`. The search was already approximate — a record whose prefix a
+    later pattern reshaped got an empty window — and under a union it would be wrong
+    more often, because a wider rule's span can swallow a narrower rule's kept prefix
+    (`token: ghp_<body>` redacts from `token: ` on, so no `ghp_MASKED` is left to
+    find). The offset is exact and needs no marker to survive.
     """
-    matches, cur = raw_matches(text)
-    records, cursor = [], {}
-    for label, prefix, value in matches:
-        marker = prefix + "MASKED"
-        at = cur.find(marker, cursor.get(marker, 0))
-        if at < 0:
-            context = ""   # a later pattern reshaped the prefix; degrade, never leak
-        else:
-            cursor[marker] = at + len(marker)
-            context = cur[max(0, at - CONTEXT_CHARS):at + len(marker) + CONTEXT_CHARS]
+    found = read(text)
+    spans = _merged([(lo, hi) for _l, _p, _v, lo, hi in found])
+    cur = _redact(text, spans)
+    records = []
+    for label, prefix, value, lo, _hi in found:
+        at = _remap(lo, spans)
+        context = cur[max(0, at - CONTEXT_CHARS):at + len(MASK) + CONTEXT_CHARS]
         records.append({
             "label": label,
             "prefix": prefix[-PREFIX_CHARS:],
@@ -901,3 +972,25 @@ def scan(text, include_suppressed=False):
         # but the raw text is what the rule actually judged.
         records.extend(suppressions(text))
     return cur, records
+
+
+def main(stdin, stdout):
+    """stdin -> masked stdout, line by line. `/home/lumen/bin/mask-secrets` is a
+    wrapper around this (wq#2913).
+
+    That tool used to be a sed -E program mirroring PATTERNS by hand. POSIX ERE has
+    no lookaround, so every lookahead here had to be re-expressed structurally — the
+    mask literal as a sentinel byte, the foreign-prefix stop as a second sentinel,
+    wq#2899's absorb as one more substitution per rule — and the copy drifted from
+    this file on every one of those tickets, in the direction that misses a mask
+    (ISSUE-LOG row 577, wq#2726 -> wq#2732 shipped a leak to bin/). The house tool
+    instinct 4 points every agent at now runs the rules this module defines, so
+    there is one implementation to keep right instead of two.
+
+    Line by line rather than whole-stream: every rule's body class excludes
+    whitespace, so no match can span a newline and the result is identical, while a
+    long pipe stays bounded in memory the way the sed program was.
+    """
+    for line in stdin:
+        stdout.write(mask_text(line)[0])
+    return 0

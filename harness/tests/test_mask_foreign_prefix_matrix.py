@@ -54,8 +54,11 @@ RULES = [
     # of the digit fill here — this class truncates the run below sk-key's own floor
     # regardless of what the fill character is, since the foreign rule's already-masked
     # residue is what stops it either way (cloudflare and slack both run around sk-key
-    # in PATTERNS, one on each side, so both glue directions apply). `_floored_absorb`
-    # closes it. The digit fill stays too: it is what isolates this class from the
+    # in PATTERNS, one on each side, so both glue directions apply). wq#2899 closed it
+    # with a per-rule absorb alternative; wq#2913 closed it structurally instead — with
+    # every rule reading the ORIGINAL text there is no already-masked residue inside a
+    # body for anything to stop at. The digit fill stays too: it is what isolates this
+    # class from the
     # separate, pre-existing, letter-only prefix-continuation shape documented at
     # `_SK_LETTER_EXCLUDES_OWN_PREFIX` below, which this ticket does not touch.
     ("sk-key", _SK, ALNUM + "_-", 16, False, "9"),
@@ -77,12 +80,13 @@ SK_LETTER_RULE = ("sk-key", _SK, ALNUM + "_-", 16, False, "z")
 # in front of a SECOND `sk-` completes one more repetition of that group whole
 # (`sk-` + `<letters>` + `sk-` reads as two whole "letters-then-dash" units), so
 # the fill is absorbed into the KEPT prefix rather than the masked body — visible
-# in the output, not merely mis-labelled. This is `_foreign_bare_prefixes`
-# excluding sk-key's own shape on purpose (wq#2638's own-repeated-prefix
-# composing needs that exclusion), so `_floored_absorb` cannot key off it the way
-# it does for a genuinely foreign prefix. A foreign rule's own already-masked
-# residue (cloudflare, slack, github, aws) does not have this shape at all, so
-# every OTHER case in FOREIGN is unaffected and stays covered below.
+# in the output, not merely mis-labelled.
+#
+# wq#2913 fixed that absorption for every FOREIGN prefix by refusing to let a
+# qualifier unit contain one (masking._PRE_NOT_SK), which is why the other entries
+# in FOREIGN now run for the letter fill too. sk-key's OWN `sk-` stays excluded,
+# because refusing it there would break wq#2638's own-repeated-prefix composing —
+# `sk-<live>sk-MASKED` has to stay one rule reading its own repeated prefix.
 _SK_LETTER_EXCLUDES_OWN_PREFIX = {_SK}
 
 

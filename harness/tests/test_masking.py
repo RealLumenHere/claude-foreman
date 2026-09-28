@@ -308,7 +308,15 @@ def test_a_dsn_password_masks_and_alarms(head, tail):
 def test_a_credential_store_dump_leaves_no_value_in_the_context():
     """wq#2514: wq#2511 read git's credential store. The github values were masked, but
     the gitea line above them had no rule, so every hit record's context window
-    printed that token in the clear — the mask-hits file was itself a leak."""
+    printed that token in the clear — the mask-hits file was itself a leak.
+
+    wq#2913: the `x-access-token:` line gains a kv-secret record. Under the union
+    every rule reads the ORIGINAL text, so that line's userinfo NAME reads as a
+    credential label and its value runs past the token to the host — one extra row
+    and a wider mask on one line, which is the direction a union always errs in. The
+    url-auth row the same line would produce is screened as a container: its value is
+    the github token whole, and the github row already names it (masking._redundant).
+    """
     hexbody = "3f" * 20
     store = "\n".join([URL_USER + hexbody + URL_HOST,
                        f"https://RealLumenHere:{GHP}@github.com",
@@ -316,7 +324,8 @@ def test_a_credential_store_dump_leaves_no_value_in_the_context():
                        f"https://x:{GHPAT}@github.com"])
     masked, records = masking.scan(store)
     assert hexbody not in masked and GHP not in masked and GHPAT not in masked
-    assert [r["label"] for r in records] == ["github", "github", "github", "url-auth"]
+    assert [r["label"] for r in records] == [
+        "github", "github", "github", "url-auth", "kv-secret"]
     for r in records:
         assert hexbody not in r["context"] and GHP not in r["context"]
 
@@ -578,8 +587,10 @@ def test_token_engine_mirror_agrees():
     # github body swallowed `AKIA` and the letters of `xoxb-` whole: mask_hits on the
     # triple glue returned ['github_token'] alone and mask_rewrite left
     # `MASKED-<slack body>` with the slack body in the clear.
+    # wq#2913: MASK_PATTERNS order (slack is listed before aws), not the order a
+    # multi-pass sweep happened to free each value in.
     assert ted.mask_hits(WQ2702_TRIPLE_GLUE) == [
-        "github_token", "aws_key_id", "slack_token"], "daemon swallows glued prefixes"
+        "github_token", "slack_token", "aws_key_id"], "daemon swallows glued prefixes"
     rewritten = ted.mask_rewrite(WQ2702_TRIPLE_GLUE)
     assert WQ2702_SLACK_BODY not in rewritten, "daemon rewrite leaks the slack body"
     assert "AKIA" not in rewritten

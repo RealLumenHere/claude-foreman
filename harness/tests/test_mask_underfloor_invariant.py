@@ -11,8 +11,9 @@ samples nine offsets per rule, and sampled offsets are what let wq#2720 ship. Th
 this file drives sweeps every offset from 0 to floor+6 for every rule x every foreign
 prefix that rule's charset can spell, and adds three shapes the matrix does not reach —
 kv-secret as host (the rule wq#2720 deliberately gave no foreign stop), url-auth as host
-(no bounded body at all), and a four-credential chain (whether _MAX_PASSES drains a chain
-of stops rather than one).
+(no bounded body at all), and a four-credential chain (whether the multi-pass sweep
+drained a chain of stops rather than one). wq#2913 removed the stops and the passes
+both; the shapes stay, because what they measure is coverage, not the mechanism.
 
 Section B is the same under-floor class through the OTHER guard `_body()` carries, the
 unconditional mask-literal lookahead, which wq#2848 correctly left alone and which still

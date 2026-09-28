@@ -2037,7 +2037,9 @@ def test_replay_reads_what_the_tripwire_reads_on_a_glued_line():
     line = ("ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8" + "AKI" + "A" + "Q" * 16
             + "xox" + "b-" + "1234567890" + "1")
     live = [(r["label"], r["value_sha256_12"]) for r in masking.scan(line)[1]]
-    assert [label for label, _ in live] == ["github", "aws", "slack"]
+    # wq#2913: records follow PATTERNS order (slack is listed before aws) rather than
+    # the order a multi-pass sweep happened to free each value in.
+    assert [label for label, _ in live] == ["github", "slack", "aws"]
     records = mask_replay.replay(0, patterns=mask_replay.CURRENT_PATTERNS, tracked={},
                                  items={"transcript:probe": line}, rotated={})
     assert [(r["label"], r["value_sha256_12"]) for r in records] == live
@@ -2077,7 +2079,11 @@ WQ2913_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2913_va
 def test_wq2913_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2913_FIXTURES)
     values = scope["WQ2913_VALUES"]
-    assert len(values) == 8
+    # wq#2913: seven, which is what the fixture holds and what its own header says
+    # ("the seven values..."). wq#2936 wrote 8 here — the eighth value its ISSUE-LOG
+    # row counts is the one the kb log already accounted for, so it was deliberately
+    # not pinned, and this test has been red since it landed.
+    assert len(values) == 7
     for sha, _label, prefix, whole in values:
         assert whole.startswith(prefix)
         assert masking.value_sha12(whole[len(prefix):]) == sha

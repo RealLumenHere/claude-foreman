@@ -1,8 +1,16 @@
 """wq#2316: the bundled bin/mask-secrets masks real tokens and leaves plain words alone.
 
-Runs the sed script as a subprocess, so these assert the shipped artefact's behaviour
+Runs the script as a subprocess, so these assert the shipped artefact's behaviour
 rather than a Python re-implementation of it — the whole failure this ticket fixes was
 that the sed copy drifted from harness/masking.py while both claimed to be in lockstep.
+
+wq#2913: the script is no longer a sed copy of those rules, it is a wrapper that calls
+masking.main(). The drift class is gone by construction, and with it the three places
+this copy was deliberately WIDER than masking.py (see
+test_the_dsn_rule_no_longer_diverges_from_masking_py and
+test_this_copy_no_longer_diverges_from_masking_py for what that gave up). The suite
+stays a subprocess suite: what ships is the wrapper, and the wrapper's own resolution
+of which masking.py it runs is part of what has to work.
 
 Credential-shaped literals are built by concatenation on purpose (masking.py:125-128):
 a real-looking `ghp_` + 36 in tracked source is the exact class of text that filed half
@@ -267,10 +275,19 @@ def test_a_dsn_password_masks_and_keeps_user_and_host(head, tail):
 
 @pytest.mark.parametrize("pw", ["short7!", "${PGPASSWORD}", "password"],
                          ids=["under-floor", "env-ref", "placeholder"])
-def test_the_dsn_rule_is_wider_than_masking_py(pw):
-    """No floor, no pointer/placeholder exclusions: masking.py passes these because a
-    hit there pages pri-1; this copy only redacts, so it takes the leak-proof side."""
-    assert mask("postgres://u:" + pw + "@db/x") == "postgres://u:MASKED@db/x"
+def test_the_dsn_rule_no_longer_diverges_from_masking_py(pw):
+    """wq#2913: the sed copy had no floor and no pointer/placeholder exclusions, on the
+    argument that masking.py passes these because a hit THERE pages pri-1 while this
+    copy only redacts — so it could afford the leak-proof side.
+
+    The wrapper gives that up, deliberately: an under-floor DSN password now prints
+    through this pipe where the sed copy redacted it. Two divergent rule sets is the
+    thing that shipped an actual leak to /home/lumen/bin (wq#2726 -> wq#2732), and the
+    stop-based design wq#2913 removed would have had to be re-derived in ERE a fourth
+    time. Re-widening belongs in masking.py's own floors, where the tripwire gets it
+    too, not in a second copy of the table.
+    """
+    assert mask("postgres://u:" + pw + "@db/x") == "postgres://u:" + pw + "@db/x"
 
 
 def test_a_raw_at_in_the_dsn_password_masks_whole():
@@ -379,18 +396,28 @@ def test_matches_masking_py_exactly(line):
      "<password_sha256_hex>MASKED</password_sha256_hex>"),
     ("NTFY_PASS=" + "hunter2000", "NTFY_PASS=MASKED"),
     ("GITEA_PASSWORD=" + "ab+cd=ef!gh", "GITEA_PASSWORD=MASKED"),
-    ("password: '" + "hunter2000" + "'", "password: 'MASKED'"),
+    # wq#2913: at masking.py's general floor of 12, not the sed copy's 8
+    ("password: '" + "hunter2000hunter" + "'", "password: 'MASKED'"),
 ])
 def test_a_config_file_shape_masks_whole(line, want):
     assert mask(line) == want
 
 
-def test_this_copy_is_wider_on_purpose():
-    """floor 8 on the strong nouns, 12 on KEY/PAT, and no prose test at all: over-masking
-    a stream is free, and this is the copy on the supergateway log pipe (wq#2546)."""
-    assert mask("first pass: " + "hunter2000") == "first pass: MASKED"
+def test_this_copy_no_longer_diverges_from_masking_py():
+    """wq#2913: the sed copy read a bare `pass` in prose, took floor 8 on the strong
+    nouns and had no public-key carve-out, on the wq#2546 supergateway-pipe argument
+    that over-masking a stream is free. The wrapper runs masking.py's grammar instead,
+    so prose `pass`, an under-floor value and `PUBLIC_KEY=` all read as what they are.
+
+    What that costs is named in the sibling DSN test. What it buys is that every one of
+    these answers is now the SAME answer the tripwire gives, so an agent piping through
+    this tool and an artefact scored by masking.scan() can no longer disagree about
+    whether a line held a credential.
+    """
+    assert mask("first pass: " + "hunter2000") == "first pass: hunter2000"
     assert mask("SORT_KEY=" + "abc123def") == "SORT_KEY=abc123def"
+    assert mask("PUBLIC_KEY=" + "hunter2hunter2") == "PUBLIC_KEY=hunter2hunter2"
+    # the shapes masking.py DOES read stay masked either way
     assert mask("X_KEY=" + "abc123def456") == "X_KEY=MASKED"
-    # the public-key carve-out is masking.py's (wq#2313 owns porting the label); here a
-    # public key labelled `_KEY=` is over-masked, never under
-    assert mask("PUBLIC_KEY=" + "hunter2hunter2") == "PUBLIC_KEY=MASKED"
+    assert mask("NTFY_PASS=" + "hunter2000") == "NTFY_PASS=MASKED"
+    assert mask("X_API_KEY=" + "hunter2hunter2") == "X_API_KEY=MASKED"
