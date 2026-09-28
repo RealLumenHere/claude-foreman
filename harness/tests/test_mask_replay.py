@@ -2227,3 +2227,27 @@ def test_wq3021_corpus_burned_nothing():
     fixture_shas = {v[0] for v in scope["WQ3021_VALUES"]}
     _assert_corpus_pinned(3021, WQ3021_FIXTURES, scope["WQ3021_RECORDS"], fixture_shas,
                           patterns=mask_replay.CURRENT_PATTERNS)
+
+
+WQ3037_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq3037")
+WQ3037_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq3037_values.py")
+
+
+def test_wq3037_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ3037_FIXTURES)
+    values = scope["WQ3037_VALUES"]
+    count = len(values)
+    assert count == 2
+    assert _unpinned(values, {"f": text}) == []
+    assert masking.mask_text(text)[1] == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ3037_RUN),
+                    reason="wq#3037's run dir is not on this host")
+def test_wq3037_corpus_burned_nothing():
+    """wq#3039's verdict, pinned: the github_pat_ and sk-ant- phrase dummies from
+    wq#3037's own orphan-prefix probe, not credentials; nothing rotated."""
+    _, scope = _load_fixture_module(WQ3037_FIXTURES)
+    fixture_shas = {v[0] for v in scope["WQ3037_VALUES"]}
+    _assert_corpus_pinned(3037, WQ3037_FIXTURES, scope["WQ3037_RECORDS"], fixture_shas,
+                          patterns=mask_replay.CURRENT_PATTERNS)
