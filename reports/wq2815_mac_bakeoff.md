@@ -79,3 +79,25 @@ Logged as kb/ISSUE-LOG.md row 884.
 None. Nothing in models.yaml, litellm or router chains changed. The lumen_state
 `local-rung model_class` ingest failed twice with `sqlite3.OperationalError: database is
 locked`, so it moves to wq#2893 together with the final qwen3:8b verdict.
+
+## Final verdict (wq#2893, applied 2026-09-27 PDT)
+
+Rule: adopt qwen3:8b only with >=2/3 local F-canaries SUCCESS or DEGRADED_SUCCESS. Result: 0/3, not adopted.
+
+| canary | local attempts | outcome |
+|---|---|---|
+| F1 wq#2885 | a1 TURNS (10 turns, 1069 s); a2 4 turns, 541 s, then CAPABILITY_DENIED (bash refused 3x) | fail |
+| F2 wq#2886 | a1, a2 both TURNS (10 turns) | fail; the "done" state is a3, a cloud escalation to claude-sonnet-5 (44 s, PR #1218), not the candidate |
+| F3 wq#2887 | a1 TURNS 212 s; a2 TURNS 264 s | fail; then escalated to cloud and blocked with this verdict |
+
+Cloud escalation of a bake-off canary says nothing about the local model, so it does not count.
+
+Actions: lumen_state `local-rung model_class` = unproven, no-route until horus (ingested with
+--new-predicate; the earlier "database is locked" did not recur). Routing unchanged.
+nephthys restored: `qwen3:14b` tag re-pointed to `bakeoff-orig/qwen3:14b`
+(blob bdbd181c33f2, /api/show family qwen3, 14.8B Q4_K_M). hathor was not touched (judge node).
+
+Scope note: these canaries score a model as a tool-calling *worker* (drive a CLI, commit, open a PR).
+They say nothing about a model as the *judge*. gemma3:12b and devstral were excluded above on
+worker-capability grounds only; judge candidates are benched separately with
+foreman/judge/judge_bench.py's eval set (see wq#2788/#2800 lineage).
