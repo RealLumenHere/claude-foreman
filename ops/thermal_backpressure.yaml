@@ -33,13 +33,18 @@ fan_floor: true
 # they have a week and replace these.
 #
 # hold_subsystems defaults to the node name, the token wq#2510 already uses. A ticket is
-# only held if it declares one of these in `subsystems`.
+# only held if it declares one of these in `subsystems` — and per wq#995, none do: no
+# ticket in queue.db declares a node name, so a live node-name-only hold skips nothing.
+# lumen overrides the default to the service tokens tickets actually declare there
+# (`grep subsystems queue.db`, 2026-09-28: litellm 10+, minerva-db 25+, both run on lumen
+# only) so the hold bites real dispatch without inventing a convention nobody uses.
 nodes:
   lumen:
     netdata: 100.117.66.102:19999
     raise_c: 79
     clear_c: 70
     action: hold
+    hold_subsystems: [lumen, litellm, minerva-db]
   isis:
     netdata: 100.100.129.24:19999
     raise_c: 79

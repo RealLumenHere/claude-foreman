@@ -129,17 +129,18 @@ class EndToEnd(unittest.TestCase):
         self.tmp.cleanup()
         os.environ.pop("WQ_DB", None)
 
-    def poll(self, isis=None, fans=None):
+    def poll(self, isis=None, lumen=None, fans=None):
         temps = {n: (None, "not read") for n in self.cfg["nodes"]}
         temps["isis"] = (isis, None)
+        temps["lumen"] = (lumen, None)
         return {d["node"]: d for d in tb.poll(self.con, self.cfg, self.act, temps, fans or {})}
 
     def holder(self, scope="isis"):
         writers, _ = gates._live_holds(self.wq_db)
         return writers.get(scope)
 
-    def dispatcher_verdict(self):
-        g = SimpleNamespace(tid=99001, t={"subsystems": "isis"}, ctx=SimpleNamespace())
+    def dispatcher_verdict(self, subsystems="isis"):
+        g = SimpleNamespace(tid=99001, t={"subsystems": subsystems}, ctx=SimpleNamespace())
         return gates.SubsystemHeld().check(g)
 
     def test_hot_holds_once_cool_releases_and_nothing_persists(self):
@@ -236,6 +237,33 @@ class EndToEnd(unittest.TestCase):
         self.poll(isis=55.0, fans={"isis": {"raise": False, "clear": True}})
         self.assertIsNone(self.holder())
         self.assertEqual(len(self.aq.calls), 2)
+
+    def test_lumen_hold_also_bites_litellm_and_minerva_db_tickets(self):
+        """wq#3045: no ticket declares subsystems="lumen" (wq#995), so the node-name-only
+        hold used to skip nothing. lumen's hold_subsystems now also names litellm and
+        minerva-db — the tokens tickets actually declare (queue.db, 2026-09-28) — so the
+        same hold that locks `lumen` also locks those, and the dispatcher gate refuses
+        both. A ticket on an unrelated subsystem still passes."""
+        self.assertIs(self.dispatcher_verdict("litellm"), gates.PASS)
+        self.assertIs(self.dispatcher_verdict("minerva-db"), gates.PASS)
+
+        self.poll(lumen=82.0)
+        self.assertEqual(self.holder("lumen"), "thermal-backpressure")
+        self.assertEqual(self.holder("litellm"), "thermal-backpressure")
+        self.assertEqual(self.holder("minerva-db"), "thermal-backpressure")
+
+        for scope in ("lumen", "litellm", "minerva-db"):
+            res = self.dispatcher_verdict(scope)
+            self.assertEqual(res.reason, "subsystem_held")
+            self.assertIn(f"{scope} held by thermal-backpressure", res.detail)
+
+        self.assertIs(self.dispatcher_verdict("fleet-ops"), gates.PASS)
+
+        self.poll(lumen=65.0)
+        self.assertIsNone(self.holder("lumen"))
+        self.assertIsNone(self.holder("litellm"))
+        self.assertIsNone(self.holder("minerva-db"))
+        self.assertIs(self.dispatcher_verdict("litellm"), gates.PASS)
 
     def test_thor_hot_is_one_aq_row_and_no_lock(self):
         hot = {"raise": True, "clear": False, "te0t_mean": 85.0, "fan_max": 790}
