@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import action_gate as ag
+import read_dir_sweep as _rds
 
 GATE = os.path.join(os.path.dirname(__file__), "..", "action_gate.py")
 
@@ -459,6 +460,66 @@ def test_clean_preimage_still_lands_in_snapdir(tmp_path):
     assert rc == 0
     assert [s.read_text() for s in snapdir.iterdir()] == ["original: true\n"]
     assert not vault.exists()
+
+
+def test_symlink_preimage_diverts(tmp_path):
+    """read_dir_sweep skips symlinks, so nothing ever scans the bytes copy2 follows
+    through to. Innocuous link name, innocuous target name, real token (wq#2123)."""
+    body = tmp_path / "body.txt"
+    body.write_text(f"GITHUB_TOKEN={FAKE_PAT}\n")
+    target = tmp_path / "notes.txt"
+    target.symlink_to(body)
+    snapdir, vault = tmp_path / "snaps", tmp_path / "vault"
+    rc, _ = _amber_edit(tmp_path, target, snapdir, vault)
+    assert rc == 0
+    assert [p.name.endswith(".held-out") for p in snapdir.iterdir()] == [True]
+    assert [p.read_text() for p in vault.iterdir()] == [f"GITHUB_TOKEN={FAKE_PAT}\n"]
+
+
+def test_binary_preimage_diverts(tmp_path):
+    """A NUL in the first 4KB stops the sweep's reader — a sqlite db or any binary
+    carrying a token reads as clean text and must not land in the snapdir."""
+    target = tmp_path / "blob.bin"
+    target.write_bytes(b"SQLite format 3\0\0" + f"GITHUB_TOKEN={FAKE_PAT}\n".encode())
+    snapdir, vault = tmp_path / "snaps", tmp_path / "vault"
+    rc, _ = _amber_edit(tmp_path, target, snapdir, vault)
+    assert rc == 0
+    assert [p.name.endswith(".held-out") for p in snapdir.iterdir()] == [True]
+    assert FAKE_PAT.encode() in list(vault.iterdir())[0].read_bytes()
+
+
+def test_oversize_preimage_diverts(tmp_path):
+    """Past MAX_FILE_BYTES the sweep reads nothing, so a token at the head of a big
+    file is unscanned, not absent."""
+    target = tmp_path / "big.log"
+    target.write_text(f"GITHUB_TOKEN={FAKE_PAT}\n" + "x" * _rds.MAX_FILE_BYTES)
+    snapdir, vault = tmp_path / "snaps", tmp_path / "vault"
+    rc, _ = _amber_edit(tmp_path, target, snapdir, vault)
+    assert rc == 0
+    assert [p.name.endswith(".held-out") for p in snapdir.iterdir()] == [True]
+    assert FAKE_PAT in list(vault.iterdir())[0].read_text()
+
+
+def test_empty_preimage_still_lands_in_snapdir(tmp_path):
+    """The boundary the divert must not cross: an empty file IS readable as text, so
+    `_read_text` returning "" stays clean while returning None does not."""
+    target = tmp_path / "empty.txt"
+    target.write_text("")
+    snapdir, vault = tmp_path / "snaps", tmp_path / "vault"
+    rc, _ = _amber_edit(tmp_path, target, snapdir, vault)
+    assert rc == 0
+    assert [p.read_text() for p in snapdir.iterdir()] == [""]
+    assert not vault.exists()
+
+
+def test_is_sensitive_globs_the_symlink_target_name(tmp_path):
+    """`.env` is a credential by convention; pointing a plain name at one does not
+    launder it."""
+    real = tmp_path / "prod.env"
+    real.write_text("FEATURE_FLAG=1\n")
+    link = tmp_path / "config.txt"
+    link.symlink_to(real)
+    assert ag._is_sensitive(path=str(link))
 
 
 def test_is_sensitive_fails_closed_without_the_sweep(monkeypatch):

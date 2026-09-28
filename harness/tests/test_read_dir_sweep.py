@@ -23,9 +23,12 @@ def _write(root, rel, text):
 
 
 def test_clean_tree_has_no_hits(tmp_path):
-    _write(tmp_path, "playbooks/a.md", "api_key: os.environ/OPENROUTER_KEY\napi_key: sk-none\n")
-    _write(tmp_path, "b.yaml", "token: ${GATUS_TOKEN}\npassword: <redacted>\n")
-    hits, n = rds.sweep_root(str(tmp_path))
+    # sweep an own subdir: conftest autouse fixtures drop stub files in tmp_path
+    # itself (wq#2901's lumen_episode_stub.py), which the file count would pick up
+    root = tmp_path / "tree"
+    _write(root, "playbooks/a.md", "api_key: os.environ/OPENROUTER_KEY\napi_key: sk-none\n")
+    _write(root, "b.yaml", "token: ${GATUS_TOKEN}\npassword: <redacted>\n")
+    hits, n = rds.sweep_root(str(root))
     assert hits == [] and n == 2
 
 

@@ -166,6 +166,61 @@ the token reaches the JSONL as ordinary tool output, not as a snapshot. The dura
 it is the same one wq#1466 is already scoped to do — take the literal out of
 `sentinel/config/config.yaml` so there is nothing for a worker to read and echo.
 
+### 3.3 Re-run after wq#2115 landed (2026-09-28, wq#2116)
+
+Scope item (2) of wq#2116: same sweep, same roots, run once wq#2115's label-shape and
+`process.env` work was on main (merged as `6e35157`).
+
+| root | files | hits | vs §3.1 |
+|---|---|---|---|
+| /home/lumen/kb | 34 | 1 | `ISSUE-LOG.md:832` — row 723's own prose, quoting the broker's `ghp_selftest` canary while explaining it is not a token. Documentation of a finding |
+| /home/lumen/mailbot | 86 | 1 | `evals/run.mjs:118` **cleared** — the `process.env` guard works. New: `DESIGN_v2.md:39`, the label shape now reads prose ("Thread key … root Message-ID") |
+| /home/lumen/pokemon | 3245 | 3 | was 0 — all three are new, all the call-on-RHS class: `const key = Notepad.correctionKey(line)` ×2, `AQ_KEY = "lpp-brain-unreachable"` (an alert dedupe key) |
+| /home/lumen/bin | 457 | 12 | was 2 — `probe_wq616.py` unchanged, plus shell/python test fixtures (`GITEA_PASSWORD=sandboxpw`, `'DEEPSEEK': 'sk-N…'`) and `new_…(notes, token, abs_path)` in `wq` ×5, counting `.bak` copies (wq#2114) |
+| /home/lumen/projects/nest | 3202 | 2 | unchanged — CA + CRL bundles, `*.pem` basename |
+| /home/lumen/agents/work-queue | 1009 | 3 | the 8 **real** `_runs/fleet{9,12}-*.jsonl` hits are **gone**: wq#2118 relocated them 2026-09-20 18:26 and left `.held-out` pointers. The 3 remaining are one board line of prose plus its two `.bak` copies |
+| /home/lumen/foreman | 45797 | 390 | was 348 (861 at the wq#2123 re-check) — composition below |
+
+Foreman's 390, by writer rather than by directory:
+
+| what | hits | verdict |
+|---|---|---|
+| `.pytest_cache/v/cache/nodeids` | 198 | untracked pytest cache in the primary tree; the node ids of the masking suite carry its fixture literals |
+| `_runs/mask_at_rest/20260925T042118Z.jsonl` | 119 | the mask tool's own findings log. Every hit is either the literal `MASKED` placeholder inside a reconstructed `http://lumen:MASKED@host` string, or a `test_masking.py` parametrize line quoted into the record's `context` window |
+| `harness/tests/*` | 16 | live fixtures — wq#2120's fingerprint allowlist is still open, so this class did **not** clear |
+| `_runs/wq<n>/` — `mask-hits-*.json`, `evidence/*/replay-AC1.log`, 8 in `snapshots/` | 33 | same shape one layer down: mask reports and worker evidence quoting pytest node ids, spread over 15 run dirs |
+| `reports/`, `research/`, `dispatcher/`, `events/`, `ops/`, `memory/` | 21 | report and doc text, including this file's own §3.1 table |
+| `despag/app.py`, `claude-shim/claude_shim.py` | 2 | the call-on-RHS class of §3.1, unchanged (wq#2120). `research/headroom_proxy_gate.py` is now **0** |
+| `_runs/wq1135/snapshots/…-home_lumen_.git-credentials` | 1 | the one real pre-image left. 2026-08-30, predates `_stow` |
+
+So scope item (2)'s answer is split: the `process.env` class cleared, the fixture class did
+not, and wq#2115's wider `kv_secret` label shape bought a new crop of call-on-RHS positives in
+roots that were clean before. The count moved 348 → 390 while the number of real credentials
+in it moved 2 → 1.
+
+That last one is worth stating precisely, because it is the bound on how bad `_runs` still is:
+`guard.sh` refuses `.git-credentials*` **by basename**, so a worker's `Read`/`Bash` cannot
+reach the snapshot even though the bytes sit inside the read grant. Verified this session: any
+worker command naming that path is refused with `guard.sh: BLOCKED — denied path: git
+credential store (.git-credentials*, .netrc, .fleet_pw)`. The sweep sees it because the sweep
+is not a worker. The bytes are still a retention problem (wq#2118), not an open grant.
+
+### 3.4 `_is_sensitive` failed open on anything the sweep would not read
+
+§3.2's `_stow()` asks `read_dir_sweep` whether a pre-image is credential-shaped, and got a
+useful answer only for files the sweep can read as text. `_read_text()` returns `None` for a
+symlink, a file over `MAX_FILE_BYTES`, a NUL in the first 4KB, or an `OSError`, and `""` for a
+genuinely empty file; `_is_sensitive` collapsed both with `if not text: return False`. So
+"the scanner declined to look" was recorded as "the scanner found nothing", and the bytes went
+to the 0644 snapdir. A symlink named `notes.txt`, a sqlite db and a 3MB log each carried a
+token straight back through the grant §3.2 was written to close. The basename half was blind
+the same way: it globbed the path's own basename, which for a symlink is the link name.
+
+Fixed in `harness/action_gate.py:544-557` — `None` now means sensitive, `""` stays clean, and
+basenames are globbed for both `path` and `realpath(path)` through `basename_candidates()`.
+Pinned by five tests at `harness/tests/test_action_gate.py:468-523`, including
+`test_empty_preimage_still_lands_in_snapdir`, which is the boundary the fix must not cross.
+
 ## 4. Test-to-failure
 
 | # | case | result |

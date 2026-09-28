@@ -542,10 +542,19 @@ def _is_sensitive(path=None, text=None):
     if _rds is None:
         return True
     if path is not None:
-        if any(fnmatch.fnmatch(os.path.basename(path), g) for g in _rds.BASENAME_GLOBS):
+        # a symlink's own name says nothing about what it points at, so glob both
+        names = {os.path.basename(path), os.path.basename(os.path.realpath(path))}
+        if any(fnmatch.fnmatch(c, g)
+               for n in names
+               for c in _rds.basename_candidates(n)
+               for g in _rds.BASENAME_GLOBS):
             return True
-        # the sweep's own reader, so both tools skip the same symlinks/binaries/oversize
         text = _rds._read_text(path)
+        if text is None:
+            # symlink, binary, oversize or unreadable: the sweep skips these, so nothing
+            # ever clears them. Unscanned bytes go to the vault, not the read-granted
+            # snapdir (wq#2123 — returning False here copied secrets through both).
+            return True
     if not text:
         return False
     return any(rx.search(text) for _, rx in _rds.PATTERNS)
