@@ -64,11 +64,12 @@ def _fake_window(denv, monkeypatch, body):
     monkeypatch.setattr(fd, "LUMEN_WINDOW_PATH", str(path))
 
 
-def test_shipped_config_keeps_needs_window_dark():
-    """Activation is a separate reviewed step: the committed block exists and is OFF."""
+def test_shipped_config_activates_needs_window():
+    """Activated by the reviewed config commit (wq#2935 CONFIRMed wq#2915): the committed
+    block exists and is ON. Flip back to False here AND in config.json to go dark again."""
     with open(os.path.join(REPO, "dispatcher", "config.json")) as f:
         cfg = json.load(f)
-    assert cfg["needs_window"]["enabled"] is False
+    assert cfg["needs_window"]["enabled"] is True
 
 
 def test_dark_switch_ignores_marker_even_when_window_closed(denv, monkeypatch):
