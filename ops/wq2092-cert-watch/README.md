@@ -7,7 +7,10 @@ health; nothing checked the certificate itself.
   (`/etc/cloudflared/config.yml`, same discovery as `bin/ui-inventory`), port
   443, plus `targets.json` `extra` entries (`{"host": ..., "port": ...}`) and
   `--extra HOST[:PORT]`. `extra` ships empty: no internal nginx TLS listener
-  has a verified host:port yet, so none are invented. Add them there.
+  has a verified host:port yet, so none are invented. Add them there. A
+  malformed `targets.json` (bad JSON, or an entry with no `host` / a
+  non-numeric `port`) is skipped with one deduped ntfy — the cloudflared hosts
+  are still checked, and `install.sh --verify` fails on it (wq#3008).
 - **Alerts:** when a host first crosses 21d (default), 7d (high), 1d
   (urgent) or is expired (urgent) — an `aq` row (`source=cert-watch`,
   `key=host:port`) plus `ntfy-send`. Only a move to a *more severe* tier

@@ -16,8 +16,14 @@ DEST=/home/lumen/services/lumen-cert-watch
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   vfile "$SRC/cert_watch.py" "$DEST/cert_watch.py"
-  # targets.json is operator-edited, so match the shape, not the bytes.
+  # targets.json is operator-edited, so match the shape, not the bytes. Parse it
+  # with the shipped loader rather than grepping for "extra": a hand-edit typo
+  # used to pass this check while every daily run silently lost the extra
+  # targets (wq#3008). Read-only: load_extra_targets only opens the file.
   vcontains "$DEST/targets.json" '"extra"'
+  terr="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import cert_watch; print(cert_watch.load_extra_targets(sys.argv[2])[1] or "")' \
+          "$SRC" "$DEST/targets.json" 2>&1)" || terr="targets.json check failed: $terr"
+  [ -z "$terr" ] || _vmiss "$terr"
   vunit_file "$SRC/lumen-cert-watch.service" /etc/systemd/system/lumen-cert-watch.service
   vunit_file "$SRC/lumen-cert-watch.timer" /etc/systemd/system/lumen-cert-watch.timer
   vactive lumen-cert-watch.timer

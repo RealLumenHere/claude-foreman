@@ -57,7 +57,53 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(cw.parse_endpoint("a.example:8443"), ("a.example", 8443))
 
     def test_extra_targets_missing_file_is_empty(self):
-        self.assertEqual(cw.load_extra_targets("/nonexistent/targets.json"), [])
+        self.assertEqual(cw.load_extra_targets("/nonexistent/targets.json"),
+                         ([], None))
+
+
+class MalformedTargetsTests(unittest.TestCase):
+    """wq#3008: targets.json is hand-edited, so every bad shape must degrade to
+    (no extra targets, an error string) — never raise through run()."""
+
+    def load(self, text):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "targets.json")
+            with open(path, "w") as f:
+                f.write(text)
+            return cw.load_extra_targets(path)
+
+    def assert_rejected(self, text, needle):
+        targets, error = self.load(text)
+        self.assertEqual(targets, [])
+        self.assertIsNotNone(error)
+        self.assertIn(needle, error)
+
+    def test_well_formed_file_still_loads(self):
+        self.assertEqual(self.load('{"extra": [{"host": "a.example"},'
+                                   ' {"host": "b.example", "port": 8443}]}'),
+                         ([("a.example", 443), ("b.example", 8443)], None))
+
+    def test_trailing_comma_is_unparseable(self):
+        self.assert_rejected('{"extra": [{"host": "a.example"},]}', "unparseable")
+
+    def test_top_level_list(self):
+        self.assert_rejected('[{"host": "a.example"}]', "top level is list")
+
+    def test_extra_not_a_list(self):
+        self.assert_rejected('{"extra": {"host": "a.example"}}', '"extra" is dict')
+
+    def test_entry_not_an_object(self):
+        self.assert_rejected('{"extra": ["a.example"]}', "entry 0 is str")
+
+    def test_entry_missing_host(self):
+        self.assert_rejected('{"extra": [{"port": 8443}]}', 'entry 0 has no "host"')
+
+    def test_non_numeric_port(self):
+        self.assert_rejected('{"extra": [{"host": "a.example", "port": "https"}]}',
+                             "ValueError")
+
+    def test_empty_file(self):
+        self.assert_rejected("", "unparseable")
 
 
 class CheckHostTests(unittest.TestCase):
@@ -262,6 +308,30 @@ class RunTests(unittest.TestCase):
                 self.assertIn("2 endpoint(s) unreachable", ntfy.call_args.args[0])
                 cw.run(**kw)  # still down: the transition already fired
                 self.assertEqual(ntfy.call_count, 1)
+
+    def test_malformed_targets_json_still_checks_cloudflared_hosts(self):
+        """wq#3008: the crash aborted the run before any of the cloudflared
+        hosts were checked, and fired no alert at all."""
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, state = os.path.join(tmp, "t.json"), os.path.join(tmp, "s.json")
+            with open(targets, "w") as f:
+                f.write('{"extra": [{"host": "internal.example"},]}')
+            kw = dict(cf_config="x", targets_path=targets, state_path=state, now=NOW)
+            with mock.patch.object(cw, "read_cloudflared_hosts",
+                                   return_value=(["a.example", "b.example"], None)), \
+                 mock.patch.object(cw, "fetch_not_after",
+                                   return_value=(NOW + 90 * DAY, None)) as fetch, \
+                 mock.patch.object(cw, "ntfy") as ntfy:
+                self.assertEqual(cw.run(**kw), 0)
+                self.assertEqual(sorted(c.args[0] for c in fetch.call_args_list),
+                                 ["a.example", "b.example"])
+                ntfy.assert_called_once()
+                self.assertIn("targets.json malformed", ntfy.call_args.args[0])
+                self.assertEqual(cw.run(**kw), 0)  # same error: no repeat page
+                self.assertEqual(ntfy.call_count, 1)
+            with open(state) as f:
+                self.assertEqual(sorted(json.load(f)["hosts"]),
+                                 ["a.example:443", "b.example:443"])
 
     def test_no_targets_returns_1(self):
         with tempfile.TemporaryDirectory() as tmp:

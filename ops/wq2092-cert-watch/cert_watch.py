@@ -14,6 +14,8 @@ Targets (the planner's "no endpoint inventory" gap, closed the same way
   * extra internal HTTPS endpoints from targets.json ("extra": [{"host",
     "port"}]) and/or --extra host[:port]. Empty by default: no internal
     nginx TLS listener has a verified host:port yet, so none are invented.
+    A malformed targets.json alerts and is skipped — the cloudflared hosts
+    are still checked (wq#3008).
 
 Verification is disabled on purpose: the point is to read notAfter from an
 expired or self-signed leaf, not to be refused by it.
@@ -109,12 +111,32 @@ def parse_endpoint(spec, default_port=443):
 
 
 def load_extra_targets(path):
+    """Returns (targets, error). Mirrors read_cloudflared_hosts: targets.json is
+    operator-edited, so a hand-edit typo (trailing comma, wrong shape) must cost
+    the extra endpoints only — never the whole run (wq#3008)."""
     try:
         with open(path) as f:
             doc = json.load(f)
     except OSError:
-        return []
-    return [(e["host"], int(e.get("port", 443))) for e in doc.get("extra", [])]
+        return [], None  # no file at all is the normal "no extra targets" case
+    except ValueError as e:
+        return [], f"targets.json unparseable: {e}"
+    targets = []
+    try:
+        if not isinstance(doc, dict):
+            raise TypeError(f"top level is {type(doc).__name__}, expected object")
+        extra = doc.get("extra", [])
+        if not isinstance(extra, list):
+            raise TypeError(f'"extra" is {type(extra).__name__}, expected list')
+        for i, e in enumerate(extra):
+            if not isinstance(e, dict):
+                raise TypeError(f"entry {i} is {type(e).__name__}, expected object")
+            if not e.get("host"):
+                raise KeyError(f'entry {i} has no "host"')
+            targets.append((str(e["host"]), int(e.get("port", 443))))
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        return [], f"targets.json malformed: {type(e).__name__}: {e}"
+    return targets, None
 
 
 def fetch_not_after(host, port, timeout=10):
@@ -246,16 +268,23 @@ def run(cf_config=DEFAULT_CF_CONFIG, targets_path=DEFAULT_TARGETS, extra=(),
     prev_hosts = state.get("hosts", {})
 
     hosts, cf_error = read_cloudflared_hosts(cf_config)
+    extra_targets, targets_error = load_extra_targets(targets_path)
     targets = [(h, 443) for h in hosts]
-    targets += load_extra_targets(targets_path)
+    targets += extra_targets
     targets += [parse_endpoint(e) for e in extra]
     targets = list(dict.fromkeys(targets))
 
     if cf_error and state.get("cf_error") != cf_error:
         ntfy("cert-watch: cannot enumerate cloudflared hosts", cf_error,
              priority="default", dry_run=dry_run)
+    if targets_error:
+        print(f"cert-watch: {targets_error} (ignoring extra targets)")
+        if state.get("targets_error") != targets_error:
+            ntfy("cert-watch: targets.json malformed, ignoring extra targets",
+                 f"{targets_error} — cloudflared hosts are still checked",
+                 priority="default", dry_run=dry_run)
     if not targets:
-        print(f"cert-watch: no targets ({cf_error or 'empty ingress'})")
+        print(f"cert-watch: no targets ({cf_error or targets_error or 'empty ingress'})")
         return 1
 
     new_hosts, newly_unreachable = {}, []
@@ -278,7 +307,8 @@ def run(cf_config=DEFAULT_CF_CONFIG, targets_path=DEFAULT_TARGETS, extra=(),
              priority="default", dry_run=dry_run)
 
     if not dry_run:
-        save_state(state_path, {"hosts": new_hosts, "cf_error": cf_error})
+        save_state(state_path, {"hosts": new_hosts, "cf_error": cf_error,
+                                "targets_error": targets_error})
     return 0  # the alerts carry the signal; a warning must not fail the unit
 
 
