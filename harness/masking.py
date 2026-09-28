@@ -398,6 +398,14 @@ _KV_IDENT_VALUE = r"_*[a-z0-9]+(?:_[a-z0-9]+)+"   # `_stale_probe_tickets` is on
 # word boundary of the line; on a 1.2 MB Commander log line that doubled the rule's cost
 # (450 ms -> 890 ms) and the all-rules sweep of /home/lumen/logs did not finish.
 _KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!#$%^*@~])))")
+# wq#2933: a value that repeats its own label is a self-name placeholder, not a
+# credential. `agent/litellm_config.yaml` writes provider keys that way (ISSUE-LOG rows
+# 871/914: LiteLLM's get_secret resolves the name from the container env), and quoting
+# that line armed the tripwire twice: wq#2923 as a 15-char hit, then again as 16 chars
+# when a grep pattern put a regex `.` behind the name. Trailing prose/regex punctuation
+# is allowed only where the body then ENDS, so `LABEL: LABEL.<opaque>` still fires.
+# `kl` is the label group _kv_rule() names; recorded as suppression "self-name".
+_KV_NOT_SELF = r"(?!(?P=kl)[.,:;!?]*(?![A-Za-z0-9._\-+/=:!#$%^*@~]))"
 
 
 def _kv_rule(label, guards, floor="{12,}"):
@@ -418,17 +426,17 @@ def _kv_rule(label, guards, floor="{12,}"):
     (test_every_label_sees_the_real_token_not_an_earlier_mask), and a stop at
     position zero would refuse it outright, floor and all.
     """
-    return (_WB + r'((?:' + label + r')' + _KV_SEP + r')' + guards
+    return (_WB + r'((?P<kl>' + label + r')' + _KV_SEP + r')' + guards
             + _body(_KV_BODY, floor))
 
 
-_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED + _KV_NOT_IDENT),
-                        re.IGNORECASE)
+_KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED + _KV_NOT_IDENT
+                                 + _KV_NOT_SELF), re.IGNORECASE)
 # wq#2806: the env-identifier form of the same rule, floor 8 (see _KV_ENV_LABEL). It
 # shares the label string "kv-secret" the way the two github rules share theirs: one
 # alarm class, one rotation-ticket shape, one set of suppressions to reason about.
-_KV_SECRET_ENV = re.compile(_kv_rule(_KV_ENV_LABEL, _KV_POINTER + _KV_NOT_CALLED,
-                                     "{8,}"))
+_KV_SECRET_ENV = re.compile(_kv_rule(_KV_ENV_LABEL, _KV_POINTER + _KV_NOT_CALLED
+                                     + _KV_NOT_SELF, "{8,}"))
 # wq#2806: XML — `<password>v</password>`, ClickHouse's users.d/*.xml (the wq#2754
 # leak: cat-ing it mid-rotation printed the new password in the clear under every rule
 # above, because no `:`/`=` follows the label). The tag name carries a credential noun
@@ -460,6 +468,7 @@ _KV_SUPPRESSIONS = (
     ("call", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_CALLED), re.IGNORECASE)),
     ("public-key", re.compile(_kv_rule(_KV_LABEL, ""), re.IGNORECASE)),
     ("identifier", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_IDENT), re.IGNORECASE)),
+    ("self-name", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_SELF), re.IGNORECASE)),
 )
 SUPPRESSED_LABEL = "kv-secret"   # the only rule that carries suppressions today
 

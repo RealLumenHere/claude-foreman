@@ -1718,6 +1718,35 @@ def test_a_key_labelled_identifier_is_a_recorded_suppression():
     assert masking.mask_text('DB_PASSWORD = "' + "my_db_pass_word_1")[1] == ["kv-secret"]
 
 
+# wq#2933: `LABEL: LABEL` is a self-name placeholder (agent/litellm_config.yaml). Names
+# are built at runtime so this source never holds the pair itself.
+_SELF_KV = "MISTRAL_API_" + "KEY"
+_SELF_PW = "GITEA_PASS" + "WORD"
+
+
+@pytest.mark.parametrize("line", [
+    _SELF_KV + ": " + _SELF_KV,
+    # wq#2923's grep pattern: a regex `.` behind the name, then `\{20\}`
+    'grep -o ".\\{60\\}' + _SELF_KV + ": " + _SELF_KV + '.\\{20\\}" ISSUE-LOG.md',
+    '"' + _SELF_KV + '": "' + _SELF_KV + '",',
+    _SELF_PW + "=" + _SELF_PW,
+])
+def test_a_self_named_value_is_a_recorded_suppression(line):
+    assert masking.mask_text(line) == (line, [])
+    assert [r["suppressed"] for r in masking.suppressions(line)] == ["self-name"]
+
+
+@pytest.mark.parametrize("line", [
+    _SELF_KV + ": " + _SELF_KV + "." + PW,
+    _SELF_KV + ": " + _SELF_KV + PW,
+    _SELF_KV + ": " + PW + _SELF_KV,
+    _SELF_PW + "=" + _SELF_PW + ":" + PW,
+])
+def test_a_self_name_with_anything_behind_it_is_still_a_credential(line):
+    masked, hits = masking.mask_text(line)
+    assert hits == ["kv-secret"] and PW not in masked, line
+
+
 def test_the_env_form_and_the_general_form_record_one_hit():
     _, records = masking.scan("NTFY_PASS=" + PW)
     assert [r["label"] for r in records] == ["kv-secret"]
