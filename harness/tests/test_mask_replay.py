@@ -2255,6 +2255,44 @@ def test_wq3037_corpus_burned_nothing():
                           patterns=mask_replay.CURRENT_PATTERNS)
 
 
+WQ2120_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2120")
+WQ2120_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq2120_values.py")
+
+
+def test_wq2120_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ2120_FIXTURES)
+    values = scope["WQ2120_VALUES"]
+    count = len(values)
+    assert count == 2
+    assert _unpinned(values, {"f": text}) == []
+    assert masking.mask_text(text)[1] == []
+
+
+def test_wq2120_pins_are_the_sweep_acks_wq2120_reviewed():
+    """The pins are the same spans read_dir_sweep already acked as upstream doc
+    placeholders, not a fresh judgment. Fingerprints only, never values."""
+    import read_dir_sweep
+    _, scope = _load_fixture_module(WQ2120_FIXTURES)
+    kv = dict(read_dir_sweep.PATTERNS)["kv_secret"]
+    fps = set()
+    for pin in scope["WQ2120_VALUES"]:
+        m = kv.search(pin[-1])
+        fps.add(read_dir_sweep.reviewed_hit_fingerprint(m.group(0)) if m else None)
+    assert fps == {"527602abdce7", "aea20d56e205"}
+    assert fps <= read_dir_sweep.REVIEWED_HIT_FINGERPRINTS
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ2120_RUN),
+                    reason="wq#2120's run dir is not on this host")
+def test_wq2120_corpus_burned_nothing():
+    """wq#3055's verdict, pinned: HR_AUTH_PASSWORD= / HR_SECRET_KEY= placeholders
+    from the upstream harnessrouter self-hosting guide, not credentials; nothing rotated."""
+    _, scope = _load_fixture_module(WQ2120_FIXTURES)
+    fixture_shas = {v[0] for v in scope["WQ2120_VALUES"]}
+    _assert_corpus_pinned(2120, WQ2120_FIXTURES, scope["WQ2120_RECORDS"], fixture_shas,
+                          patterns=mask_replay.CURRENT_PATTERNS)
+
+
 def test_replay_scores_orphan_rows_and_splices_them_from_context():
     """wq#3048: the tripwire paged on an _orphan_matches() row (sha256:72458136d6c6)
     that the replay never produced, so its "0 unaccounted" had not scored the ticket's
