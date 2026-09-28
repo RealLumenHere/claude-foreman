@@ -28,8 +28,17 @@ import subprocess
 import sys
 
 KB_DIR = "/home/lumen/kb"
-ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|")
-SEE_RE = re.compile(r"see rows?\s+(\d+)")
+# wq#2891: optional trailing lowercase letter for wq#2857's disambiguation
+# suffix (e.g. "887b") -- a suffixed row must stay a distinct, trackable row
+# number or it goes invisible to every DUP/DANGLING/ONE-WAY check below.
+ROW_RE = re.compile(r"^\|\s*(\d+[a-z]?)\s*\|")
+SEE_RE = re.compile(r"see rows?\s+(\d+[a-z]?)")
+
+
+def _sort_key(num):
+    """Numeric-then-suffix ordering so '887b' sorts next to '887', not '888'."""
+    m = re.match(r"(\d+)([a-z]?)", num)
+    return (int(m.group(1)), m.group(2))
 
 
 def load(rev, path):
@@ -49,7 +58,7 @@ def rows(lines):
     for n, text in enumerate(lines, 1):
         m = ROW_RE.match(text)
         if m:
-            found.setdefault(int(m.group(1)), []).append((n, text))
+            found.setdefault(m.group(1), []).append((n, text))
     return found
 
 
@@ -61,16 +70,16 @@ def _findings(found):
     on, since a plain append never shifts an existing row's line number in
     this append-only log but the formatted text embeds 'L<n>' regardless.
     """
-    for num in sorted(found):
+    for num in sorted(found, key=_sort_key):
         if len(found[num]) > 1:
             at = ", ".join(f"L{ln}" for ln, _ in found[num])
             yield (
                 f"DUP:{num}:{len(found[num])}",
                 f"DUP      row {num} defined {len(found[num])}x ({at})",
             )
-    for num in sorted(found):
+    for num in sorted(found, key=_sort_key):
         for line_no, text in found[num]:
-            for target in {int(t) for t in SEE_RE.findall(text)}:
+            for target in set(SEE_RE.findall(text)):
                 if target not in found:
                     yield (
                         f"DANGLING:{num}:{target}",

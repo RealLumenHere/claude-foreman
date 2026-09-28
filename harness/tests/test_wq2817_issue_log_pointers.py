@@ -43,6 +43,13 @@ FIXTURE_DUPLICATE = [
     "| 836 | wq#2740 same run | five tests fail on main | filed | OPEN |",
 ]
 
+# wq#2891: wq#2857's suffix-disambiguation policy -- the later occurrence of a
+# collision gets a lowercase-letter suffix instead of being renumbered.
+FIXTURE_SUFFIX_DISAMBIGUATED = [
+    "| 887 | wq#2871 original | cause a | fix a | OPEN |",
+    "| 887b | wq#2881 later collision | cause b | fix b | OPEN |",
+]
+
 
 def findings(lines):
     return probe.check(probe.rows(lines))
@@ -71,3 +78,18 @@ def test_two_rows_sharing_a_number_make_citations_ambiguous():
 
 def test_checker_reports_nothing_on_a_log_with_no_pointers():
     assert findings(["| 1 | symptom | cause | fix | FIXED |"]) == []
+
+
+def test_suffixed_row_is_tracked_distinctly_and_not_a_dup():
+    # a bare "887" and its suffixed "887b" must not collide with each other,
+    # or the disambiguation policy (wq#2857) would make DUP re-fire on its
+    # own fix.
+    assert findings(FIXTURE_SUFFIX_DISAMBIGUATED) == []
+
+
+def test_see_row_pointer_to_a_suffixed_row_resolves():
+    lines = FIXTURE_SUFFIX_DISAMBIGUATED + [
+        "| 900 | later correction | cause c | see row 887b | OPEN |",
+    ]
+    out = findings(lines)
+    assert not any(f.startswith("DANGLING") for f in out), out
