@@ -7,12 +7,27 @@
 #    runtime, printed back on the `cf/off5:` line of that probe's output.
 # The aws and slack values the tripwire filed wq#2952 on already account to
 # harness/tests/test_masking.py; they are not repeated here.
+#
+# wq#2982: a third value, from the same run, that wq#2972 orphaned rather than wq#2952
+# missed. wq#2972 (PR 1272, e79bc64e) split reports/wq2941_probe_self_name_punctuation_
+# bypass.py's `REAL_SECRET` literal at the name-equals-quote seam — a correct fix for
+# that probe's own-tripwire problem — but wq#2922's run corpus holds a SNAPSHOT of the
+# pre-split file, three quoted segments glued after the name-equals-quote seam. The
+# snapshot's first (11-char) segment is what `account()` can no longer find in the
+# post-split tree, which instead opens that seam onto an empty string before the full
+# run glued as one segment. Same class as wq2913's row 924 (wq2955's fix): a pin scored
+# against the live tree is invalidated by the next unrelated tree edit. Pinned here as
+# committed text, same as the two above — not split into a second "retired" set,
+# because CURRENT_PATTERNS still fires on the snapshot line unchanged; only
+# `account()`'s tree lookup went stale, not the rule.
 # (sha, label, prefix, prefix + value). Split at seams so reading this file pages nothing;
 # mask_replay.account() closes the joined string.
 # Pinned by test_mask_replay.py::test_wq2922_pins_are_their_hashes_and_read_silently.
 WQ2922_VALUES = (
     ("d356ea83d848", "cloudflare", "cfut", "cf" "ut_ALARM"),
     ("807399bef03a", "cloudflare", "cfut", "cf" "ut_QQQQQ"),
+    ("53a1492afd3b", "kv-secret", 'REAL_SECRET = "',
+     'REAL_SECRET = "' 'Zx8qLp3' 'vWn7'),
 )
 
 # The records the replay reproduces from wq#2922's corpus under today's table.

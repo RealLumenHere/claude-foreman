@@ -2177,7 +2177,7 @@ def test_wq2922_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2922_FIXTURES)
     values = scope["WQ2922_VALUES"]
     count = len(values)
-    assert count == 2
+    assert count == 3
     assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
@@ -2186,7 +2186,13 @@ def test_wq2922_pins_are_their_hashes_and_read_silently():
                     reason="wq#2922's run dir is not on this host")
 def test_wq2922_corpus_burned_nothing():
     """wq#2952's verdict, pinned: a comment word and a Q-filled probe dummy from
-    wq#2922's own work, not credentials; nothing rotated."""
+    wq#2922's own work, not credentials; nothing rotated.
+
+    wq#2982: a third value joined the pin later without a new run — wq#2972 split
+    reports/wq2941_probe_self_name_punctuation_bypass.py's `REAL_SECRET` literal to
+    stop it arming its own tripwire, which left the snapshot's pre-split 11-char first
+    segment unfindable in the post-split tree. See the fixture module's header.
+    """
     _, scope = _load_fixture_module(WQ2922_FIXTURES)
     fixture_shas = {v[0] for v in scope["WQ2922_VALUES"]}
     _assert_corpus_pinned(2922, WQ2922_FIXTURES, scope["WQ2922_RECORDS"], fixture_shas,
