@@ -39,7 +39,7 @@ Reproduced end to end against the shipped code, no modifications:
 $ python3 -c "
 import sys; sys.path.insert(0, 'harness')
 import masking
-_, records = masking.scan('CF_API_TOKEN=abcdef0123456789abcdef0123456789abcd')
+_, records = masking.scan('CF_API_TOKEN=' + 'abcdef0123456789abcdef0123456789abcd')
 print(records)
 "
 [{'label': 'kv-secret', 'prefix': 'CF_API_TOKEN=', 'value_len': 36,

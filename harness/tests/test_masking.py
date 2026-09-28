@@ -462,6 +462,51 @@ def test_the_wq2702_triple_glue_masks_its_slack_half():
     assert "slack" in hits
 
 
+# wq#2848 (verify-pass wq#2803): a BARE foreign-prefix substring — four or five
+# ordinary characters, not a matchable foreign token — must never truncate a run
+# below the rule's OWN floor. Below the floor the whole `{N,}` match fails outright,
+# so the real token (fixed prefix included) passed through with NO mask and NO
+# alarm: measured 200/200 leaks per offset on the pre-fix code (mask_probe.py,
+# offsets 5/12/20/28 in a 36-char github body). These pin the same shape
+# deterministically, one case per open-floor rule, both offsets safely below floor.
+_WQ2848_NOISE_CASES = [
+    ("github", "ghp_", 30, "AKIA"),
+    ("github", "ghp_", 30, "cfut"),
+    ("cloudflare", "cfut_", 6, "AKIA"),
+    ("sk-key", "sk-", 16, "AKIA"),
+    ("slack", "xoxb-", 8, "AKIA"),
+]
+
+
+@pytest.mark.parametrize("label, prefix, floor, noise", _WQ2848_NOISE_CASES)
+@pytest.mark.parametrize("offset", [2, 5])
+def test_a_bare_foreign_prefix_substring_does_not_drop_the_whole_token(
+        label, prefix, floor, noise, offset):
+    fill = "Q" * (floor + 6)
+    body = fill[:offset] + noise + fill[offset:]
+    masked, hits = masking.mask_text(prefix + body)
+    assert body not in masked
+    assert label in hits
+
+
+def test_the_wq2848_noise_cases_do_not_leak_in_the_daemon_mirror():
+    """wq#2802's port carries the same `_body(..., foreign=...)` shape, so it carries
+    the same wq#2848 regression until it is fixed in lockstep — pinned here rather
+    than folded into test_token_engine_mirror_agrees because the daemon's own labels
+    (`github_token`, `cloudflare_token`, ...) differ from masking.py's, and this test
+    only needs to know the body is gone, not which of its two rules said so."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..",
+                                    "token-engine"))
+    import token_engine_daemon as ted
+
+    for _label, prefix, floor, noise in _WQ2848_NOISE_CASES:
+        for offset in (2, 5):
+            fill = "Q" * (floor + 6)
+            body = fill[:offset] + noise + fill[offset:]
+            rewritten = ted.mask_rewrite(prefix + body)
+            assert body not in rewritten, f"{prefix}{body!r} leaked in the daemon mirror"
+
+
 def test_a_rules_output_inside_another_rules_value_is_still_ours():
     """The rules compose: url-auth reads a userinfo line the github rule has already
     masked, so its whole value is another rule's kept prefix plus the literal. That is
