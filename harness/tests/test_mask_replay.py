@@ -2399,6 +2399,31 @@ def test_wq3059_corpus_burned_nothing():
                           patterns=mask_replay.CURRENT_PATTERNS)
 
 
+WQ3078_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq3078")
+WQ3078_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq3078_values.py")
+
+
+def test_wq3078_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ3078_FIXTURES)
+    values = scope["WQ3078_VALUES"]
+    count = len(values)
+    assert count == 1
+    assert _unpinned(values, {"f": text}) == []
+    assert masking.mask_text(text)[1] == []
+    assert [r[0] for r in masking._orphan_matches(text)] == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ3078_RUN),
+                    reason="wq#3078's run dir is not on this host")
+def test_wq3078_corpus_burned_nothing():
+    """wq#3080's verdict, pinned: a `ghp_` + 36 x "a" dummy wq#3078 typed into a
+    `python3 -c` _PROSE_BODY probe, not a credential; nothing rotated."""
+    _, scope = _load_fixture_module(WQ3078_FIXTURES)
+    fixture_shas = {v[0] for v in scope["WQ3078_VALUES"]}
+    _assert_corpus_pinned(3078, WQ3078_FIXTURES, scope["WQ3078_RECORDS"], fixture_shas,
+                          patterns=mask_replay.CURRENT_PATTERNS)
+
+
 def test_replay_scores_orphan_rows_and_splices_them_from_context():
     """wq#3048: the tripwire paged on an _orphan_matches() row (sha256:72458136d6c6)
     that the replay never produced, so its "0 unaccounted" had not scored the ticket's
