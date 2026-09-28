@@ -1299,7 +1299,13 @@ def repo_for_ticket(ticket_id_or_dict):
     repo = repo_sweep.repo_hint(t.get("title", ""), t.get("detail", ""))
     if repo:
         return repo
-    return repo_for_lane(t.get("lane"))
+    lane = t.get("lane")
+    if lane == "auto":
+        # wq#2870: LANE_REPO['auto'] exists only for repo-sweep-shaped infra tickets,
+        # caught by repo_sweep.repo_hint above. A plain auto-lane ticket that matched
+        # none of the hints must refuse rather than guess FOREMAN_ROOT.
+        return None
+    return repo_for_lane(lane)
 
 
 def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None, model_override=None):

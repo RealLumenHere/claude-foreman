@@ -120,8 +120,12 @@ class LaneRepo(Gate):
     name = "lane_repo"
 
     def check(self, g):
-        g.repo = g.fd.router.repo_for_lane(g.lane)
         multi_repo = g.lane == g.fd.REPO_HINT_LANE or g.policy.get("multi_repo") is True
+        # wq#2870: a multi_repo lane's per-ticket resolution happens in RepoResolve
+        # below; leaving g.repo at the lane's LANE_REPO default here would let
+        # RepoResolve's `repo_for_ticket(g.t) or g.repo` fallback resurrect that
+        # guess for a ticket none of the per-ticket hints resolved.
+        g.repo = None if multi_repo else g.fd.router.repo_for_lane(g.lane)
         if not g.repo and not multi_repo:
             return Fail("lane_policy", "lane_unmapped", terminal=True,
                         detail="no LANE_REPO entry — never guess a repo",
