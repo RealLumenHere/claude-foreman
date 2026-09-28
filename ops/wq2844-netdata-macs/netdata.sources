@@ -1,0 +1,15 @@
+X-Repolib-Name: Netdata stable repository
+Types: deb
+URIs: http://repository.netdata.cloud/repos/stable/ubuntu/
+Suites: resolute/
+Signed-By: /usr/share/keyrings/netdata-archive-keyring.gpg
+By-Hash: Yes
+Enabled: Yes
+
+X-Repolib-Name: Netdata repository configuration repository
+Types: deb
+URIs: http://repository.netdata.cloud/repos/repoconfig/ubuntu/
+Suites: resolute/
+Signed-By: /usr/share/keyrings/netdata-archive-keyring.gpg
+By-Hash: Yes
+Enabled: Yes
