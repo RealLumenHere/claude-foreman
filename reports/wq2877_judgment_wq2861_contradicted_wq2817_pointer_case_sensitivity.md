@@ -113,10 +113,10 @@ objection that made a periodic check look unusable.
 
 Options, re-weighed against `main` as it actually stands:
 
-1. **Exempt the wq#2817 bundle as repo-only.** Rejected: leaves the same verify-pass
-   friction for the next audit, and `ops-deploy-drift` reads it `ABSENT` /
-   `authoritative: false` forever — visible in triage, never alertable
-   (`/home/lumen/bin/ops-deploy-drift:136` skips non-authoritative verdicts).
+1. **Leave the question where wq#2861 found it — no handler anywhere.** Rejected: it leaves
+   the same verify-pass friction for the next audit of this code, and leaves the timer that
+   makes the probe live with nothing checking it, which is exactly how wq#2857 closed `done`
+   over a `not-found` unit.
 2. **Install `probe_pointers.py` to `/home/lumen/bin` and `vfile` that.** Rejected now that
    wq#2857 exists. The timer runs the probe **in place from the primary tree**, so a second
    installed copy is a second thing to keep in step with the first — someone fixes the `bin`
@@ -151,7 +151,21 @@ units:  unchanged by this ticket (`git diff origin/main -- …/issue-log-hygiene
 `/etc/systemd/system` is outside this session's allowed paths, so the two `vunit_file` checks
 are argued from the install provenance above rather than re-hashed here, and `bash
 <bundle>/install.sh --verify` itself is not runnable from this worker at all (see Allowlist
-gap). The first sweep after this PR merges will run the handler for real.
+gap). The sweep ran it for real after the merge, which is the authoritative answer:
+
+```
+python3 /home/lumen/bin/ops-deploy-drift --json   (primary tree at 8f22c33)
+  wq2857-issue-log-hygiene-alarm       verdict VERIFIED  authoritative true
+  wq2817-issue-log-pointer-integrity   verdict ABSENT    authoritative false
+```
+
+The wq#2817 directory keeps reading `ABSENT`. That is correct and not a loose end: it is a
+payload directory (`probe_pointers.py`, `alarm_new_findings.py`,
+`known-findings-baseline.json`) consumed in place by the unit above, so no copy of it exists
+under a deploy root by design. A heuristic `ABSENT` never opens an aq row
+(`/home/lumen/bin/ops-deploy-drift:136`), so it costs a line in triage output and nothing
+else — the alternative, a `vfile` handler on a second installed copy, is the divergence
+hazard rejected as option 2.
 
 ### The widened regex re-pins wq#2857's baseline in the same commit
 
