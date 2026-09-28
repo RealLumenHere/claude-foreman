@@ -78,7 +78,7 @@ face value without checking what it pointed at.
 unaccounted by itself. It was still folded into `today_closed=True` (the field that
 excuses it as "rule-fixed") only because `today_closed`'s `any(account(v, tracked, p)
 for p, v in today_hits)` check (mask_replay.py:705-706) is computed over *every* hit on
-the shared source line, and the bogus `HR_SECRET_KEY=placeholders` match on that same
+the shared source line, and the bogus ``HR_SECRET_KEY=` + `placeholders`` match on that same
 line makes the `any()` true. Traced directly: `account()` on the remove-key value itself
 returns `None` in every call. Its "rule-fixed" disposition is not independently
 established either — it rides on the same coincidental match.

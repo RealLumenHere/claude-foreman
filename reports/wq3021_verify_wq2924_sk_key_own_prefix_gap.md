@@ -54,7 +54,7 @@ in full.
    `token_engine_daemon.mask_rewrite()` (`probe_daemon.py`).
 5. Checked whether this is a wq#2924 regression: extracted `harness/masking.py` at the
    merge-base `6a28b8e` (pre-fix) and ran the same zero-gap probe against it
-   (`probe_sk_pre.py`). Identical leak, byte-for-byte: `'sk-ant-sk-ant-99999999999999999999'`
+   (`probe_sk_pre.py`). Identical leak, byte-for-byte: ``sk-ant-sk-ant-` + `99999999999999999999``
    → `'sk-ant-sk-ant-MASKED'` on BOTH pre-fix and post-fix code. **Not introduced by this
    PR.** By contrast, the non-zero-gap variant the PR's own tests DO cover
    (`sk-ant-` + 20 live chars + `sk-ant-` + 20 more, real body between the two prefixes)

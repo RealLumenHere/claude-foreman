@@ -30,9 +30,17 @@ WQ2687_VALUES = (
 # (sha256[:12] of the body, label, prefix, prefix+body); the string is split one
 # character into the prefix so reading this file pages nothing, and the seam-closed
 # view mask_replay.account reads makes the pair whole again.
+# wq#3065 extended that rule from "under the floor" to "reads as ordinary lowercase
+# words, at any length", after the bare English plural `placeholders` — exactly at the
+# floor — accounted to unrelated governance prose and closed a pri-1 rotation row on the
+# coincidence (ISSUE-LOG row 1012). One more of wq#2687's own values came back with it:
+# the twenty-letter sequential probe body under `SECRET=`, whose only bare occurrence was
+# in an unrelated test file. Same verdict as the rest of this module — wq#2687's masked
+# `sed` probe, not a credential, nothing rotated.
 WQ2687_PROSE = (
     ("333aa9c1f664", "cloudflare", "cfut", "cf" "ut-prefix"),
     ("131a95eb6af8", "cloudflare", "cfut_", "cf" "ut_-style"),
+    ("dd65eea0329d", "kv-secret", "SECRET=", "SEC" "RET=abcdefghijklmnopqrst"),
 )
 
 # wq#2765: every (hash-only) record the replay reproduces from wq#2687's faithful

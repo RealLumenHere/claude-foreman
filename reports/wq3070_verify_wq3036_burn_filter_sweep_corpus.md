@@ -52,7 +52,7 @@ the `wq3062` half is separately logged at row 1012. Unrelated to this PR's scope
 
 ### 3. Why the fixture actually produces a match (not just a docstring claim)
 
-The new line is `pending_rotation_secret = queued_epoch_signing_material` — a bare
+The new line is `pending_rotation_secret = ` + `queued_epoch_signing_material` — a bare
 identifier value, deliberately not a string literal. Traced why this isn't suppressed the
 same way the original corpus (`key = apply_key_allowlist(reg)` and kin) was:
 

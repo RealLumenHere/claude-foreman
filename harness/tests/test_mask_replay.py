@@ -184,13 +184,40 @@ def test_a_body_at_the_floor_still_accounts_without_its_prefix():
     """The prefix requirement has to stop at MIN_SECRET_LEN: the house mitigation splits a
     fixture at the prefix seam and leaves only the body committed (ISSUE-LOG rows 814/822,
     where the label wrapped onto the line above its value), so a body long enough to be a
-    credible secret must keep excusing itself with no prefix anywhere near it."""
-    body = "abcdefghijkl"
+    credible secret must keep excusing itself with no prefix anywhere near it.
+
+    wq#3065 swapped this test's body out of the sequential alphabet: twelve lowercase
+    letters is the shape the new rule reads as ordinary words, and it is not what a
+    credible secret at the floor looks like — every family PATTERNS knows carries digits,
+    mixed case or a fixed prefix. The property under test is unchanged.
+    """
+    body = "a9Fk2mQp7xLz"
     assert len(body) == mask_replay.TRUNCATED_FLOOR
     tree = {"reports/r.md": "TOKEN: " + body + "\n"}
     assert mask_replay.account(body, tree, prefix="TOKEN: ") == "reports/r.md:1"
     wrapped = {"reports/r.md": "TOKEN:\n" + body + "\n"}
     assert mask_replay.account(body, wrapped, prefix="TOKEN: ") == "reports/r.md:2"
+
+
+def test_an_ordinary_word_over_the_floor_is_only_accounted_with_its_prefix():
+    """wq#3065, the wq#2740 coincidence one character the other side of the floor.
+
+    `placeholders` is the real value behind set:b05f5da514d1's `HR_SECRET_KEY=` row, and
+    it is exactly TRUNCATED_FLOOR long, so the old `len(value) < FLOOR` guard never asked
+    for its prefix: it accounted to dispatcher/DESIGN.md:462, Frank-decision prose about
+    lane cap defaults that holds the same English plural, and wq#3061 closed a pri-1
+    rotation row on it. Raising the floor to `<=` would fix this string and miss
+    `configuration`; the discriminator is the shape of the body, not its length.
+    """
+    prefix, body = "HR_SECRET_" + "KEY= ", "placeholders"
+    assert len(body) == mask_replay.TRUNCATED_FLOOR
+    prose = {"dispatcher/DESIGN.md": "are " + body + " scaled to the lane cap\n"}
+    assert mask_replay.account(body, prose, prefix) is None
+    assert mask_replay.account(body, prose) == "dispatcher/DESIGN.md:1"
+    leaked = {"doc.md": "X = '" + prefix + body + "'\n"}
+    assert mask_replay.account(body, leaked, prefix) == "doc.md:1"
+    longer = "configuration-defaults"
+    assert mask_replay.account(longer, {"d.md": longer + "\n"}, "KEY=") is None
 
 
 def test_a_value_in_neither_screen_is_reported(tmp_path):
@@ -1657,6 +1684,27 @@ def test_a_line_today_truly_drops_is_still_excused():
     assert mask_replay.unaccounted(today_hits) == []
 
 
+def test_today_closed_still_excuses_a_whole_line_at_once():
+    """wq#3065 pins the scope of `today_closed` so the next reader sees it is deliberate.
+
+    `any()` over the LINE means one accounted hit excuses every other hit on it, however
+    unrelated — the second half of set:b05f5da514d1's defect. Scoping it to the record's
+    own span is right and is measured in reports/wq3065_*.md, but it surfaces 13 values
+    across wq#2687's and wq#3021's corpora that nothing else accounts, i.e. it settles
+    two other rotation rows; it ships with the review that pins them. Until then this
+    test states the behaviour that is live, so the follow-up has to come here to change
+    it rather than discovering the coupling by breaking two pin tests.
+    """
+    body, other = "a9Fk2mQp7xLz", "Zq4Wn8Tb1Vy6"
+    items = {"transcript:synthetic":
+             "A TOKEN: " + body + " and B PASSWORD: " + other + "\n"}
+    recs = mask_replay.replay(0, patterns=mask_replay.CURRENT_PATTERNS,
+                              tracked={"f.md": "TOKEN: " + body + "\n"}, items=items)
+    got = {r["prefix"]: (bool(r["accounted_in"]), r["today_closed"]) for r in recs}
+    assert got == {"TOKEN:": (True, True), "PASSWORD:": (False, True)}
+    assert mask_replay.unaccounted(recs) == [], "the line-wide any() excuses both"
+
+
 def test_legacy_table_is_not_the_live_one():
     """A future tightening of masking.PATTERNS must not silently rewrite history."""
     assert mask_replay.LEGACY_PATTERNS is not mask_replay.CURRENT_PATTERNS
@@ -1895,7 +1943,7 @@ def test_wq2687_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ2687_FIXTURES)
     values, prose = scope["WQ2687_VALUES"], scope["WQ2687_PROSE"]
     counts = (len(values), len(prose))
-    assert counts == (12, 2)
+    assert counts == (12, 3)
     assert _unpinned([*values, *prose]) == []
     assert masking.mask_text(text)[1] == []
 
@@ -2317,6 +2365,37 @@ def test_wq3036_corpus_burned_nothing():
     _, scope = _load_fixture_module(WQ3036_FIXTURES)
     fixture_shas = {v[0] for v in scope["WQ3036_VALUES"]}
     _assert_corpus_pinned(3036, WQ3036_FIXTURES, scope["WQ3036_RECORDS"], fixture_shas,
+                          patterns=mask_replay.CURRENT_PATTERNS)
+
+
+WQ3059_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq3059")
+WQ3059_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "wq3059_values.py")
+
+
+def test_wq3059_pins_are_their_hashes_and_read_silently():
+    text, scope = _load_fixture_module(WQ3059_FIXTURES)
+    values = scope["WQ3059_VALUES"]
+    count = len(values)
+    assert count == 2
+    assert _unpinned(values, {"f": text}) == []
+    assert masking.mask_text(text)[1] == []
+    assert [r[0] for r in masking._orphan_matches(text)] == []
+
+
+@pytest.mark.skipif(not os.path.isdir(WQ3059_RUN),
+                    reason="wq#3059's run dir is not on this host")
+def test_wq3059_corpus_burned_nothing():
+    """wq#3065's verdict, pinned: both values are wq#3059's own English notes about which
+    labels an upstream doc and a scratch Makefile carry, not credentials; nothing rotated.
+
+    This is also the probe wq#3061 never ran. wq#3061 read `accounted_in` off a bare
+    replay and never checked what it pointed at; with the fixture popped, whatever comes
+    loose here must be a sha this file explains, so the pin cannot ride a coincidence in
+    unrelated prose the way dispatcher/DESIGN.md:462 did.
+    """
+    _, scope = _load_fixture_module(WQ3059_FIXTURES)
+    fixture_shas = {v[0] for v in scope["WQ3059_VALUES"]}
+    _assert_corpus_pinned(3059, WQ3059_FIXTURES, scope["WQ3059_RECORDS"], fixture_shas,
                           patterns=mask_replay.CURRENT_PATTERNS)
 
 

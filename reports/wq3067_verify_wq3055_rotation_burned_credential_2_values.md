@@ -81,7 +81,7 @@ own prior review rather than asserting a fresh, untested judgment.
 **Self-trip check** — a fixture built to explain a kv-secret false-positive could itself
 carry a live kv-secret shape (the exact class row 1145/wq#3021 hit). The shipped commit
 had this bug in the *test's docstring* (not the fixture): `60f77b68`/`106a4213` originally
-wrote `"""wq#3055's verdict, pinned: HR_AUTH_PASSWORD= / HR_SECRET_KEY= placeholders..."""`,
+wrote `"""wq#3055's verdict, pinned: HR_AUTH_PASSWORD= / HR_SECRET_KEY= ` + `placeholders..."""`,
 gluing the two labels straight to `=` in prose. Follow-up `0c7af93c` (same day, still
 `Refs: wq#3055`) rewrote it to `"the HR auth-password and secret-key values are
 placeholders..."`, removing the label-adjacent-to-`=` shape. Confirmed the fixture file

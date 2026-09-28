@@ -455,17 +455,45 @@ def _find(needle, tracked):
 # leaves only the body on disk keeps working, ISSUE-LOG rows 814/822), and only a body too
 # short to mean anything alone now has to show up with its prefix attached. Fails toward
 # unaccounted, i.e. loud.
+#
+# wq#3065: the floor alone was not enough. The bare English plural `placeholders` is
+# EXACTLY TRUNCATED_FLOOR long, so it cleared that guard by one character and
+# self-accounted on dispatcher/DESIGN.md:462 — "lane cap defaults ... are placeholders
+# scaled to", governance prose holding no credential — and wq#3061 closed a pri-1
+# rotation row "committed text, no rotation" on it, the same mistake wq#2733 made.
+# Raising the floor to `<=` only moves the boundary one character (`configuration` is 13)
+# and would desync it from burn_filter.MIN_SECRET_LEN, so the floor stays where it is.
+# Scoring the POSITION of the hit instead (a word, a space, then the value = prose) does
+# not hold either: this tree says "placeholders" at the head of a wrapped docstring line
+# too (fworker.py:3307), which reads as a literal by any local rule. What is left is the
+# shape of the body. Every credential family PATTERNS knows carries digits, mixed case or
+# a fixed prefix; a body of nothing but lowercase words is a doc placeholder or prose, so
+# it accounts only with its prefix in front, at any length. Fails toward unaccounted.
+# Space and `-` join words in English; `_` and `.` join them in IDENTIFIERS, which is
+# what both real code and the house's own dummy vocabulary are made of
+# (`resolve_secret_from_env`, wq#3036's sweep corpus). Reading snake_case as prose costs
+# five of wq#3036's values their accounting and buys nothing: what fired this row was an
+# English word, and English does not use underscores.
+_PROSE_BODY = re.compile(r"[a-z]+(?:[- ][a-z]+)*\Z")
+
+
+def _needs_prefix(value):
+    """True when `value` is too ordinary to excuse a hit standing on its own."""
+    return len(value) < TRUNCATED_FLOOR or bool(_PROSE_BODY.match(value))
+
+
 def account(value, tracked, prefix=""):
     """`path:line` of the first committed file holding this exact string, else None.
 
-    A body under TRUNCATED_FLOOR is only accounted where `prefix` immediately precedes
-    it, never on its own. Falls back to the seam-closed view of each file, so a fixture
+    A body under TRUNCATED_FLOOR, or one made of nothing but lowercase words, is only
+    accounted where `prefix` immediately precedes it, never on its own (_needs_prefix).
+    Falls back to the seam-closed view of each file, so a fixture
     assembled from concatenated literals accounts for the whole value its runtime
     produces, then to the value minus a trailing `...` (masking.untruncated, wq#2648),
     then to that cut with the rule's `prefix` attached (masking.untruncated_whole,
     wq#2663).
     """
-    needle = prefix + value if prefix and len(value) < TRUNCATED_FLOOR else value
+    needle = prefix + value if prefix and _needs_prefix(value) else value
     hit = _find(needle, tracked)
     if hit:
         return hit
@@ -702,6 +730,12 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
             # when today's table stops firing on it altogether, or when whatever it
             # cuts today is itself already accounted for (tracked text, not this
             # exact-value comparison, which a recut always fails).
+            # wq#3065 measured this `any()` over the whole LINE: on one JSONL line of a
+            # run's transcript it lets any accounted hit excuse every other hit on the
+            # line, and 13 unaccounted values across wq#2687's and wq#3021's corpora
+            # are excused by nothing else today. Scoping it to the record's own span is
+            # a two-line change (reports/wq3065_*.md) that surfaces all 13 at once, so
+            # it ships with the review that pins them, not here.
             today_closed = not today_hits or any(
                 account(v, tracked, p) for p, v in today_hits)
             sha12 = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
