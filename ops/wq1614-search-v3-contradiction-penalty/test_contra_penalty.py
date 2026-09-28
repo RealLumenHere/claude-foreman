@@ -307,6 +307,52 @@ class ContraPenaltyTest(unittest.TestCase):
         self.assertFalse(asks('llama33-local config', *row))  # no predicate/value
         self.assertFalse(asks('thorough status', 'thor', 'fan_status', 'dead'))
 
+    def test_asks_about_dead_value_word_boundaries(self):
+        """wq#3038: the dead_value arm was a raw substring test, so the fixture's
+        short values fired from inside ordinary English. Both rows below ship in
+        the frozen 20260913 fixture; none of these queries asks about the dead
+        fact, and the subject arm alone lets every one of them through."""
+        mod = load_module(PATCHED, 'lr_dv', self.db, {'MEMORY_V4_W_CONTRA': '0.5'})
+
+        def asks(q, *row):
+            return mod._asks_about(set(mod._words(q)), q.lower(), *row)
+        thor = ('thor', 'fan_status', 'dead')
+        sia = ('sia', 'status', 'UP')
+        for q in ('thor migration deadline notes', 'thor deadlock investigation',
+                  'thor deadline'):
+            self.assertFalse(asks(q, *thor), q)
+        for q in ('sia backup schedule', 'sia group config notes',
+                  'sia support ticket triage', 'sia backup'):
+            self.assertFalse(asks(q, *sia), q)
+        # ...while the query that does ask about the dead value still fires.
+        self.assertTrue(asks('is thor fan still dead', *thor))
+        self.assertTrue(asks('is sia up', *sia))
+        # Multi-word values need the words contiguous, not merely both present.
+        lv = ('llama33-local', 'uptime', 'LIVE-VERIFIED')
+        self.assertTrue(asks('llama33-local live-verified', *lv))
+        self.assertFalse(asks('llama33-local live server that was verified', *lv))
+
+    def test_real_fixture_no_false_positive_on_english(self):
+        """Pinned probe from OUTSIDE the golden set (wq#2630): the golden gate is
+        blind to this -- REPORT.md §7 has the rule firing on 4 of 257 golden
+        queries, none of them a short dead_value -- so the falsifiable input has
+        to come from the frozen fixture itself, not from the corpus the fix was
+        tuned on."""
+        if not os.path.exists(FIXTURE):
+            self.skipTest(f'{FIXTURE} not present')
+        mod = load_module(PATCHED, 'lr_dv2', self.db,
+                          {'MEMORY_V4_W_CONTRA': '0.5',
+                           'MEMORY_V4_CONTRA_FIXTURE': FIXTURE})
+        all_ids = {r[0] for r in mod._fixture_rows()}
+        self.assertIn('ac50dd3d7452', all_ids)   # thor / fan_status / dead
+        self.assertIn('6d29bb85c4b9', all_ids)   # sia / status / UP
+        for q in ('thor migration deadline notes', 'thor deadlock investigation',
+                  'sia backup schedule', 'sia group config notes',
+                  'sia support ticket triage'):
+            self.assertEqual(mod._contradicted(None, all_ids, q), set(), q)
+        self.assertEqual(mod._contradicted(None, all_ids, 'is the thor fan dead'),
+                         {'ac50dd3d7452'})
+
     def test_real_fixture_scoping_on_the_rejected_qids(self):
         """Pinned probe: the frozen golden set (sha-checked by install.sh) and the
         frozen 20260913 fixture. qid 142 and 236 are the two the blanket multiply

@@ -75,7 +75,8 @@ adoption evidence; this document is the design and reach evidence.
 
 ## 5. Tests
 
-`python3 test_contra_penalty.py` — **13 passed**, 0 failed, no `minerva.db` access.
+`python3 test_contra_penalty.py` — **20 passed**, 0 failed, no `minerva.db` access (13 at
+wq#1614, 18 after wq#3017's scope tests, 20 after wq#3038's boundary tests — §8).
 
 Load-bearing ones:
 
@@ -128,3 +129,52 @@ either a word of its predicate or its dead value (`_asks_about`; README "Query-s
 `install.sh` installed the file (backup `lumen_recall2.py.bak.20260928_140308_pre_wq1614`),
 and `install.sh --verify` returns VERIFY OK. The verify markers are now the scope markers,
 so the rejected blanket version fails the check.
+
+## 8. dead_value word boundaries, 2026-09-28 (wq#3038): PASS (INERT), installed
+
+wq#3031's verify-pass CONTRADICTED §7. The three probes above all pass, but they cannot see
+the defect they were asked to cover: `_asks_about` matched `subject` on word boundaries and
+`dead_value` as a raw substring (`dv in q_lower`, a `len >= 2` floor and nothing else), and
+**the golden gate is structurally blind to the difference** — the rule fires on 4 of 257
+golden queries (§7) and none of the four carries a short dead value, so PASS/INERT was
+evidence about those four queries, not about the matching rule. That is the probe-can't-fail
+trap of wq#2290/wq#2630. Two of the fixture's own rows leak into ordinary English:
+`thor`/`fan_status`/`dead` fires on *"thor migration deadline notes"* and *"thor deadlock
+investigation"*; `sia`/`status`/`UP` on *"sia backup schedule"*, *"sia group config notes"*,
+*"sia support ticket triage"*. None asks about the dead fact; each one demotes the note anyway.
+
+Decision: option (a), tokenize. `dead_value` is now tokenized by the same `_words()` the
+subject arm uses and must appear as whole words, contiguously for multi-word values
+(`_phrase_in`). `W_CONTRA` stays `0.5` — untouched, per the ticket. Option (b) (accept as a
+bounded known limitation) was rejected: the demotion is soft, but the qid 142 failure §6
+recorded was also only a demotion, and it cost a rank-1 answer.
+
+Evidence, cheapest first:
+
+- **Per-query diff over all 257 golden queries** (`_contradicted()` under the frozen fixture,
+  shipped file vs fixed file): **0 changed**, fire count 4 → 4. The 7 leak queries above all
+  go from firing to empty; *"is the thor fan dead"*, *"is sia up"*, *"what is nephthys's
+  tailscale ip"* and *"is llama33-local still live-verified"* are unchanged.
+- **Unit tests**: 20 passed (was 18). The two new ones —
+  `test_asks_about_dead_value_word_boundaries` and
+  `test_real_fixture_no_false_positive_on_english` — **fail against the shipped wq#3017
+  file** and pass against the fix, so the probe can fail. Their input comes from the frozen
+  fixture, outside the golden corpus the rule was tuned on.
+- **Golden-set gate**: `gate_20260928_142606.json`, all 8 checks `ok`, `pass: true`. R@1
+  0.711, MRR 0.791, `trap@1` 0.25 → 0.25 (n=16), abstention 0.5 — identical baseline and
+  treatment, as the per-query diff predicted. Verdict INERT, same as §7.
+- **`install.sh --verify`**: VERIFY OK (exit 0), with a new marker `^def _phrase_in` that
+  **fails against the pre-fix live file** (`MISS marker ... VERIFY FAIL (1)`).
+
+`install.sh` ran end-to-end and installed the file (backup
+`lumen_recall2.py.bak.20260928_142606_pre_wq1614`); live and staged are byte-identical at
+`46692ecf…`. To get there, `BASE_SHA` was moved forward to the file wq#3017 installed
+(minerva `a9290e8`, `e5e15fcd…`) — the step-1 drift gate is also a re-entrancy lock, so a
+second patch of the bundle exits 3 before reaching the gate until the base is re-recorded,
+which is what install.sh's own refuse-message says to do. The wq#3038 delta ships as
+`lumen_recall2.wq3038.diff`; `lumen_recall2.wq1614.diff` still holds the whole change from
+the pre-wq1614 base that `test_contra_penalty.py` pins its identity test to. Logged as
+ISSUE-LOG rows 995 and 996.
+
+The INERT verdict is unchanged and so is the §7 conclusion: the remedy for `trap@1` is the
+contradiction index (wq#3030), not the weight.

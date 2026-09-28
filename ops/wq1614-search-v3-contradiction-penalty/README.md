@@ -41,6 +41,19 @@ enough either: `status` and `dead` are ordinary English. On the frozen golden se
 fires on 4 of 257 queries (qids 11, 12, 195, 235), and the blanket version left all four at
 the same rank. qids 142 and 236 match no row (`test_real_fixture_scoping_on_the_rejected_qids`).
 
+**All three arms match on word boundaries (wq#3038).** wq#3017's dead-value arm was a raw
+substring test (`dv in q_lower`) while its subject arm was tokenized, and the golden gate
+could not see the difference: the rule fires on 4 golden queries and none of them carries a
+short dead value. The fixture's own short values therefore found themselves inside ordinary
+English — `thor`/`fan_status`/`dead` fired on *"thor migration deadline notes"*,
+`sia`/`status`/`UP` on *"sia backup schedule"* — demoting notes the query never asked about,
+which is the qid 142 shape the subject arm exists to prevent. The value is now tokenized like
+the subject and must appear as whole words, contiguously for multi-word values
+(`_phrase_in`): *"llama33-local live-verified"* fires, *"llama33-local live server that was
+verified"* does not. `W_CONTRA` was not touched. Asserted by
+`test_asks_about_dead_value_word_boundaries` and `test_real_fixture_no_false_positive_on_english`,
+both of which fail against the wq#3017 file.
+
 **Not the freshness prior returning.** `W_REC` stays `0.00` — blanket freshness was measured
 to cost recall (the wq#574 block in `lumen_recall2.py`). This fires only on notes we hold
 positive, row-level evidence about. Asserted by `test_w_rec_stays_zero`.

@@ -24,17 +24,23 @@ if [ "${1:-}" = --verify ]; then
   # wq#3017: the query-scoped penalty, not the blanket multiply the gate rejected.
   vcontains "$LIVE" "^def _asks_about\(q_words, q_lower, subject, predicate, dead_value\)"
   vcontains "$LIVE" "_contradicted\(conn, set\(cand.keys\(\)\), query\)"
+  # wq#3038: dead_value matches on word boundaries, not as a raw substring.
+  vcontains "$LIVE" "^def _phrase_in\(q_seq, phrase_words\)"
   vdone
 fi
 
 GOLDEN=/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl
 GOLDEN_SHA=8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7
 FIXTURE=/home/lumen/minerva/eval/fixtures/note_contradictions_20260913.json
-# sha256 of the live /home/lumen/minerva/lumen_recall2.py (minerva main 42d8c2a,
-# after wq#2895's conn-close split) that lumen_recall2.py here was re-derived from
-# on 2026-09-28 (wq#3004). The first base, the minerva-ref mirror 31aa3504..., had
-# gone stale: shipping that copy would have reverted wq#2895.
-BASE_SHA=d185ce3c1e2bcf0c3259881ca8d3d9a8fef8b21c3635ab5f3e6435bf3ea1a1c7
+# sha256 of the live /home/lumen/minerva/lumen_recall2.py this bundle's staged copy
+# was re-derived from. wq#3038 moved it forward to minerva main a9290e8 -- the file
+# wq#3017 installed -- so the drift gate passes again and the golden-set gate can be
+# re-run on the dead_value word-boundary fix (lumen_recall2.wq3038.diff is that
+# delta; lumen_recall2.wq1614.diff remains the whole change from pre-wq1614
+# 42d8c2a/d185ce3c..., which is also what test_contra_penalty.py pins its identity
+# test to). Before wq#3038 this read d185ce3c... and the gate refused as "already
+# installed" (exit 3).
+BASE_SHA=e5e15fcdb4ade6e34cea17de8a6d2b91734ff1d58f0d1313478998bb0b276569
 W=${W_CONTRA:-0.5}
 
 say() { printf '\n== %s\n' "$*"; }
@@ -53,9 +59,9 @@ if [ "$live_sha" != "$BASE_SHA" ]; then
 REFUSING: live $LIVE does not match the patch base.
   live   $live_sha
   base   $BASE_SHA
-Either the penalty is already installed, or another lane moved the file. Re-derive
-the patch against the current file (lumen_recall2.wq1614.diff is the change) and
-re-record BASE_SHA before retrying. Nothing was modified.
+Either this bundle's fix is already installed, or another lane moved the file.
+Re-derive the patch against the current file (lumen_recall2.wq3038.diff is the
+delta from BASE_SHA) and re-record BASE_SHA before retrying. Nothing was modified.
 EOF
   exit 3
 fi
