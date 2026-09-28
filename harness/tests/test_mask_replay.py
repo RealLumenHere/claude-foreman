@@ -2237,7 +2237,7 @@ def test_wq3037_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ3037_FIXTURES)
     values = scope["WQ3037_VALUES"]
     count = len(values)
-    assert count == 2
+    assert count == 3
     assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
 
