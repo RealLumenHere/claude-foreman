@@ -75,7 +75,7 @@ def repo(tmp_path):
 def test_merged_clean_worktree_is_prunable(tmp_path, repo):
     root = tmp_path / "worktrees"
     add_worktree(repo, root, "wq9001-a1", "feat/wq9001-a1-done")
-    results = pw.run([str(root)], apply=False, fetch=False)
+    results = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert len(results) == 1
     assert results[0]["action"] == "prune"
 
@@ -83,7 +83,7 @@ def test_merged_clean_worktree_is_prunable(tmp_path, repo):
 def test_branch_with_unique_commits_is_skipped(tmp_path, repo):
     root = tmp_path / "worktrees"
     add_worktree(repo, root, "wq9002-a1", "feat/wq9002-a1-wip", ahead=True)
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "skip"
     assert "commits not in" in r["reason"]
 
@@ -91,7 +91,7 @@ def test_branch_with_unique_commits_is_skipped(tmp_path, repo):
 def test_dirty_worktree_is_skipped_even_if_merged(tmp_path, repo):
     root = tmp_path / "worktrees"
     add_worktree(repo, root, "wq9003-a1", "feat/wq9003-a1-dirty", dirty=True)
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "skip"
     assert "uncommitted" in r["reason"]
 
@@ -100,7 +100,7 @@ def test_locked_worktree_is_skipped(tmp_path, repo):
     root = tmp_path / "worktrees"
     wt = add_worktree(repo, root, "wq9004-a1", "feat/wq9004-a1-locked")
     git("worktree", "lock", wt, cwd=repo)
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "skip"
     assert "locked" in r["reason"]
 
@@ -108,7 +108,7 @@ def test_locked_worktree_is_skipped(tmp_path, repo):
 def test_stray_directory_without_gitfile_is_ignored(tmp_path):
     root = tmp_path / "worktrees"
     os.makedirs(root / "not-a-worktree")
-    assert pw.run([str(root)], apply=False, fetch=False) == []
+    assert pw.run([str(root)], apply=False, fetch=False, grace_days=0) == []
 
 
 def test_primary_checkout_is_never_a_candidate(tmp_path, repo):
@@ -128,7 +128,7 @@ def test_live_wq_claim_blocks_pruning(tmp_path, repo, monkeypatch):
     conn.commit()
     conn.close()
     monkeypatch.setattr(pw, "WQ_DB", str(db))
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "skip"
     assert "live wq claim" in r["reason"]
 
@@ -144,7 +144,7 @@ def test_expired_lease_does_not_block_pruning(tmp_path, repo, monkeypatch):
     conn.commit()
     conn.close()
     monkeypatch.setattr(pw, "WQ_DB", str(db))
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "prune"
 
 
@@ -173,7 +173,7 @@ def test_unparseable_lease_fails_closed_with_a_reason_that_says_so(tmp_path, rep
     conn.commit()
     conn.close()
     monkeypatch.setattr(pw, "WQ_DB", str(db))
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "skip"
     assert "unparseable" in r["reason"]
 
@@ -182,7 +182,7 @@ def test_missing_wq_db_fails_closed(tmp_path, repo, monkeypatch):
     root = tmp_path / "worktrees"
     add_worktree(repo, root, "wq9007-a1", "feat/wq9007-a1-nodb")
     monkeypatch.setattr(pw, "WQ_DB", str(tmp_path / "does-not-exist.db"))
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "skip"
     assert "fail closed" in r["reason"]
 
@@ -203,7 +203,7 @@ def test_live_slock_blocks_scratch_worktree(tmp_path, repo, monkeypatch):
     conn.commit()
     conn.close()
     monkeypatch.setattr(pw, "WQ_DB", str(db))
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "skip"
     assert "live slock" in r["reason"]
 
@@ -234,7 +234,7 @@ def test_unexpired_slock_blocks_scratch_worktree(tmp_path, repo, monkeypatch):
     root = scratch_worktree_with_slock(
         tmp_path, repo, monkeypatch, "myrepo-feat-wq9017-thing", "feat/wq9017-thing",
         wq_ts(hours=1))
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "skip"
     assert "live slock" in r["reason"]
 
@@ -245,7 +245,7 @@ def test_expired_slock_does_not_block_scratch_worktree(tmp_path, repo, monkeypat
     root = scratch_worktree_with_slock(
         tmp_path, repo, monkeypatch, "myrepo-feat-wq9018-thing", "feat/wq9018-thing",
         wq_ts(hours=-1))
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "prune"
     assert "no live slock" in r["reason"]
 
@@ -254,7 +254,7 @@ def test_scratch_worktree_with_no_owner_record_is_prunable(tmp_path, repo, monke
     root = tmp_path / "scratch" / "worktrees"
     add_worktree(repo, root, "myrepo-feat-orphan", "feat/orphan")
     monkeypatch.setattr(pw, "WQ_DB", str(tmp_path / "does-not-exist.db"))
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "prune"
     assert "no owner record" in r["reason"]
 
@@ -263,23 +263,56 @@ def test_apply_actually_removes_and_dry_run_does_not(tmp_path, repo):
     root = tmp_path / "worktrees"
     wt = add_worktree(repo, root, "wq9009-a1", "feat/wq9009-a1-done")
 
-    [r] = pw.run([str(root)], apply=False, fetch=False)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
     assert r["action"] == "prune"
     assert r["bytes"] > 0
     assert os.path.isdir(wt), "dry-run must never remove anything"
 
-    [r] = pw.run([str(root)], apply=True, fetch=False)
+    [r] = pw.run([str(root)], apply=True, fetch=False, grace_days=0)
     assert r["action"] == "prune"
     assert r["removed"] is True
     assert r["bytes"] > 0, "size must be measured before removal, not after"
     assert not os.path.isdir(wt)
 
 
+def test_merged_worktree_within_grace_period_is_skipped(tmp_path, repo):
+    """wq#2909: a branch that merged moments ago must not be pruned under the
+    default grace period, even though it already passes clean+merged."""
+    root = tmp_path / "worktrees"
+    add_worktree(repo, root, "wq9020-a1", "feat/wq9020-a1-just-merged")
+    [r] = pw.run([str(root)], apply=False, fetch=False)  # default grace_days=7
+    assert r["action"] == "skip"
+    assert "grace period" in r["reason"]
+
+
+def test_merged_worktree_past_grace_period_is_prunable(tmp_path, repo, monkeypatch):
+    """Same branch, but its tip commit date is monkeypatched to 8 days ago —
+    old enough to clear a 7-day grace period."""
+    root = tmp_path / "worktrees"
+    add_worktree(repo, root, "wq9021-a1", "feat/wq9021-a1-old-merge")
+    real_merge_age_days = pw.merge_age_days
+    monkeypatch.setattr(pw, "merge_age_days",
+                         lambda repo, branch: 8.0 if branch == "feat/wq9021-a1-old-merge"
+                         else real_merge_age_days(repo, branch))
+    [r] = pw.run([str(root)], apply=False, fetch=False)
+    assert r["action"] == "prune"
+
+
+def test_unreadable_commit_date_fails_closed(tmp_path, repo, monkeypatch):
+    root = tmp_path / "worktrees"
+    add_worktree(repo, root, "wq9022-a1", "feat/wq9022-a1-noage")
+    monkeypatch.setattr(pw, "merge_age_days", lambda repo, branch: None)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
+    assert r["action"] == "skip"
+    assert "fail closed" in r["reason"]
+
+
 def test_full_cli_dry_run_reports_json(tmp_path, repo, capsys):
     root = tmp_path / "worktrees"
     add_worktree(repo, root, "wq9010-a1", "feat/wq9010-a1-done")
     log = tmp_path / "log.jsonl"
-    rc = pw.main(["--roots", str(root), "--no-fetch", "--json", "--log", str(log)])
+    rc = pw.main(["--roots", str(root), "--no-fetch", "--grace-days", "0",
+                  "--json", "--log", str(log)])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["summary"]["prunable"] == 1

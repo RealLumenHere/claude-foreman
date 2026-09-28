@@ -21,8 +21,12 @@ prunes it ONLY if all of:
       with an unexpired lease) or a live slock (lumen-pr's `.owners/<name>`
       record under scratch/worktrees, holder has an unexpired row in `slocks`
       or `slocks_ro`).
-Any read failure on the liveness checks (b/d) fails CLOSED — treated as live,
-never pruned — since an unreadable answer is not evidence of a safe one.
+  (e) the branch tip commit is at least `--grace-days` old (default 7,
+      wq#2909) — a same-day merge gets one week to be reverted before its
+      worktree is gone for good.
+Any read failure on the liveness checks (b/d) or the age check (e) fails
+CLOSED — treated as live/too-new, never pruned — since an unreadable answer is
+not evidence of a safe one.
 
     prune_worktrees.py                    # dry run, human summary
     prune_worktrees.py --json             # dry run, full JSON to stdout
@@ -183,6 +187,25 @@ def is_merged(repo, branch, default):
     return rc == 0
 
 
+def merge_age_days(repo, branch):
+    """Days since `branch`'s tip commit, or None if the commit date can't be
+    read (fails closed at the call site — an unknown age is never old enough).
+    wq#2909: the janitor pruned a merged+clean worktree the moment `is_merged`
+    went true, with no window for a same-day revert to still find it. Using the
+    branch tip's own commit date (not wall-clock "run time") means a worktree
+    whose branch merged a week ago reads as a week old on every run, not just
+    the runs that happen to fire after the wait."""
+    rc, out, _ = sh(["git", "-C", repo, "log", "-1", "--format=%ct", branch])
+    if rc != 0 or not out.strip():
+        return None
+    try:
+        committed = datetime.datetime.fromtimestamp(int(out.strip()), datetime.timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+    age = _now_utc_naive() - committed.replace(tzinfo=None)
+    return age.total_seconds() / 86400.0
+
+
 # ── liveness (criterion (b): not a live wq claim or slock) ──────────────────
 
 def _db_conn():
@@ -261,7 +284,7 @@ def slock_is_live(agent):
 
 # ── classification ───────────────────────────────────────────────────────────
 
-def classify(path, repo, registry, default, scratch_root):
+def classify(path, repo, registry, default, scratch_root, grace_days):
     """(action, reason) — action is 'prune' or 'skip'. Every skip path is a
     distinct, logged reason; nothing falls through silently."""
     info = registry.get(path)
@@ -277,6 +300,12 @@ def classify(path, repo, registry, default, scratch_root):
         return "skip", "uncommitted or untracked changes present"
     if not is_merged(repo, info["branch"], default):
         return "skip", f"branch {info['branch']!r} has commits not in origin/{default}"
+    age = merge_age_days(repo, info["branch"])
+    if age is None:
+        return "skip", f"branch {info['branch']!r} commit date unreadable — fail closed"
+    if age < grace_days:
+        return "skip", (f"merged into origin/{default}, only {age:.1f}d old "
+                         f"(grace period {grace_days}d)")
 
     name = os.path.basename(path)
     m = FWORKER_WT_RE.match(name)
@@ -336,7 +365,7 @@ def scratch_root_for(path, roots):
     return None
 
 
-def run(roots, apply, fetch):
+def run(roots, apply, fetch, grace_days=7):
     by_repo = discover_worktrees(roots)
     results = []
     for repo, paths in sorted(by_repo.items()):
@@ -346,7 +375,7 @@ def run(roots, apply, fetch):
         registry = worktree_registry(repo)
         for path in paths:
             action, reason = classify(path, repo, registry, default,
-                                       scratch_root_for(path, roots))
+                                       scratch_root_for(path, roots), grace_days)
             rec = {"path": path, "repo": repo, "action": action, "reason": reason}
             if action == "prune":
                 # Measured BEFORE any removal — in --apply mode the directory is
@@ -374,11 +403,15 @@ def main(argv=None):
                      help="actually run `git worktree remove`; default is dry-run")
     ap.add_argument("--no-fetch", action="store_true",
                      help="skip `git fetch --prune origin`; use current local refs")
+    ap.add_argument("--grace-days", type=float, default=7,
+                     help="wq#2909: only prune a merged+clean worktree once its "
+                          "branch tip is at least this many days old (default 7)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--log", default=LOG_PATH)
     args = ap.parse_args(argv)
 
-    results = run(args.roots, args.apply, fetch=not args.no_fetch)
+    results = run(args.roots, args.apply, fetch=not args.no_fetch,
+                  grace_days=args.grace_days)
     pruned = [r for r in results if r["action"] == "prune"]
     size_total = sum(r.get("bytes", 0) for r in pruned)
 

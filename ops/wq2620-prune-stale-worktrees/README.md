@@ -12,6 +12,7 @@ python3 prune_worktrees.py                    # dry run, human summary
 python3 prune_worktrees.py --json             # dry run, full JSON
 python3 prune_worktrees.py --apply            # actually `git worktree remove`
 python3 prune_worktrees.py --no-fetch         # skip `git fetch --prune`, use local refs
+python3 prune_worktrees.py --grace-days N     # wait N days after merge before pruning (default 7)
 ```
 
 A worktree is only pruned if **all** of:
@@ -25,7 +26,14 @@ A worktree is only pruned if **all** of:
 3. **Registered and unlocked** — present in `git worktree list --porcelain` (the
    authoritative source; the directory listing alone never confirms prunability),
    not `locked`, not `detached`.
-4. **No live claim on it** —
+4. **Past the grace period** — the branch tip commit is at least `--grace-days`
+   old (default **7**, wq#2909). A branch that merged moments ago is left
+   alone even though it already passes checks 1-3, so a same-day revert still
+   finds its worktree intact. The commit date is read straight off the branch
+   tip (`git log -1 --format=%ct`), not wall-clock run time, so the age is the
+   same on every run regardless of when the timer happens to fire. An
+   unreadable commit date fails closed — skipped, not guessed old enough.
+5. **No live claim on it** —
    - `/home/lumen/worktrees/wqNNNN-aN`: ticket `NNNN` in the wq db
      (`/home/lumen/agents/work-queue/queue.db`) is not `status='claimed'` with an
      unexpired lease.
@@ -34,8 +42,9 @@ A worktree is only pruned if **all** of:
      `slocks_ro`. No owner record at all (predates the ownership guard) means no
      claim to check — it still has to clear checks 1-3.
 
-Any read failure on the liveness check (db missing, unparseable) **fails closed**:
-treated as live, never pruned. An unreadable answer is not evidence of a safe one.
+Any read failure on the liveness check (db missing, unparseable) or the commit-date
+check **fails closed**: treated as live (or too new), never pruned. An unreadable
+answer is not evidence of a safe one.
 
 Lease and slock expiry times are read with `_DB_TS_FMT` (`%Y-%m-%d %H:%M:%S`), the
 format `bin/wq:145` and `bin/slock:43` actually write. Keep it separate from
@@ -50,14 +59,17 @@ would have/did happen.
 
 ## Tests
 
-`python3 -m pytest tests -q` — 17 tests, each against a real throwaway git repo (no
+`python3 -m pytest tests -q` — 20 tests, each against a real throwaway git repo (no
 git mocking): merged+clean prunes, unmerged/dirty/locked all skip, a stray directory
 with no `.git` file is ignored, a primary checkout is never a candidate, a live wq
 claim or slock blocks pruning, an expired lease or slock does not, an unparseable one
 skips and says so, a missing wq db fails closed, and `--apply` actually removes while
 dry-run never touches disk. Every timestamp fixture is written in wq's stored format,
 spelled out in the test file rather than imported from the pruner, so a fixture cannot
-drift along with the constant it is supposed to check.
+drift along with the constant it is supposed to check. wq#2909 added three more: a
+just-merged branch stays inside the default 7-day grace period, the same branch
+prunes once its tip is monkeypatched 8 days old, and an unreadable commit date fails
+closed.
 
 ## Production dry run, 2026-09-25
 
