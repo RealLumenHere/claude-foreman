@@ -1,0 +1,11 @@
+[Unit]
+Description=LiteLLM completion probe — one real chat completion per api_base host (wq#3169)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/bin/litellm-completion-probe
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+Nice=5

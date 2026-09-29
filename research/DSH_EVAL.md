@@ -58,7 +58,10 @@ Wrapping a 2-second deterministic cron job in an event-sourced agent runtime buy
 a telemetry surface, and changes zero outputs. "Unified framework" is already true where it matters: the graph-shaped
 stages are on LangGraph + Langfuse + LiteLLM. The un-unified part is that intel/signal are plain scripts, and that is fine.
 
-**Call-volume reality for any tool loop.** Researchers run on free tiers (Cerebras / SambaNova / Mistral / OpenRouter).
+**Call-volume reality for any tool loop.** Researchers run on free tiers (Cerebras / DeepSeek / OpenRouter). SambaNova
+was fully retired fleet-wide in wq#381 (`research/VENDOR_KEY_ROTATION.md:44`); `lumen-fleet-mistral.service` still
+runs but has routed to `deepseek-v4-flash` since wq#2903/wq#2927, not the Mistral API
+(`agent/lumen_fleet_researcher.py:52`), and `litellm_config.yaml` carries no Mistral model rung (wq#3169).
 133 tasks/day at ~1 call each today. A general agent loop at 6-10 model calls per task is ~800-1,300 calls/day against
 the same rate limits (estimate; the multiplier is what the pilot measures). A bounded 2-hop verify is ~3x, not ~10x.
 
