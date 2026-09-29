@@ -11,8 +11,9 @@ Each renderer rewrites ONLY the lines between a `BEGIN GENERATED inference_nodes
 carries the two sentinels as `_generated_begin` / `_generated_end` string keys (`_` keys are
 notes to dispatch_config_lint and are skipped by dispatcher/local_capacity.py).
 
-governor/governor_core.py owns the frozen prefix tuple and is never written; harness/concurrency.py
-derives from models.yaml and needs no renderer (a sixth copy is the bug this work exists to kill).
+governor/governor_core.py and harness/concurrency.py are never written: both derive from models.yaml
+(the governor unioned with its frozen floor, wq#2256) and need no renderer (a sixth copy is the bug
+this work exists to kill).
 The litellm gateway and key-allowlist targets are wq#2251 (C3).
 
 CLI (exit 0 clean, 1 error, 2 drift under --check):
@@ -179,7 +180,7 @@ def prefix_literal(prefixes):
 
 
 def render_prefix_lists(reg, root):
-    """{path: text} for the four editable tuples. governor/governor_core.py is the frozen fifth."""
+    """{path: text} for the four editable tuples. governor/governor_core.py derives its own."""
     prefixes = tuple(reg.get("governor_prefixes") or ())
     if not prefixes:
         raise RenderError("governor_prefixes: must be a non-empty list")

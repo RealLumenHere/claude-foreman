@@ -1,0 +1,18 @@
+# wq#2256 fixture: a models.yaml a fourth local family would produce. Pinned input for
+# harness/tests/test_prefix_list_parity.py; do not point it at the live research/models.yaml.
+models:
+  - id: gemma3-27b            # the fourth family: matches no frozen governor prefix
+    status: LIVE-local
+    pools: [local]
+  - id: claude-sonnet-5       # a real Anthropic id, normal pools
+    status: LIVE
+    pools: [session, weekly_all]
+  - id: claude-opus-5-5       # an Anthropic id wrongly claiming the local pool
+    status: LIVE-local
+    pools: [local]
+  - id: mistral-large         # a paid cloud row outside the exempt pools
+    status: LIVE
+    pools: [cloud]
+  - id: gemini-3-flash        # staged, not deployed
+    status: DARK
+    pools: [cheap_cloud]

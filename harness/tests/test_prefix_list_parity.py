@@ -1,6 +1,7 @@
 """Design §8 T3 (no sixth copy, the five agree) and T4 (governor-exemption round trip); wq#2250.
 The five LOCAL_POOL_MODELS literals are imported for real and compared with the registry's render.
 """
+import ast
 import copy
 import importlib
 import os
@@ -43,8 +44,11 @@ def test_editable_copy_equals_registry_render(reg, module):
 
 
 def test_fworker_and_governor_copies_equal_registry_render(reg):
+    """wq#2256: the governor derives its set from models.yaml; the frozen floor adds nothing today."""
     assert fworker.LOCAL_POOL_MODELS == _rendered(reg)
-    assert governor_core.LOCAL_POOL_MODELS == _rendered(reg)
+    assert set(governor_core._registry_local_ids()) == set(concurrency.LOCAL_POOL_MODELS)
+    assert set(governor_core.LOCAL_POOL_MODELS) == set(concurrency.LOCAL_POOL_MODELS)
+    assert set(governor_core._FROZEN_LOCAL_POOL) <= set(governor_core.LOCAL_POOL_MODELS)
 
 
 def test_concurrency_derived_set_agrees_without_being_generated(reg):
@@ -54,14 +58,16 @@ def test_concurrency_derived_set_agrees_without_being_generated(reg):
     assert not LITERAL.search(open(os.path.join(HARNESS_DIR, "concurrency.py")).read())
 
 
-def test_exactly_five_files_define_the_literal():
+def test_four_editable_literals_plus_one_derived_governor_site():
     tracked = subprocess.run(["git", "ls-files", "*.py"], cwd=REPO, capture_output=True, text=True,
                              check=True).stdout.split()
     sites = sorted(f for f in tracked
                    if "/tests/" not in f and not os.path.basename(f).startswith("test_")
                    and LITERAL.search(open(os.path.join(REPO, f)).read()))
-    assert sites == sorted((GOVERNOR_FILE,) + node_render.PREFIX_FILES), \
+    assert sites == sorted(node_render.PREFIX_FILES), \
         "a sixth LOCAL_POOL_MODELS copy (or a lost one): derive it, do not paste it"
+    gov = open(os.path.join(REPO, GOVERNOR_FILE)).read()
+    assert re.search(r"^LOCAL_POOL_MODELS = local_pool_models\(\)$", gov, re.M)
 
 
 def test_prefix_copies_stay_literal_tuples_not_imports():
@@ -130,5 +136,74 @@ def test_at_sign_as_node_separator_fails_lint_quoting_the_reason(reg):
         def tailscale_ip(self, name):
             return {n: v["tailscale_ip"] for n, v in bad["nodes"].items()}.get(name)
 
-    found = ir.lint(bad, inventory=Inv(), local_ceiling=12, governor=tuple(reg["governor_prefixes"]))
+    found = ir.lint(bad, inventory=Inv(), local_ceiling=12, governor=governor_core.is_local_model)
     assert any(f.level == "error" and "local_capacity.py:51" in f.msg for f in found)
+
+
+# --- wq#2256: the governor reads the registry --------------------------------------------------
+FOURTH = os.path.join(HARNESS_DIR, "tests", "fixtures", "wq2256_models_fourth_family.yaml")
+FAMILY = "gemma3-27b"
+
+
+class _Inv:
+    def plugs(self):
+        return {"hathor": "P3", "nephthys": "P2", "isis": "p1"}
+
+    def tailscale_ip(self, name):
+        return {"hathor": "100.80.71.13", "nephthys": "100.98.74.87", "isis": "100.100.129.24"}.get(name)
+
+
+def _import_governor(models_yaml):
+    """Import governor_core the way foreman_usaged does (bare module, governor/ on sys.path)."""
+    code = ("import governor_core as g; print(repr((g.LOCAL_POOL_MODELS, "
+            f"g.is_local_model('{FAMILY}.seshat@low'), g.is_local_model('claude-opus-5-5'))))")
+    env = dict(os.environ, FOREMAN_MODELS_YAML=models_yaml)
+    out = subprocess.run([sys.executable, "-c", code], cwd=os.path.join(REPO, "governor"), env=env,
+                         capture_output=True, text=True, check=True).stdout
+    return ast.literal_eval(out)
+
+
+def test_fourth_family_matching_no_frozen_prefix_is_governor_exempt():
+    assert not any(FAMILY.startswith(p) for p in governor_core._FROZEN_LOCAL_POOL)
+    pool, fourth, claude = _import_governor(FOURTH)
+    assert FAMILY in pool and fourth is True and claude is False
+    assert set(governor_core._FROZEN_LOCAL_POOL) <= set(pool)
+
+
+def test_fourth_family_lints_clean_against_its_models_yaml(reg):
+    r = copy.deepcopy(reg)
+    r["families"][FAMILY] = dict(r["families"]["hathor-llama8b"], blob="gemma3:27b")
+    r["governor_prefixes"].append(FAMILY)
+    gov = ir.governor_exempt(models_yaml=FOURTH)
+    assert gov(FAMILY) and gov(f"{FAMILY}.seshat@low")
+    assert [f for f in ir.lint(r, inventory=_Inv(), local_ceiling=12, governor=gov) if f.level == "error"] == []
+    # the same registry against today's models.yaml still refuses it: the row is what exempts it
+    assert any(FAMILY in f.msg for f in ir.lint(r, inventory=_Inv(), local_ceiling=12,
+                                                 governor=governor_core.is_local_model)
+               if f.level == "error" and f.rule == "governor-prefix")
+
+
+def test_claude_and_cloud_rows_stay_non_exempt():
+    pool = governor_core.local_pool_models(FOURTH)
+    gov = ir.governor_exempt(models_yaml=FOURTH)
+    for mid in ("claude-sonnet-5", "claude-opus-5-5", "claude-opus-5-5@high", "mistral-large", "gemini-3-flash"):
+        assert mid not in pool, mid
+        assert not gov(mid), mid
+        assert not governor_core.is_local_model(mid), mid
+
+
+def test_claude_family_in_the_registry_fails_lint(reg):
+    r = copy.deepcopy(reg)
+    r["families"]["claude-opus-5-5"] = dict(r["families"]["hathor-llama8b"], blob="x.gguf")
+    found = ir.lint(r, inventory=_Inv(), local_ceiling=12, governor=ir.governor_exempt(models_yaml=FOURTH))
+    assert any("claude-opus-5-5" in f.msg for f in found if f.level == "error" and f.rule == "governor-prefix")
+
+
+@pytest.mark.parametrize("content", [None, "models: [\n  - id: [unclosed\n", "just a string\n"])
+def test_unreadable_models_yaml_falls_back_to_the_frozen_tuple(tmp_path, content):
+    path = str(tmp_path / "models.yaml")
+    if content is not None:
+        open(path, "w").write(content)
+    assert governor_core.local_pool_models(path) == governor_core._FROZEN_LOCAL_POOL
+    pool, fourth, claude = _import_governor(path)
+    assert pool == governor_core._FROZEN_LOCAL_POOL and fourth is False and claude is False

@@ -1,12 +1,14 @@
 """foreman-usaged core logic: pure functions for floor evaluation, limit
 parsing, and the LIMIT-vs-CRASH-style classification of a live rate_limit
-event. No I/O here so it can be unit tested without a network or filesystem.
+event. No I/O here so it can be unit tested without a network or filesystem,
+except the one never-raising models.yaml read that builds LOCAL_POOL_MODELS (wq#2256).
 
 Ref: BUILD_PLAN.md §T1, PROBE_RESULTS.md P3a, CLAUDE_CLI_INTERNALS.md §D/§E.
 """
 from __future__ import annotations
 
 import datetime as _dt
+import os
 
 DEFAULT_FLOORS = {
     "session_min_remaining_pct": 20,
@@ -96,7 +98,39 @@ def is_fable_model(model):
 # nephthys-qwen3-14b (fallback brain only, not a wq worker per models.yaml).
 # local-worker (wq#2565): the LiteLLM group alias is dispatchable, so it must be
 # governor-exempt like the family ids it resolves to.
-LOCAL_POOL_MODELS = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker")
+# wq#2256: the exempt set is the registry's local/cheap_cloud rows unioned with this frozen
+# floor, so a fourth family needs a reviewed models.yaml row, not a governor edit, and an
+# unreadable registry falls back to exactly this tuple (research/WQ2256_GOVERNOR_REGISTRY_DESIGN.md).
+_FROZEN_LOCAL_POOL = ("deepseek-v4-flash", "qwen36-local", "nephthys-qwen14b", "hathor-llama8b", "local-worker")
+MODELS_YAML = os.environ.get(
+    "FOREMAN_MODELS_YAML",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "research", "models.yaml"))
+_EXEMPT_POOLS = ("local", "cheap_cloud")
+# An Anthropic id is never exempt, whatever pool a models.yaml row claims for it.
+_NEVER_EXEMPT = ("claude", "anthropic", "fable")
+
+
+def _registry_local_ids(path=None):
+    """Ids of models.yaml rows in an exempt pool, `status: DARK` skipped (same rule as
+    harness/concurrency.py `_pool_models`). () on any failure: never raises at import."""
+    try:
+        import yaml
+        with open(path or MODELS_YAML) as f:
+            rows = (yaml.safe_load(f) or {}).get("models") or []
+        ids = (str(m["id"]) for m in rows
+               if isinstance(m, dict) and m.get("id")
+               and any(p in (m.get("pools") or []) for p in _EXEMPT_POOLS)
+               and str(m.get("status", "")).upper() != "DARK")
+        return tuple(i for i in ids if not any(s in i.lower() for s in _NEVER_EXEMPT))
+    except Exception:  # noqa: BLE001 — a bad registry must not take the governor down
+        return ()
+
+
+def local_pool_models(path=None):
+    return tuple(dict.fromkeys(_FROZEN_LOCAL_POOL + _registry_local_ids(path)))
+
+
+LOCAL_POOL_MODELS = local_pool_models()
 
 
 def is_local_model(model):

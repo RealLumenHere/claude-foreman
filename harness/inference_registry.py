@@ -8,7 +8,7 @@ helper `local_model_ids()` falls back to the caller's tuple when the file or PyY
 
 CLI (exit 0 clean, 1 lint errors):  python3 harness/inference_registry.py lint [--path P]
 """
-import ast
+import importlib.util
 import json
 import os
 import subprocess
@@ -66,19 +66,20 @@ def model_ids(reg):
     return tuple(dict.fromkeys(ids))
 
 
-def governor_prefixes(path=None):
-    """The governor's LOCAL_POOL_MODELS tuple, parsed with ast (governor_core is import-fragile
-    by design and is never imported). None when the file or the assignment is unreadable."""
+def governor_exempt(path=None, models_yaml=None):
+    """governor_core.is_local_model, loaded by path under a private module name (governor_core
+    is a bare module off harness's sys.path), its exempt set read from `models_yaml` (default:
+    the governor's own). None when the file cannot be loaded. wq#2256: the governor's exempt set
+    now comes from models.yaml, so the lint asks the governor itself."""
     try:
-        with open(path or GOVERNOR_CORE) as f:
-            tree = ast.parse(f.read())
-        for node in tree.body:
-            if (isinstance(node, ast.Assign) and any(
-                    isinstance(t, ast.Name) and t.id == "LOCAL_POOL_MODELS" for t in node.targets)):
-                return tuple(ast.literal_eval(node.value))
-    except (OSError, SyntaxError, ValueError):
-        pass
-    return None
+        spec = importlib.util.spec_from_file_location("_lint_governor_core", path or GOVERNOR_CORE)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        if models_yaml:
+            mod.LOCAL_POOL_MODELS = mod.local_pool_models(models_yaml)
+        return mod.is_local_model
+    except Exception:  # noqa: BLE001 — an unloadable governor is a lint warning, not a crash
+        return None
 
 
 def dispatcher_local_ceiling(path=None):
@@ -157,13 +158,26 @@ def _lint_families(reg, prefixes, out):
                 "model may not hide under an old name (design §4)"))
 
 
-def _lint_ids(reg, prefixes, out):
+def _lint_exempt(reg, is_exempt, out):
+    """Every registry id and rendered prefix must be exempt under the governor's own predicate;
+    otherwise the governor bills it to Anthropic while the dispatcher routes it locally."""
     for mid in model_ids(reg):
-        if not any(str(mid).startswith(p) for p in prefixes):
+        if not is_exempt(str(mid)):
             out.append(Finding(
                 "error", "governor-prefix",
-                f"model id {mid!r} does not start with a governor prefix {list(prefixes)}: the "
-                "governor would bill it to Anthropic as a cloud model (governor/governor_core.py:97)"))
+                f"model id {mid!r} is not governor-exempt: the governor would bill it to Anthropic "
+                "as a cloud model; add a models.yaml row with pools: [local] "
+                "(governor/governor_core.py is_local_model)"))
+    for prefix in reg.get("governor_prefixes") or ():
+        if not is_exempt(str(prefix)):
+            out.append(Finding(
+                "error", "governor-prefix",
+                f"governor_prefixes entry {prefix!r} is not governor-exempt: the rendered copies "
+                "would treat as local a model the governor bills (governor/governor_core.py is_local_model)"))
+
+
+def _lint_ids(reg, out):
+    for mid in model_ids(reg):
         if "@" in str(mid):
             out.append(Finding(
                 "error", "governor-prefix",
@@ -269,22 +283,20 @@ def _lint_ceiling(nodes, local_ceiling, out):
 
 def lint(reg, inventory=None, local_ceiling=None, governor=None):
     """Findings for a loaded registry. `inventory` needs plugs() and tailscale_ip(name) (default:
-    the fleet-inv CLI); `local_ceiling` / `governor` default to the repo's dispatcher config and
-    governor tuple. Errors (level == 'error') are lint failures; warnings are unchecked rules."""
+    the fleet-inv CLI); `local_ceiling` defaults to the repo's dispatcher config; `governor` is an
+    is-exempt predicate defaulting to the repo's governor_core.is_local_model. Errors
+    (level == 'error') are lint failures; warnings are unchecked rules."""
     out = []
     prefixes = tuple(reg.get("governor_prefixes") or ())
     if not prefixes:
         out.append(Finding("error", "schema", "governor_prefixes: must be a non-empty list"))
-    actual = governor if governor is not None else governor_prefixes()
-    if actual is None:
-        out.append(Finding("warn", "governor-prefix", "governor tuple unreadable; prefixes not compared"))
-    elif set(actual) != set(prefixes):
-        out.append(Finding(
-            "error", "governor-prefix",
-            f"governor_prefixes {list(prefixes)} != governor/governor_core.py:97 {list(actual)}; the "
-            "registry may not add or drop a prefix the governor does not have (design §4)"))
+    is_exempt = governor if governor is not None else governor_exempt()
+    if is_exempt is None:
+        out.append(Finding("warn", "governor-prefix", "governor unloadable; exemption not checked"))
+    else:
+        _lint_exempt(reg, is_exempt, out)
     _lint_families(reg, prefixes, out)
-    _lint_ids(reg, prefixes, out)
+    _lint_ids(reg, out)
     nodes = reg.get("nodes")
     if not isinstance(nodes, dict) or not nodes:
         out.append(Finding("error", "schema", "nodes: must be a non-empty mapping"))

@@ -41,7 +41,6 @@ PROBE_DEADLINE_S, PROBE_INTERVAL_S = 300, 5
 GATEWAY_DEADLINE_S, GATEWAY_INTERVAL_S = 180, 5
 DRAIN_DEADLINE_S, DRAIN_POLL_S = 1800, 10
 RAM_TOLERANCE = 0.10   # MemTotal is below installed RAM
-NEW_FAMILY_TICKET = "wq#2256"
 LIVE_LIKE = ("live", "draining", "cold")
 
 
@@ -208,9 +207,15 @@ def _capacity(ctx):
                                         probe=ctx.ports.probe, cooldown_path=ctx.cooldown_path), cfg
 
 
+def _governor(ctx):
+    """The governor's is_local_model over this root's models.yaml, the file the render writes."""
+    return ir.governor_exempt(models_yaml=os.path.join(ctx.root, nr.MODELS_YAML))
+
+
 def _lint_errors(ctx, reg):
     ceiling = ir.dispatcher_local_ceiling(os.path.join(ctx.root, nr.DISPATCHER_CONFIG))
-    return [str(f) for f in ir.lint(reg, inventory=ctx.ports, local_ceiling=ceiling) if f.level == "error"]
+    return [str(f) for f in ir.lint(reg, inventory=ctx.ports, local_ceiling=ceiling, governor=_governor(ctx))
+            if f.level == "error"]
 
 
 def _verify_targets(ctx, reg):
@@ -292,9 +297,10 @@ def precheck_add(ctx, reg, node, family, slots, power_policy, source):
         return [f"family {family!r} is not in the registry (families: {sorted(fams)})"], {}
     prefixes = list(reg.get("governor_prefixes") or [])
     if not any(family.startswith(p) for p in prefixes):
-        fails.append(f"family {family!r} starts with none of the governor prefixes {prefixes}: the governor would "
-                     "bill it to Anthropic as a cloud model (governor/governor_core.py:97, design §4). "
-                     f"Escape hatch: {NEW_FAMILY_TICKET}")
+        fails.append(f"family {family!r} starts with none of the governor_prefixes {prefixes}: the rendered "
+                     "LOCAL_POOL_MODELS copies would route it as a cloud model (design §4). A new family: add it to "
+                     "governor_prefixes in research/inference_nodes.yaml; the render's models.yaml row "
+                     "(pools: [local]) makes the governor exempt it (wq#2256)")
     if not NODE_RE.match(node):
         fails.append(f"node name {node!r} breaks design §4: the model id is <family>.<node>, so the node must match "
                      "[a-z0-9][a-z0-9-]* ('@' is the effort separator, dispatcher/local_capacity.py:51)")
@@ -419,9 +425,10 @@ def add(ctx, node, family, slots=2, power_policy="warm", source=None):
             preg = _parse(proposed)
             nr.backends(preg)
             ceiling = ir.dispatcher_local_ceiling(os.path.join(ctx.root, nr.DISPATCHER_CONFIG))
-            before = {str(f) for f in ir.lint(reg, inventory=ports, local_ceiling=ceiling)}
+            gov = _governor(ctx)
+            before = {str(f) for f in ir.lint(reg, inventory=ports, local_ceiling=ceiling, governor=gov)}
             live_variant = _parse(ed.set_field(proposed, node, "state", "live"))
-            fails += [f"lint: {f}" for f in ir.lint(live_variant, inventory=ports, local_ceiling=ceiling)
+            fails += [f"lint: {f}" for f in ir.lint(live_variant, inventory=ports, local_ceiling=ceiling, governor=gov)
                       if f.level == "error" and str(f) not in before]
         except (PhaseError, ed.EditError, nr.RenderError) as e:
             fails.append(str(e))

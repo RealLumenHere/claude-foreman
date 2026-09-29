@@ -36,7 +36,8 @@ def reg():
 
 
 def run_lint(r, inv=None, ceiling=12):
-    return ir.lint(r, inventory=inv or StubInventory(), local_ceiling=ceiling, governor=GOVERNOR)
+    return ir.lint(r, inventory=inv or StubInventory(), local_ceiling=ceiling,
+                   governor=lambda m: m.startswith(GOVERNOR))
 
 
 def errors(findings, rule=None):
@@ -47,8 +48,11 @@ def test_real_registry_passes(reg):
     assert errors(run_lint(reg)) == []
 
 
-def test_real_registry_matches_governor_tuple_in_repo(reg):
-    assert set(ir.governor_prefixes()) == set(reg["governor_prefixes"])
+def test_real_registry_is_exempt_under_the_repo_governor(reg):
+    """wq#2256: the lint asks governor_core.is_local_model itself, loaded by path."""
+    gov = ir.governor_exempt()
+    assert gov is not None
+    assert errors(ir.lint(reg, inventory=StubInventory(), local_ceiling=12, governor=gov)) == []
 
 
 def test_seeded_rows_reproduce_measured_table(reg):
@@ -78,7 +82,7 @@ def test_bad_model_id_names_id_and_governor(reg):
     r["families"]["gemma3-27b"] = dict(r["families"]["hathor-llama8b"], blob="gemma3:27b")
     errs = errors(run_lint(r), "governor-prefix")
     assert len(errs) == 1
-    assert "gemma3-27b" in errs[0].msg and "governor_core.py:97" in errs[0].msg
+    assert "gemma3-27b" in errs[0].msg and "is_local_model" in errs[0].msg
 
 
 def test_at_separator_in_explicit_id_rejected(reg):
