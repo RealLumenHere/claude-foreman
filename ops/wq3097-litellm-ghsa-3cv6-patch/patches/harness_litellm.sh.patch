@@ -1,0 +1,86 @@
+--- /home/lumen/bin/maint-ops/tests/harness_litellm.sh	2026-09-28 10:30:38.259374866 +0000
++++ /home/lumen/worktrees/wq3097-a1/.tmp/harness_litellm.sh.new	2026-09-29 01:39:42.541969273 +0000
+@@ -1,12 +1,22 @@
+ #!/bin/bash
+ # Test-to-failure harness for litellm-upgrade. Throwaway compose project on 127.0.0.1:4002 + scratch DB. Prod untouched.
++# wq#3097: OLD/NEW/FIX_MARKER_* were hardcoded to the patch.3 (wq#2989/2990) digests and marker; parameterized so
++# the same harness re-runs to failure for the >=1.96.2 jump (GHSA-3cv6-jpf6-8222) with its own marker, and asserts
++# the migration-aware rollback path (MIGRATES=1: DB dump restore, then an independent post-rollback smoke check
++# on the OLD image - not just the internal verify() call rollback() already makes on its own).
+ export WQ_AGENT=deps-drain-98190c
+ SCRIPT=${SCRIPT:-$(cd "$(dirname "$0")/.." && pwd)/litellm-upgrade}
+ DUMP=${DUMP:-$(ls -t /home/lumen/backups/litellm_db_pre_*.sql.gz | head -1)}
+ SCRATCH=litellm_canary2
+ H=/tmp/harness_wq2989
+-OLD=sha256:6c82d338a60e7b273ae46bf1d8db814d2856ae010f96c44eeadde574d3893f76
+-NEW=sha256:e29d25e1952337eb7c9b605213865ae935c60f1689ad465cb5fc940b598174c9
++OLD=${OLD:-sha256:6c82d338a60e7b273ae46bf1d8db814d2856ae010f96c44eeadde574d3893f76}
++NEW=${NEW:-sha256:e29d25e1952337eb7c9b605213865ae935c60f1689ad465cb5fc940b598174c9}
++FIX_MARKER_FILE=${FIX_MARKER_FILE:-/app/litellm/proxy/auth/auth_utils.py}
++FIX_MARKER_PATTERN=${FIX_MARKER_PATTERN:-request.scope}
++# MIGRATES=1 for a jump that runs Prisma migrations (e.g. 1.83.10 -> 1.96.2, +26 migrations per the wq#2990
++# rehearsal): asserts the migration count moves forward on apply and back on rollback, and that rollback restores
++# the DB dump rather than only flipping the image digest.
++MIGRATES=${MIGRATES:-0}
+ DCH() { docker compose -p litellm-harness -f $H/compose.yml "$@"; }
+ psqlc() { docker exec lumen-pgvector psql -U lumen -d "$1" -tA -c "$2" 2>&1; }
+ cleanup() {
+@@ -17,6 +27,7 @@
+ trap cleanup EXIT
+ PASS=0; FAIL=0
+ check() { if [ "$2" = "$3" ]; then echo "  PASS $1 (got $2)"; PASS=$((PASS+1)); else echo "  FAIL $1 (want $3 got $2)"; FAIL=$((FAIL+1)); fi; }
++checkop() { if eval "$2"; then echo "  PASS $1"; PASS=$((PASS+1)); else echo "  FAIL $1"; FAIL=$((FAIL+1)); fi; }
+ running() { docker inspect litellm-harness --format '{{.Config.Image}}' 2>/dev/null | grep -oE 'sha256:[0-9a-f]{64}'; }
+ compose_dig() { grep -m1 -oE 'ghcr.io/berriai/litellm@sha256:[0-9a-f]{64}' $H/compose.yml | cut -d@ -f2; }
+ 
+@@ -25,7 +36,8 @@
+ echo "== scratch db restore"; docker exec lumen-pgvector psql -U lumen -d postgres -qc "DROP DATABASE IF EXISTS $SCRATCH" 2>&1 | head -1
+ docker exec lumen-pgvector psql -U lumen -d postgres -qc "CREATE DATABASE $SCRATCH" 2>&1 | head -1
+ nice -n 19 gunzip -c $DUMP | docker exec -i lumen-pgvector psql -U lumen -d $SCRATCH -q >/dev/null 2>&1
+-echo "scratch migrations=$(psqlc $SCRATCH 'select count(*) from _prisma_migrations')"
++MIG_BEFORE=$(psqlc $SCRATCH 'select count(*) from _prisma_migrations')
++echo "scratch migrations=$MIG_BEFORE"
+ python3 - $H/db.env $SCRATCH <<'PY'
+ import sys, urllib.parse
+ dsn=None
+@@ -64,15 +76,23 @@
+ k=json.loads(urllib.request.urlopen(r,timeout=60).read())["key"]
+ fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600); open(fd,"w").write(json.dumps({"key":k})); print("harness smoke key created")
+ PY
+-export COMPOSE_FILE=$H/compose.yml PROJECT=litellm-harness CONTAINER=litellm-harness PORT=4002 SMOKE_KEY_FILE=$H/smoke.json STATE_DIR=$H/state PGDUMP=0 HEALTH_WAIT=150 NEG_CONTROL=1
++export COMPOSE_FILE=$H/compose.yml PROJECT=litellm-harness CONTAINER=litellm-harness PORT=4002 SMOKE_KEY_FILE=$H/smoke.json STATE_DIR=$H/state PGDUMP=1 HEALTH_WAIT=150 NEG_CONTROL=1 \
++       TARGET_DIGEST=$NEW FIX_MARKER_FILE=$FIX_MARKER_FILE FIX_MARKER_PATTERN=$FIX_MARKER_PATTERN MIGRATES=$MIGRATES DB_CONTAINER=lumen-pgvector DB_NAME=$SCRATCH
+ echo; echo "== A. precheck on healthy old instance (want rc 0)"
+ bash $SCRIPT --precheck 2>&1 | sed 's/^/    /'; check "A precheck rc" "${PIPESTATUS[0]}" 0
+ echo; echo "== B. apply with INJECTED verify failure (want rc 1, rolled back to OLD)"
+ FORCE_VERIFY_FAIL=1 bash $SCRIPT --apply 2>&1 | sed 's/^/    /'; RC=${PIPESTATUS[0]}
+ check "B rc" "$RC" 1; check "B running image is OLD" "$(running)" "$OLD"; check "B compose digest is OLD" "$(compose_dig)" "$OLD"
++[ "$MIGRATES" = "1" ] && check "B migrations still at baseline (injected failure rolled back before any drift)" "$(psqlc $SCRATCH 'select count(*) from _prisma_migrations')" "$MIG_BEFORE"
+ echo; echo "== C. real apply (want rc 0, running NEW)"
+ bash $SCRIPT --apply 2>&1 | sed 's/^/    /'; RC=${PIPESTATUS[0]}
+ check "C rc" "$RC" 0; check "C running image is NEW" "$(running)" "$NEW"; check "C compose digest is NEW" "$(compose_dig)" "$NEW"
++MIG_AFTER=$(psqlc $SCRATCH 'select count(*) from _prisma_migrations')
++if [ "$MIGRATES" = "1" ]; then
++  checkop "C migrations advanced ($MIG_BEFORE -> $MIG_AFTER)" '[ "$MIG_AFTER" -gt "$MIG_BEFORE" ]'
++else
++  check "C migrations unchanged (MIGRATES=0)" "$MIG_AFTER" "$MIG_BEFORE"
++fi
+ echo; echo "== D. apply again (idempotent, want rc 0 no recreate)"
+ S1=$(docker inspect litellm-harness --format '{{.State.StartedAt}}')
+ bash $SCRIPT --apply 2>&1 | sed 's/^/    /'; RC=${PIPESTATUS[0]}
+@@ -80,9 +100,14 @@
+ echo; echo "== E. manual --rollback (want rc 1 = rolled back cleanly, running OLD)"
+ bash $SCRIPT --rollback 2>&1 | sed 's/^/    /'; RC=${PIPESTATUS[0]}
+ check "E rc" "$RC" 1; check "E running image is OLD" "$(running)" "$OLD"
++if [ "$MIGRATES" = "1" ]; then
++  check "E DB restored to pre-upgrade migration count" "$(psqlc $SCRATCH 'select count(*) from _prisma_migrations')" "$MIG_BEFORE"
++fi
++echo; echo "== E2. post-rollback smoke suite on the OLD image (independent check, want rc 0) - wq#3097 item d"
++bash $SCRIPT --verify 2>&1 | sed 's/^/    /'; check "E2 post-rollback verify rc" "${PIPESTATUS[0]}" 0
+ echo; echo "== F. no backup recorded -> rollback must refuse loudly (want rc 2)"
+ STATE_DIR=$H/state_empty bash $SCRIPT --rollback 2>&1 | sed 's/^/    /'; check "F rc" "${PIPESTATUS[0]}" 2
+ echo; echo "== prod after (must be unchanged)"; docker inspect litellm --format 'litellm started={{.State.StartedAt}} health={{.State.Health.Status}}'
+-grep -c "sha256:6c82d338" /home/lumen/docker/docker-compose.yml | sed 's/^/prod compose still pins old digest lines=/'
++grep -c "${OLD#sha256:}" /home/lumen/docker/docker-compose.yml | sed 's/^/prod compose still pins old digest lines=/'
+ echo; echo "SUMMARY pass=$PASS fail=$FAIL"
+ echo "=== DONE ==="

@@ -1,0 +1,92 @@
+--- /home/lumen/bin/maint-ops/litellm-upgrade	2026-09-28 10:30:38.259374866 +0000
++++ /home/lumen/worktrees/wq3097-a1/.tmp/litellm-upgrade.new	2026-09-29 01:38:36.040777023 +0000
+@@ -1,5 +1,5 @@
+ #!/bin/bash
+-# litellm-upgrade - maintenance-window op for the LiteLLM patch upgrade (wq#2989 / wq#2990).
++# litellm-upgrade - maintenance-window op for the LiteLLM patch upgrade (wq#2989 / wq#2990 / wq#3097).
+ # Modes: --precheck | --apply | --verify | --rollback
+ # Runs locally on Lumen. Embeds its own rollback: lumen-window halts on failure but never rolls back.
+ # Exit: 0 ok | 1 failed, rolled back cleanly | 2 failed AND rollback failed (CRITICAL) | 3 precheck abort
+@@ -12,9 +12,21 @@
+ PROJECT=${PROJECT:-}
+ IMAGE_REPO=ghcr.io/berriai/litellm
+ TARGET_DIGEST=${TARGET_DIGEST:-sha256:e29d25e1952337eb7c9b605213865ae935c60f1689ad465cb5fc940b598174c9}
++# Fix-marker grep, parameterized per wq#3097 (was hardcoded to the patch.3 host-header marker).
++# GHSA-3cv6-jpf6-8222 (>=1.96.2) lands its fix in a different file/symbol: run with
++#   FIX_MARKER_FILE=/app/litellm/proxy/litellm_pre_call_utils.py FIX_MARKER_PATTERN=reject_url_valued_destination
++FIX_MARKER_FILE=${FIX_MARKER_FILE:-/app/litellm/proxy/auth/auth_utils.py}
++FIX_MARKER_PATTERN=${FIX_MARKER_PATTERN:-request.scope}
+ SMOKE_KEY_FILE=${SMOKE_KEY_FILE:-/home/lumen/secrets/maint_smoke_key.json}
+ STATE_DIR=${STATE_DIR:-/home/lumen/.maint-ops}
+ PGDUMP=${PGDUMP:-1}
++# MIGRATES=1: this jump runs Prisma migrations (the 1.83->1.96.2 jump runs +26 per the wq#2990
++# rehearsal), so a plain image-digest rollback would leave the old binary pointed at a
++# migrated-forward schema. When set, rollback() restores the pre-upgrade DB dump before
++# restarting the old image instead of only flipping the compose digest back (wq#3097 item d).
++MIGRATES=${MIGRATES:-0}
++DB_CONTAINER=${DB_CONTAINER:-lumen-pgvector}
++DB_NAME=${DB_NAME:-litellm}
+ FORCE_VERIFY_FAIL=${FORCE_VERIFY_FAIL:-0}
+ # NEG_CONTROL=1 also asserts an out-of-scope model is refused. That is a deliberate 401, and litellm-auth-alert pages at
+ # 5 auth_401 in 10 min, so it stays OFF on prod (harness only). Scope enforcement was proven in the rehearsal + harness.
+@@ -43,8 +55,8 @@
+   [ "$have" = "$want" ] || { log "VERIFY FAIL: running image $have != expected $want"; return 1; }
+   wait_healthy || { log "VERIFY FAIL: readiness not healthy+db connected within ${HEALTH_WAIT}s"; return 1; }
+   if [ "$patched" = "1" ]; then
+-    docker exec "$CONTAINER" grep -q 'request.scope' /app/litellm/proxy/auth/auth_utils.py 2>/dev/null \
+-      || { log "VERIFY FAIL: host-header fix marker (request.scope) missing in running code"; return 1; }
++    docker exec "$CONTAINER" grep -q "$FIX_MARKER_PATTERN" "$FIX_MARKER_FILE" 2>/dev/null \
++      || { log "VERIFY FAIL: fix marker ($FIX_MARKER_PATTERN) missing in running code ($FIX_MARKER_FILE)"; return 1; }
+   fi
+   NEG_CONTROL="$NEG_CONTROL" python3 - "$PORT" "$SMOKE_KEY_FILE" <<'PY' || return 1
+ import json, os, sys, urllib.request, urllib.error
+@@ -94,9 +106,21 @@
+ }
+ 
+ rollback() {
+-  local bak old
++  local bak old dump n
+   bak=$(grep '^BACKUP=' "$STATE" 2>/dev/null | tail -1 | cut -d= -f2-); old=$(grep '^OLD=' "$STATE" 2>/dev/null | tail -1 | cut -d= -f2-)
++  dump=$(grep '^DUMP=' "$STATE" 2>/dev/null | tail -1 | cut -d= -f2-)
+   [ -f "$bak" ] && [ -n "$old" ] || { log "ROLLBACK IMPOSSIBLE: no backup recorded in $STATE"; return 2; }
++  if [ "$MIGRATES" = "1" ]; then
++    [ -n "$dump" ] && [ -f "$dump" ] || { log "ROLLBACK IMPOSSIBLE: MIGRATES=1 but no DUMP recorded in $STATE"; return 2; }
++    log "MIGRATES=1: restoring DB from $dump before switching image (forward migrations are not compatible with $old)"
++    DC stop "$SERVICE" >/dev/null 2>&1
++    docker exec "$DB_CONTAINER" psql -U lumen -d postgres -qc "DROP DATABASE IF EXISTS $DB_NAME" >/dev/null 2>&1
++    docker exec "$DB_CONTAINER" psql -U lumen -d postgres -qc "CREATE DATABASE $DB_NAME" >/dev/null 2>&1
++    gunzip -c "$dump" | docker exec -i "$DB_CONTAINER" psql -U lumen -d "$DB_NAME" -q >/dev/null 2>&1
++    n=$(docker exec "$DB_CONTAINER" psql -U lumen -d "$DB_NAME" -tAc 'select count(*) from _prisma_migrations' 2>/dev/null)
++    [ -n "$n" ] || { log "CRITICAL: DB restore from $dump did not produce a queryable _prisma_migrations table"; return 2; }
++    log "DB restored: $n migrations present (dump: $dump)"
++  fi
+   log "ROLLING BACK to $old using $bak"
+   cp -a "$bak" "$COMPOSE_FILE" && DC up -d --no-deps "$SERVICE" >/dev/null 2>&1
+   if verify "$old" 0 0; then log "ROLLED BACK cleanly to $old"; return 1; fi
+@@ -104,19 +128,22 @@
+ }
+ 
+ apply() {
+-  local old bak
++  local old bak dump
+   old=$(cur_digest)
+   if [ "$old" = "$TARGET_DIGEST" ]; then log "already at target; verifying only"; verify "$TARGET_DIGEST" 1 0 && return 0 || return 1; fi
+   precheck || return 3
++  dump=""
+   if [ "$PGDUMP" = "1" ]; then
+-    local dump="/home/lumen/backups/litellm_db_pre_upgrade_$(date -u +%Y%m%d_%H%M%S).sql.gz"
+-    docker exec lumen-pgvector pg_dump -U lumen -d litellm 2>/dev/null | gzip > "$dump"
++    dump="/home/lumen/backups/litellm_db_pre_upgrade_$(date -u +%Y%m%d_%H%M%S).sql.gz"
++    docker exec "$DB_CONTAINER" pg_dump -U lumen -d "$DB_NAME" 2>/dev/null | gzip > "$dump"
+     if ! gzip -t "$dump" 2>/dev/null || [ "$(stat -c %s "$dump")" -lt 1000000 ]; then log "ABORT: db dump failed/too small ($dump)"; return 3; fi
+     chmod 600 "$dump"; log "db dump ok: $dump"
++  elif [ "$MIGRATES" = "1" ]; then
++    log "ABORT: MIGRATES=1 requires PGDUMP=1 (no dump, no safe rollback path)"; return 3
+   fi
+   bak="$COMPOSE_FILE.bak.$(date -u +%Y%m%d_%H%M%S).wq2990"
+   cp -a "$COMPOSE_FILE" "$bak" || { log "ABORT: cannot back up compose"; return 3; }
+-  printf 'OLD=%s\nNEW=%s\nBACKUP=%s\nAT=%s\n' "$old" "$TARGET_DIGEST" "$bak" "$(date -u +%FT%TZ)" >> "$STATE"
++  printf 'OLD=%s\nNEW=%s\nBACKUP=%s\nDUMP=%s\nAT=%s\n' "$old" "$TARGET_DIGEST" "$bak" "$dump" "$(date -u +%FT%TZ)" >> "$STATE"
+   sed -i "s#$IMAGE_REPO@$old#$IMAGE_REPO@$TARGET_DIGEST#" "$COMPOSE_FILE"
+   grep -q "$IMAGE_REPO@$TARGET_DIGEST" "$COMPOSE_FILE" || { log "compose edit failed"; rollback; return $?; }
+   log "recreating $SERVICE only (no-deps) on $TARGET_DIGEST"
