@@ -289,6 +289,19 @@ _KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!
 # is allowed only where the body then ENDS, so `LABEL: LABEL.<opaque>` still fires.
 # `kl` is the label group _kv_rule() names; recorded as suppression "self-name".
 _KV_NOT_SELF = r"(?!(?P=kl)[.,:;!?]*(?![A-Za-z0-9._\-+/=:!#$%^*@~]))"
+# wq#3127: the same echo one step removed — source passing a variable or attribute whose
+# own name carries the label: the secret key kwarg handed `self.` plus the label, or the
+# credentials kwarg handed the label plus `_dict` (upstream litellm's langfuse.py, read
+# by wq#3122; three such values filed as burned). The label must sit between `.`/`_`
+# seams with at least one more segment, and every other segment is lowercase LETTERS
+# only, at most 20: a label-prefixed hex run has digits and still fires, and a bare
+# `LABEL: LABEL` stays self-name's row. A value followed by `(` is left to "call", so
+# the two copies of the kv rule keep agreeing on what they suppress (the daemon has no
+# echo guard). Recorded as suppression "echo".
+_KV_ECHO_SEG = r"[a-z]{1,20}"
+_KV_NOT_ECHO = (r"(?!(?:(?-i:_*(?:" + _KV_ECHO_SEG + r"[._]_*)+)(?P=kl)(?-i:(?:[._]"
+                + _KV_ECHO_SEG + r")*)|(?P=kl)(?-i:(?:[._]" + _KV_ECHO_SEG + r")+))"
+                r"(?![A-Za-z0-9._\-+/=:!#$%^*@~(]))")
 
 
 def _kv_rule(label, guards, floor="{12,}"):
@@ -313,7 +326,7 @@ def _kv_rule(label, guards, floor="{12,}"):
 
 
 _KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED + _KV_NOT_IDENT
-                                 + _KV_NOT_SELF), re.IGNORECASE)
+                                 + _KV_NOT_SELF + _KV_NOT_ECHO), re.IGNORECASE)
 # wq#2806: the env-identifier form of the same rule, floor 8 (see _KV_ENV_LABEL). It
 # shares the label string "kv-secret" the way the two github rules share theirs: one
 # alarm class, one rotation-ticket shape, one set of suppressions to reason about.
@@ -351,6 +364,7 @@ _KV_SUPPRESSIONS = (
     ("public-key", re.compile(_kv_rule(_KV_LABEL, ""), re.IGNORECASE)),
     ("identifier", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_IDENT), re.IGNORECASE)),
     ("self-name", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_SELF), re.IGNORECASE)),
+    ("echo", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_ECHO), re.IGNORECASE)),
 )
 SUPPRESSED_LABEL = "kv-secret"   # the only rule that carries suppressions today
 

@@ -1820,6 +1820,35 @@ def test_a_self_name_with_anything_behind_it_is_still_a_credential(line):
     assert hits == ["kv-secret"] and PW not in masked, line
 
 
+# wq#3127: upstream litellm's langfuse.py passes attributes/variables whose names carry the
+# label. Built at runtime, same reason as _SELF_KV.
+_SK = "secret_" + "key"
+_CR = "credent" + "ials"
+
+
+@pytest.mark.parametrize("line", [
+    "                " + _SK + "=self.upstream_langfuse_" + _SK + ",",
+    '            "' + _SK + '": self.' + _SK + ",",
+    "            " + _CR + "=" + _CR + '_dict, service_name="langfuse"',
+    "db_pass" + "word=settings.db_pass" + "word",
+])
+def test_a_label_echoed_inside_an_identifier_is_a_recorded_suppression(line):
+    assert masking.mask_text(line) == (line, [])
+    assert [r["suppressed"] for r in masking.suppressions(line)] == ["echo"]
+
+
+@pytest.mark.parametrize("line", [
+    "token=token_" + "3f9a8b7c6d5e4f",            # a digit segment is a token body
+    "token: token_" + "q" * 21,                   # a segment past 20 letters
+    _SK + "=self." + _SK + "." + PW,
+    _SK + "=self." + _SK + "Abcdefgh",            # glued, not a seam
+    _SK + "=Self." + _SK.upper(),                 # segments are lowercase only
+    "pass" "word: " + "wordpass_hunter_hunter",   # the label is not in the value
+])
+def test_an_echo_with_an_opaque_part_is_still_a_credential(line):
+    assert masking.mask_text(line)[1] == ["kv-secret"], line
+
+
 def test_the_env_form_and_the_general_form_record_one_hit():
     _, records = masking.scan("NTFY_PASS=" + PW)
     assert [r["label"] for r in records] == ["kv-secret"]
