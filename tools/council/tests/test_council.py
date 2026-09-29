@@ -88,6 +88,20 @@ def test_load_config_drops_disabled_and_applies_overrides(tmp_path):
     assert [s.model for s in over.seats] == ["x", "y"]
 
 
+def test_load_config_drops_disabled_seat_from_chairman_list(tmp_path):
+    """wq#3168: a disabled seat's model must never survive into council.chairman — before
+    this, synthesize() had no way to know the model was retired and would call it for a
+    real timeout even though fan_out() never touches it."""
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "members:\n"
+        "  - {seat: a, model: ma}\n"
+        "  - {seat: dead, model: md, enabled: false}\n"
+        "chairman: [md, ma]\n")
+    council = c.load_config(cfg)
+    assert council.chairman == ["ma"]
+
+
 def test_shipped_config_loads():
     council = c.load_config(c.DEFAULT_CONFIG)
     assert len(council.seats) >= 3 and council.chairman

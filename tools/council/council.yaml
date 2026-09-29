@@ -1,11 +1,16 @@
 # research-council config (wq#2628). Every model is a LiteLLM gateway alias — list them
 # with GET /v1/models. Add, drop, or swap a seat here; the orchestrator is model-agnostic.
 #
-# Seat state as probed 2026-09-25:
-#   claude    claude-max-opus goes through claude-shim (host :8091), which was not listening
-#             at build time, so the seat times out and the council runs without it. It
-#             comes back when the shim does. `claude-opus-5` (anthropic/) has no API key on
-#             the gateway.
+# Seat state as probed 2026-09-25, still true 2026-09-29 (wq#3168 audit):
+#   claude    DISABLED below (retire, not restore). claude-max-opus goes through claude-shim
+#             (host :8091), which was never installed on the gateway node — the systemd unit
+#             ships repo-only (claude-shim/systemd/INSTALL.md), installing it needs `sudo`,
+#             which is outside this worker sandbox's scope, and nobody has installed it since
+#             wq#2628 first found it dark. `ss` on the gateway shows zero listeners on :8091,
+#             so every fan-out call was a guaranteed 135s timeout with no chance of success.
+#             Re-enable (`enabled: true`) once claude-shim.service is actually running and
+#             `curl http://127.0.0.1:8091/health` answers. `claude-opus-5` (anthropic/) has no
+#             API key on the gateway either — kept defused on purpose, do not re-key it here.
 #   gemini    gemini-flash = gemini/gemini-2.5-flash. Swap to the pro alias when the
 #             gemini-access ticket (wq#2627) lands.
 #   deepseek  deepseek-v4-pro, direct DeepSeek API.
@@ -15,14 +20,17 @@
 #   kimi      kimi-k3 via OpenRouter. Off by default; enable to widen the council.
 
 members:
-  - {seat: claude,   model: claude-max-opus,   timeout_s: 135}
+  - {seat: claude,   model: claude-max-opus,   timeout_s: 135, enabled: false}
   - {seat: gemini,   model: gemini-flash}
   - {seat: deepseek, model: deepseek-v4-pro}
   - {seat: gpt,      model: cerebras-oss-120b}
   - {seat: kimi,     model: kimi-k3, enabled: false}
 
-# Synthesis model, first one that answers wins. A chairman whose seat already failed in
-# the fan-out is skipped, so a dead backend costs one timeout, not two.
+# Synthesis model, first one that answers wins. load_config() drops any entry here whose
+# seat is disabled (wq#3168) — claude-max-opus and kimi-k3 are listed for when they come
+# back but are never actually called while their `members:` row above says enabled: false.
+# A chairman whose seat already failed in the fan-out is skipped too, so a dead backend
+# costs one timeout, not two.
 chairman: [claude-max-opus, deepseek-v4-pro, kimi-k3, gemini-flash]
 
 min_responses: 2        # fewer successful members than this: no synthesis, exit 3

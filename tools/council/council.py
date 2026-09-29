@@ -140,7 +140,12 @@ def load_config(path, models_override=None):
     seats = [s for s in seats if s.enabled]
     if not seats:
         raise ValueError(f"{path}: no enabled members")
-    chairman = [str(c) for c in doc.get("chairman") or []] or [seats[0].model]
+    # wq#3168: a chairman entry for a disabled/retired seat (e.g. a dead local rung) used
+    # to reach synthesize() unfiltered and eat a real timeout there even though fan-out
+    # never touches it — disabling a seat did not actually take it out of the request path.
+    seat_models = {s.model for s in seats}
+    chairman = [str(c) for c in doc.get("chairman") or [] if str(c) in seat_models] \
+        or [seats[0].model]
     return Council(seats=seats, chairman=chairman,
                    min_responses=int(doc.get("min_responses", 2)),
                    member_max_tokens=int(doc.get("member_max_tokens", 32000)),
