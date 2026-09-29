@@ -51,7 +51,17 @@ fi
 # 3. state-regen --if-dirty (lumen-bin repo, primary tree -- this is the step the
 #    BUILD session's guard refused; land via lumen-bin's own worktree + lumen-pr,
 #    or install directly from an operator session with lumen-bin write access).
-install -m 0755 "$HERE/state-regen" /home/lumen/bin/state-regen
+#    wq#3143: a blind overwrite here is the wq#2219 unit-drift regression class if
+#    the live file has diverged from this bundle since it was written -- refuse
+#    instead of clobbering; port the hunk via a lumen-bin worktree + lumen-pr (as
+#    wq#3143 did) when they differ.
+if cmp -s "$HERE/state-regen" /home/lumen/bin/state-regen; then
+    echo "state-regen: live file already matches bundle content, nothing to install"
+else
+    echo "state-regen: live file differs from the bundle -- NOT overwriting (wq#2219 unit-drift class)." >&2
+    echo "Port the hunk onto the live file via a lumen-bin worktree + lumen-pr instead (see wq#3143)." >&2
+    exit 1
+fi
 
 # 4. federated-index refresh, hooked onto the SAME source-change event as
 #    minerva-tag-sections.path (both watch claude_memory.md PathModified), as its

@@ -67,3 +67,17 @@ ticket's evidence, not this one's.
 ## Verify
 
     cd ops/wq1633-minerva-projection-dirty-flag && python3 -m pytest -q test_projection_state.py
+
+## wq#3143 deploy status (2026-09-29)
+
+- `state-regen` MISS closed: the live `/home/lumen/bin/state-regen` was byte-identical
+  to this bundle's base before patching (no drift), so the `--if-dirty` hunk was ported
+  via a `lumen-bin` worktree + `lumen-pr` rather than installed as a whole-file
+  overwrite — lumen-bin PR#202, merged `ee059b2`. `install.sh`'s step 3 now `cmp`s
+  before installing and refuses instead of clobbering on a mismatch, so a future
+  install.sh run can't reintroduce the wq#2219 unit-drift class here.
+- `lumen-federate-reindex.path`/`.service` are still not installed: a BUILD worker
+  cannot run root/systemctl steps (root escalation is a hard `guard.sh` deny;
+  `systemctl enable`/`daemon-reload` aren't on the worker allowlist), confirmed live —
+  `systemctl is-enabled lumen-federate-reindex.path` → `not-found`. Split to wq#3144
+  (needs a session with root/systemd reach) rather than guessed at. See ISSUE-LOG #1056.
