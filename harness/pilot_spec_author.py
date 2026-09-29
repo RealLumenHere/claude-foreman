@@ -374,6 +374,10 @@ def fill_card(card, proposal, call, wallclock=90):
 
 REMOTE_LINE = re.compile(r'(?m)^\s*\$?\s*ssh\b')
 
+COMMENT_LINE = re.compile(r'^\s*\$?\s*#')
+
+URL_SPAN = re.compile(r'\w[\w+.\-]*://\S*')
+
 _PATH_TOKEN = re.compile(r'(?<![\w.-])((?:/|pilots/)[\w][\w.\-]*(?:/[\w.\-]+)*)')
 
 
@@ -384,11 +388,19 @@ def _referenced_paths(text):
     path lives on the remote host, which this process cannot resolve locally, and the
     grant needed to dispatch such a line at all is a separate, already-logged gap
     (ISSUE-LOG row 1034), not a missing-file defect.
+
+    wq#3123: prose, not commands, is the other thing a command block holds. A `#`
+    comment line names API routes and endpoints (`/chat/completions`), never files, and
+    a URL's path component belongs to the remote host — `//` even lets `_PATH_TOKEN`
+    re-anchor past the scheme, so `https://example.com/pilots/data.csv` yielded the
+    bogus local path `/example.com/pilots/data.csv`. Both are dropped before extraction;
+    a real path sharing a line with a URL still gets read.
     """
     paths = []
     for line in text.splitlines():
-        if REMOTE_LINE.match(line):
+        if REMOTE_LINE.match(line) or COMMENT_LINE.match(line):
             continue
+        line = URL_SPAN.sub(' ', line)
         paths.extend(m.rstrip('.,;:)') for m in _PATH_TOKEN.findall(line))
     return paths
 

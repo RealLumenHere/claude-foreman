@@ -24,6 +24,10 @@ import pilot_spec_author as psa  # noqa: E402
 
 TEMPLATE = os.path.join(REPO, 'pilots', 'EXPERIMENT_CARD.template.md')
 RUNNER_FILLED_CARD = os.path.join(REPO, 'pilots', '9d95766f5f43', 'CARD.md')
+# A pilot that already ran to completion (its own REPORT.md), whose Treatment comments
+# discuss the LiteLLM `/chat/completions` endpoint. wq#3121 reproduced wq#3118's
+# false-positive on exactly this card.
+COMPLETED_CARD = os.path.join(REPO, 'pilots', '1a025ddf9834', 'CARD.md')
 
 THIN_PROPOSAL = {
     'title': 'try a smaller judge rung',
@@ -182,6 +186,33 @@ def test_lint_card_skips_remote_ssh_lines():
                        'baseline': "ssh hathor 'python3 /data/lumen/does/not/exist.py'",
                        'treatment': 'python3 pilots/9d95766f5f43/run_pilot.py --arm treatment'}))
     assert psa.lint_card(card, REPO) == []
+
+
+# wq#3123 (from wq#3121's verify pass): _PATH_TOKEN read any `/`-led token as a local
+# file, so an API route in a comment and a URL's path component both linted as missing.
+# None of wq#3118's three probes had a URL or a comment line in them, so it shipped
+# 14/14 green.
+def test_lint_card_ignores_api_routes_in_comments():
+    """Outside-the-design-population probe: a committed card from a pilot that already
+    COMPLETED, so by construction nothing about it is unrunnable. Its Treatment block
+    comments name LiteLLM's `/chat/completions` endpoint; wq#3118 flagged that as a
+    path that 'does not resolve'."""
+    with open(COMPLETED_CARD) as fh:
+        card = fh.read()
+    assert psa.lint_card(card, REPO) == []
+
+
+def test_referenced_paths_ignores_a_urls_path_component():
+    """`//` let the token regex re-anchor past the scheme, inventing the local path
+    `/example.com/pilots/data.csv` out of a perfectly ordinary download."""
+    assert psa._referenced_paths('curl https://example.com/pilots/data.csv') == []
+
+
+def test_referenced_paths_still_reads_a_real_path_beside_a_url():
+    """The URL is dropped, not the whole line — a phantom output path on a `curl` line
+    is still the wq#3118 defect and must still be caught."""
+    line = 'curl -o pilots/wq3123-phantom/out.json https://example.com/data.csv'
+    assert psa._referenced_paths(line) == ['pilots/wq3123-phantom/out.json']
 
 
 def test_real_runner_authored_spec_passes_the_validator():
