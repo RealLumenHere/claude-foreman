@@ -172,6 +172,18 @@ idle draw". Measured, same hardware, both idle (`plugs.json`, 2026-09-20T15:56:5
 | hathor (p3) | amdgpu-bound, dpm=low | **86.6 W** |
 
 **+16.6 W**, against a June-documented baseline of ~78–80 W for this chassis with both cards bound.
+
+**Control re-measured 2026-09-28 (wq#2179).** The 86.6 W above was taken while hathor's cards sat at
+`auto` (wq#2157), so it was retaken once wq#2178 put both D300s at `low`/`battery`. Conditions: both
+cards read `power_dpm_force_performance_level=low` / `power_dpm_state=battery`, `gpu-lowpower.service`
+active, load 0.04, same plug snapshot source (`plugs.json`, p3), 5 distinct snapshots over about 4 min
+(04:33Z to 04:37Z on 09-29): 89.0, 89.0, 88.4, 88.9, 88.7 W, **median 88.9 W**. That is 2.3 W above the
+old figure, not below it, so the margin against isis's 103.2 W is **14.3 W** and report 2166 s7's guess
+that 16.6 W understated it did not hold. The conclusion stands. Two caveats: hathor's fan floor was raised
+to 1100 rpm on 09-26 (mbpfan), which was not the case on 09-20, and isis is not a like-for-like control
+in this direction. From the other side, isis's own plug (p1) read 85.8 W in the 04:33Z snapshot,
+after `disable-gpus.service` was deleted (wq#2153, 09-26), against 103.2 W with it in place. isis's load was
+not checked at that moment, so treat that figure as indicative only.
 The matching idle sensor shift on isis, pre-change vs post-change at comparable CPU:
 
 | | Te0T | TC0P | TM1a |
