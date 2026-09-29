@@ -226,6 +226,11 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                # `:` + `-/path` now that labels go three deep (wq#2278 replay corpus);
                # no credential opens with the `:-` `:=` `:+` `:?` operator character.
                r"(?![-+?=])"
+               # wq#3153: a regex wildcard then a sed delimiter is the PATTERN half of a
+               # substitution, `s#^<LABEL>=.*#<LABEL>=$TOKEN#` (wq#3150's deploy
+               # script rewriting API_BEARER_TOKEN in .env). Refusing it here loses nothing: the scan resumes at the
+               # replacement's own label, so a literal written there still fires.
+               r"(?!\.[*+][#/@:!~%])"
                r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
                r"|placeholder|xxxx+)\b)")
 # A value that is immediately CALLED is a function, not a credential. wq#2288 spelled

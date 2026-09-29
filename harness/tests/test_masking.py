@@ -152,6 +152,9 @@ KV_FALSE_POSITIVES = [
     'PROBE_TICKETS_FILED_KEY = "_stale_probe_tickets_x"',   # a `key`-labelled identifier
     'migrate "${FLEET_EXEC_SSH_KEY:-/home/lumen/.ssh/id_ed25519}" x',   # shell default expansion
     "SORT_KEY=" + "abc123def",                     # `KEY` is not a strong noun: floor 12
+    # wq#3153: a sed substitution's pattern half, then a pointer on the replacement side
+    'sed -i "s#^API_BEARER' + '_TOKEN=.*#API_BEARER' + '_TOKEN=$TOKEN#" "$REPO/.env"',
+    "sed -i 's/^GITEA" + "_PASSWORD=.+/GITEA" + "_PASSWORD=${NEW}/' .env",
 ]
 
 # and the shapes that must keep firing — a rule this narrow is only safe if it still
@@ -894,6 +897,15 @@ def test_an_opaque_value_glued_to_a_paren_still_alarms():
         assert masked.endswith("MASKED("), masked
         # and the rotation ticket can still name the value it is about
         assert masking.scan(text)[1][0]["value_sha256_12"]
+
+
+def test_a_literal_on_the_sed_replacement_side_still_fires():
+    """wq#3153: the pattern-half guard refuses the `.*#...` run, not the line — the
+    scan resumes at the replacement's own label, so a value written there is caught."""
+    text = 'sed -i "s#^API_BEARER' + '_TOKEN=.*#API_BEARER' + '_TOKEN=' + PW + '#" .env'
+    masked, hits = masking.mask_text(text)
+    assert hits == ["kv-secret"], text
+    assert PW not in masked and ".*#API_BEARER" in masked, masked
 
 
 def test_a_qualified_noun_still_fires():

@@ -167,6 +167,9 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                # `:` + `-/path` now that labels go three deep (wq#2278 replay corpus);
                # no credential opens with the `:-` `:=` `:+` `:?` operator character.
                r"(?![-+?=])"
+               # wq#3153: `.*` + a sed delimiter is a substitution's pattern half; the
+               # scan resumes at the replacement's label, so a literal there still fires.
+               r"(?!\.[*+][#/@:!~%])"
                r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
                r"|placeholder|xxxx+)\b)")
 # wq#2632: the call test reads the VALUE's shape, not the character after it. The
