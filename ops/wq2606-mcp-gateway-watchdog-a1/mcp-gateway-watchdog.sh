@@ -109,7 +109,21 @@ probe_mcp() {
     -H 'Accept: application/json, text/event-stream' \
     -d "$MCP_INIT_PAYLOAD" 2>/dev/null)
   http_code=$(printf '%s' "$out" | grep -o 'HTTPCODE:[0-9]*$' | cut -d: -f2)
-  [ "$http_code" = "200" ] && printf '%s' "$out" | grep -q '"result"'
+  if [ "$http_code" = "200" ] && printf '%s' "$out" | grep -q '"result"'; then
+    return 0
+  fi
+  # wq#3103 Access JWT guard (enforce mode) answers 403 to every unauthenticated
+  # request on the unit's own port except GET /health. A 403 therefore proves the
+  # HTTP layer is up but says nothing about the unit; without this fallback the
+  # probe fails forever and the watchdog restart-loops a healthy gateway. Fall
+  # back to the one path the guard exempts. The client-facing handshake stays
+  # covered by --mode mcpw (alert-only).
+  if [ "$http_code" = "403" ]; then
+    local hc
+    hc=$(curl -s -m "$CURL_TIMEOUT" -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/health" 2>/dev/null)
+    [ "$hc" = "200" ] && return 0
+  fi
+  return 1
 }
 
 probe_cloudflared() {

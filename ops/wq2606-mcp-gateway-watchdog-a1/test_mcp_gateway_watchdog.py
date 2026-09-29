@@ -27,7 +27,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "mcp-gateway-watchdog.sh")
 
-STATE = {"healthy": True}
+STATE = {"healthy": True, "guard": False}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -35,6 +35,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        if STATE["guard"]:
+            # wq#3103 Access guard enforce mode: any unauthenticated request but GET /health
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(b"forbidden")
+            return
         if not STATE["healthy"]:
             self.send_response(599)
             self.end_headers()
@@ -47,6 +53,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
+        if STATE["guard"] and self.path != "/health":
+            self.send_response(403)
+            self.end_headers()
+            return
         if not STATE["healthy"]:
             self.send_response(599)
             self.end_headers()
@@ -169,6 +179,31 @@ def main():
     fails_val_mcpw = open(fails_file_mcpw).read().strip() if os.path.exists(fails_file_mcpw) else "?"
     if fails_val_mcpw != "0":
         failures.append(f"mode=mcpw fails counter did not reset on recovery, got {fails_val_mcpw!r}")
+
+    # --- wq#2665: with the wq#3103 Access guard enforcing, POST /mcp is 403 even
+    # though the unit is fine. Healthy /health must NOT count as a failure or
+    # restart; a dead /health behind the guard must still fail and restart.
+    def run_guard():
+        # own unit name => own fails/restarts state, so the earlier flap window can't mask this
+        return subprocess.run(
+            ["bash", SCRIPT, "--mode", "mcp", "--unit", "test-guard", "--port", str(port)],
+            env=env, capture_output=True, text=True,
+        )
+
+    before_guard = restarts()
+    STATE["guard"] = True
+    STATE["healthy"] = True
+    for _ in range(4):
+        run_guard()
+    if restarts() != before_guard:
+        failures.append("guard 403 + healthy /health triggered a restart (restart-loop regression)")
+    STATE["healthy"] = False
+    run_guard()
+    run_guard()
+    if restarts() != before_guard + 1:
+        failures.append("guard 403 + dead /health did NOT count as failure/restart")
+    STATE["guard"] = False
+    STATE["healthy"] = True
 
     srv.shutdown()
     shutil.rmtree(tmpdir, ignore_errors=True)
