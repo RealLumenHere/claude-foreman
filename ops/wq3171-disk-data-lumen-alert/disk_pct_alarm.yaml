@@ -1,0 +1,10 @@
+# disk_pct_alarm config (wq#3171). Add a mount here to get an edge-triggered
+# aq+ntfy alert for it; root already has its own 85% alarm in
+# bin/lumen-disk-hygiene so it is deliberately not duplicated here.
+defaults:
+  raise_at_or_above: 90
+  clear_below: 85
+
+mounts:
+  data-lumen:
+    path: /data/lumen

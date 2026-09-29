@@ -1,0 +1,11 @@
+[Unit]
+Description=Per-mount disk-usage-percent alarm (wq#3171)
+After=local-fs.target
+OnFailure=ntfy-onfailure@%n.service
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/wq3171-disk-data-lumen-alert/disk_pct_alarm.py check
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=60
