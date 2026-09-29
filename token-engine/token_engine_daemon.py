@@ -169,7 +169,13 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                r"(?![-+?=])"
                # wq#3153: `.*` + a sed delimiter is a substitution's pattern half; the
                # scan resumes at the replacement's label, so a literal there still fires.
-               r"(?!\.[*+][#/@:!~%])"
+               # wq#3157: that premise is now TESTED rather than assumed. Keyed on value
+               # shape alone the guard silenced any single-occurrence credential opening
+               # with those three characters (wq#3156, ISSUE-LOG #1062) — here that is a
+               # verb that stops FAILING and rides the unmasked body out on the broker
+               # response. The same label, with its own `:`/`=`, must follow the
+               # delimiter on the replacement side. Mirrors masking.py exactly.
+               r"(?!\.[*+][#/@:!~%|,]\^?(?P=kl)[:=])"
                r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
                r"|placeholder|xxxx+)\b)")
 # wq#2632: the call test reads the VALUE's shape, not the character after it. The
@@ -201,7 +207,12 @@ _KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!
 def _kv_rule(label, guards, floor="{12,}"):
     # wq#2694 landed after this mirror's base: the leading boundary must accept the
     # position right after our own mask literal too (_WB), matching harness/masking.py.
-    return (_WB + r'((?:' + label + r')' + _KV_SEP + r')' + guards
+    # wq#3157: the label is NAMED here now, as masking.py has named it since wq#2933.
+    # The sed-pattern guard needs `(?P=kl)` to check that a substitution's replacement
+    # half really repeats the label; this copy had no backreferencing guard before, so
+    # the group was non-capturing. It stays group 2 inside group 1, and the `\1` + MASK
+    # replacement every rule here shares is untouched.
+    return (_WB + r'((?P<kl>' + label + r')' + _KV_SEP + r')' + guards
             + _body(_KV_BODY, floor))
 
 

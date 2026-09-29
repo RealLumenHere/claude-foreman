@@ -908,6 +908,32 @@ def test_a_literal_on_the_sed_replacement_side_still_fires():
     assert PW not in masked and ".*#API_BEARER" in masked, masked
 
 
+def test_a_value_that_merely_opens_with_a_sed_pattern_still_fires():
+    """wq#3157: the boundary wq#3153 shipped untested. Its guard read value shape
+    alone, so any single-occurrence credential whose body OPENED with `.*` + a sed
+    delimiter went silent — no mask, no hit, nothing for rotation (wq#3156's A/B
+    contradiction, ISSUE-LOG #1062). A substitution repeats its label; this does
+    not, so it is a value. A/B: the SAME line without the three characters fires,
+    so the assertion cannot pass for the wrong reason."""
+    for prefix in (".*#", ".+/", ".*@", ".*:", ".*!", ".+~", ".*%"):
+        text = 'my_api_token = "' + prefix + PW + '"'
+        masked, hits = masking.mask_text(text)
+        assert hits == ["kv-secret"], text
+        assert PW not in masked, masked
+        assert masking.mask_text('my_api_token = "' + PW + '"')[1] == ["kv-secret"]
+
+
+def test_the_env_form_still_fires_behind_a_sed_pattern_opening():
+    """wq#3157: _KV_SECRET_ENV shares _KV_POINTER, so wq#3153's guard blinded the
+    wq#2839 env-style rule too — the one CLAUDE.md documents as firing "however
+    fake the body". Floor 8, bodies well over it, and every one was silent."""
+    for label in ("API" + "_TOKEN", "DB" + "_PASSWORD", "SECRET" + "_KEY"):
+        text = label + "=.*#" + PW
+        masked, hits = masking.mask_text(text)
+        assert hits == ["kv-secret"], text
+        assert PW not in masked, masked
+
+
 def test_a_qualified_noun_still_fires():
     """The narrowing is only safe if the rule still catches: a real leak labels its
     value with a qualified noun, in whatever separator style the source service uses."""

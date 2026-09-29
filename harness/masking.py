@@ -228,9 +228,28 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                r"(?![-+?=])"
                # wq#3153: a regex wildcard then a sed delimiter is the PATTERN half of a
                # substitution, `s#^<LABEL>=.*#<LABEL>=$TOKEN#` (wq#3150's deploy
-               # script rewriting API_BEARER_TOKEN in .env). Refusing it here loses nothing: the scan resumes at the
-               # replacement's own label, so a literal written there still fires.
-               r"(?!\.[*+][#/@:!~%])"
+               # script rewriting API_BEARER_TOKEN in .env). Refusing it loses nothing —
+               # but only because "the scan resumes at the replacement's own label".
+               # wq#3153 spelled the guard as value SHAPE alone and never checked that
+               # premise, so it also silenced every single-occurrence credential whose
+               # value merely OPENED with those three characters: `my_api_token =
+               # ".*#<24 opaque>"` and the env form `API_TOKEN=.*#...` both went from a
+               # kv-secret hit to nothing (wq#3156's A/B contradiction, ISSUE-LOG #1062).
+               # No other PATTERNS entry backstops a non-vendor-prefixed body, so that
+               # silence was the whole distance between a leak and rotation — the wq#3133
+               # failure shape again: a suppression written wider than its own reason.
+               # wq#3157 makes the guard TEST the premise: the SAME label, `(?P=kl)`,
+               # must actually appear on the replacement side, carrying its own `:`/`=`
+               # because that is what a substitution rewriting `LABEL=value` writes.
+               # Nothing between the delimiter and that label but an optional anchor —
+               # the gap is 0 in both wq#3150 shapes, and every character of slack there
+               # is a character a crafted value could sit in. `|` and `,` join the
+               # delimiter set: sed takes any delimiter, and `s|…|…|` is as common as
+               # `s#…#…#`. A value that never repeats its label is not a substitution;
+               # it is a value, and a value gets read.
+               # (wq#3154's lane derived this same guard independently from the sibling
+               # rotation row; one regex, not two dialects of it — ISSUE-LOG #1063.)
+               r"(?!\.[*+][#/@:!~%|,]\^?(?P=kl)[:=])"
                r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
                r"|placeholder|xxxx+)\b)")
 # A value that is immediately CALLED is a function, not a credential. wq#2288 spelled
