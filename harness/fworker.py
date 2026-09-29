@@ -3865,6 +3865,18 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
                   and sentinel_holder != claim_holder_at_start)
     sentinel_confirmed_claim_error = (claim_lost and sentinel_status != "done")
 
+    # wq#3116: a worker that legitimately blocked itself (or lost its claim) landed
+    # no artifact and made no change — classify()'s SUCCESS/DEGRADED_SUCCESS verdict
+    # is about the *session* (clean exit, well-formed result frame), not the ticket
+    # outcome, and must not reach the attempt record, charging, or the episode
+    # digest as a success (that mislabel is exactly what let wq#3114's blocked
+    # attempt land as "attempt 1 SUCCESS" in lumen_episode). Overridden here, before
+    # anything downstream reads `classification`, so every consumer sees the truth.
+    if sentinel_confirmed_block:
+        classification = BLOCK_SENTINEL
+    elif sentinel_confirmed_claim_error:
+        classification = CLAIM_ERROR_SENTINEL
+
     # RELIABILITY_SPEC.md §C10: verify acceptance criteria against artifacts BEFORE
     # anything downstream (including the persisted attempt record) trusts a self-
     # reported success — decided here, not inside reconcile(), so the record on disk
