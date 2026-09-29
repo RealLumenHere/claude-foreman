@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 HARNESS_DIR = os.path.dirname(os.path.abspath(__file__))
 POLICY_PATH = os.environ.get("FOREMAN_FLEET_EXEC_POLICY",
@@ -180,6 +181,23 @@ SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
                        "site-packages", ".cache"})
 MAX_FILE_BYTES = 2_000_000
 MASK_KEEP = 4
+# wq#3167: the 09-29 05:16Z run timed out at TimeoutStartSec=600s (9m57s CPU) the first
+# night after wq#2119 folded agents.yaml `defaults.add_dirs` into the swept roots — the
+# 31 `allow.read_dirs` policy roots alone still finish in ~23s (verified: last write
+# before wq#2119 landed, runtime/read_dir_sweep.json ts=2026-09-28T05:18:17Z, 5422 files
+# total), but /home/lumen/foreman is one of the 7 new add_dirs roots and carries a
+# _runs/ snapshot archive (40797 files measured 2026-09-29, 77% of foreman's tree) that
+# a single unbounded os.walk had no way to bound. A per-root cap keeps one oversized or
+# pathological root (regex cost scales with content, not just file count — wq#2806) from
+# ever eating the whole run; a global cap guarantees write_runtime() always writes a
+# FRESH runtime/read_dir_sweep.json before systemd's TimeoutStartSec fires, which is what
+# capability_lint.sweep_stale() actually gates on — a truncated LATE root only loses that
+# root's coverage for one day, where a timed-out PROCESS loses every root's freshness and
+# fails every dir() grant closed (capability_lint.py:673-676). Policy read_dirs roots are
+# still swept first (write_runtime's `roots` order below), so the roots the dir() gate
+# reads (sweep_hit_under) are the ones least likely to ever be truncated.
+ROOT_TIMEOUT_S = float(os.environ.get("FOREMAN_READ_DIR_SWEEP_ROOT_TIMEOUT_S", "90"))
+SWEEP_DEADLINE_S = float(os.environ.get("FOREMAN_READ_DIR_SWEEP_DEADLINE_S", "480"))
 
 
 def mask(token):
@@ -263,12 +281,30 @@ def _read_text(path):
 
 
 def sweep_root(root):
-    """[(path, line, kind, masked_excerpt)] for one root. Deterministic order."""
+    """[(path, line, kind, masked_excerpt)] for one root. Deterministic order. Thin,
+    unbounded wrapper over `_sweep_root_bounded` (wq#3167) kept at this 2-tuple shape
+    since it's called directly all over test_read_dir_sweep.py; `_sweep_report` is the
+    only caller that needs the deadline/partial-flag behavior, via the bounded form."""
+    hits, nfiles, _partial = _sweep_root_bounded(root, deadline=None)
+    return hits, nfiles
+
+
+def _sweep_root_bounded(root, deadline=None):
+    """[(path, line, kind, masked_excerpt)], file count, partial flag. `deadline` is an
+    absolute time.monotonic() instant (wq#3167): once passed, checked once per file
+    (cheap relative to the per-line regex work it bounds), the walk stops early and
+    returns whatever it already found rather than running unbounded — a huge or
+    pathological root (regex cost scales with content, not just file count) must not be
+    able to consume the whole sweep's time budget."""
     hits = []
     nfiles = 0
+    partial = False
     for dp, dn, fn in os.walk(root):
         dn[:] = sorted(d for d in dn if d not in SKIP_DIRS)
         for f in sorted(fn):
+            if deadline is not None and time.monotonic() >= deadline:
+                partial = True
+                break
             p = os.path.join(dp, f)
             nfiles += 1
             if any(fnmatch.fnmatch(c, g)
@@ -289,7 +325,9 @@ def sweep_root(root):
                         masked = line.replace(m.group(0), mask(m.group(0)))
                         hits.append((p, i, kind, masked.strip()[:120]))
                         break
-    return hits, nfiles
+        if partial:
+            break
+    return hits, nfiles, partial
 
 
 def policy_read_dirs(path=POLICY_PATH):
@@ -321,15 +359,37 @@ def _now_iso():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _sweep_report(roots):
+def _sweep_report(roots, deadline_s=None):
+    """`deadline_s` (wq#3167), when given, is a wall-clock budget for the WHOLE call,
+    checked before each root starts, plus each root gets its own ROOT_TIMEOUT_S share
+    (capped to whatever's left of the global budget) — so one oversized or pathological
+    root (wq#2806: regex cost scales with content, not file count) can truncate itself
+    without ever blocking a later root from starting, and the global budget guarantees
+    the caller (write_runtime) always gets a report back instead of running past
+    systemd's TimeoutStartSec. `roots` order matters: a root skipped or truncated by the
+    deadline is always the LAST one processed, never an earlier one (interactive/--policy
+    callers pass deadline_s=None and are unaffected — unbounded, as before)."""
     report = {}
+    start = time.monotonic()
+    global_deadline = start + deadline_s if deadline_s is not None else None
     for root in roots:
+        if global_deadline is not None and time.monotonic() >= global_deadline:
+            report[root] = {"error": "skipped — sweep deadline reached before this "
+                                     "root started (wq#3167)", "files": 0, "hits": []}
+            continue
         if not os.path.isdir(root):
             report[root] = {"error": "not a directory", "files": 0, "hits": []}
             continue
-        hits, nfiles = sweep_root(root)
-        report[root] = {"files": nfiles, "hits": [
+        root_deadline = time.monotonic() + ROOT_TIMEOUT_S
+        if global_deadline is not None:
+            root_deadline = min(root_deadline, global_deadline)
+        t0 = time.monotonic()
+        hits, nfiles, partial = _sweep_root_bounded(root, deadline=root_deadline)
+        entry = {"files": nfiles, "elapsed_s": round(time.monotonic() - t0, 2), "hits": [
             {"path": p, "line": ln, "kind": k, "excerpt": ex} for p, ln, k, ex in hits]}
+        if partial:
+            entry["partial"] = True
+        report[root] = entry
     return report
 
 
@@ -341,14 +401,24 @@ def _prev_hit_keys(prev_roots):
     return keys
 
 
-def write_runtime(roots=None, runtime_path=None):
+def write_runtime(roots=None, runtime_path=None, deadline_s=None):
     """Sweep every `allow.read_dirs` root plus every `defaults.add_dirs` root (or
     `roots`), write the masked report to `runtime_path` (wq#1482:
     lumen-read-dir-sweep.timer's daily payload), and return `(report, new_hits)`.
     `new_hits` are hits whose (root, path, line, kind) was not present in the PREVIOUS
     runtime write, so a rerun of an already-known hit does not re-alert every day —
-    only a hit that is new since the last sweep does."""
+    only a hit that is new since the last sweep does. `deadline_s` (wq#3167) defaults
+    to SWEEP_DEADLINE_S: this call always finishes and WRITES a fresh file well inside
+    systemd's TimeoutStartSec, because capability_lint.sweep_stale() fails every dir()
+    grant closed off the file's top-level `ts` the moment the whole process fails to
+    complete — a root truncated by the deadline only loses ITS OWN coverage for a day;
+    a run that never finishes loses every root's freshness at once. `policy_read_dirs()`
+    roots are placed first in the default `roots` order (below), same as before, so the
+    roots capability_lint's dir() gate actually reads (sweep_hit_under) are the ones
+    least likely to ever hit the deadline."""
     runtime_path = runtime_path or RUNTIME_PATH
+    if deadline_s is None:
+        deadline_s = SWEEP_DEADLINE_S
     if roots is not None:
         roots = list(roots)
     else:
@@ -365,7 +435,7 @@ def write_runtime(roots=None, runtime_path=None):
     except Exception:
         prev = None
     prev_keys = _prev_hit_keys((prev or {}).get("roots"))
-    report = _sweep_report(roots)
+    report = _sweep_report(roots, deadline_s=deadline_s)
     new_hits = []
     for root, r in report.items():
         for h in r.get("hits") or []:
@@ -411,7 +481,14 @@ def _main(argv=None):
         report, new_hits = write_runtime()
         aq_alert(new_hits)
         total = sum(len(r.get("hits") or []) for r in report.values())
-        print(f"read_dir_sweep: wrote {RUNTIME_PATH} — {total} hits, {len(new_hits)} new")
+        # wq#3167: a root that hit ROOT_TIMEOUT_S/SWEEP_DEADLINE_S still gets a hits
+        # list (possibly partial) in `report`; one skipped before it ever started
+        # carries "error" instead — surface both so a slow/growing root is visible in
+        # the unit's log, not just silently thinner than the day before.
+        incomplete = [root for root, r in report.items() if r.get("partial") or "error" in r]
+        incomplete_note = f", {len(incomplete)} incomplete: {incomplete}" if incomplete else ""
+        print(f"read_dir_sweep: wrote {RUNTIME_PATH} — {total} hits, {len(new_hits)} new"
+              f"{incomplete_note}")
         # wq#2115: a FINDING is not a FAILURE. This mode runs as a systemd oneshot, and
         # a hit-driven exit 1 marks lumen-read-dir-sweep.service failed and skips its
         # ExecStartPost cron stamp — i.e. a found secret looks exactly like a broken

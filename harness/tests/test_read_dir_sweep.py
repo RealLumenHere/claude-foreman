@@ -4,6 +4,7 @@ line BEFORE masking, so a token cut at the 100-char edge escaped the replace and
 was printed whole. That exact shape is pinned here."""
 import os
 import sys
+import time
 
 import pytest
 
@@ -427,3 +428,104 @@ def test_credential_basename_inside_report_dir_still_pages(tmp_path):
     _write(tmp_path, "_runs/mask_at_rest/leaked.env", "X=1\n")
     hits, _ = rds.sweep_root(str(tmp_path))
     assert [h[2] for h in hits] == ["basename"]
+
+
+# ---- wq#3167: a huge/pathological root must not blow through the whole run --------
+# 09-29 05:16Z: the service's 600s TimeoutStartSec killed the sweep after the first
+# night wq#2119's `defaults.add_dirs` fold-in put /home/lumen/foreman (its _runs/
+# snapshot archive alone: 40797 files, 77% of the tree) into the swept roots. The
+# process never finished, so runtime/read_dir_sweep.json never got a fresh write, and
+# capability_lint.sweep_stale() fails EVERY dir() grant closed off that one top-level
+# `ts` — a global outage from one slow root, not just missing coverage for that root.
+
+
+def test_bounded_sweep_root_is_partial_when_deadline_already_passed(tmp_path):
+    _write(tmp_path, "a.txt", "nothing\n")
+    _write(tmp_path, "b.txt", "nothing\n")
+    hits, nfiles, partial = rds._sweep_root_bounded(str(tmp_path), deadline=time.monotonic() - 1)
+    assert partial is True
+    assert nfiles == 0 and hits == []
+
+
+def test_bounded_sweep_root_with_no_deadline_matches_public_wrapper(tmp_path):
+    _write(tmp_path, "prod.env", "nothing\n")
+    hits, nfiles, partial = rds._sweep_root_bounded(str(tmp_path), deadline=None)
+    assert partial is False
+    assert (hits, nfiles) == rds.sweep_root(str(tmp_path))
+
+
+def test_sweep_report_marks_a_root_partial_when_its_own_timeout_elapses(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    _write(root, "a.txt", "nothing\n")
+    monkeypatch.setattr(rds, "ROOT_TIMEOUT_S", -1)  # already-expired budget
+    report = rds._sweep_report([str(root)])
+    entry = report[str(root)]
+    assert entry["partial"] is True
+    assert entry["files"] == 0
+    assert "elapsed_s" in entry
+
+
+def test_sweep_report_records_elapsed_s_for_a_normal_root(tmp_path):
+    root = tmp_path / "root"
+    _write(root, "a.txt", "nothing\n")
+    report = rds._sweep_report([str(root)])
+    entry = report[str(root)]
+    assert "partial" not in entry
+    assert entry["files"] == 1
+    assert entry["elapsed_s"] >= 0
+
+
+def test_sweep_report_skips_a_root_entirely_once_the_global_deadline_passes(tmp_path):
+    slow = tmp_path / "slow"
+    fast = tmp_path / "fast"
+    _write(slow, "a.txt", "nothing\n")
+    _write(fast, "b.txt", "nothing\n")
+    report = rds._sweep_report([str(slow), str(fast)], deadline_s=-1)
+    assert "sweep deadline reached" in report[str(slow)]["error"]
+    assert report[str(slow)]["hits"] == []
+    assert "sweep deadline reached" in report[str(fast)]["error"]
+
+
+def test_sweep_report_earlier_roots_are_unaffected_by_a_later_deadline_skip(tmp_path, monkeypatch):
+    """The order write_runtime() builds `roots` in (policy_read_dirs() then
+    worker_add_dirs()) puts the capability_lint-gating roots first — a deadline that
+    trims the run must only ever cost the LAST root(s), never an earlier one. The first
+    root's own sweep is real and fast (well inside the 100ms budget); a spy sleeps
+    AFTER it returns to push elapsed time past the 100ms global deadline before the
+    second root's pre-start check, without touching the deadline math under test."""
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _write(first, "a.txt", "nothing\n")
+    _write(second, "b.txt", "nothing\n")
+    real_bounded = rds._sweep_root_bounded
+
+    def slow_after_first(root, deadline=None):
+        result = real_bounded(root, deadline=deadline)
+        if root == str(first):
+            time.sleep(0.2)
+        return result
+
+    monkeypatch.setattr(rds, "_sweep_root_bounded", slow_after_first)
+    report = rds._sweep_report([str(first), str(second)], deadline_s=0.1)
+    assert "error" not in report[str(first)]
+    assert report[str(first)]["files"] == 1
+    assert "sweep deadline reached" in report[str(second)]["error"]
+
+
+def test_write_runtime_finishes_and_writes_fresh_ts_when_a_root_is_incomplete(tmp_path):
+    """The actual wq#3167 fix: a root that can't finish in time must truncate itself,
+    never the whole write_runtime() call — capability_lint.sweep_stale() gates on this
+    file's top-level `ts` existing and being recent, regardless of any one root's
+    per-root completeness (harness/capability_lint.py:673-676)."""
+    huge = tmp_path / "huge"
+    _write(huge, "a.txt", "nothing\n")
+    _write(huge, "b.txt", "nothing\n")
+    _write(huge, "c.txt", "nothing\n")
+    runtime = tmp_path / "runtime" / "read_dir_sweep.json"
+    report, _ = rds.write_runtime(roots=[str(huge)], runtime_path=str(runtime),
+                                  deadline_s=-1)
+    assert runtime.exists()
+    import json
+    written = json.loads(runtime.read_text())
+    assert written["ts"]
+    assert "sweep deadline reached" in report[str(huge)]["error"]
