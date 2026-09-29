@@ -12,7 +12,10 @@ and how to read the grade log, lives at
 - `orchestrator.sh` — runs the three headless stages in order, stops at
   first FAIL, appends to `grades/resale_grades.csv`.
 - `bind_check.sh` — Vulkan (RADV) + OpenCL bind/visibility check.
-- `vram_test.sh` — `memtest_vulkan` VRAM stress wrapper.
+- `vram_test.sh` — `memtest_vulkan` VRAM stress wrapper. memtest_vulkan has no CLI flags: the wrapper
+  enumerates its device menu, picks the index whose `Bus=` matches the card under test, feeds it on stdin.
+- `memtest_verdict.sh` — grades a memtest_vulkan log (FAIL / PASS / UNGRADED). PASS needs the tool's own
+  `Standard 5-minute test PASSed` line and a confirmed device bus; UNGRADED maps to TOOL_MISSING, never a card FAIL.
 - `compute_soak.sh` — `gpu-burn`/`clpeak` compute soak with thermal/clock
   telemetry via `monitor_sysfs.sh`.
 - `record_visual_gate.sh` — records the manual FurMark2/glmark2 gate result
