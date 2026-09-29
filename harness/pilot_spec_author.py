@@ -372,6 +372,80 @@ def fill_card(card, proposal, call, wallclock=90):
     return apply_spec(card, result), result
 
 
+REMOTE_LINE = re.compile(r'(?m)^\s*\$?\s*ssh\b')
+
+_PATH_TOKEN = re.compile(r'(?<![\w.-])((?:/|pilots/)[\w][\w.\-]*(?:/[\w.\-]+)*)')
+
+
+def _referenced_paths(text):
+    """File paths a Baseline/Treatment command block names: absolute, or repo-relative
+    under `pilots/` (how every runner-authored card in this repo addresses its own
+    fixtures — see `pilots/9d95766f5f43/CARD.md`). Skips `ssh host '...'` lines: that
+    path lives on the remote host, which this process cannot resolve locally, and the
+    grant needed to dispatch such a line at all is a separate, already-logged gap
+    (ISSUE-LOG row 1034), not a missing-file defect.
+    """
+    paths = []
+    for line in text.splitlines():
+        if REMOTE_LINE.match(line):
+            continue
+        paths.extend(m.rstrip('.,;:)') for m in _PATH_TOKEN.findall(line))
+    return paths
+
+
+def unresolved_command_paths(sections, repo_root):
+    """Every path a Baseline/Treatment command names that does not exist on disk.
+
+    wq#3118: seven pilot cards (wq#2823/2824/2825/2833/2834/2835/2966) shipped Baseline
+    commands against files nothing had ever created (agentbrew_sample.csv,
+    iris-mini-pilot/{qa_set.jsonl,score.py}, dgm_v2/paired_eval/*, lexcompress_eval.py,
+    semlayer_pilot, episodes_holdout.jsonl, eval_set_v1.jsonl) — all 7 blocked under the
+    wq#1559 card protocol because the baseline could not reproduce. `validate()` only
+    checks that a section LOOKS like a command (`COMMAND_LINE`); it runs right after the
+    LLM drafts the spec, before any harness/extract step has had a chance to create the
+    fixture, so it must not demand the path exist yet. This check is the second gate the
+    ticket asks for: run it once the harness is supposed to exist (e.g. right before a
+    ticket is opened to the pilot lane) so a card whose Baseline still names a phantom
+    path is caught there instead of at the runner's first `fleet-exec run`.
+    """
+    missing = []
+    for arm in ('baseline', 'treatment'):
+        for path in _referenced_paths(sections.get(arm) or ''):
+            resolved = path if os.path.isabs(path) else os.path.join(repo_root, path)
+            if not os.path.exists(resolved):
+                missing.append(f'{arm}: {path} does not resolve')
+    return missing
+
+
+def lint_card(card_text, repo_root):
+    """Card-lint gate (wq#3118): the Baseline/Treatment paths a rendered CARD.md names
+    must resolve before the ticket is allowed into the pilot lane. Returns a problem
+    list; non-empty means the card is unrunnable and must not be dispatched.
+    """
+    lines = card_text.splitlines()
+    sections = {}
+    for heading, key in HEADINGS.items():
+        if key not in ('baseline', 'treatment'):
+            continue
+        bounds = _section_bounds(lines, heading)
+        if not bounds:
+            continue
+        sections[key] = re.sub(r'```', '', '\n'.join(lines[bounds[0]:bounds[1]]))
+    return unresolved_command_paths(sections, repo_root)
+
+
+def _main(argv):
+    if len(argv) != 3 or argv[0] != 'lint':
+        print('usage: pilot_spec_author.py lint <repo_root> <CARD.md>')
+        return 2
+    _, repo_root, card_path = argv
+    with open(card_path) as fh:
+        problems = lint_card(fh.read(), repo_root)
+    for problem in problems:
+        print(problem)
+    return 1 if problems else 0
+
+
 def unfilled_sections(card):
     """Which of the five spec sections are still empty or template-only.
 
@@ -391,3 +465,8 @@ def unfilled_sections(card):
         if not body:
             unfilled.append(key)
     return unfilled
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(_main(sys.argv[1:]))

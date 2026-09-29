@@ -152,6 +152,38 @@ def test_parse_draft_reads_a_fenced_reply():
     assert psa.parse_draft('no json here') == {}
 
 
+# wq#3118: seven pilot cards passed `validate()`'s command-SHAPE check yet named
+# Baseline/Treatment paths nothing had ever created (agentbrew_sample.csv,
+# iris-mini-pilot/qa_set.jsonl, dgm_v2/paired_eval/*, ...), so every one blocked on
+# "baseline does not reproduce" under the wq#1559 card protocol. `lint_card` is the
+# second gate the ticket asks for, run once the harness is supposed to exist.
+def test_lint_card_passes_a_real_runner_authored_card():
+    with open(RUNNER_FILLED_CARD) as fh:
+        card = fh.read()
+    assert psa.lint_card(card, REPO) == []
+
+
+def test_lint_card_flags_a_phantom_baseline_path():
+    card = psa.apply_spec(
+        open(TEMPLATE).read(),
+        psa.SpecResult(True, {**GOOD_SPEC, 'baseline':
+                       'python3 pilots/wq3118-phantom/run_pilot.py --arm baseline'}))
+    problems = psa.lint_card(card, REPO)
+    assert any('pilots/wq3118-phantom/run_pilot.py' in p for p in problems), problems
+
+
+def test_lint_card_skips_remote_ssh_lines():
+    """A path named on an `ssh host '...'` line lives on the remote host and cannot be
+    resolved from here — flagging it would conflate the wq#3118 missing-file defect
+    with the separate, already-logged dispatch-grant gap (ISSUE-LOG row 1034)."""
+    card = psa.apply_spec(
+        open(TEMPLATE).read(),
+        psa.SpecResult(True, {**GOOD_SPEC,
+                       'baseline': "ssh hathor 'python3 /data/lumen/does/not/exist.py'",
+                       'treatment': 'python3 pilots/9d95766f5f43/run_pilot.py --arm treatment'}))
+    assert psa.lint_card(card, REPO) == []
+
+
 def test_real_runner_authored_spec_passes_the_validator():
     """Outside-the-design-population probe: a committed card a runner wrote by hand,
     cited in wq#2690 as a legitimate fill-in. The validator must accept it."""
