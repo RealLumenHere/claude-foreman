@@ -42,10 +42,11 @@ Next pass runs within 5 minutes, then every 15 minutes. Watch it:
   journalctl -u langfuse-lag-monitor -f
   python3 /home/lumen/foreman/harness/langfuse_lag_monitor.py
 
-NOTE (see README.md): LANGFUSE_LAG_ENDPOINT_PATH and LANGFUSE_LAG_FIELD are
-still UNVERIFIED against the real v4.32.0 API as of wq#1554 — this worker's
-sandbox had no outbound web access and no reach to the Langfuse deploy
-config to confirm the containers were even bumped to v4.32.0 yet. Confirm
-both against release docs or a live probe before trusting a "no alert"
-result as "lag is fine" rather than "wrong endpoint, silently skipping."
+NOTE (see README.md): as of wq#3124 the probe is canary read-back
+(POST /api/public/ingestion, then GET /api/public/traces/{id}), verified
+against the live v4.32.0 instance on 2026-09-29 — the wq#1552 export-lag
+endpoint never existed and its LANGFUSE_LAG_ENDPOINT_PATH/LANGFUSE_LAG_FIELD
+knobs are gone. State lives at LANGFUSE_LAG_STATE (default
+/home/lumen/.local/state/langfuse_lag_monitor.json); threshold is
+LANGFUSE_LAG_THRESHOLD_S (default 2700s = 3 poll intervals).
 EOF

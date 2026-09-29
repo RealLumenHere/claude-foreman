@@ -1,7 +1,9 @@
-# langfuse-lag-monitor.service — one pass polling Langfuse's export-lag
-# metric, alerting via ntfy if lag exceeds threshold (wq#1552, wired wq#1554).
+# langfuse-lag-monitor.service — one pass of the Langfuse canary-staleness
+# probe: verify the previous pass's canary trace is readable, alert via ntfy
+# if no canary has been confirmed end-to-end within threshold, plant the next
+# canary (wq#1552, wired wq#1554, repointed at real signals wq#3124).
 [Unit]
-Description=Langfuse export-lag probe — one pass (wq#1552/wq#1554)
+Description=Langfuse canary-staleness probe — one pass (wq#1552/wq#1554/wq#3124)
 Documentation=file:///home/lumen/foreman/ops/wq1554-langfuse-lag-monitor/README.md
 After=network-online.target
 Wants=network-online.target
@@ -13,10 +15,11 @@ Group=lumen
 ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/langfuse_lag_monitor.py
 ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
 # run() (harness/langfuse_lag_monitor.py) returns 1 on a deliberate skip (no
-# creds at LANGFUSE_ENV, or the endpoint fetch/parse failed) — same
-# log-only-degradation contract as langfuse_client.load_creds, never
-# load-bearing for the caller. That is not a probe failure, so it must not
-# trip a restart loop or OnFailure=.
+# creds at LANGFUSE_ENV, or neither the canary read-back nor a fresh ingest
+# reached the server) — same log-only-degradation contract as
+# langfuse_client.load_creds, never load-bearing for the caller. That is not
+# a probe failure, so it must not trip a restart loop or OnFailure=. Staleness
+# alerting still fires on skip passes once persisted state crosses threshold.
 SuccessExitStatus=0 1
 TimeoutStartSec=60
 Nice=5

@@ -1,12 +1,14 @@
-# langfuse-lag-monitor.timer — 15-minute Langfuse export-lag probe
-# (wq#1552/wq#1554).
+# langfuse-lag-monitor.timer — 15-minute Langfuse canary-staleness probe
+# (wq#1552/wq#1554, repointed wq#3124).
 #
-# The alert threshold (LANGFUSE_LAG_THRESHOLD_S, default 300s) is 5 minutes;
-# polling every 15 minutes gives 3 chances to catch a sustained lag spike
-# within the hour without paging on every transient blip a single sample
-# would catch.
+# Each pass confirms the previous pass's canary trace, so healthy staleness
+# cycles between 0 and ~15 minutes. The alert threshold
+# (LANGFUSE_LAG_THRESHOLD_S, default 2700s = 45 min = 3 poll intervals)
+# tolerates two consecutive missed/failed passes before paging, so a single
+# transient blip never alerts but a sustained pipeline outage pages within
+# the hour.
 [Unit]
-Description=Langfuse export-lag probe (wq#1552/wq#1554)
+Description=Langfuse canary-staleness probe (wq#1552/wq#1554/wq#3124)
 
 [Timer]
 OnBootSec=5min
