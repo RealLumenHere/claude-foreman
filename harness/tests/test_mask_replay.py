@@ -847,6 +847,13 @@ def test_wq2253_sk_key_is_absent_from_the_model_context():
     tracked = mask_replay.tracked_text()
     found = {}
     for source, text in items.items():
+        # wq#2959: a `read-stale:` window is today's text standing in for bytes that are
+        # gone (mask_replay._recut), i.e. evidence of nothing about what the model was
+        # handed. The run's Read of the doctrine log at line 658 is one: the log has
+        # grown since, so today's line 658 is a row the model never saw, and it holds
+        # these three values. Scoring it turned this test red on the log's own growth.
+        if source.startswith("read-stale:"):
+            continue
         hits = {r["value_sha256_12"] for r
                 in mask_replay.replay(2253, tracked=tracked, items={source: text})
                 if r["label"] == "sk-key"}

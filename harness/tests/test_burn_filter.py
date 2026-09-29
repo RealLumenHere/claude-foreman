@@ -344,11 +344,12 @@ def _tracked_modules():
     return [os.path.join(REPO_ROOT, p) for p in out.stdout.split()]
 
 
-def _sweep(runner):
+def _sweep(runner, paths=None):
     """Read every tracked module the way a worker does. Returns the ones that still
-    match a pattern and the ones that would page, sharing one provenance cache."""
+    match a pattern and the ones that would page, sharing one provenance cache.
+    `paths` swaps the tracked tree for an explicit list (wq#2959: the planted module)."""
     matched, pages, cache = [], [], {}
-    for path in _tracked_modules():
+    for path in (_tracked_modules() if paths is None else paths):
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
         labels = masking.mask_text(text)[1]
@@ -375,12 +376,29 @@ def test_no_tracked_module_pages_when_a_worker_reads_it():
         pytest.skip("not a git checkout")
     _, pages = _sweep(subprocess.run)
     assert pages == [], "reading tracked source pages: %s" % pages
-    # ...and the zero is screening's doing, not a corpus that matches nothing: blind
-    # the provenance check and the same sweep must page, or this test proves nothing.
-    blinded, blind_pages = _sweep(FakeGrep())
-    assert blind_pages, (
-        "sweep is vacuous: %d files match a pattern, none page unaccounted"
-        % len(blinded))
+    # wq#2959: whether the sweep can see a page at all is not this tree's to prove —
+    # the tree is now clean enough that no module matches a rule, and a guard that needs
+    # the tree to hold a credential shape fires on progress. See
+    # test_sweep_pages_a_planted_module_unless_it_is_committed below.
+
+
+def test_sweep_pages_a_planted_module_unless_it_is_committed(tmp_path):
+    """wq#2959: the vacuity guard for the tree-wide sweep, on a fixture that matches on
+    purpose. The sweep above passes when nothing pages, which is also what a sweep that
+    cannot see a match would report; so plant a module that matches a rule and require
+    the same _sweep to page it when its value is unaccounted, and to stay quiet when
+    that value is committed text."""
+    line = f'token_file.write_text("{OAT}")\n'
+    planted = tmp_path / "planted.py"
+    planted.write_text(line)
+    detail = burn_filter.matched_values(line, masking.mask_text(line)[1])
+    assert detail, "the planted module no longer matches any pattern"
+    matched, pages = _sweep(FakeGrep(committed=[]), paths=[str(planted)])
+    assert matched and pages, "sweep is vacuous: a planted module did not page"
+    matched, pages = _sweep(
+        FakeGrep(committed=[m for ms in detail.values() for m in ms]),
+        paths=[str(planted)])
+    assert matched and pages == []
 
 
 # --- provenance across every granted dir (wq#2319) --------------------------
