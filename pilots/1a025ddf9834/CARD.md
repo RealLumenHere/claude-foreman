@@ -23,34 +23,37 @@ Desk research can only report what someone else measured on other hardware.
 
 ## Hypothesis
 
-<!-- One falsifiable sentence. "X beats Y on metric M by at least N" — not "X is
-promising". If it cannot be written this way the pilot is not ready to run. -->
+Sequence-level draft-then-verify (lumen-lfm2-1b drafts, qwen36-local verifies/corrects
+in one pass) reduces mean wall-clock latency by at least 20% vs. qwen36-local answering
+directly, at exact-match quality parity (>=80% exact text match vs. baseline).
 
 ## Primary metric
 
-<!-- ONE number. Name it, name its unit, name what counts as a win BEFORE running.
-A pilot that picks its metric after seeing the numbers has measured nothing. -->
+Mean wall-clock latency per request, in seconds, for treatment vs. baseline over the
+fixed sample. Win = treatment_mean_s <= 0.8 * baseline_mean_s AND exact_match_rate >= 0.8.
 
 ## Fixed sample
 
-<!-- Exactly what the baseline and the treatment both run against. Pin it: a path,
-a row count, a sha256 where the set can drift. Both arms see the same sample or the
-comparison is void. -->
+`pilots/1a025ddf9834/prompts.json` (committed, 5 short single-turn prompts, this file's
+git blob is the pin — no live/mutable source).
 
 ## Baseline (measure FIRST)
 
-<!-- The command that measures what Lumen does today. Run this before building the
-treatment, so the baseline cannot be tuned to lose. -->
-
 ```
+python3 pilots/1a025ddf9834/run_pilot.py
+# baseline arm = spec_decode.baseline_call(): plain qwen36-local chat completion,
+# no draft model involved.
 ```
 
 ## Treatment
 
-<!-- The smallest thing that tests the hypothesis. Not the full proposal — the
-cheapest build that produces the primary metric. -->
-
 ```
+python3 pilots/1a025ddf9834/run_pilot.py
+# treatment arm = spec_decode.speculative_call(): lumen-lfm2-1b drafts a full
+# candidate response, qwen36-local is asked once to accept it verbatim or correct it.
+# True token-level speculative decoding needs per-token logit access, which LiteLLM's
+# /chat/completions surface does not expose for these local models -- this is the
+# closest speculative-style scheme reachable through the existing gateway.
 ```
 
 ## Kill criteria
