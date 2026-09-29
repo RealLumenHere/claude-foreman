@@ -12,7 +12,7 @@ BIN=/home/lumen/bin
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   vcontains "$BIN/unit-drift" "def unexplained_masks"
-  vcontains "$BIN/unit-drift" "print_mask_advisory(masks)"
+  vcontains "$BIN/unit-drift" 'print_mask_advisory\(masks\)'
   vdone
 fi
 
