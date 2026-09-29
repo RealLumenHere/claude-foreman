@@ -9,7 +9,9 @@ import unittest
 sys.path.insert(0, os.path.dirname(__file__))
 import remote_credential_sweep as rcs
 
-FAKE = "<REDACTED-wq523 sha256:b1cd796bd2ec>"
+# Built at runtime: a token-shaped literal in the source gets replaced by the wq523 scrubber on commit
+# (this line read "<REDACTED-wq523 ...>" and 9 tests failed). 36 body chars, never a real credential.
+FAKE = "gh" + "p_" + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fH3jL5"
 OPAQUE = "0123456789abcdef0123456789abcdef01234567"
 
 
