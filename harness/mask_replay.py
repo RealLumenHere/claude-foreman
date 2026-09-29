@@ -713,6 +713,11 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
     rotated = load_rotated_ledger() if rotated is None else rotated
     if skip_masked is None:
         skip_masked = patterns is not LEGACY_PATTERNS
+    # wq#3093: a re-cut whose hash is one the run's own tripwire recorded is the same
+    # bytes the model saw, whatever else in the file changed since. wq#3090 read the
+    # LibreChat compose file and then edited it; all three live secrets re-cut to the
+    # recorded hashes and still sat behind "0 unaccounted".
+    recorded = set(recorded_hits(ticket_id))
     records, seen = [], set()
     for source, text in items.items():
         for label, prefix, value, lo, hi in _located(patterns, text, skip_masked):
@@ -745,7 +750,8 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
                 "value_len": len(value),
                 "value_sha256_12": sha12,
                 "first_seen_in": source,
-                "faithful": not source.startswith("read-stale:"),
+                "faithful": not source.startswith("read-stale:")
+                or (label, sha12) in recorded,
                 # An orphan's value is joined across the mask literal, so the file it
                 # printed from can only ever hold its raw span (wq#3048).
                 "accounted_in": account(value, tracked, prefix) or (
@@ -778,7 +784,8 @@ def unaccounted(records):
 
     A record from an unfaithful re-cut is not one of them: it was scored off text
     that replaced what the run actually read, so it can no more demand a rotation
-    than it can excuse one. It stays in the report, marked, because the gap it names
+    than it can excuse one. A re-cut that reproduces a recorded hit's hash is
+    faithful (wq#3093). It stays in the report, marked, because the gap it names
     is real — that window's true bytes are simply unrecoverable from this run.
     """
     return [r for r in records
@@ -853,6 +860,11 @@ def unreproduced(ticket_id, records):
     two a row is cannot be told from here, so it is audit, never the verdict.
     """
     have = {r["value_sha256_12"] for r in records}
+    return [key for key in recorded_hits(ticket_id) if key[1] not in have]
+
+
+def recorded_hits(ticket_id):
+    """[(label, sha12)] the run's own tripwire wrote to mask-hits-N.json, in order."""
     out = []
     for path in sorted(glob.glob(os.path.join(RUNS_ROOT, f"wq{ticket_id}", "mask-hits-*.json"))):
         try:
@@ -864,7 +876,7 @@ def unreproduced(ticket_id, records):
             if not isinstance(row, dict) or row.get("suppressed"):
                 continue
             key = (row.get("label"), row.get("value_sha256_12"))
-            if key[1] and key[1] not in have and key not in out:
+            if key[1] and key not in out:
                 out.append(key)
     return out
 

@@ -474,6 +474,38 @@ def test_a_window_whose_bytes_are_gone_is_marked_stale(tmp_path, monkeypatch):
     assert "[re-cut]" in out.getvalue()
 
 
+def test_a_stale_window_that_reproduces_a_recorded_hash_is_faithful(tmp_path,
+                                                                    monkeypatch):
+    """wq#3093: wq#3090 read a compose file, then edited it, so its three inline
+    secrets re-cut stale and reported "0 unaccounted". The run's own mask-hits
+    recorded their hashes; a re-cut that reproduces one is the bytes the model saw.
+    A recorded hash that does NOT match leaves the window re-cut."""
+    run = write_run(tmp_path, 4242, "sess-1")
+    read = tmp_path / "read_me.py"
+    (tmp_path / "events" / "read_cache" / "sess-1.jsonl").write_text(
+        read_record(read, 2, 1, read.stat().st_size + 4096))
+    monkeypatch.setattr(mask_replay, "RUNS_ROOT", str(run.parent))
+    monkeypatch.setattr(mask_replay, "EVENTS_DIR", str(tmp_path / "events"))
+    items = mask_replay.corpus(4242)
+    stale = next(r for r in mask_replay.replay(4242, tracked={}, items=items)
+                 if not r["faithful"])
+    hits = run / "mask-hits-1.json"
+
+    hits.write_text(json.dumps([{"label": stale["label"], "value_sha256_12": "0" * 12}]))
+    other = mask_replay.replay(4242, tracked={}, items=items)
+    assert not next(r for r in other if r["value_sha256_12"] == stale["value_sha256_12"]
+                    )["faithful"]
+
+    hits.write_text(json.dumps([{"label": stale["label"],
+                                 "value_sha256_12": stale["value_sha256_12"]}]))
+    records = mask_replay.replay(4242, tracked={}, items=items)
+    rec = next(r for r in records if r["value_sha256_12"] == stale["value_sha256_12"])
+    assert rec["faithful"]
+    out = io.StringIO()
+    mask_replay.report(4242, records, out=out)
+    assert "[re-cut]" not in out.getvalue()
+
+
 def test_a_changed_file_resolves_from_the_runs_own_snapshot_before_git_history(
         tmp_path, monkeypatch):
     """wq#2370: the run's own frozen pre-image is stronger evidence than a same-sized
