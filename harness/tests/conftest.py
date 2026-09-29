@@ -12,9 +12,14 @@ def _hallucination_guard_off(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_live_aq(monkeypatch, tmp_path):
     """wq#1697: fworker's CAPABILITY_DENIED path files an aq row. No test may open one
-    on the live alert queue; capability_proposal fails open on a missing binary."""
+    on the live alert queue; capability_proposal fails open on a missing binary.
+    wq#3164: mask_at_rest's held-unmasked alert uses the same aq binary/fail-open
+    shape — same rule applies."""
     import capability_proposal
-    monkeypatch.setattr(capability_proposal, "AQ_BIN", str(tmp_path / "no-aq"))
+    import mask_at_rest
+    fake_aq = str(tmp_path / "no-aq")
+    monkeypatch.setattr(capability_proposal, "AQ_BIN", fake_aq)
+    monkeypatch.setattr(mask_at_rest, "AQ_BIN", fake_aq)
 
 
 @pytest.fixture(autouse=True)

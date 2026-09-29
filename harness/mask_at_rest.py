@@ -82,6 +82,20 @@ OFFSITE_PASSWORD_FILE = os.environ.get(
 OFFSITE_SSH_KEY = os.environ.get(
     "MASK_AT_REST_OFFSITE_KEY", "/home/lumen/.ssh/thoth_ed25519")
 RESTIC_TIMEOUT_S = 120
+# wq#3164: lumen-mask-at-rest.service sets no Environment=PATH=, so it runs under
+# systemd's own default $PATH (systemd.exec(5): /usr/local/sbin:/usr/local/bin:
+# /usr/sbin:/usr/bin:/sbin:/bin), which does not include ~/.local/bin — restic's
+# actual install location on this box. A bare "restic" argv[0] made subprocess do a
+# PATH lookup that failed every unit run ("No such file or directory: restic"),
+# skipping the offsite snapshot and leaving every hit file "held unmasked" with no
+# alert (283 transcripts on the 2026-09-29 03:17Z run). Resolve by absolute path
+# instead, so the unit's PATH is irrelevant.
+RESTIC_BIN = os.environ.get("RESTIC_BIN", "/home/lumen/.local/bin/restic")
+
+# Same fail-open aq wiring as read_dir_sweep.aq_alert — a missing/broken aq binary
+# must never break the sweep itself.
+AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "/home/lumen/bin/aq")
+AQ_SOURCE = "mask-at-rest"
 
 STATE_PATH = os.environ.get("MASK_AT_REST_STATE",
                             os.path.join(FOREMAN_ROOT, "mask_at_rest_state.json"))
@@ -138,6 +152,51 @@ def _save_state(state):
         json.dump(state, fh, indent=2)
         fh.write("\n")
     os.replace(tmp, STATE_PATH)
+
+
+def _new_or_changed(paths, scanned_mtimes):
+    """`paths` whose current mtime is newer than the last mtime recorded clean/masked
+    for it in STATE_PATH (or that were never recorded at all) — wq#3164's incremental
+    bound. A path that errors on stat is treated as changed (scan it; the read below
+    will hit and log the same error)."""
+    out = []
+    for p in paths:
+        try:
+            mtime = os.path.getmtime(p)
+        except OSError:
+            out.append(p)
+            continue
+        prev = scanned_mtimes.get(p)
+        if prev is None or mtime > prev:
+            out.append(p)
+    return out
+
+
+def _update_state(state, store, transcripts, gateways, scanned):
+    """Fold this pass's `scanned` {path: mtime} map into STATE_PATH, split back into
+    the transcripts/supergateway buckets the next run's `_new_or_changed` reads. Only
+    ever grows/refreshes entries for paths this pass actually settled (process_store
+    never puts a held-unmasked or errored path in `scanned`).
+
+    A bucket is only pruned when its store was actually in scope this run (`store`)
+    — a `--store transcripts` pass must not wipe the supergateway bucket just because
+    it never listed that store's files this time. When a store IS in scope, any of
+    its bucket entries no longer in the fresh listing (deleted/rotated-away file) are
+    dropped rather than kept as dead weight."""
+    gw_set = set(gateways)
+    t_bucket = state.setdefault("transcripts", {})
+    g_bucket = state.setdefault("supergateway", {})
+    for p, mtime in scanned.items():
+        (g_bucket if p in gw_set else t_bucket)[p] = mtime
+    if store in ("transcripts", "all"):
+        still_live = set(transcripts)
+        for stale in [p for p in t_bucket if p not in still_live]:
+            del t_bucket[stale]
+    if store in ("supergateway", "all"):
+        still_live = gw_set
+        for stale in [p for p in g_bucket if p not in still_live]:
+            del g_bucket[stale]
+    _save_state(state)
 
 
 def transcript_paths(session=None):
@@ -207,7 +266,7 @@ def offsite_backup(paths, tag):
     env = dict(os.environ)
     env["RESTIC_PASSWORD_FILE"] = OFFSITE_PASSWORD_FILE
     env["RESTIC_REPOSITORY"] = OFFSITE_REPO
-    cmd = ["restic", "-o", f"sftp.command=ssh -o StrictHostKeyChecking=no "
+    cmd = [RESTIC_BIN, "-o", f"sftp.command=ssh -o StrictHostKeyChecking=no "
                             f"-i {OFFSITE_SSH_KEY} thoth@192.168.8.218 -s sftp",
            "backup", "--tag", tag, "--host", "lumen-mask-at-rest", "--"] + paths
     try:
@@ -225,30 +284,37 @@ def offsite_backup(paths, tag):
 
 def process_store(paths, run_id, dry_run, rotated):
     """One store's files: mask each, backing up off-box first. Returns
-    (files_masked, all_records, unaccounted_records)."""
-    files_masked, all_records, unaccounted = 0, [], []
-    to_backup = []
+    (files_masked, all_records, unaccounted_records, held_unmasked_paths, scanned).
+
+    `scanned` is a {path: mtime} map of every file settled this pass (clean, or
+    masked with a successful backup) — never a file that errored or is still
+    held unmasked. main() folds this into STATE_PATH so the next incremental pass
+    (wq#3164) can skip a stat-unchanged file instead of re-reading it."""
+    files_masked, all_records, unaccounted, scanned = 0, [], [], {}
     plans = []
     for path in paths:
         try:
+            mtime = os.path.getmtime(path)
             text = _read_text(path)
         except OSError as exc:
             log(f"skip {path}: {exc}")
             continue
         masked, records = mask_file_text(text)
         if not records:
+            scanned[path] = mtime
             continue
         plans.append((path, masked, records))
     if not plans:
-        return 0, [], []
+        return 0, [], [], [], scanned
     if not dry_run:
         to_backup = [p for p, _, _ in plans]
         if not offsite_backup(to_backup, tag=f"mask-at-rest-{run_id}"):
             log("offsite backup did not succeed for this batch — masking SKIPPED "
                 "for these files this pass (will retry next run):")
-            for p, _, _ in plans:
+            held = [p for p, _, _ in plans]
+            for p in held:
                 log(f"  held unmasked (backup failed): {p}")
-            return 0, [], []
+            return 0, [], [], held, scanned
     for path, masked, records in plans:
         all_records.extend({**r, "path": path} for r in records)
         loose = [r for r in records
@@ -262,9 +328,10 @@ def process_store(paths, run_id, dry_run, rotated):
         mode = os.stat(path).st_mode & 0o777
         _write_text(path, masked, mode)
         files_masked += 1
+        scanned[path] = os.path.getmtime(path)
         log(f"masked {path}: {sorted({r['label'] for r in records})} "
             f"({len(records)} value(s))")
-    return files_masked, all_records, unaccounted
+    return files_masked, all_records, unaccounted, [], scanned
 
 
 def page_alarm(unaccounted, run_id):
@@ -282,6 +349,26 @@ def page_alarm(unaccounted, run_id):
     except (OSError, subprocess.SubprocessError):
         pass
     log(msg)
+
+
+def aq_alert_held_unmasked(held_unmasked, run_id):
+    """wq#3164: a failed offsite backup used to make process_store return an empty
+    (0, [], []) — indistinguishable from "nothing to do" — so main() exited 0 and
+    283 unmasked transcripts sat silent until the next audit found them. File an aq
+    row instead of trusting exit 0 to carry this; fail-open on a missing/broken aq
+    binary, same as read_dir_sweep.aq_alert."""
+    if not held_unmasked or not os.path.exists(AQ_BIN):
+        return
+    title = (f"mask-at-rest {run_id}: offsite backup failed, "
+             f"{len(held_unmasked)} file(s) held unmasked")
+    body = "restic invoke or backup failed; see mask_at_rest log for these paths:\n" \
+        + "\n".join(held_unmasked[:50])
+    try:
+        subprocess.run([AQ_BIN, "add", AQ_SOURCE, run_id, title, body],
+                       check=False, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    log(title)
 
 
 def write_run_log(run_id, records):
@@ -311,26 +398,42 @@ def main(argv=None):
 
     run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     rotated = mask_replay.load_rotated_ledger()
+    state = _load_state()
 
-    paths = []
-    if args.store in ("transcripts", "all"):
-        paths += transcript_paths(session=args.session)
-    if args.store in ("supergateway", "all"):
-        paths += gateway_log_paths()
-    if not paths:
+    transcripts = (transcript_paths(session=args.session)
+                  if args.store in ("transcripts", "all") else [])
+    gateways = (gateway_log_paths()
+               if args.store in ("supergateway", "all") else [])
+    all_paths = transcripts + gateways
+    if not all_paths:
         log(f"no files found for --store {args.store}"
             + (f" --session {args.session}" if args.session else ""))
         return 2
 
-    files_masked, records, unaccounted = process_store(
+    # wq#3164: a targeted single-session call always scans what it was asked for; the
+    # nightly full sweep skips any file whose mtime hasn't moved since it was last
+    # recorded clean/masked in STATE_PATH — the tree-wide re-read of every transcript
+    # every night (1h08m CPU, 5.3G peak on the 2026-09-29 run) cost time proportional
+    # to the whole corpus instead of to what changed since the last pass.
+    if args.session:
+        paths = all_paths
+    else:
+        paths = (_new_or_changed(transcripts, state.get("transcripts", {})) +
+                 _new_or_changed(gateways, state.get("supergateway", {})))
+
+    files_masked, records, unaccounted, held_unmasked, scanned = process_store(
         paths, run_id, args.dry_run, rotated)
     if records:
         write_run_log(run_id, records)
-    log(f"run {run_id}: scanned {len(paths)} file(s), masked {files_masked}, "
-        f"{len(records)} value(s) found, {len(unaccounted)} unaccounted")
+    log(f"run {run_id}: scanned {len(paths)}/{len(all_paths)} file(s), "
+        f"masked {files_masked}, {len(records)} value(s) found, "
+        f"{len(unaccounted)} unaccounted, {len(held_unmasked)} held unmasked")
     if not args.dry_run:
         page_alarm(unaccounted, run_id)
-    return 1 if unaccounted else 0
+        aq_alert_held_unmasked(held_unmasked, run_id)
+        if not args.session:
+            _update_state(state, args.store, transcripts, gateways, scanned)
+    return 1 if (unaccounted or held_unmasked) else 0
 
 
 if __name__ == "__main__":
