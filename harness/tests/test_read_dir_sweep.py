@@ -335,7 +335,7 @@ def test_reviewed_hit_fingerprint_suppresses_only_that_exact_match(tmp_path, mon
 @pytest.mark.parametrize("line", [
     "url = " + _url("lumen", "pw_" + "MASKED"),                # mask_at_rest: <kept prefix>MASKED
     "url = " + _url("lumen", "MASKED"),
-    "api_key: " + "sk-prod-abcdefghijk" + "MASKED",
+    "api_key: " + "sk-" + "prod-abcdefghijk" + "MASKED",
     'token = "' + "ghp_" + 'MASKED"',                          # what the mask writes for a PAT
 ])
 def test_mask_literal_is_not_a_credential_body(tmp_path, line):
@@ -344,14 +344,86 @@ def test_mask_literal_is_not_a_credential_body(tmp_path, line):
     assert hits == []
 
 
+# ---- wq#2993: the fleet's own mask output is not a credential ----------------------------
+# Probe inputs are pinned in fixtures/wq2993_report_lines.py (committed, seams split),
+# not drawn from a live mask_at_rest log — an unpinned probe is not re-runnable evidence.
+import importlib.util as _ilu  # noqa: E402
+
+_spec = _ilu.spec_from_file_location(
+    "wq2993_report_lines",
+    os.path.join(os.path.dirname(__file__), "fixtures", "wq2993_report_lines.py"))
+w2993 = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(w2993)
+
+
+def test_mask_literal_url_value_is_not_a_hit(tmp_path):
+    """`http://lumen:ghp_MASKED@host` is mask output read back, not a basic-auth pw."""
+    _write(tmp_path, "notes.md", w2993.MASKED_URL + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
+
+
 @pytest.mark.parametrize("line", [
     "url = " + _url("lumen", "pw_" + "MASKEDx9Zq2Lm"),          # MASKED mid-value: still a hit
     "url = " + _url("lumen", "Kf3" + "x9Zq2Lm"),
-    "api_key: " + "sk-prod-abcdefghijk" + "MASKEDx9Zq2Lm",
-    "api_key: " + "sk-prod-abcdefghijk" + "Wv7Zq2Lm8Kf3",
+    "api_key: " + "sk-" + "prod-abcdefghijk" + "MASKEDx9Zq2Lm",
+    "api_key: " + "sk-" + "prod-abcdefghijk" + "Wv7Zq2Lm8Kf3",
 ])
 def test_mask_literal_exemption_does_not_hide_real_credentials(tmp_path, line):
     _write(tmp_path, "real.cfg", line + "\n")
     hits, _ = rds.sweep_root(str(tmp_path))
     assert hits, line[:12]
 
+
+def test_mask_literal_kv_value_is_not_a_hit(tmp_path):
+    _write(tmp_path, "notes.md", w2993.MASKED_KV + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
+
+
+def test_mask_literal_behind_a_token_prefix_is_not_a_hit(tmp_path):
+    """`ghp_<quoted chars>MASKED` — a context window quoting masked output around a kept
+    prefix. The prefixed patterns refuse the tail too, not only url/kv."""
+    _write(tmp_path, "notes.md", w2993.MASKED_GHPAT + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
+
+
+def test_mask_literal_refusal_is_case_sensitive_and_tail_only(tmp_path):
+    """A body that merely CONTAINS the literal mid-run is not mask output; neither is a
+    lower-case one. Both must still page — this is what keeps the refusal falsifiable."""
+    _write(tmp_path, "a.md", _url("lumen", "ghp_" + "MASK" + "EDx9Zq2Lm") + "\n")
+    _write(tmp_path, "b.md", "signing secret = " + "0123456789abcdef" + "mask" + "ed\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert sorted(h[2] for h in hits) == ["kv_secret", "url_basic_auth"]
+
+
+def test_mask_report_artifacts_are_skipped(tmp_path):
+    """A mask finding row is a report ABOUT a credential. Both report shapes —
+    _runs/mask_at_rest/*.jsonl and _runs/<ticket>/mask-hits-*.json — are exempt from
+    content patterns, even when the context window quotes a real-shaped body."""
+    _write(tmp_path, "_runs/mask_at_rest/20260101T000000Z.jsonl",
+           w2993.REPORT_ROW_REAL + "\n" + w2993.REPORT_ROW_MASKED + "\n")
+    _write(tmp_path, "_runs/wq0000/mask-hits-1.json", w2993.REPORT_ROW_REAL + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
+
+
+def test_report_shaped_row_outside_report_paths_still_pages(tmp_path):
+    """Falsifiability probe from OUTSIDE the mask-log population (wq#2630): the same
+    `label: value` JSONL row with a real-shaped body, sitting anywhere that is not a
+    report path, must still page. If this goes quiet the exemption grew too wide."""
+    _write(tmp_path, "docs/triage.jsonl", w2993.REPORT_ROW_REAL + "\n")
+    _write(tmp_path, "_runs/mask_at_rest/deeper/x.jsonl", w2993.REPORT_ROW_REAL + "\n")
+    _write(tmp_path, "_runs/wq0000/notes.json", w2993.REPORT_ROW_REAL + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert len(hits) == 3 and all(h[2] == "url_basic_auth" for h in hits)
+    assert all(w2993.REAL_PW[:3] not in h[3] for h in hits)   # still masked when printed
+
+
+def test_credential_basename_inside_report_dir_still_pages(tmp_path):
+    """The exemption covers content patterns only — a credential FILE dropped into a
+    report dir keeps its basename hit."""
+    _write(tmp_path, "_runs/mask_at_rest/leaked.env", "X=1\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert [h[2] for h in hits] == ["basename"]
