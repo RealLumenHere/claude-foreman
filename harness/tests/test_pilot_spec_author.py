@@ -215,6 +215,43 @@ def test_referenced_paths_still_reads_a_real_path_beside_a_url():
     assert psa._referenced_paths(line) == ['pilots/wq3123-phantom/out.json']
 
 
+# wq#3129 (from wq#3126's verify pass): wq#3123's comment rule was anchored at line
+# start, so only a whole-line comment was skipped. A trailing comment — the shape
+# `pilots/0eed2f5bdb92/CARD.md:81-82` ships — still had its prose read for paths.
+# wq#3123's three probes all used whole-line comments, so it shipped 17/17 green.
+def test_lint_card_ignores_a_route_in_a_trailing_comment():
+    """wq#3126's verbatim repro, through the public gate: a Baseline whose command
+    carries a trailing comment naming an API route linted as 'does not resolve'."""
+    card = psa.apply_spec(
+        open(TEMPLATE).read(),
+        psa.SpecResult(True, {**GOOD_SPEC,
+                       'baseline': 'python3 pilots/9d95766f5f43/run_pilot.py  '
+                                   '# see /api/v1/users for the schema',
+                       'treatment': 'python3 pilots/9d95766f5f43/run_pilot.py --arm t'}))
+    assert psa.lint_card(card, REPO) == []
+
+
+def test_referenced_paths_still_reads_the_command_beside_a_trailing_comment():
+    """The comment is dropped, not the whole line — a phantom path in the command part
+    of a commented line is still the wq#3118 defect and must still be caught."""
+    line = 'python3 pilots/wq3129-phantom/run.py  # writes /api/v1/users fixtures'
+    assert psa._referenced_paths(line) == ['pilots/wq3129-phantom/run.py']
+
+
+def test_referenced_paths_does_not_read_a_word_internal_hash_as_a_comment():
+    """A `#` that does not start a word is part of the token, not a comment marker:
+    ticket refs (`wq#3129`) and URL fragments both appear in this corpus."""
+    assert psa._referenced_paths(
+        'python3 pilots/wq3129-phantom/run.py --ticket wq#3129') == [
+            'pilots/wq3129-phantom/run.py']
+    assert psa._referenced_paths('curl https://example.com/page#pilots/data.csv') == []
+
+
+def test_referenced_paths_still_skips_a_whole_line_comment():
+    """wq#3123's own case, kept live: a `$ `-prefixed comment line names a route."""
+    assert psa._referenced_paths('$ # the judge posts to /chat/completions') == []
+
+
 def test_real_runner_authored_spec_passes_the_validator():
     """Outside-the-design-population probe: a committed card a runner wrote by hand,
     cited in wq#2690 as a legitimate fill-in. The validator must accept it."""

@@ -374,7 +374,9 @@ def fill_card(card, proposal, call, wallclock=90):
 
 REMOTE_LINE = re.compile(r'(?m)^\s*\$?\s*ssh\b')
 
-COMMENT_LINE = re.compile(r'^\s*\$?\s*#')
+# A `#` that opens a shell comment starts a word: preceded by whitespace or line start.
+# `wq#3129`, `page#frag` and a URL fragment keep their `#` and stay readable as paths.
+COMMENT_SPAN = re.compile(r'(?<!\S)#.*')
 
 URL_SPAN = re.compile(r'\w[\w+.\-]*://\S*')
 
@@ -390,16 +392,24 @@ def _referenced_paths(text):
     (ISSUE-LOG row 1034), not a missing-file defect.
 
     wq#3123: prose, not commands, is the other thing a command block holds. A `#`
-    comment line names API routes and endpoints (`/chat/completions`), never files, and
+    comment names API routes and endpoints (`/chat/completions`), never files, and
     a URL's path component belongs to the remote host — `//` even lets `_PATH_TOKEN`
     re-anchor past the scheme, so `https://example.com/pilots/data.csv` yielded the
     bogus local path `/example.com/pilots/data.csv`. Both are dropped before extraction;
     a real path sharing a line with a URL still gets read.
+
+    wq#3129 (from wq#3126's verify pass): wq#3123 anchored the comment rule at line
+    start, so it only dropped a line that is nothing BUT a comment. The shape committed
+    cards actually use is a trailing one — `python3 .../run_pilot.py  # arms A, B, C`
+    (`pilots/0eed2f5bdb92/CARD.md:81`) — and the route in it still linted as a missing
+    file. The comment is now stripped as a span, like the URL, so the command part of
+    the same line keeps being read.
     """
     paths = []
     for line in text.splitlines():
-        if REMOTE_LINE.match(line) or COMMENT_LINE.match(line):
+        if REMOTE_LINE.match(line):
             continue
+        line = COMMENT_SPAN.sub(' ', line)
         line = URL_SPAN.sub(' ', line)
         paths.extend(m.rstrip('.,;:)') for m in _PATH_TOKEN.findall(line))
     return paths
