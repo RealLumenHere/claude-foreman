@@ -22,6 +22,7 @@ def _isolated_dirty_state(tmp_path, monkeypatch):
     monkeypatch.setattr(ptg, "DIRTY_STATE_PATH", str(tmp_path / "dirty.json"))
     monkeypatch.setattr(ptg, "STASH_STATE_PATH", str(tmp_path / "stash.json"))
     monkeypatch.setattr(ptg, "UNTRACKED_STATE_PATH", str(tmp_path / "untracked.json"))
+    monkeypatch.setattr(ptg, "UNTRACKED_BASELINE_PATH", str(tmp_path / "untracked-baseline.json"))
     monkeypatch.setattr(ptg, "BEHIND_STATE_PATH", str(tmp_path / "behind.json"))
     monkeypatch.setattr(ptg, "AQ_BIN", str(tmp_path / "no-aq"))
 
@@ -410,6 +411,59 @@ def test_committing_the_dropping_clears_the_episode(tmp_path, monkeypatch):
     assert ptg.check_untracked_age(repos=[str(repo)], state=state,
                                    now=10 * 86400) == []
     assert state == {}
+
+
+# ---- wq#3175: permanent untracked clutter (questfree's 49,435 generated files,
+# minerva's 2, mailbot's 1) paged every 5-min timer run forever, since check_
+# untracked_age's staleness/exit-1 never clears while a file stays untracked.
+# baseline_untracked_files + check_untracked_age(baseline=...) let a known,
+# accepted untracked path stop counting, while a genuinely NEW one still ages
+# and pages on its own — "only NEW untracked material alerts" (wq#3175's FIX). ----
+
+def test_baseline_suppresses_alert_and_staleness_for_known_file(tmp_path, monkeypatch):
+    repo, _ = make_primary(tmp_path)
+    (repo / "drift_plan.py").write_text("permanent clutter\n")
+    monkeypatch.setattr(ptg, "alert", lambda t, m: pytest.fail("paged"))
+    baseline = ptg.baseline_untracked_files(repos=[str(repo)], baseline={})
+    assert baseline[str(repo)] == ["drift_plan.py"]
+    assert ptg.check_untracked_age(repos=[str(repo)], state={}, baseline=baseline,
+                                   now=time.time() + 30 * 86400) == []
+
+
+def test_baseline_is_per_path_new_file_still_pages(tmp_path, monkeypatch):
+    repo, _ = make_primary(tmp_path)
+    (repo / "drift_plan.py").write_text("permanent clutter\n")
+    baseline = ptg.baseline_untracked_files(repos=[str(repo)], baseline={})
+    (repo / "new_drop.py").write_text("genuinely new\n")
+    alerts = []
+    monkeypatch.setattr(ptg, "alert", lambda t, m: alerts.append((t, m)))
+    state = {}
+    t0 = os.path.getmtime(repo / "new_drop.py")
+    stale = ptg.check_untracked_age(repos=[str(repo)], state=state, baseline=baseline,
+                                    now=t0 + 25 * 3600)
+    assert len(stale) == 1 and stale[0]["files"] == 1
+    assert len(alerts) == 1 and "new_drop.py" in alerts[0][1]
+    assert "drift_plan.py" not in alerts[0][1]
+
+
+def test_cli_baseline_mode_snapshots_and_status_goes_clean(tmp_path, monkeypatch, capsys):
+    repo, _ = make_primary(tmp_path)
+    old = repo / "drift_plan.py"
+    old.write_text("permanent clutter\n")
+    old_time = time.time() - 30 * 86400
+    os.utime(old, (old_time, old_time))
+    monkeypatch.setattr(ptg, "primary_trees", lambda: [str(repo)])
+
+    rc = ptg.main(["status", "--repo", str(repo)])
+    assert rc == 1 and "UNTRACKED" in capsys.readouterr().out
+
+    rc = ptg.main(["baseline", "--repo", str(repo)])
+    assert rc == 0
+    assert "BASELINED" in capsys.readouterr().out
+
+    rc = ptg.main(["status", "--repo", str(repo)])
+    out = capsys.readouterr().out
+    assert rc == 0 and "UNTRACKED" not in out
 
 
 # ---- wq#2618: a primary sitting behind origin/<default> >24h pages — the exact

@@ -67,6 +67,8 @@ STASH_ALERT_AFTER_S = 24 * 3600
 UNTRACKED_STATE_PATH = os.environ.get("PRIMARY_TREE_UNTRACKED_STATE",
                                       "/tmp/.primary-tree-untracked.state")
 UNTRACKED_PAGE_AFTER_S = 24 * 3600
+UNTRACKED_BASELINE_PATH = os.environ.get("PRIMARY_TREE_UNTRACKED_BASELINE",
+                                         "/tmp/.primary-tree-untracked-baseline.state")
 BEHIND_STATE_PATH = os.environ.get("PRIMARY_TREE_BEHIND_STATE",
                                    "/tmp/.primary-tree-behind.state")
 BEHIND_PAGE_AFTER_S = 24 * 3600
@@ -302,17 +304,49 @@ def untracked_files(repo):
     return [line for line in out.splitlines() if line]
 
 
+def baseline_untracked_files(repos=None, baseline=None):
+    """wq#3175: snapshot each repo's CURRENT untracked files into `baseline` so
+    check_untracked_age stops paging on them. questfree's 49,435 generated files
+    (1025h old), minerva's 2 (43h) and mailbot's 1 (27h) are permanent clutter
+    an ops install.sh dropped and nobody will ever commit or .gitignore on the
+    guard's timeline — the alarm paged every 5 min forever, which (wq#3162)
+    trains everyone to ignore it. This does NOT fix the root cause (the files
+    are still untracked, still un-.gitignored) — it only tells the guard "these
+    specific paths are known, stop counting them" so a run against a truly NEW
+    untracked path still ages/pages normally. Returns the updated baseline."""
+    baseline = {} if baseline is None else baseline
+    for repo in (repos if repos is not None else primary_trees()):
+        try:
+            files = untracked_files(repo)
+        except Exception:
+            continue
+        if files:
+            baseline[repo] = sorted(set(baseline.get(repo, [])) | set(files))
+        else:
+            baseline.pop(repo, None)
+    return baseline
+
+
 def check_untracked_age(repos=None, now=None, max_age=UNTRACKED_PAGE_AFTER_S,
-                        state=None, do_alert=True):
+                        state=None, do_alert=True, baseline=None):
     """wq#2618: page for every primary with untracked (non-ignored) paths that
     have sat for longer than max_age. Same first-seen/state/edge-clear shape as
     check_dirty_age — see untracked_files() for why this is a separate check
     rather than dropping check_dirty_age's --untracked-files=no (that flag is
     pinned by test_clean_tree_and_untracked_files_are_not_dirty for the
     branch-restore-safety question, a different concern from this one).
+
+    wq#3175: `baseline` is {repo: [filename, ...]} of paths already accepted as
+    permanent clutter (see baseline_untracked_files) — those paths are filtered
+    out before aging/paging, so only NEW untracked material (not in the
+    baseline) can trigger an alert or a stale (exit-1) result. This is a
+    per-path, not per-repo, filter: one new file in an otherwise-baselined repo
+    still ages and pages on its own.
+
     Returns the stale results: {repo, files, age_s, paged}."""
     now = time.time() if now is None else now
     state = {} if state is None else state
+    baseline = {} if baseline is None else baseline
     stale, seen = [], set()
     for repo in (repos if repos is not None else primary_trees()):
         if check_tree(repo)["error"]:
@@ -321,6 +355,8 @@ def check_untracked_age(repos=None, now=None, max_age=UNTRACKED_PAGE_AFTER_S,
             files = untracked_files(repo)
         except Exception:
             continue
+        baselined = set(baseline.get(repo, []))
+        files = [f for f in files if f not in baselined]
         if not files:
             continue
         seen.add(repo)
@@ -518,12 +554,28 @@ def _save_state(state, path=None):
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("mode", nargs="?", default="check", choices=["check", "status"],
+    ap.add_argument("mode", nargs="?", default="check",
+                    choices=["check", "status", "baseline"],
                     help="check = alert + auto-restore-when-clean (timer mode); "
-                         "status = report only, no alert, no restore")
+                         "status = report only, no alert, no restore; "
+                         "baseline = snapshot current untracked files for "
+                         "--repo (or all primaries) so check/status stop "
+                         "paging on them — run once per already-known, "
+                         "permanent untracked path (wq#3175), never for a "
+                         "genuinely new drop")
     ap.add_argument("--repo", action="append", default=None,
                     help="override: check only these trees (repeatable)")
     a = ap.parse_args(argv)
+
+    if a.mode == "baseline":
+        baseline = baseline_untracked_files(
+            repos=a.repo, baseline=_load_state(UNTRACKED_BASELINE_PATH))
+        _save_state(baseline, UNTRACKED_BASELINE_PATH)
+        for repo in (a.repo if a.repo is not None else primary_trees()):
+            n = len(baseline.get(repo, []))
+            if n:
+                print(f"BASELINED {repo}: {n} untracked file(s)")
+        return 0
 
     if a.mode == "status":
         rc = 0
@@ -544,7 +596,8 @@ def main(argv=None):
             rc = 1
         for s in check_untracked_age(repos=a.repo,
                                      state=_load_state(UNTRACKED_STATE_PATH),
-                                     do_alert=False):
+                                     do_alert=False,
+                                     baseline=_load_state(UNTRACKED_BASELINE_PATH)):
             print(f"UNTRACKED {s['repo']}: {s['files']} untracked file(s), "
                   f"{s['age_s'] / 3600:.0f}h old")
             rc = 1
@@ -598,7 +651,8 @@ def main(argv=None):
     _save_state(dirty_state, DIRTY_STATE_PATH)
 
     untracked_state = _load_state(UNTRACKED_STATE_PATH)
-    for s in check_untracked_age(repos=a.repo, state=untracked_state):
+    for s in check_untracked_age(repos=a.repo, state=untracked_state,
+                                 baseline=_load_state(UNTRACKED_BASELINE_PATH)):
         still_bad += 1
         print(f"UNTRACKED {s['repo']}: {s['files']} untracked file(s), "
               f"{s['age_s'] / 3600:.0f}h old")
