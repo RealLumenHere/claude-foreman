@@ -366,6 +366,12 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(D.mask_hits('TOKEN = os.environ.get("GH_TOKEN")'), [])
         self.assertIn("kv_secret", D.mask_hits("password: " + "hunter2-hunter2-hunter2"))
 
+    def test_mask_refuses_a_sed_pattern_half_only_before_its_own_label(self):
+        # wq#3154: the wq#3153 guard keyed on `.*#` alone silenced real values (wq#3156).
+        label = "API_BEARER_" + "TOKEN"
+        self.assertEqual(D.mask_hits('s#^' + label + '=.*#' + label + '=$token#'), [])
+        self.assertIn("kv_secret", D.mask_hits(label + "=.*#" + "hunter2-hunter2-hunter2"))
+
 
 class T10Base(unittest.TestCase):
     """Shared fixture for the wq#2278 verbs: tempdir engine store, providers

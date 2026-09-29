@@ -169,7 +169,8 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                r"(?![-+?=])"
                # wq#3153: `.*` + a sed delimiter is a substitution's pattern half; the
                # scan resumes at the replacement's label, so a literal there still fires.
-               r"(?!\.[*+][#/@:!~%])"
+               # wq#3154: only when the replacement label is this label (`kl`).
+               r"(?!\.[*+][#/@:!~%|,]\^?(?P=kl)[:=])"
                r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
                r"|placeholder|xxxx+)\b)")
 # wq#2632: the call test reads the VALUE's shape, not the character after it. The
@@ -201,7 +202,7 @@ _KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!
 def _kv_rule(label, guards, floor="{12,}"):
     # wq#2694 landed after this mirror's base: the leading boundary must accept the
     # position right after our own mask literal too (_WB), matching harness/masking.py.
-    return (_WB + r'((?:' + label + r')' + _KV_SEP + r')' + guards
+    return (_WB + r'((?P<kl>' + label + r')' + _KV_SEP + r')' + guards
             + _body(_KV_BODY, floor))
 
 

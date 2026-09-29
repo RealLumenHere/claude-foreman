@@ -230,7 +230,10 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                # substitution, `s#^<LABEL>=.*#<LABEL>=$TOKEN#` (wq#3150's deploy
                # script rewriting API_BEARER_TOKEN in .env). Refusing it here loses nothing: the scan resumes at the
                # replacement's own label, so a literal written there still fires.
-               r"(?!\.[*+][#/@:!~%])"
+               # wq#3154: only when that replacement label IS this label. Keyed on the
+               # 3-char opener alone it silenced any value that happened to start
+               # `.*#`/`.+/` with no sed around it (wq#3156's contradiction).
+               r"(?!\.[*+][#/@:!~%|,]\^?(?P=kl)[:=])"
                r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
                r"|placeholder|xxxx+)\b)")
 # A value that is immediately CALLED is a function, not a credential. wq#2288 spelled

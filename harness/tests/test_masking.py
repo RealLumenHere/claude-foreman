@@ -908,6 +908,21 @@ def test_a_literal_on_the_sed_replacement_side_still_fires():
     assert PW not in masked and ".*#API_BEARER" in masked, masked
 
 
+@pytest.mark.parametrize("line", [
+    # wq#3156's A/B probes: a value that merely OPENS with `.*#`/`.+/` is still a value
+    'my_api_token = ".*#' + "A" * 24 + '"',
+    "API_" "TOKEN=.*#" + PW,
+    "DB_PASS" "WORD=.+/" + PW,
+    "SECRET_" "KEY=.*@" + PW,
+    "AUTH_" "TOKEN=.*:" + PW,
+    # wq#3154: a sed pattern half whose replacement names a DIFFERENT label
+    "sed 's#^API_" "TOKEN=.*#OTHER_" "TOKEN=" + PW + "#'",
+])
+def test_a_wildcard_opener_without_the_label_behind_it_still_fires(line):
+    masked, hits = masking.mask_text(line)
+    assert hits == ["kv-secret"], line
+
+
 def test_a_qualified_noun_still_fires():
     """The narrowing is only safe if the rule still catches: a real leak labels its
     value with a qualified noun, in whatever separator style the source service uses."""
