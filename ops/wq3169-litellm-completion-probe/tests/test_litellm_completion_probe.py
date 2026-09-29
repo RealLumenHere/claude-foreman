@@ -68,6 +68,7 @@ def test_apply_results_is_edge_triggered(tmp_path, monkeypatch):
     notified.clear()
     aq_added.clear()
     recovered = [{"host": "h1", "model": "m1", "ok": True, "elapsed_s": 0.5, "reason": ""}]
-    mod.apply_results(recovered)
+    state3 = mod.apply_results(recovered)
     assert notified == [("low", "LiteLLM completion probe: h1 recovered")]
     assert aq_added == []
+    assert state3["h1"]["failed"] is False
