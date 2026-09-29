@@ -1,0 +1,12 @@
+--- a/home/lumen/sentinel/config/config.yaml
++++ b/home/lumen/sentinel/config/config.yaml
+@@ -379,6 +379,11 @@
+     token: "${GATUS_EXTERNAL_TOKEN}"
+     heartbeat: { interval: 50m }
+     alerts: [{type: ntfy, send-on-resolved: true, description: "Vaultwarden /alive on Ma'at failing (app layer; DB HA + icmp are separate layers) OR probe silent — was maat-watch.timer"}]
++  - name: probe-mcp-pool-degraded
++    group: 5-probes
++    token: "${GATUS_EXTERNAL_TOKEN}"
++    heartbeat: { interval: 50m }
++    alerts: [{type: ntfy, send-on-resolved: true, description: "mcpw.lumennode.uk /pool (shared-secret header) healthy_count<3 OR probe silent — wq#2611, MCP_CONTROL_PLANE_HA_DESIGN.md §3.4. Non-paging until the Worker's /pool route + shared secret are provisioned (design §3.1/§6)."}]
+   # DISABLED 2026-08-29 (orch5): probe-a5-health RETIRED — a5 split services gone 2026-08-21 (Frank). Removing the gatus heartbeat too so it does not page 'probe silent'. Rollback: uncomment.

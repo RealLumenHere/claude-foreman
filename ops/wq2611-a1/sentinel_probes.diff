@@ -1,0 +1,58 @@
+--- a/home/lumen/sentinel/probes/sentinel_probes.py
++++ b/home/lumen/sentinel/probes/sentinel_probes.py
+@@ -752,6 +752,41 @@
+     except Exception as e:
+         return False, f"Vaultwarden /alive unreachable: {type(e).__name__}: {str(e)[:80]}", True
+
++MCPW_POOL_URL = os.environ.get("SENTINEL_MCPW_POOL_URL", "https://mcpw.lumennode.uk/pool.txt")
++MCPW_POOL_SECRET_FILE = Path("/home/lumen/.secrets/mcpw-pool-shared-secret.env")
++MCPW_POOL_MIN_HEALTHY = int(os.environ.get("SENTINEL_MCPW_POOL_MIN_HEALTHY", "3"))
++
++def _mcpw_pool_secret():
++    env = os.environ.get("MCPW_POOL_SHARED_SECRET")
++    if env:
++        return env
++    try:
++        for ln in MCPW_POOL_SECRET_FILE.read_text().splitlines():
++            if ln.startswith("MCPW_POOL_SHARED_SECRET="):
++                return ln.split("=", 1)[1].strip() or None
++    except Exception:
++        return None
++    return None
++
++def probe_mcp_pool_degraded():
++    """wq#2611 (MCP_CONTROL_PLANE_HA_DESIGN.md Sec3.4): mcpw's cron-probed backend
++    pool (Lumen/Anubis/Bes, Sec3.1) can silently drop below N healthy nodes unless
++    something outside the Worker itself watches it. Polls GET /pool.txt -- the
++    shared-secret header variant Gatus uses since it cannot do OAuth -- and
++    FAILs+pages when fewer than MCPW_POOL_MIN_HEALTHY backends are healthy.
++    NOT YET LIVE: the Worker's /pool.txt route and the shared secret are both
++    undeployed pending the CF API token physical task (design doc Sec6) -- until
++    the secret is provisioned this returns a non-paging PASS so the check can't
++    false-page against a route that isn't supposed to exist yet."""
++    secret = _mcpw_pool_secret()
++    if not secret:
++        return True, "MCPW_POOL_SHARED_SECRET not provisioned yet (Worker /pool undeployed, wq#2611 Sec3.1/Sec6)", False
++    try:
++        st, body = _http(MCPW_POOL_URL, headers={"X-Pool-Shared-Secret": secret}, timeout=10)
++    except Exception as e:
++        return False, f"GET {MCPW_POOL_URL} failed: {type(e).__name__}: {str(e)[:120]}", True
++    if st != 200:
++        return False, f"GET {MCPW_POOL_URL} -> HTTP {st}", True
++    try:
++        pool = json.loads(body)
++        healthy_count = int(pool["healthy_count"])
++    except Exception as e:
++        return False, f"pool response unparseable: {e}; body={body[:150]}", True
++    if healthy_count < MCPW_POOL_MIN_HEALTHY:
++        return False, f"mcp-pool-degraded: healthy_count={healthy_count} < {MCPW_POOL_MIN_HEALTHY}", True
++    return True, f"healthy_count={healthy_count}/{MCPW_POOL_MIN_HEALTHY}+ required", False
++
+ # probe-a5-health REMOVED (wq#1122): the agent5 split trio was retired
+ # 2026-08-21, so its probe body and constants are gone. History: wq#1064
+ # (aq#899 false CRITICAL), wq#1092 (stale-target guard), wq#1095 (unregistered).
+@@ -999,6 +1034,7 @@
+     ("probe-litellm-auth-monitor", probe_litellm_auth_monitor, False),
+     ("probe-maat-vault",      probe_maat_vault,      False),   # wq#969 fold
++    ("probe-mcp-pool-degraded", probe_mcp_pool_degraded, False),  # wq#2611, MCP_CONTROL_PLANE_HA_DESIGN.md Sec3.4
+     # DISABLED 2026-08-30 (wq#1095): wq#1092 re-enabled this probe guarded by
