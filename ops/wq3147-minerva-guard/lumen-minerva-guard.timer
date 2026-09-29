@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#3147 — minerva test guard every 6h (minerva has no CI)
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+AccuracySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

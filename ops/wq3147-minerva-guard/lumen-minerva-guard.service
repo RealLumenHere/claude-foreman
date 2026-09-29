@@ -1,0 +1,13 @@
+[Unit]
+Description=wq#3147 — run minerva's pytest suite (incl. sqlite leak ratchet) on origin/main, page on red
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Nice=10
+TimeoutStartSec=20min
+ExecStart=/usr/bin/python3 /home/lumen/services/lumen-minerva-guard/minerva_guard.py run
+StandardOutput=journal
+StandardError=journal
