@@ -1,0 +1,22 @@
+# langfuse-trace-rate-monitor.timer — 15-minute Langfuse trace-rate floor
+# probe (wq#3122).
+#
+# wq#1555 found LiteLLM's Langfuse callback failing silently for 30+ hours
+# (traces/hour fell from a 60-630/hr range to an 11-66/hr non-LiteLLM floor
+# and stayed there) before anyone noticed - there was no alert on trace rate,
+# only on Langfuse's own export lag (wq#1552/wq#1554), which stayed healthy
+# throughout since the traces that did arrive kept exporting fine. Polling
+# every 15 minutes against a 1-hour rolling window (LANGFUSE_TRACE_RATE_WINDOW_S,
+# default 3600) gives several chances to catch a sustained drop within the
+# hour without paging on a single quiet sample.
+[Unit]
+Description=Langfuse trace-rate floor probe (wq#3122)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

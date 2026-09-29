@@ -1,0 +1,23 @@
+# langfuse-trace-rate-monitor.service — one pass polling Langfuse's own
+# trace count for a rolling window, alerting via ntfy if it stays at/under
+# the non-LiteLLM floor (wq#3122).
+[Unit]
+Description=Langfuse trace-rate floor probe — one pass (wq#3122)
+Documentation=file:///home/lumen/foreman/ops/wq3122-litellm-langfuse-trace-drop/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/langfuse_trace_rate_monitor.py
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+# run() (harness/langfuse_trace_rate_monitor.py) returns 1 on a deliberate
+# skip (no creds at LANGFUSE_ENV, or the endpoint fetch/parse failed) - same
+# log-only-degradation contract as langfuse_client.load_creds, never
+# load-bearing for the caller. That is not a probe failure, so it must not
+# trip a restart loop or OnFailure=.
+SuccessExitStatus=0 1
+TimeoutStartSec=60
+Nice=5
