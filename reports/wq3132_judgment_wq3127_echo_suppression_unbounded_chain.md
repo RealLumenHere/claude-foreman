@@ -54,7 +54,9 @@ pre-fix (no echo guard) would alarm: True
 post-fix hits: [] | fully invisible: True
 ```
 
-`secret_key=self.secret_key_correct_horse_battery_staple_extra_words_here_too` — a line the
+`secret_key=self.<label>_correct_horse_battery_staple_extra_words_here_too` (`<label>` is the
+echoed label, spelled out by the repro script above; writing it whole here re-arms the alarm
+now that wq#3133 bounded the guard) — a line the
 **pre-fix** rule set (pointer + call + identifier + self-name guards, no echo) would have
 flagged as `kv-secret` — is, on the code as shipped, masked as `[]` hits: no mask, no alarm,
 no rotation record, indistinguishable from clean text. No other PATTERNS entry provides a

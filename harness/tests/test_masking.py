@@ -1849,6 +1849,22 @@ def test_an_echo_with_an_opaque_part_is_still_a_credential(line):
     assert masking.mask_text(line)[1] == ["kv-secret"], line
 
 
+# wq#3133: the echo guard's runs are counted, so a lowercase chain cannot ride it out of
+# sight. wq#3132 caught the first cut spelling them `+`/`*`: these four lines produced no
+# mask, no hit and no suppression record at all — the one failure shape suppressions()
+# exists to make countable. Longest suppressed qualifier in the wild is three segments
+# (`self.upstream_langfuse_`, asserted above), so the caps sit just past it.
+@pytest.mark.parametrize("line", [
+    _SK + "=self." + _SK + "_correct_horse_battery_staple_extra_words",
+    _SK + "=one.two.three.four.five." + _SK,       # four qualifier segments is a value
+    _SK + "=self." + "_" * 40 + _SK,               # the `__private` seam is bounded too
+    _CR + "=" + _CR + "_dict_of_many_more_words",  # the tail is counted like the head
+])
+def test_a_lowercase_chain_too_long_to_be_an_identifier_is_a_credential(line):
+    assert masking.mask_text(line)[1] == ["kv-secret"], line
+    assert masking.suppressions(line) == []
+
+
 def test_the_env_form_and_the_general_form_record_one_hit():
     _, records = masking.scan("NTFY_PASS=" + PW)
     assert [r["label"] for r in records] == ["kv-secret"]

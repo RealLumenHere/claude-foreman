@@ -298,9 +298,21 @@ _KV_NOT_SELF = r"(?!(?P=kl)[.,:;!?]*(?![A-Za-z0-9._\-+/=:!#$%^*@~]))"
 # `LABEL: LABEL` stays self-name's row. A value followed by `(` is left to "call", so
 # the two copies of the kv rule keep agreeing on what they suppress (the daemon has no
 # echo guard). Recorded as suppression "echo".
+# wq#3133: every repetition in this guard is COUNTED. The first cut spelled the
+# qualifier run `+` and the tail run `*`, so `self.` plus the label plus an arbitrarily
+# long chain of `_`-joined lowercase words rode the guard past the alarm in full — no
+# mask, no record, nothing for rotation to find, and no other PATTERNS entry backstops a
+# bare `label=value` line. That is strictly worse than the pre-echo guard set, which
+# flagged the same line (wq#3132's contradiction of wq#3127). The caps are the observed
+# shapes plus headroom, not one segment: the langfuse value this was written for is
+# `self.upstream_langfuse_<label>`, three qualifier segments deep already. A longer run
+# of lowercase words is no longer an identifier naming the label — it is a value, and a
+# value gets read.
 _KV_ECHO_SEG = r"[a-z]{1,20}"
-_KV_NOT_ECHO = (r"(?!(?:(?-i:_*(?:" + _KV_ECHO_SEG + r"[._]_*)+)(?P=kl)(?-i:(?:[._]"
-                + _KV_ECHO_SEG + r")*)|(?P=kl)(?-i:(?:[._]" + _KV_ECHO_SEG + r")+))"
+_KV_ECHO_GAP = r"_{0,3}"                    # `__private` seams, bounded like the rest
+_KV_ECHO_PRE = _KV_ECHO_GAP + r"(?:" + _KV_ECHO_SEG + r"[._]" + _KV_ECHO_GAP + r"){1,3}"
+_KV_NOT_ECHO = (r"(?!(?:(?-i:" + _KV_ECHO_PRE + r")(?P=kl)(?-i:(?:[._]"
+                + _KV_ECHO_SEG + r"){0,2})|(?P=kl)(?-i:(?:[._]" + _KV_ECHO_SEG + r"){1,2}))"
                 r"(?![A-Za-z0-9._\-+/=:!#$%^*@~(]))")
 
 
