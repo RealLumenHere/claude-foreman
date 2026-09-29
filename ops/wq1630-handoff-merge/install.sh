@@ -8,6 +8,21 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 HANDOFF=/home/lumen/HANDOFF.md
 OLD_KB_FILE=/home/lumen/kb/SESSION-HANDOFF.md
 
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; MUST stay before any install step: a
+# script that did not answer --verify would run the whole install (it did, on 2026-09-28).
+# session-handoff is also shipped by wq1294 (older), so it is matched by the marker this bundle
+# added, not byte-identity.
+if [ "${1:-}" = --verify ]; then
+    . "$HERE/../_verify.sh"
+    vcontains /home/lumen/minerva/context/claude_context.sh 'wq#1630'
+    vcontains /home/lumen/bin/session-handoff 'session-handoff:begin'
+    vunit_file "$HERE/../wq1294-session-handoff/session-handoff.service" /etc/systemd/system/session-handoff.service
+    vcontains "$HANDOFF" '^<!-- session-handoff:begin'
+    vcontains "$HANDOFF" '^### In-flight workers'
+    [ ! -e "$OLD_KB_FILE" ] || _vmiss "second handoff file exists: $OLD_KB_FILE"
+    vdone
+fi
+
 python3 -m pytest -q "$HERE/test_session_handoff.py"
 
 # 1. session-handoff (lumen-bin repo primary tree): renders into HANDOFF.md, no kb file, no git commit.
