@@ -15,6 +15,19 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 
+# wq#1696 deploy-verify contract (ops/_verify.sh), added by wq#2642. Read-only; before any install step.
+# Persistence is the point: CPUWeight/IOWeight=1000 already exist as RUNTIME-only state under
+# /run/systemd/system.control (lost on reboot), so check the /etc files, not `systemctl show`.
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vunit_file "$HERE/desktop-commander-mcp.conf" /etc/systemd/system/desktop-commander-mcp.service.d/10-control-plane-priority.conf
+  vunit_file "$HERE/cloudflared.conf" /etc/systemd/system/cloudflared.service.d/10-control-plane-priority.conf
+  vunit_file "$HERE/lumen-workers.slice" /etc/systemd/system/lumen-workers.slice
+  vactive desktop-commander-mcp.service
+  vactive cloudflared.service
+  vdone
+fi
+
 [ "$(id -u)" = 0 ] || { echo "must run as root (unit drop-ins + slice + restart)"; exit 1; }
 
 DC_DROPIN_DIR=/etc/systemd/system/desktop-commander-mcp.service.d

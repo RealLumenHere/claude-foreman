@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wq#2605 test-to-failure — run AS ROOT, after apply.sh, on Lumen. Reproduces
+# wq#2605 test-to-failure — run AS ROOT, after install.sh, on Lumen. Reproduces
 # the 04:28Z worker-storm shape (stress-ng --cpu 44 --io 8, i.e. saturate every
 # core plus 8 IO stressors) INSIDE lumen-workers.slice, while polling the
 # control plane's own MCP endpoint once a second for the whole window, and

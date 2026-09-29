@@ -14,7 +14,7 @@ Implements `/home/lumen/instructions/drafts/MCP_CONTROL_PLANE_HA_DESIGN.md` §3.
 - `lumen-workers.slice` — new slice: `CPUWeight=50 IOWeight=50 MemoryHigh=40G`.
   Job/worker processes live here so they compete for CPU/IO at 50:1000 against
   the control plane instead of 1:1 on the default `system.slice`.
-- `apply.sh` / `rollback.sh` — root-run installer/uninstaller, detached
+- `install.sh` (was apply.sh; answers `--verify`, wq#2642) / `rollback.sh` — root-run installer/uninstaller, detached
   `systemd-run` restarts, `.pre-ha.bak` backups, health-check gate.
 - `stress_test.sh` — the ticket's test-to-failure: `stress-ng --cpu 44 --io 8`
   for 300s inside `lumen-workers.slice`, concurrent 1s curl loop against
@@ -83,7 +83,7 @@ no root needed) is edited directly and lands as its own PR.
 ## To actually apply and test (needs a root-capable session on Lumen)
 
 ```
-sudo ops/wq2605-control-plane-isolation/apply.sh
+sudo ops/wq2605-control-plane-isolation/install.sh
 sudo ops/wq2605-control-plane-isolation/stress_test.sh 300
 ```
 

@@ -5,6 +5,17 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
+
+# wq#1696 deploy-verify contract (ops/_verify.sh), added by wq#2860. Read-only; before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile      "$SRC/iptables_drift_guard.py" /home/lumen/services/lumen-iptables-drift-guard/iptables_drift_guard.py
+  vunit_file "$SRC/lumen-iptables-drift-guard.service" /etc/systemd/system/lumen-iptables-drift-guard.service
+  vunit_file "$SRC/lumen-iptables-drift-guard.timer" /etc/systemd/system/lumen-iptables-drift-guard.timer
+  venabled   lumen-iptables-drift-guard.timer
+  vactive    lumen-iptables-drift-guard.timer
+  vdone
+fi
 DEST=/home/lumen/services/lumen-iptables-drift-guard
 
 mkdir -p "$DEST"
