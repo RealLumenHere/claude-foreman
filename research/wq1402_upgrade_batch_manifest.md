@@ -144,3 +144,31 @@ G5 HA 2026.8 + 2026.9 breaking-change review.
 G6 Ollama upstream advisories and vendor-doc upgrade procedure.
 G7 confirm netdata presence on the five silent nodes.
 F1 Bes cloudflared crash loop. F2 n8n bound to *:5678.
+
+## Gap resolutions (wq#2992, 2026-09-28)
+
+G5 done. Read the official 2026.8 and 2026.9 backward-incompatible lists. Nothing touches this install
+(tplink x12, esphome, mqtt, prometheus yaml, go2rtc, bluetooth, backup, sun; no custom_components). There is no
+influx config anywhere and no device_id refs in automations, scripts or scenes. The influx-removal claim in
+section 4 is not on the 2026.9 release page. 2026.7.2 to 2026.9.4 is cleared. The recorder db is about 875 MB,
+so give the tar and the first start more than the 240 s estimate.
+
+G6 done. CVE-2026-46603 is golang.org/x/image (high, fixed in 0.45.0), not an Ollama bug. Upstream go.mod at
+v0.30.7, v0.32.6 and v0.34.4 all pin x/image v0.22.0, so upgrading Ollama does not fix it. Do not spend a window
+on this CVE; check go.mod of new tags first. The vendor manual install (docs/linux.mdx) extracts the tar.zst into
+/usr and says to rm -rf /usr/lib/ollama first. Lumen runs /usr/local/bin/ollama (/usr/bin/ollama is a symlink to
+it), so a blind extract would leave the running binary stale. Extract to a temp dir and replace
+/usr/local/bin/ollama and /usr/lib/ollama by hand. Keep the unit and its four drop-ins (models-scratch, listen,
+no-gpu, ram-cap). Never run install.sh.
+
+G7 done. netdata 2.11.1 on hathor, khepri and nephthys; the earlier blank was PATH, the binary is
+/usr/sbin/netdata. sia and wadjet have no netdata, so there is nothing to patch there.
+
+F1 done (wq#2988). The config pointed at a deleted tunnel. It now runs bes-mcp-failover with a backoff drop-in.
+Re-checked after more than 5 h: 0 restarts, 4 connections.
+
+F2 done. n8n was unused (no workflows, credentials, webhooks or executions, and no owner account) and listened
+on all interfaces including IPv6. It is now bound to 127.0.0.1 via
+/etc/systemd/system/n8n.service.d/20-loopback-only.conf. cloudflared reaches it on localhost and the public
+hostname stays behind CF Access. Found on the way: Lumen's ip6tables INPUT policy is ACCEPT, which bypasses the
+v4 lockdowns (wq#3089).
