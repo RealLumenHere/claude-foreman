@@ -170,6 +170,11 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                # wq#3153: `.*` + a sed delimiter is a substitution's pattern half; the
                # scan resumes at the replacement's label, so a literal there still fires.
                # wq#3154: only when the replacement label is this label (`kl`).
+               # wq#3157, why this copy matters most: keyed on value shape alone the
+               # guard silenced any single-occurrence credential opening with those three
+               # characters (ISSUE-LOG #1062), and here that is not a missed page — this
+               # copy is detect-only and fails closed, so the suppression stops the verb
+               # FAILING and the unmasked body rides out on the broker response.
                r"(?!\.[*+][#/@:!~%|,]\^?(?P=kl)[:=])"
                r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
                r"|placeholder|xxxx+)\b)")

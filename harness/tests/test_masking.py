@@ -923,6 +923,20 @@ def test_a_wildcard_opener_without_the_label_behind_it_still_fires(line):
     assert hits == ["kv-secret"], line
 
 
+def test_every_sed_delimiter_in_the_body_charset_is_covered():
+    """wq#3157: the test above takes its inputs from wq#3156's contradiction, which
+    probed four of the seven delimiters `_KV_BODY` can actually hold. A guard is only
+    as narrow as its least-tested branch, so the remaining three get the same
+    treatment — and each case carries its own A/B control, the identical line with
+    the three characters removed, so it cannot pass for the wrong reason."""
+    for prefix in (".*#", ".+/", ".*@", ".*:", ".*!", ".+~", ".*%"):
+        text = 'my_api_token = "' + prefix + PW + '"'
+        masked, hits = masking.mask_text(text)
+        assert hits == ["kv-secret"], text
+        assert PW not in masked, masked            # and the body is really covered
+        assert masking.mask_text('my_api_token = "' + PW + '"')[1] == ["kv-secret"]
+
+
 def test_a_qualified_noun_still_fires():
     """The narrowing is only safe if the rule still catches: a real leak labels its
     value with a qualified noun, in whatever separator style the source service uses."""

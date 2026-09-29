@@ -233,6 +233,19 @@ _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                # wq#3154: only when that replacement label IS this label. Keyed on the
                # 3-char opener alone it silenced any value that happened to start
                # `.*#`/`.+/` with no sed around it (wq#3156's contradiction).
+               # wq#3157 is the judgment that ruling settles, and it lands on this exact
+               # regex from the other side — wq#3154 and wq#3157 derived it independently
+               # (ISSUE-LOG #1063/#1065), so it stays one guard, not two dialects. The
+               # ruling, for whoever widens this next: wq#3153's suppression was ARGUED
+               # from a two-sided structure and SPELLED as three characters of value
+               # shape, and the distance between those two is the whole defect. A floor
+               # or count tightening cannot close it — a sed pattern half and a
+               # credential body are the same length and the same charset — so the guard
+               # has to test the structure it claims. Coverage for every delimiter
+               # `_KV_BODY` can hold is test_every_sed_delimiter_in_the_body_charset_is
+               # _covered; ops/wq3157-sed-guard/probe_sed_guard.py fails in BOTH
+               # directions — reverting to wq#3153 breaks it, and so does dropping the
+               # suppression altogether.
                r"(?!\.[*+][#/@:!~%|,]\^?(?P=kl)[:=])"
                r"(?![*%])(?!(?i:your[-_]|changeme|change[-_]me|example|redacted|masked"
                r"|placeholder|xxxx+)\b)")
