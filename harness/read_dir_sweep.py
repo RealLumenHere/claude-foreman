@@ -207,6 +207,15 @@ REVIEWED_HIT_FINGERPRINTS = {
     # research_prompts/.scratch/autorandr_Makefile:71 — `desktop-file-edit --remove-key=`,
     # a real label/value CLI-flag shape, not a secret
     "ba3880ebd497",
+    # wq#3165: minerva/dream/prose_restore/014_current-state-overrides-...md:7 —
+    # `LITELLM_MASTER_KEY=<placeholder>` prose describing where the key lives (a
+    # claude_memory.md CORE section pre-image copied verbatim by
+    # lumen_prose_lifecycle.py). Confirmed not live: 0 digits, 0 uppercase, dash-
+    # joined lowercase ending in the English word "master"; does not equal or
+    # contain any current /home/lumen/agent/.env value, including
+    # LITELLM_MASTER_KEY's own. This was blocking lumen-minerva-ref-sync since
+    # 09-28 (aq#2353).
+    "fdc0aa8d5758",
 }
 
 
