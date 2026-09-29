@@ -77,6 +77,21 @@ mode the "no straight renumbering, ever" decision above exists to prevent. Befor
 suffixing a row, re-run `probe_pointers.py` against the current kb tip and confirm the
 `DUP:<n>:2` key is live *now*; a baseline key is a record of the past, not a work order.
 
+## Amendment (wq#3174): "appended second" means committed second, not lower down
+
+wq#3174 suffixed 15 fresh collisions (915 ... 1075) and found two rows appended in the
+middle of the file rather than at the end: row 1022 (wq#2654) sits at L1165 above the
+older 1022 at L1166, and row 1064 (wq#2611) at L651. When line order and `git -C
+/home/lumen/kb blame` disagree, blame wins: the suffix goes on the row that landed
+later (so 1022b is wq#2654's, the lower line). Where blame can't separate them (both
+rows in one session-handoff snapshot, or both still uncommitted, as with 1064), line
+order decides. Citations that meant the suffixed row were rewritten to the suffixed
+form in the log and in `reports/`; citations of the first occurrence were left alone.
+
+The collisions themselves came from parallel workers each picking "max row + 1" with
+an Edit. `harness/issue_log_append.py` now allocates the number under an exclusive
+flock on the log file and the worker doctrine points at it.
+
 ## Scope note
 
 This ticket's deliverable is the alarm (`ops/wq2857-issue-log-hygiene-alarm/`,

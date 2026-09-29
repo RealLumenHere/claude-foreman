@@ -31,7 +31,7 @@ wq#3019/wq#3020.
 1. Read the ticket, the PR body/README snapshot in `_runs/wq2971/snapshots/`, and
    `ops/wq2971-drills575-live-claim/{README.md,drills_575.py}` cold.
 2. **Cross-repo provenance.** `drills_575.py` lives in minerva, which this worktree has no
-   add-dir for (same wall as ISSUE-LOG rows 984/985/986). Worked around it the same way
+   add-dir for (same wall as ISSUE-LOG rows 984b/985/986). Worked around it the same way
    those rows did: `git init` an empty dir under `/tmp/fworker-wq3022/`, `git fetch
    http://100.121.17.5:3000/lumen/minerva.git main` (a URL, not a filesystem path).
    `git show 6c3483f:v4/probes/drills_575.py` (the commit the PR/README cite) is

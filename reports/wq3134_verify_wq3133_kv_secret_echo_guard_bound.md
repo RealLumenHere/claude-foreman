@@ -15,7 +15,7 @@ re-verified with fresh boundary/adversarial probes, not just the author's own te
   seam 0-3). Comment states the caps sit "just past" the longest real qualifier observed
   in the wild (`self.upstream_langfuse_<label>`, 3 segments).
 - Also rewrote `reports/wq3132_judgment_..._unbounded_chain.md`'s literal probe line to
-  use a `<label>` placeholder instead of the spelled-out shape, per ISSUE-LOG row 1050:
+  use a `<label>` placeholder instead of the spelled-out shape, per ISSUE-LOG row 1050b:
   once the guard is bounded, the pre-fix report's whole-value quote became a live
   credential-shaped string that armed the tripwire's own corpus scan.
 
@@ -56,7 +56,7 @@ re-verified with fresh boundary/adversarial probes, not just the author's own te
 ## Conclusion
 wq#3133's fix does what ISSUE-LOG row 1049 asked for: the previously-unbounded echo
 chain is now bounded, arbitrarily long lowercase runs are caught again, and the
-regression the fix itself caused in the corpus-tripwire tests (row 1050) was fixed in
+regression the fix itself caused in the corpus-tripwire tests (row 1050b) was fixed in
 the same commit. No new unbounded-suppression path found under adversarial probing.
 The one failing test in the full suite is pre-existing, unrelated to this diff, and
 reproduces identically on the pre-fix parent commit.

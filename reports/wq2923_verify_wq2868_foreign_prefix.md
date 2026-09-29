@@ -89,7 +89,7 @@ side-finding 1), not grounds to contradict the masking verdict.
 - `pytest harness/tests/test_masking.py -q` — 121 passed (after kb/ISSUE-LOG.md row 919 fix).
 - `reports/wq2868_probe_underfloor_class.py` — reproduced against 3 revisions, table above.
 - `lumen-run ... bash ops/wq2903-model-ref-drift/install.sh --verify` — exit 0 (after
-  ISSUE-LOG row 920 redeploy).
+  ISSUE-LOG row 920b redeploy).
 
 ## Board
 

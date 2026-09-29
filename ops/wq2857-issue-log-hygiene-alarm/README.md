@@ -58,6 +58,13 @@ json.dump({'captured': '<UTC timestamp>', 'captured_by': '<ticket>',
 "
 ```
 
+## Prevention (wq#3174)
+
+The alarm catches a collision after it lands. `harness/issue_log_append.py` stops the
+common cause, two workers picking the same "max row + 1", by allocating the number under
+an exclusive flock on the log file. An Edit-tool append takes no lock, so the alarm still
+matters for writers that skip the helper.
+
 ## Tests
 
 `harness/tests/test_wq2857_issue_log_alarm.py` — fixture-based, does not read the live kb

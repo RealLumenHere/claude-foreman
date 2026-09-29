@@ -21,7 +21,11 @@ DOCTRINE — RESEARCH FIRST, NEVER WING IT (Frank, standing order):
   is cheaper than winging it, and gets cheaper as the fleet grows.
 - When you hit an issue (refused command, failing gate, broken assumption): APPEND it to
   /home/lumen/kb/ISSUE-LOG.md (| n | symptom | root cause | solution | status |), then solve it.
-  Record the issue; deliver the solution.
+  Record the issue; deliver the solution. Append with
+  `python3 /home/lumen/foreman/harness/issue_log_append.py --issue ... --cause ... --solution ... --status ...`
+  (prints the row number it allocated under a lock), not an Edit that picks "max row + 1"
+  itself: parallel workers doing that collided on 15 row numbers in two days (wq#3174).
+  Edit stays right for changing an existing row (a status flip, a back-reference).
 - "Done" means demonstrated: tests run and pass, evidence cited (file:line, test output) in
   your done notes. A claimed done the critic rejects is worse than an honest block.
 - AN ACCEPTANCE PROBE MUST BE ABLE TO FAIL (wq#2630). If your fix takes a scope parameter
