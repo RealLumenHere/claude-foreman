@@ -341,6 +341,159 @@ def stall_cause(events):
     return " | ".join(parts), cred
 
 
+# wq#3106: the fleet idled 27h (2026-09-26 23:48Z -> 09-28 03:12Z) with 39-43 ready cloud
+# tickets and no page. weekly_all sat inside its 15% reserve, so burn_rate set a cloud
+# ceiling of 0 and every pass ended `halt no_slots` "0 cloud unit(s) at ceiling 0".
+# classify_passes counts no_slots as healthy by design (a budget stop is not a stall), so
+# nothing watched the total length of the stop. This rule does: no spawn for
+# IDLE_WINDOW_SECONDS while the latest pass still has dispatchable work opens one aq row,
+# naming the latest pass's ceiling/halt reason, and resolves it when spawning resumes.
+IDLE_WINDOW_SECONDS = int(os.environ.get("FOREMAN_IDLE_WINDOW_SECONDS", str(6 * 3600)))
+AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "/home/lumen/bin/aq")
+AQ_DB = os.environ.get("AQ_DB", "/home/lumen/agents/alert-queue/alerts.db")
+IDLE_AQ_SOURCE = "dispatch-health"
+IDLE_AQ_KEY = "idle-window"
+IDLE_TITLE = "[DISPATCH] fleet idle"
+
+
+def _ts(ev):
+    try:
+        return datetime.fromisoformat(ev.get("ts", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _log_lines_newest_first(log_path):
+    """Live log then its first rotation (.1.gz), newest line first. The weekly rotation
+    would otherwise blind the scan for IDLE_WINDOW_SECONDS after every rotate."""
+    import gzip
+    for path, opener in ((log_path, open), (log_path + ".1.gz", gzip.open)):
+        try:
+            with opener(path, "rt") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        yield from reversed(lines)
+
+
+def scan_idle(log_path, now=None, window_s=None):
+    """Return the idle finding for the last `window_s`, or None when the fleet spawned in
+    that window, the log does not reach back that far, or nothing is dispatchable.
+
+    Scans newest-first until the first line older than the cutoff (that line is what
+    proves the log covers the whole window)."""
+    now = now or _utcnow()
+    window_s = IDLE_WINDOW_SECONDS if window_s is None else window_s
+    cutoff = now.timestamp() - window_s
+    latest_end, latest_pid, covered = None, None, False
+    last_pass_evs = []
+    for line in _log_lines_newest_first(log_path):
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        t = _ts(ev)
+        if t is None or t > now:
+            continue
+        if t.timestamp() < cutoff:
+            covered = True
+            break
+        pid = ev.get("pass_id") or ""
+        if not pid.startswith("fdisp-"):
+            continue
+        event = ev.get("event")
+        if event == "spawn" or (event == "pass_end" and (ev.get("spawned") or 0) > 0):
+            return None
+        if event == "pass_end" and latest_end is None and not ev.get("dry_run"):
+            latest_end, latest_pid = ev, pid
+        if pid == latest_pid:
+            last_pass_evs.append(ev)
+    if not covered:
+        return None
+    hours = window_s / 3600
+    if latest_end is None:
+        return {"summary": f"no spawn and no dispatcher pass_end in {hours:g}h",
+                "cause": "dispatcher not completing passes (unit dead or every pass aborting)",
+                "dispatchable": None}
+    dispatchable = latest_end.get("dispatchable")
+    if dispatchable is None:
+        dispatchable = latest_end.get("candidates", 0)
+    if dispatchable <= 0:
+        return None
+    return {"summary": f"no spawn in {hours:g}h with {dispatchable} dispatchable "
+                       f"(latest pass {latest_pid})",
+            "cause": idle_cause(last_pass_evs),
+            "dispatchable": dispatchable}
+
+
+def idle_cause(pass_evs):
+    """Why the latest pass spawned nothing, from its own events: the cloud ceiling and
+    concurrency halt lines first (the wq#3106 shape), then the top skip reasons."""
+    parts, skips = [], {}
+    for ev in reversed(pass_evs):  # collected newest-first; report in log order
+        event = ev.get("event")
+        if event in ("cloud_ceiling", "burn_rate"):
+            parts.append(f"{event}: {ev.get('reason', '')}; {ev.get('detail', '')}")
+        elif event == "halt":
+            parts.append(f"halt {ev.get('stage', '')}/{ev.get('reason', '')}: {ev.get('detail', '')}")
+        elif event == "skip":
+            r = ev.get("reason") or "?"
+            skips[r] = skips.get(r, 0) + 1
+    if skips:
+        top = sorted(skips.items(), key=lambda kv: -kv[1])[:3]
+        parts.append("dominant skip: " + ", ".join(f"{k} x{v}" for k, v in top))
+    return " | ".join(parts) or "latest pass logged no ceiling, halt or skip reason"
+
+
+def _aq(*argv):
+    try:
+        r = subprocess.run([AQ_BIN, *argv], capture_output=True, text=True, timeout=15)
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _idle_aq_open_id():
+    import sqlite3
+    try:
+        c = sqlite3.connect(AQ_DB, timeout=10)
+        row = c.execute("SELECT id FROM alerts WHERE source=? AND key=? AND status='open'",
+                        (IDLE_AQ_SOURCE, IDLE_AQ_KEY)).fetchone()
+        c.close()
+    except sqlite3.Error:
+        return None
+    return row[0] if row else None
+
+
+def check_idle(log_path, dry_run=False, now=None, window_s=None):
+    """Edge-triggered idle alarm. Idle -> one open aq row (re-added only if resolved by
+    hand; aq dedups onto the open row) plus one ntfy on the edge. Spawning again ->
+    resolve the row. Returns (state_word, detail)."""
+    finding = scan_idle(log_path, now=now, window_s=window_s)
+    state = load_state()
+    was_idle = bool(state.get("idle_alert_ts"))
+    if finding is None:
+        if was_idle and not dry_run:
+            rid = _idle_aq_open_id()
+            if rid is not None:
+                _aq("resolve", str(rid), "dispatcher spawning again")
+            state.pop("idle_alert_ts", None)
+            save_state(state)
+            return "recovered", "idle window over"
+        return "ok", "not idle"
+    msg = f"{finding['summary']}. Cause: {finding['cause']}"
+    if dry_run:
+        print(f"WOULD ALERT IDLE: {msg}")
+        return "idle", msg
+    if not was_idle or _idle_aq_open_id() is None:
+        _aq("add", IDLE_AQ_SOURCE, IDLE_AQ_KEY, IDLE_TITLE, msg[:2000])
+    if not was_idle:
+        _ntfy(msg, priority="high", title=IDLE_TITLE)
+        state["idle_alert_ts"] = _utcnow().isoformat(timespec="seconds")
+        save_state(state)
+    return "idle", msg
+
+
 def check_health(log_path, threshold, dry_run=False, dedup_seconds=None, ladder=True):
     """Main check. Returns (alarm_fired, detail_string).
 
@@ -505,6 +658,11 @@ def main(argv=None):
         fired, detail = check_health(a.log, a.threshold, dry_run=a.dry_run,
                                      dedup_seconds=a.dedup, ladder=not a.no_ladder)
         print(detail)
+        # wq#3106: the regular instance owns the idle alarm; the --no-ladder window
+        # instance only tightens stall detection and shares this state file.
+        if not a.no_ladder:
+            idle, idle_detail = check_idle(a.log, dry_run=a.dry_run)
+            print(f"idle-window: {idle} — {idle_detail}")
         # wq#1012/R2-T5: on the real timer-driven pass the DISPATCHER STALLED alarm is
         # delivered via _ntfy() inside check_health(); a nonzero exit here only made
         # systemd mark lumen-foreman-health failed -> "failed-unit + recovered" echo per
