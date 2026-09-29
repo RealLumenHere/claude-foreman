@@ -144,10 +144,17 @@ PATTERNS = (
         r"(?![${%<*.]|(?i:password|passwd|secret|changeme|example|redacted|masked|xxxx+)@)"
         r"(?!os\.environ|os\.getenv|(?:process\.)?env\.)"
         r"(?![A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+@)"
+        # wq#2993: the fleet's own mask literal. mask_at_rest / the masking layer write
+        # `<kept prefix>MASKED`; a password slot that ENDS in it is a report about a
+        # credential, not one. Anchored on the trailing `@` so `MASKEDx9...@` still hits.
+        r"(?![^\s@/'\"`]*MASKED@)"
         r"[^\s@/'\"`]{8,}@(?=[A-Za-z0-9\[])")),
     ("kv_secret", re.compile(
         r"(?i)\b(?:" + KV_LABEL + r")\b" + KV_LABEL_CLOSE + KV_CONNECTOR + KV_SEP +
-        r"['\"`]?" + KV_NOT_A_CREDENTIAL + r"[A-Za-z0-9_\-./+]{20,}")),
+        r"['\"`]?" + KV_NOT_A_CREDENTIAL +
+        # wq#2993: same mask literal, value half. Only a value that ENDS in MASKED.
+        r"(?![A-Za-z0-9_\-./+]*MASKED(?![A-Za-z0-9_\-./+]))" +
+        r"[A-Za-z0-9_\-./+]{20,}")),
 )
 SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
                        "site-packages", ".cache"})

@@ -329,3 +329,29 @@ def test_reviewed_hit_fingerprint_suppresses_only_that_exact_match(tmp_path, mon
     _write(tmp_path, "g.txt", other_line + "\n")
     hits, _ = rds.sweep_root(str(tmp_path))
     assert [h[2] for h in hits] == ["kv_secret"]
+
+
+# wq#2993: the fleet's own mask literal is not a credential body.
+@pytest.mark.parametrize("line", [
+    "url = " + _url("lumen", "pw_" + "MASKED"),                # mask_at_rest: <kept prefix>MASKED
+    "url = " + _url("lumen", "MASKED"),
+    "api_key: " + "sk-prod-abcdefghijk" + "MASKED",
+    'token = "' + "ghp_" + 'MASKED"',                          # what the mask writes for a PAT
+])
+def test_mask_literal_is_not_a_credential_body(tmp_path, line):
+    _write(tmp_path, "mask.log", line + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
+
+
+@pytest.mark.parametrize("line", [
+    "url = " + _url("lumen", "pw_" + "MASKEDx9Zq2Lm"),          # MASKED mid-value: still a hit
+    "url = " + _url("lumen", "Kf3" + "x9Zq2Lm"),
+    "api_key: " + "sk-prod-abcdefghijk" + "MASKEDx9Zq2Lm",
+    "api_key: " + "sk-prod-abcdefghijk" + "Wv7Zq2Lm8Kf3",
+])
+def test_mask_literal_exemption_does_not_hide_real_credentials(tmp_path, line):
+    _write(tmp_path, "real.cfg", line + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits, line[:12]
+
