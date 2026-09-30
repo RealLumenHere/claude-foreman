@@ -142,3 +142,64 @@ def test_zero_litellm_traces_alerts_but_a_healthy_count_does_not(tmp_path, monke
         monkeypatch.setattr(mod, "fetch_trace_count", lambda *a, _c=count, **k: _c)
         mod.run(str(env), 2700, 0, name="litellm-acompletion")
         assert bool(msgs) is expect_alert
+
+
+# ---- wq#3221: a breach that persists past ESCALATE_AFTER_S opens one fleet-fires ticket ----
+
+def test_escalate_records_first_breach_and_does_not_ticket_immediately(tmp_path):
+    state_path = str(tmp_path / "state.json")
+    calls = []
+    state = mod.escalate_if_persistent(True, 1000.0, state_path=state_path,
+                                       escalate_after_s=7200, wq_add=lambda t, d: calls.append((t, d)) or True)
+    assert state["first_breach_ts"] == 1000.0
+    assert state["escalated"] is False
+    assert calls == []
+
+
+def test_escalate_tickets_once_breach_exceeds_threshold(tmp_path):
+    state_path = str(tmp_path / "state.json")
+    mod.escalate_if_persistent(True, 1000.0, state_path=state_path, escalate_after_s=7200,
+                               wq_add=lambda t, d: True)
+    calls = []
+    state = mod.escalate_if_persistent(True, 1000.0 + 7201, state_path=state_path, escalate_after_s=7200,
+                                       wq_add=lambda t, d: calls.append((t, d)) or True,
+                                       trace_count=0, floor_count=0, window_seconds=2700, name="litellm-acompletion")
+    assert len(calls) == 1
+    assert "trace-rate floor breach" in calls[0][0]
+    assert state["escalated"] is True
+
+    # a further breach on the same still-open condition must NOT ticket again
+    calls.clear()
+    mod.escalate_if_persistent(True, 1000.0 + 20000, state_path=state_path, escalate_after_s=7200,
+                               wq_add=lambda t, d: calls.append((t, d)) or True)
+    assert calls == []
+
+
+def test_escalate_clears_state_on_recovery_so_the_next_breach_can_reticket(tmp_path):
+    state_path = str(tmp_path / "state.json")
+    mod.escalate_if_persistent(True, 1000.0, state_path=state_path, escalate_after_s=7200,
+                               wq_add=lambda t, d: True)
+    mod.escalate_if_persistent(True, 1000.0 + 7201, state_path=state_path, escalate_after_s=7200,
+                               wq_add=lambda t, d: True)
+    cleared = mod.escalate_if_persistent(False, 1000.0 + 30000, state_path=state_path, escalate_after_s=7200,
+                                         wq_add=lambda t, d: True)
+    assert cleared == {}
+
+    calls = []
+    state = mod.escalate_if_persistent(True, 1000.0 + 30001, state_path=state_path, escalate_after_s=7200,
+                                       wq_add=lambda t, d: calls.append((t, d)) or True)
+    assert state["first_breach_ts"] == 1000.0 + 30001
+    assert calls == []  # fresh breach, threshold not reached yet
+
+
+def test_run_calls_escalate_if_persistent(tmp_path, monkeypatch):
+    env = tmp_path / "e.env"
+    env.write_text("LANGFUSE_HOST=http://h\nLANGFUSE_PUBLIC_KEY=pk-lf-a\nLANGFUSE_SECRET_KEY=sk-lf-b\n")
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(mod, "fetch_trace_count", lambda *a, **k: 0)
+    seen = {}
+    monkeypatch.setattr(mod, "escalate_if_persistent",
+                        lambda breached, now_ts, **kw: seen.update(breached=breached, kw=kw))
+    mod.run(str(env), 2700, 0, name="litellm-acompletion")
+    assert seen["breached"] is True
+    assert seen["kw"]["trace_count"] == 0 and seen["kw"]["floor_count"] == 0

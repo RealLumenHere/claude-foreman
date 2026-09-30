@@ -30,6 +30,7 @@ lumen-cron-stamp dead-man's-switch file so a stopped timer alarms sideways
 via lumen-cron-deadman instead of silently going stale.
 """
 import argparse
+import base64
 import concurrent.futures as cf
 import json
 import os
@@ -38,6 +39,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 # wq#3212: rung enumeration moved to the shared litellm_rungs module so this
@@ -57,6 +59,19 @@ TIMEOUT_S = int(os.environ.get("LITELLM_COMPLETION_PROBE_TIMEOUT_S", "60"))
 MAX_TOKENS = int(os.environ.get("LITELLM_COMPLETION_PROBE_MAX_TOKENS", "300"))
 WORKERS = int(os.environ.get("LITELLM_COMPLETION_PROBE_WORKERS", "6"))
 AQ_DIR = os.environ.get("LITELLM_COMPLETION_PROBE_AQ_DIR", "/home/lumen/agents/alert-queue")
+
+# wq#3221: a 200 completion is not proof Langfuse received it (wq#3211 - 47h of
+# LiteLLM->Langfuse traces silently dropped while this exact probe kept passing every
+# 30 min, because it only ever checked the HTTP response). Same env file the litellm
+# container loads and the same project/trace-name the gateway's callback writes
+# (harness/langfuse_trace_rate_monitor.py's DEFAULT_ENV_PATH/DEFAULT_TRACE_NAME).
+LANGFUSE_ENV_PATH = os.environ.get("LITELLM_COMPLETION_PROBE_LANGFUSE_ENV", ENV_PATH)
+LANGFUSE_HOST = os.environ.get("LITELLM_COMPLETION_PROBE_LANGFUSE_HOST", "http://127.0.0.1:3020")
+LANGFUSE_TRACE_NAME = os.environ.get("LITELLM_COMPLETION_PROBE_LANGFUSE_TRACE_NAME", "litellm-acompletion")
+LANGFUSE_TRACES_PATH = os.environ.get("LITELLM_COMPLETION_PROBE_LANGFUSE_TRACES_PATH", "/api/public/traces")
+LANGFUSE_POLL_TIMEOUT_S = int(os.environ.get("LITELLM_COMPLETION_PROBE_LANGFUSE_TIMEOUT_S", "60"))
+LANGFUSE_POLL_INTERVAL_S = int(os.environ.get("LITELLM_COMPLETION_PROBE_LANGFUSE_POLL_S", "5"))
+LANGFUSE_TRACE_HOST_KEY = "langfuse-trace-ingest"  # synthetic "host" fed into apply_results
 
 Rung = litellm_rungs.Rung
 one_rung_per_host = litellm_rungs.one_rung_per_host
@@ -100,6 +115,57 @@ def probe_one(key: str, rung: Rung) -> dict:
 def run_probes(key: str, rungs: list) -> list:
     with cf.ThreadPoolExecutor(WORKERS) as ex:
         return [f.result() for f in cf.as_completed([ex.submit(probe_one, key, r) for r in rungs])]
+
+
+def read_langfuse_creds(env_path: str) -> tuple:
+    """Returns (public_key, secret_key), or (None, None) if the file or keys are
+    missing. Never printed or logged (instinct 4) - used only in a Basic-auth header."""
+    try:
+        text = pathlib.Path(env_path).read_text()
+    except OSError:
+        return None, None
+    pk = re.search(r"^LANGFUSE_PUBLIC_KEY=(\S+)$", text, re.M)
+    sk = re.search(r"^LANGFUSE_SECRET_KEY=(\S+)$", text, re.M)
+    return (pk.group(1) if pk else None, sk.group(1) if sk else None)
+
+
+def check_langfuse_trace(since_ts: float) -> dict:
+    """wq#3221: poll Langfuse's own /api/public/traces for a 'litellm-acompletion'
+    trace stamped at/after since_ts, for up to LANGFUSE_POLL_TIMEOUT_S. Shaped as a
+    normal probe result dict (host=LANGFUSE_TRACE_HOST_KEY) so it flows through the
+    SAME edge-triggered apply_results()/aq/ntfy path a host failure already uses -
+    no new alert plumbing, and it gets the same clear->breach/breach->clear discipline.
+    A missing-creds skip is reported ok=True (not a probe failure): this check cannot
+    tell "callback misconfigured" from "this probe host has no read access to the
+    creds file" without the creds it's missing.
+    """
+    t0 = time.time()
+    pk, sk = read_langfuse_creds(LANGFUSE_ENV_PATH)
+    if not pk or not sk:
+        return {"host": LANGFUSE_TRACE_HOST_KEY, "model": LANGFUSE_TRACE_NAME, "ok": True,
+                "elapsed_s": round(time.time() - t0, 1), "reason": "skipped: no langfuse creds"}
+    auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
+    from_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since_ts))
+    query = urllib.parse.urlencode({"name": LANGFUSE_TRACE_NAME, "fromTimestamp": from_ts, "limit": 1})
+    url = LANGFUSE_HOST.rstrip("/") + LANGFUSE_TRACES_PATH + "?" + query
+    deadline = time.time() + LANGFUSE_POLL_TIMEOUT_S
+    seen = False
+    while time.time() < deadline:
+        req = urllib.request.Request(url, headers={"Authorization": "Basic " + auth})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.load(resp)
+            meta = data.get("meta")
+            if isinstance(meta, dict) and meta.get("totalItems", 0) >= 1:
+                seen = True
+                break
+        except Exception:
+            pass
+        if time.time() < deadline:
+            time.sleep(LANGFUSE_POLL_INTERVAL_S)
+    reason = "" if seen else f"no '{LANGFUSE_TRACE_NAME}' trace within {LANGFUSE_POLL_TIMEOUT_S}s (wq#3211/wq#3221)"
+    return {"host": LANGFUSE_TRACE_HOST_KEY, "model": LANGFUSE_TRACE_NAME, "ok": seen,
+            "elapsed_s": round(time.time() - t0, 1), "reason": reason}
 
 
 def _state_path() -> pathlib.Path:
@@ -193,7 +259,11 @@ def main() -> int:
 
     key = read_master_key(ENV_PATH)
     rungs = one_rung_per_host(CONFIG_PATH)
+    probe_started_at = time.time()
     results = run_probes(key, rungs)
+    if any(r["ok"] for r in results):
+        # only meaningful once at least one completion actually went through
+        results = results + [check_langfuse_trace(probe_started_at)]
     new_state = apply_results(results)
     path = _state_path()
     try:

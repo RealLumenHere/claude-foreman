@@ -2,6 +2,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import time
 from importlib.machinery import SourceFileLoader
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
@@ -94,6 +95,106 @@ def test_apply_results_is_edge_triggered(tmp_path, monkeypatch):
     assert notified == [("low", "LiteLLM completion probe: h1 recovered")]
     assert aq_added == []
     assert state3["h1"]["failed"] is False
+
+
+def test_read_langfuse_creds_extracts_both_keys_without_logging(tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("LANGFUSE_HOST=http://x\nLANGFUSE_PUBLIC_KEY=pk-lf-abc\nLANGFUSE_SECRET_KEY=sk-lf-def\n")
+    pk, sk = mod.read_langfuse_creds(str(env))
+    assert (pk, sk) == ("pk-lf-abc", "sk-lf-def")
+    out = capsys.readouterr().out
+    assert "pk-lf-abc" not in out and "sk-lf-def" not in out
+
+
+def test_read_langfuse_creds_missing_file_returns_none_pair(tmp_path):
+    assert mod.read_langfuse_creds(str(tmp_path / "nope.env")) == (None, None)
+
+
+def test_check_langfuse_trace_skips_ok_when_creds_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "LANGFUSE_ENV_PATH", str(tmp_path / "nope.env"))
+    r = mod.check_langfuse_trace(time.time())
+    assert r == {"host": mod.LANGFUSE_TRACE_HOST_KEY, "model": mod.LANGFUSE_TRACE_NAME, "ok": True,
+                "elapsed_s": r["elapsed_s"], "reason": "skipped: no langfuse creds"}
+
+
+def test_check_langfuse_trace_ok_when_trace_found(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("LANGFUSE_PUBLIC_KEY=pk-lf-a\nLANGFUSE_SECRET_KEY=sk-lf-b\n")
+    monkeypatch.setattr(mod, "LANGFUSE_ENV_PATH", str(env))
+    monkeypatch.setattr(mod, "LANGFUSE_POLL_TIMEOUT_S", 5)
+    monkeypatch.setattr(mod, "LANGFUSE_POLL_INTERVAL_S", 1)
+
+    class R:
+        def read(self):
+            return b'{"meta": {"totalItems": 1}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda req, timeout=10: R())
+    r = mod.check_langfuse_trace(time.time())
+    assert r["ok"] is True and r["reason"] == ""
+
+
+def test_check_langfuse_trace_fails_when_no_trace_within_timeout(tmp_path, monkeypatch):
+    """TEST TO FAILURE (wq#3221): a canary with zero matching traces (e.g. the
+    LANGFUSE_PUBLIC_KEY/SECRET_KEY self-referential config trap silently poisoning
+    the callback's creds) must FAIL this assertion, not pass it."""
+    env = tmp_path / ".env"
+    env.write_text("LANGFUSE_PUBLIC_KEY=pk-lf-a\nLANGFUSE_SECRET_KEY=sk-lf-b\n")
+    monkeypatch.setattr(mod, "LANGFUSE_ENV_PATH", str(env))
+    monkeypatch.setattr(mod, "LANGFUSE_POLL_TIMEOUT_S", 2)
+    monkeypatch.setattr(mod, "LANGFUSE_POLL_INTERVAL_S", 1)
+
+    class R:
+        def read(self):
+            return b'{"meta": {"totalItems": 0}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda req, timeout=10: R())
+    r = mod.check_langfuse_trace(time.time())
+    assert r["ok"] is False
+    assert "no 'litellm-acompletion' trace" in r["reason"]
+
+
+def test_main_appends_langfuse_check_only_when_a_completion_succeeded(tmp_path, monkeypatch):
+    """wq#3221: no point polling Langfuse if every completion probe already failed -
+    the host-failure alert already covers that, and a Langfuse check would just add
+    noise (nothing succeeded to have generated a trace)."""
+    monkeypatch.setattr(mod, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(mod, "read_master_key", lambda p: "sk-test")
+    monkeypatch.setattr(mod, "one_rung_per_host", lambda p: [mod.Rung(host="h1", model_name="m1")])
+    calls = {"langfuse": 0}
+    monkeypatch.setattr(mod, "_notify", lambda *a: None)
+    monkeypatch.setattr(mod, "_aq_add", lambda *a: None)
+    monkeypatch.setattr(mod, "_aq_resolve", lambda *a: None)
+
+    def fake_check_langfuse_trace(since_ts):
+        calls["langfuse"] += 1
+        return {"host": mod.LANGFUSE_TRACE_HOST_KEY, "model": mod.LANGFUSE_TRACE_NAME, "ok": True,
+                "elapsed_s": 0.1, "reason": ""}
+
+    monkeypatch.setattr(mod, "check_langfuse_trace", fake_check_langfuse_trace)
+    monkeypatch.setattr(mod, "run_probes",
+                        lambda key, rungs: [{"host": "h1", "model": "m1", "ok": False,
+                                             "elapsed_s": 1.0, "reason": "down"}])
+    monkeypatch.setattr(sys, "argv", ["litellm-completion-probe"])
+    mod.main()
+    assert calls["langfuse"] == 0
+
+    monkeypatch.setattr(mod, "run_probes",
+                        lambda key, rungs: [{"host": "h1", "model": "m1", "ok": True,
+                                             "elapsed_s": 1.0, "reason": ""}])
+    mod.main()
+    assert calls["langfuse"] == 1
 
 
 def test_aq_row_resolved_on_recovery_and_on_leaving_probe_set(tmp_path, monkeypatch):

@@ -7,13 +7,19 @@ was dropped 2026-08-30; model-watchdog, lumen-fleet-mistral and model_audit kept
 it (1643 ProxyModelNotFoundError in 5d). minerva-bench-2 called wq2821-judge-llama8b,
 which never existed (wq#2904, 169 failures). Nothing compared the callers to the list.
 
-Two finding kinds:
+Three finding kinds:
   RETIRED  a quoted string literal equal to a name that some litellm_config.yaml.bak*
            model_list carried and the live one does not. High precision, any context.
   UNKNOWN  a name in model context (`"model": "x"`, `model="x"`, `*_MODEL*=x`,
            `--model x`) that is in neither the live model_list nor the fleet CLI roster
            (foreman/research/models.yaml ids/aliases). Provider-native ids (`a/b`,
            `name:tag`) are skipped: those go straight to a provider, not the gateway.
+  SELF_REF (wq#3221) an `environment_variables:` entry whose value equals its own key
+           name (`KEY: KEY` instead of `KEY: os.environ/KEY`) - sets os.environ[KEY] to
+           the literal key-name string at config load. Caught the LANGFUSE_PUBLIC_KEY/
+           LANGFUSE_SECRET_KEY lines that silently fed a 19-char "credential" to the
+           Langfuse callback for 47h (wq#3211) while every env-presence/liveness check
+           kept passing.
 Known non-gateway names go in ALLOW (below) or --allow-file, one per line, with a reason.
 
 Read-only. Exit 0 clean, 1 drift, 2 the check could not run.
@@ -48,6 +54,18 @@ ALLOW = {
     "llama33-local",                    # retired-rung registry tuple, minerva/lumen_state_single_owner_migrate.py
 }
 
+# wq#3221: `environment_variables:` entries of the shape `KEY: KEY` set os.environ[KEY]
+# to the literal string "KEY" at config load - litellm's env-ref syntax is
+# `KEY: os.environ/KEY`, not a bare repeat of the key. The LANGFUSE_PUBLIC_KEY/
+# LANGFUSE_SECRET_KEY lines hit this and produced 19-char "credentials" the gateway's
+# Langfuse callback then authenticated with, while PID 1's own env stayed correct (so
+# every liveness/env-var-presence check kept passing) - 47h of silently dropped traces
+# (wq#3211) before anyone noticed. Flags ANY self-referential entry in the block,
+# regardless of provider: a `KEY: KEY` line is never a valid credential value, whether
+# or not the current caller happens to tolerate it.
+ENV_BLOCK_START_RE = re.compile(r"^environment_variables:\s*$")
+ENV_BLOCK_LINE_RE = re.compile(r"^([ \t]+)([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*$")
+
 MODEL_NAME_RE = re.compile(r"^\s*-\s*model_name:\s*[\"']?([^\"'\s#]+)", re.M)
 CLI_RE = re.compile(r"^\s*-?\s*(?:id|alias):\s*[\"']?([A-Za-z0-9._:-]+)", re.M)
 CONTEXT_RES = [
@@ -71,6 +89,45 @@ def load_live(config):
     if not names:
         raise RuntimeError(f"no model_name entries parsed from {config}")
     return names
+
+
+def find_env_self_refs(config):
+    """environment_variables: entries where the value equals the key name (wq#3221
+    config trap). Returns one SELF_REF finding per such line, same finding shape
+    (file/line/model/kind) as scan_text's RETIRED/UNKNOWN so it flows through the
+    existing CLI/--json/--aq rendering unchanged."""
+    try:
+        with open(config) as fh:
+            lines = fh.readlines()
+    except OSError:
+        return []
+    out = []
+    in_block = False
+    base_indent = None
+    for n, raw in enumerate(lines, 1):
+        line = raw.rstrip("\n")
+        if ENV_BLOCK_START_RE.match(line):
+            in_block = True
+            base_indent = None
+            continue
+        if not in_block:
+            continue
+        if not line.strip():
+            continue
+        m = ENV_BLOCK_LINE_RE.match(line)
+        if not m or not line.startswith((" ", "\t")):
+            in_block = False  # dedented to a new top-level key: block is over
+            continue
+        indent = m.group(1)
+        if base_indent is None:
+            base_indent = indent
+        elif len(indent) < len(base_indent):
+            in_block = False
+            continue
+        key, val = m.group(2), m.group(3).strip().strip("\"'")
+        if val == key:
+            out.append({"file": config, "line": n, "model": key, "kind": "SELF_REF"})
+    return out
 
 
 def load_retired(config, live):
@@ -178,7 +235,7 @@ def lint(roots, config, models_yaml, allow):
     live = load_live(config)
     retired = load_retired(config, live)
     known = load_cli(models_yaml) | allow
-    findings = []
+    findings = find_env_self_refs(config)
     for p in iter_files(roots):
         try:
             with open(p, errors="replace") as fh:

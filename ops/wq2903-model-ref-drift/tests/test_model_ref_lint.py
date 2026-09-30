@@ -69,6 +69,72 @@ def test_walk_skips_backups_state_and_doc_dirs(tmp_path):
     assert got == {("RETIRED", "mistral-small", "live_tool", 2)}
 
 
+# ---- wq#3221: environment_variables: KEY: KEY self-reference config trap ----
+
+def _write_config_with_env_block(tmp_path, env_lines):
+    cfg = tmp_path / "litellm_config.yaml"
+    cfg.write_text(
+        "model_list:\n"
+        "- model_name: cerebras-llama\n"
+        "  litellm_params:\n"
+        "    model: cerebras/llama3.1-8b\n"
+        "environment_variables:\n"
+        + "".join(f"  {ln}\n" for ln in env_lines)
+    )
+    return str(cfg)
+
+
+def test_flags_self_referential_env_var_values(tmp_path):
+    cfg = _write_config_with_env_block(tmp_path, [
+        "LANGFUSE_PUBLIC_KEY: LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY: LANGFUSE_SECRET_KEY",
+    ])
+    findings = mrl.find_env_self_refs(cfg)
+    assert {(f["kind"], f["model"], f["line"]) for f in findings} == {
+        ("SELF_REF", "LANGFUSE_PUBLIC_KEY", 6),
+        ("SELF_REF", "LANGFUSE_SECRET_KEY", 7),
+    }
+
+
+def test_does_not_flag_a_correct_os_environ_reference(tmp_path):
+    cfg = _write_config_with_env_block(tmp_path, [
+        "LANGFUSE_PUBLIC_KEY: os.environ/LANGFUSE_PUBLIC_KEY",
+        'CEREBRAS_API_KEY: "some-real-looking-value"',
+    ])
+    assert mrl.find_env_self_refs(cfg) == []
+
+
+def test_env_self_ref_canary_fails_the_lint_end_to_end(tmp_path):
+    """TEST TO FAILURE (wq#3221 part 4): a canary config with the two LANGFUSE
+    self-referential lines restored must make `lint()`/the CLI FAIL, not silently
+    pass - this is the regression this lint exists to catch on the next edit."""
+    cfg = _write_config_with_env_block(tmp_path, [
+        "LANGFUSE_PUBLIC_KEY: LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY: LANGFUSE_SECRET_KEY",
+    ])
+    _, _, findings = mrl.lint([], cfg, "/nonexistent/models.yaml", set())
+    assert any(f["kind"] == "SELF_REF" for f in findings)
+
+    r = subprocess.run([sys.executable, LINT, "--config", cfg, "--models-yaml", "/nonexistent"],
+                       capture_output=True, text=True)
+    assert r.returncode == 1, r.stdout
+
+
+def test_env_block_ends_at_next_top_level_key(tmp_path):
+    cfg = tmp_path / "litellm_config.yaml"
+    cfg.write_text(
+        "model_list:\n"
+        "- model_name: cerebras-llama\n"
+        "  litellm_params:\n"
+        "    model: cerebras/llama3.1-8b\n"
+        "environment_variables:\n"
+        "  GOOD: os.environ/GOOD\n"
+        "router_settings:\n"
+        "  num_retries: 3\n"
+    )
+    assert mrl.find_env_self_refs(str(cfg)) == []
+
+
 def test_cli_exit_codes_and_json(tmp_path):
     base = [sys.executable, LINT, "--config", CONFIG, "--models-yaml", "/nonexistent"]
     bad = subprocess.run(base + ["--json", os.path.join(FIX, "callers", "pre_fix.py")],

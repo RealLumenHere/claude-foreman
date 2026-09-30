@@ -55,6 +55,20 @@ from langfuse_client import load_creds
 TRACES_ENDPOINT_PATH = os.getenv("LANGFUSE_TRACES_ENDPOINT_PATH", "/api/public/traces")
 NTFY_SEND = os.getenv("LANGFUSE_TRACE_RATE_NTFY_SEND", "/home/lumen/bin/ntfy-send")
 
+# wq#3221: aq 2492 (this monitor's own alert) was bumped 101 times during the 47h
+# wq#3211 loss and NEVER escalated - it is an ntfy:lumen-alerts row, unassigned, with
+# no fleet-fires ticket and no owner, so Frank was the only detector. A floor breach
+# that persists past ESCALATE_AFTER_S now opens exactly one fleet-fires ticket, same
+# lane/idempotency shape as ops/wq1649-aq-source-escalate (unit_escalations table,
+# one ticket per condition, never one per poll). State lives in a small JSON file
+# (this monitor has no sqlite db of its own) keyed by first-breach timestamp.
+WQ_BIN = os.getenv("LANGFUSE_TRACE_RATE_WQ_BIN", "/home/lumen/bin/wq")
+ESCALATE_STATE_PATH = os.getenv(
+    "LANGFUSE_TRACE_RATE_ESCALATE_STATE",
+    "/home/lumen/agents/langfuse-trace-rate-monitor/escalate_state.json")
+ESCALATE_AFTER_S = int(os.getenv("LANGFUSE_TRACE_RATE_ESCALATE_AFTER_S", str(2 * 3600)))
+FLEET_FIRES_LANE = "fleet-fires"
+
 # wq#3211 (2026-09-30). This monitor used to read /home/lumen/.secrets/langfuse-foreman.env and
 # count EVERY trace in the FOREMAN project (foreman-dispatch, fworker:*, canaries). LiteLLM's
 # callback writes to a different project (lumen-pipeline, the key in agent/.env), so the monitor
@@ -122,6 +136,73 @@ def alert(trace_count, floor_count, window_seconds, ntfy_send=NTFY_SEND, name=No
         check=False)
 
 
+def _load_escalate_state(path):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_escalate_state(path, state):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        json.dump(state, fh)
+
+
+def _wq_add_fleet_fires(title, detail, wq_bin=WQ_BIN):
+    """Same idempotent-title convention as ops/wq1649-aq-source-escalate._wq_add:
+    `wq add` itself de-dupes on an open ticket with the same title, so a crash
+    between opening the ticket and persisting escalate-state just re-adds the
+    same (deduped) ticket next run rather than silently losing the escalation."""
+    cmd = [wq_bin, "add", "--lane", FLEET_FIRES_LANE, "--pri", "0", "--title", title, "--detail", detail]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
+    except Exception:
+        return False
+    return r.returncode == 0
+
+
+def escalate_if_persistent(breached, now_ts, state_path=ESCALATE_STATE_PATH,
+                            escalate_after_s=ESCALATE_AFTER_S, wq_add=_wq_add_fleet_fires,
+                            trace_count=None, floor_count=None, window_seconds=None, name=None):
+    """wq#3221: a trace-rate floor breach that persists past escalate_after_s opens
+    ONE fleet-fires ticket (idempotent via the 'escalated' flag in state), instead
+    of relying on a human to notice a repeatedly-bumped ntfy row (aq 2492, 101
+    bumps, wq#3211). Recovery clears state so the next breach can escalate again."""
+    state = _load_escalate_state(state_path)
+    if not breached:
+        if state:
+            _save_escalate_state(state_path, {})
+        return {}
+    if "first_breach_ts" not in state:
+        state = {"first_breach_ts": now_ts, "escalated": False}
+        _save_escalate_state(state_path, state)
+        return state
+    if state.get("escalated"):
+        return state
+    breach_age_s = now_ts - state["first_breach_ts"]
+    if breach_age_s < escalate_after_s:
+        return state
+    what = f"'{name}' traces" if name else "traces"
+    title = f"[fleet-fires] LiteLLM->Langfuse trace-rate floor breach open {int(breach_age_s / 60)}m"
+    detail = (
+        f"Auto-escalated by langfuse_trace_rate_monitor (wq#3221, following the wq#1649 "
+        f"fleet-fires pattern). aq 2492's own ntfy row went unassigned for 47h during "
+        f"wq#3211 - this ticket exists so a persistent breach cannot repeat that.\n\n"
+        f"Last observed: {trace_count} {what} in the last {window_seconds}s "
+        f"(floor={floor_count}). First breach: {datetime.fromtimestamp(state['first_breach_ts'], tz=timezone.utc).isoformat()}\n\n"
+        f"RUNBOOK: check litellm-completion-probe's langfuse-trace-ingest state "
+        f"(/home/lumen/agents/litellm-completion-probe/state.json), confirm the "
+        f"gateway's Langfuse callback creds match agent/.env (wq#3221 config-lint), "
+        f"restart+verify if the config was edited without a follow-up restart.\n\n"
+        f"Acceptance: trace rate back over the floor, this ticket closed.\n"
+    )
+    state["escalated"] = wq_add(title, detail)
+    _save_escalate_state(state_path, state)
+    return state
+
+
 def run(env_path, window_seconds, floor_count, name=None, host_override=None):
     """Returns exit code: 0 = checked (alerted or over floor), 1 = skipped
     (no creds or fetch failed) — matches the timer unit's oneshot contract."""
@@ -136,11 +217,15 @@ def run(env_path, window_seconds, floor_count, name=None, host_override=None):
         trace_count = fetch_trace_count(host, pk, sk, window_seconds)
     if trace_count is None:
         return 1
-    if under_floor(trace_count, floor_count):
+    breached = under_floor(trace_count, floor_count)
+    if breached:
         if name:
             alert(trace_count, floor_count, window_seconds, name=name, pk=pk)
         else:
             alert(trace_count, floor_count, window_seconds)
+    escalate_if_persistent(breached, datetime.now(timezone.utc).timestamp(),
+                           trace_count=trace_count, floor_count=floor_count,
+                           window_seconds=window_seconds, name=name)
     return 0
 
 
