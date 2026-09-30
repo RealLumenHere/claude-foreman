@@ -167,8 +167,10 @@ def test_wq3238_git_dash_b_and_dash_u_are_dangling_for_git():
         ok, reason = acceptance.replayable(cmd)
         assert not ok, cmd
         assert "dangling flag for 'git'" in reason, (cmd, reason)
-    # git query flags with no argument really are complete, and must still replay
-    for cmd in ("git status -s", "git diff --stat", "git log --oneline",
+    # git query flags with no argument really are complete, and must still replay. (`git
+    # status -s` was here until wq#3242 dropped every git short flag -- `--short` is the
+    # same command in the form that has no per-subcommand arity to get wrong.)
+    for cmd in ("git status --short", "git diff --stat", "git log --oneline",
                 "git diff --exit-code"):
         ok, reason = acceptance.replayable(cmd)
         assert ok, f"{cmd}: {reason}"
@@ -204,8 +206,13 @@ def test_wq3238_the_probes_really_can_fail_against_a_flat_set():
         make's boolean -k leaks onto pytest, where -k demands an argument. (b) is what
         widening a flat set instead of keying it would have cost next."""
     saved = acceptance._ZERO_ARG_FLAGS_BY_BINARY
+    saved_sub = acceptance._SUBCOMMAND_BINARIES
     collapsed = _flat_union()  # computed from the real table, before it is swapped out
     try:
+        # wq#3242 added a second, table-independent layer: git short flags are rejected in
+        # replayable() itself. Recreating wq#3235's code means lifting that too, or the
+        # recreation is not the code as it shipped.
+        acceptance._SUBCOMMAND_BINARIES = set()
         acceptance._ZERO_ARG_FLAGS_BY_BINARY = _shared(WQ3235_FLAT_SET)
         assert acceptance.replayable("git checkout -b")[0] is True
         assert acceptance.replayable("git branch -u")[0] is True
@@ -216,6 +223,7 @@ def test_wq3238_the_probes_really_can_fail_against_a_flat_set():
         assert acceptance.replayable("pytest -k")[0] is True
     finally:
         acceptance._ZERO_ARG_FLAGS_BY_BINARY = saved
+        acceptance._SUBCOMMAND_BINARIES = saved_sub
     assert acceptance.replayable("git checkout -b")[0] is False
     assert acceptance.replayable("git branch -u")[0] is False
     assert acceptance.replayable("pytest -k")[0] is False
@@ -243,6 +251,82 @@ def test_wq3238_an_unknown_binary_defaults_to_reject():
     assert acceptance.replayable("tsc --noEmit")[0] is True
     assert acceptance.replayable("tsc --project")[0] is False
     assert acceptance.replayable("./scripts/run.sh --only")[0] is False
+
+
+def test_wq3242_git_dash_s_is_dangling_because_rebase_and_merge_read_it_as_strategy():
+    """wq#3241's CONTRADICT. `-s` is boolean for `git status`/`log`/`show` -- the four
+    subcommands wq#3238's entry rule was applied against -- and `--strategy <name>` for
+    `git rebase`/`git merge`, which exit 129 ("switch `s' requires a value", probed live
+    2026-09-30 in this worktree). rebase/merge are OUTSIDE the population the git entry was
+    built from, which is why this probe can fail where wq#3238's could not."""
+    for cmd in ("git rebase -s", "git merge -s"):
+        ok, reason = acceptance.replayable(cmd)
+        assert not ok, cmd
+        assert "dangling flag for 'git'" in reason, (cmd, reason)
+    # the accepted cost: git's boolean short flags go too, and their long forms carry the
+    # same criterion with no per-subcommand arity to get wrong.
+    assert acceptance.replayable("git status -s")[0] is False
+    assert acceptance.replayable("git status --short")[0] is True
+    # flat CLIs keep their short flags -- the ban is scoped to subcommand dispatchers
+    assert acceptance.replayable("pytest -x")[0] is True
+    assert acceptance.replayable("make -k")[0] is True
+    assert acceptance.replayable("python3 -V")[0] is True
+    # the model derivation path, where the unsatisfiable AC was being minted
+    kept, rejected = acceptance._validate_criteria(
+        [{"id": "AC1", "text": "rebased", "proof_type": "test",
+          "cmd": "git rebase -s", "expect_exit": 0},
+         {"id": "AC2", "text": "suite passes", "proof_type": "test",
+          "cmd": "pytest -q harness/tests", "expect_exit": 0}])
+    assert [c["id"] for c in kept] == ["AC2"], kept
+    assert any("AC1" in r and "dangling flag" in r for r in rejected), rejected
+
+
+def test_wq3242_the_invariant_does_not_live_in_the_table():
+    """Four recurrences of one bug class (wq#3232 -> 3235 -> 3237 -> 3238) say a table entry
+    is too easy to get wrong. So the short-flag ban for a subcommand dispatcher is enforced
+    in replayable(): putting `-s` back exactly as wq#3238 shipped it does not resurrect
+    `git merge -s`, and emptying _SUBCOMMAND_BINARIES does not resurrect it either, because
+    the table no longer lists it. Both layers must be lifted at once -- the next test."""
+    saved = acceptance._ZERO_ARG_FLAGS_BY_BINARY
+    try:
+        acceptance._ZERO_ARG_FLAGS_BY_BINARY = dict(
+            saved, git=saved["git"] | {"-s"})
+        assert acceptance.replayable("git merge -s")[0] is False
+        assert acceptance.replayable("git status -s")[0] is False
+    finally:
+        acceptance._ZERO_ARG_FLAGS_BY_BINARY = saved
+    saved_sub = acceptance._SUBCOMMAND_BINARIES
+    try:
+        acceptance._SUBCOMMAND_BINARIES = set()
+        assert acceptance.replayable("git merge -s")[0] is False
+    finally:
+        acceptance._SUBCOMMAND_BINARIES = saved_sub
+    # The other subcommand dispatchers are covered by construction rather than by
+    # enumeration: no probe was run against go/cargo/npm (they are off this session's Bash
+    # allowlist), and none is needed -- the ban does not ask what the flag's arity is.
+    for cmd in ("cargo build -j", "npm ci -w", "go test -run"):
+        assert acceptance.replayable(cmd)[0] is False, cmd
+
+
+def test_wq3242_the_probe_really_can_fail_against_the_wq3238_table():
+    """Falsifiability guard (wq#2630). Recreate wq#3238 as merged -- `-s` in git's set, no
+    replayable()-level ban -- and the probes above must flip: `git merge -s` is accepted and
+    survives _validate_criteria() into a pinned, unsatisfiable AC."""
+    saved = acceptance._ZERO_ARG_FLAGS_BY_BINARY
+    saved_sub = acceptance._SUBCOMMAND_BINARIES
+    try:
+        acceptance._SUBCOMMAND_BINARIES = set()
+        acceptance._ZERO_ARG_FLAGS_BY_BINARY = dict(saved, git=saved["git"] | {"-s"})
+        assert acceptance.replayable("git merge -s")[0] is True
+        assert acceptance.replayable("git rebase -s")[0] is True
+        assert acceptance._validate_criteria(
+            [{"id": "AC1", "text": "t", "proof_type": "test",
+              "cmd": "git merge -s", "expect_exit": 0}])[0] != []
+    finally:
+        acceptance._ZERO_ARG_FLAGS_BY_BINARY = saved
+        acceptance._SUBCOMMAND_BINARIES = saved_sub
+    assert acceptance.replayable("git merge -s")[0] is False
+    assert acceptance.replayable("git rebase -s")[0] is False
 
 
 def test_looks_like_prose_boundaries():

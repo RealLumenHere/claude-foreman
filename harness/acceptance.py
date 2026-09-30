@@ -96,7 +96,28 @@ _SHELL_META = re.compile(r"[;&|<>`$()\\\n]")
 # `pytest -k` demands one (probed live 2026-09-30), a pair no flat set can express. A
 # long-form `--switch` whose name is a predicate (--dry-run, --noEmit, --porcelain) has no
 # value grammar to get wrong and is listed on convention.
+#
+# wq#3242 (judgment, from wq#3241's CONTRADICT): the entry rule above is necessary but not
+# sufficient, because "the real tool" is not one grammar for a binary that dispatches to
+# subcommands. `-s` was listed for git on the strength of `git status -s` / `git log -s` /
+# `git show -s` -- all boolean -- but `-s` is `--strategy` for `git rebase` and `git merge`,
+# where it requires a value (both exit 129, "switch `s' requires a value", probed live
+# 2026-09-30). One binary key, two arities: the wq#3235 defect recurring one level down.
+# Two changes, because a fourth recurrence of one bug class says the table is the wrong
+# place to hold the invariant:
+#   1. `-s` is gone from git's set. The capability lost is nil -- `--short`/`--stat`/
+#      `--oneline` cover the same query intent in long form and stay listed -- while the
+#      false accept it bought was an unsatisfiable pinned AC.
+#   2. For a SUBCOMMAND binary the short-flag ban is enforced in replayable() itself
+#      (_SUBCOMMAND_BINARIES), not left to the table's contents, so re-adding `-s` to git's
+#      set cannot resurrect `git merge -s`. This is why (binary, subcommand) keying was
+#      rejected: it is sound too (default still reject), but it makes the table an order of
+#      magnitude bigger, puts every future entry back on the honour system of "was this pair
+#      probed", and buys only rare boolean short flags nobody needs a criterion for.
 _FLAG_TOKEN_RE = re.compile(r"^-{1,2}[A-Za-z0-9]")
+# A single-dash token: `-s`, `-vv`, `-sb`. Its arity is the subcommand's choice, never the
+# binary's, for anything in _SUBCOMMAND_BINARIES.
+_SHORT_FLAG_RE = re.compile(r"^-[A-Za-z0-9]+$")
 # Zero-arity by convention across every allowlisted binary -- no CLI takes an argument TO
 # its help. (Their exit codes differ: `git -h` is 129, `go -h` is 2. That is the gate's
 # business, not this check's; a wrong expect_exit fails the AC with the tool's own error.
@@ -111,8 +132,10 @@ _ZERO_ARG_FLAGS_BY_BINARY = {
     # `python -m pytest ...` is parsed by pytest, not python -- see _arity_binary().
     "python": _HELP_FLAGS,
     "python3": _HELP_FLAGS,
-    # NOT -b (git checkout -b) and NOT -u (git branch -u): the wq#3237 finding.
-    "git": _HELP_FLAGS | {"-s", "--short", "--porcelain", "--stat", "--oneline",
+    # NOT -b (git checkout -b) and NOT -u (git branch -u): the wq#3237 finding. NOT -s
+    # either (git rebase/merge -s == --strategy <name>): the wq#3241 finding -- and no
+    # other short flag, by _SUBCOMMAND_BINARIES below.
+    "git": _HELP_FLAGS | {"--short", "--porcelain", "--stat", "--oneline",
                           "--exit-code", "--name-only"},
     "ruff": _HELP_FLAGS | {"--fix", "--check", "--diff"},
     "mypy": _HELP_FLAGS | {"--strict", "--no-incremental"},
@@ -133,6 +156,12 @@ _ZERO_ARG_FLAGS_BY_BINARY = {
     "bash": _HELP_FLAGS,
     "sh": set(),
 }
+# Binaries that dispatch to subcommands with independent flag grammars, so a short flag's
+# arity is a property of (binary, subcommand) and cannot be answered by a binary-keyed set.
+# The help flags stay exempt for the reason at _HELP_FLAGS: nothing takes an argument to its
+# help. Everything else single-dash is rejected for these, table entry or not (wq#3242).
+# Flat CLIs are absent on purpose -- pytest's -x/-q, make's -k mean one thing per binary.
+_SUBCOMMAND_BINARIES = {"git", "go", "cargo", "npm", "npx", "pnpm", "yarn"}
 
 
 def _arity_binary(argv):
@@ -199,6 +228,11 @@ def replayable(cmd, pinned=False):
     last = argv[-1]
     if not pinned and _FLAG_TOKEN_RE.match(last) and "=" not in last:
         owner = _arity_binary(argv)
+        if (owner in _SUBCOMMAND_BINARIES and last not in _HELP_FLAGS
+                and _SHORT_FLAG_RE.match(last)):
+            return False, (f"{last!r} is a dangling flag for {owner!r}: a short flag's "
+                           f"arity is chosen by the subcommand, and {owner} has one grammar "
+                           "per subcommand (wq#3242)")
         if last not in _ZERO_ARG_FLAGS_BY_BINARY.get(owner, ()):
             return False, (f"{last!r} is a dangling flag for {owner!r}: may require a "
                            "following argument, none present")
