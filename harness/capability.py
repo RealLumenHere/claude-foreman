@@ -229,7 +229,8 @@ def needs_nodes(needs):
     out = []
     for node in (list(needs.ssh_nodes)
                  + [n for n, _ in needs.copy_targets]
-                 + [n for n, _ in needs.restart_targets]):
+                 + [n for n, _ in needs.restart_targets]
+                 + [n for n, _ in needs.peer_targets]):
         if node not in out:
             out.append(node)
     return out
@@ -247,7 +248,8 @@ def policy_grants(needs, policy_path=None):
     by the broker per-invocation, not knowable at spawn time."""
     grants = []
     refused = []
-    wants_exec = bool(needs.ssh_nodes or needs.copy_targets or needs.restart_targets)
+    wants_exec = bool(needs.ssh_nodes or needs.copy_targets or needs.restart_targets
+                      or needs.peer_targets)
     if not wants_exec:
         return grants, refused
     try:
@@ -268,6 +270,21 @@ def policy_grants(needs, policy_path=None):
             refused.append(f"needs:restart({unit}@{node}) denied by {rule}: {reason}")
             continue
         grants.append({"kind": "restart", "node": node, "unit": unit})
+    # wq#3200: fixed-argv peer verb. getattr keeps this fail-closed while the
+    # lumen-bin PR carrying check_peer is in flight — an older fleet_exec_policy
+    # refuses the tag rather than granting unchecked.
+    check_peer = getattr(fleet_exec_policy, "check_peer", None)
+    for node, peer_name in needs.peer_targets:
+        if check_peer is None:
+            refused.append(f"needs:peer({peer_name}@{node}) refused: installed "
+                           f"fleet_exec_policy has no check_peer (lumen-bin not yet updated)")
+            continue
+        ok, rule, reason = check_peer(node, peer_name, policy)
+        if not ok:
+            refused.append(f"needs:peer({peer_name}@{node}) denied by {rule}: {reason}")
+            continue
+        grants.append({"kind": "ssh", "node": node, "verbs": ["peer"],
+                       "peers": [peer_name]})
     return grants, refused
 
 

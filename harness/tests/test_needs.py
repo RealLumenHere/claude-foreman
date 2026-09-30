@@ -94,3 +94,14 @@ def test_restart_targets_parses_unit_at_node():
 def test_restart_targets_skips_malformed_arg():
     n = needs.parse("restart(no-at-sign)")
     assert n.restart_targets == []
+
+
+def test_peer_targets_parses_name_at_node():
+    n = needs.parse("peer(bgblink-peer@thor)")
+    assert n.peer_targets == [("thor", "bgblink-peer")]
+    assert needs.validate("peer(bgblink-peer@thor)")[0]
+
+
+def test_peer_targets_skips_malformed_arg():
+    n = needs.parse("peer(no-at-sign)")
+    assert n.peer_targets == []

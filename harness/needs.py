@@ -16,7 +16,7 @@ import re
 
 # §2.3 tag vocabulary (v1, closed set). wq edit --needs validates against this;
 # this parser accepts anything tag-shaped so a vocabulary bump can't strand tickets.
-TAG_NAMES = ("ssh", "root", "restart", "copy", "repo", "dir", "bench", "power")
+TAG_NAMES = ("ssh", "root", "restart", "copy", "repo", "dir", "bench", "power", "peer")
 
 _TAG_RE = re.compile(r"(?:needs:)?([a-z_-]+)\(([^)]*)\)")
 _NEEDS_LINE_RE = re.compile(r"^Needs:\s*(.+)$", re.MULTILINE)
@@ -84,6 +84,18 @@ class Needs:
                 unit, _, node = arg.partition("@")
                 if node and unit:
                     out.append((node, unit))
+        return out
+
+    @property
+    def peer_targets(self):
+        """Every peer(<name>@<node>) arg as (node, name), malformed args skipped
+        (wq#3200: fleet-exec's fixed-argv peer verb)."""
+        out = []
+        for name, arg in self.tags:
+            if name == "peer" and "@" in arg:
+                peer, _, node = arg.partition("@")
+                if node and peer:
+                    out.append((node, peer))
         return out
 
     def __bool__(self):

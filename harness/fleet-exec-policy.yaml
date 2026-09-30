@@ -236,3 +236,30 @@ copy_dirs:
 # bench is v2 (fleet-exec has no `bench` verb yet).
 bench_tools:
   thor: [adb, fastboot]
+
+# peer (wq#3200): the ONE reviewed path to START a process on a second node.
+# `fleet-exec peer <node> <name>` executes EXACTLY the argv pinned here — worker
+# argv never reaches the remote node — and only after `sha256sum argv[0]` on the
+# node matches the pinned sha256, so a replaced entry point is a deny before
+# anything runs. Every entry lands by PR review only, one entry per reviewed
+# program. fleet_exec_policy.check_peer additionally refuses, regardless of what
+# this file says: an interpreter basename as the entry point (bash/node/python3/…
+# — pin a wrapper script; the sha must cover what actually runs), an entry point
+# inside that node's worker-writable copy_dirs (lumen-drop), any shell
+# metacharacter, a relative path, or a malformed/missing sha256. A never.nodes
+# node (thor) stays fully denied except for names explicitly reviewed into its
+# map below — the same carve-out shape bench_tools already carries. Review
+# checklist for a new entry: (1) the entry-point file is root- or Frank-deployed,
+# NOT worker-writable; (2) it does not exec anything from a worker-writable path;
+# (3) if it must outlive the broker's ssh session it daemonizes itself
+# (setsid + exit 0); (4) the sha256 in the entry is sha256sum of the deployed file.
+#
+# Entry shape:
+#   <node>:
+#     <name>:
+#       argv: [/abs/path/run.sh, arg1, arg2]
+#       sha256: <sha256sum of /abs/path/run.sh on the node>
+#
+# Empty by design at introduction: the verb exists, the allowlist grants nothing
+# until a reviewed entry lands (wq#484's bgblink peer will be the first).
+peer_cmds: {}

@@ -226,6 +226,50 @@ def test_no_exec_tags_never_reads_the_policy_file(tmp_path):
     assert v.ok
 
 
+# ---- peer (wq#3200): fixed-argv exec path -----------------------------------------------
+# policy_grants delegates to fleet_exec_policy.check_peer from the INSTALLED
+# /home/lumen/bin — the grant-path test skips until the lumen-bin PR carrying
+# check_peer lands; every refusal-path test must hold on both versions.
+
+PEER_POLICY_YAML = POLICY_YAML + (
+    "peer_cmds:\n"
+    "  isis:\n"
+    "    demo-peer:\n"
+    "      argv: [/home/isis/peers/demo/run.sh]\n"
+    "      sha256: " + "ab" * 32 + "\n"
+)
+
+
+def peer_policy_path(tmp_path):
+    p = tmp_path / "fleet-exec-policy.yaml"
+    p.write_text(PEER_POLICY_YAML)
+    return str(p)
+
+
+@pytest.mark.skipif(not hasattr(capability.fleet_exec_policy, "check_peer"),
+                    reason="installed fleet_exec_policy predates the lumen-bin peer PR")
+def test_peer_tag_grants_when_policy_lists_the_name(tmp_path):
+    grants, refused = capability.policy_grants(needs_mod.parse("peer(demo-peer@isis)"),
+                                               policy_path=peer_policy_path(tmp_path))
+    assert not refused, refused
+    assert grants == [{"kind": "ssh", "node": "isis", "verbs": ["peer"],
+                       "peers": ["demo-peer"]}]
+
+
+def test_peer_tag_unlisted_name_refused_never_granted(tmp_path):
+    # holds on BOTH module versions: old fleet_exec_policy refuses for lack of
+    # check_peer, new one refuses via policy — a peer tag must never fail open.
+    grants, refused = capability.policy_grants(needs_mod.parse("peer(unlisted@isis)"),
+                                               policy_path=peer_policy_path(tmp_path))
+    assert refused and grants == []
+
+
+def test_peer_tag_thor_without_reviewed_entry_refused(tmp_path):
+    grants, refused = capability.policy_grants(needs_mod.parse("peer(demo-peer@thor)"),
+                                               policy_path=peer_policy_path(tmp_path))
+    assert refused and grants == []
+
+
 # ---- rollback ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("tags,detail", [
