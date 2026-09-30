@@ -97,6 +97,15 @@ RESTIC_TIMEOUT_S = int(os.environ.get("MASK_AT_REST_RESTIC_TIMEOUT_S", "1800"))
 # alert (283 transcripts on the 2026-09-29 03:17Z run). Resolve by absolute path
 # instead, so the unit's PATH is irrelevant.
 RESTIC_BIN = os.environ.get("RESTIC_BIN", "/home/lumen/.local/bin/restic")
+# wq#3207: restic loads the offsite repo's whole index on open (3877 index files,
+# 4.6G in ~/.cache/restic on 2026-09-30), whatever the batch size. That, not the
+# Python scan, set the unit's peak: 5.3G on 2026-09-29 when restic never started,
+# 18.8G on 2026-09-30 when it did, 14G for a 316-file pass. lumen-backup-offsite
+# peaks at 22-23G on the same repo. Go's default GOGC=100 lets the heap reach twice
+# its live size before collecting; GOGC=20 is the restic forum's standard advice for
+# this, and GOMEMLIMIT (restic 0.17.3, Go 1.25) makes the GC work harder before the
+# unit's MemoryHigh=8G starts throttling. setdefault, so an explicit env wins.
+RESTIC_GO_ENV = {"GOGC": "20", "GOMEMLIMIT": "6GiB"}
 
 # Same fail-open aq wiring as read_dir_sweep.aq_alert — a missing/broken aq binary
 # must never break the sweep itself.
@@ -233,32 +242,39 @@ def gateway_log_paths():
         if os.path.isfile(p) and not p.endswith(".masking_tmp"))
 
 
-def _read_text(path):
-    """Text of `path`, transparently decompressing a rotated `.gz` copy."""
+def _iter_lines(path):
+    """Lines of `path`, one at a time, transparently decompressing a rotated `.gz`
+    copy. wq#3207: the scan used to read each file whole and keep every hit file's
+    masked text in memory until the restic batch finished, so the heap grew at ~4x
+    the hit set (CPython stores a transcript holding one emoji as UCS-4). Streaming
+    bounds it by the longest line. newline="" keeps "\\r\\n" as written, so the
+    masked rewrite changes nothing but the masked values."""
     opener = gzip.open if path.endswith(".gz") else open
-    with opener(path, "rt", errors="replace") as fh:
-        return fh.read()
+    with opener(path, "rt", errors="replace", newline="") as fh:
+        yield from fh
 
 
-def _write_text(path, text, mode):
-    """Atomic same-filesystem replace, mode preserved, gzip re-applied for `.gz`."""
+def scan_file(path):
+    """[scan hit record, ...] for `path` — line by line, so a hit's `context` window
+    never crosses a JSONL record boundary."""
+    records = []
+    for line in _iter_lines(path):
+        records.extend(masking.scan(line)[1])
+    return records
+
+
+def mask_file(path, mode):
+    """Stream `path` through masking.mask_text into a temp file, then atomically
+    replace it: mode preserved, gzip re-applied for `.gz`. Re-reads the file rather
+    than reusing the scan pass's text, so lines a live session appended while restic
+    ran are masked and kept instead of dropped with a stale copy."""
     tmp = path + ".masking_tmp"
     opener = gzip.open if path.endswith(".gz") else open
-    with opener(tmp, "wt") as fh:
-        fh.write(text)
+    with opener(tmp, "wt", newline="") as fh:
+        for line in _iter_lines(path):
+            fh.write(masking.mask_text(line)[0])
     os.chmod(tmp, mode)
     os.replace(tmp, path)
-
-
-def mask_file_text(text):
-    """(masked_text, [scan hit record, ...]) — line-by-line, so a masked JSONL line
-    still parses and a hit's `context` window never crosses a record boundary."""
-    out_lines, records = [], []
-    for line in text.splitlines(keepends=True):
-        masked, hits = masking.scan(line)
-        out_lines.append(masked)
-        records.extend(hits)
-    return "".join(out_lines), records
 
 
 def offsite_backup(paths, tag):
@@ -272,7 +288,9 @@ def offsite_backup(paths, tag):
     env = dict(os.environ)
     env["RESTIC_PASSWORD_FILE"] = OFFSITE_PASSWORD_FILE
     env["RESTIC_REPOSITORY"] = OFFSITE_REPO
-    cmd = [RESTIC_BIN, "-o", f"sftp.command=ssh -o StrictHostKeyChecking=no "
+    for k, v in RESTIC_GO_ENV.items():
+        env.setdefault(k, v)
+    cmd =[RESTIC_BIN, "-o", f"sftp.command=ssh -o StrictHostKeyChecking=no "
                             f"-i {OFFSITE_SSH_KEY} thoth@192.168.8.218 -s sftp",
            "backup", "--tag", tag, "--host", "lumen-mask-at-rest", "--"] + paths
     try:
@@ -301,27 +319,26 @@ def process_store(paths, run_id, dry_run, rotated):
     for path in paths:
         try:
             mtime = os.path.getmtime(path)
-            text = _read_text(path)
+            records = scan_file(path)
         except OSError as exc:
             log(f"skip {path}: {exc}")
             continue
-        masked, records = mask_file_text(text)
         if not records:
             scanned[path] = mtime
             continue
-        plans.append((path, masked, records))
+        plans.append((path, records))
     if not plans:
         return 0, [], [], [], scanned
     if not dry_run:
-        to_backup = [p for p, _, _ in plans]
+        to_backup = [p for p, _ in plans]
         if not offsite_backup(to_backup, tag=f"mask-at-rest-{run_id}"):
             log("offsite backup did not succeed for this batch — masking SKIPPED "
                 "for these files this pass (will retry next run):")
-            held = [p for p, _, _ in plans]
+            held = [p for p, _ in plans]
             for p in held:
                 log(f"  held unmasked (backup failed): {p}")
             return 0, [], [], held, scanned
-    for path, masked, records in plans:
+    for path, records in plans:
         all_records.extend({**r, "path": path} for r in records)
         loose = [r for r in records
                 if r["value_sha256_12"] not in rotated
@@ -332,7 +349,11 @@ def process_store(paths, run_id, dry_run, rotated):
                 f"{sorted({r['label'] for r in records})}")
             continue
         mode = os.stat(path).st_mode & 0o777
-        _write_text(path, masked, mode)
+        try:
+            mask_file(path, mode)
+        except OSError as exc:
+            log(f"mask FAILED for {path}: {exc}")
+            continue
         files_masked += 1
         scanned[path] = os.path.getmtime(path)
         log(f"masked {path}: {sorted({r['label'] for r in records})} "

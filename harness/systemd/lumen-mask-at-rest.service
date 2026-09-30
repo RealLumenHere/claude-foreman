@@ -7,4 +7,10 @@ After=network-online.target
 Type=oneshot
 User=lumen
 WorkingDirectory=/home/lumen/foreman/harness
+# wq#3207: 18.8G peak with no cap on 2026-09-30 while the box already had 11G of swap
+# in use. MemoryHigh throttles and reclaims (page cache first) instead of letting a
+# regression push the box into the swap storm that flaps sessions. The restic child
+# runs with GOMEMLIMIT=6GiB (mask_at_rest.RESTIC_GO_ENV) so Go's GC holds its heap
+# under this line.
+MemoryHigh=8G
 ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/mask_at_rest.py --store all

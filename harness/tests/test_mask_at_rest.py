@@ -221,8 +221,8 @@ def test_unchanged_clean_file_is_not_reread_on_second_pass(tmp_path, monkeypatch
     hits is never written. A file recorded clean in STATE_PATH must cost one stat,
     not a full read+scan, on the next pass its mtime hasn't moved."""
     reads = []
-    real_read = mask_at_rest._read_text
-    monkeypatch.setattr(mask_at_rest, "_read_text",
+    real_read = mask_at_rest._iter_lines
+    monkeypatch.setattr(mask_at_rest, "_iter_lines",
                         lambda p: reads.append(p) or real_read(p))
     p = _write(str(tmp_path / "projects" / "proj-a" / "sess1.jsonl"),
               "nothing secret here\n")
@@ -286,3 +286,89 @@ def test_offsite_backup_timeout_covers_repo_open_cost(monkeypatch):
     monkeypatch.setattr(mask_at_rest.subprocess, "run", fake_run)
     assert mask_at_rest.offsite_backup(["/tmp/x"], tag="t") is True
     assert seen["timeout"] == mask_at_rest.RESTIC_TIMEOUT_S
+
+
+def test_scan_memory_is_bounded_by_line_not_by_hit_set(tmp_path):
+    """wq#3207: process_store used to read each file whole and hold every hit file's
+    masked text until the restic batch returned, so the heap grew with the hit set
+    (~4x its bytes: one astral char makes CPython store the text as UCS-4). Eight
+    ~250 KB hit files of ~1 KB lines: the old code peaks above 7 MB here, streaming
+    stays under one file's size."""
+    import tracemalloc
+    line = json.dumps({"text": "lorem ipsum " * 80 + " \U0001F600"},
+                      ensure_ascii=False) + "\n"
+    hit = json.dumps({"text": f"token is {GHP}"}) + "\n"
+    paths = [_write(str(tmp_path / "projects" / "p" / f"s{i}.jsonl"),
+                    hit + line * 250) for i in range(8)]
+    corpus = sum(os.path.getsize(p) for p in paths)
+    masking.scan(line)   # warm the regex caches outside the measured window
+    tracemalloc.start()
+    try:
+        _, records, _, _, _ = mask_at_rest.process_store(paths, "t", True, {})
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(records) == 8
+    assert peak < corpus / 8, (peak, corpus)
+
+
+def test_lines_appended_during_backup_are_masked_not_dropped(tmp_path, monkeypatch):
+    """The old pass wrote back text read BEFORE the restic batch (minutes, on the
+    offsite repo), so anything a live session appended meanwhile was truncated
+    away. The mask pass now re-reads the file."""
+    p = _write(str(tmp_path / "projects" / "proj-a" / "sess1.jsonl"),
+               json.dumps({"text": f"token is {GHP}"}) + "\n")
+
+    def backup_then_append(paths, tag):
+        with open(p, "a") as fh:
+            fh.write(json.dumps({"text": f"later {AKIA}"}) + "\n")
+        return True
+
+    monkeypatch.setattr(mask_at_rest, "offsite_backup", backup_then_append)
+    assert mask_at_rest.main(["--store", "transcripts"]) == 1
+    with open(p) as fh:
+        lines = fh.read().splitlines()
+    assert len(lines) == 2
+    assert GHP not in lines[0] and AKIA not in lines[1]
+    assert "later AKIAMASKED" in lines[1]
+
+
+def test_mask_preserves_crlf_line_endings(tmp_path, monkeypatch):
+    monkeypatch.setattr(mask_at_rest, "offsite_backup", lambda paths, tag: True)
+    p = str(tmp_path / "gw" / "desktop-commander-mcp.log")
+    os.makedirs(os.path.dirname(p))
+    with open(p, "wb") as fh:
+        fh.write(f"a\r\nkey={AKIA}\r\nb\n".encode())
+    assert mask_at_rest.main(["--store", "supergateway"]) == 1
+    with open(p, "rb") as fh:
+        assert fh.read() == b"a\r\nkey=AKIAMASKED\r\nb\n"
+
+
+def test_restic_runs_with_bounded_go_gc_and_explicit_env_wins(monkeypatch):
+    """wq#3207: restic loads the offsite repo's whole multi-GB index per open; its Go
+    heap, not the Python scan, set the 18.8G peak. The child must get GOGC and a
+    GOMEMLIMIT under the unit's MemoryHigh, unless the caller already set them."""
+    seen = []
+
+    class _Done:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(mask_at_rest.subprocess, "run",
+                        lambda cmd, env=None, **kw: seen.append(env) or _Done())
+    monkeypatch.delenv("GOGC", raising=False)
+    monkeypatch.delenv("GOMEMLIMIT", raising=False)
+    mask_at_rest.offsite_backup(["/tmp/x"], tag="t")
+    assert seen[0]["GOGC"] == "20" and seen[0]["GOMEMLIMIT"] == "6GiB"
+    monkeypatch.setenv("GOGC", "50")
+    mask_at_rest.offsite_backup(["/tmp/x"], tag="t")
+    assert seen[1]["GOGC"] == "50"
+
+
+def test_unit_caps_memory_above_restic_go_limit():
+    unit = os.path.join(os.path.dirname(__file__), "..", "systemd",
+                        "lumen-mask-at-rest.service")
+    with open(unit) as fh:
+        lines = [l.strip() for l in fh if l.strip().startswith("MemoryHigh=")]
+    assert lines == ["MemoryHigh=8G"]
+    assert mask_at_rest.RESTIC_GO_ENV["GOMEMLIMIT"] == "6GiB"   # below 8G
