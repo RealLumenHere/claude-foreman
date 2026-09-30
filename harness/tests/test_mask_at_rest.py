@@ -266,3 +266,23 @@ def test_held_unmasked_file_is_retried_on_the_next_pass(tmp_path, monkeypatch):
     assert rc == 1   # now masked (new unaccounted record for a fresh hit this pass)
     with open(p) as fh:
         assert GHP not in fh.read()
+
+
+def test_offsite_backup_timeout_covers_repo_open_cost(monkeypatch):
+    """Measured 2026-09-30: restic opens the ~500G offsite repo in ~2 min, so the old
+    120s cap timed out every batch regardless of size. The cap handed to subprocess must
+    stay well above that, and must come from RESTIC_TIMEOUT_S."""
+    assert mask_at_rest.RESTIC_TIMEOUT_S >= 900
+    seen = {}
+
+    class _Done:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        seen["timeout"] = kw.get("timeout")
+        return _Done()
+
+    monkeypatch.setattr(mask_at_rest.subprocess, "run", fake_run)
+    assert mask_at_rest.offsite_backup(["/tmp/x"], tag="t") is True
+    assert seen["timeout"] == mask_at_rest.RESTIC_TIMEOUT_S

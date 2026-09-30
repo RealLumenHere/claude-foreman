@@ -81,7 +81,13 @@ OFFSITE_PASSWORD_FILE = os.environ.get(
     "MASK_AT_REST_OFFSITE_PW", "/home/lumen/services/backup/.restic-password")
 OFFSITE_SSH_KEY = os.environ.get(
     "MASK_AT_REST_OFFSITE_KEY", "/home/lumen/.ssh/thoth_ed25519")
-RESTIC_TIMEOUT_S = 120
+# The offsite repo is ~500G on a remote sftp host, and restic's repo open + index load
+# alone costs about 2 minutes: measured 2026-09-30, a `restic backup --dry-run` of ONE
+# 2 MB file took 1:59 wall against this repo. A 120s cap therefore timed out every batch
+# regardless of size (296 files / 289 MB on 2026-09-30 03:26Z), which left every file
+# with a hit "held unmasked". 30 min covers open + upload with wide
+# margin; override with MASK_AT_REST_RESTIC_TIMEOUT_S.
+RESTIC_TIMEOUT_S = int(os.environ.get("MASK_AT_REST_RESTIC_TIMEOUT_S", "1800"))
 # wq#3164: lumen-mask-at-rest.service sets no Environment=PATH=, so it runs under
 # systemd's own default $PATH (systemd.exec(5): /usr/local/sbin:/usr/local/bin:
 # /usr/sbin:/usr/bin:/sbin:/bin), which does not include ~/.local/bin — restic's
