@@ -1,9 +1,9 @@
 """wq#2713: LoadState lookup failure must read 'unknown', never 'not-found';
 healer files the delete-row ticket only after STALE_CONFIRM consecutive confirmed reads."""
-import ast, sys, types, subprocess as real_sp
-D = '/home/lumen/foreman/ops/wq2713-loadstate-unknown/'
-TARGET = sys.argv[1] if len(sys.argv) > 1 else D + 'lumen_self_healer.py'
-SPLIT = sys.argv[2] if len(sys.argv) > 2 else D + 'split_watch.py'
+import ast, os, sys, types, subprocess as real_sp
+# wq#3222: this dir, not the primary tree's copy, and nothing at import — the old
+# module-level run parsed pytest's own argv as paths and sys.exit'd during collection.
+D = os.path.dirname(os.path.abspath(__file__)) + '/'
 
 def load(path, names, extra):
     tree = ast.parse(open(path).read())
@@ -25,26 +25,38 @@ class L:
     def warning(s, m): pass
     info = warning
 FAIL = 0
+CALLS = []
 def chk(name, got, want):
     global FAIL; ok = got == want; FAIL |= not ok
     print(('PASS' if ok else 'FAIL'), name, repr(got), '' if ok else f'want {want!r}')
 
-for path, fn in [(TARGET, '_unit_load_state'), (SPLIT, '_load_state')]:
-    tag = path.split('/')[-1]
-    for mode, want in [('timeout','unknown'),('rc1','unknown'),('empty','unknown'),
-                       ('loaded','loaded'),('not-found','not-found'),('masked','masked')]:
-        ns = load(path, {fn}, {'subprocess': fake(mode)})
-        chk(f'{tag}:{mode}', ns[fn]('x.service'), want)
+def main(target=D + 'lumen_self_healer.py', split=D + 'split_watch.py'):
+    global FAIL
+    FAIL = 0
+    CALLS.clear()
+    for path, fn in [(target, '_unit_load_state'), (split, '_load_state')]:
+        tag = path.split('/')[-1]
+        for mode, want in [('timeout','unknown'),('rc1','unknown'),('empty','unknown'),
+                           ('loaded','loaded'),('not-found','not-found'),('masked','masked')]:
+            ns = load(path, {fn}, {'subprocess': fake(mode)})
+            chk(f'{tag}:{mode}', ns[fn]('x.service'), want)
 
-CALLS = []
-ns = load(TARGET, {'_file_stale_unit_ticket','_stale_alerted','_stale_seen','STALE_CONFIRM'},
-          {'subprocess': fake('loaded'), 'log': L(), 'WQ_BIN': 'wq', 'WATCH_TABLE': 't.yaml'})
-if 'STALE_CONFIRM' not in ns:
-    chk('confirm-gate present', False, True)
-else:
-    for i in range(ns['STALE_CONFIRM'] - 1):
-        ns['_file_stale_unit_ticket']('u', 'not-found')
-    chk('no ticket before confirm', len(CALLS), 0)
-    ns['_file_stale_unit_ticket']('u', 'not-found'); chk('ticket at confirm', len(CALLS), 1)
-    ns['_file_stale_unit_ticket']('u', 'not-found'); chk('dedup after file', len(CALLS), 1)
-print('RESULT', 'ALL_PASS' if not FAIL else 'FAILED'); sys.exit(FAIL)
+    CALLS.clear()
+    ns = load(target, {'_file_stale_unit_ticket','_stale_alerted','_stale_seen','STALE_CONFIRM'},
+              {'subprocess': fake('loaded'), 'log': L(), 'WQ_BIN': 'wq', 'WATCH_TABLE': 't.yaml'})
+    if 'STALE_CONFIRM' not in ns:
+        chk('confirm-gate present', False, True)
+    else:
+        for i in range(ns['STALE_CONFIRM'] - 1):
+            ns['_file_stale_unit_ticket']('u', 'not-found')
+        chk('no ticket before confirm', len(CALLS), 0)
+        ns['_file_stale_unit_ticket']('u', 'not-found'); chk('ticket at confirm', len(CALLS), 1)
+        ns['_file_stale_unit_ticket']('u', 'not-found'); chk('dedup after file', len(CALLS), 1)
+    print('RESULT', 'ALL_PASS' if not FAIL else 'FAILED')
+    return FAIL
+
+def test_wq2713_loadstate():
+    assert main() == 0
+
+if __name__ == '__main__':
+    sys.exit(main(*sys.argv[1:3]))

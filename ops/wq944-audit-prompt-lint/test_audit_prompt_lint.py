@@ -2,9 +2,13 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import audit_prompt_lint as lint  # noqa: E402
+
+LIVE_RENDER = lint.RENDER_BIN
 
 GOOD_RULE = (
     'rules:\n  - "PRODUCT-LIVENESS: prove forward progress. '
@@ -27,6 +31,21 @@ def _write(tmp_path, name, text):
     return str(p)
 
 
+def _render(tmp_path, body, name="render"):
+    """A stand-in for instincts-render, called as `<bin> --file <path>`."""
+    p = tmp_path / name
+    p.write_text(f"#!/bin/sh\n{body}\n")
+    p.chmod(0o755)
+    return str(p)
+
+
+@pytest.fixture(autouse=True)
+def _full_render(tmp_path, monkeypatch):
+    """Unit tests use a render that delivers the whole file (instincts-render's default,
+    wq#958), not the live binary; test_live_fleet_state_is_wired uses the real one."""
+    monkeypatch.setattr(lint, "RENDER_BIN", _render(tmp_path, 'cat "$2"'))
+
+
 def test_passes_when_both_channels_wired(tmp_path):
     inst = _write(tmp_path, "instincts.yaml", GOOD_RULE)
     d = tmp_path / "prompts"
@@ -35,12 +54,19 @@ def test_passes_when_both_channels_wired(tmp_path):
     assert lint.main([inst, str(d)]) == 0
 
 
-def test_rule_pushed_past_the_core_cutoff_fails(tmp_path):
-    """The 4KB head cutoff is the whole point: present-in-file is not present-in-session."""
+def test_rule_the_channel_does_not_deliver_fails(tmp_path):
+    """Present-in-file is not present-in-session: a channel that cuts the file (the old
+    `head -c 4096`) must fail the lint, and one that delivers it all must pass."""
     padded = 'rules:\n' + ('  - "filler rule padding the window."\n' * 200) + GOOD_RULE
     inst = _write(tmp_path, "instincts.yaml", padded)
-    assert lint.check_instincts(inst) != []
-    assert lint.check_instincts(inst, cutoff=len(padded.encode())) == []
+    assert lint.check_instincts(inst, render=_render(tmp_path, 'head -c 4096 "$2"', "cut")) != []
+    assert lint.check_instincts(inst) == []
+
+
+def test_a_render_that_fails_or_is_missing_fails(tmp_path):
+    inst = _write(tmp_path, "instincts.yaml", GOOD_RULE)
+    assert lint.check_instincts(inst, render=_render(tmp_path, "exit 3", "fails")) != []
+    assert lint.check_instincts(inst, render=str(tmp_path / "nope")) != []
 
 
 def test_rule_without_playbook_pointer_fails(tmp_path):
@@ -78,8 +104,9 @@ def test_empty_prompts_dir_fails_loudly(tmp_path):
     assert lint.check_prompts(str(d)) != []
 
 
-def test_live_fleet_state_is_wired():
+def test_live_fleet_state_is_wired(monkeypatch):
     """The real files on this box, which is what wq#944 actually had to fix."""
     if not os.path.isdir(lint.PROMPTS_DIR) or not os.path.exists(lint.INSTINCTS):
         return
+    monkeypatch.setattr(lint, "RENDER_BIN", LIVE_RENDER)
     assert lint.main([]) == 0

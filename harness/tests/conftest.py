@@ -1,5 +1,9 @@
 import pytest
 
+import live_bin_guard
+
+live_bin_guard.install()
+
 
 @pytest.fixture(autouse=True)
 def _hallucination_guard_off(monkeypatch):
@@ -10,16 +14,21 @@ def _hallucination_guard_off(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_live_aq(monkeypatch, tmp_path):
-    """wq#1697: fworker's CAPABILITY_DENIED path files an aq row. No test may open one
-    on the live alert queue; capability_proposal fails open on a missing binary.
-    wq#3164: mask_at_rest's held-unmasked alert uses the same aq binary/fail-open
-    shape — same rule applies."""
-    import capability_proposal
-    import mask_at_rest
-    fake_aq = str(tmp_path / "no-aq")
-    monkeypatch.setattr(capability_proposal, "AQ_BIN", fake_aq)
-    monkeypatch.setattr(mask_at_rest, "AQ_BIN", fake_aq)
+def _no_live_aq():
+    """wq#1697: fworker's CAPABILITY_DENIED path files an aq row, wq#3164: so does
+    mask_at_rest's held-unmasked alert; no test may open one on the live alert queue.
+    wq#3222: the per-test monkeypatch of two module globals this used to be is replaced
+    by live_bin_guard (env set at conftest import + a refusing Popen wrapper); this
+    fixture fails whichever test tried a live aq/ntfy-send spawn anyway."""
+    seen = len(live_bin_guard.hits)
+    yield
+    new = live_bin_guard.hits[seen:]
+    if new:
+        pytest.fail(f"reached a live alert binary (refused, not run): {new}", pytrace=False)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    live_bin_guard.session_finish(session)
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +94,8 @@ def _no_live_ntfy(monkeypatch):
     exactly that, so every ordinary run of the file (workers, verifiers, hand runs) pushed
     8 real "credential found unmasked at rest" pages to lumen-fleet (measured 2026-09-30
     by intercepting subprocess). Tests that assert on paging patch page_alarm themselves,
-    which wins over this. Same shape as _no_live_aq above."""
+    which wins over this. live_bin_guard would refuse the spawn anyway; this keeps the
+    page out of the test so the guard only fires on a regression."""
     try:
         import mask_at_rest
     except ImportError:

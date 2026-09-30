@@ -23,8 +23,31 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import mask_at_rest
 import mask_replay
 import masking
+
+
+def _skip_if_masked_at_rest(ticket_id, lost):
+    """wq#3222: call where a pin failed to reproduce. The run-dir skipifs below cover a
+    run whose evidence left the host; this covers a run whose evidence was rewritten on
+    it. lumen-mask-at-rest (wq#2546) masks CC transcripts in place, and its 2026-09-30
+    07:36Z sweep did that to 296 of them, these runs' among them, so a value pinned from
+    a transcript is gone from the live corpus for good. `lost` must mean values went
+    MISSING (never an extra or changed one) and the ticket's transcripts must be in the
+    sweep's state file; otherwise this returns and the pin's own assertion fails as
+    before."""
+    if not lost:
+        return
+    try:
+        with open(mask_at_rest.STATE_PATH) as fh:
+            swept = json.load(fh).get("transcripts", {})
+    except (OSError, ValueError):
+        return
+    sids = set(mask_replay.session_ids(ticket_id))
+    if any(os.path.basename(p).removesuffix(".jsonl") in sids for p in swept):
+        pytest.skip(f"wq#{ticket_id}'s transcript was masked at rest; pinned values "
+                    f"no longer exist in the live corpus")
 
 # The three shapes the backlog is actually made of (ISSUE-LOG rows 568-571): a called
 # identifier, a masked artefact read back, and a test fixture.
@@ -1308,6 +1331,7 @@ def test_wq2300_slack_label_burned_nothing():
     """
     records = mask_replay.replay(2300)
     slack = [r for r in records if r["label"] == "slack"]
+    _skip_if_masked_at_rest(2300, not slack)
     assert [(r["value_sha256_12"], r["value_len"]) for r in slack] == [WQ2300_SLACK]
     assert slack[0]["first_seen_in"].startswith("transcript:")
     assert slack[0]["accounted_in"].startswith("harness/tests/test_masking.py:")
@@ -1330,6 +1354,7 @@ def test_the_live_rules_would_not_have_filed_wq2354():
     """
     records = mask_replay.replay(2300, patterns=mask_replay.CURRENT_PATTERNS)
     slack = [r for r in records if r["label"] == "slack"]
+    _skip_if_masked_at_rest(2300, not slack)
     assert [(r["value_sha256_12"], r["value_len"]) for r in slack] == [WQ2300_SLACK]
     assert slack[0]["accounted_in"]
     assert mask_replay.unaccounted(records) == []
@@ -1385,7 +1410,9 @@ def test_wq2278_attempt_2_alarm_burned_nothing():
                                  items={WQ2348_TRANSCRIPT: items[WQ2348_TRANSCRIPT]})
     got = {(r["label"], r["value_sha256_12"]): r
            for r in records if r["label"] in WQ2348_LABELS}
-    assert {k: r["value_len"] for k, r in got.items()} == WQ2348_ATTEMPT_2
+    lens = {k: r["value_len"] for k, r in got.items()}
+    _skip_if_masked_at_rest(2278, lens.items() < WQ2348_ATTEMPT_2.items())
+    assert lens == WQ2348_ATTEMPT_2
     # every one of them is committed text, so burn_filter's screen would hold it benign
     assert all(r["accounted_in"] for r in got.values())
     # the two the masker wrote itself, tied to the literal rather than spelled
@@ -1420,7 +1447,9 @@ def test_the_live_rules_would_not_have_filed_wq2348():
     records = mask_replay.replay(2278, patterns=mask_replay.CURRENT_PATTERNS,
                                  items={WQ2348_TRANSCRIPT: items[WQ2348_TRANSCRIPT]})
     live = [r for r in records if r["label"] in WQ2348_LABELS]
-    assert {r["value_sha256_12"] for r in live} == {"ae71c4cdf5d7", "7b58e14cabd1"}
+    shas = {r["value_sha256_12"] for r in live}
+    _skip_if_masked_at_rest(2278, shas < {"ae71c4cdf5d7", "7b58e14cabd1"})
+    assert shas == {"ae71c4cdf5d7", "7b58e14cabd1"}
     assert all("tests/test_" in r["accounted_in"] for r in live)
     for own_output in ("cfut_" + masking.MASK, "github_pat_" + masking.MASK):
         assert masking.mask_text(own_output)[1] == []
@@ -1549,6 +1578,7 @@ def test_wq2410_transcript_burned_nothing():
     does not re-account the value and the assertion below still holds.
     """
     records = mask_replay.replay(2410, tracked=_tree_only())
+    _skip_if_masked_at_rest(2410, len(records) < 20)
     assert len(records) == 20
     assert mask_replay.unaccounted(records) == []
     assert all(r.get("faithful", True) for r in records), "no window was re-cut"
@@ -1583,6 +1613,7 @@ def test_the_live_rules_would_not_have_filed_wq2414():
     records = mask_replay.replay(2410, patterns=mask_replay.CURRENT_PATTERNS,
                                  tracked=_tree_only())
     assert mask_replay.unaccounted(records) == []
+    _skip_if_masked_at_rest(2410, not records)
     assert [(r["value_sha256_12"], r["value_len"]) for r in records] == [WQ2410_OAT_TODAY]
     assert records[0]["accounted_in"] == WQ2410_OAT_IN
     assert WQ2410_BRANCH[0] not in {r["value_sha256_12"] for r in records}
@@ -1637,6 +1668,7 @@ def test_wq2417_transcript_burned_nothing():
     found and this ticket's `today_closed` field corrects.
     """
     records = mask_replay.replay(2417, tracked=_tree_only())
+    _skip_if_masked_at_rest(2417, len(records) < 20)
     assert len(records) == 20
     assert [r["value_sha256_12"] for r in mask_replay.unaccounted(records)] == [
         WQ2417_OAT_LEGACY[0]]
@@ -1667,6 +1699,7 @@ def test_wq2418_alarm_value_is_one_literal_two_tables_cut_apart():
     legacy = _with_full_literal(2417, mask_replay.LEGACY_PATTERNS)
     today = _with_full_literal(2417, mask_replay.CURRENT_PATTERNS)
     oat = [r for r in legacy if r["value_sha256_12"] == WQ2417_OAT_LEGACY[0]]
+    _skip_if_masked_at_rest(2417, not oat)
     assert [r["value_len"] for r in oat] == [WQ2417_OAT_LEGACY[1]]
     assert [(r["value_sha256_12"], r["value_len"]) for r in today] == [WQ2417_OAT_TODAY]
     assert today[0]["full_sha12"] == oat[0]["full_sha12"], "same bytes, different cut"
@@ -2010,6 +2043,7 @@ def _assert_corpus_pinned(ticket_id, fixture_path, records_pin, fixture_shas,
     records = mask_replay.replay(ticket_id, patterns=patterns, tracked=tracked,
                                  items=items, rotated={})
     shas = {r["value_sha256_12"] for r in records}
+    _skip_if_masked_at_rest(ticket_id, not records_pin <= shas)
     assert records_pin <= shas, sorted(records_pin - shas)
     assert fixture_shas <= shas, sorted(fixture_shas - shas)
     assert mask_replay.unaccounted(records) == []
@@ -2163,6 +2197,7 @@ def test_wq2848_replay_reproduces_every_live_hit():
         fired = {r["value_sha256_12"] for r in json.load(fh) if "suppressed" not in r}
     assert fired == {"76b4100ba253", "e69bbe113521", "254aa248acb4"}
     records = mask_replay.replay(2848, patterns=mask_replay.CURRENT_PATTERNS, rotated={})
+    _skip_if_masked_at_rest(2848, not fired <= {r["value_sha256_12"] for r in records})
     assert fired <= {r["value_sha256_12"] for r in records}
     assert mask_replay.unaccounted(records) == []
 

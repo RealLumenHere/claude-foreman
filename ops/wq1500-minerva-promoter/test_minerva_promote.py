@@ -22,6 +22,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+if __name__ != "__main__":
+    # wq#3222: a script (no test functions), and everything below mutates os.environ at
+    # import. Collected by a repo-root pytest it pointed WQ_DB at a scratch queue.db that
+    # only main() creates, for the rest of the session, and dispatcher tests that read
+    # agent_sessions from WQ_DB failed on it.
+    import pytest
+    pytest.skip("script: run `python3 test_minerva_promote.py`", allow_module_level=True)
+
 MINERVA_REF = os.environ.get("MINERVA_REF", "/home/lumen/research/minerva-ref")
 WQ_BIN = os.environ.get("WQ_BIN", "/home/lumen/bin/wq")
 

@@ -227,7 +227,8 @@ def test_probe_never_appends_to_the_live_verification_log():
     mv.log = lambda *a, **k: None                                  # no live logfile write
     mv.EXTERNAL_ADVISORY_CHECK_ENABLED = False                     # no NVD/GitHub calls
     mv.semantic_citation_score = lambda claims, ctx: (0.8, [], None)
-    mv.judge_entailment_uq = lambda claims, ctx: (0.9, ["SUPPORTED"], "ok", None, [1.0])
+    # **k: verify() passes authority_note= since wq#2460 (7e221f67)
+    mv.judge_entailment_uq = lambda claims, ctx, **k: (0.9, ["SUPPORTED"], "ok", None, [1.0])
 
     out = score(ITEM, "F" * 400, "semantic", "test-rung", "pstab:1:baseline")
     assert out["passed"] is True and out["final"] > 0

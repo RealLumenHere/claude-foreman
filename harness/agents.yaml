@@ -47,14 +47,14 @@ defaults:
 
 archetypes:
   mechanical-edit:
-    primary_tuple: local-worker@local
+    primary_tuple: sonnet-5@low   # wq#2583 dropped local-worker from the chain (dec72fa2)
     max_turns: 600
     wall_clock_timeout_s: 3600
     local:
       max_turns: 10
 
   probe-build:
-    primary_tuple: local-worker@local
+    primary_tuple: sonnet-5@medium   # wq#2583 (dec72fa2)
     max_turns: 600
     wall_clock_timeout_s: 3600
     local:
@@ -71,7 +71,7 @@ archetypes:
     wall_clock_timeout_s: 3600
 
   research-synthesis:
-    primary_tuple: opus-5@high
+    primary_tuple: opus-5-5@medium   # Opus 5.5 adoption (f6f13598)
     max_turns: 600
     wall_clock_timeout_s: 3600
     # wq#2577: research-lane workers need read access into live fleet state to
@@ -95,7 +95,7 @@ archetypes:
     wall_clock_timeout_s: 3600
 
   rca-investigation:
-    primary_tuple: opus-5@xhigh
+    primary_tuple: opus-5-5@high   # Opus 5.5 adoption (f6f13598)
     max_turns: 600
     wall_clock_timeout_s: 7200
     # wq#2577: this is the "audit" archetype (router.py routes bare `audit` here) —
