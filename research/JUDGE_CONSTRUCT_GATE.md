@@ -108,6 +108,46 @@ bias + directional) with the revised rubric. The diagnostic showed 14/17 correct
 tie-prime removed — promising but untested against the style-bias half (where removing the
 tie-prime might reintroduce style bias). Only a full re-run on both halves decides.
 
+#### 5c RESOLVED (wq#891, 2026-09-29) — both halves PASS on the de-tie-primed rubric
+
+`personas/qa/judge_gate_gptoss.py` ships `RUBRIC_VERSION = "v2-detieprimed-20260827"`,
+replacing the v1 tie-prime rubric (kept in-file as `RUBRIC_V1_TIEPRIMED` for provenance
+only, never executed). The tie-prime clause ("If A and B say the same things, they are a
+TIE regardless of styling") is gone; reasoning-soundness is now named as an explicit
+substance axis alongside correctness, and formatting-disregard is retained verbatim:
+
+```
+"You are comparing two responses, A and B, to the same task. "
+"Judge ONLY on substance: correctness of the final answer AND soundness of the "
+"reasoning that reaches it. A response that arrives at the right answer through "
+"invalid, invented, or irrelevant reasoning is WORSE than one that reasons correctly. "
+"DISREGARD formatting entirely — markdown, bullets, bold, and headers must NOT "
+"influence your verdict; treat them as invisible.\n"
+"Output STRICT JSON on one line: {\"verdict\": \"A\" | \"B\" | \"TIE\", \"why\": \"<=12 words\"}. "
+"No other text."
+```
+
+Both halves re-run against `cerebras-oss-120b` (upstream `cerebras/gpt-oss-120b`, confirmed
+via `served_guard` against the alias map in `agent/litellm_config.yaml` — LiteLLM echoes the
+alias, not the upstream id, in the response `model` field, so served-model verification must
+resolve through the alias map rather than string-match the alias):
+
+- **Style-bias / position-consistency half** (25 identical-content reformat pairs,
+  `personas/qa/gate_results_2026-09-29_221955.md` and `_222157.md`): 25/25 TIE,
+  style_bias **0.00**, position_consistency **1.00**. No style-bias regression from
+  removing the tie-prime.
+- **Directional-agreement half** (25 CALM clear pairs, k=3 statistical-power runs per
+  wq#1037, `personas/qa/gate_clear_k3_2026-09-29_222024.md` and `_222224.md`): per-run
+  agreement [0.88, 0.88, 0.88], pooled agreement **0.88** (bar >=0.80, PASS), tie_rate
+  **0.12** (bar <=0.20, PASS).
+
+Both halves clear their bars simultaneously — the tie-prime removal did not reintroduce
+style bias on the reformat half while it fixed the directional-agreement collapse. gpt-oss-120b
+is cleared as a pairwise judge under rubric `v2-detieprimed-20260827`. `personas/` is not a
+git repo, so the gate result `.md` files above are the measurement artifacts; this section is
+the tracked record of the fix and both passing runs (ISSUE-LOG #1071 covers a related but
+separate `EXPECT_SERVED` substring defect in the same harness, fixed the same day).
+
 ### 5d. v4-flash baseline (new ticket, cheap)
 
 Run the same pairwise harness with JUDGE_MODEL=deepseek-v4-flash on the same 25 clear
