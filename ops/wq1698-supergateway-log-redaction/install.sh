@@ -18,7 +18,7 @@ DROPIN_DIR=/etc/systemd/system/desktop-commander-mcp.service.d
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   vfile   "$SRC/no-body-logs-journald.conf"   "$DROPIN_DIR/no-body-logs-journald.conf"
-  vfile   "$SRC/supergateway-logrotate.conf"  /etc/logrotate.d/supergateway-desktop-commander
+  vfile   "$SRC/supergateway-logrotate.conf"  /etc/logrotate.d/supergateway
   vfile   "$SRC/wq2546-mask-body-log.conf"    "$DROPIN_DIR/wq2546-mask-body-log.conf"
   vactive desktop-commander-mcp.service
   vdone

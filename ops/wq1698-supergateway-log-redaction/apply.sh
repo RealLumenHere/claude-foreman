@@ -28,7 +28,7 @@ install -d -o lumen -g lumen -m 0700 "$LOGDIR"
 chmod 0600 "$LOGFILE"
 
 install -D -m 0644 "$HERE/no-body-logs-journald.conf" "$DROPIN_DIR/no-body-logs-journald.conf"
-install -D -m 0644 "$HERE/supergateway-logrotate.conf" /etc/logrotate.d/supergateway-desktop-commander
+install -D -m 0644 "$HERE/supergateway-logrotate.conf" /etc/logrotate.d/supergateway
 
 systemctl daemon-reload
 # Detached restart (instinct: Commander's path changes only via detached
