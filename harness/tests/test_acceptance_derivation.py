@@ -8,6 +8,7 @@ self-heal or alert instead of staying dead`, against a repo with no Makefile.
 
 Zero quota: `_derive_deterministic` takes no model call.
 """
+import json
 import os
 import re
 import sys
@@ -120,6 +121,128 @@ def test_wq3235_the_probe_input_really_is_outside_the_old_fixs_population():
     finally:
         acceptance._FLAG_TOKEN_RE = saved
     assert acceptance.replayable("pytest -k")[0] is False
+
+
+# The set wq#3235 actually shipped (PR#1500, merged d7003d3d80) -- one flat set for all 21
+# allowlisted binaries. Kept verbatim so the guard below re-creates the real prior defect
+# rather than a paraphrase of it.
+WQ3235_FLAT_SET = {
+    "-x", "-v", "-vv", "-vvv", "-q", "-qq", "-s", "-h", "-i", "-u", "-b", "-E", "-V",
+    "--help", "--version", "--verbose", "--quiet", "--check", "--fix", "--list",
+    "--exitfirst", "--last-failed", "--lf", "--ff", "--dry-run", "--no-header",
+}
+
+
+def _shared(flags):
+    """Every binary keyed to one shared set -- wq#3235's shape, whatever the contents."""
+    return {b: set(flags) for b in acceptance._ZERO_ARG_FLAGS_BY_BINARY}
+
+
+def _flat_union():
+    """The new per-binary table collapsed into a single cross-binary set: what would have
+    happened had the fix widened the flat set instead of keying it."""
+    flat = set()
+    for flags in acceptance._ZERO_ARG_FLAGS_BY_BINARY.values():
+        flat |= set(flags)
+    return _shared(flat)
+
+
+def test_wq3238_flag_arity_is_per_binary_not_universal():
+    """wq#3237's finding: a flat cross-binary set gets arity wrong in BOTH directions.
+    `-k` is boolean for make (`make -k` complains about missing targets, never about a
+    missing -k argument) and argument-requiring for pytest ("argument -k: expected one
+    argument", exit 4) -- one token, two arities, which one set cannot express."""
+    assert acceptance.replayable("make -k")[0] is True
+    assert acceptance.replayable("pytest -k")[0] is False
+    # and the reverse pairing: pytest's -x is not a git flag at all
+    assert acceptance.replayable("pytest -x")[0] is True
+    assert acceptance.replayable("git log -x")[0] is False
+
+
+def test_wq3238_git_dash_b_and_dash_u_are_dangling_for_git():
+    """`git checkout -b` and `git branch -u` both exit 129 against real git -- -b wants a
+    branch name, -u an upstream. wq#3235 listed both as universally boolean (they are, for
+    python), so a command ending in either was accepted as a satisfiable criterion."""
+    for cmd in ("git checkout -b", "git branch -u", "git commit -m"):
+        ok, reason = acceptance.replayable(cmd)
+        assert not ok, cmd
+        assert "dangling flag for 'git'" in reason, (cmd, reason)
+    # git query flags with no argument really are complete, and must still replay
+    for cmd in ("git status -s", "git diff --stat", "git log --oneline",
+                "git diff --exit-code"):
+        ok, reason = acceptance.replayable(cmd)
+        assert ok, f"{cmd}: {reason}"
+
+
+def test_wq3238_the_model_derivation_path_drops_the_git_criterion():
+    """The bug lived on derive()'s MODEL path, not the deterministic one:
+    _derive_deterministic() drops every git candidate on its own `head == git` guard
+    (acceptance.py, _derive_deterministic), but _validate_criteria() -> replayable() had
+    no such guard, so a model-proposed git criterion was kept -- falsifying derive()'s
+    docstring invariant that it is "never an unrunnable gate"."""
+    proposed = [{"id": "AC1", "text": "branch is cut", "proof_type": "test",
+                 "cmd": "git checkout -b", "expect_exit": 0},
+                {"id": "AC2", "text": "suite passes", "proof_type": "test",
+                 "cmd": "pytest -q harness/tests", "expect_exit": 0}]
+    kept, rejected = acceptance._validate_criteria(proposed)
+    assert [c["id"] for c in kept] == ["AC2"], kept
+    assert any("AC1" in r and "dangling flag" in r for r in rejected), rejected
+    doc = acceptance.derive({"id": 3238, "title": "t", "detail": "d"},
+                            model_call=lambda _p: json.dumps({"criteria": proposed}))
+    assert [c["cmd"] for c in doc["criteria"] if c["proof_type"] == "test"] == \
+        ["pytest -q harness/tests"]
+
+
+def test_wq3238_the_probes_really_can_fail_against_a_flat_set():
+    """The wq#2290 falsifiability guard. wq#3235's regression suite probed 11 commands,
+    none of them git and none testing a flag against a second binary, so it could not have
+    caught this. Two re-creations, both of which must flip the probes above:
+
+    (a) wq#3235's literal shipped set -- `git checkout -b` is accepted and survives
+        _validate_criteria(), which is the defect as it actually merged;
+    (b) this table collapsed into one cross-binary set -- `pytest -k` is accepted, because
+        make's boolean -k leaks onto pytest, where -k demands an argument. (b) is what
+        widening a flat set instead of keying it would have cost next."""
+    saved = acceptance._ZERO_ARG_FLAGS_BY_BINARY
+    collapsed = _flat_union()  # computed from the real table, before it is swapped out
+    try:
+        acceptance._ZERO_ARG_FLAGS_BY_BINARY = _shared(WQ3235_FLAT_SET)
+        assert acceptance.replayable("git checkout -b")[0] is True
+        assert acceptance.replayable("git branch -u")[0] is True
+        assert acceptance._validate_criteria(
+            [{"id": "AC1", "text": "t", "proof_type": "test",
+              "cmd": "git checkout -b", "expect_exit": 0}])[0] != []
+        acceptance._ZERO_ARG_FLAGS_BY_BINARY = collapsed
+        assert acceptance.replayable("pytest -k")[0] is True
+    finally:
+        acceptance._ZERO_ARG_FLAGS_BY_BINARY = saved
+    assert acceptance.replayable("git checkout -b")[0] is False
+    assert acceptance.replayable("git branch -u")[0] is False
+    assert acceptance.replayable("pytest -k")[0] is False
+
+
+def test_wq3238_python_dash_m_arity_follows_the_module_not_the_interpreter():
+    """`python3 -m pytest --lf` is parsed by pytest; keying arity on argv[0] would check
+    --lf against python's table and reject a complete command."""
+    assert acceptance._arity_binary(["python3", "-m", "pytest", "--lf"]) == "pytest"
+    assert acceptance._arity_binary(["python3", "-m", "json.tool"]) == "python3"
+    assert acceptance.replayable("python3 -m pytest --lf")[0] is True
+    # ...and the interpreter's own trailing flags are still judged as python's
+    assert acceptance.replayable("python3 -m")[0] is False
+    assert acceptance.replayable("python3 -V")[0] is True
+    # a bare trailing -i/-u/-b opens a REPL: complete, but it would hang out the replay
+    # budget instead of passing, so it is deliberately not listed (see acceptance.py).
+    for cmd in ("python3 -i", "python3 -u", "python3 -b"):
+        assert acceptance.replayable(cmd)[0] is False, cmd
+
+
+def test_wq3238_an_unknown_binary_defaults_to_reject():
+    """Soundness does not depend on the table being complete: a binary with no entry
+    rejects every trailing flag, so the candidate falls back to the citation criterion."""
+    assert "tsc" in acceptance._ZERO_ARG_FLAGS_BY_BINARY
+    assert acceptance.replayable("tsc --noEmit")[0] is True
+    assert acceptance.replayable("tsc --project")[0] is False
+    assert acceptance.replayable("./scripts/run.sh --only")[0] is False
 
 
 def test_looks_like_prose_boundaries():

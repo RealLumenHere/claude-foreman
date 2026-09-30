@@ -67,13 +67,86 @@ _SHELL_META = re.compile(r"[;&|<>`$()\\\n]")
 # NOT replayable unless the flag is known-boolean. The costs are asymmetric -- a wrongly
 # rejected candidate merely falls back to the citation criterion (and the model derivation
 # path may still propose it), while a wrongly accepted one pins a gate nothing can satisfy.
+#
+# wq#3238: that allowlist shipped as ONE FLAT SET shared by all 21 REPLAY_ALLOWED_BINARIES,
+# which inverted the same defect for a different binary. Arity is a property of (binary,
+# flag), not of the flag token: `-b` and `-u` are boolean for python but require a
+# following argument for git (`git checkout -b` and `git branch -u` both exit 129, probed
+# live 2026-09-30). _derive_deterministic() never minted those -- it drops every `git`
+# candidate before a criterion exists -- but the MODEL derivation path does not: derive()
+# -> _validate_criteria() -> replayable() has no git guard, so a model-proposed
+# {cmd: "git checkout -b", expect_exit: 0} was KEPT, against derive()'s own docstring
+# invariant ("never an unrunnable gate").
+#
+# So the allowlist is keyed per binary. A complete arity table for 21 tools is not
+# available -- that is wq#3235's point and it still holds -- but this table does not have
+# to be complete to be sound, because the DEFAULT IS STILL REJECT: a binary with no entry,
+# or a flag outside its entry, is a dangling flag, and the candidate falls back to the
+# citation criterion (the cheap failure). Only flags checked against the real tool are
+# listed, and the test is the TRAILING position specifically: a flag earns an entry only
+# when the command ending in it is complete AND terminating. That is why python's -i/-u/-b
+# /-E are gone though they are genuinely boolean -- each one at the end of a command is a
+# bare REPL invocation, and _replay() does not close stdin (:578), so it would sit until
+# the replay timeout. Unsatisfiable by hanging is no better than unsatisfiable by arity.
+#
+# Entry rule, drawn from the evidence rather than from taste: every counterexample this
+# bug class has produced is a SINGLE-LETTER flag (-c/-e/-m in wq#3232, -k in wq#3233, -b/-u
+# here), because that is where arity is binary-specific. So a single-letter entry must be
+# checked against the real tool before it is listed -- `make -k` takes no argument while
+# `pytest -k` demands one (probed live 2026-09-30), a pair no flat set can express. A
+# long-form `--switch` whose name is a predicate (--dry-run, --noEmit, --porcelain) has no
+# value grammar to get wrong and is listed on convention.
 _FLAG_TOKEN_RE = re.compile(r"^-{1,2}[A-Za-z0-9]")
-# Boolean across the replay allowlist -- an invocation may legitimately end in one of these.
-_ZERO_ARG_FLAGS = {
-    "-x", "-v", "-vv", "-vvv", "-q", "-qq", "-s", "-h", "-i", "-u", "-b", "-E", "-V",
-    "--help", "--version", "--verbose", "--quiet", "--check", "--fix", "--list",
-    "--exitfirst", "--last-failed", "--lf", "--ff", "--dry-run", "--no-header",
+# Zero-arity by convention across every allowlisted binary -- no CLI takes an argument TO
+# its help. (Their exit codes differ: `git -h` is 129, `go -h` is 2. That is the gate's
+# business, not this check's; a wrong expect_exit fails the AC with the tool's own error.
+# This check only answers "could the command be missing a required argument".)
+_HELP_FLAGS = {"-h", "--help", "--version", "-V"}
+_PYTEST_ZERO_ARG = _HELP_FLAGS | {
+    "-x", "-v", "-vv", "-vvv", "-q", "-qq", "-s", "--verbose", "--quiet", "--exitfirst",
+    "--last-failed", "--lf", "--ff", "--co", "--collect-only", "--no-header", "-ra",
 }
+_ZERO_ARG_FLAGS_BY_BINARY = {
+    "pytest": _PYTEST_ZERO_ARG,
+    # `python -m pytest ...` is parsed by pytest, not python -- see _arity_binary().
+    "python": _HELP_FLAGS,
+    "python3": _HELP_FLAGS,
+    # NOT -b (git checkout -b) and NOT -u (git branch -u): the wq#3237 finding.
+    "git": _HELP_FLAGS | {"-s", "--short", "--porcelain", "--stat", "--oneline",
+                          "--exit-code", "--name-only"},
+    "ruff": _HELP_FLAGS | {"--fix", "--check", "--diff"},
+    "mypy": _HELP_FLAGS | {"--strict", "--no-incremental"},
+    "flake8": _HELP_FLAGS | {"--count", "--statistics"},
+    "shellcheck": _HELP_FLAGS,
+    "make": _HELP_FLAGS | {"-n", "--dry-run", "-k", "--keep-going"},
+    "npm": _HELP_FLAGS | {"--dry-run", "--silent"},
+    "npx": _HELP_FLAGS,
+    "pnpm": _HELP_FLAGS,
+    "yarn": _HELP_FLAGS,
+    "node": _HELP_FLAGS,
+    "jest": _HELP_FLAGS | {"--ci", "--silent", "--listTests", "--onlyFailures"},
+    "vitest": _HELP_FLAGS | {"--run"},
+    "tsc": _HELP_FLAGS | {"--noEmit", "--strict", "--listFiles"},
+    "go": _HELP_FLAGS,
+    "cargo": _HELP_FLAGS | {"--locked", "--offline", "--all-features"},
+    # bash/sh with a trailing flag and no script reads stdin -- never a proof command.
+    "bash": _HELP_FLAGS,
+    "sh": set(),
+}
+
+
+def _arity_binary(argv):
+    """The binary whose flag schema governs argv's TRAILING token.
+
+    `python -m pytest -k` is parsed by pytest, not python, so keying on argv[0] alone
+    would check `-k` against python's table and get the arity of a different program.
+    is_whole_suite() already unwraps the same shape."""
+    head = os.path.basename(argv[0])
+    if head in ("python", "python3") and argv[1:2] == ["-m"] and len(argv) > 2:
+        mod = os.path.basename(argv[2])
+        if mod in _ZERO_ARG_FLAGS_BY_BINARY:
+            return mod
+    return head
 _CITATION_RE = re.compile(r"^(?P<path>[^\s:]+):(?P<start>\d+)(?:-(?P<end>\d+))?$")
 
 # Tickets whose deliverable is a document, not a diff, get no baseline diff criterion —
@@ -108,10 +181,11 @@ def replayable(cmd, pinned=False):
 
     `pinned=True` means the criterion is already in a pinned acceptance.json, so the
     dangling-flag check is skipped: refusing it there would newly reject a command that
-    ends in a boolean flag _ZERO_ARG_FLAGS does not happen to list, and buys nothing --
-    a genuinely dangling flag fails the gate on its own exit code either way, with the
-    tool's real error message instead of ours. The check earns its keep only before the
-    pin, where it is the difference between a satisfiable criterion and no criterion."""
+    ends in a boolean flag _ZERO_ARG_FLAGS_BY_BINARY does not happen to list, and buys
+    nothing -- a genuinely dangling flag fails the gate on its own exit code either way,
+    with the tool's real error message instead of ours. The check earns its keep only
+    before the pin, where it is the difference between a satisfiable criterion and no
+    criterion."""
     if not cmd or not cmd.strip():
         return False, "empty command"
     if _SHELL_META.search(cmd):
@@ -123,9 +197,11 @@ def replayable(cmd, pinned=False):
     if not argv:
         return False, "empty command"
     last = argv[-1]
-    if (not pinned and _FLAG_TOKEN_RE.match(last)
-            and "=" not in last and last not in _ZERO_ARG_FLAGS):
-        return False, f"{last!r} is a dangling flag: may require a following argument, none present"
+    if not pinned and _FLAG_TOKEN_RE.match(last) and "=" not in last:
+        owner = _arity_binary(argv)
+        if last not in _ZERO_ARG_FLAGS_BY_BINARY.get(owner, ()):
+            return False, (f"{last!r} is a dangling flag for {owner!r}: may require a "
+                           "following argument, none present")
     head = os.path.basename(argv[0])
     if argv[0].startswith("./") or argv[0].startswith("/"):
         # a script path is fine as long as it is a script (a bare path is far more often
