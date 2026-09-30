@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the /data/lumen growth log daily (wq#3206)
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

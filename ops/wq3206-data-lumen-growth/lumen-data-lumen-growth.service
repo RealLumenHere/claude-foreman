@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily /data/lumen (md0) capacity growth log (wq#3206)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/wq3206-data-lumen-growth/data_lumen_growth.py record
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=30
