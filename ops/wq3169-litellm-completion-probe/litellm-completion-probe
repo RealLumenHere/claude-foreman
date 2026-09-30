@@ -30,7 +30,6 @@ lumen-cron-stamp dead-man's-switch file so a stopped timer alarms sideways
 via lumen-cron-deadman instead of silently going stale.
 """
 import argparse
-import collections
 import concurrent.futures as cf
 import json
 import os
@@ -40,9 +39,12 @@ import subprocess
 import sys
 import time
 import urllib.request
-from urllib.parse import urlparse
 
-import yaml
+# wq#3212: rung enumeration moved to the shared litellm_rungs module so this
+# probe and lumen-model-watchdog read the SAME rung list (deployed next to
+# this script in /home/lumen/bin; in-repo at ops/wq3212-litellm-dead-rungs/).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import litellm_rungs
 
 ENV_PATH = os.environ.get("LITELLM_COMPLETION_PROBE_ENV", "/home/lumen/agent/.env")
 CONFIG_PATH = os.environ.get("LITELLM_COMPLETION_PROBE_CONFIG", "/home/lumen/agent/litellm_config.yaml")
@@ -54,9 +56,10 @@ AQ = os.environ.get("LITELLM_COMPLETION_PROBE_AQ", "/home/lumen/bin/aq")
 TIMEOUT_S = int(os.environ.get("LITELLM_COMPLETION_PROBE_TIMEOUT_S", "60"))
 MAX_TOKENS = int(os.environ.get("LITELLM_COMPLETION_PROBE_MAX_TOKENS", "300"))
 WORKERS = int(os.environ.get("LITELLM_COMPLETION_PROBE_WORKERS", "6"))
-SKIP_SUBSTRINGS = ("embed", "rerank", "whisper", "tts")
+AQ_DIR = os.environ.get("LITELLM_COMPLETION_PROBE_AQ_DIR", "/home/lumen/agents/alert-queue")
 
-Rung = collections.namedtuple("Rung", "host model_name")
+Rung = litellm_rungs.Rung
+one_rung_per_host = litellm_rungs.one_rung_per_host
 
 
 def read_master_key(env_path: str) -> str:
@@ -65,23 +68,6 @@ def read_master_key(env_path: str) -> str:
     if not m:
         raise RuntimeError("LITELLM_MASTER_KEY not found in " + env_path)
     return m.group(1)
-
-
-def one_rung_per_host(config_path: str) -> list:
-    """One (host, model_name) per distinct api_base host, skipping deployments
-    a chat-completion probe can't exercise. Host falls back to the model's
-    provider prefix for models with no explicit api_base (matches
-    /home/lumen/scratch/audit_20260929/probe2.py's grouping)."""
-    cfg = yaml.safe_load(pathlib.Path(config_path).read_text())
-    by_host = collections.OrderedDict()
-    for m in cfg.get("model_list", []):
-        lp = m.get("litellm_params", {}) or {}
-        model_id = str(lp.get("model", ""))
-        if any(s in model_id for s in SKIP_SUBSTRINGS):
-            continue
-        host = urlparse(str(lp.get("api_base", ""))).netloc or model_id.split("/")[0]
-        by_host.setdefault(host, m["model_name"])
-    return [Rung(host, name) for host, name in by_host.items()]
 
 
 def probe_one(key: str, rung: Rung) -> dict:
@@ -148,6 +134,29 @@ def _aq_add(key: str, title: str, message: str) -> None:
         pass
 
 
+def _aq_resolve(key: str, why: str) -> None:
+    """wq#3212: close our own open row on a recovery edge or when the host left
+    the probe set (rung removed from litellm_config.yaml). Without this, a row
+    for a removed rung stayed open forever — no probe result ever cleared it.
+    Same direct-db shape as lumen_model_watchdog.aq_clear (wq#548 pattern)."""
+    try:
+        if AQ_DIR not in sys.path:
+            sys.path.insert(0, AQ_DIR)
+        import aq as _aq
+        c = _aq.db()
+        ts = _aq.now()
+        rows = c.execute("SELECT id FROM alerts WHERE source='litellm-completion' "
+                         "AND key=? AND status='open'", (key,)).fetchall()
+        for (rid,) in rows:
+            c.execute("UPDATE alerts SET status='resolved', note=?, resolved_ts=? "
+                      "WHERE id=? AND status='open'",
+                      (f"auto-cleared: {why} on {ts} probe run", ts, rid))
+        c.commit()
+        c.close()
+    except Exception:
+        pass
+
+
 def apply_results(results: list) -> dict:
     """Edge-triggered aq/ntfy: alert once per host on clear->breach, bump
     (no re-ntfy) while breached, low-pri notice on breach->clear. Returns the
@@ -167,6 +176,12 @@ def apply_results(results: list) -> dict:
         if r["ok"] and state.get(host, {}).get("failed", False):
             _notify("low", f"LiteLLM completion probe: {host} recovered",
                      f"model={r['model']} elapsed={r['elapsed_s']}s")
+            _aq_resolve(host, f"{host} recovered (model={r['model']})")
+    probed_hosts = {r["host"] for r in results}
+    for host, prev in state.items():
+        # wq#3212: rung removed from litellm_config.yaml while its row was open
+        if host not in probed_hosts and prev.get("failed", False):
+            _aq_resolve(host, f"{host} left the probe set (rung removed from config)")
     new_state = {r["host"]: {"failed": not r["ok"], "checked_at": int(time.time())} for r in results}
     return new_state
 

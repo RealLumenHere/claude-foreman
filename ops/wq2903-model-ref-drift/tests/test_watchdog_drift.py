@@ -32,11 +32,13 @@ def test_split_drift():
 
 
 class Harness:
-    def __init__(self, monkeypatch, tmp_path, live, roster, prev=None):
+    def __init__(self, monkeypatch, tmp_path, live, roster, prev=None, groups=None):
         self.probed, self.events, self.cleared, self.drifts = [], [], [], []
         wd.STATE = tmp_path / "state.json"
         if prev is not None:
             wd.STATE.write_text(json.dumps(prev))
+        # wq#3212: pin the config-derived host groups (never the live config)
+        monkeypatch.setattr(wd, "config_host_groups", lambda: groups)
         monkeypatch.setattr(wd, "CLOUD", roster)
         monkeypatch.setattr(wd, "LOCAL", [])
         monkeypatch.setattr(wd, "SLOW", {})
@@ -88,3 +90,28 @@ def test_unreadable_model_list_probes_full_roster(monkeypatch, tmp_path):
     h = Harness(monkeypatch, tmp_path, live=None, roster=["a", "b"])
     wd.run()
     assert h.probed == ["a", "b"] and h.drifts == []
+
+
+def test_uncovered_config_host_joins_roster(monkeypatch, tmp_path):
+    """wq#3212: a config host with no curated model on it must be probed (first
+    eligible model as representative) — this is the exact hole that let
+    `probed=6 down=none` coexist with 3 dead config rungs. A host already
+    covered by a curated name adds nothing (no double probe)."""
+    groups = {"cerebras.example": ["cerebras-llama", "cerebras-oss-120b"],
+              "host.docker.internal:8091": ["claude-max-sonnet", "claude-max-opus"]}
+    h = Harness(monkeypatch, tmp_path,
+                live={"cerebras-llama", "claude-max-sonnet"},
+                roster=["cerebras-llama"], groups=groups)
+    wd.run()
+    assert h.probed == ["cerebras-llama", "claude-max-sonnet"]
+
+
+def test_config_derived_extra_down_pages_via_aq(monkeypatch, tmp_path):
+    groups = {"host.docker.internal:8000": ["kimik3-0.4b-local"]}
+    h = Harness(monkeypatch, tmp_path, live={"a", "kimik3-0.4b-local"},
+                roster=["a"], groups=groups)
+    monkeypatch.setattr(wd, "probe",
+                        lambda m, k: (h.probed.append(m) or (m == "a", "dead")))
+    monkeypatch.setattr(wd.time, "sleep", lambda s: None)  # skip the retry backoff
+    wd.run()
+    assert "kimik3-0.4b-local" in h.events

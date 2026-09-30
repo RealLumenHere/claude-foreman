@@ -100,6 +100,36 @@ LOCAL_LIVENESS_URL = {
     "lumen-lfm2-1b": "http://127.0.0.1:11434/api/tags",
 }
 
+# wq#3212: the curated CLOUD/LOCAL roster silently diverged from what the
+# gateway actually serves — this watchdog logged `probed=6 down=none` while
+# litellm-completion-probe (wq#3169) had 3 hosts dead, because those rungs
+# (anthropic, host.docker.internal:8000/:8091) were in litellm_config.yaml but
+# not in the roster here. Both monitors now enumerate hosts through the shared
+# litellm_rungs module against the same config file: every config host not
+# already covered by a curated name gets its first eligible model added to the
+# roster, so `down=none` can no longer coexist with a dead config rung.
+# Curated names keep their per-name metadata (SLOW cadence, LOCAL timeout,
+# liveness URLs) and remain probed individually; Gatus pushes stay limited to
+# curated names because config-derived extras have no 6-models_* endpoint and
+# pushing would 404-spam (aq#352 sambanova lesson). Extras still page via aq.
+CONFIG = os.environ.get("LITELLM_CONFIG", "/home/lumen/agent/litellm_config.yaml")
+RUNGS_DIR = os.environ.get("LITELLM_RUNGS_DIR", "/home/lumen/bin")
+
+def config_host_groups():
+    """host -> [eligible model names] from litellm_config.yaml, or None if the
+    shared module/config can't be read — then fall back to the curated roster
+    alone (fail-soft: this monitor must not go dark on a config move; the
+    completion probe hard-fails on the same file, which pages the deadman)."""
+    try:
+        import sys as _s
+        if RUNGS_DIR not in _s.path:
+            _s.path.insert(0, RUNGS_DIR)
+        import litellm_rungs
+        return litellm_rungs.host_groups(CONFIG)
+    except Exception as e:
+        print(f"  litellm_rungs unavailable ({str(e)[:100]}) — curated roster only")
+        return None
+
 def _key():
     for line in open(KEYFILE):
         if line.startswith("LITELLM_MASTER_KEY="):
@@ -218,7 +248,9 @@ def aq_drift(drift):
                    title="model-watchdog roster drift (names not on the gateway)",
                    message=(f"rostered but absent from LiteLLM /v1/models: {drift}. Not probed. "
                             "Fix the CLOUD/LOCAL roster in lumen_model_watchdog.py or restore "
-                            "the model_list entry (wq#2903)."),
+                            "the model_list entry (wq#2903). A config-derived name here usually "
+                            "means litellm_config.yaml was edited but the container not yet "
+                            "recreated (wq#3212)."),
                    priority="default")
     except Exception as e:
         print(f"aq ingest failed (non-fatal): {e}")
@@ -232,7 +264,13 @@ def run():
     last_probe = st.get("last_probe", {})
     now = time.time()
     up, results = {}, {}
-    roster = [m for m in CLOUD + list(SLOW) + LOCAL if m not in NEVER_PROBE]
+    curated = [m for m in CLOUD + list(SLOW) + LOCAL if m not in NEVER_PROBE]
+    groups = config_host_groups()                    # wq#3212: same list as the
+    extras = []                                      # completion probe reads
+    if groups:
+        covered = {h for h, ms in groups.items() if any(m in curated for m in ms)}
+        extras = [ms[0] for h, ms in groups.items() if h not in covered and ms]
+    roster = curated + extras
     roster, drift = split_drift(roster, live_models(key))
 
     if drift and drift != st.get("drift"):          # raise on a new/changed set
@@ -261,7 +299,8 @@ def run():
             ok, err = was_up, f"BUSY (queue saturated): {err}"
         up[model], results[model] = ok, err
         last_probe[model] = now
-        push_gatus(model, ok, err)
+        if model in curated:      # wq#3212: extras have no Gatus endpoint (aq#352)
+            push_gatus(model, ok, err)
 
     local_ok = [m for m in LOCAL if up.get(m)]
     for model, ok in up.items():
