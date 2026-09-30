@@ -55,10 +55,25 @@ REPLAY_ALLOWED_BINARIES = {
 }
 _SHELL_META = re.compile(r"[;&|<>`$()\\\n]")
 # wq#3232: a backtick-quoted span like `python -c` names a technique ("set a sitecustomize
-# or a python -c wrapper to DEBUG"), not a runnable invocation -- -c/-e/-m all take a
-# following argument, so a span ending in one of these with nothing after it can never
-# succeed on replay no matter what the worker does (acceptance.json is pinned at dispatch).
-_ARG_REQUIRING_FLAGS = {"-c", "-e", "-m"}
+# or a python -c wrapper to DEBUG"), not a runnable invocation -- -c takes a following
+# argument, so a span ending in it with nothing after it can never succeed on replay no
+# matter what the worker does (acceptance.json is pinned at dispatch).
+#
+# wq#3235: that shipped as a 3-item {-c, -e, -m} allowlist, which left the same defect
+# live one flag over -- `pytest -k` derived an AC1 that exits 4 (argparse: "-k/--keyword
+# expected one argument"). A flag's arity is not knowable from the token; every parser
+# (argparse, type-flag, clap) needs the tool's own declared schema, which we do not have
+# for 19 allowlisted binaries. So the default inverts: a command ending in a flag token is
+# NOT replayable unless the flag is known-boolean. The costs are asymmetric -- a wrongly
+# rejected candidate merely falls back to the citation criterion (and the model derivation
+# path may still propose it), while a wrongly accepted one pins a gate nothing can satisfy.
+_FLAG_TOKEN_RE = re.compile(r"^-{1,2}[A-Za-z0-9]")
+# Boolean across the replay allowlist -- an invocation may legitimately end in one of these.
+_ZERO_ARG_FLAGS = {
+    "-x", "-v", "-vv", "-vvv", "-q", "-qq", "-s", "-h", "-i", "-u", "-b", "-E", "-V",
+    "--help", "--version", "--verbose", "--quiet", "--check", "--fix", "--list",
+    "--exitfirst", "--last-failed", "--lf", "--ff", "--dry-run", "--no-header",
+}
 _CITATION_RE = re.compile(r"^(?P<path>[^\s:]+):(?P<start>\d+)(?:-(?P<end>\d+))?$")
 
 # Tickets whose deliverable is a document, not a diff, get no baseline diff criterion —
@@ -88,8 +103,15 @@ OUTPUT_TAIL_LINES = 30
 # 1a — derivation
 # ---------------------------------------------------------------------------
 
-def replayable(cmd):
-    """(ok, reason) — may the harness re-run this command itself?"""
+def replayable(cmd, pinned=False):
+    """(ok, reason) — may the harness re-run this command itself?
+
+    `pinned=True` means the criterion is already in a pinned acceptance.json, so the
+    dangling-flag check is skipped: refusing it there would newly reject a command that
+    ends in a boolean flag _ZERO_ARG_FLAGS does not happen to list, and buys nothing --
+    a genuinely dangling flag fails the gate on its own exit code either way, with the
+    tool's real error message instead of ours. The check earns its keep only before the
+    pin, where it is the difference between a satisfiable criterion and no criterion."""
     if not cmd or not cmd.strip():
         return False, "empty command"
     if _SHELL_META.search(cmd):
@@ -100,8 +122,10 @@ def replayable(cmd):
         return False, f"unparseable command ({e})"
     if not argv:
         return False, "empty command"
-    if argv[-1] in _ARG_REQUIRING_FLAGS:
-        return False, f"{argv[-1]!r} requires a following argument, none present"
+    last = argv[-1]
+    if (not pinned and _FLAG_TOKEN_RE.match(last)
+            and "=" not in last and last not in _ZERO_ARG_FLAGS):
+        return False, f"{last!r} is a dangling flag: may require a following argument, none present"
     head = os.path.basename(argv[0])
     if argv[0].startswith("./") or argv[0].startswith("/"):
         # a script path is fine as long as it is a script (a bare path is far more often
@@ -538,7 +562,7 @@ def _tail(text, n=OUTPUT_TAIL_LINES):
 def _replay(criterion, worktree, evidence_dir, runner):
     """Run the criterion's command ourselves. Returns (ok, observed, output_tail, log)."""
     cmd = criterion.get("cmd") or ""
-    ok, why = replayable(cmd)
+    ok, why = replayable(cmd, pinned=True)
     if not ok:
         return False, "not replayable", why, None
     argv = shlex.split(cmd)
