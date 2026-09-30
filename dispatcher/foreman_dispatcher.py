@@ -48,7 +48,6 @@ Decision-log events (one JSON object per line, file + stdout):
 """
 
 import argparse
-import base64
 import json
 import os
 import random
@@ -58,7 +57,6 @@ import sqlite3
 import subprocess
 import sys
 import time
-import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -80,6 +78,7 @@ import cf_hold          # noqa: E402  # wq#2843: CF-rotation hold shape, shared 
 import psi_pressure     # noqa: E402  # wq#844
 import cpu_pressure     # noqa: E402  # wq#2631/wq#2647
 import burn_rate        # noqa: E402  # wq#1669: burn-rate spawn controller
+import langfuse_client   # noqa: E402  # wq#754/wq#3211: shared ingest() (error detail)
 import harness_preflight  # noqa: E402  # wq#1259 §2c dispatch gate
 import vlogs_mirror      # noqa: E402  # wq#1416
 import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refusal
@@ -1578,16 +1577,7 @@ def emit_langfuse(pass_id, events):
                       "body": {"id": str(uuid.uuid4()), "traceId": pass_id,
                                "name": f"wq{ev['ticket']}:{ev['event']}",
                                "startTime": ev.get("ts"), "metadata": ev}})
-    req = urllib.request.Request(
-        host.rstrip("/") + "/api/public/ingestion",
-        data=json.dumps({"batch": batch}).encode(),
-        headers={"Content-Type": "application/json",
-                 "Authorization": "Basic " + base64.b64encode(
-                     f"{pk}:{sk}".encode()).decode()},
-        method="POST")
-    with urllib.request.urlopen(req, timeout=5):
-        pass
-    return len(batch)
+    return langfuse_client.ingest(host, pk, sk, batch)
 
 
 LANGFUSE_EMIT = emit_langfuse  # seam: tests replace to prove best-effort isolation

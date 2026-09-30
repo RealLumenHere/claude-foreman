@@ -6,9 +6,21 @@ callers must catch, log, and move on. Never load-bearing.
 import base64
 import json
 import os
+import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
+
+import masking
+
+
+class LangfuseIngestError(Exception):
+    """Raised by ingest() with the langfuse-web response body attached (masked), so
+    a best-effort caller that logs repr(e) captures the real failure instead of a
+    bare HTTPError with no body (wq#3211: langfuse-web logged 4002 "Invalid
+    credentials" for 26h, but dispatcher/fworker only ever log repr(e) on ingest
+    failure, and HTTPError.__repr__ never includes the response body — the auth
+    detail langfuse-web actually returned was never captured anywhere reachable)."""
 
 
 def load_creds(env_path):
@@ -41,8 +53,14 @@ def ingest(host, pk, sk, batch, timeout=5):
                  "Authorization": "Basic " + base64.b64encode(
                      f"{pk}:{sk}".encode()).decode()},
         method="POST")
-    with urllib.request.urlopen(req, timeout=timeout):
-        pass
+    try:
+        with urllib.request.urlopen(req, timeout=timeout):
+            pass
+    except urllib.error.HTTPError as e:
+        body, _labels = masking.mask_text(e.read(2048).decode("utf-8", "replace"))
+        raise LangfuseIngestError(
+            f"HTTP {e.code} {e.reason} host={host} pk={pk[:10]}... body={body}"
+        ) from e
     return len(batch)
 
 
