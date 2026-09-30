@@ -69,6 +69,18 @@ NON_DIFF_ARCHETYPES = {"verify-pass", "rca-investigation", "fire-response",
 
 VALID_PROOF_TYPES = ("test", "citation")
 REPLAY_TIMEOUT_S = int(os.environ.get("FOREMAN_REPLAY_TIMEOUT_S", "900") or 900)
+# wq#3234: a whole-suite pytest cannot finish inside 900s — `pytest harness/tests` took
+# 1241s and repo-root `pytest -p no:randomly` 2457s on Lumen (wq#3222, 2026-09-30), so
+# every done claim on such an AC timed out into rework forever. A suite-shaped command
+# gets this budget (~1.5x the slowest measured run); a pinned `timeout_s` is honoured but
+# clamped to [REPLAY_TIMEOUT_S, REPLAY_TIMEOUT_MAX_S] so ticket text can't wedge the gate.
+SUITE_REPLAY_TIMEOUT_S = int(os.environ.get("FOREMAN_SUITE_REPLAY_TIMEOUT_S", "3600") or 3600)
+REPLAY_TIMEOUT_MAX_S = max(SUITE_REPLAY_TIMEOUT_S, REPLAY_TIMEOUT_S)
+# pytest options that consume the next token, so that token is not a test target.
+_PYTEST_VALUE_FLAGS = {"-p", "-k", "-m", "-c", "-o", "-W", "--rootdir", "--confcutdir",
+                       "--basetemp", "--deselect", "--ignore", "--ignore-glob",
+                       "--junitxml", "--maxfail", "--durations", "--tb", "--log-level",
+                       "--override-ini", "--import-mode", "--cov", "--timeout"}
 OUTPUT_TAIL_LINES = 30
 
 
@@ -101,6 +113,44 @@ def replayable(cmd):
     if head not in REPLAY_ALLOWED_BINARIES:
         return False, f"{head!r} is not in the replay allowlist"
     return True, ""
+
+
+def is_whole_suite(cmd):
+    """True for a pytest run over a directory or the whole rootdir (no file/node-id
+    targets), e.g. `pytest harness/tests` or `pytest -p no:randomly`."""
+    try:
+        argv = shlex.split(cmd or "")
+    except ValueError:
+        return False
+    if argv[:1] and os.path.basename(argv[0]) in ("python", "python3") and argv[1:3] == ["-m", "pytest"]:
+        rest = argv[3:]
+    elif argv[:1] and os.path.basename(argv[0]) == "pytest":
+        rest = argv[1:]
+    else:
+        return False
+    targets, skip = [], False
+    for tok in rest:
+        if skip:
+            skip = False
+        elif tok in _PYTEST_VALUE_FLAGS:
+            skip = True
+        elif not tok.startswith("-"):
+            targets.append(tok)
+    return not targets or any("::" not in t and not t.endswith(".py") for t in targets)
+
+
+def replay_timeout(criterion):
+    """Seconds the harness allows this criterion's replay: its pinned `timeout_s` if
+    any (clamped), else the suite budget for a whole-suite command, else the default.
+    Computed at replay time too, so docs pinned before wq#3234 get the suite budget."""
+    pinned = criterion.get("timeout_s")
+    try:
+        pinned = int(pinned) if pinned is not None else None
+    except (TypeError, ValueError):
+        pinned = None
+    if pinned is None:
+        pinned = SUITE_REPLAY_TIMEOUT_S if is_whole_suite(criterion.get("cmd")) else REPLAY_TIMEOUT_S
+    return min(max(pinned, REPLAY_TIMEOUT_S), REPLAY_TIMEOUT_MAX_S)
 
 
 # wq#1705: "make", "go" and "check" are English verbs as well as build tools, so an
@@ -166,7 +216,8 @@ def _derive_deterministic(ticket):
             continue
         n += 1
         criteria.append({"id": f"AC{n}", "text": f"`{cand}` passes",
-                         "proof_type": "test", "cmd": cand, "expect_exit": 0})
+                         "proof_type": "test", "cmd": cand, "expect_exit": 0,
+                         "timeout_s": replay_timeout({"cmd": cand})})
         if n >= 5:
             break
     archetype = (ticket.get("archetype") or "").strip()
@@ -200,7 +251,8 @@ def _validate_criteria(criteria):
                 continue
             kept.append({"id": cid, "text": text, "proof_type": "test",
                          "cmd": c["cmd"].strip(),
-                         "expect_exit": int(c.get("expect_exit", 0) or 0)})
+                         "expect_exit": int(c.get("expect_exit", 0) or 0),
+                         "timeout_s": replay_timeout(c)})
         else:
             kept.append({"id": cid, "text": text, "proof_type": "citation"})
         seen.add(cid)
@@ -497,11 +549,12 @@ def _replay(criterion, worktree, evidence_dir, runner):
     env = {k: v for k, v in os.environ.items()
            if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                         "CLAUDE_CODE_OAUTH_TOKEN")}
+    timeout_s = replay_timeout(criterion)
     try:
         p = runner(argv, cwd=worktree, env=env, capture_output=True, text=True,
-                   timeout=REPLAY_TIMEOUT_S)
+                   timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        return False, f"timeout after {REPLAY_TIMEOUT_S}s", "", None
+        return False, f"timeout after {timeout_s}s", "", None
     except (OSError, ValueError) as e:
         return False, f"replay failed to start ({e})", "", None
     # merged streams on purpose (ISSUE-LOG #30: an API error on stdout fooled a

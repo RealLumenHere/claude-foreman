@@ -132,6 +132,54 @@ def test_non_replayable_commands_are_refused_not_pinned():
     assert acceptance.replayable("pytest harness/tests -q")[0]
 
 
+# wq#3234: wq#3222's pinned ACs, verbatim — 1241s and 2457s on Lumen, both past 900s.
+@pytest.mark.parametrize("cmd,suite", [
+    ("pytest harness/tests", True),
+    ("pytest -p no:randomly", True),
+    ("python3 -m pytest -q harness/tests -k gate", True),
+    ("pytest --rootdir=. tests/", True),
+    ("pytest tests/test_fire.py -x", False),
+    ("pytest -p no:randomly harness/tests/test_evidence_gate.py", False),
+    ("pytest tests/test_fire.py::test_one tests/test_other.py", False),
+    ("python3 probe.py", False),
+    ("make test", False),
+])
+def test_whole_suite_pytest_gets_the_suite_replay_budget(cmd, suite):
+    assert acceptance.is_whole_suite(cmd) is suite
+    want = acceptance.SUITE_REPLAY_TIMEOUT_S if suite else acceptance.REPLAY_TIMEOUT_S
+    assert acceptance.replay_timeout({"cmd": cmd}) == want
+    assert acceptance.SUITE_REPLAY_TIMEOUT_S > 2457
+
+
+def test_derived_criteria_pin_their_replay_budget():
+    doc = acceptance.derive({"id": 3222, "title": "x", "detail":
+                             "`pytest harness/tests` and `pytest tests/test_fire.py`"})
+    budgets = {c["cmd"]: c["timeout_s"] for c in doc["criteria"] if c["proof_type"] == "test"}
+    assert budgets == {"pytest harness/tests": acceptance.SUITE_REPLAY_TIMEOUT_S,
+                       "pytest tests/test_fire.py": acceptance.REPLAY_TIMEOUT_S}
+
+
+def test_pinned_timeout_is_clamped_so_ticket_text_cannot_wedge_the_gate():
+    lo, hi = acceptance.REPLAY_TIMEOUT_S, acceptance.REPLAY_TIMEOUT_MAX_S
+    assert acceptance.replay_timeout({"cmd": "pytest a.py", "timeout_s": 5}) == lo
+    assert acceptance.replay_timeout({"cmd": "pytest a.py", "timeout_s": 10 ** 9}) == hi
+    assert acceptance.replay_timeout({"cmd": "pytest a.py", "timeout_s": "junk"}) == lo
+
+
+def test_replay_uses_the_criterion_budget_and_reports_it_on_timeout(worktree):
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append(kw["timeout"])
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    # a doc pinned before wq#3234 carries no timeout_s — it still gets the suite budget
+    ok, observed, _, _ = acceptance._replay(
+        {"id": "AC1", "cmd": "pytest harness/tests"}, str(worktree), None, runner)
+    assert not ok and seen == [acceptance.SUITE_REPLAY_TIMEOUT_S]
+    assert observed == f"timeout after {acceptance.SUITE_REPLAY_TIMEOUT_S}s"
+
+
 def test_model_derivation_is_validated_and_falls_back_when_unusable():
     good = json.dumps({"criteria": [
         {"id": "AC1", "text": "suite passes", "proof_type": "test",
