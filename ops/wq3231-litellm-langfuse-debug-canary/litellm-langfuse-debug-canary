@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""litellm-langfuse-debug-canary (wq#3231) — replay real request shapes through a
+DEBUG-logged canary of the LiteLLM gateway and pull the exception the langfuse SDK
+swallows behind its generic "Unexpected error occurred" line.
+
+WHY THIS EXISTS: wq#3231 found that langfuse-python's `IngestionConsumer.upload()`
+(`langfuse/_task_manager/ingestion_consumer.py:254-257`) catches ANY exception from
+`_upload_batch()` and only ever prints the generic contact-support line at its default
+log level; `handle_exception()` (`langfuse/parse_error.py:98-102`) calls
+`log.debug(exception)` first, which carries the real cause but is a no-op unless the
+`langfuse` logger is at DEBUG. wq#3122 (the same symptom's first occurrence) confirmed
+the fix does not require lowering the whole gateway's `log_level` (which is a separate,
+noisier knob) — the langfuse client is constructed with
+`debug=os.getenv("LANGFUSE_DEBUG")`, so setting `LANGFUSE_DEBUG=true` on the canary
+turns on exactly the SDK's own debug channel.
+
+Both wq#3122 and wq#3231 were unable to finish this from a BUILD worker: container-exec
+access is denied outright to this lane (kb/ISSUE-LOG.md #1043), and the gateway's real
+env/config files live outside every directory this lane is granted. This script is the
+tool that lane doesn't need: it only builds the replay payloads and the exact launch
+command an operator with container-exec access runs, and parses whatever DEBUG log that
+run produces. Nothing here touches a live container itself.
+
+USAGE (by an operator with container-exec access, not by this lane):
+  1. `litellm-langfuse-debug-canary print-cmd --image <same image as prod> \\
+       --config /path/to/litellm_config.yaml --env-file /path/to/.env`
+     prints the launch command for an ephemeral, isolated canary (LANGFUSE_DEBUG=true,
+     LITELLM_LOG=DEBUG, a throwaway --name, --rm) — never the prod container, never a
+     restart of it.
+  2. Replay a few real request shapes against the canary's own port with
+     `litellm-langfuse-debug-canary replay --url http://localhost:<canary-port>/v1/chat/completions
+       --key <canary master key>`.
+  3. Capture the canary's log output and run
+     `litellm-langfuse-debug-canary extract --log-file <path>` to pull out, for every
+     "Unexpected error occurred" line, the real exception `handle_exception()` already
+     logged at DEBUG just before it.
+"""
+import argparse
+import json
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+
+SWALLOWED_MARKER = "Unexpected error occurred"
+# handle_exception() logs `log.debug(exception)` then the generic line (wq#3122's
+# reading of langfuse/parse_error.py:98-102) — the real cause is the nearest earlier
+# DEBUG line from the langfuse logger that is not itself another marker occurrence.
+_LOOKBACK_LINES = 20
+# Two log shapes this fleet actually produces: `logging.basicConfig()`'s bare
+# "LEVEL:logger.name:message" (a plain debug script, or the raw litellm/langfuse
+# container log stream), and ops/wq3231-langfuse-debug-capture's dedicated FileHandler
+# format ("%(asctime)s %(levelname)s %(message)s" — no logger name, since that handler
+# is only ever attached to the 'langfuse' logger itself). Neither is guessed: the first
+# is what this ticket's own citations and upstream langfuse-python issue reports show;
+# the second is read straight from langfuse_debug_capture.install()'s Formatter.
+_BASIC_CONFIG_RE = re.compile(r"^(?:DEBUG|INFO|WARNING|ERROR):langfuse[.\w]*:(.*)$")
+_CAPTURE_FILE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+ "
+                               r"(?:DEBUG|INFO|WARNING|ERROR) (.*)$")
+# The line that starts a batch upload attempt — walking back past this belongs to a
+# PRIOR batch, so it is both the batch-context line and the backward-scan boundary.
+_BATCH_START_RE = re.compile(r"^(?:making request:|uploading batch of|uploading data:)")
+
+
+def _line_content(line: str):
+    """The langfuse-logger message body of `line`, under either log shape this fleet
+    produces, or None if `line` isn't a recognizable langfuse log record at all."""
+    m = _BASIC_CONFIG_RE.match(line) or _CAPTURE_FILE_RE.match(line)
+    return m.group(1) if m else None
+
+
+# ---------------------------------------------------------------------------
+# Request shapes — one per real caller class this fleet has (messenger, a fleet
+# worker's attempt span, the judge), plus two shaped to probe the ticket's own
+# candidate root causes: a multimodal/base64 content block (the
+# `_media_manager.process_media_in_event` path) and an oversized field (the
+# `_truncate_item_in_place` size-limit path). Never guessed shapes: these mirror the
+# ticket's own list of caller classes and candidate causes, not invented traffic.
+# ---------------------------------------------------------------------------
+
+def build_request_shapes() -> list:
+    tiny_png_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    return [
+        {
+            "name": "messenger",
+            "messages": [
+                {"role": "system", "content": "You are Lumen's messenger assistant."},
+                {"role": "user", "content": "What's the status of the litellm gateway?"},
+            ],
+        },
+        {
+            "name": "fleet-worker",
+            "messages": [
+                {"role": "system", "content": "You are a Lumen fleet BUILD worker."},
+                {"role": "user", "content": "Summarize the diff you just made in one line."},
+            ],
+            "metadata": {"generation_name": "fworker-attempt-span", "trace_id": "canary-fleet-worker"},
+        },
+        {
+            "name": "judge",
+            "messages": [
+                {"role": "system", "content": "You are a strict verdict-only judge."},
+                {"role": "user", "content": "VERDICT: PASS or FAIL for the attached transcript."},
+            ],
+            "metadata": {"generation_name": "judge-verdict", "trace_id": "canary-judge"},
+        },
+        {
+            "name": "multimodal",
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/png;base64,{tiny_png_b64}"}},
+                ]},
+            ],
+        },
+        {
+            "name": "oversized-metadata",
+            "messages": [
+                {"role": "user", "content": "Summarize this."},
+            ],
+            "metadata": {"probe_payload": "x" * 2_000_000},
+        },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Launch-command construction — pure, so it is testable without a container runtime.
+# The operator supplies the real image/config/env paths; this never guesses them (they
+# live outside every directory this lane can read).
+# ---------------------------------------------------------------------------
+
+def build_canary_launch_cmd(image: str, config_path: str, env_path: str,
+                             container_runtime: str = "docker",
+                             name: str = "litellm-langfuse-debug-canary",
+                             port: int = 14000) -> list:
+    if not image or not config_path or not env_path:
+        raise ValueError("image, config_path, and env_path are all required — "
+                          "never guessed, the operator reads them off the real compose file")
+    return [
+        container_runtime, "run", "--rm", "-d",
+        "--name", name,
+        "-p", f"{port}:4000",
+        "-v", f"{config_path}:/app/config.yaml:ro",
+        "--env-file", env_path,
+        "-e", "LANGFUSE_DEBUG=true",
+        "-e", "LITELLM_LOG=DEBUG",
+        image,
+        "--config", "/app/config.yaml",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Replay — send the built request shapes at a running canary.
+# ---------------------------------------------------------------------------
+
+def replay_one(url: str, key: str, model: str, shape: dict, timeout_s: int = 60) -> dict:
+    body = json.dumps({
+        "model": model,
+        "messages": shape["messages"],
+        "max_tokens": 64,
+        "metadata": shape.get("metadata", {}),
+    }).encode()
+    req = urllib.request.Request(
+        url, body,
+        {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            resp.read()
+        return {"shape": shape["name"], "ok": True, "elapsed_s": round(time.time() - t0, 1)}
+    except urllib.error.URLError as e:
+        return {"shape": shape["name"], "ok": False, "elapsed_s": round(time.time() - t0, 1),
+                "reason": str(e)}
+
+
+def replay_all(url: str, key: str, model: str) -> list:
+    return [replay_one(url, key, model, shape) for shape in build_request_shapes()]
+
+
+# ---------------------------------------------------------------------------
+# Extraction — the actual payoff: pull the real exception out of a noisy DEBUG log.
+# ---------------------------------------------------------------------------
+
+def extract_swallowed_exceptions(log_text: str) -> list:
+    """For every SWALLOWED_MARKER occurrence, return the nearest preceding langfuse
+    DEBUG line (the real cause handle_exception() already logged) plus the batch
+    context line, if one is present within _LOOKBACK_LINES. One dict per occurrence:
+    {"marker_line": int, "likely_cause": str|None, "batch_context": str|None}."""
+    lines = log_text.splitlines()
+    out = []
+    for i, line in enumerate(lines):
+        if SWALLOWED_MARKER not in line:
+            continue
+        likely_cause = None
+        batch_context = None
+        for j in range(i - 1, max(-1, i - 1 - _LOOKBACK_LINES), -1):
+            candidate = lines[j]
+            if SWALLOWED_MARKER in candidate:
+                break  # ran into the previous occurrence's own marker: stop, don't cross batches
+            content = _line_content(candidate)
+            if content is None:
+                continue
+            if _BATCH_START_RE.match(content):
+                batch_context = content
+                break  # this batch's own start: nothing further back is this batch's cause
+            if likely_cause is None:
+                likely_cause = content
+        out.append({"marker_line": i, "likely_cause": likely_cause, "batch_context": batch_context})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_cmd = sub.add_parser("print-cmd", help="print the canary launch command (does not run it)")
+    p_cmd.add_argument("--image", required=True)
+    p_cmd.add_argument("--config", required=True, dest="config_path")
+    p_cmd.add_argument("--env-file", required=True, dest="env_path")
+    p_cmd.add_argument("--runtime", default="docker")
+    p_cmd.add_argument("--port", type=int, default=14000)
+
+    p_replay = sub.add_parser("replay", help="send the built request shapes at a running canary")
+    p_replay.add_argument("--url", required=True)
+    p_replay.add_argument("--key", required=True)
+    p_replay.add_argument("--model", default="gpt-4o-mini")
+
+    p_extract = sub.add_parser("extract", help="pull swallowed exceptions out of a DEBUG log file")
+    p_extract.add_argument("--log-file", required=True)
+
+    args = parser.parse_args()
+
+    if args.cmd == "print-cmd":
+        cmd = build_canary_launch_cmd(args.image, args.config_path, args.env_path,
+                                       container_runtime=args.runtime, port=args.port)
+        print(" ".join(cmd))
+        return 0
+
+    if args.cmd == "replay":
+        results = replay_all(args.url, args.key, args.model)
+        for r in results:
+            print(json.dumps(r))
+        return 0 if all(r["ok"] for r in results) else 1
+
+    if args.cmd == "extract":
+        with open(args.log_file) as f:
+            text = f.read()
+        findings = extract_swallowed_exceptions(text)
+        for f_ in findings:
+            print(json.dumps(f_))
+        return 0 if findings else 1
+
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
