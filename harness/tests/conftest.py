@@ -76,3 +76,19 @@ def _no_mask_at_rest_sweep(monkeypatch):
     mask_alarm directly, so every suite run of a masking ticket leaked a sweep into the
     worker's cgroup (wq#2720: 96 of them). Tests that exercise the trigger fake Popen."""
     monkeypatch.setenv("FOREMAN_NO_MASK_AT_REST", "1")
+
+
+@pytest.fixture(autouse=True)
+def _no_live_ntfy(monkeypatch):
+    """mask_at_rest.page_alarm() runs the REAL /home/lumen/bin/ntfy-send -t lumen-fleet
+    whenever a run finds an unaccounted value, and 8 tests in test_mask_at_rest.py plant
+    exactly that, so every ordinary run of the file (workers, verifiers, hand runs) pushed
+    8 real "credential found unmasked at rest" pages to lumen-fleet (measured 2026-09-30
+    by intercepting subprocess). Tests that assert on paging patch page_alarm themselves,
+    which wins over this. Same shape as _no_live_aq above."""
+    try:
+        import mask_at_rest
+    except ImportError:
+        return
+    monkeypatch.setattr(mask_at_rest, "page_alarm", lambda unaccounted, run_id: None)
+

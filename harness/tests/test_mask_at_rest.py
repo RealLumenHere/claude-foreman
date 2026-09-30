@@ -372,3 +372,23 @@ def test_unit_caps_memory_above_restic_go_limit():
         lines = [l.strip() for l in fh if l.strip().startswith("MemoryHigh=")]
     assert lines == ["MemoryHigh=8G"]
     assert mask_at_rest.RESTIC_GO_ENV["GOMEMLIMIT"] == "6GiB"   # below 8G
+
+
+def test_a_finding_never_runs_the_real_ntfy_send(tmp_path, monkeypatch):
+    """Regression (2026-09-30): 8 tests here used to shell out to the real ntfy-send and
+    page lumen-fleet on every run. A run that finds an unaccounted value must reach no
+    external notifier under test; conftest's _no_live_ntfy is what guarantees it."""
+    seen = []
+
+    class _Done:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    monkeypatch.setattr(mask_at_rest.subprocess, "run",
+                        lambda cmd, *a, **kw: seen.append([str(c) for c in cmd]) or _Done())
+    monkeypatch.setattr(mask_at_rest, "offsite_backup", lambda paths, tag: True)
+    _write(str(tmp_path / "projects" / "proj-a" / "sess1.jsonl"),
+           json.dumps({"text": f"token is {GHP}"}) + "\n")
+    assert mask_at_rest.main(["--store", "transcripts"]) == 1   # unaccounted value found
+    assert not [c for c in seen if c and c[0].endswith("ntfy-send")], seen
