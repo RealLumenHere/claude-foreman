@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly stale-env-audit — aq row per unit/container whose live env drifted from its EnvironmentFile/env_file (wq#3215)
+Documentation=file:///home/lumen/foreman/ops/wq3215-stale-env-audit-wire/README.md
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/home/lumen/bin/stale-env-audit --raise-aq --docker --state /home/lumen/state/stale-env-audit-aq.json
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lumen-stale-env-audit

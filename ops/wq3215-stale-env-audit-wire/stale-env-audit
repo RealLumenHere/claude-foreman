@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""stale-env-audit - running services (and docker containers) whose live environment
+differs from the EnvironmentFile / env_file that is supposed to feed them (read-only;
+prints unit/container and VARIABLE NAMES, never values).
+
+WHY (wq#3211, 2026-09-30): the Langfuse key rotation changed agent/.env but four
+long-running units (messenger, two fleet researchers, n8n-watcher) kept the old key in
+their process environment for two days, so their traces were silently dropped. A rotation
+that does not restart its consumers is invisible from the file side. This compares what
+each process actually holds (/proc/<pid>/environ) with what its EnvironmentFile says now.
+
+  stale-env-audit               report, exit 0 clean / 1 drift / 2 could not read anything
+  stale-env-audit --json        machine-readable
+  stale-env-audit --docker      also compare `docker exec <c> printenv` against each
+                                  running container's env_file(s) (wq#3215) — containers
+                                  only pick up an env_file edit on recreate, so this is the
+                                  docker-compose analogue of the systemd drift above.
+  stale-env-audit --raise-aq [--state PATH]
+                                  hourly-timer mode (wq#3215): one aq row per drifting
+                                  unit/container (source "stale-env-audit", key
+                                  "<name>:<sorted differs+missing vars>" so a different
+                                  variable drifting on the same unit is a distinct alert,
+                                  not swallowed by the same key) and resolve-key for any
+                                  previously-raised key that is clean now. `aq add` /
+                                  `aq resolve-key` are themselves idempotent, so a missed
+                                  hourly run just catches up on the next tick.
+  stale-env-audit --fail-on-drift NAME[,NAME...] --vars VAR[,VAR...]
+                                  rotation-tool hook (wq#3215): after a rotation restarts
+                                  its consumer units, it calls this to confirm the restart
+                                  actually took — exit 1 (and print the still-drifting
+                                  names) if any of NAME is still flagged for one of VAR,
+                                  exit 0 otherwise. Reuses the same audit as every other
+                                  mode, so there is exactly one place that decides what
+                                  "drifting" means.
+Run it as root (sudo) to cover units/containers that run under another uid; as lumen it
+only sees lumen-owned processes and says how many it could not read.
+
+Ignored on purpose:
+  - variables whose file value is empty (systemd never exports them, e.g.
+    ssh.service SSHD_OPTS=).
+  - variables reported as `also_set_inline` (set via systemd Environment= AND the file,
+    or docker `-e`/`environment:` AND the env_file) — that's an intentional override, not
+    drift; keep these out of alerts (wq#3215 false-positive doctrine).
+"""
+import json, os, re, shlex, subprocess, sys
+
+AQ = "/home/lumen/bin/aq"
+STATE_PATH_DEFAULT = "/home/lumen/state/stale-env-audit-aq.json"
+
+
+def sh(*a):
+    return subprocess.run(a, capture_output=True, text=True).stdout
+
+
+def parse_envfile(path):
+    """systemd EnvironmentFile / docker env_file subset: KEY=VALUE, # and ; comments, one
+    layer of quotes. None when the file cannot be read."""
+    out = {}
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s[0] in "#;" or "=" not in s:
+                    continue
+                k, v = s.split("=", 1)
+                v = v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                    v = v[1:-1]
+                out[k.strip()] = v
+    except OSError:
+        return None
+    return out
+
+
+def find_drift(proc_env, expected):
+    """-> (differs, missing) as sorted VARIABLE NAMES. Empty file values are not expected
+    in the process (systemd/docker drop them), so they never count as missing."""
+    differs = sorted(k for k, v in expected.items() if v != "" and k in proc_env and proc_env[k] != v)
+    missing = sorted(k for k, v in expected.items() if v != "" and k not in proc_env)
+    return differs, missing
+
+
+def audit_systemd():
+    rows, clean, unreadable = [], 0, 0
+    units = [l.split()[0] for l in sh("systemctl", "list-units", "--type=service", "--state=running",
+                                     "--no-legend", "--no-pager").splitlines() if l.strip()]
+    for u in units:
+        pid = sh("systemctl", "show", u, "-p", "MainPID", "--value").strip()
+        if not pid.isdigit() or pid == "0":
+            continue
+        efs = []
+        for line in sh("systemctl", "show", u, "-p", "EnvironmentFiles", "--value").splitlines():
+            m = re.match(r"^(\S+)\s*(\(.*\))?$", line.strip())
+            if m:
+                efs.append(m.group(1).lstrip("-"))
+        if not efs:
+            continue
+        try:
+            raw = open("/proc/%s/environ" % pid, "rb").read().decode("utf-8", "replace")
+            started = os.stat("/proc/%s" % pid).st_mtime
+        except OSError:
+            unreadable += 1
+            continue
+        proc_env = dict(kv.split("=", 1) for kv in raw.split("\0") if "=" in kv)
+        expected, src = {}, {}
+        for f in efs:
+            d = parse_envfile(f)
+            for k, v in (d or {}).items():
+                expected[k], src[k] = v, f
+        differs, missing = find_drift(proc_env, expected)
+        if not (differs or missing):
+            clean += 1
+            continue
+        try:
+            inline = {kv.split("=", 1)[0] for kv in shlex.split(sh("systemctl", "show", u, "-p", "Environment", "--value")) if "=" in kv}
+        except ValueError:
+            inline = set()
+        rows.append({"kind": "systemd", "unit": u, "differs": differs, "missing": missing,
+                     "file_newer_than_process": sorted({os.path.basename(src[k]) for k in differs + missing
+                                                        if os.path.getmtime(src[k]) > started}),
+                     "also_set_inline": sorted(set(differs) & inline)})
+    return rows, clean, unreadable
+
+
+def compose_env_files(container):
+    """env_file path(s) docker-compose configured for `container`, discovered from the
+    compose project labels docker itself attaches (com.docker.compose.*) — not a guess at
+    a path, the label IS the source of truth for which project/working_dir produced this
+    container. Falls back to [] (nothing to compare) when the container isn't compose-
+    managed or the compose file no longer declares env_file for that service."""
+    labels_raw = sh("docker", "inspect", "-f", "{{json .Config.Labels}}", container)
+    try:
+        labels = json.loads(labels_raw or "{}")
+    except ValueError:
+        return []
+    wd = labels.get("com.docker.compose.project.working_dir")
+    service = labels.get("com.docker.compose.service")
+    cfg_files = labels.get("com.docker.compose.project.config_files")
+    if not (wd and service):
+        return []
+    compose_path = (cfg_files.split(",")[0] if cfg_files else os.path.join(wd, "docker-compose.yml"))
+    if not os.path.isabs(compose_path):
+        compose_path = os.path.join(wd, compose_path)
+    try:
+        import yaml
+        with open(compose_path) as f:
+            doc = yaml.safe_load(f) or {}
+    except (OSError, ValueError, ImportError):
+        return []
+    svc = (doc.get("services") or {}).get(service) or {}
+    ef = svc.get("env_file")
+    if not ef:
+        return []
+    ef = [ef] if isinstance(ef, str) else ef
+    out = []
+    for e in ef:
+        p = e if isinstance(e, str) else e.get("path", "")
+        if p and not os.path.isabs(p):
+            p = os.path.join(wd, p)
+        if p:
+            out.append(p)
+    return out
+
+
+def audit_docker():
+    rows, clean, unreadable = [], 0, 0
+    names = [l for l in sh("docker", "ps", "--format", "{{.Names}}").splitlines() if l.strip()]
+    for c in names:
+        efs = compose_env_files(c)
+        if not efs:
+            continue
+        expected, src = {}, {}
+        for f in efs:
+            d = parse_envfile(f)
+            for k, v in (d or {}).items():
+                expected[k], src[k] = v, f
+        if not expected:
+            continue
+        proc_env = {}
+        ok = True
+        for k in expected:
+            r = subprocess.run(["docker", "exec", c, "printenv", k], capture_output=True, text=True)
+            if r.returncode == 0:
+                proc_env[k] = r.stdout.rstrip("\n")
+        started = None
+        insp = sh("docker", "inspect", "-f", "{{.State.StartedAt}}", c).strip()
+        differs, missing = find_drift(proc_env, expected)
+        if not (differs or missing):
+            clean += 1
+            continue
+        env_line = sh("docker", "inspect", "-f", "{{json .Config.Env}}", c)
+        try:
+            inline_env = json.loads(env_line or "[]")
+        except ValueError:
+            inline_env = []
+        inline = {kv.split("=", 1)[0] for kv in inline_env if "=" in kv}
+        rows.append({"kind": "docker", "unit": c, "differs": differs, "missing": missing,
+                     "file_newer_than_process": sorted({os.path.basename(src[k]) for k in differs + missing
+                                                        if os.path.getmtime(src[k]) > 0}),
+                     "also_set_inline": sorted(set(differs) & inline)})
+    return rows, clean, unreadable
+
+
+def audit(include_docker=False):
+    rows, clean, unreadable = audit_systemd()
+    if include_docker:
+        try:
+            drows, dclean, dunreadable = audit_docker()
+        except OSError:
+            drows, dclean, dunreadable = [], 0, 0
+        rows += drows
+        clean += dclean
+        unreadable += dunreadable
+    return {"clean": clean, "drift": rows, "unreadable": unreadable}
+
+
+def print_report(res):
+    print("stale-env-audit: %d clean, %d with drift, %d not readable (other uid; run with sudo)"
+          % (res["clean"], len(res["drift"]), res["unreadable"]))
+    for r in res["drift"]:
+        print("- [%s] %s" % (r["kind"], r["unit"]))
+        if r["differs"]:
+            print("    process value differs from file: %s" % ", ".join(r["differs"]))
+        if r["missing"]:
+            print("    in file but not in process: %s" % ", ".join(r["missing"]))
+        print("    file newer than process: %s" % (", ".join(r["file_newer_than_process"]) or "no"))
+        if r["also_set_inline"]:
+            print("    also set via Environment= (may be an intentional override): %s" % ", ".join(r["also_set_inline"]))
+
+
+def row_key(r):
+    return "%s:%s" % (r["unit"], ",".join(sorted(r["differs"] + r["missing"])))
+
+
+def load_state(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"open_keys": []}
+
+
+def save_state(path, open_keys):
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump({"open_keys": sorted(open_keys)}, f, indent=2, sort_keys=True)
+
+
+def raise_aq(res, state_path):
+    """One aq row per drifting unit/container, dedup on unit+variables (a different set of
+    variables drifting on the same unit is a distinct key, so it doesn't get swallowed by
+    an already-open row for a different variable). Resolve any previously-open key that is
+    clean this run. `aq add`/`aq resolve-key` dedup themselves, so this is safe to call
+    every hour even when nothing changed."""
+    prev = set(load_state(state_path).get("open_keys", []))
+    now_keys = set()
+    for r in res["drift"]:
+        k = row_key(r)
+        now_keys.add(k)
+        title = "%s drift: %s" % (r["unit"], ", ".join(r["differs"] + r["missing"]))
+        msg = ("[%s] process value differs from EnvironmentFile/env_file for: %s. "
+               "file newer than process: %s.") % (
+                   r["kind"], ", ".join(r["differs"] + r["missing"]),
+                   ", ".join(r["file_newer_than_process"]) or "no")
+        subprocess.run([AQ, "add", "stale-env-audit", k, title, msg], capture_output=True)
+    for k in prev - now_keys:
+        subprocess.run([AQ, "resolve-key", "stale-env-audit", k], capture_output=True)
+    save_state(state_path, now_keys)
+    return sorted(now_keys)
+
+
+def fail_on_drift(res, names, variables):
+    names, variables = set(names), set(variables)
+    bad = [r for r in res["drift"] if r["unit"] in names and (set(r["differs"] + r["missing"]) & variables)]
+    return bad
+
+
+def main(argv):
+    include_docker = "--docker" in argv
+    res = audit(include_docker)
+
+    if "--fail-on-drift" in argv:
+        i = argv.index("--fail-on-drift")
+        names = argv[i + 1].split(",")
+        vi = argv.index("--vars")
+        variables = argv[vi + 1].split(",")
+        bad = fail_on_drift(res, names, variables)
+        if bad:
+            print("stale-env-audit --fail-on-drift: still drifting after restart: %s"
+                  % ", ".join("%s(%s)" % (r["unit"], ",".join(r["differs"] + r["missing"])) for r in bad))
+            return 1
+        print("stale-env-audit --fail-on-drift: clean")
+        return 0
+
+    if "--raise-aq" in argv:
+        state_path = STATE_PATH_DEFAULT
+        if "--state" in argv:
+            state_path = argv[argv.index("--state") + 1]
+        raised = raise_aq(res, state_path)
+        if "--json" in argv:
+            print(json.dumps({**res, "aq_open_keys": raised}, indent=2))
+        else:
+            print_report(res)
+            print("aq open keys: %s" % (", ".join(raised) or "none"))
+        return 1 if res["drift"] else 0
+
+    if "--json" in argv:
+        print(json.dumps(res, indent=2))
+    else:
+        print_report(res)
+    if res["clean"] == 0 and not res["drift"]:
+        return 2
+    return 1 if res["drift"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
