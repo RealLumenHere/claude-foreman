@@ -177,8 +177,17 @@ PATTERNS = (
         r"['\"`]?" + KV_NOT_A_CREDENTIAL +
         r"[A-Za-z0-9_\-./+]{20,}")),
 )
+# wq#3203: .pytest_cache is tool output, not readable content a grant exposes on top of
+# what the repo already carries — and its v/cache/nodeids (every pytest node id, one
+# string) read as sk_key hits 215 times in the first full foreman sweep, flooding aq.
 SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
-                       "site-packages", ".cache"})
+                       "site-packages", ".cache", ".pytest_cache"})
+# wq#3203: bulk snapshot archives, deferred to the END of each root's walk under their
+# own budget. sorted() put `_runs` (0x5F < 'a') ahead of every lowercase sibling, so
+# foreman's 42k-file snapshot archive ate the whole ROOT_TIMEOUT_S and events/ ops/
+# reports/ harness/ … (~9.9k source files) were never reached — silent coverage loss
+# in a security scan, visible only as a bare `partial=true`.
+BULK_DIRS = frozenset({"_runs"})
 MAX_FILE_BYTES = 2_000_000
 MASK_KEEP = 4
 # wq#3167: the 09-29 05:16Z run timed out at TimeoutStartSec=600s (9m57s CPU) the first
@@ -196,7 +205,18 @@ MASK_KEEP = 4
 # fails every dir() grant closed (capability_lint.py:673-676). Policy read_dirs roots are
 # still swept first (write_runtime's `roots` order below), so the roots the dir() gate
 # reads (sweep_hit_under) are the ones least likely to ever be truncated.
-ROOT_TIMEOUT_S = float(os.environ.get("FOREMAN_READ_DIR_SWEEP_ROOT_TIMEOUT_S", "90"))
+# wq#3203: 90s starved foreman's source dirs even after BULK_DIRS deferral. Measured
+# 2026-09-30: foreman's source (non-BULK_DIRS) phase is 12,223 files — 33.5s warm-cache
+# on this box, but the cold 05:21Z systemd run sustained only ~107 files/s (9,678 files
+# in 90.03s), which puts the same phase at ~115s worst case. 150s covers that with ~30%
+# headroom; the sum of ALL per-root elapsed in the 05:21Z run was 175s against the 480s
+# global budget, so one root at 150+45 still leaves >280s for the other 37 roots,
+# and SWEEP_DEADLINE_S stays well under systemd's TimeoutStartSec=600.
+ROOT_TIMEOUT_S = float(os.environ.get("FOREMAN_READ_DIR_SWEEP_ROOT_TIMEOUT_S", "150"))
+# wq#3203: the bulk (BULK_DIRS) phase's own per-root budget, ON TOP of ROOT_TIMEOUT_S.
+# foreman/_runs alone (42k files) would need ~390s to finish, so it stays partial by
+# design; the budget buys ~5k snapshot files a day without ever starving a sibling.
+BULK_TIMEOUT_S = float(os.environ.get("FOREMAN_READ_DIR_SWEEP_BULK_TIMEOUT_S", "45"))
 SWEEP_DEADLINE_S = float(os.environ.get("FOREMAN_READ_DIR_SWEEP_DEADLINE_S", "480"))
 
 
@@ -293,49 +313,108 @@ def sweep_root(root):
     unbounded wrapper over `_sweep_root_bounded` (wq#3167) kept at this 2-tuple shape
     since it's called directly all over test_read_dir_sweep.py; `_sweep_report` is the
     only caller that needs the deadline/partial-flag behavior, via the bounded form."""
-    hits, nfiles, _partial = _sweep_root_bounded(root, deadline=None)
+    hits, nfiles, _partial, _not_reached = _sweep_root_bounded(root, deadline=None)
     return hits, nfiles
 
 
-def _sweep_root_bounded(root, deadline=None):
-    """[(path, line, kind, masked_excerpt)], file count, partial flag. `deadline` is an
-    absolute time.monotonic() instant (wq#3167): once passed, checked once per file
-    (cheap relative to the per-line regex work it bounds), the walk stops early and
-    returns whatever it already found rather than running unbounded — a huge or
-    pathological root (regex cost scales with content, not just file count) must not be
-    able to consume the whole sweep's time budget."""
-    hits = []
+def _scan_file(path, name, hits):
+    """Scan one file against BASENAME_GLOBS and PATTERNS, appending to `hits`."""
+    if any(fnmatch.fnmatch(c, g)
+           for c in basename_candidates(name) for g in BASENAME_GLOBS):
+        hits.append((path, 0, "basename", name))
+    if is_mask_report(path):
+        return
+    text = _read_text(path)
+    if text is None:
+        return
+    for i, line in enumerate(text.splitlines(), 1):
+        for kind, rx in PATTERNS:
+            m = rx.search(line)
+            if m:
+                if reviewed_hit_fingerprint(m.group(0)) in REVIEWED_HIT_FINGERPRINTS:
+                    break  # wq#2120: reviewed non-secret, not a live hit
+                # mask BEFORE truncating: a cut token would escape the replace
+                masked = line.replace(m.group(0), mask(m.group(0)))
+                hits.append((path, i, kind, masked.strip()[:120]))
+                break
+
+
+def _walk_subtree(start, deadline, hits):
+    """(file count, truncated flag) for one subtree, same sorted walk order as before
+    wq#3203, deadline checked once per file (cheap relative to the per-line regex work
+    it bounds)."""
     nfiles = 0
-    partial = False
-    for dp, dn, fn in os.walk(root):
+    for dp, dn, fn in os.walk(start):
         dn[:] = sorted(d for d in dn if d not in SKIP_DIRS)
         for f in sorted(fn):
             if deadline is not None and time.monotonic() >= deadline:
-                partial = True
-                break
-            p = os.path.join(dp, f)
+                return nfiles, True
             nfiles += 1
-            if any(fnmatch.fnmatch(c, g)
-                   for c in basename_candidates(f) for g in BASENAME_GLOBS):
-                hits.append((p, 0, "basename", f))
-            if is_mask_report(p):
+            _scan_file(os.path.join(dp, f), f, hits)
+    return nfiles, False
+
+
+def _sweep_root_bounded(root, deadline=None, bulk_deadline=None):
+    """[(path, line, kind, masked_excerpt)], file count, partial flag, not_reached list.
+
+    wq#3167 bounded the walk with a single absolute time.monotonic() `deadline`; wq#3203
+    splits it into two phases because os.walk's sorted() order put `_runs` (0x5F) ahead
+    of every lowercase sibling, so a bulk snapshot archive spent the whole budget and the
+    actual source dirs were never reached. Order now: root-level files, then every
+    top-level dir NOT in BULK_DIRS (sorted, each subtree fully, bounded by `deadline`),
+    then BULK_DIRS members (bounded by `bulk_deadline`, defaulting to `deadline`) — a
+    bulk dir can only ever truncate itself. `not_reached` lists top-level dirs whose
+    walk never STARTED, so a partial root says WHAT was cut, not just that something
+    was (a dir that started but was truncated mid-walk is covered by `partial`)."""
+    if bulk_deadline is None:
+        bulk_deadline = deadline
+    hits = []
+    nfiles = 0
+    partial = False
+    not_reached = []
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        entries = []
+    root_files, source_dirs, bulk_dirs = [], [], []
+    for e in entries:
+        p = os.path.join(root, e)
+        if os.path.isdir(p):
+            # symlinked dirs: os.walk(followlinks=False) never descended them, keep that
+            if e in SKIP_DIRS or os.path.islink(p):
                 continue
-            text = _read_text(p)
-            if text is None:
-                continue
-            for i, line in enumerate(text.splitlines(), 1):
-                for kind, rx in PATTERNS:
-                    m = rx.search(line)
-                    if m:
-                        if reviewed_hit_fingerprint(m.group(0)) in REVIEWED_HIT_FINGERPRINTS:
-                            break  # wq#2120: reviewed non-secret, not a live hit
-                        # mask BEFORE truncating: a cut token would escape the replace
-                        masked = line.replace(m.group(0), mask(m.group(0)))
-                        hits.append((p, i, kind, masked.strip()[:120]))
-                        break
-        if partial:
+            (bulk_dirs if e in BULK_DIRS else source_dirs).append(e)
+        else:
+            root_files.append(e)
+    for f in root_files:
+        if deadline is not None and time.monotonic() >= deadline:
+            partial = True
             break
-    return hits, nfiles, partial
+        nfiles += 1
+        _scan_file(os.path.join(root, f), f, hits)
+
+    def _phase(dirs, phase_deadline):
+        nonlocal nfiles, partial
+        for i, d in enumerate(dirs):
+            if phase_deadline is not None and time.monotonic() >= phase_deadline:
+                partial = True
+                not_reached.extend(dirs[i:])
+                return
+            n, truncated = _walk_subtree(os.path.join(root, d), phase_deadline, hits)
+            nfiles += n
+            if truncated:
+                partial = True
+                not_reached.extend(dirs[i + 1:])
+                return
+
+    if partial:  # root-file loop already hit the deadline: no source dir ever starts
+        not_reached.extend(source_dirs)
+    else:
+        _phase(source_dirs, deadline)
+    # bulk phase runs regardless: its budget is its own, a starved source phase must
+    # not ALSO forfeit the bulk one (and vice versa — that asymmetry was the bug)
+    _phase(bulk_dirs, bulk_deadline)
+    return hits, nfiles, partial, not_reached
 
 
 def policy_read_dirs(path=POLICY_PATH):
@@ -370,7 +449,8 @@ def _now_iso():
 def _sweep_report(roots, deadline_s=None):
     """`deadline_s` (wq#3167), when given, is a wall-clock budget for the WHOLE call,
     checked before each root starts, plus each root gets its own ROOT_TIMEOUT_S share
-    (capped to whatever's left of the global budget) — so one oversized or pathological
+    for source dirs and BULK_TIMEOUT_S on top for BULK_DIRS (wq#3203; both capped to
+    whatever's left of the global budget) — so one oversized or pathological
     root (wq#2806: regex cost scales with content, not file count) can truncate itself
     without ever blocking a later root from starting, and the global budget guarantees
     the caller (write_runtime) always gets a report back instead of running past
@@ -389,14 +469,22 @@ def _sweep_report(roots, deadline_s=None):
             report[root] = {"error": "not a directory", "files": 0, "hits": []}
             continue
         root_deadline = time.monotonic() + ROOT_TIMEOUT_S
+        # wq#3203: BULK_DIRS get their own budget ON TOP of the source one, so a bulk
+        # archive can never starve source dirs and a slow source phase never forfeits
+        # the bulk phase; both instants stay capped by the global deadline.
+        bulk_deadline = root_deadline + BULK_TIMEOUT_S
         if global_deadline is not None:
             root_deadline = min(root_deadline, global_deadline)
+            bulk_deadline = min(bulk_deadline, global_deadline)
         t0 = time.monotonic()
-        hits, nfiles, partial = _sweep_root_bounded(root, deadline=root_deadline)
+        hits, nfiles, partial, not_reached = _sweep_root_bounded(
+            root, deadline=root_deadline, bulk_deadline=bulk_deadline)
         entry = {"files": nfiles, "elapsed_s": round(time.monotonic() - t0, 2), "hits": [
             {"path": p, "line": ln, "kind": k, "excerpt": ex} for p, ln, k, ex in hits]}
         if partial:
             entry["partial"] = True
+        if not_reached:
+            entry["not_reached"] = not_reached
         report[root] = entry
     return report
 
@@ -497,6 +585,12 @@ def _main(argv=None):
         incomplete_note = f", {len(incomplete)} incomplete: {incomplete}" if incomplete else ""
         print(f"read_dir_sweep: wrote {RUNTIME_PATH} — {total} hits, {len(new_hits)} new"
               f"{incomplete_note}")
+        # wq#3203: a bare `partial` hid WHICH dirs a truncated root never got to —
+        # say it in the unit log, per root, so lost coverage is visible in journalctl
+        for root in incomplete:
+            nr = report[root].get("not_reached")
+            if nr:
+                print(f"read_dir_sweep: {root} partial — not reached: {', '.join(nr)}")
         # wq#2115: a FINDING is not a FAILURE. This mode runs as a systemd oneshot, and
         # a hit-driven exit 1 marks lumen-read-dir-sweep.service failed and skips its
         # ExecStartPost cron stamp — i.e. a found secret looks exactly like a broken

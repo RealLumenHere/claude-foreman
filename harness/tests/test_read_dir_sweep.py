@@ -442,15 +442,16 @@ def test_credential_basename_inside_report_dir_still_pages(tmp_path):
 def test_bounded_sweep_root_is_partial_when_deadline_already_passed(tmp_path):
     _write(tmp_path, "a.txt", "nothing\n")
     _write(tmp_path, "b.txt", "nothing\n")
-    hits, nfiles, partial = rds._sweep_root_bounded(str(tmp_path), deadline=time.monotonic() - 1)
+    hits, nfiles, partial, _ = rds._sweep_root_bounded(str(tmp_path), deadline=time.monotonic() - 1)
     assert partial is True
     assert nfiles == 0 and hits == []
 
 
 def test_bounded_sweep_root_with_no_deadline_matches_public_wrapper(tmp_path):
     _write(tmp_path, "prod.env", "nothing\n")
-    hits, nfiles, partial = rds._sweep_root_bounded(str(tmp_path), deadline=None)
+    hits, nfiles, partial, not_reached = rds._sweep_root_bounded(str(tmp_path), deadline=None)
     assert partial is False
+    assert not_reached == []
     assert (hits, nfiles) == rds.sweep_root(str(tmp_path))
 
 
@@ -499,8 +500,8 @@ def test_sweep_report_earlier_roots_are_unaffected_by_a_later_deadline_skip(tmp_
     _write(second, "b.txt", "nothing\n")
     real_bounded = rds._sweep_root_bounded
 
-    def slow_after_first(root, deadline=None):
-        result = real_bounded(root, deadline=deadline)
+    def slow_after_first(root, deadline=None, bulk_deadline=None):
+        result = real_bounded(root, deadline=deadline, bulk_deadline=bulk_deadline)
         if root == str(first):
             time.sleep(0.2)
         return result
@@ -529,3 +530,109 @@ def test_write_runtime_finishes_and_writes_fresh_ts_when_a_root_is_incomplete(tm
     written = json.loads(runtime.read_text())
     assert written["ts"]
     assert "sweep deadline reached" in report[str(huge)]["error"]
+
+
+# ---- wq#3203: BULK_DIRS deferral — sorted() put `_runs` (0x5F) ahead of every ----------
+# lowercase sibling, so foreman's 42k-file snapshot archive ate the whole 90s budget and
+# ~9.9k source files (events, ops, reports, harness, …) were silently never swept.
+
+
+class _FakeClock:
+    """One second per monotonic() call — every deadline check is a tick, so a time
+    budget becomes a deterministic FILE budget and the starvation shape needs no
+    real sleeping. Patched as rds.time so nothing outside the module sees it."""
+    def __init__(self):
+        self.t = 0.0
+
+    def monotonic(self):
+        self.t += 1.0
+        return self.t
+
+
+def test_pytest_cache_is_skipped(tmp_path):
+    """wq#3203: 215 of foreman's 241 live hits were pytest node ids in
+    .pytest_cache/v/cache/nodeids whose `[sk...` parametrize suffix matches sk_key."""
+    root = tmp_path / "tree"
+    _write(root, "harness/a.txt", "nothing\n")
+    _write(root, ".pytest_cache/v/cache/nodeids",
+           '["tests/test_x.py::test_y[sk-' + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6]\"]\n")
+    hits, n = rds.sweep_root(str(root))
+    assert hits == [] and n == 1
+
+
+def test_bulk_dir_cannot_starve_source_siblings(tmp_path, monkeypatch):
+    """The ticket's shape: a foreman-like tree, big `_runs` plus small siblings, and a
+    budget far smaller than `_runs` alone. Every SOURCE dir must be fully reached —
+    including `tools`, which sorts after `_runs` and was exactly what the live 09-30
+    run never got to — with only `_runs` truncated. Fails on the pre-wq#3203 walk."""
+    root = tmp_path / "foreman"
+    _write(root, "README.md", "nothing\n")
+    for d in ("dispatcher", "events", "harness", "ops"):
+        _write(root, d + "/a.txt", "nothing\n")
+        _write(root, d + "/b.txt", "nothing\n")
+    _write(root, "tools/leak.txt", "GITHUB_TOKEN=" + FAKE_PAT + "\n")
+    for i in range(60):
+        _write(root, "_runs/wq%03d/snap.txt" % i, "nothing\n")
+    _write(root, "_runs/zz_last/leak.txt", "GITHUB_TOKEN=" + FAKE_PAT + "\n")
+    monkeypatch.setattr(rds, "time", _FakeClock())
+    # 40 ticks: source needs ~16 (10 files + 6 dir prechecks), `_runs` alone needs 62+
+    hits, nfiles, partial, not_reached = rds._sweep_root_bounded(str(root), deadline=40)
+    paths = [h[0] for h in hits]
+    assert str(root / "tools" / "leak.txt") in paths      # last-sorted source dir reached
+    assert str(root / "_runs" / "zz_last" / "leak.txt") not in paths
+    assert partial is True
+    assert not_reached == []                              # `_runs` started, then truncated
+    assert 10 <= nfiles < 71                              # all 10 source files, not all bulk
+
+
+def test_bulk_dir_has_its_own_budget_separate_from_source(tmp_path):
+    root = tmp_path / "root"
+    _write(root, "harness/a.txt", "nothing\n")
+    _write(root, "_runs/r/leak.env", "nothing\n")
+    hits, nfiles, partial, not_reached = rds._sweep_root_bounded(
+        str(root), deadline=time.monotonic() + 60, bulk_deadline=time.monotonic() - 1)
+    assert hits == [] and nfiles == 1                     # source swept, bulk never read
+    assert partial is True
+    assert not_reached == ["_runs"]
+
+
+def test_starved_source_phase_does_not_forfeit_the_bulk_budget(tmp_path):
+    root = tmp_path / "root"
+    _write(root, "harness/a.txt", "nothing\n")
+    _write(root, "_runs/r/leak.env", "nothing\n")
+    hits, nfiles, partial, not_reached = rds._sweep_root_bounded(
+        str(root), deadline=time.monotonic() - 1, bulk_deadline=time.monotonic() + 60)
+    assert partial is True
+    assert not_reached == ["harness"]
+    assert any(k == "basename" and p.endswith("leak.env") for p, _, k, _ in hits)
+
+
+def test_sweep_report_records_not_reached_for_a_partial_root(tmp_path, monkeypatch):
+    """wq#3203(c): `partial=true` said a root was cut short but not WHAT was cut —
+    prior-day hits under the unreached dirs just vanished from the report."""
+    root = tmp_path / "root"
+    _write(root, "harness/a.txt", "nothing\n")
+    _write(root, "ops/b.txt", "nothing\n")
+    monkeypatch.setattr(rds, "ROOT_TIMEOUT_S", -1)
+    monkeypatch.setattr(rds, "BULK_TIMEOUT_S", 0)
+    report = rds._sweep_report([str(root)])
+    entry = report[str(root)]
+    assert entry["partial"] is True
+    assert entry["not_reached"] == ["harness", "ops"]
+
+
+def test_write_runtime_mode_prints_not_reached_in_unit_log(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "root"
+    _write(root, "harness/a.txt", "nothing\n")
+    monkeypatch.setattr(rds, "RUNTIME_PATH", str(tmp_path / "runtime" / "sweep.json"))
+    monkeypatch.setattr(rds, "AQ_BIN", str(tmp_path / "no-aq"))
+    monkeypatch.setattr(rds, "policy_read_dirs", lambda *a, **k: [str(root)])
+    monkeypatch.setattr(rds, "worker_add_dirs", lambda *a, **k: [])
+    monkeypatch.setattr(rds, "ROOT_TIMEOUT_S", -1)
+    monkeypatch.setattr(rds, "BULK_TIMEOUT_S", 0)
+    assert rds._main(["--write-runtime"]) == 0
+    out = capsys.readouterr().out
+    assert "not reached: harness" in out
+    import json
+    written = json.loads((tmp_path / "runtime" / "sweep.json").read_text())
+    assert written["roots"][str(root)]["not_reached"] == ["harness"]
