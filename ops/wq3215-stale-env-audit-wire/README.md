@@ -94,3 +94,65 @@ allowlist (each refused live with "This command requires approval"), and Edit/Wr
 `/home/lumen/bin` is blocked by guard.sh's primary-tree rule. `install.sh` here is written
 to the same shape as the merged `ops/wq2152-pgvector-invariants-timer/install.sh`, ready
 for whatever merge step deploys that class of ops/ bundle.
+
+## wq#3224 — remainder of item (1): gating the rotation tools
+
+The stale-env-audit tool itself (`--docker`, `--raise-aq`, `--fail-on-drift`) shipped as
+part of wq#3215 (`lumen-bin PR#210`, `foreman PR#1487`, installed 2026-09-30 09:18Z, and
+already wired hourly with `--docker` in `lumen-stale-env-audit.service:9` above). wq#3224
+is the follow-up that actually calls the gate from the rotation tools:
+
+- **`ops/wq1747-litellm-key-rotation/rotate.py`** (the tool that actually restarts
+  consumers for the wq#1747/#1968 leaked-key remediation) is now wired end to end in this
+  branch:
+  - `restart_order_key()` (`rotate.py:279-284`) restarts workers first and any unit with
+    "messenger" in its name last, so a bad rotation surfaces on a background worker
+    before it ever reaches the unit Frank is talking to.
+  - `confirm_no_drift()` (`rotate.py:297-312`), called from `rotate_one()`
+    (`rotate.py:420`) right after the restart loop, re-runs `stale-env-audit
+    --fail-on-drift` against every unit this run actually restarted and every variable
+    name the rewritten files declared — the same "did the restart actually take" check
+    wq#3211 was missing. `result["drift_ok"]`/`drift_note` feed `main()`'s exit code
+    (`rotate.py:497-499`), so a rotation that restarts cleanly by systemd's own account
+    but still shows stale env now fails loud instead of reporting `verify_ok` and moving
+    on.
+  - Tests: `test_messenger_unit_restarted_last`,
+    `test_post_restart_drift_gate_fails_rotation_when_still_drifting`,
+    `test_main_exit_code_reflects_drift_gate_failure` in
+    `ops/wq1747-litellm-key-rotation/test_rotate.py` (13 passed).
+- **`rotate-provider-keys`, `litellm-provision-keys --rotate`, `gitea-rotate-finish`** all
+  live in `/home/lumen/bin`, a shared **primary** tree. Confirmed again this session,
+  the hard way: `lumen-pr start /home/lumen/bin fix/... --primary` happily checks out a
+  branch there (the broker recognizes this ticket), but every subsequent Edit/Write is
+  refused by guard.sh's primary-tree rule (wq#1719/#900) — and the recovery command
+  `lumen-pr ffprimary` itself prints (`git -C /home/lumen/bin checkout main`) is refused
+  too, by the git-HEAD-move rule (wq#900/#929). A worker can check that repo out but
+  cannot write to it or check it back out again. Filed as ISSUE-LOG #1106; the
+  `fix/wq3224-gate-rotation-tools-on-stale-env-audit` branch is left checked out there
+  (0 commits ahead of `main`) for an orchestrator session to either apply the snippet
+  above and land it, or `git checkout main` to release it.
+  Separately, `litellm-provision-keys --rotate` doesn't know which systemd units consume
+  `~/.secrets/litellm-service-keys/env/<alias>.env` without reading `/etc/systemd/system`
+  (the way `rotate.py`'s `map_file_to_units()` does) — that directory is outside this
+  worker's allowed read paths entirely (confirmed live: `grep` there is refused with "may
+  only search ... allowed working directories"), so even a read-only companion script
+  can't be built for it from this sandbox. Both gaps need an orchestrator, not a worker.
+- **langfuse/minio rotation** (wq#2754/#2756): no reusable script exists to wire — that
+  rotation was a one-off manual `docker-compose.yml` edit
+  (`reports/2754_langfuse_minio_clickhouse_rotate.md`), not a tool. Nothing to gate until
+  that rotation gets a script of its own.
+
+## wq#3224 — item (3): non-systemd long-running processes (tmux, nohup)
+
+Decision: **don't** add a blind `/proc` scan by cmdline. stale-env-audit's whole method is
+comparing a process's live environment against a *known, named* expected source (a unit's
+`EnvironmentFile=`, a container's compose `env_file`); a bare `tmux`/`nohup` process has no
+such declared source; a cmdline-pattern scan would have nothing authoritative to diff
+against and would either miss drift or manufacture false positives from ordinary
+long-lived shells. The fix that generalizes is upstream of the audit: any long-running
+process that needs staleness protection should be a systemd unit (a real one, or a
+transient `systemd-run --collect` unit) with an explicit `EnvironmentFile=` — it then falls
+under the existing systemd audit path for free, with no new detection code. Recommend
+flagging any tmux/nohup process found to be holding a secret-bearing env var (via a manual
+audit, not a new automated scanner) for conversion to a unit rather than building a second,
+weaker detection path for it.

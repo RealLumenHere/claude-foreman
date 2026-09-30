@@ -59,6 +59,8 @@ DEFAULT_EXCLUDE_NAMES = {"_runs", ".git", "node_modules", ".venv"}
 DEFAULT_VERIFY_MODEL = "gpt-4o-mini"
 KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]{8,}")
 MAX_SCAN_BYTES = 5 * 1024 * 1024
+STALE_ENV_AUDIT_BIN = "/home/lumen/bin/stale-env-audit"
+ENV_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=", re.MULTILINE)
 
 
 def default_search_roots() -> list[Path]:
@@ -274,6 +276,42 @@ def restart_unit(unit: str, user_unit: bool, run_id: str, dry_run: bool) -> None
     subprocess.run(cmd, check=True, capture_output=True)
 
 
+def restart_order_key(item: tuple[str, bool]) -> tuple[bool, str]:
+    """Workers first, user-facing messenger last (wq#3224): if a rotation is going to
+    surface a bad restart, it should show up on a background worker before it ever
+    reaches the unit Frank is actually talking to."""
+    unit, _is_user = item
+    return ("messenger" in unit.lower(), unit)
+
+
+def env_var_names(path: Path) -> set[str]:
+    """Variable NAMEs an env-file-shaped rewritten file declares. Never reads values —
+    stale-env-audit's --fail-on-drift hook (below) only ever needs names."""
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        return set()
+    return set(ENV_LINE_RE.findall(text))
+
+
+def confirm_no_drift(units: list[str], var_names: set[str], stale_env_audit_bin: str) -> tuple[bool, str]:
+    """Rotation-tool hook (wq#3215/#3224): `systemctl restart` returning 0 only means the
+    unit came back up, not that it picked up the new value — wq#3211 found four consumer
+    units holding a stale Langfuse key in their process environment for two days after a
+    rotation that "restarted" them in spirit. Re-run the same drift audit every other
+    stale-env-audit mode uses and fail the rotation if any just-restarted unit is still
+    flagged for one of the variables this rotation changed.
+    """
+    if not units or not var_names:
+        return True, "nothing to confirm (no units restarted or no variables changed)"
+    r = subprocess.run(
+        ["sudo", stale_env_audit_bin, "--fail-on-drift", ",".join(sorted(units)),
+         "--vars", ",".join(sorted(var_names))],
+        capture_output=True, text=True,
+    )
+    return r.returncode == 0, (r.stdout + r.stderr).strip()
+
+
 # --------------------------------------------------------------------------
 # State (idempotency)
 # --------------------------------------------------------------------------
@@ -357,9 +395,9 @@ def rotate_one(alias: str, args, master_key: str) -> dict:
     for f in files:
         units.update(map_file_to_units(f, args.unit_dirs))
 
-    restarted, skipped, failed = [], [], []
+    restarted, restarted_raw, skipped, failed = [], [], [], []
     run_id = time.strftime("%H%M%S")
-    for unit, is_user in sorted(units):
+    for unit, is_user in sorted(units, key=restart_order_key):
         if unit in never_restart:
             skipped.append(unit)
             continue
@@ -371,9 +409,15 @@ def rotate_one(alias: str, args, master_key: str) -> dict:
             failed.append(describe_unit(unit, is_user))
             continue
         restarted.append(describe_unit(unit, is_user))
+        restarted_raw.append(unit)
 
     model = args.verify_model or (models[0] if models else DEFAULT_VERIFY_MODEL)
     verify_ok, verify_note = verify_key(args.base_url, new_value, model)
+
+    var_names: set[str] = set()
+    for f in files:
+        var_names |= env_var_names(f)
+    drift_ok, drift_note = confirm_no_drift(restarted_raw, var_names, args.stale_env_audit_bin)
 
     result.update({
         "status": "rotated",
@@ -384,6 +428,8 @@ def rotate_one(alias: str, args, master_key: str) -> dict:
         "units_failed_restart": failed,
         "verify_ok": verify_ok,
         "verify_note": verify_note,
+        "drift_ok": drift_ok,
+        "drift_note": drift_note,
     })
     return result
 
@@ -409,6 +455,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--never-restart-file", type=Path,
                     default=Path(__file__).parent / "never-restart-units.txt")
     p.add_argument("--verify-model", help="model to use for the post-rotation verify call")
+    p.add_argument("--stale-env-audit-bin", default=STALE_ENV_AUDIT_BIN,
+                    help="stale-env-audit binary run via sudo after restarts to confirm "
+                         "no restarted unit is still flagged for a variable this rotation "
+                         "changed (wq#3215/#3224)")
     p.add_argument("--dry-run", action="store_true")
     return p
 
@@ -444,7 +494,8 @@ def main(argv: list[str] | None = None) -> int:
         if status == "rotated":
             ok = result["verify_ok"]
             failed = result["units_failed_restart"]
-            if not ok or failed:
+            drift_ok = result["drift_ok"]
+            if not ok or failed or not drift_ok:
                 exit_code = 1
             print(
                 f"{alias}: prefix={result['prefix6']} "
@@ -457,6 +508,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"{alias}: RESTART FAILED for {failed} — the key is already rotated and "
                     f"on disk; restart these by hand, a re-run will report already_rotated",
+                    file=sys.stderr,
+                )
+            if not drift_ok:
+                print(
+                    f"{alias}: STALE-ENV-AUDIT still sees drift after restart: {result['drift_note']} "
+                    f"— the restart did not actually take; investigate before trusting this rotation",
                     file=sys.stderr,
                 )
         elif status == "dry_run":

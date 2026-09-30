@@ -118,11 +118,13 @@ def fake_proxy():
 def restart_calls(monkeypatch):
     calls = []
 
-    def fake_run(cmd, check=True, capture_output=True):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
 
         class R:
             returncode = 0
+            stdout = ""
+            stderr = ""
         return R()
 
     monkeypatch.setattr(rotate.subprocess, "run", fake_run)
@@ -147,6 +149,7 @@ def make_args(tmp_path, base_url, **overrides):
     a.state_dir = state_dir
     a.never_restart_file = tmp_path / "never-restart-units.txt"
     a.verify_model = None
+    a.stale_env_audit_bin = "/bin/true"
     a.dry_run = False
     for k, v in overrides.items():
         setattr(a, k, v)
@@ -175,14 +178,17 @@ def test_rotate_one_happy_path(tmp_path, fake_proxy, restart_calls):
     assert oct(env_file.stat().st_mode)[-3:] == "600"
     assert result["units_restarted"] == ["myservice.service"]
     assert result["verify_ok"] is True
-    assert len(restart_calls) == 1
+    assert result["drift_ok"] is True
+    assert len(restart_calls) == 2
     assert "myservice.service" in restart_calls[0]
+    assert restart_calls[1] == ["sudo", "/bin/true", "--fail-on-drift", "myservice.service",
+                                 "--vars", "LITELLM_MASTER_KEY"]
 
     # idempotent re-run: no second regenerate call, no second restart
     result2 = rotate.rotate_one("test-alias", args, "test-master-key")
     assert result2["status"] == "already_rotated"
     assert state.regenerate_calls["test-alias"] == 1
-    assert len(restart_calls) == 1
+    assert len(restart_calls) == 2
 
 
 def test_dry_run_makes_no_changes(tmp_path, fake_proxy, restart_calls):
@@ -264,10 +270,13 @@ def test_user_scoped_unit_gets_a_user_scoped_restart(tmp_path, fake_proxy, resta
 
     assert result["status"] == "rotated"
     assert result["units_restarted"] == ["agent.service (--user)"]
-    assert len(restart_calls) == 1
+    assert result["drift_ok"] is True
+    assert len(restart_calls) == 2
     cmd = restart_calls[0]
     assert cmd[:2] == ["systemd-run", "--user"]
     assert cmd[-4:] == ["systemctl", "--user", "restart", "agent.service"]
+    assert restart_calls[1] == ["sudo", "/bin/true", "--fail-on-drift", "agent.service",
+                                 "--vars", "LITELLM_KEY"]
 
 
 def test_system_and_user_units_each_get_their_own_scope(tmp_path, fake_proxy, restart_calls):
@@ -290,6 +299,89 @@ def test_system_and_user_units_each_get_their_own_scope(tmp_path, fake_proxy, re
     assert result["units_restarted"] == ["systemonly.service", "useronly.service (--user)"]
     scoped = {cmd[-1]: ("--user" in cmd) for cmd in restart_calls}
     assert scoped == {"systemonly.service": False, "useronly.service": True}
+
+
+def test_messenger_unit_restarted_last(tmp_path, fake_proxy, restart_calls):
+    """wq#3224: workers first, user-facing messenger last — even when alphabetical
+    order would put the messenger unit first."""
+    state, base_url = fake_proxy
+    args, home, unit_dir = make_args(tmp_path, base_url)
+
+    old_raw = "sk-" + "messengerorderval1"
+    state.add("order-alias", old_raw)
+    env_file = home / "shared.env"
+    env_file.write_text(f"SHARED_KEY={old_raw}\n")
+
+    (unit_dir / "messenger.service").write_text(f"[Service]\nEnvironmentFile={env_file}\n")
+    (unit_dir / "zzz-worker.service").write_text(f"[Service]\nEnvironmentFile={env_file}\n")
+
+    result = rotate.rotate_one("order-alias", args, "test-master-key")
+
+    assert result["units_restarted"] == ["zzz-worker.service", "messenger.service"]
+    restart_cmds = [c for c in restart_calls if c[0] == "systemd-run"]
+    assert [c[-1] for c in restart_cmds] == ["zzz-worker.service", "messenger.service"]
+
+
+def test_post_restart_drift_gate_fails_rotation_when_still_drifting(tmp_path, fake_proxy, monkeypatch):
+    """wq#3224: `systemctl restart` returning 0 is not proof the unit picked up the new
+    value (wq#3211) — the post-restart stale-env-audit hook must fail the rotation, not
+    just warn, when a just-restarted unit is still flagged."""
+    state, base_url = fake_proxy
+    args, home, unit_dir = make_args(tmp_path, base_url)
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 1 if cmd[:2] == ["sudo", "/bin/true"] else 0
+            stdout = "stale-env-audit --fail-on-drift: still drifting after restart: myservice.service(LITELLM_MASTER_KEY)\n"
+            stderr = ""
+        return R()
+    monkeypatch.setattr(rotate.subprocess, "run", fake_run)
+
+    old_raw = "sk-" + "driftgatevalue1234"
+    state.add("drift-alias", old_raw)
+    env_file = home / "service.env"
+    env_file.write_text(f"LITELLM_MASTER_KEY={old_raw}\n")
+    (unit_dir / "myservice.service").write_text(f"[Service]\nEnvironmentFile={env_file}\n")
+
+    result = rotate.rotate_one("drift-alias", args, "test-master-key")
+
+    assert result["status"] == "rotated"
+    assert result["units_restarted"] == ["myservice.service"]
+    assert result["drift_ok"] is False
+    assert "still drifting" in result["drift_note"]
+
+
+def test_main_exit_code_reflects_drift_gate_failure(tmp_path, fake_proxy, monkeypatch):
+    state, base_url = fake_proxy
+    home = tmp_path / "home"; home.mkdir()
+    unit_dir = tmp_path / "units"; unit_dir.mkdir()
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "test-master-key")
+    monkeypatch.setattr(Path, "home", lambda: home)
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 1 if cmd[:1] == ["sudo"] else 0
+            stdout = ""
+            stderr = ""
+        return R()
+    monkeypatch.setattr(rotate.subprocess, "run", fake_run)
+
+    old_raw = "sk-" + "maindriftgatevalue"
+    state.add("main-drift-alias", old_raw)
+    env_file = home / "service.env"
+    env_file.write_text(f"LITELLM_MASTER_KEY={old_raw}\n")
+    (unit_dir / "myservice.service").write_text(f"[Service]\nEnvironmentFile={env_file}\n")
+
+    code = rotate.main([
+        "--alias", "main-drift-alias",
+        "--base-url", base_url,
+        "--search-root", str(home),
+        "--unit-dir", str(unit_dir),
+        "--state-dir", str(tmp_path / "state"),
+        "--never-restart-file", str(tmp_path / "nrf.txt"),
+        "--stale-env-audit-bin", "/bin/true",
+    ])
+    assert code == 1
 
 
 def test_restart_failure_records_state_and_does_not_re_regenerate(tmp_path, fake_proxy, monkeypatch):
