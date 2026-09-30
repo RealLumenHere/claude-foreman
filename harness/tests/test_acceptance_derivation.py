@@ -56,6 +56,19 @@ def test_a_backticked_command_is_trusted_even_when_long():
         "pytest -q harness/tests/test_evidence_gate.py -k derivation -x"]
 
 
+def test_wq3232_backticked_incomplete_python_dash_c_is_not_a_command():
+    """wq#3231's ticket text used `python -c` inside backticks to name a debugging
+    technique (a sitecustomize or a python -c wrapper setting a logger to DEBUG), not
+    as a literal invocation -- -c always needs a trailing code argument. Deriving it
+    as a test criterion mints an AC1 unsatisfiable by construction."""
+    detail = ("consider a sitecustomize or a `python -c` wrapper that sets a logger "
+               "to DEBUG for easier debugging")
+    assert _cmds("some title", detail) == []
+    ok, reason = acceptance.replayable("python -c")
+    assert not ok
+    assert "-c" in reason
+
+
 def test_looks_like_prose_boundaries():
     assert not acceptance._looks_like_prose(["make", "test"])
     assert not acceptance._looks_like_prose(["make", "a b c d e".replace(" ", "-")])

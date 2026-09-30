@@ -54,6 +54,11 @@ REPLAY_ALLOWED_BINARIES = {
     "bash", "sh", "git",
 }
 _SHELL_META = re.compile(r"[;&|<>`$()\\\n]")
+# wq#3232: a backtick-quoted span like `python -c` names a technique ("set a sitecustomize
+# or a python -c wrapper to DEBUG"), not a runnable invocation -- -c/-e/-m all take a
+# following argument, so a span ending in one of these with nothing after it can never
+# succeed on replay no matter what the worker does (acceptance.json is pinned at dispatch).
+_ARG_REQUIRING_FLAGS = {"-c", "-e", "-m"}
 _CITATION_RE = re.compile(r"^(?P<path>[^\s:]+):(?P<start>\d+)(?:-(?P<end>\d+))?$")
 
 # Tickets whose deliverable is a document, not a diff, get no baseline diff criterion —
@@ -83,6 +88,8 @@ def replayable(cmd):
         return False, f"unparseable command ({e})"
     if not argv:
         return False, "empty command"
+    if argv[-1] in _ARG_REQUIRING_FLAGS:
+        return False, f"{argv[-1]!r} requires a following argument, none present"
     head = os.path.basename(argv[0])
     if argv[0].startswith("./") or argv[0].startswith("/"):
         # a script path is fine as long as it is a script (a bare path is far more often
