@@ -1,0 +1,211 @@
+{
+  "sample_n": 6,
+  "gold_entities_total": 19,
+  "baseline": {
+    "tp": 8,
+    "fp": 2,
+    "fn": 11,
+    "precision": 0.8,
+    "recall": 0.4211,
+    "f1": 0.5517,
+    "per_item": [
+      {
+        "id": "s1",
+        "gold": [
+          "arxiv:2607.13568",
+          "wikidata"
+        ],
+        "pred": [
+          "arxiv:2607.13568",
+          "graded entity-familiarity readouts"
+        ],
+        "tp": 1,
+        "fp": 1,
+        "fn": 1
+      },
+      {
+        "id": "s2",
+        "gold": [
+          "duckdb",
+          "hnsw",
+          "pgvector"
+        ],
+        "pred": [
+          "hnsw"
+        ],
+        "tp": 1,
+        "fp": 0,
+        "fn": 2
+      },
+      {
+        "id": "s3",
+        "gold": [
+          "llama-3",
+          "ollama/ollama",
+          "r/localllama"
+        ],
+        "pred": [
+          "ollama/ollama",
+          "r/localllama"
+        ],
+        "tp": 2,
+        "fp": 0,
+        "fn": 1
+      },
+      {
+        "id": "s4",
+        "gold": [
+          "anthropic",
+          "claude-opus-4",
+          "context rot"
+        ],
+        "pred": [],
+        "tp": 0,
+        "fp": 0,
+        "fn": 3
+      },
+      {
+        "id": "s5",
+        "gold": [
+          "arxiv:2402.03216",
+          "baai",
+          "bge-m3",
+          "bm25"
+        ],
+        "pred": [
+          "arxiv:2402.03216",
+          "baai",
+          "bge-m3",
+          "bm25"
+        ],
+        "tp": 4,
+        "fp": 0,
+        "fn": 0
+      },
+      {
+        "id": "s6",
+        "gold": [
+          "ceph",
+          "proxmox",
+          "technotim",
+          "zfs"
+        ],
+        "pred": [
+          "send/receive"
+        ],
+        "tp": 0,
+        "fp": 1,
+        "fn": 4
+      }
+    ]
+  },
+  "treatment": {
+    "tp": 19,
+    "fp": 1,
+    "fn": 0,
+    "precision": 0.95,
+    "recall": 1.0,
+    "f1": 0.9744,
+    "per_item": [
+      {
+        "id": "s1",
+        "gold": [
+          "arxiv:2607.13568",
+          "wikidata"
+        ],
+        "pred": [
+          "arxiv:2607.13568",
+          "graded entity-familiarity readouts",
+          "wikidata"
+        ],
+        "tp": 2,
+        "fp": 1,
+        "fn": 0
+      },
+      {
+        "id": "s2",
+        "gold": [
+          "duckdb",
+          "hnsw",
+          "pgvector"
+        ],
+        "pred": [
+          "duckdb",
+          "hnsw",
+          "pgvector"
+        ],
+        "tp": 3,
+        "fp": 0,
+        "fn": 0
+      },
+      {
+        "id": "s3",
+        "gold": [
+          "llama-3",
+          "ollama/ollama",
+          "r/localllama"
+        ],
+        "pred": [
+          "llama-3",
+          "ollama/ollama",
+          "r/localllama"
+        ],
+        "tp": 3,
+        "fp": 0,
+        "fn": 0
+      },
+      {
+        "id": "s4",
+        "gold": [
+          "anthropic",
+          "claude-opus-4",
+          "context rot"
+        ],
+        "pred": [
+          "anthropic",
+          "claude-opus-4",
+          "context rot"
+        ],
+        "tp": 3,
+        "fp": 0,
+        "fn": 0
+      },
+      {
+        "id": "s5",
+        "gold": [
+          "arxiv:2402.03216",
+          "baai",
+          "bge-m3",
+          "bm25"
+        ],
+        "pred": [
+          "arxiv:2402.03216",
+          "baai",
+          "bge-m3",
+          "bm25"
+        ],
+        "tp": 4,
+        "fp": 0,
+        "fn": 0
+      },
+      {
+        "id": "s6",
+        "gold": [
+          "ceph",
+          "proxmox",
+          "technotim",
+          "zfs"
+        ],
+        "pred": [
+          "ceph",
+          "proxmox",
+          "technotim",
+          "zfs"
+        ],
+        "tp": 4,
+        "fp": 0,
+        "fn": 0
+      }
+    ]
+  }
+}

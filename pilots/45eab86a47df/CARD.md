@@ -23,35 +23,44 @@ Desk research can only report what someone else measured on other hardware.
 
 ## Hypothesis
 
-<!-- One falsifiable sentence. "X beats Y on metric M by at least N" — not "X is
-promising". If it cannot be written this way the pilot is not ready to run. -->
+DE-NER two-turn dialogue elicitation beats the deployed regex extractor
+(`familiarity_scorer.py extract()`) by at least 0.15 micro-F1 on entity-set match
+against a fixed hand-labeled sample.
 
 ## Primary metric
 
-<!-- ONE number. Name it, name its unit, name what counts as a win BEFORE running.
-A pilot that picks its metric after seeing the numbers has measured nothing. -->
+Micro-F1 (entity-set match, normalized lowercase, per-item precision/recall summed
+across the sample) on the fixed sample below. Win = treatment F1 >= baseline F1 + 0.15,
+set before either arm was run.
 
 ## Fixed sample
 
-<!-- Exactly what the baseline and the treatment both run against. Pin it: a path,
-a row count, a sha256 where the set can drift. Both arms see the same sample or the
-comparison is void. -->
+`sample.json` in this directory: 6 hand-authored title+reasoning pairs shaped like
+`classified_intel` rows, 19 gold entities total (pinned fixture, `minerva.db` not
+copied off Lumen per CARD Data handling — see file header). Both arms run against the
+same 6 items.
 
 ## Baseline (measure FIRST)
 
-<!-- The command that measures what Lumen does today. Run this before building the
-treatment, so the baseline cannot be tuned to lose. -->
+```
+python3 baseline_extract.py sample.json
+```
 
-```
-```
+Reimplements the deployed `familiarity_scorer.py extract()` regexes verbatim (see
+`baseline_extract.py` header) — the current entity-familiarity approach referenced in
+the defer rationale.
 
 ## Treatment
 
-<!-- The smallest thing that tests the hypothesis. Not the full proposal — the
-cheapest build that produces the primary metric. -->
+```
+python3 de_ner_skill.py sample.json
+```
 
-```
-```
+Two-turn DE-NER prompt (candidate listing, then self-verification pass explicitly
+covering lowercase/hyphenated names) — see `de_ner_skill.py` for the prompt text and
+the run note on how turn 2 was executed in this sandbox.
+
+Both scored together via `python3 run_pilot.py` -> `results.json`.
 
 ## Kill criteria
 
