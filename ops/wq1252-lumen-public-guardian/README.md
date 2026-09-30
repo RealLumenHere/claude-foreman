@@ -99,6 +99,18 @@ copy for the schema drill, an invalid key against the live DeepSeek API, a
 closed port for the stream drill. It never takes a public surface down to prove
 a check works.
 
+## Deploying lumen-mail-probe
+
+Deploy with `mail-probe/deploy.sh`, never a bare `wrangler deploy`: it ends
+with a schedules read-back against the Workers API
+(`workers/scripts/lumen-mail-probe/schedules`) and refuses to finish quietly
+if the cron trigger did not register. On 2026-09-07 a deploy shipped with
+that list empty — no cron ever fired the probe — and `E2-roundtrip` sat
+`UNCONFIGURED` for 23 days before anyone noticed (wq#3209). `E2-roundtrip`
+now checks the same list itself once it has no round trip on record, and
+reports "probe cron not registered" instead of the generic UNCONFIGURED
+message when it finds schedules empty.
+
 ## Mailbot dependency
 
 `E2` needs the mailbot to answer its prober, which the self-domain suppression

@@ -119,6 +119,8 @@ def check_state(state, check_id):
         "last_run": 0,
         "last_alert": 0,
         "fire_ticket": None,
+        "unconfigured_since": 0,
+        "aq_id": None,
     })
 
 
@@ -143,6 +145,37 @@ def ntfy(cfg, priority, title, message, dry_run=False):
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"guardian: ntfy-send failed: {exc}", file=sys.stderr)
         return False
+
+
+AQ_DIR = os.environ.get("GUARDIAN_AQ_DIR", "/home/lumen/agents/alert-queue")
+
+
+def aq_mod():
+    if AQ_DIR not in sys.path:
+        sys.path.insert(0, AQ_DIR)
+    import aq
+    return aq
+
+
+def aq_ingest(key, title, message, priority):
+    """Files an alert-queue row for a standing UNCONFIGURED check; returns the
+    row id, or None when the queue is unavailable (ntfy still fires, so the
+    alert is not lost). wq#3209: E2-roundtrip sat UNCONFIGURED for 23 days
+    behind nothing but a daily default-priority ntfy — a check covering
+    nothing needs a row someone has to close, not just a notification."""
+    try:
+        return aq_mod().ingest(source="lumen-public-guardian", key=key,
+                               title=title, message=message, priority=priority)
+    except Exception as exc:  # noqa: BLE001 — a queue fault must not stop the run
+        print(f"guardian: aq ingest failed for {key}: {exc}", file=sys.stderr)
+        return None
+
+
+def aq_resolve(rid, note):
+    try:
+        aq_mod().set_status(rid, "resolved", note)
+    except Exception as exc:  # noqa: BLE001
+        print(f"guardian: aq resolve failed for #{rid}: {exc}", file=sys.stderr)
 
 
 def open_fire(cfg, result, heal_log, dry_run=False):
@@ -278,6 +311,8 @@ def _apply(cfg, state, cs, spec, result, dry_run, now):
     prev = cs["status"]
 
     if result.status == UNCONFIGURED:
+        if prev != UNCONFIGURED:
+            cs["unconfigured_since"] = now
         cs["status"] = UNCONFIGURED
         cs["consecutive_red"] = 0
         cs["heal_step"] = 0
@@ -288,8 +323,12 @@ def _apply(cfg, state, cs, spec, result, dry_run, now):
         if prev == RED:
             ntfy(cfg, "high", f"RECOVERED {result.id}",
                  f"{result.id} is green again: {result.detail} (wq#1252)", dry_run)
+        if prev == UNCONFIGURED and cs.get("aq_id") and not dry_run:
+            aq_resolve(cs["aq_id"], f"{result.id} is configured and green again: "
+                                    f"{result.detail}")
         cs.update(status=OK, consecutive_red=0, heal_step=0,
-                  fire_ticket=None, last_alert=0)
+                  fire_ticket=None, last_alert=0, unconfigured_since=0,
+                  aq_id=None)
         return
 
     # RED
@@ -330,14 +369,40 @@ def _apply(cfg, state, cs, spec, result, dry_run, now):
 
 def _unconfigured_nag(cfg, cs, result, dry_run, now):
     """An unrunnable check is not green. Say so once a day rather than letting
-    it sit silently disabled — silent disablement is the 7.5h failure mode."""
+    it sit silently disabled — silent disablement is the 7.5h failure mode.
+
+    wq#3209: E2-roundtrip reported UNCONFIGURED for 23 days (lumen-mail-probe
+    had no Cloudflare cron trigger registered) behind nothing but this daily
+    default-priority nag, so a check covering nothing looked like noise
+    rather than an incident. Past `unconfigured_escalate_s` (default 24h) this
+    escalates like a red: an aq row someone has to close, plus an urgent
+    re-alert on the same cadence RED uses (`realert_cycles`), instead of the
+    quiet daily nag."""
+    escalate_s = cfg.get("unconfigured_escalate_s", 86400)
+    since = cs.get("unconfigured_since") or now
+    age = now - since
+    escalated = age >= escalate_s
+
+    if escalated and not cs.get("aq_id"):
+        title = f"UNCONFIGURED {result.id} for {age / 3600:.0f}h — covering nothing"
+        message = (f"{result.id} has been UNCONFIGURED since "
+                   f"{time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(since))} "
+                   f"({age / 3600:.0f}h) and is covering nothing: {result.detail}. "
+                   f"See {cfg['runbook']} (wq#3209)")
+        cs["aq_id"] = None if dry_run else aq_ingest(result.id, title, message, "urgent")
+
+    nag_s = (cfg.get("unconfigured_escalated_nag_s", 3600) if escalated
+             else cfg.get("unconfigured_nag_s", 86400))
     last = cs.get("last_alert") or 0
-    if last and now - last < cfg.get("unconfigured_nag_s", 86400):
+    if last and now - last < nag_s:
         return
     cs["last_alert"] = now
-    ntfy(cfg, "default", f"UNCONFIGURED {result.id}",
-         f"{result.id} cannot run: {result.detail}. It is NOT covering anything "
-         f"until this is fixed — see {cfg['runbook']} (wq#1252)", dry_run)
+    priority = "urgent" if escalated else "default"
+    detail = (f"{result.id} cannot run: {result.detail}. It is NOT covering anything "
+              f"until this is fixed — see {cfg['runbook']} (wq#1252)")
+    if escalated:
+        detail += f" [escalated after {age / 3600:.0f}h unconfigured, wq#3209]"
+    ntfy(cfg, priority, f"UNCONFIGURED {result.id}", detail, dry_run)
 
 
 # --------------------------------------------------------------------------

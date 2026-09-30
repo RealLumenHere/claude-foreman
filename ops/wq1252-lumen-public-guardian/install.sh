@@ -22,6 +22,7 @@ if [ "${1:-}" = --verify ]; then
   done
   vfile "$SRC/mail-probe/wrangler.toml" "$DEST/mail-probe/wrangler.toml"
   vfile "$SRC/mail-probe/src/worker.js" "$DEST/mail-probe/src/worker.js"
+  vfile "$SRC/mail-probe/deploy.sh" "$DEST/mail-probe/deploy.sh"
   vunit_file "$SRC/lumen-public-guardian.service" /etc/systemd/system/lumen-public-guardian.service
   vunit_file "$SRC/lumen-public-guardian.timer" /etc/systemd/system/lumen-public-guardian.timer
   venabled lumen-public-guardian.timer
@@ -37,6 +38,7 @@ for f in guardian.py checks_email.py checks_stream.py schema_parse.py config.jso
 done
 install -o lumen -g lumen -m 644 "$SRC/mail-probe/wrangler.toml" "$DEST/mail-probe/wrangler.toml"
 install -o lumen -g lumen -m 644 "$SRC/mail-probe/src/worker.js" "$DEST/mail-probe/src/worker.js"
+install -o lumen -g lumen -m 755 "$SRC/mail-probe/deploy.sh" "$DEST/mail-probe/deploy.sh"
 
 echo "== probe HMAC secret =="
 if [ ! -f "$SECRET" ]; then
@@ -86,7 +88,9 @@ Next pass runs within 2 minutes. Watch it:
 
 Still to do (each is tracked in /home/lumen/foreman/LUMEN_PUBLIC_RUNBOOK.md):
   1. Verify lumen@lumennode.uk as a Cloudflare destination address, then
-     deploy mail-probe -> unlocks E2 (the end-to-end round trip).
+     deploy mail-probe with mail-probe/deploy.sh (not a bare wrangler
+     deploy — it reads the cron trigger back and fails loudly if the
+     deploy dropped it, wq#3209) -> unlocks E2 (the end-to-end round trip).
   2. Drop a Workers-read API token at /home/lumen/mailbot/.cf_deploy_token
      (0600) -> unlocks E1-version and the migration/rollback heals.
   3. Optional: /home/lumen/.secrets/lpg-status-push.json mapping check ids to
