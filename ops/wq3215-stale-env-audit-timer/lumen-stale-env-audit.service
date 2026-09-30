@@ -1,0 +1,15 @@
+[Unit]
+Description=Find services running on rotated-away secrets and keep aq in step (wq#3215)
+Documentation=file:///home/lumen/foreman/ops/wq3215-stale-env-audit-timer/README.md
+After=local-fs.target
+
+[Service]
+Type=oneshot
+# root on purpose: /proc/<pid>/environ of units under other uids is unreadable otherwise. The tool
+# calls aq through `runuser -u lumen`, so nothing root-owned appears in the alert-queue dir.
+ExecStart=/home/lumen/bin/stale-env-audit --aq
+# 1 = drift found (an aq row is open, that is the tool working); 2 = nothing readable (a real failure)
+SuccessExitStatus=0 1
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=120
+Nice=10
