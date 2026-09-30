@@ -234,6 +234,14 @@ REVIEWED_HIT_FINGERPRINTS = {
     # LITELLM_MASTER_KEY's own. This was blocking lumen-minerva-ref-sync since
     # 09-28 (aq#2353).
     "fdc0aa8d5758",
+    # wq#3117: logs/mega1-verify.log:36 — a mask-verify transcript quoting a code sample,
+    # `token =` then a PascalCase function name that is being CALLED (the next char is
+    # `(`). A call expression, not a value: no digits, no key-shaped run, and the log is a
+    # test transcript. This one line failed every dir(/home/lumen/logs) grant closed, so
+    # the guardian's fire tickets (which cite that dir) could not be dispatched. Pinned on
+    # the exact span; a real secret landing on the same line still fires fresh. Class
+    # (kv_secret flagging identifier-then-paren) is tracked separately.
+    "f2cd95469dbb",
 }
 
 
