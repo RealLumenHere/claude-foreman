@@ -221,6 +221,8 @@ class Recorder:
         self.alerts = []
         self.fires = []
         self.heals = []
+        self.aq_rows = []
+        self.aq_resolved = []
 
 
 @pytest.fixture
@@ -230,6 +232,12 @@ def rec(monkeypatch):
                         lambda cfg, p, t, m, d=False: r.alerts.append((p, t)) or True)
     monkeypatch.setattr(guardian, "open_fire",
                         lambda cfg, res, log, d=False: r.fires.append(res.id) or "9999")
+    monkeypatch.setattr(
+        guardian, "aq_ingest",
+        lambda key, title, message, priority: r.aq_rows.append(key) or "aq-1")
+    monkeypatch.setattr(
+        guardian, "aq_resolve",
+        lambda rid, note: r.aq_resolved.append(rid))
     return r
 
 
@@ -309,6 +317,48 @@ def test_unconfigured_is_not_green_and_nags_at_most_daily(rec):
                     now=base + 200_000)       # >24h later — nags again
     assert cs["status"] == guardian.UNCONFIGURED
     assert len([a for a in rec.alerts if a[1].startswith("UNCONFIGURED")]) == 2
+
+
+def test_unconfigured_past_24h_opens_an_aq_row_and_escalates(rec):
+    """wq#3209: E2-roundtrip sat UNCONFIGURED for 23 days behind only a daily
+    default-priority ntfy. Past unconfigured_escalate_s it must open an aq
+    row (once, not every cycle) and re-alert at urgent priority."""
+    cfg, state = _cfg(), {"checks": {}}
+    cs = guardian.check_state(state, "E2-roundtrip")
+    res = guardian.Result("E2-roundtrip", guardian.UNCONFIGURED, "no secret")
+    base = 1_756_000_000
+    guardian._apply(cfg, state, cs, {"heals": []}, res, dry_run=False, now=base)
+    assert rec.aq_rows == []          # still under 24h: no row yet
+
+    guardian._apply(cfg, state, cs, {"heals": []}, res, dry_run=False,
+                    now=base + 90_000)          # >24h later
+    assert rec.aq_rows == ["E2-roundtrip"]      # exactly one row opened
+    assert ("urgent", "UNCONFIGURED E2-roundtrip") in rec.alerts
+
+    # a second escalated cycle must not open a second row
+    guardian._apply(cfg, state, cs, {"heals": []}, res, dry_run=False,
+                    now=base + 90_000 + cfg.get("unconfigured_escalated_nag_s", 3600))
+    assert rec.aq_rows == ["E2-roundtrip"]
+
+
+def test_unconfigured_recovery_resolves_the_aq_row(rec):
+    cfg, state = _cfg(), {"checks": {}}
+    cs = guardian.check_state(state, "E2-roundtrip")
+    base = 1_756_000_000
+    guardian._apply(cfg, state, cs, {"heals": []},
+                    guardian.Result("E2-roundtrip", guardian.UNCONFIGURED, "no secret"),
+                    dry_run=False, now=base)
+    guardian._apply(cfg, state, cs, {"heals": []},
+                    guardian.Result("E2-roundtrip", guardian.UNCONFIGURED, "no secret"),
+                    dry_run=False, now=base + 90_000)
+    assert cs["aq_id"] == "aq-1"
+
+    guardian._apply(cfg, state, cs, {"heals": []},
+                    guardian.Result("E2-roundtrip", guardian.OK, "round trip ok"),
+                    dry_run=False, now=base + 90_100)
+    assert cs["status"] == guardian.OK
+    assert cs["aq_id"] is None
+    assert rec.aq_resolved == ["aq-1"]
 
 
 def test_a_check_that_raises_becomes_red_not_a_crash(monkeypatch, tmp_path):
@@ -409,6 +459,38 @@ def test_other_workers_api_errors_stay_red_via_the_raise_path(monkeypatch, tmp_p
     monkeypatch.setattr(checks_email.urllib.request, "urlopen", boom)
     with pytest.raises(urllib.error.HTTPError):
         checks_email.check_e1_version(_e1_cfg(tmp_path))
+
+
+def test_e2_reports_probe_cron_not_registered_when_schedules_empty(
+        monkeypatch, tmp_path):
+    """wq#3209: an E2 that has never seen a round trip and finds the probe
+    worker's schedule list empty must say so specifically, not just 'not
+    deployed yet' — that is exactly the failure that hid for 23 days."""
+    cfg = _e1_cfg(tmp_path)
+    secret = tmp_path / "probe-secret"
+    secret.write_text("s3cret")
+    cfg["email"]["probe_secret_file"] = str(secret)
+    monkeypatch.setattr(checks_email, "d1_query", lambda cfg, sql, params=None: [])
+    monkeypatch.setattr(checks_email, "_version_state", lambda cfg: {})
+    monkeypatch.setattr(checks_email, "probe_schedules", lambda cfg: [])
+    r = checks_email.check_e2_roundtrip(cfg)
+    assert r.status == guardian.UNCONFIGURED
+    assert "probe cron not registered" in r.detail
+
+
+def test_e2_falls_back_to_generic_message_when_schedules_unreadable(
+        monkeypatch, tmp_path):
+    cfg = _e1_cfg(tmp_path)
+    secret = tmp_path / "probe-secret"
+    secret.write_text("s3cret")
+    cfg["email"]["probe_secret_file"] = str(secret)
+    monkeypatch.setattr(checks_email, "d1_query", lambda cfg, sql, params=None: [])
+    monkeypatch.setattr(checks_email, "_version_state", lambda cfg: {})
+    monkeypatch.setattr(checks_email, "probe_schedules", lambda cfg: None)
+    r = checks_email.check_e2_roundtrip(cfg)
+    assert r.status == guardian.UNCONFIGURED
+    assert "not deployed yet" in r.detail
+    assert "probe cron not registered" not in r.detail
 
 
 def test_config_paths_are_absolute():

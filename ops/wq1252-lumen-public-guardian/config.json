@@ -11,6 +11,8 @@
 
   "realert_cycles": 15,
   "unconfigured_nag_s": 86400,
+  "unconfigured_escalate_s": 86400,
+  "unconfigured_escalated_nag_s": 3600,
 
   "email": {
     "mailbot_dir": "/home/lumen/mailbot",
@@ -26,6 +28,7 @@
     "cf_deploy_token_file": "/home/lumen/mailbot/.cf_deploy_token",
 
     "worker_name": "lumen-mailbot",
+    "probe_worker_name": "lumen-mail-probe",
     "d1_database_name": "lumen-mail",
     "lumen_state_cli": "/home/lumen/minerva/lumen_state.py",
     "deploy_grace_s": 1800,

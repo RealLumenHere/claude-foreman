@@ -323,6 +323,34 @@ def _iso_delta(a, b):
     return abs(pb - pa)
 
 
+def probe_schedules(cfg):
+    """Cron trigger list for the probe worker per the Workers API
+    (GET .../workers/scripts/{name}/schedules), or None if it cannot be read
+    (no deploy token, or Cloudflare rejects it) — the caller falls back to
+    the generic UNCONFIGURED message rather than guessing why the round trip
+    has never happened. wq#3209: E2 read UNCONFIGURED for 23 days because
+    lumen-mail-probe had schedules=[] — no cron ever fired it — and the
+    generic message gave no hint that the fix was "redeploy the worker",
+    not "wait for mail"."""
+    e = _cfg(cfg)
+    token_file = _deploy_token(cfg)
+    if not token_file:
+        return None
+    worker = e.get("probe_worker_name", "lumen-mail-probe")
+    url = (f"{CF_API}/accounts/{_read(e['cf_account_id_file'])}"
+           f"/workers/scripts/{worker}/schedules")
+    req = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {_read(token_file)}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            out = json.load(r)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    if not out.get("success"):
+        return None
+    return (out.get("result") or {}).get("schedules") or []
+
+
 def check_e2_roundtrip(cfg):
     e = _cfg(cfg)
     if _missing_read_creds(cfg):
@@ -356,6 +384,14 @@ def check_e2_roundtrip(cfg):
     # outage. Once armed it never disarms, so a probe that stops working after
     # it has worked once is a real RED.
     if not _version_state(cfg).get("probe_armed"):
+        schedules = probe_schedules(cfg)
+        if schedules is not None and not schedules:
+            return Result("E2-roundtrip", UNCONFIGURED,
+                          "probe cron not registered — lumen-mail-probe has no "
+                          "Cloudflare cron trigger (workers/scripts/"
+                          f"{e.get('probe_worker_name', 'lumen-mail-probe')}"
+                          "/schedules is empty); redeploy it with wrangler and "
+                          "re-check schedules (wq#3209)")
         return Result("E2-roundtrip", UNCONFIGURED,
                       "no probe round trip has ever completed — lumen-mail-probe "
                       "is not deployed yet (runbook: UNCONFIGURED table)")
