@@ -1,0 +1,10 @@
+[Unit]
+Description=wq#3299 mcp-pressure-guard-bes — poll bes-mcp-failover cgroup memory every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

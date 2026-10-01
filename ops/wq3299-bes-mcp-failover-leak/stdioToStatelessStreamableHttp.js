@@ -1,0 +1,396 @@
+import express from 'express';
+import cors from 'cors';
+import { spawn } from 'child_process';
+import { readdirSync, readFileSync } from 'node:fs';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest, } from '@modelcontextprotocol/sdk/types.js';
+import { getVersion } from '../lib/getVersion.js';
+import { onSignals } from '../lib/onSignals.js';
+import { serializeCorsOrigin } from '../lib/serializeCorsOrigin.js';
+/** Per-request reap grace before the SIGKILL sweep (env-tunable, ms). */
+const reapGraceMs = () => {
+    const g = Number(process.env.SUPERGATEWAY_REAP_GRACE_MS);
+    return Number.isFinite(g) && g >= 0 ? g : 2000;
+};
+/**
+ * wq#829: admission gate for the stateless per-request child model. Every POST
+ * spawns a full child process; under parallel-chat fan-out the unbounded spawn
+ * storm drives box-wide memory PSI, which trips mcp-pressure-guard into a
+ * whole-unit restart — the actual "Commander is down" outage. Cap concurrent
+ * children and queue the overflow; a request that can't get a slot within the
+ * queue timeout is shed with 503 + Retry-After instead of dying mid-call.
+ */
+const maxConcurrentChildren = () => {
+    const n = Number(process.env.SUPERGATEWAY_MAX_CONCURRENT_CHILDREN);
+    return Number.isFinite(n) && n > 0 ? n : 12;
+};
+const queueTimeoutMs = () => {
+    const t = Number(process.env.SUPERGATEWAY_QUEUE_TIMEOUT_MS);
+    return Number.isFinite(t) && t >= 0 ? t : 30000;
+};
+let activeChildren = 0;
+const slotWaiters = [];
+const acquireChildSlot = () => {
+    if (activeChildren < maxConcurrentChildren()) {
+        activeChildren++;
+        return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+        const waiter = {
+            resolve,
+            timer: setTimeout(() => {
+                const i = slotWaiters.indexOf(waiter);
+                if (i !== -1)
+                    slotWaiters.splice(i, 1);
+                resolve(false);
+            }, queueTimeoutMs()),
+        };
+        waiter.timer.unref?.();
+        slotWaiters.push(waiter);
+    });
+};
+const releaseChildSlot = () => {
+    const next = slotWaiters.shift();
+    if (next) {
+        clearTimeout(next.timer);
+        next.resolve(true); // slot transfers to the queued request
+    }
+    else {
+        activeChildren--;
+    }
+};
+/**
+ * Force-kill only the processes that still belong to THIS request's own
+ * session — the stateless child plus the workers it spawned to serve the
+ * request. Any process that deliberately detached — called setsid (new
+ * session), was re-parented to init (ppid 1) via a double-fork, or was handed
+ * off to a supervisor such as `systemd-run` — is spared, so intentionally
+ * long-lived work survives the per-request reap instead of being killed as
+ * collateral. Linux-only (reads /proc); other platforms fall back to a
+ * process-group signal. (#108)
+ */
+const reapRequestSession = (pgid, signal) => {
+    if (process.platform !== 'linux') {
+        try {
+            process.kill(-pgid, signal);
+        }
+        catch { }
+        return;
+    }
+    const targets = [];
+    try {
+        for (const name of readdirSync('/proc')) {
+            if (!/^\d+$/.test(name))
+                continue;
+            let stat;
+            try {
+                stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+            }
+            catch {
+                continue; // process exited between readdir and read
+            }
+            // stat = "pid (comm) state ppid pgrp session ..." — comm may contain
+            // spaces or parens, so start parsing past the final ')'.
+            const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+            const ppid = Number(f[1]);
+            const pgrp = Number(f[2]);
+            const sid = Number(f[3]);
+            // In this request's group AND session, and not re-parented to init.
+            if (pgrp === pgid && sid === pgid && ppid !== 1)
+                targets.push(Number(name));
+        }
+    }
+    catch {
+        // /proc unreadable — fall back to the group signal rather than leak.
+        try {
+            process.kill(-pgid, signal);
+        }
+        catch { }
+        return;
+    }
+    for (const pid of targets) {
+        try {
+            process.kill(pid, signal);
+        }
+        catch { }
+    }
+};
+const setResponseHeaders = ({ res, headers, }) => Object.entries(headers).forEach(([key, value]) => {
+    res.setHeader(key, value);
+});
+// Helper function to create initialize request
+const createInitializeRequest = (id, protocolVersion) => ({
+    jsonrpc: '2.0',
+    id,
+    method: 'initialize',
+    params: {
+        protocolVersion,
+        capabilities: {
+            roots: {
+                listChanged: true,
+            },
+            sampling: {},
+        },
+        clientInfo: {
+            name: 'supergateway',
+            version: getVersion(),
+        },
+    },
+});
+// Helper function to create initialized notification
+const createInitializedNotification = () => ({
+    jsonrpc: '2.0',
+    method: 'notifications/initialized',
+});
+export async function stdioToStatelessStreamableHttp(args) {
+    const { stdioCmd, port, streamableHttpPath, logger, corsOrigin, healthEndpoints, headers, protocolVersion, } = args;
+    logger.info(`  - Headers: ${Object(headers).length ? JSON.stringify(headers) : '(none)'}`);
+    logger.info(`  - port: ${port}`);
+    logger.info(`  - stdio: ${stdioCmd}`);
+    logger.info(`  - streamableHttpPath: ${streamableHttpPath}`);
+    logger.info(`  - protocolVersion: ${protocolVersion}`);
+    logger.info(`  - CORS: ${corsOrigin ? `enabled (${serializeCorsOrigin({ corsOrigin })})` : 'disabled'}`);
+    logger.info(`  - Health endpoints: ${healthEndpoints.length ? healthEndpoints.join(', ') : '(none)'}`);
+    onSignals({ logger });
+    const app = express();
+    app.use(express.json());
+    if (corsOrigin) {
+        app.use(cors({ origin: corsOrigin }));
+    }
+    for (const ep of healthEndpoints) {
+        app.get(ep, (_req, res) => {
+            setResponseHeaders({
+                res,
+                headers,
+            });
+            res.send('ok');
+        });
+    }
+    app.post(streamableHttpPath, async (req, res) => {
+        // In stateless mode, create a new instance of transport and server for each request
+        // to ensure complete isolation. A single instance would cause request ID collisions
+        // when multiple clients connect concurrently.
+        // wq#829: admission first — no server/transport/child until a slot is held.
+        // Capture client aborts from before/while we sit in the queue: res 'close'
+        // fires once and won't re-fire for listeners added after the fact. (Do NOT
+        // test req.destroyed for this — express.json() has already consumed the
+        // body, and a fully-read IncomingMessage auto-destroys, so req.destroyed
+        // is true on every request.)
+        let clientGone = false;
+        res.on('close', () => {
+            clientGone = true;
+        });
+        const admitted = await acquireChildSlot();
+        if (!admitted) {
+            logger.error(`Shedding request: ${activeChildren} children in flight, queue wait exceeded ${queueTimeoutMs()}ms`);
+            res
+                .status(503)
+                .set('Retry-After', '5')
+                .json({
+                jsonrpc: '2.0',
+                error: {
+                    code: -32000,
+                    message: `MCP gateway saturated (${maxConcurrentChildren()} children in flight); retry shortly`,
+                },
+                id: null,
+            });
+            return;
+        }
+        let slotReleased = false;
+        const releaseSlotOnce = () => {
+            if (slotReleased)
+                return;
+            slotReleased = true;
+            releaseChildSlot();
+        };
+        // 'close' fires on every outcome (finish, abort, error) in Node >= 12.
+        res.on('close', releaseSlotOnce);
+        if (clientGone) {
+            // Client hung up while this request sat in the queue — 'close' already
+            // fired and will not re-fire, so release the slot by hand.
+            releaseSlotOnce();
+            return;
+        }
+        try {
+            const server = new Server({ name: 'supergateway', version: getVersion() }, { capabilities: {} });
+            const transport = new StreamableHTTPServerTransport({
+                sessionIdGenerator: undefined,
+            });
+            await server.connect(transport);
+            const child = spawn(stdioCmd, { shell: true, detached: true });
+            // #108: reap the request's process tree when the HTTP response ends. In
+            // stateless mode the child serves exactly one request; transport.onclose
+            // does not reliably fire, so hook the response lifecycle. We SIGTERM the
+            // whole request group first (graceful), then after a grace window SIGKILL
+            // only the processes still in this request's OWN session — anything that
+            // detached (setsid / systemd-run / reparented to init) is spared so
+            // intentionally long-lived work is not killed as collateral. The grace
+            // window doubles as the chance for a job to detach itself and survive.
+            let reaped = false;
+            const reapChild = () => {
+                if (reaped)
+                    return;
+                reaped = true;
+                const pgid = child.pid;
+                if (typeof pgid !== 'number')
+                    return;
+                try {
+                    process.kill(-pgid, 'SIGTERM');
+                }
+                catch { }
+                const t = setTimeout(() => reapRequestSession(pgid, 'SIGKILL'), reapGraceMs());
+                t.unref?.();
+            };
+            res.on('close', reapChild);
+            res.on('finish', reapChild);
+            child.on('exit', (code, signal) => {
+                logger.error(`Child exited: code=${code}, signal=${signal}`);
+                reaped = true;
+                // #139: a child that dies before producing a response must not leave the
+                // HTTP client hanging until its timeout — surface a JSON-RPC error.
+                if (!res.headersSent) {
+                    try {
+                        res.status(502).json({
+                            jsonrpc: '2.0',
+                            error: {
+                                code: -32000,
+                                message: `MCP child exited before response (code=${code}, signal=${signal})`,
+                            },
+                            id: null,
+                        });
+                    }
+                    catch { }
+                }
+                transport.close();
+            });
+            // State tracking for initialization flow
+            let isInitialized = false;
+            let initializeRequestId = null; // Current initialize request ID
+            let isAutoInitializing = false; // Flag to indicate if we're auto-initializing
+            let pendingOriginalMessage = null;
+            let buffer = '';
+            child.stdout.on('data', (chunk) => {
+                buffer += chunk.toString('utf8');
+                const lines = buffer.split(/\r?\n/);
+                buffer = lines.pop() ?? '';
+                lines.forEach((line) => {
+                    if (!line.trim())
+                        return;
+                    try {
+                        const jsonMsg = JSON.parse(line);
+                        logger.info('Child → StreamableHttp:', line);
+                        // Handle initialize response (both auto and client initiated)
+                        if (initializeRequestId && jsonMsg.id === initializeRequestId) {
+                            logger.info('Initialize response received');
+                            isInitialized = true;
+                            // If this was our auto-initialization, send initialized notification and pending message
+                            if (isAutoInitializing) {
+                                // Send initialized notification
+                                const initializedNotification = createInitializedNotification();
+                                logger.info(`StreamableHttp → Child (initialized): ${JSON.stringify(initializedNotification)}`);
+                                child.stdin.write(JSON.stringify(initializedNotification) + '\n');
+                                // Now send the original message
+                                if (pendingOriginalMessage) {
+                                    logger.info(`StreamableHttp → Child (original): ${JSON.stringify(pendingOriginalMessage)}`);
+                                    child.stdin.write(JSON.stringify(pendingOriginalMessage) + '\n');
+                                    pendingOriginalMessage = null;
+                                }
+                                // Reset auto-initialize tracking
+                                isAutoInitializing = false;
+                                initializeRequestId = null;
+                                // Don't forward our auto-initialize response to the client
+                                return;
+                            }
+                            else {
+                                // Client-initiated initialize response, just reset tracking
+                                initializeRequestId = null;
+                            }
+                        }
+                        Promise.resolve(transport.send(jsonMsg)).catch((e) => {
+                            logger.error(`Failed to send to StreamableHttp`, e);
+                        });
+                    }
+                    catch {
+                        logger.error(`Child non-JSON: ${line}`);
+                    }
+                });
+            });
+            child.stderr.on('data', (chunk) => {
+                logger.error(`Child stderr: ${chunk.toString('utf8')}`);
+            });
+            transport.onmessage = (msg) => {
+                logger.info(`StreamableHttp → Child: ${JSON.stringify(msg)}`);
+                // Check if we need to auto-initialize first
+                if (!isInitialized && !isInitializeRequest(msg)) {
+                    // Store the original message and send initialize first
+                    pendingOriginalMessage = msg;
+                    initializeRequestId = `init_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                    isAutoInitializing = true;
+                    logger.info('Non-initialize message detected, sending auto-initialize request first');
+                    const initRequest = createInitializeRequest(initializeRequestId, protocolVersion);
+                    logger.info(`StreamableHttp → Child (auto-initialize): ${JSON.stringify(initRequest)}`);
+                    child.stdin.write(JSON.stringify(initRequest) + '\n');
+                    // Don't send the original message yet - it will be sent after initialization
+                    return;
+                }
+                // Track initialize request ID (both client and auto)
+                if (isInitializeRequest(msg) && 'id' in msg && msg.id !== undefined) {
+                    initializeRequestId = msg.id;
+                    isAutoInitializing = false; // This is client-initiated
+                    logger.info(`Tracking initialize request ID: ${msg.id}`);
+                }
+                // Send all messages to child process normally
+                child.stdin.write(JSON.stringify(msg) + '\n');
+            };
+            transport.onclose = () => {
+                logger.info('StreamableHttp connection closed');
+                child.kill();
+            };
+            transport.onerror = (err) => {
+                logger.error(`StreamableHttp error:`, err);
+                child.kill();
+            };
+            await transport.handleRequest(req, res, req.body);
+        }
+        catch (error) {
+            logger.error('Error handling MCP request:', error);
+            if (!res.headersSent) {
+                res.status(500).json({
+                    jsonrpc: '2.0',
+                    error: {
+                        code: -32603,
+                        message: 'Internal server error',
+                    },
+                    id: null,
+                });
+            }
+        }
+    });
+    app.get(streamableHttpPath, async (req, res) => {
+        logger.info('Received GET MCP request');
+        res.writeHead(405).end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: {
+                code: -32000,
+                message: 'Method not allowed.',
+            },
+            id: null,
+        }));
+    });
+    app.delete(streamableHttpPath, async (req, res) => {
+        logger.info('Received DELETE MCP request');
+        res.writeHead(405).end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: {
+                code: -32000,
+                message: 'Method not allowed.',
+            },
+            id: null,
+        }));
+    });
+    app.listen(port, () => {
+        logger.info(`Listening on port ${port}`);
+        logger.info(`StreamableHttp endpoint: http://localhost:${port}${streamableHttpPath}`);
+    });
+}

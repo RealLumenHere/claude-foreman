@@ -1,0 +1,6 @@
+[Unit]
+Description=wq#3299 memory-pressure backstop for bes-mcp-failover
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mcp-pressure-guard-bes.sh
