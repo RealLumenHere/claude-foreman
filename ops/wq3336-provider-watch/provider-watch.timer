@@ -1,0 +1,10 @@
+[Unit]
+Description=Run provider-watch daily — new releases/posts across watched AI/infra providers (wq#3336)
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=24h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

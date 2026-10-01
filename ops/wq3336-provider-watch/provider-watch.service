@@ -1,0 +1,10 @@
+[Unit]
+Description=provider-watch — poll Tailscale/Ollama/LiteLLM/Cerebras/DeepSeek/SambaNova/Mistral/OpenRouter/Langfuse/PiKVM releases, file wq findings (wq#3336)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/home/lumen/bin/provider-watch run
+Nice=10
