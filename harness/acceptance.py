@@ -86,8 +86,9 @@ _SHELL_META = re.compile(r"[;&|<>`$()\\\n]")
 # listed, and the test is the TRAILING position specifically: a flag earns an entry only
 # when the command ending in it is complete AND terminating. That is why python's -i/-u/-b
 # /-E are gone though they are genuinely boolean -- each one at the end of a command is a
-# bare REPL invocation, and _replay() does not close stdin (:578), so it would sit until
-# the replay timeout. Unsatisfiable by hanging is no better than unsatisfiable by arity.
+# bare REPL invocation. Before wq#3239 _replay() inherited stdin and such a command sat
+# until the replay timeout; it now gets EOF and exits 0, which is a vacuous pass. Either
+# way it proves nothing, so it stays out of the table.
 #
 # Entry rule, drawn from the evidence rather than from taste: every counterexample this
 # bug class has produced is a SINGLE-LETTER flag (-c/-e/-m in wq#3232, -k in wq#3233, -b/-u
@@ -685,8 +686,11 @@ def _replay(criterion, worktree, evidence_dir, runner):
                         "CLAUDE_CODE_OAUTH_TOKEN")}
     timeout_s = replay_timeout(criterion)
     try:
+        # wq#3239: stdin is closed, not inherited. A pinned criterion that reads stdin
+        # (bare `python3 -i`, `sh`, a tool that prompts) otherwise blocks on the harness's
+        # own stdin until the replay timeout, up to 3600s on a suite-shaped command.
         p = runner(argv, cwd=worktree, env=env, capture_output=True, text=True,
-                   timeout=timeout_s)
+                   timeout=timeout_s, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return False, f"timeout after {timeout_s}s", "", None
     except (OSError, ValueError) as e:

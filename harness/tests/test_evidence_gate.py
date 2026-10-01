@@ -180,6 +180,30 @@ def test_replay_uses_the_criterion_budget_and_reports_it_on_timeout(worktree):
     assert observed == f"timeout after {acceptance.SUITE_REPLAY_TIMEOUT_S}s"
 
 
+def test_wq3239_replay_closes_stdin_so_a_stdin_reader_fails_fast(worktree, monkeypatch):
+    """A pinned `sh` / `python3 -i` style cmd reads stdin. With stdin inherited it blocks
+    until the replay timeout; with stdin=DEVNULL it sees EOF and exits at once. Real
+    subprocess.run on purpose, and a short budget so a regression still terminates."""
+    import time
+    monkeypatch.setenv("FOREMAN_REPLAY_TIMEOUT_S", "20")
+    monkeypatch.setattr(acceptance, "REPLAY_TIMEOUT_S", 20)
+    seen = {}
+
+    def runner(argv, **kw):
+        seen["stdin"] = kw.get("stdin")
+        return subprocess.run(argv, **kw)
+
+    script = worktree / "readstdin.py"
+    script.write_text("import sys\nsys.exit(0 if sys.stdin.read() == '' else 3)\n")
+    t0 = time.time()
+    ok, observed, _, _ = acceptance._replay(
+        {"id": "AC1", "cmd": "python3 readstdin.py", "expect_exit": 0, "timeout_s": 20},
+        str(worktree), None, runner)
+    assert seen["stdin"] is subprocess.DEVNULL
+    assert ok and observed == "exit 0"
+    assert time.time() - t0 < 10
+
+
 def test_model_derivation_is_validated_and_falls_back_when_unusable():
     good = json.dumps({"criteria": [
         {"id": "AC1", "text": "suite passes", "proof_type": "test",
