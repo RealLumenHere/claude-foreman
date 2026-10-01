@@ -46,9 +46,12 @@ timer when we already know which transcript just got the value written to it.
     python3 mask_at_rest.py --store supergateway         # gateway log only
     python3 mask_at_rest.py --store all --dry-run        # report only, mask nothing
 
-Exit 0: no unaccounted hit (or none found). Exit 1: at least one file had a hit not
-already in the rotated ledger (paged; still masked either way — masking never waits
-on the page). Exit 2: a store path does not exist / nothing to scan.
+Exit 0: no unaccounted hit (or none found). Exit 1: at least one file had a hit
+settled by nothing — not the rotated ledger, not the fixture ledger
+(fixture_ledger.json, wq#3295: committed test-fixture values that never were
+credentials), not a fixture-context marker — (paged; still masked either way —
+masking never waits on the page). Exit 2: a store path does not exist / nothing
+to scan.
 """
 import argparse
 import glob
@@ -113,6 +116,38 @@ AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "/home/lumen/bin/aq")
 AQ_SOURCE = "mask-at-rest"
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")  # same as fworker
 
+# wq#3295: values that were never credentials — committed test fixtures whose fake
+# keys reach worker transcripts whenever a test file is written/read in-session.
+# Run 20261001T031840Z paged on 24 hits / 3 values, all test code, none matching any
+# of the 30084 live-store hashes (agent/.env, .secrets/**, .git-credentials). The
+# rotated ledger is the wrong settlement (nothing was rotated; nothing 401s), so
+# these get their own ledger, committed next to this file: one row per value sha12,
+# review-gated like any code change, never auto-appended at runtime.
+FIXTURE_LEDGER_PATH = os.environ.get(
+    "FOREMAN_FIXTURE_LEDGER",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixture_ledger.json"))
+
+# wq#3295's durable half: a NEW fixture value (fresh hash, so no ledger row yet) is
+# recognized by its masked context instead — markers that place the hit inside test
+# code (a pytest file write, a test function, a dummy/deadbeef body). A marked hit
+# is still masked and still logged in the run log (tagged "settled":
+# "fixture-context") — only the page and the exit-1 are skipped, so the P1-C
+# transcript-archive gate can see green nights. Matched case-insensitively against
+# the ±120-char masked context window. Deliberately short and conservative: a hit
+# with no marker fails closed exactly as before, and a miss here costs one page and
+# one ledger row, not a loosened pattern — the PATTERNS table itself is untouched.
+FIXTURE_CONTEXT_MARKERS = (
+    "def test_",     # a test function definition in view
+    "tmp_path",      # pytest's tmp-dir fixture
+    "write_text(",   # a test writing a fake env/config file
+    "pytest",
+    "monkeypatch",
+    "capsys",
+    "/tests/",
+    "deadbeef",      # classic dummy-value body
+    "dummy",
+)
+
 STATE_PATH = os.environ.get("MASK_AT_REST_STATE",
                             os.path.join(FOREMAN_ROOT, "mask_at_rest_state.json"))
 # 2026-09-26: single-flight. fworker.trigger_mask_at_rest fires on every live alarm and
@@ -151,6 +186,26 @@ def acquire_lock(path=None):
     except OSError:
         pass
     return fh
+
+
+def load_fixture_ledger(path=None):
+    """{value_sha256_12 -> row} from FIXTURE_LEDGER_PATH. Same shape and tolerance
+    as mask_replay.load_rotated_ledger: a missing or unparsable file is an empty
+    ledger (fail closed — an unreadable settlement settles nothing)."""
+    path = FIXTURE_LEDGER_PATH if path is None else path
+    try:
+        with open(path) as fh:
+            rows = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return {r["value_sha256_12"]: r for r in rows if "value_sha256_12" in r}
+
+
+def _fixture_context(context):
+    """True when the hit's masked context window carries a test-code marker
+    (FIXTURE_CONTEXT_MARKERS)."""
+    low = (context or "").lower()
+    return any(m in low for m in FIXTURE_CONTEXT_MARKERS)
 
 
 def _load_state():
@@ -307,14 +362,23 @@ def offsite_backup(paths, tag):
     return True
 
 
-def process_store(paths, run_id, dry_run, rotated):
+def process_store(paths, run_id, dry_run, rotated, fixtures=None):
     """One store's files: mask each, backing up off-box first. Returns
     (files_masked, all_records, unaccounted_records, held_unmasked_paths, scanned).
 
     `scanned` is a {path: mtime} map of every file settled this pass (clean, or
     masked with a successful backup) — never a file that errored or is still
     held unmasked. main() folds this into STATE_PATH so the next incremental pass
-    (wq#3164) can skip a stat-unchanged file instead of re-reading it."""
+    (wq#3164) can skip a stat-unchanged file instead of re-reading it.
+
+    wq#3295: `fixtures` (load_fixture_ledger) settles a value by hash the way
+    `rotated` does, and a hit whose context carries a test-code marker
+    (_fixture_context) settles itself. Either way the hit is still masked and
+    still in all_records — tagged "settled": "fixture-ledger"/"fixture-context"
+    — it just never reaches `unaccounted`, so it neither pages nor fails the
+    unit. A hit with no ledger row and no marker is unaccounted exactly as
+    before."""
+    fixtures = {} if fixtures is None else fixtures
     files_masked, all_records, unaccounted, scanned = 0, [], [], {}
     plans = []
     for path in paths:
@@ -340,11 +404,17 @@ def process_store(paths, run_id, dry_run, rotated):
                 log(f"  held unmasked (backup failed): {p}")
             return 0, [], [], held, scanned
     for path, records in plans:
+        for r in records:
+            sha = r["value_sha256_12"]
+            if sha in rotated or sha in masking.SELF_OUTPUT_SHA12:
+                continue
+            if sha in fixtures:
+                r["settled"] = "fixture-ledger"
+            elif _fixture_context(r.get("context")):
+                r["settled"] = "fixture-context"
+            else:
+                unaccounted.append({**r, "path": path})
         all_records.extend({**r, "path": path} for r in records)
-        loose = [r for r in records
-                if r["value_sha256_12"] not in rotated
-                and r["value_sha256_12"] not in masking.SELF_OUTPUT_SHA12]
-        unaccounted.extend({**r, "path": path} for r in loose)
         if dry_run:
             log(f"[dry-run] would mask {path}: "
                 f"{sorted({r['label'] for r in records})}")
@@ -426,6 +496,7 @@ def main(argv=None):
 
     run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     rotated = mask_replay.load_rotated_ledger()
+    fixtures = load_fixture_ledger()
     state = _load_state()
 
     transcripts = (transcript_paths(session=args.session)
@@ -450,12 +521,14 @@ def main(argv=None):
                  _new_or_changed(gateways, state.get("supergateway", {})))
 
     files_masked, records, unaccounted, held_unmasked, scanned = process_store(
-        paths, run_id, args.dry_run, rotated)
+        paths, run_id, args.dry_run, rotated, fixtures)
     if records:
         write_run_log(run_id, records)
+    fixture_settled = sum(1 for r in records if r.get("settled"))
     log(f"run {run_id}: scanned {len(paths)}/{len(all_paths)} file(s), "
         f"masked {files_masked}, {len(records)} value(s) found, "
-        f"{len(unaccounted)} unaccounted, {len(held_unmasked)} held unmasked")
+        f"{len(unaccounted)} unaccounted, {fixture_settled} fixture-settled, "
+        f"{len(held_unmasked)} held unmasked")
     if not args.dry_run:
         page_alarm(unaccounted, run_id)
         aq_alert_held_unmasked(held_unmasked, run_id)

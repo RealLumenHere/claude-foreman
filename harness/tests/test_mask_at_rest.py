@@ -37,6 +37,8 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(mask_at_rest, "RUN_LOG_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(mask_at_rest, "STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setattr(mask_at_rest, "LOCK_PATH", str(tmp_path / "mask_at_rest.lock"))
+    monkeypatch.setattr(mask_at_rest, "FIXTURE_LEDGER_PATH",
+                        str(tmp_path / "fixture_ledger.json"))
     return tmp_path
 
 
@@ -129,6 +131,74 @@ def test_session_filter_scopes_to_one_transcript(tmp_path, monkeypatch):
         assert GHP not in fh.read()
     with open(other) as fh:
         assert GHP in fh.read()   # untouched: outside the requested session scope
+
+
+def test_fixture_ledger_value_masks_but_does_not_page(tmp_path, monkeypatch):
+    """wq#3295: a value settled by fixture_ledger.json (a committed test fixture
+    that never was a credential) is masked but neither pages nor fails the unit —
+    same contract as the rotated ledger, different settlement for a different
+    reason (nothing to rotate)."""
+    monkeypatch.setattr(mask_at_rest, "offsite_backup", lambda paths, tag: True)
+    paged = []
+    monkeypatch.setattr(mask_at_rest, "page_alarm",
+                        lambda unaccounted, run_id: paged.append(unaccounted))
+    sha12 = masking.value_sha12(GHP[len("ghp_"):])
+    _write(str(tmp_path / "fixture_ledger.json"), json.dumps(
+        [{"value_sha256_12": sha12, "ticket": "wq3295", "note": "test fixture"}]))
+    p = _write(str(tmp_path / "projects" / "proj-a" / "sess1.jsonl"),
+              json.dumps({"text": f"token is {GHP}"}) + "\n")
+    rc = mask_at_rest.main(["--store", "transcripts"])
+    assert rc == 0   # fixture-ledger -> not unaccounted
+    with open(p) as fh:
+        assert GHP not in fh.read()   # masked regardless of settlement
+    assert paged == [[]]
+    runs = os.listdir(tmp_path / "runs")
+    with open(tmp_path / "runs" / runs[0]) as fh:
+        rec = json.loads(fh.readline())
+    assert rec["settled"] == "fixture-ledger"
+
+
+def test_fixture_context_hit_settles_but_real_hit_still_exits_1(tmp_path, monkeypatch):
+    """wq#3295 TEST TO FAILURE, both halves. A transcript line whose hit sits in
+    test-code context (pytest tmp_path/write_text markers) settles: alone it exits
+    0. A real-shaped hit with no marker and no ledger row still exits 1 — even
+    when it shares a transcript with a fixture line."""
+    monkeypatch.setattr(mask_at_rest, "offsite_backup", lambda paths, tag: True)
+    paged = []
+    monkeypatch.setattr(mask_at_rest, "page_alarm",
+                        lambda unaccounted, run_id: paged.append(unaccounted))
+    fixture_tok = "ghp_" + "Z9y8X7w6V5u4T3s2R1q0Z9y8X7w6V5u4T3s2"
+    fixture_line = json.dumps({"toolUseResult": {"stdout":
+        f'44:    env.write_text("OTHER=1", tmp_path)  # {fixture_tok}'}}) + "\n"
+    p = _write(str(tmp_path / "projects" / "proj-a" / "fix.jsonl"), fixture_line)
+    rc = mask_at_rest.main(["--store", "transcripts"])
+    assert rc == 0   # fake-fixture transcript line settles
+    assert paged == [[]]
+    with open(p) as fh:
+        assert fixture_tok not in fh.read()   # still masked
+
+    # second pass: fixture line AND a real-shaped hit in the same transcript
+    paged.clear()
+    _write(str(tmp_path / "projects" / "proj-a" / "mixed.jsonl"),
+           fixture_line + json.dumps({"text": f"token is {GHP}"}) + "\n")
+    rc = mask_at_rest.main(["--store", "transcripts"])
+    assert rc == 1   # the real-shaped hit must still fail closed
+    assert len(paged[0]) == 1   # only the unmarked hit pages
+    assert paged[0][0]["value_sha256_12"] == masking.value_sha12(GHP[len("ghp_"):])
+
+
+def test_committed_fixture_ledger_seeds_the_wq3295_hashes():
+    """The committed ledger (harness/fixture_ledger.json, the default path) settles
+    the three values run 20261001T031840Z paged on. Pinned probe: the file is
+    committed source, not live mutable state."""
+    path = os.path.join(os.path.dirname(__file__), "..", "fixture_ledger.json")
+    fixtures = mask_at_rest.load_fixture_ledger(path)
+    assert {"08c83376aab6", "09da66321c7b", "6a91579efe20"} <= set(fixtures)
+    assert all(r["ticket"] == "wq3295" for r in fixtures.values())
+
+
+def test_missing_fixture_ledger_is_empty_and_fails_closed(tmp_path):
+    assert mask_at_rest.load_fixture_ledger(str(tmp_path / "absent.json")) == {}
 
 
 def test_already_rotated_value_masks_but_does_not_page(tmp_path, monkeypatch):

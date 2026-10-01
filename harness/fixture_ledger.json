@@ -1,0 +1,20 @@
+[
+  {
+    "value_sha256_12": "08c83376aab6",
+    "ticket": "wq3295",
+    "noted_at": "2026-10-01T00:00:00Z",
+    "note": "kv-secret len12 (LITELLM_MASTER_KEY= in a wq3222 test's env.write_text, x17 in run 20261001T031840Z). Never a credential: wall-4 matched its hash against agent/.env, .secrets/** and .git-credentials (30084 hashes), no hit."
+  },
+  {
+    "value_sha256_12": "09da66321c7b",
+    "ticket": "wq3295",
+    "noted_at": "2026-10-01T00:00:00Z",
+    "note": "sk-key len31 (OPENAI_API_KEY in a wq3221 test config string, x5 in run 20261001T031840Z). Never a credential: no live-store hash match."
+  },
+  {
+    "value_sha256_12": "6a91579efe20",
+    "ticket": "wq3295",
+    "noted_at": "2026-10-01T00:00:00Z",
+    "note": "sk-key len22 (Langfuse ingest test arg beside pk-lf-8a4fdeadbeef, x2 in run 20261001T031840Z, wq3216). Never a credential: no live-store hash match."
+  }
+]
