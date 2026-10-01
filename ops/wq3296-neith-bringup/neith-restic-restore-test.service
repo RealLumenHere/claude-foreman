@@ -1,0 +1,9 @@
+[Unit]
+Description=wq3296 weekly verified restic restore test (fleet-memory replica)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/neith-restic-restore-test.sh
+User=root
+Nice=15
+TimeoutStartSec=1200

@@ -1,0 +1,10 @@
+[Unit]
+Description=wq3296 weekly verified restore test
+
+[Timer]
+OnCalendar=Sun 06:30 UTC
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target
