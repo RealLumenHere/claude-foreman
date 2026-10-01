@@ -1,0 +1,10 @@
+[Unit]
+Description=wq#3299 — periodic bes-mcp-failover leak/pressure check
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

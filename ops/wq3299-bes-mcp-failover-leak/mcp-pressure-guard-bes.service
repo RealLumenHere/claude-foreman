@@ -1,0 +1,6 @@
+[Unit]
+Description=wq#3299 — bes-mcp-failover leak/pressure check (one-shot, run by timer)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mcp-pressure-guard-bes.sh
