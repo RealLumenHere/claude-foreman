@@ -1,0 +1,13 @@
+{
+  "_comment": "wq#3319: example commander-pool.json for commander-pool-failover.service (wq#3294 item B, ops/wq3294-commander-ha/pool_failover.py on commit bc73c6e5 -- not yet merged into this branch). JSON has no comment syntax; this key is documentation only and is ignored by pool_failover.py (it reads only interval_s/probe_timeout_s/fail_threshold/rise_threshold/backends/on_demote/on_promote). Deploys to /home/bes/etc/commander-pool.json per commander-pool-failover.service's --config flag. The two backends below are the two that exist today: lumen-dc is live, bes-dc is staged pending ops/wq2608-dc-endpoint-bes-a1/apply.sh. On arrival of each Station P1 Pro, append one more {name,url} entry per node once its hostname is live -- see README.md step 2.",
+  "interval_s": 30,
+  "probe_timeout_s": 10,
+  "fail_threshold": 3,
+  "rise_threshold": 2,
+  "backends": [
+    {"name": "lumen-dc", "url": "http://localhost:3100/mcp"},
+    {"name": "bes-dc", "url": "https://mcp-bes.lumennode.uk/mcp"}
+  ],
+  "on_demote": ["/home/bes/bin/page-commander-pool.sh", "{name}", "demote"],
+  "on_promote": ["/home/bes/bin/page-commander-pool.sh", "{name}", "promote"]
+}
