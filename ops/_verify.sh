@@ -115,6 +115,25 @@ vremote_unit() {
   case "$st" in active|activating) ;; *) _vmiss "$h: $u not active (${st:-unknown})";; esac
 }
 
+# vremote_user_unit HOST UNIT — UNIT is enabled and active in HOST's *user* manager, for a
+# bundle that installs a `systemctl --user` timer rather than a system one (wq#3332's hourly
+# chat-digest-pull.timer is the first). A non-interactive ssh has no user session, so
+# `systemctl --user` cannot find its bus unless XDG_RUNTIME_DIR is pointed at the login
+# user's runtime dir; without it every user unit reads "Failed to connect to bus" and a
+# naive check turns that into a MISS it invented. Bus failure is ERR, per wq#2985.
+vremote_user_unit() {
+  local h="$1" u="$2" uctl out
+  uctl='XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user'
+  out="$($_VSSH "$h" "$uctl is-enabled '$u' 2>&1" 2>/dev/null || true)"
+  case "$out" in
+    enabled|static|alias)       ;;
+    *bus*|*Failed*|*refused*)   echo "ERR $h: user manager unreachable ($u: $out)"; _V_ERR=1; return ;;
+    *)                          _vmiss "$h: $u not enabled (${out:-unknown})" ;;
+  esac
+  out="$($_VSSH "$h" "$uctl is-active '$u' 2>&1" 2>/dev/null || true)"
+  case "$out" in active|activating|waiting) ;; *) _vmiss "$h: $u not active (${out:-unknown})";; esac
+}
+
 # vdone — print the verdict and exit with the contract code.
 vdone() {
   if [ "$_V_ERR" -ne 0 ]; then echo "VERIFY ERROR"; exit 2; fi

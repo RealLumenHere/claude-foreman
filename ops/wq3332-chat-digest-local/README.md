@@ -36,8 +36,8 @@ Actual targets, per `research/inference_nodes.yaml:43-105`:
 so batch/fworker traffic can't land on its 2 ollama slots and contend with the synchronous
 judge call (wq#2796). `chat-digest-local` is exactly that kind of batch traffic. **Do not
 install the pull timer on hathor.** The CLI itself works there (manual, ad hoc runs only,
-during a window with no judge traffic); `install-chat-digest-local.sh` below only wires up the
-automatic timer on nephthys.
+during a window with no judge traffic); `install.sh` below only wires up the automatic timer on
+nephthys.
 
 ## What's in this kit
 
@@ -51,15 +51,22 @@ automatic timer on nephthys.
   Pull-based and read-only against Lumen, same single-writer shape as
   `ops/wq3296-neith-bringup/neith-memory-pull.sh`.
 - `chat-digest-pull.service` / `.timer` — systemd units for the above.
-- `install-chat-digest-local.sh` — run ON nephthys as the lumen user, from a copy of this kit
-  dir. Installs the CLI to `~/bin`, the pull script to `~/bin`, and enables the timer.
+- `install.sh` — run ON nephthys as the lumen user, from a copy of this kit dir. Installs the
+  CLI to `~/bin`, the pull script to `~/bin`, and enables the timer. Named `install.sh` (was
+  `install-chat-digest-local.sh` until wq#3355) because `ops-deploy-drift` only ever opens that
+  exact name, so a `--verify` handler under any other name is never run.
+- `install.sh --verify` — read-only deploy check per `ops/VERIFY_CONTRACT.md`, run FROM LUMEN:
+  byte-matches the four installed files and the user timer on nephthys over ssh. An unreachable
+  node is ERR (exit 2), never MISS. `CHAT_DIGEST_NODE=<host>` retargets it.
+- `test_verify_handler_wq3355.py` — exercises that handler's MISS/ERR paths against a stub
+  `ssh`, so no live node is needed.
 
 ## Bring-up (nephthys)
 
 1. Verify the Lumen SSH target against `lumen_state.py current lumen` first — never assume the
    tailscale IP in `chat-digest-pull.sh` hasn't changed (same caution as wq#3296's kit).
 2. Copy this directory to nephthys, then on nephthys:
-   `bash install-chat-digest-local.sh`
+   `bash install.sh`
 3. First verification run:
    `systemctl --user start chat-digest-pull.service && cat ~/chat-digest-local/status/pull.json`
 4. Confirm `ollama_version`/model match `research/inference_nodes.yaml` (`qwen3:14b`) before

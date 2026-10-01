@@ -24,7 +24,9 @@ page_token means the archive is caught up.
 
 Anything shaped like a credential is replaced by <redacted> before it ever reaches disk (same
 patterns as chat-digest: cf*_ tokens, github_pat_, sk-..., Bearer, long hex/base64, JWT,
-password= values).
+password= values). Masking is per-field and on by default: every string field of a chat record
+is masked except the ones named in OPAQUE_FIELDS, so a field added later is redacted unless
+someone deliberately exempts it.
 
 Exit: 0 ok, 2 usage / no input.
 """
@@ -55,12 +57,31 @@ KV_RE = re.compile(r"(?i)\b(password|passwd|pw|secret|token|api[_-]?key)(\s*[=:]
 
 DEFAULT_ARCHIVE = os.path.expanduser("~/.chat-archive/archive.json")
 
+# Fields exempt from masking because their value is an opaque upstream cursor that has to
+# round-trip verbatim. `page_token` is a real one: a 40+ char base64-ish token matches
+# SECRET_RES's trailing long-token rule, and a redacted token is the value the merge report
+# hands back as last_page_token, so masking it stalls the paginated recent_chats walk.
+# `id` is not listed: it is derived from UUID_RE, which cannot match any pattern here.
+OPAQUE_FIELDS = frozenset({"page_token"})
+
 
 def mask(s):
     s = KV_RE.sub(lambda m: m.group(1) + m.group(2) + "<redacted>", s)
     for rx in SECRET_RES:
         s = rx.sub("<redacted>", s)
     return s
+
+
+def mask_block(block):
+    """Mask every string field of a chat record except the declared-opaque ones.
+
+    Per-field opt-out, not opt-in: wq#3332 masked `body` at its one construction site and
+    left `title` and `url` — both derived from the same freeform chat text — in plaintext,
+    because each field had to be remembered individually (wq#3343 CONTRADICT, wq#3355).
+    Defaulting to masked means the next field someone adds is safe by omission.
+    """
+    return {k: mask(v) if isinstance(v, str) and k not in OPAQUE_FIELDS else v
+            for k, v in block.items()}
 
 
 def parse_blocks(text):
@@ -74,15 +95,15 @@ def parse_blocks(text):
         tm = re.match(r"\s*Title:\s*(.+)", body)
         if tm:
             title = tm.group(1).strip()
-        blocks.append({
-            "id": u.group(0).lower() if u else "",
+        blocks.append(mask_block({
+            "id": u.group(0).lower() if u else "",   # read off the raw url, before masking
             "url": url,
             "updated_at": attrs.get("updated_at", ""),
             "kind": attrs.get("kind", "conversation"),
             "page_token": attrs.get("page_token", ""),
             "title": title,
-            "body": mask(body),
-        })
+            "body": body,
+        }))
     return blocks
 
 
@@ -94,13 +115,23 @@ def load_archive(path):
     return {c["id"]: c for c in data.get("chats", []) if c.get("id")}
 
 
+def archive_payload(by_id):
+    """The archive's output form: masked, newest first.
+
+    Every path that lets a chat record leave this process — the archive file and --print —
+    goes through here, so the masking promise holds even for records this run did not parse:
+    an archive written by a build that stored `title` unmasked is healed on the next write.
+    """
+    return {"chats": sorted((mask_block(c) for c in by_id.values()),
+                             key=lambda c: c.get("updated_at", ""), reverse=True)}
+
+
 def save_archive(path, by_id):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    chats = sorted(by_id.values(), key=lambda c: c.get("updated_at", ""), reverse=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".chat-export-")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump({"chats": chats}, f, indent=2)
+            json.dump(archive_payload(by_id), f, indent=2)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -141,8 +172,7 @@ def main(argv=None):
     by_id = load_archive(a.archive)
 
     if a.print_archive:
-        print(json.dumps({"chats": sorted(by_id.values(), key=lambda c: c.get("updated_at", ""), reverse=True)},
-                          indent=2))
+        print(json.dumps(archive_payload(by_id), indent=2))
         return 0
 
     if a.file:
