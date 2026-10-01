@@ -6,11 +6,21 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 
 if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh" 2>/dev/null || . "$HERE/_verify.sh"
-  vfile "$HERE/thoth-arr-ensure" /usr/local/sbin/thoth-arr-ensure
-  vunit_file "$HERE/thoth-arr-ensure.service" /etc/systemd/system/thoth-arr-ensure.service
-  vunit_file "$HERE/thoth-arr-ensure.timer" /etc/systemd/system/thoth-arr-ensure.timer
-  venabled thoth-arr-ensure.timer
-  vactive thoth-arr-ensure.timer
+  if [ "$(hostname)" = thoth ]; then
+    vfile "$HERE/thoth-arr-ensure" /usr/local/sbin/thoth-arr-ensure
+    vunit_file "$HERE/thoth-arr-ensure.service" /etc/systemd/system/thoth-arr-ensure.service
+    vunit_file "$HERE/thoth-arr-ensure.timer" /etc/systemd/system/thoth-arr-ensure.timer
+    venabled thoth-arr-ensure.timer
+    vactive thoth-arr-ensure.timer
+  else
+    # payload lives on thoth: check it there (ops/VERIFY_CONTRACT.md, unreachable = ERR not MISS)
+    H=thoth@100.75.1.108
+    vremote_up "$H" || vdone
+    vremote_file "$H" "$HERE/thoth-arr-ensure" /usr/local/sbin/thoth-arr-ensure
+    vremote_file "$H" "$HERE/thoth-arr-ensure.service" /etc/systemd/system/thoth-arr-ensure.service
+    vremote_file "$H" "$HERE/thoth-arr-ensure.timer" /etc/systemd/system/thoth-arr-ensure.timer
+    vremote_unit "$H" thoth-arr-ensure.timer
+  fi
   vdone
 fi
 
