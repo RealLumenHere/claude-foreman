@@ -1,0 +1,14 @@
+# dc-handles-scrub.timer - every 10 minutes (wq#3249).
+# A credential a tool prints is recorded in ~/.dc-handles.db within seconds. 10 minutes bounds how long it can
+# sit there; a pass over a clean store is a sub-second LIKE scan. It does not stop a secret reaching a chat
+# transcript (that needs a change in Commander's output path).
+[Unit]
+Description=Redact credentials in the DC handle store, every 10 min (wq#3249)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
