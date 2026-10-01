@@ -137,7 +137,9 @@ _ZERO_ARG_FLAGS_BY_BINARY = {
     # either (git rebase/merge -s == --strategy <name>): the wq#3241 finding -- and no
     # other short flag, by _SUBCOMMAND_BINARIES below.
     "git": _HELP_FLAGS | {"--short", "--porcelain", "--stat", "--oneline",
-                          "--exit-code", "--name-only"},
+                          "--exit-code", "--name-only",
+                          # wq#3240: the read-only forms of `git branch` end in these
+                          "--list", "--show-current"},
     "ruff": _HELP_FLAGS | {"--fix", "--check", "--diff"},
     "mypy": _HELP_FLAGS | {"--strict", "--no-incremental"},
     "flake8": _HELP_FLAGS | {"--count", "--statistics"},
@@ -206,6 +208,53 @@ OUTPUT_TAIL_LINES = 30
 # 1a — derivation
 # ---------------------------------------------------------------------------
 
+# wq#3240: the gate must not WRITE to the branch it is judging. Arity (wq#3238/#3242) says
+# whether a git command is complete; it says nothing about whether a complete one is safe.
+# `{cmd: "git checkout -b feature", expect_exit: 0}` is well formed, passes every arity
+# check, gets pinned, and _replay() then runs it with cwd=worktree -- moving HEAD under the
+# diff the citation criteria are checked against. So git is allowlisted by SUBCOMMAND, on
+# both the derivation and the replay path (a hand-written pinned cmd reaches _replay too).
+# Default is reject: only subcommands that read are listed.
+_GIT_READONLY_SUBCOMMANDS = {
+    "status", "diff", "log", "show", "rev-parse", "ls-files", "ls-tree", "cat-file",
+    "merge-base", "rev-list", "diff-tree", "blame", "describe", "show-ref",
+    "for-each-ref", "grep",
+}
+# `git branch` is read-only only when it is asked to list; bare `git branch NAME` creates.
+_GIT_BRANCH_LIST_FLAGS = {"--list", "-l", "--show-current"}
+_GIT_BRANCH_MUTATING_FLAGS = {
+    "-d", "-D", "-m", "-M", "-c", "-C", "-u", "-f", "--delete", "--move", "--copy",
+    "--force", "--set-upstream-to", "--unset-upstream", "--edit-description",
+}
+
+
+def _git_mutation_reason(argv):
+    """Why this git argv may write to the repo or worktree, or "" if it only reads."""
+    if os.path.basename(argv[0]) != "git" or len(argv) < 2:
+        return ""
+    sub = argv[1]
+    if sub in _HELP_FLAGS:
+        return ""
+    if sub.startswith("-"):
+        # `git -c k=v ...` can run arbitrary configured commands and -C/--git-dir retarget
+        # the repo; none of that is a proof command, so global options are not accepted.
+        return f"git global option {sub!r} is not accepted before the subcommand (wq#3240)"
+    if sub == "branch":
+        flags = [a for a in argv[2:] if a.startswith("-")]
+        if any(f.split("=", 1)[0] in _GIT_BRANCH_MUTATING_FLAGS for f in flags):
+            return "'git branch' with a mutating flag changes refs (wq#3240)"
+        if not any(f in _GIT_BRANCH_LIST_FLAGS for f in flags):
+            return ("'git branch' creates a branch unless it is asked to list; "
+                    "pass --list or --show-current (wq#3240)")
+        return ""
+    if sub not in _GIT_READONLY_SUBCOMMANDS:
+        return (f"'git {sub}' is not on the read-only allowlist: a gate may not write to "
+                "the branch it is judging (wq#3240)")
+    if any(a == "--output" or a.startswith("--output=") for a in argv[2:]):
+        return f"'git {sub} --output' writes a file into the worktree (wq#3240)"
+    return ""
+
+
 def replayable(cmd, pinned=False):
     """(ok, reason) — may the harness re-run this command itself?
 
@@ -226,6 +275,9 @@ def replayable(cmd, pinned=False):
         return False, f"unparseable command ({e})"
     if not argv:
         return False, "empty command"
+    why = _git_mutation_reason(argv)
+    if why:
+        return False, why
     last = argv[-1]
     if not pinned and _FLAG_TOKEN_RE.match(last) and "=" not in last:
         owner = _arity_binary(argv)

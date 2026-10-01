@@ -13,11 +13,22 @@ import os
 import re
 import sys
 
+import pytest
+
 HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HARNESS_DIR)
 import acceptance  # noqa: E402
 
 WQ1705_TITLE = "make failed guard services self-heal or alert instead of staying dead"
+
+
+@pytest.fixture
+def arity_only(monkeypatch):
+    """The wq#3238/#3242 probes use mutating git commands (checkout -b, branch -u,
+    merge -s) as arity examples. wq#3240's read-only guard would now reject them first
+    for a different reason, hiding what these tests exist to show. Switch it off here so
+    they keep probing the arity table alone; test_wq3240_* below covers the guard."""
+    monkeypatch.setattr(acceptance, "_git_mutation_reason", lambda argv: "")
 
 
 def _cmds(title, detail=""):
@@ -159,6 +170,7 @@ def test_wq3238_flag_arity_is_per_binary_not_universal():
     assert acceptance.replayable("git log -x")[0] is False
 
 
+@pytest.mark.usefixtures("arity_only")
 def test_wq3238_git_dash_b_and_dash_u_are_dangling_for_git():
     """`git checkout -b` and `git branch -u` both exit 129 against real git -- -b wants a
     branch name, -u an upstream. wq#3235 listed both as universally boolean (they are, for
@@ -176,6 +188,7 @@ def test_wq3238_git_dash_b_and_dash_u_are_dangling_for_git():
         assert ok, f"{cmd}: {reason}"
 
 
+@pytest.mark.usefixtures("arity_only")
 def test_wq3238_the_model_derivation_path_drops_the_git_criterion():
     """The bug lived on derive()'s MODEL path, not the deterministic one:
     _derive_deterministic() drops every git candidate on its own `head == git` guard
@@ -195,6 +208,7 @@ def test_wq3238_the_model_derivation_path_drops_the_git_criterion():
         ["pytest -q harness/tests"]
 
 
+@pytest.mark.usefixtures("arity_only")
 def test_wq3238_the_probes_really_can_fail_against_a_flat_set():
     """The wq#2290 falsifiability guard. wq#3235's regression suite probed 11 commands,
     none of them git and none testing a flag against a second binary, so it could not have
@@ -253,6 +267,7 @@ def test_wq3238_an_unknown_binary_defaults_to_reject():
     assert acceptance.replayable("./scripts/run.sh --only")[0] is False
 
 
+@pytest.mark.usefixtures("arity_only")
 def test_wq3242_git_dash_s_is_dangling_because_rebase_and_merge_read_it_as_strategy():
     """wq#3241's CONTRADICT. `-s` is boolean for `git status`/`log`/`show` -- the four
     subcommands wq#3238's entry rule was applied against -- and `--strategy <name>` for
@@ -308,6 +323,7 @@ def test_wq3242_the_invariant_does_not_live_in_the_table():
         assert acceptance.replayable(cmd)[0] is False, cmd
 
 
+@pytest.mark.usefixtures("arity_only")
 def test_wq3242_the_probe_really_can_fail_against_the_wq3238_table():
     """Falsifiability guard (wq#2630). Recreate wq#3238 as merged -- `-s` in git's set, no
     replayable()-level ban -- and the probes above must flip: `git merge -s` is accepted and
@@ -334,3 +350,67 @@ def test_looks_like_prose_boundaries():
     assert not acceptance._looks_like_prose(["make", "a b c d e".replace(" ", "-")])
     assert acceptance._looks_like_prose(["make", "the", "thing"])
     assert acceptance._looks_like_prose("make one two three four five six".split())
+
+
+# --- wq#3240: a gate may not write to the branch it is judging ----------------------
+_MUTATING_GIT = (
+    "git checkout -b feature",          # the shape a model plausibly proposes
+    "git checkout main",
+    "git commit -m wip",
+    "git reset --hard HEAD~1",
+    "git clean -fd",
+    "git merge other",
+    "git rebase main",
+    "git stash",
+    "git add -A",
+    "git branch feature",               # bare branch NAME creates
+    "git branch -D feature",
+    "git branch --list -d feature",     # a list flag does not launder a mutating one
+    "git diff --output=out.patch",      # writes a file into the worktree
+    "git -c core.fsmonitor=x status",   # global option can run configured commands
+    "/usr/bin/git checkout -b feature", # path form is the same binary
+)
+_READONLY_GIT = (
+    "git status --porcelain",
+    "git diff --exit-code",
+    "git diff --stat",
+    "git log --oneline",
+    "git show --name-only",
+    "git rev-parse --short",
+    "git ls-files",
+    "git branch --list",
+    "git branch --show-current",
+    "git --version",
+)
+
+
+@pytest.mark.parametrize("cmd", _MUTATING_GIT)
+@pytest.mark.parametrize("pinned", (False, True))
+def test_wq3240_mutating_git_is_not_replayable_pinned_or_not(cmd, pinned):
+    ok, why = acceptance.replayable(cmd, pinned=pinned)
+    assert ok is False and "wq#3240" in why
+
+
+@pytest.mark.parametrize("cmd", _READONLY_GIT)
+@pytest.mark.parametrize("pinned", (False, True))
+def test_wq3240_readonly_git_is_still_replayable(cmd, pinned):
+    assert acceptance.replayable(cmd, pinned=pinned)[0] is True
+
+
+def test_wq3240_the_model_path_keeps_the_readonly_criterion_and_drops_the_mutating_one():
+    doc = acceptance.derive({"id": 9, "title": "x", "detail": "y"},
+        model_call=lambda p: json.dumps({"criteria": [
+            {"id": "AC1", "text": "branch created", "proof_type": "test",
+             "cmd": "git checkout -b feature", "expect_exit": 0},
+            {"id": "AC2", "text": "tree clean", "proof_type": "test",
+             "cmd": "git diff --exit-code", "expect_exit": 0}]}))
+    assert doc["derived_by"] == "model"
+    assert [c["id"] for c in doc["criteria"]] == ["AC2"]
+    assert any(n.startswith("AC1") and "wq#3240" in n for n in doc["notes"])
+
+
+def test_wq3240_the_guard_is_what_rejects_it(monkeypatch):
+    """Falsifiability: with the guard off the mutating command is accepted again, so the
+    tests above are not passing on some other rule."""
+    monkeypatch.setattr(acceptance, "_git_mutation_reason", lambda argv: "")
+    assert acceptance.replayable("git checkout -b feature", pinned=True)[0] is True
