@@ -187,6 +187,17 @@ def test_cloud_rung_with_dead_status_is_skipped(raw):
     assert pick(m, "probe-build", allow_local=False) == "claude-haiku-4-5"
 
 
+def test_cooled_cloud_rung_is_skipped(m, scratch):
+    """wq#3354: fleet-selfheal cools a non-local rung whose provider key is dead
+    (object-shaped row, source=fleet-selfheal); dispatch must walk past it. Before
+    wq#3354 the cooldown file was read for local rungs only, so this picked sonnet."""
+    (scratch / "cooldown.json").write_text(json.dumps({"claude-sonnet-5": {
+        "until": time.time() + 900, "source": "fleet-selfheal", "reason": "401"}}))
+    assert pick(m, "probe-build", allow_local=False) == "claude-haiku-4-5"
+    cool(scratch, "claude-sonnet-5", until=time.time() - 1)
+    assert pick(m, "probe-build", allow_local=False) == "claude-sonnet-5@medium"
+
+
 def test_all_rungs_unavailable_returns_none(m, scratch):
     cool(scratch, *GROUP)
     rung, reasons = router.select(m, "mechanical-edit", pressure=lambda x: "deny")

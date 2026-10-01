@@ -1,0 +1,16 @@
+[Unit]
+Description=leakwatch: inotify credential-leak watch on known sensitive files (wq#3354 class 3)
+Documentation=file:///home/lumen/foreman/ops/wq3354-fleet-selfheal/README.md
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/lumen/agents/fleet-selfheal/leakwatch.py
+User=lumen
+Restart=on-failure
+RestartSec=30
+MemoryMax=256M
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

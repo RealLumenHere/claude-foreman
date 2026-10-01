@@ -1,0 +1,15 @@
+[Unit]
+Description=fleet-selfheal sweep: guard timers, crash-loops, disk pressure, provider keys, offline nodes (wq#3354)
+Documentation=file:///home/lumen/foreman/ops/wq3354-fleet-selfheal/README.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Mode A per wq#1657: exits 0 whatever it found; findings leave via wq/aq/ntfy.
+ExecStart=/usr/bin/python3 /home/lumen/agents/fleet-selfheal/selfheal_sweep.py
+# Dead-man stamp (wq#1658): a timer that stops firing alarms via lumen-cron-deadman.
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+User=root
+TimeoutStartSec=900
+Nice=10
+MemoryMax=512M

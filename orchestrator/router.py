@@ -499,8 +499,9 @@ def _local_group_members(name):
 
 def availability_check(manifest, now=None):
     """wq#2133: -> f(rung) -> None when the rung can be picked, else the reason it cannot.
-    A rung is out when its model's models.yaml status is not LIVE*, or when it is a local
-    backend present and unexpired in runtime/backend_cooldown.json. The `local-worker` group
+    A rung is out when its model's models.yaml status is not LIVE*, or when its model is
+    present and unexpired in runtime/backend_cooldown.json (any pool since wq#3354:
+    fleet-selfheal cools a cloud rung whose provider key is dead). The `local-worker` group
     is out only when every member is cooling down or not LIVE*. A model with no models.yaml
     row is judged by cooldown alone. Rollback: FOREMAN_LOCAL_CAPACITY=static disables it.
     wq#2527: a claude-* rung is also out while cli_canary says the installed CLI cannot drive
@@ -522,10 +523,10 @@ def availability_check(manifest, now=None):
             return None
         if not live(rung.model):
             return f"{rung.model} status is {status(rung.model)!r}, not LIVE*"
-        if rung.pool != "local":
-            return canary(rung.model)
         if rung.model in cooled:
             return f"{rung.model} is cooling down (backend_cooldown.json)"
+        if rung.pool != "local":
+            return canary(rung.model)
         members = _local_group_members(rung.model)
         if members:
             why = {m: ("cooling down" if m in cooled else f"status {status(m)!r}")

@@ -1,0 +1,10 @@
+[Unit]
+Description=fleet-selfheal sweep every minute (wq#3354)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
