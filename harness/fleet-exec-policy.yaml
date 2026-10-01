@@ -113,6 +113,15 @@ allow:
     # /home/lumen/projects/mcp-oauth-worker files=13 hits=0 (wrangler.toml carries vars,
     # no secrets; CF token stays in .secrets per wq#2614).
     - /home/lumen/projects/mcp-oauth-worker
+    # wq#3339 (mcpw v2 gateway, official workers-oauth-provider 1.x + Access-for-SaaS OIDC):
+    # sibling v2 rewrite, same "not its own repo, lives inside the projects archive tree"
+    # shape as the entry above. Missing from this list is exactly what sent wq#3339's own
+    # dispatch out with a needs_advisory and left its BUILD worker unable to `ls`/Read the
+    # source (same class of gap as ISSUE-LOG row 832 / wq#2747). Swept 2026-10-01 with
+    # harness/read_dir_sweep.py: /home/lumen/projects/mcp-oauth-worker-v2 files=35 hits=0
+    # (wrangler.toml/wrangler.prod.toml carry only account/KV ids and vars; all secrets are
+    # bound via scripts/put-secrets.sh from /home/lumen/.secrets, never committed).
+    - /home/lumen/projects/mcp-oauth-worker-v2
     # wq#1738 / wq#1614 (entry is /home/lumen/minerva/eval at the top of this list, moved there
     # by 4dfb16e): minerva golden sets + bench scripts only. /home/lumen/minerva itself
     # stays OFF this list (wq#1467: credentials mirrored into context/sections). Sub-root
