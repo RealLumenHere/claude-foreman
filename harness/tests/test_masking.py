@@ -1832,6 +1832,23 @@ def test_a_key_labelled_identifier_is_a_recorded_suppression():
     assert masking.mask_text('DB_PASSWORD = "' + "my_db_pass_word_1")[1] == ["kv-secret"]
 
 
+def test_a_key_described_by_its_fields_is_an_identifier():
+    """wq#3322: `deviceKey = bus:port:vid:pid.` (wq#3314's report sentence, sha256
+    02825b2494fc) names a composite key's parts and paged as a burned credential."""
+    label = "device" + "Key = "
+    fields = "bus:port:vid:pid"
+    for tail in ("", ".", ". App.tsx:14", ", then"):
+        line = "src/lib/api.ts:77 " + label + fields + tail
+        assert masking.mask_text(line)[1] == [], tail
+        assert [r["suppressed"] for r in masking.suppressions(line)] == ["identifier"]
+    assert masking.mask_text(label + "bus:port:vid:pid:devnum")[1] == []
+    # a digit in a segment is no field list, an opaque tail past the `.` is a body,
+    # and a password is never a key-labelled identifier
+    for value in ("a1b2c3d4e5f6:" + "9f" * 16, fields + ".x9Qz", fields + "Zq"):
+        assert masking.mask_text(label + value)[1] == ["kv-secret"], value
+    assert masking.mask_text("db" + "Password = " + fields)[1] == ["kv-secret"]
+
+
 # wq#2933: `LABEL: LABEL` is a self-name placeholder (agent/litellm_config.yaml). Names
 # are built at runtime so this source never holds the pair itself.
 _SELF_KV = "MISTRAL_API_" + "KEY"

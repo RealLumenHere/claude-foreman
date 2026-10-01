@@ -297,12 +297,20 @@ _KV_SEP = r'\b["\' \t]*[:=]["\' \t]*'
 # the rule's START as a lookahead over label+separator+value, and recorded as
 # suppression "identifier" so an overbroad reading shows up as rows, not silence.
 _KV_IDENT_VALUE = r"_*[a-z0-9]+(?:_[a-z0-9]+)+"   # `_stale_probe_tickets` is one too
+# wq#3322: a composite key is described by naming its parts — `deviceKey = bus:port:vid:pid.`
+# in wq#3314's report of ewf-flasher's api.ts — and that sentence paged as a burned
+# credential. LETTERS-only segments joined by `:`, counted: a `:`-joined value with a
+# digit (GHOST_ADMIN_KEY's hex `id:secret`) is not a field list and still fires.
+# Either shape may end a sentence, so trailing prose punctuation is allowed where the
+# body then ENDS, the same allowance _KV_NOT_SELF makes.
+_KV_KEY_FIELDS = r"[a-z]{1,20}(?::[a-z]{1,20}){1,7}"
 # A CONDITIONAL on the `kn` group (Python `(?(name)yes)`): it only runs once a label has
 # matched and only when that label's noun was `key`. The first cut of this guard was a
 # lookahead at the rule's START that re-ran the whole depth-7 label grammar at every
 # word boundary of the line; on a 1.2 MB Commander log line that doubled the rule's cost
 # (450 ms -> 890 ms) and the all-rules sweep of /home/lumen/logs did not finish.
-_KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!#$%^*@~])))")
+_KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r"|" + _KV_KEY_FIELDS
+                 + r")[.,;!?]*(?![A-Za-z0-9._\-+/=:!#$%^*@~])))")
 # wq#2933: a value that repeats its own label is a self-name placeholder, not a
 # credential. `agent/litellm_config.yaml` writes provider keys that way (ISSUE-LOG rows
 # 871/914: LiteLLM's get_secret resolves the name from the container env), and quoting

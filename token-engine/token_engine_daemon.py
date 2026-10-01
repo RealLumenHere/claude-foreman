@@ -200,8 +200,10 @@ _KV_LABEL_ANY = (r"(?:" + _KV_WORD + r")" + _KV_DEPTH + _KV_WORD + _KV_NOUN + r"
 
 
 _KV_IDENT_VALUE = r"_*[a-z0-9]+(?:_[a-z0-9]+)+"
+_KV_KEY_FIELDS = r"[a-z]{1,20}(?::[a-z]{1,20}){1,7}"   # wq#3322, see harness/masking.py
 # conditional on the `kn` group, matching harness/masking.py (wq#2806 perf fix)
-_KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r")(?![A-Za-z0-9._\-+/=:!#$%^*@~])))")
+_KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r"|" + _KV_KEY_FIELDS
+                 + r")[.,;!?]*(?![A-Za-z0-9._\-+/=:!#$%^*@~])))")
 
 
 def _kv_rule(label, guards, floor="{12,}"):
