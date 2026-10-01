@@ -26,9 +26,10 @@ function jwt(extra = { email: 'f@x' }) {
   return `${h}.${p}.${crypto.sign('RSA-SHA256', Buffer.from(`${h}.${p}`), k1.privateKey).toString('base64url')}`;
 }
 
-// install the three preload files together in a temp dir, exactly like /home/lumen/bin
+// install the four preload files together in a temp dir, exactly like /home/lumen/bin
 const T = fs.mkdtempSync(path.join(os.tmpdir(), 'wq3103-'));
 for (const [src, dst] of [[path.join(DIR, 'commander-preload.cjs'), 'commander-preload.cjs'],
+  [path.join(DIR, 'dc-call-window.cjs'), 'dc-call-window.cjs'],
   [path.join(OPS, 'wq2751-listener-audit/loopback-listen.cjs'), 'loopback-listen.cjs'],
   [path.join(OPS, 'wq2768-access-guard/access-jwt-guard.cjs'), 'access-jwt-guard.cjs']]) fs.copyFileSync(src, path.join(T, dst));
 const MODEFILE = path.join(T, 'guard.mode');
@@ -63,7 +64,10 @@ ok('binds 127.0.0.1 only (not * / ::)', L.length > 0 && L.every(a => a.startsWit
 let r = await init(P, null);
 ok('shadow via mode file: anonymous initialize passes', r.status === 200, String(r.status));
 ok('shadow logs the would-be deny', g.log.includes('"reason":"missing"') && g.log.includes('"mode":"shadow"'));
-ok('child does NOT inherit NODE_OPTIONS', r.text.includes('"childNodeOptions":null'), r.text.slice(0, 200));
+// wq#3266: the stdio child gets only the dc-role preload (no guard, no listener); test_call_window.mjs proves
+// DC strips it again before spawning shells
+ok('child does NOT inherit the gateway NODE_OPTIONS, only the dc role',
+  r.text.includes(`"childNodeOptions":"--require=${path.join(T, 'commander-preload.cjs')}"`) && r.text.includes('"childPreloadRole":"dc"'), r.text.slice(0, 300));
 ok('child still sees guard env (harmless, but documented)', r.text.includes('"childGuardPort":"' + P + '"'));
 
 fs.writeFileSync(MODEFILE, 'enforce\n'); await sleep(1300);

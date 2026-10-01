@@ -16,6 +16,7 @@ for line in sys.stdin:
         result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}},
                   "serverInfo": {"name": "wq3103-fixture", "version": "0",
                                  "childNodeOptions": os.environ.get("NODE_OPTIONS"),
+                                 "childPreloadRole": os.environ.get("COMMANDER_PRELOAD_ROLE"),
                                  "childGuardPort": os.environ.get("ACCESS_GUARD_PORT")}}
     elif msg.get("method") == "tools/list":
         result = {"tools": [{"name": "wq3103_echo", "description": "fixture",

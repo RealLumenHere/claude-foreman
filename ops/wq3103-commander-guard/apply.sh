@@ -49,7 +49,7 @@ case "${1:-}" in
 deploy)
   deployed && { say "already deployed ($DROP exists); use status/flip/rollback"; exit 2; }
   say "== preflight: offline tests (scratch ports, touches nothing live)"
-  for t in "$D/test_commander_guard.mjs" "$OPS/wq2768-access-guard/test_access_guard.mjs"; do
+  for t in "$D/test_commander_guard.mjs" "$D/test_call_window.mjs" "$OPS/wq2768-access-guard/test_access_guard.mjs"; do
     runuser -u lumen -- env HOME=/home/lumen node "$t" | tail -1 | grep -qE '^([0-9]+)/\1 passed$' || { say "offline test FAILED: $t. NOT deploying"; exit 1; }
   done
   say "== baseline"; b_health=$(code "http://127.0.0.1:$PORT/health"); b_anon=$(anon_init); say "health=$b_health anon_mcp=$b_anon listen=$(listen_addrs)"
@@ -63,6 +63,7 @@ deploy)
   say "== install"
   install -o lumen -g lumen -m 0644 "$OPS/wq2768-access-guard/access-jwt-guard.cjs" "$BIN/access-jwt-guard.cjs"
   install -o lumen -g lumen -m 0644 "$OPS/wq2751-listener-audit/loopback-listen.cjs" "$BIN/loopback-listen.cjs"
+  install -o lumen -g lumen -m 0644 "$D/dc-call-window.cjs" "$BIN/dc-call-window.cjs"
   install -o lumen -g lumen -m 0644 "$D/commander-preload.cjs" "$BIN/commander-preload.cjs"
   mkdir -p "$(dirname "$MODE_FILE")"; echo shadow > "$MODE_FILE"; chmod 0644 "$MODE_FILE"; chown root:root "$MODE_FILE"
   mkdir -p "$DROPDIR"; {
