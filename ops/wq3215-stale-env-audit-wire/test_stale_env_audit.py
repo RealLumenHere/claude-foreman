@@ -52,6 +52,22 @@ def test_parse_envfile_quotes_and_comments():
         os.unlink(path)
 
 
+def test_parse_envfile_compose_strips_inline_comment_systemd_does_not():
+    """wq#3280: agent/.env had 'OLLAMA_MODEL=gemma4:latest  # was qwen3:8b' and the docker
+    audit flagged litellm every hour. compose strips the trailing comment, systemd does not."""
+    with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
+        f.write('A=gemma4:latest  # was qwen3:8b\nB="keep # inside" # trailing\n'
+                "C='x#y'\nD=nohash#attached\nE=\n")
+        path = f.name
+    try:
+        assert sea.parse_envfile(path, compose=True) == {
+            "A": "gemma4:latest", "B": "keep # inside", "C": "x#y", "D": "nohash#attached", "E": ""}
+        assert sea.parse_envfile(path)["A"] == "gemma4:latest  # was qwen3:8b"
+        _, _ = sea.expected_from([path], compose=True)
+    finally:
+        os.unlink(path)
+
+
 def test_parse_envfile_missing_file_returns_none():
     assert sea.parse_envfile("/nonexistent/path.env") is None
 
