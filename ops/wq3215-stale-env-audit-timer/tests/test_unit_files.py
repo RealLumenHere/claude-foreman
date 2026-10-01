@@ -16,7 +16,7 @@ def _unit(name):
 
 def test_service_runs_the_audit_with_aq_and_exit_1_is_success():
     s = _unit("lumen-stale-env-audit.service")["Service"]
-    assert s["ExecStart"] == "/home/lumen/bin/stale-env-audit --aq"
+    assert s["ExecStart"] == "/home/lumen/bin/stale-env-audit --aq --docker"  # wq#3245
     assert s["SuccessExitStatus"].split() == ["0", "1"]        # 2 (nothing readable) must stay a failure
     assert s["Type"] == "oneshot"
     assert "User" not in s                                       # root: needs other uids' /proc/environ

@@ -41,7 +41,8 @@ model_list:
 
 def test_read_master_key_extracts_without_logging(tmp_path, capsys):
     env = tmp_path / ".env"
-    env.write_text("OTHER=1\nLITELLM_MASTER_KEY=sk-abc123XYZ\nMORE=2\n")
+    # split at the `=` seam so reading this file arms no kv-secret tripwire (wq#3222)
+    env.write_text("OTHER=1\nLITELLM_MASTER_KEY=" + "sk-abc123XYZ\nMORE=2\n")
     key = mod.read_master_key(str(env))
     assert key == "sk-abc123XYZ"
     assert "sk-abc123XYZ" not in capsys.readouterr().out

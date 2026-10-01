@@ -123,15 +123,26 @@ def check(label, source, want_correct):
     return True
 
 
-print(f"pre-fix blob @ {PRE_FIX_COMMIT[:7]} (regression witness -- "
-      f"DC_UNIT must fail both states):")
-witness_ok = check("pre-fix blob", pre_fix_source(), want_correct=False)
+def main():
+    print(f"pre-fix blob @ {PRE_FIX_COMMIT[:7]} (regression witness -- "
+          f"DC_UNIT must fail both states):")
+    witness_ok = check("pre-fix blob", pre_fix_source(), want_correct=False)
 
-print(f"\ncurrent {ROLLBACK.name} (must handle all four):")
-current_ok = check("current rollback.sh", ROLLBACK.read_text(), want_correct=True)
+    print(f"\ncurrent {ROLLBACK.name} (must handle all four):")
+    current_ok = check("current rollback.sh", ROLLBACK.read_text(), want_correct=True)
 
-if witness_ok and current_ok:
-    print("\nPASS: the fix handles both DC_UNIT states, the CFD_CONFIG block is "
-          "unchanged and correct, and the test still catches the original bug.")
-    sys.exit(0)
-sys.exit(1)
+    if witness_ok and current_ok:
+        print("\nPASS: the fix handles both DC_UNIT states, the CFD_CONFIG block is "
+              "unchanged and correct, and the test still catches the original bug.")
+        return 0
+    return 1
+
+
+def test_rollback_restore_branches():
+    # wq#3222: this ran (and sys.exit'd) at import, which killed a repo-root `pytest`
+    # at collection with an INTERNALERROR.
+    assert main() == 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

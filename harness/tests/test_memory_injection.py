@@ -10,52 +10,23 @@ import fworker  # noqa: E402
 
 TICKET = {"title": "t", "detail": "d", "lane": "infra"}
 
-
-def _seed_store(store):
-    d = os.path.join(store, "facts")
-    os.makedirs(d)
-    with open(os.path.join(d, "2026-09-01-wq5.md"), "w") as f:
-        f.write("## Facts\n- [fleet] the gateway lives on kepler\n"
-                "- [lane:infra] infra lane fact\n"
-                "- [repo:other] other repo fact\n")
+# wq#3222: the wq#1183 distilled-fact recall tests went with the source they covered —
+# wq#1635 retired it and cd35dab2 moved memory/recall.py to memory/attic (its own tests
+# live there). {{DISTILLED_MEMORY}} now carries only fleet_context's subject state.
 
 
-def test_prompt_injects_scoped_facts(tmp_path, monkeypatch):
-    _seed_store(str(tmp_path))
-    recall = fworker._memory_import("recall")
-    monkeypatch.setattr(recall, "DEFAULT_STORE", str(tmp_path))
+def test_prompt_fail_open_empty_state(monkeypatch):
+    fleet_context = fworker._prompt_forge_import("fleet_context")
+    monkeypatch.setattr(fleet_context, "ticket_state_block", lambda ticket_id: "")
     prompt = fworker.load_worker_prompt(5, TICKET, "/tmp/wt")
     assert "{{DISTILLED_MEMORY}}" not in prompt
-    assert "DISTILLED FLEET MEMORY" in prompt
-    assert "the gateway lives on kepler" in prompt
-    assert "infra lane fact" in prompt          # lane scope included
-    assert "other repo fact" not in prompt      # unrelated repo excluded
-
-
-def test_prompt_fail_open_empty_store(tmp_path, monkeypatch):
-    recall = fworker._memory_import("recall")
-    monkeypatch.setattr(recall, "DEFAULT_STORE", str(tmp_path / "missing"))
-    prompt = fworker.load_worker_prompt(5, TICKET, "/tmp/wt")
-    assert "{{DISTILLED_MEMORY}}" not in prompt
-    assert "DISTILLED FLEET MEMORY" not in prompt
+    assert "Subject-scoped state" not in prompt
     assert "YOUR TICKET: wq#5" in prompt
 
 
-def test_prompt_fail_open_on_recall_crash(monkeypatch):
-    recall = fworker._memory_import("recall")
-    def boom(**kw):
-        raise RuntimeError("store on fire")
-    monkeypatch.setattr(recall, "top_facts", boom)
-    prompt = fworker.load_worker_prompt(5, TICKET, "/tmp/wt")
-    assert "{{DISTILLED_MEMORY}}" not in prompt
-    assert "YOUR TICKET: wq#5" in prompt
-
-
-def test_prompt_injects_ticket_subject_state(tmp_path, monkeypatch):
-    """wq#1636: subject-scoped lumen_state facts for the ticket ride the same
-    {{DISTILLED_MEMORY}} slot as the distilled-fact recall block."""
-    recall = fworker._memory_import("recall")
-    monkeypatch.setattr(recall, "DEFAULT_STORE", str(tmp_path / "missing"))
+def test_prompt_injects_ticket_subject_state(monkeypatch):
+    """wq#1636: subject-scoped lumen_state facts for the ticket ride the
+    {{DISTILLED_MEMORY}} slot."""
     fleet_context = fworker._prompt_forge_import("fleet_context")
     monkeypatch.setattr(fleet_context, "ticket_state_block",
                          lambda ticket_id: f"Subject-scoped state for wq#{ticket_id}:\n"

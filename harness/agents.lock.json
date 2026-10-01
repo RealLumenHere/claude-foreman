@@ -7,7 +7,7 @@
       "spec_hash": "2ba7104d86401568f6348824f6d6bad3183ee57264376538575cb5418cde6462"
     },
     "mechanical-edit": {
-      "spec_hash": "5002a82a43073c7bd7ee247e7391a9801dc33a4975011ee925cf91908bde8ade"
+      "spec_hash": "26d86ab7ab1c1633e2433f2f2f2426d0c83721d691eb865470d82095dd0e8e6c"
     },
     "novel-design": {
       "spec_hash": "bba0e67edcd9b6de8ceaf5c94b13987f9a470cfec2382965faee8a1c391f3fe0"
@@ -16,10 +16,10 @@
       "spec_hash": "63b1cbf640b9ce7edd6cb0e34617f96d7f8f4202e0fef1a024bd10d055c94eaa"
     },
     "rca-investigation": {
-      "spec_hash": "f2c5958d65fd4f954b1c90158cda8bd9a6af0425d1a49f4c080ccbedfc6da8ab"
+      "spec_hash": "1cc05d67873a17bab6c2cd500f6d9fe0c430daf549d8122dfd234dfdea3f43c8"
     },
     "research-synthesis": {
-      "spec_hash": "1175aea65a65cf19b1fb20cba11931f0d924b57770ea05f01d5adbbb847bba87"
+      "spec_hash": "7283c9fb9f2e2ce52487954ae4b5d0b64a4d2ef6d0ec5be159875505dd7a9775"
     },
     "standard-engineering": {
       "spec_hash": "a43a259d0a743d77e63cc47a168e1edb3f314e360d6f2e0a3a68f126bd248045"
@@ -28,6 +28,6 @@
       "spec_hash": "a43a259d0a743d77e63cc47a168e1edb3f314e360d6f2e0a3a68f126bd248045"
     }
   },
-  "overall_hash": "feda67778853e9de47c59c97141a7d2de353018e6656508c604157ad9f0c37d3",
+  "overall_hash": "72fa2de8b03d04828990bbc490cdcb2a09cc4d37c4dcc75002fe2b94bde99def",
   "source": "agents.yaml"
 }

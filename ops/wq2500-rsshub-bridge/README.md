@@ -38,7 +38,7 @@ Puppeteer/chromium image the doc bundles is unnecessary weight for this route.
 | `miniflux_subscribe.py` | subscribes the two required routes to Miniflux via its REST API (`POST /v1/feeds`) — the one step this bundle *can* run unattended, since it only needs network, not root |
 | `trending_vs_scout_diff.py` | the acceptance measurement: diffs a week of captured Trending entries against `github_scout`'s candidate pool, reports what the scout missed and at what star counts |
 | `test_diff_report.py` | unit tests for the diff/star-bucketing logic against synthetic fixtures (no network, no live Miniflux needed to prove the logic is correct) |
-| `test_verify_handler.py` | proves `install.sh --verify` follows the deploy-verify contract |
+| `test_verify_handler_wq2500.py` | proves `install.sh --verify` follows the deploy-verify contract |
 
 ## Deployment (on-host operator, maintenance window)
 

@@ -16,6 +16,8 @@ import importlib
 import os
 import sys
 
+import pytest
+
 HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HARNESS_DIR)
 import fworker  # noqa: E402
@@ -35,14 +37,16 @@ def test_cap_applies_to_local_models_too():
     assert env["BASH_MAX_OUTPUT_LENGTH"] == "2000"
 
 
-def test_cap_is_env_overridable(monkeypatch):
-    monkeypatch.setenv("FOREMAN_BASH_OUTPUT_CAP_CHARS", "500")
+def test_cap_is_env_overridable():
+    # A private MonkeyPatch: undoing the shared `monkeypatch` fixture would also undo the
+    # root conftest's autouse MINERVA_DB isolation, which then fails at teardown (wq#3222).
     try:
-        fw = importlib.reload(fworker)
-        env = fw.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt", 1116)
-        assert env["BASH_MAX_OUTPUT_LENGTH"] == "500"
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("FOREMAN_BASH_OUTPUT_CAP_CHARS", "500")
+            fw = importlib.reload(fworker)
+            env = fw.build_env("wid", "claude-sonnet-5", "high", "/tmp/wt", 1116)
+            assert env["BASH_MAX_OUTPUT_LENGTH"] == "500"
     finally:
-        monkeypatch.undo()
         importlib.reload(fworker)
 
 

@@ -111,6 +111,7 @@ RESTIC_GO_ENV = {"GOGC": "20", "GOMEMLIMIT": "6GiB"}
 # must never break the sweep itself.
 AQ_BIN = os.environ.get("FOREMAN_AQ_BIN", "/home/lumen/bin/aq")
 AQ_SOURCE = "mask-at-rest"
+NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")  # same as fworker
 
 STATE_PATH = os.environ.get("MASK_AT_REST_STATE",
                             os.path.join(FOREMAN_ROOT, "mask_at_rest_state.json"))
@@ -370,7 +371,7 @@ def page_alarm(unaccounted, run_id):
           f"value(s) found at rest ({','.join(labels)}) — masked in place, rotate "
           f"if not already dead")
     try:
-        subprocess.run(["/home/lumen/bin/ntfy-send", "-t", "lumen-fleet",
+        subprocess.run([NTFY_BIN, "-t", "lumen-fleet",
                        "-T", "mask-at-rest: credential found unmasked at rest", msg],
                       timeout=15, capture_output=True)
     except (OSError, subprocess.SubprocessError):

@@ -62,7 +62,7 @@ def test_seeded_rows_reproduce_measured_table(reg):
         got[name] = (m["family"], m["slots"], m["served_ctx"], m["prefill_tps"], m["decode_tps"])
     assert got == {
         "hathor": ("hathor-llama8b", 2, 32768, 13.6, None),
-        "nephthys": ("nephthys-qwen14b", 2, 32768, 7.4, None),
+        "nephthys": ("nephthys-qwen14b", 2, 32768, 7.4, 4.79),   # decode measured wq#2499 (db40d77a)
         "isis": ("qwen36-local", 2, 8192, 60, 10.9),
     }
     assert reg["families"]["hathor-llama8b"]["blob"] == "llama3.1:8b"

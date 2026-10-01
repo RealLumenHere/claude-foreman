@@ -91,6 +91,12 @@ def test_sigterm_to_fworker_charges_killed_attempt_and_releases_claim_and_reserv
     env, runs_root, worktrees_root, reserve_db = make_scratch_env(tmp_path, 0, "hang")
     ticket_id = wq_add(env, "scratch sigterm-cancel ticket")
     env["FAKE_CLAUDE_TICKET"] = str(ticket_id)
+    # wq#3222: the fake child writes this at startup, i.e. after do_attempt's
+    # set_sigterm_context() and run_child's Popen. The worktree appears ~110 lines of
+    # setup earlier, so "worktree exists + 0.5s" lost the race on a loaded box: SIGTERM
+    # landed before the context was armed and no attempt-1.json was charged.
+    child_started = str(tmp_path / "fake-claude-started.json")
+    env["FAKE_CLAUDE_ENV_DUMP"] = child_started
 
     # pre-seed the reservation the real dispatcher (spawner.dispatch_one) would have
     # taken before Popen'ing this fworker — otherwise the "settled" assertion below is
@@ -110,16 +116,15 @@ def test_sigterm_to_fworker_charges_killed_attempt_and_releases_claim_and_reserv
     )
     try:
         worktree = os.path.join(worktrees_root, f"wq{ticket_id}-a1")
-        deadline = time.time() + 30
+        deadline = time.time() + 60
         while time.time() < deadline:
-            if wq_status(env, ticket_id) == "claimed" and os.path.isdir(worktree):
+            if (os.path.exists(child_started) and wq_status(env, ticket_id) == "claimed"
+                    and os.path.isdir(worktree)):
                 break
             time.sleep(0.1)
         else:
             proc.kill()
             raise AssertionError(f"fworker never claimed+spawned:\n{proc.stdout.read()}")
-        # let the fake child actually reach its time.sleep(3600) past claude-cli startup
-        time.sleep(0.5)
 
         assert not os.path.exists(os.path.join(runs_root, f"wq{ticket_id}", "attempt-1.json")), \
             "test is only meaningful before attempt-1.json exists"

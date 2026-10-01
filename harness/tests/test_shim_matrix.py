@@ -198,7 +198,10 @@ def test_shim_11b_legit_block_sentinel_is_terminal_not_retried(tmp_path):
     assert wq_status(env, ticket_id) == "blocked"
     assert wq_show_field(env, ticket_id, "notes") == "WORK_BLOCKED: needs Frank"
     record = attempt_record(runs_root, ticket_id, n=1)
-    assert record["classification"] == "SUCCESS"
+    # wq#3116 (ea195dce): a confirmed block is recorded as BLOCKED, not the session's
+    # SUCCESS, which stays in raw_classification for RCA
+    assert record["classification"] == "BLOCKED"
+    assert record["raw_classification"] == "SUCCESS"
     # the one-and-only attempt: no second worktree/attempt spawned for a ticket that
     # was already legitimately closed out by the worker itself.
     assert not os.path.exists(os.path.join(runs_root, f"wq{ticket_id}", "attempt-2.json"))

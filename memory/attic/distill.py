@@ -35,7 +35,9 @@ import subprocess
 import sys
 import urllib.request
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# episodic.py stayed in memory/ when this moved to attic/ (wq#3222: it only imported when
+# another test had already put memory/ on sys.path)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import episodic  # noqa: E402
 
 GW = os.environ.get("LITELLM_URL", "http://localhost:4000/v1")

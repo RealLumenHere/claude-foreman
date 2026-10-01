@@ -184,7 +184,9 @@ def lint(spec=None, models_yaml_path=None):
 
     if routing is not None:
         for name in routing:
-            if name not in spec.archetypes and name != "orchestrator":
+            # rows a dispatcher-side caller routes itself, never an fworker archetype:
+            # orchestrator, and decomposer (dispatcher/decompose_planner.py, wq#2515)
+            if name not in spec.archetypes and name not in ("orchestrator", "decomposer"):
                 problems.append(
                     f"{name}: has a models.yaml routing entry but no agents.yaml archetype")
 
