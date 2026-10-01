@@ -1,0 +1,10 @@
+[Unit]
+Description=wq3332 chat-digest-local pull from Lumen (nephthys only, see README.md)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/chat-digest-pull.sh
+Nice=10
+TimeoutStartSec=300

@@ -1,0 +1,10 @@
+[Unit]
+Description=wq3332 hourly chat-digest-local pull (nephthys only)
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

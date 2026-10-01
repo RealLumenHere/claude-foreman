@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""chat-export - parse claude.ai <chat> blocks (recent_chats / conversation_search output) into
+a JSON archive, merging across paginated calls.
+
+Same input contract as /home/lumen/bin/chat-digest: Lumen cannot log in to claude.ai, so this
+CLI does not fetch chats itself. The browser Claude pages recent_chats and pipes each page's
+
+  <chat url="https://claude.ai/chat/<uuid>" updated_at="..." kind="summary|conversation"
+        page_token="..."> body </chat>
+
+blocks here, one call per page. chat-export merges newly-seen chats into the archive file by id:
+a chat not yet archived is added, an archived chat whose updated_at is newer is replaced, and
+everything else is left untouched. Repeated calls across a full paginated recent_chats walk
+converge on one deduplicated archive without reprocessing history already captured. Unlike
+chat-digest (lossy keyword extraction), the archive keeps the full chat body, masked.
+
+  chat-export < page1.txt                       # merges into ~/.chat-archive/archive.json
+  chat-export --archive out.json < page2.txt
+  chat-export --print                           # dump the merged archive as-is
+
+The merge report on stdout (added/updated/unchanged counts + the last page_token seen) tells a
+paginating caller whether to keep walking recent_chats or stop: an all-unchanged page with no new
+page_token means the archive is caught up.
+
+Anything shaped like a credential is replaced by <redacted> before it ever reaches disk (same
+patterns as chat-digest: cf*_ tokens, github_pat_, sk-..., Bearer, long hex/base64, JWT,
+password= values).
+
+Exit: 0 ok, 2 usage / no input.
+"""
+import argparse
+import html
+import json
+import os
+import re
+import sys
+import tempfile
+
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+CHAT_RE = re.compile(r"<chat\s+([^>]*)>(.*?)</chat>", re.S)
+ATTR_RE = re.compile(r"(\w+)\s*=\s*([\"'])(.*?)\2", re.S)
+
+SECRET_RES = [
+    re.compile(r"\bcf[a-z]{2}_[A-Za-z0-9_-]{20,}"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),
+    re.compile(r"\b[0-9a-f]{40,}\b"),
+    re.compile(r"(?<![\w/.-])(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{40,}={0,2}(?![\w/.-])"),
+]
+KV_RE = re.compile(r"(?i)\b(password|passwd|pw|secret|token|api[_-]?key)(\s*[=:]\s*)\S+")
+
+DEFAULT_ARCHIVE = os.path.expanduser("~/.chat-archive/archive.json")
+
+
+def mask(s):
+    s = KV_RE.sub(lambda m: m.group(1) + m.group(2) + "<redacted>", s)
+    for rx in SECRET_RES:
+        s = rx.sub("<redacted>", s)
+    return s
+
+
+def parse_blocks(text):
+    blocks = []
+    for m in CHAT_RE.finditer(text):
+        attrs = {k: v for k, _q, v in ATTR_RE.findall(m.group(1))}
+        url = attrs.get("url", "")
+        u = UUID_RE.search(url)
+        body = html.unescape(m.group(2).strip("\n"))
+        title = ""
+        tm = re.match(r"\s*Title:\s*(.+)", body)
+        if tm:
+            title = tm.group(1).strip()
+        blocks.append({
+            "id": u.group(0).lower() if u else "",
+            "url": url,
+            "updated_at": attrs.get("updated_at", ""),
+            "kind": attrs.get("kind", "conversation"),
+            "page_token": attrs.get("page_token", ""),
+            "title": title,
+            "body": mask(body),
+        })
+    return blocks
+
+
+def load_archive(path):
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        data = json.load(f)
+    return {c["id"]: c for c in data.get("chats", []) if c.get("id")}
+
+
+def save_archive(path, by_id):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    chats = sorted(by_id.values(), key=lambda c: c.get("updated_at", ""), reverse=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".chat-export-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"chats": chats}, f, indent=2)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def merge(by_id, blocks):
+    added = updated = unchanged = skipped = 0
+    last_page_token = ""
+    for b in blocks:
+        if b["page_token"]:
+            last_page_token = b["page_token"]
+        if not b["id"]:
+            skipped += 1
+            continue
+        existing = by_id.get(b["id"])
+        if existing is None:
+            by_id[b["id"]] = b
+            added += 1
+        elif b["updated_at"] and b["updated_at"] > existing.get("updated_at", ""):
+            by_id[b["id"]] = b
+            updated += 1
+        else:
+            unchanged += 1
+    return {"added": added, "updated": updated, "unchanged": unchanged, "skipped": skipped,
+            "last_page_token": last_page_token, "total": len(by_id)}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
+                                  epilog=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--archive", default=DEFAULT_ARCHIVE, help="archive JSON path (default %(default)s)")
+    ap.add_argument("--file", "-f", help="read a recent_chats/conversation_search page from this file")
+    ap.add_argument("--print", dest="print_archive", action="store_true", help="dump the merged archive and exit")
+    ap.add_argument("--dry-run", action="store_true", help="report the merge without writing the archive")
+    a = ap.parse_args(argv)
+
+    by_id = load_archive(a.archive)
+
+    if a.print_archive:
+        print(json.dumps({"chats": sorted(by_id.values(), key=lambda c: c.get("updated_at", ""), reverse=True)},
+                          indent=2))
+        return 0
+
+    if a.file:
+        text = open(a.file, errors="replace").read()
+    elif sys.stdin.isatty():
+        print("chat-export: no input. Pipe a recent_chats/conversation_search page on stdin or use --file "
+              "(Lumen cannot fetch claude.ai chats itself).", file=sys.stderr)
+        return 2
+    else:
+        text = sys.stdin.read()
+
+    blocks = parse_blocks(text)
+    if not blocks:
+        print("chat-export: no <chat> blocks in input", file=sys.stderr)
+        return 2
+
+    report = merge(by_id, blocks)
+    if not a.dry_run:
+        save_archive(a.archive, by_id)
+    report["archive"] = a.archive
+    report["dry_run"] = a.dry_run
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        sys.exit(0)
