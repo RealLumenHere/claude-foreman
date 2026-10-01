@@ -85,9 +85,21 @@ def sh(*a):
     return subprocess.run(a, capture_output=True, text=True).stdout
 
 
-def parse_envfile(path):
+def _compose_strip_comment(v):
+    """compose (dotenv) semantics: an UNQUOTED value ends at whitespace followed by '#'
+    ('KEY=val  # why' is 'val'); a quoted value keeps any '#' inside the quotes and ignores
+    whatever trails the closing quote. systemd does NOT do this, which is why it is opt-in."""
+    if v and v[0] in "\"'":
+        end = v.find(v[0], 1)
+        return v[:end + 1] if end != -1 else v
+    m = re.search(r"\s#", v)
+    return v[:m.start()].rstrip() if m else v
+
+
+def parse_envfile(path, compose=False):
     """systemd EnvironmentFile / compose env_file subset: KEY=VALUE, # and ; comments, one
-    layer of quotes. None when the file cannot be read."""
+    layer of quotes. compose=True also applies compose's inline-comment rule (wq#3280).
+    None when the file cannot be read."""
     out = {}
     try:
         with open(path, errors="replace") as f:
@@ -97,6 +109,8 @@ def parse_envfile(path):
                     continue
                 k, v = s.split("=", 1)
                 v = v.strip()
+                if compose:
+                    v = _compose_strip_comment(v)
                 if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
                     v = v[1:-1]
                 out[k.strip()] = v
@@ -113,12 +127,12 @@ def find_drift(proc_env, expected):
     return differs, missing
 
 
-def expected_from(paths):
+def expected_from(paths, compose=False):
     """-> (expected, src): merged KEY->value over `paths` in order, plus KEY->file it came
     from, so a drift line can name the file that moved."""
     expected, src = {}, {}
     for f in paths:
-        for k, v in (parse_envfile(f) or {}).items():
+        for k, v in (parse_envfile(f, compose) or {}).items():
             expected[k], src[k] = v, f
     return expected, src
 
@@ -328,7 +342,7 @@ def audit_docker():
         efs, inline = compose_env(c)
         if not efs:
             continue
-        expected, src = expected_from(efs)
+        expected, src = expected_from(efs, compose=True)
         for k in COMPOSE_CONTROL_VARS:
             expected.pop(k, None)
         if not expected:
