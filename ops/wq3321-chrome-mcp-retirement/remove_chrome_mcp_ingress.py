@@ -32,6 +32,7 @@ Usage:
 """
 import argparse
 import datetime
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -54,6 +55,85 @@ def find_entry(doc):
     return None
 
 
+def find_block(lines, hostname):
+    """Locate the [start, end) line range of the ingress list item whose
+    hostname matches, WITHOUT touching anything else in the file.
+
+    yaml.safe_load + yaml.safe_dump is not used here on purpose: that
+    round-trip drops every comment and reformats every untouched entry
+    (wq#3326). This instead walks the raw lines of the `ingress:` block,
+    isolates each `- ...` list item by indentation, and only confirms a
+    match by parsing that one item's own text as YAML — so the rest of
+    the file is never re-serialized and stays byte-identical.
+    """
+    import yaml
+
+    ingress_idx = None
+    for i, line in enumerate(lines):
+        if re.match(r"^ingress:\s*$", line):
+            ingress_idx = i
+            break
+    if ingress_idx is None:
+        return None
+
+    item_indent = None
+    i = ingress_idx + 1
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped == "" or stripped.startswith("#"):
+            i += 1
+            continue
+        m = re.match(r"^(\s*)-\s", line)
+        if not m:
+            return None
+        item_indent = m.group(1)
+        break
+    if item_indent is None:
+        return None
+
+    i = ingress_idx + 1
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped == "" or stripped.startswith("#"):
+            i += 1
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent < len(item_indent):
+            break
+        if not re.match(r"^" + re.escape(item_indent) + r"-\s", line):
+            i += 1
+            continue
+
+        start = i
+        i += 1
+        while i < len(lines):
+            l2 = lines[i]
+            if l2.strip() == "":
+                break
+            indent2 = len(l2) - len(l2.lstrip())
+            if indent2 <= len(item_indent):
+                break
+            i += 1
+        end = i
+
+        block_text = "".join(lines[start:end])
+        try:
+            parsed = yaml.safe_load(block_text)
+        except yaml.YAMLError:
+            parsed = None
+        if (
+            isinstance(parsed, list)
+            and len(parsed) == 1
+            and isinstance(parsed[0], dict)
+            and parsed[0].get("hostname") == hostname
+        ):
+            return start, end
+
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     g = ap.add_mutually_exclusive_group(required=True)
@@ -61,7 +141,6 @@ def main():
     g.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
-    import yaml
     text, doc = load()
     entry = find_entry(doc)
     if entry is None:
@@ -72,14 +151,20 @@ def main():
     if args.dry_run:
         return 0
 
-    doc["ingress"] = [e for e in doc["ingress"] if e.get("hostname") != HOSTNAME]
+    lines = text.splitlines(keepends=True)
+    block = find_block(lines, HOSTNAME)
+    if block is None:
+        print(f"could not locate a surgical text block for {HOSTNAME} — refusing to touch the file")
+        return 1
+    start, end = block
+    new_text = "".join(lines[:start] + lines[end:])
 
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
     backup = CONFIG.with_suffix(CONFIG.suffix + f".bak.{ts}")
     backup.write_text(text)
     print(f"backed up to {backup}")
 
-    CONFIG.write_text(yaml.safe_dump(doc, default_flow_style=False, sort_keys=False))
+    CONFIG.write_text(new_text)
     print(f"removed {HOSTNAME} ingress entry")
 
     # Detached reload — never foreground, per house policy on cloudflared changes.
