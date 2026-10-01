@@ -1,0 +1,103 @@
+commit 41b1f0485dd11e22c26aff263f8aa94f3a5fc258
+Author: Lumen Industries <fstupak.peace@gmail.com>
+Date:   Thu Oct 1 16:25:27 2026 +0000
+
+    wq#3351: autoclear plug-derived rows of unreachable nodes
+    
+    aq_autoclear only cleared rows of SSH-collected nodes, but <node>:zombie
+    fires only while the node is unreachable, so it could never clear.
+    aq#1568 seshat:zombie (plug back at 0W) sat open/high/unowned; sla_sweep
+    counted it every cycle and probe-storage-integrity FAILed 634x (aq#1482).
+    Plug keys (zombie, watts) now clear on a fresh numeric plug reading.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/storage_probe.py b/storage_probe.py
+index f1f5fe2..6163315 100644
+--- a/storage_probe.py
++++ b/storage_probe.py
+@@ -98,7 +98,7 @@ def aq_resolve_key(key, note):
+     except Exception as e:
+         log(f"aq resolve failed (non-fatal): {e}")
+ 
+-def aq_autoclear(active_keys, covered_nodes):
++def aq_autoclear(active_keys, covered_nodes, plug_nodes=()):
+     """Edge-clear: resolve open storage rows whose condition is GONE this cycle.
+ 
+     Without this, a self-clearing condition (thermal spike, transient watt burst,
+@@ -110,8 +110,16 @@ def aq_autoclear(active_keys, covered_nodes):
+     cycle. An unreachable node proves nothing, so its rows are left open.
+     SYNTHETIC prefixes (checks evaluated locally on Lumen, not per-node — e.g.
+     'manifest' for overlay drift) are always covered on a full run.
++    PLUG_KEYS (`<node>:zombie`, `<node>:watts`) are judged from Lumen's own
++    plugs.json, not over SSH, so they are covered whenever `plug_nodes` (nodes
++    with a reading in a FRESH snapshot this cycle) holds the node — reachable or
++    not. Without that, a zombie row could never clear: its node is unreachable
++    by definition, and the stale row held the probe at FAIL via sla_sweep
++    (aq#1473 hand-acked in wq#1982; aq#1568 seshat:zombie -> aq#1482 x634, wq#3351).
+     Returns list of cleared keys.
+     """
++    PLUG_KEYS = {"zombie", "watts"}
++    plug_nodes = set(plug_nodes)
+     SYNTHETIC = {"manifest"}
+     # Parked nodes are deliberately offline — their unreachability is expected,
+     # so stale rows from a pre-park window should be clearable (wq#883).
+@@ -129,11 +137,15 @@ def aq_autoclear(active_keys, covered_nodes):
+         for rid, key in rows:
+             if key in active_keys:
+                 continue
+-            node = key.split(":", 1)[0]
+-            if node not in covered_nodes:
++            node, _, kind = key.partition(":")
++            if node in covered_nodes:
++                why = "node reachable"
++            elif kind in PLUG_KEYS and node in plug_nodes:
++                why = "fresh plug reading"
++            else:
+                 continue
+             c.execute("UPDATE alerts SET status='resolved', note=?, resolved_ts=? WHERE id=? AND status='open'",
+-                      (f"auto-cleared: condition absent on {ts} probe cycle (node reachable)", ts, rid))
++                      (f"auto-cleared: condition absent on {ts} probe cycle ({why})", ts, rid))
+             cleared.append(key)
+         c.commit(); c.close()
+         if cleared:
+@@ -516,14 +528,26 @@ def assert_parity(man, snaps):
+                               "act": "fix", "prio": "urgent", "node": m})
+     return F
+ 
++def fresh_plugs():
++    """Plug rows from plugs.json, or [] when the snapshot is older than 15 min."""
++    pj = json.load(open(PLUGS))
++    age = time.time() - datetime.datetime.fromisoformat(pj["updated"]).timestamp()
++    return [] if age > 900 else pj.get("plugs", [])
++
++def plug_nodes():
++    """Nodes with a numeric watts reading in a fresh snapshot — the evidence
++    aq_autoclear needs to clear their plug-derived rows (wq#3351)."""
++    try:
++        return {p.get("device") for p in fresh_plugs() if isinstance(p.get("watts"), (int, float))}
++    except Exception as ex:
++        log(f"plug coverage skipped: {ex}")
++        return set()
++
+ def assert_watts(man, reachable):
+     """S8b plug-watts envelope + unreachable-but-drawing (from plugs.json snapshot)."""
+     F = []
+     try:
+-        pj = json.load(open(PLUGS))
+-        age = time.time() - datetime.datetime.fromisoformat(pj["updated"]).timestamp()
+-        if age > 900: return F  # stale snapshot, skip silently
+-        for p in pj.get("plugs", []):
++        for p in fresh_plugs():
+             n, w = p.get("device"), p.get("watts", 0)
+             e = man["nodes"].get(n, {})
+             if e.get("max_watts") and w > e["max_watts"]:
+@@ -781,7 +805,7 @@ def run_probe(fix=True, only_node=None, storage_only=False):
+     # run has no view of the other nodes and must not clear their rows.
+     cleared = []
+     if not only_node and not storage_only:
+-        cleared = aq_autoclear({f["key"] for f in findings}, set(snaps))
++        cleared = aq_autoclear({f["key"] for f in findings}, set(snaps), plug_nodes())
+     # SLA
+     sla_hits = sla_sweep(man)
+     # wq#1487: the SLA re-page was every 30 min (1800s) — 16 urgent pages in 8h for one
