@@ -154,7 +154,8 @@ def _floored_body(charset, floor):
 # labelled, and a prose `salt:` followed by a 12-char opaque run is not a shape the
 # fleet corpus holds.
 # `key` is a NAMED group so the identifier guard below can be conditional on it.
-_KV_NOUN = r"(?:secret|token|(?P<kn>key)|credentials?|passphrase|password|passwd|(?<=_)pass|salt)"
+# The whole noun is named `nn` (and the bare one `nb`) for the hump-echo guard (wq#3324).
+_KV_NOUN = r"(?P<nn>secret|token|(?P<kn>key)|credentials?|passphrase|password|passwd|(?<=_)pass|salt)"
 # The hump test is case-SENSITIVE via `(?-i:)` even though the rule as a whole is
 # IGNORECASE — that asymmetry is the whole trick: it admits `apiKey:` while refusing
 # `monkey:`. Two letters minimum, since a one-letter qualifier is an English article
@@ -183,7 +184,7 @@ _KV_NOT_PUBLIC = r"(?!pub(?:lic)?[ _-]{0,2}key\b)"
 # `key:` alone is ordinary YAML and an ordinary Python kwarg, and `PAT` alone is a
 # variable name — both need a qualifier in front to read as a credential label. The
 # `github_pat_` credential itself is caught by the dedicated github pattern above.
-_KV_BARE = r"(?:secret|token|credentials?|passphrase|password|passwd|bearer|salt)"
+_KV_BARE = r"(?P<nb>secret|token|credentials?|passphrase|password|passwd|bearer|salt)"
 # wq#2806: the label used to be `(WORD)? WORD NOUN` — at most two qualifiers — and it
 # opens on `\b`. `_` is a word character, so a label can only ever be read from its
 # FIRST segment, and a fleet identifier is 3-6 segments deep:
@@ -335,6 +336,18 @@ _KV_ECHO_PRE = _KV_ECHO_GAP + r"(?:" + _KV_ECHO_SEG + r"[._]" + _KV_ECHO_GAP + r
 _KV_NOT_ECHO = (r"(?!(?:(?-i:" + _KV_ECHO_PRE + r")(?P=kl)(?-i:(?:[._]"
                 + _KV_ECHO_SEG + r"){0,2})|(?P=kl)(?-i:(?:[._]" + _KV_ECHO_SEG + r"){1,2}))"
                 r"(?![A-Za-z0-9._\-+/=:!#$%^*@~(]))")
+# wq#3324: the same echo spelled in camelCase. JS/TS source hands an object-literal key
+# a local named after it — `access_` + `token: newAccessToken,` and its refresh twin, in
+# the OAuth token handler wq#3317 grepped; both values were filed as burned. The value is
+# a lowercase-led identifier of letters only, at most three humps before the last, and
+# the LAST hump is the label's own noun (`nn`, or `nb` for a bare label), capitalised
+# and all lowercase after its first letter, with the body ending there. A digit, a run
+# past the caps, an ALL_CAPS noun, or anything glued behind the noun is a value and gets
+# read. A backreference to the noun group the label did not use fails, so the
+# alternation picks whichever one matched. Recorded as suppression "hump-echo".
+_KV_NOT_HUMP_ECHO = (r"(?!(?-i:[a-z]{1,20}(?:[A-Z][a-z]{1,20}){0,3}"
+                     r"(?=[A-Z][a-z]{1,19}(?![A-Za-z0-9._\-+/=:!#$%^*@~(])))"
+                     r"(?:(?P=nn)|(?P=nb))(?![A-Za-z0-9._\-+/=:!#$%^*@~(]))")
 
 
 def _kv_rule(label, guards, floor="{12,}"):
@@ -359,7 +372,8 @@ def _kv_rule(label, guards, floor="{12,}"):
 
 
 _KV_SECRET = re.compile(_kv_rule(_KV_LABEL, _KV_POINTER + _KV_NOT_CALLED + _KV_NOT_IDENT
-                                 + _KV_NOT_SELF + _KV_NOT_ECHO), re.IGNORECASE)
+                                 + _KV_NOT_SELF + _KV_NOT_ECHO + _KV_NOT_HUMP_ECHO),
+                        re.IGNORECASE)
 # wq#2806: the env-identifier form of the same rule, floor 8 (see _KV_ENV_LABEL). It
 # shares the label string "kv-secret" the way the two github rules share theirs: one
 # alarm class, one rotation-ticket shape, one set of suppressions to reason about.
@@ -398,6 +412,7 @@ _KV_SUPPRESSIONS = (
     ("identifier", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_IDENT), re.IGNORECASE)),
     ("self-name", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_SELF), re.IGNORECASE)),
     ("echo", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_ECHO), re.IGNORECASE)),
+    ("hump-echo", re.compile(_kv_rule(_KV_LABEL_ANY, _KV_NOT_HUMP_ECHO), re.IGNORECASE)),
 )
 SUPPRESSED_LABEL = "kv-secret"   # the only rule that carries suppressions today
 

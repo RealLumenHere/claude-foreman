@@ -1890,6 +1890,36 @@ def test_an_echo_with_an_opaque_part_is_still_a_credential(line):
     assert masking.mask_text(line)[1] == ["kv-secret"], line
 
 
+# wq#3324: the echo in camelCase. The first two lines are wq#3317's grep of an OAuth
+# token handler, the pair that filed this row; split so this file is not a third.
+_AT, _RT = "access_" + "token", "refresh_" + "token"
+
+
+@pytest.mark.parametrize("line", [
+    "662:\t\t\t" + _AT + ": newAccess" + "Token,",
+    "665:\t\t\t" + _RT + ": newRefresh" + "Token,",
+    "client_" + "secret: oauthClient" + "Secret }",
+    "token: " + "pendingRefresh" + "Token;",               # a bare label's noun
+    "db_pass" + "word = currentDbPass" + "word",
+])
+def test_a_label_noun_echoed_as_a_camel_hump_is_a_recorded_suppression(line):
+    assert masking.mask_text(line) == (line, [])
+    assert [r["suppressed"] for r in masking.suppressions(line)] == ["hump-echo"]
+
+
+@pytest.mark.parametrize("line", [
+    _AT + ": newAccess" + "Token2,",                 # a digit is a token body
+    _AT + ": newAccess" + "TokenXyz,",               # something glued behind the noun
+    _AT + ": newAccess" + "TOKEN,",                  # the noun hump is Capitalised only
+    _AT + ": newAccess" + "Secret,",                 # not the label's noun
+    _AT + ": newAaBbCcDd" + "Token,",                # past three humps before the noun
+    _AT + ": NewAccess" + "Token,",                  # lowercase-led only
+    _AT + ": " + "q" * 21 + "Token,",                # a lead past 20 letters
+])
+def test_a_camel_value_that_is_not_the_label_echo_is_still_a_credential(line):
+    assert masking.mask_text(line)[1] == ["kv-secret"], line
+
+
 # wq#3133: the echo guard's runs are counted, so a lowercase chain cannot ride it out of
 # sight. wq#3132 caught the first cut spelling them `+`/`*`: these four lines produced no
 # mask, no hit and no suppression record at all — the one failure shape suppressions()
