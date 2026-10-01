@@ -108,6 +108,22 @@ random port) implementing `/key/list`, `/key/{key}/regenerate`, and
 call happens, and drives everything through `tmp_path` — no real secrets,
 proxy, or systemd units are touched.
 
+## Liveness: `install.sh --verify`
+
+This bundle installs nothing; it runs in place. It still has an `install.sh`
+with a `--verify` handler (`ops/VERIFY_CONTRACT.md`), because since wq#3224 the
+rotation is no longer self-contained: `confirm_no_drift()` shells out to
+`/home/lumen/bin/stale-env-audit --fail-on-drift ... --vars ...` to decide
+whether the consumer restarts actually took. That binary ships from
+`ops/wq3215-stale-env-audit-wire`, and wq#3228 caught the gap this closes — a
+merged `rotate.py` gating on two flags the installed build did not implement,
+which it silently ignored and answered `0` to. `vflag` asks the binary's own
+`--help`, so repo state can no longer stand in for live state:
+
+```
+bash ops/wq1747-litellm-key-rotation/install.sh --verify
+```
+
 ## Also in this PR: wq#1698 journald conf fix
 
 `ops/wq1698-supergateway-log-redaction/no-body-logs-journald.conf` shipped

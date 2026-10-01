@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""stale-env-audit - running services (and docker containers) whose live environment
+"""stale-env-audit - running services (and compose containers) whose live environment
 differs from the EnvironmentFile / env_file that is supposed to feed them (read-only;
 prints unit/container and VARIABLE NAMES, never values).
 
@@ -9,43 +9,76 @@ their process environment for two days, so their traces were silently dropped. A
 that does not restart its consumers is invisible from the file side. This compares what
 each process actually holds (/proc/<pid>/environ) with what its EnvironmentFile says now.
 
-  stale-env-audit               report, exit 0 clean / 1 drift / 2 could not read anything
-  stale-env-audit --json        machine-readable
-  stale-env-audit --docker      also compare `docker exec <c> printenv` against each
-                                  running container's env_file(s) (wq#3215) — containers
-                                  only pick up an env_file edit on recreate, so this is the
-                                  docker-compose analogue of the systemd drift above.
-  stale-env-audit --raise-aq [--state PATH]
-                                  hourly-timer mode (wq#3215): one aq row per drifting
-                                  unit/container (source "stale-env-audit", key
-                                  "<name>:<sorted differs+missing vars>" so a different
-                                  variable drifting on the same unit is a distinct alert,
-                                  not swallowed by the same key) and resolve-key for any
-                                  previously-raised key that is clean now. `aq add` /
-                                  `aq resolve-key` are themselves idempotent, so a missed
-                                  hourly run just catches up on the next tick.
+  stale-env-audit            report, exit 0 clean / 1 drift / 2 inconclusive
+  stale-env-audit --json     machine-readable
+  stale-env-audit --docker   also compare each running compose container's live
+                             environment against its env_file(s) (wq#3215) - containers
+                             only pick up an env_file edit on recreate, so this is the
+                             compose analogue of the systemd drift above.
+  stale-env-audit --aq       also keep the alert queue in step (wq#3215): one aq row per
+                             drifting unit (source stale-env, key = unit, deduped by aq),
+                             resolved automatically once the unit is clean. Resolves nothing
+                             after an incomplete scan (units unreadable, or the alert DB
+                             unreadable), so a partial view can never clear a real row.
   stale-env-audit --fail-on-drift NAME[,NAME...] --vars VAR[,VAR...]
-                                  rotation-tool hook (wq#3215): after a rotation restarts
-                                  its consumer units, it calls this to confirm the restart
-                                  actually took — exit 1 (and print the still-drifting
-                                  names) if any of NAME is still flagged for one of VAR,
-                                  exit 0 otherwise. Reuses the same audit as every other
-                                  mode, so there is exactly one place that decides what
-                                  "drifting" means.
+                             rotation-tool hook (wq#3215/wq#3224): after a rotation
+                             restarts its consumers it calls this to confirm the restart
+                             actually took. Exit 0 only when every NAME was examined and
+                             none of them drifts on a VAR; 1 when one still drifts; 2 when
+                             a NAME could not be examined at all. Reuses the same audit as
+                             every other mode, so there is one place that decides what
+                             "drifting" means.
+
 Run it as root (sudo) to cover units/containers that run under another uid; as lumen it
 only sees lumen-owned processes and says how many it could not read.
 
-Ignored on purpose:
-  - variables whose file value is empty (systemd never exports them, e.g.
-    ssh.service SSHD_OPTS=).
-  - variables reported as `also_set_inline` (set via systemd Environment= AND the file,
-    or docker `-e`/`environment:` AND the env_file) — that's an intentional override, not
-    drift; keep these out of alerts (wq#3215 false-positive doctrine).
-"""
-import json, os, re, shlex, subprocess, sys
+Exit 2 always means INCONCLUSIVE, never clean: nothing was readable, a --fail-on-drift
+NAME was never examined, or the arguments did not parse. "I could not look" must not read
+as "it is fine" (wq#2985).
 
-AQ = "/home/lumen/bin/aq"
-STATE_PATH_DEFAULT = "/home/lumen/state/stale-env-audit-aq.json"
+Unknown and abbreviated flags are a hard error (wq#3245). The d35e196 build parsed argv by
+substring and silently ignored everything it did not know, so wq#3224's rotation gate
+called `--fail-on-drift UNITS --vars VARS` against a build with neither flag and got a
+whole-fleet exit 0 that looked like a passing per-unit confirmation.
+
+Not alerted on, by design:
+  - variables whose file value is empty (systemd and docker never export them, e.g.
+    ssh.service SSHD_OPTS=).
+  - variables also declared inline (systemd Environment=, compose `environment:`): the unit
+    pins its own value, so no restart can make the process take the file's and an aq row
+    for one is a nag nothing can close. Reported under `overrides` instead of `drift`, and
+    still failed by --fail-on-drift, where the operator can act on it.
+  - the compose CLI's own control variables (COMPOSE_PROFILES and friends), which compose
+    resolves at `up` time rather than passing through, so a container's copy disagrees with
+    the .env forever.
+"""
+import argparse
+import calendar
+import json
+import os
+import re
+import shlex
+import sqlite3
+import subprocess
+import sys
+import time
+
+ALERTS_DB = os.environ.get("STALE_ENV_ALERTS_DB", "/home/lumen/agents/alert-queue/alerts.db")
+AQ_BIN = os.environ.get("STALE_ENV_AQ_BIN", "/home/lumen/bin/aq")
+AQ_SOURCE = "stale-env"
+DOCKER_TIMEOUT = 30
+
+# Read by the compose CLI out of the .env file, never meant to reach a container. They do
+# reach it anyway when the service lists that same .env as its env_file, and compose
+# resolves them at `up` time rather than passing them through, so the container's copy
+# disagrees with the file forever. The first live --docker run alerted on COMPOSE_PROFILES
+# for six dify containers (wq#3245); no restart or recreate can close that.
+COMPOSE_CONTROL_VARS = {
+    "COMPOSE_PROFILES", "COMPOSE_PROJECT_NAME", "COMPOSE_FILE", "COMPOSE_ENV_FILE",
+    "COMPOSE_PATH_SEPARATOR", "COMPOSE_CONVERT_WINDOWS_PATHS", "COMPOSE_IGNORE_ORPHANS",
+    "COMPOSE_REMOVE_ORPHANS", "COMPOSE_PARALLEL_LIMIT", "COMPOSE_ANSI", "COMPOSE_STATUS_STDOUT",
+    "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_DEFAULT_PLATFORM",
+}
 
 
 def sh(*a):
@@ -53,7 +86,7 @@ def sh(*a):
 
 
 def parse_envfile(path):
-    """systemd EnvironmentFile / docker env_file subset: KEY=VALUE, # and ; comments, one
+    """systemd EnvironmentFile / compose env_file subset: KEY=VALUE, # and ; comments, one
     layer of quotes. None when the file cannot be read."""
     out = {}
     try:
@@ -74,16 +107,61 @@ def parse_envfile(path):
 
 def find_drift(proc_env, expected):
     """-> (differs, missing) as sorted VARIABLE NAMES. Empty file values are not expected
-    in the process (systemd/docker drop them), so they never count as missing."""
+    in the process (systemd and docker drop them), so they never count as missing."""
     differs = sorted(k for k, v in expected.items() if v != "" and k in proc_env and proc_env[k] != v)
     missing = sorted(k for k, v in expected.items() if v != "" and k not in proc_env)
     return differs, missing
 
 
+def expected_from(paths):
+    """-> (expected, src): merged KEY->value over `paths` in order, plus KEY->file it came
+    from, so a drift line can name the file that moved."""
+    expected, src = {}, {}
+    for f in paths:
+        for k, v in (parse_envfile(f) or {}).items():
+            expected[k], src[k] = v, f
+    return expected, src
+
+
+def split_inline(differs, missing, inline):
+    """-> (alertable differs, alertable missing, inline-overridden names).
+
+    A variable declared inline (systemd `Environment=`, compose `environment:`) AND in the
+    env file is an intentional override of the file, not drift (wq#3215 item 4): the unit
+    pins its own value, so no restart can ever make the process take the file's, and an aq
+    row for one is a nag nothing can close. The first live `--docker` run opened rows for
+    six dify containers on exactly this (wq#3245). They stay visible in the report, and
+    --fail-on-drift still counts them: a rotation whose new value is pinned away by an
+    inline override has not taken and never will, which the operator needs to hear."""
+    overridden = sorted(set(differs + missing) & inline)
+    return ([k for k in differs if k not in inline],
+            [k for k in missing if k not in inline],
+            overridden)
+
+
+def newer_files(src, names, started):
+    """Basenames of the env files that changed after the process started. Empty when the
+    start time is unknown - an unknown start time is not evidence either way."""
+    if started is None:
+        return []
+    out = set()
+    for k in names:
+        try:
+            if os.path.getmtime(src[k]) > started:
+                out.add(os.path.basename(src[k]))
+        except OSError:
+            continue
+    return sorted(out)
+
+
+# --------------------------------------------------------------------------
+# systemd
+# --------------------------------------------------------------------------
+
 def audit_systemd():
-    rows, clean, unreadable = [], 0, 0
+    rows, overrides, clean, unreadable, examined = [], [], 0, 0, []
     units = [l.split()[0] for l in sh("systemctl", "list-units", "--type=service", "--state=running",
-                                     "--no-legend", "--no-pager").splitlines() if l.strip()]
+                                      "--no-legend", "--no-pager").splitlines() if l.strip()]
     for u in units:
         pid = sh("systemctl", "show", u, "-p", "MainPID", "--value").strip()
         if not pid.isdigit() or pid == "0":
@@ -102,42 +180,63 @@ def audit_systemd():
             unreadable += 1
             continue
         proc_env = dict(kv.split("=", 1) for kv in raw.split("\0") if "=" in kv)
-        expected, src = {}, {}
-        for f in efs:
-            d = parse_envfile(f)
-            for k, v in (d or {}).items():
-                expected[k], src[k] = v, f
+        expected, src = expected_from(efs)
         differs, missing = find_drift(proc_env, expected)
+        examined.append(u)
         if not (differs or missing):
             clean += 1
             continue
         try:
-            inline = {kv.split("=", 1)[0] for kv in shlex.split(sh("systemctl", "show", u, "-p", "Environment", "--value")) if "=" in kv}
+            inline = {kv.split("=", 1)[0] for kv in shlex.split(
+                sh("systemctl", "show", u, "-p", "Environment", "--value")) if "=" in kv}
         except ValueError:
             inline = set()
-        rows.append({"kind": "systemd", "unit": u, "differs": differs, "missing": missing,
-                     "file_newer_than_process": sorted({os.path.basename(src[k]) for k in differs + missing
-                                                        if os.path.getmtime(src[k]) > started}),
-                     "also_set_inline": sorted(set(differs) & inline)})
-    return rows, clean, unreadable
+        row = make_row("systemd", u, differs, missing, inline, src, started)
+        (rows if row["differs"] or row["missing"] else overrides).append(row)
+        if not (row["differs"] or row["missing"]):
+            clean += 1
+    return rows, overrides, clean, unreadable, examined
 
 
-def compose_env_files(container):
-    """env_file path(s) docker-compose configured for `container`, discovered from the
-    compose project labels docker itself attaches (com.docker.compose.*) — not a guess at
-    a path, the label IS the source of truth for which project/working_dir produced this
-    container. Falls back to [] (nothing to compare) when the container isn't compose-
-    managed or the compose file no longer declares env_file for that service."""
-    labels_raw = sh("docker", "inspect", "-f", "{{json .Config.Labels}}", container)
+def make_row(kind, name, differs, missing, inline, src, started):
+    differs, missing, overridden = split_inline(differs, missing, inline)
+    return {"kind": kind, "unit": name, "differs": differs, "missing": missing,
+            "file_newer_than_process": newer_files(src, differs + missing + overridden, started),
+            "also_set_inline": overridden}
+
+
+# --------------------------------------------------------------------------
+# docker compose
+# --------------------------------------------------------------------------
+
+def _docker(*a):
+    """-> CompletedProcess, or None when docker itself is missing or wedged."""
     try:
-        labels = json.loads(labels_raw or "{}")
+        return subprocess.run(["docker", *a], capture_output=True, timeout=DOCKER_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def compose_env(container):
+    """-> (env_file paths, inline variable NAMES) that docker-compose configured for
+    `container`, discovered from the compose project labels docker itself attaches
+    (com.docker.compose.*) - not a guess at a path, the label IS the source of truth for
+    which project/working_dir produced this container.
+
+    The inline names come from the compose `environment:` block rather than from
+    .Config.Env, because docker merges env_file INTO Config.Env at create time: treating
+    every Config.Env key as an inline override would label all container drift
+    intentional and alert on none of it."""
+    r = _docker("inspect", "-f", "{{json .Config.Labels}}", container)
+    try:
+        labels = json.loads((r.stdout.decode() if r and r.returncode == 0 else "") or "{}")
     except ValueError:
-        return []
+        return [], set()
     wd = labels.get("com.docker.compose.project.working_dir")
     service = labels.get("com.docker.compose.service")
     cfg_files = labels.get("com.docker.compose.project.config_files")
     if not (wd and service):
-        return []
+        return [], set()
     compose_path = (cfg_files.split(",")[0] if cfg_files else os.path.join(wd, "docker-compose.yml"))
     if not os.path.isabs(compose_path):
         compose_path = os.path.join(wd, compose_path)
@@ -146,170 +245,310 @@ def compose_env_files(container):
         with open(compose_path) as f:
             doc = yaml.safe_load(f) or {}
     except (OSError, ValueError, ImportError):
-        return []
+        return [], set()
     svc = (doc.get("services") or {}).get(service) or {}
+    return _compose_env_files(svc, wd), _compose_inline_names(svc)
+
+
+def _compose_env_files(svc, working_dir):
+    """Absolute env_file paths from one compose service block. `env_file` is a string, a
+    list of strings, or (compose spec 2.24+) a list of {path: ...} mappings."""
     ef = svc.get("env_file")
     if not ef:
         return []
-    ef = [ef] if isinstance(ef, str) else ef
     out = []
-    for e in ef:
-        p = e if isinstance(e, str) else e.get("path", "")
+    for e in ([ef] if isinstance(ef, str) else ef):
+        p = e if isinstance(e, str) else (e or {}).get("path", "")
         if p and not os.path.isabs(p):
-            p = os.path.join(wd, p)
+            p = os.path.join(working_dir, p)
         if p:
             out.append(p)
     return out
 
 
+def _compose_inline_names(svc):
+    """Variable NAMES the compose service sets inline. `environment:` is a mapping or a
+    list of "K=V" / "K" strings."""
+    env = svc.get("environment")
+    if isinstance(env, dict):
+        return set(env)
+    if isinstance(env, list):
+        return {str(e).split("=", 1)[0] for e in env if e}
+    return set()
+
+
+def container_env(name):
+    """Live environment of the container's main process, read the same way as the systemd
+    side: /proc/1/environ in the container's own namespace, which is what PID 1 actually
+    holds. Falls back to `printenv`, which reports the create-time Config.Env instead.
+    None when neither could be read.
+
+    One exec per container, not one per variable: the per-variable form the wq#3215 draft
+    used cost a docker exec per expected key, which does not fit the hourly timer's
+    TimeoutStartSec=120 once a few containers carry a few dozen variables each."""
+    r = _docker("exec", name, "cat", "/proc/1/environ")
+    if r and r.returncode == 0 and r.stdout:
+        raw = r.stdout.decode("utf-8", "replace")
+        return dict(kv.split("=", 1) for kv in raw.split("\0") if "=" in kv)
+    r = _docker("exec", name, "printenv")
+    if not r or r.returncode != 0:
+        return None
+    text = r.stdout.decode("utf-8", "replace")
+    return dict(l.split("=", 1) for l in text.splitlines() if "=" in l)
+
+
+def parse_docker_time(s):
+    """RFC3339 UTC -> epoch seconds, or None. Docker reports .State.StartedAt with nine
+    fractional digits, which datetime.fromisoformat rejects, so take the seconds field and
+    drop the fraction - sub-second precision cannot matter against an env file's mtime."""
+    m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)", (s or "").strip())
+    if not m:
+        return None
+    try:
+        return calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+
+
+def container_started(name):
+    """Epoch seconds the container's current run started, or None when docker did not
+    answer in a shape we can read."""
+    r = _docker("inspect", "-f", "{{.State.StartedAt}}", name)
+    if not r or r.returncode != 0:
+        return None
+    return parse_docker_time(r.stdout.decode(errors="replace"))
+
+
 def audit_docker():
-    rows, clean, unreadable = [], 0, 0
-    names = [l for l in sh("docker", "ps", "--format", "{{.Names}}").splitlines() if l.strip()]
-    for c in names:
-        efs = compose_env_files(c)
+    rows, overrides, clean, unreadable, examined = [], [], 0, 0, []
+    ps = _docker("ps", "--format", "{{.Names}}")
+    if not ps or ps.returncode != 0:
+        return rows, overrides, clean, unreadable, examined
+    for c in [l for l in ps.stdout.decode(errors="replace").splitlines() if l.strip()]:
+        efs, inline = compose_env(c)
         if not efs:
             continue
-        expected, src = {}, {}
-        for f in efs:
-            d = parse_envfile(f)
-            for k, v in (d or {}).items():
-                expected[k], src[k] = v, f
+        expected, src = expected_from(efs)
+        for k in COMPOSE_CONTROL_VARS:
+            expected.pop(k, None)
         if not expected:
             continue
-        proc_env = {}
-        ok = True
-        for k in expected:
-            r = subprocess.run(["docker", "exec", c, "printenv", k], capture_output=True, text=True)
-            if r.returncode == 0:
-                proc_env[k] = r.stdout.rstrip("\n")
-        started = None
-        insp = sh("docker", "inspect", "-f", "{{.State.StartedAt}}", c).strip()
+        proc_env = container_env(c)
+        if proc_env is None:
+            unreadable += 1
+            continue
         differs, missing = find_drift(proc_env, expected)
+        examined.append(c)
         if not (differs or missing):
             clean += 1
             continue
-        env_line = sh("docker", "inspect", "-f", "{{json .Config.Env}}", c)
-        try:
-            inline_env = json.loads(env_line or "[]")
-        except ValueError:
-            inline_env = []
-        inline = {kv.split("=", 1)[0] for kv in inline_env if "=" in kv}
-        rows.append({"kind": "docker", "unit": c, "differs": differs, "missing": missing,
-                     "file_newer_than_process": sorted({os.path.basename(src[k]) for k in differs + missing
-                                                        if os.path.getmtime(src[k]) > 0}),
-                     "also_set_inline": sorted(set(differs) & inline)})
-    return rows, clean, unreadable
+        row = make_row("docker", c, differs, missing, inline, src, container_started(c))
+        (rows if row["differs"] or row["missing"] else overrides).append(row)
+        if not (row["differs"] or row["missing"]):
+            clean += 1
+    return rows, overrides, clean, unreadable, examined
 
 
 def audit(include_docker=False):
-    rows, clean, unreadable = audit_systemd()
+    rows, overrides, clean, unreadable, examined = audit_systemd()
     if include_docker:
-        try:
-            drows, dclean, dunreadable = audit_docker()
-        except OSError:
-            drows, dclean, dunreadable = [], 0, 0
+        drows, doverrides, dclean, dunreadable, dexamined = audit_docker()
         rows += drows
+        overrides += doverrides
         clean += dclean
         unreadable += dunreadable
-    return {"clean": clean, "drift": rows, "unreadable": unreadable}
+        examined += dexamined
+    return {"clean": clean, "drift": rows, "overrides": overrides,
+            "unreadable": unreadable, "examined": sorted(examined)}
+
+
+# --------------------------------------------------------------------------
+# report
+# --------------------------------------------------------------------------
+
+FIX_HINT = {
+    "systemd": "systemctl restart %s, then re-run `sudo stale-env-audit`",
+    "docker": "docker compose up -d --force-recreate %s, then re-run `sudo stale-env-audit --docker`",
+}
+
+
+def print_row(r):
+    print("- [%s] %s" % (r["kind"], r["unit"]))
+    if r["differs"]:
+        print("    process value differs from file: %s" % ", ".join(r["differs"]))
+    if r["missing"]:
+        print("    in file but not in process: %s" % ", ".join(r["missing"]))
+    print("    file newer than process: %s" % (", ".join(r["file_newer_than_process"]) or "no"))
+    if r["also_set_inline"]:
+        print("    set inline too, so the file does not win (not drift): %s"
+              % ", ".join(r["also_set_inline"]))
 
 
 def print_report(res):
-    print("stale-env-audit: %d clean, %d with drift, %d not readable (other uid; run with sudo)"
-          % (res["clean"], len(res["drift"]), res["unreadable"]))
+    print("stale-env-audit: %d clean, %d with drift, %d inline-override only, "
+          "%d not readable (other uid; run with sudo)"
+          % (res["clean"], len(res["drift"]), len(res["overrides"]), res["unreadable"]))
     for r in res["drift"]:
-        print("- [%s] %s" % (r["kind"], r["unit"]))
-        if r["differs"]:
-            print("    process value differs from file: %s" % ", ".join(r["differs"]))
-        if r["missing"]:
-            print("    in file but not in process: %s" % ", ".join(r["missing"]))
-        print("    file newer than process: %s" % (", ".join(r["file_newer_than_process"]) or "no"))
-        if r["also_set_inline"]:
-            print("    also set via Environment= (may be an intentional override): %s" % ", ".join(r["also_set_inline"]))
+        print_row(r)
+    if res["overrides"]:
+        print("not drift, listed for completeness (every mismatch is pinned inline by the "
+              "unit/compose service, so no restart can change it):")
+        for r in res["overrides"]:
+            print_row(r)
 
 
-def row_key(r):
-    return "%s:%s" % (r["unit"], ",".join(sorted(r["differs"] + r["missing"])))
+# --------------------------------------------------------------------------
+# alert queue (--aq)
+# --------------------------------------------------------------------------
+
+def plan_aq(drift, open_rows, examined):
+    """Pure: which aq rows to add and which to resolve. `open_rows` is {unit: aq id} for open
+    stale-env rows.
+
+    A row is resolved only when THIS run examined that unit and found it not drifting -
+    per-unit evidence, not a fleet-wide "scan looked complete" flag. The d35e196 rule
+    required `unreadable == 0` across the whole fleet, and a single short-lived unit whose
+    /proc vanished mid-scan was enough to block every resolution forever: the first live
+    run under wq#3245 reported `1 not readable` and resolved 0 of 7 rows it had itself
+    obsoleted. Absence of evidence still resolves nothing - a unit missing from `examined`
+    keeps its row."""
+    drifting = {r["unit"] for r in drift}
+    examined = set(examined)
+    to_add = list(drift)
+    to_resolve = [(i, k) for k, i in sorted(open_rows.items())
+                  if k in examined and k not in drifting]
+    return to_add, to_resolve
 
 
-def load_state(path):
+def open_aq_rows():
+    """{unit: aq id} of open stale-env rows, or None when the alert DB cannot be read."""
     try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {"open_keys": []}
+        c = sqlite3.connect("file:%s?mode=ro" % ALERTS_DB, uri=True, timeout=10)
+        try:
+            return {k: i for i, k in c.execute(
+                "select id, key from alerts where source=? and status='open'", (AQ_SOURCE,))}
+        finally:
+            c.close()
+    except sqlite3.Error:
+        return None
 
 
-def save_state(path, open_keys):
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump({"open_keys": sorted(open_keys)}, f, indent=2, sort_keys=True)
+def _aq(*args):
+    cmd = [AQ_BIN, *args]
+    if os.geteuid() == 0:   # never let root create root-owned files inside the alert-queue dir
+        cmd = ["runuser", "-u", "lumen", "--"] + cmd
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
 
-def raise_aq(res, state_path):
-    """One aq row per drifting unit/container, dedup on unit+variables (a different set of
-    variables drifting on the same unit is a distinct key, so it doesn't get swallowed by
-    an already-open row for a different variable). Resolve any previously-open key that is
-    clean this run. `aq add`/`aq resolve-key` dedup themselves, so this is safe to call
-    every hour even when nothing changed."""
-    prev = set(load_state(state_path).get("open_keys", []))
-    now_keys = set()
-    for r in res["drift"]:
-        k = row_key(r)
-        now_keys.add(k)
-        title = "%s drift: %s" % (r["unit"], ", ".join(r["differs"] + r["missing"]))
-        msg = ("[%s] process value differs from EnvironmentFile/env_file for: %s. "
-               "file newer than process: %s.") % (
-                   r["kind"], ", ".join(r["differs"] + r["missing"]),
-                   ", ".join(r["file_newer_than_process"]) or "no")
-        subprocess.run([AQ, "add", "stale-env-audit", k, title, msg], capture_output=True)
-    for k in prev - now_keys:
-        subprocess.run([AQ, "resolve-key", "stale-env-audit", k], capture_output=True)
-    save_state(state_path, now_keys)
-    return sorted(now_keys)
+def sync_aq(res):
+    """-> (added, resolved). Names only, never values."""
+    rows = open_aq_rows()
+    if rows is None:      # alert DB unreadable: this run has no idea what is open, so it
+        rows, examined = {}, []        # may add but must not resolve anything
+    else:
+        examined = res["examined"]
+    to_add, to_resolve = plan_aq(res["drift"], rows, examined)
+    for r in to_add:
+        names = ", ".join(r["differs"] + r["missing"])
+        _aq("add", AQ_SOURCE, r["unit"],
+            "stale env: %s runs on values its env file no longer has" % r["unit"],
+            "variables: %s. file newer than process: %s. Fix: %s. (wq#3211/wq#3215)"
+            % (names, ", ".join(r["file_newer_than_process"]) or "no",
+               FIX_HINT[r["kind"]] % r["unit"]))
+    for i, k in to_resolve:
+        _aq("resolve", str(i), "stale-env-audit: %s is clean now" % k)
+    return len(to_add), len(to_resolve)
 
+
+# --------------------------------------------------------------------------
+# rotation hook (--fail-on-drift)
+# --------------------------------------------------------------------------
 
 def fail_on_drift(res, names, variables):
+    """-> (still_drifting rows, unexamined names). A NAME this audit never looked at is
+    NOT a pass: a typo'd unit, a unit that is not running, and a unit that feeds itself
+    the env file without an EnvironmentFile= all land here, and each one is a rotation
+    the tool cannot vouch for.
+
+    Unlike the aq path this also looks at `overrides`: a rotated variable the unit pins
+    inline is not fleet-alert drift (nothing can close that row) but it IS a rotation that
+    did not take, and the operator running the rotation is the one person who can fix it."""
     names, variables = set(names), set(variables)
-    bad = [r for r in res["drift"] if r["unit"] in names and (set(r["differs"] + r["missing"]) & variables)]
-    return bad
+    bad = [r for r in res["drift"] + res["overrides"]
+           if r["unit"] in names
+           and (set(r["differs"] + r["missing"] + r["also_set_inline"]) & variables)]
+    return bad, sorted(names - set(res["examined"]))
+
+
+def run_fail_on_drift(res, names, variables):
+    bad, unexamined = fail_on_drift(res, names, variables)
+    if bad:
+        print("stale-env-audit --fail-on-drift: still drifting after restart: %s"
+              % ", ".join("%s(%s)" % (r["unit"], ",".join(
+                  r["differs"] + r["missing"] + r["also_set_inline"])) for r in bad))
+    if unexamined:
+        print("stale-env-audit --fail-on-drift: INCONCLUSIVE, never examined: %s "
+              "(not running, or no EnvironmentFile= to compare against)" % ", ".join(unexamined))
+    if bad:
+        return 1
+    if unexamined:
+        return 2
+    print("stale-env-audit --fail-on-drift: clean (%d name(s) examined)" % len(names))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# cli
+# --------------------------------------------------------------------------
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="stale-env-audit", allow_abbrev=False,
+        description=__doc__.split("\n\n")[0].replace("\n", " "),
+        epilog="Exit 0 clean, 1 drift, 2 inconclusive. See the module docstring for the "
+               "full contract. Prints variable NAMES, never values.")
+    p.add_argument("--json", action="store_true", help="machine-readable report on stdout")
+    p.add_argument("--docker", action="store_true",
+                   help="also audit running compose containers against their env_file(s)")
+    p.add_argument("--aq", action="store_true",
+                   help="open/resolve one alert-queue row per drifting unit (hourly timer mode)")
+    p.add_argument("--fail-on-drift", metavar="NAME[,NAME...]",
+                   help="rotation hook: confirm these units/containers picked up --vars")
+    p.add_argument("--vars", metavar="VAR[,VAR...]",
+                   help="variable names --fail-on-drift checks (required with it)")
+    return p
+
+
+def parse_args(argv):
+    p = build_parser()
+    args = p.parse_args(argv)
+    if bool(args.fail_on_drift) != bool(args.vars):
+        p.error("--fail-on-drift and --vars go together: naming units without variables "
+                "(or the reverse) cannot decide whether a rotation took")
+    if args.fail_on_drift and args.aq:
+        p.error("--fail-on-drift is a scoped read for one rotation; it must not rewrite the "
+                "fleet-wide alert queue. Run --aq separately.")
+    return args
+
+
+def split_list(s):
+    return [x.strip() for x in s.split(",") if x.strip()]
 
 
 def main(argv):
-    include_docker = "--docker" in argv
-    res = audit(include_docker)
+    args = parse_args(argv)
+    res = audit(args.docker)
 
-    if "--fail-on-drift" in argv:
-        i = argv.index("--fail-on-drift")
-        names = argv[i + 1].split(",")
-        vi = argv.index("--vars")
-        variables = argv[vi + 1].split(",")
-        bad = fail_on_drift(res, names, variables)
-        if bad:
-            print("stale-env-audit --fail-on-drift: still drifting after restart: %s"
-                  % ", ".join("%s(%s)" % (r["unit"], ",".join(r["differs"] + r["missing"])) for r in bad))
-            return 1
-        print("stale-env-audit --fail-on-drift: clean")
-        return 0
+    if args.fail_on_drift:
+        return run_fail_on_drift(res, split_list(args.fail_on_drift), split_list(args.vars))
 
-    if "--raise-aq" in argv:
-        state_path = STATE_PATH_DEFAULT
-        if "--state" in argv:
-            state_path = argv[argv.index("--state") + 1]
-        raised = raise_aq(res, state_path)
-        if "--json" in argv:
-            print(json.dumps({**res, "aq_open_keys": raised}, indent=2))
-        else:
-            print_report(res)
-            print("aq open keys: %s" % (", ".join(raised) or "none"))
-        return 1 if res["drift"] else 0
-
-    if "--json" in argv:
+    if args.json:
         print(json.dumps(res, indent=2))
     else:
         print_report(res)
+    if args.aq:
+        added, resolved = sync_aq(res)
+        print("aq: %d row(s) opened/refreshed, %d resolved" % (added, resolved))
     if res["clean"] == 0 and not res["drift"]:
         return 2
     return 1 if res["drift"] else 0

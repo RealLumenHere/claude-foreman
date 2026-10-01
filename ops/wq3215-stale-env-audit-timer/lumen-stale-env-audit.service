@@ -7,7 +7,10 @@ After=local-fs.target
 Type=oneshot
 # root on purpose: /proc/<pid>/environ of units under other uids is unreadable otherwise. The tool
 # calls aq through `runuser -u lumen`, so nothing root-owned appears in the alert-queue dir.
-ExecStart=/home/lumen/bin/stale-env-audit --aq
+# --docker added by wq#3245: compose containers only pick up an env_file edit on recreate, so
+# they drift exactly like an unrestarted unit. One `docker exec cat /proc/1/environ` per
+# container, which is why this still fits TimeoutStartSec below.
+ExecStart=/home/lumen/bin/stale-env-audit --aq --docker
 # 1 = drift found (an aq row is open, that is the tool working); 2 = nothing readable (a real failure)
 SuccessExitStatus=0 1
 ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n

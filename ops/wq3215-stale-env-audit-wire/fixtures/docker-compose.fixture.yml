@@ -1,0 +1,30 @@
+# Committed fixture for test_stale_env_audit.py — a pinned, immutable stand-in for the
+# compose files stale-env-audit reads through the com.docker.compose.* labels. Covers the
+# three env_file shapes the compose spec allows plus both `environment:` shapes, so the
+# parser is exercised against real YAML rather than hand-built dicts.
+services:
+  envfile-string:
+    image: example/one
+    env_file: .env
+    environment:
+      INLINE_MAPPING_VAR: set-inline
+
+  envfile-list:
+    image: example/two
+    env_file:
+      - .env
+      - /etc/absolute/extra.env
+    environment:
+      - INLINE_LIST_VAR=set-inline
+      - INLINE_LIST_PASSTHROUGH
+
+  envfile-mappings:
+    image: example/three
+    env_file:
+      - path: relative/sub.env
+      - path: /etc/absolute/mapped.env
+
+  no-envfile:
+    image: example/four
+    environment:
+      ONLY_INLINE: yes

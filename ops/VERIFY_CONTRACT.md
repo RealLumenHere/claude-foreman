@@ -31,10 +31,22 @@ if [ "${1:-}" = --verify ]; then
   venabled   foo.timer
   vactive    foo.timer
   vcontains  /home/lumen/bin/unit-drift "foo-hook"            # an edit, not a copy
+  vflag      /home/lumen/bin/bar --fail-on-drift              # a flag the payload CALLS
   vdone
 fi
 # ... install steps ...
 ```
+
+### Bundles whose payload calls another bundle's binary
+
+Byte-matching your own files proves nothing about a tool you shell out to. wq#3228 found
+`ops/wq1747-litellm-key-rotation` gating a rotation on
+`stale-env-audit --fail-on-drift ... --vars ...` against an installed build that implemented
+neither flag — and because that build scanned argv by substring, it ignored both and exited
+0 on a whole-fleet audit. A gate that cannot fail. `vflag BIN FLAG` asks the callee's own
+`--help` what it implements; a build too old to have the flag is a MISS, not an ERR.
+`wq1747-litellm-key-rotation` and `wq3215-stale-env-audit-timer` are the worked examples
+(wq#3245). A bundle that installs nothing at all still needs a handler for this reason.
 
 Helpers are in `ops/_verify.sh`. Reference bundles: `wq900-primary-tree-guard`
 (units + enabled + active) and `wq1658-cron-stamp-dropin` (binary + a patched file).

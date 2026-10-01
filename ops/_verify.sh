@@ -60,6 +60,24 @@ vcontains() {
   grep -qE -- "$re" "$f" || _vmiss "marker /$re/ missing in $f"
 }
 
+# vflag BIN FLAG — the installed BIN's own `--help` advertises FLAG.
+# For a bundle whose payload CALLS another binary with a flag: wq#3228 found
+# ops/wq1747-litellm-key-rotation gating a rotation on
+# `stale-env-audit --fail-on-drift`, against an installed build that implemented neither
+# flag. It scanned argv by substring, so it ignored both and exited 0 on a whole-fleet
+# audit — a gate that could not fail. A vfile on the caller cannot catch that; only asking
+# the callee what it implements can. Read-only: `--help` neither writes nor needs sudo.
+# A non-zero --help is a MISS, not an ERR: a build old enough to lack the flag is usually
+# also old enough to lack --help, and that is an answer ("not deployed"), not a failure to
+# look. Only an unrunnable binary is ERR.
+vflag() {
+  local bin="$1" flag="$2" out
+  [ -x "$bin" ] || { _vmiss "absent or not executable: $bin"; return; }
+  out="$("$bin" --help 2>&1)" || true
+  if [ -z "$out" ]; then echo "ERR $bin --help produced nothing"; _V_ERR=1; return; fi
+  case "$out" in *"$flag"*) ;; *) _vmiss "$bin --help does not advertise $flag";; esac
+}
+
 # --- other fleet nodes (wq#2985) --------------------------------------------
 # A bundle that installs onto Anubis, Bes, Sia or the MacPro6,1 group has no
 # local target at all, so vfile/vactive can only ever report it absent. wq#1732
