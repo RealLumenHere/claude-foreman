@@ -156,6 +156,7 @@ def test_default_providers_excludes_cloudflare():
     assert "cloudflare" not in pw.DEFAULT_PROVIDERS
     assert "tailscale" in pw.DEFAULT_PROVIDERS
     assert "pikvm" in pw.DEFAULT_PROVIDERS
+    assert "anthropic" in pw.DEFAULT_PROVIDERS
 
 
 def test_every_source_has_a_known_type_and_provider():

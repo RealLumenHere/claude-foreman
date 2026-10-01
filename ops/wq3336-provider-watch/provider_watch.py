@@ -16,6 +16,12 @@ Providers/sources configured (see SOURCES below; verified live 2026-10-01):
   * tailscale  — blog RSS (tailscale.com/blog/index.xml) + GitHub releases
   * ollama     — GitHub releases
   * litellm    — GitHub releases + PyPI
+  * anthropic  — GitHub releases + npm, both on anthropics/claude-code /
+    @anthropic-ai/claude-code (the harness this fleet itself runs on). The API/platform
+    changelog (platform.claude.com/docs/en/release-notes/overview) was considered and
+    rejected: it's a single evolving URL with no per-entry pages, so a sitemap <loc> diff
+    (which only notices new URLs, not edits to an existing one) would never see a new
+    entry land — verified 2026-10-01 via `curl -s platform.claude.com/sitemap.xml`.
   * cerebras   — sitemap.xml filtered to /blog/ (cerebras.ai has no RSS feed — verified
     via fleet-search, confirmed by a live 404 on every common RSS path)
   * deepseek   — sitemap.xml filtered to /news/ (api-docs.deepseek.com has no RSS feed
@@ -110,6 +116,9 @@ SOURCES = [
 
     {"provider": "litellm", "type": "github_releases", "repo": "BerriAI/litellm"},
     {"provider": "litellm", "type": "pypi", "pkg": "litellm"},
+
+    {"provider": "anthropic", "type": "github_releases", "repo": "anthropics/claude-code"},
+    {"provider": "anthropic", "type": "npm", "pkg": "@anthropic-ai/claude-code"},
 
     {"provider": "cerebras", "type": "sitemap", "label": "cerebras-blog",
      "url": "https://www.cerebras.ai/sitemap.xml", "path_filter": "/blog/"},

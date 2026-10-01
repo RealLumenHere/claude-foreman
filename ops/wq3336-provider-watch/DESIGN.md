@@ -7,8 +7,8 @@ MCP server stack (workers-oauth-provider, McpAgent, CF Access SaaS MCP) for mont
 while hand-rolling a broken OAuth implementation. The same failure mode applies to
 every other provider we build against: a feature ships, we don't hear about it, and
 weeks later we discover we hand-rolled something that already existed. wq#3336 asks
-for the general case: Cloudflare, Tailscale, Ollama, LiteLLM, Cerebras, DeepSeek,
-SambaNova, Mistral, OpenRouter, Langfuse, PiKVM.
+for the general case: Cloudflare, Tailscale, Ollama, LiteLLM, Anthropic, Cerebras,
+DeepSeek, SambaNova, Mistral, OpenRouter, Langfuse, PiKVM.
 
 ## What shipped
 
@@ -55,6 +55,16 @@ guess a path/URL, verify it"):
   entries"). The guessed `/changelog/rss.xml` and `/rss.xml` paths both return 200
   `text/html` — an SPA shell, not a feed — so checking content-type/content, not just
   status code, mattered here.
+- **Anthropic** — named in the ticket title but not in its provider list, and missing
+  from the first cut of this change; added 2026-10-01. Watched via GitHub releases
+  (`anthropics/claude-code`) + npm (`@anthropic-ai/claude-code`) — the CLI/harness this
+  fleet itself runs on, both curl-verified live (200, real latest-release/version data).
+  The API/platform changelog (`platform.claude.com/docs/en/release-notes/overview`) was
+  considered and rejected: `sitemap.xml` lists it as one static `<loc>`, and this
+  script's sitemap source type only notices *new* URLs appearing, never edits to an
+  existing page's content — a new changelog entry landing on that same URL would never
+  be seen. GitHub releases + npm give the same "new feature shipped" signal with a
+  dedupable version/tag instead.
 - **Langfuse** — GitHub releases (`langfuse/langfuse`, has Releases).
 - **PiKVM** — the ticket says "PiKVM/kvmd-armbian". **That repo does not exist.**
   `github.com/pikvm` has 13 repos (`pi-builder`, `kvmd`, `ustreamer`, `os`,
