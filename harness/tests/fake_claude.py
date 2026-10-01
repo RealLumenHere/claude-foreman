@@ -21,6 +21,11 @@ import time
 _HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GUARD_SH = os.environ.get("FAKE_CLAUDE_GUARD_SH", os.path.join(_HARNESS_DIR, "guard.sh"))
 WQ_BIN = os.environ.get("FAKE_CLAUDE_WQ_BIN", "/home/lumen/bin/wq")
+# wq#3279: how far ahead the "rejected_limit_near" reset lands. fworker only resumes while
+# resets_at is still ahead when it checks, and that check runs after the child exits and
+# after bookkeeping, so on a loaded box a 2s window could already be past. Default leaves
+# slack; it is still short enough that the resume path sleeps, not skips.
+NEAR_LIMIT_RESET_S = float(os.environ.get("FAKE_CLAUDE_LIMIT_RESET_S", "7"))
 
 
 def emit(frame):
@@ -206,7 +211,7 @@ def main():
             emit({"type": "result", "subtype": "success", "is_error": False})
         else:
             emit({"type": "rate_limit_event", "status": "rejected", "rateLimitType": "five_hour",
-                  "resetsAt": time.time() + 2, "utilization": 1.0})
+                  "resetsAt": time.time() + NEAR_LIMIT_RESET_S, "utilization": 1.0})
             emit({"type": "result", "subtype": "error_during_execution", "is_error": True,
                   "errors": ["usage limit reached"]})
 

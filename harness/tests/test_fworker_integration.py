@@ -63,6 +63,10 @@ def make_scratch_env(tmp_path, ticket, scenario, extra=None):
         "FOREMAN_WQ_BIN": WQ_BIN,
         "FOREMAN_LUMEN_PR_BIN": "/bin/false",  # unreachable on purpose; SUCCESS path shouldn't need it
         "FOREMAN_NTFY_BIN": "/bin/true",
+        # wq#3279: fworker emits a Langfuse span per attempt (5s network timeout). A path
+        # with no keys makes it log-only, so the suite makes no live emit and the emit's
+        # latency cannot eat the fake limit-reset window.
+        "FOREMAN_LANGFUSE_ENV": str(tmp_path / "no-langfuse.env"),
         "FAKE_CLAUDE_SCENARIO": scenario,
         "FAKE_CLAUDE_TICKET": str(ticket),
         "FAKE_CLAUDE_GUARD_SH": os.path.join(HARNESS_DIR, "guard.sh"),
@@ -519,6 +523,23 @@ def test_resume_after_near_term_limit_reuses_worktree_and_closes(tmp_path):
     # same worktree reused across the LIMIT->resume boundary, no attempt-2 worktree.
     assert os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a1"))
     assert not os.path.isdir(os.path.join(worktrees_root, f"wq{ticket_id}-a2"))
+
+
+def test_wq3279_scratch_env_makes_no_live_langfuse_emit(tmp_path):
+    env, *_ = make_scratch_env(tmp_path, 0, "success")
+    assert env["FOREMAN_LANGFUSE_ENV"] == str(tmp_path / "no-langfuse.env")
+    assert not os.path.exists(env["FOREMAN_LANGFUSE_ENV"])
+
+
+def test_wq3279_the_near_limit_fake_leaves_slack_before_the_reset():
+    """The reset must be far enough ahead to survive a loaded box (the old 2s was not),
+    and near enough that fworker still sleeps rather than skipping the resume branch."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "fake_claude_wq3279", os.path.join(HARNESS_DIR, "tests", "fake_claude.py"))
+    fc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fc)
+    assert 5 <= fc.NEAR_LIMIT_RESET_S <= 30
 
 
 def test_worktree_collision_from_prior_crashed_attempt_is_adopted(tmp_path):
