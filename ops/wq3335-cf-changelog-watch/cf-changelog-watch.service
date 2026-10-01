@@ -1,0 +1,10 @@
+[Unit]
+Description=cf-changelog-watch — poll CF blog/changelog RSS + watched npm packages, file wq findings (wq#3335)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/home/lumen/bin/cf-changelog-watch run
+Nice=10
