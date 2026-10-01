@@ -11,6 +11,16 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DST=/home/lumen/bin/provider-watch
 UNIT_DIR=/etc/systemd/system
 
+if [ "${1:-}" = --verify ]; then
+  . "$HERE/../_verify.sh"
+  vfile      "$HERE/provider_watch.py" "$BIN_DST"
+  vunit_file "$HERE/provider-watch.service" "$UNIT_DIR/provider-watch.service"
+  vunit_file "$HERE/provider-watch.timer" "$UNIT_DIR/provider-watch.timer"
+  venabled   provider-watch.timer
+  vactive    provider-watch.timer
+  vdone
+fi
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "install.sh: must run as root (writes $UNIT_DIR)" >&2
   exit 1
