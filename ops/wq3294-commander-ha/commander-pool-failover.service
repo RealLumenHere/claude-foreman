@@ -1,0 +1,24 @@
+# wq#3294 item B — health/failover loop for the Commander backend pool.
+# Installs on BES (and later each P1 Pro), never only on Lumen: the driver must
+# survive the death of the node it fails away from. Paths are Bes-homed, same
+# convention as ops/wq2608-dc-endpoint-bes-a1/dc-gateway.service.
+[Unit]
+Description=Commander pool health-check/failover loop (wq#3294)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bes
+ExecStart=/usr/bin/python3 /home/bes/bin/pool_failover.py \
+  --config /home/bes/etc/commander-pool.json \
+  --state /home/bes/var/commander-pool-state.json
+Restart=always
+RestartSec=10
+# Loop is tiny; clamp it so it can never pressure the shared 16G box (wq#2608 note).
+MemoryHigh=128M
+MemoryMax=256M
+Nice=0
+
+[Install]
+WantedBy=multi-user.target
