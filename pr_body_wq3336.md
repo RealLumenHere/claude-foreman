@@ -29,10 +29,10 @@ wq#3335's design, applied generically across source types instead of hardcoded t
 RSS+npm.
 
 Every source URL was curl-verified live before being hardcoded — several providers
-(Cerebras, DeepSeek, OpenRouter) have no RSS feed at the paths you'd guess, or return
-a misleading 200 `text/html` SPA shell for any path including wrong ones, so status
-code alone wasn't enough; content-type and a content peek caught it. Full citations
-in `DESIGN.md`. The ticket named `PiKVM/kvmd-armbian`, which doesn't exist on GitHub
+(Cerebras, DeepSeek, OpenRouter) have no RSS feed at the obvious guessed paths, or
+return a misleading 200 `text/html` SPA shell for any path including wrong ones, so
+status code alone wasn't enough; content-type and a content peek caught it. Full
+citations in `DESIGN.md`. The ticket named `PiKVM/kvmd-armbian`, which doesn't exist on GitHub
 (`github.com/pikvm`'s 13 repos don't include it) — corrected to `pikvm/kvmd`,
 documented in `DESIGN.md` and `kb/ISSUE-LOG.md` row #1145.
 
