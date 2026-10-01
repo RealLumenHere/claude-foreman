@@ -15,7 +15,7 @@ Probe discipline (2026-07-10 Ma'at lesson): a model is DOWN only after
 2 consecutive failed probes in one run (retry), never on a single miss.
 gemini-flash: 250 RPD cap -> probed at most hourly.
 """
-import json, os, time, urllib.request, urllib.parse
+import json, os, subprocess, time, urllib.request, urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -70,6 +70,19 @@ TIMEOUT = 30
 # (warm probe is ~3.6s; only cold loads under contention blow the budget).
 LOCAL_TIMEOUT = 90
 NEVER_PROBE = {"messenger-chat", "messenger-re"}  # bug #22249 — documented above
+
+# wq#3287 (2026-10-01): a planned litellm recreate pages aq 4x (one row per rung)
+# because the old retry gap (3s) was far shorter than the ~30s a recreate takes
+# to come back healthy — both probes landed inside the outage window. Two
+# independent mitigations, either one would have caught this incident:
+#   1. widen the in-run retry gap to outlast a routine recreate.
+#   2. while an operator holds the `litellm` slock (doing exactly that recreate),
+#      a still-failing probe is maintenance, not a verdict — carry forward the
+#      previous state instead of alerting. Recovery still auto-resolves the aq
+#      row on the next clean pass (existing aq_clear edge, unchanged).
+RETRY_DELAY_S = int(os.environ.get("MODEL_WATCHDOG_RETRY_DELAY_S", "30"))
+SLOCK_BIN = os.environ.get("MODEL_WATCHDOG_SLOCK_BIN", "/home/lumen/bin/slock")
+MAINTENANCE_SCOPE = "litellm"
 
 # wq#898 (2026-08-23): Isis (qwen36-local, qwen35moe arch) is a single-decode-slot
 # box — `ollama ps`/journal confirm llama-server always launches with `-np 1`
@@ -186,6 +199,18 @@ def local_alive(url):
     except Exception:
         return False
 
+def slock_held(scope=MAINTENANCE_SCOPE):
+    """True while an operator holds the named slock (e.g. a planned litellm
+    recreate) — `slock who` never piped per wq#532; we read stdout, not the
+    exit code, since `who` exits 0 whether or not a lock exists."""
+    try:
+        r = subprocess.run([SLOCK_BIN, "who", scope], capture_output=True,
+                           text=True, timeout=10)
+        return "(no active locks)" not in r.stdout
+    except Exception as e:
+        print(f"  slock who {scope} unreadable ({str(e)[:100]}) — assuming not held")
+        return False
+
 def push_gatus(model, ok, detail=""):
     try:
         q = f"success={'true' if ok else 'false'}"
@@ -288,8 +313,16 @@ def run():
             continue
         ok, err = probe(model, key)
         if not ok:                        # retry once — no single-miss DOWNs
-            time.sleep(3)
+            time.sleep(RETRY_DELAY_S)      # wq#3287: outlast a routine recreate
             ok, err = probe(model, key)
+        if not ok and slock_held():
+            # wq#3287: operator is mid-maintenance on litellm (e.g. a planned
+            # recreate) — a still-failing probe here is expected, not a verdict.
+            # Carry forward the previous state; recovery still auto-clears on
+            # the next clean pass via the existing aq_clear edge below.
+            was_up = prev.get(model, True)
+            print(f"  {model}: SKIPPED (litellm slock held) — {err}")
+            ok, err = was_up, f"SKIPPED (litellm maintenance): {err}"
         if not ok and model in LOCAL_LIVENESS_URL and local_alive(LOCAL_LIVENESS_URL[model]):
             # wq#898: serving process answers its liveness URL — the generate probe just
             # queued behind production on the single decode slot. Busy, not

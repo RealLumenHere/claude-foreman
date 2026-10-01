@@ -50,6 +50,9 @@ class Harness:
         monkeypatch.setattr(wd, "aq_clear", lambda m, why="recovered", key=None:
                             self.cleared.append(key or f"model-{m}"))
         monkeypatch.setattr(wd, "aq_drift", lambda d: self.drifts.append(list(d)))
+        monkeypatch.setattr(wd, "slock_held", lambda scope=wd.MAINTENANCE_SCOPE: False)
+        self.slept = []
+        monkeypatch.setattr(wd.time, "sleep", lambda s: self.slept.append(s))
 
     def state(self):
         return json.loads(wd.STATE.read_text())
@@ -115,3 +118,49 @@ def test_config_derived_extra_down_pages_via_aq(monkeypatch, tmp_path):
     monkeypatch.setattr(wd.time, "sleep", lambda s: None)  # skip the retry backoff
     wd.run()
     assert "kimik3-0.4b-local" in h.events
+
+
+def test_retry_waits_the_widened_gap_before_a_verdict(monkeypatch, tmp_path):
+    """wq#3287: a planned litellm recreate pages 4x because the old 3s retry gap
+    landed the 2nd probe inside the recreate's own outage window. The in-run
+    retry must wait RETRY_DELAY_S (~30s), not a few seconds, before alerting."""
+    h = Harness(monkeypatch, tmp_path, live={"a"}, roster=["a"])
+    calls = []
+    monkeypatch.setattr(wd, "probe", lambda m, k: (calls.append(m) or (False, "down")))
+    wd.run()
+    assert h.slept == [wd.RETRY_DELAY_S]
+    assert wd.RETRY_DELAY_S >= 30
+    assert h.events == ["a"]                       # still down after the retry: real DOWN
+
+
+def test_maintenance_slock_held_skips_alert_and_carries_state(monkeypatch, tmp_path):
+    """wq#3287 fix 2: a still-failing probe while the `litellm` slock is held
+    (operator mid-recreate) is maintenance, not a verdict — no aq row, previous
+    up-state carried forward so a later clean pass still reads as a recovery
+    edge if the state had ever actually flipped."""
+    prev = {"up": {"cerebras-llama": True}, "last_probe": {}}
+    h = Harness(monkeypatch, tmp_path, live={"cerebras-llama"},
+                roster=["cerebras-llama"], prev=prev)
+    monkeypatch.setattr(wd, "probe", lambda m, k: (False, "connection refused"))
+    monkeypatch.setattr(wd, "slock_held", lambda scope=wd.MAINTENANCE_SCOPE: True)
+    wd.run()
+    assert h.events == []                          # no page during maintenance
+    assert h.state()["up"]["cerebras-llama"] is True  # prior state carried forward
+
+
+def test_slock_held_reads_slock_who_output(monkeypatch):
+    class FakeResult:
+        def __init__(self, stdout):
+            self.stdout = stdout
+    monkeypatch.setattr(wd.subprocess, "run",
+                        lambda *a, **kw: FakeResult("(no active locks)\n"))
+    assert wd.slock_held("litellm") is False
+    monkeypatch.setattr(wd.subprocess, "run",
+                        lambda *a, **kw: FakeResult(
+                            "litellm  some-holder  acquired ...Z expires ...Z FENCE=1\n"))
+    assert wd.slock_held("litellm") is True
+
+    def _raise(*a, **kw):
+        raise OSError("boom")
+    monkeypatch.setattr(wd.subprocess, "run", _raise)
+    assert wd.slock_held("litellm") is False        # fail-soft: don't mask real downs
