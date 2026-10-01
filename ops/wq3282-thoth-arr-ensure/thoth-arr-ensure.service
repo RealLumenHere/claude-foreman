@@ -1,0 +1,10 @@
+[Unit]
+Description=Start the arr stack again if wg0 restarted and stopped it (wq#3282)
+Documentation=file:///home/lumen/foreman/ops/wq3282-thoth-arr-ensure/README.md
+After=wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/thoth-arr-ensure
+TimeoutStartSec=240
+Nice=10

@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 5 min: keep the thoth arr stack up while wg0 is up (wq#3282)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# thoth-arr-ensure (wq#3282). Start the arr stack again after a wg0 restart.
+#
+# WHY: prowlarr/sonarr/radarr/bazarr/qbittorrent-nox are BindsTo=wg-quick@wg0 so they cannot
+# leak traffic outside the VPN. systemd stops a BindsTo unit when wg0 stops and never starts it
+# again when wg0 returns, and Restart=on-failure does not fire on a clean stop. The 2026-09-08
+# tailnet-route fix restarted wg0 and the stack sat down for three weeks.
+#
+# This script only ever STARTS units. It never stops or restarts wg-quick@wg0 (thoth's tailnet
+# routing hangs off its PostUp rules, see lumen_state thoth tailnet_routing).
+#   - wg0 not active            -> do nothing (the kill-switch is doing its job)
+#   - unit not enabled          -> do nothing (someone disabled it on purpose)
+#   - /etc/thoth-arr-ensure.pause exists -> do nothing (maintenance escape hatch)
+# Exit 1 if any start failed, so the oneshot shows up as failed in the node sweep.
+set -u
+SYSTEMCTL=${TA_SYSTEMCTL:-systemctl}
+PAUSE_FILE=${TA_PAUSE_FILE:-/etc/thoth-arr-ensure.pause}
+GATE=${TA_GATE:-wg-quick@wg0}
+UNITS=${TA_UNITS:-"prowlarr sonarr radarr bazarr qbittorrent-nox"}
+
+if [ -e "$PAUSE_FILE" ]; then echo "paused by $PAUSE_FILE"; exit 0; fi
+gate_state=$("$SYSTEMCTL" is-active "$GATE" 2>/dev/null || true)
+if [ "$gate_state" != active ]; then
+  echo "$GATE is '$gate_state', leaving the arr stack alone"; exit 0
+fi
+bad=0
+for u in $UNITS; do
+  en=$("$SYSTEMCTL" is-enabled "$u" 2>/dev/null || true)
+  [ "$en" = enabled ] || continue
+  st=$("$SYSTEMCTL" is-active "$u" 2>/dev/null || true)
+  case "$st" in active|activating|reloading|deactivating) continue ;; esac
+  echo "WARN $u is '$st' while $GATE is active, starting it"
+  if [ "$st" = failed ]; then "$SYSTEMCTL" reset-failed "$u" 2>/dev/null || true; fi
+  if "$SYSTEMCTL" start "$u"; then echo "OK $u started"; else echo "FAIL $u did not start"; bad=1; fi
+done
+exit $bad
