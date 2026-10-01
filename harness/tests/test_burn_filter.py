@@ -239,6 +239,36 @@ def test_the_committed_split_fixture_is_accounted_in_the_real_tree():
     assert burned == []
 
 
+def test_a_runtime_repeated_fixture_is_accounted_in_the_real_tree():
+    """wq#3348: bin/tests/test_chat_export.py:12 builds its dummy as
+    `"github_pat_" + "Q9" * 22`, so neither the 55-char match nor its 44-char body is
+    verbatim anywhere; the expression that prints them is."""
+    value = "github" + "_pat_" + "Q9" * 22
+    assert not burn_filter.is_committed_literal(value, REPO_ROOT)
+    assert not burn_filter.is_committed_literal(value[len("github_pat_"):], REPO_ROOT)
+    burned, _ = burn_filter.classify(
+        burn_filter.matched_values(value), set(), REPO_ROOT)
+    assert burned == []
+
+
+def test_a_repetition_with_a_count_the_tree_never_wrote_still_burns():
+    """The count is part of the expression: 23 repeats of the same committed unit are
+    a value no committed line prints, and an aperiodic body is never grepped as one.
+    Counts are computed so this file never spells the expression it asserts is absent."""
+    for body in ("Q9" * (22 + 1), "Q9" * (22 - 1) + "Q"):
+        value = "github" + "_pat_" + body
+        burned, _ = burn_filter.classify(
+            burn_filter.matched_values(value), set(), REPO_ROOT)
+        assert burned == ["github"], len(body)
+
+
+def test_repetition_finds_the_shortest_unit_only_for_a_periodic_body():
+    assert burn_filter._repetition("Q9" * 22) == ("Q9", 22)
+    assert burn_filter._repetition("x" * 20) == ("x", 20)
+    assert burn_filter._repetition("Q9" * 21 + "Q") is None
+    assert burn_filter._repetition("abcdefghi" * 2) is None
+
+
 # --- is_committed_literal against the real tree -----------------------------
 
 def test_is_committed_literal_finds_tracked_text():

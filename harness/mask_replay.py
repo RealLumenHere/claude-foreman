@@ -412,16 +412,31 @@ def tracked_text(repo=REPO_ROOT, extra=DOCTRINE_TRACKED):
 # real seam standing — so the whole string was never found and the fixture paged as
 # BURNED. A mixed-quote join (`"a" 'b'`) is no longer closed; that fails loud, not quiet.
 _SEAM = re.compile(r"([\"'])[ \t]*\+?[ \t]*\1")
+# wq#3348: the worker prompt tells a probe to build its dummy at runtime (`"Q" * 16`),
+# and bin/tests/test_chat_export.py:12 did exactly that: `"github_pat_" + "Q9" * 22`.
+# Its test output printed the 44-char body whole, no file holds it verbatim, and the
+# replay filed a rotate-today row for a committed fixture. A short literal times a
+# small integer is expanded in place before the seams close, so the prefix join above
+# still applies. Same-line only and capped, like the seams: no newline is added, and
+# `"x" * 10**6` stays text.
+_REPEAT = re.compile(r"([\"'])([^\"'\\\n]{1,8})\1[ \t]*\*[ \t]*(\d{1,3})(?!\d)")
+REPEAT_MAX = 256
 TRUNCATED_FLOOR = 12  # burn_filter.MIN_SECRET_LEN: the shortest body that can excuse a hit
 _JOINED = {}
 
 
+def _repeat(m):
+    q, lit, n = m.group(1), m.group(2), int(m.group(3))
+    return q + lit * n + q if n <= REPEAT_MAX else m.group(0)
+
+
 def _seam_joined(text):
-    """`text` with same-line string-concatenation seams closed. Memoised: a value
-    that is unaccounted costs a pass over every tracked file, once per value."""
+    """`text` with same-line `"lit" * N` repetitions expanded and string-concatenation
+    seams closed. Memoised: a value that is unaccounted costs a pass over every
+    tracked file, once per value."""
     joined = _JOINED.get(text)
     if joined is None:
-        joined = _JOINED[text] = _SEAM.sub("", text)
+        joined = _JOINED[text] = _SEAM.sub("", _REPEAT.sub(_repeat, text))
     return joined
 
 
@@ -432,7 +447,7 @@ def _find(needle, tracked):
         if at >= 0:
             return f"{path}:{text.count(chr(10), 0, at) + 1}"
     for path, text in tracked.items():
-        if not _SEAM.search(text):
+        if not (_SEAM.search(text) or _REPEAT.search(text)):
             continue
         joined = _seam_joined(text)
         at = joined.find(needle)

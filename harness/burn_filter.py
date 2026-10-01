@@ -201,6 +201,44 @@ def is_committed_literal(value, repo_roots, runner=subprocess.run):
     return False
 
 
+# wq#3348: the worker prompt tells a probe to build its dummy at runtime (`"Q" * 16`),
+# so the committed source of a value like bin/tests/test_chat_export.py:12's
+# `"Q9" * 22` is the expression, never the 44 chars it prints. A body that is one short
+# unit repeated is accounted by that expression on disk, the way mask_replay._REPEAT
+# reads the tree. The argv carries only the unit: zero entropy, after the live check.
+REPEAT_UNIT_MAX = 8
+_ERE_SPECIAL = re.compile(r"([.\[\]()*+?{}|^$\\])")
+
+
+def _repetition(body):
+    """(unit, count) when `body` is a unit of <= REPEAT_UNIT_MAX chars repeated, else None."""
+    for size in range(1, REPEAT_UNIT_MAX + 1):
+        count, rest = divmod(len(body), size)
+        if not rest and count > 1 and body[:size] * count == body:
+            return body[:size], count
+    return None
+
+
+def is_committed_repetition(body, repo_roots, runner=subprocess.run):
+    """True if a tracked file under `repo_roots` spells `body` as `"unit" * count`."""
+    rep = _repetition(body)
+    if not rep:
+        return False
+    unit, count = rep
+    pattern = (r"[\"']" + _ERE_SPECIAL.sub(r"\\\1", unit) + r"[\"'][ \t]*\*[ \t]*"
+               + str(count) + r"([^0-9]|$)")
+    for root in _as_roots(repo_roots):
+        try:
+            p = runner(["git", "-C", root, "grep", "--quiet", "-E", "-I",
+                        "-e", pattern, "--", "."],
+                       capture_output=True, timeout=GIT_GREP_TIMEOUT_S)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if p.returncode == 0:
+            return True
+    return False
+
+
 def _is_accounted(match, repo_roots, runner):
     """`match` whole, else its body when it carries one long enough to mean something.
 
@@ -215,6 +253,9 @@ def _is_accounted(match, repo_roots, runner):
     body = getattr(match, "body", "")
     if (len(body) >= MIN_SECRET_LEN and body != match
             and is_committed_literal(body, repo_roots, runner=runner)):
+        return True
+    if (len(body) >= MIN_SECRET_LEN
+            and is_committed_repetition(body, repo_roots, runner=runner)):
         return True
     cut = masking.untruncated(body or match, MIN_SECRET_LEN)
     if not cut and body and match.endswith(body):

@@ -138,6 +138,40 @@ def test_closing_a_seam_cannot_move_a_line_number_or_invent_a_value():
         assert mask_replay.account("ant-oat01-padded", pair) is None, gap
 
 
+def test_a_fixture_repeated_at_runtime_still_accounts():
+    """wq#3348: bin/tests/test_chat_export.py:12 is `"github_pat_" + "Q9" * 22`, the
+    runtime build the worker prompt asks for, and wq#3343's verify printed its output.
+    The 44-char body is in no file verbatim, so the replay paged a committed fixture."""
+    tree = {"bin/tests/test_chat_export.py":
+            '\n' * 11 + 'FAKE_PAT = "github_pat_" + "Q9" * 22\n'}
+    printed = '"title": "leaked github' + '_pat_' + "Q9" * 22 + ' in title"'
+    records = mask_replay.replay(0, tracked=tree, items={"transcript:a": printed})
+    assert [r["value_len"] for r in records] == [44]
+    assert records[0]["accounted_in"] == "bin/tests/test_chat_export.py:12"
+    assert mask_replay.unaccounted(records) == []
+
+
+def test_expanding_a_repetition_cannot_invent_a_value():
+    """The count is read whole (a longer run holds the value, as its literal would), the
+    cap leaves a huge count as text, and a repeat broken across lines is no expansion."""
+    body = "Q9" * 22
+    assert mask_replay.account(body, {"f.py": 'x = "Q9" * %d\n' % 21}) is None
+    assert mask_replay.account(body, {"f.py": 'x = "Q9" * %d\n' % 999}) is None
+    assert mask_replay.account(body, {"f.py": 'x = "Q9"\n * 22\n'}) is None
+    assert mask_replay.account("x" * 300, {"f.py": 'x = "x" * 300\n'}) is None
+    assert mask_replay.account(body, {"f.py": '\n\nx = ("Q9" * 22)\n'}) == "f.py:3"
+
+
+def test_the_wq3343_corpus_burned_nothing():
+    """The run that filed wq#3348, replayed against the real tree."""
+    records = mask_replay.replay(3343, patterns=mask_replay.CURRENT_PATTERNS,
+                                 tracked=_tree_only(), rotated={})
+    shas = {r["value_sha256_12"] for r in records}
+    _skip_if_masked_at_rest(3343, "16775b63df18" not in shas)
+    assert "16775b63df18" in shas
+    assert mask_replay.unaccounted(records) == []
+
+
 def test_a_seam_after_a_literal_ending_in_a_double_quote_is_closed():
     """wq#2358: token-engine/tests/test_daemon.py:338 splits `TOKEN="` from its body,
     so the left literal ENDS in a `"`. The first seam pattern took that embedded `"'`
