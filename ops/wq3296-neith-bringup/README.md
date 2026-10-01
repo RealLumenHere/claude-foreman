@@ -13,6 +13,10 @@ that Frank has confirmed the three units on hand or flashed A with Balena Etcher
 (the design's Frank-physical list, items 1-2). Everything in this kit is staged
 so bring-up is a checklist replay once the flashed board boots.
 
+The physical part is wq#3334; Frank's steps are `BENCH-CARD-wq3334.md` in this
+directory, ending with the `wq done 3334` that trips this ticket's
+`Liveness: ticket_done(3334)` gate.
+
 ## Bring-up order (run once neith answers DHCP)
 
 1. Follow `foreman/ops/p1-commander/CHECKLIST.md` "Per box" top section
