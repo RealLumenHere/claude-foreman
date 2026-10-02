@@ -1,0 +1,8 @@
+FACT (Firmware Analysis and Comparison Tool, fkie-cad/FACT_core)
+source: https://github.com/fkie-cad/FACT_core.git
+install-dir: /home/lumen/bin/FACT_core
+venv-dir: /home/lumen/bin/venv-fact
+installed-by: ops/wq3387-fact-core/install.sh
+note: clone + venv are root-free and deployed by this bundle; pre_install.sh
+      (installs Docker) and install.py (brings up the analysis containers +
+      web UI) need root and are left for an operator with sudo on Lumen.
