@@ -26,6 +26,11 @@ if [ "${1:-}" = --verify ]; then
   vflag "$SYMLINK" "mips"
   vflag "$SYMLINK" "arm"
   vflag "$SYMLINK" "x86"
+  # wq#1724: a citation into this install.sh only proves the script landed on
+  # the branch, not that it ever reached the target — ship a manifest file
+  # and copy it onto the live install dir so evidence.json has a deploy_target
+  # that byte-matches a file this bundle actually ships.
+  vfile "$SRC/MANIFEST.txt" "$DEST/MANIFEST.txt"
   vdone
 fi
 
@@ -40,6 +45,7 @@ else
   tar -xf "$TARBALL" -C "$DEST"
   ln -sf "$DEST/bin/retdec-decompiler" "$SYMLINK"
 fi
+install -m 644 "$SRC/MANIFEST.txt" "$DEST/MANIFEST.txt"
 
 "$SYMLINK" --version
 echo "retdec-decompiler installed: $SYMLINK -> $(readlink -f "$SYMLINK")"

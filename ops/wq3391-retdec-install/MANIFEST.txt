@@ -1,0 +1,6 @@
+retdec v5.0 (avast/retdec)
+source: https://github.com/avast/retdec/releases/download/v5.0/RetDec-v5.0-Linux-Release.tar.xz
+commit: 53e55b4b26e9b843787f0e06d867441e32b1604e
+build-date: 2022-12-08T10:13:13Z
+arches: mips pic32 arm thumb arm64 powerpc x86 x86-64
+installed-by: ops/wq3391-retdec-install/install.sh
