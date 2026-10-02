@@ -114,6 +114,28 @@ def test_sitemap_findings_filters_by_path():
     assert findings[0]["link"] == "https://www.cerebras.ai/blog/some-post"
 
 
+# ---- keyword matching -------------------------------------------------------
+
+def test_match_keywords_early_access_is_not_cf_access():
+    # wq#3423 fixture: filed solely because 'Early Access' contains 'Access'.
+    text = ("WAF - Attack Signature Detection is now available in Early Access. "
+            "It evaluates requests against Cloudflare attack signatures and "
+            "records matches without applying a mitigation action.")
+    assert pw.match_keywords(text) == []
+
+
+def test_match_keywords_limited_and_beta_access_also_excluded():
+    assert pw.match_keywords("Now in Limited Access for all plans") == []
+    assert pw.match_keywords("Beta Access opens next week") == []
+
+
+def test_match_keywords_real_access_post_still_matches():
+    # wq#3421 fixture: an actual Cloudflare Access change, must still match.
+    title = ("Cloudflare One, Access - Simplified permissions for tagging "
+             "targets with Access for Infrastructure")
+    assert "Access" in pw.match_keywords(title)
+
+
 # ---- relevance tiering ------------------------------------------------------
 
 def test_relevance_high_for_mcp_oauth():

@@ -58,6 +58,23 @@ class KeywordTests(unittest.TestCase):
     def test_no_match_on_unrelated_text(self):
         self.assertEqual(cw.match_keywords("Birthday Week recap"), [])
 
+    def test_early_access_is_not_cf_access(self):
+        # wq#3423 fixture: filed solely because 'Early Access' contains 'Access'.
+        text = ("WAF - Attack Signature Detection is now available in Early Access. "
+                "It evaluates requests against Cloudflare attack signatures and "
+                "records matches without applying a mitigation action.")
+        self.assertEqual(cw.match_keywords(text), [])
+
+    def test_limited_and_beta_access_also_excluded(self):
+        self.assertEqual(cw.match_keywords("Now in Limited Access for all plans"), [])
+        self.assertEqual(cw.match_keywords("Beta Access opens next week"), [])
+
+    def test_real_access_post_still_matches(self):
+        # wq#3421 fixture: an actual Cloudflare Access change, must still match.
+        title = ("Cloudflare One, Access - Simplified permissions for tagging "
+                  "targets with Access for Infrastructure")
+        self.assertIn("Access", cw.match_keywords(title))
+
 
 class RelevanceTests(unittest.TestCase):
     def test_mcp_or_oauth_is_high(self):

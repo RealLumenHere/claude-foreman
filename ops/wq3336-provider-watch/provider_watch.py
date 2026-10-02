@@ -92,7 +92,23 @@ GITHUB_API = "https://api.github.com"
 # Cloudflare-only keyword filter, carried over from wq#3335 — the areas that burned us.
 KEYWORDS = ["MCP", "OAuth", "Workers", "Agents", "Access", "KV",
             "Durable Objects", "tunnel", "cloudflared"]
-_KEYWORD_RE = {kw: re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE)
+# "Access" alone also matches unrelated "Early/Limited/Beta Access" program
+# announcements (wq#3423 false-positived on "now available in Early Access" —
+# WAF Attack Signature Detection, nothing to do with Cloudflare Access).
+# Excluded via negative lookbehind rather than dropping the keyword, so a real
+# Cloudflare Access post (e.g. wq#3421: "Access for Infrastructure") still matches.
+_ACCESS_EXCLUDE_PREFIXES = ("Early ", "Limited ", "Beta ")
+
+
+def _keyword_pattern(kw):
+    base = r"\b" + re.escape(kw) + r"\b"
+    if kw == "Access":
+        lookbehinds = "".join(f"(?<!{re.escape(p)})" for p in _ACCESS_EXCLUDE_PREFIXES)
+        return lookbehinds + base
+    return base
+
+
+_KEYWORD_RE = {kw: re.compile(_keyword_pattern(kw), re.IGNORECASE)
                for kw in KEYWORDS}
 _HIGH = {"mcp", "oauth"}
 _MEDIUM = {"access", "agents", "durable objects", "workers"}
