@@ -5,6 +5,10 @@
 # ops/wq2092-cert-watch.)
 # Rollback: systemctl disable --now cf-changelog-watch.timer; rm the installed
 # files below; rm the state file (/home/lumen/logs/.cf-changelog-watch.state.json).
+#
+# wq#3428: the file-copy step below (install -o lumen -g lumen ...) is lumen-owned
+# and needs no root; re-run it alone to redeploy cf_changelog_watch.py without
+# touching the systemd units.
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/bin/cf-changelog-watch
