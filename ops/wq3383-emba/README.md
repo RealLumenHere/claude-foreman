@@ -97,12 +97,18 @@ engine (direct on Lumen outside the BUILD sandbox, or maksoor per wq#2095).
 What landed instead, since the root step itself can't: `install.sh --verify`
 now has an opt-in `--deps` check (`ops/wq3383-emba/install.sh`) that looks
 for a working `docker` plus the pulled `embeddedanalyzer/emba` image and
-reports `DEPS OK` / `DEPS MISSING` accordingly — read-only, no install
+reports `DEPS OK` / `MISS DEPS MISSING` accordingly — read-only, no install
 attempted. It's a separate flag rather than folded into the base `--verify`
 so the existing clone+entrypoint guarantee (confirmed live, wq#3405) keeps
 passing on this sandbox, which will never have the dependencies installed.
 Once a root+container-engine session runs `installer.sh -d`, `install.sh
 --verify --deps` is the one-line confirmation that it worked.
+
+A missing image exits **1 (MISS)**, not 2 (ERR): it is a conclusive negative,
+and `harness/liveness.py`'s `ops_verified()` reads 1 as STILL_BLOCKED but 2 as
+UNKNOWN, so an ERR here would hide a correctly-diagnosed blocked dependency
+behind an indeterminate probe failure (wq#3407 judgment on wq#3406;
+`harness/tests/test_wq3407_emba_deps_exit_code.py` pins both arms).
 
 ## Repro
 

@@ -51,12 +51,21 @@ if [ "${1:-}" = --verify ]; then
   # that must keep passing on this sandbox's root-free, docker-free clone.
   # Opt in with --deps once installer.sh -d has actually run somewhere with
   # root + a container engine.
+  #
+  # wq#3407: this reports absence via _vmiss (exit 1 / MISS), not _V_ERR
+  # (exit 2). Both arms of the test are conclusive negatives, which the
+  # contract (ops/_verify.sh:8-9, :85-87) assigns to MISS: no docker at all
+  # means installer.sh -d — whose only supported path installs docker-ce —
+  # cannot have completed, and a clean `image inspect` miss is the image
+  # genuinely not being pulled. ERR is reserved for "I could not look", and
+  # harness/liveness.py's ops_verified() reads rc=1 as STILL_BLOCKED but
+  # rc=2 as UNKNOWN, so an ERR here would turn a correctly-diagnosed blocked
+  # dependency into an indeterminate probe failure.
   if [ "${2:-}" = --deps ]; then
     if command -v docker >/dev/null 2>&1 && docker image inspect embeddedanalyzer/emba >/dev/null 2>&1; then
       echo "DEPS OK: embeddedanalyzer/emba image present"
     else
-      echo "DEPS MISSING: embeddedanalyzer/emba image not found (run: sudo $WORKDIR/installer.sh -d)"
-      _V_ERR=1
+      _vmiss "DEPS MISSING: embeddedanalyzer/emba image not found (run: sudo $WORKDIR/installer.sh -d)"
     fi
   fi
   vdone
