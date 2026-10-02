@@ -43,6 +43,22 @@ if [ "${1:-}" = --verify ]; then
   else
     _vmiss "absent or not executable: $BIN"
   fi
+
+  # wq#3404: the dependency install (installer.sh -d, pulls the
+  # embeddedanalyzer/emba container image) needs real root + a container
+  # engine, which no BUILD-worker sandbox can grant itself (kb/ISSUE-LOG.md
+  # #1160/#1164/#1165). It is NOT part of the base --verify contract above —
+  # that must keep passing on this sandbox's root-free, docker-free clone.
+  # Opt in with --deps once installer.sh -d has actually run somewhere with
+  # root + a container engine.
+  if [ "${2:-}" = --deps ]; then
+    if command -v docker >/dev/null 2>&1 && docker image inspect embeddedanalyzer/emba >/dev/null 2>&1; then
+      echo "DEPS OK: embeddedanalyzer/emba image present"
+    else
+      echo "DEPS MISSING: embeddedanalyzer/emba image not found (run: sudo $WORKDIR/installer.sh -d)"
+      _V_ERR=1
+    fi
+  fi
   vdone
 fi
 

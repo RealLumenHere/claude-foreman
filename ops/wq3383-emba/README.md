@@ -83,6 +83,27 @@ up should run `installer.sh -d` with real root on a container-engine host
 against `/home/lumen/bin/emba-dist`, then `ops/wq3383-emba/install.sh
 --verify` here should grow a dependency check to match.
 
+## wq#3404 (root + container-engine step): still a sandbox boundary, not a worker miss
+
+wq#3404 re-confirms the same wall a 4th time (wq3383-a2/-a3/-a5, kb/ISSUE-LOG.md
+#1160/#1164/#1165): `installer.sh -d` (the only supported dependency-install
+mode) needs `EUID==0` (`installer.sh:255`) and apt-get-installs a container
+engine it then uses to pull the `embeddedanalyzer/emba` image
+(`installer/I05_emba_docker_image_dl.sh`) — both denied outright by this
+BUILD worker's `harness/worker-settings.json`. No BUILD-lane session can run
+that step; it genuinely needs a host with real root and a working container
+engine (direct on Lumen outside the BUILD sandbox, or maksoor per wq#2095).
+
+What landed instead, since the root step itself can't: `install.sh --verify`
+now has an opt-in `--deps` check (`ops/wq3383-emba/install.sh`) that looks
+for a working `docker` plus the pulled `embeddedanalyzer/emba` image and
+reports `DEPS OK` / `DEPS MISSING` accordingly — read-only, no install
+attempted. It's a separate flag rather than folded into the base `--verify`
+so the existing clone+entrypoint guarantee (confirmed live, wq#3405) keeps
+passing on this sandbox, which will never have the dependencies installed.
+Once a root+container-engine session runs `installer.sh -d`, `install.sh
+--verify --deps` is the one-line confirmation that it worked.
+
 ## Repro
 
 ```
