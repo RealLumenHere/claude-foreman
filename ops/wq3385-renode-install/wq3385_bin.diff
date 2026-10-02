@@ -1,0 +1,22 @@
+diff --git a/.gitignore b/.gitignore
+index a8a0b18..bc5c10c 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -14,6 +14,7 @@ __pycache__/
+ # large downloaded binaries — not source
+ /trivy
+ /gatus
++/renode-dist
+ 
+ # stale/superseded drafts, retired scripts, backups-by-suffix not caught above
+ *.orig
+diff --git a/renode b/renode
+new file mode 100755
+index 0000000..42a5ce5
+--- /dev/null
++++ b/renode
+@@ -0,0 +1,4 @@
++#!/bin/bash
++# wq#3385 — Renode full-system emulator (portable .NET build, no root/apt needed).
++# Payload lives in renode-dist/ (gitignored: large downloaded binary, not source).
++exec /home/lumen/bin/renode-dist/renode "$@"
