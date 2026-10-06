@@ -117,3 +117,12 @@ def test_real_run_files_one_ticket_with_a_liveness_probe_and_logs(tmp_path, monk
     assert "[sentinel] x/y:" in adds[0][adds[0].index("--title") + 1]
     assert "wq#4242" in (tmp_path / "l.log").read_text()
     assert (tmp_path / "s.json").exists()
+
+
+def test_ticket_id_is_found_by_title_when_wq_add_output_has_no_id(monkeypatch):
+    def fake_sh(cmd, timeout=30):
+        if "add" in cmd:
+            return (0, "ok\n", "")
+        return (0, "[4300] fleet p2 open           [sentinel] x/y: something\n", "")
+    monkeypatch.setattr(sw, "sh", fake_sh)
+    assert sw.file_ticket(sw.mk("x/y", 2, "something", "d"), "run1") == "wq#4300"

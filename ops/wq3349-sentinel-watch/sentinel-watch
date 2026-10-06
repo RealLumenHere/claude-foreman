@@ -173,10 +173,10 @@ def c_aq(ctx):
         rows = parse_aq(so)
         ctx["aq_open"] = len(rows)
         out += aq_findings(rows)
-    rc, so, _ = sh(["journalctl", "-u", "lumen-alert-queue.service", "--since", "-6h", "--no-pager", "-q"], 30)
+    rc, so, _ = sh(["journalctl", "-u", "lumen-alert-queue.service", "--since", "-45min", "--no-pager", "-q"], 30)
     n = so.count("database is locked")
-    if n >= 5:
-        out.append(mk("aq/subscriber-locked", 0, f"lumen-alert-queue dropped its ntfy stream {n}x in 6h: database is locked",
+    if n >= 3:
+        out.append(mk("aq/subscriber-locked", 0, f"lumen-alert-queue dropped its ntfy stream {n}x in 45min: database is locked",
                       "The subscriber cannot write to alerts.db, so alerts pushed to lumen-alerts are being dropped. See the aq/unreadable fix pattern."))
     return out
 
@@ -319,7 +319,15 @@ def file_ticket(f, run_id):
         rc, so, se = sh(base + tail, 60)
         m = re.search(r"wq#(\d+)|\[(\d+)\]|\bid[= ](\d+)", so + se)
         if rc == 0:
-            return "wq#" + next((g for g in (m.groups() if m else ()) if g), "?")
+            tid = next((g for g in (m.groups() if m else ()) if g), None)
+            if not tid:  # wq add's output format is not stable: find the ticket we just made by its title prefix
+                _, listing, _ = sh([WQ, "list"], 60)
+                for ln in listing.splitlines():
+                    lm = re.match(r"^\[(\d+)\].*" + re.escape(f"[sentinel] {key}:"), ln)
+                    if lm:
+                        tid = lm.group(1)
+                        break
+            return "wq#" + (tid or "?")
     return "FILE-FAILED rc=%s %s" % (rc, (se or so).strip()[:120])
 
 
