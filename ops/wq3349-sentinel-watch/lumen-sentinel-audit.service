@@ -1,0 +1,10 @@
+[Unit]
+Description=sentinel-watch: guards, probes, aq, services, disk, LiteLLM sweep; files tickets (wq#3349)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/home/lumen/bin/sentinel-watch
+TimeoutStartSec=900
+Nice=10
