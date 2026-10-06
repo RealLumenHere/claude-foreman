@@ -120,3 +120,36 @@ def test_sweep_cli_dry_run_isolates_a_crashing_class(tmp_path, capsys, monkeypat
     assert selfheal_sweep.main(["--config", str(cfg), "--state", str(state),
                                 "--only", "disk,nodes"]) == 0
     assert "CLASS CRASHED" in capsys.readouterr().out and alerts
+
+
+def test_unchmodable_file_is_reported_and_the_sweep_keeps_going(make_ctx, tmp_path, monkeypatch):
+    """Regression (2026-10-06): EPERM on one root-owned backup crash-looped the daemon."""
+    bad = tmp_path / ".env.bak.root-owned"
+    good = tmp_path / ".env.bak.zmine"
+    for f in (bad, good):
+        f.write_text("x=1\n")
+        os.chmod(f, 0o644)
+    real_chmod = os.chmod
+
+    def flaky(path, mode, *a, **k):
+        if str(path) == str(bad):
+            raise PermissionError(1, "Operation not permitted", str(path))
+        return real_chmod(path, mode, *a, **k)
+    monkeypatch.setattr(os, "chmod", flaky)
+    ctx = make_ctx({}, {})                                   # NOT dry-run: the real mutation path
+    leakwatch.initial_sweep(ctx, [_rules(tmp_path)[1]], masking.scan)   # must not raise
+    assert os.stat(good).st_mode & 0o007 == 0                # a later file is still secured
+    assert os.stat(bad).st_mode & 0o007 != 0                 # the unfixable one is untouched
+    assert any(k.startswith("leak-unfixable:") and str(bad) in k for k, _ in ctx.out.alerts)
+
+
+def test_safe_check_swallows_any_per_file_error(make_ctx, tmp_path, monkeypatch):
+    f = tmp_path / ".env"
+    f.write_text("x=1\n")
+
+    def boom(*a, **k):
+        raise UnicodeDecodeError("utf-8", b"x", 0, 1, "boom")
+    monkeypatch.setattr(leakwatch, "check", boom)
+    ctx = make_ctx({}, {})
+    leakwatch.safe_check(ctx, str(f), _rules(tmp_path)[1], masking.scan)   # must not raise
+    assert ctx.out.alerts

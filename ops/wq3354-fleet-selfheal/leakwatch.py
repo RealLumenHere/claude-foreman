@@ -154,11 +154,28 @@ def load_rules(cfg):
     return rules
 
 
+def safe_check(ctx, path, rule, scanner):
+    """check() that can never kill the daemon.
+
+    Live 2026-10-06: the daemon runs as lumen, a root-owned litellm_config.yaml.bak* raised
+    EPERM from os.chmod, nothing caught it, the start-up sweep died, systemd restarted it 6x
+    and fleet-selfheal's own crash-loop class stopped it. A file we cannot secure is a finding
+    (alert + the exact root command), not a reason to stop watching every other file."""
+    try:
+        check(ctx, path, rule, scanner)
+    except Exception as e:  # noqa: BLE001 - the watcher must outlive any one file
+        ctx.note(CLS, f"cannot act on {path}: {type(e).__name__}: {e}")
+        if not ctx.dry_run:
+            ctx.out.alert(f"leak-unfixable:{path}", f"leakwatch cannot secure {path}",
+                          f"{type(e).__name__}: {e}. The daemon user does not own it; "
+                          f"run: sudo chmod o-rwx {path}")
+
+
 def initial_sweep(ctx, rules, scanner):
     for r in rules:
         for name in sorted(os.listdir(r["dir"])):
             if any(fnmatch.fnmatch(name, g) for g in r["globs"]):
-                check(ctx, os.path.join(r["dir"], name), r, scanner)
+                safe_check(ctx, os.path.join(r["dir"], name), r, scanner)
 
 
 def _scanner(cfg):
@@ -208,7 +225,7 @@ def main(argv=None):
             ctx = common.Ctx(cfg, state, dry_run=a.dry_run)
             for path in due:
                 pending.pop(path)
-                check(ctx, path, rule_for(path, rules), scanner)
+                safe_check(ctx, path, rule_for(path, rules), scanner)
             flush(ctx)
 
 
