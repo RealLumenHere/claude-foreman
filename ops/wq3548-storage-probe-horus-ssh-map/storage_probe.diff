@@ -1,0 +1,29 @@
+commit 3bfcae977febef68e95d816313747e5f0d8c2752
+Author: Lumen Industries <fstupak.peace@gmail.com>
+Date:   Wed Oct 7 15:51:37 2026 +0000
+
+    wq#3548: add horus to the legacy SSH fallback map
+
+    manifest_add_node's documented step 2 (add the new node to storage_probe's
+    SSH map) was skipped on the 2026-10-07 04:43Z horus add. storage_probe's
+    primary resolution path is the fleet inventory, which already carries horus
+    (network.ssh.user/tailscale_ip), but the SSH_FALLBACK dict this inventory
+    lookup falls back to on a transient resolution failure had no horus entry,
+    so the one blip during the wq#3537 overlay-drift remediation window
+    (concurrent apply_overlay.py --apply writes around 07:24-07:25Z) surfaced as
+    "no ssh mapping (inventory + legacy)" instead of transparently failing over.
+
+    Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+diff --git a/storage_probe.py b/storage_probe.py
+index 75155c2..eae5c27 100644
+--- a/storage_probe.py
++++ b/storage_probe.py
+@@ -56,6 +56,7 @@ SSH_FALLBACK = {  # user@ts-ip — legacy, fallback only (see above)
+ "isis":"isis@100.100.129.24","hathor":"hathor@100.80.71.13",
+ "sia":"sia@100.111.15.120","gameboy":"gameboy@100.118.56.59",
+ "apis":"apis@100.89.147.95",
++ "horus":"horus@100.83.19.124",  # wq#3548: manifest_add_node step 2 (never done on the 2026-10-07 04:43Z add)
+ }
+
+ def log(msg):
