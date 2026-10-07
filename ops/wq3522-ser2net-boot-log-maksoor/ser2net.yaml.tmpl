@@ -1,0 +1,37 @@
+%YAML 1.1
+---
+# ops/wq3522-ser2net-boot-log-maksoor/ser2net.yaml.tmpl
+#
+# wq#3522: bench UART boot-log capture on maksoor. install.sh renders this to
+# /etc/ser2net.yaml, substituting __TAILNET_IP__ with this host's own tailscale
+# IPv4 address (`tailscale ip -4`, resolved at install time -- never hardcoded,
+# never 0.0.0.0). tio, labgrid (wq#3492) and baudowl (wq#3493) attach to the TCP
+# port below over the tailnet instead of opening the serial device directly, so
+# the UART stays shared and boot logs survive any one tool's terminal closing.
+#
+# SECURITY (ticket constraint): a serial console is a root shell on the DUT.
+# Every accepter below binds __TAILNET_IP__ ONLY -- reachable from the tailnet,
+# never the open bench LAN or the internet. Do not drop the address and leave a
+# bare `tcp,<port>` (defaults to all interfaces -- see ser2net.yaml(5), "Accepters
+# will generally default to being both IPv4 and IPv6 unless otherwise specified")
+# and never substitute a literal 0.0.0.0.
+#
+# Escapes below (\N, \B, \Y, \m, \D) are ser2net's own string-formatting codes
+# (ser2net.yaml(5), "FILENAME, BANNER, AND STRING FORMATTING"), not shell or
+# YAML escapes -- kept in single quotes so YAML passes them through literally.
+define: &boot_banner 'ser2net: \N (\B)\r\n'
+
+# Example DUT connection -- duplicate this block (new alias, new accepter port)
+# per real device once maksoor's physical bench inventory assigns tty devices.
+# /dev/ttyUSB0 and port 7001 are a worked example for the first bench UART, not
+# a live claim about what's plugged in today.
+connection: &dut1
+  accepter: tcp,__TAILNET_IP__,7001
+  connector: serialdev,
+             /dev/ttyUSB0,
+             115200n81,local
+  options:
+    banner: *boot_banner
+    kickolduser: true
+    trace-both: '/var/log/ser2net/dut1-\Y\m\D.log'
+    trace-timestamp: true
