@@ -7,18 +7,22 @@ Every `full_interval_s` this probes one chat model per api_base host through the
 LiteLLM gateway; hosts already failing auth are re-probed every `recheck_interval_s`.
 A host is AUTH-DOWN when the gateway answers 401/403 and the body is a provider error,
 not a gateway one (LiteLLM's gateway rejections say "Invalid proxy server token" and
-name no provider: docs.litellm.ai/docs/proxy/error_diagnosis). Once a host has been
-auth-down for `disable_after_s` (600):
+name no provider: docs.litellm.ai/docs/proxy/error_diagnosis). A host is BILLING-DOWN
+when the gateway answers 402 (provider prepaid balance exhausted, e.g. deepseek's
+"Insufficient Balance", wq#3560) — a funding problem, not a key problem, so it gets a
+"top up" ticket instead of a "rotate key" one. Once a host has been auth-down or
+billing-down for `disable_after_s` (600):
 
   * every model_name on that host goes into dispatcher/runtime/backend_cooldown.json
     with source=fleet-selfheal, refreshed each sweep while it stays down; router.py's
     availability_check skips a cooled rung in every pool (wq#3354 widened it from
     local-only), so dispatch routes to the next rung;
-  * one rotation ticket + aq row + page.
+  * one rotation (or top-up) ticket + aq row + page.
 
 When the host answers again our cooldown entries are removed (only ours) and the
 ticket episode closes. If EVERY probed host is auth-down the problem is our own
-gateway key, not N providers: page once, disable nothing.
+gateway key, not N providers: page once, disable nothing. (Billing-down hosts are
+each their own provider's problem, so they are excluded from that all-hosts check.)
 """
 import collections
 import json
@@ -61,9 +65,12 @@ def read_master_key(env_path):
 
 
 def classify(status, body):
-    """'ok' | 'auth' (provider rejected the key) | 'gateway-auth' | 'error'."""
+    """'ok' | 'auth' (provider rejected the key) | 'billing' (provider balance
+    exhausted) | 'gateway-auth' | 'error'."""
     if status is not None and 200 <= status < 300:
         return "ok"
+    if status == 402:
+        return "billing"
     if status in (401, 403):
         low = (body or "").lower()
         return "gateway-auth" if any(g in low for g in GATEWAY_MARKERS) else "auth"
@@ -117,7 +124,8 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
     hosts_state = st.setdefault("hosts", {})
     full_due = ctx.now - st.get("last_full", 0) >= int(p.get("full_interval_s", 1800))
     recheck_due = ctx.now - st.get("last_recheck", 0) >= int(p.get("recheck_interval_s", 300))
-    failing = {h for h, s in hosts_state.items() if s.get("first_auth")}
+    failing = {h for h, s in hosts_state.items()
+              if s.get("first_auth") or s.get("first_billing")}
     if not full_due and not (failing and recheck_due):
         return
     hosts = hosts_reader(p.get("litellm_config", "/home/lumen/agent/litellm_config.yaml"))
@@ -166,11 +174,35 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                               f"restart LiteLLM; fleet-selfheal re-enables the rungs on the "
                               f"first good probe.",
                               page="high")
+        elif verdict == "billing":
+            first = hs.setdefault("first_billing", int(ctx.now))
+            if ctx.now - first >= disable_after:
+                hs["disabled_billing"] = True
+                for m in models:
+                    to_set[m] = {"until": int(ctx.now) + hold_s, "source": SOURCE,
+                                 "reason": f"{host} 402 since {first} (wq#3560)"}
+                ctx.file_once(CLS, f"provider-billing:{host}",
+                              f"[selfheal] top up {host}: provider balance exhausted "
+                              f"({int((ctx.now - first) // 60)} min)",
+                              f"LiteLLM upstream {host} has answered 402 (insufficient "
+                              f"balance) for {int((ctx.now - first) // 60)} min. Rungs "
+                              f"{', '.join(models)} are cooled down in "
+                              f"backend_cooldown.json so dispatch skips them. This is not "
+                              f"a key problem — top up the account balance for {host} "
+                              f"(physical task; funding tracked in wq#3557). "
+                              f"fleet-selfheal re-enables the rungs on the first good "
+                              f"probe.",
+                              page="high")
         elif verdict == "ok":
             if hs.pop("disabled", None):
                 to_drop.extend(models)
             if hs.pop("first_auth", None) is not None:
                 ctx.resolve(CLS, f"provider-auth:{host}", f"{host} answers again; "
+                            f"rungs {', '.join(models)} re-enabled.")
+            if hs.pop("disabled_billing", None):
+                to_drop.extend(models)
+            if hs.pop("first_billing", None) is not None:
+                ctx.resolve(CLS, f"provider-billing:{host}", f"{host} answers again; "
                             f"rungs {', '.join(models)} re-enabled.")
         # 'error' (timeouts, 5xx, 429) is not a key problem: leave the episode as is.
     if to_set or to_drop:

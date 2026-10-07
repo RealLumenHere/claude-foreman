@@ -88,6 +88,8 @@ def _psweep(ctx, verdicts):
 
 PROVIDER_401 = (401, '{"error": {"message": "litellm.AuthenticationError: '
                      'DeepseekException - invalid api key"}}')
+PROVIDER_402 = (402, '{"error": {"message": "litellm.BadRequestError: '
+                     'DeepseekException - Insufficient Balance"}}')
 
 
 def test_classify_tells_provider_auth_from_gateway_auth():
@@ -97,6 +99,7 @@ def test_classify_tells_provider_auth_from_gateway_auth():
     assert sh_providers.classify(
         401, '{"detail":"Authentication Error, Invalid proxy server token passed"}') \
         == "gateway-auth"
+    assert sh_providers.classify(*PROVIDER_402) == "billing"
     assert sh_providers.classify(429, "rate limited") == "error"
     assert sh_providers.classify(None, "timed out") == "error"
 
@@ -136,6 +139,46 @@ def test_a_flap_shorter_than_ten_minutes_never_disables(make_ctx, tmp_path):
     ctx = make_ctx(cfg, state, now=t0 + 1800)
     _psweep(ctx, {"api.deepseek.com": PROVIDER_401, "api.z.ai": (200, "")})
     assert ctx.out.tickets == [] and not (tmp_path / "cooldown.json").exists()
+
+
+def test_provider_402_for_ten_minutes_cools_its_rungs_then_recovery_reenables(make_ctx, tmp_path):
+    cfg = _pcfg(tmp_path)
+    cd = tmp_path / "cooldown.json"
+    cd.write_text(json.dumps({"hathor-llama8b": 1e12}))          # another writer's row
+    state, t0 = {}, 100_000
+    bad = {"api.deepseek.com": PROVIDER_402, "api.z.ai": (200, "")}
+    _psweep(make_ctx(cfg, state, now=t0), bad)
+    assert not cd.read_text().count("deepseek")                 # 0 min: not yet
+    ctx = make_ctx(cfg, state, now=t0 + 300)
+    _psweep(ctx, bad)                                           # recheck, 5 min
+    assert ctx.out.tickets == []
+    ctx = make_ctx(cfg, state, now=t0 + 600)
+    _psweep(ctx, bad)                                           # 10 min: disable
+    data = json.loads(cd.read_text())
+    assert data["deepseek-v4-flash"]["source"] == "fleet-selfheal"
+    assert data["deepseek-v4"]["until"] == t0 + 600 + 3600
+    assert "glm-5.3" not in data and data["hathor-llama8b"] == 1e12
+    [t] = ctx.out.tickets
+    assert t["title"].startswith("[selfheal] top up api.deepseek.com")
+    assert "rotate" not in t["title"].lower()
+    good = {"api.deepseek.com": (200, ""), "api.z.ai": (200, "")}
+    ctx = make_ctx(cfg, state, now=t0 + 900)
+    _psweep(ctx, good)
+    assert json.loads(cd.read_text()) == {"hathor-llama8b": 1e12}
+    assert "provider-billing:api.deepseek.com" not in state["tickets"]
+
+
+def test_every_host_402_files_per_host_tickets_not_a_gateway_key_page(make_ctx, tmp_path):
+    cfg, state, t0 = _pcfg(tmp_path), {}, 100_000
+    bad = {"api.deepseek.com": PROVIDER_402, "api.z.ai": PROVIDER_402}
+    _psweep(make_ctx(cfg, state, now=t0), bad)
+    ctx = make_ctx(cfg, state, now=t0 + 600)
+    _psweep(ctx, bad)                                           # 10 min: disable both
+    titles = sorted(t["title"] for t in ctx.out.tickets)
+    assert titles == ["[selfheal] top up api.deepseek.com: provider balance exhausted "
+                      "(10 min)",
+                      "[selfheal] top up api.z.ai: provider balance exhausted (10 min)"]
+    assert not any("master key" in t for t in titles)
 
 
 def test_every_host_401_is_our_gateway_key_and_disables_nothing(make_ctx, tmp_path):
