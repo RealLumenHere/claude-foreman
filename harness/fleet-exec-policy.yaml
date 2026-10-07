@@ -182,6 +182,23 @@ allow:
   # it exactly as it did before this change.
   ssh: [lumen, isis, bes, anubis, maat, sobek, hathor]
 
+# wq#3457: read roots already reviewed and kept OFF allow.read_dirs (the "Deliberately
+# NOT here" / "NOT added" notes above, in machine-readable form). Not a refusal: the lint
+# still reports a cited path here as needs_unresolved/advisory. It only stops the
+# dispatcher filing a foreman-capability grant proposal for a grant that was already
+# declined, which re-bumped every 24h (/home/lumen/minerva and /home/lumen/agent were at
+# x16 each). A string covers the whole subtree; `exact: true` declines only that root, so
+# a narrow sub-root with a clean sweep can still be proposed.
+declined_read_dirs:
+  - /home/lumen/agent           # live .env + .env.bak tokens
+  - /home/lumen/minerva         # credentials mirrored into context/sections (wq#1467); minerva/eval is granted above
+  - /home/lumen/sentinel        # sntl tokens (wq#1466)
+  - /home/lumen/messenger       # vapid key, chat-log token
+  - /home/lumen/fleet           # token in patches/wq1454
+  - /home/lumen/langfuse        # 3 sweep hits (.env files)
+  - /home/lumen/backups         # 61 sweep hits (live API keys, an RSA private key)
+  - {path: /home/lumen/projects, exact: true}   # 58 sweep hits; too broad a root
+
 # run: read-only probe set. Each entry is either a bare basename (argv[0] must equal
 # it exactly) or "<basename> <subcmd-pattern>" (argv[1] must fnmatch one of the
 # '|'-separated patterns). argv is never shell-joined; metacharacters, -c/bash/sh/

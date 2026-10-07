@@ -470,6 +470,26 @@ def test_run_pass_end_to_end_files_each_digest_once(denv, jan, monkeypatch):
     assert ends[0]["purged"] == 1 and ends[0]["digests"] == ["frank_gated"]
 
 
+def test_capability_rows_close_when_the_denied_ticket_moves_on(denv, jan, monkeypatch):
+    """wq#3457 (f): a capability-denied row closes once wq says the ticket is not blocked."""
+    import capability_proposal
+    moved, still = add_ticket("was denied"), add_ticket("still denied")
+    block(still, "CAPABILITY_DENIED: dir(/x)")
+    listing = denv["tmp"] / "aq-list.txt"
+    listing.write_text("".join(
+        f"[{50 + i}] open     x2   foreman-capability capability-denied-wq{t}   "
+        f"owner=unassigned   2026-10-01T00:00:00Z  wq#{t} (P1) blocked CAPABILITY_DENIED\n"
+        for i, t in enumerate((moved, still))))
+    log = denv["tmp"] / "cap-aq.log"
+    monkeypatch.setattr(capability_proposal, "AQ_BIN", _script(
+        denv["bin_dir"] / "cap-aq", f'#!/usr/bin/env bash\nif [ "$1" = list ]; then cat {listing}; '
+        f'exit 0; fi\nprintf "%s\\n" "$*" >> {log}\n'))
+    assert janitor.reconcile_capability_rows(jan, dry_run=True) == 0 and not log.exists()
+    assert janitor.reconcile_capability_rows(jan, dry_run=False) == 1
+    assert log.read_text().splitlines() == [
+        f"resolve 50 wq#3457 reconcile: wq#{moved} is open, no longer blocked"]
+
+
 def test_dry_run_and_kill_switch_write_nothing(denv, jan, monkeypatch):
     tids = [add_ticket("rung casualty"), add_ticket("[nestlane] port")]
     block(tids[0], "RUNG_FAULT: hang")

@@ -20,6 +20,8 @@ still has to change it. The janitor is that someone, for the cases that need no 
   (e) digest       ONE aq row per parked cause per UTC day listing the tickets, replacing a page per
                    ticket per pass. Self-resolving causes (lane_cap, held, deps_unmet) are not
                    digested.
+  (f) capability   resolve foreman-capability aq rows whose proposal is moot (root granted,
+                   declined, gone, or uncited for 72h; denied ticket no longer blocked), wq#3457.
 
 It NEVER touches a secrets-denied ticket (capability_lint reports `refused` for it): none of
 (a)-(d) acts on one, and the secret wall stays fail-closed in the dispatcher. Kill switches
@@ -42,6 +44,7 @@ sys.path.insert(0, DISPATCHER_DIR)
 sys.path.insert(0, os.path.join(REPO_ROOT, "orchestrator"))
 sys.path.insert(0, os.path.join(REPO_ROOT, "harness"))
 import capability_lint  # noqa: E402
+import capability_proposal  # noqa: E402
 import foreman_dispatcher as fd  # noqa: E402 — load_config(), HUMAN_LANES
 import gate_store  # noqa: E402
 import local_capacity  # noqa: E402
@@ -332,6 +335,26 @@ def post_digests(log, dry_run, state, now=None, aq_bin=None):
     return sent
 
 
+# ---- (f) close moot capability proposals -------------------------------------------------
+
+def reconcile_capability_rows(log, dry_run, aq_bin=None):
+    def status(tid):
+        return self_heal.wq_show(tid).get("status") or None
+
+    res = capability_proposal.reconcile(status, dry_run=dry_run, aq_bin=aq_bin)
+    if res is None:
+        log.emit("error", stage="capability", reason="aq_list_failed")
+        return 0
+    for row_id, key, why, done in res:
+        if dry_run:
+            log.emit("would_resolve", aq=row_id, key=key, why=why)
+        elif done:
+            log.emit("janitor_capability_resolve", aq=row_id, key=key, why=why)
+        else:
+            log.emit("error", stage="capability", aq=row_id, key=key, reason="aq_resolve_failed")
+    return sum(1 for r in res if r[3])
+
+
 # ---- the pass ---------------------------------------------------------------------------
 
 def _section(log, name, fn, default):
@@ -357,9 +380,10 @@ def do_pass(log, dry_run):
     digests = _section(log, "digest", lambda: post_digests(log, dry_run, state), [])
     if digests and not dry_run:
         save_state(state)
+    cap_resolved = _section(log, "capability", lambda: reconcile_capability_rows(log, dry_run), 0)
     return {"purged": purged, "released": released, "held_back": held_back, "relaned": relaned,
             "holds_cleared": cleared, "spawn_loop_blocked": blocked, "digests": digests,
-            "parked_by_reason": gate_store.by_reason()}
+            "capability_resolved": cap_resolved, "parked_by_reason": gate_store.by_reason()}
 
 
 def run_pass(dry_run=False):
