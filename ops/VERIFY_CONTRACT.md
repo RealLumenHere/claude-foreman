@@ -73,12 +73,24 @@ look" must not read as "it is not deployed" (wq#2985).
 
 ### Bundles that are retired or superseded
 
-Keep the bundle and give it a handler with the sense inverted: assert the
-replacement is live and the retired names stayed absent, then refuse to install
-behind a `WQ<n>_FORCE_*` env var. `wq858-trivy-weekly-scan`, `wq1299-phoenix-tracer`
-and `wq1396-minerva-proposal-promoter` are the worked examples. Without this, the
-next content-index audit reads the bundle as ABSENT and files it for deploy — which
-for wq1396 would have double-filed every CVE proposal.
+Two ways, pick the lighter one that still tells the truth:
+
+- **A `RETIRED` marker file** (wq#3487) — `ops/<bundle>/RETIRED`, first line is the
+  reason. `ops-deploy-drift` reports the bundle as `RETIRED` (never `VERIFY_FAIL`/
+  `ABSENT`, never opens an aq row, auto-resolves one that's already open) and
+  `wq done`'s ops-deploy gate treats the bundle as out of scope — no `--deployed`/
+  `--no-deploy-needed` needed, no root-apply follow-up filed, whatever the old
+  `install.sh --verify` would say. Use this when nothing needs the retired unit's
+  *absence* actively enforced — dropping one file is the whole job.
+- **An inverted `--verify` handler** — keep the bundle, give it a handler with the
+  sense inverted: assert the replacement is live and the retired names stayed
+  absent, then refuse to install behind a `WQ<n>_FORCE_*` env var.
+  `wq858-trivy-weekly-scan`, `wq1299-phoenix-tracer`, `wq1396-minerva-proposal-promoter`,
+  `wq1406-paid-fallback-guard` and `wq2500-rsshub-bridge` are the worked examples.
+  Use this when a *regression* matters — the retired unit reappearing, or the
+  replacement going quiet, is itself worth catching. Without either marker, the
+  next content-index audit reads the bundle as ABSENT and files it for deploy —
+  which for wq1396 would have double-filed every CVE proposal.
 
 ### ABSENT is not a disposition
 
@@ -99,8 +111,15 @@ the index cannot fake. `ops/DEPLOY_TRIAGE.md` is the register that rule produced
   bundle that has a handler and opens one keyed aq row (`ops-drift:<bundle>`) per
   bundle that fails for more than 24h. Bundles without a handler are only reported
   heuristically, never alerted.
-- **`wq done`** (wq#1724) already refuses to close a ticket whose artifact is an
+- **`wq done`** (wq#1724) refuses to close a ticket whose artifact is an
   `ops/*/install.sh` without `--deployed` byte-match proof or `--no-deploy-needed`.
+  wq#3487: that override no longer closes a confirmed `--verify` FAIL silently —
+  it still closes the ticket (a sandboxed worker cannot do the root install
+  itself), but files or reuses a `[ops-root-apply]` follow-up ticket carrying
+  `Liveness: ops_verified(<bundle>)`, so the privileged half stays tracked instead
+  of living only in a closed ticket's notes. Same gate on `--no-artifact` when the
+  ticket's own title/detail/notes name a bundle, since that flag otherwise skips
+  identifying one at all.
 
 ## Backfill
 
