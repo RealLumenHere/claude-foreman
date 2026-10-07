@@ -31,8 +31,9 @@ class FakeSystemd:
 
 
 class FakeOutlets:
-    def __init__(self):
+    def __init__(self, open_tickets=None):
         self.tickets, self.alerts, self.pages = [], [], []
+        self.open_tickets = list(open_tickets or ())  # [(id, status, title), ...]
 
     def file_ticket(self, title, detail, lane, pri):
         self.tickets.append({"title": title, "detail": detail, "lane": lane, "pri": pri})
@@ -43,6 +44,15 @@ class FakeOutlets:
 
     def page(self, priority, title, msg):
         self.pages.append((priority, title))
+
+    def find_open_ticket(self, contains):
+        for tid, status, title in self.open_tickets:
+            if status in ("done", "released"):
+                continue
+            low = title.lower()
+            if all(c.lower() in low for c in contains):
+                return tid
+        return None
 
 
 class Proc:

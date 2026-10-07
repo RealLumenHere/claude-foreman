@@ -23,6 +23,12 @@ When the host answers again our cooldown entries are removed (only ours) and the
 ticket episode closes. If EVERY probed host is auth-down the problem is our own
 gateway key, not N providers: page once, disable nothing. (Billing-down hosts are
 each their own provider's problem, so they are excluded from that all-hosts check.)
+
+A billing-down host before filing a top-up ticket, checks wq for an already-open,
+non-done/released ticket whose title names the same provider + "balance" (e.g.
+litellm-completion-probe, wq#3169, files its own under a different episode key, so
+file_once's per-key dedup never sees it) and reuses that ticket's id for the episode
+instead of filing a duplicate (wq#3577 duplicated wq#3557 this way on 2026-10-07).
 """
 import collections
 import json
@@ -181,18 +187,28 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                 for m in models:
                     to_set[m] = {"until": int(ctx.now) + hold_s, "source": SOURCE,
                                  "reason": f"{host} 402 since {first} (wq#3560)"}
-                ctx.file_once(CLS, f"provider-billing:{host}",
-                              f"[selfheal] top up {host}: provider balance exhausted "
-                              f"({int((ctx.now - first) // 60)} min)",
-                              f"LiteLLM upstream {host} has answered 402 (insufficient "
-                              f"balance) for {int((ctx.now - first) // 60)} min. Rungs "
-                              f"{', '.join(models)} are cooled down in "
-                              f"backend_cooldown.json so dispatch skips them. This is not "
-                              f"a key problem — top up the account balance for {host} "
-                              f"(physical task; funding tracked in wq#3557). "
-                              f"fleet-selfheal re-enables the rungs on the first good "
-                              f"probe.",
-                              page="high")
+                key = f"provider-billing:{host}"
+                label = host.split(".")[-2] if host.count(".") >= 1 else host
+                dup = ctx.section("tickets").get(key) is None and \
+                    ctx.out.find_open_ticket([label, "balance"])
+                if dup:
+                    ctx.note(CLS, f"{host} already tracked by wq#{dup}; "
+                                  f"skip duplicate ticket")
+                    ctx.section("tickets")[key] = {"id": dup, "at": int(ctx.now),
+                                                   "title": f"(duplicate of wq#{dup})"}
+                else:
+                    ctx.file_once(CLS, key,
+                                  f"[selfheal] top up {host}: provider balance exhausted "
+                                  f"({int((ctx.now - first) // 60)} min)",
+                                  f"LiteLLM upstream {host} has answered 402 (insufficient "
+                                  f"balance) for {int((ctx.now - first) // 60)} min. Rungs "
+                                  f"{', '.join(models)} are cooled down in "
+                                  f"backend_cooldown.json so dispatch skips them. This is "
+                                  f"not a key problem — top up the account balance for "
+                                  f"{host} (physical task; funding tracked in wq#3557). "
+                                  f"fleet-selfheal re-enables the rungs on the first good "
+                                  f"probe.",
+                                  page="high")
         elif verdict == "ok":
             if hs.pop("disabled", None):
                 to_drop.extend(models)
