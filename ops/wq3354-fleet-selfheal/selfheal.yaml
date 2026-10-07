@@ -75,7 +75,11 @@ providers:              # CLASS 5
 nodes:                  # CLASS 6
   enabled: true
   offline_after_s: 1800
-  ignore: []                      # lumen_state node names meant to be off
+  ignore:                          # lumen_state node names meant to be off
+    - thor                        # wq#3506: Frank's active laptop (TLP/ASPM/s2idle,
+                                   # 85% charge cap) — sleeps/roams off tailnet by
+                                   # design, not a fleet outage; never remote-managed
+                                   # per CLAUDE.md Tier-0 #2 either way
 
 leakwatch:              # CLASS 3 (leakwatch.py daemon)
   harness_dir: /home/lumen/foreman/harness
