@@ -1,0 +1,95 @@
+# wq#3430 — role definitions for the 5 TF1 single-purpose appliances.
+#
+# All 5 boxes flash from the SAME ophub Armbian S905X3 image (proven by wq#3429's
+# flash procedure, see README.md). Everything below this point is config-only:
+# no per-role image variant, so any box can swap into any role by re-applying
+# the matching role file. build_order fixes which role is proven first.
+
+base_image: "ophub Armbian S905X3 (per wq#3429 WORKING_PROCEDURE, image/DTB pinned there)"
+
+build_order:
+  - pathfinder-spare
+  - klipper-host
+  - adguard-primary
+  - adguard-secondary
+  - kiosk-dashboard
+
+roles:
+  pathfinder-spare:
+    kind: spare
+    name: "Pathfinder / hot spare"
+    hostname: tf1-pathfinder
+    tailnet: true
+    static_ip: null
+    services: []
+    proves_flash_procedure: true
+    physical_tasks:
+      - "flash this unit first with the wq#3429-proven image (bench access required)"
+      - "run census.sh + sbc-bench + power + UART probe on this unit (wq#3429 tooling, bench-gated)"
+      - "keep powered-off as hot spare once role-cloning to the other 4 is proven"
+    open_questions: []
+
+  klipper-host:
+    kind: klipper_host
+    name: "Klipper/Moonraker/Fluidd host"
+    hostname: tf1-klipper
+    tailnet: true
+    static_ip: null
+    serial_devices_min: 2
+    services:
+      - klipper.service
+      - moonraker.service
+      - nginx.service  # serves Fluidd; config lives alongside moonraker.conf
+    replaces: "3dprinter LG AIO (tailnet-offline since 2026-07-26)"
+    physical_tasks:
+      - "pull printer.cfg and moonraker.conf off the LG AIO over LAN/physical access BEFORE any write to the AIO (it is tailnet-offline, not LAN-offline — confirm reachability first)"
+      - "confirm onboard USB port count on the S905X3 board; add a USB hub if fewer than 2 (board USB count UNK per ticket)"
+      - "wire the printer's USB-serial + any second serial peripheral (camera/ADXL) to this host"
+    open_questions:
+      - "board USB port count unconfirmed — hub need is UNK until pathfinder unit is in hand"
+
+  adguard-primary:
+    kind: dns_resolver
+    name: "AdGuard Home DNS resolver (primary)"
+    hostname: tf1-adguard-1
+    tailnet: false
+    static_ip: "TBD — fixed, out of DHCP pool (assign at bench time)"
+    services:
+      - AdGuardHome.service
+    failover_peer: adguard-secondary
+    fills_gap: "unbuilt Network-Guardian sinkhole gap"
+    physical_tasks:
+      - "assign and record the static IP out of DHCP range before first boot"
+      - "pair with adguard-secondary for failover (AdGuard's built-in DHCP/DNS failover, not tailnet)"
+    open_questions: []
+
+  adguard-secondary:
+    kind: dns_resolver
+    name: "AdGuard Home DNS resolver (secondary/failover)"
+    hostname: tf1-adguard-2
+    tailnet: false
+    static_ip: "TBD — fixed, out of DHCP pool (assign at bench time)"
+    services:
+      - AdGuardHome.service
+    failover_peer: adguard-primary
+    fills_gap: "unbuilt Network-Guardian sinkhole gap"
+    physical_tasks:
+      - "assign and record the static IP out of DHCP range before first boot (must differ from adguard-primary)"
+      - "pair with adguard-primary for failover"
+    open_questions: []
+
+  kiosk-dashboard:
+    kind: kiosk
+    name: "Dashboard kiosk"
+    hostname: tf1-kiosk
+    tailnet: true
+    static_ip: null
+    services:
+      - kiosk-chromium.service
+    target_url: "Grafana (Bes) / Glance — exact default dashboard TBD at bench time"
+    display: "HDMI, 1080p"
+    physical_tasks:
+      - "connect HDMI output to the target display and verify 1080p mode"
+      - "verify hardware video decode under Wayland on this SoC (unverified per ticket) — fall back to software decode if it fails"
+    open_questions:
+      - "HW video decode support unverified on S905X3 + Wayland/Chromium combo"
