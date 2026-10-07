@@ -58,6 +58,7 @@ SLOCK_BIN = os.environ.get("CFD_SLOCK_BIN", "/home/lumen/bin/slock")
 NTFY_BIN = os.environ.get("CFD_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 COOLDOWN_S = int(os.environ.get("CFD_COOLDOWN_S", "300"))
 ESCALATE_OPEN_ROWS = int(os.environ.get("CFD_ESCALATE_OPEN_ROWS", "5"))
+RUNUSER_BIN = "/usr/sbin/runuser"
 HOLDDOWN_ESCALATE_S = int(os.environ.get("CFD_HOLDDOWN_ESCALATE_S", "1800"))
 
 # Byte-identical to the sudoers rule (ISSUE-LOG #46: no --unit, no wildcards).
@@ -121,6 +122,14 @@ def resolve_rows(aq, ids, note):
 def cmd_request(a):
     if a.kind not in ("restart", "reload"):
         sys.exit(f"cfd-actuator: bad --kind {a.kind!r} (restart|reload)")
+    if os.geteuid() == 0:
+        # alerts.db is WAL: a root first-opener creates root-owned -wal/-shm
+        # and every lumen aq writer then fails readonly. Root callers
+        # (wadjet-ha-monitor, failback --detach) file as lumen.
+        os.execv(RUNUSER_BIN, [RUNUSER_BIN, "-u", "lumen", "--",
+                               os.path.realpath(sys.argv[0]), "request",
+                               "--from", a.caller, "--kind", a.kind,
+                               "--reason", a.reason])
     aq = aq_mod()
     already = open_rows(aq)
     aq.ingest(source=SOURCE, key=f"{a.kind}:{a.caller}",

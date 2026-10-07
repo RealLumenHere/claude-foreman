@@ -134,6 +134,24 @@ def test_request_files_row(env):
     assert len(rows) == 1 and rows[0]["key"] == "reload:wadjet-ha"
 
 
+def test_root_request_reexecs_as_lumen(env):
+    # A root write would leave root-owned alerts.db-wal/-shm behind.
+    calls = []
+    env.monkeypatch.setattr(cfd.os, "geteuid", lambda: 0)
+    def execv(path, argv):  # the real one never returns
+        calls.append(argv)
+        raise SystemExit(0)
+    env.monkeypatch.setattr(cfd.os, "execv", execv)
+    env.monkeypatch.setattr(cfd, "aq_mod", lambda: pytest.fail("root wrote aq"))
+    env.monkeypatch.setattr(sys, "argv", ["/home/lumen/bin/cfd-actuator"])
+    with pytest.raises(SystemExit):
+        cfd.main(["request", "--from", "wadjet-ha", "--kind", "reload",
+                  "--reason", "origin flip"])
+    assert calls[0][:4] == [cfd.RUNUSER_BIN, "-u", "lumen", "--"]
+    assert calls[0][5:] == ["request", "--from", "wadjet-ha", "--kind",
+                            "reload", "--reason", "origin flip"]
+
+
 def test_request_escalates_when_drain_dead(env):
     for i in range(cfd.ESCALATE_OPEN_ROWS):
         cfd.main(["request", "--from", f"c{i}", "--reason", "r"])

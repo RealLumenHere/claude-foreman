@@ -92,7 +92,9 @@ risk during migration is no worse than today.
       || log "reload_cloudflared: ERROR filing request"
   }
   ```
-  (Runs as root; aq's alerts.db must stay lumen-writable — root write is fine.)
+  (Runs as root. alerts.db is WAL, and a root first-opener would leave
+  root-owned `-wal`/`-shm` files that break every lumen aq writer, so
+  `request` re-execs itself as lumen via `runuser` when euid is 0.)
   Same stage: `bin/wadjet-ha-failback.sh` step [3/6] (`kill -s HUP ||
   restart`, :174) files the same `--kind reload` request. Until stage 1
   lands, both scripts' HUP leaves the tunnel down after a vault flip.
