@@ -116,3 +116,25 @@ and I did not route around it. I also could not run `tailscale status` (it needs
 this lane), so the tailnet facts rest on lumen_state's 2026-10-06 entries. Row 1204's "SSH …
 succeeded" on ptah does not say which address it used. It does not contradict Ruling 1, because
 ptah's LAN path is the one lumen_state calls healthy.
+
+## Resolution (wq#3581 attempt 2, closing the loop)
+
+Filed the two follow-ups Ruling 3 called for, and corrected the ISSUE-LOG rows to point at them:
+
+- **wq#3591** — ship the lost PROBE `true` (row 1204/1207) plus the connection-failure-keyed
+  `select_ip`/`ssh()`/`scp` fallback (Ruling 2's item 2). No ssh grant needed; testable against
+  the existing stub-node pytest harness.
+- **wq#3592** — re-dispatch of row 1206's live run, deps on wq#3591. Re-checked the ssh path live
+  before filing it: `fleet-exec run ptah uptime` and `fleet-exec run sekhmet uptime` both
+  `DENY [grant:no_ssh_run]` from this lane (which holds an unrelated `needs:ssh(anubis)` grant),
+  and the identical denial reproduces for `maat`, which **is** on `fleet-exec-policy.yaml`'s
+  `ssh:` list, absent a matching `needs:` tag — so a bare `needs:ssh(ptah),ssh(sekhmet)` tag on a
+  future ticket will not be enough on its own, since that file's `ssh:` list
+  (`[lumen, isis, bes, anubis, maat, sobek, hathor]`) does not include either P1 board and the
+  file's own header says no `needs:` tag can grant past it. wq#3592 widens the policy first
+  (its own small PR to foreman), then runs the bench. This was missing from Ruling 3's item 3 and
+  is worth the extra ticket rather than letting a future dispatch rediscover it the hard way.
+- ISSUE-LOG rows 1206 and 1207 updated in place with the wq#3591/wq#3592 references.
+
+wq#3496's merged status is unchanged (Ruling 3). wq#3581 closes as CONTRADICT-UPHELD, resolved via
+the two follow-up tickets above rather than a reopen of wq#3496.
