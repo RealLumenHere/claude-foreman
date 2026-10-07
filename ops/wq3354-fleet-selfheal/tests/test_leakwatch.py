@@ -1,5 +1,7 @@
 """CLASS 3 — leakwatch against the real harness masking.scan and real kernel inotify."""
+import grp
 import os
+import pwd
 
 import masking
 
@@ -56,7 +58,9 @@ def test_clean_file_files_nothing_and_cleanup_closes_the_episode(make_ctx, tmp_p
     assert "leak:" + str(f) not in ctx.state["tickets"]
 
 
-def test_world_readable_secret_store_loses_world_bits_group_is_reported(make_ctx, tmp_path):
+def test_world_readable_secret_store_loses_world_bits_group_is_reported(make_ctx, tmp_path,
+                                                                       monkeypatch):
+    monkeypatch.setattr(leakwatch, "group_readers", lambda st: {"backup"})
     env = tmp_path / ".env.bak.1"
     env.write_text("x=1\n")
     os.chmod(env, 0o644)
@@ -68,6 +72,43 @@ def test_world_readable_secret_store_loses_world_bits_group_is_reported(make_ctx
     leakwatch.check(ctx, str(env), _rules(tmp_path)[1], masking.scan)
     assert oct(os.stat(env).st_mode & 0o777) == "0o640"      # group left alone
     assert any("group-accessible" in a for a in ctx.actions)
+
+
+def _fake_accounts(monkeypatch, gr_mem, primary):
+    """uid 1000 = lumen, gid 1000 = group lumen with `gr_mem`; `primary` = names whose
+    primary gid is 1000."""
+    monkeypatch.setattr(leakwatch.grp, "getgrgid",
+                        lambda gid: grp.struct_group(("lumen", "x", 1000, gr_mem)))
+    monkeypatch.setattr(leakwatch.pwd, "getpwuid",
+                        lambda uid: pwd.struct_passwd(("lumen", "x", 1000, 1000, "", "/", "")))
+    monkeypatch.setattr(leakwatch.pwd, "getpwall", lambda: [
+        pwd.struct_passwd((n, "x", 1000 + i, 1000, "", "/", "")) for i, n in enumerate(primary)])
+
+
+def test_user_private_group_is_not_reported(make_ctx, tmp_path, monkeypatch):
+    _fake_accounts(monkeypatch, [], ["lumen"])
+    bak = tmp_path / ".env.bak.2"
+    bak.write_text("x=1\n")
+    os.chmod(bak, 0o660)
+    ctx = make_ctx({}, {})
+    leakwatch.check(ctx, str(bak), _rules(tmp_path)[1], masking.scan)
+    assert ctx.out.alerts == [] and ctx.actions == []
+    assert str(bak) not in ctx.state.get("leakwatch_group", {})
+
+
+def test_group_reaching_another_account_is_reported(make_ctx, tmp_path, monkeypatch):
+    _fake_accounts(monkeypatch, ["litellm"], ["lumen"])
+    bak = tmp_path / ".env.bak.3"
+    bak.write_text("x=1\n")
+    os.chmod(bak, 0o640)
+    ctx = make_ctx({}, {})
+    leakwatch.check(ctx, str(bak), _rules(tmp_path)[1], masking.scan)
+    assert ctx.out.alerts == [("leak-mode:" + str(bak), str(bak) + " is group-accessible")]
+    assert leakwatch.group_readers(os.stat(bak)) == {"litellm"}
+    _fake_accounts(monkeypatch, [], ["lumen", "svc"])
+    assert leakwatch.group_readers(os.stat(bak)) == {"svc"}
+    monkeypatch.setattr(leakwatch.grp, "getgrgid", lambda gid: (_ for _ in ()).throw(KeyError))
+    assert leakwatch.group_readers(os.stat(bak)) == {f"gid {os.stat(bak).st_gid}"}
 
 
 def test_dry_run_changes_no_mode(make_ctx, tmp_path):

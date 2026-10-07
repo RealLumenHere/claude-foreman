@@ -11,7 +11,8 @@ a matching file the moment a write closes:
   rule action `chmod` (secret stores: .env*, claude_credentials.md*, config backups) —
       the file is SUPPOSED to hold secrets; the leak is its mode. World access is
       stripped (o-rwx) with an aq row; group access is only reported, once, because a
-      service may legitimately read it through its group.
+      service may legitimately read it through its group — and only when that group
+      reaches an account besides the owner (a user-private group reaches no one).
   rule action `scan` (claude_memory.md, litellm configs) — the file must hold no
       literal credential. Run harness/masking.scan line by line; a hit files one
       rotation ticket + aq row + page naming the label and sha12 (never the value).
@@ -28,7 +29,9 @@ import argparse
 import ctypes
 import ctypes.util
 import fnmatch
+import grp
 import os
+import pwd
 import select
 import stat
 import struct
@@ -99,6 +102,26 @@ def scan_hits(path, scanner):
     return sorted(set(hits))
 
 
+def group_readers(st):
+    """Accounts other than the owner that the file's group lets in.
+
+    wq#3456: 71 litellm_config.yaml.* backups at 0640 lumen:lumen each raised a
+    group-accessible row, but `lumen` is a user-private group (no gr_mem, no other account
+    with it as primary gid), so group access reached nobody the owner bits didn't already.
+    An unresolvable gid or owner can't be proven private and still counts."""
+    try:
+        g = grp.getgrgid(st.st_gid)
+    except KeyError:
+        return {f"gid {st.st_gid}"}
+    try:
+        owner = pwd.getpwuid(st.st_uid).pw_name
+    except KeyError:
+        owner = None
+    readers = set(g.gr_mem) | {p.pw_name for p in pwd.getpwall() if p.pw_gid == st.st_gid}
+    readers.discard(owner)
+    return readers
+
+
 def check(ctx, path, rule, scanner):
     try:
         st = os.stat(path)
@@ -115,11 +138,15 @@ def check(ctx, path, rule, scanner):
                 ctx.out.alert(f"leak-mode:{path}", f"removed world access to {path}",
                               f"secret store was {oct(mode)}, readable by any local user")
         elif mode & 0o070 and path not in ctx.section("leakwatch_group"):
+            readers = group_readers(st)
+            if not readers:
+                return
             ctx.section("leakwatch_group")[path] = oct(mode)
             ctx.note(CLS, f"{path} is group-accessible ({oct(mode)}); alert only")
             if not ctx.dry_run:
                 ctx.out.alert(f"leak-mode:{path}", f"{path} is group-accessible",
-                              f"secret store is {oct(mode)}. Left as is in case a service "
+                              f"secret store is {oct(mode)}, readable through its group by "
+                              f"{', '.join(sorted(readers))}. Left as is in case a service "
                               f"reads it through its group; chmod 600 it if nothing does.")
         return
     hits = scan_hits(path, scanner)

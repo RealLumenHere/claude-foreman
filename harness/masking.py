@@ -304,12 +304,18 @@ _KV_IDENT_VALUE = r"_*[a-z0-9]+(?:_[a-z0-9]+)+"   # `_stale_probe_tickets` is on
 # Either shape may end a sentence, so trailing prose punctuation is allowed where the
 # body then ENDS, the same allowance _KV_NOT_SELF makes.
 _KV_KEY_FIELDS = r"[a-z]{1,20}(?::[a-z]{1,20}){1,7}"
+# wq#3456: prose names a key by the env var that holds it — `LiteLLM key = ` + the
+# 18-char ALL_CAPS `..._KEY` name + ` in agent/.env.` (claude_memory.md:248, sha12
+# 1154a18d6ea3) — and leakwatch filed it as a burned credential (wq#3449). LETTERS-only
+# segments joined by `_`, counted like the guards above: a digit anywhere (`AKIA`-style
+# IDs, base32 secrets) or a run past the caps is a value and still fires.
+_KV_ENV_NAME = r"[A-Z]{1,20}(?:_[A-Z]{1,20}){1,7}"
 # A CONDITIONAL on the `kn` group (Python `(?(name)yes)`): it only runs once a label has
 # matched and only when that label's noun was `key`. The first cut of this guard was a
 # lookahead at the rule's START that re-ran the whole depth-7 label grammar at every
 # word boundary of the line; on a 1.2 MB Commander log line that doubled the rule's cost
 # (450 ms -> 890 ms) and the all-rules sweep of /home/lumen/logs did not finish.
-_KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r"|" + _KV_KEY_FIELDS
+_KV_NOT_IDENT = (r"(?(kn)(?!(?-i:" + _KV_IDENT_VALUE + r"|" + _KV_ENV_NAME + r"|" + _KV_KEY_FIELDS
                  + r")[.,;!?]*(?![A-Za-z0-9._\-+/=:!#$%^*@~])))")
 # wq#2933: a value that repeats its own label is a self-name placeholder, not a
 # credential. `agent/litellm_config.yaml` writes provider keys that way (ISSUE-LOG rows

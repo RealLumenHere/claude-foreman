@@ -1849,6 +1849,21 @@ def test_a_key_described_by_its_fields_is_an_identifier():
     assert masking.mask_text("db" + "Password = " + fields)[1] == ["kv-secret"]
 
 
+def test_a_key_named_by_its_env_var_is_an_identifier():
+    """wq#3456: claude_memory.md:248 points at the LiteLLM key by its env var name and
+    leakwatch filed it as burned (wq#3449, sha12 1154a18d6ea3). Built at runtime."""
+    env_name = "LITELLM_MASTER_" + "KEY"
+    for line in ("- LiteLLM key = " + env_name + " in agent/.env. First grep gets it",
+                 "api_key: " + env_name + "."):
+        assert masking.mask_text(line)[1] == [], line
+        assert [r["suppressed"] for r in masking.suppressions(line)] == ["identifier"]
+    # a digit, a lowercase letter, a run past the caps, or a password label still fires
+    for value in ("LITELLM_MASTER_KEY9", "LITELLM_Master_KEY", "A" * 21 + "_KEY",
+                  "_".join(["ABCD"] * 9)):
+        assert masking.mask_text("api_key = " + value)[1] == ["kv-secret"], value
+    assert masking.mask_text("DB_PASSWORD = " + env_name)[1] == ["kv-secret"]
+
+
 # wq#2933: `LABEL: LABEL` is a self-name placeholder (agent/litellm_config.yaml). Names
 # are built at runtime so this source never holds the pair itself.
 _SELF_KV = "MISTRAL_API_" + "KEY"
@@ -1864,7 +1879,9 @@ _SELF_PW = "GITEA_PASS" + "WORD"
 ])
 def test_a_self_named_value_is_a_recorded_suppression(line):
     assert masking.mask_text(line) == (line, [])
-    assert [r["suppressed"] for r in masking.suppressions(line)] == ["self-name"]
+    # a `KEY` label's ALL_CAPS name is also an env-name identifier (wq#3456)
+    expect = "identifier+self-name" if _SELF_KV in line else "self-name"
+    assert [r["suppressed"] for r in masking.suppressions(line)] == [expect]
 
 
 @pytest.mark.parametrize("line", [
