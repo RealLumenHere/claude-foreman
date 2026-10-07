@@ -1,0 +1,17 @@
+# wq#3622 — fragment for /home/lumen/agent/.env (hand-apply; DO NOT copy this
+# file over agent/.env wholesale — it holds unrelated live secrets/tokens and
+# a full-file copy is exactly the lost-update hazard wq#1617 was filed for).
+# Apply with install.sh's upsert_env() (replaces each KEY= line if present,
+# appends if absent) so every other line in agent/.env is left untouched.
+#
+# Old (dead) values, for the record:
+#   VERIFY_JUDGE_MODEL=cerebras-oss-120b      # 402 billing lapse since 2026-08-19
+#   VERIFY_JUDGE_MODEL_2=gemini-flash         # 20 RPD cap, exhausted daily (wq#3543)
+#   CONTINUAL_LEARN_MODEL=cerebras-oss-120b   # same dead rung
+#   CONVO_LEARN_MODEL=cerebras-oss-120b       # same dead rung
+#
+# New values (this ticket's decision — see README.md):
+VERIFY_JUDGE_MODEL=deepseek-v4-flash
+VERIFY_JUDGE_MODEL_2=qwen36-local
+CONTINUAL_LEARN_MODEL=deepseek-v4-flash
+CONVO_LEARN_MODEL=deepseek-v4-flash
