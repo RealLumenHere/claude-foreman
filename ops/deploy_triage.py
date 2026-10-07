@@ -84,10 +84,11 @@ REGISTER: dict[str, dict] = {
         reason="timer enabled+active; --verify reports bin/lumen-contradiction-scan differs "
                "from the bundle. Deployed then edited in place."),
     "wq1298-gitleaks-detect": dict(
-        disposition=KEEP_DEPLOY, absent_units=["gitleaks-detect.timer"],
-        follow_up="wq#3002",
-        reason="service, timer and gitleaks_detect.py all absent; no gitleaks unit live. "
-               "The ticket's 'LANDED by orchestrator' note is about the merge, not the box."),
+        disposition=KEEP_LIVE, units=["gitleaks-detect.timer"],
+        follow_up=None,
+        reason="installed 2026-10-07 (wq#3486), VERIFY OK. The first attempt died at exit 141: "
+               "`git ls-remote | head -1` under pipefail SIGPIPEs git, so install.sh could "
+               "never have completed; fixed in the same PR."),
     "wq2086-presentation-stability": dict(
         disposition=KEEP_LIVE, units=["lumen-presentation-stability.timer"], follow_up=None,
         reason="minerva_presentation_stability.py is live and byte-identical, and the timer "
@@ -104,10 +105,12 @@ REGISTER: dict[str, dict] = {
         reason="bin/mask-secrets is live but differs from the bundle and the supergateway "
                "log pipe is not running the on-disk copy. A redeploy, not an install."),
     "wq2500-rsshub-bridge": dict(
-        disposition=KEEP_DEPLOY, scope="remote", hosts=["sia"],
-        follow_up="wq#3003",
-        reason="installs to /home/sia/services/rsshub on Sia; --verify reports the unit "
-               "absent, node_modules never fetched and .env never written."),
+        disposition=RETIRED, scope="remote", hosts=["sia"],
+        follow_up="wq#3576",
+        reason="RETIRE (wq#3486). rsshub.service starts node lib/index.js, which upstream "
+               "no longer ships (wq#2505), and install.sh never builds dist/. Nothing ever "
+               "landed on Sia: unit not-found, /home/sia/services/rsshub absent (checked "
+               "2026-10-07). The velocity-feed need moves to a fresh bundle, wq#3576."),
     "wq2739-tripwire-corpus": dict(
         disposition=OWNED, owner="wq#2981", follow_up=None,
         reason="assertion bundle: --verify runs a tripwire scan over the repo, so its MISS "
@@ -211,30 +214,38 @@ REGISTER: dict[str, dict] = {
                "absent at the wq#2985 triage, is now installed and enabled (wq#3468 re-check, "
                "2026-10-07)."),
     "wq1705-guard-meta-watchdog": dict(
-        disposition=KEEP_DEPLOY, absent_units=["lumen-guard-meta-watchdog.timer"],
-        follow_up="wq#3002",
-        reason="payload sits under staged/ and neither unit exists; the self-heal path the "
-               "ticket describes is not running."),
+        disposition=KEEP_LIVE, units=["lumen-guard-meta-watchdog.timer"],
+        follow_up=None,
+        reason="installed 2026-10-07 (wq#3486), VERIFY OK. wq3354's sh_guards.py was written "
+               "assuming this owns the guard-service restart, so it was a missing prerequisite, "
+               "not a stale bundle. Pre-install --dry-run classified all 4 failed units "
+               "not-a-guard: nothing to restart."),
     "wq1652-cfd-actuator": dict(
         disposition=KEEP_DEPLOY, absent_units=["lumen-cfd-actuator.timer"],
-        follow_up="wq#3002",
-        reason="all 4 payload files absent and no actuator unit. 415h unshipped, but "
-               "cloudflared still has no single actuator, so the need stands."),
+        follow_up="wq#3575",
+        reason="still absent (root --verify 2026-10-07) and the need stands: wadjet-ha-monitor, "
+               "wadjet-ha-failback and the public guardian each bounce cloudflared themselves. "
+               "Not installed under wq#3486: stage 0 alone is inert and its smoke request "
+               "HUPs the tunnel Commander rides, so it goes in a quiet window, wq#3575."),
     "wq1554-langfuse-lag-monitor": dict(
         disposition=OWNED, owner="wq#1555", follow_up=None,
         reason="wq#1555 (blocked) already owns the deploy: it needs /home/lumen/langfuse in "
                "a worker's --add-dir plus the v4.32.0 endpoint confirmation. Filing a second "
                "deploy ticket would duplicate it."),
     "wq1373-cf-token-liveness": dict(
-        disposition=KEEP_DEPLOY, absent_units=["cf-token-liveness.timer"],
-        follow_up="wq#3002",
-        reason="all 4 payload files absent, no unit. The failure it was written for -- a "
-               "dead Access token nobody noticed -- is still undetected."),
+        disposition=KEEP_LIVE, units=["cf-token-liveness.timer"],
+        follow_up=None,
+        reason="installed 2026-10-07 (wq#3486), VERIFY OK; the install's own dry-run "
+               "selftest reported 2/2 mailbot D1 tokens live before the timer was enabled."),
     "wq1406-paid-fallback-guard": dict(
-        disposition=KEEP_DEPLOY, absent_units=["paid-spend-tripwire.timer"],
-        follow_up="wq#3002",
-        reason="all 6 payload files absent and the live gateway config carries no "
-               "paid_fallback_alert callback, so the runaway-spend class is unguarded."),
+        disposition=RETIRED, units=["lumen-budget-alert.timer", "lumen-deepseek-spend.timer"],
+        absent_units=["paid-spend-tripwire.timer"],
+        follow_up=None,
+        reason="RETIRE (wq#3486). paid_spend_tripwire.py:129 reads the master key "
+               "positionally, the wq#2902 leak class, and the drain is already paged by "
+               "lumen-budget-alert (per-key 80%) and spend-alert.py on lumen-deepseek-spend "
+               "(thresholds + 2x-7d burn). The callback half needed a gateway merge and "
+               "proxy restart the bundle never staged."),
     "wq1299-phoenix-tracer": dict(
         disposition=RETIRED, follow_up=None,
         reason="RETIRE. The bundle exports traces via a LiteLLM OTLP callback; the live "
@@ -249,13 +260,11 @@ REGISTER: dict[str, dict] = {
                "enabled+active, v0.74.0 per the ticket's own notes -- while the bundle ships "
                "trivy-scan.timer. The bundle's units are dead names, not pending work."),
     "wq901-ntfy-oob-429": dict(
-        disposition=KEEP_DEPLOY, absent_units=["ntfy-oob-canary.timer"],
-        follow_up="wq#3002",
-        reason="neither half is live. The handler added here shows "
-               "/home/lumen/etc/ntfy-send.conf still reads NTFY_OOB_PRIORITIES=\"high,"
-               "urgent\" -- the `high` mirroring the ticket removed 781h ago is still "
-               "draining the anonymous ntfy.sh rate budget -- and both canary units are "
-               "absent. The ticket is closed and the defect it closed is still running."),
+        disposition=KEEP_LIVE, units=["ntfy-oob-canary.timer"],
+        follow_up=None,
+        reason="installed 2026-10-07 (wq#3486), VERIFY OK: ntfy-send.conf now reads "
+               "NTFY_OOB_PRIORITIES=\"urgent\" and the install's in-line canary run got "
+               "oob=200 (the unit greps for it, and install.sh is set -e)."),
     "wq394-netdata-canary": dict(
         disposition=KEEP_DRIFT, units=["wq394-netdata-sampler.timer", "netdata.service"],
         follow_up="wq#3005",
@@ -345,7 +354,7 @@ def check(ops_dir: str) -> list[str]:
                                 f"longer a known unit")
         for u in rec.get("absent_units", []):
             if u in units:
-                problems.append(f"{bundle}: classified DEPLOY but {u} is now installed "
+                problems.append(f"{bundle}: classified {rec['disposition']} but {u} is now installed "
                                 f"({units[u]}) -- it deployed outside this register")
         if rec["disposition"] == KEEP_DEPLOY and scope_of(bundle, bd) != "local" \
                 and not rec.get("hosts"):

@@ -9,18 +9,36 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
+SIA=sia@100.111.15.120
 WORKDIR=/home/sia/services/rsshub
 UNIT=/etc/systemd/system/rsshub.service
 
+# RETIRED 2026-10-07 (wq#3486). The bundle cannot run as shipped: rsshub.service
+# starts `node lib/index.js`, which does not exist on upstream DIYgod/RSSHub
+# master -- the real entrypoint is dist/index.mjs, built by `npm run build`, a
+# step this installer never runs (wq#2505 verify-pass contradiction). Checked on
+# Sia 2026-10-07: rsshub.service inactive/not-found, $WORKDIR absent, nothing on
+# :1200; Miniflux + news-intake run in docker. Nothing was ever deployed, so
+# there is nothing to roll back. The velocity-feed need (github_scout's star
+# floor cannot surface new repos) still stands; it needs a fresh bundle against
+# current upstream, not this one. Set WQ2500_FORCE_RETIRED_DEPLOY=1 to override.
+
 # wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
+# Inverted for a retired bundle: the broken unit must not have landed on Sia.
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
-  vunit_file "$SRC/rsshub.service" "$UNIT"
-  venabled rsshub.service
-  vactive rsshub.service
-  [ -d "$WORKDIR/node_modules" ] || _vmiss "absent: $WORKDIR/node_modules (npm ci never ran)"
-  [ -r "$WORKDIR/.env" ] || _vmiss "absent: $WORKDIR/.env (copy rsshub.env.example and fill in)"
+  if vremote_up "$SIA"; then
+    if $_VSSH "$SIA" "test -e $UNIT" 2>/dev/null; then
+      _vmiss "retired unit present on Sia: $UNIT (wq#3486)"
+    fi
+  fi
   vdone
+fi
+
+if [ "${WQ2500_FORCE_RETIRED_DEPLOY:-0}" != "1" ]; then
+  echo "refuse: wq#2500 rsshub-bridge was RETIRED 2026-10-07 (wq#3486) -- its ExecStart" >&2
+  echo "        names an entrypoint upstream no longer ships. See the header." >&2
+  exit 2
 fi
 
 if [ "$(id -u)" -ne 0 ]; then

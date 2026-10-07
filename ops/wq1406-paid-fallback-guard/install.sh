@@ -6,19 +6,44 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 
+# RETIRED 2026-10-07 (wq#3486, root --verify sweep of closed-but-undeployed bundles).
+#
+# Two reasons, either one enough:
+#  1. paid_spend_tripwire.py:129 reads the master key positionally
+#     (read_text().split("=", 1)[1]). That is the exact bug wq#1747/wq#2902 fixed in
+#     litellm-budget-alert: once litellm-master.env holds a second line, the value
+#     carries the next secret into the Authorization header and any exception text
+#     leaks both to journal + ntfy. Deploying it as shipped reopens that leak.
+#  2. The drain it guards is already paged by live timers: lumen-budget-alert.timer
+#     (per-service LiteLLM key budgets at 80%, wq#719) and lumen-deepseek-spend.timer
+#     (spend-alert.py: %-of-budget thresholds + 2x-7d runaway burn, wq#720). The other
+#     half (paid_fallback_alert callback) needs a gateway config merge + proxy restart
+#     the bundle never staged.
+#
+# Kept rather than deleted so the refusal below stops a future blind deploy off an
+# ABSENT verdict. To revive: port the key read to lumen_env.env_value, show a paid
+# model the two live timers miss, then set WQ1406_FORCE_RETIRED_DEPLOY=1.
+
 # wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
-# The alert callback half lives in the gateway config, not in a file we ship,
-# so it is checked by marker.
+# Inverted for a retired bundle: our units stay absent, the replacements stay live.
 if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh"
-  vunit_file "$HERE/paid-spend-tripwire.service" \
-             /etc/systemd/system/paid-spend-tripwire.service
-  vunit_file "$HERE/paid-spend-tripwire.timer" \
-             /etc/systemd/system/paid-spend-tripwire.timer
-  venabled   paid-spend-tripwire.timer
-  vactive    paid-spend-tripwire.timer
-  vcontains  /home/lumen/agent/litellm_config.yaml 'paid_fallback_alert'
+  for u in paid-spend-tripwire.service paid-spend-tripwire.timer; do
+    if [ -e "/etc/systemd/system/$u" ]; then
+      _vmiss "retired unit present: /etc/systemd/system/$u (wq#3486)"
+    fi
+  done
+  venabled lumen-budget-alert.timer
+  vactive  lumen-budget-alert.timer
+  venabled lumen-deepseek-spend.timer
+  vactive  lumen-deepseek-spend.timer
   vdone
+fi
+
+if [ "${WQ1406_FORCE_RETIRED_DEPLOY:-0}" != "1" ]; then
+  echo "refuse: wq#1406 paid-spend-tripwire was RETIRED 2026-10-07 (wq#3486) -- positional" >&2
+  echo "        master-key read (wq#2902 leak class); lumen-budget-alert + spend-alert cover it." >&2
+  exit 2
 fi
 
 sudo install -m 0644 "$HERE/paid-spend-tripwire.service" /etc/systemd/system/paid-spend-tripwire.service

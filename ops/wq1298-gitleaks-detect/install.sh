@@ -31,8 +31,12 @@ if [ "${1:-}" = --verify ]; then
 fi
 
 echo "== resolving latest gitleaks release tag =="
-GITLEAKS_TAG=$(sudo -u lumen git ls-remote --tags --refs --sort='-v:refname' \
-  https://github.com/gitleaks/gitleaks.git 'v*' | head -1 | sed 's#.*refs/tags/##')
+# Capture the whole list, then cut the first line in-shell: `| head -1` closes the
+# pipe early, git dies of SIGPIPE, and pipefail turns that into exit 141 (wq#3486).
+TAGS=$(sudo -u lumen git ls-remote --tags --refs --sort='-v:refname' \
+  https://github.com/gitleaks/gitleaks.git 'v*')
+GITLEAKS_TAG=${TAGS%%$'\n'*}
+GITLEAKS_TAG=${GITLEAKS_TAG##*refs/tags/}
 [ -n "$GITLEAKS_TAG" ] || { echo "could not resolve a gitleaks release tag" >&2; exit 1; }
 echo "target: $GITLEAKS_TAG"
 

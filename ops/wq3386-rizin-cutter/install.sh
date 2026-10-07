@@ -20,10 +20,18 @@ if [ "${1:-}" = --verify ]; then
   else
     _vmiss "absent: rizin"
   fi
-  if command -v cutter >/dev/null 2>&1; then
-    cutter --version >/dev/null 2>&1 || _vmiss "cutter --version failed"
+  # Cutter ships no apt package on Ubuntu 26.04; it is live as the upstream
+  # AppImage, /usr/local/bin/Cutter -> /opt/Cutter.AppImage (wq#3486). Lumen is
+  # headless and the AppImage bundles only the xcb Qt plugin, so `--version`
+  # cannot start without a display; `--appimage-version` proves the AppImage
+  # runtime itself executes.
+  cut="$(command -v cutter || command -v Cutter || true)"
+  if [ -z "$cut" ]; then
+    _vmiss "absent: cutter (neither cutter nor Cutter on PATH)"
+  elif [[ "$(readlink -f "$cut")" == *.AppImage ]]; then
+    "$cut" --appimage-version >/dev/null 2>&1 || _vmiss "$cut --appimage-version failed"
   else
-    _vmiss "absent: cutter"
+    "$cut" --version >/dev/null 2>&1 || _vmiss "$cut --version failed"
   fi
   vdone
 fi

@@ -39,9 +39,11 @@ def test_handler_precedes_any_install_step():
 
 
 def test_verify_reports_one_miss_per_absent_tool(tmp_path):
-    """Neither package is installed on Lumen yet (ops/wq2095-re-bench-tools lists
-    radare2/cutter on maksoor, not Lumen, and rizin nowhere) -- the real $PATH."""
-    proc = run("--verify")
+    """A PATH with neither tool. (Both are live on Lumen since wq#3486, so the real
+    $PATH can no longer stand in for "absent".)"""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    proc = run("--verify", path=f"{empty}:/usr/bin:/bin")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert proc.stdout.count("MISS ") == 2
     assert "absent: rizin" in proc.stdout
@@ -65,3 +67,28 @@ def test_verify_reports_a_miss_when_one_tool_is_present_but_its_version_flag_fai
     proc = run("--verify", path=f"{d}:/usr/bin:/bin")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "cutter --version failed" in proc.stdout
+
+
+def appimage_cutter(tmp_path, body):
+    """Lumen's real shape: Cutter (capital C) symlinked to an AppImage that cannot
+    open a display, so only --appimage-version answers."""
+    d = fake_bin(tmp_path, "rizin", 'echo "rizin 0.10.0"')
+    img = tmp_path / "Cutter.AppImage"
+    img.write_text(f"#!/bin/sh\n{body}\n")
+    img.chmod(img.stat().st_mode | stat.S_IEXEC)
+    (d / "Cutter").symlink_to(img)
+    return d
+
+
+def test_verify_accepts_a_headless_appimage_cutter(tmp_path):
+    d = appimage_cutter(tmp_path, '[ "$1" = --appimage-version ] && exit 0; exit 1')
+    proc = run("--verify", path=f"{d}:/usr/bin:/bin")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "VERIFY OK" in proc.stdout
+
+
+def test_verify_misses_an_appimage_whose_runtime_does_not_start(tmp_path):
+    d = appimage_cutter(tmp_path, "exit 1")
+    proc = run("--verify", path=f"{d}:/usr/bin:/bin")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "--appimage-version failed" in proc.stdout
