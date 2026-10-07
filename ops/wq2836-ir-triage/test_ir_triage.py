@@ -171,9 +171,12 @@ def test_run_writes_one_blocked_proposal_then_dedups(env):
     assert it.run(llm=llm) == 'unchanged'
     assert len(llm.calls) == n
 
+    # New evidence re-runs the model. This fake answers with the same title again, and
+    # wq#3523's title dedup (live in minerva since 2026-10-07) files no second copy.
     add_alert(env / 'alerts.db', 'ntfy:lumen-alerts', 'k2', 'vault DOWN', priority='high')
-    assert it.run(llm=llm) == 'proposed'
-    assert sqlite3.connect(env / 'minerva.db').execute('SELECT count(*) FROM proposals').fetchone()[0] == 2
+    assert it.run(llm=llm) == 'dedup'
+    assert len(llm.calls) > n
+    assert sqlite3.connect(env / 'minerva.db').execute('SELECT count(*) FROM proposals').fetchone()[0] == 1
 
 
 def test_model_failure_does_not_advance_seen_set(env):

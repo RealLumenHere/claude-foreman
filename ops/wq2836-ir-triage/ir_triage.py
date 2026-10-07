@@ -61,6 +61,27 @@ RANK = {'urgent': 5, 'max': 5, '5': 5, 'high': 4, '4': 4}
 # Always evidence regardless of priority: the credential tripwire.
 SECURITY_SOURCES = ('guard-fired',)
 
+# wq#3523: permanent decision exclusions -- these alert keys generate proposals
+# for settled decisions. Skip them at fragment collection so they never reach the LLM.
+EXCLUSIONS = [
+    (re.compile(r'anthropic', re.I),
+     'ANTHROPIC_API_KEY permanently defused'),
+    (re.compile(r'github.lumen', re.I),
+     'github-lumen token is valid'),
+    (re.compile(r'credential.*cascade', re.I),
+     'credential cascade settled'),
+    (re.compile(r'probe-credential-expiry'),
+     'sentinel-managed, not a triage target'),
+    (re.compile(r'\[selfheal\]\s*rotate.*credential', re.I),
+     'handled by selfheal, not triage'),
+]
+
+
+def _excluded(key, title):
+    """Return True if the alert matches a permanent-decision exclusion."""
+    text = f"{key} {title}"
+    return any(p.search(text) for p, _reason in EXCLUSIONS)
+
 
 def log(m):
     line = f'[{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}] {m}'
@@ -104,6 +125,8 @@ def collect_aq(db=None):
     out = []
     for r in rows:
         if RANK.get(str(r['priority']).lower(), 0) < 4 and r['source'] not in SECURITY_SOURCES:
+            continue
+        if _excluded(r['key'], r['title'] or ''):
             continue
         # mask() first, THEN the display budget (wq#2846/wq#2872): cutting the raw message
         # at 200 can land inside a token, leaving a prefix plus a body run under masking.py's
@@ -386,6 +409,26 @@ def store_seen(ids, note):
     tmp.replace(STATE)
 
 
+def _proposal_title_exists(title):
+    """wq#3523: dedup check -- return True if a proposal with this title exists
+    in pending/ or rejected/ (case-insensitive first-line match)."""
+    t_lower = title.strip().lower()
+    for d in (PROPOSALS_DIR, PROPOSALS_DIR.parent / 'rejected'):
+        if not d.is_dir():
+            continue
+        for p in d.glob('*.md'):
+            try:
+                with open(p) as f:
+                    for line in f:
+                        if line.startswith('title:'):
+                            if line.split(':', 1)[1].strip().lower() == t_lower:
+                                return True
+                            break
+            except OSError:
+                continue
+    return False
+
+
 def run(dry=False, force=False, llm=chat):
     frags = collect()
     ids = {f['id'] for f in frags}
@@ -413,6 +456,11 @@ def run(dry=False, force=False, llm=chat):
     if dry:
         print(json.dumps({'id': pid, **prop, 'eval_result': json.loads(explanation(result))}, indent=1))
         return 'dry'
+    # wq#3523: dedup -- skip if a proposal with the same title already exists
+    if _proposal_title_exists(prop['title']):
+        log(f'dedup: proposal with title {prop["title"]!r} already exists, skipping')
+        store_seen(ids, f'dedup {prop["title"][:60]}')
+        return 'dedup'
     wrote = save(pid, f'ir-triage:{fp[:16]}', prop, result)
     store_seen(ids, f'proposal {pid}')
     log(f"{'wrote' if wrote else 'exists'} proposal {pid}: {prop['title']} "
