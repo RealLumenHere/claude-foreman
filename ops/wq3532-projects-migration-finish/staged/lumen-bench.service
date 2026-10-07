@@ -1,0 +1,17 @@
+[Unit]
+Description=Bench salvage hardware tracker (bench.lumennode.uk)
+After=network.target
+
+[Service]
+User=lumen
+WorkingDirectory=/scratch/fleet/projects/bench
+Environment=BENCH_DB=/scratch/fleet/projects/bench/data/bench.db
+ExecStart=/usr/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 8135
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=/scratch/fleet/projects/bench
+
+[Install]
+WantedBy=multi-user.target

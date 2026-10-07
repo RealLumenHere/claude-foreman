@@ -1,0 +1,13 @@
+[Unit]
+Description=Lumen Node Process Killer — frees RAM from zombie Desktop Commander workers
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /scratch/fleet/projects/03045bd4/node_killer.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

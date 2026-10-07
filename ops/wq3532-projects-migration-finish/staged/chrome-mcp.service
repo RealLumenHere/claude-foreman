@@ -1,0 +1,22 @@
+[Unit]
+Description=Superpowers Chrome MCP via Supergateway
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=lumen
+Environment=PATH=/home/lumen/.npm-global/bin:/usr/bin:/bin
+Environment=CHROME_WS_BROWSER=/usr/bin/chromium
+Environment=CHROME_EXTRA_ARGS=--headless=new --disable-gpu
+Environment=HOME=/home/lumen
+ExecStart=/home/lumen/.npm-global/bin/supergateway --stdio "node /scratch/fleet/projects/superpowers-chrome/mcp/dist/index.js --headless" --port 3103 --outputTransport streamableHttp --streamableHttpPath /mcp --cors --healthEndpoint /health
+MemoryHigh=2G
+MemoryMax=4G
+OOMPolicy=continue
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

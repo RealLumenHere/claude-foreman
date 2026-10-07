@@ -1,0 +1,8 @@
+[Unit]
+Description=Bench eBay listing-status checker (oneshot)
+
+[Service]
+Type=oneshot
+User=lumen
+Environment=BENCH_DB=/scratch/fleet/projects/bench/data/bench.db
+ExecStart=/usr/bin/python3 /scratch/fleet/projects/bench/checker.py
