@@ -44,6 +44,7 @@ defaults:
     - /home/lumen/foreman
     - /home/lumen/kb
     - /home/lumen/projects/nest
+    - /home/lumen/sentinel  # wq#3554: sentinel_probes.py edits were wq#3466-blocked without this
 
 archetypes:
   mechanical-edit:

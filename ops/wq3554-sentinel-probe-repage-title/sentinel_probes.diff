@@ -1,0 +1,15 @@
+--- a/sentinel_probes.py
++++ b/sentinel_probes.py
+@@ -1166,7 +1166,12 @@
+                 elif ts - f.get("paged_at", 0) >= REPAGE_S:
+                     f["paged_at"] = ts; f["pages"] = f.get("pages", 0) + 1
+-                    ntfy_urgent(f"SENTINEL CRITICAL (still failing {_dur(ts - f['since'])}): {name}", detail)
++                    # wq#3554: fixed title (duration moved to body) so aq's title-keyed ntfy
++                    # ingest updates one row per probe instead of opening a new one per re-page
++                    # (137 rows / 143 repeats in alerts.db before this fix). _edge_clear's
++                    # 'still failing%' LIKE pattern still matches this title (% can be empty).
++                    ntfy_urgent(f"SENTINEL CRITICAL (still failing): {name}",
++                                f"failing {_dur(ts - f['since'])}: {detail}")
+                 else:
+                     print(f"  page suppressed {name}: open fire since {_dur(ts - f['since'])} ago, "
+                           f"next re-page in {_dur(REPAGE_S - (ts - f['paged_at']))}")
