@@ -75,14 +75,17 @@ def test_world_readable_secret_store_loses_world_bits_group_is_reported(make_ctx
 
 
 def _fake_accounts(monkeypatch, gr_mem, primary):
-    """uid 1000 = lumen, gid 1000 = group lumen with `gr_mem`; `primary` = names whose
-    primary gid is 1000."""
+    """`gr_mem` = group member names; `primary` = names whose primary gid matches this
+    process's real egid/euid, so the real tmp_path file (owned by whoever runs pytest,
+    lumen or root) still resolves against the fake records (wq#3552: hardcoded uid/gid
+    1000 only matched when pytest ran as lumen; root's tmp_path files have uid/gid 0)."""
+    uid, gid = os.geteuid(), os.getegid()
     monkeypatch.setattr(leakwatch.grp, "getgrgid",
-                        lambda gid: grp.struct_group(("lumen", "x", 1000, gr_mem)))
+                        lambda g: grp.struct_group(("lumen", "x", gid, gr_mem)))
     monkeypatch.setattr(leakwatch.pwd, "getpwuid",
-                        lambda uid: pwd.struct_passwd(("lumen", "x", 1000, 1000, "", "/", "")))
+                        lambda u: pwd.struct_passwd(("lumen", "x", uid, gid, "", "/", "")))
     monkeypatch.setattr(leakwatch.pwd, "getpwall", lambda: [
-        pwd.struct_passwd((n, "x", 1000 + i, 1000, "", "/", "")) for i, n in enumerate(primary)])
+        pwd.struct_passwd((n, "x", uid + i, gid, "", "/", "")) for i, n in enumerate(primary)])
 
 
 def test_user_private_group_is_not_reported(make_ctx, tmp_path, monkeypatch):
