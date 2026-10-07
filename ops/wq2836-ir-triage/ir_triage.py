@@ -47,6 +47,12 @@ FALLBACK_MODELS = [m.strip() for m in os.getenv(
     'IR_TRIAGE_FALLBACK_MODELS', 'cerebras-oss-120b').split(',') if m.strip()]
 MODELS = list(dict.fromkeys([MODEL] + FALLBACK_MODELS))
 NO_RETRY_HTTP = (401, 402, 403)
+# wq#3586: wall-clock cap on all LLM calls in one pass. With deepseek at 402 the
+# fallback cerebras timed out at 180s x3 per role, so three roles could run ~28
+# min, past the unit's TimeoutStartSec=15min, and systemd killed it to failed.
+# Spent budget = model failure: aq row, exit 0, next fire retries.
+LLM_BUDGET_S = float(os.getenv('IR_TRIAGE_LLM_BUDGET_S', '600'))
+LLM_TIMEOUT_S = 180
 STATUS = 'blocked'
 DECISION_REASON = ('ir-triage lane (wq#2836): review-only incident plan, never '
                    'auto-applied. Ship to act on it, Reject to dismiss.')
@@ -187,6 +193,11 @@ def collect():
 
 _refused = set()  # models that answered 401/402/403 this pass; not asked again
 _answered = {}  # last model that returned content, recorded in eval_result
+_deadline = {}  # monotonic end of this pass's LLM budget, set on the first chat()
+
+
+def _budget_left():
+    return _deadline['t'] - time.monotonic()
 
 
 def _chat_one(model, prompt, key):
@@ -198,8 +209,12 @@ def _chat_one(model, prompt, key):
     req = urllib.request.Request(LITELLM_URL, data=json.dumps(body).encode(), headers={
         'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'})
     for attempt in range(3):
+        left = _budget_left()
+        if left <= 0:
+            log(f'  llm budget {LLM_BUDGET_S:.0f}s spent; not asking {model}')
+            return ''
         try:
-            with urllib.request.urlopen(req, timeout=180) as r:
+            with urllib.request.urlopen(req, timeout=min(LLM_TIMEOUT_S, left)) as r:
                 return json.load(r)['choices'][0]['message']['content'] or ''
         except Exception as e:
             log(f'  llm err {model} (attempt {attempt + 1}/3): {str(e)[:160]}')
@@ -215,6 +230,7 @@ def chat(prompt):
     if not key:
         log('LITELLM_MASTER_KEY unset')
         return ''
+    _deadline.setdefault('t', time.monotonic() + LLM_BUDGET_S)
     for model in MODELS:
         if model in _refused:
             continue

@@ -264,13 +264,17 @@ class FakeHTTP:
     """urlopen stand-in: per-model status, 200 returns a canned completion."""
 
     def __init__(self, status):
-        self.status, self.asked = status, []
+        self.status, self.asked, self.timeouts, self.now = status, [], [], 0.0
 
     def __call__(self, req, timeout=None):
         import io, urllib.error
         model = json.loads(req.data)['model']
         self.asked.append(model)
+        self.timeouts.append(timeout)
         code = self.status[model]
+        if code == 'hang':
+            self.now += timeout
+            raise TimeoutError('timed out')
         if code != 200:
             raise urllib.error.HTTPError(req.full_url, code, 'Payment Required', {}, io.BytesIO(b''))
         return io.BytesIO(json.dumps({'choices': [{'message': {'content': f'from {model}'}}]}).encode())
@@ -285,6 +289,8 @@ def gateway(monkeypatch):
         monkeypatch.setattr(it, 'MODELS', models)
         monkeypatch.setattr(it, '_refused', set())
         monkeypatch.setattr(it, '_answered', {})
+        monkeypatch.setattr(it, '_deadline', {})
+        monkeypatch.setattr(it.time, 'monotonic', lambda: fake.now)
         monkeypatch.setenv('LITELLM_MASTER_KEY', 'x' * 8)
         return fake
     return install
@@ -315,6 +321,21 @@ def test_every_model_refused_is_an_aq_row_not_a_failed_unit(env, gateway, monkey
     assert it.main([]) == 0
     assert len(alerts) == 1 and 'refused: a,b' in alerts[0]
     assert not (env / 'state.json').exists()  # next fire retries the pass
+
+
+def test_hanging_fallback_stops_at_the_pass_budget(env, gateway, monkeypatch):
+    """wq#3586: deepseek 402 + cerebras timing out at 180s x3 per role ran three
+    roles past TimeoutStartSec=15min; the budget makes it an aq row instead."""
+    add_alert(env / 'alerts.db', 'spof-watch', 'timer:b', 'Dead-man: backup', priority='urgent')
+    monkeypatch.setattr(it, 'LLM_BUDGET_S', 400)
+    fake = gateway({'a': 402, 'b': 'hang'}, ['a', 'b'])
+    alerts = []
+    monkeypatch.setattr(it, 'alert_llm_down', alerts.append)
+    assert it.main([]) == 0
+    assert fake.now == 400  # never past the budget, whatever the per-call timeout
+    assert fake.timeouts[1:] == [180, 180, 40]  # last call clipped to what is left
+    assert len(alerts) == 1
+    assert not (env / 'state.json').exists()
 
 
 def test_dry_run_still_exits_nonzero_on_model_failure(env, gateway, monkeypatch):
