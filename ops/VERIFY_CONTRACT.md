@@ -62,6 +62,28 @@ neither flag — and because that build scanned argv by substring, it ignored bo
 Helpers are in `ops/_verify.sh`. Reference bundles: `wq900-primary-tree-guard`
 (units + enabled + active) and `wq1658-cron-stamp-dropin` (binary + a patched file).
 
+### Bundles that ship systemd units: declare them, then accept them (wq#3579)
+
+A bundle that installs, edits or removes units under /etc/systemd/system creates
+drift the moment it deploys, and `unit-drift check --digest` pages on it. Never
+"fix" that with `unit-drift snapshot` in install.sh — a blanket snapshot commits
+*everything* currently drifting on the box, reviewed or not, which defeats the
+reconciler (design/wq3509_unit_drift_alert_lifecycle.md item 3). Instead:
+
+- Declare the units near the top of install.sh, so the list is reviewed with the
+  bundle's PR: `UNITS="foo.service foo.timer"`.
+- As the **last** install step, bless exactly that list:
+  `/home/lumen/bin/unit-drift accept --ticket wq#NNNN $UNITS`.
+
+`accept` updates the baseline (units/, dropins/, enable-state, MANIFEST) for the
+named units only and git-commits with the ticket id and unit list in the message
+(`accept wq#NNNN: foo.service foo.timer`). Anything the bundle did not declare
+still drifts and still alerts; a dirty fleet-units repo makes it refuse rather
+than smuggle unrelated drift into the bless. A legit deploy therefore never
+opens a drift alert at all. Tests:
+`bin/tests/test_wq3579_unit_drift_accept.py` — an undeclared drifting unit
+survives an accept of a declared one.
+
 ### Bundles that do not install onto Lumen
 
 A bundle whose payload lands on another node (`wq2286-gitea-secret-scan` on Anubis,
