@@ -168,6 +168,28 @@ def test_provider_402_for_ten_minutes_cools_its_rungs_then_recovery_reenables(ma
     assert "provider-billing:api.deepseek.com" not in state["tickets"]
 
 
+def test_provider_402_reuses_an_already_open_ticket_instead_of_filing_a_duplicate(
+        make_ctx, tmp_path):
+    """litellm-completion-probe (wq#3169) filed wq#3557 for the same deepseek balance
+    outage under its own episode key; class providers must not file a second ticket
+    for it (wq#3577 duplicated wq#3557 this way on 2026-10-07)."""
+    cfg, state, t0 = _pcfg(tmp_path), {}, 100_000
+    bad = {"api.deepseek.com": PROVIDER_402, "api.z.ai": (200, "")}
+    open_tickets = [("3557", "frank_gated",
+                     "[physical] Frank tops up the DeepSeek API balance "
+                     "(HTTP 402 Insufficient Balance since 2026-10-01)")]
+    _psweep(make_ctx(cfg, state, now=t0, open_tickets=open_tickets), bad)
+    ctx = make_ctx(cfg, state, now=t0 + 600, open_tickets=open_tickets)
+    _psweep(ctx, bad)                                           # 10 min: disable
+    assert ctx.out.tickets == []                                # no new ticket filed
+    assert state["tickets"]["provider-billing:api.deepseek.com"]["id"] == "3557"
+    assert json.loads((tmp_path / "cooldown.json").read_text())["deepseek-v4-flash"]
+    good = {"api.deepseek.com": (200, ""), "api.z.ai": (200, "")}
+    ctx = make_ctx(cfg, state, now=t0 + 900, open_tickets=open_tickets)
+    _psweep(ctx, good)
+    assert "provider-billing:api.deepseek.com" not in state["tickets"]
+
+
 def test_every_host_402_files_per_host_tickets_not_a_gateway_key_page(make_ctx, tmp_path):
     cfg, state, t0 = _pcfg(tmp_path), {}, 100_000
     bad = {"api.deepseek.com": PROVIDER_402, "api.z.ai": PROVIDER_402}

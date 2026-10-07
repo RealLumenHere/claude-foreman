@@ -143,6 +143,27 @@ class Outlets:
         self.runner([self.ntfy, "-t", NTFY_TOPIC, "-p", priority, "-T", title,
                      "--quiet", msg], timeout=15)
 
+    def find_open_ticket(self, contains):
+        """id of the first non-done/released ticket whose title contains every string
+        in `contains` (case-insensitive), or None. One `wq list` call; other detectors
+        (e.g. litellm-completion-probe, wq#3169) file the same root cause under a
+        different episode key, so file_once's own dedup never sees it (wq#3577 duplicated
+        wq#3557 this way)."""
+        p = self.runner(as_lumen([self.wq, "list"]), timeout=30)
+        if p is None or p.returncode != 0:
+            return None
+        for line in (p.stdout or "").splitlines():
+            m = re.match(r"^\[(\d+)\]\s+\S+\s+\S+\s+(\S+)\s+(.*)$", line)
+            if not m:
+                continue
+            tid, status, title = m.group(1), m.group(2), m.group(3)
+            if status in ("done", "released"):
+                continue
+            low = title.lower()
+            if all(c.lower() in low for c in contains):
+                return tid
+        return None
+
 
 class Ctx:
     """Everything a class needs. `actions` is the human-readable record of what this
