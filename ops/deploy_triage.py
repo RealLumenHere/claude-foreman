@@ -222,13 +222,15 @@ REGISTER: dict[str, dict] = {
                "not-a-guard: nothing to restart."),
     "wq1652-cfd-actuator": dict(
         disposition=KEEP_LIVE, units=["lumen-cfd-actuator.timer"],
-        follow_up="wq#3575",
+        follow_up="wq#3607",
         reason="stage 0 installed 2026-10-07 (wq#3575), --verify VERIFY OK. Before install, "
                "SIGHUP was found to exit cloudflared 2026.7.3 (Restart=on-failure treats "
                "that as clean), so the HUP reload path and HUP smoke were dropped first. "
                "Callers: stage 1 wadjet-ha-monitor/failback live (lumen-bin #238), "
                "stage 2 healer via ops/wq3575-healer-cfd-actuator, stage 3 public guardian "
-               "(its cloudflared sudoers line dropped). Stage 4: sudoers cleanup."),
+               "(its cloudflared sudoers line dropped). Stage 4 done: only "
+               "sudoers.d/lumen-cfd-actuator names cloudflared. Enforcement still needs "
+               "lumen's blanket NOPASSWD ALL narrowed (wq#3607, ISSUE-LOG #1221)."),
     "wq1554-langfuse-lag-monitor": dict(
         disposition=OWNED, owner="wq#1555", follow_up=None,
         reason="wq#1555 (blocked) already owns the deploy: it needs /home/lumen/langfuse in "
