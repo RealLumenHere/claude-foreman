@@ -95,3 +95,6 @@ leakwatch:              # CLASS 3 (leakwatch.py daemon)
     - dir: /home/lumen/foreman
       globs: ["claude_credentials.md*", .env]
       action: chmod
+    - dir: /home/lumen/langfuse     # wq#3512: compose + env + their .bak copies carry live service secrets
+      globs: [".env", ".env.*", "*.env", "*.env.*", "docker-compose.yml*", "DEPLOYMENT.md.bak*"]
+      action: chmod
