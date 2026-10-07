@@ -55,6 +55,10 @@ def henv(tmp_path, monkeypatch):
     monkeypatch.setattr(sh, "RUNS_ROOT", str(runs_root))
     monkeypatch.setattr(sh, "DISARM_PATH", str(tmp_path / "DISARM"))
     monkeypatch.setattr(sh, "STOP_PATH", str(tmp_path / "STOP"))
+    # wq#3539: self_heal reads the trip-cause sidecar via circuit_breaker's own
+    # DISARM_PATH, so keep the two in sync under test the same way they're the same
+    # env var (FOREMAN_DISPATCH_DISARM) in production.
+    monkeypatch.setattr(sh.circuit_breaker, "DISARM_PATH", str(tmp_path / "DISARM"))
     monkeypatch.setattr(notify_sinks, "NTFY_BIN", fake_ntfy)
     monkeypatch.setattr(notify_sinks, "DESKTOP_SSH_HOST", "")
 
@@ -441,6 +445,100 @@ def test_disarm_halts_before_any_scan(henv):
     halts = log_events(henv, "halt")
     assert len(halts) == 1 and halts[0]["stage"] == "kill_switch"
     assert log_events(henv, ticket=tid) == []
+
+
+# ---- auth re-arm (wq#3539) ---------------------------------------------------------------
+
+def write_trip_cause(henv, cause):
+    (henv["tmp"] / "DISARM.cause.json").write_text(json.dumps({"cause": cause}))
+
+
+def test_auth_rearm_clears_disarm_when_probe_passes(henv, monkeypatch):
+    (henv["tmp"] / "DISARM").write_text("")
+    write_trip_cause(henv, "auth")
+    monkeypatch.setattr(sh.cli_canary, "probe", lambda model, bin_path=None: (True, "ok", None))
+
+    assert sh.run_pass() == 0
+
+    assert not (henv["tmp"] / "DISARM").exists()
+    assert not (henv["tmp"] / "DISARM.cause.json").exists()
+    assert log_events(henv, "rearm") != []
+    lines = ntfy_lines(henv)
+    assert any("RE-ARMED" in l for l in lines)
+
+
+def test_auth_rearm_leaves_disarm_when_probe_still_fails(henv, monkeypatch):
+    (henv["tmp"] / "DISARM").write_text("")
+    write_trip_cause(henv, "auth")
+    monkeypatch.setattr(sh.cli_canary, "probe",
+                        lambda model, bin_path=None: (False, "still disabled", None))
+
+    assert sh.run_pass() == 0
+
+    assert (henv["tmp"] / "DISARM").exists()
+    halts = log_events(henv, "halt")
+    assert len(halts) == 1 and halts[0]["stage"] == "kill_switch"
+
+
+def test_auth_rearm_skipped_when_trip_cause_is_infra(henv, monkeypatch):
+    (henv["tmp"] / "DISARM").write_text("")
+    write_trip_cause(henv, "infra")
+    probed = []
+    monkeypatch.setattr(sh.cli_canary, "probe",
+                        lambda model, bin_path=None: probed.append(1) or (True, "ok", None))
+
+    assert sh.run_pass() == 0
+
+    assert (henv["tmp"] / "DISARM").exists()
+    assert probed == []
+    skips = log_events(henv, "skip")
+    assert any(s.get("stage") == "auth_rearm" and s.get("reason") == "trip_cause_not_auth"
+              for s in skips)
+
+
+def test_auth_rearm_skipped_when_no_cause_file(henv):
+    # same shape test_disarm_halts_before_any_scan already covers end-to-end; this
+    # pins the specific auth_rearm skip reason it goes through to get there.
+    (henv["tmp"] / "DISARM").write_text("")
+
+    assert sh.run_pass() == 0
+
+    skips = log_events(henv, "skip")
+    assert any(s.get("stage") == "auth_rearm" and s.get("cause") is None for s in skips)
+
+
+def test_auth_rearm_dry_run_never_probes_or_clears(henv, monkeypatch):
+    (henv["tmp"] / "DISARM").write_text("")
+    write_trip_cause(henv, "auth")
+    probed = []
+    monkeypatch.setattr(sh.cli_canary, "probe",
+                        lambda model, bin_path=None: probed.append(1) or (True, "ok", None))
+
+    assert sh.run_pass(dry_run=True) == 0
+
+    assert probed == []
+    assert (henv["tmp"] / "DISARM").exists()
+    assert log_events(henv, "would_probe") != []
+
+
+def test_auth_rearm_dedup_skips_second_probe_within_window(henv, monkeypatch):
+    (henv["tmp"] / "DISARM").write_text("")
+    write_trip_cause(henv, "auth")
+    probed = []
+
+    def fake_probe(model, bin_path=None):
+        probed.append(1)
+        return False, "still disabled", None
+    monkeypatch.setattr(sh.cli_canary, "probe", fake_probe)
+
+    assert sh.run_pass() == 0
+    assert len(probed) == 1
+
+    assert sh.run_pass() == 0
+    assert len(probed) == 1  # deduped: no second probe this soon
+    skips = log_events(henv, "skip")
+    assert any(s.get("stage") == "auth_rearm" and s.get("reason") == "probe_deduped"
+              for s in skips)
 
 
 def test_units_staged_disabled():

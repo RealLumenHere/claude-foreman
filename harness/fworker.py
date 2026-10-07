@@ -54,7 +54,7 @@ from classifier import (
     RunState, classify, parse_worker_sentinel,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
     TURNS, LAUNCH_FAILURE, KILLED, BUDGET, BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL,
-    PERMISSION_LOOP, MODEL_NOT_FOUND,
+    PERMISSION_LOOP, MODEL_NOT_FOUND, AUTH_DENIED,
 )
 from oom_forensics import oom_journal_evidence
 import acceptance as acceptance_mod
@@ -489,7 +489,11 @@ BLOCK_LIMIT_HIT = "LIMIT_HIT"
 BLOCK_WORK_BLOCKED = "WORK_BLOCKED"
 BLOCK_HARNESS_DEFECT = "HARNESS_DEFECT"
 
-_INFRA_CRASH_CLASSIFICATIONS = {LAUNCH_FAILURE, KILLED, OOM}
+# wq#3539: AUTH_DENIED (an org-level subscription revocation) joins this bucket on
+# purpose, unlike MODEL_NOT_FOUND below — the breaker SHOULD still trip on it (the
+# fleet really is down), self_heal's ordinary release-on-attempts-remaining rule
+# still applies, and its own extra re-arm logic is additive, not a replacement.
+_INFRA_CRASH_CLASSIFICATIONS = {LAUNCH_FAILURE, KILLED, OOM, AUTH_DENIED}
 _LIMIT_HIT_CLASSIFICATIONS = {TURNS, BUDGET}
 _HARNESS_DEFECT_CLASSIFICATIONS = {PERMISSION_LOOP, MODEL_NOT_FOUND}
 
@@ -4357,6 +4361,18 @@ def reconcile(args, ticket_id, attempt, classification, state, events, worktree,
 
     if classification == MODEL_NOT_FOUND:
         return handle_model_not_found(args, ticket_id, attempt, state, worktree)
+
+    # wq#3539: an org-level subscription revocation page Frank the moment it's seen,
+    # not only once the breaker later trips 9/9 on the symptom — the cause is in the
+    # text, right here, before it's diluted into an undifferentiated failure-rate
+    # number. Falls through to the ordinary handle_failure() path below (INFRA_CRASH
+    # bucket) same as LAUNCH_FAILURE/KILLED/OOM.
+    if classification == AUTH_DENIED:
+        ntfy("foreman AUTH_DENIED",
+             f"wq#{ticket_id}: {state.result_text or 'Claude subscription access denied'} "
+             f"— this is an account/org-level denial, not a per-ticket failure. "
+             f"self_heal will re-probe and clear DISPATCH_DISARM once access returns.",
+             priority="urgent")
 
     # wq#2128: the backend failed, not the ticket — never the resume/retry ladder below.
     if charged_to == charging.CHARGE_RUNG:

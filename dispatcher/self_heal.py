@@ -66,6 +66,8 @@ from datetime import datetime, timedelta, timezone
 DISPATCHER_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(DISPATCHER_DIR, ".."))
 sys.path.insert(0, DISPATCHER_DIR)
+import circuit_breaker  # noqa: E402
+import cli_canary  # noqa: E402
 import local_capacity  # noqa: E402
 import vlogs_mirror  # noqa: E402
 
@@ -94,6 +96,18 @@ SLOCK_TTL_MIN = "10"
 STALE_AFTER_MIN = int(os.environ.get("FOREMAN_SELFHEAL_STALE_MIN", "30"))
 MAX_HEAL_ATTEMPTS = int(os.environ.get("FOREMAN_SELFHEAL_MAX_ATTEMPTS", "5"))
 STALE_NTFY_DEDUP_H = 6  # a still-stuck ticket only re-pings Frank every 6h, not every pass
+
+# wq#3539 (2026-10-06 incident, ~15h dead until a human cleared DISPATCH_DISARM by
+# hand): an org-level subscription denial (classifier.AUTH_DENIED) is the one trip
+# cause this daemon can actually verify has gone away on its own, so it re-arms the
+# breaker rather than waiting on a human to notice. CLAUDE_BIN mirrors
+# dispatch_recover.py's rung 1 (absolute path — a bare "claude" resolves under an
+# interactive shell's PATH, not the dispatch unit's, which is the exact class of bug
+# this probe exists to rule out) and cli_canary.probe() runs the real worker-launch
+# auth path (cli_canary._probe_env), not a synthetic check.
+CLAUDE_BIN = os.environ.get("FOREMAN_CLAUDE_BIN", "/home/lumen/.npm-global/bin/claude")
+AUTH_PROBE_MODEL = os.environ.get("FOREMAN_AUTH_PROBE_MODEL", "claude-haiku-4-5")
+AUTH_PROBE_DEDUP_MIN = int(os.environ.get("FOREMAN_AUTH_PROBE_DEDUP_MIN", "15"))
 
 BLOCK_PREFIX_RE = re.compile(
     r"^(INFRA_CRASH|WORK_BLOCKED|LIMIT_HIT|HARNESS_DEFECT|RUNG_FAULT):\s*(.*)$", re.S)
@@ -150,7 +164,7 @@ def _utcnow():
 # blocked_at column (wq#741); this file is just the "don't re-ping Frank every pass" ledger.
 
 def load_state():
-    fresh = {"stale_ntfy": {}}
+    fresh = {"stale_ntfy": {}, "last_auth_probe": None}
     try:
         with open(STATE_PATH) as f:
             st = json.load(f)
@@ -159,7 +173,8 @@ def load_state():
     if not isinstance(st, dict):
         return fresh
     stale = st.get("stale_ntfy")
-    return {"stale_ntfy": stale if isinstance(stale, dict) else {}}
+    return {"stale_ntfy": stale if isinstance(stale, dict) else {},
+            "last_auth_probe": st.get("last_auth_probe")}
 
 
 def save_state(st):
@@ -436,6 +451,61 @@ def rung_backend_healthy(ticket, tid):
     return True, name, "healthy"
 
 
+# ---- auth re-arm (wq#3539) -------------------------------------------------------------
+
+def maybe_rearm_auth(dry_run, log):
+    """When DISPATCH_DISARM is set AND circuit_breaker.trip_cause_path() says this trip
+    was "auth" (every catastrophic failure in the trip window was AUTH_DENIED), probe
+    whether Claude access is back and clear the latch the moment it is — rather than
+    leaving dispatch dead until a human notices (2026-10-06: ~15h). Any other cause
+    (None, "infra", unreadable file) is left strictly alone; only a confirmed auth-class
+    trip is this daemon's to clear. Returns True on an actual re-arm."""
+    if not os.path.exists(DISARM_PATH):
+        return False
+    try:
+        with open(circuit_breaker.trip_cause_path()) as f:
+            cause = (json.load(f) or {}).get("cause")
+    except (OSError, ValueError):
+        cause = None
+    if cause != "auth":
+        log.emit("skip", stage="auth_rearm", reason="trip_cause_not_auth", cause=cause)
+        return False
+
+    state = load_state()
+    now = _utcnow()
+    last = state.get("last_auth_probe")
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(minutes=AUTH_PROBE_DEDUP_MIN):
+                log.emit("skip", stage="auth_rearm", reason="probe_deduped")
+                return False
+        except ValueError:
+            pass
+
+    if dry_run:
+        log.emit("would_probe", stage="auth_rearm", model=AUTH_PROBE_MODEL)
+        return False
+
+    state["last_auth_probe"] = now.isoformat(timespec="seconds")
+    save_state(state)
+
+    ok, reason, _needs = cli_canary.probe(AUTH_PROBE_MODEL, bin_path=CLAUDE_BIN)
+    log.emit("auth_probe", stage="auth_rearm", ok=ok, reason=reason, model=AUTH_PROBE_MODEL)
+    if ok is not True:
+        return False
+
+    os.remove(DISARM_PATH)
+    try:
+        os.remove(circuit_breaker.trip_cause_path())
+    except OSError:
+        pass
+    ntfy(f"foreman circuit breaker RE-ARMED: Claude access probe passed "
+         f"({AUTH_PROBE_MODEL}); DISPATCH_DISARM cleared automatically (wq#3539).",
+         priority="high", title="foreman self-heal: auth re-arm")
+    log.emit("rearm", stage="auth_rearm", model=AUTH_PROBE_MODEL)
+    return True
+
+
 # ---- the pass ---------------------------------------------------------------------------
 
 def _maybe_ntfy_stale(state, tid, msg, dry_run, log):
@@ -536,9 +606,13 @@ def run_pass(dry_run=False):
                + f"-{os.getpid()}")
     log = DecisionLog(LOG_PATH, pass_id)
 
-    ks = kill_switch()
-    if ks:
-        log.emit("halt", stage="kill_switch", reason=ks)
+    # wq#3539: STOP always halts before the lock, same as before. DISARM_PATH now gets
+    # one chance at an auth re-arm (under the lock, so two concurrent self_heal
+    # invocations can't double-spend the probe) before falling back to the old
+    # unconditional halt — a non-auth or still-failing trip ends up exactly where it
+    # always did.
+    if os.path.exists(STOP_PATH):
+        log.emit("halt", stage="kill_switch", reason=f"foreman STOP present ({STOP_PATH})")
         return 0
     ok, holder = slock_acquire()
     if not ok:
@@ -548,6 +622,12 @@ def run_pass(dry_run=False):
     rc = 0
     try:
         log.emit("pass_start", dry_run=dry_run)
+        if os.path.exists(DISARM_PATH):
+            maybe_rearm_auth(dry_run, log)
+        ks = kill_switch()
+        if ks:
+            log.emit("halt", stage="kill_switch", reason=ks)
+            return 0
         summary = _do_pass(dry_run, log)
         log.emit("pass_end", **summary)
     except Exception as e:  # noqa: BLE001 — pass boundary: log + ntfy, never silent

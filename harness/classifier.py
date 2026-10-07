@@ -54,6 +54,23 @@ PERMISSION_LOOP = "PERMISSION_LOOP"
 # about the ticket or the model.
 MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
 
+# wq#3539 (2026-10-06 15:44-15:50Z, _runs/wq3446..wq3448): the CLI's own friendly text
+# for an org-level subscription revocation ("Your organization has disabled Claude
+# subscription access for Claude Code.") rode a thin result frame — <=1 turn, exit
+# nonzero, child dead in ~2s — with no mechanical signature of its own, so every one
+# of 9/9 attempts fell through to the generic LAUNCH_FAILURE catch-all (or the
+# wq#1499 thin-no-diff variant of it) indistinguishable from an ordinary spawn crash.
+# circuit_breaker.py tripped correctly on the resulting failure run, but nothing
+# downstream could tell WHY, so self_heal.py had no signal to re-probe auth and clear
+# DISPATCH_DISARM once access came back — dispatch stayed dead ~15h until a human
+# cleared the latch. Distinct from AUTH (§C11's mid-stream 401/authentication_failed,
+# which IS resumable — handle_resumable_failure re-runs the same session once the
+# token refreshes): this is a launch-time account-level denial no amount of retrying
+# the same attempt will clear, so it is bucketed with LAUNCH_FAILURE/KILLED/OOM in
+# fworker._INFRA_CRASH_CLASSIFICATIONS / circuit_breaker.CATASTROPHIC_CLASSES (the
+# breaker should still trip), but under its own verdict so self_heal can target it.
+AUTH_DENIED = "AUTH_DENIED"
+
 # wq#749: harness/prompts/worker.md has the model print exactly one of these as the
 # LAST line of its final message. Nothing parsed it before wq#749 — the sentinel
 # existed only as prose in the prompt (design/T2A_WORKER_HARNESS_DESIGN.md §3: "belt-
@@ -96,6 +113,15 @@ _UNSET = object()
 # of this preflight text.
 _MODEL_NOT_FOUND_RE = re.compile(
     r"issue with the selected model|model_not_found|not_found_error", re.I)
+
+# wq#3539: verbatim CLI text for an org-level subscription revocation (live evidence:
+# _runs/wq3446..wq3448, 2026-10-06 15:44-15:50Z) — "Your organization has disabled
+# Claude subscription access for Claude Code." Matched loosely enough to survive
+# minor wording drift (any CLI version) while staying specific to subscription/
+# account-access denial, not a generic auth 401.
+_SUBSCRIPTION_DISABLED_RE = re.compile(
+    r"disabled Claude subscription access|organization has disabled.*subscription",
+    re.I)
 
 # wq#1799 (de-spaghettifier Phase-0 E.2, FWORKER_FIXES_FROM_HR_TEARDOWN.md): a CLI
 # "API Error: ..." retry banner can land as the LAST assistant text block of a
@@ -143,6 +169,8 @@ class RunState:
         # branch) — distinct from saw_model_not_found (bad --model id/alias).
         self.saw_version_too_old = False
         self.saw_model_not_found = False
+        # wq#3539: set from the result frame's text — see _SUBSCRIPTION_DISABLED_RE.
+        self.saw_subscription_disabled = False
         # wq#1799: last non-empty assistant text block seen, so classify() can scrub
         # an API-error retry banner out of the SUCCESS path (§C1) — see
         # _API_ERROR_RETRY_RE above.
@@ -292,6 +320,8 @@ class RunState:
                 self.result_text = frame.get("result")
                 if isinstance(self.result_text, str) and _MODEL_NOT_FOUND_RE.search(self.result_text):
                     self.saw_model_not_found = True
+                if isinstance(self.result_text, str) and _SUBSCRIPTION_DISABLED_RE.search(self.result_text):
+                    self.saw_subscription_disabled = True
             self.usage = frame.get("usage")
             self.total_cost_usd = frame.get("total_cost_usd")
             self.duration_ms = frame.get("duration_ms")
@@ -323,6 +353,7 @@ class RunState:
             "saw_auth_failure": self.saw_auth_failure,
             "saw_model_not_found": self.saw_model_not_found,
             "saw_version_too_old": self.saw_version_too_old,
+            "saw_subscription_disabled": self.saw_subscription_disabled,
             "last_assistant_text": self.last_assistant_text,
             "usage": self.usage, "total_cost_usd": self.total_cost_usd,
             "duration_ms": self.duration_ms, "num_turns": self.num_turns,
@@ -359,6 +390,15 @@ def classify(state: RunState, exit_code=None, elapsed_s=None, diff_is_empty=None
     # shape rides alongside it.
     if terminal_reason == "turn_setup_failed":
         return LAUNCH_FAILURE
+
+    # wq#3539: an org-level subscription revocation, before any of the thinner
+    # catch-alls below get a chance to swallow it as an undifferentiated
+    # LAUNCH_FAILURE/CRASH — this needs its own verdict so fworker can fire a sharp
+    # ntfy and self_heal can target the right re-arm probe. Checked ahead of §C1
+    # SUCCESS too: whatever shape the result frame otherwise carries, this text means
+    # no real model turn happened.
+    if state.saw_subscription_disabled:
+        return AUTH_DENIED
 
     # wq#1499: a result frame this thin — <=1 real turn, wall-clock under 10s, a
     # nonzero exit, and the worktree shows no diff — is a launch-class fault the CLI
