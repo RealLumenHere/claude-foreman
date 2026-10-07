@@ -33,6 +33,8 @@ if [ "${1:-}" = --verify ]; then
   else
     "$cut" --version >/dev/null 2>&1 || _vmiss "$cut --version failed"
   fi
+  . "$SRC/../_retool_apt_install.sh"
+  retool_verify_no_autostart rizin cutter
   vdone
 fi
 
@@ -56,8 +58,12 @@ if [ -n "$MISSING" ]; then
   fi
   up="$(printf '%s\n' "$sim" | sed -n 's/^\([0-9][0-9]*\) upgraded.*/\1/p' | head -1)"
   [ "${up:-x}" = 0 ] || { echo "install: apt simulation would UPGRADE ${up:-?} packages; refusing" >&2; exit 3; }
-  # shellcheck disable=SC2086
-  DEBIAN_FRONTEND=noninteractive apt-get install -y $MISSING
+  # wq#3488: rizin/cutter are CLI/GUI tools, not daemons, but any apt install
+  # can ship a .service this ticket never asked to run (wq#3380 — bettercap).
+  # Route every re-tool apt install through the no-autostart guard rather than
+  # trusting each package to come daemon-free.
+  . "$SRC/../_retool_apt_install.sh"
+  retool_apt_install $MISSING
 fi
 
 echo "install: OK — $(rizin -v | head -1); $(cutter --version 2>&1 | head -1)"
