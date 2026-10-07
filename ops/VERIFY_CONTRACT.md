@@ -37,6 +37,17 @@ fi
 # ... install steps ...
 ```
 
+### Files that live in a git-tracked tree
+
+`vfile` passes a target that is byte-identical to the bundle copy. It also passes one
+that has moved on from it: the target is tracked in its own git repo (`/home/lumen/bin`,
+`/home/lumen/minerva`, `kb`), matches that repo's HEAD, and some commit in the file's
+history held the bundle copy byte for byte. It prints `OK superseded:` for that case.
+Before wq#3468, every bundle older than the last edit to a shared file failed every day
+and `ops-deploy-drift` re-filed it. Redeploying it would have reverted the later commits.
+An uncommitted edit on the live file is still a MISS, and so is a bundle copy edited
+after it shipped.
+
 ### Bundles whose payload calls another bundle's binary
 
 Byte-matching your own files proves nothing about a tool you shell out to. wq#3228 found

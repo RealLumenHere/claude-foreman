@@ -20,7 +20,15 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/chrome-mcp.service.d/20-wq2751-loopback.conf
   vunit_file "$SRC/memory-mcp.service.d/20-wq2751-loopback.conf" \
              /etc/systemd/system/memory-mcp.service.d/20-wq2751-loopback.conf
-  vactive chrome-mcp
+  # chrome-mcp was stopped+disabled on purpose (wq#2768 RCE-surface shutdown, 2026-09-29;
+  # wq#3321 retires its ingress), so live means retired: a running chrome-mcp is the MISS.
+  # wq#3468: the old `vactive chrome-mcp` failed this bundle every day after the shutdown.
+  case "$(systemctl is-active chrome-mcp 2>/dev/null || true)" in
+    active|activating) _vmiss "chrome-mcp is running again (retired by wq#2768)";;
+  esac
+  case "$(systemctl is-enabled chrome-mcp 2>/dev/null || true)" in
+    enabled) _vmiss "chrome-mcp is enabled again (retired by wq#2768)";;
+  esac
   vactive memory-mcp
 
   # the file+unit checks above prove the drop-in is INSTALLED, not that the process actually

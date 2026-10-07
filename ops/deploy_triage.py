@@ -89,10 +89,10 @@ REGISTER: dict[str, dict] = {
         reason="service, timer and gitleaks_detect.py all absent; no gitleaks unit live. "
                "The ticket's 'LANDED by orchestrator' note is about the merge, not the box."),
     "wq2086-presentation-stability": dict(
-        disposition=KEEP_DEPLOY, absent_units=["lumen-presentation-stability.timer"],
-        follow_up="wq#3002",
-        reason="minerva_presentation_stability.py is live and byte-identical, but both units "
-               "are absent, so the probe never runs. Half-deployed."),
+        disposition=KEEP_LIVE, units=["lumen-presentation-stability.timer"], follow_up=None,
+        reason="minerva_presentation_stability.py is live and byte-identical, and the timer "
+               "the wq#2985 triage found absent is now installed and enabled (wq#3468 re-check, "
+               "2026-10-07)."),
     "wq2851-aer-storm-alarm": dict(
         disposition=KEEP_DEPLOY, scope="remote", hosts=["isis", "hathor", "khepri", "nephthys"],
         follow_up="wq#3003",
@@ -206,11 +206,10 @@ REGISTER: dict[str, dict] = {
         reason="all four watchdog timers enabled+active and 9/10 payload files "
                "byte-identical; the tenth is smoke.py, a test. The DRIFTED verdict was noise."),
     "wq1633-minerva-projection-dirty-flag": dict(
-        disposition=KEEP_DEPLOY, absent_units=["lumen-federate-reindex.path"],
-        follow_up="wq#3002",
-        reason="projection_state.py is live byte-identical but lumen-federate-reindex.path "
-               "and .service are absent, so the dirty flag is written and nothing watches "
-               "it. Half-deployed."),
+        disposition=KEEP_LIVE, units=["lumen-federate-reindex.path"], follow_up=None,
+        reason="projection_state.py is live byte-identical, and lumen-federate-reindex.path, "
+               "absent at the wq#2985 triage, is now installed and enabled (wq#3468 re-check, "
+               "2026-10-07)."),
     "wq1705-guard-meta-watchdog": dict(
         disposition=KEEP_DEPLOY, absent_units=["lumen-guard-meta-watchdog.timer"],
         follow_up="wq#3002",

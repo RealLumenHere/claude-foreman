@@ -9,8 +9,10 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
+  # wq#3468: the fix's code, not its docstring wording; b153eda2 rewrapped the docstring
+  # and broke the old prose marker while the rule itself (now _needs_prefix) stayed live.
   vcontains "$SRC/../../harness/mask_replay.py" \
-    'only accounted where .prefix. immediately precedes'
+    'return len\(value\) < TRUNCATED_FLOOR'
   vcontains "$SRC/../../harness/tests/test_mask_replay.py" \
     'test_a_short_body_is_only_accounted_with_its_prefix_in_front'
   vcontains "$SRC/../../harness/tests/test_mask_replay.py" \

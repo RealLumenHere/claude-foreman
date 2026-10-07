@@ -26,13 +26,39 @@ _V_ERR=0
 
 _vmiss() { echo "MISS $*"; _V_MISS=$((_V_MISS + 1)); }
 
-# vfile SRC DST — DST exists and is byte-identical to SRC.
+# vfile SRC DST — DST exists and is byte-identical to SRC, or DST has moved on from
+# SRC through its own repo's commits (_vsuperseded).
 vfile() {
   local src="$1" dst="$2"
   [ -r "$src" ] || { echo "ERR source unreadable: $src"; _V_ERR=1; return; }
   if [ ! -e "$dst" ]; then _vmiss "absent: $dst"; return; fi
   [ -r "$dst" ] || { echo "ERR target unreadable: $dst"; _V_ERR=1; return; }
-  cmp -s "$src" "$dst" || _vmiss "differs: $dst (from $(basename "$src"))"
+  cmp -s "$src" "$dst" && return
+  if _vsuperseded "$src" "$dst"; then
+    echo "OK superseded: $dst moved on from $(basename "$src") in its own repo"
+    return
+  fi
+  _vmiss "differs: $dst (from $(basename "$src"))"
+}
+
+# _vsuperseded SRC DST — true when DST is tracked in a git repo (/home/lumen/bin,
+# /home/lumen/minerva, kb), matches that repo's HEAD byte for byte, and some
+# commit in HEAD's history of DST held exactly SRC. That means the bundle shipped
+# and later reviewed commits edited the file. wq#3468: a byte compare alone failed
+# every bundle older than the last edit to a shared file, every day, and none of
+# those could be fixed by redeploying (that would revert the newer commits).
+# An uncommitted edit on top of HEAD stays a MISS. So does a bundle copy edited
+# after it shipped, because that blob was never committed to the live repo.
+# Read-only: hash-object without -w, rev-parse, log.
+_vsuperseded() {
+  local src="$1" dst repo rel head blob
+  dst="$(realpath -- "$2" 2>/dev/null)" || return 1
+  repo="$(git -C "$(dirname "$dst")" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  rel="${dst#"$repo"/}"
+  head="$(git -C "$repo" rev-parse --quiet --verify "HEAD:$rel" 2>/dev/null)" || return 1
+  [ -n "$head" ] && [ "$head" = "$(git -C "$repo" hash-object -- "$dst" 2>/dev/null)" ] || return 1
+  blob="$(git -C "$repo" hash-object --path="$rel" -- "$src" 2>/dev/null)" || return 1
+  [ -n "$(git -C "$repo" log -1 --format=%H --find-object="$blob" HEAD -- "$rel" 2>/dev/null)" ]
 }
 
 # vunit_file SRC DST — same as vfile; named separately so reports read as units.
