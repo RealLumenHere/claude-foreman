@@ -80,6 +80,10 @@ nodes:                  # CLASS 6
                                    # 85% charge cap) — sleeps/roams off tailnet by
                                    # design, not a fleet outage; never remote-managed
                                    # per CLAUDE.md Tier-0 #2 either way
+    - maksoor               # wq#3524: RE workstation (laptop), Frank power-cycles
+                             # it by hand; lumen_state history shows prior
+                             # ONLINE/OFFLINE toggles (09-30 -> 10-01) with no
+                             # incident, not an always-on fleet node
 
 leakwatch:              # CLASS 3 (leakwatch.py daemon)
   harness_dir: /home/lumen/foreman/harness
