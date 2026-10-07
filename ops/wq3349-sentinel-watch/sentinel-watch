@@ -37,7 +37,7 @@ NTFY = os.environ.get("SW_NTFY", "http://localhost:8080")
 PROBE_STATE = os.environ.get("SW_PROBE_STATE", f"{HOME}/sentinel/probes/state.json")
 COOLDOWN = os.environ.get("SW_COOLDOWN", f"{HOME}/foreman/dispatcher/runtime/backend_cooldown.json")
 SELF = f"{HOME}/bin/sentinel-watch"
-MAX_NEW = int(os.environ.get("SW_MAX_TICKETS", "12"))
+MAX_NEW = int(os.environ.get("SW_MAX_TICKETS", "30"))  # wq#3464: 12 was overflowing every run against a ~25-finding backlog
 CLOSED = {"done", "closed", "cancelled", "canceled", "rejected", "wontfix", "superseded", "retired"}
 
 GUARDS = [  # (name, timer unit)
