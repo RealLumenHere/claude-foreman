@@ -103,7 +103,7 @@ def _wire(tmp_path, monkeypatch, calls):
 def test_dry_run_files_and_writes_nothing(tmp_path, monkeypatch):
     calls = []
     _wire(tmp_path, monkeypatch, calls)
-    assert sw.main(["--dry-run", "--quiet"]) == 1
+    assert sw.main(["--dry-run", "--quiet"]) == 4
     assert not any("add" in c for c in calls)
     assert not (tmp_path / "s.json").exists() and not (tmp_path / "l.log").exists()
 
@@ -111,7 +111,7 @@ def test_dry_run_files_and_writes_nothing(tmp_path, monkeypatch):
 def test_real_run_files_one_ticket_with_a_liveness_probe_and_logs(tmp_path, monkeypatch):
     calls = []
     _wire(tmp_path, monkeypatch, calls)
-    assert sw.main(["--quiet"]) == 1
+    assert sw.main(["--quiet"]) == 4
     adds = [c for c in calls if "add" in c]
     assert len(adds) == 1 and "--liveness" in adds[0]
     assert "[sentinel] x/y:" in adds[0][adds[0].index("--title") + 1]

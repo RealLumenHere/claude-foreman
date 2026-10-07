@@ -7,4 +7,6 @@ Type=oneshot
 User=lumen
 ExecStart=/home/lumen/bin/sentinel-watch
 TimeoutStartSec=900
+# wq#3483: exit 4 = findings filed (a successful run); exit 1 stays a crash
+SuccessExitStatus=4
 Nice=10

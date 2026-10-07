@@ -446,7 +446,10 @@ def main(argv=None):
         except OSError as e:
             print(f"log write failed: {e}", file=sys.stderr)
             return 2
-    return 1 if findings else 0
+    # wq#3483: audit-run exit vocabulary: 0 clean, 4 findings filed/known (unit has SuccessExitStatus=4),
+    # 2 log write failed. Exit 1 is left to mean 'crash' (uncaught exception) so a broken sentinel still
+    # fails the unit loudly. `--check KEY` keeps its probe contract (0 clear / 1 still present) above.
+    return 4 if findings else 0
 
 
 if __name__ == "__main__":

@@ -15,6 +15,6 @@ Name note: `lumen-sentinel-watch.timer` already exists (Gatus reciprocal watchdo
 Overlap: fleet-selfheal (wq#3354) acts live on guards/crash-loops/disk/providers/nodes; this is the independent
 4x-daily backstop and the only thing that watches aq, probes and failed units.
 
-Flags: `--dry-run` touches nothing; `--check KEY` exit 0 clear / 1 present; `--only a,b`; `--json`.
+Flags: `--dry-run` touches nothing; `--check KEY` exit 0 clear / 1 present (a sweep exits 0 clean / 4 findings / 2 log write failed, wq#3483); `--only a,b`; `--json`.
 Deploy: `bash install.sh` ; verify: `bash install.sh --verify`. Rollback line printed by install.sh.
 Log: /home/lumen/logs/sentinel-watch.log (Pacific). State: /home/lumen/agents/sentinel-watch/state.json.
