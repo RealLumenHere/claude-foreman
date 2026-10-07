@@ -155,7 +155,13 @@ Answer with ONE JSON object and nothing else, with exactly these five string key
   not the full proposal. Commands only, one per line, no prose.
 
 Absolute paths, no paid APIs, no Anthropic spend. The pilot runs on one box within
-{wallclock} minutes."""
+{wallclock} minutes.
+
+If baseline or treatment starts a long-running server (e.g. `ollama serve &`), the
+same arm must capture its PID and kill it once the arm's measurement is taken —
+never background a server and leave it running past the command block that needed
+it, and never start one without first checking whether a service on that port is
+already running on the box."""
 
 RETRY_SUFFIX = """
 
