@@ -51,7 +51,7 @@ GUARDS = [  # (name, timer unit)
 GUARD_SERVICES = [("leakwatch", "lumen-leakwatch.service"), ("alert-queue", "lumen-alert-queue.service")]
 KNOWN_ABSENT = {"overlay-drift-guard": "never built (wq#3350: no trace in systemd, journal or git); listed, not ticketed"}
 CORE_PROBES = {"probe-storage-integrity", "probe-r4-unticketed-recovery", "probe-credential-expiry"}
-PROBE_MAX_AGE = {"probe-r4-unticketed-recovery": 50 * 3600, "probe-synthetic-llm": 3 * 3600}  # seconds since last run
+PROBE_MAX_AGE = {"probe-r4-unticketed-recovery": 50 * 3600, "probe-synthetic-llm": 6 * 3600}  # seconds since last run; synthetic-llm self-gates to one run per 4h (sentinel_probes.py PROBES "4h" gate) + up to 30m poll slip, so a 3h threshold false-positives every cycle (wq#3538) -- 6h gives margin above the real 4h+30m cadence
 
 
 def now_pt() -> str:
