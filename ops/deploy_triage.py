@@ -227,8 +227,8 @@ REGISTER: dict[str, dict] = {
                "SIGHUP was found to exit cloudflared 2026.7.3 (Restart=on-failure treats "
                "that as clean), so the HUP reload path and HUP smoke were dropped first. "
                "Callers: stage 1 wadjet-ha-monitor/failback live (lumen-bin #238), "
-               "stage 2 healer via ops/wq3575-healer-cfd-actuator; stages 3-4 "
-               "(public guardian, sudoers cleanup) still direct."),
+               "stage 2 healer via ops/wq3575-healer-cfd-actuator, stage 3 public guardian "
+               "(its cloudflared sudoers line dropped). Stage 4: sudoers cleanup."),
     "wq1554-langfuse-lag-monitor": dict(
         disposition=OWNED, owner="wq#1555", follow_up=None,
         reason="wq#1555 (blocked) already owns the deploy: it needs /home/lumen/langfuse in "

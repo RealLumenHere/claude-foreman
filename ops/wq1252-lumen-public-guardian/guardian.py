@@ -54,11 +54,11 @@ UNCONFIGURED = "unconfigured"   # check cannot run — missing credential/path
 # the intended failure direction.
 HEAL_ALLOWLIST = [
     ["sudo", "/usr/bin/systemctl", "restart", "lumen-pokemon-live.service"],
-    # cloudflared goes through detached systemd-run (instinct 4). No --unit:
-    # sudoers rejects wildcards in command arguments, and a fixed unit name
-    # would collide with an in-flight restart.
-    ["sudo", "/usr/bin/systemd-run", "--collect", "/usr/bin/systemctl",
-     "restart", "cloudflared.service"],
+    # cloudflared is never bounced from here: the heal files a request with
+    # cfd-actuator, the single owner that applies holddown, slock and a shared
+    # cooldown (wq#1652 stage 3, wq#3575). No sudo, so no sudoers line.
+    ["/home/lumen/bin/cfd-actuator", "request", "--from", "public-guardian",
+     "--kind", "restart", "--reason"],
     ["npx", "wrangler", "d1", "migrations", "apply"],
     ["npx", "wrangler", "d1", "export"],
     ["npx", "wrangler", "rollback"],

@@ -204,17 +204,13 @@ def heal_restart_live(cfg, dry_run=False):
 
 
 def heal_restart_cloudflared(cfg, dry_run=False):
-    """Detached via systemd-run: restarting cloudflared from a process whose own
-    route out runs over that tunnel otherwise kills the restarter (instinct 4 —
-    cloudflared changes go through detached systemd-run, never foreground).
-
-    systemd names the transient unit itself. Passing --unit with a timestamp
-    would need a sudoers wildcard, and sudoers refuses wildcards in command
-    arguments; a fixed name would collide with a restart still in flight.
-    """
-    return run_heal(["sudo", "/usr/bin/systemd-run", "--collect",
-                     "/usr/bin/systemctl", "restart",
-                     _cfg(cfg)["cloudflared_unit"]],
+    """Files a restart request with cfd-actuator, the one owner of cloudflared
+    restarts (wq#1652 stage 3). It serves the request on its next drain tick
+    (<=60 s, inside this timer's 2 min cadence) through detached systemd-run,
+    behind holddown, slock and a cooldown shared with the healer and wadjet."""
+    return run_heal(["/home/lumen/bin/cfd-actuator", "request",
+                     "--from", "public-guardian", "--kind", "restart",
+                     "--reason", f"heal ladder: {_cfg(cfg)['cloudflared_unit']} stream red"],
                     timeout=60, dry_run=dry_run)
 
 

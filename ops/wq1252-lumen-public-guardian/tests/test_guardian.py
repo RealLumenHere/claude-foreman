@@ -204,12 +204,20 @@ def test_every_heal_the_checks_can_run_is_allowlisted():
         assert ok, out
 
 
-def test_cloudflared_heal_goes_through_detached_systemd_run():
-    """Instinct 4: cloudflared is only ever touched via detached systemd-run."""
+def test_cloudflared_heal_files_a_cfd_actuator_request():
+    """wq#3575 stage 3: the guardian asks cfd-actuator, never bounces cloudflared."""
     ok, out = checks_stream.heal_restart_cloudflared(
         {"stream": {"cloudflared_unit": "cloudflared.service"}}, dry_run=True)
     assert ok
-    assert "systemd-run" in out and "--collect" in out
+    assert "cfd-actuator request --from public-guardian --kind restart" in out
+    assert "systemd-run" not in out and "sudo" not in out
+
+
+def test_no_direct_cloudflared_restart_is_allowlisted():
+    """The old detached-restart argv must now be refused: only the actuator may act."""
+    with pytest.raises(guardian.HealNotAllowed):
+        guardian.run_heal(["sudo", "/usr/bin/systemd-run", "--collect",
+                           "/usr/bin/systemctl", "restart", "cloudflared.service"])
 
 
 # --------------------------------------------------------------------------

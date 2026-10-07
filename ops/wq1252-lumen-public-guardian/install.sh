@@ -52,17 +52,14 @@ else
   echo "$SECRET already exists, leaving it alone"
 fi
 
-echo "== sudoers: exactly the two heals in HEAL_ALLOWLIST =="
+echo "== sudoers: exactly the one sudo heal in HEAL_ALLOWLIST =="
 cat > /etc/sudoers.d/lumen-public-guardian <<'EOF'
-# wq#1252 — lumen-public-guardian's stream heal ladder. Deliberately two exact
-# commands with fully-specified arguments: this grant must not become a general
-# systemctl grant. They match HEAL_ALLOWLIST in guardian.py verbatim; change
-# one and you must change the other. cloudflared is restarted through
-# systemd-run because the guardian's own route out runs over that tunnel
-# (instinct 4), and with no --unit because sudoers rejects wildcards in
-# command arguments.
+# wq#1252 — lumen-public-guardian's stream heal ladder. Deliberately one exact
+# command with fully-specified arguments: this grant must not become a general
+# systemctl grant. It matches HEAL_ALLOWLIST in guardian.py verbatim; change
+# one and you must change the other. No cloudflared line: the guardian files
+# requests with cfd-actuator, which holds the only restart grant (wq#3575).
 lumen ALL=(root) NOPASSWD: /usr/bin/systemctl restart lumen-pokemon-live.service
-lumen ALL=(root) NOPASSWD: /usr/bin/systemd-run --collect /usr/bin/systemctl restart cloudflared.service
 EOF
 chmod 440 /etc/sudoers.d/lumen-public-guardian
 visudo -cf /etc/sudoers.d/lumen-public-guardian
