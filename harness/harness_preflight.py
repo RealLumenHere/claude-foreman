@@ -60,7 +60,7 @@ STAMP_DIR = os.environ.get("FOREMAN_PREFLIGHT_STAMP_DIR",
                             os.path.join(HARNESS_DIR, "runtime", "preflight"))
 RENDER_DIR = os.environ.get("FOREMAN_PREFLIGHT_RENDER_DIR",
                              os.path.join(HARNESS_DIR, "runtime", "preflight", "render"))
-CHEAPEST_MODEL = "claude-haiku-4-5"
+CHEAPEST_MODEL = "claude-haiku-5-5"   # wq#3618
 LIVE_PROOF_TIMEOUT = 300
 # wq#1407: the dispatcher unit's PATH has no /home/lumen/.npm-global/bin, so a bare
 # "claude" spawn from handle_stale_preflight raised FileNotFoundError on every auto-

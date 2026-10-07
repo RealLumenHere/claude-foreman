@@ -60,7 +60,7 @@ def test_routing_rows_are_the_step_10_rows(m):
     assert [r.spec() for r in m.chain("mechanical-edit")] == \
         ["claude-sonnet-5@low"]
     assert [r.spec() for r in m.chain("probe-build")] == \
-        ["claude-sonnet-5@medium", "claude-haiku-4-5"]
+        ["claude-sonnet-5@medium", "claude-haiku-5-5"]
     assert [r.spec() for r in m.chain("standard-engineering")] == \
         ["claude-sonnet-5@high", "claude-sonnet-5@medium", "claude-opus-5@medium(escalate-on-fail)"]
     assert all(r.model != "qwen36-local" for r in m.chain("mechanical-edit"))
@@ -138,13 +138,13 @@ def test_unreadable_cooldown_file_is_no_cooldown(raw, scratch):
 def test_fails_walk_position_survives_a_cooled_rung(m):
     """probe-build's base chain is now cloud-only (wq#2583); fails walks it directly."""
     assert pick(m, "probe-build", fails=0) == "claude-sonnet-5@medium"
-    assert pick(m, "probe-build", fails=1) == "claude-haiku-4-5"
+    assert pick(m, "probe-build", fails=1) == "claude-haiku-5-5"
 
 
 def test_candidates_drops_cooled_rungs_by_default(m, scratch):
     cool(scratch, *GROUP)
     assert [r.spec() for r in router.candidates(m, "probe-build")] == \
-        ["claude-sonnet-5@medium", "claude-haiku-4-5"]
+        ["claude-sonnet-5@medium", "claude-haiku-5-5"]
     assert len(router.candidates(m, "probe-build", available_only=False)) == 2
 
 
@@ -184,7 +184,7 @@ def test_cloud_rung_with_dead_status_is_skipped(raw):
         if row["id"] == "claude-sonnet-5":
             row["status"] = "TOMBSTONE-CONFIRMED"
     m = router.Manifest(raw)
-    assert pick(m, "probe-build", allow_local=False) == "claude-haiku-4-5"
+    assert pick(m, "probe-build", allow_local=False) == "claude-haiku-5-5"
 
 
 def test_cooled_cloud_rung_is_skipped(m, scratch):
@@ -193,7 +193,7 @@ def test_cooled_cloud_rung_is_skipped(m, scratch):
     wq#3354 the cooldown file was read for local rungs only, so this picked sonnet."""
     (scratch / "cooldown.json").write_text(json.dumps({"claude-sonnet-5": {
         "until": time.time() + 900, "source": "fleet-selfheal", "reason": "401"}}))
-    assert pick(m, "probe-build", allow_local=False) == "claude-haiku-4-5"
+    assert pick(m, "probe-build", allow_local=False) == "claude-haiku-5-5"
     cool(scratch, "claude-sonnet-5", until=time.time() - 1)
     assert pick(m, "probe-build", allow_local=False) == "claude-sonnet-5@medium"
 

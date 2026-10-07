@@ -89,3 +89,41 @@ wq#811/813/815 (haiku arms, wq#815 replaces excluded wq#807), wq#809 (haiku arm)
 wq#817 (diagnostic-only, not part of the trial). PRs #64-71 on `claude-foreman`
 (Gitea) are the eight trial diffs — calibration throwaways per each ticket's own
 detail text, not intended to land; safe to close without merging.
+
+## wq#3618 re-run: claude-haiku-5-5 vs sonnet-5@low (2026-10-07)
+
+CC v2.1.293 made `claude-haiku-5-5` the default Haiku. Same four tasks, rerun with
+`harness/cal1_pair.py`. It uses the real `fworker.py run` in the `cal1_fixture.py` sandbox:
+scratch wq DB, lumen-pr shimmed to `/bin/false`, and a clone of foreman pinned to
+`8d614840` with its remote removed, so no trial PRs were opened this time. Arms ran
+interleaved per pair. Each arm was scored by a check command run in its worktree, and
+every check fails on the unmodified base. A: `reaper.py --version` exits 0. B:
+judgment.py changed, has `->`, and `orchestrator/tests` pass. C: a new non-test script
+opens with `mode=ro`. D: the new test file passes.
+
+| pair | haiku-5-5 wall / turns | sonnet@low wall / turns | haiku-5-5 vs sonnet@low | checks |
+|---|---|---|---|---|
+| A | 50.0s / 15 | 56.2s / 9 | -11% | PASS/PASS |
+| B | 90.4s / 40 | 95.1s / 32 | -5% | PASS/PASS |
+| C | 79.4s / 21 | 84.7s / 21 | -6% | PASS/PASS |
+| D | 71.3s / 20 | 133.2s / 19 | -46% | PASS/PASS |
+| **mean** | **72.8s / 24** | **92.3s / 20** | **-21%** | **4/4 both** |
+
+All 8 classified SUCCESS and closed `done`. Wall-clock is fworker's own elapsed time. The
+first scoring flagged C/haiku FAIL because the check grabbed the arm's
+`test_wq5_queue_census.py` instead of the script. That was a check bug: the script does
+open with `mode=ro`, and both arms' C tests pass (3/3 and 2/2). It was fixed and rescored
+(`cal1_pair.py rescore`).
+
+Reading: haiku-4-5's +44% latency penalty is gone. haiku-5-5 beat sonnet@low on every
+pair while using a few more turns, with no correctness gap. The CLI's `total_cost_usd`
+cannot be used here. CLI 2.1.282 doesn't recognise the model
+(`[claude-code:unrecognized_model]`) and bills a 29K-token canary at $0.085, where
+$0.10/$0.50 pricing would come to about $0.0015.
+
+Placement: haiku-5-5 replaces haiku-4-5 as probe-build's downgrade rung and takes the
+`haiku` alias. It is not promoted to a primary: n=4, and sonnet@low owns mechanical-edit
+on yield (wq#750). haiku-4-5 stays LIVE for explicit pins and as the self-heal auth-probe
+model (`dispatcher/self_heal.py`), the one model that cannot be org-disabled. Raw results:
+`/tmp/fworker-wq3618/cal1pair/pair_results.json` (scratch, not durable). Rerun with the
+command in the `cal1_pair.py` docstring.

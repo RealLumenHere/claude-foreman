@@ -90,6 +90,14 @@ def test_resolve_alias_fable_5_1_specifically(m):
     assert router.resolve_alias("fable") == "claude-fable-5"
 
 
+def test_haiku_alias_moved_to_haiku_5_5_and_fallback_table_agrees(m):
+    # wq#3618: the yaml alias and the import-time fallback dict must name the same model
+    assert router.resolve_alias("haiku") == "claude-haiku-5-5"
+    assert router.resolve_alias("haiku-4-5") == "claude-haiku-4-5"
+    for alias in ("haiku", "haiku-5-5", "haiku-4-5"):
+        assert router._FALLBACK_ALIASES[alias] == router.resolve_alias(alias)
+
+
 @pytest.mark.parametrize("title,detail,lane,arch,expected", SAMPLES)
 def test_sample_tickets_route_to_expected_tuple(m, title, detail, lane, arch, expected):
     got_arch, _ = router.classify_archetype(title, detail, lane)
@@ -139,10 +147,10 @@ def test_attempt_count_downgrades_probe_build_without_pressure(m):
     r0, _ = router.select(m, "probe-build", fails=0)
     assert (r0.model, r0.effort) == ("claude-sonnet-5", "medium")
     r1, reasons = router.select(m, "probe-build", fails=1)
-    assert r1.model == "claude-haiku-4-5"
+    assert r1.model == "claude-haiku-5-5"
     assert any("attempt-count downgrade" in w for w in reasons)
     r2, _ = router.select(m, "probe-build", fails=2)
-    assert r2.model == "claude-haiku-4-5"
+    assert r2.model == "claude-haiku-5-5"
 
 
 def test_attempt_count_downgrades_mechanical_edit_without_pressure(m):
@@ -166,14 +174,14 @@ def test_attempt_count_does_not_override_escalation_facts(m):
 
 def test_route_cli_probe_build_fails_1_walks_to_the_haiku_floor(m):
     # `route probe-build --fails 1` with no --pressure (wq#2583: local-worker is gone, the
-    # base chain is sonnet-5@medium then haiku-4-5, so fails=1 already hits the floor).
+    # base chain is sonnet-5@medium then haiku-5-5 (wq#3618), so fails=1 already hits the floor).
     out = subprocess.run(
         [sys.executable, os.path.join(ORCH_DIR, "router.py"), "--manifest", MANIFEST,
          "route", "probe-build", "--fails", "1"],
         capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     d = json.loads(out.stdout)
-    assert d["rung"] == {"model": "claude-haiku-4-5", "effort": None, "pool": "cloud",
+    assert d["rung"] == {"model": "claude-haiku-5-5", "effort": None, "pool": "cloud",
                          "condition": None}
 
 
@@ -201,7 +209,7 @@ def test_dominated_table_parsed(m):
 def test_dominated_never_selected_exhaustively(m):
     """Every archetype x every pressure combination x every escalation fact: the router
     never emits a dominated (model, effort)."""
-    models = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]
+    models = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5"]
     levels = ["ok", "tight", "deny"]
     n = 0
     for arch in router.ARCHETYPES + ["orchestrator"]:
@@ -275,7 +283,7 @@ def test_hard_deny_moves_to_next_model_not_lower_effort(m):
     assert why[-1] == "every rung denied, dominated or unavailable"
     # probe-build still has the haiku floor below sonnet: a sonnet deny lands there
     r, _ = router.select(m, "probe-build", pressure=lambda x: "deny" if "sonnet" in x else "ok")
-    assert r.model == "claude-haiku-4-5" and r.effort is None
+    assert r.model == "claude-haiku-5-5" and r.effort is None
     r, why = router.select(m, "novel-design", pressure=lambda x: "deny")
     assert r is None
 
@@ -296,6 +304,7 @@ def test_escalation_rungs_need_their_facts(m):
 
 
 def test_effort_ceiling_clamp(m):
+    assert m.clamp_effort("claude-haiku-5-5", "high") is None
     assert m.clamp_effort("claude-haiku-4-5", "high") is None
     assert m.clamp_effort("claude-opus-4-6", "xhigh") == "high"
     assert m.clamp_effort("claude-sonnet-5", "max") == "max"

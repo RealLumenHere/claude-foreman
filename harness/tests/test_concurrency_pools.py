@@ -58,7 +58,7 @@ def test_mac_models_are_local_and_cloud_models_are_neither():
     for m in ("hathor-llama8b", "nephthys-qwen14b", "qwen36-local", "local-worker",
               "local-worker@local"):
         assert concurrency.is_mac_local_model(m) and concurrency.is_local_model(m)
-    for m in ("claude-sonnet-5", "claude-haiku-4-5", None, ""):
+    for m in ("claude-sonnet-5", "claude-haiku-5-5", "claude-haiku-4-5", None, ""):
         assert not concurrency.is_local_model(m) and not concurrency.is_mac_local_model(m)
         assert not concurrency.is_cheap_cloud_model(m)
 

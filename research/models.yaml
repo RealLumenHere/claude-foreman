@@ -177,8 +177,7 @@ models:
     trust: "standard-engineering; probe-build; mechanical-edit; verify-pass gate model."
 
   - id: claude-haiku-4-5
-    alias: haiku            # pin claude-haiku-4-5; alias carries no version guarantee
-    status: LIVE
+    status: LIVE            # wq#3618: off the routing chains, pin-only; 'haiku' moved to haiku-5-5
     context: 200K
     efforts: []             # no effort support — launch without --effort
     pools: [session, weekly_all]
@@ -200,6 +199,25 @@ models:
       51s per pair, range +10% to +58%). No correctness edge for haiku, measurably
       slower, only cheaper — stays the downgrade rung behind sonnet@low, not a primary.
       Small-N calibration; see research/CAL1_HAIKU_VS_SONNET_LOW.md."
+
+  - id: claude-haiku-5-5
+    alias: haiku            # wq#3618: pin claude-haiku-5-5; alias carries no version guarantee
+    status: LIVE
+    context: 1M
+    efforts: []             # launched without --effort, same as haiku-4-5
+    pools: [session, weekly_all]
+    api_price_mtok: {in: 0.10, out: 0.50, note: "CC v2.1.293 changelog (wq#3613): $0.50/$2.50 over 100K input"}
+    note: "wq#3618: default Haiku on the Anthropic API since CC v2.1.293 (2026-10-07).
+      Callable on our OAuth CLI path: cli_canary.probe -> ok, modelUsage served as
+      claude-haiku-5-5 (CLI 2.1.282)."
+    trust: "probe-build downgrade rung (replaced haiku-4-5). CAL-1 re-run wq#3618
+      (2026-10-07, harness/cal1_pair.py, wq#780's four pairs, rev 8d614840): SUCCESS 4/4
+      on both haiku-5-5 and sonnet-5@low, every arm's check re-run independently; haiku-5-5
+      FASTER on every pair (mean 72.8s vs 92.3s, -5% to -46%), 96 vs 81 turns total.
+      CLI-reported cost is not comparable (the CLI prices a model it does not recognise).
+      Small-N; see research/CAL1_HAIKU_VS_SONNET_LOW.md §wq#3618."
+    quirks: ["CLI < 2.1.293 logs [claude-code:unrecognized_model] on stderr but serves it,
+      reports contextWindow 200000 (not 1M) and accepts --effort without saying whether it applied"]
 
   # LISTED-NOT-ROUTED (pin targets / fallback landing zones; no price or capability edge on subscription)
   - {id: claude-opus-4-8,  status: LIVE,      efforts: [low,medium,high,xhigh,max], note: "Fable cyber-fallback target; api 5/25"}
@@ -349,7 +367,10 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   # agentic suite (wq#2246) at >=60% on mechanical-edit-shaped tasks with a FALSE_COMPLETE
   # rate <=10%.
   mechanical-edit:      [sonnet-5@low]
-  probe-build:          [sonnet-5@medium, haiku-4-5]
+  # wq#3618: haiku-5-5 replaces haiku-4-5 as the haiku rung on its CAL-1 re-run. haiku-4-5 is
+  # not kept as a third rung: the attempt-count walk would hand a twice-failed ticket to the
+  # older, slower model. It stays LIVE and listed for explicit `--model haiku-4-5` pins.
+  probe-build:          [sonnet-5@medium, haiku-5-5]
   standard-engineering: [sonnet-5@high,   sonnet-5@medium, opus-5@medium(escalate-on-fail)]
   # wq#2450 2026-09-24: rca-investigation + research-synthesis primary moved opus-5 -> opus-5-5.
   # Effort rungs shifted down one notch (xhigh->high, high->medium), not carried over verbatim:
@@ -413,7 +434,7 @@ effort_resolution:
       # medium/high (see `routing:` above) — this ladder documents the CLI's raw capability,
       # not the fleet's routing choice.
     max_no_xhigh:        [opus-4-6, sonnet-4-6]      # xhigh silently -> high
-    none:                [haiku-4-5]
+    none:                [haiku-5-5, haiku-4-5]   # haiku-5-5: launched without --effort (wq#3618)
   downgrade_rule: "unsupported max->high, unsupported xhigh->high (never adjacent tier)"
   verify: "actual per-turn effort = $CLAUDE_EFFORT env / hook effort.level / get_settings.applied.effort"
 

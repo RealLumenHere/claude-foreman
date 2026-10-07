@@ -106,6 +106,9 @@ STALE_NTFY_DEDUP_H = 6  # a still-stuck ticket only re-pings Frank every 6h, not
 # this probe exists to rule out) and cli_canary.probe() runs the real worker-launch
 # auth path (cli_canary._probe_env), not a synthetic check.
 CLAUDE_BIN = os.environ.get("FOREMAN_CLAUDE_BIN", "/home/lumen/.npm-global/bin/claude")
+# wq#3618 kept this on haiku-4-5 when haiku-5-5 took the fleet haiku rung: a model-level
+# failure here reads as an auth failure and leaves dispatch disarmed, and haiku-4-5 is the
+# model that cannot be org-disabled.
 AUTH_PROBE_MODEL = os.environ.get("FOREMAN_AUTH_PROBE_MODEL", "claude-haiku-4-5")
 AUTH_PROBE_DEDUP_MIN = int(os.environ.get("FOREMAN_AUTH_PROBE_DEDUP_MIN", "15"))
 

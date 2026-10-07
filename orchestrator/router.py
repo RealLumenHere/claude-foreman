@@ -167,7 +167,8 @@ _FALLBACK_ALIASES = {
     "opus-5": "claude-opus-5", "opus": "claude-opus-5",
     "opus-5-5": "claude-opus-5-5",   # wq#2450: 'opus' stays pinned to opus-5, not this
     "sonnet-5": "claude-sonnet-5", "sonnet": "claude-sonnet-5",
-    "haiku-4-5": "claude-haiku-4-5", "haiku": "claude-haiku-4-5",
+    "haiku-5-5": "claude-haiku-5-5", "haiku": "claude-haiku-5-5",   # wq#3618
+    "haiku-4-5": "claude-haiku-4-5",
     "opus-4-8": "claude-opus-4-8", "opus-4-7": "claude-opus-4-7", "opus-4-6": "claude-opus-4-6",
     "sonnet-4-6": "claude-sonnet-4-6",
 }
