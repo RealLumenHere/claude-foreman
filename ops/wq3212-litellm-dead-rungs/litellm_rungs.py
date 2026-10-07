@@ -31,7 +31,8 @@ import yaml
 NEVER_PROBE = {"messenger-chat", "messenger-re"}
 SKIP_SUBSTRINGS = ("embed", "rerank", "whisper", "tts")
 
-Rung = collections.namedtuple("Rung", "host model_name")
+# timeout = the rung's own litellm_params.timeout (seconds), None when unset
+Rung = collections.namedtuple("Rung", "host model_name timeout", defaults=(None,))
 
 
 def _eligible(entry: dict) -> bool:
@@ -48,19 +49,38 @@ def _host(entry: dict) -> str:
             or str(lp.get("model", "")).split("/")[0])
 
 
+def _timeout(entry: dict):
+    try:
+        return float((entry.get("litellm_params", {}) or {})["timeout"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _eligible_entries(config_path: str):
+    cfg = yaml.safe_load(pathlib.Path(config_path).read_text())
+    return [e for e in cfg.get("model_list", []) or [] if _eligible(e)]
+
+
 def host_groups(config_path: str) -> "collections.OrderedDict[str, list]":
     """host -> [eligible chat model_names], in config order. A host whose only
     rungs are ineligible (never-probe / embed-class) does not appear at all."""
-    cfg = yaml.safe_load(pathlib.Path(config_path).read_text())
     groups = collections.OrderedDict()
-    for entry in cfg.get("model_list", []) or []:
-        if not _eligible(entry):
-            continue
+    for entry in _eligible_entries(config_path):
         groups.setdefault(_host(entry), []).append(entry["model_name"])
     return groups
 
 
 def one_rung_per_host(config_path: str) -> list:
-    """One (host, model_name) per distinct api_base host — first eligible model
-    wins (a dead host fails every model on it identically, wq#3169)."""
-    return [Rung(host, models[0]) for host, models in host_groups(config_path).items()]
+    """One rung per distinct api_base host (a dead host fails every model on it
+    identically, wq#3169). wq#3463: the representative is the rung with the
+    SMALLEST configured timeout (the operator's own "this one answers fast"),
+    config order breaking ties and untimed rungs ranking last — first-in-config
+    elected gemma4-e4b-local (timeout 600) on Lumen over lumen-lfm2-1b (120)."""
+    best = collections.OrderedDict()
+    for entry in _eligible_entries(config_path):
+        rung = Rung(_host(entry), entry["model_name"], _timeout(entry))
+        cur = best.get(rung.host)
+        if cur is None or (rung.timeout is not None
+                           and (cur.timeout is None or rung.timeout < cur.timeout)):
+            best[rung.host] = rung
+    return list(best.values())
