@@ -98,9 +98,11 @@ risk during migration is no worse than today.
   Same stage: `bin/wadjet-ha-failback.sh` step [3/6] (`kill -s HUP ||
   restart`, :174) files the same `--kind reload` request. Until stage 1
   lands, both scripts' HUP leaves the tunnel down after a vault flip.
-- **Stage 2 (self-healer)** — in `healer_watch_table.yaml`, set the
-  cloudflared entry's `restart_cmd` to
-  `/home/lumen/bin/cfd-actuator request --from self-healer --kind restart --reason "watch-table: cloudflared down"`.
+- **Stage 2 (self-healer)** — `ops/wq3575-healer-cfd-actuator`: sets the
+  cloudflared entry's `restart_cmd` to `/home/lumen/bin/cfd-heal-request`, a
+  zero-argument wrapper for
+  `cfd-actuator request --from self-healer --kind restart`. A wrapper is needed
+  because the healer execs `restart_cmd` as a single argv element, with no shell.
   The healer's own holddown check becomes redundant for this unit (the
   actuator re-checks); its 3-strike ntfy still works because a filed request
   that goes unserved keeps the unit down and the healer re-fires.

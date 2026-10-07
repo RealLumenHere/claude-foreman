@@ -1,0 +1,5 @@
+# Fixture: rows copied from /home/lumen/agent/healer_watch_table.yaml (2026-10-07).
+units:
+  cloudflared:           {kind: systemd, policy: restart, owner: edge,      holddown_flag: /home/lumen/agents/holddowns/cloudflared.json}
+  mcp-gateway:           {kind: systemd, policy: restart, owner: hands,     holddown_flag: /home/lumen/agents/holddowns/mcp-gateway.json}
+  ntfy:                  {kind: docker,  policy: restart, owner: alerting,  holddown_flag: /home/lumen/agents/holddowns/ntfy.json}

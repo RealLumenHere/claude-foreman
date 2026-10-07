@@ -221,14 +221,14 @@ REGISTER: dict[str, dict] = {
                "not a stale bundle. Pre-install --dry-run classified all 4 failed units "
                "not-a-guard: nothing to restart."),
     "wq1652-cfd-actuator": dict(
-        disposition=KEEP_DEPLOY, absent_units=["lumen-cfd-actuator.timer"],
+        disposition=KEEP_LIVE, units=["lumen-cfd-actuator.timer"],
         follow_up="wq#3575",
-        reason="still absent (root --verify 2026-10-07) and the need stands: wadjet-ha-monitor, "
-               "wadjet-ha-failback and the public guardian each bounce cloudflared themselves. "
-               "wq#3575: SIGHUP exits cloudflared 2026.7.3 and Restart=on-failure treats "
-               "that as clean, so the HUP reload path and the HUP install smoke were "
-               "dropped (reload = cooldown-exempt restart, smoke = read-only status) "
-               "before stage 0 goes in."),
+        reason="stage 0 installed 2026-10-07 (wq#3575), --verify VERIFY OK. Before install, "
+               "SIGHUP was found to exit cloudflared 2026.7.3 (Restart=on-failure treats "
+               "that as clean), so the HUP reload path and HUP smoke were dropped first. "
+               "Callers: stage 1 wadjet-ha-monitor/failback live (lumen-bin #238), "
+               "stage 2 healer via ops/wq3575-healer-cfd-actuator; stages 3-4 "
+               "(public guardian, sudoers cleanup) still direct."),
     "wq1554-langfuse-lag-monitor": dict(
         disposition=OWNED, owner="wq#1555", follow_up=None,
         reason="wq#1555 (blocked) already owns the deploy: it needs /home/lumen/langfuse in "

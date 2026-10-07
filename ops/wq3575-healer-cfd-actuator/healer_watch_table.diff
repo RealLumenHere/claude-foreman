@@ -1,0 +1,5 @@
+--- a/agent/healer_watch_table.yaml
++++ b/agent/healer_watch_table.yaml
+@@ -17 +17 @@
+-  cloudflared:           {kind: systemd, policy: restart, owner: edge,      holddown_flag: /home/lumen/agents/holddowns/cloudflared.json}
++  cloudflared:           {kind: systemd, policy: restart, owner: edge,      holddown_flag: /home/lumen/agents/holddowns/cloudflared.json, restart_cmd: /home/lumen/bin/cfd-heal-request}

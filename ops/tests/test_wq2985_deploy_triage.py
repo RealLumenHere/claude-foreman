@@ -79,15 +79,15 @@ def test_check_flags_a_live_claim_whose_unit_vanished(monkeypatch):
 
 
 def test_check_flags_a_deploy_row_that_deployed_behind_our_back(monkeypatch):
-    """The other falsification path: a DEPLOY row must break when the thing it
-    says is absent turns up installed."""
+    """The other falsification path: a row must break when the thing it says is
+    absent turns up installed."""
     monkeypatch.setattr(
         dt, "live_unit_files",
         lambda: {u: "enabled"
                  for r in dt.REGISTER.values() for u in r.get("units", [])}
-        | {"lumen-cfd-actuator.timer": "enabled"})
+        | {"paid-spend-tripwire.timer": "enabled"})
     problems = dt.check(OPS)
-    assert any("deployed outside this register" in p and "cfd-actuator" in p
+    assert any("deployed outside this register" in p and "wq1406" in p
                for p in problems)
 
 
