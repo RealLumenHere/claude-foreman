@@ -90,6 +90,10 @@ nodes:                  # CLASS 6
     - seshat       # wq#3450: P6 powered off by Frank 2026-09-30 pending inspection; do not power on
     - be3600       # wq#3450: tailscale subnet/exit-node role broken since 2026-06-17; router itself works via LAN
     - 3dprinter    # wq#3450: AIO powered off, no lan_ip/ssh path recorded; not fleet-managed
+  notes:                           # wq#3619: known-issue context folded into a node's
+                                   # outage ticket, keyed by lumen_state node name —
+                                   # NOT a silencer like ignore above, the page still fires
+    nephthys: "recurring abrupt idle power loss (3x so far), each preceded by a PCIe AER storm (root port + PLX bridge); correlation strong, cause unproven -- see wq#2776/wq#2851. AER leading-indicator alarm (aq key aer-storm:nephthys) already covers early warning; power-remediate is deliberately ARMED=0 (no auto power-cycle). Needs Frank's physical power-on via plug P2 -- do NOT add nephthys to nodes.ignore, that would just silence the page he needs."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true

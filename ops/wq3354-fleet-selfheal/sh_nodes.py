@@ -6,6 +6,8 @@ tailscale hostname is `lumen-1`); phones and laptops that come and go are not fl
 A fleet node offline for `offline_after_s` (1800) gets one ticket per outage carrying
 tailscale's LastSeen and its known power state: the lumen_state power_* / status facts
 and, when its power_plug fact names a smart plug, that plug's live `plug-ctl <p> state`.
+A node named in `nodes.notes` (wq#3619) gets that text folded into the ticket too, so a
+recurring known-cause outage isn't re-researched from scratch on every drop.
 Coming back online closes the episode with a low-priority notice.
 """
 import datetime
@@ -119,10 +121,14 @@ def sweep(ctx, peers_fn=peers, facts_fn=fleet_facts):
         ns["node"] = node
         if f"node-offline:{node}" not in ctx.section("tickets"):
             mins = int((ctx.now - ns["offline_since"]) // 60)
+            lines = power_state(ctx, facts.get(node, {}))
+            note = ncfg.get("notes", {}).get(node)
+            if note:
+                lines.append(f"known issue: {note}")
             due.append((node, mins,
                         f"{node} (tailscale host {rec['host']}, {', '.join(rec['ips'])}) "
                         f"offline {mins} min, LastSeen {rec['last_seen'] or 'unknown'}\n  "
-                        + "\n  ".join(power_state(ctx, facts.get(node, {})))))
+                        + "\n  ".join(lines)))
     for key in [k for k in st if k not in seen]:
         st.pop(key)
     if not due:

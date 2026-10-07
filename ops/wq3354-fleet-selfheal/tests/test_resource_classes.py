@@ -287,6 +287,19 @@ def test_fleet_node_offline_30_min_is_ticketed_with_last_seen_and_power(make_ctx
     assert "franks-phone" not in json.dumps(ctx.out.tickets)     # not a fleet node
 
 
+def test_node_offline_ticket_folds_in_configured_known_issue_note(make_ctx):
+    # wq#3619: a node named in nodes.notes gets that context folded into its outage
+    # ticket so a recurring known-cause drop isn't re-researched from scratch.
+    calls = []
+    last_seen = sh_nodes._ts("2026-10-01T10:00:00Z")
+    cfg = {"nodes": {"offline_after_s": 1800,
+                     "notes": {"isis": "recurring AER-storm drop, see wq#2776"}}}
+    ctx = make_ctx(cfg, BASELINED(), now=last_seen + 1800, runner=_node_runner(calls))
+    sh_nodes.sweep(ctx)
+    [t] = ctx.out.tickets
+    assert "known issue: recurring AER-storm drop, see wq#2776" in t["detail"]
+
+
 def test_first_sweep_baselines_known_outages_into_one_ticket(make_ctx):
     last_seen = sh_nodes._ts("2026-10-01T10:00:00Z")
     ctx = make_ctx({"nodes": {}}, {}, now=last_seen + 90_000, runner=_node_runner([]))
