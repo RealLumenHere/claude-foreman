@@ -40,3 +40,16 @@ same wall wq#3466 and this ticket did.
 - Live file inspected directly: the re-page branch in `main()` now emits a fixed
   title (`sentinel_probes.py:1175`) with the duration moved into the message body
   (`sentinel_probes.py:1176`), matching this diff.
+- `install.sh --verify` (added wq#3569 verify-pass): `vcontains` against the live
+  file for the fixed title, the body line, and the untouched `_edge_clear` LIKE
+  pattern. Ran `grep -E` by hand for each pattern against the live file (match)
+  and against a pre-fix sample string (no match), proving the probe can fail.
+- `python3 /home/lumen/sentinel/probes/tests_wq1487_edge.py` — ALL PASS, including
+  two cases (iv-b, iv-c) the wq#3554 author added live alongside the fix, asserting
+  a re-page keeps the exact same title across repeats. `tests_wq1487_edge.py` here
+  is a snapshot of that live file (same convention as
+  `ops/wq1092-probe-target-liveness-guard/test_probe_target_liveness.py`) — wq#3554
+  edited the live test file but never shipped it in this bundle, so the (iv-b/iv-c)
+  coverage had no copy anywhere outside `/home/lumen/sentinel`. Added here by the
+  wq#3569 verify-pass so a lost/reverted live edit doesn't silently drop the
+  regression test too.
