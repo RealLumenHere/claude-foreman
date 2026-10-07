@@ -149,9 +149,25 @@ def _prior_open_tickets(db_path=WQ_DB):
 
 
 def _wq_add(title, detail, wq_bin=WQ_BIN):
+    # wq#2572: `wq add` (wq#1676) hard-refuses (exit 6) a user-lane ticket with no
+    # `Liveness:` line as an untagged Frank-gate. This drift-notice ticket has no
+    # deterministic completion probe -- it is superseded by the NEXT daily check
+    # (check_and_file_ticket's own diff-against-last logic), not resolved by a
+    # machine-checkable condition -- so it takes the --no-probe escape hatch. This
+    # was the actual root cause of prefs-block-check.service's failed-unit state
+    # (ISSUE-LOG wq2572): a real crash, not a finding, unrelated to any exit-code
+    # convention -- `wq add` started refusing the call and this call site was
+    # never updated.
     out = subprocess.run(
-        [wq_bin, 'add', '--lane', 'user', '--pri', 'p2', '--title', title,
-         '--detail', detail],
+        [wq_bin, 'add', '--lane', 'user', '--pri', '2', '--title', title,
+         '--detail', detail, '--no-probe',
+         'drift-notice ticket, superseded by next daily check, no deterministic probe',
+         # wq#3504: wq add's duplicate-title guard refused this call whenever the previous
+         # drift ticket was still open (exactly the case _wq_supersede exists for, but it
+         # only runs AFTER a successful add) -> crash -> failed unit -> sentinel ticket that
+         # could never clear. --force is safe: the prior open ticket of this title is
+         # superseded immediately after in check_and_file_ticket.
+         '--force'],
         capture_output=True, text=True, check=True).stdout
     m = re.search(r'added task (\d+)', out)
     if not m:
