@@ -84,6 +84,11 @@ nodes:                  # CLASS 6
                              # it by hand; lumen_state history shows prior
                              # ONLINE/OFFLINE toggles (09-30 -> 10-01) with no
                              # incident, not an always-on fleet node
+    - apis        # wq#3450: DEAD hardware, confirmed 2026-08-13, e-waste; physical decision tracked in wq#550
+    - pbox         # wq#3450: DECOMMISSIONED 2026-08-28 (Frank), removed from fleet
+    - seshat       # wq#3450: P6 powered off by Frank 2026-09-30 pending inspection; do not power on
+    - be3600       # wq#3450: tailscale subnet/exit-node role broken since 2026-06-17; router itself works via LAN
+    - 3dprinter    # wq#3450: AIO powered off, no lan_ip/ssh path recorded; not fleet-managed
 
 leakwatch:              # CLASS 3 (leakwatch.py daemon)
   harness_dir: /home/lumen/foreman/harness
