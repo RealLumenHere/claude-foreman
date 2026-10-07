@@ -190,6 +190,20 @@ def _node_runner(calls):
     return runner
 
 
+def test_power_state_truncates_on_word_boundary_not_mid_path(make_ctx):
+    # wq#3508: a hard v[:200] cut sliced the trailing kit path mid-word
+    # ("/home/lumen/fleet/thor-power" -> "...thor-powe"), filing a ticket that cited a
+    # path which doesn't exist.
+    value = ("TLP 1.8 auto AC/BAT; ASPM backed off to default (was powersupersave on BAT); "
+             "USB_AUTOSUSPEND=0; mem_sleep=s2idle (deep removed 2026-07-03 freeze fix); "
+             "charge cap 85pct; kit /home/lumen/fleet/thor-power")
+    assert len(value) == 201
+    ctx = make_ctx({}, {})
+    [line] = sh_nodes.power_state(ctx, {"power_mgmt": value})
+    assert "thor-powe" not in line           # no truncated path fragment survives
+    assert line.endswith("…")
+
+
 def test_fleet_node_offline_30_min_is_ticketed_with_last_seen_and_power(make_ctx):
     calls = []
     last_seen = sh_nodes._ts("2026-10-01T10:00:00Z")

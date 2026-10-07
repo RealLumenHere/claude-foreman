@@ -66,13 +66,22 @@ def node_for(ips, facts):
     return None
 
 
+def _trunc(v, n=200):
+    """Cut at the last space before n, not mid-word — a hard v[:n] cut split a fact's
+    trailing file path mid-name (wq#3508: ".../thor-power" -> ".../thor-powe")."""
+    if len(v) <= n:
+        return v
+    cut = v.rfind(" ", 0, n)
+    return (v[:cut] if cut > 0 else v[:n]) + "…"
+
+
 def power_state(ctx, preds):
-    lines = [f"{k} = {v[:200]}" for k, v in sorted(preds.items())
+    lines = [f"{k} = {_trunc(v)}" for k, v in sorted(preds.items())
              if k.startswith("power_") or k == "status"]
     plug = re.match(r"\s*(p\d+)\b", preds.get("power_plug", ""))
     if plug:
         p = ctx.runner([PLUG_CTL, plug.group(1), "state"], timeout=20)
-        live = (p.stdout or p.stderr or "").strip()[:200] if p else "plug-ctl did not run"
+        live = _trunc((p.stdout or p.stderr or "").strip()) if p else "plug-ctl did not run"
         lines.append(f"live plug {plug.group(1)} state: {live}")
     return lines or ["no power facts in lumen_state"]
 
