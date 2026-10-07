@@ -27,7 +27,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "mcp-gateway-watchdog.sh")
 
-STATE = {"healthy": True, "guard": False}
+STATE = {"healthy": True, "guard": False, "wedged_tools_list": False}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -45,6 +45,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(599)
             self.end_headers()
             return
+        if STATE["wedged_tools_list"]:
+            # wq#3526: mcp-proxy answers `initialize` from a cache even when the
+            # DC child behind it is hung -- only `tools/list` is forwarded through
+            # and hits the wedge.
+            length = int(self.headers.get("Content-Length", "0"))
+            req_body = self.rfile.read(length) if length else b""
+            if b'"method":"tools/list"' in req_body:
+                self.send_response(599)
+                self.end_headers()
+                return
         body = {"jsonrpc": "2.0", "id": "watchdog", "result": {"tools": []}}
         payload = json.dumps(body).encode()
         self.send_response(200)
@@ -204,6 +214,26 @@ def main():
         failures.append("guard 403 + dead /health did NOT count as failure/restart")
     STATE["guard"] = False
     STATE["healthy"] = True
+
+    # --- wq#3526: initialize succeeds (cached by the proxy) but tools/list hits
+    # a wedged DC child -- probe_mcp must still fail and the watchdog must still
+    # restart, proving initialize-only is not enough.
+    def run_wedged():
+        return subprocess.run(
+            ["bash", SCRIPT, "--mode", "mcp", "--unit", "test-wedged", "--port", str(port)],
+            env=env, capture_output=True, text=True,
+        )
+
+    before_wedged = restarts()
+    STATE["wedged_tools_list"] = True
+    run_wedged()
+    run_wedged()
+    if restarts() != before_wedged + 1:
+        failures.append(
+            "initialize succeeding from a cache did not mask a wedged tools/list "
+            f"(expected restart, got {restarts() - before_wedged} since wedge)"
+        )
+    STATE["wedged_tools_list"] = False
 
     srv.shutdown()
     shutil.rmtree(tmpdir, ignore_errors=True)

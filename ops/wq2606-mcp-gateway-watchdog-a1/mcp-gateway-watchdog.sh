@@ -93,13 +93,35 @@ read_count() {
   if [ -f "$f" ] && grep -Eq '^[0-9]+$' "$f" 2>/dev/null; then cat "$f"; else echo 0; fi
 }
 
-# Full MCP `initialize` handshake (wq#2745), not tools/list: a backend can
-# keep answering tools/list fine while the actual client-facing handshake --
-# protocolVersion negotiation, capabilities exchange -- is what's broken (this
-# is what the 2026-09-25 mcpw outage looked like from the client side; see
-# /tmp/mcpw_diag.py step 4). MCP_INIT_PAYLOAD matches that diag script's own
-# `init` dict verbatim so the probe and the manual diag tool agree on shape.
+# Full MCP `initialize` handshake (wq#2745), plus a follow-up `tools/list`
+# (wq#3526): initialize alone misses a backend that answers protocolVersion
+# negotiation fine while tools/list itself is broken (the 2026-09-25 mcpw
+# outage, /tmp/mcpw_diag.py step 4) AND misses a proxy that caches the
+# initialize response (mcp-proxy 0.12.0 on Horus dc-gateway) while the DC
+# child behind it is hung -- tools/list is forwarded through on every call,
+# so it's what actually reaches a wedged child. MCP_INIT_PAYLOAD matches that
+# diag script's own `init` dict verbatim so the probe and the manual diag
+# tool agree on shape.
 MCP_INIT_PAYLOAD='{"jsonrpc":"2.0","id":"watchdog-init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcp-gateway-watchdog","version":"1"}}}'
+
+# wq#3526: mcp-proxy 0.12.0 (Horus dc-gateway, one shared DC child) answers
+# `initialize` from a cached result -- a hung/SIGSTOPped DC child behind the
+# proxy still gets a 200+result handshake, so the initialize-only probe above
+# is blind to a wedged backend. `tools/list` is forwarded to the backend on
+# every call (not cached), so it's the one request that actually exercises a
+# hung child; run it right after a successful handshake.
+MCP_TOOLS_LIST_PAYLOAD='{"jsonrpc":"2.0","id":"watchdog-tools-list","method":"tools/list"}'
+
+probe_mcp_tools_list() {
+  local out http_code
+  out=$(curl -s -m "$CURL_TIMEOUT" -o - -w '\nHTTPCODE:%{http_code}' \
+    -X POST "http://127.0.0.1:${PORT}/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d "$MCP_TOOLS_LIST_PAYLOAD" 2>/dev/null)
+  http_code=$(printf '%s' "$out" | grep -o 'HTTPCODE:[0-9]*$' | cut -d: -f2)
+  [ "$http_code" = "200" ] && printf '%s' "$out" | grep -q '"result"'
+}
 
 probe_mcp() {
   local out http_code
@@ -110,7 +132,8 @@ probe_mcp() {
     -d "$MCP_INIT_PAYLOAD" 2>/dev/null)
   http_code=$(printf '%s' "$out" | grep -o 'HTTPCODE:[0-9]*$' | cut -d: -f2)
   if [ "$http_code" = "200" ] && printf '%s' "$out" | grep -q '"result"'; then
-    return 0
+    probe_mcp_tools_list && return 0
+    return 1
   fi
   # wq#3103 Access JWT guard (enforce mode) answers 403 to every unauthenticated
   # request on the unit's own port except GET /health. A 403 therefore proves the
