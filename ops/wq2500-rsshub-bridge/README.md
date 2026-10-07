@@ -1,5 +1,9 @@
 # wq#2500 — RSSHub as the velocity feed
 
+> **RETIRED (wq#3486).** Replaced by `ops/wq3576-trending-velocity-feed/`, which
+> needs no bridge at all. `trending_vs_scout_diff.py` and `test_diff_report.py`
+> moved there (wq#3576); the rows below describe this bundle as it shipped.
+
 Cites `O2 L1523-1613 §"Local RSS Bridges (e.g., RSSHub)"` (compose block `L1544-1582`),
 `research/DIGEST_Orchestation_2_md.md` R38, and the measured defect in
 `research/TARGETED_CRAWL_SOURCE_RANKING.md:17-22`: `github_scout` sorts

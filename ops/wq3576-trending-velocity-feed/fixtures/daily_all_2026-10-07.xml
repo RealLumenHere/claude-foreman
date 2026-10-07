@@ -1,0 +1,70 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss version="2.0">
+  <channel>
+    
+    <title>GitHub Daily Trending Repositories</title>
+    <pubDate>Wed, 07 Oct 2026 06:43:31 GMT</pubDate>
+    <link>https://mshibanami.github.io/GitHubTrendingRSS</link>
+    
+    <item>
+      <title>tester-army/e2e</title>
+      <link>https://github.com/tester-army/e2e</link>
+      </item>
+    
+    <item>
+      <title>mattpocock/skills</title>
+      <link>https://github.com/mattpocock/skills</link>
+      </item>
+    
+    <item>
+      <title>earthtojake/text-to-cad</title>
+      <link>https://github.com/earthtojake/text-to-cad</link>
+      </item>
+    
+    <item>
+      <title>boykopovar/AnyPS5</title>
+      <link>https://github.com/boykopovar/AnyPS5</link>
+      </item>
+    
+    <item>
+      <title>pbakaus/impeccable</title>
+      <link>https://github.com/pbakaus/impeccable</link>
+      </item>
+    
+    <item>
+      <title>thedotmack/claude-mem</title>
+      <link>https://github.com/thedotmack/claude-mem</link>
+      </item>
+    
+    <item>
+      <title>ayghri/i-have-adhd</title>
+      <link>https://github.com/ayghri/i-have-adhd</link>
+      </item>
+    
+    <item>
+      <title>morluto/rea</title>
+      <link>https://github.com/morluto/rea</link>
+      </item>
+    
+    <item>
+      <title>deepseek-ai/DeepGEMM</title>
+      <link>https://github.com/deepseek-ai/DeepGEMM</link>
+      </item>
+    
+    <item>
+      <title>msitarzewski/agency-agents</title>
+      <link>https://github.com/msitarzewski/agency-agents</link>
+      </item>
+    
+    <item>
+      <title>DuarteSantos8/openGym</title>
+      <link>https://github.com/DuarteSantos8/openGym</link>
+      </item>
+    
+    <item>
+      <title>cathrynlavery/diagram-design</title>
+      <link>https://github.com/cathrynlavery/diagram-design</link>
+      </item>
+    
+  </channel>
+</rss>

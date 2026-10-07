@@ -1,0 +1,5 @@
+# wq#3576 velocity feeds. One URL per line; read by install.sh (--verify) and
+# miniflux_subscribe.py. Static GitHub Pages feeds rebuilt daily by
+# mshibanami/GitHubTrendingRSS, so no bridge runs anywhere.
+https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml
+https://mshibanami.github.io/GitHubTrendingRSS/daily/python.xml
