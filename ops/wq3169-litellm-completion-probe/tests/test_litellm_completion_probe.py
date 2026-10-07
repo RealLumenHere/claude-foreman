@@ -172,6 +172,104 @@ def test_passing_host_resolves_rows_without_a_failed_state_edge(tmp_path, monkey
     assert resolved == ["h1"]
 
 
+GEMINI_429 = ('{"error":{"code":429,"message":"You exceeded your current quota ... '
+              'limit: 20, model: gemini-2.5-flash\\n Please retry in 10h20m19.507781116s."}}')
+DEEPSEEK_402 = '{"error":{"message":"Insufficient Balance (request_id: x)"}}'
+
+
+def test_classify_and_retry_hint():
+    """wq#3587: the bodies are the live aq 3198 / 2652505 failure shapes."""
+    assert mod.classify(402, DEEPSEEK_402) == "billing"
+    assert mod.classify(400, DEEPSEEK_402) == "billing"   # litellm re-wraps as BadRequest
+    assert mod.classify(429, GEMINI_429) == "rate_limited"
+    assert mod.classify(None, "timed out") == "unreachable"
+    assert mod.classify(500, "boom") == "unreachable"
+    assert mod.retry_after_s(GEMINI_429) == 10 * 3600 + 20 * 60 + 19
+    assert mod.retry_after_s("Please retry in 30s") == 30
+    assert mod.retry_after_s("no hint") == mod.RATE_LIMIT_BACKOFF_S
+    assert mod.retry_after_s("retry in 900h") == mod.RATE_LIMIT_BACKOFF_CAP_S
+
+
+def _capture(monkeypatch, tmp_path, has_open=False):
+    monkeypatch.setattr(mod, "STATE_DIR", tmp_path)
+    log = {"notify": [], "add": [], "resolve": []}
+    monkeypatch.setattr(mod, "_notify", lambda p, t, m: log["notify"].append((p, t)))
+    monkeypatch.setattr(mod, "_aq_add", lambda k, t, m: log["add"].append((k, t)))
+    monkeypatch.setattr(mod, "_aq_resolve", lambda k, w: log["resolve"].append(k))
+    monkeypatch.setattr(mod, "_aq_has_open", lambda k: has_open)
+    return log
+
+
+def test_billing_failure_keeps_one_row_without_bumping(tmp_path, monkeypatch):
+    """aq 3198 reached x135 because every 30-min run bumped a row only a
+    top-up could clear; sentinel-watch's 100-repeat floor then filed wq#3587."""
+    r = {"host": "deepseek", "model": "m", "ok": False, "kind": "billing", "elapsed_s": 0.8, "reason": "402"}
+    log = _capture(monkeypatch, tmp_path, has_open=False)
+    state = mod.apply_results([r])
+    assert log["add"] == [("deepseek", "LiteLLM completion probe: deepseek out of credit")]
+    assert log["notify"] == [("urgent", "LiteLLM completion probe: deepseek out of credit")]
+    assert state["deepseek"]["failed"] is True
+
+    (tmp_path / "state.json").write_text(json.dumps(state))
+    log = _capture(monkeypatch, tmp_path, has_open=True)
+    mod.apply_results([r])
+    assert log == {"notify": [], "add": [], "resolve": []}
+
+    # row resolved by hand while still out of credit: reopened once, no re-page
+    log = _capture(monkeypatch, tmp_path, has_open=False)
+    mod.apply_results([r])
+    assert [k for k, _ in log["add"]] == ["deepseek"] and log["notify"] == []
+
+
+def test_unreachable_still_bumps_with_an_open_row(tmp_path, monkeypatch):
+    log = _capture(monkeypatch, tmp_path, has_open=True)
+    mod.apply_results([{"host": "h1", "model": "m", "ok": False, "kind": "unreachable",
+                        "elapsed_s": 60.0, "reason": "timed out"}])
+    assert [k for k, _ in log["add"]] == ["h1"]
+
+
+def test_rate_limited_host_counts_as_answered_and_backs_off(tmp_path, monkeypatch):
+    (tmp_path / "state.json").write_text(json.dumps({"gemini": {"failed": True, "checked_at": 1}}))
+    log = _capture(monkeypatch, tmp_path)
+    state = mod.apply_results([{"host": "gemini", "model": "gemini-flash", "ok": False,
+                                "kind": "rate_limited", "retry_s": 37219, "elapsed_s": 12.5, "reason": "429"}])
+    assert log["add"] == [] and log["resolve"] == ["gemini"]
+    assert log["notify"] == [("low", "LiteLLM completion probe: gemini recovered")]
+    assert state["gemini"]["failed"] is False
+    assert state["gemini"]["skip_until"] - state["gemini"]["checked_at"] == 37219
+
+
+def test_due_rungs_honours_backoff_and_min_interval(monkeypatch):
+    monkeypatch.setattr(mod, "HOST_MIN_INTERVAL_S", {"gemini": 21600})
+    rungs = [mod.Rung("gemini", "gemini-flash"), mod.Rung("deepseek", "ds"), mod.Rung("cerebras", "c")]
+    now = 1_000_000
+    state = {"gemini": {"checked_at": now - 1800},                       # inside 6h interval
+             "deepseek": {"checked_at": now - 1800, "skip_until": now + 60},  # 429 backoff
+             "cerebras": {"checked_at": now - 1800}}
+    due, skipped = mod.due_rungs(rungs, state, now)
+    assert [r.host for r in due] == ["cerebras"] and skipped == {"gemini", "deepseek"}
+    state["gemini"]["checked_at"] = now - 21600
+    state["deepseek"]["skip_until"] = now
+    due, skipped = mod.due_rungs(rungs, state, now)
+    assert [r.host for r in due] == ["gemini", "deepseek", "cerebras"] and skipped == set()
+    # a never-probed host is always due
+    assert mod.due_rungs(rungs[:1], {}, now) == ([rungs[0]], set())
+
+
+def test_skipped_failed_host_keeps_state_and_its_row(tmp_path, monkeypatch):
+    """A failed host merely skipped this run must not be mistaken for a rung
+    removed from the config (wq#3212 path) and auto-resolved."""
+    prev = {"gemini": {"failed": True, "checked_at": 5}}
+    (tmp_path / "state.json").write_text(json.dumps(prev))
+    log = _capture(monkeypatch, tmp_path)
+    state = mod.apply_results([], skipped={"gemini"})
+    assert log["resolve"] == [] and state == prev
+
+
+def test_default_host_intervals_parse():
+    assert mod.HOST_MIN_INTERVAL_S == {"gemini": 21600}
+
+
 def test_aq_resolve_closes_open_and_acked_rows_only_for_its_key(tmp_path, monkeypatch):
     """wq#3463: aq 3140/1125736/1137450 were acked, still counted by
     sentinel-watch, and the next failure forked a fresh row beside them."""
@@ -195,3 +293,20 @@ def test_aq_resolve_closes_open_and_acked_rows_only_for_its_key(tmp_path, monkey
     mod._aq_resolve("h1", "h1 answered")
     rows = dict(sqlite3.connect(dbp).execute("SELECT id, status FROM alerts"))
     assert rows == {1: "resolved", 2: "resolved", 3: "resolved", 4: "open", 5: "acked"}
+
+
+def test_aq_has_open_sees_open_and_acked_rows_for_its_key(tmp_path, monkeypatch):
+    import sqlite3
+    import types
+    dbp = tmp_path / "alerts.db"
+    c = sqlite3.connect(dbp)
+    c.execute("CREATE TABLE alerts (id INTEGER PRIMARY KEY, source TEXT, key TEXT, status TEXT)")
+    c.executemany("INSERT INTO alerts (source, key, status) VALUES (?,?,?)", [
+        ("litellm-completion", "a", "open"), ("litellm-completion", "b", "acked"),
+        ("litellm-completion", "c", "resolved"), ("other-source", "d", "open")])
+    c.commit()
+    c.close()
+    monkeypatch.setitem(sys.modules, "aq", types.SimpleNamespace(db=lambda: sqlite3.connect(dbp)))
+    assert [mod._aq_has_open(k) for k in "abcd"] == [True, True, False, False]
+    monkeypatch.setitem(sys.modules, "aq", types.SimpleNamespace(db=lambda: 1 / 0))
+    assert mod._aq_has_open("a") is False  # unreadable db -> caller falls back to aq add
