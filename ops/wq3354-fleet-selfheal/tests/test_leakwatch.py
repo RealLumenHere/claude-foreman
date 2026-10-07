@@ -30,6 +30,18 @@ def test_literal_credential_in_a_scan_file_files_one_rotation_ticket(make_ctx, t
     assert len(ctx.out.tickets) == 1                    # same value: same episode
 
 
+def test_ticket_text_for_a_key_labelled_hit_is_not_itself_a_hit(make_ctx, tmp_path):
+    # wq#3547: the listing glued `kv-secret LiteLLM key =` to `sha12=<hex>`, so reading
+    # the ticket back fired kv-secret on the fingerprint and filed a rotation row.
+    f = tmp_path / "claude_memory.md"
+    f.write_text("LiteLLM key = " + "Q9" * 10 + " in agent/.env\n")
+    ctx = make_ctx({}, {})
+    leakwatch.check(ctx, str(f), _rules(tmp_path)[0], masking.scan)
+    [t] = ctx.out.tickets
+    assert "kv-secret LiteLLM key =" in t["detail"]
+    assert [r for r in masking.scan(t["detail"])[1] if not r.get("suppressed")] == []
+
+
 def test_clean_file_files_nothing_and_cleanup_closes_the_episode(make_ctx, tmp_path):
     f = tmp_path / "claude_memory.md"
     f.write_text("token lives in vault at secret/litellm, never inline\n")

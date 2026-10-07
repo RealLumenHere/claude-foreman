@@ -133,7 +133,10 @@ def check(ctx, path, rule, scanner):
         return
     seen[path] = sig
     ctx.resolve(CLS, f"leak:{path}")    # a new set of values is a new episode
-    listing = "\n".join(f"  {label}  sha12={sha}" for label, sha in hits)
+    # sha12 FIRST (wq#3547): a kv-secret label keeps its separator (`LiteLLM key =`), so
+    # `{label}  sha12={sha}` was itself a kv-secret hit whose value was the fingerprint,
+    # and every `wq show` of the ticket filed a rotation row (wq#3449 -> wq#3456).
+    listing = "\n".join(f"  sha12={sha}  {label}" for label, sha in hits)
     ctx.file_once(CLS, f"leak:{path}",
                   f"[selfheal] rotate: {len(hits)} literal credential(s) in "
                   f"{os.path.basename(path)}",
