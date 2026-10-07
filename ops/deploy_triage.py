@@ -225,8 +225,10 @@ REGISTER: dict[str, dict] = {
         follow_up="wq#3575",
         reason="still absent (root --verify 2026-10-07) and the need stands: wadjet-ha-monitor, "
                "wadjet-ha-failback and the public guardian each bounce cloudflared themselves. "
-               "Not installed under wq#3486: stage 0 alone is inert and its smoke request "
-               "HUPs the tunnel Commander rides, so it goes in a quiet window, wq#3575."),
+               "wq#3575: SIGHUP exits cloudflared 2026.7.3 and Restart=on-failure treats "
+               "that as clean, so the HUP reload path and the HUP install smoke were "
+               "dropped (reload = cooldown-exempt restart, smoke = read-only status) "
+               "before stage 0 goes in."),
     "wq1554-langfuse-lag-monitor": dict(
         disposition=OWNED, owner="wq#1555", follow_up=None,
         reason="wq#1555 (blocked) already owns the deploy: it needs /home/lumen/langfuse in "

@@ -45,9 +45,14 @@ in triage, and lands in the same escalation machinery as everything else
    Requests inside the window are deferred, never dropped — served on the
    first drain after expiry. Worst case Commander is interrupted once per
    5 min instead of three ways at once.
-4. **coalescing**: N open rows → one action; restart supersedes reload
-   (a restart re-reads config anyway). `reload` (SIGHUP — wadjet's graceful
-   origin flip) is cooldown-exempt and is served even while a restart cools.
+4. **coalescing**: N open rows → one restart. `--kind reload` means "config
+   changed, apply it now" (wadjet's origin flip): it is served by the same
+   restart but skips the cooldown, carrying any cooling restart rows with it.
+   There is no graceful reload. cloudflared 2026.7.3 traps only
+   SIGTERM/SIGINT (`cmd/cloudflared/tunnel/signal.go:14` at tag 2026.7.3),
+   so SIGHUP exits it, and systemd counts SIGHUP as a clean exit
+   (`systemd.service(5)` SuccessExitStatus=), so `Restart=on-failure` on
+   Lumen's unit leaves the tunnel down (wq#3575). The actuator never sends HUP.
 5. **act**: restart via the exact detached form from ISSUE-LOG #46 /
    guardian's `HEAL_ALLOWLIST`, byte-identical to the sudoers rule
    (no `--unit`, sudoers rejects wildcards in arguments):
@@ -62,9 +67,10 @@ bus: one drain tick, ≤60 s — acceptable for all three callers (healer alread
 waits 3 poll cycles; guardian cadence is 2 min; a failover origin flip is a
 reload, served next tick, cooldown-free).
 
-Tests: `tests/test_cfd_actuator.py` (11 cases, zero live services) — request
+Tests: `tests/test_cfd_actuator.py` (12 cases, zero live services) — request
 filing, dead-drainer escalation, coalescing, cooldown defer/serve, reload
-exemption, restart-supersedes-reload, holddown block, slock deny, fail paging.
+restarts through cooldown, no HUP path anywhere, read-only status, holddown
+block, slock deny, fail paging.
 
 ## Rollout (staged, no flag day; each stage reversible)
 
@@ -73,7 +79,9 @@ lands files. Until stage 4 the old direct paths still work; double-restart
 risk during migration is no worse than today.
 
 - **Stage 0** — `sudo bash install.sh`: installs the CLI, sudoers
-  (`visudo -cf` checked), timer. Touches nothing about cloudflared itself.
+  (`visudo -cf` checked), timer. Touches nothing about cloudflared itself:
+  the smoke is `cfd-actuator status` (read-only), since any filed request
+  restarts the tunnel on the next drain tick.
 - **Stage 1 (wadjet-ha-monitor.sh)** — replace `reload_cloudflared()` body
   (bin/wadjet-ha-monitor.sh:102-107) with:
   ```bash
@@ -85,6 +93,9 @@ risk during migration is no worse than today.
   }
   ```
   (Runs as root; aq's alerts.db must stay lumen-writable — root write is fine.)
+  Same stage: `bin/wadjet-ha-failback.sh` step [3/6] (`kill -s HUP ||
+  restart`, :174) files the same `--kind reload` request. Until stage 1
+  lands, both scripts' HUP leaves the tunnel down after a vault flip.
 - **Stage 2 (self-healer)** — in `healer_watch_table.yaml`, set the
   cloudflared entry's `restart_cmd` to
   `/home/lumen/bin/cfd-actuator request --from self-healer --kind restart --reason "watch-table: cloudflared down"`.

@@ -2,7 +2,7 @@
 
 Zero live services: alerts.db is a tmp sqlite with the fleet alerts schema, a
 fake `aq` module (reads AQ_TEST_DB at call time) stands in for
-agents/alert-queue/aq.py, and holddown/slock/ntfy/restart/reload are fake
+agents/alert-queue/aq.py, and holddown/slock/ntfy/restart are fake
 shell scripts that log their invocations — same convention as
 ops/wq1649-aq-source-escalate/tests.
 """
@@ -79,9 +79,6 @@ def env(tmp_path, monkeypatch):
     restart_log = tmp_path / "restart.log"
     fake_restart = _script(tmp_path / "fake-restart",
                            f"#!/usr/bin/env bash\necho restart >> {restart_log}\n")
-    reload_log = tmp_path / "reload.log"
-    fake_reload = _script(tmp_path / "fake-reload",
-                          f"#!/usr/bin/env bash\necho reload >> {reload_log}\n")
 
     state_dir = tmp_path / "state"
     monkeypatch.setattr(cfd, "AQ_DIR", str(aq_dir))
@@ -92,7 +89,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(cfd, "SLOCK_BIN", fake_true)
     monkeypatch.setattr(cfd, "NTFY_BIN", fake_ntfy)
     monkeypatch.setattr(cfd, "RESTART_CMD", [fake_restart])
-    monkeypatch.setattr(cfd, "RELOAD_CMD", [fake_reload])
     monkeypatch.setattr(cfd, "ISACTIVE_CMD", ["/bin/true"])
     monkeypatch.setenv("CFD_ACTIVE_POLL_S", "3")
 
@@ -103,7 +99,6 @@ def env(tmp_path, monkeypatch):
             self.tmp = tmp_path
             self.ntfy_log = ntfy_log
             self.restart_log = restart_log
-            self.reload_log = reload_log
             self.fake_true = fake_true
             self.fake_false = fake_false
             self.monkeypatch = monkeypatch
@@ -149,7 +144,7 @@ def test_request_escalates_when_drain_dead(env):
 
 def test_drain_noop_without_rows(env):
     assert cfd.main(["drain"]) == 0
-    assert not env.restart_log.exists() and not env.reload_log.exists()
+    assert not env.restart_log.exists()
 
 
 def test_drain_restarts_and_resolves(env):
@@ -178,31 +173,42 @@ def test_cooldown_defers_but_never_drops(env):
     assert not env.rows(source="cfd-restart-req", status="open")
 
 
-def test_reload_exempt_from_cooldown(env):
+def test_no_sighup_path(env):
+    # wq#3575: SIGHUP exits cloudflared 2026.7.3 cleanly and Restart=on-failure
+    # leaves it down. No code path may send it.
+    assert not hasattr(cfd, "RELOAD_CMD")
+    assert "HUP" not in " ".join(cfd.RESTART_CMD)
+    install = open(os.path.join(os.path.dirname(cfd.__file__),
+                                "install.sh")).read()
+    assert "HUP cloudflared" not in install.replace("No HUP grant", "")
+
+
+def test_reload_restarts_through_cooldown(env):
     env.set_state(last_restart_ts=time.time())
     cfd.main(["request", "--from", "wadjet-ha", "--kind", "reload",
               "--reason", "origin flip"])
     assert cfd.main(["drain"]) == 0
-    assert env.reload_log.exists() and not env.restart_log.exists()
+    assert env.restart_log.read_text().count("restart") == 1
     assert not env.rows(source="cfd-restart-req", status="open")
+    assert time.time() - env.state()["last_restart_ts"] < 5
 
 
-def test_reload_served_while_restart_cools(env):
+def test_reload_carries_cooling_restarts(env):
     env.set_state(last_restart_ts=time.time())
     cfd.main(["request", "--from", "healer", "--kind", "restart", "--reason", "r"])
     cfd.main(["request", "--from", "wadjet-ha", "--kind", "reload", "--reason", "r"])
     assert cfd.main(["drain"]) == 0
-    assert env.reload_log.exists() and not env.restart_log.exists()
-    open_rows = env.rows(source="cfd-restart-req", status="open")
-    assert [r["key"] for r in open_rows] == ["restart:healer"]
-
-
-def test_restart_supersedes_reload(env):
-    cfd.main(["request", "--from", "healer", "--kind", "restart", "--reason", "r"])
-    cfd.main(["request", "--from", "wadjet-ha", "--kind", "reload", "--reason", "r"])
-    assert cfd.main(["drain"]) == 0
-    assert env.restart_log.exists() and not env.reload_log.exists()
+    assert env.restart_log.read_text().count("restart") == 1  # one action
     assert not env.rows(source="cfd-restart-req", status="open")
+
+
+def test_status_is_read_only(env, capsys):
+    cfd.main(["request", "--from", "healer", "--kind", "restart", "--reason", "r"])
+    assert cfd.main(["status"]) == 0
+    out = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert out["open_requests"] == ["restart:healer"]
+    assert not env.restart_log.exists()
+    assert len(env.rows(source="cfd-restart-req", status="open")) == 1
 
 
 def test_holddown_blocks_action(env):

@@ -21,13 +21,17 @@ timer runs `cfd-actuator drain`, which serializes everything:
               request landing inside the window is DEFERRED, never dropped:
               it is served on the first drain after expiry. One Commander
               interruption per 5 min, worst case.
-  coalesce  — N open rows are satisfied by one action; restart supersedes
-              reload (a restart re-reads config anyway).
+  coalesce  — N open rows are satisfied by one restart.
 
-reload (SIGHUP, graceful config re-read — wadjet's origin flip) is exempt
-from the cooldown; only the disruptive restart is rate-limited. The restart
-itself is the exact detached form from ISSUE-LOG #46 / guardian's
-HEAL_ALLOWLIST — byte-identical to the sudoers rule, no --unit:
+There is no graceful reload. cloudflared 2026.7.3 traps only SIGTERM/SIGINT
+(cmd/cloudflared/tunnel/signal.go:14), so SIGHUP takes Go's default action
+and exits, and systemd counts a HUP death as a clean exit, so
+Restart=on-failure never brings the tunnel back (wq#3575). `--kind reload`
+therefore means "config changed, apply it now": it is served by the same
+restart, but skips the cooldown, because an origin flip (wadjet failover)
+that waits 5 min extends the outage it exists to end. The restart itself is
+the exact detached form from ISSUE-LOG #46 / guardian's HEAL_ALLOWLIST —
+byte-identical to the sudoers rule, no --unit:
 
     sudo /usr/bin/systemd-run --collect /usr/bin/systemctl restart cloudflared.service
 
@@ -37,7 +41,7 @@ is loud from the requester side, not silent.
 
 Env (tests/extension): CFD_AQ_DIR, CFD_STATE_DIR, CFD_HOLDDOWN_BIN,
 CFD_SLOCK_BIN, CFD_NTFY_BIN, CFD_COOLDOWN_S, CFD_ESCALATE_OPEN_ROWS,
-CFD_RESTART_CMD / CFD_RELOAD_CMD / CFD_ISACTIVE_CMD (JSON argv overrides).
+CFD_RESTART_CMD / CFD_ISACTIVE_CMD (JSON argv overrides).
 """
 import argparse
 import json
@@ -60,8 +64,6 @@ HOLDDOWN_ESCALATE_S = int(os.environ.get("CFD_HOLDDOWN_ESCALATE_S", "1800"))
 RESTART_CMD = json.loads(os.environ.get("CFD_RESTART_CMD", json.dumps(
     ["sudo", "/usr/bin/systemd-run", "--collect", "/usr/bin/systemctl",
      "restart", "cloudflared.service"])))
-RELOAD_CMD = json.loads(os.environ.get("CFD_RELOAD_CMD", json.dumps(
-    ["sudo", "/usr/bin/systemctl", "kill", "-s", "HUP", "cloudflared.service"])))
 ISACTIVE_CMD = json.loads(os.environ.get("CFD_ISACTIVE_CMD", json.dumps(
     ["/usr/bin/systemctl", "is-active", "--quiet", "cloudflared.service"])))
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
@@ -198,60 +200,54 @@ def cmd_drain(a):
         print(f"cfd-actuator: holddown active, {len(rows)} request(s) deferred")
         return 0
 
-    restart_rows = [(i, k) for i, k in rows if k.split(":", 1)[0] == "restart"]
-    reload_rows = [(i, k) for i, k in rows if k.split(":", 1)[0] != "restart"]
-    want_restart = bool(restart_rows)
-    if want_restart:
-        since = now - st.get("last_restart_ts", 0)
-        if since < COOLDOWN_S:
-            if not reload_rows:
-                save_state(st)
-                print(f"cfd-actuator: cooldown ({int(COOLDOWN_S - since)}s "
-                      f"left), {len(rows)} request(s) deferred")
-                return 0
-            # Serve the graceful reloads now; the restart keeps waiting.
-            want_restart = False
+    config_changed = any(k.split(":", 1)[0] == "reload" for _, k in rows)
+    since = now - st.get("last_restart_ts", 0)
+    if since < COOLDOWN_S and not config_changed:
+        save_state(st)
+        print(f"cfd-actuator: cooldown ({int(COOLDOWN_S - since)}s "
+              f"left), {len(rows)} request(s) deferred")
+        return 0
 
     if not slock_acquire():
         save_state(st)
         print("cfd-actuator: slock cloudflared denied, deferring")
         return 0
     try:
-        if want_restart:
-            served = rows  # a restart re-reads config: supersedes reloads
-            ok = run_action(RESTART_CMD) and tunnel_active(
-                int(os.environ.get("CFD_ACTIVE_POLL_S", "30")))
-            action = "restart"
-        else:
-            served = reload_rows
-            ok = run_action(RELOAD_CMD)
-            action = "reload"
-        callers = ", ".join(sorted(k for _, k in served))
+        ok = run_action(RESTART_CMD) and tunnel_active(
+            int(os.environ.get("CFD_ACTIVE_POLL_S", "30")))
+        callers = ", ".join(sorted(k for _, k in rows))
         if ok:
-            if want_restart:
-                st["last_restart_ts"] = now
+            st["last_restart_ts"] = now
             st["consec_fails"] = 0
-            if len(served) == len(rows):
-                st.pop("pending_since", None)
-                st.pop("holddown_escalated", None)
-            resolve_rows(aq, [rid for rid, _ in served],
-                         f"cfd-actuator: {action} done for [{callers}]")
-            ntfy(f"cfd-actuator: cloudflared {action}",
+            st.pop("pending_since", None)
+            st.pop("holddown_escalated", None)
+            resolve_rows(aq, [rid for rid, _ in rows],
+                         f"cfd-actuator: restart done for [{callers}]")
+            ntfy("cfd-actuator: cloudflared restart",
                  f"served requests: {callers}", prio="default")
-            print(f"cfd-actuator: {action} OK, resolved {len(served)} row(s)")
+            print(f"cfd-actuator: restart OK, resolved {len(rows)} row(s)")
             return 0
         st["consec_fails"] = st.get("consec_fails", 0) + 1
         if st["consec_fails"] >= 3:
             ntfy("CFD-ACTUATOR FAILING",
-                 f"cloudflared {action} failed {st['consec_fails']}x; "
+                 f"cloudflared restart failed {st['consec_fails']}x; "
                  f"{len(rows)} request(s) still open [{callers}]",
                  prio="urgent")
-        print(f"cfd-actuator: {action} FAILED "
+        print(f"cfd-actuator: restart FAILED "
               f"(consec_fails={st['consec_fails']})")
         return 1
     finally:
         save_state(st)
         slock_release()
+
+
+def cmd_status(a):
+    # Read-only: the install smoke. Filing a request would restart the tunnel
+    # on the next drain tick.
+    rows = open_rows(aq_mod())
+    print(json.dumps({"open_requests": [k for _, k in rows],
+                      "state": load_state()}))
+    return 0
 
 
 def main(argv=None):
@@ -264,6 +260,8 @@ def main(argv=None):
     s.set_defaults(f=cmd_request)
     s = sub.add_parser("drain", help="owner path: serve open requests (timer only)")
     s.set_defaults(f=cmd_drain)
+    s = sub.add_parser("status", help="read-only: open requests + state")
+    s.set_defaults(f=cmd_status)
     a = p.parse_args(argv)
     return a.f(a)
 
