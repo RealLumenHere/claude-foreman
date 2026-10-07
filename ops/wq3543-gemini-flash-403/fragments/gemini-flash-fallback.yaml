@@ -1,0 +1,18 @@
+# wq#3543 — gemini-flash 403 PERMISSION_DENIED ("Your project has been denied access")
+# on every call, with no fallback group, so callers get a hard 403 instead of a routed
+# answer. Root cause already tracked separately as wq#3525 (fleet-selfheal, blocked on
+# Frank): gemini-ai-studio.key is malformed (53 chars, "AQ." prefix) instead of the
+# expected Google AI Studio shape (39 chars, "AIza" prefix) -- a 404 from
+# generativelanguage.googleapis.com on direct probe, surfacing as 403 through LiteLLM.
+# That is a physical act only Frank can do (regenerate at aistudio.google.com/app/apikey)
+# and is already queued; this fragment does not duplicate it.
+#
+# This ticket's decision: don't block callers on that physical fix. Give gemini-flash a
+# fallback rung so a 403/429/5xx on the primary routes to deepseek-v4-flash (already live,
+# same cheap-tier pool per research/GEMINI_ACCESS.md) instead of surfacing the error.
+# Hand-merge into the live /home/lumen/agent/litellm_config.yaml per the wq#1617
+# fragment-merge convention (merge_litellm_fragment.py merge <live> <this file>) --
+# do not overwrite the live file wholesale.
+router_settings:
+  fallbacks:
+    - gemini-flash: [deepseek-v4-flash]
