@@ -18,6 +18,7 @@ import unittest
 from pathlib import Path
 
 INSTALL_SH = Path(__file__).resolve().parent.parent / "install.sh"
+SUDOERS_FILE = Path(__file__).resolve().parent.parent / "lumen-cfd-actuator.sudoers"
 
 ALLOW_LINE = (
     "lumen ALL=(root) NOPASSWD: "
@@ -26,10 +27,7 @@ ALLOW_LINE = (
 
 
 def _render_sudoers_block():
-    text = INSTALL_SH.read_text()
-    m = re.search(r"cat > \"\$ACTUATOR_SUDOERS\" <<'EOF'\n(.*?)\nEOF\n", text, re.S)
-    assert m, "install.sh must ship the actuator sudoers heredoc"
-    return m.group(1)
+    return SUDOERS_FILE.read_text()
 
 
 class SudoersNarrowTest(unittest.TestCase):

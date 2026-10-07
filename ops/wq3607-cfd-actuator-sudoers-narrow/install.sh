@@ -56,43 +56,7 @@ echo "== extend $ACTUATOR_SUDOERS: deny direct cloudflared control under the bla
 if [ -e "$ACTUATOR_SUDOERS" ]; then
   cp -p "$ACTUATOR_SUDOERS" "$BACKUP_DIR/lumen-cfd-actuator.pre-wq3607-$STAMP"
 fi
-cat > "$ACTUATOR_SUDOERS" <<'EOF'
-# wq#1652 cfd-actuator: the ONE path allowed to bounce cloudflared.
-# Byte-identical to RESTART_CMD in cfd_actuator.py; change both together.
-# Detached systemd-run (instinct 5), no --unit because sudoers rejects
-# wildcards in command arguments (ISSUE-LOG #46). No HUP grant: SIGHUP
-# kills cloudflared and systemd does not restart it (wq#3575).
-lumen ALL=(root) NOPASSWD: /usr/bin/systemd-run --collect /usr/bin/systemctl restart cloudflared.service
-
-# wq#3607: lumen also holds blanket NOPASSWD ALL in /etc/sudoers.d/lumen.
-# These negations land in this file (loaded after "lumen", see install.sh
-# header) to close the direct-control bypass without touching that file.
-# Each subcommand is enumerated rather than globbed so the deny set cannot
-# collide with the "restart" literal the actuator itself is allowed above
-# (a glob like `systemctl * cloudflared.service` would match -- and, being
-# the later entry, override -- the actuator's own allowed command). They do
-# NOT cover `kill <pid>` by raw PID, or `systemctl kill * cloudflared.service`
-# (its own fixed-signal variants are enumerated below instead -- visudo
-# rejects a bare `*` wildcard in a command argument outright, "wildcards are
-# not allowed in command arguments"), which names no service and can't be
-# matched this way -- that residual gap requires either removing the
-# blanket ALL grant (breaks the wide ad hoc root workload above) or
-# process-level containment, both out of scope for this ticket.
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemctl stop cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemctl kill cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemctl kill -s SIGHUP cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemctl kill -s SIGTERM cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemctl reload cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemctl try-restart cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemctl restart cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemd-run --collect /usr/bin/systemctl stop cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemd-run --collect /usr/bin/systemctl kill cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemd-run --collect /usr/bin/systemctl kill -s SIGHUP cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemd-run --collect /usr/bin/systemctl kill -s SIGTERM cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemd-run --collect /usr/bin/systemctl reload cloudflared.service
-lumen ALL=(root) NOPASSWD: !/usr/bin/systemd-run --collect /usr/bin/systemctl try-restart cloudflared.service
-EOF
-chmod 440 "$ACTUATOR_SUDOERS"
+install -o root -g root -m 440 "$SRC/lumen-cfd-actuator.sudoers" "$ACTUATOR_SUDOERS"
 visudo -cf "$ACTUATOR_SUDOERS"
 visudo -cf /etc/sudoers
 echo "done"
