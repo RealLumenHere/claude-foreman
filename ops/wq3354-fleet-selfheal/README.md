@@ -16,6 +16,7 @@ clears.
 | 5 provider key dead (`sh_providers.py`) | LiteLLM host answers 401/403 with a provider error for ≥10 min | its model_names go into `dispatcher/runtime/backend_cooldown.json` (`source: fleet-selfheal`); `router.py` now skips a cooled rung in every pool | rotation ticket + page; rungs re-enabled on the first good probe |
 | 6 node offline (`sh_nodes.py`) | lumen_state fleet node (matched by tailscale IP) offline ≥30 min | none (physical) | ticket with tailscale LastSeen, lumen_state `power_*`/`status` facts, live `plug-ctl <p> state` |
 | 7 ollama pin (`sh_ollama.py`, wq#3558) | a model in Lumen's `/api/ps` expires >120 s out, which only a client-set `keep_alive` can cause | `POST /api/generate {model, keep_alive: 0}` (ollama's own unload call). In-flight requests finish first, and no restart is needed | ticket + page when it is pinned again after 3 breaks in a row |
+| 8 content exposure (`exposure_census.py`, daily timer, wq#3514) | a file anywhere under `~` whose content holds an exact live secret value (harvested from the stores via `masking.read`, digests only) and whose path is actually world-traversable | none — report-only; rotation is the fix and the census chmods nothing | one ticket + urgent page per exposed dir per episode; group-readable hits whose group reaches outside the owner get an aq alert (wq#3456 bar); over-prevalent digests demote to a calibration note |
 
 Why class 7 exists: with `OLLAMA_MAX_LOADED_MODELS=1`, loading a chat model marks the
 resident model for unload and blocks the scheduler until that unload lands. A request
@@ -30,7 +31,11 @@ paces itself: it probes every host every 30 min (one 5-token completion per host
 re-probes failing hosts every 5 min. Class 3 is `lumen-leakwatch.service`, a
 long-running daemon (as lumen) that uses libc inotify through ctypes, so there is no
 new dependency. It re-checks every file at start-up so it catches anything written
-while it was down.
+while it was down. Class 8 is `lumen-exposure-census.timer` (daily, oneshot, nice 19 /
+idle IO): leakwatch covers the dirs we KNOW hold secrets in real time; the census
+finds the dirs nobody listed, by content instead of path, and its tickets tell the
+worker to add a legitimately secret-bearing dir to the leakwatch rules. Design and
+calibration rationale: `design/wq3514_content_driven_exposure.md`.
 
 The nightly `lumen-mask-at-rest` stays as is. Its slow, OOM-prone part is the sweep of
 every CC transcript (wq#3207 capped its memory). This bundle takes over the known

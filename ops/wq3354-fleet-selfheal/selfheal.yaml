@@ -26,6 +26,7 @@ guards:                 # CLASS 1
     - lumen-failed-units.timer
     - lumen-disk-pct-alarm.timer
     - litellm-completion-probe.timer
+    - lumen-exposure-census.timer
   patterns: ["*guard*.timer", "*sentinel*.timer", "*drift*.timer", "*pat-scan*.timer",
              "*mask-at-rest*.timer", "*watchdog*.timer"]
   exclude: []
@@ -117,3 +118,25 @@ leakwatch:              # CLASS 3 (leakwatch.py daemon)
     - dir: /home/lumen/langfuse     # wq#3512: compose + env + their .bak copies carry live service secrets
       globs: [".env", ".env.*", "*.env", "*.env.*", "docker-compose.yml*", "DEPLOYMENT.md.bak*"]
       action: chmod
+
+exposure:               # CLASS 8 (wq#3514) — content-driven census, own daily timer
+                        # (lumen-exposure-census.timer); report-only, values never
+                        # printed or persisted. design/wq3514_content_driven_exposure.md
+  enabled: true
+  root: /home/lumen
+  sources:              # live secret stores the harvest reads (values hashed, dropped)
+    - /home/lumen/agent/.env
+    - /home/lumen/foreman/.env
+    - /home/lumen/langfuse/.env
+    - /home/lumen/langfuse/langfuse-web.env
+    - /home/lumen/langfuse/langfuse-worker.env
+    - /home/lumen/.git-credentials
+  source_globs:
+    - /home/lumen/.secrets/*
+  prune: [node_modules, .git, .cache, .npm-global, .cargo, .rustup, .claude,
+          __pycache__, .venv, venv, snap, re]
+  max_file_kb: 2048
+  prevalence_cap: 20    # a digest in more files than this is demoted as non-secret
+  max_dir_tickets: 5    # per-sweep ticket cap; overflow raises one alert
+  time_cap_s: 1500      # a capped (partial) walk never resolves open episodes
+  harness_dir: /home/lumen/foreman/harness

@@ -9,9 +9,11 @@
 # with the foreman merge itself; nothing to install for it.
 #
 # Rollback (whole layer):
-#   systemctl disable --now lumen-fleet-selfheal.timer lumen-leakwatch.service
+#   systemctl disable --now lumen-fleet-selfheal.timer lumen-leakwatch.service \
+#                           lumen-exposure-census.timer
 #   rm -f /etc/systemd/system/lumen-fleet-selfheal.{service,timer} \
-#         /etc/systemd/system/lumen-leakwatch.service
+#         /etc/systemd/system/lumen-leakwatch.service \
+#         /etc/systemd/system/lumen-exposure-census.{service,timer}
 #   systemctl daemon-reload
 #   # then drop our cooldown rows: entries with "source": "fleet-selfheal" in
 #   # /home/lumen/foreman/dispatcher/runtime/backend_cooldown.json, and any
@@ -21,9 +23,10 @@
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/agents/fleet-selfheal
-UNITS=(lumen-fleet-selfheal.service lumen-fleet-selfheal.timer lumen-leakwatch.service)
+UNITS=(lumen-fleet-selfheal.service lumen-fleet-selfheal.timer lumen-leakwatch.service
+       lumen-exposure-census.service lumen-exposure-census.timer)
 CODE=(selfheal_common.py selfheal_sweep.py sh_guards.py sh_crashloop.py sh_disk.py
-      sh_providers.py sh_nodes.py sh_ollama.py leakwatch.py)
+      sh_providers.py sh_nodes.py sh_ollama.py leakwatch.py exposure_census.py)
 
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
@@ -34,6 +37,8 @@ if [ "${1:-}" = --verify ]; then
   vactive  lumen-fleet-selfheal.timer
   venabled lumen-leakwatch.service
   vactive  lumen-leakwatch.service
+  venabled lumen-exposure-census.timer
+  vactive  lumen-exposure-census.timer
   vdone
 fi
 
@@ -58,5 +63,6 @@ if [ "${1:-}" = --no-enable ]; then
   echo "installed, NOT enabled (--no-enable). Enable with: $0"
   exit 0
 fi
-systemctl enable --now lumen-fleet-selfheal.timer lumen-leakwatch.service
+systemctl enable --now lumen-fleet-selfheal.timer lumen-leakwatch.service \
+                       lumen-exposure-census.timer
 echo "enabled. Live check: $0 --verify"

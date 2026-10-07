@@ -1,0 +1,13 @@
+[Unit]
+Description=exposure-census: content-driven secret-exposure sweep (wq#3514, selfheal class 8)
+Documentation=file:///home/lumen/foreman/ops/wq3354-fleet-selfheal/README.md
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/lumen/agents/fleet-selfheal/exposure_census.py
+User=lumen
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=512M
+TimeoutStartSec=2100

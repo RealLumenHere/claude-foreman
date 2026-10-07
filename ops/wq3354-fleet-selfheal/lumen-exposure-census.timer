@@ -1,0 +1,10 @@
+[Unit]
+Description=daily content-driven secret-exposure census (wq#3514)
+
+[Timer]
+OnCalendar=*-*-* 05:20:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
