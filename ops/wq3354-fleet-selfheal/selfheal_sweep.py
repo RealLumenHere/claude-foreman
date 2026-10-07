@@ -9,6 +9,7 @@ the separate inotify daemon leakwatch.py because it must be real-time.
   disk       CLASS 4  a mount >=90% -> run the safe pruners, ticket if still over
   providers  CLASS 5  LiteLLM host 401/403 for 10 min -> cool its rungs, rotation ticket
   nodes      CLASS 6  fleet node off tailscale 30 min -> ticket with last-seen + power
+  ollama     CLASS 7  resident model pinned past keep_alive policy -> keep_alive:0 (wq#3558)
 
 A ticket is filed on the build lane, which is what the orchestrator dispatches fworkers
 from, so "file a ticket" and "dispatch a worker" are the same act. Each class's
@@ -34,10 +35,11 @@ import sh_crashloop  # noqa: E402
 import sh_disk  # noqa: E402
 import sh_guards  # noqa: E402
 import sh_nodes  # noqa: E402
+import sh_ollama  # noqa: E402
 import sh_providers  # noqa: E402
 
 CLASSES = {"guards": sh_guards, "crashloop": sh_crashloop, "disk": sh_disk,
-           "providers": sh_providers, "nodes": sh_nodes}
+           "providers": sh_providers, "nodes": sh_nodes, "ollama": sh_ollama}
 
 
 def run(ctx, only=None):

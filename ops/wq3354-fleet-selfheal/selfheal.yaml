@@ -90,6 +90,12 @@ nodes:                  # CLASS 6
     - be3600       # wq#3450: tailscale subnet/exit-node role broken since 2026-06-17; router itself works via LAN
     - 3dprinter    # wq#3450: AIO powered off, no lan_ip/ssh path recorded; not fleet-managed
 
+ollama:                 # CLASS 7 (wq#3558)
+  enabled: true
+  hosts: ["http://127.0.0.1:11434"]   # Lumen: OLLAMA_MAX_LOADED_MODELS=1, KEEP_ALIVE=30s
+  max_ttl_s: 120                  # expires_at further out than this = a client pin
+  ticket_after: 3                 # pinned again after this many breaks in a row -> ticket
+
 leakwatch:              # CLASS 3 (leakwatch.py daemon)
   harness_dir: /home/lumen/foreman/harness
   rules:

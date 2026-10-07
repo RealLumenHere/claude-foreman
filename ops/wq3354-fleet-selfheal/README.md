@@ -15,8 +15,17 @@ clears.
 | 4 disk pressure (`sh_disk.py`) | `/`, `/home`, or `/data/lumen` ≥90% | npm cache, pip cache, cargo registry cache, `journalctl --vacuum-time=7d`, worktrees wq#2620 proves merged + clean + unclaimed + 7 d landed. At most once an hour | ticket + page if still ≥90% afterwards |
 | 5 provider key dead (`sh_providers.py`) | LiteLLM host answers 401/403 with a provider error for ≥10 min | its model_names go into `dispatcher/runtime/backend_cooldown.json` (`source: fleet-selfheal`); `router.py` now skips a cooled rung in every pool | rotation ticket + page; rungs re-enabled on the first good probe |
 | 6 node offline (`sh_nodes.py`) | lumen_state fleet node (matched by tailscale IP) offline ≥30 min | none (physical) | ticket with tailscale LastSeen, lumen_state `power_*`/`status` facts, live `plug-ctl <p> state` |
+| 7 ollama pin (`sh_ollama.py`, wq#3558) | a model in Lumen's `/api/ps` expires >120 s out, which only a client-set `keep_alive` can cause | `POST /api/generate {model, keep_alive: 0}` (ollama's own unload call). In-flight requests finish first, and no restart is needed | ticket + page when it is pinned again after 3 breaks in a row |
 
-`selfheal_sweep.py` runs classes 1, 2, 4, 5 and 6 from a 1-minute root timer. Class 5
+Why class 7 exists: with `OLLAMA_MAX_LOADED_MODELS=1`, loading a chat model marks the
+resident model for unload and blocks the scheduler until that unload lands. A request
+for the resident model that carries its own `keep_alive` overwrites the mark (fast
+path `useLoadedRunner`, ollama v0.34.4 `server/sched.go`). Chat then hangs while embed
+and `/api/ps` keep answering. minerva's embed calls sent `keep_alive: '30m'`, which
+explains the 2026-10-01 and 2026-10-07 wedges. The client fix is minerva PR
+fix/wq3558-embed-no-keepalive-pin. Class 7 breaks any pin that comes back.
+
+`selfheal_sweep.py` runs classes 1, 2, 4, 5, 6 and 7 from a 1-minute root timer. Class 5
 paces itself: it probes every host every 30 min (one 5-token completion per host) and
 re-probes failing hosts every 5 min. Class 3 is `lumen-leakwatch.service`, a
 long-running daemon (as lumen) that uses libc inotify through ctypes, so there is no

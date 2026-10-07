@@ -23,7 +23,7 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/agents/fleet-selfheal
 UNITS=(lumen-fleet-selfheal.service lumen-fleet-selfheal.timer lumen-leakwatch.service)
 CODE=(selfheal_common.py selfheal_sweep.py sh_guards.py sh_crashloop.py sh_disk.py
-      sh_providers.py sh_nodes.py leakwatch.py)
+      sh_providers.py sh_nodes.py sh_ollama.py leakwatch.py)
 
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
