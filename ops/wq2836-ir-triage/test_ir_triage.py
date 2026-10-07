@@ -260,6 +260,78 @@ def test_main_still_raises_a_non_lock_operational_error(env, monkeypatch):
         it.main([])
 
 
+class FakeHTTP:
+    """urlopen stand-in: per-model status, 200 returns a canned completion."""
+
+    def __init__(self, status):
+        self.status, self.asked = status, []
+
+    def __call__(self, req, timeout=None):
+        import io, urllib.error
+        model = json.loads(req.data)['model']
+        self.asked.append(model)
+        code = self.status[model]
+        if code != 200:
+            raise urllib.error.HTTPError(req.full_url, code, 'Payment Required', {}, io.BytesIO(b''))
+        return io.BytesIO(json.dumps({'choices': [{'message': {'content': f'from {model}'}}]}).encode())
+
+
+@pytest.fixture
+def gateway(monkeypatch):
+    def install(status, models):
+        fake = FakeHTTP(status)
+        monkeypatch.setattr(it.urllib.request, 'urlopen', fake)
+        monkeypatch.setattr(it.time, 'sleep', lambda s: None)
+        monkeypatch.setattr(it, 'MODELS', models)
+        monkeypatch.setattr(it, '_refused', set())
+        monkeypatch.setattr(it, '_answered', {})
+        monkeypatch.setenv('LITELLM_MASTER_KEY', 'x' * 8)
+        return fake
+    return install
+
+
+def test_payment_required_falls_through_to_the_next_model(env, gateway):
+    """wq#3586: deepseek 402 Insufficient Balance failed the unit every hour."""
+    fake = gateway({'deepseek-v4-flash': 402, 'cerebras-oss-120b': 200},
+                   ['deepseek-v4-flash', 'cerebras-oss-120b'])
+    assert it.chat('p') == 'from cerebras-oss-120b'
+    assert fake.asked == ['deepseek-v4-flash', 'cerebras-oss-120b']  # 402 is not retried
+    assert it.chat('q') == 'from cerebras-oss-120b'
+    assert fake.asked[2:] == ['cerebras-oss-120b']  # refused model skipped for the pass
+    assert it._answered['model'] == 'cerebras-oss-120b'
+
+
+def test_transient_error_still_retries_before_falling_through(env, gateway):
+    fake = gateway({'a': 500, 'b': 200}, ['a', 'b'])
+    assert it.chat('p') == 'from b'
+    assert fake.asked == ['a', 'a', 'a', 'b']
+
+
+def test_every_model_refused_is_an_aq_row_not_a_failed_unit(env, gateway, monkeypatch):
+    add_alert(env / 'alerts.db', 'spof-watch', 'timer:b', 'Dead-man: backup', priority='urgent')
+    gateway({'a': 402, 'b': 403}, ['a', 'b'])
+    alerts = []
+    monkeypatch.setattr(it, 'alert_llm_down', alerts.append)
+    assert it.main([]) == 0
+    assert len(alerts) == 1 and 'refused: a,b' in alerts[0]
+    assert not (env / 'state.json').exists()  # next fire retries the pass
+
+
+def test_dry_run_still_exits_nonzero_on_model_failure(env, gateway, monkeypatch):
+    add_alert(env / 'alerts.db', 'spof-watch', 'timer:b', 'Dead-man: backup', priority='urgent')
+    gateway({'a': 402}, ['a'])
+    monkeypatch.setattr(it, 'alert_llm_down', lambda m: pytest.fail('dry run filed an aq row'))
+    assert it.main(['--dry']) == 1
+
+
+def test_alert_llm_down_shells_out_to_aq_add(env, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(it.subprocess, 'run',
+                        lambda argv, **k: seen.setdefault('argv', argv))
+    it.alert_llm_down('every model refused')
+    assert seen['argv'][:4] == [it.AQ_BIN, 'add', 'ir-triage', 'llm-unavailable']
+
+
 def test_alert_db_locked_shells_out_to_aq_add(env, monkeypatch):
     seen = {}
     monkeypatch.setattr(it.subprocess, 'run',

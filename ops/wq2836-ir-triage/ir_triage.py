@@ -40,6 +40,13 @@ MASKING_DIR = '/home/lumen/foreman/harness'
 
 LITELLM_URL = 'http://localhost:4000/v1/chat/completions'
 MODEL = os.getenv('IR_TRIAGE_MODEL', 'deepseek-v4-flash')
+# wq#3586: one unfunded provider must not fail the unit. 2026-10-07 deepseek
+# answered 402 Insufficient Balance on every pass, so the unit flapped failed
+# hourly (aq#2314 x12). A billing/auth refusal skips straight to the next model.
+FALLBACK_MODELS = [m.strip() for m in os.getenv(
+    'IR_TRIAGE_FALLBACK_MODELS', 'cerebras-oss-120b').split(',') if m.strip()]
+MODELS = list(dict.fromkeys([MODEL] + FALLBACK_MODELS))
+NO_RETRY_HTTP = (401, 402, 403)
 STATUS = 'blocked'
 DECISION_REASON = ('ir-triage lane (wq#2836): review-only incident plan, never '
                    'auto-applied. Ship to act on it, Reject to dismiss.')
@@ -178,14 +185,14 @@ def collect():
     return collect_aq() + collect_failed_units() + collect_trivy()
 
 
-def chat(prompt):
-    key = os.getenv('LITELLM_MASTER_KEY', '')
-    if not key:
-        log('LITELLM_MASTER_KEY unset')
-        return ''
-    body = {'model': MODEL, 'messages': [{'role': 'user', 'content': prompt}],
+_refused = set()  # models that answered 401/402/403 this pass; not asked again
+_answered = {}  # last model that returned content, recorded in eval_result
+
+
+def _chat_one(model, prompt, key):
+    body = {'model': model, 'messages': [{'role': 'user', 'content': prompt}],
             'temperature': 0.2, 'max_tokens': 4000}
-    if 'deepseek' in MODEL:
+    if 'deepseek' in model:
         # Same reasoning-sprawl guard minerva_proposal uses for this model.
         body['response_format'] = {'type': 'json_object'}
     req = urllib.request.Request(LITELLM_URL, data=json.dumps(body).encode(), headers={
@@ -195,8 +202,26 @@ def chat(prompt):
             with urllib.request.urlopen(req, timeout=180) as r:
                 return json.load(r)['choices'][0]['message']['content'] or ''
         except Exception as e:
-            log(f'  llm err (attempt {attempt + 1}/3): {str(e)[:160]}')
+            log(f'  llm err {model} (attempt {attempt + 1}/3): {str(e)[:160]}')
+            if getattr(e, 'code', None) in NO_RETRY_HTTP:
+                _refused.add(model)
+                return ''
             time.sleep(3 * (attempt + 1))
+    return ''
+
+
+def chat(prompt):
+    key = os.getenv('LITELLM_MASTER_KEY', '')
+    if not key:
+        log('LITELLM_MASTER_KEY unset')
+        return ''
+    for model in MODELS:
+        if model in _refused:
+            continue
+        out = _chat_one(model, prompt, key)
+        if out:
+            _answered['model'] = model
+            return out
     return ''
 
 
@@ -289,7 +314,7 @@ def explanation(result, cap=4000):
     text until it fits the column cap, so the stored JSON is never truncated mid-token."""
     cited = sorted({c for c in result['cites']} | {c for s in result['steps'] for c in s['cites']})
     for width in (240, 120, 60, 0):
-        doc = {'lane': 'ir-triage', 'ticket': 'wq#2836', 'model': MODEL,
+        doc = {'lane': 'ir-triage', 'ticket': 'wq#2836', 'model': _answered.get('model', MODEL),
                'severity': result['severity'], 'confidence': result['confidence'],
                'explanation': {'hypothesis_cites': result['cites'], 'fragments': {
                    c: {k: result['fragments'][c][k] for k in ('source', 'ts')}
@@ -327,15 +352,22 @@ def _is_locked(e):
         'locked' in str(e) or 'busy' in str(e))
 
 
-def alert_db_locked(message):
-    """One deduped aq row (source=ir-triage, key=minerva-db-locked) instead of a
-    failed-unit page. Best-effort: a missing aq binary only logs."""
+def _aq_add(key, title, message):
+    """One deduped aq row (source=ir-triage) instead of a failed-unit page.
+    Best-effort: a missing aq binary only logs."""
     try:
-        subprocess.run([AQ_BIN, 'add', 'ir-triage', 'minerva-db-locked',
-                        'ir-triage: minerva.db locked, pass skipped', message],
+        subprocess.run([AQ_BIN, 'add', 'ir-triage', key, title, message],
                        check=False, timeout=30)
     except OSError as e:
-        log(f'aq unavailable ({e}); lock alert dropped')
+        log(f'aq unavailable ({e}); {key} alert dropped')
+
+
+def alert_db_locked(message):
+    _aq_add('minerva-db-locked', 'ir-triage: minerva.db locked, pass skipped', message)
+
+
+def alert_llm_down(message):
+    _aq_add('llm-unavailable', 'ir-triage: every model failed, pass skipped', message)
 
 
 def save(pid, source_id, prop, result, db=None, out_dir=None):
@@ -489,7 +521,14 @@ def main(argv=None):
         alert_db_locked(f'held lock outlasted retries ({e}); '
                         'seen-set not advanced, next timer fire retries')
         return 0
-    return 1 if outcome == 'llm_error' else 0
+    if outcome == 'llm_error':
+        if a.dry:
+            return 1
+        # wq#3586: same guard class. A dead provider is an aq row, not an hourly
+        # failed-unit page; the unadvanced seen-set retries on the next fire.
+        alert_llm_down(f'models {",".join(MODELS)} gave no usable JSON '
+                       f'(refused: {",".join(sorted(_refused)) or "none"}); next timer fire retries')
+    return 0
 
 
 if __name__ == '__main__':
