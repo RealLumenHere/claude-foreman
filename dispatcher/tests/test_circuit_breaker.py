@@ -237,3 +237,59 @@ def test_cmd_test_ntfy_never_touches_disarm(benv, capsys):
     assert not benv["disarm"].exists()
     lines = ntfy_lines(benv)
     assert len(lines) == 1 and "TEST" in lines[0]
+
+
+# ---- trip_cause (wq#3539) ----------------------------------------------------------------
+
+def test_trip_cause_all_auth_denied_is_auth(benv):
+    now = time.time()
+    for i in range(7):
+        write_attempt(benv["runs_root"], i, 1, "AUTH_DENIED", now - 60)
+    for i in range(1):
+        write_attempt(benv["runs_root"], 10 + i, 1, "SUCCESS", now - 60)
+
+    tripped, stats = cb.check_and_trip(now=now)
+    assert tripped
+    with open(cb.trip_cause_path()) as f:
+        recorded = json.load(f)
+    assert recorded["cause"] == "auth"
+
+
+def test_trip_cause_mixed_catastrophic_is_infra(benv):
+    now = time.time()
+    for i in range(4):
+        write_attempt(benv["runs_root"], i, 1, "AUTH_DENIED", now - 60)
+    for i in range(3):
+        write_attempt(benv["runs_root"], 10 + i, 1, "KILLED", now - 60)
+
+    tripped, stats = cb.check_and_trip(now=now)
+    assert tripped
+    with open(cb.trip_cause_path()) as f:
+        recorded = json.load(f)
+    assert recorded["cause"] == "infra"
+
+
+def test_trip_cause_file_written_after_disarm_even_if_notify_fails(benv, monkeypatch):
+    now = time.time()
+    for i in range(7):
+        write_attempt(benv["runs_root"], i, 1, "AUTH_DENIED", now - 60)
+
+    def boom(*a, **kw):
+        raise RuntimeError("simulated notify_sinks crash")
+    monkeypatch.setattr(notify_sinks, "notify_critical", boom)
+
+    cb.check_and_trip(now=now)
+
+    assert benv["disarm"].exists()
+    with open(cb.trip_cause_path()) as f:
+        assert json.load(f)["cause"] == "auth"
+
+
+def test_dry_run_never_writes_trip_cause(benv):
+    now = time.time()
+    for i in range(7):
+        write_attempt(benv["runs_root"], i, 1, "AUTH_DENIED", now - 60)
+
+    tripped, stats = cb.check_and_trip(now=now, dry_run=True)
+    assert tripped
+    assert not os.path.exists(cb.trip_cause_path())

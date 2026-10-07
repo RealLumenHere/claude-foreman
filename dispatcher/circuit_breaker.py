@@ -66,6 +66,17 @@ RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_run
 DISARM_PATH = os.environ.get("FOREMAN_DISPATCH_DISARM",
                              "/home/lumen/autonomy/DISPATCH_DISARM")
 
+
+def trip_cause_path():
+    """wq#3539: sidecar recording WHY the breaker tripped, written best-effort right
+    after DISARM_PATH on every trip. self_heal.py reads this to decide whether an auth
+    re-probe (rather than a human) is the thing that can clear this specific trip —
+    never load-bearing for the trip itself (disarm() still touches DISARM_PATH
+    unconditionally first, same fail-safe order as before this existed). A function,
+    not a module constant, so it tracks a test's monkeypatched DISARM_PATH instead of
+    freezing the default at import time."""
+    return os.environ.get("FOREMAN_DISPATCH_DISARM_CAUSE", DISARM_PATH + ".cause.json")
+
 WINDOW_MINUTES = int(os.environ.get("FOREMAN_BREAKER_WINDOW_MIN", "90"))
 MIN_SAMPLES = int(os.environ.get("FOREMAN_BREAKER_MIN_SAMPLES", "8"))
 FAILURE_RATE_THRESHOLD = float(os.environ.get("FOREMAN_BREAKER_THRESHOLD", "0.75"))
@@ -75,7 +86,7 @@ GENERAL_SUCCESS_CLASSES = {"SUCCESS", "DEGRADED_SUCCESS"}
 # harness/fworker.py's classify_block_reason() INFRA_CRASH bucket (wq#725) — the only
 # classifications this breaker's own trip decision counts as failure. See module
 # docstring for why the broad GENERAL_SUCCESS_CLASSES definition is unsuitable here.
-CATASTROPHIC_CLASSES = {"LAUNCH_FAILURE", "KILLED", "OOM"}
+CATASTROPHIC_CLASSES = {"LAUNCH_FAILURE", "KILLED", "OOM", "AUTH_DENIED"}
 
 RUN_DIR_RE = re.compile(r"^wq(\d+)$")
 ATTEMPT_FILE_RE = re.compile(r"^attempt-(\d+)\.json$")
@@ -165,6 +176,32 @@ def general_failure_rate(window_minutes, now=None, runs_root=None):
                           now, runs_root)
 
 
+def _catastrophic_breakdown(window_minutes, now, runs_root, pool):
+    """{classification: count} over the trailing window, restricted to
+    CATASTROPHIC_CLASSES — the same population failure_rate() counts as `failures`,
+    broken out by verdict so check_and_trip() can tell an all-AUTH_DENIED trip from an
+    ordinary mixed-crash one."""
+    since = now - window_minutes * 60
+    out = {}
+    for finished, classification, _tid, model in _iter_records(runs_root):
+        if finished < since or finished > now or not _in_pool(model, pool):
+            continue
+        if classification in CATASTROPHIC_CLASSES:
+            out[classification] = out.get(classification, 0) + 1
+    return out
+
+
+def trip_cause(window_minutes, now, runs_root, pool):
+    """"auth" when every catastrophic failure in the window was AUTH_DENIED (wq#3539:
+    live incident was 9/9), else "infra". None when there were no catastrophic
+    failures to attribute (shouldn't happen on an actual trip, but never guess)."""
+    breakdown = _catastrophic_breakdown(window_minutes, now, runs_root, pool)
+    total = sum(breakdown.values())
+    if total == 0:
+        return None
+    return "auth" if breakdown.get("AUTH_DENIED") == total else "infra"
+
+
 def is_armed(disarm_path=None):
     return not os.path.exists(disarm_path if disarm_path is not None else DISARM_PATH)
 
@@ -180,16 +217,24 @@ def evaluate(now=None, pool=None):
     return tripped, stats
 
 
-def disarm(reason):
+def disarm(reason, cause=None):
     """FAIL-SAFE ORDER: touch DISARM_PATH unconditionally first — this must succeed
     independent of whether any notification sink is reachable — then best-effort
-    notify. Returns notify_sinks' delivery dict; a notify exception is swallowed here
-    too so it can never mask (or appear to undo) the disarm that already happened."""
+    notify. `cause` (wq#3539: "auth" | "infra" | None) is recorded to trip_cause_path()
+    AFTER the DISARM touch and is purely informational for self_heal.py's re-arm
+    logic — a failure to write it never blocks or undoes the disarm. Returns
+    notify_sinks' delivery dict; a notify exception is swallowed here too so it can
+    never mask (or appear to undo) the disarm that already happened."""
     d = os.path.dirname(DISARM_PATH)
     if d:
         os.makedirs(d, exist_ok=True)
     with open(DISARM_PATH, "a"):
         os.utime(DISARM_PATH, None)
+    try:
+        with open(trip_cause_path(), "w") as f:
+            json.dump({"cause": cause, "reason": reason, "tripped_at": time.time()}, f)
+    except OSError:
+        pass
     msg = (f"foreman-dispatcher circuit breaker TRIPPED: {reason}. "
            f"DISPATCH_DISARM set at {DISARM_PATH} — dispatch halted until Frank clears it.")
     try:
@@ -206,7 +251,10 @@ def check_and_trip(now=None, dry_run=False):
     if tripped and not dry_run:
         reason = (f"{stats['failures']}/{stats['total']} attempts failed in the last "
                   f"{stats['window_minutes']}m (>{FAILURE_RATE_THRESHOLD:.0%} threshold)")
-        disarm(reason)
+        now = now if now is not None else time.time()
+        pool = "cloud" if _per_pool() else None
+        cause = trip_cause(stats["window_minutes"], now, RUNS_ROOT, pool)
+        disarm(reason, cause=cause)
     return tripped, stats
 
 

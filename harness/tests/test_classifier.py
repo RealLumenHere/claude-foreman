@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from classifier import (
     RunState, classify,
     SUCCESS, REFUSED, TURNS, LAUNCH_FAILURE, BUDGET, LIMIT, KILLED, OOM,
-    INDETERMINATE, CRASH, HANG, AUTH, DEGRADED_SUCCESS, MODEL_NOT_FOUND,
+    INDETERMINATE, CRASH, HANG, AUTH, DEGRADED_SUCCESS, MODEL_NOT_FOUND, AUTH_DENIED,
 )
 
 
@@ -620,3 +620,38 @@ def test_string_shaped_api_error_other_code_does_not_set_version_too_old():
     st.observe({"type": "api_error", "api_error": "some_other_reason",
                 "api_error_code": "some_other_reason"})
     assert st.saw_version_too_old is False
+
+
+# wq#3539: live evidence _runs/wq3446..wq3448 (2026-10-06 15:44-15:50Z) — the CLI's own
+# text for an org-level subscription revocation, carried by a thin result frame (<=1
+# turn, exit nonzero, child dead in ~2s) that used to fall through to the generic
+# LAUNCH_FAILURE catch-all with no signature of its own.
+SUBSCRIPTION_DISABLED_RESULT = {
+    "type": "result", "subtype": "error_during_execution", "is_error": True,
+    "result": "Your organization has disabled Claude subscription access for Claude Code.",
+}
+
+
+def test_subscription_disabled_is_auth_denied_not_launch_failure():
+    frames = [{"type": "system", "subtype": "init"}, SUBSCRIPTION_DISABLED_RESULT]
+    verdict = run(frames, exit_code=1, elapsed_s=2, diff_is_empty=True)
+    assert verdict == AUTH_DENIED
+    assert verdict != LAUNCH_FAILURE
+
+
+def test_subscription_disabled_wins_over_success_shaped_frame():
+    # Whatever ambiguous shape rides alongside it (here: is_error omitted, subtype
+    # absent), the text alone is dispositive -- never masked into SUCCESS.
+    frames = [{"type": "system", "subtype": "init"},
+              {"type": "result",
+               "result": "Your organization has disabled Claude subscription "
+                         "access for Claude Code."}]
+    assert run(frames, exit_code=1) == AUTH_DENIED
+
+
+def test_result_text_without_subscription_phrase_is_unaffected():
+    st = RunState()
+    st.observe({"type": "system", "subtype": "init"})
+    st.observe({"type": "result", "subtype": "success", "is_error": False,
+                "result": "all done"})
+    assert st.saw_subscription_disabled is False
