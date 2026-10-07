@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# lumen-run — launch/track long jobs over Commander so they survive the
+# dc_stateless_leak_patch process-group reaping (episode d65a39411849).
+#
+# WHY: the mcpw/supergateway gateway is stateless and reaps the child
+# process-group when an MCP call closes/flaps. nohup/setsid/disown do NOT
+# survive this (SIGKILL to the pgroup / cgroup can't be caught). systemd-run
+# reparents the job to PID 1's tree, outside the gateway's reach.
+#
+# The user systemd manager is unreachable here (no XDG_RUNTIME_DIR/DBUS) and
+# lumen has Linger=no, so --user is a dead end. We use the SYSTEM manager via
+# passwordless sudo (verified available).
+#
+# Jobs are tracked by UNIT NAME, never by PID — a stable handle owned by
+# systemd that any later (stateless) Commander call can query. This is the
+# fold-in for the mcpw session-affinity fix: cross-call PID persistence is
+# not needed, so it stops being a problem.
+set -euo pipefail
+
+GUARD_HOST=lumen
+[ "$(hostname)" = "$GUARD_HOST" ] || { echo "lumen-run: WRONG HOST $(hostname), refusing (expected $GUARD_HOST)" >&2; exit 9; }
+
+# wq#1665: systemd-run transient units start with systemd's bare default PATH
+# (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin on this box) —
+# NOT the interactive lumen shell's PATH built up by .profile/.bashrc. Any
+# bare command living only in a user bin dir (lumen-pr, lumen-run itself,
+# anything under ~/bin, ~/.local/bin, ~/.npm-global/bin, ~/.cargo/bin) then
+# fails "command not found" inside the unit while working fine by hand.
+# CLASS FIX: every unit gets the same PATH the lumen user actually has,
+# hardcoded here (not sourced from the caller's environment, which
+# systemd-run does not propagate either) so it's identical regardless of
+# how lumen-run itself is invoked.
+JOB_PATH="/home/lumen/.cargo/bin:/home/lumen/.local/bin:/home/lumen/bin:/home/lumen/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+
+usage() {
+  cat >&2 <<USAGE
+usage:
+  lumen-run start [--name NAME] [--mem SIZE] [--cpu QUOTA] [--mem-high SIZE]
+                  [--tasks-max N] [--oom-policy POLICY] [--timeout-stop-sec SEC]
+                  -- CMD [ARGS...]
+      Launch CMD as a detached system transient unit (runs as lumen), in
+      lumen-workers.slice (wq#2605: CPU/IO priority isolation from the control
+      plane — not configurable per-job, every lumen-run job is a worker).
+      Prints: UNIT=<name>
+      --name  slug for the unit (default: job); final unit = lumen-job-<slug>-<epoch>
+      --mem   MemoryMax, e.g. 8G (guards the T5810 against OOM kills)
+      --cpu   CPUQuota, e.g. 200%
+      --mem-high        MemoryHigh, e.g. 6G (soft throttle ahead of MemoryMax's hard kill)
+      --tasks-max       TasksMax, e.g. 512
+      --oom-policy      OOMPolicy override (default: continue)
+      --timeout-stop-sec  TimeoutStopSec, e.g. 90 (grace before SIGKILL on stop —
+                          RELIABILITY_SPEC.md §E wants >=60 so a unit's own SessionEnd/
+                          cleanup hooks get to run to a clean 143 instead of a hard kill)
+      --root  run the unit as root (default: run as lumen)
+  lumen-run status UNIT     -> RUNNING | DONE:0 | FAILED:<code> | GONE
+  lumen-run log    UNIT     -> full journal for the unit
+  lumen-run wait   UNIT [S] -> poll until terminal or S seconds; each call is clamped to
+                               LUMEN_RUN_WAIT_CAP (default 55) so it answers inside a Commander
+                               call window -- on exit 124 just call it again
+  lumen-run list            -> active lumen-job-* units
+USAGE
+  exit 64
+}
+
+cmd="${1:-}"; shift || usage
+case "$cmd" in
+  start)
+    name=job; mem=""; cpu=""; mem_high=""; tasks_max=""; oom_policy="continue"
+    timeout_stop_sec=""; runas=(--uid=lumen --gid=lumen)
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2;;
+        --mem)  mem="$2";  shift 2;;
+        --cpu)  cpu="$2";  shift 2;;
+        --mem-high) mem_high="$2"; shift 2;;
+        --tasks-max) tasks_max="$2"; shift 2;;
+        --oom-policy) oom_policy="$2"; shift 2;;
+        --timeout-stop-sec) timeout_stop_sec="$2"; shift 2;;
+        --root) runas=(); shift;;
+        --) shift; break;;
+        *) echo "lumen-run: unknown arg $1" >&2; usage;;
+      esac
+    done
+    [ $# -gt 0 ] || { echo "lumen-run: no command given" >&2; usage; }
+    slug=$(printf '%s' "$name" | tr -cs 'a-zA-Z0-9' '-' | sed 's/^-//;s/-$//')
+    unit="lumen-job-${slug}-$(date +%s)"
+    # wq#2605: every lumen-run job is a worker/job by definition (the control
+    # plane runs as its own persistent services, never through lumen-run), so
+    # it lands in lumen-workers.slice (CPUWeight=50 IOWeight=50 MemoryHigh=40G)
+    # instead of competing 1:1 against desktop-commander-mcp/cloudflared
+    # (CPUWeight=1000 IOWeight=1000) on the default system.slice — the fix for
+    # the 2026-09-25 04:28Z worker-storm-starves-control-plane incident.
+    props=(--slice=lumen-workers.slice --property=OOMPolicy="$oom_policy" --property=Environment="PATH=${JOB_PATH}")
+    [ -n "$mem" ] && props+=(--property=MemoryMax="$mem")
+    [ -n "$cpu" ] && props+=(--property=CPUQuota="$cpu")
+    [ -n "$mem_high" ] && props+=(--property=MemoryHigh="$mem_high")
+    [ -n "$tasks_max" ] && props+=(--property=TasksMax="$tasks_max")
+    [ -n "$timeout_stop_sec" ] && props+=(--property=TimeoutStopSec="$timeout_stop_sec")
+    # Build the command string safely, append durable completion sentinel,
+    # and propagate the REAL exit code as the unit's exit status.
+    inner=$(printf '%q ' "$@")
+    # wq#1665 PROBE: resolve argv[0] against the PATH we just set (not the
+    # caller's PATH, which is irrelevant here) BEFORE running it, so a
+    # command that still can't be found fails with one unambiguous line
+    # pointing at lumen-run/JOB_PATH instead of a bare "command not found"
+    # buried in whatever the wrapped command itself prints. MUST still fall
+    # through to the shared "echo LUMEN_JOB_EXIT=$rc" tail below on every
+    # path — status/wait parse that sentinel, and an early `exit` from
+    # inside the probe branch (tried first, caught in testing) skips it,
+    # leaving status/wait to misparse systemd's own command-echo line instead.
+    wrapped="PATH=${JOB_PATH}; if command -v -- $(printf '%q' "$1") >/dev/null 2>&1; then { ${inner}; }; rc=\$?; else echo \"lumen-run: PROBE FAILED — '$1' not found on unit PATH=\$PATH (see JOB_PATH in lumen-run)\" >&2; rc=127; fi; echo \"LUMEN_JOB_EXIT=\$rc\"; exit \$rc"
+    sudo -n systemd-run --unit="$unit" --collect "${runas[@]}" "${props[@]}" \
+        /bin/bash -c "$wrapped" >/dev/null
+    echo "UNIT=${unit}"
+    ;;
+  status)
+    unit="${1:?unit required}"
+    if systemctl is-active --quiet "$unit"; then echo "RUNNING"; exit 0; fi
+    line=$(journalctl -u "$unit" --no-pager -o cat 2>/dev/null | grep -aE '^LUMEN_JOB_EXIT=[0-9]+$' | tail -1 || true)
+    if [ -n "$line" ]; then
+      rc="${line##*LUMEN_JOB_EXIT=}"
+      [ "$rc" = "0" ] && echo "DONE:0" || echo "FAILED:${rc}"
+    else
+      # no active unit and no sentinel: either never ran or journal rotated
+      systemctl show "$unit" -p LoadState 2>/dev/null | grep -q 'not-found' \
+        && echo "GONE" || echo "RUNNING"
+    fi
+    ;;
+  log)
+    # wq#3606: a job's stdout reaches the caller's transcript through here. wq#3513 a5
+    # hand-redacted a compose dump inside its job, missed one key, and this printed a live
+    # Langfuse secret. Mask here so no job body has to get its own redaction right; with
+    # the sibling mask-secrets missing, print nothing rather than print raw.
+    unit="${1:?unit required}"
+    mask="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/mask-secrets"
+    [ -x "$mask" ] || { echo "lumen-run: $mask missing, refusing to print an unmasked journal" >&2; exit 3; }
+    journalctl -u "$unit" --no-pager -o cat 2>/dev/null | "$mask"
+    ;;
+  wait)
+    unit="${1:?unit required}"; budget="${2:-3600}"; waited=0
+    # wq#3265: a Commander call is killed by the Worker's 70s abort, so a wait longer than
+    # that never returns an answer (6 of 31 cut calls in 24h were exactly `wait <unit> 840`).
+    # Clamp each call and let the caller re-poll. LUMEN_RUN_WAIT_CAP is the knob for callers
+    # that are NOT inside a Commander call (a detached script may set it high).
+    cap="${LUMEN_RUN_WAIT_CAP:-55}"
+    case "$budget" in ''|*[!0-9]*) budget=3600;; esac
+    clamped=0
+    if [ "$budget" -gt "$cap" ]; then
+      echo "NOTE: wait clamped to ${cap}s (Commander call window ~68s); re-poll"
+      budget="$cap"; clamped=1
+    fi
+    while systemctl is-active --quiet "$unit"; do
+      sleep 3; waited=$((waited+3))
+      if [ "$waited" -ge "$budget" ]; then
+        if [ "$clamped" = 1 ]; then
+          echo "TIMEOUT after ${budget}s (still RUNNING), re-poll with: lumen-run wait $unit"
+        else
+          echo "TIMEOUT after ${budget}s (still RUNNING)"
+        fi
+        exit 124
+      fi
+    done
+    line=$(journalctl -u "$unit" --no-pager -o cat 2>/dev/null | grep -aE '^LUMEN_JOB_EXIT=[0-9]+$' | tail -1 || true)
+    rc="${line##*LUMEN_JOB_EXIT=}"; [ -n "$line" ] || rc="?"
+    [ "$rc" = "0" ] && echo "DONE:0" || echo "FAILED:${rc}"
+    ;;
+  list)  systemctl list-units 'lumen-job-*' --all --no-legend --no-pager 2>/dev/null || true;;
+  *) usage;;
+esac
