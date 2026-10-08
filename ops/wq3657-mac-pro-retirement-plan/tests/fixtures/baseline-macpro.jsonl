@@ -1,0 +1,2 @@
+{"schema": "macbench/1", "run": "r1", "row": "qwen36-local", "phase": "decode", "decode_tps": 10.9, "watts_mean": 160.0}
+{"schema": "macbench/1", "run": "r1", "row": "qwen36-local", "phase": "row_done"}
