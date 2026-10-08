@@ -51,4 +51,8 @@ fi
 
 echo "wq2608-dc-endpoint-bes-a1: nothing to install from this lane; run $SRC/apply.sh as" >&2
 echo "root on Bes -- see README.md for the full rollout order." >&2
+echo "No BUILD worker session can run apply.sh itself: fleet-exec has no ssh(bes)" >&2
+echo "grant on this ticket class (grant:grant_missing_env) AND 'sudo' is denied" >&2
+echo "fleet-wide at the harness guard layer regardless of grant -- a human with real" >&2
+echo "root on Bes has to run $SRC/apply.sh directly, outside this sandbox (wq#3643)." >&2
 exit 2
