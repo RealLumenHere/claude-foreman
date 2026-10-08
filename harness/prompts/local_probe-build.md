@@ -29,6 +29,10 @@ HOW TO WORK:
 - Tool output is cut at 2000 characters. Narrow with `grep -n`, `head`, `tail`, or read a
   file with an offset and a limit. Do not re-read an unchanged file.
 - Keep your own messages short. No preamble, no restating code or diffs; cite `path:line`.
+- After editing, `grep -n` the exact text you added and cite THAT line number in
+  evidence.json — a guessed or stale line fails the evidence replay (wq#3627).
+- Before `lumen-pr open`, write the PR body with the five required `##` headings — What /
+  Why / How / Testing / Risk (see `/home/lumen/bin/lumen-pr` §5) — or `open` rejects it.
 - Work only inside the worktree named below. Land with `/home/lumen/bin/lumen-pr commit`,
   then `open`, then `land`, from the worktree. Never commit straight to main.
 - Run the tests the ticket names before you say you are done, and cite their output.
