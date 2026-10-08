@@ -8,13 +8,20 @@ foreman_dispatcher._node_power_step. The 20-minute pass cadence is the primary a
 
     wake   starve_passes=2 consecutive passes with local_slots_full >= 2 AND every live node's backends at
            0 free slots, on a cold-policy node with measured_ready_s set, wakes_today < 4, and
-           now - last_drain_ts > 900. plug-ctl on, poll health to 2 * measured_ready_s, capped at
-           WAKE_DEADLINE_CAP_S so the wait and a failed wake's power-down fit the service's TimeoutStartSec=600
-           (a node with measured_ready_s >= the cap is not woken).
+           now - last_drain_ts > 900. `wake.method` (registry) picks the AC primitive: "plug-ac"
+           (default) does plug-ctl on; "wol" (wq#3650) sends a magic packet to `wake.mac` via
+           ports.wol() instead — for a node whose power is never cut (see drain, step 6). Either
+           way: poll health to 2 * measured_ready_s, capped at WAKE_DEADLINE_CAP_S so the wait and a
+           failed wake's power-down fit the service's TimeoutStartSec=600 (a node with
+           measured_ready_s >= the cap is not woken).
     drain  idle_passes=2 passes with zero units on the node and zero ready-but-unspawned local tickets,
            and now - last_wake_ts >= 3600. Six steps, in this order and no other (§6.3):
            1 state draining + render   2 confirm zero in-flight   3 systemctl stop <unit>
-           4 poweroff                  5 wait for ssh to stop     6 plug-ctl off — strictly LAST.
+           4 poweroff                  5 wait for ssh to stop     6 plug-ctl off — strictly LAST,
+           and SKIPPED for `wake.method: wol`: a WoL node's NIC needs standby mains power to receive
+           its wake packet, so step 4's clean `systemctl poweroff` is the end of the sequence and AC
+           stays on (wq#3650; ops/wq3650-macpro-wol/README.md's Apple EFI WoL quirk — WoL survives a
+           clean shutdown but is lost across an AC loss, which a plug-off would be).
            The MacPro6,1 auto-powers-on out of G3 (research/ISIS_POWEROFF_RCA.md:70), so cutting AC under
            a running OS is a power-cycle loop wearing the mask of a crash.
            Any failure after step 4 has told the OS to halt goes to _stuck (down + excluded, plug left ON),
@@ -389,11 +396,22 @@ class NodePower:
         # is free to rescue this wake if it stalls (a wake that never boots looks identical to an
         # unreachable node, and that is exactly the case power-remediate exists to fix).
         self._hold_remediation(node, False, "node_power waking for work")
-        rc, _ = ports.plug(row["plug_id"], "on")
+        method = (row.get("wake") or {}).get("method", "plug-ac")
+        if method == "wol":
+            mac = (row.get("wake") or {}).get("mac")
+            if not mac:
+                e["excluded_until"] = ports.now() + EXCLUDE_S
+                self.emit("power_error", node=node, reason="wol_mac_missing")
+                return {"node": node, "verb": "wake", "ok": False, "why": "wol_mac_missing"}
+            rc, _ = ports.wol(mac)
+            fail_reason = "wol_send_failed"
+        else:
+            rc, _ = ports.plug(row["plug_id"], "on")
+            fail_reason = "plug_on_failed"
         if rc != 0:
             e["excluded_until"] = ports.now() + EXCLUDE_S
-            self.emit("power_error", node=node, reason="plug_on_failed", rc=rc)
-            return {"node": node, "verb": "wake", "ok": False, "why": "plug_on_failed"}
+            self.emit("power_error", node=node, reason=fail_reason, rc=rc)
+            return {"node": node, "verb": "wake", "ok": False, "why": fail_reason}
         urls = self._health_urls(reg, node)
         deadline = min(row["wake"]["measured_ready_s"] * 2, WAKE_DEADLINE_CAP_S)
         t0 = ports.clock()
@@ -462,12 +480,18 @@ class NodePower:
                     return result
                 ports.sleep(SSH_POLL_S)
             ports.sleep(SETTLE_S)
-            if ports.plugs().get(node) != row.get("plug_id"):                # 6 — binding re-read, then AC
-                raise PowerError("plug binding changed during the drain")
-            rc, _ = ports.plug(row["plug_id"], "off")
-            if rc != 0:
-                self._stuck(node, row, e, manage_state, f"plug-ctl off exited {rc}")
-                return result
+            method = (row.get("wake") or {}).get("method", "plug-ac")
+            if method != "wol":                                              # 6 — binding re-read, then AC
+                # A WoL node keeps mains power: cutting AC would also kill the NIC's standby power,
+                # and the magic packet wake() sends would then have nothing to land on. The clean
+                # `systemctl poweroff` already issued above is what the Apple EFI WoL quirk requires
+                # (ops/wq3650-macpro-wol/README.md).
+                if ports.plugs().get(node) != row.get("plug_id"):
+                    raise PowerError("plug binding changed during the drain")
+                rc, _ = ports.plug(row["plug_id"], "off")
+                if rc != 0:
+                    self._stuck(node, row, e, manage_state, f"plug-ctl off exited {rc}")
+                    return result
         except (PowerError, OSError) as err:
             if halting:
                 self._stuck(node, row, e, manage_state, str(err))

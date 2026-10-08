@@ -1,0 +1,6 @@
+[Unit]
+Description=One autosleep check (wq#3650)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/macpro-autosleep.sh

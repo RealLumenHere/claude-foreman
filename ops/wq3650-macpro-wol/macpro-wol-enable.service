@@ -1,0 +1,15 @@
+[Unit]
+# wq#3650: persist Wake-on-LAN on the MacPro6,1 chassis's primary NIC. ethtool's `wol g`
+# setting does NOT survive a reboot on most NICs (it is a live driver register, not EFI/NVRAM
+# state), so this re-applies it at every boot — independent of the Apple EFI WoL quirk below.
+Description=Re-arm Wake-on-LAN (ethtool wol g) on the fleet LAN NIC
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/macpro-wol
+ExecStart=/usr/local/sbin/macpro-wol-enable.sh
+
+[Install]
+WantedBy=multi-user.target

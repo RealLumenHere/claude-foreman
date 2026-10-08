@@ -1,0 +1,9 @@
+[Unit]
+Description=Check load average and sleep the box if idle (wq#3650)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

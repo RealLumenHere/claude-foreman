@@ -115,6 +115,27 @@ class SystemPorts:
             return 255, ""
         return p.returncode, p.stdout
 
+    def start_unit(self, unit):
+        """`systemctl start <unit>` on Lumen itself (no ssh — the caller IS Lumen). Best-effort: used
+        to kick one immediate dispatcher pass after a wol() wake (wake_judge.py), never to gate
+        correctness on, so a non-zero rc is returned, not raised."""
+        try:
+            p = subprocess.run(["systemctl", "start", unit], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return 255, str(e)
+        return p.returncode, p.stdout
+
+    def wol(self, mac):
+        """Send a Wake-on-LAN magic packet to `mac` (wq#3650). Local broadcast, run from Lumen
+        itself, never ssh'd to a remote box: a WoL packet is a LAN-local UDP broadcast that does not
+        route past an L3 boundary (research/NETWORK_PREMORTEM.md L4), so the sender has to sit on the
+        same segment as the target, same as bin/power-remediate's existing WoL rung."""
+        try:
+            p = subprocess.run(["wakeonlan", mac], capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return 255, str(e)
+        return p.returncode, p.stdout
+
     def _detached(self, node, remote_cmd, prefix):
         unit = f"{prefix}-{int(time.time())}"
         rc, _ = self.ssh(node, f"sudo -n systemd-run --unit={unit} --collect --no-block {remote_cmd}")

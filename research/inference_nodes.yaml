@@ -51,6 +51,7 @@ nodes:
     idle_watts: 86.6               # research/ISIS_POWEROFF_RCA.md:25
     wake:
       method: plug-ac
+      mac: "00:3e:e1:c9:07:48"     # enp12s0, fleet LAN (research/INVENTORY_RECONCILIATION.md:117); wq#3650
       measured_ready_s: null
       last_measured: null
     models:
@@ -113,6 +114,7 @@ nodes:
     idle_watts: 103.2              # research/ISIS_POWEROFF_RCA.md:25
     wake:
       method: plug-ac
+      mac: "00:3e:e1:c8:27:97"     # enp12s0, fleet LAN (research/INVENTORY_RECONCILIATION.md:127); wq#3650
       measured_ready_s: null
       last_measured: null
     models:

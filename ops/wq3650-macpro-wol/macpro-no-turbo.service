@@ -1,0 +1,13 @@
+[Unit]
+# wq#3650: hold the E5-2697 v2's turbo boost off, every boot. A sysfs write, same as
+# gpu-lowpower.service's knob — not persisted by the kernel across a reboot.
+Description=Disable Intel Turbo Boost (wq#3650)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/macpro-no-turbo.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -112,6 +112,10 @@ nodes:
     idle_watts: 86.6               # research/ISIS_POWEROFF_RCA.md:25
     wake:
       method: plug-ac              # plug off->on; MacPro6,1 auto-powers-on out of G3
+                                    # "wol" (wq#3650): ports.wol(mac) sends a magic packet instead of
+                                    # a plug-on, and power_down's drain leaves AC on (dispatcher/node_power.py
+                                    # wake()/power_down()) — a WoL node's NIC needs standby mains power.
+      mac: null                    # required when method: wol; the interface that answers ssh, not a spare NIC
       measured_ready_s: null       # filled by `fleet-node bench`; null => never auto-woken
       last_measured: null
     models:
@@ -131,7 +135,7 @@ nodes:
 ```
 
 Per-node fields: `tailscale_ip`, `plug_id`, `power_policy`, `power_reason`, `cores`,
-`ram_gb`, `idle_watts`, `wake{method, measured_ready_s, last_measured}`, `models[]`,
+`ram_gb`, `idle_watts`, `wake{method, mac, measured_ready_s, last_measured}`, `models[]`,
 and `state` (`live | draining | cold | down | retired`).
 
 Per-model fields: `family`, `resident`, `slots`, `served_ctx`, `first_frame_s`,
@@ -364,10 +368,12 @@ Wake **one** cold node when, for `starve_passes: 2` consecutive dispatch passes:
 Candidate order: highest `prefill_tps` for the family the starved tickets want, ties
 broken by lowest `idle_watts`, then by node name.
 
-Sequence: `plug-ctl <plug_id> on` → poll the health URL every 15 s to a deadline of
-`measured_ready_s * 2` → on pass, `state: live` and render (slots appear next pass) → on
-timeout, `state: down`, `plug-ctl <plug_id> off`, one ISSUE-LOG line, and the node is
-excluded for 24 h. A wake that half-works is worse than one that never started.
+Sequence: `plug-ctl <plug_id> on` (or, for `wake.method: wol` — wq#3650 — a magic packet to
+`wake.mac` instead: `dispatcher/node_power.py` `wake()`) → poll the health URL every 15 s to a
+deadline of `measured_ready_s * 2` → on pass, `state: live` and render (slots appear next pass) →
+on timeout, `state: down`, power back off through §6.3 (for `wol`, that means no plug-ctl at all —
+see §6.3's exception), one ISSUE-LOG line, and the node is excluded for 24 h. A wake that
+half-works is worse than one that never started.
 
 The `off` on timeout goes through the §6.3 sequence and the §6.4 interlock, so it happens
 only if the box still answers ssh as itself. If ssh is dead too (wq#2412), the interlock
@@ -409,6 +415,13 @@ Step 6 last is not style. The MacPro6,1 auto-powers-on out of G3
 (`research/ISIS_POWEROFF_RCA.md:70`), so cutting AC under a running OS produces an
 immediate unplanned boot — a power-cycle loop wearing the mask of a crash. That is
 exactly the shape of the isis incident this fleet already paid for.
+
+**`wake.method: wol` (wq#3650): step 6 is skipped entirely**, not just reordered. A node woken by
+a magic packet needs its NIC's standby rail powered the whole time it is "off" — cutting AC would
+save nothing (the box is already soft-off after step 4) and would cost the one thing that makes a
+future wake possible. Steps 1-5 are unchanged; the node simply stays at a clean `poweroff` with
+mains power on. See `ops/wq3650-macpro-wol/README.md` for the Apple EFI WoL quirk this follows
+from, and `dispatcher/node_power.py` `power_down()`'s `method != "wol"` guard.
 
 ### 6.4 Power-action safety interlock
 

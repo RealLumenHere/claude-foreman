@@ -40,6 +40,7 @@ class FakePorts:
         self.poweroff_hangs, self.stop_rc = False, 0
         self.running = []
         self.on_ssh = None
+        self.wol_rc = 0
 
     # ordered call log -------------------------------------------------------------------------
     def kinds(self):
@@ -75,6 +76,12 @@ class FakePorts:
         if verb == "watts":
             return 0, f"{plug_id} True {self.watts}\n"
         return 0, ""
+
+    # wake-on-lan (wq#3650) -----------------------------------------------------------------------
+    def wol(self, mac):
+        self.calls.append(("wol", mac))
+        self.booted_at = self.t          # same effect as plug-ctl on: starts the boot-time clock
+        return self.wol_rc, ""
 
     def probe(self, url):
         self.calls.append(("probe", url))
@@ -208,6 +215,33 @@ def test_wake_lifts_the_remediation_hold_before_ac_moves(env):
     on_idx = env.ports.calls.index(("plug", "p1", "on"))
     assert env.ports.calls.index(hold) < on_idx
     assert act == {"node": COLD, "verb": "wake", "ok": True}
+
+
+def test_wake_with_wol_method_sends_a_magic_packet_instead_of_a_plug_on(env):
+    """wq#3650: `wake.method: wol` on a Mac Pro picks ports.wol(mac) over plug-ctl on."""
+    env.set_reg('method: plug-ac\n      mac: "00:3e:e1:c8:27:97"', 'method: wol\n      mac: "00:3e:e1:c8:27:97"')
+    act = env.starved()
+    assert act == {"node": COLD, "verb": "wake", "ok": True}
+    assert env.ports.calls.count(("wol", "00:3e:e1:c8:27:97")) == 1
+    assert env.ports.plug_calls("on") == []
+
+
+def test_wake_with_wol_method_and_no_mac_is_refused_without_sending_anything(env):
+    env.set_reg('      method: plug-ac\n      mac: "00:3e:e1:c8:27:97"     '
+                '# enp12s0, fleet LAN (research/INVENTORY_RECONCILIATION.md:127); wq#3650\n',
+                '      method: wol\n      mac: null\n')
+    act = env.starved()
+    assert act == {"node": COLD, "verb": "wake", "ok": False, "why": "wol_mac_missing"}
+    assert [c for c in env.ports.calls if c[0] in ("wol", "plug")] == []
+    assert env.state()[COLD]["excluded_until"] > env.ports.t
+
+
+def test_wake_with_wol_method_failure_excludes_the_node_a_day(env):
+    env.set_reg('method: plug-ac\n      mac: "00:3e:e1:c8:27:97"', 'method: wol\n      mac: "00:3e:e1:c8:27:97"')
+    env.ports.wol_rc = 1
+    act = env.starved()
+    assert act == {"node": COLD, "verb": "wake", "ok": False, "why": "wol_send_failed"}
+    assert env.state()[COLD]["excluded_until"] - env.ports.t <= np_.EXCLUDE_S
 
 
 def test_no_wake_while_a_live_member_has_a_free_slot_or_slots_full_is_one(env):
@@ -349,6 +383,19 @@ def test_six_steps_fire_in_order_with_plug_off_strictly_last(env):
     (hold,) = [c for c in env.ports.calls if c[0] == "state_write" and c[2] == "remediation_hold"]
     assert hold[1] == COLD and hold[3].startswith("on - ")
     assert plug_off < calls.index(hold)  # wq#1981: held only after AC is actually off
+
+
+def test_wol_node_drain_skips_plug_off_and_leaves_ac_on(env):
+    """wq#3650: a WoL node's NIC needs standby mains power, so the drain's AC-cut step is skipped —
+    the clean `systemctl poweroff` in step 4 is the whole story."""
+    env.set_reg('method: plug-ac\n      mac: "00:3e:e1:c8:27:97"', 'method: wol\n      mac: "00:3e:e1:c8:27:97"')
+    awake(env)
+    act = idle_passes(env, 2)
+    assert act == {"node": COLD, "verb": "off", "ok": True}
+    assert env.ports.plug_calls("off") == []
+    calls = env.ports.kinds()
+    assert any(c[0] == "ssh" and "systemctl poweroff" in c[2] for c in calls)
+    assert env.reg_state() == "cold"
 
 
 def test_draining_render_removes_the_node_from_the_dispatcher_view(env):
