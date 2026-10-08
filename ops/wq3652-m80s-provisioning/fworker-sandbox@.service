@@ -1,0 +1,58 @@
+# fworker-sandbox@.service — hardened per-slot BUILD worker unit for an M80s node
+# (wq#3652 step 5). Same one-slot-per-%i, flock-enforced shape as
+# harness/systemd/wq-worker@.service (wq#1182) — see that unit's header for the
+# TOCTOU rationale, unchanged here. The real differences are: (a) User=fworker, a
+# nologin system account that owns ONLY /var/fworker (wq#3652 step 4), never any
+# $HOME; (b) the hardening block below; (c) ExecStart runs
+# fworker_sandbox_slot.sh, the /var/fworker-rooted sibling of wq_worker_slot.sh —
+# that script hardcodes /home/lumen/foreman, which this unit's ProtectHome=yes
+# makes EROFS/unreadable regardless of which user runs it, so it cannot be reused.
+#
+# Installed by provision-fworker.sh in this same directory. That script needs
+# useradd/mkfs/mount, none of which a BUILD-worker Bash sandbox may run
+# (harness/worker-settings.json has no useradd/mkfs/mount entry, and
+# harness/fleet-exec-policy.yaml's never.sudo_argv_deny permanently excludes
+# useradd/mkfs* even once fleet-exec grows a sudo verb) — a privileged/root session
+# runs that script; this unit file just ships the destination state it installs.
+[Unit]
+Description=Lumen fworker sandbox — M80s node slot %i (wq#3652)
+Documentation=file:///home/lumen/foreman/ops/wq3652-m80s-provisioning/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=fworker
+Group=fworker
+Environment=PATH=/var/fworker/bin:/usr/bin:/bin
+WorkingDirectory=/var/fworker
+EnvironmentFile=/var/fworker/fworker.env
+EnvironmentFile=-/var/fworker/.locks/fworker-sandbox-%i.env
+ExecStartPre=/usr/bin/flock -n /var/fworker/.locks/fworker-sandbox-%i.lock -c true
+ExecStart=/usr/bin/flock -n /var/fworker/.locks/fworker-sandbox-%i.lock /var/fworker/foreman/ops/wq3652-m80s-provisioning/fworker_sandbox_slot.sh %i
+TimeoutStartSec=0
+TimeoutStopSec=90
+Restart=no
+
+# Hardening (wq#3652 step 5, ticket-literal set).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/fworker
+
+# eBPF egress allow/deny (wq#3652 step 5). fworker's only required egress is Lumen
+# itself — LiteLLM (FOREMAN_LITELLM_BASE_URL) and the wq-remote ssh shim (wq has no
+# remote-DB mode; see wq-remote in this directory) both terminate on Lumen's
+# tailnet address. Deny the Tailscale CGNAT block and the local LAN first; Allow
+# the single Lumen /32 after — systemd resolves an address matched by both lists
+# via longest-prefix-match with Allow winning ties, so the /32 wins unconditionally
+# against the /10 and /24 denies regardless of line order. Loopback is listed
+# explicitly rather than assumed implicitly exempt: this sandbox's filesystem scope
+# (BUILD worktree + --add-dir roots only) cannot reach /usr/share/doc to confirm
+# that systemd default against this host's actual systemd version, so it is
+# spelled out instead of relied on (doctrine: verify, never guess a config value).
+# Lumen's tailnet IP per lumen_state.py current lumen tailscale_ip (since
+# 2026-06-07 at verification time) — re-verify before deploying; it can change.
+IPAddressAllow=127.0.0.0/8 ::1 100.117.66.102/32
+IPAddressDeny=100.64.0.0/10 192.168.8.0/24

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# wq-remote — M80s fworker's stand-in for /home/lumen/bin/wq (wq#3652 step 7).
+#
+# wq's queue is a local sqlite file (WQ_DB, defaults to
+# /home/lumen/agents/work-queue/queue.db — /home/lumen/bin/wq:101), not a
+# networked service, and has no remote-DB mode. Mounting that file over the
+# network for
+# concurrent multi-writer access would risk sqlite corruption, so fworker never
+# touches queue.db directly. Instead this shim does what tier-0 instinct #1
+# already requires of every Lumen-side command issued from another box: it
+# SSH-wraps the call and runs the real wq ON Lumen.
+#
+# A fworker-sandbox unit's own egress allowlist (IPAddressAllow in
+# fworker-sandbox@.service) only opens Lumen's /32, so this is also the ONLY
+# network destination this shim is able to reach from inside the sandbox.
+set -euo pipefail
+
+# Per lumen_state.py current lumen tailscale_ip, verified at authoring time
+# (since 2026-06-07) — re-verify before deploying; it can change, and this
+# default is a fallback, not a substitute for that check.
+LUMEN_SSH_TARGET="${LUMEN_SSH_TARGET:-lumen@100.117.66.102}"
+
+printf -v remote_cmd '%q ' /home/lumen/bin/wq "$@"
+exec ssh -o BatchMode=yes "$LUMEN_SSH_TARGET" "$remote_cmd"
