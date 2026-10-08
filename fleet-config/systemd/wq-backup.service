@@ -1,0 +1,10 @@
+[Unit]
+Description=wq queue.db + fleet config nightly backup (fleet-config/scripts/backup.sh)
+# backup.sh uses sqlite3 .backup — safe against a live writer, no wq downtime
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/home/lumen/foreman/fleet-config/scripts/backup.sh
+Nice=10
+IOSchedulingClass=idle

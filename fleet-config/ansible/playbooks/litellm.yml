@@ -1,0 +1,5 @@
+# LiteLLM gateway — docker container `litellm` on lumen, port 4000.
+# Config regeneration procedure: docs/RECOVERY.md §4.
+- hosts: gateway
+  roles:
+    - litellm

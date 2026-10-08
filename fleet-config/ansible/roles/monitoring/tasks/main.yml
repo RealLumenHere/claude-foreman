@@ -1,0 +1,46 @@
+# Monitoring on lumen: gatus container (:8418, docker) + gatus-ntfy-relay
+# systemd unit (:8784) + netdata (distro package). Re-establishing alert
+# routing end-to-end: docs/RECOVERY.md §5.
+- name: netdata installed
+  become: true
+  apt:
+    name: netdata
+    state: present
+
+- name: Compose directory
+  file:
+    path: "{{ fleet_home }}/fleet-compose/monitoring"
+    state: directory
+    mode: "0755"
+
+- name: Deploy gatus compose
+  copy:
+    src: "{{ playbook_dir }}/../../docker/monitoring/docker-compose.yml"
+    dest: "{{ fleet_home }}/fleet-compose/monitoring/docker-compose.yml"
+    mode: "0644"
+
+- name: Gatus config present? (endpoint list — lives on lumen, backed up by scripts/backup.sh)
+  stat:
+    path: "{{ fleet_home }}/fleet-compose/monitoring/gatus/config.yaml"
+  register: gatus_cfg
+
+- name: Refuse without gatus config
+  fail:
+    msg: "gatus/config.yaml missing — restore from backup (docs/RECOVERY.md §1) or rebuild per §5."
+  when: not gatus_cfg.stat.exists
+
+- name: gatus container up
+  command:
+    cmd: docker compose up -d
+    chdir: "{{ fleet_home }}/fleet-compose/monitoring"
+  register: compose_out
+  changed_when: "'Started' in compose_out.stderr or 'Created' in compose_out.stderr"
+
+- name: Status page answers
+  uri:
+    url: "http://127.0.0.1:{{ gatus_port }}/health"
+    status_code: 200
+  retries: 5
+  delay: 3
+  register: gatus_health
+  until: gatus_health.status == 200

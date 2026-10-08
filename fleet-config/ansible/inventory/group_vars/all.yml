@@ -1,0 +1,32 @@
+# Vars shared by every fleet node.
+fleet_user: lumen
+fleet_home: /home/lumen
+
+# Gitea base URL (anubis, tailnet). IP rotates — gen-inventory.sh refreshes
+# this file's ansible_host lines but NOT this URL; if anubis's IP changed,
+# look it up with `lumen_state.py current anubis` and update here.
+gitea_base_url: "http://100.121.17.5:3000"
+
+# Repos a provisioned node needs. Clone URLs use the gitea credential helper
+# already configured in ~/.git-credentials — never a token in the URL.
+# NOTE: wq (/home/lumen/agents/work-queue) is NOT a git repo — it is restored
+# from backup, not cloned (docs/RECOVERY.md §3).
+fleet_repos:
+  - { name: claude-foreman, dest: "{{ fleet_home }}/foreman" }
+
+# Baseline packages every node gets (common role).
+fleet_packages:
+  - git
+  - python3
+  - python3-yaml
+  - sqlite3
+  - curl
+  - jq
+  - rsync
+
+# LiteLLM gateway, reachable fleet-wide over the tailnet.
+litellm_host: lumen
+litellm_port: 4000
+
+# Gatus status page on lumen.
+gatus_port: 8418

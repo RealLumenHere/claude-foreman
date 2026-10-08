@@ -1,0 +1,21 @@
+# Gitea REBUILD path (anubis). The live install is native
+# (/etc/gitea/app.ini) — only deploy this on a dead/replacement host, via
+# `ansible-playbook playbooks/gitea.yml -e gitea_rebuild=true`.
+# After bring-up, restore the data volume from backup (docs/RECOVERY.md §2)
+# or re-push repos from working checkouts.
+services:
+  gitea:
+    image: gitea/gitea:1
+    container_name: gitea
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    volumes:
+      - gitea-data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    env_file:
+      - .env
+volumes:
+  gitea-data:

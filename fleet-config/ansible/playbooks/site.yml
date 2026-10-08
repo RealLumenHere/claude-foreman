@@ -1,0 +1,8 @@
+# Full-fleet convergence. New node: run with --limit <node>.
+# NOTE: the `readonly` group (thor, ptah, sekhmet, horus, neith, khnum,
+# hathor) is deliberately absent — documentation-only hosts, never targeted.
+- import_playbook: common.yml
+- import_playbook: litellm.yml
+- import_playbook: gitea.yml
+- import_playbook: monitoring.yml
+- import_playbook: workers.yml

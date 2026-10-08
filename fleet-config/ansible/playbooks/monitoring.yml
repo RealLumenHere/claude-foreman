@@ -1,0 +1,5 @@
+# Monitoring stack on lumen: gatus container (:8418) + gatus-ntfy-relay
+# systemd unit + netdata (distro package).
+- hosts: gateway
+  roles:
+    - monitoring

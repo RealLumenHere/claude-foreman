@@ -1,0 +1,49 @@
+# Gitea on anubis. The LIVE deployment is a native install managed via
+# `gitea --config /etc/gitea/app.ini` (ISSUE-LOG #144's token-mint procedure
+# depends on that host CLI). This role therefore does nothing on a healthy
+# host; the compose path below is the from-scratch REBUILD, gated behind an
+# explicit flag so a routine site.yml run can never shadow the native gitea.
+- name: Native gitea present?
+  stat:
+    path: /etc/gitea/app.ini
+  register: native_gitea
+
+- name: Healthy native install — nothing to do
+  debug:
+    msg: "Native gitea present on {{ inventory_hostname }}; skipping rebuild path."
+  when: native_gitea.stat.exists and not (gitea_rebuild | default(false))
+
+- name: Rebuild from compose (only with -e gitea_rebuild=true on a dead host)
+  when: gitea_rebuild | default(false)
+  block:
+    - name: Compose directory
+      file:
+        path: "{{ fleet_home }}/fleet-compose/gitea"
+        state: directory
+        mode: "0755"
+
+    - name: Deploy compose + env template
+      copy:
+        src: "{{ playbook_dir }}/../../docker/gitea/{{ item }}"
+        dest: "{{ fleet_home }}/fleet-compose/gitea/{{ item }}"
+        mode: "0644"
+      loop:
+        - docker-compose.yml
+        - .env.example
+
+    - name: Require a filled .env (copy .env.example and fill — RECOVERY.md §6)
+      stat:
+        path: "{{ fleet_home }}/fleet-compose/gitea/.env"
+      register: gitea_env
+
+    - name: Refuse without .env
+      fail:
+        msg: ".env missing — copy .env.example, fill values per docs/RECOVERY.md §6, re-run."
+      when: not gitea_env.stat.exists
+
+    - name: gitea container up
+      command:
+        cmd: docker compose up -d
+        chdir: "{{ fleet_home }}/fleet-compose/gitea"
+      register: compose_out
+      changed_when: "'Started' in compose_out.stderr or 'Created' in compose_out.stderr"

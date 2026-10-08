@@ -1,0 +1,45 @@
+# LiteLLM gateway on lumen. Runs as docker container `litellm` (there is no
+# litellm.service unit — FLEET_SERVICE_ATLAS.md confirms the systemd name is
+# a dangling target). Config is credential-bearing and lives only at
+# /home/lumen/agent/litellm_config.yaml (0600). This role deploys the
+# container; regenerating the config is docs/RECOVERY.md §4.
+- name: Compose directory
+  file:
+    path: "{{ fleet_home }}/fleet-compose/litellm"
+    state: directory
+    mode: "0755"
+
+- name: Deploy compose file
+  copy:
+    src: "{{ playbook_dir }}/../../docker/litellm/docker-compose.yml"
+    dest: "{{ fleet_home }}/fleet-compose/litellm/docker-compose.yml"
+    mode: "0644"
+
+- name: Check live config exists
+  stat:
+    path: "{{ fleet_home }}/agent/litellm_config.yaml"
+  register: litellm_cfg
+
+- name: Refuse to start without a config
+  fail:
+    msg: >-
+      /home/lumen/agent/litellm_config.yaml missing. Regenerate it first:
+      docs/RECOVERY.md §4 (skeleton + per-provider key recovery). The
+      container must never start with a default/absent master key.
+  when: not litellm_cfg.stat.exists
+
+- name: litellm container up
+  command:
+    cmd: docker compose up -d
+    chdir: "{{ fleet_home }}/fleet-compose/litellm"
+  register: compose_out
+  changed_when: "'Started' in compose_out.stderr or 'Created' in compose_out.stderr"
+
+- name: Gateway answers
+  uri:
+    url: "http://127.0.0.1:{{ litellm_port }}/health/liveliness"
+    status_code: 200
+  retries: 5
+  delay: 3
+  register: health
+  until: health.status == 200

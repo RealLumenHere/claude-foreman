@@ -1,0 +1,15 @@
+# Gatus status/alerting (lumen, :8418). Endpoint config is mounted from
+# ./gatus/config.yaml — that file lives on lumen and is captured by
+# scripts/backup.sh; it is not committed here because endpoint entries have
+# historically embedded tokens in probe URLs (keep them in the env file).
+services:
+  gatus:
+    image: twinproduction/gatus:latest
+    container_name: gatus
+    restart: unless-stopped
+    ports:
+      - "8418:8080"
+    volumes:
+      - ./gatus:/config
+    env_file:
+      - .env

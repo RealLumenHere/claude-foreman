@@ -1,0 +1,4 @@
+# Baseline every provisionable node gets: packages, dirs, repo checkouts.
+- hosts: gateway:inference:db:git:workers
+  roles:
+    - common

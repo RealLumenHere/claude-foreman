@@ -1,0 +1,5 @@
+# Worker/dispatcher plumbing on lumen: wq checkout, foreman dispatcher
+# systemd units, wq backup timer.
+- hosts: gateway
+  roles:
+    - workers

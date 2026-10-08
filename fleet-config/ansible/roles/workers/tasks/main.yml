@@ -1,0 +1,61 @@
+# Worker/dispatcher plumbing on lumen. The authoritative unit files live in
+# the foreman repo (dispatcher/systemd/, claude-shim/systemd/,
+# token-engine/systemd/, prompt-forge/systemd/ — see ../../systemd/README.md);
+# this role installs them from the checkout the common role cloned.
+- name: Foreman checkout present
+  stat:
+    path: "{{ fleet_home }}/foreman/dispatcher/systemd"
+  register: foreman_units
+
+- name: Fail if foreman checkout missing
+  fail:
+    msg: "{{ fleet_home }}/foreman missing — run the common role first (clones claude-foreman from gitea)."
+  when: not foreman_units.stat.exists
+
+- name: List dispatcher unit files
+  find:
+    paths: "{{ fleet_home }}/foreman/dispatcher/systemd"
+    patterns: "*.service,*.timer"
+  register: unit_files
+
+- name: Install dispatcher units
+  become: true
+  copy:
+    src: "{{ item.path }}"
+    dest: "/etc/systemd/system/{{ item.path | basename }}"
+    remote_src: true
+    mode: "0644"
+  loop: "{{ unit_files.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  notify: daemon-reload
+
+- name: Install wq backup units (this repo's systemd/)
+  become: true
+  copy:
+    src: "{{ playbook_dir }}/../../systemd/{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop:
+    - wq-backup.service
+    - wq-backup.timer
+  notify: daemon-reload
+
+- name: Enable wq backup timer
+  become: true
+  systemd:
+    name: wq-backup.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: wq tool answers (wq data itself restores from backup — RECOVERY.md §3)
+  command: /home/lumen/bin/wq list
+  changed_when: false
+  failed_when: false
+  register: wq_check
+
+- name: Warn if wq not yet restored
+  debug:
+    msg: "wq not functional yet — restore queue.db + wq script per docs/RECOVERY.md §3."
+  when: wq_check.rc != 0

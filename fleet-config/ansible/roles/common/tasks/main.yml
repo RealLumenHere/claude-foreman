@@ -1,0 +1,46 @@
+# Baseline for every provisionable node.
+- name: Install baseline packages
+  become: true
+  apt:
+    name: "{{ fleet_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Fleet directory skeleton
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ fleet_user }}"
+    mode: "0755"
+  loop:
+    - "{{ fleet_home }}/bin"
+    - "{{ fleet_home }}/agents"
+    - "{{ fleet_home }}/kb"
+    - "{{ fleet_home }}/backups"
+
+- name: Secrets directory (0700 — tokens live here, never in repos)
+  file:
+    path: "{{ fleet_home }}/.secrets"
+    state: directory
+    owner: "{{ fleet_user }}"
+    mode: "0700"
+
+- name: Tailscale present (join is a manual step — needs an auth key, see docs/RUNBOOK.md §2)
+  command: which tailscale
+  register: ts_check
+  changed_when: false
+  failed_when: false
+
+- name: Warn if tailscale missing
+  debug:
+    msg: "tailscale not installed on {{ inventory_hostname }} — node unreachable after IP rotation. See docs/RUNBOOK.md §2."
+  when: ts_check.rc != 0
+
+- name: Clone fleet repos (credential helper must already be configured — RECOVERY.md §6)
+  git:
+    repo: "{{ gitea_base_url }}/lumen/{{ item.name }}.git"
+    dest: "{{ item.dest }}"
+    update: false
+  loop: "{{ fleet_repos }}"
+  when: inventory_hostname in groups['gateway'] or inventory_hostname in groups['workers']

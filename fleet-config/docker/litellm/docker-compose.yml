@@ -1,0 +1,16 @@
+# LiteLLM gateway (lumen, :4000). Mirrors the live `litellm` container.
+# The config file is credential-bearing: it is MOUNTED from
+# /home/lumen/agent/litellm_config.yaml (0600), never baked into an image
+# and never committed. Regeneration: docs/RECOVERY.md §4.
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - /home/lumen/agent/litellm_config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    env_file:
+      - .env

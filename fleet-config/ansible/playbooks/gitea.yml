@@ -1,0 +1,6 @@
+# Gitea — today a native install on anubis (/etc/gitea/app.ini).
+# This playbook is the REBUILD path (compose-based); it is a no-op on a
+# healthy anubis unless gitea_rebuild=true is passed.
+- hosts: git
+  roles:
+    - gitea
