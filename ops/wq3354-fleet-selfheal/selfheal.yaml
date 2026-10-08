@@ -90,6 +90,11 @@ nodes:                  # CLASS 6
     - seshat       # wq#3450: P6 powered off by Frank 2026-09-30 pending inspection; do not power on
     - be3600       # wq#3450: tailscale subnet/exit-node role broken since 2026-06-17; router itself works via LAN
     - 3dprinter    # wq#3450: AIO powered off, no lan_ip/ssh path recorded; not fleet-managed
+    - hathor       # wq#3696: Frank power_policy 2026-09-18 "SHUT DOWN AFTER WORK" —
+                    # hathor must be UP ONLY when actively doing work; auto-sleep.timer
+                    # (lumen_state hathor.auto_sleep, since 2026-10-08) now poweroffs it
+                    # after 30min idle by design, so a 30min tailscale outage is expected,
+                    # not an incident. Wake path: wake-dispatch.sh wake hathor.
   notes:                           # wq#3619: known-issue context folded into a node's
                                    # outage ticket, keyed by lumen_state node name —
                                    # NOT a silencer like ignore above, the page still fires
