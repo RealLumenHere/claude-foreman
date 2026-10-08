@@ -20,9 +20,13 @@ import sys
 
 INSTINCTS_PATH = os.environ.get("FOREMAN_INSTINCTS_PATH", "/home/lumen/instincts.yaml")
 
-# wq#959 acceptance: tier 0 stays under 600 tok. chars/4 is the house estimate
-# (research/TOKEN_BASELINE.md); rules beyond the cap are dropped whole, loudly.
-TIER0_TOKEN_BUDGET = 600
+# wq#959 acceptance was tier 0 under 600 tok; wq#3660: the live file grew to 8
+# rules (~688 tok, lumen-headless-ssh alone ~218) and the cap silently dropped the
+# LAST rule (fabricated-evidence) from every fworker prompt. Raised to 750 (693 used) so all
+# 8 fit. instincts.yaml is proposal-only standing law, so the cap moved, not the
+# rule text. chars/4 is the house estimate (research/TOKEN_BASELINE.md); rules
+# beyond the cap are dropped whole, loudly.
+TIER0_TOKEN_BUDGET = 750
 
 TIER0_HEADER = "INSTINCTS — TIER 0 HARD CONSTRAINTS (non-negotiable, apply before any other guidance):"
 TIER1_HEADER = "INSTINCTS — OPERATING DOCTRINE:"

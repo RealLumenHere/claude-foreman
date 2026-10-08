@@ -1,6 +1,7 @@
 """instincts_render unit tests (wq#959) — tier order, audiences, fail-open contract,
 whole-rule budget cuts, and fworker prompt injection. No claude invocation."""
 import os
+import pytest
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -91,3 +92,18 @@ def test_fworker_prompt_injection_and_fail_open(tmp_path, monkeypatch):
     prompt = fworker.load_worker_prompt(999, {"title": "t", "detail": "d"}, "/tmp/wt")
     assert "{{INSTINCTS_TIER0}}" not in prompt
     assert "old flat rule" not in prompt
+
+
+LIVE_INSTINCTS = "/home/lumen/instincts.yaml"
+
+
+@pytest.mark.skipif(not os.path.exists(LIVE_INSTINCTS), reason="live instincts.yaml not on this host")
+def test_live_tier0_fits_budget_no_rule_dropped():
+    # wq#3660: the live file overflowed the cap and dropped fabricated-evidence
+    # from every fworker prompt with only a journal warning.
+    rules = ir.load_rules(LIVE_INSTINCTS)
+    warnings = []
+    block = ir.tier0_block(LIVE_INSTINCTS, warn=warnings.append)
+    assert warnings == [], warnings
+    n_t0 = len([r for r in rules if r["tier"] == 0])
+    assert len([l for l in block.splitlines()[1:]]) == n_t0
