@@ -10,3 +10,4 @@ canary wq#3629 ran on 2026-10-07 (session subtraction-phase2-ffd6a9): wrote /tmp
 canary wq#3627 ran on 2026-10-07 (session subtraction-phase2-ffd6a9): wrote /tmp/fworker-wq3627/sub-test1.txt
 canary wq#3628 ran on 2026-10-07 (session subtraction-phase2-ffd6a9): wrote /tmp/fworker-wq3628/sub-test2.txt
 canary wq#3632 ran on 2026-10-07 (session subtraction-phase2-ffd6a9): wrote /tmp/fworker-wq3632/sub-test1b.txt
+canary wq#3633 ran on 2026-10-07 (session subtraction-phase2-ffd6a9): wrote /tmp/fworker-wq3633/sub-test3b.txt
