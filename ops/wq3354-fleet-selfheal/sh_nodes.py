@@ -8,6 +8,10 @@ tailscale's LastSeen and its known power state: the lumen_state power_* / status
 and, when its power_plug fact names a smart plug, that plug's live `plug-ctl <p> state`.
 A node named in `nodes.notes` (wq#3619) gets that text folded into the ticket too, so a
 recurring known-cause outage isn't re-researched from scratch on every drop.
+A node named in `nodes.sleepers` (wq#3702) poweroffs itself when idle, so its tailnet
+absence is expected WHILE IT IS OFF — but not when it is awake: it pages only when it
+answers on its `lan_ip` while still dark on the tailnet. `nodes.ignore` cannot express
+that (it is unconditional and permanent, for a node that should be off for good).
 Coming back online closes the episode with a low-priority notice.
 """
 import datetime
@@ -88,10 +92,48 @@ def power_state(ctx, preds):
     return lines or ["no power facts in lumen_state"]
 
 
+def lan_up(ctx, ip):
+    p = ctx.runner(["ping", "-c1", "-W2", ip], timeout=10)
+    return bool(p and p.returncode == 0)
+
+
+def sleeper_skip(ctx, ns, grace):
+    """Why a `nodes.sleepers` node's tailnet absence is not reportable, or None.
+
+    A sleeper poweroffs itself when idle (hathor's auto-sleep.timer, 30min), so being
+    dark is by design while it is OFF. Every wake is a cold boot, though, and a cold boot
+    can leave tailscaled "network down" — wake-dispatch.sh:96-98 detected exactly that on
+    hathor 2026-10-08 and only LOGS it. Awake on LAN but dark on the tailnet IS that bug,
+    so it still pages; the nap doesn't. wq#3702: `nodes.ignore` silenced both.
+    """
+    ip = ns.get("lan_ip")
+    if not ip:
+        return None                        # cannot tell nap from boot race: report it
+    if not lan_up(ctx, ip):
+        ns.pop("lan_up_since", None)
+        return f"powered off by design (no LAN answer on {ip})"
+    ns.setdefault("lan_up_since", int(ctx.now))
+    if ctx.now - ns["lan_up_since"] < grace:
+        return f"awake on LAN {ip}, inside the tailscaled boot grace"
+    return None
+
+
+def sleeper_detail(ns):
+    if not ns.get("lan_ip"):
+        return ("sleeper has no lumen_state lan_ip fact, so a by-design poweroff cannot "
+                "be told from a tailscaled boot race and this outage reports either way: "
+                "record the lan_ip fact, or drop the node from nodes.sleepers")
+    return (f"sleeper is AWAKE on LAN {ns['lan_ip']} but dark on tailscale: this is the "
+            "tailscaled boot race, not an expected auto-sleep nap (wake-dispatch.sh:96-98 "
+            "— `sudo systemctl restart tailscaled` fixed it on hathor 2026-10-08)")
+
+
 def sweep(ctx, peers_fn=peers, facts_fn=fleet_facts):
     ncfg = ctx.cfg.get("nodes", {})
     after = int(ncfg.get("offline_after_s", 1800))
     ignore = set(ncfg.get("ignore", []))
+    sleepers = set(ncfg.get("sleepers", []))
+    grace = int(ncfg.get("sleeper_tailnet_grace_s", 300))
     seen = peers_fn(ctx)
     if seen is None:
         ctx.note(CLS, "tailscale status unavailable; skipped")
@@ -112,16 +154,34 @@ def sweep(ctx, peers_fn=peers, facts_fn=fleet_facts):
         ns["last_seen"] = rec["last_seen"]
         if ctx.now - ns["offline_since"] < after or ns.get("not_fleet"):
             continue
-        if facts is None:
-            facts = facts_fn(ctx)
-        node = node_for(rec["ips"], facts)
-        if node is None or node in ignore or rec["host"] in ignore:
-            ns["not_fleet"] = True   # stop re-querying lumen_state for this outage
+        if ns.get("node") is None:
+            if facts is None:
+                facts = facts_fn(ctx)
+            node = node_for(rec["ips"], facts)
+            if node is None:
+                ns["not_fleet"] = True   # stop re-querying lumen_state for this outage
+                continue
+            # a sleeper is re-probed every sweep, so cache what the probe needs: without
+            # this, watching one keeps calling lumen_state once a minute (wq#3702)
+            ns["node"] = node
+            lan = facts.get(node, {}).get("lan_ip", "").split()
+            ns["lan_ip"] = lan[0] if lan else ""
+        node = ns["node"]
+        if node in ignore or rec["host"] in ignore:
+            ns["not_fleet"] = True
             continue
-        ns["node"] = node
+        if node in sleepers:
+            why = sleeper_skip(ctx, ns, grace)
+            if why:
+                ctx.note(CLS, f"{node} dark on tailscale but {why}; no ticket")
+                continue
         if f"node-offline:{node}" not in ctx.section("tickets"):
             mins = int((ctx.now - ns["offline_since"]) // 60)
+            if facts is None:          # node identity was cached, power facts weren't
+                facts = facts_fn(ctx)
             lines = power_state(ctx, facts.get(node, {}))
+            if node in sleepers:
+                lines.append(sleeper_detail(ns))
             note = ncfg.get("notes", {}).get(node)
             if note:
                 lines.append(f"known issue: {note}")
@@ -134,7 +194,14 @@ def sweep(ctx, peers_fn=peers, facts_fn=fleet_facts):
     if not due:
         meta["baselined"] = True
         return
-    hint = "\nIf a node is meant to be off, add it to selfheal.yaml nodes.ignore."
+    # wq#3702: the old one-line hint said only "add it to nodes.ignore", and wq#3696 took
+    # it for a node that merely naps — a permanent silencer for a 30-minute condition.
+    hint = ("\nIf a node is meant to be off for good, add it to selfheal.yaml nodes.ignore"
+            " (unconditional and permanent — it silences every future outage of that node,"
+            " of any length, for any cause). If it powers itself off when idle but must be"
+            " on the tailnet whenever it IS up, use nodes.sleepers instead: the nap is"
+            " silent, awake-but-dark still pages. Context that should ride along with the"
+            " page rather than replace it goes in nodes.notes.")
     if not meta.get("baselined"):
         # First sweep after install: outages audits already know about go into ONE
         # ticket instead of N, and each node is marked so it never re-files.

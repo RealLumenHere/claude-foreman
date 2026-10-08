@@ -325,3 +325,102 @@ def test_node_back_online_resolves_and_ignore_list_suppresses(make_ctx):
                    runner=_node_runner([]))
     sh_nodes.sweep(ctx)
     assert ctx.out.tickets == []
+
+
+# wq#3702: hathor naps by design (auto-sleep.timer) but every wake is a cold boot that
+# can leave tailscaled dark (wake-dispatch.sh:96-98, unfixed). nodes.ignore silenced both;
+# nodes.sleepers splits them on the one signal that tells them apart — LAN reachability.
+SLEEPER_TS_JSON = json.dumps({"Peer": {
+    "k1": {"HostName": "isis", "TailscaleIPs": ["100.100.129.24"], "Online": False,
+           "LastSeen": "2026-10-01T10:00:00Z"},
+    "k4": {"HostName": "hathor", "TailscaleIPs": ["100.80.71.13"], "Online": False,
+           "LastSeen": "2026-10-01T10:00:00Z"}}})
+SLEEPER_STATE_OUT = STATE_OUT + """\
+     hathor.tailscale_ip  = 100.80.71.13  (since 2026-06-09)  [UNVERIFIABLE — no probe]
+     hathor.lan_ip        = 192.168.8.172  (since 2026-06-09)  [verified 1d ago]
+     hathor.power_policy  = SHUT DOWN AFTER WORK (Frank directive 2026-09-18)
+"""
+SLEEPER_CFG = {"nodes": {"offline_after_s": 1800, "sleepers": ["hathor"],
+                         "sleeper_tailnet_grace_s": 300}}
+
+
+def _sleeper_runner(pings, lan_up):
+    def runner(argv, **kw):
+        if argv[:2] == ["tailscale", "status"]:
+            return Proc(SLEEPER_TS_JSON)
+        if "lumen_state.py" in " ".join(argv):
+            return Proc(SLEEPER_STATE_OUT)
+        if argv[0] == "ping":
+            pings.append(argv)
+            return Proc(returncode=0 if lan_up else 1)
+        return Proc(returncode=1)
+    return runner
+
+
+def _titles(ctx):
+    return sorted(t["title"] for t in ctx.out.tickets)
+
+
+def test_sleeper_powered_off_files_nothing_even_hours_later(make_ctx):
+    last_seen = sh_nodes._ts("2026-10-01T10:00:00Z")
+    pings = []
+    ctx = make_ctx(SLEEPER_CFG, BASELINED(), now=last_seen + 1800,
+                   runner=_sleeper_runner(pings, lan_up=False))
+    sh_nodes.sweep(ctx)
+    assert pings == [["ping", "-c1", "-W2", "192.168.8.172"]]   # lan_ip read from facts
+    # the control: isis is not a sleeper, so the same sweep still pages for it
+    assert _titles(ctx) == ["[selfheal] fleet node isis offline on tailscale for 30 min"]
+    ctx = make_ctx(SLEEPER_CFG, ctx.state, now=last_seen + 6 * 3600,
+                   runner=_sleeper_runner(pings, lan_up=False))
+    sh_nodes.sweep(ctx)
+    assert ctx.out.tickets == []                        # 6h asleep: still nothing
+    assert "node-offline:hathor" not in ctx.state["tickets"]
+    assert "node-offline:isis" in ctx.state["tickets"]
+
+
+def test_sleeper_awake_on_lan_but_dark_on_tailnet_pages_after_grace(make_ctx):
+    last_seen = sh_nodes._ts("2026-10-01T10:00:00Z")
+    ctx = make_ctx(SLEEPER_CFG, BASELINED(), now=last_seen + 1800,
+                   runner=_sleeper_runner([], lan_up=True))
+    sh_nodes.sweep(ctx)
+    assert [t for t in ctx.out.tickets if "hathor" in t["title"]] == []   # boot grace
+    ctx = make_ctx(SLEEPER_CFG, ctx.state, now=last_seen + 1800 + 299,
+                   runner=_sleeper_runner([], lan_up=True))
+    sh_nodes.sweep(ctx)
+    assert [t for t in ctx.out.tickets if "hathor" in t["title"]] == []   # still inside
+    ctx = make_ctx(SLEEPER_CFG, ctx.state, now=last_seen + 1800 + 300,
+                   runner=_sleeper_runner([], lan_up=True))
+    sh_nodes.sweep(ctx)
+    [t] = [t for t in ctx.out.tickets if "hathor" in t["title"]]
+    assert "AWAKE on LAN 192.168.8.172 but dark on tailscale" in t["detail"]
+    assert "restart tailscaled" in t["detail"]
+    assert "power_policy = SHUT DOWN AFTER WORK" in t["detail"]   # power facts still fold in
+    assert "nodes.sleepers instead" in t["detail"]                # ignore is not the hint
+
+
+def test_sleeper_that_falls_asleep_again_restarts_the_boot_grace(make_ctx):
+    last_seen = sh_nodes._ts("2026-10-01T10:00:00Z")
+    ctx = make_ctx(SLEEPER_CFG, BASELINED(), now=last_seen + 1800,
+                   runner=_sleeper_runner([], lan_up=True))
+    sh_nodes.sweep(ctx)
+    ctx = make_ctx(SLEEPER_CFG, ctx.state, now=last_seen + 2000,
+                   runner=_sleeper_runner([], lan_up=False))
+    sh_nodes.sweep(ctx)                                  # napped again: grace forgotten
+    ctx = make_ctx(SLEEPER_CFG, ctx.state, now=last_seen + 2200,
+                   runner=_sleeper_runner([], lan_up=True))
+    sh_nodes.sweep(ctx)
+    assert [t for t in ctx.out.tickets if "hathor" in t["title"]] == []
+
+
+def test_sleeper_without_lan_ip_fact_reports_instead_of_going_blind(make_ctx):
+    last_seen = sh_nodes._ts("2026-10-01T10:00:00Z")
+    pings = []
+    runner = _sleeper_runner(pings, lan_up=False)
+    state_no_lan = SLEEPER_STATE_OUT.replace("hathor.lan_ip", "hathor.lan_ip_unknown")
+    def no_lan_runner(argv, **kw):
+        return Proc(state_no_lan) if "lumen_state.py" in " ".join(argv) else runner(argv, **kw)
+    ctx = make_ctx(SLEEPER_CFG, BASELINED(), now=last_seen + 1800, runner=no_lan_runner)
+    sh_nodes.sweep(ctx)
+    [t] = [t for t in ctx.out.tickets if "hathor" in t["title"]]
+    assert "no lumen_state lan_ip fact" in t["detail"]
+    assert pings == []                       # nothing to probe, so it never pretends to
