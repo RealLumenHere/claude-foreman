@@ -5,12 +5,12 @@ NOT run from this build worker: the Pi-hole RPi is not in
 harness/fleet-exec-policy.yaml's ssh/network allowlist, so this sandbox has no route to
 it. Run this from a session that can reach the Pi-hole's web port.
 
-Only /api/auth is pinned against current upstream docs (docs.pi-hole.net/api/auth/,
-checked via fleet-search 2026-10-08). The groups/clients/domains/config resource shapes
-below match the Pi-hole v6 web UI's own page names and are the standard REST layout for
-those pages, but per-patch field names can drift — doctrine here is verify, don't guess,
-so this script always fetches /api/docs (the instance's self-hosted OpenAPI spec) first
-and refuses to make a write call until that's been read.
+wq#3707: resource shapes below (groups/clients/config) are now pinned against
+pi-hole/FTL's own source (src/api/docs/content/specs/{groups,clients,config}.yaml,
+src/database/gravity-db.c, src/config/config.c), not pattern-matched off the web UI —
+see foreman/reports/wq3700_judgment_wq3653_opnsense-tailscale-pihole-a1.md for the
+citations. /api/docs itself is a RapiDoc UI (301 -> /api/docs/ -> index.html), not a
+JSON document, so confirm_api_shape can only confirm it's reachable, not parse it.
 
 Implements:
   --bypass-group               NETWORK_PREMORTEM.md:39-57 Fleet-Bypass mechanism (P1-P3)
@@ -19,6 +19,7 @@ Implements:
 import argparse
 import json
 import sys
+import urllib.parse
 import urllib.request
 
 FLEET_LAN_HOSTS = []  # fill with the fleet's static 192.168.8.0/24 addresses before running
@@ -26,7 +27,7 @@ FLEET_TAILNET_CIDRS = ["100.64.0.0/10", "fd7a:115c:a1e0::/48"]  # P3: Tailscale-
 BYPASS_GROUP = "Fleet-Bypass"
 
 
-def _request(base_url, path, sid=None, payload=None, method=None):
+def _request(base_url, path, sid=None, payload=None, method=None, parse_json=True):
     url = base_url.rstrip("/") + path
     headers = {"Content-Type": "application/json"}
     if sid:
@@ -36,7 +37,8 @@ def _request(base_url, path, sid=None, payload=None, method=None):
         method = "POST" if payload is not None else "GET"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        body = resp.read()
+    return json.loads(body.decode()) if parse_json else body
 
 
 def authenticate(base_url, password):
@@ -48,49 +50,71 @@ def authenticate(base_url, password):
 
 
 def confirm_api_shape(base_url):
-    """Doctrine: verify the live schema before any write call, every run."""
+    """Doctrine: verify the docs are reachable before any write call, every run.
+
+    FTL's /api/docs is a RapiDoc UI, not a JSON document: a bare /api/docs 301s to
+    /api/docs/, which serves index.html (src/api/docs/docs.c:15-37); the per-resource
+    OpenAPI fragments are plain-text YAML at /api/docs/specs/*.yaml (docs.h), never a
+    single parseable spec. This can only confirm the docs are up, not auto-verify
+    shapes against them — it tells the operator where to look instead.
+    """
     try:
-        docs = _request(base_url, "/api/docs")
+        _request(base_url, "/api/docs/", parse_json=False)
     except Exception as exc:  # noqa: BLE001 - surfaced to the operator, not swallowed
-        print(f"could not fetch {base_url}/api/docs ({exc}) — refusing to write blind", file=sys.stderr)
+        print(f"could not fetch {base_url}/api/docs/ ({exc}) — refusing to write blind", file=sys.stderr)
         sys.exit(1)
-    print("Fetched live /api/docs. Confirm the /api/groups, /api/clients and "
-          "/api/config/dns/revServers shapes below match what this script sends "
+    print(f"{base_url}/api/docs/ is reachable. Open it in a browser and confirm the "
+          "/api/groups, /api/clients and /api/config (specs/groups.yaml, "
+          "specs/clients.yaml, specs/config.yaml) shapes match what this script sends "
           "before re-running with --confirmed.", file=sys.stderr)
-    return docs
+
+
+def _upsert_group(base_url, sid, name, comment):
+    # PUT /api/groups/{name} upserts by name (gravity-db.c: INSERT ... ON CONFLICT(name)
+    # DO UPDATE) only when the payload omits "name" -- sending "name" here routes to the
+    # rename branch (UPDATE ... WHERE name = :item) instead, which no-ops when the group
+    # doesn't exist yet, so --confirmed on a fresh Pi-hole would silently create nothing.
+    resp = _request(base_url, f"/api/groups/{urllib.parse.quote(name, safe='')}", sid=sid,
+                     payload={"comment": comment}, method="PUT")
+    groups = resp.get("groups") or []
+    if not groups or "id" not in groups[0]:
+        raise RuntimeError(f"no group id in PUT /api/groups/{name} response: {resp}")
+    return groups[0]["id"]
 
 
 def setup_bypass_group(base_url, sid):
     # NETWORK_PREMORTEM.md P1: group membership is additive, so the group must exist and
     # every fleet client's group list must become [Fleet-Bypass] only, not + Default.
-    _request(base_url, "/api/groups", sid=sid,
-              payload={"name": BYPASS_GROUP, "comment": "wq#3653: no adlists for fleet IPs"})
+    # clients.yaml: "groups" is an array of integer group IDs, not names -- the real id
+    # has to come back from the API, never be guessed as the name string.
+    group_id = _upsert_group(base_url, sid, BYPASS_GROUP, "wq#3653: no adlists for fleet IPs")
 
     clients = list(FLEET_LAN_HOSTS) + FLEET_TAILNET_CIDRS
     if not clients:
         print("FLEET_LAN_HOSTS is empty — fill it in with the fleet's static LAN "
               "addresses before this does anything useful (P1/P3).", file=sys.stderr)
     for client in clients:
-        # P1: groups=[Fleet-Bypass] replaces membership, it does not add to Default.
-        _request(base_url, "/api/clients", sid=sid,
-                  payload={"client": client, "groups": [BYPASS_GROUP]})
-    print(f"Fleet-Bypass group set for {len(clients)} client entries "
+        # PUT (not POST) /api/clients/{client}: upserts (gravity-db.c ON CONFLICT(ip) DO
+        # UPDATE), so a re-run doesn't 400 on "already present". {client} must be
+        # URI-encoded (clients.yaml) since tailnet CIDRs contain "/".
+        # groups=[group_id] replaces membership outright, it does not add to Default.
+        _request(base_url, f"/api/clients/{urllib.parse.quote(client, safe='')}", sid=sid,
+                  payload={"groups": [group_id]}, method="PUT")
+    print(f"Fleet-Bypass group (id={group_id}) set for {len(clients)} client entries "
           f"(assign zero adlists to Fleet-Bypass in the Adlists page — P2 covers deny "
           f"domain-list entries too, check those separately).", file=sys.stderr)
 
 
 def setup_conditional_forwarding(base_url, sid, opnsense_lan_ip, lan_cidr="192.168.8.0/24"):
-    _request(base_url, "/api/config", sid=sid, payload={
+    # config.yaml: /api/config only defines get/patch (no post); config.c:606-611 pins
+    # dns.revServers as a CONF_JSON_STRING_ARRAY of "<enabled>,<cidr>,<server>[,<domain>]"
+    # strings, not an object. PATCH is also idempotent -- it's a plain config write, not
+    # an insert -- so a re-run just restates the same value.
+    rev_server = f"true,{lan_cidr},{opnsense_lan_ip}"
+    _request(base_url, "/api/config", sid=sid, method="PATCH", payload={
         "config": {
             "dns": {
-                "revServers": [
-                    {
-                        "active": True,
-                        "cidr": lan_cidr,
-                        "target": opnsense_lan_ip,
-                        "domain": "",
-                    }
-                ]
+                "revServers": [rev_server]
             }
         }
     })

@@ -32,12 +32,14 @@ here per the output-discipline rule).
   from here — this sandbox cannot reach the box (see above).
 - `pihole_fleet_bypass.py` — Pi-hole v6 REST API script for item 8 (DNS answer scope) and
   the §1.2 `Fleet-Bypass` group mechanism from `NETWORK_PREMORTEM.md:39-57`, plus item 9
-  (conditional forwarding for `192.168.8.0/24` to OPNsense Unbound). Talks to
-  `/api/auth` (confirmed stable: docs.pi-hole.net/api/auth/) and the `/api/groups`,
-  `/api/clients`, `/api/config/dns` resources (confirmed by the Pi-hole v6 web UI's own
-  page names; exact field shapes vary by patch release, so the script fetches and prints
-  `GET /api/docs` first and asks for a human check before the first write — see
-  `pihole_fleet_bypass.py:1-20`).
+  (conditional forwarding for `192.168.8.0/24` to OPNsense Unbound). Talks to `/api/auth`
+  and the `/api/groups`, `/api/clients`, `/api/config` resources, shapes pinned against
+  pi-hole/FTL's own source (wq#3707, after wq#3700 found the original web-UI-page-name
+  guess wrong on four counts — see
+  `foreman/reports/wq3700_judgment_wq3653_opnsense-tailscale-pihole-a1.md`). `/api/docs`
+  itself is a RapiDoc UI, not a JSON spec, so the pre-flight can only confirm it's
+  reachable and points the operator at `/api/docs/specs/*.yaml` for the real shapes — see
+  `pihole_fleet_bypass.py:1-18`.
 - `TEST_PLAN.md` — the acceptance probes, built on `NETWORK_PREMORTEM.md` §4's checklist,
   one probe per ticket item plus the P1-P4 Pi-hole bypass gotchas and the D1-D14 domain
   table.
