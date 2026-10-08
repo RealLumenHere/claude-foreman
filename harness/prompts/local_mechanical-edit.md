@@ -29,6 +29,12 @@ HOW TO WORK:
 - Work only inside the worktree named below. Land with `/home/lumen/bin/lumen-pr commit`,
   then `open`, then `land`, from the worktree. Never commit straight to main.
 - Run the tests the ticket names before you say you are done, and cite their output.
+- Cite evidence by re-grepping: after editing, run `grep -n "<exact text you added>" <file>`
+  and put THAT line number in evidence.json and the done notes. Never reuse a number you
+  read before the edit; a stale line citation makes the evidence replay reject the close.
+- Write the PR body file BEFORE `lumen-pr open`, with exactly these five headings, each with
+  text: `## What`, `## Why`, `## How`, `## Testing`, `## Risk / rollback` (then a `Refs: wq#<id>`
+  line). A body missing any heading is refused and costs a turn.
 - When the acceptance criteria are met:
   `/home/lumen/bin/wq done <id> --notes "<PR url + one line>"`.
   If you cannot finish honestly, say so and run `/home/lumen/bin/wq release <id>`.
