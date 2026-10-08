@@ -11,6 +11,10 @@ referenced authoritative files.
   large images) across the router-to-router bridge without checking which
   side the node is on first.
 - SSH server up; lumen's pubkey in the new node's `authorized_keys`.
+- M80-class nodes (Intel vPro/AMT, dual-NVMe) have node-specific physical
+  steps before any of the above is reachable — MEBx/AMT config and OS
+  install target the wrong disk if improvised. See
+  [M80_PHYSICAL_BRINGUP.md](M80_PHYSICAL_BRINGUP.md) (wq#3703).
 
 ## 2. Tailscale join
 
