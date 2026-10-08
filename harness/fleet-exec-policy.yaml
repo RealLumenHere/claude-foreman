@@ -180,7 +180,13 @@ allow:
   # load 0.00, up 8d. NOTE the ssh grant is READ-ONLY run + copy-into-pilots; hathor is
   # deliberately absent from allow.restart, so the broker still denies every restart on
   # it exactly as it did before this change.
-  ssh: [lumen, isis, bes, anubis, maat, sobek, hathor]
+  # wq#3592 (Frank-directed 2026-10-07): ptah, sekhmet, horus, neith, khnum added. Same READ-ONLY
+  # run + copy-into-drop semantics as every other entry; none are in allow.restart or never.*, so
+  # restart/sudo/power stay denied. Key-only ssh verified from lumen 2026-10-08 for horus, neith,
+  # khnum (hostname + uptime exit 0). ptah and sekhmet were UNREACHABLE at listing time (ptah: no
+  # route to host on LAN + tailnet; sekhmet: ssh timeout on LAN and tailnet) - listing is a
+  # permission, not a liveness claim; the bench ticket re-verifies reachability before running.
+  ssh: [lumen, isis, bes, anubis, maat, sobek, hathor, ptah, sekhmet, horus, neith, khnum]
 
 # run: read-only probe set. Each entry is either a bare basename (argv[0] must equal
 # it exactly) or "<basename> <subcmd-pattern>" (argv[1] must fnmatch one of the
