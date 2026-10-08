@@ -59,5 +59,5 @@ install -m 0644 "$UNIT_DIR/fworker-sandbox@.service" /etc/systemd/system/fworker
 
 systemctl daemon-reload
 echo "provision-fworker.sh: done. Start a slot with:"
-echo "  install -m0644 /dev/stdin /var/fworker/.locks/fworker-sandbox-1.env <<<'TICKET_ID=<n>\nREPO=<path>'"
+echo "  printf 'TICKET_ID=%s\nREPO=%s\n' <n> <path> | install -m0644 /dev/stdin /var/fworker/.locks/fworker-sandbox-1.env"
 echo "  systemctl start fworker-sandbox@1"
