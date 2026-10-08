@@ -516,6 +516,12 @@ Read|Edit|Write|Grep|Glob)
       # is an env reference (wq#2916's rotation runbook).
       /home/lumen/agent/litellm_config.yaml|/home/lumen/agent/litellm_config.yaml.*)
         block "denied path: $CHECK_PATH (literal Langfuse secret inside, wq#2951; grep the lines you need via Bash)" "$CHECK_PATH" ;;
+      # wq#3678: the LibreChat compose file inlines the Mongo root pw (also inside the
+      # mongodb:// URI), JWT_SECRET and JWT_REFRESH_SECRET; wq#3090 and wq#3665 each
+      # Read it whole and burned all three (6bc6f59051e9, 19dc5bec2297, 7d555026ff55).
+      # Lift once those move to a 0600 env_file (wq#3093's rotation).
+      /home/lumen/docker/docker-compose.yml|/home/lumen/docker/docker-compose.yml.*)
+        block "denied path: $CHECK_PATH (inline LibreChat Mongo/JWT secrets, wq#3678)" "$CHECK_PATH" ;;
     esac
   done
 

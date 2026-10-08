@@ -202,6 +202,10 @@ MUST_BLOCK = [
     ("Read", {"file_path": "/home/lumen/agent/litellm_config.yaml"}),
     ("Read", {"file_path": "/home/lumen/agent/litellm_config.yaml.bak"}),
     ("Grep", {"pattern": "LANGFUSE", "path": "/home/lumen/agent/litellm_config.yaml"}),
+    # wq#3678: whole-file Read of the LibreChat compose burned its inline Mongo/JWT secrets.
+    ("Read", {"file_path": "/home/lumen/docker/docker-compose.yml"}),
+    ("Read", {"file_path": "/home/lumen/docker/docker-compose.yml.bak"}),
+    ("Grep", {"pattern": "stop_grace_period", "path": "/home/lumen/docker/docker-compose.yml"}),
 ]
 
 MUST_ALLOW = [
@@ -259,6 +263,8 @@ MUST_ALLOW = [
     ("Bash", {"command": "grep -n model_name /home/lumen/agent/litellm_config.yaml | head -5"}),
     ("Bash", {"command": "grep -c ^ /home/lumen/agent/.environment_notes.md"}),
     ("Bash", {"command": "ls /home/lumen/worktrees/wq999-a1/.env.example"}),
+    # wq#3678: the compose deny names that one file, not other compose files.
+    ("Grep", {"pattern": "image", "path": "/home/lumen/glance/docker-compose.yml"}),
 ]
 
 
