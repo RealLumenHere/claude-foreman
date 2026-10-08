@@ -73,9 +73,10 @@ are queued, not left as a gate):
 - wq#3703 — physical/console: MEBx/vPro AMT config (step 1) + Ubuntu install on
   nvme0n1 (step 3a).
 - wq#3704 — privileged session, Thor hardlock applies: MeshCommander on Thor
-  (step 2). Exact command (fleet-exec cannot reach it; `never.nodes: [thor]`
-  blocks it there permanently): `docker run -d --name meshcommander --restart
-  unless-stopped -p 3000:3000 ylianst/meshcommander`.
+  (step 2; fleet-exec cannot reach it, `never.nodes: [thor]` blocks it there
+  permanently). Pre-flight checks, the exact command (Tailscale-bound, not
+  the all-interfaces default), and verification steps are in
+  `MESHCOMMANDER_RUNBOOK.md`.
 - wq#3705 — privileged session, depends on wq#3703: run `provision-fworker.sh`,
   install/start `fworker-sandbox@1`, migrate `~/.claude/` from Lumen (step 6),
   fill in the real LiteLLM key in `/var/fworker/fworker.env`, and onboard the
