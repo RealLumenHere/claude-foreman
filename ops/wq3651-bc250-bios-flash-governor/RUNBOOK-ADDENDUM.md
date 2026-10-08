@@ -68,16 +68,21 @@ Governor: **same binary/package as wq#1337** (`cyan-skillfish-governor-smu`,
 `RUNBOOK.md:125-204` — unchanged). The pin target differs by ticket, and both are real,
 reconcilable numbers rather than a conflict:
 
-- wq#1337's RUNBOOK pins a **ceiling**: nothing reachable above 1800MHz/900mV
+- wq#1337's RUNBOOK pins a **ceiling**: nothing reachable above 1800MHz
   (`RUNBOOK.md:156-193`), justified as the production inference-only cap.
 - wq#3651 asks for **1500MHz / 850-900mV**, which matches the *sustained operating
   point* already on record from pre-boot cooling validation (`lumen_state current
   hapi-1` → `hapi-1.bringup_runbook`: "pre-boot cooling targets (1500MHz/900mV
   sustained point)", since 2026-08-09).
 
-Read together: 1500MHz/850-900mV is the sustained safe-point this ticket wants added to
-the `[[safe-points]]` table (between the existing 1400/750 and 1600/800 entries in
-`RUNBOOK.md:176-182`); 1800MHz/900mV stays the ceiling entry. Add, don't replace:
+Read together: 1500MHz/900mV is the sustained safe-point this ticket wants added to the
+`[[safe-points]]` table, between the 1400MHz and 1600MHz entries in `RUNBOOK.md` §6;
+1800MHz stays the ceiling *frequency*. Adding the point forces the voltages above it up
+too, because a `[[safe-points]]` table must be non-decreasing in voltage as frequency
+rises — see the note below — so 1600, 1700 and 1800 moved to 910/920/930 with it.
+**wq#3706 has already applied this to `RUNBOOK.md` §6** — copy
+that table as it stands; the blocks below are the same five rows, reproduced here so this
+file's governor section is self-contained and its provenance is on the record:
 
 ```toml
 [[safe-points]]
@@ -86,16 +91,64 @@ voltage = 750
 
 [[safe-points]]
 frequency = 1500
-voltage = 875
+voltage = 900
 
 [[safe-points]]
 frequency = 1600
-voltage = 800
+voltage = 910
+
+[[safe-points]]
+frequency = 1700
+voltage = 920
+
+[[safe-points]]
+frequency = 1800
+voltage = 930
+# do not add points above 1800MHz — this box is inference-only, not gaming clocks
 ```
 
-(`875` splits wq#3651's 850-900mV range; adjust once a real card is on the bench and
-`bench.sh`'s power/temp logging — `RUNBOOK.md:278-298` — shows where this point actually
-lands thermally.)
+**Why these numbers, and why the ones they replace could not ship (wq#3706).** The
+first draft of this file put 1500 at 875mV ("splits wq#3651's 850-900mV range") and left
+1600 at 800mV, which would have made 1600MHz run on *less* voltage than 1500MHz — the only
+non-monotonic step in the table, and an undervolt (hang / silently wrong compute) at the
+clock just above the operating point. wq#3699 caught it; wq#3706 ruled. The replacements
+are not interpolated guesses:
+
+- **1500/900** is the measured point, three ways: the community BC-250 docs put 1500 at
+  exactly 900mV in all four published `[[safe-points]]` tables
+  (<https://elektricm.github.io/amd-bc250-docs/system/governor/>);
+  `agents/work-queue/reports/425_hapi1_bringup_runbook.md:13` has 40CU@1500MHz/900mV at
+  ~83°C sustained *indefinitely* on a stock heatsink; and `:79-83` names it the operating
+  point, with "tune per-board upward from 900mV only if memtest_vulkan/llama-bench 10-min
+  soak fails (+15-25mV steps, never >1075mV; prefer dropping freq)". 900mV is also the top
+  of wq#3651's own requested range, so nothing is overridden to get it.
+- **1600/910, 1700/920, 1800/930** come from the same published table (1600/910, 1700/920,
+  1850/930). The shipped 800/850/900 trio was below the published curve at every point;
+  with 1500 pinned at the measured 900mV it was also *inverted*. Lifting the top of the
+  table is the only fix that keeps the measured point: pushing 1500 down under 800mV to
+  preserve ordering would undervolt the one frequency hapi-1's whole cooling plan was
+  validated at.
+- **The low end is left alone on purpose.** The same published table puts 1000 at 800mV
+  and 1175 at 850mV, where `RUNBOOK.md` ships 1175/700; other published tables use
+  1000/700. That spread is real but it is not this defect — the shipped low end is
+  monotonic and above the governor's hard 700mV floor (below 700mV the GPU pins to
+  1500MHz and the governor is pointless), so no number was invented for it here. Open
+  question for the bench, not for a doc edit.
+- **Re-measure the power claim, do not assume it.** `RUNBOOK.md:195-198` derives "65W at
+  1800MHz" from the SOT thermal table, not from the config — and that figure was taken
+  against the old 900mV ceiling. 930mV at 1800MHz is ~+3% voltage, so expect single-digit
+  percent more package power at the ceiling. Confirm it with `bench.sh`'s power logging
+  (`RUNBOOK.md:278-298`) on the first real card, exactly as §6 already instructs, and
+  adjust the 1700/1800 rows down if the thermals say so — downward is safe, it keeps the
+  table monotonic.
+
+**The table must be non-decreasing in voltage.** The governor is adaptive — it ramps
+between `[[safe-points]]` pairs (`RUNBOOK.md:149-150`) — and every published BC-250 table
+is monotonic, as ordinary GPU DVFS requires: a higher clock needs equal-or-more voltage,
+never less. A dip means either an undervolt at the higher clock or undefined ramp
+behaviour at the boundary, and on hardware that does not exist yet neither is testable.
+`ops/tests/test_wq3706_safe_points_monotonic.py` enforces this over every
+`[[safe-points]]` block in `ops/`, so the next edit to either file cannot reintroduce it.
 
 ## Phase 3 — Ollama/ROCm: do not do this, serve per wq#1337 instead
 

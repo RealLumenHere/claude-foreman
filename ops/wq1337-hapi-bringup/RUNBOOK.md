@@ -178,24 +178,39 @@ frequency = 1400
 voltage = 750
 
 [[safe-points]]
+frequency = 1500
+voltage = 900
+
+[[safe-points]]
 frequency = 1600
-voltage = 800
+voltage = 910
 
 [[safe-points]]
 frequency = 1700
-voltage = 850
+voltage = 920
 
 [[safe-points]]
 frequency = 1800
-voltage = 900
+voltage = 930
 # do not add points above 1800MHz — this box is inference-only, not gaming clocks
 # (BC250_PROJECT.md line 30: "Do NOT run 2 GHz gaming clocks 24/7")
 ```
 
+The 1500MHz row and the 910/920/930 values above it are wq#3706's ruling, not the
+original draft of this table: 1500/900 is the measured sustained point
+(`agents/work-queue/reports/425_hapi1_bringup_runbook.md:13,79-83`, ~83°C indefinitely at
+40CU) and the published community tables put 1600/1700/1850 at 910/920/930. The table
+**must stay non-decreasing in voltage** — the governor ramps between these pairs, so a dip
+undervolts the higher clock. `ops/tests/test_wq3706_safe_points_monotonic.py` enforces
+that; `ops/wq3651-bc250-bios-flash-governor/RUNBOOK-ADDENDUM.md` carries the full
+reasoning and the bench follow-up.
+
 There is no separate `power_limit_w` key in this config schema (checked the upstream
 example file directly) — 65W is the *measured consequence* of an 1800MHz ceiling per
-the SOT thermal table (line 240), not an independently configured limit. **Verify it
-holds** with `bench.sh`'s power logging (§9) rather than trusting the config alone.
+the SOT thermal table (line 240), not an independently configured limit. That figure was
+taken against a 900mV ceiling, so the 930mV row makes it a prediction to re-measure, not
+a given. **Verify it holds** with `bench.sh`'s power logging (§9) rather than trusting the
+config alone.
 
 ```sh
 sudo systemctl start cyan-skillfish-governor-smu   # manual test run first
@@ -322,7 +337,8 @@ the rung goes live. See the file's own header comment for the exact activation s
 |---|---|---|
 | 40CU unlock | `active_cu_number 40` in dmesg, `num_cu = 40` in vulkaninfo | §2 |
 | Mesa version | >= 25.0.2 | §5, SOT line 167 |
-| Governor ceiling | sustained package power ~65W at 1800MHz under load | §6, SOT line 240 |
+| Governor ceiling | sustained package power ~65W at 1800MHz under load (re-measure: the figure predates the 930mV ceiling row, wq#3706) | §6, SOT line 240 |
+| Governor table | voltage non-decreasing as frequency rises, 1500MHz row at 900mV | §6, wq#3706, `ops/tests/test_wq3706_safe_points_monotonic.py` |
 | Generation throughput | measured at 512/2048/10k ctx, compare to both SOT sources | §9, SOT lines 206-227 |
 | Soak | no crash, no GPU reset event, no output corruption for 60+ min | §9, SOT line 25 |
 | wq#266 gate | `verdict_agree>=0.9 AND leaks=0 AND rationale>=3.5` vs Isis | §10 |
