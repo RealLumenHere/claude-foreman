@@ -10,7 +10,9 @@ version: 1
 # dispatchable id, so it must ride the gateway auth path and be governor-exempt like the
 # family ids it resolves to. Absent here, fworker's is_local_model() said cloud and the
 # dispatch died on Anthropic's API with model_not_found.
-governor_prefixes: [deepseek-v4-flash, qwen36-local, nephthys-qwen14b, hathor-llama8b, local-worker]
+# qwen-local / qwen-local-small (wq#3667): coder-rung group aliases, same governor-exempt
+# requirement as local-worker. Family ids use these as prefixes (design §4 naming rule).
+governor_prefixes: [deepseek-v4-flash, qwen36-local, nephthys-qwen14b, hathor-llama8b, local-worker, qwen-local, qwen-local-small]
 
 families:                 # a model blob + how it is served. NOT a box.
   qwen36-local:
@@ -38,6 +40,23 @@ families:                 # a model blob + how it is served. NOT a box.
     # thinking turn took 12 min (wq#2127). Emitted verbatim into the gateway deployment.
     extra_body: {reasoning: {effort: none}}
     context_tokens: 40960          # models.yaml declared window (wq#2070): holds full fworker prompts
+  # wq#3667: qwen2.5-coder rungs. qwen-local is the 7b group on 64GB Mac Pros; qwen-local-small
+  # is the 3b group on Station P1 Pros (3.8 GiB RAM, <=4B only). Both names are LiteLLM group
+  # aliases and governor prefixes — family ids match startswith() for governor exemption.
+  qwen-local:
+    blob: "qwen2.5-coder:7b"
+    serving: ollama
+    port: 11434
+    health_path: /api/ps
+    swap: implicit
+    context_tokens: 16384          # hand-maintained litellm config (pipeline-fix 2026-10-07)
+  qwen-local-small:
+    blob: "qwen2.5-coder:3b"
+    serving: ollama
+    port: 11434
+    health_path: /api/ps
+    swap: implicit
+    context_tokens: 8192           # hand-maintained litellm config (pipeline-fix 2026-10-07)
 
 nodes:
   hathor:
@@ -74,6 +93,21 @@ nodes:
           mechanical-edit:      {trusted: true, source: declared, ref: "harness/fworker.py:160"}
           probe-build:          {trusted: true, source: declared, ref: "harness/fworker.py:160"}
           standard-engineering: {trusted: true, source: declared, ref: "harness/fworker.py:179-182"}
+      # wq#3667: qwen2.5-coder:7b on hathor. 1 slot (judge box, wq#2796). Not in local-worker.
+      - family: qwen-local
+        id: qwen-local.hathor
+        resident: true
+        slots: 1
+        served_ctx: 16384
+        first_frame_s: 540         # unmeasured estimate (timeout = 600, matching hand-maintained)
+        prefill_tps: null
+        decode_tps: null
+        measured_at: null
+        load_s: null
+        local_worker_group: false   # in qwen-local group, not local-worker
+        capabilities:
+          mechanical-edit:      {trusted: true, source: declared, ref: "litellm_config.yaml hand-maintained (pipeline-fix 2026-10-07)"}
+          probe-build:          {trusted: true, source: declared, ref: "litellm_config.yaml hand-maintained (pipeline-fix 2026-10-07)"}
 
   nephthys:
     state: live
@@ -131,3 +165,112 @@ nodes:
           mechanical-edit:      {trusted: true,  source: declared, ref: "harness/fworker.py:160"}
           probe-build:          {trusted: true,  source: declared, ref: "harness/fworker.py:160"}
           standard-engineering: {trusted: false, source: declared, ref: "harness/fworker.py:179-182", reason: "8k served ctx cannot hold a full fworker prompt"}
+      # wq#3667: qwen2.5-coder:7b on isis. 2 slots, shares box with the qwen36 rung.
+      - family: qwen-local
+        id: qwen-local.isis
+        resident: true
+        slots: 2
+        served_ctx: 16384
+        first_frame_s: 540         # unmeasured estimate (timeout = 600, matching hand-maintained)
+        prefill_tps: null
+        decode_tps: null
+        measured_at: null
+        load_s: null
+        local_worker_group: false   # in qwen-local group, not local-worker
+        capabilities:
+          mechanical-edit:      {trusted: true, source: declared, ref: "litellm_config.yaml hand-maintained (pipeline-fix 2026-10-07)"}
+          probe-build:          {trusted: true, source: declared, ref: "litellm_config.yaml hand-maintained (pipeline-fix 2026-10-07)"}
+
+  # wq#3667: khepri — Mac Pro 6,1, E5-2697 v2 12C, 64GB. Ollama qwen2.5-coder:7b.
+  # No smart plug assigned; power management unavailable.
+  khepri:
+    state: live
+    tailscale_ip: 100.120.16.78
+    plug_id: unassigned             # no plug in fleet-inv; lint will flag (power management unavailable)
+    power_policy: always-on
+    power_reason: "no smart plug assigned; power management unavailable (wq#3667)"
+    cores: 12
+    ram_gb: 64
+    idle_watts: null                # never measured
+    wake:
+      method: plug-ac
+      mac: "00:3e:e1:c5:75:94"     # enp12s0 (lumen_state khepri.hardware)
+      measured_ready_s: null
+      last_measured: null
+    models:
+      - family: qwen-local
+        id: qwen-local.khepri
+        resident: true
+        slots: 2
+        served_ctx: 16384
+        first_frame_s: 540         # unmeasured estimate (timeout = 600, matching hand-maintained)
+        prefill_tps: null
+        decode_tps: null
+        measured_at: null
+        load_s: null
+        local_worker_group: false   # in qwen-local group, not local-worker
+        capabilities:
+          mechanical-edit:      {trusted: true, source: declared, ref: "litellm_config.yaml hand-maintained (pipeline-fix 2026-10-07)"}
+          probe-build:          {trusted: true, source: declared, ref: "litellm_config.yaml hand-maintained (pipeline-fix 2026-10-07)"}
+
+  # wq#3667: ptah — Station P1 Pro (RK3399, 3.8 GiB RAM). Ollama qwen2.5-coder:3b.
+  # LAN-only until wq#3501/#3502. No smart plug.
+  ptah:
+    state: live
+    tailscale_ip: 100.78.207.56
+    plug_id: unassigned             # Station P1 Pro, no plug in fleet-inv
+    power_policy: always-on
+    power_reason: "Station P1 Pro, no smart plug; LAN-only until wq#3501 (wq#3667)"
+    cores: 6                        # RK3399: 2x Cortex-A72 + 4x Cortex-A53
+    ram_gb: 4                       # 3.8 GiB (lumen_state ptah.ram)
+    idle_watts: null
+    wake:
+      method: plug-ac
+      measured_ready_s: null
+      last_measured: null
+    models:
+      - family: qwen-local-small
+        id: qwen-local-small.ptah
+        resident: true
+        slots: 1
+        served_ctx: 8192
+        first_frame_s: 540         # unmeasured estimate
+        prefill_tps: null
+        decode_tps: null
+        measured_at: null
+        load_s: null
+        local_worker_group: false   # in qwen-local-small group, not local-worker
+        capabilities:
+          mechanical-edit:      {trusted: true, source: declared, ref: "ptah/sekhmet provisioning 2026-10-07"}
+          probe-build:          {trusted: true, source: declared, ref: "ptah/sekhmet provisioning 2026-10-07"}
+
+  # wq#3667: sekhmet — Station P1 Pro (RK3399, 3.8 GiB RAM). Ollama qwen2.5-coder:3b.
+  # LAN-only; Tailscale logged out (Frank re-auth needed). No smart plug.
+  sekhmet:
+    state: down                     # Tailscale logged out, degraded (lumen_state sekhmet.status)
+    tailscale_ip: 100.75.162.62
+    plug_id: unassigned             # Station P1 Pro, no plug in fleet-inv
+    power_policy: always-on
+    power_reason: "Station P1 Pro, no smart plug; Tailscale logged out pending Frank re-auth (wq#3667)"
+    cores: 6
+    ram_gb: 4
+    idle_watts: null
+    wake:
+      method: plug-ac
+      measured_ready_s: null
+      last_measured: null
+    models:
+      - family: qwen-local-small
+        id: qwen-local-small.sekhmet
+        resident: true
+        slots: 1
+        served_ctx: 8192
+        first_frame_s: 540         # unmeasured estimate
+        prefill_tps: null
+        decode_tps: null
+        measured_at: null
+        load_s: null
+        local_worker_group: false   # in qwen-local-small group, not local-worker
+        capabilities:
+          mechanical-edit:      {trusted: true, source: declared, ref: "ptah/sekhmet provisioning 2026-10-07"}
+          probe-build:          {trusted: true, source: declared, ref: "ptah/sekhmet provisioning 2026-10-07"}
