@@ -330,7 +330,7 @@ models:
     status: down
     pools: [local]
     context_tokens: 8192
-    served_ctx: 8192
+    served_ctx: 16384
     efforts: []
     trust: "mechanical-edit only, gated. Offline-survival tier."
   - id: local-worker

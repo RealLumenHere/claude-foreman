@@ -121,7 +121,7 @@ nodes:
       - family: qwen36-local
         resident: true
         slots: 2
-        served_ctx: 8192           # last measured; config.json's 32768 is an unverified post-fix target
+        served_ctx: 16384          # wq#3721: :8095 /props n_ctx=32768 total_slots=2 (2026-10-12); 32768/2 = per-slot floor when both slots are busy
         first_frame_s: 900
         prefill_tps: 60            # bench 63
         decode_tps: 10.9
@@ -130,4 +130,4 @@ nodes:
         capabilities:
           mechanical-edit:      {trusted: true,  source: declared, ref: "harness/fworker.py:160"}
           probe-build:          {trusted: true,  source: declared, ref: "harness/fworker.py:160"}
-          standard-engineering: {trusted: false, source: declared, ref: "harness/fworker.py:179-182", reason: "8k served ctx cannot hold a full fworker prompt"}
+          standard-engineering: {trusted: false, source: declared, ref: "harness/fworker.py:179-182", reason: "16k per-slot ctx cannot hold a full fworker prompt"}
