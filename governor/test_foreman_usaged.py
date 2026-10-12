@@ -18,6 +18,9 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(usaged, "EVENTS_PATH", str(tmp_path / "events.json"))
     monkeypatch.setattr(usaged, "STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setattr(usaged, "send_ntfy", lambda *a, **k: None)
+    # wq#2617: the fail-closed path also opens/resolves an aq row; without this stub the
+    # suite tripped live_bin_guard (a real /home/lumen/bin/aq spawn) and exited 1 on 61 passes
+    monkeypatch.setattr(usaged, "_aq", lambda *a, **k: True)
 
 
 def test_first_good_poll_has_zero_cache_age(monkeypatch, tmp_path):

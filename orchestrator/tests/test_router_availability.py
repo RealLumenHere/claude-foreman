@@ -231,7 +231,8 @@ def test_served_ctx_rows_match_the_dispatcher_config(raw):
         backends = json.load(f)["local_backends"]
     for name in ("hathor-llama8b", "nephthys-qwen14b"):
         assert rows[name]["served_ctx"] == backends[name]["served_ctx"] == 32768
-    assert rows["qwen36-local"]["served_ctx"] == 8192
+    # wq#3721 (PR#1754, 2026-10-12): isis :8095 serves n_ctx=32768 over 2 slots -> 16384 per slot
+    assert rows["qwen36-local"]["served_ctx"] == 16384
     assert rows["local-worker"]["served_ctx"] == \
         min(rows[n]["served_ctx"] for n in ("hathor-llama8b", "nephthys-qwen14b"))
     assert rows["local-worker"]["pools"] == ["local"]

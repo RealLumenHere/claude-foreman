@@ -211,7 +211,9 @@ MUST_BLOCK = [
 
 MUST_ALLOW = [
     ("Bash", {"command": "git push origin feat/wq625"}),
-    ("Read", {"file_path": "/home/lumen/minerva/context/sections/000_preamble.md"}),
+    # wq#2617: Phase 4 memory consolidation regenerated context/sections/ with new names;
+    # LIVE_FLEET_STATE.md is the stable rendered file in that tree (state-regen output)
+    ("Read", {"file_path": "/home/lumen/minerva/context/LIVE_FLEET_STATE.md"}),
     ("Bash", {"command": "bash /home/lumen/minerva/context/claude_context.sh --core"}),
     ("Bash", {"command": "docker ps -a"}),
     ("Bash", {"command": "docker logs mycontainer"}),
