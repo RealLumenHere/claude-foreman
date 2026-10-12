@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 import pytest
 
@@ -298,6 +299,51 @@ def test_wq2274_block_message_names_the_verb():
         rc, stderr = run_guard("Bash", {"command": cmd})
         assert rc == 2, (cmd, rc, stderr)
         assert verb in stderr, (cmd, stderr)
+
+
+ROTATION_TOOLS = [
+    "rotate-fleet-pw.sh", "rotate-provider-keys", "rotate-github-cred",
+    "rotate-gitea-cred", "gitea-rotate-finish", "github-pat-rotate",
+]
+
+
+def test_wq3747_rotation_tools_refused_without_vault_backup_marker(tmp_path):
+    # GATE (wq#3747): every rotate-* tool destroys the OLD credential value the
+    # instant it writes the NEW one. With no fresh Vault-backup marker on disk
+    # (no attended operator has run vault_rotation_backup.py), invoking any of
+    # them is refused outright.
+    empty_marker_dir = tmp_path / "markers"
+    for tool in ROTATION_TOOLS:
+        rc, stderr = run_guard("Bash", {"command": f"bash /home/lumen/bin/{tool}"},
+                                env_extra={"FOREMAN_VAULT_BACKUP_MARKER_DIR": str(empty_marker_dir)})
+        assert rc == 2, (tool, rc, stderr)
+        assert "wq#3747" in stderr and tool in stderr, (tool, stderr)
+
+
+def test_wq3747_rotation_tool_allowed_with_fresh_marker(tmp_path):
+    marker_dir = tmp_path / "markers"
+    marker_dir.mkdir()
+    (marker_dir / "rotate-fleet-pw.sh.ok").write_text('{"ts": "x", "fingerprint": "abc"}')
+    rc, stderr = run_guard("Bash", {"command": "bash /home/lumen/bin/rotate-fleet-pw.sh --list"},
+                            env_extra={"FOREMAN_VAULT_BACKUP_MARKER_DIR": str(marker_dir)})
+    assert rc == 0, stderr
+
+
+def test_wq3747_rotation_tool_refused_with_stale_marker(tmp_path):
+    marker_dir = tmp_path / "markers"
+    marker_dir.mkdir()
+    marker = marker_dir / "rotate-gitea-cred.ok"
+    marker.write_text('{"ts": "x", "fingerprint": "abc"}')
+    stale = time.time() - 2 * 24 * 3600
+    os.utime(marker, (stale, stale))
+    rc, stderr = run_guard("Bash", {"command": "bash /home/lumen/bin/rotate-gitea-cred"},
+                            env_extra={"FOREMAN_VAULT_BACKUP_MARKER_DIR": str(marker_dir)})
+    assert rc == 2, stderr
+
+
+def test_wq3747_unrelated_bin_commands_unaffected():
+    rc, stderr = run_guard("Bash", {"command": "cat /home/lumen/bin/model-ref-lint"})
+    assert rc == 0, stderr
 
 
 def test_malformed_stdin_fails_closed():

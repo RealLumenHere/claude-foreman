@@ -210,6 +210,33 @@ Bash)
       block "git lfs pull/fetch denied from cron/fworker context (wq#1297: large pulls are manual off-peak only — bridge risk)" "$RAW_CMD"
     fi
 
+    # ---- wq#3747: credential-rotation safety gate ----
+    # rotate-fleet-pw.sh / rotate-provider-keys / rotate-github-cred /
+    # rotate-gitea-cred / gitea-rotate-finish / github-pat-rotate each destroy
+    # the OLD value of a live credential the instant they write the NEW one.
+    # A headless worker invoking one of these with no operator-verified Vault
+    # backup of the OLD value has no recovery path if the rotation goes wrong
+    # or the tool's own local *.bak copy is lost. This hook never sees a
+    # credential value (by design) so it cannot verify a backup's CONTENT —
+    # only that an attended operator (the only one who can unlock Vault; this
+    # worker's session cannot) recently ran vault_rotation_backup.py and left
+    # a same-day marker for this tool. No marker, or a stale one: refuse,
+    # loudly, before the rotation tool ever runs. Fine-grained per-credential
+    # verification (the exact old value, not just "an operator attested
+    # recently") lives in rotation_vault_gate.require_backup(), called from
+    # inside each rotate-* script — see ops/wq3747-credential-rotation-safety-gate/README.md
+    # for why that half isn't wired into /home/lumen/bin from this worktree yet.
+    ROTATION_TOOL_RX='\b(rotate-fleet-pw\.sh|rotate-provider-keys|rotate-github-cred|rotate-gitea-cred|gitea-rotate-finish|github-pat-rotate)\b'
+    ROTATION_TOOL=$(printf '%s' "$target" | grep -oE "$ROTATION_TOOL_RX" | head -1)
+    if [ -n "$ROTATION_TOOL" ]; then
+      MARKER_DIR=${FOREMAN_VAULT_BACKUP_MARKER_DIR:-/home/lumen/.secrets/.rotation-vault-backups}
+      MARKER="$MARKER_DIR/$ROTATION_TOOL.ok"
+      MARKER_FRESH_MIN=${FOREMAN_VAULT_BACKUP_MARKER_FRESH_MIN:-1440}
+      if [ ! -f "$MARKER" ] || [ -z "$(find "$MARKER" -mmin "-$MARKER_FRESH_MIN" -print -quit 2>/dev/null)" ]; then
+        block "credential-rotation safety gate (wq#3747): $ROTATION_TOOL refused — no Vault backup marker ($MARKER) from the last ${MARKER_FRESH_MIN}m. An attended operator must run 'python3 /home/lumen/foreman/ops/wq3747-credential-rotation-safety-gate/vault_rotation_backup.py $ROTATION_TOOL' first (pastes the OLD value, unlocks Vault with their own master password) — a headless worker cannot do this step itself" "$RAW_CMD"
+      fi
+    fi
+
     # ---- wq#2274: credential-EMITTING command shapes ----
     # The path denies above stop READING credential files; nothing stopped the
     # commands whose normal output prints a live token into a transcript. wq#2243
