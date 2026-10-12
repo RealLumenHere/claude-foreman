@@ -117,6 +117,19 @@ KV_NOT_A_CREDENTIAL = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                        # is exact upper-case; a body that merely CONTAINS it
                        # (`xMASKEDy...`) is still caught.
                        r"(?-i:(?![A-Za-z0-9_\-./+]*MASKED(?![A-Za-z0-9_\-./+])))")
+# wq#3205: `token = read_oauth_token_from_vault(` is a CALL in a code sample or a test
+# transcript, not a value, yet kv_secret flagged it (logs/mega1-verify.log:36 was one such
+# hit that failed every dir(/home/lumen/logs) grant closed). masking.py already suppresses a
+# value that is a segmented (`_`/`.`) or camelCase identifier glued to `(` (wq#2288 ->
+# wq#2632 ruling, _KV_NOT_CALLED); the two scanners disagreed about the same text. Reuse
+# the mask's own lookahead so they stay in lockstep; fall back to a verbatim copy if the
+# mask module cannot be imported, because the sweep must never go quiet. Falsifiable: a
+# 20+ char undifferentiated run followed by `(` is still a credential and still fires.
+try:
+    from masking import _KV_NOT_CALLED as KV_NOT_CALLED
+except Exception:  # noqa: BLE001 - sweep must still run without masking.py
+    KV_NOT_CALLED = (r"(?!(?:[A-Za-z_][A-Za-z0-9_.]*[_.][A-Za-z0-9_.]*"
+                     r"|(?-i:[A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*))\()")
 # wq#2122: the label used to have to touch its separator, so the single most common
 # credential shape in the fleet -- standard JSON -- was invisible: in `"api_key": "<val>"`
 # the closing quote sits between the label and the colon. Same for a markdown-bold label
@@ -174,7 +187,7 @@ PATTERNS = (
         r"[^\s@/'\"`]{8,}@(?=[A-Za-z0-9\[])")),
     ("kv_secret", re.compile(
         r"(?i)\b(?:" + KV_LABEL + r")\b" + KV_LABEL_CLOSE + KV_CONNECTOR + KV_SEP +
-        r"['\"`]?" + KV_NOT_A_CREDENTIAL +
+        r"['\"`]?" + KV_NOT_A_CREDENTIAL + KV_NOT_CALLED +
         r"[A-Za-z0-9_\-./+]{20,}")),
 )
 # wq#3203: .pytest_cache is tool output, not readable content a grant exposes on top of

@@ -636,3 +636,37 @@ def test_write_runtime_mode_prints_not_reached_in_unit_log(tmp_path, monkeypatch
     import json
     written = json.loads((tmp_path / "runtime" / "sweep.json").read_text())
     assert written["roots"][str(root)]["not_reached"] == ["harness"]
+
+
+# wq#3205: identifier-then-call is a code sample, not a credential; lockstep with masking.py.
+# Lines are BUILT at runtime so the swept foreman tree never carries a literal hit.
+def _call_line(label, ident):
+    return label + " = " + ident + "(" + "vault_path" + ")"
+
+
+def test_kv_segmented_identifier_call_is_not_a_hit(tmp_path):
+    _write(tmp_path, "sample.md", _call_line("token", "read_oauth_token_from_vault") + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
+
+
+def test_kv_camelcase_identifier_call_is_not_a_hit(tmp_path):
+    _write(tmp_path, "sample.md", _call_line("TOKEN", "readOauthTokenFromVault") + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert hits == []
+
+
+def test_kv_real_key_glued_to_paren_still_fires(tmp_path):
+    # an undifferentiated 24-char run (no `_`/`.`, no camel hump) followed by `(` is a
+    # credential, exactly the shape wq#2288 silently dropped and wq#2632 restored in the mask
+    key = "9f8e7d6c5b4a3928" + "1706f5e4"
+    _write(tmp_path, "sample.md", "token = " + key + "(\n")
+    _write(tmp_path, "plain.md", "token = " + key + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert sorted(h[2] for h in hits) == ["kv_secret", "kv_secret"], hits
+
+
+def test_kv_not_called_is_the_mask_rule(tmp_path):
+    # the sweep must use masking.py's lookahead, not a drifting copy
+    import masking
+    assert rds.KV_NOT_CALLED == masking._KV_NOT_CALLED
