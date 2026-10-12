@@ -291,3 +291,27 @@
         its own, from any lane with that path in --add-dir. remove-units.sh is
         tidy-up that may strand; the retirement does not depend on it.
         Apply ticket: wq#2041 (step 1 diff, step 2 units).
+
+- name: important-tier-phase1-subtraction
+  containers: [plausible_db, plausible_events_db, mongodb]
+  load_state: not-running   # stopped by wq#3672 Phase-1 subtraction; confirmed
+                             # stopped, not crashed
+  retired_on: "2026-10-08"
+  reason: >
+    wq#3672 Phase-1 subtraction stopped Plausible (Postgres + events
+    ClickHouse) and the LibreChat MongoDB container. backup-important.sh's
+    three dump legs for these containers (Plausible Postgres, Plausible
+    events ClickHouse, MongoDB) kept running docker exec against them daily,
+    which fails and increments ERRORS, tripping OnFailure->ntfy once a day
+    with no real data loss (the other legs — restic snapshots — kept
+    succeeding). Found by orch-subtraction-7bee64 during wq#3672 re-verify,
+    fixed by wq#3717.
+  ticket: wq#3717 (fix), wq#3672 (the subtraction that stopped these)
+  guards:
+    - "backup-important.sh RETIRED_CONTAINERS list": >
+        a leg whose container is not running is logged SKIP (not counted in
+        ERRORS) only when the container name is also on this entry's
+        `containers:` list — any other unexpectedly-stopped container still
+        counts as a real ERROR. See
+        /home/lumen/services/backup/scripts/backup-important.sh (RETIRED_CONTAINERS
+        array, just above the Langfuse ClickHouse dump section).
