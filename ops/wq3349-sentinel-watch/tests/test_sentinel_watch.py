@@ -1,6 +1,7 @@
 """sentinel-watch: pure-logic tests; no systemd, no wq, no network."""
 import importlib.machinery
 import importlib.util
+import json
 import pathlib
 
 P = pathlib.Path(__file__).resolve().parents[1] / "sentinel-watch"
@@ -117,6 +118,45 @@ def test_real_run_files_one_ticket_with_a_liveness_probe_and_logs(tmp_path, monk
     assert "[sentinel] x/y:" in adds[0][adds[0].index("--title") + 1]
     assert "wq#4242" in (tmp_path / "l.log").read_text()
     assert (tmp_path / "s.json").exists()
+
+
+def _hygiene_calls(calls):
+    return [c for c in calls if c[-1] == sw.AQ_HYGIENE]
+
+
+def test_real_run_runs_aq_hygiene_once_per_day(tmp_path, monkeypatch):
+    calls = []
+    _wire(tmp_path, monkeypatch, calls)
+    sw.main(["--quiet"])
+    sw.main(["--quiet"])
+    assert len(_hygiene_calls(calls)) == 1
+    assert "aq_hygiene_last" in json.loads((tmp_path / "s.json").read_text())
+
+
+def test_check_dry_run_and_other_collectors_never_run_aq_hygiene(tmp_path, monkeypatch):
+    calls = []
+    _wire(tmp_path, monkeypatch, calls)
+    sw.main(["--check", "x/y", "--quiet"])
+    sw.main(["--dry-run", "--quiet"])
+    sw.main(["--only", "disk", "--quiet"])
+    assert _hygiene_calls(calls) == []
+
+
+def test_failed_aq_hygiene_is_a_finding_that_check_mode_still_sees(tmp_path, monkeypatch):
+    calls = []
+    _wire(tmp_path, monkeypatch, calls)
+    monkeypatch.setattr(sw, "COLLECTORS", {"aq": sw.c_aq})
+
+    def failing_sh(cmd, timeout=30):
+        calls.append(cmd)
+        if cmd[-1] == sw.AQ_HYGIENE:
+            return (1, "", "database is locked")
+        return (0, "", "")
+    monkeypatch.setattr(sw, "sh", failing_sh)
+    sw.main(["--quiet"])
+    assert sw.main(["--check", "aq/hygiene-failed", "--quiet"]) == 1
+    st = json.loads((tmp_path / "s.json").read_text())
+    assert "aq_hygiene_last" not in st and "locked" in st["aq_hygiene_err"]
 
 
 def test_ticket_id_is_found_by_title_when_wq_add_output_has_no_id(monkeypatch):

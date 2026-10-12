@@ -6,7 +6,8 @@ Frank directive 2026-10-01: audits kept finding the same things because nothing 
 audits. This sweep checks, read-only:
   guards    named guard timers installed + active + armed, paired service not failed
   probes    sentinel probe state: probes currently firing, named probes gone stale
-  aq        alert queue readable; open rows grouped by source (noisy sources become one ticket)
+  aq        alert queue readable; open rows grouped by source (noisy sources become one ticket).
+            The one write: once per 24h a real run first acks stale rows (aq_hygiene, wq#3737)
   services  failed units and restart-looping units (live crash-loop stops belong to fleet-selfheal)
   disk      local + every ssh-reachable fleet node (unreachable nodes are fleet-ssh-check's job)
   litellm   container health, completion probe, provider rungs cooled by fleet-selfheal
@@ -36,6 +37,8 @@ STATE = os.environ.get("SW_STATE", f"{HOME}/agents/sentinel-watch/state.json")
 NTFY = os.environ.get("SW_NTFY", "http://localhost:8080")
 PROBE_STATE = os.environ.get("SW_PROBE_STATE", f"{HOME}/sentinel/probes/state.json")
 COOLDOWN = os.environ.get("SW_COOLDOWN", f"{HOME}/foreman/dispatcher/runtime/backend_cooldown.json")
+AQ_HYGIENE = os.environ.get("SW_AQ_HYGIENE", f"{HOME}/foreman/ops/wq3176-aq-daily-ack-extend/aq_daily_ack_extend.py")
+AQ_HYGIENE_EVERY = 24 * 3600
 SELF = f"{HOME}/bin/sentinel-watch"
 MAX_NEW = int(os.environ.get("SW_MAX_TICKETS", "30"))  # wq#3464: 12 was overflowing every run against a ~25-finding backlog
 CLOSED = {"done", "closed", "cancelled", "canceled", "rejected", "wontfix", "superseded", "retired"}
@@ -163,8 +166,29 @@ def aq_findings(rows, min_rows=10, min_total=100):
     return out
 
 
+def aq_hygiene(st, now, notes):
+    """Daily aq auto-ack (wq#3737). Nothing else closes aq rows since wq#3648 disabled
+    lumen-aq-autoack.timer, so every source's open rows only ever grew. Runs before the
+    collectors so c_aq counts what is left. The outcome is kept in state so that
+    `--check aq/hygiene-failed`, which never runs hygiene itself, reports the last real run."""
+    if now - st.get("aq_hygiene_last", 0) < AQ_HYGIENE_EVERY:
+        return
+    rc, so, se = sh([sys.executable, AQ_HYGIENE], 120)
+    if rc == 0:
+        st["aq_hygiene_last"] = now
+        st.pop("aq_hygiene_err", None)
+        if so.strip():
+            notes.append(so.strip())
+    else:
+        st["aq_hygiene_err"] = f"rc={rc}: {(se or so)[-300:]!r}"
+
+
 def c_aq(ctx):
     out = []
+    err = ctx["state"].get("aq_hygiene_err")
+    if err:
+        out.append(mk("aq/hygiene-failed", 2, "daily aq auto-ack failed: open alert rows are no longer being closed",
+                      f"`{AQ_HYGIENE}` {err}. sentinel-watch runs it once per 24h (wq#3737). It is the only thing that acks stale aq rows."))
     rc, so, se = sh([AQ, "list", "open"], 60)
     if rc != 0 or "database is locked" in (so + se):
         out.append(mk("aq/unreadable", 0, "aq (alert queue) is unreadable: database is locked" if "locked" in (so + se) else "aq (alert queue) is unreadable",
@@ -391,6 +415,8 @@ def main(argv=None):
     st = load_state()
     ctx = {"notes": [], "unreachable": [], "state": st, "new_state": {}, "now": now}
     only = set(a.only.split(",")) if a.only else None
+    if not (a.check or a.dry_run) and (not only or "aq" in only):
+        aq_hygiene(st, now, ctx["notes"])
     findings = collect(only, ctx)
 
     if a.check:

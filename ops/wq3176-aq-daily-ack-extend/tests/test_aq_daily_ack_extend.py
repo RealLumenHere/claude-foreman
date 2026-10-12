@@ -3,6 +3,7 @@
 Zero live services: alerts.db is a tmp sqlite file with the same schema aq.py
 creates/expects, same convention as ops/wq1649-aq-source-escalate's tests.
 """
+import datetime
 import importlib.util
 import os
 import sqlite3
@@ -109,8 +110,10 @@ def test_stale_info_class_never_touches_high_priority(env):
 
 
 def test_stale_info_class_leaves_recent_rows_open(env):
+    recent = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     env.insert("failed-unit", "Failed unit: active.service", priority="default",
-               last_ts="2026-09-28T00:00:00Z")
+               last_ts=recent)
     n = ade.ack_stale_info_class(ade.db())
     assert n == 0
 
@@ -138,3 +141,15 @@ def test_cap_per_source_under_cap_untouched(env):
         env.insert("jay-watch", f"row{i}", priority="high")
     n = ade.cap_per_source(ade.db())
     assert n == 0
+
+
+def test_dry_run_counts_but_writes_nothing(env, capsys, monkeypatch):
+    env.insert("failed-unit", "Failed unit: quiet-now.service", last_ts="2026-08-01T00:00:00Z")
+    for i in range(5):
+        env.insert("jay-watch", f"row{i}", priority="high")
+    monkeypatch.setattr(ade, "DRY_RUN", False)
+    assert ade.run(dry_run=True) == 0
+    assert "1 row(s) would ack (stale" in capsys.readouterr().out
+    assert all(r["status"] == "open" for r in env.rows())
+    ade.run()
+    assert len(env.rows(status="acked")) == 3

@@ -30,11 +30,10 @@ convention as aq_autoack.py and ops/wq1649-aq-source-escalate. Never touches
 high/urgent priority (4,5,high) -- those are the real rows this ticket exists to
 surface.
 
-Not yet wired to a systemd timer: aq_autoack.py lives outside this repo
-(/home/lumen/agents/alert-queue, not a path this worktree's `--add-dir` grants
-cover), so this ticket ships the responder logic here, same pattern as wq#1649's
-aq_source_escalate.py. Wiring is a follow-up: add a call to `run()` (or inline the
-three rules) into aq_autoack.py's own run(), run by lumen-aq-autoack.timer daily.
+Run daily by sentinel-watch (wq#3737). lumen-aq-autoack.timer, the original
+host, was disabled in wq#3648's timer cut, and after that nothing closed an aq row.
+`--dry-run` prints the counts and writes nothing. Its cap count is an upper bound
+because it does not see the stale-rule acks that would land first.
 
 Env (tests/extension): AQ_DB, AQ_DAILY_ACK_AFTER_DAYS, AQ_DAILY_ACK_PER_SOURCE_CAP,
 AQ_DAILY_ACK_FAILED_UNIT_SOURCE.
@@ -74,9 +73,12 @@ def db():
     return c
 
 
+DRY_RUN = False
+
+
 def _ack_ids(c, ids, reason):
-    if not ids:
-        return 0
+    if not ids or DRY_RUN:
+        return len(ids)
     stamp = now()
     qmarks = ",".join("?" * len(ids))
     c.execute(
@@ -140,17 +142,20 @@ def cap_per_source(c, cap=None):
     return n
 
 
-def run():
+def run(dry_run=False):
+    global DRY_RUN
+    DRY_RUN = dry_run
     c = db()
     n_pairs = ack_recovered_failed_pairs(c)
     n_stale = ack_stale_info_class(c)
     n_capped = cap_per_source(c)
     c.close()
-    print(f"aq_daily_ack_extend: {n_pairs} row(s) acked (recovered/failed pairs), "
-          f"{n_stale} row(s) acked (stale info-class incl. recurring), "
-          f"{n_capped} row(s) acked (per-source display cap)")
+    verb = "would ack" if dry_run else "acked"
+    print(f"aq_daily_ack_extend: {n_pairs} row(s) {verb} (recovered/failed pairs), "
+          f"{n_stale} row(s) {verb} (stale info-class incl. recurring), "
+          f"{n_capped} row(s) {verb} (per-source display cap)")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    sys.exit(run(dry_run="--dry-run" in sys.argv[1:]))
