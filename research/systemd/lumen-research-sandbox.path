@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#3759 research sandbox gate — run when the trigger service drops a draft proposal into research/proposals/pending
+
+[Path]
+# Create the directory as lumen before enabling (MakeDirectory= would make it root-owned).
+# Nothing but proposal files may live here: any entry keeps re-firing the service.
+DirectoryNotEmpty=/home/lumen/foreman/research/proposals/pending
+Unit=lumen-research-sandbox.service
+
+[Install]
+WantedBy=paths.target

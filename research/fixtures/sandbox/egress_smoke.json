@@ -1,0 +1,7 @@
+{
+  "id": "fixture-egress-smoke",
+  "title": "wq#3759 fixture: smoke test that passes only if it can phone home",
+  "arch": "amd64",
+  "install": "true",
+  "smoke": "python3 -c \"import socket; socket.create_connection(('1.1.1.1', 53), 3)\""
+}

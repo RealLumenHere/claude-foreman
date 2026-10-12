@@ -1,0 +1,21 @@
+[Unit]
+Description=wq#3759 research sandbox gate — run each pending proposal's install + smoke test in a container on its target arch, write masked evidence JSON
+Documentation=file:///home/lumen/foreman/design/wq3755_research_pipeline_v2.md
+After=network-online.target
+
+[Service]
+# The only code path that executes proposal-authored text (design/wq3755 §3). The guard
+# denies the container runtime to worker sessions (ISSUE-LOG 1262), so workers and the
+# trigger service only read research/evidence/*.json.
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman
+# No EnvironmentFile, ever: hostile-input territory gets zero secrets (instinct 6).
+# sandbox_gate.py also hands the runtime CLI a fixed clean env, not this one.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/lumen/foreman/research/sandbox_gate.py drain
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+# Each proposal is bounded by sandbox_gate.WALL_CLOCK_S (900s); drain is sequential, so
+# this caps a backlog, not one run. A cut-off drain leaves the rest pending for the next fire.
+TimeoutStartSec=3600
+Nice=10

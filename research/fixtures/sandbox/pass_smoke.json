@@ -1,0 +1,7 @@
+{
+  "id": "fixture-pass-smoke",
+  "title": "wq#3759 fixture: install succeeds, smoke test passes",
+  "arch": "amd64",
+  "install": "printf '#!/bin/sh\\necho widget 1.0\\n' > widget && chmod +x widget",
+  "smoke": "./widget | grep -q 'widget 1.0'"
+}

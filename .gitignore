@@ -71,6 +71,10 @@ runtime/
 /reports/*.txt
 /research/*.txt
 
+# wq#3759: sandbox gate runtime — proposals in flight and the evidence they produce
+/research/proposals/
+/research/evidence/
+
 # wq#2575: dispatch janitor runtime log/state, regenerated each run — not source
 /dispatch_janitor.log
 /dispatch_janitor/
