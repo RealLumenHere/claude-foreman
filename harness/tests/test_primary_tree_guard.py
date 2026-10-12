@@ -143,7 +143,11 @@ def test_primary_trees_covers_every_agents_yaml_add_dir(monkeypatch):
     trees = set(ptg.primary_trees())
     add_dirs = agents_spec.load().default_add_dirs
     assert add_dirs, "agents.yaml defaults.add_dirs is empty — test fixture drifted"
-    missing = [d for d in add_dirs if d not in trees]
+    # wq#3779: ptg.NON_PRIMARY_ADD_DIRS is a documented, by-name exemption list
+    # for add_dirs that are deliberately not primary trees (currently just
+    # /home/lumen/sentinel — see the comment on that constant); it is not a
+    # blanket exemption for "any add_dir that happens to not be a git repo".
+    missing = [d for d in add_dirs if d not in trees and d not in ptg.NON_PRIMARY_ADD_DIRS]
     assert not missing, f"add_dirs missing from primary_trees(): {missing}"
 
 
