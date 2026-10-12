@@ -38,10 +38,22 @@ def test_pinned_model_is_expired_and_unpinned_one_left_alone(make_ctx):
     sh_ollama.sweep(ctx, ps_fn=ps(("nomic-embed-text:latest", 1800), ("lfm2:1b", 25)),
                     expire_fn=lambda h, m: calls.append((h, m)) or True)
     assert calls == [(HOST, "nomic-embed-text:latest")]
+    assert ctx.out.alerts == []            # a break that worked is not an alert (wq#3734)
+    assert ctx.out.tickets == []
+
+
+def test_failed_break_alerts_and_the_row_closes_when_the_pin_clears(make_ctx):
+    ctx = make_ctx({}, now=NOW)
+    sh_ollama.sweep(ctx, ps_fn=ps(("nomic-embed-text:latest", 1800)),
+                    expire_fn=lambda h, m: False)
     [(key, title)] = ctx.out.alerts
     assert key == f"ollama-pin-broken:{HOST}:nomic-embed-text:latest"
-    assert "sent keep_alive:0" in title
-    assert ctx.out.tickets == []
+    assert "keep_alive:0 FAILED" in title
+    state, out = ctx.state, ctx.out
+    ctx = make_ctx({}, state, now=NOW + 300)
+    ctx.out = out
+    sh_ollama.sweep(ctx, ps_fn=lambda h: [], expire_fn=lambda h, m: True)
+    assert out.resolved == ["7001"] and state["alerts"] == {}
 
 
 def test_policy_ttl_never_triggers(make_ctx):

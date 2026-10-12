@@ -131,13 +131,28 @@ class Outlets:
     def file_ticket(self, title, detail, lane, pri):
         p = self.runner(as_lumen([self.wq, "add", "--lane", lane, "--pri", pri,
                                   "--title", title[:180], "--detail", detail]), timeout=60)
-        if p is None or p.returncode != 0:
+        if p is None:
+            return None
+        # wq#3734: wq refuses a second open ticket with the same title (exit 1). That
+        # ticket already tracks this episode; returning None instead left the episode
+        # unrecorded, so every sweep re-filed, re-bumped the aq row and re-paged urgent
+        # (provider-gateway-key x14 against wq#3625, 2026-10-08 00:40-06:10Z).
+        dup = re.search(r"DUPLICATE\W+task (\d+)", p.stdout or "")
+        if dup:
+            return dup.group(1)
+        if p.returncode != 0:
             return None
         m = re.search(r"added task (\d+)", p.stdout or "")
         return m.group(1) if m else "?"
 
     def alert(self, key, title, msg):
-        self.runner([self.aq, "add", AQ_SOURCE, key, title, msg], timeout=15)
+        """aq row id (aq bumps the open row with the same source+key), or None."""
+        p = self.runner([self.aq, "add", AQ_SOURCE, key, title, msg], timeout=15)
+        m = re.search(r"queued id=(\d+)", (p.stdout or "") if p is not None else "")
+        return m.group(1) if m else None
+
+    def resolve_alert(self, rid, note):
+        self.runner([self.aq, "resolve", str(rid), note], timeout=15)
 
     def page(self, priority, title, msg):
         self.runner([self.ntfy, "-t", NTFY_TOPIC, "-p", priority, "-T", title,
@@ -202,17 +217,39 @@ class Ctx:
         if self.dry_run:
             return None
         tid = self.out.file_ticket(title, detail, lane, pri)
-        self.out.alert(key, title, f"wq#{tid}: " + detail[:400] if tid else detail[:400])
+        rid = self.out.alert(key, title,
+                             f"wq#{tid}: " + detail[:400] if tid else detail[:400])
         if page:
             self.out.page(page, title, detail[:400])
         if tid:
             tickets[key] = {"id": tid, "at": int(self.now), "title": title}
+            if rid:
+                tickets[key]["aq"] = rid
         return tid
 
     def resolve(self, cls, key, msg=None):
-        """The episode is over: forget the ticket so the next one can file."""
+        """The episode is over: forget the ticket so the next one can file, and close
+        its aq row (wq#3734: rows used to stay open forever after the clear)."""
         rec = self.section("tickets").pop(key, None)
         if rec is not None:
             self.note(cls, f"resolved {key} (was wq#{rec.get('id')})")
-            if msg and not self.dry_run:
-                self.out.page("low", f"fleet-selfheal: {key} cleared", msg)
+            if not self.dry_run:
+                if rec.get("aq"):
+                    self.out.resolve_alert(rec["aq"], msg or f"{key} cleared")
+                if msg:
+                    self.out.page("low", f"fleet-selfheal: {key} cleared", msg)
+
+    def alert(self, key, title, msg):
+        """A bare aq row (no ticket) that `clear_alert(key)` closes later."""
+        if self.dry_run:
+            return
+        rid = self.out.alert(key, title, msg)
+        if rid:
+            self.section("alerts")[key] = rid
+
+    def clear_alert(self, key, note):
+        if self.dry_run:
+            return
+        rid = self.section("alerts").pop(key, None)
+        if rid:
+            self.out.resolve_alert(rid, note)

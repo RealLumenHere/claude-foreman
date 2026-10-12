@@ -86,6 +86,8 @@ def sweep(ctx, ps_fn=fetch_ps, expire_fn=expire):
                     k[len(host) + 1:] not in pinned]:
             streaks.pop(key)
             ctx.resolve(CLS, f"ollama-pin-stuck:{key}", f"{key} no longer pinned.")
+            ctx.clear_alert(f"ollama-pin-broken:{host}:{key[len(host) + 1:]}",
+                            f"{key} no longer pinned.")
         for model, ttl in sorted(pinned.items()):
             key = f"{host} {model}"
             n = streaks.get(key, 0) + 1
@@ -106,10 +108,12 @@ def sweep(ctx, ps_fn=fetch_ps, expire_fn=expire):
             ok = ctx.act(CLS, f"expire {model} on {host} (pinned {ttl}s > "
                               f"{max_ttl}s; break {n}/{ticket_after})",
                          expire_fn, host, model)
-            if not ctx.dry_run:
-                ctx.out.alert(f"ollama-pin-broken:{host}:{model}",
-                              f"ollama {model} pinned {ttl}s on {host}; "
-                              + ("sent keep_alive:0" if ok else "keep_alive:0 FAILED"),
-                              "A client-set keep_alive on a resident model blocks "
-                              "every other model's load under MAX_LOADED_MODELS=1 "
-                              "(wq#3558).")
+            # wq#3734: a break that went through is the fix working, not an alert (it
+            # left 18 aq repeats that never closed). Only a failed break raises a row,
+            # and it closes once the pin is gone.
+            if not ok:
+                ctx.alert(f"ollama-pin-broken:{host}:{model}",
+                          f"ollama {model} pinned {ttl}s on {host}; keep_alive:0 FAILED",
+                          "A client-set keep_alive on a resident model blocks "
+                          "every other model's load under MAX_LOADED_MODELS=1 "
+                          "(wq#3558).")
