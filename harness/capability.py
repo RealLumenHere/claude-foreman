@@ -81,9 +81,6 @@ SSH_CONFIG_PATHS = [p for p in os.environ.get(
     os.path.expanduser("~/.ssh/config") + os.pathsep
     + os.path.expanduser("~/.ssh/fleet_config")).split(os.pathsep) if p]
 
-# path literals a ticket detail can cite; punctuation that ends a sentence around a
-# path is stripped after the match, globs/ellipses simply end the literal early.
-_CITED_PATH_RE = re.compile(r"/home/lumen/[\w./~-]+")
 _STATE_TAILSCALE_RE = re.compile(r"^\s*(?P<subject>[\w-]+)\.tailscale_ip\s*=")
 _SSH_HOST_RE = re.compile(r"^\s*Host\s+(?P<aliases>.+?)\s*$", re.IGNORECASE)
 _SSH_INCLUDE_RE = re.compile(r"^\s*Include\s+(?P<patterns>.+?)\s*$", re.IGNORECASE)
@@ -121,12 +118,10 @@ def _under(path, root):
 
 
 def cited_paths(detail):
-    out = []
-    for m in _CITED_PATH_RE.finditer(detail or ""):
-        p = m.group(0).rstrip(".,;:")
-        if p != "/home/lumen" and p not in out:
-            out.append(p)
-    return out
+    """capability_lint.cited_paths — one parser, so the lint and the spawn wall agree on
+    what is a citation and what is a mention (wq#2528)."""
+    import capability_lint  # local, as effective_add_dirs: no import cycle
+    return capability_lint.cited_paths(detail)
 
 
 # ---------------------------------------------------------------------------
