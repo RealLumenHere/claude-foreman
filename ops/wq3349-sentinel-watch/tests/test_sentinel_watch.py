@@ -4,6 +4,8 @@ import importlib.util
 import json
 import pathlib
 
+import pytest
+
 P = pathlib.Path(__file__).resolve().parents[1] / "sentinel-watch"
 _l = importlib.machinery.SourceFileLoader("sentinel_watch", str(P))
 _s = importlib.util.spec_from_loader("sentinel_watch", _l)
@@ -120,43 +122,26 @@ def test_real_run_files_one_ticket_with_a_liveness_probe_and_logs(tmp_path, monk
     assert (tmp_path / "s.json").exists()
 
 
-def _hygiene_calls(calls):
-    return [c for c in calls if c[-1] == sw.AQ_HYGIENE]
+NOW = 1791000000.0
 
 
-def test_real_run_runs_aq_hygiene_once_per_day(tmp_path, monkeypatch):
-    calls = []
-    _wire(tmp_path, monkeypatch, calls)
-    sw.main(["--quiet"])
-    sw.main(["--quiet"])
-    assert len(_hygiene_calls(calls)) == 1
-    assert "aq_hygiene_last" in json.loads((tmp_path / "s.json").read_text())
-
-
-def test_check_dry_run_and_other_collectors_never_run_aq_hygiene(tmp_path, monkeypatch):
-    calls = []
-    _wire(tmp_path, monkeypatch, calls)
-    sw.main(["--check", "x/y", "--quiet"])
-    sw.main(["--dry-run", "--quiet"])
-    sw.main(["--only", "disk", "--quiet"])
-    assert _hygiene_calls(calls) == []
-
-
-def test_failed_aq_hygiene_is_a_finding_that_check_mode_still_sees(tmp_path, monkeypatch):
-    calls = []
-    _wire(tmp_path, monkeypatch, calls)
-    monkeypatch.setattr(sw, "COLLECTORS", {"aq": sw.c_aq})
-
-    def failing_sh(cmd, timeout=30):
-        calls.append(cmd)
-        if cmd[-1] == sw.AQ_HYGIENE:
-            return (1, "", "database is locked")
-        return (0, "", "")
-    monkeypatch.setattr(sw, "sh", failing_sh)
-    sw.main(["--quiet"])
-    assert sw.main(["--check", "aq/hygiene-failed", "--quiet"]) == 1
-    st = json.loads((tmp_path / "s.json").read_text())
-    assert "aq_hygiene_last" not in st and "locked" in st["aq_hygiene_err"]
+@pytest.mark.parametrize("state,hit", [
+    (None, "no successful run recorded"),
+    ({"last_ok": NOW - 3600}, None),
+    ({"last_ok": NOW - 49 * 3600}, "no successful run in 48h"),
+    ({"last_ok": NOW - 90, "err": "OperationalError('database is locked')", "err_ts": NOW - 50}, "database is locked"),
+    ({"last_ok": NOW - 10, "err": "old", "err_ts": NOW - 50}, None),
+])
+def test_aq_hygiene_finding_tracks_the_responder_state_file(tmp_path, monkeypatch, state, hit):
+    p = tmp_path / "aq-daily-ack.state.json"
+    if state is not None:
+        p.write_text(json.dumps(state))
+    monkeypatch.setattr(sw, "AQ_HYGIENE_STATE", str(p))
+    fs = sw.aq_hygiene_findings(NOW)
+    if hit is None:
+        assert fs == []
+    else:
+        assert [f["key"] for f in fs] == ["aq/hygiene"] and hit in fs[0]["title"] + fs[0]["detail"]
 
 
 def test_ticket_id_is_found_by_title_when_wq_add_output_has_no_id(monkeypatch):

@@ -30,20 +30,27 @@ convention as aq_autoack.py and ops/wq1649-aq-source-escalate. Never touches
 high/urgent priority (4,5,high) -- those are the real rows this ticket exists to
 surface.
 
-Run daily by sentinel-watch (wq#3737). lumen-aq-autoack.timer, the original
-host, was disabled in wq#3648's timer cut, and after that nothing closed an aq row.
+Host (wq#3737): lumen-aq-autoack.timer, the original host, was disabled in wq#3648's
+timer cut, and after that nothing closed an aq row. dispatch_health.py's 5-minute
+check (lumen-foreman-health.timer, one of the timers the cut kept) now calls
+`--daily`, which runs at most once per 24h and records the outcome in STATE_PATH.
+sentinel-watch reads that file and raises a finding when hygiene fails or stops.
 `--dry-run` prints the counts and writes nothing. Its cap count is an upper bound
 because it does not see the stale-rule acks that would land first.
 
 Env (tests/extension): AQ_DB, AQ_DAILY_ACK_AFTER_DAYS, AQ_DAILY_ACK_PER_SOURCE_CAP,
-AQ_DAILY_ACK_FAILED_UNIT_SOURCE.
+AQ_DAILY_ACK_FAILED_UNIT_SOURCE, AQ_DAILY_ACK_STATE.
 """
 import datetime
+import json
 import os
 import sqlite3
 import sys
+import time
 
 AQ_DB = os.environ.get("AQ_DB", "/home/lumen/agents/alert-queue/alerts.db")
+STATE_PATH = os.environ.get("AQ_DAILY_ACK_STATE", "/home/lumen/logs/aq-daily-ack.state.json")
+DAILY_EVERY = 24 * 3600
 FAILED_UNIT_SOURCE = os.environ.get("AQ_DAILY_ACK_FAILED_UNIT_SOURCE", "failed-unit")
 ACK_AFTER_DAYS = int(os.environ.get("AQ_DAILY_ACK_AFTER_DAYS", "7"))
 PER_SOURCE_CAP = int(os.environ.get("AQ_DAILY_ACK_PER_SOURCE_CAP", "15"))
@@ -157,5 +164,33 @@ def run(dry_run=False):
     return 0
 
 
+def run_daily(now=None):
+    """Run once STATE_PATH's last success is DAILY_EVERY old. Record last_ok, or err +
+    err_ts, so a reader (sentinel-watch) can tell broken or stopped hygiene from quiet."""
+    now = time.time() if now is None else now
+    try:
+        with open(STATE_PATH) as fh:
+            st = json.load(fh)
+    except (OSError, ValueError):
+        st = {}
+    if "last_ok" in st and now - st["last_ok"] < DAILY_EVERY:
+        return 0
+    rc = 0
+    try:
+        run()
+        st["last_ok"] = now
+        st.pop("err", None)
+    except Exception as e:  # noqa: BLE001 -- recorded for the reader, not swallowed
+        st.update(err=repr(e)[:300], err_ts=now)
+        print(f"aq_daily_ack_extend: FAILED {e!r}", file=sys.stderr)
+        rc = 1
+    tmp = STATE_PATH + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(st, fh)
+    os.replace(tmp, STATE_PATH)
+    return rc
+
+
 if __name__ == "__main__":
-    sys.exit(run(dry_run="--dry-run" in sys.argv[1:]))
+    args = sys.argv[1:]
+    sys.exit(run_daily() if "--daily" in args else run(dry_run="--dry-run" in args))

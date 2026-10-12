@@ -453,6 +453,22 @@ def _aq(*argv):
         return False
 
 
+AQ_HYGIENE = os.environ.get("FOREMAN_AQ_HYGIENE", os.path.join(
+    os.path.dirname(DISPATCHER_DIR), "ops", "wq3176-aq-daily-ack-extend", "aq_daily_ack_extend.py"))
+
+
+def run_aq_hygiene():
+    """wq#3737: wq#3648's timer cut left no host for daily aq ack hygiene, so open aq rows
+    only grew. This check's 5-min timer was kept; the script gates itself to once per 24h
+    and records its outcome for sentinel-watch. Never let it break the watchdog."""
+    try:
+        r = subprocess.run([sys.executable, AQ_HYGIENE, "--daily"], capture_output=True,
+                           text=True, timeout=120)
+        return (r.stdout + r.stderr).strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"aq hygiene not run: {e!r}"
+
+
 def _idle_aq_open_id():
     import sqlite3
     try:
@@ -663,6 +679,10 @@ def main(argv=None):
         if not a.no_ladder:
             idle, idle_detail = check_idle(a.log, dry_run=a.dry_run)
             print(f"idle-window: {idle} — {idle_detail}")
+            if not a.dry_run:
+                hyg = run_aq_hygiene()
+                if hyg:
+                    print(hyg)
         # wq#1012/R2-T5: on the real timer-driven pass the DISPATCHER STALLED alarm is
         # delivered via _ntfy() inside check_health(); a nonzero exit here only made
         # systemd mark lumen-foreman-health failed -> "failed-unit + recovered" echo per

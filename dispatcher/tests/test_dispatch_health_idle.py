@@ -158,3 +158,22 @@ def test_dry_run_writes_nothing(sandbox):
     word, _ = dh.check_idle(log, dry_run=True, now=_at("2026-09-27T14:00:00+00:00"),
                             window_s=6 * H)
     assert word == "idle" and _rows(db) == [] and sent == []
+
+
+@pytest.mark.parametrize("extra,runs", [([], True), (["--dry-run"], False),
+                                        (["--no-ladder"], False)])
+def test_only_the_regular_real_check_runs_daily_aq_hygiene(monkeypatch, extra, runs):
+    """wq#3737: the kept lumen-foreman-health timer hosts the aq hygiene the timer cut
+    orphaned; a dry run or the --no-ladder window instance must not run it."""
+    calls = []
+    monkeypatch.setattr(dh, "check_health", lambda *a, **k: (False, "ok"))
+    monkeypatch.setattr(dh, "check_idle", lambda *a, **k: ("ok", "not idle"))
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return type("R", (), {"stdout": "aq_daily_ack_extend: 0 acked", "stderr": ""})()
+    monkeypatch.setattr(dh.subprocess, "run", fake_run)
+    with pytest.raises(SystemExit):
+        dh.main(["check", *extra])
+    assert calls == ([[sys.executable, dh.AQ_HYGIENE, "--daily"]] if runs else [])
+    assert os.path.exists(dh.AQ_HYGIENE)

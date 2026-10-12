@@ -5,6 +5,7 @@ creates/expects, same convention as ops/wq1649-aq-source-escalate's tests.
 """
 import datetime
 import importlib.util
+import json
 import os
 import sqlite3
 import sys
@@ -153,3 +154,26 @@ def test_dry_run_counts_but_writes_nothing(env, capsys, monkeypatch):
     assert all(r["status"] == "open" for r in env.rows())
     ade.run()
     assert len(env.rows(status="acked")) == 3
+
+
+def test_run_daily_runs_once_per_day_and_records_success(env, tmp_path, monkeypatch):
+    state = tmp_path / "st.json"
+    monkeypatch.setattr(ade, "STATE_PATH", str(state))
+    env.insert("failed-unit", "Failed unit: quiet-now.service", last_ts="2026-08-01T00:00:00Z")
+    assert ade.run_daily(now=1000.0) == 0
+    assert json.loads(state.read_text()) == {"last_ok": 1000.0}
+    env.insert("failed-unit", "Failed unit: later.service", last_ts="2026-08-01T00:00:00Z")
+    ade.run_daily(now=1000.0 + 3600)
+    assert len(env.rows(status="open")) == 1  # not due yet
+    ade.run_daily(now=1000.0 + 25 * 3600)
+    assert env.rows(status="open") == []
+
+
+def test_run_daily_records_failure_and_keeps_last_ok(env, tmp_path, monkeypatch):
+    state = tmp_path / "st.json"
+    state.write_text(json.dumps({"last_ok": 5.0}))
+    monkeypatch.setattr(ade, "STATE_PATH", str(state))
+    monkeypatch.setattr(ade, "AQ_DB", str(tmp_path / "missing-dir" / "alerts.db"))
+    assert ade.run_daily(now=10 * 86400.0) == 1
+    st = json.loads(state.read_text())
+    assert st["last_ok"] == 5.0 and st["err_ts"] == 10 * 86400.0 and "unable to open" in st["err"]
