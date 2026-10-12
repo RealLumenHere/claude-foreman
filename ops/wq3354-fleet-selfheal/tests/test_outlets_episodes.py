@@ -53,7 +53,9 @@ def test_duplicate_episode_is_recorded_so_the_next_sweep_does_not_refile(make_ct
         ctx = make_ctx({}, state, now=1_000_000.0 + 1800 * i)
         ctx.out = out
         ctx.file_once("providers", "provider-gateway-key", "t", "d", page="urgent")
-    assert [a[0] for a in ran] == ["wq", "aq", "ntfy"]   # once, not once per sweep
+    # once, not once per sweep (as root, wq runs behind `runuser -u lumen --`)
+    assert [next(x for x in a if x in ("wq", "aq", "ntfy")) for a in ran] == \
+        ["wq", "aq", "ntfy"]
     assert state["tickets"]["provider-gateway-key"] == {
         "id": "3625", "at": 1_000_000, "title": "t", "aq": "2671277"}
 
