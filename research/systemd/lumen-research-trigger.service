@@ -1,0 +1,20 @@
+[Unit]
+Description=wq#3761 research trigger — poll wq needs-tags + aq research-owned alerts, formulate briefs, dispatch via the LiteLLM gateway
+Documentation=file:///home/lumen/foreman/design/wq3755_research_pipeline_v2.md
+After=network-online.target
+
+[Service]
+# Owns no model execution beyond one chat-completion call per brief (design §2);
+# a dispatched draft only ever reaches proposals/pending/ for lumen-research-sandbox
+# to run — this unit never touches the container runtime (ISSUE-LOG 1262).
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman
+# No EnvironmentFile: the LiteLLM key is read fresh from FOREMAN_LITELLM_KEY_FILE
+# (0600, despag/backends/litellm.py's own default) on every call, never cached in
+# this unit's env (instinct 4/6).
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/lumen/foreman/research/trigger.py scan
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=600
+Nice=10

@@ -1,0 +1,11 @@
+[Unit]
+Description=10-min cadence for lumen-research-trigger (STAGED — Frank enables; wq#3761)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+RandomizedDelaySec=30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

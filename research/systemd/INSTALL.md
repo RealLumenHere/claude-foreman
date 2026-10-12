@@ -25,3 +25,25 @@ Repeat with `pass_smoke.json` (expect `would_submit`, exit 0) and `egress_smoke.
 needs the qemu-aarch64 binfmt entry, which is registered on Lumen.
 
 Rollback: `sudo systemctl disable --now lumen-research-sandbox.path`.
+
+# Staged install — lumen-research-trigger (wq#3761)
+
+Shipped repo-only, same posture as the gate above: ships disabled, Frank enables.
+
+```bash
+sudo cp /home/lumen/foreman/research/systemd/lumen-research-trigger.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now lumen-research-trigger.timer
+```
+
+## Live acceptance
+
+```bash
+python3 /home/lumen/foreman/research/trigger.py ask "does qemu-user cover gfx1013?" --dry-run
+# -> {"brief_id": "ask-...", "brief_path": ".../briefs/ask-....md", ...,
+#     "verdict": "would_dispatch"}; the brief has the live rejection ledger's
+#     constraint block (if any) prepended ahead of "Question:".
+journalctl -u lumen-research-trigger.service -n 5
+```
+
+Rollback: `sudo systemctl disable --now lumen-research-trigger.timer`.
