@@ -121,6 +121,21 @@ STATIC_PRIMARY_TREES = [
     "/home/lumen/fleet/inventory",
 ]
 
+# wq#3779: /home/lumen/sentinel is a default add_dir (agents.yaml, wq#3554) but
+# deliberately NOT a primary tree, unlike every other entry in STATIC_PRIMARY_TREES
+# above. wq#3554 granted read access into it purely so sentinel_probes.py tickets
+# would stop hitting the --add-dir read wall (wq#3466); sentinel itself is not a
+# git repo — it's a live docker-compose Gatus deployment (sqlite db, credentials
+# in config/config.yaml, json probe state) with no lane for lumen-pr to land
+# changes into. The established way to change sentinel_probes.py (wq#1092,
+# wq#3554) is a diff landed under this repo's ops/<ticket>/sentinel_probes.diff
+# and applied out of band — the opposite of what write-freezing it as a primary
+# tree would force. Exempted here by name (not a blanket "any non-repo add_dir"
+# rule) so a future add_dir still has to earn this exemption deliberately.
+NON_PRIMARY_ADD_DIRS = {
+    "/home/lumen/sentinel",
+}
+
 
 def primary_trees():
     """Registered primary trees: FOREMAN_PRIMARY_TREES env override (colon-separated,
