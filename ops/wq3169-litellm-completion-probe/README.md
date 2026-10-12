@@ -12,9 +12,14 @@ at `/home/lumen/scratch/audit_20260929/probe2.py` into a recurring probe.
   300`, 60s timeout, parallel via a 6-worker pool) per distinct `api_base`
   host in `litellm_config.yaml` (one rung per host — a dead host fails every
   model on it identically, so probing more just burns quota). Embed/
-  rerank/whisper/tts deployments are skipped. Master key is read from
-  `agent/.env` by regex, used only in the `Authorization` header, never
-  printed or logged.
+  rerank/whisper/tts deployments are skipped. Authenticates with the
+  `model-watchdog` service key (`.secrets/litellm-service-keys/`, 0600),
+  used only in the `Authorization` header, never printed or logged. The
+  master key is retired for non-admin routes (wq#914), so the old `agent/.env`
+  read got a 401 on every host (wq#3736).
+- Key preflight: `GET /v1/models` with that key before probing. A 401/403 or
+  an unreadable key file is one `(litellm-completion, probe-key)` row; host
+  probes are skipped and their state and rows carry forward untouched.
 - Edge-triggered alerting, same contract as `litellm-auth-alert` (wq#911)
   and `health_check_failure_alert.py` (wq#1295): `aq add` + urgent ntfy on
   clear→breach, aq bump (no re-ntfy) while the breach persists, low-pri
@@ -24,8 +29,12 @@ at `/home/lumen/scratch/audit_20260929/probe2.py` into a recurring probe.
   `lumen-cron-stamp %n` so a stopped timer surfaces via
   `lumen-cron-deadman` instead of going silently stale.
 - `install.sh` — idempotent deploy (script + units + `enable --now`).
-- `tests/` — unit tests for host grouping, master-key extraction (never
-  printed), and the edge-trigger state machine. No network calls.
+- `tests/` — unit tests for host grouping, service-key read (never
+  printed), the key preflight, and the edge-trigger state machine. No
+  network calls.
+- Status: the timer has been disabled since 2026-10-08 (wq#3648, not on the
+  21-timer keep-list). This script stays deployed in `/home/lumen/bin` for
+  manual `--print` runs.
 
 ## Deploy status
 

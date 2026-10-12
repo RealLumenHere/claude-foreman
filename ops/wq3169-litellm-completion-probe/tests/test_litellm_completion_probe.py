@@ -39,13 +39,77 @@ model_list:
     assert local.model_name == "local-chat"
 
 
-def test_read_master_key_extracts_without_logging(tmp_path, capsys):
-    env = tmp_path / ".env"
-    # split at the `=` seam so reading this file arms no kv-secret tripwire (wq#3222)
-    env.write_text("OTHER=1\nLITELLM_MASTER_KEY=" + "sk-abc123XYZ\nMORE=2\n")
-    key = mod.read_master_key(str(env))
-    assert key == "sk-abc123XYZ"
-    assert "sk-abc123XYZ" not in capsys.readouterr().out
+def test_read_service_key_strips_without_logging(tmp_path, capsys):
+    keyfile = tmp_path / "model-watchdog.key"
+    fake = "s" "k-" + "Q" * 16
+    keyfile.write_text(fake + "\n")
+    assert mod.read_service_key(str(keyfile)) == fake
+    assert fake not in capsys.readouterr().out
+
+
+# the live 2026-10-07 22:06 body from master_key_guard.py (aq 2671246 and siblings)
+RETIRED_401 = ('{"error":{"message":"master key is retired for non-admin routes '
+               '(docs/litellm/service_keys.md, wq#914)."}}')
+
+
+def _fake_models(monkeypatch, outcome):
+    import io
+    import urllib.error
+
+    def urlopen(req, timeout):
+        assert req.full_url == mod.MODELS_URL
+        if isinstance(outcome, int):
+            raise urllib.error.HTTPError(req.full_url, outcome, "x", {}, io.BytesIO(RETIRED_401.encode()))
+        if outcome is not None:
+            raise outcome
+        return io.BytesIO(b"{}")
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen)
+
+
+def test_check_probe_key_reports_rejection_once(tmp_path, monkeypatch):
+    keyfile = tmp_path / "k"
+    keyfile.write_text("Q" * 16)
+    _fake_models(monkeypatch, 401)
+    key, fail = mod.check_probe_key(str(keyfile))
+    assert key is None and fail["host"] == mod.PROBE_KEY_HOST and fail["kind"] == "auth"
+    assert "master key is retired" in fail["reason"] and "Q" * 16 not in fail["reason"]
+    _fake_models(monkeypatch, None)
+    assert mod.check_probe_key(str(keyfile)) == ("Q" * 16, None)
+    # gateway down or 5xx is not a key problem: the host probes report it
+    _fake_models(monkeypatch, 502)
+    assert mod.check_probe_key(str(keyfile))[1] is None
+    _fake_models(monkeypatch, ConnectionRefusedError())
+    assert mod.check_probe_key(str(keyfile))[1] is None
+    key, fail = mod.check_probe_key(str(tmp_path / "missing.key"))
+    assert key is None and "unreadable" in fail["reason"]
+
+
+def test_rejected_key_files_one_row_and_leaves_host_rows_alone(tmp_path, monkeypatch):
+    """wq#3736: 12 per-host 'unreachable' rows were all the one retired-key 401."""
+    keyfile = tmp_path / "k"
+    keyfile.write_text("Q" * 16)
+    prev = {"nephthys": {"failed": True, "checked_at": 5}, "cerebras": {"failed": False, "checked_at": 5}}
+    (tmp_path / "state.json").write_text(json.dumps(prev))
+    monkeypatch.setattr(mod, "KEY_PATH", str(keyfile))
+    monkeypatch.setattr(mod, "one_rung_per_host", lambda p: [mod.Rung("nephthys", "q"), mod.Rung("cerebras", "c")])
+    monkeypatch.setattr(mod, "run_probes", lambda k, r: (_ for _ in ()).throw(AssertionError("probed")))
+    monkeypatch.setattr(sys, "argv", ["probe"])
+    _fake_models(monkeypatch, 401)
+    log = _capture(monkeypatch, tmp_path)
+    mod.main()
+    assert log["add"] == [("probe-key", "LiteLLM completion probe: gateway rejected the probe's own key")]
+    assert log["resolve"] == [] and len(log["notify"]) == 1
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["nephthys"] == prev["nephthys"] and state["cerebras"] == prev["cerebras"]
+
+    # key accepted again: probe-key row closes, hosts are probed as usual
+    _fake_models(monkeypatch, None)
+    monkeypatch.setattr(mod, "run_probes", lambda k, rungs: [
+        {"host": r.host, "model": r.model_name, "ok": True, "kind": "ok", "elapsed_s": 1.0, "reason": ""}
+        for r in rungs])
+    log = _capture(monkeypatch, tmp_path)
+    mod.main()
+    assert log["add"] == [] and sorted(log["resolve"]) == ["cerebras", "nephthys", "probe-key"]
 
 
 def test_never_probe_models_are_excluded(tmp_path):
