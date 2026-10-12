@@ -34,6 +34,7 @@ import os
 import platform
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,8 @@ import uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "harness"))
 import masking  # noqa: E402
+sys.path.insert(0, HERE)
+import ledger  # noqa: E402
 
 SCHEMA_VERSION = 1
 EVIDENCE_FIELDS = {  # design §3 schema; bridge.py validates against this
@@ -203,16 +206,35 @@ def gate(path, backend="container", evidence_dir=EVIDENCE_DIR):
     return evidence
 
 
-def drain(inbox=INBOX, gated=GATED, evidence_dir=EVIDENCE_DIR):
+def _ledger(db):
+    """The rejection ledger (wq#3760), or None if queue.db can't be opened. Fails open: the
+    bridge re-checks the ledger before anything reaches wq, so a miss here costs only a
+    sandbox run, never a re-proposal reaching Frank."""
+    try:
+        return ledger.connect(db)
+    except sqlite3.Error as e:
+        print(json.dumps({"ledger": "unavailable", "error": str(e)}), file=sys.stderr)
+        return None
+
+
+def drain(inbox=INBOX, gated=GATED, evidence_dir=EVIDENCE_DIR, db=None):
     """Gate every pending proposal, then move every inbox entry to gated/ — always, so the
-    .path unit's DirectoryNotEmpty can't spin on an entry that keeps failing."""
+    .path unit's DirectoryNotEmpty can't spin on an entry that keeps failing. A proposal
+    that repeats a rejection-ledger row is refused before any sandbox spend."""
     os.makedirs(gated, exist_ok=True)
     failures = 0
+    rej = _ledger(db)
     for name in sorted(os.listdir(inbox)) if os.path.isdir(inbox) else []:
         src = os.path.join(inbox, name)
         try:
             if not name.endswith(".json") or not os.path.isfile(src):
                 raise ProposalError("not a .json proposal file")
+            prop, sha = load_proposal(src)
+            rid = rej and ledger.hit(rej, prop.get("title"), sha)
+            if rid:
+                print(json.dumps({"proposal": name, "refused": f"rejection ledger row {rid}"}))
+                shutil.move(src, os.path.join(gated, name))
+                continue
             ev = gate(src, "container", evidence_dir)
             print(json.dumps({"proposal": name, "install_exit": ev["install_exit"],
                               "smoke_exit": ev["smoke_exit"]}))
@@ -220,6 +242,8 @@ def drain(inbox=INBOX, gated=GATED, evidence_dir=EVIDENCE_DIR):
             failures += 1
             print(json.dumps({"proposal": name, "error": str(e)}), file=sys.stderr)
         shutil.move(src, os.path.join(gated, name))
+    if rej:
+        rej.close()
     return failures
 
 
@@ -234,9 +258,10 @@ def main(argv=None):
     d.add_argument("--inbox", default=INBOX)
     d.add_argument("--gated", default=GATED)
     d.add_argument("--evidence-dir", default=EVIDENCE_DIR)
+    d.add_argument("--db", default=None, help="queue.db holding the rejection ledger")
     a = ap.parse_args(argv)
     if a.cmd == "drain":
-        return 1 if drain(a.inbox, a.gated, a.evidence_dir) else 0
+        return 1 if drain(a.inbox, a.gated, a.evidence_dir, a.db) else 0
     try:
         ev = gate(a.proposal, a.backend, a.evidence_dir)
     except ProposalError as e:

@@ -7,6 +7,7 @@ import datetime
 import json
 import os
 import shutil
+import sqlite3
 import sys
 
 import pytest
@@ -27,7 +28,11 @@ needs_bwrap = pytest.mark.skipif(
 
 
 def _bridge(proposal, evidence_dir, *extra):
-    return bridge.main(["--dry-run", proposal, "--evidence-dir", str(evidence_dir), *extra])
+    db = os.path.join(str(evidence_dir), "queue.db")
+    sqlite3.connect(db).execute("CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY, "
+                                "detail TEXT, gate_type TEXT, created_at TEXT)")
+    return bridge.main(["submit", "--dry-run", proposal, "--evidence-dir", str(evidence_dir),
+                        "--db", db, *extra])
 
 
 @needs_bwrap
@@ -159,7 +164,7 @@ def test_drain_gates_then_empties_inbox(tmp_path, monkeypatch):
     shutil.copy(FAIL, inbox / "a.json")
     (inbox / "junk.txt").write_text("x")
     (inbox / "bad.json").write_text("{")
-    assert sandbox_gate.drain(str(inbox), str(gated), str(ev)) == 2
+    assert sandbox_gate.drain(str(inbox), str(gated), str(ev), str(tmp_path / "q.db")) == 2
     assert seen == ["fixture-fail-smoke"]
     assert os.listdir(inbox) == []
     assert sorted(os.listdir(gated)) == ["a.json", "bad.json", "junk.txt"]
