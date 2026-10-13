@@ -329,7 +329,7 @@ models:
   - id: qwen36-local
     status: down
     pools: [local]
-    context_tokens: 8192
+    context_tokens: 16384
     served_ctx: 16384
     efforts: []
     trust: "mechanical-edit only, gated. Offline-survival tier."

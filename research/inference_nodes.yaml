@@ -14,15 +14,21 @@ governor_prefixes: [deepseek-v4-flash, qwen36-local, nephthys-qwen14b, hathor-ll
 
 families:                 # a model blob + how it is served. NOT a box.
   qwen36-local:
-    blob: Qwen3.6-35B-A3B-Q4_K_M.gguf
+    # wq#3794: three independent reviews agree Qwen3.6-35B-A3B is the wrong model for isis on
+    # no-AVX2 Ivy Bridge-EP — MoE prefill is the bottleneck, not decode (research/
+    # scratch/mac-llm-recommendations.md §A). Swapped the blob to a dense qwen2.5-coder:14b;
+    # the family id stays `qwen36-local` because governor_prefixes is frozen (design §4) and
+    # renaming would require a governor_core.py change out of scope here. id/blob now
+    # intentionally mismatched — this is documented, not drift.
+    blob: Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf   # TODO(wq#3794): not yet copied to isis; see research/WQ3794_MAC_FLEET_RECONFIG.md
     serving: llama-server
     port: 8095
     health_path: /health
     swap: unit
-    gateway_model: qwen3.6-35b-a3b   # optional (wq#2251): the served alias LiteLLM addresses; default blob
-    context_tokens: 8192           # models.yaml declared window (wq#2070): Isis serves 8192/req, SMALL prompts only
+    gateway_model: qwen25-coder-14b   # optional (wq#2251): the served alias LiteLLM addresses; default blob
+    context_tokens: 16384           # wq#3794: dense 14B replaces the 8192 small-prompt-only cap the 35B MoE needed
   hathor-llama8b:
-    blob: "llama3.1:8b"
+    blob: "llama3.1:8b-instruct-q8_0"   # wq#3794: Q4_K_M -> Q8_0 for judge reasoning precision (~8.5GB, up from ~4.9GB)
     serving: ollama
     port: 11434
     health_path: /api/ps
@@ -59,8 +65,8 @@ nodes:
         resident: true
         slots: 2
         served_ctx: 32768
-        first_frame_s: 1500
-        prefill_tps: 13.6
+        first_frame_s: 1500     # wq#3794: carried over from Q4_K_M, not re-measured at Q8_0; expect slight increase
+        prefill_tps: null       # wq#3794: stale at old quant (was 13.6), cleared pending re-bench at Q8_0
         decode_tps: null
         measured_at: 2026-09-20
         load_s: null
@@ -122,9 +128,9 @@ nodes:
         resident: true
         slots: 2
         served_ctx: 16384          # wq#3721: :8095 /props n_ctx=32768 total_slots=2 (2026-10-12); 32768/2 = per-slot floor when both slots are busy
-        first_frame_s: 900
-        prefill_tps: 60            # bench 63
-        decode_tps: 10.9
+        first_frame_s: 900         # wq#3794: carried over from the 35B MoE blob, not yet re-measured for qwen2.5-coder:14b
+        prefill_tps: null          # wq#3794: cleared -- the 60 tok/s figure (bench 63) was Qwen3.6-35B-A3B's, not the new blob's
+        decode_tps: null           # wq#3794: cleared pending the 20-ticket bench the ticket calls for before committing
         measured_at: 2026-09-20
         load_s: null
         capabilities:

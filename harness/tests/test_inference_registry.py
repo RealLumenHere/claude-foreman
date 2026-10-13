@@ -61,11 +61,14 @@ def test_seeded_rows_reproduce_measured_table(reg):
         m, = node["models"]
         got[name] = (m["family"], m["slots"], m["served_ctx"], m["prefill_tps"], m["decode_tps"])
     assert got == {
-        "hathor": ("hathor-llama8b", 2, 32768, 13.6, None),
+        # hathor/isis: wq#3794 swapped blobs (judge quant bump; isis off the 35B MoE), which
+        # staled the old bench numbers -- prefill/decode cleared to null (unmeasured) rather
+        # than carried over from a different blob. isis served_ctx 16384 since wq#3721.
+        "hathor": ("hathor-llama8b", 2, 32768, None, None),
         "nephthys": ("nephthys-qwen14b", 2, 32768, 7.4, 4.79),   # decode measured wq#2499 (db40d77a)
-        "isis": ("qwen36-local", 2, 8192, 60, 10.9),
+        "isis": ("qwen36-local", 2, 16384, None, None),
     }
-    assert reg["families"]["hathor-llama8b"]["blob"] == "llama3.1:8b"
+    assert reg["families"]["hathor-llama8b"]["blob"] == "llama3.1:8b-instruct-q8_0"
     assert reg["families"]["nephthys-qwen14b"]["blob"] == "qwen3:14b"
     assert reg["nodes"]["isis"]["state"] == "down"
     assert reg["nodes"]["hathor"]["power_policy"] == "always-on"
