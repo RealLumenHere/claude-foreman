@@ -9,5 +9,11 @@
     "ollama": "http://100.80.71.13:11434",
     "tag": "llama3.1:8b",
     "blob_sha256": "667b0c1932bc6ffc593ed1d03f895bf2dc8dc6df21db3042284a6f4416b06a29"
+  },
+  "nephthys-qwen14b": {
+    "ollama": "http://100.98.74.87:11434",
+    "tag": "qwen3:14b",
+    "blob_sha256": "",
+    "_pending": "wq#3792: nephthys has been offline per `tailscale status` (last seen 5d ago) for the whole life of this ticket, so /api/show was never reachable to capture the real served blob digest -- recorded in /home/lumen/kb/ISSUE-LOG.md rather than guessed (instinct 8: a fabricated hash is worse than none). An empty blob_sha256 makes verify_model_identity() fail closed on every call until the first successful /api/show after nephthys comes back fills in the real value -- correct per wq#2821's doctrine (fail closed on missing/unverifiable identity, never silently skip)."
   }
 }

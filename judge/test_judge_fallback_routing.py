@@ -75,3 +75,22 @@ def test_no_pin_and_no_env_returns_none(tmp_path):
     model, source, note = jc.resolve_judge_model(str(missing))
     assert model is None and source is None
     assert "no model configured" in note
+
+
+def test_fallback_reachability_is_never_probed(monkeypatch, tmp_path):
+    """wq#3792 follow-up (lower severity, nephthys is power_policy:warm so
+    uncommon): resolve_judge_model() only calls pinned_node_reachable() on
+    the primary -- it has no equivalent check for the fallback itself, so a
+    dead primary AND a dead fallback still returns the fallback as if it
+    were live. Pins the current (untested) behavior rather than silently
+    leaving it uncovered; bin/judge's own required=True identity check is
+    what ultimately fails this case closed, via call_judge()'s timeout or
+    verify_model_identity()'s unreachable-node error -- not this function."""
+    _serve(monkeypatch, exc=OSError("no route to host"))
+    pin = tmp_path / "pin"
+    pin.write_text("hathor-llama8b\n")
+    fallback = tmp_path / "fallback"
+    fallback.write_text("nephthys-qwen14b\n")
+    model, source, note = jc.resolve_judge_model(str(pin), fallback_pin_file=str(fallback))
+    assert model == "nephthys-qwen14b"
+    assert source == f"fallback:{fallback}"
