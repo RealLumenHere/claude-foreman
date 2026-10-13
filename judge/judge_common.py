@@ -246,6 +246,8 @@ def load_eval_set(path="/home/lumen/foreman/judge/judge_eval_set.jsonl"):
 
 
 IDENTITY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUDGE_MODEL_IDENTITY.json")
+FALLBACK_PIN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUDGE_MODEL_FALLBACK")
+REACHABILITY_TIMEOUT_S = 5
 _FROM_RE = re.compile(r'^FROM\s+\S*sha256[-:]([0-9a-f]{64})', re.MULTILINE)
 
 
@@ -275,3 +277,53 @@ def verify_model_identity(model, required=False, timeout=5):
         return (f"model identity mismatch: {model} -> {ident['tag']} serves blob "
                 f"{(got or 'unknown')[:12]}, pinned {ident['blob_sha256'][:12]}")
     return None
+
+
+def pinned_node_reachable(model, timeout=REACHABILITY_TIMEOUT_S):
+    """wq#3783: cheap reachability probe for the node behind a pinned rung,
+    paid BEFORE call_judge()'s up-to-240s timeout -- the whole point of
+    hathor-aware routing is finding out hathor is asleep in ~5s, not ~240s.
+    Returns True if the node answers, OR if there is no identity entry to
+    probe against (nothing known to check, so the caller just makes the real
+    call and lets call_judge's own error handling decide). Returns False only
+    on a confirmed connection failure against the pinned node's own Ollama
+    endpoint."""
+    try:
+        ident = json.load(open(IDENTITY_FILE)).get(model)
+    except Exception:
+        return True
+    if not ident or not ident.get("ollama"):
+        return True
+    try:
+        with urllib.request.urlopen(f"{ident['ollama']}/api/ps", timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def resolve_judge_model(pin_file, fallback_pin_file=FALLBACK_PIN_FILE, env_var="JUDGE_MODEL"):
+    """wq#3783: hathor-aware routing so one Mac asleep does not fail the judge
+    gate closed by itself -- that now needs BOTH the pinned primary and the
+    pinned fallback unreachable. JUDGE_MODEL env is an explicit single
+    override (bench/experiments) and takes no fallback, matching the old
+    override semantics exactly.
+
+    Returns (model, source, note): source is 'env:...'/'pin:...'/'fallback:...'
+    (the prefix callers already branch on, e.g. for verify_model_identity's
+    `required=`); note is '' on the plain primary path, else explains the
+    routing decision so the caller can log it instead of silently switching
+    rungs. model is None only when neither a pin nor the env var is set."""
+    env = os.environ.get(env_var)
+    if env:
+        return env, f"env:{env_var}", ""
+    primary = open(pin_file).read().strip() if os.path.isfile(pin_file) else ""
+    if not primary:
+        return None, None, f"no model configured ({pin_file} missing/empty, {env_var} unset)"
+    if pinned_node_reachable(primary):
+        return primary, f"pin:{pin_file}", ""
+    fallback = (open(fallback_pin_file).read().strip()
+                if os.path.isfile(fallback_pin_file) else "")
+    if fallback and fallback != primary:
+        return (fallback, f"fallback:{fallback_pin_file}",
+                f"primary rung {primary!r} unreachable, routed to fallback {fallback!r}")
+    return primary, f"pin:{pin_file}", f"primary rung {primary!r} unreachable, no fallback configured"
