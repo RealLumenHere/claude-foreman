@@ -138,11 +138,12 @@ def test_hathor_dedicated_out_of_group_but_keeps_its_pin(reg):
 
 def test_render_carries_registry_family_options(reg):
     # wq#3794: isis's family blob moved from Qwen3.6-35B-A3B to qwen2.5-coder:14b (MoE prefill
-    # off no-AVX2 CPU); hathor's judge blob moved to llama3.1:8b-instruct-q8_0.
+    # off no-AVX2 CPU). wq#3795/wq#3796: hathor's blob stays llama3.1:8b -- the planned Q8_0
+    # swap was never actually pulled/retagged live on hathor (research/WQ3794_MAC_FLEET_RECONFIG.md).
     by = {i["litellm_params"]["model"]: i for i in block_items(reg)}
     assert by["openai/qwen25-coder-14b"]["litellm_params"]["api_base"] == "http://100.100.129.24:8095/v1"
     assert by["openai/qwen3:14b"]["litellm_params"]["extra_body"] == {"reasoning": {"effort": "none"}}
-    assert "extra_body" not in by["openai/llama3.1:8b-instruct-q8_0"]["litellm_params"]
+    assert "extra_body" not in by["openai/llama3.1:8b"]["litellm_params"]
 
 
 def test_committed_block_matches_registry_render(reg):

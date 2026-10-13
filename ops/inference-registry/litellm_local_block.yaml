@@ -1,14 +1,14 @@
 # BEGIN GENERATED inference_nodes.yaml v1 — edit the registry, not this block
 - model_name: hathor-llama8b
   litellm_params:
-    model: openai/llama3.1:8b-instruct-q8_0
+    model: openai/llama3.1:8b
     api_base: http://100.80.71.13:11434/v1
     api_key: none
     timeout: 1560
     stream_timeout: 1560
     num_retries: 0
     max_parallel_requests: 2
-  model_info: {mode: chat, description: "llama3.1:8b-instruct-q8_0 on hathor (ollama), 2 slots x 32768 served"}
+  model_info: {mode: chat, description: "llama3.1:8b on hathor (ollama), 2 slots x 32768 served"}
 - model_name: nephthys-qwen14b
   litellm_params:
     model: openai/qwen3:14b
