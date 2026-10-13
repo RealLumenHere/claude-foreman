@@ -28,7 +28,10 @@ families:                 # a model blob + how it is served. NOT a box.
     gateway_model: qwen25-coder-14b   # optional (wq#2251): the served alias LiteLLM addresses; default blob
     context_tokens: 16384           # wq#3794: dense 14B replaces the 8192 small-prompt-only cap the 35B MoE needed
   hathor-llama8b:
-    blob: "llama3.1:8b-instruct-q8_0"   # wq#3794: Q4_K_M -> Q8_0 for judge reasoning precision (~8.5GB, up from ~4.9GB)
+    blob: "llama3.1:8b"   # wq#3795/wq#3796: wq#3794's Q8_0 swap was never pulled/retagged live on
+                           # hathor (JUDGE_MODEL_IDENTITY.json still pins this tag); the planned
+                           # Q8_0 swap stays documented only in research/WQ3794_MAC_FLEET_RECONFIG.md
+                           # until the real ollama pull happens (separate ops ticket, needs ssh(hathor))
     serving: ollama
     port: 11434
     health_path: /api/ps
@@ -65,8 +68,11 @@ nodes:
         resident: true
         slots: 2
         served_ctx: 32768
-        first_frame_s: 1500     # wq#3794: carried over from Q4_K_M, not re-measured at Q8_0; expect slight increase
-        prefill_tps: null       # wq#3794: stale at old quant (was 13.6), cleared pending re-bench at Q8_0
+        first_frame_s: 1500
+        prefill_tps: 13.6       # wq#3795/wq#3796: still the live Q4_K_M measurement -- wq#3794 cleared
+                                 # this on a false "stale at Q8_0" premise; no live pull/retag happened
+                                 # on hathor (state:live, JUDGE_MODEL_IDENTITY.json still pins llama3.1:8b
+                                 # Q4_K_M), so 13.6 still measures what hathor actually serves today
         decode_tps: null
         measured_at: 2026-09-20
         load_s: null
