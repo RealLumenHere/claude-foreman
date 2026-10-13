@@ -73,3 +73,48 @@ hand.
 
 All three runs are also in `/home/lumen/kb/logs/wq2620-prune-worktrees.jsonl`
 (3 lines, one per run above) with full per-worktree detail.
+
+## wq#3782 — manual sweep + timer restoration, 2026-10-13
+
+`lumen-prune-worktrees.timer` was stopped and disabled on 2026-10-08 as part of
+the Phase 1 subtraction cost-cutting pass (same pass that disabled the Langfuse
+evaluator timers, wq#3672) — not because the pruner was wrong, just caught in a
+blanket timer cut. With no sweeps for 5 days, 368 worktrees had accumulated
+per the ticket's count at dispatch; by the time this ran, some had already
+cleared via other activity.
+
+```
+$ python3 prune_worktrees.py --json
+scanned=426  prunable=23  skipped=403  bytes=444480247  (≈424 MiB)
+
+$ python3 prune_worktrees.py --apply --json
+scanned=426  prunable=23  skipped=403  removed_ok=23  removed_failed=0
+```
+
+Skip breakdown (403 total): 215 unmerged branch, 138 within grace period, 49
+dirty (uncommitted/untracked), 1 detached HEAD. The ticket's framing ("remove
+worktrees older than 7 days not associated with active tickets") is a looser
+rule than this tool enforces — most of the 403 skips are worktrees whose
+*ticket* may be long done but whose *branch* was never actually merged, which
+is exactly the case the tool is built to protect (README.md's wq#2561
+spot-check: content can look "landed" while real branch-unique commits are
+still unreachable from the default branch). Widening the rule to delete those
+on ticket status alone risks losing unlanded work for a cosmetic worktree
+count; left to the existing conservative criteria instead of reinventing a
+looser one for this ticket.
+
+**Timer decision: restore the cut timer, not a new weekly cron.** The unit
+files on disk at `/etc/systemd/system/lumen-prune-worktrees.{service,timer}`
+were untouched (byte-identical to this directory's committed copies) — Phase 1
+subtraction stopped and disabled the timer but did not remove it. Re-enabling
+the existing unit is the literal "replace what was cut" option the ticket
+asks for; routing this through `dispatch-batch` instead would mean building a
+new periodic-maintenance mechanism inside an unrelated dispatcher script for a
+job that already has a tested, documented, idempotent daily timer. Restored
+via `install.sh` (idempotent: re-runs a dry run, then
+`install`+`daemon-reload`+`enable --now`) run as root through
+`lumen-run start --root -- bash install.sh` (`lumen-run --root` is the sanctioned
+detached-root path for a BUILD worker's install/enable step, precedented by
+wq#2107/#2108's guardian timer re-enable). Confirmed after:
+`systemctl is-enabled`/`is-active lumen-prune-worktrees.timer` → `enabled`/
+`active`.
