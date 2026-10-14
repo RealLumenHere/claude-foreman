@@ -92,7 +92,13 @@ _PRE_GOOGLE = r"AIza"
 # not a closed set the way sk-'s providers are, so the cap is a length bound instead
 # of a vocabulary — long enough for every qualifier seen, short enough that a body
 # opening with lowercase letters then a dash cannot ride the group past the floor.
-_PRE_TAILSCALE = r"tskey-(?:[a-z]{1,20}-)?"
+# wq#3833: the cap is 14 because the kept qualifier plus its dash must stay UNDER the
+# tailscale body floor (16). The group is optional, so a re-read of our own output
+# `tskey-<qualifier>-MASKED` can also take the qualifier as the body. At the old cap of
+# 20, a 15-20 letter qualifier made that body reach the floor, mask(mask(x)) rewrote
+# its own output, and the tripwire paged a pri-1 rotation over a probe's kept label
+# (wq#3830, `tskey-` + 20 letters + `-`). A longer lowercase run is now masked as body.
+_PRE_TAILSCALE = r"tskey-(?:[a-z]{1,14}-)?"
 _PRE_GROQ = r"gsk_"
 
 

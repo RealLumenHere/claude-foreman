@@ -415,6 +415,23 @@ def test_masking_never_re_arms_on_its_own_output():
         assert masking.scan(once)[1] == [], f"{label}: scan records its own output"
 
 
+@pytest.mark.parametrize("text", [
+    "tskey-" + "q" * 14 + "-" + "B" * 16,   # longest qualifier still kept
+    "tskey-" + "q" * 15 + "-" + "B" * 16,   # one past the cap: masked as body
+    "tskey-" + "q" * 20 + "-" + "B" * 16,   # wq#3830's probe, the old cap
+])
+def test_a_long_tailscale_qualifier_is_still_a_fixed_point(text):
+    """wq#3833: the kept qualifier plus its dash must stay under the 16-char body
+    floor, or a re-read of `tskey-<qualifier>-MASKED` takes the qualifier as a body
+    and the tripwire fires on our own output. The old 20-letter cap did exactly that
+    to wq#3830's probe output and filed a pri-1 rotation for a dummy."""
+    once, first = masking.mask_text(text)
+    assert first == ["tailscale"] and "B" * 16 not in once
+    twice, again = masking.mask_text(once)
+    assert (twice, again) == (once, [])
+    assert masking.scan(once)[1] == []
+
+
 def test_a_real_secret_next_to_a_masked_one_still_fires():
     """The echo filter keys off the END of a match, so it must not swallow a live
     token that merely shares a line with an already-masked one."""
