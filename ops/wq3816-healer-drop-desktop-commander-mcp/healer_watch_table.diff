@@ -1,0 +1,6 @@
+--- a/agent/healer_watch_table.yaml
++++ b/agent/healer_watch_table.yaml
+@@ -1,4 +1,3 @@
+   mcp-gateway:           {kind: systemd, policy: restart, owner: hands,     holddown_flag: /home/lumen/agents/holddowns/mcp-gateway.json}
+-  desktop-commander-mcp: {kind: systemd, policy: restart, owner: hands,     holddown_flag: /home/lumen/agents/holddowns/desktop-commander-mcp.json}
+   ntfy:                  {kind: docker,  policy: restart, owner: alerting,  holddown_flag: /home/lumen/agents/holddowns/ntfy.json}
