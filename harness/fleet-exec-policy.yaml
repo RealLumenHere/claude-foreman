@@ -186,7 +186,10 @@ allow:
   # khnum (hostname + uptime exit 0). ptah and sekhmet were UNREACHABLE at listing time (ptah: no
   # route to host on LAN + tailnet; sekhmet: ssh timeout on LAN and tailnet) - listing is a
   # permission, not a liveness claim; the bench ticket re-verifies reachability before running.
-  ssh: [lumen, isis, bes, anubis, maat, sobek, hathor, ptah, sekhmet, horus, neith, khnum]
+  # wq#3857: maksoor (RE workstation since 2026-09-17, ssh_user=maksoor) added so fleet-health
+  # disk tickets can probe it. Same READ-ONLY run semantics; not in allow.restart or copy_dirs.
+  # Reachability was not verifiable from the worker sandbox (raw ssh off the allowlist).
+  ssh: [lumen, isis, bes, anubis, maat, sobek, hathor, ptah, sekhmet, horus, neith, khnum, maksoor]
 
 # run: read-only probe set. Each entry is either a bare basename (argv[0] must equal
 # it exactly) or "<basename> <subcmd-pattern>" (argv[1] must fnmatch one of the
@@ -207,6 +210,9 @@ run_readonly_cmds:
   - ls
   - stat
   - df
+  # wq#3857: du for disk-pressure triage (fleet-health "[disk] ... find what is filling it"
+  # tickets). Reads sizes only; it has no write or exec flag.
+  - du
   - free
   - "systemctl status|is-active|is-enabled|show|cat|list-*"
   - journalctl
