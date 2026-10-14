@@ -355,17 +355,35 @@
     upgrade — paying that upgrade cost for a service with zero workflows and
     an already-SKIP verdict is not worth it, so both units were stopped and
     disabled in place (not removed) rather than upgraded.
-  ticket: wq#3839 (retire), wq#1302 (eval, SKIP verdict)
+  ticket: wq#3839 (retire), wq#1302 (eval, SKIP verdict),
+          wq#3841 (verify), wq#3842 (correct the guards text below)
   data:
     disposition: >
-      no workflow data existed to migrate or preserve (0 published
-      workflows at time of retirement, per ticket). `/home/lumen/.n8n` left
-      on disk, untouched.
+      no workflow data existed to migrate or preserve. n8n's own startup
+      index logged `Processed 0 draft workflows, 0 published workflows`
+      (journalctl -u n8n.service, Oct 14 00:54:58 and 00:56:23) under two
+      hours before the 02:42:07 stop — a same-day confirmation from n8n
+      itself of the 0-workflow count, which until wq#3842 was carried
+      forward unre-checked from wq#1302 (2026-09-03). `/home/lumen/.n8n`
+      left on disk, untouched.
   guards:
     - n8n-watcher.service: >
         `Wants=n8n.service After=n8n.service` — n8n-watcher only ever polled
-        n8n's own event log for workflow failures (and posted them to the
-        wrong ntfy topic, `lumen_alerts` not `lumen-alerts`, per
-        FLEET_SERVICE_ATLAS.md §7 F-6), so disabling it alongside n8n drops
-        no live alerting path; the topic-mismatch bug was already silencing
-        it.
+        n8n's own event log (`/home/lumen/.n8n/.n8n/n8nEventLog.log`) for
+        workflow failures, and that log was empty for the watcher's entire
+        observed life: it logged `Seeked to end of log (0 lines)` on its last
+        start (journalctl -u n8n-watcher.service, Oct 07 23:38:39) and
+        `/home/lumen/agent/n8n_watcher_state.json` still held `last_pos: 0`
+        at its final 60 s state write (02:41:45, a minute before the Oct 14
+        02:42:07 stop). With 0 workflows nothing could fail, so disabling it
+        alongside n8n drops no live alerting path.
+        Its ntfy path was healthy, not broken. The `lumen_alerts`
+        (underscore) topic mismatch that FLEET_SERVICE_ATLAS.md §7 F-6
+        reports in the present tense was fixed on 2026-09-19 by wq#1645:
+        n8n_watcher.py:17-19,36 calls `/home/lumen/bin/ntfy-send -t
+        lumen-alerts`, and the Oct 07 start logged `ntfy sent: n8n Watcher
+        Online` with no failure warning. An earlier revision of this entry
+        cited that already-fixed bug as "already silencing it" — false;
+        wq#3841's verify pass caught it and wq#3842 corrected it. The
+        atlas's F-6 prose is a 2026-09-10 capture (annotated by wq#3842);
+        trust `n8n_watcher.py` over it.
