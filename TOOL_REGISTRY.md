@@ -221,3 +221,57 @@ blobs Fuzzware is built for. If a bare-metal MCU target shows up (no OS, single 
 ARM Cortex-M3/M4), Fuzzware is worth a follow-up eval on its own merits — add it as a
 community-tier `limpet/examples/fuzzware.toml` catalog entry at that point, not now, since
 there is no current intake path that would exercise it.
+
+## Sootty — terminal VCD waveform viewer (wq#3878, NO-GO for xfce4-terminal / Lumen's headless terminal as-is)
+
+**Status (2026-10-14): NOT adopted for the UX the ticket wants.** `re-tools-analysis.md`,
+which the ticket cites as a ref, was not found anywhere in this worktree or the other
+`--add-dir` roots (kb, foreman, bin, sentinel, mailbot, pokemon, agents/work-queue) — same
+gap as the Fuzzware/Pretender entries above. This entry is sourced from the project's
+upstream repo and docs instead (`fleet-search read` on
+https://github.com/Ben1152000/sootty, fetched 2026-10-14, plus `fleet-search web` on the
+rendering-protocol and sigrok-format questions below).
+
+What it is: Ben1152000/sootty, a Python CLI (`pip install sootty`) that parses a VCD/EVCD
+waveform and renders it as an SVG, with a Python API (`WireTrace.from_vcd_file`,
+`Visualizer(Style).to_svg`) alongside the CLI, plus query-language filtering/breakpoints
+(`-s`/`-e`/`-b`/`-w`) and a save/reload mechanism for queries.
+
+- **VCD format support**: good. Standard VCD loads directly via `WireTrace.from_vcd_file`;
+  Extended VCD (EVCD) is supported through a bundled `sootty.utils.evcd2vcd` converter that
+  runs ahead of the same VCD loader. This is the one criterion Sootty clears cleanly.
+- **Sigrok integration**: none built in — Sootty only ever reads a VCD/EVCD file from disk,
+  it has no sigrok-aware input path. The pairing works only as a two-tool pipe: sigrok's own
+  "Input output formats" wiki page and ELCE-2013 slides list VCD as a native `sigrok-cli -O
+  vcd` output format (independently confirmed by a real-world EEVblog report of using exactly
+  that flag), so `sigrok-cli -O vcd ... capture.vcd` into `sootty capture.vcd` works, but it's
+  a shell pipeline the ticket would have to script, not an integration Sootty ships.
+- **Rendering quality in xfce4-terminal — the disqualifying finding**: Sootty is not a
+  text/ASCII-native renderer despite the "terminal-native" framing in the ticket. Per its own
+  README, the CLI's terminal path is SVG generation (`sootty "waveform.vcd" -o > image.svg`)
+  piped through two external binaries it depends on but does not vendor: `rsvg-convert`
+  (SVG → raster) and `viu` (raster → terminal image). `viu`'s own docs state it displays
+  images via the Kitty graphics protocol, iTerm2 inline images, or Sixel, "down to Unicode
+  block characters as a universal fallback." xfce4-terminal (VTE-based) implements none of
+  the first three: it has no Kitty or iTerm2 protocol support, and the Sixel toggle it added
+  in version 1.1.0 is a no-op unless the underlying VTE library was itself built with Sixel —
+  which upstream GNOME VTE does not ship in stable releases (open issue
+  gitlab.gnome.org/GNOME/vte/-/issues/253; corroborated by arewesixelyet.com listing
+  "xfce-terminal: Needs Patch" for exactly this reason). So in Lumen's actual xfce4-terminal,
+  every Sootty render would silently fall all the way to viu's lowest-fidelity Unicode
+  half-block approximation of the rasterized SVG — legible at a glance, but a blocky bitmap
+  substitute, not the crisp vector/protocol-native display the project demos on Kitty,
+  WezTerm, or Contour.
+- **Install footprint**: none of `sootty`, `viu`, or `rsvg-convert` are present on Lumen
+  (`which sootty viu rsvg-convert sigrok-cli` found only `sigrok-cli`, at `/usr/bin/sigrok-cli`).
+  Getting even the degraded fallback working means standing up a Python package, a Rust
+  binary (`cargo install viu`, no apt package assumed present), and a C library binding
+  (`librsvg2-bin`) for a payoff capped at block-art fidelity on the fleet's real terminal.
+
+**Verdict**: no-go as a Limpet UX win on xfce4-terminal. The ticket's "terminal-native,
+renders in TTY without GUI" framing doesn't hold — Sootty needs an SVG rasterizer and an
+image-capable terminal to show anything at all, and Lumen's xfce4-terminal isn't one
+(stock VTE, no Kitty/iTerm2/Sixel). sigrok pairing is real but is a plain `-O vcd` pipe, not
+an integration. If a genuinely text-native VCD viewer is wanted for headless Limpet use, the
+next eval should target a tool that renders ANSI/Unicode waveforms directly (no SVG
+intermediary, no external rasterizer) rather than a second graphics-protocol-dependent tool.
