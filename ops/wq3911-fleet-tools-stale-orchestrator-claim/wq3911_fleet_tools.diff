@@ -1,6 +1,6 @@
 --- a/context/fleet_tools.yaml (before)
 +++ b/context/fleet_tools.yaml (after)
-@@ research_fleet group, research-prompt-queue + lumen_deep_research_orchestrator entries (lines 47-58) @@
+@@ -47,16 +47,16 @@
        - name: research-prompt-queue
          path: /home/lumen/scratch/research_prompts
 -        use: "Drop a self-contained .txt prompt here (name the deliverable + output path inside it). Fleet researchers drain it continuously; output lands in scratch/deep_research_output/ and scratch/research/."
