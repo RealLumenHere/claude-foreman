@@ -315,3 +315,24 @@
         counts as a real ERROR. See
         /home/lumen/services/backup/scripts/backup-important.sh (RETIRED_CONTAINERS
         array, just above the Langfuse ClickHouse dump section).
+
+- name: desktop-commander-mcp-lumen
+  units: [desktop-commander-mcp.service]
+  load_state: masked   # unit file -> /dev/null; `systemctl is-enabled` = masked
+  expect: masked
+  retired_on: 2026-10-13
+  reason: >
+    Commander now runs on Horus (mcp-proxy), reached via the mcpw.lumennode.uk
+    Cloudflare Worker, not on Lumen. The mcp-backend.lumennode.uk -> :3100
+    cloudflared route was removed (wq#3781) and nothing connects to :3100, so
+    the Lumen-local supergateway unit was stopped and masked (wq#3805).
+    Original unit file preserved at
+    /home/lumen/backups/wq3805/desktop-commander-mcp.service.orig.
+  ticket: wq#3805 (retire), wq#3781 (route removal)
+  guards:
+    - "early exit when masked": >
+        commander-blocklist.sh, dc-redeploy.sh, dc-narrow-deploy.sh,
+        dc-narrow-restart-v2.sh, mcp-pressure-guard.sh and
+        mcpw-stateful-cutover.sh in lumen-bin (PR #251) exit 0 when
+        `systemctl is-enabled desktop-commander-mcp` reports masked, so no
+        script revives the unit. mcp-pressure-guard.timer stays inactive.
