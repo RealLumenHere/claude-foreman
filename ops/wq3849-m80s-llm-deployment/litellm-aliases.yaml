@@ -1,0 +1,25 @@
+# wq#3849 -- model_list fragment for the 4 M80s aliases. Not a standalone config:
+# apply.sh merges this into the live /home/lumen/agent/litellm_config.yaml
+# model_list (fleet-config/docs/RECOVERY.md section 4 schema).
+#
+# api_base is a placeholder on purpose -- the doctrine forbids guessing a fleet
+# address. Fill it in from `lumen_state.py current m80s` (or
+# `harness/fleet-exec-policy.yaml`'s onboarded entry) once M80s is reachable, before
+# running apply.sh.
+model_list:
+  - model_name: agent-fast
+    litellm_params:
+      model: ollama/qwen3.6:35b-a3b
+      api_base: PLACEHOLDER_FILL_FROM_lumen_state_py_once_onboarded
+  - model_name: agent-deep
+    litellm_params:
+      model: ollama/qwen2.5-coder:32b
+      api_base: PLACEHOLDER_FILL_FROM_lumen_state_py_once_onboarded
+  - model_name: research
+    litellm_params:
+      model: ollama/qwen3:32b
+      api_base: PLACEHOLDER_FILL_FROM_lumen_state_py_once_onboarded
+  - model_name: quick
+    litellm_params:
+      model: ollama/qwen2.5-coder:14b
+      api_base: PLACEHOLDER_FILL_FROM_lumen_state_py_once_onboarded
