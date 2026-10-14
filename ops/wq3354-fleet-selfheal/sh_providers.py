@@ -205,9 +205,9 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                                   f"{', '.join(models)} are cooled down in "
                                   f"backend_cooldown.json so dispatch skips them. This is "
                                   f"not a key problem — top up the account balance for "
-                                  f"{host} (physical task; funding tracked in wq#3557). "
-                                  f"fleet-selfheal re-enables the rungs on the first good "
-                                  f"probe.",
+                                  f"{host} (physical task; this ticket is the funding "
+                                  f"tracker for it). fleet-selfheal re-enables the rungs "
+                                  f"on the first good probe.",
                                   page="high")
         elif verdict == "ok":
             if hs.pop("disabled", None):
