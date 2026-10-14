@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Limpet logo: conical limpet shell with blue dotted rays">
+  <!-- Colors come from design/limpet/brand/tokens.json (dark mode).
+       shell = secondary #D9A441, rays = primary #3EC5F0, base = surface #152221 -->
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D9A441"/>
+      <stop offset="1" stop-color="#8A6114"/>
+    </linearGradient>
+  </defs>
+  <!-- conical shell: wide shallow dome, apex slightly off-center like a real limpet -->
+  <path d="M 118 52 C 70 88 34 148 24 192 L 232 192 C 226 144 168 80 118 52 Z"
+        fill="url(#shell)"/>
+  <!-- three dotted rays radiating from the apex (blue-rayed limpet, Patella pellucida) -->
+  <g fill="#3EC5F0">
+    <circle cx="106" cy="86" r="7"/>
+    <circle cx="90" cy="114" r="7.5"/>
+    <circle cx="74" cy="142" r="8"/>
+    <circle cx="58" cy="170" r="8.5"/>
+    <circle cx="122" cy="90" r="7"/>
+    <circle cx="124" cy="122" r="7.5"/>
+    <circle cx="126" cy="154" r="8"/>
+    <circle cx="128" cy="184" r="8.5"/>
+    <circle cx="138" cy="84" r="7"/>
+    <circle cx="156" cy="112" r="7.5"/>
+    <circle cx="174" cy="140" r="8"/>
+    <circle cx="192" cy="168" r="8.5"/>
+  </g>
+  <!-- the rock it grips: flat base bar -->
+  <rect x="16" y="192" width="224" height="14" rx="7" fill="#152221"/>
+</svg>
