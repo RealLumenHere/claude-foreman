@@ -28,17 +28,40 @@ instead of juggling a separate MCP connection per tool.
 
 ## Hot reload
 
-A background thread polls the manifest's mtime every `reload_poll_sec`
-(default 2s) and on change calls `ToolRegistry.rebuild()`, which:
+A background thread waits up to `reload_poll_sec` (default 2s) on the manifest
+and on change calls `ToolRegistry.rebuild()`, which:
 - starts any newly-enabled child server or CLI tool,
 - stops any child server that's no longer in the manifest,
-- reuses (does not restart) a child server whose entry didn't change and is
-  still alive,
+- restarts a child whose `command` or `env` changed — those are baked into the
+  running process, so the live child is the wrong process once they differ,
+- reuses (does not restart) a child whose `command`/`env` are unchanged and
+  whose process is still alive; a changed `startup_timeout_sec` /
+  `request_timeout_sec` is applied to the live client without a restart,
 - leaves a currently in-flight `tools/call` alone — only the next
   `tools/list`/`tools/call` sees the new set.
 
-`SIGHUP` (`MetaServer.request_reload`) exists as a hook for forcing an
-out-of-cycle check; the poll loop still carries the actual reload.
+`SIGHUP` (`MetaServer.request_reload`) cuts the wait short, so the manifest
+check happens immediately instead of at the next tick. It forces the *check*:
+if the file is unchanged there is nothing to rebuild.
+
+## One bad child can't take the server down
+
+Every read from a child MCP server is bounded (`stdio_mcp_client.py`):
+`startup_timeout_sec` (default 10s) covers the `initialize` handshake and
+`request_timeout_sec` (default 30s) covers each `tools/list`/`tools/call` —
+the `mcp_servers` counterpart of a `cli_tools` entry's `timeout_sec`, settable
+per entry in the manifest. A child that times out, dies, or writes non-JSON on
+stdout raises `ChildServerError`, which `rebuild()` logs and skips: that one
+entry loses its tools and every other child and CLI tool is still served.
+Worst-case startup is therefore bounded by the sum of the enabled children's
+`startup_timeout_sec`, not unbounded.
+
+The initial `rebuild()` still runs synchronously in `MetaServer.__init__`, so
+the tool set is complete and deterministic by the time `initialize` is
+answered. If a deployment ever carries enough children that bounded-but-serial
+startup is too slow, the next step is building them in parallel (or lazily)
+and emitting `notifications/tools/list_changed` as each lands — the server
+already advertises that capability.
 
 ## Why no dependency on the `mcp` SDK
 
@@ -70,6 +93,12 @@ a shell-metacharacter-bearing argument does nothing special, since `argv` is
 never shelled out as a string), hot reload add/remove without restart, and
 an end-to-end test that spawns `meta_server.py` as a real subprocess and
 drives it over stdin/stdout exactly as an agent would — not just the
-in-process shortcut. Run with:
+in-process shortcut.
+
+`test_child_timeouts.py` plus the restart/SIGHUP tests in
+`test_meta_server_integration.py` are the regression tests for the three bugs
+wq#3815 found and wq#3821 ruled on; each one hangs or fails outright against
+the pre-fix code (transcripts in
+`reports/wq3821_judgment_wq3815_vs_wq3808_meta_server.md`). Run with:
 
     python3 -m pytest ops/wq3808-limpet-mcp-meta-server-a1/tests -q

@@ -15,7 +15,11 @@
 # its test suite can: test_end_to_end_subprocess_speaks_mcp_over_stdio spawns
 # meta_server.py as a real subprocess and drives it over stdin/stdout exactly as an
 # agent would, so an import error, a broken JSON-RPC response shape, or a regression
-# in tool dispatch all show up as a real failure here.
+# in tool dispatch all show up as a real failure here. Since wq#3821 the suite also
+# carries the regression tests for wq#3815's three bugs (child-restart on a changed
+# command/env, SIGHUP forcing an out-of-cycle check, and bounded reads so one hung
+# child can't wedge the server) -- each of those hangs or fails on the pre-fix code,
+# so --verify now fails if the bundle regresses to it.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"

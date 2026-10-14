@@ -22,7 +22,6 @@ import json
 import signal
 import sys
 import threading
-import time
 
 from cli_wrapper import CliToolError, build_cli_tool
 from registry import ManifestWatcher
@@ -33,6 +32,20 @@ PROTOCOL_VERSION = "2025-06-18"
 
 def namespaced(group: str, tool_name: str) -> str:
     return f"{group}.{tool_name}"
+
+
+def _entry_matches_client(entry, client: StdioMcpClient) -> bool:
+    """Is a live client still the process this manifest entry asks for?
+
+    Only `command` and `env` are compared: those are baked into the running
+    subprocess, so changing either means the live child is the wrong process
+    and has to be replaced (wq#3815 bug 1 — the old code checked liveness
+    only, so a manifest pointing a tool at a fixed binary kept running the
+    stale one). Timeouts are plain client attributes and are updated in place.
+    """
+    return list(entry.command or []) == list(client.command or []) and dict(
+        entry.env or {}
+    ) == dict(client.env or {})
 
 
 class ToolRegistry:
@@ -79,13 +92,31 @@ class ToolRegistry:
                 log(f"skipping '{entry.name}': transport '{entry.transport}' not yet supported")
                 continue
             existing = self._clients.get(entry.name)
-            client = existing if existing and existing.is_alive() else StdioMcpClient(
-                entry.name, entry.command, entry.env
-            )
-            if client is not existing:
+            if existing is not None and not _entry_matches_client(entry, existing):
+                log(f"child server '{entry.name}': command/env changed, restarting it")
+                existing.stop()
+                existing = None
+            elif existing is not None and not existing.is_alive():
+                existing.stop()  # reap the dead process before replacing it
+                existing = None
+            if existing is not None:
+                client = existing
+                client.startup_timeout_sec = entry.startup_timeout_sec
+                client.request_timeout_sec = entry.request_timeout_sec
+            else:
+                client = StdioMcpClient(
+                    entry.name,
+                    entry.command,
+                    entry.env,
+                    startup_timeout_sec=entry.startup_timeout_sec,
+                    request_timeout_sec=entry.request_timeout_sec,
+                )
                 try:
                     client.start()
                 except (ChildServerError, OSError) as exc:
+                    # Bounded by entry.startup_timeout_sec, so one bad child
+                    # costs this entry and nothing else: every other child and
+                    # every cli_tools entry still gets built and served.
                     log(f"failed to start child server '{entry.name}': {exc}")
                     continue
             try:
@@ -139,12 +170,20 @@ class MetaServer:
         print(f"[limpet-meta] {message}", file=sys.stderr, flush=True)
 
     def request_reload(self) -> None:
-        """Hook for SIGHUP: force a manifest re-check on the next poll tick."""
+        """Hook for SIGHUP: run the manifest check now instead of next tick.
+
+        Wakes `_reload_loop()` immediately. If the manifest is unchanged the
+        check finds nothing to do — this forces the check, it does not force a
+        rebuild.
+        """
         self._reload_requested.set()
 
     def _reload_loop(self) -> None:
         while True:
-            time.sleep(self.reload_poll_sec)
+            # wait(), not sleep(): a SIGHUP between ticks has to cut the wait
+            # short, otherwise request_reload() is inert and an operator waits
+            # out the full poll interval (wq#3815 bug 2).
+            self._reload_requested.wait(timeout=self.reload_poll_sec)
             self._reload_requested.clear()
             new_manifest = self.watcher.poll()
             if new_manifest is not None:

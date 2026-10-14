@@ -1,5 +1,5 @@
 {
-  "_comment": "wq#3808 LIMPET meta-server registry manifest. Edit this file and the running meta-server picks up the change within reload_poll_sec (or immediately on SIGHUP) with no restart.",
+  "_comment": "wq#3808 LIMPET meta-server registry manifest. Edit this file and the running meta-server picks up the change within reload_poll_sec (or immediately on SIGHUP, which cuts the wait short) with no restart. Changing an mcp_servers entry's command or env restarts that child; startup_timeout_sec/request_timeout_sec bound every read from it, so a child that stops answering costs only its own tools (wq#3821).",
   "mcp_servers": [
     {
       "name": "rea",
@@ -13,7 +13,9 @@
       "transport": "stdio",
       "command": ["ghidra-mcp-server", "--stdio"],
       "enabled": false,
-      "note": "placeholder entry: no Ghidra MCP server installed on Limpet yet, wire up command/env when it is."
+      "startup_timeout_sec": 60,
+      "request_timeout_sec": 120,
+      "note": "placeholder entry: no Ghidra MCP server installed on Limpet yet, wire up command/env when it is. Timeouts raised off the 10s/30s defaults as the shape a slow-booting, long-analysis child wants - a child is only skipped once it blows its own budget."
     },
     {
       "name": "radare2",

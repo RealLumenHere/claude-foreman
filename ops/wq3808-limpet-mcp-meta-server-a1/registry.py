@@ -14,6 +14,8 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from stdio_mcp_client import DEFAULT_REQUEST_TIMEOUT_SEC, DEFAULT_STARTUP_TIMEOUT_SEC
+
 
 class ManifestError(ValueError):
     """Raised when a manifest file is missing required fields or malformed."""
@@ -27,6 +29,11 @@ class McpServerEntry:
     command: list[str] | None = None  # required for transport=stdio
     url: str | None = None  # required for transport=http
     env: dict[str, str] = field(default_factory=dict)
+    # Read budgets for the proxy half, the mcp_servers counterpart of a
+    # cli_tools entry's timeout_sec (wq#3821). Startup is the initialize
+    # handshake; request covers tools/list and each tools/call.
+    startup_timeout_sec: float = DEFAULT_STARTUP_TIMEOUT_SEC
+    request_timeout_sec: float = DEFAULT_REQUEST_TIMEOUT_SEC
 
 
 @dataclass
@@ -53,6 +60,24 @@ def _require(entry: dict, key: str, ctx: str):
     return entry[key]
 
 
+def _positive_timeout(entry: dict, key: str, default: float, ctx: str) -> float:
+    """Read a timeout field, rejecting values that can never make progress.
+
+    A zero or negative budget would fail every read before the child could
+    possibly answer, which looks exactly like the bug this knob exists to
+    prevent — so it is a manifest error, not a silently-accepted setting.
+    """
+    if key not in entry:
+        return default
+    try:
+        value = float(entry[key])
+    except (TypeError, ValueError):
+        raise ManifestError(f"mcp_servers entry '{ctx}' has non-numeric '{key}'") from None
+    if value <= 0:
+        raise ManifestError(f"mcp_servers entry '{ctx}' has '{key}' <= 0 ({value})")
+    return value
+
+
 def _parse_mcp_server(entry: dict) -> McpServerEntry:
     name = _require(entry, "name", "mcp_servers entry")
     transport = entry.get("transport", "stdio")
@@ -71,6 +96,12 @@ def _parse_mcp_server(entry: dict) -> McpServerEntry:
         command=list(command) if command else None,
         url=url,
         env=dict(entry.get("env", {})),
+        startup_timeout_sec=_positive_timeout(
+            entry, "startup_timeout_sec", DEFAULT_STARTUP_TIMEOUT_SEC, name
+        ),
+        request_timeout_sec=_positive_timeout(
+            entry, "request_timeout_sec", DEFAULT_REQUEST_TIMEOUT_SEC, name
+        ),
     )
 
 
