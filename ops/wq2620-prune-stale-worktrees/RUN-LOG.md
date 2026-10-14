@@ -118,3 +118,44 @@ detached-root path for a BUILD worker's install/enable step, precedented by
 wq#2107/#2108's guardian timer re-enable). Confirmed after:
 `systemctl is-enabled`/`is-active lumen-prune-worktrees.timer` → `enabled`/
 `active`.
+
+## wq#3812 — hygiene follow-up, confirms wq#3782's restoration held, 2026-10-14
+
+wq#3812 was dispatched describing the same pre-restoration state wq#3782 already
+fixed (364 worktrees, timer cut in the 10-08 massacre, "re-enable a prune timer
+or run this pass weekly — decide + implement"). Checked live state rather than
+trusting the ticket's snapshot:
+
+```
+$ systemctl is-enabled lumen-prune-worktrees.timer  -> enabled
+$ systemctl is-active  lumen-prune-worktrees.timer  -> active
+$ systemctl list-timers lumen-prune-worktrees.timer --no-pager --no-legend
+Thu 2026-10-15 00:14:55 UTC 23h  Wed 2026-10-14 00:01:14 UTC  1h ago  ...
+```
+
+The timer already ran once since restoration (`ExecMainExitTimestamp=2026-10-14
+00:01:53 UTC`, `Result=success`), and its sweep is in
+`/home/lumen/kb/logs/wq2620-prune-worktrees.jsonl` under that timestamp —
+skip reasons in that line match the existing merged+clean+grace-period+live-claim
+rule, not a new or looser one. **Decision: option (a) stands, already
+implemented by wq#3782 — no second timer, no weekly orchestrator ticket.**
+Building a parallel weekly mechanism for a job the daily timer already covers
+would be the redundant-mechanism mistake the README's deploy checklist exists
+to avoid.
+
+`git -C /home/lumen/foreman worktree list | wc -l` now reports 271 (up from
+257 at this ticket's dispatch snapshot — new tickets claimed worktrees in the
+interim; expected under the conservative merged+clean+grace+no-live-claim
+rule, not a sign the timer is failing). The 22 held worktrees from
+`scratch/worktree-hold-20261013.txt` are exactly the live-wq-claim and
+unmerged/open-ticket cases the pruner is built to protect (README.md
+condition 5) — no action needed, the timer already skips them correctly.
+
+`/home/lumen/worktrees/wq3552-a1` (root-owned files inside, `sudo rm` needed
+after a diff check per wq#3782's own spot-check precedent) is a one-off
+physical/root task, not something this ticket's sandboxed session can
+execute — no `sudo` grant exists here (this ticket's own dispatch advisory
+flagged exactly that) and the path sits outside this session's `--add-dir`
+scope regardless. Queued as wq#3820 rather than left as an unresolved gate,
+per the standing full-autonomy order: decide and act, queue only the
+physical step nobody but a root session can perform.
