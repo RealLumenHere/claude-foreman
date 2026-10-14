@@ -13,7 +13,7 @@
 #              /home/lumen/agent/litellm_config.yaml && docker restart litellm
 set -euo pipefail
 
-CFG=/home/lumen/agent/litellm_config.yaml
+CFG="${WQ3849_CFG:-/home/lumen/agent/litellm_config.yaml}"
 FRAGMENT="$(dirname "${BASH_SOURCE[0]}")/litellm-aliases.yaml"
 
 case "${2:-apply}" in
@@ -29,6 +29,16 @@ case "${2:-apply}" in
 esac
 
 API_BASE="${1:?usage: apply.sh <m80s_api_base> [apply|verify] -- e.g. http://100.x.x.x:11434}"
+
+# wq#3863: a 1-arg invocation (e.g. the wq1986-style `apply.sh verify`) leaves $2 unset,
+# so the case statement above falls through to apply with $1 (here the literal string
+# "verify") silently accepted as API_BASE. The :? guard above never fires -- $1 is
+# non-null -- so this is the only thing standing between a typo and a live config write.
+case "$API_BASE" in
+  http://*|https://*) ;;
+  *) echo "usage: apply.sh <m80s_api_base> [apply|verify] -- api_base must start with http:// or https://, got: $API_BASE" >&2
+     exit 64 ;;
+esac
 
 if grep -q "model_name: agent-fast" "$CFG"; then
   echo "APPLY_OK -- agent-fast already present, nothing to do (idempotent)"
