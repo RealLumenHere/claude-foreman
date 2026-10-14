@@ -23,8 +23,12 @@ import sys
 HOME = "/home/lumen"
 
 # The seven registered primaries a foreman worktree gets read access to
-# (UID_SPLIT_FWORKER.md:126). The other six registered primaries are NOT searched —
-# see §1's "what this still does not cover".
+# (UID_SPLIT_FWORKER.md:126), plus the registered primaries wq#2681 could not search
+# (primary_tree_guard.py STATIC_PRIMARY_TREES) that wq#2741 added. `questfree` is a
+# registered primary too but the directory no longer exists on Lumen (checked 2026-10-14):
+# it stays in the list so a resurrected tree is searched, and os.walk on a missing root
+# yields nothing. `logs` is the one registered primary still NOT searched - run artifacts,
+# not code.
 ROOTS = [
     "foreman",
     "mailbot",
@@ -33,6 +37,13 @@ ROOTS = [
     "kb",
     "bin",
     "projects/nest",
+    # wq#2741
+    "questfree",
+    "pstack",
+    "mission-control",
+    "minerva",
+    "agent",
+    "fleet/inventory",
 ]
 
 PATTERNS = [
@@ -49,6 +60,7 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 RUN_ARTIFACT = re.compile(r"/(_runs|events|pilots|logs)/")
 LOG_EXT = (".jsonl", ".log")
 DOC_EXT = (".md", ".md.bak", ".txt", ".diff", ".patch")
+DATA_MARK = (".db", ".sqlite")   # wq#2741: sqlite stores - scraped text mentions vendors, never code
 
 # Every live source/config hit, with the verdict from the wq#2681 read-through.
 # "SURFACE n" = a row in §1's table. Anything else is why it is not a surface.
@@ -93,6 +105,49 @@ ADJUDICATED = {
     "foreman/ops/wq1337-hapi-bringup/litellm-hapi1-dark.yaml": "config — hapi1 dark block",
     "foreman/ops/wq1406-paid-fallback-guard/litellm_config_snippet.yaml": "config — fallback-chain snippet",
     "foreman/ops/wq1711-difficulty-router/litellm_config_snippet.yaml": "config — difficulty-router snippet",
+    # --- wq#2741: the registered primaries wq#2681 could not search (agent, minerva, ...) ---
+    "agent/litellm_config.yaml": "config — the LIVE gateway roster itself; `openai/<m>` is LiteLLM provider prefix for OpenAI-compatible LOCAL endpoints (Ollama on hathor/nephthys/isis/khepri/ptah/sekhmet) and api.z.ai, NOT api.openai.com. Every surface above that says via LiteLLM lands here",
+    "agent/litellm_config.yaml.wq236_proposed": "snapshot — proposed config, never applied",
+    "agent/staged-archive/litellm_config.yaml.staged.minimax-m3.STALE-20260926": "snapshot — stale staged config",
+    "agent/staged-archive/litellm_config.yaml.staged.wq233.STALE-20260926": "snapshot — stale staged config",
+    "minerva/vision-eval/lumen-vision-local.litellm.staged.yaml": "config — staged; comment only (drop_params ... openai fields ... for ollama)",
+    "minerva/factory_context.py": "policy text — tells the factory LLM never to propose anthropic/openai routes; no call",
+    "minerva/minerva_factory.py": "SURFACE 21 — already a row; the hit is the FORBIDDEN_PROVIDERS denylist at :283, not a call",
+    "minerva/judgearena_bench.py": "SURFACE 24 — JudgeArena judge bench: langchain ChatOpenAI against the LiteLLM loopback (BASE = LITELLM_BASE_URL or 127.0.0.1:4000/v1, :28). lumen-judgearena-bench.timer is DISABLED (installed, not live): one `systemctl enable` from live",
+    "minerva/test_judgearena_correlation.py": "fixture — mocks langchain_openai for judgearena_bench",
+    "minerva/v4/reports/fa_episode_failures.json": "report data — prose naming api.deepseek.com as a SPOF; no call",
+    "agent/deepseek_cost_tracker.py": "not a call — GET /user/balance; deepseek-cost-tracker.timer is DISABLED",
+    "agent/signal_engine.py": "keyword list — retired (wq#2041, signal-engine retired 2026-10-11); no call",
+    "agent/tag_auto_generator.py": "keyword list — tag vocabulary; no call",
+    "agent/lumen_intel.py": "keyword list — relevance filter; no call",
+    "agent/processed_research.json": "data — processed-research filename list matching on text",
+    "agent/crew.py": "dormant — CrewAI pipeline; `openai/smart|fast` are LiteLLM aliases on localhost:4000, not api.openai.com; no installed unit, no cron, no live importer",
+    "agent/backfill_content.py": "dormant — one-off direct api.deepseek.com backfill (DS_KEY); no unit/cron/script references it",
+    "agent/attic/lumen_agent_v2.py": "dormant — attic; direct api.deepseek.com",
+    "agent/lumen_agent_v2.py.pre_cap_patch": "snapshot — pre-patch copy of attic/lumen_agent_v2.py",
+    "agent/lumen_agent.py": "dormant — legacy direct Gemini; only agent/run.sh (2026-03-18) references it; lumen-agent.service is MASKED",
+    "agent/lumen_agent_v3.py": "dormant — legacy direct Groq + Gemini; only lumen_research_agent.py imports it; no installed unit",
+    "agent/lumen_research_agent.py": "dormant — legacy direct Groq + Gemini (mtime 2026-07-12); no installed unit, no process, no cron",
+    "agent/lumen_deep_research_orchestrator.py": "dormant — direct Groq + Gemini. fleet_tools.yaml:55-58 says runs via service but NO installed unit/timer/cron execs it, no process on 2026-10-14, newest scratch/deep_research_output file is 2026-07-13 (stale claim). agents/truth_table.yaml:90 queues its PBOX excision",
+    "agent/llm_project_scout.py": "dormant — direct Groq + Gemini; no installed unit",
+    "agent/project_engine.py": "dormant — direct Groq; only referenced by lumen-builder.service, which exists as a file in agent/ and is NOT installed",
+    # --- wq#2741: hits that appeared in the original seven roots after wq#2681 (new files since 2026-09-25) ---
+    "bin/angr-venv/lib/python3.14/site-packages/angr/llm_client.py": "vendored - angr optional pydantic_ai OpenAI provider (RE toolkit venv); no fleet unit invokes it",
+    "bin/emba-dist/helpers/helpers_emba_defaults.sh": "vendored - EMBA log-filename variable (q02_openai_question.txt); no call",
+    "bin/gitleaks": "vendored - gitleaks rule table (openai-api-key rule id); no call",
+    "bin/provider-watch": "monitor - release watcher (npm/GitHub versions of provider SDKs, e.g. @anthropic-ai/claude-code); no model call",
+    "bin/rotate-provider-keys": "not a completion - key-liveness verifier: GET /models on api.deepseek.com and generativelanguage.googleapis.com (:23-24); the model names are the trace-landed check through LiteLLM",
+    "foreman/harness/systemd/lumen-despag.service": "comment only - explains a cgroup bug that cut claude children off api.anthropic.com; the call is the claude CLI (surface 1)",
+    "foreman/ops/wq2903-model-ref-drift/tests/fixtures/callers/clean.py": "fixture",
+    "foreman/ops/wq2904-judge-model-group-fix/litellm_config_snippet.yaml": "config - judge model-group snippet (openai/llama3.1:8b = LiteLLM prefix for a local Ollama endpoint)",
+    "foreman/ops/wq3097-litellm-ghsa-3cv6-patch/scan_callers_pr36011.py": "scanner - regex for /openai/deployments/ URL shapes (GHSA caller scan); no call",
+    "foreman/ops/wq3169-litellm-completion-probe/tests/test_litellm_completion_probe.py": "fixture",
+    "foreman/ops/wq3212-litellm-dead-rungs/tests/test_remove_dead_rungs.py": "fixture",
+    "foreman/ops/wq3336-provider-watch/provider_watch.py": "monitor - source of bin/provider-watch (same verdict)",
+    "foreman/ops/wq3354-fleet-selfheal/tests/test_exposure_census.py": "fixture",
+    "foreman/ops/wq3354-fleet-selfheal/tests/test_resource_classes.py": "fixture",
+    "foreman/ops/wq3543-gemini-flash-403/fragments/gemini-flash-fallback.yaml": "config - fallback fragment; the endpoint string is in a comment about a direct-probe 403",
+    "mailbot/test_known_associates.mjs": "SURFACE 20 note - probe harness, direct DeepSeek fetch (dev-run, same key as test_persona/test_dodge)",
     # --- tests/fixtures for the files above ---
     "foreman/dispatcher/tests/test_cli_canary.py": "fixture",
     "foreman/dispatcher/tests/test_node_render_gateway.py": "fixture",
@@ -107,7 +162,7 @@ ADJUDICATED = {
 
 
 def bucket(rel):
-    """run-artifact | doc | snapshot | vendored | source"""
+    """run-artifact | doc | snapshot | data | vendored | source"""
     if RUN_ARTIFACT.search("/" + rel) or rel.endswith(LOG_EXT):
         return "run-artifact"
     if rel.endswith(DOC_EXT):
@@ -116,6 +171,8 @@ def bucket(rel):
         return "snapshot"
     if ".bak" in rel:
         return "snapshot"
+    if any(m in os.path.basename(rel) for m in DATA_MARK):
+        return "data"
     if rel == "bin/trivy":
         return "vendored"
     return "source"
@@ -152,7 +209,7 @@ def main():
     total = len(found)
     src = sorted(by_bucket.get("source", []))
     print(f"population over {len(ROOTS)} roots: {total} files match")
-    for name in ("run-artifact", "doc", "snapshot", "vendored", "source"):
+    for name in ("run-artifact", "doc", "snapshot", "data", "vendored", "source"):
         print(f"  {name:<13} {len(by_bucket.get(name, [])):>5}")
 
     unreviewed = [r for r in src if r not in ADJUDICATED]

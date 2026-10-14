@@ -50,18 +50,25 @@ strings/SDK imports (`api.deepseek.com`, `api.anthropic.com`, `api.openai.com`,
 `generativelanguage.googleapis.com`, `@anthropic-ai/`, `openai`) across those same
 roots. Plus the original fleet-wide grep for flagship CLI defaults
 (`--model opus|fable|best|claude-opus|claude-fable` over `agents/ services/ agent/ bin/
-minerva/` — **zero hits**).
+minerva/` — **zero hits**). wq#2741 later extended the endpoint-string pass to `pstack, mission-control,
+minerva, agent, fleet/inventory` (and the absent `questfree`) — see "Coverage" below.
 
-**What this still does not cover:** any primary tree outside that registered read-access
-list — `questfree`, `pstack`, `mission-control`, `minerva`, `agent`, `logs`,
-`fleet/inventory` are registered primaries too (`primary_tree_guard.py:96-122`) but were
-not in wq#2664's `--add-dir` grant, so the two new passes never searched them. wq#2681's
-worktree *did* hold `minerva`, `agent` and `logs`, and ran the same six patterns over
-them as an out-of-scope falsification probe: **187 files match (147 of them source or
-config)** — `minerva/minerva_factory.py` and `minerva/judgearena_bench.py` among them, and
-`agent/` holds the live `litellm_config.yaml` plus orchestrator scripts. Row 21 below is
-the one that leaked into a searched root (via its `bin/` symlink) and is fixed here; a
-real enumeration of those three trees is its own pass — **wq#2741**, not done here.
+**Coverage as of wq#2741 (2026-10-14):** the endpoint-string pass now runs over every
+registered primary in `primary_tree_guard.py` (`STATIC_PRIMARY_TREES`) except `logs`
+(run artifacts, not code): the original seven plus `pstack`, `mission-control`, `minerva`,
+`agent` and `fleet/inventory`. `questfree` is registered but the directory no longer exists
+on Lumen, and `pstack`, `mission-control` and `fleet/inventory` contain zero matches. The six
+new roots yield **186 matching files** (13 run artifacts, 20 docs, 121 snapshots, 7 sqlite
+stores, **25 source or config**: `agent` 19, `minerva` 6); the original seven have drifted from
+wq#2681's 40 live source files to **57** because new `ops/` bundles and tests landed since
+2026-09-25. Total population **1,890 files, 82 source or config hits, all adjudicated**
+(`model_routing_endpoint_grep.py --check` exits 0). Result: **one new surface (row 24) and no
+live surface that bypasses LiteLLM.** The `agent/` tree holds the live `litellm_config.yaml`
+(the gateway roster every "via LiteLLM" row lands on) and a set of **dormant** legacy
+dispatchers that call DeepSeek, Groq or Gemini directly — see the note after row 24. The 147
+"source or config" figure wq#2681 quoted for `minerva`/`agent`/`logs` is not reproducible with
+the walker's buckets, which separate sqlite stores (`data`) and snapshots from source; the
+six-root source count here is 25.
 
 Nor does either pass cover any integration that calls a model provider without a manifest
 or a matching endpoint string landing in a searched repo at all (e.g. a provider reached
@@ -151,11 +158,31 @@ DeepSeek call as the worker on the same key — folded into row 20's note, not s
 | 21 | `minerva-factory` (`minerva/minerva_factory.py`, symlinked `bin/minerva-factory`) — plans and `--apply`s minerva proposals | timer, 6×/day (`minerva-factory.timer`, `03,07,11,17,19,23:35 UTC`), `run 15 --apply` | `deepseek-v4-pro`; retries a give-up on `cerebras-oss-120b` (`minerva_factory.py:43,46,628-644`) | LiteLLM `:4000/v1/chat/completions` | no | yes — already a cheap rung | B |
 | 22 | research-council (`tools/council/council.py`, `bin/research-council`, wq#2628) — fans one prompt to N seats, then a chairman synthesizes | on demand (CLI, no timer/cron) | seats `claude-max-opus`, `gemini-flash`, `deepseek-v4-pro`, `kimi-k3` (off by default); chairman = first seat | LiteLLM (`COUNCIL_LITELLM_URL`, default `127.0.0.1:4000`) | no — the opus seat goes through `claude-shim`, which is not running (see §1 header), so that seat times out today | note only — a council is deliberately redundant | B |
 | 23 | worker-quality eval (`harness/evals/worker-quality/`, wq#1300) — promptfoo LLM-as-judge over the done-claim critic | on demand (`run_eval.sh`; no timer) | `WQ1300_JUDGE_MODEL`, default alias `claude-sonnet-5` | LiteLLM loopback, OpenAI-compatible (`promptfooconfig.yaml:14-20`) | no | yes | B |
+| 24 | JudgeArena judge bench (`minerva/judgearena_bench.py`, `lumen-judgearena-bench.service`/`.timer`, wq#2741) — pairwise LLM-as-judge battles scored against human labels | **timer installed but DISABLED** (Phase 2, 2026-10-08); would run per its OnCalendar if re-enabled | judge models passed per run (langchain `ChatOpenAI`, `temperature=0`) | LiteLLM loopback, `LITELLM_BASE_URL` default `http://127.0.0.1:4000/v1` (`judgearena_bench.py:28`) | no | yes | C |
 
 **Note on row 20.** `mailbot/evals/lib/score.mjs`, `test_persona.mjs` and `test_dodge.mjs`
 issue the same `fetch("https://api.deepseek.com/chat/completions")` on the same worker key
 when run by hand. They are dev-run, not per-email, so they do not get their own row — but
 they are real spend and they were in wq#2664's grep population unnamed.
+
+**Note on row 24 and the `agent/` tree (wq#2741).** Row 24 is the only surface the six
+new roots add, and it is not live today. Everything else under `agent/` that names a
+provider is **dormant**, verified 2026-10-14 against live state rather than assumed: no
+installed system or user unit, timer, root/user crontab or `/etc/cron.*` entry execs it, no process or container is running, and
+`lumen-agent.service` is masked. They are `lumen_agent.py` (direct Gemini), `lumen_agent_v3.py`,
+`lumen_research_agent.py`, `lumen_deep_research_orchestrator.py`, `llm_project_scout.py`
+(direct Groq + Gemini), `project_engine.py` (direct Groq), `backfill_content.py` and
+`attic/lumen_agent_v2.py` (direct `api.deepseek.com`), and `crew.py` (LiteLLM aliases). If any
+of them (all but `crew.py`) were re-enabled they would be **un-gated direct-provider surfaces outside LiteLLM**, which is why
+each has a verdict in `ADJUDICATED` rather than being filtered out. **Stale claim found:**
+`minerva/context/fleet_tools.yaml:55-58` says `lumen_deep_research_orchestrator` "runs via
+service", but no installed unit execs it and the newest file in `scratch/deep_research_output/`
+is dated 2026-07-13 — the fleet-tools entry should be corrected or the script retired.
+`openai/<model>` strings in `agent/litellm_config.yaml` are LiteLLM's provider prefix for
+OpenAI-compatible local endpoints (Ollama on isis, hathor, nephthys, khepri, ptah, sekhmet) and
+`api.z.ai`, not `api.openai.com`; the string `api.openai.com` appears in no searched source file,
+and `api.anthropic.com` appears only in the claude CLI path (surface 1), the quota probe
+`foreman_usaged.py` (a GET, not a completion) and research proxies.
 
 **Scope-2 verdict (always-on services): PASS, re-checked by wq#2681, row 9 folded in by
 wq#2742.** Surfaces 6–9, 12–17 and the newly-added 21 are the always-on set. None
