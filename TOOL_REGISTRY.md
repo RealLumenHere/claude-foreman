@@ -140,3 +140,81 @@ recorded from. Leave `limpet/examples/pretender.toml` at community tier, version
 unpromoted. If automated peripheral modeling for Qiling/Unicorn re-hosting is still wanted,
 Conware or an NLP/hardware-manual-driven approach (SEmu) is the better next eval — not a
 Pretender integration.
+
+## Fuzzware — automated MMIO modeling for firmware fuzzing (wq#3875, NO-GO for the proposed pipeline)
+
+**Status (2026-10-14): NOT adopted. The ticket's proposed pipeline (unblob extract →
+Fuzzware MMIO model → Qiling emulation with auto-generated handlers) doesn't hold together
+because the two tools operate on different artifact classes — see "Scope mismatch" below.
+`re-tools-analysis.md`, which the ticket cites as a ref, was not found anywhere in this
+worktree or the other `--add-dir` roots (kb, foreman, bin, sentinel, mailbot, pokemon,
+agents/work-queue) as of this evaluation; this entry is sourced directly from the project's
+own repos instead.**
+
+What it is: Fuzzware (Scharnowski, Bars, Schloegel, Gustafson, Muench, Vigna, et al.,
+"Fuzzware: Using Precise MMIO Modeling for Effective Firmware Fuzzing," USENIX Security
+2022, RUB Chair for Systems Security — https://www.usenix.org/conference/usenixsecurity22/presentation/scharnowski,
+repo https://github.com/fuzzware-fuzzer/fuzzware). Unlike Pretender, it needs no physical
+device: it statically configures the memory ranges of an **ARM Cortex-M3/M4** firmware
+image, then emulates and fuzzes it directly, using symbolic execution (angr) to infer which
+MMIO registers actually influence control flow and modeling the rest automatically instead
+of hardware-in-the-loop recording.
+
+- **Install complexity**: Docker is the documented path (`./build_docker.sh` /
+  `./run_docker.sh <dir> fuzzware pipeline ...`, per the repo README, fetched 2026-10-14 via
+  `fleet-search read https://github.com/fuzzware-fuzzer/fuzzware`). Native install
+  (`./install_local.sh`) sets up two separate Python virtualenvs because "our MMIO modeling
+  component [is based] on angr version 8.19.10.30... this version of angr only supports
+  Python versions lower than 3.10" — the install script auto-detects this and needs
+  `MODELING_VENV_PYTHON3` pointed at a pre-3.10 interpreter. Workable (the project scripted
+  around its own version pin, unlike Pretender's abandoned Ubuntu-16.04/avatar2-1.3.0
+  chain), but it's a 2022-era angr pin with no stated upgrade — the README's own "future
+  work" section lists "Upgrade angr version... to support Python in version >=3.10" as
+  still open.
+- **Python API**: there isn't a clean importable one. Fuzzware ships as a CLI
+  (`fuzzware -h`, `fuzzware <util> -h`) orchestrating three components — `fuzzware-emulator`
+  (the Unicorn-based run engine), `modeling` (angr-based MMIO inference), and
+  `fuzzware-pipeline` (glues modeling + emulation + AFL/AFL++ together). Driving it
+  programmatically means shelling out to the CLI or importing internal pipeline modules
+  directly, not a stable public API surface.
+- **Output format**: the inferred model is a YAML `config.yml` under `mmio_models:`, keyed
+  per access **site** — `pc_<PC>_mmio_<addr>` — not per register. Each entry names a model
+  type (`constant`: serve a fixed value; `bitextract`: narrow/shift a fuzzer-supplied byte
+  into a bitfield; `passthrough`: treat it as ordinary backed memory; confirmed via
+  `fleet-search read` on `fuzzware-emulator/README_config.yml`) plus the `addr`/`pc` pair and
+  model-specific fields. This is a precise, machine-readable format, but the PC-qualification
+  matters for the next point.
+- **Qiling/Unicorn integration**: Fuzzware's own README states it "works by plugging an
+  instruction set emulator (currently: Unicorn Engine) to a fuzzer (currently: afl/AFL++)" —
+  it targets bare Unicorn directly, not Qiling, and ships no Qiling adapter. Porting a
+  `config.yml` model to Qiling would mean writing a translation layer: Qiling's
+  `ql.hook_mem_read`/`hook_mem_write` key on address range only, but Fuzzware's models are
+  keyed on (address, PC) pairs, so each hook would additionally need to check the current PC
+  against the model's site before applying `constant`/`bitextract`/`passthrough` behavior.
+  More tractable than Pretender's case (a structured YAML table beats re-deriving avatar2
+  device models by hand) but still a bridging layer that doesn't exist today, not a drop-in.
+- **Resource requirements**: no JTAG/SWD rig or physical board — this is a genuine advantage
+  over Pretender and over hardware-in-the-loop MMIO recording generally. Cost shifts instead
+  to compute: angr symbolic execution during modeling and a sustained AFL/AFL++ fuzzing
+  campaign (coverage fuzzing benefits from long wall-clock runs and multiple parallel
+  instances), both CPU-bound, no GPU needed.
+- **Scope mismatch with the proposed pipeline**: Fuzzware's own opening description targets
+  "an ARM Cortex-M3/M4 firmware image" run "without full device emulation" — i.e. a flat,
+  bare-metal MCU firmware blob with no OS and no filesystem. The README's "future work"
+  section confirms this isn't incidental: "Currently, the Fuzzware code is rather tightly
+  coupled with ARM/Cortex-M." `unblob` (this repo's `firmware-extraction` skill), by
+  contrast, extracts filesystems and nested images out of Linux-class embedded firmware
+  (routers, IoT gateways — typically MIPS/ARM/etc. SoCs running an OS with an MMU). A
+  bare Cortex-M MCU blob has no embedded filesystem for unblob to carve out in the first
+  place, so the ticket's first pipeline stage doesn't feed the second: `unblob extract` and
+  `Fuzzware MMIO model` are solving for two different artifact classes, not two stages of
+  one pipeline.
+
+**Verdict**: no-go for the pipeline as scoped. Fuzzware is a reasonable, better-engineered
+answer than Pretender to one specific question — bare-metal Cortex-M MCU firmware fuzzing
+without a hardware rig — but that question isn't the one `unblob`-extracted, Linux-class SoC
+firmware poses, and nothing in LIMPET's current firmware intake produces the bare Cortex-M
+blobs Fuzzware is built for. If a bare-metal MCU target shows up (no OS, single flat image,
+ARM Cortex-M3/M4), Fuzzware is worth a follow-up eval on its own merits — add it as a
+community-tier `limpet/examples/fuzzware.toml` catalog entry at that point, not now, since
+there is no current intake path that would exercise it.
