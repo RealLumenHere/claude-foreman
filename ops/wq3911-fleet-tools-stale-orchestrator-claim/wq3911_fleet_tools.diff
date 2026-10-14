@@ -1,0 +1,23 @@
+--- a/context/fleet_tools.yaml (before)
++++ b/context/fleet_tools.yaml (after)
+@@ research_fleet group, research-prompt-queue + lumen_deep_research_orchestrator entries (lines 47-58) @@
+       - name: research-prompt-queue
+         path: /home/lumen/scratch/research_prompts
+-        use: "Drop a self-contained .txt prompt here (name the deliverable + output path inside it). Fleet researchers drain it continuously; output lands in scratch/deep_research_output/ and scratch/research/."
+-        invoke: "write /home/lumen/scratch/research_prompts/<name>.txt  →  outputs appear in /home/lumen/scratch/deep_research_output/"
++        use: "Drop a self-contained .txt prompt here (name the deliverable + output path inside it); output is SUPPOSED to land in scratch/deep_research_output/ and scratch/research/. STALE as of wq#2741/wq#3911 (verified 2026-10-14): the orchestrator that drains this queue is dormant, not running via any service — the queue holds dozens of undrained prompts and the newest deep_research_output/ file is dated 2026-07-13. Do not rely on this path draining until the orchestrator below is revived."
++        invoke: "write /home/lumen/scratch/research_prompts/<name>.txt  →  NOT currently drained; see 'use'"
+       - name: github_scout
+         path: /home/lumen/agent/github_scout.py
+         use: "Continuous GitHub harvester. Searches SEARCH_TOPICS (edit the list in-file to add a topic), profiles repos, writes gap prompts into the research queue. Runs on a timer; edit topics to steer it."
+         invoke: "edit SEARCH_TOPICS in the file to add a topic (persistent). One-off: it auto-runs its cycle."
+       - name: lumen_deep_research_orchestrator
+         path: /home/lumen/agent/lumen_deep_research_orchestrator.py
+-        use: "Processes queued research prompts with web-search-MCP + synthesis, no cutoffs. The heavy research engine behind the queue."
+-        invoke: "runs via service; feed it through the research-prompt-queue above"
++        use: "Processes queued research prompts with web-search-MCP + synthesis, no cutoffs. DORMANT since 2026-07 (wq#2741/wq#3911, verified 2026-10-14): no installed unit/timer/cron execs it and no process is running. Reviving it would add a direct-provider (Groq/Gemini) surface outside LiteLLM, so it is being left dormant rather than restarted — do not point work at this queue expecting it to drain."
++        invoke: "DORMANT — does NOT run via service (prior claim was stale). Manual one-off only, if ever needed: python3 /home/lumen/agent/lumen_deep_research_orchestrator.py"
+       - name: fleet-search
+         path: /home/lumen/bin/fleet-search
+         use: "Fleet-wide search CLI."
+         invoke: "fleet-search '<query>'"
