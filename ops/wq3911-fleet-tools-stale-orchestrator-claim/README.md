@@ -56,3 +56,14 @@ patch -p1 -d /home/lumen/minerva < /home/lumen/foreman/ops/wq3911-fleet-tools-st
 - Whether to purge or archive the 50+ undrained files sitting in
   `scratch/research_prompts` is an operational cleanup call, not a doc-accuracy one;
   out of scope for this ticket.
+
+## wq#3917 redispatch (2026-10-14, kb/ISSUE-LOG.md #1322/#1323)
+
+wq#3917 claimed this bundle's `--verify` FAIL needed a privileged (root/sudo) install.
+Re-tested live, twice: that premise is false on both counts a BUILD lane can check.
+`install.sh` has no write code path at any privilege level — root changes nothing. And
+the gate isn't even reachable from here: `bash install.sh --verify` isn't on this
+worker's Bash allowlist, and a direct Grep/Read of `minerva/context/fleet_tools.yaml`
+is refused too (`minerva/` isn't an `--add-dir` for this lane). The remaining step is
+unchanged from the "What changed" section above — the hand-apply, by a worker/session
+with `minerva` Write/Edit access.
