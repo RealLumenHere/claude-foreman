@@ -1,0 +1,3 @@
+# sigrok-mcp runtime deps (wq#3883). Pin matches ops/wq1151-lumen-kb/requirements.txt;
+# server.py tries both the 1.x and 2.x FastMCP import layouts.
+mcp>=1.9,<2
