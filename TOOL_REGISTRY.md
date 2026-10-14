@@ -91,9 +91,11 @@ See `kb/ISSUE-LOG.md` row 1277 for the logged finding.
 
 ## Pretender — automated peripheral modeling for firmware re-hosting (wq#3877, NO-GO)
 
-**Status (2026-10-14): NOT adopted. Stays at the "community" catalog tier
-(`limpet/examples/pretender.toml`, wq#3850, version "0", unpinned) — this is the go/no-go
-that toml's own header says must happen before any promotion past that tier.**
+**Status (2026-10-14): NOT adopted. Pretender's catalog entry is tracked as a JSON row in
+`tool-catalog.json` per wq#3850 — there is no `limpet/examples/pretender.toml` and no
+promotion-tier/gating mechanism currently exists in the repo (`limpet/examples/` has only
+generic per-tool templates for ghidra, ghidra-mcp, and hackrf). This NO-GO verdict stands on
+its own merits below, independent of any tiering scheme.**
 
 What it is: PRETENDER, from Gustafson et al., "Toward the Analysis of Embedded Firmware
 through Automated Re-Hosting" (RAID 2019, UCSB seclab — abstract at
@@ -136,8 +138,9 @@ environment so it can run without the physical device.
 **Verdict**: no-go for fleet adoption. Physical-hardware recording rig the fleet doesn't
 have, a frozen 2019-era dependency chain with no path to Qiling/Unicorn, and a core modeling
 approach its own successor paper shows doesn't generalize past the exact trace it was
-recorded from. Leave `limpet/examples/pretender.toml` at community tier, version "0",
-unpromoted. If automated peripheral modeling for Qiling/Unicorn re-hosting is still wanted,
+recorded from. Pretender's catalog entry remains the JSON row in `tool-catalog.json` per
+wq#3850, with no promotion or further action taken. If automated peripheral modeling for
+Qiling/Unicorn re-hosting is still wanted,
 Conware or an NLP/hardware-manual-driven approach (SEmu) is the better next eval — not a
 Pretender integration.
 
