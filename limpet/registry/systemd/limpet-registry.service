@@ -1,0 +1,20 @@
+[Unit]
+Description=Rebuild the unified LIMPET tool manifest from tools.d (wq#3807)
+Documentation=file:///home/lumen/foreman/limpet/registry/README.md
+
+[Service]
+Type=oneshot
+# Triggered by limpet-registry.path on any change under the drop-in dir.
+ExecStart=/usr/bin/python3 -m limpet.registry.cli build \
+    --tools-dir /etc/limpet/tools.d --manifest /etc/limpet/tools.json
+WorkingDirectory=/home/lumen/foreman
+Nice=10
+IOSchedulingClass=idle
+# The manifest is world-readable (agents read it); the drop-in dir is not writable here.
+ProtectSystem=strict
+ReadWritePaths=/etc/limpet
+ProtectHome=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,41 @@
+{
+  "tools": [
+    {
+      "name": "unblob",
+      "binary": "/usr/local/bin/unblob",
+      "ver": "24.3.14",
+      "desc": "Recursive firmware extraction with format identification.",
+      "group": "firmware",
+      "caps": ["firmware-extraction", "format-identification", "recursive-unpack"],
+      "inputs": ["firmware-blob", "img"],
+      "outputs": ["extracted-filesystem", "json-report"],
+      "arches": ["any"],
+      "healthcheck": "/usr/local/bin/unblob --help"
+    },
+    {
+      "name": "jadx",
+      "path": "/opt/jadx/bin/jadx",
+      "version": "1.5.0",
+      "description": "Dex to Java decompiler for Android APKs.",
+      "category": "android",
+      "capabilities": ["decompilation", "apk-analysis"],
+      "input_formats": ["apk", "dex", "jar"],
+      "output_formats": ["java-source"],
+      "architectures": ["any"]
+    },
+    {
+      "name": "rea-mcp",
+      "path": "/opt/rea/bin/rea-serve",
+      "version": "0.4.0",
+      "description": "Reverse-Engineer-Anything MCP bridge (held: see TOOL_REGISTRY.md).",
+      "category": "mcp",
+      "capabilities": ["disassembly", "apk-analysis", "web-capture"],
+      "mcp": "http://127.0.0.1:8737/mcp",
+      "health": "/opt/rea/bin/rea-serve --version"
+    },
+    {
+      "comment": "invalid: no path and no name alias resolves to a runnable tool",
+      "desc": "a malformed catalog row the importer must skip, not guess"
+    }
+  ]
+}

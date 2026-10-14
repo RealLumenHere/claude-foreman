@@ -1,0 +1,33 @@
+# LIMPET tool manifest (schema v1).
+name: ghidra
+path: /opt/ghidra/ghidraRun
+version: "11.1.2"
+description: NSA software reverse-engineering suite — disassembly and decompilation.
+category: disassembler
+capabilities:
+  - disassembly
+  - decompilation
+  - function-discovery
+  - type-recovery
+  - headless-analysis
+input_formats:
+  - elf
+  - pe
+  - macho
+  - raw-binary
+output_formats:
+  - decompiled-c
+  - xml-program
+  - json-report
+architectures:
+  - arm
+  - aarch64
+  - mips
+  - x86
+  - x86-64
+  - riscv
+  - powerpc
+hardware_requirements:
+  min_ram_gb: 8
+  jvm: true
+health_check: /opt/ghidra/support/analyzeHeadless -version

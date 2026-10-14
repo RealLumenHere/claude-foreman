@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch LIMPET tool drop-in dir and rebuild the unified manifest (wq#3807)
+Documentation=file:///home/lumen/foreman/limpet/registry/README.md
+
+[Path]
+# Fires limpet-registry.service whenever a tool is added, removed, or edited
+# under the drop-in directory. Event-driven; no polling.
+PathChanged=/etc/limpet/tools.d
+Unit=limpet-registry.service
+
+[Install]
+WantedBy=multi-user.target

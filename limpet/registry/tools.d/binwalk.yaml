@@ -1,0 +1,24 @@
+# LIMPET tool manifest (schema v1). One file per tool; drop here and the
+# registry rebuilds tools.json. Fields: name/path/capabilities/health_check are
+# required, the rest are optional claims the agent uses to route work.
+name: binwalk
+path: /usr/bin/binwalk
+version: "2.3.4"
+description: Firmware image analysis and extraction (signature scanning, entropy, carving).
+category: firmware
+capabilities:
+  - firmware-extraction
+  - signature-scan
+  - entropy-analysis
+  - filesystem-carving
+input_formats:
+  - bin
+  - img
+  - firmware-blob
+output_formats:
+  - extracted-filesystem
+  - json-report
+architectures:
+  - any
+hardware_requirements: {}
+health_check: /usr/bin/binwalk --help

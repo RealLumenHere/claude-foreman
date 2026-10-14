@@ -1,0 +1,29 @@
+# LIMPET tool manifest (schema v1).
+name: radare2
+path: /usr/bin/r2
+version: "5.9.0"
+description: Scriptable command-line reverse-engineering framework (disasm, debug, patch).
+category: disassembler
+capabilities:
+  - disassembly
+  - debugging
+  - binary-patching
+  - signature-scan
+  - function-discovery
+input_formats:
+  - elf
+  - pe
+  - macho
+  - raw-binary
+output_formats:
+  - disassembly
+  - json-report
+architectures:
+  - arm
+  - aarch64
+  - mips
+  - x86
+  - x86-64
+  - riscv
+hardware_requirements: {}
+health_check: /usr/bin/r2 -v
