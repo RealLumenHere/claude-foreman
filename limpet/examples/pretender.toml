@@ -1,0 +1,24 @@
+# Catalog-sourced community LIMPET plugin (wq#3884, follow-up to wq#3850).
+# NO-GO for fleet adoption -- see TOOL_REGISTRY.md "Pretender" (wq#3877,
+# confirmed by wq#3889/wq#3895). Catalogued for completeness only; this
+# manifest is not a recommendation to install or enable it. No [health]
+# block -- this tool needs a physical JTAG/SWD rig the fleet doesn't have,
+# so there is no headless health check to document.
+
+[plugin]
+name = "pretender"
+version = "0"
+kind = "tool"
+summary = "Records MMIO peripheral traffic from real hardware and replays inferred per-register models for firmware re-hosting"
+maintainer = "community"
+license = "unverified"
+
+[source]
+git = "https://github.com/ucsb-seclab/pretender"
+note = "UCSB seclab's own repo (RAID 2019, Gustafson et al.), per TOOL_REGISTRY.md. tool-catalog.json's existing url field (github.com/mit-ll/pretender) was not independently re-verified or changed by this ticket -- out of wq#3884's 7-tool scope; flagging the discrepancy for a follow-up, not fixing it here. Pinned to avatar2 1.3.0 / Ubuntu 16.04 as of 2019-09-17, no evidence of maintenance since; version left unpinned (\"0\")."
+
+[adoption]
+status = "no-go"
+ticket = "wq#3877"
+reference = "TOOL_REGISTRY.md"
+reason = "Physical hardware-in-the-loop recording rig the fleet doesn't have; frozen 2019-era toolchain; inferred models don't generalize past the recorded trace (per Conware's own findings) -- disqualifying for fuzzing/symbolic-execution re-hosting."

@@ -1,0 +1,15 @@
+# Catalog-sourced community LIMPET plugin (wq#3884, follow-up to wq#3850).
+# Not installed on any fleet host; no [health] block -- fabricating a health
+# command for a tool nobody has run here would be guessing, not verifying.
+
+[plugin]
+name = "netzob"
+version = "2.0.0"
+kind = "tool"
+summary = "Protocol reverse engineering, modeling and fuzzing: infers message format and state machine from passive/active traffic captures"
+maintainer = "community"
+license = "GPL-3.0"
+
+[source]
+git = "https://github.com/netzob/netzob"
+note = "Latest tagged release v2.0.0 (confirmed via the repo's releases page, 2026-10-14). License confirmed GPLv3 via netzob.org and the repo's own README (\"This software is provided under the GPLv3 License\"). Native-extension Python project; README's own setup instructions start with `apt-get install -y python3 python3-dev python3-setuptools virtualenv build-essential ...` before the Python package install."

@@ -1,0 +1,24 @@
+# Catalog-sourced community LIMPET plugin (wq#3884, follow-up to wq#3850).
+# NO-GO for the xfce4-terminal UX it was evaluated for -- see
+# TOOL_REGISTRY.md "Sootty" (wq#3878). Catalogued for completeness only;
+# this manifest is not a recommendation to install or enable it. No
+# [health] block -- not installed on Lumen (`which sootty viu rsvg-convert`
+# found nothing per TOOL_REGISTRY.md), so there is nothing to probe.
+
+[plugin]
+name = "sootty"
+version = "0"
+kind = "tool"
+summary = "Terminal VCD/EVCD waveform viewer: renders to SVG, then to terminal image via rsvg-convert + viu"
+maintainer = "community"
+license = "unverified"
+
+[source]
+git = "https://github.com/Ben1152000/sootty"
+note = "No tagged GitHub release found (checked 2026-10-14) -- version left unpinned (\"0\"); license not independently re-verified this ticket (out of wq#3884's 7-tool scope). Distributed via `pip install sootty`; needs external `rsvg-convert` and `viu` binaries for terminal rendering, per TOOL_REGISTRY.md."
+
+[adoption]
+status = "no-go"
+ticket = "wq#3878"
+reference = "TOOL_REGISTRY.md"
+reason = "xfce4-terminal (stock VTE) has no Kitty/iTerm2/Sixel support, so every render falls back to viu's lowest-fidelity Unicode block-art approximation; sigrok pairing is a plain `-O vcd` pipe, not a built-in integration."

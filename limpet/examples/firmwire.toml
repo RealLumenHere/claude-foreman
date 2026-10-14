@@ -1,0 +1,15 @@
+# Catalog-sourced community LIMPET plugin (wq#3884, follow-up to wq#3850).
+# Not installed on any fleet host; no [health] block -- fabricating a health
+# command for a tool nobody has run here would be guessing, not verifying.
+
+[plugin]
+name = "firmwire"
+version = "1.1.0"
+kind = "tool"
+summary = "Full-system cellular baseband firmware emulation for Samsung Shannon and MediaTek"
+maintainer = "community"
+license = "BSD-3-Clause"
+
+[source]
+git = "https://github.com/firmwire/firmwire"
+note = "NDSS'22 academic research platform (Hernandez et al., \"FirmWire: Transparent Dynamic Analysis for Cellular Baseband Firmware\"). License and version (latest release v1.1.0) confirmed live 2026-10-14 via the repo's own README and releases page. Install/build is a multi-component academic setup -- see the project's own documentation, not reproduced here to avoid guessing at steps not independently run."

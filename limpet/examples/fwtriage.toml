@@ -1,0 +1,18 @@
+# Catalog-sourced community LIMPET plugin (wq#3884, follow-up to wq#3850).
+# Not installed on any fleet host; no [health] block -- fabricating a health
+# command for a tool nobody has run here would be guessing, not verifying.
+# wq#3850 recorded this catalog entry's license as Apache-2.0; the real
+# upstream LICENSE file is MIT (confirmed live 2026-10-14) -- corrected here
+# and in tool-catalog.json.
+
+[plugin]
+name = "fwtriage"
+version = "0"
+kind = "tool"
+summary = "Pure-Python evidence-first firmware triage: entropy/XOR analysis to classify compressed vs encrypted blobs"
+maintainer = "community"
+license = "MIT"
+
+[source]
+git = "https://github.com/taffy210/fw-triage"
+note = "Upstream repo name is `fw-triage` (hyphenated); catalog/plugin name kept as `fwtriage` to match tool-catalog.json. Companion code to a firmware-teardown writeup, not a tagged release -- version left unpinned (\"0\"). Pure stdlib Python 3, no pip install, no binwalk dependency (confirmed from the repo's own README, fetched 2026-10-14)."

@@ -1,0 +1,15 @@
+# Catalog-sourced community LIMPET plugin (wq#3884, follow-up to wq#3850).
+# Not installed on any fleet host; no [health] block -- fabricating a health
+# command for a tool nobody has run here would be guessing, not verifying.
+
+[plugin]
+name = "llm4decompile"
+version = "0"
+kind = "tool"
+summary = "Open-source LLM family (1.3B-22B) purpose-built for decompilation; currently x86_64 Linux GCC binaries only"
+maintainer = "community"
+license = "MIT + DeepSeek License"
+
+[source]
+git = "https://github.com/albertan017/LLM4Decompile"
+note = "No tagged GitHub release found (checked 2026-10-14) -- version left unpinned (\"0\"); distributed as model weights on Hugging Face (`LLM4Binary/llm4decompile-*`), not a versioned CLI release. Repo's own README states it is licensed under the MIT and DeepSeek License (dual, because base models derive from DeepSeek-Coder)."

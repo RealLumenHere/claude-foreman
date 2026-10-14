@@ -1,0 +1,27 @@
+# Catalog-sourced community LIMPET plugin (wq#3884, follow-up to wq#3850).
+# NO-GO for fleet adoption as scoped -- see TOOL_REGISTRY.md "Fuzzware"
+# (wq#3875). Catalogued for completeness only; this manifest is not a
+# recommendation to install or enable it.
+
+[plugin]
+name = "fuzzware"
+version = "0"
+kind = "tool"
+summary = "Automated MMIO modeling (angr-based) for ARM Cortex-M3/M4 firmware fuzzing, no hardware-in-the-loop required"
+maintainer = "community"
+license = "unverified"
+
+[source]
+git = "https://github.com/fuzzware-fuzzer/fuzzware"
+note = "No tagged GitHub release found (checked 2026-10-14) -- version left unpinned (\"0\"); license not independently re-verified this ticket (out of wq#3884's 7-tool scope). CLI entrypoints per TOOL_REGISTRY.md: `fuzzware -h`, `fuzzware <util> -h`. Docker is the documented install path (`./build_docker.sh`); native install pins angr to a pre-3.10 Python venv."
+
+[health]
+command = "fuzzware -h"
+interval_seconds = 3600
+timeout_seconds = 10
+
+[adoption]
+status = "no-go"
+ticket = "wq#3875"
+reference = "TOOL_REGISTRY.md"
+reason = "Scope mismatch: targets bare-metal Cortex-M3/M4 blobs, not the Linux-class SoC firmware this fleet's unblob-based intake produces."
