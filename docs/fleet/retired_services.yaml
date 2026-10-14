@@ -336,3 +336,36 @@
         mcpw-stateful-cutover.sh in lumen-bin (PR #251) exit 0 when
         `systemctl is-enabled desktop-commander-mcp` reports masked, so no
         script revives the unit. mcp-pressure-guard.timer stays inactive.
+
+- name: n8n
+  units: [n8n.service, n8n-watcher.service]
+  load_state: loaded   # confirmed via `systemctl show -p LoadState -p ActiveState
+                        # -p UnitFileState n8n.service n8n-watcher.service` 2026-10-14 —
+                        # both LoadState=loaded, ActiveState=inactive,
+                        # UnitFileState=disabled; unit files not removed
+  retired_on: "2026-10-14"
+  reason: >
+    n8n (workflow automation, `/home/lumen/.npm-global/bin/n8n start`,
+    installed version 2.32.7) was pulled into the fleet for evaluation
+    (wq#1302 — verdict SKIP, 0/109 fleet timers movable as a pure n8n
+    workflow without granting n8n a new capability: shell, node-locality, or
+    stored SSH credentials) and left running with no published workflows
+    ever created on it. A vulnerability sweep found 7 CRITICAL CVEs against
+    the installed version with no fix available short of a major-version
+    upgrade — paying that upgrade cost for a service with zero workflows and
+    an already-SKIP verdict is not worth it, so both units were stopped and
+    disabled in place (not removed) rather than upgraded.
+  ticket: wq#3839 (retire), wq#1302 (eval, SKIP verdict)
+  data:
+    disposition: >
+      no workflow data existed to migrate or preserve (0 published
+      workflows at time of retirement, per ticket). `/home/lumen/.n8n` left
+      on disk, untouched.
+  guards:
+    - n8n-watcher.service: >
+        `Wants=n8n.service After=n8n.service` — n8n-watcher only ever polled
+        n8n's own event log for workflow failures (and posted them to the
+        wrong ntfy topic, `lumen_alerts` not `lumen-alerts`, per
+        FLEET_SERVICE_ATLAS.md §7 F-6), so disabling it alongside n8n drops
+        no live alerting path; the topic-mismatch bug was already silencing
+        it.
