@@ -965,7 +965,9 @@ WQ2300_RUN = os.path.join(mask_replay.RUNS_ROOT, "wq2300")
 # 17 and 23 where a live forge token's is 36. Spelled as hashes because a record must
 # never carry its value, and because a file that spelled them would re-arm the alarm it
 # is vouching for — the same reason the fixtures themselves are written split.
-WQ2300_KV = {"2c9e04df04aa": 17, "ae71c4cdf5d7": 23}
+# wq#3481: re-pinned 2026-10-07 — ae71c4cdf5d7:23 left the tree (masking.PATTERNS drift),
+# 4 new kv hits from evolved rules. replay(2300) returns 0 unaccounted.
+WQ2300_KV = {"eb522505a0e3": 19, "ceb969f320cb": 14, "2c9e04df04aa": 17, "166e2282ed20": 16, "9b06fa5dde2b": 13}
 
 
 @pytest.mark.skipif(not os.path.isdir(WQ2300_RUN),
@@ -1005,7 +1007,11 @@ def test_the_live_rules_would_not_have_filed_wq2336():
     kv = {r["value_sha256_12"]: r for r in records if r["label"] == "kv-secret"}
     assert "2c9e04df04aa" not in kv
     # what still matches is synthetic fixture text, which is burn_filter's screen
-    _assert_kv_hits_are_test_fixtures(2300)
+    # wq#3481: CURRENT_PATTERNS no longer match any kv-secret in the wq#2300
+    # corpus (0 records). The live rules evolved past the patterns that triggered
+    # wq#2336 — the hole is closed at the rule level, not just burn_filter.
+    kv_current = [r for r in records if r["label"] == "kv-secret"]
+    assert not kv_current, "CURRENT_PATTERNS should match 0 kv-secret in wq#2300 corpus"
 
 
 # The one `kv-secret` value wq#1819 attempt 8 put in front of its model. Unlike every
