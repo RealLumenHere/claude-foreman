@@ -1,0 +1,11 @@
+# Ingress addition for p1-backup's OWN cloudflared config.yml. Same rules as
+# cloudflared-ingress-p1-primary.yml -- fresh tunnel created ON p1-backup,
+# new hostname, mcp-backend.lumennode.uk untouched until cutover.
+ingress:
+  - hostname: mcp-p1-backup.lumennode.uk
+    service: http://localhost:3100
+    originRequest:
+      connectTimeout: 30s
+      tcpKeepAlive: 30s
+      keepAliveConnections: 100
+  - service: http_status:404

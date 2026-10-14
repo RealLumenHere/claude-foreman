@@ -1,0 +1,38 @@
+# Install as: /etc/systemd/system/dc-gateway.service  (P1 nodes: p1-primary AND p1-backup)
+#
+# wq#2744 P1 Commander. Content-matched against Lumen's LIVE effective unit
+# (systemctl cat desktop-commander-mcp on Lumen, 2026-09-26 -- merges Lumen's
+# session-timeout.conf drop-in, the current production ExecStart: no
+# --sessionTimeout flag, stateless) with Lumen-only paths swapped for the P1
+# node's own user/home. NOT carried over from Lumen:
+#   - path.conf (wq#2565 git-credential-token-engine fix -- Lumen-only)
+#   - Lumen's 8G/12G MemoryHigh/Max, which is T5810-64GB-specific tuning
+#     history (wq#380). P1 hardware RAM is UNVERIFIED as of this writing
+#     (Firefly Station P1 Pro / RK3399 ships in several RAM configs) -- the
+#     MemoryHigh/Max below are conservative placeholders sized for a 4GB
+#     board. BEFORE first start: run `free -h`, then re-set MemoryHigh to
+#     ~50% of total RAM and MemoryMax to ~70% via dc-gateway-hardening.conf,
+#     not by editing this file.
+# __NODE_USER__ is replaced by install.sh with the node's actual hostname
+# (fleet convention: SSH user == hostname lowercase, e.g. p1-primary).
+
+[Unit]
+Description=Desktop Commander MCP via Supergateway (P1 Commander node)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=__NODE_USER__
+Environment=PATH=/home/__NODE_USER__/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStartPre=-/usr/bin/python3 /home/__NODE_USER__/bin/dc-enforce-config.py
+ExecStart=/home/__NODE_USER__/.npm-global/bin/supergateway --stdio "/home/__NODE_USER__/.npm-global/bin/desktop-commander" --port 3100 --outputTransport streamableHttp --streamableHttpPath /mcp --cors --healthEndpoint /health
+OOMPolicy=continue
+MemoryHigh=2G
+MemoryMax=3G
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

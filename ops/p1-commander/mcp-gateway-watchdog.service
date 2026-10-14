@@ -1,0 +1,26 @@
+# Install as: /etc/systemd/system/mcp-gateway-watchdog.service  (P1 nodes)
+# Runs 4 probes per tick (4th = dcredact, wq#3804: hourly rate-limited inside the script, alert-only), per wq#2606 + wq#2745:
+#   1. mcp        -- local dc-gateway unit, full JSON-RPC `initialize` on :3100
+#   2. cloudflared -- this node's own tunnel /ready on :20241
+#   3. mcpw        -- the SAME initialize handshake, but through the public
+#      mcpw.lumennode.uk endpoint (post-cutover: mcp-p1-primary/-backup
+#      hostnames), using a pre-provisioned bearer token. This is the "health
+#      = full MCP initialize, not process-up" probe the P1 cutover requires
+#      (wq#2744) and the class fix for the 2026-09-25 outage (wq#2745): that
+#      outage went undetected because the old check only looked at local
+#      process liveness while the client-facing mcpw path was actually down.
+#      mcpw mode NEVER restarts anything -- alert only (control-plane rule 3:
+#      nothing touches mcpw unattended). Token file must be created once, by
+#      hand, per install.sh's printed instructions -- it is NOT provisioned
+#      by this script or by install.sh, since minting it requires a live,
+#      Frank-driven OAuth dance through mcpw's CF-Access-gated /authorize.
+[Unit]
+Description=P1 Commander gateway watchdog (liveness probe, not PSI) -- wq#2606/2744/2745
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/__NODE_USER__/bin/mcp-gateway-watchdog.sh --mode mcp --unit dc-gateway --port 3100
+ExecStart=/home/__NODE_USER__/bin/mcp-gateway-watchdog.sh --mode cloudflared --unit cloudflared --port 20241
+ExecStart=/home/__NODE_USER__/bin/mcp-gateway-watchdog.sh --mode mcpw --unit mcpw-__NODE_USER__ --mcpw-url https://mcpw.lumennode.uk/mcp --token-file /home/__NODE_USER__/.secrets/mcpw-watchdog.token
+ExecStart=/home/__NODE_USER__/bin/mcp-gateway-watchdog.sh --mode dcredact --unit dc-gateway --port 3100

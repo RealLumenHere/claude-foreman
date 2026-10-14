@@ -1,0 +1,11 @@
+# Install as: /etc/systemd/system/p1-update-gate.service  (LUMEN only -- this
+# reads lumen_state.py, which lives on Lumen; it never touches p1-primary or
+# p1-backup directly). Read-only + alert-only, safe on a timer.
+[Unit]
+Description=P1 Commander backup-update-window gate (rule 2 enforcement, alert-only)
+After=network.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/home/lumen/bin/p1-update-gate.sh

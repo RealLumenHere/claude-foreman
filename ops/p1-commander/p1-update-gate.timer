@@ -1,0 +1,11 @@
+# Install as: /etc/systemd/system/p1-update-gate.timer  (LUMEN only)
+[Unit]
+Description=Weekly check: is P1 backup's 2-weeks-behind update due?
+
+[Timer]
+OnCalendar=Mon 09:00 UTC
+Persistent=true
+AccuracySec=1h
+
+[Install]
+WantedBy=timers.target

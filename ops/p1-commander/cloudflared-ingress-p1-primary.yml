@@ -1,0 +1,18 @@
+# Ingress addition for p1-primary's OWN cloudflared config.yml.
+# wq#2744: NEW hostname, not the live mcp-backend.lumennode.uk (that stays
+# pointed at Lumen until the mcpw cutover in mcpw-cutover-plan.md actually
+# flips MCP_BACKENDS -- do not touch mcp-backend.lumennode.uk from this file).
+# Tunnel must be created FRESH ON p1-primary itself (`cloudflared tunnel
+# login` + `tunnel create p1-primary-mcp`) -- do NOT run tunnel create on
+# Lumen and point it at p1-primary; that mints a tunnel Lumen's cert/UUID
+# owns, breaking "one UUID per node, individually addressable"
+# (MCP_CONTROL_PLANE_HA_DESIGN.md #3, the 2026-06-29 gotcha, same class as
+# wq#2607's Anubis note).
+ingress:
+  - hostname: mcp-p1-primary.lumennode.uk
+    service: http://localhost:3100
+    originRequest:
+      connectTimeout: 30s
+      tcpKeepAlive: 30s
+      keepAliveConnections: 100
+  - service: http_status:404

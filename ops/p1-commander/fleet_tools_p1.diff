@@ -1,0 +1,11 @@
+--- a/context/fleet_tools.yaml (before)
++++ b/context/fleet_tools.yaml (after)
+@@ end of file (after commander_mcp group) @@
++
++  p1_commander:
++    desc: "wq#2744 control-plane relocation: primary+backup Commander on the two Station P1 Pros (Firefly RK3399, arm64), OFF Lumen. Lumen's desktop-commander-mcp/cloudflared mcp-backend.lumennode.uk stay live and unchanged until the mcpw cutover (foreman/ops/p1-commander/mcpw-cutover-plan.md) actually flips MCP_BACKENDS -- this entry is PREPARED, NOT DEPLOYED (boxes not yet on hand). Update this line to 'deployed' + fill in real TS/LAN IPs via lumen_state.py ingest once hardware arrives and install.sh has actually run."
++    tools:
++      - name: p1-primary (Commander primary, prepared not deployed)
++        use: "Will hold the active DC gateway + supergateway + its own cloudflared tunnel (mcp-p1-primary.lumennode.uk) once wq#2744 executes. Runbook: foreman/ops/p1-commander/README.md. Update policy: p1-update.sh (Frank-driven only, never a timer)."
++      - name: p1-backup (Commander backup, prepared not deployed)
++        use: "Live, health-checked standby, kept 2 weeks behind p1-primary on updates by its own dedicated window (control-plane rule 2) -- enforced by p1-backup-update-gate.timer (alert-only, never auto-applies). Runbook: foreman/ops/p1-commander/README.md."
