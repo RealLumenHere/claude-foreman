@@ -48,6 +48,13 @@ BACKUP_SUFFIX = re.compile(
     re.IGNORECASE)
 
 
+# wq#3753: `.env.example` / `.env.sample` are templates, the file a human copies TO `.env` and
+# fills in -- the `.env*` glob read them as credentials (3 hits in fleet-config/docker). Only
+# the BASENAME rule is relaxed: content patterns still scan a template, so a real value
+# pasted into one still fires.
+TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+
+
 def basename_candidates(name):
     """The name itself, plus what it is a backup OF. Applied repeatedly so a doubly
     suffixed copy (`id_ed25519.bak.20260101.orig`) still resolves to its origin."""
@@ -275,7 +282,41 @@ REVIEWED_HIT_FINGERPRINTS = {
     # the exact span; a real secret landing on the same line still fires fresh. Class
     # (kv_secret flagging identifier-then-paren) is tracked separately.
     "f2cd95469dbb",
+    # wq#3753 (2026-10-13): fixture/prose triage of the 44 non-_runs hits in /home/lumen/foreman.
+    # Each span was checked three ways: (1) read in context -- deliberate test fixture, mask-test
+    # transcript, code identifier or prose; (2) not equal to / not containing any value in
+    # /home/lumen/agent/.env or ~/.secrets/*; (3) not present in the live sentinel/agent config.
+    # Pinned on the exact span, so a real secret landing on the same line still fires fresh.
+    # harness/tests/test_masking.py:104,105,151,152,153,1828 (mask-suite parametrize fixtures)
+    "6afd36180c81", "006a4321ba2f", "4fae0efda9be", "ed8ede614fb9", "9adcafc3df88", "39a12eff2783",
+    # memory/attic/tests/test_distill.py:83, ops/tests/test_intervention_ledger_chat.py:122
+    # (short gh_pat-shaped test literals, 32 and 24 chars -- shorter than any real PAT)
+    "7c86267f672d", "1fb0f1ec37ed",
+    # dispatcher/dispatch_health.py.bak.*:223 (FAULT_KEY code constant) and
+    # ops/wq1092-.../sentinel_probes.diff:18 (a Python identifier on a +line)
+    "3364c10be0d3", "daab62fc4177",
+    # reports/wq1915_*.txt (pytest transcripts quoting sk-a... test literals) and
+    # reports/wq3134_verify_...md:48 (prose describing a label/value shape)
+    "561c1b9c783d", "0871f503a900", "734a573e6940",
 }
+
+
+# wq#3753: the sweep's OWN pattern fixtures (test_read_dir_sweep.py:55,57,58,75-78) assert that
+# these exact spans ARE detected, so a global fingerprint pin would blind that test. Pinned
+# on (path suffix, fingerprint) instead: the test's tmp-file copies still fire, only the
+# checked-in fixture lines are cleared.
+REVIEWED_PATH_PINS = {
+    "/harness/tests/test_read_dir_sweep.py": frozenset({
+        "fd826fd2ed78", "03999e97af56", "c8b0cb49c9ff", "6bc2f922b189", "457ac2870921",
+        "c99fc3c6e7fd", "8ff01b61db2a"}),
+}
+
+
+def _is_reviewed(path, fingerprint):
+    if fingerprint in REVIEWED_HIT_FINGERPRINTS:
+        return True
+    return any(path.endswith(suf) and fingerprint in fps
+               for suf, fps in REVIEWED_PATH_PINS.items())
 
 
 def reviewed_hit_fingerprint(matched_text):
@@ -332,8 +373,9 @@ def sweep_root(root):
 
 def _scan_file(path, name, hits):
     """Scan one file against BASENAME_GLOBS and PATTERNS, appending to `hits`."""
-    if any(fnmatch.fnmatch(c, g)
-           for c in basename_candidates(name) for g in BASENAME_GLOBS):
+    if not name.lower().endswith(TEMPLATE_SUFFIXES) and any(
+            fnmatch.fnmatch(c, g)
+            for c in basename_candidates(name) for g in BASENAME_GLOBS):
         hits.append((path, 0, "basename", name))
     if is_mask_report(path):
         return
@@ -344,7 +386,7 @@ def _scan_file(path, name, hits):
         for kind, rx in PATTERNS:
             m = rx.search(line)
             if m:
-                if reviewed_hit_fingerprint(m.group(0)) in REVIEWED_HIT_FINGERPRINTS:
+                if _is_reviewed(path, reviewed_hit_fingerprint(m.group(0))):
                     break  # wq#2120: reviewed non-secret, not a live hit
                 # mask BEFORE truncating: a cut token would escape the replace
                 masked = line.replace(m.group(0), mask(m.group(0)))

@@ -53,7 +53,7 @@ this is the important one.** Live: `curl http://localhost:8418/api/v1/endpoints/
 More to the point, **the exec/push pattern already exists and is already in production.**
 `config.yaml:253` opens an `external-endpoints:` block. 26 of the 65 endpoints (all of `5-probes`
 and `6-models`) are push-mode, fed by `/home/lumen/sentinel/probes/sentinel_probes.py`
-(`push_gatus()`, line 66; key format `5-probes_<name>`, bearer token `sntl-probe-7f3a9c1e`), driven
+(`push_gatus()`, line 66; key format `5-probes_<name>`, bearer token `sntl-<redacted>`), driven
 by `sentinel-probes.timer` every 30 min. Each carries a `heartbeat: {interval: N}` — Gatus fails the
 endpoint automatically if no push arrives in the window. The config comment on
 `probe-output-rate` says it out loud: *"missed report = DOWN (dead-man switch on the probe itself)"*.

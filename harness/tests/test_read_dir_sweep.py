@@ -670,3 +670,19 @@ def test_kv_not_called_is_the_mask_rule(tmp_path):
     # the sweep must use masking.py's lookahead, not a drifting copy
     import masking
     assert rds.KV_NOT_CALLED == masking._KV_NOT_CALLED
+
+
+# wq#3753: template files are not credentials by basename, but content still scans them.
+def test_env_example_not_flagged_by_basename(tmp_path):
+    (tmp_path / ".env.example").write_text("# template\nFOO=bar\n")
+    (tmp_path / ".env").write_text("FOO=bar\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    names = sorted(os.path.basename(h[0]) for h in hits if h[2] == "basename")
+    assert names == [".env"]
+
+
+def test_env_example_content_still_scanned(tmp_path):
+    tok = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+    (tmp_path / ".env.example").write_text("GITHUB_TOKEN=" + tok + "\n")
+    hits, _ = rds.sweep_root(str(tmp_path))
+    assert any(h[2] != "basename" for h in hits)
