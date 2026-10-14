@@ -1,0 +1,33 @@
+# Example community LIMPET plugin (tool kind).
+# Shared as a git repo containing this one file at limpet-plugin.toml; an
+# operator installs it by dropping it into /etc/limpet/plugins.d/ as
+# ghidra-mcp.toml (the filename stem must equal [plugin].name).
+#
+# This one declares a dependency on the `ghidra` plugin -- the Ghidra MCP
+# server is useless without Ghidra itself -- so the registry leaves it
+# `blocked` until a satisfying `ghidra` plugin is also installed and enabled
+# (lifecycle step 6 example from wq#3810).
+
+[plugin]
+name = "ghidra-mcp"
+version = "0.3.1"
+kind = "tool"
+summary = "Ghidra MCP server exposing decompiler tools over MCP"
+maintainer = "community"
+license = "Apache-2.0"
+
+[source]
+git = "https://github.com/example/limpet-ghidra-mcp"
+rev = "v0.3.1"
+
+[dependencies]
+ghidra = ">=11.0"
+
+[health]
+command = "ghidra-mcp --health"
+interval_seconds = 60
+timeout_seconds = 10
+
+[runtime]
+start = "systemctl --user start ghidra-mcp"
+stop = "systemctl --user stop ghidra-mcp"

@@ -1,0 +1,25 @@
+# Example community LIMPET plugin (hardware kind).
+# A hardware module needs no other plugin, so it has no [dependencies]; its
+# health check confirms the device is actually present and reachable. The
+# [hardware] table carries identity hints LIMPET can use to auto-detect the
+# device (not deeply validated by the schema -- free-form per device class).
+
+[plugin]
+name = "hackrf"
+version = "1.0.0"
+kind = "hardware"
+summary = "HackRF One software-defined radio support"
+maintainer = "community"
+license = "GPL-2.0"
+
+[source]
+git = "https://github.com/example/limpet-hackrf"
+
+[health]
+# hackrf_info exits non-zero when no device is attached -> reports unhealthy
+command = "hackrf_info"
+interval_seconds = 300
+timeout_seconds = 15
+
+[hardware]
+usb_ids = ["1d50:6089", "1d50:cc15"]

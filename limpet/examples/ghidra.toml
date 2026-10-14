@@ -1,0 +1,19 @@
+# Example community LIMPET plugin (tool kind) -- the dependency that
+# ghidra-mcp.toml requires. Install both and enable them to see ghidra-mcp go
+# from `blocked` to `active` once `ghidra` is present at a satisfying version.
+
+[plugin]
+name = "ghidra"
+version = "11.2"
+kind = "tool"
+summary = "Ghidra software reverse engineering suite"
+maintainer = "community"
+license = "Apache-2.0"
+
+[source]
+git = "https://github.com/example/limpet-ghidra"
+
+[health]
+command = "test -x /opt/ghidra/ghidraRun"
+interval_seconds = 600
+timeout_seconds = 5
