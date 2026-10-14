@@ -500,6 +500,23 @@ def sweep_hit_under(d, root, sweep):
     return None
 
 
+def sweep_root_incomplete(root, sweep):
+    """wq#3204: why `root`'s sweep entry cannot vouch for a clean directory, or None.
+    sweep_hit_under only reads `hits`; a root that hit ROOT_TIMEOUT_S / the global
+    deadline (`partial`), was skipped or errored (`error`), or was never swept at all
+    has an EMPTY or SHORT hit list that means "not scanned", not "clean". Fail closed."""
+    entry = ((sweep or {}).get("roots") or {}).get(root)
+    if not isinstance(entry, dict):
+        return "has no entry in the sweep report (never swept)"
+    if entry.get("error"):
+        return f"was skipped or errored in the sweep ({str(entry['error'])[:80]})"
+    if entry.get("partial"):
+        nr = entry.get("not_reached") or []
+        extra = f"; not reached: {', '.join(nr[:6])}" if nr else ""
+        return f"was only partially swept (deadline hit{extra})"
+    return None
+
+
 def allowed_restart(node, unit, policy):
     for glob in (allow_section(policy).get("restart") or {}).get(node) or []:
         if fnmatch.fnmatch(unit, glob):
@@ -690,6 +707,11 @@ def _derive_dirs(text, repo, add_dirs, tags, unresolved, refused, policy=None, s
         if hit:
             hit_path, hit_line = hit
             refused.append(f"dir({d}) fresh secret-sweep hit at {hit_path}:{hit_line}")
+            continue
+        incomplete = sweep_root_incomplete(allow_root, sweep)
+        if incomplete:
+            unresolved.append(f"dir({d}) read_dir_sweep root {allow_root} {incomplete} — "
+                              f"fail closed until a complete sweep covers it (wq#3204)")
             continue
         tags.append(("dir", d))
 

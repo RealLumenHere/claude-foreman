@@ -818,3 +818,44 @@ def test_advisory_note_is_bounded():
 
 def test_advisory_alone_makes_the_derivation_truthy():
     assert cl.Derived(advisory=["x"]) and not cl.Derived()
+
+
+# --- wq#3204: the dir() gate fails closed on a root the sweep could not fully scan -------
+
+def _derive_with_root_entry(entry):
+    sweep = fresh_sweep()
+    if entry is None:
+        del sweep["roots"]["/home/lumen/agent"]
+    else:
+        sweep["roots"]["/home/lumen/agent"] = entry
+    return cl.derive({"title": "", "detail": "read /home/lumen/agent"},
+                     roster=ROSTER, policy=POLICY, sweep=sweep)
+
+
+def test_partial_sweep_root_fails_closed():
+    d = _derive_with_root_entry({"files": 10, "hits": [], "partial": True,
+                                 "not_reached": ["ops"]})
+    assert d.tags == [] and d.refused == [] and len(d.unresolved) == 1
+    assert "partially swept" in d.unresolved[0] and "ops" in d.unresolved[0]
+
+
+def test_errored_or_skipped_sweep_root_fails_closed():
+    d = _derive_with_root_entry({"error": "skipped — sweep deadline reached", "files": 0,
+                                 "hits": []})
+    assert d.tags == [] and len(d.unresolved) == 1 and "skipped or errored" in d.unresolved[0]
+
+
+def test_unswept_root_fails_closed():
+    d = _derive_with_root_entry(None)
+    assert d.tags == [] and len(d.unresolved) == 1 and "never swept" in d.unresolved[0]
+
+
+def test_complete_clean_sweep_root_still_passes():
+    d = _derive_with_root_entry({"files": 10, "hits": []})
+    assert d.tags == [("dir", "/home/lumen/agent")] and d.unresolved == [] and d.refused == []
+
+
+def test_hit_on_partial_root_is_refused_not_just_unresolved():
+    d = _derive_with_root_entry({"files": 10, "partial": True,
+                                 "hits": [{"path": "/home/lumen/agent/x.py", "line": 3}]})
+    assert len(d.refused) == 1 and d.unresolved == []
