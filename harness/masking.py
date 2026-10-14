@@ -83,6 +83,17 @@ _PRE_AWS = r"AKIA"
 # other rules and left sk-key's own. A fixed vocabulary closes the class: an unknown
 # qualifier is now masked as body, which only widens coverage.
 _PRE_SK = r"sk-(?:(?:ant|or|proj|svcacct|admin|None)-)?"
+# wq#3825: five families bin/mask-secrets, handle-store.js and Horus redact.js all
+# learned from wq#3716 and masking.py never did — the fourth copy the lockstep missed.
+_PRE_GOOGLE = r"AIza"
+# One bounded qualifier, same shape as _PRE_SK's fixed vocabulary and for the same
+# reason (wq#2924): an unbounded `[a-z]+-` repeated group is the prefix that grows
+# into the body. Tailscale's real qualifiers (`auth-`, `client-`, `ephemeral-`...) are
+# not a closed set the way sk-'s providers are, so the cap is a length bound instead
+# of a vocabulary — long enough for every qualifier seen, short enough that a body
+# opening with lowercase letters then a dash cannot ride the group past the floor.
+_PRE_TAILSCALE = r"tskey-(?:[a-z]{1,20}-)?"
+_PRE_GROQ = r"gsk_"
 
 
 def _body(charset, quant):
@@ -534,6 +545,37 @@ PATTERNS = [
     # it can express none of this. It has already missed both earlier fixes and is the
     # tool instinct 4 tells every agent to pipe through (ISSUE-LOG row 577).
     ("kv-secret", _KV_SECRET, r"\1MASKED"),
+    # wq#3825: the five families bin/mask-secrets (and handle-store.js, Horus
+    # redact.js) carry and this table never did. Fixed-prefix shapes (google,
+    # tailscale, groq) follow the same `_B` + floored-body shape as github/
+    # cloudflare/slack/aws above, but are deliberately NOT added to _OWN_TAIL,
+    # _PRE_ANY or _ORPHAN_SHAPES: those three are exact-equality-tested against
+    # token_engine_daemon.py's own mirrored copies
+    # (test_mask_underfloor_invariant.py), and wiring a fifth copy into that daemon
+    # is outside wq#3825's port-into-masking.py scope. The gap this leaves (an
+    # under-floor value of one of these three families passes through unmasked and
+    # unalarmed, the same class wq#2922 closed for the other six) is real and
+    # un-backstopped — a scoped follow-up, not a silent one, now that it is named
+    # here instead of merely absent.
+    ("google", re.compile(_B + r"(" + _PRE_GOOGLE + r")"
+                          + _body(r"[0-9A-Za-z_-]", "{35}")), r"\1MASKED"),
+    ("tailscale", re.compile(_B + r"(" + _PRE_TAILSCALE + r")"
+                             + _floored_body(r"[A-Za-z0-9-]", 16)), r"\1MASKED"),
+    ("groq", re.compile(_B + r"(" + _PRE_GROQ + r")"
+                        + _floored_body(r"[A-Za-z0-9]", 20)), r"\1MASKED"),
+    # A bearer token keeps the "Bearer " word as its label-like prefix, same reason
+    # kv-secret keeps the kv label: the value alone is an opaque blob no narrower
+    # rule would otherwise catch, so what makes it readable as a credential is the
+    # word in front of it, not a fixed short literal glued to the body.
+    ("bearer", re.compile(_WB + r"([Bb]earer[ \t]+)"
+                          + _floored_body(r"[A-Za-z0-9._~+/=-]", 20)), r"\1MASKED"),
+    # A JWT has no kept prefix at all: `eyJ` is the base64 of `{"`, part of the
+    # secret shape itself, not a label the way `ghp_`/`AKIA` are — so group 1 is an
+    # empty capture and the whole three-segment match is replaced by the bare
+    # literal, same as the sed copy's unconditional `s/.../\x01/g`.
+    ("jwt", re.compile(_WB + r"()eyJ" + _floored_body(r"[A-Za-z0-9_-]", 8) + r"\."
+                       + _floored_body(r"[A-Za-z0-9_-]", 8) + r"\."
+                       + _floored_body(r"[A-Za-z0-9_-]", 8)), r"\1MASKED"),
 ]
 
 

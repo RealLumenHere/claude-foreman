@@ -59,6 +59,14 @@ URL_AUTH = URL_USER + PW + URL_HOST
 XML_OPEN = "<password>"
 XML_CLOSE = "</password>"
 XML_LINE = XML_OPEN + PW + XML_CLOSE
+# wq#3825: the five families masking.py gained from bin/mask-secrets, handle-store.js
+# and Horus redact.js (wq#3716 had ported them everywhere except here). Split at each
+# rule's boundary like every fixture above.
+GOOGLE = "AIza" + "Q" * 35
+TAILSCALE = "tskey-auth-" + "Q" * 16
+GROQ = "gsk_" + "Q" * 20
+BEARER = "Bearer " + "Q" * 20
+JWT = "eyJ" + "A" * 8 + "." + "B" * 8 + "." + "C" * 8
 
 # wq#2292: strings that LOOK like a prefix rule but are not credentials. Each one
 # is a real shape that reached a stream and cost a pri-1 rotation ticket or a
@@ -125,6 +133,11 @@ SECRETS = [
     ("url-auth", URL_AUTH),
     ("xml-secret", XML_LINE),
     ("kv-secret", KV_LINE),
+    ("google", f'v = "{GOOGLE}"'),
+    ("tailscale", f'v = "{TAILSCALE}"'),
+    ("groq", f'v = "{GROQ}"'),
+    ("bearer", f'v = "{BEARER}"'),
+    ("jwt", f'v = "{JWT}"'),
 ]
 
 # wq#2297: the same list for the kv-secret rule, whose label half was a naked keyword
@@ -427,6 +440,14 @@ ADJACENT = [
     ("url-auth", URL_USER, PW),
     # xml-secret is anchored the same way, on the `</` behind its value.
     ("xml-secret", XML_OPEN, PW),
+    ("google", "AIza", GOOGLE[len("AIza"):]),
+    ("tailscale", "tskey-auth-", TAILSCALE[len("tskey-auth-"):]),
+    ("groq", "gsk_", GROQ[len("gsk_"):]),
+    ("bearer", "Bearer ", BEARER[len("Bearer "):]),
+    # jwt keeps no prefix at all — `eyJ` is part of the secret shape, not a label —
+    # so its ADJACENT/BODIES entries carry an empty kept prefix and the whole token
+    # as the "body" (see masking.PATTERNS' jwt rule and _adjacency_cases below).
+    ("jwt", "", JWT),
 ]
 # a rule whose value is anchored on text it does not consume, per kept prefix
 ANCHORED_END = {URL_USER: URL_HOST, XML_OPEN: XML_CLOSE}
@@ -631,8 +652,12 @@ def test_token_engine_mirror_agrees():
     # wq#2638: and both adjacency directions, or the tripwire goes blind on a live
     # token exactly when the text around it carries masked residue — which an outbound
     # PR body or a quoted log tail routinely does. url-auth has no rule in this copy.
+    # wq#3825: neither do the five families just ported into masking.py — the ticket
+    # scoped that port to masking.py alone, so the daemon has no rule for google,
+    # tailscale, groq, bearer or jwt yet either, same gap as url-auth above.
+    _WQ3825_LABELS = {"google", "tailscale", "groq", "bearer", "jwt"}
     for label, prefix, body in ADJACENT:
-        if prefix == URL_USER:
+        if prefix == URL_USER or label in _WQ3825_LABELS:
             continue
         for case, text in _adjacency_cases(prefix, body):
             assert ted.mask_hits(text), f"{label}: daemon blind to {case}"
@@ -699,6 +724,11 @@ BODIES = [
     ("url-auth", URL_USER, URL_USER + PW),
     ("xml-secret", XML_OPEN, XML_OPEN + PW),
     ("kv-secret", 'TOKEN="', 'TOKEN="' + PW),
+    ("google", "AIza", GOOGLE),
+    ("tailscale", "tskey-auth-", TAILSCALE),
+    ("groq", "gsk_", GROQ),
+    ("bearer", "Bearer ", BEARER),
+    ("jwt", "", JWT),
 ]
 # a rule whose match must be followed by something it does not consume
 BODY_SUFFIX = {"url-auth": URL_HOST, "xml-secret": XML_CLOSE}
