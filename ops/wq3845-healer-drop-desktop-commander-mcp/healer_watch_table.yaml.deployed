@@ -1,0 +1,62 @@
+# healer_watch_table.yaml — wq#971 (2026-08-27), R2 §6 ACTUATOR.
+# The self-healer is the ONLY thing on Lumen that restarts services.
+# Declarative watch table: unit -> {kind, policy, holddown_flag, owner, restart_cmd?}.
+#   policy: restart      = auto-restart on down (3 attempts, then escalate)
+#           alert-only   = page, never touch
+#   holddown_flag: canonical wq#967 flag path (informational here; enforcement
+#     is holddown_lib — a unit with an ACTIVE flag is never touched, an EXPIRED
+#     flag triggers restore via its sanctioned restore cmd).
+#   restart_cmd: sanctioned restart tool when bare `systemctl restart` is not
+#     allowed for the unit (LPP contract: lpp-restart takes the slock, refuses
+#     under RESTART_FREEZE, verifies a fresh event).
+# Edit THIS file to change coverage — not the healer code. Healer reloads on
+# mtime change each cycle; a malformed table keeps the last good one and pages.
+units:
+  redis-server:          {kind: systemd, policy: restart, owner: core,      holddown_flag: /home/lumen/agents/holddowns/redis-server.json}
+  lumen-messenger:       {kind: systemd, policy: restart, owner: product,   holddown_flag: /home/lumen/agents/holddowns/lumen-messenger.json}
+  cloudflared:           {kind: systemd, policy: restart, owner: edge,      holddown_flag: /home/lumen/agents/holddowns/cloudflared.json, restart_cmd: /home/lumen/bin/cfd-heal-request}
+  lumen-memoryd:         {kind: systemd, policy: restart, owner: memory,    holddown_flag: /home/lumen/agents/holddowns/lumen-memoryd.json}
+  mcp-gateway:           {kind: systemd, policy: restart, owner: hands,     holddown_flag: /home/lumen/agents/holddowns/mcp-gateway.json}
+  # wq#1892 (2026-09-20): lumen-pokemon-live row removed — unit masked
+  # 2026-09-13 (docs/fleet/retired_services.yaml, wq#2073); nothing to restart.
+  ntfy:                  {kind: docker,  policy: restart, owner: alerting,  holddown_flag: /home/lumen/agents/holddowns/ntfy.json}
+  litellm:               {kind: docker,  policy: restart, owner: inference, holddown_flag: /home/lumen/agents/holddowns/litellm.json}
+  ollama:                {kind: systemd, policy: restart, owner: memory,    holddown_flag: /home/lumen/agents/holddowns/ollama.json}
+  lumen-gatus-ntfy-relay: {kind: systemd, policy: restart, owner: alerting, holddown_flag: /home/lumen/agents/holddowns/lumen-gatus-ntfy-relay.json}
+  # wq#1650: lumen-guardian's own unit sets Restart=always — healer watches
+  # and pages on sustained-down, but does not issue a competing restart.
+  lumen-guardian:        {kind: systemd, policy: alert-only, owner: hardware}
+  # lumen-agent: deliberately ABSENT from liveness list (retired from healer
+  # 2026-08-21 per Frank — do not re-add without his explicit direction).
+  # Its stall rule below only applies while the unit is active.
+  # wq#1112 (2026-08-30): lumen-vip-api, lumen-vip-watcher, lumen-prompt-engine
+  # removed — retired 2026-08-28 with the 8-unit research mill (unit files in
+  # /etc/systemd/system/DISABLED-research-mill.bak/). Found by wq#1099; the
+  # healer now also carries a LoadState=not-found/masked guard (see
+  # lumen_self_healer.py) so a future stale row skips + files one ticket
+  # instead of restart-looping.
+
+# Port sanity (log-only, unchanged semantics from the old PORT_CHECKS dict)
+ports:
+  lumen-memoryd: 8139
+  lumen-messenger: 8765
+  ntfy: 8080
+  ollama: 11434
+  lumen-gatus-ntfy-relay: 8784
+
+# wq#971: absorbed from lumen-smart-watchdog (daemon retired 2026-08-27).
+# Restart lumen-agent ONLY on true research stall: unit ACTIVE, output count
+# frozen past threshold, AND pending prompts waiting. Inactive unit = no-op
+# (respects the 2026-08-21 retirement; rule self-arms if Frank ever revives it).
+stall:
+  lumen-agent:
+    status_file: /home/lumen/scratch/STATUS.json
+    pending_glob: /home/lumen/scratch/research_prompts/*.txt
+    threshold_s: 3600
+    state_file: /home/lumen/scratch/watchdog_state.json
+    restart_cmd: null   # bare systemctl restart is fine for lumen-agent
+
+# wq#971: absorbed from lumen-smart-watchdog (was dead code there since the
+# lumen-agent retirement made its check() bail early every cycle).
+ram:
+  crit_pct: 90
