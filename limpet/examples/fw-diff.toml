@@ -1,0 +1,30 @@
+# Firmware-diff plugin (wq#3906): walk two workspace extractions -> classify
+# every file (added/removed/unchanged/modified/moved) -> run a per-file differ
+# on the modified set (BinDiff for executables, line/block deltas otherwise) ->
+# firmware-diff.json in the workspace, committed to workspace.git. Design:
+# design/wq3906_limpet_firmware_diff.md. Future plugin, not v1 core: authored at
+# community, inert until promoted. Depends on `ghidra` (BinExport) and `bindiff`
+# (the differ), so the registry leaves it blocked until both are enabled; the
+# image walk/classify/report stages still run degraded with no differ present.
+# Health check runs the selftest against the committed two-tree golden fixture
+# (it can genuinely fail, unlike a bare binary-exists probe).
+
+[plugin]
+name = "fw-diff"
+version = "0.1.0"
+kind = "tool"
+summary = "Whole-image firmware diff: classify files across two versions, BinDiff the changed executables, emit a structured report"
+maintainer = "lumen-fleet"
+license = "Apache-2.0"
+
+[source]
+git = "https://github.com/example/limpet-fw-diff"
+
+[dependencies]
+ghidra = ">=11.0"
+bindiff = "*"
+
+[health]
+command = "fw-diff selftest --fixture golden-two-tree"
+interval_seconds = 3600
+timeout_seconds = 120
