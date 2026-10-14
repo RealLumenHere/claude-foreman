@@ -5,6 +5,11 @@
 # wq3911_fleet_tools.diff per README.md. This handler only verifies the live target
 # carries the corrected text, same shape as wq2607-dc-endpoint-anubis/install.sh for
 # this identical file.
+# NOTE (wq#3917, kb/ISSUE-LOG.md #1322): a --verify FAIL here is NOT a privileged-
+# install problem. This script has no write code path at any privilege level, so
+# re-running it as root changes nothing. The only gate is the guard-hook Write/Edit
+# block above, confirmed live by a direct Edit attempt on the minerva file (refused).
+# The fix is a worker/session with Write/Edit permission inside minerva, not root.
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 CTX=/home/lumen/minerva/context
