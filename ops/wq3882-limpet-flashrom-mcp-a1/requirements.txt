@@ -1,0 +1,4 @@
+# limpet-flashrom-mcp runtime deps (wq#3882). Same pin as ops/wq1151-lumen-kb (the
+# FastMCP reference this follows) — 2.x import layout not verified offline from the
+# build lane; server.py already tries both layouts.
+mcp>=1.9,<2
