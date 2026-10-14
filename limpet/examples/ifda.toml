@@ -1,0 +1,17 @@
+# Catalog-sourced community LIMPET plugin (wq#3850). Research-identified,
+# not installed on any fleet host. No [health] block: fabricating a health
+# command for a tool nobody has run here would be guessing, not verifying.
+# version "0" means unpinned -- pin a real release/commit during the
+# TOOL_REGISTRY.md go/no-go before promoting this past community tier.
+
+[plugin]
+name = "ifda"
+version = "0"
+kind = "tool"
+summary = "LLM-powered IoT device/firmware analysis tool"
+maintainer = "community"
+license = "unverified"
+
+[source]
+description = "Applies an LLM to IoT firmware/device analysis tasks."
+note = "Catalog candidate only; lowest-confidence entry in this batch (no strong independent recollection of the upstream repo) -- repo/license were NOT verified this session (fleet-search web outage, 2026-10-14). Re-check provenance before any TOOL_REGISTRY go/no-go."

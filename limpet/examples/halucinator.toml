@@ -1,0 +1,17 @@
+# Catalog-sourced community LIMPET plugin (wq#3850). Research-identified,
+# not installed on any fleet host. No [health] block: fabricating a health
+# command for a tool nobody has run here would be guessing, not verifying.
+# version "0" means unpinned -- pin a real release/commit during the
+# TOOL_REGISTRY.md go/no-go before promoting this past community tier.
+
+[plugin]
+name = "halucinator"
+version = "0"
+kind = "tool"
+summary = "HAL (hardware abstraction layer) emulation-based firmware rehosting framework"
+maintainer = "community"
+license = "unverified"
+
+[source]
+description = "HALucinator: Firmware Re-hosting Through Abstraction Layer Emulation (USENIX Security 2020)"
+note = "Catalog candidate only; repo/license not independently re-verified this session (fleet-search web outage, 2026-10-14, see TOOL_REGISTRY.md adoption gate)."

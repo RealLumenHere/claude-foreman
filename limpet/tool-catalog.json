@@ -1,0 +1,86 @@
+{
+  "_meta": {
+    "description": "Hand-maintained LIMPET tool catalog (wq#3807 README, 'Seeding the 147-tool catalog'). /home/lumen/projects/limpet/tool-catalog.json (the external deploy-time default `import_catalog.DEFAULT_CATALOG` reads) does not exist yet and is outside this worktree's allowed directories; this in-repo file is the reviewable seed. Point the importer at it explicitly: `python3 -m limpet.registry.cli import --catalog limpet/tool-catalog.json`.",
+    "scope": "wq#3850: 11 tools identified from RE research, not yet installed anywhere on the fleet. None carry a `path`, so `import_catalog.catalog_to_manifest` cannot synthesize a `health_check` and `schema.validate_tool` rejects all 11 for missing required fields (`path`, `health_check`) -- reported and skipped by the importer, never guessed in, per limpet/registry/README.md and the 'never guess a path' house rule.",
+    "promotion_path": "Each entry has a matching community-tier plugin manifest under limpet/examples/<name>.toml (design/wq3806_limpet_architecture.md §1.2-1.3: community = visible, inert until promoted). Promotion to a real tools.d entry requires installing the tool, then either self-registration (limpet/registry/register.py) or adding a verified `path`/`health_check` here -- not editing this file to assert a path that was never checked."
+  },
+  "tools": [
+    {
+      "name": "fuzzware",
+      "description": "MMIO auto-modeling for effective ARM Cortex-M firmware fuzzing (USENIX Security 2022).",
+      "category": "firmware",
+      "capabilities": ["mmio-modeling", "firmware-fuzzing", "arm-cortex-m"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "halucinator",
+      "description": "HAL (hardware abstraction layer) emulation-based firmware rehosting framework.",
+      "category": "emulation",
+      "capabilities": ["hal-emulation", "firmware-rehosting"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "pretender",
+      "description": "Peripheral replay / hardware-trace-based peripheral modeling for firmware rehosting.",
+      "category": "emulation",
+      "capabilities": ["peripheral-replay", "trace-based-modeling", "firmware-rehosting"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "sootty",
+      "description": "Text/terminal-based digital waveform (VCD) viewer.",
+      "category": "hardware",
+      "capabilities": ["vcd-waveform-viewer", "text-ui"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "firmwire",
+      "description": "Dynamic analysis and emulation framework for cellular baseband firmware (NDSS 2022).",
+      "category": "firmware",
+      "capabilities": ["baseband-emulation", "cellular-baseband-analysis", "dynamic-analysis"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "fwtriage",
+      "description": "Vendor-specific firmware triage tool for an initial per-vendor RE pass.",
+      "category": "firmware",
+      "capabilities": ["vendor-firmware-triage"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "ifda",
+      "description": "LLM-powered IoT device/firmware analysis tool.",
+      "category": "other",
+      "capabilities": ["llm-assisted-analysis", "iot-firmware-analysis"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "llm4decompile",
+      "description": "Open fine-tuned LLMs for binary decompilation.",
+      "category": "decompiler",
+      "capabilities": ["llm-decompilation", "binary-to-source"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "fwanalyzer",
+      "description": "Rule-based firmware filesystem checker and auditor (Cruise Automation).",
+      "category": "firmware",
+      "capabilities": ["rule-based-firmware-checks", "filesystem-policy-checks"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "netzob",
+      "description": "Protocol reverse-engineering and format-inference framework via sequence alignment of captured traffic.",
+      "category": "network",
+      "capabilities": ["protocol-inference", "message-format-alignment"],
+      "status": "catalog-candidate, not installed, unpinned"
+    },
+    {
+      "name": "spreadtrum_flash",
+      "description": "Flashing tool for Unisoc/Spreadtrum (SPRD) SoCs.",
+      "category": "hardware",
+      "capabilities": ["unisoc-spreadtrum-flashing", "device-flashing"],
+      "status": "catalog-candidate, not installed, unpinned"
+    }
+  ]
+}

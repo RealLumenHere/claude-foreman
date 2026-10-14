@@ -1,0 +1,17 @@
+# Catalog-sourced community LIMPET plugin (wq#3850). Research-identified,
+# not installed on any fleet host. No [health] block: fabricating a health
+# command for a tool nobody has run here would be guessing, not verifying.
+# version "0" means unpinned -- pin a real release/commit during the
+# TOOL_REGISTRY.md go/no-go before promoting this past community tier.
+
+[plugin]
+name = "llm4decompile"
+version = "0"
+kind = "tool"
+summary = "Open fine-tuned LLMs for binary decompilation"
+maintainer = "community"
+license = "unverified"
+
+[source]
+description = "Decompiling Binary Code with Large Language Models -- models fine-tuned for binary-to-source decompilation."
+note = "Catalog candidate only; repo/license not independently re-verified this session (fleet-search web outage, 2026-10-14, see TOOL_REGISTRY.md adoption gate). Note TOOL_REGISTRY.md's existing caution on bot-driven trending-repo adoption applies equally to LLM-branded tooling."

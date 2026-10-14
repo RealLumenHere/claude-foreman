@@ -1,0 +1,17 @@
+# Catalog-sourced community LIMPET plugin (wq#3850). Research-identified,
+# not installed on any fleet host. No [health] block: fabricating a health
+# command for a tool nobody has run here would be guessing, not verifying.
+# version "0" means unpinned -- pin a real release/commit during the
+# TOOL_REGISTRY.md go/no-go before promoting this past community tier.
+
+[plugin]
+name = "firmwire"
+version = "0"
+kind = "tool"
+summary = "Dynamic analysis and emulation framework for cellular baseband firmware (NDSS 2022)"
+maintainer = "community"
+license = "unverified"
+
+[source]
+description = "FirmWire: Transparent Dynamic Analysis for Cellular Baseband Firmware"
+note = "Catalog candidate only; repo/license not independently re-verified this session (fleet-search web outage, 2026-10-14, see TOOL_REGISTRY.md adoption gate)."
