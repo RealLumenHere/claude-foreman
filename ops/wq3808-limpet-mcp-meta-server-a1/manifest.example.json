@@ -1,0 +1,52 @@
+{
+  "_comment": "wq#3808 LIMPET meta-server registry manifest. Edit this file and the running meta-server picks up the change within reload_poll_sec (or immediately on SIGHUP) with no restart.",
+  "mcp_servers": [
+    {
+      "name": "rea",
+      "transport": "stdio",
+      "command": ["npx", "rea-agents", "mcp"],
+      "enabled": false,
+      "note": "SECURITY HOLD per TOOL_REGISTRY.md (wq#3786): astroturfed star velocity, no independent audit. Do not flip to true without a Frank-reviewed TOOL_REGISTRY.md status change."
+    },
+    {
+      "name": "ghidra",
+      "transport": "stdio",
+      "command": ["ghidra-mcp-server", "--stdio"],
+      "enabled": false,
+      "note": "placeholder entry: no Ghidra MCP server installed on Limpet yet, wire up command/env when it is."
+    },
+    {
+      "name": "radare2",
+      "transport": "stdio",
+      "command": ["r2mcp"],
+      "enabled": false,
+      "note": "placeholder entry: no radare2 MCP server installed on Limpet yet, wire up command/env when it is."
+    }
+  ],
+  "cli_tools": [
+    {
+      "name": "strings",
+      "command": ["strings", "{path}"],
+      "description": "Print printable character sequences from a file (no MCP server of its own, so it's CLI-wrapped).",
+      "args_schema": {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"]
+      },
+      "enabled": true,
+      "timeout_sec": 30
+    },
+    {
+      "name": "file",
+      "command": ["file", "{path}"],
+      "description": "Identify a file's type (no MCP server of its own, so it's CLI-wrapped).",
+      "args_schema": {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"]
+      },
+      "enabled": true,
+      "timeout_sec": 10
+    }
+  ]
+}
