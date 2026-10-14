@@ -1,0 +1,19 @@
+# BusyBox-init target class (wq#3879). Include only for images that ship
+# /etc/inittab and /etc/init.d/rcS; on any other image both checks report
+# "file not found" as offenders.
+
+[Include."limpet_base.toml"]
+
+[FileContent."inittab_console_shell"]
+File = "/etc/inittab"
+RegEx = "^[^#]*::(respawn|askfirst):-?/bin/(a|ba)?sh"
+RegExLineByLine = true
+Match = true
+Desc = "serial console drops to a shell without login"
+
+[FileContent."rcs_starts_telnetd"]
+File = "/etc/init.d/rcS"
+RegEx = "^[^#]*telnetd"
+RegExLineByLine = true
+Match = true
+Desc = "boot script starts telnetd"

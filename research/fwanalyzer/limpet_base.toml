@@ -1,0 +1,48 @@
+# LIMPET baseline FwAnalyzer policy (wq#3879). Safe for any Linux rootfs:
+# every FileContent check here names a file present on essentially every
+# embedded Linux image, because FwAnalyzer reports a configured-but-missing
+# file as an offender (filecontent.go:109-113). Target-class checks that name
+# files not every image ships go in their own include (busybox_init.toml).
+#
+# Match = true means "offender when the regex matches" (filecontent.go:178,187).
+
+[GlobalConfig]
+FsType = "squashfs"
+FsTypeOptions = "securityinfo"
+DigestImage = true
+
+[GlobalFileChecks]
+Suid = true
+SuidAllowedList = ["/bin/busybox"]
+WorldWrite = true
+# Host keys baked into the image are shared by every unit that ships it.
+BadFiles = [
+  "/etc/dropbear/dropbear_rsa_host_key",
+  "/etc/dropbear/dropbear_ecdsa_host_key",
+  "/etc/dropbear/dropbear_ed25519_host_key",
+  "/etc/ssh/ssh_host_rsa_key",
+  "/etc/ssh/ssh_host_ecdsa_key",
+  "/etc/ssh/ssh_host_ed25519_key",
+  "/usr/sbin/telnetd",
+  "/usr/sbin/utelnetd",
+]
+
+[FileContent."passwd_empty_password"]
+File = "/etc/passwd"
+RegEx = "^[^:#]+::"
+RegExLineByLine = true
+Match = true
+Desc = "account with an empty password field"
+
+[FileContent."passwd_uid0_accounts"]
+File = "/etc/passwd"
+RegEx = "^[^:#]+:[^:]*:0:"
+RegExLineByLine = true
+Match = true
+InformationalOnly = true
+Desc = "uid-0 account (expect only root)"
+
+[DataExtract."os_release"]
+File = "/etc/os-release"
+RegEx = "(?m)^PRETTY_NAME=\"?([^\"\\n]*)"
+Desc = "target OS identity for manifest.json"
