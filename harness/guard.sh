@@ -113,7 +113,30 @@ Bash)
   # tab/newline/multi-space evasions.
   NORM=$(printf '%s' "$RAW_CMD" | tr '\n\t' '  ' | tr -s ' ')
 
-  for target in "$RAW_CMD" "$NORM"; do
+  # ---- wq#3861 (wq#3858 proposal, ISSUE-LOG #1304): quote exemption for the
+  # denied-verb scan ----
+  # The denied-verb scan used to run inside the shared RAW_CMD/NORM loop below,
+  # so it read quoted prose the same as a real command — a lone
+  # `wq done/block --notes "..."` call whose notes mentioned restart/reboot/halt/
+  # sudo as PROSE tripped the same block as an actual verb invocation. wq3854
+  # lost a worker to this (rows 41/324/447/451 are the same class). For a lone
+  # wq call ONLY — RAW_CMD has no newline/CR, starts with /home/lumen/bin/wq
+  # plus whitespace, and has no $, backtick, or backslash that could smuggle a
+  # second command past a naive scan — blank every quoted string before running
+  # the verb scan. If anything separator-shaped (;&|()<>) or an unbalanced quote
+  # survives the blanking, fall back to the full RAW_CMD/NORM scan unchanged.
+  # Every other check below (systemctl, credential shapes, paths, rm -rf, ...)
+  # keeps scanning the full, unblanked text — only this one check moves.
+  VERB_SCAN_TARGETS=("$RAW_CMD" "$NORM")
+  if [[ "$RAW_CMD" != *$'\n'* && "$RAW_CMD" != *$'\r'* \
+        && "$RAW_CMD" != *'$'* && "$RAW_CMD" != *'`'* && "$RAW_CMD" != *'\'* ]] \
+      && printf '%s' "$RAW_CMD" | grep -qE '^/home/lumen/bin/wq[[:space:]]'; then
+    BLANKED=$(printf '%s' "$NORM" | sed -E "s/\"[^\"]*\"|'[^']*'/Q/g")
+    if ! printf '%s' "$BLANKED" | grep -qE '[;&|()<>"'"'"']'; then
+      VERB_SCAN_TARGETS=("$BLANKED")
+    fi
+  fi
+  for target in "${VERB_SCAN_TARGETS[@]}"; do
     # Leading context is "anything that is not part of a longer word": an explicit
     # [;&|[:space:]] class missed every verb sitting immediately after an opening
     # quote or paren — `ssh bes 'sudo ...'` slipped straight through. Disclosed in
@@ -122,6 +145,9 @@ Bash)
     if printf '%s' "$target" | grep -qE '(^|[^[:alnum:]_./-])(sudo|reboot|shutdown|poweroff|halt|init +[06])\b'; then
       block "denied verb (sudo/reboot/shutdown/poweroff/halt/init 0|6)" "$RAW_CMD"
     fi
+  done
+
+  for target in "$RAW_CMD" "$NORM"; do
     if printf '%s' "$target" | grep -qE 'systemctl +(stop|disable|mask)\b'; then
       block "systemctl stop/disable/mask denied" "$RAW_CMD"
     fi

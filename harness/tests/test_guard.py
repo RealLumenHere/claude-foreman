@@ -1325,3 +1325,64 @@ def test_bin_inplace_overwrite_blocked_on_real_default_dir():
     assert os.path.isfile("/home/lumen/bin/wq")
     rc, err = run_guard("Bash", {"command": "cp /tmp/x /home/lumen/bin/wq"})
     assert rc == 2 and "wq#2856" in err
+
+
+# ---- wq#3861 (wq#3858 proposal, ISSUE-LOG #1304): quote exemption for the
+# denied-verb scan on a lone wq call ----
+# wq3854 lost a worker when the denied-verb scan read quoted --notes/--detail
+# prose as if it were a real command (rows 41/324/447/451 are the same class).
+# A lone `/home/lumen/bin/wq ...` call's quoted args are now blanked before the
+# verb scan; every real-exec shape — an unquoted verb past a separator, a
+# bash/sh -c payload, a dollar-paren or backtick, an unbalanced quote, a
+# lookalike `wqx` path, or an escalation verb standing in FRONT of wq — must
+# still block exactly as before.
+
+WQ_QUOTE_EXEMPT_MUST_ALLOW = [
+    # double-quoted notes, apostrophe inside the double quotes
+    {"command": "/home/lumen/bin/wq done 3854 --notes \"operator sudo escalation review before the 06:20Z reboot or halt; won't restart automatically, no action needed\""},
+    # single-quoted detail
+    {"command": "/home/lumen/bin/wq block 123 --detail 'blocked pending an operator decision on reboot/halt/poweroff — do not shutdown yet'"},
+    # two quoted flags on the same lone call
+    {"command": "/home/lumen/bin/wq done 447 --notes \"post-halt sudo review\" --tag 'reboot-postmortem'"},
+]
+
+WQ_QUOTE_EXEMPT_MUST_BLOCK = [
+    # unquoted verb after ;
+    {"command": "/home/lumen/bin/wq done 123 --notes \"ok\"; reboot"},
+    # unquoted verb after &&
+    {"command": "/home/lumen/bin/wq done 123 --notes \"ok\" && sudo reboot"},
+    # unquoted verb after |
+    {"command": "/home/lumen/bin/wq done 123 --notes \"ok\" | sudo reboot"},
+    # verb after a raw newline in RAW_CMD itself
+    {"command": "/home/lumen/bin/wq done 123 --notes \"ok\"\nreboot"},
+    # bash -c / sh -c quoted payload after a separator
+    {"command": "/home/lumen/bin/wq done 123 --notes \"ok\"; bash -c \"sudo reboot\""},
+    {"command": "/home/lumen/bin/wq done 123 --notes \"ok\" && sh -c 'shutdown -h now'"},
+    # dollar-paren / backtick inside the notes
+    {"command": "/home/lumen/bin/wq done 123 --notes \"$(sudo reboot)\""},
+    {"command": "/home/lumen/bin/wq done 123 --notes \"`sudo reboot`\""},
+    # an unbalanced quote
+    {"command": "/home/lumen/bin/wq done 123 --notes \"reboot the fleet now"},
+    # a wqx-prefixed (lookalike) path, not the real /home/lumen/bin/wq
+    {"command": "/home/lumen/bin/wqx done 123 --notes \"reboot the fleet\""},
+    # the escalation verb in front of wq, not inside it
+    {"command": "sudo /home/lumen/bin/wq done 123 --notes ok"},
+]
+
+
+def test_wq3861_lone_wq_call_quoted_prose_allowed():
+    failures = []
+    for inp in WQ_QUOTE_EXEMPT_MUST_ALLOW:
+        rc, stderr = run_guard("Bash", inp)
+        if rc != 0:
+            failures.append((inp, rc, stderr))
+    assert not failures, f"expected exit 0 (allow), got: {failures}"
+
+
+def test_wq3861_real_exec_shapes_still_blocked():
+    failures = []
+    for inp in WQ_QUOTE_EXEMPT_MUST_BLOCK:
+        rc, stderr = run_guard("Bash", inp)
+        if rc != 2:
+            failures.append((inp, rc, stderr))
+    assert not failures, f"expected exit 2 (block), got: {failures}"
