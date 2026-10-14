@@ -60,6 +60,66 @@ def test_detect_matches_by_descriptor_substring():
     assert found[0]["hw_type"] == "debug_probe"
 
 
+# wq#3814/wq#3819: every line below is ordinary consumer hardware from a vendor that also
+# makes RE/lab gear, with a PID that is NOT in any plugin's usb_ids — i.e. probes drawn
+# from outside the population desc_patterns was written to match (wq#2630). Each one was
+# a confirmed false positive before wq#3819 narrowed the vendor-name patterns: Realtek NIC
+# → sdr_receiver (rf_capture/rtl_sdr), Qualcomm modem and Rockchip/Allwinner boards in
+# normal mode → target_device (edl_flash/maskrom_flash), Cypress mouse → logic_analyzer.
+ORDINARY_LSUSB_SAMPLE = """\
+Bus 001 Device 002: ID 0bda:8153 Realtek Semiconductor Corp. RTL8153 Gigabit Ethernet Adapter
+Bus 001 Device 003: ID 0bda:b812 Realtek Semiconductor Corp. RTL88x2bu 802.11a/b/g/n/ac WLAN Adapter
+Bus 001 Device 004: ID 0bda:0316 Realtek Semiconductor Corp. USB3.0-CRW card reader
+Bus 001 Device 005: ID 05c6:a40c Qualcomm, Inc. Mobile Broadband Modem
+Bus 001 Device 006: ID 05c6:6765 Qualcomm, Inc. Android phone (MTP mode)
+Bus 001 Device 007: ID 04b4:0060 Cypress Semiconductor Corp. Wireless optical mouse
+Bus 001 Device 008: ID 2207:0010 Fuzhou Rockchip Electronics Company RK3288 Android device
+Bus 001 Device 009: ID 1f3a:1000 Allwinner Technology A10 tablet
+Bus 001 Device 010: ID 1a6e:0001 Global Unichip Corp. unrelated ASIC
+"""
+
+
+def test_ordinary_vendor_hardware_is_not_reported_as_re_hardware():
+    devices = hal.list_usb_devices(ORDINARY_LSUSB_SAMPLE)
+    assert len(devices) == 9
+    assert hal.detect(devices) == []
+
+
+def test_realtek_nic_is_not_an_sdr_receiver():
+    sample = (
+        "Bus 001 Device 003: ID 0bda:8153 Realtek Semiconductor Corp. "
+        "RTL8153 Gigabit Ethernet Adapter\n"
+    )
+    assert hal.detect(hal.list_usb_devices(sample)) == []
+
+
+def test_qualcomm_modem_is_not_an_edl_flashable_target():
+    sample = "Bus 001 Device 004: ID 05c6:a40c Qualcomm, Inc. Mobile Broadband Modem\n"
+    assert hal.detect(hal.list_usb_devices(sample)) == []
+
+
+def test_bootrom_mode_descriptors_still_match_target_device():
+    """The narrowed patterns must keep catching rebrands/unlisted PIDs in a flashing mode
+    — the whole point of the desc_patterns fallback."""
+    sample = (
+        "Bus 001 Device 011: ID 05c6:9009 Qualcomm, Inc. Gobi Wireless Modem (QDL mode)\n"
+        "Bus 001 Device 012: ID 2207:330e Fuzhou Rockchip Electronics Company "
+        "RK3328 in Mask ROM mode\n"
+        "Bus 001 Device 013: ID 1f3a:efe9 Onda (unverified) V972 tablet in flashing mode\n"
+    )
+    found = hal.detect(hal.list_usb_devices(sample))
+    assert [e["hw_type"] for e in found] == ["target_device"] * 3
+
+
+def test_rtl_sdr_clone_with_unlisted_pid_still_matches_sdr_receiver():
+    sample = (
+        "Bus 001 Device 014: ID 1d19:1101 Dexatek Technology Ltd. "
+        "DK RTL2832 DVB-T dongle\n"
+    )
+    found = hal.detect(hal.list_usb_devices(sample))
+    assert [e["hw_type"] for e in found] == ["sdr_receiver"]
+
+
 def test_detect_empty_bus_returns_nothing():
     assert hal.detect([]) == []
 

@@ -20,7 +20,7 @@ of the agent guessing and getting a confusing tool-level error.
 
 | hw_type | capabilities | device node |
 |---|---|---|
-| `coral_tpu` | image_classification, on_device_ml, edgetpu_inference | `/dev/apex_*` (PCIe/M.2) else USB bus path |
+| `coral_tpu` | image_classification, on_device_ml, edgetpu_inference | USB bus path |
 | `hdmi_capture` | visual_input, screen_reading, kvm | `/dev/videoN` (V4L2) |
 | `debug_probe` | jtag, swd, openocd_target, gdb_server | `/dev/ttyACM*` where exposed, else USB bus path |
 | `logic_analyzer` | logic_capture, protocol_decode, pulseview | USB bus path (sigrok talks libusb directly) |
@@ -34,6 +34,30 @@ and, where the kernel gives the device a stable node (V4L2 capture, CDC-ACM seri
 resolver that walks `/sys/class/*/.../device` back to the matching `busnum`/`devnum` to
 find it (`hal.py:_node_for_sysfs_class`). Adding a ninth class means adding one more
 `HardwarePlugin(...)` entry to `REGISTRY` — no other code changes.
+
+## Matching rule (wq#3819)
+
+`usb_ids` is the primary signal. `desc_patterns` is a fallback for rebranded clones that
+ship an unlisted PID but keep the product string, so every pattern must name a **product
+or USB mode** — `rtl2838`, `qdl mode`, `mask rom mode`, `black magic probe` — never a bare
+vendor name. wq#3814 reproduced three plugins matching the vendor string alone, which made
+an ordinary Realtek NIC report as an SDR receiver (`rf_capture`/`rtl_sdr`), a Qualcomm WWAN
+modem as an EDL-flashable target (`edl_flash`/`maskrom_flash`), and a Cypress mouse as a
+logic analyzer. `tests/test_hal.py:ORDINARY_LSUSB_SAMPLE` is the regression guard, and
+`install.sh --verify` reruns the same probe against the deployed copy via
+`verify_no_false_positive.py`.
+
+## Known gaps
+
+- PCIe/M.2 Coral TPUs (`/dev/apex_*`) are not detected: they never appear in `lsusb`, and
+  there is no way to correlate an apex node with a USB bus/device pair, so the old
+  `_apex_node_for` resolver could only ever report a PCIe card's node for a USB
+  Accelerator. Dropped in wq#3819; covering PCIe Corals needs an `lspci`/sysfs scan this
+  detector does not have.
+- A target device in normal ADB mode is not detected either — only the bootrom/flashing
+  modes (`qdl mode`, `mask rom mode`, `in flashing mode`) and the listed VID:PIDs are. The
+  `adb` capability on `target_device` therefore means "this device is flashable and speaks
+  adb when booted", not "adb is live right now"; ask `adb devices` for that.
 
 ## Not verified
 

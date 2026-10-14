@@ -3,6 +3,7 @@
 Read-only, exit 0 when the live hal.py still implements the documented CLI and
 registry shape, exit 1 with one MISS line per gap.
 """
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,6 +27,7 @@ def stage(tmp_path, hal_text):
     bundle = tmp_path / "ops" / "wq3809-limpet-hal"
     bundle.mkdir(parents=True)
     shutil.copy(OPS / "_verify.sh", tmp_path / "ops" / "_verify.sh")
+    shutil.copy(BUNDLE / "verify_no_false_positive.py", bundle / "verify_no_false_positive.py")
     text = (BUNDLE / "install.sh").read_text().replace(LIVE_LINE, f'LIVE="{live}"')
     assert str(live) in text
     (bundle / "install.sh").write_text(text)
@@ -61,22 +63,30 @@ def test_verify_fails_when_a_subcommand_is_dropped(tmp_path):
     assert "list-plugins" in proc.stdout
 
 
-SDR_PLUGIN_BLOCK = """\
-    HardwarePlugin(
-        hw_type="sdr_receiver",
-        name="SDR receiver (RTL-SDR)",
-        capabilities=("rf_capture", "iq_sample", "rtl_sdr"),
-        usb_ids=frozenset({("0bda", "2838"), ("0bda", "2832")}),
-        desc_patterns=("realtek semiconductor",),
-    ),
-"""
+SDR_PLUGIN_BLOCK_RE = re.compile(
+    r'    HardwarePlugin\(\n        hw_type="sdr_receiver",.*?\n    \),\n', re.DOTALL
+)
 
 
 def test_verify_fails_when_a_plugin_class_is_removed(tmp_path):
     live_src = (OPS.parent / "ops" / "wq3809-limpet-hal" / "hal.py")
-    text = live_src.read_text()
-    assert SDR_PLUGIN_BLOCK in text
-    text = text.replace(SDR_PLUGIN_BLOCK, "")
+    text, removed = SDR_PLUGIN_BLOCK_RE.subn("", live_src.read_text())
+    assert removed == 1 and "sdr_receiver" not in text
     proc = run(stage(tmp_path, text), "--verify")
     assert proc.returncode == 1
     assert "expected 8" in proc.stdout
+
+
+def test_verify_fails_on_the_vendor_name_desc_patterns_wq3814_found(tmp_path):
+    """The probe's own falsifiability (wq#2630): restore the pre-wq#3819 vendor-name
+    pattern on a staged copy and the handler must name the false positive."""
+    live_src = (OPS.parent / "ops" / "wq3809-limpet-hal" / "hal.py")
+    text = live_src.read_text().replace(
+        'desc_patterns=("rtl2832", "rtl2838"),',
+        'desc_patterns=("realtek semiconductor",),',
+    )
+    assert "realtek semiconductor" in text
+    proc = run(stage(tmp_path, text), "--verify")
+    assert proc.returncode == 1
+    assert "ordinary-hardware probe" in proc.stdout
+    assert "0bda:8153" in proc.stdout and "sdr_receiver" in proc.stdout

@@ -30,6 +30,11 @@ if [ "${1:-}" = --verify ]; then
         *) _vmiss "list-plugins reported '$count' plugins, expected 8" ;;
       esac
     fi
+    # wq#3819: the live copy must not report ordinary consumer hardware as RE hardware.
+    # Behavioural, not a marker grep — it fails on the pre-wq#3819 vendor-name
+    # desc_patterns the wq#3814 verify reproduced.
+    fp="$(PYTHONDONTWRITEBYTECODE=1 python3 -I "$SRC/verify_no_false_positive.py" "$LIVE" 2>&1)" \
+      || _vmiss "ordinary-hardware probe: $(printf '%s' "$fp" | tr '\n' ';')"
   fi
   vdone
 fi

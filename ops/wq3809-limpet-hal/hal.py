@@ -13,6 +13,16 @@ kind of hardware is present"; it does not open the device or exercise it — tha
 the tool the agent runs against the reported device node (openocd, sigrok-cli, minipro,
 rtl_sdr, ...).
 
+VID:PID is the primary signal; `desc_patterns` is a fallback for rebranded clones that
+ship an unlisted PID but keep the product string. Every pattern must name a *product or
+USB mode*, never a bare vendor name: wq#3814 found three plugins matching on the vendor
+string alone ("realtek semiconductor", "qualcomm, inc.", "cypress semiconductor"), so an
+ordinary Realtek NIC reported as an SDR receiver, a Qualcomm WWAN modem as an EDL-
+flashable target, and a Cypress mouse as a logic analyzer — the exact wrong-answer failure
+this module exists to prevent. wq#3819 narrowed them; `tests/test_hal.py`'s
+ORDINARY_LSUSB_SAMPLE is the regression guard (probes drawn from outside the matched
+population, per wq#2630).
+
 CLI:
     python3 hal.py detect        # JSON: only hardware currently connected
     python3 hal.py list-plugins  # JSON: every supported hardware class, connected or not
@@ -120,19 +130,15 @@ def _tty_node_for(device: UsbDevice) -> str | None:
     return _node_for_sysfs_class(device, ("/sys/class/tty/ttyACM*", "/sys/class/tty/ttyUSB*"))
 
 
-def _apex_node_for(_device: UsbDevice) -> str | None:
-    """Coral PCIe/M.2 variants expose /dev/apex_N; the USB Accelerator has no such node
-    and falls back to its USB bus path."""
-    nodes = sorted(glob.glob("/dev/apex_*"))
-    return nodes[0] if nodes else None
-
-
 @dataclass(frozen=True)
 class HardwarePlugin:
     hw_type: str
     name: str
     capabilities: tuple[str, ...]
     usb_ids: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    #: Product- or USB-mode-identifying descriptor substrings only ("rtl2838", "qdl mode",
+    #: "black magic probe"). A bare vendor name here matches every unrelated device that
+    #: vendor ships — see the module docstring and wq#3814.
     desc_patterns: tuple[str, ...] = ()
     node_resolver: "callable | None" = None
 
@@ -156,8 +162,11 @@ REGISTRY: tuple[HardwarePlugin, ...] = (
         name="Google Coral TPU",
         capabilities=("image_classification", "on_device_ml", "edgetpu_inference"),
         usb_ids=frozenset({("1a6e", "089a"), ("18d1", "9302")}),
-        desc_patterns=("global unichip", "coral"),
-        node_resolver=_apex_node_for,
+        # "global unichip" dropped (wq#3819): 1a6e is the vendor ID of an ASIC house whose
+        # silicon is not only Coral, and both Coral USB IDs (pre- and post-firmware-upload)
+        # are already in usb_ids. PCIe/M.2 Corals are not lsusb-visible at all, so they are
+        # out of scope for this detector — see README "Known gaps".
+        desc_patterns=("coral",),
     ),
     HardwarePlugin(
         hw_type="hdmi_capture",
@@ -194,7 +203,10 @@ REGISTRY: tuple[HardwarePlugin, ...] = (
                 ("2a0e", "0001"),  # DSLogic
             }
         ),
-        desc_patterns=("saleae", "dslogic", "cypress semiconductor"),
+        # "cypress semiconductor" dropped (wq#3819): it matched every Cypress-based mouse,
+        # keyboard and hub. The unconfigured-FX2 clones it was meant to catch present
+        # 04b4:8613, already in usb_ids above.
+        desc_patterns=("saleae", "dslogic"),
     ),
     HardwarePlugin(
         hw_type="flash_programmer",
@@ -222,14 +234,25 @@ REGISTRY: tuple[HardwarePlugin, ...] = (
                 ("1f3a", "efe8"),  # Allwinner FEL
             }
         ),
-        desc_patterns=("qualcomm, inc.", "rockchip", "allwinner"),
+        # wq#3819: vendor names dropped. "qualcomm, inc." matched every WWAN modem and
+        # every Android phone in its normal mode; "rockchip"/"allwinner" matched any SoC
+        # board in any mode (and "allwinner" never matched the FEL device anyway — lsusb
+        # renders 1f3a:efe8 as "Onda (unverified) V972 tablet in flashing mode"). What is
+        # left is the mode string lsusb prints for an EDL device, "Qualcomm, Inc. Gobi
+        # Wireless Modem (QDL mode)", plus the two other bootrom-mode strings lsusb prints
+        # from its own ID table: "RK3399 in Mask ROM mode" (2207:330c) and Allwinner FEL's
+        # "... tablet in flashing mode" (1f3a:efe8).
+        desc_patterns=("qdl mode", "mask rom mode", "in flashing mode"),
     ),
     HardwarePlugin(
         hw_type="sdr_receiver",
         name="SDR receiver (RTL-SDR)",
         capabilities=("rf_capture", "iq_sample", "rtl_sdr"),
         usb_ids=frozenset({("0bda", "2838"), ("0bda", "2832")}),
-        desc_patterns=("realtek semiconductor",),
+        # wq#3819: "realtek semiconductor" matched every Realtek NIC, WiFi dongle and card
+        # reader on the bus. The RTL2832U/RTL2838 chip names are what lsusb prints for a
+        # real dongle ("Realtek Semiconductor Corp. RTL2838 DVB-T"), rebrands included.
+        desc_patterns=("rtl2832", "rtl2838"),
     ),
 )
 
