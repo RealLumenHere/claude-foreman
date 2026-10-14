@@ -1,6 +1,7 @@
 import pytest
 
 import live_bin_guard
+from id_mask import pytest_make_parametrize_id  # noqa: F401  (wq#3834 hook)
 
 live_bin_guard.install()
 

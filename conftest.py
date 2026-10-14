@@ -25,6 +25,16 @@ def pytest_sessionfinish(session, exitstatus):
     sys.modules["live_bin_guard"].session_finish(session)
 
 
+# wq#3834: a credential-shaped str param id is printed masked, for every dir a root run
+# collects. Loaded by file like live_bin_guard; harness/tests/conftest.py imports the same.
+if "id_mask" not in sys.modules:
+    _spec = importlib.util.spec_from_file_location(
+        "id_mask", os.path.join(os.path.dirname(__file__), "harness", "tests", "id_mask.py"))
+    sys.modules["id_mask"] = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(sys.modules["id_mask"])
+pytest_make_parametrize_id = sys.modules["id_mask"].pytest_make_parametrize_id
+
+
 @pytest.fixture(autouse=True)
 def _isolate_minerva_db_root(monkeypatch, tmp_path):
     """wq#2784: fworker's real attempt-end path (episodic.commit_to_archive ->

@@ -597,7 +597,10 @@ _WQ2848_NOISE_CASES = [
 ]
 
 
-@pytest.mark.parametrize("label, prefix, floor, noise", _WQ2848_NOISE_CASES)
+# wq#3834: `+`-joined ids, as wq#2936 did — pytest's `-` join reads the cloudflare row's
+# prefix, floor and noise as one cfut_ token on every `-v` line.
+@pytest.mark.parametrize("label, prefix, floor, noise", _WQ2848_NOISE_CASES,
+                         ids=["+".join(map(str, c)) for c in _WQ2848_NOISE_CASES])
 @pytest.mark.parametrize("offset", [2, 5])
 def test_a_bare_foreign_prefix_substring_does_not_drop_the_whole_token(
         label, prefix, floor, noise, offset):
@@ -2010,11 +2013,24 @@ def test_a_camel_value_that_is_not_the_label_echo_is_still_a_credential(line):
     _SK + "=self." + _SK + "_correct_horse_battery_staple_extra_words",
     _SK + "=one.two.three.four.five." + _SK,       # four qualifier segments is a value
     _SK + "=self." + "_" * 40 + _SK,               # the `__private` seam is bounded too
-    _CR + "=" + _CR + "_dict_of_many_more_words",  # the tail is counted like the head
+    # wq#3834: the value is spelled as joinable literals so mask_replay finds it here.
+    _CR + "=" + "credent" "ials_dict_of_many_more_words",  # the tail is counted like the head
 ])
 def test_a_lowercase_chain_too_long_to_be_an_identifier_is_a_credential(line):
     assert masking.mask_text(line)[1] == ["kv-secret"], line
     assert masking.suppressions(line) == []
+
+
+def test_this_files_case_ids_read_silently():
+    """wq#3834: a `--collect-only`/`-v` listing of this file printed the case above whole
+    as its id and paged kv-secret (wq#3830). id_mask.py masks a credential-shaped str id;
+    this reads the real listing, from harness/tests where the root conftest never loads,
+    so a joined id that fires is caught too."""
+    here = os.path.abspath(__file__)
+    out = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", here],
+                         capture_output=True, text=True, cwd=os.path.dirname(here)).stdout
+    assert "tests collected" in out
+    assert masking.mask_text(out)[1] == []
 
 
 def test_the_env_form_and_the_general_form_record_one_hit():
