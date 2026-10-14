@@ -1790,16 +1790,15 @@ def test_a_line_today_truly_drops_is_still_excused():
     assert mask_replay.unaccounted(today_hits) == []
 
 
-def test_today_closed_still_excuses_a_whole_line_at_once():
-    """wq#3065 pins the scope of `today_closed` so the next reader sees it is deliberate.
+def test_today_closed_scores_the_records_own_span_not_the_line():
+    """wq#3076 (closing wq#3065's follow-up): `today_closed` is scoped to the record's own
+    span. One accounted hit on a line no longer excuses another, unrelated hit on it - the
+    second half of set:b05f5da514d1's defect. A span today's table no longer fires on is
+    still closed (all([]) is True), which is wq#2423's recut concern.
 
-    `any()` over the LINE means one accounted hit excuses every other hit on it, however
-    unrelated — the second half of set:b05f5da514d1's defect. Scoping it to the record's
-    own span is right and is measured in reports/wq3065_*.md, but it surfaces 13 values
-    across wq#2687's and wq#3021's corpora that nothing else accounts, i.e. it settles
-    two other rotation rows; it ships with the review that pins them. Until then this
-    test states the behaviour that is live, so the follow-up has to come here to change
-    it rather than discovering the coupling by breaking two pin tests.
+    wq#2687's and wq#3021's transcripts were masked at rest, so the 13 values wq#3065
+    measured as newly surfaced are gone from the live corpus (their pin tests skip) and
+    nothing needs pinning.
     """
     body, other = "a9Fk2mQp7xLz", "Zq4Wn8Tb1Vy6"
     items = {"transcript:synthetic":
@@ -1807,8 +1806,8 @@ def test_today_closed_still_excuses_a_whole_line_at_once():
     recs = mask_replay.replay(0, patterns=mask_replay.CURRENT_PATTERNS,
                               tracked={"f.md": "TOKEN: " + body + "\n"}, items=items)
     got = {r["prefix"]: (bool(r["accounted_in"]), r["today_closed"]) for r in recs}
-    assert got == {"TOKEN:": (True, True), "PASSWORD:": (False, True)}
-    assert mask_replay.unaccounted(recs) == [], "the line-wide any() excuses both"
+    assert got == {"TOKEN:": (True, True), "PASSWORD:": (False, False)}
+    assert [r["prefix"] for r in mask_replay.unaccounted(recs)] == ["PASSWORD:"]
 
 
 def test_legacy_table_is_not_the_live_one():

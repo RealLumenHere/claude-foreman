@@ -753,11 +753,18 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
             # wq#3065 measured this `any()` over the whole LINE: on one JSONL line of a
             # run's transcript it lets any accounted hit excuse every other hit on the
             # line, and 13 unaccounted values across wq#2687's and wq#3021's corpora
-            # are excused by nothing else today. Scoping it to the record's own span is
-            # a two-line change (reports/wq3065_*.md) that surfaces all 13 at once, so
-            # it ships with the review that pins them, not here.
-            today_closed = not today_hits or any(
-                account(v, tracked, p) for p, v in today_hits)
+            # were excused by nothing else. wq#3076 scoped it to the record's own span
+            # (reports/wq3065_*.md); by then those transcripts were masked at rest, so
+            # the 13 are gone from the live corpora and nothing needed pinning.
+            # wq#3076: scoped to the record's own span. Only the hits of today's table
+            # that overlap [lo, hi) of THIS record count, and every one of them must be
+            # accounted; no overlapping hit at all means the table stopped firing on the
+            # span (all([]) is True), which subsumes the old `not today_hits` branch.
+            span_lo, span_hi = lo - line_at, hi - line_at
+            span_hits = [(p, v) for _l, p, v, a, b in
+                         _located(CURRENT_PATTERNS, line, True)
+                         if a < span_hi and b > span_lo]
+            today_closed = all(account(v, tracked, p) for p, v in span_hits)
             sha12 = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
             records.append({
                 "label": label,
