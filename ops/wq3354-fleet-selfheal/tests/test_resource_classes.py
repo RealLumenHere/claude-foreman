@@ -122,7 +122,7 @@ def test_provider_401_for_ten_minutes_cools_its_rungs_then_recovery_reenables(ma
     assert data["deepseek-v4"]["until"] == t0 + 600 + 3600
     assert "glm-5.3" not in data and data["hathor-llama8b"] == 1e12
     [t] = ctx.out.tickets
-    assert t["title"].startswith("[selfheal] rotate key: api.deepseek.com")
+    assert t["title"].startswith("[selfheal] rotate key: " + "api.deepseek.com")
     good = {"api.deepseek.com": (200, ""), "api.z.ai": (200, "")}
     ctx = make_ctx(cfg, state, now=t0 + 900)
     _psweep(ctx, good)
