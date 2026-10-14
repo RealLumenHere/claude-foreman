@@ -41,12 +41,16 @@ def detect_chip(programmer: str, chip: str = "") -> dict:
 
 
 @mcp.tool()
-def read_flash(programmer: str, output_path: str, chip: str = "", region: str = "") -> dict:
+def read_flash(
+    programmer: str, output_path: str, chip: str = "", region: str = "", layout_file: str = ""
+) -> dict:
     """Read the full flash chip (or one named `region`, via flashrom's -i) attached via
     `programmer` and save it to `output_path`. Always do this before write_flash/erase_chip
     — it's the only way to recover the original image if something goes wrong.
+    `region` requires `layout_file` (a path to a flashrom -l layout file naming the
+    region) — flashrom rejects -i without a layout source.
     """
-    return ops.read_flash(programmer, output_path, chip, region)
+    return ops.read_flash(programmer, output_path, chip, region, layout_file)
 
 
 @mcp.tool()

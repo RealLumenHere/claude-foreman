@@ -82,12 +82,26 @@ def detect_chip(programmer: str, chip: str = "") -> dict:
     return _run(_programmer_args(programmer, chip), DEFAULT_TIMEOUT_SEC)
 
 
-def read_flash(programmer: str, output_path: str, chip: str = "", region: str = "") -> dict:
+def read_flash(
+    programmer: str, output_path: str, chip: str = "", region: str = "", layout_file: str = ""
+) -> dict:
     """Read the full flash chip (or one named `region`, via flashrom's -i) and save it to
-    `output_path`."""
+    `output_path`.
+
+    flashrom's -i rejects the command line before even probing the chip unless a layout
+    source is also given (-l <layout_file>, --ifd, --fmap, ...); this wrapper only
+    supports -l, so `region` requires `layout_file` (wq#3894 — see
+    reports/3890_judgment_wq3882_flashrom_region_flag.md for the real-binary repro)."""
+    if region and not layout_file:
+        raise FlashromError(
+            f"read_flash region={region!r} requires layout_file=<path> (flashrom's -l): "
+            "-i is rejected before the chip is even probed without a layout source"
+        )
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     args = _programmer_args(programmer, chip) + ["-r", str(out)]
+    if layout_file:
+        args += ["-l", layout_file]
     if region:
         args += ["-i", region]
     result = _run(args, DEFAULT_TIMEOUT_SEC)

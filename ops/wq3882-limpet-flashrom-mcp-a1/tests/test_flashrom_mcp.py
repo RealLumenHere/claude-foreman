@@ -69,10 +69,20 @@ def test_read_flash_creates_parent_dir_and_passes_path(fake_run, tmp_path):
     assert result["output_path"] == str(out)
 
 
-def test_read_flash_with_region(fake_run, tmp_path):
+def test_read_flash_region_without_layout_raises(fake_run, tmp_path):
     out = tmp_path / "bios_region.bin"
-    ops.read_flash("ch341a_spi", str(out), region="bios")
-    assert fake_run[0] == [ops.FLASHROM_BIN, "-p", "ch341a_spi", "-r", str(out), "-i", "bios"]
+    with pytest.raises(ops.FlashromError, match="layout_file"):
+        ops.read_flash("ch341a_spi", str(out), region="bios")
+    assert fake_run == []  # the refusal must happen before any subprocess call
+
+
+def test_read_flash_with_region_and_layout(fake_run, tmp_path):
+    out = tmp_path / "bios_region.bin"
+    layout = tmp_path / "board.layout"
+    ops.read_flash("ch341a_spi", str(out), region="bios", layout_file=str(layout))
+    assert fake_run[0] == [
+        ops.FLASHROM_BIN, "-p", "ch341a_spi", "-r", str(out), "-l", str(layout), "-i", "bios",
+    ]
 
 
 def test_write_flash_requires_existing_file(fake_run, tmp_path):

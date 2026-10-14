@@ -11,7 +11,7 @@ write/verify/erase against a backed-up image.
 |---|---|---|
 | `identify_programmer` | — | delegates to the LIMPET HAL (`ops/wq3809-limpet-hal/hal.py detect`, filtered to `hw_type="flash_programmer"`) instead of re-deriving USB VID:PID signatures here |
 | `detect_chip(programmer, chip="")` | none (flashrom's default: probe only) | run first; parses `Found <vendor> flash chip "<name>" (<N> kB, <bus>)` lines out of stdout |
-| `read_flash(programmer, output_path, chip="", region="")` | `-r` (`-i` for `region`) | creates `output_path`'s parent dir; always do this before write/erase |
+| `read_flash(programmer, output_path, chip="", region="", layout_file="")` | `-r` (`-l`/`-i` for `region`) | creates `output_path`'s parent dir; `region` requires `layout_file` (flashrom rejects `-i` without a layout source — raises `FlashromError` locally otherwise); always do this before write/erase |
 | `write_flash(programmer, input_path, chip="", verify=True)` | `-w` (`-n` if `verify=False`) | requires `input_path` to already exist |
 | `verify_flash(programmer, input_path, chip="")` | `-v` | requires `input_path` to already exist |
 | `erase_chip(programmer, confirm=False, chip="")` | `-E` | **refuses unless `confirm=True`** — destructive, no undo without a prior `read_flash` |
