@@ -18,7 +18,7 @@ WorkingDirectory=/home/lumen/foreman
 Environment=PATH=/home/lumen/.npm-global/bin:/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
 # 0600, operator-created from harness/systemd/lumen-despag.env.example — see that
 # file for the key reference (token, data dir, concurrency cap, wall-clock, port).
-EnvironmentFile=/home/lumen/foreman/harness/systemd/lumen-despag.env
+EnvironmentFile=/home/lumen/.secrets/lumen-despag.env
 ExecStart=/usr/bin/python3 -m despag
 Restart=on-failure
 RestartSec=5
