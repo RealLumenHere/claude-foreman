@@ -10,7 +10,7 @@ EXAMPLES = os.path.join(os.path.dirname(__file__), "examples")
 
 
 def test_validate_example_manifests_ok(capsys):
-    for name in ("ghidra", "ghidra-mcp", "hackrf"):
+    for name in ("ghidra", "ghidra-mcp", "hackrf", "component-id"):
         rc = cli.main(["--json", "validate", os.path.join(EXAMPLES, f"{name}.toml")])
         assert rc == 0
         out = json.loads(capsys.readouterr().out)

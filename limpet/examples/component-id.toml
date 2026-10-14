@@ -1,0 +1,22 @@
+# Vision-based component identification pipeline (wq#3900): PCB photo ->
+# VLM/OCR read -> marking resolution -> components.json manifest in the
+# workspace. Design: design/wq3900_limpet_vision_component_id.md. File input
+# works with no camera attached, so there is no hard hardware dependency; the
+# health check runs the pipeline self-test against the committed golden-board
+# fixture (it can genuinely fail, unlike a bare binary-exists probe).
+
+[plugin]
+name = "component-id"
+version = "0.1.0"
+kind = "tool"
+summary = "PCB photo -> OCR/VLM -> part lookup -> structured component manifest"
+maintainer = "lumen-fleet"
+license = "MIT"
+
+[source]
+git = "https://github.com/example/limpet-component-id"
+
+[health]
+command = "component-id selftest --fixture golden-board"
+interval_seconds = 3600
+timeout_seconds = 120
