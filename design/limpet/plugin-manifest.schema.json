@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lumen.industries/limpet/plugin-manifest.schema.json",
+  "title": "Limpet plugin manifest (limpet-plugin.toml, parsed to JSON)",
+  "description": "Schema for a Limpet tool/hardware plugin manifest. Formalizes the limpet-plugin.toml format from projects/limpet/VISION.md. The registry loader (design/wq3806_limpet_architecture.md §1) rejects any manifest that fails this schema. The required `trust` tier is the security spine: only core/vetted plugins may be enabled; community plugins are visible but inert until promoted.",
+  "type": "object",
+  "required": ["plugin", "trust"],
+  "additionalProperties": false,
+  "properties": {
+    "plugin": {
+      "type": "object",
+      "required": ["name", "version", "category"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+        "version": { "type": "string", "minLength": 1 },
+        "category": {
+          "type": "string",
+          "enum": [
+            "binary-analysis",
+            "disassembler",
+            "decompiler",
+            "firmware",
+            "emulation",
+            "debugger",
+            "mobile",
+            "web",
+            "network",
+            "crypto",
+            "hardware",
+            "forensics",
+            "other"
+          ]
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "trust": {
+      "description": "Trust tier. core=audited, shipped in base image, enabled by default. vetted=passed the TOOL_REGISTRY go/no-go (pinned, source-read, scoped). community=present but inert until promoted by review; the meta-server refuses to proxy a community tool call.",
+      "type": "string",
+      "enum": ["core", "vetted", "community"]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": { "type": ["boolean", "string", "array"] },
+      "properties": {
+        "architectures": { "type": "array", "items": { "type": "string" } },
+        "input_formats": { "type": "array", "items": { "type": "string" } },
+        "output_formats": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "server": { "type": "string" },
+        "transport": { "type": "string", "enum": ["stdio", "http", "sse"] }
+      },
+      "if": { "properties": { "enabled": { "const": true } } },
+      "then": { "required": ["server", "transport"] }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "health": {
+      "type": "object",
+      "required": ["check"],
+      "additionalProperties": false,
+      "properties": {
+        "check": { "type": "string", "minLength": 1 },
+        "interval": { "type": "string", "pattern": "^[0-9]+[smhd]$" }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requires": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "hardware": {
+      "description": "Present only for hardware plugins (category=hardware). Mirrors the VISION.md [hardware]/[detection]/[agent_use] blocks.",
+      "type": "object",
+      "required": ["type", "detection"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "video-capture",
+            "debug-probe",
+            "logic-analyzer",
+            "sdr",
+            "programmer",
+            "accelerator",
+            "usb-target"
+          ]
+        },
+        "detection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "usb_vendor": { "type": "string", "pattern": "^[0-9a-fA-F]{1,4}$" },
+            "usb_product": { "type": "string", "pattern": "^[0-9a-fA-F]{1,4}$" },
+            "device_path": { "type": "string" },
+            "driver": { "type": "string" }
+          }
+        },
+        "agent_use": {
+          "type": "object",
+          "additionalProperties": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "plugin": { "properties": { "category": { "const": "hardware" } } } }
+      },
+      "then": { "required": ["hardware"] }
+    }
+  ]
+}
