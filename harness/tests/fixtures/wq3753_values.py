@@ -16,6 +16,17 @@
 # before it searches, so the value stays on one line.
 WQ3753_VALUES = (
     ("d1f6f18ff8b9", "kv-secret", "sim" "-st" "udi" "o-s" "rc/" "..." "/gi" "thu" "b.t" "s"),
+    # wq#3753 follow-up (mask_replay 3753: 1 unaccounted). The wq#1482 smoke-test command
+    # (`echo "GITHUB_TOKEN=ghp_..." > wq1482_smoke/root1/leak.env`) reached the model
+    # already masked, as the masker's own elided placeholder `ghp_MASK...` + `MASKEDLEN6`.
+    # The kv rule read the 11-char placeholder as a value. It is the masker's output,
+    # not a credential, and it was never any live token; nothing to rotate.
+    ("14a7e03ec8dd", "kv-secret", "ghp" "_MA" "SK." ".."),
 )
+
+# mask_replay.account() only excuses a body under TRUNCATED_FLOOR (12) when the rule's kept
+# prefix sits directly in front of it, so the placeholder is also committed WITH its
+# `GITHUB_TOKEN=` label, as it appeared in the smoke-test command. Split like the values.
+WQ3753_PLACEHOLDER_CONTEXT = "GIT" "HUB" "_TO" "KEN" "=ghp" "_MA" "SK." ".."
 
 WQ3753_RECORDS = frozenset(v[0] for v in WQ3753_VALUES)

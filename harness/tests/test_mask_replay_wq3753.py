@@ -21,7 +21,7 @@ def test_wq3753_pins_are_their_hashes_and_read_silently():
     text, scope = _load_fixture_module(WQ3753_FIXTURES)
     values = scope["WQ3753_VALUES"]
     count = len(values)
-    assert count == 1
+    assert count == 2
     assert _unpinned(values, {"f": text}) == []
     assert masking.mask_text(text)[1] == []
     assert [r[0] for r in masking._orphan_matches(text)] == []
