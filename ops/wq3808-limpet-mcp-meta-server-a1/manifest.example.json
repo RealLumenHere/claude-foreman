@@ -49,6 +49,71 @@
       },
       "enabled": true,
       "timeout_sec": 10
+    },
+    {
+      "name": "ofrak-unpack",
+      "command": ["python3", "/path/to/ops/wq3967-limpet-ofrak-a1/ofrak_cli.py", "unpack", "{input_path}", "{workdir}"],
+      "description": "Recursively unpack a binary/firmware image with OFRAK; writes a resource-tree manifest into workdir.",
+      "args_schema": {
+        "type": "object",
+        "properties": {"input_path": {"type": "string"}, "workdir": {"type": "string"}},
+        "required": ["input_path", "workdir"]
+      },
+      "enabled": false,
+      "timeout_sec": 120,
+      "note": "LICENSING HOLD per TOOL_REGISTRY.md 'OFRAK' (wq#3967): the OFRAK Community License excludes Shared Use, which is exactly how the meta-server runs this. Needs an OFRAK Pro/Enterprise license from Red Balloon Security before enabling. Do not flip to true without that purchase."
+    },
+    {
+      "name": "ofrak-list-resources",
+      "command": ["python3", "/path/to/ops/wq3967-limpet-ofrak-a1/ofrak_cli.py", "list-resources", "{workdir}"],
+      "description": "List the resource tree OFRAK found in a prior ofrak-unpack call.",
+      "args_schema": {
+        "type": "object",
+        "properties": {"workdir": {"type": "string"}},
+        "required": ["workdir"]
+      },
+      "enabled": false,
+      "timeout_sec": 10,
+      "note": "LICENSING HOLD, see ofrak-unpack."
+    },
+    {
+      "name": "ofrak-patch-bytes",
+      "command": ["python3", "/path/to/ops/wq3967-limpet-ofrak-a1/ofrak_cli.py", "patch-bytes", "{workdir}", "--offset", "{offset}", "--hex", "{hex_bytes}"],
+      "description": "Patch raw bytes at an offset into the resource OFRAK unpacked, then repack it into workdir/patched.bin.",
+      "args_schema": {
+        "type": "object",
+        "properties": {"workdir": {"type": "string"}, "offset": {"type": "string"}, "hex_bytes": {"type": "string"}},
+        "required": ["workdir", "offset", "hex_bytes"]
+      },
+      "enabled": false,
+      "timeout_sec": 120,
+      "note": "LICENSING HOLD, see ofrak-unpack."
+    },
+    {
+      "name": "ofrak-patch-strings",
+      "command": ["python3", "/path/to/ops/wq3967-limpet-ofrak-a1/ofrak_cli.py", "patch-strings", "{workdir}", "--old", "{old_string}", "--new", "{new_string}"],
+      "description": "Find-and-replace a same-length string in the resource OFRAK unpacked, then repack it into workdir/patched.bin.",
+      "args_schema": {
+        "type": "object",
+        "properties": {"workdir": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}},
+        "required": ["workdir", "old_string", "new_string"]
+      },
+      "enabled": false,
+      "timeout_sec": 120,
+      "note": "LICENSING HOLD, see ofrak-unpack."
+    },
+    {
+      "name": "ofrak-repack",
+      "command": ["python3", "/path/to/ops/wq3967-limpet-ofrak-a1/ofrak_cli.py", "repack", "{workdir}", "{output_path}"],
+      "description": "Deliver the patched binary OFRAK produced to the requested output path, with sha256 provenance.",
+      "args_schema": {
+        "type": "object",
+        "properties": {"workdir": {"type": "string"}, "output_path": {"type": "string"}},
+        "required": ["workdir", "output_path"]
+      },
+      "enabled": false,
+      "timeout_sec": 30,
+      "note": "LICENSING HOLD, see ofrak-unpack."
     }
   ]
 }

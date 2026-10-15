@@ -1,0 +1,32 @@
+# wq#3967: OFRAK (redballoonsecurity/ofrak) -- the unpack/modify/repack plugin
+# that fills gap G7 (design/wq3929_competitive_analysis.md:233, :284 "A7 -> G7").
+# "Buy, don't build" held up on capability; the trust tier did not. The OFRAK
+# Community License (fetched from the upstream LICENSE file, not assumed)
+# excludes "Shared Use" -- any instance accessed by more than one person, or
+# set up by one person and driven by another -- which is exactly how a Limpet
+# registry plugin is used (one shared instance behind the meta-server, driven
+# by whichever agent session calls it). It also excludes "Commercial Use".
+# Promoting to `vetted`/enabling the cli_tools entries therefore needs an
+# OFRAK Pro or Enterprise license purchased from Red Balloon Security --
+# a paid, named-user agreement, i.e. a physical/business act, not a code
+# change (see ops/wq3967-limpet-ofrak-a1/README.md "Licensing" and
+# TOOL_REGISTRY.md "OFRAK"). Ships at community tier (disabled in the
+# meta-server manifest, see manifest.example.json's "ofrak-*" entries) until
+# that purchase happens.
+[plugin]
+name = "ofrak"
+version = "3.3.0"
+kind = "tool"
+category = "firmware"
+summary = "Unpack / modify / repack binaries and firmware images (Red Balloon Security OFRAK)"
+maintainer = "community"
+license = "OFRAK Community License (restrictive -- see README.md Licensing)"
+
+[source]
+git = "https://github.com/redballoonsecurity/ofrak"
+rev = "v3.3.0"
+
+[health]
+command = "python3 ops/wq3967-limpet-ofrak-a1/selftest.py"
+interval_seconds = 3600
+timeout_seconds = 60

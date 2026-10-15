@@ -1,0 +1,12 @@
+# wq#3967. ofrak's own PyPI metadata declares python_requires >=3.9, but its
+# pinned aiohttp (a Cython extension) does not build against Python 3.14's
+# changed C API (verified: `pip install ofrak` fails compiling aiohttp/_websocket.c
+# on this host's default python3 3.14.4; ISSUE-LOG.md). Install into a 3.11/3.12
+# venv -- /home/lumen/.local/bin/python3.12 is available on Lumen.
+#
+# LICENSING: ofrak ships under the OFRAK Community License, not Apache/MIT/BSD
+# (verified against https://github.com/redballoonsecurity/ofrak/blob/master/LICENSE,
+# not assumed from the PyPI "Topic :: Security" classifier). See
+# ops/wq3967-limpet-ofrak-a1/README.md "Licensing" before enabling this plugin
+# for more than one person's non-shared, non-commercial use.
+ofrak==3.3.0

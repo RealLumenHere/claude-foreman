@@ -320,3 +320,46 @@ external-invoke-only pending confirmation, same conservative posture as FAT 2.0.
 tracking convention this audit added to `limpet/tool-catalog.json` (`provenance.license_risk_policy`,
 plus `license_risk`/`redistribution_posture` fields) applies to whichever of these four actually
 gets a catalog row when wq#3929's P0 list lands.
+
+## OFRAK — unpack/modify/repack plugin (wq#3967, SHIPPED at `community` tier, licensing hold)
+
+**Status**: implementation complete (`ops/wq3967-limpet-ofrak-a1`, `limpet/examples/ofrak.toml`,
+`limpet/tool-catalog.json` row `ofrak`), but NOT promoted to `vetted` and NOT enabled in the
+meta-server manifest — a licensing finding this ticket's own research turned up, not a code gap.
+
+wq#3929 §(10)/G7 flagged OFRAK (`redballoonsecurity/ofrak`) as the "buy, don't build" fill for
+Limpet's missing binary modify/repack capability and called for a `vetted`-tier plugin
+(`design/wq3806_limpet_architecture.md:100-110`). That call assumed a permissive license the
+way EMBA/FACT/ghidra turned out to have; checking the actual text at
+`github.com/redballoonsecurity/ofrak/blob/master/LICENSE` (not the PyPI classifier, which just
+says "Proprietary"/"Free For Home Use") shows otherwise: OFRAK ships under the **OFRAK Community
+License**, a custom EULA, not Apache/MIT/GPL. It grants use only for Academic Purposes or
+Non-Commercial Use, and explicitly **excludes "Shared Use"** — "any use of OFRAK where the person
+who set up a particular instance ... is not the same person interacting with that instance ...
+or where a single instance ... is used by more than one person." Limpet's meta-server/registry is
+exactly that: one shared instance, driven by whichever agent session calls it. It also excludes
+Commercial Use outright. Both the OFRAK Pro and OFRAK Enterprise tiers (the only path to lawful
+Shared/Commercial Use) are paid, named-"Authorized User" agreements with Red Balloon Security
+("Licensee agrees to pay Red Balloon all fees...") — i.e. a purchase, not a code change.
+
+Per wq#3959's `license_risk`/`redistribution_posture` convention: `license_risk =
+non-osi-commercial-restricted`, `redistribution_posture = external-invoke` (we invoke the pip
+package, we don't bundle its source) — but unlike the FSL/BSL cases that convention was written
+for, the blocker here isn't *bundling into the sold ISO*, it's the Shared Use clause blocking the
+meta-server's basic operating model regardless of distribution. The core packages the license
+covers as one unit — `ofrak`, `ofrak_io`, `ofrak_type`, `ofrak_patch_maker`, `ofrak_components`,
+plus the paid-backend integrations `ofrak_angr`/`ofrak_binary_ninja`/`ofrak_ghidra` — are **all**
+under this same Community/Pro/Enterprise structure; none of them separately carry a permissive
+license. This ticket's scope (unpack/list/patch-bytes/patch-strings/repack) only needs the core
+four packages, none of the paid disassembler backends.
+
+**Verdict**: ship the full implementation at `community` tier — present on disk, tested, disabled
+in the registry (`ops/wq3808-limpet-mcp-meta-server-a1/manifest.example.json`'s `ofrak-*`
+cli_tools entries carry `"enabled": false` with a licensing-hold note, same shape as the existing
+`rea` SECURITY HOLD entry). Promotion to `vetted` needs an OFRAK Pro or Enterprise license
+purchased from Red Balloon Security — queued as a physical/business task for Frank per the
+full-autonomy instinct (a purchase nobody else can make), not a gate blocking this ticket.
+Also unresolved and orthogonal to licensing: the real `ofrak` package's pinned aiohttp build
+doesn't compile against this host's default Python 3.14 (ISSUE-LOG.md) — a 3.11/3.12 interpreter
+is needed wherever it's actually installed (`/home/lumen/.local/bin/python3.12` is already on
+Lumen).

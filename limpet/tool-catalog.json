@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "catalog_version": "0.2.0",
+  "catalog_version": "0.3.0",
   "generated": "2026-10-15",
-  "ticket": "wq#3936",
+  "ticket": "wq#3967",
   "provenance": {
     "summary": "Demonstrably-existing RE tool seed, NOT a reconstruction of 147 enumerated rows.",
     "note": "wq#3908 asked to 'save' a tool-catalog.json (147 tools, 9 categories) said to have been created in an earlier design session but never written to disk. The landed architecture decision wq#3806 (design/wq3806_limpet_architecture.md:32-38) already verified that /home/lumen/projects/limpet/ contained only VISION.md and that the '147 tools' figure is a target, not an enumerated input; it explicitly refused to fabricate 147 rows. No DESIGN-DECISIONS.md or 'Universal Hardware RE Tool Catalog research' exists in the repo or any granted directory. This catalog therefore follows wq#3806 section 1.3: seed from the RE surface that demonstrably exists, each entry at the correct trust tier, so the '147' target becomes an auditable outcome of promotion rather than a fabricated claim.",
@@ -15,7 +15,7 @@
     "trust_tiers": "core = proven on fleet, in base image; vetted = passed TOOL_REGISTRY go/no-go; community = present/known but disabled until human promotion (includes HOLD and NO-GO evaluations).",
     "reconciliation": "wq#3936 (2026-10-15): reconciled the 34 wq#3908-verified rows with all reachable on-disk sources and added install_method/mcp_status/disk_size_estimate/priority. New rows (8): searchsploit, component-id, fw-diff, gepetto, pyamlboot, sunxi-fel, fiedka, glitchkit. searchsploit/component-id/fw-diff from on-disk manifests; gepetto/pyamlboot/sunxi-fel from on-disk research/design docs; fiedka/glitchkit are ticket-named promotion stubs (no verifiable on-disk source, web-verify unavailable per wq#2595) carried at trust=community with url=null rather than fabricated. Sources named by the ticket that are NOT on disk and were therefore not folded in: docs/tool-registry-spec.md, DESIGN-DECISIONS.md, VISION.md and install-wizard-spec.md (the real limpet VISION.md lives in /home/lumen/projects/limpet/, outside this worktree; see design/wq3806_limpet_architecture.md:32-45). Farida Phase 2 signed skills (11 tools) are on a remote node with no manifest reachable from this worktree, so not enumerated here.",
     "field_methodology": "mcp_status=has_server only where an MCP server file exists on disk (wq#3881/3882/3883 server.py, wq#3942 server.py, rea/ghidra-mcp bridges); else cli_only. install_method is a best-known static class; the authoritative apt/pip/cargo resolution is dpkg -S at ISO build (limpet/iso-builder/gen_tool_packages.py). disk_size_estimate is a coarse planning bucket (small<100MB / medium 100MB-1GB / large>1GB), not a per-host measurement; null where unmeasured. priority maps from trust: core->core, vetted->recommended, community->optional.",
-    "license_risk_policy": "wq#3959 (design/wq3959_license_audit_oghidra_emba_fact_fat.md): the free-text 'license' field alone is not enough to catch redistribution risk (a GPL-3.0 tool and a Functional-Source/Business-Source/custom-EULA tool can both look like a short license string, but only one of them blocks bundling into the commercially-sold Limpet ISO). Every tool entry going forward MUST also carry 'license_risk' (none | copyleft-source-offer | non-osi-commercial-restricted | unverified) and 'redistribution_posture' (bundle | external-invoke | blocked-pending-permission). Any non-OSI / source-available license with a commercial-use or 'competing use' carve-out (FSL, BSL, custom written-permission clauses) gets license_risk=non-osi-commercial-restricted and redistribution_posture=external-invoke (or blocked-pending-permission if the integration plan assumes bundling) until a written commercial license or legal sign-off is obtained — that sign-off is the one legitimate human-gated step here, everything else (scoping the integration to external-invoke) is applied without waiting on it. See the ghidra entry below for the fields in practice, and the audit doc for EMBA/FACT (GPL-3.0, safe to bundle with a source offer)/FAT 2.0 (FSL-1.1-ALv2, external-invoke only)/OGhidra (unverified, treat as external-invoke only) ahead of their wq#3929 P0 adoption."
+    "license_risk_policy": "wq#3959 (design/wq3959_license_audit_oghidra_emba_fact_fat.md): the free-text 'license' field alone is not enough to catch redistribution risk (a GPL-3.0 tool and a Functional-Source/Business-Source/custom-EULA tool can both look like a short license string, but only one of them blocks bundling into the commercially-sold Limpet ISO). Every tool entry going forward MUST also carry 'license_risk' (none | copyleft-source-offer | non-osi-commercial-restricted | unverified) and 'redistribution_posture' (bundle | external-invoke | blocked-pending-permission). Any non-OSI / source-available license with a commercial-use or 'competing use' carve-out (FSL, BSL, custom written-permission clauses) gets license_risk=non-osi-commercial-restricted and redistribution_posture=external-invoke (or blocked-pending-permission if the integration plan assumes bundling) until a written commercial license or legal sign-off is obtained \u2014 that sign-off is the one legitimate human-gated step here, everything else (scoping the integration to external-invoke) is applied without waiting on it. See the ghidra entry below for the fields in practice, and the audit doc for EMBA/FACT (GPL-3.0, safe to bundle with a source offer)/FAT 2.0 (FSL-1.1-ALv2, external-invoke only)/OGhidra (unverified, treat as external-invoke only) ahead of their wq#3929 P0 adoption."
   },
   "categories": [
     {
@@ -67,6 +67,11 @@
       "id": "exploit-db",
       "title": "Exploit & vulnerability databases",
       "description": "Offline exploit/CVE code search against mirrored databases."
+    },
+    {
+      "id": "firmware-modification",
+      "title": "Firmware/binary modification & repack",
+      "description": "Unpack, patch, and repack binaries and firmware images via a resource-graph model, not just extraction."
     }
   ],
   "tools": [
@@ -212,7 +217,7 @@
       "license_risk": "none",
       "redistribution_posture": "bundle",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:15 (verified 2026-10-14); license_risk/redistribution_posture per wq#3959 (design/wq3959_license_audit_oghidra_emba_fact_fat.md) — this is the real NSA Ghidra, not the unrelated 'OGhidra' LLM-bridge project that ticket flagged for a restrictive license.",
+      "provenance": "TOOL_REGISTRY.md:15 (verified 2026-10-14); license_risk/redistribution_posture per wq#3959 (design/wq3959_license_audit_oghidra_emba_fact_fat.md) \u2014 this is the real NSA Ghidra, not the unrelated 'OGhidra' LLM-bridge project that ticket flagged for a restrictive license.",
       "install_method": "binary",
       "mcp_status": "cli_only",
       "disk_size_estimate": "large",
@@ -1256,7 +1261,47 @@
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
       "priority": "optional"
+    },
+    {
+      "name": "ofrak",
+      "path": null,
+      "version": "3.3.0",
+      "description": "Unpack / modify / repack binaries and firmware images via a resource-graph model (Red Balloon Security).",
+      "category": "firmware-modification",
+      "capabilities": [
+        "binary-unpack",
+        "binary-patch",
+        "binary-repack",
+        "recursive-unpacking"
+      ],
+      "input_formats": [
+        "firmware-blob",
+        "elf",
+        "tar",
+        "zip",
+        "cpio",
+        "filesystem-image"
+      ],
+      "output_formats": [
+        "extracted-filesystem",
+        "patched-binary",
+        "json-report"
+      ],
+      "architectures": [
+        "any"
+      ],
+      "health_check": "python3 ops/wq3967-limpet-ofrak-a1/selftest.py",
+      "url": "https://github.com/redballoonsecurity/ofrak",
+      "license": "OFRAK Community License (custom, non-OSI)",
+      "license_risk": "non-osi-commercial-restricted",
+      "redistribution_posture": "external-invoke",
+      "trust": "community",
+      "provenance": "wq#3967 (design/wq3929_competitive_analysis.md:179-189,233,284 gap G7; TOOL_REGISTRY.md 'OFRAK'). License fetched from github.com/redballoonsecurity/ofrak/blob/master/LICENSE, not assumed from the PyPI classifier -- it excludes 'Shared Use' (one instance set up by one person and driven by another, or used by more than one person) and 'Commercial Use' outright, which blocks Limpet's shared meta-server/registry use case specifically, not only bundling into a sold ISO. Held at community tier pending an OFRAK Pro/Enterprise purchase (a paid, named-user license from Red Balloon Security) -- a business decision queued for Frank, not a code gap.",
+      "install_method": "pip (ofrak==3.3.0; needs a 3.11/3.12 interpreter -- the pinned aiohttp Cython extension does not build on 3.14, see ISSUE-LOG.md)",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "medium",
+      "priority": "community"
     }
   ],
-  "tool_count": 42
+  "tool_count": 43
 }
