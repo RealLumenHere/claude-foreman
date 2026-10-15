@@ -244,6 +244,12 @@ the same four views. Adding a frontend never requires a new backend path.
   discipline as fleet command output.
 - **Untrusted output rendered inert** (§4.2): no escape passthrough, no auto-fetch, no
   auto-exec from tool/target-derived text.
+- **Content sanitized before it reaches the model, not just before it renders.** The UI
+  inert-render rule above is the display-side backstop; the primary defense against
+  prompt injection via target-derived strings/disassembly/decompilation runs upstream at the
+  meta-server result boundary — see `docs/agent-security-spec.md` (wq#4014). Raw tool output
+  is quarantined and a sanitize pass fences/escapes/truncates injection content before it
+  enters the agent's context.
 
 ## 8. Persistence & replay
 
