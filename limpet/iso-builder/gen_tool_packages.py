@@ -25,6 +25,14 @@ import dataclasses
 import json
 import pathlib
 import subprocess
+import sys
+
+# This dir is not an importable package (the hyphen in "iso-builder"), so reach the
+# sibling module through the repo root rather than a relative import.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from limpet import license_policy  # noqa: E402
 
 DEFAULT_CATALOG = pathlib.Path(__file__).parent.parent / "tool-catalog.json"
 BAKE_TIERS = ("core", "vetted")
@@ -69,6 +77,14 @@ def resolve(tool: dict, runner=subprocess.run) -> Resolution:
     if trust not in BAKE_TIERS:
         return Resolution(name, trust, "unresolved", None,
                            f"trust tier '{trust}' not promoted for base image")
+    if not license_policy.is_bundleable(tool):
+        # wq#4048: the ISO is the redistribution act, so a tool the catalog marks
+        # external-invoke or blocked-pending-permission must not be baked into it.
+        return Resolution(name, trust, "unresolved", None,
+                           "redistribution_posture "
+                           f"'{tool['redistribution_posture']}' forbids bundling "
+                           "into the ISO (tool-catalog.json license_risk_policy, "
+                           "wq#3959/wq#4048)")
     if not path:
         return Resolution(name, trust, "unresolved", None,
                            "no verified path in catalog (import_catalog.py "

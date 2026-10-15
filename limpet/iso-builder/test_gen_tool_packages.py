@@ -42,6 +42,23 @@ def test_core_tool_whose_path_dpkg_does_not_own_is_unresolved():
     assert "dpkg does not know" in res.reason
 
 
+def test_core_tool_barred_from_bundling_is_not_baked_in(): # wq#4048
+    tool = {"name": "fat2", "trust": "core", "path": "/usr/bin/fat2",
+            "license_risk": "non-osi-commercial-restricted",
+            "redistribution_posture": "external-invoke"}
+    res = g.resolve(tool, runner=fake_runner({"/usr/bin/fat2": "fat2: /usr/bin/fat2\n"}))
+    assert res.method == "unresolved"
+    assert "forbids bundling" in res.reason
+
+
+def test_core_tool_marked_bundle_still_resolves(): # wq#4048
+    tool = {"name": "tshark", "trust": "core", "path": "/usr/bin/tshark",
+            "license_risk": "copyleft-source-offer", "redistribution_posture": "bundle"}
+    res = g.resolve(tool, runner=fake_runner({"/usr/bin/tshark": "tshark: /usr/bin/tshark\n"}))
+    assert res.method == "apt"
+    assert res.package == "tshark"
+
+
 def test_dpkg_query_owner_handles_multi_package_output():
     runner = fake_runner({"/usr/bin/x": "pkg-a, pkg-b: /usr/bin/x\n"})
     assert g._dpkg_query_owner("/usr/bin/x", runner=runner) == "pkg-a"
