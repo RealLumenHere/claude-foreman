@@ -13,6 +13,8 @@ template search at a tmp dir (a falsifiable boundary, outside the real /etc).
   limpet-workspace obligations verify <ws>                     exit 3 while any is open
   limpet-workspace critic review <ws> <finding.json> --verdict ... --rationale ...
                                                                  wq#3966 critic/adjudicate step
+  limpet-workspace [--json] console <ws> [--follow]            wq#3971 read-only live
+                                                                 tail of the per-call evidence log
 
 The agent chat command ``/export`` (agent-chat GUI, design/wq3903) maps straight
 onto ``export`` via ``chat_export`` below, so the agent and a headless SSH operator
@@ -33,6 +35,7 @@ import sys
 
 import critic as critic_pass
 import obligations as ob_ledger
+import workspace_console as wcon
 import workspace_report as wr
 
 
@@ -236,6 +239,19 @@ def _cmd_critic_review(args):
             critic_pass.VERDICT_CONTESTED: 3}[result["verdict"]]
 
 
+def _cmd_console(args):
+    workspace = os.path.abspath(args.workspace)
+    if not os.path.isdir(workspace):
+        _emit({"ok": False, "error": f"no such workspace: {workspace}"}, args.json)
+        print(f"error: no such workspace: {workspace}", file=sys.stderr)
+        return 1
+    if args.follow:
+        wcon.follow(workspace, json_mode=args.json, poll_interval=args.poll_interval)
+    else:
+        wcon.emit(workspace, json_mode=args.json)
+    return 0
+
+
 def _fixture_ir():
     """A minimal but complete IR used to dry-render a template under validation."""
     return {
@@ -344,6 +360,14 @@ def build_parser():
     ov = osub.add_parser("verify", help="the agent verify-step gate: exit 3 while any obligation is open")
     ov.add_argument("workspace")
     ov.set_defaults(func=_cmd_ob_verify)
+
+    co = sub.add_parser("console", help="wq#3971 read-only live tail of the per-call evidence log")
+    co.add_argument("workspace", help="workspace dir whose evidence/tool-calls.jsonl to tail")
+    co.add_argument("--follow", "-f", action="store_true",
+                    help="keep streaming new evidence blocks as they are appended")
+    co.add_argument("--poll-interval", type=float, default=wcon.DEFAULT_POLL_INTERVAL,
+                    help="seconds between polls in --follow mode")
+    co.set_defaults(func=_cmd_console)
 
     cp = sub.add_parser("critic", help="wq#3966 adversarial critic pass on a proposed finding")
     csub = cp.add_subparsers(dest="ccmd", required=True)
