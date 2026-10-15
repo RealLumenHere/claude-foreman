@@ -50,7 +50,12 @@ def main() -> None:
                 },
             }
         elif method == "tools/call" and message.get("params", {}).get("name") == TOOL_NAME:
-            response = {"jsonrpc": "2.0", "id": req_id, "result": {"reply": "pong"}}
+            result = {"reply": "pong"}
+            # wq#3964: an REA-style child annotating its own result.
+            coverage = message["params"].get("arguments", {}).get("coverage")
+            if coverage is not None:
+                result["_meta"] = {"coverage": coverage, "provenance": {"untrusted_content": True}}
+            response = {"jsonrpc": "2.0", "id": req_id, "result": result}
         else:
             response = {
                 "jsonrpc": "2.0",

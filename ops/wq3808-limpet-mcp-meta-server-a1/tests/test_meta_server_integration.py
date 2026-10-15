@@ -70,7 +70,7 @@ def test_tools_call_proxies_to_child_server(server):
             "params": {"name": namespaced("fixture", "ping"), "arguments": {}},
         }
     )
-    assert response["result"] == {"reply": "pong"}
+    assert response["result"]["reply"] == "pong"
 
 
 def test_tools_call_runs_cli_tool(server):
@@ -304,7 +304,8 @@ def test_end_to_end_subprocess_speaks_mcp_over_stdio(tmp_path):
             }
         )
         call_resp = recv()
-        assert call_resp["result"] == {"reply": "pong"}
+        assert call_resp["result"]["reply"] == "pong"
+        assert call_resp["result"]["_meta"]["evidence"]["ok"] is True
     finally:
         proc.stdin.close()
         try:

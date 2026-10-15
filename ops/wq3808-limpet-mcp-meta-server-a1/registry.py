@@ -34,6 +34,10 @@ class McpServerEntry:
     # handshake; request covers tools/list and each tools/call.
     startup_timeout_sec: float = DEFAULT_STARTUP_TIMEOUT_SEC
     request_timeout_sec: float = DEFAULT_REQUEST_TIMEOUT_SEC
+    # Provenance stamped on every call's _meta.evidence (wq#3964): the plugin's
+    # git sha, and whether its output is target-derived (untrusted) data.
+    git_sha: str | None = None
+    untrusted_output: bool = True
 
 
 @dataclass
@@ -44,6 +48,8 @@ class CliToolEntry:
     enabled: bool = True
     args_schema: dict = field(default_factory=dict)
     timeout_sec: float = 30.0
+    git_sha: str | None = None
+    untrusted_output: bool = True
 
 
 @dataclass
@@ -102,6 +108,8 @@ def _parse_mcp_server(entry: dict) -> McpServerEntry:
         request_timeout_sec=_positive_timeout(
             entry, "request_timeout_sec", DEFAULT_REQUEST_TIMEOUT_SEC, name
         ),
+        git_sha=entry.get("git_sha"),
+        untrusted_output=bool(entry.get("untrusted_output", True)),
     )
 
 
@@ -115,6 +123,8 @@ def _parse_cli_tool(entry: dict) -> CliToolEntry:
         enabled=bool(entry.get("enabled", True)),
         args_schema=dict(entry.get("args_schema", {})),
         timeout_sec=float(entry.get("timeout_sec", 30.0)),
+        git_sha=entry.get("git_sha"),
+        untrusted_output=bool(entry.get("untrusted_output", True)),
     )
 
 

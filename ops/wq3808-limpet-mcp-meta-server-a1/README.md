@@ -63,6 +63,24 @@ startup is too slow, the next step is building them in parallel (or lazily)
 and emitting `notifications/tools/list_changed` as each lands — the server
 already advertises that capability.
 
+## Per-call evidence (wq#3964)
+
+Every `tools/call` answer carries `_meta.evidence` (`evidence.py`): the
+namespaced tool (`operation`/`tool`), `source` {kind, server, child tool,
+`git_sha` from the manifest entry}, `args_sha256`, `started_at`/`finished_at`,
+`ok`, `exit_code` (CLI tools), `error`, the child's own `coverage` note if it
+supplied one (`_meta.coverage`), `untrusted_content`, and an
+`ev_<sha256>` `evidence_id` shaped like REA's Evidence records so the log
+exports into an REA-style bundle. A call that errors or times out is still
+a JSON-RPC error, with the block (`ok: false`) at `error.data._meta.evidence`.
+
+Manifest entries (both kinds) take two optional fields: `git_sha` (the
+plugin's pinned revision) and `untrusted_output` (default `true`: output is
+target-derived; a child marking `_meta.provenance.untrusted_content` forces
+it true regardless). When a workspace is bound (`MetaServer(workspace=...)`
+or `LIMPET_WORKSPACE`), each block is appended to
+`<workspace>/evidence/tool-calls.jsonl`.
+
 ## Why no dependency on the `mcp` SDK
 
 `ops/wq1151-lumen-kb/server.py` builds its MCP server on `mcp.server.fastmcp`

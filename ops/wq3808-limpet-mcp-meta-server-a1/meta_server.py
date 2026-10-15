@@ -19,11 +19,13 @@ servers that both happen to export e.g. "list_files" don't collide.
 from __future__ import annotations
 
 import json
+import os
 import signal
 import sys
 import threading
 
 from cli_wrapper import CliToolError, build_cli_tool
+from evidence import EvidenceLog, attach_to_result, build_evidence, utc_now
 from registry import ManifestWatcher
 from stdio_mcp_client import ChildServerError, StdioMcpClient
 
@@ -83,6 +85,7 @@ class ToolRegistry:
                 "description": tool.description,
                 "input_schema": tool.input_schema,
                 "invoke": tool.invoke,
+                "source": _source("cli_tool", "cli", tool.name, entry),
             }
 
         for entry in manifest.mcp_servers:
@@ -131,6 +134,7 @@ class ToolRegistry:
                     "description": child_tool.get("description", ""),
                     "input_schema": child_tool.get("inputSchema", {"type": "object"}),
                     "invoke": _make_proxy_invoke(client, child_tool["name"]),
+                    "source": _source("mcp_server", entry.name, child_tool["name"], entry),
                 }
 
         stale = set(self._clients) - set(new_clients)
@@ -141,12 +145,25 @@ class ToolRegistry:
             self._tools = new_tools
             self._clients = new_clients
 
-    def call(self, name: str, arguments: dict) -> dict:
+    def get(self, name: str) -> dict:
         with self._lock:
             tool = self._tools.get(name)
         if tool is None:
             raise KeyError(name)
-        return tool["invoke"](arguments)
+        return tool
+
+    def call(self, name: str, arguments: dict) -> dict:
+        return self.get(name)["invoke"](arguments)
+
+
+def _source(kind: str, server: str, child_tool: str, entry) -> dict:
+    return {
+        "kind": kind,
+        "server": server,
+        "tool": child_tool,
+        "git_sha": entry.git_sha,
+        "untrusted_output": entry.untrusted_output,
+    }
 
 
 def _make_proxy_invoke(client: StdioMcpClient, child_tool_name: str):
@@ -159,15 +176,30 @@ def _make_proxy_invoke(client: StdioMcpClient, child_tool_name: str):
 class MetaServer:
     """Speaks MCP (stdio, newline-delimited JSON-RPC) upstream to the agent."""
 
-    def __init__(self, manifest_path: str, reload_poll_sec: float = 2.0):
+    def __init__(self, manifest_path: str, reload_poll_sec: float = 2.0, workspace: str | None = None):
         self.watcher = ManifestWatcher(manifest_path)
         self.registry = ToolRegistry()
         self.reload_poll_sec = reload_poll_sec
         self._reload_requested = threading.Event()
+        workspace = workspace or os.environ.get("LIMPET_WORKSPACE")
+        self.evidence_log = EvidenceLog(workspace) if workspace else None
         self.registry.rebuild(self.watcher.manifest, log=self._log)
 
     def _log(self, message: str) -> None:
         print(f"[limpet-meta] {message}", file=sys.stderr, flush=True)
+
+    def _record(self, block: dict) -> dict:
+        """Append a call's evidence to the bound workspace's log, if any.
+
+        A failed append is logged, not raised: losing the log line must not
+        also lose the agent's tool result.
+        """
+        if self.evidence_log is not None:
+            try:
+                self.evidence_log.append(block)
+            except OSError as exc:
+                self._log(f"evidence log append failed ({self.evidence_log.path}): {exc}")
+        return block
 
     def request_reload(self) -> None:
         """Hook for SIGHUP: run the manifest check now instead of next tick.
@@ -222,20 +254,29 @@ class MetaServer:
             name = params.get("name")
             arguments = params.get("arguments", {})
             try:
-                result = self.registry.call(name, arguments)
+                tool = self.registry.get(name)
             except KeyError:
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,
                     "error": {"code": -32601, "message": f"unknown tool '{name}'"},
                 }
+            started_at = utc_now()
+            try:
+                result = tool["invoke"](arguments)
             except (CliToolError, ChildServerError) as exc:
+                block = self._record(
+                    build_evidence(name, tool["source"], arguments, started_at, utc_now(), error=str(exc))
+                )
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "error": {"code": -32000, "message": str(exc)},
+                    "error": {"code": -32000, "message": str(exc), "data": {"_meta": {"evidence": block}}},
                 }
-            return {"jsonrpc": "2.0", "id": req_id, "result": result}
+            block = self._record(
+                build_evidence(name, tool["source"], arguments, started_at, utc_now(), result=result)
+            )
+            return {"jsonrpc": "2.0", "id": req_id, "result": attach_to_result(result, block)}
 
         return {
             "jsonrpc": "2.0",
