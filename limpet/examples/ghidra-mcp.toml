@@ -12,6 +12,7 @@
 name = "ghidra-mcp"
 version = "0.3.1"
 kind = "tool"
+category = "decompiler"
 summary = "Ghidra MCP server exposing decompiler tools over MCP"
 maintainer = "community"
 license = "Apache-2.0"

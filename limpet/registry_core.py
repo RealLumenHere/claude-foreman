@@ -5,10 +5,11 @@ safe start order. No I/O -- registry.py owns the filesystem/subprocess side.
 
 Effective-state ladder (worst wins), with the reason recorded:
   disabled   -- operator toggled it off (enable/disable, lifecycle step 4)
-  blocked    -- a declared dependency is missing, disabled, or version-mismatched
+  blocked    -- a declared dependency is missing, disabled, version-mismatched,
+                or the plugin conflicts with another plugin already active
   cycle      -- this plugin sits on a dependency cycle
   unhealthy  -- enabled and deps ok, but its own health check is failing
-  active     -- enabled, every dependency satisfied, healthy
+  active     -- enabled, every dependency satisfied, healthy, no active conflict
 
 Only `active` and `unhealthy` plugins are started; `active` ones are ordered
 so every dependency starts before its dependants (lifecycle step 5).
@@ -26,9 +27,11 @@ class ResolvedPlugin:
     name: str
     version: str
     kind: str
+    category: str       # "" if not categorized (wq#3932 rec. 4)
     state: str          # disabled | blocked | cycle | unhealthy | active
     reason: str         # human-readable justification for non-active states
     dependencies: dict  # name -> constraint, carried through for the unified view
+    conflicts: list      # names this plugin cannot be active alongside
 
 
 @dataclasses.dataclass(frozen=True)
@@ -72,6 +75,19 @@ def _find_cycles(manifests: dict) -> set:
     return on_cycle
 
 
+def _symmetric_conflicts(manifests: dict) -> dict:
+    """Mirror each declared `conflicts` entry onto its target, so a conflict
+    declared on only one side (A declares B) still mutually excludes both --
+    an author shouldn't have to coordinate editing both plugins' manifests to
+    get the exclusion right (wq#3932 recommendation 5)."""
+    out = {name: set(m.conflicts) for name, m in manifests.items()}
+    for name, targets in list(out.items()):
+        for target in targets:
+            if target in out:
+                out[target].add(name)
+    return out
+
+
 def resolve(manifests, enabled, health_ok=None) -> Resolution:
     """Resolve effective states.
 
@@ -84,6 +100,7 @@ def resolve(manifests, enabled, health_ok=None) -> Resolution:
     enabled = set(enabled)
     health_ok = dict(health_ok or {})
     on_cycle = _find_cycles(manifests)
+    conflicts_of = _symmetric_conflicts(manifests)
 
     resolved = {}
 
@@ -116,15 +133,22 @@ def resolve(manifests, enabled, health_ok=None) -> Resolution:
             state, reason = "cycle", "on a dependency cycle"
         else:
             problem = dep_problem(m)
+            active_conflict = next(
+                (c for c in sorted(conflicts_of.get(name, ()))
+                 if resolved.get(c) is not None and resolved[c].state == "active"),
+                None)
             if problem is not None:
                 state, reason = "blocked", problem
+            elif active_conflict is not None:
+                state, reason = "blocked", f"conflicts with {active_conflict!r} (already active)"
             elif health_ok.get(name, True) is False:
                 state, reason = "unhealthy", "health check failing"
             else:
                 state, reason = "active", ""
         resolved[name] = ResolvedPlugin(
-            name=name, version=m.version, kind=m.kind,
-            state=state, reason=reason, dependencies=dict(m.dependencies))
+            name=name, version=m.version, kind=m.kind, category=m.category,
+            state=state, reason=reason, dependencies=dict(m.dependencies),
+            conflicts=list(m.conflicts))
 
     start_order = _topo_order(
         manifests, [n for n, p in resolved.items() if p.state == "active"])

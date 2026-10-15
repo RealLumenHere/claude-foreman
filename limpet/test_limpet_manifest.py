@@ -60,6 +60,32 @@ def test_bad_dependency_constraint_rejected():
         m.parse_manifest(bad)
 
 
+def test_category_optional_and_validated():
+    man = m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="hardware"\ncategory="sdr"\n')
+    assert man.category == "sdr"
+    man = m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="hardware"\n')
+    assert man.category == ""
+    with pytest.raises(m.ManifestError) as exc:
+        m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="hardware"\ncategory="made-up"\n')
+    assert any("category" in e for e in exc.value.errors)
+
+
+def test_data_kind_is_valid():
+    man = m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="data"\n')
+    assert man.kind == "data"
+
+
+def test_conflicts_parsed_and_validated():
+    man = m.parse_manifest(
+        '[plugin]\nname="a"\nversion="1.0"\nkind="hardware"\nconflicts=["b", "c"]\n')
+    assert man.conflicts == ["b", "c"]
+    with pytest.raises(m.ManifestError) as exc:
+        m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="hardware"\nconflicts=["a"]\n')
+    assert any("itself" in e for e in exc.value.errors)
+    with pytest.raises(m.ManifestError):
+        m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="hardware"\nconflicts=["BAD NAME"]\n')
+
+
 def test_malformed_toml_fails_closed():
     with pytest.raises(m.ManifestError) as exc:
         m.parse_manifest('[plugin\nname=')

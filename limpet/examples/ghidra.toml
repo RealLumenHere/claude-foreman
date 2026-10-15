@@ -6,6 +6,7 @@
 name = "ghidra"
 version = "11.2"
 kind = "tool"
+category = "disassembler"
 summary = "Ghidra software reverse engineering suite"
 maintainer = "community"
 license = "Apache-2.0"

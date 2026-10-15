@@ -1,10 +1,12 @@
 # LIMPET plugin system
 
-Hot-swappable **tool** and **hardware** modules for LIMPET. Drop a
+Hot-swappable **tool**, **hardware**, and **data** modules for LIMPET. Drop a
 `limpet-plugin.toml` into `/etc/limpet/plugins.d/`, and the registry daemon
-validates it, resolves its dependencies, health-checks it, and publishes a
-unified view every other tool reads. Full spec:
-[`design/wq3810_limpet_plugin_system.md`](../design/wq3810_limpet_plugin_system.md).
+validates it, resolves its dependencies and conflicts, health-checks it, and
+publishes a unified view every other tool reads. Full spec:
+[`design/wq3810_limpet_plugin_system.md`](../design/wq3810_limpet_plugin_system.md),
+refined by ecosystem research in
+[`docs/plugin-spec.md`](../docs/plugin-spec.md).
 
 ## Write a plugin in 60 seconds
 
@@ -14,8 +16,10 @@ Create `my-thing.toml` (filename stem must equal `name`):
 [plugin]
 name = "my-thing"
 version = "1.0.0"
-kind = "tool"          # or "hardware"
+kind = "tool"          # or "hardware" / "data"
+category = "fuzzer"    # optional: see manifest.py CATEGORIES for the full enum
 summary = "what it does"
+conflicts = ["other-plugin-name"]   # optional: can't both be active
 
 [dependencies]          # optional: other plugins it needs
 some-dep = ">=2.0"
@@ -32,6 +36,7 @@ Validate, install (drop into the dir), and inspect:
 python3 limpet/cli.py validate my-thing.toml
 cp my-thing.toml /etc/limpet/plugins.d/
 python3 limpet/cli.py list          # effective state of every plugin
+python3 limpet/cli.py list --category sdr   # filter by category
 python3 limpet/cli.py disable my-thing   # toggle off without uninstalling
 ```
 

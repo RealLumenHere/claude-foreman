@@ -1,0 +1,26 @@
+# Example community LIMPET plugin (hardware kind) demonstrating `conflicts`
+# (wq#3932 recommendation 5, wq#3945 refinement). A HackRF One flashed with
+# PortaPack firmware still enumerates as a HackRF, so this plugin and
+# hackrf.toml can never both be the active driver config for the same
+# physical device -- declaring the conflict on either side is enough, the
+# registry mirrors it onto the other (registry_core.py:_symmetric_conflicts).
+
+[plugin]
+name = "hackrf-portapack"
+version = "1.0.0"
+kind = "hardware"
+category = "sdr"
+summary = "HackRF One running PortaPack firmware (standalone mode)"
+maintainer = "community"
+license = "GPL-2.0"
+
+[source]
+git = "https://github.com/example/limpet-hackrf-portapack"
+
+[health]
+command = "hackrf_info | grep -q portapack"
+interval_seconds = 300
+timeout_seconds = 15
+
+[hardware]
+usb_ids = ["1d50:6089", "1d50:cc15"]

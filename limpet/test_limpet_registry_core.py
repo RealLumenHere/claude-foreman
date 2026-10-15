@@ -5,10 +5,10 @@ from manifest import HealthCheck, PluginManifest
 import registry_core as rc
 
 
-def mk(name, version="1.0", kind="tool", deps=None, health=False):
+def mk(name, version="1.0", kind="tool", deps=None, health=False, conflicts=None, category=""):
     return PluginManifest(
-        name=name, version=version, kind=kind,
-        dependencies=deps or {},
+        name=name, version=version, kind=kind, category=category,
+        dependencies=deps or {}, conflicts=conflicts or [],
         health=HealthCheck("probe") if health else None)
 
 
@@ -84,6 +84,34 @@ def test_three_level_chain_orders_transitively():
     res = rc.resolve(man, enabled={"base", "mid", "top"})
     order = res.start_order
     assert order.index("base") < order.index("mid") < order.index("top")
+
+
+def test_mutual_conflict_blocks_the_second_one():
+    man = {"a": mk("a", conflicts=["b"]), "b": mk("b")}
+    res = rc.resolve(man, enabled={"a", "b"})
+    assert res.plugins["a"].state == "active"
+    assert res.plugins["b"].state == "blocked"
+    assert "conflicts with 'a'" in res.plugins["b"].reason
+
+
+def test_conflict_declared_one_sided_is_still_mutual():
+    # only "a" declares the conflict; "b" must still be blocked by it.
+    man = {"a": mk("a", conflicts=["b"]), "b": mk("b", conflicts=[])}
+    res = rc.resolve(man, enabled={"a", "b"})
+    assert res.plugins["b"].state == "blocked"
+
+
+def test_conflict_with_disabled_plugin_does_not_block():
+    man = {"a": mk("a", conflicts=["b"]), "b": mk("b")}
+    res = rc.resolve(man, enabled={"a"})  # b not enabled -> no active conflict
+    assert res.plugins["a"].state == "active"
+    assert res.plugins["b"].state == "disabled"
+
+
+def test_category_carried_through_resolution():
+    man = {"a": mk("a", category="sdr")}
+    res = rc.resolve(man, enabled={"a"})
+    assert res.plugins["a"].category == "sdr"
 
 
 def test_blocked_dependant_does_not_crash_order():
