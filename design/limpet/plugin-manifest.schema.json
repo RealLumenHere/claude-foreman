@@ -81,6 +81,41 @@
         "requires": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "integrity": {
+      "description": "wq#4056 supply-chain trust gate: pinned content hash of the plugin payload tree, verified at install AND load. Absent = verification state 'unverified' (visible warning, explicit opt-in to load). A present-but-mismatching hash is 'tampered' and never loadable.",
+      "type": "object",
+      "required": ["sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "algo": { "type": "string", "enum": ["sha256"] },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "provenance": {
+      "description": "wq#4056: where the payload came from (SLSA-lite predicate). source must equal [source].canonical when both are present; commit is the git commit the payload was built from (the fake REA 6.3.0 release archive matched no commit — this field is what makes that checkable).",
+      "type": "object",
+      "required": ["source", "commit"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "build": { "type": "string", "enum": ["git-clone", "release-archive", "local-build"] },
+        "builder": { "type": "string" },
+        "fetched_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}" }
+      }
+    },
+    "signature": {
+      "description": "wq#4056: detached Ed25519 (minisign-scheme) signature over the manifest bytes; covers the payload transitively via integrity.sha256. key_id is pinned per plugin name on first install (TOFU-pin); core/vetted tiers require signer=org.",
+      "type": "object",
+      "required": ["scheme", "key_id", "signer", "file"],
+      "additionalProperties": false,
+      "properties": {
+        "scheme": { "type": "string", "enum": ["minisign"] },
+        "key_id": { "type": "string", "minLength": 1 },
+        "signer": { "type": "string", "enum": ["maintainer", "org"] },
+        "file": { "type": "string", "minLength": 1 }
+      }
+    },
     "hardware": {
       "description": "Present only for hardware plugins (category=hardware). Mirrors the VISION.md [hardware]/[detection]/[agent_use] blocks.",
       "type": "object",

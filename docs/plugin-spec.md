@@ -111,7 +111,16 @@ registry surfaces whether LLM-assisted decompilation is actually available.
 
 ## 5. Trust / signing model
 
-**Today: none**, matching every ecosystem in the survey except that `[source]
+**Designed (wq#4056, not yet implemented):**
+[`design/wq4056_limpet_plugin_supply_chain_trust_gate.md`](../design/wq4056_limpet_plugin_supply_chain_trust_gate.md)
+specifies the full supply-chain gate — `[integrity]` pinned tree hash verified at
+install and load, `[provenance]` (source + commit + build origin), `[signature]`
+(minisign Ed25519, maintainer or org key, TOFU-pinned), a lockfile, a new
+`unverified` ladder rung, and a visible CLI/GUI warning with per-plugin explicit
+opt-in for unverified community plugins (`tampered` is never loadable). Evidence
+driver: the trojaned fake REA 6.3.0 release (2026-10-14, 172 downloads).
+
+**Shipped today: none**, matching every ecosystem in the survey except that `[source]
 git`/`rev` already pins provenance by revision (`limpet/manifest.py`
 `source` field). wq#3932 §2 "Trust / signing" calls this the field-wide hole
 and the one place Limpet can lead rather than follow.
