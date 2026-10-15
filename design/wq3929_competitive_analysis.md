@@ -193,29 +193,83 @@ How they compare and integrate with Limpet:
 - Their SBOM/vuln-report output is the kind of deliverable our evidence bundle should be able
   to carry (`design/wq3806_limpet_architecture.md:227-229`).
 
+### (11) AttifyOS — pre-configured IoT / hardware-RE Linux distro (verified live, wq#3994)
+
+AttifyOS (Attify, Inc., commercial) is a pre-configured IoT/hardware-RE Linux distribution
+bundling firmware extraction + hardware interfaces (UART/JTAG/SPI/I2C) + SDR, built on the
+assumption of hands-on hardware access. Live search (orch-limpet-research,
+`/home/lumen/scratch/research/limpet_live_search_2026-10-14.md` PART A1) surfaced it as the
+offline doc's **most important omission**: it is the **nearest prior art to Limpet's
+"hardware-aware RE distro / plug-a-device" positioning — closer than Kali (§1.6)**.
+
+- **Correction to the brand claim.** Limpet is **not** "the first hardware-aware RE distro" —
+  AttifyOS already bundles the same probe/capture tool classes Limpet's HAL exposes
+  (`design/wq3806_limpet_architecture.md:180-204`). What AttifyOS is *not*: not agent-driven,
+  not auto-detecting (the operator wires and configures interfaces by hand), and not an
+  appliance (it is an image you install, like Kali). **Limpet's defensible wedge is therefore
+  the intersection AttifyOS lacks: agent-driven + auto-detecting HAL + appliance form factor**
+  — see the re-worded §4.
+- **Related legacy tool.** `attify/firmware-analysis-toolkit` (1,549★, MIT) is a flat
+  Firmadyne wrapper, now legacy; the active successor is the FAT2.0 fork already tracked by
+  wq#3959. No separate matrix column — folded into the firmware-extraction lane.
+
+### (12) REx@Skill — agentic binary-vuln skill with a defect-proof schema (verified live, wq#3994)
+
+`tihanyin/REx-skill` is an agentic RE skill for binary-vulnerability discovery over Ghidra +
+capa. It is a **direct peer to Limpet's workspace + evidence model**, and two of its
+conventions are worth adopting outright:
+
+- **sha256-named workspace.** REx keeps one directory per binary named
+  `<filename>-<sha256[:8]>`, so two builds of the same name never collide. Limpet's workspace
+  manager is "one git-backed workspace per investigation"
+  (`design/wq3806_limpet_architecture.md:206-229`) but does not pin the directory name to
+  artifact content. **Adopt the sha256-named-workspace convention** (A12 below) — it makes a
+  workspace content-addressable and collision-free, matching the content-over-flag trust
+  thesis the plugin-signing work relies on.
+- **Four-part defect-proof schema.** A bug is reported only when **source + sink +
+  broken-guard + affected-principal** are all named and located. This is a concrete, auditable
+  shape for the reconstruction obligation ledger (G2): the ledger's open obligations can be
+  typed against these four slots. **Adopt as the defect-proof template** inside A1→G2.
+
+### (13) Academic RE-agent benchmarks — CrackMeBench / AgentRE-Bench (verified live, wq#3994)
+
+Live search surfaced published agentic-RE evaluation instruments: **CrackMeBench**
+(arXiv 2605.10597), **AgentRE-Bench** (agentre-bench.ai), and the survey "Challenges and
+Future Directions in Agentic Reverse Engineering Systems" (arXiv 2604.14317). These are not
+tools to wrap but **eval instruments to measure against**: adopting a published benchmark is
+cheap external credibility and a forcing function, and ties to fleet golden-set doctrine.
+**Adopt as A13** (design-only: pick one benchmark as Limpet's standing eval). Not a
+capability column — benchmarks are measurement, not features.
+
 ## 2. Feature comparison matrix
 
 Legend: ✅ have / ◑ partial / ✗ lack / — out of lane. "Limpet" = the committed design.
 
-| Capability | Limpet | OpenClaw | REA(morluto) | REA(Rust) | VRAX | Kali | EMBA | FACT | OFRAK | Ghidra-MCP |
-|---|---|---|---|---|---|---|---|---|---|---|
-| One-endpoint tool orchestration | ✅ | ✅ | ✅ | ◑ | ◑ | ✗ | — | — | ◑ | ✗ |
-| Large tool surface (100+) | ◑(via promote) | ✅ | ✅ | ✗ | ◑ | ✅ | ◑ | ◑ | ◑ | ◑(209 fork) |
-| Trust-tiered plugin gate | ✅ | ◑ | ✗ | — | ✗ | ◑(distro) | ✗ | ✗ | ✗ | ✗ |
-| Per-investigation workspace | ✅ | ✗ | ◑(bundle) | ◑(files) | ◑ | ✗ | ◑ | ✅(db) | ◑ | ✗ |
-| Per-tool-call evidence/provenance | ◑ | ✗ | ✅ | ✅ | ◑ | ✗ | ◑ | ✅ | ◑ | ✗ |
-| Reconstruction obligation ledger | ✗ | ✗ | ✅ | ◑ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| Adversarial review agent | ✗ | ◑ | ◑ | ✅ | ✅ | — | — | — | — | — |
-| Specialized RE model routing | ◑(design) | ◑ | ✗ | ◑ | ✗ | — | ✗ | ✗ | ✗ | ✗ |
-| Firmware extraction | ✅ | ✗ | ◑ | ✅ | ✗ | ◑ | ✅ | ✅ | ✅ | ✗ |
-| Binary modify / repack | ✗ | ✗ | ✗ | ✗ | ✗ | ◑ | ✗ | ✗ | ✅ | ✗ |
-| Firmware version diff/compare | ◑(wq3906) | ✗ | ◑ | ◑ | ✗ | ✗ | ◑ | ✅ | ◑ | ✗ |
-| Live operator console | ✗ | ✅ | ✗ | ✗ | ✅ | — | ◑(web) | ✅(web) | ✗ | ✗ |
-| SQL/queryable RE index | ✗ | ✗ | ◑ | ◑ | ✗ | ✗ | ◑ | ✅ | ◑ | ✗ |
-| Outbound integration (ticket/chat) | ✗ | ✅ | ✗ | ✗ | ✗ | — | ✗ | ◑(API) | ✗ | ✗ |
-| **Physical hardware awareness (HAL)** | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| **Plug-a-device appliance form factor** | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| Local/offline inference | ✅ | ◑ | ✗(cloud) | ✗(OpenRouter) | ✗ | — | ✅ | ✅ | ✅ | ✗ |
+Columns now include **AttifyOS** (the hardware-RE distro, §1.11) and **REx@Skill** (§1.12).
+AttifyOS is the one peer that is *not* ✗ on bundled hardware interfaces — which is exactly why
+the HAL/appliance differentiator is re-worded in §4.
+
+| Capability | Limpet | OpenClaw | REA(morluto) | REA(Rust) | VRAX | Kali | AttifyOS | EMBA | FACT | OFRAK | REx@Skill | Ghidra-MCP |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| One-endpoint tool orchestration | ✅ | ✅ | ✅ | ◑ | ◑ | ✗ | ✗ | — | — | ◑ | ◑ | ✗ |
+| Large tool surface (100+) | ◑(via promote) | ✅ | ✅ | ✗ | ◑ | ✅ | ✅(distro) | ◑ | ◑ | ◑ | ✗ | ◑(209 fork) |
+| Trust-tiered plugin gate | ✅ | ◑ | ✗ | — | ✗ | ◑(distro) | ◑(distro) | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Per-investigation workspace | ✅ | ✗ | ◑(bundle) | ◑(files) | ◑ | ✗ | ✗ | ◑ | ✅(db) | ◑ | ✅(sha256 dir) | ✗ |
+| Per-tool-call evidence/provenance | ◑ | ✗ | ✅ | ✅ | ◑ | ✗ | ✗ | ◑ | ✅ | ◑ | ✅(4-part) | ✗ |
+| Reconstruction obligation ledger | ✗ | ✗ | ✅ | ◑ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◑(defect schema) | ✗ |
+| Adversarial review agent | ✗ | ◑ | ◑ | ✅ | ✅ | — | — | — | — | — | ◑ | — |
+| Agent-driven (vs. manual toolkit) | ✅ | ✅ | ✅ | ✅ | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ | ✅ | ◑ |
+| Specialized RE model routing | ◑(design) | ◑ | ✗ | ◑ | ✗ | — | — | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Firmware extraction | ✅ | ✗ | ◑ | ✅ | ✗ | ◑ | ✅ | ✅ | ✅ | ✅ | ✗ | ✗ |
+| Binary modify / repack | ✗ | ✗ | ✗ | ✗ | ✗ | ◑ | ✗ | ✗ | ✗ | ✅ | ✗ | ✗ |
+| Firmware version diff/compare | ◑(wq3906) | ✗ | ◑ | ◑ | ✗ | ✗ | ✗ | ◑ | ✅ | ◑ | ✗ | ✗ |
+| Live operator console | ✗ | ✅ | ✗ | ✗ | ✅ | — | ✗ | ◑(web) | ✅(web) | ✗ | ✗ | ✗ |
+| SQL/queryable RE index | ✗ | ✗ | ◑ | ◑ | ✗ | ✗ | ✗ | ◑ | ✅ | ◑ | ✗ | ✗ |
+| Outbound integration (ticket/chat) | ✗ | ✅ | ✗ | ✗ | ✗ | — | ✗ | ✗ | ◑(API) | ✗ | ✗ | ✗ |
+| Bundled hardware interfaces (UART/JTAG/SPI/I2C/SDR) | ✅ | ✗ | ✗ | ✗ | ✗ | ◑ | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| **Auto-detecting HAL (plug → identify)** | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| **Plug-a-device appliance form factor** | ✅ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Local/offline inference | ✅ | ◑ | ✗(cloud) | ✗(OpenRouter) | ✗ | — | — | ✅ | ✅ | ✅ | ◑ | ✗ |
 
 ## 3. Gap list (what competitors have that Limpet doesn't)
 
@@ -240,24 +294,41 @@ only partially covers.
   else in Kali is deliberately out of lane.*
 - **G8 — Manifest signing/trust-at-scale** (Kali curation). Already flagged future
   (`design/wq3810_limpet_plugin_system.md:118-121`); needed before any `community` auto-clone.
+- **G9 — Content-addressed workspace naming** (REx@Skill, §1.12). Limpet keeps one git-backed
+  workspace per investigation (`design/wq3806_limpet_architecture.md:206-229`) but does not pin
+  the directory name to the target artifact's hash, so two builds of the same filename can
+  collide. *Cheap: adopt the `<filename>-<sha256[:8]>` convention (A12).*
+- **G10 — Not first in the hardware-RE-distro lane** (AttifyOS, §1.11). Not a capability gap
+  but a *positioning* correction: AttifyOS already bundles the probe/capture classes Limpet's
+  HAL exposes, so the "first hardware-aware RE distro" claim is false. The response is the
+  re-worded §4 differentiator, not a build item.
 
 ## 4. Differentiator validation (do our unique advantages hold?)
 
 Checked against every platform above — these are the columns where Limpet is the *only* ✅:
 
-- **Physical hardware awareness (HAL).** No software-only peer (REA, OpenClaw, EMBA, FACT,
-  OFRAK, GhidraMCP) touches physical probes/capture. Limpet's udev-driven `list_hardware`,
-  OpenOCD debug-probe, and uvcvideo screen-capture classes
-  (`design/wq3806_limpet_architecture.md:180-204`) are genuinely unmatched. **HOLDS.**
-- **Plug-a-device appliance form factor.** Every peer is software you install; Limpet is a
-  box you plug a device into (`design/wq3806_limpet_architecture.md:3-7`). **HOLDS** — and it
-  is the brand position Kali doesn't occupy (§1.6).
+- **Agent-driven + auto-detecting HAL + appliance form factor (the hardware wedge).**
+  *Re-worded for wq#3994 — AttifyOS (§1.11) is the incumbent that makes the old "first
+  hardware-aware RE distro" framing false.* AttifyOS already bundles the same probe/capture
+  tool classes (UART/JTAG/SPI/I2C/SDR) Limpet's HAL exposes
+  (`design/wq3806_limpet_architecture.md:180-204`), so bundled hardware access is **not** the
+  differentiator. What no peer — AttifyOS included — combines is the three-way intersection:
+  (1) **agent-driven** operation rather than a manual toolkit, (2) an **auto-detecting HAL**
+  that identifies a device on plug-in via the udev-driven `list_hardware`/OpenOCD/uvcvideo
+  classes (`:180-204`) rather than hand-wired interfaces, and (3) a **plug-a-device appliance**
+  form factor (`:3-7`) rather than a distro image you install. AttifyOS has none of the three;
+  Kali has none; every software-only peer (REA, OpenClaw, EMBA, FACT, OFRAK, GhidraMCP) is ✗
+  on all of them. **Lead with this intersection, not with "hardware awareness" alone.** **HOLDS.**
 - **Trust-tiered, drop-in plugin gate with per-plugin git provenance.** OpenClaw/Kali have
   marketplaces/distros but not the install-decoupled-from-enablement, fail-closed,
   hash-pinned gate (`design/wq3806_limpet_architecture.md:71-88,161-178`;
   `design/wq3810_limpet_plugin_system.md:43-66`). This is a real differentiator *and* the
   direct answer to the astroturf-adoption threat that put REA on hold
-  (`design/wq3806_limpet_architecture.md:40-48`). **HOLDS.**
+  (`design/wq3806_limpet_architecture.md:40-48`). Live search (A3) gives it concrete evidence:
+  researchers found **42,000+ exposed OpenClaw instances plus malicious skills on the ClawHub
+  marketplace** — a popular agent plus an unvetted central skill registry equals mass
+  compromise, exactly the failure Limpet's trust-tiered, fail-closed, hash-pinned gate is
+  built to prevent. **HOLDS.**
 - **Git-backed, replayable per-investigation workspace + local/offline inference.** REA has
   bundles; none has a committed, diffable workspace *and* on-box inference. **HOLDS** (local
   inference is constrained by the 32GB/iGPU box — real but bounded, `:233-239`).
@@ -295,6 +366,14 @@ Ranked by (value ÷ cost), each tied to a gap and the existing design hook it ex
 10. **A10 → G6: add tshark + a fuzzer to the `core` seed**
     (`design/wq3806_limpet_architecture.md:96-99`). Narrow, do last.
 11. **A11 → G4: one outbound evidence-bundle connector.** Lowest priority for an appliance.
+12. **A12 → G9: sha256-named workspace** (REx@Skill, §1.12). Name each workspace directory
+    `<filename>-<sha256[:8]>` so two builds of the same name never collide and a workspace is
+    content-addressable (`design/wq3806_limpet_architecture.md:206-229`). Near-zero cost;
+    also carry REx's four-part **source + sink + broken-guard + affected-principal**
+    defect-proof schema as the obligation-ledger template (folds into A1→G2).
+13. **A13 → benchmarks: adopt a published RE-agent eval** (CrackMeBench / AgentRE-Bench,
+    §1.13). Pick one as Limpet's standing eval instrument — cheap external credibility and a
+    forcing function, ties to fleet golden-set doctrine. Design-only; no build on the box.
 
 ## 6. Unblocking the design work
 
