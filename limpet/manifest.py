@@ -29,6 +29,18 @@ CATEGORIES = (
     "sdr", "flash-programmer", "network", "data", "other",
 )
 
+# Closed taxonomy for a plugin's mutation boundary (wq#3998, adopted from REA
+# morluto/rea's documented "analysis runs locally ... never escalates" boundary:
+# REA states it operates only on processes it owns and installs an engine only
+# "with approval"). A plugin DECLARES what it may touch so the trust gate can see
+# a plugin's blast radius before enabling it, and an agent can report it to the
+# operator -- the boundary is a contract, not a runtime observation. Scopes widen
+# left-to-right: "none" (read-only analysis, REA's own default) < "workspace"
+# (writes only into the investigation workspace) < "target" (modifies the
+# artifact under analysis, e.g. OFRAK repack) < "device" (writes to attached
+# hardware, e.g. a flash programmer) < "host" (mutates the Limpet host itself).
+WRITE_SCOPES = ("none", "workspace", "target", "device", "host")
+
 # A deliberately small, total version grammar: a constraint is an operator
 # (defaulting to ==) followed by a dotted release. "*" / "any" match anything.
 # We do NOT pull in a packaging dependency -- stdlib-only is a house rule, and
@@ -45,6 +57,22 @@ class HealthCheck:
     command: str
     interval_seconds: int = 60
     timeout_seconds: int = 10
+
+
+@dataclasses.dataclass(frozen=True)
+class MutationBoundary:
+    """A plugin's declared no-sudo mutation boundary (wq#3998, from REA
+    morluto/rea). REA's boundary -- "analysis runs locally", operates only on
+    owned processes, never escalates privilege -- maps here to the all-default
+    instance: escalates=False, network=False, writes=("none",). A plugin that
+    needs more declares it, so the trust gate never has to INFER blast radius
+    from a tool's name: a flash programmer declares writes=("device",), an
+    OFRAK-style repack plugin writes=("target",), and escalates=True is the
+    explicit, auditable opt-out of the no-sudo default rather than a silent
+    `sudo` buried in a start hook."""
+    escalates: bool = False            # needs root / privilege escalation
+    network: bool = False              # contacts the network (REA: local-only)
+    writes: tuple = ("none",)          # subset of WRITE_SCOPES this plugin mutates
 
 
 @dataclasses.dataclass(frozen=True)
@@ -73,6 +101,17 @@ class PluginManifest:
     # optional lifecycle hooks the registry invokes on enable/disable
     start: str = ""
     stop: str = ""
+    # declared no-sudo mutation boundary (wq#3998). None = not declared; the
+    # registry/trust gate treats an undeclared boundary as unknown rather than
+    # as safe, so "no [mutation] table" is not silently equivalent to read-only.
+    mutation: MutationBoundary | None = None
+    # the authoritative upstream for this plugin (wq#3998 anti-impersonation,
+    # from REA morluto/rea: "A similar repository name or copied README does not
+    # establish that a download is official"). A plugin index/registry compares a
+    # drop-in's declared source against the canonical URL registered for the
+    # name, so a name-squatting copy with an identical README is detectable. ""
+    # = not declared. Read from [source].canonical.
+    canonical_source: str = ""
     # free-form provenance / hardware hints, preserved but not validated deeply
     source: dict = dataclasses.field(default_factory=dict)
     hardware: dict = dataclasses.field(default_factory=dict)
@@ -144,6 +183,31 @@ def _validate_deps_table(deps, label: str) -> list:
     return errors
 
 
+def _validate_mutation(mutation) -> list:
+    """Shape check for the optional [mutation] table (wq#3998). Fail-closed: an
+    unknown write scope or a non-bool flag is rejected rather than coerced, so a
+    typo like writes=["devices"] can never widen a plugin's declared boundary."""
+    errors = []
+    if not isinstance(mutation, dict):
+        errors.append("[mutation] must be a table")
+        return errors
+    for flag in ("escalates", "network"):
+        if flag in mutation and not isinstance(mutation[flag], bool):
+            errors.append(f"[mutation].{flag} must be a boolean")
+    if "writes" in mutation:
+        writes = mutation["writes"]
+        if not isinstance(writes, list) or not writes:
+            errors.append("[mutation].writes must be a non-empty list of write scopes")
+        else:
+            for scope in writes:
+                if scope not in WRITE_SCOPES:
+                    errors.append(
+                        f"[mutation].writes entry {scope!r} must be one of {WRITE_SCOPES}")
+            if "none" in writes and len(writes) > 1:
+                errors.append('[mutation].writes "none" cannot be combined with other scopes')
+    return errors
+
+
 def validate_manifest(data: dict) -> list:
     """Return a list of human-readable problems with a parsed manifest dict;
     empty list means valid. Used by the registry's register step to reject a
@@ -193,6 +257,14 @@ def validate_manifest(data: dict) -> list:
             if field in health and (not isinstance(health[field], int) or health[field] <= 0):
                 errors.append(f"[health].{field} must be a positive integer")
 
+    if data.get("mutation") is not None:
+        errors.extend(_validate_mutation(data["mutation"]))
+
+    source = data.get("source", {})
+    if isinstance(source, dict) and "canonical" in source:
+        if not isinstance(source["canonical"], str) or not source["canonical"].strip():
+            errors.append("[source].canonical must be a non-empty string (the authoritative upstream)")
+
     return errors
 
 
@@ -208,6 +280,15 @@ def manifest_from_dict(data: dict) -> PluginManifest:
             timeout_seconds=int(h.get("timeout_seconds", 10)),
         )
     runtime = data.get("runtime", {}) if isinstance(data.get("runtime"), dict) else {}
+    mutation = None
+    if isinstance(data.get("mutation"), dict):
+        mut = data["mutation"]
+        mutation = MutationBoundary(
+            escalates=bool(mut.get("escalates", False)),
+            network=bool(mut.get("network", False)),
+            writes=tuple(mut.get("writes", ("none",))),
+        )
+    src = data.get("source", {}) if isinstance(data.get("source"), dict) else {}
     return PluginManifest(
         name=plugin["name"],
         version=plugin["version"],
@@ -222,6 +303,8 @@ def manifest_from_dict(data: dict) -> PluginManifest:
         health=health,
         start=str(runtime.get("start", "")),
         stop=str(runtime.get("stop", "")),
+        mutation=mutation,
+        canonical_source=str(src.get("canonical", "")),
         source=dict(data.get("source", {}) or {}),
         hardware=dict(data.get("hardware", {}) or {}),
     )

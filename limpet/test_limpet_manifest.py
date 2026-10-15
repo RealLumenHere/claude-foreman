@@ -98,6 +98,55 @@ def test_conflicts_parsed_and_validated():
         m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="hardware"\nconflicts=["BAD NAME"]\n')
 
 
+def test_mutation_boundary_defaults_to_no_sudo():
+    # No [mutation] table => undeclared (None), NOT silently read-only (wq#3998).
+    man = m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n')
+    assert man.mutation is None
+    # An empty [mutation] table => REA's own boundary: no escalation, no network,
+    # writes nothing.
+    man = m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n[mutation]\n')
+    assert man.mutation == m.MutationBoundary(escalates=False, network=False, writes=("none",))
+
+
+def test_mutation_boundary_declares_wider_scope():
+    man = m.parse_manifest(
+        '[plugin]\nname="flash"\nversion="1.0"\nkind="hardware"\n'
+        '[mutation]\nescalates=true\nnetwork=false\nwrites=["device"]\n')
+    assert man.mutation.escalates is True
+    assert man.mutation.writes == ("device",)
+
+
+@pytest.mark.parametrize("bad, needle", [
+    ('[mutation]\nwrites=["devices"]\n', "writes"),          # typo'd scope fails closed
+    ('[mutation]\nescalates="yes"\n', "escalates"),          # non-bool flag
+    ('[mutation]\nwrites=["none", "target"]\n', "none"),     # none cannot combine
+    ('[mutation]\nwrites=[]\n', "non-empty"),                # empty writes list
+])
+def test_mutation_boundary_invalid_rejected(bad, needle):
+    with pytest.raises(m.ManifestError) as exc:
+        m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n' + bad)
+    assert any(needle in e for e in exc.value.errors)
+
+
+def test_canonical_source_parsed_and_validated():
+    # Anti-impersonation (wq#3998): the authoritative upstream is declared so a
+    # name-squatting copy with the same README is detectable by the index.
+    man = m.parse_manifest(
+        '[plugin]\nname="rea"\nversion="1.0"\nkind="tool"\n'
+        '[source]\ncanonical="https://github.com/morluto/rea"\n')
+    assert man.canonical_source == "https://github.com/morluto/rea"
+    # Present-but-empty is a declaration error, not a silent "" default.
+    with pytest.raises(m.ManifestError) as exc:
+        m.parse_manifest(
+            '[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n[source]\ncanonical=""\n')
+    assert any("canonical" in e for e in exc.value.errors)
+
+
+def test_canonical_source_absent_defaults_empty():
+    man = m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n')
+    assert man.canonical_source == ""
+
+
 def test_malformed_toml_fails_closed():
     with pytest.raises(m.ManifestError) as exc:
         m.parse_manifest('[plugin\nname=')
