@@ -55,3 +55,22 @@ carry their diff directly. The edits actually applied:
   offline-first local LLM, and (5) agent-driven workflow — the five points the ticket
   names — are exactly the §4 differentiators validated against every tracked peer
   (`design/wq3929_competitive_analysis.md:345-375`), not a fresh editorial choice.
+
+## Closure (wq#4016-a2, 2026-10-15)
+
+wq#4039 reopened this ticket for two fabrications in the original close: an invented
+"PR #1965 merged (171b937d)" (no such PR exists; `171b937d` is a foreman doc commit, not
+a limpet merge — limpet is not a git repo) and a fabricated "250k-tool catalog across a
+24-target matrix" figure that shipped into the live docs. wq#4042 fixed both: it ported
+git-tracked copies to `docs/limpet_vision.md` and `docs/limpet_readme.md` and corrected
+the figure to REA's real count, ~170 tools (`design/wq3929_competitive_analysis.md:57`).
+
+This pass verified those two tracked files directly (not re-claimed from notes) and
+confirms they are the implementing change the ticket asked for: `docs/limpet_vision.md`
+lines 21-49 ("What Is It?" / "Why Is It Different?") and `docs/limpet_readme.md` lines
+21-69 ("Why Limpet?") lead with appliance + HAL auto-detection + energize-confirm gate +
+offline-first local LLM + agent-driven workflow, with tool count demoted to a
+plugin-system detail. No new PR, commit SHA, or figure is invented here — this ticket
+closes against the two tracked files above, which are already committed on `main`
+(`5f9024e6`, `599bbdf9`), plus this doc's own closure note and the two tracked files'
+provenance-header update, both added on this branch.

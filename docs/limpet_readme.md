@@ -1,7 +1,11 @@
 # Limpet (README.md, tracked copy)
 
 > Status: tracked copy — 2026-10-15
-> Ticket: wq#4042 (fixes wq#4016 fabrication, per wq#4039 judgment)
+> Tickets: wq#4042 (fixed the fabricated "250k/24-target" citation, per wq#4039
+> judgment); wq#4016 (closed 2026-10-15 against this copy — the "Why Limpet?"
+> section below, leading with appliance + HAL auto-detection + energize-confirm
+> gate + offline-first local LLM + agent-driven workflow instead of tool count,
+> is the ticket's implementing change)
 
 This is the git-tracked copy of `/home/lumen/projects/limpet/README.md`
 (outside any git repo, so edits there have no commit/diff/review trail —
