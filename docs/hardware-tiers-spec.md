@@ -51,7 +51,7 @@ The hardware tiers system classifies any PC into one of five performance tiers b
 - No P-core pinning (no hybrid architecture)
 - `vm.swappiness=10`
 
-**Notes:** These machines are approaching end-of-useful-life for LLM work but are common in e-waste streams. Limpet still functions — the MCP meta-server, all 129 tools, and headless mode work fine. Agent mode is slow but functional.
+**Notes:** These machines are approaching end-of-useful-life for LLM work but are common in e-waste streams. Limpet still functions — the MCP meta-server, all 104 tools **[U]**, and headless mode work fine. Agent mode is slow but functional.
 
 ### Tier 2 — CAPABLE (Haswell through 7th gen, AVX2, DDR3/DDR4)
 
@@ -783,6 +783,19 @@ def detect_tier():
             f"Zen 4/5 AVX-512 ({topology['ccd_count']} CCD, "
             f"{topology['numa_node_count']} NUMA node(s))"
         )
+
+    # Step 3c: AMD family 17h Zen 1/Zen+ → Tier 2 per §3.1, regardless of bandwidth.
+    # Family 17h spans Zen 1 through Zen 2; model distinguishes them (AMD CPUID,
+    # cross-checked against the Linux kernel's amd.c model tables): Zen 1 is model
+    # 0x01 (Summit Ridge/Naples), 0x11 (Raven Ridge), 0x20 (Dali); Zen+ is 0x08
+    # (Pinnacle Ridge), 0x18 (Picasso). Zen 2 starts at model 0x31 (Rome) and every
+    # later family-17h part (Renoir/Lucienne/Matisse/Van Gogh/Mendocino) stays
+    # >=0x30, so model < 0x30 is a safe Zen-1/Zen+ cutoff within family 17h. [D]
+    # Dual-channel DDR4 on real Zen 1/Zen+ boards is always >=30 GB/s, so without
+    # this branch Step 4 never catches them and they fall through to Tier 3.
+    if (cpu_info['vendor'] == 'amd' and cpu_info.get('family') == 0x17
+            and cpu_info.get('model', 0xFF) < 0x30):
+        return 2, "Zen 1/Zen+ (half-width AVX2 decode; §3.1 Tier 2 floor)"
 
     # Step 4: Check memory bandwidth → <30 GB/s = Tier 2
     bandwidth = mem_info['channels'] * mem_info['speed_mhz'] * 8 / 1000  # GB/s approx
