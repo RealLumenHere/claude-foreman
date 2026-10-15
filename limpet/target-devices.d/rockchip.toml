@@ -1,4 +1,7 @@
 # wq#3940 — LIMPET HAL target device database: rockchip (17 entries)
+# wq#3935 — ewf (e-waste-flasher) device-profile merge: per-entry
+#           recommended_commands + partition_layout, and the shared
+#           [partition_layouts.*] tables at the bottom of this file.
 #
 # Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
 # boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
@@ -25,6 +28,18 @@
 #                     Below "high" should not gate an irreversible action without
 #                     an operator confirm (same posture as usb_boot_signatures.toml).
 #   notes             caveats, protocol notes, disambiguation from a similar entry
+#
+# OPTIONAL PROFILE FIELDS (wq#3935, ewf absorption — may be absent on
+# not-yet-profiled entries in other vendor files):
+#   recommended_commands  ordered operator playbook for this mode; <angle-bracket>
+#                         tokens are operator-supplied values, never literal.
+#                         MaskROM mode has NO flash verbs of its own — the first
+#                         step is always chainloading the per-SoC loader blob
+#                         (rkdeveloptool db), which flips the device to Loader.
+#   partition_layout      name of a [partition_layouts.<name>] table below
+#                         (loaded via limpet/target_devices.py
+#                         load_partition_layouts). Layout confidence is the
+#                         layout's own `confidence`, independent of the entry's.
 
 [[device]]
 match_type = "vid_pid"
@@ -38,6 +53,13 @@ mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = "RK3066 shares its MaskROM PID with the earlier RK2928 generation."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-legacy-parameter"
 
 [[device]]
 match_type = "vid_pid"
@@ -51,6 +73,13 @@ mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-legacy-parameter"
 
 [[device]]
 match_type = "vid_pid"
@@ -64,6 +93,12 @@ mode_name = "Loader (post-DRAM-init)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-legacy-parameter"
 
 [[device]]
 match_type = "vid_pid"
@@ -77,6 +112,13 @@ mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-legacy-parameter"
 
 [[device]]
 match_type = "vid_pid"
@@ -90,6 +132,12 @@ mode_name = "Loader (post-DRAM-init)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-legacy-parameter"
 
 [[device]]
 match_type = "vid_pid"
@@ -103,6 +151,13 @@ mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-legacy-parameter"
 
 [[device]]
 match_type = "vid_pid"
@@ -116,6 +171,12 @@ mode_name = "Loader (post-DRAM-init)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-legacy-parameter"
 
 [[device]]
 match_type = "vid_pid"
@@ -129,6 +190,13 @@ mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = "Pairs with 2207:330c (Loader) below, which is already independently confirmed in production HAL."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -142,6 +210,12 @@ mode_name = "Loader (post-DRAM-init)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "high"
 notes = "Already shipped in ops/wq3809-limpet-hal/hal.py's target_device plugin as 'Rockchip MaskROM' — labelled here as Loader per rkdeveloptool's a/c generation-pair convention; HAL's existing label should be read as 'Rockchip flashing mode, RK31xx/RK32xx family' rather than strictly MaskROM-only. Flagging the discrepancy rather than silently relabeling hal.py's shipped entry."
+recommended_commands = [
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -155,6 +229,13 @@ mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -168,6 +249,12 @@ mode_name = "Loader (post-DRAM-init)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -181,6 +268,13 @@ mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = "RK3566/RK3568 share a generation and MaskROM PID."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -194,6 +288,12 @@ mode_name = "Loader (post-DRAM-init)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -207,6 +307,13 @@ mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -220,6 +327,12 @@ mode_name = "Loader (post-DRAM-init)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "medium"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -233,6 +346,13 @@ mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "low"
 notes = "Newest, lowest-confidence pair in this table; most tentative of the Rockchip rows."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -246,4 +366,40 @@ mode_name = "Loader (post-DRAM-init)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "low"
 notes = ""
+recommended_commands = [
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-gpt-standard"
 
+# ---------------------------------------------------------------------------
+# Shared partition layouts (wq#3935). Loaded by
+# limpet/target_devices.py load_partition_layouts(); referenced from the
+# entries above by name. Offsets are 512-byte-sector LBAs. These describe the
+# vendor-standard image layout (what rkbin/U-Boot tooling writes) — a device
+# running vendor Android firmware may instead carry whatever its parameter
+# file declared, so `rkdeveloptool ppt` output, when the loader can produce
+# it, always outranks this table for an attached device.
+# ---------------------------------------------------------------------------
+
+[partition_layouts.rk-gpt-standard]
+description = "Rockchip standard GPT layout (RK3288 and later, rkbin/U-Boot convention): fixed loader offsets, GPT for everything from boot onward."
+confidence = "medium"
+source = "rkbin/U-Boot Rockchip docs convention per wq#3923 research corpus; not live-verified on hardware this pass"
+partitions = [
+    { name = "idbloader", start_sector = 64, notes = "0x40: DDR-init blob + miniloader (idbloader.img)" },
+    { name = "uboot", start_sector = 16384, notes = "0x4000: U-Boot proper (uboot.img / u-boot.itb)" },
+    { name = "trust", start_sector = 24576, notes = "0x6000: ATF/OP-TEE (trust.img); merged into the U-Boot FIT on newer mainline builds" },
+    { name = "boot", start_sector = 32768, notes = "0x8000: kernel/boot partition; GPT-defined from here on" },
+    { name = "rootfs", start_sector = 262144, notes = "0x40000: root filesystem" },
+]
+
+[partition_layouts.rk-legacy-parameter]
+description = "Legacy Rockchip layout (pre-GPT Android era, RK2928..RK3368): partition map is declared by the 'parameter' file, not a GPT."
+confidence = "medium"
+source = "Rockchip legacy parameter-file convention per wq#3923 research corpus; per-device map varies with firmware"
+partitions = [
+    { name = "idbloader", start_sector = 64, notes = "0x40: DDR-init blob + miniloader, same fixed offset as the GPT layout" },
+    { name = "parameter", start_sector = 8192, notes = "0x2000: 'parameter' text file; its mtdparts string defines every later partition, offsets relative to this base. Dump and parse it (rkdeveloptool rl 0x2000 0x20 parameter.bin) instead of assuming names/offsets" },
+]

@@ -6,48 +6,64 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
-## wq#3938 — settings/preferences panel (extension of wq#3904)
+## wq#3935 — ewf absorption: Rockchip MCP tool + device-profile merge
 
-**Decision.** `docs/settings-spec.md` extended in place rather than rewritten: wq#3904's
-layered-TOML store, `limpet-config` CLI, and seven-domain layout stand; wq#3938 adds the
-settings they were missing (marked **[wq3938]** in the spec): LLM provider selection +
-per-role models (`agent-fast`/`agent-deep`/`agent-code`, the alias names already live in
-`ops/wq3849-m80s-llm-deployment/litellm-aliases.yaml:10-14`) + a `models pull` download
-manager; `hardware rescan` and the full tuning-override table absorbing the AMD research
-knobs from `docs/hardware-tiers-spec.md` §3.9–§3.10 (wq#3919/wq#3939); plugin
-install-from-git/URL and notify-only update check; evidence-chain and report-template
-workspace prefs; update-repo URL, proxy, and an `offline_mode` master switch; theme,
-font size, chat and notification display prefs.
+**D1 — ewf is retired as a standalone app; its function moves into Limpet.**
+The e-waste-flasher Tauri app (`/home/lumen/build/ewf/`, rebuild history in
+`docs/wq3244_ewf_rebuild_audit.md`, backend research in
+`docs/wq3253_ewf_amlogic_allwinner_backends.md`) duplicated two things Limpet
+already owns: a USB device-detection layer (HAL + target device DB, wq#3809 /
+wq#3940) and a tool-dispatch layer (MCP meta-server, wq#3808). Maintaining a
+second GUI app around the same rkdeveloptool calls meant two VID:PID tables
+and two command surfaces drifting apart. ewf's two real assets — its Rockchip
+device-profile knowledge and its backup/flash workflow — are absorbed as:
 
-**Why these calls:**
+- per-SoC profiles in `limpet/target-devices.d/rockchip.toml`
+  (`recommended_commands`, `partition_layout` + `[partition_layouts.*]`),
+- MCP wrappers in `limpet/tools/rockchip/rockchip-mcp.toml`
+  (`list_devices`, `read_partition_table`, `read_flash`, `write_flash`),
+- a plugin manifest `limpet/tools/rockchip/limpet-plugin.toml` so the
+  registry (wq#3810) tracks/health-checks it like any other tool plugin.
 
-- **GUI stays Textual; GTK4 and xfce4-settings-manager embedding rejected.** The ticket
-  offered "XFCE settings panel integration or standalone GTK4 window." Both exist only
-  when a display does; the appliance's primary mode is SSH with no display, so either
-  choice forces a second settings implementation for headless. A `.desktop` launcher
-  opening the Textual TUI in xfce4-terminal (already shipped,
-  `docs/desktop-spec.md:274-282`) satisfies "accessible from start bar menu" with one
-  code path and zero new dependencies. (Spec §5.)
-- **Tuning knobs are vendor-gated, preference-only.** P-core pinning is refused on AMD
-  (no P/E split — CCD/NUMA topology instead, `docs/hardware-tiers-spec.md` §3.9);
-  `numa_mode` is hidden on single-CCD parts; governor/swappiness are written as
-  preferences a provisioning service applies, keeping `limpet-config` off the house
-  deny-list. Defaults come from the hardware-book TOMLs, bounds from the live hardware
-  row — the spec fixes names and gating, never numbers. (Spec §4.2.)
-- **Offline mode is one switch that only refuses, never removes.** It gates every
-  remote fetch (cloud LLM routes, model pulls, plugin installs, update checks) and
-  touches nothing on disk — protecting the local-first differentiator wq#3929's matrix
-  validated (`design/wq3929_competitive_analysis.md:218,261`). (Spec §4.5.)
-- **Plugin install lands disabled at community tier, always.** Install-from-git reuses
-  wq#3810's drop-in flow; decoupling install from enablement is the fail-closed property
-  the competitive pass found no peer marketplace has
-  (`design/wq3929_competitive_analysis.md:256`). Update check is notify-only, matching
-  the update domain's manual-apply posture. (Spec §4.3.)
-- **Report/evidence prefs validate against live state, not enums.**
-  `workspace.report_template` is checked against the three-level template resolution
-  (`limpet/workspace_report.py:47-50`), so site templates are first-class without a code
-  change; evidence prefs only set workspace-creation defaults, never rewrite an existing
-  workspace. (Spec §4.4.)
+**D2 — wrappers are authored in TOML, rendered to the meta-server's JSON.**
+The MCP meta-server's registry manifest is JSON and stays JSON — its
+hot-reload, validation, and packaging (`packaging/limpet-mcp-meta`) are built
+and tested around it (wq#3808/wq#3821), and teaching it a second manifest
+format would put parsing risk in the serving path for zero serving benefit.
+The Rockchip tool is instead *authored* as `[[wrappers]]` TOML (consistent
+with every other Limpet drop-in: plugin manifests, target-device catalogs)
+and `limpet/tools/rockchip/mcp_wrappers.py render` emits the `cli_tools` JSON
+array verbatim in the shape `registry.py` parses. Validation happens at
+render time, where failing is cheap: every `{placeholder}` must be a whole
+argv element (the cli_wrapper substitution contract) and must be declared +
+required in the wrapper's `args_schema`.
+
+**D3 — destructive wrappers render disabled by default.**
+`write_flash` overwrites device flash irreversibly, and the meta-server has no
+operator-confirm step — any connected agent can call any enabled tool. Same
+posture as the target-DB rule that below-high confidence must not gate an
+irreversible action (wq#3940 header): the rendered `write_flash` entry carries
+`"enabled": false` plus a note; turning it on is a deliberate, auditable
+manifest edit made after a verified backup exists. The read-only verbs
+(`list_devices`, `read_partition_table`, `read_flash`) render enabled.
+MaskROM loader-chainloading (`rkdeveloptool db`) is not wrapped at all: it
+needs a per-SoC loader blob, and the wrong blob wedges the BootROM session —
+it stays an operator step, spelled out per-SoC in `recommended_commands`.
+
+**D4 — device profiles extend [[device]]; partition layouts are shared tables.**
+ewf kept a separate device-profile DB. Limpet instead extends the existing
+`[[device]]` entries (wq#3940) with two optional fields —
+`recommended_commands`, `partition_layout` — rather than standing up a second
+catalog keyed by the same VID:PIDs, which would recreate exactly the
+drift-between-two-tables problem D1 retires. Partition layouts are shared
+`[partition_layouts.<name>]` tables referenced by name, because Rockchip
+generations cluster on a few layouts (fixed-offset GPT convention vs. legacy
+parameter-file) and inlining per-entry copies invites drift;
+`load_partition_layouts()` fails loud on a name collision across files. The
+fields are optional with empty defaults so the other eleven vendor catalogs
+load unchanged until each gets its own profiling pass. Layout tables describe
+the vendor-standard image convention; live `rkdeveloptool ppt` output always
+outranks them for an attached device.
 
 ## wq#3934 — reporting/export system
 

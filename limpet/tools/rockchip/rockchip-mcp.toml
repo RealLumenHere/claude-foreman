@@ -1,0 +1,82 @@
+# wq#3935 — Rockchip MCP tool: rkdeveloptool wrapped for the LIMPET MCP meta-server.
+#
+# This is the authorable source for the meta-server's Rockchip CLI tools. The
+# meta-server (ops/wq3808-limpet-mcp-meta-server-a1) consumes a JSON registry
+# manifest; `python3 limpet/tools/rockchip/mcp_wrappers.py render` turns every
+# [[wrappers]] table below into a `cli_tools` JSON entry in exactly the shape
+# its registry.py parses (name, command argv, description, args_schema,
+# enabled, timeout_sec). ewf (e-waste-flasher) is retired as a standalone app;
+# this manifest absorbs its Rockchip backup/flash surface — see
+# limpet/DESIGN-DECISIONS.md (wq#3935).
+#
+# Command templates are argv lists. A "{name}" element is substituted WHOLESALE
+# as one argv entry by the meta-server's cli_wrapper.py (never interpolated
+# into a shell string), so every placeholder must be a whole element and must
+# be declared in the wrapper's args_schema. mcp_wrappers.py validate enforces
+# both.
+#
+# rkdeveloptool subcommands used (github.com/rockchip-linux/rkdeveloptool;
+# binary path per limpet/tool-catalog.json, installed on maksoor per
+# TOOL_REGISTRY.md):
+#   ld                      list attached Rockchip devices + mode (Maskrom/Loader)
+#   ppt                     print the device's partition table (needs Loader stage)
+#   rl <begin> <count> <f>  read <count> sectors from LBA <begin> into file <f>
+#   wl <begin> <f>          write file <f> to flash starting at LBA <begin>
+#
+# MaskROM-mode devices must first be pushed a loader (`rkdeveloptool db
+# MiniLoaderAll.bin`) before any flash I/O verb works — that step is deliberately
+# NOT wrapped here: it takes a per-SoC loader blob, and picking the wrong blob
+# can hang the BootROM session. It stays an operator step; the per-SoC
+# recommended_commands in limpet/target-devices.d/rockchip.toml spell it out.
+
+[tool]
+name = "rockchip"
+binary = "/usr/local/sbin/rkdeveloptool"
+summary = "Rockchip SoC backup/flash over USB MaskROM/Loader mode (absorbed from ewf, wq#3935)"
+
+[[wrappers]]
+name = "list_devices"
+description = "List attached Rockchip USB devices and their mode (Maskrom or Loader). Safe, read-only."
+command = ["/usr/local/sbin/rkdeveloptool", "ld"]
+destructive = false
+timeout_sec = 15
+args_schema = { type = "object", properties = {}, required = [] }
+
+[[wrappers]]
+name = "read_partition_table"
+description = "Print the connected device's partition table (rkdeveloptool ppt). Read-only; requires the device to be in Loader mode (MaskROM devices need a loader pushed first — see rockchip.toml recommended_commands)."
+command = ["/usr/local/sbin/rkdeveloptool", "ppt"]
+destructive = false
+timeout_sec = 30
+args_schema = { type = "object", properties = {}, required = [] }
+
+[[wrappers]]
+name = "read_flash"
+description = "Back up flash: read sector_count 512-byte sectors starting at LBA begin_sector into out_path (rkdeveloptool rl). Read-only on the device; a full eMMC dump over USB 2.0 runs tens of minutes. begin_sector/sector_count accept decimal or 0x-hex as rkdeveloptool does."
+command = ["/usr/local/sbin/rkdeveloptool", "rl", "{begin_sector}", "{sector_count}", "{out_path}"]
+destructive = false
+timeout_sec = 3600
+
+[wrappers.args_schema]
+type = "object"
+required = ["begin_sector", "sector_count", "out_path"]
+
+[wrappers.args_schema.properties]
+begin_sector = { type = "string", description = "First LBA to read (decimal or 0x-hex), e.g. \"0\" for a full-device dump" }
+sector_count = { type = "string", description = "Number of 512-byte sectors to read (decimal or 0x-hex)" }
+out_path = { type = "string", description = "File to write the dump to" }
+
+[[wrappers]]
+name = "write_flash"
+description = "DESTRUCTIVE: write image_path to flash starting at LBA begin_sector (rkdeveloptool wl). Overwrites device contents irreversibly. Rendered into the meta-server manifest with enabled=false; flipping it on is a deliberate manifest edit after a backup exists (house posture, limpet/DESIGN-DECISIONS.md D3)."
+command = ["/usr/local/sbin/rkdeveloptool", "wl", "{begin_sector}", "{image_path}"]
+destructive = true
+timeout_sec = 3600
+
+[wrappers.args_schema]
+type = "object"
+required = ["begin_sector", "image_path"]
+
+[wrappers.args_schema.properties]
+begin_sector = { type = "string", description = "First LBA to write (decimal or 0x-hex)" }
+image_path = { type = "string", description = "Image file to write" }

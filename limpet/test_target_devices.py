@@ -88,3 +88,45 @@ def test_checked_in_rules_file_matches_current_catalog():
     with open(rules_path) as f:
         on_disk = f.read()
     assert on_disk == td.render_udev_rules(td.load_catalog())
+
+
+# wq#3935 (ewf absorption): per-device flashing profiles + shared partition layouts.
+
+def test_every_rockchip_entry_carries_a_resolvable_profile():
+    layouts = td.load_partition_layouts()
+    rockchip = [d for d in td.load_catalog() if d.source_file == "rockchip"]
+    assert len(rockchip) == 17
+    for d in rockchip:
+        assert d.recommended_commands, f"{d.usb_vid}:{d.usb_pid} has no recommended_commands"
+        assert d.partition_layout in layouts, f"{d.usb_vid}:{d.usb_pid} names unknown layout {d.partition_layout!r}"
+        if d.mode_name == "MaskROM":
+            # MaskROM has no flash verbs: the playbook must start by chainloading a loader
+            assert d.recommended_commands[0].startswith("rkdeveloptool db ")
+
+
+def test_partition_layouts_have_ascending_offsets_and_a_confidence():
+    layouts = td.load_partition_layouts()
+    assert set(layouts) >= {"rk-gpt-standard", "rk-legacy-parameter"}
+    for name, layout in layouts.items():
+        assert layout["confidence"] in ("high", "medium", "low")
+        starts = [p["start_sector"] for p in layout["partitions"]]
+        assert starts and all(isinstance(s, int) for s in starts)
+        assert starts == sorted(starts)
+
+
+def test_profile_fields_default_empty_outside_the_profiled_population():
+    # Probe from outside the population wq#3935 touched (wq#2630): a qualcomm
+    # entry must load fine with no profile fields and expose empty defaults.
+    hits = td.lookup("05c6", "9008")
+    assert hits and hits[0].recommended_commands == ()
+    assert hits[0].partition_layout == ""
+
+
+def test_duplicate_layout_name_across_files_fails_loud(tmp_path):
+    (tmp_path / "a.toml").write_text('[partition_layouts.x]\ndescription = "a"\n')
+    (tmp_path / "b.toml").write_text('[partition_layouts.x]\ndescription = "b"\n')
+    try:
+        td.load_partition_layouts(tmp_path)
+        assert False, "expected ValueError on a duplicate layout name"
+    except ValueError as exc:
+        assert "x" in str(exc)

@@ -1,0 +1,28 @@
+# wq#3935 — LIMPET plugin manifest for the Rockchip tools (ewf absorption).
+#
+# Install = drop (or symlink) this file into /etc/limpet/plugins.d/ as
+# rockchip-tools.toml; limpet/registry.py picks it up on the next scan.
+# Schema: limpet/manifest.py (design/wq3810_limpet_plugin_system.md).
+#
+# No [runtime] start/stop: the wrappers are not a daemon — they execute inside
+# the MCP meta-server's process (ops/wq3808-limpet-mcp-meta-server-a1), whose
+# own systemd unit (packaging/limpet-mcp-meta) owns the lifecycle.
+
+[plugin]
+name = "rockchip-tools"
+version = "1.0.0"
+kind = "tool"
+summary = "rkdeveloptool-backed Rockchip MaskROM/Loader backup+flash wrappers for the MCP meta-server (absorbed from ewf, wq#3935)"
+maintainer = "lumen"
+license = "GPL-2.0"
+
+[health]
+# Same probe tool-catalog.json uses for rkdeveloptool: exits 0 iff the binary
+# is present and runnable. No device needs to be attached.
+command = "/usr/local/sbin/rkdeveloptool ver"
+interval_seconds = 300
+timeout_seconds = 10
+
+[source]
+url = "https://github.com/rockchip-linux/rkdeveloptool"
+wrappers_manifest = "limpet/tools/rockchip/rockchip-mcp.toml"

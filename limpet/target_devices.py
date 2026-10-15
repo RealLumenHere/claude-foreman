@@ -46,6 +46,14 @@ class TargetDevice:
     confidence: str
     notes: str
     source_file: str
+    # wq#3935 (ewf absorption): optional per-device flashing profile. Empty on
+    # entries that haven't been profiled yet; populated per-entry in the TOML.
+    # `partition_layout` names a [partition_layouts.<name>] table (same catalog
+    # dir, loaded by load_partition_layouts) rather than inlining the layout,
+    # because every SoC generation of a vendor tends to share one of a few
+    # layouts and duplicating it per entry invites drift.
+    recommended_commands: tuple = ()
+    partition_layout: str = ""
 
 
 def load_catalog(catalog_dir: pathlib.Path = CATALOG_DIR) -> list[TargetDevice]:
@@ -55,8 +63,30 @@ def load_catalog(catalog_dir: pathlib.Path = CATALOG_DIR) -> list[TargetDevice]:
         with toml_path.open("rb") as f:
             data = tomllib.load(f)
         for entry in data.get("device", []):
+            if "recommended_commands" in entry:
+                entry["recommended_commands"] = tuple(entry["recommended_commands"])
             devices.append(TargetDevice(**entry, source_file=toml_path.stem))
     return devices
+
+
+def load_partition_layouts(catalog_dir: pathlib.Path = CATALOG_DIR) -> dict:
+    """Every [partition_layouts.<name>] table from every *.toml in catalog_dir.
+
+    Returns name -> layout dict (the TOML table plus `source_file`). A layout
+    name reused across files is a catalog bug, not a merge: fail loud so the
+    collision is fixed in the TOML rather than silently last-writer-wins.
+    """
+    layouts = {}
+    for toml_path in sorted(catalog_dir.glob("*.toml")):
+        with toml_path.open("rb") as f:
+            data = tomllib.load(f)
+        for name, layout in data.get("partition_layouts", {}).items():
+            if name in layouts:
+                raise ValueError(
+                    f"partition layout {name!r} defined in both "
+                    f"{layouts[name]['source_file']}.toml and {toml_path.name}")
+            layouts[name] = {**layout, "source_file": toml_path.stem}
+    return layouts
 
 
 def lookup(
