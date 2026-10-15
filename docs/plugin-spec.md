@@ -125,7 +125,9 @@ signed `registry.lock.json` — same goal (don't run an unreviewed community
 plugin silently), cheaper mechanism (sign a pointer, not a trust label baked
 into every manifest).
 
-## 6. Sandboxing
+## 6. Sandboxing and privilege separation
+
+### 6.1 Today
 
 **Today:** health and runtime (`start`/`stop`) commands run out-of-process —
 health via a plain subprocess (`limpet/health.py:_shell_runner`), runtime
@@ -143,6 +145,105 @@ the field — but that step touches the deployed systemd unit files
 subsystem's unit, wq#3807's tool-registry daemon, not wq#3810's plugin
 registry, which has no shipped unit file to harden yet). Scoping it correctly
 needs its own ticket once the plugin registry daemon has a real systemd unit.
+
+### 6.2 v2 design: privilege separation and the hardware broker (wq#3961)
+
+**Scope note.** This subsection is the wq#3961 design review of the upstream
+LIMPET repo's Plugin Development Guide (`docs/plugin-spec.md` in the repo the
+tracked README points at — `docs/limpet_readme.md:316`). That guide's install
+flow runs a plugin's `install.sh` as root via `sudo` when the plugin is
+flagged needs-root (the same all-or-nothing shape visible in the tracked
+README: `sudo ./install.sh`, `docs/limpet_readme.md:99`, and the
+`apt-get install` plugin `install.sh` template, `docs/limpet_readme.md:296-303`),
+with **nothing between unprivileged and root**. The plugin system there is
+still pre-implementation, so this belongs in its future-v2 registry
+discussion, not a v1 rewrite. It is recorded here — in the authoritative
+manifest spec — because the manifest shape below is a `limpet-plugin.toml`
+change, and this document is where that schema lives.
+
+The design (from the 2026-10-15 thor-docs research digest §D, independent
+ecosystem research across VS Code, Binary Ninja, Nix, Homebrew, and Burp —
+every one of which runs extensions/builds unprivileged, and Homebrew refuses
+root outright):
+
+1. **Unprivileged workers by default.** Plugin processes — install hooks,
+   health probes, `start`/`stop`, tool invocations — run as a dedicated
+   unprivileged user. `escalates = true` in the shipped `[mutation]` boundary
+   (`limpet/manifest.py:73`) stays the explicit, auditable opt-out, but in v2
+   it buys a *scoped* grant (a specific systemd unit with a specific
+   capability set), never a blanket root shell.
+
+2. **A hardware broker owning USB/JTAG/serial.** A separate, narrowly-scoped
+   service is the only component with device-node access (udev-granted ACLs /
+   `plugdev`+`dialout` group membership). Plugins never open `/dev/*`
+   directly; they request an operation on a device handle over a local
+   socket, and the broker checks the request against the manifest's declared
+   capabilities before touching hardware. This keeps root out of the loop
+   entirely for ordinary hardware access — the gap today is not that root is
+   used, it's that root is the *only* step above unprivileged.
+
+3. **Per-capability authorization for destructive ops.** Flash erase/write
+   and bootloader changes require explicit per-operation authorization at the
+   broker, over and above the manifest declaration. This generalizes the
+   already-mandatory energize-confirm gate
+   (`design/wq3806_limpet_architecture.md:214-226`): read-only probing and
+   passive capture stay fully autonomous; `flash-erase`, `flash-write`, and
+   `bootloader` verbs are refused unless both declared in the manifest *and*
+   confirmed per invocation.
+
+**Manifest shape** — additive to the existing `limpet-plugin.toml` schema, no
+rewrite (it sits alongside `[mutation]`, `[dependencies]`, `[health]` exactly
+as `[optional_dependencies]` did in wq#3945):
+
+```toml
+[capabilities]
+network = false          # default-deny, mirrors [mutation].network
+root    = false          # default-deny, mirrors [mutation].escalates
+
+[capabilities.udev]
+subsystems  = ["usb", "tty"]
+match       = [{ vendor = "0x0483", product = "0x3748" }]   # ST-Link v2
+destructive = ["flash-erase", "flash-write", "bootloader"]  # broker-gated verbs
+```
+
+`[capabilities]` is the v2 superset of the shipped `[mutation]` boundary
+(`limpet/manifest.py:62-75`): `root` maps to `escalates`, `network` to
+`network`, and `[capabilities.udev]` carries what `[mutation]` cannot — which
+physical devices a hardware plugin may ask the broker for, and which verbs on
+them are destructive. The broker uses `match` to bind a plugin to its
+declared VID/PID set (the same udev-driven inventory the HAL detection path
+already specifies, `design/wq3806_limpet_architecture.md:197`), so a plugin
+cannot reach a device it never declared. Migration from `[mutation]` is
+mechanical; `[mutation]` remains valid for v1 manifests.
+
+### 6.3 v2 design: three-tier version identity, hash pinning, lockfile (wq#3961, secondary)
+
+The upstream guide's versioning today is `git pull` to update, `HEAD~1` to
+roll back, and `pin` meaning only skip-autoupdate — no artifact-hash pinning
+anywhere, so a force-pushed rev or a tampered checkout is invisible. The v2
+registry should separate three identities that the current single version
+string conflates:
+
+1. **Plugin identity** — the name plus its canonical source
+   (`[source].canonical`, already shipped: `limpet/manifest.py:108-114`),
+   which is what the index's anti-impersonation check binds to.
+2. **Plugin release** — the manifest `version` + git `rev`, what
+   `[dependencies]` constraints resolve against.
+3. **Underlying tool release** — the version of the wrapped tool itself
+   (OpenOCD 0.12, Ghidra 11.x), which can change under a plugin release when
+   `install.sh` does an unpinned `apt-get install`
+   (`docs/limpet_readme.md:296-303`) — exactly the hole tier 3 exists to name.
+
+Pin by **artifact hash**: a `limpet.lock` lockfile records, per plugin,
+`(name, rev, content hash of the plugin directory, underlying tool version)`,
+and the loader fails closed on mismatch. This is the same mechanism
+`design/wq3806_limpet_architecture.md:86-88` already sketches as
+`registry.lock.json` (resolved version + content hash + trust tier per
+plugin) and the same lesson as Nix (store-path hashes) and modern package
+lockfiles: `rev` says what you asked for, the hash proves what you got.
+Rollback becomes "restore the previous lock entry" instead of `HEAD~1`, so it
+survives a rewritten upstream branch. Depends on the §3 index/registry work;
+lower priority than §6.2.
 
 ## 7. Update mechanism
 
@@ -188,6 +289,8 @@ standalone git repo with the manifest at its root
 | Central index + `limpet install/search` | Not shipped — needs a new repo, out of this ticket's code scope. |
 | Signing | Not shipped — depends on the index existing first. |
 | Sandboxing hardening | Not shipped — depends on the plugin registry having its own systemd unit. |
+| Hardware broker + `[capabilities]` manifest (§6.2) | Designed (wq#3961), not shipped — v2 registry work; pre-implementation upstream. |
+| 3-tier version identity + `limpet.lock` hash pinning (§6.3) | Designed (wq#3961), not shipped — depends on the §3 index. |
 | Soft/optional dependencies | **Shipped.** `[optional_dependencies]` + per-entry `optional_dependencies_satisfied`, worked example in `limpet/examples/ghidra-mcp.toml`. |
 | Contribution workflow (§8) | Documented, not operational — depends on the index. |
 
