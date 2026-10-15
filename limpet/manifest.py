@@ -59,6 +59,12 @@ class PluginManifest:
     category: str = ""
     # name -> version constraint, e.g. {"ghidra": ">=11.0"}
     dependencies: dict = dataclasses.field(default_factory=dict)
+    # name -> version constraint for a dep that improves this plugin but is
+    # never required to resolve it -- unlike [dependencies], a missing or
+    # unsatisfied entry here never blocks (wq#3932 recommendation 5: "soft
+    # dependencies"). registry_core.py reports per-entry satisfaction so an
+    # operator/agent can see what installing the optional dep would unlock.
+    optional_dependencies: dict = dataclasses.field(default_factory=dict)
     # names of other plugins this one cannot be active alongside, e.g. two
     # plugins claiming the same SDR hardware (wq#3932 rec. 5). Declaring the
     # conflict on either side is enough -- resolve() treats it as mutual.
@@ -120,6 +126,24 @@ def version_satisfies(version: str, constraint: str) -> bool:
     }[op]
 
 
+def _validate_deps_table(deps, label: str) -> list:
+    """Shared shape check for [dependencies] and [optional_dependencies]:
+    both are a table of name -> version constraint, same name/constraint
+    grammar. Only how a resolver USES the two differs (registry_core.py)."""
+    errors = []
+    if not isinstance(deps, dict):
+        errors.append(f"{label} must be a table of name = constraint")
+        return errors
+    for dep_name, constraint in deps.items():
+        if not _NAME_RE.match(dep_name):
+            errors.append(f"{label} name {dep_name!r} is not a valid plugin name")
+        if not isinstance(constraint, str):
+            errors.append(f"{label} {dep_name!r} constraint must be a string")
+        elif not _CONSTRAINT_RE.match(constraint) and constraint.strip() not in ("*", "any", ""):
+            errors.append(f"{label} {dep_name!r} constraint {constraint!r} is not parseable")
+    return errors
+
+
 def validate_manifest(data: dict) -> list:
     """Return a list of human-readable problems with a parsed manifest dict;
     empty list means valid. Used by the registry's register step to reject a
@@ -157,17 +181,9 @@ def validate_manifest(data: dict) -> list:
             elif conflict_name == name:
                 errors.append(f"plugin {name!r} cannot declare a conflict with itself")
 
-    deps = data.get("dependencies", {})
-    if not isinstance(deps, dict):
-        errors.append("[dependencies] must be a table of name = constraint")
-    else:
-        for dep_name, constraint in deps.items():
-            if not _NAME_RE.match(dep_name):
-                errors.append(f"dependency name {dep_name!r} is not a valid plugin name")
-            if not isinstance(constraint, str):
-                errors.append(f"dependency {dep_name!r} constraint must be a string")
-            elif not _CONSTRAINT_RE.match(constraint) and constraint.strip() not in ("*", "any", ""):
-                errors.append(f"dependency {dep_name!r} constraint {constraint!r} is not parseable")
+    errors.extend(_validate_deps_table(data.get("dependencies", {}), "[dependencies]"))
+    errors.extend(_validate_deps_table(
+        data.get("optional_dependencies", {}), "[optional_dependencies]"))
 
     health = data.get("health")
     if health is not None:
@@ -201,6 +217,7 @@ def manifest_from_dict(data: dict) -> PluginManifest:
         license=plugin.get("license", ""),
         category=plugin.get("category", "") or "",
         dependencies=dict(data.get("dependencies", {}) or {}),
+        optional_dependencies=dict(data.get("optional_dependencies", {}) or {}),
         conflicts=list(plugin.get("conflicts", []) or []),
         health=health,
         start=str(runtime.get("start", "")),

@@ -5,10 +5,12 @@ from manifest import HealthCheck, PluginManifest
 import registry_core as rc
 
 
-def mk(name, version="1.0", kind="tool", deps=None, health=False, conflicts=None, category=""):
+def mk(name, version="1.0", kind="tool", deps=None, health=False, conflicts=None,
+       category="", optional_deps=None):
     return PluginManifest(
         name=name, version=version, kind=kind, category=category,
         dependencies=deps or {}, conflicts=conflicts or [],
+        optional_dependencies=optional_deps or {},
         health=HealthCheck("probe") if health else None)
 
 
@@ -106,6 +108,34 @@ def test_conflict_with_disabled_plugin_does_not_block():
     res = rc.resolve(man, enabled={"a"})  # b not enabled -> no active conflict
     assert res.plugins["a"].state == "active"
     assert res.plugins["b"].state == "disabled"
+
+
+def test_optional_dependency_satisfied_when_target_active():
+    man = {"a": mk("a", optional_deps={"b": ">=1.0"}), "b": mk("b", "1.5")}
+    res = rc.resolve(man, enabled={"a", "b"})
+    assert res.plugins["a"].state == "active"  # never blocked by an optional dep
+    assert res.plugins["a"].optional_dependencies_satisfied == {"b": True}
+
+
+def test_optional_dependency_missing_does_not_block():
+    man = {"a": mk("a", optional_deps={"b": ">=1.0"})}  # b not installed at all
+    res = rc.resolve(man, enabled={"a"})
+    assert res.plugins["a"].state == "active"
+    assert res.plugins["a"].optional_dependencies_satisfied == {"b": False}
+
+
+def test_optional_dependency_unsatisfied_version_reported_false():
+    man = {"a": mk("a", optional_deps={"b": ">=2.0"}), "b": mk("b", "1.0")}
+    res = rc.resolve(man, enabled={"a", "b"})
+    assert res.plugins["a"].state == "active"
+    assert res.plugins["a"].optional_dependencies_satisfied == {"b": False}
+
+
+def test_optional_dependency_disabled_target_reported_false():
+    man = {"a": mk("a", optional_deps={"b": "*"}), "b": mk("b")}
+    res = rc.resolve(man, enabled={"a"})  # b installed but not enabled
+    assert res.plugins["a"].state == "active"
+    assert res.plugins["a"].optional_dependencies_satisfied == {"b": False}
 
 
 def test_category_carried_through_resolution():

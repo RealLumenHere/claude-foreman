@@ -32,6 +32,12 @@ class ResolvedPlugin:
     reason: str         # human-readable justification for non-active states
     dependencies: dict  # name -> constraint, carried through for the unified view
     conflicts: list      # names this plugin cannot be active alongside
+    # a soft dep (wq#3932 rec. 5): missing or unsatisfied never blocks `state`,
+    # unlike `dependencies`. optional_dependencies_satisfied reports, per
+    # entry, whether that dep is installed, version-matching, AND active --
+    # the same bar `dependencies` enforces, just advisory instead of fatal.
+    optional_dependencies: dict
+    optional_dependencies_satisfied: dict
 
 
 @dataclasses.dataclass(frozen=True)
@@ -148,7 +154,24 @@ def resolve(manifests, enabled, health_ok=None) -> Resolution:
         resolved[name] = ResolvedPlugin(
             name=name, version=m.version, kind=m.kind, category=m.category,
             state=state, reason=reason, dependencies=dict(m.dependencies),
-            conflicts=list(m.conflicts))
+            conflicts=list(m.conflicts),
+            optional_dependencies=dict(m.optional_dependencies),
+            optional_dependencies_satisfied={})
+
+    # Second pass: every plugin's final state is known now, so resolve each
+    # optional dependency's satisfaction without needing it in dependency-first
+    # order (it can never block, so unlike `dependencies` it doesn't gate the
+    # first pass's resolution order).
+    for name, rp in list(resolved.items()):
+        m = manifests[name]
+        satisfied = {
+            dep_name: bool(
+                dep_name in manifests
+                and manifests[dep_name].satisfies(constraint)
+                and resolved[dep_name].state == "active")
+            for dep_name, constraint in m.optional_dependencies.items()
+        }
+        resolved[name] = dataclasses.replace(rp, optional_dependencies_satisfied=satisfied)
 
     start_order = _topo_order(
         manifests, [n for n, p in resolved.items() if p.state == "active"])

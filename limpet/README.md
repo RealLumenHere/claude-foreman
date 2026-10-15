@@ -21,8 +21,11 @@ category = "fuzzer"    # optional: see manifest.py CATEGORIES for the full enum
 summary = "what it does"
 conflicts = ["other-plugin-name"]   # optional: can't both be active
 
-[dependencies]          # optional: other plugins it needs
+[dependencies]          # optional: other plugins it needs (missing/mismatched -> blocked)
 some-dep = ">=2.0"
+
+[optional_dependencies]   # optional: other plugins that help but are never required
+nice-to-have = "*"
 
 [health]                # optional: how it proves it's alive (exit 0 = healthy)
 command = "my-thing --health"

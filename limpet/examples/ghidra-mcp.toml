@@ -6,7 +6,11 @@
 # This one declares a dependency on the `ghidra` plugin -- the Ghidra MCP
 # server is useless without Ghidra itself -- so the registry leaves it
 # `blocked` until a satisfying `ghidra` plugin is also installed and enabled
-# (lifecycle step 6 example from wq#3810).
+# (lifecycle step 6 example from wq#3810). It also declares an optional
+# dependency on `llm4decompile`: ghidra-mcp works fine without it, but if
+# it's installed and active it unlocks LLM-assisted decompilation comments,
+# so the registry reports whether that's the case without ever blocking on
+# it (wq#3932 recommendation 5, wq#3945 refinement).
 
 [plugin]
 name = "ghidra-mcp"
@@ -23,6 +27,9 @@ rev = "v0.3.1"
 
 [dependencies]
 ghidra = ">=11.0"
+
+[optional_dependencies]
+llm4decompile = "*"
 
 [health]
 command = "ghidra-mcp --health"
