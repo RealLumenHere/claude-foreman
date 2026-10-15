@@ -207,6 +207,10 @@ MUST_BLOCK = [
     ("Read", {"file_path": "/home/lumen/docker/docker-compose.yml"}),
     ("Read", {"file_path": "/home/lumen/docker/docker-compose.yml.bak"}),
     ("Grep", {"pattern": "stop_grace_period", "path": "/home/lumen/docker/docker-compose.yml"}),
+    # wq#4018: whole-file Read of the OpenHands compose burned its inline LiteLLM key.
+    ("Read", {"file_path": "/home/lumen/containers/openhands/docker-compose.yml"}),
+    ("Read", {"file_path": "/home/lumen/containers/openhands/docker-compose.yml.bak.wq4018"}),
+    ("Grep", {"pattern": "LLM_", "path": "/home/lumen/containers/openhands/docker-compose.yml"}),
 ]
 
 MUST_ALLOW = [
@@ -268,6 +272,8 @@ MUST_ALLOW = [
     ("Bash", {"command": "ls /home/lumen/worktrees/wq999-a1/.env.example"}),
     # wq#3678: the compose deny names that one file, not other compose files.
     ("Grep", {"pattern": "image", "path": "/home/lumen/glance/docker-compose.yml"}),
+    # wq#4018: the deny names the compose file, not the rest of the OpenHands dir.
+    ("Grep", {"pattern": "image", "path": "/home/lumen/containers/openhands/compose.override.yml"}),
 ]
 
 

@@ -575,6 +575,11 @@ Read|Edit|Write|Grep|Glob)
       # Lift once those move to a 0600 env_file (wq#3093's rotation).
       /home/lumen/docker/docker-compose.yml|/home/lumen/docker/docker-compose.yml.*)
         block "denied path: $CHECK_PATH (inline LibreChat Mongo/JWT secrets, wq#3678)" "$CHECK_PATH" ;;
+      # wq#4018: the OpenHands compose inlines its LiteLLM virtual key (LLM_API_KEY);
+      # wq#4007 Read it whole and burned edce1aefdbdd. Lift once rotate.py moves the
+      # key to the 0600 .env beside it (ops/wq4018-openhands-key-rotation/README.md).
+      /home/lumen/containers/openhands/docker-compose.yml|/home/lumen/containers/openhands/docker-compose.yml.*)
+        block "denied path: $CHECK_PATH (inline OpenHands LiteLLM key, wq#4018; hash-only view: ops/wq4018-openhands-key-rotation/probe_key.py)" "$CHECK_PATH" ;;
     esac
   done
 
