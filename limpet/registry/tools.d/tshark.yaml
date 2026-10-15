@@ -1,0 +1,31 @@
+# LIMPET tool manifest (schema v1). One file per tool; drop here and the
+# registry rebuilds tools.json. Fields: name/path/capabilities/health_check are
+# required, the rest are optional claims the agent uses to route work.
+#
+# wq#3972 (design/wq3929_competitive_analysis.md:171-173,417-418, A10/G6):
+# Kali-parity gap -- tshark pairs with the HAL network-adapter/SDR classes
+# already in core (design/wq3806_limpet_architecture.md:197-201). Standard
+# Ubuntu/Debian `tshark` package; not yet re-verified on a dedicated Limpet
+# node (none exists yet), same posture as searchsploit.yaml.
+name: tshark
+path: /usr/bin/tshark
+version: null
+description: CLI packet capture and protocol dissection (Wireshark's terminal engine).
+category: protocol-analysis
+capabilities:
+  - packet-capture
+  - protocol-dissection
+  - pcap-analysis
+  - live-capture
+input_formats:
+  - pcap
+  - pcapng
+  - live-interface
+output_formats:
+  - dissected-packets
+  - pcap
+  - json-report
+architectures:
+  - any
+hardware_requirements: {}
+health_check: /usr/bin/tshark --version

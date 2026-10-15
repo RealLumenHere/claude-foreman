@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "0.2.0",
+  "catalog_version": "0.2.1",
   "generated": "2026-10-15",
   "ticket": "wq#3936",
   "provenance": {
@@ -15,7 +15,7 @@
     "trust_tiers": "core = proven on fleet, in base image; vetted = passed TOOL_REGISTRY go/no-go; community = present/known but disabled until human promotion (includes HOLD and NO-GO evaluations).",
     "reconciliation": "wq#3936 (2026-10-15): reconciled the 34 wq#3908-verified rows with all reachable on-disk sources and added install_method/mcp_status/disk_size_estimate/priority. New rows (8): searchsploit, component-id, fw-diff, gepetto, pyamlboot, sunxi-fel, fiedka, glitchkit. searchsploit/component-id/fw-diff from on-disk manifests; gepetto/pyamlboot/sunxi-fel from on-disk research/design docs; fiedka/glitchkit are ticket-named promotion stubs (no verifiable on-disk source, web-verify unavailable per wq#2595) carried at trust=community with url=null rather than fabricated. Sources named by the ticket that are NOT on disk and were therefore not folded in: docs/tool-registry-spec.md, DESIGN-DECISIONS.md, VISION.md and install-wizard-spec.md (the real limpet VISION.md lives in /home/lumen/projects/limpet/, outside this worktree; see design/wq3806_limpet_architecture.md:32-45). Farida Phase 2 signed skills (11 tools) are on a remote node with no manifest reachable from this worktree, so not enumerated here.",
     "field_methodology": "mcp_status=has_server only where an MCP server file exists on disk (wq#3881/3882/3883 server.py, wq#3942 server.py, rea/ghidra-mcp bridges); else cli_only. install_method is a best-known static class; the authoritative apt/pip/cargo resolution is dpkg -S at ISO build (limpet/iso-builder/gen_tool_packages.py). disk_size_estimate is a coarse planning bucket (small<100MB / medium 100MB-1GB / large>1GB), not a per-host measurement; null where unmeasured. priority maps from trust: core->core, vetted->recommended, community->optional.",
-    "license_risk_policy": "wq#3959 (design/wq3959_license_audit_oghidra_emba_fact_fat.md): the free-text 'license' field alone is not enough to catch redistribution risk (a GPL-3.0 tool and a Functional-Source/Business-Source/custom-EULA tool can both look like a short license string, but only one of them blocks bundling into the commercially-sold Limpet ISO). Every tool entry going forward MUST also carry 'license_risk' (none | copyleft-source-offer | non-osi-commercial-restricted | unverified) and 'redistribution_posture' (bundle | external-invoke | blocked-pending-permission). Any non-OSI / source-available license with a commercial-use or 'competing use' carve-out (FSL, BSL, custom written-permission clauses) gets license_risk=non-osi-commercial-restricted and redistribution_posture=external-invoke (or blocked-pending-permission if the integration plan assumes bundling) until a written commercial license or legal sign-off is obtained — that sign-off is the one legitimate human-gated step here, everything else (scoping the integration to external-invoke) is applied without waiting on it. See the ghidra entry below for the fields in practice, and the audit doc for EMBA/FACT (GPL-3.0, safe to bundle with a source offer)/FAT 2.0 (FSL-1.1-ALv2, external-invoke only)/OGhidra (unverified, treat as external-invoke only) ahead of their wq#3929 P0 adoption."
+    "license_risk_policy": "wq#3959 (design/wq3959_license_audit_oghidra_emba_fact_fat.md): the free-text 'license' field alone is not enough to catch redistribution risk (a GPL-3.0 tool and a Functional-Source/Business-Source/custom-EULA tool can both look like a short license string, but only one of them blocks bundling into the commercially-sold Limpet ISO). Every tool entry going forward MUST also carry 'license_risk' (none | copyleft-source-offer | non-osi-commercial-restricted | unverified) and 'redistribution_posture' (bundle | external-invoke | blocked-pending-permission). Any non-OSI / source-available license with a commercial-use or 'competing use' carve-out (FSL, BSL, custom written-permission clauses) gets license_risk=non-osi-commercial-restricted and redistribution_posture=external-invoke (or blocked-pending-permission if the integration plan assumes bundling) until a written commercial license or legal sign-off is obtained \u2014 that sign-off is the one legitimate human-gated step here, everything else (scoping the integration to external-invoke) is applied without waiting on it. See the ghidra entry below for the fields in practice, and the audit doc for EMBA/FACT (GPL-3.0, safe to bundle with a source offer)/FAT 2.0 (FSL-1.1-ALv2, external-invoke only)/OGhidra (unverified, treat as external-invoke only) ahead of their wq#3929 P0 adoption."
   },
   "categories": [
     {
@@ -212,7 +212,7 @@
       "license_risk": "none",
       "redistribution_posture": "bundle",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:15 (verified 2026-10-14); license_risk/redistribution_posture per wq#3959 (design/wq3959_license_audit_oghidra_emba_fact_fat.md) — this is the real NSA Ghidra, not the unrelated 'OGhidra' LLM-bridge project that ticket flagged for a restrictive license.",
+      "provenance": "TOOL_REGISTRY.md:15 (verified 2026-10-14); license_risk/redistribution_posture per wq#3959 (design/wq3959_license_audit_oghidra_emba_fact_fat.md) \u2014 this is the real NSA Ghidra, not the unrelated 'OGhidra' LLM-bridge project that ticket flagged for a restrictive license.",
       "install_method": "binary",
       "mcp_status": "cli_only",
       "disk_size_estimate": "large",
@@ -1256,7 +1256,74 @@
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
       "priority": "optional"
+    },
+    {
+      "name": "tshark",
+      "path": "/usr/bin/tshark",
+      "version": null,
+      "description": "CLI packet capture and protocol dissection (Wireshark's terminal engine); pairs with the HAL network-adapter/SDR capture classes.",
+      "category": "protocol-analysis",
+      "capabilities": [
+        "packet-capture",
+        "protocol-dissection",
+        "pcap-analysis",
+        "live-capture"
+      ],
+      "input_formats": [
+        "pcap",
+        "pcapng",
+        "live-interface"
+      ],
+      "output_formats": [
+        "dissected-packets",
+        "pcap",
+        "json-report"
+      ],
+      "architectures": [
+        "any"
+      ],
+      "health_check": "/usr/bin/tshark --version",
+      "url": "https://www.wireshark.org",
+      "license": "GPL-2.0",
+      "trust": "core",
+      "provenance": "design/wq3929_competitive_analysis.md:171-173,417-418 (A10/G6 - Kali-parity gap, defensible core addition, design/wq3806_limpet_architecture.md:197-201); standard Ubuntu/Debian tshark package, not yet re-verified on a dedicated Limpet node (none exists yet, same posture as searchsploit).",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "core"
+    },
+    {
+      "name": "afl++",
+      "path": "/usr/bin/afl-fuzz",
+      "version": null,
+      "description": "Coverage-guided fuzzer for the dynamic-analysis step; QEMU mode pairs with the qemu-user core tool for binary-only cross-arch fuzzing.",
+      "category": "dynamic-instrumentation",
+      "capabilities": [
+        "coverage-guided-fuzzing",
+        "binary-only-fuzzing",
+        "crash-triage"
+      ],
+      "input_formats": [
+        "elf",
+        "raw-binary"
+      ],
+      "output_formats": [
+        "crash-corpus",
+        "coverage-report"
+      ],
+      "architectures": [
+        "any"
+      ],
+      "health_check": "/usr/bin/afl-fuzz --version",
+      "url": "https://github.com/AFLplusplus/AFLplusplus",
+      "license": "Apache-2.0",
+      "trust": "core",
+      "provenance": "design/wq3929_competitive_analysis.md:171-173,417-418,493-494 (A10/G6); AFL++ chosen over honggfuzz because AFL/AFL++ is already the fuzzing backend TOOL_REGISTRY.md:199,210 names fuzzware as gluing together ('modeling + emulation + AFL/AFL++'); its QEMU mode reuses the qemu-user core tool already in this catalog; honggfuzz has no existing fleet dependency to anchor it. Live search for a second opinion hit the known search-engine outage (wq#2595/wq#2599/wq#2601). Standard Ubuntu/Debian aflplusplus package, not yet re-verified on a dedicated Limpet node (none exists yet, same posture as searchsploit).",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "medium",
+      "priority": "core"
     }
   ],
-  "tool_count": 42
+  "tool_count": 44
 }
