@@ -41,6 +41,21 @@ CATEGORIES = (
 # hardware, e.g. a flash programmer) < "host" (mutates the Limpet host itself).
 WRITE_SCOPES = ("none", "workspace", "target", "device", "host")
 
+# Closed capability taxonomy for per-step model routing (wq#3968, split from
+# wq#3944/A5, design/wq3929_competitive_analysis.md §5 A5). "general" is the
+# resident chat/reasoning model and never needs a route -- it IS the fallback
+# (design/wq3806_limpet_architecture.md:260-266). The other three name the
+# specialized steps the competitive analysis found have purpose-built, open-
+# weight alternatives (fleet-search 2026-10-15, limpet/examples/llm4decompile.toml:
+# MIT+DeepSeek-licensed, GGUF quants from 1.3B-33B comfortably under the
+# 32GB/iGPU ceiling): "re-naming" (function/symbol name recovery), "re-types"
+# (variable/struct type inference), "vision" (HAL frame/screen analysis, §4).
+# ReCopilot itself (arXiv 2505.16366) is NOT adopted as a route target --
+# wq#3995 found its only served weights are a China-hosted API
+# (tqgpt.qianxin.com), an unacceptable egress for decompiled target code -- so
+# this taxonomy is the mechanism, deliberately provider-agnostic.
+MODEL_CAPABILITIES = ("general", "re-naming", "re-types", "vision")
+
 # A deliberately small, total version grammar: a constraint is an operator
 # (defaulting to ==) followed by a dotted release. "*" / "any" match anything.
 # We do NOT pull in a packaging dependency -- stdlib-only is a house rule, and
@@ -115,6 +130,10 @@ class PluginManifest:
     # free-form provenance / hardware hints, preserved but not validated deeply
     source: dict = dataclasses.field(default_factory=dict)
     hardware: dict = dataclasses.field(default_factory=dict)
+    # step name -> one of MODEL_CAPABILITIES (wq#3968). A step with no entry
+    # here is "general" by default -- model_router.py resolves the actual
+    # model, this table only declares what a step NEEDS.
+    model_routes: dict = dataclasses.field(default_factory=dict)
 
     def satisfies(self, constraint: str) -> bool:
         """Does this plugin's version satisfy `constraint` (a dependant's ask)?"""
@@ -208,6 +227,25 @@ def _validate_mutation(mutation) -> list:
     return errors
 
 
+def _validate_model_routes(routes) -> list:
+    """Shape check for the optional [model_routes] table (wq#3968): step name
+    -> capability, where capability must be a declared MODEL_CAPABILITIES
+    value. Fail-closed like _validate_mutation -- a typo'd capability (e.g.
+    "re-names") is rejected rather than silently treated as "general"."""
+    errors = []
+    if not isinstance(routes, dict):
+        errors.append("[model_routes] must be a table of step = capability")
+        return errors
+    for step_name, capability in routes.items():
+        if not isinstance(step_name, str) or not step_name.strip():
+            errors.append(f"[model_routes] step name {step_name!r} must be a non-empty string")
+        if capability not in MODEL_CAPABILITIES:
+            errors.append(
+                f"[model_routes].{step_name} capability {capability!r} "
+                f"must be one of {MODEL_CAPABILITIES}")
+    return errors
+
+
 def validate_manifest(data: dict) -> list:
     """Return a list of human-readable problems with a parsed manifest dict;
     empty list means valid. Used by the registry's register step to reject a
@@ -260,6 +298,9 @@ def validate_manifest(data: dict) -> list:
     if data.get("mutation") is not None:
         errors.extend(_validate_mutation(data["mutation"]))
 
+    if data.get("model_routes") is not None:
+        errors.extend(_validate_model_routes(data["model_routes"]))
+
     source = data.get("source", {})
     if isinstance(source, dict) and "canonical" in source:
         if not isinstance(source["canonical"], str) or not source["canonical"].strip():
@@ -307,6 +348,7 @@ def manifest_from_dict(data: dict) -> PluginManifest:
         canonical_source=str(src.get("canonical", "")),
         source=dict(data.get("source", {}) or {}),
         hardware=dict(data.get("hardware", {}) or {}),
+        model_routes=dict(data.get("model_routes", {}) or {}),
     )
 
 

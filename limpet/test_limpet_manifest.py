@@ -128,6 +128,37 @@ def test_mutation_boundary_invalid_rejected(bad, needle):
     assert any(needle in e for e in exc.value.errors)
 
 
+def test_model_routes_defaults_to_empty():
+    # No [model_routes] table => every step is "general" (wq#3968).
+    man = m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n')
+    assert man.model_routes == {}
+
+
+def test_model_routes_declares_step_capability():
+    man = m.parse_manifest(
+        '[plugin]\nname="llm4decompile"\nversion="0"\nkind="tool"\n'
+        '[model_routes]\nrename_function = "re-naming"\ninfer_types = "re-types"\n')
+    assert man.model_routes == {"rename_function": "re-naming", "infer_types": "re-types"}
+
+
+@pytest.mark.parametrize("bad, needle", [
+    ('[model_routes]\nrename_function = "re-name"\n', "re-naming"),      # typo'd capability
+    ('[model_routes]\nrename_function = "fast"\n', "must be one of"),    # not a declared capability
+])
+def test_model_routes_invalid_rejected(bad, needle):
+    with pytest.raises(m.ManifestError) as exc:
+        m.parse_manifest('[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n' + bad)
+    assert any(needle in e for e in exc.value.errors)
+
+
+def test_model_routes_non_table_rejected():
+    # model_routes set at the top level (before [plugin]) so it is not
+    # folded into the [plugin] table by TOML's own table-scoping rules.
+    with pytest.raises(m.ManifestError) as exc:
+        m.parse_manifest('model_routes = "oops"\n[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n')
+    assert any("table of step" in e for e in exc.value.errors)
+
+
 def test_canonical_source_parsed_and_validated():
     # Anti-impersonation (wq#3998): the authoritative upstream is declared so a
     # name-squatting copy with the same README is detectable by the index.

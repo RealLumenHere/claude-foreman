@@ -145,6 +145,18 @@ from a **China-hosted API (XingTuLab / QI-ANXIN, `tqgpt.qianxin.com`)**, and sel
 infeasible on the box. So an A5 route to ReCopilot-as-a-service would egress decompiled target
 code to a third-party foreign endpoint — out of policy for a sensitive investigation. The
 adopt is the *capability-tier mechanism*, not a default route to this specific provider.
+**Build note (wq#3968, 2026-10-15):** `fleet-search web/github` were still down at
+dispatch (same outage as ISSUE-LOG #1325/#1333/#1334, `BRAVE_API_KEY` still unminted,
+wq#2595 open) — `fleet-search read` on HuggingFace/GitHub confirmed the open-weight
+alternative this repo had already catalogued pre-dispatch
+(`limpet/examples/llm4decompile.toml`, wq#3884): `albertan017/LLM4Decompile`, MIT-licensed
+code + DeepSeek-licensed base weights, GGUF quants at 1.3B/6.7B/9B/22B/33B (`mradermacher`,
+`tensorblock`, `RichardErkhov` repacks on HF) — the 6.7B/9B GGUF tiers fit the 32GB/iGPU
+ceiling as an opt-in route. The capability-tier mechanism itself is implemented in
+`limpet/manifest.py` (`MODEL_CAPABILITIES`, `[model_routes]`) and `limpet/model_router.py`
+(`resolve_model`/`resolve_step`); no model client is wired yet (same posture as
+`limpet/critic.py`'s model call), so an operator routes a step to LLM4Decompile (or any
+other configured model) through the eventual settings store, not a hard-coded default.
 
 ### (6) Kali Linux — tool distribution + brand *(partly described)*
 Kali is the brand baseline operators compare any security appliance to. Two lenses:
