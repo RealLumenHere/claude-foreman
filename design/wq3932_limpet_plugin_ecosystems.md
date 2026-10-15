@@ -238,6 +238,48 @@ Ordered by leverage. Each is scoped against the current design, not a rewrite.
    content-addressed integrity without new manifest fields. This turns wq#3810's
    "signature/trust (future work)" into Limpet's headline differentiator.
 
+   **Live-search addendum (wq#3996): the VSCode verified-publisher failure is
+   the design's negative example.** The out-of-fleet live-search pass
+   (`/home/lumen/scratch/research/limpet_live_search_2026-10-14.md` B3)
+   surfaced ox.security's finding that VSCode Marketplace's verified-publisher
+   badge was spoofable: the client derived "verified" from a **mutable server
+   response**, not from anything bound to the extension's content, and VSCode
+   verifies extension signatures only at **install time**, never again. Four
+   hard constraints for Limpet's signing design follow:
+
+   1. **Never model trust as a mutable `verified` flag.** Trust must be a
+      signature over the content-bound `(name, git, rev)` tuple, exactly as
+      specified above — a server (or index repo) compromise can flip a flag
+      but cannot forge a signature over a content address. The design as
+      written is structurally immune to the VSCode failure; keep it that way
+      (no "trusted: true" field in `index.json`, ever).
+   2. **Re-verify on load, not just on install.** VSCode's install-time-only
+      check means a post-install tamper is invisible. Limpet's registry scan
+      (`limpet/registry.py:scan`) should re-verify the pinned `rev` (and the
+      signature over it) each time a plugin is loaded. This is cheap precisely
+      because `rev` is content-addressed: `git rev-parse HEAD` against the
+      pinned value is one subprocess, no network.
+   3. **Per-file hash validation inside the pinned tree.** A git `rev` pins
+      the tree at clone time, but the working copy can drift afterwards.
+      Record per-file hashes (the tree objects git already has) at install and
+      validate them at load, so an edited `health` script inside an otherwise
+      correctly-pinned checkout is caught.
+   4. **Reject unsafe plugin names before writing any byte.** The same
+      live-search pass found path-traversal-shaped names in extension tooling
+      (varve / export-vsix prior art). Limpet's filename-stem ==
+      `[plugin].name` invariant (`limpet/registry.py:scan`) already constrains
+      names after the fact; enforce the name grammar (no `/`, no `..`, no
+      leading `-`) **before** `limpet install` writes anything to disk, so a
+      malicious index entry cannot place files outside the plugin root.
+
+   Mature general-purpose packaging validates the surrounding choices:
+   Homebrew (tap = plain git repo, `brew audit` as the CI gate, mandatory
+   license field, optional deps) is live prior art for the §3.1 index repo,
+   this section's CI-enforced trust gate, and §3.5's soft-dependency
+   affordance; Nix's content-addressed derivations are the at-scale proof
+   that signing over a content address (here, `rev`) is the durable trust
+   anchor (`.../limpet_live_search_2026-10-14.md` PART B).
+
 3. **Harden the plugin sandbox with systemd properties.** Limpet already runs
    plugin health/runtime commands out-of-process under systemd `--user`; add
    hardening properties to that invocation (`NoNewPrivileges=yes`,
@@ -306,5 +348,5 @@ are enforced — the combination no single surveyed ecosystem achieves today.
 - Dependency resolver + cycle detection + topo order → **ahead of the field**, keep.
 - Version constraint grammar → **right-sized** (Cargo/apt parity), keep.
 - Discovery (git-repo-per-plugin, no index) → **gap**, fix with a central index (§3.1).
-- Trust/signing → **field-wide gap; make it Limpet's lead** (§3.2).
+- Trust/signing → **field-wide gap; make it Limpet's lead** (§3.2) — signature over content-bound `(name, git, rev)`, re-verified at load, never a mutable verified flag (VSCode's spoofed badge is the negative example).
 - Sandboxing → **nearly free from the systemd architecture already chosen** (§3.3).
