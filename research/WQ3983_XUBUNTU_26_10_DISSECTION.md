@@ -42,6 +42,46 @@ Treat any remaining sentence of the form "<flavor> already does/doesn't X" as
 unverified until re-grepped; the rest of the doc stands. Full reasoning:
 `reports/wq3990_judgment_wq3983_xubuntu_absence_claims.md`.
 
+**Corrections (wq#4009, post-GA pass, 2026-10-15).** Three more items fixed,
+all doc/date errors rather than package-presence errors:
+- **§12's "5-year LTS" for Xubuntu 26.04 was wrong — it is a 3-year LTS, EOL
+  2029-04-26.** 5 years is Ubuntu main only; Xubuntu's own release page
+  (`xubuntu.org/release/26.04/`, re-read live 2026-10-15) carries Release Date
+  April 23, 2026 / End of Life April 26, 2029 — 3 years, not 5. Fixed in §12
+  below.
+- **26.10's EOL date cannot yet be stated as fact — upstream Xubuntu itself
+  is self-contradictory on GA day.** `xubuntu.org/release/26.10/` (live,
+  2026-10-15 ~09:35 UTC) states Release Date October 15, 2026 / **End of Life
+  January 15, 2029** in its structured release-info field, while the prose on
+  `xubuntu.org/releasedocs/26.10/release-notes/` (same fetch) says "supported
+  for nine months until January 2027" — three different dates across two
+  pages (Jan 2029 field, Jan 2027 prose, and simple Oct-2026-+9-months
+  arithmetic gives July 2027, which independent secondary sources — ItsFOSS,
+  FOSSLinux, LinuxCompatible — corroborate). Jan 2029 is suspiciously close to
+  26.04's own 3-year LTS window and reads like a templating bug, not a real
+  9-month-release EOL. **Do not put a single EOL date for 26.10 in any Limpet
+  doc until Canonical/Xubuntu resolve this on their own pages** — until then,
+  say "~9 months post-GA (nominally ~July 2027; upstream's own EOL field
+  currently says Jan 2029, which conflicts with its own 9-month prose and is
+  not trusted)". See §12.
+- **Real GA ISO is still not on any public mirror as of this pass** (checked
+  2026-10-15 ~09:35 UTC): `cdimage.ubuntu.com/xubuntu/releases/26.10/release/`
+  lists only `snapshot-1`–`snapshot-4` (no new snapshot cut on GA day, no
+  `SHA256SUMS`, confirmed 404), and `releases.ubuntu.com/26.10/` (Ubuntu main,
+  not even the Xubuntu flavor) still titles itself "Ubuntu 26.10 (Stonking
+  Stingray) **Beta**". The web-facing release pages (`xubuntu.org`) are ahead
+  of the actual image-mirror sync — same lag class the wq#4008 research first
+  flagged. **§6/§13/§16's delta-from-26.04 numbers below are therefore still
+  snapshot-4 numbers, not re-run against a real GA artifact** — that re-run is
+  blocked on upstream publishing the artifact, not on anything in this
+  pipeline; retry once `.../release/SHA256SUMS` returns non-404. The one GA
+  number available from a primary source without downloading the ISO —
+  kernel `7.3.0-9.9` (based on `7.3-rc6`) — is confirmed from
+  `documentation.ubuntu.com/release-notes/26.10/`'s own text ("the kernel in
+  the release images (`7.3.0-9.9`) is based on `7.3-rc6`"), not from an
+  unsquashfs; AppArmor's GA version is **not** in those release notes and
+  stays unconfirmed pending the real ISO.
+
 ---
 
 ## 1. ISO structure, boot chain, installer
@@ -227,7 +267,14 @@ sandbox can't run `qemu-system-x86_64` either).
 `linux-image-7.2.0-5-generic` / `linux-generic` **7.2.0-5.5**, confirmed two
 ways: the `dpkg status` entry and the real `usr/lib/modules/7.2.0-5-generic/`
 directory name inside `minimal.squashfs` (8,225 files under that tree — `.ko`
-modules plus `modules.*` index files, extracted listing, not estimated).
+modules plus `modules.*` index files, extracted listing, not estimated). **This
+is snapshot-4, built 2026-09-17 — not GA.** The GA release images ship
+**7.3.0-9.9** (based on `7.3-rc6`; upstream 7.3 final lands after GA), per
+`documentation.ubuntu.com/release-notes/26.10/`'s own text, re-read live
+2026-10-15. The real GA ISO is not yet on any mirror this pipeline can reach
+(see header Corrections, wq#4009) so the `usr/lib/modules/` path/module-count
+re-check against 7.3.0-9.9 is an open item, not re-run here — do not assume
+the 8,225-file count or module-tree path hold unchanged at 7.3.
 `dkms` itself is **absent** from the manifest — confirmed by grep, zero hits —
 so Limpet must add it for any out-of-tree module (common for RE-fleet USB/SDR
 hardware).
@@ -332,13 +379,24 @@ for Limpet's own minimal/full product split.
 
 ## 12. Upgrade path, LTS vs non-LTS
 
-26.10 is non-LTS: **9 months of upstream support** (standard Ubuntu interim
-release) vs 26.04's 5-year LTS window — confirmed against the actual release
+26.10 is non-LTS: **~9 months of upstream support** (standard Ubuntu interim
+release) vs 26.04's LTS window — confirmed against the actual release
 directory structure (`cdimage.ubuntu.com/xubuntu/releases/` lists `26.04` with a
 `26.04.1` point release already cut, the LTS point-release pattern; `26.10` has
 only snapshot builds, the interim-release pattern, no point releases possible
-within a 9-month cycle). Implication for Limpet: **basing on 26.10 means Limpet
-itself inherits a 9-month upstream security window**, not 5 years — either
+within a 9-month cycle). **Correction (wq#4009): 26.04's LTS window for
+Xubuntu is 3 years, not 5 — 5 years is Ubuntu main only.** Xubuntu's own
+release page (`xubuntu.org/release/26.04/`, re-read live 2026-10-15) states
+Release Date April 23, 2026 / **End of Life April 26, 2029** — 3 years. 26.10's
+own EOL cannot be stated as a single trusted date yet: `xubuntu.org/release/26.10/`'s
+structured field says "End of Life January 15, 2029" (same-day re-read,
+2026-10-15), but that contradicts its own release-notes prose ("supported for
+nine months until January 2027") and simple arithmetic (Oct 15 2026 + 9 months
+= July 2027, which matches secondary sources). Treat 26.10's support window as
+**~9 months, nominally mid-2027**, until Canonical/Xubuntu fix the
+self-contradiction on their own pages — see header Corrections for the full
+three-way date conflict. Implication for Limpet: **basing on 26.10 means Limpet
+itself inherits a ~9-month upstream security window**, not years — either
 Limpet's own release cadence must re-base onto a new Ubuntu interim release
 roughly every 6 months to stay inside supported upstream packages, or Limpet
 needs its own backport/security-patch commitment once 26.10 goes EOL
@@ -358,9 +416,13 @@ Present and **enforcing by default** — confirmed by extracting
 `etc/apparmor.d/force-complain/` (370 profile-related files under `minimal`, 10
 more under `standard`, none disabled/complain-forced), and by `grub.cfg`'s
 kernel cmdline carrying no `apparmor=0`. Version is a notable 26.10-vs-26.04
-jump: **`apparmor` 6.0.0~alpha1-0ubuntu1** here vs **5.0.2-0ubuntu1~26.04.1** on
-26.04.1 (§16) — Xubuntu 26.10 ships an alpha-versioned AppArmor as its stable
-default, which is a real risk flag for RE-tool interference (ptrace restrictions,
+jump in snapshot-4: **`apparmor` 6.0.0~alpha1-0ubuntu1** here vs
+**5.0.2-0ubuntu1~26.04.1** on 26.04.1 (§16). **Not re-confirmed for GA**
+(wq#4009): the GA release notes don't state an AppArmor version, and the real
+GA ISO isn't on any mirror yet (header Corrections), so this alpha-version
+number is still only a snapshot-4 fact — the GA package could ship a later
+non-alpha build. If it holds, Xubuntu 26.10 ships an alpha-versioned AppArmor
+as its stable default, which is a real risk flag for RE-tool interference (ptrace restrictions,
 unprivileged-user-namespace confinement, profile transitions on tools like gdb/
 Frida that this fleet uses) that a pre-26.10 fleet member would not have hit.
 Recommendation: keep AppArmor (it's load-bearing for several other packages'
@@ -371,7 +433,9 @@ the 26.04 behavior this fleet has already tuned around.
 
 ## 14. Hardware
 
-Kernel 7.2.0-5-generic is the single rolling kernel for 26.10 (interim releases
+Kernel 7.2.0-5-generic was the single rolling kernel in snapshot-4; GA ships
+7.3.0-9.9 per release notes (§6, not yet re-verified against a real ISO). The
+single-rolling-kernel *structure* for 26.10 (interim releases
 don't ship a separate HWE track — HWE only exists as a concept on LTS, where
 26.04 gets periodic kernel point-bumps under the same ABI; 26.10's kernel *is*
 already the "latest hardware" kernel by virtue of being non-LTS). USB3/Thunderbolt:
@@ -397,10 +461,17 @@ XFCE components soft-depend on the bus being present even when unused.
 
 ## 16. Delta from 26.04 (26.04.1 → 26.10 snapshot-4, same package set, real diffs)
 
-| package | 26.04.1 | 26.10 | significance |
-|---|---|---|---|
-| kernel (`linux-generic`) | 7.0.0-30.30 | **7.2.0-5.5** | kernel minor-version bump |
-| apparmor | 5.0.2-0ubuntu1~26.04.1 | **6.0.0~alpha1-0ubuntu1** | major jump, alpha — see §13 |
+**This whole table is still snapshot-4 vs 26.04.1 — not GA vs 26.04.1**
+(wq#4009, see header Corrections): the real GA ISO is not yet on any mirror
+this pipeline can reach as of 2026-10-15. The one row below confirmed from a
+primary GA source without the ISO is the kernel's GA version, added as its own
+line; every other row is snapshot-4 only and needs re-running once the GA
+artifact publishes.
+
+| package | 26.04.1 | 26.10 snapshot-4 | GA (primary source, no ISO) | significance |
+|---|---|---|---|---|
+| kernel (`linux-generic`) | 7.0.0-30.30 | 7.2.0-5.5 | **7.3.0-9.9** (based on `7.3-rc6`; `documentation.ubuntu.com/release-notes/26.10/`) | kernel bump larger than snapshot-4 suggested — re-run module-tree checks (§6/§14) once ISO available |
+| apparmor | 5.0.2-0ubuntu1~26.04.1 | 6.0.0~alpha1-0ubuntu1 | not stated in GA release notes — **unconfirmed** | major jump, alpha in snapshot-4 — see §13, not yet verified for GA |
 | network-manager | 1.54.3-2ubuntu3 | **1.58.1-1ubuntu3** | minor bump |
 | bluez | 5.85-4ubuntu0.1 | **5.87-3** | minor bump |
 | pipewire | 1.6.2-1ubuntu1.1 | **1.6.8-1ubuntu3** | minor bump |
