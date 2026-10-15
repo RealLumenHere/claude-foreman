@@ -13,3 +13,21 @@ license = "MIT + DeepSeek License"
 [source]
 git = "https://github.com/albertan017/LLM4Decompile"
 note = "No tagged GitHub release found (checked 2026-10-14) -- version left unpinned (\"0\"); distributed as model weights on Hugging Face (`LLM4Binary/llm4decompile-*`), not a versioned CLI release. Repo's own README states it is licensed under the MIT and DeepSeek License (dual, because base models derive from DeepSeek-Coder)."
+
+# wq#4001 A5 routing spec (design/wq4001_recopilot_xingtulab_dissection.md §5):
+# ReCopilot's task taxonomy mapped onto MODEL_CAPABILITIES, realised on the
+# SELF-HOSTABLE alternative rather than ReCopilot's China-hosted API (§6 egress
+# caveat). This is the concrete form of A5 "route decompiler-naming/type steps
+# to a specialist while reasoning stays general": each completion step that a
+# ReCopilot-class specialist beats a general model at declares the capability it
+# needs; model_router.resolve_step picks the specialist ONLY if an operator has
+# configured one (opt-in, 32GB/iGPU ceiling), else falls back to the resident
+# model. "vision" is absent on purpose -- ReCopilot is not multimodal; the enum
+# is not over-applied. SimAI homology search is deliberately NOT here: it is a
+# retrieval service, not a chat-completion model, so it is out-of-band of the
+# model-capability tier (§5).
+[model_routes]
+recover_function_names = "re-naming"
+infer_variable_types = "re-types"
+recover_structs = "re-types"
+document_function = "general"
