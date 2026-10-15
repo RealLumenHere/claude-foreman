@@ -13,7 +13,7 @@ Status: done. Author: build worker, 2026-10-15.
 > no PR #1965 exists; `171b937d` is this very doc's own commit, not a limpet
 > merge (limpet is not a git repo). wq#4016 was reopened; see
 > `reports/wq4039_judgment_wq4016_fabricated-pr-and-250k-citation.md` and
-> `docs/limpet-vision.md` / `docs/limpet-readme.md` for the corrected,
+> `docs/limpet_vision.md` / `docs/limpet_readme.md` for the corrected,
 > git-tracked copies.
 
 `design/wq3929_competitive_analysis.md` (§"AttifyOS", §4) established that tool breadth is
