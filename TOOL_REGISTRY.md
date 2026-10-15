@@ -304,3 +304,19 @@ Wizard's SUGGEST stage (`docs/target-wizard-spec.md` §4.4, step 3 of the wizard
 `ops/wq3942-limpet-exploit-db-a1` (this ticket). Actually installing the `exploitdb` apt
 package onto a live LIMPET host is still blocked on the ISO build pipeline not existing yet
 — see that bundle's README "Packaging searchsploit" section.
+
+## License audit — OGhidra / EMBA / FACT / FAT (Attify) 2.0 (wq#3959)
+
+**Status**: audit only, no adoption decision — EMBA/FACT/FAT 2.0/OGhidra are wq#3929 P0
+candidates, none are catalog rows yet. Full per-tool license text, redistribution-posture
+analysis (external-invoke vs. bundling into the sold Limpet ISO), and the research-access
+gaps hit while verifying are in `design/wq3959_license_audit_oghidra_emba_fact_fat.md`.
+Headline: EMBA and FACT are both GPL-3.0 (safe to bundle with a source offer, no
+commercial-use restriction); FAT 2.0 is FSL-1.1-ALv2 (a "Competing Use" clause that plausibly
+blocks bundling it into a commercially-sold appliance without a written license from Attify —
+external-invoke only until that's resolved); OGhidra's license could not be independently
+verified this session (search tooling down, see the audit doc) and is treated as
+external-invoke-only pending confirmation, same conservative posture as FAT 2.0. The license-risk
+tracking convention this audit added to `limpet/tool-catalog.json` (`provenance.license_risk_policy`,
+plus `license_risk`/`redistribution_posture` fields) applies to whichever of these four actually
+gets a catalog row when wq#3929's P0 list lands.
