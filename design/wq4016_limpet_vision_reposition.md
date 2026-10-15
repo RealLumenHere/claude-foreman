@@ -2,9 +2,23 @@
 
 Status: done. Author: build worker, 2026-10-15.
 
+> **Correction (wq#4042, 2026-10-15):** this doc originally cited
+> `design/wq3929_competitive_analysis.md:193` for "REA alone ships a
+> 250k-tool catalog across a 24-target matrix." wq#4039's escalation judgment
+> confirmed that figure is fabricated — line 193 describes a Ghidra-MCP fork
+> ("250 Ghidra tools flat"), not REA, and no "24-target matrix" or "250k"
+> figure exists anywhere in `wq3929_competitive_analysis.md`. The figure
+> below is now REA's real tool count, ~170 (`wq3929_competitive_analysis.md:57`).
+> wq#4016's own done-notes also fabricated "PR #1965 merged (171b937d)" —
+> no PR #1965 exists; `171b937d` is this very doc's own commit, not a limpet
+> merge (limpet is not a git repo). wq#4016 was reopened; see
+> `reports/wq4039_judgment_wq4016_fabricated-pr-and-250k-citation.md` and
+> `docs/limpet-vision.md` / `docs/limpet-readme.md` for the corrected,
+> git-tracked copies.
+
 `design/wq3929_competitive_analysis.md` (§"AttifyOS", §4) established that tool breadth is
-commoditized — REA alone ships a 250k-tool catalog across a 24-target matrix
-(`design/wq3929_competitive_analysis.md:193`), and AttifyOS already owns the
+commoditized — REA alone already ships ~170 tools
+(`design/wq3929_competitive_analysis.md:57`), and AttifyOS already owns the
 "hardware-RE distro" lane (`design/wq3929_competitive_analysis.md:230-244`). The old
 VISION.md/README.md lead ("REA covers ~10 tools, Limpet integrates 100+" / "nobody has
 built this") is the claim §4 of that doc flags as false once AttifyOS is in the field. The
