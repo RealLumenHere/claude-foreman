@@ -1,0 +1,34 @@
+# wq#3946 stage 2 -- packages purged from the stock Xubuntu 26.04 base before
+# Limpet packages go in.
+#
+# No "install-wizard-spec.md section 6.1" exists anywhere in this repo to source
+# this list from (confirmed by repo-wide grep; the same gap wq#3941 already hit
+# and logged -- see kb/ISSUE-LOG.md row 1327). This list is therefore this
+# ticket's own reasoned call, not a transcription: drop desktop-suite packages an
+# appliance that boots straight to the Limpet panel (docs/desktop-spec.md) never
+# needs, keep anything a.) the panel/greeter spec names outright or b.) an RE
+# session plausibly wants (e.g. a terminal, a file manager). One package per
+# line, apt purge argument syntax, comments allowed.
+
+# Office suite -- the appliance is a dedicated RE box, not a desktop replacement.
+libreoffice-core
+libreoffice-common
+
+# Groupware/mail clients -- no mail account is ever configured on this appliance.
+thunderbird
+
+# Games bundled by the xubuntu-desktop metapackage.
+xubuntu-icon-theme
+gnome-mahjongg
+gnome-mines
+gnome-sudoku
+
+# Printing/scanning stack -- no printer is ever attached to an RE appliance.
+cups
+cups-browsed
+simple-scan
+
+# Media players/transcoders not used by any Limpet component (HDMI capture
+# goes through v4l2/the HAL, not a desktop media player).
+rhythmbox
+parole

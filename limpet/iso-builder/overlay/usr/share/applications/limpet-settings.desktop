@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Limpet Settings
+Comment=Registry trust tiers, model selection, panel, and XFCE settings
+Icon=preferences-system
+Exec=limpet-settings
+Categories=Limpet;Settings;
