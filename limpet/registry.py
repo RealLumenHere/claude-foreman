@@ -179,9 +179,11 @@ class Registry:
                 name: {
                     "version": rp.version,
                     "kind": rp.kind,
+                    "category": rp.category,
                     "state": rp.state,
                     "reason": rp.reason,
                     "dependencies": rp.dependencies,
+                    "conflicts": rp.conflicts,
                 }
                 for name, rp in sorted(resolution.plugins.items())
             },

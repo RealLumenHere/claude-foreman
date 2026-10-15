@@ -8,9 +8,15 @@
 name = "hackrf"
 version = "1.0.0"
 kind = "hardware"
+category = "sdr"
 summary = "HackRF One software-defined radio support"
 maintainer = "community"
 license = "GPL-2.0"
+# This plugin and hackrf-portapack.toml both claim exclusive control of the
+# same physical device, so they declare a mutual conflict (wq#3932 rec. 5):
+# install/enable both and the registry keeps only one `active`, blocking the
+# other with the reason instead of racing for the USB device at runtime.
+conflicts = ["hackrf-portapack"]
 
 [source]
 git = "https://github.com/example/limpet-hackrf"

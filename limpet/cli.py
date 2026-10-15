@@ -44,7 +44,8 @@ def _cmd_validate(args, reg):
         print(f"error: cannot read {args.path}: {exc}", file=sys.stderr)
         return 1
     _emit({"path": args.path, "valid": True, "name": manifest.name,
-           "version": manifest.version, "kind": manifest.kind}, args.json)
+           "version": manifest.version, "kind": manifest.kind,
+           "category": manifest.category}, args.json)
     if not args.json:
         print(f"OK {manifest.name} {manifest.version} ({manifest.kind})")
     return 0
@@ -52,15 +53,22 @@ def _cmd_validate(args, reg):
 
 def _cmd_list(args, reg):
     unified = reg.reconcile(run_health=not args.no_health)
-    _emit(unified, args.json)
+    plugins = unified["plugins"]
+    if args.category:
+        plugins = {n: p for n, p in plugins.items() if p["category"] == args.category}
+    shown = dict(unified, plugins=plugins)
+    _emit(shown, args.json)
     if not args.json:
-        if not unified["plugins"]:
-            print("no plugins installed")
-        for name, p in unified["plugins"].items():
+        if not plugins:
+            print("no plugins installed" if not args.category
+                  else f"no plugins in category {args.category!r}")
+        for name, p in plugins.items():
             suffix = f"  ({p['reason']})" if p["reason"] else ""
-            print(f"{p['state']:>9}  {name} {p['version']} [{p['kind']}]{suffix}")
-        for path, errs in unified["rejected"].items():
-            print(f"REJECTED {path}: {'; '.join(errs)}", file=sys.stderr)
+            cat = f"/{p['category']}" if p["category"] else ""
+            print(f"{p['state']:>9}  {name} {p['version']} [{p['kind']}{cat}]{suffix}")
+        if not args.category:
+            for path, errs in unified["rejected"].items():
+                print(f"REJECTED {path}: {'; '.join(errs)}", file=sys.stderr)
     return 0
 
 
@@ -130,7 +138,9 @@ def build_parser():
     sv.add_argument("path")
     sv.set_defaults(func=_cmd_validate)
 
-    sub.add_parser("list", help="list installed plugins + state").set_defaults(func=_cmd_list)
+    sl = sub.add_parser("list", help="list installed plugins + state")
+    sl.add_argument("--category", help="show only plugins in this category (discovery filter)")
+    sl.set_defaults(func=_cmd_list)
 
     se = sub.add_parser("enable", help="enable a plugin")
     se.add_argument("name")

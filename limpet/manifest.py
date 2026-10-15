@@ -16,7 +16,18 @@ import dataclasses
 import re
 import tomllib
 
-KINDS = ("tool", "hardware")
+KINDS = ("tool", "hardware", "data")
+
+# Closed category taxonomy for discovery/browse (wq#3932 recommendation 4):
+# every mature plugin ecosystem surveyed there (NSE categories, Binary Ninja /
+# ClawHub marketplace categories) selects by category, and a closed enum keeps
+# `limpet list --category` and a future index both browsable without authors
+# inventing free-text tags. "other" is the deliberate escape hatch for a
+# plugin that doesn't fit yet rather than forcing a bad guess.
+CATEGORIES = (
+    "disassembler", "decompiler", "debugger", "fuzzer", "firmware",
+    "sdr", "flash-programmer", "network", "data", "other",
+)
 
 # A deliberately small, total version grammar: a constraint is an operator
 # (defaulting to ==) followed by a dotted release. "*" / "any" match anything.
@@ -44,8 +55,14 @@ class PluginManifest:
     summary: str = ""
     maintainer: str = ""
     license: str = ""
+    # one of CATEGORIES, or "" for not-yet-categorized (wq#3932 rec. 4)
+    category: str = ""
     # name -> version constraint, e.g. {"ghidra": ">=11.0"}
     dependencies: dict = dataclasses.field(default_factory=dict)
+    # names of other plugins this one cannot be active alongside, e.g. two
+    # plugins claiming the same SDR hardware (wq#3932 rec. 5). Declaring the
+    # conflict on either side is enough -- resolve() treats it as mutual.
+    conflicts: list = dataclasses.field(default_factory=list)
     health: HealthCheck | None = None
     # optional lifecycle hooks the registry invokes on enable/disable
     start: str = ""
@@ -126,6 +143,20 @@ def validate_manifest(data: dict) -> list:
     if kind not in KINDS:
         errors.append(f"[plugin].kind {kind!r} must be one of {KINDS}")
 
+    category = plugin.get("category", "")
+    if category not in ("", None) and category not in CATEGORIES:
+        errors.append(f"[plugin].category {category!r} must be one of {CATEGORIES} (or omitted)")
+
+    conflicts = plugin.get("conflicts", [])
+    if not isinstance(conflicts, list):
+        errors.append("[plugin].conflicts must be a list of plugin names")
+    else:
+        for conflict_name in conflicts:
+            if not isinstance(conflict_name, str) or not _NAME_RE.match(conflict_name):
+                errors.append(f"conflicts entry {conflict_name!r} is not a valid plugin name")
+            elif conflict_name == name:
+                errors.append(f"plugin {name!r} cannot declare a conflict with itself")
+
     deps = data.get("dependencies", {})
     if not isinstance(deps, dict):
         errors.append("[dependencies] must be a table of name = constraint")
@@ -168,7 +199,9 @@ def manifest_from_dict(data: dict) -> PluginManifest:
         summary=plugin.get("summary", ""),
         maintainer=plugin.get("maintainer", ""),
         license=plugin.get("license", ""),
+        category=plugin.get("category", "") or "",
         dependencies=dict(data.get("dependencies", {}) or {}),
+        conflicts=list(plugin.get("conflicts", []) or []),
         health=health,
         start=str(runtime.get("start", "")),
         stop=str(runtime.get("stop", "")),

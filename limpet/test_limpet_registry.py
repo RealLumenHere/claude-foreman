@@ -110,6 +110,18 @@ def test_unhealthy_dependency_flagged_not_started(tree, tmp_path):
     assert unified["start_order"] == []
 
 
+def test_conflicting_plugins_second_one_blocked(tree):
+    reg, plugins, _ = tree
+    drop(plugins, "hackrf", '[plugin]\nname="hackrf"\nversion="1.0"\nkind="hardware"\n'
+         'category="sdr"\nconflicts=["hackrf-portapack"]\n')
+    drop(plugins, "hackrf-portapack",
+         '[plugin]\nname="hackrf-portapack"\nversion="1.0"\nkind="hardware"\ncategory="sdr"\n')
+    unified = reg.reconcile()
+    assert unified["plugins"]["hackrf"]["state"] == "active"
+    assert unified["plugins"]["hackrf-portapack"]["state"] == "blocked"
+    assert "conflicts with 'hackrf'" in unified["plugins"]["hackrf-portapack"]["reason"]
+
+
 def test_empty_plugins_dir_is_clean(tree):
     reg, _, _ = tree
     unified = reg.reconcile()

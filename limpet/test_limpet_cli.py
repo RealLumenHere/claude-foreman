@@ -40,6 +40,22 @@ def test_enable_disable_roundtrip(tmp_path, capsys):
     assert unified["plugins"]["ghidra"]["state"] == "disabled"
 
 
+def test_list_category_filter(tmp_path, capsys):
+    plugins = tmp_path / "plugins.d"
+    plugins.mkdir()
+    (plugins / "hackrf.toml").write_text(
+        '[plugin]\nname="hackrf"\nversion="1.0"\nkind="hardware"\ncategory="sdr"\n')
+    (plugins / "ghidra.toml").write_text(
+        '[plugin]\nname="ghidra"\nversion="1.0"\nkind="tool"\ncategory="disassembler"\n')
+    base = ["--plugins-dir", str(plugins), "--state-dir", str(tmp_path / "state"),
+            "--no-health", "--json"]
+
+    rc = cli.main(base + ["list", "--category", "sdr"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert list(out["plugins"]) == ["hackrf"]
+
+
 def test_enable_unknown_plugin_exit_1(tmp_path, capsys):
     plugins = tmp_path / "plugins.d"
     plugins.mkdir()

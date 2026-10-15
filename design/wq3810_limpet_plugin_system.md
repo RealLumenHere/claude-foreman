@@ -1,6 +1,11 @@
 # wq#3810 — LIMPET plugin system: hot-swappable tool & hardware modules
 
 Status: designed + reference implementation landed (`limpet/`). Author: build worker, 2026-10-14.
+Refined by wq#3945 against ten-ecosystem research (wq#3932): manifests gained
+a `category` taxonomy and a `conflicts` declaration, and a third `data` kind
+for code-free plugins — see
+[`docs/plugin-spec.md`](../docs/plugin-spec.md) for the full refinement and
+what's still future work (index/discovery, signing, sandboxing hardening).
 
 LIMPET is meant to be extensible: anyone can write a plugin for their hardware or
 their tool and drop it in, without patching the core. This doc is the lifecycle
@@ -118,4 +123,7 @@ hints and a device-presence health check).
 ## Future work (not in this ticket)
 Signature/trust on community manifests before auto-clone; a `limpet install
 <git-url>` fetch+symlink helper; restart-on-unhealthy backoff policy; an
-inotify-driven reconcile to complement the timer.
+inotify-driven reconcile to complement the timer. (wq#3945 added the
+`category` and `conflicts` manifest fields and the `data` kind — see
+`docs/plugin-spec.md` §9 for the updated shipped/future split: a curated
+index repo, signing, and sandbox hardening are still open.)
