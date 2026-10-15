@@ -27,13 +27,20 @@ API unauthenticated — logged ISSUE-LOG #1325). The working backends were used 
   (OpenClaw ~180K users not 340K stars; bethington/ghidra-mcp 244–256 tools not ≈209) and
   downgraded VRAX to a described architecture (single LinkedIn source, no public repo) — the
   corrections are folded into §1 below and the matrix. The *(verified live)* tag marks each.
+- **Gap-fill (wq#3963, 2026-10-15):** Kong, ReVa, and GhidrAssist were missing from the
+  original brief; §1.14–1.16 add them, each checked against its own upstream README via
+  `fleet-search read` (the cited `docs/research-digest-2026-10-15-thor-docs.md` is not in
+  the repo or any granted root, the same phantom-citation pattern as ISSUE-LOG row 1338).
+  Same pass: VRAX dropped as a cited precedent (§1.4), and two figures that disagree
+  across sources are flagged for re-verify (§6).
 
 Limpet facts below are cited to the committed design docs, not restated from memory.
 
 ## 1. Platform-by-platform
 
 ### (1) OpenClaw — general agent platform with a plugin marketplace *(verified live, wq#3995)*
-~180K users (corrected from the brief's "340K+ stars"), multi-agent orchestration, 138+ MCP
+~180K users (corrected from the brief's "340K+ stars"; a third source says ~392K stars,
+re-verify per §6), multi-agent orchestration, 138+ MCP
 tools, ClawHub plugin marketplace, Composio 500+ app integrations, browser MCP, enterprise
 controls. Live search (`.../limpet_live_search_2026-10-14.md` A0) confirms this is a
 *general-purpose* AI agent platform (the OpenHands/Composio shape), **not RE-specific**, so
@@ -54,7 +61,7 @@ relevance to Limpet is **orchestration and plugin distribution**, not RE depth.
   intent; they are ahead in maturity (SSO/multi-tenant).
 
 ### (2) REA — morluto / npm `rea-agents` (verified: installed, `mcp__rea__*` live)
-~170 tools (skill v37), investigation model, evidence tracking, CLI + npm, Ghidra provider
+~170 tools (skill v37; another source says 78, re-verify per §6), investigation model, evidence tracking, CLI + npm, Ghidra provider
 (Hopper/IDA optional). This is the **closest peer to Limpet's software-tool plane** and is
 already on the fleet (`TOOL_REGISTRY.md:33-56`). Live search (`.../limpet_live_search_2026-10-14.md`
 A0) adds two boundary facts: REA is **macOS-centric** (Homebrew/Hopper, "check your Mac") and
@@ -102,15 +109,23 @@ engine; Rust firmware extraction; OpenRouter API; PDF dossier.
   near-parity. Make dossier generation a first-class workspace export alongside the evidence
   bundle.
 
-### (4) VRAX — multi-agent swarm binary analysis + live operator console *(DOWNGRADED — described architecture, not a shipping competitor)*
+### (4) VRAX — multi-agent swarm binary analysis + live operator console *(UNCONFIRMED — not cited as precedent, wq#3963)*
 Swarm topology over binary analysis with a live console. **Downgrade (wq#3995):** live search
 (`.../limpet_live_search_2026-10-14.md` A0) found the *only* substantive source is a single
 LinkedIn profile (Chathuranga BW, UAE) — no public repo, release, or community. So VRAX is a
 **described architecture, not a shipping competitor**; treat it as evidence that others pursue
-the pattern, not as a product to benchmark against. Two takeaways survive the downgrade: (a) a
-**live operator console** — a real-time view of what the agent is doing on the box — which
-Limpet lacks (we have a replayable git trail but no live view). **Gap G5** stays a validated
-pattern (EMBArk, below, is the verified prior art for it). (b) swarm-over-one-
+the pattern, not as a product to benchmark against.
+
+**Dropped as a cited precedent (wq#3963).** Two more independent sources (a Gemini
+competitive-analysis PDF and a separate ChatGPT-sourced doc, per the wq#3963 brief) each
+concluded no VRAX project is identifiable and that the name is likely a VEX conflation. With
+the single-LinkedIn finding above that is three sources against existence, so VRAX no longer
+counts as evidence for any gap: it is struck from G3 and G5 in §3, and its matrix column is
+kept only as greyed history. The two ideas attributed to it stand or fall on other evidence:
+(a) a **live operator console** — a real-time view of what the agent is doing on the box —
+which Limpet lacks (we have a replayable git trail but no live view). **Gap G5** stays,
+backed by EMBArk, OpenClaw, and FACT's web UI (§1.1, §1.10), none of which depend on VRAX.
+(b) swarm-over-one-
 binary parallelism; lower priority for an appliance with an i5/32GB ceiling
 (`design/wq3806_limpet_architecture.md:3,152-153`) where resident-memory pressure, not
 agent count, is the constraint.
@@ -275,6 +290,61 @@ cheap external credibility and a forcing function, and ties to fleet golden-set 
 **Adopt as A13** (design-only: pick one benchmark as Limpet's standing eval). Not a
 capability column — benchmarks are measurement, not features.
 
+### (14) Kong — autonomous LLM pipeline over in-process Ghidra *(verified live, wq#3963)*
+
+`amruth-sn/kong` (PyPI `kong-re`, Apache-2.0, README fetched 2026-10-15): "a single command
+runs the complete analysis. Triage, function analysis, cleanup, semantic synthesis, and
+export." Ghidra runs in-process via PyGhidra/JPype; functions are analyzed **bottom-up over
+the call graph** so callers see already-named callees; known library/crypto functions are
+signature-matched before any LLM call; decompiler output is normalized before it reaches the
+model; a final **semantic synthesis** pass unifies naming, synthesizes structs, and resolves
+inconsistencies between independently analyzed functions; results are written back into
+Ghidra's program database. It also advertises an agentic deobfuscation pass (CFF, bogus
+control flow, string encryption, VM protection).
+
+- **No new gap.** Kong is a direct agent-driven-RE competitor on the software side, but every
+  capability it has maps onto an existing item: it is ✗ on hardware, workspace, and trust
+  gate, like the other software peers in §4.
+- **Strengthens G3/A3.** The synthesis pass is a second look over the first pass's output
+  that catches cross-function inconsistencies. It is not an adversarial critic, but it is
+  shipping evidence that a post-analysis check pays off. A3's critic should run after the
+  per-function pass and check consistency across functions, not only per-claim.
+- **Strengthens A1/G2.** Bottom-up call-graph order gives the obligation ledger a natural
+  ordering: open obligations on leaf functions close first, and a caller's obligation stays
+  open until its callees are explained. Signature matching is a cheap way to close
+  obligations without an LLM call.
+
+### (15) ReVa — Ghidra MCP with assistant and headless modes *(verified live, wq#3963)*
+
+`cyberkaida/reverse-engineering-assistant` (README fetched 2026-10-15) runs either inside the
+Ghidra UI ("assistant mode") or headless for automation/CI, and in headless mode "ReVa manages
+starting Ghidra and projects for you. Projects in headless mode are ephemeral (session-scoped)
+and automatically cleaned up."
+
+- **Adopt the session-scoped project cleanup as a plugin lifecycle pattern (A14).** Limpet's
+  Ghidra plugin starts and stops a headless backend through manifest `start`/`stop` strings
+  (`docs/plugin-spec.md` §6.1). The wq#3963 brief cites "plugin-spec.md 3.2", but that doc
+  has no §3.2 (§3 is Discovery), so the pattern lands in §6.1 next to the runtime
+  `start`/`stop` description. No gap number: Limpet has no shipped behavior here to be
+  behind on, so this is a pattern to adopt before the first headless plugin ships.
+
+### (16) GhidrAssist — Ghidra LLM plugin with a Graph-RAG knowledge store *(verified live, wq#3963)*
+
+`jtang613/GhidrAssist` (README fetched 2026-10-15; the wq#3963 brief attributes it as
+"symgraph", a name the README does not use) is an LLM extension inside Ghidra. Its
+**Graph-RAG knowledge system** keeps a "5-level semantic hierarchy: Statement → Block →
+Function → Module → Binary", "pre-computed LLM summaries enable fast, LLM-free queries",
+"SQLite persistence with JGraphT graph algorithms", and "full-text search (FTS5) on summaries
+and security annotations", plus Leiden-algorithm community detection to group functions into
+modules.
+
+- **Refines A6 (no new gap).** The per-workspace SQLite index in A6 listed
+  {functions, strings, xrefs, symbols, invocations}. GhidrAssist shows the expensive row to
+  keep is the **decompiled-function cache**: decompiler output and the LLM summary per
+  function, keyed by function address and binary hash, with FTS over the summaries. Re-asking
+  about a function then costs a SQLite read, not a decompile plus an LLM call. A6 is updated
+  in §5 to include it.
+
 ## 2. Feature comparison matrix
 
 Legend: ✅ have / ◑ partial / ✗ lack / — out of lane. "Limpet" = the committed design.
@@ -282,6 +352,10 @@ Legend: ✅ have / ◑ partial / ✗ lack / — out of lane. "Limpet" = the comm
 Columns now include **AttifyOS** (the hardware-RE distro, §1.11) and **REx@Skill** (§1.12).
 AttifyOS is the one peer that is *not* ✗ on bundled hardware interfaces — which is exactly why
 the HAL/appliance differentiator is re-worded in §4.
+
+wq#3963: the **VRAX** column is kept as history only; VRAX is unconfirmed (§1.4) and its ✅
+cells are not evidence for any gap. Kong, ReVa, and GhidrAssist (§1.14–1.16) get no columns:
+none adds a gap, and their READMEs don't support a cell-by-cell rating on every row.
 
 | Capability | Limpet | OpenClaw | REA(morluto) | REA(Rust) | VRAX | Kali | AttifyOS | EMBA | FACT | OFRAK | REx@Skill | Ghidra-MCP |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -316,14 +390,16 @@ only partially covers.
 - **G2 — Reconstruction obligation ledger** (REA). No explicit "what still must be explained"
   tracker. *The highest-value RE-specific gap; it is the RE analogue of the fleet evidence
   gate.*
-- **G3 — Adversarial review agent** (REA-Rust, VRAX). Single-loop agent, no propose/critic
-  split in-analysis. *High value, matches house doctrine.*
+- **G3 — Adversarial review agent** (REA-Rust; Kong's post-analysis reconciliation pass is a
+  weaker form, §1.14). Single-loop
+  agent, no propose/critic split in-analysis. *High value, matches house doctrine.* VRAX
+  removed as a precedent (§1.4).
 - **G7 — Binary modify/repack** (OFRAK). Design is analysis-only. *Adopt by wrapping OFRAK;
   do not build.*
-- **G5 — Live operator console** (EMBA's EMBArk, OpenClaw, FACT; VRAX downgraded to described,
-  §1.4). Replayable trail but no live view. *Medium; a read-only tail of the workspace evidence
-  log is the cheap version. Prior art is now verified-shipping (EMBArk), not just VRAX's
-  described console.*
+- **G5 — Live operator console** (EMBA's EMBArk, OpenClaw, FACT). Replayable trail but no
+  live view. *Medium; a read-only tail of the workspace evidence log is the cheap version.*
+  VRAX is no longer cited (unconfirmed by three sources, §1.4); the gap rests on the three
+  shipping peers alone.
 - **G4 — Outbound integrations** (OpenClaw/Composio). Evidence bundle exists but no connector
   to ship it. *Medium; one connector (file/email of the bundle) covers 80%.*
 - **G6 — Narrow tool-lane additions** (Kali): tshark + a fuzzer as `core`. *Low; everything
@@ -394,6 +470,9 @@ Ranked by (value ÷ cost), each tied to a gap and the existing design hook it ex
    specialized RE model vs. the general one (`design/wq3806_limpet_architecture.md:233-239`).
 6. **A6 → Recon-SQL: per-workspace SQLite RE index.** Queryable {functions,strings,xrefs,
    symbols,invocations} beside the evidence (`design/wq3806_limpet_architecture.md:211-218`).
+   **Refined (wq#3963, GhidrAssist §1.16):** include a decompiled-function cache, meaning
+   decompiler output plus LLM summary per function, keyed by address and binary hash, with
+   FTS over the summaries.
 7. **A4 → reverse-skill: declared target-class→toolset routing table** feeding the two-level
    router (`design/wq3806_limpet_architecture.md:152-159`).
 8. **A8 → G5: read-only live console** = a tail of the workspace evidence log. Low effort.
@@ -410,6 +489,12 @@ Ranked by (value ÷ cost), each tied to a gap and the existing design hook it ex
 13. **A13 → benchmarks: adopt a published RE-agent eval** (CrackMeBench / AgentRE-Bench,
     §1.13). Pick one as Limpet's standing eval instrument — cheap external credibility and a
     forcing function, ties to fleet golden-set doctrine. Design-only; no build on the box.
+14. **A14 → ReVa: session-scoped headless project cleanup** (§1.15). A plugin that starts a
+    headless backend owns a throwaway project for one session and deletes it on `stop`
+    (`docs/plugin-spec.md` §6.1). Cheap; do it before the first headless plugin ships.
+
+Kong (§1.14) adds no item of its own; it sharpens A3 (check consistency across functions)
+and A1 (close ledger obligations bottom-up over the call graph).
 
 ## 6. Unblocking the design work
 
@@ -433,3 +518,14 @@ The baseline users expect, distilled for the downstream design tickets this one 
   described architecture (single LinkedIn source); ReCopilot carries a China-hosted
   data-egress caveat; EMBA adds AI/diffing/EMBArk. A3/A5/A6 are cleared to proceed on verified
   grounding (A5 design-only, subject to the ReCopilot egress caveat).
+- **Re-verify (wq#3963, open, not resolved here):** two figures disagree across the three
+  independent sources now in hand, and this doc does not pick one.
+  - **OpenClaw scale:** "340K+ stars" (original wq#3929 brief), "~180K users" (wq#3995 live
+    search, used in §1.1), "~392K" stars (the ChatGPT-sourced doc cited by wq#3963). Stars
+    and users are different metrics, so the next pass should fetch the repo page and record
+    stars and date together.
+  - **REA (morluto) tool count:** "~170 tools (skill v37)" (wq#3929, §1.2) vs **78** (the
+    ChatGPT-sourced doc). REA is installed on the fleet, so the count can be taken directly
+    from the live `mcp__rea__*` tool list with the installed version noted; a gap that big
+    may be a version difference or a tools-vs-skills miscount.
+  Neither figure changes a gap or adopt item; tool count is already not a moat (§4).

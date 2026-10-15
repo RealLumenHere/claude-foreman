@@ -146,6 +146,18 @@ subsystem's unit, wq#3807's tool-registry daemon, not wq#3810's plugin
 registry, which has no shipped unit file to harden yet). Scoping it correctly
 needs its own ticket once the plugin registry daemon has a real systemd unit.
 
+**Recommended lifecycle pattern (wq#3963, from ReVa):** a plugin that spawns a
+headless analysis backend (Ghidra headless being the first case) should own
+that backend's project state for the life of one session and delete it on
+`stop`, the way ReVa (`cyberkaida/reverse-engineering-assistant`) runs headless
+mode: "ReVa manages starting Ghidra and projects for you. Projects in headless
+mode are ephemeral (session-scoped) and automatically cleaned up" (README,
+fetched 2026-10-15). For Limpet that means: the throwaway Ghidra project goes
+under a per-session temp dir, analysis results the agent needs are written to
+the workspace before `stop`, and `stop` removes the temp project so no stale
+`.gpr`/`.rep` lock state survives into the next session. Not implemented; the
+`ghidra-mcp.toml` example's `start`/`stop` strings are where it would land.
+
 ### 6.2 v2 design: privilege separation and the hardware broker (wq#3961)
 
 **Scope note.** This subsection is the wq#3961 design review of the upstream
