@@ -25,6 +25,23 @@ from the live layer's squashfs (1,908 `Package:` stanzas) and the ISO's own
 `research/wq3983_xubuntu-26.10-snapshot4-desktop-amd64.manifest` and
 `research/wq3983_xubuntu-26.04.1-desktop-amd64.manifest` (delta baseline).
 
+**Corrections (wq#3985 verify-pass, wq#3990 judgment, 2026-10-15).** Three
+package-presence claims in the original text were wrong and have been rewritten
+in place against the two committed manifests: §3's Whisker Menu claim (claimed
+absent, actually `xfce4-whiskermenu-plugin` 2.10.1-1 at
+`wq3983_xubuntu-26.10-snapshot4-desktop-amd64.manifest:1853` /
+`…26.04.1…:1849`), §3's `xfce4-appmenu-plugin` panel default (named as what
+ships; present in neither manifest), and §2/§10's LibreOffice claim (claimed
+dropped from the seed, actually 19 `libreoffice-*` packages 4:26.8.0.3-0ubuntu1
+at `…26.10-snapshot4…:1096-1114`, and 19 in 26.04.1 too). All three asserted a
+belief about Xubuntu's flavor defaults; every absence claim about something the
+author had no prior belief about (`git`, `cmake`, `pip`/`python3-pip`, `dkms`,
+`orca`, `pulseaudio`, `xwayland`/`wayland-protocols`, `ubiquity`/`calamares`)
+re-verified correct, as did the ~30 version/presence claims wq#3985 sampled.
+Treat any remaining sentence of the form "<flavor> already does/doesn't X" as
+unverified until re-grepped; the rest of the doc stands. Full reasoning:
+`reports/wq3990_judgment_wq3983_xubuntu_absence_claims.md`.
+
 ---
 
 ## 1. ISO structure, boot chain, installer
@@ -110,9 +127,13 @@ each future packaging ticket, wq#3947, applies):
   point of riding a real Ubuntu kernel), `bluez`+`bolt`, `xserver-xorg-video-*`
   (GPU breadth), `mesa-utils`, NetworkManager stack, XFCE core (`xfwm4`,
   `xfce4-session`, `xfconf`, `thunar`, `xfdesktop4`), LightDM core.
-- **Strip (bloat-removal target, see §10):** `libreoffice*` not present in this
-  manifest (Xubuntu dropped it from the default seed already — verified absent),
-  but `thunderbird` (snap), `onboard`+`onboard-data` if Limpet ships its own a11y
+- **Strip (bloat-removal target, see §10):** `libreoffice*` — 19 packages,
+  `libreoffice-{core,common,writer,calc,impress,draw,math,base-core,gnome,gtk3}`
+  + `-style-*`/`-uiconfig-*`, all 4:26.8.0.3-0ubuntu1
+  (`wq3983_xubuntu-26.10-snapshot4-desktop-amd64.manifest:1096-1114`, same 19 in
+  26.04.1) — a dedicated RE appliance needs none of it, and this is the largest
+  single strippable block in the seed; `thunderbird` (snap),
+  `onboard`+`onboard-data` if Limpet ships its own a11y
   story, every `language-pack-*`/`language-support-*` beyond `en`, printer stack
   (`cups*`, present per `multi-user.target.wants/cups.service`) if Limpet targets
   headless/field hardware without printers.
@@ -130,12 +151,17 @@ each future packaging ticket, wq#3947, applies):
 Exact versions from `status`/`.manifest`: `xfce4-panel` 4.20.8-1, `xfce4-session`
 4.20.4-1, `xfce4-settings` 4.20.1-1ubuntu2, `xfconf` 4.20.0-2, `xfdesktop4`
 4.20.1-1ubuntu2, `xfwm4` 4.20.0-1build1, `xfce4-power-manager` 4.20.1-1,
-`xfce4-notifyd` 0.9.7-2build1, `thunar` 4.20.9-1. Whisker Menu is not in the
-manifest under that name — Xubuntu 26.10 ships the stock XFCE "Applications
-Menu" (`xfce4-appmenu-plugin`/panel default), not `xfce4-whiskermenu-plugin`;
-grepped the manifest for `whisker`, zero hits, so a Limpet panel that wants
-Whisker-style search-as-you-type must add `xfce4-whiskermenu-plugin` itself, not
-assume it is already there.
+`xfce4-notifyd` 0.9.7-2build1, `thunar` 4.20.9-1. **Whisker Menu ships in the
+seed:** `xfce4-whiskermenu-plugin` 2.10.1-1
+(`wq3983_xubuntu-26.10-snapshot4-desktop-amd64.manifest:1853`, and
+`…26.04.1…:1849` — same version in both releases), alongside `xfce4-appfinder`
+4.20.0-2build1, `xfce4-panel` 4.20.8-1 and `xfce4-panel-profiles`
+1.0.15-1build1. There is no `xfce4-appmenu-plugin` in either manifest. A Limpet
+panel that wants Whisker-style search-as-you-type therefore needs no extra
+package — it configures the plugin that is already there, which is exactly what
+the landed ISO overlay does
+(`limpet/iso-builder/overlay/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml:27`,
+`plugin-1 = whiskermenu`, with no corresponding install step in `build.sh`).
 
 Panel plugin API / build system: XFCE panel plugins at this version build against
 `libxfce4panel-2.0` + `xfconf` via the standard Meson/`xfce4-dev-tools` pipeline
@@ -264,7 +290,10 @@ extras not present in an installed system). Per-layer compressed-on-ISO sizes:
 1.82 GB / 2.09 GB / 185 MB respectively.
 
 2–4 GB bloat-removal target against the 7.24 GiB full-install baseline is
-realistic: `thunderbird` snap (~200MB+), `cups*` stack, `onboard`+`-data`,
+realistic: the 19-package `libreoffice*` suite (§2 — the largest single
+strippable block, and already purged by the landed builder at
+`limpet/iso-builder/bloat-removal.list:14-15`), `thunderbird` snap (~200MB+),
+`cups*` stack, `onboard`+`-data`,
 non-`en` `language-pack-*`/`language-support-*` (this is typically the single
 largest strippable chunk on a desktop seed, though this pass didn't unsquash
 `standard.squashfs` to size it precisely — flagged as a follow-up for wq#3947),
