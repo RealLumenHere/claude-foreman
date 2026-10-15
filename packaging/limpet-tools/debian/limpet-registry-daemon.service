@@ -1,0 +1,13 @@
+[Unit]
+Description=Limpet plugin registry reconcile daemon
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/limpet-registry-daemon --interval 30
+Restart=on-failure
+RestartSec=5
+StateDirectory=limpet
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+Source: limpet-hald
+Section: utils
+Priority: optional
+Maintainer: Lumen Industries <packaging@lumen.local>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+
+Package: limpet-hald
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.11), usbutils
+Description: Limpet USB RE-hardware detector (hal.py)
+ Signature-based detector for RE/lab USB hardware (debug probes, logic
+ analyzers, flash programmers, SDR receivers, target devices in boot/flash
+ mode, ...). Exposes `limpet-hald detect` / `limpet-hald list-plugins` as one
+ JSON document so an agent can check what hardware is attached before
+ reaching for a hardware-specific tool.

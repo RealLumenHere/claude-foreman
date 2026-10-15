@@ -1,0 +1,8 @@
+limpet-mcp-meta (0.1.0) unstable; urgency=low
+
+  * Initial packaging of meta_server.py (ops/wq3808-limpet-mcp-meta-server-a1)
+    for ISO inclusion (wq#3947). Ships a disabled-by-default systemd unit;
+    the manifest itself ships with every child-server entry disabled, same
+    as ops/wq3808-limpet-mcp-meta-server-a1/manifest.example.json.
+
+ -- Lumen Industries <packaging@lumen.local>  Wed, 15 Oct 2026 00:00:00 +0000

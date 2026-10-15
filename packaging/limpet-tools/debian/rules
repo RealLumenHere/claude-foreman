@@ -1,0 +1,26 @@
+#!/usr/bin/make -f
+# wq#3947: stages limpet/{cli,daemon,registry,registry_core,manifest,health}.py
+# into the package tree. This package root carries no copy of them on disk;
+# the build always reads whatever is currently checked in at those paths.
+
+MONOROOT := $(CURDIR)/../..
+SRC := $(MONOROOT)/limpet
+PKGROOT := debian/limpet-tools
+
+%:
+	dh $@
+
+override_dh_installsystemd:
+	# Ships disabled: enabling the reconcile loop before any plugin is
+	# dropped into /etc/limpet/plugins.d just reconciles an empty registry
+	# on a timer. Operator opts in once a plugin exists.
+	dh_installsystemd --no-enable --no-start
+
+override_dh_auto_install:
+	dh_auto_install
+	install -d $(PKGROOT)/usr/lib/limpet/tools
+	install -m 0644 $(SRC)/cli.py $(SRC)/daemon.py $(SRC)/registry.py \
+	    $(SRC)/registry_core.py $(SRC)/manifest.py $(SRC)/health.py \
+	    $(PKGROOT)/usr/lib/limpet/tools/
+	install -d $(PKGROOT)/etc/limpet/plugins.d
+	install -d $(PKGROOT)/var/lib/limpet

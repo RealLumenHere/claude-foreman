@@ -1,0 +1,16 @@
+Source: limpet-tools
+Section: utils
+Priority: optional
+Maintainer: Lumen Industries <packaging@lumen.local>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+
+Package: limpet-tools
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.11)
+Description: Limpet plugin registry CLI and reconcile daemon
+ `limpet` is the operator/agent front door to the Limpet plugin registry:
+ validate a limpet-plugin.toml, list installed plugins and effective state,
+ enable/disable a plugin, run health checks, and reconcile the unified
+ manifest. `limpet-registry-daemon` wraps the same reconcile loop in a
+ periodic timer so a dropped-in plugin is picked up without a restart.

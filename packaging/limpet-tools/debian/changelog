@@ -1,0 +1,8 @@
+limpet-tools (0.1.0) unstable; urgency=low
+
+  * Initial packaging of the limpet plugin-registry CLI (limpet/cli.py) and
+    reconcile daemon (limpet/daemon.py) for ISO inclusion (wq#3947). Creates
+    /etc/limpet/plugins.d and /var/lib/limpet (limpet/registry.py:31-32
+    defaults) on install.
+
+ -- Lumen Industries <packaging@lumen.local>  Wed, 15 Oct 2026 00:00:00 +0000

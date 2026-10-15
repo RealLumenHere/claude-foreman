@@ -1,0 +1,6 @@
+#!/bin/sh
+# wq#3947: daemon.py's own docstring says run as `python3 -m daemon --interval 30`
+# from the limpet/ dir (limpet/daemon.py:7-8); invoking the staged copy by path
+# works the same way since Python puts the script's own dir on sys.path, which is
+# where this package's cli.py/registry.py/etc. are staged too.
+exec python3 /usr/lib/limpet/tools/daemon.py "$@"

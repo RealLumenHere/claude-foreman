@@ -1,0 +1,6 @@
+#!/bin/sh
+# wq#3947: limpet-hald wrapper. hal.py does `from limpet import target_devices`
+# (ops/wq3809-limpet-hal/hal.py:49) so the `limpet` package parent dir must be on
+# PYTHONPATH; the limpet-hald.deb install layout puts it next to hal.py's own dir.
+exec env PYTHONPATH="/usr/lib/limpet${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 /usr/lib/limpet/hald/hal.py "$@"

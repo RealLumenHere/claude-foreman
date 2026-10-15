@@ -1,0 +1,27 @@
+#!/usr/bin/make -f
+# wq#3947: stages ops/wq3808-limpet-mcp-meta-server-a1/ into the package tree.
+# This package root carries no copy of it on disk; the build always reads
+# whatever is currently checked in at that path.
+
+MONOROOT := $(CURDIR)/../..
+SRC := $(MONOROOT)/ops/wq3808-limpet-mcp-meta-server-a1
+PKGROOT := debian/limpet-mcp-meta
+
+%:
+	dh $@
+
+override_dh_installsystemd:
+	# Ships disabled: ops/wq3808-limpet-mcp-meta-server-a1/install.sh documents
+	# that the server has no deploy step wired up yet (manifest ships every
+	# child entry disabled too). Operator opts in with `systemctl enable --now`.
+	dh_installsystemd --no-enable --no-start
+
+override_dh_auto_install:
+	dh_auto_install
+	install -d $(PKGROOT)/usr/lib/limpet/mcp-meta
+	install -m 0644 $(SRC)/meta_server.py $(SRC)/cli_wrapper.py \
+	    $(SRC)/registry.py $(SRC)/stdio_mcp_client.py \
+	    $(PKGROOT)/usr/lib/limpet/mcp-meta/
+	install -d $(PKGROOT)/etc/limpet/mcp-meta
+	install -m 0644 $(SRC)/manifest.example.json \
+	    $(PKGROOT)/etc/limpet/mcp-meta/manifest.json

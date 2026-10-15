@@ -1,0 +1,31 @@
+#!/usr/bin/make -f
+# wq#3947: stages real monorepo sources (ops/wq3809-limpet-hal/,
+# limpet/target_devices.py, limpet/target-devices.d/) into the package tree.
+# This package root carries no copy of them on disk; the build always reads
+# whatever is currently checked in at those paths.
+
+MONOROOT := $(CURDIR)/../..
+PKGROOT := debian/limpet-hald
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	dh_auto_install
+	install -d $(PKGROOT)/usr/lib/limpet/hald
+	install -m 0644 $(MONOROOT)/ops/wq3809-limpet-hal/hal.py \
+	    $(PKGROOT)/usr/lib/limpet/hald/hal.py
+	install -m 0644 $(MONOROOT)/ops/wq3809-limpet-hal/usb_boot_signatures.py \
+	    $(PKGROOT)/usr/lib/limpet/hald/usb_boot_signatures.py
+	install -m 0644 $(MONOROOT)/ops/wq3809-limpet-hal/usb_boot_signatures.toml \
+	    $(PKGROOT)/usr/lib/limpet/hald/usb_boot_signatures.toml
+	install -d $(PKGROOT)/usr/lib/limpet/limpet/target-devices.d
+	install -m 0644 $(MONOROOT)/limpet/__init__.py \
+	    $(PKGROOT)/usr/lib/limpet/limpet/__init__.py
+	install -m 0644 $(MONOROOT)/limpet/target_devices.py \
+	    $(PKGROOT)/usr/lib/limpet/limpet/target_devices.py
+	install -m 0644 $(MONOROOT)/limpet/target-devices.d/*.toml \
+	    $(PKGROOT)/usr/lib/limpet/limpet/target-devices.d/
+	install -d $(PKGROOT)/etc/udev/rules.d
+	install -m 0644 $(MONOROOT)/limpet/target-devices.d/91-limpet-targets.rules \
+	    $(PKGROOT)/etc/udev/rules.d/91-limpet-targets.rules

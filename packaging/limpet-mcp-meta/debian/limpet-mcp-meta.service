@@ -1,0 +1,14 @@
+[Unit]
+Description=Limpet unified MCP meta-server
+Documentation=file:/usr/share/doc/limpet-mcp-meta/README.md
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/limpet-mcp-meta /etc/limpet/mcp-meta/manifest.json
+Restart=on-failure
+RestartSec=5
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+#!/bin/sh
+# wq#3947: meta_server.py takes exactly one positional arg, the manifest path
+# (ops/wq3808-limpet-mcp-meta-server-a1/meta_server.py:260-264).
+exec python3 /usr/lib/limpet/mcp-meta/meta_server.py "${1:-/etc/limpet/mcp-meta/manifest.json}"

@@ -1,0 +1,16 @@
+Source: limpet-mcp-meta
+Section: utils
+Priority: optional
+Maintainer: Lumen Industries <packaging@lumen.local>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+
+Package: limpet-mcp-meta
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.11)
+Description: Limpet unified MCP meta-server
+ Manifest-driven multiplexer that exposes multiple child MCP servers (stdio
+ subprocesses) as one JSON-RPC endpoint, restarting children on a changed
+ command/env and bounding reads so a hung child cannot wedge the server.
+ Ships with every manifest entry disabled (see /etc/limpet/mcp-meta/manifest.json)
+ until an operator enables a specific child server.
