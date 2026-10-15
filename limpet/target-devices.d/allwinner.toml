@@ -1,0 +1,54 @@
+# wq#3940 — LIMPET HAL target device database: allwinner (2 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1f3a"
+usb_pid = "efe8"
+class_code = ""
+vendor = "Allwinner Technology"
+soc_family = "every Allwinner SoC"
+soc_model = "A-series (A10, A13, A20, A31, A33, A64), H-series (H2+, H3, H5, H6, H616, H618, H700), T-series (T3, T5, T507, T527), R-series (R818)"
+mode_name = "FEL (BootROM USB protocol)"
+recommended_tool = "sunxi-fel"
+confidence = "high"
+notes = "Allwinner's single most load-bearing fact for this ticket: ALL Allwinner chips across every A/H/T/R-series generation enumerate as this one VID:PID pair in FEL — sunxi-fel hardcodes exactly this pair as its device match. One row genuinely covers the entire vendor; chip identity comes from sunxi-fel reading the SoC ID register after connecting, never from the PID."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1f3a"
+usb_pid = "1000"
+class_code = ""
+vendor = "Allwinner Technology"
+soc_family = "very early A1x tablets (pre-FEL, LiveSuit/PhoenixSuit-era USB mass-storage-ish boot)"
+soc_model = "very early A1x tablets (pre-FEL, LiveSuit/PhoenixSuit-era USB mass-storage-ish boot)"
+mode_name = "legacy USB boot (pre-FEL protocol)"
+recommended_tool = "LiveSuit (legacy, Windows-oriented; no modern Linux equivalent)"
+confidence = "low"
+notes = "Predates FEL; included for historical completeness on very old A1x-class tablets. Low confidence, not cross-checked this run."
+

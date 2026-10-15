@@ -1,0 +1,80 @@
+# wq#3940 — LIMPET HAL target device database: broadcom (4 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0a5c"
+usb_pid = "2763"
+class_code = ""
+vendor = "Broadcom Corp"
+soc_family = "BCM2835 (Raspberry Pi 1/Zero)"
+soc_model = "BCM2835 (Raspberry Pi 1/Zero)"
+mode_name = "USB Boot ROM (rpiboot mass-storage-gadget boot)"
+recommended_tool = "rpiboot / usbboot"
+confidence = "high"
+notes = "Raspberry Pi 1/Zero's BootROM USB device mode, used for SD-card-less boot and bootloader recovery."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0a5c"
+usb_pid = "2764"
+class_code = ""
+vendor = "Broadcom Corp"
+soc_family = "BCM2836/BCM2837 (Raspberry Pi 2/3)"
+soc_model = "BCM2836/BCM2837 (Raspberry Pi 2/3)"
+mode_name = "USB Boot ROM (rpiboot mass-storage-gadget boot)"
+recommended_tool = "rpiboot / usbboot"
+confidence = "high"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0a5c"
+usb_pid = "2711"
+class_code = ""
+vendor = "Broadcom Corp"
+soc_family = "BCM2711 (Raspberry Pi 4)"
+soc_model = "BCM2711 (Raspberry Pi 4)"
+mode_name = "USB Boot ROM (rpiboot mass-storage-gadget boot)"
+recommended_tool = "rpiboot / usbboot"
+confidence = "high"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0a5c"
+usb_pid = "a4a7"
+class_code = ""
+vendor = "Broadcom Corp"
+soc_family = "BCM2835-family (alternate board-revision enumeration)"
+soc_model = "BCM2835-family (alternate board-revision enumeration)"
+mode_name = "USB Boot ROM (alternate enumeration, some early board revisions)"
+recommended_tool = "rpiboot / usbboot"
+confidence = "low"
+notes = "Low confidence; included for completeness on early board revisions."
+

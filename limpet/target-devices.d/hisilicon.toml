@@ -1,0 +1,67 @@
+# wq#3940 — LIMPET HAL target device database: hisilicon (3 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "12d1"
+usb_pid = "1001"
+class_code = ""
+vendor = "Huawei Technologies Co. (HiSilicon Balong modem)"
+soc_family = "Balong-modem Huawei devices"
+soc_model = "Balong-modem Huawei devices, pre-modeswitch"
+mode_name = "initial mass-storage/CD-ROM mode (pre-usb_modeswitch)"
+recommended_tool = "usb_modeswitch"
+confidence = "medium"
+notes = "Not a flashing/recovery mode — the device's power-on default before usb_modeswitch flips it into modem/diag mode. Listed because it is the first thing HAL will see for these devices."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "12d1"
+usb_pid = "14fe"
+class_code = ""
+vendor = "Huawei Technologies Co. (HiSilicon Balong modem)"
+soc_family = "Balong-modem Huawei devices"
+soc_model = "Balong-modem Huawei devices, post-modeswitch"
+mode_name = "modem/diagnostic mode"
+recommended_tool = "AT/diag tooling (not a flashing mode)"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "12d1"
+usb_pid = "36a2"
+class_code = ""
+vendor = "Huawei Technologies Co. (HiSilicon Balong modem)"
+soc_family = "Balong-modem Huawei devices"
+soc_model = "Balong-modem Huawei devices"
+mode_name = "diagnostic mode (alternate PID)"
+recommended_tool = "AT/diag tooling (not a flashing mode)"
+confidence = "low"
+notes = ""
+

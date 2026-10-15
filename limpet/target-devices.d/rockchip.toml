@@ -1,0 +1,249 @@
+# wq#3940 — LIMPET HAL target device database: rockchip (17 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "290a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK2928"
+soc_model = "RK2928, RK3066"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = "RK3066 shares its MaskROM PID with the earlier RK2928 generation."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "300a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3026"
+soc_model = "RK3026, RK3036, RK3188"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "300b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3026"
+soc_model = "RK3026, RK3036, RK3188"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "310a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3126"
+soc_model = "RK3126, RK3128"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "310b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3126"
+soc_model = "RK3126, RK3128"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "320a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3368"
+soc_model = "RK3368"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "320b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3368"
+soc_model = "RK3368"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "330a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3288"
+soc_model = "RK3288, RK3399"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = "Pairs with 2207:330c (Loader) below, which is already independently confirmed in production HAL."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "330c"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3288"
+soc_model = "RK3288, RK3399 (also matches as a broad RK31xx/RK32xx-family fallback)"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Already shipped in ops/wq3809-limpet-hal/hal.py's target_device plugin as 'Rockchip MaskROM' — labelled here as Loader per rkdeveloptool's a/c generation-pair convention; HAL's existing label should be read as 'Rockchip flashing mode, RK31xx/RK32xx family' rather than strictly MaskROM-only. Flagging the discrepancy rather than silently relabeling hal.py's shipped entry."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "350a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3328"
+soc_model = "RK3328"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "350b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3328"
+soc_model = "RK3328"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "360a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3566"
+soc_model = "RK3566, RK3568"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = "RK3566/RK3568 share a generation and MaskROM PID."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "360b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3566"
+soc_model = "RK3566, RK3568"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "380a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3588"
+soc_model = "RK3588, RK3588S"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "380b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3588"
+soc_model = "RK3588, RK3588S"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "390a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3528"
+soc_model = "RK3528, RV1106 (edge-AI/ISP line)"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "low"
+notes = "Newest, lowest-confidence pair in this table; most tentative of the Rockchip rows."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "390b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3528"
+soc_model = "RK3528, RV1106 (edge-AI/ISP line)"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "low"
+notes = ""
+

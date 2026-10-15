@@ -1,0 +1,262 @@
+# wq#3940 — LIMPET HAL target device database: ti/nxp (18 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0483"
+usb_pid = "df11"
+class_code = ""
+vendor = "STMicroelectronics"
+soc_family = "STM32 (all F0/F1/F2/F3/F4/F7/G0/G4/H7/L0/L1/L4/WB/WL families with the in-ROM USB DFU bootloader enabled)"
+soc_model = "STM32 (all F0/F1/F2/F3/F4/F7/G0/G4/H7/L0/L1/L4/WB/WL families with the in-ROM USB DFU bootloader enabled)"
+mode_name = "DFU (in-ROM System Memory bootloader)"
+recommended_tool = "dfu-util"
+confidence = "high"
+notes = "The single most common and best-documented MCU DFU pair in existence — ST's in-ROM bootloader, entered via BOOT0 strap or a software jump, identical across nearly the entire STM32 line."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0483"
+usb_pid = "3748"
+class_code = ""
+vendor = "STMicroelectronics"
+soc_family = "STM32 development boards (ST-LINK/V2 composite debugger)"
+soc_model = "STM32 development boards (ST-LINK/V2 composite debugger)"
+mode_name = "ST-LINK/V2 debug probe (not the target's own DFU — the attached programmer)"
+recommended_tool = "openocd / st-flash"
+confidence = "medium"
+notes = "Not a target-chip boot mode — this is the ST-LINK debug probe commonly soldered onto STM32 dev boards. Included so HAL does not conflate 'an ST-LINK is attached' with 'the target itself is in DFU'; the two are mutually exclusive states on the same board."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1cbe"
+usb_pid = "00fd"
+class_code = ""
+vendor = "Luminary Micro / Texas Instruments"
+soc_family = "TI Stellaris / Tiva-C (LM3S/LM4F/TM4C series)"
+soc_model = "TI Stellaris / Tiva-C (LM3S/LM4F/TM4C series)"
+mode_name = "DFU (in-ROM bootloader)"
+recommended_tool = "dfu-util / lm4flash"
+confidence = "medium"
+notes = "TI inherited the Luminary Micro VID when it acquired Stellaris; both VID strings appear in the wild for the same PID."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0451"
+usb_pid = "6141"
+class_code = ""
+vendor = "Texas Instruments"
+soc_family = "AM335x"
+soc_model = "AM335x, AM437x (Sitara)"
+mode_name = "ROM boot (USB SPL/bootloader download, Sitara ROM code)"
+recommended_tool = "TI's UniFlash / custom SPL-over-USB tooling"
+confidence = "medium"
+notes = "Sitara's ROM-level USB boot peripheral mode for SPL download, used in industrial single-board-computer recovery."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0451"
+usb_pid = "d00e"
+class_code = ""
+vendor = "Texas Instruments"
+soc_family = "OMAP4"
+soc_model = "OMAP4"
+mode_name = "ROM boot (USB peripheral boot)"
+recommended_tool = "omap_usbboot-class tooling"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "15a2"
+usb_pid = "0054"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "i.MX6 (Quad/DualLite/Solo)"
+soc_model = "i.MX6 (Quad/DualLite/Solo)"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = "medium"
+notes = "NXP kept the Freescale VID after the acquisition; this is the i.MX6-generation SDP pair."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "15a2"
+usb_pid = "0061"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "i.MX7 (Solo/Dual)"
+soc_model = "i.MX7 (Solo/Dual)"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "15a2"
+usb_pid = "0073"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "Kinetis (K-series)"
+soc_model = "Kinetis (K-series)"
+mode_name = "KBOOT (ROM bootloader over USB-HID/CDC)"
+recommended_tool = "blhost"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1fc9"
+usb_pid = "0135"
+class_code = ""
+vendor = "NXP Semiconductors"
+soc_family = "i.MX8M/8QM family"
+soc_model = "i.MX8M/8QM family"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "uuu (mfgtools)"
+confidence = "medium"
+notes = "NXP's newer post-acquisition VID (1fc9) used for the i.MX8 generation onward, distinct from the legacy Freescale 15a2 VID used on i.MX6/7/Kinetis."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1fc9"
+usb_pid = "0130"
+class_code = ""
+vendor = "NXP Semiconductors"
+soc_family = "i.MX RT (crossover MCU, e.g. RT1050/RT1060)"
+soc_model = "i.MX RT (crossover MCU, e.g. RT1050/RT1060)"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "uuu (mfgtools) / blhost"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1fc9"
+usb_pid = "0126"
+class_code = ""
+vendor = "NXP Semiconductors"
+soc_family = "i.MX7Solo/7Dual (alternate PID seen on some revisions)"
+soc_model = "i.MX7Solo/7Dual (alternate PID seen on some revisions)"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "03eb"
+usb_pid = "6124"
+class_code = ""
+vendor = "Atmel / Microchip Technology"
+soc_family = "AT91SAM (SAM7/SAM9/SAMA5)"
+soc_model = "AT91SAM (SAM7/SAM9/SAMA5)"
+mode_name = "SAM-BA (ROM boot, USB CDC variant)"
+recommended_tool = "BOSSA / sam-ba"
+confidence = "medium"
+notes = "Microchip acquired Atmel; the VID is still the legacy Atmel allocation. SAM-BA is widely used in industrial-control boards built on AT91 parts."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1915"
+usb_pid = "521f"
+class_code = ""
+vendor = "Nordic Semiconductor"
+soc_family = "nRF52"
+soc_model = "nRF52, nRF53 (BLE/IoT SoC)"
+mode_name = "DFU (Nordic's nRF Secure DFU over USB)"
+recommended_tool = "nrfutil"
+confidence = "medium"
+notes = "Common in BLE-based industrial IoT sensors; not in the ticket's named list but squarely in the 'industrial IoT' ask."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "303a"
+usb_pid = "1001"
+class_code = ""
+vendor = "Espressif Systems"
+soc_family = "ESP32-S2"
+soc_model = "ESP32-S2, ESP32-S3, ESP32-C3 (built-in USB-JTAG/Serial, no external bridge chip)"
+mode_name = "USB-JTAG/Serial debug unit (native USB, ROM-resident)"
+recommended_tool = "esptool.py / openocd"
+confidence = "medium"
+notes = "Espressif's newer chips expose a native-USB ROM peripheral instead of requiring an external CP210x/CH340 bridge (see the generic-bridge entries under 'standard device classes' below, still relevant for classic ESP32/ESP8266)."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "04b4"
+usb_pid = "f139"
+class_code = ""
+vendor = "Cypress (now Infineon) Semiconductor"
+soc_family = "PSoC (4/5/6) with CyBootloader"
+soc_model = "PSoC (4/5/6) with CyBootloader"
+mode_name = "CyBootloader (USB-UART bootloader)"
+recommended_tool = "Cypress Bootloader Host / cymcuelftool-based tooling"
+confidence = "low"
+notes = "PSoC is common in industrial sensor/control boards."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0451"
+usb_pid = "bef3"
+class_code = ""
+vendor = "Texas Instruments"
+soc_family = "TI MSP430/Sitara/C2000 development boards (XDS110 onboard debug probe)"
+soc_model = "TI MSP430/Sitara/C2000 development boards (XDS110 onboard debug probe)"
+mode_name = "XDS110 debug probe (not the target's own boot mode — the attached programmer)"
+recommended_tool = "openocd / TI UniFlash"
+confidence = "medium"
+notes = "Same disambiguation rationale as the ST-LINK (0483:3748) row: an attached XDS110 means a debugger is present, not that the target chip itself is in a USB boot/download mode."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2047"
+usb_pid = "0013"
+class_code = ""
+vendor = "Texas Instruments (MSP430 LaunchPad allocation)"
+soc_family = "MSP430 LaunchPad boards"
+soc_model = "MSP430 LaunchPad boards"
+mode_name = "Application UART / BSL bridge (onboard eZ-FET debugger, not native device USB)"
+recommended_tool = "TI MSP-FET / BSL scripter"
+confidence = "low"
+notes = "Low-power MSP430 industrial/IoT boards; the BSL (bootstrap loader) itself is reached over this bridge's UART, not natively over USB."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "04d8"
+usb_pid = "003c"
+class_code = ""
+vendor = "Microchip Technology"
+soc_family = "PIC32 (industrial control MCU line)"
+soc_model = "PIC32 (industrial control MCU line)"
+mode_name = "HID bootloader (USB-HID, no DFU class)"
+recommended_tool = "Microchip's USB HID Bootloader host app / mphidflash"
+confidence = "low"
+notes = "Same VID as this repo's existing HAL flash_programmer entry (04d8:e11c, TL866/XGecu) — different PID, unrelated device."
+

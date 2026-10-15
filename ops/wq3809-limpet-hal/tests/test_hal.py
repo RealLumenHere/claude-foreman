@@ -111,6 +111,30 @@ def test_bootrom_mode_descriptors_still_match_target_device():
     assert [e["hw_type"] for e in found] == ["target_device"] * 3
 
 
+def test_target_device_is_enriched_from_wq3940_catalog():
+    """wq#3940: a target_device match gets soc_family/mode_name/recommended_tool
+    from limpet/target-devices.d/*.toml, not just the plugin's generic name."""
+    sample = "Bus 001 Device 015: ID 05c6:9008 Qualcomm, Inc. QDLoader 9008\n"
+    found = hal.detect(hal.list_usb_devices(sample))
+    assert len(found) == 1
+    matches = found[0]["target_db_matches"]
+    assert matches, "expected at least one target_devices.d hit for 05c6:9008"
+    assert matches[0]["vendor"] == "Qualcomm, Inc."
+    assert matches[0]["recommended_tool"] == "edl / qdl"
+    assert matches[0]["confidence"] == "high"
+
+
+def test_target_device_enrichment_empty_for_pair_outside_catalog():
+    # Probe drawn from outside the catalog's matched population (wq#2630): the
+    # plugin's own desc_patterns fallback can match a target_device that the
+    # wq#3940 VID:PID catalog has never heard of -- enrichment must degrade to
+    # [] rather than raising or fabricating a hit.
+    sample = "Bus 001 Device 016: ID dead:beef SomeVendor in Mask ROM mode\n"
+    found = hal.detect(hal.list_usb_devices(sample))
+    assert len(found) == 1
+    assert found[0]["target_db_matches"] == []
+
+
 def test_rtl_sdr_clone_with_unlisted_pid_still_matches_sdr_receiver():
     sample = (
         "Bus 001 Device 014: ID 1d19:1101 Dexatek Technology Ltd. "

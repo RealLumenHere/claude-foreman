@@ -47,24 +47,33 @@ logic analyzer. `tests/test_hal.py:ORDINARY_LSUSB_SAMPLE` is the regression guar
 `install.sh --verify` reruns the same probe against the deployed copy via
 `verify_no_false_positive.py`.
 
-## SoC boot-mode VID:PID map (wq#3923)
+## SoC boot-mode VID:PID map (wq#3923, shipped as wq#3940's target device database)
 
 `target_device`'s own VID:PID set above (3 pairs) is intentionally minimal — just enough
-to not false-negative the common cases. `usb_boot_signatures.toml` is the much larger
-(100+ entry) companion map researched under wq#3923: MediaTek BROM, Qualcomm EDL/Sahara,
-Rockchip MaskROM/Loader, Amlogic burn mode, Allwinner FEL, Samsung Odin, Broadcom/RPi USB
-boot, TI/NXP/STM32/industrial-IoT DFU and ROM-boot modes, Xiaomi/Spreadtrum, Apple DFU,
-Realtek, HiSilicon, plus the vendor-independent ADB/fastboot/DFU/CDC-ACM USB class
-signatures and a set of Android-OEM VIDs. It is this repo's data source for the Target
-Device Wizard's IDENTIFY stage (`docs/target-wizard-spec.md:144-156`, the `usb-vid-pid`
-evidence source) and for widening `target_device` beyond its current 3 pairs — load and
-query it with `usb_boot_signatures.py` (`lookup(vid, pid, class_code=...)`), not by
-hand-rolling a second table. See `research/WQ3923_USB_BOOT_MODE_SIGNATURES.md` for the
-sourcing note and confidence methodology.
+to not false-negative the common cases. `usb_boot_signatures.toml` is wq#3923's original
+(100+ entry) research artifact: MediaTek BROM, Qualcomm EDL/Sahara, Rockchip MaskROM/Loader,
+Amlogic burn mode, Allwinner FEL, Samsung Odin, Broadcom/RPi USB boot, TI/NXP/STM32/
+industrial-IoT DFU and ROM-boot modes, Xiaomi/Spreadtrum, Apple DFU, Realtek, HiSilicon,
+plus the vendor-independent ADB/fastboot/DFU/CDC-ACM USB class signatures and a set of
+Android-OEM VIDs. See `research/WQ3923_USB_BOOT_MODE_SIGNATURES.md` for the sourcing note
+and confidence methodology.
+
+wq#3940 reshaped that same research into the on-disk, per-vendor-family database this HAL
+plugin and the Target Device Wizard's IDENTIFY stage (`docs/target-wizard-spec.md:144-156`,
+the `usb-vid-pid` evidence source) actually query: `limpet/target-devices.d/*.toml` (one
+file per vendor family — `mediatek.toml`, `qualcomm.toml`, `rockchip.toml`, `amlogic.toml`,
+`allwinner.toml`, `samsung.toml`, `broadcom.toml`, `ti-nxp.toml`, `apple.toml`,
+`realtek.toml`, `hisilicon.toml`, `generic-usb.toml`), loaded via `limpet/target_devices.py`
+(`lookup(vid, pid, class_code=...)`). `detect()` above calls this for every `target_device`
+match and attaches the result as `target_db_matches` — real-time enrichment, not a second
+hand-rolled table. The matching udev rules ship at
+`limpet/target-devices.d/91-limpet-targets.rules`, generated (never hand-edited) by
+`python3 limpet/target_devices.py render-udev-rules`. See
+`design/wq3940_target_device_database.md` for the schema and file layout.
 
 ```
-python3 usb_boot_signatures.py lookup 05c6 9008   # -> EDL, edl / qdl, confidence 0.95
-python3 usb_boot_signatures.py list --match-type usb_class
+python3 ../../limpet/target_devices.py lookup 05c6 9008   # -> EDL, edl / qdl, confidence high
+python3 usb_boot_signatures.py lookup 05c6 9008            # original wq#3923 artifact, confidence 0.95
 ```
 
 ## Known gaps

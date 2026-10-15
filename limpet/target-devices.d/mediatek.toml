@@ -1,0 +1,106 @@
+# wq#3940 — LIMPET HAL target device database: mediatek (6 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0e8d"
+usb_pid = "0003"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT65xx/MT67xx legacy"
+soc_model = "MT6572, MT6580, MT6735, MT6737, MT6750, MT6753"
+mode_name = "BROM (mask ROM, legacy VCOM handshake, pre-DA)"
+recommended_tool = "mtkclient"
+confidence = "high"
+notes = "Classic 'MediaTek USB Port'. MediaTek does not vary the BROM PID by SoC model; the chip identifies itself only after mtkclient/SP Flash Tool completes the BROM handshake and reads back the HW code. This single pair covers every legacy MT65xx/MT67xx family member, not just the ones listed."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0e8d"
+usb_pid = "2000"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT6765"
+soc_model = "MT6765, MT6768, MT6771, MT6779, MT6785, MT6833, MT8167, MT8173, MT8183, MT8195"
+mode_name = "BROM (mask ROM, modern DA protocol V5/V6)"
+recommended_tool = "mtkclient"
+confidence = "high"
+notes = "Covers the DA-protocol-V5/V6 generation across phone (MT67xx/MT68xx) and tablet/Chromebook/set-top (MT81xx) lines alike — same caveat as 0e8d:0003: PID does not discriminate SoC model, only generation. mtkclient's payload/DA selection, not the PID, narrows the exact chip."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0e8d"
+usb_pid = "2001"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT6761"
+soc_model = "MT6761, MT6762, MT6769 (Helio A/P-series variants seen with an alternate enumeration)"
+mode_name = "BROM (mask ROM, modern DA, alternate enumeration)"
+recommended_tool = "mtkclient"
+confidence = "medium"
+notes = "Seen on some Helio A/P-series phones alongside 0e8d:2000; exact trigger for which PID a given unit enumerates as is not independently confirmed this run."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0e8d"
+usb_pid = "201d"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT67xx/MT68xx (post-Preloader)"
+soc_model = "MT67xx/MT68xx (post-Preloader)"
+mode_name = "Preloader VCOM (DA already handshaked, not raw BROM)"
+recommended_tool = "mtkclient"
+confidence = "medium"
+notes = "Distinguish from BROM: this enumerates after the Preloader stage has already run, i.e. a normally-booting device paused at Preloader, not a BROM-mode device. HAL should label this 'preloader', not 'brom', so the wizard does not suggest a BROM-only workflow."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0e8d"
+usb_pid = "0002"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT65xx (very old feature-phone-era)"
+soc_model = "MT65xx (very old feature-phone-era)"
+mode_name = "Preloader COM port (pre-smartphone-era devices)"
+recommended_tool = "mtkclient"
+confidence = "low"
+notes = "Legacy pair, mostly relevant to feature-phone-class MT62xx/MT65xx chips rather than any family named in the ticket; included for completeness."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0e8d"
+usb_pid = "2005"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT6833"
+soc_model = "MT6833, MT6853, MT6893 (Dimensity series)"
+mode_name = "BROM (mask ROM, Dimensity-era DA)"
+recommended_tool = "mtkclient"
+confidence = "low"
+notes = "Lower-confidence Dimensity-era pair; not independently cross-checked against upstream mtkclient source this run (search backend down)."
+

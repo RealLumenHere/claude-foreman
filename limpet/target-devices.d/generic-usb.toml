@@ -1,0 +1,470 @@
+# wq#3940 — LIMPET HAL target device database: generic/usb (34 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2717"
+usb_pid = "ff48"
+class_code = ""
+vendor = "Xiaomi, Inc."
+soc_family = "Xiaomi/Redmi/POCO devices (Qualcomm or MediaTek underneath)"
+soc_model = "Xiaomi/Redmi/POCO devices (Qualcomm or MediaTek underneath)"
+mode_name = "fastboot (Xiaomi-branded composite interface)"
+recommended_tool = "fastboot"
+confidence = "medium"
+notes = "Alternate Xiaomi-VID fastboot enumeration; many Xiaomi devices instead use the generic Google VID (18d1:4ee0, under 'standard device classes' below)."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2717"
+usb_pid = "ff40"
+class_code = ""
+vendor = "Xiaomi, Inc."
+soc_family = "Xiaomi/Redmi/POCO devices"
+soc_model = "Xiaomi/Redmi/POCO devices"
+mode_name = "ADB (Xiaomi-branded composite interface)"
+recommended_tool = "adb"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "2717"
+usb_pid = "*"
+class_code = ""
+vendor = "Xiaomi, Inc."
+soc_family = "any Xiaomi/Redmi/POCO device"
+soc_model = "any Xiaomi/Redmi/POCO device"
+mode_name = "normal/MTP/unknown composite mode (vendor-ID-only signal)"
+recommended_tool = "adb (probe first)"
+confidence = "low"
+notes = "Catch-all: VID alone identifies the OEM, not the mode. Real discriminator is the specific PID (above) or the active USB interface class — see 'standard device classes'."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1782"
+usb_pid = "4d00"
+class_code = ""
+vendor = "Spreadtrum / Unisoc"
+soc_family = "Unisoc/Spreadtrum SoCs (used in many budget Xiaomi/Redmi models and other budget-Android OEMs)"
+soc_model = "Unisoc/Spreadtrum SoCs (used in many budget Xiaomi/Redmi models and other budget-Android OEMs)"
+mode_name = "BootROM download mode"
+recommended_tool = "SPD Flash Tool / sprdclient"
+confidence = "medium"
+notes = "Not asked for by name in the ticket, but Unisoc is a major budget-phone SoC vendor (overlapping with the Xiaomi item) with its own BootROM-level download mode analogous to MTK BROM/Qualcomm EDL — worth shipping given the minimum-coverage goal."
+
+[[device]]
+match_type = "usb_class"
+usb_vid = ""
+usb_pid = ""
+class_code = "fe:01:00"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "any DFU-capable MCU"
+soc_model = "STM32, TI Stellaris/Tiva, NXP Kinetis/i.MX, Atmel/Microchip SAM, and countless others"
+mode_name = "DFU class, DFU-mode interface (bInterfaceClass=0xFE, bInterfaceSubClass=0x01, bInterfaceProtocol=0x00)"
+recommended_tool = "dfu-util"
+confidence = "high"
+notes = "The real, vendor-independent DFU signal — matching this class/subclass pair catches DFU devices whose VID:PID is not in this table at all. Protocol 0x02 (below) distinguishes DFU-mode from runtime."
+
+[[device]]
+match_type = "usb_class"
+usb_vid = ""
+usb_pid = ""
+class_code = "fe:01:02"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "any DFU-capable MCU (runtime, DFU-capable but not yet switched)"
+soc_model = "any DFU-capable MCU (runtime, DFU-capable but not yet switched)"
+mode_name = "DFU class, runtime interface (bInterfaceProtocol=0x02)"
+recommended_tool = "dfu-util (use -e / detach-attach to enter DFU-mode first)"
+confidence = "high"
+notes = "A device enumerating this protocol is DFU-capable but currently running its application, not yet in DFU mode — HAL should surface this as 'needs a DFU detach', not as a device already ready to flash."
+
+[[device]]
+match_type = "usb_class"
+usb_vid = ""
+usb_pid = ""
+class_code = "02:02:01"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "any CDC-ACM device"
+soc_model = "USB-serial bridges, most MCU virtual COM ports, many SoC debug/AT-command consoles"
+mode_name = "CDC-ACM (virtual serial port)"
+recommended_tool = "picocom / minicom / screen (then protocol-specific tooling over the resulting /dev/ttyACM*)"
+confidence = "high"
+notes = "Extremely broad signal (matches nearly every USB-serial device) — useful as a fallback 'there is a serial console here' signal, not a SoC identification by itself. Pair with desc_patterns/vendor VID to narrow."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "18d1"
+usb_pid = "4ee7"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device (ADB is a userspace protocol, not SoC-specific)"
+soc_model = "any Android device (ADB is a userspace protocol, not SoC-specific)"
+mode_name = "ADB (Android Debug Bridge) composite interface"
+recommended_tool = "adb"
+confidence = "high"
+notes = "Google's VID is used both by Nexus/Pixel devices directly and, via the generic android_winusb.inf-class driver, as a fallback composite ID many other OEMs' devices also enumerate under when ADB is enabled. Real interface signature is class ff, subclass 42, protocol 1 — see the usb_class row below for devices that use their own OEM VID instead."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "18d1"
+usb_pid = "4ee0"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device in fastboot"
+soc_model = "any Android device in fastboot"
+mode_name = "fastboot"
+recommended_tool = "fastboot"
+confidence = "high"
+notes = "Same cross-OEM-fallback caveat as 4ee7 above; real signature is class ff, subclass 42, protocol 3."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "18d1"
+usb_pid = "d00d"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "Android 10+ devices using userspace fastbootd"
+soc_model = "Android 10+ devices using userspace fastbootd"
+mode_name = "fastbootd (userspace fastboot, dynamic partitions)"
+recommended_tool = "fastboot"
+confidence = "medium"
+notes = "Distinct from classic bootloader fastboot (4ee0): fastbootd runs from a booted Android userspace slot, so some operations (e.g. flashing the active slot) are unavailable — HAL/Wizard should not treat the two as interchangeable."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "18d1"
+usb_pid = "2d00"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device"
+soc_model = "any Android device"
+mode_name = "AOA — Android Open Accessory protocol (no ADB)"
+recommended_tool = "custom AOA host tooling"
+confidence = "medium"
+notes = "Relevant to USB-gadget-based attack/test tooling against Android devices, distinct from ADB/fastboot."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "18d1"
+usb_pid = "2d01"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device"
+soc_model = "any Android device"
+mode_name = "AOA — Android Open Accessory protocol (with ADB)"
+recommended_tool = "custom AOA host tooling / adb"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "18d1"
+usb_pid = "4ee1"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device"
+soc_model = "any Android device"
+mode_name = "MTP (Media Transfer Protocol) — not RE-relevant by itself"
+recommended_tool = "n/a"
+confidence = "medium"
+notes = "Included so HAL does not mis-flag an ordinary file-transfer connection as a flashing-relevant mode."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "18d1"
+usb_pid = "4ee2"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device"
+soc_model = "any Android device"
+mode_name = "PTP (Picture Transfer Protocol) — not RE-relevant by itself"
+recommended_tool = "n/a"
+confidence = "medium"
+notes = ""
+
+[[device]]
+match_type = "usb_class"
+usb_vid = ""
+usb_pid = ""
+class_code = "ff:42:01"
+vendor = "USB-IF vendor-specific (Android ADB class allocation)"
+soc_family = "any Android device"
+soc_model = "any Android device, any OEM VID"
+mode_name = "ADB class signature (bInterfaceClass=0xFF, bInterfaceSubClass=0x42, bInterfaceProtocol=0x01)"
+recommended_tool = "adb"
+confidence = "high"
+notes = "The actual vendor-independent ADB signal — matches regardless of which OEM VID (Samsung, Motorola, Sony, etc.) the device enumerates under. Should be checked ahead of any single OEM-VID guess."
+
+[[device]]
+match_type = "usb_class"
+usb_vid = ""
+usb_pid = ""
+class_code = "ff:42:03"
+vendor = "USB-IF vendor-specific (Android fastboot class allocation)"
+soc_family = "any Android device"
+soc_model = "any Android device, any OEM VID"
+mode_name = "fastboot class signature (bInterfaceClass=0xFF, bInterfaceSubClass=0x42, bInterfaceProtocol=0x03)"
+recommended_tool = "fastboot"
+confidence = "high"
+notes = "Vendor-independent fastboot signal, same rationale as the ADB class row above."
+
+[[device]]
+match_type = "usb_class"
+usb_vid = ""
+usb_pid = ""
+class_code = "08:06:50"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "any device exposing USB mass storage (eMMC/SD-based recovery images, some router/STB recovery modes)"
+soc_model = "any device exposing USB mass storage (eMMC/SD-based recovery images, some router/STB recovery modes)"
+mode_name = "USB Mass Storage (bulk-only transport) — recovery-relevant when unexpected"
+recommended_tool = "dd / mount (read-only first) / file"
+confidence = "medium"
+notes = "Broad, low-specificity signal: useful only when a device that should NOT normally present mass storage suddenly does (common on some STB/router recovery images)."
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "0fce"
+usb_pid = "*"
+class_code = ""
+vendor = "Sony Mobile Communications"
+soc_family = "Sony Xperia (Snapdragon or Exynos underneath)"
+soc_model = "Sony Xperia (Snapdragon or Exynos underneath)"
+mode_name = "ADB/fastboot (vendor-ID-only signal; real discriminator is the usb_class rows above)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = "OEM-VID rows in this section (Sony, Motorola, HTC, ZTE, LG, OnePlus, OPPO) are intentionally wildcard-PID: the PID varies per model/build and is not independently enumerable here. They exist so HAL recognizes 'this is an Android OEM device' even before the real ADB/fastboot usb_class match fires."
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "22b8"
+usb_pid = "*"
+class_code = ""
+vendor = "Motorola Mobility LLC"
+soc_family = "Motorola/Moto devices"
+soc_model = "Motorola/Moto devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "0bb4"
+usb_pid = "*"
+class_code = ""
+vendor = "HTC Corporation"
+soc_family = "HTC devices"
+soc_model = "HTC devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "19d2"
+usb_pid = "*"
+class_code = ""
+vendor = "ZTE Corporation"
+soc_family = "ZTE devices"
+soc_model = "ZTE devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "1004"
+usb_pid = "*"
+class_code = ""
+vendor = "LG Electronics"
+soc_family = "LG devices"
+soc_model = "LG devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "2a70"
+usb_pid = "*"
+class_code = ""
+vendor = "OnePlus Technology"
+soc_family = "OnePlus devices"
+soc_model = "OnePlus devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "2ae5"
+usb_pid = "*"
+class_code = ""
+vendor = "Guangdong OPPO Mobile Telecommunications"
+soc_family = "OPPO/Realme devices"
+soc_model = "OPPO/Realme devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "0403"
+usb_pid = "6001"
+class_code = ""
+vendor = "Future Technology Devices International (FTDI)"
+soc_family = "any target using an FTDI FT232-family USB-UART bridge (extremely common on dev boards, including Realtek Ameba and HiSilicon camera boards)"
+soc_model = "any target using an FTDI FT232-family USB-UART bridge (extremely common on dev boards, including Realtek Ameba and HiSilicon camera boards)"
+mode_name = "USB-serial bridge (not itself a boot mode — identifies the console path to many of the targets in this table that lack native USB)"
+recommended_tool = "picocom / minicom / screen"
+confidence = "high"
+notes = "Already present in this repo as a HAL 'bus_interface' plugin device (ops/wq3809-limpet-hal/hal.py). Repeated here because it is the actual detection path for several vendors above (Realtek Ameba, HiSilicon) that have no native-USB boot mode."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "10c4"
+usb_pid = "ea60"
+class_code = ""
+vendor = "Silicon Labs"
+soc_family = "any target using a CP2102/CP2104 USB-UART bridge (common on ESP32/ESP8266 and many industrial IoT dev boards)"
+soc_model = "any target using a CP2102/CP2104 USB-UART bridge (common on ESP32/ESP8266 and many industrial IoT dev boards)"
+mode_name = "USB-serial bridge (not itself a boot mode)"
+recommended_tool = "esptool.py (for ESP32/8266) / picocom / minicom"
+confidence = "high"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1a86"
+usb_pid = "7523"
+class_code = ""
+vendor = "QinHeng Electronics (WCH)"
+soc_family = "any target using a CH340/CH341 USB-UART bridge (extremely common on cheap Chinese dev boards, including many Allwinner/Rockchip/Realtek Ameba boards)"
+soc_model = "any target using a CH340/CH341 USB-UART bridge (extremely common on cheap Chinese dev boards, including many Allwinner/Rockchip/Realtek Ameba boards)"
+mode_name = "USB-serial bridge (not itself a boot mode)"
+recommended_tool = "picocom / minicom / screen"
+confidence = "high"
+notes = "Distinct PID from the CH341A SPI-programmer-mode device (1a86:5512) already in this repo's HAL 'flash_programmer' plugin — same chip family, different firmware/mode."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "067b"
+usb_pid = "2303"
+class_code = ""
+vendor = "Prolific Technology"
+soc_family = "any target using a PL2303 USB-UART bridge"
+soc_model = "any target using a PL2303 USB-UART bridge"
+mode_name = "USB-serial bridge (not itself a boot mode)"
+recommended_tool = "picocom / minicom / screen"
+confidence = "high"
+notes = ""
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1209"
+usb_pid = "db42"
+class_code = ""
+vendor = "pid.codes (open-source shared VID allocation)"
+soc_family = "hobbyist/open-hardware boards using the generic pid.codes DFU runtime allocation"
+soc_model = "hobbyist/open-hardware boards using the generic pid.codes DFU runtime allocation"
+mode_name = "DFU runtime (generic open-source allocation)"
+recommended_tool = "dfu-util"
+confidence = "low"
+notes = "Lower-traffic than the vendor-specific DFU pairs above, but a real, registered allocation seen on open-hardware projects."
+
+[[device]]
+match_type = "usb_class"
+usb_vid = ""
+usb_pid = ""
+class_code = "e0:01:03"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "Android devices and embedded-Linux targets exposing a USB network gadget mid-boot"
+soc_model = "Android devices and embedded-Linux targets exposing a USB network gadget mid-boot"
+mode_name = "RNDIS (USB network gadget, over Communications Device Class)"
+recommended_tool = "standard host-side RNDIS/usb0 networking, then protocol-specific tooling over the resulting interface"
+confidence = "low"
+notes = "A target unexpectedly presenting this class mid-boot (rather than its normal mode) is a useful 'something is in a recovery/debug U-Boot/initramfs stage' signal on embedded-Linux targets."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "18d1"
+usb_pid = "d001"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "early Android devices (Nexus One era) ADB composite"
+soc_model = "early Android devices (Nexus One era) ADB composite"
+mode_name = "ADB (older composite ID, pre-4ee7)"
+recommended_tool = "adb"
+confidence = "low"
+notes = "Historical pair, superseded by 4ee7 on later devices; included for older-device coverage."
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "0b05"
+usb_pid = "*"
+class_code = ""
+vendor = "ASUSTek Computer"
+soc_family = "ASUS/Zenfone devices"
+soc_model = "ASUS/Zenfone devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "2d95"
+usb_pid = "*"
+class_code = ""
+vendor = "Vivo Mobile Communication"
+soc_family = "Vivo devices"
+soc_model = "Vivo devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = ""
+
+[[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "2a45"
+usb_pid = "*"
+class_code = ""
+vendor = "Meizu Technology"
+soc_family = "Meizu devices"
+soc_model = "Meizu devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = "low"
+notes = ""
+

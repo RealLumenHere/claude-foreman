@@ -1,0 +1,80 @@
+# wq#3940 — LIMPET HAL target device database: samsung (4 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "04e8"
+usb_pid = "685d"
+class_code = ""
+vendor = "Samsung Electronics"
+soc_family = "Exynos- and Qualcomm-variant Galaxy devices alike (download mode is a Samsung bootloader feature, independent of the underlying SoC vendor)"
+soc_model = "Exynos- and Qualcomm-variant Galaxy devices alike (download mode is a Samsung bootloader feature, independent of the underlying SoC vendor)"
+mode_name = "Odin download mode (classic)"
+recommended_tool = "Heimdall"
+confidence = "high"
+notes = "Classic Odin/Download-mode PID, the one Heimdall's device-detection targets. A Qualcomm-SoC Galaxy device in EDL (rather than Download mode) instead enumerates as the generic 05c6:9008 entry above — the two modes are distinct and triggered differently (Download: vol-down+vol-up+power; EDL: a deeper test-point/combination trigger)."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "04e8"
+usb_pid = "6860"
+class_code = ""
+vendor = "Samsung Electronics"
+soc_family = "Galaxy devices (composite Download+MTP configuration)"
+soc_model = "Galaxy devices (composite Download+MTP configuration)"
+mode_name = "Odin download mode (composite variant)"
+recommended_tool = "Heimdall"
+confidence = "medium"
+notes = "Composite-descriptor variant seen on some models; lower confidence than 685d."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "04e8"
+usb_pid = "68c3"
+class_code = ""
+vendor = "Samsung Electronics"
+soc_family = "newer Galaxy devices"
+soc_model = "newer Galaxy devices"
+mode_name = "Odin download mode (newer firmware generation)"
+recommended_tool = "Heimdall"
+confidence = "low"
+notes = "Newer-generation Odin pair; not independently cross-checked this run."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "04e8"
+usb_pid = "6764"
+class_code = ""
+vendor = "Samsung Electronics"
+soc_family = "Galaxy devices (older models)"
+soc_model = "Galaxy devices (older models)"
+mode_name = "Odin download mode (older firmware generation)"
+recommended_tool = "Heimdall"
+confidence = "low"
+notes = ""
+

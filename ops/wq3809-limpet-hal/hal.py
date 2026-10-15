@@ -38,6 +38,18 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
+# wq#3940: enrich target_device detections with the per-vendor-family SoC boot-mode
+# database (limpet/target-devices.d/*.toml) -- soc_family/mode_name/recommended_tool
+# that this plugin's own 3-pair usb_ids set does not carry. Optional: this module must
+# keep working (just without enrichment) if limpet/ is not alongside this ops/ tree.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+try:
+    from limpet import target_devices as _target_devices_db
+except ImportError:
+    _target_devices_db = None
+
 LSUSB_LINE_RE = re.compile(
     r"^Bus\s+(?P<bus>\d+)\s+Device\s+(?P<dev>\d+):\s+ID\s+"
     r"(?P<vid>[0-9a-fA-F]{4}):(?P<pid>[0-9a-fA-F]{4})\s*(?P<desc>.*)$"
@@ -257,6 +269,26 @@ REGISTRY: tuple[HardwarePlugin, ...] = (
 )
 
 
+def _target_db_matches(device: UsbDevice) -> list[dict]:
+    """wq#3940 real-time enrichment: query the SoC boot-mode database for this
+    device's VID:PID, highest-confidence first. [] if the lookup module isn't
+    importable or the pair isn't in the catalog -- never raises into detect()."""
+    if _target_devices_db is None:
+        return []
+    hits = _target_devices_db.lookup(device.vid, device.pid)
+    return [
+        {
+            "vendor": h.vendor,
+            "soc_family": h.soc_family,
+            "soc_model": h.soc_model,
+            "mode_name": h.mode_name,
+            "recommended_tool": h.recommended_tool,
+            "confidence": h.confidence,
+        }
+        for h in hits
+    ]
+
+
 def detect(devices: list[UsbDevice] | None = None) -> list[dict]:
     if devices is None:
         devices = list_usb_devices()
@@ -264,17 +296,18 @@ def detect(devices: list[UsbDevice] | None = None) -> list[dict]:
     for plugin in REGISTRY:
         for device in devices:
             if plugin.matches(device):
-                found.append(
-                    {
-                        "hw_type": plugin.hw_type,
-                        "name": plugin.name,
-                        "capabilities": list(plugin.capabilities),
-                        "device_node": plugin.device_node(device),
-                        "status": "connected",
-                        "usb_id": f"{device.vid}:{device.pid}",
-                        "descriptor": device.desc,
-                    }
-                )
+                entry = {
+                    "hw_type": plugin.hw_type,
+                    "name": plugin.name,
+                    "capabilities": list(plugin.capabilities),
+                    "device_node": plugin.device_node(device),
+                    "status": "connected",
+                    "usb_id": f"{device.vid}:{device.pid}",
+                    "descriptor": device.desc,
+                }
+                if plugin.hw_type == "target_device":
+                    entry["target_db_matches"] = _target_db_matches(device)
+                found.append(entry)
     return found
 
 

@@ -1,0 +1,67 @@
+# wq#3940 — LIMPET HAL target device database: apple (3 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05ac"
+usb_pid = "1227"
+class_code = ""
+vendor = "Apple, Inc."
+soc_family = "all checkm8-vulnerable A-series SoCs (A5 through A11) and others in DFU"
+soc_model = "all checkm8-vulnerable A-series SoCs (A5 through A11) and others in DFU"
+mode_name = "DFU — Device Firmware Upgrade mode"
+recommended_tool = "checkm8 / ipwndfu (limited Linux support — see note)"
+confidence = "high"
+notes = "libimobiledevice/libirecovery detect this pair reliably on Linux; checkm8/ipwndfu's *exploit* tooling is the historically macOS/libusb-on-Linux-is-flaky part, not the detection — HAL can match this pair with high confidence even where the exploit tooling itself needs a specific libusb/kernel driver setup."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05ac"
+usb_pid = "1281"
+class_code = ""
+vendor = "Apple, Inc."
+soc_family = "iPhone/iPad in Recovery mode (distinct from DFU)"
+soc_model = "iPhone/iPad in Recovery mode (distinct from DFU)"
+mode_name = "Recovery mode"
+recommended_tool = "libirecovery / idevicerestore"
+confidence = "high"
+notes = "Recovery mode is a higher-level, iBoot-driven restore mode — distinguishable from DFU (which runs before iBoot) and relevant because many RE workflows pivot through Recovery rather than DFU."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05ac"
+usb_pid = "12a8"
+class_code = ""
+vendor = "Apple, Inc."
+soc_family = "iPhone"
+soc_model = "iPhone, normal boot"
+mode_name = "normal operating mode (reference only — not RE-relevant, included to disambiguate from DFU/Recovery)"
+recommended_tool = "n/a"
+confidence = "high"
+notes = "Not a boot/recovery mode; included only so HAL's Apple-device matcher can distinguish 'plugged in normally' from 'plugged in for recovery', since both report VID 05ac."
+

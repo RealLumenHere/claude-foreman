@@ -1,0 +1,119 @@
+# wq#3940 — LIMPET HAL target device database: qualcomm (7 entries)
+#
+# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
+# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
+# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
+# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
+# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
+# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
+# from (python3 limpet/target_devices.py render-udev-rules).
+#
+# SCHEMA (per [[device]]):
+#   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
+#   usb_vid, usb_pid  lowercase hex strings; "" when match_type="usb_class"
+#   class_code        "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor            silicon/OEM vendor name
+#   soc_family        short chip-family/platform tag
+#   soc_model         specific chip model(s) this pair is known to cover (may be a
+#                     superset: several vendors do not vary the boot-mode PID by
+#                     model, so model identity comes from the flashing tool's own
+#                     post-connect handshake, not from the PID — see notes)
+#   mode_name         human name of the boot/recovery mode
+#   recommended_tool  the tool to dispatch to
+#   confidence        "high" | "medium" | "low" — corroboration strength in the
+#                     wq#3923 research corpus, NOT a live hardware verification.
+#                     Below "high" should not gate an irreversible action without
+#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#   notes             caveats, protocol notes, disambiguation from a similar entry
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05c6"
+usb_pid = "9008"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "all Qualcomm/Snapdragon SoCs (EDL is chip-generation-independent)"
+soc_model = "all Qualcomm/Snapdragon SoCs (EDL is chip-generation-independent)"
+mode_name = "EDL — Emergency Download Mode (Qualcomm HS-USB QDLoader 9008), Sahara + Firehose"
+recommended_tool = "edl / qdl"
+confidence = "high"
+notes = "The single most universal Qualcomm RE signature: every Snapdragon from early MSM to current, across every OEM (including Samsung's Qualcomm-variant Galaxy models and all Xiaomi/Android devices), enumerates identically in EDL. Chip identity comes from the Sahara HELLO exchange (hw_id), not the PID. Programmer (.mbn/.elf firehose) is per-chip and must be supplied separately — see TOOL_REGISTRY for the per-SoC programmer catalog this feeds."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05c6"
+usb_pid = "900e"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "all Qualcomm/Snapdragon SoCs"
+soc_model = "all Qualcomm/Snapdragon SoCs"
+mode_name = "Diagnostic mode (QXDM/DIAG), not EDL"
+recommended_tool = "QPST / QXDM"
+confidence = "high"
+notes = "Adjacent to but distinct from EDL: this is the always-available modem diagnostic interface on a normally-booting device, not a flashing mode. Useful as a pre-EDL-trigger signal (many 'dload' triggers are issued over this interface) but must not be classified as EDL by HAL."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05c6"
+usb_pid = "9001"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "early MSM/Snapdragon (pre-Firehose, Sahara-only)"
+soc_model = "early MSM/Snapdragon (pre-Firehose, Sahara-only)"
+mode_name = "Sahara-only EDL (no Firehose, older chips)"
+recommended_tool = "qsaharaserver / edl (legacy mode)"
+confidence = "low"
+notes = "Older chips that predate the Firehose protocol and only speak Sahara; low independent confidence this generation this run, included because the ticket's 'per-SoC programmer files' point explicitly implies pre-Firehose chips exist."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05c6"
+usb_pid = "9025"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "Snapdragon (composite diagnostic+modem configurations)"
+soc_model = "Snapdragon (composite diagnostic+modem configurations)"
+mode_name = "Composite DIAG+modem (not a flashing mode)"
+recommended_tool = "QPST / QXDM"
+confidence = "low"
+notes = "Composite-descriptor variant of 900e seen on some modem configurations; included for HAL non-match completeness (so it is not mis-tagged as a flash-relevant target)."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05c6"
+usb_pid = "f000"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "Snapdragon reference/engineering boards"
+soc_model = "Snapdragon reference/engineering boards"
+mode_name = "DIAG (engineering/reference board variant)"
+recommended_tool = "QPST / QXDM"
+confidence = "low"
+notes = "Seen on some reference-design boards; low confidence, not cross-checked this run."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05c6"
+usb_pid = "9091"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "Snapdragon (composite mass-storage+diagnostic configurations)"
+soc_model = "Snapdragon (composite mass-storage+diagnostic configurations)"
+mode_name = "composite DIAG+storage (not a flashing mode)"
+recommended_tool = "QPST / QXDM"
+confidence = "low"
+notes = "Included for HAL non-match completeness, same rationale as the other composite DIAG rows above."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "05c6"
+usb_pid = "90db"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "Snapdragon (NMEA/GPS diagnostic composite configurations)"
+soc_model = "Snapdragon (NMEA/GPS diagnostic composite configurations)"
+mode_name = "composite DIAG variant (not a flashing mode)"
+recommended_tool = "QPST / QXDM"
+confidence = "low"
+notes = ""
+
