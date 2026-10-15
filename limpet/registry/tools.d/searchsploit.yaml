@@ -1,0 +1,26 @@
+# LIMPET tool manifest (schema v1). One file per tool; drop here and the
+# registry rebuilds tools.json. Fields: name/path/capabilities/health_check are
+# required, the rest are optional claims the agent uses to route work.
+#
+# wq#3942: no ISO build pipeline exists yet to actually install the exploitdb
+# apt package (research/WQ3921_EXPLOIT_VULN_DATABASES.md §2) -- this manifest
+# describes the tool for when that provisioning step lands, same posture as
+# limpet/hardware.d's driver-bundle entries for a base image that doesn't
+# exist yet. health_check will fail until exploitdb is actually installed.
+name: searchsploit
+path: /usr/bin/searchsploit
+version: null
+description: Offline Exploit-DB mirror search (the exploitdb apt package, same as Kali ships).
+category: exploit-db
+capabilities:
+  - exploit-search
+  - cve-code-search
+input_formats:
+  - search-term
+output_formats:
+  - json-report
+architectures:
+  - any
+hardware_requirements: {}
+health_check: /usr/bin/searchsploit -h
+mcp_endpoint: ops/wq3942-limpet-exploit-db-a1/server.py

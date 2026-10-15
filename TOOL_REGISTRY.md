@@ -275,3 +275,32 @@ image-capable terminal to show anything at all, and Lumen's xfce4-terminal isn't
 an integration. If a genuinely text-native VCD viewer is wanted for headless Limpet use, the
 next eval should target a tool that renders ANSI/Unicode waveforms directly (no SVG
 intermediary, no external rasterizer) rather than a second graphics-protocol-dependent tool.
+
+## exploitdb / searchsploit — offline Exploit-DB mirror (wq#3942, ADOPTED)
+
+**Status**: catalogued (`limpet/registry/tools.d/searchsploit.yaml`) and wired into a new
+MCP tool (`ops/wq3942-limpet-exploit-db-a1/server.py`, `limpet_exploit_lookup`). Not yet
+`apt-get install`-ed anywhere — there is no ISO build pipeline in this repo to install it
+into (confirmed: no `packages.txt`/`Dockerfile`/live-build config anywhere), the same
+"catalog ahead of the pipeline" posture `limpet/hardware.d/build_iso_drivers.py` takes for
+driver bundles.
+
+Carried over from `research/WQ3921_EXPLOIT_VULN_DATABASES.md` §2/§9: `searchsploit` is the
+`exploitdb` apt package (same one Kali ships), a git clone of
+`offensive-security/exploitdb` plus a CSV index, no server/DB engine, low hundreds of MB,
+self-updates with `searchsploit -u`. Weak on embedded/SoC boot-ROM exploits (that's what
+the paired curated `device-exploits.db` below is for) but a useful fallback for "any known
+exploit mentioning this vendor/model string."
+
+Paired with it, a new fleet-authored layer the research flagged as "most valuable and
+least available": `/var/lib/limpet/exploit-db/device-exploits.db` (SQLite,
+`devices(soc_family, vendor, model, exploit_type, exploit_tool, cve_id, description,
+confidence, source_url)`), seeded from `research/wq3921_soc_exploit_seed.json` via
+`ops/wq3942-limpet-exploit-db-a1/device_exploit_db.py`. Both are queried together by
+`limpet_exploit_lookup(soc_family, vendor, model)`, the call target for the Target Device
+Wizard's SUGGEST stage (`docs/target-wizard-spec.md` §4.4, step 3 of the wizard).
+
+**Verdict**: adopt both layers as designed by wq#3921; implementation lands in
+`ops/wq3942-limpet-exploit-db-a1` (this ticket). Actually installing the `exploitdb` apt
+package onto a live LIMPET host is still blocked on the ISO build pipeline not existing yet
+— see that bundle's README "Packaging searchsploit" section.
