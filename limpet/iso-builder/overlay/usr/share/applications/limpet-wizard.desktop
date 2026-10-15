@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=New Target (Wizard)
+Comment=Identify a plugged-in device and open a fresh workspace
+Icon=document-new
+Exec=limpet-wizard
+Categories=Limpet;System;
