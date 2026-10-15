@@ -38,7 +38,33 @@ Providers/sources configured (see SOURCES below; verified live 2026-10-01):
     13 repos, none named kvmd-armbian — the only GitHub hit for that name is an
     unrelated third-party fork). PiKVM's own armbian/OS build repos (pikvm/os,
     pikvm/pi-builder) don't use GitHub Releases (404 on /releases/latest). pikvm/kvmd,
-    the core daemon that actually ships features, does.
+    the core daemon that actually ships features, does. wq#3991 re-confirmed the
+    tiering: github_releases findings carry no keywords, so relevance() always lands
+    on the medium "new GitHub release of a watched repo" branch — a V4 Plus fix
+    release files unconditionally; the keyword tiers only gate Cloudflare RSS.
+
+RE-hardware upstreams (wq#3991 — the fleet hardware manifest's device classes had no
+watched upstream after the researchers were retired, wq#3754; verified live 2026-10-15):
+  * mtkclient  — GitHub releases on bkerler/mtkclient (MT8167 miko2/miko3 flash/RE
+    tool; latest v2.1.4.1, published 2026-03-18).
+  * thingino   — GitHub releases on themactep/thingino-firmware (Ingenic T40 camera
+    firmware, firmware-YYYY-MM-DD tags; latest firmware-2026-10-04) and
+    wltechblog/thingino-dfu (Ingenic cloner/DFU; latest v1.5.43, 2026-08-25).
+  * openipc    — sitemap on openipc.org filtered to "openipc.org/news/" (6 English
+    /news/ pages; the substring filter excludes the /ru/ and /zh/ duplicates).
+    GitHub was verified and REJECTED for this provider: OpenIPC/firmware's
+    /releases/latest pins the rolling "nightly" tag, so the (repo, tag) dedup key
+    never changes after baseline (a silent no-op), its dated nightly-YYYYMMDD-sha
+    releases would file daily tickets (wq#3755's 5/week cap), and OpenIPC/linux has
+    no GitHub Releases at all (404).
+  * rockchip   — GitHub releases on xboot/xrock (RK3568 gocheckin / RK3399 Station P1
+    MaskROM tool; latest v1.1.2) + Debian package-tracker RSS for rkdeveloptool
+    (tracker.debian.org/pkg/rkdeveloptool/rss — RSS 2.0 with per-news <item> links;
+    upstream rockchip-linux/rkdeveloptool has no GitHub Releases, 404).
+  Dropped candidates (each logged in the research rejection ledger, wq#3760):
+  opensensor/open-tx-isp (repo exists, zero Releases) and the lscorcia mt8167
+  mainline repos (lscorcia/linux, lscorcia/linux-mt8167-consys — zero Releases);
+  neither has an RSS/sitemap surface a supported source type can watch.
 
 Source types (see `findings_for_source` dispatch):
   rss             — RSS 2.0 feed. Optional `keywords` list filters+tiers matches
@@ -154,6 +180,21 @@ SOURCES = [
     {"provider": "langfuse", "type": "github_releases", "repo": "langfuse/langfuse"},
 
     {"provider": "pikvm", "type": "github_releases", "repo": "pikvm/kvmd"},
+
+    # RE-hardware upstreams (wq#3991) — see module docstring for the live
+    # verification of each surface and the rejected alternatives.
+    {"provider": "mtkclient", "type": "github_releases", "repo": "bkerler/mtkclient"},
+
+    {"provider": "thingino", "type": "github_releases",
+     "repo": "themactep/thingino-firmware"},
+    {"provider": "thingino", "type": "github_releases", "repo": "wltechblog/thingino-dfu"},
+
+    {"provider": "openipc", "type": "sitemap", "label": "openipc-news",
+     "url": "https://openipc.org/sitemap.xml", "path_filter": "openipc.org/news/"},
+
+    {"provider": "rockchip", "type": "github_releases", "repo": "xboot/xrock"},
+    {"provider": "rockchip", "type": "rss", "label": "debian-rkdeveloptool",
+     "url": "https://tracker.debian.org/pkg/rkdeveloptool/rss"},
 ]
 
 DEFAULT_PROVIDERS = sorted({s["provider"] for s in SOURCES} - {"cloudflare"})

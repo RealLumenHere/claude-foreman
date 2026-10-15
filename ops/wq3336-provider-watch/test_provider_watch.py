@@ -179,6 +179,27 @@ def test_default_providers_excludes_cloudflare():
     assert "tailscale" in pw.DEFAULT_PROVIDERS
     assert "pikvm" in pw.DEFAULT_PROVIDERS
     assert "anthropic" in pw.DEFAULT_PROVIDERS
+    # RE-hardware upstreams (wq#3991) ride the default daily sweep too.
+    for provider in ("mtkclient", "thingino", "openipc", "rockchip"):
+        assert provider in pw.DEFAULT_PROVIDERS
+
+
+def test_re_hardware_sources_use_verified_surfaces():
+    """wq#3991: the shapes verified live 2026-10-15 — github_releases only where
+    /releases/latest actually 200s with a stable tag, sitemap/rss elsewhere."""
+    by_provider = {}
+    for s in pw.SOURCES:
+        by_provider.setdefault(s["provider"], []).append(s)
+    assert {s["repo"] for s in by_provider["mtkclient"]} == {"bkerler/mtkclient"}
+    assert {s["repo"] for s in by_provider["thingino"]} == {
+        "themactep/thingino-firmware", "wltechblog/thingino-dfu"}
+    (openipc,) = by_provider["openipc"]
+    assert openipc["type"] == "sitemap"
+    # the substring filter must exclude the /ru/ and /zh/ sitemap duplicates
+    assert openipc["path_filter"] == "openipc.org/news/"
+    assert "openipc.org/news/" not in "https://openipc.org/ru/news/x"
+    rockchip_types = {s["type"] for s in by_provider["rockchip"]}
+    assert rockchip_types == {"github_releases", "rss"}
 
 
 def test_every_source_has_a_known_type_and_provider():
