@@ -1,4 +1,14 @@
-# wq#3904 — LIMPET settings/preferences panel design
+# wq#3904 / wq#3938 — LIMPET settings/preferences panel design
+
+> wq#3938 extension pass (2026-10-15): absorbs the AMD tuning research
+> (`docs/hardware-tiers-spec.md` §3.9–§3.10, wq#3919/wq#3939) and the competitive
+> analysis (`design/wq3929_competitive_analysis.md`) into this spec, and fills the
+> settings the original draft left out: per-role model selection, a model download
+> manager, hardware rescan, plugin install/update, evidence-chain and report-template
+> preferences, proxy/offline/update-source network keys, and notification/chat display
+> prefs. Marked **[wq3938]** inline. Architecture (§2), CLI shape (§3), and the
+> Textual-not-GTK4 GUI decision (§5) are unchanged — see
+> `limpet/DESIGN-DECISIONS.md` for why GTK4 was considered and rejected.
 
 The config surface an operator uses to set up and tune a Limpet box: LLM provider
 routing, hardware tier info, plugin trust/enable state, workspace defaults, network
@@ -146,6 +156,34 @@ limpet-config edit [--layer site|user]                 # $EDITOR on that layer's
 - Pool awareness is read-only here: `limpet-config get llm.resident_model --json` tags
   the answer `"pool": "local"` vs. `"fleet"`/`"cloud"` from `research/models.yaml`'s own
   taxonomy, so a script can refuse to route off-box without reparsing YAML itself.
+- **[wq3938] Provider selection.** `llm.provider = "litellm-local" | "litellm-external"
+  | "ollama-direct" | "cloud-api"`. Default `litellm-local`: the box's own LiteLLM in
+  front of its own Ollama, the architecture's shipping shape
+  (`docs/agent-chat-spec.md:188`). `litellm-external` points `llm.gateway_url` at
+  another box's gateway (the fleet pattern); `ollama-direct` drops the gateway for a
+  minimal install (loses per-step routing — `limpet-config` warns that `llm.routing.*`
+  keys become inert); `cloud-api` requires `llm.api_key_file` set and is refused
+  outright while `network.offline_mode = true` (§4.5) — the offline differentiator the
+  competitive matrix shows most peers lack
+  (`design/wq3929_competitive_analysis.md:218`).
+- **[wq3938] Per-role model selection.** The fleet already names its roles in the
+  LiteLLM alias layer — `agent-fast`, `agent-deep`
+  (`ops/wq3849-m80s-llm-deployment/litellm-aliases.yaml:10-14`); Limpet adds
+  `agent-code` for code-emitting steps. `llm.role.agent_fast`, `llm.role.agent_deep`,
+  `llm.role.agent_code` each name a model from the same `/v1/models` picker as
+  `llm.resident_model`. Roles are coarser than `llm.routing.<step>`: a step override
+  wins over its role, a role wins over `resident_model` — three layers, same
+  last-wins rule as the TOML files themselves (§2). Defaults per hardware tier come
+  from the tier's model matrix (`docs/hardware-tiers-spec.md` §7), not hand-typed here.
+- **[wq3938] Model download manager.** `limpet-config models list|pull <name>|rm <name>
+  [--json]` wraps `ollama list/pull/rm` — presentation and policy only, no second
+  download path. Policy it adds over bare Ollama: `pull` refuses (exit 2) when
+  `network.offline_mode = true` or when the model's size would leave less than
+  `tuning.min_free_disk_gb` free; `rm` refuses to remove a model currently referenced
+  by any `llm.role.*`/`llm.routing.*`/`llm.resident_model` key, naming the key. The
+  GUI's LLM tab renders `models list` with per-model size and a pull progress line —
+  the one long-running operation in the settings surface, so it is cancellable and
+  survives the TUI closing (the pull is Ollama's own, not ours).
 
 ### 4.2 Hardware tier display and tuning
 
@@ -166,6 +204,40 @@ limpet-config edit [--layer site|user]                 # $EDITOR on that layer's
   `design/wq3806_limpet_architecture.md:199-201`, off by default since the agent core
   does not depend on it). Each knob's valid range is derived from the hardware row in
   §4.2's display, not hand-typed, so a 32GB box cannot be tuned past its own ceiling.
+- **[wq3938] Re-run hardware scan.** `limpet-config hardware rescan [--json]` invokes
+  the HAL detector (`limpet-hald`, `packaging/limpet-hald/bin/limpet-hald:5-6`) plus the
+  CPU/memory/GPU probe that fills the hardware-book row
+  (`docs/hardware-tiers-spec.md` §3.9 topology detection on AMD, the P-core snippet at
+  `:125-132` on Intel), then re-derives the tier and rewrites the cached hardware row
+  atomically. Output is a diff against the previous row ("GPU added: …", "tier 3 → 4"),
+  so plugging in a Coral or new DIMMs is a rescan away, not a reprovision. Rescan never
+  silently changes `tuning.*` overrides the operator set — it re-derives *bounds* and
+  flags any override now out of range as `stale` rather than deleting it.
+- **[wq3938] Performance tuning overrides** — the full knob set, superseding the three
+  knobs above as the complete list. Every knob is a **preference**, applied by the
+  provisioning-time service (§4.5's execution rule: `limpet-config` writes, never
+  executes), and every default comes from the matched hardware-book TOML
+  (`docs/hardware-tiers-spec.md` §3.4), not from this spec:
+
+  | Knob | Key | Default source | Notes |
+  |---|---|---|---|
+  | Thread count | `tuning.cpu_threads` | `[performance].threads` = physical cores | wizard sweep stores the measured winner (`docs/hardware-tiers-spec.md:221`) |
+  | P-core pinning | `tuning.pcore_pinning` | auto on Intel hybrid only (`docs/hardware-tiers-spec.md:108,119`) | **Intel-only**: refused (exit 2, "no P/E split on AMD — see numa_mode") on an AMD vendor string, per the §3.9 warning at `:136-138` |
+  | NUMA / CCD mode | `tuning.numa_mode` | §3.9 `needs_pinning_bench` result, else TOML | AMD multi-CCD/EPYC only (`docs/hardware-tiers-spec.md:630`) |
+  | Strict CPU affinity | `tuning.cpu_strict` | `true` on every AMD profile (§3.4) | |
+  | Swap pressure | `tuning.swappiness` | `vm.swappiness=10` (`docs/hardware-tiers-spec.md:52`) | range 0–100 |
+  | CPU governor | `tuning.cpu_governor` | `performance` while a model is loaded | preference-only; the applying service owns the sysfs write |
+  | Populated channels | `tuning.require_populated_channels` | EPYC TOML only (§3.10) | |
+  | Max resident models | `tuning.max_loaded_models` | RAM-aware matrix (§7) × tier | |
+  | AVX-512 status | `tuning.avx512_check` | Ollama `system info` parse (`docs/hardware-tiers-spec.md:230`) | read-only — a check result, not a toggle |
+  | ROCm opt-in | `tuning.rocm_experimental` | `false` everywhere (§3.3/§6 matrix) | hard-refused on devices the matrix marks no-toggle (e.g. BC-250, gfx1013) |
+  | Min free disk | `tuning.min_free_disk_gb` | tier default | gates `models pull` (§4.1) |
+
+  This table is the settings-side contract for `docs/hardware-tiers-spec.md` §3.10,
+  which already names this spec as the owning surface — one knob list, defined here,
+  defaults defined there. AMD-vs-Intel gating is intentional: the knobs a given box
+  shows are filtered by its vendor/topology row, so a 7950X operator never sees a
+  P-core toggle and an i9 operator never sees `numa_mode`.
 
 ### 4.3 Plugin management UI
 
@@ -183,6 +255,23 @@ A presentation layer over the registry that already exists — it adds no new st
   request*, which appends a row to the TOOL_REGISTRY-style review queue — it does not
   write `registry.lock.json` or flip the tier itself (§0.3). This mirrors "the agent may
   propose, never self-promote" (`:246-249`) for the human operator's own UI.
+- **[wq3938] Install from URL / git repo.** `limpet-config plugins install <git-url>`
+  implements the community-tier flow `design/wq3810_limpet_plugin_system.md` already
+  defines (§1 "install: drop/symlink into" the drop-in dir; §6 "plugins shared as git
+  repos"): clone into the community plugins dir, run `limpet validate` on its
+  `limpet-plugin.toml` (`limpet/cli.py:129-131`), and only then symlink the manifest
+  into the drop-in. The result always lands at **community tier, disabled** — install
+  is decoupled from enablement, the fail-closed property wq#3929 found no peer
+  marketplace has (`design/wq3929_competitive_analysis.md:256`). A plain URL (non-git)
+  is accepted only for a bare `limpet-plugin.toml` fetched to a new empty dir, same
+  validate-then-link path; and any remote fetch is refused under
+  `network.offline_mode = true` (§4.5).
+- **[wq3938] Update check.** `limpet-config plugins check-updates [--json]`: for each
+  git-installed plugin, `git fetch` its origin and compare the fetched
+  `limpet-plugin.toml` version against the installed one. **Notify-only** — output is a
+  table of (name, installed, available); applying an update is an explicit
+  `plugins install` re-run per plugin, never automatic, matching the update-domain
+  posture in §4.6. Honors the proxy keys and offline toggle in §4.5.
 
 ### 4.4 Workspace defaults
 
@@ -194,6 +283,22 @@ A presentation layer over the registry that already exists — it adds no new st
   (`docs/target-wizard-spec.md` — the wizard's own creation step); settings changes here
   take effect on the *next* wizard run, never retroactively rewriting an existing
   workspace's `manifest.json`.
+- **[wq3938] Evidence-chain preferences.** `workspace.evidence.redact_reports`
+  (default `true` — the mask-once-on-the-IR rule, `limpet/DESIGN-DECISIONS.md`
+  wq#3934; `false` only flips the default, `--no-redact` per export still stamps
+  `report_meta.redacted=false`), `workspace.evidence.source_date`
+  (`commit` default | `none` — the byte-for-byte re-derivation mode the reporting spec
+  uses to make a report count as evidence), and `workspace.evidence.require_findings_schema`
+  (default `true`: an export with a malformed `evidence/findings/*.json` fails instead
+  of skipping the file — fail-closed like the registry). These set workspace-creation
+  defaults, same next-run-only rule as above.
+- **[wq3938] Report template selection.** `workspace.report_template` (default
+  `full-technical`; `exec-summary` also ships — `limpet/report-templates/`). Valid
+  values are whatever the three-level template resolution actually finds — workspace
+  dir, `/etc/limpet/report-templates`, packaged built-ins
+  (`limpet/workspace_report.py:47-50`) — so `limpet-config set` validates against a
+  live directory listing, not a hardcoded enum, and a site-installed custom template
+  is selectable with no code change.
 
 ### 4.5 Network config
 
@@ -207,6 +312,25 @@ A presentation layer over the registry that already exists — it adds no new st
   `limpet-config` writes the preference, a provisioning-time service (outside this
   ticket) applies it — this keeps the settings CLI inside the fleet's deny-list-exempt
   surface rather than needing deny-list carve-outs for itself.
+- **[wq3938] Update sources.** `network.update_repo_url` — the apt repo the §4.6 update
+  mechanism reads (default the Limpet package repo; a mirror URL for air-gapped sites
+  that sync one). Preference-only like everything else here: changing it rewrites a
+  sources-list fragment on the next apply, it does not run `apt` itself.
+- **[wq3938] Proxy.** `network.proxy.http`, `network.proxy.https`, `network.proxy.no_proxy`
+  — honored by every outbound path this spec defines (gateway calls when
+  `llm.provider` is external/cloud, `models pull`, `plugins install`/`check-updates`,
+  update checks) via the standard env-var names at process spawn. Proxy URLs with
+  inline credentials (`http://user:pass@…`) are refused (exit 2) — a credential in a
+  TOML layer is exactly what §0.4 forbids; use the 0600 secrets-file pattern or an
+  unauthenticated proxy.
+- **[wq3938] Offline mode.** `network.offline_mode` (default `false`) — one master
+  switch for the appliance's strongest differentiator (every analysis capability is
+  local; most peers require cloud, `design/wq3929_competitive_analysis.md:218,261`).
+  When `true`: `cloud-api`/`litellm-external` provider routes refuse, `models pull`
+  refuses, `plugins install`/`check-updates` refuse remote fetches, update checks stop.
+  Everything already on disk — resident models, installed plugins, all RE backends —
+  is untouched. The panel surfaces the flag (an "offline" badge) so an operator
+  mid-investigation can see at a glance why a cloud route is refusing.
 
 ### 4.6 Update preferences
 
@@ -227,6 +351,26 @@ A presentation layer over the registry that already exists — it adds no new st
   set). Window manager theme, fonts, display scaling stay in `xfce4-settings-manager`,
   one button away (§0.1, §5) — `limpet-settings` does not reimplement an XFCE theme
   picker.
+- **[wq3938] Theme.** `appearance.theme = "dark" | "light"` (default `dark`) — one knob
+  that drives both Textual surfaces (chat + settings) and the HTML report stylesheet,
+  so the appliance reads as one product. It does not touch the XFCE GTK theme (§0.1's
+  boundary); the desktop launcher ships matching XFCE defaults at provisioning time.
+- **[wq3938] Font size.** `appearance.font_size` applies to the *local desktop
+  terminal profile* the launchers open (`docs/desktop-spec.md` §4's
+  xfce4-terminal-hosted surfaces). Honest limit, stated in the UI: over a remote SSH
+  session the font belongs to the operator's own terminal and this key has no effect —
+  a TUI cannot set a remote font, and pretending otherwise is the kind of dead toggle
+  this spec refuses to ship.
+- **[wq3938] Agent chat preferences.** `appearance.chat.show_tool_output`
+  (full | collapsed | hidden, default collapsed), `appearance.chat.timestamps`
+  (default `false`), `appearance.chat.stream_tokens` (default `true`) — the display
+  knobs `docs/agent-chat-spec.md`'s TUI reads; defined here so chat and settings share
+  one config loader rather than growing a second prefs file.
+- **[wq3938] Notification settings.** `appearance.notify.enabled` (default `true`),
+  `appearance.notify.events` (subset of: `analysis-done`, `update-available`,
+  `plugin-health-changed`, `scan-hardware-changed`). Delivery is the desktop panel's
+  notification area locally and the chat status line over SSH — notify-only surfaces;
+  no notification ever carries an action that mutates state, consistent with §4.6.
 
 ## 5. GUI — `limpet-settings`
 
@@ -251,6 +395,17 @@ ceiling (`design/wq3806_limpet_architecture.md:3`, `:233-235`).
   `limpet-settings` degrades to printing the same guidance `limpet-config --help` would
   and exits 1 rather than hanging — consistent with §0.2's "CLI is primary, GUI never the
   only way in."
+- **[wq3938] Start-bar access, and why not GTK4 / an XFCE settings-manager plugin.**
+  The wq#3938 ticket offered two desktop shapes: XFCE settings-panel integration or a
+  standalone GTK4 window. Decision: **neither — keep Textual**, reached from the start
+  bar via the `limpet-settings.desktop` launcher the desktop spec already ships
+  (`docs/desktop-spec.md:274-282`), which opens the TUI in xfce4-terminal. Rationale
+  recorded in `limpet/DESIGN-DECISIONS.md` (wq#3938 entry): a GTK4 window or an
+  `xfce4-settings-manager` embed exists only when a display does, so the headless box —
+  the primary operating mode — would need a second, parallel settings implementation;
+  Textual-in-a-terminal gives the start-bar menu entry the ticket asks for *and* the
+  identical surface over SSH, with one code path. The "one button out" above covers the
+  OS-settings half of the XFCE-integration option.
 
 ## 6. Security
 

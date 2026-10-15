@@ -6,6 +6,49 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#3938 — settings/preferences panel (extension of wq#3904)
+
+**Decision.** `docs/settings-spec.md` extended in place rather than rewritten: wq#3904's
+layered-TOML store, `limpet-config` CLI, and seven-domain layout stand; wq#3938 adds the
+settings they were missing (marked **[wq3938]** in the spec): LLM provider selection +
+per-role models (`agent-fast`/`agent-deep`/`agent-code`, the alias names already live in
+`ops/wq3849-m80s-llm-deployment/litellm-aliases.yaml:10-14`) + a `models pull` download
+manager; `hardware rescan` and the full tuning-override table absorbing the AMD research
+knobs from `docs/hardware-tiers-spec.md` §3.9–§3.10 (wq#3919/wq#3939); plugin
+install-from-git/URL and notify-only update check; evidence-chain and report-template
+workspace prefs; update-repo URL, proxy, and an `offline_mode` master switch; theme,
+font size, chat and notification display prefs.
+
+**Why these calls:**
+
+- **GUI stays Textual; GTK4 and xfce4-settings-manager embedding rejected.** The ticket
+  offered "XFCE settings panel integration or standalone GTK4 window." Both exist only
+  when a display does; the appliance's primary mode is SSH with no display, so either
+  choice forces a second settings implementation for headless. A `.desktop` launcher
+  opening the Textual TUI in xfce4-terminal (already shipped,
+  `docs/desktop-spec.md:274-282`) satisfies "accessible from start bar menu" with one
+  code path and zero new dependencies. (Spec §5.)
+- **Tuning knobs are vendor-gated, preference-only.** P-core pinning is refused on AMD
+  (no P/E split — CCD/NUMA topology instead, `docs/hardware-tiers-spec.md` §3.9);
+  `numa_mode` is hidden on single-CCD parts; governor/swappiness are written as
+  preferences a provisioning service applies, keeping `limpet-config` off the house
+  deny-list. Defaults come from the hardware-book TOMLs, bounds from the live hardware
+  row — the spec fixes names and gating, never numbers. (Spec §4.2.)
+- **Offline mode is one switch that only refuses, never removes.** It gates every
+  remote fetch (cloud LLM routes, model pulls, plugin installs, update checks) and
+  touches nothing on disk — protecting the local-first differentiator wq#3929's matrix
+  validated (`design/wq3929_competitive_analysis.md:218,261`). (Spec §4.5.)
+- **Plugin install lands disabled at community tier, always.** Install-from-git reuses
+  wq#3810's drop-in flow; decoupling install from enablement is the fail-closed property
+  the competitive pass found no peer marketplace has
+  (`design/wq3929_competitive_analysis.md:256`). Update check is notify-only, matching
+  the update domain's manual-apply posture. (Spec §4.3.)
+- **Report/evidence prefs validate against live state, not enums.**
+  `workspace.report_template` is checked against the three-level template resolution
+  (`limpet/workspace_report.py:47-50`), so site templates are first-class without a code
+  change; evidence prefs only set workspace-creation defaults, never rewrite an existing
+  workspace. (Spec §4.4.)
+
 ## wq#3934 — reporting/export system
 
 **Decision.** `limpet-workspace export` renders a workspace to **Markdown (default), HTML,
