@@ -184,6 +184,8 @@ class Registry:
                     "reason": rp.reason,
                     "dependencies": rp.dependencies,
                     "conflicts": rp.conflicts,
+                    "optional_dependencies": rp.optional_dependencies,
+                    "optional_dependencies_satisfied": rp.optional_dependencies_satisfied,
                 }
                 for name, rp in sorted(resolution.plugins.items())
             },

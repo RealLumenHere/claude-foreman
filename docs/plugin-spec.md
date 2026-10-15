@@ -98,10 +98,16 @@ disabled → cycle → blocked (missing/disabled/version-mismatched dep,
            OR an active conflicting plugin) → unhealthy → active
 ```
 
-Soft/optional dependencies (declare a dep that *improves* a plugin but
-doesn't block it if absent) were in the same wq#3932 recommendation but are
-not implemented — no current manifest or test exercises a use case for one,
-and adding the field without a consumer would be speculative.
+**Also new in wq#3945:** `[optional_dependencies]` — a soft dep that
+*improves* a plugin but never blocks it if absent, unsatisfied, or disabled
+(`limpet/manifest.py` `optional_dependencies` field; resolved in a second
+pass after the main ladder, `limpet/registry_core.py:161-175`, since it can
+never block it doesn't need the first pass's dependency-first ordering). Per
+entry the unified view reports `optional_dependencies_satisfied`: installed,
+version-matching, AND active — the same bar a hard dependency enforces, just
+advisory. Worked example: `limpet/examples/ghidra-mcp.toml` declares
+`llm4decompile = "*"` as optional — ghidra-mcp runs fine without it, but the
+registry surfaces whether LLM-assisted decompilation is actually available.
 
 ## 5. Trust / signing model
 
@@ -182,14 +188,15 @@ standalone git repo with the manifest at its root
 | Central index + `limpet install/search` | Not shipped — needs a new repo, out of this ticket's code scope. |
 | Signing | Not shipped — depends on the index existing first. |
 | Sandboxing hardening | Not shipped — depends on the plugin registry having its own systemd unit. |
-| Soft/optional dependencies | Not shipped — no concrete use case yet to design against. |
+| Soft/optional dependencies | **Shipped.** `[optional_dependencies]` + per-entry `optional_dependencies_satisfied`, worked example in `limpet/examples/ghidra-mcp.toml`. |
 | Contribution workflow (§8) | Documented, not operational — depends on the index. |
 
-Tests: `limpet/test_limpet_manifest.py` (category/conflicts validation),
-`limpet/test_limpet_registry_core.py` (conflict resolution, one-sided
-declaration mirrored, disabled-conflict doesn't block), `limpet/test_limpet_registry.py`
-and `limpet/test_limpet_cli.py` (end-to-end through `Registry.reconcile()` and
-`limpet list --category`) all pass — 130 tests across `limpet/` (see
-ISSUE-LOG #1334 for the pre-existing, unrelated `registry.py`/`registry/`
-import-collision quirk hit while running this suite, and the file-path-load
-workaround used to verify it here).
+Tests: `limpet/test_limpet_manifest.py` (category/conflicts/optional-deps
+validation), `limpet/test_limpet_registry_core.py` (conflict resolution,
+one-sided declaration mirrored, disabled-conflict doesn't block, optional-dep
+satisfaction for the active/missing/version-mismatched/disabled cases),
+`limpet/test_limpet_registry.py` and `limpet/test_limpet_cli.py` (end-to-end
+through `Registry.reconcile()` and `limpet list --category`) all pass — 135
+tests across `limpet/` (see ISSUE-LOG #1334 for the pre-existing, unrelated
+`registry.py`/`registry/` import-collision quirk hit while running this
+suite, and the file-path-load workaround used to verify it here).

@@ -75,6 +75,18 @@ def test_data_kind_is_valid():
     assert man.kind == "data"
 
 
+def test_optional_dependencies_parsed_and_validated():
+    man = m.parse_manifest(
+        '[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n'
+        '[optional_dependencies]\nb = ">=2.0"\n')
+    assert man.optional_dependencies == {"b": ">=2.0"}
+    with pytest.raises(m.ManifestError) as exc:
+        m.parse_manifest(
+            '[plugin]\nname="a"\nversion="1.0"\nkind="tool"\n'
+            '[optional_dependencies]\nb = "~>2"\n')
+    assert any("optional_dependencies" in e for e in exc.value.errors)
+
+
 def test_conflicts_parsed_and_validated():
     man = m.parse_manifest(
         '[plugin]\nname="a"\nversion="1.0"\nkind="hardware"\nconflicts=["b", "c"]\n')
