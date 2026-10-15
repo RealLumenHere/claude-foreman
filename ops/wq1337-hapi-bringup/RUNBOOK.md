@@ -77,6 +77,12 @@ Optional: `./scripts/cu_map.sh` (in the cloned repo) before enabling, to record 
 card's stock harvest pattern (which 16 of 40 CUs are fused off) for the fleet's shared
 harvest-map dataset per the repo's README.
 
+For bench triage only (not persistence): `WinnieLV/bc250-cu-live-manager` does the same
+`CC_GC_SHADER_ARRAY_CONFIG`/SPI-WGP-mask writes via UMR live register access, no kernel
+patch, no rebuild — reverts on boot, so it is not a substitute for the
+`duggasco/bc250-40cu-unlock` module above for a 24/7 deploy (`hapi.cu_unlock_state`,
+`lumen_state current hapi cu_unlock_state`).
+
 ## 3. Boot params
 
 Per SOT (BC250_PROJECT.md lines 36, 166), append to `GRUB_CMDLINE_LINUX_DEFAULT` in
@@ -102,6 +108,11 @@ Dynamic** mode (not a fixed/static allocation). This is the memory-unlock decisi
 BC250_PROJECT.md line 36 — dynamic UMA + `amdgpu.gttsize=14750` is what gets the model
 weights (Qwen3.6-35B-A3B IQ3, ~13GiB) into addressable GPU memory out of the 16GB total.
 
+**Do not flash to BIOS P4.00** (wq#4023, community update 2026-10-15): P4.00 is reported
+unstable by the BC-250 community; numbers are not independently verified by this fleet.
+Stay on P3.00 (or whatever revision is already on the card at bring-up) until a fleet
+member confirms P4.00 is safe.
+
 ## 5. Mesa 25.0.2+ (oibaf PPA)
 
 ```sh
@@ -121,6 +132,11 @@ glxinfo -B | grep -i "mesa\|OpenGL version"
 
 Confirm the reported Mesa version is >= 25.0.2 before proceeding — if the PPA hasn't
 caught up, hold and re-check rather than run inference on a known-bad matmul path.
+
+**Community update (wq#4023, 2026-10-15, numbers not verified by this fleet):** the
+BC-250 community now reports kernel 6.19+ and Mesa 26 needed for the latest gfx1013
+fixes — treat 25.0.2 above as the floor this runbook has actually validated, and
+re-check the 6.19+/Mesa-26 claim against a real card before raising either floor here.
 
 ## 6. Governor: cyan-skillfish-governor-smu
 
@@ -218,8 +234,34 @@ sudo systemctl start cyan-skillfish-governor-smu   # manual test run first
 sudo systemctl enable --now cyan-skillfish-governor-smu
 ```
 
-## 7. Vulkan environment (ROCm is a HARD NO — GFX1013 has no ROCm userspace support;
-`HSA_OVERRIDE_GFX_VERSION` silently corrupts compute results, never use it)
+## 7. Vulkan environment (ROCm stays off the production path — see premise update below)
+
+**Premise update (wq#4023, 2026-10-15):** "GFX1013 has no ROCm userspace support" is
+now *partly* stale, not fully true. `akandr/bc250-rocm` ships a patched kernel plus
+native rocBLAS/PyTorch builds and reports four endurance soaks passed. That is still an
+unofficial, out-of-tree community patch set, not a production ROCm backend:
+`ROCm/ROCm#6313` (the upstream gfx1013 support request) remains open as of 2026-09-24,
+and `rocm-libraries` PR 8838 — the in-flight fix — was closed unmerged by the stale bot
+on 2026-09-09. The root cause of the regression this patch set works around is itself
+unreconciled between two community sources: a KIQ TLB-flush regression + 2ms fence
+timer patch (one theory) vs wrong SDMA microcode (`lorek123/bc250-notes`, 2026-09-24,
+competing theory) — no fleet verification of either. None of this changes the
+conclusion: **Vulkan/RADV stays the recommended production inference path** for hapi-1
+(this section), and `HSA_OVERRIDE_GFX_VERSION` spoofing is still never used. ROCm is
+expt-viable only via `akandr/bc250-rocm`, as a side-by-side bench experiment, never as
+what the governor/systemd unit below is tuned for. See `bc250.training_and_autoevolve_assessment`
+(`lumen_state current bc250 training_and_autoevolve_assessment`) — the same premise
+update applies there, and the thermal/autonomy/auto-evolve reject stands regardless of
+ROCm's gfx1013 status.
+
+**Community follow-list additions (wq#4023):** `bc250.community_follow` now also tracks
+`katzzero/bc250-unofficial-community-guide`, `lorek123/bc250-notes`,
+`DryhoppedIPA/bc250-gfx1013-fix`, `SkillFishOS` (already cited above and in
+`hapi.cpu_core_unlock_state`), and `ROCm/ROCm#6313`. These 5 are not yet wired into the
+live `lumen-community-watch` (wq#1018) poller — its config at
+`/home/lumen/services/lumen-community-watch/config.json` is outside this worker's
+`add_dirs` grant (`kb/ISSUE-LOG.md` row 1360, same class as rows 129/141) — so they are
+staged here and in the fact for the next worker/Frank with access to wire them in.
 
 ```sh
 export RADV_PERFTEST=aco
