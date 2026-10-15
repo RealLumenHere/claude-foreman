@@ -17,6 +17,7 @@ authored: every field is read from the workspace
   <workspace>/
     manifest.json   target identity, checksums, hardware bound, tool-invocation log
     evidence/findings/*.json   findings the agent/operator committed during analysis
+    obligations.json           open/resolved/waived RE obligations (``obligations.py``)
     workspace.git (or .git)    the analysis history -> git log summary
     notes/*.md      working notes (optional timeline events)
 
@@ -37,6 +38,8 @@ import json
 import os
 import re
 import subprocess
+
+import obligations
 
 SCHEMA_VERSION = "1"
 GENERATOR_VERSION = "limpet-report/1.0.0"
@@ -239,7 +242,20 @@ def _fold_tools(invocations: list[dict]) -> list[dict]:
     return [folded[k] for k in sorted(folded)]
 
 
-_KIND_RANK = {"commit": 0, "tool_invocation": 1, "finding": 2, "note": 3}
+def _obligation_timeline(obs: list[dict]) -> list[dict]:
+    events = []
+    for ob in obs:
+        if not isinstance(ob, dict):
+            continue
+        for h in ob.get("history", []):
+            if isinstance(h, dict):
+                events.append({"ts": h.get("ts", ""), "kind": "obligation", "ref": ob.get("id", ""),
+                               "summary": f"{h.get('action', '?')}: {ob.get('claim', '')}",
+                               "actor": h.get("by", "agent")})
+    return events
+
+
+_KIND_RANK = {"commit": 0, "tool_invocation": 1, "finding": 2, "obligation": 3, "note": 4}
 
 
 def _order_timeline(events: list[dict]) -> list[dict]:
@@ -258,6 +274,10 @@ def collect(workspace: str, *, at: str | None = None, manifest_name: str = "mani
     man = _collect_manifest(workspace, manifest_name)
     git_summary, head, git_events = _collect_git(workspace, at, log_cap)
     findings = _collect_findings(workspace)
+    try:
+        ledger = obligations.load(workspace)
+    except obligations.ObligationError as exc:
+        raise ReportError(str(exc)) from exc
     tool_invocations = man.get("tool_invocations", []) if isinstance(man.get("tool_invocations"), list) else []
 
     checksums = man.get("checksums", []) if isinstance(man.get("checksums"), list) else []
@@ -270,6 +290,7 @@ def collect(workspace: str, *, at: str | None = None, manifest_name: str = "mani
         git_events + _tool_timeline(tool_invocations)
         + [{"ts": f.get("ts", ""), "kind": "finding", "ref": f.get("id", ""),
             "summary": f.get("title", ""), "actor": "agent"} for f in findings]
+        + _obligation_timeline(ledger["obligations"])
     )
 
     commit = head or "no-git"
@@ -298,6 +319,8 @@ def collect(workspace: str, *, at: str | None = None, manifest_name: str = "mani
         "firmware_checksums": firmware_checksums,
         "git_summary": git_summary,
         "findings": findings,
+        "obligations": ledger["obligations"],
+        "obligations_summary": obligations.summary(ledger),
     }
     if redact:
         ir = _mask_tree(ir)

@@ -9,13 +9,16 @@ template search at a tmp dir (a falsifiable boundary, outside the real /etc).
   limpet-workspace export <workspace> --format md|html|json   write a report
   limpet-workspace templates list                              resolvable templates
   limpet-workspace templates validate <path>                   check a custom template
+  limpet-workspace obligations list|open|resolve|waive <ws>    the RE obligation ledger
+  limpet-workspace obligations verify <ws>                     exit 3 while any is open
 
 The agent chat command ``/export`` (agent-chat GUI, design/wq3903) maps straight
 onto ``export`` via ``chat_export`` below, so the agent and a headless SSH operator
 drive the exact same code path.
 
-Exit 0 on success, 1 on usage/not-found, 2 on a report/template error, matching
-``limpet/cli.py`` so scripts can branch on the code.
+Exit 0 on success, 1 on usage/not-found, 2 on a report/template/ledger error, matching
+``limpet/cli.py`` so scripts can branch on the code; ``obligations verify`` exits 3
+when done is refused because an obligation is still open.
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ import json
 import os
 import sys
 
+import obligations as ob_ledger
 import workspace_report as wr
 
 
@@ -137,6 +141,71 @@ def _cmd_templates_validate(args):
     return 0 if ok else 2
 
 
+def _ob_fail(exc, as_json):
+    _emit({"ok": False, "error": str(exc)}, as_json)
+    print(f"error: {exc}", file=sys.stderr)
+    return 2
+
+
+def _ob_row(ob):
+    return f"{ob['id']}\t{ob['status']}\t{ob['severity']}\t{ob['opened_by']}\t{ob['claim']}"
+
+
+def _cmd_ob_list(args):
+    try:
+        obs = ob_ledger.list_obligations(args.workspace, status=args.status)
+    except ob_ledger.ObligationError as exc:
+        return _ob_fail(exc, args.json)
+    _emit({"ok": True, "obligations": obs}, args.json)
+    if not args.json:
+        for ob in obs:
+            print(_ob_row(ob))
+    return 0
+
+
+def _cmd_ob_open(args):
+    try:
+        ob = ob_ledger.open_obligation(args.workspace, args.claim, opened_by=args.opened_by,
+                                       evidence=args.evidence, severity=args.severity,
+                                       by=args.by, commit=not args.no_commit)
+    except ob_ledger.ObligationError as exc:
+        return _ob_fail(exc, args.json)
+    _emit({"ok": True, "obligation": ob}, args.json)
+    if not args.json:
+        print(_ob_row(ob))
+    return 0
+
+
+def _cmd_ob_close(args):
+    fn = ob_ledger.resolve if args.obcmd == "resolve" else ob_ledger.waive
+    try:
+        ob = fn(args.workspace, args.id, evidence=args.evidence, rationale=args.rationale,
+                by=args.by, expected_revision=args.expected_revision,
+                commit=not args.no_commit)
+    except ob_ledger.ObligationError as exc:
+        return _ob_fail(exc, args.json)
+    _emit({"ok": True, "obligation": ob}, args.json)
+    if not args.json:
+        print(_ob_row(ob))
+    return 0
+
+
+def _cmd_ob_verify(args):
+    try:
+        result = ob_ledger.check_done(args.workspace)
+    except ob_ledger.ObligationError as exc:
+        return _ob_fail(exc, args.json)
+    _emit(result, args.json)
+    if not args.json:
+        if result["ok"]:
+            print("OK no open obligations")
+        else:
+            for ob in result["open"]:
+                print(_ob_row(ob), file=sys.stderr)
+            print(f"REFUSED done: {len(result['open'])} open obligation(s)", file=sys.stderr)
+    return 0 if result["ok"] else 3
+
+
 def _fixture_ir():
     """A minimal but complete IR used to dry-render a template under validation."""
     return {
@@ -158,6 +227,14 @@ def _fixture_ir():
                       "summary": "A fixture finding for template validation.",
                       "evidence": [{"path": "evidence/x", "sha256": "cd" * 32, "locator": "line 1"}],
                       "remediation": "Patch it."}],
+        "obligations": [{"id": "OB-001", "claim": "Fixture question?", "opened_by": "static",
+                         "opened_at": "1970-01-01T00:00:00Z", "severity": "medium",
+                         "evidence": ["evidence/x"], "status": "resolved", "revision": 2,
+                         "resolution": {"disposition": "verified", "rationale": "answered",
+                                        "evidence": ["evidence/x#L1"], "ts": "1970-01-01T00:00:00Z",
+                                        "by": "agent"},
+                         "history": []}],
+        "obligations_summary": {"total": 1, "open": 0, "resolved": 1, "waived": 0, "done_ready": True},
     }
 
 
@@ -206,6 +283,37 @@ def build_parser():
     tv = tsub.add_parser("validate", help="dry-render a custom template against a fixture IR")
     tv.add_argument("path", help="template directory to validate")
     tv.set_defaults(func=_cmd_templates_validate)
+
+    op = sub.add_parser("obligations", help="the workspace's open RE obligations (obligations.json)")
+    osub = op.add_subparsers(dest="obcmd", required=True)
+    ol = osub.add_parser("list", help="list obligations")
+    ol.add_argument("workspace")
+    ol.add_argument("--status", choices=ob_ledger.STATUSES, default=None)
+    ol.set_defaults(func=_cmd_ob_list)
+    oo = osub.add_parser("open", help="record a new open obligation")
+    oo.add_argument("workspace")
+    oo.add_argument("claim", help="the claim or question that must be answered")
+    oo.add_argument("--opened-by", required=True, help="analysis step that raised it")
+    oo.add_argument("--severity", choices=ob_ledger.SEVERITIES, default="medium")
+    oo.add_argument("--evidence", action="append", default=[], help="evidence ref (repeatable)")
+    oo.add_argument("--by", default="operator")
+    oo.add_argument("--no-commit", action="store_true", help="write the ledger without a git commit")
+    oo.set_defaults(func=_cmd_ob_open)
+    for verb, needs_ev in (("resolve", True), ("waive", False)):
+        oc = osub.add_parser(verb, help=("close with evidence" if needs_ev else "close without answering, with a reason"))
+        oc.add_argument("workspace")
+        oc.add_argument("id", help="obligation id, e.g. OB-001")
+        oc.add_argument("--rationale", required=True)
+        oc.add_argument("--evidence", action="append", default=[],
+                        help="workspace-relative path[#locator] or REA ev_ id (repeatable)"
+                        + ("; at least one required" if needs_ev else ""))
+        oc.add_argument("--expected-revision", type=int, default=None)
+        oc.add_argument("--by", default="operator")
+        oc.add_argument("--no-commit", action="store_true")
+        oc.set_defaults(func=_cmd_ob_close)
+    ov = osub.add_parser("verify", help="the agent verify-step gate: exit 3 while any obligation is open")
+    ov.add_argument("workspace")
+    ov.set_defaults(func=_cmd_ob_verify)
 
     return p
 

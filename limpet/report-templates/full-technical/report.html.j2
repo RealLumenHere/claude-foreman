@@ -95,6 +95,16 @@
 {% endfor %}
 {% else %}<p class="empty">No findings recorded.</p>{% endif %}
 
+<h2>Reconstruction obligations</h2>
+{% if obligations %}
+<p><strong>{{ obligations_summary.open }} open</strong> · {{ obligations_summary.resolved }} resolved · {{ obligations_summary.waived }} waived{% if not obligations_summary.done_ready %} — <strong>investigation not done: open obligations remain</strong>{% endif %}</p>
+<table><tr><th>ID</th><th>Status</th><th>Severity</th><th>Claim / question</th><th>Opened by</th><th>Resolution</th><th>Evidence</th></tr>
+{% for o in obligations %}
+<tr><td><code>{{ o.id }}</code></td><td>{{ o.status }}</td><td>{{ o.severity | default("—", true) }}</td><td>{{ o.claim }}</td><td>{{ o.opened_by | default("—", true) }}</td><td>{{ o.resolution.rationale if o.resolution else "—" }}</td><td>{% for ev in (o.resolution.evidence if o.resolution else o.evidence) %}<code>{{ ev }}</code> {% endfor %}</td></tr>
+{% endfor %}
+</table>
+{% else %}<p class="empty">No obligations recorded.</p>{% endif %}
+
 <h2>Firmware checksums</h2>
 {% if firmware_checksums %}
 <table><tr><th>Path</th><th>sha256</th><th>Size</th></tr>

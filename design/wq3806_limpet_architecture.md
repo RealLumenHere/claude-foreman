@@ -254,6 +254,12 @@ reproducible:
   orchestrate multi-tool steps (extract → static → emulate/debug → verify) → write
   evidence → report. Each step is a committed workspace change, so the trajectory is
   replayable.
+- **Obligation gate (wq#3965).** Steps that raise an unanswered RE question record it in
+  `<workspace>/obligations.json` (`limpet/obligations.py`; CLI `limpet-workspace
+  obligations open|resolve|waive|list`). The verify step calls `obligations.require_done`
+  (CLI: `obligations verify`, exit 3) and refuses "done" while any obligation is open:
+  each must be resolved with at least one workspace evidence ref or REA `ev_` id, or
+  waived with a reason. The report renders the ledger.
 - **Autonomy boundary.** The agent orchestrates *enabled* tools freely. It may *propose*
   promoting a `community` plugin (with rationale) but cannot self-promote — promotion is
   the §3 trust-gate, a review decision. This keeps "fully autonomous RE" (VISION.md) true

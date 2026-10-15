@@ -14,3 +14,11 @@ _{{ target.identity.vendor | default("unknown vendor", true) }} {{ target.identi
 {% else %}
 _No findings recorded._
 {% endif %}
+{% if obligations %}
+
+**Obligations:** {{ obligations_summary.open }} open · {{ obligations_summary.resolved }} resolved · {{ obligations_summary.waived }} waived{% if not obligations_summary.done_ready %} — not done{% endif %}
+
+{% for o in obligations if o.status == "open" %}
+- **{{ o.id }}** _{{ o.severity | default("medium", true) }}_ — {{ o.claim }}
+{% endfor %}
+{% endif %}

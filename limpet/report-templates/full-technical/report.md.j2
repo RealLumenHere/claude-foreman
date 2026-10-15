@@ -71,6 +71,21 @@ _No tool invocations recorded._
 _No findings recorded._
 {% endif %}
 
+## Reconstruction obligations
+
+{% if obligations %}
+**{{ obligations_summary.open }} open** · {{ obligations_summary.resolved }} resolved · {{ obligations_summary.waived }} waived{% if not obligations_summary.done_ready %} — **investigation not done: open obligations remain**{% endif %}
+
+
+| ID | Status | Severity | Claim / question | Opened by | Resolution | Evidence |
+|---|---|---|---|---|---|---|
+{% for o in obligations %}
+| `{{ o.id }}` | {{ o.status }} | {{ o.severity | default("—", true) }} | {{ o.claim }} | {{ o.opened_by | default("—", true) }} | {{ o.resolution.rationale if o.resolution else "—" }} | {% for ev in (o.resolution.evidence if o.resolution else o.evidence) %}`{{ ev }}` {% endfor %}|
+{% endfor %}
+{% else %}
+_No obligations recorded._
+{% endif %}
+
 ## Firmware checksums
 
 {% if firmware_checksums %}
