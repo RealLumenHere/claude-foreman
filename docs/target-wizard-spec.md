@@ -201,6 +201,13 @@ pulled (the §3 trust gate of the architecture doc). Examples:
 The suggestion is a default, not a lock — the operator (GUI) or `--workflow <id>` (headless)
 can choose another. Unknown targets get the passive arc as the floor.
 
+Before naming the arc, SUGGEST also calls `limpet_exploit_lookup(soc_family, vendor,
+model)` (`ops/wq3942-limpet-exploit-db-a1/server.py`, wq#3942) against the curated
+`device-exploits.db` (SoC family → known boot-ROM exploit → tool, e.g. MT8167 →
+mtkclient) and `searchsploit`. A hit surfaces as an additional suggested step ("known
+exploit available: <tool>") alongside the arc above, tagged with the lookup's own
+`confidence` field so an unverified entry doesn't bypass the §4.3 gate.
+
 ### 4.5 WORKSPACE CREATE
 
 Materialize the §5 workspace of `design/wq3806_limpet_architecture.md:206-218` at
