@@ -1,0 +1,63 @@
+# Limpet Plymouth splash animation (script module).
+# Palette: background #0C1414, foreground #D6E2DF, primary #3EC5F0 (ray).
+# Assets (limpet-logo-256.png, ray-dot.png, progress_box/bar) are rendered from
+# design/limpet/brand/limpet-logo.svg by export-assets.sh at build time.
+# The animation: the static amber shell holds while one blue ray-dot pulses in
+# and out (the "blue dot is the signature" rule, branding-spec.md §0) — no
+# spinning, no video, console-safe per §1.3.
+
+Window.SetBackgroundTopColor(0.047, 0.078, 0.078);     # #0C1414
+Window.SetBackgroundBottomColor(0.047, 0.078, 0.078);
+
+logo.image = Image("limpet-logo-256.png");
+logo.sprite = Sprite(logo.image);
+logo.x = Window.GetWidth()  / 2 - logo.image.GetWidth()  / 2;
+logo.y = Window.GetHeight() / 2 - logo.image.GetHeight() / 2 - 40;
+logo.sprite.SetPosition(logo.x, logo.y, 0);
+
+ray.image = Image("ray-dot.png");               # single primary-blue dot
+ray.sprite = Sprite();
+ray.x = Window.GetWidth() / 2 - ray.image.GetWidth() / 2;
+ray.y = logo.y - 28;
+
+# pulse the signature ray-dot: opacity eases 0.25 -> 1.0 -> 0.25, ~1.6 s loop
+progress = 0;
+fun refresh_callback() {
+    progress++;
+    phase = Math.Sin(progress / 15.0);          # -1..1
+    opacity = 0.6 + 0.4 * phase;                # 0.2..1.0
+    ray.sprite.SetImage(ray.image.Scale(
+        ray.image.GetWidth(), ray.image.GetHeight()));
+    ray.sprite.SetOpacity(opacity);
+    ray.sprite.SetPosition(ray.x, ray.y, 1);
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# password prompt (LUKS / early boot) in foreground + primary, monospace feel
+fun display_password_callback(prompt, bullets) {
+    prompt.image = Image.Text(prompt, 0.839, 0.886, 0.875);   # #D6E2DF
+    prompt.sprite = Sprite(prompt.image);
+    prompt.sprite.SetPosition(
+        Window.GetWidth() / 2 - prompt.image.GetWidth() / 2,
+        logo.y + logo.image.GetHeight() + 56, 10);
+
+    bullet_text = "";
+    i = 0;
+    while (i < bullets) { bullet_text += "•"; i++; }
+    dots.image = Image.Text(bullet_text, 0.243, 0.773, 0.941);  # #3EC5F0
+    dots.sprite = Sprite(dots.image);
+    dots.sprite.SetPosition(
+        Window.GetWidth() / 2 - dots.image.GetWidth() / 2,
+        logo.y + logo.image.GetHeight() + 88, 10);
+}
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+
+# boot status messages in muted #7A8C8A
+fun message_callback(text) {
+    msg.image = Image.Text(text, 0.478, 0.549, 0.541);
+    msg.sprite = Sprite(msg.image);
+    msg.sprite.SetPosition(
+        Window.GetWidth() / 2 - msg.image.GetWidth() / 2,
+        Window.GetHeight() - 48, 10);
+}
+Plymouth.SetMessageFunction(message_callback);

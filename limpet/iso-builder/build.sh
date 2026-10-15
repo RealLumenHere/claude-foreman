@@ -199,12 +199,39 @@ stage9_apply_branding() {
   mkdir -p "$CHROOT/opt/limpet/brand"
   cp "$REPO_ROOT/design/limpet/brand/limpet-logo.svg" "$REPO_ROOT/design/limpet/brand/tokens.json" \
      "$CHROOT/opt/limpet/brand/"
-  # GRUB theme: docs/branding-spec.md never specifies one (no §4 subsection for
-  # it) -- only a text-mode GRUB menu is in scope here; a graphical GRUB theme
-  # asset does not exist. Plymouth: branding-spec.md section 6 explicitly
-  # defers it ("Plymouth boot splash... if the appliance ever shows boot
-  # video") -- not yet decided, so not fabricated here.
-  log "stage9: GRUB stays text-mode (no spec'd graphical theme exists); Plymouth boot splash explicitly deferred by docs/branding-spec.md section 6 -- neither fabricated"
+
+  local BRAND="$REPO_ROOT/design/limpet/brand"
+  # Raster exports (PNGs) rendered from the SVG masters into the chroot's brand
+  # dir -- not committed to git (branding-spec.md §5). Needs librsvg2-bin.
+  require_cmd rsvg-convert
+  bash "$BRAND/export-assets.sh" "$CHROOT/opt/limpet/brand"
+
+  # GRUB graphical theme (wq#3948, design/limpet/brand/themes/grub/theme.txt).
+  mkdir -p "$CHROOT/boot/grub/themes/limpet"
+  cp "$BRAND/themes/grub/theme.txt" "$CHROOT/boot/grub/themes/limpet/"
+  cp "$CHROOT/opt/limpet/brand/grub/limpet-logo-128.png" \
+     "$CHROOT/boot/grub/themes/limpet/"
+  python3 -I "$HERE/set_grub_theme.py" \
+    --default "$CHROOT/etc/default/grub" \
+    --theme "/boot/grub/themes/limpet/theme.txt"
+
+  # Plymouth boot splash (wq#3948, design/limpet/brand/themes/plymouth/).
+  local PLY="$CHROOT/usr/share/plymouth/themes/limpet"
+  mkdir -p "$PLY"
+  cp "$BRAND/themes/plymouth/limpet.plymouth" "$BRAND/themes/plymouth/limpet.script" "$PLY/"
+  cp "$CHROOT/opt/limpet/brand/plymouth/limpet-logo-256.png" \
+     "$CHROOT/opt/limpet/brand/plymouth/ray-dot.png" "$PLY/"
+
+  # LightDM greeter CSS + XFCE accent sheet (wq#3948).
+  mkdir -p "$CHROOT/usr/share/lightdm" "$CHROOT/etc/skel/.config/gtk-3.0"
+  cp "$BRAND/themes/lightdm/limpet-greeter.css" "$CHROOT/usr/share/lightdm/"
+  cp "$BRAND/themes/gtk/gtk.css" "$CHROOT/etc/skel/.config/gtk-3.0/gtk.css"
+
+  # Desktop wallpaper: export-assets.sh already rendered limpet-wallpaper.png
+  # into the brand dir; the xfconf key that points xfdesktop at it is set by
+  # the desktop overlay (docs/desktop-spec.md §4.2), not here.
+
+  log "stage9: applied GRUB theme, Plymouth splash, LightDM/GTK themes, icons, wallpaper (wq#3948)"
 }
 
 # ---------------------------------------------------------------------------

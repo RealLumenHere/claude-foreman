@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Limpet agent chat">
+  <!-- Agent chat app icon, docs/branding-spec.md §2.1 palette. Flat token colors:
+       surface #152221 bubble, foreground #D6E2DF text lines, primary #3EC5F0 ray dot.
+       Motif: a terminal speech bubble whose cursor is the signature blue ray dot. -->
+  <rect x="6" y="9" width="36" height="26" rx="5" fill="#152221" stroke="#7A8C8A" stroke-width="1.5"/>
+  <!-- speech tail -->
+  <path d="M 14 35 L 14 42 L 22 35 Z" fill="#152221" stroke="#7A8C8A" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- prompt chevron in amber (operator line) -->
+  <path d="M 12 17 L 16 21 L 12 25" fill="none" stroke="#D9A441" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- two transcript lines in foreground -->
+  <rect x="19" y="16" width="16" height="2.4" rx="1.2" fill="#D6E2DF"/>
+  <rect x="19" y="23" width="11" height="2.4" rx="1.2" fill="#D6E2DF"/>
+  <!-- the signature: blinking-cursor ray dot in primary blue -->
+  <circle cx="34" cy="24" r="2.4" fill="#3EC5F0"/>
+</svg>

@@ -1,0 +1,10 @@
+# Limpet Plymouth boot splash — docs/branding-spec.md §2.1 dark palette.
+# Resolves the Plymouth item deferred in branding-spec.md §6.
+[Plymouth Theme]
+Name=Limpet
+Description=limpet boot splash — amber shell on deep kelp water, pulsing blue ray
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/limpet
+ScriptFile=/usr/share/plymouth/themes/limpet/limpet.script

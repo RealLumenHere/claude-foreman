@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" role="img" aria-label="Limpet desktop wallpaper: faint amber shell on deep kelp water">
+  <!-- Subtle branded wallpaper, docs/branding-spec.md §4.2 ("solid background
+       token, with the mark optionally centered ... No photographic wallpaper").
+       Flat token colors only: background #0C1414, surface #152221,
+       secondary #D9A441 (shell, low alpha), primary #3EC5F0 (ray dots, low alpha). -->
+  <rect width="1920" height="1080" fill="#0C1414"/>
+  <!-- barely-there surface vignette so the flat ground isn't dead -->
+  <rect x="0" y="648" width="1920" height="432" fill="#152221" opacity="0.35"/>
+  <!-- large faint shell silhouette, centered, drawn from the logo profile -->
+  <g opacity="0.06" transform="translate(960 560) scale(2.4) translate(-128 -120)">
+    <path d="M 118 52 C 70 88 34 148 24 192 L 232 192 C 226 144 168 80 118 52 Z" fill="#D9A441"/>
+    <rect x="16" y="192" width="224" height="14" rx="7" fill="#D6E2DF"/>
+  </g>
+  <!-- a sparse scatter of ray dots, the signature, kept very quiet -->
+  <g fill="#3EC5F0" opacity="0.10">
+    <circle cx="300" cy="200" r="6"/>
+    <circle cx="340" cy="250" r="5"/>
+    <circle cx="1600" cy="300" r="6"/>
+    <circle cx="1650" cy="360" r="5"/>
+    <circle cx="200" cy="820" r="6"/>
+    <circle cx="1720" cy="840" r="6"/>
+    <circle cx="1680" cy="900" r="5"/>
+  </g>
+</svg>

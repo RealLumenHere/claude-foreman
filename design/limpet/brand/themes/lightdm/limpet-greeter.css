@@ -1,0 +1,67 @@
+/* Limpet LightDM greeter theme — docs/branding-spec.md §4.1 dark palette.
+ *
+ * lightdm-gtk-greeter already sets background/theme/logo via
+ * overlay/etc/lightdm/lightdm-gtk-greeter.conf. This sheet (referenced from
+ * that conf's `theme-name`-adjacent user CSS, installed to
+ * /usr/share/lightdm/limpet-greeter.css and pulled in via
+ * `~/.config/gtk-3.0/gtk.css`'s @import on the greeter user) does two things:
+ *   1. recolors selection/entry focus to the primary blue ray, and
+ *   2. styles the hardware status bar strip across the bottom of the greeter —
+ *      the greeter counterpart of the panel's genmon-hardware item
+ *      (docs/desktop-spec.md §4.3). The strip's text is filled at render time
+ *      by the greeter's status hook; this sheet only paints it.
+ *
+ * Token map (branding-spec.md §2.1):
+ *   background #0C1414  surface #152221  panel #1C2B2A  foreground #D6E2DF
+ *   muted #7A8C8A  primary #3EC5F0  success #5FA876  warning #E5B35A  error #E06C6C
+ */
+
+@define-color limpet_background #0C1414;
+@define-color limpet_surface    #152221;
+@define-color limpet_panel      #1C2B2A;
+@define-color limpet_foreground #D6E2DF;
+@define-color limpet_muted      #7A8C8A;
+@define-color limpet_primary    #3EC5F0;
+@define-color limpet_success    #5FA876;
+@define-color limpet_warning    #E5B35A;
+@define-color limpet_error      #E06C6C;
+
+/* flat kelp-water ground, no wallpaper (branding-spec.md §4.1) */
+#panel_window,
+#greeter_background {
+    background-color: @limpet_background;
+}
+
+/* password entry: surface field, primary focus ring */
+#login_window entry {
+    background-color: @limpet_surface;
+    color: @limpet_foreground;
+    border: 1px solid @limpet_muted;
+    border-radius: 4px;
+    padding: 6px 10px;
+}
+#login_window entry:focus {
+    border-color: @limpet_primary;
+    box-shadow: 0 0 0 1px @limpet_primary;
+}
+#login_window entry selection {
+    background-color: @limpet_primary;
+    color: @limpet_background;
+}
+
+/* the hardware status bar: panel-colored strip pinned to the bottom edge */
+.limpet-hwbar {
+    background-color: @limpet_panel;
+    color: @limpet_foreground;
+    font-family: "JetBrains Mono";
+    font-size: 10pt;
+    padding: 4px 12px;
+    border-top: 1px solid @limpet_surface;
+}
+/* status dots inside the bar follow the effective-state ladder
+ * (limpet/registry_core.py:29 / branding-spec.md §4.3) */
+.limpet-hwbar .ok       { color: @limpet_success; }
+.limpet-hwbar .unhealthy{ color: @limpet_warning; }
+.limpet-hwbar .blocked  { color: @limpet_error;   }
+.limpet-hwbar .idle     { color: @limpet_muted;   }
+.limpet-hwbar .label    { color: @limpet_muted;   }

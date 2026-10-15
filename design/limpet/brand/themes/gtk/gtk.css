@@ -1,0 +1,46 @@
+/* Limpet XFCE accent sheet — docs/branding-spec.md §4.2.
+ *
+ * The base GTK/WM theme is stock Greybird-dark (branding-spec.md §4.2: reuse,
+ * don't author). This drop-in, installed to
+ * /etc/skel/.config/gtk-3.0/gtk.css, only recolors selection/links/focus to
+ * the primary blue ray and matches the panel background to the `panel` token
+ * at 0.95 alpha so the start bar (docs/desktop-spec.md §4.3) reads as one
+ * surface with the genmon items.
+ *
+ * Token map (branding-spec.md §2.1):
+ *   panel #1C2B2A  foreground #D6E2DF  primary #3EC5F0  secondary #D9A441
+ */
+
+@define-color theme_selected_bg_color #3EC5F0;   /* primary ray */
+@define-color theme_selected_fg_color #0C1414;   /* on-primary = background */
+@define-color link_color              #3EC5F0;
+@define-color link_visited_color      #5FA876;   /* kelp/success */
+@define-color accent_color            #3EC5F0;
+@define-color accent_bg_color         #3EC5F0;
+@define-color accent_fg_color         #0C1414;
+
+/* XFCE panel: panel token at 0.95 alpha, dark-style (branding-spec.md §4.3) */
+.xfce4-panel,
+#XfcePanelWindow {
+    background-color: rgba(28, 43, 42, 0.95);     /* #1C2B2A @ 0.95 */
+    color: #D6E2DF;
+    font-family: "JetBrains Mono";
+    font-size: 10pt;
+}
+/* genmon label states reuse tokens (branding-spec.md §4.3 table) */
+.xfce4-panel .ok        { color: #D6E2DF; }
+.xfce4-panel .unhealthy { color: #E5B35A; }
+.xfce4-panel .blocked   { color: #E06C6C; }
+.xfce4-panel .idle      { color: #7A8C8A; }
+
+/* selection + focus across GTK3 widgets */
+selection,
+*:selected {
+    background-color: #3EC5F0;
+    color: #0C1414;
+}
+entry:focus,
+button:focus,
+*:focus {
+    outline-color: #3EC5F0;
+}

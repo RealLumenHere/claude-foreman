@@ -1,0 +1,58 @@
+# Limpet GRUB2 gfxmenu theme — docs/branding-spec.md §2.1 dark palette.
+# Colors are token hexes only (background #0C1414, foreground #D6E2DF,
+# primary #3EC5F0, secondary #D9A441, muted #7A8C8A). limpet-logo-128.png is
+# rendered from design/limpet/brand/limpet-logo.svg by export-assets.sh and
+# placed next to this file at install time (build.sh stage9).
+
+# deep kelp-water ground, no photographic background image
+desktop-color: "#0C1414"
+title-text: ""
+terminal-font: "JetBrains Mono Regular 16"
+terminal-box: "terminal_box_*.png"
+
+# the mark, centered above the menu
++ image {
+    file = "limpet-logo-128.png"
+    top = 18%
+    left = 50%-64
+    width = 128
+    height = 128
+}
+
+# wordmark line under the mark, amber shell color
++ label {
+    top = 18%+136
+    left = 0
+    width = 100%
+    align = "center"
+    text = "limpet — universal RE appliance"
+    color = "#D9A441"
+    font = "JetBrains Mono Regular 16"
+}
+
+# boot menu: foreground text, primary-blue selection (the blue ray signature)
++ boot_menu {
+    top = 44%
+    left = 25%
+    width = 50%
+    height = 44%
+    item_font = "JetBrains Mono Regular 16"
+    item_color = "#D6E2DF"
+    selected_item_font = "JetBrains Mono Regular 16"
+    selected_item_color = "#3EC5F0"
+    item_height = 28
+    item_padding = 4
+    item_spacing = 6
+    selected_item_pixmap_style = "select_*.png"
+}
+
+# help / status strip, muted
++ label {
+    top = 92%
+    left = 0
+    width = 100%
+    align = "center"
+    text = "↑↓ select · enter boot · e edit · c console"
+    color = "#7A8C8A"
+    font = "JetBrains Mono Regular 12"
+}

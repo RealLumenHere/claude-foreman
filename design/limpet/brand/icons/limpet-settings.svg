@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Limpet settings">
+  <!-- Settings app icon, docs/branding-spec.md §2.1 palette. Flat token colors:
+       muted #7A8C8A gear teeth/ring, surface #152221 hub, primary #3EC5F0 center
+       ray dot. Motif: an 8-tooth gear whose hub carries the signature blue ray dot. -->
+  <g fill="none" stroke="#7A8C8A" stroke-width="3" stroke-linecap="round">
+    <!-- eight teeth as radial spokes -->
+    <line x1="24" y1="5"  x2="24" y2="12"/>
+    <line x1="24" y1="36" x2="24" y2="43"/>
+    <line x1="5"  y1="24" x2="12" y2="24"/>
+    <line x1="36" y1="24" x2="43" y2="24"/>
+    <line x1="10.6" y1="10.6" x2="15.5" y2="15.5"/>
+    <line x1="32.5" y1="32.5" x2="37.4" y2="37.4"/>
+    <line x1="37.4" y1="10.6" x2="32.5" y2="15.5"/>
+    <line x1="15.5" y1="32.5" x2="10.6" y2="37.4"/>
+  </g>
+  <circle cx="24" cy="24" r="11" fill="#152221" stroke="#7A8C8A" stroke-width="3"/>
+  <!-- the signature: primary-blue ray dot as the hub -->
+  <circle cx="24" cy="24" r="4.2" fill="#3EC5F0"/>
+</svg>

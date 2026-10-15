@@ -2,6 +2,6 @@
 Type=Application
 Name=Limpet Settings
 Comment=Registry trust tiers, model selection, panel, and XFCE settings
-Icon=preferences-system
+Icon=/opt/limpet/brand/icons/limpet-settings-48.png
 Exec=limpet-settings
 Categories=Limpet;Settings;

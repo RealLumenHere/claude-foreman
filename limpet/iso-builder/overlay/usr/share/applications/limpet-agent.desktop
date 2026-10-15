@@ -2,6 +2,6 @@
 Type=Application
 Name=Limpet Agent Chat
 Comment=Talk to the RE agent about the current target
-Icon=utilities-terminal
+Icon=/opt/limpet/brand/icons/limpet-agent-48.png
 Exec=xfce4-terminal --title "Limpet Agent" -e "limpet-agent"
 Categories=Limpet;System;

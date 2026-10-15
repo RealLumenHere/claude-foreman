@@ -51,10 +51,11 @@ blocking on one that doesn't:
   `core`/`vetted` trust tiers are baked in; `community` stays out until
   promoted (mirrors `limpet/registry/import_catalog.py`'s existing
   skip-by-design behavior).
-- **GRUB/Plymouth branding** (task 9): `docs/branding-spec.md` section 6
-  explicitly defers the Plymouth boot splash and never specifies a graphical
-  GRUB theme. `build.sh stage9` ships a text-mode GRUB menu and leaves
-  Plymouth unthemed rather than fabricating either.
+- **GRUB/Plymouth branding** (task 9): originally deferred because no theme
+  assets existed. wq#3948 created them (`design/limpet/brand/themes/grub/`,
+  `.../plymouth/`) in the committed, WCAG-AA token palette, so `build.sh
+  stage9` now installs a graphical GRUB theme (via `set_grub_theme.py`) and an
+  animated Plymouth splash instead of shipping text-mode/unthemed.
 - **Hardware profile book is 5 profiles, not 200+** (tasks 5/10): the ticket's
   "200+" is a target the upstream Tier-1/2 tickets haven't reached yet
   (`docs/hardware-tiers-spec.md` so far only has the AMD tier complete).
