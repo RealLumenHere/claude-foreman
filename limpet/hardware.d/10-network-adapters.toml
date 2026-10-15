@@ -1,0 +1,69 @@
+# Limpet hardware driver catalog — category: network adapters (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes. This is the
+# category with the clearest in-kernel/DKMS split: the two most common RE-rig NICs
+# (ASIX, Realtek 2.5G/1G) are in-kernel; the two most common RE-rig WiFi chips
+# (RTL8812BU, MT7921U) are NOT, and are exactly why the build script
+# (build_iso_drivers.py) exists — they need pre-compiled DKMS modules baked into
+# the ISO, since a fresh install has no network to `apt install` them with.
+
+[[device]]
+name = "ASIX AX88179 (USB3 Gigabit Ethernet)"
+category = "usb-target"
+usb_ids = ["0b95:1790"]
+linux_driver = "ax88179_178a"
+in_kernel_since = "3.8"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None. Fully open, in-kernel."
+confidence = "high"
+
+[[device]]
+name = "Realtek RTL8153 (USB3 Gigabit Ethernet)"
+category = "usb-target"
+usb_ids = ["0bda:8153"]
+linux_driver = "r8152"
+in_kernel_since = "3.16"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None. Fully open, in-kernel."
+confidence = "high"
+
+[[device]]
+name = "Realtek RTL8812BU (USB WiFi, 802.11ac dual-band)"
+category = "usb-target"
+usb_ids = ["0bda:b812"]
+linux_driver = "rtl8812bu (out-of-tree, DKMS)"
+in_kernel_since = "never mainlined — Realtek's vendor driver for this chip has no in-tree equivalent; the actively-maintained community fork is the only practical option"
+firmware_blob = true
+firmware_package = "bundled:rtl8812bu-dkms"
+firmware_note = "Not from linux-firmware — firmware blobs are bundled inside the driver source tree itself and installed to /lib/firmware/rtlwifi/ by its own build/install step."
+dkms = true
+dkms_source = "https://github.com/morrownr/8812bu-20210629 (actively maintained community fork of Realtek's vendor driver; morrownr's repos are the de facto standard reference for this chip family)"
+dkms_build_estimate_minutes = 3
+udev_rule = ""
+proprietary_notes = "The driver itself is Realtek vendor code (GPLv2-declared but low code quality, periodically breaks on new kernel ABI until the fork catches up) wrapped for DKMS by the community; not a clean-room implementation. Must be pre-built per target kernel ABI in the ISO build (no network available during install to let DKMS build it live)."
+confidence = "high"
+
+[[device]]
+name = "MediaTek MT7921U (USB WiFi, 802.11ax dual-band)"
+category = "usb-target"
+usb_ids = ["0e8d:7961"]
+linux_driver = "mt76 family — specifically the mt7921u module"
+in_kernel_since = "mainlined in the mt76 tree around 5.15-5.18 (USB variant trailed the PCIe mt7921e support by a couple of point releases); confirm against the exact kernel the ISO ships rather than assuming 6.x blanket coverage"
+firmware_blob = true
+firmware_package = "linux-firmware"
+firmware_note = "Files under /lib/firmware/mediatek/mt7921/, e.g. WIFI_RAM_CODE_MT7961_1.bin and the WIFI_MT7961_patch_mcu_*.bin series — naming is shared across the mt7921/mt7961 family."
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "Driver is in-kernel and open; the firmware blobs are closed binary-only MediaTek microcode, which is why they need linux-firmware bundled rather than compiled. Confirm the ISO's target kernel is new enough — on anything older than ~5.15, this chip has no working in-kernel driver and would need vendor DKMS instead."
+confidence = "medium"

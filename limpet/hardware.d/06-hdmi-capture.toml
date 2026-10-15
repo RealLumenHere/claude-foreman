@@ -1,0 +1,47 @@
+# Limpet hardware driver catalog — category: HDMI capture (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes.
+
+[[device]]
+name = "Magewell USB Capture HDMI Gen 2"
+category = "video-capture"
+usb_ids = ["2935:0003"]
+linux_driver = "uvcvideo (in-kernel USB Video Class driver) — device is UVC-compliant, no vendor module needed"
+in_kernel_since = "uvcvideo is in-kernel since 2.6.26; nothing device-specific required"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "Magewell also ships a closed-source SDK for advanced features (HDR metadata, EDID control) but basic capture works zero-config via plain V4L2/uvcvideo. VID 2935 (Magewell) and PID not live-verified this session."
+confidence = "medium"
+
+[[device]]
+name = "Generic UVC HDMI-to-USB capture dongle (MacroSilicon MS2109, 1080p60)"
+category = "video-capture"
+usb_ids = ["534d:2109"]
+linux_driver = "uvcvideo (video) + snd-usb-audio (in-kernel USB Audio Class, for the HDMI audio passthrough channel)"
+in_kernel_since = "uvcvideo since 2.6.26, snd-usb-audio long-standing — both predate this chip"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "No vendor driver exists or is needed; these are commodity UVC/UAC dongles. VID:PID varies by rebrand/batch even for the same MS2109 silicon — treat any mismatch as a cheap-clone variance, not a catalog gap, and fall back to the generic UVC match (device still works, just isn't name-identified)."
+confidence = "low"
+
+[[device]]
+name = "Generic UVC HDMI-to-USB capture dongle (MacroSilicon MS2130, 4K30)"
+category = "video-capture"
+usb_ids = ["345f:2130"]
+linux_driver = "uvcvideo + snd-usb-audio"
+in_kernel_since = "uvcvideo since 2.6.26"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "Same commodity-dongle caveat as MS2109 above — VID:PID is batch-dependent, not a stable vendor identity. No vendor driver needed; plain UVC covers it."
+confidence = "low"

@@ -1,0 +1,35 @@
+# Limpet hardware driver catalog — category: voltage glitching (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes.
+
+[[device]]
+name = "ChipWhisperer (Lite/Nano/Pro/CW1200, NewAE Technology)"
+category = "usb-target"
+usb_ids = ["2b3e:ace0", "2b3e:ace2"]
+linux_driver = "none (userspace, libusb via the chipwhisperer Python package) — the bundled target-UART bridge on some variants additionally enumerates as cdc_acm (in-kernel)"
+in_kernel_since = "n/a for the control interface; cdc_acm (where present) is ancient"
+firmware_blob = false
+firmware_package = "none (ChipWhisperer firmware is open and flashed by the chipwhisperer package tooling itself, not supplied by the host OS)"
+dkms = false
+dkms_source = "https://github.com/newaetech/chipwhisperer (pip-installable Python API, not a kernel module — nothing to DKMS-build)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/50-newae.rules (shipped by the chipwhisperer repo)
+SUBSYSTEM=="usb", ATTR{idVendor}=="2b3e", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Fully open hardware/firmware/software — NewAE is one of the most RE-friendly vendors in this entire catalog. The two PIDs listed (ace0 Lite/Nano family, ace2 CW1200 Pro) are not live-verified this session; low-to-medium confidence on the exact PID split by model."
+confidence = "medium"
+
+[[device]]
+name = "GlitchKit (generic DIY voltage-glitching rig)"
+category = "usb-target"
+usb_ids = []
+linux_driver = "no fixed answer — 'GlitchKit' names a technique/toolkit pattern, not a single commercial product with a stable USB identity; most DIY builds sit on a Teensy, STM32, or ChipWhisperer-class MCU board and inherit THAT board's driver (commonly cdc_acm, in-kernel, if it's a CDC-ACM-capable MCU dev board)"
+in_kernel_since = "n/a — depends entirely on the underlying board chosen for a given build"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "Deliberately left without a VID:PID entry rather than guessing one: there is no single device here to catalog. HAL should resolve a GlitchKit-style rig via its underlying MCU dev board's own catalog entry (e.g. a Teensy's cdc_acm identity) and treat the glitching function as a capability layered on top, not a separate hardware identity."
+confidence = "unverified"

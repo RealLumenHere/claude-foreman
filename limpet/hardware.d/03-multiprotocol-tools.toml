@@ -1,0 +1,105 @@
+# Limpet hardware driver catalog — category: multi-protocol tools (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes.
+
+[[device]]
+name = "Bus Pirate v3"
+category = "multiprotocol"
+usb_ids = ["0403:6001"]
+linux_driver = "ftdi_sio (in-kernel USB-serial driver)"
+in_kernel_since = "2.6.3x (ftdi_sio predates current Bus Pirate hardware by a wide margin)"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# none required beyond default tty group access; Bus Pirate v3 enumerates as a
+# generic FTDI FT232RL (VID:PID not reprogrammed on most units) at /dev/ttyUSBx
+'''
+proprietary_notes = "Fully open protocol/firmware. Because it reports the generic FTDI VID:PID, HAL cannot distinguish a Bus Pirate v3 from any other bare FT232R device by VID:PID alone — needs a protocol probe (send 0x00, expect BBIO1) to confirm identity."
+confidence = "high"
+
+[[device]]
+name = "Bus Pirate v5"
+category = "multiprotocol"
+usb_ids = ["1209:7331"]
+linux_driver = "cdc_acm (in-kernel) — native USB on RP2040, no FTDI bridge chip"
+in_kernel_since = "cdc_acm is ancient; nothing device-specific needed"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-buspirate5.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="7331", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Open hardware/firmware. VID:PID is a pid.codes-allocated pair (shared VID 1209); not live-verified against usb.ids this session — confirm before relying on it for silent auto-detection."
+confidence = "low"
+
+[[device]]
+name = "Bus Pirate 6"
+category = "multiprotocol"
+usb_ids = []
+linux_driver = "cdc_acm (in-kernel) — expected native USB CDC like v5, same RP2040-class MCU family"
+in_kernel_since = "cdc_acm is ancient; nothing device-specific needed"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "Released too recently for this catalog's knowledge-cutoff confidence and fleet-search is down (wq#2595), so no VID:PID is recorded — do NOT guess one. Treat as an unlisted device: route through the online-search/USB-sideload fallback path until a verified VID:PID lands here."
+confidence = "unverified"
+
+[[device]]
+name = "Glasgow Interface Explorer"
+category = "multiprotocol"
+usb_ids = ["1d50:6141"]
+linux_driver = "none (userspace, libusb) — custom protocol, no kernel module"
+in_kernel_since = "n/a"
+firmware_blob = true
+firmware_package = "bundled:glasgow"
+firmware_note = "Uploaded to device RAM at runtime by the glasgow Python package itself — not a /lib/firmware blob and not part of linux-firmware."
+dkms = false
+dkms_source = "https://github.com/GlasgowEmbedded/glasgow (Python + Amaranth toolchain for the gateware; the host-side 'glasgow' CLI is a pip package, not a kernel module — nothing to DKMS-build)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-glasgow.rules (shipped in the glasgow repo)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6141", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Fully open hardware/gateware/software. VID:PID taken from the OpenMoko-administered shared VID (1d50) block Glasgow registers under; not live-verified this session."
+confidence = "medium"
+
+[[device]]
+name = "JTAGulator"
+category = "multiprotocol"
+usb_ids = ["0403:6001"]
+linux_driver = "ftdi_sio (in-kernel)"
+in_kernel_since = "2.6.3x"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "Open firmware, talks over a plain serial terminal at /dev/ttyUSBx. Same generic-FTDI VID:PID ambiguity as Bus Pirate v3 — HAL needs a protocol/menu-prompt probe to disambiguate, not VID:PID alone."
+confidence = "high"
+
+[[device]]
+name = "Tigard"
+category = "multiprotocol"
+usb_ids = ["0403:6010"]
+linux_driver = "ftdi_sio (in-kernel) — FT2232H dual-interface chip, binds as two ttyUSB nodes (or MPSSE-only if claimed by libftdi for JTAG/SWD use)"
+in_kernel_since = "2.6.3x"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-tigard.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Open hardware. Same generic-FT2232H VID:PID as plain Tigard-less FT2232H boards (including iCE40 dev boards, see 12-fpga-programmers.toml) — VID:PID alone cannot tell them apart; HAL must fall back to USB string descriptors or protocol probing."
+confidence = "high"

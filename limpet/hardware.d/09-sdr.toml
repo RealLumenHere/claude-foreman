@@ -1,0 +1,82 @@
+# Limpet hardware driver catalog — category: SDR (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes.
+
+[[device]]
+name = "RTL-SDR (RTL2832U-based dongles)"
+category = "sdr"
+usb_ids = ["0bda:2838", "0bda:2832"]
+linux_driver = "dvb_usb_rtl28xxu (in-kernel DVB-T driver) — MUST be blacklisted/unbound for SDR use, since it auto-claims the device for TV-tuner mode before librtlsdr (userspace, libusb) can open it"
+in_kernel_since = "dvb_usb_rtl28xxu in-kernel since ~3.x; for SDR use the relevant 'driver' is librtlsdr, which needs the kernel driver kept OFF this device"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = "https://github.com/osmocom/rtl-sdr (userspace library, not a kernel module)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-rtl-sdr.rules (shipped by rtl-sdr), paired with a modprobe blacklist
+# so dvb_usb_rtl28xxu never auto-attaches to these IDs:
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2838", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2832", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+# /etc/modprobe.d/blacklist-rtl-sdr.conf
+blacklist dvb_usb_rtl28xxu
+blacklist rtl2832
+blacklist rtl2830
+'''
+proprietary_notes = "Fully open (librtlsdr). The ISO's hardware-detection step must ship the modprobe blacklist by default or the stock DVB driver wins the bind race and SDR tools get 'device busy'."
+confidence = "high"
+
+[[device]]
+name = "HackRF One"
+category = "sdr"
+usb_ids = ["1d50:6089", "1d50:cc15"]
+linux_driver = "none (userspace, libusb via libhackrf)"
+in_kernel_since = "n/a"
+firmware_blob = false
+firmware_package = "none (device firmware lives on the HackRF itself, flashed via hackrf_spiflash when upgrading, not supplied by the host OS)"
+dkms = false
+dkms_source = "https://github.com/greatscottgadgets/hackrf (userspace libhackrf, not a kernel module)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-hackrf.rules (matches limpet/examples/hackrf.toml's hardware.usb_ids)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="cc15", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Fully open hardware/firmware/software. cc15 is the DFU (firmware update) mode PID, 6089 is normal operating mode — both are the same physical device. Cross-checked against the existing limpet/examples/hackrf.toml community plugin, which uses the same usb_ids pair."
+confidence = "high"
+
+[[device]]
+name = "YARD Stick One"
+category = "sdr"
+usb_ids = ["1d50:60ff"]
+linux_driver = "none (userspace, pyusb/libusb via rfcat)"
+in_kernel_since = "n/a"
+firmware_blob = false
+firmware_package = "none (rfcat firmware lives on the CC1111's own flash)"
+dkms = false
+dkms_source = "https://github.com/atlas0fd00m/rfcat (userspace Python tool, not a kernel module)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-yardstickone.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="60ff", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Open hardware/firmware. VID:PID not live-verified this session (search engines down) — confirm before relying on it for silent auto-detection; low confidence on the exact PID specifically."
+confidence = "low"
+
+[[device]]
+name = "LimeSDR (USB, original form factor)"
+category = "sdr"
+usb_ids = ["1d50:6108"]
+linux_driver = "none (userspace, libusb via LimeSuite)"
+in_kernel_since = "n/a"
+firmware_blob = true
+firmware_package = "bundled:LimeSuite"
+firmware_note = "FX3 firmware + FPGA gateware images installed to /usr/share/Lime, uploaded to the board at runtime — not a linux-firmware package."
+dkms = false
+dkms_source = "https://github.com/myriadrf/LimeSuite (userspace library/CLI, not a kernel module)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/64-lime-suite.rules (shipped by LimeSuite)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6108", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Open hardware/software. PID not live-verified this session — medium rather than high confidence."
+confidence = "medium"

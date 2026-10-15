@@ -1,0 +1,40 @@
+# Limpet hardware driver catalog — category: FPGA programmers (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes.
+
+[[device]]
+name = "Lattice iCE40 dev boards (iCEstick, iCEBreaker, etc. via onboard FT2232H)"
+category = "programmer"
+usb_ids = ["0403:6010"]
+linux_driver = "ftdi_sio claims the serial function by default; iceprog (from the open IceStorm toolchain) instead talks to the same FT2232H chip's MPSSE mode directly via libftdi/libusb, so ftdi_sio must be detached from that interface (or the device must be accessed before ftdi_sio binds it) for programming to succeed"
+in_kernel_since = "2.6.3x for ftdi_sio itself; iceprog's MPSSE access path is userspace, n/a for a kernel version"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = "https://github.com/YosysHQ/icestorm (iceprog is part of the open IceStorm toolchain; userspace, not a kernel module)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-icestorm.rules — grants libusb access without fighting ftdi_sio
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Fully open (IceStorm toolchain reverse-engineered Lattice's bitstream format). Same VID:PID as a bare/Tigard FT2232H (see 03-multiprotocol-tools.toml and 05-usb-serial.toml) — HAL cannot distinguish 'this is an iCE40 board' from 'this is a Tigard' by VID:PID alone; needs USB string-descriptor or board-topology disambiguation."
+confidence = "high"
+
+[[device]]
+name = "Xilinx Platform Cable USB II (and compatible clones)"
+category = "programmer"
+usb_ids = ["03fd:0008", "03fd:0009"]
+linux_driver = "none (userspace, libusb) — Xilinx's proprietary protocol, requires the vendor firmware blob to be uploaded to the cable's FX2 chip on every plug before it does anything"
+in_kernel_since = "n/a"
+firmware_blob = true
+firmware_package = "proprietary:xusbdfwu.hex"
+firmware_note = "Distributed inside Xilinx's ISE/Vivado installer under a restrictive EULA — NOT redistributable in a general-purpose linux-firmware-style package; the ISO build must either bundle a Xilinx-EULA-accepted copy under its own license terms or omit it and route this device through the sideload fallback."
+dkms = false
+dkms_source = "https://github.com/jwrdegoede/xusbdfwu.fx2 (community loader for the firmware blob; not a kernel module) — also usable via OpenOCD's own ft2232/xpcu paths for some clone cables that don't need the proprietary blob"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-xilinx-usb.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="03fd", ATTR{idProduct}=="0009", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="03fd", ATTR{idProduct}=="0008", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Closed firmware under a Xilinx EULA is the hard blocker here — this is the one device in the whole catalog where the licensing question (can we legally bundle xusbdfwu.hex in the ISO?) needs a real answer before ISO build, not just a technical one. 0009 is the unconfigured/no-firmware PID, 0008 is the configured/running PID for the same physical cable."
+confidence = "medium"

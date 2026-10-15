@@ -1,0 +1,67 @@
+# Limpet hardware driver catalog — category: flash programmers (wq#3924)
+#
+# Drop-in catalog for /etc/limpet/hardware.d/. Distinct from a limpet-plugin.toml
+# (design/limpet/plugin-manifest.schema.json): a plugin manifest declares ONE active
+# HAL binding, this file is reference data about ALL known devices in a category,
+# consumed by the ISO build (limpet/hardware.d/build_iso_drivers.py) to decide what
+# to pre-bake, and by the install wizard / HAL to resolve an unrecognized VID:PID.
+#
+# PROVENANCE: compiled from maintainer knowledge (flashrom, minipro, linux-usb.org
+# usb.ids), NOT live-verified — fleet-search web is down fleet-wide (all general
+# engines suspended, missing Brave key, wq#2595; see kb/ISSUE-LOG.md row 715+).
+# `confidence = "low"` entries need a sideload/online check before being trusted for
+# auto-detection; everything else is well-established, long-stable driver history.
+
+[[device]]
+name = "CH341A SPI/I2C/EPP programmer"
+category = "flash-programmer"
+usb_ids = ["1a86:5512"]
+linux_driver = "none (userspace, libusb) — the in-kernel ch341 module is a USB-serial driver (drivers/usb/serial/ch341.c) for UART mode only and does not expose the SPI/I2C/parallel programmer mode this device is used for"
+in_kernel_since = "n/a (SPI/I2C mode is not a kernel driver; UART mode via ch341 is in-kernel since 2.6.3x)"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-ch341a-programmer.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Open: flashrom's ch341a_spi programmer and ch341prog are FOSS, reverse-engineered from the vendor protocol. No vendor driver needed."
+confidence = "high"
+
+[[device]]
+name = "TL866II Plus / T48 universal programmer (minipro)"
+category = "flash-programmer"
+usb_ids = ["04d8:e11c"]
+linux_driver = "none (userspace, libusb) — proprietary USB protocol, accessed via the reverse-engineered minipro tool"
+in_kernel_since = "n/a"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = "https://github.com/vdudouyt/minipro (userspace CLI, not a kernel module — build via make/meson, not DKMS)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-minipro.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="04d8", ATTR{idProduct}=="e11c", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Device firmware/protocol is closed; minipro is a clean-room reimplementation covering most TL866/T48 chip support. New chip families sometimes lag vendor Windows software."
+confidence = "high"
+
+[[device]]
+name = "DediProg SF100"
+category = "flash-programmer"
+usb_ids = ["0483:dada"]
+linux_driver = "none (userspace, libusb) — flashrom's dediprog programmer"
+in_kernel_since = "n/a"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-dediprog.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="dada", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "SF100 support in flashrom is solid (open protocol docs leaked/reverse-engineered). SF600 is only partially supported in mainline flashrom — treat as sideload/manual-verify territory, not a guaranteed plug-and-play target."
+confidence = "medium"

@@ -1,0 +1,97 @@
+# Limpet hardware driver catalog — category: debug probes (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes (same source
+# limitation: fleet-search web down, wq#2595).
+
+[[device]]
+name = "Segger J-Link (BASE/EDU/PLUS, all V8-V12 variants)"
+category = "debug-probe"
+usb_ids = ["1366:0101", "1366:0105", "1366:1020"]
+linux_driver = "none (userspace, libusb) — proprietary bulk-transfer protocol"
+in_kernel_since = "n/a"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = "https://github.com/afaff/libjaylink (open client lib used by OpenOCD's jlink adapter; not a kernel module)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-jlink.rules (SEGGER ships an equivalent rule with JLinkExe)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1366", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Full feature set (RTT, flash breakpoints, licensed targets) requires SEGGER's closed-source J-Link software/driver package. OpenOCD + libjaylink cover core JTAG/SWD for open workflows but trail SEGGER's own tooling on niche targets."
+confidence = "high"
+
+[[device]]
+name = "ST-Link V2"
+category = "debug-probe"
+usb_ids = ["0483:3748", "0483:374b"]
+linux_driver = "none (userspace, libusb)"
+in_kernel_since = "n/a"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = "https://github.com/stlink-org/stlink (userspace st-flash/st-util CLI; OpenOCD also talks to it directly)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/49-stlinkv2.rules (shipped upstream by stlink-org)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="3748", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="374b", MODE="0666", GROUP="plugdev"
+'''
+proprietary_notes = "Fully open: ST's protocol was reverse-engineered years ago and is well covered by stlink-org/stlink and OpenOCD."
+confidence = "high"
+
+[[device]]
+name = "ST-Link V3 (V3SET/V3MINI)"
+category = "debug-probe"
+usb_ids = ["0483:3752", "0483:3753"]
+linux_driver = "none (userspace, libusb)"
+in_kernel_since = "n/a"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = "https://github.com/stlink-org/stlink"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/49-stlinkv3.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="3752", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="3753", MODE="0666", GROUP="plugdev"
+'''
+proprietary_notes = "Same open coverage as V2; V3 adds a bridge mode (SPI/I2C/CAN passthrough) that is less universally supported across tools."
+confidence = "medium"
+
+[[device]]
+name = "CMSIS-DAP (generic HID probe, e.g. mbed/DAPLink boards)"
+category = "debug-probe"
+usb_ids = ["0d28:0204"]
+linux_driver = "hidraw (generic in-kernel USB HID class) — no vendor-specific kernel module required"
+in_kernel_since = "in-kernel generic HID/hidraw support predates all current CMSIS-DAP hardware (well before 2.6.3x); nothing CMSIS-DAP-specific is needed in-kernel"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-cmsis-dap.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="0d28", ATTR{idProduct}=="0204", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "CMSIS-DAP is an open ARM spec; every compliant probe (DAPLink, Pico-Probe, etc.) shares the same HID access path, just with a different VID:PID per vendor/board. The VID:PID here is the common mbed/DAPLink one — treat others as unlisted-device sideload until confirmed."
+confidence = "medium"
+
+[[device]]
+name = "Black Magic Probe"
+category = "debug-probe"
+usb_ids = ["1d50:6018"]
+linux_driver = "cdc_acm (in-kernel USB CDC-ACM serial class driver) — exposes two ttyACM ports: GDB server + target UART"
+in_kernel_since = "cdc_acm itself is ancient (pre-2.6.12); nothing device-specific needed beyond the generic class driver"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-blackmagic.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6018", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", SYMLINK+="ttyBmpGdb", ENV{ID_USB_INTERFACE_NUM}=="00"
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", SYMLINK+="ttyBmpTarg", ENV{ID_USB_INTERFACE_NUM}=="02"
+'''
+proprietary_notes = "Fully open hardware and firmware; zero proprietary dependency. Plug-and-play on any kernel with CDC-ACM."
+confidence = "high"

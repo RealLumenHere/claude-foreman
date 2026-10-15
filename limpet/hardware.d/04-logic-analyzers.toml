@@ -1,0 +1,75 @@
+# Limpet hardware driver catalog — category: logic analyzers (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes.
+
+[[device]]
+name = "Saleae Logic / Logic Pro / Logic 8 / Logic 16 (current product line)"
+category = "logic-analyzer"
+usb_ids = []
+linux_driver = "none (userspace, libusb) — Saleae's closed-source Logic software ships its own proprietary USB client; no kernel module"
+in_kernel_since = "n/a"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-saleae.rules (Saleae ships this with the Logic software download)
+SUBSYSTEM=="usb", ATTR{idVendor}=="21a9", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Closed-source capture engine required for current-generation Saleae devices; sigrok support exists only for the original, discontinued 8-channel 'Logic' (first generation, pre-2013) via its fx2lafw-compatible firmware, not for Logic Pro/8/16. VID 21a9 (Saleae) not live-verified this session — treat all PIDs here as unlisted-device/sideload until confirmed."
+confidence = "low"
+
+[[device]]
+name = "DSLogic (DreamSourceLab)"
+category = "logic-analyzer"
+usb_ids = ["2a0e:0020"]
+linux_driver = "none (userspace, libusb via libsigrok's fx2lafw-family driver)"
+in_kernel_since = "n/a"
+firmware_blob = true
+firmware_package = "sigrok-firmware-fx2lafw"
+firmware_note = "Debian/Ubuntu package name; uploaded to the Cypress FX2's RAM over USB at session start, not persisted to flash."
+dkms = false
+dkms_source = "https://github.com/sigrokproject/libsigrok (userspace library, not a kernel module)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-dreamsourcelab-dslogic.rules (shipped by sigrok)
+SUBSYSTEM=="usb", ATTR{idVendor}=="2a0e", ATTR{idProduct}=="0020", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Open: supported by mainline sigrok/PulseView. Firmware upload is to the FX2's volatile RAM each run, so it must stay bundled in the ISO image, not just installed once."
+confidence = "medium"
+
+[[device]]
+name = "FX2-based clones (generic 'USBee'/Saleae-clone 8ch, Cypress CY7C68013A)"
+category = "logic-analyzer"
+usb_ids = ["08a9:0014"]
+linux_driver = "none (userspace, libusb via libsigrok's fx2lafw driver)"
+in_kernel_since = "n/a"
+firmware_blob = true
+firmware_package = "sigrok-firmware-fx2lafw"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-saleae-logic.rules (shipped by sigrok for the fx2lafw-compatible clone family)
+SUBSYSTEM=="usb", ATTR{idVendor}=="08a9", ATTR{idProduct}=="0014", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Open. This is the broad clone family sigrok's wiki documents as fx2lafw-compatible; exact VID:PID varies by clone batch — treat unmatched clones as unlisted-device sideload, not a catalog gap."
+confidence = "medium"
+
+[[device]]
+name = "Digilent Analog Discovery 2"
+category = "logic-analyzer"
+usb_ids = ["1443:0007"]
+linux_driver = "none (userspace, libusb) — Digilent's closed-source WaveForms/Adept runtime"
+in_kernel_since = "n/a"
+firmware_blob = false
+firmware_package = "none (proprietary runtime bundles its own device firmware uploader)"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/60-digilent.rules (Digilent ships this with Adept Runtime)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1443", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "Closed: needs Digilent's Adept Runtime + WaveForms (proprietary, free-of-charge binary) for any functionality beyond raw USB enumeration. No open-source alternative exists for this device's full feature set."
+confidence = "medium"

@@ -1,0 +1,112 @@
+# Limpet hardware driver catalog — category: USB-serial bridges (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes. This category
+# is the most settled of all twelve: every listed chip has had an in-kernel driver
+# for over a decade, so these entries are "zero-config" for the ISO — no DKMS, no
+# firmware blob. They're cataloged because other categories (Bus Pirate, JTAGulator,
+# Tigard) key off these same drivers and VID:PIDs, and the HAL needs this table to
+# disambiguate "bare FTDI chip" from "FTDI chip inside a Bus Pirate".
+
+[[device]]
+name = "FTDI FT232R"
+category = "usb-serial"
+usb_ids = ["0403:6001"]
+linux_driver = "ftdi_sio"
+in_kernel_since = "2.6.3x (ftdi_sio is one of the oldest USB-serial drivers in the tree)"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None. Fully open, in-kernel."
+confidence = "high"
+
+[[device]]
+name = "FTDI FT2232H"
+category = "usb-serial"
+usb_ids = ["0403:6010"]
+linux_driver = "ftdi_sio (serial function) — tools needing MPSSE/JTAG mode (OpenOCD, iceprog) instead talk to the same chip via libftdi/libusb, bypassing ftdi_sio for that interface"
+in_kernel_since = "2.6.3x"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None. Fully open, in-kernel."
+confidence = "high"
+
+[[device]]
+name = "Silicon Labs CP2102/CP2104"
+category = "usb-serial"
+usb_ids = ["10c4:ea60"]
+linux_driver = "cp210x"
+in_kernel_since = "2.6.27"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None. Fully open, in-kernel."
+confidence = "high"
+
+[[device]]
+name = "WCH CH340"
+category = "usb-serial"
+usb_ids = ["1a86:7523"]
+linux_driver = "ch341"
+in_kernel_since = "long-standing (pre-3.0; added ~2.6.3x era), well before current CH340/341 production"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None for UART mode. Note the SAME ch341 kernel module name is reused for CH341's UART mode but does NOT cover CH341A's SPI/I2C programmer mode (see 01-flash-programmers.toml) — don't conflate the two by module name alone."
+confidence = "high"
+
+[[device]]
+name = "WCH CH341 (UART mode)"
+category = "usb-serial"
+usb_ids = ["1a86:5523"]
+linux_driver = "ch341"
+in_kernel_since = "long-standing (pre-3.0)"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None. Same module as CH340; see note above distinguishing this from the CH341A SPI/I2C programmer mode."
+confidence = "high"
+
+[[device]]
+name = "Prolific PL2303HX (original/older revisions)"
+category = "usb-serial"
+usb_ids = ["067b:2303"]
+linux_driver = "pl2303"
+in_kernel_since = "long-standing (pre-3.0)"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None on Linux. The well-known PL2303 'driver stops working' problem is a Windows-driver chip-revision-detection issue (Prolific deliberately broke counterfeit HXA chips in their own Windows driver); Linux's pl2303 module detects chip revision generically and is not affected the same way."
+confidence = "high"
+
+[[device]]
+name = "Prolific PL2303TA"
+category = "usb-serial"
+usb_ids = ["067b:2303"]
+linux_driver = "pl2303"
+in_kernel_since = "kernel 4.x added explicit TA-type revision detection to pl2303 (the chip shares the HX's VID:PID; the driver tells revisions apart internally via a type-detection routine, not via a distinct PID)"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None on Linux. TA and HX share VID:PID 067b:2303; a pre-4.x kernel may misdetect a TA-revision chip. Not a concern for a current ISO build targeting a modern kernel."
+confidence = "medium"

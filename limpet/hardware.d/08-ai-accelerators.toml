@@ -1,0 +1,22 @@
+# Limpet hardware driver catalog — category: AI accelerators (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes.
+
+[[device]]
+name = "Google Coral USB Accelerator (Edge TPU, USB form factor)"
+category = "accelerator"
+usb_ids = ["1a6e:089a", "18d1:9302"]
+linux_driver = "none (userspace, libusb) — the in-tree 'gasket'/apex kernel driver (drivers/staging/gasket) is for the PCIe/M.2 Coral form factor, NOT the USB Accelerator; the USB variant talks directly over libusb bulk transfers from the libedgetpu runtime"
+in_kernel_since = "n/a for the USB variant (no kernel module involved); the unrelated PCIe apex driver landed in staging around kernel 4.19/5.0 and is not required for this device"
+firmware_blob = true
+firmware_package = "bundled:libedgetpu"
+firmware_note = "The Edge TPU runtime (libedgetpu/pycoral) uploads its firmware to device RAM on first use each boot — not shipped via linux-firmware."
+dkms = false
+dkms_source = "https://github.com/google-coral/libedgetpu (userspace runtime, not a kernel module — nothing to DKMS-build)"
+dkms_build_estimate_minutes = 0
+udev_rule = '''
+# /etc/udev/rules.d/99-edgetpu-accelerator.rules (shipped by libedgetpu)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1a6e", ATTR{idProduct}=="089a", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="9302", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "libedgetpu's core runtime is source-available but Google-controlled (not accepted upstream anywhere); pycoral adds a Python API on top. The two VID:PID entries are the documented unconfigured-mode (1a6e:089a, Global Unichip bring-up ID) and configured/running-mode (18d1:9302, Google) identities the SAME physical device presents at different points in its boot sequence — HAL must treat both as 'this is a Coral', not two devices."
+confidence = "high"

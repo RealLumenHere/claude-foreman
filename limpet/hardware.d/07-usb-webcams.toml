@@ -1,0 +1,17 @@
+# Limpet hardware driver catalog — category: USB webcams (wq#3924)
+# See 01-flash-programmers.toml header for provenance/confidence notes.
+
+[[device]]
+name = "Generic UVC-class USB webcam (any vendor)"
+category = "video-capture"
+usb_ids = []
+linux_driver = "uvcvideo (in-kernel USB Video Class driver)"
+in_kernel_since = "2.6.26"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = "None. This is the one category in the whole catalog with no VID:PID list by design: essentially every webcam made since ~2008 implements the UVC class spec, so it needs zero per-device entries and zero config. A webcam that ISN'T UVC-compliant (rare, usually a cheap pre-2008 part or a proprietary gaming peripheral) is the actual edge case — route those through the unlisted-device/sideload fallback, not this table."
+confidence = "high"
