@@ -19,21 +19,25 @@ API unauthenticated — logged ISSUE-LOG #1325). The working backends were used 
   also installed on the fleet, `mcp__rea__*` live; REA (mytechnotalent/rea, pure-Rust);
   EMBA (`e-m-b-a/emba`); OFRAK (`redballoonsecurity/ofrak`); FACT (`fkie-cad/FACT_core`);
   GhidraMCP (`LaurieWired/GhidraMCP`).
-- **Described + prior-art knowledge:** OpenClaw, VRAX, ReCopilot, reverse-skill, Recon-2026
-  SQL-RE, and the GhidraMCP fork tool-counts (13bm/bethington). For these the feature set
-  is taken from the ticket brief and general knowledge of the category; claims about them
-  are marked *(described)* and should be re-verified when search is restored before any are
-  used to justify a build commitment.
+- **Verified live (independent web search, 2026-10-14):** the entities the first pass could
+  only mark *(described)* — OpenClaw, VRAX, ReCopilot, reverse-skill, Recon-2026 SQL-RE, and
+  the GhidraMCP fork tool-counts (13bm/bethington) — were all confirmed REAL by an
+  out-of-fleet live-search pass (browser Claude, `/home/lumen/scratch/research/limpet_live_search_2026-10-14.md`,
+  PART A). **The re-verify caveat is lifted.** That pass also corrected several figures
+  (OpenClaw ~180K users not 340K stars; bethington/ghidra-mcp 244–256 tools not ≈209) and
+  downgraded VRAX to a described architecture (single LinkedIn source, no public repo) — the
+  corrections are folded into §1 below and the matrix. The *(verified live)* tag marks each.
 
 Limpet facts below are cited to the committed design docs, not restated from memory.
 
 ## 1. Platform-by-platform
 
-### (1) OpenClaw — general agent platform with a plugin marketplace *(described)*
-340K+ stars, multi-agent orchestration, 138+ MCP tools, ClawHub plugin marketplace,
-Composio 500+ app integrations, browser MCP, enterprise controls. This is the
-*general-purpose coding/agent* platform category (the OpenHands/Composio shape), not an RE
-tool. Relevance to Limpet is **orchestration and plugin distribution**, not RE depth.
+### (1) OpenClaw — general agent platform with a plugin marketplace *(verified live, wq#3995)*
+~180K users (corrected from the brief's "340K+ stars"), multi-agent orchestration, 138+ MCP
+tools, ClawHub plugin marketplace, Composio 500+ app integrations, browser MCP, enterprise
+controls. Live search (`.../limpet_live_search_2026-10-14.md` A0) confirms this is a
+*general-purpose* AI agent platform (the OpenHands/Composio shape), **not RE-specific**, so
+relevance to Limpet is **orchestration and plugin distribution**, not RE depth.
 
 - **Orchestration vs. our meta-server.** OpenClaw orchestrates *agents*; Limpet's
   MCP meta-server orchestrates *tools* behind one endpoint with lazy child-spawn and a
@@ -52,7 +56,11 @@ tool. Relevance to Limpet is **orchestration and plugin distribution**, not RE d
 ### (2) REA — morluto / npm `rea-agents` (verified: installed, `mcp__rea__*` live)
 ~170 tools (skill v37), investigation model, evidence tracking, CLI + npm, Ghidra provider
 (Hopper/IDA optional). This is the **closest peer to Limpet's software-tool plane** and is
-already on the fleet (`TOOL_REGISTRY.md:33-56`).
+already on the fleet (`TOOL_REGISTRY.md:33-56`). Live search (`.../limpet_live_search_2026-10-14.md`
+A0) adds two boundary facts: REA is **macOS-centric** (Homebrew/Hopper, "check your Mac") and
+**explicitly never invokes the privileged-escalation path** (a documented mutation boundary).
+Both **strengthen Limpet's Linux-appliance + HAL wedge**: the closest software peer is a Mac
+dev tool with no hardware plane, not a hardware-aware box.
 
 - **Their evidence model vs. our workspace manager.** REA emits inline per-tool *Evidence*
   with provenance/`untrusted_content` marking, and has `export_evidence_bundle` /
@@ -94,23 +102,34 @@ engine; Rust firmware extraction; OpenRouter API; PDF dossier.
   near-parity. Make dossier generation a first-class workspace export alongside the evidence
   bundle.
 
-### (4) VRAX — multi-agent swarm binary analysis + live operator console *(described)*
-Swarm topology over binary analysis with a live console. Two takeaways: (a) a **live
-operator console** — a real-time view of what the agent is doing on the box — which Limpet
-lacks (we have a replayable git trail but no live view). **Gap G5.** (b) swarm-over-one-
+### (4) VRAX — multi-agent swarm binary analysis + live operator console *(DOWNGRADED — described architecture, not a shipping competitor)*
+Swarm topology over binary analysis with a live console. **Downgrade (wq#3995):** live search
+(`.../limpet_live_search_2026-10-14.md` A0) found the *only* substantive source is a single
+LinkedIn profile (Chathuranga BW, UAE) — no public repo, release, or community. So VRAX is a
+**described architecture, not a shipping competitor**; treat it as evidence that others pursue
+the pattern, not as a product to benchmark against. Two takeaways survive the downgrade: (a) a
+**live operator console** — a real-time view of what the agent is doing on the box — which
+Limpet lacks (we have a replayable git trail but no live view). **Gap G5** stays a validated
+pattern (EMBArk, below, is the verified prior art for it). (b) swarm-over-one-
 binary parallelism; lower priority for an appliance with an i5/32GB ceiling
 (`design/wq3806_limpet_architecture.md:3,152-153`) where resident-memory pressure, not
 agent count, is the constraint.
 
-### (5) ReCopilot — domain-specific binary-analysis LLM *(described)*
-Function-name recovery, variable type/name inference — a model *fine-tuned on decompiled
-code*, not a general chat model. **Yes, Limpet should be able to mount specialized RE models
-alongside the general LLM.** Our agent core already routes via LiteLLM and does not hard-code
-one model (`design/wq3806_limpet_architecture.md:233-239`); the clean extension is a
+### (5) ReCopilot — domain-specific binary-analysis LLM *(verified live, wq#3995)*
+Function-name recovery, variable type/name inference, struct recovery, SimAI code-homology
+search — a model *fine-tuned on decompiled code* (arXiv 2505.16366, SOTA +13%), not a general
+chat model, shipped as an IDA Pro plugin. **Yes, Limpet should be able to mount specialized RE
+models alongside the general LLM.** Our agent core already routes via LiteLLM and does not
+hard-code one model (`design/wq3806_limpet_architecture.md:233-239`); the clean extension is a
 *model-capability tier* in the registry so a decompiler-naming step can be routed to a
 ReCopilot-class model while reasoning stays on the general model. **Adopt as A5** (design-only;
 no such model is provisioned on the box today — the 32GB/iGPU ceiling means a specialized
 model is an opt-in or a fleet-routed call, same policy as the 14B coder model, `:233-239`).
+**Data-egress caveat (wq#3995):** the published `recopilot-v0.1-beta-dpo` weights are served
+from a **China-hosted API (XingTuLab / QI-ANXIN, `tqgpt.qianxin.com`)**, and self-hosting is
+infeasible on the box. So an A5 route to ReCopilot-as-a-service would egress decompiled target
+code to a third-party foreign endpoint — out of policy for a sensitive investigation. The
+adopt is the *capability-tier mechanism*, not a default route to this specific provider.
 
 ### (6) Kali Linux — tool distribution + brand *(partly described)*
 Kali is the brand baseline operators compare any security appliance to. Two lenses:
@@ -159,21 +178,36 @@ an index beside the evidence, not a rewrite of the tool plane).
 - **LaurieWired/GhidraMCP (verified):** MCP server + Ghidra plugin; decompile, auto-rename
   methods/data, list methods/classes/imports/exports. Compact, well-known, the reference
   implementation.
-- **13bm/GhidraMCP ≈70 tools, bethington/ghidra-mcp ≈209 tools *(described counts)*:** forks
-  expanding the tool surface (structs/types, data-flow, scripting bridge).
+- **13bm/GhidraMCP ≈70 tools, bethington/ghidra-mcp 244–256 tools (verified live, wq#3995):**
+  forks expanding the tool surface (structs/types, data-flow, scripting bridge). Live search
+  (`.../limpet_live_search_2026-10-14.md` A2) corrected bethington **up** from the offline
+  "≈209" to **244–256 tools** (v5.14.2, 2026-06-27; 1.8k★; headless + Docker + Ghidra-Server
+  multiuser, P-code emulation, live debugger, PCode-graph dataflow).
 - **Ours (the fleet `ghidra-mcp` + `ghidra-re` skill):** Ghidra headless already a `core`
   plugin (`design/wq3806_limpet_architecture.md:96-99`), and the plugin examples carry a
   `ghidra-mcp.toml` depending on `ghidra` (`design/wq3810_limpet_plugin_system.md:81-86`).
   Limpet does not need to pick one fork: the registry can carry whichever Ghidra-MCP a
   workspace needs as a `vetted` plugin, and the meta-server namespaces it. The lesson from
-  the 209-tool fork is **tool-schema budget** — which is precisely why our meta-server does
-  two-level exposure (`design/wq3806_limpet_architecture.md:152-159`) rather than mounting
-  200 Ghidra tools flat. No gap; design already absorbs it.
+  the 244–256-tool fork is **tool-schema budget** — which is precisely why our meta-server
+  does two-level exposure (`design/wq3806_limpet_architecture.md:152-159`) rather than mounting
+  250 Ghidra tools flat. **Strengthened (wq#3995):** bethington/ghidra-mcp now advertises
+  **"lazy tool loading"** — a competitor has *independently converged* on the exact
+  schema-budget answer Limpet's two-level meta-server adopts. Two consequences: (1) raw
+  tool-count is **confirmed not a moat** (§4 caveat holds, strengthened); (2) two-level/lazy
+  tool exposure is now **table stakes, not a differentiator** — Limpet's edge there is the
+  trust-tier gate around it, not the lazy-load itself. (Also live: MCPyGhidra — Nightwing, 26
+  tools, +binary patching; Sarks0/binary-mcp — Ghidra static 22 + x64dbg dynamic 14 +
+  cross-conversation sessions, close to Limpet's workspace continuity.) No gap; design absorbs it.
 
 ### (10) EMBA / FACT / OFRAK — automated firmware platforms (verified)
 - **EMBA (`e-m-b-a/emba`):** central firmware analysis + SBOM; extraction→static→dynamic
   (emulation)→SBOM→web vuln report; auto-discovers weak binaries, outdated components,
-  hard-coded passwords. A full *pipeline*, CLI with a web report.
+  hard-coded passwords. A full *pipeline*, CLI with a web report. **More current than the
+  offline doc (verified live, wq#3995):** EMBA now ships **AI support**, **firmware diffing**,
+  UEFI analysis (FwHunt/Binarly), user+system emulation, and **EMBArk — a multi-user team web
+  console**. Two consequences: its **firmware diffing overlaps Limpet's wq#3906 diff work**
+  (align, do not duplicate — see §1.10 note below), and **EMBArk is verified prior art for the
+  live-operator-console gap (G5)** now that VRAX is downgraded.
 - **FACT (`fkie-cad/FACT_core`):** automates firmware analysis with browsable/searchable/
   **comparable** results, web UI + REST API/SwaggerUI, plugin analyses.
 - **OFRAK (`redballoonsecurity/ofrak`):** unpack → analyze → **modify & repack** with
@@ -252,7 +286,7 @@ the HAL/appliance differentiator is re-worded in §4.
 | Capability | Limpet | OpenClaw | REA(morluto) | REA(Rust) | VRAX | Kali | AttifyOS | EMBA | FACT | OFRAK | REx@Skill | Ghidra-MCP |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | One-endpoint tool orchestration | ✅ | ✅ | ✅ | ◑ | ◑ | ✗ | ✗ | — | — | ◑ | ◑ | ✗ |
-| Large tool surface (100+) | ◑(via promote) | ✅ | ✅ | ✗ | ◑ | ✅ | ✅(distro) | ◑ | ◑ | ◑ | ✗ | ◑(209 fork) |
+| Large tool surface (100+) | ◑(via promote) | ✅ | ✅ | ✗ | ◑ | ✅ | ✅(distro) | ◑ | ◑ | ◑ | ✗ | ◑(244–256 fork) |
 | Trust-tiered plugin gate | ✅ | ◑ | ✗ | — | ✗ | ◑(distro) | ◑(distro) | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Per-investigation workspace | ✅ | ✗ | ◑(bundle) | ◑(files) | ◑ | ✗ | ✗ | ◑ | ✅(db) | ◑ | ✅(sha256 dir) | ✗ |
 | Per-tool-call evidence/provenance | ◑ | ✗ | ✅ | ✅ | ◑ | ✗ | ✗ | ◑ | ✅ | ◑ | ✅(4-part) | ✗ |
@@ -286,8 +320,10 @@ only partially covers.
   split in-analysis. *High value, matches house doctrine.*
 - **G7 — Binary modify/repack** (OFRAK). Design is analysis-only. *Adopt by wrapping OFRAK;
   do not build.*
-- **G5 — Live operator console** (VRAX, OpenClaw, FACT). Replayable trail but no live view.
-  *Medium; a read-only tail of the workspace evidence log is the cheap version.*
+- **G5 — Live operator console** (EMBA's EMBArk, OpenClaw, FACT; VRAX downgraded to described,
+  §1.4). Replayable trail but no live view. *Medium; a read-only tail of the workspace evidence
+  log is the cheap version. Prior art is now verified-shipping (EMBArk), not just VRAX's
+  described console.*
 - **G4 — Outbound integrations** (OpenClaw/Composio). Evidence bundle exists but no connector
   to ship it. *Medium; one connector (file/email of the bundle) covers 80%.*
 - **G6 — Narrow tool-lane additions** (Kali): tshark + a fuzzer as `core`. *Low; everything
@@ -388,7 +424,12 @@ The baseline users expect, distilled for the downstream design tickets this one 
 - **The one thing to stop claiming:** raw tool count as the differentiator. The design
   already says so (`design/wq3806_limpet_architecture.md:269-270`); the marketing/positioning
   must follow it.
-- **Re-verify when search is restored:** every *(described)* platform (OpenClaw, VRAX,
-  ReCopilot, reverse-skill, Recon-SQL, the 13bm/bethington tool counts) before any of A3/A5/
-  A6 is turned into a build commitment (ISSUE-LOG #1325 records why they are described, not
-  verified).
+- **Re-verification done (wq#3995 — caveat lifted):** the independent live-search pass
+  (`/home/lumen/scratch/research/limpet_live_search_2026-10-14.md`, PART A) confirmed every
+  entity the first pass could only mark *(described)* — OpenClaw, VRAX, ReCopilot,
+  reverse-skill, Recon-SQL, the 13bm/bethington tool counts — is REAL. Net changes carried into
+  this doc: OpenClaw ~180K users (not 340K stars); bethington/ghidra-mcp 244–256 tools (not
+  ≈209) now shipping lazy tool loading (tool-count confirmed not a moat); VRAX downgraded to a
+  described architecture (single LinkedIn source); ReCopilot carries a China-hosted
+  data-egress caveat; EMBA adds AI/diffing/EMBArk. A3/A5/A6 are cleared to proceed on verified
+  grounding (A5 design-only, subject to the ReCopilot egress caveat).
