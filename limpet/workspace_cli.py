@@ -11,6 +11,8 @@ template search at a tmp dir (a falsifiable boundary, outside the real /etc).
   limpet-workspace templates validate <path>                   check a custom template
   limpet-workspace obligations list|open|resolve|waive <ws>    the RE obligation ledger
   limpet-workspace obligations verify <ws>                     exit 3 while any is open
+  limpet-workspace critic review <ws> <finding.json> --verdict ... --rationale ...
+                                                                 wq#3966 critic/adjudicate step
 
 The agent chat command ``/export`` (agent-chat GUI, design/wq3903) maps straight
 onto ``export`` via ``chat_export`` below, so the agent and a headless SSH operator
@@ -18,7 +20,9 @@ drive the exact same code path.
 
 Exit 0 on success, 1 on usage/not-found, 2 on a report/template/ledger error, matching
 ``limpet/cli.py`` so scripts can branch on the code; ``obligations verify`` exits 3
-when done is refused because an obligation is still open.
+when done is refused because an obligation is still open; ``critic review`` exits 2
+when the deterministic gate rejects the finding, 3 when the critic contests it (a
+ledger obligation was opened and needs resolving), 0 when accepted.
 """
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ import json
 import os
 import sys
 
+import critic as critic_pass
 import obligations as ob_ledger
 import workspace_report as wr
 
@@ -206,6 +211,31 @@ def _cmd_ob_verify(args):
     return 0 if result["ok"] else 3
 
 
+def _cmd_critic_review(args):
+    try:
+        with open(args.finding, encoding="utf-8") as fh:
+            finding = json.load(fh)
+    except (OSError, ValueError) as exc:
+        _emit({"ok": False, "error": f"cannot read finding: {exc}"}, args.json)
+        print(f"error: cannot read finding {args.finding}: {exc}", file=sys.stderr)
+        return 1
+    try:
+        result = critic_pass.review(args.workspace, finding, critic_verdict=args.verdict,
+                                    critic_rationale=args.rationale, by=args.by,
+                                    commit=not args.no_commit)
+    except (critic_pass.CriticError, ob_ledger.ObligationError) as exc:
+        return _ob_fail(exc, args.json)
+    _emit({"ok": result["verdict"] != critic_pass.VERDICT_REJECTED, **result}, args.json)
+    if not args.json:
+        print(f"{result['verdict']}\t{finding.get('id', '?')}")
+        for reason in result["reasons"]:
+            print(f"  {reason}", file=sys.stderr if result["verdict"] == critic_pass.VERDICT_REJECTED else sys.stdout)
+        if result["obligation"]:
+            print(f"  opened {result['obligation']['id']}")
+    return {critic_pass.VERDICT_ACCEPTED: 0, critic_pass.VERDICT_REJECTED: 2,
+            critic_pass.VERDICT_CONTESTED: 3}[result["verdict"]]
+
+
 def _fixture_ir():
     """A minimal but complete IR used to dry-render a template under validation."""
     return {
@@ -314,6 +344,18 @@ def build_parser():
     ov = osub.add_parser("verify", help="the agent verify-step gate: exit 3 while any obligation is open")
     ov.add_argument("workspace")
     ov.set_defaults(func=_cmd_ob_verify)
+
+    cp = sub.add_parser("critic", help="wq#3966 adversarial critic pass on a proposed finding")
+    csub = cp.add_subparsers(dest="ccmd", required=True)
+    cr = csub.add_parser("review", help="deterministic gate + critic-model verdict -> accept/reject/contest")
+    cr.add_argument("workspace")
+    cr.add_argument("finding", help="path to the finding JSON (e.g. evidence/findings/F-001.json)")
+    cr.add_argument("--verdict", required=True, choices=critic_pass.CRITIC_VERDICTS,
+                    help="the second model call's verdict on the finding")
+    cr.add_argument("--rationale", required=True, help="the critic model's rationale")
+    cr.add_argument("--by", default="critic")
+    cr.add_argument("--no-commit", action="store_true", help="write a contested obligation without a git commit")
+    cr.set_defaults(func=_cmd_critic_review)
 
     return p
 

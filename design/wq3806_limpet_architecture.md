@@ -276,6 +276,15 @@ reproducible:
   (CLI: `obligations verify`, exit 3) and refuses "done" while any obligation is open:
   each must be resolved with at least one workspace evidence ref or REA `ev_` id, or
   waived with a reason. The report renders the ledger.
+- **Critic pass (wq#3966).** Before a proposed finding is committed, `limpet/critic.py`
+  runs a propose/critic/adjudicate step (CLI `limpet-workspace critic review`): a
+  deterministic gate refuses a finding with no cited evidence or one that names a
+  currently-open ledger obligation in its `closes` list (closing one is a deliberate
+  `obligations.resolve`/`waive` act, never a side effect), then a second model call --
+  a distinct falsify-this-claim prompt, possibly the same local model -- either accepts
+  the finding or contests it. A contested finding is never silently dropped: a ledger
+  obligation records the disagreement instead, so it stays tracked until resolved or
+  waived.
 - **Autonomy boundary.** The agent orchestrates *enabled* tools freely. It may *propose*
   promoting a `community` plugin (with rationale) but cannot self-promote — promotion is
   the §3 trust-gate, a review decision. This keeps "fully autonomous RE" (VISION.md) true
