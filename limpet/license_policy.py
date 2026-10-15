@@ -35,18 +35,9 @@ BUNDLEABLE_POSTURES = frozenset({"bundle"})
 
 # Entries that predate wq#3959's policy and have not been license-audited yet.
 # Frozen by wq#4048 as the ratchet baseline -- remove names as they are audited,
-# never add new ones.
-LEGACY_UNAUDITED = frozenset(
-    {
-        "unblob", "binwalk", "fwanalyzer", "fwtriage", "radare2", "llm4decompile",
-        "ifda", "cutter", "frida", "qemu-user", "qemu-system", "gdb-multiarch",
-        "qiling", "halucinator", "firmwire", "fuzzware", "pretender", "openocd",
-        "flashrom", "rkdeveloptool", "mtkclient", "edl", "heimdall",
-        "spreadtrum_flash", "hackrf", "sigrok-cli", "sootty", "netzob", "jadx",
-        "apktool", "scrcpy", "rea", "ghidra-mcp", "searchsploit", "component-id",
-        "fw-diff", "gepetto", "pyamlboot", "sunxi-fel", "fiedka", "glitchkit",
-    }
-)
+# never add new ones. wq#4050 audited and removed the last 41; kept empty so the
+# ratchet now covers every entry in the catalog.
+LEGACY_UNAUDITED: frozenset[str] = frozenset()
 
 
 def check_entry(entry: dict) -> list[str]:

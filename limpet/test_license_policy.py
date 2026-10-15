@@ -27,6 +27,20 @@ def test_tshark_is_classified_copyleft_with_a_source_offer():
     assert entry["license_risk"] == "copyleft-source-offer"
 
 
+@pytest.mark.parametrize(
+    "name", ["qemu-user", "qemu-system", "gdb-multiarch", "flashrom", "openocd",
+             "sigrok-cli", "radare2"]
+)
+def test_gpl_bundling_tools_state_a_source_offer_obligation(name):
+    # wq#4050: the trust=core tools wq#4048's judgment flagged as high-probability
+    # copyleft must land classified as copyleft, bundled, and with the ISO's
+    # source-offer obligation spelled out in provenance -- not just a bare enum value.
+    entry = next(t for t in lp.load_tools(CATALOG) if t["name"] == name)
+    assert entry["license_risk"] == "copyleft-source-offer"
+    assert entry["redistribution_posture"] == "bundle"
+    assert "source offer" in entry["provenance"]
+
+
 def test_new_entry_without_the_fields_is_a_violation():
     # The ratchet: a name outside the frozen legacy backlog must carry both fields.
     problems = lp.check_entry({"name": "brand-new-tool", "license": "GPL-3.0"})
@@ -34,9 +48,19 @@ def test_new_entry_without_the_fields_is_a_violation():
     assert "missing license_risk and redistribution_posture" in problems[0]
 
 
-def test_legacy_entry_without_the_fields_is_exempt():
-    assert lp.check_entry({"name": "binwalk", "license": "MIT"}) == []
-    assert "binwalk" in lp.LEGACY_UNAUDITED
+def test_legacy_unaudited_backlog_is_cleared():
+    # wq#4050: the 41 pre-policy entries are all audited now; the ratchet baseline
+    # frozen by wq#4048 shrinks to empty rather than ever gaining a name.
+    assert lp.LEGACY_UNAUDITED == frozenset()
+
+
+def test_legacy_entry_without_the_fields_is_exempt(monkeypatch):
+    # LEGACY_UNAUDITED is empty on the live catalog (wq#4050), so this exercises
+    # the exemption mechanism itself against a synthetic legacy name rather than
+    # a real one -- there is no real one left to exercise it against.
+    monkeypatch.setattr(lp, "LEGACY_UNAUDITED", frozenset({"some-legacy-tool"}))
+    assert lp.check_entry({"name": "some-legacy-tool", "license": "MIT"}) == []
+    assert "some-legacy-tool" in lp.LEGACY_UNAUDITED
 
 
 def test_partial_declaration_names_only_the_missing_field():
@@ -62,9 +86,10 @@ def test_out_of_enum_values_are_rejected(entry, expected):
     assert expected in problems[0]
 
 
-def test_legacy_exemption_does_not_excuse_a_bad_value():
+def test_legacy_exemption_does_not_excuse_a_bad_value(monkeypatch):
     # Exempt from "must declare", not from "declare it correctly".
-    problems = lp.check_entry({"name": "binwalk", "license_risk": "mit-ish"})
+    monkeypatch.setattr(lp, "LEGACY_UNAUDITED", frozenset({"some-legacy-tool"}))
+    problems = lp.check_entry({"name": "some-legacy-tool", "license_risk": "mit-ish"})
     assert len(problems) == 1
     assert "license_risk='mit-ish'" in problems[0]
 
