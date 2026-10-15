@@ -4,7 +4,7 @@ Tracks RE/dev tools evaluated for fleet-wide adoption (MCP registration through
 Commander, cross-host install) that are significant enough to need a documented go/no-go,
 distinct from the routine `/home/lumen/bin` inventory in minerva's FLEET_TOOLS.md.
 
-## Maksoor RE workstation — verified tool inventory (2026-10-14, wq#3803)
+## Maksoor RE workstation — verified tool inventory (2026-10-14, wq#3803; Phase 1-3 rows added 2026-10-15, wq#4012)
 
 Host: `maksoor` (user `maksoor`, tailnet 100.81.204.74; the `maksoor` ssh alias on Lumen now
 resolves to this — it did not before wq#3803). Probed live over ssh on 2026-10-14. "PATH" below means the
@@ -13,7 +13,7 @@ non-interactive ssh PATH (what Commander/fworker/scripts see).
 | Tool | Version | Location | On non-interactive PATH |
 |---|---|---|---|
 | Ghidra (+ `analyzeHeadless`) | 12.1.3 | /opt/ghidra (`ghidraRun` in /usr/local/bin) | analyzeHeadless: no (use /opt/ghidra/support/analyzeHeadless) |
-| REA (`rea-agents`) | 6.4.0 | ~/.npm-global/bin/rea | NO — interactive .bashrc only; MCP entry uses the absolute path |
+| REA (`rea-agents`) | 6.4.0 (verified 2026-10-14; lumen_state `maksoor.rea_mcp` still says 6.4.0; not re-probed since — Lumen's own copy separately drifted to 6.5.0, see REA section below) | ~/.npm-global/bin/rea | NO — interactive .bashrc only; MCP entry uses the absolute path |
 | binwalk | installed | /usr/bin/binwalk | yes |
 | unblob | 26.6.4 | /usr/local/bin/unblob | yes |
 | frida | 17.18.0 | /usr/local/bin/frida (+ /opt/re-venv) | yes |
@@ -24,11 +24,26 @@ non-interactive ssh PATH (what Commander/fworker/scripts see).
 | mtkclient (`mtk`) / edl | installed | /opt/re-venv/bin/{mtk,edl}; /opt/mtkclient | NO — venv path only |
 | heimdall | installed | /usr/bin/heimdall | yes |
 | ollama | NOT INSTALLED | — | — |
+| capa | 9.4.0 | /usr/local/bin | not re-probed — ssh not available to this ticket's worker; location implies yes |
+| UEFITool | A72 suite | /opt/UEFITool | not re-probed |
+| Renode | 1.17.0 | /opt/renode | not re-probed |
+| angr | 10.0.3 | /opt/angr-venv | not re-probed — venv path implies NO |
+| oscura / wireskein / sootty / avatar2 | 0.0.1 / 0.0.16 / 1.0 / 1.4.7 | /opt/re-venv | not re-probed — venv path implies NO |
+| Gepetto / Diaphora | installed (Ghidra extensions) | Ghidra Extensions | n/a — Ghidra plugins, not standalone binaries |
+| EMBA | repo + Docker image (34.4GB) | /opt/emba | not re-probed |
+| Docker CE | 29.9.0 | — | not re-probed |
 
 Notes: `rea` and `mtk`/`edl` are intentionally not on the system PATH (home/venv installs). Maksoor
 also carries the longer tool list recorded in lumen_state (`maksoor.node_provisioning`: cutter, jadx,
 apktool, scrcpy, sigrok, etc.); only the tools above were re-verified on 2026-10-14.
 There is no local LLM runtime on Maksoor (`ollama` absent) — inference for RE work goes through Lumen/LiteLLM.
+The `capa`...`Docker CE` rows (RE Phase 1-3, wq#4012) come from `lumen_state` (`maksoor.re_toolset`,
+since 2026-10-13) rather than a fresh ssh probe — this registry had drifted behind that install by two
+days before this update (wq#4012). OFRAK stays deferred (Python 3.14 incompatible, pinned aiohttp
+3.8.x) and is intentionally not listed as installed. Run
+`python3 scripts/check_maksoor_tool_registry_drift.py` after any future `maksoor.re_toolset` change —
+it fails if a lumen_state-reported tool name is missing from this section, so this table can't drift
+silently again.
 
 ## REA (Reverse Engineer Anything) — github.com/morluto/rea / npm `rea-agents`
 
