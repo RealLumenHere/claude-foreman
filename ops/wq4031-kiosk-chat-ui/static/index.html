@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Lumen Kiosk</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="log" role="log"></div>
+
+  <video id="camera" autoplay playsinline muted style="display:none"></video>
+  <canvas id="snapshot-canvas" style="display:none"></canvas>
+
+  <form id="chat-form">
+    <input id="chat-input" type="text" placeholder="Type a message" autocomplete="off">
+    <button id="send-btn" type="submit">Send</button>
+    <button id="voice-btn" type="button">&#127908; Voice</button>
+    <button id="camera-btn" type="button">&#128247; Snapshot</button>
+  </form>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
