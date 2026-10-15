@@ -6,6 +6,42 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#3997 — adopt a published RE-agent benchmark as the eval instrument
+
+**D1 — adopt AgentRE-Bench as the default instrument; keep the loader benchmark-agnostic.**
+The live search (`scratch/research/limpet_live_search_2026-10-14.md` A1) surfaced three
+published agentic-RE benchmarks: CrackMeBench (arXiv 2605.10597), AgentRE-Bench
+(agentre-bench.ai), and a survey (arXiv 2604.14317). AgentRE-Bench is the default source
+because its unit of evaluation — an agent that plans, drives tools, and produces graded
+findings end to end — is exactly what the appliance ships; CrackMeBench scores single-binary
+software-license reversing, a narrower, software-centric slice further from the firmware/
+hardware emphasis the ticket's selection criterion names. The loader (`limpet/benchmark.py`
+`load_suite`) is nonetheless benchmark-agnostic: it reads `[[task]]` tables from
+`limpet/benchmark.d/*.toml`, each tagged with its source `benchmark` and `target_class`, so
+which benchmark the appliance is measured against is a question of which drop-ins ship, not of
+code — the one-schema-many-files posture of the target-device catalog (wq#3940). Rationale
+and candidate comparison: `design/wq3997_limpet_re_benchmark.md`.
+
+**D2 — the instrument is pure and offline-testable; the agent is an injected boundary.**
+Limpet's agent core is design-only (`design/wq3806_limpet_architecture.md` §6; same note in
+`critic.py`/`model_router.py`), so `run_suite(suite, agent)` takes the agent as a callable and
+never places a model call. With no agent core, the honest baseline is zero, which the CLI's
+default `null` agent reports (`limpet-bench run --agent null` → `score: 0.0`) — the forcing
+function the ticket wants. `oracle` returns ground truth and scores 1.0 as a harness self-test.
+`periodic()` wraps the single-shot run in an injectable-sleep loop (the `daemon.py` shape) and
+emits `schema: limpet-bench/1` JSON-lines records that make a re-run resumable on unchanged
+task digests (the macbench `row_digest` idiom).
+
+**Scope held back, on purpose.** The real AgentRE-Bench task set is **not** vendored here:
+fetching it needs network egress the build sandbox lacks (`fleet-search web` down fleet-wide,
+wq#2595; no web tool granted — the exact wall the prior wq#3997 attempt hit). This ticket ships
+the instrument plus a committed **offline fixture** (`limpet/benchmark.d/agentre_fixture.toml`)
+modeling the published task schema, firmware-leaning to match the appliance. Vendoring the live
+dataset and confirming its firmware/hardware task proportion against D1's criterion is a
+follow-up needing egress — a drop-in file, not a code change. Deploy wiring of the periodic run
+(a systemd timer / detached `lumen-run`, never foreground-unattended per instinct 5) rides with
+that follow-up.
+
 ## wq#4010 — ESP32-S3 / ESP32 Bit Pirate bench-tool catalog entries
 
 **D1 — offensive RF/Wi-Fi/BLE/sub-GHz/ESP-SDR modes stay out of the Limpet default image.**
