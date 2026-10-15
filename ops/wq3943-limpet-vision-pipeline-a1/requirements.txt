@@ -1,0 +1,7 @@
+# limpet-vision-mcp runtime deps (wq#3943). Same pin as
+# ops/wq3882-limpet-flashrom-mcp-a1 (the FastMCP reference this follows) —
+# 2.x import layout not verified offline from the build lane; server.py
+# already tries both layouts. capture_ops/vision_ops/component_lookup_ops
+# use only the stdlib (urllib, subprocess) so they stay testable without
+# this installed.
+mcp>=1.9,<2

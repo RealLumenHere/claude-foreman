@@ -189,6 +189,67 @@ def test_device_node_falls_back_to_bus_path_without_resolver():
     assert plugin.device_node(device) == "/dev/bus/usb/002/004"
 
 
+def _make_video_node(tmp_path, index, name, driver="uvcvideo"):
+    node = tmp_path / "sys/class/video4linux" / f"video{index}"
+    node.mkdir(parents=True)
+    (node / "name").write_text(name + "\n")
+    device_dir = tmp_path / "sys/devices/usb_fake" / f"dev{index}"
+    device_dir.mkdir(parents=True)
+    driver_dir = tmp_path / "sys/bus/usb/drivers" / driver
+    driver_dir.mkdir(parents=True, exist_ok=True)
+    os.symlink(driver_dir, device_dir / "driver")
+    os.symlink(device_dir, node / "device")
+    return node
+
+
+def test_detect_video_devices_classifies_webcam_by_default(tmp_path):
+    _make_video_node(tmp_path, 0, "Generic UVC WebCam: USB Camera")
+    found = hal.detect_video_devices(str(tmp_path / "sys/class/video4linux/video*"))
+    assert found == [{
+        "hw_type": "webcam",
+        "name": "Generic UVC WebCam: USB Camera",
+        "capabilities": ["visual_input", "pcb_imaging"],
+        "device_node": "/dev/video0",
+        "status": "connected",
+        "usb_id": "",
+        "descriptor": "Generic UVC WebCam: USB Camera",
+    }]
+
+
+def test_detect_video_devices_classifies_hdmi_capture_by_name(tmp_path):
+    _make_video_node(tmp_path, 1, "MACROSILICON USB Capture HDMI")
+    found = hal.detect_video_devices(str(tmp_path / "sys/class/video4linux/video*"))
+    assert found[0]["hw_type"] == "hdmi_capture"
+    assert found[0]["capabilities"] == ["visual_input", "screen_reading", "kvm"]
+
+
+def test_detect_video_devices_skips_known_nodes(tmp_path):
+    _make_video_node(tmp_path, 0, "Magewell USB Capture HDMI Gen 2")
+    found = hal.detect_video_devices(
+        str(tmp_path / "sys/class/video4linux/video*"),
+        known_device_nodes=frozenset({"/dev/video0"}),
+    )
+    assert found == []
+
+
+def test_detect_video_devices_skips_non_uvc_driver(tmp_path):
+    _make_video_node(tmp_path, 2, "Built-in codec", driver="some-other-driver")
+    found = hal.detect_video_devices(str(tmp_path / "sys/class/video4linux/video*"))
+    assert found == []
+
+
+def test_detect_video_devices_empty_glob_returns_nothing(tmp_path):
+    assert hal.detect_video_devices(str(tmp_path / "sys/class/video4linux/video*")) == []
+
+
+def test_cli_detect_video_outputs_json(capsys):
+    hal.main(["detect-video"])
+    out = capsys.readouterr().out
+    import json
+
+    assert isinstance(json.loads(out), list)
+
+
 def test_cli_detect_outputs_json(capsys):
     hal.main(["detect"])
     out = capsys.readouterr().out

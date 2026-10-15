@@ -23,8 +23,17 @@ this module exists to prevent. wq#3819 narrowed them; `tests/test_hal.py`'s
 ORDINARY_LSUSB_SAMPLE is the regression guard (probes drawn from outside the matched
 population, per wq#2630).
 
+wq#3943 extends this with `detect_video_devices()`: generic UVC webcams carry no
+stable VID:PID at all (`limpet/hardware.d/07-usb-webcams.toml`'s whole point — "no
+VID:PID list by design"), so they can't be found by the VID:PID/desc_patterns match
+above. That function instead walks /sys/class/video4linux directly and classifies
+each uvcvideo-bound node as hdmi_capture or webcam by card-name heuristic
+(research/WQ3922_VISION_HDMI_CAPTURE.md §G-b), independent of the REGISTRY/detect()
+path above so the well-tested VID:PID matching here is untouched.
+
 CLI:
     python3 hal.py detect        # JSON: only hardware currently connected
+    python3 hal.py detect-video  # JSON: V4L2 webcam/HDMI-capture nodes (wq#3943)
     python3 hal.py list-plugins  # JSON: every supported hardware class, connected or not
 """
 from __future__ import annotations
@@ -184,7 +193,15 @@ REGISTRY: tuple[HardwarePlugin, ...] = (
         hw_type="hdmi_capture",
         name="Magewell HDMI Capture",
         capabilities=("visual_input", "screen_reading", "kvm"),
-        usb_ids=frozenset({("2935", "0008"), ("2935", "0007")}),
+        usb_ids=frozenset({
+            ("2935", "0008"), ("2935", "0007"),
+            # wq#3943/wq#3924: MacroSilicon MS2109/MS2130 generic capture dongles.
+            # limpet/hardware.d/06-hdmi-capture.toml marks these confidence="low" --
+            # VID:PID is batch/rebrand-dependent for this commodity silicon, so a miss
+            # here is expected and falls through to detect_video_devices()'s
+            # card-name classification below, not a bug in this set.
+            ("534d", "2109"), ("345f", "2130"),
+        }),
         desc_patterns=("magewell",),
         node_resolver=_video_node_for,
     ),
@@ -268,6 +285,56 @@ REGISTRY: tuple[HardwarePlugin, ...] = (
     ),
 )
 
+# wq#3943 §G-b: a capture card's V4L2 card-name string is the fallback classifier for
+# commodity UVC capture dongles whose VID:PID is batch-dependent (MS2109/MS2130 above).
+# A bare vendor/product name here is fine (unlike desc_patterns above) because every
+# candidate is already known to be a video4linux node -- there is no "ordinary device"
+# population for a name-string match to misfire against.
+_HDMI_CARD_NAME_HINTS = ("hdmi", "usb capture", "macrosilicon", "magewell")
+
+
+def detect_video_devices(
+    video4linux_glob: str = "/sys/class/video4linux/video*",
+    known_device_nodes: frozenset[str] = frozenset(),
+) -> list[dict]:
+    """Enumerate every /dev/videoN the kernel's uvcvideo driver has bound and
+    classify each as hdmi_capture or webcam by card-name heuristic (research/
+    WQ3922_VISION_HDMI_CAPTURE.md §G-b) -- the fallback for devices `detect()`
+    can't place by VID:PID (generic UVC webcams have none at all;
+    `limpet/hardware.d/07-usb-webcams.toml`). `known_device_nodes` excludes
+    nodes `detect()` already matched by VID:PID so a Magewell/MS2109 unit
+    isn't reported twice. Kept separate from `detect()` (not merged into its
+    REGISTRY loop) so that function's existing VID:PID/desc_patterns contract
+    and tests are untouched by this independent, sysfs-driven detection axis.
+    """
+    found = []
+    for node_dir in sorted(glob.glob(video4linux_glob)):
+        dev_node = f"/dev/{os.path.basename(node_dir)}"
+        if dev_node in known_device_nodes:
+            continue
+        driver_link = os.path.join(node_dir, "device", "driver")
+        if os.path.islink(driver_link):
+            driver = os.path.basename(os.path.realpath(driver_link))
+            if driver != "uvcvideo":
+                continue  # a non-UVC video4linux node (e.g. a built-in codec) -- not ours
+        name_file = os.path.join(node_dir, "name")
+        try:
+            name = open(name_file).read().strip()
+        except OSError:
+            name = ""
+        is_hdmi = any(hint in name.lower() for hint in _HDMI_CARD_NAME_HINTS)
+        found.append({
+            "hw_type": "hdmi_capture" if is_hdmi else "webcam",
+            "name": name or "Unidentified UVC video device",
+            "capabilities": list(("visual_input", "screen_reading", "kvm") if is_hdmi
+                                  else ("visual_input", "pcb_imaging")),
+            "device_node": dev_node,
+            "status": "connected",
+            "usb_id": "",
+            "descriptor": name,
+        })
+    return found
+
 
 def _target_db_matches(device: UsbDevice) -> list[dict]:
     """wq#3940 real-time enrichment: query the SoC boot-mode database for this
@@ -327,11 +394,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("detect", help="JSON of currently connected hardware")
+    sub.add_parser("detect-video", help="JSON of V4L2 webcam/HDMI-capture nodes (wq#3943)")
     sub.add_parser("list-plugins", help="JSON of every supported hardware class")
     args = parser.parse_args(argv)
 
     if args.command == "detect":
         print(json.dumps(detect(), indent=2))
+    elif args.command == "detect-video":
+        hdmi_nodes = frozenset(e["device_node"] for e in detect() if e["hw_type"] == "hdmi_capture")
+        print(json.dumps(detect_video_devices(known_device_nodes=hdmi_nodes), indent=2))
     elif args.command == "list-plugins":
         print(json.dumps(list_plugins(), indent=2))
     return 0
