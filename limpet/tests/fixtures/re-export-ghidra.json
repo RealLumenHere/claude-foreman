@@ -1,0 +1,24 @@
+{
+  "binary": "target/fw.bin",
+  "source": "ghidra",
+  "functions": [
+    {"addr": "0x001000", "name": "main", "size": 240},
+    {"addr": "0x0010f0", "name": "check_password", "size": 96},
+    {"addr": "0x001150", "name": "reboot_handler", "size": 48}
+  ],
+  "strings": [
+    {"addr": "0x0020a0", "value": "login failed", "encoding": "ascii"},
+    {"addr": "0x0020c0", "value": "admin password required", "encoding": "ascii"},
+    {"addr": "0x0020e8", "value": "/etc/shadow", "encoding": "ascii"}
+  ],
+  "xrefs": [
+    {"from": "0x001000", "to": "0x0010f0", "kind": "call"},
+    {"from": "0x0010f0", "to": "0x0020c0", "kind": "data"},
+    {"from": "0x0010f0", "to": "0x0020e8", "kind": "data"}
+  ],
+  "symbols": [
+    {"addr": "0x001000", "name": "main", "kind": "function"},
+    {"addr": "0x0010f0", "name": "check_password", "kind": "function"},
+    {"addr": "0x003000", "name": "g_session_key", "kind": "object"}
+  ]
+}

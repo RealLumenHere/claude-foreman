@@ -36,6 +36,7 @@ import sys
 import critic as critic_pass
 import obligations as ob_ledger
 import workspace_console as wcon
+import workspace_index as wi
 import workspace_report as wr
 
 
@@ -252,6 +253,39 @@ def _cmd_console(args):
     return 0
 
 
+def _cmd_index_build(args):
+    try:
+        counts = wi.build_index(args.workspace, manifest_name=args.manifest)
+    except wi.IndexError_ as exc:
+        _emit({"ok": False, "error": str(exc)}, args.json)
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    _emit({"ok": True, "index": wi.index_path(args.workspace), "counts": counts}, args.json)
+    if not args.json:
+        print(wi.index_path(args.workspace))
+        for table in ("functions", "strings", "xrefs", "symbols", "invocations"):
+            print(f"{table}\t{counts[table]}")
+    return 0
+
+
+def _cmd_index_query(args):
+    """Read-only `query_index` meta-server tool: SQL in, rows out, non-SELECT refused."""
+    try:
+        res = wi.query_index(args.workspace, args.sql, max_rows=args.max_rows)
+    except wi.IndexError_ as exc:
+        _emit({"ok": False, "error": str(exc)}, args.json)
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    _emit({"ok": True, **res}, args.json)
+    if not args.json:
+        print("\t".join(res["columns"]))
+        for row in res["rows"]:
+            print("\t".join("" if v is None else str(v) for v in row))
+        if res["truncated"]:
+            print(f"(truncated at {args.max_rows} rows)", file=sys.stderr)
+    return 0
+
+
 def _fixture_ir():
     """A minimal but complete IR used to dry-render a template under validation."""
     return {
@@ -368,6 +402,18 @@ def build_parser():
     co.add_argument("--poll-interval", type=float, default=wcon.DEFAULT_POLL_INTERVAL,
                     help="seconds between polls in --follow mode")
     co.set_defaults(func=_cmd_console)
+
+    ip = sub.add_parser("index", help="the per-workspace SQLite RE index (wq#3969 / A6)")
+    isub = ip.add_subparsers(dest="icmd", required=True)
+    ib = isub.add_parser("build", help="(re)build index.sqlite from evidence/re-exports + manifest")
+    ib.add_argument("workspace")
+    ib.add_argument("--manifest", default="manifest.json", help="manifest filename in the workspace")
+    ib.set_defaults(func=_cmd_index_build)
+    iq = isub.add_parser("query", help="run a read-only SELECT against the index (non-SELECT refused)")
+    iq.add_argument("workspace")
+    iq.add_argument("sql", help="a single read-only SELECT statement")
+    iq.add_argument("--max-rows", type=int, default=10000, help="cap rows returned (default 10000)")
+    iq.set_defaults(func=_cmd_index_query)
 
     cp = sub.add_parser("critic", help="wq#3966 adversarial critic pass on a proposed finding")
     csub = cp.add_subparsers(dest="ccmd", required=True)
