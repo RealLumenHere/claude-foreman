@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "rea": {
+      "command": "{{PROJECT_DIR}}/bin/rea-guard",
+      "args": ["mcp"],
+      "env": {
+        "GHIDRA_INSTALL_DIR": "/opt/ghidra_12.1.3_PUBLIC",
+        "JAVA_HOME": "/usr/lib/jvm/java-21-openjdk-amd64"
+      }
+    },
+    "rea-maksoor": {
+      "command": "ssh",
+      "args": [
+        "maksoor@100.81.204.74",
+        "/home/maksoor/.npm-global/bin/rea",
+        "mcp"
+      ]
+    }
+  },
+  "_wq4006": {
+    "scope": "project",
+    "reason": "moved off user scope (~/.claude.json) so only sessions opened in this project directory get REA's ~170 RE tools, matching ghidra-lumen's project scope at /data/lumen/archive/re instead of fleet-wide Commander exposure",
+    "pinned_version": "see PROVENANCE.json",
+    "self_update_blocked_by": "bin/rea-guard",
+    "runtime_capture_policy": "common/tools/HOSTILE_INPUT_POLICY.md section 2 — capture/instrument/ADB tools route through rea-maksoor only, never the local Ghidra-only provider"
+  }
+}

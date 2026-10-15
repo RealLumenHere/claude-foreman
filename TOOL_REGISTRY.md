@@ -32,6 +32,17 @@ There is no local LLM runtime on Maksoor (`ollama` absent) — inference for RE 
 
 ## REA (Reverse Engineer Anything) — github.com/morluto/rea / npm `rea-agents`
 
+**Status (2026-10-15, wq#4006): version drifted 6.4.0 -> 6.5.0 on Lumen (npm global install dir
+mtime 2026-10-14 22:26) with still no PROVENANCE/SHA256, unlike `/opt/ghidra-mcp/6.0.0/PROVENANCE`.
+`ops/wq4006-rea-security-rescope-a1/` ships the fix for hold preconditions 1 and 3 below (pin +
+provenance, and move the MCP registration from Lumen-wide user scope in `~/.claude.json` to a
+project scope at `~/re`, mirroring `ghidra-lumen`'s scope at `/data/lumen/archive/re`) plus a
+self-update guard and a hostile-input policy for RE tooling (`common/tools/HOSTILE_INPUT_POLICY.md`,
+none existed before). Per `ops/VERIFY_CONTRACT.md` the bundle is shipped, not applied — `~/.claude.json`
+and `~/re` are outside a sandboxed BUILD worker's granted dirs, and `~/.claude.json` gates every
+Claude Code session on Lumen, so the live cutover is a privileged/non-worker step (see that bundle's
+RUNBOOK.md). Until applied, the state below (superseded install, status as of 2026-10-14) remains live.**
+
 **Status (2026-10-14): INSTALLED on Lumen and Maksoor, Ghidra provider only. The original
 SECURITY HOLD (below) is superseded by the installs, but its preconditions are NOT shown as met — see
 "Open hold preconditions".**
@@ -60,14 +71,22 @@ Live state, verified 2026-10-14 (wq#3803):
 The installs landed (wq#3786 follow-ups) without the registry being updated, so none of these is
 recorded as satisfied anywhere in this repo. Frank should either accept the current state or require them:
 
-1. Pin to a specific commit/release hash. Installed version is 6.4.0, but no commit hash / integrity
-   record of what was installed or how (`npm install` vs `npx rea-agents setup`) exists here.
+1. Pin to a specific commit/release hash. Installed version is 6.4.0 (now drifted to 6.5.0), but no
+   commit hash / integrity record of what was installed or how (`npm install` vs
+   `npx rea-agents setup`) exists here. **wq#4006**: `ops/wq4006-rea-security-rescope-a1/generate_provenance.py`
+   writes `PROVENANCE.json` (version + npm `dist.integrity`) once the bundle is applied; not yet applied.
 2. Read the setup script's install/postinstall hooks in an isolated throwaway environment first.
-   No record that this was done.
+   No record that this was done. Still open.
 3. Scope the MCP registration to a single non-production lane and scope Maksoor ADB access. Current
    registration is Lumen-wide for Claude Code (and `rea-maksoor` reaches the RE host that has live
-   ADB/device access) — i.e. NOT scoped to one lane.
+   ADB/device access) — i.e. NOT scoped to one lane. **wq#4006**: `ops/wq4006-rea-security-rescope-a1/`
+   moves `rea`/`rea-maksoor` to a project scope at `~/re`; not yet applied (privileged step, see
+   that bundle's RUNBOOK.md). Maksoor-side ADB access itself is unchanged by this bundle — the Lumen
+   registration no longer reaches it fleet-wide, but a symmetric guard on the Maksoor host is a
+   separate follow-up.
 4. Re-check for security advisories once the package has had more scrutiny. Not re-run on 2026-10-14.
+   wq#3998/wq#4000 (LIMPET dissection tickets, in flight 2026-10-15) add scrutiny of REA's own repo
+   but are not a security-advisory re-check.
 
 ### Original decision (2026-10-13, superseded — kept for the record)
 

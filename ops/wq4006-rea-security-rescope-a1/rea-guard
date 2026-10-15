@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# wq#4006 — guard wrapper for the project-scoped `rea` MCP registration.
+# Refuses self-update subcommands and execs the pinned real binary for
+# everything else. This is the only path the project's .mcp.json invokes
+# rea through, so it is the enforcement point for "pin the version, block
+# self-update" (TOOL_REGISTRY.md open hold precondition #1/#3).
+set -euo pipefail
+
+REAL_REA="${WQ4006_REAL_REA:-/home/lumen/.npm-global/bin/rea}"
+
+for arg in "$@"; do
+  case "$arg" in
+    update|self-update|upgrade)
+      echo "rea-guard: '$arg' is blocked (wq#4006) — this project pins rea" \
+           "to the version recorded in PROVENANCE.json. Bump it via a" \
+           "reviewed PROVENANCE update, not a live self-update." >&2
+      exit 1
+      ;;
+  esac
+done
+
+exec "$REAL_REA" "$@"
