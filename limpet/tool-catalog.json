@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "catalog_version": "0.1.0-seed",
-  "generated": "2026-10-14",
-  "ticket": "wq#3908",
+  "catalog_version": "0.2.0",
+  "generated": "2026-10-15",
+  "ticket": "wq#3936",
   "provenance": {
     "summary": "Demonstrably-existing RE tool seed, NOT a reconstruction of 147 enumerated rows.",
     "note": "wq#3908 asked to 'save' a tool-catalog.json (147 tools, 9 categories) said to have been created in an earlier design session but never written to disk. The landed architecture decision wq#3806 (design/wq3806_limpet_architecture.md:32-38) already verified that /home/lumen/projects/limpet/ contained only VISION.md and that the '147 tools' figure is a target, not an enumerated input; it explicitly refused to fabricate 147 rows. No DESIGN-DECISIONS.md or 'Universal Hardware RE Tool Catalog research' exists in the repo or any granted directory. This catalog therefore follows wq#3806 section 1.3: seed from the RE surface that demonstrably exists, each entry at the correct trust tier, so the '147' target becomes an auditable outcome of promotion rather than a fabricated claim.",
@@ -12,18 +12,61 @@
       "limpet/examples/*.toml (plugin manifests: upstream URLs, summaries, licenses, wq#3884)"
     ],
     "caveat": "Verified paths/versions reflect the Maksoor RE workstation (the reference RE host, verified 2026-10-14), the seed for the Limpet appliance image; they are not re-verified on a dedicated Limpet node, which does not yet exist. Tools with path=null are catalogued for visibility but are not yet runnable-resolved; import_catalog.py skips them by design rather than guessing a path.",
-    "trust_tiers": "core = proven on fleet, in base image; vetted = passed TOOL_REGISTRY go/no-go; community = present/known but disabled until human promotion (includes HOLD and NO-GO evaluations)."
+    "trust_tiers": "core = proven on fleet, in base image; vetted = passed TOOL_REGISTRY go/no-go; community = present/known but disabled until human promotion (includes HOLD and NO-GO evaluations).",
+    "reconciliation": "wq#3936 (2026-10-15): reconciled the 34 wq#3908-verified rows with all reachable on-disk sources and added install_method/mcp_status/disk_size_estimate/priority. New rows (8): searchsploit, component-id, fw-diff, gepetto, pyamlboot, sunxi-fel, fiedka, glitchkit. searchsploit/component-id/fw-diff from on-disk manifests; gepetto/pyamlboot/sunxi-fel from on-disk research/design docs; fiedka/glitchkit are ticket-named promotion stubs (no verifiable on-disk source, web-verify unavailable per wq#2595) carried at trust=community with url=null rather than fabricated. Sources named by the ticket that are NOT on disk and were therefore not folded in: docs/tool-registry-spec.md, DESIGN-DECISIONS.md, VISION.md and install-wizard-spec.md (the real limpet VISION.md lives in /home/lumen/projects/limpet/, outside this worktree; see design/wq3806_limpet_architecture.md:32-45). Farida Phase 2 signed skills (11 tools) are on a remote node with no manifest reachable from this worktree, so not enumerated here.",
+    "field_methodology": "mcp_status=has_server only where an MCP server file exists on disk (wq#3881/3882/3883 server.py, wq#3942 server.py, rea/ghidra-mcp bridges); else cli_only. install_method is a best-known static class; the authoritative apt/pip/cargo resolution is dpkg -S at ISO build (limpet/iso-builder/gen_tool_packages.py). disk_size_estimate is a coarse planning bucket (small<100MB / medium 100MB-1GB / large>1GB), not a per-host measurement; null where unmeasured. priority maps from trust: core->core, vetted->recommended, community->optional."
   },
   "categories": [
-    {"id": "firmware-extraction", "title": "Firmware extraction & filesystem triage", "description": "Carve, unpack, and audit firmware images and embedded filesystems."},
-    {"id": "disassembly-decompilation", "title": "Disassembly & decompilation", "description": "Static analysis, disassembly, and decompilation of native and managed binaries."},
-    {"id": "dynamic-instrumentation", "title": "Dynamic instrumentation & tracing", "description": "Runtime hooking, tracing, and behavior observation of live processes."},
-    {"id": "emulation-rehosting", "title": "Emulation & firmware re-hosting", "description": "Run firmware without the original hardware via CPU/full-system emulation and peripheral modeling."},
-    {"id": "hardware-flash-debug", "title": "Hardware flashing & debug probes", "description": "JTAG/SWD debug, SPI flash read/write, and SoC-specific download/flash protocols."},
-    {"id": "sdr-signal", "title": "SDR & logic/signal capture", "description": "Software-defined radio and logic-analyzer capture and waveform inspection."},
-    {"id": "protocol-analysis", "title": "Protocol reverse engineering", "description": "Infer and model undocumented wire protocols from traces."},
-    {"id": "mobile-android", "title": "Mobile & Android RE", "description": "APK/DEX analysis, repackaging, and on-device inspection."},
-    {"id": "mcp-bridge", "title": "MCP bridges & meta-tooling", "description": "Model Context Protocol bridges exposing RE engines to agents."}
+    {
+      "id": "firmware-extraction",
+      "title": "Firmware extraction & filesystem triage",
+      "description": "Carve, unpack, and audit firmware images and embedded filesystems."
+    },
+    {
+      "id": "disassembly-decompilation",
+      "title": "Disassembly & decompilation",
+      "description": "Static analysis, disassembly, and decompilation of native and managed binaries."
+    },
+    {
+      "id": "dynamic-instrumentation",
+      "title": "Dynamic instrumentation & tracing",
+      "description": "Runtime hooking, tracing, and behavior observation of live processes."
+    },
+    {
+      "id": "emulation-rehosting",
+      "title": "Emulation & firmware re-hosting",
+      "description": "Run firmware without the original hardware via CPU/full-system emulation and peripheral modeling."
+    },
+    {
+      "id": "hardware-flash-debug",
+      "title": "Hardware flashing & debug probes",
+      "description": "JTAG/SWD debug, SPI flash read/write, and SoC-specific download/flash protocols."
+    },
+    {
+      "id": "sdr-signal",
+      "title": "SDR & logic/signal capture",
+      "description": "Software-defined radio and logic-analyzer capture and waveform inspection."
+    },
+    {
+      "id": "protocol-analysis",
+      "title": "Protocol reverse engineering",
+      "description": "Infer and model undocumented wire protocols from traces."
+    },
+    {
+      "id": "mobile-android",
+      "title": "Mobile & Android RE",
+      "description": "APK/DEX analysis, repackaging, and on-device inspection."
+    },
+    {
+      "id": "mcp-bridge",
+      "title": "MCP bridges & meta-tooling",
+      "description": "Model Context Protocol bridges exposing RE engines to agents."
+    },
+    {
+      "id": "exploit-db",
+      "title": "Exploit & vulnerability databases",
+      "description": "Offline exploit/CVE code search against mirrored databases."
+    }
   ],
   "tools": [
     {
@@ -32,53 +75,105 @@
       "version": "26.6.4",
       "description": "Recursive firmware extraction with format identification and nested-image carving.",
       "category": "firmware-extraction",
-      "capabilities": ["firmware-extraction", "format-identification", "recursive-unpack"],
-      "input_formats": ["firmware-blob", "img", "bin"],
-      "output_formats": ["extracted-filesystem", "json-report"],
-      "architectures": ["any"],
+      "capabilities": [
+        "firmware-extraction",
+        "format-identification",
+        "recursive-unpack"
+      ],
+      "input_formats": [
+        "firmware-blob",
+        "img",
+        "bin"
+      ],
+      "output_formats": [
+        "extracted-filesystem",
+        "json-report"
+      ],
+      "architectures": [
+        "any"
+      ],
       "health_check": "/usr/local/bin/unblob --help",
       "url": "https://github.com/onekey-sec/unblob",
       "license": "MIT",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:18 (verified 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:18 (verified 2026-10-14)",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "binwalk",
       "path": "/usr/bin/binwalk",
       "description": "Signature-based firmware scanning, entropy analysis, and extraction.",
       "category": "firmware-extraction",
-      "capabilities": ["firmware-scanning", "signature-detection", "entropy-analysis", "extraction"],
-      "input_formats": ["firmware-blob", "bin"],
-      "output_formats": ["extracted-filesystem", "report"],
-      "architectures": ["any"],
+      "capabilities": [
+        "firmware-scanning",
+        "signature-detection",
+        "entropy-analysis",
+        "extraction"
+      ],
+      "input_formats": [
+        "firmware-blob",
+        "bin"
+      ],
+      "output_formats": [
+        "extracted-filesystem",
+        "report"
+      ],
+      "architectures": [
+        "any"
+      ],
       "health_check": "/usr/bin/binwalk --help",
       "url": "https://github.com/ReFirmLabs/binwalk",
       "license": "MIT",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:16 (verified 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:16 (verified 2026-10-14)",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "fwanalyzer",
       "version": "1.4.4",
       "description": "Rule-based firmware filesystem image security checks (ext2/3/4, FAT/VFAT, SquashFS, UBIFS).",
       "category": "firmware-extraction",
-      "capabilities": ["filesystem-audit", "policy-checks"],
-      "input_formats": ["filesystem-image"],
-      "output_formats": ["report"],
+      "capabilities": [
+        "filesystem-audit",
+        "policy-checks"
+      ],
+      "input_formats": [
+        "filesystem-image"
+      ],
+      "output_formats": [
+        "report"
+      ],
       "url": "https://github.com/cruise-automation/fwanalyzer",
       "license": "Apache-2.0",
       "trust": "community",
-      "provenance": "limpet/examples/fwanalyzer.toml"
+      "provenance": "limpet/examples/fwanalyzer.toml",
+      "install_method": "binary",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "fwtriage",
       "description": "Firmware triage: automated first-pass reconnaissance over extracted firmware.",
       "category": "firmware-extraction",
-      "capabilities": ["firmware-triage", "reconnaissance"],
+      "capabilities": [
+        "firmware-triage",
+        "reconnaissance"
+      ],
       "url": "https://github.com/taffy210/fw-triage",
       "license": "unverified",
       "trust": "community",
-      "provenance": "limpet/examples/fwtriage.toml"
+      "provenance": "limpet/examples/fwtriage.toml",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "ghidra",
@@ -86,65 +181,150 @@
       "version": "12.1.3",
       "description": "NSA software reverse engineering suite; headless analyzer for scripted disassembly and decompilation.",
       "category": "disassembly-decompilation",
-      "capabilities": ["disassembly", "decompilation", "scripted-analysis"],
-      "input_formats": ["elf", "pe", "raw-binary", "firmware-blob"],
-      "output_formats": ["decompiled-c", "analysis-db"],
-      "architectures": ["arm", "mips", "x86", "x86_64", "riscv", "powerpc", "any"],
+      "capabilities": [
+        "disassembly",
+        "decompilation",
+        "scripted-analysis"
+      ],
+      "input_formats": [
+        "elf",
+        "pe",
+        "raw-binary",
+        "firmware-blob"
+      ],
+      "output_formats": [
+        "decompiled-c",
+        "analysis-db"
+      ],
+      "architectures": [
+        "arm",
+        "mips",
+        "x86",
+        "x86_64",
+        "riscv",
+        "powerpc",
+        "any"
+      ],
       "health_check": "/opt/ghidra/support/analyzeHeadless",
       "url": "https://github.com/NationalSecurityAgency/ghidra",
       "license": "Apache-2.0",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:15 (verified 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:15 (verified 2026-10-14)",
+      "install_method": "binary",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "large",
+      "priority": "core"
     },
     {
       "name": "radare2",
       "path": "/usr/bin/radare2",
       "description": "Command-line reverse engineering framework: disassembly, debugging, and binary patching.",
       "category": "disassembly-decompilation",
-      "capabilities": ["disassembly", "debugging", "binary-patching", "scripting"],
-      "input_formats": ["elf", "pe", "raw-binary", "firmware-blob"],
-      "output_formats": ["disassembly", "analysis-project"],
-      "architectures": ["arm", "mips", "x86", "x86_64", "riscv", "any"],
+      "capabilities": [
+        "disassembly",
+        "debugging",
+        "binary-patching",
+        "scripting"
+      ],
+      "input_formats": [
+        "elf",
+        "pe",
+        "raw-binary",
+        "firmware-blob"
+      ],
+      "output_formats": [
+        "disassembly",
+        "analysis-project"
+      ],
+      "architectures": [
+        "arm",
+        "mips",
+        "x86",
+        "x86_64",
+        "riscv",
+        "any"
+      ],
       "health_check": "/usr/bin/radare2 -version",
       "url": "https://github.com/radareorg/radare2",
       "license": "LGPL-3.0",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:22 (verified 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:22 (verified 2026-10-14)",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "medium",
+      "priority": "core"
     },
     {
       "name": "llm4decompile",
       "description": "Open-source LLM family (1.3B-22B) purpose-built for decompilation; currently x86_64 Linux GCC binaries only.",
       "category": "disassembly-decompilation",
-      "capabilities": ["decompilation", "llm-assisted"],
-      "input_formats": ["x86_64-elf"],
-      "output_formats": ["c-source"],
+      "capabilities": [
+        "decompilation",
+        "llm-assisted"
+      ],
+      "input_formats": [
+        "x86_64-elf"
+      ],
+      "output_formats": [
+        "c-source"
+      ],
       "url": "https://github.com/albertan017/LLM4Decompile",
       "license": "MIT + DeepSeek License",
       "trust": "community",
-      "provenance": "limpet/examples/llm4decompile.toml"
+      "provenance": "limpet/examples/llm4decompile.toml",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "ifda",
       "description": "IoT firmware deep analysis: automated RE and vulnerability discovery with a taint-tracking/LLM-assisted core.",
       "category": "disassembly-decompilation",
-      "capabilities": ["automated-re", "vulnerability-discovery", "taint-tracking"],
-      "input_formats": ["firmware-binary"],
-      "output_formats": ["report"],
+      "capabilities": [
+        "automated-re",
+        "vulnerability-discovery",
+        "taint-tracking"
+      ],
+      "input_formats": [
+        "firmware-binary"
+      ],
+      "output_formats": [
+        "report"
+      ],
       "url": "https://github.com/cn0xroot/IFDA",
       "license": "Apache-2.0",
       "trust": "community",
-      "provenance": "limpet/examples/ifda.toml"
+      "provenance": "limpet/examples/ifda.toml",
+      "install_method": "binary",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "cutter",
       "description": "Qt GUI for the Rizin/radare2 reverse engineering framework.",
       "category": "disassembly-decompilation",
-      "capabilities": ["disassembly", "decompilation", "graph-view"],
-      "architectures": ["arm", "mips", "x86", "x86_64", "any"],
+      "capabilities": [
+        "disassembly",
+        "decompilation",
+        "graph-view"
+      ],
+      "architectures": [
+        "arm",
+        "mips",
+        "x86",
+        "x86_64",
+        "any"
+      ],
       "url": "https://github.com/rizinorg/cutter",
       "license": "GPL-3.0",
       "trust": "community",
-      "provenance": "lumen_state maksoor.node_provisioning (TOOL_REGISTRY.md:29); path not re-verified 2026-10-14"
+      "provenance": "lumen_state maksoor.node_provisioning (TOOL_REGISTRY.md:29); path not re-verified 2026-10-14",
+      "install_method": "binary",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "medium",
+      "priority": "optional"
     },
     {
       "name": "frida",
@@ -152,123 +332,267 @@
       "version": "17.18.0",
       "description": "Dynamic instrumentation toolkit: inject scripts to trace and hook live native/managed processes.",
       "category": "dynamic-instrumentation",
-      "capabilities": ["dynamic-instrumentation", "function-hooking", "runtime-tracing"],
-      "input_formats": ["running-process", "mobile-app"],
-      "output_formats": ["trace", "hooked-values"],
-      "architectures": ["arm", "arm64", "x86", "x86_64"],
+      "capabilities": [
+        "dynamic-instrumentation",
+        "function-hooking",
+        "runtime-tracing"
+      ],
+      "input_formats": [
+        "running-process",
+        "mobile-app"
+      ],
+      "output_formats": [
+        "trace",
+        "hooked-values"
+      ],
+      "architectures": [
+        "arm",
+        "arm64",
+        "x86",
+        "x86_64"
+      ],
       "health_check": "/usr/local/bin/frida --version",
       "url": "https://github.com/frida/frida",
       "license": "wxWindows",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:19 (verified 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:19 (verified 2026-10-14)",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "qemu-user",
       "path": "/usr/bin/qemu-arm",
       "description": "QEMU user-mode emulation for running individual cross-architecture firmware binaries.",
       "category": "emulation-rehosting",
-      "capabilities": ["user-mode-emulation", "cross-arch-execution"],
-      "input_formats": ["elf"],
-      "output_formats": ["runtime-behavior"],
-      "architectures": ["arm", "mips", "x86", "riscv", "powerpc"],
+      "capabilities": [
+        "user-mode-emulation",
+        "cross-arch-execution"
+      ],
+      "input_formats": [
+        "elf"
+      ],
+      "output_formats": [
+        "runtime-behavior"
+      ],
+      "architectures": [
+        "arm",
+        "mips",
+        "x86",
+        "riscv",
+        "powerpc"
+      ],
       "health_check": "/usr/bin/qemu-arm -version",
       "url": "https://www.qemu.org",
       "license": "GPL-2.0",
       "trust": "core",
-      "provenance": "design/wq3806_limpet_architecture.md:98 (fleet firmware-emulation skill)"
+      "provenance": "design/wq3806_limpet_architecture.md:98 (fleet firmware-emulation skill)",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "medium",
+      "priority": "core"
     },
     {
       "name": "qemu-system",
       "path": "/usr/bin/qemu-system-arm",
       "description": "QEMU full-system emulation for booting a complete firmware stack with peripheral models.",
       "category": "emulation-rehosting",
-      "capabilities": ["full-system-emulation", "firmware-boot"],
-      "input_formats": ["firmware-image", "kernel"],
-      "output_formats": ["runtime-behavior", "serial-console"],
-      "architectures": ["arm", "mips", "x86_64", "riscv", "powerpc"],
+      "capabilities": [
+        "full-system-emulation",
+        "firmware-boot"
+      ],
+      "input_formats": [
+        "firmware-image",
+        "kernel"
+      ],
+      "output_formats": [
+        "runtime-behavior",
+        "serial-console"
+      ],
+      "architectures": [
+        "arm",
+        "mips",
+        "x86_64",
+        "riscv",
+        "powerpc"
+      ],
       "health_check": "/usr/bin/qemu-system-arm -version",
       "url": "https://www.qemu.org",
       "license": "GPL-2.0",
       "trust": "core",
-      "provenance": "design/wq3806_limpet_architecture.md:98 (fleet firmware-emulation skill)"
+      "provenance": "design/wq3806_limpet_architecture.md:98 (fleet firmware-emulation skill)",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "medium",
+      "priority": "core"
     },
     {
       "name": "gdb-multiarch",
       "path": "/usr/bin/gdb-multiarch",
       "description": "Multi-architecture GDB for debugging emulated and remote firmware targets.",
       "category": "emulation-rehosting",
-      "capabilities": ["debugging", "remote-debugging", "multi-arch"],
-      "input_formats": ["elf", "core-dump"],
-      "output_formats": ["debug-session"],
-      "architectures": ["arm", "mips", "x86", "x86_64", "riscv", "powerpc"],
+      "capabilities": [
+        "debugging",
+        "remote-debugging",
+        "multi-arch"
+      ],
+      "input_formats": [
+        "elf",
+        "core-dump"
+      ],
+      "output_formats": [
+        "debug-session"
+      ],
+      "architectures": [
+        "arm",
+        "mips",
+        "x86",
+        "x86_64",
+        "riscv",
+        "powerpc"
+      ],
       "health_check": "/usr/bin/gdb-multiarch --version",
       "url": "https://www.gnu.org/software/gdb/",
       "license": "GPL-3.0",
       "trust": "core",
-      "provenance": "design/wq3806_limpet_architecture.md:99 (fleet firmware-emulation skill)"
+      "provenance": "design/wq3806_limpet_architecture.md:99 (fleet firmware-emulation skill)",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "medium",
+      "priority": "core"
     },
     {
       "name": "qiling",
       "description": "Unicorn-based cross-platform binary/firmware emulation framework with hookable peripherals.",
       "category": "emulation-rehosting",
-      "capabilities": ["binary-emulation", "firmware-rehosting", "mmio-hooks"],
-      "input_formats": ["firmware-image", "elf"],
-      "output_formats": ["runtime-behavior"],
-      "architectures": ["arm", "mips", "x86", "x86_64", "riscv"],
+      "capabilities": [
+        "binary-emulation",
+        "firmware-rehosting",
+        "mmio-hooks"
+      ],
+      "input_formats": [
+        "firmware-image",
+        "elf"
+      ],
+      "output_formats": [
+        "runtime-behavior"
+      ],
+      "architectures": [
+        "arm",
+        "mips",
+        "x86",
+        "x86_64",
+        "riscv"
+      ],
       "url": "https://github.com/qilingframework/qiling",
       "license": "GPL-2.0",
       "trust": "vetted",
-      "provenance": "TOOL_REGISTRY.md:131 / firmware-emulation skill (Qiling usage in repo)"
+      "provenance": "TOOL_REGISTRY.md:131 / firmware-emulation skill (Qiling usage in repo)",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "recommended"
     },
     {
       "name": "halucinator",
       "version": "1.9.0",
       "description": "HAL (hardware abstraction layer) emulation-based firmware re-hosting framework.",
       "category": "emulation-rehosting",
-      "capabilities": ["firmware-rehosting", "hal-emulation"],
-      "input_formats": ["firmware-image"],
-      "output_formats": ["runtime-behavior"],
+      "capabilities": [
+        "firmware-rehosting",
+        "hal-emulation"
+      ],
+      "input_formats": [
+        "firmware-image"
+      ],
+      "output_formats": [
+        "runtime-behavior"
+      ],
       "url": "https://github.com/halucinator/halucinator",
       "license": "GPL-3.0",
       "trust": "community",
-      "provenance": "limpet/examples/halucinator.toml"
+      "provenance": "limpet/examples/halucinator.toml",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "firmwire",
       "description": "Full-system baseband firmware emulation and fuzzing platform.",
       "category": "emulation-rehosting",
-      "capabilities": ["baseband-emulation", "fuzzing"],
-      "input_formats": ["baseband-firmware"],
-      "output_formats": ["runtime-behavior", "crashes"],
+      "capabilities": [
+        "baseband-emulation",
+        "fuzzing"
+      ],
+      "input_formats": [
+        "baseband-firmware"
+      ],
+      "output_formats": [
+        "runtime-behavior",
+        "crashes"
+      ],
       "url": "https://github.com/firmwire/firmwire",
       "license": "unverified",
       "trust": "community",
-      "provenance": "limpet/examples/firmwire.toml"
+      "provenance": "limpet/examples/firmwire.toml",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "fuzzware",
       "description": "Automated MMIO modeling (angr-based) for ARM Cortex-M3/M4 firmware fuzzing, no hardware-in-the-loop required.",
       "category": "emulation-rehosting",
-      "capabilities": ["mmio-modeling", "firmware-fuzzing"],
-      "input_formats": ["cortex-m-firmware"],
-      "output_formats": ["mmio-config", "crashes"],
-      "architectures": ["arm-cortex-m"],
+      "capabilities": [
+        "mmio-modeling",
+        "firmware-fuzzing"
+      ],
+      "input_formats": [
+        "cortex-m-firmware"
+      ],
+      "output_formats": [
+        "mmio-config",
+        "crashes"
+      ],
+      "architectures": [
+        "arm-cortex-m"
+      ],
       "url": "https://github.com/fuzzware-fuzzer/fuzzware",
       "license": "unverified",
       "trust": "community",
-      "provenance": "limpet/examples/fuzzware.toml; evaluated NO-GO for proposed pipeline (TOOL_REGISTRY.md:147-223)"
+      "provenance": "limpet/examples/fuzzware.toml; evaluated NO-GO for proposed pipeline (TOOL_REGISTRY.md:147-223)",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "pretender",
       "description": "Records MMIO peripheral traffic from real hardware and replays inferred per-register models for firmware re-hosting.",
       "category": "emulation-rehosting",
-      "capabilities": ["mmio-recording", "peripheral-modeling", "firmware-rehosting"],
-      "input_formats": ["firmware-image", "hardware-trace"],
-      "output_formats": ["peripheral-model"],
+      "capabilities": [
+        "mmio-recording",
+        "peripheral-modeling",
+        "firmware-rehosting"
+      ],
+      "input_formats": [
+        "firmware-image",
+        "hardware-trace"
+      ],
+      "output_formats": [
+        "peripheral-model"
+      ],
       "url": "https://github.com/ucsb-seclab/pretender",
       "license": "unverified",
       "trust": "community",
-      "provenance": "limpet/examples/pretender.toml; evaluated NO-GO (TOOL_REGISTRY.md:92-145)"
+      "provenance": "limpet/examples/pretender.toml; evaluated NO-GO (TOOL_REGISTRY.md:92-145)",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "openocd",
@@ -276,14 +600,28 @@
       "version": "0.12.0",
       "description": "On-chip debugger for JTAG/SWD access to microcontrollers and SoCs.",
       "category": "hardware-flash-debug",
-      "capabilities": ["jtag", "swd", "on-chip-debug", "flash-programming"],
-      "input_formats": ["debug-probe"],
-      "output_formats": ["memory-dump", "debug-session"],
+      "capabilities": [
+        "jtag",
+        "swd",
+        "on-chip-debug",
+        "flash-programming"
+      ],
+      "input_formats": [
+        "debug-probe"
+      ],
+      "output_formats": [
+        "memory-dump",
+        "debug-session"
+      ],
       "health_check": "/usr/bin/openocd --version",
       "url": "https://openocd.org",
       "license": "GPL-2.0",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:20 (verified 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:20 (verified 2026-10-14)",
+      "install_method": "apt",
+      "mcp_status": "has_server",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "flashrom",
@@ -291,133 +629,255 @@
       "version": "1.6.0",
       "description": "Read/write/erase SPI, parallel, and LPC flash chips over supported programmers.",
       "category": "hardware-flash-debug",
-      "capabilities": ["spi-flash-read", "spi-flash-write", "chip-identification"],
-      "input_formats": ["flash-programmer"],
-      "output_formats": ["flash-dump"],
+      "capabilities": [
+        "spi-flash-read",
+        "spi-flash-write",
+        "chip-identification"
+      ],
+      "input_formats": [
+        "flash-programmer"
+      ],
+      "output_formats": [
+        "flash-dump"
+      ],
       "health_check": "/usr/sbin/flashrom --version",
       "url": "https://github.com/flashrom/flashrom",
       "license": "GPL-2.0",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:21 (verified 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:21 (verified 2026-10-14)",
+      "install_method": "apt",
+      "mcp_status": "has_server",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "rkdeveloptool",
       "path": "/usr/local/sbin/rkdeveloptool",
       "description": "Rockchip SoC download/flash tool over USB maskrom/loader mode.",
       "category": "hardware-flash-debug",
-      "capabilities": ["soc-flash", "maskrom-mode"],
-      "input_formats": ["usb-device", "loader-image"],
-      "output_formats": ["flash-dump"],
+      "capabilities": [
+        "soc-flash",
+        "maskrom-mode"
+      ],
+      "input_formats": [
+        "usb-device",
+        "loader-image"
+      ],
+      "output_formats": [
+        "flash-dump"
+      ],
       "health_check": "/usr/local/sbin/rkdeveloptool ver",
       "url": "https://github.com/rockchip-linux/rkdeveloptool",
       "license": "GPL-2.0",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:23 (verified 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:23 (verified 2026-10-14)",
+      "install_method": "binary",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "mtkclient",
       "path": "/opt/re-venv/bin/mtk",
       "description": "MediaTek SoC BROM/preloader exploitation and flash read/write client.",
       "category": "hardware-flash-debug",
-      "capabilities": ["soc-flash", "brom-exploit", "partition-dump"],
-      "input_formats": ["usb-device"],
-      "output_formats": ["flash-dump", "partition-image"],
+      "capabilities": [
+        "soc-flash",
+        "brom-exploit",
+        "partition-dump"
+      ],
+      "input_formats": [
+        "usb-device"
+      ],
+      "output_formats": [
+        "flash-dump",
+        "partition-image"
+      ],
       "health_check": "/opt/re-venv/bin/mtk --help",
       "url": "https://github.com/bkerler/mtkclient",
       "license": "GPL-3.0",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:24 (verified 2026-10-14; venv path only)"
+      "provenance": "TOOL_REGISTRY.md:24 (verified 2026-10-14; venv path only)",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "edl",
       "path": "/opt/re-venv/bin/edl",
       "description": "Qualcomm Emergency Download (EDL / Firehose) client for flash read/write.",
       "category": "hardware-flash-debug",
-      "capabilities": ["soc-flash", "edl-firehose", "partition-dump"],
-      "input_formats": ["usb-device"],
-      "output_formats": ["flash-dump", "partition-image"],
+      "capabilities": [
+        "soc-flash",
+        "edl-firehose",
+        "partition-dump"
+      ],
+      "input_formats": [
+        "usb-device"
+      ],
+      "output_formats": [
+        "flash-dump",
+        "partition-image"
+      ],
       "health_check": "/opt/re-venv/bin/edl --help",
       "url": "https://github.com/bkerler/edl",
       "license": "GPL-3.0",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:24 (verified 2026-10-14; venv path only)"
+      "provenance": "TOOL_REGISTRY.md:24 (verified 2026-10-14; venv path only)",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "heimdall",
       "path": "/usr/bin/heimdall",
       "description": "Samsung Odin-protocol flash tool for reading/writing device partitions over USB.",
       "category": "hardware-flash-debug",
-      "capabilities": ["odin-flash", "partition-dump"],
-      "input_formats": ["usb-device"],
-      "output_formats": ["partition-image"],
+      "capabilities": [
+        "odin-flash",
+        "partition-dump"
+      ],
+      "input_formats": [
+        "usb-device"
+      ],
+      "output_formats": [
+        "partition-image"
+      ],
       "health_check": "/usr/bin/heimdall version",
       "url": "https://github.com/Benjamin-Dobell/Heimdall",
       "license": "MIT",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:25 (verified 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:25 (verified 2026-10-14)",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "spreadtrum_flash",
       "description": "Unisoc/Spreadtrum spd_dump flash read/write tool over USB download mode.",
       "category": "hardware-flash-debug",
-      "capabilities": ["soc-flash", "partition-dump"],
-      "input_formats": ["usb-device"],
-      "output_formats": ["flash-dump"],
+      "capabilities": [
+        "soc-flash",
+        "partition-dump"
+      ],
+      "input_formats": [
+        "usb-device"
+      ],
+      "output_formats": [
+        "flash-dump"
+      ],
       "url": "https://github.com/ilyakurdyukov/spreadtrum_flash",
       "license": "unverified",
       "trust": "community",
-      "provenance": "limpet/examples/spreadtrum_flash.toml"
+      "provenance": "limpet/examples/spreadtrum_flash.toml",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "hackrf",
       "description": "HackRF One software-defined radio: wideband half-duplex transceiver.",
       "category": "sdr-signal",
-      "capabilities": ["sdr-capture", "sdr-transmit"],
-      "input_formats": ["rf-signal"],
-      "output_formats": ["iq-samples"],
+      "capabilities": [
+        "sdr-capture",
+        "sdr-transmit"
+      ],
+      "input_formats": [
+        "rf-signal"
+      ],
+      "output_formats": [
+        "iq-samples"
+      ],
       "health_check": "hackrf_info",
       "url": "https://github.com/greatscottgadgets/hackrf",
       "license": "GPL-2.0",
       "trust": "community",
-      "provenance": "limpet/examples/hackrf.toml (hardware plugin template)"
+      "provenance": "limpet/examples/hackrf.toml (hardware plugin template)",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "optional"
     },
     {
       "name": "sigrok-cli",
       "path": "/usr/bin/sigrok-cli",
       "description": "Logic analyzer / oscilloscope capture front-end; exports VCD and other formats.",
       "category": "sdr-signal",
-      "capabilities": ["logic-capture", "protocol-decode", "vcd-export"],
-      "input_formats": ["logic-probe"],
-      "output_formats": ["vcd", "csv"],
+      "capabilities": [
+        "logic-capture",
+        "protocol-decode",
+        "vcd-export"
+      ],
+      "input_formats": [
+        "logic-probe"
+      ],
+      "output_formats": [
+        "vcd",
+        "csv"
+      ],
       "health_check": "/usr/bin/sigrok-cli --version",
       "url": "https://sigrok.org",
       "license": "GPL-3.0",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:266 (verified present on Lumen 2026-10-14)"
+      "provenance": "TOOL_REGISTRY.md:266 (verified present on Lumen 2026-10-14)",
+      "install_method": "apt",
+      "mcp_status": "has_server",
+      "disk_size_estimate": "small",
+      "priority": "core"
     },
     {
       "name": "sootty",
       "description": "Terminal VCD/EVCD waveform viewer with query-language filtering (renders via SVG + image terminal).",
       "category": "sdr-signal",
-      "capabilities": ["waveform-view", "vcd-parse"],
-      "input_formats": ["vcd", "evcd"],
-      "output_formats": ["svg", "terminal-image"],
+      "capabilities": [
+        "waveform-view",
+        "vcd-parse"
+      ],
+      "input_formats": [
+        "vcd",
+        "evcd"
+      ],
+      "output_formats": [
+        "svg",
+        "terminal-image"
+      ],
       "url": "https://github.com/Ben1152000/sootty",
       "license": "unverified",
       "trust": "community",
-      "provenance": "limpet/examples/sootty.toml; evaluated NO-GO on xfce4-terminal (TOOL_REGISTRY.md:225-277)"
+      "provenance": "limpet/examples/sootty.toml; evaluated NO-GO on xfce4-terminal (TOOL_REGISTRY.md:225-277)",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "netzob",
       "description": "Protocol reverse engineering: infer message formats and state machines from captured traffic.",
       "category": "protocol-analysis",
-      "capabilities": ["protocol-inference", "message-clustering", "state-machine-inference"],
-      "input_formats": ["pcap", "traffic-trace"],
-      "output_formats": ["protocol-model"],
+      "capabilities": [
+        "protocol-inference",
+        "message-clustering",
+        "state-machine-inference"
+      ],
+      "input_formats": [
+        "pcap",
+        "traffic-trace"
+      ],
+      "output_formats": [
+        "protocol-model"
+      ],
       "url": "https://github.com/netzob/netzob",
       "license": "GPL-3.0",
       "trust": "community",
-      "provenance": "limpet/examples/netzob.toml"
+      "provenance": "limpet/examples/netzob.toml",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     },
     {
       "name": "jadx",
@@ -425,40 +885,81 @@
       "version": "1.5.0",
       "description": "Dex to Java decompiler for Android APKs.",
       "category": "mobile-android",
-      "capabilities": ["decompilation", "apk-analysis"],
-      "input_formats": ["apk", "dex", "jar"],
-      "output_formats": ["java-source"],
-      "architectures": ["any"],
+      "capabilities": [
+        "decompilation",
+        "apk-analysis"
+      ],
+      "input_formats": [
+        "apk",
+        "dex",
+        "jar"
+      ],
+      "output_formats": [
+        "java-source"
+      ],
+      "architectures": [
+        "any"
+      ],
       "health_check": "/opt/jadx/bin/jadx --version",
       "url": "https://github.com/skylot/jadx",
       "license": "Apache-2.0",
       "trust": "vetted",
-      "provenance": "lumen_state maksoor.node_provisioning (TOOL_REGISTRY.md:29); path per limpet/registry/tests/fixtures/tool-catalog.sample.json"
+      "provenance": "lumen_state maksoor.node_provisioning (TOOL_REGISTRY.md:29); path per limpet/registry/tests/fixtures/tool-catalog.sample.json",
+      "install_method": "binary",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "medium",
+      "priority": "recommended"
     },
     {
       "name": "apktool",
       "description": "Reverse engineer and repackage Android APK resources and smali.",
       "category": "mobile-android",
-      "capabilities": ["apk-decode", "apk-rebuild", "resource-extraction"],
-      "input_formats": ["apk"],
-      "output_formats": ["smali", "resources"],
-      "architectures": ["any"],
+      "capabilities": [
+        "apk-decode",
+        "apk-rebuild",
+        "resource-extraction"
+      ],
+      "input_formats": [
+        "apk"
+      ],
+      "output_formats": [
+        "smali",
+        "resources"
+      ],
+      "architectures": [
+        "any"
+      ],
       "url": "https://github.com/iBotPeaches/Apktool",
       "license": "Apache-2.0",
       "trust": "community",
-      "provenance": "lumen_state maksoor.node_provisioning (TOOL_REGISTRY.md:29); path not re-verified 2026-10-14"
+      "provenance": "lumen_state maksoor.node_provisioning (TOOL_REGISTRY.md:29); path not re-verified 2026-10-14",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "optional"
     },
     {
       "name": "scrcpy",
       "description": "Display and control an Android device over ADB for live inspection.",
       "category": "mobile-android",
-      "capabilities": ["device-mirror", "device-control"],
-      "input_formats": ["adb-device"],
-      "output_formats": ["screen-stream"],
+      "capabilities": [
+        "device-mirror",
+        "device-control"
+      ],
+      "input_formats": [
+        "adb-device"
+      ],
+      "output_formats": [
+        "screen-stream"
+      ],
       "url": "https://github.com/Genymobile/scrcpy",
       "license": "Apache-2.0",
       "trust": "community",
-      "provenance": "lumen_state maksoor.node_provisioning (TOOL_REGISTRY.md:29); path not re-verified 2026-10-14"
+      "provenance": "lumen_state maksoor.node_provisioning (TOOL_REGISTRY.md:29); path not re-verified 2026-10-14",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": "small",
+      "priority": "optional"
     },
     {
       "name": "rea",
@@ -466,25 +967,293 @@
       "version": "6.4.0",
       "description": "Reverse-Engineer-Anything agent/MCP bridge over a Ghidra provider; ~300 MCP tools across native, managed, Electron/JS, ADB/APK, and firmware.",
       "category": "mcp-bridge",
-      "capabilities": ["disassembly", "apk-analysis", "web-capture", "mcp-bridge"],
-      "input_formats": ["elf", "apk", "web-bundle", "firmware-blob"],
-      "output_formats": ["analysis", "mcp-tools"],
+      "capabilities": [
+        "disassembly",
+        "apk-analysis",
+        "web-capture",
+        "mcp-bridge"
+      ],
+      "input_formats": [
+        "elf",
+        "apk",
+        "web-bundle",
+        "firmware-blob"
+      ],
+      "output_formats": [
+        "analysis",
+        "mcp-tools"
+      ],
       "mcp_endpoint": "stdio:rea mcp",
       "health_check": "/home/lumen/.npm-global/bin/rea --version",
       "url": "https://github.com/morluto/rea",
       "license": "MIT",
       "trust": "community",
-      "provenance": "TOOL_REGISTRY.md:33-70; on SECURITY HOLD, community tier until TOOL_REGISTRY.md:40-46 preconditions met"
+      "provenance": "TOOL_REGISTRY.md:33-70; on SECURITY HOLD, community tier until TOOL_REGISTRY.md:40-46 preconditions met",
+      "install_method": "npm",
+      "mcp_status": "has_server",
+      "disk_size_estimate": "medium",
+      "priority": "optional"
     },
     {
       "name": "ghidra-mcp",
       "description": "MCP bridge exposing a running Ghidra instance to agents; depends on the ghidra tool plugin.",
       "category": "mcp-bridge",
-      "capabilities": ["mcp-bridge", "disassembly", "decompilation"],
-      "input_formats": ["elf", "pe", "raw-binary"],
-      "output_formats": ["mcp-tools", "decompiled-c"],
+      "capabilities": [
+        "mcp-bridge",
+        "disassembly",
+        "decompilation"
+      ],
+      "input_formats": [
+        "elf",
+        "pe",
+        "raw-binary"
+      ],
+      "output_formats": [
+        "mcp-tools",
+        "decompiled-c"
+      ],
       "trust": "community",
-      "provenance": "limpet/examples/ghidra-mcp.toml (depends on ghidra plugin)"
+      "provenance": "limpet/examples/ghidra-mcp.toml (depends on ghidra plugin)",
+      "install_method": "pip",
+      "mcp_status": "has_server",
+      "disk_size_estimate": null,
+      "priority": "optional"
+    },
+    {
+      "name": "searchsploit",
+      "path": "/usr/bin/searchsploit",
+      "version": null,
+      "description": "Offline Exploit-DB mirror search (the exploitdb apt package, same as Kali ships).",
+      "category": "exploit-db",
+      "capabilities": [
+        "exploit-search",
+        "cve-code-search"
+      ],
+      "input_formats": [
+        "search-term"
+      ],
+      "output_formats": [
+        "json-report"
+      ],
+      "architectures": [
+        "any"
+      ],
+      "health_check": "/usr/bin/searchsploit -h",
+      "url": "https://gitlab.com/exploit-database/exploitdb",
+      "license": "GPL-2.0",
+      "trust": "community",
+      "provenance": "limpet/registry/tools.d/searchsploit.yaml (wq#3942; MCP server ops/wq3942-limpet-exploit-db-a1/server.py)",
+      "install_method": "apt",
+      "mcp_status": "has_server",
+      "disk_size_estimate": "medium",
+      "priority": "optional"
+    },
+    {
+      "name": "component-id",
+      "path": null,
+      "version": "0.1.0",
+      "description": "PCB photo -> OCR/VLM -> part lookup -> structured component manifest (vision component ID pipeline).",
+      "category": "firmware-extraction",
+      "capabilities": [
+        "component-identification",
+        "ocr",
+        "vlm-read"
+      ],
+      "input_formats": [
+        "pcb-photo"
+      ],
+      "output_formats": [
+        "components-json"
+      ],
+      "architectures": [
+        "any"
+      ],
+      "health_check": "component-id selftest --fixture golden-board",
+      "url": null,
+      "license": "MIT",
+      "trust": "community",
+      "provenance": "limpet/examples/component-id.toml (wq#3900; design/wq3900_limpet_vision_component_id.md). Limpet-native plugin, upstream repo is a placeholder.",
+      "install_method": "binary",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
+    },
+    {
+      "name": "fw-diff",
+      "path": null,
+      "version": "0.1.0",
+      "description": "Whole-image firmware diff: classify files across two versions, BinDiff the changed executables, emit a structured report.",
+      "category": "firmware-extraction",
+      "capabilities": [
+        "firmware-diff",
+        "file-classification",
+        "bindiff"
+      ],
+      "input_formats": [
+        "two-extractions"
+      ],
+      "output_formats": [
+        "firmware-diff-json"
+      ],
+      "architectures": [
+        "any"
+      ],
+      "health_check": "fw-diff selftest --fixture golden-two-tree",
+      "url": null,
+      "license": "Apache-2.0",
+      "trust": "community",
+      "provenance": "limpet/examples/fw-diff.toml (wq#3906). Limpet-native plugin, upstream repo is a placeholder; depends on ghidra+bindiff.",
+      "install_method": "binary",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
+    },
+    {
+      "name": "gepetto",
+      "path": null,
+      "version": null,
+      "description": "LLM-assisted decompilation helper (function naming + pseudo-code explanation); IDA Pro plugin, no Ghidra port.",
+      "category": "disassembly-decompilation",
+      "capabilities": [
+        "llm-decompilation-assist",
+        "function-naming"
+      ],
+      "input_formats": [
+        "ida-database"
+      ],
+      "output_formats": [
+        "renamed-functions"
+      ],
+      "architectures": [
+        "any"
+      ],
+      "health_check": null,
+      "url": "https://github.com/JusticeRage/Gepetto",
+      "license": "unverified",
+      "trust": "community",
+      "provenance": "research/GEPETTO_EVAL.md:17,79 (fleet-search web). Evaluated: IDA-only install path, not Ghidra-compatible.",
+      "install_method": "binary",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
+    },
+    {
+      "name": "pyamlboot",
+      "path": null,
+      "version": null,
+      "description": "Amlogic BootROM USB-boot protocol client (read/write SRAM/DRAM, chainload U-Boot); ewf Amlogic backend.",
+      "category": "hardware-flash-debug",
+      "capabilities": [
+        "usb-boot",
+        "sram-dram-rw",
+        "bootloader-chainload"
+      ],
+      "input_formats": [
+        "bootloader-image"
+      ],
+      "output_formats": [
+        "device-boot"
+      ],
+      "architectures": [
+        "arm"
+      ],
+      "health_check": null,
+      "url": "https://github.com/superna9999/pyamlboot",
+      "license": "unverified",
+      "trust": "community",
+      "provenance": "docs/wq3253_ewf_amlogic_allwinner_backends.md:40,244 (ewf Amlogic backend; VID:PID 1b8e:c003).",
+      "install_method": "pip",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
+    },
+    {
+      "name": "sunxi-fel",
+      "path": null,
+      "version": null,
+      "description": "Allwinner FEL BootROM USB protocol client (part of sunxi-tools); ewf Allwinner backend.",
+      "category": "hardware-flash-debug",
+      "capabilities": [
+        "usb-boot",
+        "fel-protocol",
+        "bootloader-chainload"
+      ],
+      "input_formats": [
+        "bootloader-image"
+      ],
+      "output_formats": [
+        "device-boot"
+      ],
+      "architectures": [
+        "arm"
+      ],
+      "health_check": null,
+      "url": "https://github.com/linux-sunxi/sunxi-tools",
+      "license": "unverified",
+      "trust": "community",
+      "provenance": "docs/wq3253_ewf_amlogic_allwinner_backends.md:85,244 (ewf Allwinner backend; sunxi-tools).",
+      "install_method": "apt",
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
+    },
+    {
+      "name": "fiedka",
+      "path": null,
+      "version": null,
+      "description": "UEFI firmware editor/analyzer (ticket-named; metadata unverified).",
+      "category": "firmware-extraction",
+      "capabilities": [
+        "uefi-analysis"
+      ],
+      "input_formats": [
+        "uefi-image"
+      ],
+      "output_formats": [
+        "uefi-tree"
+      ],
+      "architectures": [
+        "x86"
+      ],
+      "health_check": null,
+      "url": null,
+      "license": "unverified",
+      "trust": "community",
+      "provenance": "wq#3936 names it as a DESIGN-DECISIONS.md Session 2 addition; DESIGN-DECISIONS.md is NOT present on disk and no other on-disk reference exists. Web-verify unavailable (fleet-search blocked wq#2595, WebSearch ungranted). Promotion stub: url/license must be confirmed before promotion. Not fabricated metadata.",
+      "install_method": null,
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
+    },
+    {
+      "name": "glitchkit",
+      "path": null,
+      "version": null,
+      "description": "Fault-injection / voltage-glitching toolkit (ticket-named; metadata unverified).",
+      "category": "hardware-flash-debug",
+      "capabilities": [
+        "fault-injection",
+        "voltage-glitch"
+      ],
+      "input_formats": [
+        "glitch-config"
+      ],
+      "output_formats": [
+        "glitch-campaign"
+      ],
+      "architectures": [
+        "any"
+      ],
+      "health_check": null,
+      "url": null,
+      "license": "unverified",
+      "trust": "community",
+      "provenance": "wq#3936 names it as a DESIGN-DECISIONS.md Session 2 addition; only on-disk mention is design/wq3924_hardware_driver_catalog.md:28 (no VID:PID by design, no URL/license). DESIGN-DECISIONS.md absent; web-verify unavailable (wq#2595). Promotion stub: url/license must be confirmed before promotion. Not fabricated metadata.",
+      "install_method": null,
+      "mcp_status": "cli_only",
+      "disk_size_estimate": null,
+      "priority": "optional"
     }
-  ]
+  ],
+  "tool_count": 42
 }

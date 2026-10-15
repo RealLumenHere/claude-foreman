@@ -109,6 +109,17 @@ landing at the right trust tier:
 The "147" target is then an outcome of promotion, auditable row by row against
 `registry.lock.json`, not a claim.
 
+**Reconciliation (wq#3936, 2026-10-15):** `limpet/tool-catalog.json` has been
+reconciled against every reachable on-disk source (manifests under
+`limpet/examples/` and `limpet/registry/tools.d/`, the built MCP servers
+`ops/wq388{1,2,3}-*` + `ops/wq3942-*`, and the `research/`/`docs/` evaluations)
+and now enumerates a **canonical 42 tools** across 10 categories
+(`catalog_version` 0.2.0, `tool_count: 42`). This is the real number against the
+"147" target — the remainder is promotable surface (REA's ~300 MCP tools,
+Farida Phase 2 skills, unverified community entries), not catalogued rows. The
+VISION.md that lives in `/home/lumen/projects/limpet/` (outside the foreman repo)
+should carry this 42, not 147, as the current enumerated count.
+
 ## 2. MCP meta-server
 
 ### 2.1 Pattern: gateway/proxy, not a bespoke aggregator
