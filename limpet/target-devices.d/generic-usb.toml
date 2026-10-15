@@ -365,6 +365,19 @@ confidence = "high"
 notes = ""
 
 [[device]]
+match_type = "vid_pid_wildcard"
+usb_vid = "303a"
+usb_pid = "*"
+class_code = ""
+vendor = "Espressif Systems"
+soc_family = "ESP32-S2/S3/C3/C6 native USB (built-in USB-Serial-JTAG peripheral or TinyUSB CDC, no external bridge chip)"
+soc_model = "ESP32-S2, ESP32-S3, ESP32-C3, ESP32-C6, ESP32-H2 — PID is firmware-defined, not model-fixed"
+mode_name = "USB-serial / USB-JTAG bridge (not itself a boot mode)"
+recommended_tool = "esptool.py (native USB-Serial-JTAG, reset-to-bootloader works without a bridge chip); for a CDC port running custom firmware (e.g. ESP32 Bit Pirate, see limpet/hardware.d/03-multiprotocol-tools.toml), identify the mode with the firmware's own protocol/USB-string probe before dispatching a tool"
+confidence = "low"
+notes = "wq#4010: usb_vid=303a is Espressif's own registered VID — well-established maintainer/public knowledge (used throughout Espressif's and OpenOCD's udev rules) but NOT live-verified this session: fleet-search web is down fleet-wide (wq#2595, kb/ISSUE-LOG.md row 715+) and Frank's own S3 board is not attached to any host this fleet can reach to confirm with a real lsusb (wq#4036). pid is wildcarded on purpose: the peripheral's own default PID (USB-Serial-JTAG), a TinyUSB CDC app's PID, and ESP32 Bit Pirate's PID (which v1.7+ deliberately varies to dodge host-side caching, research/esp32s3-re-tools.md ADDENDUM A3) are three different firmware-chosen values under the same VID — VID:PID alone cannot distinguish them, same CDC-ambiguity class already documented for the generic FTDI/CH340 entries above. Confirm with lsusb (bus_interface string descriptor) or a protocol probe, not this table alone, before auto-dispatching a destructive tool."
+
+[[device]]
 match_type = "vid_pid"
 usb_vid = "1a86"
 usb_pid = "7523"

@@ -103,3 +103,52 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", MODE="0660", 
 '''
 proprietary_notes = "Open hardware. Same generic-FT2232H VID:PID as plain Tigard-less FT2232H boards (including iCE40 dev boards, see 12-fpga-programmers.toml) — VID:PID alone cannot tell them apart; HAL must fall back to USB string descriptors or protocol probing."
 confidence = "high"
+
+[[device]]
+name = "ESP32 Bit Pirate (geo-tp firmware, ESP32-S3)"
+category = "multiprotocol"
+usb_ids = []
+linux_driver = "cdc_acm (in-kernel) — native TinyUSB CDC-ACM on the S3, no bridge chip"
+in_kernel_since = "cdc_acm is ancient; nothing device-specific needed"
+firmware_blob = false
+firmware_package = "none"
+dkms = false
+dkms_source = "https://github.com/geo-tp/ESP32-Bit-Pirate (MIT; pin v1.8, released 2026-10-11 — v1.6/v1.7 predate the WP/HOLD-pin and transfer-buffer fixes referenced below). Not a host driver blob — this is the device's OWN firmware, which wq#4010 found is vendored under re/common/tools/firmware-to-flash/, outside this repo's tree (see wq#4037)."
+dkms_build_estimate_minutes = 0
+udev_rule = ""
+proprietary_notes = '''
+wq#4010: no usb_ids recorded here on purpose — do NOT guess one (same posture
+as the Bus Pirate 6 entry above). Espressif's own USB VID is well-established
+maintainer/public knowledge (0x303a, used throughout Espressif's and
+OpenOCD's own udev rules) but fleet-search web is down fleet-wide (all
+engines suspended, wq#2595; kb/ISSUE-LOG.md row 715+) so it was not
+live-verified this session, and the Bit Pirate's exact PID under that VID is
+not independently confirmed on real hardware (Frank's S3 board is not
+attached to any host this fleet can reach — wq#4036).
+
+CDC ambiguity (ticket ask): any ESP32-S3/C3/C6 running TinyUSB CDC —
+including a stock Arduino/ESP-IDF sketch, not just Bit Pirate — enumerates
+under the same Espressif VID with a PID that firmware controls. v1.7+
+standardizes the USB product string to "ESP32 Bit Pirate" and changed PID
+handling to avoid host-side caching (research/esp32s3-re-tools.md ADDENDUM
+A3), which narrows but does not remove the ambiguity: HAL cannot use
+VID:PID alone to tell "ESP32 Bit Pirate" apart from an unrelated S3 CDC
+device, same class of problem as the FTDI-VID ambiguity already documented
+for Bus Pirate v3 and JTAGulator above. A USB product-string check (or a
+protocol probe once the adapter mode is known) is required, not VID:PID.
+
+Protocol modes relevant to this catalog (v1.8, research/esp32s3-re-tools.md
+section 1): flashrom SPI programmer (`flashrom -p
+serprog:dev=/dev/ttyACM0:921600,spispeed=4M`, WP#/HOLD# must be tied high
+pre-v1.8, configurable in v1.8), SUMP logic analyzer (8 channels D0-D7, vs.
+the Pico sigrok build's 21 digital + 3 analog — the Pico remains the wider
+capture tool), OpenOCD Bus-Pirate JTAG/SWD bridge (docs say not as fast as a
+dedicated probe; debug/recovery only). Unvalidated against the Pico baseline
+as of this ticket — see wq#4036 for the required spare-chip serprog/SUMP
+read-write test before trusting it with flash.
+
+Offensive RF/Wi-Fi/BLE/sub-GHz/ESP-SDR modes ship in the same firmware but
+are policy-excluded from the Limpet default image — see
+limpet/DESIGN-DECISIONS.md wq#4010 entry.
+'''
+confidence = "unverified"

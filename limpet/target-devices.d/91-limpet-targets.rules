@@ -45,6 +45,7 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="2a70", TAG+="limpet_target", ENV{LIMPET_TARGE
 SUBSYSTEM=="usb", ATTR{idVendor}=="2ae5", TAG+="limpet_target", ENV{LIMPET_TARGET_MODE}="adb_fastboot__vendor_id_only_signal_"
 SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6001", TAG+="limpet_target", ENV{LIMPET_TARGET_MODE}="usb_serial_bridge__not_itself_a_boot_mode___iden"
 SUBSYSTEM=="usb", ATTR{idVendor}=="10c4", ATTR{idProduct}=="ea60", TAG+="limpet_target", ENV{LIMPET_TARGET_MODE}="usb_serial_bridge__not_itself_a_boot_mode_"
+SUBSYSTEM=="usb", ATTR{idVendor}=="303a", TAG+="limpet_target", ENV{LIMPET_TARGET_MODE}="usb_serial___usb_jtag_bridge__not_itself_a_boot_"
 SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="7523", TAG+="limpet_target", ENV{LIMPET_TARGET_MODE}="usb_serial_bridge__not_itself_a_boot_mode_"
 SUBSYSTEM=="usb", ATTR{idVendor}=="067b", ATTR{idProduct}=="2303", TAG+="limpet_target", ENV{LIMPET_TARGET_MODE}="usb_serial_bridge__not_itself_a_boot_mode_"
 SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="db42", TAG+="limpet_target", ENV{LIMPET_TARGET_MODE}="dfu_runtime__generic_open_source_allocation_"

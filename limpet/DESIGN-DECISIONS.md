@@ -6,6 +6,50 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#4010 — ESP32-S3 / ESP32 Bit Pirate bench-tool catalog entries
+
+**D1 — offensive RF/Wi-Fi/BLE/sub-GHz/ESP-SDR modes stay out of the Limpet default image.**
+ESP32 Bit Pirate (geo-tp/ESP32-Bit-Pirate) ships Wi-Fi deauth, BLE spoof/sniff, sub-GHz/RFID
+replay, and (as of v1.8) an experimental "ESP SDR" adapter in the same firmware binary as the
+bench-tool modes this ticket cares about (flashrom serprog, SUMP logic analyzer, OpenOCD
+JTAG/SWD bridge). The project documents these as educational/interoperability features, but
+Limpet's bench-bus scope is "talk to a chip on a bench," not "attack a network," and shipping
+offensive RF/Wi-Fi tooling in a default appliance image creates an attractive-nuisance and
+scope-creep problem the catalog should not carry silently. Decision: when a Bit Pirate tool
+manifest is registered under `limpet/registry/tools.d/` (not yet done — the firmware itself
+lives outside this repo, see Scope below), its `capabilities` list must enumerate only the
+bench-bus modes (serprog, sump, openocd-jtag, uart-bridge) and must NOT include
+wifi/deauth/ble-spoof/subghz-replay/rfid-clone/sdr capabilities, regardless of what the
+underlying firmware build supports. This mirrors the registry schema's own posture
+(`registry/schema.py`: "unknown == makes no claim") — omission from `capabilities` is the
+enforcement mechanism, not a separate blocklist.
+
+**D2 — catalog entries note CDC ambiguity instead of guessing a VID:PID.**
+`limpet/hardware.d/03-multiprotocol-tools.toml` (ESP32 Bit Pirate entry) and
+`limpet/target-devices.d/generic-usb.toml` (Espressif `303a:*` wildcard entry) both record
+`usb_ids = []` / a VID-only wildcard rather than a specific PID: any ESP32-S3/C3/C6 running
+TinyUSB CDC — Bit Pirate or otherwise — enumerates under Espressif's VID with a
+firmware-chosen PID, and Bit Pirate v1.7+ deliberately varies its PID to dodge host-side USB
+caching. This is the same ambiguity class already on record for the FTDI-VID Bus Pirate v3 /
+JTAGulator entries: VID:PID alone cannot identify the device; a USB string-descriptor or
+protocol probe is required. `confidence` is `"unverified"`/`"low"` on both entries because
+Frank's physical S3 board has not been attached to any host this fleet can reach this session
+(see Scope), and fleet-search web is down fleet-wide (wq#2595) so even the public Espressif
+VID convention could not be independently re-verified — see each entry's `proprietary_notes`.
+
+**Scope held back from the wq#4010 ticket text, on purpose.** The ticket's items (1) vendor a
+pinned geo-tp/ESP32-Bit-Pirate release + fix the README, and (5) validate esp32-image-parser
+on an S3 image, both target `re/common/tools/firmware-to-flash/README.md` and
+`re/common/tools/TOOL_REGISTRY.md` — paths under `/home/lumen/re`, which exists but is
+outside every `--add-dir` this worktree was granted (confirmed: `test -d` succeeds, `ls`/`grep`
+on the same path is refused as outside allowed directories). Items (2) identify Frank's S3
+module and (3) validate serprog/SUMP against the Pico baseline on a spare SPI NOR chip both
+need the board physically attached to a reachable host, which it is not (re-confirmed this
+session; matches the wq#4010 research addendum A4). Per the fleet's physical-task posture,
+both gaps are queued rather than guessed around: wq#4037 (repo(/home/lumen/re) access, items
+1/5) and wq#4036 (physical bench task, items 2/3). This entry and the two catalog edits above
+are the items (4, 6) answerable from inside this worktree.
+
 ## wq#3935 — ewf absorption: Rockchip MCP tool + device-profile merge
 
 **D1 — ewf is retired as a standalone app; its function moves into Limpet.**
