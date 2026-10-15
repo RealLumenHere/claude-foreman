@@ -1,0 +1,1366 @@
+# wq#3923 — SoC boot-mode USB VID:PID detection signatures.
+#
+# Comprehensive map of USB VID:PID (and, where the real signal is a USB interface
+# class rather than a vendor ID, class-code) pairs for SoCs/MCUs in
+# recovery/download/flashing boot modes. This is the data `usb_boot_signatures.py`
+# loads for the HAL `target_device` plugin (ops/wq3809-limpet-hal/hal.py) and for the
+# Target Device Wizard's IDENTIFY stage usb-vid-pid evidence source
+# (docs/target-wizard-spec.md:88, weight 0.9 on a plugin-manifest match / 0.6 on a
+# bare usb.ids match — `confidence` below feeds that same scale).
+#
+# SOURCING: compiled from the on-disk device tables of the per-vendor open-source
+# flashing tools named in `recommended_tool` (mtkclient, edl/qdl, rkdeveloptool,
+# pyamlboot, sunxi-fel, Heimdall, dfu-util, rpiboot) plus each silicon vendor's own
+# USB-IF VID assignment, as carried in this agent's training corpus. Live
+# cross-checking against upstream source (fleet-search web/github) was unavailable
+# this run: web search is down fleet-wide (all 4 SearXNG engines
+# suspended/CAPTCHA'd, no BRAVE_API_KEY — wq#2595, open) and `fleet-search github`
+# returns 401 (no usable token) — both pre-existing, logged outages, not new issues.
+# See research/WQ3923_USB_BOOT_MODE_SIGNATURES.md for the full sourcing note.
+#
+# `confidence` (0.0-1.0) reflects how independently-corroborated each pair is in that
+# corpus, NOT a live verification — treat exactly like any other identification
+# evidence under the wizard's §4.3 gate (docs/target-wizard-spec.md:171-184): entries
+# below 0.85 should not gate an irreversible action (flash write, mass-erase) without
+# an operator confirm, same as any other `probable` evidence.
+#
+# SCHEMA (per [[entry]]):
+#   match_type       "vid_pid" | "vid_pid_wildcard" (pid="*", vendor-only signal,
+#                     real discriminator is the ADB/fastboot interface class) |
+#                     "usb_class" (vendor-independent; class_code carries the
+#                     bInterfaceClass:bInterfaceSubClass:bInterfaceProtocol hex triplet
+#                     instead of vid/pid)
+#   vid, pid         lowercase hex strings, 4 digits each; "" when match_type="usb_class"
+#   class_code       "cc:ss:pp" hex triplet; "" unless match_type="usb_class"
+#   vendor           silicon/OEM vendor name
+#   soc_family       SoC/chip family this pair identifies (comma-separated when one
+#                     PID is shared across a generation — MediaTek and Allwinner in
+#                     particular do not vary PID per SoC model)
+#   mode_name        human name of the boot/recovery mode
+#   recommended_tool the tool this repo's TOOL_REGISTRY/limpet plugins should dispatch to
+#   confidence       0.0-1.0, see above
+#   notes            caveats, protocol notes, disambiguation from a similar pair
+
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# 1. MediaTek — BROM / Preloader modes (VID 0e8d, "MediaTek Inc.")
+# ---------------------------------------------------------------------------
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0e8d"
+pid = "0003"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT65xx/MT67xx legacy: MT6572, MT6580, MT6735, MT6737, MT6750, MT6753"
+mode_name = "BROM (mask ROM, legacy VCOM handshake, pre-DA)"
+recommended_tool = "mtkclient"
+confidence = 0.9
+notes = "Classic 'MediaTek USB Port'. MediaTek does not vary the BROM PID by SoC model; the chip identifies itself only after mtkclient/SP Flash Tool completes the BROM handshake and reads back the HW code. This single pair covers every legacy MT65xx/MT67xx family member, not just the ones listed."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0e8d"
+pid = "2000"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT6765, MT6768, MT6771, MT6779, MT6785, MT6833, MT8167, MT8173, MT8183, MT8195"
+mode_name = "BROM (mask ROM, modern DA protocol V5/V6)"
+recommended_tool = "mtkclient"
+confidence = 0.85
+notes = "Covers the DA-protocol-V5/V6 generation across phone (MT67xx/MT68xx) and tablet/Chromebook/set-top (MT81xx) lines alike — same caveat as 0e8d:0003: PID does not discriminate SoC model, only generation. mtkclient's payload/DA selection, not the PID, narrows the exact chip."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0e8d"
+pid = "2001"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT6761, MT6762, MT6769 (Helio A/P-series variants seen with an alternate enumeration)"
+mode_name = "BROM (mask ROM, modern DA, alternate enumeration)"
+recommended_tool = "mtkclient"
+confidence = 0.5
+notes = "Seen on some Helio A/P-series phones alongside 0e8d:2000; exact trigger for which PID a given unit enumerates as is not independently confirmed this run."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0e8d"
+pid = "201d"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT67xx/MT68xx (post-Preloader)"
+mode_name = "Preloader VCOM (DA already handshaked, not raw BROM)"
+recommended_tool = "mtkclient"
+confidence = 0.6
+notes = "Distinguish from BROM: this enumerates after the Preloader stage has already run, i.e. a normally-booting device paused at Preloader, not a BROM-mode device. HAL should label this 'preloader', not 'brom', so the wizard does not suggest a BROM-only workflow."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0e8d"
+pid = "0002"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT65xx (very old feature-phone-era)"
+mode_name = "Preloader COM port (pre-smartphone-era devices)"
+recommended_tool = "mtkclient"
+confidence = 0.4
+notes = "Legacy pair, mostly relevant to feature-phone-class MT62xx/MT65xx chips rather than any family named in the ticket; included for completeness."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0e8d"
+pid = "2005"
+class_code = ""
+vendor = "MediaTek Inc."
+soc_family = "MT6833, MT6853, MT6893 (Dimensity series)"
+mode_name = "BROM (mask ROM, Dimensity-era DA)"
+recommended_tool = "mtkclient"
+confidence = 0.4
+notes = "Lower-confidence Dimensity-era pair; not independently cross-checked against upstream mtkclient source this run (search backend down)."
+
+# ---------------------------------------------------------------------------
+# 2. Qualcomm — EDL / Sahara-Firehose modes (VID 05c6, "Qualcomm, Inc.")
+# ---------------------------------------------------------------------------
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05c6"
+pid = "9008"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "all Qualcomm/Snapdragon SoCs (EDL is chip-generation-independent)"
+mode_name = "EDL — Emergency Download Mode (Qualcomm HS-USB QDLoader 9008), Sahara + Firehose"
+recommended_tool = "edl / qdl"
+confidence = 0.95
+notes = "The single most universal Qualcomm RE signature: every Snapdragon from early MSM to current, across every OEM (including Samsung's Qualcomm-variant Galaxy models and all Xiaomi/Android devices), enumerates identically in EDL. Chip identity comes from the Sahara HELLO exchange (hw_id), not the PID. Programmer (.mbn/.elf firehose) is per-chip and must be supplied separately — see TOOL_REGISTRY for the per-SoC programmer catalog this feeds."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05c6"
+pid = "900e"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "all Qualcomm/Snapdragon SoCs"
+mode_name = "Diagnostic mode (QXDM/DIAG), not EDL"
+recommended_tool = "QPST / QXDM"
+confidence = 0.8
+notes = "Adjacent to but distinct from EDL: this is the always-available modem diagnostic interface on a normally-booting device, not a flashing mode. Useful as a pre-EDL-trigger signal (many 'dload' triggers are issued over this interface) but must not be classified as EDL by HAL."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05c6"
+pid = "9001"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "early MSM/Snapdragon (pre-Firehose, Sahara-only)"
+mode_name = "Sahara-only EDL (no Firehose, older chips)"
+recommended_tool = "qsaharaserver / edl (legacy mode)"
+confidence = 0.4
+notes = "Older chips that predate the Firehose protocol and only speak Sahara; low independent confidence this generation this run, included because the ticket's 'per-SoC programmer files' point explicitly implies pre-Firehose chips exist."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05c6"
+pid = "9025"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "Snapdragon (composite diagnostic+modem configurations)"
+mode_name = "Composite DIAG+modem (not a flashing mode)"
+recommended_tool = "QPST / QXDM"
+confidence = 0.4
+notes = "Composite-descriptor variant of 900e seen on some modem configurations; included for HAL non-match completeness (so it is not mis-tagged as a flash-relevant target)."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05c6"
+pid = "f000"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "Snapdragon reference/engineering boards"
+mode_name = "DIAG (engineering/reference board variant)"
+recommended_tool = "QPST / QXDM"
+confidence = 0.3
+notes = "Seen on some reference-design boards; low confidence, not cross-checked this run."
+
+# ---------------------------------------------------------------------------
+# 3. Rockchip — MaskROM / Loader modes (VID 2207, "Fuzhou Rockchip Electronics")
+# ---------------------------------------------------------------------------
+# Rockchip's VID is fixed across every chip; the PID encodes chip generation and,
+# within a generation, MaskROM (pre-DRAM-init) vs Loader (post-DRAM-init, DDR blob
+# already pushed by rkdeveloptool/upgrade_tool) as a distinct pair. Only 2207:330c
+# is independently confirmed in this repo already (ops/wq3809-limpet-hal/hal.py,
+# shipped wq#3809); the remaining chip-generation pairs below are compiled from
+# rkdeveloptool's community chip-ID conventions at medium confidence pending
+# on-device confirmation (`rkdeveloptool ld` / `lsusb`) — safe by design, since the
+# wizard's confidence gate requires operator confirm below 0.85 for any active step.
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "290a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK2928, RK3066"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.5
+notes = "RK3066 shares its MaskROM PID with the earlier RK2928 generation."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "300a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3026, RK3036, RK3188"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.5
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "300b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3026, RK3036, RK3188"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.5
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "310a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3126, RK3128"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.5
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "310b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3126, RK3128"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.5
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "320a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3368"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.45
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "320b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3368"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.45
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "330a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3288, RK3399"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.55
+notes = "Pairs with 2207:330c (Loader) below, which is already independently confirmed in production HAL."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "330c"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3288, RK3399 (also matches as a broad RK31xx/RK32xx-family fallback)"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.9
+notes = "Already shipped in ops/wq3809-limpet-hal/hal.py's target_device plugin as 'Rockchip MaskROM' — labelled here as Loader per rkdeveloptool's a/c generation-pair convention; HAL's existing label should be read as 'Rockchip flashing mode, RK31xx/RK32xx family' rather than strictly MaskROM-only. Flagging the discrepancy rather than silently relabeling hal.py's shipped entry."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "350a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3328"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.45
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "350b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3328"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.45
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "360a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3566, RK3568"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.55
+notes = "RK3566/RK3568 share a generation and MaskROM PID."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "360b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3566, RK3568"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.55
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "380a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3588, RK3588S"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.55
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "380b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3588, RK3588S"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.55
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "390a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3528, RV1106 (edge-AI/ISP line)"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.35
+notes = "Newest, lowest-confidence pair in this table; most tentative of the Rockchip rows."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2207"
+pid = "390b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3528, RV1106 (edge-AI/ISP line)"
+mode_name = "Loader (post-DRAM-init)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = 0.35
+notes = ""
+
+# ---------------------------------------------------------------------------
+# 4. Amlogic — USB burn mode (VID 1b8e, "Amlogic, Inc.")
+# ---------------------------------------------------------------------------
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1b8e"
+pid = "c003"
+class_code = ""
+vendor = "Amlogic, Inc."
+soc_family = "S905, S905X, S905X2, S905X3, S912, A113X, A311D, S905X4, S905Y4"
+mode_name = "USB burn mode (BootROM download)"
+recommended_tool = "pyamlboot"
+confidence = 0.85
+notes = "The broad, generation-spanning Amlogic pair that pyamlboot's amlboot.py checks for. Like MediaTek/Allwinner, the PID does not discriminate chip model — pyamlboot reads chip identity back over the USB protocol after connecting."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1b8e"
+pid = "c002"
+class_code = ""
+vendor = "Amlogic, Inc."
+soc_family = "M6, M8, M8B (older set-top-box generation)"
+mode_name = "USB burn mode (legacy BootROM download)"
+recommended_tool = "pyamlboot"
+confidence = 0.5
+notes = "Older generation, predates the c003-era chips; lower independent confidence this run."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1b8e"
+pid = "c001"
+class_code = ""
+vendor = "Amlogic, Inc."
+soc_family = "very early Amlogic STB chips"
+mode_name = "USB burn mode (earliest BootROM download generation)"
+recommended_tool = "pyamlboot"
+confidence = 0.3
+notes = "Included for historical completeness; not independently cross-checked this run."
+
+# ---------------------------------------------------------------------------
+# 5. Allwinner — FEL mode (VID 1f3a, "Allwinner Technology")
+# ---------------------------------------------------------------------------
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1f3a"
+pid = "efe8"
+class_code = ""
+vendor = "Allwinner Technology"
+soc_family = "every Allwinner SoC: A-series (A10, A13, A20, A31, A33, A64), H-series (H2+, H3, H5, H6, H616, H618, H700), T-series (T3, T5, T507, T527), R-series (R818)"
+mode_name = "FEL (BootROM USB protocol)"
+recommended_tool = "sunxi-fel"
+confidence = 0.95
+notes = "Allwinner's single most load-bearing fact for this ticket: ALL Allwinner chips across every A/H/T/R-series generation enumerate as this one VID:PID pair in FEL — sunxi-fel hardcodes exactly this pair as its device match. One row genuinely covers the entire vendor; chip identity comes from sunxi-fel reading the SoC ID register after connecting, never from the PID."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1f3a"
+pid = "1000"
+class_code = ""
+vendor = "Allwinner Technology"
+soc_family = "very early A1x tablets (pre-FEL, LiveSuit/PhoenixSuit-era USB mass-storage-ish boot)"
+mode_name = "legacy USB boot (pre-FEL protocol)"
+recommended_tool = "LiveSuit (legacy, Windows-oriented; no modern Linux equivalent)"
+confidence = 0.3
+notes = "Predates FEL; included for historical completeness on very old A1x-class tablets. Low confidence, not cross-checked this run."
+
+# ---------------------------------------------------------------------------
+# 6. Samsung — Odin/download mode (VID 04e8, "Samsung Electronics")
+# ---------------------------------------------------------------------------
+
+[[entry]]
+match_type = "vid_pid"
+vid = "04e8"
+pid = "685d"
+class_code = ""
+vendor = "Samsung Electronics"
+soc_family = "Exynos- and Qualcomm-variant Galaxy devices alike (download mode is a Samsung bootloader feature, independent of the underlying SoC vendor)"
+mode_name = "Odin download mode (classic)"
+recommended_tool = "Heimdall"
+confidence = 0.85
+notes = "Classic Odin/Download-mode PID, the one Heimdall's device-detection targets. A Qualcomm-SoC Galaxy device in EDL (rather than Download mode) instead enumerates as the generic 05c6:9008 entry above — the two modes are distinct and triggered differently (Download: vol-down+vol-up+power; EDL: a deeper test-point/combination trigger)."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "04e8"
+pid = "6860"
+class_code = ""
+vendor = "Samsung Electronics"
+soc_family = "Galaxy devices (composite Download+MTP configuration)"
+mode_name = "Odin download mode (composite variant)"
+recommended_tool = "Heimdall"
+confidence = 0.5
+notes = "Composite-descriptor variant seen on some models; lower confidence than 685d."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "04e8"
+pid = "68c3"
+class_code = ""
+vendor = "Samsung Electronics"
+soc_family = "newer Galaxy devices"
+mode_name = "Odin download mode (newer firmware generation)"
+recommended_tool = "Heimdall"
+confidence = 0.4
+notes = "Newer-generation Odin pair; not independently cross-checked this run."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "04e8"
+pid = "6764"
+class_code = ""
+vendor = "Samsung Electronics"
+soc_family = "Galaxy devices (older models)"
+mode_name = "Odin download mode (older firmware generation)"
+recommended_tool = "Heimdall"
+confidence = 0.4
+notes = ""
+
+# ---------------------------------------------------------------------------
+# 7. Broadcom — USB boot ROM (VID 0a5c, "Broadcom Corp")
+# ---------------------------------------------------------------------------
+# Research finding: Broadcom does not expose a flashing/recovery USB mode analogous
+# to MediaTek/Qualcomm/Rockchip on its mobile/WWAN SoC lines (those are generally
+# locked-down and accessed, if at all, via the carrier/OEM's own signed tooling, not
+# a public USB BootROM protocol). The one genuinely RE-relevant, well-documented
+# Broadcom USB boot surface is the Raspberry Pi's BCM283x/BCM2711 "USB Boot" ROM mode
+# (used by `rpiboot` / `usbboot` for diskless/EEPROM-less boot and recovery), and
+# router firmware on Broadcom-SoC boxes is near-universally flashed over
+# UART/JTAG/TFTP rather than USB, so it is out of scope for a VID:PID table.
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0a5c"
+pid = "2763"
+class_code = ""
+vendor = "Broadcom Corp"
+soc_family = "BCM2835 (Raspberry Pi 1/Zero)"
+mode_name = "USB Boot ROM (rpiboot mass-storage-gadget boot)"
+recommended_tool = "rpiboot / usbboot"
+confidence = 0.75
+notes = "Raspberry Pi 1/Zero's BootROM USB device mode, used for SD-card-less boot and bootloader recovery."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0a5c"
+pid = "2764"
+class_code = ""
+vendor = "Broadcom Corp"
+soc_family = "BCM2836/BCM2837 (Raspberry Pi 2/3)"
+mode_name = "USB Boot ROM (rpiboot mass-storage-gadget boot)"
+recommended_tool = "rpiboot / usbboot"
+confidence = 0.75
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0a5c"
+pid = "2711"
+class_code = ""
+vendor = "Broadcom Corp"
+soc_family = "BCM2711 (Raspberry Pi 4)"
+mode_name = "USB Boot ROM (rpiboot mass-storage-gadget boot)"
+recommended_tool = "rpiboot / usbboot"
+confidence = 0.75
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0a5c"
+pid = "a4a7"
+class_code = ""
+vendor = "Broadcom Corp"
+soc_family = "BCM2835-family (alternate board-revision enumeration)"
+mode_name = "USB Boot ROM (alternate enumeration, some early board revisions)"
+recommended_tool = "rpiboot / usbboot"
+confidence = 0.3
+notes = "Low confidence; included for completeness on early board revisions."
+
+# ---------------------------------------------------------------------------
+# 8. TI / NXP / STM32 — industrial IoT MCU DFU/ROM-boot modes
+# ---------------------------------------------------------------------------
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0483"
+pid = "df11"
+class_code = ""
+vendor = "STMicroelectronics"
+soc_family = "STM32 (all F0/F1/F2/F3/F4/F7/G0/G4/H7/L0/L1/L4/WB/WL families with the in-ROM USB DFU bootloader enabled)"
+mode_name = "DFU (in-ROM System Memory bootloader)"
+recommended_tool = "dfu-util"
+confidence = 0.95
+notes = "The single most common and best-documented MCU DFU pair in existence — ST's in-ROM bootloader, entered via BOOT0 strap or a software jump, identical across nearly the entire STM32 line."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0483"
+pid = "3748"
+class_code = ""
+vendor = "STMicroelectronics"
+soc_family = "STM32 development boards (ST-LINK/V2 composite debugger)"
+mode_name = "ST-LINK/V2 debug probe (not the target's own DFU — the attached programmer)"
+recommended_tool = "openocd / st-flash"
+confidence = 0.7
+notes = "Not a target-chip boot mode — this is the ST-LINK debug probe commonly soldered onto STM32 dev boards. Included so HAL does not conflate 'an ST-LINK is attached' with 'the target itself is in DFU'; the two are mutually exclusive states on the same board."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1cbe"
+pid = "00fd"
+class_code = ""
+vendor = "Luminary Micro / Texas Instruments"
+soc_family = "TI Stellaris / Tiva-C (LM3S/LM4F/TM4C series)"
+mode_name = "DFU (in-ROM bootloader)"
+recommended_tool = "dfu-util / lm4flash"
+confidence = 0.7
+notes = "TI inherited the Luminary Micro VID when it acquired Stellaris; both VID strings appear in the wild for the same PID."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0451"
+pid = "6141"
+class_code = ""
+vendor = "Texas Instruments"
+soc_family = "AM335x, AM437x (Sitara)"
+mode_name = "ROM boot (USB SPL/bootloader download, Sitara ROM code)"
+recommended_tool = "TI's UniFlash / custom SPL-over-USB tooling"
+confidence = 0.5
+notes = "Sitara's ROM-level USB boot peripheral mode for SPL download, used in industrial single-board-computer recovery."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0451"
+pid = "d00e"
+class_code = ""
+vendor = "Texas Instruments"
+soc_family = "OMAP4"
+mode_name = "ROM boot (USB peripheral boot)"
+recommended_tool = "omap_usbboot-class tooling"
+confidence = 0.45
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "15a2"
+pid = "0054"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "i.MX6 (Quad/DualLite/Solo)"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = 0.65
+notes = "NXP kept the Freescale VID after the acquisition; this is the i.MX6-generation SDP pair."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "15a2"
+pid = "0061"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "i.MX7 (Solo/Dual)"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = 0.6
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "15a2"
+pid = "0073"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "Kinetis (K-series)"
+mode_name = "KBOOT (ROM bootloader over USB-HID/CDC)"
+recommended_tool = "blhost"
+confidence = 0.4
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1fc9"
+pid = "0135"
+class_code = ""
+vendor = "NXP Semiconductors"
+soc_family = "i.MX8M/8QM family"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "uuu (mfgtools)"
+confidence = 0.6
+notes = "NXP's newer post-acquisition VID (1fc9) used for the i.MX8 generation onward, distinct from the legacy Freescale 15a2 VID used on i.MX6/7/Kinetis."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1fc9"
+pid = "0130"
+class_code = ""
+vendor = "NXP Semiconductors"
+soc_family = "i.MX RT (crossover MCU, e.g. RT1050/RT1060)"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "uuu (mfgtools) / blhost"
+confidence = 0.45
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1fc9"
+pid = "0126"
+class_code = ""
+vendor = "NXP Semiconductors"
+soc_family = "i.MX7Solo/7Dual (alternate PID seen on some revisions)"
+mode_name = "SDP — Serial Download Protocol (ROM boot)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = 0.35
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "03eb"
+pid = "6124"
+class_code = ""
+vendor = "Atmel / Microchip Technology"
+soc_family = "AT91SAM (SAM7/SAM9/SAMA5)"
+mode_name = "SAM-BA (ROM boot, USB CDC variant)"
+recommended_tool = "BOSSA / sam-ba"
+confidence = 0.6
+notes = "Microchip acquired Atmel; the VID is still the legacy Atmel allocation. SAM-BA is widely used in industrial-control boards built on AT91 parts."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1915"
+pid = "521f"
+class_code = ""
+vendor = "Nordic Semiconductor"
+soc_family = "nRF52, nRF53 (BLE/IoT SoC)"
+mode_name = "DFU (Nordic's nRF Secure DFU over USB)"
+recommended_tool = "nrfutil"
+confidence = 0.55
+notes = "Common in BLE-based industrial IoT sensors; not in the ticket's named list but squarely in the 'industrial IoT' ask."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "303a"
+pid = "1001"
+class_code = ""
+vendor = "Espressif Systems"
+soc_family = "ESP32-S2, ESP32-S3, ESP32-C3 (built-in USB-JTAG/Serial, no external bridge chip)"
+mode_name = "USB-JTAG/Serial debug unit (native USB, ROM-resident)"
+recommended_tool = "esptool.py / openocd"
+confidence = 0.7
+notes = "Espressif's newer chips expose a native-USB ROM peripheral instead of requiring an external CP210x/CH340 bridge (see the generic-bridge entries under 'standard device classes' below, still relevant for classic ESP32/ESP8266)."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "04b4"
+pid = "f139"
+class_code = ""
+vendor = "Cypress (now Infineon) Semiconductor"
+soc_family = "PSoC (4/5/6) with CyBootloader"
+mode_name = "CyBootloader (USB-UART bootloader)"
+recommended_tool = "Cypress Bootloader Host / cymcuelftool-based tooling"
+confidence = 0.4
+notes = "PSoC is common in industrial sensor/control boards."
+
+# ---------------------------------------------------------------------------
+# 9. Xiaomi — fastboot/EDL specifics
+# ---------------------------------------------------------------------------
+# Xiaomi devices are Qualcomm- or MediaTek-SoC phones underneath, so their true
+# recovery-mode USB signature is almost always one of the generic Qualcomm EDL
+# (05c6:9008) or MediaTek BROM (0e8d:0003/2000) entries above, NOT a Xiaomi-specific
+# chip-level mode. The Xiaomi-specific VID (2717) only ever shows up for the
+# fastboot/ADB *userspace* interfaces, i.e. a normally-booting (or bootloader-stage)
+# device, not a BootROM-level recovery mode.
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2717"
+pid = "ff48"
+class_code = ""
+vendor = "Xiaomi, Inc."
+soc_family = "Xiaomi/Redmi/POCO devices (Qualcomm or MediaTek underneath)"
+mode_name = "fastboot (Xiaomi-branded composite interface)"
+recommended_tool = "fastboot"
+confidence = 0.5
+notes = "Alternate Xiaomi-VID fastboot enumeration; many Xiaomi devices instead use the generic Google VID (18d1:4ee0, under 'standard device classes' below)."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2717"
+pid = "ff40"
+class_code = ""
+vendor = "Xiaomi, Inc."
+soc_family = "Xiaomi/Redmi/POCO devices"
+mode_name = "ADB (Xiaomi-branded composite interface)"
+recommended_tool = "adb"
+confidence = 0.5
+notes = ""
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "2717"
+pid = "*"
+class_code = ""
+vendor = "Xiaomi, Inc."
+soc_family = "any Xiaomi/Redmi/POCO device"
+mode_name = "normal/MTP/unknown composite mode (vendor-ID-only signal)"
+recommended_tool = "adb (probe first)"
+confidence = 0.2
+notes = "Catch-all: VID alone identifies the OEM, not the mode. Real discriminator is the specific PID (above) or the active USB interface class — see 'standard device classes'."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1782"
+pid = "4d00"
+class_code = ""
+vendor = "Spreadtrum / Unisoc"
+soc_family = "Unisoc/Spreadtrum SoCs (used in many budget Xiaomi/Redmi models and other budget-Android OEMs)"
+mode_name = "BootROM download mode"
+recommended_tool = "SPD Flash Tool / sprdclient"
+confidence = 0.6
+notes = "Not asked for by name in the ticket, but Unisoc is a major budget-phone SoC vendor (overlapping with the Xiaomi item) with its own BootROM-level download mode analogous to MTK BROM/Qualcomm EDL — worth shipping given the minimum-coverage goal."
+
+# ---------------------------------------------------------------------------
+# 10. Apple — DFU mode (VID 05ac, "Apple, Inc.")
+# ---------------------------------------------------------------------------
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05ac"
+pid = "1227"
+class_code = ""
+vendor = "Apple, Inc."
+soc_family = "all checkm8-vulnerable A-series SoCs (A5 through A11) and others in DFU"
+mode_name = "DFU — Device Firmware Upgrade mode"
+recommended_tool = "checkm8 / ipwndfu (limited Linux support — see note)"
+confidence = 0.85
+notes = "libimobiledevice/libirecovery detect this pair reliably on Linux; checkm8/ipwndfu's *exploit* tooling is the historically macOS/libusb-on-Linux-is-flaky part, not the detection — HAL can match this pair with high confidence even where the exploit tooling itself needs a specific libusb/kernel driver setup."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05ac"
+pid = "1281"
+class_code = ""
+vendor = "Apple, Inc."
+soc_family = "iPhone/iPad in Recovery mode (distinct from DFU)"
+mode_name = "Recovery mode"
+recommended_tool = "libirecovery / idevicerestore"
+confidence = 0.75
+notes = "Recovery mode is a higher-level, iBoot-driven restore mode — distinguishable from DFU (which runs before iBoot) and relevant because many RE workflows pivot through Recovery rather than DFU."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05ac"
+pid = "12a8"
+class_code = ""
+vendor = "Apple, Inc."
+soc_family = "iPhone, normal boot"
+mode_name = "normal operating mode (reference only — not RE-relevant, included to disambiguate from DFU/Recovery)"
+recommended_tool = "n/a"
+confidence = 0.9
+notes = "Not a boot/recovery mode; included only so HAL's Apple-device matcher can distinguish 'plugged in normally' from 'plugged in for recovery', since both report VID 05ac."
+
+# ---------------------------------------------------------------------------
+# 11. Realtek — Ameba IoT, router SoC debug
+# ---------------------------------------------------------------------------
+# Research finding: unlike MTK/Qualcomm/Rockchip/Amlogic/Allwinner, Realtek's router
+# SoC lines (RTL838x switch, RTL930x, RTL819x/RTL8197 Wi-Fi SoC) do not expose a
+# native USB BootROM/flashing mode at all — firmware recovery on Realtek-based
+# routers is done over UART (TFTP-over-bootloader) or, on some, a JTAG header, never
+# USB. The Ameba IoT line (RTL8710/RTL8720) likewise has no native-USB DFU; boards
+# ship with a USB-UART bridge (usually a CP210x or CH340, already covered under
+# 'standard device classes') for Realtek's own AmebaZ/AmebaD flash tool to talk UART
+# ISP. The one native-USB Realtek pair worth listing is the BLE/combo RTL8762 series.
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0bda"
+pid = "8762"
+class_code = ""
+vendor = "Realtek Semiconductor Corp."
+soc_family = "RTL8762 series (BLE/combo IoT SoC)"
+mode_name = "USB DFU-style firmware download"
+recommended_tool = "Realtek's own MP/ISP tooling (no mainstream open-source equivalent found)"
+confidence = 0.35
+notes = "Lowest-confidence Realtek row; included for IoT-overlap completeness. The router-SoC and Ameba-MCU lines genuinely have no USB boot-mode VID:PID to list — see the section note above, which is itself the useful research finding for those two lines."
+
+# ---------------------------------------------------------------------------
+# 12. HiSilicon — Huawei SoCs (IP cameras, set-top boxes)
+# ---------------------------------------------------------------------------
+# Research finding: HiSilicon's Hi35xx IP-camera/STB SoC line (Hi3516, Hi3518,
+# Hi3521) has no publicly documented USB BootROM download mode comparable to
+# MTK/Qualcomm/Rockchip/Amlogic — these chips are normally dumped via UART console
+# access or by desoldering the SPI-NOR/NAND flash directly, which is why
+# firmware-extraction/firmware-static-analysis (not a USB signature) are this repo's
+# actual tools for Hi35xx-class targets. The only genuinely USB-enumerable HiSilicon-
+# silicon devices in the wild are Huawei's own HiSilicon-Balong-modem phones/dongles,
+# which show up under Huawei's own VID (12d1), not a distinct "HiSilicon" VID — there
+# is no separate USB-IF VID for HiSilicon as a component vendor.
+
+[[entry]]
+match_type = "vid_pid"
+vid = "12d1"
+pid = "1001"
+class_code = ""
+vendor = "Huawei Technologies Co. (HiSilicon Balong modem)"
+soc_family = "Balong-modem Huawei devices, pre-modeswitch"
+mode_name = "initial mass-storage/CD-ROM mode (pre-usb_modeswitch)"
+recommended_tool = "usb_modeswitch"
+confidence = 0.6
+notes = "Not a flashing/recovery mode — the device's power-on default before usb_modeswitch flips it into modem/diag mode. Listed because it is the first thing HAL will see for these devices."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "12d1"
+pid = "14fe"
+class_code = ""
+vendor = "Huawei Technologies Co. (HiSilicon Balong modem)"
+soc_family = "Balong-modem Huawei devices, post-modeswitch"
+mode_name = "modem/diagnostic mode"
+recommended_tool = "AT/diag tooling (not a flashing mode)"
+confidence = 0.5
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "12d1"
+pid = "36a2"
+class_code = ""
+vendor = "Huawei Technologies Co. (HiSilicon Balong modem)"
+soc_family = "Balong-modem Huawei devices"
+mode_name = "diagnostic mode (alternate PID)"
+recommended_tool = "AT/diag tooling (not a flashing mode)"
+confidence = 0.4
+notes = ""
+
+# ---------------------------------------------------------------------------
+# Standard USB device classes (ADB, fastboot, CDC-ACM, DFU class) and common
+# Android-OEM VIDs — vendor-independent RE-relevant signals.
+# ---------------------------------------------------------------------------
+
+[[entry]]
+match_type = "usb_class"
+vid = ""
+pid = ""
+class_code = "fe:01:00"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "any DFU-capable MCU: STM32, TI Stellaris/Tiva, NXP Kinetis/i.MX, Atmel/Microchip SAM, and countless others"
+mode_name = "DFU class, DFU-mode interface (bInterfaceClass=0xFE, bInterfaceSubClass=0x01, bInterfaceProtocol=0x00)"
+recommended_tool = "dfu-util"
+confidence = 0.9
+notes = "The real, vendor-independent DFU signal — matching this class/subclass pair catches DFU devices whose VID:PID is not in this table at all. Protocol 0x02 (below) distinguishes DFU-mode from runtime."
+
+[[entry]]
+match_type = "usb_class"
+vid = ""
+pid = ""
+class_code = "fe:01:02"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "any DFU-capable MCU (runtime, DFU-capable but not yet switched)"
+mode_name = "DFU class, runtime interface (bInterfaceProtocol=0x02)"
+recommended_tool = "dfu-util (use -e / detach-attach to enter DFU-mode first)"
+confidence = 0.85
+notes = "A device enumerating this protocol is DFU-capable but currently running its application, not yet in DFU mode — HAL should surface this as 'needs a DFU detach', not as a device already ready to flash."
+
+[[entry]]
+match_type = "usb_class"
+vid = ""
+pid = ""
+class_code = "02:02:01"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "any CDC-ACM device: USB-serial bridges, most MCU virtual COM ports, many SoC debug/AT-command consoles"
+mode_name = "CDC-ACM (virtual serial port)"
+recommended_tool = "picocom / minicom / screen (then protocol-specific tooling over the resulting /dev/ttyACM*)"
+confidence = 0.8
+notes = "Extremely broad signal (matches nearly every USB-serial device) — useful as a fallback 'there is a serial console here' signal, not a SoC identification by itself. Pair with desc_patterns/vendor VID to narrow."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "18d1"
+pid = "4ee7"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device (ADB is a userspace protocol, not SoC-specific)"
+mode_name = "ADB (Android Debug Bridge) composite interface"
+recommended_tool = "adb"
+confidence = 0.85
+notes = "Google's VID is used both by Nexus/Pixel devices directly and, via the generic android_winusb.inf-class driver, as a fallback composite ID many other OEMs' devices also enumerate under when ADB is enabled. Real interface signature is class ff, subclass 42, protocol 1 — see the usb_class row below for devices that use their own OEM VID instead."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "18d1"
+pid = "4ee0"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device in fastboot"
+mode_name = "fastboot"
+recommended_tool = "fastboot"
+confidence = 0.85
+notes = "Same cross-OEM-fallback caveat as 4ee7 above; real signature is class ff, subclass 42, protocol 3."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "18d1"
+pid = "d00d"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "Android 10+ devices using userspace fastbootd"
+mode_name = "fastbootd (userspace fastboot, dynamic partitions)"
+recommended_tool = "fastboot"
+confidence = 0.6
+notes = "Distinct from classic bootloader fastboot (4ee0): fastbootd runs from a booted Android userspace slot, so some operations (e.g. flashing the active slot) are unavailable — HAL/Wizard should not treat the two as interchangeable."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "18d1"
+pid = "2d00"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device"
+mode_name = "AOA — Android Open Accessory protocol (no ADB)"
+recommended_tool = "custom AOA host tooling"
+confidence = 0.6
+notes = "Relevant to USB-gadget-based attack/test tooling against Android devices, distinct from ADB/fastboot."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "18d1"
+pid = "2d01"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device"
+mode_name = "AOA — Android Open Accessory protocol (with ADB)"
+recommended_tool = "custom AOA host tooling / adb"
+confidence = 0.6
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "18d1"
+pid = "4ee1"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device"
+mode_name = "MTP (Media Transfer Protocol) — not RE-relevant by itself"
+recommended_tool = "n/a"
+confidence = 0.6
+notes = "Included so HAL does not mis-flag an ordinary file-transfer connection as a flashing-relevant mode."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "18d1"
+pid = "4ee2"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "any Android device"
+mode_name = "PTP (Picture Transfer Protocol) — not RE-relevant by itself"
+recommended_tool = "n/a"
+confidence = 0.6
+notes = ""
+
+[[entry]]
+match_type = "usb_class"
+vid = ""
+pid = ""
+class_code = "ff:42:01"
+vendor = "USB-IF vendor-specific (Android ADB class allocation)"
+soc_family = "any Android device, any OEM VID"
+mode_name = "ADB class signature (bInterfaceClass=0xFF, bInterfaceSubClass=0x42, bInterfaceProtocol=0x01)"
+recommended_tool = "adb"
+confidence = 0.9
+notes = "The actual vendor-independent ADB signal — matches regardless of which OEM VID (Samsung, Motorola, Sony, etc.) the device enumerates under. Should be checked ahead of any single OEM-VID guess."
+
+[[entry]]
+match_type = "usb_class"
+vid = ""
+pid = ""
+class_code = "ff:42:03"
+vendor = "USB-IF vendor-specific (Android fastboot class allocation)"
+soc_family = "any Android device, any OEM VID"
+mode_name = "fastboot class signature (bInterfaceClass=0xFF, bInterfaceSubClass=0x42, bInterfaceProtocol=0x03)"
+recommended_tool = "fastboot"
+confidence = 0.9
+notes = "Vendor-independent fastboot signal, same rationale as the ADB class row above."
+
+[[entry]]
+match_type = "usb_class"
+vid = ""
+pid = ""
+class_code = "08:06:50"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "any device exposing USB mass storage (eMMC/SD-based recovery images, some router/STB recovery modes)"
+mode_name = "USB Mass Storage (bulk-only transport) — recovery-relevant when unexpected"
+recommended_tool = "dd / mount (read-only first) / file"
+confidence = 0.5
+notes = "Broad, low-specificity signal: useful only when a device that should NOT normally present mass storage suddenly does (common on some STB/router recovery images)."
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "0fce"
+pid = "*"
+class_code = ""
+vendor = "Sony Mobile Communications"
+soc_family = "Sony Xperia (Snapdragon or Exynos underneath)"
+mode_name = "ADB/fastboot (vendor-ID-only signal; real discriminator is the usb_class rows above)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = "OEM-VID rows in this section (Sony, Motorola, HTC, ZTE, LG, OnePlus, OPPO) are intentionally wildcard-PID: the PID varies per model/build and is not independently enumerable here. They exist so HAL recognizes 'this is an Android OEM device' even before the real ADB/fastboot usb_class match fires."
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "22b8"
+pid = "*"
+class_code = ""
+vendor = "Motorola Mobility LLC"
+soc_family = "Motorola/Moto devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = ""
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "0bb4"
+pid = "*"
+class_code = ""
+vendor = "HTC Corporation"
+soc_family = "HTC devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = ""
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "19d2"
+pid = "*"
+class_code = ""
+vendor = "ZTE Corporation"
+soc_family = "ZTE devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = ""
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "1004"
+pid = "*"
+class_code = ""
+vendor = "LG Electronics"
+soc_family = "LG devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = ""
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "2a70"
+pid = "*"
+class_code = ""
+vendor = "OnePlus Technology"
+soc_family = "OnePlus devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = ""
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "2ae5"
+pid = "*"
+class_code = ""
+vendor = "Guangdong OPPO Mobile Telecommunications"
+soc_family = "OPPO/Realme devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0403"
+pid = "6001"
+class_code = ""
+vendor = "Future Technology Devices International (FTDI)"
+soc_family = "any target using an FTDI FT232-family USB-UART bridge (extremely common on dev boards, including Realtek Ameba and HiSilicon camera boards)"
+mode_name = "USB-serial bridge (not itself a boot mode — identifies the console path to many of the targets in this table that lack native USB)"
+recommended_tool = "picocom / minicom / screen"
+confidence = 0.85
+notes = "Already present in this repo as a HAL 'bus_interface' plugin device (ops/wq3809-limpet-hal/hal.py). Repeated here because it is the actual detection path for several vendors above (Realtek Ameba, HiSilicon) that have no native-USB boot mode."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "10c4"
+pid = "ea60"
+class_code = ""
+vendor = "Silicon Labs"
+soc_family = "any target using a CP2102/CP2104 USB-UART bridge (common on ESP32/ESP8266 and many industrial IoT dev boards)"
+mode_name = "USB-serial bridge (not itself a boot mode)"
+recommended_tool = "esptool.py (for ESP32/8266) / picocom / minicom"
+confidence = 0.85
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1a86"
+pid = "7523"
+class_code = ""
+vendor = "QinHeng Electronics (WCH)"
+soc_family = "any target using a CH340/CH341 USB-UART bridge (extremely common on cheap Chinese dev boards, including many Allwinner/Rockchip/Realtek Ameba boards)"
+mode_name = "USB-serial bridge (not itself a boot mode)"
+recommended_tool = "picocom / minicom / screen"
+confidence = 0.85
+notes = "Distinct PID from the CH341A SPI-programmer-mode device (1a86:5512) already in this repo's HAL 'flash_programmer' plugin — same chip family, different firmware/mode."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "067b"
+pid = "2303"
+class_code = ""
+vendor = "Prolific Technology"
+soc_family = "any target using a PL2303 USB-UART bridge"
+mode_name = "USB-serial bridge (not itself a boot mode)"
+recommended_tool = "picocom / minicom / screen"
+confidence = 0.8
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "1209"
+pid = "db42"
+class_code = ""
+vendor = "pid.codes (open-source shared VID allocation)"
+soc_family = "hobbyist/open-hardware boards using the generic pid.codes DFU runtime allocation"
+mode_name = "DFU runtime (generic open-source allocation)"
+recommended_tool = "dfu-util"
+confidence = 0.4
+notes = "Lower-traffic than the vendor-specific DFU pairs above, but a real, registered allocation seen on open-hardware projects."
+
+# ---------------------------------------------------------------------------
+# Additional entries: more Qualcomm diag variants, debug-probe disambiguation
+# rows (mirroring the ST-LINK entry's rationale), a vendor-independent RNDIS
+# class signal, and more Android-OEM wildcard VIDs.
+# ---------------------------------------------------------------------------
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05c6"
+pid = "9091"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "Snapdragon (composite mass-storage+diagnostic configurations)"
+mode_name = "composite DIAG+storage (not a flashing mode)"
+recommended_tool = "QPST / QXDM"
+confidence = 0.3
+notes = "Included for HAL non-match completeness, same rationale as the other composite DIAG rows above."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "05c6"
+pid = "90db"
+class_code = ""
+vendor = "Qualcomm, Inc."
+soc_family = "Snapdragon (NMEA/GPS diagnostic composite configurations)"
+mode_name = "composite DIAG variant (not a flashing mode)"
+recommended_tool = "QPST / QXDM"
+confidence = 0.3
+notes = ""
+
+[[entry]]
+match_type = "vid_pid"
+vid = "0451"
+pid = "bef3"
+class_code = ""
+vendor = "Texas Instruments"
+soc_family = "TI MSP430/Sitara/C2000 development boards (XDS110 onboard debug probe)"
+mode_name = "XDS110 debug probe (not the target's own boot mode — the attached programmer)"
+recommended_tool = "openocd / TI UniFlash"
+confidence = 0.5
+notes = "Same disambiguation rationale as the ST-LINK (0483:3748) row: an attached XDS110 means a debugger is present, not that the target chip itself is in a USB boot/download mode."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "2047"
+pid = "0013"
+class_code = ""
+vendor = "Texas Instruments (MSP430 LaunchPad allocation)"
+soc_family = "MSP430 LaunchPad boards"
+mode_name = "Application UART / BSL bridge (onboard eZ-FET debugger, not native device USB)"
+recommended_tool = "TI MSP-FET / BSL scripter"
+confidence = 0.4
+notes = "Low-power MSP430 industrial/IoT boards; the BSL (bootstrap loader) itself is reached over this bridge's UART, not natively over USB."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "04d8"
+pid = "003c"
+class_code = ""
+vendor = "Microchip Technology"
+soc_family = "PIC32 (industrial control MCU line)"
+mode_name = "HID bootloader (USB-HID, no DFU class)"
+recommended_tool = "Microchip's USB HID Bootloader host app / mphidflash"
+confidence = 0.35
+notes = "Same VID as this repo's existing HAL flash_programmer entry (04d8:e11c, TL866/XGecu) — different PID, unrelated device."
+
+[[entry]]
+match_type = "usb_class"
+vid = ""
+pid = ""
+class_code = "e0:01:03"
+vendor = "USB-IF standard (vendor-independent)"
+soc_family = "Android devices and embedded-Linux targets exposing a USB network gadget mid-boot"
+mode_name = "RNDIS (USB network gadget, over Communications Device Class)"
+recommended_tool = "standard host-side RNDIS/usb0 networking, then protocol-specific tooling over the resulting interface"
+confidence = 0.4
+notes = "A target unexpectedly presenting this class mid-boot (rather than its normal mode) is a useful 'something is in a recovery/debug U-Boot/initramfs stage' signal on embedded-Linux targets."
+
+[[entry]]
+match_type = "vid_pid"
+vid = "18d1"
+pid = "d001"
+class_code = ""
+vendor = "Google Inc."
+soc_family = "early Android devices (Nexus One era) ADB composite"
+mode_name = "ADB (older composite ID, pre-4ee7)"
+recommended_tool = "adb"
+confidence = 0.4
+notes = "Historical pair, superseded by 4ee7 on later devices; included for older-device coverage."
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "0b05"
+pid = "*"
+class_code = ""
+vendor = "ASUSTek Computer"
+soc_family = "ASUS/Zenfone devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = ""
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "2d95"
+pid = "*"
+class_code = ""
+vendor = "Vivo Mobile Communication"
+soc_family = "Vivo devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = ""
+
+[[entry]]
+match_type = "vid_pid_wildcard"
+vid = "2a45"
+pid = "*"
+class_code = ""
+vendor = "Meizu Technology"
+soc_family = "Meizu devices"
+mode_name = "ADB/fastboot (vendor-ID-only signal)"
+recommended_tool = "adb / fastboot"
+confidence = 0.3
+notes = ""

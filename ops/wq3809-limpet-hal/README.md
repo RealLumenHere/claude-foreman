@@ -47,6 +47,26 @@ logic analyzer. `tests/test_hal.py:ORDINARY_LSUSB_SAMPLE` is the regression guar
 `install.sh --verify` reruns the same probe against the deployed copy via
 `verify_no_false_positive.py`.
 
+## SoC boot-mode VID:PID map (wq#3923)
+
+`target_device`'s own VID:PID set above (3 pairs) is intentionally minimal — just enough
+to not false-negative the common cases. `usb_boot_signatures.toml` is the much larger
+(100+ entry) companion map researched under wq#3923: MediaTek BROM, Qualcomm EDL/Sahara,
+Rockchip MaskROM/Loader, Amlogic burn mode, Allwinner FEL, Samsung Odin, Broadcom/RPi USB
+boot, TI/NXP/STM32/industrial-IoT DFU and ROM-boot modes, Xiaomi/Spreadtrum, Apple DFU,
+Realtek, HiSilicon, plus the vendor-independent ADB/fastboot/DFU/CDC-ACM USB class
+signatures and a set of Android-OEM VIDs. It is this repo's data source for the Target
+Device Wizard's IDENTIFY stage (`docs/target-wizard-spec.md:144-156`, the `usb-vid-pid`
+evidence source) and for widening `target_device` beyond its current 3 pairs — load and
+query it with `usb_boot_signatures.py` (`lookup(vid, pid, class_code=...)`), not by
+hand-rolling a second table. See `research/WQ3923_USB_BOOT_MODE_SIGNATURES.md` for the
+sourcing note and confidence methodology.
+
+```
+python3 usb_boot_signatures.py lookup 05c6 9008   # -> EDL, edl / qdl, confidence 0.95
+python3 usb_boot_signatures.py list --match-type usb_class
+```
+
 ## Known gaps
 
 - PCIe/M.2 Coral TPUs (`/dev/apex_*`) are not detected: they never appear in `lsusb`, and
