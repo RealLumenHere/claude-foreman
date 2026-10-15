@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "ticket": "wq#3970",
+  "provenance": "Split from wq#3944/A4, design/wq3929_competitive_analysis.md section 5 A4 (reverse-skill scenario routing), design/wq3806_limpet_architecture.md:152-159 (two-level router tool budget). Every tool id below must resolve by name in limpet/tool-catalog.json; stage order is the dispatch order the Target Device Wizard identify step and the meta-server's on-demand expansion should offer the agent.",
+  "target_classes": {
+    "rockchip-firmware": {
+      "description": "Rockchip SoC firmware images and maskrom/loader boot streams (RK3xxx update.img/loader, recovery partitions).",
+      "toolset_groups": [
+        {"stage": "extract", "tools": ["unblob", "binwalk"]},
+        {"stage": "flash-debug", "tools": ["rkdeveloptool"]},
+        {"stage": "disassemble", "tools": ["ghidra", "radare2"]}
+      ]
+    },
+    "android-apk": {
+      "description": "Android application packages (APK/DEX) and on-device live inspection via ADB.",
+      "toolset_groups": [
+        {"stage": "static", "tools": ["apktool", "jadx"]},
+        {"stage": "dynamic", "tools": ["frida", "scrcpy"]}
+      ]
+    },
+    "elf-arm": {
+      "description": "Standalone ARM ELF binaries (userland or kernel modules) outside a recognized firmware container.",
+      "toolset_groups": [
+        {"stage": "disassemble", "tools": ["ghidra", "radare2", "cutter"]},
+        {"stage": "dynamic", "tools": ["qemu-user", "gdb-multiarch", "frida"]}
+      ]
+    },
+    "pcap": {
+      "description": "Captured network traffic for undocumented wire-protocol inference.",
+      "toolset_groups": [
+        {"stage": "protocol-analysis", "tools": ["netzob"]}
+      ]
+    },
+    "uefi": {
+      "description": "UEFI firmware volumes and images (PI firmware, DXE drivers, capsules).",
+      "toolset_groups": [
+        {"stage": "extract", "tools": ["unblob", "binwalk", "fiedka"]},
+        {"stage": "disassemble", "tools": ["ghidra", "radare2"]}
+      ]
+    }
+  }
+}

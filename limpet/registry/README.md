@@ -56,6 +56,16 @@ key names need not match the schema. An entry that cannot be made valid (no
 runnable path to build a health check from) is reported and skipped, never
 guessed in. After import, each tool re-registers itself on its next install.
 
+## Target-class -> toolset routing (wq#3970)
+
+`routing.json` declares, per target class (`rockchip-firmware`, `android-apk`,
+`elf-arm`, `pcap`, `uefi`, ...), the ordered toolset groups the meta-server's
+two-level router (design/wq3806_limpet_architecture.md:152-159) and the Target
+Device Wizard identify step (`limpet/target_devices.py`) should expand once a
+target has been classified. `routing.py` loads/validates the table and
+resolves a target class to its groups; every tool id it names must resolve by
+name in `tool-catalog.json` (`validate_tools_resolve`).
+
 ## Install
 
 ```
@@ -70,3 +80,6 @@ sudo systemctl enable --now limpet-registry.path
 duplicate handling), index build, rebuild idempotency, register round-trip,
 catalog import via alias mapping, watcher signature, and health runner. Driven
 by the committed fixture `tests/fixtures/tool-catalog.sample.json`.
+`test_routing.py` covers the wq#3970 routing table against the real, shipped
+`routing.json` and `tool-catalog.json`: schema validation, every routed tool
+id resolving in the catalog, and router resolution for fixture target classes.
