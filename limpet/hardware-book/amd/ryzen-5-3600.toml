@@ -1,0 +1,31 @@
+[cpu]
+name = "AMD Ryzen 5 3600"
+vendor = "amd"
+family = "zen2"
+codename = "Matisse"
+
+[cpu.cores]
+physical = 6
+threads = 12
+base_clock_mhz = 3600
+boost_clock_mhz = 4200
+
+[cpu.isa]
+avx2 = true
+avx512 = false
+
+[cpu.memory]
+type = "ddr4"
+max_speed_mhz = 3200
+channels = 2
+max_capacity_gb = 128
+
+[tier]
+classification = 3
+reason = "Zen 2 full AVX2, DDR4-3200 dual channel; tg is bandwidth-bound"
+
+[performance]
+threads = 6
+cpu_strict = true
+mlock = true
+# Anchor [M]: Zen 2 3900X, Mistral-7B Q6_K: tg 6.32 @DDR4-2666, 7.55 @3200, 8.45 @3600

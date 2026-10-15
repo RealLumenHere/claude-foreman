@@ -1,0 +1,38 @@
+[cpu]
+name = "AMD EPYC 9554"
+vendor = "amd"
+family = "zen4"
+codename = "Genoa"
+
+[cpu.cores]
+physical = 64
+threads = 128
+base_clock_mhz = 3100
+boost_clock_mhz = 3750
+
+[cpu.isa]
+avx2 = true
+avx512 = true
+avx512_vnni = true
+
+[cpu.memory]
+type = "ddr5"
+max_speed_mhz = 4800
+channels = 12
+ecc = true
+
+[cpu.topology]
+ccd_count = 8
+
+[tier]
+classification = "4E"
+reason = "12-channel DDR5-4800 = 460.8 GB/s theoretical [D]; gate on populated channels"
+
+[performance]
+threads = 64
+cpu_strict = true
+numa_mode = "distribute"
+mlock = true
+require_populated_channels = 12
+max_loaded_models = 4
+# UNVALIDATED: 70B interactive speed (hard ceiling ~11.5 t/s [D])

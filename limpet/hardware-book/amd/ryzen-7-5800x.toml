@@ -1,0 +1,31 @@
+[cpu]
+name = "AMD Ryzen 7 5800X"
+vendor = "amd"
+family = "zen3"
+codename = "Vermeer"
+
+[cpu.cores]
+physical = 8
+threads = 16
+base_clock_mhz = 3800
+boost_clock_mhz = 4700
+
+[cpu.isa]
+avx2 = true
+avx512 = false
+
+[cpu.memory]
+type = "ddr4"
+max_speed_mhz = 3200
+channels = 2
+max_capacity_gb = 128
+
+[tier]
+classification = 3
+reason = "Zen 3 full AVX2; ~+58% pp over Zen 2 at equal memory, equal tg"
+
+[performance]
+threads = 8
+cpu_strict = true
+mlock = true
+# Anchor [M]: Zen 3 5950X DDR4-3600, Mistral-7B Q6_K: pp512 109.37, tg 8.50

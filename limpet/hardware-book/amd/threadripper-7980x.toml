@@ -1,0 +1,30 @@
+[cpu]
+name = "AMD Ryzen Threadripper 7980X"
+vendor = "amd"
+family = "zen4"
+codename = "Storm Peak"
+
+[cpu.cores]
+physical = 64
+threads = 128
+base_clock_mhz = 3200
+boost_clock_mhz = 5100
+
+[cpu.memory]
+type = "ddr5"
+max_speed_mhz = 5200
+channels = 4
+max_capacity_gb = 1024
+ecc = true
+
+[tier]
+classification = "4A"
+reason = "Quad-channel DDR5-5200 = 166.4 GB/s theoretical [D]"
+
+[performance]
+threads = 64
+cpu_strict = true
+numa_mode = "distribute"
+mlock = true
+# Related [M]: PRO 7995WX Mixtral-8x22B Q6_K pp512 151.73 tg 8.07 vs 5950X 19.66 / 1.57
+# UNVALIDATED: 72B interactive speed on this SKU

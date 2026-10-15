@@ -1,0 +1,38 @@
+[cpu]
+name = "AMD Ryzen 9 7950X"
+vendor = "amd"
+family = "zen4"
+codename = "Raphael"
+
+[cpu.cores]
+physical = 16
+threads = 32
+base_clock_mhz = 4500
+boost_clock_mhz = 5700
+
+[cpu.isa]
+avx2 = true
+avx512 = true
+avx512_vnni = true
+# avx512_bf16: detect at runtime from /proc/cpuinfo (not verified from a primary source in wq#3919)
+
+[cpu.memory]
+type = "ddr5"
+max_speed_mhz = 5200
+channels = 2
+max_capacity_gb = 128
+
+[cpu.topology]
+ccd_count = 2
+
+[tier]
+classification = 4
+reason = "Zen 4 AVX-512, DDR5 dual channel; tg capped by bandwidth"
+
+[performance]
+threads = 16
+cpu_strict = true
+mlock = true
+numa_mode = "test"
+avx512_check = "ollama system-info must show AVX512=1; else offer source build"
+# Anchors [M]: llama.cpp 8B Q4_0 pp512 153.52 (ik_llama 273.54); mobile 7940HS Mistral-7B Q4_K_M tg16 11.19
