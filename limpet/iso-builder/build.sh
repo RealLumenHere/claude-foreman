@@ -48,6 +48,11 @@ stage1_fetch_base_iso() {
   log "stage1: base Xubuntu $XUBUNTU_VERSION ISO"
   [ -n "$BASE_ISO" ] || fail "LIMPET_BASE_ISO not set -- point it at a locally cached Xubuntu $XUBUNTU_VERSION ISO (this script does not fetch one itself; see header comment)"
   [ -f "$BASE_ISO" ] || fail "LIMPET_BASE_ISO=$BASE_ISO does not exist"
+  # wq#4008: a failed/partial fetch (e.g. four 404s against a release path
+  # that isn't published yet) can leave a 0-byte file sitting at this path.
+  # Reject that before it ever reaches the checksum check below, with an
+  # error that names the actual failure instead of a generic mismatch.
+  [ -s "$BASE_ISO" ] || fail "LIMPET_BASE_ISO=$BASE_ISO is 0 bytes -- refusing to build from an empty ISO (a prior fetch likely failed; re-fetch before retrying)"
   [ -n "$BASE_ISO_SHA256" ] || fail "LIMPET_BASE_ISO_SHA256 not set -- supply the published checksum, do not skip verification"
   require_cmd sha256sum
   local actual

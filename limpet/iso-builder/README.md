@@ -66,7 +66,13 @@ blocking on one that doesn't:
 - **Does not fetch the base ISO.** An unattended multi-GB download with no
   checksum pinned anywhere in this repo is a guess, not a verified input.
   `stage1` requires the caller to supply `LIMPET_BASE_ISO` +
-  `LIMPET_BASE_ISO_SHA256` and verifies the hash before extracting.
+  `LIMPET_BASE_ISO_SHA256`, rejects a 0-byte `LIMPET_BASE_ISO` outright
+  (wq#4008), and verifies the hash before extracting. If you need to
+  populate `LIMPET_BASE_ISO`, use `fetch_base_iso.sh <version> <dest-dir>`
+  (wq#4008) — it only writes `<dest-dir>/.xubuntu_download_complete` after
+  every artifact it fetched is confirmed non-empty and checksum-verified
+  against `SHA256SUMS`, so a 404/short-read mid-release-window can't produce
+  a false "complete" marker the way an earlier ad hoc fetch did.
 - **Does not cross-compile DKMS modules.** `build_iso_drivers.py`'s own
   docstring scopes that to "once a pinned target kernel exists" — `stage7`
   installs the udev rules + prebake plan it generates and says exactly what's
