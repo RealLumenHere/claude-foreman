@@ -360,3 +360,85 @@ companion build artifacts a provisioning ticket should produce are
 `design/wq3806_limpet_architecture.md:206-229` and does not redefine them; the absent
 `workspace-spec.md` (§0.1) is not a prerequisite — §7 is the specification of the
 `limpet-workspace export` command the architecture doc names at line 130.
+
+---
+
+# Part II — wq#3934 implementation (what shipped)
+
+§1–9 above are the wq#3905 design. wq#3934 **builds** the operator-facing core of it. The
+operator — not a paying client — is the reader, so the build deliberately ships a tight,
+testable subset and leaves the heavier design features (PDF/WeasyPrint §4, signing and
+evidence bundles §8, the `verify` and MCP `generate_report` surfaces §7.4/§7) for a later
+ticket. Where this section and Part I disagree, **this section describes the code that
+exists**; Part I remains the north star for the unbuilt pieces.
+
+## II.1 Shipped surface
+
+```
+limpet-workspace export <workspace> [--format md|html|json|all]   # default: md
+    [--template NAME|PATH]        (default: full-technical)
+    [--out DIR]                   (default: <workspace>/reports/<report-id>/)
+    [--templates-dir DIR]         (default: /etc/limpet/report-templates)
+    [--manifest NAME] [--at COMMIT] [--full-log]
+    [--source-date EPOCH|iso|none] [--no-redact] [--json]
+limpet-workspace templates list [--templates-dir DIR] [--workspace WS]
+limpet-workspace templates validate <path>
+```
+
+- **Formats: Markdown (default), HTML, JSON** — the ticket's three. No PDF (Part I §4's
+  WeasyPrint path is not built; `--format` rejects anything but `md|html|json|all`).
+- **Reports land in `<workspace>/reports/<report-id>/`** — the ticket's `workspace/reports/`
+  location, not Part I §1's `evidence/reports/`.
+- **Agent chat `/export`** maps onto `export` via `workspace_cli.chat_export`: `/export`
+  → markdown, `/export html|json|all`, `/export md full-technical` picks a template.
+- **Templates** resolve in order: `<workspace>/report-templates/`, then the site dir
+  (`/etc/limpet/report-templates`, overridable with `--templates-dir`), then the built-ins
+  packaged next to the code. Built-ins: `full-technical` (md+html, the default) and
+  `exec-summary` (md).
+
+## II.2 Code map (file:line)
+
+| Concern | Location |
+|---|---|
+| IR assembly from the workspace | `limpet/workspace_report.py:collect` (`:251`) |
+| Collectors (manifest / findings / git / tools) | `limpet/workspace_report.py:146-245` |
+| Credential masking of the IR (fleet instinct 4) | `limpet/workspace_report.py:mask_text` (`:79`), `_mask_tree` (`:94`) |
+| JSON / Markdown / HTML renderers | `limpet/workspace_report.py:render_json` (`:311`), `render_template` (`:357`) |
+| Jinja2 sandbox + forced HTML autoescape | `limpet/workspace_report.py:_jinja_env` (`:315`) |
+| Template resolution order | `limpet/workspace_report.py:resolve_template` (`:334`) |
+| `export` entry point | `limpet/workspace_report.py:export` (`:376`) |
+| CLI (`export` / `templates list` / `templates validate`) | `limpet/workspace_cli.py` |
+| `/export` chat dispatch | `limpet/workspace_cli.py:chat_export` |
+| Built-in templates | `limpet/report-templates/{full-technical,exec-summary}/` |
+| Package wiring (bin shim, install, deps) | `packaging/limpet-tools/{bin/limpet-workspace,debian/install,debian/rules,debian/control}` |
+| Tests | `limpet/test_workspace_report.py` (14 cases) |
+
+## II.3 Manifest contract the collector reads
+
+The export is derived from committed workspace state (Part I §0.2). `manifest.json` is read
+for target identity, checksums, hardware bindings, and the tool-invocation log:
+
+```jsonc
+{
+  "target_id": "acme-router-v2", "class": "firmware",
+  "identity": { "vendor": "Acme", "model": "FX-1", "version": "2.1" },
+  "checksums": [ { "path": "target/fw.bin", "sha256": "…", "size": 8388608 } ],
+  "hardware_bound": [ { "capability": "debug_probe", "adapter": "ST-Link/V2", "vid_pid": "0483:3748" } ],
+  "tool_invocations": [ { "seq": 1, "ts": "…", "plugin": "unblob", "version": "1.0", "trust": "core", "summary": "…" } ]
+}
+```
+
+Findings are collected (never authored at export time) from `evidence/findings/*.json`:
+`{ "id", "title", "severity", "summary", "cvss"?, "evidence": [{path,sha256,locator}], "remediation"? }`.
+The git summary comes from `workspace.git` (or `.git`), read-only, pinned to `--at` or HEAD.
+
+## II.4 Guarantees held by tests
+
+`limpet/test_workspace_report.py` proves, each with a probe that can fail: IR shape and
+tool-folding; credential masking removes a planted `ghp_…` from **every** format; HTML
+escapes untrusted target strings (`<config>` → `&lt;config&gt;`); byte-identical re-export
+at a pinned `--source-date none`; default format is Markdown; reports land under
+`<workspace>/reports/`; template search honours a site dir **outside** the built-ins and a
+missing template name errors rather than falling through (the wq#2630 falsifiable-boundary
+rule); `templates validate` passes a good template and fails a broken one; and `/export`
+dispatch. Run: `python3 -m pytest limpet/test_workspace_report.py` from `limpet/`.

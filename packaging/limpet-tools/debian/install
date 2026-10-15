@@ -1,2 +1,3 @@
 bin/limpet usr/bin
 bin/limpet-registry-daemon usr/bin
+bin/limpet-workspace usr/bin

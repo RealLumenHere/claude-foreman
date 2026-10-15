@@ -7,7 +7,7 @@ Standards-Version: 4.6.2
 
 Package: limpet-tools
 Architecture: all
-Depends: ${misc:Depends}, python3 (>= 3.11)
+Depends: ${misc:Depends}, python3 (>= 3.11), python3-jinja2, git
 Description: Limpet plugin registry CLI and reconcile daemon
  `limpet` is the operator/agent front door to the Limpet plugin registry:
  validate a limpet-plugin.toml, list installed plugins and effective state,

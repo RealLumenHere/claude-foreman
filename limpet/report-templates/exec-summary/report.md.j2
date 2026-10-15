@@ -1,0 +1,16 @@
+# Executive summary — {{ target.target_id }}
+
+_{{ target.identity.vendor | default("unknown vendor", true) }} {{ target.identity.model | default("", true) }} {{ target.identity.version | default("", true) }} · class {{ target.class }} · report `{{ report_meta.report_id }}`_
+
+{% set counts = {} %}
+{% for f in findings %}{% if counts.update({f.severity: counts.get(f.severity, 0) + 1}) %}{% endif %}{% endfor %}
+**Findings:** {{ findings | length }} total{% for sev in SEVERITY_ORDER %}{% if counts.get(sev) %} · {{ counts.get(sev) }} {{ sev }}{% endif %}{% endfor %}
+
+{% if findings %}
+{% for f in findings %}
+- **{{ f.id }}** _{{ f.severity | default("info", true) }}_ — {{ f.title | default("(untitled)", true) }}{% if f.remediation %}
+  Remediation: {{ f.remediation }}{% endif %}
+{% endfor %}
+{% else %}
+_No findings recorded._
+{% endif %}

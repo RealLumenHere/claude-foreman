@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Limpet report — {{ target.target_id }}</title>
+<style>
+  :root { --fg:#1a1a1a; --muted:#666; --line:#ddd; --accent:#0b5; --bg:#fff;
+          --crit:#b00020; --high:#d35400; --med:#b7950b; --low:#2471a3; --info:#555; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+         color:var(--fg); background:var(--bg); max-width:52rem; margin:2rem auto; padding:0 1.2rem; }
+  h1 { font-size:1.7rem; border-bottom:3px solid var(--accent); padding-bottom:.3rem; }
+  h2 { margin-top:2rem; border-bottom:1px solid var(--line); padding-bottom:.2rem; }
+  h3 { margin-top:1.4rem; }
+  code { background:#f3f3f3; padding:.1em .3em; border-radius:3px; font-size:.86em;
+         word-break:break-all; }
+  table { border-collapse:collapse; width:100%; margin:.6rem 0; font-size:.92em; }
+  th,td { border:1px solid var(--line); padding:.35rem .55rem; text-align:left; vertical-align:top; }
+  th { background:#fafafa; }
+  .meta { color:var(--muted); font-size:.9em; border-left:3px solid var(--accent);
+          padding:.4rem .8rem; background:#fafafa; }
+  .warn { color:#fff; background:var(--crit); padding:.5rem .8rem; border-radius:4px; font-weight:600; }
+  .sev { display:inline-block; padding:.05em .5em; border-radius:3px; color:#fff; font-size:.8em;
+         text-transform:uppercase; letter-spacing:.03em; }
+  .sev-critical{background:var(--crit);} .sev-high{background:var(--high);}
+  .sev-medium{background:var(--med);} .sev-low{background:var(--low);} .sev-info{background:var(--info);}
+  .empty { color:var(--muted); font-style:italic; }
+  footer { margin-top:2.5rem; border-top:1px solid var(--line); padding-top:.6rem;
+           color:var(--muted); font-size:.85em; }
+  @media print { body { max-width:none; margin:0; } h2 { page-break-after:avoid; }
+                 h3 { page-break-after:avoid; } table { page-break-inside:avoid; } }
+</style>
+</head>
+<body>
+<h1>Limpet investigation report — {{ target.target_id }}</h1>
+<div class="meta">
+  Report <code>{{ report_meta.report_id }}</code> ·
+  template <code>{{ report_meta.template }}@1</code> ·
+  generated {{ report_meta.generated_at }} ·
+  workspace commit <code>{{ report_meta.workspace_commit | sha_short if report_meta.workspace_commit else "(no git)" }}</code>
+</div>
+{% if not report_meta.redacted %}<p class="warn">⚠ UNREDACTED — contains unmasked secrets. Handle accordingly.</p>{% endif %}
+
+<h2>Target</h2>
+<table>
+  <tr><th>Target ID</th><td><code>{{ target.target_id }}</code></td></tr>
+  <tr><th>Class</th><td>{{ target.class }}</td></tr>
+  <tr><th>Vendor</th><td>{{ target.identity.vendor | default("—", true) }}</td></tr>
+  <tr><th>Model</th><td>{{ target.identity.model | default("—", true) }}</td></tr>
+  <tr><th>Version</th><td>{{ target.identity.version | default("—", true) }}</td></tr>
+</table>
+{% if target.hardware_bound %}
+<h3>Hardware bound</h3>
+<table><tr><th>Capability</th><th>Adapter</th><th>VID:PID</th></tr>
+{% for hw in target.hardware_bound %}
+<tr><td>{{ hw.capability | default("—", true) }}</td><td>{{ hw.adapter | default("—", true) }}</td><td><code>{{ hw.vid_pid | default("—", true) }}</code></td></tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<h2>Analysis timeline</h2>
+{% if timeline %}
+<table><tr><th>Time</th><th>Kind</th><th>Ref</th><th>Summary</th></tr>
+{% for e in timeline %}
+<tr><td>{{ e.ts | default("—", true) }}</td><td>{{ e.kind }}</td><td><code>{{ e.ref }}</code></td><td>{{ e.summary }}</td></tr>
+{% endfor %}
+</table>
+{% else %}<p class="empty">No recorded events.</p>{% endif %}
+
+<h2>Tools used</h2>
+{% if tools_used %}
+<table><tr><th>Plugin</th><th>Version</th><th>Trust</th><th>Invocations</th><th>First</th><th>Last</th></tr>
+{% for t in tools_used %}
+<tr><td>{{ t.plugin }}</td><td>{{ t.version | default("—", true) }}</td><td>{{ t.trust }}</td><td>{{ t.invocations }}</td><td>{{ t.first_ts | default("—", true) }}</td><td>{{ t.last_ts | default("—", true) }}</td></tr>
+{% endfor %}
+</table>
+{% else %}<p class="empty">No tool invocations recorded.</p>{% endif %}
+
+<h2>Findings</h2>
+{% if findings %}
+{% for f in findings %}
+<h3>{{ f.id }} — {{ f.title | default("(untitled)", true) }}
+  <span class="sev sev-{{ f.severity | default('info', true) }}">{{ f.severity | default("info", true) }}</span></h3>
+{% if f.cvss %}<p>CVSS {{ f.cvss.version }} {{ f.cvss.score }} <code>{{ f.cvss.vector }}</code></p>{% endif %}
+<p>{{ f.summary | default("", true) }}</p>
+{% if f.evidence %}
+<p><strong>Evidence</strong></p><ul>
+{% for ev in f.evidence %}
+<li><code>{{ ev.path | default("?", true) }}</code>{% if ev.locator %} @ {{ ev.locator }}{% endif %}{% if ev.sha256 %} — sha256 <code>{{ ev.sha256 | sha_short }}</code>{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if f.remediation %}<p><strong>Remediation.</strong> {{ f.remediation }}</p>{% endif %}
+{% endfor %}
+{% else %}<p class="empty">No findings recorded.</p>{% endif %}
+
+<h2>Firmware checksums</h2>
+{% if firmware_checksums %}
+<table><tr><th>Path</th><th>sha256</th><th>Size</th></tr>
+{% for c in firmware_checksums %}
+<tr><td><code>{{ c.path }}</code></td><td><code>{{ c.sha256 }}</code></td><td>{{ c.size | default("—", true) }}</td></tr>
+{% endfor %}
+</table>
+{% else %}<p class="empty">No checksums recorded.</p>{% endif %}
+
+<h2>Workspace git summary</h2>
+<ul>
+  <li>Commits: <strong>{{ git_summary.commit_count }}</strong></li>
+  <li>First commit: <code>{{ git_summary.first_commit | sha_short if git_summary.first_commit else "—" }}</code></li>
+  <li>Head: <code>{{ git_summary.head | sha_short if git_summary.head else "—" }}</code></li>
+</ul>
+{% if git_summary.shortlog %}
+<table><tr><th>Commit</th><th>Time</th><th>Subject</th></tr>
+{% for c in git_summary.shortlog %}
+<tr><td><code>{{ c.sha | sha_short }}</code></td><td>{{ c.ts }}</td><td>{{ c.subject }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<footer>Generated by {{ report_meta.generator_version }}. Self-contained, no external resources.</footer>
+</body>
+</html>

@@ -1,0 +1,7 @@
+# wq#3934 -- default Limpet report template: everything, for the operator.
+[template]
+name = "full-technical"
+version = "1"
+title = "Full technical investigation report"
+description = "Target identity, analysis timeline, tools used, findings with evidence, firmware checksums, and the workspace git summary. The default export."
+formats = ["md", "html"]

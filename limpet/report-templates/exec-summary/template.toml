@@ -1,0 +1,7 @@
+# wq#3934 -- condensed template: identity + severity-ranked findings, no raw evidence.
+[template]
+name = "exec-summary"
+version = "1"
+title = "Executive summary"
+description = "Target identity and severity-ranked findings with remediation only; omits the evidence chain, tool log, and git shortlog. For a quick read."
+formats = ["md"]
