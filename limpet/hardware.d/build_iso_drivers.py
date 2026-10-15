@@ -19,9 +19,10 @@ function that touches the filesystem, and only ever writes into a
 caller-given directory -- no subprocess calls, no compiling. Actually
 pre-compiling a dkms_targets() module against a real kernel ABI, or copying
 a firmware_targets() package into the ISO's package pool, is the ISO build
-script's job (mkosi/live-build hook) once that pipeline exists; see
-limpet/hardware.d/README.md for current status (no base image/pinned
-target kernel yet, tracked wq#3941 follow-up).
+script's job (mkosi/live-build hook) once that pipeline exists. It does not
+exist yet -- no base image is chosen and no target kernel is pinned, so the
+bundle this module writes is consumed by nothing; building that hook is
+tracked as wq#3980.
 """
 from __future__ import annotations
 
