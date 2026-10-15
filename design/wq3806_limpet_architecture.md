@@ -211,6 +211,22 @@ USB VID/PID + device path + driver, `[capabilities]`, `[agent_use]`).
   image triage), *not* a general inference engine — the i5-14500 has no dGPU and the Coral
   does int8 edge inference only. The agent core (§6) does not depend on it.
 
+- **Safety: the energize-confirm gate (MANDATORY — policy, Frank 2026-10-15, not a
+  per-session judgment call).** Every HAL capability a hardware plugin exposes must be
+  classified `read_only` or `energizing`. `energizing` means: applies probe power, drives
+  JTAG/SWD, writes flash, flips a GPIO/reset line, sends a bootloader-unlock command, or
+  fires a boot-vector/exploit action sourced from `limpet/data/soc-exploit-db/`. The
+  meta-server (§2) must refuse to invoke an `energizing` capability without an explicit
+  operator confirm attached to that specific call — the same confirm defined for the
+  wizard's IDENTIFY flow at `docs/target-wizard-spec.md` §4.3/§5, generalized here to every
+  HAL path, not just identification. A capability with no classification, or an ambiguous
+  one, defaults to `energizing` (fail closed). `read_only` work — enumeration, VID:PID
+  identification, read-only probing, passive capture, non-destructive dumps — stays fully
+  autonomous; this is what keeps "fully autonomous RE" (VISION.md) true without making
+  destructive hardware actions autonomous too. A SoC→exploit catalog is legitimate,
+  cataloging-only RE data; this gate is what stops the agent from autonomously *acting* on
+  it against a physically attached device.
+
 Every HAL capability is mediated by the meta-server like any other tool, so hardware
 actions are trust-gated and audited identically to software tools.
 
@@ -264,6 +280,15 @@ reproducible:
   promoting a `community` plugin (with rationale) but cannot self-promote — promotion is
   the §3 trust-gate, a review decision. This keeps "fully autonomous RE" (VISION.md) true
   for the analysis loop while keeping tool-adoption under the §0.3 gate.
+- **Energize-confirm boundary (MANDATORY, see §4).** The autonomy boundary above covers
+  *which tools* the agent may use; it does not cover *energizing actions on hardware*,
+  which are gated separately and unconditionally by §4's energize-confirm requirement. The
+  agent core may plan, propose, and queue an energizing step (e.g. "write this Firehose
+  loader," "drive JTAG to this pin"), but must stop and wait for the operator confirm
+  defined in §4 before that step executes, regardless of trust tier, plugin confidence, or
+  how many prior steps in the session succeeded. This is policy (Frank, 2026-10-15), not a
+  per-agent or per-session judgment call, and it applies to every energizing action,
+  including ones sourced from `limpet/data/soc-exploit-db/`.
 - **Secondary-control preservation (wq#3658).** The agent core and the Ollama+Docker
   worker role are not mutually exclusive: Limpet runs the RE meta-server as its primary
   service and can still host Docker workers / stand in for control-plane duties. The
