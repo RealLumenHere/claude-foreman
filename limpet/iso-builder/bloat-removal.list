@@ -18,7 +18,12 @@ libreoffice-common
 thunderbird
 
 # Games bundled by the xubuntu-desktop metapackage.
-xubuntu-icon-theme
+#
+# xubuntu-icon-theme was listed here by wq#3946 under this comment. It is not a
+# game -- it is the stock Xubuntu icon theme, and the greeter config this build
+# ships (overlay/etc/lightdm/lightdm-gtk-greeter.conf) names an icon theme, so
+# stripping icon themes here is the wrong direction. Removed by wq#4073; see
+# reports/wq4073_judgment_wq3946_papirus_icon_theme.md.
 gnome-mahjongg
 gnome-mines
 gnome-sudoku

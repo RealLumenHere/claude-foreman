@@ -44,6 +44,15 @@ blocking on one that doesn't:
   "section 6.1" source (same missing-spec issue above) — it's this ticket's
   own reasoned call (drop office/games/print/media-player packages an
   appliance that boots to the Limpet panel never needs), documented inline.
+- **Greeter theme packages** (task 9, wq#4073): the greeter conf
+  `overlay/etc/lightdm/lightdm-gtk-greeter.conf` names Papirus-Dark /
+  Greybird-dark / Inter, but nothing installed them — LightDM would have booted
+  with `icon-theme-name` pointed at a theme absent from the chroot. `stage9`
+  now installs `papirus-icon-theme greybird-gtk-theme fonts-inter`
+  (`docs/branding-spec.md:160-161`, `:126`), and `xubuntu-icon-theme` is no
+  longer purged by `bloat-removal.list` (it was listed under the "games"
+  comment; it is an icon theme). Guarded by
+  `test_build_theme_packages.py`.
 - **RE tool packaging** (task 4): `tool-catalog.json` records no
   apt/pip/cargo package name field. `gen_tool_packages.py` resolves one the
   way a human would — `dpkg -S <verified-path>` on the build host — and

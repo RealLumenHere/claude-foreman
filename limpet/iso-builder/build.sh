@@ -95,7 +95,10 @@ stage3_inject_limpet_packages() {
   # limpet-tools CLI + registry + HAL daemon + MCP meta-server: the real
   # component code, not a reference to where it lives.
   mkdir -p "$CHROOT/opt/limpet/lib"
-  cp -a "$LIMPET_ROOT"/*.py "$CHROOT/opt/limpet/lib/"
+  # Production modules only -- an unfiltered *.py glob shipped the pytest suite
+  # (17 test_*.py files) into /opt/limpet/lib (wq#4073).
+  find "$LIMPET_ROOT" -maxdepth 1 -name '*.py' ! -name 'test_*.py' \
+    -exec cp -a {} "$CHROOT/opt/limpet/lib/" \;
   cp -a "$LIMPET_ROOT/registry" "$CHROOT/opt/limpet/lib/"
   cp "$REPO_ROOT/ops/wq3809-limpet-hal/hal.py" "$CHROOT/opt/limpet/lib/hal.py"
   mkdir -p "$CHROOT/opt/limpet/mcp-meta-server"
@@ -193,7 +196,18 @@ stage9_apply_branding() {
   log "stage9: branding"
   [ -d "$CHROOT" ] || fail "chroot not assembled yet"
   require_cmd python3
-  # LightDM greeter: shipped verbatim in overlay/ (stage3), nothing more to do.
+
+  # Theme/font packages the shipped greeter conf names. wq#3946 shipped
+  # overlay/etc/lightdm/lightdm-gtk-greeter.conf pointing at Papirus-Dark /
+  # Greybird-dark / Inter without installing any of them, so the greeter booted
+  # with icon-theme-name aimed at a theme absent from the chroot (wq#4073).
+  # Packages come from docs/branding-spec.md:160-161 and :126, not guessed.
+  # Greybird is the Xubuntu default and is normally already present; apt makes
+  # that a no-op rather than something this build has to assume.
+  chroot "$CHROOT" apt-get install -y \
+    papirus-icon-theme greybird-gtk-theme fonts-inter
+
+  # LightDM greeter conf itself: shipped verbatim in overlay/ (stage3).
   # MOTD: rendered from the fixed terminal mark + tokens.json (branding-spec.md 1.3/2.4).
   python3 -I "$HERE/gen_motd.py" --out "$CHROOT/etc/motd"
   mkdir -p "$CHROOT/opt/limpet/brand"
