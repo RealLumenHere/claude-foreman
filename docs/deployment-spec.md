@@ -8,10 +8,11 @@
 
 Sibling specs this one leans on:
 
-- Install wizard flow → `docs/install-wizard-spec.md` (companion; see §4).
+- Install → the stock Xubuntu installer (§4). `install-wizard-spec.md` in
+  `/home/lumen/projects/limpet/docs/` is superseded as an installer design.
 - Target Device Wizard → `docs/target-wizard-spec.md`.
 - Agent chat, model picker, greeting → `docs/agent-chat-spec.md`.
-- Desktop / start bar → `docs/desktop-spec.md`.
+- Desktop (two stacked terminals) → `docs/desktop-spec.md` §0a.
 - Settings keys (update, network, LLM) → `docs/settings-spec.md`.
 - Plugin + tool registry → `docs/plugin-spec.md`, `limpet/tool-catalog.json`.
 - Hardware support matrix → `docs/hardware-tiers-spec.md`.
@@ -20,8 +21,30 @@ Sibling specs this one leans on:
 
 Limpet is an appliance, not an app (`docs/limpet_readme.md:29`). The deployment
 story must therefore read like unboxing a device, not installing software on a
-daily driver: download → write USB → boot → (try live or install) → first boot
-brings the stack up → plug in a target → work.
+daily driver: download → write USB → boot → install → first boot brings the
+stack up → plug in a target → work.
+
+**Frank decisions, 2026-10-16 (wq#4082).** These override anything below or in a
+sibling spec that disagrees:
+
+1. **Install-only boot.** The USB's GRUB menu installs Limpet. There is no "Try
+   Limpet Live" session (§3).
+2. **Desktop = two stacked `xfce4-terminal` windows.** Agent TUI on top, a plain
+   shell below. No custom start-bar panel (`docs/desktop-spec.md` §0a).
+3. **No-internet ISO.** Install and first boot finish with no network at all.
+   Everything the box needs ships on the ISO. There is no netinst variant (§1, §5).
+4. **USB writing: balenaEtcher recommended.** The ISO is a standard hybrid image,
+   so any raw-image writer works. The guide documents Etcher only, not `dd` (§2).
+5. **Standard Linux install.** The installer is the stock Xubuntu 26.04 installer
+   already on the base ISO, not a custom TUI. Limpet packages come from the ISO,
+   not from a PPA (§4).
+
+As-built reference: the base ISO (Xubuntu 26.04) boots one entry, "Try or
+Install Xubuntu", with casper layered squashfs (minimal → minimal.standard →
+live) and `casper/install-sources.yaml`. `limpet/iso-builder/build.sh` does not
+yet remaster that layout (audit `/home/lumen/projects/limpet/docs/audit-2026-10-16-limpet-iso.md`
+§3). The boot and desktop behaviour this spec describes is the target, not what
+ships today.
 
 ---
 
@@ -59,38 +82,30 @@ auto-detection against real probes, but the full UI + agent + offline LLM work):
 - Each ships with USB passthrough notes so an evaluator can still forward a real
   target device into the VM.
 
-**Bundled models.** The ISO ships with at least one local LLM baked in so the box
-is useful fully offline on first boot (§5). The download page states the ISO size
-and which model(s) are included; a smaller "netinst" ISO without bundled models
-is offered for bandwidth-constrained downloads (model pulled on first boot
-instead, per §5).
+**No-internet ISO.** One ISO, self-contained: base OS, Limpet packages, the
+tool set, and at least one local LLM are all on it. Installing and first boot
+never touch the network (§4, §5). The download page states the ISO size and
+which model(s) are included. No "netinst" ISO is offered: a variant that needs
+the network at install time breaks decision 3.
 
 ---
 
 ## 2. USB creation
 
-The download page carries a per-OS guide. All three paths write the raw hybrid
-ISO; none require unpacking.
+**balenaEtcher is the recommended writer on every OS** (decision 4). It runs on
+Windows, macOS, and Linux, it only lists removable drives, and it verifies the
+write when it finishes, so one set of instructions covers everyone. The guide
+does not document `dd`: a mistyped device is the one way to destroy a disk here.
 
-**Windows — Rufus (recommended) or balenaEtcher.**
 1. Download the ISO and `SHA256SUMS`.
-2. Verify: `certutil -hashfile limpet-<version>-amd64.iso SHA256` and compare.
-3. Rufus: select the USB device, select the ISO, keep "DD Image" mode when
-   prompted (hybrid ISO), leave partition scheme on the default, Start.
-4. Etcher alternative: Flash from file → select ISO → select drive → Flash.
+2. Verify the checksum: `certutil -hashfile limpet-<version>-amd64.iso SHA256`
+   (Windows), `shasum -a 256 limpet-<version>-amd64.iso` (macOS), or
+   `sha256sum -c SHA256SUMS` (Linux), and compare.
+3. Etcher: Flash from file → select the ISO → select the USB drive → Flash.
 
-**macOS — balenaEtcher (recommended).**
-1. Verify: `shasum -a 256 limpet-<version>-amd64.iso` and compare.
-2. Etcher: Flash from file → select drive → Flash. (Etcher over raw `dd` on
-   macOS because it handles unmount/eject and avoids the wrong-disk footgun.)
-
-**Linux — `dd` or balenaEtcher.**
-1. Verify: `sha256sum -c SHA256SUMS`.
-2. Identify the device with `lsblk` (confirm size; it must be the USB stick, not
-   a system disk).
-3. `sudo dd if=limpet-<version>-amd64.iso of=/dev/sdX bs=4M status=progress oflag=sync`
-   — replace `/dev/sdX` with the whole device, never a partition.
-4. `sync` before removing. Etcher alternative for users who want the guardrails.
+The ISO is a standard BIOS+UEFI hybrid image, not an Etcher-specific format.
+Rufus (in "DD Image" mode), Ventoy, GNOME Disks, or any other raw-image writer
+also works. Those tools are supported but not documented step by step.
 
 Every path ends with: boot the target PC, open the one-time boot menu
 (F12/F10/Esc depending on vendor), pick the USB device.
@@ -99,61 +114,74 @@ Every path ends with: boot the target PC, open the one-time boot menu
 
 ## 3. Boot
 
-**GRUB menu** (default highlight on "Try Limpet Live", 10s timeout):
+**GRUB menu: install-only** (decision 1). No timeout auto-selects Install: the
+default entry is the harmless one, so a box that boots the USB by accident and
+sits unattended ends up on its own disk, not halfway into an install.
 
 ```
 Limpet <version>
 
-  > Try Limpet Live          (no changes to disk — evaluate first)
-    Install Limpet           (guided installer, §4)
-    Boot from first hard disk (leave this machine alone)
+  > Boot from first hard disk (leave this machine alone)
+    Install Limpet            (standard installer, §4)
+    Install Limpet (safe graphics)
     Memory test (memtest86+)
-    Advanced ▸               (safe graphics, nomodeset, serial console)
 ```
 
-- **Try Limpet Live** boots the full environment off the USB into a live session:
-  the whole stack comes up (§5), HAL auto-detection works against anything plugged
-  in, and the user can run a real investigation without touching the internal
-  disk. Workspaces live on tmpfs/USB and are lost on reboot unless exported (§11);
-  the live session surfaces this in the agent greeting.
-- **Install Limpet** launches the wizard (§4). The live session also carries an
-  "Install Limpet" desktop launcher so a user who started in Try mode can commit
-  without rebooting.
-- **Boot from first hard disk** is the safety exit for a user who booted the USB
-  by accident.
+- **Install Limpet** boots straight into the installer (§4). No desktop, Limpet
+  stack, or "Try" option comes first. The disk-erasing step stays a confirmed
+  action inside the installer, consistent with the energize-confirm doctrine
+  (`docs/limpet_readme.md:68`).
+- **Boot from first hard disk** is the default (10s timeout) and the safety exit
+  for a user who booted the USB by accident.
+- **Install Limpet (safe graphics)** adds `nomodeset` so an oddball-GPU box can
+  still reach the installer.
 - **Memtest** is bundled because the reference workload (local LLM + emulation)
   is RAM-heavy and bad DIMMs are a common field failure.
-- **Advanced** holds the nomodeset / safe-graphics / serial-console entries so a
-  headless or oddball-GPU box can still reach the installer.
 
-Default highlight is deliberately Live, not Install: the appliance pitch is
-"plug a target in and see," and a destructive install should be a chosen action,
-consistent with the energize-confirm doctrine (`docs/limpet_readme.md:68`).
+There is no live session. Evaluation without installing goes through the VM
+images (§1).
+
+**Gap against the base ISO.** The stock Xubuntu 26.04 `grub.cfg` has one entry,
+"Try or Install Xubuntu". It boots casper into a live session that offers the
+installer. Getting to install-only means remastering that `grub.cfg` (stage11 of
+`limpet/iso-builder/build.sh` writes none today, per the audit) and starting the
+installer with no "Try" choice. That is iso-builder work, separate from this spec.
 
 ---
 
 ## 4. Install
 
-The installer wizard flow is owned by `docs/install-wizard-spec.md` (companion
-spec). This deployment spec depends only on its contract:
+Limpet uses a **standard Linux install** (decision 5): the stock Xubuntu 26.04
+installer that the base ISO already carries (casper + `install-sources.yaml`).
+Limpet does not ship a custom TUI installer. Limpet's own packages
+(`limpet-hald`, `limpet-mcp-meta`, `limpet-tools`, the three debs that exist in
+`packaging/`) and the tool set are baked into the ISO's squashfs layers at ISO
+build time, so the installer copies them like any other installed package.
+There is no Limpet PPA, and the install never fetches anything (decision 3).
+Limpet-specific choices (LLM, update policy) are written as settings defaults at
+ISO build time and confirmed on first boot (§5), not asked in the installer.
 
-- Input: a live/installer session from §3.
+`/home/lumen/projects/limpet/docs/install-wizard-spec.md` (wq#3806) describes a
+custom urwid TUI, a PPA, and pre-built debs for 104 tools. Read it as the list
+of Limpet defaults, not as the installer. Its banner records this.
+
+The contract this spec depends on:
+
+- Input: the installer booted from §3.
 - Output on success: an installed system that, on next boot, runs the first-boot
   sequence in §5 and reaches the first-login experience in §6.
-- The wizard must record the operator's LLM choice (bundled model vs. pull vs.
-  external gateway) so §5's model step is a confirmation, not a fresh decision —
-  it writes the `llm.*` settings keys defined in `docs/settings-spec.md:159`.
-- The wizard must write the update channel/policy preference
+- The installed image carries `llm.*` defaults (`docs/settings-spec.md:159`)
+  pointing at the bundled model, so §5's model step is a confirmation, not a
+  fresh decision.
+- The installed image carries the update channel/policy defaults
   (`docs/settings-spec.md:338`) so §10 has a source of truth.
-
-If `docs/install-wizard-spec.md` is absent at build time, treat the above four
-bullets as the acceptance surface the installer must satisfy.
+- The install completes with networking unplugged.
 
 ---
 
 ## 5. First-boot sequence
 
-On the first boot of an installed (or live) system, systemd brings the stack up
+On the first boot of an installed system, systemd brings the stack up
 in dependency order. The real units today are `limpet-hald` (binary at
 `packaging/limpet-hald/bin/limpet-hald`, referenced as the HAL detector in
 `docs/settings-spec.md:208`), `limpet-mcp-meta.service`
@@ -177,21 +205,20 @@ Each step publishes a health check that the next `After=` + a readiness probe
 depends on:
 
 1. **limpet-hald** — enumerates connected hardware, writes the inventory the
-   start bar and §6 read. Healthy when the detector has completed one full scan.
+   agent TUI status line and §6 read. Healthy when the detector has completed one full scan.
 2. **limpet-mcp-meta** — the manifest-driven multiplexer. It ships with every
    child server disabled (`packaging/limpet-mcp-meta/debian/control:15`) and
    enables only what the installed tool set declares; healthy when it answers
    JSON-RPC `initialize` and the registry daemon has reconciled the manifest.
-3. **litellm** — the local LLM gateway. First-boot model step: if the ISO bundled
-   a model, this is a one-line confirm; if not (netinst), the agent offers the
-   model picker, which reads the gateway's live `/v1/models`
-   (`docs/agent-chat-spec.md:195`) rather than a hard-coded list, and pulls the
-   selected model. In full offline mode with a bundled model, no network is
-   touched.
+3. **litellm** — the local LLM gateway. First-boot model step: a one-line
+   confirm of the model bundled on the ISO. No network is touched. The model
+   picker (`docs/agent-chat-spec.md:195`) reads the gateway's live `/v1/models`,
+   so pointing at an external gateway or pulling another model later is an
+   operator choice once the box has a network, not a first-boot step.
 4. **limpet-agent** — connects to the meta-server and (if up) the LLM gateway,
    then runs tool-health verification: `limpet-tools health`
    (`docs/limpet_readme.md:105`) over the registry, surfacing the `n/n✓` the
-   start bar shows (`docs/desktop-spec.md:69`).
+   agent TUI status line shows (`docs/desktop-spec.md` §0a).
 
 **Health checks** are the gate, not a timer: a slow model pull must not fail the
 boot. A failed non-essential tool is reported (degraded `Tools: n/m✓`), never
@@ -202,8 +229,9 @@ degradation.
 
 ## 6. First-login experience
 
-On first login the desktop (XFCE start bar, `docs/desktop-spec.md:69`) loads and
-the Agent Chat panel opens to a greeting from the agent, not a blank prompt. The
+On first login the XFCE session opens two `xfce4-terminal` windows stacked
+top-to-bottom (decision 2, `docs/desktop-spec.md` §0a): the agent TUI on top, a
+plain shell below. The agent TUI opens to a greeting, not a blank prompt. The
 greeting:
 
 - States what Limpet is in one line and names the box's hardware inventory from
@@ -213,16 +241,13 @@ greeting:
   without AI assistance — plug in a model or gateway in Settings" if litellm is
   down, §9).
 - Offers a **guided tour** or **skip**. The tour is a short, dismissible walk:
-  the start bar clusters (launchers | status | settings, `docs/desktop-spec.md`
-  §2), the Target Wizard, the `/tools` command, and where workspaces live. Skip
-  is one click and never nags again (a settings flag).
+  the two terminals (agent above, shell below), the Target Wizard, the `/tools`
+  command, and where workspaces live. Skip is one keypress and never nags again
+  (a settings flag).
 
-The hardware inventory is also reachable any time from the start bar `HW: n✓`
-indicator and `limpet-tools hardware` (`docs/limpet_readme.md:115`), so the tour
-is convenience, not the only path.
-
-Live-session note: the greeting states that workspaces are ephemeral until
-exported (§11) and offers the "Install Limpet" launcher.
+The hardware inventory is also reachable any time from the agent TUI status
+line `HW: n✓` and from `limpet-tools hardware` in the bottom shell
+(`docs/limpet_readme.md:115`), so the tour is convenience, not the only path.
 
 ---
 
@@ -230,8 +255,8 @@ exported (§11) and offers the "Install Limpet" launcher.
 
 The canonical first session:
 
-1. **Plug in the first target.** `limpet-hald` detects it; the start bar `HW`
-   indicator ticks up and the agent proactively notes the new device
+1. **Plug in the first target.** `limpet-hald` detects it; the agent TUI `HW`
+   status ticks up and the agent proactively notes the new device
    (auto-detection is the differentiator, `docs/limpet_readme.md:66`).
 2. **Target Device Wizard launches.** Entry points and flow are owned by
    `docs/target-wizard-spec.md` (entry points §1, flow §2). It walks
@@ -256,19 +281,16 @@ The canonical first session:
 
 Users reach the tool catalog (104 tools; the `tools` array in
 `limpet/tool-catalog.json` is canonical, `docs/limpet_readme.md:211`) three ways,
-by context:
+by context. There is no start-bar or menu launcher path (decision 2); the
+two terminals are the whole surface.
 
-- **Start bar / Whisker menu** (`docs/desktop-spec.md` §2) — GUI launchers,
-  organized by the plugin `category` field (firmware-extraction, binary-analysis,
-  emulation, flash, android, network, bios-uefi — the README's section grouping).
-  The `Tools: n/n✓` indicator doubles as the discovery entry point: clicking it
-  opens the tool list with health state.
-- **`/tools` in agent chat** — in-conversation discovery. Lists tools filtered by
+- **`/tools` in the agent TUI (top terminal)** — in-conversation discovery. Lists tools filtered by
   the connected target and the current workflow stage, so the agent surfaces the
   few relevant tools rather than all 104. This is the primary discovery path in
   normal use because the agent already knows the context.
-- **`limpet-tools` CLI** (`packaging/limpet-tools/bin/limpet`,
-  `limpet-workspace`) — the scriptable/headless path: `limpet-tools health`,
+- **`limpet-tools` CLI in the bottom shell** (`packaging/limpet-tools/bin/limpet`,
+  `limpet-workspace`) — the scriptable/headless path, and where GUI tools such as
+  Ghidra are launched by name: `limpet-tools health`,
   `limpet-tools hardware`, `limpet-tools install-defaults`
   (`docs/limpet_readme.md:102`). Everything the GUI does is available here for
   automation and remote/SSH use.
@@ -292,7 +314,8 @@ suggestions are how a user finds the right tool without reading a 104-item menu.
 **Graceful degradation is a first-class requirement.** The agent must work
 without the LLM — tool invocation, workspace management, the Target Wizard's
 deterministic DETECT/IDENTIFY path, and manual tool runs all function; the box
-simply offers no AI suggestions and says so in the greeting (§6) and start bar.
+simply offers no AI suggestions and says so in the greeting (§6) and the agent
+TUI status line.
 This matches the offline-first posture (`docs/limpet_readme.md:69`): a user with
 no model and no network still has a working RE appliance.
 
@@ -304,12 +327,17 @@ exist in `packaging/` today and are the template for the rest.
 
 ## 10. Update mechanism
 
-**Online (default).** Limpet packages, tools, and the agent update through an apt
-repo whose URL is `network.update_repo_url` (`docs/settings-spec.md:315`).
-Policy is operator-controlled and never silent: `update.channel` (`stable`
+The box works with no network for its whole life (decision 3), so updates are
+never required and never automatic.
+
+**Online (optional, not built).** Once a box has a network, Limpet packages,
+tools, and the agent can update through an apt repo whose URL is
+`network.update_repo_url` (`docs/settings-spec.md:315`). No such repo or PPA
+exists today. Until one does, the offline sideload below is the only update
+path. Policy is operator-controlled and never silent: `update.channel` (`stable`
 default, `dev` opt-in) and `update.policy` (`manual` default — an update is an
 explicit operator action), with `update.notify_only` surfacing "update available"
-in the panel (`docs/settings-spec.md:338`). This is consistent with the
+in the agent TUI status line (`docs/settings-spec.md:338`). This is consistent with the
 fleet-wide deny-list on silent `systemctl stop/disable/mask`
 (`docs/settings-spec.md:77`).
 
@@ -322,7 +350,7 @@ What updates, and how:
 - **Kernel**: Ubuntu HWE stack via apt, so hardware support tracks the LTS HWE
   cadence without a distro rebuild.
 
-**Offline (USB sideload).** For air-gapped sites: `limpet-update --from-usb
+**Offline (USB sideload, primary).** For every box, air-gapped or not: `limpet-update --from-usb
 <mountpoint>`. A companion online box runs `limpet-update --export <usb>` to stage
 a signed bundle (packages + tool/plugin updates + exploit-DB delta) onto a USB;
 the air-gapped box verifies the bundle signature against the release key (§1) and
@@ -339,8 +367,7 @@ Three granularities, smallest to largest:
    <name>` (via `packaging/limpet-tools/bin/limpet-workspace`) produces a single
    archive of one git-tracked workspace: firmware, extractions, findings, and the
    commit history that links each finding to its tool/command (the audit chain,
-   `docs/limpet_readme.md:72`). This is also how a live-session user persists work
-   before reboot (§3, §6). Restore: `limpet-workspace import <archive>`.
+   `docs/limpet_readme.md:72`). Restore: `limpet-workspace import <archive>`.
 2. **System config backup** — the settings tree (`docs/settings-spec.md`), the
    enabled-plugin manifest, HAL overrides, and the LLM/update preferences. A small
    archive that re-provisions a freshly installed box to a known configuration
@@ -357,8 +384,9 @@ losing its evidence chain.
 ## 12. Troubleshooting
 
 **Common issues (download page + in-box help cover these):**
-- *USB won't boot* → re-check `SHA256SUMS`, confirm DD/raw-image write mode (§2),
-  try the Advanced → safe-graphics / nomodeset GRUB entry (§3).
+- *USB won't boot* → re-check `SHA256SUMS`, rewrite the stick with Etcher (or
+  any writer in raw-image mode, §2), try the "Install Limpet (safe graphics)"
+  GRUB entry (§3).
 - *No AI suggestions* → litellm down or no model. Expected degraded mode (§9);
   pick a model in the chat picker (`docs/agent-chat-spec.md:195`) or point
   `llm.provider` at an external gateway (`docs/settings-spec.md:159`).
@@ -372,12 +400,15 @@ losing its evidence chain.
 **Recovery mode.** The installed GRUB carries a recovery entry that boots to a
 minimal shell with the stack **not** auto-started, so a wedged service or bad
 config can be fixed. From there the operator can `systemctl` individual units,
-restore a system-config backup (§11), or re-run `limpet-tools health`. The live
-USB is itself a recovery tool: boot it, `limpet-workspace import`/`export` against
-the internal disk to rescue work from a non-booting install.
+restore a system-config backup (§11), or re-run `limpet-tools health`. The
+install USB has no live session (§3), so it is not a rescue environment. To rescue
+work from a non-booting install, boot recovery mode and run
+`limpet-workspace export` to a USB drive, or pull the disk into another machine.
 
 **Getting help.** In-box: the agent answers "how do I…" from the shipped docs;
-the start bar links to the local copy of these specs. Out-of-box: the project
+local copies of these specs ship on the box for reading from the bottom shell
+(install path to be fixed by packaging; the debs install per-package docs under
+`/usr/share/doc/<package>/` today). Out-of-box: the project
 repo issue tracker and the download page's support links. Reports should attach
 `limpet-tools health` output and the relevant service journal (scrubbed of any
 target-identifying data the operator doesn't want to share).
@@ -388,7 +419,8 @@ target-identifying data the operator doesn't want to share).
 
 This spec is the deliverable. It covers all twelve sections of the journey,
 references each owning sibling spec by path, and grounds the service architecture
-(§5, §9) in the real units under `packaging/`. Where a referenced spec does not
-yet exist (`docs/install-wizard-spec.md`) or a unit is not yet authored
+(§5, §9) in the real units under `packaging/`. The installer is the stock
+Xubuntu one (§4), so there is no install-wizard spec to depend on. Where a unit
+is not yet authored
 (`limpet-hald.service`, `litellm.service`, `limpet-agent.service`), the dependency
 is named explicitly as a build-time acceptance surface rather than assumed.

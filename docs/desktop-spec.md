@@ -1,10 +1,44 @@
 # wq#3902 — LIMPET desktop mode: XFCE start-bar (panel) layout and contents
 
+> **Superseded by Frank's 2026-10-16 decision (wq#4082):** the desktop is two stacked
+> `xfce4-terminal` windows, not a panel. See §0a.
+
 Design-only ticket. This specifies the XFCE panel an operator sees when a Limpet box
 boots to a desktop session, so a provisioning ticket can lay it down verbatim. It does not
 install a desktop, write to `~/.config`, or register any launcher — those inherit the
 fleet gates. Companion architecture: [`design/wq3806_limpet_architecture.md`](../design/wq3806_limpet_architecture.md)
 (meta-server §2, HAL §4, workspace isolation §5) and the registry in `limpet/`.
+
+## 0a. Superseded: the desktop is two stacked terminals (Frank, 2026-10-16, wq#4082)
+
+Frank decided that the Limpet session opens **two `xfce4-terminal` windows, stacked**:
+
+| Position | Runs | Role |
+|---|---|---|
+| Top | `limpet-agent` TUI | agent chat, greeting (`docs/deployment-spec.md` §6), `/tools`, Target Wizard |
+| Bottom | a plain login shell | `limpet-tools`, `limpet-workspace`, launching GUI tools such as Ghidra by name |
+
+Together the two windows fill the screen. No custom start-bar panel ships, and
+nothing below is the default layout any more. Consequences:
+
+- The six items in §0 do not go on a panel. Items 1, 2 and 4 (workspace,
+  hardware, tool health) become the agent TUI's status line. It reads the same
+  data sources and keeps the §1.1 output contract (one short label per item).
+  Items 3 and 5 are the top terminal itself and `/tools` / the Target Wizard
+  inside it. Item 6 is `limpet-settings` run from either terminal.
+- The session starts both windows from an XDG autostart entry (a script that
+  runs `xfce4-terminal` twice, each with its own `--title` and a `--geometry`
+  computed from the screen size). The exact flags belong to the iso-builder
+  ticket that builds it.
+- As built, `limpet/iso-builder/overlay/` still ships this spec's
+  `xfce4-panel.xml` (to `/etc/skel`) and the `/opt/limpet/panel/genmon-*.sh`
+  scripts. The default session no longer uses them. Removing or repurposing
+  them is iso-builder follow-up work; this doc change does not touch the overlay.
+- `/home/lumen/projects/limpet/docs/startbar-spec.md` (wq#3806) is superseded the
+  same way and carries a matching banner.
+
+Sections 0–7 below are kept as the record of the panel design and of the genmon
+data contract that the status line reuses.
 
 ## 0. What the panel must surface (ticket acceptance)
 

@@ -170,6 +170,9 @@ theme"):
 
 ### 4.3 Start bar (panel)
 
+> wq#4082: no panel ships (`docs/desktop-spec.md` §0a, two stacked terminals). The color
+> tokens below apply to the agent TUI status line that replaces it.
+
 The §4 genmon scripts in `docs/desktop-spec.md` color labels via inline `<css>`; those
 colors are now fixed to tokens:
 
