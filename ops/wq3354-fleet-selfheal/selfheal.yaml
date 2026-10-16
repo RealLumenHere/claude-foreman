@@ -120,6 +120,20 @@ nodes:                  # CLASS 6
     ptah: "wq#3957: did not return from a Frank-approved kernel reboot 2026-10-15 02:54 UTC (6.18.50->6.18.56, wq#3866 apt upgrade) -- no LAN ping (192.168.8.125 ARP FAILED), no tailnet, and no smart plug assigned so there is no remote power path. ptah is a live inference node (qwen2.5-coder:3b / ollama), not meant to be permanently off and not a self-idle sleeper, so this stays a real page, not nodes.ignore/sleepers. Physical check (LEDs, serial console ttyS2@1500000 or HDMI; do NOT power-cycle blindly if the disk LED shows fsck activity) already queued as wq#3949 -- that physical task is the actual fix, this note just carries the context so the next page on ptah doesn't re-derive it.
       wq#4064 (2026-10-16T03:20Z): still offline, same unresolved reboot -- lumen_state confirms ptah.availability=offline since 2026-10-14, conf 0.90. wq#3949 is still open/unclaimed, no smart plug added. Page is working as designed (wq#3957's resolution); it should keep firing daily until wq#3949's physical check lands."
     khnum: "wq#4063: offline on tailscale since 2026-10-16T03:20Z (30+ min). Confirmed REAL, not a stale-read false alarm: lumen_state.py's khnum.status='SERVING' text is dated 2026-10-07 (Commander MCP calls observed landing on khnum 01:45Z that day) and khnum.broker_last_transport_error=2026-10-16T03:54:36Z is from today but still just a prior read -- `fleet-exec run khnum uptime` was re-run live during this ticket and got `ssh: connect to host 100.76.194.58 port 22: Connection timed out`, a real-time outage, not a refusal. khnum is Commander COLD STANDBY (still the deployed backend until Frank deploys the horus pool) and has no Frank power-policy marking it intentionally off and no self-idle timer like hathor, so this stays a real page, not nodes.ignore/sleepers. No smart plug/remote-power path is recorded for khnum (same gap as ptah), so BUILD/selfheal has no remote remediation here -- physical check queued as wq#4067 [frank-hw], deps-linked off this node-offline ticket, not a Frank-gate."
+    rt-ax86u: "wq#4069: offline on tailscale since 2026-10-16T04:50:00Z (30+ min), no power
+       facts in lumen_state at all -- no availability/status history, which makes this the
+       FIRST selfheal page ever recorded for this node (unlike maksoor's nodes.ignore entry,
+       which rests on an observed prior ONLINE/OFFLINE toggle history with no incident).
+       rt-ax86u.role = wifi-repeater-re-station (RT-AX86U, BCM4908 aarch64, Merlin 388.12.2);
+       research/fleet_hardware.json's network-gear entry groups it with be3600 under
+       'appliances and RE targets, not compute hosts'. be3600 is already in nodes.ignore,
+       but only after a CONFIRMED permanent break (85+ days of tailnet-subnet-role failure
+       while the router kept routing fine on LAN) -- rt-ax86u has no equivalent confirmed,
+       long-running fact, just one unexplained 30min gap, so it does not meet either ignore's
+       bar (meant to be off for good) or sleepers' bar (self-idle nap that must stay reachable
+       when up). Leaving this as a live page, not nodes.ignore/sleepers: a second occurrence
+       with no Frank RE-session explanation would be the evidence to revisit, same precedent
+       be3600 and maksoor were classified under."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
