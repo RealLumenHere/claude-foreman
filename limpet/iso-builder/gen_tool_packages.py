@@ -1,15 +1,15 @@
 """wq#3946 stage 4 helper: turn limpet/tool-catalog.json into an install manifest
 for the ISO build.
 
-The catalog (limpet/tool-catalog.json) records each tool's trust tier and, for
-tools already verified on the reference Maksoor RE workstation, its on-disk
-path -- but it does not record an apt/pip/cargo package name (no such field
-exists in any entry as of catalog_version 0.1.0-seed). Guessing a package name
-from a tool name would violate the no-guessing read doctrine, so this module
-resolves a package the same way a human auditing the reference workstation
-would: `dpkg -S <path>` for an apt-owned binary. A tool resolves to pip/cargo
-only when its own catalog entry says so explicitly (none do yet); otherwise an
-unresolved tool is reported, never silently skipped or fabricated.
+The catalog (limpet/tool-catalog.json) records each tool's trust tier, its
+on-disk path on the reference Maksoor RE workstation where verified, and (since
+wq#4081) a verified install_method + package. A declared apt package is used
+as-is; a declared non-apt method is reported unresolved, because this stage
+installs apt packages only. An entry with no declared apt package falls back to
+`dpkg -S <path>`, the way a human auditing the reference workstation would.
+Guessing a package name from a tool name would violate the no-guessing read
+doctrine, so an unresolved tool is reported, never silently skipped or
+fabricated.
 
 Per the catalog's own trust_tiers doctrine (tool-catalog.json provenance.trust_tiers):
 "core = proven on fleet, in base image; vetted = passed TOOL_REGISTRY go/no-go;
@@ -85,6 +85,14 @@ def resolve(tool: dict, runner=subprocess.run) -> Resolution:
                            f"'{tool['redistribution_posture']}' forbids bundling "
                            "into the ISO (tool-catalog.json license_risk_policy, "
                            "wq#3959/wq#4048)")
+    method = tool.get("install_method")
+    declared = tool.get("package")
+    if method == "apt" and declared:
+        return Resolution(name, trust, "apt", declared, None)
+    if method and method != "apt":
+        return Resolution(name, trust, "unresolved", None,
+                           f"install_method '{method}' (package {declared!r}): "
+                           "stage4 installs apt packages only")
     if not path:
         return Resolution(name, trust, "unresolved", None,
                            "no verified path in catalog (import_catalog.py "

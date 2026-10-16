@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "0.2.3",
+  "catalog_version": "0.2.4",
   "generated": "2026-10-15",
   "ticket": "wq#4050",
   "provenance": {
@@ -16,7 +16,8 @@
     "reconciliation": "wq#3936 (2026-10-15): reconciled the 34 wq#3908-verified rows with all reachable on-disk sources and added install_method/mcp_status/disk_size_estimate/priority. New rows (8): searchsploit, component-id, fw-diff, gepetto, pyamlboot, sunxi-fel, fiedka, glitchkit. searchsploit/component-id/fw-diff from on-disk manifests; gepetto/pyamlboot/sunxi-fel from on-disk research/design docs; fiedka/glitchkit are ticket-named promotion stubs (no verifiable on-disk source, web-verify unavailable per wq#2595) carried at trust=community with url=null rather than fabricated. Sources named by the ticket that are NOT on disk and were therefore not folded in: docs/tool-registry-spec.md, DESIGN-DECISIONS.md, VISION.md and install-wizard-spec.md (the real limpet VISION.md lives in /home/lumen/projects/limpet/, outside this worktree; see design/wq3806_limpet_architecture.md:32-45). Farida Phase 2 signed skills (11 tools) are on a remote node with no manifest reachable from this worktree, so not enumerated here.",
     "field_methodology": "mcp_status=has_server only where an MCP server file exists on disk (wq#3881/3882/3883 server.py, wq#3942 server.py, rea/ghidra-mcp bridges); else cli_only. install_method is a best-known static class; the authoritative apt/pip/cargo resolution is dpkg -S at ISO build (limpet/iso-builder/gen_tool_packages.py). disk_size_estimate is a coarse planning bucket (small<100MB / medium 100MB-1GB / large>1GB), not a per-host measurement; null where unmeasured. priority maps from trust: core->core, vetted->recommended, community->optional.",
     "license_risk_policy": "wq#3959 (design/wq3959_license_audit_oghidra_emba_fact_fat.md): the free-text 'license' field alone is not enough to catch redistribution risk (a GPL-3.0 tool and a Functional-Source/Business-Source/custom-EULA tool can both look like a short license string, but only one of them blocks bundling into the commercially-sold Limpet ISO). Every tool entry going forward MUST also carry 'license_risk' (none | copyleft-source-offer | non-osi-commercial-restricted | unverified) and 'redistribution_posture' (bundle | external-invoke | blocked-pending-permission). Any non-OSI / source-available license with a commercial-use or 'competing use' carve-out (FSL, BSL, custom written-permission clauses) gets license_risk=non-osi-commercial-restricted and redistribution_posture=external-invoke (or blocked-pending-permission if the integration plan assumes bundling) until a written commercial license or legal sign-off is obtained \u2014 that sign-off is the one legitimate human-gated step here, everything else (scoping the integration to external-invoke) is applied without waiting on it. See the ghidra entry below for the fields in practice, and the audit doc for EMBA/FACT (GPL-3.0, safe to bundle with a source offer)/FAT 2.0 (FSL-1.1-ALv2, external-invoke only)/OGhidra (unverified, treat as external-invoke only) ahead of their wq#3929 P0 adoption.",
-    "license_risk_enforcement": "wq#4048: the policy above was prose only, so wq#3972 added tshark (GPL-2.0) and afl++ (Apache-2.0) as trust=core (i.e. bundled) entries carrying neither field and nothing caught it until the wq#4047 verify pass. limpet/license_policy.py now enforces it mechanically and limpet/test_license_policy.py runs it against this file: declared values must be in the two enums, and any entry not in the frozen LEGACY_UNAUDITED backlog MUST carry both fields \u2014 a ratchet, so new entries cannot omit them while the 41 pre-policy entries are audited separately (wq#3959 follow-up). limpet/iso-builder/gen_tool_packages.py additionally drops any entry whose redistribution_posture is not 'bundle' from the ISO install manifest, so an external-invoke/blocked tool cannot reach the shipped image by default."
+    "license_risk_enforcement": "wq#4048: the policy above was prose only, so wq#3972 added tshark (GPL-2.0) and afl++ (Apache-2.0) as trust=core (i.e. bundled) entries carrying neither field and nothing caught it until the wq#4047 verify pass. limpet/license_policy.py now enforces it mechanically and limpet/test_license_policy.py runs it against this file: declared values must be in the two enums, and any entry not in the frozen LEGACY_UNAUDITED backlog MUST carry both fields \u2014 a ratchet, so new entries cannot omit them while the 41 pre-policy entries are audited separately (wq#3959 follow-up). limpet/iso-builder/gen_tool_packages.py additionally drops any entry whose redistribution_posture is not 'bundle' from the ISO install manifest, so an external-invoke/blocked tool cannot reach the shipped image by default.",
+    "install_methods": "wq#4081: install_method + package on every entry, verified 2026-10-16 against apt-cache (Lumen, Ubuntu 26.04), PyPI/npm/crates.io metadata and GitHub release assets; vocabulary and the cross-catalog reconciliation (project 104 + data/*.toml names) are in limpet/tool-install-methods.json."
   },
   "categories": [
     {
@@ -104,7 +105,9 @@
       "install_method": "pip",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "unblob",
+      "install_evidence": "wq#4081: PyPI unblob 26.6.4 == foreman verified version; the classifier's 'binary-download' hit was this same wheel."
     },
     {
       "name": "binwalk",
@@ -138,7 +141,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "binwalk",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.4.3 (v2, matches foreman /usr/bin/binwalk). Project names 'Binwalk v3': v3 is Rust, crates.io binwalk 3.1.0 (repository ReFirmLabs/binwalk); v3.1.0 GitHub release has no Linux binary."
     },
     {
       "name": "fwanalyzer",
@@ -161,10 +166,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/examples/fwanalyzer.toml; license_risk/redistribution_posture added by wq#4050: Apache-2.0 confirmed via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file) for github.com/cruise-automation/fwanalyzer. Permissive, notice/attribution only.",
-      "install_method": "binary",
+      "install_method": "source-build",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "https://github.com/cruise-automation/fwanalyzer",
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: 1.4.4 has no Linux assets (Go build). Foreman previously said binary."
     },
     {
       "name": "fwtriage",
@@ -180,10 +187,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/examples/fwtriage.toml; license_risk/redistribution_posture added by wq#4050: upstream (github.com/taffy210/fw-triage, this entry's own url) resolves to MIT via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file), not the 'unverified' placeholder this entry carried before the audit. Permissive, no source-offer obligation.",
-      "install_method": "pip",
+      "install_method": "source-build",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "https://github.com/taffy210/fw-triage",
+      "install_evidence": "wq#4081: PyPI 'fwtriage' 404. Foreman previously said pip."
     },
     {
       "name": "ghidra",
@@ -225,7 +234,9 @@
       "install_method": "binary",
       "mcp_status": "cli_only",
       "disk_size_estimate": "large",
-      "priority": "core"
+      "priority": "core",
+      "package": "ghidra_12.1.4_PUBLIC_20260921.zip",
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: Ghidra_12.1.4_build. apt 'ghidra' absent; crates.io 'ghidra' is unrelated."
     },
     {
       "name": "radare2",
@@ -266,7 +277,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "medium",
-      "priority": "core"
+      "priority": "core",
+      "package": "radare2",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 6.0.7+ds-1."
     },
     {
       "name": "llm4decompile",
@@ -288,10 +301,12 @@
       "redistribution_posture": "external-invoke",
       "trust": "community",
       "provenance": "limpet/examples/llm4decompile.toml; license_risk/redistribution_posture added by wq#4050: fetched both license files from github.com/albertan017/LLM4Decompile directly -- the wrapper code is MIT (LICENSE), but the underlying DeepSeek-based model weights ship under the DeepSeek License Agreement v1.0 (LICENSE-MODEL), a non-OSI license with binding use-based restrictions (Attachment A) that 'MUST be included ... in any legal agreement governing the use and/or distribution of the Model'. Per tool-catalog.json provenance.license_risk_policy this is non-osi-commercial-restricted; trust=community (not currently assumed bundled), so external-invoke applies rather than blocked-pending-permission -- a written DeepSeek commercial sign-off is the human-gated step if bundling the weights is ever proposed.",
-      "install_method": "pip",
+      "install_method": "source-build",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "https://github.com/albertan017/LLM4Decompile",
+      "install_evidence": "wq#4081: PyPI 'llm4decompile' 404; model weights come from Hugging Face. Foreman previously said pip."
     },
     {
       "name": "ifda",
@@ -314,10 +329,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/examples/ifda.toml; license_risk/redistribution_posture added by wq#4050: Apache-2.0 confirmed via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file) for github.com/cn0xroot/IFDA. Permissive, notice/attribution only.",
-      "install_method": "binary",
+      "install_method": "source-build",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "https://github.com/cn0xroot/IFDA",
+      "install_evidence": "wq#4081: upstream repo HEAD 200 on github.com, 2026-10-16; no GitHub releases. Foreman previously said binary."
     },
     {
       "name": "cutter",
@@ -344,7 +361,9 @@
       "install_method": "binary",
       "mcp_status": "cli_only",
       "disk_size_estimate": "medium",
-      "priority": "optional"
+      "priority": "optional",
+      "package": "Cutter-v2.5.0-Linux-x86_64.AppImage",
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v2.5.0 Linux AppImage."
     },
     {
       "name": "frida",
@@ -381,7 +400,9 @@
       "install_method": "pip",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "frida-tools",
+      "install_evidence": "wq#4081: PyPI frida-tools 14.11.0 (Frida CLI, home frida.re) pulls PyPI frida 17.23.3. npm/crates 'frida' not used."
     },
     {
       "name": "qemu-user",
@@ -415,7 +436,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "medium",
-      "priority": "core"
+      "priority": "core",
+      "package": "qemu-user",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:10.2.1+ds-1ubuntu3.2."
     },
     {
       "name": "qemu-system",
@@ -451,7 +474,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "medium",
-      "priority": "core"
+      "priority": "core",
+      "package": "qemu-system-arm",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:10.2.1+ds-1ubuntu3.2 (== foreman /usr/bin/qemu-system-arm)."
     },
     {
       "name": "gdb-multiarch",
@@ -488,7 +513,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "medium",
-      "priority": "core"
+      "priority": "core",
+      "package": "gdb-multiarch",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 17.1-2ubuntu1."
     },
     {
       "name": "qiling",
@@ -522,7 +549,9 @@
       "install_method": "pip",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "recommended"
+      "priority": "recommended",
+      "package": "qiling",
+      "install_evidence": "wq#4081: PyPI qiling 1.4.6, home qiling.io."
     },
     {
       "name": "halucinator",
@@ -548,7 +577,9 @@
       "install_method": "pip",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "halucinator",
+      "install_evidence": "wq#4081: PyPI halucinator 1.9.0 project_urls=github.com/halucinator/halucinator."
     },
     {
       "name": "firmwire",
@@ -571,10 +602,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/examples/firmwire.toml; license_risk/redistribution_posture added by wq#4050: upstream (github.com/firmwire/firmwire, this entry's own url) resolves to BSD-3-Clause via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file), not the 'unverified' placeholder this entry carried before the audit. Permissive, no source-offer obligation.",
-      "install_method": "pip",
+      "install_method": "source-build",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "https://github.com/firmwire/firmwire",
+      "install_evidence": "wq#4081: PyPI 'firmwire' 404. Foreman previously said pip."
     },
     {
       "name": "fuzzware",
@@ -600,10 +633,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/examples/fuzzware.toml; evaluated NO-GO for proposed pipeline (TOOL_REGISTRY.md:147-223); license_risk/redistribution_posture added by wq#4050: upstream (github.com/fuzzware-fuzzer/fuzzware, this entry's own url) resolves to Apache-2.0 via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file), not the 'unverified' placeholder this entry carried before the audit. Permissive, notice/attribution only.",
-      "install_method": "pip",
+      "install_method": "source-build",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "https://github.com/fuzzware-fuzzer/fuzzware",
+      "install_evidence": "wq#4081: PyPI 'fuzzware' 404. Foreman previously said pip."
     },
     {
       "name": "pretender",
@@ -627,10 +662,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/examples/pretender.toml; evaluated NO-GO (TOOL_REGISTRY.md:92-145); license_risk/redistribution_posture added by wq#4050: upstream (github.com/ucsb-seclab/pretender, this entry's own url) resolves to Apache-2.0 via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file), not the 'unverified' placeholder this entry carried before the audit. Permissive, notice/attribution only.",
-      "install_method": "pip",
+      "install_method": "source-build",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "https://github.com/ucsb-seclab/pretender",
+      "install_evidence": "wq#4081: Project url github.com/mit-ll/pretender is 404; ucsb-seclab/pretender (foreman url) exists. PyPI 'pretender' 404; npm 'pretender' is a JS mock-server library. Foreman previously said pip."
     },
     {
       "name": "openocd",
@@ -661,7 +698,9 @@
       "install_method": "apt",
       "mcp_status": "has_server",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "openocd",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.12.0-3build3."
     },
     {
       "name": "flashrom",
@@ -690,7 +729,9 @@
       "install_method": "apt",
       "mcp_status": "has_server",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "flashrom",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.6.0-2ubuntu1.1."
     },
     {
       "name": "rkdeveloptool",
@@ -715,10 +756,12 @@
       "redistribution_posture": "bundle",
       "trust": "core",
       "provenance": "TOOL_REGISTRY.md:23 (verified 2026-10-14); license_risk/redistribution_posture added by wq#4050: GPL-2.0 confirmed via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file) for github.com/rockchip-linux/rkdeveloptool. Bundling permitted with a written source offer.",
-      "install_method": "binary",
+      "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "rkdeveloptool",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.32+pine64git20240226.17823e9-2. Foreman previously said binary (Maksoor's copy is a source build in /usr/local/sbin)."
     },
     {
       "name": "mtkclient",
@@ -747,7 +790,9 @@
       "install_method": "pip",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "git+https://github.com/bkerler/mtkclient",
+      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/mtk); PyPI 'mtkclient' 404."
     },
     {
       "name": "edl",
@@ -776,7 +821,9 @@
       "install_method": "pip",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "git+https://github.com/bkerler/edl",
+      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/edl). PyPI 'edl' is an unrelated EDL-file reader."
     },
     {
       "name": "heimdall",
@@ -803,7 +850,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "heimdall-flash",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.1.0-1build1."
     },
     {
       "name": "spreadtrum_flash",
@@ -825,10 +874,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/examples/spreadtrum_flash.toml; license_risk/redistribution_posture added by wq#4050: upstream (github.com/ilyakurdyukov/spreadtrum_flash, this entry's own url) resolves to Unlicense via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file), not the 'unverified' placeholder this entry carried before the audit. Public-domain-equivalent, no source-offer obligation.",
-      "install_method": "pip",
+      "install_method": "source-build",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "https://github.com/ilyakurdyukov/spreadtrum_flash",
+      "install_evidence": "wq#4081: C tool, no packaged artifact. Foreman previously said pip."
     },
     {
       "name": "hackrf",
@@ -854,7 +905,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "optional"
+      "priority": "optional",
+      "package": "hackrf",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2026.01.3-1."
     },
     {
       "name": "sigrok-cli",
@@ -883,7 +936,9 @@
       "install_method": "apt",
       "mcp_status": "has_server",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "sigrok-cli",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.7.2-1build3."
     },
     {
       "name": "sootty",
@@ -910,7 +965,9 @@
       "install_method": "pip",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "sootty",
+      "install_evidence": "wq#4081: PyPI sootty 1.0 home=github.com/Ben1152000/sootty."
     },
     {
       "name": "netzob",
@@ -937,7 +994,9 @@
       "install_method": "pip",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "netzob",
+      "install_evidence": "wq#4081: PyPI netzob 2.0.0 home=github.com/netzob/netzob."
     },
     {
       "name": "jadx",
@@ -970,7 +1029,9 @@
       "install_method": "binary",
       "mcp_status": "cli_only",
       "disk_size_estimate": "medium",
-      "priority": "recommended"
+      "priority": "recommended",
+      "package": "jadx-1.5.6.zip",
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v1.5.6."
     },
     {
       "name": "apktool",
@@ -1000,7 +1061,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "optional"
+      "priority": "optional",
+      "package": "apktool",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.7.0+dfsg-7.1ubuntu1."
     },
     {
       "name": "scrcpy",
@@ -1025,7 +1088,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "optional"
+      "priority": "optional",
+      "package": "scrcpy",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 3.3.4-1."
     },
     {
       "name": "rea",
@@ -1060,7 +1125,9 @@
       "install_method": "npm",
       "mcp_status": "has_server",
       "disk_size_estimate": "medium",
-      "priority": "optional"
+      "priority": "optional",
+      "package": "rea-agents",
+      "install_evidence": "wq#4081: npm rea-agents 6.5.0 repository=github.com/morluto/rea; its package.json bin maps 'rea'. npm 'rea' is an unrelated connect.router wrapper (stagas), PyPI 'rea' is radio-astronomy software."
     },
     {
       "name": "ghidra-mcp",
@@ -1085,10 +1152,12 @@
       "redistribution_posture": "external-invoke",
       "trust": "community",
       "provenance": "limpet/examples/ghidra-mcp.toml (depends on ghidra plugin); license_risk/redistribution_posture added by wq#4050: limpet/examples/ghidra-mcp.toml (this entry's only provenance) is an illustrative example plugin manifest pointing at a placeholder git url (github.com/example/limpet-ghidra-mcp) -- there is no real published package to verify a license against. Per the no-guessing doctrine this stays unverified rather than trusting the example toml's placeholder 'Apache-2.0' string.",
-      "install_method": "pip",
+      "install_method": "unresolved",
       "mcp_status": "has_server",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": null,
+      "install_evidence": "wq#4081: Foreman entry comes from limpet/examples/ghidra-mcp.toml, whose git source is the placeholder github.com/example/limpet-ghidra-mcp. Not assumed to be bethington/ghidra-mcp. Foreman previously said pip."
     },
     {
       "name": "searchsploit",
@@ -1116,10 +1185,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/registry/tools.d/searchsploit.yaml (wq#3942; MCP server ops/wq3942-limpet-exploit-db-a1/server.py); license_risk/redistribution_posture added by wq#4050: fetched LICENSE.md directly from the entry's own url (gitlab.com/exploit-database/exploitdb) -- GPLv2. Same posture as the tshark precedent: bundling into the commercial ISO permitted with a written source offer.",
-      "install_method": "apt",
+      "install_method": "source-build",
       "mcp_status": "has_server",
       "disk_size_estimate": "medium",
-      "priority": "optional"
+      "priority": "optional",
+      "package": "https://gitlab.com/exploit-database/exploitdb",
+      "install_evidence": "wq#4081: apt 'exploitdb' is absent on Ubuntu 26.04 (Kali-only), despite the foreman entry's earlier apt claim; gitlab repo 200."
     },
     {
       "name": "component-id",
@@ -1148,10 +1219,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/examples/component-id.toml (wq#3900; design/wq3900_limpet_vision_component_id.md). Limpet-native plugin, upstream repo is a placeholder.; license_risk/redistribution_posture added by wq#4050: Limpet-native plugin (wq#3900) with no third-party upstream to audit -- this entry's own provenance already states 'upstream repo is a placeholder' and records the license Lumen itself chose, MIT. Lumen-owned code carries no redistribution risk to classify beyond its own license.",
-      "install_method": "binary",
+      "install_method": "limpet-native",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": null,
+      "install_evidence": "wq#4081: Limpet-native plugin (limpet/examples/component-id.toml, wq#3900); no upstream package."
     },
     {
       "name": "fw-diff",
@@ -1180,10 +1253,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/examples/fw-diff.toml (wq#3906). Limpet-native plugin, upstream repo is a placeholder; depends on ghidra+bindiff.; license_risk/redistribution_posture added by wq#4050: Limpet-native plugin (wq#3906) with no third-party upstream to audit -- same situation as component-id above. Lumen-owned code, Apache-2.0 as this entry's provenance already records.",
-      "install_method": "binary",
+      "install_method": "limpet-native",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": null,
+      "install_evidence": "wq#4081: Limpet-native plugin (limpet/examples/fw-diff.toml, wq#3906); no upstream package."
     },
     {
       "name": "gepetto",
@@ -1211,10 +1286,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "research/GEPETTO_EVAL.md:17,79 (fleet-search web). Evaluated: IDA-only install path, not Ghidra-compatible.; license_risk/redistribution_posture added by wq#4050: upstream (github.com/JusticeRage/Gepetto, this entry's own url) resolves to GPL-3.0 via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file), not the 'unverified' placeholder this entry carried before the audit. Bundling permitted with a written source offer.",
-      "install_method": "binary",
+      "install_method": "vendor",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": null,
+      "install_evidence": "wq#4081: IDA Pro plugin: needs proprietary IDA, so no Limpet-side package; v1.5.1 release has no assets. npm 'gepetto' is a Jira worklog CLI. Foreman previously said binary."
     },
     {
       "name": "pyamlboot",
@@ -1246,7 +1323,9 @@
       "install_method": "pip",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "pyamlboot",
+      "install_evidence": "wq#4081: PyPI pyamlboot 1.0.0 home=github.com/superna9999/pyamlboot."
     },
     {
       "name": "sunxi-fel",
@@ -1278,7 +1357,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "sunxi-tools",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.4.2+git20240825.4390ca-1build1; provides sunxi-fel."
     },
     {
       "name": "fiedka",
@@ -1305,10 +1386,12 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "wq#3936 names it as a DESIGN-DECISIONS.md Session 2 addition; DESIGN-DECISIONS.md is NOT present on disk and no other on-disk reference exists. Web-verify unavailable (fleet-search blocked wq#2595, WebSearch ungranted). Promotion stub: url/license must be confirmed before promotion. Not fabricated metadata.; license_risk/redistribution_posture added by wq#4050: resolved the wq#3936 promotion stub by GitHub-searching the exact tool name -- github.com/fiedka/fiedka ('a firmware editor app', built on linuxboot/fiano with efiXplorer-derived DXE GUIDs per its README) matches this entry's 'UEFI firmware editor/analyzer' description. MIT via GitHub's license search metadata, consistent with GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file). url/license updated from the placeholder null/'unverified' this entry carried before the audit.",
-      "install_method": null,
+      "install_method": "binary",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": "fiedka_1.5.2_amd64.deb",
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v1.5.2."
     },
     {
       "name": "glitchkit",
@@ -1336,10 +1419,12 @@
       "redistribution_posture": "external-invoke",
       "trust": "community",
       "provenance": "wq#3936 names it as a DESIGN-DECISIONS.md Session 2 addition; only on-disk mention is design/wq3924_hardware_driver_catalog.md:28 (no VID:PID by design, no URL/license). DESIGN-DECISIONS.md absent; web-verify unavailable (wq#2595). Promotion stub: url/license must be confirmed before promotion. Not fabricated metadata.; license_risk/redistribution_posture added by wq#4050: design/wq3924_hardware_driver_catalog.md:28 names GlitchKit as an open-hardware probe with no VID:PID by design, but a GitHub repository search for the exact name surfaced no project matching that description (the candidates found are unrelated software, e.g. an error-type toolkit) -- fleet-search web remains down (wq#2595/2599/2601) so no second source was available. Left unverified rather than guessing a repo or license.",
-      "install_method": null,
+      "install_method": "unresolved",
       "mcp_status": "cli_only",
       "disk_size_estimate": null,
-      "priority": "optional"
+      "priority": "optional",
+      "package": null,
+      "install_evidence": "wq#4081: Ticket-named entry with no upstream URL; github.com/glitchkit/glitchkit 404."
     },
     {
       "name": "tshark",
@@ -1376,7 +1461,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
-      "priority": "core"
+      "priority": "core",
+      "package": "tshark",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.6.4-1."
     },
     {
       "name": "afl++",
@@ -1410,7 +1497,9 @@
       "install_method": "apt",
       "mcp_status": "cli_only",
       "disk_size_estimate": "medium",
-      "priority": "core"
+      "priority": "core",
+      "package": "afl++",
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.33c-1.1ubuntu1."
     }
   ],
   "tool_count": 44

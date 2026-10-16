@@ -59,6 +59,28 @@ def test_core_tool_marked_bundle_still_resolves(): # wq#4048
     assert res.package == "tshark"
 
 
+def test_declared_apt_package_wins_over_unowned_path(): # wq#4081
+    tool = {"name": "rkdeveloptool", "trust": "core", "path": "/usr/local/sbin/rkdeveloptool",
+            "install_method": "apt", "package": "rkdeveloptool"}
+    res = g.resolve(tool, runner=fake_runner({}))
+    assert res.method == "apt"
+    assert res.package == "rkdeveloptool"
+
+
+def test_declared_non_apt_method_is_unresolved_even_if_dpkg_owns_path(): # wq#4081
+    tool = {"name": "unblob", "trust": "core", "path": "/usr/bin/unblob",
+            "install_method": "pip", "package": "unblob"}
+    res = g.resolve(tool, runner=fake_runner({"/usr/bin/unblob": "unblob: /usr/bin/unblob\n"}))
+    assert res.method == "unresolved"
+    assert "install_method 'pip'" in res.reason
+
+
+def test_real_catalog_bakes_declared_apt_names_not_tool_names(): # wq#4081
+    manifest = g.build_manifest(g.load_tools(), runner=fake_runner({}))
+    assert {"heimdall-flash", "rkdeveloptool", "qemu-system-arm"} <= set(manifest["apt_packages"])
+    assert "heimdall" not in manifest["apt_packages"]
+
+
 def test_dpkg_query_owner_handles_multi_package_output():
     runner = fake_runner({"/usr/bin/x": "pkg-a, pkg-b: /usr/bin/x\n"})
     assert g._dpkg_query_owner("/usr/bin/x", runner=runner) == "pkg-a"

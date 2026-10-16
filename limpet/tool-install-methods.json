@@ -1,0 +1,2065 @@
+{
+ "schema_version": 1,
+ "ticket": "wq#4081",
+ "generated": "2026-10-16",
+ "purpose": "One row per distinct tool across the project catalog (projects/limpet/tool-catalog.json, 104 tools), the foreman catalog (limpet/tool-catalog.json, 44 tools) and the tool names used by projects/limpet/data/*.toml, with a verified install_method and package. Stage 4 of the ISO build reads install_method/package from limpet/tool-catalog.json; this file carries the same decision for the tools that are not in the foreman catalog yet.",
+ "sources": {
+  "project_catalog": {
+   "path": "/home/lumen/projects/limpet/tool-catalog.json",
+   "sha256": "0d43fee94f319fce873491eaf52c0d47ea49d107410a30743a672827805ed618",
+   "tools": 104
+  },
+  "foreman_catalog": {
+   "path": "limpet/tool-catalog.json",
+   "tools": 44
+  },
+  "toml": {
+   "/home/lumen/projects/limpet/data/hardware-drivers.toml": "d39a177fc8106114aff142a33f728c78d78ca234ad532dd55b7e0181ad6df5c3",
+   "/home/lumen/projects/limpet/data/soc-boot-vectors.toml": "f178dbba491b55069bad8a151c9c34127fa5614d7bd7b5afe1bf2954d35abe8e",
+   "/home/lumen/projects/limpet/data/usb-device-ids.toml": "4d78a4105ac56b482a3d0efd41b7439b5e1699b03f39c178c87f74212fc1cf63"
+  },
+  "limpet_iso_classification": {
+   "path": "/home/lumen/scratch/limpet-iso/tool-install-methods-final.json",
+   "sha256": "66ce863dc550986a45d412e7ee900e4724026e62d8ede7b25e13c9cb4f5d226a",
+   "note": "Automated first pass (agent limpet-iso-6302d0); limpet_iso_class on each row is its verdict. Every NEEDS-EYEBALL row was re-checked here against PyPI/npm/crates.io metadata, apt-cache, and GitHub release assets."
+  }
+ },
+ "install_method_vocabulary": {
+  "apt": "Ubuntu 26.04 archive package; package = apt package name.",
+  "pip": "PyPI distribution whose metadata points at the upstream repo, or a pip requirement spec (git+URL); package = that spec.",
+  "npm": "npm package whose repository field points at the upstream repo; package = npm name.",
+  "cargo": "crates.io crate whose repository points at the upstream repo; package = crate name.",
+  "binary": "Prebuilt upstream release artifact; package = asset filename at the latest release checked.",
+  "source-build": "Fetch from the upstream source repo, building if needed; package = repo URL.",
+  "container": "Upstream ships as a container image built from its repo; package = repo URL.",
+  "vendor": "Proprietary or vendor-distributed, or needs a proprietary host (IDA, Binary Ninja, Windows); package = null.",
+  "hardware": "Physical device or probe firmware; no host package (host-side tools are listed separately); package = null.",
+  "limpet-native": "Limpet's own plugin; ships with Limpet, no upstream package; package = null.",
+  "unresolved": "No verified upstream; never guessed; package = null until someone verifies one."
+ },
+ "tools": [
+  {
+   "id": "rea",
+   "install_method": "npm",
+   "package": "rea-agents",
+   "url": "https://github.com/morluto/rea",
+   "alternatives": [],
+   "evidence": "npm rea-agents 6.5.0 repository=github.com/morluto/rea; its package.json bin maps 'rea'. npm 'rea' is an unrelated connect.router wrapper (stagas), PyPI 'rea' is radio-astronomy software.",
+   "project_name": "REA",
+   "foreman_name": "rea",
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "ghidra-mcp-bethington",
+   "install_method": "binary",
+   "package": "GhidraMCP-6.0.0.zip",
+   "url": "https://github.com/bethington/ghidra-mcp",
+   "alternatives": [
+    "binary:ghidra_mcp_bridge-6.0.0-py3-none-any.whl (same release, bridge half)"
+   ],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v6.0.0 ships GhidraMCP-6.0.0.zip (Ghidra extension) + ghidra_mcp_bridge-6.0.0-py3-none-any.whl. PyPI 'ghidramcp' is LaurieWired/GhidraMCP, a different project.",
+   "project_name": "Ghidra MCP (bethington)",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "kong",
+   "install_method": "pip",
+   "package": "kong-re",
+   "url": "https://github.com/amruth-sn/kong",
+   "alternatives": [],
+   "evidence": "PyPI kong-re 0.2.2 project_urls=github.com/amruth-sn/kong; repo pyproject name=kong-re, script 'kong'. PyPI 'kong' is Kongregate utilities, npm 'kong' is mashape kong-node.",
+   "project_name": "Kong",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "reva",
+   "install_method": "pip",
+   "package": "reverse-engineering-assistant",
+   "url": "https://github.com/cyberkaida/reverse-engineering-assistant",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: PyPI owner+repo match (reverse-engineering-assistant 7.3.1).",
+   "project_name": "ReVa",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "ghidrassist",
+   "install_method": "source-build",
+   "package": "https://github.com/symgraph/GhidrAssist",
+   "url": "https://github.com/symgraph/GhidrAssist",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: no packaged artifact; upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": "GhidrAssist",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "oghidra",
+   "install_method": "pip",
+   "package": "oghidra",
+   "url": "https://github.com/llnl/OGhidra",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: PyPI owner+repo match (oghidra 0.0.0).",
+   "project_name": "OGhidra",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "gepetto",
+   "install_method": "vendor",
+   "package": null,
+   "url": "https://github.com/JusticeRage/Gepetto",
+   "alternatives": [],
+   "evidence": "IDA Pro plugin: needs proprietary IDA, so no Limpet-side package; v1.5.1 release has no assets. npm 'gepetto' is a Jira worklog CLI. Foreman previously said binary.",
+   "project_name": "Gepetto",
+   "foreman_name": "gepetto",
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "rea-rust",
+   "install_method": "source-build",
+   "package": "https://github.com/mytechnotalent/rea",
+   "url": "https://github.com/mytechnotalent/rea",
+   "alternatives": [],
+   "evidence": "Rust repo; crates.io 'rea' 404, v6.0.0 release has no assets. PyPI/npm 'rea' are unrelated.",
+   "project_name": "REA (Rust)",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "ida-mcp-server",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Hex-Rays server for proprietary IDA Pro; no upstream URL in the project catalog.",
+   "project_name": "IDA MCP Server",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "binja-headless-mcp",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Requires a commercial Binary Ninja headless license; no upstream URL in the project catalog.",
+   "project_name": "Binary Ninja Headless MCP",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "radare2-mcp",
+   "install_method": "source-build",
+   "package": "https://github.com/radareorg/radare2-mcp",
+   "url": "https://github.com/radareorg/radare2-mcp",
+   "alternatives": [
+    "r2pm -ci r2mcp (radare2 package manager)"
+   ],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16. Not in apt (r2mcp/radare2-mcp absent).",
+   "project_name": "radare2 MCP Server",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "llm4decompile",
+   "install_method": "source-build",
+   "package": "https://github.com/albertan017/LLM4Decompile",
+   "url": "https://github.com/albertan017/LLM4Decompile",
+   "alternatives": [],
+   "evidence": "PyPI 'llm4decompile' 404; model weights come from Hugging Face. Foreman previously said pip.",
+   "project_name": "LLM4Decompile",
+   "foreman_name": "llm4decompile",
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "ghidra",
+   "install_method": "binary",
+   "package": "ghidra_12.1.4_PUBLIC_20260921.zip",
+   "url": "https://github.com/NationalSecurityAgency/ghidra",
+   "alternatives": [],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: Ghidra_12.1.4_build. apt 'ghidra' absent; crates.io 'ghidra' is unrelated.",
+   "project_name": "Ghidra",
+   "foreman_name": "ghidra",
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "radare2",
+   "install_method": "apt",
+   "package": "radare2",
+   "url": "https://github.com/radareorg/radare2",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 6.0.7+ds-1.",
+   "project_name": "radare2",
+   "foreman_name": "radare2",
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "rizin",
+   "install_method": "binary",
+   "package": "rizin-v0.9.1-static-x86_64.tar.xz",
+   "url": "https://github.com/rizinorg/rizin",
+   "alternatives": [],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v0.9.1 static x86_64 tarball; apt 'rizin' absent.",
+   "project_name": "Rizin",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "binary-download"
+  },
+  {
+   "id": "cutter",
+   "install_method": "binary",
+   "package": "Cutter-v2.5.0-Linux-x86_64.AppImage",
+   "url": "https://github.com/rizinorg/cutter",
+   "alternatives": [],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v2.5.0 Linux AppImage.",
+   "project_name": null,
+   "foreman_name": "cutter",
+   "toml_names": []
+  },
+  {
+   "id": "frida",
+   "install_method": "pip",
+   "package": "frida-tools",
+   "url": "https://github.com/frida/frida",
+   "alternatives": [
+    "pip:frida (Python bindings only)"
+   ],
+   "evidence": "PyPI frida-tools 14.11.0 (Frida CLI, home frida.re) pulls PyPI frida 17.23.3. npm/crates 'frida' not used.",
+   "project_name": "Frida",
+   "foreman_name": "frida",
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "angr",
+   "install_method": "pip",
+   "package": "angr",
+   "url": "https://github.com/angr/angr",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: PyPI owner+repo match (angr 10.0.4.post1).",
+   "project_name": "angr",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "capa",
+   "install_method": "pip",
+   "package": "flare-capa",
+   "url": "https://github.com/mandiant/capa",
+   "alternatives": [
+    "binary:capa-v9.4.0-linux.zip (standalone, GitHub release)"
+   ],
+   "evidence": "PyPI flare-capa 9.4.0 project_urls=github.com/mandiant/capa. PyPI 'capa' is Vinh-thuy/Librairie-Capa (unrelated).",
+   "project_name": "Capa",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "capstone",
+   "install_method": "apt",
+   "package": "libcapstone-dev",
+   "url": "https://github.com/capstone-engine/capstone",
+   "alternatives": [
+    "apt:python3-capstone 5.0.7-2"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 5.0.7-2.",
+   "project_name": "Capstone",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "keystone",
+   "install_method": "pip",
+   "package": "keystone-engine",
+   "url": "https://github.com/keystone-engine/keystone",
+   "alternatives": [],
+   "evidence": "PyPI keystone-engine 0.9.2 (home keystone-engine.org). apt 'keystone'/'python3-keystone' are OpenStack Identity, npm 'keystone' is KeystoneJS; libkeystone-dev absent.",
+   "project_name": "Keystone",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "unicorn",
+   "install_method": "apt",
+   "package": "libunicorn-dev",
+   "url": "https://github.com/unicorn-engine/unicorn",
+   "alternatives": [
+    "apt:python3-unicorn"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.1.4-3.",
+   "project_name": "Unicorn Engine",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "qiling",
+   "install_method": "pip",
+   "package": "qiling",
+   "url": "https://github.com/qilingframework/qiling",
+   "alternatives": [],
+   "evidence": "PyPI qiling 1.4.6, home qiling.io.",
+   "project_name": "Qiling Framework",
+   "foreman_name": "qiling",
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "cwe_checker",
+   "install_method": "source-build",
+   "package": "https://github.com/fkie-cad/cwe_checker",
+   "url": "https://github.com/fkie-cad/cwe_checker",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: no packaged artifact; upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": "cwe_checker",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "pwndbg",
+   "install_method": "binary",
+   "package": "pwndbg_2026.09.15_amd64.deb",
+   "url": "https://github.com/pwndbg/pwndbg",
+   "alternatives": [],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: 2026.09.15 ships pwndbg_ (GDB) and pwndbg-lldb_ debs; the classifier had picked the LLDB one.",
+   "project_name": "pwndbg",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "binary-download"
+  },
+  {
+   "id": "gef",
+   "install_method": "source-build",
+   "package": "https://github.com/hugsy/gef",
+   "url": "https://github.com/hugsy/gef",
+   "alternatives": [],
+   "evidence": "Single-file gef.py fetched from the 2026.01 tag (no build step); PyPI 'gef' 0.1.2 has no metadata and npm 'gef' is unrelated.",
+   "project_name": "GEF",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "bindiff",
+   "install_method": "binary",
+   "package": "bindiff_8_amd64.deb",
+   "url": "https://github.com/google/bindiff",
+   "alternatives": [],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v8 ships bindiff_8_amd64.deb. PyPI python-bindiff is Quarkslab's file-format wrapper, crates 'bindiff' unrelated.",
+   "project_name": "BinDiff",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "diaphora",
+   "install_method": "vendor",
+   "package": null,
+   "url": "https://github.com/joxeankoret/diaphora",
+   "alternatives": [],
+   "evidence": "IDA Pro plugin: needs proprietary IDA. PyPI diaphora-python is an SDK for a separate Diaphora API service.",
+   "project_name": "Diaphora",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "kaitai-struct",
+   "install_method": "binary",
+   "package": "kaitai-struct-compiler_0.11_all.deb",
+   "url": "https://github.com/kaitai-io/kaitai_struct",
+   "alternatives": [
+    "apt:python3-kaitaistruct 0.11-1 (runtime)"
+   ],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16 (kaitai-io/kaitai_struct_compiler 0.11); apt compiler absent.",
+   "project_name": "Kaitai Struct",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "cpu_rec",
+   "install_method": "source-build",
+   "package": "https://github.com/airbus-seclab/cpu_rec",
+   "url": "https://github.com/airbus-seclab/cpu_rec",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: no packaged artifact; upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": "cpu_rec",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "manticore",
+   "install_method": "pip",
+   "package": "manticore",
+   "url": "https://github.com/trailofbits/manticore",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: PyPI owner+repo match (manticore 0.3.7).",
+   "project_name": "Manticore",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "emba",
+   "install_method": "source-build",
+   "package": "https://github.com/e-m-b-a/emba",
+   "url": "https://github.com/e-m-b-a/emba",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: no packaged artifact; upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": "EMBA",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "unblob",
+   "install_method": "pip",
+   "package": "unblob",
+   "url": "https://github.com/onekey-sec/unblob",
+   "alternatives": [],
+   "evidence": "PyPI unblob 26.6.4 == foreman verified version; the classifier's 'binary-download' hit was this same wheel.",
+   "project_name": "unblob",
+   "foreman_name": "unblob",
+   "toml_names": [],
+   "limpet_iso_class": "binary-download"
+  },
+  {
+   "id": "binwalk",
+   "install_method": "apt",
+   "package": "binwalk",
+   "url": "https://github.com/ReFirmLabs/binwalk",
+   "alternatives": [
+    "cargo:binwalk 3.1.0 (v3)"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.4.3 (v2, matches foreman /usr/bin/binwalk). Project names 'Binwalk v3': v3 is Rust, crates.io binwalk 3.1.0 (repository ReFirmLabs/binwalk); v3.1.0 GitHub release has no Linux binary.",
+   "project_name": "Binwalk v3",
+   "foreman_name": "binwalk",
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "ofrak",
+   "install_method": "pip",
+   "package": "ofrak",
+   "url": "https://github.com/redballoonsecurity/ofrak",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: PyPI owner+repo match (ofrak 3.3.0).",
+   "project_name": "OFRAK",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "fact",
+   "install_method": "source-build",
+   "package": "https://github.com/fkie-cad/FACT_core",
+   "url": "https://github.com/fkie-cad/FACT_core",
+   "alternatives": [],
+   "evidence": "FACT_core installer; no packaged artifact (v4.4.1 release has no assets). PyPI 'fact' is a factorial calculator.",
+   "project_name": "FACT",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "sasquatch",
+   "install_method": "binary",
+   "package": "sasquatch_1.0_amd64.deb",
+   "url": "https://github.com/onekey-sec/sasquatch",
+   "alternatives": [],
+   "evidence": "Project url was null; GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: onekey-sec/sasquatch sasquatch-v4.5.1-6. apt absent; PyPI/npm 'sasquatch' unrelated.",
+   "project_name": "sasquatch",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "uefitool",
+   "install_method": "apt",
+   "package": "uefitool",
+   "url": "https://github.com/LongSoft/UEFITool",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.28.0+A73-1.",
+   "project_name": "UEFITool",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "chipsec",
+   "install_method": "pip",
+   "package": "chipsec",
+   "url": "https://github.com/chipsec/chipsec",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: PyPI owner+repo match (chipsec 1.13.16).",
+   "project_name": "CHIPSEC",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "efixplorer",
+   "install_method": "vendor",
+   "package": null,
+   "url": "https://github.com/binarly-io/efiXplorer",
+   "alternatives": [],
+   "evidence": "IDA Pro plugin (builds against the IDA SDK), so it needs proprietary IDA.",
+   "project_name": "efiXplorer",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "fiano",
+   "install_method": "source-build",
+   "package": "https://github.com/linuxboot/fiano",
+   "url": "https://github.com/linuxboot/fiano",
+   "alternatives": [],
+   "evidence": "Go tools (go install); upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": "Fiano",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "firmae",
+   "install_method": "source-build",
+   "package": "https://github.com/pr0v3rbs/FirmAE",
+   "url": "https://github.com/pr0v3rbs/FirmAE",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; repo install.sh.",
+   "project_name": "FirmAE",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "firmadyne",
+   "install_method": "source-build",
+   "package": "https://github.com/firmadyne/firmadyne",
+   "url": "https://github.com/firmadyne/firmadyne",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": "Firmadyne",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "emux",
+   "install_method": "container",
+   "package": "https://github.com/therealsaumil/emux",
+   "url": "https://github.com/therealsaumil/emux",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; Docker-based. PyPI 'emux' is eidos-agi's tmux tool, crates 'emux' unrelated.",
+   "project_name": "EMUX",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "avatar2",
+   "install_method": "pip",
+   "package": "avatar2",
+   "url": "https://github.com/avatartwo/avatar2",
+   "alternatives": [],
+   "evidence": "limpet-iso classifier: PyPI owner+repo match (avatar2 1.4.7).",
+   "project_name": "Avatar2",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "firmwire",
+   "install_method": "source-build",
+   "package": "https://github.com/firmwire/firmwire",
+   "url": "https://github.com/firmwire/firmwire",
+   "alternatives": [],
+   "evidence": "PyPI 'firmwire' 404. Foreman previously said pip.",
+   "project_name": "FirmWire",
+   "foreman_name": "firmwire",
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "depthcharge",
+   "install_method": "pip",
+   "package": "depthcharge",
+   "url": "https://github.com/tetrelsec/depthcharge",
+   "alternatives": [],
+   "evidence": "PyPI depthcharge 0.6.0 project_urls=github.com/tetrelsec/depthcharge; nccgroup/depthcharge is archived at 0.5.0 under the same PyPI name.",
+   "project_name": "Depthcharge",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "vxhunter",
+   "install_method": "source-build",
+   "package": "https://github.com/PAGalaxyLab/vxhunter",
+   "url": "https://github.com/PAGalaxyLab/vxhunter",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; Ghidra/IDA scripts.",
+   "project_name": "vxhunter",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "firmwalker",
+   "install_method": "unresolved",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Project url null; github.com/craigz28/firmwalker returns 404 and the upstream was not found. Needs a verified upstream before it can be installed.",
+   "project_name": "firmwalker",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "fwtriage",
+   "install_method": "source-build",
+   "package": "https://github.com/taffy210/fw-triage",
+   "url": "https://github.com/taffy210/fw-triage",
+   "alternatives": [],
+   "evidence": "PyPI 'fwtriage' 404. Foreman previously said pip.",
+   "project_name": "fwtriage",
+   "foreman_name": "fwtriage",
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "ifda",
+   "install_method": "source-build",
+   "package": "https://github.com/cn0xroot/IFDA",
+   "url": "https://github.com/cn0xroot/IFDA",
+   "alternatives": [],
+   "evidence": "upstream repo HEAD 200 on github.com, 2026-10-16; no GitHub releases. Foreman previously said binary.",
+   "project_name": "IFDA",
+   "foreman_name": "ifda",
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "fwanalyzer",
+   "install_method": "source-build",
+   "package": "https://github.com/cruise-automation/fwanalyzer",
+   "url": "https://github.com/cruise-automation/fwanalyzer",
+   "alternatives": [],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: 1.4.4 has no Linux assets (Go build). Foreman previously said binary.",
+   "project_name": "FwAnalyzer",
+   "foreman_name": "fwanalyzer",
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "qemu-system",
+   "install_method": "apt",
+   "package": "qemu-system-arm",
+   "url": "https://www.qemu.org",
+   "alternatives": [
+    "apt:qemu-system-x86",
+    "apt:qemu-system-mips (and other qemu-system-* arches)"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:10.2.1+ds-1ubuntu3.2 (== foreman /usr/bin/qemu-system-arm).",
+   "project_name": "QEMU",
+   "foreman_name": "qemu-system",
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "qemu-user",
+   "install_method": "apt",
+   "package": "qemu-user",
+   "url": "https://www.qemu.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:10.2.1+ds-1ubuntu3.2.",
+   "project_name": null,
+   "foreman_name": "qemu-user",
+   "toml_names": []
+  },
+  {
+   "id": "gdb-multiarch",
+   "install_method": "apt",
+   "package": "gdb-multiarch",
+   "url": "https://www.gnu.org/software/gdb/",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 17.1-2ubuntu1.",
+   "project_name": null,
+   "foreman_name": "gdb-multiarch",
+   "toml_names": [
+    "gdb-multiarch"
+   ]
+  },
+  {
+   "id": "halucinator",
+   "install_method": "pip",
+   "package": "halucinator",
+   "url": "https://github.com/halucinator/halucinator",
+   "alternatives": [],
+   "evidence": "PyPI halucinator 1.9.0 project_urls=github.com/halucinator/halucinator.",
+   "project_name": "HALucinator",
+   "foreman_name": "halucinator",
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "fuzzware",
+   "install_method": "source-build",
+   "package": "https://github.com/fuzzware-fuzzer/fuzzware",
+   "url": "https://github.com/fuzzware-fuzzer/fuzzware",
+   "alternatives": [],
+   "evidence": "PyPI 'fuzzware' 404. Foreman previously said pip.",
+   "project_name": "Fuzzware",
+   "foreman_name": "fuzzware",
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "pretender",
+   "install_method": "source-build",
+   "package": "https://github.com/ucsb-seclab/pretender",
+   "url": "https://github.com/ucsb-seclab/pretender",
+   "alternatives": [],
+   "evidence": "Project url github.com/mit-ll/pretender is 404; ucsb-seclab/pretender (foreman url) exists. PyPI 'pretender' 404; npm 'pretender' is a JS mock-server library. Foreman previously said pip.",
+   "project_name": "Pretender",
+   "foreman_name": "pretender",
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "openocd",
+   "install_method": "apt",
+   "package": "openocd",
+   "url": "https://openocd.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.12.0-3build3.",
+   "project_name": "OpenOCD",
+   "foreman_name": "openocd",
+   "toml_names": [
+    "openocd"
+   ],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "flashrom",
+   "install_method": "apt",
+   "package": "flashrom",
+   "url": "https://github.com/flashrom/flashrom",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.6.0-2ubuntu1.1.",
+   "project_name": "flashrom",
+   "foreman_name": "flashrom",
+   "toml_names": [
+    "flashrom"
+   ],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "probe-rs",
+   "install_method": "binary",
+   "package": "probe-rs-tools-x86_64-unknown-linux-gnu.tar.xz",
+   "url": "https://github.com/probe-rs/probe-rs",
+   "alternatives": [
+    "cargo:probe-rs-tools 0.32.0"
+   ],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v0.32.0. crates.io 'probe-rs' is the library; the CLI crate is probe-rs-tools. apt absent.",
+   "project_name": "probe-rs",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "blackmagic",
+   "install_method": "hardware",
+   "package": null,
+   "url": "https://github.com/blackmagic-debug/blackmagic",
+   "alternatives": [],
+   "evidence": "Probe firmware runs on the probe; the host talks to it with gdb-multiarch (apt), so there is no host package.",
+   "project_name": "Black Magic Probe",
+   "foreman_name": null,
+   "toml_names": [
+    "blackmagic firmware"
+   ],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "pulseview",
+   "install_method": "apt",
+   "package": "pulseview",
+   "url": "https://sigrok.org",
+   "alternatives": [
+    "apt:sigrok-cli"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.4.2-4.",
+   "project_name": "sigrok / PulseView",
+   "foreman_name": null,
+   "toml_names": [
+    "pulseview"
+   ],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "sigrok-cli",
+   "install_method": "apt",
+   "package": "sigrok-cli",
+   "url": "https://sigrok.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.7.2-1build3.",
+   "project_name": null,
+   "foreman_name": "sigrok-cli",
+   "toml_names": [
+    "sigrok-cli"
+   ]
+  },
+  {
+   "id": "minipro",
+   "install_method": "source-build",
+   "package": "https://gitlab.com/DavidGriffith/minipro",
+   "url": "https://gitlab.com/DavidGriffith/minipro",
+   "alternatives": [],
+   "evidence": "Project url was null; gitlab.com/DavidGriffith/minipro 200; apt 'minipro' absent on 26.04.",
+   "project_name": "minipro",
+   "foreman_name": null,
+   "toml_names": [
+    "minipro"
+   ],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "snander",
+   "install_method": "source-build",
+   "package": "https://github.com/McMCCRU/SNANDer",
+   "url": "https://github.com/McMCCRU/SNANDer",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; apt absent.",
+   "project_name": "SNANDer",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "dumpflash",
+   "install_method": "source-build",
+   "package": "https://github.com/ohjeongwook/dumpflash",
+   "url": "https://github.com/ohjeongwook/dumpflash",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; PyPI 'dumpflash' 404.",
+   "project_name": "dumpflash",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "glasgow",
+   "install_method": "source-build",
+   "package": "https://github.com/GlasgowEmbedded/glasgow",
+   "url": "https://github.com/GlasgowEmbedded/glasgow",
+   "alternatives": [],
+   "evidence": "Upstream installs from git (no GitHub releases); PyPI 'glasgow' is a 0.0.0 placeholder with no metadata. apt absent.",
+   "project_name": "Glasgow Interface Explorer",
+   "foreman_name": null,
+   "toml_names": [
+    "glasgow"
+   ],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "bus-pirate",
+   "install_method": "hardware",
+   "package": null,
+   "url": "https://github.com/DangerousPrototypes/BusPirate5-firmware",
+   "alternatives": [],
+   "evidence": "Hardware tool driven over a serial terminal (minicom/picocom/screen, apt). crates 'buspirate' is an unrelated library.",
+   "project_name": "Bus Pirate",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "tigard",
+   "install_method": "hardware",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "FTDI hardware; driven by openocd/flashrom/pyftdi.",
+   "project_name": "Tigard",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "jtagulator",
+   "install_method": "hardware",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Standalone hardware; serial-terminal UI.",
+   "project_name": "JTAGulator",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "greatfet",
+   "install_method": "pip",
+   "package": "greatfet",
+   "url": "https://github.com/greatscottgadgets/greatfet",
+   "alternatives": [],
+   "evidence": "Project url was null; PyPI greatfet 2026.0.0 project_urls=github.com/greatscottgadgets/greatfet.",
+   "project_name": "GreatFET One",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "cynthion",
+   "install_method": "pip",
+   "package": "cynthion",
+   "url": "https://github.com/greatscottgadgets/cynthion",
+   "alternatives": [],
+   "evidence": "PyPI cynthion 0.2.5 project_urls=github.com/greatscottgadgets/cynthion.",
+   "project_name": "Cynthion",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "facedancer",
+   "install_method": "pip",
+   "package": "facedancer",
+   "url": "https://github.com/greatscottgadgets/facedancer",
+   "alternatives": [],
+   "evidence": "PyPI facedancer 3.1.3 project_urls=github.com/greatscottgadgets/facedancer; apt absent.",
+   "project_name": "Facedancer",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "urjtag",
+   "install_method": "apt",
+   "package": "urjtag",
+   "url": "http://urjtag.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2021.03-5build2.",
+   "project_name": "UrJTAG",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "openfixture",
+   "install_method": "source-build",
+   "package": "https://github.com/tinylabs/openfixture",
+   "url": "https://github.com/tinylabs/openfixture",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; OpenSCAD script.",
+   "project_name": "OpenFixture",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "thunderscope",
+   "install_method": "hardware",
+   "package": null,
+   "url": "https://github.com/EEVengers/ThunderScope",
+   "alternatives": [],
+   "evidence": "PCIe oscilloscope hardware.",
+   "project_name": "ThunderScope",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "chipwhisperer",
+   "install_method": "pip",
+   "package": "chipwhisperer",
+   "url": "https://github.com/newaetech/chipwhisperer",
+   "alternatives": [],
+   "evidence": "PyPI chipwhisperer 6.0.0 project_urls=github.com/newaetech/chipwhisperer.",
+   "project_name": "ChipWhisperer",
+   "foreman_name": null,
+   "toml_names": [
+    "chipwhisperer (python)"
+   ],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "hackrf",
+   "install_method": "apt",
+   "package": "hackrf",
+   "url": "https://github.com/greatscottgadgets/hackrf",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2026.01.3-1.",
+   "project_name": null,
+   "foreman_name": "hackrf",
+   "toml_names": [
+    "hackrf-tools (hackrf_info)"
+   ]
+  },
+  {
+   "id": "edl",
+   "install_method": "pip",
+   "package": "git+https://github.com/bkerler/edl",
+   "url": "https://github.com/bkerler/edl",
+   "alternatives": [],
+   "evidence": "pip from git (foreman verified /opt/re-venv/bin/edl). PyPI 'edl' is an unrelated EDL-file reader.",
+   "project_name": "edl (bkerler)",
+   "foreman_name": "edl",
+   "toml_names": [
+    "edl",
+    "edl (bkerler)"
+   ],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "mtkclient",
+   "install_method": "pip",
+   "package": "git+https://github.com/bkerler/mtkclient",
+   "url": "https://github.com/bkerler/mtkclient",
+   "alternatives": [],
+   "evidence": "pip from git (foreman verified /opt/re-venv/bin/mtk); PyPI 'mtkclient' 404.",
+   "project_name": "mtkclient",
+   "foreman_name": "mtkclient",
+   "toml_names": [
+    "mtkclient"
+   ],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "qdl",
+   "install_method": "apt",
+   "package": "qdl",
+   "url": "https://github.com/linux-msm/qdl",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.4-3.",
+   "project_name": "qdl (linux-msm)",
+   "foreman_name": null,
+   "toml_names": [
+    "qdl",
+    "qdl (linux-msm)"
+   ],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "qdlrs",
+   "install_method": "source-build",
+   "package": "https://github.com/qualcomm/qdlrs",
+   "url": "https://github.com/qualcomm/qdlrs",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; crates.io 'qdlrs' 404.",
+   "project_name": "qdlrs",
+   "foreman_name": null,
+   "toml_names": [
+    "qdlrs"
+   ],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "qcsuper",
+   "install_method": "pip",
+   "package": "qcsuper",
+   "url": "https://github.com/P1sec/QCSuper",
+   "alternatives": [],
+   "evidence": "PyPI qcsuper 2.1.3 project_urls=github.com/P1sec/QCSuper.",
+   "project_name": "QCSuper",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "heimdall",
+   "install_method": "apt",
+   "package": "heimdall-flash",
+   "url": "https://github.com/Benjamin-Dobell/Heimdall",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.1.0-1build1.",
+   "project_name": "Heimdall",
+   "foreman_name": "heimdall",
+   "toml_names": [
+    "Heimdall",
+    "heimdall"
+   ],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "thor",
+   "install_method": "binary",
+   "package": "Thor-Linux",
+   "url": "https://github.com/Samsung-Loki/Thor",
+   "alternatives": [],
+   "evidence": "Project url was null; GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: 1.1.0 ships Thor-Linux. PyPI 'thor' is mnot's event-IO library.",
+   "project_name": "Thor (Samsung-Loki)",
+   "foreman_name": null,
+   "toml_names": [
+    "Thor (Samsung-Loki)"
+   ],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "rkdeveloptool",
+   "install_method": "apt",
+   "package": "rkdeveloptool",
+   "url": "https://github.com/rockchip-linux/rkdeveloptool",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.32+pine64git20240226.17823e9-2. Foreman previously said binary (Maksoor's copy is a source build in /usr/local/sbin).",
+   "project_name": "rkdeveloptool",
+   "foreman_name": "rkdeveloptool",
+   "toml_names": [
+    "rkdeveloptool"
+   ],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "sunxi-tools",
+   "install_method": "apt",
+   "package": "sunxi-tools",
+   "url": "https://github.com/linux-sunxi/sunxi-tools",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.4.2+git20240825.4390ca-1build1; provides sunxi-fel.",
+   "project_name": "sunxi-tools",
+   "foreman_name": "sunxi-fel",
+   "toml_names": [
+    "sunxi-fel"
+   ],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "spreadtrum_flash",
+   "install_method": "source-build",
+   "package": "https://github.com/ilyakurdyukov/spreadtrum_flash",
+   "url": "https://github.com/ilyakurdyukov/spreadtrum_flash",
+   "alternatives": [],
+   "evidence": "C tool, no packaged artifact. Foreman previously said pip.",
+   "project_name": "spreadtrum_flash",
+   "foreman_name": "spreadtrum_flash",
+   "toml_names": [],
+   "limpet_iso_class": "source-build"
+  },
+  {
+   "id": "payload-dumper-go",
+   "install_method": "binary",
+   "package": "payload-dumper-go_2.1.0_linux_amd64.tar.gz",
+   "url": "https://github.com/ssut/payload-dumper-go",
+   "alternatives": [],
+   "evidence": "Project url was null; GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: 2.1.0.",
+   "project_name": "payload-dumper-go",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "magisk",
+   "install_method": "binary",
+   "package": "Magisk-v30.7.apk",
+   "url": "https://github.com/topjohnwu/Magisk",
+   "alternatives": [],
+   "evidence": "Project url was null; GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v30.7; magiskboot ships as a native lib inside the APK. npm 'magisk' is unrelated.",
+   "project_name": "Magisk (magiskboot)",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "dumprx",
+   "install_method": "source-build",
+   "package": "https://github.com/DumprX/DumprX",
+   "url": "https://github.com/DumprX/DumprX",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; shell + setup script.",
+   "project_name": "DumprX",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "mvt",
+   "install_method": "pip",
+   "package": "mvt",
+   "url": "https://github.com/mvt-project/mvt",
+   "alternatives": [],
+   "evidence": "PyPI mvt 2026.10.12 project_urls=github.com/mvt-project/mvt.",
+   "project_name": "MVT",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "pmbootstrap",
+   "install_method": "apt",
+   "package": "pmbootstrap",
+   "url": "https://postmarketos.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 3.9.0-1.",
+   "project_name": "pmbootstrap",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "jadx",
+   "install_method": "binary",
+   "package": "jadx-1.5.6.zip",
+   "url": "https://github.com/skylot/jadx",
+   "alternatives": [],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v1.5.6.",
+   "project_name": null,
+   "foreman_name": "jadx",
+   "toml_names": []
+  },
+  {
+   "id": "apktool",
+   "install_method": "apt",
+   "package": "apktool",
+   "url": "https://github.com/iBotPeaches/Apktool",
+   "alternatives": [
+    "binary:apktool_3.0.3.jar (GitHub v3.0.3)"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.7.0+dfsg-7.1ubuntu1.",
+   "project_name": null,
+   "foreman_name": "apktool",
+   "toml_names": []
+  },
+  {
+   "id": "scrcpy",
+   "install_method": "apt",
+   "package": "scrcpy",
+   "url": "https://github.com/Genymobile/scrcpy",
+   "alternatives": [
+    "binary:scrcpy-linux-x86_64-v5.0.1.tar.gz"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 3.3.4-1.",
+   "project_name": null,
+   "foreman_name": "scrcpy",
+   "toml_names": []
+  },
+  {
+   "id": "pyamlboot",
+   "install_method": "pip",
+   "package": "pyamlboot",
+   "url": "https://github.com/superna9999/pyamlboot",
+   "alternatives": [],
+   "evidence": "PyPI pyamlboot 1.0.0 home=github.com/superna9999/pyamlboot.",
+   "project_name": null,
+   "foreman_name": "pyamlboot",
+   "toml_names": [
+    "pyamlboot"
+   ]
+  },
+  {
+   "id": "wireshark",
+   "install_method": "apt",
+   "package": "wireshark",
+   "url": "https://www.wireshark.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.6.4-1.",
+   "project_name": "Wireshark",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "tshark",
+   "install_method": "apt",
+   "package": "tshark",
+   "url": "https://www.wireshark.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.6.4-1.",
+   "project_name": null,
+   "foreman_name": "tshark",
+   "toml_names": []
+  },
+  {
+   "id": "gnuradio",
+   "install_method": "apt",
+   "package": "gnuradio",
+   "url": "https://www.gnuradio.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 3.10.12.0-6.",
+   "project_name": "GNU Radio",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "urh",
+   "install_method": "pip",
+   "package": "urh",
+   "url": "https://github.com/jopohl/urh",
+   "alternatives": [],
+   "evidence": "Project url was null; PyPI urh 2.10.0 home=github.com/jopohl/urh; apt 'urh' absent.",
+   "project_name": "Universal Radio Hacker (URH)",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "rtl_433",
+   "install_method": "apt",
+   "package": "rtl-433",
+   "url": "https://github.com/merbanan/rtl_433",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 25.12-1.",
+   "project_name": "rtl_433",
+   "foreman_name": null,
+   "toml_names": [
+    "rtl_433"
+   ],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "ubertooth",
+   "install_method": "apt",
+   "package": "ubertooth",
+   "url": "https://github.com/greatscottgadgets/ubertooth",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2018.12.R1-5.2ubuntu2.",
+   "project_name": "Ubertooth",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "apt"
+  },
+  {
+   "id": "killerbee",
+   "install_method": "source-build",
+   "package": "https://github.com/riverloopsec/killerbee",
+   "url": "https://github.com/riverloopsec/killerbee",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; PyPI and apt 'killerbee' absent.",
+   "project_name": "KillerBee",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "pymodbus",
+   "install_method": "apt",
+   "package": "python3-pymodbus",
+   "url": "https://github.com/pymodbus-dev/pymodbus",
+   "alternatives": [
+    "pip:pymodbus 3.16.1 (project_urls=github.com/pymodbus-dev/pymodbus)"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 3.8.6-2.",
+   "project_name": "pymodbus",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "open62541",
+   "install_method": "source-build",
+   "package": "https://github.com/open62541/open62541",
+   "url": "https://github.com/open62541/open62541",
+   "alternatives": [],
+   "evidence": "apt libopen62541-dev/open62541 absent; GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v1.5.9 ships the amalgamated open62541.c/.h source. crates.io 'open62541' is HMIProject's Rust bindings.",
+   "project_name": "open62541",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "snap7",
+   "install_method": "apt",
+   "package": "libsnap7-1",
+   "url": "https://snap7.sourceforge.net",
+   "alternatives": [
+    "apt:libsnap7-dev",
+    "pip:python-snap7 3.2.1 (github.com/gijzelaerr/python-snap7)"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.4.2+dfsg-1build1 ('Siemens S7 PLCs communications library').",
+   "project_name": "Snap7",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "netzob",
+   "install_method": "pip",
+   "package": "netzob",
+   "url": "https://github.com/netzob/netzob",
+   "alternatives": [],
+   "evidence": "PyPI netzob 2.0.0 home=github.com/netzob/netzob.",
+   "project_name": "Netzob",
+   "foreman_name": "netzob",
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "sootty",
+   "install_method": "pip",
+   "package": "sootty",
+   "url": "https://github.com/Ben1152000/sootty",
+   "alternatives": [],
+   "evidence": "PyPI sootty 1.0 home=github.com/Ben1152000/sootty.",
+   "project_name": "Sootty",
+   "foreman_name": "sootty",
+   "toml_names": [],
+   "limpet_iso_class": "pip"
+  },
+  {
+   "id": "afl++",
+   "install_method": "apt",
+   "package": "afl++",
+   "url": "https://github.com/AFLplusplus/AFLplusplus",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.33c-1.1ubuntu1.",
+   "project_name": null,
+   "foreman_name": "afl++",
+   "toml_names": []
+  },
+  {
+   "id": "searchsploit",
+   "install_method": "source-build",
+   "package": "https://gitlab.com/exploit-database/exploitdb",
+   "url": "https://gitlab.com/exploit-database/exploitdb",
+   "alternatives": [
+    "apt:exploitdb (Kali archive only)"
+   ],
+   "evidence": "apt 'exploitdb' is absent on Ubuntu 26.04 (Kali-only), despite the foreman entry's earlier apt claim; gitlab repo 200.",
+   "project_name": null,
+   "foreman_name": "searchsploit",
+   "toml_names": []
+  },
+  {
+   "id": "part-db",
+   "install_method": "container",
+   "package": "https://github.com/Part-DB/Part-DB-server",
+   "url": "https://github.com/Part-DB/Part-DB-server",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; self-hosted Docker web app.",
+   "project_name": "Part-DB",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "flashdetector",
+   "install_method": "source-build",
+   "package": "https://github.com/iTXTech/FlashDetector",
+   "url": "https://github.com/iTXTech/FlashDetector",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": "FlashDetector",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "pcb-retrace",
+   "install_method": "unresolved",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Project url null and no upstream found (web search was down on 2026-10-16). Needs a verified upstream.",
+   "project_name": "PCB ReTrace",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "vendor-or-manual"
+  },
+  {
+   "id": "uconfig",
+   "install_method": "source-build",
+   "package": "https://github.com/Robotips/uConfig",
+   "url": "https://github.com/Robotips/uConfig",
+   "alternatives": [],
+   "evidence": "Project url was null; upstream repo HEAD 200 on github.com, 2026-10-16; Qt/C++, no releases. PyPI 'uconfig' is an unrelated config parser.",
+   "project_name": "uConfig",
+   "foreman_name": null,
+   "toml_names": [],
+   "limpet_iso_class": "NEEDS-EYEBALL"
+  },
+  {
+   "id": "fiedka",
+   "install_method": "binary",
+   "package": "fiedka_1.5.2_amd64.deb",
+   "url": "https://github.com/fiedka/fiedka",
+   "alternatives": [],
+   "evidence": "GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v1.5.2.",
+   "project_name": null,
+   "foreman_name": "fiedka",
+   "toml_names": []
+  },
+  {
+   "id": "ghidra-mcp",
+   "install_method": "unresolved",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Foreman entry comes from limpet/examples/ghidra-mcp.toml, whose git source is the placeholder github.com/example/limpet-ghidra-mcp. Not assumed to be bethington/ghidra-mcp. Foreman previously said pip.",
+   "project_name": null,
+   "foreman_name": "ghidra-mcp",
+   "toml_names": []
+  },
+  {
+   "id": "glitchkit",
+   "install_method": "unresolved",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Ticket-named entry with no upstream URL; github.com/glitchkit/glitchkit 404.",
+   "project_name": null,
+   "foreman_name": "glitchkit",
+   "toml_names": []
+  },
+  {
+   "id": "component-id",
+   "install_method": "limpet-native",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Limpet-native plugin (limpet/examples/component-id.toml, wq#3900); no upstream package.",
+   "project_name": null,
+   "foreman_name": "component-id",
+   "toml_names": []
+  },
+  {
+   "id": "fw-diff",
+   "install_method": "limpet-native",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Limpet-native plugin (limpet/examples/fw-diff.toml, wq#3906); no upstream package.",
+   "project_name": null,
+   "foreman_name": "fw-diff",
+   "toml_names": []
+  },
+  {
+   "id": "adb",
+   "install_method": "apt",
+   "package": "adb",
+   "url": "https://developer.android.com/tools/adb",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:34.0.5-12build1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "adb"
+   ]
+  },
+  {
+   "id": "fastboot",
+   "install_method": "apt",
+   "package": "fastboot",
+   "url": "https://developer.android.com/tools/fastboot",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:34.0.5-12build1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "fastboot"
+   ]
+  },
+  {
+   "id": "dfu-util",
+   "install_method": "apt",
+   "package": "dfu-util",
+   "url": "https://dfu-util.sourceforge.net",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.11-3build1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "dfu-util"
+   ]
+  },
+  {
+   "id": "ffmpeg",
+   "install_method": "apt",
+   "package": "ffmpeg",
+   "url": "https://ffmpeg.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 7:8.0.1-3ubuntu2.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "ffmpeg"
+   ]
+  },
+  {
+   "id": "gqrx",
+   "install_method": "apt",
+   "package": "gqrx-sdr",
+   "url": "https://gqrx.dk",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.17.7-1build1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "gqrx"
+   ]
+  },
+  {
+   "id": "guvcview",
+   "install_method": "apt",
+   "package": "guvcview",
+   "url": "https://guvcview.sourceforge.net",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.2.2-1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "guvcview"
+   ]
+  },
+  {
+   "id": "v4l2-ctl",
+   "install_method": "apt",
+   "package": "v4l-utils",
+   "url": "https://linuxtv.org",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.32.0-2ubuntu1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "v4l2-ctl"
+   ]
+  },
+  {
+   "id": "minicom",
+   "install_method": "apt",
+   "package": "minicom",
+   "url": "https://salsa.debian.org/minicom-team/minicom",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.10-1ubuntu1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "minicom"
+   ]
+  },
+  {
+   "id": "picocom",
+   "install_method": "apt",
+   "package": "picocom",
+   "url": "https://github.com/npat-efault/picocom",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 3.1-4build1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "picocom"
+   ]
+  },
+  {
+   "id": "screen",
+   "install_method": "apt",
+   "package": "screen",
+   "url": "https://www.gnu.org/software/screen/",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.9.1-3ubuntu2.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "screen"
+   ]
+  },
+  {
+   "id": "rtl-sdr",
+   "install_method": "apt",
+   "package": "rtl-sdr",
+   "url": "https://osmocom.org/projects/rtl-sdr",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.0.2-2build1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "rtl-sdr"
+   ]
+  },
+  {
+   "id": "stlink-tools",
+   "install_method": "apt",
+   "package": "stlink-tools",
+   "url": "https://github.com/stlink-org/stlink",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.8.0-1.1build1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "stlink-tools (st-flash, st-util)"
+   ]
+  },
+  {
+   "id": "imx_usb_loader",
+   "install_method": "apt",
+   "package": "imx-usb-loader",
+   "url": "https://github.com/boundarydevices/imx_usb_loader",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0~git20200517.30b43d69-2build1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "imx_usb_loader"
+   ]
+  },
+  {
+   "id": "uuu",
+   "install_method": "apt",
+   "package": "uuu",
+   "url": "https://github.com/nxp-imx/mfgtools",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.5.243-1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "uuu"
+   ]
+  },
+  {
+   "id": "rkflashtool",
+   "install_method": "apt",
+   "package": "rkflashtool",
+   "url": null,
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0~20160324-2build1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "rkflashtool"
+   ]
+  },
+  {
+   "id": "irecovery",
+   "install_method": "apt",
+   "package": "irecovery",
+   "url": "https://github.com/libimobiledevice/libirecovery",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.3.1-1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "irecovery"
+   ]
+  },
+  {
+   "id": "limesuite",
+   "install_method": "apt",
+   "package": "limesuite",
+   "url": "https://github.com/myriadrf/LimeSuite",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 23.11.0+dfsg-4.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "LimeSuite"
+   ]
+  },
+  {
+   "id": "rpiboot",
+   "install_method": "apt",
+   "package": "rpiboot",
+   "url": "https://github.com/raspberrypi/usbboot",
+   "alternatives": [],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0~20240926~102326+git82d8755+nowin-0ubuntu1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "rpiboot",
+    "usbboot"
+   ]
+  },
+  {
+   "id": "pyocd",
+   "install_method": "apt",
+   "package": "python3-pyocd",
+   "url": "https://github.com/pyocd/pyOCD",
+   "alternatives": [
+    "pip:pyocd 0.45.1"
+   ],
+   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.37.0-1.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "pyocd"
+   ]
+  },
+  {
+   "id": "pyftdi",
+   "install_method": "pip",
+   "package": "pyftdi",
+   "url": "https://github.com/eblot/pyftdi",
+   "alternatives": [],
+   "evidence": "PyPI pyftdi 0.57.2 home=github.com/eblot/pyftdi; apt python3-pyftdi absent.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "pyftdi"
+   ]
+  },
+  {
+   "id": "tflite-runtime",
+   "install_method": "pip",
+   "package": "tflite-runtime",
+   "url": "https://www.tensorflow.org/lite/",
+   "alternatives": [],
+   "evidence": "PyPI tflite-runtime 2.14.0 (TensorFlow Lite runtime).",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "tflite-runtime"
+   ]
+  },
+  {
+   "id": "openvino",
+   "install_method": "pip",
+   "package": "openvino==2022.3.0",
+   "url": "https://github.com/openvinotoolkit/openvino",
+   "alternatives": [],
+   "evidence": "PyPI openvino 2022.3.0 exists; the TOML pins '<= 2022.3 LTS'.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "openvino (<= 2022.3 LTS)"
+   ]
+  },
+  {
+   "id": "dsview",
+   "install_method": "source-build",
+   "package": "https://github.com/DreamSourceLab/DSView",
+   "url": "https://github.com/DreamSourceLab/DSView",
+   "alternatives": [],
+   "evidence": "apt 'dsview' absent; upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "DSView"
+   ]
+  },
+  {
+   "id": "aml-flash-tool",
+   "install_method": "source-build",
+   "package": "https://github.com/khadas/utils",
+   "url": "https://github.com/khadas/utils",
+   "alternatives": [],
+   "evidence": "Khadas utils repo carries aml-flash-tool; upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "aml-flash-tool"
+   ]
+  },
+  {
+   "id": "thingino-dfu",
+   "install_method": "source-build",
+   "package": "https://github.com/gtxaspec/thingino-dfu",
+   "url": "https://github.com/gtxaspec/thingino-dfu",
+   "alternatives": [],
+   "evidence": "upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "thingino-dfu"
+   ]
+  },
+  {
+   "id": "ipwndfu",
+   "install_method": "source-build",
+   "package": "https://github.com/axi0mX/ipwndfu",
+   "url": "https://github.com/axi0mX/ipwndfu",
+   "alternatives": [],
+   "evidence": "upstream repo HEAD 200 on github.com, 2026-10-16.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "ipwndfu"
+   ]
+  },
+  {
+   "id": "jztool",
+   "install_method": "source-build",
+   "package": "https://github.com/Rockbox/rockbox",
+   "url": "https://github.com/Rockbox/rockbox",
+   "alternatives": [],
+   "evidence": "Lives at utils/jztool in the Rockbox tree (tree URL 200).",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "jztool"
+   ]
+  },
+  {
+   "id": "libedgetpu",
+   "install_method": "vendor",
+   "package": null,
+   "url": "https://github.com/google-coral/libedgetpu",
+   "alternatives": [],
+   "evidence": "Shipped from Google's Coral apt repo, not the Ubuntu archive (libedgetpu1-std absent on 26.04).",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "libedgetpu"
+   ]
+  },
+  {
+   "id": "pycoral",
+   "install_method": "vendor",
+   "package": null,
+   "url": "https://github.com/google-coral/pycoral",
+   "alternatives": [],
+   "evidence": "Coral apt repo / Coral wheel index only; python3-pycoral absent and PyPI 'pycoral' is an unrelated Allen Coral Atlas CLI.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "pycoral"
+   ]
+  },
+  {
+   "id": "jlink",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "SEGGER J-Link software (proprietary, vendor download).",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "JLinkExe"
+   ]
+  },
+  {
+   "id": "odin",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Samsung Odin, Windows-only proprietary tool; Linux uses heimdall/thor.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "Odin (Windows)"
+   ]
+  },
+  {
+   "id": "qfil",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Qualcomm QFIL, Windows-only proprietary tool; Linux uses qdl/edl.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "QFIL"
+   ]
+  },
+  {
+   "id": "sp-flash-tool",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "MediaTek SP Flash Tool, proprietary vendor download; Linux uses mtkclient.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "SP Flash Tool"
+   ]
+  },
+  {
+   "id": "saleae-logic2",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Saleae Logic 2, proprietary AppImage from saleae.com.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "Saleae Logic 2 (proprietary)"
+   ]
+  },
+  {
+   "id": "amlogic-usb-burning-tool",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Amlogic Windows tool; Linux uses pyamlboot/aml-flash-tool.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "Amlogic USB Burning Tool"
+   ]
+  },
+  {
+   "id": "ingenic-cloner",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Ingenic vendor cloner tool.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "Ingenic USB Cloner",
+    "cloner"
+   ]
+  },
+  {
+   "id": "rockchip-upgrade-tool",
+   "install_method": "vendor",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Rockchip proprietary Linux upgrade_tool binary; open alternative is rkdeveloptool.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "upgrade_tool"
+   ]
+  },
+  {
+   "id": "ingenic-tools",
+   "install_method": "unresolved",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "Generic name in the TOML; no specific upstream identified.",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "ingenic-tools"
+   ]
+  },
+  {
+   "id": "qc_diag",
+   "install_method": "unresolved",
+   "package": null,
+   "url": null,
+   "alternatives": [],
+   "evidence": "No upstream identified for 'qc_diag' (QCSuper speaks Qualcomm DIAG; not assumed to be it).",
+   "project_name": null,
+   "foreman_name": null,
+   "toml_names": [
+    "qc_diag"
+   ]
+  }
+ ]
+}
