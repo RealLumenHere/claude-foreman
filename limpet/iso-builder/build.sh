@@ -74,9 +74,22 @@ stage2_remove_bloat() {
   require_cmd chroot
   [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1/stage3 first)"
   local pkgs
-  pkgs="$(grep -v '^#' "$list" | grep -v '^[[:space:]]*$' | tr '\n' ' ')"
-  log "stage2: purging: $pkgs"
-  chroot "$CHROOT" apt-get purge -y $pkgs || log "stage2: some packages were already absent (non-fatal)"
+  pkgs="$(grep -v '^#' "$list" | grep -v '^[[:space:]]*$')"
+  # wq#4075: one invocation covering the whole list meant a single absent
+  # package made apt-get purge the WHOLE list exit non-zero and purge NOTHING,
+  # while the old `|| log ... non-fatal` line swallowed that exit code and
+  # misreported total failure as a benign partial. Purge package-by-package
+  # instead so one absent package only skips itself -- every other package in
+  # the list still gets purged, and each outcome is logged for what it is.
+  local pkg
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    if chroot "$CHROOT" apt-get purge -y "$pkg"; then
+      log "stage2: purged $pkg"
+    else
+      log "stage2: $pkg not purged (absent from this base or already removed)"
+    fi
+  done <<<"$pkgs"
   chroot "$CHROOT" apt-get autoremove -y
 }
 
