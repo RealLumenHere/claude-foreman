@@ -89,7 +89,7 @@ class StdioMcpClient:
                     "params": {
                         "protocolVersion": "2025-06-18",
                         "capabilities": {},
-                        "clientInfo": {"name": "limpet-meta-server", "version": "0.1"},
+                        "clientInfo": {"name": "limpet-mcp-meta", "version": "0.1"},
                     },
                 }
             )

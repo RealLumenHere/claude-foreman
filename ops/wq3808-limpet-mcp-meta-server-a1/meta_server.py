@@ -238,7 +238,7 @@ class MetaServer:
                 "result": {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {"tools": {"listChanged": True}},
-                    "serverInfo": {"name": "limpet-meta-server", "version": "0.1"},
+                    "serverInfo": {"name": "limpet-mcp-meta", "version": "0.1"},
                 },
             }
         if method == "notifications/initialized":

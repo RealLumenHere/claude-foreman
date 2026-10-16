@@ -109,7 +109,7 @@ limpet-tools health
 
 ```bash
 # Start the services
-sudo systemctl start limpet-hal limpet-registry limpet-meta-server
+sudo systemctl start limpet-hald limpet-registry-daemon limpet-mcp-meta
 
 # Check what hardware is connected
 limpet-tools hardware
@@ -119,10 +119,10 @@ limpet-workspace create --name "my-device" --description "Unknown IoT gadget"
 
 # Connect your LLM agent via MCP
 # (stdio transport — agent spawns the meta-server)
-limpet-meta-server
+limpet-mcp-meta
 
 # Or via SSE (HTTP transport for remote agents)
-limpet-meta-server --transport sse --port 3200
+limpet-mcp-meta --transport sse --port 3200
 ```
 
 ### Example Session

@@ -286,7 +286,7 @@ def test_end_to_end_subprocess_speaks_mcp_over_stdio(tmp_path):
 
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
         init_resp = recv()
-        assert init_resp["result"]["serverInfo"]["name"] == "limpet-meta-server"
+        assert init_resp["result"]["serverInfo"]["name"] == "limpet-mcp-meta"
 
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 

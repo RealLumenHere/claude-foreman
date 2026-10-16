@@ -179,7 +179,7 @@ def test_end_to_end_subprocess_answers_initialize_despite_hung_child(tmp_path):
         ready, _, _ = select.select([proc.stdout], [], [], WEDGE_CEILING)
         assert ready, f"no response within {WEDGE_CEILING}s to a plain initialize"
         init_resp = json.loads(proc.stdout.readline())
-        assert init_resp["result"]["serverInfo"]["name"] == "limpet-meta-server"
+        assert init_resp["result"]["serverInfo"]["name"] == "limpet-mcp-meta"
 
         proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n")
         proc.stdin.flush()
