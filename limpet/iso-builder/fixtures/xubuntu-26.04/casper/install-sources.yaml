@@ -1,0 +1,26 @@
+kernel:
+  default: linux-generic
+sources:
+- default: false
+  description:
+    en: A minimal installation of the Xubuntu Desktop.
+  id: xubuntu-desktop-minimal
+  locale_support: langpack
+  name:
+    en: Xubuntu Minimal
+  path: minimal.squashfs
+  size: 3962335232
+  type: fsimage-layered
+  variant: desktop
+- default: true
+  description:
+    en: A full featured Xubuntu Desktop.
+  id: xubuntu-desktop
+  locale_support: langpack
+  name:
+    en: Xubuntu Desktop
+  path: minimal.standard.squashfs
+  size: 7482785792
+  type: fsimage-layered
+  variant: desktop
+version: 2

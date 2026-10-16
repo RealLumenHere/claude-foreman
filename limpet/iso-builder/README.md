@@ -2,9 +2,43 @@
 
 `build.sh` assembles a Xubuntu 26.04 base + every Limpet component into one
 hybrid BIOS+UEFI bootable ISO. Run `./build.sh --help` for the stage list and
-env vars, or `./build.sh all` end to end on a build host with real network
-egress, `debootstrap`/`xorriso`/`mksquashfs`/`grub-mkrescue`/`qemu-system-x86_64`,
-and ~15 GB free (this worktree/CI sandbox has none of those and cannot run it).
+env vars, or `./build.sh all` end to end as root on a build host with real
+network egress, `xorriso`/`squashfs-tools`/`qemu-system-x86_64`, overlayfs +
+loop-device support, and ~15 GB free.
+
+## Layered squashfs (wq#4077)
+
+The 26.04 ISO has no `casper/filesystem.squashfs`. It stacks `minimal` ->
+`minimal.standard` -> `minimal.standard.live`, and `casper/install-sources.yaml`
+(type `fsimage-layered`) marks `minimal.standard` as the default install source.
+Limpet content goes into that layer, because it's the one the installer copies to disk; the
+`.live` layer only exists in the live session. `iso_layers.py target-layer`
+reads the choice from the yaml; set `LIMPET_ISO_LAYER` to override it.
+
+- `stage1b_assemble_chroot` loop-mounts the parent layers read-only, unsquashes
+  the target layer to `layers/upper/`, and mounts an overlayfs of the two at
+  `$CHROOT` (plus proc/sys/dev/dev/pts, a tmpfs `/run` holding the resolver,
+  and a `policy-rc.d`). Every later stage's writes, including purge whiteouts,
+  land in `upper/`. livecd-rootfs `lb_binary_layered` builds the layers the
+  same way.
+- `stage11_build_hybrid_iso` regenerates `<layer>.manifest.full`, the delta
+  `<layer>.manifest`, `<layer>.size` and the `install-sources.yaml` size the
+  same way livecd-rootfs does. It then unmounts, packs `upper/` with the
+  original compression and block size, rebrands the ISO's `boot/grub/grub.cfg` +
+  `loopback.cfg` ("Try or Install Limpet", kernel args unchanged) and
+  refreshes `md5sum.txt`. Finally it writes a copy of the base ISO with only
+  those files mapped in and the base's El Torito/MBR/GPT boot records replayed
+  (`xorriso -boot_image any replay`). The base ISO's kernel/initrd are reused.
+  grub-mkrescue is no longer used.
+- Not handled: `minimal.standard.live.manifest*` still lists the stock live
+  layer's packages. That layer's own dpkg db also shadows the target layer's
+  in the live session, so packages installed by stages 4/9 show their files
+  there but don't appear in `dpkg -l`. The installed system is unaffected.
+  `upper/` is not rsync-deduplicated the way livecd-rootfs does it, so the
+  repacked layer can be slightly larger than it needs to be.
+- Which menu entries the ISO should offer (deployment-spec's "Try Limpet Live"
+  default vs. the install-only GRUB decision recorded in the 2026-10-16 audit)
+  is still undecided. Only the stock entries are rebranded.
 
 ## The ticket cites a spec file that does not exist
 
@@ -86,13 +120,15 @@ blocking on one that doesn't:
 - **Does not cross-compile DKMS modules.** `build_iso_drivers.py`'s own
   docstring scopes that to "once a pinned target kernel exists" — `stage7`
   installs the udev rules + prebake plan it generates and says exactly what's
-  left (wiring `dkms install` against stage1's kernel) rather than faking a
+  left (wiring `dkms install` against stage1b's kernel) rather than faking a
   compile step with no kernel to compile against.
-- **Was not run end to end in this session.** The worktree sandbox has none
-  of `debootstrap`/`mksquashfs`/`xorriso`/`grub-mkrescue`/`qemu-system-x86_64`
-  and no multi-GB scratch space. Every stage that *can* run standalone here
-  (`stage4`, `stage7`, `gen_motd.py`, the overlay files, both test suites) was
-  run for real — see the done-notes evidence — not merely written.
+- **Has not been run end to end as root against the real ISO.**
+  `test_layered_remaster.py` runs the real stage1 -> 1b -> 6 -> 11 path
+  (real mksquashfs/unsquashfs/xorriso/dpkg-query) on a small synthetic
+  three-layer ISO built from the real 26.04 `install-sources.yaml`/`grub.cfg`
+  (`fixtures/xubuntu-26.04/`). Only mount/umount/mountpoint/chroot are faked,
+  because they need root. Boot-record replay on the real ISO is covered by
+  scratch/limpet-iso/test_remaster.sh (wq#4077 evidence).
 
 ## Tests
 

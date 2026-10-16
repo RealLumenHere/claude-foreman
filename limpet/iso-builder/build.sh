@@ -24,6 +24,10 @@ REPO_ROOT="$(cd "$LIMPET_ROOT/.." && pwd)"
 
 WORKDIR="${LIMPET_ISO_WORKDIR:-$HERE/.build}"
 CHROOT="$WORKDIR/chroot"
+ISO_EXTRACT="$WORKDIR/iso-extract"
+# wq#4077: lower/<layer> mountpoints + the unsquashed target layer (upper/)
+# that overlayfs records every chroot change into. See stage1b.
+LAYERS_DIR="$WORKDIR/layers"
 OUT_DIR="${LIMPET_ISO_OUT_DIR:-$WORKDIR/out}"
 ISO_NAME="${LIMPET_ISO_NAME:-limpet-$(date -u +%Y%m%d).iso}"
 
@@ -59,9 +63,91 @@ stage1_fetch_base_iso() {
   actual="$(sha256sum "$BASE_ISO" | cut -d' ' -f1)"
   [ "$actual" = "$BASE_ISO_SHA256" ] || fail "checksum mismatch on $BASE_ISO: got $actual, expected $BASE_ISO_SHA256"
   require_cmd xorriso
-  mkdir -p "$WORKDIR/iso-extract"
-  xorriso -osirrox on -indev "$BASE_ISO" -extract / "$WORKDIR/iso-extract" >/dev/null
-  log "stage1: extracted to $WORKDIR/iso-extract"
+  mkdir -p "$ISO_EXTRACT"
+  xorriso -osirrox on -indev "$BASE_ISO" -extract / "$ISO_EXTRACT" >/dev/null
+  log "stage1: extracted to $ISO_EXTRACT"
+}
+
+# ---------------------------------------------------------------------------
+# Stage 1b -- layered chroot assembly (wq#4077)
+# ---------------------------------------------------------------------------
+# Xubuntu 26.04 has no single filesystem.squashfs: casper stacks
+# minimal -> minimal.standard -> minimal.standard.live, and
+# casper/install-sources.yaml names the layer the installer copies to disk
+# (the default: true source, minimal.standard on the stock ISO). Limpet
+# content has to land in THAT layer to survive installation; the .live layer
+# is the live session only. This mirrors livecd-rootfs lb_binary_layered: the
+# target layer is the overlayfs upperdir over its read-only parents, so every
+# later stage's chroot writes (apt, cp, whiteouts for purges) are recorded in
+# upper/ and stage11 packs upper/ back into that same layer.
+iso_layers() { python3 -I "$HERE/iso_layers.py" "$@"; }
+
+target_layer() {
+  if [ -n "${LIMPET_ISO_LAYER:-}" ]; then echo "$LIMPET_ISO_LAYER"; return; fi
+  local sources="$ISO_EXTRACT/casper/install-sources.yaml"
+  [ -f "$sources" ] || fail "no $sources -- run stage1 first (a base without it is not a layered 26.04+ image and this pipeline does not handle it)"
+  iso_layers target-layer --sources "$sources"
+}
+
+stage1b_assemble_chroot() {
+  log "stage1b: assembling layered chroot"
+  require_cmd python3
+  require_cmd unsquashfs
+  require_cmd mount
+  require_cmd mountpoint
+  if mountpoint -q "$CHROOT"; then
+    log "stage1b: $CHROOT already mounted -- reusing it"
+    return
+  fi
+  local casper="$ISO_EXTRACT/casper" layer lowers
+  layer="$(target_layer)"
+  [ -f "$casper/$layer.squashfs" ] || fail "target layer $casper/$layer.squashfs missing from the extracted ISO"
+  lowers="$(iso_layers lowerdirs --layer "$layer" --root "$LAYERS_DIR/lower")"
+  local lower_paths d
+  IFS=: read -r -a lower_paths <<<"$lowers"
+  for d in "${lower_paths[@]}"; do
+    mkdir -p "$d"
+    mountpoint -q "$d" || mount -t squashfs -o loop,ro "$casper/$(basename "$d").squashfs" "$d"
+  done
+  # Unsquash (not loop-mount) the target layer: it is the writable upperdir,
+  # and unsquashfs keeps its existing overlay whiteouts + opaque xattrs.
+  # An upper/ left by an earlier run holds that run's stage work -- keep it.
+  if [ ! -d "$LAYERS_DIR/upper" ]; then
+    unsquashfs -d "$LAYERS_DIR/upper" "$casper/$layer.squashfs" >/dev/null
+  fi
+  mkdir -p "$LAYERS_DIR/work" "$CHROOT"
+  mount -t overlay overlay \
+    -o "lowerdir=$lowers,upperdir=$LAYERS_DIR/upper,workdir=$LAYERS_DIR/work" "$CHROOT"
+
+  # API filesystems for dpkg maintainer scripts. /run is a tmpfs so the
+  # resolver copy below never enters the layer; the chroot's resolv.conf is
+  # the stock symlink into /run/systemd/resolve, and the host's stub resolver
+  # is reachable from the chroot (same network namespace).
+  mount -t proc proc "$CHROOT/proc"
+  mount -t sysfs sysfs "$CHROOT/sys"
+  mount --bind /dev "$CHROOT/dev"
+  mount --bind /dev/pts "$CHROOT/dev/pts"
+  mount -t tmpfs tmpfs "$CHROOT/run"
+  mkdir -p "$CHROOT/run/systemd/resolve"
+  cp -L /etc/resolv.conf "$CHROOT/run/systemd/resolve/stub-resolv.conf"
+  # No daemons start from package installs inside the build chroot.
+  printf '#!/bin/sh\nexit 101\n' >"$CHROOT/usr/sbin/policy-rc.d"
+  chmod +x "$CHROOT/usr/sbin/policy-rc.d"
+  log "stage1b: $layer (over $lowers) mounted at $CHROOT"
+}
+
+release_chroot() {
+  rm -f "$CHROOT/usr/sbin/policy-rc.d"
+  local m
+  for m in dev/pts dev sys proc run; do
+    if mountpoint -q "$CHROOT/$m"; then umount "$CHROOT/$m"; fi
+  done
+  if mountpoint -q "$CHROOT"; then umount "$CHROOT"; fi
+  if [ -d "$LAYERS_DIR/lower" ]; then
+    for m in "$LAYERS_DIR"/lower/*; do
+      if mountpoint -q "$m"; then umount "$m"; fi
+    done
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -72,7 +158,7 @@ stage2_remove_bloat() {
   local list="$HERE/bloat-removal.list"
   [ -f "$list" ] || fail "missing $list"
   require_cmd chroot
-  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1/stage3 first)"
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
   local pkgs
   pkgs="$(grep -v '^#' "$list" | grep -v '^[[:space:]]*$')"
   # wq#4075: one invocation covering the whole list meant a single absent
@@ -98,7 +184,7 @@ stage2_remove_bloat() {
 # ---------------------------------------------------------------------------
 stage3_inject_limpet_packages() {
   log "stage3: injecting Limpet components + desktop overlay"
-  [ -d "$CHROOT" ] || fail "chroot not assembled yet"
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
 
   # Overlay tree (docs/desktop-spec.md panel/launchers, docs/branding-spec.md
   # LightDM greeter config) copies onto the chroot verbatim.
@@ -157,7 +243,7 @@ stage4_package_re_tools() {
 # ---------------------------------------------------------------------------
 stage5_bundle_hardware_book() {
   log "stage5/10: bundling limpet/hardware-book/"
-  [ -d "$CHROOT" ] || fail "chroot not assembled yet"
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
   mkdir -p "$CHROOT/opt/limpet/hardware-book"
   cp -a "$LIMPET_ROOT/hardware-book/." "$CHROOT/opt/limpet/hardware-book/"
   local n
@@ -170,7 +256,7 @@ stage5_bundle_hardware_book() {
 # ---------------------------------------------------------------------------
 stage6_bundle_target_device_db() {
   log "stage6: bundling limpet/hardware.d/ (RE target/peripheral device catalog)"
-  [ -d "$CHROOT" ] || fail "chroot not assembled yet"
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
   mkdir -p "$CHROOT/opt/limpet/hardware.d"
   cp "$LIMPET_ROOT"/hardware.d/*.toml "$CHROOT/opt/limpet/hardware.d/"
 }
@@ -181,13 +267,13 @@ stage6_bundle_target_device_db() {
 stage7_bundle_driver_bundle() {
   log "stage7: driver bundle via limpet/hardware.d/build_iso_drivers.py"
   require_cmd python3
-  [ -d "$CHROOT" ] || fail "chroot not assembled yet"
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
   local bundle="$WORKDIR/driver-bundle"
   python3 -I "$LIMPET_ROOT/hardware.d/build_iso_drivers.py" --write-bundle "$bundle"
   mkdir -p "$CHROOT/etc/udev/rules.d" "$CHROOT/opt/limpet/docs"
   cp "$bundle/90-limpet-hardware.rules" "$CHROOT/etc/udev/rules.d/"
   cp "$bundle/prebake-plan.md" "$bundle/PROPRIETARY-LIMITATIONS.md" "$CHROOT/opt/limpet/docs/"
-  log "stage7: udev rules + prebake plan installed. Actual DKMS cross-compilation against this ISO's target kernel is NOT run by this script -- build_iso_drivers.py's own docstring (limpet/hardware.d/build_iso_drivers.py:16-24) scopes that to the ISO build script's mkosi/live-build hook once a pinned target kernel exists; stage1's debootstrap tree supplies that kernel, so wire the dkms_targets() list from \$bundle/prebake-plan.md into a 'dkms install' loop here once stage1 is exercised against a real kernel on a real build host."
+  log "stage7: udev rules + prebake plan installed. Actual DKMS cross-compilation against this ISO's target kernel is NOT run by this script -- build_iso_drivers.py's own docstring (limpet/hardware.d/build_iso_drivers.py:16-24) scopes that to the ISO build script's mkosi/live-build hook once a pinned target kernel exists; stage1b's layered chroot supplies that kernel, so wire the dkms_targets() list from \$bundle/prebake-plan.md into a 'dkms install' loop here once stage1 is exercised against a real kernel on a real build host."
 }
 
 # ---------------------------------------------------------------------------
@@ -195,7 +281,7 @@ stage7_bundle_driver_bundle() {
 # ---------------------------------------------------------------------------
 stage8_bundle_exploit_db() {
   log "stage8: bundling exploit database snapshot"
-  [ -d "$CHROOT" ] || fail "chroot not assembled yet"
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
   mkdir -p "$CHROOT/opt/limpet/exploit-db"
   cp "$REPO_ROOT/research/wq3921_soc_exploit_seed.json" \
      "$REPO_ROOT/research/WQ3921_EXPLOIT_VULN_DATABASES.md" \
@@ -207,7 +293,7 @@ stage8_bundle_exploit_db() {
 # ---------------------------------------------------------------------------
 stage9_apply_branding() {
   log "stage9: branding"
-  [ -d "$CHROOT" ] || fail "chroot not assembled yet"
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
   require_cmd python3
 
   # Theme/font packages the shipped greeter conf names. wq#3946 shipped
@@ -264,17 +350,76 @@ stage9_apply_branding() {
 # ---------------------------------------------------------------------------
 # Stage 11 -- hybrid BIOS+UEFI bootable ISO
 # ---------------------------------------------------------------------------
+# wq#4077: the old body packed the whole chroot as one filesystem.squashfs and
+# ran grub-mkrescue on a tree with no boot/grub/grub.cfg. Instead: pack the
+# target layer's upper/ back into its own casper/<layer>.squashfs, refresh the
+# metadata livecd-rootfs derives from it, and write a new ISO from the base ISO
+# with only the changed files mapped in and its El Torito/MBR/GPT boot records
+# replayed (xorriso -boot_image any replay; proven by
+# scratch/limpet-iso/test_remaster.sh, 99 s for the live layer). Kernel and
+# initrd stay the base ISO's /casper/vmlinuz + /casper/initrd.
 stage11_build_hybrid_iso() {
   log "stage11: assembling hybrid BIOS+UEFI ISO"
+  require_cmd python3
   require_cmd mksquashfs
+  require_cmd unsquashfs
   require_cmd xorriso
-  require_cmd grub-mkrescue
-  [ -d "$CHROOT" ] || fail "chroot not assembled yet"
-  mkdir -p "$OUT_DIR" "$WORKDIR/iso-root/casper" "$WORKDIR/iso-root/boot/grub"
-  mksquashfs "$CHROOT" "$WORKDIR/iso-root/casper/filesystem.squashfs" -noappend -comp xz
-  cp "$CHROOT/boot/vmlinuz" "$WORKDIR/iso-root/casper/vmlinuz"
-  cp "$CHROOT/boot/initrd.img" "$WORKDIR/iso-root/casper/initrd"
-  grub-mkrescue -o "$OUT_DIR/$ISO_NAME" "$WORKDIR/iso-root"
+  require_cmd dpkg-query
+  [ -n "$BASE_ISO" ] && [ -f "$BASE_ISO" ] || fail "LIMPET_BASE_ISO must still point at the base ISO -- stage11 replays its boot records"
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
+  local casper="$ISO_EXTRACT/casper" upper="$LAYERS_DIR/upper" layer parent
+  layer="$(target_layer)"
+  [ -d "$upper" ] || fail "no $upper -- run stage1b_assemble_chroot first"
+  parent="$(iso_layers lowerdirs --layer "$layer" --root . | cut -d: -f1)"
+  parent="${parent#./}"
+
+  local changes="$WORKDIR/iso-changes"
+  rm -rf "$changes"
+  mkdir -p "$changes/casper" "$changes/boot/grub" "$OUT_DIR"
+
+  # Measured on the merged tree before it is unmounted, the way
+  # lb_binary_layered does: manifest.full = every package installed up to this
+  # layer, the delta manifest = what this layer adds over its parent, and the
+  # install-sources size = the installed footprint the installer checks.
+  if mountpoint -q "$CHROOT"; then chroot "$CHROOT" apt-get clean; fi
+  dpkg-query --show --admindir="$CHROOT/var/lib/dpkg" >"$changes/casper/$layer.manifest.full"
+  diff -NU0 "$casper/$parent.manifest.full" "$changes/casper/$layer.manifest.full" \
+    | grep -v '^@' >"$changes/casper/$layer.manifest" || true
+  local merged_size
+  merged_size="$(du -B 1 -s -x "$CHROOT/" | cut -f1)"
+  release_chroot
+  du -B 1 -s "$upper" | cut -f1 >"$changes/casper/$layer.size"
+
+  # Same compression + block size as the layer being replaced.
+  local comp bs
+  comp="$(unsquashfs -s "$casper/$layer.squashfs" | awk '/^Compression/{print $2}')"
+  bs="$(unsquashfs -s "$casper/$layer.squashfs" | awk '/^Block size/{print $3}')"
+  mksquashfs "$upper" "$changes/casper/$layer.squashfs" -noappend -comp "$comp" -b "$bs" -xattrs -no-progress >/dev/null
+
+  # install, not cp: xorriso extracts ISO files 0444 and these get rewritten.
+  install -m 0644 "$casper/install-sources.yaml" "$changes/casper/"
+  iso_layers set-size --sources "$changes/casper/install-sources.yaml" --layer "$layer" --size "$merged_size"
+
+  # The ISO's own boot menu (distinct from the installed system's grub, which
+  # stage9 themes). Rebranded from the stock entries, kernel args untouched.
+  local cfg
+  for cfg in grub.cfg loopback.cfg; do
+    install -m 0644 "$ISO_EXTRACT/boot/grub/$cfg" "$changes/boot/grub/"
+    iso_layers grub-cfg --file "$changes/boot/grub/$cfg"
+  done
+
+  local rel=()
+  mapfile -t rel < <(cd "$changes" && find . -type f | sed 's|^\./||' | sort)
+  install -m 0644 "$ISO_EXTRACT/md5sum.txt" "$changes/md5sum.txt"
+  iso_layers md5sum --root "$changes" "${rel[@]}"
+
+  local map_args=() f
+  for f in "${rel[@]}" md5sum.txt; do map_args+=(-map "$changes/$f" "/$f"); done
+  rm -f "$OUT_DIR/$ISO_NAME"
+  xorriso -indev "$BASE_ISO" -outdev "$OUT_DIR/$ISO_NAME" -boot_image any replay \
+    "${map_args[@]}" -commit >/dev/null 2>"$WORKDIR/xorriso-stage11.log" \
+    || fail "xorriso repack failed -- see $WORKDIR/xorriso-stage11.log"
+  log "stage11: mapped ${#rel[@]} changed files + md5sum.txt (incl. /casper/$layer.squashfs) onto a copy of $BASE_ISO"
   local size_gb
   size_gb="$(du -BG "$OUT_DIR/$ISO_NAME" | cut -f1 | tr -d G)"
   log "stage11: wrote $OUT_DIR/$ISO_NAME (${size_gb}G; ticket target is 8-12G)"
@@ -299,6 +444,7 @@ stage12_qemu_test() {
 # ---------------------------------------------------------------------------
 STAGES=(
   stage1_fetch_base_iso
+  stage1b_assemble_chroot
   stage2_remove_bloat
   stage3_inject_limpet_packages
   stage4_package_re_tools
@@ -321,6 +467,8 @@ $(printf '  %s\n' "${STAGES[@]}")
 Env:
   LIMPET_BASE_ISO         path to a cached Xubuntu $XUBUNTU_VERSION ISO (stage1)
   LIMPET_BASE_ISO_SHA256  its published sha256 (stage1)
+  LIMPET_ISO_LAYER        casper layer to modify (default: the install-sources.yaml
+                          default source, minimal.standard on stock 26.04)
   LIMPET_ISO_WORKDIR      scratch dir (default: $HERE/.build)
   LIMPET_ISO_OUT_DIR      output dir (default: \$WORKDIR/out)
   LIMPET_ISO_NAME         output filename (default: limpet-<date>.iso)
