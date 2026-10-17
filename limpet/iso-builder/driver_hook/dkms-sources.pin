@@ -1,0 +1,14 @@
+# wq#3980 -- DKMS source pins (supply chain: URL + full commit, no branches).
+#   pin  <module> <git-url> <40-hex-commit>
+#   skip <module> <reason...>
+# <module> is the first token of the catalog's linux_driver field.
+# A catalog dkms=true entry with NO line here makes the hook exit 4 (fail closed).
+#
+# rtl8812bu: the catalog's dkms_source (github.com/morrownr/8812bu-20210629)
+# returns "Repository not found" (that name is the AU chip's repo). The in-kernel
+# rtw88_8822bu module claims usb:v0BDApB812 -- verified directly from the .ko in
+# the ISO pool's linux-modules-7.0.0-14-generic (vermagic 7.0.0-14-generic) and
+# on the running 7.0.0-38 kernel. DKMS is therefore not needed. Catalog
+# correction is tracked separately; if out-of-tree is ever wanted again the
+# candidate upstream is github.com/morrownr/88x2bu-20210702 (unvetted).
+skip rtl8812bu in-kernel rtw88_8822bu claims 0bda:b812 on 7.0.0-14 and 7.0.0-38; catalog dkms_source URL is dead

@@ -1,0 +1,16 @@
+# wq#3980 -- pinned base image + target kernel ABI for the Limpet ISO.
+# Every value below was read from the real artifact on 2026-10-16, not assumed:
+#   - ISO: /home/lumen/scratch/xubuntu-26.04/xubuntu-26.04-desktop-amd64.iso,
+#     sha256 verified against the published xubuntu-SHA256SUMS ("OK").
+#   - /.disk/info: Xubuntu 26.04 "Resolute Raccoon" - Release amd64 (20260423.1)
+#   - casper/vmlinuz is a bzImage "7.0.0-14-generic" (built 2026-04-13)
+#   - ISO pool/ carries linux-headers-7.0.0-14-generic and
+#     linux-modules-7.0.0-14-generic (fully offline for this ABI)
+#   - casper/install-sources.yaml: "kernel: default: linux-generic" -- the
+#     INSTALLER picks the kernel; the layered squashfs carries none.
+# Changing KERNEL_ABI means re-verifying every in-kernel claim in
+# dkms-sources.pin; the test suite does not do that for you.
+BASE_ISO_NAME=xubuntu-26.04-desktop-amd64.iso
+BASE_ISO_SHA256=ae030dbd99426a4c7b2d1c96731e0f435ec9d18f6a28c9e76f077dd5f46364bc
+BASE_ISO_RELEASE=26.04 (20260423.1)
+KERNEL_ABI=7.0.0-14-generic

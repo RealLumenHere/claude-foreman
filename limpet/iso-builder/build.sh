@@ -270,10 +270,15 @@ stage7_bundle_driver_bundle() {
   [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
   local bundle="$WORKDIR/driver-bundle"
   python3 -I "$LIMPET_ROOT/hardware.d/build_iso_drivers.py" --write-bundle "$bundle"
-  mkdir -p "$CHROOT/etc/udev/rules.d" "$CHROOT/opt/limpet/docs"
-  cp "$bundle/90-limpet-hardware.rules" "$CHROOT/etc/udev/rules.d/"
-  cp "$bundle/prebake-plan.md" "$bundle/PROPRIETARY-LIMITATIONS.md" "$CHROOT/opt/limpet/docs/"
-  log "stage7: udev rules + prebake plan installed. Actual DKMS cross-compilation against this ISO's target kernel is NOT run by this script -- build_iso_drivers.py's own docstring (limpet/hardware.d/build_iso_drivers.py:16-24) scopes that to the ISO build script's mkosi/live-build hook once a pinned target kernel exists; stage1b's layered chroot supplies that kernel, so wire the dkms_targets() list from \$bundle/prebake-plan.md into a 'dkms install' loop here once stage1 is exercised against a real kernel on a real build host."
+  # wq#3980: the pinned-kernel hook (driver_hook/) places the udev rules, hardware.d
+  # TOMLs, docs and driver-plan.json, and fails closed (exit 3) if the chroot carries a
+  # kernel other than driver_hook/kernel.pin, or (exit 4) on an unpinned DKMS source.
+  # LIMPET_DRIVER_HOOK_RUN=1 additionally executes the in-chroot installer (needs root +
+  # network inside the chroot): firmware apt packages and any pinned DKMS builds.
+  local run=()
+  [ "${LIMPET_DRIVER_HOOK_RUN:-0}" = "1" ] && run=(--run-chroot)
+  python3 -I "$HERE/driver_hook/driver_hook.py" install --chroot "$CHROOT" --bundle "$bundle" "${run[@]}"
+  log "stage7: driver bundle installed for the pinned kernel ABI (pin: driver_hook/kernel.pin; see README "Driver bundle hook")"
 }
 
 # ---------------------------------------------------------------------------

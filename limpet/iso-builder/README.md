@@ -117,11 +117,8 @@ blocking on one that doesn't:
   every artifact it fetched is confirmed non-empty and checksum-verified
   against `SHA256SUMS`, so a 404/short-read mid-release-window can't produce
   a false "complete" marker the way an earlier ad hoc fetch did.
-- **Does not cross-compile DKMS modules.** `build_iso_drivers.py`'s own
-  docstring scopes that to "once a pinned target kernel exists" — `stage7`
-  installs the udev rules + prebake plan it generates and says exactly what's
-  left (wiring `dkms install` against stage1b's kernel) rather than faking a
-  compile step with no kernel to compile against.
+- **Only builds DKMS modules that are pinned.** See "Driver bundle hook" below;
+  today the catalog's one DKMS module needs no build (in-kernel driver).
 - **Has not been run end to end as root against the real ISO.**
   `test_layered_remaster.py` runs the real stage1 -> 1b -> 6 -> 11 path
   (real mksquashfs/unsquashfs/xorriso/dpkg-query) on a small synthetic
@@ -129,6 +126,30 @@ blocking on one that doesn't:
   (`fixtures/xubuntu-26.04/`). Only mount/umount/mountpoint/chroot are faked,
   because they need root. Boot-record replay on the real ISO is covered by
   scratch/limpet-iso/test_remaster.sh (wq#4077 evidence).
+
+## Driver bundle hook (wq#3980)
+
+`driver_hook/` is the stage7 hook that consumes the wq#3941 bundle. It is runner-agnostic
+(needs only a chroot dir), so the same code can sit behind live-build/mkosi later.
+
+- `kernel.pin` pins the base ISO (name + sha256, verified) and the target kernel ABI
+  (`7.0.0-14-generic`, read from the real ISO's `casper/vmlinuz`; its `pool/` carries the
+  matching headers + modules). Note the installer picks the kernel (`kernel: default:
+  linux-generic` in `install-sources.yaml`); the squashfs layers carry none.
+- `dkms-sources.pin` pins DKMS sources by URL + full commit, or records an explicit `skip`
+  with a reason. A catalog `dkms=true` entry with no line makes the hook exit 4.
+  `rtl8812bu` is `skip`ped: the in-kernel `rtw88_8822bu` claims `0bda:b812` (verified from
+  the `.ko` in the pinned ABI's modules deb and on the running 7.0.0-38 kernel); the
+  catalog's `dkms_source` URL is a 404.
+- Firmware refs are classified: plain names -> apt in the chroot; `bundled:` -> provided by
+  another component; `proprietary:` (Xilinx EULA firmware) -> never bundled, sideload only.
+- Exit 3 if the chroot already carries a kernel other than the pin.
+- `LIMPET_DRIVER_HOOK_RUN=1` runs the generated in-chroot installer (root + network).
+  **Untested path:** it has not been run against a real chroot, and no pinned DKMS module
+  exists to exercise the build branch (only script generation + `bash -n` are tested).
+- Wizard Phase 4 can call `driver_hook.py verify-installed` (JSON, exit 5 on failure).
+  Open naming conflict: install-wizard-spec says `90-limpet.rules`; the generator ships
+  `90-limpet-hardware.rules`.
 
 ## Tests
 
