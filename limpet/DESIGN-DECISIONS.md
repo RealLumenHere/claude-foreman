@@ -6,6 +6,28 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#4087 — populate the limpet-kb creds category with real data
+
+**D1 — populate, don't re-architect.** wq#4086 landed `defaultcreds`/`ics-default-passwords`
+SHIP catalog entries with no data on disk ("populating .../kb/<category>/ ... is a
+drop-in/update follow-up, not a code change"). This ticket is that follow-up: it adds
+`limpet/kb/creds/*.csv` + `.LICENSE` files and one new `kb-sources.d/many-passwords.toml`
+drop-in, and touches nothing else in the wq#4086 front end. An earlier draft of this
+ticket built a standalone `limpet creds search`/`limpet creds sources` CLI
+(`limpet/cli.py`, `limpet/creds.py`) before discovering wq#4086 had landed a generic
+equivalent (`limpet-kb search --category creds`) one commit ahead on `main` — that draft
+was dropped in favor of this one to avoid two parallel creds-lookup front ends.
+
+**D2 — ics-default-passwords: reshaped SecLists data, not the TOML's named repo.**
+`kb-sources.d/ics-default-passwords.toml` names `arnaudsoullie/ics-default-passwords` and
+declares columns `vendor,product,username,password,protocol`. That repo is a 6-row stub
+with no LICENSE and different column names. SecLists' `Passwords/Default-Credentials/
+scada-pass.csv` (MIT via the SecLists repo license, 107 rows of the same upstream SCADA
+StrangeLove content) is shipped instead, reshaped to the TOML's declared header (splitting
+its combined `Default password` field on the first `:`) rather than editing the
+already-landed TOML — keeps this ticket additive-only. Provenance + the exact transform:
+`limpet/kb/creds/SOURCES.md`.
+
 ## wq#4086 — limpet-kb front end: one KB namespace, one FTS5 index, a tiered catalog
 
 **D1 — the KB is catalog-driven, not hardcoded.** Which knowledge sources exist is a

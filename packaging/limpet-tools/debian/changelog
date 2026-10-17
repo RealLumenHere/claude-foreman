@@ -1,3 +1,17 @@
+limpet-tools (0.1.2) unstable; urgency=low
+
+  * Populate the wq#4086 `limpet-kb` creds category (wq#4087):
+    DefaultCreds-Cheat-Sheet (MIT, 3767 rows) and ics-default-passwords
+    (MIT via SecLists, 107 rows, reshaped to the vendor/product/username/
+    password/protocol columns kb-sources.d/ics-default-passwords.toml
+    already declared) populate /usr/share/limpet/kb/creds/, and a new
+    many-passwords.toml source (GPL-2.0, 2860 rows) is added alongside
+    them. Each CSV ships with its upstream .LICENSE file; provenance in
+    limpet/kb/creds/SOURCES.md. `limpet-kb update && limpet-kb search
+    <query> --category creds` now returns real results.
+
+ -- Lumen Industries <packaging@lumen.local>  Sat, 17 Oct 2026 00:00:00 +0000
+
 limpet-tools (0.1.1) unstable; urgency=low
 
   * Fix systemd unit packaging (wq#4071): rename the unit source to

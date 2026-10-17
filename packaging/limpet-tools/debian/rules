@@ -46,3 +46,8 @@ override_dh_auto_install:
 	install -d $(PKGROOT)/etc/limpet/plugins.d
 	install -d $(PKGROOT)/etc/limpet/report-templates
 	install -d $(PKGROOT)/var/lib/limpet
+	# wq#4087: populates the `creds` category of the wq#4086 KB root with the
+	# actual SHIP-tier data its kb-sources.d/{defaultcreds,ics-default-passwords}.toml
+	# (and this ticket's new many-passwords.toml) declare but don't carry on
+	# disk yet -- see limpet/kb/creds/SOURCES.md for provenance + licenses.
+	cp -r $(SRC)/kb/creds $(PKGROOT)/usr/share/limpet/kb/
