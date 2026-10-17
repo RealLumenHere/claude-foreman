@@ -1,5 +1,16 @@
 # wq#4088 — License/provenance audit: embedxpl / RouterXPL-Forge
 
+> **Amended 2026-10-17 by wq#4124** (disposition: forward-fix) after wq#4115's verify-pass
+> CONTRADICTED this doc's central §3 claim. As originally landed (`1bb939ca`) §3 asserted
+> "MPL-2.0 is the one non-permissive license found"; the same tree listing the audit used also
+> vendors a complete 78-file **GPL-3.0** project at `embedxpl/native_src/cpp/oboromi/`, plus a
+> second unmentioned MIT component at `embedxpl/native_src/cpp/cfc/LICENSE`, and the nested
+> license count was understated. §3, the risk section, the summary table and the follow-up
+> below are corrected accordingly. The `license_risk` value is unchanged — see
+> "Why the enum value survives" in §4. Evidence and reasoning:
+> `reports/wq4115_judgment_wq4088_embedxpl_forge_license_gap.md`,
+> `reports/wq4124_judgment_wq4088_license_audit_forward_fix.md`.
+
 ## Identity resolution
 
 The ticket's name `embedxpl/RouterXPL-Forge` ("~700 modules 350 CVEs 55 vendors ICS/OT APT
@@ -69,9 +80,22 @@ carve-out. Read in isolation this would be `license_risk: none`.
 ## 3. The real finding: this is a ~20,827-file aggregation of dozens of separately-licensed upstream projects, not one author's codebase under one license
 
 A full recursive tree listing (`git/trees/master?recursive=1`, fetched this session, 20,827
-entries, not truncated) turns up **13 separate `LICENSE`/`COPYING` files** nested under
-`embedxpl/native_src/` and `embedxpl/malware_research/`, each belonging to a distinct vendored
-upstream project bundled wholesale into this repo's tree:
+entries, not truncated) turns up **20 `LICENSE`/`LICENSE.md`/`COPYING`/`license.txt` blobs** —
+the top-level one plus **19 nested**, belonging to **18 distinct vendored project directories**
+(`zstd` carries both a `COPYING` and a `LICENSE`). 18 of the 19 nested files sit under
+`embedxpl/native_src/` (17) and `embedxpl/malware_research/` (1); the 19th, `samsung_root`, sits
+under `embedxpl/modules/exploits/`, not either of those paths.
+
+*(Corrected by wq#4124. The original text said "13 separate `LICENSE`/`COPYING` files nested
+under `native_src/` and `malware_research/`" — wrong on both the count and, for `samsung_root`,
+the location, which the original's own table already contradicted. The counts above are from a
+re-scan of the same unmodified tree JSON, reproducible with
+`python3 -I tools/license-sweep/tree_license_scan.py <tree.json> embedxpl/native_src/cpp/oboromi/`
+→ `20 (root: 1 nested: 19)`, `distinct nested directories: 18`, `entries under
+embedxpl/native_src/cpp/oboromi/: 78`.)*
+
+Each nested license belongs to a distinct upstream project bundled wholesale into this repo's
+tree:
 
 | Vendored path | Upstream project (inferred) | License (confirmed by direct fetch) |
 |---|---|---|
@@ -79,21 +103,45 @@ upstream project bundled wholesale into this repo's tree:
 | `modules/exploits/smart_tv/samsung_root` | public-domain root exploit | Unlicense (public domain) |
 | `native_src/c/meltdown` | Meltdown PoC | zlib-style permissive |
 | `malware_research/ics_apt/industroyer2` | DFIR_Resources_Industroyer2 (YARA detection rules, CERT-UA/ESET-era Industroyer2 response — defensive signatures, not an offensive payload) | Apache-2.0 |
+| `native_src/cpp/cfc` | the `cfc` wrapper app itself (parent of the vendored libcimbar) | MIT (added by wq#4124) |
 | `native_src/cpp/cfc/app/.../libcimbar` | sz3/libcimbar | **MPL-2.0** |
-| `.../libcimbar/src/third_party_lib/{zstd,fmt,stb,PicoSHA2,cxxopts,intx,libcorrect,libpopcnt,wirehair,base91}` | standard third-party libs vendored by libcimbar itself | each permissive (BSD/MIT/public-domain per their usual upstream terms) |
+| `.../libcimbar/src/third_party_lib/{zstd,fmt,stb,PicoSHA2,cxxopts,intx,libcorrect,libpopcnt,wirehair,base91,concurrentqueue}` | standard third-party libs vendored by libcimbar itself | each permissive (BSD/MIT/public-domain per their usual upstream terms) — 11 directories, not the 10 originally listed (`concurrentqueue` was omitted) |
+| `native_src/cpp/oboromi` | `0xNikilite/oboromi` — a WIP Nintendo Switch 2 emulator, vendored whole (78 files: `CMakeLists.txt`, `Cargo.toml`/`Cargo.lock`, a Rust `core/` with `audio`/`cpu`/`fs`/`gpu`/`nn`/`sys`, a GUI, its own `.github/workflows/` CI, README, logo) | **GPL-3.0** (added by wq#4124) |
 
-**MPL-2.0 is the one non-permissive license found.** It is weak/file-scoped copyleft: it requires
-source availability only for the specific MPL-covered files if they are modified and distributed,
-and explicitly permits combining MPL code with proprietary code in a "Larger Work" without
-infecting the rest. This is a real but narrow obligation — materially the same *category* of risk
-as EMBA/FACT's GPL-3.0 in `design/wq3959_license_audit_oghidra_emba_fact_fat.md:40-56`
-(source-offer, no commercial-use restriction), just file-scoped instead of whole-work-scoped.
+**Two copyleft licenses are present, not one.** The original version of this doc stated "MPL-2.0
+is the one non-permissive license found" — that was wrong, and it was the load-bearing sentence
+under this heading. Corrected:
+
+- **GPL-3.0 (`native_src/cpp/oboromi/license.txt`)** — full GNU GPL v3 text, "Version 3,
+  29 June 2007", 674 lines, re-fetched by wq#4124 from
+  `raw.githubusercontent.com/.../master/embedxpl/native_src/cpp/oboromi/license.txt`; the
+  subtree's own README carries a `license-GPL v3` badge pointing at
+  `github.com/0xNikilite/oboromi/blob/main/LICENSE`. This is **whole-work copyleft**: any work
+  that is a derivative of, or statically/dynamically linked into one program with, this code must
+  itself be GPL-3.0 when distributed. It is the strongest obligation in this repo.
+- **MPL-2.0 (`libcimbar`)** — weak/file-scoped copyleft: source availability only for the
+  specific MPL-covered files if they are modified and distributed, and explicitly permits
+  combining MPL code with proprietary code in a "Larger Work" without infecting the rest.
+
+So the copyleft exposure here is **not** uniformly "narrow." The MPL half is narrow for exactly
+the reason given above; the GPL-3.0 half is the whole-work case that
+`design/wq3959_license_audit_oghidra_emba_fact_fat.md:35-56` (EMBA/FACT) analyses, and the
+original text cited that precedent only to contrast *against* it — while an instance of it sat
+unnoticed in the same tree.
+
+**Provenance note on `oboromi` (wq#4124):** a Nintendo Switch 2 emulator has no connection to
+router/IoT/ICS exploitation, this repo's stated purpose, or any of the other 17 vendored
+projects. It is a second unrelated wholesale vendoring, and it carries non-license risk of its
+own: console-emulator projects are a standing takedown target, so a bundled copy inherits both
+the GPL-3.0 obligation and the chance that upstream disappears from under it. Whatever posture is
+chosen, this subtree is the first thing to excise.
 
 This means the single free-text `license` field the ticket and the repo's own badges point at
 (BSD/MIT, take your pick) badly understates the real licensing surface of what would actually
 ship if Limpet bundled this repo's binary/package: at minimum a BSD-3-Clause-equivalent top
-license, a confirmed MPL-2.0 component, and a double-digit count of further permissive
-third-party licenses nested inside that one component alone. No per-component audit of this kind
+license, a confirmed GPL-3.0 project vendored whole, a confirmed MPL-2.0 component, and a
+double-digit count of further permissive third-party licenses nested inside that one component
+alone. No per-component audit of this kind
 exists anywhere in this repo today (`grep` of `limpet/tool-catalog.json` and `design/` for
 `embedxpl`/`routerxpl`/`cimbar` before this doc returns nothing).
 
@@ -103,26 +151,48 @@ Per `limpet/tool-catalog.json`'s `provenance.license_risk_policy`
 (`limpet/tool-catalog.json:18`) enum (`none | copyleft-source-offer |
 non-osi-commercial-restricted | unverified`):
 
+### Why the enum value survives (wq#4124)
+
+The GPL-3.0 finding does **not** move `license_risk`. The enum's only stronger neighbour is
+`non-osi-commercial-restricted`, and GPL-3.0 carries no commercial-use restriction — it
+explicitly permits distribution "whether gratis or for a fee"; the same precedent that put
+EMBA/FACT's GPL-3.0 in `copyleft-source-offer`
+(`design/wq3959_license_audit_oghidra_emba_fact_fat.md:35-56`) applies unchanged here. What the
+finding moves is the *severity within* that bucket, and therefore the bundle precondition below:
+a GPL-3.0 subtree is a materially harder thing to clear than a file-scoped MPL one.
+
 - **`license_risk: copyleft-source-offer`** — not `none`, despite the top-level license being
-  permissive, because the confirmed MPL-2.0 `libcimbar` component carries a real (if narrow)
-  source-offer obligation that a `bundle` posture would inherit. Not
+  permissive, because the confirmed GPL-3.0 `oboromi` project (whole-work copyleft) and the
+  confirmed MPL-2.0 `libcimbar` component (file-scoped) both carry source-offer obligations that
+  a `bundle` posture would inherit. Not
   `non-osi-commercial-restricted` — nothing found here is FSL/BSL-style or otherwise blocks
   commercial use; every license found (BSD-3-Clause-equivalent, MIT, Unlicense, zlib, Apache-2.0,
-  MPL-2.0) permits commercial redistribution. Not `unverified` — every claim above was confirmed
-  against the primary-source `LICENSE`/`COPYING` text fetched this session, not carried forward
-  from the ticket's digest.
+  MPL-2.0, GPL-3.0) permits commercial redistribution. Not `unverified` — every license *type*
+  claimed above was confirmed against primary-source `LICENSE`/`COPYING` text, the two wq#4124
+  additions by its own re-fetch. The sweep's *completeness*, by contrast, was not verified when
+  this doc first landed and was wrong; see the amendment banner.
 - **`redistribution_posture: external-invoke`** (recommended, not yet applied to
   `tool-catalog.json` — see below) — the same conservative default
   `design/wq3959_license_audit_oghidra_emba_fact_fat.md:150-154` used for OGhidra: the operator
   installs/updates their own copy; Limpet's agent shells out to it; no code ships inside the sold
-  ISO, so none of the 13+ distinct upstream licenses' redistribution terms are triggered. `bundle`
-  is not ruled out in principle (nothing here is a hard block the way FAT 2.0's FSL
-  "Competing Use" clause was), but it is not safe to default into it from a single free-text
-  `license` field on a repo this large and this heterogeneous — `bundle` would first need a real
-  per-component SBOM pass (confirm `libcimbar`'s MPL files aren't modified by EmbedXPL-Forge's own
-  wrapper code; produce a durable source-offer for all 13+ vendored projects, not just the top
-  license). That audit is out of scope for this evaluation ticket and is flagged as follow-up
-  work below, not performed here.
+  ISO, so none of the 18 distinct upstream licenses' redistribution terms are triggered — the
+  GPL-3.0 subtree included, since GPL obligations attach to distribution, and an
+  operator-installed copy distributes nothing of ours. This posture is unchanged by wq#4124's
+  findings; it was already the conservative default, and it absorbs the GPL-3.0 miss without
+  further work. `bundle` is still not ruled out in principle (nothing here is a hard block the
+  way FAT 2.0's FSL "Competing Use" clause was), but wq#4124 raises its bar: it is not merely a
+  paperwork SBOM pass. `bundle` would first need, in order of difficulty —
+  1. **Dispose of `native_src/cpp/oboromi/` (GPL-3.0).** Either excise the subtree from whatever
+     artefact ships (simplest, and independently advisable per the provenance note in §3), or
+     establish that it is mere aggregation rather than one work with EmbedXPL-Forge's own code —
+     plausible on its face (it is a self-contained Rust/CMake program with no visible call path
+     from the Python framework) but it must be *shown*, not assumed, and if it is linked or
+     invoked as part of a combined work the whole combined work becomes GPL-3.0 on distribution.
+  2. **Confirm `libcimbar`'s MPL-2.0 files are unmodified** by EmbedXPL-Forge's own wrapper code,
+     else source-offer obligations attach to those specific files.
+  3. **Produce a durable source-offer list** covering all 18 vendored projects, not just the top
+     license.
+  That work is out of scope for this evaluation ticket and is flagged as follow-up below.
 
 ## Summary table
 
@@ -131,15 +201,22 @@ non-osi-commercial-restricted | unverified`):
 | Canonical project | `github.com/mrhenrike/EmbedXPL-Forge` (formerly `RouterXPL-Forge`, 301 redirect confirmed) |
 | Top-level license | Modified BSD-3-Clause (LICENSE file text); GitHub reports `Other`/`NOASSERTION`; README badge says MIT, README body says "BSD License" — both imprecise, only the LICENSE file is authoritative |
 | Maintainer | Single individual (`mrhenrike`), active, created 2026-04, 53 stars / 10 forks |
-| Vendored sub-licenses found | MIT, Unlicense, zlib-style, Apache-2.0, **MPL-2.0** (libcimbar), plus permissive libs nested under libcimbar's own third_party_lib |
-| `license_risk` | `copyleft-source-offer` |
-| `redistribution_posture` (recommended) | `external-invoke` |
-| Bundle into Limpet ISO now? | Not recommended without a per-component SBOM audit of the vendored native_src tree first |
+| Vendored sub-licenses found | MIT (cameradar, cfc), Unlicense, zlib-style, Apache-2.0, **MPL-2.0** (libcimbar, file-scoped copyleft), **GPL-3.0** (oboromi, whole-work copyleft), plus 11 permissive libs nested under libcimbar's own third_party_lib — 20 license blobs / 18 distinct vendored projects in total |
+| `license_risk` | `copyleft-source-offer` (unchanged by wq#4124 — GPL-3.0 sorts into the same bucket; severity within it is higher than originally written) |
+| `redistribution_posture` (recommended) | `external-invoke` (unchanged) |
+| Bundle into Limpet ISO now? | No. Blocked first on disposing of the GPL-3.0 `oboromi` subtree (excise, or prove mere aggregation), then the MPL/SBOM pass |
 | Catalog entry added this ticket? | No — this is an evaluation doc only, matching the wq#3959 precedent of separating audit from adoption; adding a `tool-catalog.json` row is follow-up adoption work, not this ticket |
 
 ## Follow-up (not performed here, out of scope for an evaluation ticket)
 
-A full SBOM-level pass over `embedxpl/native_src/` and `embedxpl/malware_research/` before any
-`bundle` posture is adopted: confirm no MPL-2.0 `libcimbar` files are modified by EmbedXPL-Forge's
-own code (which would mean source-offer obligations attach to those specific files), and draft the
-source-offer list for all 13+ vendored projects identified above.
+A full SBOM-level pass over `embedxpl/native_src/`, `embedxpl/malware_research/` and
+`embedxpl/modules/exploits/` before any `bundle` posture is adopted — the three paths the 19
+nested licenses actually span. Scope, per the ordered bar in the risk section above: dispose of
+the GPL-3.0 `oboromi` subtree, confirm no MPL-2.0 `libcimbar` files are modified by
+EmbedXPL-Forge's own code (which would mean source-offer obligations attach to those specific
+files), and draft the source-offer list for all 18 vendored projects identified above.
+
+Start that pass from a machine sweep of the tree listing rather than a hand-reconciled table —
+`tools/license-sweep/tree_license_scan.py` is the one wq#4124 used, and the gap it closed (a 78-file GPL-3.0
+project missed by a sweep that enumerated the right tree) is exactly what hand-reconciliation
+loses on a 20,827-entry repo.
