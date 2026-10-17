@@ -1,0 +1,9 @@
+# Limpet udev rules for the HackRF One, installed by limpet-plugin-hackrf-mcp.
+#
+# VID:PID pair verified in limpet/hardware.d/09-sdr.toml (confidence=high): 1d50:6089 is
+# normal operating mode, 1d50:cc15 is DFU (firmware update) mode — same physical device.
+# This is the same device limpet-plugin-gnuradio-mcp's GNURADIO_HARDWARE=hackrf backend
+# drives; the two plugins declare a mutual [dependencies].conflicts in their
+# limpet-plugin.toml rather than fighting over udev ownership of the node.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-sdr"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="cc15", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-sdr"

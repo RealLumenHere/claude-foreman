@@ -1,0 +1,107 @@
+# limpet-plugin-hackrf-mcp — HackRF One SDR plugin (RX-only v1)
+# wq#4154 — wraps thehappydinoa/hackrf-mcp (MIT), pinned commit
+# d9fa2ee6bf58acd28e50a1cad98a4458e0e2ef67 (no tags/releases/PyPI — pin is the only option).
+# Evaluation: reports/wq4145_limpet_verify_hackrf_mcp_eval_buspirate_mcp.md section 1
+# (CONFIRMED real, wrap as RX-only v1). 10 registered @mcp.tool entries over hackrf_info/
+# hackrf_sweep/hackrf_transfer/hackrf_clock/hackrf_operacake/hackrf_biast plus four offline
+# IQ-file tools; three firmware-touching tools (hackrf_debug/hackrf_cpldjtag/hackrf_spiflash)
+# are commented out upstream and never registered (server.py:710-845).
+#
+# TX REFUSAL (v1 scope, mandatory): hackrf_transfer takes direction="rx"|"tx". Upstream
+# annotates it CONFIG (destructiveHint=False) and relies only on its docstring to warn about
+# TX (server.py:160,188-195) — an energize gate alone is not enough for RF transmission,
+# which is its own risk class beyond needs_energize (wq#4147, matching the RX-only stance
+# plugins/limpet-plugin-gnuradio-mcp/limpet-plugin.toml already takes). This plugin's [mcp]
+# command therefore does NOT point at hackrf-mcp directly: it points at
+# mcp/hackrf_tx_guard.py, a stdio proxy that inspects every tools/call for
+# hackrf_transfer and refuses any direction="tx" argument before it ever reaches upstream,
+# forwarding everything else unmodified. TX stays refused until wq#4147 decides SDR TX
+# policy; re-enabling it means changing the guard, not just flipping tools_energize.
+#
+# DEVICE SHARING: HackRF One (1d50:6089 / DFU 1d50:cc15, limpet/hardware.d/09-sdr.toml,
+# confidence=high) is the same physical device gnuradio-mcp's GNURADIO_HARDWARE=hackrf
+# backend drives. Upstream hackrf-mcp itself says only one hackrf_* command at a time
+# (server.py:25-26) — libhackrf/libusb does not arbitrate concurrent opens. Declared as a
+# plugin conflict below so the registry refuses to activate both at once.
+
+[plugin]
+name = "hackrf-mcp"
+version = "0.1.0"
+manifest_version = 1
+category = "sdr"
+description = "HackRF One control via thehappydinoa/hackrf-mcp: device info, RX spectrum sweep, RX IQ capture, clock/Opera-Cake/bias-tee config, and offline IQ analysis (WAV/spectrogram/burst detection). RX-only v1 — hackrf_transfer direction=\"tx\" is refused at the Limpet proxy layer pending wq#4147."
+license = "MIT"
+homepage = "https://github.com/thehappydinoa/hackrf-mcp"
+repository = "https://github.com/thehappydinoa/hackrf-mcp"
+authors = ["Aidan Holland"]
+
+[capabilities]
+sdr_rx = true
+sdr_tx = false   # refused at the proxy layer (mcp/hackrf_tx_guard.py), not merely undeclared
+spectrum_sweep = true
+iq_capture = true
+iq_offline_analysis = true
+headless = true
+gui = false
+architectures = ["any"]  # pure-Python client; hardware access is via the hackrf_* CLI binaries
+input_formats = ["hackrf_* CLI binaries (Debian hackrf package) via subprocess, no shell"]
+output_formats = ["JSON", "IQ file (.iq/.cs8)", "WAV", "PNG spectrogram"]
+
+[paths]
+binary = "/opt/limpet/plugins/hackrf-mcp/venv/bin/hackrf-mcp"
+install_dir = "/opt/limpet/plugins/hackrf-mcp"
+
+[health]
+check = "/opt/limpet/plugins/hackrf-mcp/venv/bin/python3 -c 'import hackrf_mcp' && command -v hackrf_info"
+interval = "1h"
+timeout = "10s"
+startup_grace = "5s"
+
+[dependencies]
+requires = []
+# Debian package providing the hackrf_info/hackrf_transfer/hackrf_sweep/... CLI binaries
+# the MCP server wraps via subprocess (report section 1, cli.py:31). The MCP server itself
+# is pure Python (mcp, numpy>=2.2.6 — pip-resolved from the pinned git checkout).
+system_packages = ["hackrf"]
+# Must not hold the HackRF device open at the same time as gnuradio-mcp's
+# GNURADIO_HARDWARE=hackrf backend — see header "DEVICE SHARING".
+conflicts = ["gnuradio-mcp"]
+
+[mcp]
+enabled = true
+server = "hackrf-mcp"
+transport = "stdio"
+command = "/opt/limpet/plugins/hackrf-mcp/venv/bin/python3"
+args = ["/opt/limpet/plugins/hackrf-mcp/mcp/hackrf_tx_guard.py"]
+env = { LIMPET_HACKRF_MCP_REAL_COMMAND = "/opt/limpet/plugins/hackrf-mcp/venv/bin/hackrf-mcp" }
+
+[mcp.tools_energize]
+# Per-tool energize gate per reports/wq4145_...md section 1 table. hackrf_transfer is both
+# gated AND has its direction="tx" case refused outright by mcp/hackrf_tx_guard.py — the
+# report judged the energize gate alone insufficient for RF transmission (finding 1).
+hackrf_transfer = true
+hackrf_clock = true       # clkout_enable drives a signal out of an SMA connector (server.py:253)
+hackrf_operacake = true   # antenna-switch (Opera Cake) config
+hackrf_biast = true       # applies DC 3.3-5V to the antenna port (server.py:358,369-372)
+
+# Read-only device query / offline file analysis — ungated
+hackrf_info = false
+hackrf_sweep = false
+hackrf_iq_to_wav = false
+hackrf_iq_spectrogram = false
+hackrf_iq_info = false
+hackrf_iq_detect_bursts = false
+
+[agent_hints]
+summary = "Receive-side HackRF One control: device info, RX spectrum sweep, RX IQ capture to file, clock/Opera-Cake/bias-tee configuration, and offline analysis (IQ-to-WAV, spectrograms, burst detection) on previously captured IQ files."
+when_to_use = "Use for direct hackrf_* CLI control of a HackRF One without GNU Radio: quick device info, a spectrum sweep, a single RX capture to an IQ file, or offline analysis of a capture already on disk. Pairs with gnuradio-mcp for live flowgraph work, but the two must never hold the device open at the same time (see limpet-plugin.toml [dependencies].conflicts)."
+when_not_to_use = "Never for transmit — hackrf_transfer direction=\"tx\" is refused at the proxy layer (mcp/hackrf_tx_guard.py) regardless of energize-confirm, pending wq#4147's SDR TX policy decision. Not while gnuradio-mcp has the same HackRF open. Not for RTL-SDR/USRP/LimeSDR (gnuradio-mcp covers those via gr-osmosdr/uhd)."
+complements = ["sigrok"]
+supersedes = []
+workflow_position = "recon"
+
+[resources]
+max_memory = "256M"
+max_instances = 1
+gpu_required = false
+estimated_startup_time = "3s"
