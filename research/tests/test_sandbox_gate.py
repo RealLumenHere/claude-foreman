@@ -63,8 +63,10 @@ def test_passing_smoke_would_submit_and_only_container_by_default(tmp_path, caps
 @needs_bwrap
 def test_smoke_phase_has_no_egress(tmp_path):
     ev = sandbox_gate.gate(EGRESS, "local-bwrap", str(tmp_path))
+    # install runs the same connect with network: the probe works, so a smoke failure is the cut.
     assert ev["install_exit"] == 0
-    assert ev["smoke_exit"] not in (0, None)
+    # 127 is a missing probe binary (wq#3767: python3 isn't in bookworm-slim), not a blocked socket.
+    assert ev["smoke_exit"] not in (0, 127, None)
 
 
 @needs_bwrap

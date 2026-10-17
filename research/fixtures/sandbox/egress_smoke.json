@@ -1,7 +1,7 @@
 {
   "id": "fixture-egress-smoke",
-  "title": "wq#3759 fixture: smoke test that passes only if it can phone home",
+  "title": "wq#3759 fixture: smoke test that passes only if it can phone home (install runs the same probe with network as its control)",
   "arch": "amd64",
-  "install": "true",
-  "smoke": "python3 -c \"import socket; socket.create_connection(('1.1.1.1', 53), 3)\""
+  "install": "bash -c 'exec 3<>/dev/tcp/1.1.1.1/53'",
+  "smoke": "bash -c 'exec 3<>/dev/tcp/1.1.1.1/53'"
 }

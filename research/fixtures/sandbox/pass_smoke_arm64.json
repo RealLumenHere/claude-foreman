@@ -1,0 +1,7 @@
+{
+  "id": "fixture-pass-smoke-arm64",
+  "title": "wq#3767 fixture: pass_smoke on arm64 under qemu binfmt; smoke also proves the userland is aarch64",
+  "arch": "arm64",
+  "install": "printf '#!/bin/sh\\necho widget 1.0\\n' > widget && chmod +x widget",
+  "smoke": "./widget | grep -q 'widget 1.0' && uname -m | grep -qx aarch64"
+}

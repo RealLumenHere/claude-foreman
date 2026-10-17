@@ -16,13 +16,19 @@ sudo systemctl enable --now lumen-research-sandbox.path
 ```bash
 cp /home/lumen/foreman/research/fixtures/sandbox/fail_smoke.json /home/lumen/foreman/research/proposals/pending/
 journalctl -u lumen-research-sandbox.service -n 5           # {"proposal": ..., "smoke_exit": 1}
-python3 /home/lumen/foreman/research/bridge.py --dry-run \
+python3 /home/lumen/foreman/research/bridge.py submit --dry-run \
   /home/lumen/foreman/research/fixtures/sandbox/fail_smoke.json   # verdict refused, exit 1
 ```
 
 Repeat with `pass_smoke.json` (expect `would_submit`, exit 0) and `egress_smoke.json`
-(expect `smoke_exit` != 0: the smoke phase runs with `--network none`). The arm64 path
-needs the qemu-aarch64 binfmt entry, which is registered on Lumen.
+(expect `install_exit` 0 and `smoke_exit` 1: install runs the same connect with network as
+its control, the smoke phase runs with `--network none`; 127 means the probe binary is
+missing, not that egress was cut). `pass_smoke_arm64.json` covers the arm64 path (expect
+`arch` arm64, `smoke_exit` 0; the smoke also checks `uname -m` is aarch64), which needs the
+qemu-aarch64 binfmt entry registered on Lumen.
+
+Installed and enabled on Lumen; all four fixtures passed through the container backend on
+2026-10-17 (wq#3767).
 
 Rollback: `sudo systemctl disable --now lumen-research-sandbox.path`.
 
