@@ -14,7 +14,14 @@ override_dh_installsystemd:
 	# Ships disabled: enabling the reconcile loop before any plugin is
 	# dropped into /etc/limpet/plugins.d just reconciles an empty registry
 	# on a timer. Operator opts in once a plugin exists.
-	dh_installsystemd --no-enable --no-start
+	#
+	# wq#4071: the unit is limpet-registry-daemon.service but the binary
+	# package is limpet-tools. dh_installsystemd only auto-discovers
+	# debian/<package>.service and debian/<package>.<name>.service, so the
+	# source file is debian/limpet-tools.limpet-registry-daemon.service and
+	# --name selects it; it installs as limpet-registry-daemon.service, the
+	# canonical name (docs/limpet-naming.md; limpet-mcp-meta Requires= it).
+	dh_installsystemd --no-enable --no-start --name=limpet-registry-daemon
 
 override_dh_auto_install:
 	dh_auto_install

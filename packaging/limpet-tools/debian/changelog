@@ -1,3 +1,13 @@
+limpet-tools (0.1.1) unstable; urgency=low
+
+  * Fix systemd unit packaging (wq#4071): rename the unit source to
+    debian/limpet-tools.limpet-registry-daemon.service and pass
+    --name=limpet-registry-daemon to dh_installsystemd. The 0.1.0 .deb shipped
+    the daemon binary with no unit (empirically confirmed with
+    dpkg-buildpackage; dh_installsystemd silently skipped the bare file).
+
+ -- Lumen Industries <packaging@lumen.local>  Fri, 16 Oct 2026 00:00:00 +0000
+
 limpet-tools (0.1.0) unstable; urgency=low
 
   * Initial packaging of the limpet plugin-registry CLI (limpet/cli.py) and
