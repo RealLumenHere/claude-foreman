@@ -149,3 +149,26 @@ add a §/row surfacing the Scorcia "Add support for MT6392 PMIC" series as the p
 Option-A candidate — track/fetch it via lore.kernel.org rather than porting the BSP from
 scratch — and (3) reconcile the two byte-identical landed commits (`cb6839600a` /
 `de8ace3616`) so the file exists once with one clear history, not a silent duplicate.
+
+## Correction and outcome (wq#4129, 2026-10-17)
+
+The escalation was right and has been actioned — `research/wq4110_mt6392_pmic_linux_blocker.md`
+is amended. Two fixes to *this* report while closing it out:
+
+1. **"landed twice… both on main" is wrong.** Only `de8ace3616` is an ancestor of
+   `origin/main`; `cb6839600a` exists solely on
+   `fix/wq4110-miko-linux-investigate-mt6392-pmic-drive-a1`. `main` has one add-commit and
+   the tree one copy, so history was never doubled (checks listed under "Provenance" in the
+   amended doc).
+2. **The series is now pinned from a primary source, not snippets.** The LWN/Nura-wiki
+   snippet-level finding was correct: it is `[PATCH v10 0/9] Add support for MT6392 PMIC`
+   (msgid `20260902193351.185771-1-l.scorcia@gmail.com`, 2026-09-02, nine patches covering
+   mfd + regulator + pinctrl + keys + RTC + dtsi, two of them Reviewed-by AngeloGioacchino
+   Del Regno, parked on subsystem Acks per Lee Jones in-thread 2026-09-17). The gap this
+   report flagged as unchecked — "whether the Scorcia series actually covers mfd+regulator
+   (vs. only pinctrl/DT)" — is now answered: it covers both. Fetched past the Anubis wall via
+   the lore public-inbox **git** mirror (ISSUE-LOG #1386).
+   Also narrowed: the mainline `mediatek,mt6392-pinfunc.h` header is real (Fedora listing
+   re-reproduced) but it is **not** a `mediatek,mt6392` *compatible* — those are still
+   unmerged, in patches 1-3 of v10. So wq#4110's claim was over-broad rather than flatly
+   false.
