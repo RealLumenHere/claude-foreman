@@ -6,6 +6,34 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#4108 — binary-content sanitization layer (indirect prompt-injection defense)
+
+**D1 — sanitize the *derived* surface, never the canonical evidence.** A target binary
+is attacker data; its strings/symbol/function names are indirect prompt-injection
+payloads once the agent reads them. `limpet/sanitize.py` is the boundary between that
+content and the model's context. It is applied at *ingest* into the agent-facing
+`index.sqlite` (`workspace_index._clean` on every free-text field), **not** to the raw
+`evidence/re-exports/*.json` the RE tool wrote. The index is explicitly rebuildable/
+derived (wq#3969), so sanitizing it loses nothing an operator cannot recover from the
+untouched raw evidence on purpose. This keeps forensic fidelity and agent safety as
+separate layers rather than trading one for the other.
+
+**D2 — three concrete transforms the ticket named, documented as defense-in-depth, not
+a classifier.** (1) Every control/invisible char — C0/C1, bidi overrides, zero-width,
+and the invisible Unicode *tag* block U+E0000–E007F (a documented ASCII-smuggling
+channel) — becomes a *visible* escape, so nothing invisible survives and a value cannot
+forge turn/line structure. (2) Length is capped (`DEFAULT_MAX_LEN`, visible `⟦+N⟧`
+marker). (3) Known chat/instruction delimiters (`<|im_start|>`, `[INST]`, `<<SYS>>`,
+role headers) and override phrasing are replaced with a legible, non-actionable
+`⟦scrubbed:<label>⟧` tag — defanged, not deleted, so the string stays searchable and an
+operator still sees what was there. Prior art: OWASP LLM01 cheat sheet + the
+tldrsec/prompt-injection-defenses survey (fleet-search web, 2026-10-17; backend partly
+up — brave/ddg/startpage throttled, searxng answered).
+
+**D3 — self-contained, mirrors `workspace_report.mask_text`.** Stdlib-only, flat-import
+module so the packaged tool stays importable anywhere. Credential masking and
+injection-sanitization are orthogonal and compose; run both where both matter.
+
 ## wq#4086 — limpet-kb front end: one KB namespace, one FTS5 index, a tiered catalog
 
 **D1 — the KB is catalog-driven, not hardcoded.** Which knowledge sources exist is a

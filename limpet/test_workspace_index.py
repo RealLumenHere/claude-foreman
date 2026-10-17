@@ -21,6 +21,8 @@ import workspace_index as wi  # noqa: E402
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "tests", "fixtures", "re-export-ghidra.json")
+INJECTION_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "tests", "fixtures", "re-export-injection.json")
 
 
 @pytest.fixture
@@ -117,6 +119,37 @@ def test_cli_build_and_query(workspace, capsys):
     assert out["ok"] and [r[0] for r in out["rows"]] == ["main", "check_password", "reboot_handler"]
     # the meta-server tool refuses a non-SELECT with a non-zero exit, no traceback.
     assert wc.main(["index", "query", workspace, "DROP TABLE functions"]) == 2
+
+
+def test_binary_content_sanitized_into_index(tmp_path):
+    """wq#4108 falsifiable probe: a crafted target binary's strings/symbols reach the
+    agent-facing index DEFANGED, not verbatim. A no-op ingest fails this test.
+
+    The input is a committed, rev-pinned malicious RE export (re-export-injection.json),
+    not a live mutable file -- re-runnable evidence.
+    """
+    ws = tmp_path / "evil-ws"
+    (ws / wi.RE_EXPORTS_SUBDIR).mkdir(parents=True)
+    shutil.copy(INJECTION_FIXTURE, ws / wi.RE_EXPORTS_SUBDIR / "evil.json")
+    wi.build_index(str(ws))
+
+    vals = [r[0] for r in wi.query_index(str(ws), "SELECT value FROM strings")["rows"]]
+    # the live chat/instruction delimiters and turn-forging newline must be gone from
+    # every stored value
+    for v in vals:
+        assert "<|im_start|>" not in v and "<|im_end|>" not in v
+        assert "[INST]" not in v and "[/INST]" not in v
+        assert "\n" not in v                     # no raw newline survived into a value
+    assert any("scrubbed:" in v for v in vals)   # ... they were defanged, not dropped
+    # a crafted SYMBOL name is sanitized on the same path
+    sym = wi.query_index(str(ws), "SELECT name FROM symbols")["rows"][0][0]
+    assert "Assistant:" not in sym and "\n" not in sym
+    # the benign string still survives (not defanged) and stays searchable
+    assert any("benign version banner" in v for v in vals)
+    if wi.query_index(str(ws), "SELECT value FROM meta WHERE key='fts'")["rows"][0][0] == "1":
+        hit = wi.query_index(str(ws),
+                             "SELECT value FROM strings_fts WHERE strings_fts MATCH 'banner'")
+        assert hit["row_count"] == 1 and "banner" in hit["rows"][0][0]
 
 
 def test_rebuild_is_idempotent(workspace):
