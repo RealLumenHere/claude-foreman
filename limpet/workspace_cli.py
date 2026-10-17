@@ -15,6 +15,9 @@ template search at a tmp dir (a falsifiable boundary, outside the real /etc).
                                                                  wq#3966 critic/adjudicate step
   limpet-workspace [--json] console <ws> [--follow]            wq#3971 read-only live
                                                                  tail of the per-call evidence log
+  limpet-workspace sanitize run <ws>                            wq#4091 prompt-injection
+                                                                 scan/redact over raw evidence,
+                                                                 before the agent core reads it
 
 The agent chat command ``/export`` (agent-chat GUI, design/wq3903) maps straight
 onto ``export`` via ``chat_export`` below, so the agent and a headless SSH operator
@@ -24,7 +27,10 @@ Exit 0 on success, 1 on usage/not-found, 2 on a report/template/ledger error, ma
 ``limpet/cli.py`` so scripts can branch on the code; ``obligations verify`` exits 3
 when done is refused because an obligation is still open; ``critic review`` exits 2
 when the deterministic gate rejects the finding, 3 when the critic contests it (a
-ledger obligation was opened and needs resolving), 0 when accepted.
+ledger obligation was opened and needs resolving), 0 when accepted; ``sanitize run``
+keeps ``sanitize.py``'s own gate contract verbatim (0 clean, 1 scrubbed-but-safe-now,
+2 error/blocked) rather than the general 0/1/2 above, since that exit code is the
+signal a meta-server gate consumes directly.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ import sys
 
 import critic as critic_pass
 import obligations as ob_ledger
+import sanitize as san
 import workspace_console as wcon
 import workspace_index as wi
 import workspace_report as wr
@@ -253,6 +260,23 @@ def _cmd_console(args):
     return 0
 
 
+def _cmd_sanitize_run(args):
+    try:
+        result = san.sanitize_workspace(args.workspace)
+    except san.SanitizeError as exc:
+        _emit({"ok": False, "error": str(exc)}, args.json)
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    _emit({"ok": True, **result}, args.json)
+    if not args.json:
+        if result["scrubbed"]:
+            print(f"redacted {result['scrubbed']} hit(s), originals filed under "
+                  f"{san.QUARANTINE_RELPATH}")
+        else:
+            print("clean")
+    return 1 if result["scrubbed"] else 0
+
+
 def _cmd_index_build(args):
     try:
         counts = wi.build_index(args.workspace, manifest_name=args.manifest)
@@ -426,6 +450,13 @@ def build_parser():
     cr.add_argument("--by", default="critic")
     cr.add_argument("--no-commit", action="store_true", help="write a contested obligation without a git commit")
     cr.set_defaults(func=_cmd_critic_review)
+
+    sp = sub.add_parser("sanitize", help="wq#4091 prompt-injection scan/redact over raw evidence")
+    ssub = sp.add_subparsers(dest="scmd", required=True)
+    sr = ssub.add_parser("run", help="scan evidence/re-exports, evidence/**/*.txt and "
+                                      "evidence/tool-calls.jsonl, redact any hit in place")
+    sr.add_argument("workspace")
+    sr.set_defaults(func=_cmd_sanitize_run)
 
     return p
 
