@@ -266,6 +266,95 @@ Rollback becomes "restore the previous lock entry" instead of `HEAD~1`, so it
 survives a rewritten upstream branch. Depends on the §3 index/registry work;
 lower priority than §6.2.
 
+### 6.4 v2 design: two-axis privilege/energize gate + community technical sandbox (wq#4095)
+
+**Provenance.** From the fable-research plugin-registry spec §7 (2026-10-16;
+the source doc lives in `/home/lumen/projects/limpet/docs/`, outside this
+repo — same situation as the VISION.md note in `limpet/tool-catalog.json`).
+This subsection records the design against the in-repo sources it binds to:
+§6.2 above, the energize-confirm gate (`docs/limpet_vision.md:44-48`), and
+the trust ladder (`design/wq3806_limpet_architecture.md` §1.2).
+
+**The two axes are different threat models and never merge:**
+
+- **PRIVILEGE** (root/sudo, Linux capabilities) is danger *to the Limpet
+  appliance*: a plugin process that can rewrite the host. Declared per
+  plugin: `[capabilities].root` (§6.2), v1 alias `[mutation].escalates`
+  (`limpet/manifest.py:88`).
+- **ENERGIZE** is danger *to the target*: any operation that drives current
+  or signals into the device under test — probe power, JTAG/SWD connect,
+  flash erase/write, bootloader changes, GPIO/reset lines, glitching.
+  Declared per verb: `[capabilities.udev].destructive` (§6.2).
+
+They fail independently — a fully unprivileged community plugin can brick a
+target through the broker, and a root-elevated plugin may never touch
+hardware at all — so neither gate may ever satisfy the other. In particular,
+privilege elevation never pre-authorizes an energize verb.
+
+**Privilege axis — tier-gated.** Only `core`/`vetted` may *request*
+needs-root, and the grant is the §6.2-item-1 scoped grant (a specific
+systemd unit with a specific capability set), never a blanket root shell. A
+`community` plugin that declares `root = true` stays discoverable and
+inspectable (the §3806 ladder's "visible but inert"), but cannot be enabled
+by the normal ladder at all: enabling it requires **explicit per-plugin
+informed operator elevation** — a recorded decision (lock entry: who, when,
+which plugin, what the elevation grants), the same shape as wq#4056's
+per-plugin opt-in for `unverified`. There is no bulk "allow community root"
+switch.
+
+**Energize axis — operator-confirmed at every tier, including `core`.** The
+VISION.md energize-confirm gate is not waivable by trust tier: tier answers
+"do we trust this code on our box", not "does the operator want this target
+energized now". Confirmation is **per invocation at the HAL broker** (§6.2
+item 3), not per plugin at enable time; enabling a plugin — any plugin —
+never pre-authorizes an energize verb. Read-only and passive verbs
+(enumerate, identify, capture) stay fully autonomous.
+
+**Community tier = technical sandbox, not just a policy flag.** The §3806
+trust-gate makes `community` inert until promoted; once a community plugin
+*is* enabled (promotion, or the informed-elevation path above), its
+processes run inside a hardened sandbox (prior art: `systemd.exec(5)`
+directives; the broker pattern below is Flatpak's portal model — sandboxed
+app, brokered resource, per-use grant):
+
+- **Dropped capabilities:** `CapabilityBoundingSet=` (empty — no
+  `CAP_SYS_RAWIO`, no `CAP_SYS_ADMIN`), `NoNewPrivileges=yes`.
+- **No device nodes:** `PrivateDevices=yes`, `DevicePolicy=closed` — the
+  only hardware path is the HAL broker socket.
+- **Restricted PATH:** the plugin's own `bin/` plus a minimal base set; no
+  inherited operator PATH.
+- **Workspace-scratch-only writes:** `ProtectSystem=strict`,
+  `ProtectHome=yes`, `PrivateTmp=yes`, `ReadWritePaths=` limited to the
+  plugin's per-session scratch dir under the workspace (the same
+  session-scoped lifecycle as §6.1's ReVa pattern).
+
+**HAL is the broker at every tier.** Even an elevated `core` plugin keeps
+`PrivateDevices=yes`: hardware is reached only through the energize-gated
+broker interface, never via raw `/dev/*`. Privilege elevation grants host
+capabilities (install into system paths, load a kernel module); it never
+grants a device node. This closes the gap §6.2 names — root stops being the
+only step above unprivileged, *and* root stops implying hardware.
+
+**Decision table** (per the source spec §7.3; `declares` = manifest,
+`enable` = registry ladder outcome, `run` = broker behavior):
+
+| declares | tier | enable | run |
+|---|---|---|---|
+| neither axis | any | normal ladder (§3806 §3) | autonomous, sandboxed per tier |
+| needs-root | core/vetted | allowed; scoped capability grant, not a root shell | host caps per grant; hardware still broker-only |
+| needs-root | community | **refused** by the ladder; only per-plugin informed operator elevation (recorded) unlocks it | sandbox stays; only the recorded grant is added |
+| energize verbs | any, incl. core | allowed — declaration alone never blocks enable | **every** energize invocation operator-confirmed at the broker |
+| energize verb not declared | any | n/a | broker refuses outright (no confirm prompt — undeclared is a manifest bug, not an operator decision) |
+| needs-root **and** energize | per privilege row | per privilege row | both gates apply; neither satisfies the other |
+
+**Reconciliation with §6.2 (wq#3961).** Nothing in §6.2 changes; this
+subsection names and sharpens it: (a) `[capabilities].root` is the privilege
+axis and is now tier-gated, not merely default-deny; (b) §6.2 item 3's
+"per-capability authorization for destructive ops" *is* the energize axis —
+the destructive-verb list generalizes to all energize verbs (probe power,
+GPIO/reset, glitch included); (c) §6.2 item 2's broker is tier-independent:
+elevated plugins get no raw-device bypass.
+
 ## 7. Update mechanism
 
 **Today:** re-clone/re-fetch the plugin's git repo at a new `rev`, overwrite
@@ -312,6 +401,7 @@ standalone git repo with the manifest at its root
 | Sandboxing hardening | Not shipped — depends on the plugin registry having its own systemd unit. |
 | Hardware broker + `[capabilities]` manifest (§6.2) | Designed (wq#3961), not shipped — v2 registry work; pre-implementation upstream. |
 | 3-tier version identity + `limpet.lock` hash pinning (§6.3) | Designed (wq#3961), not shipped — depends on the §3 index. |
+| Two-axis privilege/energize gate + community sandbox (§6.4) | Designed (wq#4095), not shipped — v2 registry work; sandbox needs the plugin registry's own systemd unit. |
 | Soft/optional dependencies | **Shipped.** `[optional_dependencies]` + per-entry `optional_dependencies_satisfied`, worked example in `limpet/examples/ghidra-mcp.toml`. |
 | Contribution workflow (§8) | Documented, not operational — depends on the index. |
 
