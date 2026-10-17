@@ -1,0 +1,18 @@
+# Limpet SDR udev rules for gnuradio-mcp's GNURADIO_HARDWARE backends
+# Installed by limpet-plugin-gnuradio-mcp
+# HackRF/RTL-SDR IDs match limpet/hardware.d/09-sdr.toml; USRP B2xx IDs
+# verified against EttusResearch/uhd host/utils/uhd-usrp.rules.
+
+# HackRF One (GNURADIO_HARDWARE=hackrf)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-sdr"
+
+# RTL-SDR RTL2832U dongles (GNURADIO_HARDWARE=rtlsdr)
+# NOTE: also requires the dvb_usb_rtl28xxu kernel driver blacklisted
+# (/etc/modprobe.d/blacklist-rtl-sdr.conf) — see limpet/hardware.d/09-sdr.toml
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2838", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-sdr"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2832", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-sdr"
+
+# Ettus USRP B2xx (GNURADIO_HARDWARE=usrp)
+SUBSYSTEM=="usb", ATTR{idVendor}=="2500", ATTR{idProduct}=="0020", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-sdr"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2500", ATTR{idProduct}=="0021", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-sdr"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2500", ATTR{idProduct}=="0022", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-sdr"

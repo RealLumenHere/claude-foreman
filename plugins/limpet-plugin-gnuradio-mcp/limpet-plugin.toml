@@ -1,0 +1,109 @@
+# limpet-plugin-gnuradio-mcp — SDR receive/spectrum-analysis plugin (RX-only v1)
+# wq#4144 — wraps Pranav-d33/gnuradio-mcp-server (MIT, PyPI v0.1.1)
+# License verified directly against
+# raw.githubusercontent.com/Pranav-d33/gnuradio-mcp-server/main/LICENSE
+# (2026-10-17): standard MIT text, copyright "2026 Pranav Dhiran" — matches the
+# ticket's "MIT confirmed".
+# Evaluation: docs/mcp-server-evaluations.md Section 8 (not present in this
+# worktree at dispatch time; this plugin was built directly from upstream
+# source + PyPI metadata). CATALOG-WATCH alternate: AetherLink-SDR-MCP
+# (license unconfirmed, not tested per Glama) — revisit if upstream stalls.
+#
+# RX-ONLY SCOPE (v1): upstream exposes no transmit tool — all 13 tools are
+# receive/tune/analyse (verified against gnuradio_mcp/server.py, the full
+# @mcp.tool set). The RX-only guarantee, however, lives in the FLOWGRAPH, not
+# the server: gnuradio_set_variable can set any variable of whatever flowgraph
+# is running, so a TX-capable flowgraph would make this plugin TX-capable.
+# SDR TX is a distinct risk class from needs_energize (RF emission is
+# regulated, affects third parties, and is unbounded by the device) — flagged
+# as a separate future decision, see design ticket wq#4147. v1 ships only the
+# upstream RX flowgraphs (hackrf_mcp.grc / rtlsdr_mcp.grc / simulation_mcp.grc).
+
+[plugin]
+name = "gnuradio-mcp"
+version = "0.1.1"
+manifest_version = 1
+category = "sdr"
+description = "SDR receive and spectrum analysis (HackRF/RTL-SDR/USRP) via a live GNU Radio flowgraph: tune, capture IQ, FFT/PSD snapshots, signal sweep. RX-only v1."
+license = "MIT"
+homepage = "https://github.com/Pranav-d33/gnuradio-mcp-server"
+repository = "https://github.com/Pranav-d33/gnuradio-mcp-server"
+authors = ["Pranav Dhiran"]
+
+[capabilities]
+sdr_rx = true
+sdr_tx = false   # RX-only v1 by scope — TX is wq#4147's decision, not a missing feature
+spectrum_analysis = true
+iq_capture = true
+signal_sweep = true
+headless = true
+gui = false
+architectures = ["any"]  # pure-Python client; hardware support comes from GNU Radio
+input_formats = ["GRC flowgraph (XML-RPC + ZMQ)"]
+output_formats = ["JSON", "IQ power summary", "FFT/PSD snapshot"]
+
+[paths]
+binary = "/usr/local/bin/gnuradio-mcp"
+install_dir = "/opt/limpet/plugins/gnuradio-mcp"
+
+[health]
+check = "gnuradio-mcp --help 2>&1 | grep -qi 'gnuradio\\|mcp' || python3 -c 'import gnuradio_mcp'"
+interval = "1h"
+timeout = "10s"
+startup_grace = "5s"
+
+[dependencies]
+requires = []
+# The MCP server itself is pure Python (mcp, numpy, scipy, pyzmq, pydantic —
+# pip-resolved). GNU Radio (GPL-3.0, NOT bundled: system package, separate
+# process, talked to over XML-RPC/ZMQ — no linking, no copyleft obligation on
+# this plugin) plus the per-SDR OOT blocks are system packages:
+system_packages = ["gnuradio", "gr-osmosdr"]  # gr-osmosdr covers HackRF + RTL-SDR; USRP needs uhd-host + a user-supplied .grc (upstream ships none for USRP)
+conflicts = []
+
+[mcp]
+enabled = true
+server = "gnuradio-mcp"
+transport = "stdio"
+command = "gnuradio-mcp"
+args = []
+env = { GNURADIO_HARDWARE = "hackrf", GNURADIO_GR_HOST = "127.0.0.1", GNURADIO_GR_XMLRPC_PORT = "8080", GNURADIO_GR_ZMQ_PORT = "5555" }
+
+[mcp.tools_energize]
+# Per-tool energize gate: true = requires energize-confirm before execution.
+# Upstream ships a Read-Only column in its README but no gate annotations; the
+# mapping below is this packaging's own judgment call, verified against
+# gnuradio_mcp/server.py rather than the README alone. Gated = mutates
+# flowgraph or hardware state (start/stop, retune, gain, arbitrary variable
+# write); ungated = pure reads over XML-RPC/ZMQ.
+gnuradio_flowgraph_start = true
+gnuradio_flowgraph_stop = true
+gnuradio_set_center_frequency = true
+gnuradio_set_sample_rate = true
+gnuradio_set_gain = true
+gnuradio_set_variable = true   # arbitrary flowgraph variable write — the TX-risk vector flagged for wq#4147
+# detect_signals is upstream-labelled Read-Only but calls set_freq repeatedly
+# during its sweep and restores the original frequency only afterwards
+# (server.py:570,594) — it retunes live hardware, so it is gated here.
+gnuradio_detect_signals = true
+# Read-only / informational — no energize needed
+gnuradio_flowgraph_status = false
+gnuradio_get_variable = false
+gnuradio_list_variables = false
+gnuradio_capture_samples = false
+gnuradio_get_spectrum_snapshot = false
+gnuradio_ping = false
+
+[agent_hints]
+summary = "Receive-side SDR control through a live GNU Radio flowgraph: tune center frequency, set gain/sample rate, capture IQ power summaries, take FFT/PSD spectrum snapshots, and sweep ranges for active signals on HackRF, RTL-SDR, or USRP."
+when_to_use = "Use for RF reconnaissance of a target device: finding its radio emissions (gnuradio_detect_signals sweep), watching a known band (gnuradio_get_spectrum_snapshot), or confirming activity at a frequency (gnuradio_capture_samples). Requires a GNU Radio flowgraph already running with an XML-RPC server block (port 8080) and a complex64 ZMQ PUB sink (port 5555) — start one of the bundled .grc flowgraphs first; select hardware with GNURADIO_HARDWARE=hackrf|rtlsdr|usrp|simulation."
+when_not_to_use = "Not for transmit/replay/jamming of any kind — RX-only v1, TX is a separate risk decision (wq#4147). Not for sub-GHz packet work a YARD Stick One does natively. Not standalone: without a running flowgraph every tool fails its XML-RPC/ZMQ connect (gnuradio_ping to diagnose). RTL-SDR tops out ~1.7 GHz and needs the dvb_usb_rtl28xxu kernel driver blacklisted (see limpet/hardware.d/09-sdr.toml)."
+complements = ["hackrf", "rtl-sdr", "sigrok"]
+supersedes = []
+workflow_position = "recon"
+
+[resources]
+max_memory = "512M"
+max_instances = 1
+gpu_required = false
+estimated_startup_time = "3s"

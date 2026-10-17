@@ -1,0 +1,59 @@
+# Hardware manifest: SDR devices recognized by this plugin
+# Installed to /etc/limpet/hardware.d/ by the plugin installer
+# Supplements hal.py's built-in REGISTRY with plugin-specific devices
+#
+# gnuradio-mcp's GNURADIO_HARDWARE env var is a single switch across the
+# hardware backends (hackrf / rtlsdr / usrp / simulation), so this plugin
+# ships one representative entry per hardware family rather than one entry
+# for the plugin as a whole. HackRF and RTL-SDR VID:PIDs match the canonical
+# values already in limpet/hardware.d/09-sdr.toml; USRP B2xx VID:PIDs are
+# verified against EttusResearch/uhd host/utils/uhd-usrp.rules (VID 2500,
+# PIDs 0020–0023; 0020=B200, 0021=B210, 0022=B200mini — IDs apply before
+# UHD's runtime firmware load re-enumerates the device).
+
+[hardware]
+name = "sdr-devices"
+description = "SDR receivers supported by gnuradio-mcp's GNURADIO_HARDWARE backends"
+plugin = "gnuradio-mcp"
+
+[[devices]]
+vid = "1d50"
+pid = "6089"
+name = "HackRF One"
+interface = "usb"
+hardware_type = "hackrf"
+
+[[devices]]
+vid = "0bda"
+pid = "2838"
+name = "RTL-SDR (RTL2832U, common PID)"
+interface = "usb"
+hardware_type = "rtlsdr"
+
+[[devices]]
+vid = "0bda"
+pid = "2832"
+name = "RTL-SDR (RTL2832U, alternate PID)"
+interface = "usb"
+hardware_type = "rtlsdr"
+
+[[devices]]
+vid = "2500"
+pid = "0020"
+name = "Ettus USRP B200"
+interface = "usb"
+hardware_type = "usrp"
+
+[[devices]]
+vid = "2500"
+pid = "0021"
+name = "Ettus USRP B210"
+interface = "usb"
+hardware_type = "usrp"
+
+[[devices]]
+vid = "2500"
+pid = "0022"
+name = "Ettus USRP B200mini"
+interface = "usb"
+hardware_type = "usrp"
