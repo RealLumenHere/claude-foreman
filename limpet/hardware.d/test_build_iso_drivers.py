@@ -20,10 +20,13 @@ def test_dkms_targets_only_include_dkms_true_devices():
     devices = b.load_catalog()
     targets = b.dkms_targets(devices)
     assert all(d.get("dkms") for d in devices if d["name"] in {t.device for t in targets})
-    modules = {t.module for t in targets}
-    assert any("rtl8812bu" in m for m in modules)
+    # wq#4093: RTL8812BU's catalog entry was corrected from dkms=true (dead
+    # dkms_source URL) to dkms=false (in-kernel rtw88_8822bu covers 0bda:b812)
+    # -- the catalog currently has no dkms=true device at all.
+    assert targets == []
     # an in-kernel, no-DKMS device must never show up as a build target
     assert not any(t.device.startswith("ASIX") for t in targets)
+    assert not any("RTL8812BU" in t.device for t in targets)
 
 
 def test_firmware_targets_exclude_none_and_carry_package_name():
