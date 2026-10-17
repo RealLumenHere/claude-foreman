@@ -6,6 +6,33 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#4108 — binary-content scrub: the control-char + length half of the injection defense
+
+**D1 — build the missing half, don't duplicate the shipped half.** wq#4091 already landed
+the prompt-injection *phrasing* classifier (`injection.classify`) and a workspace *gate*
+(`sanitize.sanitize_workspace`, which redacts hits in evidence files + quarantines before
+the first agent read). It did **not** cover the other two things wq#4108's text names:
+stripping control characters and limiting string length. `limpet/binary_scrub.py` is that
+half, and deliberately **reuses** `injection` for phrasing rather than shipping a second,
+drifting pattern list — one source of truth for "what counts as an injection".
+
+**D2 — a string can corrupt context with no injection *phrasing* at all.** Control/escape
+bytes (`\x1b[2J`, NUL), invisible Unicode (bidi override `U+202E`, zero-width, the
+invisible tag block `U+E0000–E007F` used to smuggle instructions past a human reader), and
+megabyte-long strings are all hijack/flood vectors the phrasing classifier never sees.
+`scrub()` escapes every unsafe char to a *visible* form (so nothing invisible survives and
+a value collapses to one logical line, denying forged turn/line structure) and caps length
+with a visible `...[+N]` marker. `scrub_for_context()` composes the two: redact known
+phrasing (via `injection`), then escape + cap.
+
+**D3 — apply it on ingest into the derived index, not to canonical evidence.**
+`workspace_index._clean` scrubs every binary-derived free-text field (string value, symbol/
+function name, xref kind) on the way into the rebuildable, agent-facing `index.sqlite`. The
+raw `evidence/re-exports/*.json` is never rewritten — forensic fidelity and agent safety
+stay separate layers, and the transform is idempotent whether or not the wq#4091 gate ran
+first. Prior art: OWASP LLM01 cheat sheet + tldrsec/prompt-injection-defenses (fleet-search
+web, 2026-10-17; searxng answered, brave/ddg/startpage throttled).
+
 ## wq#4087 — populate the limpet-kb creds category with real data
 
 **D1 — populate, don't re-architect.** wq#4086 landed `defaultcreds`/`ics-default-passwords`

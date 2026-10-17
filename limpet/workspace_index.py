@@ -38,6 +38,12 @@ Ghidra/rizin wrapper writes, and what the committed test fixture uses::
       "symbols":   [{"addr": "0x1000", "name": "main", "kind": "function"}, ...]
     }
 
+Binary-derived free text (string values, symbol/function names, xref kinds) is scrubbed
+on the way into this derived index (wq#4108, ``binary_scrub.scrub_text``): a crafted
+string in the target is an indirect prompt-injection payload once the agent reads the
+index. The raw evidence under ``evidence/re-exports/`` is the canonical copy and is never
+rewritten.
+
 ``query_index`` enforces SELECT-only two ways (belt and suspenders): the connection is
 opened read-only (``mode=ro``), and a sqlite authorizer denies every action that is not
 a read, so a write/DDL/ATTACH/PRAGMA statement is refused up front with a clear error
@@ -50,6 +56,25 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+
+import binary_scrub
+
+# wq#4108: binary-derived free text (string values, symbol/function names, xref kinds) is
+# attacker-controlled -- a crafted string in the target is an indirect prompt-injection
+# payload once the agent reads this index. Scrub it on ingest into the derived, agent-
+# facing index: redact known injection phrasing (reusing wq#4091's injection classifier),
+# escape control/invisible chars, cap length. The canonical raw evidence under
+# evidence/re-exports/ is never rewritten.
+
+
+def _clean(value):
+    """Scrub one untrusted binary-derived text field for safe inclusion in the index.
+
+    Only actual strings are scrubbed; None and non-strings (e.g. an integer ``size``)
+    pass through untouched. Addresses are coerced to str by the caller and are not free
+    text, so they are not routed here.
+    """
+    return binary_scrub.scrub_text(value) if isinstance(value, str) else value
 
 INDEX_NAME = "index.sqlite"
 RE_EXPORTS_SUBDIR = os.path.join("evidence", "re-exports")
@@ -182,26 +207,26 @@ def build_index(workspace: str, *, manifest_name: str = "manifest.json") -> dict
             for r in _as_list(ex, "functions"):
                 conn.execute(
                     "INSERT INTO functions(binary, addr, name, size, source) VALUES(?,?,?,?,?)",
-                    (_row_binary(ex, r), str(r.get("addr", "")), r.get("name"),
+                    (_row_binary(ex, r), str(r.get("addr", "")), _clean(r.get("name")),
                      r.get("size"), _row_source(ex, r)))
                 counts["functions"] += 1
             for r in _as_list(ex, "strings"):
                 conn.execute(
                     "INSERT INTO strings(binary, addr, value, encoding, source) VALUES(?,?,?,?,?)",
-                    (_row_binary(ex, r), str(r.get("addr", "")), r.get("value"),
-                     r.get("encoding"), _row_source(ex, r)))
+                    (_row_binary(ex, r), str(r.get("addr", "")), _clean(r.get("value")),
+                     _clean(r.get("encoding")), _row_source(ex, r)))
                 counts["strings"] += 1
             for r in _as_list(ex, "xrefs"):
                 conn.execute(
                     "INSERT INTO xrefs(binary, from_addr, to_addr, kind, source) VALUES(?,?,?,?,?)",
                     (_row_binary(ex, r), str(r.get("from", "")), str(r.get("to", "")),
-                     r.get("kind"), _row_source(ex, r)))
+                     _clean(r.get("kind")), _row_source(ex, r)))
                 counts["xrefs"] += 1
             for r in _as_list(ex, "symbols"):
                 conn.execute(
                     "INSERT INTO symbols(binary, addr, name, kind, source) VALUES(?,?,?,?,?)",
-                    (_row_binary(ex, r), str(r.get("addr", "")), r.get("name"),
-                     r.get("kind"), _row_source(ex, r)))
+                    (_row_binary(ex, r), str(r.get("addr", "")), _clean(r.get("name")),
+                     _clean(r.get("kind")), _row_source(ex, r)))
                 counts["symbols"] += 1
 
         for inv in invocations:

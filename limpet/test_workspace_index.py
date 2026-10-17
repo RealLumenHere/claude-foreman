@@ -21,6 +21,8 @@ import workspace_index as wi  # noqa: E402
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "tests", "fixtures", "re-export-ghidra.json")
+INJECTION_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "tests", "fixtures", "re-export-injection.json")
 
 
 @pytest.fixture
@@ -117,6 +119,33 @@ def test_cli_build_and_query(workspace, capsys):
     assert out["ok"] and [r[0] for r in out["rows"]] == ["main", "check_password", "reboot_handler"]
     # the meta-server tool refuses a non-SELECT with a non-zero exit, no traceback.
     assert wc.main(["index", "query", workspace, "DROP TABLE functions"]) == 2
+
+
+def test_binary_content_scrubbed_into_index(tmp_path):
+    """wq#4108 falsifiable probe: a crafted target binary's strings/symbols reach the
+    agent-facing index scrubbed -- injection phrasing redacted, control/invisible bytes
+    escaped -- not verbatim. A no-op ingest fails this test.
+
+    Input is a committed, rev-pinned malicious RE export (re-export-injection.json), not
+    a live mutable file -- re-runnable evidence.
+    """
+    import injection
+    ws = tmp_path / "evil-ws"
+    (ws / wi.RE_EXPORTS_SUBDIR).mkdir(parents=True)
+    shutil.copy(INJECTION_FIXTURE, ws / wi.RE_EXPORTS_SUBDIR / "evil.json")
+    wi.build_index(str(ws))
+
+    vals = [r[0] for r in wi.query_index(str(ws), "SELECT value FROM strings")["rows"]]
+    for v in vals:
+        assert "Ignore previous instructions" not in v   # phrasing redacted
+        assert "\x00" not in v and "\x1b" not in v        # control bytes escaped
+        assert "\n" not in v                              # no raw newline survived
+    assert any(injection.REDACTION_TOKEN in v for v in vals)   # redaction happened
+    assert any("\\x00" in v for v in vals)                     # control escaped, not dropped
+    assert any("plain version banner v1.2.3" == v for v in vals)   # benign string intact
+
+    sym = wi.query_index(str(ws), "SELECT name FROM symbols")["rows"][0][0]
+    assert chr(0x202E) not in sym and "\x00" not in sym and "\\u202e" in sym
 
 
 def test_rebuild_is_idempotent(workspace):
