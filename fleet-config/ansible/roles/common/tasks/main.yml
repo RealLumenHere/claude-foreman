@@ -37,6 +37,23 @@
     msg: "tailscale not installed on {{ inventory_hostname }} — node unreachable after IP rotation. See docs/RUNBOOK.md §2."
   when: ts_check.rc != 0
 
+- name: Persistent journal directory (survives reboot — wq#4104, last-boot reason capture)
+  become: true
+  file:
+    path: /var/log/journal
+    state: directory
+    owner: root
+    group: systemd-journal
+    mode: "2755"
+
+- name: journald Storage=persistent (wq#4104 — nephthys/neith/khnum had no readable pre-crash journal)
+  become: true
+  lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: "^#?Storage="
+    line: "Storage=persistent"
+  notify: restart systemd-journald
+
 - name: Clone fleet repos (credential helper must already be configured — RECOVERY.md §6)
   git:
     repo: "{{ gitea_base_url }}/lumen/{{ item.name }}.git"
