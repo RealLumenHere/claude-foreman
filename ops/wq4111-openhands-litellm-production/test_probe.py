@@ -27,5 +27,29 @@ class ClassifyApiRoutingTest(unittest.TestCase):
             self.assertEqual(probe.classify_api_routing(), "unknown")
 
 
+class CheckOpenhandsAliveTest(unittest.TestCase):
+    """wq#4149 item 7: lumen_state must probe /alive, not /api/health (which
+    is SPA HTML with a misleading 200 — wq#4007 §1)."""
+
+    def test_status_ok_body_is_alive(self):
+        with patch.object(probe, "_get", return_value=(200, {}, b'{"status": "ok"}')):
+            self.assertTrue(probe.check_openhands_alive())
+
+    def test_non_200_is_not_alive(self):
+        with patch.object(probe, "_get", return_value=(503, {}, b'{"status": "ok"}')):
+            self.assertFalse(probe.check_openhands_alive())
+
+    def test_spa_html_on_this_path_is_not_alive(self):
+        # the /api/health failure mode this probe exists to avoid: 200 with a
+        # body that isn't the liveness JSON shape at all.
+        html = b"<!DOCTYPE html><html></html>"
+        with patch.object(probe, "_get", return_value=(200, {}, html)):
+            self.assertFalse(probe.check_openhands_alive())
+
+    def test_unreachable_is_not_alive(self):
+        with patch.object(probe, "_get", return_value=(None, {}, b"Connection refused")):
+            self.assertFalse(probe.check_openhands_alive())
+
+
 if __name__ == "__main__":
     unittest.main()

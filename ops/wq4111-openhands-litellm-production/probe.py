@@ -2,15 +2,16 @@
 """wq#4111: host-side, non-privileged readiness probe for the OpenHands/LiteLLM pair.
 
 No docker, no secrets, no compose read — every check here is a plain HTTP GET/POST
-against ports already published on the Lumen host, so a BUILD worker (or lumen_state,
-closing wq#4007 TODO item 9: add a real `/alive` probe, NOT `/api/health`, which is SPA
-HTML) can run it unprivileged.
+against ports already published on the Lumen host, so a BUILD worker (or lumen_state)
+can run it unprivileged. `check_openhands_alive()` (wq#4149) is the real `/alive`
+probe wq#4007 TODO item 7 asked for, NOT `/api/health`, which is SPA HTML with a
+misleading 200.
 
-Findings from the 2026-10-17 run this script codifies:
-  - LiteLLM gateway: GET /health/readiness -> 200 (gateway itself is reachable from
-    the Lumen host; this does NOT prove the openhands container's own network
-    namespace can reach it, which is the still-open wq#4007 network-attach bug).
-  - OpenHands UI root: GET / -> 200 (container up, port published on the host).
+Findings from the 2026-10-17 run this script codifies (network-attach fixed by
+wq#4007's 2026-10-16 deployment; see research/OPENHANDS_1_8_READINESS.md):
+  - LiteLLM gateway: GET /health/readiness -> 200, reachable from the Lumen host.
+  - OpenHands UI root: GET / -> 200, and GET /alive -> 200 {"status": "ok"}
+    (container up, both ports published on the host).
   - OpenHands API routing: GET /api/conversations returns the SPA's static
     index.html (text/html, same content-length as /) instead of JSON, while POST to
     the same path returns a real FastAPI 405 (application/json, "Method Not
@@ -53,6 +54,20 @@ def check_openhands_up():
     return status == 200
 
 
+def check_openhands_alive():
+    """wq#4149 item 7: lumen_state's openhands probe must hit /alive, not
+    /api/health (which returns the SPA's index.html with a 200, not a real
+    health check — wq#4007 §1). /alive returns {"status": "ok"} from the app
+    itself, so this is a true liveness check, not a static-file 200."""
+    status, headers, body = _get(f"{OPENHANDS}/alive")
+    if status != 200:
+        return False
+    try:
+        return json.loads(body).get("status") == "ok"
+    except (json.JSONDecodeError, AttributeError):
+        return False
+
+
 def classify_api_routing():
     """Returns one of: "ok" (GET returns JSON), "spa_fallback" (GET returns the SPA
     shell instead of JSON — the wq#4007-era routing anomaly), "down" (unreachable),
@@ -71,17 +86,20 @@ def classify_api_routing():
 def main():
     litellm_ready = check_litellm_ready()
     openhands_up = check_openhands_up()
+    openhands_alive = check_openhands_alive()
     routing = classify_api_routing()
     print(f"litellm /health/readiness: {'OK' if litellm_ready else 'FAIL'}")
     print(f"openhands UI root: {'OK' if openhands_up else 'FAIL'}")
+    print(f"openhands /alive: {'OK' if openhands_alive else 'FAIL'}")
     print(f"openhands API routing (GET /api/conversations): {routing}")
     result = {
         "litellm_ready": litellm_ready,
         "openhands_up": openhands_up,
+        "openhands_alive": openhands_alive,
         "api_routing": routing,
     }
     print(json.dumps(result))
-    return 0 if litellm_ready and openhands_up else 1
+    return 0 if litellm_ready and openhands_up and openhands_alive else 1
 
 
 if __name__ == "__main__":
