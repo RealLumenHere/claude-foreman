@@ -53,18 +53,73 @@ CARGO_RECIPES = {
                 "runtime_apt": ["libfontconfig1", "libfreetype6"],
                 "bin": "binwalk"},
 }
+
+# wq#4116: PyPI-hosted pip packages with a VERIFIED release. sha256 is the
+# published digest of the exact wheel/sdist this build host installs (PyPI
+# JSON API, checked against manylinux_2_17_x86_64 for a wheel, sdist
+# otherwise), so a pip-side supply-chain substitution fails sha256 verification
+# before anything lands in the chroot -- same guarantee driver_hook's
+# dkms-sources.pin gives DKMS builds. "bin" is the console-script entry point
+# stage4c checks for after install.
+#   unblob 26.6.4: PyPI manylinux_2_17_x86_64 wheel, verified 2026-10-17.
+#   frida-tools 14.11.0: catalog's old "17.18.0" pin does not exist on PyPI --
+#   that number is frida-tools' pinned `frida` core dependency version
+#   (pyproject: frida>=17.10.0,<18.0.0), not frida-tools' own release. 14.11.0
+#   is frida-tools' real latest sdist (PyPI JSON API, verified 2026-10-17; see
+#   kb/ISSUE-LOG.md). Corrected in tool-catalog.json alongside this recipe.
+PIP_RECIPES = {
+    "unblob": {"sha256": "0fc16e9c7dc92fcf86b8b61475700c9dd16e1dddacf34467574ea965a5d3584e",
+               "bin": "unblob", "runtime_apt": []},
+    "frida-tools": {"sha256": "b8c772e59502be43b76df9feccadd5d342b5ca325066dd0c2384e63fa88da921",
+                     "bin": "frida", "runtime_apt": []},
+}
+
+# wq#4116: pip-from-git packages with a VERIFIED commit (no branches, mirrors
+# driver_hook/dkms-sources.pin's own "pin <module> <url> <40-hex-commit>" rule).
+# The commit itself is pinned on the catalog entry (tool-catalog.json's
+# "commit" field), validated by _resolve_pip below; this table only carries
+# the install recipe (runtime/build apt deps, verified console-script name).
+#   mtkclient HEAD 7cb40e72..., edl HEAD 1cda1a61...: both `git ls-remote`,
+#   2026-10-17 (neither project cuts PyPI releases -- see each entry's
+#   install_evidence). libxcb-cursor0 is mtkclient's documented Ubuntu runtime
+#   dep for its PySide6 import (README-INSTALL.md); liblzma-dev is edl's
+#   documented apt dep (README.md) for building pylzma if no wheel matches.
+PIP_GIT_RECIPES = {
+    "mtkclient": {"bin": "mtk", "runtime_apt": ["libxcb-cursor0"], "build_apt": []},
+    "edl": {"bin": "edl", "runtime_apt": [], "build_apt": ["liblzma-dev"]},
+}
+
+# wq#4116: sha256-verified binary release artifacts (ghidra). Digest is
+# GitHub's own release-asset digest (releases/tags/<tag> API, attested at
+# upload time), checked again by curl+sha256sum on the build host before
+# unzip -- same "verify before it touches the chroot" rule as the cargo/pip
+# recipes above. java_min is Ghidra's own Ghidra/application.properties
+# application.java.min, which is why openjdk-21-jre-headless is the paired
+# runtime_apt entry.
+#   ghidra 12.1.4 (Ghidra_12.1.4_build): GitHub releases API, 2026-10-17.
+BINARY_RECIPES = {
+    "ghidra_12.1.4_PUBLIC_20260921.zip": {
+        "url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/"
+               "Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip",
+        "sha256": "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db",
+        "extract_to": "/opt/ghidra",
+        "runtime_apt": ["openjdk-21-jre-headless"],
+    },
+}
 _CRATE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclasses.dataclass(frozen=True)
 class Resolution:
     name: str
     trust: str
-    method: str  # "apt" | "cargo" | "unresolved"
+    method: str  # "apt" | "cargo" | "pip" | "pip-git" | "binary" | "unresolved"
     package: str | None
     reason: str | None
-    version: str | None = None  # pinned crate version (cargo only)
+    version: str | None = None  # pinned crate/pip version (cargo, pip only)
+    commit: str | None = None  # pinned 40-hex commit (pip-git only)
 
 
 def load_tools(catalog_path: pathlib.Path = DEFAULT_CATALOG) -> list[dict]:
@@ -88,6 +143,34 @@ def _dpkg_query_owner(path: str, runner=subprocess.run) -> str | None:
         return None
     # dpkg -S output: "<package>[,<package>...]: <path>"
     return proc.stdout.split(":", 1)[0].split(",")[0].strip() or None
+
+
+def _resolve_pip(name: str, trust: str, declared: str | None,
+                  version: str | None, commit: str | None) -> Resolution:
+    if not declared:
+        return Resolution(name, trust, "unresolved", None,
+                           "install_method 'pip' needs a package name")
+    if declared.startswith("git+"):
+        if not (commit and _COMMIT_RE.match(commit)):
+            return Resolution(name, trust, "unresolved", None,
+                               f"install_method 'pip' from {declared!r} needs a pinned "
+                               "40-hex commit in the catalog's 'commit' field (git+ URLs "
+                               "are never installed off a branch, wq#4116)")
+        if name not in PIP_GIT_RECIPES:
+            return Resolution(name, trust, "unresolved", None,
+                               f"no verified pip-git build recipe for {name!r} "
+                               "(add one to PIP_GIT_RECIPES after an actual install; "
+                               "never guessed)")
+        return Resolution(name, trust, "pip-git", declared, None, commit=commit)
+    if not (version and _VERSION_RE.match(version)):
+        return Resolution(name, trust, "unresolved", None,
+                           f"install_method 'pip' needs a pinned X.Y.Z version "
+                           f"(got {version!r})")
+    if declared not in PIP_RECIPES:
+        return Resolution(name, trust, "unresolved", None,
+                           f"no verified pip recipe for package {declared!r} "
+                           "(add one to PIP_RECIPES after an actual install; never guessed)")
+    return Resolution(name, trust, "pip", declared, None, version=version)
 
 
 def resolve(tool: dict, runner=subprocess.run) -> Resolution:
@@ -120,6 +203,18 @@ def resolve(tool: dict, runner=subprocess.run) -> Resolution:
                               f"no verified cargo build recipe for crate {declared!r} "
                               "(add one to CARGO_RECIPES after an actual build; never guessed)")
         return Resolution(name, trust, "cargo", declared, None, version)
+    if method == "pip":
+        return _resolve_pip(name, trust, declared, tool.get("version"), tool.get("commit"))
+    if method == "binary":
+        if not declared:
+            return Resolution(name, trust, "unresolved", None,
+                               "install_method 'binary' needs a package (release artifact filename)")
+        if declared not in BINARY_RECIPES:
+            return Resolution(name, trust, "unresolved", None,
+                               f"no verified binary recipe for artifact {declared!r} "
+                               "(add one to BINARY_RECIPES after an actual sha256-verified "
+                               "fetch; never guessed)")
+        return Resolution(name, trust, "binary", declared, None)
     if method and method != "apt":
         return Resolution(name, trust, "unresolved", None,
                            f"install_method '{method}' (package {declared!r}): "
@@ -143,18 +238,46 @@ def build_manifest(tools: list[dict], runner=subprocess.run) -> dict:
                      "build_apt": CARGO_RECIPES[r.package]["build_apt"],
                      "runtime_apt": CARGO_RECIPES[r.package]["runtime_apt"],
                      "bin": CARGO_RECIPES[r.package]["bin"]} for r in cargo]
+
+    pip = [r for r in resolutions if r.method == "pip"]
+    pip_packages = [{"name": r.name, "package": r.package, "version": r.version,
+                      "sha256": PIP_RECIPES[r.package]["sha256"],
+                      "bin": PIP_RECIPES[r.package]["bin"],
+                      "runtime_apt": PIP_RECIPES[r.package]["runtime_apt"]} for r in pip]
+
+    pip_git = [r for r in resolutions if r.method == "pip-git"]
+    pip_git_packages = [{"name": r.name, "url": r.package, "commit": r.commit,
+                          "bin": PIP_GIT_RECIPES[r.name]["bin"],
+                          "build_apt": PIP_GIT_RECIPES[r.name]["build_apt"],
+                          "runtime_apt": PIP_GIT_RECIPES[r.name]["runtime_apt"]} for r in pip_git]
+
+    binary = [r for r in resolutions if r.method == "binary"]
+    binary_artifacts = [{"name": r.name, "artifact": r.package,
+                          "url": BINARY_RECIPES[r.package]["url"],
+                          "sha256": BINARY_RECIPES[r.package]["sha256"],
+                          "extract_to": BINARY_RECIPES[r.package]["extract_to"],
+                          "runtime_apt": BINARY_RECIPES[r.package]["runtime_apt"]} for r in binary]
+
     apt_packages = sorted({r.package for r in resolutions if r.method == "apt"}
-                          | {p for c in cargo_crates for p in c["runtime_apt"]})
+                          | {p for c in cargo_crates for p in c["runtime_apt"]}
+                          | {p for c in pip_packages for p in c["runtime_apt"]}
+                          | {p for c in pip_git_packages for p in c["runtime_apt"]}
+                          | {p for c in binary_artifacts for p in c["runtime_apt"]})
     unresolved = [dataclasses.asdict(r) for r in resolutions if r.method == "unresolved"]
     return {
         "apt_packages": apt_packages,
         "cargo_crates": cargo_crates,
+        "pip_packages": pip_packages,
+        "pip_git_packages": pip_git_packages,
+        "binary_artifacts": binary_artifacts,
         "unresolved": unresolved,
         "totals": {
             "catalog": len(tools),
             "baked": len(apt_packages),
             "unresolved": len(unresolved),
             "cargo": len(cargo_crates),
+            "pip": len(pip_packages) + len(pip_git_packages),
+            "binary": len(binary_artifacts),
         },
     }
 

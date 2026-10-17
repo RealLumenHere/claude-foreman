@@ -369,7 +369,7 @@
     {
       "name": "frida",
       "path": "/usr/local/bin/frida",
-      "version": "17.18.0",
+      "version": "14.11.0",
       "description": "Dynamic instrumentation toolkit: inject scripts to trace and hook live native/managed processes.",
       "category": "dynamic-instrumentation",
       "capabilities": [
@@ -403,7 +403,7 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "frida-tools",
-      "install_evidence": "wq#4081: PyPI frida-tools 14.11.0 (Frida CLI, home frida.re) pulls PyPI frida 17.23.3. npm/crates 'frida' not used."
+      "install_evidence": "wq#4081: PyPI frida-tools 14.11.0 (Frida CLI, home frida.re) pulls PyPI frida 17.23.3. npm/crates 'frida' not used. wq#4116: the top-level 'version' field above had been left at 17.18.0 -- that is frida-tools' pinned `frida` core dependency range (pyproject.toml: frida>=17.10.0,<18.0.0), not a frida-tools release; no frida-tools 17.x exists on PyPI. Corrected to 14.11.0 (PyPI JSON API, verified 2026-10-17), whose sdist sha256 is pinned in gen_tool_packages.py PIP_RECIPES."
     },
     {
       "name": "qemu-user",
@@ -793,7 +793,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "git+https://github.com/bkerler/mtkclient",
-      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/mtk); PyPI 'mtkclient' 404."
+      "commit": "7cb40e727727dfe3faa065eefb29b16ed29bbdf1",
+      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/mtk); PyPI 'mtkclient' 404. wq#4116: 'commit' is `git ls-remote https://github.com/bkerler/mtkclient HEAD`, verified 2026-10-17 -- mtkclient cuts no PyPI/tagged releases, so stage4c installs from this pinned commit, never a branch (gen_tool_packages.py PIP_GIT_RECIPES)."
     },
     {
       "name": "edl",
@@ -824,7 +825,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "git+https://github.com/bkerler/edl",
-      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/edl). PyPI 'edl' is an unrelated EDL-file reader."
+      "commit": "1cda1a616748d608667b2d13b73a28d3197ceb45",
+      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/edl). PyPI 'edl' is an unrelated EDL-file reader. wq#4116: 'commit' is `git ls-remote https://github.com/bkerler/edl HEAD`, verified 2026-10-17 -- edl cuts no PyPI/tagged releases, so stage4c installs from this pinned commit, never a branch (gen_tool_packages.py PIP_GIT_RECIPES)."
     },
     {
       "name": "heimdall",

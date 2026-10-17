@@ -236,6 +236,9 @@ stage4_package_re_tools() {
     unresolved="$(jq '.totals.unresolved' "$manifest")"
     log "stage4: $unresolved catalog tools unresolved on this build host (see $manifest, never guessed)"
     [ "$(jq '.cargo_crates | length' "$manifest")" -gt 0 ] && stage4b_build_cargo_tools "$manifest"
+    { [ "$(jq '.pip_packages | length' "$manifest")" -gt 0 ] ||
+      [ "$(jq '.pip_git_packages | length' "$manifest")" -gt 0 ]; } && stage4c_build_pip_tools "$manifest"
+    [ "$(jq '.binary_artifacts | length' "$manifest")" -gt 0 ] && stage4d_fetch_binary_tools "$manifest"
   fi
   return 0
 }
@@ -259,6 +262,101 @@ stage4b_build_cargo_tools() {
     install -m 0755 "$out/bin/$bin" "$CHROOT/usr/local/bin/$bin"
     log "stage4b: installed /usr/local/bin/$bin ($(sha256sum "$out/bin/$bin" | cut -c1-16)...)"
   done < <(jq -c '.cargo_crates[]' "$manifest")
+}
+
+# wq#4116: build recipe-backed pip tools in an ubuntu:$XUBUNTU_VERSION container
+# and copy ONLY the resulting venv/pipx tree into the chroot, at the exact
+# absolute path it is built at -- a venv's console-script shebang bakes in an
+# absolute interpreter path, so the build path and the chroot-install path
+# must be identical or the shebang breaks on first run. Two families, both
+# validated against gen_tool_packages.py's PIP_RECIPES/PIP_GIT_RECIPES (never
+# an unverified recipe reaches here):
+#   manifest.pip_packages:     PyPI release, pipx-installed, sha256-verified
+#                               before install (unblob, frida-tools).
+#   manifest.pip_git_packages: pinned-commit git source, shared venv at
+#                               /opt/re-venv (mtkclient, edl -- neither cuts
+#                               PyPI releases; the commit is checked out
+#                               --detach and the resulting HEAD is compared
+#                               byte-for-byte against the pin before install,
+#                               same pattern as driver_hook.py's DKMS builds).
+stage4c_build_pip_tools() {
+  local manifest="$1" out="$WORKDIR/pip-out"
+  require_cmd docker; require_cmd jq
+  mkdir -p "$out" "$CHROOT/usr/local/bin" "$CHROOT/usr/local/share/pipx" "$CHROOT/opt/re-venv"
+
+  local c name package ver sha256 bin
+  while read -r c; do
+    name="$(jq -r .name <<<"$c")"; package="$(jq -r .package <<<"$c")"
+    ver="$(jq -r .version <<<"$c")"; sha256="$(jq -r .sha256 <<<"$c")"
+    bin="$(jq -r .bin <<<"$c")"
+    log "stage4c: pipx install $package==$ver (container ubuntu:$XUBUNTU_VERSION, sha256-pinned)"
+    docker run --rm -v "$out:/out" "ubuntu:$XUBUNTU_VERSION" bash -euc "
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq --no-install-recommends python3-venv python3-pip pipx ca-certificates
+      rm -rf /tmp/dl; mkdir -p /tmp/dl
+      pip download --no-deps --dest /tmp/dl '$package==$ver'
+      got=\"\$(sha256sum /tmp/dl/* | awk '{print \$1}' | head -1)\"
+      [ \"\$got\" = '$sha256' ] || { echo \"stage4c: sha256 mismatch for $package==$ver: got \$got want $sha256\" >&2; exit 1; }
+      mkdir -p /out/usr/local/share/pipx /out/usr/local/bin
+      PIPX_HOME=/out/usr/local/share/pipx PIPX_BIN_DIR=/out/usr/local/bin pipx install /tmp/dl/*
+    "
+    [ -x "$out/usr/local/bin/$bin" ] || fail "pipx install of $package $ver produced no $out/usr/local/bin/$bin"
+    log "stage4c: built /usr/local/bin/$bin ($(sha256sum "$out/usr/local/bin/$bin" | cut -c1-16)...)"
+  done < <(jq -c '.pip_packages[]' "$manifest")
+  [ -d "$out/usr/local/share/pipx" ] && cp -a "$out/usr/local/share/pipx/." "$CHROOT/usr/local/share/pipx/"
+  [ -d "$out/usr/local/bin" ] && cp -a "$out/usr/local/bin/." "$CHROOT/usr/local/bin/"
+
+  local url commit bdeps
+  while read -r c; do
+    name="$(jq -r .name <<<"$c")"; url="$(jq -r .url <<<"$c")"; commit="$(jq -r .commit <<<"$c")"
+    bin="$(jq -r .bin <<<"$c")"; bdeps="$(jq -r '.build_apt | join(" ")' <<<"$c")"
+    log "stage4c: pip install $name from $url @ $commit (container ubuntu:$XUBUNTU_VERSION, pinned commit)"
+    docker run --rm -v "$out:/out" "ubuntu:$XUBUNTU_VERSION" bash -euc "
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq --no-install-recommends python3-venv python3-pip git ca-certificates $bdeps
+      rm -rf /tmp/src
+      git clone --no-checkout '${url#git+}' /tmp/src
+      git -C /tmp/src checkout --detach '$commit'
+      [ \"\$(git -C /tmp/src rev-parse HEAD)\" = '$commit' ] || { echo \"stage4c: checked-out HEAD != pinned commit for $name\" >&2; exit 1; }
+      mkdir -p /out/opt/re-venv
+      python3 -m venv /out/opt/re-venv
+      /out/opt/re-venv/bin/pip install --no-cache-dir /tmp/src
+    "
+    [ -x "$out/opt/re-venv/bin/$bin" ] || fail "pip install of $name @ $commit produced no $out/opt/re-venv/bin/$bin"
+    log "stage4c: built /opt/re-venv/bin/$bin ($(sha256sum "$out/opt/re-venv/bin/$bin" | cut -c1-16)...)"
+  done < <(jq -c '.pip_git_packages[]' "$manifest")
+  [ -d "$out/opt/re-venv" ] && cp -a "$out/opt/re-venv/." "$CHROOT/opt/re-venv/"
+}
+
+# wq#4116: fetch recipe-backed binary release artifacts (ghidra) on the build
+# host and unpack them straight into the chroot. sha256-verified against
+# gen_tool_packages.py's BINARY_RECIPES before any byte lands under $CHROOT --
+# same fail-closed rule as stage4b/stage4c. The JDK dependency Ghidra 12.x
+# declares (Ghidra/application.properties application.java.min=21) rides in
+# through manifest.apt_packages (openjdk-21-jre-headless), installed by the
+# stage4 apt-get call above this one runs after.
+stage4d_fetch_binary_tools() {
+  local manifest="$1" out="$WORKDIR/binary-out"
+  require_cmd curl; require_cmd jq; require_cmd sha256sum; require_cmd unzip
+  mkdir -p "$out"
+  local c name artifact url sha256 extract_to got top
+  while read -r c; do
+    name="$(jq -r .name <<<"$c")"; artifact="$(jq -r .artifact <<<"$c")"
+    url="$(jq -r .url <<<"$c")"; sha256="$(jq -r .sha256 <<<"$c")"
+    extract_to="$(jq -r .extract_to <<<"$c")"
+    log "stage4d: fetch $name ($artifact, sha256-pinned)"
+    curl -fsSL "$url" -o "$out/$artifact"
+    got="$(sha256sum "$out/$artifact" | cut -d' ' -f1)"
+    [ "$got" = "$sha256" ] || fail "sha256 mismatch for $artifact: got $got want $sha256"
+    rm -rf "$out/extract-$name"; mkdir -p "$out/extract-$name" "$CHROOT$extract_to"
+    unzip -q "$out/$artifact" -d "$out/extract-$name"
+    top="$(find "$out/extract-$name" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    [ -n "$top" ] || fail "$artifact extracted to no top-level directory"
+    cp -a "$top/." "$CHROOT$extract_to/"
+    log "stage4d: installed $extract_to from $artifact (sha256 ${got:0:16}...)"
+  done < <(jq -c '.binary_artifacts[]' "$manifest")
 }
 
 # ---------------------------------------------------------------------------

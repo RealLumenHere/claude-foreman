@@ -141,3 +141,129 @@ def test_real_catalog_ships_binwalk_v3_via_cargo():
     res = g.resolve(tools["binwalk"])
     assert (res.method, res.version) == ("cargo", "3.1.0")
     assert tools["binwalk"]["install_method"] != "pip"  # PyPI binwalk is a dead 2.1.0 stub
+
+
+# --- wq#4116: pip method, PyPI release (unblob, frida-tools) ---
+def _pip_tool(**kw):
+    t = {"name": "unblob", "trust": "core", "path": "/usr/local/bin/unblob",
+         "install_method": "pip", "package": "unblob", "version": "26.6.4"}
+    t.update(kw)
+    return t
+
+
+def test_pip_tool_with_recipe_and_pin_resolves():
+    res = g.resolve(_pip_tool())
+    assert (res.method, res.package, res.version) == ("pip", "unblob", "26.6.4")
+
+
+def test_pip_tool_without_version_pin_is_unresolved():
+    assert g.resolve(_pip_tool(version=None)).method == "unresolved"
+
+
+def test_pip_version_must_be_plain_x_y_z():
+    assert g.resolve(_pip_tool(version="26.6.4; rm -rf /")).method == "unresolved"
+    assert g.resolve(_pip_tool(version="^26.6")).method == "unresolved"
+
+
+def test_pip_package_without_verified_recipe_is_unresolved_not_installed():
+    res = g.resolve(_pip_tool(name="othertool", package="othertool"))
+    assert res.method == "unresolved" and "recipe" in res.reason
+
+
+def test_manifest_carries_pip_package_and_its_sha256():
+    m = g.build_manifest([_pip_tool()])
+    assert m["pip_packages"] == [{
+        "name": "unblob", "package": "unblob", "version": "26.6.4",
+        "sha256": g.PIP_RECIPES["unblob"]["sha256"], "bin": "unblob", "runtime_apt": [],
+    }]
+    assert m["totals"]["pip"] == 1
+
+
+# --- wq#4116: pip method, git+ source (mtkclient, edl) ---
+_COMMIT = "7cb40e727727dfe3faa065eefb29b16ed29bbdf1"
+
+
+def _pip_git_tool(**kw):
+    t = {"name": "mtkclient", "trust": "core", "path": "/opt/re-venv/bin/mtk",
+         "install_method": "pip", "package": "git+https://github.com/bkerler/mtkclient",
+         "commit": _COMMIT}
+    t.update(kw)
+    return t
+
+
+def test_pip_git_tool_with_recipe_and_commit_pin_resolves():
+    res = g.resolve(_pip_git_tool())
+    assert (res.method, res.package, res.commit) == (
+        "pip-git", "git+https://github.com/bkerler/mtkclient", _COMMIT)
+
+
+def test_pip_git_tool_without_commit_pin_is_unresolved():
+    res = g.resolve(_pip_git_tool(commit=None))
+    assert res.method == "unresolved" and "40-hex commit" in res.reason
+
+
+def test_pip_git_commit_must_be_40_hex_not_a_branch():
+    assert g.resolve(_pip_git_tool(commit="main")).method == "unresolved"
+    assert g.resolve(_pip_git_tool(commit=_COMMIT + "x")).method == "unresolved"
+
+
+def test_pip_git_tool_without_verified_recipe_is_unresolved_not_installed():
+    res = g.resolve(_pip_git_tool(name="othertool",
+                                   package="git+https://github.com/example/othertool"))
+    assert res.method == "unresolved" and "recipe" in res.reason
+
+
+def test_manifest_carries_pip_git_package_and_its_commit():
+    m = g.build_manifest([_pip_git_tool()])
+    assert m["pip_git_packages"] == [{
+        "name": "mtkclient", "url": "git+https://github.com/bkerler/mtkclient",
+        "commit": _COMMIT, "bin": "mtk", "build_apt": [], "runtime_apt": ["libxcb-cursor0"],
+    }]
+    assert "libxcb-cursor0" in m["apt_packages"]
+    assert m["totals"]["pip"] == 1
+
+
+# --- wq#4116: binary method (ghidra) ---
+def _binary_tool(**kw):
+    t = {"name": "ghidra", "trust": "core", "path": "/opt/ghidra/support/analyzeHeadless",
+         "install_method": "binary", "package": "ghidra_12.1.4_PUBLIC_20260921.zip"}
+    t.update(kw)
+    return t
+
+
+def test_binary_tool_with_recipe_resolves():
+    res = g.resolve(_binary_tool())
+    assert (res.method, res.package) == ("binary", "ghidra_12.1.4_PUBLIC_20260921.zip")
+
+
+def test_binary_tool_without_verified_recipe_is_unresolved_not_fetched():
+    res = g.resolve(_binary_tool(package="ghidra_99.0.0_PUBLIC_99999999.zip"))
+    assert res.method == "unresolved" and "recipe" in res.reason
+
+
+def test_binary_tool_with_no_declared_artifact_is_unresolved():
+    res = g.resolve(_binary_tool(package=None))
+    assert res.method == "unresolved"
+
+
+def test_manifest_carries_binary_artifact_and_its_sha256():
+    m = g.build_manifest([_binary_tool()])
+    assert m["binary_artifacts"] == [{
+        "name": "ghidra", "artifact": "ghidra_12.1.4_PUBLIC_20260921.zip",
+        "url": g.BINARY_RECIPES["ghidra_12.1.4_PUBLIC_20260921.zip"]["url"],
+        "sha256": g.BINARY_RECIPES["ghidra_12.1.4_PUBLIC_20260921.zip"]["sha256"],
+        "extract_to": "/opt/ghidra", "runtime_apt": ["openjdk-21-jre-headless"],
+    }]
+    assert "openjdk-21-jre-headless" in m["apt_packages"]
+    assert m["totals"]["binary"] == 1
+
+
+# --- wq#4116: the real catalog's 5 core tools that build_manifest previously
+# reported unresolved (wq#4097's build_manifest run, 2026-10-16) now resolve ---
+def test_real_catalog_resolves_the_five_previously_unresolved_core_tools():
+    tools = {t["name"]: t for t in g.load_tools()}
+    for name, method in (("unblob", "pip"), ("frida", "pip"),
+                          ("mtkclient", "pip-git"), ("edl", "pip-git"),
+                          ("ghidra", "binary")):
+        res = g.resolve(tools[name])
+        assert res.method == method, f"{name}: expected {method}, got {res.method} ({res.reason})"
