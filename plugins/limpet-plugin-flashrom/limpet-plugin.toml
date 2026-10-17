@@ -1,0 +1,71 @@
+# limpet-plugin-flashrom — First-party SPI flash programmer plugin
+# wq#4141 — thin MCP wrapper over flashrom CLI
+# GAP finding: no flashrom-mcp exists anywhere (wq#4096 Section 3)
+# Core tier: Limpet ships flashrom, owns both ends
+
+[plugin]
+name = "flashrom"
+version = "1.4.0"
+manifest_version = 1
+category = "flash-tools"
+description = "SPI flash read/write/erase/verify via flashrom — BIOS, firmware, EEPROM"
+license = "GPL-2.0-only"
+homepage = "https://flashrom.org"
+repository = "https://github.com/flashrom/flashrom"
+authors = ["flashrom contributors"]
+
+[capabilities]
+flash_read = true
+flash_write = true
+flash_erase = true
+headless = true
+gui = false
+architectures = ["x86", "x86_64", "ARM", "ARM64"]
+input_formats = ["bin", "rom"]
+output_formats = ["bin", "rom"]
+
+[paths]
+binary = "/usr/sbin/flashrom"
+install_dir = "/usr"
+
+[health]
+check = "flashrom --version 2>&1 | grep -q 'flashrom'"
+interval = "1h"
+timeout = "5s"
+startup_grace = "2s"
+
+[dependencies]
+requires = []
+system_packages = ["flashrom"]
+conflicts = []
+
+[mcp]
+enabled = true
+server = "limpet-flashrom-mcp"
+transport = "stdio"
+command = "python3"
+args = ["/opt/limpet/plugins/flashrom/mcp/server.py"]
+env = {}
+
+[mcp.tools_energize]
+# Read/probe are safe — no energize needed
+probe = false
+read = false
+verify = false
+# Write/erase are destructive — MUST be gated
+write = true
+erase = true
+
+[agent_hints]
+summary = "SPI flash programmer for reading, writing, and erasing BIOS/firmware/EEPROM chips via programmers like CH341A, Pico serprog, or internal chipset."
+when_to_use = "Use when the HAL detects a flash programmer (CH341A, Pico serprog) or when you need to dump/flash a SPI NOR chip on a target board. Always read+verify before any write."
+when_not_to_use = "Not for NAND flash, eMMC, or UFS storage. Not for in-circuit bootloader flashing (use edl/mtkclient/rkdeveloptool instead)."
+complements = ["binwalk", "unblob", "ghidra", "uefi-tool"]
+supersedes = []
+workflow_position = "entry"
+
+[resources]
+max_memory = "256M"
+max_instances = 1
+gpu_required = false
+estimated_startup_time = "1s"

@@ -1,0 +1,22 @@
+[hardware]
+name = "flash-programmer"
+description = "SPI flash programmers supported by flashrom"
+plugin = "flashrom"
+
+[[devices]]
+vid = "1a86"
+pid = "5512"
+name = "CH341A SPI programmer"
+programmer = "ch341a_spi"
+
+[[devices]]
+vid = "04d8"
+pid = "e11c"
+name = "XGecu TL866II+"
+programmer = "minipro"
+
+[[devices]]
+vid = "2e8a"
+pid = "000a"
+name = "Raspberry Pi Pico (serprog)"
+programmer = "serprog:dev=/dev/ttyACM0:115200"
