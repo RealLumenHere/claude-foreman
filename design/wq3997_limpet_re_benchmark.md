@@ -12,6 +12,12 @@ number posture already used for minerva recall, ISSUE-LOG #292).
   binaries with a license/keygen check to defeat. Single-artifact, x86/software-centric RE.
 - **AgentRE-Bench** (agentre-bench.ai) — an *agentic* RE benchmark: an agent is given a target
   and must plan, drive tools, and produce graded findings end to end.
+- **CREBench** (arXiv 2604.03750) — a *crypto binary RE* benchmark: tasks score locating and
+  identifying cryptographic routines/constants in compiled binaries. Noted as a reference (and
+  a candidate drop-in for a crypto-RE slice), not adopted as the primary instrument — its unit
+  of evaluation is single-binary crypto identification, narrower than the appliance's end-to-end
+  agentic loop. Cited from the ticket wq#4098 / the live-search pass; not yet vendored (same
+  egress wall as AgentRE-Bench below).
 - Survey, "Challenges and Future Directions in Agentic Reverse Engineering Systems"
   (arXiv 2604.14317) — frames agentic-RE evaluation around end-to-end task success rather than
   single-shot decompilation accuracy.
@@ -72,3 +78,12 @@ last `task_done` is skipped — mirroring the macbench results idiom
 (`tools/macbench/README.md`). Deployment wiring (a systemd timer / `lumen-run` detached job on
 a cadence) belongs with the dataset follow-up; per fleet instinct 5 the daemon is never run
 foreground-unattended.
+
+## Baseline run (wq#4098)
+
+The standing-eval score is published in `reports/wq4098_limpet_re_benchmark_baseline.md`:
+the `null` agent (no agent core yet) scores **0.0/5**, the honest baseline and the forcing
+function; the `oracle` agent scores **1.0/5**, the harness self-test proving loader + fixture
++ scorer agree. The report is the first instance of the golden-set posture for Limpet — a
+frozen fixture, a measured number, and a reproduce command — mirroring minerva recall
+(ISSUE-LOG #292). wq#4098 also added the CREBench reference above.
