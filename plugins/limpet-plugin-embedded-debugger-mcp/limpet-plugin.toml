@@ -1,0 +1,102 @@
+# limpet-plugin-embedded-debugger-mcp — ARM Cortex-M/RISC-V/Xtensa debug probe plugin
+# wq#4139 — wraps Adancurusul/embedded-debugger-mcp (MIT, GitHub tag v0.3.0)
+# Evaluation: docs/mcp-server-evaluations.md Section 5 (wq#4096 eval batch, top pick)
+
+[plugin]
+name = "embedded-debugger-mcp"
+version = "0.3.0"
+manifest_version = 1
+category = "hardware-interface"
+description = "Dual-backend (probe-rs + OpenOCD) embedded debug probe with AI-facing crash diagnosis"
+license = "MIT"
+homepage = "https://github.com/Adancurusul/embedded-debugger-mcp"
+repository = "https://github.com/Adancurusul/embedded-debugger-mcp"
+authors = ["Adancurusul"]
+
+[capabilities]
+jtag = true
+swd = true
+flash_read = true
+flash_write = true
+flash_erase = true
+headless = true
+gui = false
+architectures = ["ARM", "RISC-V", "Xtensa"]
+input_formats = ["ELF", "hex", "bin"]
+output_formats = ["bin", "JSON"]
+
+[paths]
+binary = "/usr/local/bin/embedded-debugger-mcp"
+install_dir = "/opt/limpet/plugins/embedded-debugger-mcp"
+
+[health]
+check = "embedded-debugger-mcp --help 2>&1 | grep -q 'embedded-debugger-mcp'"
+interval = "1h"
+timeout = "10s"
+startup_grace = "5s"
+
+[dependencies]
+requires = []
+system_packages = []
+conflicts = []
+
+[backends]
+# Single MCP tool set, backend chosen at `connect`.
+default = "probe-rs"
+available = ["probe-rs", "openocd"]
+# openocd backend is experimental upstream: register reads use ARM gdb
+# register numbers, so PC/SP are wrong on Xtensa; flash/RTT are probe-rs only.
+notes = "probe-rs backend is native and covers flash+RTT on ARM/RISC-V. openocd backend connects to an already-running openocd over GDB RSP (default 127.0.0.1:3333) — needed for Xtensa/ESP32 targets probe-rs does not cover, but memory/halt/run/step only; diagnose_fault/unwind_exception are Cortex-M specific on both backends."
+
+[mcp]
+enabled = true
+server = "embedded-debugger-mcp"
+transport = "stdio"
+command = "embedded-debugger-mcp"
+args = ["serve"]
+env = { RUST_LOG = "info" }
+
+[mcp.tools_energize]
+# Per-tool energize gate (wq#4139): true = requires energize-confirm before execution.
+# Scope per ticket: gate flash/halt/write-class tools; diagnose_fault and
+# unwind_exception are read-only evidence reads and are explicitly exempted
+# even though they are used in the same crash-diagnosis workflow as halt.
+halt = true
+run = true
+reset = true
+step = true
+write_memory = true
+flash_erase = true
+flash_program = true
+run_firmware = true
+rtt_write = true
+# Read-only / session-management — no energize needed
+list_probes = false
+connect = false
+probe_info = false
+disconnect = false
+get_status = false
+read_memory = false
+set_breakpoint = false
+clear_breakpoint = false
+flash_verify = false
+rtt_attach = false
+rtt_detach = false
+rtt_channels = false
+rtt_read = false
+diagnose_fault = false
+unwind_exception = false
+
+[agent_hints]
+summary = "Dual-backend (probe-rs native, or OpenOCD via GDB RSP) embedded debug probe for ARM Cortex-M, RISC-V, and Xtensa targets. One MCP tool set covers probe discovery, core control, memory, breakpoints, flash, RTT, and AI-facing crash diagnosis (diagnose_fault, unwind_exception)."
+when_to_use = "Use when a probe-rs or OpenOCD compatible debug probe (ST-Link, J-Link, DAPLink, Black Magic Probe, FTDI-based) is detected and a live Cortex-M/RISC-V/Xtensa target needs halt/step debugging, flash programming, RTT log capture, or post-crash fault analysis. Prefer the probe-rs backend; fall back to the openocd backend only for targets probe-rs does not cover (e.g. ESP32 via openocd-esp32)."
+when_not_to_use = "For SPI/NOR flash chip programming outside a debug session (use flashrom instead). For bare JTAG/SWD scripting without the AI crash-diagnosis tool set (use openocd-mcp instead)."
+complements = ["flashrom", "serial-mcp-server", "openocd-mcp"]
+supersedes = []
+workflow_position = "mid-pipeline"
+
+[resources]
+max_memory = "512M"
+max_instances = 1
+gpu_required = false
+estimated_startup_time = "3s"

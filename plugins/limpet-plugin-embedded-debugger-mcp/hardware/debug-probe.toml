@@ -1,0 +1,44 @@
+# Hardware manifest: probe-rs/OpenOCD debug probes recognized by this plugin
+# Installed to /etc/limpet/hardware.d/ by the plugin installer
+# Supplements hal.py's built-in REGISTRY with plugin-specific probes
+
+[hardware]
+name = "debug-probe"
+description = "probe-rs/OpenOCD compatible debug probes supported by embedded-debugger-mcp"
+plugin = "embedded-debugger-mcp"
+
+[[devices]]
+vid = "0483"
+pid = "3748"
+name = "ST-Link/V2"
+interface = "swd"
+
+[[devices]]
+vid = "0483"
+pid = "374b"
+name = "ST-Link/V2-1"
+interface = "swd"
+
+[[devices]]
+vid = "1366"
+pid = "0101"
+name = "SEGGER J-Link"
+interface = "jtag"
+
+[[devices]]
+vid = "1d50"
+pid = "6018"
+name = "Black Magic Probe"
+interface = "swd"
+
+[[devices]]
+vid = "0403"
+pid = "6010"
+name = "FTDI FT2232H (Tigard)"
+interface = "jtag"
+
+[[devices]]
+vid = "0d28"
+pid = "0204"
+name = "CMSIS-DAP"
+interface = "swd"
