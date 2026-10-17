@@ -111,7 +111,7 @@
     },
     {
       "name": "binwalk",
-      "path": "/usr/bin/binwalk",
+      "path": "/usr/local/bin/binwalk",
       "description": "Signature-based firmware scanning, entropy analysis, and extraction.",
       "category": "firmware-extraction",
       "capabilities": [
@@ -131,19 +131,20 @@
       "architectures": [
         "any"
       ],
-      "health_check": "/usr/bin/binwalk --help",
+      "health_check": "/usr/local/bin/binwalk --help",
       "url": "https://github.com/ReFirmLabs/binwalk",
       "license": "MIT",
       "license_risk": "none",
       "redistribution_posture": "bundle",
       "trust": "core",
-      "provenance": "TOOL_REGISTRY.md:16 (verified 2026-10-14); license_risk/redistribution_posture added by wq#4050: MIT confirmed via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file) for github.com/ReFirmLabs/binwalk. Permissive, no source-offer obligation.",
-      "install_method": "apt",
+      "provenance": "TOOL_REGISTRY.md:16 (verified 2026-10-14); license_risk/redistribution_posture added by wq#4050: MIT confirmed via GitHub's repo-license API (licensee-detected SPDX id against the repo's own LICENSE file) for github.com/ReFirmLabs/binwalk. Permissive, no source-offer obligation. wq#4097: core ships binwalk v3 (Rust) built from crates.io 3.1.0 --locked; apt's 2.4.3 (python) and the PyPI 2.1.0 stub (2373-byte sdist) are not used.",
+      "install_method": "cargo",
       "mcp_status": "cli_only",
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "binwalk",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.4.3 (v2, matches foreman /usr/bin/binwalk). Project names 'Binwalk v3': v3 is Rust, crates.io binwalk 3.1.0 (repository ReFirmLabs/binwalk); v3.1.0 GitHub release has no Linux binary."
+      "install_evidence": "wq#4097: v3 (Rust) crates.io binwalk 3.1.0, built --locked in ubuntu:26.04 (cargo 1.93.1) in 51s after adding libfontconfig1-dev; scan + -e extraction smoke-tested. apt candidate on Lumen (Ubuntu 26.04) is 2.4.3 (v2, python); PyPI binwalk is a 2373-byte 2.1.0 stub.",
+      "version": "3.1.0"
     },
     {
       "name": "fwanalyzer",

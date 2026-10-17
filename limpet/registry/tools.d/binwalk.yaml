@@ -2,8 +2,8 @@
 # registry rebuilds tools.json. Fields: name/path/capabilities/health_check are
 # required, the rest are optional claims the agent uses to route work.
 name: binwalk
-path: /usr/bin/binwalk
-version: "2.3.4"
+path: /usr/local/bin/binwalk
+version: "3.1.0"
 description: Firmware image analysis and extraction (signature scanning, entropy, carving).
 category: firmware
 capabilities:
@@ -21,4 +21,4 @@ output_formats:
 architectures:
   - any
 hardware_requirements: {}
-health_check: /usr/bin/binwalk --help
+health_check: /usr/local/bin/binwalk --help

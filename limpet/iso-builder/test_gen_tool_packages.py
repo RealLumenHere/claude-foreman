@@ -98,3 +98,46 @@ def test_build_manifest_partitions_real_catalog_and_matches_totals():
     for t in tools:
         if t.get("trust") == "community":
             assert t["name"] in unresolved_names
+
+
+# --- wq#4097: cargo method (binwalk v3) ---
+def _cargo_tool(**kw):
+    t = {"name": "binwalk", "trust": "core", "path": "/usr/local/bin/binwalk",
+         "install_method": "cargo", "package": "binwalk", "version": "3.1.0"}
+    t.update(kw)
+    return t
+
+
+def test_cargo_tool_with_recipe_and_pin_resolves():
+    res = g.resolve(_cargo_tool())
+    assert (res.method, res.package, res.version) == ("cargo", "binwalk", "3.1.0")
+
+
+def test_cargo_tool_without_version_pin_is_unresolved():
+    assert g.resolve(_cargo_tool(version=None)).method == "unresolved"
+
+
+def test_cargo_version_must_be_plain_x_y_z():
+    assert g.resolve(_cargo_tool(version="3.1.0; rm -rf /")).method == "unresolved"
+    assert g.resolve(_cargo_tool(version="^3.1")).method == "unresolved"
+
+
+def test_cargo_crate_without_verified_recipe_is_unresolved_not_built():
+    res = g.resolve(_cargo_tool(name="othertool", package="othertool"))
+    assert res.method == "unresolved" and "recipe" in res.reason
+
+
+def test_manifest_carries_cargo_crate_and_its_runtime_apt():
+    m = g.build_manifest([_cargo_tool()])
+    assert m["cargo_crates"] == [{"name": "binwalk", "crate": "binwalk", "version": "3.1.0",
+                                  "build_apt": ["libfontconfig1-dev"],
+                                  "runtime_apt": ["libfontconfig1", "libfreetype6"], "bin": "binwalk"}]
+    assert "libfontconfig1" in m["apt_packages"] and "libfontconfig1-dev" not in m["apt_packages"]
+    assert m["totals"]["cargo"] == 1
+
+
+def test_real_catalog_ships_binwalk_v3_via_cargo():
+    tools = {t["name"]: t for t in g.load_tools()}
+    res = g.resolve(tools["binwalk"])
+    assert (res.method, res.version) == ("cargo", "3.1.0")
+    assert tools["binwalk"]["install_method"] != "pip"  # PyPI binwalk is a dead 2.1.0 stub

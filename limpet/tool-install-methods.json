@@ -449,13 +449,13 @@
   },
   {
    "id": "binwalk",
-   "install_method": "apt",
+   "install_method": "cargo",
    "package": "binwalk",
    "url": "https://github.com/ReFirmLabs/binwalk",
    "alternatives": [
-    "cargo:binwalk 3.1.0 (v3)"
+    "apt:binwalk 2.4.3+dfsg1-2build1 (v2, python; Ubuntu 26.04 universe)"
    ],
-   "evidence": "apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.4.3 (v2, matches foreman /usr/bin/binwalk). Project names 'Binwalk v3': v3 is Rust, crates.io binwalk 3.1.0 (repository ReFirmLabs/binwalk); v3.1.0 GitHub release has no Linux binary.",
+   "evidence": "wq#4097: v3 is the supported line. crates.io binwalk 3.1.0 (ReFirmLabs/binwalk); v3.1.0 GitHub release has no binary assets; PyPI binwalk is a 2373-byte 2.1.0 stub. Built 2026-10-16 in ubuntu:26.04 (cargo 1.93.1) with --locked in 51s after adding libfontconfig1-dev; scan + -e extraction smoke-tested; runtime libs already in the Xubuntu 26.04 desktop manifest.",
    "project_name": "Binwalk v3",
    "foreman_name": "binwalk",
    "toml_names": [],

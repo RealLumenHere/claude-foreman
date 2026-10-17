@@ -235,7 +235,30 @@ stage4_package_re_tools() {
     local unresolved
     unresolved="$(jq '.totals.unresolved' "$manifest")"
     log "stage4: $unresolved catalog tools unresolved on this build host (see $manifest, never guessed)"
+    [ "$(jq '.cargo_crates | length' "$manifest")" -gt 0 ] && stage4b_build_cargo_tools "$manifest"
   fi
+  return 0
+}
+
+# wq#4097: build recipe-backed cargo crates (e.g. binwalk v3) in an ubuntu:$XUBUNTU_VERSION
+# container on the build host and copy ONLY the binary into the chroot, so no Rust toolchain
+# is added to the ISO layer. Crate/version come from gen_tool_packages.py, which validates
+# them and only emits crates that have a verified recipe. Runtime libs were already apt-installed
+# by stage4 (they are in manifest.apt_packages).
+stage4b_build_cargo_tools() {
+  local manifest="$1" out="$WORKDIR/cargo-out" c crate ver bin bdeps
+  require_cmd docker; require_cmd jq
+  rm -rf "$out"; mkdir -p "$out" "$CHROOT/usr/local/bin"
+  while read -r c; do
+    crate="$(jq -r .crate <<<"$c")"; ver="$(jq -r .version <<<"$c")"; bin="$(jq -r .bin <<<"$c")"
+    bdeps="$(jq -r '.build_apt | join(" ")' <<<"$c")"
+    log "stage4b: cargo install $crate $ver (container ubuntu:$XUBUNTU_VERSION, --locked)"
+    docker run --rm -v "$out:/out" "ubuntu:$XUBUNTU_VERSION" bash -euc \
+      "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq; apt-get install -y -qq --no-install-recommends cargo rustc build-essential pkg-config ca-certificates $bdeps; cargo install $crate --version $ver --locked --root /out"
+    [ -x "$out/bin/$bin" ] || fail "cargo build of $crate $ver produced no $out/bin/$bin"
+    install -m 0755 "$out/bin/$bin" "$CHROOT/usr/local/bin/$bin"
+    log "stage4b: installed /usr/local/bin/$bin ($(sha256sum "$out/bin/$bin" | cut -c1-16)...)"
+  done < <(jq -c '.cargo_crates[]' "$manifest")
 }
 
 # ---------------------------------------------------------------------------
