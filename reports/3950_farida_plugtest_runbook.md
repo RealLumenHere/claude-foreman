@@ -114,3 +114,28 @@ sandbox (Tier-0 instinct 3's carve-out: the only legitimate Frank dependency is 
 physical act nobody else can perform). Everything reachable without them has now been
 re-verified twice (attempt 1 and this attempt) and extended with the plugin-coverage
 finding above.
+
+## Attempt 3 re-verification (2026-10-17)
+
+Re-ran both suites against current `main` after attempt 2: still
+`11 passed` (`limpet/hardware.d/test_build_iso_drivers.py`) and `17 passed`
+(`ops/wq3809-limpet-hal/tests/test_hal.py`). SSH to Farida is still absent from
+`/home/lumen/foreman/harness/worker-settings.json`'s allowlist, and wq#4120 (the queued
+physical-act follow-up) is still `frank_gated`/unclaimed — nothing about the physical
+blocker has changed since attempt 2.
+
+One catalog fact *did* change and corrects step 3 above: wq#4093 (merged after attempt 2,
+commit `82a6fcbd`) found the RTL8812BU `dkms_source` URL dead and verified the in-kernel
+`rtw88_8822bu` module already claims `usb:v0BDApB812` on both the ISO's pinned kernel and
+Farida's running-kernel ABI (`limpet/hardware.d/10-network-adapters.toml:43-48`). So the
+network-adapter category is **not** DKMS-backed after all — all four devices (ASIX
+AX88179, RTL8153, RTL8812BU, MT7921U) are in-kernel; RTL8812BU and MT7921U only need
+their firmware blobs present via `linux-firmware`, no `dkms autoinstall` target. Step 3's
+"whichever categories are DKMS-backed" still applies to the *other* 11 categories per
+`prebake-plan.md`, just not to network-adapter. The HAL plugin-coverage gap (5/12
+categories, `ops/wq3809-limpet-hal/hal.py:171-269`) and the missing notify daemon
+(`docs/limpet-naming.md:28,42`) are both unchanged this attempt.
+
+wq#3950 stays blocked rather than false-completed: the ticket's deliverable is the
+physical confirmation itself, which still has not happened. The remaining work is
+entirely the physical act tracked at wq#4120.
