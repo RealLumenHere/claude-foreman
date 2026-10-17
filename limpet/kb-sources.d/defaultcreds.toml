@@ -1,0 +1,15 @@
+# DefaultCreds-cheat-sheet (ihebski). re-knowledge-bases.md §2.2 — SHIP. One CSV,
+# ~3,711 rows; the Target-Device Wizard's "try defaults" step reads it.
+[source]
+name = "defaultcreds"
+tier = "ship"
+category = "creds"
+summary = "DefaultCreds-cheat-sheet: default user/pass by product"
+license = "MIT"
+size = "<5 MB"
+
+[ship]
+format = "csv"
+path = "creds/DefaultCreds-Cheat-Sheet.csv"
+title_fields = ["productvendor"]
+body_fields = ["productvendor", "username", "password"]

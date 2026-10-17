@@ -1,0 +1,20 @@
+# MITRE ATT&CK + CAPEC. re-knowledge-bases.md §5.2 — SHIP (static). ATT&CK-ICS is the right
+# framework for firmware/OT findings. STIX bundles are normalized to jsonl (one technique/
+# attack-pattern per line) by the update step.
+[source]
+name = "attack"
+tier = "ship"
+category = "attack"
+summary = "MITRE ATT&CK + CAPEC technique/attack-pattern taxonomy"
+license = "free (MITRE)"
+size = "~50-100 MB"
+version = "stix-2.1"
+
+[ship]
+format = "jsonl"
+path = "attack/attack.jsonl"
+title_fields = ["external_id", "name"]
+body_fields = ["external_id", "name", "description", "tactic"]
+
+[update]
+command = "limpet-kb-render attack"

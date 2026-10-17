@@ -1,0 +1,13 @@
+# RouterSploit defaults.txt (threat9, BSD). re-knowledge-bases.md §2.1 — SHIP. The
+# user:pass default-cred wordlist, one pair per line, extractable for the Wizard.
+[source]
+name = "routersploit-defaults"
+tier = "ship"
+category = "creds"
+summary = "RouterSploit defaults.txt user:pass wordlist"
+license = "BSD"
+size = "small"
+
+[ship]
+format = "lines"
+path = "creds/routersploit-defaults.txt"

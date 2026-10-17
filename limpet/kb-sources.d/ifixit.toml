@@ -1,0 +1,13 @@
+# iFixit guides/teardowns. re-knowledge-bases.md §3.4 — LINK. Public API over guides +
+# teardowns (CC-BY-NC); board photography and component ID. API lookup, not a ship.
+[source]
+name = "ifixit"
+tier = "link"
+category = "devices"
+summary = "iFixit teardown/repair guide API lookup"
+license = "CC-BY-NC (API)"
+size = "web-scale"
+
+[link]
+url = "https://www.ifixit.com/api/2.0/search/{query}"
+helper = "limpet teardown <device>"

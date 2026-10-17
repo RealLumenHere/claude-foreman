@@ -29,11 +29,20 @@ override_dh_auto_install:
 	install -m 0644 $(SRC)/cli.py $(SRC)/daemon.py $(SRC)/registry.py \
 	    $(SRC)/registry_core.py $(SRC)/manifest.py $(SRC)/health.py \
 	    $(SRC)/workspace_cli.py $(SRC)/workspace_report.py \
+	    $(SRC)/kb.py \
 	    $(PKGROOT)/usr/lib/limpet/tools/
 	# wq#3934: built-in report templates live next to workspace_report.py so
 	# BUILTIN_TEMPLATES_DIR resolves; /etc/limpet/report-templates is the site
 	# drop-in for operator-authored custom formats.
 	cp -r $(SRC)/report-templates $(PKGROOT)/usr/lib/limpet/tools/
+	# wq#4086: the limpet-kb source catalog (SHIP/FETCH/LINK drop-ins) ships to
+	# /usr/share/limpet/kb-sources.d; /etc/limpet/kb-sources.d is the operator
+	# site-override dir; /usr/share/limpet/kb is the KB data root the SHIP-tier
+	# flat files populate and the FTS5 index (/var/lib/limpet/limpet-kb.db) loads.
+	install -d $(PKGROOT)/usr/share/limpet/kb-sources.d
+	install -m 0644 $(SRC)/kb-sources.d/*.toml $(PKGROOT)/usr/share/limpet/kb-sources.d/
+	install -d $(PKGROOT)/usr/share/limpet/kb
+	install -d $(PKGROOT)/etc/limpet/kb-sources.d
 	install -d $(PKGROOT)/etc/limpet/plugins.d
 	install -d $(PKGROOT)/etc/limpet/report-templates
 	install -d $(PKGROOT)/var/lib/limpet

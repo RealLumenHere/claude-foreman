@@ -1,0 +1,14 @@
+# FCC ID teardown databases. re-knowledge-bases.md §3.3 — LINK. Web-scale PDF/image
+# archives (internal photos reveal the SoC); not shippable. On-demand helper: read the
+# FCC ID off the board label, open the teardown.
+[source]
+name = "fccid"
+tier = "link"
+category = "devices"
+summary = "FCC ID teardown lookup (fccid.io / fcc.report)"
+license = "web source"
+size = "web-scale"
+
+[link]
+url = "https://fccid.io/{query}"
+helper = "limpet fccid <ID>"

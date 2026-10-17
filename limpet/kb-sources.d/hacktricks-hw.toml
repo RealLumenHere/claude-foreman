@@ -1,0 +1,13 @@
+# HackTricks hardware-hacking tree. re-knowledge-bases.md §4 — SHIP. Offline UART/JTAG/SWD/
+# SPI/I2C field refs (pinouts, baud rates); one markdown doc per page, indexed whole.
+[source]
+name = "hacktricks-hw"
+tier = "ship"
+category = "hw"
+summary = "HackTricks hardware-hacking field refs (UART/JTAG/SPI/I2C)"
+license = "open"
+size = "~tens MB"
+
+[ship]
+format = "markdown"
+path = "hw/*.md"

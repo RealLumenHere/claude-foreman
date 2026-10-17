@@ -1,0 +1,15 @@
+# WikiDevi / TechInfoDepot mirror. re-knowledge-bases.md §3.2 — FETCH. Maps chipset ->
+# device -> FCC ID -> Linux driver name, exactly the linkage for fingerprinting an unknown
+# board. Too large and wiki-shaped to pre-ship; mirrored into local sqlite on demand.
+[source]
+name = "devicedb"
+tier = "fetch"
+category = "devices"
+summary = "WikiDevi/TechInfoDepot mirror: chipset<->device<->FCC<->driver"
+license = "wiki / CC"
+size = "~hundreds MB"
+
+[fetch]
+command = "limpet-kb-fetch devicedb"
+requires = "network egress (wi-cat / archive.org mirror)"
+dest = "devices/devicedb.sqlite"

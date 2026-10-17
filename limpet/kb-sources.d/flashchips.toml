@@ -1,0 +1,19 @@
+# flashrom flashchips DB. re-knowledge-bases.md §3.5 — SHIP (ships with flashrom). JEDEC
+# mfg:dev ID -> chip name, size, geometry. Rendered from flashchips.c to a flat CSV so the
+# index can resolve a bare RDID off `flashrom --flash-name` without a C parser in the path.
+[source]
+name = "flashchips"
+tier = "ship"
+category = "devices"
+summary = "flashrom flashchips: JEDEC ID -> SPI/parallel flash geometry"
+license = "GPLv2"
+size = "in-tree"
+
+[ship]
+format = "csv"
+path = "devices/flashchips.csv"
+title_fields = ["vendor", "name"]
+body_fields = ["vendor", "name", "jedec_id", "total_kb", "page_size", "tested"]
+
+[update]
+command = "limpet-kb-render flashchips"

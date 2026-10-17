@@ -1,0 +1,18 @@
+# OpenWrt Table of Hardware. re-knowledge-bases.md §3.1 — SHIP. The device->SoC/flash/RAM
+# spine for the Target-Device Wizard; full device data ships as a JSON dump.
+[source]
+name = "openwrt-toh"
+tier = "ship"
+category = "devices"
+summary = "OpenWrt Table of Hardware: device -> SoC/flash/RAM/bootloader"
+license = "CC-BY-SA"
+size = "~10-30 MB"
+
+[ship]
+format = "json"
+path = "devices/openwrt-toh.json"
+title_fields = ["model", "brand"]
+body_fields = ["brand", "model", "target", "cpu", "flashmb", "rammb", "bootloader"]
+
+[update]
+command = "limpet-kb-fetch openwrt-toh"

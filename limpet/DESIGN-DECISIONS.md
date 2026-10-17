@@ -6,6 +6,42 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#4086 — limpet-kb front end: one KB namespace, one FTS5 index, a tiered catalog
+
+**D1 — the KB is catalog-driven, not hardcoded.** Which knowledge sources exist is a
+question of which TOML drop-ins ship under `kb-sources.d/`, not of code — the same
+one-schema-many-files posture as `hardware.d`/`target-devices.d` (wq#3940). `kb.py`
+`load_sources()` reads `/usr/share/limpet/kb-sources.d` (shipped catalog) then
+`/etc/limpet/kb-sources.d` (operator site overrides, later-dir-wins), mirroring the
+report-templates split (wq#3934). Each source carries its integration **tier** from
+`re-knowledge-bases.md` (wq#3930) §8: SHIP (flat files on the ISO), FETCH (download on
+demand), LINK (online helper only). Thirteen drop-ins ship, one per row of the design's
+TL;DR table.
+
+**D2 — one read-only SQLite FTS5 index, no DB server.** `limpet-kb update` loads every
+*present* SHIP source into a single `limpet-kb.db` FTS5 table (`/var/lib/limpet/`), so
+`limpet-kb search` is one offline full-text query. The loader is format-dispatched
+(csv/json/jsonl/markdown/lines) over a glob resolved against the KB root; a per-source
+delete-then-insert keeps `update` idempotent (no double-count on re-run). CWE/ATT&CK ship
+as normalized jsonl rather than teaching the index an XML/STIX parser — the convert step is
+each source's `[update].command`. User search input is quoted token-by-token before it
+reaches FTS5 MATCH, so punctuation (`OR`, `*`, `"`, `)`) can never be read as query syntax.
+
+**D3 — FETCH is fail-closed; LINK is never indexed.** The build sandbox has no egress
+(fleet-wide, wq#2595), so `limpet-kb pull <name>` defaults to a dry plan (prints the
+command + its requirement, e.g. getsploit's Vulners key) and only runs the fetch under
+`--run`, stamping a dated marker so `status` shows staleness. `pull` on a SHIP/LINK source
+is refused. Downloaded exploit bodies stay untrusted (design §8.4): the catalog records the
+fetch command, never auto-runs an exploit.
+
+**Scope held back, on purpose.** No multi-GB corpus is vendored (Exploit-DB clone, getsploit
+DB, OpenWrt ToH JSON, CWE/ATT&CK bundles) — fetching them needs the egress the sandbox lacks,
+the wq#3997 posture. This ticket ships the *front end + loader + catalog*; populating
+`/usr/share/limpet/kb/<category>/` with the real artifacts is a drop-in/`update` follow-up,
+not a code change. Code: `limpet/kb.py`, `limpet/kb-sources.d/*.toml`,
+`packaging/limpet-tools/bin/limpet-kb` (+ `debian/{rules,install}`). Tests:
+`limpet/test_limpet_kb.py`.
+
 ## wq#3997 — adopt a published RE-agent benchmark as the eval instrument
 
 **D1 — adopt AgentRE-Bench as the default instrument; keep the loader benchmark-agnostic.**

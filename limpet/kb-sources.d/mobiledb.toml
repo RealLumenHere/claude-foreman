@@ -1,0 +1,15 @@
+# Mobile / boot-ROM compatibility matrices. re-knowledge-bases.md §6 — FETCH. checkm8/
+# checkra1n + Magisk unlock + Android factory-image status: small but volatile and
+# web-shaped, so scraped-to-table on demand with a fetch date, not frozen on the ISO.
+[source]
+name = "mobiledb"
+tier = "fetch"
+category = "mobile"
+summary = "checkm8/checkra1n + Magisk + Android unlock matrices"
+license = "mixed"
+size = "small (volatile)"
+
+[fetch]
+command = "limpet-kb-fetch mobiledb"
+requires = "network egress (iphonewiki / Magisk-device / factory-image)"
+dest = "mobile/mobiledb.sqlite"

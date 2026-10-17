@@ -1,0 +1,16 @@
+# getsploit (Vulners). re-knowledge-bases.md §1.2 — FETCH. A ~1.7 GB SQLite FTS5 superset
+# of Exploit-DB (+ Metasploit/PacketStorm/ZDI/GitHub PoCs). --update needs the user's own
+# Vulners API key, so it can't pre-ship. Downloaded exploit bodies are untrusted: never
+# auto-run; review before running (safe-extract, no symlink follow).
+[source]
+name = "getsploit"
+tier = "fetch"
+category = "exploits"
+summary = "getsploit/Vulners FTS5 exploit superset (key-gated)"
+license = "needs Vulners API key"
+size = "~1.7 GB"
+
+[fetch]
+command = "getsploit --update"
+requires = "Vulners API key (VULNERS_API_KEY)"
+dest = "exploits/getsploit.db"

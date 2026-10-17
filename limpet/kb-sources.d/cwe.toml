@@ -1,0 +1,20 @@
+# MITRE CWE. re-knowledge-bases.md §5.1 — SHIP (static). Weakness taxonomy; CWE IDs are
+# the canonical defect-class labels in findings. Upstream XML/JSON is normalized to jsonl
+# (one weakness per line) by the update step so the index needs no XML parser in its path.
+[source]
+name = "cwe"
+tier = "ship"
+category = "cwe"
+summary = "MITRE CWE weakness taxonomy"
+license = "free (MITRE)"
+size = "~15-40 MB"
+version = "4.x"
+
+[ship]
+format = "jsonl"
+path = "cwe/cwe.jsonl"
+title_fields = ["id", "name"]
+body_fields = ["id", "name", "description"]
+
+[update]
+command = "limpet-kb-render cwe"
