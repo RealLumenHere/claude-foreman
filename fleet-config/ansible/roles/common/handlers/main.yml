@@ -1,0 +1,7 @@
+# wq#4104 — apply persistent journal storage immediately so a crash later
+# the same run doesn't fall into the same unreadable-journal hole.
+- name: restart systemd-journald
+  become: true
+  systemd:
+    name: systemd-journald
+    state: restarted
