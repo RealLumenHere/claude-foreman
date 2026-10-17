@@ -1,0 +1,9 @@
+# Limpet JTAG/SWD probe udev rules — grant plugdev access to mcjtag's tested probe
+# Installed by limpet-plugin-mcjtag
+#
+# Numbered 91- (after openocd-mcp's 90-limpet-jtag-swd.rules) and scoped to
+# only the probe mcjtag ships a config for, so installing both plugins never
+# collides on the same udev rules file.
+
+# CMSIS-DAP (e.g. Treedix DAP-Link V1, mcjtag's tested probe)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0d28", ATTR{idProduct}=="0204", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"
