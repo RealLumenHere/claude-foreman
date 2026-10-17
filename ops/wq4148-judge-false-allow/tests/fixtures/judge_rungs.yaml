@@ -1,0 +1,33 @@
+model_list:
+- model_name: lumen-gemma4-e4b
+  litellm_params:
+    model: ollama/hf.co/unsloth/gemma-4-E4B-it-GGUF:Q4_K_M
+    api_base: http://172.17.0.1:11434
+- model_name: lumen/judge
+  litellm_params:
+    model: ollama/hathor-judge
+    api_base: http://100.80.71.13:11434
+    timeout: 10
+    num_retries: 0
+    max_parallel_requests: 1
+  model_info:
+    mode: chat
+    description: hathor judge primary (llama3.1:8b Q8_0)
+- model_name: lumen-local-judge
+  litellm_params:
+    model: ollama/qwen2.5-coder:7b
+    api_base: http://172.17.0.1:11434
+    timeout: 120
+    num_retries: 0
+    max_parallel_requests: 1
+  model_info:
+    mode: chat
+    description: lumen local fallback judge (qwen2.5-coder:7b)
+- model_name: lumen/code
+  litellm_params:
+    model: ollama/qwen2.5-coder:14b
+    api_base: http://172.17.0.1:11434
+router_settings:
+  fallbacks:
+  - lumen/judge:
+    - lumen-local-judge

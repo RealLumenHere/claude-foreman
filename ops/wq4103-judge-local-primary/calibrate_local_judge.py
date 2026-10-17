@@ -18,6 +18,9 @@ snapshot+rollback+notify), and a PARSE_FAIL is fail-closed by definition (no
 verdict served) -- both are reported but neither fails the gate. A real
 false-allow does.
 
+Verdicts come from judge_common.call_judge, so this gates the full production
+decision (rubric pass + wq#4148 deny-side second look), not a bare model call.
+
 Must run where the LiteLLM gateway and its service key are reachable (on Lumen,
 via the wq4103 window op) -- the worker sandbox can read neither, so this is not
 runnable from the build worktree.

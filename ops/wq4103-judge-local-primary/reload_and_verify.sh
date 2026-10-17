@@ -18,7 +18,16 @@ log() { echo "[wq4103 $(date -u +%H:%M:%SZ)] $*"; }
 python3 "$HERE/judge_local_primary.py" apply "$CONFIG" --write || { log "PRECHECK FAIL: apply"; exit 3; }
 python3 "$HERE/judge_local_primary.py" check "$CONFIG" >/dev/null || { log "PRECHECK FAIL: config not local-primary"; exit 3; }
 
-if python3 "$HERE/probe_judge_primary.py"; then
+# wq#4148: the ollama/ provider flattens the judge prompt into /api/generate,
+# which is what made the 7B false-allow 8/98; serve the rung via ollama_chat/.
+# A transport change is invisible to the latency probe, so it forces a restart.
+TRANSPORT="$HERE/../wq4148-judge-false-allow/judge_chat_transport.py"
+FORCE_RESTART=0
+python3 "$TRANSPORT" check "$CONFIG" >/dev/null || FORCE_RESTART=1
+python3 "$TRANSPORT" apply "$CONFIG" --write || { log "PRECHECK FAIL: chat transport apply"; exit 3; }
+python3 "$TRANSPORT" check "$CONFIG" >/dev/null || { log "PRECHECK FAIL: judge rung not on ollama_chat/"; exit 3; }
+
+if [ "$FORCE_RESTART" = 0 ] && python3 "$HERE/probe_judge_primary.py"; then
   log "running gateway already serves lumen/judge from the local primary; no restart"
 else
   log "restarting $SERVICE to load the new lumen/judge routing"
