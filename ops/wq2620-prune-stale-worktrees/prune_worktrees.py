@@ -182,13 +182,57 @@ def is_clean(path):
 
 
 def is_merged(repo, branch, default):
-    """True iff `branch`'s tip is an ancestor of origin/<default> — deliberately
+    """True iff `branch`'s tip is an ancestor of origin/<default>. Deliberately
     NOT a commit count, so a squash-merged branch (tip not reachable from
-    origin/default even though its content landed) reports False and is left
-    alone rather than guessed safe. Conservative in the direction the ticket
-    asks for: 'do NOT touch a worktree with unmerged commits'."""
+    origin/default even though its content landed) reports False here — that
+    case is caught separately by `squash_landing_commit` below, not guessed
+    safe by this ancestor test alone."""
     rc, _, _ = sh(["git", "-C", repo, "merge-base", "--is-ancestor", branch, f"origin/{default}"])
     return rc == 0
+
+
+def _patch_id(repo, diff_args):
+    """Stable patch-id for `git diff <diff_args>`, or None if either command
+    fails or there is no diff (an empty commit has no patch-id to match)."""
+    rc, diff_out, _ = sh(["git", "-C", repo, "diff", *diff_args])
+    if rc != 0 or not diff_out.strip():
+        return None
+    # patch-id reads stdin, so feed it diff_out directly rather than relying on sh()'s argv path.
+    r = subprocess.run(["git", "-C", repo, "patch-id", "--stable"],
+                        input=diff_out, capture_output=True, text=True, timeout=60)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    return r.stdout.split()[0]
+
+
+def squash_landing_commit(repo, branch, default):
+    """The commit on origin/<default> that is a squash-equivalent of `branch`,
+    or None if there isn't one — covers wq#4105: a squash-merge-then-delete
+    workflow leaves `branch`'s tip unreachable from origin/<default> forever
+    (its own commits were never replayed there, only a new squashed commit
+    with the same total diff), so `is_merged`'s ancestor test never matches
+    and the worktree sits stale indefinitely (164 of 241 found 2026-10-16).
+
+    Compares the patch-id of `branch`'s entire diff since its merge-base
+    against the patch-id of each individual commit origin/<default> gained
+    since that same merge-base — a squash commit's diff is, by construction,
+    the sum of the branch's commits, so the patch-ids match even though no
+    commit object is shared. Any unmatched or unreadable diff returns None,
+    never guessed as a match."""
+    rc, mb, _ = sh(["git", "-C", repo, "merge-base", branch, f"origin/{default}"])
+    if rc != 0 or not mb.strip():
+        return None
+    mb = mb.strip()
+    branch_pid = _patch_id(repo, [f"{mb}..{branch}"])
+    if branch_pid is None:
+        return None
+    rc, out, _ = sh(["git", "-C", repo, "rev-list", f"{mb}..origin/{default}"])
+    if rc != 0:
+        return None
+    for commit in out.split():
+        if _patch_id(repo, [f"{commit}^", commit]) == branch_pid:
+            return commit
+    return None
 
 
 def commit_ts(repo, rev):
@@ -243,7 +287,7 @@ def wq_done_at(ticket_id):
     return _parse_ts(row[0]) if row else None
 
 
-def landing_age_days(repo, branch, default, wt_name=None):
+def landing_age_days(repo, branch, default, wt_name=None, squash_commit=None):
     """(days_since_landing, source) — how long ago `branch`'s work became
     reachable from origin/<default> — or (None, why) when nothing readable says.
     Fails closed at the call site: an unknown age is never old enough.
@@ -269,7 +313,7 @@ def landing_age_days(repo, branch, default, wt_name=None):
         what remains for a branch that never diverged, where there was no
         landing event to date in the first place."""
     cands = []
-    lc = landing_commit(repo, branch, default)
+    lc = squash_commit or landing_commit(repo, branch, default)
     if lc:
         ts = commit_ts(repo, lc)
         if ts:
@@ -366,7 +410,7 @@ def slock_is_live(agent):
 
 # ── classification ───────────────────────────────────────────────────────────
 
-def classify(path, repo, registry, default, scratch_root, grace_days):
+def classify(path, repo, registry, default, scratch_root, grace_days, backup_root=None):
     """(action, reason) — action is 'prune' or 'skip'. Every skip path is a
     distinct, logged reason; nothing falls through silently."""
     info = registry.get(path)
@@ -378,32 +422,94 @@ def classify(path, repo, registry, default, scratch_root, grace_days):
         return "skip", "detached HEAD, cannot compare to a default branch"
     if default is None:
         return "skip", "could not resolve origin's default branch"
-    if not is_clean(path):
-        return "skip", "uncommitted or untracked changes present"
-    if not is_merged(repo, info["branch"], default):
-        return "skip", f"branch {info['branch']!r} has commits not in origin/{default}"
+
+    branch = info["branch"]
+    merged = is_merged(repo, branch, default)
+    squash_commit = None
+    merge_desc = f"merged into origin/{default}"
+    if not merged:
+        squash_commit = squash_landing_commit(repo, branch, default)
+        if squash_commit is None:
+            return "skip", f"branch {branch!r} has commits not in origin/{default}"
+        merge_desc = f"squash-equivalent of origin/{default}@{squash_commit[:8]}"
+
+    clean = is_clean(path)
+    backup_path = None
+    if not clean:
+        if backup_root is None:
+            return "skip", "uncommitted or untracked changes present"
+        # wq#4105: a dirty worktree whose branch has already landed (plain or
+        # squash) is not "someone's in-progress work" the way an unmerged one
+        # is — it is a merged worktree with leftover scratch (build caches,
+        # stray edits). Back the diff up before pruning rather than letting it
+        # sit stale forever (42 of 241 found 2026-10-16 were exactly this).
+        backup_path, err = backup_dirty_worktree(path, backup_root)
+        if backup_path is None:
+            return "skip", f"uncommitted changes present, backup failed ({err})"
+
     name = os.path.basename(path)
-    age, age_src = landing_age_days(repo, info["branch"], default, name)
+    age, age_src = landing_age_days(repo, branch, default, name, squash_commit=squash_commit)
     if age is None:
-        return "skip", (f"branch {info['branch']!r} landing date unreadable "
+        return "skip", (f"branch {branch!r} landing date unreadable "
                          f"({age_src}) — fail closed")
     if age < grace_days:
-        return "skip", (f"merged into origin/{default}, only {age:.1f}d since landing "
+        return "skip", (f"{merge_desc}, only {age:.1f}d since landing "
                          f"per {age_src} (grace period {grace_days}d)")
 
+    clean_note = "clean" if clean else f"dirty, backed up to {backup_path}"
     m = FWORKER_WT_RE.match(name)
     if m:
         live, why = wq_claim_is_live(int(m.group(1)))
         return ("skip", f"live wq claim ({why})") if live else \
-               ("prune", f"merged into origin/{default}, clean, {why}")
+               ("prune", f"{merge_desc}, {clean_note}, {why}")
     if scratch_root:
         agent = scratch_owner(scratch_root, name)
         if agent:
             live, why = slock_is_live(agent)
             return ("skip", f"live slock ({why})") if live else \
-                   ("prune", f"merged into origin/{default}, clean, {why}")
-        return "prune", f"merged into origin/{default}, clean, no owner record"
-    return "prune", f"merged into origin/{default}, clean, no liveness record to check"
+                   ("prune", f"{merge_desc}, {clean_note}, {why}")
+        return "prune", f"{merge_desc}, {clean_note}, no owner record"
+    return "prune", f"{merge_desc}, {clean_note}, no liveness record to check"
+
+
+DEFAULT_BACKUP_ROOT = "/home/lumen/backups/worktree-prune-auto"
+
+
+def backup_dirty_worktree(path, backup_root):
+    """Write `path`'s tracked diff and untracked files under `backup_root` as
+    `<worktree-name>-<timestamp>/{diff.patch, untracked.tgz}`, matching the
+    by-hand backup-then-delete done for wq#4105's 241 stale worktrees
+    (MANIFEST.tsv at /home/lumen/backups/worktree-prune-20261016). Returns
+    (backup_dir, None) on success, (None, error) on any failure — a worktree
+    whose backup fails is never pruned, per the caller's fail-closed contract."""
+    name = os.path.basename(path)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    out_dir = os.path.join(backup_root, f"{name}-{stamp}")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as e:
+        return None, str(e)
+
+    rc, diff_out, err = sh(["git", "-C", path, "diff", "HEAD"])
+    if rc != 0:
+        return None, f"git diff failed: {err.strip()[:200]}"
+    try:
+        with open(os.path.join(out_dir, "diff.patch"), "w") as f:
+            f.write(diff_out)
+    except OSError as e:
+        return None, str(e)
+
+    rc, untracked_out, err = sh(["git", "-C", path, "ls-files",
+                                  "--others", "--exclude-standard"])
+    if rc != 0:
+        return None, f"git ls-files failed: {err.strip()[:200]}"
+    untracked = [u for u in untracked_out.splitlines() if u]
+    if untracked:
+        tgz = os.path.join(out_dir, "untracked.tgz")
+        rc, _, err = sh(["tar", "-C", path, "-czf", tgz, *untracked], timeout=180)
+        if rc != 0:
+            return None, f"tar of untracked files failed: {err.strip()[:200]}"
+    return out_dir, None
 
 
 # ── size / logging ───────────────────────────────────────────────────────────
@@ -448,7 +554,7 @@ def scratch_root_for(path, roots):
     return None
 
 
-def run(roots, apply, fetch, grace_days=7):
+def run(roots, apply, fetch, grace_days=7, backup_root=DEFAULT_BACKUP_ROOT):
     by_repo = discover_worktrees(roots)
     results = []
     for repo, paths in sorted(by_repo.items()):
@@ -458,7 +564,8 @@ def run(roots, apply, fetch, grace_days=7):
         registry = worktree_registry(repo)
         for path in paths:
             action, reason = classify(path, repo, registry, default,
-                                       scratch_root_for(path, roots), grace_days)
+                                       scratch_root_for(path, roots), grace_days,
+                                       backup_root=backup_root)
             rec = {"path": path, "repo": repo, "action": action, "reason": reason}
             if action == "prune":
                 # Measured BEFORE any removal — in --apply mode the directory is
@@ -493,10 +600,17 @@ def main(argv=None):
                           "branch tip's own commit date (wq#2942; default 7)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--log", default=LOG_PATH)
+    ap.add_argument("--backup-root", default=DEFAULT_BACKUP_ROOT,
+                     help="wq#4105: where a dirty-but-merged worktree's diff "
+                          "and untracked files are backed up before pruning")
+    ap.add_argument("--no-backup", action="store_true",
+                     help="skip dirty worktrees entirely instead of backing "
+                          "them up (old behavior)")
     args = ap.parse_args(argv)
 
     results = run(args.roots, args.apply, fetch=not args.no_fetch,
-                  grace_days=args.grace_days)
+                  grace_days=args.grace_days,
+                  backup_root=None if args.no_backup else args.backup_root)
     pruned = [r for r in results if r["action"] == "prune"]
     size_total = sum(r.get("bytes", 0) for r in pruned)
 

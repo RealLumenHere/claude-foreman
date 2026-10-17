@@ -140,12 +140,52 @@ def test_branch_with_unique_commits_is_skipped(tmp_path, repo):
     assert "commits not in" in r["reason"]
 
 
-def test_dirty_worktree_is_skipped_even_if_merged(tmp_path, repo):
+def test_squash_merged_branch_is_prunable(tmp_path, repo):
+    """wq#4105: a squash-merge-then-delete workflow never puts the branch's own
+    commits onto origin/main (only a new commit with the same total diff), so
+    the plain ancestor test in `is_merged` never matches. The patch-id fallback
+    must still find it merged."""
+    root = tmp_path / "worktrees"
+    branch = "feat/wq9005-a1-squashed"
+    wt = add_worktree(repo, root, "wq9005-a1", branch, ahead=True)
+    # Squash-merge: apply the branch's diff onto main as a brand new commit,
+    # never merging or fast-forwarding the branch itself in.
+    diff = subprocess.run(["git", "diff", "main", branch], cwd=repo,
+                           capture_output=True, text=True, check=True).stdout
+    subprocess.run(["git", "apply", "-"], cwd=repo, input=diff, text=True, check=True)
+    git("add", "-A", cwd=repo)
+    git("commit", "-q", "-m", f"squash-merge {branch} (#1)", cwd=repo)
+    git("push", "-q", "origin", "main", cwd=repo)
+    git("fetch", "-q", "origin", cwd=repo)
+
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
+    assert r["action"] == "prune"
+    assert "squash-equivalent" in r["reason"]
+
+
+def test_dirty_worktree_without_backup_is_skipped_even_if_merged(tmp_path, repo):
     root = tmp_path / "worktrees"
     add_worktree(repo, root, "wq9003-a1", "feat/wq9003-a1-dirty", dirty=True)
-    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0, backup_root=None)
     assert r["action"] == "skip"
     assert "uncommitted" in r["reason"]
+
+
+def test_dirty_merged_worktree_is_backed_up_then_prunable(tmp_path, repo):
+    """wq#4105: a merged-but-dirty worktree is backup-then-prune, not an
+    indefinite skip — matching the by-hand backup-then-delete done for the
+    241 stale worktrees found 2026-10-16."""
+    root = tmp_path / "worktrees"
+    backup_root = tmp_path / "backups"
+    wt = add_worktree(repo, root, "wq9004-a1", "feat/wq9004-a1-dirty", dirty=True)
+    [r] = pw.run([str(root)], apply=False, fetch=False, grace_days=0,
+                 backup_root=str(backup_root))
+    assert r["action"] == "prune"
+    assert "backed up" in r["reason"]
+    backups = list(backup_root.iterdir())
+    assert len(backups) == 1
+    diff = (backups[0] / "diff.patch").read_text()
+    assert "uncommitted" in diff
 
 
 def test_locked_worktree_is_skipped(tmp_path, repo):
