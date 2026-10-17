@@ -1,0 +1,35 @@
+# Hardware manifest: debug probes recognized by this plugin
+# Installed to /etc/limpet/hardware.d/ by the plugin installer
+# Supplements hal.py's built-in REGISTRY with plugin-specific probes
+#
+# jlink-mcp's PROBE_TYPE env var is a single switch across three backends
+# (jlink / openocd / blackmagic, see README.md "Multi-Probe Support"), so
+# this plugin needs one representative hardware entry per backend rather
+# than one entry for the plugin as a whole. VID:PIDs match the canonical
+# values already in limpet/hardware.d/02-debug-probes.toml.
+
+[hardware]
+name = "multi-backend-probe"
+description = "Debug probes supported by jlink-mcp's three PROBE_TYPE backends"
+plugin = "jlink-mcp"
+
+[[devices]]
+vid = "1366"
+pid = "0101"
+name = "SEGGER J-Link"
+interface = "jtag"
+probe_type = "jlink"
+
+[[devices]]
+vid = "1d50"
+pid = "6018"
+name = "Black Magic Probe"
+interface = "swd"
+probe_type = "blackmagic"
+
+[[devices]]
+vid = "0483"
+pid = "3748"
+name = "ST-Link/V2 (generic OpenOCD adapter)"
+interface = "swd"
+probe_type = "openocd"

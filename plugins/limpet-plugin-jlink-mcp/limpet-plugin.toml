@@ -1,0 +1,120 @@
+# limpet-plugin-jlink-mcp — multi-backend embedded debug probe plugin
+# wq#4140 — wraps Klievan/jlink-mcp (MIT, npm v0.7.0)
+# CORRECTED PROVENANCE: previously catalogued as vhdirk/jlink-mcp; the real
+# upstream is Klievan/jlink-mcp (npm maintainer "klievan", repo
+# github.com/Klievan/jlink-mcp). No reference to vhdirk/jlink-mcp exists
+# anywhere else in this repo as of this ticket.
+# Evaluation: docs/mcp-server-evaluations.md Section 4 (not present in this
+# worktree at dispatch time; this plugin was built directly from upstream
+# npm registry metadata + README, not from that doc).
+
+[plugin]
+name = "jlink-mcp"
+version = "0.7.0"
+manifest_version = 1
+category = "hardware-interface"
+description = "Multi-backend embedded debug probe (J-Link/OpenOCD/Black Magic Probe) with RTT, GDB server, and crash diagnosis"
+license = "MIT"
+homepage = "https://github.com/Klievan/jlink-mcp"
+repository = "https://github.com/Klievan/jlink-mcp"
+authors = ["Klievan"]
+
+[capabilities]
+jtag = true
+swd = true
+flash_read = true
+flash_write = true
+flash_erase = true
+headless = true
+gui = false
+architectures = ["ARM", "ARM64"]
+input_formats = ["ELF", "bin", "hex"]
+output_formats = ["bin", "hex", "JSON"]
+
+[paths]
+binary = "/usr/local/bin/jlink-mcp"
+install_dir = "/opt/limpet/plugins/jlink-mcp"
+
+[health]
+check = "jlink-mcp --help 2>&1 | grep -qi 'jlink-mcp\\|mcp'"
+interval = "1h"
+timeout = "10s"
+startup_grace = "5s"
+
+[dependencies]
+requires = []
+system_packages = []
+conflicts = []
+
+[mcp]
+enabled = true
+server = "jlink-mcp"
+transport = "stdio"
+command = "jlink-mcp"
+args = []
+env = { PROBE_TYPE = "jlink" }
+
+[mcp.tools_energize]
+# Per-tool energize gate: true = requires energize-confirm before execution.
+# Gated = writes flash/memory, changes execution state, or runs an arbitrary
+# command; ungated = read-only/informational/connect operations. This mapping
+# is this plugin's own judgment call (upstream ships no gate annotations),
+# made by direct analogy to limpet-plugin-openocd-mcp's flash/halt/reset/step
+# gate set.
+flash = true
+erase = true
+write_memory = true
+halt = true
+resume = true
+reset = true
+step = true
+set_breakpoint = true
+clear_breakpoints = true
+rtt_send = true
+gdb_command = true
+probe_command = true
+gdb_server_start = true
+gdb_server_stop = true
+# Read-only / informational — no energize needed
+list_devices = false
+set_device = false
+get_config = false
+device_info = false
+list_peripherals = false
+read_peripheral = false
+decode_register = false
+read_memory = false
+read_registers = false
+read_register = false
+start_debug_session = false
+snapshot = false
+diagnose_crash = false
+gdb_connect = false
+gdb_load = false
+gdb_backtrace = false
+gdb_wait = false
+gdb_disconnect = false
+gdb_server_status = false
+rtt_connect = false
+rtt_disconnect = false
+rtt_read = false
+rtt_search = false
+rtt_clear = false
+telnet_proxy_start = false
+telnet_proxy_stop = false
+telnet_proxy_status = false
+telnet_proxy_read = false
+
+[agent_hints]
+summary = "Multi-backend embedded debug probe (SEGGER J-Link native, or OpenOCD/Black Magic Probe via PROBE_TYPE) with RTT log streaming, GDB server, and ARM Cortex-M fault decoding. Hardware-CI-tested on a real nRF52840-DK."
+when_to_use = "Use for ARM Cortex-M debugging, flashing, RTT log capture, or crash diagnosis when a J-Link, OpenOCD-compatible adapter (ST-Link/CMSIS-DAP/FTDI), or Black Magic Probe is detected by the HAL. The richest tool set (crash auto-diagnosis, SVD peripheral decode, Trice/Pigweed proxy) is only on the native jlink backend; openocd/blackmagic backends are upstream-labeled Beta with no RTT support."
+when_not_to_use = "For SPI flash programming (use flashrom instead). For pure JTAG/SWD sessions with no RTT/crash-diagnosis need where openocd-mcp's self-managed lifecycle is already in place (use openocd-mcp instead of this plugin's openocd backend to avoid redundant coverage)."
+complements = ["flashrom", "sigrok", "gdb"]
+supersedes = []
+workflow_position = "mid-pipeline"
+
+[resources]
+max_memory = "512M"
+max_instances = 1
+gpu_required = false
+estimated_startup_time = "3s"

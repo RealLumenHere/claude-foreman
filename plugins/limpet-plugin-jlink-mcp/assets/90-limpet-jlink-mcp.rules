@@ -1,0 +1,11 @@
+# Limpet debug probe udev rules for jlink-mcp's three PROBE_TYPE backends
+# Installed by limpet-plugin-jlink-mcp
+
+# SEGGER J-Link (PROBE_TYPE=jlink)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1366", ATTR{idProduct}=="0101", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"
+
+# Black Magic Probe (PROBE_TYPE=blackmagic)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6018", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"
+
+# ST-Link/V2, generic OpenOCD adapter (PROBE_TYPE=openocd)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="3748", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"
