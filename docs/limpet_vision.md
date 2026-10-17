@@ -24,7 +24,7 @@ the live file and this copy now cite that figure.
 
 ## What Is It?
 A dedicated appliance for reverse engineering — not an app you install, a
-secure RE workstation (M70q Gen 5, i5-14500, 32GB DDR5) you plug a target
+secure RE workstation (M70q Gen 5, i5-14500, 16GB DDR5 — `docs/pcb-vision-spec.md` §7) you plug a target
 into. The Hardware Abstraction Layer auto-detects whatever just landed on a
 USB port — probe, analyzer, programmer, or the target device itself — and the
 agent takes it from there: autonomous analysis, with destructive hardware
