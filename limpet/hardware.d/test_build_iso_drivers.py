@@ -70,3 +70,33 @@ def test_write_bundle_writes_all_three_files(tmp_path):
     assert paths["prebake_plan"].read_text() == b.render_report(devices)
     assert paths["proprietary_notes"].read_text() == b.proprietary_report(devices)
     assert paths["udev_rules"].name == "90-limpet-hardware.rules"
+
+
+# --- wq#3950: modprobe directives must not leak into the udev rules file ---
+import shutil as _shutil
+import subprocess as _sp
+import pytest as _pytest
+
+
+def test_rules_file_has_no_modprobe_directives():
+    rules = b.udev_rules(b.load_catalog())
+    for ln in rules.splitlines():
+        assert not ln.startswith(("blacklist ", "install ", "options ", "alias ", "softdep ")), ln
+        assert "/etc/modprobe.d/" not in ln
+
+
+def test_rtl_sdr_blacklist_lands_in_modprobe_conf():
+    conf = b.modprobe_conf(b.load_catalog())
+    assert "blacklist dvb_usb_rtl28xxu" in conf
+
+
+def test_modprobe_conf_header_only_without_directives():
+    assert "blacklist" not in b.modprobe_conf([{"name": "x", "udev_rule": 'SUBSYSTEM=="usb"'}])
+
+
+@_pytest.mark.skipif(_shutil.which("udevadm") is None, reason="udevadm not installed")
+def test_generated_rules_pass_udevadm_verify(tmp_path):
+    f = tmp_path / b.UDEV_RULES_FILENAME
+    f.write_text(b.udev_rules(b.load_catalog()))
+    r = _sp.run(["udevadm", "verify", str(f)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr

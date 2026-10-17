@@ -74,6 +74,7 @@ def test_install_into_fake_chroot_and_verify(tmp_path):
     plan = dh.install(chroot, _bundle(tmp_path))
     assert (chroot / "etc/udev/rules.d/90-limpet-hardware.rules").is_file()
     assert list((chroot / "etc/limpet/hardware.d").glob("*.toml"))
+    assert (chroot / "etc/modprobe.d/90-limpet-hardware-modprobe.conf").is_file()
     assert (chroot / dh.STAGE / "driver-plan.json").is_file()
     s = (chroot / dh.STAGE / "install-drivers.sh").read_text()
     assert "linux-firmware" in s and "xusbdfwu" not in s

@@ -146,9 +146,10 @@ def install(chroot: pathlib.Path, bundle: pathlib.Path, run_chroot: bool = False
     devices = bid.load_catalog()
     plan = build_plan(devices, pin, pins, skips)
     check_chroot_kernel(chroot, pin["KERNEL_ABI"])
-    for rel in ("etc/udev/rules.d", "etc/limpet/hardware.d", "opt/limpet/docs", STAGE):
+    for rel in ("etc/udev/rules.d", "etc/modprobe.d", "etc/limpet/hardware.d", "opt/limpet/docs", STAGE):
         (chroot / rel).mkdir(parents=True, exist_ok=True)
     shutil.copy2(bundle / bid.UDEV_RULES_FILENAME, chroot / "etc/udev/rules.d" / bid.UDEV_RULES_FILENAME)
+    shutil.copy2(bundle / bid.MODPROBE_FILENAME, chroot / "etc/modprobe.d" / bid.MODPROBE_FILENAME)
     for toml in sorted(bid.CATALOG_DIR.glob("*.toml")):
         shutil.copy2(toml, chroot / "etc/limpet/hardware.d" / toml.name)
     for doc in ("prebake-plan.md", "PROPRIETARY-LIMITATIONS.md"):
