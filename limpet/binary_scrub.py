@@ -18,8 +18,11 @@ injection *phrasing* at all --
     scroll).
 
 This module is that missing half. It is deliberately narrow and orthogonal to
-``injection.py``: it does **not** re-classify phrasing (that is ``injection``'s job and
-reusing it keeps one source of truth). It escapes every unsafe char to a *visible* form
+``injection.py``: it does **not** define what counts as injection phrasing (that is
+``injection``'s job and reusing it keeps one source of truth). It does decide *what
+string* ``injection`` is shown -- wq#4127: a normalized reading, with invisible chars
+removed, so an attacker cannot splice a ZWSP through a known phrase to miss the
+classifier's ``\\s``. It escapes every unsafe char to a *visible* form
 and caps length. ``scrub_for_context`` composes the two into the single call the
 binary-content->LLM boundary wants: redact known injection phrasing (reusing
 ``injection``), then escape controls and cap length.
@@ -84,6 +87,56 @@ def _escape_char(ch: str) -> str:
     return ch
 
 
+def _is_classification_noise(ch: str) -> bool:
+    """True iff ``ch`` is a char this module escapes, i.e. one a reader never sees.
+
+    Defined as "``_escape_char`` would change it" so the set the classifier ignores can
+    never drift from the set the scrub escapes.
+    """
+    return _escape_char(ch) != ch
+
+
+def _classification_variants(text: str) -> list[str]:
+    """Readings of ``text`` with invisible chars removed, for phrasing classification.
+
+    wq#4127: ``injection``'s STRONG patterns join words with ``\\s``, which does *not*
+    match U+200B and friends -- the very code points ``_BIDI_AND_ZEROWIDTH`` lists as
+    smuggling vectors. So ``ignore<ZWSP>previous<ZWSP>instructions`` classified ``None``
+    while the plain phrase classified ``strong``, and the value passed through with the
+    instruction intact (only the ZWSPs turned into visible ``\\u200b`` tokens).
+
+    Two readings are needed, because the splice point decides which one restores the
+    phrase: between words, dropping the char welds them (``ignoreprevious``) and only
+    the space-substituted reading matches; inside a word (``ig<ZWSP>nore``) the space
+    reading breaks the word and only the deleted reading matches. Returns ``[]`` when
+    there is nothing invisible, so the common path adds no classification work.
+    """
+    deleted = []
+    spaced = []
+    found = False
+    for ch in text:
+        if _is_classification_noise(ch):
+            found = True
+            spaced.append(" ")
+            continue
+        deleted.append(ch)
+        spaced.append(ch)
+    if not found:
+        return []
+    return ["".join(deleted), "".join(spaced)]
+
+
+def _is_injection_normalized(text: str) -> bool:
+    """``injection.is_injection`` against the text as perceived, not as encoded.
+
+    Keeps ``injection.py`` the single source of truth for *what counts as* an injection;
+    this only decides *what string* that source of truth is shown.
+    """
+    if injection.is_injection(text):
+        return True
+    return any(injection.is_injection(v) for v in _classification_variants(text))
+
+
 @dataclass
 class Scrubbed:
     """Result of scrubbing one value, with telemetry a probe can assert on."""
@@ -138,8 +191,13 @@ def scrub_for_context(value, *, max_len: int = DEFAULT_MAX_LEN) -> Scrubbed:
     escaped and length-capped. Safe and idempotent whether or not the workspace gate
     (``sanitize.sanitize_workspace``) already ran: the redaction token carries no control
     chars, and a second pass over it is a no-op. ``None``/non-str pass through ``scrub``.
+
+    Classification runs over ``_classification_variants`` as well as the raw value
+    (wq#4127), so splicing invisible chars through a known phrase no longer buys an
+    attacker a pass-through; the *stored* form is still built from the raw value, so
+    nothing is lost from the evidence that reaches the index.
     """
-    if isinstance(value, str) and injection.is_injection(value):
+    if isinstance(value, str) and _is_injection_normalized(value):
         res = scrub(injection.REDACTION_TOKEN, max_len=max_len)
         res.redacted = True
         return res

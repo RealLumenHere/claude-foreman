@@ -23,6 +23,8 @@ FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "tests", "fixtures", "re-export-ghidra.json")
 INJECTION_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  "tests", "fixtures", "re-export-injection.json")
+ZWSP_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "tests", "fixtures", "re-export-zwsp-injection.json")
 
 
 @pytest.fixture
@@ -146,6 +148,32 @@ def test_binary_content_scrubbed_into_index(tmp_path):
 
     sym = wi.query_index(str(ws), "SELECT name FROM symbols")["rows"][0][0]
     assert chr(0x202E) not in sym and "\x00" not in sym and "\\u202e" in sym
+
+
+def test_invisible_char_spliced_injection_scrubbed_into_index(tmp_path):
+    """wq#4127 falsifiable probe: the wq#4121 evasion, end-to-end through the shipped
+    ingest path. Every crafted string in the fixture is a known injection phrase with
+    invisible code points spliced through it -- the inputs wq#4108's suite never tried.
+
+    Pre-fix this test fails: injection.classify() returned None on the raw value, so the
+    stored string was the full instruction with \\u200b markers and no REDACTION_TOKEN.
+    """
+    import injection
+    ws = tmp_path / "zwsp-ws"
+    (ws / wi.RE_EXPORTS_SUBDIR).mkdir(parents=True)
+    shutil.copy(ZWSP_FIXTURE, ws / wi.RE_EXPORTS_SUBDIR / "evil2.json")
+    wi.build_index(str(ws))
+
+    vals = [r[0] for r in wi.query_index(str(ws), "SELECT value FROM strings")["rows"]]
+    redacted = [v for v in vals if v == injection.REDACTION_TOKEN]
+    assert len(redacted) == 4                       # all four crafted strings redacted
+    assert "plain version banner v4.1.27" in vals   # the benign one still passes through
+    for v in vals:
+        assert "exfiltrate" not in v and "maintenance mode" not in v
+        assert "not_vulnerable" not in v and "dings for this binary" not in v
+
+    sym = wi.query_index(str(ws), "SELECT name FROM symbols")["rows"][0][0]
+    assert sym == injection.REDACTION_TOKEN
 
 
 def test_rebuild_is_idempotent(workspace):

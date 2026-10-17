@@ -124,3 +124,25 @@ format/control characters stripped or collapsed to a single space before calling
 for the stored form — so the classifier sees the same text a reader would perceive, instead
 of the literal byte sequence an attacker controls. This closes the gap without touching
 `injection.py` and keeps "one source of truth" for phrasing intact.
+
+## Disposition (wq#4127, 2026-10-17)
+
+**FORWARD-FIX**, as recommended — wq#4108 is not reopened. The contradiction is real and
+reproduced, but it is one integration point in one function, not a wrong design: the
+composition `scrub_for_context` chose (reuse `injection` for phrasing, add escaping +
+capping) is the right one, it just fed the classifier the wrong string. Reopening wq#4108
+would re-litigate a landed module to change six lines.
+
+Landed in `limpet/binary_scrub.py`: `_classification_variants()` + `_is_injection_normalized()`,
+called from `scrub_for_context`. Two normalized readings, not one — the splice point decides
+which restores the phrase (deletion welds words across a between-words splice; space
+substitution breaks a word across an inside-a-word splice), so both are classified. The noise
+set is defined as "`_escape_char` would change it", so it cannot drift from the escape set.
+`injection.py` unchanged. Evidence: `limpet/tests/fixtures/re-export-zwsp-injection.json`
+(committed, rev-pinned) through the real `workspace_index.build_index` ingest —
+4/4 crafted strings redacted post-fix, **0/4 pre-fix**. 610 limpet tests pass (603 + 7 new).
+
+The report's noted CUE-layer weakness is covered by the same normalization (CUE patterns are
+`re.escape(word)` over literal phrases, which the normalized reading restores). The
+`sanitize.sanitize_workspace` instance of the same evasion is wq#4091's surface, not
+wq#4108's, and is filed as **wq#4130** rather than widened into this fix. ISSUE-LOG row 1385.

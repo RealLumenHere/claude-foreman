@@ -6,6 +6,33 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#4127 — classify what a reader perceives, not the bytes an attacker chose
+
+**D1 — normalize before classifying, in `binary_scrub`, not in `injection`.** wq#4121's
+verify-pass contradicted wq#4108: `scrub_for_context` classified the *raw* value, and
+`injection`'s STRONG patterns join words with `\s`, which does not match `U+200B` — one of
+the exact code points `_BIDI_AND_ZEROWIDTH` lists as a smuggling vector. So
+`ignore<ZWSP>previous<ZWSP>instructions` classified `None`, the value was only
+escaped, and the instruction reached `index.sqlite` intact (confirmed end-to-end through
+`workspace_index.build_index`). The fix hands `injection.is_injection` normalized readings
+of the value (`binary_scrub._classification_variants`) alongside the raw one; `injection.py`
+is untouched, so it stays the one source of truth for *what counts as* an injection and
+this module only decides *what string* it is shown. The stored form is still built from the
+raw value — nothing is lost from the evidence.
+
+**D2 — two readings, because the splice point decides which one restores the phrase.**
+Deleting the invisible char welds words across a between-words splice
+(`ignore<ZWSP>previous` → `ignoreprevious`, no match); substituting a space breaks a word
+across an inside-a-word splice (`fin<ZWSP>dings` → `fin dings`, no match). Classifying both
+the deleted and the space-substituted reading covers both, and the noise set is defined as
+"`_escape_char` would change it" so it can never drift from the set the scrub escapes.
+Falsifiable probe: `tests/fixtures/re-export-zwsp-injection.json` (committed, rev-pinned)
+through the real ingest path — 4/4 crafted strings redacted post-fix, 0/4 pre-fix.
+
+**Known remaining gap (out of scope here):** `sanitize.sanitize_workspace` classifies raw
+text too, so the same invisible-char splice evades the wq#4091 workspace gate. That gate is
+wq#4091's surface, not wq#4108's; filed separately rather than widened into this fix.
+
 ## wq#4108 — binary-content scrub: the control-char + length half of the injection defense
 
 **D1 — build the missing half, don't duplicate the shipped half.** wq#4091 already landed
