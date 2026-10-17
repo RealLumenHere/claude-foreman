@@ -1,0 +1,19 @@
+# Hardware manifest: JTAG/SWD debug probes recognized by this plugin
+# Installed to /etc/limpet/hardware.d/ by the plugin installer
+# Supplements hal.py's built-in REGISTRY with plugin-specific probes
+#
+# Scoped to mcjtag's actually-tested probe (CMSIS-DAP / Treedix DAP-Link),
+# the one its shipped OpenOCD configs target. limpet-plugin-openocd-mcp
+# already covers the broader probe list (ST-Link, J-Link, Black Magic
+# Probe, FTDI) for the same jtag/swd hardware category.
+
+[hardware]
+name = "jtag-swd-probe-mcjtag"
+description = "JTAG/SWD debug probe supported by mcjtag's shipped configs"
+plugin = "mcjtag"
+
+[[devices]]
+vid = "0d28"
+pid = "0204"
+name = "CMSIS-DAP"
+interface = "swd"

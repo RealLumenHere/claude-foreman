@@ -1,0 +1,109 @@
+# limpet-plugin-mcjtag — Secondary/alternate JTAG/SWD debug probe plugin
+# wq#4138 — wraps Ryan Malloy's mcjtag (PyPI v2026.2.18)
+# Evaluation: docs/mcp-server-evaluations.md Section 1
+#
+# License note: mcjtag's sdist ships no LICENSE file (pyproject.toml excludes
+# "*.cfg" but there is also simply no license text anywhere in the tarball).
+# "MIT" is declared three ways in upstream metadata that all agree --
+# PyPI classifier "License :: OSI Approved :: MIT License", pyproject.toml's
+# `license = "MIT"` SPDX field, and PKG-INFO's `License-Expression: MIT` --
+# and https://git.supported.systems/warehack.ing/mcjtag returns 404 (private
+# or restructured), so the upstream repo's literal LICENSE text could not be
+# cross-checked. Treat "MIT" below as metadata-confirmed, not yet vetted
+# against upstream license text.
+#
+# SAME-PORT WARNING: mcjtag and openocd-mcp both default to OpenOCD's TCL
+# server on localhost:6666. Enabling both plugins at once means two MCP
+# servers racing to spawn/attach to the same OpenOCD TCL port -- whichever
+# connects second either fails or steals the session from the first. This
+# plugin ships with [mcp].enabled = false for that reason; openocd-mcp is
+# the default primary (self-manages its own OpenOCD lifecycle). Enable
+# mcjtag only as a deliberate swap-in, with openocd-mcp disabled.
+
+[plugin]
+name = "mcjtag"
+version = "2026.2.18"
+manifest_version = 1
+category = "hardware-interface"
+description = "JTAG/SWD debug interface via OpenOCD (secondary/alternate to openocd-mcp)"
+license = "MIT"
+homepage = "https://mcjtag.warehack.ing"
+repository = "https://git.supported.systems/warehack.ing/mcjtag"
+authors = ["Ryan Malloy"]
+
+[capabilities]
+jtag = true
+swd = true
+flash_read = true
+flash_write = true
+flash_erase = false
+headless = true
+gui = false
+architectures = ["ARM", "ARM64", "RISC-V"]
+input_formats = ["bin", "hex", "svd"]
+output_formats = ["JSON"]
+
+[paths]
+binary = "/usr/local/bin/mcjtag"
+install_dir = "/opt/limpet/plugins/mcjtag"
+
+[health]
+check = "python3 -c 'import mcjtag' 2>&1 | grep -qv Error"
+interval = "1h"
+timeout = "10s"
+startup_grace = "5s"
+
+[dependencies]
+requires = []
+system_packages = ["openocd"]
+conflicts = ["openocd-mcp"]
+
+[mcp]
+# Secondary plugin: do not flip to true while openocd-mcp is also enabled --
+# both bind OpenOCD's TCL port 6666 by default. See SAME-PORT WARNING above.
+enabled = false
+server = "mcjtag"
+transport = "stdio"
+command = "mcjtag"
+args = []
+env = {}
+
+[mcp.tools_energize]
+# Per-tool energize gate: true = requires energize-confirm before execution.
+# Mirrors limpet-plugin-openocd-mcp's split: anything that mutates target
+# state, memory, flash, or raw OpenOCD TCL is gated even though mcjtag also
+# applies its own conservative defaults (SRAM-only write_memory range,
+# raw_command deny-list) -- Limpet's energize gate is defense in depth, not
+# a substitute for it.
+target_control = true
+write_memory = true
+write_register = true
+flash_program = true
+jtag_shift = true
+raw_command = true
+# These are read-only -- no energize needed
+connect = false
+start_openocd = false
+disconnect = false
+probe_diagnostics = false
+target_state = false
+read_memory = false
+search_memory = false
+read_registers = false
+flash_info = false
+jtag_scan = false
+svd_inspect = false
+
+[agent_hints]
+summary = "JTAG/SWD debug interface over an OpenOCD TCL connection. Secondary to openocd-mcp: use only when openocd-mcp is unavailable or disabled, never alongside it."
+when_to_use = "Use as a drop-in alternate for openocd-mcp when that plugin is disabled, failing health checks, or when its self-managed OpenOCD lifecycle is undesirable (mcjtag can instead attach to an already-running, separately managed OpenOCD instance via OPENOCD_HOST/OPENOCD_PORT)."
+when_not_to_use = "Never enable alongside openocd-mcp -- both default to OpenOCD TCL port 6666 and will race. For SPI flash programming, use flashrom instead."
+complements = ["flashrom", "sigrok", "gdb"]
+superseded_by = ["openocd-mcp"]
+workflow_position = "mid-pipeline"
+
+[resources]
+max_memory = "256M"
+max_instances = 1
+gpu_required = false
+estimated_startup_time = "2s"
