@@ -284,6 +284,25 @@ def validate_entry(data: dict) -> list:
             "(a pinned content address, never a branch or tag)")
     if registry.get("namespace") and safe_name(name):
         errors.extend(namespace_errors(registry["namespace"], name, tier))
+    te = registry.get("tool_energize")
+    if te is not None:
+        # Per-tool energize override (spec §5.4): a [registry.tool_energize]
+        # table of tool-name = true/false that overrides the plugin-wide
+        # needs_energize for individual tools, so a read/scan tool (jtag_scan)
+        # is not gated as heavily as a write tool (flash_write) on the same
+        # plugin. Optional and backward compatible — absent means every tool
+        # inherits needs_energize.
+        if not isinstance(te, dict):
+            errors.append(
+                "[registry.tool_energize] must be a table of "
+                "tool-name = true/false per-tool energize overrides")
+        else:
+            for tool, flag in te.items():
+                if not isinstance(flag, bool):
+                    errors.append(
+                        f"[registry.tool_energize].{tool} must be a boolean "
+                        f"(got {flag!r}) — it overrides the plugin-wide "
+                        "needs_energize for that one tool")
     sig = data.get("signature")
     if sig is not None:
         for field in ("scheme", "pubkey_id", "sig", "tree_hash"):
@@ -307,6 +326,9 @@ def entry_to_record(data: dict) -> dict:
         "tier": registry["tier"],
         "tags": list(registry.get("tags", [])),
         "needs_energize": bool(registry.get("needs_energize", False)),
+        "tool_energize": {
+            str(tool): bool(flag)
+            for tool, flag in (registry.get("tool_energize") or {}).items()},
         "hardware_required": list(registry.get("hardware_required", [])),
         "limpet_compat": registry.get("limpet_compat", ""),
     }

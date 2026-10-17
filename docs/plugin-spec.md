@@ -347,6 +347,26 @@ only step above unprivileged, *and* root stops implying hardware.
 | energize verb not declared | any | n/a | broker refuses outright (no confirm prompt — undeclared is a manifest bug, not an operator decision) |
 | needs-root **and** energize | per privilege row | per privilege row | both gates apply; neither satisfies the other |
 
+**Per-tool energize override (wq#4146).** The registry index entry's
+plugin-wide `[registry].needs_energize` (`limpet/registry_index.py:328`) is a
+single flag over the whole plugin, but ≥5 of the 9 debug/flash candidates
+evaluated in wq#4096 (mcjtag, openocd-mcp, jlink-mcp, embedded-debugger-mcp,
+flashrom) have a clean read-vs-write tool split the one flag cannot express:
+`jtag_scan`/`probe`/`read` only observe the target, while
+`flash_write`/`erase`/`reset` drive it. The schema now carries an optional
+`[registry.tool_energize]` table — `tool-name = true/false` — that overrides
+`needs_energize` for named tools, so a plugin can leave its scan tools
+autonomous while still gating every write verb at the broker
+(`limpet/registry_index.py:287-305` validates it as a string→bool table;
+`:329-331` emits it per record). This is the index-listing mirror of the
+full manifest's `[mcp.tools_energize]` block (see
+`plugins/limpet-plugin-flashrom/limpet-plugin.toml`). It only ever *tightens
+or relaxes within* the energize axis; it cannot waive the per-invocation
+broker confirmation for a tool it marks `true`, and an undeclared tool
+inherits the plugin-wide default (absent table ⇒ every tool follows
+`needs_energize`), preserving backward compatibility with every existing
+entry.
+
 **Reconciliation with §6.2 (wq#3961).** Nothing in §6.2 changes; this
 subsection names and sharpens it: (a) `[capabilities].root` is the privilege
 axis and is now tier-gated, not merely default-deny; (b) §6.2 item 3's

@@ -19,9 +19,9 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import registry_index  # noqa: E402
 from registry_index import (  # noqa: E402
-    add_index, clamp_tier, generate_index, info, load_config, load_records,
-    namespace_errors, remove_index, search, sync_index, validate_entry,
-    write_index,
+    add_index, clamp_tier, entry_to_record, generate_index, info, load_config,
+    load_records, namespace_errors, remove_index, search, sync_index,
+    validate_entry, write_index,
 )
 
 
@@ -270,3 +270,45 @@ def test_duplicate_entry_names_rejected(tmp_path):
 def test_validate_entry_missing_tables():
     assert validate_entry({}) == ["missing [plugin] table"]
     assert validate_entry({"plugin": {}}) == ["missing [registry] table"]
+
+
+# ---- per-tool energize override (spec §5.4, wq#4146) ---------------------
+# Falsifiability: the gated tool (flash_write) and the ungated tool
+# (jtag_scan) are BOTH on a plugin whose plugin-wide needs_energize is False,
+# so the record carrying tool_energize["flash_write"] == True is the only
+# way the per-tool override reaches the index -- a schema that still only
+# emitted the plugin-wide flag would drop it and fail this assertion.
+GOOD_ENTRY_ENERGIZE = GOOD_ENTRY.replace(
+    'tags = ["bluetooth", "ble"]',
+    'tags = ["jtag"]\nneeds_energize = false\n\n'
+    '[registry.tool_energize]\njtag_scan = false\nflash_write = true')
+
+
+def test_tool_energize_override_reaches_record(tmp_path):
+    entries = str(tmp_path / "entries")
+    write_entry(entries, "ubertooth.toml", GOOD_ENTRY_ENERGIZE)
+    records, errors = generate_index(entries)
+    assert errors == {}
+    [rec] = records
+    assert rec["needs_energize"] is False          # plugin-wide default
+    assert rec["tool_energize"] == {               # per-tool overrides win
+        "jtag_scan": False, "flash_write": True}
+
+
+def test_tool_energize_defaults_empty_when_absent():
+    rec = entry_to_record({
+        "plugin": {"name": "x", "version": "1", "category": "c",
+                   "description": "d", "license": "MIT"},
+        "registry": {"namespace": "io.github.u.x", "git": "g",
+                     "rev": "a" * 40, "tier": "community"}})
+    assert rec["tool_energize"] == {}
+
+
+def test_tool_energize_rejects_non_boolean():
+    errors = validate_entry({
+        "plugin": {"name": "x", "version": "1", "category": "c",
+                   "description": "d", "license": "MIT"},
+        "registry": {"namespace": "io.github.u.x", "git": "g",
+                     "rev": "a" * 40, "tier": "community",
+                     "tool_energize": {"flash_write": "yes"}}})
+    assert any("tool_energize" in e and "boolean" in e for e in errors)
