@@ -61,7 +61,7 @@ relevance to Limpet is **orchestration and plugin distribution**, not RE depth.
   intent; they are ahead in maturity (SSO/multi-tenant).
 
 ### (2) REA — morluto / npm `rea-agents` (verified: installed, `mcp__rea__*` live)
-~170 tools (skill v37; another source says 78, re-verify per §6), investigation model, evidence tracking, CLI + npm, Ghidra provider
+**tens of tools (42-78, version-dependent), not ~170** — the ~170 figure was a skill count (competitor deep dive 2026-10-16 §6; resolves the wq#3963 re-verify item; the range is the deep dive's, not re-counted here: npm `rea-agents` is at 6.5.0 as of 2026-10-14 and its README states no count), investigation model, evidence tracking, CLI + npm, Ghidra provider
 (Hopper/IDA optional). This is the **closest peer to Limpet's software-tool plane** and is
 already on the fleet (`TOOL_REGISTRY.md:33-56`). Live search (`.../limpet_live_search_2026-10-14.md`
 A0) adds two boundary facts: REA is **macOS-centric** (Homebrew/Hopper, "check your Mac") and
@@ -159,6 +159,8 @@ ceiling as an opt-in route. The capability-tier mechanism itself is implemented 
 other configured model) through the eventual settings store, not a hard-coded default.
 
 ### (6) Kali Linux — tool distribution + brand *(partly described)*
+
+*Currency (2026-10-16):* the latest release is **Kali 2026.2** (2026-06-29, kernel 6.19; official release history page, last modified 2026-06-29). **2026.3 is not shipped as of that page** — a gbhackers "Kali 2026.3 released" article is a mangled reprint of an old post (it lists tools from an unrelated older release); do not cite it. `MetasploitMCP` shipped in 2026.1 (verified). Per the deep dive (not re-verified): Kali's RE lane is deliberately shallow and `hexstrike-ai` marks its own agent-security pivot.
 Kali is the brand baseline operators compare any security appliance to. Two lenses:
 
 - **Tools they ship that Limpet doesn't (as `core`):** the Limpet `core` seed is firmware/RE
@@ -235,8 +237,10 @@ an index beside the evidence, not a rewrite of the tool plane).
   console**. Two consequences: its **firmware diffing overlaps Limpet's wq#3906 diff work**
   (align, do not duplicate — see §1.10 note below), and **EMBArk is verified prior art for the
   live-operator-console gap (G5)** now that VRAX is downgraded.
+  - **Currency (2026-10-16):** latest EMBA release is **v2.0.4-summer_edition** (2026-09-21, GitHub API); the deep dive recorded v2.0.3, now superseded. EMBArk (`e-m-b-a/embark`) last pushed 2026-07-31. The deep dive's ~87% emulation-success figure is not re-verified here.
 - **FACT (`fkie-cad/FACT_core`):** automates firmware analysis with browsable/searchable/
   **comparable** results, web UI + REST API/SwaggerUI, plugin analyses.
+  - **Currency (2026-10-16):** actively maintained (`fkie-cad/FACT_core` last pushed 2026-10-15, not archived; GitHub API). Per the deep dive, not re-verified here: the docker path is unmaintained, analysis is static-only, and 16 cores / 64 GB are recommended.
 - **OFRAK (`redballoonsecurity/ofrak`):** unpack → analyze → **modify & repack** with
   patching strategies; a programmable platform (Python), not just a report.
 
@@ -255,6 +259,8 @@ How they compare and integrate with Limpet:
   to carry (`design/wq3806_limpet_architecture.md:227-229`).
 
 ### (11) AttifyOS — pre-configured IoT / hardware-RE Linux distro (verified live, wq#3994)
+
+**Staleness flag (2026-10-16):** the public `adi0x90/attifyos` repo was last pushed **2021-08-26** (GitHub API). The deep dive reports the current release as 4.0 on Ubuntu 22.04 (an EOL-track base) with a toolset frozen at 2022 build dates and effectively unmaintained (6 commits, no releases); those specifics are the deep dive's and were not re-verified here. Treat AttifyOS as occupying the hardware-RE-distro lane in name, not in maintenance.
 
 AttifyOS (Attify, Inc., commercial) is a pre-configured IoT/hardware-RE Linux distribution
 bundling firmware extraction + hardware interfaces (UART/JTAG/SPI/I2C) + SDR, built on the
