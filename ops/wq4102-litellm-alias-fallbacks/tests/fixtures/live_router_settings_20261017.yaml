@@ -1,0 +1,52 @@
+model_list:
+- model_name: lumen-lfm2-1b
+  litellm_params:
+    model: openai/lfm2-1b
+- model_name: deepseek-v4-pro
+  litellm_params:
+    model: deepseek/deepseek-v4-pro
+- model_name: lumen-vision
+  litellm_params:
+    model: ollama/vision
+  model_info:
+    supports_vision: true
+- model_name: lumen/judge
+  litellm_params:
+    model: ollama/hathor-judge
+router_settings:
+  retry_policy:
+    BadRequestErrorRetries: 0
+    AuthenticationErrorRetries: 0
+  routing_strategy: least-busy
+  num_retries: 3
+  retry_after: 2
+  allowed_fails: 2
+  model_group_alias:
+    lumen/fast: lumen-lfm2-1b
+    lumen/best: deepseek-v4-pro
+    lumen/vision: lumen-vision
+  fallbacks:
+  - lumen-lfm2-1b:
+    - cerebras-llama
+  - deepseek-v4-flash:
+    - openrouter-free
+  - deepseek-chat:
+    - openrouter-free
+  - gpt-3.5-turbo:
+    - openrouter-free
+  - messenger-chat:
+    - openrouter-free
+  - deepseek-v4-pro:
+    - openrouter-deepseek-pro
+  - messenger-re:
+    - openrouter-deepseek-pro
+  - lumen/judge:
+    - lumen-local-judge
+  enable_pre_call_checks: true
+  context_window_fallbacks:
+  - lumen-lfm2-1b:
+    - deepseek-v4-flash
+litellm_settings:
+  request_timeout: 240
+  drop_params: true
+  set_verbose: false
