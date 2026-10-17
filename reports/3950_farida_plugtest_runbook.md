@@ -139,3 +139,34 @@ categories, `ops/wq3809-limpet-hal/hal.py:171-269`) and the missing notify daemo
 wq#3950 stays blocked rather than false-completed: the ticket's deliverable is the
 physical confirmation itself, which still has not happened. The remaining work is
 entirely the physical act tracked at wq#4120.
+
+## Attempt 4 re-verification (2026-10-17)
+
+Re-ran both suites against current `main` (28 commits landed since attempt 3's
+`cde8f9cb`): still `11 passed` (`limpet/hardware.d/test_build_iso_drivers.py`) and
+`17 passed` (`ops/wq3809-limpet-hal/tests/test_hal.py`). SSH to Farida is still absent
+from the worker allowlist and wq#4120 is still `frank_gated`/unclaimed — the physical
+blocker itself is unchanged.
+
+One catalog fact did change in that window: wq#4155 (commit `9be5caec`) replaced the
+multiprotocol category's "Bus Pirate 6" placeholder (previously `usb_ids = []`,
+`confidence = "unverified"`, empty `udev_rule`) with a confirmed VID:PID and a real
+rule (`limpet/hardware.d/03-multiprotocol-tools.toml:43,51-54`). No other commit in
+that window touched `limpet/hardware.d/*.toml` or `ops/wq3809-limpet-hal/hal.py`'s
+`REGISTRY` (`wq#4154` hackrf-mcp and `wq#4143` openocd-mcp/jtagprobe both added
+plugin-local files only) — the plugin-coverage matrix above and the missing-notify-daemon
+gap are both still accurate as written.
+
+That catalog change surfaced a second, smaller finding: `limpet-plugin-buspirate-mcp`
+ships its own udev rule (`plugins/limpet-plugin-buspirate-mcp/assets/90-limpet-buspirate-mcp.rules`,
+installed to `/etc/udev/rules.d/90-limpet-buspirate-mcp.rules` by its `install.sh:49`)
+for the same `1209:7331` device the catalog now also emits into the consolidated
+`90-limpet-hardware.rules`. The two rule bodies aren't identical: the plugin's copy adds
+`TAG+="limpet-multiprotocol"` that the catalog-generated rule lacks. Both files can
+coexist in `/etc/udev/rules.d/` (different filenames, same `MODE`/`GROUP`, so permissions
+don't conflict), but anything gated on the `limpet-multiprotocol` tag only fires if the
+plugin's own rules file is also installed — physically installing only the ISO
+bundle's `90-limpet-hardware.rules` (step 2 above) is not equivalent to also running
+the plugin's `install.sh`. Whoever runs the physical step for the multiprotocol category
+should install both, not assume the consolidated bundle alone covers a plugin-shipped
+device.
