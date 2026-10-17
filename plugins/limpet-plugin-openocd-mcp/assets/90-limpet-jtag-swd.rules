@@ -1,0 +1,18 @@
+# Limpet JTAG/SWD probe udev rules — grant plugdev access to common probes
+# Installed by limpet-plugin-openocd-mcp
+
+# ST-Link/V2
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="3748", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="374b", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"
+
+# SEGGER J-Link
+SUBSYSTEM=="usb", ATTR{idVendor}=="1366", ATTR{idProduct}=="0101", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"
+
+# Black Magic Probe
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6018", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"
+
+# FTDI FT2232H (Tigard, generic OpenOCD adapters)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"
+
+# CMSIS-DAP (generic)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0d28", ATTR{idProduct}=="0204", MODE="0666", GROUP="plugdev", TAG+="limpet-probe"

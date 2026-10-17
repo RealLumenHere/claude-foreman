@@ -1,0 +1,80 @@
+# limpet-plugin-openocd-mcp — Primary JTAG/SWD debug probe plugin
+# wq#4137 — wraps microhenrio/openocd-mcp (MIT, PyPI v0.4.0)
+# Evaluation: docs/mcp-server-evaluations.md Section 2
+
+[plugin]
+name = "openocd-mcp"
+version = "0.4.0"
+manifest_version = 1
+category = "hardware-interface"
+description = "JTAG/SWD debug interface via OpenOCD with self-managed lifecycle"
+license = "MIT"
+homepage = "https://github.com/microhenrio/openocd-mcp"
+repository = "https://github.com/microhenrio/openocd-mcp"
+authors = ["microhenrio"]
+
+[capabilities]
+jtag = true
+swd = true
+flash_read = true
+flash_write = true
+flash_erase = true
+headless = true
+gui = false
+architectures = ["ARM", "ARM64", "RISC-V", "MIPS", "x86"]
+input_formats = ["ELF", "bin", "hex", "srec"]
+output_formats = ["bin", "hex", "JSON"]
+
+[paths]
+binary = "/usr/local/bin/openocd-mcp"
+install_dir = "/opt/limpet/plugins/openocd-mcp"
+
+[health]
+check = "openocd-mcp --help 2>&1 | grep -q 'openocd-mcp'"
+interval = "1h"
+timeout = "10s"
+startup_grace = "5s"
+
+[dependencies]
+requires = []
+system_packages = ["openocd"]
+conflicts = []
+
+[mcp]
+enabled = true
+server = "openocd-mcp"
+transport = "stdio"
+command = "openocd-mcp"
+args = []
+env = {}
+
+[mcp.tools_energize]
+# Per-tool energize gate: true = requires energize-confirm before execution
+# Read-only tools are ungated; write/flash/halt tools are gated.
+flash_write = true
+flash_erase = true
+halt = true
+reset = true
+step = true
+register_write = true
+memory_write = true
+# These are read-only — no energize needed
+flash_read = false
+jtag_scan = false
+identify_chip = false
+register_read = false
+memory_read = false
+
+[agent_hints]
+summary = "JTAG/SWD debug interface with self-managed OpenOCD lifecycle. Connects to microcontrollers and SoCs via debug probes for flash read/write, memory inspection, and halt/step debugging."
+when_to_use = "Use when a JTAG/SWD debug probe (ST-Link, J-Link, FTDI, Black Magic Probe) is detected by the HAL. Preferred over mcjtag because it manages the OpenOCD process automatically."
+when_not_to_use = "For SPI flash programming (use flashrom instead). For USB bootloader modes like EDL/MaskROM/DFU (use the appropriate vendor tool)."
+complements = ["flashrom", "sigrok", "gdb"]
+supersedes = ["mcjtag"]
+workflow_position = "mid-pipeline"
+
+[resources]
+max_memory = "512M"
+max_instances = 1
+gpu_required = false
+estimated_startup_time = "3s"
