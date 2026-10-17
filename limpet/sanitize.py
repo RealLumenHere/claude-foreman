@@ -20,11 +20,15 @@ EVIDENCE_LOG_RELPATH`` -- both pre-existing, not invented here):
                                 uses at ``evidence/strings/hits.txt``).
   evidence/tool-calls.jsonl    the meta-server's per-call evidence log
                                 (``workspace_console.EVIDENCE_LOG_RELPATH``); only its
-                                ``coverage``/``summary`` fields are scanned, because
-                                those are the "one free-text field a child tool
-                                controls" (``workspace_console.py:18-20``) -- the rest
-                                of a block (``tool``, ``ts``, ``ok``, ``evidence_id``)
-                                is meta-server-authored, not target-derived.
+                                ``coverage``/``error`` fields are scanned, because
+                                those are the free-text fields a child tool or child
+                                process can influence -- ``error`` is set from
+                                ``str(exc)`` on a ``CliToolError``/``ChildServerError``,
+                                which for the latter embeds the child's raw stderr
+                                (``stdio_mcp_client.py``'s ``_stderr_text()``) -- the
+                                rest of a block (``tool``, ``ts``, ``ok``,
+                                ``evidence_id``) is meta-server-authored, not
+                                target-derived.
 
 Findings (``evidence/findings/*.json``) are deliberately **not** scanned: those are
 the analyst's own committed conclusions, not raw target output, and redacting them
@@ -62,7 +66,7 @@ import injection
 QUARANTINE_RELPATH = os.path.join("quarantine", "redactions.jsonl")
 RE_EXPORTS_SUBDIR = os.path.join("evidence", "re-exports")
 TOOL_CALLS_RELPATH = os.path.join("evidence", "tool-calls.jsonl")
-_SCANNED_LOG_FIELDS = ("coverage", "summary")
+_SCANNED_LOG_FIELDS = ("coverage", "error")
 
 
 class SanitizeError(Exception):
