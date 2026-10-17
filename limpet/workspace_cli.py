@@ -13,6 +13,8 @@ template search at a tmp dir (a falsifiable boundary, outside the real /etc).
   limpet-workspace obligations verify <ws>                     exit 3 while any is open
   limpet-workspace critic review <ws> <finding.json> --verdict ... --rationale ...
                                                                  wq#3966 critic/adjudicate step
+  limpet-workspace sanitize <ws> [--dirs evidence,notes]       wq#4091 prompt-injection
+                                                                 quarantine gate on tool output
   limpet-workspace [--json] console <ws> [--follow]            wq#3971 read-only live
                                                                  tail of the per-call evidence log
 
@@ -24,7 +26,10 @@ Exit 0 on success, 1 on usage/not-found, 2 on a report/template/ledger error, ma
 ``limpet/cli.py`` so scripts can branch on the code; ``obligations verify`` exits 3
 when done is refused because an obligation is still open; ``critic review`` exits 2
 when the deterministic gate rejects the finding, 3 when the critic contests it (a
-ledger obligation was opened and needs resolving), 0 when accepted.
+ledger obligation was opened and needs resolving), 0 when accepted; ``sanitize``
+exits 1 when it scrubbed at least one hit (REx@Skill's own convention, dissection
+``design/wq3999_rex_skill_dissection.md`` §3 -- redactions were still applied, but a
+pipeline should know a quarantine happened), 0 when the workspace was already clean.
 """
 from __future__ import annotations
 
@@ -35,6 +40,7 @@ import sys
 
 import critic as critic_pass
 import obligations as ob_ledger
+import sanitize as sanitize_pass
 import workspace_console as wcon
 import workspace_index as wi
 import workspace_report as wr
@@ -240,6 +246,23 @@ def _cmd_critic_review(args):
             critic_pass.VERDICT_CONTESTED: 3}[result["verdict"]]
 
 
+def _cmd_sanitize(args):
+    workspace = os.path.abspath(args.workspace)
+    if not os.path.isdir(workspace):
+        _emit({"ok": False, "error": f"no such workspace: {workspace}"}, args.json)
+        print(f"error: no such workspace: {workspace}", file=sys.stderr)
+        return 1
+    dirs = tuple(d.strip() for d in args.dirs.split(",") if d.strip())
+    report = sanitize_pass.sanitize_workspace(workspace, dirs=dirs or sanitize_pass.AGENT_READABLE_DIRS)
+    _emit({"ok": True, **report}, args.json)
+    if not args.json:
+        if report["scrubbed"]:
+            for item in report["scrubbed"]:
+                print(f"SCRUBBED\t{item['path']}\t{item['hits']} hit(s)")
+        print(f"files_scanned={report['files_scanned']} hit_count={report['hit_count']}")
+    return 1 if report["hit_count"] else 0
+
+
 def _cmd_console(args):
     workspace = os.path.abspath(args.workspace)
     if not os.path.isdir(workspace):
@@ -426,6 +449,12 @@ def build_parser():
     cr.add_argument("--by", default="critic")
     cr.add_argument("--no-commit", action="store_true", help="write a contested obligation without a git commit")
     cr.set_defaults(func=_cmd_critic_review)
+
+    sz = sub.add_parser("sanitize", help="wq#4091 prompt-injection quarantine gate on tool output")
+    sz.add_argument("workspace")
+    sz.add_argument("--dirs", default=",".join(sanitize_pass.AGENT_READABLE_DIRS),
+                    help="comma-separated workspace-relative dirs to sanitize")
+    sz.set_defaults(func=_cmd_sanitize)
 
     return p
 
