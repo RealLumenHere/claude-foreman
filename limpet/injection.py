@@ -124,3 +124,80 @@ def classify(text: str) -> str | None:
 def is_injection(text: str) -> bool:
     """True iff ``text`` matches a known model-directed-injection shape."""
     return classify(text) is not None
+
+
+# --- wq#4130: invisible-char normalization for evasion-resistant classification ---
+# Lifted from binary_scrub._classification_variants (wq#4127) so both sanitize.py
+# and binary_scrub.py classify through one path.  The set of "invisible" chars is
+# the same _BIDI_AND_ZEROWIDTH + tag-block + Cf/Cs/Co/Cn that binary_scrub escapes;
+# keeping it here means the classifier and the scrubber can never drift apart.
+
+import unicodedata as _unicodedata
+
+_INVISIBLE_CODEPOINTS = {
+    0x200B, 0x200C, 0x200D, 0x200E, 0x200F,            # ZWSP / ZWNJ / ZWJ / LRM / RLM
+    0x202A, 0x202B, 0x202C, 0x202D, 0x202E,            # bidi overrides
+    0x2060, 0x2061, 0x2062, 0x2063, 0x2064,            # word-joiner / invisible operators
+    0x2066, 0x2067, 0x2068, 0x2069,                    # bidi isolates
+    0xFEFF,                                            # BOM / ZWNBSP
+    0x00AD,                                            # soft hyphen
+    0xFFF9, 0xFFFA, 0xFFFB,                            # interlinear annotation anchors
+}
+
+
+def _is_invisible(ch: str) -> bool:
+    """True iff ch renders invisibly and could splice through a classifier pattern.
+    Mirrors binary_scrub._is_classification_noise so the two never disagree."""
+    cp = ord(ch)
+    if cp in _INVISIBLE_CODEPOINTS:
+        return True
+    if 0xE0000 <= cp <= 0xE007F:       # Unicode tag block
+        return True
+    if 0x2028 <= cp <= 0x2029:         # LINE / PARAGRAPH SEPARATOR
+        return True
+    if cp < 0x20 and ch not in ("\t", "\n", "\r"):  # C0 controls (minus tab/nl/cr)
+        return True
+    if cp == 0x7F or 0x80 <= cp <= 0x9F:  # DEL, C1
+        return True
+    if _unicodedata.category(ch) in ("Cf", "Cs", "Co", "Cn"):
+        return True
+    return False
+
+
+def _classification_variants(text: str) -> list[str]:
+    """Readings of text with invisible chars removed/replaced, for evasion-resistant
+    classification.  Returns [] when there is nothing invisible."""
+    deleted = []
+    spaced = []
+    found = False
+    for ch in text:
+        if _is_invisible(ch):
+            found = True
+            spaced.append(" ")
+            continue
+        deleted.append(ch)
+        spaced.append(ch)
+    if not found:
+        return []
+    return ["".join(deleted), "".join(spaced)]
+
+
+def classify_normalized(text: str) -> str | None:
+    """Like classify(), but also checks normalized (invisible-chars-removed)
+    readings so an attacker cannot splice U+200B through a known phrase to
+    evade the classifier.  This is the function both sanitize.py and
+    binary_scrub.py should call."""
+    raw = classify(text)
+    if raw is not None:
+        return raw
+    for variant in _classification_variants(text):
+        hit = classify(variant)
+        if hit is not None:
+            return hit
+    return None
+
+
+def is_injection_normalized(text: str) -> bool:
+    """True iff text matches a known injection shape, including after
+    invisible-char normalization."""
+    return classify_normalized(text) is not None

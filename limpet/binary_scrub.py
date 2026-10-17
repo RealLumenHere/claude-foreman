@@ -129,12 +129,11 @@ def _classification_variants(text: str) -> list[str]:
 def _is_injection_normalized(text: str) -> bool:
     """``injection.is_injection`` against the text as perceived, not as encoded.
 
-    Keeps ``injection.py`` the single source of truth for *what counts as* an injection;
-    this only decides *what string* that source of truth is shown.
+    wq#4130: delegates to ``injection.is_injection_normalized`` which now owns the
+    invisible-char normalization logic (lifted from the original local implementation
+    so sanitize.py gets the same defense).
     """
-    if injection.is_injection(text):
-        return True
-    return any(injection.is_injection(v) for v in _classification_variants(text))
+    return injection.is_injection_normalized(text)
 
 
 @dataclass

@@ -84,7 +84,7 @@ def _sanitize_tree(obj, artifact: str, locator: str, entries: list):
     recursion shape so the two defenses read as one system.
     """
     if isinstance(obj, str):
-        layer = injection.classify(obj)
+        layer = injection.classify_normalized(obj)
         if layer is None:
             return obj
         entries.append(_quarantine_entry(artifact, locator, layer, obj))
@@ -134,7 +134,7 @@ def _sanitize_txt_file(path: str, artifact: str, entries: list) -> bool:
     out = []
     for i, line in enumerate(lines):
         stripped = line[:-1] if line.endswith("\n") else line
-        layer = injection.classify(stripped)
+        layer = injection.classify_normalized(stripped)
         if layer is None:
             out.append(line)
             continue
@@ -173,7 +173,7 @@ def _sanitize_tool_calls_log(path: str, artifact: str, entries: list) -> bool:
             val = block.get(field)
             if not isinstance(val, str):
                 continue
-            layer = injection.classify(val)
+            layer = injection.classify_normalized(val)
             if layer is None:
                 continue
             entries.append(_quarantine_entry(artifact, f"L{i + 1}.{field}", layer, val))
