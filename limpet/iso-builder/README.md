@@ -118,14 +118,42 @@ blocking on one that doesn't:
   against `SHA256SUMS`, so a 404/short-read mid-release-window can't produce
   a false "complete" marker the way an earlier ad hoc fetch did.
 - **Only builds DKMS modules that are pinned.** See "Driver bundle hook" below;
-  today the catalog's one DKMS module needs no build (in-kernel driver).
-- **Has not been run end to end as root against the real ISO.**
-  `test_layered_remaster.py` runs the real stage1 -> 1b -> 6 -> 11 path
-  (real mksquashfs/unsquashfs/xorriso/dpkg-query) on a small synthetic
-  three-layer ISO built from the real 26.04 `install-sources.yaml`/`grub.cfg`
-  (`fixtures/xubuntu-26.04/`). Only mount/umount/mountpoint/chroot are faked,
-  because they need root. Boot-record replay on the real ISO is covered by
-  scratch/limpet-iso/test_remaster.sh (wq#4077 evidence).
+  as of wq#4093's catalog fix, the catalog has zero `dkms = true` devices (every
+  cataloged device is in-kernel), so there is currently nothing for this branch to build.
+- **stage1 -> 1b -> 7 (driver hook) has now been run end to end as root against
+  the real ISO (wq#4093).** `./build.sh stage1_fetch_base_iso`, then
+  `stage1b_assemble_chroot`, then `LIMPET_DRIVER_HOOK_RUN=1 ./build.sh
+  stage7_bundle_driver_bundle`, run as root on this host (`lumen`) against the
+  pinned `xubuntu-26.04-desktop-amd64.iso`: extract succeeded, the
+  `minimal.standard` overlay mounted cleanly, the in-chroot installer ran
+  `apt-get install` for real (network + DNS resolution through the bind-mounted
+  resolver worked), `90-limpet-hardware.rules` landed in
+  `etc/udev/rules.d/`, and `driver_hook.py verify-installed` reported
+  `{"rules": true, "hardware_d": 12, "plan": "7.0.0-14-generic", "ok": true}`.
+  `linux-firmware` was already present on the base image (metapackage, pulling
+  in `linux-firmware-realtek`, which carries `rtw88/rtw8822b_fw.bin.zst` --
+  confirming the wq#4093 catalog fix below); `sigrok-firmware-fx2lafw` was a
+  fresh install. All chroot mounts (overlay, proc, sys, dev, dev/pts, run,
+  the lower squashfs loop mount) were unmounted afterward with no mounts left
+  under `.build`. **Still untested:** the DKMS build branch in
+  `chroot_script()` (`git clone`/`dkms add`/`dkms install`) -- the catalog now
+  has zero `dkms = true` devices, so nothing exercises it. `test_layered_remaster.py`
+  covers stage1 -> 1b -> 6 -> 11 (mksquashfs/unsquashfs/xorriso/dpkg-query) on a
+  small synthetic three-layer ISO (`fixtures/xubuntu-26.04/`), with only
+  mount/umount/mountpoint/chroot faked; boot-record replay on the real ISO is
+  covered by scratch/limpet-iso/test_remaster.sh (wq#4077 evidence).
+- **Base image: still 26.04, not 26.04.1 (wq#4093 decision).** Whether a
+  26.04.1 point release exists and should replace the pinned 26.04 base was in
+  scope for wq#4093, but every outbound search engine (SearXNG's brave/
+  duckduckgo/google-cse/startpage backends) was down for this run ("too many
+  requests"/CAPTCHA, no `BRAVE_API_KEY` fallback -- wq#2595), so there was no
+  verified way to confirm a 26.04.1 release exists, let alone fetch its ISO
+  and published sha256. Guessing a version/checksum is exactly what `stage1`
+  refuses to do (see above), so the pin stays on 26.04 (`kernel.pin`,
+  `BASE_ISO_RELEASE=26.04 (20260423.1)`) rather than swapping blind. Re-run
+  this decision once search is reachable again or a checksum-verified
+  26.04.1 ISO is supplied directly -- note `kernel.pin`'s own warning that a
+  base swap means re-verifying every in-kernel claim in `dkms-sources.pin`.
 
 ## Driver bundle hook (wq#3980)
 
@@ -140,16 +168,29 @@ blocking on one that doesn't:
   with a reason. A catalog `dkms=true` entry with no line makes the hook exit 4.
   `rtl8812bu` is `skip`ped: the in-kernel `rtw88_8822bu` claims `0bda:b812` (verified from
   the `.ko` in the pinned ABI's modules deb and on the running 7.0.0-38 kernel); the
-  catalog's `dkms_source` URL is a 404.
+  catalog's `dkms_source` URL is a 404. **wq#4093**: the catalog entry itself (
+  `limpet/hardware.d/10-network-adapters.toml`) was corrected to match this pin --
+  `dkms = false`, `firmware_package = "linux-firmware"` (the chip's firmware is
+  `rtw88/rtw8822b_fw.bin`, shipped by `linux-firmware`, not by the dead DKMS fork). The
+  catalog previously still said `dkms = true` with the dead URL, so `dkms_targets()` kept
+  emitting it as a (skipped) build target and its firmware was mis-classified as
+  `bundled:` (i.e. "provided by the DKMS build step") -- a step that was never actually
+  running. The catalog is now the only source of truth and matches the pin: zero
+  `dkms = true` devices anywhere in `limpet/hardware.d/*.toml`.
 - Firmware refs are classified: plain names -> apt in the chroot; `bundled:` -> provided by
   another component; `proprietary:` (Xilinx EULA firmware) -> never bundled, sideload only.
 - Exit 3 if the chroot already carries a kernel other than the pin.
 - `LIMPET_DRIVER_HOOK_RUN=1` runs the generated in-chroot installer (root + network).
-  **Untested path:** it has not been run against a real chroot, and no pinned DKMS module
-  exists to exercise the build branch (only script generation + `bash -n` are tested).
+  **wq#4093: run for real** -- see "What this script does NOT do" above for the full
+  stage1->1b->7 run and its results. Apt-firmware branch confirmed working; DKMS build
+  branch still untested (no catalog entry currently needs it).
 - Wizard Phase 4 can call `driver_hook.py verify-installed` (JSON, exit 5 on failure).
-  Open naming conflict: install-wizard-spec says `90-limpet.rules`; the generator ships
-  `90-limpet-hardware.rules`.
+  **wq#4093 -- udev naming conflict resolved**: the ticket that raised this
+  (install-wizard-spec "says" `90-limpet.rules`) cites the same nonexistent spec file as
+  the "ticket cites a spec file that does not exist" section above -- repo-wide grep finds
+  `90-limpet.rules` nowhere except this note itself. `90-limpet-hardware.rules` is the only
+  name with any real implementation (generated by `build_iso_drivers.py`, written by
+  `driver_hook.py install`, asserted by both test suites) and stays canonical.
 
 ## Tests
 

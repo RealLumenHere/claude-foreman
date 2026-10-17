@@ -1,10 +1,11 @@
 # Limpet hardware driver catalog — category: network adapters (wq#3924)
-# See 01-flash-programmers.toml header for provenance/confidence notes. This is the
-# category with the clearest in-kernel/DKMS split: the two most common RE-rig NICs
-# (ASIX, Realtek 2.5G/1G) are in-kernel; the two most common RE-rig WiFi chips
-# (RTL8812BU, MT7921U) are NOT, and are exactly why the build script
-# (build_iso_drivers.py) exists — they need pre-compiled DKMS modules baked into
-# the ISO, since a fresh install has no network to `apt install` them with.
+# See 01-flash-programmers.toml header for provenance/confidence notes.
+# wq#4093: all four devices here are in-kernel (no DKMS build). RTL8812BU was
+# originally cataloged as needing an out-of-tree DKMS fork, but that
+# dkms_source URL is dead and the in-kernel rtw88_8822bu already covers this
+# chip (0bda:b812) on the pinned kernel ABI -- see that device's entry and
+# driver_hook/dkms-sources.pin. MT7921U is in-kernel too (mt76 family); only
+# its firmware blob needs bundling via linux-firmware, same as RTL8812BU's.
 
 [[device]]
 name = "ASIX AX88179 (USB3 Gigabit Ethernet)"
@@ -40,16 +41,16 @@ confidence = "high"
 name = "Realtek RTL8812BU (USB WiFi, 802.11ac dual-band)"
 category = "usb-target"
 usb_ids = ["0bda:b812"]
-linux_driver = "rtl8812bu (out-of-tree, DKMS)"
-in_kernel_since = "never mainlined — Realtek's vendor driver for this chip has no in-tree equivalent; the actively-maintained community fork is the only practical option"
+linux_driver = "rtw88_8822bu"
+in_kernel_since = "wq#4093: the dkms_source below (github.com/morrownr/8812bu-20210629) returns 'Repository not found' -- that is the AU chip's repo, not this one. In-kernel rtw88_8822bu claims usb:v0BDApB812 (verified from the .ko in linux-modules-7.0.0-14-generic in the pinned ISO pool, and on the running 7.0.0-38 kernel). No DKMS build is needed; see driver_hook/dkms-sources.pin's skip entry."
 firmware_blob = true
-firmware_package = "bundled:rtl8812bu-dkms"
-firmware_note = "Not from linux-firmware — firmware blobs are bundled inside the driver source tree itself and installed to /lib/firmware/rtlwifi/ by its own build/install step."
-dkms = true
-dkms_source = "https://github.com/morrownr/8812bu-20210629 (actively maintained community fork of Realtek's vendor driver; morrownr's repos are the de facto standard reference for this chip family)"
-dkms_build_estimate_minutes = 3
+firmware_package = "linux-firmware"
+firmware_note = "rtw88 ships this chip's firmware (rtw88/rtw8822b_fw.bin family) via linux-firmware, not via a DKMS build/install step."
+dkms = false
+dkms_source = ""
+dkms_build_estimate_minutes = 0
 udev_rule = ""
-proprietary_notes = "The driver itself is Realtek vendor code (GPLv2-declared but low code quality, periodically breaks on new kernel ABI until the fork catches up) wrapped for DKMS by the community; not a clean-room implementation. Must be pre-built per target kernel ABI in the ISO build (no network available during install to let DKMS build it live)."
+proprietary_notes = "Driver is in-kernel and open (rtw88_8822bu); the firmware blob is closed binary-only Realtek microcode, which is why it needs linux-firmware bundled rather than compiled. Catalog previously (incorrectly) pointed at an out-of-tree DKMS fork with a dead repo URL; if out-of-tree is ever wanted again, the candidate upstream is github.com/morrownr/88x2bu-20210702 (unvetted)."
 confidence = "high"
 
 [[device]]
