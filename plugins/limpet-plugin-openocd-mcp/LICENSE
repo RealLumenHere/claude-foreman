@@ -1,6 +1,8 @@
 MIT License
 
 Copyright (c) 2026 microhenrio (upstream openocd-mcp)
+Copyright (c) 2025 iothackbot contributors (classify_access algorithm,
+  ported from BrownFineSecurity/iothackbot tools/iothackbot/core/jtagprobe_core.py)
 Copyright (c) 2026 Lumen Industries (plugin packaging)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

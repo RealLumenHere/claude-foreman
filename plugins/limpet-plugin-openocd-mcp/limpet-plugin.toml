@@ -1,6 +1,16 @@
 # limpet-plugin-openocd-mcp — Primary JTAG/SWD debug probe plugin
 # wq#4137 — wraps microhenrio/openocd-mcp (MIT, PyPI v0.4.0)
 # Evaluation: docs/mcp-server-evaluations.md Section 2
+#
+# wq#4143 — classify_access is served out-of-band by mcp/classify_access.py,
+# NOT by the wrapped microhenrio/openocd-mcp binary (a sealed third-party
+# package we can't add tools to). It attaches read-only to the same OpenOCD
+# Tcl RPC port openocd-mcp already manages (the same same-port pattern
+# mcjtag's manifest documents) and runs the classification before any
+# energize-gated tool below is invoked. Algorithm ported from
+# BrownFineSecurity/iothackbot's tools/iothackbot/core/jtagprobe_core.py
+# (MIT License) — see mcp/classify_access.py's docstring for the full
+# provenance note.
 
 [plugin]
 name = "openocd-mcp"
@@ -64,9 +74,12 @@ jtag_scan = false
 identify_chip = false
 register_read = false
 memory_read = false
+# Pre-energize OPEN/LOCKED/DEAD classifier (wq#4143) — read-only recon,
+# run before an operator decides whether to energize anything above.
+classify_access = false
 
 [agent_hints]
-summary = "JTAG/SWD debug interface with self-managed OpenOCD lifecycle. Connects to microcontrollers and SoCs via debug probes for flash read/write, memory inspection, and halt/step debugging."
+summary = "JTAG/SWD debug interface with self-managed OpenOCD lifecycle. Connects to microcontrollers and SoCs via debug probes for flash read/write, memory inspection, and halt/step debugging. Run classify_access first to learn whether the target's debug access is OPEN, LOCKED, or DEAD before energizing anything destructive."
 when_to_use = "Use when a JTAG/SWD debug probe (ST-Link, J-Link, FTDI, Black Magic Probe) is detected by the HAL. Preferred over mcjtag because it manages the OpenOCD process automatically."
 when_not_to_use = "For SPI flash programming (use flashrom instead). For USB bootloader modes like EDL/MaskROM/DFU (use the appropriate vendor tool)."
 complements = ["flashrom", "sigrok", "gdb"]
