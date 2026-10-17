@@ -40,17 +40,20 @@ confidence = "low"
 [[device]]
 name = "Bus Pirate 6"
 category = "multiprotocol"
-usb_ids = []
-linux_driver = "cdc_acm (in-kernel) — expected native USB CDC like v5, same RP2040-class MCU family"
+usb_ids = ["1209:7331"]
+linux_driver = "cdc_acm (in-kernel) — native USB CDC like v5, same RP2040-class MCU family"
 in_kernel_since = "cdc_acm is ancient; nothing device-specific needed"
 firmware_blob = false
 firmware_package = "none"
 dkms = false
 dkms_source = ""
 dkms_build_estimate_minutes = 0
-udev_rule = ""
-proprietary_notes = "Released too recently for this catalog's knowledge-cutoff confidence and fleet-search is down (wq#2595), so no VID:PID is recorded — do NOT guess one. Treat as an unlisted device: route through the online-search/USB-sideload fallback path until a verified VID:PID lands here."
-confidence = "unverified"
+udev_rule = '''
+# /etc/udev/rules.d/90-limpet-buspirate-mcp.rules (installed by limpet-plugin-buspirate-mcp)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="7331", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+'''
+proprietary_notes = "wq#4155: VID:PID confirmed from the DangerousPrototypes/BusPirate5-firmware source, which also builds the BP6 (src/platform/bpi6-rev2.c/h live in the same tree as the BP5 platform files). src/usb_descriptors.c:32-37 documents two pid.codes-registered pairs for this firmware family (1209:7331 'Bus Pirate Next Gen CDC', 1209:7332 'Bus Pirate Next Gen Logic Analyzer') and states the firmware is hard-coded to use the first — so BP6 enumerates identically to the Bus Pirate v5 entry above. This is read directly from the firmware source that sets idVendor/idProduct, not a live lsusb capture (no BP6 unit was reachable from this worker to attach and read lsusb directly); fleet-search web was down for independent corroboration (ISSUE-LOG rows 1315/1379)."
+confidence = "medium"
 
 [[device]]
 name = "Glasgow Interface Explorer"

@@ -1,0 +1,137 @@
+# limpet-plugin-buspirate-mcp — Bus Pirate 6 multi-protocol bus plugin
+# wq#4155 — wraps mplogas/buspirate-mcp (MIT), pinned commit 36589d5d9fbcb3018f8568a88cdad04a7c434299
+# Evaluation: reports/wq4145_limpet_verify_hackrf_mcp_eval_buspirate_mcp.md section 2
+# (ADD-VETTED). 33 tools over UART/SPI/I2C/1-Wire/logic analyzer on a Bus Pirate 6 via
+# the BPIO2 FlatBuffers binary interface.
+#
+# DO NOT TRUST UPSTREAM'S OWN SAFETY TIERS. safety.py's "approval-write" tier is gated
+# by an ordinary tool argument (_confirmed=true, server.py:184,201,363,472) that the
+# model itself can set — it is a speed bump, not a human gate. Three "allowed-write"
+# tools (open_spi/open_i2c/open_1wire) energize the target PSU via voltage_mv with no
+# _confirmed step at all (hardware.py:220-223,259-262,295-298). Two tools upstream labels
+# "read-only" can write arbitrary bytes to the bus (spi_transfer, tools.py:1244-1256;
+# la_command, tools.py:1339-1357) — spi_transfer can send WREN+chip-erase (06/C7,
+# tools.py:50,53). The [mcp.tools_energize] map below is this packaging's own judgment
+# call per the report, not a passthrough of upstream's tiers.
+
+[plugin]
+name = "buspirate-mcp"
+version = "0.1.0"
+manifest_version = 1
+category = "multiprotocol"
+description = "UART/SPI/I2C/1-Wire/logic-analyzer bus access to a target device via Bus Pirate 6 (BPIO2 FlatBuffers interface). Also drives the target PSU and ESP download-mode flashing."
+license = "MIT"
+homepage = "https://github.com/mplogas/buspirate-mcp"
+repository = "https://github.com/mplogas/buspirate-mcp"
+authors = ["Marc Plogas"]
+
+[capabilities]
+uart = true
+spi = true
+i2c = true
+onewire = true
+logic_analyzer = true
+psu_control = true
+esp_flash = true
+headless = true
+gui = false
+architectures = ["any"]  # pure-Python client; hardware support comes from the Bus Pirate 6 itself
+input_formats = ["BPIO2 FlatBuffers binary protocol over USB CDC-ACM serial"]
+output_formats = ["JSON"]
+
+[paths]
+binary = "/opt/limpet/plugins/buspirate-mcp/venv/bin/python3 -m buspirate_mcp"
+install_dir = "/opt/limpet/plugins/buspirate-mcp"
+
+[health]
+check = "/opt/limpet/plugins/buspirate-mcp/venv/bin/python3 -c 'import buspirate_mcp'"
+interval = "1h"
+timeout = "10s"
+startup_grace = "5s"
+
+[dependencies]
+requires = []
+# Installed into a venv from a pinned git clone (not PyPI — buspirate-mcp has no
+# release). esptool>=4.0 is a hard dependency of the upstream package even when ESP
+# flash tools are never called (pyproject.toml:12-20). vendor/bpio2 is a git submodule
+# (DangerousPrototypes/BusPirate-BPIO2-flatbuffer-interface) and must be cloned with it —
+# `pip install .` alone misses it.
+system_packages = []
+conflicts = []
+
+[mcp]
+enabled = true
+server = "buspirate-mcp"
+transport = "stdio"
+command = "/opt/limpet/plugins/buspirate-mcp/venv/bin/python3"
+args = ["-m", "buspirate_mcp"]
+env = {}
+
+[mcp.tools_energize]
+# Per-tool energize gate per reports/wq4145_...md section 2 "Proposed Limpet
+# [mcp.tools_energize]". Gated = drives power, writes/erases the target bus, or resets
+# it. Ungated = pure reads and session bookkeeping. Upstream's own read-only/
+# allowed-write/approval-write tiers are NOT used as the basis for this map (see header).
+
+# PSU
+set_voltage = true
+set_power = true
+
+# Bus opens that can energize the target PSU via voltage_mv (hardware.py:220-223,259-262,295-298)
+open_spi = true
+open_i2c = true
+open_1wire = true
+
+# SPI writes/erases and the unfiltered raw-transfer tool
+spi_write = true
+spi_transfer = true   # upstream labels this "read-only"; it sends arbitrary bus writes (tools.py:1244-1256)
+
+# I2C writes
+i2c_write = true
+
+# Logic analyzer raw command channel — passes bus writes (tools.py:1339-1357)
+la_command = true   # upstream labels this "read-only"
+
+# Target state changes / resets
+enter_download_mode = true
+read_flash = true    # also leaves the BP6 stuck in bridge mode until physical replug
+send_command = true
+
+# UART open is ungated: configures BP IO pins only, no PSU argument (server.py:105-126)
+open_uart = false
+
+# Pure reads / session bookkeeping — ungated
+list_devices = false
+verify_connection = false
+scan_baud = false
+read_output = false
+close_uart = false
+close_spi = false
+close_i2c = false
+close_1wire = false
+spi_probe = false
+spi_read = false
+spi_dump = false
+i2c_scan = false
+i2c_read = false
+i2c_dump = false
+onewire_search = false
+onewire_read = false
+la_prepare = false
+la_analyze = false
+la_identify = false
+la_cleanup = false
+
+[agent_hints]
+summary = "Bus-level access to a target device through a Bus Pirate 6: UART console, SPI flash dump/program, I2C read/write, 1-Wire search/read, and a FALA logic analyzer, plus target PSU control and ESP32 download-mode flashing via esptool."
+when_to_use = "Use when a target board is wired to a Bus Pirate 6 and you need to probe or talk to an onboard SPI flash, I2C EEPROM/sensor, 1-Wire device, or UART console, or capture a bus trace with the logic analyzer. set_voltage/set_power can energize the target from the BP6's own PSU for bench work without a separate supply."
+when_not_to_use = "Not for untethered/wireless work (no RF here — see gnuradio-mcp/hackrf-mcp for SDR). Not for anything upstream labels read-only without checking this plugin's own tools_energize map first: spi_transfer and la_command can write to the bus despite the upstream label, and open_spi/open_i2c/open_1wire can turn on the target PSU via voltage_mv. Do not treat upstream's _confirmed argument as a human approval gate — it is model-settable."
+complements = ["jtagulator", "tigard", "glasgow"]
+supersedes = []
+workflow_position = "interact"
+
+[resources]
+max_memory = "256M"
+max_instances = 1
+gpu_required = false
+estimated_startup_time = "3s"

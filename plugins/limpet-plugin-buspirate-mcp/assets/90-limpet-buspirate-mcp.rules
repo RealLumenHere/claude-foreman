@@ -1,0 +1,13 @@
+# Limpet udev rules for the Bus Pirate 6 (BPIO2 interface), installed by
+# limpet-plugin-buspirate-mcp.
+#
+# VID:PID 1209:7331 ("Bus Pirate Next Gen CDC", pid.codes-allocated) is taken from the
+# BusPirate5-firmware repo, which also builds the BP6 (src/platform/bpi6-rev2.c/h live
+# in the same tree as the BP5 platform files). usb_descriptors.c:32-37 documents two
+# registered pid.codes pairs for this firmware family (1209:7331 CDC, 1209:7332 logic
+# analyzer) and states "the firmware is hard-coded to use the first of these" — so BP6
+# enumerates identically to the existing Bus Pirate v5 entry in
+# limpet/hardware.d/03-multiprotocol-tools.toml. This is the authoritative firmware
+# source that sets idVendor/idProduct, not a live lsusb capture (no BP6 unit was
+# available to this worker to attach and read lsusb directly).
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="7331", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-multiprotocol"
