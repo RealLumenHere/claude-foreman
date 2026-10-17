@@ -46,6 +46,11 @@ on tool count. It is the only platform that combines:
    energizes hardware (probe power, JTAG/SWD, flash writes, GPIO/reset lines,
    exploit vectors) is gated behind an explicit operator confirm. Autonomous
    analysis, human-gated destructive action.
+   *Open design flag (wq#4147):* SDR transmit does not fit this framing —
+   energize bounds risk to the device under test, while TX emits RF at third
+   parties and carries regulatory exposure. Whether TX overloads the energize
+   gate or gets its own confirm class is an undecided trust-gate design call;
+   see plugin-spec.md §6 ("OPEN DESIGN FLAG — SDR TX").
 4. **Offline-first, local LLM.** Runs air-gapped on local inference
    (Ollama/LiteLLM) — no cloud dependency to analyze a device.
 5. **Agent-driven, not tool-driven.** The agent suggests the next workflow

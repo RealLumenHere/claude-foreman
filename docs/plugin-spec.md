@@ -367,6 +367,37 @@ inherits the plugin-wide default (absent table ⇒ every tool follows
 `needs_energize`), preserving backward compatibility with every existing
 entry.
 
+**OPEN DESIGN FLAG — SDR TX is not `needs_energize` (wq#4147, undecided).**
+The energize axis models risk that is *bounded by the device under test*:
+flash writes, GPIO/reset, probe power, glitching can brick or corrupt the
+target, and nothing beyond the bench. SDR transmit breaks that bound in three
+ways the axis cannot express: (a) RF emission affects third parties outside
+the bench, not just the DUT; (b) it carries regulatory exposure (licensed
+spectrum, emission limits) that no operator confirm can waive; (c) the risk
+scales with frequency/power/duration parameters, not with a per-invocation
+yes/no. The concrete vector already exists in-tree: the RX-only guarantee of
+`limpet-plugin-gnuradio-mcp` lives in the flowgraph, not the server —
+`gnuradio_set_variable` against a TX-capable flowgraph makes the plugin
+TX-capable (see that plugin's README, "RX-only scope (v1) and the TX risk
+flag"). The decision needed, for whoever owns the VISION.md trust-gate
+design, is one of:
+
+1. **Overload `needs_energize`** — TX verbs are just energize verbs; one
+   confirm gate covers both. Cheapest; but it tells the operator "this may
+   harm the target" when the actual risk is "this may violate spectrum
+   regulation and affect third parties", and it gives the broker no hook for
+   TX-specific policy (frequency allowlists, power caps, antenna-connected
+   interlocks).
+2. **Define a separate confirm class** (e.g. a `needs_emission` /
+   `[registry.tool_emission]` axis parallel to energize) — honest risk
+   framing and a policy hook, at the cost of a third manifest axis, a third
+   decision-table row set, and schema churn in `registry_index.py`.
+
+This subsection is a flag, not a resolution: no manifest field, broker
+behavior, or decision-table row changes until the owner rules. Until then
+the gnuradio plugin's v1 posture stands — TX out of scope, RX flowgraphs
+only, and every TX-adjacent tool energize-gated as the conservative default.
+
 **Reconciliation with §6.2 (wq#3961).** Nothing in §6.2 changes; this
 subsection names and sharpens it: (a) `[capabilities].root` is the privilege
 axis and is now tier-gated, not merely default-deny; (b) §6.2 item 3's
