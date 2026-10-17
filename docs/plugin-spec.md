@@ -380,7 +380,7 @@ Recommended process from wq#3932 §4 (not yet operational — it assumes the
    code ever merges into Limpet's core.
 3. **CI gate** (Limpet's analogue of Metasploit's `msftidy`) clones at the
    pinned `rev`, runs `limpet validate`, checks the filename-stem ==
-   `[plugin].name` invariant (`limpet/registry.py:100-104`), verifies the
+   `[plugin].name` invariant (`limpet/plugin_registry.py:112-116`), verifies the
    publisher signature (§5), rejects an unresolvable dependency.
 4. **Merge** regenerates `index.json`.
 
@@ -411,6 +411,22 @@ one-sided declaration mirrored, disabled-conflict doesn't block, optional-dep
 satisfaction for the active/missing/version-mismatched/disabled cases),
 `limpet/test_limpet_registry.py` and `limpet/test_limpet_cli.py` (end-to-end
 through `Registry.reconcile()` and `limpet list --category`) all pass — 135
-tests across `limpet/` (see ISSUE-LOG #1334 for the pre-existing, unrelated
-`registry.py`/`registry/` import-collision quirk hit while running this
-suite, and the file-path-load workaround used to verify it here).
+tests across `limpet/` (ISSUE-LOG #1334's `registry.py`/`registry/`
+import-collision was resolved by wq#4094's rename to
+`limpet/plugin_registry.py`; the old file-path-load workaround is obsolete).
+
+**Registry implementation (wq#4094).** The v2 registry this spec stubs in
+§6.2's future discussion is now implemented per
+`docs/plugin-registry-spec.md` (the fable-research spec, in the limpet
+project repo): `limpet/registry_index.py` (federated git-repo indexes,
+offline-first search/info, index.json generation with reverse-DNS namespace
+checks), `limpet/registry_trust.py` (content-bound minisign signatures over
+`(name, git, rev)` + tree hash, trust roots in `/etc/limpet/trust/`,
+re-verified on every `Registry.scan()` — a tampered-on-disk plugin fails to
+load), and `limpet/limpet_tools.py` (the `limpet-tools` CLI: index
+add/remove/list/sync, search, info, install, verify, elevate). The §6.2
+privilege axis is reconciled as tier policy
+(`limpet/registry_trust.py:tier_policy_errors`): only core/vetted plugins
+may declare `[mutation].escalates = true`; community/unlisted plugins need
+an explicit per-plugin `limpet-tools elevate`. The energize-confirm gate
+stays the broker's runtime concern and is never waived by tier.

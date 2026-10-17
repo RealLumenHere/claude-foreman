@@ -16,7 +16,7 @@ between project docs" (agent limpet-iso-6302d0).
 | Registry daemon | `limpet-registry-daemon` (`/usr/bin`), unit `limpet-registry-daemon.service` | `limpet-registry`, `limpet-registryd`, `limpet-registry.service` | `packaging/limpet-tools/debian/limpet-registry-daemon.service:7`, `packaging/limpet-tools/debian/install` |
 | MCP meta-server binary / package / unit | `limpet-mcp-meta`, `limpet-mcp-meta.service` | `limpet-meta-server` | `packaging/limpet-mcp-meta/debian/control:8`, `packaging/limpet-mcp-meta/debian/limpet-mcp-meta.service:8` |
 | MCP `serverInfo.name` / `clientInfo.name` | `limpet-mcp-meta` | `limpet-meta-server` | `ops/wq3808-limpet-mcp-meta-server-a1/meta_server.py:241`, `stdio_mcp_client.py:92` (renamed in wq#4080) |
-| Resolved registry file | `/var/lib/limpet/unified.json` | `/var/lib/limpet/registry.json`, `/var/lib/limpet/tool-registry.json` | `limpet/registry.py:32`, `limpet/registry.py:77` |
+| Resolved registry file | `/var/lib/limpet/unified.json` | `/var/lib/limpet/registry.json`, `/var/lib/limpet/tool-registry.json` | `limpet/plugin_registry.py:33`, `limpet/plugin_registry.py:87` |
 | Gate (doctrine name) | energize-confirm gate | none; this name stays | hal-spec.md §9, `docs/limpet_readme.md:68` |
 | Gate (agent-facing MCP tool) | `limpet_confirm_destructive` | none; this name stays | mcp-meta-spec.md §6.3 |
 
@@ -46,7 +46,7 @@ meta-server tools. None is implemented yet.
   READMEs and mcp-meta-spec.md §2.2 is spec, not as-built.
 - There are two registries. The second is wq#3807's `limpet/registry/` (`limpet-registry.service`
   + `.path`, writes `/etc/limpet/tools.json`, `WorkingDirectory=/home/lumen/foreman`).
-  It is unpackaged and dev-only. The packaged one, wq#3810's `limpet/registry.py` via
+  It is unpackaged and dev-only. The packaged one, wq#3810's `limpet/plugin_registry.py` (nee registry.py, renamed in wq#4094 to end the limpet/registry/ package shadow, ISSUE-LOG #1334) via
   `limpet-registry-daemon`, wins. `docs/plugin-spec.md:153` already marks the
   wq#3807 unit as "a different subsystem".
 

@@ -71,7 +71,7 @@ Five facts on the ground shape every decision. Ignoring them would be winging it
 |---|---|---|---|
 | 1 | LLM provider config | `llm.*` keys + a 0600 key file | `docs/agent-chat-spec.md:186-216` (routing/picker), `research/models.yaml` (pool taxonomy) |
 | 2 | Hardware tier display/tuning | read-only derived view + `tuning.*` keys | `research/fleet_hardware.json`, `design/wq3806_limpet_architecture.md:231-239` |
-| 3 | Plugin management UI | **wraps** `limpet/registry.py` state (`enabled.json`, `unified.json`) | `limpet/cli.py` (exists today — this is a frontend, not a reimplementation) |
+| 3 | Plugin management UI | **wraps** `limpet/plugin_registry.py` state (`enabled.json`, `unified.json`) | `limpet/cli.py` (exists today — this is a frontend, not a reimplementation) |
 | 4 | Workspace defaults | `workspace.*` keys | `design/wq3806_limpet_architecture.md:206-230` |
 | 5 | Network config | `network.*` keys | `design/wq3806_limpet_architecture.md:224-226` (containment), fleet SSH/tailnet posture |
 | 6 | Update preferences | `update.*` keys | fleet deny-list on `systemctl stop/disable/mask` (no silent auto-apply) |
@@ -100,10 +100,10 @@ shape instead of inventing a second one:
   (`design/wq3810_limpet_plugin_system.md:105-107`). No new dependency.
 - **Atomic writes.** Every `limpet-config set` reads the owning layer, applies the one
   key, and writes via temp-file + rename, mirroring `_atomic_write_json`
-  (`limpet/registry.py:41`) so a crash mid-write never corrupts the file.
+  (`limpet/plugin_registry.py:42`) so a crash mid-write never corrupts the file.
 - **Plugin state is not duplicated here.** Trust tier, enabled/disabled, and health
   already live in `enabled.json` / `unified.json` under the registry's `state_dir`
-  (`limpet/registry.py:13`). `limpet-config` does not shadow that store; §4.3 shells out
+  (`limpet/plugin_registry.py:13`). `limpet-config` does not shadow that store; §4.3 shells out
   to the existing `limpet` CLI (`limpet/cli.py:120-151`) and only adds presentation.
 - **Secrets never enter the TOML layers.** `llm.api_key_file = "/etc/limpet/secrets/<name>.key"`
   is what `limpet.toml` holds; the key body lives in a 0600 file the config loader reads

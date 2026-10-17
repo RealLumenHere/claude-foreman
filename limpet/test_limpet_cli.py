@@ -3,8 +3,10 @@ validate. Drives main(argv) with --plugins-dir/--state-dir pinned to tmp
 (outside the /etc,/var defaults -- falsifiable boundary)."""
 import json
 import os
+import sys
 
-import cli
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cli  # noqa: E402
 
 EXAMPLES = os.path.join(os.path.dirname(__file__), "examples")
 

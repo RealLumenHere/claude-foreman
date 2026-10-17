@@ -45,6 +45,30 @@ python3 limpet/cli.py disable my-thing   # toggle off without uninstalling
 
 Share it as a git repo with the `.toml` at its root (see `examples/`).
 
+## Discover and install from the registry (wq#4094)
+
+`limpet-tools` is the registry front door — federated git-repo indexes,
+offline-first search, content-bound trust (`docs/plugin-registry-spec.md`
+in the limpet project repo):
+
+```sh
+python3 limpet/limpet_tools.py index add <git-url> --name canonical --ceiling core
+python3 limpet/limpet_tools.py search "bluetooth sniffer"   # local query; pulls if online
+python3 limpet/limpet_tools.py info ubertooth
+python3 limpet/limpet_tools.py install ubertooth            # pin rev, verify sig, install
+python3 limpet/limpet_tools.py install <git-url> --name x   # direct install, unlisted tier
+python3 limpet/limpet_tools.py verify ubertooth             # re-verify content now
+python3 limpet/limpet_tools.py elevate flashrom             # per-plugin privilege grant
+```
+
+Trust is a minisign signature over `(name, git, rev)` plus a tree hash of the
+pinned checkout, re-verified on **every registry scan** (not just install) —
+a plugin tampered with on disk fails to load. Trust roots live in
+`/etc/limpet/trust/` (`LIMPET_TRUST_DIR` to override): `core.pub`,
+`vetted-*.pub` reviewer keys, `index-*.pub` operator-trusted index keys.
+Community/unlisted plugins that declare `[mutation].escalates = true` are
+refused until explicitly elevated (plugin-spec.md §6.2 tier policy).
+
 ## Run the daemon
 
 ```sh

@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import time
 
-from registry import Registry
+from plugin_registry import Registry
 
 
 def run(interval_seconds=30, iterations=None, reg=None, sleep=time.sleep):

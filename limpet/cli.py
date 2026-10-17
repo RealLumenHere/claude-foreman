@@ -21,7 +21,7 @@ import json
 import sys
 
 from manifest import ManifestError, parse_manifest
-from registry import Registry
+from plugin_registry import Registry
 
 
 def _emit(obj, as_json):

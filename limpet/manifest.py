@@ -4,7 +4,7 @@ semantic-version constraint comparator, and a fail-closed validator.
 A plugin -- a tool (e.g. Ghidra MCP) or a hardware module (e.g. a HackRF) --
 is described by exactly one `limpet-plugin.toml`. Installing a plugin means
 dropping that file (or a symlink to it) into the drop-in directory
-`/etc/limpet/plugins.d/`; see registry.py for the pickup/register step and
+`/etc/limpet/plugins.d/`; see plugin_registry.py for the pickup/register step and
 registry_core.py for dependency resolution.
 
 Pure: parse/validate operate on text or dicts only, no filesystem or network,

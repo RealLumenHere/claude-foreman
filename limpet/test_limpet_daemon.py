@@ -1,7 +1,11 @@
 """Test the daemon loop bounds its iterations and reconciles each pass,
 without sleeping for real. (wq#3810 lifecycle step 2 periodic pickup.)"""
-import daemon as d
-from registry import Registry
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import daemon as d  # noqa: E402
+from plugin_registry import Registry  # noqa: E402
 
 
 def test_loop_runs_bounded_iterations(tmp_path):

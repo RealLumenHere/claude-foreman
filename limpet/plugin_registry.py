@@ -27,6 +27,7 @@ import time
 from health import run_health_check
 from manifest import ManifestError, parse_manifest
 import registry_core
+import registry_trust
 
 DEFAULT_PLUGINS_DIR = "/etc/limpet/plugins.d"
 DEFAULT_STATE_DIR = "/var/lib/limpet"
@@ -55,13 +56,23 @@ def _atomic_write_json(path: str, obj) -> None:
 
 
 class Registry:
-    def __init__(self, plugins_dir=None, state_dir=None, health_runner=None, clock=None):
+    def __init__(self, plugins_dir=None, state_dir=None, health_runner=None, clock=None,
+                 trust_gate=None):
         self.plugins_dir = (
             plugins_dir or os.environ.get("LIMPET_PLUGINS_DIR") or DEFAULT_PLUGINS_DIR)
         self.state_dir = (
             state_dir or os.environ.get("LIMPET_STATE_DIR") or DEFAULT_STATE_DIR)
         self._health_runner = health_runner
         self._clock = clock or time.time
+        # Re-verify-on-load (wq#4094, plugin-registry-spec §5.2.4): every scan
+        # re-checks each drop-in against its install receipt -- content hash +
+        # signature + tier/privilege policy -- so a tampered-on-disk plugin
+        # fails to LOAD, not just to install. The default gate is benign for
+        # hand-dropped manifests with no receipt (pre-registry workflow);
+        # pass trust_gate=False to disable, or a callable to substitute.
+        if trust_gate is None:
+            trust_gate = registry_trust.trust_gate(self.state_dir)
+        self._trust_gate = trust_gate or None
 
     # ---- paths -----------------------------------------------------------
     @property
@@ -106,6 +117,11 @@ class Registry:
             if manifest.name in loaded:
                 rejected[path] = [f"duplicate plugin name {manifest.name!r}"]
                 continue
+            if self._trust_gate is not None:
+                trust_errors = self._trust_gate(manifest.name, manifest)
+                if trust_errors:
+                    rejected[path] = trust_errors
+                    continue
             loaded[manifest.name] = manifest
         return RegisterReport(loaded, rejected)
 

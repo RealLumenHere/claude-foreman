@@ -7,10 +7,13 @@ defaults, so the suite exercises the override boundary rather than confirming
 only the built-in paths -- a drop-in that failed to load from a non-default
 dir would fail these tests, it is not drawn from the default population."""
 import json
+import os
+import sys
 
 import pytest
 
-from registry import Registry
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from plugin_registry import Registry  # noqa: E402
 
 GHIDRA = """
 [plugin]
