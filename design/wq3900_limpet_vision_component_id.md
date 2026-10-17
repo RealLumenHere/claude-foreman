@@ -32,6 +32,10 @@ the example-manifest test extension in `limpet/test_limpet_cli.py`.
    evicted** (Ollama `keep_alive=0`), never co-resident by default; boards that defeat
    the local model route to a cloud vision model through LiteLLM. Do not design around
    two resident models.
+   **Superseded:** the 32GB figure above was the research benchmark box, not the Limpet
+   minimum spec. `docs/pcb-vision-spec.md` §0.1/§7 corrects this to the **16GB floor**
+   (the M70q's actual RAM pending upgrade) and validates the YOLO+PaddleOCR+OpenVINO
+   INT8 working set against it; read that budget, not this one, for provisioning.
 
 ## 1. Pipeline overview
 
@@ -98,7 +102,9 @@ dependency. This keeps the gap-closing milestone small.
   models **[verify-at-adoption]**: qwen2.5-vl:7b, minicpm-v, llama3.2-vision:11b —
   chosen at provisioning against the fleet model-selection standard
   (`research/WQ3798_M80S_LLM_MODEL_SELECTION.md`), not hard-coded here; quantized 7-8B
-  VLMs fit the 32GB box when loaded on demand (§0.3). A VLM is the right core because
+  VLMs fit the 32GB box when loaded on demand (§0.3 — superseded by the 16GB-floor
+  budget in `docs/pcb-vision-spec.md` §7, which is why this pipeline's successor spec
+  does not keep a resident VLM by default). A VLM is the right core because
   IC tops are short, stylized, multi-line, logo-bearing text — a reader that also
   *interprets* (logo→manufacturer, layout→package) does what plain OCR cannot.
 - **Track B — deterministic OCR (cross-check).** PaddleOCR (preferred) or Tesseract
