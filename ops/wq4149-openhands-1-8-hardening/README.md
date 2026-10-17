@@ -82,3 +82,10 @@ Then, with docker access: confirm `SANDBOX_NAME_PREFIX` in `reaper.py` against
 `docker inspect` call + `docker rm -f` on each returned name, and re-run
 `python3 probe.py` (in `ops/wq4111-openhands-litellm-production/`) to confirm
 the app survived the recreate.
+
+## Privileged-lane follow-up
+
+Everything in "What's NOT here, and why" above needs docker/host access this
+BUILD lane doesn't have. Filed as wq#4152 (lane `fleet`, deps on this ticket)
+rather than left as an unresolved gate — see that ticket for the full list
+(items 2/3/4/6/8/9).
