@@ -1,0 +1,23 @@
+[Unit]
+Description=LIMPET Hardware Abstraction Layer daemon
+Documentation=file:///usr/share/doc/limpet/hal-spec.md
+After=systemd-udevd.service
+Wants=systemd-udevd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 /usr/lib/limpet/hald/hal_daemon.py run --foreground
+RuntimeDirectory=limpet
+StateDirectory=limpet
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/limpet /run/limpet
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
