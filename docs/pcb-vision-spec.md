@@ -253,7 +253,7 @@ budget is validated against **16GB**, not the research's 32GB.
 | PaddleOCR PP-OCRv4 (det+rec+cls) INT8 working set | ~1.0–2.0 GB               |
 | Tesseract (runs after Paddle, not co-resident)  | ~0.1 GB                     |
 | Burst frame + crop buffers (high-res)           | ~0.5–1.0 GB                 |
-| **Vision-stack peak**                           | **~4.5–6.8 GB**             |
+| **System peak (incl. OS)**                      | **~4.4–6.8 GB**             |
 
 That peak sits comfortably inside 16GB — **with one hard condition**: the resident ~9B coder
 model that wq#3900 §0.3 budgeted on a 32GB box **must be evicted** (`keep_alive=0`) while the
@@ -267,17 +267,22 @@ escalation of §4.4 is for this reason not resident by default.
 ### 7.1 Latency, re-derived on the actual M70q
 
 The research's ~0.8–2 s per board was measured on an i5-14500T/32GB. The M70q is the **same
-i5-14500T** and the **same DDR generation and channel count**; only RAM *capacity* differs
-(16 vs 32GB). CPU inference latency here is compute- and memory-**bandwidth**-bound, and
+i5-14500T**, but its channel count does **not** match the benchmark box and latency must not be
+assumed to transfer. CPU inference latency here is compute- and memory-**bandwidth**-bound, and
 bandwidth is a function of memory generation/channels, not capacity
 (`docs/hardware-tiers-spec.md` §3: token generation is memory-bandwidth-bound, and
-same-memory parts generate at the same rate). So the per-inference latency figure **transfers** from the 32GB benchmark to
-the 16GB M70q — the two boxes have identical compute and identical bandwidth — **provided the
-working set stays resident and the box never swaps**. Capacity matters only as a cliff: the
-moment the coder model is left loaded and the box pages to the SSD, per-board latency is no
-longer ~2 s but tens of seconds of thrash. The re-derivation therefore yields the *same*
-~0.8–2 s target **conditioned on §7's eviction rule**, and it must be **confirmed by a measured
-run on the actual 16GB M70q** (milestone M3, §9), not asserted from the 32GB benchmark.
+same-memory parts generate at the same rate) — but Farida's `dmidecode -t memory` (2026-10-16)
+shows the actual 16GB M70q rig runs **one** 16GB DDR5 SODIMM (Controller0 is empty): single
+channel. The research-ingestion summary records only "32GB" for the benchmark box and never
+states its DIMM count, so we cannot confirm it was also single-channel; if it ran 2x16GB, it had
+roughly double the bandwidth of this rig, and §7.1's own logic says that bandwidth gap could move
+the latency figure. **Capacity budget (§7) is unaffected and holds; the latency figure is not
+assumed to transfer** until it is **confirmed by a measured run on the actual 16GB M70q**
+(milestone M3, §9) rather than asserted from the 32GB benchmark.
+
+Hardware note: filling the empty slot with a second matched 16GB SODIMM would give the M70q
+32GB **and** dual channel; swapping to a single 32GB stick would leave it at 32GB but still
+single-channel.
 
 ## 8. Evaluation — the golden-board fixture
 

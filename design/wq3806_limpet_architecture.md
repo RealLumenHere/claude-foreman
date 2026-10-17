@@ -258,7 +258,9 @@ reproducible:
 ## 6. Agent core
 
 - **Inference.** Local, on the box: Ollama serving a coder model via LiteLLM (VISION.md
-  says `qwen2.5-coder:14b`; wq#3658 says `qwen3.5-9b`). On a 32GB / iGPU-only M70q, a 14B
+  says `qwen2.5-coder:14b`; wq#3658 says `qwen3.5-9b`). The actual M70q is a 16GB / iGPU-only
+  box (`docs/pcb-vision-spec.md` §7 validates the vision stack against this floor, not 32GB).
+  On that floor, a 14B
   model quantized is near the memory ceiling once backends (Ghidra/QEMU) are resident —
   **recommend the 9B default from wq#3658 as the resident model, with the 14B as an opt-in
   for heavy sessions**, and allow routing hard steps to a fleet model via LiteLLM rather

@@ -138,7 +138,8 @@ models alongside the general LLM.** Our agent core already routes via LiteLLM an
 hard-code one model (`design/wq3806_limpet_architecture.md:233-239`); the clean extension is a
 *model-capability tier* in the registry so a decompiler-naming step can be routed to a
 ReCopilot-class model while reasoning stays on the general model. **Adopt as A5** (design-only;
-no such model is provisioned on the box today — the 32GB/iGPU ceiling means a specialized
+no such model is provisioned on the box today — the box is actually a 16GB/iGPU ceiling
+(`docs/pcb-vision-spec.md` §7), not 32GB, and that ceiling means a specialized
 model is an opt-in or a fleet-routed call, same policy as the 14B coder model, `:233-239`).
 **Data-egress caveat (wq#3995):** the published `recopilot-v0.1-beta-dpo` weights are served
 from a **China-hosted API (XingTuLab / QI-ANXIN, `tqgpt.qianxin.com`)**, and self-hosting is
@@ -151,8 +152,8 @@ wq#2595 open) — `fleet-search read` on HuggingFace/GitHub confirmed the open-w
 alternative this repo had already catalogued pre-dispatch
 (`limpet/examples/llm4decompile.toml`, wq#3884): `albertan017/LLM4Decompile`, MIT-licensed
 code + DeepSeek-licensed base weights, GGUF quants at 1.3B/6.7B/9B/22B/33B (`mradermacher`,
-`tensorblock`, `RichardErkhov` repacks on HF) — the 6.7B/9B GGUF tiers fit the 32GB/iGPU
-ceiling as an opt-in route. The capability-tier mechanism itself is implemented in
+`tensorblock`, `RichardErkhov` repacks on HF) — the 6.7B/9B GGUF tiers fit the actual
+16GB/iGPU ceiling (`docs/pcb-vision-spec.md` §7) as an opt-in route. The capability-tier mechanism itself is implemented in
 `limpet/manifest.py` (`MODEL_CAPABILITIES`, `[model_routes]`) and `limpet/model_router.py`
 (`resolve_model`/`resolve_step`); no model client is wired yet (same posture as
 `limpet/critic.py`'s model call), so an operator routes a step to LLM4Decompile (or any
