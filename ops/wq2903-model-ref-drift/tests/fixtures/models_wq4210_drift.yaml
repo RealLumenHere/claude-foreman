@@ -1,0 +1,18 @@
+# The manifest shape wq#4210 landed (PR#2138, 0e678d3e), reduced to the rows that
+# matter for the MANIFEST check and pinned here so the probe cannot drift with the
+# live manifest. `deepseek-flash` was never a litellm model_name: the only finding
+# this fixture must produce is that row. wq#4217 / wq#4220.
+pools:
+  session:     {kind: five_hour, source: oauth_usage}
+  local:       {kind: none,      source: litellm}
+  cheap_cloud: {kind: none,      source: litellm}
+
+models:
+  - {id: claude-opus-5, status: LIVE, pools: [session]}   # not a gateway rung
+  - id: deepseek-flash
+    legacy_aliases: [deepseek-v4-flash, deepseek-v4-flash-vision-exp]
+    status: LIVE-local
+    pools: [cheap_cloud]
+  - {id: gemini-3-flash,   status: DARK,      pools: [cheap_cloud]}  # staged on purpose
+  - {id: hathor-llama8b,   status: LIVE-local, pools: [local]}
+  - {id: qwen36-local,     status: down,      pools: [local]}        # absent on purpose

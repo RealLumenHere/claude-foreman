@@ -98,6 +98,40 @@ def test_haiku_alias_moved_to_haiku_5_5_and_fallback_table_agrees(m):
         assert router._FALLBACK_ALIASES[alias] == router.resolve_alias(alias)
 
 
+def test_legacy_aliases_resolve_and_never_shadow_a_live_name(m):
+    # wq#4220: legacy_aliases used to be read by nothing while wq#4210's commit claimed
+    # it was what kept the retired deepseek name resolving (wq#4217 CONTRADICT).
+    assert router.resolve_alias("deepseek-flash") == "deepseek-v4-flash"
+    with open(MANIFEST) as f:
+        raw = yaml.safe_load(f)
+    ids = {model["id"] for model in raw["models"]}
+    checked = 0
+    for model in raw["models"]:
+        for old in model.get("legacy_aliases") or []:
+            # a legacy name that some other row claims as its id, or as its live alias,
+            # must keep resolving to that row — compatibility never wins over a live name
+            expect = old if old in ids else model["id"]
+            assert router.resolve_alias(old) == expect, f"legacy alias {old!r}"
+            checked += 1
+    assert checked > 0, "no legacy_aliases in models.yaml — test would pass vacuously"
+
+
+def test_legacy_alias_loses_to_a_live_id_and_to_a_declared_alias():
+    # synthetic manifest: the same string claimed three ways. _build_aliases is pure,
+    # so this probes the precedence rule directly rather than waiting for the live
+    # manifest to grow a collision.
+    data = {"models": [
+        {"id": "retired-name", "status": "LIVE"},                    # a live id ...
+        {"id": "keeper", "legacy_aliases": ["retired-name"]},        # ... outranks this
+        {"id": "real", "alias": "short"},                            # a declared alias ...
+        {"id": "other", "legacy_aliases": ["short", "moved-away"]},  # ... outranks this
+    ]}
+    aliases = router._build_aliases(data=data)
+    assert "retired-name" not in aliases          # falls through to the live id
+    assert aliases["short"] == "real"
+    assert aliases["moved-away"] == "other"       # uncontested legacy name still maps
+
+
 @pytest.mark.parametrize("title,detail,lane,arch,expected", SAMPLES)
 def test_sample_tickets_route_to_expected_tuple(m, title, detail, lane, arch, expected):
     got_arch, _ = router.classify_archetype(title, detail, lane)

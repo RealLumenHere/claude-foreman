@@ -231,14 +231,26 @@ models:
   # 'foreman-local-rung' -- models:[deepseek-v4-flash,qwen36-local], minted wq#618,
   # stored /home/lumen/.secrets/foreman-litellm.token 0600, NOT the litellm master
   # key; ZERO Anthropic quota, governor-exempt by design)
-  - id: deepseek-flash
-    legacy_aliases: [deepseek-v4-flash, deepseek-v4-flash-vision-exp]
-    # wq#4210 2026-10-18: DeepSeek retired deepseek-v4-flash, replaced by
-    # DeepSeek-V4.1-Flash-1017; deepseek-flash is now the canonical litellm_config.yaml
-    # model_name. Both legacy names above still resolve (served by the new model at
-    # Flash pricing) -- no caller update required, but new references should use
-    # deepseek-flash. deepseek-v4-flash-vision-exp had no in-repo literal references
-    # as of this ticket (grepped clean), so nothing else needed changing.
+  - id: deepseek-v4-flash
+    legacy_aliases: [deepseek-flash, deepseek-v4-flash-vision-exp]
+    # wq#4220 2026-10-18 reverts wq#4210's `id: deepseek-flash` rename (wq#4217
+    # CONTRADICT). wq#4210 mistook DeepSeek's upstream model id for the gateway's
+    # model_name; they are different names. The live entry is
+    #   model_name: deepseek-v4-flash -> litellm_params.model: deepseek/deepseek-flash
+    # so deepseek-v4-flash is the name a caller passes, and `deepseek-flash` is not a
+    # model_name the gateway serves at all. The rename left router.py advertising
+    # deepseek-flash on its roster while the gateway and four hand-maintained pool
+    # lists (governor_core _FROZEN_LOCAL_POOL, judgment LOCAL_POOL_MODELS, router
+    # LOCAL_RUNG_POOL_MODELS, despag/tiers TIER_MODELS['mechanical']) still knew only
+    # the old name -- despag resolve_tier 422s any id outside its list, so the id the
+    # router advertised was a reachable break.
+    # legacy_aliases is a real mechanism now, not a claim: router._build_aliases maps
+    # every entry to this id, so a caller that picked up `deepseek-flash` after wq#4210
+    # still resolves. Direct gateway callers must use the id itself (the model_name);
+    # deepseek-v4-flash-vision-exp has no in-repo literal references.
+    # Renaming the id again means moving the litellm_config.yaml model_name first:
+    # model-ref-lint's MANIFEST check (ops/wq2903-model-ref-drift) now fails when a
+    # LIVE litellm-pool id is absent from the live model_list.
     status: LIVE-local
     pools: [cheap_cloud]
     # wq#750 2026-08-22 CORRECTION, resolved wq#777 2026-08-23: this was `pools: [local]`,

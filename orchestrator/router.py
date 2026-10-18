@@ -182,6 +182,12 @@ def _build_aliases(path=None, data=None):
     entry _FALLBACK_ALIASES used to hand-list, with zero maintenance, including the
     fable-5-1 entry that was previously missing (ISSUE-LOG #127).
 
+    wq#4220: `legacy_aliases:` (a list) maps the same way, one rung lower in priority —
+    it is the retired-name compatibility field, so a name some other row claims as its
+    id or its live `alias` always wins over a legacy claim on the same string. Before
+    this, legacy_aliases was read by nothing while wq#4210's commit message claimed it
+    was what kept the old deepseek name resolving (wq#4217 CONTRADICT).
+
     `data` lets a caller that already parsed the yaml (load_manifest) skip a second
     read; passed None (the module-import-time call below), this does its own read."""
     p = path or MANIFEST_PATH
@@ -191,16 +197,22 @@ def _build_aliases(path=None, data=None):
                 return dict(_FALLBACK_ALIASES)
             with open(p) as f:
                 data = yaml.safe_load(f) or {}
-        aliases = {}
+        aliases, legacy, ids = {}, {}, set()
         for m in (data or {}).get("models") or []:
             mid = m.get("id")
             if not mid:
                 continue
+            ids.add(mid)
             alias = m.get("alias")
             if alias:
                 aliases[alias] = mid
             if mid.startswith("claude-"):
                 aliases[mid[len("claude-"):]] = mid
+            for old in m.get("legacy_aliases") or []:
+                legacy.setdefault(old, mid)
+        for old, mid in legacy.items():
+            if old not in aliases and old not in ids:
+                aliases[old] = mid
         return aliases or dict(_FALLBACK_ALIASES)
     except (OSError, ValueError):
         return dict(_FALLBACK_ALIASES)

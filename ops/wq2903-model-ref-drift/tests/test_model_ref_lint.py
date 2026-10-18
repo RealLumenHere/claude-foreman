@@ -69,6 +69,24 @@ def test_walk_skips_backups_state_and_doc_dirs(tmp_path):
     assert got == {("RETIRED", "mistral-small", "live_tool", 2)}
 
 
+def test_manifest_check_flags_the_wq4210_rename_and_nothing_else():
+    """The drift fixture is wq#4210's own manifest shape: `deepseek-flash` is the one
+    id the fixture gateway does not serve. The DARK row, the `down` rung and the
+    session-pool row are all absent from the model_list too, on purpose — flagging any
+    of them would make this check noise."""
+    live = mrl.load_live(CONFIG)
+    drift = mrl.manifest_drift(os.path.join(FIX, "models_wq4210_drift.yaml"), live)
+    assert [(f["kind"], f["model"], f["line"]) for f in drift] == [("MANIFEST", "deepseek-flash", 12)]
+    assert mrl.manifest_drift(os.path.join(FIX, "models_clean.yaml"), live) == []
+    assert mrl.manifest_drift("/nonexistent/models.yaml", live) == []
+
+
+def test_lint_reports_manifest_drift_alongside_caller_findings():
+    _, _, findings = mrl.lint([os.path.join(FIX, "callers", "clean.py")], CONFIG,
+                              os.path.join(FIX, "models_wq4210_drift.yaml"), set())
+    assert [(f["kind"], f["model"]) for f in findings] == [("MANIFEST", "deepseek-flash")]
+
+
 def test_cli_exit_codes_and_json(tmp_path):
     base = [sys.executable, LINT, "--config", CONFIG, "--models-yaml", "/nonexistent"]
     bad = subprocess.run(base + ["--json", os.path.join(FIX, "callers", "pre_fix.py")],

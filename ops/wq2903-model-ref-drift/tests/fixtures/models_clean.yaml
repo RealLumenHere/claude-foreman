@@ -1,0 +1,17 @@
+# models_wq4210_drift.yaml after the wq#4220 revert: the id is the gateway model_name
+# again and the new name lives in legacy_aliases (router._build_aliases resolves it).
+# The MANIFEST check must report nothing here.
+pools:
+  session:     {kind: five_hour, source: oauth_usage}
+  local:       {kind: none,      source: litellm}
+  cheap_cloud: {kind: none,      source: litellm}
+
+models:
+  - {id: claude-opus-5, status: LIVE, pools: [session]}
+  - id: deepseek-v4-flash
+    legacy_aliases: [deepseek-flash, deepseek-v4-flash-vision-exp]
+    status: LIVE-local
+    pools: [cheap_cloud]
+  - {id: gemini-3-flash,   status: DARK,      pools: [cheap_cloud]}
+  - {id: hathor-llama8b,   status: LIVE-local, pools: [local]}
+  - {id: qwen36-local,     status: down,      pools: [local]}
