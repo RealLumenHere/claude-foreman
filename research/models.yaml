@@ -231,7 +231,14 @@ models:
   # 'foreman-local-rung' -- models:[deepseek-v4-flash,qwen36-local], minted wq#618,
   # stored /home/lumen/.secrets/foreman-litellm.token 0600, NOT the litellm master
   # key; ZERO Anthropic quota, governor-exempt by design)
-  - id: deepseek-v4-flash
+  - id: deepseek-flash
+    legacy_aliases: [deepseek-v4-flash, deepseek-v4-flash-vision-exp]
+    # wq#4210 2026-10-18: DeepSeek retired deepseek-v4-flash, replaced by
+    # DeepSeek-V4.1-Flash-1017; deepseek-flash is now the canonical litellm_config.yaml
+    # model_name. Both legacy names above still resolve (served by the new model at
+    # Flash pricing) -- no caller update required, but new references should use
+    # deepseek-flash. deepseek-v4-flash-vision-exp had no in-repo literal references
+    # as of this ticket (grepped clean), so nothing else needed changing.
     status: LIVE-local
     pools: [cheap_cloud]
     # wq#750 2026-08-22 CORRECTION, resolved wq#777 2026-08-23: this was `pools: [local]`,
