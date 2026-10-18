@@ -50,6 +50,15 @@ class VerifyContract(unittest.TestCase):
         self.assertIn("claude-sonnet", r.stdout)
         self.assertIn("claude-haiku", r.stdout)
 
+    def test_fail_output_explains_key_gate_not_privilege(self):
+        # wq#4260: a bare "MISS marker ..." FAIL reads as a privilege problem
+        # and gets redispatched as "run install.sh as root". Assert the
+        # --verify output itself says otherwise.
+        r = _verify(NEITHER)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("key hasn't landed yet", r.stdout)
+        self.assertIn("not that install needs root", r.stdout)
+
     def test_fails_when_only_one_model_registered(self):
         r = _verify(NEITHER.replace("model_list: []", "model_list:\n  - model_name: claude-sonnet\n"))
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
