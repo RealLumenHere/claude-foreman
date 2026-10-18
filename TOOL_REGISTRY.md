@@ -398,3 +398,30 @@ interactive-session install script, not a headless worker grant.
 - Reach: it passes Cloudflare's JS challenge (nowsecure.nl). It fails Cloudflare managed
   challenges (crunchbase) and DataDome (g2), headless and headed. It is not a search engine,
   so it works as a render/fetch tier and does not replace SearXNG.
+
+## Firmadyne/FirmAE + avatar2 — firmware emulation & dynamic-analysis orchestration (wq#4241, FirmAE CONDITIONAL GO / Firmadyne superseded / avatar2 GO pending license re-verify)
+
+**Status (2026-10-18): evaluation only, no install/catalog changes this ticket.** Full
+writeup: `research/WQ4241_FIRMADYNE_AVATAR2_EMULATION_EVAL.md`. Headline: the fleet's own
+`firmware-emulation` skill already prefers FirmAE over Firmadyne ("better success rate"), so
+Firmadyne gets no catalog row — it is superseded, not a separate candidate. FirmAE's gate is
+the same root+Postgres dependency wall ISSUE-LOG #1165 (wq#3383) hit installing EMBA, not
+suitability; `qemu-system`/`gdb-multiarch` (both already `trust: core`,
+`limpet/tool-catalog.json`) cover the QEMU+GDB half of this ticket independently.
+
+avatar2 appears once already in this repo, as Pretender's rejected dependency
+(`TOOL_REGISTRY.md:142`, wq#3877 NO-GO) — but that NO-GO turned on a missing Qiling/Unicorn
+adapter (`TOOL_REGISTRY.md:164`), a gap that does not transfer here: avatar2 used directly
+orchestrates `qemu-system`+`gdb-multiarch`, tools Limpet already adopted independently of
+Qiling, rather than competing with Qiling for the same job the way Pretender/Fuzzware did.
+avatar2 1.4.7 is already physically installed on `maksoor` at `/opt/re-venv`
+(`TOOL_REGISTRY.md:31`, alongside `openocd` 0.12.0 on PATH) but marked "not re-probed" —
+Pretender's own quoted upstream warning about avatar2's version-sensitivity/fragility
+(pinned to 1.3.0 circa 2019 in that setup) carries forward as a caveat to re-probe, not
+dismiss.
+
+**Verdict**: FirmAE — conditional GO, redispatch the root+Postgres install (not a
+Frank-gate). Firmadyne — no catalog row, superseded. avatar2 — GO, pending a live
+license re-verify and an actual re-probe of the maksoor install (both blocked this session
+by the standing `fleet-search` web+github outage, `kb/ISSUE-LOG.md` row 715 /
+wq#2595/wq#2599/wq#2601 — already logged, no new row needed).
