@@ -1,0 +1,13 @@
+:OH-SBX-EGRESS - [0:0]
+:OH-SBX-SRC - [0:0]
+-A INPUT -i docker0 -j OH-SBX-SRC
+-A DOCKER-USER -i docker0 -j OH-SBX-SRC
+-A OH-SBX-EGRESS -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment wq4198 -j RETURN
+-A OH-SBX-EGRESS -p tcp -m conntrack --ctstate NEW --ctproto tcp --ctorigdst 172.17.0.1/32 --ctorigdstport 4000 -m comment --comment wq4198:litellm -j RETURN
+-A OH-SBX-EGRESS -p tcp -m conntrack --ctstate NEW --ctproto tcp --ctorigdst 172.17.0.1/32 --ctorigdstport 3000 -m comment --comment wq4198:openhands-app-callback -j RETURN
+-A OH-SBX-EGRESS -m limit --limit 6/min -m comment --comment wq4198 -j LOG --log-prefix "oh-sbx-deny: "
+-A OH-SBX-EGRESS -p tcp -m comment --comment wq4198 -j REJECT --reject-with tcp-reset
+-A OH-SBX-EGRESS -m comment --comment wq4198 -j REJECT --reject-with icmp-port-unreachable
+-A OH-SBX-SRC -s 172.17.0.3/32 -m comment --comment wq4198:exempt:searxng -j RETURN
+-A OH-SBX-SRC -s 172.17.0.4/32 -m comment --comment wq4198:exempt:other -j RETURN
+-A OH-SBX-SRC -m comment --comment wq4198 -j OH-SBX-EGRESS

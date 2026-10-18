@@ -26,14 +26,20 @@ STATE_FILE = "/home/lumen/logs/.lumen-iptables-drift-guard.state.json"
 NTFY = "/home/lumen/bin/ntfy-send"
 
 _COUNTER_RE = re.compile(r"\[\d+:\d+\]")
+# wq#4198: lumen-oh-sandbox-guard rewrites its per-container exemptions on
+# every container start, and its boot-time start drops whatever was saved.
+# Only these per-IP lines are dynamic; the chain's final jump to
+# OH-SBX-EGRESS and the whole OH-SBX-EGRESS chain stay drift-checked.
+_DYNAMIC_RE = re.compile(r"^-A OH-SBX-SRC -s \S+ .*-j RETURN$")
 
 
 def normalize(text: str) -> list[str]:
-    """Drop comment lines and zero out packet/byte counters, which churn on
-    every packet and carry no rule-identity information."""
+    """Drop comment lines and dynamic sandbox-guard exemptions, and zero out
+    packet/byte counters, which churn on every packet and carry no
+    rule-identity information."""
     lines = []
     for line in text.splitlines():
-        if not line or line.startswith("#"):
+        if not line or line.startswith("#") or _DYNAMIC_RE.match(line):
             continue
         lines.append(_COUNTER_RE.sub("[0:0]", line))
     return lines

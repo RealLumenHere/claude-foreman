@@ -1,0 +1,17 @@
+[Unit]
+Description=wq4198 OpenHands sandbox egress allowlist + resource limits
+# Before docker so the boot-time start (zero exemptions) is in place before any
+# container, sandbox or not, gets a docker0 address; Type=simple returns at
+# exec, so docker is not held back while the watcher waits for its socket.
+After=netfilter-persistent.service
+Before=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/python3 /home/lumen/services/lumen-oh-sandbox-guard/sandbox_guard.py start
+ExecStart=/usr/bin/python3 /home/lumen/services/lumen-oh-sandbox-guard/sandbox_guard.py watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

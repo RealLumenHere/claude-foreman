@@ -66,6 +66,45 @@ class DiffLinesTest(unittest.TestCase):
         self.assertEqual(len(only_persisted), 6)
 
 
+def _with_sandbox_guard(text, drop=()):
+    """live_rules.v4 plus wq#4198's committed guard rules, spliced in before
+    the filter table's COMMIT, minus any lines in `drop`."""
+    extra = [l for l in _read("wq4198_sandbox_guard.rules").splitlines() if l not in drop]
+    head, sep, tail = text.partition("*filter\n")
+    body, commit, rest = tail.partition("\nCOMMIT\n")
+    return head + sep + body + "\n" + "\n".join(extra) + commit + rest
+
+
+class SandboxGuardTest(unittest.TestCase):
+    """wq#4198: OH-SBX-SRC's per-IP exemptions are rewritten by
+    lumen-oh-sandbox-guard on every container start. Their churn is not
+    drift; losing any static egress rule is."""
+
+    EXEMPT_3 = "-A OH-SBX-SRC -s 172.17.0.3/32 -m comment --comment wq4198:exempt:searxng -j RETURN"
+    REJECT_TCP = "-A OH-SBX-EGRESS -p tcp -m comment --comment wq4198 -j REJECT --reject-with tcp-reset"
+    SRC_TAIL = "-A OH-SBX-SRC -m comment --comment wq4198 -j OH-SBX-EGRESS"
+
+    def test_exemption_churn_is_not_drift(self):
+        live = _with_sandbox_guard(_read("live_rules.v4"))
+        persisted = _with_sandbox_guard(_read("live_rules.v4"), drop={self.EXEMPT_3})
+        self.assertEqual(guard.diff_lines(live, persisted), ([], []))
+
+    def test_lost_egress_reject_is_drift(self):
+        live = _with_sandbox_guard(_read("live_rules.v4"), drop={self.REJECT_TCP})
+        persisted = _with_sandbox_guard(_read("live_rules.v4"))
+        self.assertEqual(guard.diff_lines(live, persisted), ([], [self.REJECT_TCP]))
+
+    def test_lost_src_tail_jump_is_drift(self):
+        live = _with_sandbox_guard(_read("live_rules.v4"), drop={self.SRC_TAIL})
+        persisted = _with_sandbox_guard(_read("live_rules.v4"))
+        self.assertEqual(guard.diff_lines(live, persisted), ([], [self.SRC_TAIL]))
+
+    def test_splice_lands_inside_filter_table(self):
+        text = _with_sandbox_guard(_read("live_rules.v4"))
+        filter_table = text.split("*filter\n", 1)[1].split("\nCOMMIT\n", 1)[0]
+        self.assertIn(self.EXEMPT_3, filter_table)
+
+
 class RunTest(unittest.TestCase):
     """Exercises run()'s orchestration (save-then-reverify, alerting, exit
     codes) against the same fixture pair, with the real iptables-save/
