@@ -505,3 +505,13 @@ window) once there's a live batch to dispatch.
 - OTEL env vars are wired into every child's env (§10) but not independently probed here
   beyond the confirmed-live ingest URL already in the design doc; verifying a metric
   actually lands on Bes VictoriaMetrics is part of the quota-costing smoke above.
+
+## Aider runtime (wq#4289)
+
+`fworker run --runtime aider` (or `FOREMAN_RUNTIME=aider` in the dispatcher env) runs a
+ticket through aider on the local openai/lumen/code model instead of `claude -p`. Aider
+only edits files; fworker then stages the changed paths, runs
+`lumen-pr commit`/`open`/`land`, and closes the ticket with the resulting PR url. Aider
+exits 0 even on backend errors, so a run that changed no files must be treated as a
+failure, not a success. The backend URL and key come from
+`/etc/lumen-aider-fworker.env`. The default runtime remains `claude`.
