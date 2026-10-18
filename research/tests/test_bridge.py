@@ -50,7 +50,7 @@ def proposal(q, n, title=None, ts=None):
     ev = {"proposal_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
           "image": "debian:bookworm-slim", "arch": "amd64", "install_exit": 0,
           "smoke_cmd": "true", "smoke_exit": 0, "duration_s": 1.0, "stdout_tail": "",
-          "backend": "container", "ts": ts.strftime("%Y-%m-%dT%H:%M:%SZ")}
+          "install_size_kb": 1, "backend": "container", "ts": ts.strftime("%Y-%m-%dT%H:%M:%SZ")}
     with open(os.path.join(q["ev"], f"prop-{n}.json"), "w") as f:
         json.dump(ev, f)
     return str(path)

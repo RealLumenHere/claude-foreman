@@ -21,6 +21,7 @@ FIXTURES = os.path.join(RESEARCH, "fixtures", "sandbox")
 FAIL = os.path.join(FIXTURES, "fail_smoke.json")
 PASS = os.path.join(FIXTURES, "pass_smoke.json")
 EGRESS = os.path.join(FIXTURES, "egress_smoke.json")
+MAKE_BUILD = os.path.join(FIXTURES, "make_build.json")
 LOCAL = ["--accept-backend", "local-bwrap"]
 needs_bwrap = pytest.mark.skipif(
     not os.path.exists("/usr/bin/bwrap") or sandbox_gate.host_arch() != "amd64",
@@ -67,6 +68,13 @@ def test_smoke_phase_has_no_egress(tmp_path):
     assert ev["install_exit"] == 0
     # 127 is a missing probe binary (wq#3767: python3 isn't in bookworm-slim), not a blocked socket.
     assert ev["smoke_exit"] not in (0, 127, None)
+
+
+@needs_bwrap
+def test_makefile_is_built_before_smoke_and_size_is_measured(tmp_path):
+    ev = sandbox_gate.gate(MAKE_BUILD, "local-bwrap", str(tmp_path))
+    assert (ev["install_exit"], ev["smoke_exit"]) == (0, 0)
+    assert isinstance(ev["install_size_kb"], int) and ev["install_size_kb"] > 0
 
 
 @needs_bwrap
@@ -148,7 +156,8 @@ def test_container_argvs_cut_egress_and_pass_nothing_in():
         assert not {"-v", "--volume", "--mount", "-e", "--env", "--env-file",
                     "--privileged", "--network=host"} & set(argv)
         assert "no-new-privileges" in argv
-    assert install[-1] == prop["install"] and smoke[-1] == prop["smoke"]
+    assert install[-1] == sandbox_gate._wrap_install(prop["install"])
+    assert smoke[-1] == prop["smoke"]
     assert smoke[smoke.index("--network") + 2:].count("rsg-img:t1") == 1
     assert set(sandbox_gate.CLEAN_ENV) == {"PATH", "HOME", "LANG"}
 

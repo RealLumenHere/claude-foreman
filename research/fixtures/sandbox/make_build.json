@@ -1,0 +1,7 @@
+{
+  "id": "fixture-make-build",
+  "title": "wq#4205 fixture: C project with a Makefile, built automatically before smoke",
+  "arch": "amd64",
+  "install": "printf 'int main(void){return 0;}\\n' > widget.c && printf 'widget: widget.c\\n\\tcc -o widget widget.c\\n' > Makefile",
+  "smoke": "./widget"
+}

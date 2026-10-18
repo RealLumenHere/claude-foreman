@@ -51,7 +51,7 @@ SCHEMA_VERSION = 1
 EVIDENCE_FIELDS = {  # design §3 schema; bridge.py validates against this
     "proposal_sha256": str, "image": str, "arch": str, "install_exit": int,
     "smoke_cmd": str, "smoke_exit": (int, type(None)), "duration_s": (int, float),
-    "stdout_tail": str,
+    "stdout_tail": str, "install_size_kb": (int, type(None)),
 }
 EVIDENCE_DIR = os.path.join(HERE, "evidence")
 INBOX = os.path.join(HERE, "proposals", "pending")
@@ -68,6 +68,29 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 CLEAN_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C.UTF-8"}
 HARDENING = ["--security-opt", "no-new-privileges", "--pids-limit", "512",
              "--memory", "2g", "--cpus", "2"]
+
+# wq#4205: a C/make project cloned from GitHub (flashrom, etc.) isn't pip- or
+# apt-installable -- it needs its own build step before the smoke test can run it.
+# Detected by file presence in the install's own cwd, never by project name (a name
+# guess would violate the no-guessing read doctrine).
+BUILD_DETECT = (
+    "if [ -f CMakeLists.txt ]; then cmake -S . -B .sandbox-build && cmake --build .sandbox-build; "
+    "elif [ -f Makefile ]; then make; "
+    "fi"
+)
+SIZE_MARKER = "SANDBOX_INSTALL_SIZE_KB"
+SIZE_RE = re.compile(rf"^{SIZE_MARKER}=(\d+)$", re.MULTILINE)
+
+
+def _wrap_install(install):
+    """The proposal's own install text, then build detection, then a du-based install size
+    probe -- one shell invocation, so a failed build still fails install_exit the same way
+    a failed install already does, and the probe output rides the existing stdout capture.
+    "." is wherever the install text's own cwd ended up: the container's default workdir,
+    or bwrap's --chdir /work -- so a relative-path install (e.g. a git clone) is measured
+    and built in place, with no new assumption about where it put its files."""
+    probe = f'echo "{SIZE_MARKER}=$(du -sk . 2>/dev/null | cut -f1)"'
+    return f"{install} && ({BUILD_DETECT}); _rc=$?; {probe}; exit $_rc"
 
 
 class ProposalError(ValueError):
@@ -104,7 +127,7 @@ def container_argvs(prop, tag):
     common = ["--platform", f"linux/{arch}", *HARDENING]
     return {
         "install": [RUNTIME, "run", "--name", cname, "--pull=missing", "--network", "bridge",
-                    *common, image, "/bin/sh", "-c", prop["install"]],
+                    *common, image, "/bin/sh", "-c", _wrap_install(prop["install"])],
         "commit": [RUNTIME, "commit", cname, f"rsg-img:{tag}"],
         "smoke": [RUNTIME, "run", "--rm", "--name", f"{cname}-smoke", "--network", "none",
                   *common, f"rsg-img:{tag}", "/bin/sh", "-c", prop["smoke"]],
@@ -162,7 +185,8 @@ def run_local_bwrap(prop, deadline):
     if prop["arch"] != host_arch():
         raise ProposalError(f"local-bwrap runs host arch {host_arch()} only, not {prop['arch']}")
     with tempfile.TemporaryDirectory(prefix="rsg-") as workdir:
-        install_exit, install_out = _run(bwrap_argv(prop["install"], workdir, True), deadline)
+        install_exit, install_out = _run(
+            bwrap_argv(_wrap_install(prop["install"]), workdir, True), deadline)
         smoke_exit, smoke_out = None, ""
         if install_exit == 0:
             smoke_exit, smoke_out = _run(bwrap_argv(prop["smoke"], workdir, False), deadline)
@@ -178,6 +202,10 @@ def gate(path, backend="container", evidence_dir=EVIDENCE_DIR):
     t0 = time.monotonic()
     image, install_exit, install_out, smoke_exit, smoke_out = BACKENDS[backend](
         prop, t0 + WALL_CLOCK_S)
+    # wq#4205: the size probe's own echo line rides install_out, win or lose (lost on a
+    # blown deadline, since _run's timeout text replaces it -- install_size_kb is None then).
+    size_match = SIZE_RE.search(install_out)
+    install_size_kb = int(size_match.group(1)) if size_match else None
     # Mask the whole transcript before tailing: a cut can't split a credential past the masker.
     combined = f"== install (exit {install_exit}) ==\n{install_out}"
     if smoke_exit is not None:
@@ -190,6 +218,7 @@ def gate(path, backend="container", evidence_dir=EVIDENCE_DIR):
         "arch": prop["arch"],
         "backend": backend,
         "install_exit": install_exit,
+        "install_size_kb": install_size_kb,
         "smoke_cmd": masking.mask_text(prop["smoke"])[0],
         "smoke_exit": smoke_exit,
         "duration_s": round(time.monotonic() - t0, 2),
