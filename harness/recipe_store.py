@@ -20,10 +20,22 @@ Fail-open, two ways:
   - reads (lookup_recipe/is_frozen/load_store/success_rates): PG unreachable, table
     missing, or anything else raising means "nothing frozen" / empty, never an error.
   - record_outcome(): on any PG failure the outcome goes to recipe_crystallizer's JSON
-    store instead, so a PG outage drops no counter updates on the floor. Nothing reads
-    JSON freezes while PG is the backend, so the fallback cannot pin a route.
+    store AND to an append-only journal next to it (JOURNAL_SUFFIX). Nothing reads JSON
+    freezes while PG is the backend, so the fallback cannot pin a route.
 After one failed connect, PG is skipped for PG_RETRY_S so a down database costs the
 dispatcher one connect timeout per window, not one per ticket.
+
+The journal is what makes "a PG outage drops no counter updates" true rather than
+aspirational (wq#4310, after wq#4304 found a live cell orphaned in JSON that PG had
+never seen). Writing JSON alone was lossy: the only JSON->PG path is seed_from_json(),
+which the operator-run `migrate` calls with ON CONFLICT DO NOTHING, so a fallback
+outcome on a cell PG already knows was invisible forever. drain_journal() replays the
+journaled outcomes through _record_pg() in recorded order — a replay of the outcome
+sequence, not a diff of aggregates, so streaks and freezes land exactly as they would
+have live — and record_outcome() calls it before its own PG write, so the first
+successful write after an outage heals the gap with no timer to forget to run.
+FOREMAN_RECIPE_PG=off is a deliberate JSON backend, not an outage, so it never journals
+(journaling it would double-count against a later `migrate` seed of the same cells).
 
 No runtime DDL: the table only comes into being through `recipe_store.py migrate`,
 which pg_dumps fleet_memory first and refuses to touch the schema if the dump fails.
@@ -32,6 +44,7 @@ Until then every call takes the fail-open path above.
 FOREMAN_RECIPE_PG=off forces the JSON path (the test suite's root conftest sets it).
 """
 
+import fcntl
 import json
 import os
 import re
@@ -55,6 +68,12 @@ PG_DBNAME = os.environ.get("FM_DBNAME", "fleet_memory")
 CONNECT_TIMEOUT_S = 3
 PG_RETRY_S = 60
 BACKUP_DIR = "/home/lumen/backups"
+# Journal of outcomes that went to the JSON fallback and still owe PG a replay. Lives
+# beside the JSON store (and moves with it, so a test that redirects the store redirects
+# the journal). DRAIN_MAX caps one drain so the first close after a long outage pays a
+# bounded cost; whatever is left over drains on the next close.
+JOURNAL_SUFFIX = ".pending.jsonl"
+DRAIN_MAX = 200
 
 _pg_down_until = 0.0
 
@@ -221,11 +240,130 @@ def _record_pg(cur, ticket_type, model, prompt_template, success):
             "successes": wins, "failures": losses}
 
 
+# ---- JSON-fallback journal (wq#4310) -----------------------------------------------
+
+def journal_path():
+    return os.environ.get("FOREMAN_RECIPE_JOURNAL", _json_store.STORE_PATH + JOURNAL_SUFFIX)
+
+
+def _journal_append(ticket_type, model, prompt_template, success):
+    """Append one owed-to-PG outcome. Never raises: it is called from the fallback path,
+    which must stay fail-open even if the journal itself is unwritable."""
+    path = journal_path()
+    entry = {"ticket_type": ticket_type, "model": model,
+             "prompt_template": prompt_template, "success": bool(success), "at": time.time()}
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                fh.write(json.dumps(entry, sort_keys=True) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+    except Exception as e:  # noqa: BLE001 — a journal failure must not fail the close
+        _log(f"journal append failed, outcome stays JSON-only: {e!r}")
+
+
+def _journal_owes_pg():
+    """Cheap hot-path guard: one stat, false when there is nothing to replay."""
+    try:
+        return os.path.getsize(journal_path()) > 0
+    except OSError:
+        return False
+
+
+def _parse_journal(raw):
+    """(entries, dropped) — entries in file order, dropped counting lines that are not
+    a replayable outcome (truncated write, hand-edit, a type since retired)."""
+    entries, dropped = [], 0
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+            if (e["ticket_type"] in TICKET_TYPES and e["model"] and e["prompt_template"]):
+                entries.append(e)
+                continue
+        except (ValueError, KeyError, TypeError):
+            pass
+        dropped += 1
+    return entries, dropped
+
+
+def drain_journal(max_entries=DRAIN_MAX):
+    """Replay journaled fallback outcomes into PG, oldest first, and drop the ones that
+    land. {"replayed", "pending", "dropped"}.
+
+    One transaction per ticket_type, because _record_pg() takes a per-ticket_type
+    advisory lock and a transaction that held several could deadlock with a concurrent
+    close; one lock per transaction cannot. A group whose transaction fails stays in the
+    journal for the next drain, so a replay is never half-counted: _record_pg()'s
+    increments and the journal entry's removal commit or roll back together.
+
+    Holds the journal flock throughout, which blocks concurrent appends — those only
+    happen while PG is down, which is the one time this function does nothing."""
+    if not _journal_owes_pg():
+        return {"replayed": 0, "pending": 0, "dropped": 0}
+    try:
+        fh = open(journal_path(), "r+", encoding="utf-8")
+    except OSError as e:
+        _log(f"drain_journal cannot open the journal: {e!r}")
+        return {"replayed": 0, "pending": 0, "dropped": 0}
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        entries, dropped = _parse_journal(fh.read())
+        batch, remainder = entries[:max_entries], entries[max_entries:]
+        groups = {}
+        for e in batch:
+            groups.setdefault(e["ticket_type"], []).append(e)
+        replayed, failed = 0, []
+        try:
+            conn = _connect()
+        except Exception as e:  # noqa: BLE001 — still down; everything stays pending
+            _log(f"drain_journal deferred, PG unavailable: {e!r}", e)
+            conn = None
+        if conn is not None:
+            try:
+                for ticket_type, group in groups.items():
+                    try:
+                        with conn, conn.cursor() as cur:
+                            for e in group:
+                                _record_pg(cur, ticket_type, e["model"],
+                                           e["prompt_template"], bool(e["success"]))
+                        replayed += len(group)
+                    except Exception as err:  # noqa: BLE001 — retry this group later
+                        _log(f"drain_journal kept {len(group)} {ticket_type} outcomes "
+                             f"pending: {err!r}")
+                        failed.extend(group)
+            finally:
+                conn.close()
+        else:
+            failed = batch
+        kept = failed + remainder
+        fh.seek(0)
+        fh.write("".join(json.dumps(e, sort_keys=True) + "\n" for e in kept))
+        fh.truncate()
+        fh.flush()
+        os.fsync(fh.fileno())
+        if replayed or dropped:
+            _log(f"drain_journal replayed {replayed}, pending {len(kept)}, dropped {dropped}")
+        return {"replayed": replayed, "pending": len(kept), "dropped": dropped}
+    finally:
+        fh.close()
+
+
 def record_outcome(ticket_type, model, prompt_template, success):
     """recipe_crystallizer.record_outcome() semantics and return shape, against PG.
-    Any PG failure routes the same outcome to the JSON fallback store instead."""
+    Any PG failure routes the same outcome to the JSON fallback store and the journal.
+
+    Drains the journal first so a healed outage replays in the order it happened: the
+    outcomes PG missed count toward this cell's streak before this outcome does."""
     if ticket_type not in TICKET_TYPES or not model or not prompt_template:
         return None
+    if _pg_enabled() and _journal_owes_pg():
+        drain_journal()
     try:
         conn = _connect()
         try:
@@ -235,7 +373,9 @@ def record_outcome(ticket_type, model, prompt_template, success):
             conn.close()
     except Exception as e:  # noqa: BLE001 — fail-open by contract
         if _pg_enabled():
+            # A real outage: PG owes this outcome, so journal it before the JSON write.
             _log(f"record_outcome falling back to JSON: {e!r}")
+            _journal_append(ticket_type, model, prompt_template, success)
         return _json_store.record_outcome(ticket_type, model, prompt_template, success)
 
 
@@ -323,6 +463,9 @@ def migrate(backup_dir=BACKUP_DIR, skip_backup=False):
     report = {"threshold": threshold, "table": _table()}
     report["backup"] = None if skip_backup else backup(backup_dir)
     report["json_released"] = _json_store.reconcile_freezes(threshold)
+    # Owed outcomes first: a drained cell then has a PG row, so the seed below leaves it
+    # alone (ON CONFLICT DO NOTHING) instead of overwriting the replay with an aggregate.
+    report["drained"] = drain_journal(max_entries=10_000)
     store = _json_store.load_store()
     conn = _connect()
     try:
@@ -345,11 +488,27 @@ def main(argv=None):
     rates = sub.add_parser("rates", help="per-ticket-type success rate by model")
     rates.add_argument("ticket_type", nargs="?")
     sub.add_parser("show", help="print load_store()")
+    dr = sub.add_parser("drain", help="replay JSON-fallback outcomes PG still owes")
+    dr.add_argument("--max", type=int, default=10_000, help="entries to replay this run")
+    dr.add_argument("--seed-missing", action="store_true",
+                    help="also insert JSON cells PG has no row for at all — the repair "
+                         "for cells orphaned before the journal existed (wq#4310); "
+                         "additive, never touches a cell PG already knows")
     args = ap.parse_args(argv)
     if args.cmd == "migrate":
         out = migrate(args.backup_dir)
     elif args.cmd == "rates":
         out = success_rates(args.ticket_type)
+    elif args.cmd == "drain":
+        out = {"journal": journal_path(), "drained": drain_journal(max_entries=args.max)}
+        if args.seed_missing:
+            conn = _connect()
+            try:
+                with conn, conn.cursor() as cur:
+                    out["seeded"] = seed_from_json(cur, _json_store.load_store(),
+                                                   _json_store.FREEZE_THRESHOLD)
+            finally:
+                conn.close()
     else:
         out = load_store()
     print(json.dumps(out, indent=1, sort_keys=True, default=str))

@@ -88,6 +88,56 @@ def test_bad_table_name_fails_open(monkeypatch):
     assert rs.lookup_recipe("test-fix") is None
 
 
+# ---- wq#4310: the JSON-fallback journal ---------------------------------------------
+
+def _journal_lines():
+    with open(rs.journal_path(), encoding="utf-8") as fh:
+        return [json.loads(line) for line in fh if line.strip()]
+
+
+def test_pg_down_journals_what_pg_owes(pg_down):
+    rs.record_outcome("test-fix", *CELL, True)
+    rs._pg_down_until = 0.0
+    rs.record_outcome("test-fix", *CELL, False)
+    owed = _journal_lines()
+    assert [(e["ticket_type"], e["model"], e["success"]) for e in owed] == [
+        ("test-fix", CELL[0], True), ("test-fix", CELL[0], False)]
+    assert rs.journal_path().startswith(rc.STORE_PATH), "journal follows the JSON store"
+
+
+def test_pg_off_is_a_backend_choice_not_an_outage_so_never_journals():
+    assert os.environ["FOREMAN_RECIPE_PG"] == "off"  # root conftest
+    rs.record_outcome("test-fix", *CELL, True)
+    assert rc.load_store()["cells"]["test-fix"], "the outcome still reached JSON"
+    assert not os.path.exists(rs.journal_path()), "PG is not owed an outcome it opted out of"
+
+
+def test_drain_with_pg_still_down_keeps_every_outcome_pending(pg_down):
+    rs.record_outcome("code-refactor", *CELL, True)
+    rs._pg_down_until = 0.0
+    assert rs.drain_journal() == {"replayed": 0, "pending": 1, "dropped": 0}
+    assert len(_journal_lines()) == 1, "nothing is dropped until PG has taken it"
+
+
+def test_drain_of_an_absent_or_empty_journal_is_a_noop():
+    empty = {"replayed": 0, "pending": 0, "dropped": 0}
+    assert rs.drain_journal() == empty
+    with open(rs.journal_path(), "w", encoding="utf-8"):
+        pass
+    assert rs.drain_journal() == empty
+
+
+def test_drain_drops_unreplayable_lines(pg_down):
+    rs.record_outcome("test-fix", *CELL, True)
+    with open(rs.journal_path(), "a", encoding="utf-8") as fh:
+        fh.write("{truncated\n")
+        fh.write(json.dumps({"ticket_type": "rca-investigation", "model": "m",
+                             "prompt_template": "t", "success": True}) + "\n")
+    rs._pg_down_until = 0.0
+    assert rs.drain_journal() == {"replayed": 0, "pending": 1, "dropped": 2}
+    assert len(_journal_lines()) == 1, "corruption is dropped, the real outcome is kept"
+
+
 # ---- real PostgreSQL ----------------------------------------------------------------
 
 needs_pg = pytest.mark.skipif(os.environ.get("FOREMAN_RECIPE_PG_TEST") != "1",
@@ -182,6 +232,64 @@ def test_pg_migration_of_the_live_freeze(pg_table):
     rs.record_outcome("config-edit", *CELL, True)
     assert rs.lookup_recipe("config-edit") is None
     assert rs.record_outcome("config-edit", *CELL, True)["streak_at_freeze"] == 5
+
+
+def _outage_outcomes(*successes):
+    """Record outcomes while PG is unreachable, leaving them in the journal — a real
+    fallback write, port 1, not a hand-built journal file."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(rs, "PG_PORT", 1)
+        for success in successes:
+            rs._pg_down_until = 0.0
+            rs.record_outcome("test-fix", *CELL, success)
+    rs._pg_down_until = 0.0
+
+
+@needs_pg
+def test_pg_drains_outage_outcomes_so_they_still_count_toward_the_freeze(pg_table):
+    _outage_outcomes(True, True, True, True)
+    assert len(_journal_lines()) == 4
+    assert rs._query(f"SELECT 1 FROM {pg_table}") == [], "PG missed all four"
+    assert rs.record_outcome("test-fix", *CELL, True)["streak_at_freeze"] == 5
+    assert rs.lookup_recipe("test-fix")["model"] == CELL[0]
+    assert not os.path.exists(rs.journal_path()) or not _journal_lines()
+    assert rs.drain_journal() == {"replayed": 0, "pending": 0, "dropped": 0}
+    assert rs.success_rates("test-fix")[0]["wins"] == 5, "a re-drain never double-counts"
+
+
+@needs_pg
+def test_pg_drain_replays_in_recorded_order_not_as_an_aggregate(pg_table):
+    _outage_outcomes(True, True, False, True)
+    result = rs.record_outcome("test-fix", *CELL, True)
+    assert (result["streak"], result["successes"], result["failures"]) == (2, 4, 1)
+    assert rs.lookup_recipe("test-fix") is None, "the journaled loss broke the streak"
+
+
+@needs_pg
+def test_pg_drain_cap_leaves_the_rest_for_the_next_drain(pg_table):
+    _outage_outcomes(True, True, True)
+    assert rs.drain_journal(max_entries=2) == {"replayed": 2, "pending": 1, "dropped": 0}
+    assert rs.load_store()["cells"]["test-fix"]["::".join(CELL)]["streak"] == 2
+    assert rs.drain_journal(max_entries=2) == {"replayed": 1, "pending": 0, "dropped": 0}
+    assert rs.load_store()["cells"]["test-fix"]["::".join(CELL)]["streak"] == 3
+
+
+@needs_pg
+def test_pg_seed_missing_repairs_a_cell_orphaned_before_the_journal(pg_table):
+    """The wq#4304 live case: JSON holds a cell PG has never seen and no journal entry
+    owes it, because the outage predates the journal. `drain --seed-missing` is the
+    repair; it must leave a cell PG already knows untouched."""
+    rs.record_outcome("config-edit", *CELL, True)  # PG knows this one: wins 1
+    orphan = ("claude-opus-5-5", "rca-investigation")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(rs, "PG_PORT", 1)
+        rs.record_outcome("config-edit", *orphan, True)
+        rs.record_outcome("config-edit", *CELL, True)  # JSON aggregate now disagrees
+    os.remove(rs.journal_path())  # pre-journal orphan: nothing owes PG a replay
+    rs._pg_down_until = 0.0
+    assert rs.main(["drain", "--seed-missing"]) == 0
+    rates = {r["model"]: r["wins"] for r in rs.success_rates("config-edit")}
+    assert rates == {CELL[0]: 1, orphan[0]: 1}, "orphan seeded, known cell not overwritten"
 
 
 @needs_pg
