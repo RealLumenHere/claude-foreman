@@ -212,3 +212,20 @@ def test_dead_gateway_refuses_cleanly(q):
     report = trigger.ask("needs a tool", "manual", q["db"], q["briefs"], q["pending"],
                          dry_run=False, chat=dead_chat)
     assert report["verdict"] == "dropped"
+
+
+def test_daily_cap_refuses_the_sixth_dispatch(q):
+    def fake_chat(model, system, user, effort):
+        return json.dumps({"id": "widget-tool", "title": "t", "arch": "amd64",
+                           "install": "true", "smoke": "true"})
+
+    state_dir = os.path.join(q["dir"], "state")
+    for _ in range(trigger.DAILY_DISPATCH_CAP):
+        report = trigger.ask("needs a tool", "manual", q["db"], q["briefs"], q["pending"],
+                             dry_run=False, chat=fake_chat, state_dir=state_dir)
+        assert report["verdict"] == "dispatched"
+
+    report = trigger.ask("needs a tool", "manual", q["db"], q["briefs"], q["pending"],
+                         dry_run=False, chat=fake_chat, state_dir=state_dir)
+    assert report["verdict"] == "refused"
+    assert "daily_cap_reached" in report["reasons"][0]

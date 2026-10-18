@@ -59,6 +59,8 @@ WQ_DB = os.environ.get("WQ_DB", "/home/lumen/agents/work-queue/queue.db")
 AQ_DB = os.environ.get("AQ_DB", "/home/lumen/agents/alert-queue/alerts.db")
 BRIEFS_DIR = os.environ.get("RESEARCH_BRIEFS_DIR", os.path.join(HERE, "briefs"))
 FLEET_HARDWARE = os.path.join(HERE, "fleet_hardware.json")
+STATE_DIR = os.environ.get("RESEARCH_STATE_DIR", os.path.join(HERE, "state"))
+DAILY_DISPATCH_CAP = 5
 ARCHETYPE = "research-synthesis"
 GATEWAY = os.environ.get("FOREMAN_LITELLM_BASE_URL", "http://localhost:4000")
 KEY_FILE = os.environ.get("FOREMAN_LITELLM_KEY_FILE", "/home/lumen/.secrets/foreman-litellm.token")
@@ -288,8 +290,36 @@ def submit_to_sandbox(prop, pending_dir):
     return path
 
 
+def _dispatch_count_path(state_dir, day=None):
+    day = day or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+    return os.path.join(state_dir, f"dispatch_count-{day}.json")
+
+
+def dispatched_today(state_dir=STATE_DIR):
+    path = _dispatch_count_path(state_dir)
+    try:
+        with open(path) as f:
+            return json.load(f).get("count", 0)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return 0
+
+
+def record_dispatch(state_dir=STATE_DIR):
+    """Bump today's dispatch counter (§6 — 5/day cap). Called only on an actual
+    gateway dispatch, never on a dry-run/refused/dropped verdict."""
+    os.makedirs(state_dir, exist_ok=True)
+    path = _dispatch_count_path(state_dir)
+    count = dispatched_today(state_dir) + 1
+    fd, tmp = tempfile.mkstemp(dir=state_dir, prefix=".dispatch_count.")
+    with os.fdopen(fd, "w") as f:
+        json.dump({"count": count}, f)
+    os.replace(tmp, path)
+    return count
+
+
 def trigger_one(brief_id, question, context, db=None, briefs_dir=BRIEFS_DIR,
-                 pending_dir=None, dry_run=False, chat=gateway_chat, manifest=None):
+                 pending_dir=None, dry_run=False, chat=gateway_chat, manifest=None,
+                 state_dir=STATE_DIR):
     """Brief -> (dry-run stop here) -> route -> dispatch -> bounce-or-drop ->
     sandbox inbox. Returns a report dict; never raises on a dead gateway/router."""
     env = target_env()
@@ -299,6 +329,9 @@ def trigger_one(brief_id, question, context, db=None, briefs_dir=BRIEFS_DIR,
     out = {"brief_id": brief_id, "brief_path": path, "context": context}
     if dry_run:
         return {**out, "verdict": "would_dispatch"}
+    if dispatched_today(state_dir) >= DAILY_DISPATCH_CAP:
+        return {**out, "verdict": "refused",
+                "reasons": [f"daily_cap_reached ({DAILY_DISPATCH_CAP}/day)"]}
     try:
         m = manifest or router.load_manifest()
         rung, reasons = router.select(m, ARCHETYPE)
@@ -311,21 +344,24 @@ def trigger_one(brief_id, question, context, db=None, briefs_dir=BRIEFS_DIR,
         return {**out, "verdict": "dropped",
                 "reasons": ["no runnable smoke test after one bounce"]}
     dest = submit_to_sandbox(prop, pending_dir or sandbox_gate.INBOX)
+    record_dispatch(state_dir)
     return {**out, "verdict": "dispatched", "proposal_path": dest}
 
 
 def scan(db=None, aq_db=None, briefs_dir=BRIEFS_DIR, pending_dir=None, dry_run=False,
-          chat=gateway_chat):
+          chat=gateway_chat, state_dir=STATE_DIR):
     inputs = unserved_wq_questions(db, briefs_dir) + unserved_aq_alerts(aq_db, briefs_dir)
-    return [trigger_one(bid, q, ctx, db, briefs_dir, pending_dir, dry_run, chat)
+    return [trigger_one(bid, q, ctx, db, briefs_dir, pending_dir, dry_run, chat,
+                         state_dir=state_dir)
             for bid, q, ctx in inputs]
 
 
 def ask(question, context="manual", db=None, briefs_dir=BRIEFS_DIR, pending_dir=None,
-        dry_run=False, chat=gateway_chat):
+        dry_run=False, chat=gateway_chat, state_dir=STATE_DIR):
     brief_id = "ask-" + datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
-    return trigger_one(brief_id, question, context, db, briefs_dir, pending_dir, dry_run, chat)
+    return trigger_one(brief_id, question, context, db, briefs_dir, pending_dir, dry_run, chat,
+                        state_dir=state_dir)
 
 
 def main(argv=None):
