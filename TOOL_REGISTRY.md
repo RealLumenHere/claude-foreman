@@ -377,3 +377,24 @@ live on the fleet before standing up a second stack — unverified from this san
 **Verdict**: adopt for Phase 1 (hub on lumen + collectors on the 6 Ansible-managed nodes) as
 a follow-up build ticket; Phase 2 (readonly-group nodes + khepri/nephthys) needs an
 interactive-session install script, not a headless worker grant.
+
+## stealth-browser-mcp — github.com/vibheksoni/stealth-browser-mcp (wq#4206, ADOPTED, guarded)
+
+**Status (2026-10-18): INSTALLED on Lumen as the user-scope Claude Code MCP server
+`stealth-browser` (`claude mcp get stealth-browser` reports Connected).** Bundle:
+`ops/wq4206-stealth-browser-mcp/` (install.sh with `--verify`, RUNBOOK.md, live `probe.py`).
+
+- Pin: upstream commit `ba95cca933c8` (MIT). The repo has been active since 2025-08, so the
+  REA bot-virality pattern does not apply. Python 3.12 venv with upstream's exact-pinned
+  requirements. Chrome for Testing 153.0.8010.12 comes from `playwright==1.63.0`. The commit,
+  the binary's sha256 and the venv freeze are in `PROVENANCE.json`.
+- Surface: `--minimal` (21 tools), behind `lumen_stealth_guard.py`. It allows public http(s)
+  only and checks where the tab really landed after every call. File paths are confined to
+  the install dir, browser flags come from an allowlist, and dynamic-hooks (in-process
+  `exec`) is always off. It speaks stdio only and opens no listener, which avoids the
+  chrome-mcp tailnet exposure (ISSUE-LOG #838/#909).
+- The Chrome sandbox stays on through an AppArmor userns profile for the pinned binary
+  (ISSUE-LOG #1412).
+- Reach: it passes Cloudflare's JS challenge (nowsecure.nl). It fails Cloudflare managed
+  challenges (crunchbase) and DataDome (g2), headless and headed. It is not a search engine,
+  so it works as a render/fetch tier and does not replace SearXNG.

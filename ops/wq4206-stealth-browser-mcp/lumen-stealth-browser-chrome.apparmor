@@ -1,0 +1,13 @@
+# wq#4206: Lumen sets kernel.apparmor_restrict_unprivileged_userns=1, so the Chrome for
+# Testing build stealth-browser-mcp runs aborts (SIGABRT) when it builds its sandbox.
+# Same shape as Ubuntu's stock /etc/apparmor.d/chrome: unconfined, plus userns, for
+# exactly the pinned binary. The alternative was --no-sandbox on a browser that renders
+# hostile pages.
+
+abi <abi/5.0>,
+include <tunables/global>
+
+profile lumen-stealth-browser-chrome /home/lumen/.local/share/stealth-browser-mcp/ba95cca933c8/browsers/chromium-1243/chrome-linux64/chrome flags=(unconfined) {
+  userns,
+  @{exec_path} mr,
+}
