@@ -111,6 +111,50 @@ def test_bootrom_mode_descriptors_still_match_target_device():
     assert [e["hw_type"] for e in found] == ["target_device"] * 3
 
 
+def test_bootrom_modes_beyond_edl_maskrom_fel_match_target_device():
+    """wq#4188: flashing modes whose lsusb line carries no desc_patterns mode string (or
+    no product string at all) are caught by VID:PID alone. Before wq#4188 the gate held
+    only 05c6:9008/2207:330c/1f3a:efe8, so every line here detected as nothing."""
+    sample = (
+        "Bus 001 Device 020: ID 0e8d:0003 MediaTek Inc. MT6227 phone\n"
+        "Bus 001 Device 021: ID 04e8:685d Samsung Electronics Co., Ltd "
+        "GT-I9100 Phone [Galaxy S II] (Download mode)\n"
+        "Bus 001 Device 022: ID 2207:350b Fuzhou Rockchip Electronics Company\n"
+        "Bus 001 Device 023: ID 1b8e:c003 Amlogic, Inc.\n"
+        "Bus 001 Device 024: ID 15a2:0054 Freescale Semiconductor, Inc. "
+        "i.MX 6Dual/6Quad SystemOnChip in RecoveryMode\n"
+        "Bus 001 Device 025: ID 05ac:1227 Apple, Inc. Mobile Device (DFU Mode)\n"
+        "Bus 001 Device 026: ID 0483:df11 STMicroelectronics STM Device in DFU Mode\n"
+        "Bus 001 Device 027: ID 18d1:4ee0 Google Inc. Nexus/Pixel Device (fastboot)\n"
+    )
+    found = hal.detect(hal.list_usb_devices(sample))
+    assert [e["hw_type"] for e in found] == ["target_device"] * 8
+
+
+# wq#4188: ordinary phones/tablets/modems whose VID:PID *is* in limpet/target-devices.d
+# (exact rows or vendor-only wildcards) but is not a flashing mode. Gating target_device
+# on that catalog wholesale would report every one of these — 04e8:6860 is catalogued
+# there as "Odin download mode", but usb.ids and the verified catalog both say Samsung MTP.
+# 1004:6000/04e8:6601 are verified download PIDs that usb.ids also gives to normal phones.
+CATALOGUED_NORMAL_MODE_LSUSB_SAMPLE = """\
+Bus 002 Device 002: ID 04e8:6860 Samsung Electronics Co., Ltd Galaxy series, misc. (MTP mode)
+Bus 002 Device 003: ID 18d1:4ee7 Google Inc. Nexus/Pixel Device (charging + debug)
+Bus 002 Device 004: ID 18d1:4ee1 Google Inc. Nexus/Pixel Device (MTP)
+Bus 002 Device 005: ID 1004:6000 LG Electronics, Inc. Various Mobile Phones
+Bus 002 Device 006: ID 04e8:6601 Samsung Electronics Co., Ltd Mobile Phone
+Bus 002 Device 007: ID 05c6:9091 Qualcomm, Inc. Intex Aqua Fish & Jolla C Diagnostic Mode
+Bus 002 Device 008: ID 2207:0006 Fuzhou Rockchip Electronics Company
+Bus 002 Device 009: ID 0b05:1706 ASUSTek Computer, Inc. WL-167G v1 802.11g Adapter [Ralink RT2571]
+Bus 002 Device 010: ID 12d1:14fe Huawei Technologies Co., Ltd. Modem (Mass Storage Mode)
+"""
+
+
+def test_catalogued_normal_mode_devices_are_not_target_devices():
+    devices = hal.list_usb_devices(CATALOGUED_NORMAL_MODE_LSUSB_SAMPLE)
+    assert len(devices) == 9
+    assert hal.detect(devices) == []
+
+
 def test_target_device_is_enriched_from_wq3940_catalog():
     """wq#3940: a target_device match gets soc_family/mode_name/recommended_tool
     from limpet/target-devices.d/*.toml, not just the plugin's generic name."""

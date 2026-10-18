@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 
 # wq#3940: enrich target_device detections with the per-vendor-family SoC boot-mode
 # database (limpet/target-devices.d/*.toml) -- soc_family/mode_name/recommended_tool
-# that this plugin's own 3-pair usb_ids set does not carry. Optional: this module must
+# that this plugin's own usb_ids set does not carry. Optional: this module must
 # keep working (just without enrichment) if limpet/ is not alongside this ops/ tree.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
@@ -239,11 +239,43 @@ REGISTRY: tuple[HardwarePlugin, ...] = (
         hw_type="target_device",
         name="Target device (ADB/EDL/MaskROM)",
         capabilities=("adb", "edl_flash", "maskrom_flash"),
+        # wq#4188: every pair below is a bootrom/bootloader *flashing* mode, taken from the
+        # source-verified catalog /home/lumen/projects/limpet/data/usb-device-ids.toml
+        # (generated 2026-10-15, sha256 4d78a410...) rather than limpet/target-devices.d,
+        # whose wq#3923 rows were recalled, not sourced (ISSUE-LOG #1365): it mixes in
+        # vendor-only wildcards, normal-mode reference rows and mislabels (04e8:6860 is a
+        # Samsung phone in MTP mode, not Odin), so gating on it would reintroduce the
+        # wq#3814 false positives. Kept: confidence >= 0.8 and mode not adb/mtp/diag/ums/
+        # modem-boot (an ordinary booted phone, WWAN modem or tablet). Dropped: 1004:6000
+        # and 04e8:6601, which usb.ids also names "Various Mobile Phones"/"Mobile Phone".
         usb_ids=frozenset(
             {
-                ("05c6", "9008"),  # Qualcomm EDL (9008 mode)
-                ("2207", "330c"),  # Rockchip MaskROM
+                # Rockchip MaskROM; Loader mode shares the chip's PID (rkdeveloptool)
+                ("2207", "281a"), ("2207", "290a"), ("2207", "292a"), ("2207", "292c"),
+                ("2207", "300a"), ("2207", "300b"), ("2207", "301a"), ("2207", "310a"),
+                ("2207", "310b"), ("2207", "310c"), ("2207", "310d"), ("2207", "320a"),
+                ("2207", "320b"), ("2207", "320c"), ("2207", "330a"), ("2207", "330c"),
+                ("2207", "330d"), ("2207", "330e"), ("2207", "110a"), ("2207", "110b"),
+                ("2207", "350a"), ("2207", "350b"),
+                # MediaTek BROM / preloader (mtkclient), incl. OEM-VID rebrands
+                ("0e8d", "0003"), ("0e8d", "2000"), ("0e8d", "2001"), ("0e8d", "6000"),
+                ("0e8d", "20ff"), ("0e8d", "3000"), ("22d9", "0006"), ("0fce", "f200"),
+                # Qualcomm EDL (9008) and Sahara memory-debug (900e/9006, LG 61a1)
+                ("05c6", "9008"), ("05c6", "900e"), ("05c6", "9006"), ("1004", "61a1"),
+                # Android bootloader fastboot / fastbootd
+                ("18d1", "4ee0"), ("18d1", "d00d"), ("1f3a", "1010"),
                 ("1f3a", "efe8"),  # Allwinner FEL
+                ("1b8e", "c003"),  # Amlogic USB burn mode
+                ("04e8", "685d"), ("04e8", "68c3"),  # Samsung Odin download
+                # Ingenic USB boot
+                ("a108", "c309"), ("a108", "4775"), ("601a", "4740"), ("601a", "4760"),
+                # Broadcom / Raspberry Pi USB boot ROM (rpiboot)
+                ("0a5c", "2763"), ("0a5c", "2764"), ("0a5c", "2711"), ("0a5c", "2712"),
+                ("0483", "df11"),  # STM32 system-memory DFU
+                # NXP i.MX/Vybrid ROM recovery / serial downloader
+                ("15a2", "0054"), ("15a2", "0061"), ("15a2", "0076"), ("15a2", "0080"),
+                ("15a2", "004f"), ("15a2", "006a"), ("1fc9", "0126"), ("1fc9", "012b"),
+                ("05ac", "1227"), ("05ac", "1281"),  # Apple DFU / recovery
             }
         ),
         # wq#3819: vendor names dropped. "qualcomm, inc." matched every WWAN modem and

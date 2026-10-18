@@ -49,8 +49,23 @@ logic analyzer. `tests/test_hal.py:ORDINARY_LSUSB_SAMPLE` is the regression guar
 
 ## SoC boot-mode VID:PID map (wq#3923, shipped as wq#3940's target device database)
 
-`target_device`'s own VID:PID set above (3 pairs) is intentionally minimal — just enough
-to not false-negative the common cases. `usb_boot_signatures.toml` is wq#3923's original
+`target_device`'s own VID:PID set (60 pairs, wq#4188) is what decides whether a device
+is a target at all. Everything below only *enriches* a device that set already matched.
+The set is curated from the source-verified catalog
+`/home/lumen/projects/limpet/data/usb-device-ids.toml` (generated 2026-10-15, every row
+cited to a tool's udev rules/source or usb.ids). It holds only the flashing modes
+(MaskROM, BROM/preloader, EDL/Sahara, fastboot, FEL, Odin download, DFU, ROM
+recovery/USB boot) at confidence >= 0.8, and drops any pair that usb.ids also gives to a
+normal-mode phone. The catalogs described below are **not** safe to gate on: they carry
+vendor-only wildcards (any ASUS/LG/Sony/ZTE device), normal-mode reference rows (MTP, ADB,
+USB-serial bridges, WWAN diag) and recalled-not-sourced mislabels (ISSUE-LOG #1365;
+`04e8:6860` is a Samsung phone in MTP mode, catalogued as Odin download).
+`tests/test_hal.py:CATALOGUED_NORMAL_MODE_LSUSB_SAMPLE` fails if the gate is widened that
+way. The `2207` "any PID with a non-zero high byte" Rockchip fallback in that catalog is
+not used, so a Rockchip SoC newer than RK3588 is caught only by the `mask rom mode`
+descriptor pattern.
+
+`usb_boot_signatures.toml` is wq#3923's original
 (100+ entry) research artifact: MediaTek BROM, Qualcomm EDL/Sahara, Rockchip MaskROM/Loader,
 Amlogic burn mode, Allwinner FEL, Samsung Odin, Broadcom/RPi USB boot, TI/NXP/STM32/
 industrial-IoT DFU and ROM-boot modes, Xiaomi/Spreadtrum, Apple DFU, Realtek, HiSilicon,
@@ -83,8 +98,9 @@ python3 usb_boot_signatures.py lookup 05c6 9008            # original wq#3923 ar
   `_apex_node_for` resolver could only ever report a PCIe card's node for a USB
   Accelerator. Dropped in wq#3819; covering PCIe Corals needs an `lspci`/sysfs scan this
   detector does not have.
-- A target device in normal ADB mode is not detected either — only the bootrom/flashing
-  modes (`qdl mode`, `mask rom mode`, `in flashing mode`) and the listed VID:PIDs are. The
+- A target device in normal ADB mode is not detected either. Only the bootrom/flashing
+  modes are detected: the listed VID:PIDs plus the `qdl mode`, `mask rom mode` and
+  `in flashing mode` descriptor patterns. The
   `adb` capability on `target_device` therefore means "this device is flashable and speaks
   adb when booted", not "adb is live right now"; ask `adb devices` for that.
 
