@@ -241,13 +241,17 @@ REGISTRY: tuple[HardwarePlugin, ...] = (
         capabilities=("adb", "edl_flash", "maskrom_flash"),
         # wq#4188: every pair below is a bootrom/bootloader *flashing* mode, taken from the
         # source-verified catalog /home/lumen/projects/limpet/data/usb-device-ids.toml
-        # (generated 2026-10-15, sha256 4d78a410...) rather than limpet/target-devices.d,
-        # whose wq#3923 rows were recalled, not sourced (ISSUE-LOG #1365): it mixes in
-        # vendor-only wildcards, normal-mode reference rows and mislabels (04e8:6860 is a
-        # Samsung phone in MTP mode, not Odin), so gating on it would reintroduce the
-        # wq#3814 false positives. Kept: confidence >= 0.8 and mode not adb/mtp/diag/ums/
-        # modem-boot (an ordinary booted phone, WWAN modem or tablet). Dropped: 1004:6000
-        # and 04e8:6601, which usb.ids also names "Various Mobile Phones"/"Mobile Phone".
+        # (generated 2026-10-15, sha256 4d78a410...) rather than limpet/target-devices.d.
+        # wq#4190 reconciled target-devices.d's own rows against that same verified
+        # catalog (ISSUE-LOG #1365: the wq#3923 rows it carried before that were
+        # recalled, not sourced), but this gate still does NOT read target-devices.d:
+        # that catalog still mixes in vendor-only wildcards and normal-mode reference
+        # rows by design (MTP/ADB/diag entries kept for enrichment), so gating on it
+        # wholesale would reintroduce the wq#3814 false positives regardless of how
+        # accurate its flashing-mode rows are. Kept: confidence >= 0.8 and mode not
+        # adb/mtp/diag/ums/modem-boot (an ordinary booted phone, WWAN modem or tablet).
+        # Dropped: 1004:6000 and 04e8:6601, which usb.ids also names "Various Mobile
+        # Phones"/"Mobile Phone".
         usb_ids=frozenset(
             {
                 # Rockchip MaskROM; Loader mode shares the chip's PID (rkdeveloptool)

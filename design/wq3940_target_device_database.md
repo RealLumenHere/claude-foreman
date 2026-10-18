@@ -1,5 +1,15 @@
 # wq#3940 — LIMPET HAL target device database (SoC boot-mode VID:PID TOML files)
 
+> **wq#4190 update:** the entry counts and "none dropped" claim below describe this
+> ticket's original 1:1 reshape of wq#3923's research. wq#4190 later found that
+> research recalled-not-sourced (ISSUE-LOG #1365) and regenerated the
+> vendor-covered rows (Rockchip, MediaTek+OEM, Qualcomm+OEM, Allwinner, Amlogic,
+> Samsung, Broadcom, Apple, and the NXP/STM32 slice of ti-nxp.toml) from the
+> source-verified catalog `/home/lumen/projects/limpet/data/usb-device-ids.toml`,
+> retiring `usb_boot_signatures.toml`/`.py` as superseded. The schema, loader,
+> and udev-rule generation described here are unchanged; only the catalog data
+> and entry counts are stale. See `ops/wq3809-limpet-hal/README.md`.
+
 Reshapes wq#3923's SoC boot-mode USB VID:PID research
 (`ops/wq3809-limpet-hal/usb_boot_signatures.toml`,
 `research/WQ3923_USB_BOOT_MODE_SIGNATURES.md`) into the on-disk, per-vendor-family

@@ -1,12 +1,17 @@
-# wq#3940 — LIMPET HAL target device database: amlogic (3 entries)
+# wq#3940 — LIMPET HAL target device database: amlogic (1 entry)
+# wq#4190 — reconciled against the source-verified catalog
+# /home/lumen/projects/limpet/data/usb-device-ids.toml (generated 2026-10-15,
+# data/_src/gen_usb_ids.py). The c002/c001 "legacy generation" rows from the
+# wq#3923 research pass (ISSUE-LOG #1365: recalled, not sourced) are dropped —
+# the verified catalog has no primary source for either and explicitly flags
+# 1b8e:c004 and S905X4/SC2-family USB boot as NOT VERIFIED, so no additional
+# Amlogic PID is added without one.
 #
-# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
-# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
-# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
-# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
-# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
-# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
-# from (python3 limpet/target_devices.py render-udev-rules).
+# Drop-in catalog for /etc/limpet/target-devices.d/. Loaded by
+# limpet/target_devices.py, which is what ops/wq3809-limpet-hal/hal.py's
+# target_device plugin queries for real-time enrichment and what
+# limpet/target-devices.d/91-limpet-targets.rules is generated from
+# (python3 limpet/target_devices.py render-udev-rules).
 #
 # SCHEMA (per [[device]]):
 #   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
@@ -20,10 +25,10 @@
 #                     post-connect handshake, not from the PID — see notes)
 #   mode_name         human name of the boot/recovery mode
 #   recommended_tool  the tool to dispatch to
-#   confidence        "high" | "medium" | "low" — corroboration strength in the
-#                     wq#3923 research corpus, NOT a live hardware verification.
+#   confidence        "high" | "medium" | "low" (>=0.75 high, 0.45-0.74 medium,
+#                     <0.45 low on the verified catalog's 0.0-1.0 source scale).
 #                     Below "high" should not gate an irreversible action without
-#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#                     an operator confirm.
 #   notes             caveats, protocol notes, disambiguation from a similar entry
 
 [[device]]
@@ -32,36 +37,9 @@ usb_vid = "1b8e"
 usb_pid = "c003"
 class_code = ""
 vendor = "Amlogic, Inc."
-soc_family = "S905"
-soc_model = "S905, S905X, S905X2, S905X3, S912, A113X, A311D, S905X4, S905Y4"
-mode_name = "USB burn mode (BootROM download)"
-recommended_tool = "pyamlboot"
+soc_family = "GXBB/GXL/GXM/G12A/G12B/SM1"
+soc_model = "S905X, S912, A113D, S905X2, S905D2, S905X3, S905D3, A311D, S922X"
+mode_name = "USB boot (BootROM download, 'GX-CHIP' / Windows 'WorldCup Device')"
+recommended_tool = "pyamlboot / aml-flash-tool"
 confidence = "high"
-notes = "The broad, generation-spanning Amlogic pair that pyamlboot's amlboot.py checks for. Like MediaTek/Allwinner, the PID does not discriminate chip model — pyamlboot reads chip identity back over the USB protocol after connecting."
-
-[[device]]
-match_type = "vid_pid"
-usb_vid = "1b8e"
-usb_pid = "c002"
-class_code = ""
-vendor = "Amlogic, Inc."
-soc_family = "M6"
-soc_model = "M6, M8, M8B (older set-top-box generation)"
-mode_name = "USB burn mode (legacy BootROM download)"
-recommended_tool = "pyamlboot"
-confidence = "medium"
-notes = "Older generation, predates the c003-era chips; lower independent confidence this run."
-
-[[device]]
-match_type = "vid_pid"
-usb_vid = "1b8e"
-usb_pid = "c001"
-class_code = ""
-vendor = "Amlogic, Inc."
-soc_family = "very early Amlogic STB chips"
-soc_model = "very early Amlogic STB chips"
-mode_name = "USB burn mode (earliest BootROM download generation)"
-recommended_tool = "pyamlboot"
-confidence = "low"
-notes = "Included for historical completeness; not independently cross-checked this run."
-
+notes = "boot.py (pyamlboot) handles GXL/GXM/GXBB, boot-g12.py handles G12A/G12B/SM1. S905X4 (SC2/S4 family) is NOT in the pyamlboot README and is not verified; do not assume it enumerates here. PID does not discriminate chip model — pyamlboot reads chip identity back over the USB protocol after connecting. Sources: pyamlboot source/README, aml-flash-tool, CoreELEC forum."

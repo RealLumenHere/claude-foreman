@@ -56,27 +56,19 @@ The set is curated from the source-verified catalog
 cited to a tool's udev rules/source or usb.ids). It holds only the flashing modes
 (MaskROM, BROM/preloader, EDL/Sahara, fastboot, FEL, Odin download, DFU, ROM
 recovery/USB boot) at confidence >= 0.8, and drops any pair that usb.ids also gives to a
-normal-mode phone. The catalogs described below are **not** safe to gate on: they carry
-vendor-only wildcards (any ASUS/LG/Sony/ZTE device), normal-mode reference rows (MTP, ADB,
-USB-serial bridges, WWAN diag) and recalled-not-sourced mislabels (ISSUE-LOG #1365;
-`04e8:6860` is a Samsung phone in MTP mode, catalogued as Odin download).
-`tests/test_hal.py:CATALOGUED_NORMAL_MODE_LSUSB_SAMPLE` fails if the gate is widened that
-way. The `2207` "any PID with a non-zero high byte" Rockchip fallback in that catalog is
-not used, so a Rockchip SoC newer than RK3588 is caught only by the `mask rom mode`
-descriptor pattern.
+normal-mode phone. The enrichment catalog described below is **not** safe to gate on
+wholesale: even after wq#4190's reconciliation it still carries vendor-only wildcards (any
+ASUS/LG/Sony/ZTE device) and normal-mode reference rows (MTP, ADB, USB-serial bridges, WWAN
+diag) that are correct but not flashing modes. `tests/test_hal.py:CATALOGUED_NORMAL_MODE_LSUSB_SAMPLE`
+fails if the gate is widened that way. The `2207` "any PID with a non-zero high byte"
+Rockchip fallback in the verified catalog is not expressible in this module's `usb_ids`/
+`desc_patterns` matching, so a Rockchip SoC newer than RK3588 is caught only by the
+`mask rom mode` descriptor pattern.
 
-`usb_boot_signatures.toml` is wq#3923's original
-(100+ entry) research artifact: MediaTek BROM, Qualcomm EDL/Sahara, Rockchip MaskROM/Loader,
-Amlogic burn mode, Allwinner FEL, Samsung Odin, Broadcom/RPi USB boot, TI/NXP/STM32/
-industrial-IoT DFU and ROM-boot modes, Xiaomi/Spreadtrum, Apple DFU, Realtek, HiSilicon,
-plus the vendor-independent ADB/fastboot/DFU/CDC-ACM USB class signatures and a set of
-Android-OEM VIDs. See `research/WQ3923_USB_BOOT_MODE_SIGNATURES.md` for the sourcing note
-and confidence methodology.
-
-wq#3940 reshaped that same research into the on-disk, per-vendor-family database this HAL
-plugin and the Target Device Wizard's IDENTIFY stage (`docs/target-wizard-spec.md:144-156`,
-the `usb-vid-pid` evidence source) actually query: `limpet/target-devices.d/*.toml` (one
-file per vendor family — `mediatek.toml`, `qualcomm.toml`, `rockchip.toml`, `amlogic.toml`,
+wq#3940 shipped the on-disk, per-vendor-family database this HAL plugin and the Target
+Device Wizard's IDENTIFY stage (`docs/target-wizard-spec.md:144-156`, the `usb-vid-pid`
+evidence source) actually query: `limpet/target-devices.d/*.toml` (one file per vendor
+family — `mediatek.toml`, `qualcomm.toml`, `rockchip.toml`, `amlogic.toml`,
 `allwinner.toml`, `samsung.toml`, `broadcom.toml`, `ti-nxp.toml`, `apple.toml`,
 `realtek.toml`, `hisilicon.toml`, `generic-usb.toml`), loaded via `limpet/target_devices.py`
 (`lookup(vid, pid, class_code=...)`). `detect()` above calls this for every `target_device`
@@ -86,9 +78,21 @@ hand-rolled table. The matching udev rules ship at
 `python3 limpet/target_devices.py render-udev-rules`. See
 `design/wq3940_target_device_database.md` for the schema and file layout.
 
+wq#3940 originally reshaped that database 1:1 from this directory's own
+`usb_boot_signatures.toml` (wq#3923's research artifact). wq#4190 found the database's
+vendor-covered rows (Rockchip, MediaTek+OEM, Qualcomm+OEM, Allwinner, Amlogic, Samsung,
+Broadcom, Apple, and the NXP/STM32 slice of ti-nxp.toml) mismatched against the
+source-verified catalog `/home/lumen/projects/limpet/data/usb-device-ids.toml`
+(ISSUE-LOG #1365: recalled, not sourced — e.g. `2207:300b/310b/320b/350b` catalogued as
+"Loader" of the wrong chip, `0e8d:2000/2001` catalogued "BROM" instead of Preloader,
+`05c6:900e` catalogued "DIAG" instead of Sahara memory-debug, `04e8:6860` catalogued "Odin
+download" instead of Samsung MTP) and regenerated those rows from the verified catalog,
+retiring `usb_boot_signatures.toml`/`.py` as superseded: the rows it fed into
+`target-devices.d/*.toml` were duplicated there, nothing else imported it, and keeping two
+copies of the same recalled-not-sourced data around was the problem, not a feature.
+
 ```
 python3 ../../limpet/target_devices.py lookup 05c6 9008   # -> EDL, edl / qdl, confidence high
-python3 usb_boot_signatures.py lookup 05c6 9008            # original wq#3923 artifact, confidence 0.95
 ```
 
 ## Known gaps

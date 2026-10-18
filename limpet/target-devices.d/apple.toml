@@ -1,12 +1,15 @@
-# wq#3940 — LIMPET HAL target device database: apple (3 entries)
+# wq#3940 — LIMPET HAL target device database: apple (2 entries)
+# wq#4190 — reconciled against the source-verified catalog
+# /home/lumen/projects/limpet/data/usb-device-ids.toml (generated 2026-10-15,
+# data/_src/gen_usb_ids.py). The 05ac:12a8 "normal operating mode" reference row
+# from the wq#3923 research pass (ISSUE-LOG #1365: recalled, not sourced) is
+# dropped — the verified catalog has no primary source for it.
 #
-# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
-# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
-# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
-# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
-# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
-# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
-# from (python3 limpet/target_devices.py render-udev-rules).
+# Drop-in catalog for /etc/limpet/target-devices.d/. Loaded by
+# limpet/target_devices.py, which is what ops/wq3809-limpet-hal/hal.py's
+# target_device plugin queries for real-time enrichment and what
+# limpet/target-devices.d/91-limpet-targets.rules is generated from
+# (python3 limpet/target_devices.py render-udev-rules).
 #
 # SCHEMA (per [[device]]):
 #   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
@@ -20,10 +23,10 @@
 #                     post-connect handshake, not from the PID — see notes)
 #   mode_name         human name of the boot/recovery mode
 #   recommended_tool  the tool to dispatch to
-#   confidence        "high" | "medium" | "low" — corroboration strength in the
-#                     wq#3923 research corpus, NOT a live hardware verification.
+#   confidence        "high" | "medium" | "low" (>=0.75 high, 0.45-0.74 medium,
+#                     <0.45 low on the verified catalog's 0.0-1.0 source scale).
 #                     Below "high" should not gate an irreversible action without
-#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#                     an operator confirm.
 #   notes             caveats, protocol notes, disambiguation from a similar entry
 
 [[device]]
@@ -32,12 +35,12 @@ usb_vid = "05ac"
 usb_pid = "1227"
 class_code = ""
 vendor = "Apple, Inc."
-soc_family = "all checkm8-vulnerable A-series SoCs (A5 through A11) and others in DFU"
-soc_model = "all checkm8-vulnerable A-series SoCs (A5 through A11) and others in DFU"
+soc_family = "Apple A-series"
+soc_model = "Apple A-series (DFU)"
 mode_name = "DFU — Device Firmware Upgrade mode"
-recommended_tool = "checkm8 / ipwndfu (limited Linux support — see note)"
+recommended_tool = "irecovery / ipwndfu"
 confidence = "high"
-notes = "libimobiledevice/libirecovery detect this pair reliably on Linux; checkm8/ipwndfu's *exploit* tooling is the historically macOS/libusb-on-Linux-is-flaky part, not the detection — HAL can match this pair with high confidence even where the exploit tooling itself needs a specific libusb/kernel driver setup."
+notes = "checkm8/ipwndfu Linux support is limited (project design note); this entry only identifies the mode, not exploit tooling readiness. Source: usb.ids."
 
 [[device]]
 match_type = "vid_pid"
@@ -45,23 +48,9 @@ usb_vid = "05ac"
 usb_pid = "1281"
 class_code = ""
 vendor = "Apple, Inc."
-soc_family = "iPhone/iPad in Recovery mode (distinct from DFU)"
-soc_model = "iPhone/iPad in Recovery mode (distinct from DFU)"
+soc_family = "Apple A-series"
+soc_model = "Apple A-series (recovery)"
 mode_name = "Recovery mode"
-recommended_tool = "libirecovery / idevicerestore"
+recommended_tool = "irecovery"
 confidence = "high"
-notes = "Recovery mode is a higher-level, iBoot-driven restore mode — distinguishable from DFU (which runs before iBoot) and relevant because many RE workflows pivot through Recovery rather than DFU."
-
-[[device]]
-match_type = "vid_pid"
-usb_vid = "05ac"
-usb_pid = "12a8"
-class_code = ""
-vendor = "Apple, Inc."
-soc_family = "iPhone"
-soc_model = "iPhone, normal boot"
-mode_name = "normal operating mode (reference only — not RE-relevant, included to disambiguate from DFU/Recovery)"
-recommended_tool = "n/a"
-confidence = "high"
-notes = "Not a boot/recovery mode; included only so HAL's Apple-device matcher can distinguish 'plugged in normally' from 'plugged in for recovery', since both report VID 05ac."
-
+notes = "A higher-level, iBoot-driven restore mode -- distinguishable from DFU (which runs before iBoot). Source: usb.ids."

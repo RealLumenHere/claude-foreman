@@ -1,12 +1,16 @@
 # wq#3940 — LIMPET HAL target device database: broadcom (4 entries)
+# wq#4190 — reconciled against the source-verified catalog
+# /home/lumen/projects/limpet/data/usb-device-ids.toml (generated 2026-10-15,
+# data/_src/gen_usb_ids.py). Added the missing 0a5c:2712 (Raspberry Pi 5/CM5,
+# BCM2712). Dropped 0a5c:a4a7 ("alternate enumeration, some early board
+# revisions") from the wq#3923 research pass (ISSUE-LOG #1365: recalled, not
+# sourced) — the verified catalog has no primary source for it.
 #
-# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
-# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
-# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
-# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
-# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
-# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
-# from (python3 limpet/target_devices.py render-udev-rules).
+# Drop-in catalog for /etc/limpet/target-devices.d/. Loaded by
+# limpet/target_devices.py, which is what ops/wq3809-limpet-hal/hal.py's
+# target_device plugin queries for real-time enrichment and what
+# limpet/target-devices.d/91-limpet-targets.rules is generated from
+# (python3 limpet/target_devices.py render-udev-rules).
 #
 # SCHEMA (per [[device]]):
 #   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
@@ -20,10 +24,10 @@
 #                     post-connect handshake, not from the PID — see notes)
 #   mode_name         human name of the boot/recovery mode
 #   recommended_tool  the tool to dispatch to
-#   confidence        "high" | "medium" | "low" — corroboration strength in the
-#                     wq#3923 research corpus, NOT a live hardware verification.
+#   confidence        "high" | "medium" | "low" (>=0.75 high, 0.45-0.74 medium,
+#                     <0.45 low on the verified catalog's 0.0-1.0 source scale).
 #                     Below "high" should not gate an irreversible action without
-#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#                     an operator confirm.
 #   notes             caveats, protocol notes, disambiguation from a similar entry
 
 [[device]]
@@ -32,12 +36,12 @@ usb_vid = "0a5c"
 usb_pid = "2763"
 class_code = ""
 vendor = "Broadcom Corp"
-soc_family = "BCM2835 (Raspberry Pi 1/Zero)"
-soc_model = "BCM2835 (Raspberry Pi 1/Zero)"
-mode_name = "USB Boot ROM (rpiboot mass-storage-gadget boot)"
-recommended_tool = "rpiboot / usbboot"
+soc_family = "BCM2835/BCM2836/BCM2837"
+soc_model = "Raspberry Pi 1/Zero/2/3, CM1/CM3"
+mode_name = "BootROM USB (bootcode.bin path)"
+recommended_tool = "rpiboot"
 confidence = "high"
-notes = "Raspberry Pi 1/Zero's BootROM USB device mode, used for SD-card-less boot and bootloader recovery."
+notes = "rpiboot treats 2763 and 2764 identically (banner 'BCM2835/6/7'); the exact PID-to-chip split is not stated in the source. Source: raspberrypi/usbboot main.c."
 
 [[device]]
 match_type = "vid_pid"
@@ -45,12 +49,12 @@ usb_vid = "0a5c"
 usb_pid = "2764"
 class_code = ""
 vendor = "Broadcom Corp"
-soc_family = "BCM2836/BCM2837 (Raspberry Pi 2/3)"
-soc_model = "BCM2836/BCM2837 (Raspberry Pi 2/3)"
-mode_name = "USB Boot ROM (rpiboot mass-storage-gadget boot)"
-recommended_tool = "rpiboot / usbboot"
+soc_family = "BCM2835/BCM2836/BCM2837"
+soc_model = "Raspberry Pi 1/Zero/2/3, CM1/CM3"
+mode_name = "BootROM USB (bootcode.bin path, alternate PID)"
+recommended_tool = "rpiboot"
 confidence = "high"
-notes = ""
+notes = "Source: raspberrypi/usbboot main.c."
 
 [[device]]
 match_type = "vid_pid"
@@ -58,23 +62,22 @@ usb_vid = "0a5c"
 usb_pid = "2711"
 class_code = ""
 vendor = "Broadcom Corp"
-soc_family = "BCM2711 (Raspberry Pi 4)"
-soc_model = "BCM2711 (Raspberry Pi 4)"
-mode_name = "USB Boot ROM (rpiboot mass-storage-gadget boot)"
-recommended_tool = "rpiboot / usbboot"
+soc_family = "BCM2711"
+soc_model = "Raspberry Pi 4/CM4/400"
+mode_name = "BootROM USB (bootcode4.bin path)"
+recommended_tool = "rpiboot"
 confidence = "high"
-notes = ""
+notes = "Source: raspberrypi/usbboot main.c."
 
 [[device]]
 match_type = "vid_pid"
 usb_vid = "0a5c"
-usb_pid = "a4a7"
+usb_pid = "2712"
 class_code = ""
 vendor = "Broadcom Corp"
-soc_family = "BCM2835-family (alternate board-revision enumeration)"
-soc_model = "BCM2835-family (alternate board-revision enumeration)"
-mode_name = "USB Boot ROM (alternate enumeration, some early board revisions)"
-recommended_tool = "rpiboot / usbboot"
-confidence = "low"
-notes = "Low confidence; included for completeness on early board revisions."
-
+soc_family = "BCM2712"
+soc_model = "Raspberry Pi 5/CM5"
+mode_name = "BootROM USB (bootcode5.bin path)"
+recommended_tool = "rpiboot"
+confidence = "high"
+notes = "Source: raspberrypi/usbboot main.c."

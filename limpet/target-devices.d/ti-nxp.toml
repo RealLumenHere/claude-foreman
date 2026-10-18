@@ -1,4 +1,16 @@
-# wq#3940 — LIMPET HAL target device database: ti/nxp (18 entries)
+# wq#3940 — LIMPET HAL target device database: ti/nxp (23 entries)
+# wq#4190 — the NXP (15a2/1fc9) and STM32 DFU (0483:df11) rows reconciled
+# against the source-verified catalog
+# /home/lumen/projects/limpet/data/usb-device-ids.toml (generated 2026-10-15,
+# data/_src/gen_usb_ids.py): fixed 15a2:0061 (the wq#3923 research pass,
+# ISSUE-LOG #1365, called this i.MX7 Solo/Dual; verified source says i.MX
+# 6Solo/6DualLite) and 1fc9:0126 (was called i.MX7Solo/7Dual SDP at low
+# confidence; verified source says i.MX 7ULP recovery, high confidence). Added
+# the missing 15a2:0076/0080/004f/006a and 1fc9:012b. The remaining TI
+# Stellaris/Sitara/MSP430, Atmel, Nordic, Espressif, Cypress, PIC32 and debug-
+# probe rows are untouched: the verified catalog's own research pass did not
+# cover those vendors (no primary source either way), so there is nothing to
+# reconcile them against.
 #
 # Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
 # boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
@@ -97,12 +109,12 @@ usb_vid = "15a2"
 usb_pid = "0054"
 class_code = ""
 vendor = "NXP (formerly Freescale) Semiconductors"
-soc_family = "i.MX6 (Quad/DualLite/Solo)"
-soc_model = "i.MX6 (Quad/DualLite/Solo)"
-mode_name = "SDP — Serial Download Protocol (ROM boot)"
+soc_family = "i.MX 6Dual/6Quad"
+soc_model = "i.MX 6Dual/6Quad"
+mode_name = "SDP — Serial Download Protocol (ROM boot, 'recovery' per usb.ids)"
 recommended_tool = "imx_usb_loader / uuu (mfgtools)"
-confidence = "medium"
-notes = "NXP kept the Freescale VID after the acquisition; this is the i.MX6-generation SDP pair."
+confidence = "high"
+notes = "NXP kept the Freescale VID after the acquisition; this is the i.MX6Dual/6Quad SDP pair. Source: usb.ids."
 
 [[device]]
 match_type = "vid_pid"
@@ -110,12 +122,64 @@ usb_vid = "15a2"
 usb_pid = "0061"
 class_code = ""
 vendor = "NXP (formerly Freescale) Semiconductors"
-soc_family = "i.MX7 (Solo/Dual)"
-soc_model = "i.MX7 (Solo/Dual)"
-mode_name = "SDP — Serial Download Protocol (ROM boot)"
+soc_family = "i.MX 6Solo/6DualLite"
+soc_model = "i.MX 6Solo/6DualLite"
+mode_name = "SDP — Serial Download Protocol (ROM boot, 'recovery' per usb.ids)"
 recommended_tool = "imx_usb_loader / uuu (mfgtools)"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "ISSUE-LOG #1365: the wq#3923 research pass labelled this i.MX7 (Solo/Dual). usb.ids identifies 15a2:0061 as i.MX 6Solo/6DualLite -- the real i.MX7Solo/7Dual pair is 15a2:0076, below. Source: usb.ids."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "15a2"
+usb_pid = "0076"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "i.MX 7Solo/7Dual"
+soc_model = "i.MX 7Solo/7Dual"
+mode_name = "SDP — Serial Download Protocol (ROM boot, 'recovery' per usb.ids)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = "high"
+notes = "Source: usb.ids."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "15a2"
+usb_pid = "0080"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "i.MX 6ULL"
+soc_model = "i.MX 6ULL"
+mode_name = "SDP — Serial Download Protocol (ROM boot, 'recovery' per usb.ids)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = "high"
+notes = "Source: usb.ids."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "15a2"
+usb_pid = "004f"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "i.MX28"
+soc_model = "i.MX28"
+mode_name = "SDP — Serial Download Protocol (ROM boot, 'recovery' per usb.ids)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = "high"
+notes = "Source: usb.ids."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "15a2"
+usb_pid = "006a"
+class_code = ""
+vendor = "NXP (formerly Freescale) Semiconductors"
+soc_family = "Vybrid"
+soc_model = "Vybrid"
+mode_name = "SDP — Serial Download Protocol (ROM boot, 'recovery' per usb.ids)"
+recommended_tool = "imx_usb_loader / uuu (mfgtools)"
+confidence = "high"
+notes = "Source: usb.ids."
 
 [[device]]
 match_type = "vid_pid"
@@ -162,12 +226,25 @@ usb_vid = "1fc9"
 usb_pid = "0126"
 class_code = ""
 vendor = "NXP Semiconductors"
-soc_family = "i.MX7Solo/7Dual (alternate PID seen on some revisions)"
-soc_model = "i.MX7Solo/7Dual (alternate PID seen on some revisions)"
-mode_name = "SDP — Serial Download Protocol (ROM boot)"
+soc_family = "i.MX 7ULP"
+soc_model = "i.MX 7ULP"
+mode_name = "SDP — Serial Download Protocol (ROM boot, 'recovery' per usb.ids)"
 recommended_tool = "imx_usb_loader / uuu (mfgtools)"
-confidence = "low"
-notes = ""
+confidence = "high"
+notes = "ISSUE-LOG #1365: the wq#3923 research pass labelled this 'i.MX7Solo/7Dual (alternate PID)' at low confidence. usb.ids identifies 1fc9:0126 as i.MX 7ULP. Source: usb.ids."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "1fc9"
+usb_pid = "012b"
+class_code = ""
+vendor = "NXP Semiconductors"
+soc_family = "i.MX 8M Dual/QuadLite/Quad"
+soc_model = "i.MX 8M Dual/QuadLite/Quad"
+mode_name = "Serial Downloader (ROM boot)"
+recommended_tool = "uuu (mfgtools) / imx_usb_loader"
+confidence = "high"
+notes = "Source: usb.ids."
 
 [[device]]
 match_type = "vid_pid"

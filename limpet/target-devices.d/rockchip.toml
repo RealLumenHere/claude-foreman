@@ -1,15 +1,35 @@
-# wq#3940 — LIMPET HAL target device database: rockchip (17 entries)
+# wq#3940 — LIMPET HAL target device database: rockchip (27 entries)
 # wq#3935 — ewf (e-waste-flasher) device-profile merge: per-entry
 #           recommended_commands + partition_layout, and the shared
 #           [partition_layouts.*] tables at the bottom of this file.
+# wq#4190 — fully regenerated against the source-verified catalog
+# /home/lumen/projects/limpet/data/usb-device-ids.toml (generated 2026-10-15,
+# data/_src/gen_usb_ids.py). ISSUE-LOG #1365: the wq#3923 research pass this
+# file was originally built from invented an "a/b generation-pair" PID
+# convention (PID ending 'a' = MaskROM, same prefix ending 'b' = Loader of the
+# *same* SoC) that does not match rkdeveloptool/U-Boot: each PID actually
+# identifies one SoC, and MaskROM vs Loader on that SoC share the *same* PID,
+# discriminated by bcdUSB bit0, not by a different PID. That fabricated
+# convention produced four of the specific mislabels wq#4188 found (2207:300b
+# called "RK3026 Loader", verified RK3168 MaskROM; 310b called "RK3126/28
+# Loader", verified RK3188 MaskROM; 320b called "RK3368 Loader", verified
+# RK3228/RK3229 MaskROM; 350b called "RK3328 Loader", verified RK3588 MaskROM)
+# plus 330c (called "RK3288/RK3399 Loader", verified RK3399 MaskROM *and*
+# Loader, same PID). It also fabricated 2207:360a/360b (RK3566/68) and
+# 2207:380a/380b/390a/390b (RK3588/RK3528) point PIDs the verified catalog
+# explicitly has no primary source for -- RK3528 is in that catalog's own
+# "NOT VERIFIED -- deliberately absent" list, and RK3588/RK3566/68 are already
+# correctly covered below at 350b/350a. All four are dropped. Twelve verified
+# pairs that were missing outright are added: 281a, 292a, 292c, 301a, 310c,
+# 310d, 320c, 330d, 330e, 110a, 110b, plus the Loader-mode duplicate entries
+# for 320c/330c/350a/350b (same PID as their MaskROM entry, separate row per
+# mode) and the UMS entry 0010.
 #
-# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
-# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
-# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
-# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
-# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
-# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
-# from (python3 limpet/target_devices.py render-udev-rules).
+# Drop-in catalog for /etc/limpet/target-devices.d/. Loaded by
+# limpet/target_devices.py, which is what ops/wq3809-limpet-hal/hal.py's
+# target_device plugin queries for real-time enrichment and what
+# limpet/target-devices.d/91-limpet-targets.rules is generated from
+# (python3 limpet/target_devices.py render-udev-rules).
 #
 # SCHEMA (per [[device]]):
 #   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
@@ -29,8 +49,7 @@
 #                     an operator confirm (same posture as usb_boot_signatures.toml).
 #   notes             caveats, protocol notes, disambiguation from a similar entry
 #
-# OPTIONAL PROFILE FIELDS (wq#3935, ewf absorption — may be absent on
-# not-yet-profiled entries in other vendor files):
+# OPTIONAL PROFILE FIELDS (wq#3935, ewf absorption):
 #   recommended_commands  ordered operator playbook for this mode; <angle-bracket>
 #                         tokens are operator-supplied values, never literal.
 #                         MaskROM mode has NO flash verbs of its own — the first
@@ -44,15 +63,75 @@
 [[device]]
 match_type = "vid_pid"
 usb_vid = "2207"
+usb_pid = "281a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK2818"
+soc_model = "RK2818"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Sources: usb.ids, rkdeveloptool RKScan.cpp."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-legacy-parameter"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
 usb_pid = "290a"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK2928"
-soc_model = "RK2928, RK3066"
+soc_family = "RK2918"
+soc_model = "RK2918"
 mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = "RK3066 shares its MaskROM PID with the earlier RK2928 generation."
+confidence = "high"
+notes = "Sources: usb.ids, rkdeveloptool RKScan.cpp."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-legacy-parameter"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "292a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK2928"
+soc_model = "RK2928"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Sources: usb.ids, rkdeveloptool RKScan.cpp."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-legacy-parameter"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "292c"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3026"
+soc_model = "RK3026"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Source: usb.ids."
 recommended_commands = [
     "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
     "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
@@ -67,12 +146,12 @@ usb_vid = "2207"
 usb_pid = "300a"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3026"
-soc_model = "RK3026, RK3036, RK3188"
+soc_family = "RK3066"
+soc_model = "RK3066"
 mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "Sources: usb.ids, rkdeveloptool RKScan.cpp, U-Boot Kconfig, Pine64 wiki."
 recommended_commands = [
     "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
     "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
@@ -87,16 +166,37 @@ usb_vid = "2207"
 usb_pid = "300b"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3026"
-soc_model = "RK3026, RK3036, RK3188"
-mode_name = "Loader (post-DRAM-init)"
+soc_family = "RK3168"
+soc_model = "RK3168"
+mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "ISSUE-LOG #1365: the wq#3923 research pass labelled this 'RK3026 Loader' under an invented a/b generation-pair convention. rkdeveloptool/usb.ids identify 2207:300b as RK3168's own MaskROM PID, unrelated to RK3026/300a. Sources: usb.ids, rkdeveloptool RKScan.cpp."
 recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
     "rkdeveloptool ppt  # print partition table",
     "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
-    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-legacy-parameter"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "301a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3036"
+soc_model = "RK3036"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Sources: usb.ids, rkdeveloptool 99-rk-rockusb.rules, U-Boot Kconfig."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
 ]
 partition_layout = "rk-legacy-parameter"
 
@@ -106,12 +206,12 @@ usb_vid = "2207"
 usb_pid = "310a"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3126"
-soc_model = "RK3126, RK3128"
+soc_family = "RK3066B"
+soc_model = "RK3066B"
 mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "Sources: usb.ids, U-Boot Kconfig."
 recommended_commands = [
     "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
     "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
@@ -126,31 +226,12 @@ usb_vid = "2207"
 usb_pid = "310b"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3126"
-soc_model = "RK3126, RK3128"
-mode_name = "Loader (post-DRAM-init)"
-recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
-recommended_commands = [
-    "rkdeveloptool ppt  # print partition table",
-    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
-    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
-]
-partition_layout = "rk-legacy-parameter"
-
-[[device]]
-match_type = "vid_pid"
-usb_vid = "2207"
-usb_pid = "320a"
-class_code = ""
-vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3368"
-soc_model = "RK3368"
+soc_family = "RK3188"
+soc_model = "RK3188"
 mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "ISSUE-LOG #1365: the wq#3923 research pass labelled this 'RK3126/28 Loader' under an invented a/b generation-pair convention. rkdeveloptool/usb.ids identify 2207:310b as RK3188's own MaskROM PID, unrelated to RK3126/RK3128. Sources: usb.ids, rkdeveloptool RKScan.cpp, U-Boot Kconfig."
 recommended_commands = [
     "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
     "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
@@ -162,21 +243,102 @@ partition_layout = "rk-legacy-parameter"
 [[device]]
 match_type = "vid_pid"
 usb_vid = "2207"
+usb_pid = "310c"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3126/RK3128"
+soc_model = "RK3126, RK3128"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "usb.ids lists RK3126/RK3128; U-Boot and rkdeveloptool list RK3128 only. Sources: usb.ids, rkdeveloptool 99-rk-rockusb.rules, rkdeveloptool RKScan.cpp, U-Boot Kconfig."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-legacy-parameter"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "310d"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3126"
+soc_model = "RK3126"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Single source (usb.ids)."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-legacy-parameter"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "320a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3288"
+soc_model = "RK3288"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Sources: usb.ids, rkdeveloptool 99-rk-rockusb.rules, rkdeveloptool RKScan.cpp, U-Boot Kconfig."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
 usb_pid = "320b"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3368"
-soc_model = "RK3368"
-mode_name = "Loader (post-DRAM-init)"
+soc_family = "RK3228/RK3229"
+soc_model = "RK3228, RK3229"
+mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "ISSUE-LOG #1365: the wq#3923 research pass labelled this 'RK3368 Loader' under an invented a/b generation-pair convention. rkdeveloptool/usb.ids identify 2207:320b as the RK3228/RK3229 MaskROM PID, unrelated to RK3368. Sources: usb.ids, rkdeveloptool 99-rk-rockusb.rules, U-Boot Kconfig."
 recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
     "rkdeveloptool ppt  # print partition table",
     "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
-    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
 ]
-partition_layout = "rk-legacy-parameter"
+partition_layout = "rk-gpt-standard"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "320c"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3328"
+soc_model = "RK3328"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Same VID:PID is presented in Loader mode (separate entry below); tell them apart by bcdUSB bit0 (rkdeveloptool RKScan.cpp: bit0==0 -> MaskROM). Sources: usb.ids, rkdeveloptool 99-rk-rockusb.rules, U-Boot Kconfig."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
 
 [[device]]
 match_type = "vid_pid"
@@ -184,12 +346,12 @@ usb_vid = "2207"
 usb_pid = "330a"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3288"
-soc_model = "RK3288, RK3399"
+soc_family = "RK3368"
+soc_model = "RK3368"
 mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = "Pairs with 2207:330c (Loader) below, which is already independently confirmed in production HAL."
+confidence = "high"
+notes = "Sources: usb.ids, rkdeveloptool 99-rk-rockusb.rules, U-Boot Kconfig."
 recommended_commands = [
     "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
     "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
@@ -204,16 +366,97 @@ usb_vid = "2207"
 usb_pid = "330c"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3288"
-soc_model = "RK3288, RK3399 (also matches as a broad RK31xx/RK32xx-family fallback)"
-mode_name = "Loader (post-DRAM-init)"
+soc_family = "RK3399"
+soc_model = "RK3399"
+mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
 confidence = "high"
-notes = "Already shipped in ops/wq3809-limpet-hal/hal.py's target_device plugin as 'Rockchip MaskROM' — labelled here as Loader per rkdeveloptool's a/c generation-pair convention; HAL's existing label should be read as 'Rockchip flashing mode, RK31xx/RK32xx family' rather than strictly MaskROM-only. Flagging the discrepancy rather than silently relabeling hal.py's shipped entry."
+notes = "ISSUE-LOG #1365: the wq#3923 research pass labelled this 'RK3288/RK3399 Loader' under an invented a/b generation-pair convention. rkdeveloptool/usb.ids/bootlin identify 2207:330c as RK3399's own PID, used in both MaskROM and Loader mode (separate entry below); tell them apart by bcdUSB bit0 (rkdeveloptool RKScan.cpp: bit0==0 -> MaskROM). Sources: usb.ids, rkdeveloptool 99-rk-rockusb.rules, bootlin.com recovery-boot note, Pine64 wiki."
 recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
     "rkdeveloptool ppt  # print partition table",
     "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
-    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-gpt-standard"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "330d"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "PX30"
+soc_model = "PX30"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Single source (U-Boot Kconfig). Whether RK3326 shares this id is not verified."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "330e"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3308"
+soc_model = "RK3308"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Single source (U-Boot Kconfig PID defaults, which the commit says mirror the MaskROM PIDs)."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "110a"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RV1108"
+soc_model = "RV1108"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Single source (U-Boot Kconfig PID defaults, which the commit says mirror the MaskROM PIDs)."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "110b"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RV1126"
+soc_model = "RV1126"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Single source (U-Boot Kconfig PID defaults, which the commit says mirror the MaskROM PIDs)."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
 ]
 partition_layout = "rk-gpt-standard"
 
@@ -223,12 +466,12 @@ usb_vid = "2207"
 usb_pid = "350a"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3328"
-soc_model = "RK3328"
+soc_family = "RK3566/RK3568"
+soc_model = "RK3566, RK3568"
 mode_name = "MaskROM"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "Same VID:PID is presented in Loader mode (separate entry below); tell them apart by bcdUSB bit0 (rkdeveloptool RKScan.cpp: bit0==0 -> MaskROM). RK3566 and RK3568 share the BootROM id; confirm the exact SoC with `rkdeveloptool rci` after loading usbplug. Sources: rkdeveloptool 99-rk-rockusb.rules, U-Boot Kconfig, barebox rk3588 patch, Pine64 wiki."
 recommended_commands = [
     "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
     "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
@@ -243,12 +486,51 @@ usb_vid = "2207"
 usb_pid = "350b"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3588"
+soc_model = "RK3588"
+mode_name = "MaskROM"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "ISSUE-LOG #1365: the wq#3923 research pass labelled this 'RK3328 Loader' under an invented a/b generation-pair convention. rkdeveloptool/U-Boot/barebox/mnt-rcore identify 2207:350b as RK3588's own PID, used in both MaskROM and Loader mode (separate entry below); tell them apart by bcdUSB bit0 (rkdeveloptool RKScan.cpp: bit0==0 -> MaskROM). Sources: rkdeveloptool 99-rk-rockusb.rules, U-Boot Kconfig, barebox rk3588 patch, MNT rcore RK3588 maskrom note."
+recommended_commands = [
+    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
+    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+]
+partition_layout = "rk-gpt-standard"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "330c"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
+soc_family = "RK3399"
+soc_model = "RK3399"
+mode_name = "Loader (post-DRAM-init, usbplug / U-Boot rockusb)"
+recommended_tool = "rkdeveloptool / upgrade_tool"
+confidence = "high"
+notes = "Loader mode reuses the MaskROM PID (separate entry above); discriminated by bcdUSB bit0 == 1 (rkdeveloptool RKScan.cpp). Sources: rkdeveloptool RKScan.cpp, Pine64 wiki, usb.ids."
+recommended_commands = [
+    "rkdeveloptool ppt  # print partition table",
+    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
+    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+]
+partition_layout = "rk-gpt-standard"
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "2207"
+usb_pid = "320c"
+class_code = ""
+vendor = "Fuzhou Rockchip Electronics"
 soc_family = "RK3328"
 soc_model = "RK3328"
-mode_name = "Loader (post-DRAM-init)"
+mode_name = "Loader (post-DRAM-init, usbplug / U-Boot rockusb)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "Loader mode reuses the MaskROM PID (separate entry above); discriminated by bcdUSB bit0 == 1 (rkdeveloptool RKScan.cpp). Sources: rkdeveloptool RKScan.cpp, rkdeveloptool 99-rk-rockusb.rules."
 recommended_commands = [
     "rkdeveloptool ppt  # print partition table",
     "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
@@ -259,35 +541,15 @@ partition_layout = "rk-gpt-standard"
 [[device]]
 match_type = "vid_pid"
 usb_vid = "2207"
-usb_pid = "360a"
+usb_pid = "350a"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3566"
+soc_family = "RK3566/RK3568"
 soc_model = "RK3566, RK3568"
-mode_name = "MaskROM"
+mode_name = "Loader (post-DRAM-init, usbplug / U-Boot rockusb)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = "RK3566/RK3568 share a generation and MaskROM PID."
-recommended_commands = [
-    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
-    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
-    "rkdeveloptool ppt  # print partition table",
-    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
-]
-partition_layout = "rk-gpt-standard"
-
-[[device]]
-match_type = "vid_pid"
-usb_vid = "2207"
-usb_pid = "360b"
-class_code = ""
-vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3566"
-soc_model = "RK3566, RK3568"
-mode_name = "Loader (post-DRAM-init)"
-recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "Loader mode reuses the MaskROM PID (separate entry above); discriminated by bcdUSB bit0 == 1 (rkdeveloptool RKScan.cpp). Pine64 wiki shows this PID in both modes on the RK3566 PineNote. Sources: rkdeveloptool RKScan.cpp, Pine64 wiki."
 recommended_commands = [
     "rkdeveloptool ppt  # print partition table",
     "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
@@ -298,35 +560,15 @@ partition_layout = "rk-gpt-standard"
 [[device]]
 match_type = "vid_pid"
 usb_vid = "2207"
-usb_pid = "380a"
+usb_pid = "350b"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
 soc_family = "RK3588"
-soc_model = "RK3588, RK3588S"
-mode_name = "MaskROM"
+soc_model = "RK3588"
+mode_name = "Loader (post-DRAM-init, usbplug / U-Boot rockusb)"
 recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
-recommended_commands = [
-    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
-    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
-    "rkdeveloptool ppt  # print partition table",
-    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
-]
-partition_layout = "rk-gpt-standard"
-
-[[device]]
-match_type = "vid_pid"
-usb_vid = "2207"
-usb_pid = "380b"
-class_code = ""
-vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3588"
-soc_model = "RK3588, RK3588S"
-mode_name = "Loader (post-DRAM-init)"
-recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "medium"
-notes = ""
+confidence = "high"
+notes = "Loader mode reuses the MaskROM PID (separate entry above); discriminated by bcdUSB bit0 == 1 (rkdeveloptool RKScan.cpp). Sources: rkdeveloptool RKScan.cpp, rkdeveloptool 99-rk-rockusb.rules."
 recommended_commands = [
     "rkdeveloptool ppt  # print partition table",
     "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
@@ -337,39 +579,19 @@ partition_layout = "rk-gpt-standard"
 [[device]]
 match_type = "vid_pid"
 usb_vid = "2207"
-usb_pid = "390a"
+usb_pid = "0010"
 class_code = ""
 vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3528"
-soc_model = "RK3528, RV1106 (edge-AI/ISP line)"
-mode_name = "MaskROM"
-recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "low"
-notes = "Newest, lowest-confidence pair in this table; most tentative of the Rockchip rows."
+soc_family = "Rockchip (any; U-Boot UMS gadget)"
+soc_model = "Rockchip (any; U-Boot UMS gadget)"
+mode_name = "UMS (U-Boot mass storage gadget)"
+recommended_tool = "rkdeveloptool"
+confidence = "high"
+notes = "rkdeveloptool treats 2207:0010 and 2207:0000 as MSC, not rockusb. usb.ids has an unrelated tablet at 2207:0010. Not a MaskROM/Loader mode -- the board is already running U-Boot and exposing eMMC/SD directly as a USB mass-storage device. Sources: U-Boot 'rockchip: board: Use a common USB Product ID for UMS' commit, rkdeveloptool RKScan.cpp."
 recommended_commands = [
-    "rkdeveloptool db <per-SoC MiniLoaderAll.bin>  # chainload loader: MaskROM itself has no flash verbs",
-    "rkdeveloptool ld  # confirm the device re-enumerated in Loader mode",
-    "rkdeveloptool ppt  # print partition table",
-    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
-]
-partition_layout = "rk-gpt-standard"
-
-[[device]]
-match_type = "vid_pid"
-usb_vid = "2207"
-usb_pid = "390b"
-class_code = ""
-vendor = "Fuzhou Rockchip Electronics"
-soc_family = "RK3528"
-soc_model = "RK3528, RV1106 (edge-AI/ISP line)"
-mode_name = "Loader (post-DRAM-init)"
-recommended_tool = "rkdeveloptool / upgrade_tool"
-confidence = "low"
-notes = ""
-recommended_commands = [
-    "rkdeveloptool ppt  # print partition table",
-    "rkdeveloptool rl 0x0 <total_sectors> full-backup.img  # full dump before any write",
-    "rkdeveloptool wl 0x0 <image>  # DESTRUCTIVE: only after a verified backup",
+    "lsblk  # U-Boot ums exposes eMMC/SD as a USB mass-storage block device",
+    "dd if=/dev/sdX of=full-backup.img bs=4M status=progress  # full dump before any write",
+    "dd if=<image> of=/dev/sdX bs=4M status=progress  # DESTRUCTIVE: only after a verified backup",
 ]
 partition_layout = "rk-gpt-standard"
 
@@ -396,7 +618,7 @@ partitions = [
 ]
 
 [partition_layouts.rk-legacy-parameter]
-description = "Legacy Rockchip layout (pre-GPT Android era, RK2928..RK3368): partition map is declared by the 'parameter' file, not a GPT."
+description = "Legacy Rockchip layout (pre-GPT Android era, RK2818..RK3188/RK3126/28): partition map is declared by the 'parameter' file, not a GPT."
 confidence = "medium"
 source = "Rockchip legacy parameter-file convention per wq#3923 research corpus; per-device map varies with firmware"
 partitions = [
