@@ -397,8 +397,10 @@ interactive-session install script, not a headless worker grant.
   dynamic-hooks (in-process `exec`) is always off. It speaks stdio only. The proxy listens on
   an ephemeral loopback port and only forwards to public hosts. This avoids the chrome-mcp
   tailnet exposure (ISSUE-LOG #838/#909).
-- A second, unguarded copy runs as `stealth-browser-mcp.service` on 127.0.0.1:8900 (raw
-  upstream, 101 tools). It is slated for retirement (wq#4290, `retire-8900-service.sh`).
+- A second, unguarded copy ran as `stealth-browser-mcp.service` on 127.0.0.1:8900 (raw
+  upstream, 101 tools). RETIRED 2026-10-18 (wq#4301/wq#4290): stopped, disabled, unit
+  parked at `/etc/systemd/system/stealth-browser-mcp.service.retired-wq4290`, :8900
+  closed (`ops/wq4206-stealth-browser-mcp/retire-8900-service.sh`, `--restore` to undo).
   Do not point anything at it.
 - The Chrome sandbox stays on through an AppArmor userns profile for the pinned binary
   (ISSUE-LOG #1412).
