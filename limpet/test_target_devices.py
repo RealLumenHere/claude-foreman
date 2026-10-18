@@ -78,7 +78,14 @@ def test_render_udev_rules_covers_vid_pid_wildcard_and_usb_class():
     # one usb_class interface-level rule (ADB class signature)
     assert 'ATTRS{bInterfaceClass}=="ff", ATTRS{bInterfaceSubClass}=="42", ATTRS{bInterfaceProtocol}=="01"' in rules
     every_rule_line = [l for l in rules.splitlines() if l.startswith("SUBSYSTEM")]
-    assert len(every_rule_line) == len(devices)
+    # wq#4190: a udev rule matches a VID:PID or class_code, not a mode -- entries that
+    # share a PID across two modes (e.g. Rockchip MaskROM vs Loader, discriminated by
+    # bcdUSB bit0, not expressible in a udev ATTR match) collapse to one rule each.
+    unique_rule_keys = {
+        (d.match_type, d.usb_vid, d.usb_pid) if d.match_type != "usb_class" else (d.match_type, d.class_code)
+        for d in devices
+    }
+    assert len(every_rule_line) == len(unique_rule_keys)
 
 
 def test_checked_in_rules_file_matches_current_catalog():
@@ -95,7 +102,7 @@ def test_checked_in_rules_file_matches_current_catalog():
 def test_every_rockchip_entry_carries_a_resolvable_profile():
     layouts = td.load_partition_layouts()
     rockchip = [d for d in td.load_catalog() if d.source_file == "rockchip"]
-    assert len(rockchip) == 17
+    assert len(rockchip) == 27
     for d in rockchip:
         assert d.recommended_commands, f"{d.usb_vid}:{d.usb_pid} has no recommended_commands"
         assert d.partition_layout in layouts, f"{d.usb_vid}:{d.usb_pid} names unknown layout {d.partition_layout!r}"

@@ -1,12 +1,19 @@
-# wq#3940 — LIMPET HAL target device database: samsung (4 entries)
+# wq#3940 — LIMPET HAL target device database: samsung (5 entries)
+# wq#4190 — reconciled against the source-verified catalog
+# /home/lumen/projects/limpet/data/usb-device-ids.toml (generated 2026-10-15,
+# data/_src/gen_usb_ids.py). Fixed 04e8:6860: the wq#3923 research pass
+# (ISSUE-LOG #1365: recalled, not sourced) catalogued it as an "Odin download
+# mode (composite variant)" — usb.ids and the verified catalog both say this is
+# Samsung Galaxy MTP mode, not a flashing mode at all. Dropped 04e8:6764
+# ("older firmware generation" Odin pair), which the verified catalog has no
+# primary source for. Added 04e8:685e (ADB), present in the verified catalog
+# but missing here.
 #
-# Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
-# boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
-# research/WQ3923_USB_BOOT_MODE_SIGNATURES.md) reshaped into this ticket's
-# per-vendor-family schema. Loaded by limpet/target_devices.py, which is what
-# ops/wq3809-limpet-hal/hal.py's target_device plugin queries for real-time
-# enrichment and what limpet/target-devices.d/91-limpet-targets.rules is generated
-# from (python3 limpet/target_devices.py render-udev-rules).
+# Drop-in catalog for /etc/limpet/target-devices.d/. Loaded by
+# limpet/target_devices.py, which is what ops/wq3809-limpet-hal/hal.py's
+# target_device plugin queries for real-time enrichment and what
+# limpet/target-devices.d/91-limpet-targets.rules is generated from
+# (python3 limpet/target_devices.py render-udev-rules).
 #
 # SCHEMA (per [[device]]):
 #   match_type        "vid_pid" | "vid_pid_wildcard" (pid="*") | "usb_class"
@@ -20,10 +27,10 @@
 #                     post-connect handshake, not from the PID — see notes)
 #   mode_name         human name of the boot/recovery mode
 #   recommended_tool  the tool to dispatch to
-#   confidence        "high" | "medium" | "low" — corroboration strength in the
-#                     wq#3923 research corpus, NOT a live hardware verification.
+#   confidence        "high" | "medium" | "low" (>=0.75 high, 0.45-0.74 medium,
+#                     <0.45 low on the verified catalog's 0.0-1.0 source scale).
 #                     Below "high" should not gate an irreversible action without
-#                     an operator confirm (same posture as usb_boot_signatures.toml).
+#                     an operator confirm.
 #   notes             caveats, protocol notes, disambiguation from a similar entry
 
 [[device]]
@@ -32,25 +39,25 @@ usb_vid = "04e8"
 usb_pid = "685d"
 class_code = ""
 vendor = "Samsung Electronics"
-soc_family = "Exynos- and Qualcomm-variant Galaxy devices alike (download mode is a Samsung bootloader feature, independent of the underlying SoC vendor)"
-soc_model = "Exynos- and Qualcomm-variant Galaxy devices alike (download mode is a Samsung bootloader feature, independent of the underlying SoC vendor)"
-mode_name = "Odin download mode (classic)"
-recommended_tool = "Heimdall"
+soc_family = "Galaxy (Exynos and Qualcomm models)"
+soc_model = "Galaxy (Exynos and Qualcomm models)"
+mode_name = "Odin/download mode (Heimdall kPidGalaxyS2 0x685D)"
+recommended_tool = "heimdall"
 confidence = "high"
-notes = "Classic Odin/Download-mode PID, the one Heimdall's device-detection targets. A Qualcomm-SoC Galaxy device in EDL (rather than Download mode) instead enumerates as the generic 05c6:9008 entry above — the two modes are distinct and triggered differently (Download: vol-down+vol-up+power; EDL: a deeper test-point/combination trigger)."
+notes = "Generic download-mode id on most Galaxy devices. Heimdall is old; newer One UI models may need Odin/Odin4 -- not verified. A Qualcomm-SoC Galaxy device in EDL instead enumerates as the generic 05c6:9008 pair, a distinct mode triggered differently. Sources: Heimdall BridgeManager.h/.cpp, usb.ids, android-udev-rules."
 
 [[device]]
 match_type = "vid_pid"
 usb_vid = "04e8"
-usb_pid = "6860"
+usb_pid = "6601"
 class_code = ""
 vendor = "Samsung Electronics"
-soc_family = "Galaxy devices (composite Download+MTP configuration)"
-soc_model = "Galaxy devices (composite Download+MTP configuration)"
-mode_name = "Odin download mode (composite variant)"
-recommended_tool = "Heimdall"
-confidence = "medium"
-notes = "Composite-descriptor variant seen on some models; lower confidence than 685d."
+soc_family = "Galaxy S (legacy)"
+soc_model = "Galaxy S (legacy)"
+mode_name = "download mode (Heimdall kPidGalaxyS 0x6601)"
+recommended_tool = "heimdall"
+confidence = "high"
+notes = "usb.ids also gives this PID to an ordinary 'Mobile Phone' in normal mode, so ops/wq3809-limpet-hal/hal.py's target_device gate (wq#4188) deliberately does not match on this pair alone -- enrichment-only here. Sources: Heimdall BridgeManager.h/.cpp, usb.ids."
 
 [[device]]
 match_type = "vid_pid"
@@ -58,23 +65,35 @@ usb_vid = "04e8"
 usb_pid = "68c3"
 class_code = ""
 vendor = "Samsung Electronics"
-soc_family = "newer Galaxy devices"
-soc_model = "newer Galaxy devices"
-mode_name = "Odin download mode (newer firmware generation)"
-recommended_tool = "Heimdall"
-confidence = "low"
-notes = "Newer-generation Odin pair; not independently cross-checked this run."
+soc_family = "Droid Charge"
+soc_model = "Droid Charge"
+mode_name = "download mode (Heimdall kPidDroidCharge 0x68C3)"
+recommended_tool = "heimdall"
+confidence = "high"
+notes = "Source: Heimdall BridgeManager.h/.cpp."
 
 [[device]]
 match_type = "vid_pid"
 usb_vid = "04e8"
-usb_pid = "6764"
+usb_pid = "685e"
 class_code = ""
 vendor = "Samsung Electronics"
-soc_family = "Galaxy devices (older models)"
-soc_model = "Galaxy devices (older models)"
-mode_name = "Odin download mode (older firmware generation)"
-recommended_tool = "Heimdall"
-confidence = "low"
-notes = ""
+soc_family = "Galaxy (legacy)"
+soc_model = "Galaxy (legacy)"
+mode_name = "ADB (USB debugging mode)"
+recommended_tool = "adb"
+confidence = "medium"
+notes = "Not a flashing mode. Source: usb.ids."
 
+[[device]]
+match_type = "vid_pid"
+usb_vid = "04e8"
+usb_pid = "6860"
+class_code = ""
+vendor = "Samsung Electronics"
+soc_family = "Galaxy (various)"
+soc_model = "Galaxy (various)"
+mode_name = "MTP (Media Transfer Protocol) — not a flashing mode"
+recommended_tool = "n/a"
+confidence = "medium"
+notes = "ISSUE-LOG #1365: the wq#3923 research pass catalogued this pair as 'Odin download mode (composite variant)'. usb.ids and the verified catalog both identify it as ordinary Galaxy MTP mode, not Odin/download. Source: usb.ids."

@@ -1,4 +1,7 @@
-# wq#3940 — LIMPET HAL target device database: generic/usb (34 entries)
+# wq#3940 — LIMPET HAL target device database: generic/usb (39 entries)
+# wq#4190 — added 4 Ingenic rows and fixed 18d1:d00d's mode label against the
+# source-verified catalog /home/lumen/projects/limpet/data/usb-device-ids.toml
+# (generated 2026-10-15, data/_src/gen_usb_ids.py); see the inline notes below.
 #
 # Drop-in catalog for /etc/limpet/target-devices.d/. Built from the wq#3923 SoC
 # boot-mode USB VID:PID research (ops/wq3809-limpet-hal/usb_boot_signatures.toml,
@@ -78,6 +81,63 @@ recommended_tool = "SPD Flash Tool / sprdclient"
 confidence = "medium"
 notes = "Not asked for by name in the ticket, but Unisoc is a major budget-phone SoC vendor (overlapping with the Xiaomi item) with its own BootROM-level download mode analogous to MTK BROM/Qualcomm EDL — worth shipping given the minimum-coverage goal."
 
+# wq#4190: Ingenic XBurst USB boot, added from the source-verified catalog
+# /home/lumen/projects/limpet/data/usb-device-ids.toml (generated 2026-10-15,
+# data/_src/gen_usb_ids.py) -- this vendor had no entries anywhere in
+# target-devices.d/ before this reconciliation.
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "a108"
+usb_pid = "c309"
+class_code = ""
+vendor = "Ingenic Semiconductor"
+soc_family = "Ingenic T40 (also T20/T21/T23/T30/T31/T41/A1 per thingino-dfu)"
+soc_model = "Ingenic T40 (also T20/T21/T23/T30/T31/T41/A1 per thingino-dfu)"
+mode_name = "USB Boot Device (permanent BootROM recovery mode)"
+recommended_tool = "thingino-dfu / Ingenic USB Cloner"
+confidence = "high"
+notes = "X2000 and X-series bootrom ids were not verified; do not assume this PID covers them. Sources: themactep/thingino-firmware wiki, wltechblog/thingino-dfu README."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "a108"
+usb_pid = "4775"
+class_code = ""
+vendor = "Ingenic Semiconductor"
+soc_family = "Ingenic JZ4775"
+soc_model = "Ingenic JZ4775"
+mode_name = "boot device"
+recommended_tool = "usbboot"
+confidence = "high"
+notes = "Source: usb.ids."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "601a"
+usb_pid = "4740"
+class_code = ""
+vendor = "Ingenic Semiconductor (legacy XBurst VID)"
+soc_family = "Ingenic JZ4740"
+soc_model = "Ingenic JZ4740"
+mode_name = "XBurst JZ4740 boot mode"
+recommended_tool = "usbboot"
+confidence = "high"
+notes = "Source: usb.ids."
+
+[[device]]
+match_type = "vid_pid"
+usb_vid = "601a"
+usb_pid = "4760"
+class_code = ""
+vendor = "Ingenic Semiconductor (legacy XBurst VID)"
+soc_family = "Ingenic JZ4760"
+soc_model = "Ingenic JZ4760"
+mode_name = "boot device"
+recommended_tool = "usbboot"
+confidence = "high"
+notes = "Source: usb.ids."
+
 [[device]]
 match_type = "usb_class"
 usb_vid = ""
@@ -148,13 +208,13 @@ match_type = "vid_pid"
 usb_vid = "18d1"
 usb_pid = "d00d"
 class_code = ""
-vendor = "Google Inc."
-soc_family = "Android 10+ devices using userspace fastbootd"
-soc_model = "Android 10+ devices using userspace fastbootd"
-mode_name = "fastbootd (userspace fastboot, dynamic partitions)"
+vendor = "Xiaomi (Google-VID AOSP fastboot convention)"
+soc_family = "Xiaomi Mi/Redmi (bootloader)"
+soc_model = "Xiaomi Mi/Redmi 2 era"
+mode_name = "fastboot (classic bootloader fastboot)"
 recommended_tool = "fastboot"
-confidence = "medium"
-notes = "Distinct from classic bootloader fastboot (4ee0): fastbootd runs from a booted Android userspace slot, so some operations (e.g. flashing the active slot) are unavailable — HAL/Wizard should not treat the two as interchangeable."
+confidence = "high"
+notes = "wq#4190: reconciled against the source-verified catalog /home/lumen/projects/limpet/data/usb-device-ids.toml -- the wq#3923 research pass (ISSUE-LOG #1365) labelled this 'fastbootd (userspace fastboot, dynamic partitions)'; the verified catalog (android-rules) identifies 18d1:d00d specifically as Xiaomi Mi/Redmi 2-era classic bootloader fastboot, not the generic fastbootd concept. Source: usb.ids, android-rules."
 
 [[device]]
 match_type = "vid_pid"
