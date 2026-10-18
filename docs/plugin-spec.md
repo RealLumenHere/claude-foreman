@@ -406,6 +406,45 @@ the destructive-verb list generalizes to all energize verbs (probe power,
 GPIO/reset, glitch included); (c) §6.2 item 2's broker is tier-independent:
 elevated plugins get no raw-device bypass.
 
+### 6.5 Capability vocabulary: `limpet.capabilities.v1` (wq#4224)
+
+§6.2's `[capabilities]` block and the HAL manifest's `[capabilities]`
+(`hal-spec.md` §3.2) both described affordances with free-form booleans
+(`capture_video`, `flash_write`, `visual_input`, …) — invented per manifest,
+with no shared registry and no safety class on the name, so a tool plugin could
+not reliably state what hardware it requires. wq#4224 freezes a versioned
+namespace, `limpet.capabilities.v1`, that both HAL and tool-plugin manifests
+declare against. The full vocabulary, semantics, per-capability
+`read_only`/`energizing` class, privacy class, freeze rules, and the legacy-
+boolean migration map live in
+[`design/wq4224_limpet_capabilities_v1.md`](../design/wq4224_limpet_capabilities_v1.md).
+
+Pattern provenance: the lampOS evaluation (wq#4209) — a frozen, versioned
+capability namespace with per-name safety and privacy classes. Pattern only;
+lampOS `hal/` is GPL-3.0 and every Limpet capability name is domain-specific
+(JTAG/flash/BootROM, not robot audio/vision/motion).
+
+Three invariants bind the vocabulary to this spec's gate so it can never weaken
+it:
+
+1. **Class defaults to `energizing`.** A missing or unknown capability name is
+   energize-gated, never autonomous — the same fail-closed default as
+   `hal-spec.md` §9 and §6.4's undeclared-verb rule.
+2. **The stricter of (capability class, verb class) wins.** A verb may be
+   autonomous (`action_class = read`, `[registry.tool_energize] tool = false`)
+   only if every capability it exercises is `read_only`. A verb touching an
+   `energizing` capability stays broker-confirmed per invocation regardless of
+   its own class. The vocabulary only ever *raises* a verb's floor; it is the
+   same "tightens or relaxes within the energize axis, never waives the confirm"
+   constraint §6.4 puts on `[registry.tool_energize]`.
+3. **Append-only, never repurposed.** A published name's meaning and class are
+   fixed; a capability may be re-marked `energizing` but never relaxed from
+   `energizing` to `read_only` (freeze rule 4, design doc §2).
+
+`[capabilities].root` (the privilege axis, §6.2/§6.4) is unchanged and
+orthogonal: the vocabulary names only the energize axis and target-facing
+affordances, never host privilege.
+
 ## 7. Update mechanism
 
 **Today:** re-clone/re-fetch the plugin's git repo at a new `rev`, overwrite
