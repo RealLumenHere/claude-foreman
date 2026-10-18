@@ -34,15 +34,36 @@ def report(case, ok, detail=""):
 
 
 class Sentinel(BaseHTTPRequestHandler):
+    hits = []
+
     def do_GET(self):
+        Sentinel.hits.append(f"{self.command} {self.path}")
         body = f"<html><title>{SENTINEL}</title><body>{SENTINEL}</body></html>".encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
         self.wfile.write(body)
 
+    do_POST = do_GET
+
     def log_message(self, *args):
         pass
+
+
+def subresource_vectors(base, tag):
+    """JS that requests `base` five ways without moving the tab; each path names its vector."""
+    return (f"fetch({base + tag + '-fetch'!r}).catch(() => 0);"
+            f"fetch({base + tag + '-nocors'!r}, {{mode: 'no-cors'}}).catch(() => 0);"
+            f"(() => {{ const x = new XMLHttpRequest(); x.open('GET', {base + tag + '-xhr'!r}); x.send(); }})();"
+            f"new Image().src = {base + tag + '-img'!r};"
+            f"try {{ new WebSocket({base.replace('http', 'ws', 1) + tag + '-ws'!r}); }} catch (e) {{}}"
+            "'sent'")
+
+
+def form_post(base, tag):
+    """JS that submits a POST form to `base`: a state-changing write to a private service."""
+    return ("const f = document.createElement('form'); f.method = 'POST';"
+            f"f.action = {base + tag + '-form'!r}; document.documentElement.append(f); f.submit(); 'sent'")
 
 
 def text(result):
@@ -74,10 +95,21 @@ async def main():
                              {"browser_args": ["--remote-debugging-address=0.0.0.0"]})
         await expect_refused(client, "spawn refuses profile outside install", "spawn_browser",
                              {"user_data_dir": "/home/lumen/kb"})
+        await expect_refused(client, "spawn refuses a caller proxy (egress proxy is forced)", "spawn_browser",
+                             {"proxy": "http://8.8.8.8:3128"})
 
         spawned = json.loads(text(await client.call_tool("spawn_browser", {})))
         iid = spawned["instance_id"]
         report("spawn_browser forced headless", spawned.get("headless") is True, spawned)
+
+        # wq#4218: page script reaching a private host without a tool URL argument. The
+        # script call itself succeeds; what must fail is every request it makes, so the
+        # evidence is the sentinel's own log. First from about:blank (a fresh tab shows
+        # chrome://new-tab-page/, which the landing check rightly refuses to run on).
+        await client.call_tool("navigate", {"instance_id": iid, "url": "about:blank"})
+        await client.call_tool("execute_script", {"instance_id": iid, "script": subresource_vectors(loopback, "blank")})
+        await asyncio.sleep(4)
+        report("execute_script requests from about:blank never reach loopback", Sentinel.hits == [], Sentinel.hits)
 
         nav = json.loads(text(await client.call_tool("navigate", {"instance_id": iid, "url": "https://example.com/"})))
         report("navigate public https", nav.get("title") == "Example Domain", nav)
@@ -97,6 +129,28 @@ async def main():
         await client.call_tool("take_screenshot", {"instance_id": iid, "file_path": str(shot)})
         report("screenshot inside install dir", shot.exists() and shot.stat().st_size > 0, shot)
 
+        before = len(Sentinel.hits)
+        await client.call_tool("execute_script", {"instance_id": iid, "script": subresource_vectors(loopback, "public")})
+        await asyncio.sleep(4)
+        report("execute_script requests from a public page never reach loopback",
+               len(Sentinel.hits) == before, Sentinel.hits[before:])
+
+        # A form POST moves the tab, so the landing check fires on this call or the next;
+        # the case here is only whether the write reached the private host at all.
+        before = len(Sentinel.hits)
+        try:
+            await client.call_tool("execute_script", {"instance_id": iid, "script": form_post(loopback, "public")})
+            await asyncio.sleep(3)
+            await client.call_tool("get_page_content", {"instance_id": iid})
+        except ToolError:
+            pass
+        report("execute_script form POST never reaches loopback", len(Sentinel.hits) == before, Sentinel.hits[before:])
+        # A fresh instance for the rest: on the unfixed install the next navigate after a
+        # blanked POST landing hung for the client's whole 120s timeout.
+        await client.call_tool("close_instance", {"instance_id": iid})
+        iid = json.loads(text(await client.call_tool("spawn_browser", {})))["instance_id"]
+        await client.call_tool("navigate", {"instance_id": iid, "url": "https://example.com/"})
+
         # Page script moves the tab to loopback behind the guard's back. Whichever call
         # first sees the tab there (the script call itself if the hop is fast, else the
         # next one) must blank the tab and withhold its content.
@@ -110,6 +164,7 @@ async def main():
             report(case, "landed on" in str(exc) and SENTINEL not in str(exc), exc)
         state = text(await client.call_tool("get_page_content", {"instance_id": iid}))
         report("tab blanked after private landing", SENTINEL not in state, state[:120])
+        report("loopback sentinel never received a request", Sentinel.hits == [], Sentinel.hits)
 
         for site in ANTI_BOT_SITES:
             try:

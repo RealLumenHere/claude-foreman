@@ -6,6 +6,11 @@ writes to any path. On Lumen the client is an agent reading hostile web pages, s
 prompt-injected page could ask it to open file:///home/lumen/... or a tailnet service and
 read the result back (the chrome-mcp file:// + eval finding, ISSUE-LOG #838/#909).
 
+Argument checks alone cannot cover page JavaScript: execute_script, or the hostile page
+itself, can fetch() a private host without naming it in any tool argument (wq#4218). So
+every Chrome is also forced through lumen_egress_proxy.py, which applies the same
+public-only rule to each connection the browser opens (wq#4290).
+
 This module is pure (no fastmcp/nodriver imports) so the policy is unit-testable;
 lumen_stealth_mcp.py applies it to every tool call.
 """
@@ -15,16 +20,31 @@ import socket
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# The audited --minimal surface at the pin (upstream's browser-management and
+# element-interaction sections). Every other tool is refused, so a fastmcp that ignores
+# --minimal (the raw :8900 deployment listed 101 tools, wq#4290) or a pin bump cannot
+# hand agents execute_cdp_command, inject_and_execute_script, execute_python_in_browser
+# or the dynamic-hooks exec().
+ALLOWED_TOOLS = frozenset({
+    "spawn_browser", "navigate", "close_instance", "list_instances", "get_instance_state",
+    "go_back", "go_forward", "reload_page",
+    "click_element", "type_text", "paste_text", "press_key", "select_option", "scroll_page",
+    "query_elements", "get_element_state", "wait_for_element", "get_page_content",
+    "execute_script", "take_screenshot", "file_upload",
+})
 URL_ARGS = ("url", "target_url")
 URL_LIST_ARGS = ("urls",)
 PATH_ARGS = ("file_path", "filepath", "filename", "user_data_dir")
 PATH_LIST_ARGS = ("paths",)
 WEB_SCHEMES = ("http", "https")
-PROXY_SCHEMES = ("http", "https", "socks4", "socks5")
 # Chrome flags an agent may pass. Everything else (remote debugging, file access,
 # web security, extensions, proxy/resolver overrides) is refused.
 SAFE_BROWSER_ARG_PREFIXES = ("--lang=", "--window-size=", "--disable-gpu", "--mute-audio",
                              "--force-device-scale-factor=", "--hide-scrollbars")
+# Added to every spawn so nothing skips the egress proxy: Chrome sends loopback direct
+# unless told otherwise, and WebRTC would send UDP direct.
+EGRESS_BROWSER_ARGS = ("--proxy-bypass-list=<-loopback>",
+                       "--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
 
 
 class PolicyError(ValueError):
@@ -38,17 +58,31 @@ def _resolve(host):
         raise PolicyError(f"cannot resolve host {host!r}: {exc}") from None
 
 
-def host_is_public(host):
-    """True when every address `host` names is globally routable. Loopback, RFC1918,
-    link-local and the 100.64/10 range the tailnet lives in are all non-global."""
+def _addresses(host):
     host = host.strip("[]")
     try:
         ipaddress.ip_address(host)
-        addrs = {host}
+        return {host}
     except ValueError:
         # getaddrinfo also decodes the numeric spellings (2130706433, 0x7f.1) to 127.0.0.1.
-        addrs = _resolve(host)
+        return _resolve(host)
+
+
+def host_is_public(host):
+    """True when every address `host` names is globally routable. Loopback, RFC1918,
+    link-local and the 100.64/10 range the tailnet lives in are all non-global."""
+    addrs = _addresses(host)
     return bool(addrs) and all(_is_global(a) for a in addrs)
+
+
+def public_addresses(host):
+    """The addresses `host` resolves to, IPv4 first, or PolicyError unless all are
+    public. Callers connect to these instead of resolving again, so a DNS answer that
+    changes after the check (rebinding) cannot reach a private host."""
+    addrs = _addresses(host)
+    if not addrs or not all(_is_global(a) for a in addrs):
+        raise PolicyError(f"host {host!r} is not a public address")
+    return sorted(addrs, key=lambda a: (":" in a, a))
 
 
 def _is_global(addr):
@@ -103,9 +137,12 @@ def check_browser_args(args):
             raise PolicyError(f"browser arg {arg!r} not allowed (allowed prefixes: {', '.join(SAFE_BROWSER_ARG_PREFIXES)})")
 
 
-def check_arguments(tool, arguments, roots, has_display):
+def check_arguments(tool, arguments, roots, has_display, egress_proxy):
     """Validate one tool call's arguments; returns the (possibly adjusted) arguments.
-    Raises PolicyError naming the refused argument."""
+    Raises PolicyError naming the refused tool or argument. `egress_proxy` is the
+    lumen_egress_proxy URL every spawned Chrome is pointed at."""
+    if tool not in ALLOWED_TOOLS:
+        raise PolicyError(f"tool {tool!r} is not on the lumen allowlist")
     arguments = dict(arguments)
     for name in URL_ARGS:
         if arguments.get(name) is not None:
@@ -122,7 +159,9 @@ def check_arguments(tool, arguments, roots, has_display):
     if tool == "spawn_browser":
         check_browser_args(arguments.get("browser_args"))
         if arguments.get("proxy"):
-            check_url(arguments["proxy"], schemes=PROXY_SCHEMES)
+            raise PolicyError("proxy not allowed: Chrome egress always goes through the lumen egress proxy")
+        arguments["proxy"] = egress_proxy
+        arguments["browser_args"] = [*(arguments.get("browser_args") or []), *EGRESS_BROWSER_ARGS]
         if not has_display:
             arguments["headless"] = True
     return arguments

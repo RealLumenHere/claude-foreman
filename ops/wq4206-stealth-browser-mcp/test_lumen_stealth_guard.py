@@ -78,25 +78,53 @@ def test_check_path_follows_symlinks(roots, tmp_path):
         guard.check_path(roots[1] / "link" / "x.png", roots)
 
 
+EGRESS = "http://127.0.0.1:40000"
+
+
 def test_spawn_browser_policy(roots):
     out = guard.check_arguments("spawn_browser", {"headless": False, "browser_args": ["--lang=en-US"]},
-                                roots, has_display=False)
+                                roots, False, EGRESS)
     assert out["headless"] is True
-    assert guard.check_arguments("spawn_browser", {"headless": False}, roots, has_display=True)["headless"] is False
+    assert guard.check_arguments("spawn_browser", {"headless": False}, roots, True, EGRESS)["headless"] is False
     for args in ({"browser_args": ["--remote-debugging-address=0.0.0.0"]},
                  {"browser_args": ["--allow-file-access-from-files"]},
+                 {"browser_args": ["--proxy-bypass-list=*"]},
                  {"user_data_dir": "/home/lumen/.config/chromium"},
-                 {"proxy": "http://127.0.0.1:8080"}):
+                 {"proxy": "http://127.0.0.1:8080"},
+                 {"proxy": "http://8.8.8.8:3128"}):
         with pytest.raises(guard.PolicyError):
-            guard.check_arguments("spawn_browser", args, roots, has_display=False)
+            guard.check_arguments("spawn_browser", args, roots, False, EGRESS)
+
+
+def test_spawn_browser_is_forced_through_egress_proxy(roots):
+    out = guard.check_arguments("spawn_browser", {"browser_args": ["--lang=en-US"]}, roots, False, EGRESS)
+    assert out["proxy"] == EGRESS
+    assert out["browser_args"] == ["--lang=en-US", *guard.EGRESS_BROWSER_ARGS]
+    assert "--proxy-bypass-list=<-loopback>" in guard.check_arguments("spawn_browser", {}, roots, False, EGRESS)["browser_args"]
+
+
+@pytest.mark.parametrize("tool", ["execute_cdp_command", "inject_and_execute_script", "execute_python_in_browser",
+                                  "call_javascript_function", "create_dynamic_hook", "new_tab", "get_cookies",
+                                  "hot_reload", "not_a_tool"])
+def test_tools_outside_the_minimal_surface_are_refused(roots, tool):
+    with pytest.raises(guard.PolicyError, match="allowlist"):
+        guard.check_arguments(tool, {"instance_id": "i"}, roots, False, EGRESS)
 
 
 def test_check_arguments_covers_list_and_path_args(roots):
     with pytest.raises(guard.PolicyError):
-        guard.check_arguments("get_cookies", {"urls": ["https://8.8.8.8/", "file:///etc/passwd"]}, roots, False)
+        guard.check_arguments("file_upload", {"paths": ["/home/lumen/.ssh/id_ed25519"]}, roots, False, EGRESS)
     with pytest.raises(guard.PolicyError):
-        guard.check_arguments("file_upload", {"paths": ["/home/lumen/.ssh/id_ed25519"]}, roots, False)
-    with pytest.raises(guard.PolicyError):
-        guard.check_arguments("export_network_data", {"filepath": "/tmp/x.json"}, roots, False)
+        guard.check_arguments("take_screenshot", {"file_path": "/tmp/x.png"}, roots, False, EGRESS)
     args = {"instance_id": "i", "selector": "a"}
-    assert guard.check_arguments("click_element", args, roots, False) == args
+    assert guard.check_arguments("click_element", args, roots, False, EGRESS) == args
+
+
+def test_public_addresses(monkeypatch):
+    assert guard.public_addresses("8.8.8.8") == ["8.8.8.8"]
+    monkeypatch.setattr(guard, "_resolve", lambda host: {"2606:4700::1", "93.184.215.14"})
+    assert guard.public_addresses("example.com") == ["93.184.215.14", "2606:4700::1"]
+    for addrs in ({"93.184.215.14", "127.0.0.1"}, {"100.117.66.102"}, set()):
+        monkeypatch.setattr(guard, "_resolve", lambda host, addrs=addrs: addrs)
+        with pytest.raises(guard.PolicyError):
+            guard.public_addresses("rebind.example")

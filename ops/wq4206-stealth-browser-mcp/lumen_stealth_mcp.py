@@ -5,7 +5,8 @@ Runs upstream's src/server.py unchanged, after patching fastmcp's FunctionTool.r
 every tool call goes through lumen_stealth_guard first, and every call on a browser
 instance is followed by a check of where the tab really is. A redirect or page script
 that lands the tab on a local file or private host blanks the tab and fails the call,
-so its content never reaches the agent.
+so its content never reaches the agent. Every Chrome it spawns sends all its traffic
+through lumen_egress_proxy, which refuses private hosts per connection (wq#4290).
 
 Also pins the upstream knobs agents should not choose: the Chrome binary (the
 playwright-installed Chrome for Testing under ./browsers), the upload root, and the
@@ -23,6 +24,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import lumen_egress_proxy  # noqa: E402
 import lumen_stealth_guard as guard  # noqa: E402
 
 UPSTREAM = HERE / "repo" / "src"
@@ -34,7 +36,7 @@ def browser_path():
     return found[-1] if found else ""
 
 
-def install_guard():
+def install_guard(egress_proxy):
     from fastmcp.exceptions import ToolError
     from fastmcp.tools.tool import FunctionTool
 
@@ -43,7 +45,7 @@ def install_guard():
 
     async def guarded_run(self, arguments):
         try:
-            arguments = guard.check_arguments(self.name, arguments, ROOTS, has_display)
+            arguments = guard.check_arguments(self.name, arguments, ROOTS, has_display, egress_proxy)
         except guard.PolicyError as exc:
             raise ToolError(f"lumen policy refused {self.name}: {exc}") from None
         result = await original_run(self, arguments)
@@ -78,7 +80,7 @@ def main():
         root.mkdir(exist_ok=True)
     os.chdir(HERE)
     sys.path.insert(0, str(UPSTREAM))
-    install_guard()
+    install_guard(lumen_egress_proxy.start())
     sys.argv = [str(UPSTREAM / "server.py"), *sys.argv[1:], "--disable-dynamic-hooks"]
     runpy.run_path(str(UPSTREAM / "server.py"), run_name="__main__")
 

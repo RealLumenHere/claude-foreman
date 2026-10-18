@@ -388,11 +388,18 @@ interactive-session install script, not a headless worker grant.
   REA bot-virality pattern does not apply. Python 3.12 venv with upstream's exact-pinned
   requirements. Chrome for Testing 153.0.8010.12 comes from `playwright==1.63.0`. The commit,
   the binary's sha256 and the venv freeze are in `PROVENANCE.json`.
-- Surface: `--minimal` (21 tools), behind `lumen_stealth_guard.py`. It allows public http(s)
-  only and checks where the tab really landed after every call. File paths are confined to
-  the install dir, browser flags come from an allowlist, and dynamic-hooks (in-process
-  `exec`) is always off. It speaks stdio only and opens no listener, which avoids the
-  chrome-mcp tailnet exposure (ISSUE-LOG #838/#909).
+- Surface: `--minimal` (21 tools), behind `lumen_stealth_guard.py`, which refuses any tool
+  outside that list. Tool URL arguments must be public http(s), and every Chrome sends all
+  its traffic through `lumen_egress_proxy.py`, which refuses private hosts per connection.
+  That covers fetch/XHR/form posts from page JS and `execute_script`, which no argument
+  check can see (wq#4218/wq#4290). The tab's landing URL is still checked after every call.
+  File paths are confined to the install dir, browser flags come from an allowlist, and
+  dynamic-hooks (in-process `exec`) is always off. It speaks stdio only. The proxy listens on
+  an ephemeral loopback port and only forwards to public hosts. This avoids the chrome-mcp
+  tailnet exposure (ISSUE-LOG #838/#909).
+- A second, unguarded copy runs as `stealth-browser-mcp.service` on 127.0.0.1:8900 (raw
+  upstream, 101 tools). It is slated for retirement (wq#4290, `retire-8900-service.sh`).
+  Do not point anything at it.
 - The Chrome sandbox stays on through an AppArmor userns profile for the pinned binary
   (ISSUE-LOG #1412).
 - Reach: it passes Cloudflare's JS challenge (nowsecure.nl). It fails Cloudflare managed

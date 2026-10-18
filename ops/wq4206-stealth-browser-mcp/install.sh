@@ -9,6 +9,7 @@
 #   browsers/     PLAYWRIGHT_BROWSERS_PATH: Chrome for Testing from playwright==$PLAYWRIGHT
 #   uploads/ screenshots/ profiles/   the only dirs the guard lets tools touch
 #   lumen_stealth_mcp.py  guard launcher (the registered MCP entrypoint)
+#   lumen_stealth_guard.py, lumen_egress_proxy.py   its tool-argument and per-connection policy
 #   PROVENANCE.json       what was installed, from where, with hashes
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -29,6 +30,7 @@ if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   vfile "$SRC/lumen_stealth_mcp.py" "$LAUNCHER"
   vfile "$SRC/lumen_stealth_guard.py" "$DEST/lumen_stealth_guard.py"
+  vfile "$SRC/lumen_egress_proxy.py" "$DEST/lumen_egress_proxy.py"
   [ -r "$DEST/PROVENANCE.json" ] || _vmiss "absent: $DEST/PROVENANCE.json"
   head=$(git -C "$DEST/repo" rev-parse HEAD 2>/dev/null || true)
   [ "$head" = "$PIN" ] || _vmiss "upstream checkout at '${head:-none}', want $PIN"
@@ -66,6 +68,7 @@ PLAYWRIGHT_BROWSERS_PATH="$DEST/browsers" \
 
 mkdir -p "$DEST/uploads" "$DEST/screenshots" "$DEST/profiles"
 install -m 0644 "$SRC/lumen_stealth_guard.py" "$DEST/lumen_stealth_guard.py"
+install -m 0644 "$SRC/lumen_egress_proxy.py" "$DEST/lumen_egress_proxy.py"
 install -m 0755 "$SRC/lumen_stealth_mcp.py" "$LAUNCHER"
 
 chrome=$("$VPY" -I "$LAUNCHER" --print-browser)
