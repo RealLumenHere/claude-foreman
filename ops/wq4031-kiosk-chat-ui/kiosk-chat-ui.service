@@ -1,0 +1,17 @@
+[Unit]
+Description=wq#4031 — Lumen kiosk chat web UI (FastAPI server.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lumen
+WorkingDirectory=/home/lumen/services/kiosk-chat-ui
+ExecStart=/usr/bin/python3 -m uvicorn server:app --host 0.0.0.0 --port 8099
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

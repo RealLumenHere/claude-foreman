@@ -41,12 +41,20 @@ instead of crashing the server when that venv isn't the one running it. Text cha
 camera snapshot work with no ML deps installed at all.
 
 ## Running
+Deployed on Lumen as `kiosk-chat-ui.service` (see `install.sh` / `kiosk-chat-ui.service`),
+serving on `:8099` (`:8080` is already ntfy's `lumen-updates` listener). Install/update
+with:
+```
+/home/lumen/bin/lumen-run start --root -- bash /home/lumen/foreman/ops/wq4031-kiosk-chat-ui/install.sh
+```
+For ad-hoc runs instead:
 ```
 cd ops/wq4031-kiosk-chat-ui
-uvicorn server:app --host 0.0.0.0 --port 8080
+uvicorn server:app --host 0.0.0.0 --port 8099
 ```
 For voice/TTS, run under the voice-venv described in the PoC report (adds
-`faster-whisper`, `kokoro-onnx`, `torchaudio==2.11.0+cpu`).
+`faster-whisper`, `kokoro-onnx`, `torchaudio==2.11.0+cpu`) — the deployed unit above runs
+in the base env, so voice/tts routes 503 until that venv is wired in (wq#4030 territory).
 
 ## Tests
 ```
