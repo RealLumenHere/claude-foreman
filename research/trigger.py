@@ -50,6 +50,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import ledger  # noqa: E402
 import sandbox_gate  # noqa: E402
+import search_tier  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "harness"))
 import needs  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "orchestrator"))
@@ -166,9 +167,10 @@ def constraint_block(db=None, n=ledger.CONSTRAINT_ROWS):
         c.close()
 
 
-def brief_text(brief_id, question, context, env, constraints):
+def brief_text(brief_id, question, context, env, constraints, findings=""):
     """The brief (§2): constraint block prepended verbatim, then the one question,
-    its requesting context, and the target environment."""
+    its requesting context, the target environment, and (wq#4232) whatever the
+    tiered search turned up — an optional section, never a guess when empty."""
     parts = []
     if constraints:
         parts.append(constraints)
@@ -180,6 +182,8 @@ def brief_text(brief_id, question, context, env, constraints):
         f"Requesting context: {context}",
         f"Target environment: {env['node']} ({env['arch']}, {env['os']})",
     ]
+    if findings:
+        parts += ["", findings.rstrip("\n")]
     return "\n".join(parts) + "\n"
 
 
@@ -319,12 +323,14 @@ def record_dispatch(state_dir=STATE_DIR):
 
 def trigger_one(brief_id, question, context, db=None, briefs_dir=BRIEFS_DIR,
                  pending_dir=None, dry_run=False, chat=gateway_chat, manifest=None,
-                 state_dir=STATE_DIR):
-    """Brief -> (dry-run stop here) -> route -> dispatch -> bounce-or-drop ->
-    sandbox inbox. Returns a report dict; never raises on a dead gateway/router."""
+                 state_dir=STATE_DIR, search=search_tier.findings_block):
+    """Brief -> search -> (dry-run stop here) -> route -> dispatch ->
+    bounce-or-drop -> sandbox inbox. Returns a report dict; never raises on a
+    dead gateway/router/search tier — each is fail-soft on its own (§1)."""
     env = target_env()
     constraints = constraint_block(db)
-    text = brief_text(brief_id, question, context, env, constraints)
+    findings = search(question)
+    text = brief_text(brief_id, question, context, env, constraints, findings)
     path = write_brief(brief_id, text, briefs_dir)
     out = {"brief_id": brief_id, "brief_path": path, "context": context}
     if dry_run:
@@ -349,19 +355,19 @@ def trigger_one(brief_id, question, context, db=None, briefs_dir=BRIEFS_DIR,
 
 
 def scan(db=None, aq_db=None, briefs_dir=BRIEFS_DIR, pending_dir=None, dry_run=False,
-          chat=gateway_chat, state_dir=STATE_DIR):
+          chat=gateway_chat, state_dir=STATE_DIR, search=search_tier.findings_block):
     inputs = unserved_wq_questions(db, briefs_dir) + unserved_aq_alerts(aq_db, briefs_dir)
     return [trigger_one(bid, q, ctx, db, briefs_dir, pending_dir, dry_run, chat,
-                         state_dir=state_dir)
+                         state_dir=state_dir, search=search)
             for bid, q, ctx in inputs]
 
 
 def ask(question, context="manual", db=None, briefs_dir=BRIEFS_DIR, pending_dir=None,
-        dry_run=False, chat=gateway_chat, state_dir=STATE_DIR):
+        dry_run=False, chat=gateway_chat, state_dir=STATE_DIR, search=search_tier.findings_block):
     brief_id = "ask-" + datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
     return trigger_one(brief_id, question, context, db, briefs_dir, pending_dir, dry_run, chat,
-                        state_dir=state_dir)
+                        state_dir=state_dir, search=search)
 
 
 def main(argv=None):
