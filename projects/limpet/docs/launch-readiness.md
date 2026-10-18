@@ -32,8 +32,8 @@ are both on the page.
 - DONE — energize gate: `docs/limpet_readme.md:68`.
 - DONE — HAL hardware table: `docs/limpet_readme.md:213` ("Supported
   Hardware", probes/programmers/analyzers/targets).
-- OPEN — asciinema: no recording exists (`grep -rn asciinema docs/` finds only
-  this file). Record against a real detected device (Bus Pirate or ST-Link),
+- OPEN — asciinema: no recording exists (`grep -rn asciinema docs/` finds
+  nothing). Record against a real detected device (Bus Pirate or ST-Link),
   showing detect → suggest → energize-confirm prompt. ≤30s, hosted on
   asciinema.org + a GIF fallback embedded in the README.
 - OPEN — consistency: README claims the catalog's canonical count is 104
