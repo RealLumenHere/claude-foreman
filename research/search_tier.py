@@ -70,6 +70,31 @@ def deepseek_search(query, n=6, url=DEEPSEEK_SEARCH_URL, key_file=DEEPSEEK_KEY_F
     return results if isinstance(results, list) and results else None
 
 
+def deepseek_status(url=DEEPSEEK_SEARCH_URL, key_file=DEEPSEEK_KEY_FILE, timeout=TIMEOUT_S):
+    """Diagnostic probe for tier 1 (wq#4252): `deepseek_search` deliberately
+    collapses every failure mode to None so callers never block on it, but that
+    makes "account needs funding" (402) indistinguishable from "key missing" or
+    "network down" when checking whether a top-up at platform.deepseek.com has
+    landed. Returns one of: "ok", "no_key", "unauthorized" (401), "unfunded"
+    (402), "rate_limited" (429), "http_<code>" (other status), "unreachable"
+    (network/timeout/bad response)."""
+    key = _deepseek_key(key_file)
+    if not key:
+        return "no_key"
+    body = json.dumps({"query": "ping", "num_results": 1}).encode()
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return "ok" if resp.status == 200 else f"http_{resp.status}"
+    except urllib.error.HTTPError as e:
+        return {401: "unauthorized", 402: "unfunded", 429: "rate_limited"}.get(
+            e.code, f"http_{e.code}")
+    except (urllib.error.URLError, OSError, ValueError):
+        return "unreachable"
+
+
 def searxng_search(query, n=6, fleet_search_bin=FLEET_SEARCH_BIN, timeout=TIMEOUT_S):
     """Tier 3 (final fallback) — shells out to fleet-search's existing
     SearXNG-backed `web` source (wq#999) rather than re-implementing it."""
@@ -119,3 +144,7 @@ def findings_block(query, n=6, search=tiered_search):
         snippet = r.get("snippet") or r.get("content") or ""
         lines.append(f"- {title} ({url}): {snippet}".strip())
     return "\n".join(lines) + "\n" if len(lines) > 1 else ""
+
+
+if __name__ == "__main__":
+    print(deepseek_status())

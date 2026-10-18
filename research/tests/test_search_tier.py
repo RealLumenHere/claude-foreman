@@ -63,3 +63,29 @@ def test_findings_block_renders_tier_and_entries():
 
 def test_searxng_search_missing_binary_returns_none():
     assert search_tier.searxng_search("q", fleet_search_bin="/nonexistent/fleet-search") is None
+
+
+def test_deepseek_status_no_key():
+    assert search_tier.deepseek_status(key_file="/nonexistent/deepseek.token") == "no_key"
+
+
+def test_deepseek_status_distinguishes_unfunded_from_unauthorized(monkeypatch):
+    import urllib.error
+
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 402, "Payment Required", {}, None)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk" + "-" + "test" * 4)
+    monkeypatch.setattr(search_tier.urllib.request, "urlopen", fake_urlopen)
+    assert search_tier.deepseek_status() == "unfunded"
+
+
+def test_deepseek_status_unreachable_on_network_error(monkeypatch):
+    import urllib.error
+
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.URLError("no route")
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk" + "-" + "test" * 4)
+    monkeypatch.setattr(search_tier.urllib.request, "urlopen", fake_urlopen)
+    assert search_tier.deepseek_status() == "unreachable"
