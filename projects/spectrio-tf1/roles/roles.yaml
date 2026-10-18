@@ -1,0 +1,86 @@
+# wq#4181 — TF1 appliance role map: exit node, external-vantage monitoring,
+# ADB host.
+#
+# Extends wq#3430's 5-appliance plan (ops/wq3430-spectrio-tf1-deploy/roles.yaml)
+# with 3 more single-purpose roles on the same ophub Armbian S905X3 base image.
+# Every role here layers role-specific config on top of harden-armbian.sh
+# (this directory) — the hardening pack is shared across tf1-a/b/c, role
+# config is additive.
+
+base_image: "ophub Armbian S905X3 (per wq#3429 WORKING_PROCEDURE, image/DTB pinned there)"
+hardening_script: "harden-armbian.sh"
+est_power_draw_w: 3
+est_cost_per_month_usd: 0.70
+
+build_order:
+  - tf1-a-exit-node
+  - tf1-b-external-vantage
+  - tf1-c-adb-host
+
+roles:
+  tf1-a-exit-node:
+    kind: exit_node
+    name: "Tailscale exit node + subnet router"
+    hostname: tf1-a
+    tailnet: true
+    static_ip: null
+    services:
+      - tailscaled.service
+      - cpufreq-performance.service
+    config_script: "tf1-a-exit-node.sh"
+    sysctl_dropin: "/etc/sysctl.d/99-tailscale.conf"
+    networkd_dispatcher_hook: "/etc/networkd-dispatcher/routable.d/50-tailscale-gro"
+    advertise_routes: "192.168.8.0/24"
+    cpu_governor: performance
+    physical_tasks:
+      - "VERIFY NIC speed on the real unit (100M vs 1G) before relying on the performance governor + GRO forwarding path — a 100M link caps exit-node throughput regardless of CPU tuning"
+      - "VERIFY onboard RAM"
+      - "VERIFY PoE PD power budget delivered to this unit (est ~3W draw assumed; exit-node load draws more than idle)"
+      - "run tailscale up --advertise-exit-node --advertise-routes=192.168.8.0/24 once, interactively, then approve the route/exit-node in the tailnet admin console (one-time human action, not a recurring gate)"
+    open_questions:
+      - "LAN subnet behind this router is assumed 192.168.8.0/24 per the ticket; confirm against the real TF1 network before advertising"
+
+  tf1-b-external-vantage:
+    kind: external_vantage
+    name: "External-vantage Gatus + self-hosted ntfy"
+    hostname: tf1-b
+    tailnet: true
+    static_ip: null
+    services:
+      - gatus.service
+      - ntfy.service
+    config_dir: "tf1-b-external-vantage"
+    gatus_image: "ghcr.io/twin/gatus:v5-arm64"
+    gatus_storage: "tmpfs (sqlite db never touches eMMC)"
+    ntfy_version: "2.28"
+    ntfy_bind: "tailscale IP only"
+    ntfy_acl: "deny-all"
+    covers_gap: "WAN-side Gatus blind spot (aq#98/99/138/139) — monitors Lumen from OUTSIDE its own network, with an alert path independent of Lumen itself"
+    physical_tasks:
+      - "VERIFY NIC speed on the real unit (100M vs 1G) — affects probe latency readings, not a hard blocker"
+      - "VERIFY onboard RAM (Gatus + ntfy are both small; flag if the unit has <1GB)"
+      - "VERIFY PoE PD power budget (est ~3W)"
+      - "provision ntfy's auth-file (users/ACL) at bench time; deny-all ships as the default until a real credential exists"
+      - "point Gatus's endpoint list at Lumen's actual WAN-facing services once tailnet connectivity is confirmed"
+    open_questions:
+      - "exact Gatus endpoint list (which WAN-facing Lumen services aq#98/99/138/139 flagged as unmonitored) is TBD at bench time — ships with a placeholder config"
+
+  tf1-c-adb-host:
+    kind: adb_host
+    name: "Tailnet-only ADB host"
+    hostname: tf1-c
+    tailnet: true
+    static_ip: null
+    services:
+      - adb-server.service
+      - tf1-c-adb-firewall.service
+    config_script: "tf1-c-adb-host.sh"
+    adb_bind: "-a -P 5037"
+    adb_mode: nodaemon
+    firewall: "tailscale0-only (iptables, see tf1-c-adb-host.sh)"
+    physical_tasks:
+      - "VERIFY NIC speed on the real unit (100M vs 1G)"
+      - "VERIFY onboard RAM"
+      - "VERIFY PoE PD power budget (est ~3W)"
+      - "confirm which Android devices this host services and their USB power draw before wiring them in"
+    open_questions: []

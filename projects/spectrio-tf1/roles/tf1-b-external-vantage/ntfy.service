@@ -1,0 +1,13 @@
+[Unit]
+Description=Self-hosted ntfy (tf1-b external-vantage alert path)
+After=docker.service network-online.target tailscaled.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/home/lumen/projects/spectrio-tf1/roles/tf1-b-external-vantage/launch-ntfy.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

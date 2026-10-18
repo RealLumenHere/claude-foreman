@@ -1,0 +1,13 @@
+[Unit]
+Description=Gatus external-vantage monitoring (tf1-b)
+After=docker.service network-online.target tailscaled.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/home/lumen/projects/spectrio-tf1/roles/tf1-b-external-vantage/launch-gatus.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

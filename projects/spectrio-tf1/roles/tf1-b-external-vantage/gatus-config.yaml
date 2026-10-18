@@ -1,0 +1,29 @@
+# wq#4181 — tf1-b Gatus config. sqlite storage lives on tmpfs (see
+# launch-gatus.sh's --tmpfs /data), so the eMMC never takes a Gatus write.
+#
+# endpoints/alerting.ntfy.url below are PLACEHOLDERs — roles.yaml's
+# open_questions for tf1-b-external-vantage: the real WAN-facing endpoint
+# list (the services aq#98/99/138/139 flagged as unmonitored from outside
+# Lumen's own network) and the tailscale IP are both TBD until this unit is
+# on the bench and joined to the tailnet.
+storage:
+  type: sqlite
+  path: /data/gatus.db
+
+endpoints:
+  - name: lumen-wan-placeholder
+    url: "https://PLACEHOLDER.example.invalid/health"
+    interval: 60s
+    conditions:
+      - "[STATUS] == 200"
+    alerts:
+      - type: ntfy
+        enabled: true
+        failure-threshold: 2
+        success-threshold: 2
+
+alerting:
+  ntfy:
+    url: "http://PLACEHOLDER-TAILSCALE-IP"
+    topic: lumen-external-vantage
+    priority: 4

@@ -1,0 +1,13 @@
+# wq#4181 — tf1-b self-hosted ntfy 2.28 config. Bound to the tailscale IP
+# only (launch-ntfy.sh publishes the container port on that address, not
+# 0.0.0.0) and ACL deny-all by default — covers the gap where this is the
+# alert path of last resort when Lumen itself is unreachable, so it cannot
+# ship open to the world. auth-default-access flips from deny-all once a
+# real credential is provisioned at bench time (roles.yaml physical_tasks);
+# do not generate a dummy credential here.
+base-url: "http://PLACEHOLDER-TAILSCALE-IP"
+listen-http: ":80"
+cache-file: /var/cache/ntfy/cache.db
+auth-file: /etc/ntfy/auth.db
+auth-default-access: "deny-all"
+behind-proxy: false
