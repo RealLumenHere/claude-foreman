@@ -12,13 +12,34 @@ worktree's sandbox and isn't where freedom-bot docs actually live.
 
 ## Bottom line
 
-**No public community reverse-engineering work exists for Polaris Freedom or Polaris
-VRX pool robots** — no teardown guides, no firmware dumps, no ESP32-specific writeups,
-no GitHub repos, no wiring diagrams, no leaked/decoded motor-control protocol. This was
-checked across general web search (w/ DeepSeek-Search fallback), Reddit, Hacker News,
-and GitHub (API search itself failed — see Tooling Notes). This is itself the useful
-result: a freedom-bot integration has to start from first-party sources (manuals,
-patents, physical teardown) rather than reusing existing community RE.
+> **Corrected 2026-10-18 (wq#4291).** The original bottom line here claimed no public
+> community RE and no GitHub repos exist for these models. That was false and has been
+> replaced. Evidence: `reports/wq4284_judgment_wq4271_github_repos_found.md`.
+
+Community RE **does** exist for Freedom and VRX, at the **cloud/app-protocol layer**:
+
+- `github.com/galletn/iaqualink` — Home Assistant integration, MIT, HACS-distributed.
+  Its README's "Fully Supported" list names both **Polaris VRX iQ+** and **Polaris
+  Freedom Cordless** (README lines 150 and 156; fetched live 2026-10-18, HTTP 200), and
+  the feature list covers remote directional movement, start/stop/return-to-base,
+  battery, cleaning mode, and error state. Models land on that list when an owner
+  reports a working unit, so the two entries are owner-confirmed, not vendor copy.
+- `github.com/tekkamanendless/iaqualink` — Go client, MIT. Documents the wire commands
+  outright: `0A1B42` backward, `0A1B46` forward, `0A1B4C` left, `0A1B52` right (README
+  lines 209-212). Its own "Tested With" list names P965 iQ rather than Freedom/VRX, but
+  it is the same iAquaLink `i2d_robot` family galletn confirms Freedom/VRX on.
+
+What **does** remain true is the hardware layer: no teardown guide, no firmware dump, no
+ESP32 firmware writeup, no schematic or motor-driver board photo, and no decode of the
+Freedom Plus LiFi remote link. So the practical result is split — a freedom-bot
+integration can reuse an existing MIT client for cloud-relay directional control, while
+any local/low-latency control path still has to start from first-party sources (manuals,
+patents, physical teardown).
+
+Both repos were already documented by the prior freedom-bot ticket wq#4266, landed one
+commit before this survey: `projects/freedom-bot/PHASE1-ESP32-MOTOR-PROTOCOL.md` lines
+18-44 (commit `c51e453e`). This survey cited that commit for its path convention and
+missed its substance.
 
 ## What the devices actually are
 
@@ -39,12 +60,12 @@ patents, physical teardown) rather than reusing existing community RE.
   kit community (iFixit-style reviews, YouTube tune-up videos) — but that's mechanical
   maintenance, not RE of any onboard compute/comms.
 
-## LiFi remote control (Freedom Plus) — the one real protocol lead
+## LiFi remote control (Freedom Plus) — the one *undecoded* protocol surface
 
 Freedom Plus's handheld remote talks to the submerged robot via **LiFi** (modulated
 light pulses through the water) rather than RF, because RF does not propagate usefully
-underwater. This is the only documented "protocol" surface found, and it is vendor
-marketing copy, not a community decode:
+underwater. Unlike the Wi-Fi/iAquaLink side (decoded — see Bottom line), the LiFi link
+has no community decode; everything below is vendor marketing copy:
 - Functions confirmed from marketing/support copy: start/stop, steer, "call the cleaner
   up" (surface summon) via the Easy Lift System.
 - No example of anyone having decoded the LiFi modulation scheme, sniffed it with a
@@ -75,11 +96,16 @@ survey only.
 
 ## Firmware / ESP32 / GitHub
 
-- **No GitHub repos found** referencing Polaris Freedom, Polaris VRX, or any
-  ESP32/firmware work tied to either. `fleet-search github` (authenticated GitHub API)
-  itself failed with a 401 — no usable token in this environment (see Tooling Notes) —
-  so this is a web-search-only negative result, not a confirmed-empty GitHub search;
-  it should be re-run once a GitHub token is available.
+- **Two GitHub repos do exist** for the iAquaLink cloud protocol these robots speak
+  (galletn/iaqualink, tekkamanendless/iaqualink — see Bottom line). What no repo covers
+  is the **ESP32/firmware layer**: no firmware dump, no disassembly, no custom-firmware
+  project for Freedom or VRX. That split drives phase planning — the cloud path is
+  solved and MIT-licensed, the on-board path is not.
+- `fleet-search github` (authenticated GitHub API) failed with a 401 — no usable token
+  in this environment (see Tooling Notes) — so the GitHub side of this survey was
+  web-search-only and demonstrably *not* exhaustive: it missed both repos above, either
+  of which a plain web search for "polaris freedom home assistant integration" returns.
+  Re-run once a GitHub token is available.
 - No hits for "polaris freedom esp32", "polaris vrx esp32 OR firmware OR teardown", or
   general firmware-dump-style queries. The ESP32-related hits that did come back
   (e.g. a 2025-12-27 congress talk on reverse-engineering the ESP32 Bluetooth stack)
@@ -97,10 +123,12 @@ overcharge/over-discharge/overcurrent/thermal protection and SMBus/I2C/UART BMS
 communication — representative of the battery class these robots use, not a verified
 Freedom/VRX teardown figure.
 
-## Wiring diagrams / motor control
+## Wiring diagrams / board-level motor control
 
-None found. No schematic, no motor-driver board photos, no PCB teardown for Freedom or
-VRX turned up in web, Reddit, or HN search.
+No schematic, no motor-driver board photos, and no PCB teardown for Freedom or VRX
+turned up in web, Reddit, or HN search. (The *command-level* motor protocol is decoded —
+see Bottom line; what is missing is anything below the cloud API: driver IC, gearbox,
+UART/GPIO headers.)
 
 ## "iRobot competitor protocol" keyword
 
