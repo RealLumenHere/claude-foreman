@@ -263,6 +263,14 @@ live `lumen-community-watch` (wq#1018) poller — its config at
 `add_dirs` grant (`kb/ISSUE-LOG.md` row 1360, same class as rows 129/141) — so they are
 staged here and in the fact for the next worker/Frank with access to wire them in.
 
+**SkillFishOS is not a blade OS (wq#4180, research-f-40b629, 2026-10-17):** it is cited
+above only as a community distro that happens to apply the CPU-core-unlock DXE/SMU patch
+at boot (`hapi.cpu_core_unlock_state`). It is a KDE-desktop, Debian-sid-based distro —
+not the headless-server install this runbook's §1 specifies — and it dropped Ollama in
+favor of Unsloth Studio as of its 26.08 release, i.e. its own maintainers moved away from
+Ollama for serving. Borrow only its `linux-tkg` BC-250 kernel patch set as a second
+opinion against this runbook's kernel choices; never boot it as the production image.
+
 ```sh
 export RADV_PERFTEST=aco
 export RADV_DEBUG=noibs,nobinning
@@ -275,7 +283,43 @@ export LLAMACPP_VULKAN_COMMAND_BUFFER_COUNT=1
 These are baked into `llama-server.service` (§8) via `Environment=` lines so they apply
 identically whether started by systemd or by hand.
 
+### If Ollama is ever used (dense models, <=14B, only)
+
+§8 below is the plan of record: the MoE lead is `llama-server` + `GGML_VULKAN`, never
+Ollama. The one case where Ollama is still an option on this fleet is a **dense** model
+<=14B on a blade that isn't carrying the MoE lead — never the MoE lead itself (see §8).
+If that case ever comes up (research-f-40b629, 2026-10-17, akandr/bc250 paired A/B,
+llama.cpp b9265):
+
+- `OLLAMA_VULKAN=1` is **mandatory** in the unit's `Environment=` — Ollama's Vulkan
+  backend is opt-in, not auto-detected; without the flag it silently falls back to CPU
+  and the run looks "successful" while being 10-50x slower, with no error logged.
+- `OOMScoreAdjust=-1000` on the systemd unit — Ollama's model-manager process is an OOM
+  kill target like any other on a UMA box where GPU and system memory are the same
+  pool; without this it is the first thing the kernel reaps under memory pressure.
+- KV cache quant **q8_0, not q4_0** — q4_0 collapses low-KV-head models (this card's
+  dense candidates included); q4_0 is fine for prompt/weight quant, not for the KV
+  cache on this hardware.
+
+Dense-model throughput shows ~0% gap between Ollama and llama-server (same source) — the
+~2.4x MoE expert-dispatch penalty below is specific to MoE routing, which is exactly why
+MoE stays off Ollama entirely rather than trying to tune around it.
+
 ## 8. Serve: llama-server, NOT Ollama
+
+**Plan of record (wq#4180):** the MoE lead is served by `llama-server` built with
+`GGML_VULKAN` (this section), fronted by LiteLLM the same way the fleet already fronts a
+llama-server blob on Isis today — `research/inference_nodes.yaml`'s `qwen36-local`
+family (`serving: llama-server`, `port: 8095`) and `ops/wq1337-hapi-bringup/litellm-hapi1-dark.yaml:43`'s
+own `replaces_tier: qwen36-local (Isis)` note are the live examples; there is no Lumen
+`:8095` instance in this fleet (grepped `research/inference_nodes.yaml` and
+`ops/**/litellm_config_snippet.yaml` — every `:8095` hit resolves to Isis, not Lumen).
+Note Isis's own `qwen36-local` blob was swapped from this same MoE model to a dense
+Qwen2.5-Coder-14B per wq#3794 (Isis's no-AVX2 CPU made MoE prefill the bottleneck there)
+— that swap was a CPU-bound problem specific to Isis, unrelated to the Ollama
+expert-dispatch penalty this section is about, and does not apply to hapi-1's
+Vulkan-GPU-bound path. Ollama is reserved for dense models <=14B per the gotcha above;
+it never serves this card's MoE lead.
 
 Ollama drops MoE throughput ~60 → ~25 tok/s on this model family (SOT line 34) — build
 and run `llama.cpp`'s `llama-server` directly.
@@ -362,6 +406,14 @@ generated output degenerating into repeated tokens or non-UTF8 garbage mid-run, 
 the same class of symptom a corrupted GDDR6 read would produce whether or not there's a
 screen attached to show it as a pixel.
 
+**STEP1 baseline target (wq#4180, research-f-40b629, 2026-10-17; `hapi.bringup_test_plan`):**
+Qwen3.6-35B-A3B IQ2_M via `llama-server`/Vulkan on the paired A/B reference
+(akandr/bc250, llama.cpp b9265) measured **59.6 tok/s at 24CU (stock) / 78.0 tok/s at
+40CU (unlocked)** — this is the number `bench.sh`'s generation-tok/s column should land
+near once §2's 40CU unlock and §6's governor are both in place; a result well under ~60
+tok/s before the unlock, or well under ~78 tok/s after it, is a bring-up regression to
+chase, not a new baseline to accept.
+
 ## 10. LiteLLM `hapi-1` rung — staged DARK
 
 `litellm-hapi1-dark.yaml` (this directory) is a `model_list` entry ready to splice into
@@ -384,5 +436,43 @@ the rung goes live. See the file's own header comment for the exact activation s
 | Generation throughput | measured at 512/2048/10k ctx, compare to both SOT sources | §9, SOT lines 206-227 |
 | Soak | no crash, no GPU reset event, no output corruption for 60+ min | §9, SOT line 25 |
 | wq#266 gate | `verdict_agree>=0.9 AND leaks=0 AND rationale>=3.5` vs Isis | §10 |
+| Golden-image probe | `ttm.pages_limit`/zram/swap all pass (§12) | §12 |
 
-Only after all six hold does the LiteLLM rung (§10) get merged from dark to live.
+Only after all seven hold does the LiteLLM rung (§10) get merged from dark to live.
+
+## 12. Golden-image checklist (every blade, before first boot-to-benchmark)
+
+wq#4180 (research-f-40b629, 2026-10-17): these three checks catch config regressions
+that are silent at boot and only show up as a mid-inference stall or OOM once the model
+is actually loaded — run them on every blade's image before it goes into §9 benchmarking,
+not just hapi-1's.
+
+```sh
+cat /sys/module/ttm/parameters/pages_limit   # must read 4194304
+```
+
+`ttm.pages_limit` is the kernel TTM graphics-buffer page cap; the default (~7.4GiB-worth
+of pages) is well under this card's 16GB unified pool and silently throttles a
+mid-inference allocation into ~500-second stalls rather than failing fast. **This is not
+a one-time boot-param check** — `tmpfiles.d` entries can override a `modprobe`/cmdline
+setting on every boot, so a value that was correct at bring-up can regress on a later
+boot without touching `/etc/default/grub` or `/etc/modprobe.d/` at all. Also already
+tracked in `hapi.platform_pins`; re-verify here specifically because it is the kind of
+setting that silently reverts.
+
+```sh
+zramctl                                       # total zram must be <= 2G
+swapon --show                                 # expect the 16G NVMe swap file
+lsattr /path/to/swapfile 2>/dev/null | grep -q 'C' && echo "nocow: OK"
+```
+
+Keep zram capped at 2G on this box — more than that competes with the model for the
+same unified GDDR6 pool under memory pressure, which is the opposite of what swap is
+for here. The 16G NVMe swap file must be `chattr +C` (no-COW) — on a COW filesystem
+(btrfs; check `findmnt -no FSTYPE /` if unsure which this image uses) an unmarked
+swapfile fragments under the sustained write pattern of an OOM-adjacent inference
+workload and degrades instead of just working.
+
+Only after all three golden-image checks pass should a freshly-imaged blade proceed to
+§9 benchmarking — a probe that comes back wrong here invalidates any tok/s number
+measured downstream on the same image.
