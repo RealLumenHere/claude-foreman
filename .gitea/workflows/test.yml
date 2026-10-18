@@ -1,0 +1,14 @@
+name: foreman-tests
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  pytest:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test suite
+        run: pytest -q
