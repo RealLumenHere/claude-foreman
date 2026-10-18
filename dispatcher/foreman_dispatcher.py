@@ -2018,7 +2018,11 @@ def _spawn(ctx, r):
     # spawns keep the 2-arg call.
     cap = ctx.capacity() if r["part"] == "local" else None
     spawn_env = cap.spawn_env(member or model) if cap is not None else {}
-    kw = {k: v for k, v in (("env", spawn_env), ("model_override", member)) if v}
+    # wq#4289: lumen-run forwards only PATH, so the dispatcher's own FOREMAN_RUNTIME
+    # (aider: the post-promo local path) rides in front of the worker like the vars above.
+    if os.environ.get("FOREMAN_RUNTIME"):
+        spawn_env = dict(spawn_env, FOREMAN_RUNTIME=os.environ["FOREMAN_RUNTIME"])
+    kw ={k: v for k, v in (("env", spawn_env), ("model_override", member)) if v}
     unit = spawner.dispatch_one(tid, repo, **kw)
     if unit is None:
         log.emit("error", stage="spawn", ticket=tid, lane=lane,

@@ -3268,6 +3268,196 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
 
 
 # ---------------------------------------------------------------------------
+# wq#4289: aider runtime, the local path for after the Anthropic promo credits
+# expire (2026-11-09)
+#
+# `fworker run --runtime aider` (or FOREMAN_RUNTIME=aider) runs the attempt's turn
+# through aider against the local lumen/code model instead of `claude -p`. Everything
+# around the turn is the ordinary path: make_worktree()'s linked worktree, run_child()'s
+# watchdogs and masking, do_attempt()'s artifact gate and reconcile(). aider only edits
+# files (--no-auto-commits); the harness then does what a claude worker does at the end
+# of its session: lumen-pr commit/open/land, then `wq done` citing the PR. The ordinary
+# SUCCESS branch files the verify-pass that reviews the local model's diff.
+# ---------------------------------------------------------------------------
+
+RUNTIMES = ("claude", "aider")
+AIDER_BIN = os.environ.get("FOREMAN_AIDER_BIN", "/home/lumen/.local/bin/aider")
+AIDER_MODEL = os.environ.get("FOREMAN_AIDER_MODEL", "openai/lumen/code")
+# instinct 4: the backend URL and key live in this 0600 file and reach the child's env
+# only, never argv or the log.
+AIDER_ENV_FILE = os.environ.get("FOREMAN_AIDER_ENV_FILE", "/etc/lumen-aider-fworker.env")
+AIDER_ENV_KEYS = ("OPENAI_API_BASE", "OPENAI_API_KEY")
+LUMEN_PR_BIN = os.environ.get("FOREMAN_LUMEN_PR_BIN", "/home/lumen/bin/lumen-pr")
+LUMEN_PR_TIMEOUT_S = _envint("FOREMAN_AIDER_LAND_TIMEOUT_S", 1200)
+CONV_TYPES = ("feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci",
+              "chore", "revert")
+
+
+def runtime_of(args):
+    """--runtime, else FOREMAN_RUNTIME, else claude. An unknown value is a config error."""
+    rt = getattr(args, "runtime", None) or os.environ.get("FOREMAN_RUNTIME") or "claude"
+    if rt not in RUNTIMES:
+        raise ValueError(f"unknown fworker runtime {rt!r} (one of {', '.join(RUNTIMES)})")
+    return rt
+
+
+def aider_backend_env(env, path=None):
+    """The child env plus OPENAI_API_BASE/OPENAI_API_KEY from the aider env file (the
+    same file bin/aider-fworker sources). Raises OSError if it can't be read."""
+    out = dict(env)
+    with open(path or AIDER_ENV_FILE) as f:
+        for line in f:
+            k, sep, v = line.strip().removeprefix("export ").partition("=")
+            if sep and k in AIDER_ENV_KEYS:
+                out[k] = v.strip().strip("\"'")
+    return out
+
+
+def build_aider_cmd(ticket, history_dir, attempt, model=None, aider_bin=None):
+    """The aider argv. The message is the ticket itself, not the claude worker prompt:
+    that prompt is mostly wq/lumen-pr/tool rules aider can't act on. History files go to
+    the run dir so nothing aider writes for itself lands in the worktree's diff."""
+    message = (f"Implement this ticket: {ticket.get('title', '')}\n\n"
+               f"{ticket.get('detail', '')}\n\n"
+               "Edit the files this needs and nothing else. Do not commit; the harness "
+               "commits and opens the pull request.")
+    return [aider_bin or AIDER_BIN, "--model", model or AIDER_MODEL, "--message", message,
+            "--yes-always", "--no-auto-commits", "--no-dirty-commits", "--no-gitignore",
+            "--no-show-model-warnings", "--no-check-update", "--no-analytics",
+            "--no-pretty", "--no-stream", "--no-fancy-input",
+            "--no-suggest-shell-commands", "--no-restore-chat-history",
+            "--chat-history-file", os.path.join(history_dir, f"aider-chat-a{attempt}.md"),
+            "--input-history-file", os.path.join(history_dir, f"aider-input-a{attempt}")]
+
+
+def aider_changed_paths(worktree):
+    """Paths aider changed, minus aider's own `.aider*` cache files (the repo-map tags
+    cache always lands in the repo root). Staged by name: `git add -A` is banned (§10.8)."""
+    p = _git(worktree, "status", "--porcelain", "-z", "--untracked-files=all")
+    if p.returncode != 0:
+        raise RuntimeError(f"git status failed in {worktree}: {p.stderr.strip()}")
+    paths = []
+    entries = p.stdout.split("\0")
+    i = 0
+    while i < len(entries):
+        e = entries[i]
+        i += 1
+        if len(e) < 4:
+            continue
+        xy, path = e[:2], e[3:]
+        if "R" in xy or "C" in xy:
+            i += 1   # -z puts a rename's source path in the next entry
+        if not any(part.startswith(".aider") for part in path.split("/")):
+            paths.append(path)
+    return paths
+
+
+def aider_commit_subject(branch, title):
+    """A Conventional Commit subject lumen-pr's lint_subject accepts: the branch's type,
+    the ticket title without its wq#/FOLLOW-UP markers, at most 60 chars, no period."""
+    ctype = branch.split("/", 1)[0] if "/" in branch else "chore"
+    if ctype not in CONV_TYPES:
+        ctype = "chore"
+    t = re.sub(r"(?i)\b(follow-up\s+)?wq#\d+:?\s*|board:\s*", "", title or "")
+    t = re.sub(r"\s+", " ", t).strip(" :-.") or "apply ticket change"
+    t = t[0].lower() + t[1:]
+    return f"{ctype}: {t[:60].rstrip(' .')}"
+
+
+def _lumen_pr(env, *args):
+    p = subprocess.run([LUMEN_PR_BIN, *args], capture_output=True, text=True, env=env,
+                       timeout=LUMEN_PR_TIMEOUT_S)
+    if p.returncode != 0:
+        out, _ = masking.mask_text(((p.stdout or "") + (p.stderr or "")).strip())
+        raise RuntimeError(f"lumen-pr {args[0]} failed (exit {p.returncode}): {out[-800:]}")
+    return p.stdout
+
+
+def land_aider_changes(worktree, ticket_id, ticket, attempt, model, env):
+    """Commit aider's edits, open and land the PR, close the ticket citing it. Returns
+    the PR url, or None when aider changed nothing. Raises RuntimeError on a refusal."""
+    paths = aider_changed_paths(worktree)
+    if not paths:
+        return None
+    p = _git(worktree, "add", "--", *paths)
+    if p.returncode != 0:
+        raise RuntimeError(f"git add failed: {p.stderr.strip()}")
+    branch = _git(worktree, "branch", "--show-current").stdout.strip()
+    subject = aider_commit_subject(branch, ticket.get("title"))
+    _lumen_pr(env, "commit", worktree, subject, "--refs", f"wq#{ticket_id}")
+    body_path = os.path.join(run_dir(ticket_id), f"aider-pr-body-a{attempt}.md")
+    with open(body_path, "w") as f:
+        f.write(f"## What\n\n{ticket.get('title', '')}\n\n"
+                f"## Why\n\nRefs: wq#{ticket_id}\n\n"
+                f"## How\n\nEdited by aider ({model}) under fworker's aider runtime "
+                f"(wq#4289), attempt {attempt}. Files: "
+                f"{', '.join(paths[:20])}{' ...' if len(paths) > 20 else ''}\n\n"
+                f"## Testing\n\nThe fworker evidence and artifact gates run after landing, "
+                f"and the verify-pass ticket reviews this diff.\n\n"
+                f"## Risk / rollback\n\nLocal-model output. Revert this PR's merge commit.\n")
+    out = _lumen_pr(env, "open", worktree, "--title", subject, "--body-file", body_path)
+    m = re.search(r"https?://\S+/pulls?/(\d+)", out)
+    if not m:
+        raise RuntimeError(f"lumen-pr open printed no PR url: {out.strip()[-300:]}")
+    pr_url, pr_number = m.group(0), m.group(1)
+    _lumen_pr(env, "land", worktree, pr_number)
+    wq_done(ticket_id, f"{pr_url} landed: aider runtime ({model}) attempt {attempt}, "
+                       f"{len(paths)} file(s) changed")
+    return pr_url
+
+
+def run_child_aider(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
+                    frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
+                    first_frame_s=None):
+    """aider sibling of run_child(), same signature and 6-tuple return. `cmd` (the claude
+    argv) is ignored: aider gets build_aider_cmd()'s ticket message instead.
+
+    aider prints plain text, never stream-json, so the verdict rides a synthesized result
+    frame: success only once the PR has landed and the ticket is done, an error result
+    otherwise. aider exits 0 on backend/API errors (bin/aider-fworker note), so "no file
+    changed" is the check that catches those, not the exit code."""
+    state = RunState()
+    state.runtime = "aider"
+    ticket = wq_show(ticket_id)
+    model = AIDER_MODEL
+    try:
+        aider_env = aider_backend_env(env)
+    except OSError as e:
+        log(f"wq#{ticket_id} attempt {attempt}: aider env file unreadable: {e}")
+        return state, 1, [{"type": "aider_error", "error": str(e)}], None, 0.0, None
+    aider_cmd = build_aider_cmd(ticket, run_dir(ticket_id), attempt, model=model)
+    log(f"wq#{ticket_id} attempt {attempt}: aider runtime, model {model}")
+    # first_frame_s=None: aider never emits a model frame, so the single frame-gap window
+    # (any output line counts as life) is the liveness check.
+    state, exit_code, raw_events, killed_reason, cpu_s, pid = run_child(
+        aider_cmd, cwd, aider_env, max_turns, wall_clock_s, ticket_id, attempt,
+        frame_gap_s=frame_gap_s, post_result_grace_s=post_result_grace_s,
+        loop_tracker=None, first_frame_s=None)
+    state.runtime = "aider"
+    if killed_reason or exit_code != 0:
+        return state, exit_code, raw_events, killed_reason, cpu_s, pid
+
+    try:
+        pr_url = land_aider_changes(cwd, ticket_id, ticket, attempt, model, env)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+        pr_url, failure = None, f"aider edits could not be landed: {e}"
+    else:
+        failure = (None if pr_url else
+                   f"aider exited 0 but changed no files (model {model}); aider exits 0 "
+                   f"on backend errors, see the unparsed lines in this attempt's events")
+    if failure:
+        log(f"wq#{ticket_id} attempt {attempt}: {failure}")
+        frame = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                 "result": failure}
+    else:
+        frame = {"type": "result", "subtype": "success", "is_error": False,
+                 "result": f"aider runtime landed {pr_url}\nTICKET_CLOSED"}
+    raw_events.append(frame)
+    state.observe(frame)
+    return state, exit_code, raw_events, killed_reason, cpu_s, pid
+
+
+# ---------------------------------------------------------------------------
 # main attempt orchestration
 # ---------------------------------------------------------------------------
 
@@ -3639,15 +3829,17 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # assumed to be wq_identity() so a resumed attempt compares against the claim it
     # actually inherited.
     claim_holder_at_start = ticket_holder(ticket)
+    # wq#4289: both gates below police args.model's pool; the aider runtime spends none of it.
+    aider_runtime = runtime_of(args) == "aider"
 
-    allow, reason = can_dispatch(args.model)
+    allow, reason = (True, None) if aider_runtime else can_dispatch(args.model)
     if not allow:
         log(f"governor DEFERRED dispatch: {reason} — releasing claim")
         wq_release(ticket_id)
         print("DEFERRED")
         return EXIT_DEFERRED
 
-    allow, reason = local_rung_gate(args.model, archetype)
+    allow, reason = (True, None) if aider_runtime else local_rung_gate(args.model, archetype)
     if not allow:
         log(f"DEFERRED: {reason} — releasing claim")
         wq_release(ticket_id)
@@ -3720,12 +3912,14 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # wq#2244: the gap between frames after the first one; local = the backend's turn budget.
     turn_gap_s = (args.frame_gap_timeout if args.frame_gap_timeout is not None
                   else turn_gap_timeout(args.model))
-    over_ctx = (None if charging.legacy_mode() or not is_local_rung(args.model)
+    # wq#4289: the aider runtime never sends this prompt, so its size can't refuse it.
+    sends_prompt_local = is_local_rung(args.model) and not aider_runtime
+    over_ctx = (None if charging.legacy_mode() or not sends_prompt_local
                 else charging.prompt_over_ctx(prompt, cli_profile=cli_profile))
     if over_ctx:
         raise SpawnRefused("PROMPT_OVER_CTX", over_ctx, worktree=worktree)
     over_budget = (charging.prompt_over_budget(prompt_tokens_est, first_frame_s)
-                   if is_local_rung(args.model) else None)
+                   if sends_prompt_local else None)
     if over_budget:
         raise SpawnRefused("PROMPT_OVER_BUDGET", over_budget, worktree=worktree)
 
@@ -3794,7 +3988,12 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # backend runs this attempt's turn, picked by the ticket's own `lane` against
     # FOREMAN_GATEWAY_LANES (default empty: no lane, so every ticket keeps spawning
     # claude -p directly until an operator opts one in — harness/GATEWAY_CANARY.md).
-    run_fn = run_child_gateway if gateway_lane_enabled(ticket.get("lane")) else run_child
+    if aider_runtime:
+        run_fn = run_child_aider
+    elif gateway_lane_enabled(ticket.get("lane")):
+        run_fn = run_child_gateway
+    else:
+        run_fn = run_child
     state, exit_code, events, killed_reason, cpu_s, child_pid = run_fn(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
         frame_gap_s=turn_gap_s, post_result_grace_s=args.post_result_grace,
@@ -3984,6 +4183,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         "gateway_backend": getattr(state, "gateway_backend", False),
         "gateway_fallback": getattr(state, "gateway_fallback", False),
         "gateway_fallback_reason": getattr(state, "gateway_fallback_reason", None),
+        "runtime": getattr(state, "runtime", "claude"),
+        "aider_model": AIDER_MODEL if aider_runtime else None,
     }
     state_path = write_attempt_state(ticket_id, attempt, attempt_record)
     mark_attempt_written()  # wq#1894: attempt-N.json landed — SIGTERM no longer our job
@@ -4785,7 +4986,9 @@ def cmd_run(args):
     # no lease to release, no churn. do_attempt() re-checks this per-attempt too
     # (design's "per-attempt setup"), since a retry/resume can run long after this
     # initial gate; that path releases the claim it's already holding on deny.
-    allow, reason = can_dispatch(args.model)
+    # wq#4289: the aider runtime spends neither pool these two gates police.
+    aider_runtime = runtime_of(args) == "aider"
+    allow, reason = (True, None) if aider_runtime else can_dispatch(args.model)
     if not allow:
         log(f"DEFERRED: wq#{args.ticket} governor denied dispatch before claim: {reason}")
         print("DEFERRED")
@@ -4793,7 +4996,8 @@ def cmd_run(args):
 
     # T4: same pre-claim treatment as the governor gate above — a local-pool model
     # dispatched outside LOCAL_ALLOWED_ARCHETYPES never touches the claim.
-    allow, reason = local_rung_gate(args.model, args.archetype or "standard-engineering")
+    allow, reason = ((True, None) if aider_runtime else
+                     local_rung_gate(args.model, args.archetype or "standard-engineering"))
     if not allow:
         log(f"DEFERRED: wq#{args.ticket} {reason}")
         print("DEFERRED")
@@ -4931,6 +5135,9 @@ def main():
     # default crashed every spawn with FileNotFoundError within 1s.
     p_run.add_argument("--claude-bin", default="/home/lumen/.npm-global/bin/claude",
                         help="override for testing against a fake claude shim")
+    # wq#4289: default None so FOREMAN_RUNTIME (dispatcher/unit env) can pick it.
+    p_run.add_argument("--runtime", choices=RUNTIMES, default=None,
+                        help="claude (default) or aider: the local lumen/code path")
     p_run.set_defaults(func=cmd_run)
 
     # ISSUE-LOG #17: the same replay fworker runs after the child exits, exposed so a

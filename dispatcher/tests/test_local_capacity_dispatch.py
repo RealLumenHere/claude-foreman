@@ -117,6 +117,21 @@ def test_failed_probe_gives_zero_capacity_and_cloud_still_spawns(denv, monkeypat
     assert [s["reason"] for s in log_events(denv, "skip")] == ["local_slots_full"]
 
 
+def test_foreman_runtime_rides_into_every_spawn(denv, monkeypatch):
+    """wq#4289: the dispatcher's FOREMAN_RUNTIME reaches cloud and local spawns alike,
+    alongside (not instead of) the local backend's own spawn env."""
+    write_config(denv, local_backends=BACKENDS)
+    probe_up(monkeypatch, HATHOR_URL, NEPH_URL)
+    calls = spawn_stub(denv, monkeypatch)
+    monkeypatch.setenv("FOREMAN_RUNTIME", "aider")
+    local = add_ticket("hathor item", model="hathor-llama8b", pri=1)
+    cloud = add_ticket("cloud item", pri=2)
+    assert fd.run_pass() == 0
+    envs = dict(calls)
+    assert envs[cloud] == {"FOREMAN_RUNTIME": "aider"}
+    assert envs[local]["FOREMAN_RUNTIME"] == "aider" and "FOREMAN_FIRST_FRAME_S" in envs[local]
+
+
 def test_free_slots_is_zero_when_probe_fails_and_slots_minus_running_otherwise():
     running = ["hathor-llama8b", "nephthys-qwen14b@low"]
     up = {"http://hathor.test/api/ps"}
