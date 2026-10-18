@@ -36,6 +36,19 @@ pytest_make_parametrize_id = sys.modules["id_mask"].pytest_make_parametrize_id
 
 
 @pytest.fixture(autouse=True)
+def _isolate_recipe_store(monkeypatch, tmp_path):
+    """wq#4288: fworker's real done/block path calls recipe_store.record_outcome(),
+    which would write the live fleet_memory `recipes` table, or on fallback the live
+    dispatcher/recipes.json. Force the JSON path and point it at a per-test file;
+    tests that want PG opt back in explicitly."""
+    monkeypatch.setenv("FOREMAN_RECIPE_PG", "off")
+    monkeypatch.setenv("FOREMAN_RECIPE_STORE", str(tmp_path / "recipes.json"))
+    rc = sys.modules.get("recipe_crystallizer")
+    if rc is not None:
+        monkeypatch.setattr(rc, "STORE_PATH", str(tmp_path / "recipes.json"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_minerva_db_root(monkeypatch, tmp_path):
     """wq#2784: fworker's real attempt-end path (episodic.commit_to_archive ->
     minerva_memory.py) wrote test episodes into prod minerva.db. Applies to every dir a

@@ -52,7 +52,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                  "dispatcher"))
 import router  # noqa: E402 -- wq#2581: escalate_off_local() shared with foreman_dispatcher.py
-import recipe_crystallizer  # noqa: E402 -- wq#4235: crystallize/freeze outcome recording
+import recipe_store  # noqa: E402 -- wq#4235/wq#4288: crystallize/freeze outcome recording (fleet_memory)
 from classifier import (
     RunState, classify, parse_worker_sentinel,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
@@ -806,8 +806,8 @@ def wq_block(ticket_id, reason):
 
 def record_recipe_outcome(ticket, args, success, triage=None):
     """wq#4235: best-effort crystallize/freeze update for this ticket's class. Never
-    allowed to affect the ticket's own done/block outcome — recipe_crystallizer's
-    record_outcome() already fails open on I/O errors; this wraps the classification
+    allowed to affect the ticket's own done/block outcome — recipe_store's
+    record_outcome() already fails open (PG down -> JSON fallback); this wraps the classification
     step too, since a bad title/detail regex match is no more a fworker-fatal error
     than a store write failure is.
 
@@ -820,17 +820,17 @@ def record_recipe_outcome(ticket, args, success, triage=None):
     unfroze a working recipe (wq#4245's live repro); skipping it leaves the cell
     exactly as the last competence-bearing outcome left it."""
     if triage in failure_record.TRIAGE_NON_COMPETENCE:
-        log(f"recipe_crystallizer: skipping {triage} outcome (not a competence signal)")
+        log(f"recipe_store: skipping {triage} outcome (not a competence signal)")
         return
     try:
-        ticket_type = recipe_crystallizer.classify_ticket_type(
+        ticket_type = recipe_store.classify_ticket_type(
             ticket.get("title") or "", ticket.get("detail") or "")
         if not ticket_type:
             return
-        recipe_crystallizer.record_outcome(
+        recipe_store.record_outcome(
             ticket_type, args.model, args.archetype or "standard-engineering", success)
     except Exception as e:  # noqa: BLE001 — best-effort by contract
-        log(f"recipe_crystallizer.record_outcome failed (non-fatal): {e!r}")
+        log(f"recipe_store.record_outcome failed (non-fatal): {e!r}")
 
 
 def ntfy(title, msg, priority="default"):

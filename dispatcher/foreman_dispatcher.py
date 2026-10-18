@@ -89,7 +89,7 @@ import liveness_clear     # noqa: E402  # wq#1478 LIVENESS_GATE §12.4: stale Fr
 import gates              # noqa: E402  # DISPATCH_REBUILD step 8: the ordered gate objects
 import gate_store         # noqa: E402  # DISPATCH_REBUILD step 11: dispatch_gate parking table
 import decomposer         # noqa: E402  # wq#2516: DECOMPOSE-rung consumer's guards (marker, depth)
-import recipe_crystallizer  # noqa: E402  # wq#4235: crystallize/freeze routing shortcut
+import recipe_store       # noqa: E402  # wq#4235/wq#4288: crystallize/freeze routing shortcut (fleet_memory)
 
 # Env seams (FOREMAN_DISPATCHER_* are new; the rest mirror router/spawner/governor).
 # All read at import; tests monkeypatch the module attributes or set env before import.
@@ -670,8 +670,8 @@ def candidate_model(t, tid):
     # already won FREEZE_THRESHOLD times in a row on this class. Still subject to the
     # same canary-hold check as an explicit tuple model above — a frozen recipe is a
     # routing shortcut, not an exemption from "don't launch a CLI that can't run it".
-    recipe = recipe_crystallizer.lookup_recipe(
-        recipe_crystallizer.classify_ticket_type(t.get("title") or "", t.get("detail") or ""))
+    recipe = recipe_store.lookup_recipe(
+        recipe_store.classify_ticket_type(t.get("title") or "", t.get("detail") or ""))
     if recipe:
         if cli_canary.held(recipe["model"], router.load_manifest().models):
             return None, CLI_CANARY_HELD

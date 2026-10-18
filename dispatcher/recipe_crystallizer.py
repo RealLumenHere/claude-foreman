@@ -17,8 +17,13 @@ there is no decay/grace window, unlike e.g. circuit_breaker.py's windowed trip c
 Ticket-type classification starts deliberately narrow (the ticket's own "start
 with" list): code-refactor, test-fix, config-edit. Anything that doesn't match one
 of those three keyword rubrics classifies as None — no cell, no tracking, no
-recipe. Three wins on a ticket class rare enough to not have its own rubric entry
-would be noise dressed up as a pattern, not a recipe.
+recipe. A winning streak on a ticket class rare enough to not have its own rubric
+entry would be noise dressed up as a pattern, not a recipe.
+
+wq#4288: the primary store is now the fleet_memory `recipes` table behind
+harness/recipe_store.py (same public API); dispatcher and fworker call that, and it
+falls back to this module's JSON file when PostgreSQL is unreachable. This file
+still owns classification, the threshold, and the JSON fallback store.
 
 Storage is one JSON file, read-modify-write under an exclusive flock on the file
 itself (same seam as harness/issue_log_append.py's row-allocation lock — multiple
@@ -45,7 +50,10 @@ import time
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
 STORE_PATH = os.environ.get("FOREMAN_RECIPE_STORE",
                             os.path.join(FOREMAN_ROOT, "dispatcher", "recipes.json"))
-FREEZE_THRESHOLD = int(os.environ.get("FOREMAN_RECIPE_FREEZE_THRESHOLD", "3"))
+# wq#4288: 5, per the spec and evolving-agents-dissection.md R2 ("N times consecutively
+# (e.g., N=5)"). wq#4235 shipped 3, and config-edit froze live at streak 3 before
+# this was caught; reconcile_freezes() below releases freezes made under a lower bar.
+FREEZE_THRESHOLD = int(os.environ.get("FOREMAN_RECIPE_FREEZE_THRESHOLD", "5"))
 
 # wq#4235 step 4: "Start with: code-refactor, test-fix, config-edit." Order matters —
 # first rubric that matches wins, so the more specific signals (test-fix, config-edit)
@@ -200,3 +208,49 @@ def record_outcome(ticket_type, model, prompt_template, success):
             return result
     except OSError:
         return None
+
+
+def reconcile_freezes(threshold=None, dry_run=False):
+    """wq#4288 migration: unfreeze every recipe whose cell streak is below `threshold`
+    (default FREEZE_THRESHOLD), under the same store flock record_outcome() takes, so
+    it cannot interleave with a concurrent fworker write. The cell itself is left
+    alone, streak included, so the next win(s) re-freeze it once the streak reaches
+    the threshold rather than restarting from 0. Returns {ticket_type: released
+    recipe}. Unlike the runtime API this raises on I/O errors: it is an operator
+    migration, and a silent no-op would read as "nothing needed releasing"."""
+    threshold = FREEZE_THRESHOLD if threshold is None else threshold
+    released = {}
+    with _open_store_for_write() as fh:
+        store = _load_locked(fh)
+        for ticket_type, recipe in list(store["frozen"].items()):
+            cells = store["cells"].setdefault(ticket_type, {})
+            key = _cell_key(recipe["model"], recipe["prompt_template"])
+            streak = recipe.get("streak_at_freeze", 0)
+            cell = cells.setdefault(key, {
+                "model": recipe["model"], "prompt_template": recipe["prompt_template"],
+                "streak": streak, "successes": streak, "failures": 0})
+            if cell["streak"] < threshold:
+                del store["frozen"][ticket_type]
+                released[ticket_type] = dict(recipe)
+        if released and not dry_run:
+            _save_locked(fh, store)
+    return released
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    rec = sub.add_parser("reconcile", help="unfreeze recipes frozen below the threshold")
+    rec.add_argument("--threshold", type=int, default=None)
+    rec.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args(argv)
+    released = reconcile_freezes(args.threshold, dry_run=args.dry_run)
+    print(json.dumps({"store": STORE_PATH, "dry_run": args.dry_run,
+                      "threshold": args.threshold or FREEZE_THRESHOLD,
+                      "released": released}, indent=1, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

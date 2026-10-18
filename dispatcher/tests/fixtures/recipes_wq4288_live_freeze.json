@@ -1,0 +1,28 @@
+{
+ "cells": {
+  "config-edit": {
+   "claude-sonnet-5::mechanical-edit": {
+    "failures": 0,
+    "model": "claude-sonnet-5",
+    "prompt_template": "mechanical-edit",
+    "streak": 1,
+    "successes": 1
+   },
+   "claude-sonnet-5::standard-engineering": {
+    "failures": 0,
+    "model": "claude-sonnet-5",
+    "prompt_template": "standard-engineering",
+    "streak": 3,
+    "successes": 3
+   }
+  }
+ },
+ "frozen": {
+  "config-edit": {
+   "frozen_at": 1792347087.9889984,
+   "model": "claude-sonnet-5",
+   "prompt_template": "standard-engineering",
+   "streak_at_freeze": 3
+  }
+ }
+}
