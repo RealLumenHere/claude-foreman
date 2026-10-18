@@ -1,0 +1,26 @@
+# wq#4258 Phase 2 — merge into the live LiteLLM proxy config
+# (/home/lumen/agent/litellm_config.yaml — NOT in this repo, lives on the gateway
+# node; same hand-merge convention as wq#897/948/1295/1406/1590/2627).
+# Deploy steps + verification: README.md next to this file.
+#
+# Blocked on the workspace ANTHROPIC_API_KEY landing in
+# fleet-config/docker/litellm/.env (0600, line 5 — slot already exists, value
+# pending per the ticket: "workspace key pending"). That is a credential-mint,
+# a physical act only Frank can do (instinct 3) — this snippet is the
+# ready-to-merge artifact so Phase 2 is a paste once the key exists, not a
+# blocked gate on the rest of wq#4258.
+#
+# Aliases are new gateway-facing model_name entries, distinct from the
+# claude-sonnet-5 / claude-haiku-5-5 strings the harness passes straight to
+# the `claude` CLI via OAuth subscription (harness/harness_preflight.py:63,
+# harness/reroute_local_blocked.py:65-68) — those bypass this gateway
+# entirely and are untouched by this change.
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
