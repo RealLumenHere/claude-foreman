@@ -38,6 +38,19 @@ def test_parse_accepts_needs_prefixed_tags():
     assert n.repo == "/home/lumen/pokemon"
 
 
+def test_parse_tag_arg_with_nested_parens_is_not_truncated():
+    # wq#4204: a research(...) question with a parenthetical aside used to be cut
+    # off at the first ')', losing everything after it.
+    n = needs.parse(
+        None, "Needs: research(does gfx1013 (RDNA3) need a passthrough quirk?)")
+    assert n.tags == [("research", "does gfx1013 (RDNA3) need a passthrough quirk?")]
+
+
+def test_parse_unterminated_tag_arg_is_skipped():
+    n = needs.parse("repo(/home/lumen/foo), research(no closing paren")
+    assert n.tags == [("repo", "/home/lumen/foo")]
+
+
 def test_parse_empty_and_none():
     assert not needs.parse(None, None)
     assert not needs.parse("", "")

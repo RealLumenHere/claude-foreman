@@ -69,6 +69,15 @@ def test_research_tag_via_needs_line_yields_unserved_question(q):
     assert out == [(f"wq{tid}", "does qemu-user support gfx1013 passthrough?", f"wq#{tid}")]
 
 
+def test_research_tag_with_parenthetical_aside_is_not_truncated(q):
+    # wq#4204: the shared tag parser used to stop at the first ')', so a question
+    # with a parenthetical aside yielded a mangled "primary search query".
+    tid = wq_add(q, detail="Needs: research(does gfx1013 (RDNA3) need a passthrough quirk?)")
+    out = trigger.unserved_wq_questions(q["db"], q["briefs"])
+    assert out == [(f"wq{tid}",
+                    "does gfx1013 (RDNA3) need a passthrough quirk?", f"wq#{tid}")]
+
+
 def test_research_tag_via_needs_column_is_also_read(q):
     """harness/needs.py's vocabulary (ssh/root/.../peer) doesn't list 'research', but
     the parser 'accepts anything tag-shaped' (needs.py:18) — this is the designed

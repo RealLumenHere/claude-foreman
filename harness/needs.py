@@ -18,10 +18,10 @@ import re
 # this parser accepts anything tag-shaped so a vocabulary bump can't strand tickets.
 TAG_NAMES = ("ssh", "root", "restart", "copy", "repo", "dir", "bench", "power", "peer")
 
-_TAG_RE = re.compile(r"(?:needs:)?([a-z_-]+)\(([^)]*)\)")
+_TAG_START_RE = re.compile(r"(?:needs:)?([a-z_-]+)\(")
 _NEEDS_LINE_RE = re.compile(r"^Needs:\s*(.+)$", re.MULTILINE)
 # Liveness Gate (research/LIVENESS_GATE.md §5): a `Liveness:` detail line is the
-# sibling of `Needs:` — same _TAG_RE, same parse_tags. Its tags live in a separate
+# sibling of `Needs:` — same parse_tags. Its tags live in a separate
 # Liveness object and are NEVER merged into Needs.tags (§4 firewall): the exec
 # allow/deny path (capability.policy_grants, fworker.resolve_exec_grant) reads Needs
 # only, so a liveness tag can never widen a grant. TAG_NAMES is deliberately NOT
@@ -102,8 +102,38 @@ class Needs:
         return bool(self.tags)
 
 
+def _scan_tags(text):
+    """(name, arg, start, end) for every tag(arg) run in text, in source order.
+    Parens inside arg are honored by depth-counting to the MATCHING close paren,
+    not the first ')' seen — the prior single-shot regex truncated a research(...)
+    question with a parenthetical aside (wq#4204, e.g. research(does gfx1013
+    (RDNA3) need a passthrough quirk?) lost everything after "RDNA3"). An
+    unterminated tag (no matching close paren) is skipped, same as before."""
+    text = text or ""
+    out = []
+    pos = 0
+    while True:
+        m = _TAG_START_RE.search(text, pos)
+        if not m:
+            break
+        depth = 1
+        i = m.end()
+        while i < len(text) and depth:
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+            i += 1
+        if depth == 0:
+            out.append((m.group(1), text[m.end():i - 1].strip(), m.start(), i))
+            pos = i
+        else:
+            pos = m.end()
+    return out
+
+
 def parse_tags(text):
-    return [(m.group(1), m.group(2).strip()) for m in _TAG_RE.finditer(text or "")]
+    return [(name, arg) for name, arg, _, _ in _scan_tags(text)]
 
 
 def parse(needs_field=None, detail=None):
@@ -125,9 +155,13 @@ def validate(needs_field):
     text = (needs_field or "").strip()
     if not text:
         return True, None
-    parsed = parse_tags(text)
+    spans = _scan_tags(text)
+    parsed = [(name, arg) for name, arg, _, _ in spans]
     # anything left over after removing recognized tag(arg) runs is a syntax error
-    leftover = _TAG_RE.sub("", text).replace(",", "").strip()
+    leftover = text
+    for _, _, start, end in reversed(spans):
+        leftover = leftover[:start] + leftover[end:]
+    leftover = leftover.replace(",", "").strip()
     if leftover:
         return False, f"unparseable needs fragment: {leftover!r} (want tag(arg), comma-separated)"
     for name, arg in parsed:

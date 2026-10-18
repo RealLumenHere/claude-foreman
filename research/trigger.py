@@ -5,7 +5,7 @@ design/wq3755_research_pipeline_v2.md §2+§5).
 The only three ways research starts (§2):
   1. wq needs-tag.  An open ticket carries a `research(<question>)` tag — same
      tag(arg) shape as the repo()/dir() family (bin/wq:202 `_REPO_TAG_RE`,
-     harness/needs.py `_TAG_RE`), read from both the ticket's `needs` column and its
+     harness/needs.py's balanced-paren tag scanner), read from both the ticket's `needs` column and its
      detail's `Needs:` line (harness/needs.py — reused rather than re-regexed, since
      that module already unions both sources and "accepts anything tag-shaped").
      "unserved" has no new column/status (§2 explicitly refuses a schema migration):
