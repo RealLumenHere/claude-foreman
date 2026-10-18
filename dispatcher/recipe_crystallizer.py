@@ -22,8 +22,13 @@ would be noise dressed up as a pattern, not a recipe.
 
 Storage is one JSON file, read-modify-write under an exclusive flock on the file
 itself (same seam as harness/issue_log_append.py's row-allocation lock — multiple
-fworker instances across worktrees call record_outcome() concurrently) with an
-atomic tmp+rename on write (foreman_dispatcher.py's save_state() pattern).
+fworker instances across worktrees call record_outcome() concurrently), written in
+place on the locked fd: truncate to 0, write, fsync. Deliberately NOT
+foreman_dispatcher.save_state()'s tmp+rename (wq#4245 flagged the docstring as
+claiming otherwise, wq#4254 corrected the docstring rather than the code): a rename
+swaps the inode out from under every other holder of this flock, so the lock would
+stop serialising anything. load_store()'s unlocked read already fails open to
+"nothing frozen" if it catches the truncated moment.
 Stdlib-only, fail-open: every public function swallows I/O/JSON errors and
 returns the caller's safe default rather than raising, because losing a recipe
 update must never cost a ticket its done/block outcome (fworker.py's

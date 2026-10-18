@@ -50,6 +50,19 @@ TRIAGE_UNKNOWN = "UNKNOWN"
 TRIAGE_VALUES = (TRIAGE_CAPABILITY_DENIED, TRIAGE_HARNESS_DEFECT, TRIAGE_GENUINE_BUG,
                  TRIAGE_REAL_BLOCK, TRIAGE_LIMIT, TRIAGE_UNKNOWN)
 
+# wq#4254 (judgment on wq#4245's CONTRADICT of wq#4235): the triage classes that say
+# nothing about whether this (model, prompt_template) is any good at this ticket class.
+# REAL_BLOCK means the worker did the right thing (recognized a Frank-only decision and
+# self-blocked — the documented good path); CAPABILITY_DENIED is a sandbox policy wall no
+# model gets past; HARNESS_DEFECT is our bug, not the model's. Scoring any of them as a
+# recipe loss unfreezes a working recipe for a reason the recipe did not cause. LIMIT
+# (a TURNS/BUDGET ceiling) and UNKNOWN stay IN: burning the ceiling without landing the
+# ticket, or failing with no mechanical signature at all, are both real competence
+# signals for the cell. Same reasoning as the local-rung escalation skip in
+# fworker.handle_failure() — "a different model can't help here".
+TRIAGE_NON_COMPETENCE = frozenset({TRIAGE_REAL_BLOCK, TRIAGE_CAPABILITY_DENIED,
+                                   TRIAGE_HARNESS_DEFECT})
+
 LUMEN_STATE = os.environ.get("FOREMAN_LUMEN_STATE",
                              "/home/lumen/minerva/lumen_state.py")
 

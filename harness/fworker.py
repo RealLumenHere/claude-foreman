@@ -804,12 +804,24 @@ def wq_block(ticket_id, reason):
     return p
 
 
-def record_recipe_outcome(ticket, args, success):
+def record_recipe_outcome(ticket, args, success, triage=None):
     """wq#4235: best-effort crystallize/freeze update for this ticket's class. Never
     allowed to affect the ticket's own done/block outcome — recipe_crystallizer's
     record_outcome() already fails open on I/O errors; this wraps the classification
     step too, since a bad title/detail regex match is no more a fworker-fatal error
-    than a store write failure is."""
+    than a store write failure is.
+
+    wq#4254: `triage` is the terminal failure's failure_record triage class (None on
+    the success path, which has no triage). A failure whose triage is in
+    TRIAGE_NON_COMPETENCE is NOT recorded at all — not as a loss, not as a win. The
+    cell's streak is a claim about this (model, prompt_template)'s competence at this
+    ticket class, and a self-block / sandbox denial / harness bug is evidence about
+    the ticket or the harness, not about the model. Recording it zeroed the streak and
+    unfroze a working recipe (wq#4245's live repro); skipping it leaves the cell
+    exactly as the last competence-bearing outcome left it."""
+    if triage in failure_record.TRIAGE_NON_COMPETENCE:
+        log(f"recipe_crystallizer: skipping {triage} outcome (not a competence signal)")
+        return
     try:
         ticket_type = recipe_crystallizer.classify_ticket_type(
             ticket.get("title") or "", ticket.get("detail") or "")
@@ -4712,7 +4724,7 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
         log(f"local rung exhausted but not escalating: {detail}")
 
     log(f"BLOCKED [{block_class}/{rec['triage']}]: {reason}")
-    record_recipe_outcome(ticket, args, success=False)
+    record_recipe_outcome(ticket, args, success=False, triage=rec["triage"])
     if rec["triage"] != failure_record.TRIAGE_REAL_BLOCK:
         wq_block(ticket_id, reason)
     # wq#1697 fix 3: a P0/P1 parked on a capability denial gets a visible aq row carrying
