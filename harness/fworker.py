@@ -49,7 +49,10 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                  "orchestrator"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 "dispatcher"))
 import router  # noqa: E402 -- wq#2581: escalate_off_local() shared with foreman_dispatcher.py
+import recipe_crystallizer  # noqa: E402 -- wq#4235: crystallize/freeze outcome recording
 from classifier import (
     RunState, classify, parse_worker_sentinel,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
@@ -799,6 +802,23 @@ def wq_block(ticket_id, reason):
         out = ((p.stdout or "") + " " + (p.stderr or "")).strip()
         log(f"ERROR: wq block {ticket_id} refused (exit {p.returncode}): {out}")
     return p
+
+
+def record_recipe_outcome(ticket, args, success):
+    """wq#4235: best-effort crystallize/freeze update for this ticket's class. Never
+    allowed to affect the ticket's own done/block outcome — recipe_crystallizer's
+    record_outcome() already fails open on I/O errors; this wraps the classification
+    step too, since a bad title/detail regex match is no more a fworker-fatal error
+    than a store write failure is."""
+    try:
+        ticket_type = recipe_crystallizer.classify_ticket_type(
+            ticket.get("title") or "", ticket.get("detail") or "")
+        if not ticket_type:
+            return
+        recipe_crystallizer.record_outcome(
+            ticket_type, args.model, args.archetype or "standard-engineering", success)
+    except Exception as e:  # noqa: BLE001 — best-effort by contract
+        log(f"recipe_crystallizer.record_outcome failed (non-fatal): {e!r}")
 
 
 def ntfy(title, msg, priority="default"):
@@ -4349,10 +4369,12 @@ def reconcile(args, ticket_id, attempt, classification, state, events, worktree,
     # artifacts confirm the ticket landed (else it relabeled the classification
     # FALSE_COMPLETE before calling reconcile at all) — safe to trust directly.
     if classification in (SUCCESS, DEGRADED_SUCCESS):
-        if wq_show(ticket_id).get("status") != "done":
+        ticket = wq_show(ticket_id)
+        if ticket.get("status") != "done":
             wq_done(ticket_id, f"fworker attempt {attempt} ({classification}): {state_path}")
         else:
             log(f"{classification}: worker already ran `wq done`.")
+        record_recipe_outcome(ticket, args, success=True)
         file_verify_pass(ticket_id, args)
         return EXIT_OK
 
@@ -4690,6 +4712,7 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
         log(f"local rung exhausted but not escalating: {detail}")
 
     log(f"BLOCKED [{block_class}/{rec['triage']}]: {reason}")
+    record_recipe_outcome(ticket, args, success=False)
     if rec["triage"] != failure_record.TRIAGE_REAL_BLOCK:
         wq_block(ticket_id, reason)
     # wq#1697 fix 3: a P0/P1 parked on a capability denial gets a visible aq row carrying
