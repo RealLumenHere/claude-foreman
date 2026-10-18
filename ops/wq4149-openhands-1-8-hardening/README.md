@@ -11,21 +11,22 @@ wq#4007/wq#4111/wq#4018 all hit).
 
 | File | Covers | Status |
 |---|---|---|
-| `reaper.py` + `test_reaper.py` | item 3 (reap idle/failed sandboxes) | Pure selection logic, 8/8 tests pass, no docker needed. `SANDBOX_NAME_PREFIX` is an **unconfirmed guess** — see the module docstring. A privileged lane must confirm the real sandbox container naming convention with `docker ps -a --format '{{.Names}}'` before trusting `reap_candidates()`'s output against this host |
+| `reaper.py` + `test_reaper.py` | item 3 (reap idle/failed sandboxes) | Pure selection logic, 15/15 tests pass, no docker needed. `SANDBOX_NAME_PREFIX` **confirmed live 2026-10-18** (wq#4199): real sandbox container names are `oh-agent-server-<id>`, not the `openhands-runtime-` guess this shipped with (which matched nothing). Kill step now targets the supported API path — `reap_request()` builds `DELETE /api/v1/sandboxes?sandbox_id=<id>` (confirmed live: 200, removed in <4s; the bare path form returns 422) — with `docker rm -f <name>` left as the privileged lane's fallback only |
 | `harden_app.py` | item 2 (workspace ownership) + item 3 (app-container mem/cpu limits only) | Privileged-lane script, `--dry-run` tested here (see below); not run against the live container from this lane |
 
 ## What's NOT here, and why
 
-- **`max_num_sandboxes=5`** (item 3, the other half): the ticket names this
-  exact config knob, but this lane found no way to confirm it's the real
-  OpenHands 1.8 config key without either (a) web/GitHub search — both
-  returned `ok:false` this session, all general engines suspended/CAPTCHA'd,
-  no `BRAVE_API_KEY` (wq#2595, already open) — or (b) reading the installed
-  agent-server image's config schema, which needs `docker exec`. Guessing an
-  env var name here would be exactly the failure mode instinct 8 warns about
-  (a value Claude invented, then a later "it didn't work" reads as a fleet
-  problem when it's really evidence the name was fabricated). Left for a
-  privileged lane to confirm against the image before setting it.
+- **`max_num_sandboxes=5`** (item 3, the other half): **still unconfirmed as
+  of wq#4199** (re-checked 2026-10-18) — `fleet-search web`/`github` both
+  still return `ok:false` this session (general engines suspended/CAPTCHA'd,
+  no `BRAVE_API_KEY` per wq#2595; github 401, no usable token), and reading
+  the installed agent-server image's config schema needs `docker exec`,
+  which this lane doesn't have (`docker ps` itself denied — see wq#4152,
+  blocked on the same wall, ISSUE-LOG row 1399). Guessing an env var name
+  here would be exactly the failure mode instinct 8 warns about (a value
+  Claude invented, then a later "it didn't work" reads as a fleet problem
+  when it's really evidence the name was fabricated). Left for a privileged
+  lane to confirm against the image before setting it.
 - **Per-run wall-clock + cost caps** (item 4): the wall-clock half is already
   demonstrated in `ops/wq4111-openhands-litellm-production/configure_and_run_task.py`
   (`subprocess.run(..., timeout=TASK_TIMEOUT_S)`); the cost half is bounded at
@@ -56,7 +57,7 @@ wq#4007/wq#4111/wq#4018 all hit).
 
 ```
 $ python3 -m unittest test_reaper.py -v
-... 8 tests, OK
+... 15 tests, OK
 
 $ python3 -m py_compile harden_app.py reaper.py test_reaper.py
 (clean)
@@ -77,11 +78,13 @@ ssh lumen@<...> \
   'python3 /home/lumen/foreman/ops/wq4149-openhands-1-8-hardening/harden_app.py'
 ```
 
-Then, with docker access: confirm `SANDBOX_NAME_PREFIX` in `reaper.py` against
-`docker ps -a --format '{{.Names}}'`, wire `reap_candidates()` to a live
-`docker inspect` call + `docker rm -f` on each returned name, and re-run
-`python3 probe.py` (in `ops/wq4111-openhands-litellm-production/`) to confirm
-the app survived the recreate.
+Then, with docker access: wire `reap_candidates()` to a live `docker inspect`
+call, and for each name it returns call `reaper.reap_request(name)` — builds
+`DELETE /api/v1/sandboxes?sandbox_id=<id>`, confirmed live wq#4199 — falling
+back to `docker rm -f <name>` only if that request errors. Scheduling
+(detached `systemd-run`, per instinct 5) stays in wq#4152's scope, not this
+package. Re-run `python3 probe.py` (in
+`ops/wq4111-openhands-litellm-production/`) to confirm the app survived.
 
 ## Privileged-lane follow-up
 

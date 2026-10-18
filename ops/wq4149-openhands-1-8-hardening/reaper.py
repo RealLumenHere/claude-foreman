@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """wq#4149 item 3: identify idle/failed OpenHands sandbox containers safe to
-reap. Pure selection logic only — no docker calls here, so it is unit-testable
-without a live daemon (same posture as wq#4111's probe.py classifier).
+reap. Pure selection logic only — no docker/network calls here, so it is
+unit-testable without a live daemon (same posture as wq#4111's probe.py
+classifier).
 
 A privileged lane wires this to a live source with
 `docker inspect $(docker ps -aq --filter name=<SANDBOX_NAME_PREFIX>) `
 (JSON array, same shape `inspect_container()` in
 ops/wq4111-openhands-litellm-production/configure_and_run_task.py already
-parses) and then `docker rm -f` on the returned names.
+parses), then kills each name `reap_candidates()` returns via `reap_request()`
+below: `DELETE /api/v1/sandboxes?sandbox_id=<id>` first (confirmed live
+wq#4199: 200, container removed in <4s; the bare path form
+`/api/v1/sandboxes/<id>` returns 422 — the id must be a query param), falling
+back to `docker rm -f <name>` only if that call errors or is unreachable.
 
-SANDBOX_NAME_PREFIX is a BEST-GUESS based on OpenHands' own naming convention
-for agent-server sandbox containers (`openhands-runtime-*` in older releases);
-it is NOT confirmed against the installed 1.8/agent-server 1.26 image from
-this lane (no docker access). A privileged lane MUST confirm the real prefix
-with `docker ps -a --format '{{.Names}}'` before trusting reap_candidates'
-output against this host's containers — do not run `docker rm -f` on an
-unconfirmed name filter.
+SANDBOX_NAME_PREFIX was confirmed live 2026-10-18 (wq#4199) against the
+installed 1.8/agent-server 1.26 image: real sandbox container names are
+`oh-agent-server-<id>`, not the `openhands-runtime-` guess this module
+shipped with under wq#4149 (which matched nothing — fail-safe but
+non-functional).
 """
 from datetime import datetime, timezone
 
-SANDBOX_NAME_PREFIX = "openhands-runtime-"  # UNCONFIRMED — see module docstring
+SANDBOX_NAME_PREFIX = "oh-agent-server-"  # confirmed live 2026-10-18, wq#4199
 
 
 def _parse_ts(value):
@@ -63,3 +66,27 @@ def reap_candidates(containers, now=None, *, exited_grace_s=300,
             if started_at and (now - started_at).total_seconds() >= running_idle_s:
                 reap.append(name)
     return reap
+
+
+def sandbox_id_from_name(name, *, name_prefix=SANDBOX_NAME_PREFIX):
+    """Strip name_prefix from a container name to get the sandbox_id the
+    DELETE API expects. Returns None if name doesn't match the prefix."""
+    name = name.lstrip("/")
+    if not name.startswith(name_prefix):
+        return None
+    return name[len(name_prefix):]
+
+
+def reap_request(name, *, name_prefix=SANDBOX_NAME_PREFIX,
+                  base_url="http://127.0.0.1:3000"):
+    """Build the (method, url) a privileged lane should call to reap `name`:
+    DELETE /api/v1/sandboxes?sandbox_id=<id> — the supported path, confirmed
+    live wq#4199 (200, container removed in <4s). base_url defaults to the
+    host-reachable published port (UI/API stay 127.0.0.1+172.17.0.1 only per
+    wq#4152). Returns None if name doesn't match name_prefix. Only fall back
+    to `docker rm -f <name>` if this request errors or is unreachable.
+    """
+    sandbox_id = sandbox_id_from_name(name, name_prefix=name_prefix)
+    if sandbox_id is None:
+        return None
+    return ("DELETE", f"{base_url}/api/v1/sandboxes?sandbox_id={sandbox_id}")
