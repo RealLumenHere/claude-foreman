@@ -354,3 +354,26 @@ external-invoke-only pending confirmation, same conservative posture as FAT 2.0.
 tracking convention this audit added to `limpet/tool-catalog.json` (`provenance.license_risk_policy`,
 plus `license_risk`/`redistribution_posture` fields) applies to whichever of these four actually
 gets a catalog row when wq#3929's P0 list lands.
+
+## Scrutiny (analogj/scrutiny) — fleet-wide SMART monitoring (wq#4158, CONDITIONAL GO, phased)
+
+**Status**: evaluation only, no deployment this ticket. Full writeup:
+`research/WQ4158_SCRUTINY_SMART_MONITORING_EVAL.md`. Headline: the ticket's own motivating
+example (nephthys "AER errors") is a category error — that's PCIe Advanced Error Reporting,
+already tracked by `ops/wq2851-aer-storm-alarm/`, not a SMART symptom Scrutiny would ever
+surface. The underlying ask still stands: `research/fleet_hardware.json` confirms 29
+SMART-capable physical drives fleet-wide (the ticket's "20+" is conservative), and the
+hub+collector architecture is a low-resource fit alongside the existing `gatus`/`netdata`
+stack. The real gate is infrastructure access, not tool suitability:
+`fleet-config/ansible/inventory/hosts.yml`'s `readonly` group (and the fact that `khepri`/
+`nephthys` aren't in the inventory at all) means only 6 of the fleet's active nodes
+(`lumen, isis, sobek, anubis, maat, bes`) are reachable by the existing Ansible pattern or
+this ticket's own headless-build-worker execution context; the rest need a `wq2844`-style
+install script run once by an interactive ssh session, same as how netdata reached the Mac
+Pros. Also flagged: worth checking whether netdata's own `smartctl` collector is already
+live on the fleet before standing up a second stack — unverified from this sandbox
+(`smartctl` isn't on `harness/fleet-exec-policy.yaml`'s read-only allowlist).
+
+**Verdict**: adopt for Phase 1 (hub on lumen + collectors on the 6 Ansible-managed nodes) as
+a follow-up build ticket; Phase 2 (readonly-group nodes + khepri/nephthys) needs an
+interactive-session install script, not a headless worker grant.
