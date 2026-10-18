@@ -23,6 +23,12 @@ if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   vcontains "$LIVE_CONFIG" 'model_name: claude-sonnet'
   vcontains "$LIVE_CONFIG" 'model_name: claude-haiku'
+  # wq#4260: a MISS/FAIL here is the expected state until ANTHROPIC_API_KEY
+  # lands (Frank-only credential mint, README.md "Phase 2") -- it is NOT a
+  # signal that this script needs to be (re-)run as root/sudo. There is no
+  # install step for --verify to have skipped; read README.md before
+  # redispatching this as a privileged-install ticket.
+  echo "NOTE: FAIL here means the key hasn't landed yet, not that install needs root -- see README.md Phase 2."
   vdone
 fi
 
