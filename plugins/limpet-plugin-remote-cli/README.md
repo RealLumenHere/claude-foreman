@@ -54,9 +54,10 @@ invented key.
 
 remote-cli has no synchronous run-and-wait-for-exit-code primitive: it owns a
 PTY a human may be attached to, so the only way to run something *in that
-session* is to type it. `exec` therefore sends the command plus a unique
-completion marker carrying `$?`, then polls `scrollback` until the marker
-appears. Consequences worth knowing before you use it:
+session* is to type it. `exec` therefore types one line — a start marker, the
+command handed to `eval`, and a unique completion marker carrying `$?` — then
+polls `scrollback` until the completion marker appears and returns what lies
+between the two markers. Consequences worth knowing before you use it:
 
 - the shared session must be a POSIX shell at a prompt. If a human left it in
   `vim`/`less`/a REPL, `exec` types into *that* and returns a timeout.
@@ -64,6 +65,19 @@ appears. Consequences worth knowing before you use it:
   every poll (the first cut ignored it and capped every call at 5s).
 - `output` is carved out of raw scrollback, so it keeps the PTY's `\r\n` and
   any escape sequences the command emitted.
+- the command runs under `eval`, so it is parsed as a script fragment, not
+  typed line by line: embedded newlines run as successive lines and all of
+  their output comes back, but history expansion (`!!`) does not happen and a
+  syntax error is reported against `eval`'s line.
+- `warning` appears in the result when the start marker had already aged out
+  of the daemon's scrollback cap — i.e. `output` may be missing the command's
+  first lines, rather than that being silent.
+
+Why two markers rather than keying off the shell's echo of the typed line
+(wq#4405): a shared PTY does not guarantee that echo exists (`stty -echo`, a
+password prompt) or that there is one of it. Keying off it returned ok:true
+with a correct `exit_code` and the wrong `output` — the last line only for a
+multi-line command, a stale prompt string for a session with echo off.
 
 This lives client-side on purpose: remote-cli is already deployed fleet-wide
 (Lumen, Maksoor) and keeps its minimal five-command protocol.

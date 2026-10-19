@@ -243,6 +243,8 @@ def test_exec_payload_echo_cannot_match_its_own_marker():
     payload = server._exec_payload("ls -la", "deadbeef0001")
     assert not server._exec_marker("deadbeef0001").search(payload), \
         "the shell's echo of the payload would be mistaken for the completion marker"
+    assert not server._exec_start_marker("deadbeef0001").search(payload), \
+        "the shell's echo of the payload would be mistaken for the start marker"
     assert payload.endswith("\n")
 
 
@@ -251,21 +253,122 @@ def test_exec_marker_parses_exit_code():
     assert m and int(m.group(1)) == 42
 
 
+def _echo_on_scrollback(token, command, output, prompt="earlier$ "):
+    """Scrollback as a real echoing shell produces it for one `_exec_payload`:
+    some earlier history, the prompt, the echo of the single typed line, the
+    start marker printf's output, the command's output, the completion
+    marker, the next prompt."""
+    typed = server._exec_payload(command, token).rstrip("\n")
+    return (f"{prompt}whoami\r\nlumen\r\n"
+            f"{prompt}{typed}\r\n"
+            f"RCSTART-{token}\r\n"
+            + output
+            + f"RCDONE-{token}-0\r\n{prompt}")
+
+
 def test_exec_output_carves_command_output_from_scrollback():
     token = "deadbeef0003"
-    scrollback = (
-        "earlier$ whoami\r\nlumen\r\n"
-        f"earlier$ echo hi; __rc_status=$?; printf '%s%s-%s-%s\\n' RC DONE {token} \"$__rc_status\"\r\n"
-        "hi\r\n"
-        f"RCDONE-{token}-0\r\n"
-        "earlier$ "
-    )
-    assert server._exec_output(scrollback, token) == "hi"
+    assert server._exec_output(
+        _echo_on_scrollback(token, "echo hi", "hi\r\n"), token) == "hi"
 
 
-def test_exec_output_tolerates_echo_suppressed_session():
+def test_exec_output_keeps_every_line_of_a_multiline_command():
+    """wq#4403 finding A, live-reproduced: `output` was 'THIRDLINE' alone
+    because the first token occurrence is the echo of the LAST typed line, so
+    slicing after it discarded the first two lines' real output."""
+    token = "deadbeef0005"
+    scrollback = _echo_on_scrollback(
+        token, "echo FIRSTLINE\necho SECONDLINE\necho THIRDLINE",
+        "FIRSTLINE\r\nSECONDLINE\r\nTHIRDLINE\r\n")
+    out = server._exec_output(scrollback, token)
+    assert out == "FIRSTLINE\r\nSECONDLINE\r\nTHIRDLINE", out
+
+
+def test_exec_payload_is_a_single_typed_line_whatever_the_command():
+    """The embedded-newline command must not reach the PTY as several typed
+    lines: each would get its own echo and prompt interleaved with the output,
+    which is what made the first cut's extraction lose data (wq#4403 A)."""
+    payload = server._exec_payload("echo one\r\necho two\n", "deadbeef0009")
+    assert payload.count("\n") == 1 and "\r" not in payload, repr(payload)
+    assert payload.endswith("\n"), repr(payload)
+    out = subprocess.run(["/bin/sh", "-c", payload], capture_output=True,
+                         text=True).stdout
+    assert "one\ntwo\n" in out, out
+    assert "RCDONE-deadbeef0009-0" in out, out
+
+
+def test_exec_payload_quotes_a_command_containing_quotes():
+    """The `eval` wrapper has to survive the apostrophes real bench commands
+    carry, so the quoting is checked by running it through a real shell."""
+    command = """printf '%s|%s\\n' "it's" 'a "quote"'"""
+    payload = server._exec_payload(command, "deadbeef0010")
+    out = subprocess.run(["/bin/sh", "-c", payload], capture_output=True,
+                         text=True).stdout
+    assert "it's|a \"quote\"" in out, out
+    assert "RCDONE-deadbeef0010-0" in out, out
+
+
+def test_exec_output_survives_an_echo_suppressed_session():
+    """wq#4403 finding B, live-reproduced: with `stty -echo` the token occurs
+    once (in the marker), the real output precedes it, and slicing after the
+    first occurrence returned the trailing prompt — ok:true with wrong data."""
     token = "deadbeef0004"
-    assert server._exec_output(f"RCDONE-{token}-0\r\n", token) == ""
+    scrollback = (f"RCSTART-{token}\r\nhidden-echo-probe\r\n"
+                  f"RCDONE-{token}-0\r\nbash-5.3$ ")
+    assert server._exec_output(scrollback, token) == "hidden-echo-probe"
+
+
+def test_exec_output_keeps_output_that_lacks_a_trailing_newline():
+    """The marker printf then lands on the same physical line as the output,
+    so the end boundary is the marker's own start, not a line break."""
+    token = "deadbeef0006"
+    scrollback = f"RCSTART-{token}\r\nabcRCDONE-{token}-0\r\n$ "
+    assert server._exec_output(scrollback, token) == "abc"
+
+
+def test_exec_output_boundary_is_the_last_marker_not_a_printed_one():
+    """A command that prints marker-shaped text of its own (`exec` reading a
+    log of an earlier exec) must not shorten the output or change the status."""
+    token = "deadbeef0007"
+    scrollback = (f"RCSTART-{token}\r\nquoted RCDONE-{token}-9 line\r\n"
+                  f"RCDONE-{token}-0\r\n$ ")
+    assert server._exec_output(scrollback, token) == f"quoted RCDONE-{token}-9 line"
+    m = server._exec_last_marker(scrollback, token)
+    assert m and int(m.group(1)) == 0
+
+
+def test_exec_marker_survives_a_trailing_comment_or_ampersand():
+    """wq#4403 finding C: appended bare after `;`, the marker clause was
+    swallowed by a trailing `#` comment and made `cmd &` a bash syntax error,
+    so the exec timed out with no output at all. Run through a real shell —
+    asserting on the payload's shape could not catch either."""
+    for command, expected in (("echo visible # a comment", "visible"),
+                              ("echo backgrounded; sleep 0.2 &", "backgrounded")):
+        payload = server._exec_payload(command, "deadbeef0008")
+        done = subprocess.run(["/bin/bash", "-c", payload], capture_output=True,
+                              text=True)
+        assert expected in done.stdout, (command, done.stdout, done.stderr)
+        assert "RCDONE-deadbeef0008-0" in done.stdout, (command, done.stdout, done.stderr)
+
+
+def test_exec_output_warns_rather_than_guessing_when_the_start_marker_aged_out(monkeypatch):
+    token_holder = {}
+    fake = _with_fake(monkeypatch, scrollback="")
+    real_payload = server._exec_payload
+
+    def capture(command, token):
+        token_holder["token"] = token
+        text = real_payload(command, token)
+        fake.scrollback = f"older output the cap kept\r\nRCDONE-{token}-0\r\n$ "
+        return text
+
+    monkeypatch.setattr(server, "_exec_payload", capture)
+    try:
+        result = server.tool_exec("echo x", timeout=5.0)
+        assert result["ok"] is True and result["exit_code"] == 0
+        assert "warning" in result, result
+    finally:
+        fake.close()
 
 
 def test_exec_times_out_without_a_marker(monkeypatch):
@@ -289,7 +392,8 @@ def test_exec_reports_exit_code_once_the_marker_lands(monkeypatch):
     def capture(command, token):
         token_holder["token"] = token
         text = real_payload(command, token)
-        fake.scrollback = f"$ {text}boom\r\nRCDONE-{token}-7\r\n$ "
+        fake.scrollback = (f"$ {text.rstrip()}\r\nRCSTART-{token}\r\nboom\r\n"
+                           f"RCDONE-{token}-7\r\n$ ")
         return text
 
     monkeypatch.setattr(server, "_exec_payload", capture)
@@ -298,6 +402,7 @@ def test_exec_reports_exit_code_once_the_marker_lands(monkeypatch):
         assert result["ok"] is True
         assert result["exit_code"] == 7
         assert result["output"] == "boom"
+        assert "warning" not in result, result
     finally:
         fake.close()
 
@@ -409,6 +514,60 @@ def test_live_exec_honors_a_timeout_past_the_old_five_second_cap(live):
     assert result["exit_code"] == 0, result
     assert "wq4398-slow-done" in result["output"], result
     assert elapsed > 5.5, f"returned in {elapsed:.2f}s — the command cannot have run"
+
+
+@needs_remote_cli
+def test_live_exec_multiline_keeps_every_line_of_output(live):
+    """wq#4403's exact repro of finding A, against the real daemon: this used
+    to return 'THIRDLINE' alone while raw scrollback proved all three ran.
+    Outside the population the wq#4398 fix was designed around (single-line,
+    echo-on commands), so it can genuinely fail."""
+    result = server.tool_exec(
+        "echo FIRSTLINE\necho SECONDLINE\necho THIRDLINE", timeout=20.0)
+    assert result.get("ok") is True, result
+    assert result["exit_code"] == 0, result
+    for line in ("FIRSTLINE", "SECONDLINE", "THIRDLINE"):
+        assert line in result["output"], (line, result)
+
+
+@needs_remote_cli
+def test_live_exec_with_local_echo_disabled(live):
+    """wq#4403's repro of finding B: after `stty -echo` — a state any human
+    sharing this PTY can leave behind — exec returned a stale prompt string as
+    `output` with ok:true and the right exit code."""
+    assert server.tool_send("stty -echo\n").get("ok") is True
+    time.sleep(0.5)
+    try:
+        result = server.tool_exec("echo hidden-echo-probe", timeout=20.0)
+    finally:
+        server.tool_send("stty echo\n")
+    assert result.get("ok") is True, result
+    assert result["exit_code"] == 0, result
+    assert "hidden-echo-probe" in result["output"], result
+    assert "$" not in result["output"], f"returned a shell prompt, not output: {result!r}"
+
+
+@needs_remote_cli
+def test_live_exec_survives_a_trailing_comment(live):
+    """wq#4403 finding C: with the marker appended after `;` on the command's
+    own line, a trailing `#` comment commented it out and exec burned the
+    caller's whole timeout."""
+    started = time.monotonic()
+    result = server.tool_exec("echo visible # a trailing comment", timeout=20.0)
+    assert result.get("ok") is True, result
+    assert result["exit_code"] == 0, result
+    assert "visible" in result["output"], result
+    assert time.monotonic() - started < 10.0, "took a timeout-shaped amount of time"
+
+
+@needs_remote_cli
+def test_live_exec_survives_a_backgrounded_command(live):
+    """`cmd &; __rc=$?` is a bash syntax error, so the first cut could not run
+    a command ending in `&` at all."""
+    result = server.tool_exec("echo backgrounded; sleep 0.2 &", timeout=20.0)
+    assert result.get("ok") is True, result
+    assert result["exit_code"] == 0, result
+    assert "backgrounded" in result["output"], result
 
 
 @needs_remote_cli

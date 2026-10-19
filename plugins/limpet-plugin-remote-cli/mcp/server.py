@@ -54,6 +54,18 @@ as a committed fixture, and tests/test_server.py drives the real daemon rather
 than a fake built to this file's own assumptions (the hole that let the first
 cut ship 8/8 green while 0/4 tools worked).
 
+wq#4405 (judgment on wq#4403's CONTRADICT verdict): wq#4398's fix was right
+about the wire protocol and the timeout, and wrong one layer up — its
+`_exec_output` located the command's output by slicing after the first
+occurrence of the token, i.e. after the shell's echo of the typed line. A
+shared PTY does not guarantee that echo exists (a human's `stty -echo`, a
+password prompt) or that there is only one of them (an embedded-newline
+command echoes a line per line), so `exec` returned ok:true with a correct
+exit_code and silently wrong `output` in both cases. `exec` now brackets the
+command with a printf'd START marker as well as the completion marker, reads
+between them, and types the whole payload as one `eval` line so that bracket
+holds for a multi-line command too; see `_exec_payload` and `_exec_output`.
+
 `exec` is synthesized, not native: remote-cli deliberately has no
 run-and-wait-for-exit-code primitive — it owns a PTY a human may be attached
 to, so the only way to run something IN that shared session is to type it.
@@ -176,43 +188,121 @@ def _call(cmd: str, timeout: float = REQUEST_TIMEOUT, **fields: Any) -> Dict[str
         client.close()
 
 
-def _exec_payload(command: str, token: str) -> str:
-    """The line typed into the shared shell: the command, then a marker line
-    carrying its exit status.
+def _exec_quote(text: str) -> str:
+    """Single-quote `text` as one shell word, POSIX-style: inside single quotes
+    nothing expands, and an embedded `'` is spliced in as `'\\''`."""
+    return "'" + text.replace("'", "'\\''") + "'"
 
-    The marker is assembled by printf from separate arguments (`RC`, `DONE`,
-    …) so the SHELL'S ECHO of this line cannot itself match the marker regex —
-    the echo contains `RC DONE <token>` (spaces, from the argument list) while
-    only printf's output contains `RCDONE-<token>-<status>`. Without that
-    split, polling would match the echo instantly and report the exit code of
-    the previous command.
+
+def _exec_eval_clause(command: str) -> str:
+    """`command` as a single-line `eval` clause — nothing in the returned text
+    is a newline, whatever `command` contains.
+
+    A multi-line command is reassembled by `printf '%s\\n'` from one quoted
+    argument per line, rather than being quoted with its newlines intact: a
+    newline inside the quotes is still a newline the PTY's line discipline
+    acts on, so that form would reach the shared shell as several typed lines
+    (an unterminated quote, a PS2 continuation prompt) — the thing this
+    wrapper exists to avoid. `printf` is a shell builtin everywhere and the
+    format is fixed, so a `%` in the command is data, not a conversion.
+
+    A bare CR counts as a line break here because that is what the PTY would
+    make of it (CR is Enter at a terminal); a caller that needs to put a raw
+    control byte into the session wants `send`, not `exec`."""
+    lines = command.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if len(lines) == 1:
+        return f"eval {_exec_quote(lines[0])}"
+    args = " ".join(_exec_quote(line) for line in lines)
+    return f"eval \"$(printf '%s\\n' {args})\""
+
+
+def _exec_payload(command: str, token: str) -> str:
+    """The ONE line typed into the shared shell: a start marker, the command
+    handed to `eval`, then the completion marker carrying its exit status.
+
+    Both markers are assembled by printf from separate arguments (`RC`,
+    `DONE`, …) so the SHELL'S ECHO of this line cannot itself match either
+    marker regex — the echo contains `RC DONE <token>` (spaces, from the
+    argument list) while only printf's output contains
+    `RCDONE-<token>-<status>`. Without that split, polling would match the echo
+    instantly and report the exit code of the previous command.
+
+    Two wq#4405 changes to the first cut's shape (`<command>; __rc_status=$?;
+    printf …`):
+
+    - The START marker, because the command's output cannot be located from
+      the echo of the typed line: there may be no echo at all (`stty -echo`, a
+      password prompt). A marker the SHELL PRINTS immediately before the
+      command runs is in the stream unconditionally. This is the boundary
+      OSC 133's `;C` ("just before start of command output") gives terminal
+      emulators with shell integration, and for the same reason — inferring it
+      from the echoed command line is not reliable.
+    - `eval` plus quoting (see `_exec_eval_clause`), which keeps the payload a
+      single typed line no matter what `command` contains. That is what makes
+      the extraction honest for an embedded-newline command: typed raw, each
+      of its lines gets its own echo and its own prompt interleaved with the
+      output (and the first cut mistook the last of those echoes for the
+      output's start, silently dropping every earlier line). As one typed
+      line, everything the shell echoes is upstream of the START marker, so
+      between the two markers there is nothing but the command's real output.
+      A trailing `#` comment (wq#4403 finding C) and a trailing `&`
+      (`cmd &; x=$?` is a bash syntax error) are likewise contained by the
+      quoting instead of swallowing or breaking the marker clause.
+
+    `$?` is expanded in the same command list, right after `eval` returns, so
+    it is the command's own status and no scratch variable is left behind in a
+    session a human shares.
     """
-    one_line = command.rstrip("\r\n")
-    return (f"{one_line}; __rc_status=$?; "
-            f"printf '%s%s-%s-%s\\n' RC DONE {token} \"$__rc_status\"\n")
+    body = command.rstrip("\r\n")
+    return (f"printf '%s%s-%s\\n' RC START {token}; {_exec_eval_clause(body)}; "
+            f"printf '%s%s-%s-%s\\n' RC DONE {token} \"$?\"\n")
 
 
 def _exec_marker(token: str) -> "re.Pattern[str]":
     return re.compile(r"RCDONE-" + re.escape(token) + r"-(\d+)")
 
 
-def _exec_output(scrollback: str, token: str) -> str:
-    """Carve the command's own output out of raw PTY scrollback.
+def _exec_start_marker(token: str) -> "re.Pattern[str]":
+    return re.compile(r"RCSTART-" + re.escape(token))
 
-    `token` appears exactly twice: first in the shell's echo of the payload
-    line, then in printf's marker output. Everything between the end of the
-    echo line and the start of the marker is what the command printed. Raw
-    scrollback keeps the PTY's \\r\\n and any escape sequences the command
+
+def _exec_last_marker(text: str, token: str) -> "Optional[re.Match[str]]":
+    """The LAST completion marker in `text`, which is the real one: printf runs
+    after the command, so anything marker-shaped the command itself printed is
+    necessarily earlier. First-match (the first cut) would take the command's
+    output as the boundary and its digits as the exit code."""
+    last = None
+    for last in _exec_marker(token).finditer(text):
+        pass
+    return last
+
+
+def _exec_output(scrollback: str, token: str) -> str:
+    """Carve the command's own output out of raw PTY scrollback: everything
+    between the start marker's line and the completion marker.
+
+    Raw scrollback keeps the PTY's \\r\\n and any escape sequences the command
     emitted — deliberately not scrubbed, since for bench RE work the escapes
     are sometimes the signal.
+
+    Two boundaries, neither of which assumes anything about local echo
+    (wq#4405; the first cut assumed the token appeared exactly twice — once in
+    an echo of the typed line, once in the marker — and silently dropped real
+    output whenever that was false):
+
+    1. start: just past the end of the START marker's line. Everything the
+       shell echoed, and the prompt it printed, are upstream of that marker.
+       It is absent only if it aged out of the daemon's scrollback cap, which
+       `tool_exec` reports as a warning rather than papering over.
+    2. end: the start of the LAST completion marker.
     """
-    idx = scrollback.find(token)
-    if idx != -1:
-        nl = scrollback.find("\n", idx)
+    start = _exec_start_marker(token).search(scrollback)
+    if start is not None:
+        nl = scrollback.find("\n", start.end())
         scrollback = scrollback[nl + 1:] if nl != -1 else ""
-    m = _exec_marker(token).search(scrollback)
-    if m:
-        scrollback = scrollback[:m.start()]
+    done = _exec_last_marker(scrollback, token)
+    if done is not None:
+        scrollback = scrollback[:done.start()]
     return scrollback.rstrip("\r\n")
 
 
@@ -234,10 +324,21 @@ def tool_exec(command: str, timeout: float = 30.0) -> Dict[str, Any]:
       - the shared session must be a POSIX shell sitting at a prompt. If a
         human left it inside vim/less/a REPL, this types the command into THAT
         program instead, and the marker never appears -> a timeout result.
-      - `command` is one shell line; a trailing newline is stripped. Embedded
-        newlines run as successive lines and `exit_code` is the last one's.
+      - `command` is run by `eval` in that shell, so it is parsed as a shell
+        script fragment rather than typed line by line: embedded newlines run
+        as successive lines, `exit_code` is the last one's, and all of their
+        output is returned (wq#4405). The cost is that interactive-only
+        behaviour differs — history expansion (`!!`) does not happen, and a
+        syntax error is reported against `eval`'s line, not the human's.
+      - a command that reads stdin (`cat`, `read`) reads from the shared
+        terminal, exactly as if a human had typed it there, so it blocks
+        until someone feeds the session or the timeout expires.
       - `output` is carved out of raw scrollback, so it carries the PTY's
         \\r\\n and whatever escapes the command emitted.
+      - `warning` is present iff the start marker was no longer in the
+        retained scrollback (a command that printed more than the daemon's
+        scrollback cap), in which case `output` may begin with unrelated
+        earlier terminal text rather than silently losing the overflow.
     """
     token = uuid.uuid4().hex[:12]
     marker = _exec_marker(token)
@@ -259,10 +360,15 @@ def tool_exec(command: str, timeout: float = 30.0) -> Dict[str, Any]:
             continue
         full = _call("scrollback", timeout=_exec_request_timeout(deadline), lines=0)
         text = full.get("text", "") if full.get("ok") else tail.get("text", "")
-        m = marker.search(text)
-        return {"ok": True, "command": command,
-                "exit_code": int(m.group(1)) if m else None,
-                "output": _exec_output(text, token)}
+        m = _exec_last_marker(text, token)
+        result = {"ok": True, "command": command,
+                  "exit_code": int(m.group(1)) if m else None,
+                  "output": _exec_output(text, token)}
+        if not _exec_start_marker(token).search(text):
+            result["warning"] = ("start marker not found in the retained scrollback; "
+                                 "output may include earlier terminal text or be missing "
+                                 "the command's first lines")
+        return result
 
     return {"ok": False, "command": command, "timed_out": True,
             "error": f"exec timed out after {timeout}s with no completion marker; "
