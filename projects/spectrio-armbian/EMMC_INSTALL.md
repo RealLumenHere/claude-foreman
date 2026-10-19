@@ -1,19 +1,28 @@
 # eMMC install guide
 
 Once the overlaid image (see `FLASH_PROCEDURE.md`) boots cleanly from
-USB/SD, move it to the internal eMMC so the box no longer depends on
+USB, move it to the internal eMMC so the box no longer depends on
 removable media.
 
 ## Procedure
 
-Run ophub's own `armbian-install` from the booted USB/SD system, selecting:
+Run `sudo armbian-install` from the booted USB system. At the board
+prompt, pick **Customize (ID 0)** and enter:
 
-- SoC: `s905x3`
-- Board DTB: the overlaid `meson-sm1-spectrio-tf1.dtb` (not the stock
-  ophub board choice)
-- Bootloader profile: `x96maxplus` (matches the `u-boot-x96maxplus.bin`
-  chainload target `provision.sh` already set up — see
-  `FLASH_PROCEDURE.md` step 3)
+| Prompt | Value |
+|---|---|
+| SoC | `s905x3` |
+| DTB | `meson-sm1-spectrio-tf1.dtb` |
+| `UBOOT_OVERLOAD` | `u-boot-x96maxplus.bin` (the same chainload target `provision.sh` set up) |
+| `MAINLINE_UBOOT` | leave blank |
+| `BOOTLOADER_IMG` | leave blank |
+| filesystem | `ext4` |
+
+**Don't pass `-m yes`** (the mainline U-Boot option). It can't bring up
+this eMMC, for the reason given below.
+
+Afterwards, check that the eMMC's `uEnv.txt` `APPEND=` line still contains
+`mem=3552M`. Without it, the first eMMC boot panics (see `BOOT_ARGS.md`).
 
 `armbian-install` lays out the eMMC as:
 
@@ -44,9 +53,10 @@ eMMC up.
 
 After the install and a reboot with removable media pulled:
 
-- confirm the box boots to login without the USB stick/SD card inserted;
+- confirm the box boots to login with the USB stick pulled;
+- confirm `cat /proc/cmdline` shows `mem=3552M`;
 - confirm `ip addr show eth0` comes up (this is the real end-to-end proof
   that the PEF7071 Ethernet fix in `DEVICE_QUIRKS.md` survived the
-  eMMC install, not just the USB/SD trial boot);
+  eMMC install, not just the USB trial boot);
 - `fsck` both `BOOT_EMMC` and `ROOTFS_EMMC` clean before considering the
   install final.

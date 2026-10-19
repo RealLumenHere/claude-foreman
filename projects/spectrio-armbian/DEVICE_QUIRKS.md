@@ -65,27 +65,75 @@ ethernet@ff3f0000 {
         compatible = "snps,dwmac-mdio";
         #address-cells = <0x1>;
         #size-cells = <0x0>;
-        /* ethernet-phy@5: PEF7071 at MDIO address 5 — the board-specific
-           fixup. See full source for the complete phy node; reproduced
-           here only as prose per the fleet's own annotation (provision.sh
-           and CENSUS_METHODOLOGY.md both independently describe it as
-           "PEF7071 @ MDIO addr 5, rgmii, no rx-delay") pending a verified
-           pull of the complete .dts across (see README "Status"). */
+        phandle = <0x14>;   /* parent bus of the mdio-multiplexer below */
     };
 };
 ```
 
-The two load-bearing facts — **MDIO address 5** and **no RX delay on the
-SoC side** — are corroborated independently in two places in the fleet's
-internal copy of this project: the inline comment in `provision.sh`
-(`cp ... meson-sm1-spectrio-tf1.dtb ... # PEF7071 @ MDIO 5, rgmii, no
-rx-delay`) and the prose in `CENSUS_METHODOLOGY.md` ("DTB: ...(PEF7071 PHY
-@ MDIO addr 5, rgmii, no rx-delay — the TF1-specific ethernet fix)"). The
-exact `ethernet-phy@5` node body (compatible string, reg, any
-`phy-mode`/timing overrides specific to the PHY node itself rather than the
-MAC node) is in the full `.dts` on the RE workstation and is called out as
-the next thing to pull across in README's "Status" section rather than
-guessed at here.
+The PHY itself is not under that `mdio` node. As on every G12A/SM1 board,
+it hangs off the SoC's MDIO multiplexer, on the external-PHY leg
+(`mdio@0`). The complete node, verbatim from the shipped
+`meson-sm1-spectrio-tf1.dts` (lines 1922-1948):
+
+```dts
+mdio-multiplexer@4c000 {
+    compatible = "amlogic,g12a-mdio-mux";
+    reg = <0x00 0x4c000 0x00 0xa4>;
+    clocks = <0x02 0x13 0x0b 0x02 0xb1>;
+    clock-names = "pclk", "clkin0", "clkin1";
+    mdio-parent-bus = <0x14>;
+    #address-cells = <0x01>;
+    #size-cells = <0x00>;
+    phandle = <0xe4>;
+
+    mdio@0 {
+        reg = <0x00>;
+        #address-cells = <0x01>;
+        #size-cells = <0x00>;
+        phandle = <0xe5>;
+
+        ethernet-phy@0 {
+            reg = <0x05>;               /* the fix: PEF7071 answers at MDIO 5 */
+            max-speed = <0x3e8>;        /* 1000 */
+            reset-assert-us = <0x7530>;
+            reset-deassert-us = <0x13880>;
+            reset-gpios = <0x15 0x0f 0x07>;
+            interrupt-parent = <0x16>;
+            interrupts = <0x1a 0x08>;
+            phandle = <0x09>;           /* = the MAC's phy-handle */
+        };
+    };
+    /* mdio@1 / ethernet-phy@8: the SoC's internal 10/100 PHY, unused */
+};
+```
+
+Things that only show up in the real node:
+
+- **The fix is a single `reg` change.** The node keeps its stock X96 Max+
+  name `ethernet-phy@0`. Only `reg` moved from `0x00` to `0x05`. The unit
+  address in the name no longer matches `reg`. That's cosmetic: the kernel
+  finds the PHY through the MAC's `phy-handle` and addresses it by `reg`,
+  and the board runs 1 Gb/s full duplex with this exact blob. This is what the
+  fleet's patch script does: it decompiles `meson-sm1-x96-max-plus.dtb`
+  and runs `sed` on `reg` inside the `ethernet-phy@0 {` block only.
+- **There is no `compatible` string.** The kernel reads the PHY ID over
+  MDIO and picks `intel-xway` on its own.
+- **The X96 Max+ reset/IRQ properties are still there.** The reset GPIO,
+  its assert/deassert timings and the PHY interrupt were written for that
+  board's RTL8211F. One intermediate fleet revision stripped them and
+  renamed the node `ethernet-phy@5`. The golden DTB does neither, and it is
+  the one proven on hardware. Leave them in.
+- **No RX delay on the MAC side.** The MAC node has
+  `amlogic,tx-delay-ns = <0x2>` and nothing for RX: no `amlogic,rx-delay-ns`
+  and no `rx-internal-delay-ps`. An earlier patch revision added
+  `rx-internal-delay-ps = <0x7d0>` (2 ns). The golden copy dropped it,
+  because the PEF7071 adds the RX delay itself.
+
+Integrity: `meson-sm1-spectrio-tf1.dtb` sha256 `0f1f9b3a…2a88ef`, which is
+the same hash the fleet's read-only inspection of the working community
+image recorded. The `.dts` is that same DTB decompiled. Its MAC node, PHY
+node, `/memory` and `reserved-memory` match a direct parse of the binary
+property for property.
 
 ## Memory
 
@@ -100,11 +148,17 @@ reserved-memory {
 };
 ```
 
-Per the ticket, the working boot args include an explicit `mem=3552M` cap.
-That number isn't independently re-derived here — it's carried over as-is
-from the ticket's own description of the bring-up — but it is at least
-consistent in shape with a board that needs to subtract secure-monitor +
-CMA reservations from whatever the vendor BL2/U-Boot reports as total DRAM
-before the kernel sees a clean, non-colliding map. The precise root-cause
-narrative (what the kernel saw without the cap, and why) is one of the
-items pending the maksoor pull noted in `README.md`.
+Those two `secmon` regions sit low in DRAM (0x05000000-0x072fffff). That
+is the whole list. Nothing near the top of the 4 GiB part is declared, and
+`/memory@0` is the X96 Max+ placeholder `reg = <0x0 0x0 0x0 0xffffffff>`,
+which the bootloader is supposed to fix up with the real size and carve-outs.
+This board's 2015-era vendor U-Boot never declares the TrustZone/BL31
+memory at the top of DRAM. The kernel therefore maps it as ordinary RAM,
+touches it during `paging_init`, and dies with an Asynchronous SError
+Interrupt.
+
+The fix is the boot arg `mem=3552M` (0xDE000000). It caps the kernel's view
+of RAM below the secure region, giving up the top ~544 MiB (usable RAM
+shows as ~3.4 GB). See `BOOT_ARGS.md`. Making the DTB declare that region
+would be the cleaner fix. It hasn't been done because nobody has measured
+the exact BL31/TEE bounds on this board.
