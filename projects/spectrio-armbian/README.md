@@ -46,6 +46,11 @@ this worker's dispatch did not grant (`fleet-exec run maksoor` →
 wq#1444: the ticket needs a `needs:ssh(maksoor)` tag at dispatch to mint
 that grant). Follow-up ticket filed for that pull; see `ops/wq4318-*`.
 
+The same applies to the `mem=3552M` boot-arg cap: this repo documents where
+it goes (`BOOT_ARGS.md`) but ships nothing that applies it, and carries no
+transcript of it being applied and booting. Treat that as a documented
+manual step, not an automated or re-verified one.
+
 Before pushing this to a public, Lumen-external GitHub repo: creating a new
 *public* repository and the initial push both need a GitHub credential this
 worker's `gh` allowlist doesn't carry (only `gh pr/issue/run` read

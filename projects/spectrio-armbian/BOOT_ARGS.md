@@ -26,8 +26,34 @@ carried over from the bring-up, not as independently re-derived here.
 
 ## Where it goes
 
-Same place any ophub `s905x3` boot-arg override goes: the `APPEND=` (or
-equivalent) line in the image's `armbianEnv.txt` on the boot partition, or
-appended to `bootargs` if you're hand-editing `uEnv.txt`/`boot.scr`
-directly. `FLASH_PROCEDURE.md` and `provision.sh` show where this sits
-relative to the DTB/overlay changes.
+On ophub's Amlogic images the kernel command line lives in `uEnv.txt` on
+the BOOT partition — not in `armbianEnv.txt`. `uEnv.txt` carries `LINUX=`,
+`INITRD=`, `FDT=` and `APPEND=`, and `APPEND=` is the command line, so the
+cap goes on the end of that one line:
+
+```
+APPEND=root=UUID=<rootfs-uuid> rootfstype=ext4 rootflags=data=writeback rw
+       console=ttyAML0,115200n8 console=tty0 ... mem=3552M
+```
+
+(one physical line in the file). `armbianEnv.txt` + `extraargs=` is the
+mainline-Armbian equivalent you would edit on a stock Armbian board; it is
+not the path this image family uses for Amlogic boot args. Confirmed
+against ophub's own boot-configuration documentation for
+`amlogic-s9xxx-armbian`, which both documents `APPEND=` as "kernel
+command-line parameters" in `uEnv.txt` and shows `armbian-install`
+rewriting the `root=...console=ttyAML0` portion of that same line.
+
+### Not yet demonstrated in this repo
+
+Nothing shipped here applies the cap for you. `provision.sh` does edit
+`uEnv.txt`, but only the `FDT=` line — `FLASH_PROCEDURE.md` step 3 lists
+its three actions as the complete set of what it touches — so a reader who
+follows the flash procedure end to end ends up with the DTB overlay applied
+and **no memory cap**. Editing `APPEND=` is a manual step until that is
+automated and re-verified on hardware.
+
+The transcript showing this cap being applied and surviving a boot on the
+real board lives with the original RE session, not in this repo. It is a
+third pending item alongside the board `.dtb` binary and the before/after
+kernel log above — see `README.md` → "Status".

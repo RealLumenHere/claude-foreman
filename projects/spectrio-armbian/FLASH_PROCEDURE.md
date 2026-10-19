@@ -36,6 +36,11 @@ complete list of what it touches):
    boot script looks for.
 3. Points `FDT=` in `uEnv.txt` at the copied-in DTB.
 
+It does **not** touch the kernel command line. The `mem=3552M` cap this
+board needs is a separate manual edit to the `APPEND=` line of the same
+`uEnv.txt` — see `BOOT_ARGS.md`. Skipping it leaves you with the DTB
+overlay and no memory cap.
+
 Note: `provision.sh` as shipped here expects
 `meson-sm1-spectrio-tf1.dtb` to sit next to it. The binary `.dtb` itself
 isn't in this repo yet — see `README.md` → "Status". Until it's pulled
