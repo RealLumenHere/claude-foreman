@@ -1,0 +1,30 @@
+# Install as: /etc/systemd/system/remote-desktop-commander.service (per node,
+# Phase 1: Lumen and Maksoor)
+#
+# wq#4329. Keeps the Remote Desktop Commander pairing agent running after the
+# one-time OAuth device-flow pairing (browser "Verify your device" step --
+# see PHASE1-PAIRING-CHECKLIST.md). Unlike ops/p1-commander/dc-gateway.service
+# this does not front a local stdio server with supergateway: "remote" mode
+# IS the full agent, relaying through mcp.desktopcommander.app directly, so
+# there is no --port/--stdio pair to wire up.
+#
+# __NODE_USER__ is replaced by install.sh with the node's actual username
+# (fleet convention: SSH user == hostname lowercase, e.g. lumen, maksoor).
+
+[Unit]
+Description=Remote Desktop Commander pairing agent (direct MCP, wq#4329)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=__NODE_USER__
+Environment=PATH=/home/__NODE_USER__/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/npx @wonderwhy-er/desktop-commander@latest remote
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
