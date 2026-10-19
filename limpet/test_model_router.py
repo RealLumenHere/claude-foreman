@@ -93,3 +93,64 @@ def test_recopilot_routing_spec_realised_on_example_manifest():
     # and with NO specialist configured, every step falls back to resident (opt-in).
     assert r.resolve_step(man, "recover_function_names",
                           capability_models={}, resident_model=RESIDENT) == RESIDENT
+
+
+# --- wq#4355: requirement-profile layer + user-override escape hatch ---
+
+POLICY = {
+    "long-context": "gpt-5.2-like-fleet-model",
+    "speed-critical": "grok-like-fleet-model",
+    "vision-heavy": "gemini-like-fleet-model",
+}
+
+
+def test_profile_routes_to_configured_policy_model():
+    assert r.resolve_profile("long-context", profile_models=POLICY,
+                             resident_model=RESIDENT) == "gpt-5.2-like-fleet-model"
+
+
+def test_profile_falls_back_to_resident_when_policy_unset():
+    # code-gen has no entry in POLICY -> resident, same opt-in posture as capabilities.
+    assert r.resolve_profile("code-gen", profile_models=POLICY,
+                             resident_model=RESIDENT) == RESIDENT
+
+
+def test_unknown_profile_fails_closed():
+    with pytest.raises(r.RoutingError):
+        r.resolve_profile("gpu-melting", profile_models=POLICY, resident_model=RESIDENT)
+
+
+def test_user_override_wins_over_profile_policy():
+    # Perplexity axis 3: a user-pinned model beats the classifier/policy outright.
+    assert r.resolve_profile("long-context", profile_models=POLICY,
+                             resident_model=RESIDENT,
+                             override="operator-pinned-model") == "operator-pinned-model"
+
+
+def test_user_override_bypasses_profile_validation():
+    # An override names a model, not a need -- so an unknown profile string must
+    # NOT raise when the user has pinned a model. Probes the bypass branch
+    # (wq#2630: this can fail if override were validated like a profile).
+    assert r.resolve_profile("not-a-real-profile", profile_models={},
+                             resident_model=RESIDENT,
+                             override="pinned") == "pinned"
+
+
+def test_empty_override_defers_to_policy():
+    # "" / None must not be treated as a pinned model -- falls through to routing.
+    assert r.resolve_profile("speed-critical", profile_models=POLICY,
+                             resident_model=RESIDENT, override="") == "grok-like-fleet-model"
+    assert r.resolve_profile("speed-critical", profile_models=POLICY,
+                             resident_model=RESIDENT, override=None) == "grok-like-fleet-model"
+
+
+def test_resolve_step_override_wins_over_manifest_capability():
+    # The escape hatch at the step layer: a user pin beats the manifest's declared
+    # capability and its configured specialist model.
+    man = m.parse_manifest(
+        '[plugin]\nname="llm4decompile"\nversion="0"\nkind="tool"\n'
+        '[model_routes]\nrename_function = "re-naming"\n')
+    assert r.resolve_step(man, "rename_function",
+                          capability_models={"re-naming": "llm4decompile-6.7b"},
+                          resident_model=RESIDENT,
+                          override="user-pinned") == "user-pinned"
