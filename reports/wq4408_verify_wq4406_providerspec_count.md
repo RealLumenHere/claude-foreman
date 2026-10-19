@@ -55,8 +55,8 @@ from scratch.
 both in the errata row and in the rewritten §3 superseded-note) is itself
 miscounted — the real split is 38 of 46, not 39 of 46.**
 
-`registry.py` at `909b277e` has 47 total `backend="openai_compat"`-style
-assignments across the file, but only 46 of those sit inside the actual
+`registry.py` at `909b277e` has 47 total `ProviderSpec(` constructions across
+the file, but only 46 of those sit inside the actual
 catalog — the `PROVIDERS: tuple[ProviderSpec, ...] = (` literal, which opens
 at `registry.py:215` and closes at `registry.py:943`. The 47th
 `ProviderSpec(` construction, at `registry.py:969-979`, is inside

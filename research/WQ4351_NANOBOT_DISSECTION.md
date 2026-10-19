@@ -95,7 +95,7 @@ left to dispatch a further pass against.
 | # | Claim as shipped by wq#4401 | Primary source | Status |
 |---|---|---|---|
 | E4 | E1's mechanism citation: `pyproject.toml:117` is `nanobot = "nanobot.cli.entry:main"`, offered as evidence at pinned `a1241ee6` | At `a1241ee6` the file is 117 lines, `:117` is `testpaths = ["tests"]`, and `entry` occurs nowhere in it (`grep -c entry` → 0); the console script is `:73` → `nanobot = "nanobot.cli.commands:app"`. The quoted line/number pair is exactly right for `main`@`909b277e`, where `[project.scripts]` sits at `:116` and `:117` is `nanobot = "nanobot.cli.entry:main"` | **Mis-attributed, not fabricated — fixed.** Right text, right line, wrong ref: a current-`main` reading printed under the pinned-commit citation. Conclusion (distribution ≠ console script) unaffected |
-| E5 | `main` replaced LiteLLM with native adapters "`anthropic`, `azure_openai`, `bedrock`, `github_copilot`, `openai_codex`, `openai_compat`, `xai_grok`, `dashscope`" | `nanobot/providers/registry.py` on `main`@`909b277e`: `backend` takes exactly seven values (`:71-72`), one `*_provider.py` each; `dashscope` is a `ProviderSpec` (`:693-702`) whose `backend="openai_compat"`, one of 39 such specs out of 46 | **Wrong category, not a fabricated name — fixed.** DashScope is a configured provider, not a native adapter; the adapter list is seven, not eight. wq#4404's "zero hits anywhere in the repo for dashscope/qwen" is itself incorrect: it searched the recursive git tree, which lists *paths* only, so a provider declared inside `registry.py` was invisible to it (`qwen` is at `:695`) |
+| E5 | `main` replaced LiteLLM with native adapters "`anthropic`, `azure_openai`, `bedrock`, `github_copilot`, `openai_codex`, `openai_compat`, `xai_grok`, `dashscope`" | `nanobot/providers/registry.py` on `main`@`909b277e`: `backend` takes exactly seven values (`:71-72`), one `*_provider.py` each; `dashscope` is a `ProviderSpec` (`:693-702`) whose `backend="openai_compat"`, one of 38 such specs out of 46 | **Wrong category, not a fabricated name — fixed.** DashScope is a configured provider, not a native adapter; the adapter list is seven, not eight. wq#4404's "zero hits anywhere in the repo for dashscope/qwen" is itself incorrect: it searched the recursive git tree, which lists *paths* only, so a provider declared inside `registry.py` was invisible to it (`qwen` is at `:695`) |
 | E6 | "18 channel dirs on current `main`" | 19 directories under `nanobot/channels/` on `main`@`909b277e` (dingtalk, discord, email, feishu, linear, matrix, mattermost, mochat, msteams, napcat, qq, signal, slack, telegram, websocket, wecom, weixin, whatsapp, whatsapp_agent) | **Off by one — fixed.** "10+ channels is conservative" holds either way |
 
 Re-checked clean in this round, independently rather than trusted: E2
@@ -226,7 +226,7 @@ if it were file contents.
     (`registry.py:215+`). Named vendors are specs, not adapters: DashScope
     (Qwen), for instance, is `ProviderSpec(name="dashscope", …,
     backend="openai_compat", default_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1")`
-    at `registry.py:693-702` — 39 of the 46 specs ride `openai_compat` that
+    at `registry.py:693-702` — 38 of the 46 specs ride `openai_compat` that
     way (see **Errata E5**). Read the "bypasses LiteLLM" framing as
     historical, not current.
 - **10+ chat platforms**: Telegram (documented as the recommended/easiest

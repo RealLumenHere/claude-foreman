@@ -65,7 +65,7 @@ nanobot/providers/registry.py:693-702 @ 909b277e
 `qwen` among them at `:695`, so the "zero hits for qwen" claim is also false.
 What is wrong in wq#4401's doc text is the *category*: `backend` takes exactly
 seven values (`registry.py:71-72`, one `*_provider.py` module each) and
-`dashscope` rides the generic `openai_compat` one, as do 39 of the 46
+`dashscope` rides the generic `openai_compat` one, as do 38 of the 46
 `ProviderSpec` entries. The native-adapter list is seven, not eight, and
 DashScope does not belong in it.
 
