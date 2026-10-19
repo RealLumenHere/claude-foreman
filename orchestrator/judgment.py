@@ -172,12 +172,17 @@ _OPS_RE = re.compile(r"(?:foreman/)?ops/(wq\d+-[A-Za-z0-9._-]+)")
 
 
 def ops_bundles_cited(t):
-    """ops/wqNNNN-*/ bundle dirs a shipped ticket cites in notes/detail/deliverable."""
+    """ops/wqNNNN-*/ bundle dirs a shipped ticket cites in notes/detail/deliverable.
+
+    wq#4345: a doc-only dir (no install.sh at all, e.g. a README amendment) has no
+    install surface to verify and is not a bundle citation -- skip it rather than
+    feeding it to the --verify gate.
+    """
     text = " ".join(str(t.get(k) or "") for k in ("notes", "detail", "deliverable"))
     seen = []
     for m in _OPS_RE.finditer(text):
         b = m.group(1).rstrip(".,;:/")
-        if b not in seen and os.path.isdir(os.path.join(OPS_ROOT, b)):
+        if b not in seen and os.path.isfile(os.path.join(OPS_ROOT, b, "install.sh")):
             seen.append(b)
     return seen
 

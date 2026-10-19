@@ -23,6 +23,9 @@ def ops(tmp_path, monkeypatch):
         d.mkdir(parents=True)
         body = 'if [ "${1:-}" = --verify ]; then exit 0; fi\n' if handler else "cp x /y\n"
         (d / "install.sh").write_text("#!/usr/bin/env bash\n" + body)
+    # wq#4345: a doc-only dir with no install.sh at all (e.g. a README amendment)
+    (root / "wq12-doconly").mkdir(parents=True)
+    (root / "wq12-doconly" / "README.md").write_text("docs only, no install surface\n")
     monkeypatch.setattr(judgment, "OPS_ROOT", str(root))
     return root
 
@@ -44,6 +47,13 @@ def test_cited_bundles_found_only_if_they_exist(ops):
     t = {"notes": "staged at foreman/ops/wq10-good/install.sh and ops/wq11-legacy/, "
                   "also ops/wq99-gone/install.sh"}
     assert judgment.ops_bundles_cited(t) == ["wq10-good", "wq11-legacy"]
+
+
+def test_doc_only_bundle_dir_is_not_cited(ops):
+    # wq#4345: a dir exists but has no install.sh at all (doc-only amendment) -- it
+    # has no install surface, so it must not be cited into the --verify gate.
+    t = {"notes": "amended ops/wq12-doconly/README.md, dead-end citation dropped"}
+    assert judgment.ops_bundles_cited(t) == []
 
 
 def test_verify_ticket_carries_box_liveness(ops, monkeypatch):
