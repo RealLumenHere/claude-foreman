@@ -7,7 +7,10 @@ Prof. **Huang Chao** — "港大黄超"). Launched **2026-02-01** as *"an
 ultra-lightweight personal AI assistant inspired by Clawdbot"* — Clawdbot
 being OpenClaw's original pre-rename name, the same lineage NanoClaw
 (wq#4348) targets. Pure **Python ≥3.11, single asyncio event loop**, MIT
-licensed, `pip install nanobot` → `nanobot onboard`. Core agent loop is
+licensed, `pip install nanobot-ai` → `nanobot onboard` (the PyPI
+*distribution* is `nanobot-ai`; the *console script* it installs is `nanobot` —
+collapsing the two is how the original version of this line got it wrong, see
+**Errata E1**). Core agent loop is
 reported at **~3,400–4,000 LOC** (the README itself says "run
 `core_agent_lines.sh` to verify anytime," and different commit snapshots
 show the number moving: 3,359, 3,422, ~4,000 — it's a live, self-checking
@@ -43,6 +46,42 @@ rather than picking one silently.
 
 ---
 
+## Errata (wq#4386 verify-pass → wq#4401 judgment, 2026-10-19)
+
+This doc shipped on secondary sources for several claims because the primary
+search path was down when it was written (see the sourcing note above: all of
+SearXNG's general engines were suspended/CAPTCHA'd that run). A verify-pass
+(wq#4386) found one primary-source contradiction; the wq#4401 judgment pass
+then re-audited **every precise identifier and number the doc stated without a
+primary-source link**, because that class of claim is what a press/wiki
+paraphrase degrades. Three corrections resulted, all applied inline above.
+Historical claims are cited against commit **`a1241ee6`** (2026-03-14) rather
+than `main`, so they stay re-checkable.
+
+| # | Claim as shipped | Primary source | Status |
+|---|---|---|---|
+| E1 | `pip install nanobot` | `pyproject.toml:2` → `name = "nanobot-ai"`; `pypi.org/pypi/nanobot/json` is an unrelated Jetson robot-navigation package by "NanoBot Team" | **Wrong — fixed.** Installed the wrong software. `pyproject.toml:117` (`nanobot = "nanobot.cli.entry:main"`) explains the slip: the console script *is* `nanobot`, the distribution is not |
+| E2 | subagents get 15 iterations "vs. 4" for the main agent, so delegated work has "more runway" | `nanobot/agent/subagent.py:115` → `max_iterations = 15`; `nanobot/agent/loop.py:56` → `max_iterations: int = 40` | **Wrong — fixed.** Second number was 40, not 4, so the stated rationale was inverted |
+| E3 | `save_memory` is "not a real tool call", a "zero-I/O virtual tool" | `nanobot/agent/memory.py:21-45` (`_SAVE_MEMORY_TOOL` function schema), `:114` (`consolidate()`), `:139` (forced `tool_choice`) | **Wrong — fixed**, and Recommendation B rewritten: it is a real forced tool call costing an extra round-trip, on a separate consolidation agent |
+
+Checked and **upheld** in the same pass, for the record: `SpawnTool` is real
+(`nanobot/agent/tools/spawn.py:11`, since renamed `SubagentTool` — wq#4386
+flagged this unresolved only because it looked at current `main`, where the
+old path is gone); the LiteLLM-bypass framing was accurate as of the doc's
+sources (now superseded, §3); `@jcheesepkg/nanobot` on npm and
+`bcefghj/learn-nanobot` on GitHub both exist under exactly those names;
+ClawHub is real (`nanobot/skills/clawhub/SKILL.md`); Markdown-file memory with
+no vector DB is real; "10+ channels" is conservative (18 channel dirs on
+current `main`). wq#4386 separately re-confirmed PR #554's content, the
+`LLMProvider`/`BaseChannel` names, and `core_agent_lines.sh`.
+
+**The transferable lesson** is in `kb/ISSUE-LOG.md` row 1474: one
+primary-source contradiction in a doc whose sourcing note admits the primary
+path was unavailable is a *sampling signal*, not an isolated typo — audit the
+claims sharing that provenance, not just the one that failed.
+
+---
+
 ## Architecture (single-process, async, layered — no containers, no queue broker)
 
 ```
@@ -72,11 +111,11 @@ rather than picking one silently.
         │  prompt only when relevant; ClawHub marketplace to search/install
         │  public skills
         └─ SubAgents — SpawnTool creates background sub-agents with their
-           own iteration budget (15 vs. the main agent's own separate cap)
+           own iteration budget (15, vs. the main loop's default 40)
         ▼
   Memory — plain Markdown files on disk, no vector DB, per-workspace
-  isolation; "save_memory" is not a real tool call, it's handled directly
-  inside the framework to cut I/O
+  isolation; "save_memory" is a real forced tool call, but issued by a
+  separate consolidation pass, not from the main agent loop
 ```
 
 ## 1. Minimal dependency footprint, self-verifying
@@ -131,6 +170,17 @@ rather than picking one silently.
   entirely, passes the model name as-is) that covers LM Studio, llama.cpp,
   Together AI, Fireworks, and Azure OpenAI without NanoBot needing
   provider-specific code for each.
+  - **Confirmed as of this doc's sources, since superseded.** At `a1241ee6`
+    (2026-03-14) `litellm>=1.82.1,<2.0.0` was a hard dependency and
+    `nanobot/providers/` held exactly `litellm_provider.py` +
+    `custom_provider.py` + `azure_openai_provider.py` +
+    `openai_codex_provider.py` — i.e. the breadth (VolcEngine, StepFun,
+    vllm, …) came *through* LiteLLM and the custom passthrough was indeed
+    the bypass around it. Current `main` has **dropped LiteLLM entirely**
+    (zero occurrences in `pyproject.toml`) in favour of native adapters:
+    `anthropic`, `azure_openai`, `bedrock`, `github_copilot`,
+    `openai_codex`, `openai_compat`, `xai_grok`, `dashscope`. Read the
+    "bypasses LiteLLM" framing as historical, not current.
 - **10+ chat platforms**: Telegram (documented as the recommended/easiest
   setup), Discord, Slack, Feishu, DingTalk, Mochat, plus IMAP/SMTP email —
   each a `BaseChannel` subclass with its own credential setup flow
@@ -149,11 +199,19 @@ rather than picking one silently.
   **transparency** (a user can read/edit their own agent's memory file
   directly), **zero dependencies** (no vector DB to run or pay for), and
   **per-workspace isolation** (each project gets its own memory space).
-- `save_memory` is **not a real tool call** — it's handled directly inside
-  the framework rather than round-tripping through the LLM tool-call
-  protocol, cutting unnecessary I/O. A deliberate "virtual tool" pattern:
-  looks like a tool to the model, costs nothing like a real one to the
-  runtime.
+- `save_memory` is **a real tool call, but not one the main agent loop ever
+  sees** — it belongs to a separate memory-consolidation pass. Primary
+  source (`nanobot/agent/memory.py` at `a1241ee6`): `_SAVE_MEMORY_TOOL`
+  (lines 21-45) is a full function-tool schema, and
+  `MemoryStore.consolidate()` (line 114) passes it to
+  `provider.chat_with_retry(..., tools=_SAVE_MEMORY_TOOL,
+  tool_choice=forced)` with `forced = {"type": "function", "function":
+  {"name": "save_memory"}}` (line 139), falling back to `tool_choice="auto"`
+  on providers that reject forced choice. So it costs an *extra* dedicated
+  LLM round-trip rather than zero I/O. What's actually true is the narrower
+  claim: consolidation is a separate agent with a one-tool toolbelt, which
+  keeps `save_memory` out of the main loop's tool list and off the
+  interactive path (see **Errata E3**).
 - A later release note ("memory summaries cumulative," PR #5610 on a fork)
   shows the memory system evolving incrementally (summarization on top of
   raw files) rather than being replaced by heavier infrastructure as the
@@ -177,13 +235,22 @@ rather than picking one silently.
 
 ## 6. SubAgents (SpawnTool)
 
-- The main agent can spawn **background sub-agents** via a `SpawnTool`.
-  Sub-agents get their **own iteration budget, separate from and larger
-  than the main agent's** (one source cites 15 iterations for sub-agents
-  vs. 4 for the dispatching main agent — i.e. the main loop stays cheap
-  and interactive while delegated work gets more runway). Subagents work
-  in CLI mode as of the 2026-02-19 release, not just inside channel
-  sessions.
+- The main agent can spawn **background sub-agents** via a `SpawnTool` —
+  primary-source confirmed as `class SpawnTool(Tool)` at
+  `nanobot/agent/tools/spawn.py:11`, pinned at commit `a1241ee6`
+  (2026-03-14). Since renamed: current `main` calls it `SubagentTool` at
+  `nanobot/agent/tools/subagent.py`.
+- Sub-agents get their **own iteration budget, smaller than and capped
+  independently of the main agent's**: `max_iterations = 15` for a subagent
+  (`nanobot/agent/subagent.py:115`) against the main loop's default
+  `max_iterations: int = 40` (`nanobot/agent/loop.py:56`), both at
+  `a1241ee6`. The "15 vs. 4" framing the secondary sources carried is wrong
+  on the second number and therefore backwards on the rationale — delegated
+  work gets *less* runway than the dispatching loop, not more, which reads
+  as bounding the cost of fan-out rather than extending it (see
+  **Errata E2**).
+- Subagents work in CLI mode as of the 2026-02-19 release, not just inside
+  channel sessions.
 
 ## 7. Deploy story: "2-minute deploy," Docker support added early
 
@@ -191,7 +258,7 @@ rather than picking one silently.
   **"2-minute deploy, clear architecture, easy to learn core logic"** as
   the explicit value proposition alongside the LOC reduction — deploy speed
   is treated as a first-class selling point, not incidental.
-- `pip install nanobot` → `nanobot onboard` is the baseline path. **Docker
+- `pip install nanobot-ai` → `nanobot onboard` is the baseline path. **Docker
   support shipped early** (v0.1.3.post4 changelog: *"multi-provider &
   Docker support"*, 2026-02-04, three days after the 2026-02-01 launch) —
   not a one-click PaaS button (no Railway/Fly.io template surfaced in
@@ -218,13 +285,13 @@ rather than picking one silently.
    never wrote bespoke code for.
 4. **10+ chat/email channels** behind one `BaseChannel` interface.
 5. **File-based memory** (Markdown, no vector DB), with `save_memory`
-   implemented as a zero-I/O virtual tool rather than a real tool-call
-   round-trip.
+   implemented as a forced single-tool call on a *separate* consolidation
+   agent, keeping it off the main loop's tool list.
 6. **Dynamically-loaded skills** (`SKILL.md`) plus a public marketplace
    (ClawHub) for third-party skills — capability growth routed out of the
    reviewable core.
-7. **SubAgents via SpawnTool** with an independent, larger iteration
-   budget than the dispatching main agent.
+7. **SubAgents via SpawnTool** with an independent, *smaller* iteration
+   budget than the dispatching main agent (15 vs. 40).
 8. **Docker packaging shipped 3 days post-launch**; pip-installable CLI
    onboarding flow as the primary path.
 9. **"Research-Ready" is a stated, shipped design goal** (README Key
@@ -246,13 +313,24 @@ abstraction underneath it is already generic.
   exposure), that's a signal the generic tool abstraction underneath isn't
   generic enough yet — the fix is usually in the abstraction, not in
   adding more wrapper code.
-- **B. Adopt the "virtual tool" pattern for cheap, framework-internal
-  operations.** NanoBot's `save_memory` looks like a tool to the model but
-  is handled directly in-process, skipping a real tool-call round-trip.
-  Any Limpet operation that's logically a tool call but cheap and
-  framework-owned (e.g., writing to `evidence.json`, appending to
-  `ISSUE-LOG.md`) is a candidate for the same treatment — exposed to the
-  model as a tool for discoverability, but short-circuited internally.
+- **B. Keep framework-owned bookkeeping off the main loop's toolbelt by
+  giving it its own single-tool agent.** *(Rewritten per Errata E3 — the
+  original version of this recommendation was built on the claim that
+  `save_memory` is a zero-I/O virtual tool, which the primary source
+  contradicts.)* What NanoBot actually does is narrower and still useful:
+  memory consolidation runs as a **separate pass with a one-tool toolbelt
+  and a forced `tool_choice`**, so the main agent's tool list never carries
+  `save_memory` and the interactive loop never spends an iteration on it.
+  The transferable lever is **toolbelt scoping plus forced choice**, not
+  short-circuiting: for a Limpet operation that is logically a tool call but
+  framework-owned (writing `evidence.json`, appending an `ISSUE-LOG.md`
+  row), run it as its own small forced-tool call rather than adding it to
+  the main agent's tool list, where it competes for attention and iteration
+  budget on every turn. Note the real cost honestly: this *buys* a clean
+  main-loop toolbelt and *pays* an extra LLM round-trip — the opposite of
+  the free-lunch framing. If zero-I/O is what Limpet wants, that's a
+  genuinely different design (deterministic post-turn hook, no model in the
+  loop) and NanoBot is not evidence for it.
 - **C. Markdown-file memory, not infrastructure, for anything that fits.**
   NanoBot's bet — memory as plain, user-editable Markdown files instead of
   a vector DB — buys transparency and zero extra infra at the cost of
