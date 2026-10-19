@@ -1,0 +1,11 @@
+# Limpet udev rules for generic USB-serial adapters, installed by
+# limpet-plugin-serial-mcp. VID:PIDs match the existing zero-config entries in
+# limpet/hardware.d/05-usb-serial.toml (FTDI FT232R, Silicon Labs CP2102/CP2104,
+# WCH CH340/CH341 UART mode, Prolific PL2303) — all in-kernel drivers, no DKMS.
+# Grants the Limpet plugin runtime uaccess without requiring dialout group
+# membership.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-serial"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-serial"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-serial"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="5523", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-serial"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="limpet-serial"

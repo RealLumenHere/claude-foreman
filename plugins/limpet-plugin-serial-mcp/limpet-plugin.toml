@@ -1,0 +1,114 @@
+# limpet-plugin-serial-mcp — UART/serial automation MCP tool
+# wq#4317 — wraps alxgmpr/serial-mcp (MIT, PyPI "pyserial-mcp" v0.7.4, 24 tools)
+#
+# CORRECTED SOURCE: the ticket named github.com/dperezcabrera/pico-agent as the
+# upstream. That repo is real but is NOT a UART tool — it is a DEPRECATED,
+# general-purpose LangChain/LangGraph agent framework built on Pico-IoC dependency
+# injection (confirmed via fleet-search web, 2026-10-19: its own README opens
+# "DEPRECATED. This package is no longer maintained..." and has zero mentions of
+# UART/serial/picocom/minicom anywhere). It has no relationship to serial
+# automation. The actual need behind the ticket (automated UART interaction for
+# RE work, picocom/minicom already installed, Spectrio RE target + Freedom Bot
+# ESP32 serial) is real and unmet, so this plugin wraps the tool that actually
+# does it: alxgmpr/serial-mcp, found via fleet-search web "MCP server serial port
+# UART automation tool github". Logged as kb/ISSUE-LOG.md row for wq#4317.
+
+[plugin]
+name = "serial-mcp"
+version = "0.7.4"
+manifest_version = 1
+category = "hardware-interface"
+description = "UART/serial automation over MCP: interactive command/expect shells, DTR/RTS signal control for bootloader entry, auto-baud detection, hex I/O, and XMODEM file transfer against any USB-serial adapter."
+license = "MIT"
+homepage = "https://github.com/alxgmpr/serial-mcp"
+repository = "https://github.com/alxgmpr/serial-mcp"
+authors = ["Alex Gompper"]
+
+[capabilities]
+uart = true
+headless = true
+gui = false
+architectures = ["any"]  # pure-Python client; hardware support is any in-kernel USB-serial chip
+input_formats = ["text", "hex", "XMODEM"]
+output_formats = ["JSON", "hex"]
+
+[paths]
+binary = "/opt/limpet/plugins/serial-mcp/venv/bin/serial-mcp"
+install_dir = "/opt/limpet/plugins/serial-mcp"
+
+[health]
+check = "/opt/limpet/plugins/serial-mcp/venv/bin/python3 -c 'import serial_mcp'"
+interval = "1h"
+timeout = "10s"
+startup_grace = "5s"
+
+[dependencies]
+requires = []
+system_packages = []
+conflicts = []
+
+[mcp]
+enabled = true
+server = "serial-mcp"
+transport = "stdio"
+command = "/opt/limpet/plugins/serial-mcp/venv/bin/serial-mcp"
+args = []
+env = {}
+
+[mcp.tools_energize]
+# Per-tool energize gate. This plugin's own judgment call, NOT a passthrough of
+# upstream's readOnlyHint/destructiveHint MCP annotations (server.py) — those
+# describe side effects on the MCP session/host filesystem, not physical-device
+# safety. E.g. upstream marks serial_open/serial_close/serial_clear_history
+# readOnlyHint=False (they mutate server-side session state) even though they
+# never write a byte to the wire; conversely serial_wait_for and
+# serial_detect_baud can write to the device (optional respond/respond_hex param,
+# server.py:747-748; probe=True sends b"\r\n", server.py:1075-1076) despite
+# looking like pure reads. Gated = writes bytes to the device, drives DTR/RTS/
+# break (can reset or force a target into bootloader), or forcibly reclaims a
+# port from another process. Ungated = pure reads, port config, and local-only
+# session/log bookkeeping.
+
+# Writes / signal control / can reset or bootloader-trigger the target
+serial_execute = true
+serial_command = true
+serial_wait_for = true          # optional respond/respond_hex writes to the device (server.py:747-748)
+serial_write = true
+serial_write_hex = true
+serial_set_signals = true       # DTR/RTS — e.g. forces an ESP32 into bootloader/reset
+serial_send_break = true
+serial_detect_baud = true       # probe=True writes b"\r\n" to the device (server.py:1075-1076)
+serial_xmodem_send = true
+serial_xmodem_receive = true    # protocol ACK/NAK bytes go to the device; upstream also marks destructiveHint=True
+
+# Forcibly reclaims a port held by another process (kills that process)
+serial_force_release = true
+
+# Pure reads / port config / local-only session and log bookkeeping — ungated
+list_serial_ports = false
+serial_open = false
+serial_close = false
+serial_change_settings = false
+serial_read = false
+serial_read_since = false
+serial_read_hex = false
+serial_get_signals = false
+serial_clear_history = false
+serial_log_start = false
+serial_log_stop = false
+serial_list_sessions = false
+serial_status = false
+
+[agent_hints]
+summary = "MCP server giving an LLM a reliable serial connection to microcontrollers, routers, modems, and embedded Linux systems: interactive command/expect shells, DTR/RTS signal control (e.g. force an ESP32 into bootloader mode), auto-baud detection, hex I/O for binary protocols, and XMODEM file transfer. Continuously buffers incoming data so output from a slow or bursty device is not lost between calls."
+when_to_use = "Use for any RE/automation task against a device's UART console or bootloader prompt over a standard USB-serial adapter — Spectrio RE target host, Freedom Bot ESP32 serial, U-Boot/login prompts, AT-command modems, router CLIs. serial_command's expect-pattern + respond/respond_hex covers triggered responses (e.g. interrupt U-Boot autoboot, answer a bootloader handshake byte) without round-tripping through the agent for timing-sensitive sequences."
+when_not_to_use = "Not for JTAG/SWD debug, flash programming, or any non-UART bus — use jlink-mcp/openocd-mcp/flashrom/buspirate-mcp instead. Not a replacement for manual picocom/minicom use when a human needs to watch the raw terminal live; this is for agent-driven automation of the same ports."
+complements = ["buspirate-mcp", "jlink-mcp", "flashrom"]
+supersedes = []
+workflow_position = "interact"
+
+[resources]
+max_memory = "256M"
+max_instances = 1  # one server process manages multiple ports internally via session_id
+gpu_required = false
+estimated_startup_time = "2s"
