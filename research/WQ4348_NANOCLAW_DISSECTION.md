@@ -11,16 +11,18 @@ persistent memory — and runs every agent invocation inside its own disposable
 **Docker container** (or **Apple Container** on macOS). Pitch, in Cohen's own
 words: *"treat agents as untrusted and potentially malicious... architecture
 that assumes agents will misbehave and contains the damage when they do."*
-On **2026-03-13** NanoCo partnered with Docker Inc. to run NanoClaw inside
-**Docker Sandboxes** — disposable **MicroVMs**, one layer deeper than the
-container boundary.
+On **2026-03-13** NanoCo announced a partnership with Docker Inc. to run
+NanoClaw inside **Docker Sandboxes** — disposable MicroVMs, one layer deeper
+than the container boundary. **This integration is retired as of the time of
+writing** (see the historical note in Section 2) — current NanoClaw ships
+container-only isolation.
 
 **Size claim, sourced:** OpenClaw is reported at **400k–500k LOC, 53 config
 files, 70+ dependencies**, all security enforced at the application level
 (allowlists, pairing codes) inside one shared Node process. NanoClaw is
 reported at **under 4,000 LOC across ~15 core source files** — "up to 100x"
 smaller (Cohen, via CloudNativeNow) — with security enforced by the OS
-(container/VM boundary), not by the model behaving correctly.
+(the container boundary), not by the model behaving correctly.
 
 **Sourcing note (instinct 8 — anti-fabrication):** every claim below came from
 `fleet-search web` on 2026-10-19 (SearXNG→DeepSeek-Search fallback — SearXNG's
@@ -41,7 +43,7 @@ such below — treat those as "exists in the ecosystem, not confirmed shipped on
 
 ---
 
-## Architecture diagram (container-per-agent + MicroVM, defense-in-depth)
+## Architecture diagram (container-per-agent, defense-in-depth)
 
 ```
   HOST PROCESS (trusted, single Node.js orchestrator)
@@ -56,17 +58,19 @@ such below — treat those as "exists in the ecosystem, not confirmed shipped on
                                    │   --security-opt no-new-privileges
                                    │   --init --pids-limit <N>
                                    ▼
-  ┌─ MicroVM (Docker Sandbox, own kernel + own Docker engine) ─────────┐
-  │  ┌─ Container (one per agent GROUP, ephemeral per session) ─────┐ │
-  │  │ uid 1000 (node), setuid bit stripped host-wide                │ │
-  │  │ mounts: session folder (rw), group workspace (rw),            │ │
-  │  │   container.json + composed CLAUDE.md (RO, nested on top      │ │
-  │  │   of the rw group dir), shared agent-runner src (RO)          │ │
-  │  │ NO project root, NO .ssh/.env/credentials, NO Docker socket   │ │
-  │  │ network: --internal (egress lockdown) → OneCLI gateway only   │ │
-  │  └─────────────────────────────────────────────────────────────┘ │
+  ┌─ Container (one per agent GROUP, ephemeral per session) ──────────┐
+  │ uid 1000 (node), setuid bit stripped host-wide                    │
+  │ mounts: session folder (rw), group workspace (rw),                │
+  │   container.json + composed CLAUDE.md (RO, nested on top          │
+  │   of the rw group dir), shared agent-runner src (RO)              │
+  │ NO project root, NO .ssh/.env/credentials, NO Docker socket       │
+  │ network: --internal (egress lockdown) → OneCLI gateway only       │
   └─────────────────────────────────────────────────────────────────┘
 ```
+
+(The container is the only isolation ring on current `main` — see the
+historical note in Section 2: a one-layer-deeper MicroVM ring was announced
+2026-03-13 and has since been retired.)
 
 ## 1. Container-per-agent (the primary boundary)
 
@@ -79,11 +83,18 @@ such below — treat those as "exists in the ecosystem, not confirmed shipped on
 - **Nested read-only-over-read-write mounts**: `container.json` and the
   composed `CLAUDE.md` are mounted RO *on top of* the writable group
   directory — the agent can read its own config but cannot rewrite it to
-  grant itself more. The **project root itself is never mounted** (current
-  `nanocoai/main`) — host source (`src/`, `dist/`, `package.json`) is simply
-  unreachable, closing the earlier "agent edits its own sandbox code" failure
-  mode an older fork generation (`topcoder1`/`echthesia`/`nickpourazima`
-  SECURITY.md snapshots) handled only by mounting that root read-only.
+  grant itself more. **The project root itself is never mounted, on current
+  `nanocoai/main` (commit `7be8d7f6`, 2026-10-18)** — host source (`src/`,
+  `dist/`, `package.json`) is simply unreachable. This has moved twice:
+  PR `nanocoai/nanoclaw#392` ("fix: mount project root read-only to prevent
+  container escape", merged 2026-02-22 at `5fb10645`) changed an older
+  read-write mount to read-only for the trusted "main" group only; the
+  2026-07-04 "v2 perimeter" rewrite (`39061049`) then replaced the whole
+  main/non-main group model with a `user_roles`-based trust model and
+  dropped the project-root mount entirely — `docs/SECURITY.md` on current
+  `main` states plainly "the project root is never mounted" for every group.
+  Treat any "main gets the project root read-only" framing (including PR#392
+  itself) as a superseded v1 snapshot, not current behavior.
 - **Symlink-trap guard on host writes into the container**: files flowing in
   (channel attachments, inter-agent forwards) are written by the *host* into
   the session's inbox. `src/inbox-safety.ts` verifies the inbox root and the
@@ -98,36 +109,59 @@ such below — treat those as "exists in the ecosystem, not confirmed shipped on
   (`ncl sessions history`, which does reject *cross-group* reads). Different
   trust domains therefore need separate groups, not just separate sessions —
   documented candidly as "one boundary the container does not draw."
-- **Trust tiers baked into mounts, not prompts**: Main (trusted, self-chat)
-  gets the project root read-only plus cross-group admin; non-main groups get
-  only their own group folder, read-only global memory, and no project
-  access at all — enforced by what's physically mounted, checked in code
-  (`ncl` IPC authorization table), not by instructing the model to behave.
+- **Trust tiers baked into mounts, not prompts (historical, v1):** the pre-
+  2026-07-04 architecture gave Main (trusted, self-chat) the project root
+  read-only plus cross-group admin, while non-main groups got only their own
+  group folder, read-only global memory, and no project access — enforced by
+  what was physically mounted, checked in code (`ncl` IPC authorization
+  table). The 2026-07-04 "v2 perimeter" rewrite replaced this main/non-main
+  split with a `user_roles`-based trust model and removed project-root
+  access for every group (see the reconciled mount statement above); the
+  "checked in code, not by prompting the model" design principle still
+  holds, the specific main/non-main mount table does not.
 
-## 2. MicroVM-based Docker Sandboxes (the second isolation ring)
+## 2. MicroVM-based Docker Sandboxes — historical, retired
+
+**Status as of this writing (2026-10-19): retired, not current architecture.**
+This section originally described a live "second isolation ring." Two
+independent `fleet-search web` queries against the project's own current
+primary sources contradict that framing:
+
+- The `nanoclaw.dev` blog post announcing the integration now carries a
+  banner: *"Historical post — March 13, 2026. This announcement describes a
+  retired experimental integration. Current NanoClaw releases use Docker
+  containers directly; Docker Sandboxes and micro-VM runtimes are not
+  supported."*
+- `docs.nanoclaw.dev/operate/hardening` states independently: *"NanoClaw's
+  isolation boundary is the Docker container ... There is no micro-VM or
+  alternative sandbox runtime."*
+
+What follows is preserved as a historical record of what was announced on
+2026-03-13, not a claim about current behavior:
 
 - Announced 2026-03-13 as a **NanoCo × Docker Inc. partnership**: NanoClaw
-  becomes the first "claw"-style agent runtime deployable inside **Docker
-  Sandboxes**, Docker's microVM-based execution primitive (shipped
-  experimentally in Docker Desktop since Nov 2025). One command converts an
+  was positioned as the first "claw"-style agent runtime deployable inside
+  **Docker Sandboxes**, Docker's microVM-based execution primitive (shipped
+  experimentally in Docker Desktop since Nov 2025). One command converted an
   install.
-- **Two isolation layers, stacked**: *"Each agent runs in its own container
-  (can't see other agents' data), and all containers run inside a micro VM
-  (can't touch your host machine)"* (Cohen). A container is a process jail on
-  a shared kernel; a microVM is a dedicated kernel and dedicated hardware
-  space — Docker COO Mark Cavage's framing: *"agents break the container
-  model"* because they want to mutate their own environment (install
-  packages, spin up databases) at runtime, which containers were never built
-  to tolerate safely; the microVM gives that mutation a bigger, cheaper-to-
-  discard blast-radius boundary.
-- **Platform support is currently partial and sourced-as-of-March-2026**:
-  Docker Sandboxes shipped for **macOS (Apple Silicon) and Windows (x86)
-  first, with Linux support called out explicitly as "coming in a few weeks"**
-  in the launch coverage. Treat Linux-host microVM support as a thing to
-  re-verify at adoption time, not a given.
-- **Threat model it buys you**: if an agent achieves a container escape via a
-  zero-day, the microVM still contains it — damage is capped at "a resettable
-  microVM boundary," not the developer's laptop or a CI runner.
+- **Two isolation layers, stacked** (as pitched): *"Each agent runs in its own
+  container (can't see other agents' data), and all containers run inside a
+  micro VM (can't touch your host machine)"* (Cohen). A container is a
+  process jail on a shared kernel; a microVM is a dedicated kernel and
+  dedicated hardware space — Docker COO Mark Cavage's framing: *"agents break
+  the container model"* because they want to mutate their own environment
+  (install packages, spin up databases) at runtime, which containers were
+  never built to tolerate safely; the microVM was meant to give that mutation
+  a bigger, cheaper-to-discard blast-radius boundary.
+- At launch, platform support was partial: Docker Sandboxes shipped for
+  **macOS (Apple Silicon) and Windows (x86) first**, with Linux support
+  called out as "coming in a few weeks." It never reached the point of
+  being treated as current architecture here — it was retired before this
+  doc's own 2026-10-19 research window.
+- **wq#4363's sandbox-tier doc** is the place to re-ask whether Limpet's RE
+  tier wants a second, VM-grade isolation ring of its own; that question is
+  independent of whether NanoClaw ships one today, and is not re-researched
+  here.
 
 ## 3. Hardening layers (all configurable, all defense-in-depth)
 
@@ -235,14 +269,16 @@ such below — treat those as "exists in the ecosystem, not confirmed shipped on
    `--security-opt no-new-privileges`, `--init`, configurable `--pids-limit`.
 2. **Nested RO-over-RW mounts** for the agent's own config (`container.json`,
    composed `CLAUDE.md`) — readable, not self-modifiable.
-3. **Project root never mounted** into the container (current `main`); no
+3. **Project root never mounted** into the container, on current `main`
+   (commit `7be8d7f6`, 2026-10-18; see reconciled statement in Section 1); no
    path by which the agent can rewrite host application code.
 4. **Symlink-trap-safe host→container file writes** (`inbox-safety.ts`):
    real-directory checks + exclusive-create, specifically against a
    compromised agent redirecting host writes via a planted symlink.
-5. **Second isolation ring via Docker Sandboxes (MicroVM)** — dedicated
-   kernel per sandbox, contains container-escape zero-days; opt-in, platform-
-   partial (macOS/Windows first, Linux pending as of the March 2026 launch).
+5. **Second isolation ring via Docker Sandboxes (MicroVM) — historical,
+   retired** (see Section 2): announced 2026-03-13, not current architecture
+   as of this doc's 2026-10-19 research window. Current `main` is
+   container-only; re-verify at adoption time if considering this feature.
 6. **Egress lockdown**: `--internal` Docker network + single-gateway-hop
    topology, fail-closed on misconfiguration, off by default.
 7. **External, non-agent-writable, default-deny mount allowlist** with
