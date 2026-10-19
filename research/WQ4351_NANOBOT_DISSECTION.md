@@ -60,7 +60,7 @@ than `main`, so they stay re-checkable.
 
 | # | Claim as shipped | Primary source | Status |
 |---|---|---|---|
-| E1 | `pip install nanobot` | `pyproject.toml:2` → `name = "nanobot-ai"`; `pypi.org/pypi/nanobot/json` is an unrelated Jetson robot-navigation package by "NanoBot Team" | **Wrong — fixed.** Installed the wrong software. `pyproject.toml:117` (`nanobot = "nanobot.cli.entry:main"`) explains the slip: the console script *is* `nanobot`, the distribution is not |
+| E1 | `pip install nanobot` | `pyproject.toml:2` → `name = "nanobot-ai"`; `pypi.org/pypi/nanobot/json` is an unrelated Jetson robot-navigation package by "NanoBot Team" | **Wrong — fixed.** Installed the wrong software. `pyproject.toml:73` at `a1241ee6` (`nanobot = "nanobot.cli.commands:app"`, under `[project.scripts]` at `:72`) explains the slip: the console script *is* `nanobot`, the distribution is not. On `main`@`909b277e` the same entry is `:117` → `nanobot = "nanobot.cli.entry:main"` (see **Errata E4**) |
 | E2 | subagents get 15 iterations "vs. 4" for the main agent, so delegated work has "more runway" | `nanobot/agent/subagent.py:115` → `max_iterations = 15`; `nanobot/agent/loop.py:56` → `max_iterations: int = 40` | **Wrong — fixed.** Second number was 40, not 4, so the stated rationale was inverted |
 | E3 | `save_memory` is "not a real tool call", a "zero-I/O virtual tool" | `nanobot/agent/memory.py:21-45` (`_SAVE_MEMORY_TOOL` function schema), `:114` (`consolidate()`), `:139` (forced `tool_choice`) | **Wrong — fixed**, and Recommendation B rewritten: it is a real forced tool call costing an extra round-trip, on a separate consolidation agent |
 
@@ -71,14 +71,53 @@ old path is gone); the LiteLLM-bypass framing was accurate as of the doc's
 sources (now superseded, §3); `@jcheesepkg/nanobot` on npm and
 `bcefghj/learn-nanobot` on GitHub both exist under exactly those names;
 ClawHub is real (`nanobot/skills/clawhub/SKILL.md`); Markdown-file memory with
-no vector DB is real; "10+ channels" is conservative (18 channel dirs on
-current `main`). wq#4386 separately re-confirmed PR #554's content, the
-`LLMProvider`/`BaseChannel` names, and `core_agent_lines.sh`.
+no vector DB is real; "10+ channels" is conservative (19 channel dirs under
+`nanobot/channels/` on `main`@`909b277e`). wq#4386 separately re-confirmed PR
+#554's content, the `LLMProvider`/`BaseChannel` names, and
+`core_agent_lines.sh`.
 
 **The transferable lesson** is in `kb/ISSUE-LOG.md` row 1474: one
 primary-source contradiction in a doc whose sourcing note admits the primary
 path was unavailable is a *sampling signal*, not an isolated typo — audit the
 claims sharing that provenance, not just the one that failed.
+
+### Errata, second round (wq#4404 verify-pass → wq#4406 judgment, 2026-10-19)
+
+wq#4404 re-checked the citations the wq#4401 pass above had *added* and
+reported two as fabricated. Both are real errors and are fixed below, but
+neither was a fabrication — each quoted string exists verbatim in the repo,
+and the wq#4404 characterisation overshot in both cases. wq#4406 then closed
+the population: all fifteen precise identifiers the wq#4401 diff introduced
+are now re-checked against SHA-pinned primary sources (`a1241ee6` for
+historical claims, `909b277e` for `main`), so there is no unaudited remainder
+left to dispatch a further pass against.
+
+| # | Claim as shipped by wq#4401 | Primary source | Status |
+|---|---|---|---|
+| E4 | E1's mechanism citation: `pyproject.toml:117` is `nanobot = "nanobot.cli.entry:main"`, offered as evidence at pinned `a1241ee6` | At `a1241ee6` the file is 117 lines, `:117` is `testpaths = ["tests"]`, and `entry` occurs nowhere in it (`grep -c entry` → 0); the console script is `:73` → `nanobot = "nanobot.cli.commands:app"`. The quoted line/number pair is exactly right for `main`@`909b277e`, where `[project.scripts]` sits at `:116` and `:117` is `nanobot = "nanobot.cli.entry:main"` | **Mis-attributed, not fabricated — fixed.** Right text, right line, wrong ref: a current-`main` reading printed under the pinned-commit citation. Conclusion (distribution ≠ console script) unaffected |
+| E5 | `main` replaced LiteLLM with native adapters "`anthropic`, `azure_openai`, `bedrock`, `github_copilot`, `openai_codex`, `openai_compat`, `xai_grok`, `dashscope`" | `nanobot/providers/registry.py` on `main`@`909b277e`: `backend` takes exactly seven values (`:71-72`), one `*_provider.py` each; `dashscope` is a `ProviderSpec` (`:693-702`) whose `backend="openai_compat"`, one of 39 such specs out of 46 | **Wrong category, not a fabricated name — fixed.** DashScope is a configured provider, not a native adapter; the adapter list is seven, not eight. wq#4404's "zero hits anywhere in the repo for dashscope/qwen" is itself incorrect: it searched the recursive git tree, which lists *paths* only, so a provider declared inside `registry.py` was invisible to it (`qwen` is at `:695`) |
+| E6 | "18 channel dirs on current `main`" | 19 directories under `nanobot/channels/` on `main`@`909b277e` (dingtalk, discord, email, feishu, linear, matrix, mattermost, mochat, msteams, napcat, qq, signal, slack, telegram, websocket, wecom, weixin, whatsapp, whatsapp_agent) | **Off by one — fixed.** "10+ channels is conservative" holds either way |
+
+Re-checked clean in this round, independently rather than trusted: E2
+(`subagent.py:115` = `max_iterations = 15`; `loop.py:56` =
+`max_iterations: int = 40,`), E3 (`memory.py:21` = `_SAVE_MEMORY_TOOL = [`,
+`:45` = `]`, `:114` = `async def consolidate(`, `:139` = the `forced` dict,
+plus `chat_with_retry(…, tool_choice=forced)` at `:140-144` and the
+`tool_choice="auto"` retry at `:151-155`, inside `class MemoryStore` at
+`:75`), `spawn.py:11` = `class SpawnTool(Tool):` and its rename to
+`class SubagentTool(Tool):` at `nanobot/agent/tools/subagent.py:59` on
+`main`@`909b277e`, `pyproject.toml:2` = `name = "nanobot-ai"`, `:21` =
+`"litellm>=1.82.1,<2.0.0",`, PyPI `nanobot` = "Minimalist robot navigation
+framework" by "NanoBot Team", and `nanobot/skills/clawhub/SKILL.md` present
+on `main`.
+
+**The second transferable lesson** (`kb/ISSUE-LOG.md` row 1475): a
+verify-pass that reports "fabricated" owes the same primary-source standard
+it is enforcing. Both E4 and E5 were real defects, but calling them invented
+mis-states the fix — one is a ref-mismatch across two refs the author was
+legitimately reading, the other a category error about a name that does
+exist — and E5's supporting evidence came from a git-tree listing searched as
+if it were file contents.
 
 ---
 
@@ -171,16 +210,25 @@ claims sharing that provenance, not just the one that failed.
   Together AI, Fireworks, and Azure OpenAI without NanoBot needing
   provider-specific code for each.
   - **Confirmed as of this doc's sources, since superseded.** At `a1241ee6`
-    (2026-03-14) `litellm>=1.82.1,<2.0.0` was a hard dependency and
-    `nanobot/providers/` held exactly `litellm_provider.py` +
-    `custom_provider.py` + `azure_openai_provider.py` +
-    `openai_codex_provider.py` — i.e. the breadth (VolcEngine, StepFun,
-    vllm, …) came *through* LiteLLM and the custom passthrough was indeed
-    the bypass around it. Current `main` has **dropped LiteLLM entirely**
-    (zero occurrences in `pyproject.toml`) in favour of native adapters:
-    `anthropic`, `azure_openai`, `bedrock`, `github_copilot`,
-    `openai_codex`, `openai_compat`, `xai_grok`, `dashscope`. Read the
-    "bypasses LiteLLM" framing as historical, not current.
+    (2026-03-14) `litellm>=1.82.1,<2.0.0` was a hard dependency
+    (`pyproject.toml:21`) and the only provider *implementations* under
+    `nanobot/providers/` were `litellm_provider.py`, `custom_provider.py`,
+    `azure_openai_provider.py` and `openai_codex_provider.py` (alongside
+    `base.py`, `registry.py`, `transcription.py`, `__init__.py` — infra, not
+    adapters) — i.e. the breadth (VolcEngine, StepFun, vllm, …) came
+    *through* LiteLLM and the custom passthrough was indeed the bypass
+    around it. On `main`@`909b277e` LiteLLM is **gone entirely** (zero
+    case-insensitive occurrences in `pyproject.toml`), replaced by exactly
+    **seven** native backend adapters — `openai_compat`, `anthropic`,
+    `azure_openai`, `openai_codex`, `xai_grok`, `github_copilot`, `bedrock`
+    (`nanobot/providers/registry.py:71-72`, one `*_provider.py` module
+    each) — over which **46** declarative `ProviderSpec` entries are routed
+    (`registry.py:215+`). Named vendors are specs, not adapters: DashScope
+    (Qwen), for instance, is `ProviderSpec(name="dashscope", …,
+    backend="openai_compat", default_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1")`
+    at `registry.py:693-702` — 39 of the 46 specs ride `openai_compat` that
+    way (see **Errata E5**). Read the "bypasses LiteLLM" framing as
+    historical, not current.
 - **10+ chat platforms**: Telegram (documented as the recommended/easiest
   setup), Discord, Slack, Feishu, DingTalk, Mochat, plus IMAP/SMTP email —
   each a `BaseChannel` subclass with its own credential setup flow
