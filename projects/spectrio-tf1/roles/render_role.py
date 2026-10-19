@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""wq#4181 — validate and render the config-only role files for the 3 TF1
-appliance roles added by this ticket (tf1-a exit node, tf1-b external
-vantage, tf1-c ADB host). See roles.yaml and README.md.
+"""wq#4181 — validate and render the config-only role files for the TF1
+appliance roles (tf1-a exit node, tf1-b external vantage, tf1-c ADB/RE
+host, tf1-d Limpet testbed — the last added by wq#4319). See roles.yaml
+and README.md.
 
 Sibling of ops/wq3430-spectrio-tf1-deploy/render_role.py (the earlier
 5-role plan); kept separate because the role kinds and required fields
@@ -23,8 +24,17 @@ REQUIRED_COMMON = ("kind", "name", "hostname", "tailnet", "services")
 REQUIRED_BY_KIND = {
     "exit_node": ("advertise_routes", "cpu_governor", "sysctl_dropin"),
     "external_vantage": ("gatus_image", "ntfy_bind", "ntfy_acl"),
-    "adb_host": ("adb_bind", "adb_mode", "firewall"),
+    "adb_host": ("adb_bind", "adb_mode", "firewall", "re_tools"),
+    "limpet_testbed": (
+        "hal_daemon_service",
+        "registry_daemon_service",
+        "meta_server_enabled",
+    ),
 }
+
+RE_TOOLS_REQUIRED = frozenset(
+    {"rkdeveloptool", "mtkclient", "pyamlboot", "heimdall", "flashrom"}
+)
 
 
 class RoleValidationError(ValueError):
@@ -70,9 +80,22 @@ def validate_role(role_id: str, role: dict) -> None:
             "(systemd needs a foreground process, not a self-forking daemon)"
         )
 
+    if kind == "adb_host" and not RE_TOOLS_REQUIRED.issubset(set(role["re_tools"])):
+        raise RoleValidationError(
+            f"{role_id}: adb_host roles must list every RE tool "
+            f"{sorted(RE_TOOLS_REQUIRED)}, got {role['re_tools']!r}"
+        )
+
+    if kind == "limpet_testbed" and role["meta_server_enabled"] is not False:
+        raise RoleValidationError(
+            f"{role_id}: limpet_testbed roles must ship meta_server_enabled: "
+            "false (wq#3808 MCP meta-server is under the wq#3786 REA security "
+            "hold — this role may not flip it on)"
+        )
+
     if role["tailnet"] is not True:
         raise RoleValidationError(
-            f"{role_id}: every tf1-a/b/c role is tailnet-reachable (tailnet: true)"
+            f"{role_id}: every tf1-a/b/c/d role is tailnet-reachable (tailnet: true)"
         )
 
 

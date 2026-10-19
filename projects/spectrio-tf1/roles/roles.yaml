@@ -1,10 +1,14 @@
 # wq#4181 — TF1 appliance role map: exit node, external-vantage monitoring,
 # ADB host.
+# wq#4319 extends tf1-c-adb-host into a multi-chipset RE target host (adds
+# rkdeveloptool/mtkclient/pyamlboot/heimdall/flashrom alongside the existing
+# ADB server) and adds tf1-d-limpet-testbed, a 4th role. Unit numbering in
+# wq#4319's ticket text (3/4/5/6) maps 1:1 onto tf1-a/b/c/d here.
 #
 # Extends wq#3430's 5-appliance plan (ops/wq3430-spectrio-tf1-deploy/roles.yaml)
-# with 3 more single-purpose roles on the same ophub Armbian S905X3 base image.
+# with 4 more single-purpose roles on the same ophub Armbian S905X3 base image.
 # Every role here layers role-specific config on top of harden-armbian.sh
-# (this directory) — the hardening pack is shared across tf1-a/b/c, role
+# (this directory) — the hardening pack is shared across tf1-a/b/c/d, role
 # config is additive.
 
 base_image: "ophub Armbian S905X3 (per wq#3429 WORKING_PROCEDURE, image/DTB pinned there)"
@@ -16,6 +20,7 @@ build_order:
   - tf1-a-exit-node
   - tf1-b-external-vantage
   - tf1-c-adb-host
+  - tf1-d-limpet-testbed
 
 roles:
   tf1-a-exit-node:
@@ -67,7 +72,7 @@ roles:
 
   tf1-c-adb-host:
     kind: adb_host
-    name: "Tailnet-only ADB host"
+    name: "Tailnet-only ADB + multi-chipset RE target host"
     hostname: tf1-c
     tailnet: true
     static_ip: null
@@ -78,9 +83,41 @@ roles:
     adb_bind: "-a -P 5037"
     adb_mode: nodaemon
     firewall: "tailscale0-only (iptables, see tf1-c-adb-host.sh)"
+    re_tools:
+      - rkdeveloptool
+      - mtkclient
+      - pyamlboot
+      - heimdall
+      - flashrom
     physical_tasks:
       - "VERIFY NIC speed on the real unit (100M vs 1G)"
       - "VERIFY onboard RAM"
       - "VERIFY PoE PD power budget (est ~3W)"
       - "confirm which Android devices this host services and their USB power draw before wiring them in"
+      - "confirm which RE target devices (Rockchip/MediaTek/Amlogic/Samsung Download-mode/SPI-flash) this host services, and their USB/power draw, before wiring any in"
     open_questions: []
+
+  tf1-d-limpet-testbed:
+    kind: limpet_testbed
+    name: "Limpet headless testbed"
+    hostname: tf1-d
+    tailnet: true
+    static_ip: null
+    services:
+      - limpet-hal-daemon.service
+      - limpet-registryd.service
+    config_script: "tf1-d-limpet-testbed.sh"
+    foreman_checkout: "/opt/foreman"
+    hal_daemon_service: "limpet-hal-daemon.service"
+    registry_daemon_service: "limpet-registryd.service"
+    workspace_cli: "python3 /opt/foreman/limpet/workspace_cli.py"
+    meta_server_enabled: false
+    meta_server_note: "wq#3808 MCP meta-server ships with every manifest entry disabled per the REA SECURITY HOLD (wq#3786, TOOL_REGISTRY.md) — this role must not flip that to true."
+    physical_tasks:
+      - "VERIFY NIC speed on the real unit (100M vs 1G)"
+      - "VERIFY onboard RAM (plugin registry + HAL daemon are both small; flag if the unit has <1GB)"
+      - "VERIFY PoE PD power budget (est ~3W)"
+      - "bench-sync a foreman checkout to /opt/foreman (git clone or rsync over tailnet — no fleet-exec grant for this yet) before enabling either systemd unit"
+      - "wire up whatever USB target hardware the HAL daemon (ops/wq3809-limpet-hal/hal_daemon.py) is meant to watch on this bench"
+    open_questions:
+      - "whether the MCP meta-server (ops/wq3808-limpet-mcp-meta-server-a1/meta_server.py) ever runs on this box is a Frank/wq#3786 call, not this ticket's — ships disabled"
