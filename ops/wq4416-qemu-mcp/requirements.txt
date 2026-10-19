@@ -1,0 +1,4 @@
+# qemu-mcp runtime deps (wq#4416).
+# Same SDK pin as ops/wq1151-lumen-kb / ops/wq3881-openocd-mcp (1.x layout);
+# server.py tries both layouts so a 2.x migration there covers this server too.
+mcp>=1.9,<2
