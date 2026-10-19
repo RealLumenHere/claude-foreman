@@ -15,6 +15,8 @@ override_dh_auto_install:
 	install -d $(PKGROOT)/usr/lib/limpet/hald
 	install -m 0644 $(MONOROOT)/ops/wq3809-limpet-hal/hal.py \
 	    $(PKGROOT)/usr/lib/limpet/hald/hal.py
+	install -m 0755 $(MONOROOT)/ops/wq3809-limpet-hal/hal_daemon.py \
+	    $(PKGROOT)/usr/lib/limpet/hald/hal_daemon.py
 	install -m 0644 $(MONOROOT)/ops/wq3809-limpet-hal/usb_boot_signatures.py \
 	    $(PKGROOT)/usr/lib/limpet/hald/usb_boot_signatures.py
 	install -m 0644 $(MONOROOT)/ops/wq3809-limpet-hal/usb_boot_signatures.toml \
