@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # wq#4181 — tf1-c: tailnet-only ADB host role config.
+# wq#4319 extends this into a multi-chipset RE target host: rkdeveloptool
+# (Rockchip maskrom/loader), mtkclient (MediaTek BROM), pyamlboot (Amlogic
+# USB burn mode — same family as this fleet's own S905X3 boards), heimdall
+# (Samsung Odin download mode), flashrom (SPI/parallel/LPC flash chips).
 # Run after harden-armbian.sh. Idempotent.
 set -euo pipefail
 
@@ -60,4 +64,13 @@ UNIT
 
 systemctl enable tf1-c-adb-firewall.service adb-server.service
 
-echo "tf1-c-adb-host.sh: adb-server.service + tailnet-only iptables firewall installed."
+# RE target toolchain (wq#4319): apt packages first, then the two
+# pip-only tools. mtkclient/pyamlboot have no Debian package; installed
+# with --break-system-packages since this is a single-purpose appliance,
+# not a general-purpose dev box with a managed venv.
+apt-get update
+apt-get install -y rkdeveloptool heimdall-flash flashrom python3-pip python3-usb
+
+python3 -m pip install --break-system-packages --no-input mtkclient pyamlboot
+
+echo "tf1-c-adb-host.sh: adb-server.service + tailnet-only iptables firewall + RE toolchain (rkdeveloptool, mtkclient, pyamlboot, heimdall, flashrom) installed."

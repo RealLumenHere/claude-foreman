@@ -13,18 +13,24 @@ from render_role import (
 
 ROOT = Path(__file__).parent
 DATA = load_roles(ROOT / "roles.yaml")
-EXPECTED_ROLES = {"tf1-a-exit-node", "tf1-b-external-vantage", "tf1-c-adb-host"}
+EXPECTED_ROLES = {
+    "tf1-a-exit-node",
+    "tf1-b-external-vantage",
+    "tf1-c-adb-host",
+    "tf1-d-limpet-testbed",
+}
 
 SHELL_SCRIPTS = [
     ROOT / "harden-armbian.sh",
     ROOT / "tf1-a-exit-node.sh",
     ROOT / "tf1-c-adb-host.sh",
+    ROOT / "tf1-d-limpet-testbed.sh",
     ROOT / "tf1-b-external-vantage" / "launch-gatus.sh",
     ROOT / "tf1-b-external-vantage" / "launch-ntfy.sh",
 ]
 
 
-def test_exactly_three_roles():
+def test_exactly_four_roles():
     assert set(DATA["roles"]) == EXPECTED_ROLES
 
 
@@ -73,6 +79,19 @@ def test_adb_host_script_covers_every_ticket_requirement():
     text = (ROOT / "tf1-c-adb-host.sh").read_text()
     assert "adb -a -P 5037 nodaemon server" in text
     assert "tailscale0" in text
+    for tool in ("rkdeveloptool", "mtkclient", "pyamlboot", "heimdall-flash", "flashrom"):
+        assert tool in text
+
+
+def test_limpet_testbed_script_covers_every_ticket_requirement():
+    text = (ROOT / "tf1-d-limpet-testbed.sh").read_text()
+    assert "hal_daemon.py run --foreground" in text
+    assert "daemon.py --interval 30" in text
+    assert "wq#3786" in text  # MCP meta-server security hold documented
+    assert not any(
+        "ExecStart" in line and "meta_server.py" in line
+        for line in text.splitlines()
+    )
 
 
 def test_external_vantage_covers_every_ticket_requirement():
@@ -128,6 +147,28 @@ def test_render_includes_hostname_and_services():
             "adb_bind": "-a -P 5037",
             "adb_mode": "nodaemon",
             "firewall": "tailscale0-only",
+            "re_tools": ["rkdeveloptool", "mtkclient", "pyamlboot", "heimdall", "flashrom"],
+        },
+        {
+            "kind": "adb_host",
+            "name": "x",
+            "hostname": "h",
+            "tailnet": True,
+            "services": [],
+            "adb_bind": "-a -P 5037",
+            "adb_mode": "nodaemon",
+            "firewall": "tailscale0-only",
+            "re_tools": ["rkdeveloptool"],  # missing mtkclient/pyamlboot/heimdall/flashrom
+        },
+        {
+            "kind": "limpet_testbed",
+            "name": "x",
+            "hostname": "h",
+            "tailnet": True,
+            "services": [],
+            "hal_daemon_service": "limpet-hal-daemon.service",
+            "registry_daemon_service": "limpet-registryd.service",
+            "meta_server_enabled": True,  # wq#3786 hold forbids this
         },
     ],
 )
