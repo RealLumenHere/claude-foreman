@@ -45,20 +45,44 @@ side effects on the MCP session or host filesystem, not physical-device
 safety, so this plugin does not pass them through as-is (same approach as
 `limpet-plugin-buspirate-mcp`). For example upstream marks `serial_open`,
 `serial_close`, and `serial_clear_history` `readOnlyHint=False` because they
-mutate server-side session state — none of them write a byte to the wire.
-Conversely `serial_wait_for` (optional `respond`/`respond_hex`,
-`server.py:747-748`) and `serial_detect_baud` (`probe=True` writes `b"\r\n"`,
-`server.py:1075-1076`) can write to the device despite looking like reads.
+mutate server-side session state. Conversely `serial_wait_for` (optional
+`respond`/`respond_hex`, `server.py:747-748`) and `serial_detect_baud`
+(`probe=True` writes `b"\r\n"`, `server.py:1075-1076`) can write to the
+device despite looking like reads.
+
+**`serial_open` writes to the wire too — it is gated.** (Corrected by wq#4323's
+judgment pass; the PR as originally shipped claimed it was side-effect-free,
+which was wrong.) `session.py`'s `serial.Serial(...)` call passes no
+`dtr`/`rts`/`dsrdtr`/`rtscts` kwargs, so both the Linux kernel (`tty_port.c`
+raises DTR+RTS on any open at a nonzero baud) and pyserial itself
+(`serialposix.py Serial.open` → `_update_dtr_state`/`_update_rts_state`, both
+defaulting true) assert DTR and RTS on the physical adapter the instant the
+port opens. Effect depends on target wiring: resets a capacitor-coupled-DTR
+board (Arduino/AVR-style) on every open; holds a target in reset for as long
+as the port stays open if RTS is jumpered straight to an enable/reset pin (a
+common bench RE hookup); no effect on a TX/RX/GND-only console tap; and — per
+Espressif's boot-mode-selection docs — does **not** force a standard
+two-transistor auto-program ESP32 dev board (DevKitC/NodeMCU-style) into
+bootloader, since that circuit ignores DTR and RTS asserted together. Only
+`serial_set_signals`'s independent DTR/RTS sequencing can do that.
+`serial_close` stays ungated despite also dropping both lines (via HUPCL) on
+close, because the inactivity reaper (900s default) and the server's `atexit`
+handler already drop them with no tool call at all — gating close would not
+add protection open already bypasses.
 
 - **Gated:** `serial_execute`, `serial_command`, `serial_wait_for`,
   `serial_write`, `serial_write_hex`, `serial_set_signals`,
   `serial_send_break`, `serial_detect_baud`, `serial_xmodem_send`,
-  `serial_xmodem_receive`, `serial_force_release`
-- **Ungated:** `list_serial_ports`, `serial_open`, `serial_close`,
+  `serial_xmodem_receive`, `serial_force_release`, `serial_open`
+- **Ungated:** `list_serial_ports`, `serial_close`,
   `serial_change_settings`, `serial_read`, `serial_read_since`,
   `serial_read_hex`, `serial_get_signals`, `serial_clear_history`,
   `serial_log_start`, `serial_log_stop`, `serial_list_sessions`,
   `serial_status`
+
+Before opening a port against an unfamiliar target, confirm the wiring
+(TX/RX/GND-only vs DTR/RTS connected) — see `agent_hints.when_not_to_use` in
+`limpet-plugin.toml`.
 
 ## Hardware
 

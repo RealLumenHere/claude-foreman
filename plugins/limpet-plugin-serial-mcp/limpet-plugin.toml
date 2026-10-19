@@ -68,6 +68,26 @@ env = {}
 # break (can reset or force a target into bootloader), or forcibly reclaims a
 # port from another process. Ungated = pure reads, port config, and local-only
 # session/log bookkeeping.
+#
+# CORRECTED (wq#4323 judgment, opus-5@high): serial_open is NOT side-effect-free.
+# session.py's serial.Serial(...) construction passes no dtr/rts/dsrdtr/rtscts
+# kwargs, so both the Linux kernel (tty_port.c raises DTR+RTS on any open with a
+# nonzero baud, before pyserial's own ioctls run) and pyserial itself
+# (serialposix.py Serial.open -> _update_dtr_state/_update_rts_state, both
+# defaulting true) assert DTR and RTS on the physical adapter the instant
+# serial_open runs — the same category of effect this table gates
+# serial_set_signals for. Consequence depends on target wiring: resets
+# capacitor-coupled-DTR boards (Arduino/AVR-style) on every open; holds a target
+# in reset for as long as the port is open if RTS is jumpered straight to an
+# enable/reset pin (a common bench RE hookup); has no effect on TX/RX/GND-only
+# console taps; and — per Espressif's own boot-mode docs — does NOT force
+# standard two-transistor-auto-program ESP32 dev boards (DevKitC/NodeMCU-style,
+# the likely "Freedom Bot ESP32" build) into bootloader, since that circuit
+# ignores DTR+RTS asserted together. Only serial_set_signals's independent
+# DTR/RTS sequencing can do that. serial_open is gated below accordingly.
+# serial_close stays ungated: the kernel drops both lines on last close via
+# HUPCL regardless of any tool call (inactivity reaper at 900s, atexit on server
+# shutdown), so gating close would not add protection open already bypasses.
 
 # Writes / signal control / can reset or bootloader-trigger the target
 serial_execute = true
@@ -80,14 +100,14 @@ serial_send_break = true
 serial_detect_baud = true       # probe=True writes b"\r\n" to the device (server.py:1075-1076)
 serial_xmodem_send = true
 serial_xmodem_receive = true    # protocol ACK/NAK bytes go to the device; upstream also marks destructiveHint=True
+serial_open = true              # asserts DTR+RTS on the wire on every open (kernel + pyserial); see note above
 
 # Forcibly reclaims a port held by another process (kills that process)
 serial_force_release = true
 
 # Pure reads / port config / local-only session and log bookkeeping — ungated
 list_serial_ports = false
-serial_open = false
-serial_close = false
+serial_close = false            # drops DTR/RTS too, but the reaper/atexit already do this without a tool call
 serial_change_settings = false
 serial_read = false
 serial_read_since = false
@@ -101,8 +121,8 @@ serial_status = false
 
 [agent_hints]
 summary = "MCP server giving an LLM a reliable serial connection to microcontrollers, routers, modems, and embedded Linux systems: interactive command/expect shells, DTR/RTS signal control (e.g. force an ESP32 into bootloader mode), auto-baud detection, hex I/O for binary protocols, and XMODEM file transfer. Continuously buffers incoming data so output from a slow or bursty device is not lost between calls."
-when_to_use = "Use for any RE/automation task against a device's UART console or bootloader prompt over a standard USB-serial adapter — Spectrio RE target host, Freedom Bot ESP32 serial, U-Boot/login prompts, AT-command modems, router CLIs. serial_command's expect-pattern + respond/respond_hex covers triggered responses (e.g. interrupt U-Boot autoboot, answer a bootloader handshake byte) without round-tripping through the agent for timing-sensitive sequences."
-when_not_to_use = "Not for JTAG/SWD debug, flash programming, or any non-UART bus — use jlink-mcp/openocd-mcp/flashrom/buspirate-mcp instead. Not a replacement for manual picocom/minicom use when a human needs to watch the raw terminal live; this is for agent-driven automation of the same ports."
+when_to_use = "Use for any RE/automation task against a device's UART console or bootloader prompt over a standard USB-serial adapter — Spectrio RE target host, Freedom Bot ESP32 serial, U-Boot/login prompts, AT-command modems, router CLIs. serial_command's expect-pattern + respond/respond_hex covers triggered responses (e.g. interrupt U-Boot autoboot, answer a bootloader handshake byte) without round-tripping through the agent for timing-sensitive sequences. Bootloader/download-mode entry on a standard ESP32 auto-program board needs serial_set_signals's independent DTR/RTS sequencing — serial_open alone cannot do it (see tools_energize note)."
+when_not_to_use = "Not for JTAG/SWD debug, flash programming, or any non-UART bus — use jlink-mcp/openocd-mcp/flashrom/buspirate-mcp instead. Not a replacement for manual picocom/minicom use when a human needs to watch the raw terminal live; this is for agent-driven automation of the same ports. Before opening a port against an unfamiliar target, confirm the wiring (TX/RX/GND-only vs DTR/RTS connected) — opening asserts DTR+RTS and can reset a capacitor-coupled-reset board or hold an RTS-to-enable-wired target in reset."
 complements = ["buspirate-mcp", "jlink-mcp", "flashrom"]
 supersedes = []
 workflow_position = "interact"
