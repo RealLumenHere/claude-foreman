@@ -50,6 +50,20 @@ by trying and retrying a blocked command. This is the same wall wq#3151
 an unreachable/ungranted node is `ERR`, never a `MISS`: "I could not look"
 must not read as "it is not deployed."
 
+wq#4333 re-checked whether `fleet-exec` (which IS on this worker's allowlist)
+could substitute for raw ssh. It cannot, for two compounding reasons:
+`maksoor` is listed in `fleet-exec-policy.yaml`'s `allow.ssh` (wq#3857), but
+(1) this ticket's dispatch carries no `needs:ssh(maksoor)` tag, so
+`fleet-exec run maksoor hostname` returns
+`DENY [grant:grant_missing_env]: grant file did not verify` before even
+reaching the node, and (2) that allow-list entry is read-only `run` under
+`run_readonly_cmds` only -- there is no `copy_dirs[maksoor]` entry and the
+`sudo` verb `fleet-exec` would need to run `install.sh` as root is still
+v2/unimplemented (`fleet-exec-policy.yaml:230-238`). So even a worker
+dispatched with the missing grant tag could not push files or install as
+root on maksoor through fleet-exec -- raw ssh/scp (or a human/the real
+`lumen` account at a shell) is still the only path.
+
 maksoor's own availability fact (`lumen_state.py current maksoor` ->
 `availability = available (since 2026-10-05) [verified 14d ago] [conf 0.25]`)
 is stale and low-confidence besides -- consistent with maksoor's established

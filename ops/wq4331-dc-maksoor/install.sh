@@ -13,8 +13,15 @@
 # ssh/scp entry at all (harness/worker-settings.json; same class as
 # kb/ISSUE-LOG.md #740/#1055b -- wq#3151's deploy-ccc-on-maksoor hit the identical
 # wall), so neither --verify nor the install itself can be exercised live from this
-# sandbox. The real lumen account (or Frank, or a future ticket carrying an
-# ssh(maksoor) grant) runs the scp/ssh line above. See README.md.
+# sandbox. wq#4333 re-checked the fleet-exec path too: maksoor IS in
+# fleet-exec-policy.yaml's allow.ssh (wq#3857), but (a) this ticket carries no
+# needs:ssh(maksoor) tag so fleet-exec denies it outright
+# (`DENY [grant:grant_missing_env]: grant file did not verify`), and (b) even
+# granted, that entry is read-only `run` under run_readonly_cmds only -- no
+# copy_dirs[maksoor] and the `sudo` verb is still v2/unimplemented
+# (fleet-exec-policy.yaml:230-238) -- so fleet-exec cannot substitute for raw
+# ssh/scp here regardless of grant. The real lumen account (or Frank, or a future
+# ticket carrying an ssh(maksoor) grant) runs the scp/ssh line above. See README.md.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 H=maksoor
