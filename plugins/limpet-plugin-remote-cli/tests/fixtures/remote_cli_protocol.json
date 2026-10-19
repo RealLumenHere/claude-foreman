@@ -1,0 +1,23 @@
+{
+  "_provenance": {
+    "ticket": "wq#4398",
+    "source": "/home/lumen/bin/remote-cli",
+    "source_ticket": "wq#4395",
+    "source_lines": "9-18 (docstring), 271-292 (_handle_control dispatcher)",
+    "read_on": "2026-10-19",
+    "why": "wq#4397 CONTRADICTed wq#4396 because mcp/server.py was written against an invented protocol ('op' key, exec/snapshot/send/logs command names) while the real daemon reads 'cmd' with the five names below. This file is the committed, immutable copy of that contract: tests assert the wrapper speaks only these commands, so the same class of drift fails a test instead of shipping 8/8 green with 0/4 tools working. tests/test_server.py::test_fixture_matches_real_remote_cli re-checks it against the live binary when one is present."
+  },
+  "request_key": "cmd",
+  "commands": {
+    "snapshot": {"fields": [], "reply": ["ok", "screen", "rows", "cols"]},
+    "scrollback": {"fields": ["lines"], "reply": ["ok", "text"]},
+    "send_keys": {"fields": ["text", "raw_b64", "enter"], "reply": ["ok"]},
+    "resize": {"fields": ["rows", "cols"], "reply": ["ok"]},
+    "status": {"fields": [], "reply": ["ok", "status"]}
+  },
+  "unknown_command_reply": {"ok": false, "error": "unknown cmd <repr>"},
+  "framing": "one JSON object + newline per connection, one JSON object + newline back, then the daemon closes the connection",
+  "not_in_protocol": [
+    "exec — remote-cli has no synchronous run-and-wait-for-exit-code command; the MCP `exec` tool is synthesized client-side from send_keys + polled scrollback"
+  ]
+}
