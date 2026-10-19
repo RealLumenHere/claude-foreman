@@ -1,0 +1,46 @@
+# /etc/systemd/system/dc-gateway.service (MAKSOOR)
+#
+# wq#4331: Maksoor DC endpoint — direct RE-workstation access for agents, so an
+# overnight RE session can run mtkclient/ADB/rkdeveloptool on the box with the
+# target device actually plugged in, without SSH-hopping through Lumen first.
+# Base ExecStart/Restart/OOMPolicy shape is the same byte-matched-against-Lumen
+# template already used for Anubis (ops/wq2607-dc-endpoint-anubis/dc-gateway.service)
+# and Bes (ops/wq2608-dc-endpoint-bes-a1/dc-gateway.service); Lumen's own unit was
+# later retired in favor of a centralized Horus mcp-proxy (docs/fleet/retired_services.yaml,
+# wq#3805) — that retirement is about Lumen's *own* control-plane path and does not
+# apply here: this is a standalone endpoint on Maksoor's tailnet IP (100.81.204.74,
+# lumen_state.py maksoor.tailscale_ip), reached directly, not through mcpw/Horus.
+#
+# NOT bound behind cloudflared/mcpw — this node is reached over Tailscale only,
+# matching the ticket's "no SSH-hopping through Lumen" goal: agents MCP straight to
+# Maksoor's tailnet IP:3100, no public ingress needed or wanted for a bench RE box.
+#
+# MemoryHigh/Max sized conservatively for Maksoor's 8GB total RAM (lumen_state.py
+# maksoor.node_provisioning) — this is Frank's interactive bench laptop, not a
+# dedicated backend, so the gateway must leave headroom for GNOME + whatever RE
+# tool is actually driving the plugged-in device. Re-check with `free -h` on first
+# start and adjust via dc-gateway-hardening.conf, not by editing this file.
+#
+# NOT YET DEPLOYED (NO-PROBE: this BUILD worker has no ssh(maksoor) grant — see
+# README.md and kb/ISSUE-LOG.md class #740/#1055b). Ships complete and ready to run.
+
+[Unit]
+Description=Desktop Commander MCP via Supergateway (Maksoor RE-workstation DC endpoint)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=maksoor
+Environment=PATH=/home/maksoor/.npm-global/bin:/usr/bin:/bin
+ExecStartPre=-/usr/bin/python3 /home/maksoor/bin/dc-enforce-config.py
+ExecStart=/home/maksoor/.npm-global/bin/supergateway --stdio "/home/maksoor/.npm-global/bin/desktop-commander" --port 3100 --outputTransport streamableHttp --streamableHttpPath /mcp --cors --healthEndpoint /health
+OOMPolicy=continue
+MemoryHigh=2G
+MemoryMax=3G
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
