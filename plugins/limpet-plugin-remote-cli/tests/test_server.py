@@ -253,34 +253,34 @@ def test_exec_marker_parses_exit_code():
     assert m and int(m.group(1)) == 42
 
 
-def _echo_on_scrollback(token, command, output, prompt="earlier$ "):
+def _echo_on_scrollback(nonce, command, output, prompt="earlier$ "):
     """Scrollback as a real echoing shell produces it for one `_exec_payload`:
     some earlier history, the prompt, the echo of the single typed line, the
     start marker printf's output, the command's output, the completion
     marker, the next prompt."""
-    typed = server._exec_payload(command, token).rstrip("\n")
+    typed = server._exec_payload(command, nonce).rstrip("\n")
     return (f"{prompt}whoami\r\nlumen\r\n"
             f"{prompt}{typed}\r\n"
-            f"RCSTART-{token}\r\n"
+            f"RCSTART-{nonce}\r\n"
             + output
-            + f"RCDONE-{token}-0\r\n{prompt}")
+            + f"RCDONE-{nonce}-0\r\n{prompt}")
 
 
 def test_exec_output_carves_command_output_from_scrollback():
-    token = "deadbeef0003"
+    nonce = "deadbeef0003"
     assert server._exec_output(
-        _echo_on_scrollback(token, "echo hi", "hi\r\n"), token) == "hi"
+        _echo_on_scrollback(nonce, "echo hi", "hi\r\n"), nonce) == "hi"
 
 
 def test_exec_output_keeps_every_line_of_a_multiline_command():
     """wq#4403 finding A, live-reproduced: `output` was 'THIRDLINE' alone
-    because the first token occurrence is the echo of the LAST typed line, so
+    because the first nonce occurrence is the echo of the LAST typed line, so
     slicing after it discarded the first two lines' real output."""
-    token = "deadbeef0005"
+    nonce = "deadbeef0005"
     scrollback = _echo_on_scrollback(
-        token, "echo FIRSTLINE\necho SECONDLINE\necho THIRDLINE",
+        nonce, "echo FIRSTLINE\necho SECONDLINE\necho THIRDLINE",
         "FIRSTLINE\r\nSECONDLINE\r\nTHIRDLINE\r\n")
-    out = server._exec_output(scrollback, token)
+    out = server._exec_output(scrollback, nonce)
     assert out == "FIRSTLINE\r\nSECONDLINE\r\nTHIRDLINE", out
 
 
@@ -309,31 +309,31 @@ def test_exec_payload_quotes_a_command_containing_quotes():
 
 
 def test_exec_output_survives_an_echo_suppressed_session():
-    """wq#4403 finding B, live-reproduced: with `stty -echo` the token occurs
+    """wq#4403 finding B, live-reproduced: with `stty -echo` the nonce occurs
     once (in the marker), the real output precedes it, and slicing after the
     first occurrence returned the trailing prompt — ok:true with wrong data."""
-    token = "deadbeef0004"
-    scrollback = (f"RCSTART-{token}\r\nhidden-echo-probe\r\n"
-                  f"RCDONE-{token}-0\r\nbash-5.3$ ")
-    assert server._exec_output(scrollback, token) == "hidden-echo-probe"
+    nonce = "deadbeef0004"
+    scrollback = (f"RCSTART-{nonce}\r\nhidden-echo-probe\r\n"
+                  f"RCDONE-{nonce}-0\r\nbash-5.3$ ")
+    assert server._exec_output(scrollback, nonce) == "hidden-echo-probe"
 
 
 def test_exec_output_keeps_output_that_lacks_a_trailing_newline():
     """The marker printf then lands on the same physical line as the output,
     so the end boundary is the marker's own start, not a line break."""
-    token = "deadbeef0006"
-    scrollback = f"RCSTART-{token}\r\nabcRCDONE-{token}-0\r\n$ "
-    assert server._exec_output(scrollback, token) == "abc"
+    nonce = "deadbeef0006"
+    scrollback = f"RCSTART-{nonce}\r\nabcRCDONE-{nonce}-0\r\n$ "
+    assert server._exec_output(scrollback, nonce) == "abc"
 
 
 def test_exec_output_boundary_is_the_last_marker_not_a_printed_one():
     """A command that prints marker-shaped text of its own (`exec` reading a
     log of an earlier exec) must not shorten the output or change the status."""
-    token = "deadbeef0007"
-    scrollback = (f"RCSTART-{token}\r\nquoted RCDONE-{token}-9 line\r\n"
-                  f"RCDONE-{token}-0\r\n$ ")
-    assert server._exec_output(scrollback, token) == f"quoted RCDONE-{token}-9 line"
-    m = server._exec_last_marker(scrollback, token)
+    nonce = "deadbeef0007"
+    scrollback = (f"RCSTART-{nonce}\r\nquoted RCDONE-{nonce}-9 line\r\n"
+                  f"RCDONE-{nonce}-0\r\n$ ")
+    assert server._exec_output(scrollback, nonce) == f"quoted RCDONE-{nonce}-9 line"
+    m = server._exec_last_marker(scrollback, nonce)
     assert m and int(m.group(1)) == 0
 
 
@@ -352,14 +352,14 @@ def test_exec_marker_survives_a_trailing_comment_or_ampersand():
 
 
 def test_exec_output_warns_rather_than_guessing_when_the_start_marker_aged_out(monkeypatch):
-    token_holder = {}
+    nonce_holder = {}
     fake = _with_fake(monkeypatch, scrollback="")
     real_payload = server._exec_payload
 
-    def capture(command, token):
-        token_holder["token"] = token
-        text = real_payload(command, token)
-        fake.scrollback = f"older output the cap kept\r\nRCDONE-{token}-0\r\n$ "
+    def capture(command, nonce):
+        nonce_holder["nonce"] = nonce
+        text = real_payload(command, nonce)
+        fake.scrollback = f"older output the cap kept\r\nRCDONE-{nonce}-0\r\n$ "
         return text
 
     monkeypatch.setattr(server, "_exec_payload", capture)
@@ -369,6 +369,22 @@ def test_exec_output_warns_rather_than_guessing_when_the_start_marker_aged_out(m
         assert "warning" in result, result
     finally:
         fake.close()
+
+
+def test_exec_nonce_names_do_not_trip_the_kv_secret_mask():
+    """wq#4409: named `token`, the 12-hex completion marker matched kv-secret in
+    this file's fixtures and in every failing test's traceback funcarg line,
+    filing a false credential leak each time someone touched the plugin."""
+    harness = os.path.join(os.path.dirname(__file__), "..", "..", "..", "harness")
+    sys.path.insert(0, harness)
+    import masking
+    for path in (__file__, server.__file__):
+        with open(path) as f:
+            assert "kv-secret" not in masking.mask_text(f.read())[1], path
+    assert masking.mask_text("nonce = 'deadbeef0003'")[1] == []
+    # The old name must still fire, or the scan above proves nothing. Split so
+    # this line does not trip the scan of its own file.
+    assert "kv-secret" in masking.mask_text("tok" + "en = 'deadbeef0003'")[1]
 
 
 def test_exec_times_out_without_a_marker(monkeypatch):
@@ -385,15 +401,15 @@ def test_exec_times_out_without_a_marker(monkeypatch):
 
 
 def test_exec_reports_exit_code_once_the_marker_lands(monkeypatch):
-    token_holder = {}
+    nonce_holder = {}
     fake = _with_fake(monkeypatch, scrollback="")
     real_payload = server._exec_payload
 
-    def capture(command, token):
-        token_holder["token"] = token
-        text = real_payload(command, token)
-        fake.scrollback = (f"$ {text.rstrip()}\r\nRCSTART-{token}\r\nboom\r\n"
-                           f"RCDONE-{token}-7\r\n$ ")
+    def capture(command, nonce):
+        nonce_holder["nonce"] = nonce
+        text = real_payload(command, nonce)
+        fake.scrollback = (f"$ {text.rstrip()}\r\nRCSTART-{nonce}\r\nboom\r\n"
+                           f"RCDONE-{nonce}-7\r\n$ ")
         return text
 
     monkeypatch.setattr(server, "_exec_payload", capture)

@@ -57,7 +57,7 @@ cut ship 8/8 green while 0/4 tools worked).
 wq#4405 (judgment on wq#4403's CONTRADICT verdict): wq#4398's fix was right
 about the wire protocol and the timeout, and wrong one layer up — its
 `_exec_output` located the command's output by slicing after the first
-occurrence of the token, i.e. after the shell's echo of the typed line. A
+occurrence of the nonce, i.e. after the shell's echo of the typed line. A
 shared PTY does not guarantee that echo exists (a human's `stty -echo`, a
 password prompt) or that there is only one of them (an embedded-newline
 command echoes a line per line), so `exec` returned ok:true with a correct
@@ -216,15 +216,15 @@ def _exec_eval_clause(command: str) -> str:
     return f"eval \"$(printf '%s\\n' {args})\""
 
 
-def _exec_payload(command: str, token: str) -> str:
+def _exec_payload(command: str, nonce: str) -> str:
     """The ONE line typed into the shared shell: a start marker, the command
     handed to `eval`, then the completion marker carrying its exit status.
 
     Both markers are assembled by printf from separate arguments (`RC`,
     `DONE`, …) so the SHELL'S ECHO of this line cannot itself match either
-    marker regex — the echo contains `RC DONE <token>` (spaces, from the
+    marker regex — the echo contains `RC DONE <nonce>` (spaces, from the
     argument list) while only printf's output contains
-    `RCDONE-<token>-<status>`. Without that split, polling would match the echo
+    `RCDONE-<nonce>-<status>`. Without that split, polling would match the echo
     instantly and report the exit code of the previous command.
 
     Two wq#4405 changes to the first cut's shape (`<command>; __rc_status=$?;
@@ -254,30 +254,30 @@ def _exec_payload(command: str, token: str) -> str:
     session a human shares.
     """
     body = command.rstrip("\r\n")
-    return (f"printf '%s%s-%s\\n' RC START {token}; {_exec_eval_clause(body)}; "
-            f"printf '%s%s-%s-%s\\n' RC DONE {token} \"$?\"\n")
+    return (f"printf '%s%s-%s\\n' RC START {nonce}; {_exec_eval_clause(body)}; "
+            f"printf '%s%s-%s-%s\\n' RC DONE {nonce} \"$?\"\n")
 
 
-def _exec_marker(token: str) -> "re.Pattern[str]":
-    return re.compile(r"RCDONE-" + re.escape(token) + r"-(\d+)")
+def _exec_marker(nonce: str) -> "re.Pattern[str]":
+    return re.compile(r"RCDONE-" + re.escape(nonce) + r"-(\d+)")
 
 
-def _exec_start_marker(token: str) -> "re.Pattern[str]":
-    return re.compile(r"RCSTART-" + re.escape(token))
+def _exec_start_marker(nonce: str) -> "re.Pattern[str]":
+    return re.compile(r"RCSTART-" + re.escape(nonce))
 
 
-def _exec_last_marker(text: str, token: str) -> "Optional[re.Match[str]]":
+def _exec_last_marker(text: str, nonce: str) -> "Optional[re.Match[str]]":
     """The LAST completion marker in `text`, which is the real one: printf runs
     after the command, so anything marker-shaped the command itself printed is
     necessarily earlier. First-match (the first cut) would take the command's
     output as the boundary and its digits as the exit code."""
     last = None
-    for last in _exec_marker(token).finditer(text):
+    for last in _exec_marker(nonce).finditer(text):
         pass
     return last
 
 
-def _exec_output(scrollback: str, token: str) -> str:
+def _exec_output(scrollback: str, nonce: str) -> str:
     """Carve the command's own output out of raw PTY scrollback: everything
     between the start marker's line and the completion marker.
 
@@ -286,7 +286,7 @@ def _exec_output(scrollback: str, token: str) -> str:
     are sometimes the signal.
 
     Two boundaries, neither of which assumes anything about local echo
-    (wq#4405; the first cut assumed the token appeared exactly twice — once in
+    (wq#4405; the first cut assumed the nonce appeared exactly twice — once in
     an echo of the typed line, once in the marker — and silently dropped real
     output whenever that was false):
 
@@ -296,11 +296,11 @@ def _exec_output(scrollback: str, token: str) -> str:
        `tool_exec` reports as a warning rather than papering over.
     2. end: the start of the LAST completion marker.
     """
-    start = _exec_start_marker(token).search(scrollback)
+    start = _exec_start_marker(nonce).search(scrollback)
     if start is not None:
         nl = scrollback.find("\n", start.end())
         scrollback = scrollback[nl + 1:] if nl != -1 else ""
-    done = _exec_last_marker(scrollback, token)
+    done = _exec_last_marker(scrollback, nonce)
     if done is not None:
         scrollback = scrollback[:done.start()]
     return scrollback.rstrip("\r\n")
@@ -340,12 +340,14 @@ def tool_exec(command: str, timeout: float = 30.0) -> Dict[str, Any]:
         scrollback cap), in which case `output` may begin with unrelated
         earlier terminal text rather than silently losing the overflow.
     """
-    token = uuid.uuid4().hex[:12]
-    marker = _exec_marker(token)
+    # Not "token": the fleet's kv-secret mask fires on `token = '<12 hex>'`,
+    # and a pytest traceback prints exactly that for this value (wq#4409).
+    nonce = uuid.uuid4().hex[:12]
+    marker = _exec_marker(nonce)
     deadline = time.monotonic() + timeout
 
     sent = _call("send_keys", timeout=_exec_request_timeout(deadline),
-                 text=_exec_payload(command, token))
+                 text=_exec_payload(command, nonce))
     if "error" in sent or not sent.get("ok"):
         return sent if "error" in sent else {"ok": False, "error": "send_keys refused",
                                              "response": sent}
@@ -360,11 +362,11 @@ def tool_exec(command: str, timeout: float = 30.0) -> Dict[str, Any]:
             continue
         full = _call("scrollback", timeout=_exec_request_timeout(deadline), lines=0)
         text = full.get("text", "") if full.get("ok") else tail.get("text", "")
-        m = _exec_last_marker(text, token)
+        m = _exec_last_marker(text, nonce)
         result = {"ok": True, "command": command,
                   "exit_code": int(m.group(1)) if m else None,
-                  "output": _exec_output(text, token)}
-        if not _exec_start_marker(token).search(text):
+                  "output": _exec_output(text, nonce)}
+        if not _exec_start_marker(nonce).search(text):
             result["warning"] = ("start marker not found in the retained scrollback; "
                                  "output may include earlier terminal text or be missing "
                                  "the command's first lines")
