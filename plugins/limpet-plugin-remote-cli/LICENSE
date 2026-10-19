@@ -1,0 +1,5 @@
+MIT
+
+This plugin wrapper (mcp/server.py and this manifest) is first-party Lumen
+Industries code, MIT licensed. remote-cli itself (wq#4395) is installed and
+licensed separately.

@@ -1,0 +1,79 @@
+# limpet-plugin-remote-cli — shared terminal backend for Limpet
+# wq#4396 — integrates remote-cli (wq#4395: pure-Python shared-PTY tool,
+# Unix socket IPC, no tmux/screen dependency) as Limpet's agent-facing
+# terminal. Frank and an agent attach to the SAME PTY session, eliminating
+# the copy-paste/screenshot workflow for bench RE work.
+#
+# First-party: mcp/server.py is Limpet's own MCP wrapper (same pattern as
+# limpet-plugin-flashrom), not a wrapped third-party MCP package — remote-cli
+# itself speaks Unix-socket JSON, not MCP.
+
+[plugin]
+name = "remote-cli"
+version = "0.1.0"
+manifest_version = 1
+category = "hardware-interface"
+description = "Shared terminal backend: a Frank+agent PTY session with exec/snapshot/send/logs, backed by remote-cli (wq#4395)."
+license = "MIT"
+homepage = ""
+repository = ""
+authors = ["Lumen Industries"]
+
+[capabilities]
+headless = true
+gui = false
+architectures = ["any"]
+input_formats = ["text"]
+output_formats = ["text", "JSON"]
+
+[paths]
+binary = "/usr/local/bin/remote-cli"
+install_dir = "/opt/limpet/plugins/remote-cli"
+
+[health]
+check = "test -S /run/remote-cli/shared.sock"
+interval = "1h"
+timeout = "10s"
+startup_grace = "5s"
+
+[dependencies]
+requires = []
+system_packages = []
+conflicts = []
+
+[mcp]
+enabled = true
+server = "limpet-remote-cli-mcp"
+transport = "stdio"
+command = "python3"
+args = ["/opt/limpet/plugins/remote-cli/mcp/server.py"]
+env = {}
+
+[mcp.tools_energize]
+# Ticket-specified classification (wq#4396): read screen / scrollback never
+# writes to the shared PTY, so neither needs energize-confirm.
+snapshot = false
+logs = false
+# Ticket-specified: typing keystrokes into a terminal a human may be watching
+# live (passwords, control sequences, a stray Ctrl-C) goes through Sentinel's
+# energize-confirm gate.
+send = true
+# Not named in the ticket's classification list, but judged the same way here
+# (see mcp/server.py's module docstring): exec runs a whole command in the
+# shared session, strictly more consequential than raw keystrokes, so it is
+# gated too rather than left as the one ungated way to mutate the terminal.
+exec = true
+
+[agent_hints]
+summary = "Shared PTY terminal: Frank and an agent see and drive the same session. snapshot/logs are read-only recon of what's on screen or in scrollback; send/exec mutate the live session and are energize-gated."
+when_to_use = "Bench RE work where Frank is watching a target's console/bootloader session live and wants the agent to drive or observe it without a copy-paste or screenshot round trip."
+when_not_to_use = "Not for unattended command execution against a target the agent owns outright — use a plain shell/SSH session for that. This plugin exists specifically because the terminal is SHARED with a human."
+complements = ["serial-mcp"]
+supersedes = []
+workflow_position = "interact"
+
+[resources]
+max_memory = "128M"
+max_instances = 1
+gpu_required = false
+estimated_startup_time = "1s"
