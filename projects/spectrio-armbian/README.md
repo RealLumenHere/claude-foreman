@@ -32,19 +32,27 @@ boot-arg fix, eMMC install path) that the stock build doesn't know about.
 
 ## Status / what's still missing from this writeup
 
-The RE session that produced this bring-up ran on the fleet's dedicated RE
-workstation (internal hostname "maksoor"), and the primary artifacts — the
-full board `.dtb`/`.dts`, the exact per-unit flash/install transcripts, and
-photos of the board/PHY — live there, not in this git repo. This pass
-reconstructed and verified the technical content below from the fleet's own
-internal documentation of the same bring-up (`projects/spectrio-tf1/golden/`
-and `projects/spectrio-tf1/census/CENSUS_METHODOLOGY.md`, both outside this
-repo's worktree) plus public upstream sources (cited inline). Pulling the
-actual binary artifacts across requires fleet-exec access to maksoor, which
-this worker's dispatch did not grant (`fleet-exec run maksoor` →
-`DENY [grant:grant_missing_env]` — same class of gap as ISSUE-LOG #192,
-wq#1444: the ticket needs a `needs:ssh(maksoor)` tag at dispatch to mint
-that grant). Follow-up ticket filed for that pull; see `ops/wq4318-*`.
+The RE session that produced this bring-up used the fleet's dedicated RE
+workstation (internal hostname "maksoor") for the physical board work, but
+the primary artifacts this writeup still needs — the full board `.dtb`/
+`.dts`, the exact per-unit flash/install transcripts, and photos of the
+board/PHY — are not there. wq#4322 (follow-up to wq#4318) got a working
+`fleet-exec run maksoor` grant (confirming ISSUE-LOG #192/wq#1444's fix
+holds) and exhaustively searched maksoor's home tree for them: nothing
+matching `golden`, `spectrio-tf1`, or `meson-sm1-spectrio-tf1` exists there
+— only generic, board-agnostic ophub device-tree-overlay blobs.
+
+The actual source this writeup's technical content was reconstructed from
+(`projects/spectrio-tf1/golden/` and
+`projects/spectrio-tf1/census/CENSUS_METHODOLOGY.md`, cited inline in
+`DEVICE_QUIRKS.md`) turns out to be a fleet-shared, non-git scratch tree
+**local to the Lumen host itself** — confirmed real via symlink resolution
+to `/data/lumen/projects/spectrio-tf1-cluster/golden` — not on maksoor.
+Pulling the complete artifacts needs a `needs:dir(/data/lumen/projects/spectrio-tf1-cluster)`
+grant (not an ssh grant) on whatever worker does the pull; a `needs:ssh(maksoor)`
+grant, however correctly minted, cannot reach this path. Follow-up ticket
+wq#4326 is filed with the right tag; see `kb/ISSUE-LOG.md` row 1457 for the
+full diagnosis of how `ssh(maksoor)` ended up on wq#4322 instead.
 
 Before pushing this to a public, Lumen-external GitHub repo: creating a new
 *public* repository and the initial push both need a GitHub credential this

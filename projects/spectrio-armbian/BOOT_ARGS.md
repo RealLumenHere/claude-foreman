@@ -19,10 +19,12 @@ See `DEVICE_QUIRKS.md` → "Memory" for the DTB-side `reserved-memory` layout
 
 This repo does not yet have the full before/after kernel log that would
 pin down the exact failure mode without the cap (crash signature, which
-region collided) — that evidence lives with the original RE session and is
-one of the items the follow-up pull (`README.md` → "Status") is meant to
-bring across. Until then, treat `mem=3552M` as a verified-working value
-carried over from the bring-up, not as independently re-derived here.
+region collided). wq#4322 confirmed that log is not on maksoor (the RE
+workstation) — see `README.md` → "Status" — and is one of the items the
+follow-up pull (wq#4326, which needs a `dir()` grant on the lumen-local
+scratch tree instead) is meant to bring across. Until then, treat
+`mem=3552M` as a verified-working value carried over from the bring-up,
+not as independently re-derived here.
 
 ## Where it goes
 

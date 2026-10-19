@@ -83,8 +83,9 @@ rx-delay`) and the prose in `CENSUS_METHODOLOGY.md` ("DTB: ...(PEF7071 PHY
 @ MDIO addr 5, rgmii, no rx-delay — the TF1-specific ethernet fix)"). The
 exact `ethernet-phy@5` node body (compatible string, reg, any
 `phy-mode`/timing overrides specific to the PHY node itself rather than the
-MAC node) is in the full `.dts` on the RE workstation and is called out as
-the next thing to pull across in README's "Status" section rather than
+MAC node) is in the full `.dts`, which — per wq#4322's search — is not on
+the RE workstation (maksoor) but in a lumen-local scratch tree needing a
+`dir()` grant; see README's "Status" section and wq#4326 rather than
 guessed at here.
 
 ## Memory

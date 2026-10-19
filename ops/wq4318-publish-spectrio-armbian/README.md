@@ -51,8 +51,12 @@ Neither blocks landing what *is* real and complete here.
 
 ## Deps / follow-ups
 
-- wq#4322 — pull real artifacts from maksoor (`needs:ssh(maksoor)`),
-  replace this repo's TODO markers with the verified complete content.
+- wq#4322 — ran with `needs:ssh(maksoor)`; the grant worked (ISSUE-LOG
+  #192/wq#1444's fix holds) but an exhaustive search of maksoor found none
+  of the claimed golden `.dts`/transcripts — they live in a lumen-local
+  non-git scratch tree instead (`kb/ISSUE-LOG.md` row 1457). Superseded by
+  wq#4326 (`needs:dir(/data/lumen/projects/spectrio-tf1-cluster)`), which
+  replaces this repo's TODO markers with the verified complete content.
 - wq#4324 — Frank-gated: create the public repo, push, pick a license.
 
 No Thor restarts; nothing here touches Thor.
