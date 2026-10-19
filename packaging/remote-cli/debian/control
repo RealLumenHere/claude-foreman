@@ -1,0 +1,16 @@
+Source: remote-cli
+Section: utils
+Priority: optional
+Maintainer: Lumen Industries <packaging@lumen.local>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+
+Package: remote-cli
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.9)
+Description: Pure-Python shared-PTY terminal for bench RE work
+ Frank and an agent attach to the same PTY session over a Unix domain
+ socket -- no tmux/screen dependency, no copy-paste/screenshot round trip.
+ `remote-cli serve` runs the shared daemon; `remote-cli attach` joins it
+ from a human terminal; the control socket (exec/snapshot/send/logs ops)
+ is what an MCP wrapper (plugins/limpet-plugin-remote-cli) drives.

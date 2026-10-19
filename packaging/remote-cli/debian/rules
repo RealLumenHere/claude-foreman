@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+# wq#4395: stages lib/remote_cli.py (this package's own canonical source --
+# nothing else in the tree imports it, so unlike limpet-hald/limpet-tools
+# there is no monorepo path to stage FROM) into /usr/lib/remote-cli/.
+#
+# debian/remote-cli.service matches the package name exactly, so
+# dh_installsystemd's default discovery picks it up with no --name (wq#4071
+# regression: a name that doesn't match debian/<package>.service, or a unit
+# placed outside debian/ entirely, is silently skipped).
+
+PKGROOT := debian/remote-cli
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	dh_auto_install
+	install -d $(PKGROOT)/usr/lib/remote-cli
+	install -m 0644 lib/remote_cli.py $(PKGROOT)/usr/lib/remote-cli/remote_cli.py
