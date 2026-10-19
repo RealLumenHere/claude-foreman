@@ -1,19 +1,22 @@
 # limpet-plugin-remote-cli — shared terminal backend for Limpet
-# wq#4396 — integrates remote-cli (wq#4395: pure-Python shared-PTY tool,
-# Unix socket IPC, no tmux/screen dependency) as Limpet's agent-facing
-# terminal. Frank and an agent attach to the SAME PTY session, eliminating
-# the copy-paste/screenshot workflow for bench RE work.
+# wq#4396 integrated remote-cli (wq#4395's custom shared-PTY daemon) as
+# Limpet's agent-facing terminal. wq#4419 retires remote-cli and retargets
+# this plugin at shared-terminal (lumen-bin PR #262): the same shared
+# Frank+agent session, now backed by tmux on a dedicated server socket
+# (`tmux -L shared`), which gives screen replay on attach, resize/detach,
+# and faithful rendering of picocom/mtkclient/adb output — everything the
+# custom daemon lacked.
 #
 # First-party: mcp/server.py is Limpet's own MCP wrapper (same pattern as
-# limpet-plugin-flashrom), not a wrapped third-party MCP package — remote-cli
-# itself speaks Unix-socket JSON, not MCP.
+# limpet-plugin-flashrom); it shells out to the shared-terminal CLI, whose
+# surface is unchanged by this plugin.
 
 [plugin]
 name = "remote-cli"
-version = "0.1.0"
+version = "0.2.0"
 manifest_version = 1
 category = "hardware-interface"
-description = "Shared terminal backend: a Frank+agent PTY session with exec/snapshot/send/logs, backed by remote-cli (wq#4395)."
+description = "Shared terminal backend: a Frank+agent tmux session with start/send/snapshot/scrollback/wait, backed by shared-terminal (wq#4419)."
 license = "MIT"
 homepage = ""
 repository = ""
@@ -27,45 +30,48 @@ input_formats = ["text"]
 output_formats = ["text", "JSON"]
 
 [paths]
-binary = "/usr/local/bin/remote-cli"
+binary = "/home/lumen/bin/shared-terminal"
 install_dir = "/opt/limpet/plugins/remote-cli"
 
 [health]
-check = "test -S /run/remote-cli/shared.sock"
+# The shared tmux server's socket. Present iff at least one shared session is
+# (or was) running under `tmux -L shared` for this user.
+check = "test -S /tmp/tmux-$(id -u)/shared"
 interval = "1h"
 timeout = "10s"
 startup_grace = "5s"
 
 [dependencies]
 requires = []
-system_packages = []
+system_packages = ["tmux"]
 conflicts = []
 
 [mcp]
 enabled = true
-server = "limpet-remote-cli-mcp"
+server = "limpet-shared-terminal-mcp"
 transport = "stdio"
 command = "python3"
 args = ["/opt/limpet/plugins/remote-cli/mcp/server.py"]
 env = {}
 
 [mcp.tools_energize]
-# Ticket-specified classification (wq#4396): read screen / scrollback never
-# writes to the shared PTY, so neither needs energize-confirm.
+# wq#4419 ticket-specified classification: reading the screen, history, the
+# session inventory, metadata, or polling for a regex never writes to the
+# shared session, so none of these need energize-confirm.
 snapshot = false
-logs = false
-# Ticket-specified: typing keystrokes into a terminal a human may be watching
-# live (passwords, control sequences, a stray Ctrl-C) goes through Sentinel's
-# energize-confirm gate.
+scrollback = false
+list = false
+status = false
+wait = false
+# Typing keystrokes into a terminal a human may be watching live (passwords,
+# control sequences, a stray Ctrl-C) goes through Sentinel's energize-confirm
+# gate; `start` creates a session and may launch an arbitrary command in it,
+# strictly more consequential than raw keys, so it is gated too.
 send = true
-# Not named in the ticket's classification list, but judged the same way here
-# (see mcp/server.py's module docstring): exec runs a whole command in the
-# shared session, strictly more consequential than raw keystrokes, so it is
-# gated too rather than left as the one ungated way to mutate the terminal.
-exec = true
+start = true
 
 [agent_hints]
-summary = "Shared PTY terminal: Frank and an agent see and drive the same session. snapshot/logs are read-only recon of what's on screen or in scrollback; send/exec mutate the live session and are energize-gated."
+summary = "Shared tmux terminal: Frank and an agent see and drive the same session. snapshot/scrollback/list/status/wait are read-only recon of what's on screen or in history; send/start mutate the live session and are energize-gated."
 when_to_use = "Bench RE work where Frank is watching a target's console/bootloader session live and wants the agent to drive or observe it without a copy-paste or screenshot round trip."
 when_not_to_use = "Not for unattended command execution against a target the agent owns outright — use a plain shell/SSH session for that. This plugin exists specifically because the terminal is SHARED with a human."
 complements = ["serial-mcp"]

@@ -1,48 +1,46 @@
-"""Tests for the remote-cli MCP server (wq#4396, corrected under wq#4398).
+"""Tests for the shared-terminal MCP server (wq#4419, replacing the wq#4396
+remote-cli wrapper's suite).
 
 Three layers, in the order they catch things:
 
-1. JSON-RPC shape tests (no socket) — mirror limpet-plugin-flashrom's suite.
-2. Wire-protocol conformance against a fake daemon that speaks remote-cli's
-   REAL protocol, pinned by tests/fixtures/remote_cli_protocol.json. The fake
-   dispatches on "cmd" and rejects anything else exactly as remote-cli does,
-   so a wrapper that invents a command fails here instead of shipping green.
-3. Live integration against the actual remote-cli binary — the probe wq#4396
-   never ran. wq#4397 ran it by hand and got
-   `{'ok': False, 'error': 'unknown cmd None'}` from all four tools; these
-   tests make that probe permanent and re-runnable.
-
-Layer 2 exists because wq#4396's original suite was 8/8 green while 0/4 tools
-worked: its fake dispatched on the same invented "op" key the wrapper sent, so
-it could not fail. Same remedy shape as ISSUE-LOG row 1309 (wq#3881's OpenOCD
-MCP build): a fake that speaks the REAL wire protocol over a real socket.
+1. JSON-RPC shape tests (no tmux) — mirror limpet-plugin-flashrom's suite.
+2. CLI argv-mapping tests against a recorded `_run`: every tool must put only
+   real shared-terminal subcommands and flags on the command line. This is the
+   same lesson as the retired suite's wire-protocol layer (ISSUE-LOG row 1473:
+   a wrapper tested only against its own invented fake shipped 8/8 green with
+   0/4 tools working) — the contract under test is the CLI's, pinned by
+   tests/fixtures/shared_terminal_cli.json, not this wrapper's assumptions.
+3. Live integration: a real tmux session created through the real
+   shared-terminal CLI on an ISOLATED tmux server socket (never the fleet's
+   `shared` socket), exercising start/send/wait/snapshot/scrollback/status/list
+   end to end. Skips if tmux or the CLI is absent.
 """
 import json
 import os
-import re
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
+import uuid
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mcp"))
 import server  # noqa: E402
 
-FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "remote_cli_protocol.json")
+FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "shared_terminal_cli.json")
 with open(FIXTURE) as fh:
-    PROTOCOL = json.load(fh)
+    CLI = json.load(fh)
 
-REMOTE_CLI_BIN = os.environ.get("REMOTE_CLI_BIN", "/home/lumen/bin/remote-cli")
-if not os.path.exists(REMOTE_CLI_BIN):
-    REMOTE_CLI_BIN = shutil.which("remote-cli") or ""
-needs_remote_cli = pytest.mark.skipif(
-    not REMOTE_CLI_BIN,
-    reason="real remote-cli binary not found (set REMOTE_CLI_BIN to run the live layer)")
+TMUX = shutil.which("tmux")
+ST_BIN = server.SHARED_TERMINAL_BIN if os.path.exists(server.SHARED_TERMINAL_BIN) else ""
+needs_live = pytest.mark.skipif(
+    not (TMUX and ST_BIN),
+    reason="tmux or the shared-terminal CLI not found (set SHARED_TERMINAL_BIN)")
+
+READ_ONLY_TOOLS = ["list", "scrollback", "snapshot", "status", "wait"]
+ENERGIZING_TOOLS = ["send", "start"]
 
 
 # --------------------------------------------------------------------------
@@ -51,21 +49,20 @@ needs_remote_cli = pytest.mark.skipif(
 
 def test_initialize():
     resp = server.handle_request({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-    assert resp["result"]["serverInfo"]["name"] == "limpet-remote-cli-mcp"
+    assert resp["result"]["serverInfo"]["name"] == "limpet-shared-terminal-mcp"
     assert "tools" in resp["result"]["capabilities"]
 
 
 def test_tools_list():
     resp = server.handle_request({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-    tools = resp["result"]["tools"]
-    names = [t["name"] for t in tools]
-    assert sorted(names) == ["exec", "logs", "send", "snapshot"]
+    names = [t["name"] for t in resp["result"]["tools"]]
+    assert sorted(names) == sorted(READ_ONLY_TOOLS + ENERGIZING_TOOLS)
 
 
 def test_unknown_tool():
     resp = server.handle_request({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                                  "params": {"name": "nonexistent", "arguments": {}}})
-    assert "error" in resp
+                                  "params": {"name": "exec", "arguments": {}}})
+    assert "error" in resp, "the retired remote-cli exec tool must be gone"
 
 
 def test_initialized_notification():
@@ -78,518 +75,265 @@ def test_unknown_method():
     assert "error" in resp
 
 
-def test_exec_unreachable_socket_returns_error_not_exception():
-    missing = os.path.join(tempfile.gettempdir(), "wq4398-no-such-remote-cli.sock")
-    client = server.RemoteCliClient(socket_path=missing, timeout=1.0)
-    with pytest.raises(server.RemoteCliError, match="cannot reach remote-cli"):
-        client.connect()
+def test_manifest_energize_classification_matches_the_tools():
+    """The ticket-pinned split: snapshot/scrollback/list/status/wait read-only,
+    send/start energize-gated — checked against the actual manifest so the two
+    files cannot drift apart."""
+    manifest = os.path.join(os.path.dirname(__file__), "..", "limpet-plugin.toml")
+    with open(manifest) as fh:
+        text = fh.read()
+    section = text.split("[mcp.tools_energize]", 1)[1].split("[agent_hints]", 1)[0]
+    flags = {}
+    for line in section.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if "=" in line:
+            key, val = (part.strip() for part in line.split("=", 1))
+            flags[key] = val == "true"
+    assert flags == {**{t: False for t in READ_ONLY_TOOLS},
+                     **{t: True for t in ENERGIZING_TOOLS}}
+    assert set(flags) == set(server.TOOLS), "manifest lists a tool the server lacks (or vice versa)"
 
 
 # --------------------------------------------------------------------------
-# 2. Wire-protocol conformance
+# 2. CLI argv mapping
 # --------------------------------------------------------------------------
 
-class FakeRemoteCli:
-    """Fake daemon speaking remote-cli's real protocol: dispatch on the "cmd"
-    key over the five commands the fixture pins, reply `unknown cmd <repr>` to
-    anything else (remote-cli:292). Serves many connections, since one
-    tool_exec call makes several. Records every request for assertions."""
+def _record_runs(monkeypatch, result=None):
+    calls = []
 
-    def __init__(self, scrollback="", delay=0.0):
-        self._dir = tempfile.mkdtemp(prefix="wq4398-fake-remote-cli-")
-        self.socket_path = os.path.join(self._dir, "shared.sock")
-        self.requests = []
-        self.scrollback = scrollback
-        self.delay = delay
-        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._sock.bind(self.socket_path)
-        self._sock.listen(8)
-        self._stop = threading.Event()
-        threading.Thread(target=self._serve, daemon=True).start()
+    def fake_run(args, timeout=server.REQUEST_TIMEOUT):
+        calls.append(list(args))
+        return dict(result or {"ok": True, "exit_code": 0, "output": ""})
 
-    def _serve(self):
-        while not self._stop.is_set():
-            try:
-                conn, _ = self._sock.accept()
-            except OSError:
-                return
-            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
-
-    def _handle(self, conn):
-        with conn:
-            data = b""
-            while not data.endswith(b"\n"):
-                chunk = conn.recv(4096)
-                if not chunk:
-                    return
-                data += chunk
-            req = json.loads(data.decode())
-            self.requests.append(req)
-            if self.delay:
-                time.sleep(self.delay)
-            try:
-                conn.sendall((json.dumps(self._reply(req)) + "\n").encode())
-            except OSError:
-                pass
-
-    def _reply(self, req):
-        cmd = req.get("cmd")
-        if cmd == "snapshot":
-            return {"ok": True, "screen": "fake$ ", "rows": 24, "cols": 80}
-        if cmd == "scrollback":
-            lines = int(req.get("lines", 0))
-            text = self.scrollback
-            if lines > 0:
-                text = "\n".join(text.splitlines()[-lines:])
-            return {"ok": True, "text": text}
-        if cmd == "send_keys":
-            return {"ok": True}
-        if cmd == "resize":
-            return {"ok": True}
-        if cmd == "status":
-            return {"ok": True, "status": {"alive": True}}
-        return {"ok": False, "error": f"unknown cmd {cmd!r}"}
-
-    def close(self):
-        self._stop.set()
-        self._sock.close()
+    monkeypatch.setattr(server, "_run", fake_run)
+    return calls
 
 
-def _with_fake(monkeypatch, **kwargs):
-    fake = FakeRemoteCli(**kwargs)
-    monkeypatch.setattr(server, "SOCKET_PATH", fake.socket_path)
-    return fake
+def _assert_real_cli_shape(argv):
+    sub = argv[0]
+    assert sub in CLI["subcommands"], f"not a shared-terminal subcommand: {argv}"
+    for flag in (a for a in argv[1:] if a.startswith("--")):
+        assert flag in CLI["subcommands"][sub]["flags"], \
+            f"{sub} has no flag {flag!r} in the real CLI"
 
 
-def test_fixture_pins_cmd_key_not_op():
-    assert PROTOCOL["request_key"] == "cmd"
-    assert "exec" not in PROTOCOL["commands"]
+def test_every_tool_uses_only_real_cli_subcommands(monkeypatch):
+    calls = _record_runs(monkeypatch)
+    server.tool_start("s", command="htop")
+    server.tool_send("s", text="ls")
+    server.tool_send("s", keys=["C-c"])
+    server.tool_snapshot("s", ansi=True)
+    server.tool_scrollback("s", lines=50)
+    server.tool_scrollback("s", all=True)
+    server.tool_list()
+    server.tool_status("s")
+    server.tool_wait("s", r"\$", timeout=5)
+    assert calls, "no CLI invocations recorded"
+    for argv in calls:
+        _assert_real_cli_shape(argv)
 
 
-def test_client_sends_cmd_key(monkeypatch):
-    fake = _with_fake(monkeypatch)
+def test_send_text_uses_no_enter_plus_explicit_enter_key(monkeypatch):
+    """Literal text must go through --no-enter + --key Enter, so text beginning
+    with `--` can never be parsed as a CLI flag."""
+    calls = _record_runs(monkeypatch)
+    server.tool_send("bench", text="--key C-c")
+    assert calls == [["send", "bench", "--no-enter", "--key C-c"],
+                     ["send", "bench", "--key", "Enter"]]
+
+
+def test_send_text_without_enter_types_only(monkeypatch):
+    calls = _record_runs(monkeypatch)
+    server.tool_send("bench", text="partial", enter=False)
+    assert calls == [["send", "bench", "--no-enter", "partial"]]
+
+
+def test_send_keys_maps_to_key_names(monkeypatch):
+    calls = _record_runs(monkeypatch)
+    server.tool_send("bench", keys=["C-c", "Up", "Enter"])
+    assert calls == [["send", "bench", "--key", "C-c", "Up", "Enter"]]
+
+
+def test_send_without_text_or_keys_is_an_error(monkeypatch):
+    calls = _record_runs(monkeypatch)
+    result = server.tool_send("bench")
+    assert result["ok"] is False and not calls
+
+
+def test_send_failed_typing_does_not_press_enter(monkeypatch):
+    """If the text never reached the session (no such session, dead server),
+    following up with Enter would be a blind keystroke into whatever exists."""
+    calls = _record_runs(monkeypatch, result={"ok": False, "exit_code": 1, "error": "no session"})
+    result = server.tool_send("bench", text="ls")
+    assert result["ok"] is False
+    assert calls == [["send", "bench", "--no-enter", "ls"]]
+
+
+def test_scrollback_lines_and_all(monkeypatch):
+    calls = _record_runs(monkeypatch)
+    server.tool_scrollback("bench")
+    server.tool_scrollback("bench", lines=17)
+    server.tool_scrollback("bench", all=True)
+    assert calls == [["scrollback", "bench", "200"],
+                     ["scrollback", "bench", "17"],
+                     ["scrollback", "bench", "all"]]
+
+
+def test_wait_timeout_is_whole_seconds_and_exit_2_means_timed_out(monkeypatch):
+    calls = _record_runs(monkeypatch, result={"ok": False, "exit_code": 2, "output": "",
+                                              "error": "timeout waiting for /x/"})
+    result = server.tool_wait("bench", "READY", timeout=7.9)
+    assert calls == [["wait", "bench", "READY", "7"]]
+    assert result["timed_out"] is True
+
+
+def test_status_parses_the_cli_json(monkeypatch):
+    payload = {"session": "bench", "attached_clients": 1, "cols": 120, "rows": 40,
+               "shell_pid": 4242, "running": "bash", "cwd": "/home/lumen",
+               "created": "x", "log": "/tmp/bench.log"}
+    _record_runs(monkeypatch, result={"ok": True, "exit_code": 0,
+                                      "output": json.dumps(payload)})
+    result = server.tool_status("bench")
+    assert result["ok"] is True
+    assert result["status"] == payload
+    assert "output" not in result
+
+
+def test_run_reports_a_missing_binary_as_an_error():
+    monkey_bin = os.path.join(tempfile.gettempdir(), "wq4419-no-such-shared-terminal")
+    real = server.SHARED_TERMINAL_BIN
+    server.SHARED_TERMINAL_BIN = monkey_bin
     try:
-        assert server.tool_snapshot()["ok"] is True
-        assert fake.requests == [{"cmd": "snapshot"}]
+        result = server._run(["list"])
     finally:
-        fake.close()
-
-
-def test_every_tool_uses_only_real_protocol_commands(monkeypatch):
-    """The assertion wq#4396's suite was missing: every command this wrapper
-    puts on the wire must be one remote-cli actually implements."""
-    fake = _with_fake(monkeypatch, scrollback="")
-    try:
-        server.tool_snapshot()
-        server.tool_logs(lines=5)
-        server.tool_send("\x03")
-        server.tool_exec("true", timeout=0.6)  # times out: no shell to answer
-        assert fake.requests, "fake recorded no requests"
-        for req in fake.requests:
-            assert "op" not in req, f"wrapper still speaks the invented 'op' key: {req}"
-            assert req.get("cmd") in PROTOCOL["commands"], f"not a remote-cli command: {req}"
-            for field in req:
-                if field == "cmd":
-                    continue
-                assert field in PROTOCOL["commands"][req["cmd"]]["fields"], \
-                    f"{req['cmd']} has no field {field!r} in the real protocol"
-    finally:
-        fake.close()
-
-
-def test_logs_maps_to_scrollback(monkeypatch):
-    fake = _with_fake(monkeypatch, scrollback="line one\nline two\nline three")
-    try:
-        assert server.tool_logs(lines=2)["text"] == "line two\nline three"
-        assert fake.requests == [{"cmd": "scrollback", "lines": 2}]
-    finally:
-        fake.close()
-
-
-def test_send_maps_to_send_keys_text(monkeypatch):
-    fake = _with_fake(monkeypatch)
-    try:
-        assert server.tool_send("\x03")["ok"] is True
-        assert fake.requests == [{"cmd": "send_keys", "text": "\x03"}]
-    finally:
-        fake.close()
-
-
-def test_caller_timeout_reaches_the_socket(monkeypatch):
-    """wq#4397 finding 6: `timeout` used to be sent as a JSON field and never
-    applied to the socket, so every call was capped at the hardcoded 5s."""
-    seen = {}
-    real_init = server.RemoteCliClient.__init__
-
-    def spy(self, socket_path=None, timeout=server.REQUEST_TIMEOUT):
-        seen["timeout"] = timeout
-        real_init(self, socket_path=socket_path, timeout=timeout)
-
-    fake = _with_fake(monkeypatch)
-    monkeypatch.setattr(server.RemoteCliClient, "__init__", spy)
-    try:
-        server._call("status", timeout=11.5)
-        assert seen["timeout"] == 11.5
-        assert "timeout" not in fake.requests[0], "timeout must not be a wire field"
-    finally:
-        fake.close()
+        server.SHARED_TERMINAL_BIN = real
+    assert result["ok"] is False and "not found" in result["error"]
 
 
 # --------------------------------------------------------------------------
-# 2b. exec's marker protocol, as pure functions
+# 3. Live integration: real tmux through the real shared-terminal CLI
 # --------------------------------------------------------------------------
 
-def test_exec_payload_echo_cannot_match_its_own_marker():
-    payload = server._exec_payload("ls -la", "deadbeef0001")
-    assert not server._exec_marker("deadbeef0001").search(payload), \
-        "the shell's echo of the payload would be mistaken for the completion marker"
-    assert not server._exec_start_marker("deadbeef0001").search(payload), \
-        "the shell's echo of the payload would be mistaken for the start marker"
-    assert payload.endswith("\n")
-
-
-def test_exec_marker_parses_exit_code():
-    m = server._exec_marker("deadbeef0002").search("RCDONE-deadbeef0002-42\r\n")
-    assert m and int(m.group(1)) == 42
-
-
-def _echo_on_scrollback(nonce, command, output, prompt="earlier$ "):
-    """Scrollback as a real echoing shell produces it for one `_exec_payload`:
-    some earlier history, the prompt, the echo of the single typed line, the
-    start marker printf's output, the command's output, the completion
-    marker, the next prompt."""
-    typed = server._exec_payload(command, nonce).rstrip("\n")
-    return (f"{prompt}whoami\r\nlumen\r\n"
-            f"{prompt}{typed}\r\n"
-            f"RCSTART-{nonce}\r\n"
-            + output
-            + f"RCDONE-{nonce}-0\r\n{prompt}")
-
-
-def test_exec_output_carves_command_output_from_scrollback():
-    nonce = "deadbeef0003"
-    assert server._exec_output(
-        _echo_on_scrollback(nonce, "echo hi", "hi\r\n"), nonce) == "hi"
-
-
-def test_exec_output_keeps_every_line_of_a_multiline_command():
-    """wq#4403 finding A, live-reproduced: `output` was 'THIRDLINE' alone
-    because the first nonce occurrence is the echo of the LAST typed line, so
-    slicing after it discarded the first two lines' real output."""
-    nonce = "deadbeef0005"
-    scrollback = _echo_on_scrollback(
-        nonce, "echo FIRSTLINE\necho SECONDLINE\necho THIRDLINE",
-        "FIRSTLINE\r\nSECONDLINE\r\nTHIRDLINE\r\n")
-    out = server._exec_output(scrollback, nonce)
-    assert out == "FIRSTLINE\r\nSECONDLINE\r\nTHIRDLINE", out
-
-
-def test_exec_payload_is_a_single_typed_line_whatever_the_command():
-    """The embedded-newline command must not reach the PTY as several typed
-    lines: each would get its own echo and prompt interleaved with the output,
-    which is what made the first cut's extraction lose data (wq#4403 A)."""
-    payload = server._exec_payload("echo one\r\necho two\n", "deadbeef0009")
-    assert payload.count("\n") == 1 and "\r" not in payload, repr(payload)
-    assert payload.endswith("\n"), repr(payload)
-    out = subprocess.run(["/bin/sh", "-c", payload], capture_output=True,
-                         text=True).stdout
-    assert "one\ntwo\n" in out, out
-    assert "RCDONE-deadbeef0009-0" in out, out
-
-
-def test_exec_payload_quotes_a_command_containing_quotes():
-    """The `eval` wrapper has to survive the apostrophes real bench commands
-    carry, so the quoting is checked by running it through a real shell."""
-    command = """printf '%s|%s\\n' "it's" 'a "quote"'"""
-    payload = server._exec_payload(command, "deadbeef0010")
-    out = subprocess.run(["/bin/sh", "-c", payload], capture_output=True,
-                         text=True).stdout
-    assert "it's|a \"quote\"" in out, out
-    assert "RCDONE-deadbeef0010-0" in out, out
-
-
-def test_exec_output_survives_an_echo_suppressed_session():
-    """wq#4403 finding B, live-reproduced: with `stty -echo` the nonce occurs
-    once (in the marker), the real output precedes it, and slicing after the
-    first occurrence returned the trailing prompt — ok:true with wrong data."""
-    nonce = "deadbeef0004"
-    scrollback = (f"RCSTART-{nonce}\r\nhidden-echo-probe\r\n"
-                  f"RCDONE-{nonce}-0\r\nbash-5.3$ ")
-    assert server._exec_output(scrollback, nonce) == "hidden-echo-probe"
-
-
-def test_exec_output_keeps_output_that_lacks_a_trailing_newline():
-    """The marker printf then lands on the same physical line as the output,
-    so the end boundary is the marker's own start, not a line break."""
-    nonce = "deadbeef0006"
-    scrollback = f"RCSTART-{nonce}\r\nabcRCDONE-{nonce}-0\r\n$ "
-    assert server._exec_output(scrollback, nonce) == "abc"
-
-
-def test_exec_output_boundary_is_the_last_marker_not_a_printed_one():
-    """A command that prints marker-shaped text of its own (`exec` reading a
-    log of an earlier exec) must not shorten the output or change the status."""
-    nonce = "deadbeef0007"
-    scrollback = (f"RCSTART-{nonce}\r\nquoted RCDONE-{nonce}-9 line\r\n"
-                  f"RCDONE-{nonce}-0\r\n$ ")
-    assert server._exec_output(scrollback, nonce) == f"quoted RCDONE-{nonce}-9 line"
-    m = server._exec_last_marker(scrollback, nonce)
-    assert m and int(m.group(1)) == 0
-
-
-def test_exec_marker_survives_a_trailing_comment_or_ampersand():
-    """wq#4403 finding C: appended bare after `;`, the marker clause was
-    swallowed by a trailing `#` comment and made `cmd &` a bash syntax error,
-    so the exec timed out with no output at all. Run through a real shell —
-    asserting on the payload's shape could not catch either."""
-    for command, expected in (("echo visible # a comment", "visible"),
-                              ("echo backgrounded; sleep 0.2 &", "backgrounded")):
-        payload = server._exec_payload(command, "deadbeef0008")
-        done = subprocess.run(["/bin/bash", "-c", payload], capture_output=True,
-                              text=True)
-        assert expected in done.stdout, (command, done.stdout, done.stderr)
-        assert "RCDONE-deadbeef0008-0" in done.stdout, (command, done.stdout, done.stderr)
-
-
-def test_exec_output_warns_rather_than_guessing_when_the_start_marker_aged_out(monkeypatch):
-    nonce_holder = {}
-    fake = _with_fake(monkeypatch, scrollback="")
-    real_payload = server._exec_payload
-
-    def capture(command, nonce):
-        nonce_holder["nonce"] = nonce
-        text = real_payload(command, nonce)
-        fake.scrollback = f"older output the cap kept\r\nRCDONE-{nonce}-0\r\n$ "
-        return text
-
-    monkeypatch.setattr(server, "_exec_payload", capture)
-    try:
-        result = server.tool_exec("echo x", timeout=5.0)
-        assert result["ok"] is True and result["exit_code"] == 0
-        assert "warning" in result, result
-    finally:
-        fake.close()
-
-
-def test_exec_nonce_names_do_not_trip_the_kv_secret_mask():
-    """wq#4409: named `token`, the 12-hex completion marker matched kv-secret in
-    this file's fixtures and in every failing test's traceback funcarg line,
-    filing a false credential leak each time someone touched the plugin."""
-    harness = os.path.join(os.path.dirname(__file__), "..", "..", "..", "harness")
-    sys.path.insert(0, harness)
-    import masking
-    for path in (__file__, server.__file__):
-        with open(path) as f:
-            assert "kv-secret" not in masking.mask_text(f.read())[1], path
-    assert masking.mask_text("nonce = 'deadbeef0003'")[1] == []
-    # The old name must still fire, or the scan above proves nothing. Split so
-    # this line does not trip the scan of its own file.
-    assert "kv-secret" in masking.mask_text("tok" + "en = 'deadbeef0003'")[1]
-
-
-def test_exec_times_out_without_a_marker(monkeypatch):
-    fake = _with_fake(monkeypatch, scrollback="nothing resembling a marker\n")
-    try:
-        started = time.monotonic()
-        result = server.tool_exec("sleep 99", timeout=1.0)
-        elapsed = time.monotonic() - started
-        assert result["timed_out"] is True
-        assert result["ok"] is False
-        assert 1.0 <= elapsed < 3.0, f"timeout not honored: returned after {elapsed:.2f}s"
-    finally:
-        fake.close()
-
-
-def test_exec_reports_exit_code_once_the_marker_lands(monkeypatch):
-    nonce_holder = {}
-    fake = _with_fake(monkeypatch, scrollback="")
-    real_payload = server._exec_payload
-
-    def capture(command, nonce):
-        nonce_holder["nonce"] = nonce
-        text = real_payload(command, nonce)
-        fake.scrollback = (f"$ {text.rstrip()}\r\nRCSTART-{nonce}\r\nboom\r\n"
-                           f"RCDONE-{nonce}-7\r\n$ ")
-        return text
-
-    monkeypatch.setattr(server, "_exec_payload", capture)
-    try:
-        result = server.tool_exec("false; echo boom", timeout=5.0)
-        assert result["ok"] is True
-        assert result["exit_code"] == 7
-        assert result["output"] == "boom"
-        assert "warning" not in result, result
-    finally:
-        fake.close()
-
-
-# --------------------------------------------------------------------------
-# 3. Live integration against the real remote-cli daemon
-# --------------------------------------------------------------------------
-
-class LiveRemoteCli:
-    """A real `remote-cli serve` process with a real PTY running bash."""
+class LiveSharedTerminal:
+    """A real shared-terminal session on an isolated tmux server socket, so
+    the fleet's actual `shared` socket is never touched by tests."""
 
     def __init__(self):
-        self._dir = tempfile.mkdtemp(prefix="wq4398-live-remote-cli-")
-        self.socket_path = os.path.join(self._dir, "shared.sock")
-        self.proc = subprocess.Popen(
-            [sys.executable, REMOTE_CLI_BIN, "serve", "--socket", self.socket_path,
-             "--cmd", "/bin/bash", "--norc", "--noprofile"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            if os.path.exists(self.socket_path):
-                time.sleep(0.4)  # let bash reach its first prompt
-                return
-            time.sleep(0.05)
-        self.close()
-        raise AssertionError("real remote-cli never created its socket")
+        self.socket = f"wq4419test{uuid.uuid4().hex[:8]}"
+        self.logs = tempfile.mkdtemp(prefix="wq4419-shared-terminal-logs-")
+        self.session = "t1"
+        os.environ["SHARED_TERMINAL_SOCKET"] = self.socket
+        os.environ["SHARED_TERMINAL_LOGS"] = self.logs
+        proc = subprocess.run(
+            [ST_BIN, "start", self.session, "/bin/bash --norc --noprofile"],
+            capture_output=True, text=True, timeout=15)
+        assert proc.returncode == 0, (proc.stdout, proc.stderr)
 
     def close(self):
-        self.proc.terminate()
-        try:
-            self.proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
+        subprocess.run([TMUX, "-L", self.socket, "kill-server"],
+                       capture_output=True, timeout=10)
+        os.environ.pop("SHARED_TERMINAL_SOCKET", None)
+        os.environ.pop("SHARED_TERMINAL_LOGS", None)
+        shutil.rmtree(self.logs, ignore_errors=True)
 
 
-@pytest.fixture
-def live(monkeypatch):
-    daemon = LiveRemoteCli()
-    monkeypatch.setattr(server, "SOCKET_PATH", daemon.socket_path)
+@pytest.fixture(scope="module")
+def live():
+    if not (TMUX and ST_BIN):
+        pytest.skip("tmux or shared-terminal CLI missing")
+    lt = LiveSharedTerminal()
     try:
-        yield daemon
+        yield lt
     finally:
-        daemon.close()
+        lt.close()
 
 
-@needs_remote_cli
-def test_fixture_matches_real_remote_cli():
-    """Drift guard: if wq#4395's protocol changes, this fails loudly instead of
-    letting the wrapper keep speaking a stale contract."""
-    with open(REMOTE_CLI_BIN) as fh:
-        source = fh.read()
-    live_cmds = set(re.findall(r'cmd == "([a-z_]+)"', source))
-    assert live_cmds == set(PROTOCOL["commands"]), \
-        f"fixture pins {sorted(PROTOCOL['commands'])}, binary implements {sorted(live_cmds)}"
-    assert 'req.get("cmd")' in source
+@needs_live
+def test_live_health_check_socket_exists(live):
+    """The manifest's [health] check target: the tmux server socket for this
+    (isolated) server name, at the path tmux actually creates."""
+    sock = f"/tmp/tmux-{os.getuid()}/{live.socket}"
+    assert os.path.exists(sock), sock
 
 
-@needs_remote_cli
-def test_live_snapshot(live):
-    result = server.tool_snapshot()
-    assert result.get("ok") is True, result
-    assert "screen" in result and result["rows"] > 0
+@needs_live
+def test_live_list_and_status(live):
+    listing = server.tool_list()
+    assert listing["ok"] is True and live.session in listing["output"], listing
+    status = server.tool_status(live.session)
+    assert status["ok"] is True, status
+    assert status["status"]["session"] == live.session
+    assert status["status"]["cols"] > 0 and status["status"]["rows"] > 0
 
 
-@needs_remote_cli
-def test_live_logs(live):
-    result = server.tool_logs(lines=50)
-    assert result.get("ok") is True, result
-    assert isinstance(result["text"], str)
+@needs_live
+def test_live_send_wait_snapshot_scrollback_roundtrip(live):
+    marker = "wq4419-live-roundtrip-ok"
+    sent = server.tool_send(live.session, text=f"echo {marker}")
+    assert sent["ok"] is True, sent
+    waited = server.tool_wait(live.session, marker, timeout=15)
+    assert waited["ok"] is True, waited
+    snap = server.tool_snapshot(live.session)
+    assert marker in snap["output"], snap
+    back = server.tool_scrollback(live.session, lines=50)
+    assert marker in back["output"], back
 
 
-@needs_remote_cli
-def test_live_send(live):
-    marker = "wq4398-live-send-probe"
-    assert server.tool_send(f"echo {marker}\n").get("ok") is True
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if marker in server.tool_logs(lines=50).get("text", ""):
-            return
-        time.sleep(0.2)
-    pytest.fail("keystrokes never reached the shared shell")
-
-
-@needs_remote_cli
-def test_live_exec_returns_output_and_zero_exit(live):
-    result = server.tool_exec("echo wq4398-live-exec-ok", timeout=20.0)
-    assert result.get("ok") is True, result
-    assert result["exit_code"] == 0, result
-    assert "wq4398-live-exec-ok" in result["output"], result
-
-
-@needs_remote_cli
-def test_live_exec_propagates_nonzero_exit(live):
-    result = server.tool_exec("(exit 3)", timeout=20.0)
-    assert result.get("ok") is True, result
-    assert result["exit_code"] == 3, result
-
-
-@needs_remote_cli
-def test_live_exec_honors_a_timeout_past_the_old_five_second_cap(live):
-    """The boundary wq#4397 live-reproduced as broken: a command that finishes
-    at ~6s used to fail at 5.01s no matter what the caller asked for. 6s is
-    outside REQUEST_TIMEOUT (5.0) and the caller's 20s is outside the old
-    hardcoded ceiling, so this probe can genuinely fail."""
-    started = time.monotonic()
-    result = server.tool_exec("sleep 6; echo wq4398-slow-done", timeout=20.0)
-    elapsed = time.monotonic() - started
-    assert result.get("ok") is True, result
-    assert result["exit_code"] == 0, result
-    assert "wq4398-slow-done" in result["output"], result
-    assert elapsed > 5.5, f"returned in {elapsed:.2f}s — the command cannot have run"
-
-
-@needs_remote_cli
-def test_live_exec_multiline_keeps_every_line_of_output(live):
-    """wq#4403's exact repro of finding A, against the real daemon: this used
-    to return 'THIRDLINE' alone while raw scrollback proved all three ran.
-    Outside the population the wq#4398 fix was designed around (single-line,
-    echo-on commands), so it can genuinely fail."""
-    result = server.tool_exec(
-        "echo FIRSTLINE\necho SECONDLINE\necho THIRDLINE", timeout=20.0)
-    assert result.get("ok") is True, result
-    assert result["exit_code"] == 0, result
-    for line in ("FIRSTLINE", "SECONDLINE", "THIRDLINE"):
-        assert line in result["output"], (line, result)
-
-
-@needs_remote_cli
-def test_live_exec_with_local_echo_disabled(live):
-    """wq#4403's repro of finding B: after `stty -echo` — a state any human
-    sharing this PTY can leave behind — exec returned a stale prompt string as
-    `output` with ok:true and the right exit code."""
-    assert server.tool_send("stty -echo\n").get("ok") is True
+@needs_live
+def test_live_send_keys_interrupts_a_running_command(live):
+    assert server.tool_send(live.session, text="sleep 300")["ok"] is True
     time.sleep(0.5)
-    try:
-        result = server.tool_exec("echo hidden-echo-probe", timeout=20.0)
-    finally:
-        server.tool_send("stty echo\n")
-    assert result.get("ok") is True, result
-    assert result["exit_code"] == 0, result
-    assert "hidden-echo-probe" in result["output"], result
-    assert "$" not in result["output"], f"returned a shell prompt, not output: {result!r}"
+    assert server.tool_send(live.session, keys=["C-c"])["ok"] is True
+    waited = server.tool_wait(live.session, r"\$", timeout=10)
+    assert waited["ok"] is True, waited
+    status = server.tool_status(live.session)
+    assert status["status"]["running"] != "sleep", status
 
 
-@needs_remote_cli
-def test_live_exec_survives_a_trailing_comment(live):
-    """wq#4403 finding C: with the marker appended after `;` on the command's
-    own line, a trailing `#` comment commented it out and exec burned the
-    caller's whole timeout."""
+@needs_live
+def test_live_wait_times_out_on_a_regex_that_never_appears(live):
+    """The probe that can fail: a regex matching nothing on screen must come
+    back timed_out (CLI exit 2), not ok and not a crash."""
     started = time.monotonic()
-    result = server.tool_exec("echo visible # a trailing comment", timeout=20.0)
-    assert result.get("ok") is True, result
-    assert result["exit_code"] == 0, result
-    assert "visible" in result["output"], result
-    assert time.monotonic() - started < 10.0, "took a timeout-shaped amount of time"
-
-
-@needs_remote_cli
-def test_live_exec_survives_a_backgrounded_command(live):
-    """`cmd &; __rc=$?` is a bash syntax error, so the first cut could not run
-    a command ending in `&` at all."""
-    result = server.tool_exec("echo backgrounded; sleep 0.2 &", timeout=20.0)
-    assert result.get("ok") is True, result
-    assert result["exit_code"] == 0, result
-    assert "backgrounded" in result["output"], result
-
-
-@needs_remote_cli
-def test_live_exec_short_timeout_gives_up_early(live):
-    started = time.monotonic()
-    result = server.tool_exec("sleep 30", timeout=2.0)
+    result = server.tool_wait(live.session, "wq4419-never-printed-anywhere", timeout=2)
     elapsed = time.monotonic() - started
     assert result.get("timed_out") is True, result
-    assert 2.0 <= elapsed < 4.0, f"timeout not honored: returned after {elapsed:.2f}s"
+    assert result["ok"] is False
+    assert 1.5 <= elapsed < 10.0, f"timeout not honored: returned after {elapsed:.2f}s"
+
+
+@needs_live
+def test_live_tools_against_a_missing_session_report_an_error(live):
+    for result in (server.tool_snapshot("wq4419-no-such-session"),
+                   server.tool_status("wq4419-no-such-session"),
+                   server.tool_send("wq4419-no-such-session", text="x")):
+        assert result["ok"] is False, result
+        assert "no session" in result.get("error", ""), result
+
+
+@needs_live
+def test_live_transcript_log_is_written(live):
+    marker = "wq4419-transcript-probe"
+    assert server.tool_send(live.session, text=f"echo {marker}")["ok"] is True
+    log = os.path.join(live.logs, f"{live.session}.log")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if os.path.exists(log):
+            with open(log, errors="replace") as fh:
+                if marker in fh.read():
+                    return
+        time.sleep(0.2)
+    pytest.fail(f"marker never reached the transcript log {log}")
+
+
+@needs_live
+def test_fixture_matches_real_cli_help():
+    """Drift guard: if the shared-terminal CLI grows or renames subcommands,
+    this fails loudly instead of letting the wrapper speak a stale surface."""
+    with open(ST_BIN) as fh:
+        source = fh.read()
+    for sub in CLI["subcommands"]:
+        assert f"{sub})" in source, f"fixture pins subcommand {sub!r} the CLI lacks"
+    for sub, spec in CLI["subcommands"].items():
+        for flag in spec["flags"]:
+            assert flag in source, f"fixture pins flag {flag!r} the CLI lacks"

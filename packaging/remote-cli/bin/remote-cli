@@ -1,4 +1,0 @@
-#!/bin/sh
-# wq#4395: thin shim, matching packaging/limpet-hald/bin/limpet-hald's style --
-# the real implementation is staged to /usr/lib/remote-cli/remote_cli.py.
-exec python3 /usr/lib/remote-cli/remote_cli.py "$@"

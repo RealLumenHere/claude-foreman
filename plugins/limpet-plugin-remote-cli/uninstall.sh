@@ -1,5 +1,5 @@
 #!/bin/bash
 set -euo pipefail
-echo "[remote-cli] Uninstalling plugin..."
+echo "[shared-terminal] Uninstalling plugin..."
 sudo rm -rf /opt/limpet/plugins/remote-cli
-echo "[remote-cli] Uninstalled. (remote-cli itself, installed by wq#4395, is untouched.)"
+echo "[shared-terminal] Uninstalled. (shared-terminal itself, installed from lumen-bin, is untouched.)"

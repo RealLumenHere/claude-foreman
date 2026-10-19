@@ -1,0 +1,12 @@
+{
+  "_comment": "Committed pin of the shared-terminal CLI surface this wrapper drives (lumen-bin PR #262, wq#4419). test_fixture_matches_real_cli_help checks it against the installed CLI so drift fails loudly. Only the agent-facing subcommands the MCP server uses are pinned; open/attach/log/kill/help are human-side and unused here.",
+  "subcommands": {
+    "start": {"usage": "start <name> [cmd...]", "flags": []},
+    "send": {"usage": "send <name> [--no-enter] \"text\" | send <name> --key KEY...", "flags": ["--no-enter", "--key"]},
+    "snapshot": {"usage": "snapshot <name> [--ansi]", "flags": ["--ansi"]},
+    "scrollback": {"usage": "scrollback <name> [lines|all]", "flags": []},
+    "list": {"usage": "list", "flags": []},
+    "status": {"usage": "status <name>", "flags": []},
+    "wait": {"usage": "wait <name> <regex> [timeout_s]", "flags": []}
+  }
+}

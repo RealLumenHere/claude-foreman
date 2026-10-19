@@ -1,1 +1,2 @@
-# No additional dependencies — stdlib only (socket, json)
+# No additional dependencies — stdlib only (subprocess, json); tmux + the
+# shared-terminal CLI are system-level, installed from lumen-bin.

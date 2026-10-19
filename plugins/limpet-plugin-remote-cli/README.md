@@ -1,86 +1,57 @@
-# limpet-plugin-remote-cli
+# limpet-plugin-remote-cli (shared-terminal backend)
 
-First-party shared-terminal plugin for Limpet. Wraps wq#4395's remote-cli
-(a pure-Python shared-PTY tool, Unix socket IPC, no tmux/screen dependency)
-as an MCP server so an agent and Frank can drive and observe the same
-terminal session — no more copy-paste/screenshot round trips for bench RE
-work.
+First-party shared-terminal plugin for Limpet. Wraps the tmux-backed
+`shared-terminal` CLI (lumen-bin PR #262) as an MCP server so an agent and
+Frank can drive and observe the same terminal session — no more
+copy-paste/screenshot round trips for bench RE work.
+
+History: wq#4395/wq#4396 built this on remote-cli, a custom shared-PTY daemon
+with a Unix-socket JSON protocol. wq#4419 retired remote-cli — its attach
+showed a blank screen until a key was pressed, it was pinned to 24x80 with no
+resize/detach, and its VT100 subset could not render picocom/mtkclient/adb
+output faithfully — and retargeted this plugin at shared-terminal, which gets
+all of that from tmux (design: scratch/research/shared-terminal-solution.md).
 
 ## Tools
 
 | Tool | Energize | Description |
 |---|---|---|
-| `snapshot` | No | Read the current screen state |
-| `logs` | No | Read scrollback |
-| `send` | **Yes** | Type raw keystrokes into the shared session |
-| `exec` | **Yes** | Run a command in the shared session and wait for its exit code |
+| `snapshot` | No | Current visible screen (what an attached human sees); `--ansi` optional |
+| `scrollback` | No | Last N lines of history (default 200), or all |
+| `list` | No | Active shared sessions |
+| `status` | No | Session metadata: size, clients, running command, cwd, log path |
+| `wait` | No | Block until the screen matches a regex, or timeout |
+| `send` | **Yes** | Type text or tmux key names into the shared session |
+| `start` | **Yes** | Create a detached session, optionally running a command |
 
-`snapshot`/`logs` are pure reads of what's already on screen. `send`/`exec`
-both mutate a PTY a human may be watching live, so both go through
-Sentinel's energize-confirm gate — see `mcp/server.py`'s module docstring
-for why `exec` is gated even though the wq#4396 ticket text only named
-`send` explicitly.
+The read-only five never write to the session (`wait` only polls
+capture-pane). `send` and `start` both mutate a terminal a human may be
+watching live, so both go through Sentinel's energize-confirm gate.
 
-## Wire protocol
+There is no `exec` tool any more: the old remote-cli wrapper synthesized
+run-and-wait-for-exit-code with printf marker lines because the daemon had no
+such primitive. With tmux the composition is explicit and honest instead:
+`send` the command, then `wait` for a prompt or output regex, then `snapshot`
+or `scrollback` to read the result.
 
-`mcp/server.py` is this plugin's own MCP stdio server (remote-cli is not
-itself an MCP server). Each tool call opens a fresh connection to
-`/run/remote-cli/shared.sock` (override with `REMOTE_CLI_SOCKET_PATH`),
-writes one JSON line, reads one JSON line back, and disconnects.
+## How it talks to the backend
 
-The top-level request key is `cmd`, and remote-cli implements exactly five
-commands (`remote-cli:271-292`):
+`mcp/server.py` is this plugin's own MCP stdio server. Each tool call shells
+out to the shared-terminal CLI (default `/home/lumen/bin/shared-terminal`,
+override with `SHARED_TERMINAL_BIN`), which owns all tmux interaction: socket
+naming (`tmux -L shared`, override `SHARED_TERMINAL_SOCKET`), transcript
+logging (`SHARED_TERMINAL_LOGS`), and capture semantics. The CLI surface is
+unchanged by this plugin; a human at a shell and this server run the exact
+same commands.
 
-| Request | Reply |
-|---|---|
-| `{"cmd": "snapshot"}` | `ok`, `screen`, `rows`, `cols` |
-| `{"cmd": "scrollback", "lines": 200}` | `ok`, `text` |
-| `{"cmd": "send_keys", "text": "...", "enter": false}` | `ok` |
-| `{"cmd": "resize", "rows": 40, "cols": 120}` | `ok` |
-| `{"cmd": "status"}` | `ok`, `status` |
+Text sent with `send` goes through the CLI's `--no-enter` form plus an
+explicit `--key Enter`, so text beginning with `--` is never parsed as a
+flag.
 
-The MCP tool names above are this plugin's API; they are not the wire command
-names. `snapshot` → `snapshot`, `logs` → `scrollback`, `send` → `send_keys`.
+## Health
 
-`tests/fixtures/remote_cli_protocol.json` is the committed copy of that
-contract, and `tests/test_server.py` asserts the wrapper never puts anything
-else on the wire. wq#4398 added both after wq#4397 found the first cut sending
-`{"op": ...}` with invented command names — every tool got back
-`{"ok": false, "error": "unknown cmd None"}` from the real daemon while the
-original suite stayed 8/8 green, because its fake dispatched on the same
-invented key.
-
-### `exec` is synthesized, not a remote-cli command
-
-remote-cli has no synchronous run-and-wait-for-exit-code primitive: it owns a
-PTY a human may be attached to, so the only way to run something *in that
-session* is to type it. `exec` therefore types one line — a start marker, the
-command handed to `eval`, and a unique completion marker carrying `$?` — then
-polls `scrollback` until the completion marker appears and returns what lies
-between the two markers. Consequences worth knowing before you use it:
-
-- the shared session must be a POSIX shell at a prompt. If a human left it in
-  `vim`/`less`/a REPL, `exec` types into *that* and returns a timeout.
-- `timeout` is the real wall-clock budget for the whole run, honored across
-  every poll (the first cut ignored it and capped every call at 5s).
-- `output` is carved out of raw scrollback, so it keeps the PTY's `\r\n` and
-  any escape sequences the command emitted.
-- the command runs under `eval`, so it is parsed as a script fragment, not
-  typed line by line: embedded newlines run as successive lines and all of
-  their output comes back, but history expansion (`!!`) does not happen and a
-  syntax error is reported against `eval`'s line.
-- `warning` appears in the result when the start marker had already aged out
-  of the daemon's scrollback cap — i.e. `output` may be missing the command's
-  first lines, rather than that being silent.
-
-Why two markers rather than keying off the shell's echo of the typed line
-(wq#4405): a shared PTY does not guarantee that echo exists (`stty -echo`, a
-password prompt) or that there is one of it. Keying off it returned ok:true
-with a correct `exit_code` and the wrong `output` — the last line only for a
-multi-line command, a stale prompt string for a session with echo off.
-
-This lives client-side on purpose: remote-cli is already deployed fleet-wide
-(Lumen, Maksoor) and keeps its minimal five-command protocol.
+The shared tmux server's socket lives at `/tmp/tmux-$(id -u)/shared`;
+`health.sh` (and the manifest's `[health] check`) test for it.
 
 ## Tests
 
@@ -88,9 +59,10 @@ This lives client-side on purpose: remote-cli is already deployed fleet-wide
 python3 -m pytest tests/test_server.py -q
 ```
 
-The live layer spawns the real `remote-cli` binary (`REMOTE_CLI_BIN`, default
-`/home/lumen/bin/remote-cli`) over a real PTY and skips if it is absent.
+The live layer spawns a real tmux session through the real shared-terminal
+CLI on an isolated tmux server socket (never the fleet's `shared` socket) and
+skips if tmux or the CLI is absent.
 
 ## License
 
-MIT (this wrapper). remote-cli's own license is whatever wq#4395 installs.
+MIT (this wrapper). shared-terminal itself lives in lumen-bin.
