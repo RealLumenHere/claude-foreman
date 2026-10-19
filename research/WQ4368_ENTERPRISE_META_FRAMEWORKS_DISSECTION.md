@@ -205,8 +205,10 @@ obligations.py` (an unanswered-question ledger gating "done"), `limpet/critic.py
 propose/critic/adjudicate pass before a finding commits), and the energize-confirm
 boundary (an unconditional hardware-action stop, §4) are each a bespoke module wired into
 the investigation loop by hand. None of MAF's four building blocks — todo tracking,
-plan/execute mode, tool approval, background-agent fan-out — exist in Limpet today, and
-three of the four map onto work Limpet's design doc already calls "deferred" or "future":
+plan/execute mode, tool approval, background-agent fan-out — exist in Limpet today.
+`design/wq3806_limpet_architecture.md` never mentions any of the four by name, so each is
+assessed below on its own merits rather than against a design-doc deferral it doesn't
+actually contain:
 
 - **Todo tracking** is the closest overlap, and Limpet's version is *stronger* in one
   specific way MAF's isn't: `obligations.py`'s ledger is a hard gate (`obligations
@@ -287,8 +289,9 @@ exported evidence bundle, or a report shared outside the workspace.
    (`limpet/sanitize.py:80`, `_sanitize_tree`) is not an ALARM event (no rotation ticket —
    it isn't Lumen's secret) — it is redacted into the quarantine file the same way an
    injection-phrasing hit already is (`_quarantine_entry`, line 76), with a `layer` tag of
-   `"credential"` alongside the existing `"injection"` tag, so the ledger distinguishes the
-   two without a second file format.
+   `"credential"` alongside the existing `"strong"`/`"cue"` tags (`injection.py`'s
+   `LAYER_STRONG`/`LAYER_CUE`), so the ledger distinguishes the three without a second file
+   format.
 3. **Preventive, not post-hoc — this is the one place NemoClaw's Memory Secret Scanner
    and OpenShell's credential-blind gateway are the closer model than Lumen's own
    `masking.py`.** Because `sanitize_workspace` already runs *before* the first agent read
