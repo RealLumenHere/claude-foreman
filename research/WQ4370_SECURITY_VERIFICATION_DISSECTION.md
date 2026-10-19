@@ -137,15 +137,19 @@ are wrapped transparently inside a container.
   high but not complete — roughly one in five auto-generated manifests needs a human
   correction before it's trustworthy as a security boundary.
 - **The ticket's "user confirmation layered on manifest, prevents malicious manifest
-  escalation" claim is not literally in the paper.** The paper describes MCP's standard
-  Host role as the thing that "enforce[s] security and consent policies" (generic MCP
-  architecture, not an AgentBox-specific feature), and discusses manifest *correctness*
-  (auto-generation accuracy) rather than manifest *tamper/escalation* detection — no
-  signature, hash, or integrity-check mechanism for the manifest file itself is described.
-  Treat "prevents malicious manifest escalation" as the ticket's own gloss on "the
-  enforcement layer is independent of what the manifest claims," not a cited AgentBox
-  feature — if Limpet wants tamper-resistance, that's a gap to design for, not a thing
-  to assume AgentBox already closed.
+  escalation" claim is in the paper, as AgentBound's own design.** §3.1 describes each
+  generic manifest capability being instantiated into a concrete runtime permission that
+  triggers a user consent dialog, and the policy enforcement engine "aborts the execution"
+  if an agent requests a runtime permission not covered by the manifest. §3.2 states the
+  same guarantee directly: a server "can only access resources explicitly granted by both
+  its manifest and the user." So AgentBox does layer per-run user consent on top of the
+  manifest-declared capabilities, and it does cap escalation beyond what the manifest
+  declares. What the paper does *not* describe is any protection for the manifest file
+  itself — no signature, hash, or integrity-check mechanism — and its own security
+  evaluation never tested an attacker-written manifest (the 10 malicious-server manifests
+  in §4.2.1 were written by hand by the evaluators, not by an adversary). If Limpet wants
+  manifest-tamper resistance, that's still a gap to design for, not a thing AgentBox
+  already closed.
 
 ## 4. GBase Lifeline — pre-mutation git snapshot
 
