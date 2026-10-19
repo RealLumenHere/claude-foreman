@@ -14,9 +14,11 @@ command is one `{"execute": ..., "arguments": ...}` line in, one or more
 or `{"error": ...}` line out. See QEMU's qemu-qmp-ref.
 
 Launch flags (boot()) and the serial-as-tie-breaker rationale follow
-projects/limpet/docs/iso-test-pipeline.md section 3: `-vnc :N,share=allowed`
-lets a human VNC viewer and this client's screenshot/type calls attach to the
-one display concurrently; `-serial file:...` is the tailable log qemu_serial/
+projects/limpet/docs/iso-test-pipeline.md section 3: `-vnc :N,share=force-shared`
+means a human VNC viewer attached to the display is never evicted (this
+client's own screenshot/type calls ride the separate QMP socket, not VNC, so
+they never contend for the display at all — only another VNC client could);
+`-serial file:...` is the tailable log qemu_serial/
 qemu_wait_serial read from, kept as a plain file (not yet the chardev/socket
 upgrade iso-test-pipeline.md section 6 describes for the follow-on interactive
 pipeline) so it stays byte-compatible with the existing
@@ -163,7 +165,7 @@ class QMPClient:
             "-cdrom", str(iso),
             "-boot", "d",
             "-no-reboot",
-            "-vnc", f":{vnc_display},share=allowed",
+            "-vnc", f":{vnc_display},share=force-shared",
             "-serial", f"file:{serial_log}",
             "-qmp", f"unix:{qmp_sock},server=on,wait=off",
             "-display", "none",

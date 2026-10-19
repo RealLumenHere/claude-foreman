@@ -98,12 +98,28 @@ def _handle(conn: socket.socket, keys_log_path: Path) -> None:
                     return
 
 
+_VALID_VNC_SHARE = {"allow-exclusive", "force-shared", "ignore"}
+
+
+def _vnc_share_value(vnc_arg: str) -> str | None:
+    for token in vnc_arg.split(",")[1:]:
+        if token.startswith("share="):
+            return token[len("share="):]
+    return None
+
+
 def main(argv: list[str]) -> int:
     qmp_arg = _parse_arg(argv, "-qmp")
     serial_arg = _parse_arg(argv, "-serial")
+    vnc_arg = _parse_arg(argv, "-vnc")
     if not qmp_arg or not qmp_arg.startswith("unix:"):
         print("fake qemu: expected -qmp unix:PATH,...", file=sys.stderr)
         return 1
+    if vnc_arg is not None:
+        share = _vnc_share_value(vnc_arg)
+        if share is not None and share not in _VALID_VNC_SHARE:
+            print(f"qemu-system-x86_64: -vnc {vnc_arg}: unknown vnc share= option", file=sys.stderr)
+            return 1
     sock_path = Path(qmp_arg[len("unix:"):].split(",", 1)[0])
     if serial_arg and serial_arg.startswith("file:"):
         Path(serial_arg[len("file:"):]).write_text(SERIAL_TRANSCRIPT)

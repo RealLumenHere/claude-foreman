@@ -5,10 +5,12 @@ ISO, capture the framebuffer, read/wait-on the serial console, and send
 keystrokes — built for Limpet ISO install/boot testing per
 `projects/limpet/docs/iso-test-pipeline.md` (the wq#4417 design this ticket
 implements; see its section 11, which lists "`qemu-mcp` server itself" as
-the one open, not-yet-built component). Combined with the shared VNC display
-`qemu_boot` opens (`-vnc :N,share=allowed`), Frank can watch the same VM in
-an ordinary VNC viewer while the agent drives it through this server — the
-VM does not know or care how many observers are attached.
+the one open, not-yet-built component). The agent drives the VM entirely
+over the QMP socket `qemu_boot` opens, never over VNC, so the separate
+shared VNC display `qemu_boot` also opens (`-vnc :N,share=force-shared`)
+is purely for Frank: he can watch the same VM in an ordinary VNC viewer at
+the same time without being evicted, whether or not his viewer asks for a
+shared session.
 
 The serial console is the key win the ticket calls out: `qemu_serial` /
 `qemu_wait_serial` read the guest's first serial port, which keeps printing
@@ -67,7 +69,7 @@ dependency.
 
 | Tool | Maps to |
 |---|---|
-| `qemu_boot(iso_path, run_dir, memory_mb, smp, machine, vnc_display)` | launches `qemu-system-x86_64 -cdrom … -vnc :N,share=allowed -serial file:… -qmp unix:…,server=on,wait=off -display none -no-reboot`, opens the QMP socket |
+| `qemu_boot(iso_path, run_dir, memory_mb, smp, machine, vnc_display)` | launches `qemu-system-x86_64 -cdrom … -vnc :N,share=force-shared -serial file:… -qmp unix:…,server=on,wait=off -display none -no-reboot`, opens the QMP socket |
 | `qemu_screenshot(out_path, image_format)` | QMP `screendump` — guest framebuffer to a PNG file |
 | `qemu_serial(max_chars?)` | tails `run_dir/serial.log` since the last read — never re-reads |
 | `qemu_wait_serial(pattern, timeout_s, regex?)` | polls the serial tail until `pattern` appears or the timeout elapses |

@@ -18,6 +18,7 @@ pattern that is, so that branch can fail too.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -54,6 +55,33 @@ def test_boot_quit_lifecycle(client, iso, tmp_path):
     out = client.quit()
     assert "stopped" in out
     assert not client.connected
+
+
+def test_fake_qemu_rejects_invalid_vnc_share_mode(tmp_path):
+    """wq#4421: boot() shipped with `share=allowed`, which isn't a real QEMU
+    `-vnc` share= value (only allow-exclusive/force-shared/ignore exist) —
+    every real qemu_boot call failed at argv-parse time despite 14/14 tests
+    passing, because fake_qemu.py never validated -vnc at all. fake_qemu.py
+    now rejects an invalid share= value the same way real qemu-system-x86_64
+    does (confirmed against the installed binary during the wq#4421
+    verify-pass), so a regression back to an invalid value fails this suite
+    instead of silently passing it."""
+    qmp_sock = tmp_path / "qmp.sock"
+    result = subprocess.run(
+        [sys.executable, FAKE_QEMU, "-qmp", f"unix:{qmp_sock}", "-vnc", ":9,share=allowed"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 1
+    assert "unknown vnc share= option" in result.stderr
+
+
+def test_boot_passes_a_valid_vnc_share_mode(client, iso, tmp_path):
+    """The flip side of the regression above: boot()'s own argv must use a
+    share= value fake_qemu.py (and real QEMU) actually accepts."""
+    info = client.boot(str(iso), str(tmp_path / "run"))
+    assert info["pid"] > 0
 
 
 def test_boot_rejects_missing_iso(client, tmp_path):

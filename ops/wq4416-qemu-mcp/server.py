@@ -4,10 +4,12 @@
 Gives an agent eyes (qemu_screenshot for the guest framebuffer; qemu_serial /
 qemu_wait_serial for the serial console — the sensor that still sees boot
 errors when the framebuffer is still black) and hands (qemu_type, plus
-qemu_boot/qemu_quit for session lifecycle) on one QEMU VM, while the VM's own
-`-vnc :N,share=allowed` flag (set by qemu_boot) lets Frank attach an ordinary
-VNC viewer to the same display at the same time — neither observer evicts the
-other. Built for Limpet ISO install/boot testing per
+qemu_boot/qemu_quit for session lifecycle) on one QEMU VM over its QMP
+socket, while the VM's own `-vnc :N,share=force-shared` flag (set by
+qemu_boot) lets Frank attach an ordinary VNC viewer to the same display at
+the same time without ever being evicted — the agent's own screenshot/type
+calls ride QMP, not VNC, so they never contend with Frank's viewer for the
+display. Built for Limpet ISO install/boot testing per
 projects/limpet/docs/iso-test-pipeline.md (wq#4417 design, sections 3-4);
 this ticket is the "new component" that design's open items (section 11)
 calls out as not yet existing.

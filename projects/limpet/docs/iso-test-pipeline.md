@@ -46,8 +46,8 @@ The QEMU primitives both of them stand on are the ones we use directly:
   PPM/PNG file. This is the screenshot sensor.
 - **`send-key`** (QMP) — inject a list of `QKeyCode`s as a single chord. This is the
   keystroke actuator. (`sendkey` is the HMP spelling.)
-- **`-vnc <display>,share=allowed`** — let more than one viewer attach to the same display
-  (QEMU VNC shared-flag semantics, `interop/qemu-qmp-ref.html`).
+- **`-vnc <display>,share=force-shared`** — let more than one viewer attach to the same
+  display without any of them evicting another (QEMU VNC share-mode semantics; see §3).
 - **`-serial`** — route the guest serial port to a host sink (file, pty, TCP, unix socket).
 
 **Where we diverge from openQA.** openQA classifies screens by *pixel needle matching* —
@@ -69,7 +69,7 @@ the agent's visual guess, never the other way around.
 qemu-system-x86_64 \
   -machine q35 -m 4096 -smp 2 \
   -cdrom "$ISO" -boot d -no-reboot \
-  -vnc :1,share=allowed \
+  -vnc :1,share=force-shared \
   -serial file:/tmp/limpet-iso-test/serial.log \
   -qmp unix:/tmp/limpet-iso-test/qmp.sock,server=on,wait=off \
   -display none
@@ -77,11 +77,20 @@ qemu-system-x86_64 \
 
 Line by line, and why each is load-bearing:
 
-- **`-vnc :1,share=allowed`** → VNC on host port **5901** (`:1` = 5900+1). `share=allowed`
-  is the shared-mode flag: Frank's viewer and the agent's framebuffer grabber attach to
-  the one display concurrently, neither evicting the other. (`share=force-shared` is the
-  harder guarantee if a client ever negotiates exclusive; `allowed` is the default-friendly
-  choice and what the ticket's `shared` maps to.)
+- **`-vnc :1,share=force-shared`** → VNC on host port **5901** (`:1` = 5900+1). QEMU's
+  `-vnc` share mode is a three-value enum — `allow-exclusive` (the default, lets any
+  client that doesn't ask for a shared session evict every other viewer),
+  `force-shared` (no client can ever get exclusive access, regardless of what it
+  requests), or `ignore` (non-conforming to the RFB spec). `force-shared` is the only
+  one of the three that guarantees Frank's viewer is never evicted without requiring
+  his viewer to opt in with `-shared`; `allow-exclusive` would leave that to however
+  Frank's VNC client happens to be configured. (There is no `allowed` or bare `shared`
+  value — the ticket's own `-vnc :1,shared` shorthand is likewise invalid; both were
+  caught as a shipped-code defect by wq#4421's verify-pass, since real QEMU rejects
+  `share=allowed` at argv-parse time and every real `qemu_boot` call failed as a
+  result.) The agent itself never attaches over VNC — its screenshot/keystroke calls
+  ride the separate QMP socket below — so `share=` only governs Frank's viewer versus
+  any other VNC client, never the agent.
 - **`-serial file:/tmp/limpet-iso-test/serial.log`** → the guest's first serial port is
   appended to a host file the agent tails. This keeps parity with the existing
   `stage12_qemu_test` serial contract so the same boot markers (`login:`) still mean the
