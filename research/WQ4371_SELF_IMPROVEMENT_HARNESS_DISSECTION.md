@@ -165,17 +165,43 @@ tag/v0.6.1` and the author's own closing attribution line, `@garyqlin` / `📦 G
 
 ---
 
-## 3. Dify / Sim — a reference pointer the ticket names but this repo hasn't dissected yet
+## 3. Dify / Sim — erratum (wq4389 forward-fix of wq4388's judgment pass)
 
-The ticket states this reference pattern is "already covered in prior tickets." That claim
-does not hold up against this repo's own history: `grep -rn -i "dify\|Sim Studio\|workflow-
-as-mcp" research/ design/` across every WQ43xx/WQ44xx dissection (`WQ4356`, `WQ4357`,
-`WQ4358`, `WQ4361`, `WQ4362`, `WQ4364`, `WQ4367`, `WQ4368`, `WQ4369`, `WQ4370`) returns zero
-substantive hits — one false-positive grep match on "modify," and a single passing mention
-of Dify as a container in `research/FLEET_SERVICE_ATLAS.md:86`'s inventory list (Open WebUI,
-LibreChat, Dify named as chat/agent-interface containers already running on the fleet, no
-architectural discussion). Recording this honestly rather than citing a dissection that does
-not exist (ISSUE-LOG-worthy if a future ticket is dispatched believing this is covered):
+**Erratum 1 — citation fix.** The original text below cited `research/FLEET_SERVICE_ATLAS.md:86`
+and attributed "Open WebUI" to the fleet's container inventory. Both are wrong: line 86 of
+that file is unrelated (`L3 ingress/control` territory, not the container row), and the line
+actually carrying a Dify/Open WebUI mention at that offset belongs to a *different* file —
+`research/DIGEST_Fleet_Monitoring_2_md.md:86`, an R19 requirement note ("Open WebUI as the
+conversational interface to LiteLLM" — **HAVE**, satisfied via other interfaces: `chat`,
+`claude`, `ask`, …, plus LibreChat and Dify in the container set, per that note's own
+cross-reference to `FLEET_SERVICE_ATLAS.md:34`). Open WebUI is a *requirement marked HAVE*,
+not itself a running container. The actual fleet container inventory lives at
+`research/FLEET_SERVICE_ATLAS.md:35` (the `L2 containers (docker)` row), which lists
+`librechat` and `dify (11 ctrs)` — **no Open WebUI**. Corrected: only LibreChat and Dify run
+as fleet containers; Open WebUI is not one.
+
+**Erratum 2 — "hasn't dissected yet" is stale.** The paragraph below also claimed this repo
+had "zero substantive hits" on Dify/Sim. That was true when this ticket's branch was cut
+(05:10:25) but false by the time it merged (05:21:04): `research/WQ4365_VISUAL_WORKFLOW_BUILDERS_DISSECTION.md`
+(commit `6849c305`, landed 2026-10-19 05:12:02) is a full 167-line Dify+Sim architectural
+dissection, and `git merge-base --is-ancestor 6849c305 3ff18e88` confirms it is an ancestor of
+this doc's own merge commit — a concurrent-ticket race, not a research gap. Its §4
+("Decision") holds the actual conclusion; treat that doc, not the paragraph below, as the
+live Dify/Sim dissection.
+
+The paragraph below is left as originally written (minus the corrected citation) for
+historical trace; the two erratum notes above are the forward-fix (wq4389, per
+`reports/4388_judgment_wq4371_fleet_atlas_citation.md`).
+
+The ticket states this reference pattern is "already covered in prior tickets." At the time
+this section was authored, that claim did not hold up against this repo's own history:
+`grep -rn -i "dify\|Sim Studio\|workflow-as-mcp" research/ design/` across every WQ43xx/WQ44xx
+dissection found at that point (`WQ4356`, `WQ4357`, `WQ4358`, `WQ4361`, `WQ4362`, `WQ4364`,
+`WQ4367`, `WQ4368`, `WQ4369`, `WQ4370`) returned zero substantive hits — one false-positive
+grep match on "modify," and a single passing mention of Dify in
+`research/FLEET_SERVICE_ATLAS.md:35`'s container-inventory row (`librechat`, `dify (11 ctrs)`
+— no Open WebUI), no architectural discussion. Recording this honestly rather than citing a
+dissection that did not yet exist at authoring time:
 
 - **Dify** (`dify.ai`, `github.com/langgenius/dify`) is real and current: "the platform for
   production-ready agentic workflows. Build agents, knowledge pipelines, models, and tools
@@ -192,9 +218,9 @@ not exist (ISSUE-LOG-worthy if a future ticket is dispatched believing this is c
   ("Deploy a workflow to make it available through an API, a chat interface, or an MCP
   server").
 
-If a future ticket wants an actual dissection of either against Limpet's shape (Limpet has
-no visual-canvas user and no workflow-export need today — it is a single operator-driven
-investigation loop, §6), it should be dispatched as new research, not assumed covered.
+**Update (wq4389 erratum):** as of this doc's own merge commit, a dissection against Limpet's
+shape already exists — `research/WQ4365_VISUAL_WORKFLOW_BUILDERS_DISSECTION.md` §4. Consult
+that doc's Decision section before dispatching any new Dify/Sim-vs-Limpet research.
 
 ---
 
