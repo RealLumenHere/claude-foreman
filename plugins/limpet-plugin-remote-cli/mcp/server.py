@@ -155,7 +155,7 @@ def tool_serial_console_open(dev: Optional[str] = None, session: Optional[str] =
     if not dev and (session is not None or baud is not None):
         return {"ok": False, "error": "serial_console_open: session/baud need dev given too "
                                        "(CLI positional order: open [dev] [name] [baud])"}
-    if session is None and baud is not None:
+    if not session and baud is not None:
         return {"ok": False, "error": "serial_console_open: baud needs session given too "
                                        "(CLI positional order: open [dev] [name] [baud])"}
     args = ["open"]
