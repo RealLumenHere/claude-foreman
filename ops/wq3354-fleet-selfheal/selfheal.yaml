@@ -134,6 +134,21 @@ nodes:                  # CLASS 6
        when up). Leaving this as a live page, not nodes.ignore/sleepers: a second occurrence
        with no Frank RE-session explanation would be the evidence to revisit, same precedent
        be3600 and maksoor were classified under."
+    sia: "wq#4437: offline on tailscale since 2026-10-20T02:20:00Z (30+ min). lumen_state's
+       sia.status='HEALTHY' (docker containers up 12h+, Miniflux news pipeline + PG17) and
+       sia.provision_status='COMPLETE' are both dated 2026-07-10/11 -- over 3 months stale,
+       and every sia.* fact including power_plug=P8 (since 2026-07-16) is flagged
+       [UNVERIFIABLE -- no probe]. No power_policy/auto_sleep fact like hathor's and no
+       Frank off-decision like apis/pbox/seshat/be3600/3dprinter -- nothing on record
+       marks sia as meant to be off or as self-idling. A live reprobe attempted this
+       ticket (`fleet-exec run sia uptime`) returned DENY grant:grant_missing_env -- a
+       BUILD-lane exec-grant gap already logged (ISSUE-LOG #192: policy/classification
+       tickets get no run/copy grant unless dispatched with needs:run/copy), not fleet
+       evidence either way per CLAUDE.md instinct 8. On the facts actually on record this
+       is a live, always-on fleet node (Miniflux/PG17 news pipeline), held to the same bar
+       rt-ax86u and neith were -- one unexplained outage with no ignore/sleepers-qualifying
+       fact behind it stays a real page, not nodes.ignore/sleepers. This note just carries
+       the context so the next page on sia doesn't re-derive it."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
