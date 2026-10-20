@@ -108,6 +108,21 @@ nodes:                  # CLASS 6
                                    # outage ticket, keyed by lumen_state node name —
                                    # NOT a silencer like ignore above, the page still fires
     hathor: "every hathor wake is a COLD BOOT (WoL tested and FAILED 2026-10-08; the working path is a plug p3 power-cycle, ~115s), and a cold boot can leave tailscaled 'network down' -- observed on hathor 2026-10-08, fixed by `sudo systemctl restart tailscaled`. wake-dispatch.sh:96-98 detects it but only LOGS a warning, it does not remediate (wq#3685). So: hathor dark on tailscale while powered off is its auto-sleep nap (nodes.sleepers suppresses it); hathor dark on tailscale while answering ping on 192.168.8.172 is that boot race -- restart tailscaled on hathor, and see wq#3702 for why this is notes+sleepers and not nodes.ignore."
+    isis: "wq#4448 (2026-10-20): isis hard-off since 2026-10-19 ~21:28-21:30Z -- went dark
+       within a minute of khepri (nephthys lost power the same evening), recovery tracked as
+       wq#4420 [frank_gated PHYSICAL]. Remote power recovery does NOT work for isis even
+       though plug p1 is remotely controllable: wq#4420 plug-cycled p1 at ~22:23Z, relay ON
+       restored but the Mac Pro 6,1 does NOT boot after AC loss -- it needs the physical
+       power button (same cold-boot-only class as hathor above, but isis has no WoL path
+       recorded either). At the wq#4448 sweep, plug p1 (192.168.8.118) itself also stopped
+       answering kasa discovery (10s timeout; confirmed 2026-10-20 from lumen: TCP:80
+       connect to .118 fails while gateway .8.1 and plug p11 .115 answer), so even the
+       plug-state read can be dark during this outage. isis is the Frank-policy WARM
+       STANDBY local LLM (power_policy 2026-09-18, qwen3.6:35b-a3b = LiteLLM lumen/code +
+       qwen36-local): never nodes.ignore/sleepers -- a dark isis is always a real page.
+       This note carries the no-auto-boot + wq#4420 context so the next page doesn't
+       re-derive it or burn another futile plug-cycle; once Frank presses the button,
+       wq#4289 (aider e2e) unblocks."
     neith: "wq#4062: neith is the Commander SECOND STANDBY backend (mcpw pool position 2
        behind horus, per research/fleet_hardware.json) -- status=SERVING was observed
        2026-10-07 01:56Z when a Commander MCP call landed on neith during a pool failover
