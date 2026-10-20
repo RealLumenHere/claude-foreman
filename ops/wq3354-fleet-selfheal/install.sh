@@ -22,16 +22,36 @@
 #   /home/lumen/agents/fleet-selfheal/selfheal.yaml (no restart needed; read every sweep).
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
-DEST=/home/lumen/agents/fleet-selfheal
+# SELFHEAL_DEST override exists so tests can point --verify at a fixture tree
+# (wq#4445: a verify that can only look at the real live dir can never be
+# tested to failure).
+DEST="${SELFHEAL_DEST:-/home/lumen/agents/fleet-selfheal}"
 UNITS=(lumen-fleet-selfheal.service lumen-fleet-selfheal.timer lumen-leakwatch.service
        lumen-exposure-census.service lumen-exposure-census.timer)
 CODE=(selfheal_common.py selfheal_sweep.py sh_guards.py sh_crashloop.py sh_disk.py
-      sh_providers.py sh_nodes.py sh_ollama.py leakwatch.py exposure_census.py)
+      sh_providers.py sh_nodes.py sh_ollama.py leakwatch.py exposure_census.py
+      selfheal_merge.py)
 
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   for f in "${CODE[@]}"; do vfile "$SRC/$f" "$DEST/$f"; done
-  [ -e "$DEST/selfheal.yaml" ] || _vmiss "absent: $DEST/selfheal.yaml"
+  # wq#4445: presence alone was a false green — seed keys added after first
+  # deploy never reached the operator copy. Fail on any seed key path (and
+  # nodes.ignore/sleepers membership) missing live; live-only keys stay INFO.
+  if [ -e "$DEST/selfheal.yaml" ]; then
+    rc=0
+    out="$(python3 "$SRC/selfheal_merge.py" --check \
+             --seed "$SRC/selfheal.yaml" --live "$DEST/selfheal.yaml" 2>&1)" || rc=$?
+    [ -z "$out" ] || echo "$out"
+    if [ "$rc" = 1 ]; then
+      n="$(printf '%s\n' "$out" | grep -c '^MISS ')" || true
+      _V_MISS=$((_V_MISS + ${n:-1}))
+    elif [ "$rc" != 0 ]; then
+      echo "ERR selfheal_merge.py --check rc=$rc"; _V_ERR=1
+    fi
+  else
+    _vmiss "absent: $DEST/selfheal.yaml"
+  fi
   for u in "${UNITS[@]}"; do vunit_file "$SRC/$u" "/etc/systemd/system/$u"; done
   venabled lumen-fleet-selfheal.timer
   vactive  lumen-fleet-selfheal.timer
@@ -49,8 +69,15 @@ python3 -m pytest -q "$SRC/tests" >/dev/null 2>&1 \
 
 install -d -o lumen -g lumen -m 0755 "$DEST"
 for f in "${CODE[@]}"; do install -o lumen -g lumen -m 0755 "$SRC/$f" "$DEST/$f"; done
-# The live config is the operator's to edit; never clobber it.
-[ -e "$DEST/selfheal.yaml" ] || install -o lumen -g lumen -m 0644 "$SRC/selfheal.yaml" "$DEST/selfheal.yaml"
+# The live config is the operator's to edit; never clobber it. wq#4445: but DO
+# merge NEW seed keys in (never overwriting existing ones — operator wins on
+# values): the script backs up, keeps comments, validates before replacing.
+if [ -e "$DEST/selfheal.yaml" ]; then
+  runuser -u lumen -- python3 "$SRC/selfheal_merge.py" \
+    --seed "$SRC/selfheal.yaml" --live "$DEST/selfheal.yaml"
+else
+  install -o lumen -g lumen -m 0644 "$SRC/selfheal.yaml" "$DEST/selfheal.yaml"
+fi
 for u in "${UNITS[@]}"; do install -m 0644 "$SRC/$u" "/etc/systemd/system/$u"; done
 systemctl daemon-reload
 
