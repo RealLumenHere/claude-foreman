@@ -270,6 +270,14 @@ def test_serial_console_open_baud_without_session_is_rejected(monkeypatch):
     assert result["ok"] is False and not calls
 
 
+def test_serial_console_open_empty_string_dev_is_rejected(monkeypatch):
+    """dev='' is not dev=None, but it carries no real device either; session/baud
+    must not be silently dropped for it the way truthiness-gated arg-building would."""
+    calls = _record_serial_runs(monkeypatch)
+    result = server.tool_serial_console_open(dev="", session="c130", baud=9600)
+    assert result["ok"] is False and not calls
+
+
 def test_serial_console_catch_default_mode_is_enter(monkeypatch):
     calls = _record_serial_runs(monkeypatch)
     server.tool_serial_console_catch("c130", "login:")

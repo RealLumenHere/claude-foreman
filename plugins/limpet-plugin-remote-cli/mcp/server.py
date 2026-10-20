@@ -152,7 +152,7 @@ def tool_serial_console_open(dev: Optional[str] = None, session: Optional[str] =
     The CLI takes dev/session/baud positionally (`open [dev] [name] [baud]`), so
     naming a session or baud without a device would silently shift onto the
     wrong positional slot; reject that combination instead of guessing."""
-    if dev is None and (session is not None or baud is not None):
+    if not dev and (session is not None or baud is not None):
         return {"ok": False, "error": "serial_console_open: session/baud need dev given too "
                                        "(CLI positional order: open [dev] [name] [baud])"}
     if session is None and baud is not None:
