@@ -47,6 +47,30 @@ are new surface:
                            `wait`, but through serial-console's own subcommand
                            (no key spam).
 
+wq#4443 adds three combined-verb tools matching re-term (lumen-bin, horus-local
+until this ticket, sha 5440810c; usage: scratch/research/re-term-usage.md),
+the agent-side fast driver for the bench serial console that holds a
+persistent SSH ControlMaster to the RE box so a warm call is 0.04s against a
+cold 0.8s. re-term's verb set (drive/open/snap/tail/do/type/at/key/catch/
+expect/status/list/kill/close) is mostly already covered here — send/snapshot/
+scrollback/status/list/wait/serial_console_* above are drive/type+key/snap/
+tail/status/list/expect+catch under different names. Only the three verbs
+that COMBINE a read and a write in one round trip are new surface:
+  term_do    = energizing — send then snapshot in one call, so the agent sees
+               the result of its own keystrokes without a second tool round
+               trip (re-term's `do`).
+  term_at    = energizing — wait for a regex, THEN send: a guarded send that
+               never types blind into the wrong prompt (a hung boot, a stale
+               shell, output still scrolling) (re-term's `at`).
+  term_catch = energizing — same spam-until-match loop as
+               serial_console_catch, generalized past serial sessions: the
+               serial-console CLI's `catch` subcommand only requires
+               `shared-terminal status` on the name, never a picocom-owned
+               port, so this reuses it unchanged for a plain shell session.
+This gives agents the fast do/at/catch loop through MCP without hand-SSH to
+the RE box; the persistent-connection speedup itself lives in re-term's own
+ControlMaster, not in this stdio-per-call wrapper.
+
 Stdlib-only, same rationale as the rest of the first-party Limpet MCP servers
 (limpet-plugin-flashrom/mcp/server.py): unit-testable without the `mcp` SDK.
 Tool handlers never pass agent text where the CLI parses flags: literal text
@@ -276,6 +300,44 @@ def tool_wait(session: str, regex: str, timeout: float = 30.0) -> Dict[str, Any]
     return result
 
 
+def tool_term_do(session: str, text: Optional[str] = None, enter: bool = True,
+                  keys: Optional[List[str]] = None, ansi: bool = False) -> Dict[str, Any]:
+    """Send then read back the screen in one round trip — re-term's `do` verb.
+    ENERGIZING — requires energize-confirm (it types). A failed send is
+    returned as-is, without a follow-up snapshot of whatever the screen
+    happened to already show."""
+    sent = tool_send(session, text=text, enter=enter, keys=keys)
+    if not sent.get("ok"):
+        return sent
+    result = tool_snapshot(session, ansi=ansi)
+    result["sent"] = sent
+    return result
+
+
+def tool_term_at(session: str, regex: str, text: Optional[str] = None, enter: bool = True,
+                  keys: Optional[List[str]] = None, timeout: float = 30.0) -> Dict[str, Any]:
+    """Guarded send — re-term's `at` verb: wait for the screen to match `regex`
+    before typing, so a send never lands blind on the wrong prompt. ENERGIZING
+    — requires energize-confirm. A guard that never matches is returned as-is,
+    without sending anything."""
+    waited = tool_wait(session, regex, timeout=timeout)
+    if not waited.get("ok"):
+        return waited
+    sent = tool_send(session, text=text, enter=enter, keys=keys)
+    sent["waited"] = waited
+    return sent
+
+
+def tool_term_catch(session: str, regex: str, keys: Optional[List[str]] = None,
+                     hz: int = 20, secs: int = 60) -> Dict[str, Any]:
+    """Spam a key into any shared-terminal session until the screen matches
+    `regex`, or `secs` elapses — re-term's `catch` verb, generalized past
+    serial-console sessions (same CLI call as serial_console_catch; the
+    serial-console `catch` subcommand itself never requires a picocom-owned
+    port). ENERGIZING — requires energize-confirm."""
+    return tool_serial_console_catch(session, regex, keys=keys, hz=hz, secs=secs)
+
+
 TOOLS = {
     "start": {
         "description": "Create a detached shared-terminal session (optionally running a command). ENERGIZING — requires energize-confirm.",
@@ -398,6 +460,55 @@ TOOLS = {
             "required": ["session", "regex"],
         },
         "handler": tool_serial_console_expect,
+    },
+    "term_do": {
+        "description": "Send text or keys, then read back the screen in one round trip (re-term's `do` verb). ENERGIZING — requires energize-confirm.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session": {"type": "string", "description": "Session name"},
+                "text": {"type": "string", "description": "Literal text to type"},
+                "enter": {"type": "boolean", "description": "Press Enter after text (default true)", "default": True},
+                "keys": {"type": "array", "items": {"type": "string"},
+                         "description": "tmux key names instead of text: C-c, Enter, Up, Escape, F1 ..."},
+                "ansi": {"type": "boolean", "description": "Keep ANSI escape sequences in the returned screen", "default": False},
+            },
+            "required": ["session"],
+        },
+        "handler": tool_term_do,
+    },
+    "term_at": {
+        "description": "Wait for the screen to match a regex, then send text or keys — a guarded send that never types blind into the wrong prompt (re-term's `at` verb). ENERGIZING — requires energize-confirm.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session": {"type": "string", "description": "Session name"},
+                "regex": {"type": "string", "description": "POSIX extended regex to wait for before sending"},
+                "text": {"type": "string", "description": "Literal text to type once the regex matches"},
+                "enter": {"type": "boolean", "description": "Press Enter after text (default true)", "default": True},
+                "keys": {"type": "array", "items": {"type": "string"},
+                         "description": "tmux key names instead of text: C-c, Enter, Up, Escape, F1 ..."},
+                "timeout": {"type": "number", "description": "Seconds to wait for the guard regex (default 30)", "default": 30.0},
+            },
+            "required": ["session", "regex"],
+        },
+        "handler": tool_term_at,
+    },
+    "term_catch": {
+        "description": "Spam a key into any shared-terminal session until the screen matches a regex, or a timeout elapses (re-term's `catch` verb, generalized past serial-console sessions). ENERGIZING — requires energize-confirm.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session": {"type": "string", "description": "Session name"},
+                "regex": {"type": "string", "description": "POSIX extended regex to catch"},
+                "keys": {"type": "array", "items": {"type": "string"},
+                         "description": "tmux key names to send each tick instead of Enter"},
+                "hz": {"type": "integer", "description": "Key bursts per second (default 20)", "default": 20},
+                "secs": {"type": "integer", "description": "Timeout in seconds (default 60)", "default": 60},
+            },
+            "required": ["session", "regex"],
+        },
+        "handler": tool_term_catch,
     },
 }
 

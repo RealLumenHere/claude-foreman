@@ -23,7 +23,7 @@ name = "remote-cli"
 version = "0.2.0"
 manifest_version = 1
 category = "hardware-interface"
-description = "Shared terminal backend: a Frank+agent tmux session with start/send/snapshot/scrollback/wait, backed by shared-terminal (wq#4419); plus serial_console_open/catch/expect for one-port-owner UART consoles (wq#4433)."
+description = "Shared terminal backend: a Frank+agent tmux session with start/send/snapshot/scrollback/wait, backed by shared-terminal (wq#4419); plus serial_console_open/catch/expect for one-port-owner UART consoles (wq#4433) and term_do/term_at/term_catch combined-verb tools matching re-term (wq#4443)."
 license = "MIT"
 homepage = ""
 repository = ""
@@ -82,9 +82,15 @@ start = true
 serial_console_open = true
 serial_console_catch = true
 serial_console_expect = false
+# wq#4443: term_do/term_at/term_catch combine a read and a write in one call
+# (re-term's do/at/catch) — each one always ends in a send, so all three are
+# gated the same as send/serial_console_catch above.
+term_do = true
+term_at = true
+term_catch = true
 
 [agent_hints]
-summary = "Shared tmux terminal: Frank and an agent see and drive the same session. snapshot/scrollback/list/status/wait are read-only recon of what's on screen or in history; send/start mutate the live session and are energize-gated. serial_console_open/catch/expect (wq#4433) add a one-port-owner UART console on top: open starts picocom as the port's sole owner, catch spams a key through a boot window, expect polls for a regex without typing."
+summary = "Shared tmux terminal: Frank and an agent see and drive the same session. snapshot/scrollback/list/status/wait are read-only recon of what's on screen or in history; send/start mutate the live session and are energize-gated. serial_console_open/catch/expect (wq#4433) add a one-port-owner UART console on top: open starts picocom as the port's sole owner, catch spams a key through a boot window, expect polls for a regex without typing. term_do/term_at/term_catch (wq#4443) are re-term's combined do/at/catch verbs — send+snapshot, wait-then-send, and the catch loop generalized past serial sessions — so the fast agent loop re-term gave over SSH works the same way through MCP."
 when_to_use = "Bench RE work where Frank is watching a target's console/bootloader session live and wants the agent to drive or observe it without a copy-paste or screenshot round trip. serial_console_* specifically for UART/bootloader RE (U-Boot, OpenWrt failsafe, Hit-any-key/Press-f boot windows) where a second picocom/pexpect process fighting the same port for keystrokes is the exact failure this exists to prevent."
 when_not_to_use = "Not for unattended command execution against a target the agent owns outright — use a plain shell/SSH session for that. This plugin exists specifically because the terminal is SHARED with a human. serial_console_* is not for a port no one is sharing — a plain pyserial/picocom session is simpler when no human needs to watch live."
 complements = ["serial-mcp"]

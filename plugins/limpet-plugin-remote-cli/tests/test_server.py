@@ -45,7 +45,8 @@ needs_live = pytest.mark.skipif(
     reason="tmux or the shared-terminal CLI not found (set SHARED_TERMINAL_BIN)")
 
 READ_ONLY_TOOLS = ["list", "scrollback", "snapshot", "status", "wait", "serial_console_expect"]
-ENERGIZING_TOOLS = ["send", "start", "serial_console_open", "serial_console_catch"]
+ENERGIZING_TOOLS = ["send", "start", "serial_console_open", "serial_console_catch",
+                    "term_do", "term_at", "term_catch"]
 
 
 # --------------------------------------------------------------------------
@@ -329,6 +330,76 @@ def test_serial_console_run_reports_a_missing_binary_as_an_error():
     assert result["ok"] is False and "not found" in result["error"]
 
 
+# --------------------------------------------------------------------------
+# 2c. term_do / term_at / term_catch (wq#4443, re-term's combined verbs)
+# --------------------------------------------------------------------------
+
+def test_term_do_sends_then_snapshots(monkeypatch):
+    calls = _record_runs(monkeypatch)
+    result = server.tool_term_do("bench", text="ls")
+    assert calls == [["send", "bench", "--no-enter", "ls"],
+                     ["send", "bench", "--key", "Enter"],
+                     ["snapshot", "bench"]]
+    assert result["ok"] is True
+    assert result["sent"]["ok"] is True
+
+
+def test_term_do_skips_snapshot_when_send_fails(monkeypatch):
+    """A send that never reached the session must not be followed by a
+    snapshot of whatever the screen already happened to show — that would
+    look like a successful round trip when nothing was typed."""
+    calls = _record_runs(monkeypatch, result={"ok": False, "exit_code": 1, "error": "no session"})
+    result = server.tool_term_do("bench", text="ls")
+    assert result["ok"] is False
+    assert calls == [["send", "bench", "--no-enter", "ls"]]
+
+
+def test_term_do_ansi_and_keys_passthrough(monkeypatch):
+    calls = _record_runs(monkeypatch)
+    server.tool_term_do("bench", keys=["Enter"], ansi=True)
+    assert calls == [["send", "bench", "--key", "Enter"], ["snapshot", "bench", "--ansi"]]
+
+
+def test_term_at_waits_then_sends(monkeypatch):
+    calls = _record_runs(monkeypatch)
+    result = server.tool_term_at("bench", "READY", text="ls", timeout=5)
+    assert calls == [["wait", "bench", "READY", "5"],
+                     ["send", "bench", "--no-enter", "ls"],
+                     ["send", "bench", "--key", "Enter"]]
+    assert result["ok"] is True
+    assert result["waited"]["ok"] is True
+
+
+def test_term_at_skips_send_when_guard_times_out(monkeypatch):
+    """The whole point of a guarded send: a regex that never appears must
+    never be followed by a blind send into whatever is actually on screen."""
+    calls = _record_runs(monkeypatch, result={"ok": False, "exit_code": 2, "output": "",
+                                              "error": "timeout waiting for /READY/"})
+    result = server.tool_term_at("bench", "READY", text="ls")
+    assert result["ok"] is False
+    assert result.get("timed_out") is True
+    assert calls == [["wait", "bench", "READY", "30"]]
+
+
+def test_term_catch_delegates_to_serial_console_catch(monkeypatch):
+    calls = _record_serial_runs(monkeypatch)
+    server.tool_term_catch("bench", "login:", hz=10, secs=5)
+    assert calls == [["catch", "bench", "login:", "--enter", "--hz", "10", "--secs", "5"]]
+
+
+def test_term_catch_keys_mode(monkeypatch):
+    calls = _record_serial_runs(monkeypatch)
+    server.tool_term_catch("bench", "login:", keys=["Space"])
+    assert calls == [["catch", "bench", "login:", "--keys", "Space", "--hz", "20", "--secs", "60"]]
+
+
+def test_term_catch_exit_2_means_timed_out(monkeypatch):
+    _record_serial_runs(monkeypatch, result={"ok": False, "exit_code": 2, "output": "",
+                                             "error": "timeout, /login:/ not seen in 5s"})
+    result = server.tool_term_catch("bench", "login:", secs=5)
+    assert result["timed_out"] is True
+
+
 def test_fixture_matches_real_serial_console_cli_help():
     """Drift guard, mirroring test_fixture_matches_real_cli_help: if
     serial-console grows or renames subcommands, fail loudly instead of
@@ -422,6 +493,28 @@ def test_live_send_keys_interrupts_a_running_command(live):
     assert waited["ok"] is True, waited
     status = server.tool_status(live.session)
     assert status["status"]["running"] != "sleep", status
+
+
+@needs_live
+def test_live_term_do_round_trip(live):
+    marker = "wq4443-live-term-do-ok"
+    result = server.tool_term_do(live.session, text=f"echo {marker}")
+    assert result["ok"] is True, result
+    assert result["sent"]["ok"] is True
+    assert marker in result["output"], result
+
+
+@needs_live
+def test_live_term_at_never_sends_when_guard_regex_does_not_appear(live):
+    """The probe that can fail: a guard regex matching nothing on screen must
+    time out without ever typing — the marker must not reach the transcript."""
+    marker = "wq4443-live-term-at-should-not-appear"
+    result = server.tool_term_at(live.session, "wq4443-never-printed-anywhere",
+                                 text=f"echo {marker}", timeout=2)
+    assert result.get("timed_out") is True, result
+    assert result["ok"] is False
+    snap = server.tool_snapshot(live.session)
+    assert marker not in snap["output"], "guarded send typed despite the guard never matching"
 
 
 @needs_live
