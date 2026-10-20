@@ -29,6 +29,24 @@ Energize classification (wq#4419 ticket-specified):
   start      = energizing — creates a session and may launch an arbitrary
                command in it; strictly more consequential than raw keys.
 
+wq#4433 adds three tools wrapping `serial-console` (lumen-bin, one-port-owner
+picocom inside a shared-terminal session; design: the 2026-10-19 AP-303/C-130
+failure where a second pexpect-driven picocom fought the shared session for
+the same /dev/ttyUSB0). serial-console's own snapshot/send/scrollback/status/
+list/kill are a straight passthrough to shared-terminal, so the existing
+tools above already cover them for a serial session — only open/catch/expect
+are new surface:
+  serial_console_open   = energizing — spawns `sudo picocom` as root, the
+                           device's sole port owner.
+  serial_console_catch  = energizing — spams a key (default Enter) into the
+                           session until the screen matches a regex or a
+                           timeout elapses; drives keys during a boot window
+                           (Hit-any-key / Press-f prompts) exactly like `send`
+                           does for an ordinary shell.
+  serial_console_expect = read_only — polls the screen for a regex, same as
+                           `wait`, but through serial-console's own subcommand
+                           (no key spam).
+
 Stdlib-only, same rationale as the rest of the first-party Limpet MCP servers
 (limpet-plugin-flashrom/mcp/server.py): unit-testable without the `mcp` SDK.
 Tool handlers never pass agent text where the CLI parses flags: literal text
@@ -47,7 +65,7 @@ from typing import Any, Dict, List, Optional
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "limpet-shared-terminal-mcp"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 
 DEFAULT_BIN = "/home/lumen/bin/shared-terminal"
 SHARED_TERMINAL_BIN = (
@@ -55,6 +73,14 @@ SHARED_TERMINAL_BIN = (
     or (DEFAULT_BIN if os.path.exists(DEFAULT_BIN) else None)
     or shutil.which("shared-terminal")
     or DEFAULT_BIN
+)
+
+DEFAULT_SERIAL_CONSOLE_BIN = "/home/lumen/bin/serial-console"
+SERIAL_CONSOLE_BIN = (
+    os.environ.get("SERIAL_CONSOLE_BIN")
+    or (DEFAULT_SERIAL_CONSOLE_BIN if os.path.exists(DEFAULT_SERIAL_CONSOLE_BIN) else None)
+    or shutil.which("serial-console")
+    or DEFAULT_SERIAL_CONSOLE_BIN
 )
 
 # One CLI invocation is a tmux client round-trip — fast. `wait` is the only
@@ -88,6 +114,87 @@ def _run(args: List[str], timeout: float = REQUEST_TIMEOUT) -> Dict[str, Any]:
         result["error"] = proc.stderr.strip() or f"shared-terminal {args[0]} failed"
     elif proc.stderr.strip():
         result["info"] = proc.stderr.strip()
+    return result
+
+
+def _run_serial_console(args: List[str], timeout: float = REQUEST_TIMEOUT) -> Dict[str, Any]:
+    """Run one serial-console subcommand (open/catch/expect) — same result shape
+    as `_run`, against a different CLI. serial-console's snapshot/send/scrollback/
+    status/list/kill are a passthrough to shared-terminal already covered by the
+    tools above, so this only needs to drive the three subcommands it owns."""
+    try:
+        proc = subprocess.run(
+            [SERIAL_CONSOLE_BIN, *args],
+            capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return {"ok": False,
+                "error": f"serial-console CLI not found at {SERIAL_CONSOLE_BIN} "
+                         "(set SERIAL_CONSOLE_BIN)"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "timed_out": True,
+                "error": f"serial-console {args[0]} did not return within {timeout}s"}
+    result: Dict[str, Any] = {"ok": proc.returncode == 0,
+                              "exit_code": proc.returncode,
+                              "output": proc.stdout.rstrip("\n")}
+    if proc.returncode != 0:
+        result["error"] = proc.stderr.strip() or f"serial-console {args[0]} failed"
+    elif proc.stderr.strip():
+        result["info"] = proc.stderr.strip()
+    return result
+
+
+def tool_serial_console_open(dev: Optional[str] = None, session: Optional[str] = None,
+                              baud: Optional[int] = None) -> Dict[str, Any]:
+    """Open a picocom session on a UART device inside shared-terminal — the ONLY
+    process allowed to own the port (serial-console refuses a busy port itself).
+    ENERGIZING: spawns `sudo picocom` as root.
+
+    The CLI takes dev/session/baud positionally (`open [dev] [name] [baud]`), so
+    naming a session or baud without a device would silently shift onto the
+    wrong positional slot; reject that combination instead of guessing."""
+    if dev is None and (session is not None or baud is not None):
+        return {"ok": False, "error": "serial_console_open: session/baud need dev given too "
+                                       "(CLI positional order: open [dev] [name] [baud])"}
+    if session is None and baud is not None:
+        return {"ok": False, "error": "serial_console_open: baud needs session given too "
+                                       "(CLI positional order: open [dev] [name] [baud])"}
+    args = ["open"]
+    if dev:
+        args.append(dev)
+        if session:
+            args.append(session)
+            if baud:
+                args.append(str(int(baud)))
+    return _run_serial_console(args)
+
+
+def tool_serial_console_catch(session: str, regex: str, keys: Optional[List[str]] = None,
+                               hz: int = 20, secs: int = 60) -> Dict[str, Any]:
+    """Spam a key (Enter by default, or named tmux keys) into the session until
+    the screen matches `regex` or `secs` elapses — the boot-window catch loop
+    (Hit-any-key / Press-f prompts). ENERGIZING: types into a terminal a human
+    may be watching, same category as `send`. Exit 2 from the CLI is a timeout."""
+    args = ["catch", session, regex]
+    if keys:
+        args += ["--keys", *keys]
+    else:
+        args.append("--enter")
+    args += ["--hz", str(int(hz)), "--secs", str(int(secs))]
+    result = _run_serial_console(args, timeout=secs + WAIT_MARGIN)
+    if result.get("exit_code") == 2:
+        result["timed_out"] = True
+    return result
+
+
+def tool_serial_console_expect(session: str, regex: str, timeout: float = 30.0) -> Dict[str, Any]:
+    """Wait for the screen to match `regex`, no key spam. Read-only — polls the
+    screen via serial-console's own `expect` subcommand (which delegates to
+    `shared-terminal wait`) and never types. Exit 2 from the CLI is a timeout."""
+    seconds = max(1, int(timeout))
+    result = _run_serial_console(["expect", session, regex, str(seconds)],
+                                 timeout=seconds + WAIT_MARGIN)
+    if result.get("exit_code") == 2:
+        result["timed_out"] = True
     return result
 
 
@@ -250,6 +357,47 @@ TOOLS = {
             "required": ["session", "regex"],
         },
         "handler": tool_wait,
+    },
+    "serial_console_open": {
+        "description": "Open a picocom session on a UART device inside shared-terminal, the sole owner of the port. ENERGIZING — requires energize-confirm; spawns `sudo picocom` as root.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dev": {"type": "string", "description": "Serial device, e.g. /dev/ttyUSB0 (autodetected if omitted and exactly one /dev/ttyUSB*|ttyACM* exists)"},
+                "session": {"type": "string", "description": "Session name (default: device basename); requires dev"},
+                "baud": {"type": "integer", "description": "Baud rate (default 115200); requires session"},
+            },
+        },
+        "handler": tool_serial_console_open,
+    },
+    "serial_console_catch": {
+        "description": "Spam a key into the session (Enter by default) until the screen matches a regex, or a timeout elapses — catches a boot-window prompt (Hit any key, Press f...). ENERGIZING — requires energize-confirm.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session": {"type": "string", "description": "Session name"},
+                "regex": {"type": "string", "description": "POSIX extended regex to catch"},
+                "keys": {"type": "array", "items": {"type": "string"},
+                         "description": "tmux key names to send each tick instead of Enter"},
+                "hz": {"type": "integer", "description": "Key bursts per second (default 20)", "default": 20},
+                "secs": {"type": "integer", "description": "Timeout in seconds (default 60)", "default": 60},
+            },
+            "required": ["session", "regex"],
+        },
+        "handler": tool_serial_console_catch,
+    },
+    "serial_console_expect": {
+        "description": "Wait for a UART session's screen to match a regex, with no key spam. Read-only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session": {"type": "string", "description": "Session name"},
+                "regex": {"type": "string", "description": "POSIX extended regex to wait for"},
+                "timeout": {"type": "number", "description": "Seconds to wait (default 30)", "default": 30.0},
+            },
+            "required": ["session", "regex"],
+        },
+        "handler": tool_serial_console_expect,
     },
 }
 

@@ -33,14 +33,19 @@ FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "shared_terminal_c
 with open(FIXTURE) as fh:
     CLI = json.load(fh)
 
+SC_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "serial_console_cli.json")
+with open(SC_FIXTURE) as fh:
+    SC_CLI = json.load(fh)
+
 TMUX = shutil.which("tmux")
 ST_BIN = server.SHARED_TERMINAL_BIN if os.path.exists(server.SHARED_TERMINAL_BIN) else ""
+SC_BIN = server.SERIAL_CONSOLE_BIN if os.path.exists(server.SERIAL_CONSOLE_BIN) else ""
 needs_live = pytest.mark.skipif(
     not (TMUX and ST_BIN),
     reason="tmux or the shared-terminal CLI not found (set SHARED_TERMINAL_BIN)")
 
-READ_ONLY_TOOLS = ["list", "scrollback", "snapshot", "status", "wait"]
-ENERGIZING_TOOLS = ["send", "start"]
+READ_ONLY_TOOLS = ["list", "scrollback", "snapshot", "status", "wait", "serial_console_expect"]
+ENERGIZING_TOOLS = ["send", "start", "serial_console_open", "serial_console_catch"]
 
 
 # --------------------------------------------------------------------------
@@ -208,6 +213,119 @@ def test_run_reports_a_missing_binary_as_an_error():
     finally:
         server.SHARED_TERMINAL_BIN = real
     assert result["ok"] is False and "not found" in result["error"]
+
+
+# --------------------------------------------------------------------------
+# 2b. serial-console CLI argv mapping (wq#4433)
+# --------------------------------------------------------------------------
+
+def _record_serial_runs(monkeypatch, result=None):
+    calls = []
+
+    def fake_run(args, timeout=server.REQUEST_TIMEOUT):
+        calls.append(list(args))
+        return dict(result or {"ok": True, "exit_code": 0, "output": ""})
+
+    monkeypatch.setattr(server, "_run_serial_console", fake_run)
+    return calls
+
+
+def _assert_real_serial_cli_shape(argv):
+    sub = argv[0]
+    assert sub in SC_CLI["subcommands"], f"not a serial-console subcommand: {argv}"
+    for flag in (a for a in argv[1:] if a.startswith("--")):
+        assert flag in SC_CLI["subcommands"][sub]["flags"], \
+            f"{sub} has no flag {flag!r} in the real CLI"
+
+
+def test_serial_console_every_tool_uses_only_real_cli_subcommands(monkeypatch):
+    calls = _record_serial_runs(monkeypatch)
+    server.tool_serial_console_open(dev="/dev/ttyUSB0", session="c130", baud=115200)
+    server.tool_serial_console_catch("c130", "login:", hz=10, secs=5)
+    server.tool_serial_console_catch("c130", "login:", keys=["Space"])
+    server.tool_serial_console_expect("c130", "login:", timeout=5)
+    assert calls, "no CLI invocations recorded"
+    for argv in calls:
+        _assert_real_serial_cli_shape(argv)
+
+
+def test_serial_console_open_bare_autodetects(monkeypatch):
+    calls = _record_serial_runs(monkeypatch)
+    server.tool_serial_console_open()
+    assert calls == [["open"]]
+
+
+def test_serial_console_open_session_without_dev_is_rejected(monkeypatch):
+    """The CLI takes dev/session/baud positionally; a session name with no dev
+    would silently land in the dev slot instead, so this must error, not call
+    the CLI with the wrong positional meaning."""
+    calls = _record_serial_runs(monkeypatch)
+    result = server.tool_serial_console_open(session="c130")
+    assert result["ok"] is False and not calls
+
+
+def test_serial_console_open_baud_without_session_is_rejected(monkeypatch):
+    calls = _record_serial_runs(monkeypatch)
+    result = server.tool_serial_console_open(dev="/dev/ttyUSB0", baud=9600)
+    assert result["ok"] is False and not calls
+
+
+def test_serial_console_catch_default_mode_is_enter(monkeypatch):
+    calls = _record_serial_runs(monkeypatch)
+    server.tool_serial_console_catch("c130", "login:")
+    assert calls == [["catch", "c130", "login:", "--enter", "--hz", "20", "--secs", "60"]]
+
+
+def test_serial_console_catch_keys_mode(monkeypatch):
+    calls = _record_serial_runs(monkeypatch)
+    server.tool_serial_console_catch("c130", "login:", keys=["Space", "Enter"], hz=5, secs=20)
+    assert calls == [["catch", "c130", "login:", "--keys", "Space", "Enter", "--hz", "5", "--secs", "20"]]
+
+
+def test_serial_console_catch_exit_2_means_timed_out(monkeypatch):
+    _record_serial_runs(monkeypatch, result={"ok": False, "exit_code": 2, "output": "",
+                                             "error": "timeout, /login:/ not seen in 5s"})
+    result = server.tool_serial_console_catch("c130", "login:", secs=5)
+    assert result["timed_out"] is True
+
+
+def test_serial_console_expect_timeout_is_whole_seconds(monkeypatch):
+    calls = _record_serial_runs(monkeypatch)
+    server.tool_serial_console_expect("c130", "login:", timeout=7.9)
+    assert calls == [["expect", "c130", "login:", "7"]]
+
+
+def test_serial_console_expect_exit_2_means_timed_out(monkeypatch):
+    _record_serial_runs(monkeypatch, result={"ok": False, "exit_code": 2, "output": "",
+                                             "error": "timeout waiting for /login:/"})
+    result = server.tool_serial_console_expect("c130", "login:", timeout=5)
+    assert result["timed_out"] is True
+
+
+def test_serial_console_run_reports_a_missing_binary_as_an_error():
+    monkey_bin = os.path.join(tempfile.gettempdir(), "wq4433-no-such-serial-console")
+    real = server.SERIAL_CONSOLE_BIN
+    server.SERIAL_CONSOLE_BIN = monkey_bin
+    try:
+        result = server._run_serial_console(["expect", "c130", "login:", "5"])
+    finally:
+        server.SERIAL_CONSOLE_BIN = real
+    assert result["ok"] is False and "not found" in result["error"]
+
+
+def test_fixture_matches_real_serial_console_cli_help():
+    """Drift guard, mirroring test_fixture_matches_real_cli_help: if
+    serial-console grows or renames subcommands, fail loudly instead of
+    letting the wrapper speak a stale surface."""
+    if not SC_BIN:
+        pytest.skip("serial-console CLI not found (set SERIAL_CONSOLE_BIN)")
+    with open(SC_BIN) as fh:
+        source = fh.read()
+    for sub in SC_CLI["subcommands"]:
+        assert f"{sub})" in source, f"fixture pins subcommand {sub!r} the CLI lacks"
+    for sub, spec in SC_CLI["subcommands"].items():
+        for flag in spec["flags"]:
+            assert flag in source, f"fixture pins flag {flag!r} the CLI lacks"
 
 
 # --------------------------------------------------------------------------

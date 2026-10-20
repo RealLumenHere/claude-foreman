@@ -1,0 +1,8 @@
+{
+  "_comment": "Committed pin of the serial-console CLI surface this wrapper drives (wq#4433). test_fixture_matches_real_serial_console_cli_help checks it against the installed CLI so drift fails loudly. Only the agent-facing subcommands the MCP server uses are pinned; snapshot/scrollback/send/status/list/kill/log/attach/help are a passthrough to shared-terminal and already covered by tests/fixtures/shared_terminal_cli.json.",
+  "subcommands": {
+    "open": {"usage": "open [dev] [name] [baud]", "flags": []},
+    "catch": {"usage": "catch <name> <regex> [--enter|--keys K..] [--hz N] [--secs S]", "flags": ["--enter", "--keys", "--hz", "--secs"]},
+    "expect": {"usage": "expect <name> <regex> [secs]", "flags": []}
+  }
+}

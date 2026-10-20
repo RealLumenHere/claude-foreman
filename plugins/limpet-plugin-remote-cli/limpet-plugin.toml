@@ -10,13 +10,20 @@
 # First-party: mcp/server.py is Limpet's own MCP wrapper (same pattern as
 # limpet-plugin-flashrom); it shells out to the shared-terminal CLI, whose
 # surface is unchanged by this plugin.
+#
+# wq#4433 adds serial_console_open/catch/expect, wrapping the `serial-console`
+# CLI (a thin layer over shared-terminal that gives a UART device exactly one
+# port owner, picocom in the shared tmux session, plus a boot-window catch
+# loop). snapshot/send/scrollback/status/list/kill already cover a serial
+# session through the tools above, since serial-console delegates those
+# straight to shared-terminal.
 
 [plugin]
 name = "remote-cli"
 version = "0.2.0"
 manifest_version = 1
 category = "hardware-interface"
-description = "Shared terminal backend: a Frank+agent tmux session with start/send/snapshot/scrollback/wait, backed by shared-terminal (wq#4419)."
+description = "Shared terminal backend: a Frank+agent tmux session with start/send/snapshot/scrollback/wait, backed by shared-terminal (wq#4419); plus serial_console_open/catch/expect for one-port-owner UART consoles (wq#4433)."
 license = "MIT"
 homepage = ""
 repository = ""
@@ -69,11 +76,17 @@ wait = false
 # strictly more consequential than raw keys, so it is gated too.
 send = true
 start = true
+# wq#4433: serial-console's open spawns `sudo picocom` as root (taking sole
+# ownership of the port) and catch drives keys during a boot window — same
+# category as start/send above. expect only polls the screen, like wait.
+serial_console_open = true
+serial_console_catch = true
+serial_console_expect = false
 
 [agent_hints]
-summary = "Shared tmux terminal: Frank and an agent see and drive the same session. snapshot/scrollback/list/status/wait are read-only recon of what's on screen or in history; send/start mutate the live session and are energize-gated."
-when_to_use = "Bench RE work where Frank is watching a target's console/bootloader session live and wants the agent to drive or observe it without a copy-paste or screenshot round trip."
-when_not_to_use = "Not for unattended command execution against a target the agent owns outright — use a plain shell/SSH session for that. This plugin exists specifically because the terminal is SHARED with a human."
+summary = "Shared tmux terminal: Frank and an agent see and drive the same session. snapshot/scrollback/list/status/wait are read-only recon of what's on screen or in history; send/start mutate the live session and are energize-gated. serial_console_open/catch/expect (wq#4433) add a one-port-owner UART console on top: open starts picocom as the port's sole owner, catch spams a key through a boot window, expect polls for a regex without typing."
+when_to_use = "Bench RE work where Frank is watching a target's console/bootloader session live and wants the agent to drive or observe it without a copy-paste or screenshot round trip. serial_console_* specifically for UART/bootloader RE (U-Boot, OpenWrt failsafe, Hit-any-key/Press-f boot windows) where a second picocom/pexpect process fighting the same port for keystrokes is the exact failure this exists to prevent."
+when_not_to_use = "Not for unattended command execution against a target the agent owns outright — use a plain shell/SSH session for that. This plugin exists specifically because the terminal is SHARED with a human. serial_console_* is not for a port no one is sharing — a plain pyserial/picocom session is simpler when no human needs to watch live."
 complements = ["serial-mcp"]
 supersedes = []
 workflow_position = "interact"
