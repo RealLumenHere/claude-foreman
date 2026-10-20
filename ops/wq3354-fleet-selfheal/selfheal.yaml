@@ -164,6 +164,18 @@ nodes:                  # CLASS 6
        rt-ax86u and neith were -- one unexplained outage with no ignore/sleepers-qualifying
        fact behind it stays a real page, not nodes.ignore/sleepers. This note just carries
        the context so the next page on sia doesn't re-derive it."
+    khepri: "wq#4415/wq#4450 (2026-10-20): khepri is Mac Pro 6,1 hardware and got swept into
+       a bad closure that cited the 2026-10-19 'Mac fleet retired' brief, but khepri is not
+       in ORCHESTRATOR-HANDOFF.md section 3's actual retired list (isis/hathor/wadjet/
+       nephthys/seshat only) and wq#3541 (still open) shows it running ollama
+       qwen2.5-coder:7b (OLLAMA_HOST 0.0.0.0, KEEP_ALIVE 2h) since 2026-10-07, mid-fold into
+       research/inference_nodes.yaml -- live inference infra, not parts-only. khepri has no
+       smart plug and no remote power path, and this outage (dark on tailscale + LAN
+       192.168.8.211 ARP FAILED since 2026-10-19T21:30Z) can only be resolved by a physical
+       check at the box (wq#4415, re-blocked frank_gated). Not nodes.ignore/sleepers: stays
+       a real page until Frank confirms it in person. This note just carries the context so
+       the next page on khepri doesn't re-derive it or get silenced by the same wrong
+       'Mac fleet retired' shortcut."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
