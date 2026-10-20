@@ -45,7 +45,16 @@ case "$RIG" in hathor|khepri) ;; *) die "rig must be hathor or khepri (never isi
 case "$CARD" in card[0-9]*) ;; *) die "--card must look like card1" ;; esac
 
 rig() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$RIG" "$@"; }
-RUSER=$(rig 'id -un') || die "cannot ssh to $RIG"
+# wq#2842 2026-10-20: both rigs were unreachable (ssh connect timeout) when this was last
+# actually run. hathor auto-sleeps after 30min idle (lumen_state hathor.auto_sleep) and needs
+# `/home/lumen/bin/wake-dispatch.sh wake hathor` before this will connect; khepri has been
+# fully dark on tailscale+LAN since 2026-10-19T21:30Z with no remote plug (wq#4415, physical
+# check required) -- do not retry-loop ssh against either without checking those first.
+case "$RIG" in
+  hathor) hint="wake it: /home/lumen/bin/wake-dispatch.sh wake hathor (auto-sleeps after 30min idle)" ;;
+  khepri) hint="check wq#4415: khepri has been dark since 2026-10-19T21:30Z, no remote plug, needs physical check" ;;
+esac
+RUSER=$(rig 'id -un') || die "cannot ssh to $RIG -- $hint"
 REMOTE_ROOT="$(rig 'echo $HOME')/pilots/wq2842"
 
 pci_of_card() { rig "basename \$(readlink -f /sys/class/drm/$CARD/device)"; }
