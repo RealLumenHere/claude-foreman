@@ -45,6 +45,47 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 fail() { log "FAIL: $*"; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1 (install it on the build host, not in the ISO's chroot)"; }
 
+# wq#4456: these two guards previously existed only in the external build-limpet.sh
+# wrapper (wq#4449), so running this script's own stage1b directly -- which the README
+# says `./build.sh all` supports -- bypassed both entirely. Inlined here so the canonical
+# pipeline fails closed on its own, with no wrapper required.
+#
+# A non-root unsquashfs extracts the target layer with every file owned by the invoking
+# user, so sudo(-rs) at /usr/bin/sudo is no longer uid 0 with the setuid bit and refuses to
+# run ("must be owned by uid 0 and have the setuid bit set") once installed on the live ISO.
+# stage1b keeps an existing upper/ across runs, so one bad non-root extraction silently
+# poisons every later build until someone notices on a booted ISO.
+verify_layer_ownership() {
+  local root="$1" rc=0 n d b r t u m
+  for d in usr/bin usr/sbin etc/sudoers.d; do
+    [ -d "$root/$d" ] || continue
+    n="$(find "$root/$d" -xdev -type f ! -uid 0 2>/dev/null | wc -l)"
+    if [ "$n" -gt 0 ]; then
+      log "verify-layer: $n regular file(s) under /$d not owned by uid 0"
+      rc=1
+    fi
+  done
+  for b in sudo su pkexec passwd newgrp chsh chfn gpasswd mount umount fusermount3; do
+    r="$root/usr/bin/$b"
+    [ -L "$r" ] || [ -f "$r" ] || continue
+    if [ -L "$r" ]; then
+      t="$(readlink -f "$r")"
+      [ -n "$t" ] && [ -f "$t" ] || continue
+      r="$t"
+    fi
+    read -r u m < <(stat -c '%u %a' "$r")
+    if [ "$u" != "0" ]; then
+      log "verify-layer: $r (/usr/bin/$b) owned by uid $u (want 0)"
+      rc=1
+    fi
+    case "$m" in
+      4[0-7][0-7][0-7]) : ;;
+      *) log "verify-layer: $r (/usr/bin/$b) mode $m lacks setuid"; rc=1 ;;
+    esac
+  done
+  return "$rc"
+}
+
 # ---------------------------------------------------------------------------
 # Stage 1 -- base ISO acquisition and extraction
 # ---------------------------------------------------------------------------
@@ -95,6 +136,10 @@ stage1b_assemble_chroot() {
   require_cmd unsquashfs
   require_cmd mount
   require_cmd mountpoint
+  # wq#4456: mount/unsquashfs/the proc+sys+dev bind-mounts below all require root; let
+  # a missing sudo fail here with a clear message instead of a confusing mid-stage
+  # "Operation not permitted" from whichever mount call happens to run first.
+  [ "$(id -u)" -eq 0 ] || fail "stage1b must run as root (sudo -E $0 ...) -- mount/unsquashfs need it"
   if mountpoint -q "$CHROOT"; then
     log "stage1b: $CHROOT already mounted -- reusing it"
     return
@@ -111,8 +156,12 @@ stage1b_assemble_chroot() {
   done
   # Unsquash (not loop-mount) the target layer: it is the writable upperdir,
   # and unsquashfs keeps its existing overlay whiteouts + opaque xattrs.
-  # An upper/ left by an earlier run holds that run's stage work -- keep it.
-  if [ ! -d "$LAYERS_DIR/upper" ]; then
+  # An upper/ left by an earlier run holds that run's stage work -- keep it, but only
+  # after confirming it wasn't left by a non-root extraction (wq#4456/wq#4449).
+  if [ -d "$LAYERS_DIR/upper" ]; then
+    verify_layer_ownership "$LAYERS_DIR/upper" ||
+      fail "existing $LAYERS_DIR/upper has wrong ownership/setuid (stale non-root extraction) -- move it aside and rerun: mv '$LAYERS_DIR/upper' '$LAYERS_DIR/upper.stale-$(date +%Y%m%d_%H%M%S)'"
+  else
     unsquashfs -d "$LAYERS_DIR/upper" "$casper/$layer.squashfs" >/dev/null
   fi
   mkdir -p "$LAYERS_DIR/work" "$CHROOT"

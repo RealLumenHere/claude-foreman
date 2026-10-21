@@ -17,6 +17,7 @@ minimal.standard.squashfs and nowhere else -- picking the live layer, the
 first source, or packing the whole chroot as one image all fail it.
 """
 import hashlib
+import os
 import shutil
 import stat
 import subprocess
@@ -113,6 +114,11 @@ case "$1" in */run) rm -rf "$1"/systemd ;; esac
 
 FAKE_MOUNTPOINT = '#!/usr/bin/env bash\n[ -f "$FAKE_MNT" ] && grep -qxF "$2" "$FAKE_MNT"\n'
 
+# wq#4456: stage1b now refuses to run unless EUID 0 (the mounts it makes are real root-only
+# calls even though this fixture fakes them). This suite intentionally doesn't run as root
+# (see module docstring), so fake `id` the same way mount/umount/mountpoint are faked.
+FAKE_ID = '#!/usr/bin/env bash\n[ "$1" = "-u" ] && echo 0 || exec /usr/bin/id "$@"\n'
+
 
 def _exe(path, body):
     path.write_text(body)
@@ -197,6 +203,7 @@ def remaster(tmp_path_factory):
     _exe(bin_dir / "mount", FAKE_MOUNT)
     _exe(bin_dir / "umount", FAKE_UMOUNT)
     _exe(bin_dir / "mountpoint", FAKE_MOUNTPOINT)
+    _exe(bin_dir / "id", FAKE_ID)
     _exe(bin_dir / "chroot", '#!/usr/bin/env bash\nshift\nexec "$@"\n')
     _exe(bin_dir / "apt-get", "#!/usr/bin/env bash\nexit 0\n")
 
@@ -277,3 +284,57 @@ def test_layer_metadata_refreshed(remaster):
 def test_mounts_all_released(remaster):
     assert (remaster["tmp"] / "mounts").read_text().strip() == ""
     assert not (remaster["work"] / "chroot").is_symlink()
+
+
+# --- wq#4456: stage1b's own root/ownership guards (previously only in the external
+# build-limpet.sh wrapper) ----------------------------------------------------
+
+def _stage1_env(tmp_path, fake_id):
+    for tool in ("mksquashfs", "unsquashfs", "xorriso"):
+        if not shutil.which(tool):
+            pytest.skip(f"{tool} not installed")
+    iso = _make_base_iso(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _exe(bin_dir / "mount", FAKE_MOUNT)
+    _exe(bin_dir / "umount", FAKE_UMOUNT)
+    _exe(bin_dir / "mountpoint", FAKE_MOUNTPOINT)
+    if fake_id:
+        _exe(bin_dir / "id", FAKE_ID)
+    _exe(bin_dir / "chroot", '#!/usr/bin/env bash\nshift\nexec "$@"\n')
+    work = tmp_path / "work"
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin",
+        "FAKE_MNT": str(tmp_path / "mounts"),
+        "LIMPET_BASE_ISO": str(iso),
+        "LIMPET_BASE_ISO_SHA256": hashlib.sha256(iso.read_bytes()).hexdigest(),
+        "LIMPET_ISO_WORKDIR": str(work),
+        "LIMPET_ISO_NAME": "limpet-test.iso",
+    }
+    r = subprocess.run(["bash", str(BUILD), "stage1_fetch_base_iso"], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, f"stage1 setup failed:\n{r.stderr}"
+    return env, work
+
+
+def test_stage1b_refuses_non_root(tmp_path):
+    # No fake `id`: the real (non-root, uid 1000 in this harness) id(1) answers, so this
+    # probes the guard with an input squarely outside its "root" population -- it must
+    # actually be able to fail, not just pass trivially (wq#2630).
+    assert os.geteuid() != 0, "this test assumes the test runner itself is not root"
+    env, _work = _stage1_env(tmp_path, fake_id=False)
+    r = subprocess.run(["bash", str(BUILD), "stage1b_assemble_chroot"], env=env, capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "must run as root" in r.stderr
+
+
+def test_stage1b_refuses_stale_non_root_upper(tmp_path):
+    env, work = _stage1_env(tmp_path, fake_id=True)
+    # Simulate wq#4449's root cause directly: an upper/ left by a non-root unsquashfs,
+    # where /usr/bin/sudo ends up owned by the extracting (non-root) user instead of uid 0.
+    stale_sudo = work / "layers" / "upper" / "usr" / "bin" / "sudo"
+    stale_sudo.parent.mkdir(parents=True)
+    stale_sudo.write_text("#!/bin/sh\n")
+    stale_sudo.chmod(0o4755)
+    r = subprocess.run(["bash", str(BUILD), "stage1b_assemble_chroot"], env=env, capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "stale non-root extraction" in r.stderr
