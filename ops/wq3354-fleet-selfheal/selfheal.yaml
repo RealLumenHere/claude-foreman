@@ -176,6 +176,19 @@ nodes:                  # CLASS 6
        a real page until Frank confirms it in person. This note just carries the context so
        the next page on khepri doesn't re-derive it or get silenced by the same wrong
        'Mac fleet retired' shortcut."
+    farida: "wq#4458 (2026-10-21): offline on tailscale 30+ min (last seen
+       2026-10-21T14:40:00.1Z), no power facts in lumen_state -- confirmed via
+       `lumen_state.py current farida` (no availability predicate at all) and
+       `lumen_state.py history farida availability` (empty, no toggle history like
+       maksoor's). farida is Ubuntu Server on an M70q-Gen5 mini PC, role=
+       limpet-reference-hardware (the limpet RE hardware reference rig, wq#3950/wq#4393);
+       it has no Frank power_policy and no self-idle timer like hathor's, so this is not a
+       sleeper. Not a first outage either: farida was one of the original wq#3450
+       (2026-08) offline-at-install batch, and wq#3546's verify pass explicitly found it
+       has no intentional-off fact and should stay alerting rather than go in
+       nodes.ignore -- that finding still holds, nothing has changed since. Keep farida
+       out of nodes.ignore/sleepers: a dark farida is a real page, not a nap. This note
+       just carries the context so the next page doesn't re-derive it."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
