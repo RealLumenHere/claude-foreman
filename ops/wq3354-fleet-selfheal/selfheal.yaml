@@ -189,6 +189,26 @@ nodes:                  # CLASS 6
        nodes.ignore -- that finding still holds, nothing has changed since. Keep farida
        out of nodes.ignore/sleepers: a dark farida is a real page, not a nap. This note
        just carries the context so the next page doesn't re-derive it."
+    apep: "wq#3250: offline on tailscale since 2026-09-13T00:36Z (now 5+ weeks).
+       `lumen_state.py current apep` has apep.status='OFFLINE -- on tailscale, last seen
+       ~2026-09-13 (24d), ping down; aq storage:apep:unreach firing. Needs physical/Frank
+       check' (since 2026-10-07, conf 0.25); `lumen_state.py history apep availability`
+       is empty, no toggle history like maksoor's. apep is a portable DEPLOYABLE TEST
+       STATION (Frank redefined 2026-08-12), WiFi-only on 192.168.0.x -- a different
+       subnet from the 192.168.8.x fleet LAN, so it has no route from lumen and no plug
+       entry in plugs.json (confirmed by wq#3556), meaning power state cannot be read or
+       changed remotely either. No Frank power_policy and no self-idle timer like
+       hathor's, so this is not a sleeper -- it is a portable unit that went dark, not a
+       node meant to be off. The first physical-check ticket (wq#3291) closed 'done' with
+       no claimed_by/done_at/notes -- a hollow closure, not an actual fix, since apep was
+       still offline at wq#3250's next redispatch (see ISSUE-LOG). The standing physical
+       dependency is wq#3556 [storage] PHYSICAL: apep + gameboy dark since 2026-09-13,
+       still open/frank_gated -- locate the unit and either power it back onto WiFi or
+       set status.power: off if it is meant to stay parked. Keep apep out of
+       nodes.ignore/sleepers until wq#3556 resolves one way or the other: a dark apep is
+       a real page, not a nap. This note just carries the context so the next page
+       doesn't re-derive it or redispatch fresh build work against an already-exhausted
+       remote diagnosis."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
