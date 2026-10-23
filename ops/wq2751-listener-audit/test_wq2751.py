@@ -184,8 +184,12 @@ def curl_path_as_is(url):
 def live(ts):
     check("live chrome-mcp :3103 refused on tailnet", reachable(ts, 3103), False)
     check("live memory-mcp :3104 refused on tailnet", reachable(ts, 3104), False)
-    check("live chrome-mcp :3103 still on 127.0.0.1", reachable("127.0.0.1", 3103), True)
-    check("live memory-mcp :3104 still on 127.0.0.1", reachable("127.0.0.1", 3104), True)
+    # chrome-mcp stopped+disabled 2026-09-29 (ISSUE-LOG #1138, RCE-surface follow-up
+    # to wq#2751/2768); its loopback check inverts for the same reason as :3104 below.
+    check("live chrome-mcp :3103 refused on 127.0.0.1 (retired, ISSUE-LOG #1138)", reachable("127.0.0.1", 3103), False)
+    # wq#4555 (wq#4539 phase 3): memory-mcp retired — the loopback check inverts,
+    # a listener audit asserting a retired port is open would page forever.
+    check("live memory-mcp :3104 refused on 127.0.0.1 (retired wq#4555)", reachable("127.0.0.1", 3104), False)
     check("live projects-app :8124 refused on tailnet", reachable(ts, 8124), False)
     check("live projects-app handoff traversal on 127.0.0.1",
           curl_path_as_is("http://127.0.0.1:8124/api/handoff/../../kb/ISSUE-LOG"), "404")
