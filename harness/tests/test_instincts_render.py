@@ -44,6 +44,14 @@ def test_core_order_is_tier0_first_then_doctrine_then_index(tmp_path):
     assert "[quest work]" in out
 
 
+def test_boot_tier2_is_titles_only_no_rule_text(tmp_path):
+    out = ir.render("boot", _write(tmp_path, SCHEMA2))
+    assert out.index(ir.TIER0_HEADER) < out.index(ir.TIER1_HEADER) < out.index(ir.TIER2_HEADER)
+    assert "HARD A" in out and "DOCTRINE B" in out
+    assert "[quest work]" in out
+    assert "DOMAIN C pointer" not in out
+
+
 def test_schema1_flat_list_fails_open(tmp_path):
     path = _write(tmp_path, SCHEMA1)
     assert ir.load_rules(path) is None
