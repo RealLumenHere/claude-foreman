@@ -113,7 +113,17 @@ blocking on one that doesn't:
   so it stays primary) to `boot/grub/grub.cfg` + `loopback.cfg`'s
   `linux /casper/vmlinuz` lines before the `---` separator, enabling
   serial-based automated boot testing without a VNC/QMP screenshot
-  dependency.
+  dependency. That still left the log near-empty (wq#4564): both files ship
+  `quiet splash` after the `---`, and `quiet` lowers `console_loglevel` for
+  every console, ttyS0 included, so the kernel/systemd print almost nothing
+  regardless of where it's routed. **Decision (wq#4564, no Frank-gate):**
+  drop `quiet`, keep `splash` -- Plymouth only owns the tty0 framebuffer, it
+  never touched what printk sends to ttyS0, so dropping `splash` instead
+  would cost the wq#3948 graphical boot branding for no serial-log gain --
+  and add `loglevel=7 systemd.show_status=1` where `quiet` was, which wins
+  because GRUB's `linux` line is parsed left to right and overrides any
+  earlier/default loglevel. `iso_layers.add_serial_console` now rewrites
+  both halves of the line in one pass.
 - **Hardware profile book is 5 profiles, not 200+** (tasks 5/10): the ticket's
   "200+" is a target the upstream Tier-1/2 tickets haven't reached yet
   (`docs/hardware-tiers-spec.md` so far only has the AMD tier complete).

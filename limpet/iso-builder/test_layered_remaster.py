@@ -97,8 +97,18 @@ def test_grub_rebrand_fails_loudly_on_unknown_layout(tmp_path):
 # narrower fix could miss -- grub.cfg alone (loopback.cfg has an extra
 # iso-scan/filename= token before "---"), the nomodeset menuentry (a second
 # token between vmlinuz and "---"), and a second run (idempotency).
+#
+# wq#4564: console=ttyS0 alone still shipped a near-empty serial log because
+# "quiet" (in the tail after "---") lowers console_loglevel fleet-wide, so
+# the kernel/systemd print almost nothing on any console, ttyS0 included.
+# grub-cfg now drops "quiet" and adds loglevel=7 systemd.show_status=1 in
+# its place, read as the last word on console_loglevel since cmdline tokens
+# parse left to right. "splash" is left alone -- Plymouth only owns the tty0
+# framebuffer, so it never touched what printk sends to ttyS0, and dropping
+# it would cost the wq#3948 graphical boot branding for no serial-log gain.
 
 SERIAL_ARGS = "console=tty0 console=ttyS0,115200n8"
+VERBOSE_ARGS = "loglevel=7 systemd.show_status=1"
 
 
 @pytest.mark.parametrize("name", ["grub.cfg", "loopback.cfg"])
@@ -112,9 +122,12 @@ def test_grub_cfg_adds_serial_console_to_every_linux_line(tmp_path, name):
     assert len(linux_lines) == 2, after
     for line in linux_lines:
         assert SERIAL_ARGS in line
-        # Live-only args land before "---"; "quiet splash" after it is untouched.
+        # Live-only args land before "---"; the verbosity args replace
+        # "quiet" in the tail, "splash" (Plymouth branding) stays.
         assert line.index(SERIAL_ARGS) < line.index("---")
-        assert line.rsplit("---", 1)[1].strip() == "quiet splash"
+        tail = line.rsplit("---", 1)[1].strip()
+        assert tail == f"splash {VERBOSE_ARGS}"
+        assert "quiet" not in tail
 
 
 def test_grub_cfg_serial_console_covers_nomodeset_line(tmp_path):
@@ -141,6 +154,7 @@ def test_grub_cfg_serial_console_is_idempotent(tmp_path):
     second = cfg.read_text()
     assert second == first
     assert second.count("console=ttyS0") == 2  # one per menuentry, not duplicated
+    assert second.count("loglevel=7") == 2  # one per menuentry, not duplicated
 
 
 def test_grub_cfg_serial_console_fails_loudly_on_unknown_kernel_line(tmp_path):

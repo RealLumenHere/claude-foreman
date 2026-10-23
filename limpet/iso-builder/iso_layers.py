@@ -30,6 +30,17 @@ STOCK_ENTRY = "Try or Install"
 # /dev/console, so this keeps the local display live while making ttyS0
 # primary for stage12's QEMU "-serial file:..." boot test.
 SERIAL_ARGS = "console=tty0 console=ttyS0,115200n8"
+# wq#4564: console=ttyS0 alone still shipped a near-empty serial log --
+# "quiet" lowers console_loglevel fleet-wide (every console, ttyS0 included),
+# so most of what the kernel/systemd would otherwise print never gets
+# written. "splash" is left alone: Plymouth only takes over the tty0
+# framebuffer, it doesn't touch what printk sends to ttyS0, so dropping
+# "quiet" instead of "splash" keeps the wq#3948 graphical boot branding on
+# physical/local boots while unblocking the serial log. loglevel=7 is placed
+# after the dropped "quiet" (cmdline tokens are parsed in order, last one
+# wins) and systemd.show_status=1 forces unit status lines too, since
+# systemd separately honors "quiet" straight off /proc/cmdline.
+VERBOSE_ARGS = "loglevel=7 systemd.show_status=1"
 
 
 def die(msg: str) -> None:
@@ -88,22 +99,26 @@ def rebrand_grub(text: str, old: str, new: str) -> str:
 # verbatim from the base ISO (build.sh stage11), so stage12's QEMU boot test
 # (which boots the ISO, not an installed system) still got an empty serial
 # log. Matches on the "linux ... --- quiet splash" shape both files ship:
-# args land right before "---", never inside the "quiet splash" tail, so a
-# layout change there is caught by the die() below instead of silently
+# console args land right before "---", and (wq#4564) the verbosity args
+# land in the "quiet splash" tail itself, replacing "quiet". A layout change
+# either side of "---" is caught by the die() below instead of silently
 # landing args in the wrong half of the line.
-LINUX_LINE = re.compile(r'(?m)^(\s*linux\s+\S+(?:\s+\S+)*?)(\s*---)')
+LINUX_LINE = re.compile(r'(?m)^(\s*linux\s+\S+(?:\s+\S+)*?)(\s*---)(.*)$')
 
 
-def add_serial_console(text: str, args: str = SERIAL_ARGS) -> str:
+def add_serial_console(text: str, args: str = SERIAL_ARGS, verbose_args: str = VERBOSE_ARGS) -> str:
     if not LINUX_LINE.search(text):
         die('no "linux ... ---" kernel line -- base ISO grub.cfg kernel-arg layout '
             "changed, re-check before adding serial console args")
 
     def inject(m):
-        pre, sep = m.group(1), m.group(2)
-        if "console=ttyS0" in pre:
-            return m.group(0)
-        return f"{pre} {args}{sep}"
+        pre, sep, tail = m.group(1), m.group(2), m.group(3)
+        if "console=ttyS0" not in pre:
+            pre = f"{pre} {args}"
+        if "loglevel=" not in tail:
+            tail = re.sub(r"\bquiet\b\s*", "", tail, count=1)
+            tail = f"{tail} {verbose_args}"
+        return f"{pre}{sep}{tail}"
 
     return LINUX_LINE.sub(inject, text)
 
