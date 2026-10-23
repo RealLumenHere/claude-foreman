@@ -18,9 +18,17 @@ fi
 
 # Fresh dump before touching the renderer, even though this change is
 # read-only on PG (ticket wq#4553 instruction; recipe_store.py:405 convention).
+# A bare `pg_dump -Fc fleet_memory` defaults to the local unix socket on port 5432,
+# which doesn't exist here — fleet_memory only listens on recipe_store.py's PG_HOST/
+# PG_PORT (127.0.0.1:5433), so this calls recipe_store.backup() for the same
+# -h/-p/-U/PGPASSWORD dump recipe_crystallizer already relies on (wq#4570).
 mkdir -p "$BACKUP_DIR"
-pg_dump -Fc fleet_memory \
-  > "$BACKUP_DIR/fleet_memory_pre-wq4553p1_$(date +%Y%m%d_%H%M%S).dump"
+python3 -c "
+import sys
+sys.path.insert(0, '/home/lumen/foreman/harness')
+from recipe_store import backup
+backup('$BACKUP_DIR')
+"
 
 cp -p "$LIVE" "$LIVE.bak.$(date +%Y%m%d)_wq4553"
 install -m 0644 "$SRC/context_builder.py" "$LIVE"
