@@ -55,14 +55,18 @@ preferred way to do that:
   expose port 3240 on a public interface ... Tailscale (good fallback when Tailscale is not
   available [sic — SSH tunnel is the fallback]"
   (https://gist.github.com/startergo/8b2f264e1b68d4f354cb92bb00bb723e).
-- Two small commercial products exist for exactly Frank's stated use case — a USB-over-IP
+- One small commercial product exists for exactly Frank's stated use case — a USB-over-IP
   hub you attach over Tailscale specifically to flash/reset boards remotely: VBUS-04
   ("USB-over-IP hub with per-port power switching. Attach any port remotely over Tailscale
-  and flash with the tools you already use.", https://vbus.dev/) and MeshHold ("Use a USB
-  device plugged into another machine. Export a device on Linux (usbip bind); one TCP
-  forward carries USB/IP port 3240.", https://meshhold.com/docs/). Neither is being proposed
-  for purchase here — they're cited as independent confirmation that "usbip host behind
-  Tailscale, flash remotely" is a solved, shipped pattern, not a novel risk.
+  and flash with the tools you already use.", https://vbus.dev/). MeshHold is a separate,
+  self-hosted mesh VPN marketed as an alternative *to* Tailscale ("MeshHold vs Tailscale,
+  Headscale, NetBird & Nebula") whose own USB-passthrough feature runs over its own mesh
+  tunnel, not over Tailscale (https://meshhold.com/docs/) — it does not independently
+  confirm the Tailscale-specific pattern and is cited here only as a second example of
+  "USB-over-network wrapped in an encrypted mesh" being a shipped product category.
+  VBUS-04 is not being proposed for purchase here — it's cited as independent confirmation
+  that "usbip host behind Tailscale, flash remotely" is a solved, shipped pattern, not a
+  novel risk.
 
 Because Tailscale is a device-authenticated, WireGuard-encrypted mesh, running usbipd bound
 to the tailnet interface only (not `0.0.0.0`) gets USB/IP's missing transport security for
@@ -76,10 +80,15 @@ whatever USB/IP itself adds.
 ## 3. Latency for interactive serial (picocom/ADB shell)
 
 No fleet-specific measurement exists yet (open item, §6), but a concrete third-party data
-point for the same LAN-vs-local comparison: a DualSense-over-network project reports
-"USB/IP over LAN adds ~1–3 ms" of latency versus a local connection
-(https://github.com/AarveeGill/Phantom-Sense). That figure is for the USB/IP hop itself on a
-LAN; Tailscale's own tunnel overhead stacks on top of it. For a UART-over-USB (CDC-ACM)
+point for a loosely comparable LAN-vs-local comparison: a DualSense-over-network project
+(Phantom-Sense) reports "~1–3 ms" added latency versus a local connection
+(https://github.com/AarveeGill/Phantom-Sense). That project uses VirtualHere, a separate
+proprietary USB-over-network product ("VirtualHere starts automatically... VirtualHere
+Client on the PC auto-attaches it"), not the Linux-kernel usbip/vhci-hcd protocol this doc
+is about, and the workload is an HID gamepad, not a bulk-transfer flashing/serial tool — so
+the figure is directional (USB-over-network of any kind adds low-single-digit ms on a LAN),
+not a measurement of usbip itself. Tailscale's own tunnel overhead stacks on top of
+whatever usbip's real figure turns out to be. For a UART-over-USB (CDC-ACM)
 serial console driven by `picocom`, or an interactive `adb shell`, a few ms of added
 round-trip latency per USB transaction is very unlikely to be user-noticeable — both
 workloads are byte-stream/command-response, not frame-rate-sensitive. This should read as
@@ -108,7 +117,8 @@ short window right at power-on/reset-strap, and the flashing tool must open and 
 talking to it inside that window) — this is a property of the device's own BootROM, true
 whether the host talking to it is local or over usbip. What usbip changes is that every
 command/ack round-trip in the handshake now carries the extra network hop's latency (§3's
-few-ms figure) on top of whatever the BootROM's own timeout tolerance is. For a device whose
+few-ms figure, itself from a different USB-over-network product and not a usbip
+measurement) on top of whatever the BootROM's own timeout tolerance is. For a device whose
 BootROM window is generous (most MTK targets mtkclient already supports), this should still
 land inside tolerance; for anything with a BootROM window that's already a close call on a
 direct USB connection, remote-over-usbip is the wrong tool and a physical connection (or
@@ -156,8 +166,8 @@ through something above usbip (a lock, or routing both through one agent).
 
 1. **Workable for the stated use case** (mtkclient/EDL/ADB/picocom against Maksoor-attached
    devices from Lumen agents) based on protocol class (bulk/control, not isochronous) and
-   the Tailscale-wraps-the-missing-auth pattern independently validated by two commercial
-   products built for this exact scenario (§2).
+   the Tailscale-wraps-the-missing-auth pattern validated by VBUS-04, a commercial product
+   built for this exact scenario (§2).
 2. **Before shipping it**: (a) confirm `usbip_host`/`vhci-hcd` modules actually load on
    Maksoor's and Lumen's running kernels (§1) — not assumed; (b) confirm `tailscale ping`
    reports a direct peer path, not DERP-relayed (§2); (c) run one real flash against a
@@ -185,3 +195,7 @@ through something above usbip (a lock, or routing both through one agent).
   hit from the web search ("Integrate USB/IP Support for Enhanced Remote Hardware...") could
   not be opened via `github` backend; not re-logged since the 401 condition is already a
   known standing issue, not new information from this ticket.
+- §3/§4's cited latency figure comes from VirtualHere (Phantom-Sense), a proprietary
+  USB-over-network product, not from the Linux-kernel usbip/vhci-hcd stack this doc is
+  about — no usbip-specific latency figure was found; this is still an open item for
+  fleet measurement, not resolved by that citation (wq#4488, per wq#4478's judgment).
