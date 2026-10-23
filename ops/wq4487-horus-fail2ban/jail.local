@@ -1,0 +1,19 @@
+# wq#4487 — fail2ban jail for Horus (100.83.19.124).
+# Installed to /etc/fail2ban/jail.local by install.sh.
+#
+# ignoreip covers loopback and the tailnet CGNAT range so a flaky client on
+# the tailnet can never get itself banned off Horus — UFW (per the audit,
+# already GOOD on Horus) is the real perimeter; fail2ban here is defense in
+# depth against SSH brute force from anywhere UFW's "allow 22 from anywhere"
+# rule still lets through.
+
+[DEFAULT]
+ignoreip = 127.0.0.1/8 ::1 100.64.0.0/10
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+
+[sshd]
+enabled = true
+port    = ssh
+backend = systemd
