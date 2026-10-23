@@ -124,6 +124,15 @@ Three changes follow from that, all in this PR's successor commit:
 `scripts/wq4578_outside_probe.py` now probes both bundle copies for the same reason — a probe
 against phase 1 alone would have passed while the live parser stayed broken.
 
+Running the **phase-2** installer then surfaced a fourth problem (`kb/ISSUE-LOG.md` row
+**1552**): it is not re-runnable either. Its step 3 (`migrate_decisions.py`) SELECTs PG
+`fleet_decisions`/`fleet_facts`, which its own step 5 renames to `retired_*` — so after the
+first install there was no deploy path at all for a renderer that lives untracked in
+`minerva/memory`. Fixed with `_source_table()`: a `to_regclass` probe that falls back to the
+frozen `retired_*` copy and returns `None` when neither exists (the mirror is
+`INSERT OR IGNORE`, so a re-run is a no-op resync), covered by
+`test_source_table_falls_back_to_frozen_copy` against a fake cursor — no PG needed.
+
 `kb/ISSUE-LOG.md`: row 1543 flipped to `fixed (wq#4578)` with the ruling; row **1546** appended
 for the reusable lesson — before reporting a capability gap, grep
 `harness/worker-settings.json` for an allowlisted wrapper that reaches the same fact

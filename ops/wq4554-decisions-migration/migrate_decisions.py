@@ -30,13 +30,30 @@ LANE = "wq4554"
 SOURCE_REF = "wq#4554"
 
 
+def _source_table(cur, name):
+    """wq#4578: this installer's own step 4 renames the source tables to
+    `retired_*`, so a second run of install.sh died here with UndefinedTable —
+    i.e. the bundle could never be re-installed, and re-install is the only
+    deploy path for a renderer that lives untracked in minerva/memory. Read the
+    frozen copy when the live name is gone (the mirror is INSERT OR IGNORE, so
+    a re-run is a no-op resync), and return None when neither exists."""
+    for candidate in (name, "retired_" + name):
+        cur.execute("SELECT to_regclass(%s)", (candidate,))
+        if cur.fetchone()[0] is not None:
+            return candidate
+    return None
+
+
 def fetch_pg_rows():
     conn = rs._connect()
     try:
         cur = conn.cursor()
+        table = _source_table(cur, "fleet_decisions")
+        if table is None:
+            return []
         cur.execute(
             "SELECT id, decision, rationale, scope, status, created_at, supersedes "
-            "FROM fleet_decisions ORDER BY id")
+            "FROM " + table + " ORDER BY id")
         rows = cur.fetchall()
     finally:
         conn.close()
@@ -50,9 +67,12 @@ def fetch_pg_facts():
     conn = rs._connect()
     try:
         cur = conn.cursor()
+        table = _source_table(cur, "fleet_facts")
+        if table is None:
+            return []
         cur.execute(
             "SELECT id, subject, attribute, value, source, status, expires_at "
-            "FROM fleet_facts ORDER BY id")
+            "FROM " + table + " ORDER BY id")
         rows = cur.fetchall()
     finally:
         conn.close()

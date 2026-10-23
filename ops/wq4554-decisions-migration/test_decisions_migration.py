@@ -52,6 +52,31 @@ def test_render_reads_minerva_not_pg():
     con.close()
 
 
+class _FakeCur:
+    """Minimal psycopg2-cursor stand-in: knows which table names exist."""
+
+    def __init__(self, existing):
+        self.existing = existing
+        self._last = None
+
+    def execute(self, sql, params=None):
+        self._last = params[0]
+
+    def fetchone(self):
+        return (self._last if self._last in self.existing else None,)
+
+
+def test_source_table_falls_back_to_frozen_copy():
+    """wq#4578: install.sh's step 4 renames the source tables to retired_*, so
+    a second run of the installer must read the frozen copy instead of dying
+    on UndefinedTable — re-install is the only deploy path for the renderer."""
+    assert md._source_table(_FakeCur({"fleet_decisions"}), "fleet_decisions") \
+        == "fleet_decisions"
+    assert md._source_table(_FakeCur({"retired_fleet_decisions"}),
+                            "fleet_decisions") == "retired_fleet_decisions"
+    assert md._source_table(_FakeCur(set()), "fleet_facts") is None
+
+
 def test_parse_state_lines_binds_last_since_clause():
     """wq#4578 regression, carried into phase 2 because this bundle's
     context_builder.py is the copy that is actually installed: the value group
