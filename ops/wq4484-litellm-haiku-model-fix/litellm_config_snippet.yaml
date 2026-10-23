@@ -1,0 +1,15 @@
+# wq#4484: lumen/claude-haiku was pointing at an unverified model string.
+# Verified against https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions
+# (dated-snapshot format for pre-4.6-generation models): claude-haiku-4-5-20251001.
+#
+# Live /home/lumen/agent/litellm_config.yaml already carried a DIFFERENT bad value
+# than the ticket's reported one — not claude-haiku-4-20250514, but the unverified
+# third-party string claude-haiku-5-5 (someone had already hand-edited it since the
+# ticket was filed). This snippet is the corrected entry as applied live.
+- model_name: lumen/claude-haiku
+  litellm_params:
+    model: anthropic/claude-haiku-4-5-20251001
+    api_key: os.environ/ANTHROPIC_API_KEY
+    extra_headers:
+      anthropic-workspace-id: wrkspc_017zvy386miL7cs9TKomFovm
+    timeout: 30
