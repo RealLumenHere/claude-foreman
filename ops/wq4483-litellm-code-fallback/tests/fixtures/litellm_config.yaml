@@ -1,0 +1,49 @@
+model_list:
+- model_name: lumen-lfm2-1b
+  litellm_params:
+    model: openai/lfm2-1b
+- model_name: lumen/code
+  litellm_params:
+    model: ollama/qwen3.6:35b-a3b
+    api_base: http://100.100.129.24:11434/v1
+    api_key: none
+    timeout: 60
+    stream_timeout: 60
+    num_retries: 0
+    max_parallel_requests: 2
+  model_info:
+    mode: chat
+    description: "qwen2.5-coder:14b on isis (ollama) -- stale description, wq#4228"
+- model_name: isis-coder-14b
+  litellm_params:
+    model: ollama/qwen3.6:35b-a3b
+    api_base: http://100.100.129.24:11434/v1
+    api_key: none
+    timeout: 60
+    stream_timeout: 60
+    num_retries: 0
+    max_parallel_requests: 2
+  model_info:
+    mode: chat
+    description: "qwen2.5-coder:14b Q4_K_M on isis, 16384 ctx -- stale description"
+- model_name: deepseek-v4-flash
+  litellm_params:
+    model: deepseek/deepseek-v4-flash
+router_settings:
+  retry_policy:
+    BadRequestErrorRetries: 0
+    AuthenticationErrorRetries: 0
+  routing_strategy: least-busy
+  num_retries: 3
+  retry_after: 2
+  allowed_fails: 2
+  model_group_alias:
+    lumen/fast: lumen-lfm2-1b
+  fallbacks:
+  - lumen-lfm2-1b:
+    - openrouter-free
+  enable_pre_call_checks: true
+litellm_settings:
+  request_timeout: 240
+  drop_params: true
+  set_verbose: false
