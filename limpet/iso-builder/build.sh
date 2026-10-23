@@ -321,6 +321,22 @@ stage3b_enable_test_ssh() {
 }
 
 # ---------------------------------------------------------------------------
+# Stage 3c -- base network utilities (wq#4547)
+# ---------------------------------------------------------------------------
+# The stock Xubuntu 26.04 casper stack ships wget and iproute2 but NOT curl or
+# net-tools (ifconfig/netstat): checked against the minimal, minimal.standard
+# and minimal.standard.live manifest.full files of the base ISO. Anyone
+# debugging a booted ISO expects them. Installed into the same layer stage3
+# fills (the one the installer copies to disk), so they survive installation.
+# apt-get install is idempotent, so re-running the stage is safe.
+stage3c_install_base_utils() {
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
+  log "stage3c: installing curl and net-tools (absent from every base layer)"
+  chroot "$CHROOT" apt-get install -y curl net-tools
+  log "stage3c: curl and net-tools installed"
+}
+
+# ---------------------------------------------------------------------------
 # Stage 4 -- RE tool packaging
 # ---------------------------------------------------------------------------
 stage4_package_re_tools() {
@@ -749,6 +765,7 @@ STAGES=(
   stage2_remove_bloat
   stage3_inject_limpet_packages
   stage3b_enable_test_ssh
+  stage3c_install_base_utils
   stage4_package_re_tools
   stage5_bundle_hardware_book
   stage6_bundle_target_device_db
