@@ -30,6 +30,9 @@ ISO_EXTRACT="$WORKDIR/iso-extract"
 LAYERS_DIR="$WORKDIR/layers"
 OUT_DIR="${LIMPET_ISO_OUT_DIR:-$WORKDIR/out}"
 ISO_NAME="${LIMPET_ISO_NAME:-limpet-$(date -u +%Y%m%d).iso}"
+TOOL_CATALOG="${LIMPET_TOOL_CATALOG:-$LIMPET_ROOT/tool-catalog.json}"
+# stage4 writes it, stage11 refuses to pack a layer that does not carry what it lists.
+TOOL_MANIFEST="$WORKDIR/tool-packages.json"
 
 XUBUNTU_VERSION="26.04"
 # Caller-supplied: a locally cached base ISO + its published sha256. This
@@ -270,26 +273,50 @@ stage3_inject_limpet_packages() {
 # Stage 4 -- RE tool packaging
 # ---------------------------------------------------------------------------
 stage4_package_re_tools() {
-  log "stage4: RE tool packaging from tool-catalog.json"
+  log "stage4: RE tool packaging from $TOOL_CATALOG"
   require_cmd python3
-  local manifest="$WORKDIR/tool-packages.json"
+  require_cmd jq
+  require_cmd chroot
+  # wq#4524: this used to be `if [ -d "$CHROOT" ]; then ...install...; fi; return 0`, the
+  # only stage that skipped instead of failing on a missing chroot -- so a run whose
+  # CHROOT didn't match the one stage1b mounted wrote the manifest, installed nothing, and
+  # exited 0, and the ISO shipped with zero RE tools.
+  mountpoint -q "$CHROOT" || fail "chroot not mounted at $CHROOT (run stage1b_assemble_chroot with the same LIMPET_ISO_WORKDIR)"
   mkdir -p "$WORKDIR"
-  python3 -I "$HERE/gen_tool_packages.py" --catalog "$LIMPET_ROOT/tool-catalog.json" --out "$manifest"
-  log "stage4: manifest at $manifest"
-  if [ -d "$CHROOT" ]; then
-    require_cmd jq
-    local pkgs
-    pkgs="$(jq -r '.apt_packages[]' "$manifest" | tr '\n' ' ')"
-    [ -n "$pkgs" ] && chroot "$CHROOT" apt-get install -y $pkgs
-    local unresolved
-    unresolved="$(jq '.totals.unresolved' "$manifest")"
-    log "stage4: $unresolved catalog tools unresolved on this build host (see $manifest, never guessed)"
-    [ "$(jq '.cargo_crates | length' "$manifest")" -gt 0 ] && stage4b_build_cargo_tools "$manifest"
-    { [ "$(jq '.pip_packages | length' "$manifest")" -gt 0 ] ||
-      [ "$(jq '.pip_git_packages | length' "$manifest")" -gt 0 ]; } && stage4c_build_pip_tools "$manifest"
-    [ "$(jq '.binary_artifacts | length' "$manifest")" -gt 0 ] && stage4d_fetch_binary_tools "$manifest"
-  fi
-  return 0
+  python3 -I "$HERE/gen_tool_packages.py" --catalog "$TOOL_CATALOG" --out "$TOOL_MANIFEST"
+  log "stage4: manifest at $TOOL_MANIFEST"
+  local pkgs
+  pkgs="$(jq -r '.apt_packages[]' "$TOOL_MANIFEST" | tr '\n' ' ')"
+  if [ -n "$pkgs" ]; then chroot "$CHROOT" apt-get install -y $pkgs; fi
+  log "stage4: $(jq '.totals.unresolved' "$TOOL_MANIFEST") catalog tools unresolved on this build host (see $TOOL_MANIFEST, never guessed)"
+  if [ "$(jq '.cargo_crates | length' "$TOOL_MANIFEST")" -gt 0 ]; then stage4b_build_cargo_tools "$TOOL_MANIFEST"; fi
+  if [ "$(jq '.pip_packages + .pip_git_packages | length' "$TOOL_MANIFEST")" -gt 0 ]; then stage4c_build_pip_tools "$TOOL_MANIFEST"; fi
+  if [ "$(jq '.binary_artifacts | length' "$TOOL_MANIFEST")" -gt 0 ]; then stage4d_fetch_binary_tools "$TOOL_MANIFEST"; fi
+  verify_re_tools "$CHROOT" || fail "stage4: installs reported success but the tools above are missing from $CHROOT"
+  log "stage4: every manifest tool verified present in $CHROOT"
+}
+
+# wq#4524: every tool the stage4 manifest lists must be present under <root>: apt packages
+# installed in its dpkg db, built binaries at their install paths, binary artifacts
+# unpacked. Logs each miss and returns 1 if any.
+verify_re_tools() {
+  local root="$1" miss=0 p bin dir
+  [ -f "$TOOL_MANIFEST" ] || { log "no $TOOL_MANIFEST -- stage4_package_re_tools never ran against this WORKDIR"; return 1; }
+  while read -r p; do
+    [ -n "$p" ] || continue
+    if [ "$(dpkg-query --admindir="$root/var/lib/dpkg" -W -f='${db:Status-Status}' "$p" 2>/dev/null)" != "installed" ]; then
+      log "missing RE tool apt package: $p"; miss=1
+    fi
+  done < <(jq -r '.apt_packages[]' "$TOOL_MANIFEST")
+  while read -r bin; do
+    [ -n "$bin" ] || continue
+    [ -x "$root$bin" ] || { log "missing RE tool binary: $bin"; miss=1; }
+  done < <(jq -r '((.cargo_crates + .pip_packages)[] | "/usr/local/bin/" + .bin), (.pip_git_packages[] | "/opt/re-venv/bin/" + .bin)' "$TOOL_MANIFEST")
+  while read -r dir; do
+    [ -n "$dir" ] || continue
+    [ -n "$(ls -A "$root$dir" 2>/dev/null)" ] || { log "missing RE tool artifact dir: $dir"; miss=1; }
+  done < <(jq -r '.binary_artifacts[].extract_to' "$TOOL_MANIFEST")
+  return "$miss"
 }
 
 # wq#4097: build recipe-backed cargo crates (e.g. binwalk v3) in an ubuntu:$XUBUNTU_VERSION
@@ -545,6 +572,11 @@ stage11_build_hybrid_iso() {
   local casper="$ISO_EXTRACT/casper" upper="$LAYERS_DIR/upper" layer parent
   layer="$(target_layer)"
   [ -d "$upper" ] || fail "no $upper -- run stage1b_assemble_chroot first"
+  # wq#4524: check upper/ itself, the tree that becomes the squashfs, so a skipped stage4
+  # or installs that went to some other mount fail here instead of shipping an ISO
+  # without RE tools.
+  require_cmd jq
+  verify_re_tools "$upper" || fail "refusing to pack $upper without the stage4 RE tools (see above)"
   parent="$(iso_layers lowerdirs --layer "$layer" --root . | cut -d: -f1)"
   parent="${parent#./}"
 
@@ -647,6 +679,7 @@ Env:
   LIMPET_ISO_WORKDIR      scratch dir (default: $HERE/.build)
   LIMPET_ISO_OUT_DIR      output dir (default: \$WORKDIR/out)
   LIMPET_ISO_NAME         output filename (default: limpet-<date>.iso)
+  LIMPET_TOOL_CATALOG     RE tool catalog for stage4 (default: \$LIMPET_ROOT/tool-catalog.json)
 EOF
 }
 

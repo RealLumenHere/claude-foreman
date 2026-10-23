@@ -17,6 +17,7 @@ minimal.standard.squashfs and nowhere else -- picking the live layer, the
 first source, or packing the whole chroot as one image all fail it.
 """
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -114,6 +115,23 @@ case "$1" in */run) rm -rf "$1"/systemd ;; esac
 
 FAKE_MOUNTPOINT = '#!/usr/bin/env bash\n[ -f "$FAKE_MNT" ] && grep -qxF "$2" "$FAKE_MNT"\n'
 
+# The fake chroot execs on the host, so `apt-get install` records its packages in the
+# chroot's dpkg db (through the overlay symlink, i.e. into upper/) the way a real one would.
+FAKE_APT_GET = r"""#!/usr/bin/env bash
+[ "$1" = install ] || exit 0
+for p in "$@"; do
+  case "$p" in install|-*) ;; *)
+    printf 'Package: %s\nStatus: install ok installed\nMaintainer: t\nArchitecture: amd64\nVersion: 1.0\nDescription: t\n\n' "$p" >>"$FAKE_DPKG_STATUS" ;;
+  esac
+done
+"""
+
+# One apt tool: stage4 resolves it through gen_tool_packages.py like the real catalog,
+# without the container builds the cargo/pip/binary tools need.
+TEST_CATALOG = {"tools": [
+    {"name": "limpet-test-tool", "trust": "core", "install_method": "apt", "package": "limpet-test-pkg"},
+]}
+
 # wq#4456: stage1b now refuses to run unless EUID 0 (the mounts it makes are real root-only
 # calls even though this fixture fakes them). This suite intentionally doesn't run as root
 # (see module docstring), so fake `id` the same way mount/umount/mountpoint are faked.
@@ -123,6 +141,14 @@ FAKE_ID = '#!/usr/bin/env bash\n[ "$1" = "-u" ] && echo 0 || exec /usr/bin/id "$
 def _exe(path, body):
     path.write_text(body)
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+
+def _stage4_env(tmp, bin_dir, work):
+    _exe(bin_dir / "apt-get", FAKE_APT_GET)
+    catalog = tmp / "tool-catalog.json"
+    catalog.write_text(json.dumps(TEST_CATALOG))
+    return {"LIMPET_TOOL_CATALOG": str(catalog),
+            "FAKE_DPKG_STATUS": str(work / "chroot/var/lib/dpkg/status")}
 
 
 def _status(*pkgs):
@@ -205,7 +231,6 @@ def remaster(tmp_path_factory):
     _exe(bin_dir / "mountpoint", FAKE_MOUNTPOINT)
     _exe(bin_dir / "id", FAKE_ID)
     _exe(bin_dir / "chroot", '#!/usr/bin/env bash\nshift\nexec "$@"\n')
-    _exe(bin_dir / "apt-get", "#!/usr/bin/env bash\nexit 0\n")
 
     work = tmp / "work"
     env = {
@@ -215,6 +240,7 @@ def remaster(tmp_path_factory):
         "LIMPET_BASE_ISO_SHA256": hashlib.sha256(iso.read_bytes()).hexdigest(),
         "LIMPET_ISO_WORKDIR": str(work),
         "LIMPET_ISO_NAME": "limpet-test.iso",
+        **_stage4_env(tmp, bin_dir, work),
     }
 
     def run(stage):
@@ -225,10 +251,8 @@ def remaster(tmp_path_factory):
     run("stage1_fetch_base_iso")
     run("stage1b_assemble_chroot")
     run("stage1b_assemble_chroot")  # idempotent: second call reuses the mount
+    run("stage4_package_re_tools")  # dpkg db gains limpet-test-pkg via the fake apt-get
     run("stage6_bundle_target_device_db")
-    # Stand-in for an apt-get install in stages 4/9: dpkg db gains a package.
-    status = work / "chroot/var/lib/dpkg/status"
-    status.write_text(status.read_text() + _status("limpet-test-pkg"))
     run("stage11_build_hybrid_iso")
 
     out = work / "out/limpet-test.iso"
@@ -310,6 +334,7 @@ def _stage1_env(tmp_path, fake_id):
         "LIMPET_BASE_ISO_SHA256": hashlib.sha256(iso.read_bytes()).hexdigest(),
         "LIMPET_ISO_WORKDIR": str(work),
         "LIMPET_ISO_NAME": "limpet-test.iso",
+        **_stage4_env(tmp_path, bin_dir, work),
     }
     r = subprocess.run(["bash", str(BUILD), "stage1_fetch_base_iso"], env=env, capture_output=True, text=True)
     assert r.returncode == 0, f"stage1 setup failed:\n{r.stderr}"
@@ -338,3 +363,50 @@ def test_stage1b_refuses_stale_non_root_upper(tmp_path):
     r = subprocess.run(["bash", str(BUILD), "stage1b_assemble_chroot"], env=env, capture_output=True, text=True)
     assert r.returncode != 0
     assert "stale non-root extraction" in r.stderr
+
+
+# --- wq#4524: an ISO shipped with zero RE tools; stage4 and stage11 now fail closed ------
+
+def _build(env, stage):
+    return subprocess.run(["bash", str(BUILD), stage], env=env, capture_output=True, text=True)
+
+
+def test_stage4_refuses_unmounted_chroot(tmp_path):
+    # Pre-fix, stage4 with no chroot wrote the manifest, installed nothing, and exited 0.
+    env, work = _stage1_env(tmp_path, fake_id=True)
+    r = _build(env, "stage4_package_re_tools")
+    assert r.returncode != 0
+    assert "chroot not mounted" in r.stderr
+
+
+def test_stage4_refuses_installs_that_miss_the_chroot(tmp_path):
+    # apt reports success but writes some other dpkg db (a chroot other than the
+    # overlay stage1b mounted): the packages never reach upper/.
+    env, work = _stage1_env(tmp_path, fake_id=True)
+    assert _build(env, "stage1b_assemble_chroot").returncode == 0
+    env["FAKE_DPKG_STATUS"] = str(tmp_path / "elsewhere-status")
+    r = _build(env, "stage4_package_re_tools")
+    assert r.returncode != 0
+    assert "missing RE tool apt package: limpet-test-pkg" in r.stderr
+
+
+def test_stage11_refuses_to_pack_without_stage4(tmp_path):
+    # The external wrapper's stage loop skipped stage4 and still produced an ISO.
+    env, work = _stage1_env(tmp_path, fake_id=True)
+    assert _build(env, "stage1b_assemble_chroot").returncode == 0
+    r = _build(env, "stage11_build_hybrid_iso")
+    assert r.returncode != 0
+    assert "stage4_package_re_tools never ran" in r.stderr
+    assert not (work / "out/limpet-test.iso").exists()
+
+
+def test_stage11_refuses_upper_missing_a_stage4_tool(tmp_path):
+    env, work = _stage1_env(tmp_path, fake_id=True)
+    assert _build(env, "stage1b_assemble_chroot").returncode == 0
+    status = work / "layers/upper/var/lib/dpkg/status"
+    before = status.read_text()
+    assert _build(env, "stage4_package_re_tools").returncode == 0
+    status.write_text(before)  # upper/ lost the install between stage4 and stage11
+    r = _build(env, "stage11_build_hybrid_iso")
+    assert r.returncode != 0
+    assert "missing RE tool apt package: limpet-test-pkg" in r.stderr

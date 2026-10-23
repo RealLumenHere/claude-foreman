@@ -233,6 +233,34 @@ at a real checkout of this repo and drop its own stage list in favor of `./build
 or keep it a thin wrapper that still sources the full `STAGES` array rather than
 re-enumerating a subset that drifts (as it already has, twice: stage3 and now stage4/8).
 
+## wq#4524 — an ISO with zero RE tools now fails the build
+
+The ticket's three hypotheses, checked against this script:
+
+- **"stage4 failed silently"**: true whenever stage4 ran without a chroot.
+  `stage4_package_re_tools` was the only stage that wrapped its installs in
+  `if [ -d "$CHROOT" ]` and returned 0 otherwise, so it wrote the manifest, installed
+  nothing, and passed. It now fails unless `$CHROOT` is mounted.
+- **"CHROOT not inherited"**: `CHROOT` is always `$LIMPET_ISO_WORKDIR/chroot`
+  (`build.sh:26`). An exported `CHROOT` is overwritten, so a wrapper that mounts its own
+  chroot somewhere else and runs `build.sh <stage>` against a different workdir hits the
+  silent skip above.
+- **"packing dropped the changes"**: stage11 packs `layers/upper/`, not `$CHROOT`. Writes
+  that go to any mount other than stage1b's overlay never reach the squashfs.
+
+The fix doesn't depend on which of these happened. `verify_re_tools` checks every tool in
+`tool-packages.json` (apt package installed in the dpkg db, built binary at its
+`/usr/local/bin` or `/opt/re-venv/bin` path, artifact dir non-empty). stage4 runs it on
+the chroot after installing. stage11 runs it on `upper/` before `mksquashfs`, and fails
+if the manifest is missing, i.e. stage4 never ran. The external wrapper's stage subset
+(wq#4456) now fails at stage11 instead of shipping a tool-less ISO.
+
+The ticket's figures (104 tools, a 29K `tool-catalog.json`, picocom) don't match this
+repo: `limpet/tool-catalog.json` is 73K, lists 44 tools, and has no picocom entry. They
+most likely describe the stale out-of-tree copy under `/home/lumen/projects/limpet` that
+the wrapper's `LIMPET_ROOT` resolves to (wq#4456). `LIMPET_TOOL_CATALOG` overrides the
+catalog path; the tests use it.
+
 ## Tests
 
 ```sh
