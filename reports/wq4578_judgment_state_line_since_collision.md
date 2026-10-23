@@ -95,6 +95,35 @@ The falsification run is the point: both the regression test and the outside pro
 the pre-fix pattern and pass after, so neither is a tautology over the population the fix was
 designed around.
 
+## Deploying the ruling: the live renderer is phase 2, not this bundle
+
+Re-applying the phase-1 bundle to ship the fix exposed a third stale premise, and caused a
+short live incident (recovered; `kb/ISSUE-LOG.md` row **1550**):
+
+- `/home/lumen/minerva/memory/context_builder.py` is the **wq#4554 phase-2** renderer, not
+  wq#4553's. Phase 2 reads decisions/facts from `minerva.db` and froze the four PG memory
+  tables to `retired_*`.
+- `ops/wq4553-context-builder-live-roster/install.sh` installs to that same untracked path with
+  no supersession check, so the re-apply rolled the live renderer back to the PG-reading
+  phase-1 copy, which then died on `UndefinedTable: relation "fleet_decisions" does not exist`.
+- Recovered from the backup the installer itself takes (`install.sh:33`):
+  `install -m 0644 …context_builder.py.bak.20261023_wq4553 …context_builder.py`, md5
+  `a1ebff40…` matching the backup. Live renderer is back to phase 2.
+
+Three changes follow from that, all in this PR's successor commit:
+
+1. The greedy value group is carried into **`ops/wq4554-decisions-migration/context_builder.py`**
+   — the copy that is actually installed. Fixing only the phase-1 bundle would have been a
+   paper fix.
+2. `ops/wq4553-context-builder-live-roster/install.sh` now refuses (exit 2) when `LIVE` contains
+   `wq#4554`, pointing at the phase-2 installer; `--force` is the deliberate rollback.
+3. `ops/wq4554-decisions-migration/freeze_pg_memory_tables.sql` uses `ALTER TABLE IF EXISTS`,
+   because re-install is the only deploy path for an untracked live renderer and a bare
+   `RENAME` aborts the installer under `set -e` on the second run.
+
+`scripts/wq4578_outside_probe.py` now probes both bundle copies for the same reason — a probe
+against phase 1 alone would have passed while the live parser stayed broken.
+
 `kb/ISSUE-LOG.md`: row 1543 flipped to `fixed (wq#4578)` with the ruling; row **1546** appended
 for the reusable lesson — before reporting a capability gap, grep
 `harness/worker-settings.json` for an allowlisted wrapper that reaches the same fact

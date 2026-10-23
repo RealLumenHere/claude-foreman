@@ -50,3 +50,29 @@ def test_render_reads_minerva_not_pg():
     # the superseded row must not render as current (phase 0 contract)
     assert "old rule" not in text
     con.close()
+
+
+def test_parse_state_lines_binds_last_since_clause():
+    """wq#4578 regression, carried into phase 2 because this bundle's
+    context_builder.py is the copy that is actually installed: the value group
+    is greedy, so a value whose own free text contains a "(since DATE)"
+    fragment binds to the LAST clause — the one lumen_state.py appends. The
+    non-greedy `.*?` this replaces parsed the first line below as
+    value="flaky", since="2020-01-01": truncated, six years stale, no error.
+    Fixture is the pinned one from the phase-1 bundle (sibling dir, committed,
+    immutable) so both copies of the parser are probed against identical bytes.
+    """
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "wq4553-context-builder-live-roster", "fixtures",
+        "state_embedded_since_wq4578.txt")
+    with open(path, encoding="utf-8") as fh:
+        facts = cb.parse_state_lines(fh.read())
+    got = {(f["subject"], f["predicate"]): (f["value"], f["since"]) for f in facts}
+    assert len(facts) == 6
+    assert got[("testhost", "status")] == (
+        "flaky (since 2020-01-01) but recovered", "2026-10-11")
+    assert got[("dualhost", "lan_ip")] == (
+        "192.168.8.44 (static lease since 2025-12-01; see wq#4539)", "2026-08-14")
+    assert got[("tailhost", "role")] == ("watchdog (since 2024-05-05)", "2026-10-22")
+    assert got[("emptyhost", "status")] == ("", "2026-10-20")

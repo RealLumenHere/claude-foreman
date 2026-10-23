@@ -13,7 +13,14 @@
 -- actually blocks a write. Renaming keeps the data as a live rollback
 -- (alongside the pg_dump this ticket's install.sh takes first); nothing is
 -- dropped.
-ALTER TABLE fleet_facts     RENAME TO retired_fleet_facts;
-ALTER TABLE fleet_devices   RENAME TO retired_fleet_devices;
-ALTER TABLE agent_episodes  RENAME TO retired_agent_episodes;
-ALTER TABLE fleet_decisions RENAME TO retired_fleet_decisions;
+--
+-- wq#4578: `IF EXISTS` so the whole install.sh is re-runnable. Shipping a
+-- fix to the renderer now means re-running this installer (the live
+-- context_builder.py is untracked in minerva, so re-install IS the deploy
+-- path), and a bare RENAME aborts the script under `set -e` once the tables
+-- are already renamed — leaving the installer exited 1 before its own
+-- --verify step. IF EXISTS makes a second run a no-op here instead.
+ALTER TABLE IF EXISTS fleet_facts     RENAME TO retired_fleet_facts;
+ALTER TABLE IF EXISTS fleet_devices   RENAME TO retired_fleet_devices;
+ALTER TABLE IF EXISTS agent_episodes  RENAME TO retired_agent_episodes;
+ALTER TABLE IF EXISTS fleet_decisions RENAME TO retired_fleet_decisions;
