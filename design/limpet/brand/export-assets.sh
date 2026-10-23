@@ -41,6 +41,16 @@ for name in agent workspace settings; do
   done
 done
 
+# Panel genmon status icons (docs/desktop-spec.md §4.1/§4.3) -- replace the
+# generic freedesktop icon names (dialog-ok-apply, dialog-warning,
+# network-wired, network-offline) the genmon scripts used before wq#4602.
+for name in status-ok status-warning status-offline; do
+  for px in 16 22 24 48; do
+    rsvg-convert -w "$px" -h "$px" "$HERE/icons/limpet-$name.svg" \
+      -o "$OUT/icons/limpet-$name-$px.png"
+  done
+done
+
 # Desktop wallpaper (branding-spec.md §4.2 optional centered mark; this ships
 # the subtle branded variant).
 rsvg-convert -w 1920 -h 1080 "$WALL" -o "$OUT/limpet-wallpaper.png"

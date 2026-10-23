@@ -4,7 +4,8 @@ j=$(limpet list --json 2>/dev/null) || { echo "<txt>Tools: ?</txt><tool>registry
 ok=$(printf '%s' "$j" | jq '[.plugins[] | select(.state=="active")] | length')
 tot=$(printf '%s' "$j" | jq '.plugins | length')
 bad=$(printf '%s' "$j" | jq -r '[.plugins | to_entries[] | select(.value.state!="active") | "\(.key): \(.value.state) (\(.value.reason))"] | .[]')
-icon="dialog-ok-apply"; [ "$ok" = "$tot" ] || icon="dialog-warning"
+icon="/opt/limpet/brand/icons/limpet-status-ok-16.png"
+[ "$ok" = "$tot" ] || icon="/opt/limpet/brand/icons/limpet-status-warning-16.png"
 echo "<img>$icon</img><txt>Tools: ${ok}/${tot}</txt>"
 echo "<tool>Healthy ${ok} of ${tot} plugins${bad:+\n$bad}</tool>"
 echo "<click>xfce4-terminal -e 'limpet list'</click>"

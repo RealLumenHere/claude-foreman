@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Limpet status: offline">
+  <!-- Panel genmon status icon (docs/desktop-spec.md §4.3), docs/branding-spec.md
+       §2.1 palette. Flat token colors: muted #7A8C8A fill, surface #152221 ring,
+       foreground #D6E2DF slash marking the disconnected state. -->
+  <circle cx="24" cy="24" r="18" fill="#7A8C8A" stroke="#152221" stroke-width="2.5"/>
+  <path d="M 13 13 L 35 35" fill="none" stroke="#D6E2DF" stroke-width="3.6" stroke-linecap="round"/>
+</svg>

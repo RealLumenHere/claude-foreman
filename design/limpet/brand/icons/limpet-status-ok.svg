@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Limpet status: healthy">
+  <!-- Panel genmon status icon (docs/desktop-spec.md §4.1/§4.3), docs/branding-spec.md
+       §2.1 palette. Flat token colors: success #5FA876 fill, surface #152221 ring.
+       Motif: the signature ray dot, recolored to the status it reports. -->
+  <circle cx="24" cy="24" r="18" fill="#5FA876" stroke="#152221" stroke-width="2.5"/>
+  <path d="M 15 24 L 21 30 L 33 17" fill="none" stroke="#152221" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

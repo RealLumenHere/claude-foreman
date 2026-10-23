@@ -27,6 +27,9 @@ THEME_FILES = [
     BRAND / "icons" / "limpet-agent.svg",
     BRAND / "icons" / "limpet-workspace.svg",
     BRAND / "icons" / "limpet-settings.svg",
+    BRAND / "icons" / "limpet-status-ok.svg",
+    BRAND / "icons" / "limpet-status-warning.svg",
+    BRAND / "icons" / "limpet-status-offline.svg",
 ]
 
 # The ticket text named these raw installer hexes; the formalized, AA-tested
