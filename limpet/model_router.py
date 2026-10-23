@@ -85,6 +85,86 @@ def resolve_profile(profile: str, *, profile_models: dict, resident_model: str,
     return profile_models.get(profile) or resident_model
 
 
+# wq#4510 -- agent-role split. The fleet's LiteLLM alias layer already names two
+# roles (`ops/wq3849-m80s-llm-deployment/litellm-aliases.yaml:10-14`): `agent-fast`
+# (MoE, interactive chat and simple tool dispatch) and `agent-deep` (reasoning
+# model, multi-step plans and firmware/decompilation work). `docs/settings-spec.md`
+# §4.1 names the corresponding settings keys `llm.role.agent_fast` / `llm.role.agent_deep`.
+# Same pure-decision posture as resolve_model: the classifier below names the ROLE a
+# request needs; the caller (the agent core) maps role->model via its configured
+# role_models and places the LiteLLM call itself.
+AGENT_FAST = "agent-fast"
+AGENT_DEEP = "agent-deep"
+AGENT_ROLES = (AGENT_FAST, AGENT_DEEP)
+
+# Signals that a request (or its prior context) is RE work the reasoning model
+# should take: firmware analysis, decompilation, or a multi-step RE workflow.
+# A closed, lowercase keyword set -- matched as substrings so "decompile",
+# "decompiler", "decompilation" all hit one entry. Kept here (not in the caller)
+# so the heuristic is pure and offline-testable, same reason as resolve_model.
+_DEEP_SIGNALS = (
+    "firmware",
+    "decompil",
+    "disassembl",
+    "reverse engineer",
+    "reverse-engineer",
+    "reverse engineering",
+    "binary analysis",
+    "ghidra",
+    "multi-step",
+    "multistep",
+)
+
+
+def classify_agent_role(request: str, *, prior_context: str = "") -> str:
+    """Return the agent role a chat turn needs: AGENT_DEEP for firmware analysis,
+    decompilation, or multi-step RE workflows, else AGENT_FAST.
+
+    The wq#4510 decision heuristic. `request` is the current user message;
+    `prior_context` is earlier conversation text that can also pull a turn deep
+    (the ticket's "or prior context involves ..." clause) -- a follow-up like
+    "and the next function?" inherits the reasoning model from the firmware
+    thread it belongs to. Matching is case-insensitive substring over a closed
+    signal set; the default is the fast MoE model, so routing deep is always a
+    positive match, never a guess. Returns a role name, not a model -- the caller
+    resolves it through resolve_agent_role."""
+    haystack = f"{request}\n{prior_context}".lower()
+    if any(signal in haystack for signal in _DEEP_SIGNALS):
+        return AGENT_DEEP
+    return AGENT_FAST
+
+
+def resolve_agent_role(role: str, *, role_models: dict, resident_model: str,
+                       override: str | None = None) -> str:
+    """Return the model name for an agent `role` (one of AGENT_ROLES).
+
+    `role_models` is the operator-configured policy (role -> model name; the
+    `llm.role.agent_fast` / `llm.role.agent_deep` settings keys). A role with no
+    entry falls back to `resident_model`, same opt-in posture as resolve_model --
+    a box with no deep model configured still answers, on the resident model.
+    `override` is the wq#4355 user-pin escape hatch: a non-empty model name wins
+    over the classifier and policy outright, so it is NOT validated against
+    AGENT_ROLES (the user is naming a model, not a role). An empty/None override
+    defers to the policy."""
+    if override:
+        return override
+    if role not in AGENT_ROLES:
+        raise RoutingError(f"role {role!r} must be one of {AGENT_ROLES}")
+    return role_models.get(role) or resident_model
+
+
+def route_agent_turn(request: str, *, role_models: dict, resident_model: str,
+                     prior_context: str = "", override: str | None = None) -> str:
+    """Classify a chat turn (classify_agent_role) and resolve it to a model name
+    (resolve_agent_role) in one call -- the agent core's entry point for the
+    wq#4510 reasoning-vs-fast split. `override` short-circuits classification,
+    same escape hatch as resolve_agent_role."""
+    if override:
+        return override
+    role = classify_agent_role(request, prior_context=prior_context)
+    return resolve_agent_role(role, role_models=role_models, resident_model=resident_model)
+
+
 def resolve_step(manifest: PluginManifest, step_name: str, *,
                   capability_models: dict, resident_model: str,
                   override: str | None = None) -> str:

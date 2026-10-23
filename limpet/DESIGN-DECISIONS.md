@@ -6,6 +6,37 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#4510 — reasoning-vs-fast agent-role split lives in the pure router
+
+**D1 — the classifier is a pure decision, not a wired model call.** The ticket asks to
+"wire the agent loop" to pick the reasoning model for firmware/decompilation/multi-step RE
+and the fast MoE model for interactive chat. But the agent loop and its LiteLLM client are
+still design-only (`model_router.py:15-22`), so there is nothing concrete to wire into yet.
+Same posture as the rest of `model_router.py`: the routing *decision* lives here, pure and
+offline-testable, and the caller (the agent core, once built) takes the returned model name
+and places the call. `classify_agent_role` maps a chat turn to a role via a closed
+substring signal set; `resolve_agent_role` maps role->model through the operator's
+`role_models` policy; `route_agent_turn` is the one-call entry point the loop will use.
+
+**D2 — route to roles, not models, matching the fleet's existing alias layer.** The m80s
+LiteLLM deployment already names exactly these two roles
+(`ops/wq3849-m80s-llm-deployment/litellm-aliases.yaml:10-14`: `agent-fast` -> MoE,
+`agent-deep` -> reasoning), and `docs/settings-spec.md` §4.1 already defines the
+`llm.role.agent_fast` / `llm.role.agent_deep` settings keys. So the classifier returns a
+role name (`AGENT_FAST`/`AGENT_DEEP`), and `resolve_agent_role` defers model selection to
+the configured policy — no model names hardcoded, same opt-in-with-resident-fallback posture
+as `resolve_model`/`resolve_profile`.
+
+**D3 — default fast, route deep only on a positive match.** Deep is the expensive route; a
+guess that sends ordinary chat to the reasoning model wastes the box's 32GB ceiling. So the
+heuristic defaults to `AGENT_FAST` and only escalates on a matched signal (firmware,
+decompil*, disassembl*, reverse-engineer, binary analysis, ghidra, multi-step). Prior
+context is folded into the haystack so a bare follow-up ("and the next function?") inherits
+deep from the firmware thread it belongs to — the ticket's "or prior context involves"
+clause. Override (wq#4355 escape hatch) short-circuits classification entirely. Falsifiable
+probes: `test_model_router.py` routes interactive requests to fast and a context-only
+follow-up to deep, so a classifier that ignored context or defaulted deep would fail.
+
 ## wq#4127 — classify what a reader perceives, not the bytes an attacker chose
 
 **D1 — normalize before classifying, in `binary_scrub`, not in `injection`.** wq#4121's

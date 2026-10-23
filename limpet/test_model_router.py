@@ -154,3 +154,91 @@ def test_resolve_step_override_wins_over_manifest_capability():
                           capability_models={"re-naming": "llm4decompile-6.7b"},
                           resident_model=RESIDENT,
                           override="user-pinned") == "user-pinned"
+
+
+# --- wq#4510: reasoning-vs-fast agent-role split ---
+
+ROLE_POLICY = {"agent-fast": "qwen3.6-35b-a3b", "agent-deep": "qwen2.5-coder-32b"}
+
+
+@pytest.mark.parametrize("request_text", [
+    "extract and analyze the firmware image from this router dump",
+    "decompile this function and explain what it does",
+    "run the decompiler over the stripped binary",
+    "walk me through a multi-step plan to reverse engineer the bootloader",
+    "open it in Ghidra and recover the structs",
+    "do the binary analysis on main()",
+])
+def test_re_requests_classify_deep(request_text):
+    assert r.classify_agent_role(request_text) == r.AGENT_DEEP
+
+
+@pytest.mark.parametrize("request_text", [
+    "hi, what can you do?",
+    "list the installed tools",
+    "show me the last report",
+    "what's the status of the current workspace?",
+])
+def test_interactive_requests_classify_fast(request_text):
+    assert r.classify_agent_role(request_text) == r.AGENT_FAST
+
+
+def test_prior_context_pulls_followup_deep():
+    # The ticket's "or prior context involves ..." clause: a bare follow-up that
+    # names nothing RE on its own inherits deep from the firmware thread it belongs
+    # to. Probes the prior_context branch (wq#2630: fails if context were ignored).
+    assert r.classify_agent_role("and the next function?",
+                                 prior_context="") == r.AGENT_FAST
+    assert r.classify_agent_role(
+        "and the next function?",
+        prior_context="user: decompile sub_401000\nassistant: it validates a login token",
+    ) == r.AGENT_DEEP
+
+
+def test_classification_is_case_insensitive():
+    assert r.classify_agent_role("Analyze this FIRMWARE blob") == r.AGENT_DEEP
+
+
+def test_resolve_agent_role_routes_to_policy_model():
+    assert r.resolve_agent_role("agent-deep", role_models=ROLE_POLICY,
+                                resident_model=RESIDENT) == "qwen2.5-coder-32b"
+    assert r.resolve_agent_role("agent-fast", role_models=ROLE_POLICY,
+                                resident_model=RESIDENT) == "qwen3.6-35b-a3b"
+
+
+def test_resolve_agent_role_falls_back_to_resident_when_unset():
+    # A box with no deep model configured still answers -- on the resident model.
+    assert r.resolve_agent_role("agent-deep", role_models={},
+                                resident_model=RESIDENT) == RESIDENT
+
+
+def test_unknown_agent_role_fails_closed():
+    with pytest.raises(r.RoutingError):
+        r.resolve_agent_role("agent-genius", role_models={}, resident_model=RESIDENT)
+
+
+def test_agent_role_override_wins_and_bypasses_validation():
+    # A user pin beats the policy and is not validated as a role (names a model).
+    assert r.resolve_agent_role("agent-deep", role_models=ROLE_POLICY,
+                                resident_model=RESIDENT,
+                                override="operator-pinned") == "operator-pinned"
+    assert r.resolve_agent_role("not-a-role", role_models={},
+                                resident_model=RESIDENT, override="pinned") == "pinned"
+    # "" / None are not pins -- they defer to the policy.
+    assert r.resolve_agent_role("agent-fast", role_models=ROLE_POLICY,
+                                resident_model=RESIDENT, override="") == "qwen3.6-35b-a3b"
+
+
+def test_route_agent_turn_end_to_end():
+    # The agent core's entry point: classify + resolve in one call. A firmware
+    # request routes to the deep model; a chat request to the fast model.
+    assert r.route_agent_turn("analyze the firmware dump", role_models=ROLE_POLICY,
+                              resident_model=RESIDENT) == "qwen2.5-coder-32b"
+    assert r.route_agent_turn("hello there", role_models=ROLE_POLICY,
+                              resident_model=RESIDENT) == "qwen3.6-35b-a3b"
+
+
+def test_route_agent_turn_override_short_circuits_classification():
+    # An override wins even on a request that would classify deep.
+    assert r.route_agent_turn("decompile this", role_models=ROLE_POLICY,
+                              resident_model=RESIDENT, override="pinned") == "pinned"
