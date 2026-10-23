@@ -894,6 +894,18 @@ CCC_MUST_BLOCK = [
     # still block (no regression from tightening the match).
     ({"command": 'git push origin main; cat "/home/lumen/ccc"'}, WORKTREE, None),
     ({"command": "git push origin main; ls /home/lumen/ccc/sub"}, WORKTREE, None),
+    # wq#4595: wq#4590's enumerated boundary set is narrower than the \b it
+    # replaced -- \b treats ANY non-word char as a boundary, so it also caught
+    # a trailing ')', backtick, or no-space shell operator right after the
+    # path. These shell-expand to a real push of the protected tree and were
+    # wrongly ALLOWED by the enumerated set (fails-open regression).
+    ({"command": "x=$(cat /home/lumen/ccc); git push origin main"}, WORKTREE, None),
+    ({"command": "git push origin main; y=$(cat /home/lumen/ccc)"}, WORKTREE, None),
+    ({"command": "git push origin main; z=`cat /home/lumen/ccc`"}, WORKTREE, None),
+    ({"command": "cd /home/lumen/ccc&&git push origin main"}, WORKTREE, None),
+    ({"command": "(cd /home/lumen/ccc)&&git push origin main"}, WORKTREE, None),
+    ({"command": "cat /home/lumen/ccc>out && git push origin main"}, WORKTREE, None),
+    ({"command": "cat /home/lumen/ccc|xargs -I{} git push origin main"}, WORKTREE, None),
 ]
 
 APPEND = "python3 /home/lumen/foreman/harness/issue_log_append.py"

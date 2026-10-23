@@ -203,10 +203,15 @@ Bash)
   # "ccc" (/home/lumen/ccc-mirror, /home/lumen/ccc.bak) is an ordinary, existing
   # path — not one "that cannot exist" as the removed comment above claimed —
   # so the bare \b false-blocked any push command that merely mentioned one.
-  # The match now requires a path separator, quote char, whitespace, semicolon,
-  # or end-of-string right after "ccc" instead, mirroring the org/repo fix:
-  # still catches /home/lumen/ccc, .../ccc/subdir, .../ccc"  and .../ccc; but
-  # lets .../ccc-mirror and .../ccc.bak through.
+  # wq#4595: that enumerated boundary set (quote/slash/semicolon/whitespace/EOL)
+  # was narrower than the \b it replaced, which treats ANY non-word char as a
+  # boundary -- so it missed ')', backtick, and no-space shell operators
+  # (&&, |, >) right after the path, letting a real push through via command
+  # substitution or an unspaced operator. The match now negates the boundary
+  # class instead of enumerating it -- any char outside [[:alnum:]_.-], or
+  # EOL -- so it still catches /home/lumen/ccc, .../ccc/subdir, .../ccc" and
+  # .../ccc; and now also $(...)/`...`/&&/|/> immediately after the path,
+  # while still letting .../ccc-mirror and .../ccc.bak through.
   CCC_TREES=${FOREMAN_CCC_TREES:-/home/lumen/ccc}
   CCC_CWD_HIT=0
   CCC_CWD=$(jfield '.cwd')
@@ -220,7 +225,7 @@ Bash)
   for target in "${CCC_SCAN_TARGETS[@]}"; do
     if printf '%s' "$target" | grep -qE '\bgit\b.*\bpush\b' \
         && { printf '%s' "$target" | grep -qiE 'RealLumenHere/ccc(\.git)?([[:space:]]|$)' \
-          || printf '%s' "$target" | grep -qE '/home/lumen/ccc(['\''"/;[:space:]]|$)' \
+          || printf '%s' "$target" | grep -qE '/home/lumen/ccc([^[:alnum:]_.-]|$)' \
           || [ "$CCC_CWD_HIT" = 1 ]; }; then
       block "git push toward RealLumenHere/ccc denied (wq#4550/wq#4551/wq#4568: public mirror of never-public ccc; cwd=$CCC_CWD)" "$RAW_CMD"
     fi
