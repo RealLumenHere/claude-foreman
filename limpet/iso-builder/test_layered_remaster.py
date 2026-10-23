@@ -545,3 +545,70 @@ def test_stage11_refuses_upper_missing_a_stage4_tool(tmp_path):
     r = _build(env, "stage11_build_hybrid_iso")
     assert r.returncode != 0
     assert "missing RE tool apt package: limpet-test-pkg" in r.stderr
+
+
+# --- wq#4596: an upper/ left by an earlier run was reused with only an ownership check,
+# so a stale upper from a different base ISO/layer (found Oct 18 still holding
+# openssh-server) would have been packed straight into the next build ------------------
+
+# The ownership check (verify_layer_ownership) runs before the fingerprint check in the
+# reuse branch, and this test harness's unsquashfs/mount calls run as the real (non-root)
+# test uid even with a faked `id`, so a upper/ actually assembled by a prior
+# stage1b_assemble_chroot call always trips ownership on reuse here -- that's the
+# existing wq#4456 guard working as designed, not something wq#4596 touches. To isolate
+# the fingerprint check the same way test_stage1b_refuses_stale_non_root_upper isolates
+# the ownership check, pre-populate upper/ directly (empty: no usr/bin, usr/sbin or
+# etc/sudoers.d content for the ownership scan to flag) instead of letting a real build
+# create it.
+def _matching_fingerprint(work, layer="minimal.standard"):
+    sq = work / "iso-extract/casper" / f"{layer}.squashfs"
+    return f"{hashlib.sha256(sq.read_bytes()).hexdigest()} {layer}\n"
+
+
+def test_stage1b_reuses_upper_with_matching_fingerprint(tmp_path):
+    env, work = _stage1_env(tmp_path, fake_id=True)
+    upper = work / "layers/upper"
+    (upper / "usr/sbin").mkdir(parents=True)  # stage1b writes usr/sbin/policy-rc.d into it
+    (work / "layers/upper.fingerprint").write_text(_matching_fingerprint(work))
+    r = _build(env, "stage1b_assemble_chroot")
+    assert r.returncode == 0, r.stderr
+
+
+def test_stage1b_refuses_upper_with_missing_fingerprint(tmp_path):
+    env, work = _stage1_env(tmp_path, fake_id=True)
+    (work / "layers/upper").mkdir(parents=True)
+    # no layers/upper.fingerprint written at all
+    r = _build(env, "stage1b_assemble_chroot")
+    assert r.returncode != 0
+    assert "no/stale fingerprint" in r.stderr
+
+
+def test_stage1b_refuses_upper_with_mismatched_fingerprint(tmp_path):
+    env, work = _stage1_env(tmp_path, fake_id=True)
+    (work / "layers/upper").mkdir(parents=True)
+    (work / "layers/upper.fingerprint").write_text("0" * 64 + " minimal.standard\n")  # some other run's upper
+    r = _build(env, "stage1b_assemble_chroot")
+    assert r.returncode != 0
+    assert "no/stale fingerprint" in r.stderr
+
+
+def test_stage11_refuses_sshd_in_upper(tmp_path):
+    # Falsifying mutation for the content guard: an upper/ that otherwise passes every
+    # other check (ownership, fingerprint, RE tools) but has sshd copied up into it --
+    # exactly what wq#4596 found a stale upper/ already holding.
+    env, work = _stage1_env(tmp_path, fake_id=True)
+    assert _build(env, "stage1b_assemble_chroot").returncode == 0
+    assert _build(env, "stage4_package_re_tools").returncode == 0
+    upper = work / "layers/upper"
+    (upper / "usr/sbin").mkdir(parents=True, exist_ok=True)
+    (upper / "usr/sbin/sshd").write_text("#!/bin/sh\n")
+    (upper / "etc/ssh").mkdir(parents=True, exist_ok=True)
+    (upper / "etc/ssh/ssh_host_rsa_key").write_text("fake key material\n")
+    r = _build(env, "stage11_build_hybrid_iso")
+    assert r.returncode != 0
+    assert "sshd and/or host keys" in r.stderr
+    assert not (work / "out/limpet-test.iso").exists()
+
+    env["LIMPET_ALLOW_SSHD_IN_TARGET_LAYER"] = "1"
+    r = _build(env, "stage11_build_hybrid_iso")
+    assert "sshd and/or host keys" not in r.stderr
