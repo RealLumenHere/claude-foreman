@@ -330,49 +330,40 @@ on the stock layout, fails on seedless / wrong-snap / no-live-layer /
 no-install-sources variants). Override the seeded snap name with
 `--installer-snap` if a future base ships a different installer.
 
-## wq#4527 — SSH for automated QEMU testing, live-only
+## wq#4558 — live-only test SSH (replaces wq#4527's `stage3b`)
 
-QEMU automated testing needs SSH, not QMP keystroke injection (too slow and
-unreliable for XFCE double-clicks, per the ticket). A server with known-good
-auth must never reach an installed system, though, so `stage3b_enable_test_ssh`
-only acts on a `*.live` layer — `iso_layers.py:64` already documents
-`minimal.standard.live` as "live-session only, never installed", and the
-ticket's own "live squashfs layer" wording names that exact layer, not
-`minimal.standard` (the one `stage3` fills because the installer copies it to
-disk).
+QEMU automated testing needs SSH, not QMP keystroke injection. A server with known-good auth
+must never reach an installed system, so the sshd goes into the **live layer only**
+(`minimal.standard.live`, "live-session only, never installed"), never into `minimal.standard`
+(the layer `stage3` fills and the installer copies to disk).
 
-- `target_layer` is checked inside the stage itself, not trusted from the
-  caller, so a missing/forgotten `LIMPET_ISO_LAYER` override can't leak this
-  into a production image. On every layer except `*.live` the stage logs and
-  returns 0 (same "skip, don't fail" shape as `stage3`'s precheck-service
-  gap) so `./build.sh all` with no overrides still produces a normal
-  production ISO. It is still listed in `STAGES` (so `./build.sh
-  stage3b_enable_test_ssh` works per the usual per-stage invocation), it just
-  self-gates.
-- Building the test-only ISO: `LIMPET_ISO_LAYER=minimal.standard.live
-  LIMPET_TEST_SSH_PUBKEY=/path/to/key.pub ./build.sh all`. Without
-  `LIMPET_TEST_SSH_PUBKEY` set to a real, non-empty file the stage fails
-  outright rather than guessing or shipping a fixed password baked into
-  every build.
-- Key-based auth, not a fixed password: the ticket offered either, and a
-  literal password shipped in every built ISO is a standing credential this
-  pipeline would otherwise have to rotate forever. The caller-supplied public
-  key lands in `etc/skel/.ssh/authorized_keys` (`install -m 0600`, dir `0700`)
-  because the live user's home is created from `/etc/skel` by casper at boot
-  — no user or homedir exists yet at build time to own one directly, and no
-  file in this repo names the live username, so it is never hardcoded here.
-- `apt-get install openssh-server` in the chroot already enables `ssh.service`
-  via `deb-systemd-helper` (works offline); `systemctl --root="$CHROOT" enable
-  ssh.service` makes that explicit rather than relying on an implicit default.
-- Known limitation: `ssh-keygen`-generated host keys land in `/etc/ssh/` at
-  build time and are then baked into the squashfs, so every test ISO built
-  from the same `upper/` reuses the same host keys. Fine for an ephemeral
-  QEMU test session; not how a real golden image should ship SSH.
-- `test_stage3b_enable_test_ssh.py` covers both directions (wq#2630): a
-  `minimal.standard.live` run installs the package, authorizes the key, and
-  enables the service; a `minimal.standard` run (the default production
-  layer) does none of that; a live-layer run with no
-  `LIMPET_TEST_SSH_PUBKEY` fails closed instead of guessing.
+It is opt-in and part of the stage 11 live layer repack (`install_live_test_ssh`, called from
+`repack_live_layer`), not a separate stage:
+
+- `LIMPET_TEST_SSH_PUBKEY` unset (the default): nothing SSH-related is built, and the path needs
+  no extra host commands (no `systemctl`, no mounts).
+- `LIMPET_TEST_SSH_PUBKEY=/path/to/key.pub`: after the dpkg database merge above, the build mounts
+  an overlay whose lowers are the **modified** target layer and its parents and whose upper is
+  the live layer tree, installs `openssh-server` there (apt lists and cache go to the chroot
+  tmpfs `/run`, not into the layer, because the base layers carry stale apt lists), writes
+  `etc/ssh/sshd_config.d/10-limpet-test.conf` (no passwords, no keyboard-interactive, no root
+  login, pubkey only), enables `ssh.service`, and puts the key in `etc/skel/.ssh/authorized_keys`
+  (dir `0700`, file `0600`). Because the install runs on top of the merged database, dpkg writes a
+  consistent database back into the live layer and the live `manifest.full` lists `openssh-server`.
+- Fail closed: a missing or empty key file, a file containing a private key, a target layer that is
+  itself the live layer, or a base ISO without a live layer all fail the build instead of silently
+  skipping. A failed install unmounts everything it mounted and ships no live layer.
+- Build and connect:
+  `LIMPET_TEST_SSH_PUBKEY=/home/lumen/.secrets/limpet-test-ssh.pub sudo -E ./build.sh all`, then
+  `ssh -p <fwd> -i /home/lumen/.secrets/limpet-test-ssh -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1`. The live user is `ubuntu`
+  (`export USERNAME="ubuntu"` in the base live layer's `/etc/casper.conf`); casper creates it at boot
+  from `/etc/skel`, which is how the key reaches it, so the username is never hardcoded here.
+- Known limitations: host keys generated by the package postinst are baked into the live layer, so
+  every ISO built from it shares them (fine for an ephemeral QEMU test, not for a golden image). The
+  build needs network access for `apt-get update`. `LIMPET_ISO_LAYER=*.live` is no longer how test SSH
+  is requested (that moved all Limpet content into the live layer).
+- Tests: `test_live_test_ssh.py` (fake mount/chroot/apt-get; real shell and merge logic).
 
 ## Tests
 

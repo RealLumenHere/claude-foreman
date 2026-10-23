@@ -270,60 +270,6 @@ stage3_inject_limpet_packages() {
 }
 
 # ---------------------------------------------------------------------------
-# Stage 3b -- openssh-server for automated QEMU testing (wq#4527)
-# ---------------------------------------------------------------------------
-# QEMU automated testing needs SSH, not QMP keystroke injection (too slow and
-# unreliable for XFCE double-clicks, per the ticket). But a server with
-# known-good auth must never reach an installed system, so this stage only
-# ever touches a "*.live" layer -- iso_layers.py:64 already documents
-# minimal.standard.live as "live-session only, never installed", and the
-# ticket's own "live squashfs layer" wording names that exact layer, not
-# minimal.standard (the one stage3 above fills because the installer copies
-# it to disk). target_layer is checked here, not trusted from the caller, so
-# this can't land in a production image by a missing/forgotten override.
-# Skipped (not failed) on every other layer so `./build.sh all` still
-# produces a normal production ISO unless LIMPET_ISO_LAYER is explicitly
-# pointed at a live-only layer to build a separate, test-only ISO.
-stage3b_enable_test_ssh() {
-  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
-  local layer
-  layer="$(target_layer)"
-  case "$layer" in
-    # wq#4560: systemctl is required inside this branch only (used once, below,
-    # and nowhere else in this script). Checking it ahead of the case statement
-    # made a systemd-less build host fail the whole `./build.sh all` even on the
-    # default non-live layer, where this stage documents itself as a no-op skip.
-    *.live) require_cmd systemctl ;;
-    *)
-      log "stage3b: $layer is not a live-only layer -- skipping test SSH (set LIMPET_ISO_LAYER to a *.live layer to build a test ISO)"
-      return 0
-      ;;
-  esac
-
-  local pubkey="${LIMPET_TEST_SSH_PUBKEY:-}"
-  [ -n "$pubkey" ] || fail "stage3b: LIMPET_ISO_LAYER=$layer is live-only but LIMPET_TEST_SSH_PUBKEY is unset -- point it at a public key to authorize, never a guessed default"
-  [ -s "$pubkey" ] || fail "stage3b: LIMPET_TEST_SSH_PUBKEY=$pubkey is missing or empty"
-
-  log "stage3b: installing openssh-server for automated QEMU testing ($layer)"
-  chroot "$CHROOT" apt-get install -y openssh-server
-
-  # The live user's home is created from /etc/skel by casper at boot time --
-  # no user (and no /home/<user>) exists yet at build time to own a homedir
-  # for, so the key goes in skel and rides along whatever username casper
-  # creates (never hardcoded here, since no file in this repo names it).
-  install -d -m 0700 "$CHROOT/etc/skel/.ssh"
-  install -m 0600 "$pubkey" "$CHROOT/etc/skel/.ssh/authorized_keys"
-
-  # openssh-server's postinst already enables ssh.service via
-  # deb-systemd-helper (works offline, no running systemd required); this
-  # makes that explicit so the stage doesn't depend on that implicit default
-  # silently changing upstream.
-  systemctl --root="$CHROOT" enable ssh.service
-
-  log "stage3b: openssh-server installed, ssh.service enabled, test key installed to /etc/skel/.ssh/authorized_keys"
-}
-
-# ---------------------------------------------------------------------------
 # Stage 3c -- base network utilities (wq#4547)
 # ---------------------------------------------------------------------------
 # The stock Xubuntu 26.04 casper stack ships wget and iproute2 but NOT curl or
@@ -645,6 +591,79 @@ carry_snap_records() {
 }
 
 # ---------------------------------------------------------------------------
+# Live-only test SSH (wq#4558 option C; replaces wq#4527's stage3b)
+# ---------------------------------------------------------------------------
+# Opt-in: only when LIMPET_TEST_SSH_PUBKEY is set. Installs openssh-server into the
+# LIVE layer only, key-only, so the validation ISO is the production ISO plus a
+# live-session sshd. minimal.standard (the layer the installer copies to disk) is never
+# touched, so nothing SSH-related can reach an installed system.
+# Runs inside repack_live_layer, after the dpkg database merge: the chroot is an overlay
+# whose lowers are the MODIFIED target layer and its parents and whose upper is the live
+# layer tree, so dpkg sees the merged database and writes a consistent one back into
+# the live layer. apt lists and cache go to the chroot tmpfs (/run), not into the layer.
+install_live_test_ssh() {
+  local layer="$1" lw="$2" pubkey="$3" casper="$4"
+  [ -s "$pubkey" ] || fail "live-ssh: LIMPET_TEST_SSH_PUBKEY=$pubkey is missing or empty"
+  if grep -q 'PRIVATE KEY' "$pubkey"; then
+    fail "live-ssh: $pubkey contains a PRIVATE key -- LIMPET_TEST_SSH_PUBKEY must be the .pub file"
+  fi
+  require_cmd mount
+  require_cmd umount
+  require_cmd mountpoint
+  require_cmd chroot
+  require_cmd systemctl
+  local ov="$WORKDIR/live-chroot" work="$WORKDIR/live-work" lowers d rc
+  local lower_paths=() ours=() m
+  lowers="$(iso_layers lowerdirs --layer "$layer" --root "$LAYERS_DIR/lower")"
+  IFS=: read -r -a lower_paths <<<"$lowers"
+  rm -rf "$work"
+  mkdir -p "$ov" "$work"
+  for d in "${lower_paths[@]}"; do mountpoint -q "$d" || ours+=("$d"); done
+  log "live-ssh: installing openssh-server into the live layer only (key-only auth, key from $pubkey)"
+  # No errexit leak: a plain subshell run under `set +e`, so a failing step really stops
+  # the sequence and cleanup below always runs.
+  set +e
+  (
+    set -e
+    for d in "${ours[@]}"; do
+      mkdir -p "$d"
+      mount -t squashfs -o loop,ro "$casper/$(basename "$d").squashfs" "$d"
+    done
+    mount -t overlay overlay -o "lowerdir=$LAYERS_DIR/upper:$lowers,upperdir=$lw,workdir=$work" "$ov"
+    mount -t proc proc "$ov/proc"
+    mount -t sysfs sysfs "$ov/sys"
+    mount --bind /dev "$ov/dev"
+    mount --bind /dev/pts "$ov/dev/pts"
+    mount -t tmpfs tmpfs "$ov/run"
+    mkdir -p "$ov/run/systemd/resolve"
+    cp -L /etc/resolv.conf "$ov/run/systemd/resolve/stub-resolv.conf"
+    printf '#!/bin/sh\nexit 101\n' >"$ov/usr/sbin/policy-rc.d"
+    chmod +x "$ov/usr/sbin/policy-rc.d"
+    # The base layers carry stale apt lists, so refresh them -- into /run, not the layer.
+    chroot "$ov" apt-get -o Dir::State::lists=/run/apt-lists -o Dir::Cache=/run/apt-cache update -qq
+    chroot "$ov" apt-get -o Dir::State::lists=/run/apt-lists -o Dir::Cache=/run/apt-cache install -y openssh-server
+    install -d -m 0755 "$ov/etc/ssh/sshd_config.d"
+    printf '%s\n' "# wq#4558: test ISO, key-only" "PasswordAuthentication no" "KbdInteractiveAuthentication no" \
+      "PermitRootLogin no" "PubkeyAuthentication yes" >"$ov/etc/ssh/sshd_config.d/10-limpet-test.conf"
+    # casper creates the live user from /etc/skel at boot, so the key rides along whatever
+    # username that is (ubuntu per the base casper.conf; not hardcoded here).
+    install -d -m 0700 "$ov/etc/skel/.ssh"
+    install -m 0600 "$pubkey" "$ov/etc/skel/.ssh/authorized_keys"
+    systemctl --root="$ov" enable ssh.service
+  )
+  rc=$?
+  set -e
+  # Always: drop the build-time guard, unmount in reverse order, unmount only what we mounted.
+  rm -f "$ov/usr/sbin/policy-rc.d"
+  for m in dev/pts dev sys proc run; do mountpoint -q "$ov/$m" && umount "$ov/$m"; done
+  mountpoint -q "$ov" && umount "$ov"
+  for d in "${ours[@]}"; do mountpoint -q "$d" && umount "$d"; done
+  rm -rf "$work"
+  [ "$rc" -eq 0 ] || fail "live-ssh: installing the live-only sshd failed (rc=$rc) -- see above; not shipping a half-configured live layer"
+  log "live-ssh: openssh-server installed in the live layer, ssh.service enabled, key-only auth"
+}
+
+# ---------------------------------------------------------------------------
 # Live layer repack (wq#4558, research: reports/wq4557_live_layer_dpkg_consistency.md)
 # ---------------------------------------------------------------------------
 # casper stacks minimal -> minimal.standard -> minimal.standard.live with the live
@@ -659,9 +678,13 @@ carry_snap_records() {
 repack_live_layer() {
   local layer="$1" changes="$2" casper="$3" live="$1.live"
   case "$layer" in
-    *.live) log "live-repack: $layer is itself the live layer -- nothing separate to repack"; return 0 ;;
+    *.live)
+      [ -z "${LIMPET_TEST_SSH_PUBKEY:-}" ] || fail "live-ssh: LIMPET_TEST_SSH_PUBKEY is set but the target layer $layer is itself the live layer -- test SSH only goes into a live layer ABOVE the target; unset LIMPET_ISO_LAYER"
+      log "live-repack: $layer is itself the live layer -- nothing separate to repack"
+      return 0 ;;
   esac
   if [ ! -f "$casper/$live.squashfs" ]; then
+    [ -z "${LIMPET_TEST_SSH_PUBKEY:-}" ] || fail "live-ssh: LIMPET_TEST_SSH_PUBKEY is set but the base ISO has no $live.squashfs to put it in"
     log "live-repack: no $live.squashfs in the base ISO -- nothing to repack"
     return 0
   fi
@@ -692,9 +715,13 @@ repack_live_layer() {
     install -m 0644 "$st/merged.ext" "$lw/var/lib/apt/extended_states"
   fi
 
+  if [ -n "${LIMPET_TEST_SSH_PUBKEY:-}" ]; then
+    install_live_test_ssh "$layer" "$lw" "$LIMPET_TEST_SSH_PUBKEY" "$casper"
+  fi
+
   # Metadata livecd-rootfs derives per layer: manifest.full = every package up to
   # this layer, the delta manifest = what it adds over its (NEW) parent, size = footprint.
-  cp "$st/merged.status" "$st/admin/status"
+  cp "$lw/var/lib/dpkg/status" "$st/admin/status"   # final: includes openssh-server when test SSH was installed
   dpkg-query --show --admindir="$st/admin" >"$changes/casper/$live.manifest.full" \
     || fail "live-repack: dpkg-query failed on the merged status"
   # same snap records as above, from the original live layer (it lists the installer snaps too)
@@ -854,7 +881,6 @@ STAGES=(
   stage1b_assemble_chroot
   stage2_remove_bloat
   stage3_inject_limpet_packages
-  stage3b_enable_test_ssh
   stage3c_install_base_utils
   stage4_package_re_tools
   stage5_bundle_hardware_book
@@ -884,7 +910,8 @@ Env:
   LIMPET_ISO_OUT_DIR      output dir (default: \$WORKDIR/out)
   LIMPET_ISO_NAME         output filename (default: limpet-<date>.iso)
   LIMPET_TOOL_CATALOG     RE tool catalog for stage4 (default: \$LIMPET_ROOT/tool-catalog.json)
-  LIMPET_TEST_SSH_PUBKEY  public key authorized for test SSH (stage3b, only on a *.live layer)
+  LIMPET_TEST_SSH_PUBKEY  public key for key-only SSH in the LIVE layer of a test ISO (stage11 live repack, wq#4558);
+                          unset = no SSH anywhere. Never reaches minimal.standard or an installed system.
 EOF
 }
 

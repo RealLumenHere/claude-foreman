@@ -4,7 +4,7 @@ stage3c_install_base_utils installs the two missing ones.
 
 Falsifiable both ways (wq#2630): the install test fails if either package is
 dropped from the apt call; the ordering test fails if the stage is not
-registered between stage3b and stage4, i.e. if `./build.sh all` would never run
+registered after stage3 and before stage4, i.e. if `./build.sh all` would never run
 it. The missing-chroot test fails if the stage ever runs apt without a chroot.
 """
 import stat
@@ -25,7 +25,7 @@ def _run(tmp_path, args, *, make_chroot=True):
     bin_dir.mkdir()
     state = tmp_path / "state"
     state.mkdir()
-    # Fake chroot(8): drop the dir arg and exec the rest (mirrors test_stage3b).
+    # Fake chroot(8): drop the dir arg and exec the rest (mirrors test_live_test_ssh).
     _write_exec(bin_dir / "chroot", "#!/usr/bin/env bash\nshift\nexec \"$@\"\n")
     _write_exec(
         bin_dir / "apt-get",
@@ -76,11 +76,11 @@ def test_fails_closed_without_a_chroot(tmp_path):
     assert installed == []
 
 
-def test_stage_is_registered_between_3b_and_4(tmp_path):
+def test_stage_is_registered_after_stage3_and_before_stage4(tmp_path):
     result, _ = _run(tmp_path, ["--help"])
 
     assert result.returncode == 0, result.stderr
     stages = [line.strip() for line in result.stdout.splitlines() if line.startswith("  stage")]
     assert "stage3c_install_base_utils" in stages
-    assert stages.index("stage3b_enable_test_ssh") < stages.index("stage3c_install_base_utils")
+    assert stages.index("stage3_inject_limpet_packages") < stages.index("stage3c_install_base_utils")
     assert stages.index("stage3c_install_base_utils") < stages.index("stage4_package_re_tools")
