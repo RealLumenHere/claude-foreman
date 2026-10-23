@@ -1,0 +1,10 @@
+# wq#4485 — Thor fail2ban jail for sshd.
+# Install at /etc/fail2ban/jail.local (jail.local overrides jail.conf's
+# [DEFAULT] and [sshd] stanzas without editing the packaged file).
+[sshd]
+enabled = true
+port = ssh
+backend = systemd
+maxretry = 5
+bantime = 3600
+findtime = 600
