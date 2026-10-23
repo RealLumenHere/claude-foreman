@@ -89,6 +89,16 @@ verify_layer_ownership() {
   return "$rc"
 }
 
+# wq#4596: verify_layer_ownership only catches a non-root extraction; it says nothing
+# about whether a kept upper/ was unsquashed from the squashfs this run is actually
+# targeting. A upper/ left over from a different base ISO or a different target layer
+# (e.g. after LIMPET_ISO_LAYER changes, or a base ISO respin) would otherwise be reused
+# silently, baking its contents into whatever layer this run packs. The fingerprint pins
+# upper/ to the exact (squashfs sha256, layer name) pair it was unsquashed from.
+layer_fingerprint() {
+  printf '%s %s\n' "$(sha256sum "$1" | cut -d' ' -f1)" "$2"
+}
+
 # ---------------------------------------------------------------------------
 # Stage 1 -- base ISO acquisition and extraction
 # ---------------------------------------------------------------------------
@@ -164,8 +174,17 @@ stage1b_assemble_chroot() {
   if [ -d "$LAYERS_DIR/upper" ]; then
     verify_layer_ownership "$LAYERS_DIR/upper" ||
       fail "existing $LAYERS_DIR/upper has wrong ownership/setuid (stale non-root extraction) -- move it aside and rerun: mv '$LAYERS_DIR/upper' '$LAYERS_DIR/upper.stale-$(date +%Y%m%d_%H%M%S)'"
+    # wq#4596: a kept upper/ must match the squashfs+layer this run is assembling, or
+    # a run started against a different base ISO/layer silently reuses another run's
+    # upper/ -- e.g. the Oct 18 upper found still holding openssh-server on 2026-10-23.
+    local want got_fp
+    want="$(layer_fingerprint "$casper/$layer.squashfs" "$layer")"
+    got_fp="$(cat "$LAYERS_DIR/upper.fingerprint" 2>/dev/null || true)"
+    [ "$got_fp" = "$want" ] ||
+      fail "existing $LAYERS_DIR/upper has no/stale fingerprint for $casper/$layer.squashfs (wanted '$want', found '$got_fp') -- move it aside and rerun: mv '$LAYERS_DIR/upper' '$LAYERS_DIR/upper.stale-$(date +%Y%m%d_%H%M%S)'"
   else
     unsquashfs -d "$LAYERS_DIR/upper" "$casper/$layer.squashfs" >/dev/null
+    layer_fingerprint "$casper/$layer.squashfs" "$layer" >"$LAYERS_DIR/upper.fingerprint"
   fi
   mkdir -p "$LAYERS_DIR/work" "$CHROOT"
   mount -t overlay overlay \
@@ -333,6 +352,22 @@ verify_re_tools() {
     [ -n "$(ls -A "$root$dir" 2>/dev/null)" ] || { log "missing RE tool artifact dir: $dir"; miss=1; }
   done < <(jq -r '.binary_artifacts[].extract_to' "$TOOL_MANIFEST")
   return "$miss"
+}
+
+# wq#4596: the live-only SSH design (wq#4548 option C) exists so sshd and its host keys
+# never leave the live session; nothing in the production flow should put them in the
+# target layer. Guards against a stale/mis-synced upper/ (or a future stage3/stage4
+# change) shipping them anyway. LIMPET_ALLOW_SSHD_IN_TARGET_LAYER is an explicit,
+# deliberate override for someone who has a real reason to ship sshd in the installed
+# system -- never set by default.
+verify_no_live_ssh() {
+  local root="$1" hit=0 f
+  [ -f "$root/usr/sbin/sshd" ] && { log "verify-no-live-ssh: $root/usr/sbin/sshd present"; hit=1; }
+  for f in "$root"/etc/ssh/ssh_host_*_key; do
+    [ -f "$f" ] || continue
+    log "verify-no-live-ssh: $f present"; hit=1
+  done
+  return "$hit"
 }
 
 # wq#4097: build recipe-backed cargo crates (e.g. binwalk v3) in an ubuntu:$XUBUNTU_VERSION
@@ -786,6 +821,12 @@ stage11_build_hybrid_iso() {
   # without RE tools.
   require_cmd jq
   verify_re_tools "$upper" || fail "refusing to pack $upper without the stage4 RE tools (see above)"
+  # wq#4596: sshd/host keys in the target layer ship into the INSTALLED system, which the
+  # live-only SSH design (wq#4548 option C) exists to prevent.
+  if [ -z "${LIMPET_ALLOW_SSHD_IN_TARGET_LAYER:-}" ]; then
+    verify_no_live_ssh "$upper" ||
+      fail "refusing to pack $upper: it contains sshd and/or host keys (see above) -- move it aside and rerun: mv '$upper' '$upper.stale-$(date +%Y%m%d_%H%M%S)', or set LIMPET_ALLOW_SSHD_IN_TARGET_LAYER=1 if you really mean to ship sshd in the installed system"
+  fi
   parent="$(iso_layers lowerdirs --layer "$layer" --root . | cut -d: -f1)"
   parent="${parent#./}"
 
@@ -932,6 +973,9 @@ Env:
   LIMPET_TOOL_CATALOG     RE tool catalog for stage4 (default: \$LIMPET_ROOT/tool-catalog.json)
   LIMPET_TEST_SSH_PUBKEY  public key for key-only SSH in the LIVE layer of a test ISO (stage11 live repack, wq#4558);
                           unset = no SSH anywhere. Never reaches minimal.standard or an installed system.
+  LIMPET_ALLOW_SSHD_IN_TARGET_LAYER
+                          override stage11's refusal to pack a target layer upper/ containing
+                          sshd/host keys (wq#4596). Unset by default; nothing in production sets it.
 EOF
 }
 
