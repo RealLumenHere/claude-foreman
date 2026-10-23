@@ -409,7 +409,9 @@ stage4b_build_cargo_tools() {
 stage4c_build_pip_tools() {
   local manifest="$1" out="$WORKDIR/pip-out"
   require_cmd docker; require_cmd jq
-  mkdir -p "$out" "$CHROOT/usr/local/bin" "$CHROOT/usr/local/share/pipx" "$CHROOT/opt/re-venv"
+  rm -rf "$out"
+  mkdir -p "$out/usr/local/share/pipx" "$out/usr/local/bin" "$out/opt/re-venv"
+  mkdir -p "$CHROOT/usr/local/bin" "$CHROOT/usr/local/share/pipx" "$CHROOT/opt/re-venv"
 
   local c name package ver sha256 bin
   while read -r c; do
@@ -417,7 +419,15 @@ stage4c_build_pip_tools() {
     ver="$(jq -r .version <<<"$c")"; sha256="$(jq -r .sha256 <<<"$c")"
     bin="$(jq -r .bin <<<"$c")"
     log "stage4c: pipx install $package==$ver (container ubuntu:$XUBUNTU_VERSION, sha256-pinned)"
-    docker run --rm -v "$out:/out" "ubuntu:$XUBUNTU_VERSION" bash -euc "
+    # wq#4601: bind-mount straight onto /usr/local/share/pipx and /usr/local/bin --
+    # the SAME absolute paths the chroot has -- instead of an /out-prefixed stand-in.
+    # pipx bakes PIPX_HOME's absolute path into every venv shebang and app symlink it
+    # creates, so building under /out/usr/local/... and then cp -a'ing into $CHROOT left
+    # every console script pointing at an interpreter under a nonexistent /out tree.
+    docker run --rm \
+      -v "$out/usr/local/share/pipx:/usr/local/share/pipx" \
+      -v "$out/usr/local/bin:/usr/local/bin" \
+      "ubuntu:$XUBUNTU_VERSION" bash -euc "
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -qq
       apt-get install -y -qq --no-install-recommends python3-venv python3-pip pipx ca-certificates
@@ -425,8 +435,7 @@ stage4c_build_pip_tools() {
       pip download --no-deps --dest /tmp/dl '$package==$ver'
       got=\"\$(sha256sum /tmp/dl/* | awk '{print \$1}' | head -1)\"
       [ \"\$got\" = '$sha256' ] || { echo \"stage4c: sha256 mismatch for $package==$ver: got \$got want $sha256\" >&2; exit 1; }
-      mkdir -p /out/usr/local/share/pipx /out/usr/local/bin
-      PIPX_HOME=/out/usr/local/share/pipx PIPX_BIN_DIR=/out/usr/local/bin pipx install /tmp/dl/*
+      PIPX_HOME=/usr/local/share/pipx PIPX_BIN_DIR=/usr/local/bin pipx install /tmp/dl/*
     "
     [ -x "$out/usr/local/bin/$bin" ] || fail "pipx install of $package $ver produced no $out/usr/local/bin/$bin"
     log "stage4c: built /usr/local/bin/$bin ($(sha256sum "$out/usr/local/bin/$bin" | cut -c1-16)...)"
@@ -439,7 +448,9 @@ stage4c_build_pip_tools() {
     name="$(jq -r .name <<<"$c")"; url="$(jq -r .url <<<"$c")"; commit="$(jq -r .commit <<<"$c")"
     bin="$(jq -r .bin <<<"$c")"; bdeps="$(jq -r '.build_apt | join(" ")' <<<"$c")"
     log "stage4c: pip install $name from $url @ $commit (container ubuntu:$XUBUNTU_VERSION, pinned commit)"
-    docker run --rm -v "$out:/out" "ubuntu:$XUBUNTU_VERSION" bash -euc "
+    # Same fix as above: /opt/re-venv is bind-mounted at its real, final absolute path,
+    # so `python3 -m venv` bakes a shebang that is still correct once copied into $CHROOT.
+    docker run --rm -v "$out/opt/re-venv:/opt/re-venv" "ubuntu:$XUBUNTU_VERSION" bash -euc "
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -qq
       apt-get install -y -qq --no-install-recommends python3-venv python3-pip git ca-certificates $bdeps
@@ -447,9 +458,8 @@ stage4c_build_pip_tools() {
       git clone --no-checkout '${url#git+}' /tmp/src
       git -C /tmp/src checkout --detach '$commit'
       [ \"\$(git -C /tmp/src rev-parse HEAD)\" = '$commit' ] || { echo \"stage4c: checked-out HEAD != pinned commit for $name\" >&2; exit 1; }
-      mkdir -p /out/opt/re-venv
-      python3 -m venv /out/opt/re-venv
-      /out/opt/re-venv/bin/pip install --no-cache-dir /tmp/src
+      python3 -m venv /opt/re-venv
+      /opt/re-venv/bin/pip install --no-cache-dir /tmp/src
     "
     [ -x "$out/opt/re-venv/bin/$bin" ] || fail "pip install of $name @ $commit produced no $out/opt/re-venv/bin/$bin"
     log "stage4c: built /opt/re-venv/bin/$bin ($(sha256sum "$out/opt/re-venv/bin/$bin" | cut -c1-16)...)"
