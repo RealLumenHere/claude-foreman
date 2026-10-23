@@ -124,6 +124,29 @@ def test_cli_audience_boot_is_callable_and_smaller_than_core():
     assert len(runs["boot"].stdout) < len(runs["core"].stdout)
 
 
+def test_cli_audience_exit_codes_match_claude_context_case(tmp_path):
+    # wq#4585: claude_context.sh's case on the renderer's exit: 0 inject, 3 silent,
+    # else INSTINCTS UNAVAILABLE. A broken corpus must not exit 0 with empty output.
+    import subprocess
+    script = os.path.join(os.path.dirname(__file__), "..", "instincts_render.py")
+
+    def run(path):
+        return subprocess.run(
+            [sys.executable, script, "--audience", "boot", "--file", path],
+            capture_output=True, text=True,
+        )
+
+    missing = run(str(tmp_path / "nope.yaml"))
+    assert (missing.returncode, missing.stdout) == (ir.EXIT_EMPTY, "")
+    empty = run(_write(tmp_path, "schema: 2\nrules: []\n"))
+    assert (empty.returncode, empty.stdout) == (ir.EXIT_EMPTY, "")
+    broken = run(_write(tmp_path, SCHEMA1))
+    assert (broken.returncode, broken.stdout) == (ir.EXIT_UNUSABLE, "")
+    assert "unusable corpus" in broken.stderr
+    good = run(_write(tmp_path, SCHEMA2))
+    assert good.returncode == 0 and good.stdout.startswith(ir.TIER0_HEADER)
+
+
 LIVE_INSTINCTS = "/home/lumen/instincts.yaml"
 
 

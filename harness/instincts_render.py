@@ -34,6 +34,11 @@ INSTINCTS_PATH = os.environ.get("FOREMAN_INSTINCTS_PATH", "/home/lumen/instincts
 # beyond the cap are dropped whole, loudly.
 TIER0_TOKEN_BUDGET = 750
 
+# CLI exit codes for --audience, matching bin/instincts-render's (claude_context.sh
+# --core's case statement reads them): nothing to inject vs a corpus it cannot read.
+EXIT_EMPTY = 3
+EXIT_UNUSABLE = 4
+
 TIER0_HEADER = "INSTINCTS — TIER 0 HARD CONSTRAINTS (non-negotiable, apply before any other guidance):"
 TIER1_HEADER = "INSTINCTS — OPERATING DOCTRINE:"
 TIER2_HEADER = "INSTINCTS — DOMAIN TRIGGERS (read the named playbook BEFORE acting in that domain):"
@@ -181,7 +186,16 @@ def main(argv=None):
         out = render(args.audience, args.file)
         if out:
             print(out)
-        return 0
+            return 0
+        # wq#4585: claude_context.sh --core branches on bin/instincts-render's exit
+        # codes — 3 stays silent, anything else prints INSTINCTS UNAVAILABLE. A bare 0
+        # here turned a broken corpus into an empty INSTINCTS block, read as "no rules".
+        path = args.file or INSTINCTS_PATH
+        if not os.path.exists(path) or load_rules(path) is not None:
+            return EXIT_EMPTY
+        print("instincts_render: unusable corpus (not schema 2 or unparseable): %s" % path,
+              file=sys.stderr)
+        return EXIT_UNUSABLE
     ap.print_help()
     return 2
 
