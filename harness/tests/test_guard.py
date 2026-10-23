@@ -881,6 +881,13 @@ CCC_MUST_BLOCK = [
     # follow it there — a probe drawn only from /home/lumen/ccc could not fail.
     ({"command": "git push origin main"}, "/home/lumen/mirror-of-ccc",
      {"FOREMAN_CCC_TREES": "/home/lumen/mirror-of-ccc"}),
+    # wq#4569 corpus case 1: case-insensitive, no .git suffix, whitespace
+    # after "ccc" (an ssh-style remote, not the https form the other rows use).
+    ({"command": "git push git@github.com:RealLumenHere/CCC main"},
+     WORKTREE, None),
+    # wq#4569 corpus case 2: case-insensitive, "ccc" is the literal end of the
+    # command string (end-of-string branch, not whitespace or ".git").
+    ({"command": "git push RealLumenHere/ccc"}, WORKTREE, None),
 ]
 
 APPEND = "python3 /home/lumen/foreman/harness/issue_log_append.py"
@@ -894,6 +901,16 @@ CCC_MUST_ALLOW = [
     ({"command": "git status"}, CCC_TREE, None),
     ({"command": "git log --oneline -3"}, CCC_TREE, None),
     ({"command": "grep -rn mirror /home/lumen/ccc"}, WORKTREE, None),
+    # wq#4569 corpus case 3: the over-broad half of the old \b boundary. A
+    # bare \b fires at ANY non-word char, so "RealLumenHere/ccc\b" matched the
+    # unrelated repo "ccc-mirror" too (word boundary right before the hyphen).
+    # A different, unaffiliated repo that merely starts with "ccc-" must push
+    # cleanly, including the uppercase variant the case-insensitive match now
+    # also has to not over-match.
+    ({"command": "git push https://github.com/RealLumenHere/ccc-mirror.git main"},
+     WORKTREE, None),
+    ({"command": "git push https://github.com/RealLumenHere/CCC-MIRROR.git main"},
+     WORKTREE, None),
     # the override is a scope list, not a blanket: a cwd outside the configured
     # trees still allows, which is what makes the out-of-population block above
     # evidence rather than a tautology.

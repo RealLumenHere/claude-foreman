@@ -188,6 +188,12 @@ Bash)
   #     repo routing is case-insensitive — github.com/reallumenhere/ccc reaches
   #     the same mirror. The filesystem path match stays case-sensitive; Linux
   #     paths are, and widening it would only block paths that cannot exist.
+  #
+  # wq#4569: a bare \b after "ccc" is a word boundary at ANY non-word char, so
+  # it also fired on an unrelated repo merely prefixed by "ccc-" (e.g. a
+  # hypothetical RealLumenHere/ccc-mirror). The org/repo match now requires
+  # ".git", whitespace, or end-of-string right after "ccc" instead, so it
+  # still catches ccc.git/CCC.git/ccc<EOL> but lets ccc-mirror.git through.
   # Every push out of that tree is in scope regardless of remote name: ccc is
   # never-public, so the risk is content leaving, not which remote is typed.
   # Read-only git in the checkout stays allowed.
@@ -203,7 +209,7 @@ Bash)
   done
   for target in "${CCC_SCAN_TARGETS[@]}"; do
     if printf '%s' "$target" | grep -qE '\bgit\b.*\bpush\b' \
-        && { printf '%s' "$target" | grep -qiE 'RealLumenHere/ccc\b' \
+        && { printf '%s' "$target" | grep -qiE 'RealLumenHere/ccc(\.git)?([[:space:]]|$)' \
           || printf '%s' "$target" | grep -qE '/home/lumen/ccc\b' \
           || [ "$CCC_CWD_HIT" = 1 ]; }; then
       block "git push toward RealLumenHere/ccc denied (wq#4550/wq#4551/wq#4568: public mirror of never-public ccc; cwd=$CCC_CWD)" "$RAW_CMD"
