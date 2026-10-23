@@ -52,6 +52,9 @@ attempt's `burned=['sk-key']` into `burned=[]`.
 Masking itself is unchanged — artefacts stay redacted either way. This only gates
 the ntfy page and the rotation ticket.
 """
+import base64
+import binascii
+import json
 import re
 import subprocess
 import sys
@@ -239,6 +242,48 @@ def is_committed_repetition(body, repo_roots, runner=subprocess.run):
     return False
 
 
+# wq#4616: an unauthenticated request to an Access-protected host (ntfy.lumennode.uk)
+# is 302'd to `<team>.cloudflareaccess.com/cdn-cgi/access/login/<host>?kid=..&meta=<jwt>`.
+# That `meta` JWT is Cloudflare's signed envelope of the request being bounced
+# (`type: meta`, hostname, redirect_url, auth_status, a 300 s exp) — handed to anyone
+# who asks, carrying no identity, and authorising nothing: the session credential is
+# the CF_Authorization cookie issued AFTER login, `type: app`/`org`. Every curl at the
+# ntfy feed printed a fresh one and filed a pri-1 rotation row (wq#4607 -> wq#4616).
+# Decided by decoding the claims in-process, no argv; a token that fails any test
+# (undecodable, an identity claim, a lifetime past ACCESS_META_MAX_TTL_S) is screened
+# as before, i.e. it alarms.
+ACCESS_META_MAX_TTL_S = 900
+_ACCESS_META_REQUIRED = ("hostname", "redirect_url", "auth_status", "exp", "iat")
+_IDENTITY_CLAIMS = ("sub", "email", "identity_nonce", "common_name", "custom", "groups")
+
+
+def _jwt_claims(token):
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    seg = parts[1]
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+    except (ValueError, binascii.Error):
+        return None
+    return claims if isinstance(claims, dict) else None
+
+
+def is_access_login_meta(token):
+    """True if `token` is a Cloudflare Access login-redirect `meta` JWT (see above)."""
+    claims = _jwt_claims(token)
+    if not claims or claims.get("type") != "meta":
+        return False
+    if any(k not in claims for k in _ACCESS_META_REQUIRED):
+        return False
+    if any(k in claims for k in _IDENTITY_CLAIMS):
+        return False
+    exp, iat = claims["exp"], claims["iat"]
+    if not (isinstance(exp, int) and isinstance(iat, int)):
+        return False
+    return 0 < exp - iat <= ACCESS_META_MAX_TTL_S
+
+
 def _is_accounted(match, repo_roots, runner):
     """`match` whole, else its body when it carries one long enough to mean something.
 
@@ -248,6 +293,8 @@ def _is_accounted(match, repo_roots, runner):
     with the rule's prefix attached when the cut body alone is under the floor
     (masking.untruncated_whole, wq#2663).
     """
+    if is_access_login_meta(match):
+        return True
     if is_committed_literal(match, repo_roots, runner=runner):
         return True
     body = getattr(match, "body", "")

@@ -682,3 +682,63 @@ def test_the_recheck_does_not_reuse_this_processs_provenance_answers(
                              [REPO], 2404, 1)
     # this process asked once (whole, then body); the deployed copy asked itself
     assert calls == [OAT, OAT[len("sk-ant-"):]]
+
+
+# --- wq#4616: Cloudflare Access login-redirect meta JWT ---------------------
+
+def _seg(obj):
+    import base64
+    return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+
+def _access_jwt(**claims):
+    """A JWT assembled at runtime, never a literal: header.payload.signature."""
+    return ".".join([_seg({"alg": "RS256", "typ": "JWT", "kid": "k" * 64}),
+                     _seg(claims), "s" * 342])
+
+
+META = dict(type="meta", aud="a" * 64, hostname="ntfy.lumennode.uk",
+            redirect_url="/lumen-fleet/json?poll=1&since=1h", auth_status="NONE",
+            service_token_status=False, iat=1792786825, nbf=1792786825,
+            exp=1792786825 + 300)
+
+
+def test_access_login_meta_jwt_is_benign_without_any_grep():
+    token = _access_jwt(**META)
+    line = ("https://team.cloudflareaccess.com/cdn-cgi/access/login/ntfy.lumennode.uk"
+            f"?kid={'k' * 64}&meta={token}&redirect_url=%2Flumen-fleet%2Fjson")
+    detail = burn_filter.matched_values(line)
+    assert detail.get("jwt") == [token]
+    grep = FakeGrep(committed=[])
+    burned, benign = burn_filter.classify(detail, set(), REPO, runner=grep)
+    assert burned == [] and benign == ["jwt"]
+    assert grep.calls == []           # decided in-process, nothing on an argv
+
+
+@pytest.mark.parametrize("change", [
+    {"type": "app"},                                  # the CF_Authorization session token
+    {"type": "org"},
+    {"email": "someone@example.com"},                 # any identity claim
+    {"sub": "user-id"},
+    {"common_name": "svc.access"},                    # service token
+    {"exp": META["iat"] + 86400},                     # long-lived
+    {"exp": "never"},
+])
+def test_access_meta_screen_fails_toward_burned(change):
+    token = _access_jwt(**{**META, **change})
+    detail = burn_filter.matched_values(f"meta={token}")
+    burned, _ = burn_filter.classify(detail, set(), REPO, runner=FakeGrep())
+    assert burned == ["jwt"]
+
+
+def test_access_meta_screen_needs_every_redirect_claim():
+    claims = {k: v for k, v in META.items() if k != "redirect_url"}
+    assert not burn_filter.is_access_login_meta(_access_jwt(**claims))
+    assert not burn_filter.is_access_login_meta("eyJ" + "not.base64!.x")
+
+
+def test_live_access_meta_is_still_burned():
+    token = _access_jwt(**META)
+    detail = burn_filter.matched_values(f"meta={token}")
+    burned, _ = burn_filter.classify(detail, {token}, REPO, runner=FakeGrep())
+    assert burned == ["jwt"]

@@ -62,6 +62,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import burn_filter  # noqa: E402
 import masking  # noqa: E402
 
 FOREMAN_ROOT = os.environ.get("FOREMAN_ROOT", "/home/lumen/foreman")
@@ -777,7 +778,9 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
                 # An orphan's value is joined across the mask literal, so the file it
                 # printed from can only ever hold its raw span (wq#3048).
                 "accounted_in": account(value, tracked, prefix) or (
-                    text[lo:hi] != value and _find(prefix + text[lo:hi], tracked)) or None,
+                    text[lo:hi] != value and _find(prefix + text[lo:hi], tracked)) or (
+                    "cloudflare-access-login-meta"
+                    if burn_filter.is_access_login_meta(value) else None),
                 "still_matches_today": value in today,
                 "today_closed": today_closed,
                 "rotated": rotated.get(sha12),
