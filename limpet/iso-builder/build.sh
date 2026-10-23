@@ -550,6 +550,24 @@ stage9_apply_branding() {
 }
 
 # ---------------------------------------------------------------------------
+# Stage 10 -- serial console
+# ---------------------------------------------------------------------------
+# wq#4526: limpet-serial.log came back empty from QEMU boots because the
+# kernel was never told to print to ttyS0. Runs before stage11 packs the
+# chroot's upper/ into the layer squashfs, so update-grub's compiled
+# grub.cfg ships in the built ISO.
+stage10_configure_serial_console() {
+  log "stage10: serial console"
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
+  require_cmd python3
+
+  python3 -I "$HERE/set_grub_cmdline.py" --default "$CHROOT/etc/default/grub"
+  chroot "$CHROOT" update-grub
+
+  log "stage10: added console=ttyS0,115200n8 to GRUB_CMDLINE_LINUX and ran update-grub"
+}
+
+# ---------------------------------------------------------------------------
 # Stage 11 -- hybrid BIOS+UEFI bootable ISO
 # ---------------------------------------------------------------------------
 # wq#4077: the old body packed the whole chroot as one filesystem.squashfs and
@@ -660,6 +678,7 @@ STAGES=(
   stage7_bundle_driver_bundle
   stage8_bundle_exploit_db
   stage9_apply_branding
+  stage10_configure_serial_console
   stage11_build_hybrid_iso
   stage12_qemu_test
 )

@@ -99,6 +99,12 @@ blocking on one that doesn't:
   `.../plymouth/`) in the committed, WCAG-AA token palette, so `build.sh
   stage9` now installs a graphical GRUB theme (via `set_grub_theme.py`) and an
   animated Plymouth splash instead of shipping text-mode/unthemed.
+- **Serial console** (wq#4526): `limpet-serial.log` came back empty from QEMU
+  boots because nothing told the kernel to print to a serial port. `stage10`
+  sets `GRUB_CMDLINE_LINUX="console=ttyS0,115200n8"` in the chroot's
+  `/etc/default/grub` (via `set_grub_cmdline.py`) and runs `update-grub`
+  before stage11 packs the layer, enabling serial-based automated boot
+  testing without a VNC/QMP screenshot dependency.
 - **Hardware profile book is 5 profiles, not 200+** (tasks 5/10): the ticket's
   "200+" is a target the upstream Tier-1/2 tickets haven't reached yet
   (`docs/hardware-tiers-spec.md` so far only has the AMD tier complete).
