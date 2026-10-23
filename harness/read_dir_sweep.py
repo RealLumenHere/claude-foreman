@@ -200,8 +200,13 @@ PATTERNS = (
 # wq#3203: .pytest_cache is tool output, not readable content a grant exposes on top of
 # what the repo already carries — and its v/cache/nodeids (every pytest node id, one
 # string) read as sk_key hits 215 times in the first full foreman sweep, flooding aq.
+# wq#4562: .build is gitignored build output. limpet/iso-builder/.build is a 22 GB,
+# 741,438-file root-owned Ubuntu rootfs (measured 2026-10-23) nested under the
+# /home/lumen/foreman root; it blew through every budget (10m00s wall, 1m31s CPU,
+# no runtime file -> every dir() grant failed closed). A grant exposes nothing via
+# build output that the repo does not already expose; nested, so BULK_DIRS never saw it.
 SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
-                       "site-packages", ".cache", ".pytest_cache"})
+                       "site-packages", ".cache", ".pytest_cache", ".build"})
 # wq#3203: bulk snapshot archives, deferred to the END of each root's walk under their
 # own budget. sorted() put `_runs` (0x5F < 'a') ahead of every lowercase sibling, so
 # foreman's 42k-file snapshot archive ate the whole ROOT_TIMEOUT_S and events/ ops/
