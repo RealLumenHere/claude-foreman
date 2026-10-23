@@ -6,11 +6,13 @@ tests exercise AgentSession, the workspace/status helpers, and the readline
 MVP loop directly. A smoke test for the Textual App is included but skips
 cleanly via `pytest.importorskip` when the optional dependency is absent.
 """
+import asyncio
 import io
 import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -230,3 +232,123 @@ def test_textual_app_smoke(tmp_path):
     status = atui.StatusInfo(model="m", provider="p", devices=[])
     app = atui.LimpetChatApp(session, status)
     assert app is not None
+
+
+# -- streaming must not block the event loop (wq#4521 finding, wq#4522 fix) ---
+#
+# The shipped suite only ever drove the app with backend=None or an instant
+# generator -- inputs the blocking implementation was designed around, so they
+# could not fail. These probes come from outside that population: a backend
+# whose chunks cost real wall-clock time, which is what the limpet-session
+# service will be. Against the pre-fix handler they fail (press blocks for the
+# full reply, zero timer fires inside the window).
+
+CHUNK_DELAY = 0.4
+SLOW_CHUNKS = ("a", "b", "c", "d")  # 1.6s of reply, vs the 1.0s tool-table timer
+
+
+def _slow_backend(text):
+    for chunk in SLOW_CHUNKS:
+        time.sleep(CHUNK_DELAY)
+        yield chunk
+
+
+def _spy_app_class(fires):
+    """LimpetChatApp whose tool-table timer callback records when it fires.
+
+    Subclassed rather than monkeypatched so `set_interval(1.0, self._refresh_tools)`
+    in `on_mount` binds the recording method from the start.
+    """
+    class _SpyApp(atui.LimpetChatApp):
+        def _refresh_tools(self):
+            fires.append(time.monotonic())
+            super()._refresh_tools()
+
+    return _SpyApp
+
+
+def test_textual_streaming_keeps_event_loop_live(tmp_path):
+    pytest.importorskip("textual")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    session = atui.AgentSession(str(ws), backend=_slow_backend)
+    status = atui.StatusInfo(model="m", provider="p", devices=[])
+    fires = []
+    measured = {}
+
+    async def _drive():
+        app = _spy_app_class(fires)(session, status)
+        async with app.run_test() as pilot:
+            app.query_one("#chat-input", atui.Input).value = "hi"
+            t0 = time.monotonic()
+            await pilot.press("enter")
+            measured["press"] = time.monotonic() - t0
+            measured["disabled_during"] = app.query_one("#chat-input", atui.Input).disabled
+            # A second submit while the turn is in flight must not start one.
+            app.query_one("#chat-input", atui.Input).value = "again"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            measured["total"] = time.monotonic() - t0
+            await pilot.pause()
+            measured["t0"] = t0
+            measured["stream"] = str(app.query_one("#agent-stream", atui.Static).render())
+            measured["disabled_after"] = app.query_one("#chat-input", atui.Input).disabled
+
+    asyncio.run(_drive())
+
+    reply_cost = CHUNK_DELAY * len(SLOW_CHUNKS)
+    # The handler returns long before the backend does -- pre-fix it returned
+    # only after the last chunk (wq#4521: 1.279s for this exact backend).
+    assert measured["press"] < CHUNK_DELAY, measured
+    # ...and the backend really was slow, so the margin above means something.
+    assert measured["total"] >= reply_cost * 0.8, measured
+    # The 1s tool-table timer fired *while the reply was still streaming*: any
+    # window longer than its 1.0s period must contain a fire if the loop is
+    # being serviced. The window deliberately stops one chunk short of the end,
+    # so a timer that only catches up once the blocking loop releases (pre-fix:
+    # a single late fire at t0+1.21s) does not count.
+    cutoff = measured["t0"] + measured["total"] - CHUNK_DELAY
+    assert cutoff - measured["t0"] > 1.0, measured  # window must exceed the period
+    during = [round(t - measured["t0"], 3) for t in fires if measured["t0"] < t < cutoff]
+    assert during, (fires, measured)
+    # Final state is still the pre-fix state: whole reply, turn marked done.
+    assert session.turns[-1].role == "agent"
+    assert session.turns[-1].text == "".join(SLOW_CHUNKS)
+    assert session.turns[-1].done is True
+    assert [t.text for t in session.turns if t.role == "user"] == ["hi"]
+    assert measured["disabled_during"] is True
+    assert measured["disabled_after"] is False
+    assert measured["stream"] == ""
+
+
+def test_textual_streaming_renders_backend_failure_and_recovers(tmp_path):
+    pytest.importorskip("textual")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    def _failing_backend(text):
+        yield "partial"
+        raise RuntimeError("gateway down")
+
+    session = atui.AgentSession(str(ws), backend=_failing_backend)
+    status = atui.StatusInfo(model="m", provider="p", devices=[])
+    seen = {}
+
+    async def _drive():
+        app = atui.LimpetChatApp(session, status)
+        async with app.run_test() as pilot:
+            app.query_one("#chat-input", atui.Input).value = "hi"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            seen["running"] = app.is_running
+            seen["disabled"] = app.query_one("#chat-input", atui.Input).disabled
+            seen["log"] = "\n".join(
+                strip.text for strip in app.query_one("#chat-log", atui.RichLog).lines)
+
+    asyncio.run(_drive())
+
+    assert seen["running"] is True  # a mid-stream backend error must not kill the app
+    assert seen["disabled"] is False  # the operator can send the next turn
+    assert "partial" in seen["log"]
+    assert "backend error: RuntimeError: gateway down" in seen["log"]

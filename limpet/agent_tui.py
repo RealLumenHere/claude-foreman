@@ -10,6 +10,11 @@ plainly that no backend is attached. The event log it appends
 tool-call panel reuses workspace_console's read-only evidence tail (Sec4.2)
 instead of re-deriving it.
 
+The Textual frontend iterates that backend on a thread worker, never in the
+message handler (wq#4522): the backend contract is synchronous, so a reply that
+takes real wall-clock time would otherwise freeze the whole app -- repaints, the
+tool-table timer and the quit binding -- until the last chunk (wq#4521).
+
 Textual is optional (`limpet/requirements-tui.txt`): this module imports fine
 without it installed, and `main()` falls back to a plain input()-loop MVP
 console for headless/no-Textual sessions -- the ticket's explicit fallback
@@ -30,6 +35,7 @@ from typing import Callable, Iterable, Iterator
 import workspace_console as wc
 
 try:
+    from textual import work
     from textual.app import App, ComposeResult
     from textual.containers import VerticalScroll
     from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
@@ -202,6 +208,7 @@ if TEXTUAL_AVAILABLE:
             self.session = session
             self.status = status
             self._known_tool_rows = 0
+            self._turn_in_flight = False
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -231,17 +238,54 @@ if TEXTUAL_AVAILABLE:
         def on_input_submitted(self, event: Input.Submitted) -> None:
             text = event.value.strip()
             event.input.value = ""
-            if not text:
+            if not text or self._turn_in_flight:
                 return
-            log = self.query_one("#chat-log", RichLog)
-            stream = self.query_one("#agent-stream", Static)
-            log.write(f"you: {text}")
+            self._turn_in_flight = True
+            # One turn at a time: AgentSession's turn list and session.jsonl are a
+            # single append-only stream with no turn ids (Sec6), so two concurrent
+            # replies would interleave their deltas. The input re-enables itself in
+            # _finish_turn.
+            event.input.disabled = True
+            self.query_one("#chat-log", RichLog).write(f"you: {text}")
+            self.query_one("#agent-stream", Static).update("agent: ...")
+            self._stream_reply(text)
+
+        @work(thread=True, group="agent-turn")
+        def _stream_reply(self, text: str) -> None:
+            """Iterate the backend off the UI thread (Sec4.1/4.3: stay live).
+
+            `AgentSession.backend` is a synchronous `text -> Iterable[str]` -- a
+            model/tool call over the wire once limpet-session is attached (Sec9
+            step 1) -- so iterating it inside the message handler froze repaints,
+            the tool-table timer and the quit binding for the whole reply
+            (wq#4521 measured 1.279s blocked, zero timer fires). The worker thread
+            owns the iteration; only widget writes cross back to the UI thread.
+            """
             cumulative = ""
-            for chunk in self.session.reply_stream(text):
-                cumulative += chunk
-                stream.update(f"agent: {cumulative}")
-            log.write(f"agent: {cumulative}")
-            stream.update("")
+            try:
+                for chunk in self.session.reply_stream(text):
+                    cumulative += chunk
+                    self.call_from_thread(self._show_partial_reply, cumulative)
+            except Exception as exc:  # a real backend can fail mid-stream
+                self.call_from_thread(self._finish_turn, cumulative, exc)
+                return
+            self.call_from_thread(self._finish_turn, cumulative, None)
+
+        def _show_partial_reply(self, cumulative: str) -> None:
+            self.query_one("#agent-stream", Static).update(f"agent: {cumulative}")
+
+        def _finish_turn(self, cumulative: str, error: BaseException | None) -> None:
+            log = self.query_one("#chat-log", RichLog)
+            if cumulative:
+                log.write(f"agent: {cumulative}")
+            if error is not None:
+                # Honest failure rendering (Sec5): say what broke, don't swallow it.
+                log.write(f"agent: [backend error: {type(error).__name__}: {error}]")
+            self.query_one("#agent-stream", Static).update("")
+            chat_input = self.query_one("#chat-input", Input)
+            chat_input.disabled = False
+            chat_input.focus()
+            self._turn_in_flight = False
 
 
 def run_readline(session: AgentSession, status: StatusInfo, input_fn=input, out=None) -> None:
