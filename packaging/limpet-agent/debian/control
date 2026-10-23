@@ -1,0 +1,16 @@
+Source: limpet-agent
+Section: utils
+Priority: optional
+Maintainer: Lumen Industries <packaging@lumen.local>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+
+Package: limpet-agent
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.11), tmux
+Description: Limpet agent core launcher and first-boot LLM wizard
+ Ships `limpet-agent.service`, which creates (or re-attaches) the
+ "limpet-executor" tmux session the agent core runs in, and
+ `limpet-llm-firstboot.service`, a one-shot console wizard that asks an
+ operator for an LLM provider (cloud API key, local Ollama, or none) on first
+ boot and writes the answer to `/etc/limpet/llm.toml`.

@@ -1,0 +1,8 @@
+#!/bin/sh
+# wq#4512: thin wrapper so `limpet-llm-firstboot.service` can ExecStart a
+# plain path. Mirrors the `limpet-hald` wrapper's PYTHONPATH trick
+# (`packaging/limpet-hald/bin/limpet-hald`): `limpet.llm_firstboot` does
+# `from limpet import ...`-style package imports, so the `limpet` package's
+# parent dir must be on PYTHONPATH in the installed layout.
+exec env PYTHONPATH="/usr/lib/limpet${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m limpet.llm_firstboot "$@"

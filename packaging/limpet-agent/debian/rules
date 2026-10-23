@@ -1,0 +1,28 @@
+#!/usr/bin/make -f
+# wq#4512: stages limpet/llm_firstboot.py into the package tree. This
+# package root carries no copy of it on disk; the build always reads
+# whatever is currently checked in at that path.
+
+MONOROOT := $(CURDIR)/../..
+SRC := $(MONOROOT)/limpet
+PKGROOT := debian/limpet-agent
+
+%:
+	dh $@
+
+override_dh_installsystemd:
+	# limpet-agent.service ships disabled until litellm.service and the real
+	# agent_core.py binary (docs/agent-chat-spec.md:31-33) land; an operator
+	# or a later package's postinst enables it then. The firstboot wizard
+	# ships enabled -- it is harmless (ConditionPathExists skips it once
+	# /etc/limpet/llm.toml exists) and is the thing that's supposed to run
+	# unattended on first boot.
+	dh_installsystemd --no-enable --no-start --name=limpet-agent
+	dh_installsystemd --name=limpet-llm-firstboot
+
+override_dh_auto_install:
+	dh_auto_install
+	install -d $(PKGROOT)/usr/lib/limpet
+	install -d $(PKGROOT)/usr/lib/limpet/limpet
+	install -m 0644 $(SRC)/__init__.py $(SRC)/llm_firstboot.py \
+	    $(PKGROOT)/usr/lib/limpet/limpet/

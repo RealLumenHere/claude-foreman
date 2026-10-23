@@ -1,0 +1,29 @@
+#!/bin/sh
+# wq#4512: limpet-agent.service's ExecStart. Creates (or re-attaches) the
+# "limpet-executor" tmux session the agent core runs in, so the agent process
+# outlives any one terminal and an operator can `tmux attach -t limpet-executor`
+# from the first-login terminal (`docs/deployment-spec.md:230-246`) to see it.
+#
+# `docs/agent-chat-spec.md:31-33`: the agent core is architecturally defined
+# (single MCP client, owns the tool loop) but its binary has not landed yet.
+# Rather than fail the unit on a missing binary -- which would violate the
+# graceful-degradation requirement this same spec sets for a missing LLM
+# (`docs/deployment-spec.md:314-320`, "the agent core comes up even if litellm
+# never does") -- fall back to an idle placeholder shell that says so, so the
+# unit (and the tmux session an operator expects) always comes up.
+set -eu
+
+SESSION=limpet-executor
+AGENT_BIN=/usr/lib/limpet/agent/agent_core.py
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    exit 0
+fi
+
+if [ -x "$AGENT_BIN" ] || [ -f "$AGENT_BIN" ]; then
+    CMD="python3 $AGENT_BIN"
+else
+    CMD='echo "limpet-agent: agent core not installed yet (expected '"$AGENT_BIN"'); idle." && exec sh'
+fi
+
+tmux new-session -d -s "$SESSION" "$CMD"

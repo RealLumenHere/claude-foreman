@@ -1,0 +1,7 @@
+limpet-agent (0.1.0) unstable; urgency=low
+
+  * Initial packaging: limpet-agent.service (executor tmux session launcher)
+    and limpet-llm-firstboot.service (first-boot LLM provider wizard that
+    writes /etc/limpet/llm.toml), for ISO integration (wq#4512).
+
+ -- Lumen Industries <packaging@lumen.local>  Fri, 23 Oct 2026 00:00:00 +0000
