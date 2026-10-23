@@ -1,0 +1,15 @@
+[Unit]
+Description=Limpet agent core (executor tmux session)
+Documentation=file:/usr/share/doc/limpet-agent/README.md
+After=limpet-mcp-meta.service limpet-llm-firstboot.service
+Wants=litellm.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/limpet-agent-session
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -6,7 +6,7 @@ set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-for pkg in limpet-hald limpet-mcp-meta limpet-tools; do
+for pkg in limpet-hald limpet-mcp-meta limpet-tools limpet-agent; do
     echo "== building $pkg =="
     (cd "$HERE/$pkg" && dpkg-buildpackage -us -uc -b)
 done

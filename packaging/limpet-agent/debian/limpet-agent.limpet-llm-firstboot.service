@@ -1,0 +1,19 @@
+[Unit]
+Description=Limpet first-boot LLM provider wizard
+Documentation=file:/usr/share/doc/limpet-agent/README.md
+Before=limpet-agent.service
+ConditionPathExists=!/etc/limpet/llm.toml
+DefaultDependencies=no
+After=sysinit.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/limpet-llm-wizard
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+
+[Install]
+WantedBy=multi-user.target

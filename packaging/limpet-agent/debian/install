@@ -1,0 +1,2 @@
+bin/limpet-agent-session usr/bin
+bin/limpet-llm-wizard usr/bin
