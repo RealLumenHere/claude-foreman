@@ -95,7 +95,15 @@ def resolve_profile(profile: str, *, profile_models: dict, resident_model: str,
 # role_models and places the LiteLLM call itself.
 AGENT_FAST = "agent-fast"
 AGENT_DEEP = "agent-deep"
-AGENT_ROLES = (AGENT_FAST, AGENT_DEEP)
+# wq#4511 -- the multi-agent RE topology (topology.py) adds a third role for its
+# Static Analyst: `agent-code`, the disassembly/decompilation specialist. It is a
+# role name, not a model -- resolve_agent_role defers it to the operator's
+# role_models policy with the same resident fallback as the other two, so a box
+# that has not configured a dedicated coder model still answers on the resident
+# model. (The fleet alias layer wq#3849 serves a coder build as `agent-deep` today;
+# an operator who wants a separate code model points `llm.role.agent_code` at it.)
+AGENT_CODE = "agent-code"
+AGENT_ROLES = (AGENT_FAST, AGENT_DEEP, AGENT_CODE)
 
 # Signals that a request (or its prior context) is RE work the reasoning model
 # should take: firmware analysis, decompilation, or a multi-step RE workflow.

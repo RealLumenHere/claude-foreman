@@ -6,6 +6,52 @@ reasoning without re-deriving it. (This file did not exist before wq#3934 —
 `limpet/tool-catalog.json` noted its absence; it is created here and entries for earlier
 subsystems can be backfilled as those tickets touch it.)
 
+## wq#4511 — multi-agent RE topology: supervisor / static / dynamic
+
+**D1 — the topology is pure wiring, not a wired orchestrator.** Same posture as
+`model_router.py`/`critic.py`: the agent core and its LiteLLM/MCP clients are
+design-only (`design/wq3806_limpet_architecture.md` §6 describes a *single* loop),
+so `limpet/topology.py` decides the wiring — which LLM role each of the three
+agents runs on, which tool categories each may see, what the confidence loop does
+next — and the caller resolves roles to models, mounts the filtered toolset, and
+places the calls. Nothing in the module imports a model or MCP client. The role
+split is the orchestrator-workers pattern (fleet-search web 2026-10-23: "Agentic
+AI Design Patterns"/"OpenClaw Orchestration Patterns" — a central model plans and
+delegates to specialized workers); the confidence loop is reflect/retry/escalate
+as a pure decision.
+
+**D2 — three agents on three roles; `agent-code` is new.** Supervisor→`agent-deep`
+(orchestrates, runs no bench tool), Static Analyst→`agent-code`, Dynamic
+Agent→`agent-fast`, exactly as the ticket names them. `agent-code` did not exist
+in wq#4510's two-role set; it is added to `model_router.AGENT_ROLES` as a role
+name (not a model), so `resolve_agent_role` defers it to the operator's
+`role_models` policy with the same resident fallback — a box with no dedicated
+coder model still answers on the resident model. This keeps the topology
+resolvable end to end (a probe resolves every agent's role through the real
+router) without hardcoding a model.
+
+**D3 — filtered MCP access partitions the analysis tools; supervisor runs none.**
+`tools_for(agent, catalog)` filters over the closed `manifest.CATEGORIES` taxonomy
+`limpet-tools` already indexes on, rather than inventing a second tool-labeling
+scheme. Static gets {disassembler, decompiler, firmware, data}; Dynamic gets
+{debugger, fuzzer, flash-programmer, sdr, network} — disjoint, so a worker can
+never reach the other's toolset. The Supervisor's allowed set is empty: it
+orchestrates by delegating to the two workers (`can_delegate`), consistent with
+its "orchestrates" role in the ticket. The filter is fail-closed: an uncategorized
+or unknown-category tool is dropped, never silently exposed. Falsifiable probes in
+`test_topology.py` feed a catalog carrying a dynamic tool, an uncategorized tool,
+and a bad-category tool, and assert the static view excludes all three (a probe
+drawn only from static tools could not have falsified the partition).
+
+**D4 — confidence loop: accept ≥ 0.7, else retry an untried alternative, else
+escalate up.** `next_action` is a pure decision over (confidence, approaches
+tried, approaches available): at/above `CONFIDENCE_THRESHOLD` (0.7, the ticket's
+bar) it accepts; below it, it retries the first still-untried approach; once the
+inventory is spent it escalates — a worker to the Supervisor, the Supervisor
+(nothing above it) to the OPERATOR, matching §6's autonomy boundary. Code:
+`limpet/topology.py`, `limpet/model_router.py` (+`AGENT_CODE`). Tests:
+`limpet/test_topology.py` (21).
+
 ## wq#4510 — reasoning-vs-fast agent-role split lives in the pure router
 
 **D1 — the classifier is a pure decision, not a wired model call.** The ticket asks to
