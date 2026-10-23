@@ -2,19 +2,22 @@
 
 ## Bottom line
 
-The Batch API is real, cheap, and easy to wire into LiteLLM — but it cannot serve
-the workload the ticket names. It batches independent, single-turn Messages
-requests; it has no mechanism to feed a tool result back into the same request and
-get the next step asynchronously. fworker's BUILD queue (this session included),
-OpenHands, and aider are all multi-turn tool-use loops — each step depends on the
-previous tool's output, so there is nothing to submit-and-walk-away-from until the
-loop ends. **Savings apply to single-shot, parallel, no-feedback workloads only**
-(e.g. `judge/judge_bench.py:53-89` running one independent judge verdict per case
-across a fixed eval set — see "What's actually batchable" below), not to agent
-sessions. Applying the 50% discount to the $200/mo figure as if it covered
+The Batch API is real and cheap, and is reachable directly via the Anthropic SDK —
+but it is not reachable through LiteLLM's `/v1/batches` for Claude (see "LiteLLM
+integration" below), and it cannot serve the workload the ticket names. It batches
+independent, single-turn Messages requests; it has no mechanism to feed a tool
+result back into the same request and get the next step asynchronously. fworker's
+BUILD queue (this session included), OpenHands, and aider are all multi-turn
+tool-use loops — each step depends on the previous tool's output, so there is
+nothing to submit-and-walk-away-from until the loop ends. **Savings apply to
+single-shot, parallel, no-feedback workloads only** (structurally, e.g. the
+pattern in `judge/judge_bench.py:53-89` of running one independent judge verdict
+per case across a fixed eval set — though that specific script currently calls
+only local models, not Claude; see "What's actually batchable" below), not to
+agent sessions. Applying the 50% discount to the $200/mo figure as if it covered
 everything would overstate savings; the real number depends on what fraction of
-spend is non-agentic single-shot calls, which this research did not have billing
-data to measure (not guessing it — doctrine: verify, don't guess a root
+spend is non-agentic single-shot Claude calls, which this research did not have
+billing data to measure (not guessing it — doctrine: verify, don't guess a root
 cause/number).
 
 ## How the Message Batches API works
@@ -43,8 +46,13 @@ and `.../about-claude/pricing`, fetched via `fleet-search read`/`web`, 2026-10-2
 - **Model/feature support**: all active models; batching covers vision, tool use
   (including server tools), system prompts, multi-turn conversation *content*
   (i.e. you can submit a full transcript as one item), and extended thinking.
-  Prompt caching is NOT supported inside a batch request (an ephemeral cache
-  entry would likely expire before a same-batch follow-up ran).
+  Prompt caching IS supported inside a batch request: per
+  `platform.claude.com/docs/en/build-with-claude/batch-processing` ("Using prompt
+  caching with Message Batches"), cache hits are best-effort rather than
+  guaranteed, since batch requests are processed asynchronously and
+  concurrently — typical hit rates run 30-98%. This is consistent with the
+  stacking-discount line above: the batch discount and the prompt-caching
+  discount both apply, and caching isn't disabled, just not deterministic.
 - **Scope**: batches are scoped to a Workspace; rate limits apply both to the
   Batches HTTP endpoints and to in-flight requests per batch.
 
@@ -58,19 +66,18 @@ framing both give $4/$20). Batch halves all of the above.
 
 ## LiteLLM integration
 
-LiteLLM has first-class Batches support, not a shim: `docs.litellm.ai/docs/batches`
-documents `/v1/batches` (create/retrieve/list/cancel) on both the SDK and the
-proxy, OpenAI-Batches-API-shaped, with Anthropic as one of the backing providers.
-`docs.litellm.ai/docs/proxy/managed_batches` (proxy-only, no Enterprise license
-required) adds managed file uploads for batch input and v1.69.0 added batch-model
-load balancing across multiple deployments of the same batch-capable model. For
-our fleet this means: if there's a LiteLLM-fronted job that currently does N
-sequential `litellm.completion()` calls with no cross-call dependency, pointing it
-at `litellm.create_batch` / the proxy's `/v1/batches` instead is additive, no new
-vendor integration — the LiteLLM version already running (per the litellm_config
-snippets under `ops/`) would need to be checked against v1.69.0+ for the load
-balancing piece specifically, but basic batch create/poll/retrieve is older than
-that.
+LiteLLM's Batches support does NOT cover Anthropic. `docs.litellm.ai/docs/batches`'s
+own supported-providers table lists only OpenAI, Azure, Vertex, Bedrock, Mistral,
+vLLM, and xAI — the string "anthropic" appears zero times on that page, and Bedrock
+(AWS-hosted Claude) is not the same as the direct `anthropic/` provider this fleet
+actually uses (`ops/wq4258-fleet-consolidation-plan/litellm_config_snippet.yaml`:
+`model: anthropic/claude-sonnet-5-5`, `api_key: os.environ/ANTHROPIC_API_KEY`).
+Calling `litellm.create_batch` against the `anthropic/` provider does not work. For
+Claude specifically, the real batch-integration path is the Anthropic SDK's own
+`messages.batches` endpoints directly against `api.anthropic.com`, not LiteLLM's
+`/v1/batches`. LiteLLM's Batches API remains useful for the providers it does
+support (e.g. an OpenAI- or Bedrock-fronted batch workload), just not for this
+fleet's Anthropic traffic.
 
 ## OpenHands / aider: not batch-compatible
 
@@ -90,12 +97,15 @@ making tool calls against live repo state turn-by-turn, not a single prompt.
 
 Not every LLM call here is an agent loop. `judge/judge_bench.py:53` (`run_model`)
 loops over a fixed case list and calls `call_judge(model, case)` once per case with
-no dependency between cases or on any tool result — exactly the "large-scale
-evaluation" shape Anthropic's own docs call out as the target use case. The same
-shape likely applies to `judge/judge_bench_drift.py` and any other
-nightly/scheduled single-shot classification or scoring pass that doesn't need an
-answer before the next item runs. Those are the batchable candidates, not the
-interactive BUILD/Pokemon/Fable agent queues.
+no dependency between cases or on any tool result — structurally the "large-scale
+evaluation" shape Anthropic's own docs call out as the target use case for the
+Batch API. However, `judge_bench.py`'s own `DEFAULT_MODELS`
+(`judge/judge_bench.py:28`) is `"isis-qwen3-32b,qwen36-local,hathor-llama8b"` —
+three local models, not Claude — so today it has zero Anthropic spend to batch.
+The same caveat likely applies to `judge/judge_bench_drift.py` and any other
+nightly/scheduled single-shot classification or scoring pass: the *shape* fits
+Batch API, but whether a given run actually calls Claude needs checking before
+counting it as a batchable-Anthropic-cost candidate.
 
 ## Estimated savings
 
@@ -116,9 +126,14 @@ worker's allowed dirs).
 
 1. Don't attempt to route fworker BUILD/Pokemon/Fable agent traffic through the
    Batch API — architecturally incompatible, not a config problem.
-2. Point `judge_bench.py` / `judge_bench_drift.py` (and any other fixed-case,
-   no-tool-use eval loop found the same way) at LiteLLM's `/v1/batches` instead of
-   per-case `litellm.completion()` calls. This is a build ticket on its own, not
-   something to do inside a research ticket.
+2. `judge_bench.py` is not a sound example of batchable Anthropic cost today:
+   its `DEFAULT_MODELS` (`judge/judge_bench.py:28`) is
+   `"isis-qwen3-32b,qwen36-local,hathor-llama8b"` — three local models, zero
+   Anthropic spend. And per the LiteLLM correction above, `/v1/batches` doesn't
+   back Anthropic anyway. If a fixed-case, no-tool-use eval loop is later found
+   that *does* call Claude, batch it via the direct Anthropic SDK
+   `messages.batches` endpoint, not LiteLLM's `/v1/batches`. This is a build
+   ticket on its own, contingent on finding such a call site, not something to
+   do inside a research ticket.
 3. Before that build ticket, pull real LiteLLM spend-log numbers for those
    specific call sites to size the actual dollar savings rather than estimating.
