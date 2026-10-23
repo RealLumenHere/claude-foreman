@@ -17,7 +17,18 @@ design/limpet/brand/
     gtk/gtk.css          # XFCE accent sheet over stock Greybird-dark
   wallpaper/limpet-wallpaper.svg # subtle branded desktop background
   icons/                 # app icons: limpet-agent/-workspace/-settings .svg
+                          # panel status icons: limpet-status-ok/-warning/-offline .svg
 ```
+
+## Panel status icons
+
+wq#4602 replaced the genmon scripts' generic freedesktop icon names
+(`dialog-ok-apply`, `dialog-warning`, `network-wired`, `network-offline`,
+`folder-open`) with branded icons. `limpet/iso-builder/overlay/opt/limpet/panel/
+genmon-{toolhealth,hardware}.sh` now point at `/opt/limpet/brand/icons/
+limpet-status-{ok,warning,offline}-16.png`; `genmon-workspace.sh` reuses the
+existing `limpet-workspace` app icon. `export-assets.sh` renders all three new
+status SVGs at the same 16/22/24/48 px set as the app icons.
 
 ## Palette
 
