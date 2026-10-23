@@ -45,6 +45,10 @@
     "min_allowed": 1
   },
   "lanes": {
+    "session": {
+      "enabled": false,
+      "_note": "wq#4538 S2: synthetic per-orchestrator session tickets (claim anchors for memoryd I-7 episode commits). Never dispatched — the owning session claims its own ticket at --core boot. enabled:false passes wq add's lane gate (wq#912: entry exists) and stays out of wq#2139's enabled-unmapped refusal set."
+    },
     "foreman-tok": {
       "enabled": true,
       "max_per_day": 999
