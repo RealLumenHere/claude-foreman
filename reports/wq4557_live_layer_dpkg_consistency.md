@@ -75,7 +75,7 @@ Pure function `merge_dpkg_status(base, live, modified)` in `iso_layers.py`, keye
 4. In `base`, not in `modified` (removed by the build): drop, even if live lists it. First assert that no kept stanza Depends/Pre-Depends on it, else fail closed.
 5. In `live` only (88 packages): take the live stanza.
 
-Expected result on this ISO: 1903 - 91 + 11 = **1823 stanzas (1822 `ii` + 1 `rc`)**; jq/libjq1 at -4ubuntu2.
+Expected result on this ISO: 1903 - 91 + 11 = **1823 stanzas (measured on the merged result: 1819 `install ok installed` + 4 `deinstall ok config-files`)**; jq/libjq1 at -4ubuntu2.
 
 Inputs: base parent status via `unsquashfs -cat` of the **original** `casper/<target>.squashfs` (before repack), modified parent status from the chroot, live status from the **original** `minimal.standard.live.squashfs`. Always merge from the originals so rebuilds are idempotent.
 
@@ -89,7 +89,7 @@ Unit (fake data, wq#2630 style): merge cases for each of rules 1-5 plus both fai
 
 Real data (read-only, on `.build`): run the merge on the real three status files; assert 11 added present, 91 removed absent, 88 live-only present, jq = -4ubuntu2, total = 1823.
 
-Booted guest (same QEMU recipe as section 4): `dpkg -l tmux` is `ii`; `dpkg -l cups` is not installed (`dpkg-query: no packages found`); `dpkg --audit` prints nothing; installed count 1822.
+Booted guest (same QEMU recipe as section 4): `dpkg -l tmux` is `ii`; `dpkg -l cups` is not installed (`dpkg-query: no packages found`); `dpkg --audit` prints nothing; installed count 1819 (`install ok installed`).
 
 ## 8. Unknowns
 
@@ -100,3 +100,7 @@ Booted guest (same QEMU recipe as section 4): `dpkg -l tmux` is `ii`; `dpkg -l c
 ## 9. Reproduction
 
 Scripts and raw output: `/home/lumen/scratch/research/limpet-4557/` (`bootcheck.sh`, `qtype.py`, `bootcheck2.out`). Layer inspection used `unsquashfs -cat <layer>.squashfs var/lib/dpkg/status` and `xorriso -osirrox on -indev <iso> -extract /casper/<file>` on `/home/lumen/foreman/limpet/iso-builder/.build/iso-extract/casper` and `limpet-20261021.iso`; casper logic from `unmkinitramfs .../casper/initrd` -> `scripts/casper` lines ~596-683 and `conf/conf.d/default-layer.conf`.
+
+## 10. Corrections
+
+- 2026-10-23: the first version of this report predicted 1822 installed + 1 `rc`. Running the merge on the real files (wq#4558) gave 1823 stanzas of which 1819 are `install ok installed` and 4 are `deinstall ok config-files` (config residue from the build's package removals). Sections 6 and 7 are corrected above.
