@@ -267,6 +267,30 @@ most likely describe the stale out-of-tree copy under `/home/lumen/projects/limp
 the wrapper's `LIMPET_ROOT` resolves to (wq#4456). `LIMPET_TOOL_CATALOG` overrides the
 catalog path; the tests use it.
 
+## wq#4523 — installer presence gate (stage11b)
+
+The wq#4523 P0 ("no working installer — ubiquity missing") rested on a false
+premise: Xubuntu 26.04 has no ubiquity to be missing. Canonical retired it;
+the flavors now install through the `ubuntu-desktop-bootstrap` snap seeded in
+the live-only casper layer (`research/WQ3983_XUBUNTU_26_10_DISSECTION.md` §1,
+confirmed against the 26.04.1 and 26.10 manifests). "Add ubiquity back" (option
+a) is not possible, and the custom TUI wizard (option b) was explicitly
+superseded by `docs/deployment-spec.md:5,11,38` ("the installer is the stock
+Xubuntu 26.04 installer already on the base ISO, not a custom TUI"). So the fix
+is neither: it is a gate that fails the build the moment the stock installer
+doesn't survive the remaster.
+
+`stage11b_verify_installer` (`verify_installer.py`) probes the *finished* ISO
+— not the build inputs, which wq#4456 showed drift — for: `install-sources.yaml`
+present/parseable/`fsimage-layered` with one default source; every referenced
+layer squashfs and its parents; the `<default>.live` layer; and, inside it, the
+snap seed (`var/lib/snapd/seed/seed.yaml` seeding the installer snap by name
+plus its `.snap` file). A missing seed is exactly the ghost "Install" icon
+wq#4523 reported. Falsifiable both ways in `test_verify_installer.py` (passes
+on the stock layout, fails on seedless / wrong-snap / no-live-layer /
+no-install-sources variants). Override the seeded snap name with
+`--installer-snap` if a future base ships a different installer.
+
 ## Tests
 
 ```sh

@@ -167,12 +167,29 @@ def _mksquashfs(src, dest):
     )
 
 
-def _make_base_iso(tmp):
+# wq#4523: the real live layer snap-preseeds the installer
+# (ubuntu-desktop-bootstrap -- Xubuntu 26.04 has no ubiquity; see
+# verify_installer.py). The fixture mirrors that so stage11b's installer gate
+# runs against the same layout it probes on a real ISO.
+SEED_FILES = {
+    "var/lib/snapd/seed/seed.yaml":
+        "snaps:\n"
+        "- name: ubuntu-desktop-bootstrap\n"
+        "  channel: 26.04/stable/ubuntu-26.04\n"
+        "  file: ubuntu-desktop-bootstrap_675.snap\n",
+    "var/lib/snapd/seed/snaps/ubuntu-desktop-bootstrap_675.snap": "squash-stub\n",
+}
+
+
+def _make_base_iso(tmp, live_extra=None):
     root = tmp / "iso-src"
     (root / "casper").mkdir(parents=True)
     shutil.copytree(FIX / "boot", root / "boot")
     shutil.copy(FIX / "casper/install-sources.yaml", root / "casper")
 
+    live = {"var/lib/dpkg/status": _status("base-files", "xubuntu-desktop", "casper"),
+            "etc/live-only": "live\n", "usr/sbin/.keep": ""}
+    live.update(SEED_FILES if live_extra is None else live_extra)
     trees = {
         "minimal": {"var/lib/dpkg/status": _status("base-files"),
                     "etc/os-release": 'VERSION_ID="26.04"\n'},
@@ -180,8 +197,7 @@ def _make_base_iso(tmp):
         # upper/ only, and a wrong-layer pick must reach the content asserts.
         "minimal.standard": {"var/lib/dpkg/status": _status("base-files", "xubuntu-desktop"),
                              "usr/share/standard-only": "std\n", "usr/sbin/.keep": ""},
-        "minimal.standard.live": {"var/lib/dpkg/status": _status("base-files", "xubuntu-desktop", "casper"),
-                                  "etc/live-only": "live\n", "usr/sbin/.keep": ""},
+        "minimal.standard.live": live,
     }
     for layer, files in trees.items():
         t = tmp / "trees" / layer
@@ -254,6 +270,7 @@ def remaster(tmp_path_factory):
     run("stage4_package_re_tools")  # dpkg db gains limpet-test-pkg via the fake apt-get
     run("stage6_bundle_target_device_db")
     run("stage11_build_hybrid_iso")
+    run("stage11b_verify_installer")  # wq#4523: installer gate on the finished ISO
 
     out = work / "out/limpet-test.iso"
     got = tmp / "got"

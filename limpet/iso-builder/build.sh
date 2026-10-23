@@ -651,6 +651,28 @@ stage11_build_hybrid_iso() {
 }
 
 # ---------------------------------------------------------------------------
+# Stage 11b -- installer presence gate (wq#4523)
+# ---------------------------------------------------------------------------
+# limpet-20261021.iso shipped with no working installer (P0). Xubuntu 26.04's
+# installer is NOT ubiquity (retired upstream; absent from the stock ISO too --
+# research/WQ3983_XUBUNTU_26_10_DISSECTION.md) but the ubuntu-desktop-bootstrap
+# snap, seeded in the live-only casper layer. This gate probes the finished
+# ISO -- not the build inputs, which wq#4456 proved can drift -- for everything
+# that installer needs: install-sources.yaml, every referenced layer, the live
+# layer, and the snap seed inside it. A missing seed is exactly the ghost
+# "Install" icon the wq#4523 validation hit.
+stage11b_verify_installer() {
+  log "stage11b: verifying the stock installer survived the remaster"
+  require_cmd python3
+  require_cmd xorriso
+  require_cmd unsquashfs
+  local iso="$OUT_DIR/$ISO_NAME"
+  [ -f "$iso" ] || fail "no ISO at $iso -- run stage11 first"
+  python3 -I "$HERE/verify_installer.py" --iso "$iso" \
+    || fail "installer verification failed on $iso -- see the errors above; this ISO cannot install itself"
+}
+
+# ---------------------------------------------------------------------------
 # Stage 12 -- QEMU/KVM boot test
 # ---------------------------------------------------------------------------
 stage12_qemu_test() {
@@ -680,6 +702,7 @@ STAGES=(
   stage9_apply_branding
   stage10_configure_serial_console
   stage11_build_hybrid_iso
+  stage11b_verify_installer
   stage12_qemu_test
 )
 
