@@ -1,0 +1,5 @@
+  memory_state:
+    desc: "Fleet facts + episodic memory. Query state, never trust dated prose; record episodes after real work."
+    tools:
+      - name: lumen_state.py
+        path: /home/lumen/minerva/lumen_state.py
