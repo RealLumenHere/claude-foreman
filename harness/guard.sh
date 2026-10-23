@@ -126,14 +126,32 @@ Bash)
   # the verb scan. If anything separator-shaped (;&|()<>) or an unbalanced quote
   # survives the blanking, fall back to the full RAW_CMD/NORM scan unchanged.
   # Every other check below (systemctl, credential shapes, paths, rm -rf, ...)
-  # keeps scanning the full, unblanked text — only this one check moves.
+  # keeps scanning the full, unblanked text — only the prose-sensitive ones move.
+  #
+  # wq#4568 widens the exempt-command list from `wq` alone to the issue-log
+  # append tool, and lets the ccc push wall below use the exemption too. Both
+  # halves were forced by the same live failure: the doctrine-mandated
+  # `issue_log_append.py --solution "..."` call closing out THIS ticket was
+  # blocked by the pre-fix ccc wall, because the solution text necessarily
+  # quotes the mirror's org/repo and the words for uploading commits. Reporting
+  # an issue about a wall must not be walled — rows 41/324/447/451 and wq3854
+  # are the same class — and making the literal match case-insensitive widens
+  # the prose over-match, so the exemption has to cover it. Identical gate: a
+  # lone call to one of those two absolute paths, no newline/CR, no $/backtick/
+  # backslash that could smuggle a second command past a naive scan, and nothing
+  # separator-shaped or an unbalanced quote surviving the blanking. An argument
+  # of issue_log_append.py cannot execute anything, so a real push string quoted
+  # inside one pushes nothing.
+  PROSE_EXEMPT_RE='^(/home/lumen/bin/wq|python3 +/home/lumen/foreman/harness/issue_log_append\.py)[[:space:]]'
   VERB_SCAN_TARGETS=("$RAW_CMD" "$NORM")
+  CCC_SCAN_TARGETS=("$RAW_CMD" "$NORM")
   if [[ "$RAW_CMD" != *$'\n'* && "$RAW_CMD" != *$'\r'* \
         && "$RAW_CMD" != *'$'* && "$RAW_CMD" != *'`'* && "$RAW_CMD" != *'\'* ]] \
-      && printf '%s' "$RAW_CMD" | grep -qE '^/home/lumen/bin/wq[[:space:]]'; then
+      && printf '%s' "$RAW_CMD" | grep -qE "$PROSE_EXEMPT_RE"; then
     BLANKED=$(printf '%s' "$NORM" | sed -E "s/\"[^\"]*\"|'[^']*'/Q/g")
     if ! printf '%s' "$BLANKED" | grep -qE '[;&|()<>"'"'"']'; then
       VERB_SCAN_TARGETS=("$BLANKED")
+      CCC_SCAN_TARGETS=("$BLANKED")
     fi
   fi
   for target in "${VERB_SCAN_TARGETS[@]}"; do
@@ -144,6 +162,51 @@ Bash)
     # out of the match keeps `my_sudo`, `./reboot.sh` and `--no-halt` from tripping.
     if printf '%s' "$target" | grep -qE '(^|[^[:alnum:]_./-])(sudo|reboot|shutdown|poweroff|halt|init +[06])\b'; then
       block "denied verb (sudo/reboot/shutdown/poweroff/halt/init 0|6)" "$RAW_CMD"
+    fi
+  done
+
+  # ---- wq#4550 (duplicate report: wq#4551), widened by wq#4568 ----
+  # RealLumenHere/ccc is a public GitHub mirror of a Class C, never-public repo
+  # (agent-scope.conf has no ALLOW for it — lumen/ccc's ALLOW line explicitly
+  # does not cover the mirror). Taking it private/deleting it is Frank's
+  # GitHub-account action (queued wq#4563, frank_gated); this is the interim
+  # backstop so no agent push reaches it (directly, or via /home/lumen/ccc's
+  # github remote) in the meantime. It is the SOLE backstop for this org/repo:
+  # worker-settings.json's deny list and action_gate.py's regex table are both
+  # force-push-only.
+  #
+  # wq#4568 closes the two evasions wq#4565's verify-pass reproduced live at
+  # exit 0, and moves this wall out of the shared RAW_CMD/NORM loop so it can
+  # scan the prose-exempt targets:
+  #   - cwd: the Bash tool's cwd persists between calls, so `cd /home/lumen/ccc`
+  #     in one call and a push in a later one yields a command string naming
+  #     neither the mirror nor the checkout. Matched against CCC_TREES with the
+  #     same case tree|tree/* shape the primary-tree branch-move wall already
+  #     uses for this exact threat shape (see HOOK_CWD/PRIMARY_TREES below), so
+  #     subdirectories count.
+  #   - case: the org/repo literal is matched case-insensitively, because GitHub
+  #     repo routing is case-insensitive — github.com/reallumenhere/ccc reaches
+  #     the same mirror. The filesystem path match stays case-sensitive; Linux
+  #     paths are, and widening it would only block paths that cannot exist.
+  # Every push out of that tree is in scope regardless of remote name: ccc is
+  # never-public, so the risk is content leaving, not which remote is typed.
+  # Read-only git in the checkout stays allowed.
+  CCC_TREES=${FOREMAN_CCC_TREES:-/home/lumen/ccc}
+  CCC_CWD_HIT=0
+  CCC_CWD=$(jfield '.cwd')
+  IFS=':' read -ra CCC_TREE_ARR <<< "$CCC_TREES"
+  for ctree in "${CCC_TREE_ARR[@]}"; do
+    [ -n "$ctree" ] || continue
+    case "$CCC_CWD" in
+      "$ctree"|"$ctree"/*) CCC_CWD_HIT=1; break ;;
+    esac
+  done
+  for target in "${CCC_SCAN_TARGETS[@]}"; do
+    if printf '%s' "$target" | grep -qE '\bgit\b.*\bpush\b' \
+        && { printf '%s' "$target" | grep -qiE 'RealLumenHere/ccc\b' \
+          || printf '%s' "$target" | grep -qE '/home/lumen/ccc\b' \
+          || [ "$CCC_CWD_HIT" = 1 ]; }; then
+      block "git push toward RealLumenHere/ccc denied (wq#4550/wq#4551/wq#4568: public mirror of never-public ccc; cwd=$CCC_CWD)" "$RAW_CMD"
     fi
   done
 
@@ -165,16 +228,6 @@ Bash)
     fi
     if printf '%s' "$target" | grep -qE 'git +push +.*(--force\b|--force-with-lease\b|-f\b)'; then
       block "git push --force denied" "$RAW_CMD"
-    fi
-    # wq#4550 (duplicate report: wq#4551): RealLumenHere/ccc is a public GitHub
-    # mirror of a Class C, never-public repo (agent-scope.conf has no ALLOW for
-    # it — lumen/ccc's ALLOW line explicitly does not cover the mirror). Taking
-    # it private/deleting it is Frank's GitHub-account action (queued wq#4563,
-    # frank_gated); this is the interim backstop so no agent push reaches it
-    # (directly, or via /home/lumen/ccc's github remote) in the meantime.
-    if printf '%s' "$target" | grep -qE '\bgit\b.*\bpush\b' \
-        && printf '%s' "$target" | grep -qE 'RealLumenHere/ccc\b|/home/lumen/ccc\b'; then
-      block "git push toward RealLumenHere/ccc denied (wq#4550/wq#4551: public mirror of never-public ccc)" "$RAW_CMD"
     fi
     if printf '%s' "$target" | grep -qE '\bmkfs(\.[a-z0-9]+)?\b|\bwipefs\b'; then
       block "mkfs/wipefs denied" "$RAW_CMD"

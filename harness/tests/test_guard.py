@@ -852,6 +852,112 @@ def test_primary_tree_allow_cases():
     assert not failures, f"expected exit 0 (allow), got: {failures}"
 
 
+# ---- wq#4568: the ccc mirror push wall reads cwd and ignores case ----
+# wq#4565's verify-pass reproduced both of these live against the real guard.sh
+# at exit 0 (allowed), because wq#4550's check only pattern-matched the literal,
+# case-sensitive strings in the command text. wq#4550's own MUST_BLOCK rows never
+# varied cwd or case, so they could not have caught either.
+
+CCC_TREE = "/home/lumen/ccc"
+
+CCC_MUST_BLOCK = [
+    # wq#4565 probe 1: cwd-only. The Bash tool's cwd persists between calls, so
+    # `cd /home/lumen/ccc` then a push in a LATER call names nothing matchable.
+    ({"command": "git push origin main"}, CCC_TREE, None),
+    ({"command": "git push github main"}, f"{CCC_TREE}/docs", None),  # subdir counts
+    # wq#4565 probe 2: case-variant mirror URL. GitHub repo routing is
+    # case-insensitive, so this reaches the same public mirror.
+    ({"command": "git push https://github.com/reallumenhere/ccc.git main"},
+     WORKTREE, None),
+    ({"command": "git push https://github.com/REALLUMENHERE/CCC.git main"},
+     WORKTREE, None),
+    # the wq#4550 rows still block (no regression from widening)
+    ({"command": "git push https://github.com/RealLumenHere/ccc.git main"},
+     WORKTREE, None),
+    ({"command": "git -C /home/lumen/ccc push github main"}, WORKTREE, None),
+    # OUT-OF-POPULATION probe (wq#2630): CCC_TREES is the fix's scope parameter,
+    # so at least one probe must come from outside its default value. Point the
+    # override at a tree the fix was not designed around and the cwd wall has to
+    # follow it there — a probe drawn only from /home/lumen/ccc could not fail.
+    ({"command": "git push origin main"}, "/home/lumen/mirror-of-ccc",
+     {"FOREMAN_CCC_TREES": "/home/lumen/mirror-of-ccc"}),
+]
+
+APPEND = "python3 /home/lumen/foreman/harness/issue_log_append.py"
+
+CCC_MUST_ALLOW = [
+    # a push from a worker's own worktree to an unrelated remote stays usable
+    ({"command": "git push origin feat/wq4568"}, WORKTREE, None),
+    ({"command": "git push https://github.com/RealLumenHere/foreman.git main"},
+     WORKTREE, None),
+    # read-only git inside the ccc checkout is not the risk — only pushes are
+    ({"command": "git status"}, CCC_TREE, None),
+    ({"command": "git log --oneline -3"}, CCC_TREE, None),
+    ({"command": "grep -rn mirror /home/lumen/ccc"}, WORKTREE, None),
+    # the override is a scope list, not a blanket: a cwd outside the configured
+    # trees still allows, which is what makes the out-of-population block above
+    # evidence rather than a tautology.
+    ({"command": "git push origin main"}, WORKTREE,
+     {"FOREMAN_CCC_TREES": "/home/lumen/mirror-of-ccc"}),
+    # wq#4568: reporting an issue about this wall must not be walled. The
+    # doctrine-mandated issue-log append closing out wq#4568 was blocked live by
+    # the pre-fix wall, because its --solution text necessarily quotes the
+    # mirror's org/repo and the words for uploading commits. Same class as rows
+    # 41/324/447/451 and wq3854. These are the real blocked call's shape:
+    ({"command": f'{APPEND} --issue "wq#4565 says git push to RealLumenHere/ccc '
+                 f'is unblocked" --solution "widened the wall" --status resolved'},
+     WORKTREE, None),
+    ({"command": f'{APPEND} --solution "guard.sh now blocks git push toward '
+                 f'reallumenhere/ccc case-insensitively"'}, WORKTREE, None),
+    # the wq#3861 exemption this reuses still covers a lone wq call's prose
+    ({"command": '/home/lumen/bin/wq done 4568 --notes "blocked git push to '
+                 'RealLumenHere/ccc"'}, WORKTREE, None),
+]
+
+# wq#4568: the prose exemption is narrowly gated, and must not become a bypass.
+# A real push is still blocked when the command only LOOKS like an exempt call.
+CCC_EXEMPTION_MUST_BLOCK = [
+    # a separator surviving the blanking falls back to the full unblanked scan
+    ({"command": f'{APPEND} --status resolved; git push https://github.com/'
+                 f'RealLumenHere/ccc.git main'}, WORKTREE, None),
+    ({"command": f'{APPEND} --status x && git push origin main'}, CCC_TREE, None),
+    # the exempt prefix must be at the start, not merely present somewhere
+    ({"command": f'git push https://github.com/RealLumenHere/ccc.git main # {APPEND}'},
+     WORKTREE, None),
+    # command substitution / backslash disables the exemption by design
+    ({"command": f'{APPEND} --solution "$(git push origin main)"'}, CCC_TREE, None),
+    # an unbalanced quote leaves a quote surviving the blanking -> no exemption
+    ({"command": f'{APPEND} --solution "git push origin main'}, CCC_TREE, None),
+]
+
+
+def test_ccc_mirror_push_blocked():
+    failures = []
+    for inp, cwd, env_extra in CCC_MUST_BLOCK:
+        rc, stderr = run_guard("Bash", inp, cwd=cwd, env_extra=env_extra)
+        if rc != 2 or "wq#4568" not in stderr or "syntax error" in stderr:
+            failures.append((inp, cwd, rc, stderr))
+    assert not failures, f"expected clean wq#4568 ccc block, got: {failures}"
+
+
+def test_ccc_mirror_allow_cases():
+    failures = []
+    for inp, cwd, env_extra in CCC_MUST_ALLOW:
+        rc, stderr = run_guard("Bash", inp, cwd=cwd, env_extra=env_extra)
+        if rc != 0:
+            failures.append((inp, cwd, rc, stderr))
+    assert not failures, f"expected exit 0 (allow), got: {failures}"
+
+
+def test_ccc_prose_exemption_is_not_a_bypass():
+    failures = []
+    for inp, cwd, env_extra in CCC_EXEMPTION_MUST_BLOCK:
+        rc, stderr = run_guard("Bash", inp, cwd=cwd, env_extra=env_extra)
+        if rc != 2:
+            failures.append((inp, cwd, rc, stderr))
+    assert not failures, f"expected exit 2 (block), got: {failures}"
+
+
 # ---- wq#2504: git stash is a primary-tree reset (and with -u/-a a clean) ----
 # wq#2477 (ISSUE-LOG #663): `git stash -u` in the live foreman tree swept 73
 # untracked files into stash@{0} to get past lumen-pr land's dirty-tree refusal.
