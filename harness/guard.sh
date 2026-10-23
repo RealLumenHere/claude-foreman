@@ -166,6 +166,15 @@ Bash)
     if printf '%s' "$target" | grep -qE 'git +push +.*(--force\b|--force-with-lease\b|-f\b)'; then
       block "git push --force denied" "$RAW_CMD"
     fi
+    # wq#4550: RealLumenHere/ccc is a public GitHub mirror of a Class C,
+    # never-public repo (agent-scope.conf has no ALLOW for it — lumen/ccc's ALLOW
+    # line explicitly does not cover the mirror). Taking it private/deleting it is
+    # Frank's GitHub-account action; this is the interim backstop so no agent push
+    # reaches it (directly, or via /home/lumen/ccc's github remote) in the meantime.
+    if printf '%s' "$target" | grep -qE '\bgit\b.*\bpush\b' \
+        && printf '%s' "$target" | grep -qE 'RealLumenHere/ccc\b|/home/lumen/ccc\b'; then
+      block "git push toward RealLumenHere/ccc denied (wq#4550: public mirror of never-public ccc)" "$RAW_CMD"
+    fi
     if printf '%s' "$target" | grep -qE '\bmkfs(\.[a-z0-9]+)?\b|\bwipefs\b'; then
       block "mkfs/wipefs denied" "$RAW_CMD"
     fi
