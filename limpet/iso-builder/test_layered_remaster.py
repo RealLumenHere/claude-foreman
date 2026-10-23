@@ -284,7 +284,12 @@ def _make_base_iso(tmp, live_extra=None):
             (t / rel).write_text(body)
         _mksquashfs(t, root / "casper" / f"{layer}.squashfs")
     (root / "casper/minimal.manifest.full").write_text("base-files\t1.0\n")
-    (root / "casper/minimal.standard.manifest.full").write_text("base-files\t1.0\nxubuntu-desktop\t1.0\n")
+    # Like the real ISO, manifest.full also records seeded snaps (snap:NAME<TAB>channel<TAB>rev).
+    (root / "casper/minimal.standard.manifest.full").write_text(
+        "base-files\t1.0\nxubuntu-desktop\t1.0\nsnap:core24\tstable\t1587\n")
+    (root / "casper/minimal.standard.live.manifest.full").write_text(
+        "base-files\t1.0\ncasper\t1.0\nxubuntu-desktop\t1.0\nsnap:core24\tstable\t1587\n"
+        "snap:ubuntu-desktop-bootstrap\t26.04/stable/ubuntu-26.04\t589\n")
 
     lines = []
     for f in sorted(p for p in root.rglob("*") if p.is_file()):
@@ -367,11 +372,44 @@ def test_stage_content_lands_in_the_install_layer_only(remaster):
     assert not any(p.startswith("run/systemd") for p in listing)
 
 
-@pytest.mark.parametrize("layer", ["minimal", "minimal.standard.live"])
-def test_other_layers_are_byte_identical(remaster, layer):
-    a = _extract(remaster["base"], f"/casper/{layer}.squashfs", remaster["got"] / f"base-{layer}")
-    b = _extract(remaster["out"], f"/casper/{layer}.squashfs", remaster["got"] / f"out-{layer}")
+def test_untouched_root_layer_is_byte_identical(remaster):
+    a = _extract(remaster["base"], "/casper/minimal.squashfs", remaster["got"] / "base-minimal")
+    b = _extract(remaster["out"], "/casper/minimal.squashfs", remaster["got"] / "out-minimal")
     assert a.read_bytes() == b.read_bytes()
+
+
+def _cat(sq, path):
+    return subprocess.run(["unsquashfs", "-cat", str(sq), path], check=True, capture_output=True, text=True).stdout
+
+
+def test_live_layer_is_repacked_with_a_dpkg_database_merged_against_the_target(remaster):
+    # wq#4558: the live layer sits on top of the overlay and ships its own full dpkg status,
+    # so it used to shadow the target layer: packages the build adds looked uninstalled.
+    base = _extract(remaster["base"], "/casper/minimal.standard.live.squashfs", remaster["got"] / "base-live")
+    out = _extract(remaster["out"], "/casper/minimal.standard.live.squashfs", remaster["got"] / "out-live")
+    status = _cat(out, "var/lib/dpkg/status")
+    assert "Package: limpet-test-pkg" in status       # added to the target layer by stage4
+    assert "Package: casper" in status                # live-only package kept
+    assert "Package: xubuntu-desktop" in status
+    assert "limpet-test-pkg" not in _cat(base, "var/lib/dpkg/status")
+    # everything else in the live layer is untouched, installer snap seed included
+    assert _squash_listing(out) == _squash_listing(base)
+    assert _cat(out, "etc/live-only") == "live\n"
+    assert "ubuntu-desktop-bootstrap" in _cat(out, "var/lib/snapd/seed/seed.yaml")
+
+
+def test_live_layer_metadata_and_md5_are_refreshed(remaster):
+    got = remaster["got"]
+    full = _extract(remaster["out"], "/casper/minimal.standard.live.manifest.full", got / "live.full").read_text()
+    assert "limpet-test-pkg\t1.0" in full and "casper\t1.0" in full
+    assert "snap:ubuntu-desktop-bootstrap\t26.04/stable/ubuntu-26.04\t589" in full.splitlines()
+    delta = _extract(remaster["out"], "/casper/minimal.standard.live.manifest", got / "live.delta").read_text()
+    assert "+casper\t1.0" in delta and "limpet-test-pkg" not in delta   # delta is against the NEW parent
+    assert "+snap:ubuntu-desktop-bootstrap" in delta and "snap:core24" not in delta  # only what the live layer adds
+    assert _extract(remaster["out"], "/casper/minimal.standard.live.size", got / "live.size").read_text().strip().isdigit()
+    md5 = _extract(remaster["out"], "/md5sum.txt", got / "md5sum-live.txt").read_text().splitlines()
+    sq = _extract(remaster["out"], "/casper/minimal.standard.live.squashfs", got / "live-md5.sq")
+    assert f"{hashlib.md5(sq.read_bytes()).hexdigest()}  ./casper/minimal.standard.live.squashfs" in md5
 
 
 def test_iso_grub_cfg_emitted_and_rebranded(remaster):
@@ -393,7 +431,9 @@ def test_layer_metadata_refreshed(remaster):
 
     delta = _extract(remaster["out"], "/casper/minimal.standard.manifest", got / "delta").read_text()
     added = {l for l in delta.splitlines() if l.startswith("+") and not l.startswith("+++")}
-    assert added == {"+limpet-test-pkg\t1.0", "+xubuntu-desktop\t1.0"}
+    assert added == {"+limpet-test-pkg\t1.0", "+xubuntu-desktop\t1.0", "+snap:core24\tstable\t1587"}
+    full = _extract(remaster["out"], "/casper/minimal.standard.manifest.full", got / "std.full").read_text()
+    assert "snap:core24\tstable\t1587" in full.splitlines()  # snap records survive the dpkg-query regeneration
 
     md5 = _extract(remaster["out"], "/md5sum.txt", got / "md5sum.txt").read_text()
     sq = _extract(remaster["out"], "/casper/minimal.standard.squashfs", got / "std-md5.sq")

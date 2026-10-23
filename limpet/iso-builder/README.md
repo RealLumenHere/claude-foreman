@@ -286,6 +286,26 @@ most likely describe the stale out-of-tree copy under `/home/lumen/projects/limp
 the wrapper's `LIMPET_ROOT` resolves to (wq#4456). `LIMPET_TOOL_CATALOG` overrides the
 catalog path; the tests use it.
 
+## wq#4558 — live layer dpkg database (stage11)
+
+casper stacks `minimal` -> `minimal.standard` -> `minimal.standard.live` with the live layer
+on top, and the live layer ships its own full `/var/lib/dpkg/status`. On the stock ISO that
+copy shadows the target layer's, so in a live session `dpkg`/`apt` disagree with the files on
+disk (packages this build adds look uninstalled, packages it removes look installed; measured
+and observed in a booted guest, see `reports/wq4557_live_layer_dpkg_consistency.md`).
+
+`stage11_build_hybrid_iso` therefore also repacks the live layer (`repack_live_layer`): it takes
+the original base target-layer status, the original live status and the target layer's status
+after this build, three-way merges them (`iso_layers.py merge-dpkg-status`, same for
+`apt/extended_states`), and writes the live layer's `.squashfs`, `.manifest`, `.manifest.full`,
+`.size` and `md5sum.txt` entries. It always merges from the ORIGINAL base layers, so rebuilds are
+idempotent, and fails closed on a conflict. It does nothing when the target layer is itself the
+live layer or the base ISO has no live layer. `snap:` records in `manifest.full` (not dpkg
+packages) are carried over from the originals for both layers.
+
+Not covered: dpkg diversions, alternatives and trigger state files, which the live layer also
+carries (not checked whether this build changes them).
+
 ## wq#4523 — installer presence gate (stage11b)
 
 The wq#4523 P0 ("no working installer — ubiquity missing") rested on a false

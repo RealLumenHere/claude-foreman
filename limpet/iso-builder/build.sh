@@ -637,6 +637,80 @@ stage10_configure_serial_console() {
   log "stage10: added console=tty0 console=ttyS0,115200n8 to GRUB_CMDLINE_LINUX and ran update-grub"
 }
 
+# Append the snap:NAME<TAB>channel<TAB>revision records of an original manifest.full to a
+# regenerated one (dpkg-query cannot list snaps). No snap lines is fine.
+carry_snap_records() {
+  [ -f "$1" ] || return 0
+  grep '^snap:' "$1" >>"$2" || true
+}
+
+# ---------------------------------------------------------------------------
+# Live layer repack (wq#4558, research: reports/wq4557_live_layer_dpkg_consistency.md)
+# ---------------------------------------------------------------------------
+# casper stacks minimal -> minimal.standard -> minimal.standard.live with the live
+# layer on top. The live layer carries its own FULL var/lib/dpkg/status, so on the
+# stock ISO it shadows the target layer's database: packages this build adds look
+# uninstalled, packages it removes look installed (measured and observed in a
+# booted guest). Repack the live layer with a status merged against the target
+# layer as it is after this build. Always merges from the ORIGINAL base layers
+# (never from a previous repack), so rebuilds are idempotent. Fails closed on a
+# merge conflict. Not covered here (not checked): dpkg diversions, alternatives and
+# trigger state files the live layer also carries.
+repack_live_layer() {
+  local layer="$1" changes="$2" casper="$3" live="$1.live"
+  case "$layer" in
+    *.live) log "live-repack: $layer is itself the live layer -- nothing separate to repack"; return 0 ;;
+  esac
+  if [ ! -f "$casper/$live.squashfs" ]; then
+    log "live-repack: no $live.squashfs in the base ISO -- nothing to repack"
+    return 0
+  fi
+  [ -f "$WORKDIR/modified.dpkg-status" ] || fail "live-repack: $WORKDIR/modified.dpkg-status missing (stage11 saves it before releasing the chroot)"
+  require_cmd unsquashfs
+  require_cmd mksquashfs
+  require_cmd dpkg-query
+  local lw="$WORKDIR/live-upper" st="$WORKDIR/live-state"
+  rm -rf "$lw" "$st"
+  mkdir -p "$st/admin/info" "$st/admin/updates" "$changes/casper"
+  log "live-repack: $live gets a dpkg database merged against the modified $layer"
+  unsquashfs -d "$lw" "$casper/$live.squashfs" >/dev/null
+  [ -f "$lw/var/lib/dpkg/status" ] || fail "live-repack: $live has no var/lib/dpkg/status -- cannot merge"
+  unsquashfs -cat "$casper/$layer.squashfs" var/lib/dpkg/status >"$st/base.status" \
+    || fail "live-repack: cannot read the original $layer dpkg status"
+  unsquashfs -cat "$casper/$layer.squashfs" var/lib/apt/extended_states >"$st/base.ext" 2>/dev/null || : >"$st/base.ext"
+  cp "$lw/var/lib/dpkg/status" "$st/live.status"
+  if [ -f "$lw/var/lib/apt/extended_states" ]; then cp "$lw/var/lib/apt/extended_states" "$st/live.ext"; else : >"$st/live.ext"; fi
+  iso_layers merge-dpkg-status --base "$st/base.status" --live "$st/live.status" \
+    --modified "$WORKDIR/modified.dpkg-status" --out "$st/merged.status" \
+    || fail "live-repack: dpkg status merge for $live failed -- see above; not shipping a live layer that disagrees with its parent"
+  iso_layers merge-extended-states --base "$st/base.ext" --live "$st/live.ext" \
+    --modified "$WORKDIR/modified.extended_states" --status "$st/merged.status" --out "$st/merged.ext" \
+    || fail "live-repack: extended_states merge for $live failed -- see above"
+  install -m 0644 "$st/merged.status" "$lw/var/lib/dpkg/status"
+  if [ -s "$st/merged.ext" ] || [ -f "$lw/var/lib/apt/extended_states" ]; then
+    mkdir -p "$lw/var/lib/apt"
+    install -m 0644 "$st/merged.ext" "$lw/var/lib/apt/extended_states"
+  fi
+
+  # Metadata livecd-rootfs derives per layer: manifest.full = every package up to
+  # this layer, the delta manifest = what it adds over its (NEW) parent, size = footprint.
+  cp "$st/merged.status" "$st/admin/status"
+  dpkg-query --show --admindir="$st/admin" >"$changes/casper/$live.manifest.full" \
+    || fail "live-repack: dpkg-query failed on the merged status"
+  # same snap records as above, from the original live layer (it lists the installer snaps too)
+  carry_snap_records "$casper/$live.manifest.full" "$changes/casper/$live.manifest.full"
+  diff -NU0 "$changes/casper/$layer.manifest.full" "$changes/casper/$live.manifest.full" \
+    | grep -v '^@' >"$changes/casper/$live.manifest" || true
+  du -B 1 -s "$lw" | cut -f1 >"$changes/casper/$live.size"
+
+  local comp bs
+  comp="$(unsquashfs -s "$casper/$live.squashfs" | awk '/^Compression/{print $2}')"
+  bs="$(unsquashfs -s "$casper/$live.squashfs" | awk '/^Block size/{print $3}')"
+  mksquashfs "$lw" "$changes/casper/$live.squashfs" -noappend -comp "$comp" -b "$bs" -xattrs -no-progress >/dev/null
+  rm -rf "$lw"
+  log "live-repack: wrote $live.squashfs + manifest, manifest.full, size (merged dpkg database)"
+}
+
 # ---------------------------------------------------------------------------
 # Stage 11 -- hybrid BIOS+UEFI bootable ISO
 # ---------------------------------------------------------------------------
@@ -678,10 +752,21 @@ stage11_build_hybrid_iso() {
   # install-sources size = the installed footprint the installer checks.
   if mountpoint -q "$CHROOT"; then chroot "$CHROOT" apt-get clean; fi
   dpkg-query --show --admindir="$CHROOT/var/lib/dpkg" >"$changes/casper/$layer.manifest.full"
+  # dpkg-query only knows dpkg packages; livecd-rootfs also records seeded snaps in
+  # manifest.full (snap:NAME<TAB>channel<TAB>revision). Carry the original's over: this
+  # build never touches the snap seed, and dropping them rewrote the layer's metadata.
+  carry_snap_records "$casper/$layer.manifest.full" "$changes/casper/$layer.manifest.full"
   diff -NU0 "$casper/$parent.manifest.full" "$changes/casper/$layer.manifest.full" \
     | grep -v '^@' >"$changes/casper/$layer.manifest" || true
   local merged_size
   merged_size="$(du -B 1 -s -x "$CHROOT/" | cut -f1)"
+  # wq#4558: the live layer is merged against the target layer as it stands now.
+  cp "$CHROOT/var/lib/dpkg/status" "$WORKDIR/modified.dpkg-status"
+  if [ -f "$CHROOT/var/lib/apt/extended_states" ]; then
+    cp "$CHROOT/var/lib/apt/extended_states" "$WORKDIR/modified.extended_states"
+  else
+    : >"$WORKDIR/modified.extended_states"
+  fi
   release_chroot
   du -B 1 -s "$upper" | cut -f1 >"$changes/casper/$layer.size"
 
@@ -690,6 +775,8 @@ stage11_build_hybrid_iso() {
   comp="$(unsquashfs -s "$casper/$layer.squashfs" | awk '/^Compression/{print $2}')"
   bs="$(unsquashfs -s "$casper/$layer.squashfs" | awk '/^Block size/{print $3}')"
   mksquashfs "$upper" "$changes/casper/$layer.squashfs" -noappend -comp "$comp" -b "$bs" -xattrs -no-progress >/dev/null
+
+  repack_live_layer "$layer" "$changes" "$casper"
 
   # install, not cp: xorriso extracts ISO files 0444 and these get rewritten.
   install -m 0644 "$casper/install-sources.yaml" "$changes/casper/"
@@ -817,4 +904,6 @@ main() {
   fail "unknown stage: $target (see --help)"
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
