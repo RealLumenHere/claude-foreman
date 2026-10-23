@@ -1,0 +1,28 @@
+[Unit]
+Description=serial-mcp (qarnet/serial-mcp v0.9.3) — UART MCP server, HTTP transport
+Documentation=https://github.com/qarnet/serial-mcp
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=maksoor
+Group=dialout
+ExecStart=/opt/serial-mcp/bin/serial-mcp \
+    --transport=http \
+    --bind=100.81.204.74:8000 \
+    --allowlist=/dev/ttyUSB*,/dev/ttyACM* \
+    --capture-dir=/var/log/serial-mcp
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+# Hardening: this is a UART bridge, not a general-purpose service.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/log/serial-mcp
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
