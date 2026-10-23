@@ -54,6 +54,40 @@ def test_parse_state_lines_handles_confidence_tag(cb, state_text):
     assert thor_role["since"] == "2026-06-18"
 
 
+def test_parse_state_lines_binds_last_since_clause(cb):
+    """wq#4578 regression (wq#4572's contradiction): the value group is greedy,
+    so a value whose own free text contains a "(since DATE)" fragment binds to
+    the LAST clause — the one lumen_state.py appends — not the first. The
+    non-greedy `.*?` this replaces parsed line 2 of the fixture as
+    value="flaky", since="2020-01-01": truncated, six years stale, no error."""
+    with open(os.path.join(FIXTURES, "state_embedded_since_wq4578.txt"),
+              encoding="utf-8") as fh:
+        facts = cb.parse_state_lines(fh.read())
+    got = {(f["subject"], f["predicate"]): (f["value"], f["since"]) for f in facts}
+    assert len(facts) == 6
+    assert got[("testhost", "status")] == (
+        "flaky (since 2020-01-01) but recovered", "2026-10-11")
+    assert got[("testhost", "role")] == (
+        "spare builder, took over ra's lane (retired since 2026-03-02)", "2026-09-14")
+    assert got[("dualhost", "lan_ip")] == (
+        "192.168.8.44 (static lease since 2025-12-01; see wq#4539)", "2026-08-14")
+    # No tag after the date at all: the dropped end anchor still must not matter.
+    assert got[("tailhost", "role")] == ("watchdog (since 2024-05-05)", "2026-10-22")
+    # Empty value stays an empty string, never None (the `|` branch).
+    assert got[("emptyhost", "status")] == ("", "2026-10-20")
+
+
+def test_parse_state_lines_greedy_value_keeps_live_coverage(cb, state_text):
+    """The greedy value group must not change WHICH lines match: same 12 facts
+    off the pinned live snapshot as before wq#4578, and a retired-role value
+    still reads as retired (greedy must not swallow the leading word)."""
+    facts = cb.parse_state_lines(state_text)
+    assert len(facts) == 12
+    khepri_role = next(f for f in facts
+                       if f["subject"] == "khepri" and f["predicate"] == "role")
+    assert cb._is_retired(khepri_role["value"])
+
+
 def test_roster_excludes_retired_node_present_in_minerva(cb, state_text):
     """Probe (b): khepri has a CURRENT `.role` fact (minerva.db never deletes
     history) but both role and status read retired — must not render."""

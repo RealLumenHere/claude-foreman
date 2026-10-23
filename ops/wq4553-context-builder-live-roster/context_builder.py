@@ -64,6 +64,19 @@ Facts go to lumen_state.py ingest, episodes to lumen_episode.py commit.
 # fleet_context.py's pattern currently matches 0 role lines. This pattern
 # drops the end anchor so it still captures subject/predicate/value/since with
 # trailing tag text present.
+#
+# wq#4578 (ruling on wq#4572's contradiction): with no end anchor, the value
+# group must be GREEDY. A non-greedy `.*?` stops at the FIRST
+# "(since YYYY-MM-DD)"-shaped substring on the line, so a value whose own
+# free text contains that idiom (the fixture already carries parenthetical
+# free-text values, e.g. khepri.lan_ip) parsed to a truncated value with a
+# stale date and no error. Greedy binds to the LAST such clause — the one
+# lumen_state.py actually appends. `.*\S|` keeps the group empty-safe (never
+# None) and leaves no trailing whitespace in the value without a post-strip.
+# Deliberately NOT re-anchored at end-of-line (even tolerating `[tag]`):
+# greedy-vs-non-greedy cannot change WHICH lines match, only where the split
+# falls inside a matching line, so this fix carries zero risk of repeating
+# fleet_context.py's 0-of-1244 coverage collapse.
 LUMEN_STATE_BIN = os.environ.get(
     "LUMEN_STATE_BIN", "/home/lumen/minerva/lumen_state.py")
 MINERVA_DB_PATH = os.environ.get(
@@ -73,7 +86,7 @@ DB_TIMEOUT_S = 5
 EPISODE_LIMIT = 40
 
 _STATE_LINE = re.compile(
-    r"^\s*(?P<subject>[\w-]+)\.(?P<predicate>[\w-]+)\s*= (?P<value>.*?)\s*"
+    r"^\s*(?P<subject>[\w-]+)\.(?P<predicate>[\w-]+)\s*= (?P<value>.*\S|)\s*"
     r"\(since (?P<since>\d{4}-\d{2}-\d{2})\)")
 _RETIRED_RE = re.compile(r"^(retired|decommissioned)\b", re.IGNORECASE)
 _ROSTER_PREDICATES = ("role", "status", "tailscale_ip", "lan_ip")

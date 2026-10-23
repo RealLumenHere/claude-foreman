@@ -45,9 +45,10 @@ in the roster.
 
 ## Evidence (2026-10-23, live fleet — not just fixtures)
 
-- `python3 -m pytest -q test_live_roster.py` → 7 passed (uses a pinned, immutable snapshot
-  fixture of real `lumen_state.py current` output, `fixtures/state_sample_2026-10-23.txt`,
-  plus a synthetic `archival_notes`/`note_merges` db for the episodes filter).
+- `python3 -m pytest -q test_live_roster.py` → 9 passed (7 at wq#4553 + 2 from wq#4578; uses a
+  pinned, immutable snapshot fixture of real `lumen_state.py current` output,
+  `fixtures/state_sample_2026-10-23.txt`, plus a synthetic `archival_notes`/`note_merges` db
+  for the episodes filter).
 - Live replay of the ticket's actual probe, run from this worktree against the real
   `lumen_state.py` and `minerva.db` (not a copy): `roster()` called twice in one process
   returns the identical 30-host list both times (probe a — byte-stable); khepri, nephthys,
@@ -77,9 +78,25 @@ only listens on `recipe_store.py`'s `PG_HOST`/`PG_PORT` (127.0.0.1:5433). Fixed 
 
 `install.sh --verify` now reports `VERIFY OK`.
 
+## Re-applied (wq#4578)
+
+wq#4572's verify-pass contradicted wq#4553 on one point and wq#4578 ruled on it: with the
+end anchor gone, `_STATE_LINE`'s value group had to be greedy, because a non-greedy `.*?`
+stops at the FIRST `(since DATE)`-shaped substring on the line instead of the trailing one
+`lumen_state.py` appends — a value whose free text contained that idiom parsed truncated with
+a stale date and no error. Now `(?P<value>.*\S|)` (context_builder.py:88-89), plus two
+regression tests and `fixtures/state_embedded_since_wq4578.txt`. Live scan at ruling time:
+0 of 1244 current state lines carry an embedded since-clause, so the trap was latent and
+nothing rendered was corrupted. Full reasoning and the falsification run:
+`reports/wq4578_judgment_state_line_since_collision.md`. Re-applied the same way as wq#4570:
+
+```
+/home/lumen/bin/lumen-run start --name wq4578-apply -- bash /home/lumen/foreman/ops/wq4553-context-builder-live-roster/install.sh
+```
+
 ## Not done here
 
 - `fleet_context.py`'s own broken regex (prompt-forge, not this ticket's file) — needs its
-  own ticket.
+  own ticket. It carries BOTH bugs: the end anchor and the non-greedy value group.
 - Phase 2 (migrate decisions into minerva.db, freeze PG memory tables) and phase 3 (retire
   memory-mcp.service) are separate tickets per the design doc's ordering.

@@ -1,0 +1,6 @@
+      thor.lan_ip         = 192.168.8.132  (since 2026-06-18)  [verified 17d ago]
+  testhost.status         = flaky (since 2020-01-01) but recovered  (since 2026-10-11)  [UNVERIFIABLE — no probe]
+  testhost.role           = spare builder, took over ra's lane (retired since 2026-03-02)  (since 2026-09-14)  [verified 3d ago]
+  dualhost.lan_ip         = 192.168.8.44 (static lease since 2025-12-01; see wq#4539)  (since 2026-08-14)  [UNVERIFIABLE — no probe]
+ emptyhost.status         =   (since 2026-10-20)  [UNVERIFIABLE — no probe]
+  tailhost.role           = watchdog (since 2024-05-05)  (since 2026-10-22)
