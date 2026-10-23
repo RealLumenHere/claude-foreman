@@ -1,0 +1,4 @@
+# Optional dep for agent_tui.py's Textual frontend (wq#4507). Not required to
+# import or run the module -- without it, main() falls back to the readline
+# MVP console automatically (docs/agent-chat-spec.md Sec3/Sec9).
+textual>=0.60
