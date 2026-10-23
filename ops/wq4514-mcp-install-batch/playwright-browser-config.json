@@ -1,0 +1,1 @@
+{"browser":{"browserName":"chromium","launchOptions":{"args":["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]}}}
