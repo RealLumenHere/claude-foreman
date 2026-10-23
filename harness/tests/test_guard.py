@@ -86,6 +86,10 @@ MUST_BLOCK = [
     ("Bash", {"command": "git push --force origin main"}),
     ("Bash", {"command": "git push -f origin main"}),
     ("Bash", {"command": "git push --force-with-lease origin main"}),
+    # wq#4550: RealLumenHere/ccc is a public GitHub mirror of a never-public Class
+    # C repo — block any push toward it, by URL or by the local checkout path.
+    ("Bash", {"command": "git push https://github.com/RealLumenHere/ccc.git main"}),
+    ("Bash", {"command": "git -C /home/lumen/ccc push github main"}),
     ("Bash", {"command": "rm -rf /"}),
     ("Bash", {"command": "rm -rf /home"}),
     ("Bash", {"command": "rm -fr /etc"}),
@@ -215,6 +219,8 @@ MUST_BLOCK = [
 
 MUST_ALLOW = [
     ("Bash", {"command": "git push origin feat/wq625"}),
+    # wq#4550: the ccc deny names that repo only — an unrelated push stays usable.
+    ("Bash", {"command": "git -C /home/lumen/questfree push origin main"}),
     # wq#2617: Phase 4 memory consolidation regenerated context/sections/ with new names;
     # LIVE_FLEET_STATE.md is the stable rendered file in that tree (state-regen output)
     ("Read", {"file_path": "/home/lumen/minerva/context/LIVE_FLEET_STATE.md"}),
