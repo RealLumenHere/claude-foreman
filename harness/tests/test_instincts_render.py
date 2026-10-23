@@ -102,6 +102,28 @@ def test_fworker_prompt_injection_and_fail_open(tmp_path, monkeypatch):
     assert "old flat rule" not in prompt
 
 
+def test_cli_audience_boot_is_callable_and_smaller_than_core():
+    # wq#4582: claude_context.sh line 56 is repointed (ops/wq4540 install.sh step 4)
+    # to shell out to `python3 harness/instincts_render.py --audience boot`. Pin the
+    # CLI invocation shape the call site depends on — module-API tests above cannot
+    # catch a renamed flag or a nonzero exit — and the savings mechanism (boot output
+    # strictly smaller than core's on the committed canonical corpus).
+    import subprocess
+    script = os.path.join(os.path.dirname(__file__), "..", "instincts_render.py")
+    runs = {
+        aud: subprocess.run(
+            [sys.executable, script, "--audience", aud, "--file", CANONICAL],
+            capture_output=True, text=True,
+        )
+        for aud in ("boot", "core")
+    }
+    for aud, r in runs.items():
+        assert r.returncode == 0, (aud, r.stderr)
+        assert r.stdout.strip(), "--audience %s emitted nothing" % aud
+    assert runs["boot"].stdout.startswith(ir.TIER0_HEADER)
+    assert len(runs["boot"].stdout) < len(runs["core"].stdout)
+
+
 LIVE_INSTINCTS = "/home/lumen/instincts.yaml"
 
 
