@@ -1,0 +1,22 @@
+--- a/context/fleet_tools.yaml (before, anchored against the wq#4537 fixture snapshot at
+    ops/wq4537-claude-memory-hand-prose/fixtures/fleet_tools.yaml — this worker's sandbox cannot
+    read the live /home/lumen/context/fleet_tools.yaml directly; line numbers below are therefore
+    relative to that section only. Insert as a new entry under memory_state.tools, alongside the
+    existing lumen_state.py entry.)
++++ b/context/fleet_tools.yaml (after)
+@@ memory_state.tools @@
+       - name: lumen_state.py
+         path: /home/lumen/minerva/lumen_state.py
++      - name: fleet-state (MCP)
++        path: /home/lumen/.local/share/mcp/dbhub/1.5.0/launch-fleet-state.sh
++        use: "LIVE fleet memory via MCP (dbhub 1.5.0, read-only): state_facts (bi-temporal facts,
++          ~1.2k open rows), archival_notes, memory_audit in /home/lumen/minerva/minerva.db.
++          fleet-memory (same dbhub tool, different registration) is a FROZEN 2026-10-08 Postgres
++          snapshot pending collapse (wq#4539) — use fleet-state for anything mid-session, not
++          fleet-memory. Read-only is enforced by fleet-state.toml's [[tools]] readonly=true
++          (verified: DELETE/UPDATE/INSERT/CREATE TABLE/PRAGMA query_only=0 all refused with
++          READONLY_VIOLATION); minerva.db is WAL so this reader cannot block lumen_state.py's
++          writes (wq#4552).
++        invoke: "MCP tools execute_sql / search_objects, registered user-scope for the claude CLI
++          (claude mcp get fleet-state). No shell invocation — stdio MCP only, behind
++          lumen_mcp_guard, no network listener."

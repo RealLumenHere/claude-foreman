@@ -1,0 +1,13 @@
+[[sources]]
+id = "fleet_state"
+dsn = "sqlite:///home/lumen/minerva/minerva.db?mode=ro"
+
+[[tools]]
+name = "execute_sql"
+source = "fleet_state"
+readonly = true
+max_rows = 500
+
+[[tools]]
+name = "search_objects"
+source = "fleet_state"

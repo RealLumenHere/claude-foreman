@@ -1,0 +1,17 @@
+--- a/ORCHESTRATOR-HANDOFF.md (before — this worker's sandbox has no read access to
+    /home/lumen/ORCHESTRATOR-HANDOFF.md, so this is NOT a line-anchored diff: it is the block to
+    insert into section s9 (MCP servers), content-matched by section heading, not by line number.
+    Apply by hand or have whoever maintains this file fold it in.)
++++ b/ORCHESTRATOR-HANDOFF.md (after, s9)
+@@ s9 (MCP servers) @@
++- `fleet-state` (wq#4552): dbhub 1.5.0, stdio, user-scope, behind lumen_mcp_guard. Second
++  registration of the same dbhub install `fleet-memory` (wq#4515) uses, pointed at
++  /home/lumen/minerva/minerva.db (sqlite) instead of the frozen Postgres fleet_memory snapshot.
++  This is the LIVE fleet memory — state_facts (bi-temporal, ~1.2k open facts), archival_notes,
++  memory_audit. Query fleet-state for anything mid-session; fleet-memory is frozen since
++  2026-10-08 and pending collapse (wq#4539).
++  Read-only: enforced by fleet-state.toml's `[[tools]] readonly=true`, NOT the env-var
++  DSN+READONLY=true scheme fleet-memory's launcher uses (that scheme does not enforce anything
++  for dbhub's sqlite connector — verified empirically during wq#4552; see
++  ops/wq4514-mcp-install-batch/RUNBOOK.md). minerva.db is WAL, so this reader does not block
++  lumen_state.py's writes. No network listener or CF route — stdio only, per the MCP freeze.
