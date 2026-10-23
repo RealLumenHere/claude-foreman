@@ -8,6 +8,12 @@ Audiences:
   worker  -> tier 0 only (hard constraints; goes into every fworker prompt)
   core    -> tier 0, tier 1, then the tier-2 trigger index (orchestrator /
              audit / chat sessions; claude_context.sh --core)
+  boot    -> tier 0 + tier 1 whole, tier 2 as bare trigger titles with no rule
+             text (wq#4540: `--audience core`'s tier-2 index still carries each
+             rule's full text, the single biggest line item in the ~22K-tok
+             `claude_context.sh --core` boot payload; a session that needs a
+             tier-2 rule reads its playbook, so the title is enough to route
+             there)
 
 Fail-safe contract: tier0_block() and render() return "" on ANY failure
 (missing file, schema-1 flat list, parse error) — injection must never break a
@@ -86,7 +92,7 @@ def tier0_block(path=None, budget=TIER0_TOKEN_BUDGET, warn=None):
 
 
 def render(audience, path=None):
-    """Full render for an audience ('worker' or 'core'). "" on any failure."""
+    """Full render for an audience ('worker', 'core', or 'boot'). "" on any failure."""
     if audience == "worker":
         return tier0_block(path)
     rules = load_rules(path)
@@ -100,10 +106,18 @@ def render(audience, path=None):
     t2 = _tier(rules, 2)
     if t2:
         out.append(TIER2_HEADER)
-        out.extend(
-            "- [%s] %s" % (r.get("trigger", r.get("domain", "?")), " ".join(r["text"].split()))
-            for r in t2
-        )
+        if audience == "boot":
+            # Titles only: a trigger is enough to route to the playbook; the rule text
+            # itself is what --audience core pays the tokens for (wq#4540).
+            out.extend(
+                "- [%s]" % r.get("trigger", r.get("domain", "?"))
+                for r in t2
+            )
+        else:
+            out.extend(
+                "- [%s] %s" % (r.get("trigger", r.get("domain", "?")), " ".join(r["text"].split()))
+                for r in t2
+            )
     return "\n".join(x for x in out if x)
 
 
@@ -144,7 +158,7 @@ def check(path=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--file", default=None, help="instincts.yaml path override")
-    ap.add_argument("--audience", choices=("worker", "core"), help="render for audience")
+    ap.add_argument("--audience", choices=("worker", "core", "boot"), help="render for audience")
     ap.add_argument("--tier", type=int, help="dump one tier's rule texts raw")
     ap.add_argument("--check", action="store_true", help="validate corpus, exit 1 on errors")
     args = ap.parse_args(argv)

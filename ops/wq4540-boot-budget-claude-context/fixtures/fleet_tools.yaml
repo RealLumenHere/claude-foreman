@@ -1,0 +1,14 @@
+updated: 2026-10-23
+note: "Query state, never trust dated prose."
+groups:
+  memory_state:
+    desc: "Fleet facts + episodic memory."
+    tools:
+      - name: lumen_state.py
+        path: /home/lumen/minerva/lumen_state.py
+        use: "Query live roster facts."
+        invoke: "python3 lumen_state.py current"
+      - name: missing-tool
+        path: /home/lumen/does/not/exist.py
+        use: "Deliberately absent, for drift coverage."
+        invoke: "python3 missing-tool.py"
