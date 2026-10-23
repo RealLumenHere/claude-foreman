@@ -80,6 +80,7 @@ allow:
     - /home/lumen/pstack
     - /home/lumen/personas
     - /home/lumen/questfree/docs
+    - /home/lumen/ccc                 # wq#4562: narrow grant, sweep hits=0 (22 files), CCC source for wq#4606-4611; node_modules gitignored
     - /home/lumen/projects/bench
     - /home/lumen/infra
     # wq#1697 follow-on: split-watch retire/apply work (wq#1739) cites this dir.
