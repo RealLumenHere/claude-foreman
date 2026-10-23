@@ -614,6 +614,15 @@ install_live_test_ssh() {
   require_cmd systemctl
   local ov="$WORKDIR/live-chroot" work="$WORKDIR/live-work" lowers d rc
   local lower_paths=() ours=() m
+  # Regenerable caches and logs that apt/dpkg hooks (man-db, appstream, apt itself) write during an
+  # install. They live in tmpfs for the duration, so they never reach the layer; hiding them only
+  # affects this chroot, the lower layers' copies are untouched. var/cache/debconf is NOT masked:
+  # it holds real package configuration state.
+  local masks=(var/cache/apt var/cache/man var/cache/swcatalog var/lib/swcatalog var/log)
+  # Lists, cache and sources all live in the chroot tmpfs (/run): nothing bulky enters the layer, and
+  # the base image's file:/cdrom source (cdrom.sources, no Release file) cannot break apt-get update.
+  local apt_opts=(-o Dir::State::lists=/run/apt-lists -o Dir::Cache=/run/apt-cache
+                  -o Dir::Etc::sourceparts=/run/apt-sources.d -o Dir::Etc::sourcelist=/dev/null)
   lowers="$(iso_layers lowerdirs --layer "$layer" --root "$LAYERS_DIR/lower")"
   IFS=: read -r -a lower_paths <<<"$lowers"
   rm -rf "$work"
@@ -635,13 +644,24 @@ install_live_test_ssh() {
     mount --bind /dev "$ov/dev"
     mount --bind /dev/pts "$ov/dev/pts"
     mount -t tmpfs tmpfs "$ov/run"
+    for m in "${masks[@]}"; do
+      mkdir -p "$ov/$m"
+      mount -t tmpfs tmpfs "$ov/$m"
+    done
     mkdir -p "$ov/run/systemd/resolve"
     cp -L /etc/resolv.conf "$ov/run/systemd/resolve/stub-resolv.conf"
     printf '#!/bin/sh\nexit 101\n' >"$ov/usr/sbin/policy-rc.d"
     chmod +x "$ov/usr/sbin/policy-rc.d"
+    # apt will not create these itself: it fails with "List directory .../partial is missing".
+    # /run is the chroot tmpfs, so none of this ends up in the layer.
+    mkdir -p "$ov/run/apt-lists/partial" "$ov/run/apt-cache/archives/partial"
+    # Only the archive source the image is configured with (not hardcoded here).
+    [ -f "$ov/etc/apt/sources.list.d/ubuntu.sources" ] || { echo "no /etc/apt/sources.list.d/ubuntu.sources in the chroot" >&2; exit 1; }
+    mkdir -p "$ov/run/apt-sources.d"
+    cp "$ov/etc/apt/sources.list.d/ubuntu.sources" "$ov/run/apt-sources.d/"
     # The base layers carry stale apt lists, so refresh them -- into /run, not the layer.
-    chroot "$ov" apt-get -o Dir::State::lists=/run/apt-lists -o Dir::Cache=/run/apt-cache update -qq
-    chroot "$ov" apt-get -o Dir::State::lists=/run/apt-lists -o Dir::Cache=/run/apt-cache install -y openssh-server
+    chroot "$ov" apt-get "${apt_opts[@]}" update -qq
+    chroot "$ov" apt-get "${apt_opts[@]}" install -y openssh-server
     install -d -m 0755 "$ov/etc/ssh/sshd_config.d"
     printf '%s\n' "# wq#4558: test ISO, key-only" "PasswordAuthentication no" "KbdInteractiveAuthentication no" \
       "PermitRootLogin no" "PubkeyAuthentication yes" >"$ov/etc/ssh/sshd_config.d/10-limpet-test.conf"
@@ -655,7 +675,7 @@ install_live_test_ssh() {
   set -e
   # Always: drop the build-time guard, unmount in reverse order, unmount only what we mounted.
   rm -f "$ov/usr/sbin/policy-rc.d"
-  for m in dev/pts dev sys proc run; do mountpoint -q "$ov/$m" && umount "$ov/$m"; done
+  for m in "${masks[@]}" dev/pts dev sys proc run; do mountpoint -q "$ov/$m" && umount "$ov/$m"; done
   mountpoint -q "$ov" && umount "$ov"
   for d in "${ours[@]}"; do mountpoint -q "$d" && umount "$d"; done
   rm -rf "$work"

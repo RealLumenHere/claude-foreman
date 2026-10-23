@@ -18,7 +18,7 @@ from test_repack_live_layer import (BASE, BUILD, LIVE, MOD, _exec, _live_files, 
 PUBKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItestkeytestkeytestkeytestkeytestkeytestkey0 wq4558-test\n"
 
 FAKE_MOUNT = r"""#!/usr/bin/env python3
-import os, sys
+import os, shutil, sys
 st = os.environ["FAKE_STATE"]; a = sys.argv[1:]
 open(os.environ["FAKE_LOG"], "a").write("mount " + " ".join(a) + "\n")
 target = a[-1]
@@ -29,15 +29,31 @@ if "overlay" in a:
     os.rmdir(target); os.symlink(up, target)
 elif "squashfs" in a:
     os.makedirs(target, exist_ok=True)
+elif "tmpfs" in a:
+    # a real tmpfs hides what is underneath and swallows writes: park the original directory aside
+    # and point the path at scratch space; umount puts everything back.
+    n = len(os.listdir(st + "/tmpfs-parked")) if os.path.isdir(st + "/tmpfs-parked") else 0
+    os.makedirs(st + "/tmpfs-parked", exist_ok=True)
+    real = os.path.realpath(target)
+    park, scratch = "%s/tmpfs-parked/%d" % (st, n), "%s/tmpfs-scratch-%d" % (st, n)
+    shutil.move(real, park); os.makedirs(scratch)
+    os.symlink(scratch, real)
+    open(st + "/tmpfs-map", "a").write("%s\t%s\t%s\n" % (target, real, park))
 elif not os.path.isdir(target):
     sys.stderr.write("mount: %s: mount point does not exist\n" % target); sys.exit(32)
 open(st + "/mounted", "a").write(target + "\n")
 """
 
 FAKE_UMOUNT = r"""#!/usr/bin/env python3
-import os, sys
+import os, shutil, sys
 st = os.environ["FAKE_STATE"]; t = sys.argv[1]
 open(os.environ["FAKE_LOG"], "a").write("umount " + t + "\n")
+if os.path.exists(st + "/tmpfs-map"):
+    rows = [l.split("\t") for l in open(st + "/tmpfs-map").read().splitlines()]
+    for target, real, park in rows:
+        if target == t and os.path.islink(real):
+            os.unlink(real); shutil.move(park, real)
+    open(st + "/tmpfs-map", "w").write("".join("\t".join(r) + "\n" for r in rows if r[0] != t))
 lines = [l for l in open(st + "/mounted").read().splitlines() if l != t]
 open(st + "/mounted", "w").write("".join(l + "\n" for l in lines))
 """
@@ -54,8 +70,17 @@ FAKE_CHROOT = '#!/usr/bin/env bash\nshift\nexec "$@"\n'
 FAKE_APT = r"""#!/usr/bin/env bash
 echo "apt-get $*" >>"$FAKE_LOG"
 [ -n "${FAKE_APT_FAIL:-}" ] && exit 100
+# real apt refuses to run when its list/archive directories are absent (found by the first real run)
+up="$LIMPET_ISO_WORKDIR/live-upper"
+if [ ! -d "$up/run/apt-lists/partial" ]; then echo "E: List directory /run/apt-lists/partial is missing. - Acquire (2: No such file or directory)" >&2; exit 100; fi
+if [ -e "$up/run/apt-sources.d/cdrom.sources" ] || [ ! -f "$up/run/apt-sources.d/ubuntu.sources" ]; then echo "E: The repository file:/cdrom resolute Release does not have a Release file." >&2; exit 100; fi
+case " $* " in *" Dir::Etc::sourceparts=/run/apt-sources.d "*) ;; *) echo "E: not using the isolated sources dir" >&2; exit 100 ;; esac
+if [ ! -d "$up/run/apt-cache/archives/partial" ]; then echo "E: Archive directory /run/apt-cache/archives/partial is missing." >&2; exit 100; fi
 case " $* " in
   *" install "*)
+    for f in var/cache/apt/pkgcache.bin var/cache/man/index.db var/lib/swcatalog/yaml/dangling.yml.gz var/log/apt/history.log; do
+      mkdir -p "$(dirname "$LIMPET_ISO_WORKDIR/live-upper/$f")"; echo hook-output >"$LIMPET_ISO_WORKDIR/live-upper/$f"
+    done
     printf '\nPackage: openssh-server\nStatus: install ok installed\nPriority: optional\nSection: net\nArchitecture: amd64\nVersion: 9.9\n' \
       >>"$LIMPET_ISO_WORKDIR/live-upper/var/lib/dpkg/status" ;;
 esac
@@ -72,13 +97,20 @@ os.symlink("/usr/lib/systemd/system/ssh.service", d + "/ssh.service")
 """
 
 
-def _prepare(tmp_path, *, ssh_pubkey="__unset__", extra_env=None, layer="minimal.standard", **setup_kw):
+def _prepare(tmp_path, *, ssh_pubkey="__unset__", extra_env=None, layer="minimal.standard", strip_archive_source=False, **setup_kw):
     bin_dir, fix, casper, changes, work = _setup(tmp_path, base=BASE, live=LIVE, modified=MOD, **setup_kw)
     for name, body in (("mount", FAKE_MOUNT), ("umount", FAKE_UMOUNT), ("mountpoint", FAKE_MOUNTPOINT),
                        ("chroot", FAKE_CHROOT), ("apt-get", FAKE_APT), ("systemctl", FAKE_SYSTEMCTL)):
         _exec(bin_dir / name, body)
     for d in ("proc", "sys", "dev/pts", "run", "usr/sbin"):          # what the real lowers provide
         _write(fix / "minimal.standard.live" / d / ".keep", "")
+    _write(fix / "minimal.standard.live/var/cache/man/base-cache", "from the base layer\n")
+    _write(fix / "minimal.standard.live/var/log/base.log", "from the base layer\n")
+    _write(fix / "minimal.standard.live/etc/apt/sources.list.d/ubuntu.sources",
+           "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute\nComponents: main\n")
+    _write(fix / "minimal.standard.live/etc/apt/sources.list.d/cdrom.sources", "Types: deb\nURIs: file:/cdrom\nSuites: resolute\n")
+    if strip_archive_source:
+        (fix / "minimal.standard.live/etc/apt/sources.list.d/ubuntu.sources").unlink()
     state = tmp_path / "state"
     state.mkdir()
     (state / "mounted").write_text("")
@@ -168,6 +200,7 @@ def test_apt_lists_and_cache_stay_out_of_the_layer(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert log.count("Dir::State::lists=/run/apt-lists") == 2 and log.count("Dir::Cache=/run/apt-cache") == 2
+    assert log.count("Dir::Etc::sourceparts=/run/apt-sources.d") == 2 and log.count("Dir::Etc::sourcelist=/dev/null") == 2
     assert "update -qq" in log and "install -y openssh-server" in log
     assert not any(n.startswith(("var/lib/apt/lists", "var/cache/apt")) for n in _live_files(changes))
 
@@ -256,3 +289,60 @@ def test_requesting_test_ssh_without_a_live_layer_in_the_base_iso_fails_instead_
     assert result.returncode != 0
     assert "no minimal.standard.live.squashfs" in result.stderr or "has no minimal.standard.live.squashfs" in result.stderr
     assert "mount" not in log
+
+
+def test_apt_directories_exist_before_apt_runs(tmp_path):
+    # Regression (first real run): with lists/cache redirected into /run, apt aborts unless
+    # <lists>/partial and <cache>/archives/partial already exist. The fake apt-get now enforces that.
+    result, changes, work, log, state = _prepare(tmp_path, ssh_pubkey=PUBKEY)
+
+    assert result.returncode == 0, result.stderr
+    assert "is missing" not in result.stderr
+
+
+def test_the_cdrom_source_is_kept_out_of_apt_and_the_configured_archive_source_is_used(tmp_path):
+    # Regression (second real run): the base image also configures file:/cdrom, which has no
+    # Release file and makes `apt-get update` abort.
+    result, changes, work, log, state = _prepare(tmp_path, ssh_pubkey=PUBKEY)
+
+    assert result.returncode == 0, result.stderr
+    assert "Release file" not in result.stderr
+
+
+def test_a_chroot_without_the_archive_source_fails_closed(tmp_path):
+    result, changes, work, log, state = _prepare(tmp_path, ssh_pubkey=PUBKEY, strip_archive_source=True)
+
+    assert result.returncode != 0
+    assert "no /etc/apt/sources.list.d/ubuntu.sources in the chroot" in result.stderr   # the clear message, not just cp failing
+    assert (state / "mounted").read_text() == ""
+    assert not (changes / "casper/minimal.standard.live.squashfs").exists()
+
+
+def test_cache_and_log_writes_of_the_install_hooks_never_reach_the_layer(tmp_path):
+    # Found by the real run: apt/man-db/appstream hooks wrote ~100 MB of caches and dangling swcatalog
+    # symlinks into the live layer. The directories they write are tmpfs while the install runs.
+    result, changes, work, log, state = _prepare(tmp_path, ssh_pubkey=PUBKEY)
+
+    assert result.returncode == 0, result.stderr
+    names = set(_live_files(changes))
+    for leaked in ("var/cache/apt/pkgcache.bin", "var/cache/man/index.db", "var/lib/swcatalog/yaml/dangling.yml.gz",
+                   "var/log/apt/history.log"):
+        assert leaked not in names, leaked
+    for mask in ("var/cache/apt", "var/cache/man", "var/cache/swcatalog", "var/lib/swcatalog", "var/log"):
+        assert f"mount -t tmpfs tmpfs {work}/live-chroot/{mask}" in log, mask
+
+
+def test_hiding_the_cache_directories_does_not_delete_what_the_base_layer_had(tmp_path):
+    result, changes, work, log, state = _prepare(tmp_path, ssh_pubkey=PUBKEY)
+
+    assert result.returncode == 0, result.stderr
+    files = _live_files(changes)
+    assert files["var/cache/man/base-cache"] == "from the base layer\n"
+    assert files["var/log/base.log"] == "from the base layer\n"
+
+
+def test_debconf_state_is_not_masked_because_it_is_real_configuration(tmp_path):
+    result, changes, work, log, state = _prepare(tmp_path, ssh_pubkey=PUBKEY)
+
+    assert result.returncode == 0, result.stderr
+    assert "var/cache/debconf" not in log
