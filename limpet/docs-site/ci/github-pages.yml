@@ -1,0 +1,33 @@
+# GitHub Pages deploy for the Limpet docs site.
+#
+# This file is kept INERT here under limpet/docs-site/ci/ so it does not run against
+# the monorepo's CI. To activate it in the published Limpet repo, copy it to
+# .github/workflows/docs.yml at that repo's root.
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "limpet/docs-site/**"
+      - "limpet/tool-catalog.json"
+      - "plugins/**/limpet-plugin.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r limpet/docs-site/requirements.txt
+      - name: Check the generated tool reference is current
+        run: python3 limpet/docs-site/gen_tool_reference.py --check
+      - name: Deploy to GitHub Pages
+        run: mkdocs gh-deploy --force -f limpet/docs-site/mkdocs.yml

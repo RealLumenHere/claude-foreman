@@ -1,0 +1,7 @@
+# Build the Limpet documentation site.
+#   pip install -r limpet/docs-site/requirements.txt
+#   python3 limpet/docs-site/gen_tool_reference.py   # refresh the generated reference
+#   mkdocs serve -f limpet/docs-site/mkdocs.yml      # preview at http://127.0.0.1:8000
+#   mkdocs build -f limpet/docs-site/mkdocs.yml      # render to limpet/docs-site/site/
+mkdocs>=1.6
+mkdocs-material>=9.5

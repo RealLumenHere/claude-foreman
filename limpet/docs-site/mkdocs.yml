@@ -1,0 +1,62 @@
+site_name: Limpet
+site_description: Universal reverse-engineering agent appliance — user guide, tool reference, and contributor docs.
+site_author: Lumen Industries
+copyright: Lumen Industries
+
+# Published to GitHub Pages. Override site_url/repo_url when the public repo exists.
+site_url: https://limpet.lumen-industries/
+repo_url: https://github.com/lumen-industries/limpet
+repo_name: lumen-industries/limpet
+edit_uri: edit/main/limpet/docs-site/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - navigation.tracking
+    - content.code.copy
+    - toc.follow
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - tables
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - User Guide:
+      - Desktop layout: user-guide/desktop.md
+      - Agent chat: user-guide/agent-chat.md
+      - Target Device Wizard: user-guide/target-wizard.md
+      - Workspaces: user-guide/workspaces.md
+  - Tool Reference: tool-reference.md
+  - Plugin Development: plugin-development.md
+  - Device Profiles: device-profiles.md
+  - Architecture: architecture.md
