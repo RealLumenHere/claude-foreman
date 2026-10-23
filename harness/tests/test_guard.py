@@ -888,6 +888,12 @@ CCC_MUST_BLOCK = [
     # wq#4569 corpus case 2: case-insensitive, "ccc" is the literal end of the
     # command string (end-of-string branch, not whitespace or ".git").
     ({"command": "git push RealLumenHere/ccc"}, WORKTREE, None),
+    # wq#4590: the filesystem-path arm had the same bare-\b defect one line
+    # below wq#4569's org/repo fix. These confirm the real tree and its
+    # subdirectories, plus the quote/semicolon/EOL separators the fix added,
+    # still block (no regression from tightening the match).
+    ({"command": 'git push origin main; cat "/home/lumen/ccc"'}, WORKTREE, None),
+    ({"command": "git push origin main; ls /home/lumen/ccc/sub"}, WORKTREE, None),
 ]
 
 APPEND = "python3 /home/lumen/foreman/harness/issue_log_append.py"
@@ -911,6 +917,12 @@ CCC_MUST_ALLOW = [
      WORKTREE, None),
     ({"command": "git push https://github.com/RealLumenHere/CCC-MIRROR.git main"},
      WORKTREE, None),
+    # wq#4590: the filesystem-path arm's own bare \b, same defect class, one
+    # line below the org/repo fix above. A sibling directory that merely
+    # starts with "ccc" is an ordinary, existing path next to the real
+    # never-public tree, not inside it, and must push cleanly.
+    ({"command": "git -C /home/lumen/ccc-mirror push origin main"}, WORKTREE, None),
+    ({"command": "git -C /home/lumen/ccc.bak push origin main"}, WORKTREE, None),
     # the override is a scope list, not a blanket: a cwd outside the configured
     # trees still allows, which is what makes the out-of-population block above
     # evidence rather than a tautology.

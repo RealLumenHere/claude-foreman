@@ -187,7 +187,7 @@ Bash)
   #   - case: the org/repo literal is matched case-insensitively, because GitHub
   #     repo routing is case-insensitive — github.com/reallumenhere/ccc reaches
   #     the same mirror. The filesystem path match stays case-sensitive; Linux
-  #     paths are, and widening it would only block paths that cannot exist.
+  #     paths are.
   #
   # wq#4569: a bare \b after "ccc" is a word boundary at ANY non-word char, so
   # it also fired on an unrelated repo merely prefixed by "ccc-" (e.g. a
@@ -197,6 +197,16 @@ Bash)
   # Every push out of that tree is in scope regardless of remote name: ccc is
   # never-public, so the risk is content leaving, not which remote is typed.
   # Read-only git in the checkout stays allowed.
+  #
+  # wq#4590: the filesystem-path arm had the exact same bare-\b defect one line
+  # below, left unfixed by wq#4569. A sibling directory that merely starts with
+  # "ccc" (/home/lumen/ccc-mirror, /home/lumen/ccc.bak) is an ordinary, existing
+  # path — not one "that cannot exist" as the removed comment above claimed —
+  # so the bare \b false-blocked any push command that merely mentioned one.
+  # The match now requires a path separator, quote char, whitespace, semicolon,
+  # or end-of-string right after "ccc" instead, mirroring the org/repo fix:
+  # still catches /home/lumen/ccc, .../ccc/subdir, .../ccc"  and .../ccc; but
+  # lets .../ccc-mirror and .../ccc.bak through.
   CCC_TREES=${FOREMAN_CCC_TREES:-/home/lumen/ccc}
   CCC_CWD_HIT=0
   CCC_CWD=$(jfield '.cwd')
@@ -210,7 +220,7 @@ Bash)
   for target in "${CCC_SCAN_TARGETS[@]}"; do
     if printf '%s' "$target" | grep -qE '\bgit\b.*\bpush\b' \
         && { printf '%s' "$target" | grep -qiE 'RealLumenHere/ccc(\.git)?([[:space:]]|$)' \
-          || printf '%s' "$target" | grep -qE '/home/lumen/ccc\b' \
+          || printf '%s' "$target" | grep -qE '/home/lumen/ccc(['\''"/;[:space:]]|$)' \
           || [ "$CCC_CWD_HIT" = 1 ]; }; then
       block "git push toward RealLumenHere/ccc denied (wq#4550/wq#4551/wq#4568: public mirror of never-public ccc; cwd=$CCC_CWD)" "$RAW_CMD"
     fi
