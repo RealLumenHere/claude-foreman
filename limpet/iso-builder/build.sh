@@ -270,6 +270,57 @@ stage3_inject_limpet_packages() {
 }
 
 # ---------------------------------------------------------------------------
+# Stage 3b -- openssh-server for automated QEMU testing (wq#4527)
+# ---------------------------------------------------------------------------
+# QEMU automated testing needs SSH, not QMP keystroke injection (too slow and
+# unreliable for XFCE double-clicks, per the ticket). But a server with
+# known-good auth must never reach an installed system, so this stage only
+# ever touches a "*.live" layer -- iso_layers.py:64 already documents
+# minimal.standard.live as "live-session only, never installed", and the
+# ticket's own "live squashfs layer" wording names that exact layer, not
+# minimal.standard (the one stage3 above fills because the installer copies
+# it to disk). target_layer is checked here, not trusted from the caller, so
+# this can't land in a production image by a missing/forgotten override.
+# Skipped (not failed) on every other layer so `./build.sh all` still
+# produces a normal production ISO unless LIMPET_ISO_LAYER is explicitly
+# pointed at a live-only layer to build a separate, test-only ISO.
+stage3b_enable_test_ssh() {
+  [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
+  require_cmd systemctl
+  local layer
+  layer="$(target_layer)"
+  case "$layer" in
+    *.live) ;;
+    *)
+      log "stage3b: $layer is not a live-only layer -- skipping test SSH (set LIMPET_ISO_LAYER to a *.live layer to build a test ISO)"
+      return 0
+      ;;
+  esac
+
+  local pubkey="${LIMPET_TEST_SSH_PUBKEY:-}"
+  [ -n "$pubkey" ] || fail "stage3b: LIMPET_ISO_LAYER=$layer is live-only but LIMPET_TEST_SSH_PUBKEY is unset -- point it at a public key to authorize, never a guessed default"
+  [ -s "$pubkey" ] || fail "stage3b: LIMPET_TEST_SSH_PUBKEY=$pubkey is missing or empty"
+
+  log "stage3b: installing openssh-server for automated QEMU testing ($layer)"
+  chroot "$CHROOT" apt-get install -y openssh-server
+
+  # The live user's home is created from /etc/skel by casper at boot time --
+  # no user (and no /home/<user>) exists yet at build time to own a homedir
+  # for, so the key goes in skel and rides along whatever username casper
+  # creates (never hardcoded here, since no file in this repo names it).
+  install -d -m 0700 "$CHROOT/etc/skel/.ssh"
+  install -m 0600 "$pubkey" "$CHROOT/etc/skel/.ssh/authorized_keys"
+
+  # openssh-server's postinst already enables ssh.service via
+  # deb-systemd-helper (works offline, no running systemd required); this
+  # makes that explicit so the stage doesn't depend on that implicit default
+  # silently changing upstream.
+  systemctl --root="$CHROOT" enable ssh.service
+
+  log "stage3b: openssh-server installed, ssh.service enabled, test key installed to /etc/skel/.ssh/authorized_keys"
+}
+
+# ---------------------------------------------------------------------------
 # Stage 4 -- RE tool packaging
 # ---------------------------------------------------------------------------
 stage4_package_re_tools() {
@@ -694,6 +745,7 @@ STAGES=(
   stage1b_assemble_chroot
   stage2_remove_bloat
   stage3_inject_limpet_packages
+  stage3b_enable_test_ssh
   stage4_package_re_tools
   stage5_bundle_hardware_book
   stage6_bundle_target_device_db
@@ -722,6 +774,7 @@ Env:
   LIMPET_ISO_OUT_DIR      output dir (default: \$WORKDIR/out)
   LIMPET_ISO_NAME         output filename (default: limpet-<date>.iso)
   LIMPET_TOOL_CATALOG     RE tool catalog for stage4 (default: \$LIMPET_ROOT/tool-catalog.json)
+  LIMPET_TEST_SSH_PUBKEY  public key authorized for test SSH (stage3b, only on a *.live layer)
 EOF
 }
 
