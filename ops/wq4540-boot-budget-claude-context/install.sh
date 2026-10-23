@@ -37,14 +37,20 @@ python3 /home/lumen/bin/lint-handoff.py "$HANDOFF_LIVE"
 
 echo "== 4/4: claude_context.sh — NOT applied, apply by hand (see README) =="
 cat <<'EOF'
-Two one-line edits this session could not verify against the live file (no read access,
-fleet-exec-policy.yaml wq#1467). Both are exact-anchor sed, refuse instead of guessing if the
-anchor is not found verbatim:
+Edit 1 (corrected by wq#4582 — the original anchor 'instincts_render.py --audience core' never
+existed in the live file; line 56 has called /home/lumen/bin/instincts-render with no flags
+since wq#958, ISSUE-LOG row 1547). Repoint the call site to the canonical tier-aware renderer
+(option (a) of wq#4582: one renderer, no bin/harness drift; /home/lumen/foreman is the primary
+claude-foreman checkout, already load-bearing for every fworker spawn). Exact-anchor sed,
+refuse instead of guessing if the anchor is not found verbatim:
 
-  grep -q -- '--audience core' /home/lumen/minerva/context/claude_context.sh && \
-    sed -i 's/instincts_render\.py --audience core/instincts_render.py --audience boot/' \
+  grep -q -- '/home/lumen/bin/instincts-render' /home/lumen/minerva/context/claude_context.sh && \
+    sed -i 's#/home/lumen/bin/instincts-render#python3 /home/lumen/foreman/harness/instincts_render.py --audience boot#' \
       /home/lumen/minerva/context/claude_context.sh \
-    || echo "ANCHOR MISSING: '--audience core' not found verbatim — do not guess, inspect the file"
+    || echo "ANCHOR MISSING: '/home/lumen/bin/instincts-render' not found verbatim — do not guess, inspect the file"
+
+Edit 2 (already applied live by wq#4576; the ANCHOR MISSING echo on a re-run is the no-op,
+not a failure):
 
   grep -q 'FLEET_TOOLS\.md' /home/lumen/minerva/context/claude_context.sh && \
     sed -i 's/FLEET_TOOLS\.md/FLEET_TOOLS_BOOT.md/' /home/lumen/minerva/context/claude_context.sh \
@@ -52,7 +58,11 @@ anchor is not found verbatim:
 
 After both: measure with
   export WQ_AGENT=x; bash /home/lumen/minerva/context/claude_context.sh --core | wc -c
-Target <= 45000 (ticket's 45 KB cap). Re-run steps 1-3 of this script on every later boot-budget
+Baseline 75020 B post wq#4576. Measured honestly (wq#4582): edit 1 saves only ~763 B against
+the live corpus — bin/instincts-render (no flags) emits 13316 B, harness --audience boot emits
+12553 B, because tier 2 has shrunk to 4 rules (~238 tok); wq#4540's 'tier-2 index is the single
+biggest line item' premise no longer holds. The 45000 B target is carried by the HANDOFF s3
+rewrite (wq#4581), not this edit. Re-run steps 1-3 of this script on every later boot-budget
 pass; they are idempotent (fleet-tools-render always re-renders both outputs; the cap and the
 s3 rewrite are no-ops once already applied — handoff_s3_rewrite.py's AnchorError on a second run
 is exactly that no-op, not a failure).

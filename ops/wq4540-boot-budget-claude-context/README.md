@@ -51,22 +51,28 @@ never the live path.
 was the single biggest line item in `--audience core`'s own test corpus. `--audience` now
 accepts `worker|core|boot`. Tests in `harness/tests/test_instincts_render.py`.
 
-This one *is* wq#4540's `instincts-render --boot` deliverable for real, not staged: wq#978
-already established that `harness/instincts_render.py` (wq#959), not the legacy
-`/home/lumen/bin/instincts-render` (wq#958), is what `claude_context.sh --core` actually calls
-(`ops/wq978-instincts-render-live-test-fix/README.md`: "`harness/fworker.py` imports
-`instincts_render` directly... `/home/lumen/instincts.yaml`'s own header now names
-`harness/instincts_render.py` as canonical"). The wiring edit in `claude_context.sh`
-(`--audience core` → `--audience boot`) is still staged (see install.sh step 4) because this
-session cannot read that file to confirm the exact current call-site text.
+CORRECTION (wq#4582, ISSUE-LOG row 1547): the paragraph this replaced claimed wq#978 had
+established `harness/instincts_render.py` as what `claude_context.sh --core` calls. That was
+true of `harness/fworker.py`'s own context assembly, not of `claude_context.sh`: its line 56
+has called the legacy `/home/lumen/bin/instincts-render` (wq#958, standalone — `--file` /
+`--max-tier` / `--budget-tokens` only, no `--audience`) since wq#958 and was never repointed.
+wq#4576 found install.sh step 4's first anchor (`--audience core`) missing and refused it per
+instruction. wq#4582 chose option (a) — repoint line 56 to
+`python3 /home/lumen/foreman/harness/instincts_render.py --audience boot` (one canonical
+renderer, no bin/harness drift) — and corrected the staged sed in install.sh step 4 to anchor
+on the literal `/home/lumen/bin/instincts-render` path. Measured against the live corpus the
+repoint saves only ~763 B (13316 B → 12553 B): tier 2 is down to 4 rules, so wq#4540's
+"tier-2 index is the biggest line item" premise no longer holds; the 45 KB target rides on the
+HANDOFF s3 rewrite (wq#4581).
 
 ## Not done here
 
-- The two `claude_context.sh` wiring edits (above) — needs a session with `minerva` fs access
-  to verify the anchors first.
-- Re-measuring `bash claude_context.sh --core | wc -c` against the ticket's 89,865 B baseline
-  and the 45 KB target — needs the same access, and needs the wiring edits landed first to be
-  a meaningful number.
+- Wiring edit 2 (FLEET_TOOLS.md → FLEET_TOOLS_BOOT.md) landed live via wq#4576; edit 1
+  (instincts call-site repoint, corrected by wq#4582) is staged in install.sh step 4 and needs
+  a session with `minerva` fs access to apply — queued as a follow-up ops ticket by wq#4582.
+- Re-measuring `bash claude_context.sh --core | wc -c`: 75,020 B post wq#4576 (baseline was
+  89,865 B). The 45 KB target needs the HANDOFF s3 rewrite (wq#4581) plus edit 1; edit 1 alone
+  is worth ~763 B.
 - `live_fleet_state_cap.py` is wired into `install.sh` as a one-shot; making it run on every
   boot means adding the call to `claude_context.sh` right after the existing `state-regen
   --if-dirty` / `projection_state.py check-warn` step (`ops/wq1633-minerva-projection-dirty-flag/claude_context_if_dirty.diff`) — same access gap.
