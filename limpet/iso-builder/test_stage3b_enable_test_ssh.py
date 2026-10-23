@@ -13,12 +13,23 @@ population the fix targets -- and asserts nothing gets installed. If stage3b
 ever regressed to running unconditionally, that test would fail by catching
 openssh-server in the install log.
 """
+import shutil
 import stat
 import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 BUILD = HERE / "build.sh"
+
+# Resolved while PATH is still the test runner's own: the systemctl-absent
+# cases below hand bash a PATH that holds nothing but the stub dir, so neither
+# interpreter nor `date` can be found by name from inside it.
+BASH = shutil.which("bash")
+# Everything build.sh needs before it reaches stage3b's layer check, and
+# nothing else: dirname for HERE/LIMPET_ROOT/REPO_ROOT (build.sh:21-23), date
+# for the default ISO_NAME (build.sh:33), mkdir for main's workdir
+# (build.sh:803). Notably not systemctl.
+SKIP_PATH_TOOLS = [shutil.which(name) for name in ("dirname", "date", "mkdir")]
 
 TEST_PUBKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVuknNYGpXz9Ht3fQ2KxwJn9r0bQe0m1b2n3c4d5e6f wq4527-test\n"
 
@@ -28,7 +39,7 @@ def _write_exec(path, body):
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def _run_stage3b(tmp_path, *, layer, pubkey_path=None):
+def _run_stage3b(tmp_path, *, layer, pubkey_path=None, systemctl_on_path=True):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     state = tmp_path / "state"
@@ -50,19 +61,30 @@ def _run_stage3b(tmp_path, *, layer, pubkey_path=None):
         "exit 0\n",
     )
 
-    _write_exec(
-        bin_dir / "systemctl",
-        "#!/usr/bin/env bash\n"
-        'echo "$*" >>"$FAKE_APT_STATE/systemctl.log"\n'
-        "exit 0\n",
-    )
+    if systemctl_on_path:
+        _write_exec(
+            bin_dir / "systemctl",
+            "#!/usr/bin/env bash\n"
+            'echo "$*" >>"$FAKE_APT_STATE/systemctl.log"\n'
+            "exit 0\n",
+        )
+        path = f"{bin_dir}:/usr/bin:/bin"
+    else:
+        # wq#4560: a build host with no systemctl anywhere. /usr/bin and /bin
+        # have to come off PATH too -- the real systemctl lives there, and its
+        # presence is the one dimension every other case here pins. What's left
+        # is exactly what the skip path legitimately needs: the shims above
+        # plus SKIP_PATH_TOOLS.
+        for tool in SKIP_PATH_TOOLS:
+            (bin_dir / Path(tool).name).symlink_to(tool)
+        path = str(bin_dir)
 
     workdir = tmp_path / "work"
     chroot_dir = workdir / "chroot"
     chroot_dir.mkdir(parents=True)
 
     env = {
-        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "PATH": path,
         "FAKE_APT_STATE": str(state),
         "LIMPET_ISO_WORKDIR": str(workdir),
         "LIMPET_ISO_LAYER": layer,
@@ -71,7 +93,7 @@ def _run_stage3b(tmp_path, *, layer, pubkey_path=None):
         env["LIMPET_TEST_SSH_PUBKEY"] = str(pubkey_path)
 
     result = subprocess.run(
-        ["bash", str(BUILD), "stage3b_enable_test_ssh"],
+        [BASH, str(BUILD), "stage3b_enable_test_ssh"],
         env=env,
         capture_output=True,
         text=True,
@@ -111,6 +133,47 @@ def test_default_layer_is_skipped_not_installed(tmp_path):
     assert not systemctl_calls
     assert not (chroot_dir / "etc" / "skel" / ".ssh").exists()
     assert "skipping" in result.stderr
+
+
+def test_default_layer_skips_without_systemctl_on_path(tmp_path):
+    """wq#4546/wq#4560: the skip path must not require systemctl.
+
+    `require_cmd systemctl` used to run ahead of the layer case statement, so a
+    build host without systemd on PATH failed the whole `./build.sh all` while
+    building the DEFAULT, non-live, production layer -- the case this stage's
+    own doc comment and wq#4527 both call a no-op skip. systemctl is used only
+    on the live path (build.sh:317), so the check belongs there.
+    """
+    result, installed, systemctl_calls, chroot_dir = _run_stage3b(
+        tmp_path, layer="minimal.standard", systemctl_on_path=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "missing required command: systemctl" not in result.stderr
+    assert "skipping" in result.stderr
+    assert "openssh-server" not in installed
+    assert not (chroot_dir / "etc" / "skel" / ".ssh").exists()
+
+
+def test_live_layer_without_systemctl_fails_closed(tmp_path):
+    """The guard moved, not deleted: the live path still needs systemctl.
+
+    apt-get is on the stub PATH here, so "openssh-server not installed" shows
+    require_cmd fired before the install rather than apt-get being unreachable.
+    """
+    pubkey = tmp_path / "test_id_ed25519.pub"
+    pubkey.write_text(TEST_PUBKEY)
+
+    result, installed, systemctl_calls, chroot_dir = _run_stage3b(
+        tmp_path,
+        layer="minimal.standard.live",
+        pubkey_path=pubkey,
+        systemctl_on_path=False,
+    )
+
+    assert result.returncode != 0
+    assert "missing required command: systemctl" in result.stderr
+    assert "openssh-server" not in installed
 
 
 def test_live_layer_without_pubkey_fails_closed(tmp_path):

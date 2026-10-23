@@ -111,3 +111,37 @@ Filed as wq#4560 (deps: wq#4546), decision options:
   false invariant on every other layer.
 - (b) accept as a known gap, log it, and defer — every current Lumen
   build host has systemd, so nothing breaks in practice yet.
+
+## Judgment (wq#4560, 2026-10-23)
+
+**(a) fix now.** The finding is upheld — re-confirmed live before touching
+anything: `require_cmd systemctl` sat at `build.sh:289`, ahead of the layer
+`case` at 292-298, and systemctl is called exactly once in the whole script
+(`build.sh:317`, inside the live-only path). (b) was rejected because the gap
+costs a one-line edit to close while a deferred known-gap row costs a doc
+entry plus the next build host that lands without systemd — and the invariant
+being wrong is what makes the stage's own doc comment false.
+
+Fix: the `*.live)` branch is no longer an empty `;;` — it carries
+`require_cmd systemctl`. Nothing else in wq#4527's diff was touched, per the
+ticket's scope limit.
+
+Test gap closed too. The shipped fixture stubbed a fake systemctl into PATH
+for all three cases, so "is systemctl present" never varied (wq#2630
+probe-can't-fail). `_run_stage3b` now takes `systemctl_on_path`, and when it
+is false the fixture drops `/usr/bin` and `/bin` from PATH entirely —
+otherwise the host's real systemctl answers `command -v` and the probe is
+inert — leaving only the chroot/apt-get shims plus the three coreutils
+build.sh needs before the layer check (`dirname`, `date`, `mkdir`). Two cases
+use it:
+
+- `test_default_layer_skips_without_systemctl_on_path` — the red case. Failed
+  before the fix with `FAIL: missing required command: systemctl`, exit 1;
+  passes after, logging the skip and exiting 0.
+- `test_live_layer_without_systemctl_fails_closed` — the regression guard,
+  proving the check moved rather than got deleted. apt-get is reachable on
+  that stub PATH, so "openssh-server not installed" shows `require_cmd` fired
+  ahead of the install rather than apt-get being absent.
+
+Suite: 5 passed in `test_stage3b_enable_test_ssh.py`, 97 passed across
+`limpet/iso-builder/`.

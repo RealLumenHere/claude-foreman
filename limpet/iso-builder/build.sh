@@ -286,11 +286,14 @@ stage3_inject_limpet_packages() {
 # pointed at a live-only layer to build a separate, test-only ISO.
 stage3b_enable_test_ssh() {
   [ -d "$CHROOT" ] || fail "chroot not assembled yet (run stage1_fetch_base_iso then stage1b_assemble_chroot)"
-  require_cmd systemctl
   local layer
   layer="$(target_layer)"
   case "$layer" in
-    *.live) ;;
+    # wq#4560: systemctl is required inside this branch only (used once, below,
+    # and nowhere else in this script). Checking it ahead of the case statement
+    # made a systemd-less build host fail the whole `./build.sh all` even on the
+    # default non-live layer, where this stage documents itself as a no-op skip.
+    *.live) require_cmd systemctl ;;
     *)
       log "stage3b: $layer is not a live-only layer -- skipping test SSH (set LIMPET_ISO_LAYER to a *.live layer to build a test ISO)"
       return 0
