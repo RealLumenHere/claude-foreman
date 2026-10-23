@@ -378,6 +378,42 @@ It is opt-in and part of the stage 11 live layer repack (`install_live_test_ssh`
   is requested (that moved all Limpet content into the live layer).
 - Tests: `test_live_test_ssh.py` (fake mount/chroot/apt-get; real shell and merge logic).
 
+## wq#4604 — torrent distribution (`distribute.sh`)
+
+Once `build.sh stage11_build_hybrid_iso` has written the ISO to
+`$LIMPET_ISO_OUT_DIR`, `distribute.sh` turns it into the release
+`docs/deployment-spec.md` section 1 promises: a `.torrent` (opentrackr
+tracker, DHT/PEX left enabled — no `-p`), `SHA256SUMS` + `SHA512SUMS`, a
+`SHA256SUMS.gpg` detached signature, a magnet link, a seeding
+`transmission-cli` instance on Lumen, and the GitHub release notes body.
+
+```sh
+LIMPET_ISO_NAME=limpet-20261023.iso limpet/iso-builder/distribute.sh all
+```
+
+The magnet link is derived locally from the `.torrent`'s BEP-3 info-hash
+(`release.py`) instead of depending on a `transmission-show -m` flag whose
+availability varies by packaged transmission version.
+
+`stage_install_transmission`, `stage_seed`, and `stage_sign` run
+`sudo`/`systemd-run`/`gpg` and are not things this ticket's sandboxed build
+worker can run directly (no `sudo`, no `gpg`, no `apt` in its allowlist) —
+an operator with that access runs them on Lumen. `stage_sign` also requires
+`LIMPET_RELEASE_GPG_KEY_ID`: there is no default key, because guessing one
+is exactly the kind of fabricated-evidence failure the fleet's instincts
+forbid — the Limpet release signing key does not exist yet (it is a
+one-time mint, alongside the still-open license/domain/trademark decisions
+in `projects/limpet/docs/launch-readiness.md` items 7-8). `gh release
+create ...` (printed in `RELEASE_NOTES.md`) is likewise not run by this
+script: this worker's `gh` allowlist is read-only (`gh pr/issue/run
+view|list`), and the Limpet repo is not public yet per the same
+launch-readiness gate, so there is no releases page to publish to.
+`stage_make_torrent`, `stage_checksums`, and `stage_release_notes` need no
+elevated privilege and are covered by `test_release.py`.
+
+See `docs/limpet-download-verify-flash.md` for the user-facing download +
+verify + flash walkthrough built on these artifacts.
+
 ## Tests
 
 ```sh
