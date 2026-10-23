@@ -5,10 +5,17 @@
 # credential material in command output (run everything through lumen-run,
 # never grep/sed with the match printed to a terminal that isn't masked).
 set -euo pipefail
+SRC="$(cd "$(dirname "$0")" && pwd)"
 
 F=/home/lumen/agent/litellm_config.yaml
 BAD='model: anthropic/claude-haiku-5-5'
 GOOD='model: anthropic/claude-haiku-4-5-20251001'
+
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vcontains "$F" 'model: anthropic/claude-haiku-4-5-20251001'
+  vdone
+fi
 
 if grep -qF "$GOOD" "$F"; then
   echo "already fixed"
