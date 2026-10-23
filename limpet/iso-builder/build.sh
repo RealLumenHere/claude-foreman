@@ -615,7 +615,7 @@ stage10_configure_serial_console() {
   python3 -I "$HERE/set_grub_cmdline.py" --default "$CHROOT/etc/default/grub"
   chroot "$CHROOT" update-grub
 
-  log "stage10: added console=ttyS0,115200n8 to GRUB_CMDLINE_LINUX and ran update-grub"
+  log "stage10: added console=tty0 console=ttyS0,115200n8 to GRUB_CMDLINE_LINUX and ran update-grub"
 }
 
 # ---------------------------------------------------------------------------
@@ -677,7 +677,10 @@ stage11_build_hybrid_iso() {
   iso_layers set-size --sources "$changes/casper/install-sources.yaml" --layer "$layer" --size "$merged_size"
 
   # The ISO's own boot menu (distinct from the installed system's grub, which
-  # stage9 themes). Rebranded from the stock entries, kernel args untouched.
+  # stage9 themes and stage10 points at ttyS0). Rebranded from the stock
+  # entries; iso_layers.py grub-cfg also adds the serial console kernel args
+  # here (wq#4534) -- stage12 boots this ISO directly, so without this the
+  # serial log stays empty even though stage10 fixed the installed system.
   local cfg
   for cfg in grub.cfg loopback.cfg; do
     install -m 0644 "$ISO_EXTRACT/boot/grub/$cfg" "$changes/boot/grub/"

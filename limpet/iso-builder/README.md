@@ -25,8 +25,10 @@ reads the choice from the yaml; set `LIMPET_ISO_LAYER` to override it.
   `<layer>.manifest`, `<layer>.size` and the `install-sources.yaml` size the
   same way livecd-rootfs does. It then unmounts, packs `upper/` with the
   original compression and block size, rebrands the ISO's `boot/grub/grub.cfg` +
-  `loopback.cfg` ("Try or Install Limpet", kernel args unchanged) and
-  refreshes `md5sum.txt`. Finally it writes a copy of the base ISO with only
+  `loopback.cfg` ("Try or Install Limpet") and adds `console=tty0
+  console=ttyS0,115200n8` to every `linux /casper/vmlinuz` line (wq#4534 --
+  otherwise stage12's QEMU boot test, which boots this ISO directly, got an
+  empty serial log) and refreshes `md5sum.txt`. Finally it writes a copy of the base ISO with only
   those files mapped in and the base's El Torito/MBR/GPT boot records replayed
   (`xorriso -boot_image any replay`). The base ISO's kernel/initrd are reused.
   grub-mkrescue is no longer used.
@@ -99,12 +101,19 @@ blocking on one that doesn't:
   `.../plymouth/`) in the committed, WCAG-AA token palette, so `build.sh
   stage9` now installs a graphical GRUB theme (via `set_grub_theme.py`) and an
   animated Plymouth splash instead of shipping text-mode/unthemed.
-- **Serial console** (wq#4526): `limpet-serial.log` came back empty from QEMU
-  boots because nothing told the kernel to print to a serial port. `stage10`
-  sets `GRUB_CMDLINE_LINUX="console=ttyS0,115200n8"` in the chroot's
-  `/etc/default/grub` (via `set_grub_cmdline.py`) and runs `update-grub`
-  before stage11 packs the layer, enabling serial-based automated boot
-  testing without a VNC/QMP screenshot dependency.
+- **Serial console** (wq#4526, wq#4534): `limpet-serial.log` came back empty
+  from QEMU boots because nothing told the kernel to print to a serial port.
+  `stage10` sets `GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"`
+  in the chroot's `/etc/default/grub` (via `set_grub_cmdline.py`) and runs
+  `update-grub` before stage11 packs the layer -- that fixes the *installed*
+  system's grub, not the live ISO's own boot menu. `stage12_qemu_test` boots
+  the ISO directly (`-cdrom`, never installed), so wq#4526 alone still left
+  the serial log empty; wq#4534 closes that gap in `stage11` by having
+  `iso_layers.py grub-cfg` add the same console args (tty0 first, ttyS0 last
+  so it stays primary) to `boot/grub/grub.cfg` + `loopback.cfg`'s
+  `linux /casper/vmlinuz` lines before the `---` separator, enabling
+  serial-based automated boot testing without a VNC/QMP screenshot
+  dependency.
 - **Hardware profile book is 5 profiles, not 200+** (tasks 5/10): the ticket's
   "200+" is a target the upstream Tier-1/2 tickets haven't reached yet
   (`docs/hardware-tiers-spec.md` so far only has the AMD tier complete).

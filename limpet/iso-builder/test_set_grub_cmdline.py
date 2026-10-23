@@ -14,7 +14,7 @@ _spec = importlib.util.spec_from_file_location(
 mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
 
-CONSOLE_ARG = "console=ttyS0,115200n8"
+CONSOLE_ARG = "console=tty0 console=ttyS0,115200n8"
 
 
 def test_appends_when_absent(tmp_path):

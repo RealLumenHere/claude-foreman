@@ -12,7 +12,8 @@ Subcommands:
                 Limpet content has to land in to reach the installed system
   lowerdirs     overlayfs lowerdir= string for a layer (nearest parent first)
   set-size      rewrite one source's size: in install-sources.yaml
-  grub-cfg      rebrand the stock ISO grub.cfg / loopback.cfg menu entries
+  grub-cfg      rebrand the stock ISO grub.cfg / loopback.cfg menu entries and
+                add the serial console kernel args (wq#4534)
   md5sum        refresh md5sum.txt lines for files this build replaced
 """
 import argparse
@@ -25,6 +26,10 @@ import yaml
 
 LAYERED = "fsimage-layered"
 STOCK_ENTRY = "Try or Install"
+# wq#4534: tty0 first, ttyS0 last -- the kernel's last console= arg becomes
+# /dev/console, so this keeps the local display live while making ttyS0
+# primary for stage12's QEMU "-serial file:..." boot test.
+SERIAL_ARGS = "console=tty0 console=ttyS0,115200n8"
 
 
 def die(msg: str) -> None:
@@ -75,6 +80,32 @@ def rebrand_grub(text: str, old: str, new: str) -> str:
         return m.group(1) + m.group(2).replace(old, new) + m.group(3)
 
     return re.sub(r'(?m)^(\s*menuentry\s+")([^"]*)(")', title, text)
+
+
+# wq#4526 fixed console=ttyS0 on the installed system's grub (chroot
+# /etc/default/grub via set_grub_cmdline.py). The live ISO's own boot menu --
+# this file -- ships kernel args baked into grub.cfg/loopback.cfg, copied
+# verbatim from the base ISO (build.sh stage11), so stage12's QEMU boot test
+# (which boots the ISO, not an installed system) still got an empty serial
+# log. Matches on the "linux ... --- quiet splash" shape both files ship:
+# args land right before "---", never inside the "quiet splash" tail, so a
+# layout change there is caught by the die() below instead of silently
+# landing args in the wrong half of the line.
+LINUX_LINE = re.compile(r'(?m)^(\s*linux\s+\S+(?:\s+\S+)*?)(\s*---)')
+
+
+def add_serial_console(text: str, args: str = SERIAL_ARGS) -> str:
+    if not LINUX_LINE.search(text):
+        die('no "linux ... ---" kernel line -- base ISO grub.cfg kernel-arg layout '
+            "changed, re-check before adding serial console args")
+
+    def inject(m):
+        pre, sep = m.group(1), m.group(2)
+        if "console=ttyS0" in pre:
+            return m.group(0)
+        return f"{pre} {args}{sep}"
+
+    return LINUX_LINE.sub(inject, text)
 
 
 def refresh_md5(listing: str, root: Path, rel_paths: list) -> str:
@@ -129,7 +160,8 @@ def main(argv=None) -> int:
         doc = set_size(load_sources(args.sources), args.layer, args.size)
         args.sources.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
     elif args.cmd == "grub-cfg":
-        args.file.write_text(rebrand_grub(args.file.read_text(encoding="utf-8"), args.old, args.new), encoding="utf-8")
+        text = rebrand_grub(args.file.read_text(encoding="utf-8"), args.old, args.new)
+        args.file.write_text(add_serial_console(text), encoding="utf-8")
     elif args.cmd == "md5sum":
         listing = args.root / "md5sum.txt"
         listing.write_text(refresh_md5(listing.read_text(encoding="utf-8"), args.root, args.files), encoding="utf-8")

@@ -75,8 +75,10 @@ def test_grub_rebrand_keeps_kernel_args(tmp_path):
         after = cfg.read_text()
         assert 'menuentry "Try or Install Limpet"' in after
         assert "Xubuntu" not in after
-        keep = [l for l in before.splitlines() if "menuentry" not in l]
-        assert keep == [l for l in after.splitlines() if "menuentry" not in l]
+        # wq#4534: the one intentional exception is the "linux ... ---" lines,
+        # which now gain the serial console args -- covered below.
+        keep = [l for l in before.splitlines() if "menuentry" not in l and "linux" not in l]
+        assert keep == [l for l in after.splitlines() if "menuentry" not in l and "linux" not in l]
 
 
 def test_grub_rebrand_fails_loudly_on_unknown_layout(tmp_path):
@@ -85,6 +87,68 @@ def test_grub_rebrand_fails_loudly_on_unknown_layout(tmp_path):
     r = _iso_layers("grub-cfg", "--file", str(cfg))
     assert r.returncode != 0
     assert "Try or Install" in r.stderr
+
+
+# --- wq#4534: grub-cfg also adds the serial console kernel args ------------
+# wq#4526 fixed console=ttyS0 only on the chroot's /etc/default/grub (the
+# installed system's grub), not the live ISO's own boot menu -- the one
+# stage12's QEMU boot test actually boots -- so limpet-serial.log stayed
+# empty. Falsifiable (wq#2630): each case below probes a boundary that a
+# narrower fix could miss -- grub.cfg alone (loopback.cfg has an extra
+# iso-scan/filename= token before "---"), the nomodeset menuentry (a second
+# token between vmlinuz and "---"), and a second run (idempotency).
+
+SERIAL_ARGS = "console=tty0 console=ttyS0,115200n8"
+
+
+@pytest.mark.parametrize("name", ["grub.cfg", "loopback.cfg"])
+def test_grub_cfg_adds_serial_console_to_every_linux_line(tmp_path, name):
+    cfg = tmp_path / name
+    shutil.copy(FIX / "boot/grub" / name, cfg)
+    cfg.chmod(0o644)
+    assert _iso_layers("grub-cfg", "--file", str(cfg)).returncode == 0
+    after = cfg.read_text()
+    linux_lines = [l for l in after.splitlines() if l.lstrip().startswith("linux")]
+    assert len(linux_lines) == 2, after
+    for line in linux_lines:
+        assert SERIAL_ARGS in line
+        # Live-only args land before "---"; "quiet splash" after it is untouched.
+        assert line.index(SERIAL_ARGS) < line.index("---")
+        assert line.rsplit("---", 1)[1].strip() == "quiet splash"
+
+
+def test_grub_cfg_serial_console_covers_nomodeset_line(tmp_path):
+    cfg = tmp_path / "grub.cfg"
+    shutil.copy(FIX / "boot/grub/grub.cfg", cfg)
+    cfg.chmod(0o644)
+    assert _iso_layers("grub-cfg", "--file", str(cfg)).returncode == 0
+    after = cfg.read_text()
+    nomodeset_line = next(l for l in after.splitlines() if "nomodeset" in l)
+    assert SERIAL_ARGS in nomodeset_line
+    assert nomodeset_line.index("nomodeset") < nomodeset_line.index(SERIAL_ARGS)
+
+
+def test_grub_cfg_serial_console_is_idempotent(tmp_path):
+    cfg = tmp_path / "grub.cfg"
+    shutil.copy(FIX / "boot/grub/grub.cfg", cfg)
+    cfg.chmod(0o644)
+    assert _iso_layers("grub-cfg", "--file", str(cfg)).returncode == 0
+    first = cfg.read_text()
+    # Second run must re-brand "Limpet" -> "Limpet" (a no-op) without
+    # duplicating the serial console args already in the line.
+    r = _iso_layers("grub-cfg", "--file", str(cfg), "--old", "Limpet", "--new", "Limpet")
+    assert r.returncode == 0, r.stderr
+    second = cfg.read_text()
+    assert second == first
+    assert second.count("console=ttyS0") == 2  # one per menuentry, not duplicated
+
+
+def test_grub_cfg_serial_console_fails_loudly_on_unknown_kernel_line(tmp_path):
+    cfg = tmp_path / "grub.cfg"
+    cfg.write_text('menuentry "Try or Install Xubuntu" {\n    initrd /casper/initrd\n}\n')
+    r = _iso_layers("grub-cfg", "--file", str(cfg))
+    assert r.returncode != 0
+    assert "linux" in r.stderr
 
 
 # --- end to end: real stages on a synthetic layered ISO -----------------------

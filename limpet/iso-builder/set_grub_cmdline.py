@@ -8,12 +8,18 @@ testing (it had to fall back to VNC/QMP screenshots). Rewrites an existing
 GRUB_CMDLINE_LINUX line in place or appends one, so re-running the ISO build
 does not duplicate keys. The caller still runs `update-grub` inside the
 chroot to compile grub.cfg; this only edits the source of truth GRUB reads.
+
+wq#4534: wq#4526 shipped ttyS0 alone, which makes it the kernel's only
+console -- the installed system's local display stops showing boot/login
+output. tty0 first, ttyS0 last: the kernel's last console= arg becomes
+/dev/console, so this keeps the local display live while ttyS0 stays
+primary for serial-based testing (matches iso_layers.SERIAL_ARGS).
 """
 import argparse
 import re
 import sys
 
-CONSOLE_ARG = "console=ttyS0,115200n8"
+CONSOLE_ARG = "console=tty0 console=ttyS0,115200n8"
 
 
 def set_cmdline(text: str, value: str) -> str:
