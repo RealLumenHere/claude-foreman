@@ -161,3 +161,114 @@ def test_build_system_prompt_rebuilds_fresh_each_call(monkeypatch, tmp_path, wor
     assert "## Recent tool results (warm band)\nNone yet." in first
     assert "extract_rootfs" in second
     assert first != second
+
+
+# wq#4528 -- the docstring contract is that no section ever raises, but the wq#4509 tests
+# only probed each source's absent extreme, never a source that is present with the wrong
+# type. manifest.json is operator-editable and hardware.json is a file on disk, so every
+# shape below is reachable without a code bug; each one raised before wq#4528.
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"identity": ["vendor", "Acme"]},
+        {"identity": "Acme"},
+        {"identity": 7},
+        {"hardware_bound": "ST-Link/V2"},
+        {"hardware_bound": {"adapter": "ST-Link/V2"}},
+        {"hardware_bound": ["ST-Link/V2"]},
+        {"hardware_bound": [None]},
+    ],
+    ids=[
+        "identity-list",
+        "identity-str",
+        "identity-int",
+        "hw-bound-str",
+        "hw-bound-dict",
+        "hw-bound-str-entries",
+        "hw-bound-null-entries",
+    ],
+)
+def test_wrong_typed_manifest_field_degrades_instead_of_raising(
+    monkeypatch, tmp_path, workspace, overrides
+):
+    _point_hal_at(monkeypatch, tmp_path, socket_exists=False)
+    _write_manifest(workspace, **overrides)
+
+    prompt = pl.Planner(workspace=workspace).build_system_prompt()
+
+    assert "target_id=acme-router-v2 class=firmware" in prompt
+    assert "identity=(" in prompt and "hardware_bound=(" in prompt
+
+
+def test_non_dict_device_entries_are_dropped_not_rendered(monkeypatch, tmp_path, workspace):
+    _point_hal_at(
+        monkeypatch,
+        tmp_path,
+        socket_exists=True,
+        devices=["ST-Link", None, {"name": "ST-Link", "hw_type": "debug_probe"}],
+    )
+    _write_manifest(workspace)
+
+    prompt = pl.Planner(workspace=workspace).build_system_prompt()
+
+    section = prompt.split("## Attached hardware\n", 1)[1].split("\n\n", 1)[0]
+    assert section.splitlines() == ["- ST-Link (debug_probe) at ? [?] "
+                                   "status=? capabilities=[] descriptor=-"]
+
+
+def test_all_device_entries_malformed_reads_as_none_detected(monkeypatch, tmp_path, workspace):
+    _point_hal_at(monkeypatch, tmp_path, socket_exists=True, devices=["ST-Link", 3748])
+    _write_manifest(workspace)
+
+    prompt = pl.Planner(workspace=workspace).build_system_prompt()
+
+    assert "## Attached hardware\nNone detected" in prompt
+
+
+@pytest.mark.parametrize(
+    "device, expected",
+    [
+        ({"descriptor": 3748}, "descriptor=3748"),
+        ({"descriptor": None}, "descriptor=-"),
+        ({"capabilities": "swd"}, "capabilities=[]"),
+        ({"capabilities": [1, 2]}, "capabilities=[1, 2]"),
+        ({"capabilities": {"swd": True}}, "capabilities=[]"),
+    ],
+    ids=["descriptor-int", "descriptor-null", "caps-str", "caps-int-entries", "caps-dict"],
+)
+def test_wrong_typed_device_field_degrades_instead_of_raising(
+    monkeypatch, tmp_path, workspace, device, expected
+):
+    _point_hal_at(monkeypatch, tmp_path, socket_exists=True, devices=[dict({"name": "d"}, **device)])
+    _write_manifest(workspace)
+
+    prompt = pl.Planner(workspace=workspace).build_system_prompt()
+
+    assert expected in prompt
+
+
+def test_credential_masking_still_applies_after_descriptor_coercion(
+    monkeypatch, tmp_path, workspace
+):
+    secret = "gh" + "p_" + "A" * 36
+    _point_hal_at(
+        monkeypatch, tmp_path, socket_exists=True, devices=[{"descriptor": f"token {secret}"}]
+    )
+    _write_manifest(workspace)
+
+    prompt = pl.Planner(workspace=workspace).build_system_prompt()
+
+    assert secret not in prompt
+    assert "descriptor=token " in prompt
+
+
+def test_unreadable_evidence_log_degrades_instead_of_raising(monkeypatch, tmp_path, workspace):
+    _point_hal_at(monkeypatch, tmp_path, socket_exists=False)
+    _write_manifest(workspace)
+    os.makedirs(log_path(workspace))  # a directory where the log should be: open() -> OSError
+
+    prompt = pl.Planner(workspace=workspace).build_system_prompt()
+
+    assert "## Recent tool results (warm band)\nEvidence log unreadable." in prompt

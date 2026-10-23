@@ -67,8 +67,9 @@ class Planner:
             )
         lines = ["## Attached hardware"]
         for d in devices:
-            caps = ", ".join(d.get("capabilities", []))
-            descriptor = wr.mask_text(d.get("descriptor", "") or "")
+            caps_raw = d.get("capabilities")
+            caps = ", ".join(str(c) for c in caps_raw) if isinstance(caps_raw, list) else ""
+            descriptor = wr.mask_text(str(d.get("descriptor") or ""))
             lines.append(
                 f"- {d.get('name', '?')} ({d.get('hw_type', '?')}) "
                 f"at {d.get('device_node', '?')} [{d.get('usb_id', '?')}] "
@@ -85,7 +86,11 @@ class Planner:
                 data = json.load(fh)
         except (OSError, ValueError):
             return []
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        # hal_daemon.py writes a fixed schema, so a non-dict entry means the file was
+        # truncated/hand-edited: drop the bad entry rather than let d.get() raise.
+        return [d for d in data if isinstance(d, dict)]
 
     def _workspace_manifest_section(self) -> str:
         path = os.path.join(self.workspace, "manifest.json")
@@ -96,10 +101,15 @@ class Planner:
             return "## Active workspace\nNo manifest.json -- not a Limpet workspace."
         if not isinstance(man, dict):
             return "## Active workspace\nmanifest.json is not a JSON object."
-        identity = man.get("identity", {}) or {}
+        # manifest.json is operator-editable, so every field is checked at its point of
+        # use, the same guard workspace_report.py:313,315 and agent_tui.py:114 apply to
+        # these two fields -- a wrong type degrades the line, it never raises.
+        identity = man.get("identity") if isinstance(man.get("identity"), dict) else {}
         ident_str = ", ".join(f"{k}={v}" for k, v in identity.items()) or "-"
-        hw_bound = man.get("hardware_bound", []) or []
-        hw_str = "; ".join(h.get("adapter", "?") for h in hw_bound) or "none"
+        hw_bound = man.get("hardware_bound") if isinstance(man.get("hardware_bound"), list) else []
+        hw_str = "; ".join(
+            str(h.get("adapter", "?")) if isinstance(h, dict) else "?" for h in hw_bound
+        ) or "none"
         return (
             "## Active workspace\n"
             f"target_id={man.get('target_id', '?')} class={man.get('class', '?')} "
@@ -107,7 +117,12 @@ class Planner:
         )
 
     def _warm_band_section(self, limit: int = WARM_BAND_SIZE) -> str:
-        blocks = read_blocks(self.workspace)
+        try:
+            blocks = read_blocks(self.workspace)
+        except OSError:
+            # read_blocks skips malformed lines but still opens the path; an unreadable
+            # evidence log is the same "source absent" case as the two sections above.
+            return "## Recent tool results (warm band)\nEvidence log unreadable."
         if not blocks:
             return "## Recent tool results (warm band)\nNone yet."
         lines = ["## Recent tool results (warm band)"]
