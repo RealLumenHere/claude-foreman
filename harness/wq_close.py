@@ -33,10 +33,53 @@ Exit 0 only when the ticket is `done` on the record.
 import argparse
 import json
 import os
+import re
+import sqlite3
 import subprocess
 import sys
 
 WQ_BIN = os.environ.get("WQ_BIN", "/home/lumen/bin/wq")
+WQ_DB = os.environ.get("WQ_DB", "/home/lumen/agents/work-queue/queue.db")
+
+# wq#4577: the staging pattern (wq#4537/#4539/#4540) is correct doctrine — a worker walled
+# out of a live path builds+tests against fixtures and ships ops/<ticket>/install.sh for a
+# session that holds the grant. The hole is the handoff: wq#4540 closed `done` this way with
+# nothing filing the deploy, and its own acceptance probe sat unmeasured for 3h until a
+# verify pass caught it (ISSUE-LOG 1537). These two shapes are the textual admission that
+# notes carry when a close is actually a handoff, not a deploy.
+STAGED_INSTALL_PATH_RE = re.compile(r"ops/(?:wq#?)?\d+/install\.sh", re.I)
+STAGED_INSTALL_SHAPE_RE = re.compile(r"staged\b.{0,60}\b(?:unreachable|no fs access)", re.I | re.S)
+
+
+def staged_install_successor(ticket_id, notes, db_path=None):
+    """Detect the staged-for-another-session admission in closing `notes` and look for a
+    successor ticket whose own --deps names this ticket. Returns (triggered, successor_id):
+    `triggered` is True when the notes carry the admission; `successor_id` is the id of a
+    ticket that deps-links `ticket_id`, or None when none does (or the queue db can't be
+    read — fail toward "no successor found", since that is the refusable state, same as the
+    wq#899 merge-state gate failing toward "not merged" on ambiguity for a textual check this
+    narrow). Detection only — the caller decides what to do with it, same split as
+    `wq.py`'s own `pr_merge_state()`/cmd_done gate pairing."""
+    text = notes or ""
+    if not (STAGED_INSTALL_PATH_RE.search(text) or STAGED_INSTALL_SHAPE_RE.search(text)):
+        return False, None
+    sid = str(int(ticket_id))
+    try:
+        con = sqlite3.connect(db_path or WQ_DB)
+        try:
+            rows = con.execute(
+                "SELECT id, deps FROM tasks WHERE deps IS NOT NULL AND deps != ''").fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return True, None
+    for rid, deps in rows:
+        for clause in [c.strip() for c in (deps or "").split(",") if c.strip()]:
+            low = clause.lower()
+            d = clause[3:] if low.startswith("wq#") else clause[2:] if low.startswith("wq") else clause
+            if d.strip() == sid:
+                return True, rid
+    return True, None
 
 
 class Verdict:
@@ -103,7 +146,8 @@ def _status(row):
     return (row.get("status") or "").strip()
 
 
-def close(ticket_id, notes, no_artifact=None, agent=None, unmerged=None, log=None):
+def close(ticket_id, notes, no_artifact=None, agent=None, unmerged=None, log=None,
+          staged_install_override=None):
     """Claim-then-done, gated on the exit code of every step and confirmed against the row.
 
     Returns a Verdict. Never raises on a refusal — a refusal is an answer, and the caller
@@ -136,6 +180,26 @@ def close(ticket_id, notes, no_artifact=None, agent=None, unmerged=None, log=Non
         # about the ticket, which is exactly the class of bug this module exists for.
         emit("show: already done — nothing to do")
         return Verdict(ticket_id, True, "show", 0, "", "done", steps)
+
+    staged, successor = staged_install_successor(ticket_id, notes)
+    if staged and not successor and not staged_install_override:
+        refusal = (
+            f"REFUSED: wq#4577 staged-install-successor gate — wq#{ticket_id}'s closing "
+            "notes admit the deliverable is staged for another session (an "
+            "ops/<ticket>/install.sh reference, or 'staged ... unreachable/no fs access') "
+            "and no ticket's --deps names this close. File a successor ticket with "
+            f"--deps {ticket_id} naming who deploys it, or record an explicit override "
+            "with --staged-install-successor \"<reason>\" (wq#4573: wq#4540 closed this "
+            "way with nothing filing the deploy, caught 3h later only by a human noticing).")
+        emit(refusal)
+        return Verdict(ticket_id, False, "staged-install-successor", 1, refusal, status, steps)
+    if staged and successor:
+        notes = (notes + (" " if notes else "") + f"[STAGED-SUCCESSOR: wq#{successor}]").strip()
+        emit(f"staged-install-successor: wq#{successor} deps-links this close")
+    elif staged and staged_install_override:
+        notes = (notes + (" " if notes else "") +
+                 f"[STAGED-INSTALL-OVERRIDE: {staged_install_override}]").strip()
+        emit("staged-install-successor: override recorded on the record")
 
     reblock_reason = None
     if status == "blocked":
@@ -196,11 +260,15 @@ def main(argv=None):
     ap.add_argument("--no-artifact", dest="no_artifact",
                     help="reason, when the close has no file/PR/sha artifact (wq#759)")
     ap.add_argument("--unmerged", help="reason, when the evidence PR has not landed (wq#899)")
+    ap.add_argument("--staged-install-successor", dest="staged_install_successor",
+                    help="override, when the notes admit a staged-for-another-session "
+                         "deliverable and no ticket deps-links this close (wq#4577)")
     ap.add_argument("--agent", help="wq identity to claim under (default: $WQ_AGENT)")
     ap.add_argument("--json", action="store_true", help="verdict as JSON on the last line")
     a = ap.parse_args(argv)
 
     v = close(a.id, a.notes, no_artifact=a.no_artifact, unmerged=a.unmerged, agent=a.agent,
+              staged_install_override=a.staged_install_successor,
               log=None if a.json else lambda m: print(f"  {m}", file=sys.stderr))
     print(json.dumps(v.as_dict()) if a.json else v.line)
     return 0 if v.closed else 1
