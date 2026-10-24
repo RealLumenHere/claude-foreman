@@ -119,6 +119,10 @@ STATIC_PRIMARY_TREES = [
     # had never picked it up, so a dirty/behind fleet-inventory tree paged
     # nowhere. No router.LANE_REPO entry, same gap class as the rest of this list.
     "/home/lumen/fleet/inventory",
+    # wq#4623: router.REPO_TAGS repos with no lane; fworker now grants the ticket's
+    # repo primary as an --add-dir, so each must be write-frozen here.
+    "/home/lumen/ccc",
+    "/home/lumen/messenger",
 ]
 
 # wq#3779: /home/lumen/sentinel is a default add_dir (agents.yaml, wq#3554) but
@@ -147,8 +151,8 @@ def primary_trees():
     trees = set(STATIC_PRIMARY_TREES)
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(HARNESS_DIR), "orchestrator"))
-        from router import LANE_REPO  # noqa: E402
-        trees |= set(LANE_REPO.values())
+        from router import LANE_REPO, REPO_TAGS  # noqa: E402
+        trees |= set(LANE_REPO.values()) | set(REPO_TAGS.values())
     except Exception:
         pass
     return sorted(trees)

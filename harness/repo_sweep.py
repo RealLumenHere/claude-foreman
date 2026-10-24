@@ -43,8 +43,8 @@ def _lane_repos():
     """Return the set of repo paths from LANE_REPO."""
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(HARNESS_DIR), "orchestrator"))
-        from router import LANE_REPO  # noqa: E402
-        return set(LANE_REPO.values())
+        from router import LANE_REPO, REPO_TAGS  # noqa: E402
+        return set(LANE_REPO.values()) | set(REPO_TAGS.values())  # wq#4623
     except Exception:
         return set()
 

@@ -1020,7 +1020,7 @@ def enforce_capability(state, tid, t, lane, repo, derived, dry_run, log):
                 state, tid, lane, capability.REASON_NEEDS_UNRESOLVED,
                 "; ".join(derived.unresolved), dry_run, log)
         needs = capability.effective_needs(t, derived)
-        add_dirs = capability.effective_add_dirs(t.get("archetype"), needs)
+        add_dirs = capability.effective_add_dirs(t.get("archetype"), needs, repo=repo)
         verdict = capability.preflight(t, repo, add_dirs, needs,
                                        advisory_paths=(derived.advisory_paths
                                                        if derived is not None else ()))

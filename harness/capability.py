@@ -363,15 +363,16 @@ def effective_needs(ticket, derived=None):
     return needs_mod.Needs(list(parsed.tags) + list(derived.tags))
 
 
-def effective_add_dirs(archetype, needs):
+def effective_add_dirs(archetype, needs, repo=None):
     """The `--add-dir` set a worker for this ticket WOULD get — computed at dispatch
     time, before any spawn. Mirrors fworker.add_dirs_for (:1049) exactly: the
     archetype's base list from agents.yaml, unioned with the ticket's needs:dir tags,
-    order preserved. Two functions, one answer; the base half is read through
-    capability_lint.base_add_dirs so both read the same manifest loader."""
+    then the ticket's repo primary (wq#4623), order preserved. Two functions, one
+    answer; the base half is read through capability_lint.base_add_dirs so both read
+    the same manifest loader."""
     import capability_lint  # local: capability_lint imports nothing from this module
     out = list(capability_lint.base_add_dirs(archetype))
-    for d in (needs.dirs if needs is not None else []):
+    for d in [*(needs.dirs if needs is not None else []), *([repo] if repo else [])]:
         if d not in out:
             out.append(d)
     return out

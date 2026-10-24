@@ -79,7 +79,7 @@ def replay(ticket, repo=None, roster=None, policy=None, sweep=None):
         return {**out, "column": capability.REASON_NEEDS_UNRESOLVED,
                 "detail": "; ".join(derived.unresolved)}
     needs = capability.effective_needs(ticket, derived)
-    add_dirs = capability.effective_add_dirs(ticket.get("archetype"), needs)
+    add_dirs = capability.effective_add_dirs(ticket.get("archetype"), needs, repo=repo)
     verdict = capability.preflight(ticket, repo, add_dirs, needs,
                                    advisory_paths=derived.advisory_paths)
     if not verdict.ok:

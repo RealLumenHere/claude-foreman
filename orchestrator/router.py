@@ -1188,6 +1188,10 @@ def repo_mismatch(ticket):
     lane = ticket.get("lane")
     lane_repo = repo_for_lane(lane)
     title_repo = title_repo_marker(title)
+    if not title_repo and lane_repo != FOREMAN_ROOT:
+        # wq#4623: a REPO_TAGS tag/field overrides only a foreman-default lane; a lane
+        # that is itself a repo claim (pokemon, mailbot) disagreeing with it is wq#433.
+        title_repo = ticket_repo_tag(ticket)[0]
     if not lane_repo or not title_repo or lane_repo == title_repo:
         return None
     return (f"title names {title_repo} but lane {lane!r} maps to {lane_repo} — "
@@ -1277,13 +1281,84 @@ def landing_repo_hint(ticket):
     return found[0] if len(found) == 1 else None
 
 
+# wq#4623 (ISSUE-LOG #1565): wq#4608, titled `[messenger] ...` with a detail naming
+# /home/lumen/messenger, ran in a foreman worktree because 'messenger' is no lane, so
+# TITLE_REPO_MARKERS (lanes only) never saw it and lane 'build' won. Repos that have no
+# lane of their own are named here; a ticket picks one with a leading `[tag]` or a
+# line-start `repo: <tag | /abs/path | owner/name>` field in its detail.
+# Most leading tags are topical ([verify], [judgment], [sec]: 88 distinct ones on
+# wq#3600+), so an unlisted title tag is only "unknown" when it is the name of a git repo
+# under REPO_TAG_ROOT — the shape of wq#4608's [messenger] before this table existed.
+REPO_TAGS = {
+    "ccc": "/home/lumen/ccc",
+    "messenger": "/home/lumen/messenger",
+    "foreman": FOREMAN_ROOT,
+    "bin": "/home/lumen/bin",
+    "minerva": "/home/lumen/minerva",
+}
+REPO_TAG_ROOT = "/home/lumen"
+_REPO_FIELD_RE = re.compile(r"(?im)^[ \t]*repo[ \t]*:[ \t]*`?([^\s`]+)`?")
+
+
+def _leading_bracket_tags(title):
+    lead = _LEADING_TAGS_RE.match(title or "")
+    return [t.strip().lower() for t in _TAG_RE.findall(lead.group(0))] if lead else []
+
+
+def _repo_ref(value):
+    """The repo a `repo:` field value names, or None. Accepts a REPO_TAGS / lane-marker
+    name, a Gitea `owner/name` (`lumen/lumen-messenger` -> messenger), or an absolute path
+    at or inside a REPO_TAGS or managed repo."""
+    value = value.rstrip(".,;")
+    if os.path.isabs(value):
+        p = os.path.normpath(value)
+        repos = sorted(set(REPO_TAGS.values()) | repo_sweep.managed_repos(),
+                       key=len, reverse=True)
+        return next((r for r in repos if p == r or p.startswith(r + "/")), None)
+    name = value.rsplit("/", 1)[-1].lower()
+    name = name[:-len(".git")] if name.endswith(".git") else name
+    name = name[len("lumen-"):] if name.startswith("lumen-") else name
+    return REPO_TAGS.get(name) or TITLE_REPO_MARKERS.get(name)
+
+
+def ticket_repo_tag(ticket):
+    """(repo, None) when the ticket names its repo by `repo:` field or REPO_TAGS title tag;
+    (None, reason) when it names one dispatch has no row for — the caller skips and pages,
+    never falls back to the lane's repo; (None, None) when it names none. Verify-pass
+    tickets are exempt (their repo is pinned in their detail, wq#1220)."""
+    title = ticket.get("title") or ""
+    if title.startswith(VERIFY_TITLE_PREFIX):
+        return None, None
+    m = _REPO_FIELD_RE.search(ticket.get("detail") or "")
+    if m:
+        repo = _repo_ref(m.group(1))
+        if repo:
+            return repo, None
+        return None, (f"detail field 'repo: {m.group(1)}' names no repo dispatch knows "
+                      f"(router.REPO_TAGS: {', '.join(sorted(REPO_TAGS))}) — add a "
+                      f"REPO_TAGS row or fix the field")
+    tags = _leading_bracket_tags(title)
+    for tag in tags:
+        if tag in REPO_TAGS:
+            return REPO_TAGS[tag], None
+    for tag in tags:
+        if (tag and "/" not in tag and tag not in TITLE_REPO_MARKERS
+                and os.path.isdir(os.path.join(REPO_TAG_ROOT, tag, ".git"))):
+            return None, (f"title tag [{tag}] names git repo {REPO_TAG_ROOT}/{tag}, which "
+                          f"has no router.REPO_TAGS row — add one rather than dispatching "
+                          f"into the lane's repo")
+    return None, None
+
+
 def repo_for_ticket(ticket_id_or_dict):
     """The one resolver shared by dispatch_cmd and foreman_dispatcher._do_pass (wq#1123):
     a lane/title repo disagreement refuses outright (wq#433 — see repo_mismatch; a
     needs tag never papers over a mis-laned ticket, §5.2), then the ticket's own
     needs:repo tag (wq#1331 — the per-ticket override, ahead of every derived source),
     then the repo holding the ticket's named deliverable (wq#1446), then the repo a
-    'lands via lumen-pr against/on ...' sentence in the detail names (wq#2753), then the verify-pass repo hint (wq#1220 — a verify ticket's own lane is a static
+    'lands via lumen-pr against/on ...' sentence in the detail names (wq#2753), then the
+    ticket's `repo:` field / REPO_TAGS title tag (wq#4623 — an unknown one returns None
+    rather than the lane default), then the verify-pass repo hint (wq#1220 — a verify ticket's own lane is a static
     policy default, not the repo it needs to verify), then the exact repo a repo-sweep
     ticket wrote into its own detail (repo_sweep.repo_hint — per-ticket data, so ahead
     of the lane default since wq#2753; 1eb5c48 mapping 'auto' into LANE_REPO had put
@@ -1304,6 +1379,9 @@ def repo_for_ticket(ticket_id_or_dict):
     repo = landing_repo_hint(t)
     if repo:
         return repo
+    repo, unknown = ticket_repo_tag(t)
+    if repo or unknown:
+        return repo  # wq#4623: an unknown repo tag refuses; never the lane default
     repo = verify_repo_hint(t.get("title", ""), t.get("detail", ""))
     if repo:
         return repo
@@ -1339,6 +1417,9 @@ def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None, model_overrid
         if mismatch:
             raise SystemExit(f"router: wq#{ticket_id} lane/repo mismatch — {mismatch}")
         repo = repo_for_ticket(t)
+        unknown = None if repo else ticket_repo_tag(t)[1]
+        if unknown:
+            raise SystemExit(f"router: wq#{ticket_id} unknown repo tag — {unknown}")
         if not repo:
             raise SystemExit(
                 f"router: wq#{ticket_id} lane {t.get('lane')!r} has no LANE_REPO entry — "

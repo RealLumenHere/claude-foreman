@@ -408,6 +408,19 @@ def test_effective_add_dirs_matches_fworkers_union():
                 == fworker.add_dirs_for(archetype, n.dirs))
 
 
+def test_ticket_repo_primary_is_an_add_dir_in_both_unions():
+    """wq#4623: wq#4608's messenger worker had no path to /home/lumen/messenger. The
+    ticket's repo primary is granted, and preflight sees the same grant fworker hands out."""
+    n = needs_mod.parse("dir(/home/lumen/agent)")
+    repo = "/home/lumen/messenger"
+    for archetype in (None, "standard-engineering"):
+        spawned = fworker.add_dirs_for(archetype, n.dirs, repo=repo)
+        assert repo in spawned and repo not in fworker.add_dirs_for(archetype, n.dirs)
+        assert capability.effective_add_dirs(archetype, n, repo=repo) == spawned
+    assert fworker.add_dirs_for(None, [], repo="/home/lumen/foreman").count(
+        "/home/lumen/foreman") == 1
+
+
 def test_covered_by_requires_every_path_and_treats_empty_as_unknown():
     dirs = ["/home/lumen/agent", "/home/lumen/kb"]
     assert capability.covered_by(["/home/lumen/agent/x.py"], dirs)

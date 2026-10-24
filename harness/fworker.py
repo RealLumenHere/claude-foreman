@@ -2469,11 +2469,16 @@ def build_env(worker_id, model, effort, worktree, ticket_id, cli_profile=False):
 WORKER_ADD_DIRS = _AGENTS.default_add_dirs
 
 
-def add_dirs_for(archetype, needs_dirs=None):
+def add_dirs_for(archetype, needs_dirs=None, repo=None):
     """Per-archetype --add-dir list (wq#1301), unioned with the ticket's own
     needs:dir tags (wq#1331 §3.2 — read context only; landing still goes through the
     worktree). needs_dirs is already empty when FOREMAN_NEEDS_DISABLE=1 because
     needs.parse() returned nothing.
+
+    wq#4623: `repo` (the primary the worktree is cut from) is appended too — wq#4608 got
+    a messenger worktree's ticket and no path to the live /home/lumen/messenger copy.
+    Read context only: primary_tree_guard write-freezes every router.REPO_TAGS /
+    LANE_REPO tree. capability.effective_add_dirs mirrors this.
 
     wq#1439 (BROKER_WIRING.md §2.3): every needs:dir is checked against the lint's
     own deny-list before it is unioned, so a hand-written `needs:dir(/home/lumen/.ssh)`
@@ -2494,6 +2499,8 @@ def add_dirs_for(archetype, needs_dirs=None):
     if refused:
         raise SpawnRefused("CAPABILITY_DENIED_BY_POLICY", "; ".join(refused),
                            refused=refused)
+    if repo and repo not in out:
+        out.append(repo)
     return out
 
 def scratch_grant_dirs(ticket_id):
@@ -3860,7 +3867,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # was already honoured by the router before --repo reached us. parse() returns
     # empty under FOREMAN_NEEDS_DISABLE=1 (rollback).
     ticket_needs = needs_mod.parse(ticket.get("needs"), ticket.get("detail", ""))
-    add_dirs = add_dirs_for(archetype, ticket_needs.dirs)
+    add_dirs = add_dirs_for(archetype, ticket_needs.dirs, repo=args.repo)
     add_dirs += [d for d in scratch_grant_dirs(ticket_id) if d not in add_dirs]
 
     if resume_session:

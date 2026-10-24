@@ -173,7 +173,17 @@ class RepoResolve(Gate):
     name = "repo_resolve"
 
     def check(self, g):
-        g.repo = g.fd.router.repo_for_ticket(g.t) or g.repo
+        resolved = g.fd.router.repo_for_ticket(g.t)
+        unknown = None if resolved else g.fd.router.ticket_repo_tag(g.t)[1]
+        if unknown:
+            # wq#4623: a repo tag dispatch has no row for must not fall back to the lane
+            # repo below (wq#4608's foreman worktree); page once per 24h and skip. Not
+            # parked: the fix is usually a REPO_TAGS row, which no ticket fingerprint sees.
+            reason = "repo_tag_unknown"
+            g.fd.handle_capability_skip(g.ctx.state, g.tid, g.lane, reason, unknown,
+                                        g.ctx.dry_run, g.log)
+            return Fail("lane_policy", reason, detail=unknown, terminal=True, logged=True)
+        g.repo = resolved or g.repo
         if not g.repo:
             return Fail("lane_policy", "lane_unmapped", terminal=True,
                         detail="no LANE_REPO entry — never guess a repo",
