@@ -798,6 +798,29 @@ def _primary_rung_cost(manifest, archetype):
     return price * weight
 
 
+# wq#4633: research-brief shape. The title prefix forces research-synthesis outright; the
+# two detail shapes below are strong (non-weak) research-synthesis signals, so a brief
+# filed without the prefix still clears the wq#778 gate and, as an analysis archetype,
+# shuts mechanical-edit/probe-build out of the tie-break (wq#1707). Detail LENGTH alone is
+# deliberately not a signal: long build tickets with pasted logs are common.
+_RESEARCH_TITLE_RE = re.compile(r"\s*(research|audit)\s*:", re.IGNORECASE)
+_BRIEF_LABEL_RE = re.compile(r"(?:^|[.\n])\s*(research|questions?|research questions)\s*:",
+                             re.IGNORECASE)
+BRIEF_QUESTION_MIN = 5
+
+
+def _research_brief_signals(detail):
+    """Signals that `detail` is a research brief: a 'Research:'/'Questions:' section label,
+    or >= BRIEF_QUESTION_MIN question marks (a question list)."""
+    detail = detail or ""
+    sig = []
+    if _BRIEF_LABEL_RE.search(detail):
+        sig.append("brief label Research:/Questions: (wq#4633)")
+    if detail.count("?") >= BRIEF_QUESTION_MIN:
+        sig.append(f">={BRIEF_QUESTION_MIN} questions in detail (wq#4633)")
+    return sig
+
+
 def classify_archetype(title, detail="", lane="", manifest=None):
     """Keyword rubric from §15: title/detail signals + lane bias, gated by the wq#778
     corroboration rule for opus-primary archetypes, with cost-aware tie-breaking (wq#779
@@ -821,6 +844,20 @@ def classify_archetype(title, detail="", lane="", manifest=None):
     # which is why only the former mis-routed.
     if (title or "").lstrip().lower().startswith("[lpp][stuck]"):
         return "rca-investigation", ["lpp-stuck alert (forced rca-investigation, wq#1143)"]
+    # wq#4633: a RESEARCH:/AUDIT: title prefix is the filer declaring the deliverable is a
+    # research doc. wq#4628/wq#4630 ("RESEARCH: Trigger.dev ...", "RESEARCH: LangGraph ...")
+    # matched only the weak \bresearch\b (disqualified by wq#778) plus a "how to wire into
+    # our dispatch" \bwire\b in the brief, and shipped as mechanical-edit@low. The prefix
+    # pins the analysis tier, lane-independent (fleet-fires stays first): the rubric's pick
+    # is kept only if it is itself an analysis archetype (an "AUDIT: why ... bypass" stays
+    # rca-investigation), anything else becomes research-synthesis.
+    m = _RESEARCH_TITLE_RE.match(title or "")
+    if m:
+        forced = f"title prefix {m.group(1).upper()}: (wq#4633)"
+        arch, signals = classify_archetype(title[m.end():], detail, lane, manifest)
+        if arch in _ANALYSIS_ARCHETYPES:
+            return arch, [forced] + signals
+        return "research-synthesis", [forced]
     text = f"{title or ''}\n{detail or ''}"
     by_arch = {}
     for arch, pats in _RUBRIC:
@@ -833,6 +870,9 @@ def classify_archetype(title, detail="", lane="", manifest=None):
             matched.append(p)
         if matched:
             by_arch[arch] = matched
+    brief = _research_brief_signals(detail)
+    if brief:
+        by_arch.setdefault("research-synthesis", []).extend(brief)
     # first-listed archetype in _RUBRIC order that hit at all (used for lane bias + fallback
     # signal reporting); qualifying narrows that to archs that clear the wq#778 gate.
     hit_archs = [a for a, _ in _RUBRIC if a in by_arch]

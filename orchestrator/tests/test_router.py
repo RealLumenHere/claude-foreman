@@ -151,6 +151,84 @@ def test_fleet_fires_lane_overrides_keyword_rubric():
     assert any("fleet-fires" in s for s in signals)
 
 
+# ---- wq#4633: RESEARCH:/AUDIT: briefs never land on a cheap archetype -----------------
+
+# Pinned copies of the wq#4628 / wq#4630 tickets (2026-10-25) that routed
+# mechanical-edit@low off the "how to wire into our fworker dispatch" clause.
+WQ4628 = ("RESEARCH: Trigger.dev — durable execution engine for overnight agent batches",
+          "Open-source durable execution platform for long-running tasks. Current pain: "
+          "overnight fworkers are fire-and-forget Claude chats. Trigger.dev would give us: "
+          "durable queuing with automatic retry, checkpoint/resume for multi-hour builds. "
+          "Research: self-hosted deployment (Docker), TypeScript SDK integration, how to "
+          "wire into our fworker dispatch, can it call Claude API or claude -p, PostgreSQL "
+          "state backend (we already have pgvector). Compare to: Temporal, Inngest, BullMQ.")
+WQ4630 = ("RESEARCH: LangGraph — stateful agent graphs with checkpoint-to-Postgres",
+          "LangGraph models orchestration as a directed graph with built-in checkpointers "
+          "to Postgres/SQLite/Redis. Research: how to wire the Postgres checkpointer, "
+          "planner/executor split.")
+EFFORT_FLOOR = router.EFFORT_LADDER.index("medium")
+
+
+@pytest.mark.parametrize("ticket", [WQ4628, WQ4630])
+@pytest.mark.parametrize("lane", ["build", "fleet", "pilot", "", "research"])
+def test_research_title_prefix_forces_research_synthesis_in_any_lane(m, ticket, lane):
+    arch, signals = router.classify_archetype(*ticket, lane, m)
+    assert arch == "research-synthesis"
+    assert any("wq#4633" in s for s in signals)
+
+
+@pytest.mark.parametrize("title", ["AUDIT: rename sweep of the wire protocol",
+                                   "  research : bump the probe CI", "Audit:wire it",
+                                   "AUDIT: campaign checkpoint uplift"])
+def test_audit_and_case_variants_of_the_prefix(m, title):
+    assert router.classify_archetype(title, "", "fleet", m)[0] == "research-synthesis"
+
+
+def test_prefix_keeps_an_analysis_pick_from_the_rubric(m):
+    # an AUDIT: that the rubric already reads as RCA stays RCA (opus@high), not demoted
+    arch, signals = router.classify_archetype(
+        "AUDIT: why does lpp-watchdog bypass the guard", "", "fleet", m)
+    assert arch == "rca-investigation"
+    assert any("wq#4633" in s for s in signals)
+
+
+def test_prefix_must_lead_the_title(m):
+    # "research" mid-title is still the wq#778 weak signal, not the forced prefix
+    arch, signals = router.classify_archetype("wire the research: dashboard", "", "fleet", m)
+    assert arch == "mechanical-edit"
+    assert not any("wq#4633" in s for s in signals)
+
+
+def test_fleet_fires_still_outranks_research_prefix(m):
+    assert router.classify_archetype("AUDIT: vault down", "", "fleet-fires", m)[0] == \
+        "fire-response"
+
+
+@pytest.mark.parametrize("detail", [
+    WQ4628[1],                                                         # Research: label
+    "Questions: deployment model, how to wire it in, overhead.",
+    "Is it self-hosted? Does it wire into fworker? Cost? Overhead? Postgres?",
+])
+def test_unprefixed_research_brief_is_not_a_mechanical_edit(m, detail):
+    arch, _ = router.classify_archetype("Trigger.dev durable execution", detail, "fleet", m)
+    assert arch == "research-synthesis"
+
+
+def test_brief_detector_ignores_few_questions_and_long_detail(m):
+    detail = "wire the new flag through. does it need a restart? " + "log line\n" * 400
+    assert router._research_brief_signals(detail) == []
+    assert router.classify_archetype("wire the flag", detail, "fleet", m)[0] == "mechanical-edit"
+
+
+@pytest.mark.parametrize("level", ["ok", "tight"])
+@pytest.mark.parametrize("fails", [0, 1, 2])
+def test_research_synthesis_never_selects_below_medium(m, level, fails):
+    arch, _ = router.classify_archetype(*WQ4628, "build", m)
+    rung, _ = router.select(m, arch, pressure=lambda x: level, fails=fails)
+    assert rung is not None
+    assert router.EFFORT_LADDER.index(rung.effort) >= EFFORT_FLOOR
+
+
 # ---- wq#779 F3: cost-aware rubric resolution + attempt-count downgrade trigger ---------
 
 def test_classify_cost_aware_tiebreak_on_equal_evidence(m):
