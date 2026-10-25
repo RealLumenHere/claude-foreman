@@ -143,6 +143,31 @@ the index cannot fake. `ops/DEPLOY_TRIAGE.md` is the register that rule produced
   ticket's own title/detail/notes name a bundle, since that flag otherwise skips
   identifying one at all.
 
+### A bundle is implicated by any file in it, not only its install.sh
+
+The rule this contract intends: **if a ticket's PR changes any file that a bundle's
+install.sh deploys, that bundle must be proven live before the ticket closes.**
+
+The gate does not implement that yet. `pr_ops_deploy_check` filters the PR's changed
+files through `OPS_INSTALL_RE` (`/home/lumen/bin/wq:2855`, `= /ops/wq\d+[\w.-]*/install\.sh$`,
+applied at `:3115`) and returns verdict `none` — fail open, close clean — when nothing
+matches. A commit that edits only a bundle's *payload* therefore identifies no bundle
+and runs no `--verify`:
+
+- wq#4458 (2026-10-22) and wq#4638 (2026-10-25) each added a `nodes.notes` entry to
+  `ops/wq3354-fleet-selfheal/selfheal.yaml` and nothing else. Both closed `done` on the
+  repo merge alone; both were caught only by a follow-on [verify] ticket (wq#4459,
+  wq#4639), three days apart, because nothing in the close path looked.
+- Reproduced rev-pinned against the live predicate in
+  `reports/wq4640_probes/probe_gate_gap.py` — the probe reads the regex out of the
+  running `wq` script, so widening the gate flips its expectation rather than silently
+  passing it.
+
+Until the predicate is dir-scoped (a changed file under `ops/wqNNNN-*/` whose directory
+ships an `install.sh` maps to that `install.sh`), the 24h `ops-deploy-drift` sweep above
+is the only net under a payload-only change, and a worker closing such a ticket must run
+the bundle's `--verify` by hand. Tracked as the follow-up filed by wq#4640.
+
 ## Backfill
 
 wq#1732 audited the existing bundles; wq#2985 triaged the 36 it left untracked and
