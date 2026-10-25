@@ -64,6 +64,7 @@ import acceptance as acceptance_mod
 import deferral_gate
 import hallucination_guard
 import action_gate
+import tool_ceiling
 import failure_record
 import needs as needs_mod
 import capability
@@ -2925,7 +2926,7 @@ def _observe_gateway_event(ev, state, loop_tracker):
 
 def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
                        frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
-                       first_frame_s=None):
+                       first_frame_s=None, ceiling_tracker=None):
     """Gateway-backed sibling of run_child(): identical signature and identical
     6-tuple return (state, exit_code, raw_events, killed_reason, cpu_s, pid), so a
     caller's choice of which one to call is a plain conditional (PHASE2_WIRING_SPEC.md
@@ -2950,7 +2951,8 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
         fb_state, exit_code, raw_events, killed_reason, cpu_s, pid = run_child(
             cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             frame_gap_s=frame_gap_s, post_result_grace_s=post_result_grace_s,
-            loop_tracker=loop_tracker, first_frame_s=first_frame_s)
+            loop_tracker=loop_tracker, first_frame_s=first_frame_s,
+            ceiling_tracker=ceiling_tracker)
         fb_state.gateway_backend = False
         fb_state.gateway_fallback = True
         fb_state.gateway_fallback_reason = reason
@@ -3067,7 +3069,7 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
 
 def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
               frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
-              first_frame_s=None):
+              first_frame_s=None, ceiling_tracker=None):
     """Spawn, parse stream-json, enforce watchdogs. Returns (RunState, exit_code,
     raw_events, killed_reason, cpu_s, pid).
 
@@ -3214,6 +3216,15 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
                 killed_reason = "steer"
                 log("STEER: CLI shell refusal — stopping session to resume it with the hint")
                 break
+        # wq#4634: a Bash call killed by the tool ceiling (not by the command) — stop
+        # the session so do_attempt can re-issue the command under bin/watchdog and
+        # resume this same session with the verdict (harness/TOOL_CEILING_REISSUE.md).
+        if ceiling_tracker is not None and ceiling_tracker.observe(frame):
+            killed_reason = "tool_ceiling"
+            log(f"TOOL CEILING: {ceiling_tracker.hit['class']} killed "
+                f"{ceiling_tracker.hit['command'][:120]!r} — stopping session to "
+                f"re-issue it under watchdog")
+            break
         # wq#1819: the wire nests status/resetsAt/rateLimitType under
         # rate_limit_info; the flat read never matched, so no rejection ever
         # reached the governor. Unwrap and hand the governor the inner dict.
@@ -3415,7 +3426,7 @@ def land_aider_changes(worktree, ticket_id, ticket, attempt, model, env):
 
 def run_child_aider(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
                     frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
-                    first_frame_s=None):
+                    first_frame_s=None, ceiling_tracker=None):
     """aider sibling of run_child(), same signature and 6-tuple return. `cmd` (the claude
     argv) is ignored: aider gets build_aider_cmd()'s ticket message instead.
 
@@ -3827,7 +3838,8 @@ def run_fire_ticket(args):
         return EXIT_FIRE_APPLY_INCOMPLETE
 
 
-def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=None):
+def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=None,
+               resume_text=None, ceiling_reissues=0):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
     archetype = args.archetype or "standard-engineering"
@@ -3973,8 +3985,12 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     env[action_gate.SNAPDIR_ENV] = os.path.join(run_dir(ticket_id), "snapshots")
     env[action_gate.HANDOFF_ENV] = run_dir(ticket_id)
     loop_tracker = action_gate.LoopTracker(steered=bool(steer))
+    # wq#4634: ceiling-kill detection is budgeted per attempt — once the re-issue cap
+    # is spent, the tracker goes quiet and the session judges further kills itself.
+    ceiling_tracker = tool_ceiling.CeilingTracker(
+        budget=max(0, tool_ceiling.REISSUE_MAX - ceiling_reissues))
     settings_file = resolve_worker_settings(args.repo, ticket_id)
-    cmd = build_claude_cmd(steer or prompt, args.model, args.effort, settings_file,
+    cmd = build_claude_cmd(steer or resume_text or prompt, args.model, args.effort, settings_file,
                             add_dirs=add_dirs, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin,
                             local_profile=cli_profile)
@@ -4004,13 +4020,32 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     state, exit_code, events, killed_reason, cpu_s, child_pid = run_fn(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
         frame_gap_s=turn_gap_s, post_result_grace_s=args.post_result_grace,
-        loop_tracker=loop_tracker, first_frame_s=first_frame_s)
+        loop_tracker=loop_tracker, first_frame_s=first_frame_s,
+        ceiling_tracker=ceiling_tracker)
     if killed_reason == "steer" and state.session_id:
         # wq#2138: same attempt number — a harness-side refusal must not cost the
         # ticket an attempt. The resumed tracker is `steered`, so a second refusal
         # is a real loop_break, classified PERMISSION_LOOP (harness defect).
         return do_attempt(args, attempt, resume_session=state.session_id,
-                           prior_worktree=worktree, steer=loop_tracker.steer)
+                           prior_worktree=worktree, steer=loop_tracker.steer,
+                           ceiling_reissues=ceiling_reissues)
+    if killed_reason == "tool_ceiling" and state.session_id and ceiling_tracker.hit:
+        # wq#4634: the ceiling kill is a harness/transport event, not the ticket's
+        # failure — same attempt number, like the steer above. reissue() blocks
+        # (bounded by the watchdog timeout + slack) and heartbeats the claim lease
+        # while it waits; it returns the verdict/advisory line the resumed session
+        # gets as its prompt. Design: harness/TOOL_CEILING_REISSUE.md.
+        verdict = tool_ceiling.reissue(
+            ceiling_tracker.hit,
+            label=f"fw{ticket_id}-a{attempt}r{ceiling_reissues + 1}",
+            cwd=worktree, env=env, run_dir_path=run_dir(ticket_id),
+            heartbeat=lambda: wq_heartbeat(ticket_id),
+            heartbeat_every_s=HEARTBEAT_INTERVAL_S, log=log,
+            mask=lambda t: masking.mask_text(t)[0])
+        if verdict:
+            return do_attempt(args, attempt, resume_session=state.session_id,
+                               prior_worktree=worktree, resume_text=verdict,
+                               ceiling_reissues=ceiling_reissues + 1)
     if killed_reason == "loop_break":
         # Layer 2 handoff: "SESSION PAUSED: repeated unsuccessful approach detected.
         # Your work has been preserved for a reviewing agent." — written to the run
@@ -4174,6 +4209,10 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         "exit_code": exit_code, "cpu_s": cpu_s, "oauth_token_used": oauth_token_used,
         "oom_journal": oom_journal,
         "killed_reason": killed_reason, "loop_reason": loop_tracker.tripped,
+        # wq#4634: how many ceiling re-issues this attempt had already consumed, plus
+        # the unhandled hit when a tool_ceiling kill fell through to classification.
+        "ceiling_reissues": ceiling_reissues,
+        "ceiling_hit": ceiling_tracker.hit,
         "turns": state.turns,
         "session_id": state.session_id, "resumed_from": resume_session,
         "saw_limit": state.saw_limit, "latest_resets_at": state.latest_resets_at,
