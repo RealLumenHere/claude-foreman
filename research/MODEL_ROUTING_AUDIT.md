@@ -178,6 +178,24 @@ each has a verdict in `ADJUDICATED` rather than being filtered out. **Stale clai
 `minerva/context/fleet_tools.yaml:55-58` says `lumen_deep_research_orchestrator` "runs via
 service", but no installed unit execs it and the newest file in `scratch/deep_research_output/`
 is dated 2026-07-13 — the fleet-tools entry should be corrected or the script retired.
+
+**Still stale as of wq#4626 (2026-10-25), with the gap now structural, not procedural.**
+wq#3911 (PR #1889) wrote the correction and wq#3916 (PR #1893) fixed its malformed
+`patch` hunk header, but the live file is unchanged — `minerva/context/fleet_tools.yaml:49-59`
+still reads "drain it continuously" / "runs via service" (re-read directly on this ticket).
+Two independent walls, confirmed live here, not just inherited from those tickets: (1)
+`guard.sh` (wq#1719/wq#900) refuses `Edit`/`Write` inside `/home/lumen/minerva` for every
+fworker lane, BUILD or OPS — it is not a lane-specific gap a different worker grant could
+clear; (2) `minerva/.gitignore:18` ignores `context/` entirely, so `fleet_tools.yaml` has
+no git history and no PR path even exists to land a correction through review — the
+"hand-apply the staged diff" plan in `ops/wq3911-fleet-tools-stale-orchestrator-claim/`
+has no fworker session that can ever run it. Same shape as the `systemctl`-mutate gap
+recorded in `kb/ISSUE-LOG.md` #377/#378 (do not keep re-dispatching the live-apply step to
+a BUILD/OPS lane expecting a different grant to clear it): this needs either a direct
+Frank edit outside the fworker harness, or a dedicated out-of-band sync job exempted from
+`guard.sh`'s primary-tree rule. Meanwhile `scratch/research_prompts/` keeps accumulating
+undrained prompts no lane with this grant set can even list (outside every current
+`--add-dir`), most recently `twn4-multitech3-linux-reflash.txt` (2026-10-25).
 `openai/<model>` strings in `agent/litellm_config.yaml` are LiteLLM's provider prefix for
 OpenAI-compatible local endpoints (Ollama on isis, hathor, nephthys, khepri, ptah, sekhmet) and
 `api.z.ai`, not `api.openai.com`; the string `api.openai.com` appears in no searched source file,
