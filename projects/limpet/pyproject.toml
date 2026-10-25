@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "limpet-agent"
+version = "0.1.0"
+description = "Limpet Agent Processor -- LangGraph stateful-graph pilot (wq#4636)"
+requires-python = ">=3.11"
+dependencies = [
+    # langgraph 1.2.5 is already present fleet-wide (wq#4630 research, ISSUE-LOG #655).
+    "langgraph>=1.2.5",
+    "langgraph-checkpoint-postgres",
+    "psycopg[binary,pool]",
+    "langchain-anthropic",
+    "langchain-mcp-adapters",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
