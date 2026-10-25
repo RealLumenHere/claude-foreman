@@ -1,0 +1,14 @@
+[Unit]
+Description=wq#4629 commander watchdog -- wake the drain when a lumen-job completion marker appears
+
+[Path]
+# Same pattern as research/systemd/lumen-research-sandbox.path (wq#3759):
+# DirectoryNotEmpty= is systemd.path's wrapper over inotify (IN_CREATE on the
+# watched dir) -- zero CPU while idle, fires the instant lumen-job-notify.sh
+# writes a marker. Create the dir as lumen before enabling (MakeDirectory=
+# would make it root-owned).
+DirectoryNotEmpty=/home/lumen/var/commander-watchdog/done
+Unit=commander-job-notify.service
+
+[Install]
+WantedBy=paths.target

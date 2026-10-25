@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#4629 commander watchdog drain -- ntfy + optional claude -p injection, then clear markers
+Documentation=file:///home/lumen/foreman/research/wq4629_commander_watchdog_survival.md
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/foreman
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/lumen/bin:/home/lumen/.npm-global/bin
+ExecStart=/home/lumen/foreman/ops/wq4629-commander-watchdog-a1/drain_done_dir.sh
+TimeoutStartSec=120
