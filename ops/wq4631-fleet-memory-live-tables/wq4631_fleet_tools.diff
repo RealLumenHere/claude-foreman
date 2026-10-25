@@ -1,0 +1,11 @@
+--- a/context/fleet_tools.yaml
++++ b/context/fleet_tools.yaml
+@@ -180,7 +180,7 @@
+         invoke: "claude mcp get gitea   |   smoke: /home/lumen/.local/share/mcp/_guard/venv/bin/python -I /home/lumen/foreman/ops/wq4514-mcp-install-batch/smoke_gitea.py --skip-issue"
+       - name: fleet-memory (MCP, dbhub)
+         path: /home/lumen/.local/share/mcp/dbhub/1.5.0/launch.sh
+-        use: "fleet_memory Postgres on lumen-pgvector (fleet_facts, fleet_devices, fleet_decisions, agent_episodes, memory_events, memory_sources, recipes) as the SELECT-only role mcp_ro. execute_sql + search_objects, 500-row cap, 15s timeout. There is no table named facts. NEVER point it at minerva.db (fleet-wide lock incidents 2026-09-28)."
++        use: "fleet_memory Postgres on lumen-pgvector (live tables: memory_events, memory_sources, recipes; retired_fleet_facts, retired_fleet_devices, retired_fleet_decisions, retired_agent_episodes are frozen history since wq#4554) as the SELECT-only role mcp_ro. execute_sql + search_objects, 500-row cap, 15s timeout. There is no table named facts. NEVER point it at minerva.db (fleet-wide lock incidents 2026-09-28)."
+         invoke: "claude mcp get fleet-memory   |   re-grant after a schema change: GRANT SELECT ON ALL TABLES IN SCHEMA public TO mcp_ro (RUNBOOK.md)"
+       - name: docker (MCP, READ-ONLY)
+         path: /home/lumen/.local/share/mcp/docker-mcp/0.3.0/launch.sh

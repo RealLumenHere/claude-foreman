@@ -270,7 +270,7 @@ verify_postgres() {
   vgen "$d/launch.sh" emit_launcher_postgres
   v_secret_file "$DB_PW"
   v_registered fleet-memory "$d/launch.sh"
-  v_launcher_lists "$d/launch.sh" "$(n_items "$DBHUB_ALLOW")" execute_sql '{"sql":"SELECT count(*) FROM fleet_facts"}'
+  v_launcher_lists "$d/launch.sh" "$(n_items "$DBHUB_ALLOW")" execute_sql '{"sql":"SELECT count(*) FROM memory_events"}'
 }
 
 verify_fleet_state() {
