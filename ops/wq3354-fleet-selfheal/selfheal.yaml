@@ -209,6 +209,31 @@ nodes:                  # CLASS 6
        a real page, not a nap. This note just carries the context so the next page
        doesn't re-derive it or redispatch fresh build work against an already-exhausted
        remote diagnosis."
+    toilet: "wq#4638 (2026-10-25): offline on tailscale since 2026-10-25T21:00:00.1Z (30+
+       min). lumen_state's toilet.status='online' is dated 2026-06-17 and flagged
+       [UNVERIFIABLE -- no probe], same as every other toilet.* fact (hostname, lan_ip,
+       location, tailscale_ip) -- none have been reprobed since seeding.
+       `lumen_state.py history toilet availability` is empty, the same no-toggle-history
+       gap as rt-ax86u/farida, so this is the first selfheal page recorded for this node,
+       not a repeat. Despite the 'toilet-940X5N' tailscale hostname reading like a Samsung
+       Galaxy Book model code (UNVERIFIED guess, per toilet.hostname's own note), toilet is
+       NOT a phone/laptop: wq#753's opsaudit (2026-08-23) VERIFIED node_exporter live on
+       toilet (100.70.94.19:9100 -> 200, reports/opsaudit_a3_node_exporter.md:30) and
+       grouped it with isis/lumen/nephthys as one of only 4 hosts exposing amdgpu sysfs
+       (reports/opsaudit_a3_node_exporter.md:123) -- a real Linux compute host with an AMD
+       GPU, not a mobile device. toilet.lan_ip=192.168.50.111 is a different subnet from the
+       192.168.8.x fleet LAN and toilet.location='Frederick MD' (both UNVERIFIABLE),
+       consistent with a remote-site box reachable only over tailscale, like apep's off-LAN
+       WiFi unit -- so no LAN-side reprobe is possible here. A live reprobe attempt this
+       ticket (`fleet-exec run toilet uptime`) returned DENY grant:grant_missing_env, the
+       same BUILD-lane exec-grant gap already logged for policy/classification tickets
+       (ISSUE-LOG #192), not fleet evidence either way per CLAUDE.md instinct 8. No Frank
+       power_policy and no self-idle timer like hathor's, and no Frank off-decision like
+       apis/pbox/seshat/be3600/3dprinter -- nothing on record marks toilet as meant to be
+       off or self-idling. On the facts actually on record this stays a live fleet node
+       held to the same bar as rt-ax86u/farida/sia: one unexplained outage with no ignore/
+       sleepers-qualifying fact behind it is a real page, not nodes.ignore/sleepers. This
+       note just carries the context so the next page on toilet doesn't re-derive it."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
