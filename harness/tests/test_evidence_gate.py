@@ -319,6 +319,55 @@ def test_ops_install_citation_without_deploy_target_is_rejected(worktree):
     assert "deploy_target" in ac2["observed"]
 
 
+def test_ops_payload_citation_without_deploy_target_is_rejected(worktree):
+    """wq#4643 (wq#4458/wq#4638 shape): citing a bundle's payload, not its install.sh,
+    implicates the bundle all the same — the old install.sh-only regex let this through."""
+    _write_ops_artifact(worktree)
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/lumen_state.py:1"}]},
+        str(worktree), base_ref="main")
+    assert not result["ok"]
+    ac2 = [f for f in result["failed"] if f["id"] == "AC2"][0]
+    assert "deploy_target" in ac2["observed"]
+    assert "wq1632-fake-fix/install.sh" in ac2["observed"]
+
+
+def test_ops_nested_payload_citation_implicates_the_bundle_install(worktree):
+    art_dir = _write_ops_artifact(worktree)
+    (art_dir / "conf").mkdir()
+    (art_dir / "conf" / "unit.service").write_text("[Service]\n")
+    _git(worktree, "add", "-A")
+    _git(worktree, "commit", "-q", "-m", "nested payload")
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/conf/unit.service:1"}]},
+        str(worktree), base_ref="main")
+    assert not result["ok"]
+    ac2 = [f for f in result["failed"] if f["id"] == "AC2"][0]
+    assert "deploy_target" in ac2["observed"]
+
+
+def test_ops_dir_without_install_sh_needs_no_deploy_target(worktree):
+    """A file under ops/wqNNNN-*/ whose bundle ships no install.sh deploys nothing."""
+    notes = worktree / "foreman" / "ops" / "wq1700-notes-only"
+    notes.mkdir(parents=True)
+    (notes / "README.md").write_text("findings only\n")
+    _git(worktree, "add", "-A")
+    _git(worktree, "commit", "-q", "-m", "notes-only bundle")
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1700-notes-only/README.md:1"}]},
+        str(worktree), base_ref="main")
+    assert result["ok"], result["failed"]
+
+
 _DEPLOY_VERIFY = ("premise: re-checked lumen_state.py's lifecycle-closure bug is still "
                   "live on the target before deploying; "
                   "probe: dry-run diff of install.sh's cp against the live target showed "
@@ -335,6 +384,21 @@ def test_ops_install_citation_with_matching_deploy_target_is_accepted(worktree, 
         _acceptance_doc(),
         {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
                       {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                       "deploy_target": str(live), "deploy_verify": _DEPLOY_VERIFY}]},
+        str(worktree), base_ref="main")
+    assert result["ok"], result["failed"]
+
+
+def test_ops_payload_citation_with_matching_deploy_target_is_accepted(worktree, tmp_path):
+    _write_ops_artifact(worktree)
+    live = tmp_path / "target" / "lumen_state.py"
+    live.parent.mkdir()
+    live.write_text("# fixed lifecycle closure logic\n")
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/lumen_state.py:1",
                        "deploy_target": str(live), "deploy_verify": _DEPLOY_VERIFY}]},
         str(worktree), base_ref="main")
     assert result["ok"], result["failed"]

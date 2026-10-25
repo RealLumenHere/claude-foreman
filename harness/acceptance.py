@@ -771,7 +771,24 @@ def _replay(criterion, worktree, evidence_dir, runner):
 # citation check rather than adding a parallel gate: an ops-install citation additionally
 # needs a `deploy_target` naming a live file whose bytes match one the artifact ships (same
 # rule bin/wq's `ops_deploy_check` enforces on `wq done`, applied here to evidence.json).
-_OPS_INSTALL_RE = re.compile(r"(?:^|/)ops/wq\d+[\w.-]*/install\.sh$")
+#
+# wq#4643: the rule is bundle-scoped, not install.sh-scoped (ops/VERIFY_CONTRACT.md "A bundle
+# is implicated by any file in it"): wq#4458/wq#4638 cited only a payload
+# (ops/wq3354-fleet-selfheal/selfheal.yaml) and skipped the check. Any file under
+# ops/wqNNNN-*/ implicates that bundle's install.sh when it exists — same predicate as
+# bin/wq's _ops_bundle_install (OPS_BUNDLE_DIR_RE).
+_OPS_BUNDLE_DIR_RE = re.compile(r"(?:^|/)ops/wq\d+[\w.-]*/(?=.)")
+
+
+def _ops_bundle_install(worktree, rel):
+    """Absolute path of the install.sh of the ops/wqNNNN-* bundle repo-relative `rel` sits
+    in, or None when it sits in no bundle or the bundle ships no install.sh. Matched on
+    `rel`, so a worktree that itself lives under an ops/wq* path cannot implicate it."""
+    m = _OPS_BUNDLE_DIR_RE.search(rel)
+    if not m:
+        return None
+    install = os.path.join(worktree, rel[:m.end()] + "install.sh")
+    return install if os.path.isfile(install) else None
 
 
 def _sha256(path):
@@ -922,8 +939,9 @@ def _check_citation(entry, worktree, changed):
     norm = os.path.normpath(rel)
     if norm not in {os.path.normpath(c) for c in changed}:
         return False, f"{rel} is not touched by this branch's diff", ""
-    if _OPS_INSTALL_RE.search(norm):
-        ok, why = _ops_deploy_evidence(entry, abspath)
+    install = _ops_bundle_install(os.path.realpath(worktree), norm)
+    if install:
+        ok, why = _ops_deploy_evidence(entry, install)
         if not ok:
             return False, why, ""
     return True, f"{rel}:{start}-{end} in diff", ""

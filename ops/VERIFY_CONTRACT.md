@@ -168,6 +168,13 @@ ships an `install.sh` maps to that `install.sh`), the 24h `ops-deploy-drift` swe
 is the only net under a payload-only change, and a worker closing such a ticket must run
 the bundle's `--verify` by hand. Tracked as the follow-up filed by wq#4640.
 
+Both halves are now dir-scoped. `wq done` maps a changed file to its bundle's
+`install.sh` via `_ops_bundle_install` / `OPS_BUNDLE_DIR_RE` (wq#4641, lumen-bin
+`b8aa50b`). fworker's evidence gate does the same for a citation: a citation of any file
+under an `ops/wqNNNN-*/` that ships an `install.sh` needs a `deploy_target`
+(`harness/acceptance.py` `_ops_bundle_install`, wq#4643). Before wq#4643 the gate only
+checked `install.sh` citations.
+
 ## Backfill
 
 wq#1732 audited the existing bundles; wq#2985 triaged the 36 it left untracked and
