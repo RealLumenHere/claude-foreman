@@ -260,7 +260,7 @@ stage3_inject_limpet_packages() {
   # Overlay tree (docs/desktop-spec.md panel/launchers, docs/branding-spec.md
   # LightDM greeter config) copies onto the chroot verbatim.
   cp -a "$HERE/overlay/." "$CHROOT/"
-  chmod +x "$CHROOT"/opt/limpet/panel/*.sh
+  chmod +x "$CHROOT"/opt/limpet/panel/*.sh 2>/dev/null || true
 
   # limpet-tools CLI + registry + HAL daemon + MCP meta-server: the real
   # component code, not a reference to where it lives.
@@ -437,7 +437,7 @@ stage4c_build_pip_tools() {
       [ \"\$got\" = '$sha256' ] || { echo \"stage4c: sha256 mismatch for $package==$ver: got \$got want $sha256\" >&2; exit 1; }
       PIPX_HOME=/usr/local/share/pipx PIPX_BIN_DIR=/usr/local/bin pipx install /tmp/dl/*
     "
-    [ -x "$out/usr/local/bin/$bin" ] || fail "pipx install of $package $ver produced no $out/usr/local/bin/$bin"
+    { [ -x "$out/usr/local/bin/$bin" ] || [ -L "$out/usr/local/bin/$bin" ]; } || fail "pipx install of $package $ver produced no $out/usr/local/bin/$bin"
     log "stage4c: built /usr/local/bin/$bin ($(sha256sum "$out/usr/local/bin/$bin" | cut -c1-16)...)"
   done < <(jq -c '.pip_packages[]' "$manifest")
   [ -d "$out/usr/local/share/pipx" ] && cp -a "$out/usr/local/share/pipx/." "$CHROOT/usr/local/share/pipx/"
@@ -505,7 +505,7 @@ stage5_bundle_hardware_book() {
   mkdir -p "$CHROOT/opt/limpet/hardware-book"
   cp -a "$LIMPET_ROOT/hardware-book/." "$CHROOT/opt/limpet/hardware-book/"
   local n
-  n="$(find "$LIMPET_ROOT/hardware-book" -name '*.toml' | grep -c ^)"
+  n="$(find "$LIMPET_ROOT/hardware-book" -name '*.toml' | wc -l)"
   log "stage5/10: bundled $n profile(s) (ticket target is 200+; this stage bundles whatever exists today and grows automatically as Tier 1/2 tickets land -- no count is hardcoded)"
 }
 

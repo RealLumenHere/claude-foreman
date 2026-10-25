@@ -107,7 +107,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "unblob",
-      "install_evidence": "wq#4081: PyPI unblob 26.6.4 == foreman verified version; the classifier's 'binary-download' hit was this same wheel."
+      "install_evidence": "wq#4081: PyPI unblob 26.6.4 == foreman verified version; the classifier's 'binary-download' hit was this same wheel.",
+      "trust_tier": "core"
     },
     {
       "name": "binwalk",
@@ -144,7 +145,8 @@
       "priority": "core",
       "package": "binwalk",
       "install_evidence": "wq#4097: v3 (Rust) crates.io binwalk 3.1.0, built --locked in ubuntu:26.04 (cargo 1.93.1) in 51s after adding libfontconfig1-dev; scan + -e extraction smoke-tested. apt candidate on Lumen (Ubuntu 26.04) is 2.4.3 (v2, python); PyPI binwalk is a 2373-byte 2.1.0 stub.",
-      "version": "3.1.0"
+      "version": "3.1.0",
+      "trust_tier": "core"
     },
     {
       "name": "fwanalyzer",
@@ -172,7 +174,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "https://github.com/cruise-automation/fwanalyzer",
-      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: 1.4.4 has no Linux assets (Go build). Foreman previously said binary."
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: 1.4.4 has no Linux assets (Go build). Foreman previously said binary.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "fwtriage",
@@ -193,7 +197,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "https://github.com/taffy210/fw-triage",
-      "install_evidence": "wq#4081: PyPI 'fwtriage' 404. Foreman previously said pip."
+      "install_evidence": "wq#4081: PyPI 'fwtriage' 404. Foreman previously said pip.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "ghidra",
@@ -237,7 +243,8 @@
       "disk_size_estimate": "large",
       "priority": "core",
       "package": "ghidra_12.1.4_PUBLIC_20260921.zip",
-      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: Ghidra_12.1.4_build. apt 'ghidra' absent; crates.io 'ghidra' is unrelated."
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: Ghidra_12.1.4_build. apt 'ghidra' absent; crates.io 'ghidra' is unrelated.",
+      "trust_tier": "core"
     },
     {
       "name": "radare2",
@@ -280,7 +287,8 @@
       "disk_size_estimate": "medium",
       "priority": "core",
       "package": "radare2",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 6.0.7+ds-1."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 6.0.7+ds-1.",
+      "trust_tier": "core"
     },
     {
       "name": "llm4decompile",
@@ -307,7 +315,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "https://github.com/albertan017/LLM4Decompile",
-      "install_evidence": "wq#4081: PyPI 'llm4decompile' 404; model weights come from Hugging Face. Foreman previously said pip."
+      "install_evidence": "wq#4081: PyPI 'llm4decompile' 404; model weights come from Hugging Face. Foreman previously said pip.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "ifda",
@@ -335,7 +345,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "https://github.com/cn0xroot/IFDA",
-      "install_evidence": "wq#4081: upstream repo HEAD 200 on github.com, 2026-10-16; no GitHub releases. Foreman previously said binary."
+      "install_evidence": "wq#4081: upstream repo HEAD 200 on github.com, 2026-10-16; no GitHub releases. Foreman previously said binary.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "cutter",
@@ -364,7 +376,8 @@
       "disk_size_estimate": "medium",
       "priority": "optional",
       "package": "Cutter-v2.5.0-Linux-x86_64.AppImage",
-      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v2.5.0 Linux AppImage."
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v2.5.0 Linux AppImage.",
+      "trust_tier": "vetted"
     },
     {
       "name": "frida",
@@ -403,7 +416,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "frida-tools",
-      "install_evidence": "wq#4081: PyPI frida-tools 14.11.0 (Frida CLI, home frida.re) pulls PyPI frida 17.23.3. npm/crates 'frida' not used. wq#4116: the top-level 'version' field above had been left at 17.18.0 -- that is frida-tools' pinned `frida` core dependency range (pyproject.toml: frida>=17.10.0,<18.0.0), not a frida-tools release; no frida-tools 17.x exists on PyPI. Corrected to 14.11.0 (PyPI JSON API, verified 2026-10-17), whose sdist sha256 is pinned in gen_tool_packages.py PIP_RECIPES."
+      "install_evidence": "wq#4081: PyPI frida-tools 14.11.0 (Frida CLI, home frida.re) pulls PyPI frida 17.23.3. npm/crates 'frida' not used. wq#4116: the top-level 'version' field above had been left at 17.18.0 -- that is frida-tools' pinned `frida` core dependency range (pyproject.toml: frida>=17.10.0,<18.0.0), not a frida-tools release; no frida-tools 17.x exists on PyPI. Corrected to 14.11.0 (PyPI JSON API, verified 2026-10-17), whose sdist sha256 is pinned in gen_tool_packages.py PIP_RECIPES.",
+      "trust_tier": "core"
     },
     {
       "name": "qemu-user",
@@ -439,7 +453,8 @@
       "disk_size_estimate": "medium",
       "priority": "core",
       "package": "qemu-user",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:10.2.1+ds-1ubuntu3.2."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:10.2.1+ds-1ubuntu3.2.",
+      "trust_tier": "core"
     },
     {
       "name": "qemu-system",
@@ -477,7 +492,8 @@
       "disk_size_estimate": "medium",
       "priority": "core",
       "package": "qemu-system-arm",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:10.2.1+ds-1ubuntu3.2 (== foreman /usr/bin/qemu-system-arm)."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1:10.2.1+ds-1ubuntu3.2 (== foreman /usr/bin/qemu-system-arm).",
+      "trust_tier": "core"
     },
     {
       "name": "gdb-multiarch",
@@ -516,7 +532,8 @@
       "disk_size_estimate": "medium",
       "priority": "core",
       "package": "gdb-multiarch",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 17.1-2ubuntu1."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 17.1-2ubuntu1.",
+      "trust_tier": "core"
     },
     {
       "name": "qiling",
@@ -552,7 +569,8 @@
       "disk_size_estimate": null,
       "priority": "recommended",
       "package": "qiling",
-      "install_evidence": "wq#4081: PyPI qiling 1.4.6, home qiling.io."
+      "install_evidence": "wq#4081: PyPI qiling 1.4.6, home qiling.io.",
+      "trust_tier": "vetted"
     },
     {
       "name": "halucinator",
@@ -580,7 +598,8 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "halucinator",
-      "install_evidence": "wq#4081: PyPI halucinator 1.9.0 project_urls=github.com/halucinator/halucinator."
+      "install_evidence": "wq#4081: PyPI halucinator 1.9.0 project_urls=github.com/halucinator/halucinator.",
+      "trust_tier": "community"
     },
     {
       "name": "firmwire",
@@ -608,7 +627,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "https://github.com/firmwire/firmwire",
-      "install_evidence": "wq#4081: PyPI 'firmwire' 404. Foreman previously said pip."
+      "install_evidence": "wq#4081: PyPI 'firmwire' 404. Foreman previously said pip.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "fuzzware",
@@ -639,7 +660,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "https://github.com/fuzzware-fuzzer/fuzzware",
-      "install_evidence": "wq#4081: PyPI 'fuzzware' 404. Foreman previously said pip."
+      "install_evidence": "wq#4081: PyPI 'fuzzware' 404. Foreman previously said pip.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "pretender",
@@ -668,7 +691,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "https://github.com/ucsb-seclab/pretender",
-      "install_evidence": "wq#4081: Project url github.com/mit-ll/pretender is 404; ucsb-seclab/pretender (foreman url) exists. PyPI 'pretender' 404; npm 'pretender' is a JS mock-server library. Foreman previously said pip."
+      "install_evidence": "wq#4081: Project url github.com/mit-ll/pretender is 404; ucsb-seclab/pretender (foreman url) exists. PyPI 'pretender' 404; npm 'pretender' is a JS mock-server library. Foreman previously said pip.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "openocd",
@@ -701,7 +726,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "openocd",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.12.0-3build3."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.12.0-3build3.",
+      "trust_tier": "core"
     },
     {
       "name": "flashrom",
@@ -732,7 +758,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "flashrom",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.6.0-2ubuntu1.1."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.6.0-2ubuntu1.1.",
+      "trust_tier": "core"
     },
     {
       "name": "rkdeveloptool",
@@ -762,7 +789,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "rkdeveloptool",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.32+pine64git20240226.17823e9-2. Foreman previously said binary (Maksoor's copy is a source build in /usr/local/sbin)."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.32+pine64git20240226.17823e9-2. Foreman previously said binary (Maksoor's copy is a source build in /usr/local/sbin).",
+      "trust_tier": "vetted"
     },
     {
       "name": "mtkclient",
@@ -794,7 +822,8 @@
       "priority": "core",
       "package": "git+https://github.com/bkerler/mtkclient",
       "commit": "7cb40e727727dfe3faa065eefb29b16ed29bbdf1",
-      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/mtk); PyPI 'mtkclient' 404. wq#4116: 'commit' is `git ls-remote https://github.com/bkerler/mtkclient HEAD`, verified 2026-10-17 -- mtkclient cuts no PyPI/tagged releases, so stage4c installs from this pinned commit, never a branch (gen_tool_packages.py PIP_GIT_RECIPES)."
+      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/mtk); PyPI 'mtkclient' 404. wq#4116: 'commit' is `git ls-remote https://github.com/bkerler/mtkclient HEAD`, verified 2026-10-17 -- mtkclient cuts no PyPI/tagged releases, so stage4c installs from this pinned commit, never a branch (gen_tool_packages.py PIP_GIT_RECIPES).",
+      "trust_tier": "vetted"
     },
     {
       "name": "edl",
@@ -826,7 +855,8 @@
       "priority": "core",
       "package": "git+https://github.com/bkerler/edl",
       "commit": "1cda1a616748d608667b2d13b73a28d3197ceb45",
-      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/edl). PyPI 'edl' is an unrelated EDL-file reader. wq#4116: 'commit' is `git ls-remote https://github.com/bkerler/edl HEAD`, verified 2026-10-17 -- edl cuts no PyPI/tagged releases, so stage4c installs from this pinned commit, never a branch (gen_tool_packages.py PIP_GIT_RECIPES)."
+      "install_evidence": "wq#4081: pip from git (foreman verified /opt/re-venv/bin/edl). PyPI 'edl' is an unrelated EDL-file reader. wq#4116: 'commit' is `git ls-remote https://github.com/bkerler/edl HEAD`, verified 2026-10-17 -- edl cuts no PyPI/tagged releases, so stage4c installs from this pinned commit, never a branch (gen_tool_packages.py PIP_GIT_RECIPES).",
+      "trust_tier": "vetted"
     },
     {
       "name": "heimdall",
@@ -855,7 +885,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "heimdall-flash",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.1.0-1build1."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.1.0-1build1.",
+      "trust_tier": "core"
     },
     {
       "name": "spreadtrum_flash",
@@ -882,7 +913,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "https://github.com/ilyakurdyukov/spreadtrum_flash",
-      "install_evidence": "wq#4081: C tool, no packaged artifact. Foreman previously said pip."
+      "install_evidence": "wq#4081: C tool, no packaged artifact. Foreman previously said pip.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "hackrf",
@@ -910,7 +943,8 @@
       "disk_size_estimate": "small",
       "priority": "optional",
       "package": "hackrf",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2026.01.3-1."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2026.01.3-1.",
+      "trust_tier": "core"
     },
     {
       "name": "sigrok-cli",
@@ -941,7 +975,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "sigrok-cli",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.7.2-1build3."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 0.7.2-1build3.",
+      "trust_tier": "core"
     },
     {
       "name": "sootty",
@@ -970,7 +1005,8 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "sootty",
-      "install_evidence": "wq#4081: PyPI sootty 1.0 home=github.com/Ben1152000/sootty."
+      "install_evidence": "wq#4081: PyPI sootty 1.0 home=github.com/Ben1152000/sootty.",
+      "trust_tier": "vetted"
     },
     {
       "name": "netzob",
@@ -999,7 +1035,8 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "netzob",
-      "install_evidence": "wq#4081: PyPI netzob 2.0.0 home=github.com/netzob/netzob."
+      "install_evidence": "wq#4081: PyPI netzob 2.0.0 home=github.com/netzob/netzob.",
+      "trust_tier": "vetted"
     },
     {
       "name": "jadx",
@@ -1034,7 +1071,8 @@
       "disk_size_estimate": "medium",
       "priority": "recommended",
       "package": "jadx-1.5.6.zip",
-      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v1.5.6."
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v1.5.6.",
+      "trust_tier": "core"
     },
     {
       "name": "apktool",
@@ -1066,7 +1104,8 @@
       "disk_size_estimate": "small",
       "priority": "optional",
       "package": "apktool",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.7.0+dfsg-7.1ubuntu1."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 2.7.0+dfsg-7.1ubuntu1.",
+      "trust_tier": "core"
     },
     {
       "name": "scrcpy",
@@ -1093,7 +1132,8 @@
       "disk_size_estimate": "small",
       "priority": "optional",
       "package": "scrcpy",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 3.3.4-1."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 3.3.4-1.",
+      "trust_tier": "core"
     },
     {
       "name": "rea",
@@ -1130,7 +1170,8 @@
       "disk_size_estimate": "medium",
       "priority": "optional",
       "package": "rea-agents",
-      "install_evidence": "wq#4081: npm rea-agents 6.5.0 repository=github.com/morluto/rea; its package.json bin maps 'rea'. npm 'rea' is an unrelated connect.router wrapper (stagas), PyPI 'rea' is radio-astronomy software."
+      "install_evidence": "wq#4081: npm rea-agents 6.5.0 repository=github.com/morluto/rea; its package.json bin maps 'rea'. npm 'rea' is an unrelated connect.router wrapper (stagas), PyPI 'rea' is radio-astronomy software.",
+      "trust_tier": "vetted"
     },
     {
       "name": "ghidra-mcp",
@@ -1160,7 +1201,8 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": null,
-      "install_evidence": "wq#4081: Foreman entry comes from limpet/examples/ghidra-mcp.toml, whose git source is the placeholder github.com/example/limpet-ghidra-mcp. Not assumed to be bethington/ghidra-mcp. Foreman previously said pip."
+      "install_evidence": "wq#4081: Foreman entry comes from limpet/examples/ghidra-mcp.toml, whose git source is the placeholder github.com/example/limpet-ghidra-mcp. Not assumed to be bethington/ghidra-mcp. Foreman previously said pip.",
+      "trust_tier": "vetted"
     },
     {
       "name": "searchsploit",
@@ -1188,12 +1230,13 @@
       "redistribution_posture": "bundle",
       "trust": "community",
       "provenance": "limpet/registry/tools.d/searchsploit.yaml (wq#3942; MCP server ops/wq3942-limpet-exploit-db-a1/server.py); license_risk/redistribution_posture added by wq#4050: fetched LICENSE.md directly from the entry's own url (gitlab.com/exploit-database/exploitdb) -- GPLv2. Same posture as the tshark precedent: bundling into the commercial ISO permitted with a written source offer.",
-      "install_method": "source-build",
+      "install_method": "apt",
       "mcp_status": "has_server",
       "disk_size_estimate": "medium",
       "priority": "optional",
-      "package": "https://gitlab.com/exploit-database/exploitdb",
-      "install_evidence": "wq#4081: apt 'exploitdb' is absent on Ubuntu 26.04 (Kali-only), despite the foreman entry's earlier apt claim; gitlab repo 200."
+      "package": "exploitdb",
+      "install_evidence": "wq#4081: apt 'exploitdb' is absent on Ubuntu 26.04 (Kali-only), despite the foreman entry's earlier apt claim; gitlab repo 200.",
+      "trust_tier": "core"
     },
     {
       "name": "component-id",
@@ -1227,7 +1270,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": null,
-      "install_evidence": "wq#4081: Limpet-native plugin (limpet/examples/component-id.toml, wq#3900); no upstream package."
+      "install_evidence": "wq#4081: Limpet-native plugin (limpet/examples/component-id.toml, wq#3900); no upstream package.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "fw-diff",
@@ -1261,7 +1306,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": null,
-      "install_evidence": "wq#4081: Limpet-native plugin (limpet/examples/fw-diff.toml, wq#3906); no upstream package."
+      "install_evidence": "wq#4081: Limpet-native plugin (limpet/examples/fw-diff.toml, wq#3906); no upstream package.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "gepetto",
@@ -1294,7 +1341,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": null,
-      "install_evidence": "wq#4081: IDA Pro plugin: needs proprietary IDA, so no Limpet-side package; v1.5.1 release has no assets. npm 'gepetto' is a Jira worklog CLI. Foreman previously said binary."
+      "install_evidence": "wq#4081: IDA Pro plugin: needs proprietary IDA, so no Limpet-side package; v1.5.1 release has no assets. npm 'gepetto' is a Jira worklog CLI. Foreman previously said binary.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "pyamlboot",
@@ -1328,7 +1377,8 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "pyamlboot",
-      "install_evidence": "wq#4081: PyPI pyamlboot 1.0.0 home=github.com/superna9999/pyamlboot."
+      "install_evidence": "wq#4081: PyPI pyamlboot 1.0.0 home=github.com/superna9999/pyamlboot.",
+      "trust_tier": "vetted"
     },
     {
       "name": "sunxi-fel",
@@ -1362,7 +1412,8 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "sunxi-tools",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.4.2+git20240825.4390ca-1build1; provides sunxi-fel."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 1.4.2+git20240825.4390ca-1build1; provides sunxi-fel.",
+      "trust_tier": "vetted"
     },
     {
       "name": "fiedka",
@@ -1394,7 +1445,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": "fiedka_1.5.2_amd64.deb",
-      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v1.5.2."
+      "install_evidence": "wq#4081: GitHub latest-release asset list (github.com expanded_assets), 2026-10-16: v1.5.2.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "glitchkit",
@@ -1427,7 +1480,9 @@
       "disk_size_estimate": null,
       "priority": "optional",
       "package": null,
-      "install_evidence": "wq#4081: Ticket-named entry with no upstream URL; github.com/glitchkit/glitchkit 404."
+      "install_evidence": "wq#4081: Ticket-named entry with no upstream URL; github.com/glitchkit/glitchkit 404.",
+      "trust_tier": "deferred",
+      "deferred_reason": "source-build required, Phase 5"
     },
     {
       "name": "tshark",
@@ -1466,7 +1521,8 @@
       "disk_size_estimate": "small",
       "priority": "core",
       "package": "tshark",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.6.4-1."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.6.4-1.",
+      "trust_tier": "core"
     },
     {
       "name": "afl++",
@@ -1502,7 +1558,8 @@
       "disk_size_estimate": "medium",
       "priority": "core",
       "package": "afl++",
-      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.33c-1.1ubuntu1."
+      "install_evidence": "wq#4081: apt-cache policy candidate on Lumen (Ubuntu 26.04), 2026-10-16: 4.33c-1.1ubuntu1.",
+      "trust_tier": "core"
     }
   ],
   "tool_count": 44
