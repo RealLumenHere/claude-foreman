@@ -56,7 +56,7 @@ systemctl enable --now commander-job-notify.path
 Then launch a job with notification:
 
 ```
-UNIT=$(/home/lumen/bin/lumen-run start --name build-limpet -- /home/lumen/path/to/build-limpet.sh)
+UNIT=$(/home/lumen/bin/lumen-run start --name build-limpet -- /home/lumen/path/to/build-limpet.sh | sed -n 's/^UNIT=//p')
 /home/lumen/bin/lumen-run start --name notify-"$UNIT" -- \
   /home/lumen/foreman/ops/wq4629-commander-watchdog-a1/lumen-job-notify.sh "$UNIT"
 ```

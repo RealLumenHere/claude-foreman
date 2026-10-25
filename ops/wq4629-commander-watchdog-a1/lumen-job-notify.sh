@@ -36,10 +36,12 @@ lumen_run="${LUMEN_RUN_BIN:-/home/lumen/bin/lumen-run}"
 
 result=""
 while :; do
-  out=$(LUMEN_RUN_WAIT_CAP="$poll_cap" "$lumen_run" wait "$unit" "$poll_cap" 2>&1)
-  case "$out" in
-    *TIMEOUT*) continue;;
-    *) result="$out"; break;;
+  rc=0
+  out=$(LUMEN_RUN_WAIT_CAP="$poll_cap" "$lumen_run" wait "$unit" "$poll_cap" 2>&1) || rc=$?
+  case "$rc" in
+    124) continue;;
+    0) result="$out"; break;;
+    *) result="ERROR:lumen-run wait rc=$rc: $out"; break;;
   esac
 done
 

@@ -30,6 +30,7 @@ count=$((count + 1))
 echo "$count" > "{count_file}"
 if [ "$count" -lt 2 ]; then
   echo "TIMEOUT after 1s (still RUNNING)"
+  exit 124
 else
   echo "DONE:0"
 fi
@@ -49,7 +50,32 @@ fi
     data = json.loads(marker.read_text())
     assert data["result"] == "DONE:0"
     assert data["unit"] == "lumen-job-build-limpet-123"
-    assert count_file.read_text().strip() == "2", "expected 1 timeout + 1 terminal lumen-run call"
+    assert count_file.read_text().strip() == "2", "expected 1 real TIMEOUT (rc=124) + 1 terminal lumen-run call"
+
+
+def test_lumen_job_notify_writes_error_marker_on_unexpected_rc(tmp_path):
+    lumen_run = tmp_path / "lumen-run"
+    _write_stub(
+        lumen_run,
+        """#!/usr/bin/env bash
+echo "boom: unit vanished" >&2
+exit 2
+""",
+    )
+
+    done_dir = tmp_path / "done"
+    env = dict(os.environ, LUMEN_RUN_BIN=str(lumen_run), COMMANDER_WATCHDOG_DONE_DIR=str(done_dir))
+    result = subprocess.run(
+        ["bash", str(HERE / "lumen-job-notify.sh"), "lumen-job-build-limpet-456", "--poll-cap", "1"],
+        env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+    marker = done_dir / "lumen-job-build-limpet-456.json"
+    assert marker.exists(), "marker not written on unexpected rc"
+    data = json.loads(marker.read_text())
+    assert data["result"].startswith("ERROR:lumen-run wait rc=2"), data["result"]
+    assert "boom: unit vanished" in data["result"]
 
 
 def test_drain_notifies_injects_claude_and_clears_marker(tmp_path):
