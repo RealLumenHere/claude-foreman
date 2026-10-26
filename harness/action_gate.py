@@ -44,6 +44,11 @@ EVENTS_DIR = os.environ.get("FOREMAN_EVENTS_DIR", "/home/lumen/foreman/events")
 WORKER_ID = os.environ.get("FOREMAN_WORKER", "unknown")
 RULES_BASENAME = ".fworker-rules.yaml"
 SNAP_FILE_CAP = 64 * 1024 * 1024      # per-file copy cap
+# wq#4599: a credential pre-image is registered with an expiry so it cannot outlive the rollback it exists for
+# (secret-backup-sweep shreds it once every value in it is provably dead). Off when a non-default vault is set,
+# so tests and one-off runs never write into the real registry, unless FOREMAN_BACKUP_REGISTER names a tool.
+BACKUP_REGISTER = os.environ.get("FOREMAN_BACKUP_REGISTER") or (
+    "" if os.environ.get("FOREMAN_GATE_SNAP_VAULT") else "/home/lumen/bin/secret-backup-sweep")
 SNAP_DB_CAP = 200 * 1024 * 1024       # sqlite db copy cap
 # wq#2116: the snapdir lives under /home/lumen/foreman/_runs, and foreman is every
 # worker's --add-dir. A verbatim pre-image of a file that is deliberately OFF every
@@ -563,6 +568,17 @@ def _is_sensitive(path=None, text=None):
     return any(rx.search(text) for _, rx in _rds.PATTERNS)
 
 
+def _register_backup(path):
+    """Best-effort: a registry hiccup must never block the gate. The pre-image already exists on disk."""
+    if not BACKUP_REGISTER or not os.access(BACKUP_REGISTER, os.X_OK):
+        return
+    try:
+        subprocess.run([BACKUP_REGISTER, "register", path, "--ttl", "7d", "--owner", WORKER_ID,
+                        "--why", "gate credential pre-image"], capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+
 def _stow(d, name, src=None, text=None):
     """Write one pre-image artifact and return its path. A credential-shaped artifact
     goes to SNAP_VAULT at 0600 instead of the snapdir, and `d` gets a path-only pointer
@@ -582,6 +598,7 @@ def _stow(d, name, src=None, text=None):
     else:
         open(dst, "w").write(text)
     os.chmod(dst, 0o600)
+    _register_backup(dst)
     with open(os.path.join(d, f"{name}.held-out"), "w") as f:
         f.write(f"credential-shaped pre-image of {src or name} kept out of the snapdir\n"
                 f"vault (0600): {dst}\n")

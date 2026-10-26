@@ -451,6 +451,52 @@ def test_credential_basename_alone_diverts(tmp_path):
     assert [p.read_text() for p in vault.iterdir()] == ["FEATURE_FLAG=1\n"]
 
 
+def _register_stub(tmp_path, body):
+    stub = tmp_path / "register-stub"
+    stub.write_text("#!/bin/sh\n" + body)
+    stub.chmod(0o755)
+    return stub
+
+
+def test_credential_preimage_is_registered_with_an_expiry(tmp_path):
+    """wq#4599: the vault pre-image must carry a 7d expiry so it cannot sit there for 50 days."""
+    target = tmp_path / "agent.env"
+    target.write_text(f"GITHUB_TOKEN={FAKE_PAT}\n")
+    log = tmp_path / "reg.log"
+    stub = _register_stub(tmp_path, f'echo "$@" >> {log}\n')
+    snapdir, vault = tmp_path / "snaps", tmp_path / "vault"
+    rc, _ = run_hook({"tool_name": "Edit", "tool_input": {"file_path": str(target)}, "cwd": str(tmp_path)},
+                     {ag.SNAPDIR_ENV: str(snapdir), "FOREMAN_EVENTS_DIR": str(tmp_path),
+                      "FOREMAN_GATE_SNAP_VAULT": str(vault), "FOREMAN_BACKUP_REGISTER": str(stub)})
+    assert rc == 0
+    stowed = list(vault.iterdir())
+    line = log.read_text().strip()
+    assert line.startswith("register " + str(stowed[0])) and "--ttl 7d" in line
+    assert FAKE_PAT not in line
+
+
+def test_registration_failure_never_blocks_the_gate(tmp_path):
+    target = tmp_path / "agent.env"
+    target.write_text(f"GITHUB_TOKEN={FAKE_PAT}\n")
+    stub = _register_stub(tmp_path, "exit 9\n")
+    snapdir, vault = tmp_path / "snaps", tmp_path / "vault"
+    rc, _ = run_hook({"tool_name": "Edit", "tool_input": {"file_path": str(target)}, "cwd": str(tmp_path)},
+                     {ag.SNAPDIR_ENV: str(snapdir), "FOREMAN_EVENTS_DIR": str(tmp_path),
+                      "FOREMAN_GATE_SNAP_VAULT": str(vault), "FOREMAN_BACKUP_REGISTER": str(stub)})
+    assert rc == 0 and len(list(vault.iterdir())) == 1
+
+
+def test_clean_preimage_is_not_registered(tmp_path):
+    target = tmp_path / "config.yaml"
+    target.write_text("original: true\n")
+    log = tmp_path / "reg.log"
+    stub = _register_stub(tmp_path, f'echo "$@" >> {log}\n')
+    rc, _ = run_hook({"tool_name": "Edit", "tool_input": {"file_path": str(target)}, "cwd": str(tmp_path)},
+                     {ag.SNAPDIR_ENV: str(tmp_path / "snaps"), "FOREMAN_EVENTS_DIR": str(tmp_path),
+                      "FOREMAN_GATE_SNAP_VAULT": str(tmp_path / "vault"), "FOREMAN_BACKUP_REGISTER": str(stub)})
+    assert rc == 0 and not log.exists()
+
+
 def test_clean_preimage_still_lands_in_snapdir(tmp_path):
     """No divert for ordinary files: rollback keeps working where it always did."""
     target = tmp_path / "config.yaml"
