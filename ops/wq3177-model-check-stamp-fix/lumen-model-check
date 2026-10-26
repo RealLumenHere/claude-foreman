@@ -12,13 +12,34 @@ set -uo pipefail
 # wrote that stamp. Stamp directly from the script on every invocation
 # (success or failure) so the dead-man check reflects real liveness.
 trap '/home/lumen/bin/lumen-cron-stamp model-check 2>/dev/null || true' EXIT
-KEY=$(grep -hoE 'LITELLM_MASTER_KEY=sk-[A-Za-z0-9_-]+' /home/lumen/agent/.env 2>/dev/null | head -1 | cut -d= -f2)
+# wq#3681: the master key is retired for non-admin routes since wq#914 (/v1/models -> 401),
+# which made this check page "gateway down" falsely. Use the named model-watchdog service
+# key (same role, lists all models) from the 0600 service-key store. Value is never printed.
+KEY=$(tr -d '\n' < /home/lumen/.secrets/litellm-service-keys/model-watchdog.key 2>/dev/null)
 GW=$(curl -s -m 10 http://localhost:4000/v1/models -H "Authorization: Bearer $KEY" 2>/dev/null | python3 -c "import json,sys;print('\n'.join(m['id'] for m in json.load(sys.stdin).get('data',[])))" 2>/dev/null)
 if [ -z "$GW" ]; then /home/lumen/bin/ntfy-send -p high "model-check: LiteLLM gateway :4000 returned NO models (down?)" 2>/dev/null; echo "gateway down"; exit 1; fi
 CLI=$(grep -oE '(id|alias): +[a-z0-9._-]+' /home/lumen/foreman/research/models.yaml 2>/dev/null | awk '{print $2}' | sort -u)
 VALID=$(printf '%s\n%s\n' "$GW" "$CLI" | sort -u)
 declare -A CFG
-while read -r m; do [ -n "$m" ] && CFG["$m"]="LPP brain-env"; done < <(grep -hoE 'LPP_BRAIN[A-Z_]*=[a-z0-9._-]+' /etc/systemd/system/lumen-pokemon-live.service.d/*.conf 2>/dev/null | cut -d= -f2 | sort -u)
+# CLASS (2026-10-26): a config source is only a defect if something LIVE consumes it.
+# LPP (lumen-pokemon-live) was decommissioned (masked, wq#1053/wq#2218) but its brain-env
+# drop-ins stayed on disk as the revive config; when cerebras left the gateway (10-19) this
+# check paged "model config drift" every 15 min for 7 days (658 pages) over a model nothing
+# runs. unit_live: active OR enabled-ish. masked/not-found/disabled AND inactive => skip.
+unit_live() {  # $1 = unit name; rc0 = something can still consume its config
+  local en act
+  en=$(systemctl is-enabled "$1" 2>/dev/null || true)
+  act=$(systemctl is-active "$1" 2>/dev/null || true)
+  [ "$act" = active ] && return 0
+  case "$en" in masked|masked-runtime|not-found|disabled|"") return 1 ;; esac
+  return 0
+}
+LPP_UNIT=lumen-pokemon-live.service
+if unit_live "$LPP_UNIT"; then
+  while read -r m; do [ -n "$m" ] && CFG["$m"]="LPP brain-env"; done < <(grep -hoE 'LPP_BRAIN[A-Z_]*=[a-z0-9._-]+' /etc/systemd/system/${LPP_UNIT}.d/*.conf 2>/dev/null | cut -d= -f2 | sort -u)
+else
+  echo "skip LPP brain-env: $LPP_UNIT is $(systemctl is-enabled "$LPP_UNIT" 2>/dev/null)/$(systemctl is-active "$LPP_UNIT" 2>/dev/null), nothing consumes it"
+fi
 while read -r m; do [ -n "$m" ] && CFG["$m"]="wq active ticket"; done < <(sqlite3 /home/lumen/agents/work-queue/queue.db "select distinct model from tasks where status in ('open','claimed') and model is not null and model != '';" 2>/dev/null)
 BAD=""
 for m in "${!CFG[@]}"; do printf '%s\n' "$VALID" | grep -qx "$m" || BAD="${BAD} ${m}(${CFG[$m]})"; done
