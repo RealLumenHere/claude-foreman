@@ -351,6 +351,22 @@ class Hold(Gate):
         return PASS
 
 
+class OrchFresh(Gate):
+    """stage 5d (wq#4659): a ticket an orch-* session filed under ORCH_GRACE_MIN ago and has
+    not released is the orchestrator's own build (wq#4645, wq#4658 got duplicate fworkers).
+    Parked until the window ends; a `wq release` changes released_at and unparks it."""
+    name = "orch_fresh"
+
+    def check(self, g):
+        until = g.fd.orch_fresh_until(g.t)
+        if until:
+            return Fail("orch_fresh", "orch_fresh",
+                        detail=f"filed by '{g.t.get('created_by')}', grace until {until}Z",
+                        fingerprint_inputs=("created_by", "released_at"),
+                        recheck_after=until.replace(" ", "T") + "Z", parkable=True)
+        return PASS
+
+
 class Deps(Gate):
     """stage 6 (MUST 2): any dep not `done`; a missing dep counts as unmet."""
     name = "deps"
@@ -498,7 +514,8 @@ class SubsystemHeld(Gate):
 # trips two gates reports — the golden replay (test_gates_replay.py) is what holds it.
 GATES = (LaneCap(), HumanLane(), LaneRepo(), TicketLoad(), RepoMismatch(), RepoResolve(),
          Capability(), Runaway(), HarnessDefect(), SpawnLoop(), Nodispatch(), NeedsWindow(),
-         FrankGate(), FireApproval(), FireProbe(), Hold(), Deps(), AlreadyRunning(), Route(),
+         FrankGate(), FireApproval(), FireProbe(), Hold(), OrchFresh(), Deps(), AlreadyRunning(),
+         Route(),
          SubsystemHeld())
 
 

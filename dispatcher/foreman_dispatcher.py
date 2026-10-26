@@ -611,6 +611,46 @@ def hold_reason(t):
     return f"held by '{hold_by}' until {hold_expires}Z"
 
 
+ORCH_CREATOR_PREFIX = "orch-"
+ORCH_GRACE_MIN_DEFAULT = 10
+
+
+def orch_grace_min():
+    try:
+        return int(os.environ.get("FOREMAN_ORCH_GRACE_MIN", ORCH_GRACE_MIN_DEFAULT))
+    except ValueError:
+        return ORCH_GRACE_MIN_DEFAULT
+
+
+def orch_fresh_until(t):
+    """wq#4659: the end of a fresh orch-filed ticket's grace window (wq timestamp format),
+    or None when the window does not apply. An orchestrator filed wq#4645 and wq#4658
+    with `wq add` and built them itself; the dispatcher spawned a duplicate fworker on
+    each 60 s and 16 s later. A ticket whose `created_by` is an orch-* session is held
+    for FOREMAN_ORCH_GRACE_MIN (default 10) minutes from created_at, which gives the
+    orch time to claim it, unless it has been `wq release`d (released_at set: an
+    explicit hand-off). The race-free path is `wq add --claim`, which holds the ticket in
+    the INSERT itself; this window covers an orch that forgot the flag. `created_by`
+    and `released_at` come off `wq show`'s SELECT * like hold_by ('None' = unset).
+    Rollback: FOREMAN_ORCH_GRACE_MIN=0."""
+    grace = orch_grace_min()
+    if grace <= 0:
+        return None
+    creator = t.get("created_by") or ""
+    if not creator.startswith(ORCH_CREATOR_PREFIX):
+        return None
+    if (t.get("released_at") or "None") != "None":
+        return None
+    try:
+        created = datetime.strptime(t.get("created_at") or "", "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    until = (created + timedelta(minutes=grace)).strftime("%Y-%m-%d %H:%M:%S")
+    if until <= _utcnow().strftime("%Y-%m-%d %H:%M:%S"):
+        return None
+    return until
+
+
 DEP_UNREADABLE = "unreadable"  # dep_cache status of a dep whose `wq show` failed this pass
 
 

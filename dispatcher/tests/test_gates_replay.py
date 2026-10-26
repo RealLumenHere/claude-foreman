@@ -52,6 +52,7 @@ FAULTS = [
     ("fire_unapproved", "fire_unapproved", FIRE),
     ("fire_no_probe", "fire_no_probe", FIRE),
     ("held", "held", None),
+    ("orch_fresh", "orch_fresh", None),
     ("deps_unmet", "deps_unmet", None),
     ("already_running", "already_running", None),
     ("route_unassigned", "route_unassigned", None),
@@ -60,7 +61,7 @@ FAULTS = [
 GATE_ORDER = ["lane_cap", "human_lane", "lane_repo", "ticket_load", "repo_mismatch",
               "repo_resolve", "capability", "runaway", "harness_defect", "spawn_loop",
               "nodispatch", "needs_window", "frank_gate", "fire_approval", "fire_probe",
-              "hold", "deps", "already_running", "route", "subsystem"]
+              "hold", "orch_fresh", "deps", "already_running", "route", "subsystem"]
 FIRE_PROBE = 'fire_probe: {"cmd": "true", "clear_when_exit": 0}'
 
 
@@ -114,6 +115,10 @@ class World:
             "deps": "900001" if "deps_unmet" in f else "",
             "hold_by": "orch" if "held" in f else "None",
             "hold_expires": "2999-01-01 00:00:00" if "held" in f else "None",
+            "created_by": "orch-opus-1026-a1b2c3" if "orch_fresh" in f else "None",
+            "created_at": (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                           if "orch_fresh" in f else "2026-09-20 00:00:00"),
+            "released_at": "None",
             "subsystems": "fleet-ops" if "subsystem_held" in f else "",
             "detail": "" if "fire_no_probe" in f else FIRE_PROBE,
             "_mismatch": "title names another repo" if "repo_mismatch" in f else mismatch}
