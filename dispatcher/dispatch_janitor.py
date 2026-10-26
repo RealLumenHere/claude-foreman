@@ -62,7 +62,7 @@ SLOCK_TTL_MIN = "10"
 BATCH_SLOTS_FACTOR = 2      # (a): release at most live slots x 2 per run
 DIGEST_LIST_MAX = 25
 # the parked causes that clear themselves on the natural recheck — a daily row for them is noise
-SELF_RESOLVING = frozenset({"lane_cap", "held", "deps_unmet"})
+SELF_RESOLVING = frozenset({"lane_cap", "held", "deps_unmet", "orch_fresh"})
 RELANE_REASONS = ("repo_mismatch", "lane_unmapped")
 
 
