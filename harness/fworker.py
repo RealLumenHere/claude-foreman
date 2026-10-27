@@ -2508,12 +2508,22 @@ def scratch_grant_dirs(ticket_id):
     return [scratch_grant.scratch_dir(wq_identity(ticket_id))]
 
 
-def resolve_worker_settings(repo, ticket_id):
+# design/orchestrator_verify_lane.md §5.2: verify-probe is a lane, not a repo toolchain —
+# its grant (read-only reach + probe execution, writes only to reports/**) must apply no
+# matter which repo the ticket names, so it bypasses the per-repo repos.d/ union entirely
+# rather than being declared as one more repos.d/<repo>.json fragment.
+VERIFY_PROBE_SETTINGS_FILE = os.path.join(HARNESS_DIR, "permission-profiles", "verify-probe.json")
+
+
+def resolve_worker_settings(repo, ticket_id, archetype=None):
     """ISSUE-SOLUTIONS-fable.md §2b: render this repo's per-repo toolchain permission
     profile (permission-profiles/repos.d/<repo>.json) into the ticket's run_dir, unioned
     from the shared profile fragments. A repo with no profile declaration yet falls back
     to the static SETTINGS_FILE unchanged — no regression for repos not yet migrated.
+    verify-probe overrides the per-repo profile outright (see VERIFY_PROBE_SETTINGS_FILE).
     """
+    if archetype == "verify-probe":
+        return VERIFY_PROBE_SETTINGS_FILE
     settings_file, digest = permission_profiles.resolve_settings_file(
         repo, SETTINGS_FILE, run_dir(ticket_id))
     if digest:
@@ -4070,7 +4080,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     env[action_gate.HANDOFF_ENV] = run_dir(ticket_id)
     loop_tracker = action_gate.LoopTracker(steered=bool(steer),
                                            ceiling_spent=ceiling_spent)
-    settings_file = resolve_worker_settings(args.repo, ticket_id)
+    settings_file = resolve_worker_settings(args.repo, ticket_id, archetype=archetype)
     cmd = build_claude_cmd(steer or prompt, args.model, args.effort, settings_file,
                             add_dirs=add_dirs, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin,

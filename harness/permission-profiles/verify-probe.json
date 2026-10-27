@@ -1,0 +1,178 @@
+{
+  "_comment": "design/orchestrator_verify_lane.md S3 option A + S5.2/5.4. Standalone settings file for the verify-probe archetype -- NOT a repos.d fragment (permission_profiles.render_permissions is keyed by repo, this is keyed by archetype in fworker.resolve_worker_settings). Grant is read-only reach + probe execution; the only writes are reports/** in the worker's own worktree. Bare 'Write'/'Edit' are deliberately absent from allow (acceptEdits auto-approves edits not explicitly denied, same mechanism the acceptance.json deny entries below rely on) -- mailbot/sentinel are add_dirs for this archetype but are NOT in guard.sh's PRIMARY_TREES wall, so they are denied here explicitly; every other add_dir (foreman, bin, kb, agent, logs, minerva, work-queue, projects/nest, pokemon) is already walled by guard.sh regardless of this file.",
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Write(reports/**)",
+      "Edit(reports/**)",
+      "Bash(git *)",
+      "Bash(python3 *)",
+      "Bash(pytest *)",
+      "Bash(python3 -m pytest*)",
+      "Bash(node --test*)",
+      "Bash(npm test*)",
+      "Bash(/home/lumen/bin/wq *)",
+      "Bash(/home/lumen/bin/lumen-pr *)",
+      "Bash(/home/lumen/bin/slock *)",
+      "Bash(/home/lumen/bin/lumen-run *)",
+      "Bash(/home/lumen/bin/fleet-search *)",
+      "Bash(/home/lumen/bin/fleet-exec *)",
+      "Bash(/home/lumen/bin/lumen_state.py *)",
+      "Bash(/home/lumen/bin/lumen_busy *)",
+      "Bash(/home/lumen/bin/mask-secrets)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(cd *)",
+      "Bash(sed *)",
+      "Bash(awk *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(sort *)",
+      "Bash(uniq *)",
+      "Bash(diff *)",
+      "Bash(echo *)",
+      "Bash(printf *)",
+      "Bash(test *)",
+      "Bash(true)",
+      "Bash(basename *)",
+      "Bash(dirname *)",
+      "Bash(systemctl status*)",
+      "Bash(systemctl is-active*)",
+      "Bash(systemctl is-enabled*)",
+      "Bash(systemctl show*)",
+      "Bash(systemctl list-*)",
+      "Bash(systemctl cat*)",
+      "Bash(journalctl *)",
+      "Bash(stat *)",
+      "Bash(readlink *)",
+      "Bash(realpath *)",
+      "Bash(ps)",
+      "Bash(ps -p *)",
+      "Bash(jq *)",
+      "Bash(cut *)",
+      "Bash(tr *)",
+      "Bash(nl *)",
+      "Bash(which *)",
+      "Bash(uname*)",
+      "Bash(hostname*)",
+      "Bash(date*)",
+      "Bash(df *)",
+      "Bash(ss *)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr list*)",
+      "Bash(gh pr diff*)",
+      "Bash(gh pr checks*)",
+      "Bash(gh run view*)",
+      "Bash(gh run list*)",
+      "Bash(gh issue view*)",
+      "Bash(gh issue list*)",
+      "mcp__docker__list_containers",
+      "mcp__docker__list_images",
+      "mcp__docker__list_networks",
+      "mcp__docker__list_volumes",
+      "mcp__docker__fetch_container_logs",
+      "mcp__keenable__search_web_pages",
+      "mcp__keenable__fetch_page_content"
+    ],
+    "deny": [
+      "Bash(*reboot*)",
+      "Bash(shutdown*)",
+      "Bash(poweroff*)",
+      "Bash(halt*)",
+      "Bash(systemctl stop*)",
+      "Bash(systemctl disable*)",
+      "Bash(systemctl mask*)",
+      "Bash(dd *)",
+      "Bash(*--remove-orphans*)",
+      "Bash(ip link set*)",
+      "Bash(macchanger*)",
+      "Bash(git push*)",
+      "Bash(rm -rf /*)",
+      "Bash(docker *)",
+      "Bash(docker exec*)",
+      "Bash(sudo *)",
+      "Bash(claude setup-token*)",
+      "Bash(env)",
+      "Bash(env |*)",
+      "Bash(printenv*)",
+      "Read(**/.env)",
+      "Read(**/.credentials.json)",
+      "Read(**/claude_credentials.md)",
+      "Read(**/claude_credentials.md.*)",
+      "Read(/home/lumen/minerva/context/sections/*credentials*)",
+      "Read(/home/lumen/minerva/context/sections.json)",
+      "Read(/home/lumen/minerva/context/sections.json.*)",
+      "Read(/home/lumen/agent/.env)",
+      "Read(/home/lumen/.secrets/**)",
+      "Write(**/acceptance.json)",
+      "Edit(**/acceptance.json)",
+      "Write(/home/lumen/mailbot/**)",
+      "Edit(/home/lumen/mailbot/**)",
+      "Write(/home/lumen/sentinel/**)",
+      "Edit(/home/lumen/sentinel/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/lumen/foreman/harness/action_gate.py hook"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh --lifecycle start"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh --lifecycle stop"
+          },
+          {
+            "type": "command",
+            "command": "python3 /home/lumen/foreman/harness/hooks/stop_gate.py"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh --lifecycle end"
+          }
+        ]
+      }
+    ]
+  }
+}

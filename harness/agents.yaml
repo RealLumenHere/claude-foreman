@@ -76,14 +76,14 @@ archetypes:
     # a verify-pass sibling for a verify ticket whose derived needs (orchestrator/
     # router.classify_verify_archetype) demand reach the plain verify-pass envelope
     # doesn't have. max_turns/wall_clock are tighter than verify-pass's (§5.2: 400/2400)
-    # because the probe is read-only reach, not a re-implementation. The actual
-    # read-reach grant (fleet-exec/docker-read/home-root settings pack) is Option A's own
-    # build ticket (§4 step 2) -- this entry only wires the archetype so dispatch has a
-    # row to route to; permission_profile_note is documentation only until that lands.
+    # because the probe is read-only reach, not a re-implementation. wq#4687 (Option A,
+    # §4 step 2) shipped the read-reach grant: harness/permission-profiles/verify-probe.json,
+    # selected over the per-repo repos.d/ union by fworker.resolve_worker_settings() when
+    # archetype == "verify-probe" (VERIFY_PROBE_SETTINGS_FILE).
     primary_tuple: sonnet-5@high
     max_turns: 400
     wall_clock_timeout_s: 2400
-    permission_profile_note: "verify-pass pack until Option A's verify-probe.json ships (design §5.2/§3)"
+    permission_profile_note: "harness/permission-profiles/verify-probe.json (design §5.2/§3, wq#4687)"
     add_dirs:
       - /home/lumen/agents/work-queue
       - /home/lumen/mailbot
