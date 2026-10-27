@@ -71,6 +71,24 @@ vactive() {
   case "$st" in active|activating) ;; *) _vmiss "not active: $u ($st)";; esac
 }
 
+# vtimer_scheduled UNIT — the timer has an actual future elapse, not just systemd's
+# ActiveState bookkeeping. wq#4732/wq#4733: `vactive` passes on a timer in
+# SubState=elapsed with NextElapseUSecMonotonic=infinity — e.g. a monotonic-only timer
+# (OnBootSec/OnUnitActiveSec, no OnCalendar/OnActiveSec) enabled long after boot, whose
+# catch-up got suppressed by a stale Persistent= stamp from a prior install. `is-active`
+# alone cannot distinguish "will fire again" from "fired once, never will again" — only
+# SubState and NextElapseUSec* can. MISS unless SubState=waiting and at least one of
+# NextElapseUSecMonotonic/NextElapseUSecRealtime is a finite value (not empty, not "infinity").
+vtimer_scheduled() {
+  local u="$1" sub mono real
+  sub="$(systemctl show "$u" -p SubState --value 2>/dev/null || true)"
+  if [ "$sub" != waiting ]; then _vmiss "not scheduled: $u (SubState=${sub:-unknown})"; return; fi
+  mono="$(systemctl show "$u" -p NextElapseUSecMonotonic --value 2>/dev/null || true)"
+  real="$(systemctl show "$u" -p NextElapseUSecRealtime --value 2>/dev/null || true)"
+  case "$mono" in ""|infinity) case "$real" in ""|infinity)
+    _vmiss "no finite NextElapseUSec: $u"; return ;; esac ;; esac
+}
+
 # venabled UNIT — unit is enabled (timers that must survive reboot).
 venabled() {
   local u="$1" st

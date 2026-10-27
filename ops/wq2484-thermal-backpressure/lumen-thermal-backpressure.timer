@@ -7,7 +7,14 @@ OnBootSec=3min
 # STEP_S=60 spacing, so a 5-min window needs five polls. A sysfs read costs one SSH round
 # trip per node in parallel (~0.6 s for the whole roster), where five netdata windows did not.
 OnUnitActiveSec=1min
-Persistent=true
+# wq#4733: anchor a fresh `enable --now` to a real first run. OnBootSec/OnUnitActiveSec are
+# both monotonic triggers with no anchor until something fires once this boot, so a late
+# enable (not at boot) schedules nothing until the next reboot or a manual service start.
+# OnActiveSec=0 fires immediately on activation, which also anchors OnUnitActiveSec's base.
+OnActiveSec=0
+# No Persistent=: it only replays a missed OnCalendar= trigger (we have none) and otherwise
+# just loads a stale /var/lib/systemd/timers/stamp-* LastTriggerUSec from a prior install,
+# which is what suppressed OnBootSec's catch-up here (see wq#4732 judgment report).
 
 [Install]
 WantedBy=timers.target
