@@ -331,6 +331,20 @@ stage4_package_re_tools() {
   log "stage4: every manifest tool verified present in $CHROOT"
 }
 
+# Is <path> an executable inside <root>? Resolves symlinks AS IF <root> were /: a pipx app
+# link is absolute (/usr/local/bin/unblob -> /usr/local/share/pipx/venvs/unblob/bin/unblob),
+# and `[ -x "$root$path" ]` lets the kernel resolve that target against the HOST root, so a
+# correctly baked tool read as missing (and a host-only target read as present).
+root_exec_ok() {
+  local root="$1" p="$2" n=0 t
+  while [ -L "$root$p" ] && [ "$n" -lt 16 ]; do
+    t="$(readlink "$root$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$((n+1))
+  done
+  [ ! -L "$root$p" ] && [ -f "$root$p" ] && [ -x "$root$p" ]
+}
+
 # wq#4524: every tool the stage4 manifest lists must be present under <root>: apt packages
 # installed in its dpkg db, built binaries at their install paths, binary artifacts
 # unpacked. Logs each miss and returns 1 if any.
@@ -345,7 +359,7 @@ verify_re_tools() {
   done < <(jq -r '.apt_packages[]' "$TOOL_MANIFEST")
   while read -r bin; do
     [ -n "$bin" ] || continue
-    [ -x "$root$bin" ] || { log "missing RE tool binary: $bin"; miss=1; }
+    root_exec_ok "$root" "$bin" || { log "missing RE tool binary: $bin"; miss=1; }
   done < <(jq -r '((.cargo_crates + .pip_packages)[] | "/usr/local/bin/" + .bin), (.pip_git_packages[] | "/opt/re-venv/bin/" + .bin)' "$TOOL_MANIFEST")
   while read -r dir; do
     [ -n "$dir" ] || continue
