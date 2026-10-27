@@ -453,7 +453,7 @@ stage4c_build_pip_tools() {
     docker run --rm -v "$out/opt/re-venv:/opt/re-venv" "ubuntu:$XUBUNTU_VERSION" bash -euc "
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -qq
-      apt-get install -y -qq --no-install-recommends python3-venv python3-pip git ca-certificates $bdeps
+      apt-get install -y -qq --no-install-recommends python3-venv python3-pip python3-dev build-essential git ca-certificates $bdeps
       rm -rf /tmp/src
       git clone --no-checkout '${url#git+}' /tmp/src
       git -C /tmp/src checkout --detach '$commit'
