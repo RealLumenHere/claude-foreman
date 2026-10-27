@@ -18,6 +18,9 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/lumen-thermal-backpressure.timer
   venabled   lumen-thermal-backpressure.timer
   vactive    lumen-thermal-backpressure.timer
+  # wq#4733: vactive alone cannot tell SubState=waiting (will fire again) from
+  # SubState=elapsed (will not, until a reboot) — see wq#4732's judgment report.
+  vtimer_scheduled lumen-thermal-backpressure.timer
   # The payload is not installed by this bundle — it is read in place from the git-tracked
   # foreman tree — so assert the version of it the units actually run. A guard without
   # sample_temps is one still reading netdata serially, which is what cost wq#3044 its
@@ -39,6 +42,11 @@ sudo install -m 0644 "$SRC/lumen-thermal-backpressure.service" /etc/systemd/syst
 sudo install -m 0644 "$SRC/lumen-thermal-backpressure.timer" /etc/systemd/system/lumen-thermal-backpressure.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now lumen-thermal-backpressure.timer
+# wq#4733: a fresh enable on a long-running box leaves OnUnitActiveSec with no base (the
+# service has never left "inactive" this boot) until something runs it once. Start it here
+# so the first run happens under the unit (not just this script's direct `python3` calls
+# above) and anchors the recurring timer instead of waiting on OnActiveSec=0 to race it.
+sudo systemctl start lumen-thermal-backpressure.service
 systemctl list-timers lumen-thermal-backpressure.timer --no-pager --no-legend
 echo
 python3 "$GUARD" status
