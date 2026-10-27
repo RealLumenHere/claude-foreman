@@ -390,7 +390,7 @@ stage4b_build_cargo_tools() {
     # existing target ("Already exists") instead of GNU's silent overwrite,
     # which kills this script under set -euo pipefail on a re-run.
     rm -f "$CHROOT/usr/local/bin/$bin"
-    install -m 0755 "$out/bin/$bin" "$CHROOT/usr/local/bin/$bin"
+    rm -f "$CHROOT/usr/local/bin/$bin" 2>/dev/null; install -m 0755 "$out/bin/$bin" "$CHROOT/usr/local/bin/$bin"
     log "stage4b: installed /usr/local/bin/$bin ($(sha256sum "$out/bin/$bin" | cut -c1-16)...)"
   done < <(jq -c '.cargo_crates[]' "$manifest")
 }
