@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wq#3946 -- Limpet ISO build pipeline: Xubuntu 26.04 base + every Limpet
+# wq#3946 -- Limpet ISO build pipeline: Xubuntu base (26.10; LIMPET_XUBUNTU_VERSION, wq#4709) + every Limpet
 # component assembled into one installable, hybrid BIOS+UEFI bootable ISO.
 #
 # Ticket-cited integration point ("install-wizard-spec.md section 6") does not
@@ -39,15 +39,23 @@ TOOL_CATALOG="${LIMPET_TOOL_CATALOG:-$LIMPET_ROOT/tool-catalog.json}"
 # stage4 writes it, stage11 refuses to pack a layer that does not carry what it lists.
 TOOL_MANIFEST="$WORKDIR/tool-packages.json"
 
-XUBUNTU_VERSION="26.04"
-# Caller-supplied: a locally cached base ISO + its published sha256. This
-# script never fetches 2+ GB over the network unattended (instinct 3/5
-# territory: an unattended multi-GB fetch with no integrity source pinned in
-# this repo is a guess, not a verified input) -- the operator (or an earlier
-# pipeline stage with real network egress and the Ubuntu keyring) supplies
-# both and this stage only verifies them.
+# wq#4709: the base release is a parameter. Frank set Xubuntu 26.10 as the Limpet
+# base (lumen_state limpet.base_os, 2026-10-15); 26.04 stays buildable. Each
+# release has its own driver_hook/kernel-<release>.pin (ISO name + sha256 + kernel
+# ABI), and the same value tags the ubuntu:<release> build containers (stage4b/4c).
+XUBUNTU_VERSION="${LIMPET_XUBUNTU_VERSION:-26.10}"
+KERNEL_PIN="$HERE/driver_hook/kernel-$XUBUNTU_VERSION.pin"
+[ -f "$KERNEL_PIN" ] || { printf 'FAIL: no %s -- LIMPET_XUBUNTU_VERSION=%s is not a pinned release\n' "$KERNEL_PIN" "$XUBUNTU_VERSION" >&2; exit 1; }
+pin_value() { sed -n "s/^$1=//p" "$KERNEL_PIN"; }
+# Caller-supplied: a locally cached base ISO. This script never fetches 2+ GB
+# over the network unattended (instinct 3/5 territory) -- the operator (or an
+# earlier pipeline stage with real network egress and the Ubuntu keyring)
+# supplies it and this stage only verifies it. Its sha256 defaults to the
+# release pin's, which was checked against the published SHA256SUMS; stage1 warns
+# on a caller override that differs, since the pinned kernel ABI is only verified
+# for that exact image.
 BASE_ISO="${LIMPET_BASE_ISO:-}"
-BASE_ISO_SHA256="${LIMPET_BASE_ISO_SHA256:-}"
+BASE_ISO_SHA256="${LIMPET_BASE_ISO_SHA256:-$(pin_value BASE_ISO_SHA256)}"
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 fail() { log "FAIL: $*"; exit 1; }
@@ -218,6 +226,8 @@ stage1_fetch_base_iso() {
   # error that names the actual failure instead of a generic mismatch.
   [ -s "$BASE_ISO" ] || fail "LIMPET_BASE_ISO=$BASE_ISO is 0 bytes -- refusing to build from an empty ISO (a prior fetch likely failed; re-fetch before retrying)"
   [ -n "$BASE_ISO_SHA256" ] || fail "LIMPET_BASE_ISO_SHA256 not set -- supply the published checksum, do not skip verification"
+  [ "$BASE_ISO_SHA256" = "$(pin_value BASE_ISO_SHA256)" ] ||
+    log "stage1: WARNING LIMPET_BASE_ISO_SHA256 is not the $XUBUNTU_VERSION base pinned in $KERNEL_PIN -- its KERNEL_ABI is unverified for this image"
   require_cmd sha256sum
   local actual
   actual="$(sha256sum "$BASE_ISO" | cut -d' ' -f1)"
@@ -721,13 +731,13 @@ stage7_bundle_driver_bundle() {
   python3 -I "$LIMPET_ROOT/hardware.d/build_iso_drivers.py" --write-bundle "$bundle"
   # wq#3980: the pinned-kernel hook (driver_hook/) places the udev rules, hardware.d
   # TOMLs, docs and driver-plan.json, and fails closed (exit 3) if the chroot carries a
-  # kernel other than driver_hook/kernel.pin, or (exit 4) on an unpinned DKMS source.
+  # kernel other than driver_hook/kernel-<release>.pin, or (exit 4) on an unpinned DKMS source.
   # LIMPET_DRIVER_HOOK_RUN=1 additionally executes the in-chroot installer (needs root +
   # network inside the chroot): firmware apt packages and any pinned DKMS builds.
   local run=()
   [ "${LIMPET_DRIVER_HOOK_RUN:-0}" = "1" ] && run=(--run-chroot)
-  python3 -I "$HERE/driver_hook/driver_hook.py" install --chroot "$CHROOT" --bundle "$bundle" "${run[@]}"
-  log "stage7: driver bundle installed for the pinned kernel ABI (pin: driver_hook/kernel.pin; see README "Driver bundle hook")"
+  python3 -I "$HERE/driver_hook/driver_hook.py" install --release "$XUBUNTU_VERSION" --chroot "$CHROOT" --bundle "$bundle" "${run[@]}"
+  log "stage7: driver bundle installed for the pinned kernel ABI (pin: $KERNEL_PIN; see README "Driver bundle hook")"
 }
 
 # ---------------------------------------------------------------------------
@@ -1168,10 +1178,12 @@ $(printf '  %s\n' "${STAGES[@]}")
             you want to retry stage1b from scratch instead of reusing its mounts
 
 Env:
+  LIMPET_XUBUNTU_VERSION  base release (default 26.10; 26.04 also pinned) -- selects
+                          driver_hook/kernel-<release>.pin and the ubuntu:<release> containers
   LIMPET_BASE_ISO         path to a cached Xubuntu $XUBUNTU_VERSION ISO (stage1)
-  LIMPET_BASE_ISO_SHA256  its published sha256 (stage1)
+  LIMPET_BASE_ISO_SHA256  its published sha256 (stage1; default and required value: the pin's)
   LIMPET_ISO_LAYER        casper layer to modify (default: the install-sources.yaml
-                          default source, minimal.standard on stock 26.04)
+                          default source, minimal.standard on stock 26.04 and 26.10)
   LIMPET_ISO_WORKDIR      scratch dir (default: $HERE/.build)
   LIMPET_ISO_OUT_DIR      output dir (default: \$WORKDIR/out)
   LIMPET_ISO_NAME         output filename (default: limpet-<date>.iso)

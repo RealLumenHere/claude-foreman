@@ -8,7 +8,9 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import driver_hook as dh  # noqa: E402
 
-PIN = dh.read_pin()
+RELEASE = "26.10"
+PIN = dh.read_pin(dh.pin_path(RELEASE))
+ABI = "7.3.0-9-generic"
 GOOD_COMMIT = "d" * 40
 
 
@@ -26,8 +28,23 @@ def _bundle(tmp_path):
 
 
 def test_pin_is_sane():
-    assert PIN["KERNEL_ABI"] == "7.0.0-14-generic"
+    assert PIN["KERNEL_ABI"] == ABI
     assert len(PIN["BASE_ISO_SHA256"]) == 64
+
+
+@pytest.mark.parametrize("release,abi", [("26.04", "7.0.0-14-generic"), ("26.10", "7.3.0-9-generic")])
+def test_each_release_has_its_own_pin(release, abi):
+    pin = dh.read_pin(dh.pin_path(release))
+    assert pin["KERNEL_ABI"] == abi
+    assert pin["BASE_ISO_NAME"] == f"xubuntu-{release}-desktop-amd64.iso"
+
+
+@pytest.mark.parametrize("release", ["24.04", "26.1", "../26.10"])
+def test_unpinned_or_malformed_release_fails_closed(release):
+    with pytest.raises(dh.HookError) as e:
+        dh.pin_path(release)
+    assert e.value.code == dh.E_PIN
+    assert dh.main(["plan", "--release", release]) == dh.E_PIN
 
 
 def test_plan_real_catalog():
@@ -64,14 +81,14 @@ def test_pinned_dkms_script_is_hash_checked_and_valid_bash(tmp_path):
     s = dh.chroot_script(plan)
     assert f"checkout --detach {GOOD_COMMIT}" in s
     assert f'rev-parse HEAD)" = {GOOD_COMMIT}' in s
-    assert "linux-headers-7.0.0-14-generic" in s and "-k 7.0.0-14-generic" in s
+    assert f"linux-headers-{ABI}" in s and f"-k {ABI}" in s
     f = tmp_path / "s.sh"; f.write_text(s)
     assert subprocess.run(["bash", "-n", str(f)]).returncode == 0
 
 
 def test_install_into_fake_chroot_and_verify(tmp_path):
     chroot = tmp_path / "chroot"; chroot.mkdir()
-    plan = dh.install(chroot, _bundle(tmp_path))
+    plan = dh.install(chroot, _bundle(tmp_path), RELEASE)
     assert (chroot / "etc/udev/rules.d/90-limpet-hardware.rules").is_file()
     assert list((chroot / "etc/limpet/hardware.d").glob("*.toml"))
     assert (chroot / "etc/modprobe.d/90-limpet-hardware-modprobe.conf").is_file()
@@ -91,11 +108,11 @@ def test_chroot_kernel_mismatch_fails_closed(tmp_path):
     chroot = tmp_path / "chroot"
     (chroot / "usr/lib/modules/7.0.0-38-generic").mkdir(parents=True)
     with pytest.raises(dh.HookError) as e:
-        dh.install(chroot, _bundle(tmp_path))
+        dh.install(chroot, _bundle(tmp_path), RELEASE)
     assert e.value.code == dh.E_KERNEL
 
 
 def test_chroot_kernel_match_ok(tmp_path):
     chroot = tmp_path / "chroot"
-    (chroot / "usr/lib/modules/7.0.0-14-generic").mkdir(parents=True)
-    dh.install(chroot, _bundle(tmp_path))
+    (chroot / "usr/lib/modules" / ABI).mkdir(parents=True)
+    dh.install(chroot, _bundle(tmp_path), RELEASE)

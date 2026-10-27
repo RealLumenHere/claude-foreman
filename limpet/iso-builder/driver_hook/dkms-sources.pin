@@ -8,7 +8,8 @@
 # returns "Repository not found" (that name is the AU chip's repo). The in-kernel
 # rtw88_8822bu module claims usb:v0BDApB812 -- verified directly from the .ko in
 # the ISO pool's linux-modules-7.0.0-14-generic (vermagic 7.0.0-14-generic) and
-# on the running 7.0.0-38 kernel. DKMS is therefore not needed. Catalog
+# on the running 7.0.0-38 kernel, and (wq#4709) in the 26.10 ISO pool's
+# linux-modules-7.3.0-9-generic (vermagic 7.3.0-9-generic). DKMS is therefore not needed. Catalog
 # correction is tracked separately; if out-of-tree is ever wanted again the
 # candidate upstream is github.com/morrownr/88x2bu-20210702 (unvetted).
-skip rtl8812bu in-kernel rtw88_8822bu claims 0bda:b812 on 7.0.0-14 and 7.0.0-38; catalog dkms_source URL is dead
+skip rtl8812bu in-kernel rtw88_8822bu claims 0bda:b812 on 7.0.0-14, 7.0.0-38 and 7.3.0-9; catalog dkms_source URL is dead

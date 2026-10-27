@@ -2,7 +2,8 @@
 """wq#3980 -- ISO driver-bundle hook (runner-agnostic).
 
 Consumes the wq#3941 bundle (build_iso_drivers.py --write-bundle) and installs
-it into an assembled chroot against the pinned kernel ABI (kernel.pin). Same
+it into an assembled chroot against the pinned kernel ABI (kernel-<release>.pin,
+one per base Xubuntu release; --release picks it, wq#4709). Same
 code serves build.sh stage7 (remaster chroot) and could be dropped into a
 live-build config/hooks/ or mkosi postinst -- it only needs a chroot dir.
 
@@ -41,7 +42,18 @@ class HookError(Exception):
         self.code = code
 
 
-def read_pin(path: pathlib.Path = HERE / "kernel.pin") -> dict:
+def pin_path(release: str) -> pathlib.Path:
+    """wq#4709: one kernel-<release>.pin per base Xubuntu release (build.sh XUBUNTU_VERSION)."""
+    if not re.match(r"^\d{2}\.\d{2}$", release):
+        raise HookError(E_PIN, f"release {release!r} is not <yy>.<mm>")
+    p = HERE / f"kernel-{release}.pin"
+    if not p.is_file():
+        have = sorted(q.stem.removeprefix("kernel-") for q in HERE.glob("kernel-*.pin"))
+        raise HookError(E_PIN, f"no {p.name} -- pinned releases: {have}")
+    return p
+
+
+def read_pin(path: pathlib.Path) -> dict:
     pin = {}
     for ln in path.read_text().splitlines():
         ln = ln.strip()
@@ -140,8 +152,9 @@ def check_chroot_kernel(chroot: pathlib.Path, abi: str):
                         "DKMS/in-kernel claims were verified only for the pin")
 
 
-def install(chroot: pathlib.Path, bundle: pathlib.Path, run_chroot: bool = False) -> dict:
-    pin = read_pin()
+def install(chroot: pathlib.Path, bundle: pathlib.Path, release: str, run_chroot: bool = False) -> dict:
+    pin_file = pin_path(release)
+    pin = read_pin(pin_file)
     pins, skips = read_sources()
     devices = bid.load_catalog()
     plan = build_plan(devices, pin, pins, skips)
@@ -155,7 +168,7 @@ def install(chroot: pathlib.Path, bundle: pathlib.Path, run_chroot: bool = False
     for doc in ("prebake-plan.md", "PROPRIETARY-LIMITATIONS.md"):
         shutil.copy2(bundle / doc, chroot / "opt/limpet/docs" / doc)
     (chroot / STAGE / "driver-plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
-    shutil.copy2(HERE / "kernel.pin", chroot / STAGE / "kernel.pin")
+    shutil.copy2(pin_file, chroot / STAGE / "kernel.pin")
     script = chroot / STAGE / "install-drivers.sh"
     script.write_text(chroot_script(plan))
     script.chmod(0o755)
@@ -178,8 +191,10 @@ def verify_installed(root: pathlib.Path) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("plan")
+    p = sub.add_parser("plan")
     i = sub.add_parser("install")
+    for s in (p, i):
+        s.add_argument("--release", required=True, help="base Xubuntu release, selects kernel-<release>.pin")
     i.add_argument("--chroot", type=pathlib.Path, required=True)
     i.add_argument("--bundle", type=pathlib.Path, required=True)
     i.add_argument("--run-chroot", action="store_true")
@@ -189,9 +204,10 @@ def main(argv=None) -> int:
     try:
         if a.cmd == "plan":
             pins, skips = read_sources()
-            print(json.dumps(build_plan(bid.load_catalog(), read_pin(), pins, skips), indent=2, sort_keys=True))
+            print(json.dumps(build_plan(bid.load_catalog(), read_pin(pin_path(a.release)), pins, skips),
+                             indent=2, sort_keys=True))
         elif a.cmd == "install":
-            plan = install(a.chroot, a.bundle, a.run_chroot)
+            plan = install(a.chroot, a.bundle, a.release, a.run_chroot)
             print(f"driver_hook: installed for {plan['kernel_abi']}: "
                   f"dkms build={sum(d['status']=='build' for d in plan['dkms'])} "
                   f"skipped={sum(d['status']=='skipped' for d in plan['dkms'])} "

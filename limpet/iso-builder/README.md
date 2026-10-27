@@ -1,6 +1,7 @@
 # wq#3946 — Limpet ISO build pipeline
 
-`build.sh` assembles a Xubuntu 26.04 base + every Limpet component into one
+`build.sh` assembles a Xubuntu base (26.10 by default, `LIMPET_XUBUNTU_VERSION`;
+see "Base release" below) + every Limpet component into one
 hybrid BIOS+UEFI bootable ISO. Run `./build.sh --help` for the stage list and
 env vars, or `./build.sh all` end to end as root on a build host with real
 network egress, `xorriso`/`squashfs-tools`/`qemu-system-x86_64`, overlayfs +
@@ -8,7 +9,7 @@ loop-device support, and ~15 GB free.
 
 ## Layered squashfs (wq#4077)
 
-The 26.04 ISO has no `casper/filesystem.squashfs`. It stacks `minimal` ->
+Neither the 26.04 nor the 26.10 ISO has a `casper/filesystem.squashfs`. Both stack `minimal` ->
 `minimal.standard` -> `minimal.standard.live`, and `casper/install-sources.yaml`
 (type `fsimage-layered`) marks `minimal.standard` as the default install source.
 Limpet content goes into that layer, because it's the one the installer copies to disk; the
@@ -167,27 +168,43 @@ blocking on one that doesn't:
   small synthetic three-layer ISO (`fixtures/xubuntu-26.04/`), with only
   mount/umount/mountpoint/chroot faked; boot-record replay on the real ISO is
   covered by scratch/limpet-iso/test_remaster.sh (wq#4077 evidence).
-- **Base image: still 26.04, not 26.04.1 (wq#4093 decision).** Whether a
-  26.04.1 point release exists and should replace the pinned 26.04 base was in
-  scope for wq#4093, but every outbound search engine (SearXNG's brave/
-  duckduckgo/google-cse/startpage backends) was down for this run ("too many
-  requests"/CAPTCHA, no `BRAVE_API_KEY` fallback -- wq#2595), so there was no
-  verified way to confirm a 26.04.1 release exists, let alone fetch its ISO
-  and published sha256. Guessing a version/checksum is exactly what `stage1`
-  refuses to do (see above), so the pin stays on 26.04 (`kernel.pin`,
-  `BASE_ISO_RELEASE=26.04 (20260423.1)`) rather than swapping blind. Re-run
-  this decision once search is reachable again or a checksum-verified
-  26.04.1 ISO is supplied directly -- note `kernel.pin`'s own warning that a
-  base swap means re-verifying every in-kernel claim in `dkms-sources.pin`.
+- **Base release (wq#4709).** Frank set Xubuntu 26.10 as the Limpet base
+  (lumen_state `limpet.base_os`, 2026-10-15; wq#3983/wq#4009), superseding the
+  26.04 the pipeline had been pinned to (wq#4093). `LIMPET_XUBUNTU_VERSION`
+  (default `26.10`) selects `driver_hook/kernel-<release>.pin`, the
+  `ubuntu:<release>` stage4b/4c containers, and the default
+  `LIMPET_BASE_ISO_SHA256` (the pin's; stage1 warns on an override that differs).
+  `26.04` stays pinned and buildable. 26.04.1 has a published sha256
+  (`cdimage.ubuntu.com/xubuntu/releases/26.04/release/SHA256SUMS`, fetched
+  2026-10-27) but is not pinned.
+  Real run, 2026-10-27, as root against the checksum-verified 26.10 GA ISO in a
+  throwaway `LIMPET_ISO_WORKDIR` on `/scratch`: stage1, 1b, 2, 3, 3c, 4 (incl.
+  4b cargo/4c pip/4d/4e in `ubuntu:26.10`), 5, 6, 7, 8, 9, 11 and 11b all
+  exited 0. That includes the same casper stack with the same `minimal.standard`
+  default-true install source, every `bloat-removal.list` package purged,
+  driver_hook installing for `7.3.0-9-generic` with no exit 3 (no layer carries
+  `usr/lib/modules`), stage11b finding `ubuntu-desktop-bootstrap` seeded in the
+  live layer, and a 6.7 GB ISO. **stage10 exited 1**
+  (`grub-probe: failed to get canonical path of 'overlay'` from the in-chroot
+  `update-grub`). It fails the same way on 26.04 (same grub 2.14-2ubuntu2), so it
+  is a pipeline bug and has nothing to do with the base change: ISSUE-LOG row 1620, wq#4740.
+  **Cost:** 26.10 is an interim release, not an LTS. endoflife.date gives its
+  EOL as 2027-07-01 and Ubuntu Studio's 26.10 announcement says "9 months, until
+  July 2027" (both fetched 2026-10-27). xubuntu.org's own EOL field disagrees
+  (`research/WQ3983_ERRATA_AND_GA_RERUN.md` §3). For comparison, 26.04 LTS has
+  standard support until 2029-04 (same doc §2). Staying supported means rebasing
+  onto 27.04 (another pin, another in-kernel re-verification) before July 2027.
 
 ## Driver bundle hook (wq#3980)
 
 `driver_hook/` is the stage7 hook that consumes the wq#3941 bundle. It is runner-agnostic
 (needs only a chroot dir), so the same code can sit behind live-build/mkosi later.
 
-- `kernel.pin` pins the base ISO (name + sha256, verified) and the target kernel ABI
-  (`7.0.0-14-generic`, read from the real ISO's `casper/vmlinuz`; its `pool/` carries the
-  matching headers + modules). Note the installer picks the kernel (`kernel: default:
+- `kernel-<release>.pin` (one per base release; `--release`, which build.sh passes as
+  `$XUBUNTU_VERSION`) pins the base ISO (name + sha256, verified) and the target kernel ABI
+  (26.04: `7.0.0-14-generic`; 26.10: `7.3.0-9-generic` -- each read from the real ISO's
+  `casper/vmlinuz`; each `pool/` carries the matching headers + modules). The selected pin
+  is copied into the image as `opt/limpet/driver-bundle/kernel.pin`. Note the installer picks the kernel (`kernel: default:
   linux-generic` in `install-sources.yaml`); the squashfs layers carry none.
 - `dkms-sources.pin` pins DKMS sources by URL + full commit, or records an explicit `skip`
   with a reason. A catalog `dkms=true` entry with no line makes the hook exit 4.

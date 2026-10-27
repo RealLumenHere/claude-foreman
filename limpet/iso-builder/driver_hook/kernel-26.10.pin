@@ -1,0 +1,21 @@
+# wq#4709 -- pinned base image + target kernel ABI for a Xubuntu 26.10 Limpet ISO
+# (Frank's base_os decision, lumen_state limpet.base_os, 2026-10-15). Every value
+# below was read from the real artifact on 2026-10-27, not assumed:
+#   - ISO: /home/lumen/scratch/xubuntu-26.10/xubuntu-26.10-desktop-amd64.iso,
+#     sha256 equal to cdimage.ubuntu.com/xubuntu/releases/26.10/release/SHA256SUMS
+#     (fetched 2026-10-27) and to the local xubuntu-SHA256SUMS copy.
+#   - /.disk/info: Xubuntu 26.10 "Stonking Stingray" - Official amd64 (20261014)
+#   - casper/vmlinuz is a bzImage "7.3.0-9-generic" (#9-Ubuntu, built 2026-10-05)
+#   - ISO pool/ carries linux-headers-7.3.0-9-generic and
+#     linux-modules-7.3.0-9-generic (7.3.0-9.9; fully offline for this ABI)
+#   - casper/install-sources.yaml: "kernel: default: linux-generic", same
+#     minimal -> minimal.standard (default: true) -> .live stack as 26.04;
+#     no layer manifest lists a linux-image/linux-modules package.
+#   - dkms-sources.pin's rtw88_8822bu skip re-verified on this ABI: the pool
+#     .ko has vermagic 7.3.0-9-generic and alias usb:v0BDApB812.
+# Changing KERNEL_ABI means re-verifying every in-kernel claim in
+# dkms-sources.pin; the test suite does not do that for you.
+BASE_ISO_NAME=xubuntu-26.10-desktop-amd64.iso
+BASE_ISO_SHA256=8f5662cf26f320a8a2cda807f16b4ba66449cf9846946a47fc2e9aa6d1a56690
+BASE_ISO_RELEASE=26.10 (20261014)
+KERNEL_ABI=7.3.0-9-generic
