@@ -11,8 +11,10 @@ tickets already use to compare a candidate.
   scan.py pre-receive            hook mode (stdin: old new ref)
   scan.py audit GITDIR [...]     scan every reachable object in bare repos, report only
 
-Allow a known-synthetic value one of two ways: put `secret-scan:allow` on the same line, or
-list the 12-hex sha in /etc/lumen-secret-scan/allow.txt (one per line, # comments).
+Allow a known-synthetic value one of three ways: put `secret-scan:allow` on the same line,
+list the 12-hex sha in /etc/lumen-secret-scan/allow.txt (one per line, # comments), or — repo-local,
+self-serve (wq#4735) — list `sha256:<64hex> <fixture glob>` in `.secret-scan-allow` at the repo root
+(read from the pushed commit; path must match a test/fixture glob, see allow_local.py).
 
 Fails OPEN on its own errors and on the time budget (logged to syslog): a broken scanner
 must not stop the fleet landing PRs. A finding always fails closed.
@@ -24,6 +26,12 @@ import subprocess
 import sys
 import syslog
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import allow_local                       # wq#4735: repo-local .secret-scan-allow
+except Exception:                            # absent on an old install: no local allow, scan as before
+    allow_local = None
 
 MAX_BLOB = int(os.environ.get("SECRET_SCAN_MAX_BLOB", str(2 * 1024 * 1024)))
 BUDGET_S = int(os.environ.get("SECRET_SCAN_BUDGET_S", "25"))
@@ -68,13 +76,15 @@ def load_allow():
     return out
 
 
-def scan_text(text, allow=frozenset()):
+def scan_text(text, allow=frozenset(), path=None, local_allow=()):
     """[(label, lineno, sha12)] for every unallowed token shape in text."""
     hits, seen = [], set()
     for label, rx in RULES:
         for m in rx.finditer(text):
             sha = hashlib.sha256(m.group(0).encode("utf-8", "replace")).hexdigest()[:12]
             if sha in allow or (label, m.start()) in seen:
+                continue
+            if allow_local and allow_local.allowed(path, m.group(0), local_allow):
                 continue
             ls = text.rfind("\n", 0, m.start()) + 1
             le = text.find("\n", m.end())
@@ -100,7 +110,18 @@ def new_objects(new, base_args):
     return objs
 
 
-def scan_objects(objs, allow, deadline):
+def load_local_allow(rev):
+    """Parsed .secret-scan-allow entries at `rev`, or () if absent/unreadable (fail closed)."""
+    if allow_local is None:
+        return ()
+    try:
+        raw = git("cat-file", "-p", "%s:%s" % (rev, allow_local.FILE_NAME))
+    except Exception:
+        return ()
+    return tuple(allow_local.parse(raw.decode("utf-8", "replace")))
+
+
+def scan_objects(objs, allow, deadline, local_allow=()):
     """Scan blobs, commits and tags. Returns (findings, timed_out)."""
     findings = []
     if not objs:
@@ -124,8 +145,9 @@ def scan_objects(objs, allow, deadline):
             size = int(hdr[2])
             body = raw[eol + 1:eol + 1 + size]
             pos = eol + 1 + size + 1
-            for label, lineno, sha12 in scan_text(body.decode("latin-1"), allow):
-                findings.append((label, objs.get(hdr[0].decode(), "") or "(%s)" % hdr[1].decode(), lineno, sha12))
+            path = objs.get(hdr[0].decode(), "")   # empty for commits/tags: never locally allowable
+            for label, lineno, sha12 in scan_text(body.decode("latin-1"), allow, path, local_allow):
+                findings.append((label, path or "(%s)" % hdr[1].decode(), lineno, sha12))
     return findings, False
 
 
@@ -146,7 +168,7 @@ def pre_receive(stdin, stderr):
                 continue                                    # malformed, or a ref delete
             new = parts[1]
             objs = new_objects(new, ["--not", "--all"])
-            f, timed_out = scan_objects(objs, allow, deadline)
+            f, timed_out = scan_objects(objs, allow, deadline, load_local_allow(new))
             findings += f
             if timed_out and not findings:
                 log("time budget hit, push allowed unscanned (%s)" % parts[2])
@@ -168,7 +190,7 @@ def audit(gitdirs, out):
     for gd in gitdirs:
         os.environ["GIT_DIR"] = gd
         objs = new_objects("--all", [])
-        f, _ = scan_objects(objs, allow, time.time() + 3600)
+        f, _ = scan_objects(objs, allow, time.time() + 3600, load_local_allow("HEAD"))
         total += len(f)
         out.write("%s: %d objects, %d finding(s)\n" % (gd, len(objs), len(f)))
         for label, path, lineno, sha12 in f[:40]:

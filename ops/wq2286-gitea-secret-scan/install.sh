@@ -29,6 +29,7 @@ case "${1:-}" in
     . "$SRC/../_verify.sh"
     if [ "$(hostname -s)" = anubis ]; then
       vfile "$SRC/scan.py" "$LIB/scan.py"
+      vfile "$SRC/allow_local.py" "$LIB/allow_local.py"
       [ -e "$ETC/allow.txt" ] || _vmiss "absent: $ETC/allow.txt"
       for r in $(repos); do
         [ -x "$r/$SHIM" ] || _vmiss "no pre-receive shim: $r"
@@ -36,6 +37,7 @@ case "${1:-}" in
     else
       vremote_up anubis || vdone
       vremote_file anubis "$SRC/scan.py" "$LIB/scan.py"
+      vremote_file anubis "$SRC/allow_local.py" "$LIB/allow_local.py"
       [ -n "$($_VSSH anubis "test -e $ETC/allow.txt && echo y" 2>/dev/null)" ] \
         || _vmiss "anubis: absent $ETC/allow.txt"
       unhooked="$($_VSSH anubis \
@@ -55,9 +57,10 @@ case "${1:-}" in
     for r in $(repos); do rm -f "$r/$SHIM" && echo "removed: $r"; done; exit 0 ;;
 esac
 
-python3 -m py_compile "$SRC/scan.py"
+python3 -m py_compile "$SRC/scan.py" "$SRC/allow_local.py"
 install -d -m 755 "$LIB" "$ETC"
 install -m 755 -o root -g root "$SRC/scan.py" "$LIB/scan.py"
+install -m 644 -o root -g root "$SRC/allow_local.py" "$LIB/allow_local.py"
 [ -e "$ETC/allow.txt" ] || install -m 644 -o root -g root "$SRC/allow.txt" "$ETC/allow.txt"
 
 OWNER="$(owner)"

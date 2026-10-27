@@ -18,6 +18,14 @@ Put `secret-scan:allow` on the same line, or add the value's 12-hex sha to
 `/etc/lumen-secret-scan/allow.txt` on Anubis. Build the fake at runtime (`"gh" + "p_" + ...`) so
 the source file is not a hit either.
 
+Repo-local, self-serve (wq#4735): add `.secret-scan-allow` at the repo root with
+`sha256:<64 hex of the exact value> <fixture glob>` lines (e.g. `**/test_*.py`,
+`**/fixtures/**`). The scanner skips a match only when the file path matches the glob, the
+glob targets test/fixture paths (must contain test/fixture/example/sample/mock — production
+paths can never be allowlisted), and the value's full sha256 is listed. Malformed lines
+grant nothing. `cmd-secret-lint` reads the same file from the working tree (allow_local.py
+is the shared parser). The file carries only hashes, so it is not itself a hit.
+
 ## Deploy
 ```
 tar c -C ops/wq2286-gitea-secret-scan . | ssh anubis@100.121.17.5 \
