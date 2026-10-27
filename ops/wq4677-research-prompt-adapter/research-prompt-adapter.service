@@ -1,0 +1,16 @@
+[Unit]
+Description=File scratch/research_prompts/*.txt as wq research tickets (wq#4677)
+Documentation=file:///home/lumen/foreman/ops/wq4677-research-prompt-adapter/README.md
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+WorkingDirectory=/home/lumen
+# Only side effects: `wq add --lane research` + file moves inside scratch/research_prompts.
+# No provider calls (the dormant deep_research_orchestrator is NOT revived, HANDOFF s4).
+ExecStart=/usr/bin/python3 /home/lumen/bin/research-prompt-adapter
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=300
+Nice=10

@@ -1,0 +1,12 @@
+[Unit]
+Description=Drain the research-prompt inbox into the wq research lane every 10 min (wq#4677)
+Requires=research-prompt-adapter.service
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target
