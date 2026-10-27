@@ -221,6 +221,19 @@ basenames are globbed for both `path` and `realpath(path)` through `basename_can
 Pinned by five tests at `harness/tests/test_action_gate.py:468-523`, including
 `test_empty_preimage_still_lands_in_snapdir`, which is the boundary the fix must not cross.
 
+### 3.5 Dead `read_dirs` entry replaced (wq#4691)
+
+`allow.read_dirs` named `/home/lumen/research_prompts`, which does not exist — the real
+research-prompt inbox the research-prompt-adapter (wq#4677) queues into is
+`/home/lumen/scratch/research_prompts`. Swept the real path before granting it:
+
+| root | files | hits | verdict |
+|---|---|---|---|
+| /home/lumen/scratch/research_prompts | 4611 | 2 | false positives — `sk_key` matched a 24+ char hyphenated URL slug naming the company "SK Telecom" / "SK Hynix" inside queued article text, not an API key: `done/intel_alleged_china_ties_at_sk_telecom_alarmed_us_officials_and_tr_7fb176.txt:4` and `done/intel_samsung_and_sk_hynix_plan__590_billion_chip_investment_as_ai_4d5c80.txt:4`, both a `URL: https://the-decoder.com/...sk-t.../` line |
+
+Replaced the dead entry in `harness/fleet-exec-policy.yaml:74` in place rather than adding a
+second line, since nothing ever read the old path (it never existed on disk).
+
 ## 4. Test-to-failure
 
 | # | case | result |
