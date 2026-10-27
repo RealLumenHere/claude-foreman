@@ -387,3 +387,59 @@
         wq#3841's verify pass caught it and wq#3842 corrected it. The
         atlas's F-6 prose is a 2026-09-10 capture (annotated by wq#3842);
         trust `n8n_watcher.py` over it.
+
+- name: lumen-watchdog
+  units: [lumen-watchdog.timer, lumen-watchdog.service]
+  load_state: loaded   # 2026-10-27: timer `disabled` and inactive, service `static`;
+                        # both files still in /etc/systemd/system until
+                        # ops/wq4701-lumen-watchdog-retire/remove-units.sh runs as root
+  retired_on: "2026-08-27"
+  reason: >
+    60 s ping/port poller (/home/lumen/agent/lumen_watchdog.py) that wrote
+    /home/lumen/scratch/HOMELAB_STATUS.json and sent edge-triggered ntfy pages.
+    wq#970 disabled its timer on 2026-08-27 after backfilling its device and
+    service list into Gatus (lumen_watchdog.RETIRED.txt). Its log
+    /home/lumen/scratch/watchdog.log has a line per minute from 2026-05-17
+    to 2026-08-27 19:42:46 UTC, then exactly one more, 2026-10-27 05:19:08,
+    which is the manual wq#4695 acceptance run (also the only
+    `journalctl -u lumen-watchdog.service` entry; journal reaches back to
+    2026-10-06). wq#4701 found the service still installed and asked whether
+    to schedule it again. RETIRE: on 2026-10-27 Gatus had an endpoint for
+    every target in the script's DEVICES/SERVICES/ollama check
+    (1-nodes_{thor,thoth,3dprinter,phone,anubis,maat},
+    2-lumen-services_{n8n,litellm,redis,ntfy-self,beszel-hub,ollama-local},
+    all polled within the last minute), alerting via the :8784 gatus-alert
+    bridge. The only DEVICES entry Gatus lacks is `lumen` itself, and a
+    watchdog running on lumen cannot report lumen down. Re-arming the timer
+    would page every outage twice.
+  ticket: wq#4701 (decision + removal bundle), wq#970 (disabled the timer), wq#4695 (last edit; its watchdog half dropped by wq#4701)
+  data:
+    files:
+      - /home/lumen/scratch/HOMELAB_STATUS.json   # frozen since 2026-08-27 apart from the wq#4695 run; no reader found
+      - /home/lumen/scratch/watchdog.log          # leave, it is the evidence
+      - /home/lumen/logs/.stamp.lumen-watchdog    # from the wq#4695 manual run; removed by remove-units.sh
+    disposition: >
+      Script moved to /home/lumen/agent/lumen_watchdog.py.retired-wq4701 by
+      remove-units.sh. Units preserved verbatim in
+      ops/wq4701-lumen-watchdog-retire/units/. Nothing reads
+      HOMELAB_STATUS.json (grep of agent, bin, foreman, minerva, 2026-10-27).
+  guards:
+    - "Gatus (sentinel)": >
+        the replacement. Note it still probes retired isis/khepri/seshat
+        (and the n8n endpoint, n8n retired 2026-10-14). The node-retirement
+        cleanup wq#4695 did for this script was never done for Gatus;
+        filed separately.
+    - "cron_deadman.py (wq#1184)": >
+        the 99-cron-stamp.conf drop-in on the service touched the stamp on
+        the manual run. With no timer there is no cadence and the stamp is
+        skipped, so removal cannot page.
+    - "lumen_watchdog_notify.py": >
+        a different module (the Watchdog/beat_forever heartbeat helper that
+        lumen_self_healer, lumen_agent_v4 and lumen_fleet_researcher import).
+        NOT retired. The name collision is the reason this note exists.
+    - "projects_app.py `lumen-watchdog` health row": >
+        ops/wq2751-listener-audit/projects_app.py:35 watches
+        /home/lumen/logs/watchdog.log, written by a separate restart
+        watchdog ("[watchdog] All done — nothing to restart", fresh
+        2026-10-27), not by this script, which logged to
+        /home/lumen/scratch/watchdog.log. Unaffected.

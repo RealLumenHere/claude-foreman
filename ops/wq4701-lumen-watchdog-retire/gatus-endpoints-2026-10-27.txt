@@ -1,0 +1,36 @@
+# Gatus endpoint keys, groups 1-nodes and 2-lumen-services, captured 2026-10-27 from
+# curl -s http://localhost:8418/api/v1/endpoints/statuses on lumen (wq#4701).
+# Fixture for harness/tests/test_wq4701_lumen_watchdog_retire.py.
+1-nodes_3dprinter
+1-nodes_anubis
+1-nodes_anubis-sshauth
+1-nodes_apep
+1-nodes_apep-sshauth
+1-nodes_bes
+1-nodes_gameboy
+1-nodes_isis
+1-nodes_isis-sshauth
+1-nodes_khepri
+1-nodes_maat
+1-nodes_maat-sshauth
+1-nodes_nephthys-sshauth
+1-nodes_phone
+1-nodes_seshat
+1-nodes_seshat-sshauth
+1-nodes_sia
+1-nodes_sobek
+1-nodes_thor
+1-nodes_thor-sshauth
+1-nodes_thoth
+1-nodes_thoth-sshauth
+2-lumen-services_beszel-hub
+2-lumen-services_dc-gateway
+2-lumen-services_kiosk-stream
+2-lumen-services_langfuse-health
+2-lumen-services_litellm
+2-lumen-services_messenger
+2-lumen-services_n8n
+2-lumen-services_ntfy-self
+2-lumen-services_ollama-local
+2-lumen-services_pgvector
+2-lumen-services_redis

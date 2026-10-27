@@ -6,8 +6,10 @@ shipped in ops/wq4695-watchdog-retired-canary-a1/ (the live
 /home/lumen/agent + /home/lumen/bin paths are guard.sh PRIMARY_TREES this repo's
 workers cannot write — see that bundle's README "Why the live files aren't
 touched directly").
+
+The lumen_watchdog.py half of these tests went with the script's retirement
+(wq#4701, ops/wq4701-lumen-watchdog-retire/).
 """
-import importlib.util
 import json
 import os
 import re
@@ -21,19 +23,10 @@ REPO_ROOT = os.path.dirname(HARNESS)
 BUNDLE = os.path.join(REPO_ROOT, "ops", "wq4695-watchdog-retired-canary-a1")
 
 RETIRED_JSON = os.path.join(BUNDLE, "fleet-retired-nodes.json")
-WATCHDOG_PY = os.path.join(BUNDLE, "lumen_watchdog.py")
 OLLAMA_CANARY = os.path.join(BUNDLE, "tests", "ollama_canary.sh")
 TAILSCALE_CANARY = os.path.join(BUNDLE, "tests", "tailscale_canary.sh")
 
 RETIRED_NAMES = {"isis", "hathor", "khepri", "wadjet", "nephthys"}
-
-
-def _load_watchdog(tmp_path, retired_json_path):
-    spec = importlib.util.spec_from_file_location("wq4695_watchdog", WATCHDOG_PY)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.RETIRED_NODES_PATH = retired_json_path
-    return mod
 
 
 def test_shared_retired_list_matches_the_ticket():
@@ -44,37 +37,6 @@ def test_shared_retired_list_matches_the_ticket():
     # land with no record of when it happened.
     for name, date in retired.items():
         assert re.match(r"^\d{4}-\d{2}-\d{2}$", date), f"{name}: {date!r} is not YYYY-MM-DD"
-
-
-def test_devices_has_no_retired_node():
-    mod = _load_watchdog(None, RETIRED_JSON)
-    assert RETIRED_NAMES.isdisjoint(mod.DEVICES), (
-        f"DEVICES still monitors {RETIRED_NAMES & set(mod.DEVICES)}")
-    # anubis replaced wadjet as the canary target, but it's still a monitored
-    # device in its own right — must not have been dropped by mistake.
-    assert "anubis" in mod.DEVICES
-
-
-def test_retired_devices_stay_out_of_transient_too():
-    mod = _load_watchdog(None, RETIRED_JSON)
-    assert RETIRED_NAMES.isdisjoint(mod.TRANSIENT_DEVICES)
-
-
-def test_startup_guard_passes_on_the_real_devices_dict():
-    mod = _load_watchdog(None, RETIRED_JSON)
-    mod.check_no_retired_devices_monitored()  # must not raise
-
-
-def test_startup_guard_raises_loudly_if_a_retired_node_is_reintroduced():
-    mod = _load_watchdog(None, RETIRED_JSON)
-    mod.DEVICES = dict(mod.DEVICES, wadjet="100.116.217.15")
-    with pytest.raises(RuntimeError, match="wadjet"):
-        mod.check_no_retired_devices_monitored()
-
-
-def test_startup_guard_is_wired_into_main():
-    src = open(WATCHDOG_PY).read()
-    assert "check_no_retired_devices_monitored()" in src.split('if __name__')[-1]
 
 
 @pytest.mark.parametrize("path", [OLLAMA_CANARY, TAILSCALE_CANARY])

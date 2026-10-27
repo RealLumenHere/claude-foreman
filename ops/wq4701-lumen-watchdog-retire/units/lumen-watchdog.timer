@@ -1,0 +1,10 @@
+[Unit]
+Description=Run homelab watchdog every 60 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+Unit=lumen-watchdog.service
+
+[Install]
+WantedBy=timers.target

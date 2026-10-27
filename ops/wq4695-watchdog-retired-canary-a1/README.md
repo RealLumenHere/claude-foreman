@@ -1,5 +1,14 @@
 # wq#4695 — stop watchdog + maint-ops canary harnesses from targeting retired nodes
 
+> **wq#4701 (2026-10-27): the watchdog half of this bundle is retired.**
+> `lumen_watchdog.py` had not run on a schedule since 2026-08-27 (wq#970 disabled its
+> timer when Gatus took over its checks), and Gatus covers every target it pinged. The bundle
+> copy was dropped and `install.sh --verify` no longer checks it. The script and units are
+> removed by `ops/wq4701-lumen-watchdog-retire/`. The last shipped copy is
+> `git show 7e91411f:ops/wq4695-watchdog-retired-canary-a1/lumen_watchdog.py`. The canary
+> half below (`fleet-retired-nodes.json`, `tests/*_canary.sh`) still stands. Deploy steps 2 and
+> 8 and the watchdog liveness check are obsolete.
+
 Found by `build-litellm-wadjet-e77ef4` (wq#4680). `/home/lumen/agent/lumen_watchdog.py`'s
 `DEVICES` dict still pinged `isis`, `hathor`, `khepri` (retired 2026-10-22) and `wadjet`
 (retired 2026-10-26); only `nephthys` had ever been removed (wq#589 precedent). None of the

@@ -1,0 +1,10 @@
+[Unit]
+Description=Lumen Homelab Watchdog
+After=network.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/usr/bin/python3 /home/lumen/agent/lumen_watchdog.py
+StandardOutput=append:/home/lumen/scratch/watchdog.log
+StandardError=append:/home/lumen/scratch/watchdog.log
