@@ -442,8 +442,15 @@ stage4c_build_pip_tools() {
       export PIPX_HOME=/usr/local/share/pipx
       export PIPX_BIN_DIR=/usr/local/bin
       pipx install /tmp/dl/*
-      # Fallback: if pipx put binaries in ~/.local/bin despite env vars, copy them
-      if [ -d ~/.local/bin ] && [ -n "$(ls ~/.local/bin/ 2>/dev/null)" ]; then
+      # Fallback: if pipx put binaries in ~/.local/bin despite env vars, copy them.
+      # wq#4676: every \$ and \" below MUST stay escaped -- this whole block is one
+      # double-quoted string in build.sh's own shell, so an unescaped \$(...) runs on the
+      # BUILD HOST at docker-run-assembly time (against the build user's ~/.local/bin,
+      # before the container even starts) and an unescaped \" ends the string early,
+      # letting the substitution's word-split output spill into docker's argv. The
+      # bare-\$ form shipped in wq#4672 did exactly that; ~ and * need no escaping
+      # (no tilde/glob expansion happens inside double quotes).
+      if [ -d ~/.local/bin ] && [ -n \"\$(ls ~/.local/bin/ 2>/dev/null)\" ]; then
         cp -a ~/.local/bin/* /usr/local/bin/ 2>/dev/null || true
       fi
     "
