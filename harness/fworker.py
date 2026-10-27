@@ -3088,9 +3088,27 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
 
 # wq#4707: the CLI feeds a finished background task back to the agent as a new turn,
 # so a result frame emitted while one is outstanding is "turn over", not "run over".
-# Matched against the text the CLI hands the agent back.
+#
+# wq#4728: a completion is read only from the CLI's own notification channel, never from
+# arbitrary tool output. The authoritative signal is a structured frame —
+# {"type": "system", "subtype": "task_notification", "task_id": ..., "status":
+# "completed"|"failed"|"stopped"} — emitted exactly once per task at its terminal state
+# (anthropics/claude-code#104943; CodeBuddy's stdio protocol doc, aligned to Claude Code
+# 2.1.220, states it outright: task_notification is the authoritative terminal signal and
+# completion must not be derived from other events). The text turn the CLI hands back
+# (<task-notification>…) is accepted too, since that is the shape wq4686's captured
+# frames have. What is no longer accepted is the same phrasing inside an unrelated
+# tool_result: matching any user-frame text meant that reading a file, a test log or a
+# ticket that merely says "background task … completed" cleared a real pending task and
+# silently put the session back on the short grace with work still outstanding (wq#4726).
+_BG_NOTIFY_SUBTYPE = "task_notification"
+_BG_TERMINAL_STATUSES = ("", "completed", "success", "failed", "error", "stopped",
+                         "killed", "cancelled", "canceled", "timed_out", "timeout")
+_BG_NOTIFY_RE = re.compile(r"<\s*/?\s*task[-_]notification\b", re.I)
+# Fallback phrasings for the text channel, so a change in the wrapper does not blind the
+# detector. Only ever applied to a CLI-injected turn or to the tracked task's own
+# tool_result — see BackgroundTaskWatch._is_completion_text.
 _BG_COMPLETE_RE = re.compile(
-    r"task-notification|"
     r"\btask\b[^\n]{0,80}\b(?:completed|finished|failed|exited|has finished)|"
     r"background (?:task|command|shell|process|run)[^\n]{0,80}"
     r"(?:completed|finished|failed|exited|is done)",
@@ -3112,10 +3130,16 @@ class BackgroundTaskWatch:
 
     Starts are read from the agent's own tool_use input (run_in_background on Bash, or
     any Agent/Task call that did not opt out) plus the CLI's auto-background of an
-    over-long Bash call. Completions are read from the notification text the CLI feeds
-    back. Detection is deliberately generous on the start side and strict on the
-    completion side: over-counting only stretches the post-result grace for a process
-    that is still alive, while under-counting is what killed 60 workers mid-ticket.
+    over-long Bash call. Completions are read from the CLI's notification channel only:
+    a system/task_notification frame, the <task-notification> turn it hands the agent, or
+    the tracked call's own tool_result — never from an unrelated tool_result, and never
+    while nothing is pending (wq#4728).
+
+    Detection is deliberately generous on the start side and strict on the completion
+    side: over-counting a start only stretches the post-result grace for a process that
+    is still alive (and POST_RESULT_BG_GRACE_S still bounds it), while under-counting one
+    — or clearing it on text that was never a completion — is what killed 60 workers
+    mid-ticket.
     """
 
     def __init__(self):
@@ -3130,6 +3154,12 @@ class BackgroundTaskWatch:
 
     def observe(self, frame):
         ftype = frame.get("type")
+        if ftype == "system":
+            # The authoritative terminal signal, one per task, no text matching at all.
+            if (frame.get("subtype") == _BG_NOTIFY_SUBTYPE
+                    and str(frame.get("status") or "").lower() in _BG_TERMINAL_STATUSES):
+                self._complete()
+            return
         msg = frame.get("message")
         content = (msg.get("content") if isinstance(msg, dict) else None) or []
         if not isinstance(content, list):
@@ -3147,17 +3177,36 @@ class BackgroundTaskWatch:
             for b in content:
                 if not isinstance(b, dict):
                     continue
-                text = "\n".join(_content_text(
-                    b.get("content") if b.get("type") == "tool_result" else [b]))
+                is_result = b.get("type") == "tool_result"
+                text = "\n".join(_content_text(b.get("content") if is_result else [b]))
                 if not text:
                     continue
-                if _BG_COMPLETE_RE.search(text):
-                    self.completed += 1
-                elif (b.get("type") == "tool_result"
+                if self._is_completion_text(b, is_result, text):
+                    self._complete()
+                elif (is_result
                         and b.get("tool_use_id") not in self._bg_ids
                         and _BG_AUTO_RE.search(text)):
                     self.started += 1
                     self._bg_ids.add(b.get("tool_use_id"))
+
+    def _complete(self):
+        """Count a completion only against work actually outstanding: pending is
+        started - completed, so a stray match while nothing is pending would bank credit
+        that a later real start then silently spends (wq#4728 — a worker's own dispatch
+        prompt can quote notification text)."""
+        if self.pending:
+            self.completed += 1
+
+    def _is_completion_text(self, block, is_result, text):
+        if not self.pending:
+            return False
+        if is_result:
+            # Ordinary foreground output cannot speak for a background task — only the
+            # tracked call's own result can. Mirrors the start side's `tool_use_id not
+            # in self._bg_ids` gate, which the completion side was missing (wq#4726).
+            if block.get("tool_use_id") not in self._bg_ids:
+                return False
+        return bool(_BG_NOTIFY_RE.search(text) or _BG_COMPLETE_RE.search(text))
 
 
 def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
