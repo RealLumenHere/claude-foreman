@@ -435,7 +435,13 @@ stage4c_build_pip_tools() {
       pip download --no-deps --dest /tmp/dl '$package==$ver'
       got=\"\$(sha256sum /tmp/dl/* | awk '{print \$1}' | head -1)\"
       [ \"\$got\" = '$sha256' ] || { echo \"stage4c: sha256 mismatch for $package==$ver: got \$got want $sha256\" >&2; exit 1; }
-      PIPX_HOME=/usr/local/share/pipx PIPX_BIN_DIR=/usr/local/bin pipx install /tmp/dl/*
+      export PIPX_HOME=/usr/local/share/pipx
+      export PIPX_BIN_DIR=/usr/local/bin
+      pipx install /tmp/dl/*
+      # Fallback: if pipx put binaries in ~/.local/bin despite env vars, copy them
+      if [ -d ~/.local/bin ] && [ -n "$(ls ~/.local/bin/ 2>/dev/null)" ]; then
+        cp -a ~/.local/bin/* /usr/local/bin/ 2>/dev/null || true
+      fi
     "
     { [ -x "$out/usr/local/bin/$bin" ] || [ -L "$out/usr/local/bin/$bin" ]; } || fail "pipx install of $package $ver produced no $out/usr/local/bin/$bin"
     log "stage4c: built /usr/local/bin/$bin ($(sha256sum "$out/usr/local/bin/$bin" | cut -c1-16)...)"
