@@ -59,7 +59,7 @@ archetypes:
     max_turns: 600
     wall_clock_timeout_s: 3600
     local:
-      max_turns: 15
+      max_turns: 40   # 2026-10-08 subtraction-phase2: 15 starved deepseek-v4-flash (cheap_cloud) at the lumen-pr step on wq#3627 (2 attempts, both TURNS, no hang); was tuned for 7-14B Mac rungs
 
   standard-engineering:
     primary_tuple: sonnet-5@high
