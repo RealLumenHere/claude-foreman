@@ -193,6 +193,11 @@ case "$1" in */run) rm -rf "$1"/systemd ;; esac
 
 FAKE_MOUNTPOINT = '#!/usr/bin/env bash\n[ -f "$FAKE_MNT" ] && grep -qxF "$2" "$FAKE_MNT"\n'
 
+# wq#4710: build.sh's generic mount teardown discovers what to unmount via findmnt
+# instead of a hardcoded path list, so it needs the same bookkeeping-file fake as
+# mount/umount/mountpoint above (one mounted target per line).
+FAKE_FINDMNT = '#!/usr/bin/env bash\n[ -f "$FAKE_MNT" ] && cat "$FAKE_MNT"\nexit 0\n'
+
 # The fake chroot execs on the host, so `apt-get install` records its packages in the
 # chroot's dpkg db (through the overlay symlink, i.e. into upper/) the way a real one would.
 FAKE_APT_GET = r"""#!/usr/bin/env bash
@@ -328,6 +333,7 @@ def remaster(tmp_path_factory):
     _exe(bin_dir / "mount", FAKE_MOUNT)
     _exe(bin_dir / "umount", FAKE_UMOUNT)
     _exe(bin_dir / "mountpoint", FAKE_MOUNTPOINT)
+    _exe(bin_dir / "findmnt", FAKE_FINDMNT)
     _exe(bin_dir / "id", FAKE_ID)
     _exe(bin_dir / "chroot", '#!/usr/bin/env bash\nshift\nexec "$@"\n')
 
@@ -458,6 +464,7 @@ def _stage1_env(tmp_path, fake_id):
     _exe(bin_dir / "mount", FAKE_MOUNT)
     _exe(bin_dir / "umount", FAKE_UMOUNT)
     _exe(bin_dir / "mountpoint", FAKE_MOUNTPOINT)
+    _exe(bin_dir / "findmnt", FAKE_FINDMNT)
     if fake_id:
         _exe(bin_dir / "id", FAKE_ID)
     _exe(bin_dir / "chroot", '#!/usr/bin/env bash\nshift\nexec "$@"\n')
