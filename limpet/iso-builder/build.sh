@@ -386,6 +386,10 @@ stage4b_build_cargo_tools() {
     docker run --rm -v "$out:/out" "ubuntu:$XUBUNTU_VERSION" bash -euc \
       "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq; apt-get install -y -qq --no-install-recommends cargo rustc build-essential pkg-config ca-certificates $bdeps; cargo install $crate --version $ver --locked --root /out"
     [ -x "$out/bin/$bin" ] || fail "cargo build of $crate $ver produced no $out/bin/$bin"
+    # wq#4673: Ubuntu 26.04's uutils coreutils `install` returns non-zero on an
+    # existing target ("Already exists") instead of GNU's silent overwrite,
+    # which kills this script under set -euo pipefail on a re-run.
+    rm -f "$CHROOT/usr/local/bin/$bin"
     install -m 0755 "$out/bin/$bin" "$CHROOT/usr/local/bin/$bin"
     log "stage4b: installed /usr/local/bin/$bin ($(sha256sum "$out/bin/$bin" | cut -c1-16)...)"
   done < <(jq -c '.cargo_crates[]' "$manifest")
@@ -435,7 +439,13 @@ stage4c_build_pip_tools() {
       pip download --no-deps --dest /tmp/dl '$package==$ver'
       got=\"\$(sha256sum /tmp/dl/* | awk '{print \$1}' | head -1)\"
       [ \"\$got\" = '$sha256' ] || { echo \"stage4c: sha256 mismatch for $package==$ver: got \$got want $sha256\" >&2; exit 1; }
-      PIPX_HOME=/usr/local/share/pipx PIPX_BIN_DIR=/usr/local/bin pipx install /tmp/dl/*
+      export PIPX_HOME=/usr/local/share/pipx
+      export PIPX_BIN_DIR=/usr/local/bin
+      pipx install /tmp/dl/*
+      # Fallback: if pipx put binaries in ~/.local/bin despite env vars, copy them
+      if [ -d ~/.local/bin ] && [ -n "$(ls ~/.local/bin/ 2>/dev/null)" ]; then
+        cp -a ~/.local/bin/* /usr/local/bin/ 2>/dev/null || true
+      fi
     "
     { [ -x "$out/usr/local/bin/$bin" ] || [ -L "$out/usr/local/bin/$bin" ]; } || fail "pipx install of $package $ver produced no $out/usr/local/bin/$bin"
     log "stage4c: built /usr/local/bin/$bin ($(sha256sum "$out/usr/local/bin/$bin" | cut -c1-16)...)"
@@ -453,7 +463,7 @@ stage4c_build_pip_tools() {
     docker run --rm -v "$out/opt/re-venv:/opt/re-venv" "ubuntu:$XUBUNTU_VERSION" bash -euc "
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -qq
-      apt-get install -y -qq --no-install-recommends python3-venv python3-pip git ca-certificates $bdeps
+      apt-get install -y -qq --no-install-recommends python3-venv python3-pip python3-dev build-essential git ca-certificates $bdeps
       rm -rf /tmp/src
       git clone --no-checkout '${url#git+}' /tmp/src
       git -C /tmp/src checkout --detach '$commit'
