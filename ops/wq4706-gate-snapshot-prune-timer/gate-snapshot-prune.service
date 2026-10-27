@@ -1,0 +1,21 @@
+# gate-snapshot-prune.service - age out the NO_SECRETS residue in the gate-snapshot vault (wq#4706).
+# wq#4654 added prune_vault()/`action_gate.py prune-vault` and shipped NO caller: merged as-is it
+# would not retire a single file (wq#4657 found that; wq#4706 is this unit). This is that caller.
+[Unit]
+Description=Prune aged no-secret pre-images from the gate-snapshot vault (wq#4706)
+Documentation=file:///home/lumen/foreman/ops/wq4706-gate-snapshot-prune-timer/README.md
+# Ordering is only advisory (separate timers, separate transactions) but states the intent:
+# secret-backup-sweep retires the provably-dead secret-BEARING pre-images first; this pass then
+# ages out the NO_SECRETS class that sweep structurally never shreds.
+After=secret-backup-sweep.service
+OnFailure=ntfy-onfailure@%n.service
+
+[Service]
+Type=oneshot
+User=lumen
+# The primary tree, not a worktree: worktrees come and go, and action_gate.py on main is the
+# version the live PreToolUse hook also runs.
+ExecStart=/usr/bin/python3 /home/lumen/foreman/harness/action_gate.py prune-vault
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=600
+Nice=10

@@ -690,10 +690,15 @@ def _carries_secret_pattern(path):
     return any(rx.search(text) for _, rx in _rds.PATTERNS)
 
 
-def prune_vault(max_age_days=None, vault=None):
+def prune_vault(max_age_days=None, vault=None, dry_run=False):
     """Delete vault pre-images older than the rollback window that carry no secret
     pattern for secret-backup-sweep to track — the NO_SECRETS class it never shreds
-    (see SNAP_PRUNE_DAYS comment). Returns the list of paths removed."""
+    (see SNAP_PRUNE_DAYS comment). Returns the list of paths removed.
+
+    dry_run=True selects the same set and unlinks nothing: wq#4706 needs a read-only
+    probe against the REAL vault for the ops bundle's --verify and for wq#2762's
+    `probe:` term, and an installer that has to delete files to prove itself is not a
+    pre-flight check."""
     vault = vault or SNAP_VAULT
     max_age_days = SNAP_PRUNE_DAYS if max_age_days is None else max_age_days
     cutoff = time.time() - max_age_days * 86400
@@ -709,6 +714,9 @@ def prune_vault(max_age_days=None, vault=None):
         except OSError:
             continue
         if not old_enough or _carries_secret_pattern(p):
+            continue
+        if dry_run:
+            removed.append(p)
             continue
         try:
             os.unlink(p)
@@ -1187,10 +1195,16 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "hook":
         sys.exit(hook_main())
     if len(sys.argv) > 1 and sys.argv[1] == "prune-vault":
-        for _p in prune_vault():
-            print(f"pruned {_p}")
+        _dry = "--dry-run" in sys.argv[2:]
+        _n = 0
+        for _p in prune_vault(dry_run=_dry):
+            _n += 1
+            print(f"{'would prune' if _dry else 'pruned'} {_p}")
+        print(f"{'would prune' if _dry else 'pruned'} {_n} file(s) from {SNAP_VAULT} "
+              f"(older than {SNAP_PRUNE_DAYS}d, no secret pattern)")
         sys.exit(0)
     print("usage: action_gate.py hook  (PreToolUse stdin JSON)\n"
-          "       action_gate.py prune-vault  (delete non-credential vault pre-images "
-          "past the rollback window)", file=sys.stderr)
+          "       action_gate.py prune-vault [--dry-run]  (delete non-credential vault "
+          "pre-images past the rollback window; --dry-run only lists them)",
+          file=sys.stderr)
     sys.exit(2)
