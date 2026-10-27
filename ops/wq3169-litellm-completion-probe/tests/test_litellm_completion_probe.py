@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import pathlib
 import sys
@@ -223,6 +224,52 @@ def test_probe_budget_follows_rung_timeout_within_floor_and_cap(monkeypatch):
     assert mod.probe_budget_s(mod.Rung("h", "m", 20.0)) == 60    # never below floor
     assert mod.probe_budget_s(mod.Rung("h", "m", 120.0)) == 120
     assert mod.probe_budget_s(mod.Rung("h", "m", 2460.0)) == 300  # capped
+
+
+def test_metered_rung_never_sends_a_completion(monkeypatch):
+    """wq#4692: 1318 calls / $0.1216 in 7d to lumen/claude-sonnet alone came from
+    probe_one POSTing a real chat completion to a metered rung every cycle.
+    A metered Rung must hit GET /v1/models only — this test fails (asserts
+    AssertionError, not a probe result) the moment probe_one regresses to
+    POSTing GATEWAY_URL for a metered rung."""
+    calls = []
+
+    def urlopen(req, timeout):
+        calls.append(req.full_url)
+        assert req.full_url != mod.GATEWAY_URL, "metered rung must not be sent a real completion"
+        assert req.full_url == mod.MODELS_URL
+        return io.BytesIO(json.dumps({"data": [{"id": "lumen/claude-sonnet"}]}).encode())
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen)
+    rung = mod.Rung("anthropic", "lumen/claude-sonnet", 30.0, True)
+    result = mod.probe_one("k", rung)
+    assert calls == [mod.MODELS_URL]
+    assert result == {"host": "anthropic", "model": "lumen/claude-sonnet", "ok": True,
+                       "kind": "ok", "elapsed_s": result["elapsed_s"], "reason": ""}
+
+
+def test_metered_rung_absent_from_models_is_a_fail(monkeypatch):
+    def urlopen(req, timeout):
+        return io.BytesIO(json.dumps({"data": [{"id": "some-other-model"}]}).encode())
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen)
+    rung = mod.Rung("anthropic", "lumen/claude-sonnet", None, True)
+    result = mod.probe_one("k", rung)
+    assert result["ok"] is False and result["kind"] == "unreachable"
+    assert "not listed" in result["reason"]
+
+
+def test_unmetered_rung_still_sends_a_completion(monkeypatch):
+    """Control: a normal rung's probe_one must still POST the real completion —
+    the metered branch must not swallow everything."""
+    def urlopen(req, timeout):
+        assert req.full_url == mod.GATEWAY_URL
+        return io.BytesIO(json.dumps({"choices": [{"message": {"content": "pong"}}]}).encode())
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen)
+    rung = mod.Rung("cerebras.example", "cerebras-llama", 30.0, False)
+    result = mod.probe_one("k", rung)
+    assert result["ok"] is True
 
 
 def test_passing_host_resolves_rows_without_a_failed_state_edge(tmp_path, monkeypatch):

@@ -132,3 +132,57 @@ def test_rungs_module_on_committed_wq2903_fixture():
     assert [(r.host, r.model_name) for r in rungs] == [
         ("cerebras", "cerebras-llama"), ("deepseek", "deepseek-v4-flash"),
         ("ollama_chat", "hathor-llama8b")]
+    # none of that fixture's rungs are metered -> no false positives
+    assert litellm_rungs.metered_names(str(fixture)) == set()
+    assert all(not r.metered for r in rungs)
+
+
+METERED_FIXTURE = """\
+model_list:
+  - model_name: cerebras-llama
+    litellm_params:
+      model: cerebras/llama3.1-8b
+      api_base: "https://api.cerebras.ai"
+  - model_name: lumen/claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20260219
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 30
+  - model_name: lumen/claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: opted-out-anthropic
+    litellm_params:
+      model: anthropic/claude-opus-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      metered: false
+  - model_name: opted-in-local
+    litellm_params:
+      model: ollama_chat/llama3.1:8b
+    model_info:
+      metered: true
+"""
+
+
+def test_metered_names_reads_api_key_env_ref_and_model_info_override(tmp_path):
+    """wq#4692: a rung is metered when its litellm_params.api_key pulls
+    ANTHROPIC_API_KEY from the environment (the live lumen/claude-* shape,
+    ops/wq4484-litellm-haiku-model-fix/litellm_config_snippet.yaml) UNLESS an
+    explicit model_info.metered overrides it either way."""
+    p = tmp_path / "litellm_config.yaml"
+    p.write_text(METERED_FIXTURE)
+    assert litellm_rungs.metered_names(str(p)) == {
+        "lumen/claude-sonnet", "lumen/claude-haiku", "opted-in-local"}
+
+
+def test_one_rung_per_host_carries_metered_flag(tmp_path):
+    """The class fix: BOTH monitors read metered off the shared Rung, not a
+    per-caller re-derivation — this pins the field actually reaches callers."""
+    p = tmp_path / "litellm_config.yaml"
+    p.write_text(METERED_FIXTURE)
+    rungs = {r.host: r for r in litellm_rungs.one_rung_per_host(str(p))}
+    assert rungs["anthropic"].metered is True
+    assert rungs["api.cerebras.ai"].metered is False
+    assert rungs["ollama_chat"].metered is True

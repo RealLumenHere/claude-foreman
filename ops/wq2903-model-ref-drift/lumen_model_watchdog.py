@@ -143,6 +143,21 @@ def config_host_groups():
         print(f"  litellm_rungs unavailable ({str(e)[:100]}) — curated roster only")
         return None
 
+def config_metered_names():
+    """wq#4692: model_names flagged metered (real $/token, e.g. the per-token
+    Anthropic rungs) — probed below via /v1/models presence only, never a real
+    completion. Empty set (not failure) when the shared module/config can't be
+    read: same fail-soft contract as config_host_groups above."""
+    try:
+        import sys as _s
+        if RUNGS_DIR not in _s.path:
+            _s.path.insert(0, RUNGS_DIR)
+        import litellm_rungs
+        return litellm_rungs.metered_names(CONFIG)
+    except Exception as e:
+        print(f"  litellm_rungs metered lookup unavailable ({str(e)[:100]}) — none treated as metered")
+        return set()
+
 def _key():
     for line in open(KEYFILE):
         if line.startswith("LITELLM_MASTER_KEY="):
@@ -297,6 +312,7 @@ def run():
         extras = [ms[0] for h, ms in groups.items() if h not in covered and ms]
     roster = curated + extras
     roster, drift = split_drift(roster, live_models(key))
+    metered = config_metered_names()
 
     if drift and drift != st.get("drift"):          # raise on a new/changed set
         aq_drift(drift)
@@ -310,6 +326,15 @@ def run():
         if model in SLOW and now - last_probe.get(model, 0) < SLOW[model]:
             if model in prev:
                 up[model] = prev[model]   # carry state between slow probes
+            continue
+        if model in metered:
+            # wq#4692: real $/token rung — split_drift above already proved it
+            # via GET /v1/models (roster membership = present in that list),
+            # so stop there instead of spending a real completion every cycle.
+            up[model], results[model] = True, ""
+            last_probe[model] = now
+            if model in curated:
+                push_gatus(model, True, "")
             continue
         ok, err = probe(model, key)
         if not ok:                        # retry once — no single-miss DOWNs

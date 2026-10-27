@@ -32,13 +32,15 @@ def test_split_drift():
 
 
 class Harness:
-    def __init__(self, monkeypatch, tmp_path, live, roster, prev=None, groups=None):
+    def __init__(self, monkeypatch, tmp_path, live, roster, prev=None, groups=None, metered=None):
         self.probed, self.events, self.cleared, self.drifts = [], [], [], []
         wd.STATE = tmp_path / "state.json"
         if prev is not None:
             wd.STATE.write_text(json.dumps(prev))
         # wq#3212: pin the config-derived host groups (never the live config)
         monkeypatch.setattr(wd, "config_host_groups", lambda: groups)
+        # wq#4692: pin the config-derived metered set the same way
+        monkeypatch.setattr(wd, "config_metered_names", lambda: metered or set())
         monkeypatch.setattr(wd, "CLOUD", roster)
         monkeypatch.setattr(wd, "LOCAL", [])
         monkeypatch.setattr(wd, "SLOW", {})
@@ -164,3 +166,37 @@ def test_slock_held_reads_slock_who_output(monkeypatch):
         raise OSError("boom")
     monkeypatch.setattr(wd.subprocess, "run", _raise)
     assert wd.slock_held("litellm") is False        # fail-soft: don't mask real downs
+
+
+def test_metered_rung_is_never_sent_a_real_completion(monkeypatch, tmp_path):
+    """wq#4692: model-watchdog alone sent 984 real completions/7d to
+    lumen/claude-sonnet because every roster member (curated or config-derived
+    extra) went through probe() -> a real /chat/completions call, with no
+    opt-out for a metered rung. This test fails (asserts probe() was called)
+    the moment that regresses — a metered rung must be confirmed via the
+    GET /v1/models presence check (split_drift's `live` set) alone."""
+    groups = {"anthropic": ["lumen/claude-sonnet"]}
+    h = Harness(monkeypatch, tmp_path, live={"a", "lumen/claude-sonnet"},
+                roster=["a"], groups=groups, metered={"lumen/claude-sonnet"})
+
+    def _fail_only_for_metered(m, k):
+        if m == "lumen/claude-sonnet":
+            raise AssertionError(f"probe() called for metered rung {m}: real completion sent")
+        return True, ""
+    monkeypatch.setattr(wd, "probe", _fail_only_for_metered)
+    wd.run()
+    assert h.state()["up"]["lumen/claude-sonnet"] is True
+
+
+def test_metered_rung_absent_from_live_is_drift_not_a_probe(monkeypatch, tmp_path):
+    groups = {"anthropic": ["lumen/claude-sonnet"]}
+    h = Harness(monkeypatch, tmp_path, live={"a"}, roster=["a"],
+                groups=groups, metered={"lumen/claude-sonnet"})
+
+    def _fail_only_for_metered(m, k):
+        if m == "lumen/claude-sonnet":
+            raise AssertionError(f"probe() called for metered rung {m}: real completion sent")
+        return True, ""
+    monkeypatch.setattr(wd, "probe", _fail_only_for_metered)
+    wd.run()
+    assert h.drifts == [["lumen/claude-sonnet"]]
