@@ -945,6 +945,32 @@ def is_shell_refusal(text):
     return bool(text) and bool(SHELL_REFUSAL_RE.search(text))
 
 
+# wq#4634: transport-ceiling kill signatures. A long shell command can be killed by
+# its transport, not by failing: the Bash tool's own timeout ("Error: Command timed
+# out after 2m 0.0s", anthropics/claude-code#1717; SIGURG kills even run_in_background,
+# #34138), or — on the Commander path — supergateway's group reap when the Worker
+# aborts the tools/call at 70 s (reports/wq3264_mcpw_commander_drops_rca.md). Retrying
+# cannot help (the same ceiling kills the retry), so fworker re-runs the command under
+# /home/lumen/bin/watchdog (setsid → survives both kill modes) and resumes the session
+# with the verdict. The MCP patterns are gated on the tool name: "context canceled" or
+# "request timed out" inside ordinary Bash OUTPUT is the command's own business, not a
+# transport kill.
+CEILING_KILL_SHELL_RE = re.compile(
+    r"command timed out after|killed by signal|sig(kill|term) received", re.I)
+CEILING_KILL_MCP_RE = re.compile(
+    r"context canceled|mcp error\s*-32001|request timed out", re.I)
+
+
+def is_ceiling_kill(text, tool=""):
+    """True when an is_error tool_result's `text` is a transport-ceiling kill of a
+    running command rather than the command's own failure."""
+    if not text:
+        return False
+    if CEILING_KILL_SHELL_RE.search(text):
+        return True
+    return tool.startswith("mcp__") and bool(CEILING_KILL_MCP_RE.search(text))
+
+
 class LoopTracker:
     """Feeds on the same stream-json frames RunState.observe() sees. Triggers
     when the agent is demonstrably retrying a failed approach without change:
@@ -956,11 +982,14 @@ class LoopTracker:
       - the same file is Read N times with no successful mutation in between.
     observe() returns a reason string when tripped, else None."""
 
-    def __init__(self, threshold=None, steered=False):
+    def __init__(self, threshold=None, steered=False, ceiling_spent=False):
         self.n = threshold or int(os.environ.get("FOREMAN_LOOP_THRESHOLD", "3"))
         self.steered = steered     # the one shell-refusal steer is already spent
         self.steer = None          # steer text the caller must deliver (wq#2138)
-        self.pending = {}          # tool_use_id -> (tool, class_sig, file_path)
+        # wq#4634: the one watchdog reissue per attempt chain is already spent
+        self.ceiling_spent = ceiling_spent
+        self.ceiling = None        # {"command", "error"} of the ceiling-killed call
+        self.pending = {}          # tool_use_id -> (tool, class_sig, file_path, command)
         self.fail_counts = {}      # class_sig -> count (reset on successful mutation)
         self.perm_counts = {}      # class_sig -> permission-refusal count (tracks fail_counts)
         self.error_counts = {}     # error_sig -> count (never reset)
@@ -1019,7 +1048,8 @@ class LoopTracker:
                     fkey = ti.get("file_path")
                     if tool == "Read" and fkey:
                         fkey = f"{fkey}@{ti.get('offset') or 0}+{ti.get('limit') or 0}"
-                    self.pending[b.get("id")] = (tool, sig, fkey)
+                    cmd = ti.get("command") if isinstance(ti.get("command"), str) else None
+                    self.pending[b.get("id")] = (tool, sig, fkey, cmd)
                     self.recent.append({"tool": tool, "sig": sig,
                                         "detail": (ti.get("command") or ti.get("file_path") or "")[:160]})
                     self.recent = self.recent[-15:]
@@ -1027,7 +1057,8 @@ class LoopTracker:
             for b in content:
                 if not (isinstance(b, dict) and b.get("type") == "tool_result"):
                     continue
-                tool, sig, fpath = self.pending.pop(b.get("tool_use_id"), ("", "", None))
+                tool, sig, fpath, cmd = self.pending.pop(b.get("tool_use_id"),
+                                                          ("", "", None, None))
                 if b.get("is_error"):
                     self.fail_counts[sig] = self.fail_counts.get(sig, 0) + 1
                     if self.recent:
@@ -1036,6 +1067,15 @@ class LoopTracker:
                     if is_shell_refusal(raw_err) and not self.steered:
                         self.steered = True
                         self.steer = SHELL_REFUSAL_STEER
+                        self.fail_counts[sig] -= 1
+                        return None
+                    # wq#4634: a transport ceiling killed a running command — not a
+                    # model failure, so it never feeds the loop counters. fworker
+                    # stops the session, re-runs the command under watchdog, and
+                    # resumes with the verdict. Once per attempt chain (ceiling_spent).
+                    if cmd and not self.ceiling_spent and is_ceiling_kill(raw_err, tool):
+                        self.ceiling_spent = True
+                        self.ceiling = {"command": cmd, "error": raw_err[:500]}
                         self.fail_counts[sig] -= 1
                         return None
                     harness_refusal = is_permission_denial(raw_err) or is_shell_refusal(raw_err)

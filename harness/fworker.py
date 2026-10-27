@@ -3214,6 +3214,15 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
                 killed_reason = "steer"
                 log("STEER: CLI shell refusal — stopping session to resume it with the hint")
                 break
+            if loop_tracker.ceiling:
+                # wq#4634: a transport ceiling (Bash tool timeout / supergateway reap,
+                # wq#3264) killed a running command. The model cannot fix this by
+                # retrying, so stop the session; do_attempt re-runs the command under
+                # watchdog and resumes with the verdict.
+                killed_reason = "tool_ceiling"
+                log("TOOL CEILING: transport killed a running command — stopping "
+                    "session to re-issue it via watchdog and resume with the verdict")
+                break
         # wq#1819: the wire nests status/resetsAt/rateLimitType under
         # rate_limit_info; the flat read never matched, so no rejection ever
         # reached the governor. Unwrap and hand the governor the inner dict.
@@ -3272,6 +3281,92 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
         log(f"WARN: wq#900 post-run primary tree check failed: {e}")
 
     return state, exit_code, raw_events, killed_reason, cpu_s, proc.pid
+
+
+# ---------------------------------------------------------------------------
+# wq#4634: re-issue a ceiling-killed shell command via watchdog, then resume.
+# Design: design/wq4634_tool_ceiling_watchdog_reissue.md. Detection lives in
+# action_gate (CEILING_KILL_*_RE / LoopTracker.ceiling); this is the reissue half.
+# ---------------------------------------------------------------------------
+
+WATCHDOG_BIN = os.environ.get("FOREMAN_WATCHDOG_BIN", "/home/lumen/bin/watchdog")
+REISSUE_TIMEOUT_MIN = _envint("FOREMAN_REISSUE_TIMEOUT_MIN", 30)
+
+CEILING_RESUME_TAIL = (
+    "Your previous shell command was killed by a transport ceiling (Bash tool "
+    "timeout / supergateway group reap, wq#3264), not by the command itself, and the "
+    "harness intervened. If a verdict line appears above, that is the command's true "
+    "result: read the tail file it names and continue the ticket from there. Do NOT "
+    "re-run the command bare — the same ceiling will kill it again. If you must run "
+    "it (or any other long command) again, wrap it: /home/lumen/bin/watchdog "
+    "--no-send --label <name> -- <cmd>, then poll /tmp/watchdog-<name>.result.json.")
+
+
+def reissue_ceiling_killed(ticket_id, attempt, ceiling, worktree,
+                           timeout_min=None, poll_s=5.0, grace_s=120):
+    """Re-run a ceiling-killed command detached under watchdog (setsid survives both
+    wq#3264 kill modes), wait for its result.json, and return the verdict line that
+    rides the --resume back into the session. Every failure path still returns a
+    resume line — the session always learns what happened to its command."""
+    label = f"fw-{ticket_id}-a{attempt}"
+    cmd = (ceiling or {}).get("command") or ""
+    if not cmd:
+        return (f"[watchdog:{label}] SKIPPED — a ceiling kill was detected but the "
+                f"command could not be recovered from the stream. {CEILING_RESUME_TAIL}")
+    # The command ran once under the PreToolUse gate, but fworker re-running it
+    # directly bypasses hooks — re-classify, and refuse RED rather than execute it.
+    try:
+        gate_verdict = action_gate.classify_bash(
+            cmd, action_gate.load_compiled_rules())[0]
+    except Exception as e:
+        log(f"reissue: classify_bash failed ({e}) — failing closed")
+        gate_verdict = "RED"
+    if gate_verdict == "RED":
+        return (f"[watchdog:{label}] REFUSED — the killed command is RED under the "
+                f"action gate; fworker will not re-run it outside the hook. "
+                f"{CEILING_RESUME_TAIL}")
+    tmin = timeout_min if timeout_min is not None else REISSUE_TIMEOUT_MIN
+    result_path = f"/tmp/watchdog-{label}.result.json"
+    try:
+        spawn = subprocess.run(
+            [WATCHDOG_BIN, "--no-send", "--label", label, "--cwd", worktree,
+             "-t", str(tmin), "--", cmd],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return (f"[watchdog:{label}] SPAWN-FAILED ({e.__class__.__name__}) — the "
+                f"command was NOT re-run. {CEILING_RESUME_TAIL}")
+    if spawn.returncode != 0:
+        err, _ = masking.mask_text((spawn.stdout + spawn.stderr).strip()[-300:])
+        return (f"[watchdog:{label}] SPAWN-FAILED rc={spawn.returncode}: {err} — the "
+                f"command was NOT re-run. {CEILING_RESUME_TAIL}")
+    log(f"reissue: watchdog {label} spawned (timeout {tmin}m) — waiting for "
+        f"{result_path}")
+    # result.json is written unconditionally at verdict time (before --callback would
+    # fire), so the file IS the synchronization artifact; fworker runs no HTTP hook.
+    deadline = time.time() + tmin * 60 + grace_s
+    last_hb = time.time()
+    while time.time() < deadline:
+        if time.time() - last_hb >= HEARTBEAT_INTERVAL_S:
+            wq_heartbeat(ticket_id)
+            last_hb = time.time()
+        if os.path.exists(result_path):
+            try:
+                with open(result_path) as f:
+                    res = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                time.sleep(min(poll_s, 1.0))   # mid-write; re-read next pass
+                continue
+            line = (f"[watchdog:{label}] {res.get('status') or 'UNKNOWN'} — "
+                    f"{res.get('note') or 'no note'} — output tail: "
+                    f"{res.get('tail') or res.get('out') or '(none)'}")
+            masked, _ = masking.mask_text(line)
+            log(f"reissue: verdict {res.get('status')} after "
+                f"{res.get('duration_s')}s for {label}")
+            return f"{masked} {CEILING_RESUME_TAIL}"
+        time.sleep(poll_s)
+    return (f"[watchdog:{label}] NO-VERDICT — the re-run is still in flight after "
+            f"{tmin}m+grace; its verdict will land at {result_path} (output: "
+            f"/tmp/watchdog-{label}.out). Poll that file. {CEILING_RESUME_TAIL}")
 
 
 # ---------------------------------------------------------------------------
@@ -3827,7 +3922,8 @@ def run_fire_ticket(args):
         return EXIT_FIRE_APPLY_INCOMPLETE
 
 
-def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=None):
+def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=None,
+               ceiling_spent=False):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
     archetype = args.archetype or "standard-engineering"
@@ -3972,7 +4068,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         return EXIT_DEFERRED
     env[action_gate.SNAPDIR_ENV] = os.path.join(run_dir(ticket_id), "snapshots")
     env[action_gate.HANDOFF_ENV] = run_dir(ticket_id)
-    loop_tracker = action_gate.LoopTracker(steered=bool(steer))
+    loop_tracker = action_gate.LoopTracker(steered=bool(steer),
+                                           ceiling_spent=ceiling_spent)
     settings_file = resolve_worker_settings(args.repo, ticket_id)
     cmd = build_claude_cmd(steer or prompt, args.model, args.effort, settings_file,
                             add_dirs=add_dirs, max_turns=max_turns,
@@ -4010,7 +4107,22 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         # ticket an attempt. The resumed tracker is `steered`, so a second refusal
         # is a real loop_break, classified PERMISSION_LOOP (harness defect).
         return do_attempt(args, attempt, resume_session=state.session_id,
-                           prior_worktree=worktree, steer=loop_tracker.steer)
+                           prior_worktree=worktree, steer=loop_tracker.steer,
+                           ceiling_spent=loop_tracker.ceiling_spent)
+    if killed_reason == "tool_ceiling" and state.session_id:
+        # wq#4634: same attempt number — a transport kill must not cost the ticket an
+        # attempt (wq#2138 precedent). reissue_ceiling_killed blocks here until the
+        # watchdog verdict (or its own hard cap), then the verdict line rides the
+        # --resume. ceiling_spent=True: a second ceiling kill in this attempt chain is
+        # an ordinary error — no reissue recursion; the resume line already told the
+        # session to use watchdog itself.
+        verdict_line = reissue_ceiling_killed(ticket_id, attempt,
+                                              loop_tracker.ceiling, worktree)
+        log(f"tool_ceiling: resuming session {state.session_id} with the watchdog "
+            f"verdict")
+        return do_attempt(args, attempt, resume_session=state.session_id,
+                           prior_worktree=worktree, steer=verdict_line,
+                           ceiling_spent=True)
     if killed_reason == "loop_break":
         # Layer 2 handoff: "SESSION PAUSED: repeated unsuccessful approach detected.
         # Your work has been preserved for a reviewing agent." — written to the run
