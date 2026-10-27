@@ -65,7 +65,10 @@ def main():
     stub = tmp / "wq"; stub.write_text(STUB); stub.chmod(0o755)
     state = tmp / "state.json"
     db = tmp / "stub.json"
-    env = dict(os.environ, RPA_INBOX=str(inbox), RPA_STATE=str(state), RPA_WQ=str(stub), STUB_DB=str(db))
+    fres = tmp / "foreman-research"; fres.mkdir()
+    sres = tmp / "scratch-research"; sres.mkdir()
+    env = dict(os.environ, RPA_INBOX=str(inbox), RPA_STATE=str(state), RPA_WQ=str(stub), STUB_DB=str(db),
+               RPA_FOREMAN_RESEARCH=str(fres), RPA_SCRATCH_RESEARCH=str(sres))
     try:
         # 1. five distinct prompts -> five tickets
         for i in range(5):
@@ -162,11 +165,30 @@ def main():
 
         # 14. DELIVERABLE: path wins the liveness probe; stem fallback otherwise
         last = json.load(open(db))["log"][-1]
-        check(last["liveness"] == "test -f /home/lumen/scratch/research/x.md",
-              f"T14 DELIVERABLE: path is the probe: {last['liveness']!r}")
+        check(last["liveness"] == f"test -f /home/lumen/scratch/research/x.md || test -f {fres}/x.md",
+              f"T14 DELIVERABLE: path is the probe (dual): {last['liveness']!r}")
         plain = [e for e in json.load(open(db))["log"] if e["title"].startswith("RESEARCH: subject number 1")][0]
-        check(plain["liveness"] == "test -f /home/lumen/scratch/research/p1.md",
-              f"T14b stem fallback probe: {plain['liveness']!r}")
+        check(plain["liveness"] == f"test -f {sres}/p1.md || test -f {fres}/p1.md",
+              f"T14b stem fallback probe (dual): {plain['liveness']!r}")
+
+        # 15. mirror pass: a deliverable landed under foreman/research by PR is copied into
+        #     scratch/research on the next tick; never overwritten once present
+        (inbox / "landed.txt").write_text(f"DELIVERABLE: {sres}/landed-doc.md\nLanded by an fworker\n")
+        rc, out = run(env)
+        (fres / "landed-doc.md").write_text("v1 from PR\n")
+        rc, out = run(env); s15 = summary(out)
+        check(s15["mirrored"] == "1" and (sres / "landed-doc.md").read_text() == "v1 from PR\n",
+              f"T15 landed deliverable mirrored into scratch/research: {s15}")
+        (fres / "landed-doc.md").write_text("v2 from PR\n")
+        rc, out = run(env); s15 = summary(out)
+        check(s15["mirrored"] == "0" and (sres / "landed-doc.md").read_text() == "v1 from PR\n",
+              "T15b existing scratch copy never overwritten")
+        # 16. stem-fallback prompt (no DELIVERABLE:) mirrors by <stem>.md too
+        (inbox / "stemmed.txt").write_text("RESEARCH PROMPT: stem based deliverable mirroring\n")
+        rc, out = run(env)
+        (fres / "stemmed.md").write_text("stem doc\n")
+        rc, out = run(env); s16 = summary(out)
+        check(s16["mirrored"] == "1" and (sres / "stemmed.md").exists(), f"T16 stem fallback mirrored: {s16}")
 
         # 13. dry-run touches nothing
         (inbox / "dry.txt").write_text("RESEARCH PROMPT: dry run candidate\n")

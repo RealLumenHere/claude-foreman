@@ -99,6 +99,18 @@ path (`scratch/research/<stem>.md`) so `done` has a checkable deliverable. `--pr
 `research`, no model/archetype (router classifies, wq#4633). No `--claim`. No direct-provider
 calls anywhere: the adapter only execs `/home/lumen/bin/wq` and moves files.
 
+### Landing zone + mirror (added after the first live drain, wq#4690)
+An fworker's sandbox cannot write `scratch/` (its only write path is a PR into a repo tree), so
+wq#4690's runbook landed at `foreman/research/<basename>` and the ticket note asked for an
+orchestrator `cp`. A hand step is not a fix (instinct: fix the class, in machinery):
+- the ticket detail now carries a `LANDING:` line telling the worker to land the deliverable by PR as
+  `/home/lumen/foreman/research/<deliverable basename>`;
+- the probe is `test -f <deliverable> || test -f /home/lumen/foreman/research/<basename>`;
+- every tick runs `mirror_landed()`: for each `queued/*.txt` whose deliverable is expected under
+  `scratch/research` and is absent, copy `foreman/research/<basename>` across if it exists
+  (copy-if-absent, atomic rename, never overwrite). Summary line gains `mirrored=N`.
+Tests T14–T16 cover the dual probe, the mirror, and the never-overwrite rule.
+
 ### Runtime
 - `/home/lumen/bin/research-prompt-adapter` — python3, stdlib only (`subprocess`, `hashlib`,
   `json`, `fcntl`, `argparse`, `pathlib`). Flags: `--dry-run`, `--once` (default), `--inbox`,

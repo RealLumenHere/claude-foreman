@@ -10,6 +10,10 @@ Why: the research-prompt-queue inbox was advertised at every boot and drained by
 direct Groq/Gemini surface and stays DORMANT. The fleet already drains the wq research lane, so
 the inbox now feeds that. Design: `design/research_prompt_adapter.md`.
 
+Landing: an fworker lands its deliverable by PR as `/home/lumen/foreman/research/<basename>` (its
+sandbox cannot write `scratch/`); each tick mirrors landed files into `scratch/research` (copy-if-absent,
+`mirrored=N` in the summary) and the probe accepts either path.
+
 Idempotence: queued-name check → content sha256 ledger
 (`/home/lumen/logs/.research-prompt-adapter.state.json`) → wq's own DUPLICATE-title refusal
 (parsed, file joins the named ticket). Bodies >8 KB send a 2000-char head + the path.
