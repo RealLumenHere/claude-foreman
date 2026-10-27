@@ -444,6 +444,16 @@ FIRST_FRAME_TIMEOUT_S = charging.CLOUD_FIRST_FRAME_S
 # shorter grace covers the "process just won't exit" case — no more real work is
 # coming, so there is no reason to wait out the full frame-gap window before forcing it.
 POST_RESULT_GRACE_S = _envint("FOREMAN_POST_RESULT_GRACE_S", 20)
+# wq#4707: "no more real work is coming" is false while a background task the agent
+# started has not reported back. The CLI keeps the session alive to re-invoke the agent
+# with the completion notification, so the 20s grace was killing live workers mid-ticket
+# (measured over _runs/wq*/episode.jsonl: 73 post_result_stuck kills, 60 FALSE_COMPLETE,
+# 43 whose assistant tail says it is waiting on a background task — wq4686/wq4634/wq4644
+# each had real work on disk, PR #2465 open). While a background task is outstanding the
+# grace stretches to this instead. Wall-clock still bounds the run, and a child that
+# really is finished closes its stdout (eof) in well under either window, so the longer
+# window costs nothing on the happy path — it only applies to a process still alive.
+POST_RESULT_BG_GRACE_S = _envint("FOREMAN_POST_RESULT_BG_GRACE_S", 900)
 HEARTBEAT_INTERVAL_S = 10 * 60
 MAX_ATTEMPTS = 2
 RESUME_WAIT_MAX_S = 6 * 3600
@@ -2935,7 +2945,7 @@ def _observe_gateway_event(ev, state, loop_tracker):
 
 def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
                        frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
-                       first_frame_s=None):
+                       first_frame_s=None, post_result_bg_grace_s=None):
     """Gateway-backed sibling of run_child(): identical signature and identical
     6-tuple return (state, exit_code, raw_events, killed_reason, cpu_s, pid), so a
     caller's choice of which one to call is a plain conditional (PHASE2_WIRING_SPEC.md
@@ -2960,7 +2970,8 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
         fb_state, exit_code, raw_events, killed_reason, cpu_s, pid = run_child(
             cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             frame_gap_s=frame_gap_s, post_result_grace_s=post_result_grace_s,
-            loop_tracker=loop_tracker, first_frame_s=first_frame_s)
+            loop_tracker=loop_tracker, first_frame_s=first_frame_s,
+            post_result_bg_grace_s=post_result_bg_grace_s)
         fb_state.gateway_backend = False
         fb_state.gateway_fallback = True
         fb_state.gateway_fallback_reason = reason
@@ -3075,9 +3086,83 @@ def run_child_gateway(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt
     return state, exit_code, raw_events, killed_reason, 0.0, None
 
 
+# wq#4707: the CLI feeds a finished background task back to the agent as a new turn,
+# so a result frame emitted while one is outstanding is "turn over", not "run over".
+# Matched against the text the CLI hands the agent back.
+_BG_COMPLETE_RE = re.compile(
+    r"task-notification|"
+    r"\btask\b[^\n]{0,80}\b(?:completed|finished|failed|exited|has finished)|"
+    r"background (?:task|command|shell|process|run)[^\n]{0,80}"
+    r"(?:completed|finished|failed|exited|is done)",
+    re.I)
+# The CLI's own auto-background of a Bash call that outran the tool timeout — the agent
+# never asked for it, so it only ever shows up in the tool_result text (wq4239).
+_BG_AUTO_RE = re.compile(
+    r"\b(?:moved|sent|pushed|continues?|now running|running|runs)\b[^\n]{0,40}"
+    r"\b(?:in|to) the background\b|"
+    r"running in background with id",
+    re.I)
+# Tools whose work is backgrounded unless the call says otherwise (the Agent tool
+# reports back through the same completion notification a background Bash does).
+_BG_BY_DEFAULT_TOOLS = ("Agent", "Task")
+
+
+class BackgroundTaskWatch:
+    """Tracks whether this session has a background task still outstanding.
+
+    Starts are read from the agent's own tool_use input (run_in_background on Bash, or
+    any Agent/Task call that did not opt out) plus the CLI's auto-background of an
+    over-long Bash call. Completions are read from the notification text the CLI feeds
+    back. Detection is deliberately generous on the start side and strict on the
+    completion side: over-counting only stretches the post-result grace for a process
+    that is still alive, while under-counting is what killed 60 workers mid-ticket.
+    """
+
+    def __init__(self):
+        self.started = 0
+        self.completed = 0
+        self._bg_ids = set()   # tool_use ids already counted, so their own
+                               # "running in the background" result is not a 2nd start
+
+    @property
+    def pending(self):
+        return max(0, self.started - self.completed)
+
+    def observe(self, frame):
+        ftype = frame.get("type")
+        msg = frame.get("message")
+        content = (msg.get("content") if isinstance(msg, dict) else None) or []
+        if not isinstance(content, list):
+            return
+        if ftype == "assistant":
+            for b in content:
+                if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                    continue
+                ti = b.get("input") if isinstance(b.get("input"), dict) else {}
+                bg = ti.get("run_in_background")
+                if bg is True or (bg is None and b.get("name") in _BG_BY_DEFAULT_TOOLS):
+                    self.started += 1
+                    self._bg_ids.add(b.get("id"))
+        elif ftype == "user":
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                text = "\n".join(_content_text(
+                    b.get("content") if b.get("type") == "tool_result" else [b]))
+                if not text:
+                    continue
+                if _BG_COMPLETE_RE.search(text):
+                    self.completed += 1
+                elif (b.get("type") == "tool_result"
+                        and b.get("tool_use_id") not in self._bg_ids
+                        and _BG_AUTO_RE.search(text)):
+                    self.started += 1
+                    self._bg_ids.add(b.get("tool_use_id"))
+
+
 def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
               frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
-              first_frame_s=None):
+              first_frame_s=None, post_result_bg_grace_s=None):
     """Spawn, parse stream-json, enforce watchdogs. Returns (RunState, exit_code,
     raw_events, killed_reason, cpu_s, pid).
 
@@ -3093,10 +3178,17 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     the CLI's system/init and retry chatter, see charging.is_model_frame) the run is held
     to first_frame_s measured from spawn; frame_gap_s only applies after it. None keeps the
     single pre-split window (legacy mode, and callers that pass an explicit frame_gap_s).
+
+    wq#4707: post_result_bg_grace_s replaces post_result_grace_s for as long as the
+    session has a background task outstanding (BackgroundTaskWatch), because the CLI is
+    then holding the session open to deliver that task's completion to the agent — the
+    one case where a terminal result does not mean the run is over.
     """
     frame_gap_s = frame_gap_s if frame_gap_s is not None else INACTIVITY_TIMEOUT_S
     post_result_grace_s = (post_result_grace_s if post_result_grace_s is not None
                             else POST_RESULT_GRACE_S)
+    post_result_bg_grace_s = (post_result_bg_grace_s if post_result_bg_grace_s is not None
+                              else POST_RESULT_BG_GRACE_S)
     cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     # ISSUE-SOLUTIONS-fable.md #18: start_new_session=True puts the child in its own
     # session/process group so a signal delivered to fworker's process group (e.g. an
@@ -3124,6 +3216,7 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     killed_reason = None
     turn_backstop = max_turns + TURN_BACKSTOP_BUFFER
     result_seen_at = None
+    bg_watch = BackgroundTaskWatch()   # wq#4707
     done_seen_at = None          # wq#992-C: when the ticket itself first read `done`
     last_done_poll = start       # throttle the wq status poll to DONE_POLL_INTERVAL_S
     # short poll interval when either watchdog window is itself short (tests), so
@@ -3143,8 +3236,16 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             break
         # §C9 SUCCESS-BUT-STUCK: once a terminal result has landed, don't wait out the
         # full frame-gap window — a much shorter grace covers "process won't exit".
-        if result_seen_at is not None and now - result_seen_at >= post_result_grace_s:
+        # wq#4707: unless a background task the agent started has yet to report back,
+        # in which case the session is legitimately parked waiting to be re-invoked
+        # with its completion and gets the longer window.
+        grace_s = (max(post_result_grace_s, post_result_bg_grace_s)
+                   if bg_watch.pending else post_result_grace_s)
+        if result_seen_at is not None and now - result_seen_at >= grace_s:
             killed_reason = "post_result_stuck"
+            if bg_watch.pending:
+                log(f"post_result_stuck: {bg_watch.pending} background task(s) never "
+                    f"reported back within {int(grace_s)}s — stopping the session")
             break
         # wq#992-C: the ticket itself reached `done` mid-run. Give a short grace for a
         # trailing episode-commit / final message, then stop the lingering session so it
@@ -3209,6 +3310,15 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             continue
         raw_events.append(frame)
         state.observe(frame)
+        bg_watch.observe(frame)     # wq#4707
+        # wq#4707: a real turn after a result means the session resumed work (the
+        # background task's completion landed and the agent is acting on it), so the
+        # grace must rearm from the NEXT result rather than keep counting from the
+        # stale one. Without this the countdown opened by the first result killed the
+        # session 20s later however much live work followed — the ~25s, 4-7 turn
+        # attempt 2 of wq4686/wq4239, scored FALSE_COMPLETE with an empty result.
+        if result_seen_at is not None and frame.get("type") in ("assistant", "user"):
+            result_seen_at = None
         if not first_frame_seen and charging.is_model_frame(frame):
             first_frame_seen = True
         # Layer 2 (TIERED_INTELLIGENCE_DESIGN.md, wq#985): loop breaker. This is
@@ -3246,6 +3356,8 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
             killed_reason = "turns_exceeded"
             break
 
+    state.bg_tasks_started = bg_watch.started      # wq#4707, observability only
+    state.bg_tasks_pending = bg_watch.pending
     if killed_reason:
         if killed_reason in ("inactivity", "first_frame"):
             state.hung = True
@@ -3520,7 +3632,7 @@ def land_aider_changes(worktree, ticket_id, ticket, attempt, model, env):
 
 def run_child_aider(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
                     frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
-                    first_frame_s=None):
+                    first_frame_s=None, post_result_bg_grace_s=None):
     """aider sibling of run_child(), same signature and 6-tuple return. `cmd` (the claude
     argv) is ignored: aider gets build_aider_cmd()'s ticket message instead.
 
@@ -3544,7 +3656,8 @@ def run_child_aider(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     state, exit_code, raw_events, killed_reason, cpu_s, pid = run_child(
         aider_cmd, cwd, aider_env, max_turns, wall_clock_s, ticket_id, attempt,
         frame_gap_s=frame_gap_s, post_result_grace_s=post_result_grace_s,
-        loop_tracker=None, first_frame_s=None)
+        loop_tracker=None, first_frame_s=None,
+        post_result_bg_grace_s=post_result_bg_grace_s)
     state.runtime = "aider"
     if killed_reason or exit_code != 0:
         return state, exit_code, raw_events, killed_reason, cpu_s, pid
@@ -4111,7 +4224,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     state, exit_code, events, killed_reason, cpu_s, child_pid = run_fn(
         cmd, worktree, env, max_turns, wall_clock, ticket_id, attempt,
         frame_gap_s=turn_gap_s, post_result_grace_s=args.post_result_grace,
-        loop_tracker=loop_tracker, first_frame_s=first_frame_s)
+        loop_tracker=loop_tracker, first_frame_s=first_frame_s,
+        post_result_bg_grace_s=getattr(args, "post_result_bg_grace", None))
     if killed_reason == "steer" and state.session_id:
         # wq#2138: same attempt number — a harness-side refusal must not cost the
         # ticket an attempt. The resumed tracker is `steered`, so a second refusal
@@ -4349,6 +4463,11 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         "result_text": (state.result_text
                         if isinstance(state.result_text, str) else "")[:4000],
         "assistant_tail": assistant_text_tail(events),
+        # wq#4707: so the next burn-down can separate "killed while its own background
+        # task was still running" from a genuine post-result hang without re-reading
+        # assistant tails for the phrase "waiting for the background".
+        "bg_tasks_started": getattr(state, "bg_tasks_started", 0),
+        "bg_tasks_pending": getattr(state, "bg_tasks_pending", 0),
     })
     commit_episode_to_archive(ticket_id)
 
@@ -5258,6 +5377,8 @@ def main():
     # T_gap configurable 120-300s (default/env var: INACTIVITY_TIMEOUT_S above).
     p_run.add_argument("--frame-gap-timeout", type=int, default=None)
     p_run.add_argument("--post-result-grace", type=int, default=None)
+    # wq#4707: the grace that applies instead while a background task is outstanding.
+    p_run.add_argument("--post-result-bg-grace", type=int, default=None)
     p_run.add_argument("--worker-id", default=None)
     p_run.add_argument("--resume", action="store_true")
     # wq#714: systemd unit PATH lacks ~/.npm-global/bin, so the bare "claude"

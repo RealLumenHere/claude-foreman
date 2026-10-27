@@ -90,6 +90,14 @@ RULES:
   a `MASKED` in front does not neuter the next link: `<prefix>MASKED<prefix><phrase>`
   fires on its second link, English phrase or not (wq#3040: wq#3037's orphan-chain
   probes). Build every link at runtime: `p = "xo" "xb-"; p + "MASKED" + p + "x" * 20`.
+- A long command (a full test suite, `lumen-pr land`) is yours to wait out, not to park:
+  run it in the FOREGROUND with an explicit `timeout`, or detach it under
+  `/home/lumen/bin/watchdog --no-send --label <name> -- <cmd>` and POLL
+  `/tmp/watchdog-<name>.result.json` on your own turns. Do not end a turn on "I'll wait
+  for the background task's notification" — the harness holds the session open for at
+  most FOREMAN_POST_RESULT_BG_GRACE_S (default 900s) after your last turn, and anything
+  slower than that dies there with the ticket judged FALSE_COMPLETE however much real
+  work is on disk (wq#4707: 60 such attempts, wq4686/wq4634 both had an open PR).
 - Bash output is capped at 2000 characters per result (wq#954) and the tail is dropped —
   tool results are ~40-50% of a session's cost. Narrow commands yourself with
   `head`/`tail`/`grep -n` instead of dumping everything; stderr counts toward the same

@@ -182,6 +182,13 @@ class RunState:
         self.total_cost_usd = None
         self.duration_ms = None
         self.num_turns = None
+        # wq#4707: background tasks the agent started and how many were still
+        # outstanding when the child ended — set by fworker.run_child's
+        # BackgroundTaskWatch, observability only (the post-result grace reads the
+        # watch directly). Carried into the attempt record so a later burn-down can
+        # tell "killed while waiting on its own test run" from a genuine stall.
+        self.bg_tasks_started = 0
+        self.bg_tasks_pending = 0
 
     def observe(self, frame):
         """Feed one parsed stream-json frame (dict). Returns nothing; mutates state."""

@@ -1,0 +1,13 @@
+{"type": "system", "subtype": "init", "session_id": "wq4686-a2", "model": "fake"}
+{"_pause_s": 0.1, "type": "result", "subtype": "success", "is_error": false, "result": ""}
+{"_pause_s": 0.3, "type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git -C /w status --short"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": false, "content": [{"type": "text", "text": "7 modified files"}]}]}}
+{"_pause_s": 0.3, "type": "assistant", "message": {"content": [{"type": "text", "text": "Good, all work survived. Let's run the full dispatcher test suite."}]}}
+{"_pause_s": 0.3, "type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "pytest harness/tests -x", "run_in_background": true}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2", "is_error": false, "content": [{"type": "text", "text": "Command running in background with ID: bash_1"}]}]}}
+{"_pause_s": 0.2, "type": "assistant", "message": {"content": [{"type": "text", "text": "Waiting for the background test run to complete."}]}}
+{"type": "result", "subtype": "success", "is_error": false, "result": "Waiting for the background test run (bash_1) to complete."}
+{"_pause_s": 2.5, "type": "user", "message": {"content": [{"type": "text", "text": "<task-notification>Background task bash_1 completed: 312 passed</task-notification>"}]}}
+{"_pause_s": 0.2, "type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t3", "name": "Bash", "input": {"command": "/home/lumen/bin/lumen-pr land"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t3", "is_error": false, "content": [{"type": "text", "text": "PR #2465 landed"}]}]}}
+{"_pause_s": 0.2, "type": "result", "subtype": "success", "is_error": false, "result": "landed"}
