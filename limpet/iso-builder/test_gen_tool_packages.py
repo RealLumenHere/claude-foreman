@@ -267,3 +267,79 @@ def test_real_catalog_resolves_the_five_previously_unresolved_core_tools():
                           ("ghidra", "binary")):
         res = g.resolve(tools[name])
         assert res.method == method, f"{name}: expected {method}, got {res.method} ({res.reason})"
+
+
+# --- wq#4734: source-build method (searchsploit, no packaged release) ---
+_SEARCHSPLOIT_COMMIT = "f08907b131f851c2ec3c052906f82ca83703ebef"
+
+
+def _source_build_tool(**kw):
+    t = {"name": "searchsploit", "trust": "core", "path": "/usr/bin/searchsploit",
+         "install_method": "source-build",
+         "package": "https://gitlab.com/exploit-database/exploitdb",
+         "commit": _SEARCHSPLOIT_COMMIT}
+    t.update(kw)
+    return t
+
+
+def test_source_build_tool_with_recipe_and_commit_pin_resolves():
+    res = g.resolve(_source_build_tool())
+    assert (res.method, res.package, res.commit) == (
+        "source-build", "https://gitlab.com/exploit-database/exploitdb", _SEARCHSPLOIT_COMMIT)
+
+
+def test_source_build_tool_without_commit_pin_is_unresolved():
+    res = g.resolve(_source_build_tool(commit=None))
+    assert res.method == "unresolved" and "40-hex commit" in res.reason
+
+
+def test_source_build_commit_must_be_40_hex_not_a_branch():
+    assert g.resolve(_source_build_tool(commit="main")).method == "unresolved"
+    assert g.resolve(_source_build_tool(commit=_SEARCHSPLOIT_COMMIT + "x")).method == "unresolved"
+
+
+def test_source_build_tool_without_verified_recipe_is_unresolved_not_fetched():
+    res = g.resolve(_source_build_tool(name="othertool",
+                                        package="https://gitlab.com/example/othertool"))
+    assert res.method == "unresolved" and "recipe" in res.reason
+
+
+def test_source_build_tool_with_no_declared_repo_is_unresolved():
+    res = g.resolve(_source_build_tool(package=None))
+    assert res.method == "unresolved"
+
+
+def test_manifest_carries_source_build_tool_and_its_sha256():
+    m = g.build_manifest([_source_build_tool()])
+    assert m["source_build_tools"] == [{
+        "name": "searchsploit",
+        "repo": "https://gitlab.com/exploit-database/exploitdb",
+        "commit": _SEARCHSPLOIT_COMMIT,
+        "archive_name": "exploitdb",
+        "sha256": g.SOURCE_BUILD_RECIPES["searchsploit"]["sha256"],
+        "extract_to": "/opt/exploitdb", "bin_src": "searchsploit",
+        "bin": "/usr/bin/searchsploit", "runtime_apt": [],
+    }]
+    assert m["totals"]["source_build"] == 1
+
+
+# --- wq#4734: 5 core RE tools that never reached the ISO (trust/trust_tier mismatch on
+# hackrf/apktool/scrcpy, no binary recipe for jadx, no apt package for searchsploit) ---
+def test_real_catalog_resolves_the_five_wq4734_core_tools():
+    tools = {t["name"]: t for t in g.load_tools()}
+    for name, method in (("hackrf", "apt"), ("apktool", "apt"), ("scrcpy", "apt"),
+                          ("jadx", "binary"), ("searchsploit", "source-build")):
+        res = g.resolve(tools[name], runner=fake_runner({}))
+        assert res.method == method, f"{name}: expected {method}, got {res.method} ({res.reason})"
+
+
+# --- wq#4734: an unresolvable core-tier tool must be distinguishable from a merely
+# unresolved community/vetted one, so build.sh's verify_re_tools can fail the build on it ---
+def test_manifest_totals_counts_unresolved_core_tools_separately():
+    tools = [
+        {"name": "mystery-core", "trust": "core", "path": None},
+        {"name": "mystery-community", "trust": "community", "path": None},
+    ]
+    m = g.build_manifest(tools, runner=fake_runner({}))
+    assert m["totals"]["unresolved"] == 2
+    assert m["totals"]["unresolved_core"] == 1

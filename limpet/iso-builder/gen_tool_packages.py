@@ -105,6 +105,41 @@ BINARY_RECIPES = {
         "extract_to": "/opt/ghidra",
         "runtime_apt": ["openjdk-21-jre-headless"],
     },
+    # wq#4734: jadx release zip has no single top-level wrapper directory (its
+    # entries are LICENSE, README.md, bin/, lib/ directly) -- sha256 is GitHub's
+    # own release-asset digest, re-checked by curl+sha256sum on the build host,
+    # 2026-10-27.
+    "jadx-1.5.6.zip": {
+        "url": "https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip",
+        "sha256": "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974",
+        "extract_to": "/opt/jadx",
+        "runtime_apt": ["openjdk-21-jre-headless"],
+    },
+}
+
+# wq#4734: tools with no packaged release -- fetched as a sha256-pinned GitLab
+# archive of a single commit (same "verify before it touches the chroot" rule
+# as BINARY_RECIPES), because the catalog's 'commit' field pins the exact
+# revision rather than trusting a moving branch. "archive_name" is the repo
+# slug GitLab uses to name the generated tarball
+# (<repo>/-/archive/<commit>/<archive_name>-<commit>.tar.gz).
+#   searchsploit (gitlab.com/exploit-database/exploitdb): apt's 'exploitdb'
+#   package doesn't exist on Ubuntu 26.04 (Kali-only), and the project ships no
+#   releases -- it's a bash script plus a CSV database, updated by commit, not
+#   by tag. Pinned to GitLab HEAD f08907b1 as of 2026-10-27 (api/v4
+#   .../repository/commits); sha256 is this build host's own curl+sha256sum of
+#   that commit's -/archive endpoint, confirmed to contain the 'searchsploit'
+#   script at the archive root. No extra runtime apt: the script only shells
+#   out to grep/which, both already in the base image.
+SOURCE_BUILD_RECIPES = {
+    "searchsploit": {
+        "archive_name": "exploitdb",
+        "sha256": "370b8e481e70183c41fab2c0ffd487982c6a481909be31ca452ee1f60f7d36be",
+        "extract_to": "/opt/exploitdb",
+        "bin_src": "searchsploit",
+        "bin": "/usr/bin/searchsploit",
+        "runtime_apt": [],
+    },
 }
 _CRATE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -115,7 +150,7 @@ _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 class Resolution:
     name: str
     trust: str
-    method: str  # "apt" | "cargo" | "pip" | "pip-git" | "binary" | "unresolved"
+    method: str  # "apt" | "cargo" | "pip" | "pip-git" | "binary" | "source-build" | "unresolved"
     package: str | None
     reason: str | None
     version: str | None = None  # pinned crate/pip version (cargo, pip only)
@@ -173,6 +208,24 @@ def _resolve_pip(name: str, trust: str, declared: str | None,
     return Resolution(name, trust, "pip", declared, None, version=version)
 
 
+def _resolve_source_build(name: str, trust: str, declared: str | None,
+                           commit: str | None) -> Resolution:
+    if not declared:
+        return Resolution(name, trust, "unresolved", None,
+                           "install_method 'source-build' needs a repo url")
+    if not (commit and _COMMIT_RE.match(commit)):
+        return Resolution(name, trust, "unresolved", None,
+                           f"install_method 'source-build' from {declared!r} needs a pinned "
+                           "40-hex commit in the catalog's 'commit' field (no branches, "
+                           "same rule as pip-git, wq#4116)")
+    if name not in SOURCE_BUILD_RECIPES:
+        return Resolution(name, trust, "unresolved", None,
+                           f"no verified source-build recipe for {name!r} "
+                           "(add one to SOURCE_BUILD_RECIPES after an actual sha256-verified "
+                           "fetch; never guessed)")
+    return Resolution(name, trust, "source-build", declared, None, commit=commit)
+
+
 def resolve(tool: dict, runner=subprocess.run) -> Resolution:
     name = tool["name"]
     trust = tool.get("trust", "community")
@@ -205,6 +258,8 @@ def resolve(tool: dict, runner=subprocess.run) -> Resolution:
         return Resolution(name, trust, "cargo", declared, None, version)
     if method == "pip":
         return _resolve_pip(name, trust, declared, tool.get("version"), tool.get("commit"))
+    if method == "source-build":
+        return _resolve_source_build(name, trust, declared, tool.get("commit"))
     if method == "binary":
         if not declared:
             return Resolution(name, trust, "unresolved", None,
@@ -258,11 +313,22 @@ def build_manifest(tools: list[dict], runner=subprocess.run) -> dict:
                           "extract_to": BINARY_RECIPES[r.package]["extract_to"],
                           "runtime_apt": BINARY_RECIPES[r.package]["runtime_apt"]} for r in binary]
 
+    source_build = [r for r in resolutions if r.method == "source-build"]
+    source_build_tools = [{"name": r.name, "repo": r.package, "commit": r.commit,
+                            "archive_name": SOURCE_BUILD_RECIPES[r.name]["archive_name"],
+                            "sha256": SOURCE_BUILD_RECIPES[r.name]["sha256"],
+                            "extract_to": SOURCE_BUILD_RECIPES[r.name]["extract_to"],
+                            "bin_src": SOURCE_BUILD_RECIPES[r.name]["bin_src"],
+                            "bin": SOURCE_BUILD_RECIPES[r.name]["bin"],
+                            "runtime_apt": SOURCE_BUILD_RECIPES[r.name]["runtime_apt"]}
+                           for r in source_build]
+
     apt_packages = sorted({r.package for r in resolutions if r.method == "apt"}
                           | {p for c in cargo_crates for p in c["runtime_apt"]}
                           | {p for c in pip_packages for p in c["runtime_apt"]}
                           | {p for c in pip_git_packages for p in c["runtime_apt"]}
-                          | {p for c in binary_artifacts for p in c["runtime_apt"]})
+                          | {p for c in binary_artifacts for p in c["runtime_apt"]}
+                          | {p for c in source_build_tools for p in c["runtime_apt"]})
     unresolved = [dataclasses.asdict(r) for r in resolutions if r.method == "unresolved"]
     return {
         "apt_packages": apt_packages,
@@ -270,14 +336,18 @@ def build_manifest(tools: list[dict], runner=subprocess.run) -> dict:
         "pip_packages": pip_packages,
         "pip_git_packages": pip_git_packages,
         "binary_artifacts": binary_artifacts,
+        "source_build_tools": source_build_tools,
         "unresolved": unresolved,
         "totals": {
             "catalog": len(tools),
             "baked": len(apt_packages),
             "unresolved": len(unresolved),
+            "unresolved_core": len([r for r in resolutions
+                                     if r.method == "unresolved" and r.trust == "core"]),
             "cargo": len(cargo_crates),
             "pip": len(pip_packages) + len(pip_git_packages),
             "binary": len(binary_artifacts),
+            "source_build": len(source_build_tools),
         },
     }
 

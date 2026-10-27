@@ -327,7 +327,8 @@ stage4_package_re_tools() {
   if [ "$(jq '.cargo_crates | length' "$TOOL_MANIFEST")" -gt 0 ]; then stage4b_build_cargo_tools "$TOOL_MANIFEST"; fi
   if [ "$(jq '.pip_packages + .pip_git_packages | length' "$TOOL_MANIFEST")" -gt 0 ]; then stage4c_build_pip_tools "$TOOL_MANIFEST"; fi
   if [ "$(jq '.binary_artifacts | length' "$TOOL_MANIFEST")" -gt 0 ]; then stage4d_fetch_binary_tools "$TOOL_MANIFEST"; fi
-  verify_re_tools "$CHROOT" || fail "stage4: installs reported success but the tools above are missing from $CHROOT"
+  if [ "$(jq '.source_build_tools | length' "$TOOL_MANIFEST")" -gt 0 ]; then stage4e_build_source_tools "$TOOL_MANIFEST"; fi
+  verify_re_tools "$CHROOT" || fail "stage4: installs reported success but the tools above are missing from $CHROOT, or a core-tier tool was unresolved (see $TOOL_MANIFEST .unresolved)"
   log "stage4: every manifest tool verified present in $CHROOT"
 }
 
@@ -348,8 +349,13 @@ root_exec_ok() {
 # wq#4524: every tool the stage4 manifest lists must be present under <root>: apt packages
 # installed in its dpkg db, built binaries at their install paths, binary artifacts
 # unpacked. Logs each miss and returns 1 if any.
+# wq#4734: also fails if any catalog tool stage4_package_re_tools could not resolve at all
+# is core-tier -- this used to only check tools that made it INTO the manifest's install
+# sections, so a core tool gen_tool_packages.py reported fully unresolved (wrong trust tier,
+# no apt package on this build host, no recipe) never failed the build; stage4 just logged
+# the unresolved count and continued.
 verify_re_tools() {
-  local root="$1" miss=0 p bin dir
+  local root="$1" miss=0 p bin dir core_unresolved
   [ -f "$TOOL_MANIFEST" ] || { log "no $TOOL_MANIFEST -- stage4_package_re_tools never ran against this WORKDIR"; return 1; }
   while read -r p; do
     [ -n "$p" ] || continue
@@ -360,11 +366,16 @@ verify_re_tools() {
   while read -r bin; do
     [ -n "$bin" ] || continue
     root_exec_ok "$root" "$bin" || { log "missing RE tool binary: $bin"; miss=1; }
-  done < <(jq -r '((.cargo_crates + .pip_packages)[] | "/usr/local/bin/" + .bin), (.pip_git_packages[] | "/opt/re-venv/bin/" + .bin)' "$TOOL_MANIFEST")
+  done < <(jq -r '((.cargo_crates + .pip_packages)[] | "/usr/local/bin/" + .bin), (.pip_git_packages[] | "/opt/re-venv/bin/" + .bin), ((.source_build_tools // [])[].bin)' "$TOOL_MANIFEST")
   while read -r dir; do
     [ -n "$dir" ] || continue
     [ -n "$(ls -A "$root$dir" 2>/dev/null)" ] || { log "missing RE tool artifact dir: $dir"; miss=1; }
   done < <(jq -r '.binary_artifacts[].extract_to' "$TOOL_MANIFEST")
+  core_unresolved="$(jq -r '[(.unresolved // [])[] | select(.trust == "core")] | length' "$TOOL_MANIFEST")"
+  if [ "$core_unresolved" -gt 0 ]; then
+    log "core-tier RE tool(s) unresolved at stage4 verify time ($core_unresolved; see $TOOL_MANIFEST .unresolved for the reason each one failed)"
+    miss=1
+  fi
   return "$miss"
 }
 
@@ -520,11 +531,50 @@ stage4d_fetch_binary_tools() {
     [ "$got" = "$sha256" ] || fail "sha256 mismatch for $artifact: got $got want $sha256"
     rm -rf "$out/extract-$name"; mkdir -p "$out/extract-$name" "$CHROOT$extract_to"
     unzip -q "$out/$artifact" -d "$out/extract-$name"
-    top="$(find "$out/extract-$name" -mindepth 1 -maxdepth 1 -type d | head -1)"
-    [ -n "$top" ] || fail "$artifact extracted to no top-level directory"
-    cp -a "$top/." "$CHROOT$extract_to/"
+    # wq#4734: a zip with exactly one top-level directory (ghidra) is a wrapper to unwrap
+    # one level; a zip with no such wrapper (jadx's release zip extracts straight to
+    # LICENSE/README.md/bin/lib at the top level) must be copied as-is -- unwrapping the
+    # first -type d match in that case silently dropped every sibling entry.
+    local top_entries top_dirs
+    top_entries="$(find "$out/extract-$name" -mindepth 1 -maxdepth 1 | wc -l)"
+    top_dirs="$(find "$out/extract-$name" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+    if [ "$top_entries" -eq 1 ] && [ "$top_dirs" -eq 1 ]; then
+      top="$(find "$out/extract-$name" -mindepth 1 -maxdepth 1 -type d)"
+      cp -a "$top/." "$CHROOT$extract_to/"
+    else
+      cp -a "$out/extract-$name/." "$CHROOT$extract_to/"
+    fi
     log "stage4d: installed $extract_to from $artifact (sha256 ${got:0:16}...)"
   done < <(jq -c '.binary_artifacts[]' "$manifest")
+}
+
+# wq#4734: fetch recipe-backed source tools (searchsploit) that ship no packaged release --
+# apt's 'exploitdb' is Kali-only and absent on Ubuntu 26.04. Pulled as a sha256-pinned GitLab
+# archive of the single commit gen_tool_packages.py's SOURCE_BUILD_RECIPES/catalog 'commit'
+# field names (never a moving branch), verified before anything lands under $CHROOT, same
+# fail-closed rule as stage4b/c/d.
+stage4e_build_source_tools() {
+  local manifest="$1" out="$WORKDIR/source-build-out"
+  require_cmd curl; require_cmd jq; require_cmd sha256sum; require_cmd tar
+  mkdir -p "$out"
+  local c name repo commit archive_name sha256 extract_to bin_src bin url got
+  while read -r c; do
+    name="$(jq -r .name <<<"$c")"; repo="$(jq -r .repo <<<"$c")"
+    commit="$(jq -r .commit <<<"$c")"; archive_name="$(jq -r .archive_name <<<"$c")"
+    sha256="$(jq -r .sha256 <<<"$c")"; extract_to="$(jq -r .extract_to <<<"$c")"
+    bin_src="$(jq -r .bin_src <<<"$c")"; bin="$(jq -r .bin <<<"$c")"
+    url="$repo/-/archive/$commit/$archive_name-$commit.tar.gz"
+    log "stage4e: fetch $name ($archive_name@${commit:0:12}, sha256-pinned)"
+    curl -fsSL "$url" -o "$out/$name.tar.gz"
+    got="$(sha256sum "$out/$name.tar.gz" | cut -d' ' -f1)"
+    [ "$got" = "$sha256" ] || fail "sha256 mismatch for $name source archive: got $got want $sha256"
+    rm -rf "$out/extract-$name"; mkdir -p "$out/extract-$name" "$CHROOT$extract_to"
+    tar -xzf "$out/$name.tar.gz" -C "$out/extract-$name" --strip-components=1
+    cp -a "$out/extract-$name/." "$CHROOT$extract_to/"
+    chroot "$CHROOT" chmod +x "$extract_to/$bin_src"
+    chroot "$CHROOT" ln -sf "$extract_to/$bin_src" "$bin"
+    log "stage4e: installed $bin -> $extract_to/$bin_src from $name (sha256 ${got:0:16}...)"
+  done < <(jq -c '.source_build_tools[]' "$manifest")
 }
 
 # ---------------------------------------------------------------------------
