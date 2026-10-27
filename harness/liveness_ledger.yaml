@@ -23,12 +23,12 @@ credentials:
     last_verified: 2026-09-07
     probe: cred_alive(/home/lumen/.secrets/github-frank.token, https://api.github.com/user)
   github-lumen:
-    path: /home/lumen/.secrets/github-lumen.token
+    path: /home/lumen/.secrets/github-reallumenhere.token
     scope: Lumen Industries PAT (fleet PRs on Jay's repos + lumen/*)
     verify_url: https://api.github.com/user
     scheme: bearer
     last_verified: 2026-09-07
-    probe: cred_alive(/home/lumen/.secrets/github-lumen.token, https://api.github.com/user)
+    probe: cred_alive(/home/lumen/.secrets/github-reallumenhere.token, https://api.github.com/user)
   tailscale-api:
     path: /home/lumen/.secrets/tailscale-api.key
     scope: tailnet API (devices read; key-expiry audit)
