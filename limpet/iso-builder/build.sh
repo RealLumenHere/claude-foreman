@@ -48,6 +48,107 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 fail() { log "FAIL: $*"; exit 1; }
 require_cmd() { command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1 (install it on the build host, not in the ISO's chroot)"; }
 
+# ---------------------------------------------------------------------------
+# Mount teardown (wq#4710) -- stage1b mounts an overlay chroot plus proc/
+# sysfs/devtmpfs/tmpfs inside WORKDIR, and nothing used to unmount them on a
+# failed/killed run: a watchdog SIGTERM or a dead fworker left a build's
+# mounts stuck under WORKDIR with no process left to tear them down.
+# devtmpfs mounted inside the tree means an `rm -rf WORKDIR` from a worktree
+# prune or pruner timer then descends into the host's real device nodes.
+#
+# workdir_mounts lists mounts under WORKDIR deepest-path-first (so a child
+# unmounts before its parent). findmnt ships in the same util-linux package
+# as mount/mountpoint, both already required by stage1b.
+# ---------------------------------------------------------------------------
+workdir_mounts() {
+  findmnt -rn -o TARGET 2>/dev/null \
+    | awk -v d="$WORKDIR" -v dslash="$WORKDIR/" \
+      '$0 == d || index($0, dslash) == 1 { print length($0), $0 }' \
+    | sort -rn | cut -d' ' -f2-
+}
+
+_unmount_retry() {
+  local m="$1" tries=0
+  while mountpoint -q "$m" 2>/dev/null && [ "$tries" -lt 5 ]; do
+    umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || true
+    tries=$((tries + 1))
+  done
+  mountpoint -q "$m" 2>/dev/null && log "teardown: $m still mounted after $tries attempt(s) -- something still holds it open (check fuser/lsof)"
+  return 0
+}
+
+teardown_workdir_mounts() {
+  local m
+  # Known shape first, in dependency-safe order: the chroot's own submounts, then the
+  # chroot overlay itself (so nothing still references layers/lower/* as a lowerdir),
+  # then each lower/<layer> squashfs. Unmounting a lowerdir while its overlay is still
+  # mounted on top of it is the one ordering a generic deepest-path sort gets wrong --
+  # lower/<layer> and chroot are siblings, not nested, so string/path depth alone
+  # doesn't know the overlay depends on it.
+  for m in "$CHROOT/dev/pts" "$CHROOT/dev" "$CHROOT/sys" "$CHROOT/proc" "$CHROOT/run" "$CHROOT"; do
+    _unmount_retry "$m"
+  done
+  if [ -d "$LAYERS_DIR/lower" ]; then
+    for m in "$LAYERS_DIR"/lower/*; do
+      [ -e "$m" ] || continue
+      _unmount_retry "$m"
+    done
+  fi
+  # Catch-all (wq#4710): anything still mounted under WORKDIR the list above doesn't
+  # know about -- a future stage1b change, or a mount left by a differently-shaped
+  # failure. Deepest path first so a child clears before its parent.
+  for m in $(workdir_mounts); do
+    _unmount_retry "$m"
+  done
+}
+
+# Refuses when a mount sits at or below $1 -- the belt-and-braces half of the
+# class fix: whatever removes WORKDIR (this script, a pruner timer, a
+# worktree prune) must call this first so a stale mount under the tree turns
+# into a loud failure instead of `rm -rf` silently descending into it.
+refuse_rm_if_mounted() {
+  local target="$1" hit
+  hit="$(findmnt -rn -o TARGET 2>/dev/null \
+    | awk -v d="$target" -v dslash="$target/" '$0 == d || index($0, dslash) == 1')"
+  [ -z "$hit" ] || fail "refusing to remove $target: mount(s) still present at/below it ($(printf '%s' "$hit" | tr '\n' ' ')) -- run '$0 teardown' first (wq#4710: rm -rf here would descend into live devtmpfs/proc/overlay)"
+}
+
+stage_teardown() {
+  require_cmd mountpoint
+  require_cmd umount
+  require_cmd findmnt
+  log "teardown: unmounting everything under $WORKDIR"
+  teardown_workdir_mounts
+  refuse_rm_if_mounted "$WORKDIR"
+  log "teardown: $WORKDIR is clean"
+}
+
+# EXIT fires on both `fail`'s exit 1 and a `set -e` abort -- tear down only on
+# a non-zero exit so a clean single-stage run (e.g. `build.sh
+# stage1b_assemble_chroot`) keeps its mounts for the next invocation, exactly
+# like the existing "already mounted -- reusing it" resume path expects.
+# INT/TERM (watchdog kill, a dead fworker's process group) never reach a
+# clean exit on their own, so they tear down unconditionally, then exit 143
+# instead of returning control to whatever was interrupted.
+_teardown_on_exit() {
+  local rc=$?
+  trap - EXIT INT TERM
+  if [ "$rc" -ne 0 ]; then
+    log "build.sh exiting (rc=$rc) -- tearing down mounts under $WORKDIR so a failed run never leaves them stuck (wq#4710)"
+    teardown_workdir_mounts || true
+  fi
+  exit "$rc"
+}
+_teardown_on_signal() {
+  trap - EXIT INT TERM
+  log "build.sh received SIG$1 -- tearing down mounts under $WORKDIR (wq#4710)"
+  teardown_workdir_mounts || true
+  exit 143
+}
+trap _teardown_on_exit EXIT
+trap '_teardown_on_signal INT' INT
+trap '_teardown_on_signal TERM' TERM
+
 # wq#4456: these two guards previously existed only in the external build-limpet.sh
 # wrapper (wq#4449), so running this script's own stage1b directly -- which the README
 # says `./build.sh all` supports -- bypassed both entirely. Inlined here so the canonical
@@ -149,6 +250,7 @@ stage1b_assemble_chroot() {
   require_cmd unsquashfs
   require_cmd mount
   require_cmd mountpoint
+  require_cmd findmnt
   # wq#4456: mount/unsquashfs/the proc+sys+dev bind-mounts below all require root; let
   # a missing sudo fail here with a clear message instead of a confusing mid-stage
   # "Operation not permitted" from whichever mount call happens to run first.
@@ -157,6 +259,14 @@ stage1b_assemble_chroot() {
     log "stage1b: $CHROOT already mounted -- reusing it"
     return
   fi
+  # wq#4710: $CHROOT itself isn't mounted (the reuse path above didn't fire), but a
+  # submount survives under WORKDIR anyway -- a prior run was killed/failed between
+  # mounting proc/sys/dev/run and the final overlay mount, or after release_chroot
+  # unmounted some but not all of them. Reusing silently here would mount a fresh
+  # overlay over/under whatever is left; refuse and point at the new teardown stage.
+  local stale
+  stale="$(workdir_mounts)"
+  [ -z "$stale" ] || fail "stage1b: $WORKDIR already has mount(s) left from a previous run ($(printf '%s' "$stale" | tr '\n' ' ')) -- run '$0 teardown' first (wq#4710)"
   local casper="$ISO_EXTRACT/casper" layer lowers
   layer="$(target_layer)"
   [ -f "$casper/$layer.squashfs" ] || fail "target layer $casper/$layer.squashfs missing from the extracted ISO"
@@ -207,18 +317,13 @@ stage1b_assemble_chroot() {
   log "stage1b: $layer (over $lowers) mounted at $CHROOT"
 }
 
+# wq#4710: generalized into teardown_workdir_mounts (findmnt-driven, not a hardcoded
+# dev/pts,dev,sys,proc,run list) so it also catches whatever a future stage1b change
+# mounts, and so the same logic backs the standalone `teardown` stage and the
+# EXIT/INT/TERM trap above.
 release_chroot() {
-  rm -f "$CHROOT/usr/sbin/policy-rc.d"
-  local m
-  for m in dev/pts dev sys proc run; do
-    if mountpoint -q "$CHROOT/$m"; then umount "$CHROOT/$m"; fi
-  done
-  if mountpoint -q "$CHROOT"; then umount "$CHROOT"; fi
-  if [ -d "$LAYERS_DIR/lower" ]; then
-    for m in "$LAYERS_DIR"/lower/*; do
-      if mountpoint -q "$m"; then umount "$m"; fi
-    done
-  fi
+  rm -f "$CHROOT/usr/sbin/policy-rc.d" 2>/dev/null || true
+  teardown_workdir_mounts
 }
 
 # ---------------------------------------------------------------------------
@@ -1048,10 +1153,14 @@ STAGES=(
 
 usage() {
   cat <<EOF
-Usage: $0 [stage-name|all]
+Usage: $0 [stage-name|all|teardown]
 
 Stages (run in this order for 'all'):
 $(printf '  %s\n' "${STAGES[@]}")
+
+  teardown  unmount everything left under WORKDIR (wq#4710) -- run this before
+            removing WORKDIR by hand, and after a build was killed/failed and
+            you want to retry stage1b from scratch instead of reusing its mounts
 
 Env:
   LIMPET_BASE_ISO         path to a cached Xubuntu $XUBUNTU_VERSION ISO (stage1)
@@ -1079,6 +1188,9 @@ main() {
   if [ "$target" = "all" ]; then
     for s in "${STAGES[@]}"; do "$s"; done
     return
+  fi
+  if [ "$target" = "teardown" ]; then
+    stage_teardown; return
   fi
   for s in "${STAGES[@]}"; do
     if [ "$s" = "$target" ]; then "$s"; return; fi
