@@ -16,7 +16,8 @@ import re
 
 # §2.3 tag vocabulary (v1, closed set). wq edit --needs validates against this;
 # this parser accepts anything tag-shaped so a vocabulary bump can't strand tickets.
-TAG_NAMES = ("ssh", "root", "restart", "copy", "repo", "dir", "bench", "power", "peer")
+TAG_NAMES = ("ssh", "root", "restart", "copy", "repo", "dir", "bench", "power", "peer",
+             "homeroot")
 
 _TAG_START_RE = re.compile(r"(?:needs:)?([a-z_-]+)\(")
 _NEEDS_LINE_RE = re.compile(r"^Needs:\s*(.+)$", re.MULTILINE)
@@ -74,6 +75,14 @@ class Needs:
                 if node and d:
                     out.append((node, d))
         return out
+
+    @property
+    def homeroot_paths(self):
+        """Every homeroot(<abs-path>) arg, in order (orchestrator_verify_lane.md
+        §5.1): a verify ticket's read grant against VERIFY_HOME_ROOT_READ_ALLOW,
+        never merged into .dirs — dir() grants a whole directory, homeroot() grants
+        exactly one hard-coded file."""
+        return [arg for name, arg in self.tags if name == "homeroot" and arg]
 
     @property
     def restart_targets(self):
@@ -169,7 +178,7 @@ def validate(needs_field):
             return False, f"unknown needs tag {name!r} (vocabulary: {', '.join(TAG_NAMES)})"
         if not arg:
             return False, f"needs tag {name}() has an empty argument"
-        if name in ("repo", "dir") and not arg.startswith("/"):
+        if name in ("repo", "dir", "homeroot") and not arg.startswith("/"):
             return False, f"needs:{name}({arg}) must be an absolute path"
     return True, None
 

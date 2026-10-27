@@ -32,6 +32,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import router  # noqa: E402
+import needs as needs_mod  # noqa: E402  # wq#4686: derive a verify ticket's own needs
+import capability_lint  # noqa: E402  # wq#4686: homeroot/dir-deny checks on cited paths
 
 FOREMAN_ROOT = router.FOREMAN_ROOT
 RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_runs"))
@@ -96,6 +98,79 @@ def existing_verify_ticket(shipped_id):
     return None
 
 
+def verify_derive_disabled():
+    """design/orchestrator_verify_lane.md §9 rollback lever: off restores a verify
+    ticket's shape to exactly what it was before wq#4686 (no derived needs, archetype
+    always 'verify-pass', nothing ever filed pre-blocked)."""
+    return os.environ.get("FOREMAN_VERIFY_DERIVE_NEEDS") == "off"
+
+
+def _ops_bundle_node(bundle):
+    """The fleet node ops/<bundle>/install.sh targets, or None. §5.1: 'read its
+    install.sh target node(s)'. install.sh's own convention (ops/wq2608-dc-endpoint-
+    bes-a1/install.sh:15, ops/wq3332-chat-digest-local/install.sh:16) is a literal
+    `NODE=<word>` assignment; a shell-expansion value ('${X:-nephthys}') or a path
+    (wq4514's `NODE=/usr/bin/node`, the nodejs binary) doesn't match \\w+ and is
+    correctly skipped rather than guessed. 'lumen' is the box every worker already
+    runs on — never worth an ssh() grant."""
+    try:
+        with open(os.path.join(OPS_ROOT, bundle, "install.sh")) as f:
+            head = f.read(20000)
+    except OSError:
+        return None
+    m = re.search(r"^NODE=(\w+)$", head, re.MULTILINE)
+    if m and m.group(1) != "lumen":
+        return m.group(1)
+    return None
+
+
+# wq#4686 §5.1: the same /home/lumen/... literal the lint cites from, minus a quoted
+# mention (capability_lint._MENTION_RE's own class — a path the ticket talks ABOUT, not
+# one a worker must reach).
+_HOME_ROOT_CITE_RE = re.compile(r"/home/lumen/[\w./~-]+")
+
+
+def _cited_home_root_paths(t):
+    """Every distinct /home/lumen/... path the shipped ticket's detail/notes cite,
+    outside a quoted mention, normalised and deduped in source order."""
+    text = " ".join(str(t.get(k) or "") for k in ("detail", "notes"))
+    text = capability_lint._MENTION_RE.sub(" ", text)
+    out = []
+    for m in _HOME_ROOT_CITE_RE.finditer(text):
+        p = os.path.normpath(m.group(0).rstrip(".,;:)"))
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def derive_verify_needs(t):
+    """(Needs, block_reasons) for the verify ticket about to be filed for shipped
+    ticket `t` (design §5.1): copy the shipped ticket's own needs:ssh tags verbatim,
+    add ssh(<node>) for every non-lumen ops-bundle install target, and needs:homeroot
+    for every home-root file it cites. block_reasons (§5.3) is populated the moment a
+    derived tag is unsatisfiable by policy — that ticket is filed blocked and the
+    needs are never written to it (an unsatisfiable need is not a grant)."""
+    tags = []
+    block_reasons = []
+    shipped_needs = needs_mod.parse(t.get("needs"), t.get("detail"))
+    for node in shipped_needs.ssh_nodes:
+        if ("ssh", node) not in tags:
+            tags.append(("ssh", node))
+    for bundle in ops_bundles_cited(t):
+        node = _ops_bundle_node(bundle)
+        if node and ("ssh", node) not in tags:
+            tags.append(("ssh", node))
+    for path in _cited_home_root_paths(t):
+        reason = capability_lint.dir_denied(path)
+        if reason:
+            block_reasons.append(f"{path} refused by {capability_lint.dir_denied_rule_loc(path)} ({reason})")
+        elif os.path.dirname(path) == "/home/lumen" and ("homeroot", path) not in tags:
+            tags.append(("homeroot", path))
+    derived = needs_mod.Needs(tags)
+    block_reasons += router.verify_needs_block_reasons(derived)
+    return derived, block_reasons
+
+
 def file_verify_pass(shipped_id, *, pr=None, author_model=None, manifest=None, dry_run=False):
     """File the archetype-8 ticket for a shipped diff. Returns a decision dict."""
     manifest = manifest or router.load_manifest()
@@ -152,18 +227,48 @@ def file_verify_pass(shipped_id, *, pr=None, author_model=None, manifest=None, d
             detail += ("\n\nBundle(s) without a --verify handler: " + ", ".join(missing) +
                        ". Add one per ops/VERIFY_CONTRACT.md before confirming; a repo-only "
                        "check does not count (wq#1696).")
-    out.update(verifier=rung.as_dict(), verifier_note=note, title=title, pr=pr_ref, liveness=liveness)
+    # wq#4686 (design/orchestrator_verify_lane.md §5.1-5.3): derive this verify
+    # ticket's OWN needs from what the shipped ticket had to touch, route by them
+    # (verify-pass vs verify-probe), and refuse to file a ticket no lane can ever run
+    # — it goes straight to blocked instead. FOREMAN_VERIFY_DERIVE_NEEDS=off restores
+    # the pre-wq#4686 shape unconditionally (archetype stays verify-pass, no needs, no
+    # pre-filed block).
+    verify_archetype = "verify-pass"
+    derived_needs = needs_mod.Needs([])
+    block_reasons = []
+    archetype_reason = "FOREMAN_VERIFY_DERIVE_NEEDS=off"
+    if not verify_derive_disabled():
+        derived_needs, block_reasons = derive_verify_needs(t)
+        verify_archetype, archetype_reason = router.classify_verify_archetype(derived_needs, liveness)
+    out.update(verifier=rung.as_dict(), verifier_note=note, title=title, pr=pr_ref, liveness=liveness,
+               derived_needs=derived_needs.tags, verify_archetype=verify_archetype,
+               archetype_reason=archetype_reason, block_reasons=block_reasons)
     if dry_run:
         return out
+    needs_value = ", ".join(f"{name}({arg})" for name, arg in derived_needs.tags)
     args = ["add", "--lane", str(pol.get("lane", "build")), "--pri", str(pol.get("pri", 2)),
             "--title", title, "--detail", detail, "--deps", str(shipped_id),
-            "--model", rung.model, "--effort", rung.effort or "", "--archetype", "verify-pass"]
+            "--model", rung.model, "--effort", rung.effort or "",
+            # §5.3: a ticket with an unsatisfiable need is filed under verify-pass's own
+            # archetype (never verify-probe, which it could never run either) — the
+            # block_reason is what matters, not which of the two reachable archetypes
+            # it nominally carries.
+            "--archetype", verify_archetype if not block_reasons else "verify-pass"]
     if liveness:
         args += ["--liveness", liveness]
+    if needs_value and not block_reasons:
+        args += ["--needs", needs_value]
     p = router.wq(*args)
     m = re.search(r"added task (\d+)", p.stdout)
-    out["filed"] = int(m.group(1)) if m else None
+    filed_id = int(m.group(1)) if m else None
+    out["filed"] = filed_id
     out["wq"] = (p.stdout + p.stderr).strip()
+    if filed_id and block_reasons:
+        block_reason = "orchestrator-only: " + "; ".join(block_reasons)
+        bp = router.wq("block", str(filed_id), block_reason)
+        out["blocked"] = True
+        out["block_reason"] = block_reason
+        out["wq_block"] = (bp.stdout + bp.stderr).strip()
     return out
 
 

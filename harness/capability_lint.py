@@ -66,6 +66,61 @@ DIR_DENY_BASENAME_GLOBS_HOME = (".fleet_pw", ".git-credentials*", ".netrc", "*.p
 # DIR_DENY_PREFIXES for every other reader of that tuple.
 WORKTREE_DENY_PREFIXES = ("/home/lumen/worktrees", "/home/lumen/scratch/worktrees")
 
+# design/orchestrator_verify_lane.md §5.1/§5.3 + option A §3: the ONLY home-root files a
+# verify-probe worker may read, needs:homeroot(<file>)-gated. Hard-coded for the same
+# reason DIR_DENY_EXACT/_PREFIXES are hard-coded above — an edited policy file must not be
+# able to widen a worker's reach into Frank's home root. Anything else under /home/lumen
+# (including every DIR_DENY_PREFIXES/BASENAME_GLOBS_HOME entry) stays refused: homeroot()
+# never bypasses the deny-list, it only carves these five named files out of DIR_DENY_EXACT.
+VERIFY_HOME_ROOT_READ_ALLOW = (
+    "/home/lumen/ORCHESTRATOR-HANDOFF.md",
+    "/home/lumen/HANDOFF.md",
+    "/home/lumen/AGENT-FILE-INDEX.md",
+    "/home/lumen/claude_memory.md",
+    "/home/lumen/FLEET_MAP.md",
+)
+
+
+def _def_line(name):
+    """'capability_lint.py:NN' of this module's own `name = `/`def name` line, read
+    from the live source so a block_reason names a rule's REAL location instead of a
+    number that rots the next time this file is edited (§5.3 wants 'rule file:line')."""
+    pat = re.compile(rf"^(?:{re.escape(name)}\s*=|def {re.escape(name)}\()")
+    try:
+        with open(__file__) as f:
+            for i, line in enumerate(f, 1):
+                if pat.match(line):
+                    return f"{os.path.basename(__file__)}:{i}"
+    except OSError:
+        pass
+    return os.path.basename(__file__)
+
+
+def homeroot_refusal(path):
+    """None if `path` is on VERIFY_HOME_ROOT_READ_ALLOW and clears the deny-list;
+    otherwise the refusal reason a needs:homeroot(<path>) tag must be filed blocked
+    with (§5.3). Checked against the deny-list FIRST so a credential-prefix path
+    (wq#4479: /home/lumen/.config/..., token-engine) can never leak through as an
+    allowed homeroot grant."""
+    p = _norm(path)
+    reason = _deny_reason(p)
+    if reason:
+        return f"credential-adjacent path refused by {_def_line('_deny_reason')} ({reason})"
+    if p not in VERIFY_HOME_ROOT_READ_ALLOW:
+        return f"{p} not in VERIFY_HOME_ROOT_READ_ALLOW ({_def_line('VERIFY_HOME_ROOT_READ_ALLOW')})"
+    return None
+
+
+def dir_denied_rule_loc(path):
+    """'capability_lint.py:NN' of the _deny_reason check that refused `path` via
+    dir_denied(), or None if it isn't refused. wq#4686: lets a caller (judgment.
+    file_verify_pass) cite the exact rule a credential-prefix citation hit, same
+    'rule file:line' shape homeroot_refusal() already gives §5.3's block_reason."""
+    if dir_denied(path) is None:
+        return None
+    return _def_line("_deny_reason")
+
+
 # wq#1535: closure artifacts. A ticket may cite a file that the WORK creates — the
 # factory's yellow-approval touch file is the shape that hit us (14 promoter tickets
 # stuck on `cited path .../approvals/F<plan>.approved does not exist`). Such a path is

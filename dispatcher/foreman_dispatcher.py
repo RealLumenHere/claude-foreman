@@ -85,6 +85,9 @@ import fire_gate          # noqa: E402  # wq#1261 §4 item 1: no-probe fire refu
 import capability_lint    # noqa: E402  # wq#1437 BROKER_WIRING §2.1 slice B (warn)
 import capability         # noqa: E402  # wq#1438 BROKER_WIRING §2.2 slice C (pre-skip)
 import capability_proposal  # noqa: E402  # wq#1697: one keyed aq grant proposal per path
+import judgment            # noqa: E402  # wq#4686: --replay-ticket reuses file_verify_pass's dry_run derivation
+import agents_spec         # noqa: E402  # wq#4686: add_dirs a replay record reports for the chosen archetype
+from agents_spec import AgentsSpecError  # noqa: E402
 import liveness_clear     # noqa: E402  # wq#1478 LIVENESS_GATE §12.4: stale Frank-gates auto-clear
 import gates              # noqa: E402  # DISPATCH_REBUILD step 8: the ordered gate objects
 import gate_store         # noqa: E402  # DISPATCH_REBUILD step 11: dispatch_gate parking table
@@ -106,6 +109,7 @@ DISARM_PATH = os.environ.get("FOREMAN_DISPATCH_DISARM",
                              "/home/lumen/autonomy/DISPATCH_DISARM")
 STOP_PATH = os.environ.get("FOREMAN_STOP_FILE", os.path.join(FOREMAN_ROOT, "STOP"))
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
+RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_runs"))
 SLOCK_BIN = os.environ.get("FOREMAN_SLOCK_BIN", "/home/lumen/bin/slock")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 GOVERNOR_CLI = os.environ.get("FOREMAN_GOVERNOR_CLI",
@@ -2345,6 +2349,46 @@ def _do_pass(cfg, log, state, dry_run, deferred=None, config_sha=None, gate_salt
             "stopped_cloud_reason": stopped["cloud"]}
 
 
+def replay_ticket(ticket_id):
+    """wq#4686 (design/orchestrator_verify_lane.md §7 test-to-failure plan): re-derive
+    a SHIPPED ticket's verify-pass filing -- needs, archetype, block_reason -- with NO
+    spawn and NO wq write. judgment.file_verify_pass(dry_run=True) already does the
+    derivation read-only (needs.py parse + capability_lint/fleet_exec_policy checks,
+    `wq show`/`wq list` reads only); this just shapes that decision into the replay
+    record §7 asks for and writes it to _runs/replay/<id>.json so T1-T4 can diff
+    successive router/judgment changes against the same ticket without burning a real
+    dispatch slot or mutating the board.
+    """
+    manifest = router.load_manifest()
+    decision = judgment.file_verify_pass(ticket_id, manifest=manifest, dry_run=True)
+    arch = decision.get("verify_archetype") or decision.get("archetype")
+    add_dirs = []
+    if arch:
+        try:
+            add_dirs = list(agents_spec.load().get(arch).add_dirs)
+        except AgentsSpecError:
+            add_dirs = []
+    block_reasons = decision.get("block_reasons") or []
+    record = {
+        "ticket": int(ticket_id),
+        "would_spawn": bool(decision.get("required")) and not decision.get("filed")
+                       and not block_reasons,
+        "archetype": arch,
+        "lane": (manifest.verify_policy or {}).get("lane", "build"),
+        "derived_needs": decision.get("derived_needs") or [],
+        "add_dirs": add_dirs,
+        "block_reason": ("orchestrator-only: " + "; ".join(block_reasons))
+                        if block_reasons else None,
+        "decision": decision,
+    }
+    out_dir = os.path.join(RUNS_ROOT, "replay")
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, f"{ticket_id}.json"), "w") as f:
+        json.dump(record, f, indent=1)
+    print(json.dumps(record, indent=1))
+    return record
+
+
 def run_pass(dry_run=False):
     pass_id = ("fdisp-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
                + f"-{os.getpid()}")
@@ -2459,7 +2503,14 @@ def main(argv=None):
                    help="documentational: a pass is always one-shot")
     r.add_argument("--dry-run", action="store_true",
                    help="decide + log would_spawn; zero side effects")
+    r.add_argument("--replay-ticket", type=int, default=None, metavar="ID",
+                   help="wq#4686: re-derive wq#ID's verify-pass filing (needs/"
+                        "archetype/block_reason), no spawn, no wq write; writes "
+                        "_runs/replay/<ID>.json instead of running a dispatch pass")
     a = ap.parse_args(argv)
+    if a.replay_ticket is not None:
+        replay_ticket(a.replay_ticket)
+        return 0
     global _terminating
     _terminating = False
     signal.signal(signal.SIGTERM, _term_to_exit)

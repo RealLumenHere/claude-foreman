@@ -71,6 +71,31 @@ archetypes:
     max_turns: 600
     wall_clock_timeout_s: 3600
 
+  verify-probe:
+    # design/orchestrator_verify_lane.md §5.2 (archetype 10, router.ARCHETYPE_NUMBERS):
+    # a verify-pass sibling for a verify ticket whose derived needs (orchestrator/
+    # router.classify_verify_archetype) demand reach the plain verify-pass envelope
+    # doesn't have. max_turns/wall_clock are tighter than verify-pass's (§5.2: 400/2400)
+    # because the probe is read-only reach, not a re-implementation. The actual
+    # read-reach grant (fleet-exec/docker-read/home-root settings pack) is Option A's own
+    # build ticket (§4 step 2) -- this entry only wires the archetype so dispatch has a
+    # row to route to; permission_profile_note is documentation only until that lands.
+    primary_tuple: sonnet-5@high
+    max_turns: 400
+    wall_clock_timeout_s: 2400
+    permission_profile_note: "verify-pass pack until Option A's verify-probe.json ships (design §5.2/§3)"
+    add_dirs:
+      - /home/lumen/agents/work-queue
+      - /home/lumen/mailbot
+      - /home/lumen/pokemon
+      - /home/lumen/bin
+      - /home/lumen/foreman
+      - /home/lumen/kb
+      - /home/lumen/projects/nest
+      - /home/lumen/agent
+      - /home/lumen/logs
+      - /home/lumen/minerva
+
   research-synthesis:
     primary_tuple: opus-5-5@medium   # Opus 5.5 adoption (f6f13598)
     max_turns: 600

@@ -33,6 +33,7 @@ def test_all_fworker_archetypes_present():
         "mechanical-edit", "probe-build", "standard-engineering", "verify-pass",
         "research-synthesis", "novel-design", "rca-investigation",
         "long-horizon-campaign", "fire-response",
+        "verify-probe",  # wq#4686 (design/orchestrator_verify_lane.md §5.2, archetype 10)
     }
     assert expected == set(spec.names())
 
@@ -187,7 +188,7 @@ def test_apply_cli_writes_stable_content_addressed_lock(tmp_path):
     assert set(lock["archetypes"]) == {
         "mechanical-edit", "probe-build", "standard-engineering", "verify-pass",
         "research-synthesis", "novel-design", "rca-investigation",
-        "long-horizon-campaign", "fire-response",
+        "long-horizon-campaign", "fire-response", "verify-probe",
     }
     first_hash = lock["overall_hash"]
 

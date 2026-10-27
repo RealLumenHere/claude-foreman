@@ -407,6 +407,11 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   long-horizon-campaign: [DECOMPOSE]      # orchestrator splits; never one worker
   research-synthesis:   [opus-5-5@medium, sonnet-5@high]
   verify-pass:          [sonnet-5@high,   opus-5@high(on-contradiction)]
+  # design/orchestrator_verify_lane.md §5.2 (archetype 10, router.ARCHETYPE_NUMBERS):
+  # same tuple as verify-pass -- verify-probe is verify-pass's grant envelope, not a
+  # different model/effort call. The build ticket for option A (not this one) adds the
+  # permission-profile/add_dirs sibling in harness/agents.yaml.
+  verify-probe:         [sonnet-5@high,   opus-5@high(on-contradiction)]
   fire-response:        [sonnet-5@high,   opus-5@high(escalate-on-fail)]   # wq#717 AUTO-5: fleet-fires manual-approval; never local (LOCAL_ALLOWED_ARCHETYPES excludes it)
   orchestrator:         [fable-5@high]    # fable-5@max reserved for hardest investigations until CAL data justifies more
   decomposer:           [opus-5@medium, opus-5@high]  # wq#2515: the DECOMPOSE consumer's planning call

@@ -58,6 +58,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import concurrency  # noqa: E402  # wq#2081: is_local_model for the governor-exempt local rung
 import repo_sweep  # noqa: E402  # wq#1123: shared repo_for_ticket() resolver
 import needs as needs_mod  # noqa: E402  # wq#1331: per-ticket needs:repo/needs:dir tags
+import capability_lint  # noqa: E402  # wq#4686: VERIFY_HOME_ROOT_READ_ALLOW / homeroot_refusal
+sys.path.insert(0, "/home/lumen/bin")
+import fleet_exec_policy  # noqa: E402  # wq#4686: THOR_HARDLOCK / check_ssh_node for verify needs
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dispatcher"))
 import local_capacity  # noqa: E402  # wq#2133: the backend_cooldown.json reader the rung gate shares
 import cli_canary  # noqa: E402  # wq#2527: holds a rung the installed claude CLI can't drive
@@ -226,6 +229,10 @@ ARCHETYPE_NUMBERS = {
     4: "rca-investigation", 5: "novel-design", 6: "long-horizon-campaign",
     7: "research-synthesis", 8: "verify-pass",
     9: "fire-response",  # wq#717 (AUTO-5): fleet-fires manual-approval workflow
+    # design/orchestrator_verify_lane.md §5.2 calls this "archetype 9" — written before
+    # wq#717 claimed 9 for fire-response. 10 is the first free slot; the design's intent
+    # (a verify-pass sibling with reach, not mutation, grants) is unaffected by the number.
+    10: "verify-probe",
 }
 ARCHETYPES = list(ARCHETYPE_NUMBERS.values())
 # routing rows that are not ticket archetypes: the foreman's own judgment sessions.
@@ -1174,6 +1181,83 @@ def verify_repo_hint(title, detail):
         return None
     repo = m.group(1)
     return repo if repo in repo_sweep.managed_repos() else None
+
+
+# ---------------------------------------------------------------------------
+# wq#4686 (design/orchestrator_verify_lane.md §5.2/§5.3): route a verify ticket by
+# what its DERIVED needs (judgment.file_verify_pass) demand, not by its lane/archetype
+# of origin. verify_needs_block_reasons() runs first — any unsatisfiable need means the
+# ticket is filed status=blocked and never reaches classify_verify_archetype at all
+# (§5.3 is a filing-time gate, not an archetype choice).
+# ---------------------------------------------------------------------------
+
+def verify_needs_block_reasons(needs, policy_path=None):
+    """[block_reason, ...] for every derived need §5.3 says a verify ticket must never
+    be spawned with: an ssh(<node>) policy refuses (THOR_HARDLOCK foremost) or a
+    homeroot(<path>) outside VERIFY_HOME_ROOT_READ_ALLOW / hitting the credential
+    deny-list. Each reason already names its own rule file:line (fleet_exec_policy.py
+    for ssh, capability_lint.py for homeroot) so the caller only has to prefix
+    'orchestrator-only: '. Empty list = every derived need is satisfiable (or there are
+    none) -- NOT the same as 'route to verify-probe', which is classify_verify_archetype's
+    job once this list is empty."""
+    reasons = []
+    policy = None
+    if needs.ssh_nodes:
+        try:
+            policy = fleet_exec_policy.load_policy(policy_path or capability_lint.FLEET_EXEC_POLICY_PATH)
+        except fleet_exec_policy.PolicyError as e:
+            reasons.append(f"ssh needs unresolvable: fleet-exec-policy.yaml unreadable: {e}")
+    if policy is not None:
+        for node in needs.ssh_nodes:
+            ok, rule, reason = fleet_exec_policy.check_ssh_node(node, policy)
+            if not ok:
+                reasons.append(f"ssh({node}) refused by {rule} ({reason}) "
+                                f"(fleet_exec_policy.py:{_FLEET_EXEC_SSH_CHECK_LINE})")
+    for path in needs.homeroot_paths:
+        refusal = capability_lint.homeroot_refusal(path)
+        if refusal:
+            reasons.append(f"homeroot({path}) refused: {refusal}")
+    return reasons
+
+
+# wq#4686: cached once at import so verify_needs_block_reasons' ssh refusal message can
+# cite check_ssh_node's own definition line without re-deriving it per call (the function
+# body never moves without this module being re-imported anyway).
+def _find_def_line(module_file, name):
+    pat = re.compile(rf"^def {re.escape(name)}\(")
+    try:
+        with open(module_file) as f:
+            for i, line in enumerate(f, 1):
+                if pat.match(line):
+                    return i
+    except OSError:
+        pass
+    return "?"
+
+
+_FLEET_EXEC_SSH_CHECK_LINE = _find_def_line(fleet_exec_policy.__file__, "check_ssh_node")
+
+# §5.2: needs whose only route is a lane with read-reach beyond plain verify-pass's
+# worktree + default add_dirs. ops_verified liveness also demands reach (the probe runs
+# install.sh --verify against a live target) but Liveness is a sibling object, never
+# merged into Needs (needs.py §4 firewall) — classify_verify_archetype takes it as a
+# separate argument rather than reading it off `needs`.
+def _verify_needs_demand_reach(needs):
+    return bool(needs.ssh_nodes or needs.homeroot_paths
+                or "/home/lumen/minerva" in needs.dirs)
+
+
+def classify_verify_archetype(needs, liveness=None):
+    """(archetype, reason) for a verify ticket whose block reasons (if any) are already
+    cleared by the caller -- 'verify-probe' (archetype 10) when the derived needs (or an
+    ops_verified liveness tag) demand reach beyond plain verify-pass's box, else
+    'verify-pass' unchanged (§5.2). This is the ONLY place that picks between the two;
+    file_verify_pass calls it, nothing else should duplicate the predicate."""
+    if _verify_needs_demand_reach(needs):
+        return "verify-probe", "derived needs demand reach (ssh/homeroot/minerva)"
+    if liveness:
+        return "verify-probe", "ops_verified liveness demands reach to a live target"
+    return "verify-pass", "no derived need demands reach beyond verify-pass's envelope"
 
 
 # wq#433/ISSUE-LOG #56 class (wq#683 questfree, wq#1155 nest, wq#433 LPP-MP): a ticket
