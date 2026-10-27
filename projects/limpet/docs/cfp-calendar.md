@@ -10,14 +10,18 @@ Researched 2026-10-26 (orchestrator-side: the fworker lanes have no WebSearch gr
 | REcon 2027 (Montreal) | June 2027, dates not yet posted | page says CFP "opening soon". 2026 edition: first round ended 14 Mar, closed 11 Apr. Projected 2027: first round ~mid Mar, close ~mid Apr | CFP dates unannounced | Strong fit (reverse engineering, single track, 40 percent training rebate offered to speakers in 2026) |
 | Black Hat USA 2027 Briefings + Arsenal | ~31 Jul-5 Aug 2027 per third-party listings, official dates TBD (Mandalay Bay) | 2026 Briefings: opened 27 Jan, closed 23 Mar, notification 22 May. 2025: 5 Feb-2 Apr. Projected 2027: late Jan-late Mar. The Arsenal tool call usually closes earlier than the Briefings call | official 2027 CFP not open | Arsenal (tool demo) is the natural slot; Briefings need new research |
 | DEF CON 35 | 5-8 Aug 2027, Las Vegas Convention Center West Hall | Each village runs its own CFP. From earlier years: main CFP closed ~1 May, Hardware Hacking Village ~25 May, IoT ~1 Jun, RF ~16 Jun, Recon Village (2025) 15 Apr-15 Jun, MEACS (2026) 22 Jun-21 Jul. Projected 2027: villages open Apr, close late May-June | dates confirmed, village windows projected | Hardware Hacking, IoT and RF villages are the live-demo venue; village CFPs are the latest-closing option |
+| BSidesSF 2027 | ~Mar-Apr 2027, dates not found (2026 was 21-22 Mar, 2025 was 26-27 Apr) | The call for the next edition has opened in October in recent years (2024 and 2025 announcements); for 2024 the informational track closed 8 Jan after an extension past 11 Dec. Projected 2027: open now or imminent, closes ~Dec 2026-Jan 2027. No 2027 page found yet | projected | Closest deadline on this list; community audience, collaborative track suits a hands-on demo; the Call for Villages launches separately, later |
 | Black Hat Asia 2027 | Singapore, dates TBD | CLOSED 16 Oct 2026, notification by 5 Jan 2027 | confirmed | missed for this cycle |
 | Black Hat Europe 2026 | 9-10 Dec 2026, London | CLOSED 22 Jul 2026 | confirmed | missed |
 | hardwear.io NL 2026 | 19-20 Nov 2026 | CLOSED 20 Jul 2026 | confirmed | missed; NL 2027 projected to open ~Apr-May 2027, close ~Jul 2027 (a fallback if the ISO slips) |
 | CCC Congress (Dec) | not verified for 2026/2027 | historically closes late Sep-Oct | no current data found | skip until a 2027 call appears |
 
+Other BSides worth a look (sessionize listings, dates confirmed, CFP windows vary per event): Galway 20 Feb 2027, Seattle 5-6 Mar 2027, Zagreb 5 Mar 2027, Rocket City 20 Mar 2027, San Diego 27 Mar 2027, Sofia 26-28 Mar 2027 (call open until 31 Jan 2027), Groningen 9 Apr 2027, Salt Lake City 6-7 May 2027, Krakow 18 Sep 2027 (call open until 30 Jun 2027).
+
 ## Recommended sequence
 
-1. Earliest hard gate is hardwear.io USA: its call opens around the turn of the year and closes about early March 2027, so a New Research or Tool submission needs the first stable ISO or at least a reproducible demo by Feb 2027.
+0. BSidesSF is the nearest deadline (call likely open now to ~Jan 2027); only worth it if a live demo can be shown by March.
+1. Earliest hard gate for the hardware conferences is hardwear.io USA: its call opens around the turn of the year and closes about early March 2027, so a New Research or Tool submission needs the first stable ISO or at least a reproducible demo by Feb 2027.
 2. Black Hat Arsenal call (Feb-Mar 2027) and REcon (closes ~mid Apr) come next, then the DEF CON 35 village calls (late May-June 2027), which are the last chance for a live demo in Aug 2027.
 3. Target: first stable ISO tagged by end of Feb 2027, public demo repo ready by April.
 4. Calendar alerts: check organizer pages 15 Dec 2026, 1 Feb, 1 Mar, 1 Apr, 1 May 2027.
