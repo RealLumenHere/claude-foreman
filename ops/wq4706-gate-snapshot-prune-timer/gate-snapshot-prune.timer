@@ -1,0 +1,14 @@
+# gate-snapshot-prune.timer - daily (wq#4706). The retention window is 30 days
+# (FOREMAN_GATE_SNAP_PRUNE_DAYS), so the cadence only has to keep the tail from compounding;
+# the vault grew ~25 files/day between wq#4654 filing and wq#4657, which a daily pass absorbs.
+# 05:10 sits after secret-backup-sweep (04:40 + up to 10min RandomizedDelaySec + 600s timeout).
+[Unit]
+Description=Prune aged no-secret gate-snapshot pre-images, daily (wq#4706)
+
+[Timer]
+OnCalendar=*-*-* 05:10:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

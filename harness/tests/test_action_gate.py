@@ -623,6 +623,42 @@ def test_prune_vault_missing_dir_is_a_noop(tmp_path):
     assert ag.prune_vault(max_age_days=30, vault=str(tmp_path / "no-such-vault")) == []
 
 
+# ---------------- wq#4706: dry-run, so the scheduler has a read-only probe -----
+
+def test_prune_vault_dry_run_reports_without_deleting(tmp_path):
+    """The wq#4706 ops bundle's --verify and install-time pre-check have to ask the REAL
+    vault what this pass would do; an installer that must delete to prove itself is no
+    pre-flight check. Same selection, no unlink."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    doomed = vault / "worker-20260101T000000Z-prod.env"
+    doomed.write_text("FEATURE_FLAG=1\n")
+    _age(doomed, 31)
+    kept = vault / "worker-20260101T000000Z-agent.env"
+    kept.write_text(f"GITHUB_TOKEN={FAKE_PAT}\n")
+    _age(kept, 31)
+    reported = ag.prune_vault(max_age_days=30, vault=str(vault), dry_run=True)
+    assert reported == [str(doomed)]
+    assert doomed.exists() and kept.exists()
+    # and the wet pass agrees with what the dry one promised
+    assert ag.prune_vault(max_age_days=30, vault=str(vault)) == [str(doomed)]
+    assert not doomed.exists() and kept.exists()
+
+
+def test_prune_vault_cli_dry_run_leaves_the_vault_alone(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    f = vault / "worker-20260101T000000Z-prod.env"
+    f.write_text("FEATURE_FLAG=1\n")
+    _age(f, 31)
+    env = dict(os.environ, FOREMAN_GATE_SNAP_VAULT=str(vault))
+    r = subprocess.run([sys.executable, ag.__file__, "prune-vault", "--dry-run"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert "would prune 1 file(s)" in r.stdout
+    assert f.exists()
+
+
 # ---------------- Layer 3: project rules additive ----------------
 
 MIKO_RULES = textwrap.dedent("""\
