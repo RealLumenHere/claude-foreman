@@ -573,6 +573,56 @@ def test_is_sensitive_fails_closed_without_the_sweep(monkeypatch):
     assert ag._is_sensitive(text="nothing interesting here")
 
 
+# ---------------- wq#4654: vault retention for non-credential pre-images -----
+
+def _age(path, days):
+    t = os.path.getmtime(path) - days * 86400
+    os.utime(path, (t, t))
+
+
+def test_prune_vault_deletes_old_non_credential_preimage(tmp_path):
+    """Basename-only diverts (e.g. `prod.env` with no token inside) still land in the
+    vault, but secret-backup-sweep's value-level dead-check never claims them (verdict
+    NO_SECRETS, excluded from cmd_apply's todo list). prune_vault is the age-based
+    backstop for exactly that file."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    f = vault / "worker-20260101T000000Z-prod.env"
+    f.write_text("FEATURE_FLAG=1\n")
+    _age(f, 31)
+    removed = ag.prune_vault(max_age_days=30, vault=str(vault))
+    assert removed == [str(f)]
+    assert not f.exists()
+
+
+def test_prune_vault_keeps_recent_non_credential_preimage(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    f = vault / "worker-20260101T000000Z-prod.env"
+    f.write_text("FEATURE_FLAG=1\n")
+    _age(f, 2)
+    removed = ag.prune_vault(max_age_days=30, vault=str(vault))
+    assert removed == []
+    assert f.exists()
+
+
+def test_prune_vault_keeps_old_credential_bearing_preimage(tmp_path):
+    """A pre-image that still carries a trackable secret value is secret-backup-sweep's
+    to retire (value-level dead-check, wq#4599's 7d TTL) — prune_vault must not race it."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    f = vault / "worker-20260101T000000Z-agent.env"
+    f.write_text(f"GITHUB_TOKEN={FAKE_PAT}\n")
+    _age(f, 31)
+    removed = ag.prune_vault(max_age_days=30, vault=str(vault))
+    assert removed == []
+    assert f.exists()
+
+
+def test_prune_vault_missing_dir_is_a_noop(tmp_path):
+    assert ag.prune_vault(max_age_days=30, vault=str(tmp_path / "no-such-vault")) == []
+
+
 # ---------------- Layer 3: project rules additive ----------------
 
 MIKO_RULES = textwrap.dedent("""\

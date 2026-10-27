@@ -57,6 +57,15 @@ SNAP_DB_CAP = 200 * 1024 * 1024       # sqlite db copy cap
 # pre-image goes here instead: 0600, outside every --add-dir root.
 SNAP_VAULT = os.environ.get("FOREMAN_GATE_SNAP_VAULT",
                             os.path.expanduser("~/.secrets/gate-snapshots"))
+# wq#4654: secret-backup-sweep (the vault's owner for value-level retirement) classifies
+# a vault file NO_SECRETS whenever extract() finds no secret-shaped value in it, and
+# cmd_apply only ever shreds verdict=="ELIGIBLE" rows — a NO_SECRETS pre-image is never
+# in that set, by design, so it sits forever regardless of --ttl. That's exactly the
+# basename-only divert (test_credential_basename_alone_diverts: a `prod.env` with no
+# token inside still lands in the vault) and the fail-safe unreadable/binary/oversize
+# divert (_is_sensitive returning True with no text to scan). prune_vault() below is the
+# blunt age-based backstop for that class: the rollback window, not a dead-value proof.
+SNAP_PRUNE_DAYS = int(os.environ.get("FOREMAN_GATE_SNAP_PRUNE_DAYS", "30"))
 
 RED_MSG = ("ACTION BLOCKED: destructive operation requires review. "
            "Your context has been preserved for a reviewing agent.")
@@ -666,6 +675,49 @@ def snapshot(kind, payload, cwd):
     return arts
 
 
+def _carries_secret_pattern(path):
+    """Re-derive _is_sensitive's content check in isolation, to tell a pre-image that
+    still carries a trackable credential value (secret-backup-sweep owns its retirement)
+    apart from one that only looked sensitive at stow time and has nothing for that
+    sweep to ever prove dead. Unreadable/binary/symlink stays conservative (True, same
+    fail-safe as _is_sensitive) — prune_vault ages those out by mtime like anything else
+    it can't clear by content."""
+    if _rds is None:
+        return True
+    text = _rds._read_text(path)
+    if text is None:
+        return True
+    return any(rx.search(text) for _, rx in _rds.PATTERNS)
+
+
+def prune_vault(max_age_days=None, vault=None):
+    """Delete vault pre-images older than the rollback window that carry no secret
+    pattern for secret-backup-sweep to track — the NO_SECRETS class it never shreds
+    (see SNAP_PRUNE_DAYS comment). Returns the list of paths removed."""
+    vault = vault or SNAP_VAULT
+    max_age_days = SNAP_PRUNE_DAYS if max_age_days is None else max_age_days
+    cutoff = time.time() - max_age_days * 86400
+    removed = []
+    if not os.path.isdir(vault):
+        return removed
+    for name in os.listdir(vault):
+        p = os.path.join(vault, name)
+        if not os.path.isfile(p) or os.path.islink(p):
+            continue
+        try:
+            old_enough = os.stat(p).st_mtime < cutoff
+        except OSError:
+            continue
+        if not old_enough or _carries_secret_pattern(p):
+            continue
+        try:
+            os.unlink(p)
+            removed.append(p)
+        except OSError:
+            pass
+    return removed
+
+
 def _log_event(event, **kv):
     try:
         os.makedirs(EVENTS_DIR, exist_ok=True)
@@ -1094,5 +1146,11 @@ def hook_main():
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "hook":
         sys.exit(hook_main())
-    print("usage: action_gate.py hook  (PreToolUse stdin JSON)", file=sys.stderr)
+    if len(sys.argv) > 1 and sys.argv[1] == "prune-vault":
+        for _p in prune_vault():
+            print(f"pruned {_p}")
+        sys.exit(0)
+    print("usage: action_gate.py hook  (PreToolUse stdin JSON)\n"
+          "       action_gate.py prune-vault  (delete non-credential vault pre-images "
+          "past the rollback window)", file=sys.stderr)
     sys.exit(2)

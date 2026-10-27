@@ -89,6 +89,20 @@ def _no_mask_at_rest_sweep(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _gate_snap_vault_in_tmp(monkeypatch, tmp_path):
+    """wq#4654: action_gate.SNAP_VAULT defaults to ~/.secrets/gate-snapshots, the REAL
+    credential vault. A test that snapshots a basename-flagged target (secret.token,
+    agent.env, ...) without naming its own vault wrote straight into it, same as a live
+    worker would — measured at 2415 files / 1.6G, mostly test fixture names
+    (enforce-conditions-*.token from test_judge_enforce_allow_with_conditions_stages_
+    snapshot_before_allowing, tier-medium-* from test_tier_ceiling_medium_bare_allow_is_
+    forced_to_snapshot). run_hook's subprocess env starts from os.environ, so this reaches
+    every hook invocation; a test that passes its own FOREMAN_GATE_SNAP_VAULT in
+    env_extra still wins (dict.update applies it after)."""
+    monkeypatch.setenv("FOREMAN_GATE_SNAP_VAULT", str(tmp_path / "vault"))
+
+
+@pytest.fixture(autouse=True)
 def _no_live_ntfy(monkeypatch):
     """mask_at_rest.page_alarm() runs the REAL /home/lumen/bin/ntfy-send -t lumen-fleet
     whenever a run finds an unaccounted value, and 8 tests in test_mask_at_rest.py plant
