@@ -23,23 +23,36 @@ rule:
 # nobody itself; there is no second notification path.
 consumer: wq#2484
 
+# wq#4714 (2026-10-27): every node below is a retired MacPro6,1 — offline since Frank
+# retired them on 2026-10-22, no netdata, no hardware to read. `retired: true` makes
+# check() skip the host instead of burning a 30 s curl against it, and
+# thermal_backpressure.yaml sets `fan_floor: false`, so nothing polls this at all today.
+# The rule, its thresholds and the ISIS_POWEROFF_RCA replay fixture are kept deliberately:
+# no node on the live roster has a Te0T sensor or an SMC fan floor, so there is nothing to
+# re-point this at, and if a MacPro6,1 comes back the entries and the numbers are still
+# here. Re-enabling is: drop `retired` on the node, flip `fan_floor` in
+# thermal_backpressure.yaml. Reasoning: design/thermal_backpressure_rebase.md.
 nodes:
   isis:
     netdata: 100.100.129.24:19999
     action: hold
     hold_subsystem: isis
+    retired: true
   hathor:
     netdata: 100.80.71.13:19999
     action: hold
     hold_subsystem: hathor
+    retired: true
   nephthys:
     netdata: 100.98.74.87:19999
     action: hold
     hold_subsystem: nephthys
+    retired: true
   khepri:
     netdata: 100.120.16.78:19999
     action: hold
     hold_subsystem: khepri
+    retired: true
   # THOR IS THE HARD RULE (instinct 2, wq#1016): never restarted, never interrupted. The
   # alarm may only notify on Thor; fan_floor_alarm.py refuses to load a config that omits
   # this entry, or gives thor or any node at Thor's address (100.112.151.100) an action other

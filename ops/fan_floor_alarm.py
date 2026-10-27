@@ -156,7 +156,11 @@ def check(cfg):
         v = {"node": name, "action": node["action"], "hold_subsystem": node.get("hold_subsystem"),
              "raise": None, "clear": None, "te0t_mean": None, "fan_max": None, "reason": None}
         stats = None
-        if not node.get("netdata"):
+        if node.get("retired"):
+            # wq#4714: the hardware is gone. Fetching from it costs a 30 s curl per call and
+            # cannot produce a verdict, so skip the host rather than time out against it.
+            v["reason"] = "node retired"
+        elif not node.get("netdata"):
             v["reason"] = "no netdata source"
         else:
             try:

@@ -1,73 +1,118 @@
 # wq#2484: thermal backpressure. Loaded and validated by ops/thermal_backpressure.py.
+# Rebased on the live roster by wq#4714 — reasoning in design/thermal_backpressure_rebase.md.
 #
-# Signal: CPU package temperature (coretemp Package_id_0), read from each node's existing
-# netdata. All five netdata nodes carry the chart (2026-09-28). A node is hot when the mean
-# over `sustain_min` crosses raise_c; it cools only when that mean drops below clear_c.
-# Between the two lines the state carries, so a reading sitting on either line cannot flap.
+# Signal: CPU package temperature, read from each node's own hwmon sysfs (the kernel's
+# coretemp node), locally on lumen and over SSH everywhere else. netdata is NOT the source:
+# it is `inactive`+`disabled` on lumen and absent on maksoor (probed 2026-10-27), so a
+# netdata-only guard could not see the one node whose heat it exists to throttle. sysfs
+# answered on all six non-Thor nodes with no daemon and no port. netdata stays wired to
+# `observe`/`replay` only, on the four nodes that still serve it.
+#
+# A node is hot when the mean over `sustain_min` crosses raise_c; it cools only when that
+# mean drops below clear_c. Between the two lines the state carries, so a reading sitting on
+# either line cannot flap. A sysfs read is instantaneous, so the guard keeps the window
+# itself: one sample per poll in the `samples` table, `window_mean` over the last
+# sustain_min. That needs a 1-min timer (STEP_S=60) — see the bundle's .timer.
 sensor:
+  # the hwmon temp*_label to read. coretemp on Intel; Tdie/Tctl would be the AMD names.
+  hwmon_label: Package id 0
+  # one dead node cannot hang a poll (wq#4714): every node is read concurrently, each under
+  # node_timeout_s, the whole fan-out bounded by poll_budget_s. A timeout is a gap, and a gap
+  # carries the previous state — it never reads as cool. validate() refuses a budget below a
+  # single node's timeout, so the bound cannot be configured away.
+  node_timeout_s: 8
+  poll_budget_s: 30
+  # netdata chart, for `observe` and `replay` history only. Never read by `poll`.
   chart_prefix: sensors.temperature_coretemp
   chart_suffix: _Package_id_0_input
 sustain_min: 5
 
-# The hold is an slock lease the guard refreshes every poll (timer: 5 min). If the guard
+# The hold is an slock lease the guard refreshes every poll (timer: 1 min). If the guard
 # dies, the lease runs out and the dispatcher resumes on its own. The dispatcher gate
 # (dispatcher/gates.py SubsystemHeld) is fail-open too, so this matches its posture.
 holder: thermal-backpressure
 hold_ttl_min: 20
 
-# wq#2510's MacPro fan-floor alarm (ops/fan_floor_alarm.py) is a second trigger: its
-# per-node verdicts come from `check`, and this guard keeps their state. A node is held
-# while either trigger is hot.
-fan_floor: true
+# wq#2510's MacPro6,1 fan-floor alarm (ops/fan_floor_alarm.py) was a second trigger. Off
+# since wq#4714: its signature is Te0T above 80 C with fan1 stuck at the 790 rpm SMC floor,
+# and every node carrying it is a retired Mac — a T5810, an OptiPlex and three N100s have
+# neither sensor. Leaving it on would also re-open the hang, since check() fetches those
+# four dead netdata hosts outside sample_temps' budget. The module, thresholds, fixture and
+# tests all stay in the tree; ops/fan_floor_alarm.yaml marks the nodes `retired: true`.
+# Re-enabling is two lines. next_fan(hot, None) carries state, so turning it off cannot
+# strand a node it was holding.
+fan_floor: false
 
 # Thresholds come from each node's own history, not the 80 C OptiPlex figure in the source
 # doc. `thermal_backpressure.py observe <node>` recomputes them over 5-min means:
 #   raise_c = ceil(max) + 3: above every 5-min mean the node has sustained in normal work,
 #             so ordinary heavy load never holds it
 #   clear_c = floor(p99):    back down to the level the node sits under 99% of the time
-# Observed 2026-09-28 over all retained netdata history:
-#   lumen  37 d  p50 52.2  p99 70.0  max 75.1 (09-25T04:35)  -> 79 / 70
-#   isis   36 d  p50 51.2  p99 73.8  max 75.6 (09-06T07:15)  -> 79 / 73
-# hathor, nephthys and khepri got netdata on 2026-09-28 (wq#2844) and had 15 minutes of
-# history, so they borrow isis's numbers: same MacPro6,1 chassis. Re-run `observe` once
-# they have a week and replace these.
+# lumen's 79/70 are its own observed numbers (37 d of netdata, 2026-09-28: p50 52.2,
+# p99 70.0, max 75.1) and are kept — netdata is off there now, so they cannot be recomputed;
+# the committed replay fixture ops/tests/fixtures/wq2484_lumen_package_0925.csv still holds
+# the hottest day behind them. The five nodes added by wq#4714 have no observed history at
+# these thresholds yet, so they start on the chassis-class defaults below. Re-run `observe`
+# on the four that still run netdata (anubis, maat, sobek, bes) once this guard has a week
+# of `samples`, and replace them.
 #
 # hold_subsystems defaults to the node name, the token wq#2510 already uses. A ticket is
 # only held if it declares one of these in `subsystems` — and per wq#995, none do: no
-# ticket in queue.db declares a node name, so a live node-name-only hold skips nothing.
-# lumen overrides the default to the service tokens tickets actually declare there
-# (`grep subsystems queue.db`, 2026-09-28: litellm 10+, minerva-db 25+, both run on lumen
-# only) so the hold bites real dispatch without inventing a convention nobody uses.
+# ticket in queue.db declares a node name, so a live node-name-only hold skips nothing; the
+# transitions row and its aq are the value until one does. lumen overrides the default to
+# the service tokens tickets actually declare there (`grep subsystems queue.db`, 2026-09-28:
+# litellm 10+, minerva-db 25+, both run on lumen only) so the hold bites real dispatch
+# without inventing a convention nobody uses.
 nodes:
+  # primary AI orchestration host (T5810, Xeon). Runs the dispatch that makes the heat and
+  # sat at 65-73 C under ordinary load on 2026-10-27. sysfs read in-process, no SSH.
   lumen:
-    netdata: 100.117.66.102:19999
+    sensor: local
+    netdata: null
     raise_c: 79
     clear_c: 70
     action: hold
     hold_subsystems: [lumen, litellm, minerva-db]
-  isis:
-    netdata: 100.100.129.24:19999
-    raise_c: 79
-    clear_c: 73
+  # Postgres + Vaultwarden. 60 C at probe, the hottest of the remote nodes.
+  maat:
+    sensor: ssh://maam@100.105.219.34
+    netdata: 100.105.219.34:19999
+    raise_c: 85
+    clear_c: 75
     action: hold
-  hathor:
-    netdata: 100.80.71.13:19999
-    raise_c: 79
-    clear_c: 73
+  # Borg backup repo + Gitea. Dell OptiPlex 3090 UFF, i5-1145G7.
+  anubis:
+    sensor: ssh://anubis@100.121.17.5
+    netdata: 100.121.17.5:19999
+    raise_c: 85
+    clear_c: 75
     action: hold
-  nephthys:
-    netdata: 100.98.74.87:19999
-    raise_c: 79
-    clear_c: 73
+  # vault standby (PG streaming replica). Trigkey Green G4, N100, PL1 pinned to 12 W.
+  sobek:
+    sensor: ssh://sobek@100.86.156.91
+    netdata: 100.86.156.91:19999
+    raise_c: 85
+    clear_c: 75
     action: hold
-  khepri:
-    netdata: 100.120.16.78:19999
-    raise_c: 79
-    clear_c: 73
+  # Home Assistant + mosquitto + vlogs sink. N100.
+  bes:
+    sensor: ssh://bes@100.110.156.91
+    netdata: 100.110.156.91:19999
+    raise_c: 85
+    clear_c: 75
+    action: hold
+  # primary reverse-engineering workstation (replaces Thor for RE). No netdata; sysfs only.
+  maksoor:
+    sensor: ssh://maksoor@100.81.204.74
+    netdata: null
+    raise_c: 90
+    clear_c: 80
     action: hold
   # Instinct 2: Thor may only notify. load_config() refuses any hold for it, by name or by
-  # address. No netdata on Thor today, so this entry only carries the fan-floor verdict
-  # through to an aq row if a source ever appears.
+  # address, in `sensor` as well as in `netdata`. No reachable source today (no netdata, and
+  # no key for frank@), so this entry carries a verdict through to an aq row only if one
+  # ever appears.
   thor:
+    sensor: null
     netdata: null
     action: notify

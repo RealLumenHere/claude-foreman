@@ -31,6 +31,18 @@ import thermal_backpressure as tb  # noqa: E402
 LUMEN_0925 = os.path.join(HERE, "fixtures", "wq2484_lumen_package_0925.csv")
 ISIS_0918 = os.path.join(HERE, "fixtures", "wq2510_isis_0918_0919.csv")
 SLOCK = "/home/lumen/bin/slock"
+# The node these hold/release tests drive. It was isis until wq#4714 retired the MacPro6,1
+# group off the roster; maat replaces it as a hold node whose hold_subsystems is just its own
+# name, which is the shape these tests exercise (lumen's three service tokens are separate).
+HOT = "maat"
+# Readings are taken from that node's own shipped thresholds rather than written in as
+# literals: wq#4714 moved the roster and the numbers with it, and a test asserting "82 C
+# holds" silently stops testing anything the moment raise_c goes past 82.
+_LINES = tb.load_config()["nodes"][HOT]
+RAISE_C, CLEAR_C = _LINES["raise_c"], _LINES["clear_c"]
+HOT_C = RAISE_C + 3.0      # above the raise line
+COOL_C = CLEAR_C - 3.0     # below the clear line
+RELEASE_C = CLEAR_C - 0.1  # just below it: the narrowest reading that still releases
 
 
 def flat(value, minutes, t0=1790000000):
@@ -40,9 +52,11 @@ def flat(value, minutes, t0=1790000000):
 class Config(unittest.TestCase):
     def test_shipped_config_loads_with_hysteresis_on_every_sensed_node(self):
         cfg = tb.load_config()
-        for name, node in cfg["nodes"].items():
-            if node.get("netdata"):
-                self.assertLess(node["clear_c"], node["raise_c"], name)
+        sensed = [n for n, node in cfg["nodes"].items() if node.get("sensor")]
+        self.assertTrue(sensed)
+        for name in sensed:
+            node = cfg["nodes"][name]
+            self.assertLess(node["clear_c"], node["raise_c"], name)
 
     def test_thor_can_never_hold(self):
         cfg = tb.load_config()
@@ -129,94 +143,95 @@ class EndToEnd(unittest.TestCase):
         self.tmp.cleanup()
         os.environ.pop("WQ_DB", None)
 
-    def poll(self, isis=None, lumen=None, fans=None):
+    def poll(self, hot=None, lumen=None, fans=None):
         temps = {n: (None, "not read") for n in self.cfg["nodes"]}
-        temps["isis"] = (isis, None)
+        temps[HOT] = (hot, None)
         temps["lumen"] = (lumen, None)
         return {d["node"]: d for d in tb.poll(self.con, self.cfg, self.act, temps, fans or {})}
 
-    def holder(self, scope="isis"):
+    def holder(self, scope=HOT):
         writers, _ = gates._live_holds(self.wq_db)
         return writers.get(scope)
 
-    def dispatcher_verdict(self, subsystems="isis"):
+    def dispatcher_verdict(self, subsystems=HOT):
         g = SimpleNamespace(tid=99001, t={"subsystems": subsystems}, ctx=SimpleNamespace())
         return gates.SubsystemHeld().check(g)
 
     def test_hot_holds_once_cool_releases_and_nothing_persists(self):
-        self.poll(isis=60.0)
+        self.poll(hot=COOL_C)
         self.assertIsNone(self.holder())
         self.assertIs(self.dispatcher_verdict(), gates.PASS)
 
-        self.poll(isis=82.0)
+        self.poll(hot=HOT_C)
         self.assertEqual(self.holder(), "thermal-backpressure")
         res = self.dispatcher_verdict()
         self.assertEqual(res.reason, "subsystem_held")
-        self.assertIn("isis held by thermal-backpressure", res.detail)
+        self.assertIn(f"{HOT} held by thermal-backpressure", res.detail)
         self.assertEqual(len(self.aq.calls), 1)
-        self.assertTrue(self.aq.calls[0][1].startswith("thermal hold: isis"))
+        self.assertTrue(self.aq.calls[0][1].startswith(f"thermal hold: {HOT}"))
 
-        # ten more hot polls, then a reading swinging across raise_c 79: no second row
-        for v in [82.0] * 10 + [78.0, 80.0, 74.0, 80.0, 73.5, 79.5]:
-            self.poll(isis=v)
+        # ten more hot polls, then a reading swinging across raise_c, never under clear_c
+        swing = [RAISE_C - 1, RAISE_C + 1, CLEAR_C + 1, RAISE_C + 1, CLEAR_C + 0.5, RAISE_C + 0.5]
+        for v in [HOT_C] * 10 + swing:
+            self.poll(hot=v)
         self.assertEqual(self.holder(), "thermal-backpressure")
         self.assertEqual(len(self.aq.calls), 1)
 
-        self.poll(isis=72.9)
+        self.poll(hot=RELEASE_C)
         self.assertIsNone(self.holder())
         self.assertIs(self.dispatcher_verdict(), gates.PASS)
         self.assertEqual(len(self.aq.calls), 2)
-        self.assertTrue(self.aq.calls[1][1].startswith("thermal release: isis"))
+        self.assertTrue(self.aq.calls[1][1].startswith(f"thermal release: {HOT}"))
 
         for _ in range(5):
-            self.poll(isis=60.0)
+            self.poll(hot=COOL_C)
         self.assertIsNone(self.holder())
         self.assertEqual(len(self.aq.calls), 2)
         kinds = [r["kind"] for r in self.con.execute("SELECT kind FROM transitions ORDER BY id")]
         self.assertEqual(kinds, ["hold", "release"])
 
     def test_missing_reading_keeps_the_hold(self):
-        self.poll(isis=82.0)
-        self.poll(isis=None)
+        self.poll(hot=HOT_C)
+        self.poll(hot=None)
         self.assertEqual(self.holder(), "thermal-backpressure")
         self.assertEqual(len(self.aq.calls), 1)
 
     def test_aq_failure_retries_the_same_key_without_a_second_row(self):
         self.aq.fail_first = 1
-        self.poll(isis=82.0)
-        self.poll(isis=82.0)
-        self.poll(isis=82.0)
-        self.assertEqual([c[0] for c in self.aq.calls], ["isis:hold:1", "isis:hold:1"])
+        self.poll(hot=HOT_C)
+        self.poll(hot=HOT_C)
+        self.poll(hot=HOT_C)
+        self.assertEqual([c[0] for c in self.aq.calls], [f"{HOT}:hold:1", f"{HOT}:hold:1"])
 
     def test_worker_lock_defers_the_hold_and_the_next_poll_takes_it(self):
         env = dict(os.environ)
         import subprocess
-        subprocess.run([SLOCK, "acquire", "isis", "--holder", "fworker-wq1"], env=env,
+        subprocess.run([SLOCK, "acquire", HOT, "--holder", "fworker-wq1"], env=env,
                        capture_output=True, check=True)
-        self.poll(isis=82.0)
+        self.poll(hot=HOT_C)
         self.assertEqual(self.holder(), "fworker-wq1")
         pending = self.con.execute("SELECT applied_at, apply_note FROM transitions").fetchone()
         self.assertIsNone(pending["applied_at"])
         self.assertIn("DENIED", pending["apply_note"])
         self.assertEqual(len(self.aq.calls), 1)
-        subprocess.run([SLOCK, "release", "isis", "--holder", "fworker-wq1"], env=env,
+        subprocess.run([SLOCK, "release", HOT, "--holder", "fworker-wq1"], env=env,
                        capture_output=True, check=True)
-        self.poll(isis=82.0)
+        self.poll(hot=HOT_C)
         self.assertEqual(self.holder(), "thermal-backpressure")
         self.assertIsNotNone(self.con.execute("SELECT applied_at FROM transitions").fetchone()[0])
         self.assertEqual(len(self.aq.calls), 1)
 
     def test_release_never_frees_someone_elses_lock(self):
         import subprocess
-        self.poll(isis=82.0)
-        subprocess.run([SLOCK, "release", "isis", "--holder", "thermal-backpressure"],
+        self.poll(hot=HOT_C)
+        subprocess.run([SLOCK, "release", HOT, "--holder", "thermal-backpressure"],
                        capture_output=True, check=True)
-        subprocess.run([SLOCK, "acquire", "isis", "--holder", "fworker-wq2"],
+        subprocess.run([SLOCK, "acquire", HOT, "--holder", "fworker-wq2"],
                        capture_output=True, check=True)
-        self.poll(isis=60.0)
+        self.poll(hot=COOL_C)
         self.assertEqual(self.holder(), "fworker-wq2")
 
-    def test_real_isis_fan_floor_event_holds_through_the_other_trigger(self):
+    def test_real_fan_floor_event_holds_through_the_other_trigger(self):
         # package temp stays cool; only wq#2510's verdict, off its committed fixture, is hot
         rule = ffa.load_config()["rule"]
         samples = ffa.read_csv(ISIS_0918)
@@ -228,13 +243,13 @@ class EndToEnd(unittest.TestCase):
                    "clear": not ffa.next_state(True, stats, rule),
                    "te0t_mean": round(stats[0], 1), "fan_max": stats[1]}
         self.assertTrue(verdict["raise"])
-        self.poll(isis=55.0, fans={"isis": verdict})
+        self.poll(hot=COOL_C, fans={HOT: verdict})
         self.assertEqual(self.holder(), "thermal-backpressure")
         self.assertIn("fan-floor Te0T", self.aq.calls[0][2])
         # no verdict next poll (netdata gap): still held
-        self.poll(isis=55.0, fans={"isis": {"raise": None, "clear": None}})
+        self.poll(hot=COOL_C, fans={HOT: {"raise": None, "clear": None}})
         self.assertEqual(self.holder(), "thermal-backpressure")
-        self.poll(isis=55.0, fans={"isis": {"raise": False, "clear": True}})
+        self.poll(hot=COOL_C, fans={HOT: {"raise": False, "clear": True}})
         self.assertIsNone(self.holder())
         self.assertEqual(len(self.aq.calls), 2)
 
@@ -268,7 +283,7 @@ class EndToEnd(unittest.TestCase):
     def test_thor_hot_is_one_aq_row_and_no_lock(self):
         hot = {"raise": True, "clear": False, "te0t_mean": 85.0, "fan_max": 790}
         for _ in range(3):
-            self.poll(isis=60.0, fans={"thor": hot})
+            self.poll(hot=COOL_C, fans={"thor": hot})
         self.assertEqual([c[0] for c in self.aq.calls], ["thor:hot:1"])
         writers, _ = gates._live_holds(self.wq_db)
         self.assertEqual(writers, {})

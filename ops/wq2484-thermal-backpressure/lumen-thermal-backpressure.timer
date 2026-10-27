@@ -1,9 +1,12 @@
 [Unit]
-Description=Poll node temperatures for thermal backpressure every 5min (hold lease 20min, wq#2484)
+Description=Poll node temperatures for thermal backpressure every 1min (hold lease 20min, wq#2484)
 
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=5min
+# wq#4714: 1 min, not 5. The sustain window now lives in the guard's own `samples` table at
+# STEP_S=60 spacing, so a 5-min window needs five polls. A sysfs read costs one SSH round
+# trip per node in parallel (~0.6 s for the whole roster), where five netdata windows did not.
+OnUnitActiveSec=1min
 Persistent=true
 
 [Install]

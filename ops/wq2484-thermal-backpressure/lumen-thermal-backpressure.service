@@ -8,3 +8,8 @@ Type=oneshot
 User=lumen
 ExecStart=/usr/bin/python3 /home/lumen/foreman/ops/thermal_backpressure.py poll
 Nice=5
+# wq#4714: the guard bounds its own sensor fan-out at sensor.poll_budget_s (30 s) and every
+# node read at sensor.node_timeout_s (8 s), so a poll that is still running at 90 s is stuck
+# somewhere else — slock, aq or sqlite. Kill it: the timer fires again in a minute, the hold
+# lease is 20 min, and a wedged oneshot on a 1-min timer would otherwise pile up.
+TimeoutStartSec=90

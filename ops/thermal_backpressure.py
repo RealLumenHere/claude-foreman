@@ -6,11 +6,20 @@ no new control: it takes an slock on the node's subsystem, which the dispatcher 
 refuses to spawn into (dispatcher/gates.py SubsystemHeld, b8c4609), the same way Slurm drains
 a node that fails its health check. Work already running finishes; nothing new starts.
 
-Triggers, per node, both read from netdata that is already there:
+Triggers, per node:
   temp       CPU package mean over sustain_min: hot above raise_c, cool below clear_c,
              unchanged in between (hysteresis). Thresholds: ops/thermal_backpressure.yaml.
   fan-floor  wq#2510's MacPro verdict (ops/fan_floor_alarm.py). This guard keeps its state.
+             Off since wq#4714 — every node it names is a retired Mac.
 A missing reading is no verdict and carries the state. It never reads as cool.
+
+The temperature comes from each node's hwmon sysfs (wq#4714), read in-process on lumen and
+over SSH elsewhere; netdata is `disabled` on lumen and absent on maksoor, so it could not
+see the nodes that matter. sysfs only has "now", so the sustain window lives in the
+`samples` table here. Every node is read concurrently under sensor.node_timeout_s with the
+fan-out bounded by sensor.poll_budget_s, so a node that is off cannot hang the poll — the
+serial 30 s-per-curl read it replaces took 70 s+ and died at rc=124 on 2026-10-27.
+netdata is now only `observe`/`replay` history, on the nodes that still serve it.
 
 Exactly once, as bin/aq_escalate.py:13-21 does it: a hold or release is a row in the
 `transitions` table, written in the same transaction that flips the node's state, so a poll
@@ -19,6 +28,7 @@ failure retries on the next poll. The aq key carries the transition id, so a ret
 aq write whose bookkeeping failed bumps the same aq row and never opens a second.
 
   thermal_backpressure.py poll [--dry-run]        one cycle (lumen-thermal-backpressure.timer)
+  thermal_backpressure.py sample                  read-only: every node's package temp now
   thermal_backpressure.py status                  recorded state and recent transitions
   thermal_backpressure.py observe <node> [--days N]
                                                   observed range and the thresholds it implies
@@ -27,7 +37,9 @@ aq write whose bookkeeping failed bumps the same aq row and never opens a second
                                                   temp-rule transitions over a window
 """
 import argparse
+import concurrent.futures as cf
 import csv
+import glob
 import json
 import math
 import os
@@ -49,6 +61,11 @@ SLOCK = os.environ.get("THERMAL_BP_SLOCK", "/home/lumen/bin/slock")
 AQ = os.environ.get("THERMAL_BP_AQ", "/home/lumen/bin/aq")
 AQ_SOURCE = "thermal-backpressure"
 STEP_S = 60
+# keep two weeks of samples: enough to recompute thresholds from the guard's own history on
+# the nodes netdata no longer covers, and bounded so the db cannot grow without end.
+RETAIN_SAMPLES_S = 14 * 86400
+HWMON_GLOB = "/sys/class/hwmon/hwmon*/temp*_label"
+SSH_OPTS = ("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
 THOR_NAME, THOR_IP = fan_floor_alarm.THOR_NAME, fan_floor_alarm.THOR_IP
 
 SCHEMA = """
@@ -66,11 +83,39 @@ CREATE TABLE IF NOT EXISTS transitions(
   created_at TEXT NOT NULL,
   applied_at TEXT, apply_note TEXT,
   aq_at TEXT);
+-- wq#4714: sysfs reads are instantaneous, so the sustain window lives here instead of in
+-- netdata's history. One row per node per poll, at STEP_S spacing.
+CREATE TABLE IF NOT EXISTS samples(
+  node TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  temp REAL,
+  PRIMARY KEY(node, ts));
 """
 
 
 class ConfigError(ValueError):
     pass
+
+
+def parse_sensor(spec):
+    """A node's live sensor spec -> ("local", None) | ("ssh", "[user@]host") | (None, None)."""
+    if not spec:
+        return None, None
+    text = str(spec)
+    if text == "local":
+        return "local", None
+    if text.startswith("ssh://"):
+        target = text[len("ssh://"):]
+        if not target or target.startswith("@") or target.endswith("@"):
+            raise ConfigError(f"sensor ssh:// needs a [user@]host, got {spec!r}")
+        return "ssh", target
+    raise ConfigError(f"sensor must be 'local', 'ssh://[user@]host' or null, got {spec!r}")
+
+
+def sensor_host(spec):
+    """Host a sensor spec reaches, for the Thor address check. '' when it reaches none."""
+    kind, target = parse_sensor(spec)
+    return target.split("@")[-1].split(":")[0] if kind == "ssh" else ""
 
 
 def validate(cfg):
@@ -80,6 +125,16 @@ def validate(cfg):
     if not cfg.get("holder"):
         raise ConfigError("holder missing")
     sensor = cfg.get("sensor") or {}
+    if not sensor.get("hwmon_label"):
+        raise ConfigError("sensor.hwmon_label is required")
+    for key in ("node_timeout_s", "poll_budget_s"):
+        if not isinstance(sensor.get(key), (int, float)) or sensor[key] <= 0:
+            raise ConfigError(f"sensor.{key} missing or not a positive number")
+    if sensor["poll_budget_s"] < sensor["node_timeout_s"]:
+        # the budget is what makes "one dead node cannot hang a poll" true (wq#4714); set it
+        # under a single node's own timeout and it stops bounding anything.
+        raise ConfigError(f"sensor.poll_budget_s {sensor['poll_budget_s']} must be at least "
+                          f"sensor.node_timeout_s {sensor['node_timeout_s']}")
     if not (sensor.get("chart_prefix") and sensor.get("chart_suffix")):
         raise ConfigError("sensor.chart_prefix and sensor.chart_suffix are required")
     nodes = cfg.get("nodes") or {}
@@ -89,14 +144,14 @@ def validate(cfg):
         action = node.get("action")
         if action not in ("hold", "notify"):
             raise ConfigError(f"{name}: action must be hold or notify, got {action!r}")
-        host = str(node.get("netdata") or "").split(":")[0]
-        if name == THOR_NAME or host == THOR_IP:
+        hosts = {str(node.get("netdata") or "").split(":")[0], sensor_host(node.get("sensor"))}
+        if name == THOR_NAME or THOR_IP in hosts:
             if action != "notify" or node.get("hold_subsystems"):
                 raise ConfigError(f"{name}: Thor may only notify; no hold, no hold_subsystems")
-        if node.get("netdata"):
+        if node.get("sensor"):
             r, c = node.get("raise_c"), node.get("clear_c")
             if not isinstance(r, (int, float)) or not isinstance(c, (int, float)):
-                raise ConfigError(f"{name}: raise_c and clear_c are required with a netdata source")
+                raise ConfigError(f"{name}: raise_c and clear_c are required with a sensor source")
             if c >= r:
                 raise ConfigError(f"{name}: clear_c {c} must be below raise_c {r} (hysteresis)")
         if action == "hold":
@@ -150,7 +205,126 @@ def evaluate(samples, node, sustain_min):
     return out
 
 
-# ── netdata ───────────────────────────────────────────────────────────────────────────────
+# ── sysfs sensor (wq#4714) ────────────────────────────────────────────────────────────────
+
+# the remote half of read_hwmon_local, fed to `python3 -` on stdin so no part of it is ever
+# a shell word (instinct 5: nothing this guard runs needs quoting on a command line).
+REMOTE_HWMON = """import glob
+for p in sorted(glob.glob({glob!r})):
+    try:
+        if open(p).read().strip() != {label!r}:
+            continue
+        print(open(p[:-len('_label')] + '_input').read().strip())
+        break
+    except OSError:
+        continue
+"""
+
+
+def read_hwmon_local(label, _glob=HWMON_GLOB):
+    """Package temperature in C from this box's own hwmon, the one source with no daemon."""
+    for path in sorted(glob.glob(_glob)):
+        try:
+            if open(path).read().strip() != label:
+                continue
+            with open(path[:-len("_label")] + "_input") as fh:
+                return int(fh.read().strip()) / 1000.0
+        except OSError:
+            continue
+    raise RuntimeError(f"no hwmon sensor labelled {label!r}")
+
+
+def read_hwmon_ssh(target, label, timeout, _glob=HWMON_GLOB):
+    connect_s = max(2, int(timeout) - 2)
+    proc = subprocess.run(["ssh", *SSH_OPTS, "-o", f"ConnectTimeout={connect_s}",
+                           target, "python3", "-"],
+                          input=REMOTE_HWMON.format(glob=_glob, label=label),
+                          capture_output=True, text=True, timeout=timeout)
+    out = proc.stdout.strip()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ssh {target}: rc={proc.returncode} {proc.stderr.strip()[:120]}")
+    if not out:
+        raise RuntimeError(f"{target}: no hwmon sensor labelled {label!r}")
+    return int(out) / 1000.0
+
+
+def sample_one(name, node, sensor):
+    """One node's instantaneous reading, as (name, (celsius|None, reason|None))."""
+    timeout = sensor["node_timeout_s"]
+    try:
+        kind, target = parse_sensor(node.get("sensor"))
+        if kind is None:
+            return name, (None, "no sensor source")
+        label = sensor["hwmon_label"]
+        if kind == "local":
+            return name, (read_hwmon_local(label), None)
+        return name, (read_hwmon_ssh(target, label, timeout), None)
+    except subprocess.TimeoutExpired:
+        return name, (None, f"timeout after {timeout}s")
+    except Exception as exc:
+        return name, (None, f"{type(exc).__name__}: {exc}"[:200])
+
+
+def sample_temps(cfg):
+    """Every node's package temperature right now, read concurrently.
+
+    wq#4714: one dead node must not hang a poll. Each read is capped at
+    sensor.node_timeout_s and the whole fan-out at sensor.poll_budget_s, so the sensor
+    layer's worst case is the budget rather than the sum of the nodes — which is what cost
+    wq#3044 its install (four retired Macs x two 30 s curls, serial, rc=124). A node that
+    times out reports no reading, and no reading carries the previous state.
+    """
+    sensor, nodes = cfg["sensor"], cfg["nodes"]
+    budget = sensor["poll_budget_s"]
+    pool = cf.ThreadPoolExecutor(max_workers=max(1, len(nodes)))
+    out = {}
+    try:
+        futures = {pool.submit(sample_one, name, node, sensor): name
+                   for name, node in nodes.items()}
+        try:
+            for fut in cf.as_completed(futures, timeout=budget):
+                try:
+                    name, res = fut.result()
+                except Exception as exc:
+                    name, res = futures[fut], (None, f"{type(exc).__name__}: {exc}"[:200])
+                out[name] = res
+        except cf.TimeoutError:
+            pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    for name in nodes:
+        out.setdefault(name, (None, f"poll budget {budget}s exceeded"))
+    return out
+
+
+def record_means(con, cfg, readings, now):
+    """Persist this poll's readings, then return each node's sustain-window mean.
+
+    netdata used to supply the window; sysfs has only "now", so the guard keeps it. The
+    stored spacing is STEP_S, the same shape window_mean and evaluate already take, so the
+    hysteresis rule and its committed replay fixtures are untouched.
+    """
+    n = int(cfg["sustain_min"] * 60 // STEP_S)
+    ts = now - now % STEP_S
+    out = {}
+    for name, (temp, reason) in readings.items():
+        if temp is not None:
+            con.execute("INSERT INTO samples(node,ts,temp) VALUES(?,?,?) "
+                        "ON CONFLICT(node,ts) DO UPDATE SET temp=excluded.temp",
+                        (name, ts, temp))
+        rows = con.execute("SELECT ts,temp FROM samples WHERE node=? AND ts<=? "
+                           "ORDER BY ts DESC LIMIT ?", (name, ts, n)).fetchall()
+        win = sorted((r["ts"], r["temp"]) for r in rows)
+        # the window has to END at this poll. Without the anchor a node that went dark keeps
+        # answering off its last full window for sustain_min more polls — and would read as
+        # *cool* on stale data, which is the one thing this guard must never do.
+        mean = window_mean(win, n) if win and win[-1][0] == ts else None
+        out[name] = (mean, reason or (None if mean is not None else "window not fully covered"))
+    con.execute("DELETE FROM samples WHERE ts < ?", (ts - RETAIN_SAMPLES_S,))
+    return out
+
+
+# ── netdata (observe/replay history only) ─────────────────────────────────────────────────
 
 def resolve_chart(base, sensor):
     raw = subprocess.run(["curl", "-s", "-m", "30", f"http://{base}/api/v1/charts"],
@@ -162,31 +336,6 @@ def resolve_chart(base, sensor):
     if len(hits) != 1:
         raise RuntimeError(f"{base}: expected one {prefix}*{suffix} chart, found {hits}")
     return hits[0]
-
-
-def read_mean(base, cfg, now):
-    n = int(cfg["sustain_min"] * 60 // STEP_S)
-    chart = resolve_chart(base, cfg["sensor"])
-    # the newest minute is still filling: read two extra, drop the tail
-    before = now - now % STEP_S
-    after = before - (n + 2) * STEP_S
-    series = fetch(base, chart, after, before, n + 2)
-    samples = sorted(series.items())
-    return window_mean(samples[-n - 1:-1], n)
-
-
-def read_temps(cfg, now):
-    out = {}
-    for name, node in cfg["nodes"].items():
-        if not node.get("netdata"):
-            out[name] = (None, "no netdata source")
-            continue
-        try:
-            mean = read_mean(node["netdata"], cfg, now)
-            out[name] = (mean, None if mean is not None else "window not fully covered")
-        except Exception as exc:
-            out[name] = (None, f"{type(exc).__name__}: {exc}"[:200])
-    return out
 
 
 def read_fans(cfg):
@@ -358,6 +507,11 @@ def poll(con, cfg, act, temps, fans):
 
 def observe(cfg, name, days):
     node = cfg["nodes"][name]
+    if not node.get("netdata"):
+        # sysfs has no history (wq#4714). The guard's own `samples` table accumulates it at
+        # RETAIN_SAMPLES_S; until a node has a week there, thresholds stay chassis-class.
+        return {"node": name, "error": "no netdata history source; this node's history is "
+                                       "only in the guard's samples table"}
     base, now = node["netdata"], int(time.time())
     chart = resolve_chart(base, cfg["sensor"])
     step = 300
@@ -396,6 +550,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("poll")
     p.add_argument("--dry-run", action="store_true", help="read and decide in memory; no state, lock or aq write")
+    sub.add_parser("sample", help="read-only: every node's package temperature right now")
     sub.add_parser("status")
     o = sub.add_parser("observe")
     o.add_argument("node")
@@ -428,6 +583,24 @@ def main(argv=None):
         for t in evaluate(samples, node, cfg["sustain_min"]):
             print(f"{time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(t['ts']))} {t['state']:5} mean={t['mean']}")
         return 0
+    if a.cmd == "sample":
+        # fail-able on purpose: a node that carries a sensor and does not answer exits 1, so
+        # install.sh's smoke step and a hand check can both tell "cool" from "could not look".
+        started = time.monotonic()
+        readings = sample_temps(cfg)
+        missed = []
+        for name in cfg["nodes"]:
+            temp, reason = readings[name]
+            print(f"{name:9} temp={'-' if temp is None else format(temp, '.1f')}"
+                  + (f" ({reason})" if reason else ""))
+            if temp is None and cfg["nodes"][name].get("sensor"):
+                missed.append(name)
+        print(f"read {len(cfg['nodes'])} nodes in {time.monotonic() - started:.1f}s "
+              f"(budget {cfg['sensor']['poll_budget_s']}s)")
+        if missed:
+            print(f"no reading from: {', '.join(missed)}", file=sys.stderr)
+            return 1
+        return 0
     if a.cmd == "status":
         con = connect(a.db)
         for row in con.execute("SELECT * FROM node_state ORDER BY node"):
@@ -436,14 +609,21 @@ def main(argv=None):
             print(json.dumps(dict(row)))
         return 0
 
-    temps, fans = read_temps(cfg, int(time.time())), read_fans(cfg)
+    now = int(time.time())
+    readings, fans = sample_temps(cfg), read_fans(cfg)
+    # --dry-run keeps its throwaway db, so it has no stored window and every mean reads as
+    # None (which carries state and decides nothing). The instantaneous `now=` column below
+    # is what makes it a useful smoke test: every node should answer with a temperature.
     con = connect(":memory:" if a.dry_run else a.db)
+    temps = record_means(con, cfg, readings, now)
     decisions = decide(con, cfg, temps, fans)
     if not a.dry_run:
         actuate(con, cfg, Actuator(cfg["holder"], cfg["hold_ttl_min"]))
     for d in decisions:
         mean = "-" if d["mean"] is None else f"{d['mean']:.1f}"
-        print(f"{d['node']:9} held={d['held']} temp={mean} temp_hot={d['temp_hot']} "
+        shot = readings[d["node"]][0]
+        print(f"{d['node']:9} held={d['held']} now={'-' if shot is None else format(shot, '.1f')} "
+              f"temp={mean} temp_hot={d['temp_hot']} "
               f"fan_hot={d['fan_hot']}" + (f" transition=#{d['transition']}" if d["transition"] else "")
               + (f" ({d['reason']})" if d["reason"] else ""))
     return 0
