@@ -124,6 +124,8 @@ RULES:
 
 {{ACCEPTANCE_CONTRACT}}
 
+{{ARCHETYPE_ADDENDUM}}
+
 Print exactly one sentinel as the last line: TICKET_CLOSED | BLOCKED | CLAIM_ERROR.
 
 ---

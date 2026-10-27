@@ -50,6 +50,7 @@ class ArchetypeSpec:
         self.wall_clock_timeout_s = int(data["wall_clock_timeout_s"])
         self.prompt_template = data["prompt_template"]
         self.add_dirs = list(data["add_dirs"])
+        self.prompt_addendum = data.get("prompt_addendum") or ""
         local = data.get("local")
         self.local_allowed = local is not None
         self.local_max_turns = int(local["max_turns"]) if local else None

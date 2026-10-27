@@ -10,6 +10,8 @@ import json
 import os
 import sys
 
+import pytest
+
 HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HARNESS_DIR)
 sys.path.insert(0, os.path.join(os.path.dirname(HARNESS_DIR), "dispatcher"))
@@ -221,6 +223,51 @@ def test_triage_ssh_denial_is_capability_denied_with_needs_head():
     t, head = _triage(events=ev)
     assert t == "CAPABILITY_DENIED"
     assert "ssh(apis)" in head and "3x" in head
+
+
+# wq#4716: a research ticket that needs live web data and has no route must say so,
+# not fall through to UNKNOWN (wq#4183, CFP dates).
+WEB_REFUSAL = ("Claude requested permissions to use WebSearch, but you haven't "
+               "granted it yet.")
+
+
+def say(text):
+    return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def test_triage_refused_websearch_is_needs_web():
+    ev = denial_events(None, text=WEB_REFUSAL, tool="WebSearch",
+                       inp={"query": "DEF CON 35 CFP"}, times=2)
+    t, head = _triage(events=ev)
+    assert t == "CAPABILITY_DENIED"
+    assert head.startswith("needs-web: WebSearch refused 2x")
+
+
+@pytest.mark.parametrize("text", [
+    "I cannot access the internet from this sandbox, so the 2027 CFP dates are unknown.",
+    "I don't have web search available here.",
+    "There is no web access route for this worker.",
+    "Unable to reach the web to verify these deadlines.",
+])
+def test_triage_worker_prose_no_web_is_needs_web(text):
+    t, head = _triage(events=[say(text)])
+    assert t == "CAPABILITY_DENIED"
+    assert head.startswith("needs-web: worker said")
+
+
+@pytest.mark.parametrize("text", [
+    "Wired the web dashboard and the tests pass.",
+    "Cannot reproduce the crash; the fix is in the internet-facing proxy config.",
+])
+def test_triage_unrelated_web_words_stay_unknown(text):
+    t, _ = _triage(events=[say(text)])
+    assert t == "UNKNOWN"
+
+
+def test_triage_worker_block_reason_outranks_needs_web():
+    t, head = _triage(events=[say("I cannot access the internet.")],
+                      worker_reason="needs Frank's decision on X")
+    assert t == "REAL_BLOCK"
 
 
 def test_triage_worktree_mismatch_is_harness_defect():

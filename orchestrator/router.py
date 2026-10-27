@@ -1021,13 +1021,28 @@ def wq_show(ticket_id):
     return out
 
 
+def _stored_archetype(t):
+    a = t.get("archetype")
+    return a if a not in (None, "", "None") else None
+
+
+def prefix_overrides_stored(t):
+    """wq#4716: a ticket stamped at filing (wq#4183: standard-engineering) and LATER
+    retitled RESEARCH:/AUDIT: kept its stale stamp — assign() trusted the stored column
+    and never reached classify_archetype's wq#4633 prefix pin. The prefix wins over a
+    stored non-analysis archetype; a stored analysis archetype stays (the pin keeps those)."""
+    stored = _stored_archetype(t)
+    return bool(stored and stored not in _ANALYSIS_ARCHETYPES
+                and _RESEARCH_TITLE_RE.match(t.get("title") or ""))
+
+
 def assign(ticket_id, *, archetype=None, manifest=None, pressure=None, dry_run=False,
            fails=0, cross_subsystem=False):
     """Classify (unless told), select, and write (model, effort, archetype) into the
     ticket. Returns the decision dict."""
     manifest = manifest or load_manifest()
     t = wq_show(ticket_id)
-    arch = archetype or (t.get("archetype") if t.get("archetype") not in (None, "", "None") else None)
+    arch = archetype or (None if prefix_overrides_stored(t) else _stored_archetype(t))
     signals = []
     if not arch:
         arch, signals = classify_archetype(t.get("title", ""), t.get("detail", ""), t.get("lane", ""), manifest)
@@ -1549,7 +1564,7 @@ def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None, model_overrid
                 f"router: wq#{ticket_id} lane {t.get('lane')!r} has no LANE_REPO entry — "
                 f"pass --repo explicitly (never guess /home/lumen)")
     model, effort, arch = t.get("model"), t.get("effort"), t.get("archetype")
-    if model in (None, "", "None"):
+    if model in (None, "", "None") or prefix_overrides_stored(t):
         d = assign(ticket_id, manifest=manifest)
         if not d.get("rung"):
             raise SystemExit(f"router: cannot route wq#{ticket_id}: {d['reasons']}")

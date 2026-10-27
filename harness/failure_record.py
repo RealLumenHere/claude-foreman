@@ -105,6 +105,46 @@ def _structural_kind(text):
     return None
 
 
+# wq#4716: a research ticket that needs data newer than training dies with no web route
+# (wq#4183, CFP dates). Two shapes: the CLI refused WebSearch/WebFetch (not granted to any
+# archetype), or the worker said so in prose and stopped. Either one is a capability gap,
+# not a competence signal — name it instead of falling through to UNKNOWN.
+_WEB_TOOLS = frozenset({"WebSearch", "WebFetch"})
+_NO_WEB_RE = re.compile(
+    r"\b(?:cannot|can't|can not|unable to|no way to|(?:do not|don't) have)\b[^.;,\n]{0,40}?"
+    r"\b(?:internet|web ?search|web ?fetch|web access|live web|the web)\b(?!-)"
+    r"|\bno (?:web(?: ?search| ?fetch)?|internet) (?:access|tool|route|path|grant)\b",
+    re.I)
+
+
+def needs_web_signal(events):
+    """wq#4716: evidence string if the run died wanting web access, else None. A refused
+    web tool reads "Claude requested permissions to use WebSearch, but you haven't granted
+    it yet" (ISSUE-LOG #136), which PERMISSION_DENIAL_RE does not match, so any errored
+    WebSearch/WebFetch result counts here rather than going through extract_denied_calls."""
+    pending, refused, said = {}, {}, None
+    for frame in events or []:
+        msg = frame.get("message")
+        content = (msg.get("content") if isinstance(msg, dict) else None) or []
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use":
+                pending[b.get("id")] = b.get("name") or ""
+            elif b.get("type") == "tool_result" and b.get("is_error"):
+                tool = pending.get(b.get("tool_use_id"))
+                if tool in _WEB_TOOLS:
+                    refused[tool] = refused.get(tool, 0) + 1
+            elif (b.get("type") == "text" and frame.get("type") == "assistant"
+                  and said is None):
+                m = _NO_WEB_RE.search(b.get("text") or "")
+                if m:
+                    said = f"worker said {m.group(0).strip()[:80]!r}"
+    if refused:
+        return f"{'/'.join(sorted(refused))} refused {sum(refused.values())}x"
+    return said
+
+
 _TRACEBACK_RE = re.compile(
     r"Traceback \(most recent call last\)|^\s*at .+\(.+:\d+:\d+\)", re.M)
 _TEST_BUILD_RE = re.compile(
@@ -435,7 +475,16 @@ def triage(classification, trip_kind, denied_calls, unreachable_paths,
     if classification in ("TURNS", "BUDGET"):
         return TRIAGE_LIMIT, f"{classification} ceiling hit"
 
+    web = needs_web_signal(events)
+    if web:
+        return TRIAGE_CAPABILITY_DENIED, _needs_web_head(web)
+
     return TRIAGE_UNKNOWN, f"{classification}: no mechanical signature matched"
+
+
+def _needs_web_head(evidence):
+    return (f"needs-web: {evidence} — no WebSearch/WebFetch grant; route via "
+            f"fleet-search / searxng recipe in agents.yaml research-synthesis (wq#4716)")
 
 
 # ---------------------------------------------------------------------------

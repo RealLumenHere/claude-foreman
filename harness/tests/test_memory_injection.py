@@ -15,6 +15,20 @@ TICKET = {"title": "t", "detail": "d", "lane": "infra"}
 # live there). {{DISTILLED_MEMORY}} now carries only fleet_context's subject state.
 
 
+def test_research_synthesis_prompt_carries_web_recipe(monkeypatch):
+    # wq#4716: the agents.yaml prompt_addendum renders only for its own archetype.
+    fleet_context = fworker._prompt_forge_import("fleet_context")
+    monkeypatch.setattr(fleet_context, "ticket_state_block", lambda ticket_id: "")
+    research = fworker.load_worker_prompt(5, TICKET, "/tmp/wt", archetype="research-synthesis")
+    plain = fworker.load_worker_prompt(5, TICKET, "/tmp/wt", archetype="standard-engineering")
+    legacy = fworker.load_worker_prompt(5, TICKET, "/tmp/wt")
+    assert "WEB RESEARCH RECIPE" in research and "fleet-search web" in research
+    assert research.index("WEB RESEARCH RECIPE") < research.index("YOUR TICKET: wq#5")
+    for p in (research, plain, legacy):
+        assert "{{ARCHETYPE_ADDENDUM}}" not in p
+    assert "WEB RESEARCH RECIPE" not in plain and "WEB RESEARCH RECIPE" not in legacy
+
+
 def test_prompt_fail_open_empty_state(monkeypatch):
     fleet_context = fworker._prompt_forge_import("fleet_context")
     monkeypatch.setattr(fleet_context, "ticket_state_block", lambda ticket_id: "")

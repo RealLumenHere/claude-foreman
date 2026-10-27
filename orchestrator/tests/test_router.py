@@ -204,6 +204,36 @@ def test_fleet_fires_still_outranks_research_prefix(m):
         "fire-response"
 
 
+# wq#4716: pinned copy of wq#4183 as it stood 2026-10-27. It was filed and stamped
+# standard-engineering, retitled RESEARCH: afterwards, and assign() kept the stale stamp.
+WQ4183 = {"id": 4183, "lane": "research", "model": "claude-sonnet-5", "effort": "high",
+          "archetype": "standard-engineering", "subsystems": "",
+          "title": "RESEARCH: [limpet] CFP calendar: DEF CON HHV/IoT Village, Hardwear.io, "
+                   "REcon, BSides SF — deadlines + draft tool-demo abstracts",
+          "detail": "Web-search each 2027 CFP window, produce a dated table + one 150-word "
+                    "village/tool-demo abstract. No submission without Frank."}
+
+
+@pytest.mark.parametrize("stored, title, want", [
+    ("standard-engineering", WQ4183["title"], "research-synthesis"),   # the wq#4183 case
+    ("mechanical-edit", "audit: rename sweep", "research-synthesis"),
+    ("standard-engineering", "CFP calendar (no prefix)", "standard-engineering"),
+    ("rca-investigation", "AUDIT: why does X bypass Y", "rca-investigation"),
+    ("novel-design", "RESEARCH: memory design", "novel-design"),
+])
+def test_assign_research_prefix_overrides_stale_stored_archetype(m, monkeypatch, stored,
+                                                                 title, want):
+    monkeypatch.setattr(router, "wq_show", lambda tid: dict(WQ4183, archetype=stored,
+                                                            title=title))
+    assert router.assign(4183, manifest=m, dry_run=True)["archetype"] == want
+
+
+def test_explicit_archetype_still_beats_research_prefix(m, monkeypatch):
+    monkeypatch.setattr(router, "wq_show", lambda tid: dict(WQ4183))
+    d = router.assign(4183, archetype="standard-engineering", manifest=m, dry_run=True)
+    assert d["archetype"] == "standard-engineering"
+
+
 @pytest.mark.parametrize("detail", [
     WQ4628[1],                                                         # Research: label
     "Questions: deployment model, how to wire it in, overhead.",

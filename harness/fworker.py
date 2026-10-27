@@ -3701,7 +3701,7 @@ def _sub_instincts_tier0(tmpl):
 
 
 def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None,
-                        acceptance_doc=None, rework=None):
+                        acceptance_doc=None, rework=None, archetype=None):
     tmpl_path = os.path.join(HARNESS_DIR, "prompts", "worker.md")
     with open(tmpl_path) as f:
         tmpl = _sub_instincts_tier0(f.read())
@@ -3710,7 +3710,11 @@ def load_worker_prompt(ticket_id, ticket, worktree, prior_notes_path=None,
     # first rule is that the worker's first action is to re-run the repro commands.
     contract = acceptance_mod.contract_block(acceptance_doc, worktree) if acceptance_doc else ""
     rework_text = acceptance_mod.rework_block(rework) if rework else ""
+    # wq#4716: per-archetype instructions from agents.yaml (research-synthesis's web recipe).
+    addendum = (_AGENTS.get(archetype).prompt_addendum.strip()
+                if archetype in _AGENTS else "")
     for placeholder, block in (("{{ACCEPTANCE_CONTRACT}}", contract),
+                                ("{{ARCHETYPE_ADDENDUM}}", addendum),
                                 ("{{REWORK}}", rework_text)):
         tmpl = (tmpl.replace(placeholder, block) if block
                 else tmpl.replace(placeholder + "\n\n", "").replace(placeholder, ""))
@@ -4124,7 +4128,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
                                     acceptance_doc=acceptance_doc, rework=rework)
     else:
         prompt = load_worker_prompt(ticket_id, ticket, worktree, prior_notes_arg,
-                                     acceptance_doc=acceptance_doc, rework=rework)
+                                     acceptance_doc=acceptance_doc, rework=rework,
+                                     archetype=archetype)
     # wq#2128: a prompt that cannot fit the served context is a harness fault, refused
     # before any token is spent and never charged (SpawnRefused writes no attempt record).
     # wq#2185: the size gate counts the CLI's own fixed request too (the local profile's

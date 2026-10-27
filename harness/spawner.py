@@ -224,7 +224,7 @@ def dispatch_one(ticket_id, repo, env=None, model_override=None):
     column's group name."""
     t = router.wq_show(ticket_id)
     model = model_override or t.get("model")
-    if model in (None, "", "None"):
+    if model in (None, "", "None") or (not model_override and router.prefix_overrides_stored(t)):
         d = router.assign(ticket_id)
         if not d.get("rung"):
             log(f"wq#{ticket_id}: router could not assign a rung ({d['reasons']}) — skipping")
