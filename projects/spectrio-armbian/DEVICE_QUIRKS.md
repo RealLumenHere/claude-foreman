@@ -162,3 +162,15 @@ of RAM below the secure region, giving up the top ~544 MiB (usable RAM
 shows as ~3.4 GB). See `BOOT_ARGS.md`. Making the DTB declare that region
 would be the cleaner fix. It hasn't been done because nobody has measured
 the exact BL31/TEE bounds on this board.
+
+## Provenance re-check (wq#4322)
+
+The golden `meson-sm1-spectrio-tf1.dts`/`.dtb` and the root-cause writeups
+above already landed in this repo (wq#4326, commit `a3acf112`) before this
+ticket was dispatched. wq#4322 re-opened the question of whether maksoor
+holds additional per-unit flash transcripts beyond what's here. A direct
+`ssh`/`fleet-exec run maksoor` check of the home directory (`~`, `~/Documents`,
+`~/Downloads`) found no Spectrio/S905X3/TF1 artifacts — that box's current
+working set is unrelated hardware (RK3399, Aruba AP-303, SkillFishOS). The
+DTS/DTB/boot-arg/eMMC content in this repo remains the authoritative,
+already-verified copy; there was nothing further to pull.
