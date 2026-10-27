@@ -1226,6 +1226,8 @@ def test_mask_alarm_pages_and_files_rotation_ticket(tmp_path, monkeypatch):
                         lambda title, msg, priority="default":
                         pages.append((title, priority)))
     monkeypatch.setattr(fworker, "wq", lambda *a, **k: adds.append(a) or P())
+    monkeypatch.setattr(fworker.mask_replay, "load_rotated_ledger",
+                        lambda path=None: {})
     _, records = masking.scan(f"remote https://x:{GHP}@github.com")
     fworker.mask_alarm(1234, 2, ["github"], records)
     assert pages and pages[0][0] == "foreman MASK HIT" and pages[0][1] == "high"
@@ -1260,11 +1262,14 @@ def github_records():
 
 
 def alarm(tmp_path, monkeypatch, ticket_id, records, labels=("github",),
-          add_result=None, title="[token-engine T10] remaining verbs"):
+          add_result=None, title="[token-engine T10] remaining verbs", ledger=None):
     """mask_alarm on a ticket whose own title is `title`, with `wq add` answering
-    `add_result`. Returns (pages, calls): every ntfy and every wq argv, in order."""
+    `add_result` and the rotated ledger reading `ledger`. Returns (pages, calls):
+    every ntfy and every wq argv, in order."""
     pages, calls = [], []
     monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path))
+    monkeypatch.setattr(fworker.mask_replay, "load_rotated_ledger",
+                        lambda path=None: dict(ledger or {}))
     monkeypatch.setattr(fworker, "ntfy",
                         lambda t, msg, priority="default":
                         pages.append((t, priority, msg)))
@@ -1277,6 +1282,33 @@ def alarm(tmp_path, monkeypatch, ticket_id, records, labels=("github",),
     monkeypatch.setattr(fworker, "wq_show", lambda tid: {"title": title})
     fworker.mask_alarm(ticket_id, 1, list(labels), records)
     return pages, calls
+
+
+def test_a_value_settled_in_the_rotated_ledger_files_no_second_row(
+        tmp_path, monkeypatch):
+    """wq#4736: gitlab.com's public CSP sentry_key was settled in the ledger as
+    wq#3189, and the next run that curled gitlab.com filed it again as a fresh pri-1
+    row, because mask_alarm never read the ledger. Settled means no page, no row."""
+    records = github_records()
+    (h,) = fworker.burned_hashes(["github"], records)
+    pages, calls = alarm(tmp_path, monkeypatch, 4734, records,
+                         ledger={h: {"value_sha256_12": h, "ticket": "wq3189"}})
+    assert pages == [] and not [c for c in calls if c[0] == "add"]
+    # the forensics are still written — the skip decides the row, never the evidence
+    assert os.path.exists(os.path.join(str(tmp_path), "wq4734", "mask-hits-1.json"))
+
+
+def test_one_unsettled_value_beside_a_settled_one_still_alarms(tmp_path, monkeypatch):
+    """All-or-nothing, like the self-output skip: a ledgered value sharing the line
+    with a live token must not carry the live one out of the alarm."""
+    records = github_records()
+    (h,) = fworker.burned_hashes(["github"], records)
+    other = masking.scan("TOKEN: " + "ghp_" + "Z9" * 18)[1]
+    both = records + other
+    assert len(fworker.burned_hashes(["github"], both)) == 2
+    pages, calls = alarm(tmp_path, monkeypatch, 4734, both,
+                         ledger={h: {"value_sha256_12": h, "ticket": "wq3189"}})
+    assert pages and [c for c in calls if c[0] == "add"]
 
 
 def alarm_with_title(tmp_path, monkeypatch, title, ticket_id):

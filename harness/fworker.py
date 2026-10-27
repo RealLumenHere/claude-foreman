@@ -75,6 +75,7 @@ import fire_gate
 import charging
 import burn_filter
 import masking
+import mask_replay  # wq#4736: the rotated ledger — a settled value is not a new alarm
 import cf_hold  # wq#2843: the CF-rotation hold shape, shared with foreman_dispatcher.py
 
 # wq#1332 (WORKER_EXEC_CAPABILITY_GAP.md §2.4): fleet_exec_policy.py lives in the
@@ -1246,6 +1247,18 @@ def mask_alarm(ticket_id, attempt, labels, records=None, session_id=None):
         log(f"mask hit wq#{ticket_id} attempt {attempt}: {tag} — every value is the "
             f"mask literal by hash ({','.join(hashes)}), not a credential; records in "
             f"{hits_path}, no page and no rotation ticket (wq#2339)")
+        return
+    settled = mask_replay.load_rotated_ledger()
+    if hashes and all(h in settled for h in hashes):
+        # wq#4736: the alarm never read the ledger, so a value settled once kept filing
+        # fresh pri-1 rows — gitlab.com's public CSP sentry_key (09c067d6e975), settled
+        # as wq#3189, came back as wq#4736 the next time a run curled gitlab.com. A
+        # ledgered value is dead or was never ours (mask_at_rest skips it the same
+        # way); all-or-nothing like the self-output skip above.
+        log(f"mask hit wq#{ticket_id} attempt {attempt}: {tag} — every value already "
+            f"settled in the rotated ledger ("
+            f"{', '.join(h + ' by ' + str(settled[h].get('ticket')) for h in hashes)}); "
+            f"records in {hits_path}, no page and no rotation ticket (wq#4736)")
         return
     if rotation_chain_refire(ticket_id, attempt, tag, hits_path):
         return
