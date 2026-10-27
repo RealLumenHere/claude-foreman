@@ -258,6 +258,54 @@ at a real checkout of this repo and drop its own stage list in favor of `./build
 or keep it a thin wrapper that still sources the full `STAGES` array rather than
 re-enumerating a subset that drifts (as it already has, twice: stage3 and now stage4/8).
 
+## wq#4713 — the out-of-tree wrapper is retired; this is the only ISO build
+
+wq#4456 left the wrapper in place with advice to point it at a real checkout. A
+10-25 run through it (`docs/build-tree-of-record.md`) baked **0 of 104 RE tools**
+(manifest `baked=0 unresolved=104`) because the same `LIMPET_ROOT` bug made stage4
+read `/home/lumen/projects/limpet/tool-catalog.json` — the stale 2026-10-14,
+untiered, 104-entry catalog — instead of this repo's tiered one (44 entries, 19
+core). This ticket retires the wrapper outright.
+
+**Class fix (this repo).** `build.sh:21` now resolves `${BASH_SOURCE[0]}` through
+`readlink -f` before deriving `HERE`/`LIMPET_ROOT`. A symlinked invocation from a
+foreign tree (what the wrapper was — a 12-symlink farm into this repo) can no
+longer make `LIMPET_ROOT` the foreign tree and read its catalog. Covered by
+`test_build_root_resolution.py`, whose probe sources `build.sh` through a symlink
+in a decoy tree carrying its own catalog and asserts both `LIMPET_ROOT` and
+`TOOL_CATALOG` resolve back to this repo (fails before the fix, passes after).
+
+**Module-level diff of the two stage-3 component trees, and the port decision.**
+The wrapper's `install-to-chroot.sh` injected a *different* component tree than
+canonical `stage3_inject_limpet_packages`. Side by side:
+
+| wrapper stage-3 source (loser) | canonical equivalent that supersedes it |
+|---|---|
+| `src/limpet/` nested package (`hal.daemon`, `mcp.server`, `installer.firstboot`, `agent.sentinel`, `workspace.knowledge_base`) | flat `limpet/*.py` + `ops/wq3809-limpet-hal/hal.py` + `ops/wq3808-limpet-mcp-meta-server-a1/*.py` |
+| `src/agent/` (parallel older agent processor) | `limpet/planner.py`, `critic.py`, `context.py`, `result_store.py`, `agent_tui.py` |
+| `systemd/` units + `getty-autologin.conf` + autostart enablement | `overlay/` xfce desktop model: `.desktop` launchers in `usr/share/applications` + panel genmon, not systemd services + autologin |
+| `xfce/` panel/layout scripts | `overlay/opt/limpet/panel/*.sh`, `overlay/etc/skel/.config/.../xfce4-panel.xml` |
+| `data/*.toml` (default-credentials, usb-device-ids, soc-boot-vectors, spi-flash-pinouts, i2c-common, common-baud) | `hardware-book/`, `hardware.d/`, `target-devices.d/` (stages 5/6/7) |
+| `manifests/*.toml` (9 hand-written tool manifests) | `tool-catalog.json` + `registry/tools.d` (stage4) |
+
+**Decision: port nothing.** No module in this repo imports any loser `data/*.toml`
+or `/etc/limpet/data` path (repo-wide grep, empty), so those files are not product
+inputs — the structured `hardware-book/`/`hardware.d/`/`target-devices.d/` dirs
+replaced them. The loser's `src/limpet`/`src/agent` are an older package layout
+wq#4456 already found "doesn't exist anywhere under `limpet/` here"; the canonical
+flat modules plus the two `ops/` servers are the maintained code. The systemd+
+autologin runtime model was deliberately replaced by the xfce `.desktop` overlay
+model wq#4456 made canonical, so its units are not a missing piece. Every loser
+component has a canonical supersessor; none is a still-needed port.
+
+**Out-of-repo cleanup (tracked, not done here).** Archiving `build-limpet.sh*` /
+`install-to-chroot.sh*` (both carry uncommitted edits) and the 12-symlink farm,
+and moving the wrapper's 20G `.build` off the root LV, all live under
+`/home/lumen/projects/limpet/`, a separate repo outside every foreman worker's
+allowed directories (wq#4456 hit the same boundary). That teardown is a follow-up
+in the limpet repo; this PR makes the canonical pipeline the only one that can read
+the right catalog.
+
 ## wq#4524 — an ISO with zero RE tools now fails the build
 
 The ticket's three hypotheses, checked against this script:

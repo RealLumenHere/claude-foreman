@@ -18,7 +18,12 @@
 # output, per the fleet's no-guessing read doctrine.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# wq#4713: resolve the symlink chain before deriving HERE. The retired
+# out-of-tree wrapper invoked this script through a symlink farm, so a logical
+# dirname made LIMPET_ROOT the foreign wrapper tree and stage4 read its stale,
+# untiered tool-catalog.json (0 of 104 RE tools baked). readlink -f pins HERE to
+# the real repo whatever path the script is invoked by.
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 LIMPET_ROOT="$(cd "$HERE/.." && pwd)"
 REPO_ROOT="$(cd "$LIMPET_ROOT/.." && pwd)"
 
