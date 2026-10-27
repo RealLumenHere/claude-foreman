@@ -33,7 +33,8 @@ if title in d["titles"]:
     print(f"DUPLICATE — task {d['titles'][title]} [research/open] already has this title:\n  {title}\nUse --force to add anyway.")
     json.dump(d, open(db, "w")); sys.exit(1)
 tid = d["next"]; d["next"] += 1; d["titles"][title] = tid
-d["log"].append({"id": tid, "title": title, "detail_len": len(detail), "detail_head": detail[:80]})
+live = args[args.index("--liveness") + 1] if "--liveness" in args else ""
+d["log"].append({"id": tid, "title": title, "detail_len": len(detail), "detail_head": detail[:80], "liveness": live})
 json.dump(d, open(db, "w"))
 print(f"added task {tid} [research]")
 '''
@@ -158,6 +159,14 @@ def main():
         rc, out = run(env)
         check(json.load(open(db))["log"][-1]["title"] == "RESEARCH: TWN4 MultiTech 3 Linux reflash runbook",
               "T12 DELIVERABLE: line skipped for the title")
+
+        # 14. DELIVERABLE: path wins the liveness probe; stem fallback otherwise
+        last = json.load(open(db))["log"][-1]
+        check(last["liveness"] == "test -f /home/lumen/scratch/research/x.md",
+              f"T14 DELIVERABLE: path is the probe: {last['liveness']!r}")
+        plain = [e for e in json.load(open(db))["log"] if e["title"].startswith("RESEARCH: subject number 1")][0]
+        check(plain["liveness"] == "test -f /home/lumen/scratch/research/p1.md",
+              f"T14b stem fallback probe: {plain['liveness']!r}")
 
         # 13. dry-run touches nothing
         (inbox / "dry.txt").write_text("RESEARCH PROMPT: dry run candidate\n")
