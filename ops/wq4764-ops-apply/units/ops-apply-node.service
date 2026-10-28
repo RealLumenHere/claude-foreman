@@ -1,0 +1,38 @@
+[Unit]
+Description=ops-apply node daemon (wq#4764, design doc §3.2/§3.5)
+Requires=ops-apply-node.socket
+After=ops-apply-node.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/ops-apply-node
+User=root
+Group=root
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ops-apply /etc/cloudflared
+ProtectHome=yes
+PrivateTmp=yes
+RuntimeDirectory=ops-apply-work
+StateDirectory=ops-apply
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# B2-T2 must prove by test on the node's systemd that `systemctl restart
+# cloudflared` still works under this CapabilityBoundingSet (it goes over
+# D-Bus as uid 0, unaffected by the bounding set — design §3.5) before this
+# unit is installed. Any hardening directive that breaks `cloudflared
+# ingress validate` is relaxed per-directive, with the test output cited,
+# never wholesale.
+
+[Install]
+WantedBy=multi-user.target

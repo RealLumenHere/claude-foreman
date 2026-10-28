@@ -1,0 +1,31 @@
+[Unit]
+Description=ops-apply gate (wq#4764, design doc §3.2/§3.5)
+Requires=ops-apply-gate.socket
+After=ops-apply-gate.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/ops-apply-gate
+User=root
+Group=root
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ops-apply
+ProtectHome=yes
+PrivateTmp=yes
+RuntimeDirectory=ops-apply-work
+StateDirectory=ops-apply
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

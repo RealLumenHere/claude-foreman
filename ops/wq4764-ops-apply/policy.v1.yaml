@@ -1,0 +1,42 @@
+# ops-apply's pinned policy copy (design §3.4 V6). This is the SOURCE that
+# the B2-T2 install bundle copies to /etc/ops-apply/policy.yaml, root:root
+# 0644, never worker-writable. catalog.json pins its sha256; V6 refuses the
+# whole daemon (OPS_POLICY) if the installed copy's sha ever drifts from
+# this file without a matching catalog.json update landing by PR.
+#
+# This is a curated SUBSET of harness/fleet-exec-policy.yaml's `never` rows
+# — only what ops-apply's checks consult (never.nodes, never.restart,
+# never.sudo_argv_deny). It is never read from, or compared byte-for-byte
+# against, the live lumen-writable fleet-exec-policy.yaml (design: "The
+# lumen-writable file in the repo is never read"); a change here lands by
+# the same PR review every other policy row does.
+never:
+  nodes: [thor]
+  restart:
+    lumen:
+      - "vaultwarden*"
+      - "cloudflared"
+      - "desktop-commander-mcp"
+      - "postgresql*"
+      - "tailscaled"
+      - "sshd"
+    maat:
+      - "*"
+    sobek:
+      - "postgresql*"
+      - "cloudflared"
+    # bes deliberately has no cloudflared row here (design §3.2: "cloudflared
+    # is not in bes's never.restart row, whereas it is for lumen and sobek" —
+    # that asymmetry is *why* bes is the pilot node).
+  sudo_argv_deny:
+    - ip
+    - macchanger
+    - dd
+    - "mkfs*"
+    - wipefs
+    - visudo
+    - passwd
+    - useradd
+    - chpasswd
+    - "tailscale up*"
+    - "systemctl mask*"

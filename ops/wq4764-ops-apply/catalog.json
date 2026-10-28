@@ -1,0 +1,28 @@
+{
+  "policy_sha256": "712b75344fbb1c18544d704cdef688469c1b6b390225e3bcade66e529508bbfe",
+  "recipes": [
+    {
+      "id": "cloudflared.ingress.upsert",
+      "version": 1,
+      "sha256": "0a862c195009d50db703738a56c2758caf59c5761f8525e68a7d2361fdf621a5",
+      "nodes": ["bes"],
+      "unit": "cloudflared",
+      "frozen_nodes": [],
+      "param_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "hostname", "port"],
+        "properties": {
+          "action": {"enum": ["upsert", "remove"]},
+          "hostname": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.(lumennode\\.uk)$",
+            "maxLength": 253
+          },
+          "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+          "path": {"type": "string", "pattern": "^/[A-Za-z0-9/_.-]{0,64}$"}
+        }
+      }
+    }
+  ]
+}

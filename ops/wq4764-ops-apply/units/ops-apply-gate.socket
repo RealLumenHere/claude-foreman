@@ -1,0 +1,11 @@
+[Unit]
+Description=ops-apply gate socket (wq#4764, design doc §3.5)
+
+[Socket]
+ListenStream=/run/ops-apply/gate.sock
+SocketMode=0660
+SocketGroup=ops-apply-clients
+Accept=no
+
+[Install]
+WantedBy=sockets.target
