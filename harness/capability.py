@@ -49,9 +49,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import needs as needs_mod  # noqa: E402
+import repo_sweep  # noqa: E402  # wq#4762: needs.repo_grants() -> managed_repos() membership
 
 sys.path.insert(0, "/home/lumen/bin")
 import fleet_exec_policy  # noqa: E402
+
+_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
 REASON_CITED_PATH_UNREACHABLE = "cited_path_unreachable"
 REASON_NODE_UNKNOWN = "node_unknown"
@@ -240,9 +243,26 @@ def policy_grants(needs, policy_path=None):
     one refusal string per tag it forbids. Pure policy — the caller decides whether
     to write a grant.json (fworker) or merely ask whether it would (dispatcher).
     ssh(node) is always grantable as read-only `run`: the argv allowlist is enforced
-    by the broker per-invocation, not knowable at spawn time."""
+    by the broker per-invocation, not knowable at spawn time.
+
+    needs:repo(<key>@<sha>) (wq#4762, DESIGN.md §2.5) is handled here too, ahead of
+    the exec-only early return below: it names no node and touches no
+    fleet-exec-policy.yaml rule, so a ticket with ONLY a repo() grant must still get
+    one. <key> must be a repo_sweep.managed_repos() member and <sha> a full 40-hex
+    id — the same two checks repo-read itself makes at read time; capability.py's
+    copy is belt-and-braces at grant-mint time, repo-read's is authoritative."""
     grants = []
     refused = []
+    for key, sha in needs.repo_grants:
+        if key not in repo_sweep.managed_repos():
+            refused.append(f"needs:repo({key}@{sha}) denied: {key!r} is not a "
+                           f"repo_sweep.managed_repos() key")
+            continue
+        if not _SHA40_RE.match(sha):
+            refused.append(f"needs:repo({key}@{sha}) denied: sha must be a full "
+                           f"40-hex commit id")
+            continue
+        grants.append({"kind": "repo", "repo": f"{key}@{sha}"})
     wants_exec = bool(needs.ssh_nodes or needs.copy_targets or needs.restart_targets
                       or needs.peer_targets)
     if not wants_exec:

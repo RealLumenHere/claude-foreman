@@ -2538,17 +2538,28 @@ def scratch_grant_dirs(ticket_id):
 VERIFY_PROBE_SETTINGS_FILE = os.path.join(HARNESS_DIR, "permission-profiles", "verify-probe.json")
 
 
+# repo-read grant (wq#4762, DESIGN.md §2.5): verify-pass gets the SAME box as a
+# plain build worker on this repo PLUS this one rule, never the reverse — an
+# ordinary build-archetype ticket on the same repo renders without it.
+ARCHETYPE_EXTRA_ALLOW = {
+    "verify-pass": ["Bash(/home/lumen/bin/repo-read *)"],
+}
+
+
 def resolve_worker_settings(repo, ticket_id, archetype=None):
     """ISSUE-SOLUTIONS-fable.md §2b: render this repo's per-repo toolchain permission
     profile (permission-profiles/repos.d/<repo>.json) into the ticket's run_dir, unioned
     from the shared profile fragments. A repo with no profile declaration yet falls back
     to the static SETTINGS_FILE unchanged — no regression for repos not yet migrated.
     verify-probe overrides the per-repo profile outright (see VERIFY_PROBE_SETTINGS_FILE).
+    verify-pass instead keeps the per-repo profile and adds ARCHETYPE_EXTRA_ALLOW's
+    rules on top (wq#4762) — it stays build-worker-shaped for everything else.
     """
     if archetype == "verify-probe":
         return VERIFY_PROBE_SETTINGS_FILE
     settings_file, digest = permission_profiles.resolve_settings_file(
-        repo, SETTINGS_FILE, run_dir(ticket_id))
+        repo, SETTINGS_FILE, run_dir(ticket_id),
+        archetype_allow=ARCHETYPE_EXTRA_ALLOW.get(archetype))
     if digest:
         log(f"wq#{ticket_id}: rendered permission profile {digest[:12]} -> {settings_file}")
     return settings_file

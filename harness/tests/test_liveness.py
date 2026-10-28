@@ -29,7 +29,10 @@ import needs as needs_mod  # noqa: E402
 # preflight re-pinned wq#2184 (advisory_paths param); liveness still does not touch it.
 # policy_grants re-pinned wq#3222: wq#3200's peer_targets (0354e642) changed it and
 # did not re-pin, which left this red on main.
-PRE_LIVENESS_FN_SHA = {"policy_grants": "4c150fd0c6bca745", "preflight": "cdddd9f2725e8f49"}
+# policy_grants re-pinned wq#4762: needs:repo(<key>@<sha>) broker-grant handling
+# (DESIGN.md §2.5) added ahead of the exec-only early return; liveness still does
+# not touch it (test_policy_grants_ignores_liveness below is unchanged).
+PRE_LIVENESS_FN_SHA = {"policy_grants": "0f338101427d3974", "preflight": "cdddd9f2725e8f49"}
 
 DETAIL = ("Do the thing.\n"
           "Needs: ssh(isis), dir(/home/lumen/foreman)\n"

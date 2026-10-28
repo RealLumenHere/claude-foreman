@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import router  # noqa: E402
 import needs as needs_mod  # noqa: E402  # wq#4686: derive a verify ticket's own needs
 import capability_lint  # noqa: E402  # wq#4686: homeroot/dir-deny checks on cited paths
+import repo_sweep  # noqa: E402  # wq#4762: needs:repo(<key>@<sha>) derivation (§2.5)
 
 FOREMAN_ROOT = router.FOREMAN_ROOT
 RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_runs"))
@@ -143,13 +144,35 @@ def _cited_home_root_paths(t):
     return out
 
 
+def _shipped_merge_sha(repo, shipped_id):
+    """The 40-hex commit that landed wq#<shipped_id>'s PR on `repo`, found via the
+    'Refs: wq#<id>' commit footer lumen-pr writes on every commit (verified: every
+    landed commit on foreman/main carries one, e.g. 8d9db5df "Refs: wq#4758"). Pure
+    git, no Gitea/gh API call — consistent with repo-read's own "git objects only"
+    reach. None on any failure (repo unreadable, no match yet — the shipped ticket's
+    own PR may not be merged at filing time): derive_verify_needs then skips the
+    repo() tag rather than granting an unverifiable sha."""
+    try:
+        p = subprocess.run(
+            ["git", "-C", repo, "log", "--format=%H", f"--grep=^Refs: wq#{shipped_id}$", "-1"],
+            capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    sha = p.stdout.strip()
+    return sha if re.fullmatch(r"[0-9a-f]{40}", sha or "") else None
+
+
 def derive_verify_needs(t):
     """(Needs, block_reasons) for the verify ticket about to be filed for shipped
-    ticket `t` (design §5.1): copy the shipped ticket's own needs:ssh tags verbatim,
-    add ssh(<node>) for every non-lumen ops-bundle install target, and needs:homeroot
-    for every home-root file it cites. block_reasons (§5.3) is populated the moment a
-    derived tag is unsatisfiable by policy — that ticket is filed blocked and the
-    needs are never written to it (an unsatisfiable need is not a grant)."""
+    ticket `t` (design §5.1 + wq#4762 §2.5): copy the shipped ticket's own needs:ssh
+    tags verbatim, add ssh(<node>) for every non-lumen ops-bundle install target,
+    needs:homeroot for every home-root file it cites, and needs:repo(<key>@<sha>) for
+    the shipped diff's own merge commit — the broker (repo-read) reads the EXACT
+    merged code via git objects, sidestepping the mutable, possibly-.env-polluted
+    primary-tree add_dir fworker.py:2501 already grants for the same repo.
+    block_reasons (§5.3) is populated the moment a derived tag is unsatisfiable by
+    policy — that ticket is filed blocked and the needs are never written to it (an
+    unsatisfiable need is not a grant)."""
     tags = []
     block_reasons = []
     shipped_needs = needs_mod.parse(t.get("needs"), t.get("detail"))
@@ -166,6 +189,11 @@ def derive_verify_needs(t):
             block_reasons.append(f"{path} refused by {capability_lint.dir_denied_rule_loc(path)} ({reason})")
         elif os.path.dirname(path) == "/home/lumen" and ("homeroot", path) not in tags:
             tags.append(("homeroot", path))
+    shipped_repo = router.repo_for_ticket(t)
+    if shipped_repo and shipped_repo in repo_sweep.managed_repos() and t.get("id") is not None:
+        sha = _shipped_merge_sha(shipped_repo, t["id"])
+        if sha and ("repo", f"{shipped_repo}@{sha}") not in tags:
+            tags.append(("repo", f"{shipped_repo}@{sha}"))
     derived = needs_mod.Needs(tags)
     block_reasons += router.verify_needs_block_reasons(derived)
     return derived, block_reasons

@@ -44,14 +44,27 @@ def _dedup_extend(dest, seen, rules):
             dest.append(rule)
 
 
-def render_permissions(repo_path, base_settings):
+def render_permissions(repo_path, base_settings, archetype_allow=None):
     """Union the repo's declared toolchain profiles into base_settings' permissions
     block (hooks/defaultMode pass through unchanged). Returns None if the repo has no
-    repos.d/<repo>.json — caller falls back to base_settings unchanged.
+    repos.d/<repo>.json AND no archetype_allow — caller falls back to base_settings
+    unchanged. `archetype_allow` (wq#4762: verify-pass's repo-read grant, keyed by
+    ARCHETYPE in fworker.resolve_worker_settings — distinct from repo_conf's own
+    "extra_allow" key below, which is keyed by REPO) is unioned in regardless of
+    whether the repo has a repos.d entry, so a verify-pass ticket on a repo with no
+    profile declaration still gets it.
     """
     conf_path = repo_config_path(repo_path)
     if not os.path.isfile(conf_path):
-        return None
+        if not archetype_allow:
+            return None
+        merged = json.loads(json.dumps(base_settings))  # deep copy; hooks/defaultMode untouched
+        merged.setdefault("permissions", {})
+        allow = list(merged["permissions"].get("allow", []))
+        seen = set(allow)
+        _dedup_extend(allow, seen, archetype_allow)
+        merged["permissions"]["allow"] = allow
+        return merged
     repo_conf = _load_json(conf_path)
     profile_names = repo_conf.get("profiles") or ["base"]
 
@@ -75,6 +88,8 @@ def render_permissions(repo_path, base_settings):
         _dedup_extend(deny, seen_deny, prof.get("deny", []))
 
     _dedup_extend(allow, seen_allow, repo_conf.get("extra_allow", []))
+    if archetype_allow:
+        _dedup_extend(allow, seen_allow, archetype_allow)
 
     repo_abs = os.path.normpath(repo_path)
     verb_rules = [f"Bash({os.path.join(repo_abs, verb)})"
@@ -102,17 +117,19 @@ def render_hash(settings_dict):
     return hashlib.sha256(blob).hexdigest()
 
 
-def resolve_settings_file(repo_path, static_settings_file, out_dir):
+def resolve_settings_file(repo_path, static_settings_file, out_dir, archetype_allow=None):
     """Render this repo's merged permission pack under out_dir (fworker passes its
     per-ticket run_dir — one rendered file per (repo, profile-content) pair, content-
     addressed so a re-render with unchanged profiles is a no-op write).
 
     Returns (settings_path, render_hash). render_hash is None when the repo has no
-    profile declaration and static_settings_file is returned unchanged — the existing,
-    pre-2b behavior.
+    profile declaration (and no archetype_allow) and static_settings_file is returned
+    unchanged — the existing, pre-2b behavior. `archetype_allow` (wq#4762) is folded
+    into the same merged dict before hashing, so it is already covered by the
+    content-addressed filename below — no separate cache key needed.
     """
     base_settings = _load_json(static_settings_file)
-    merged = render_permissions(repo_path, base_settings)
+    merged = render_permissions(repo_path, base_settings, archetype_allow=archetype_allow)
     if merged is None:
         return static_settings_file, None
 

@@ -49,11 +49,31 @@ class Needs:
     @property
     def repo(self):
         """First repo(<abs-path>) arg, or None. Single-valued by design: a ticket
-        lands in exactly one repo."""
+        lands in exactly one repo. Skips a repo(<key>@<sha>) broker-grant tag
+        (wq#4762, DESIGN.md §2.5: the read-only repo broker's grant on ANOTHER
+        repo — multi-valued, always carries '@', see repo_grants) so a verify
+        ticket carrying both this routing tag and a broker grant can't have the
+        grant mistaken for its own worktree repo."""
         for name, arg in self.tags:
-            if name == "repo" and arg:
+            if name == "repo" and arg and "@" not in arg:
                 return arg
         return None
+
+    @property
+    def repo_grants(self):
+        """Every repo(<key>@<sha>) broker-grant arg as (key, sha), malformed args
+        skipped (wq#4762, DESIGN.md §2.5 — the read-only repo-read broker's grant,
+        consumed by capability.policy_grants into a {"kind": "repo", "repo":
+        "<key>@<sha>"} grant.json entry, the same shape harness/hold_gate.py's
+        _repo_granted already reads). Distinct from .repo above by always
+        containing '@'."""
+        out = []
+        for name, arg in self.tags:
+            if name == "repo" and "@" in arg:
+                key, _, sha = arg.rpartition("@")
+                if key and sha:
+                    out.append((key, sha))
+        return out
 
     @property
     def dirs(self):

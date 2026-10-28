@@ -20,6 +20,7 @@
       "Bash(/home/lumen/bin/lumen-run *)",
       "Bash(/home/lumen/bin/fleet-search *)",
       "Bash(/home/lumen/bin/fleet-exec *)",
+      "Bash(/home/lumen/bin/repo-read *)",
       "Bash(/home/lumen/bin/lumen_state.py *)",
       "Bash(/home/lumen/bin/lumen_busy *)",
       "Bash(/home/lumen/bin/mask-secrets)",

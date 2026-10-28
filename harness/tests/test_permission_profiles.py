@@ -252,3 +252,45 @@ def test_fworker_resolve_worker_settings_renders_for_foreman(tmp_path):
         rendered = json.load(f)
     assert "Bash(pytest *)" in rendered["permissions"]["allow"]
     assert "Bash(npx *)" not in rendered["permissions"]["allow"]
+
+
+# ---- wq#4762 (DESIGN.md §2.5): verify-pass gets repo-read, ordinary build never does ----
+
+def test_verify_pass_gets_repo_read_on_an_unconfigured_repo(tmp_path):
+    """No repos.d/<repo>.json entry at all — must still render a settings file
+    (not fall back to the static one unchanged) carrying the repo-read rule."""
+    import importlib
+    import fworker
+    importlib.reload(fworker)
+    fworker.RUNS_ROOT = str(tmp_path)
+    settings_file = fworker.resolve_worker_settings(
+        "/home/lumen/no-such-repo-configured", "wq1258-test", archetype="verify-pass")
+    assert os.path.realpath(settings_file) != os.path.realpath(SETTINGS)
+    with open(settings_file) as f:
+        rendered = json.load(f)
+    assert "Bash(/home/lumen/bin/repo-read *)" in rendered["permissions"]["allow"]
+
+
+def test_verify_pass_gets_repo_read_on_foreman(tmp_path):
+    import importlib
+    import fworker
+    importlib.reload(fworker)
+    fworker.RUNS_ROOT = str(tmp_path)
+    settings_file = fworker.resolve_worker_settings(
+        "/home/lumen/foreman", "wq1258-test", archetype="verify-pass")
+    with open(settings_file) as f:
+        rendered = json.load(f)
+    assert "Bash(/home/lumen/bin/repo-read *)" in rendered["permissions"]["allow"]
+    assert "Bash(pytest *)" in rendered["permissions"]["allow"]  # foreman's own profile, untouched
+
+
+def test_plain_build_archetype_never_gets_repo_read(tmp_path):
+    import importlib
+    import fworker
+    importlib.reload(fworker)
+    fworker.RUNS_ROOT = str(tmp_path)
+    settings_file = fworker.resolve_worker_settings(
+        "/home/lumen/foreman", "wq1258-test", archetype="build")
+    with open(settings_file) as f:
+        rendered = json.load(f)
+    assert "Bash(/home/lumen/bin/repo-read *)" not in rendered["permissions"]["allow"]

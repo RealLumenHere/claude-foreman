@@ -118,3 +118,36 @@ def test_peer_targets_parses_name_at_node():
 def test_peer_targets_skips_malformed_arg():
     n = needs.parse("peer(no-at-sign)")
     assert n.peer_targets == []
+
+
+# ---------------------------------------------------------------------------
+# wq#4762 (DESIGN.md §2.5): repo(<key>@<sha>) broker-grant tag, distinct from the
+# single-valued routing repo(<abs-path>) tag above by always carrying an '@'.
+# ---------------------------------------------------------------------------
+
+def test_repo_grants_parses_key_at_sha():
+    sha = "a" * 40
+    n = needs.parse(f"repo(/home/lumen/bin@{sha})")
+    assert n.repo_grants == [("/home/lumen/bin", sha)]
+    assert needs.validate(f"repo(/home/lumen/bin@{sha})")[0]
+
+
+def test_repo_grants_skips_malformed_arg():
+    n = needs.parse("repo(no-at-sign)")
+    assert n.repo_grants == []
+    # no '@' -> read by .repo instead, same as any ordinary routing tag
+    assert n.repo == "no-at-sign"
+
+
+def test_repo_property_ignores_grant_shaped_tags():
+    sha = "b" * 40
+    n = needs.parse(f"repo(/home/lumen/foreman), repo(/home/lumen/bin@{sha})")
+    assert n.repo == "/home/lumen/foreman"
+    assert n.repo_grants == [("/home/lumen/bin", sha)]
+
+
+def test_repo_grants_multivalued():
+    sha1, sha2 = "c" * 40, "d" * 40
+    n = needs.parse(f"repo(/home/lumen/bin@{sha1}), repo(/home/lumen/kb@{sha2})")
+    assert n.repo_grants == [("/home/lumen/bin", sha1), ("/home/lumen/kb", sha2)]
+    assert n.repo is None

@@ -244,6 +244,47 @@ def test_no_exec_tags_never_reads_the_policy_file(tmp_path):
     assert v.ok
 
 
+# ---- repo(<key>@<sha>) broker grant (wq#4762, DESIGN.md §2.5) --------------------------
+
+def test_repo_grant_tag_grants_a_managed_key(tmp_path, monkeypatch):
+    # a repo()-only ticket (no ssh/copy/restart/peer) must still get a grant, and
+    # must never touch fleet-exec-policy.yaml (the file-path given doesn't exist).
+    monkeypatch.setattr(capability.repo_sweep, "managed_repos", lambda: {"/home/lumen/bin"})
+    sha = "a" * 40
+    grants, refused = capability.policy_grants(
+        needs_mod.parse(f"repo(/home/lumen/bin@{sha})"),
+        policy_path=str(tmp_path / "does-not-exist.yaml"))
+    assert not refused, refused
+    assert grants == [{"kind": "repo", "repo": f"/home/lumen/bin@{sha}"}]
+
+
+def test_repo_grant_tag_unmanaged_key_refused_never_granted(tmp_path, monkeypatch):
+    monkeypatch.setattr(capability.repo_sweep, "managed_repos", lambda: {"/home/lumen/bin"})
+    sha = "a" * 40
+    grants, refused = capability.policy_grants(
+        needs_mod.parse(f"repo(/home/lumen/not-managed@{sha})"),
+        policy_path=str(tmp_path / "does-not-exist.yaml"))
+    assert refused and grants == []
+
+
+def test_repo_grant_tag_abbreviated_sha_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(capability.repo_sweep, "managed_repos", lambda: {"/home/lumen/bin"})
+    grants, refused = capability.policy_grants(
+        needs_mod.parse("repo(/home/lumen/bin@abc123)"),
+        policy_path=str(tmp_path / "does-not-exist.yaml"))
+    assert refused and grants == []
+
+
+def test_repo_grant_tag_preflight_refuses_unmanaged_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(capability.repo_sweep, "managed_repos", lambda: {"/home/lumen/bin"})
+    sha = "a" * 40
+    v = capability.preflight({"detail": ""}, "/home/lumen/foreman", [],
+                             needs_mod.parse(f"repo(/home/lumen/not-managed@{sha})"),
+                             policy_path=str(tmp_path / "does-not-exist.yaml"),
+                             state_output=STATE, ssh_hosts=HOSTS)
+    assert v.reason == capability.REASON_CAPABILITY_DENIED_BY_POLICY
+
+
 # ---- peer (wq#3200): fixed-argv exec path -----------------------------------------------
 # policy_grants delegates to fleet_exec_policy.check_peer from the INSTALLED
 # /home/lumen/bin — the grant-path test skips until the lumen-bin PR carrying
