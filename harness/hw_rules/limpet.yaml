@@ -1,0 +1,26 @@
+# Hardware rules for Limpet (wq#4751, gap-analysis §2(b)/T3). Compiled by
+# action_gate.compile_rules for every fworker ticket whose repo sits under a
+# `repos:` root, merged additively with any .fworker-rules.yaml in the repo.
+#
+# targets: one entry per physical board a write-class action may touch
+# (flashrom/esptool/openocd/... writes, backup_required_before tokens).
+# Required per target: id, datasheet (URL or local path), flash_layout (local
+# path or URL to the memory map / partition table), recovery_image (local
+# path), recovery_sha256 (hex). Optional: match (regexes naming the target in
+# a command; needed once there is more than one target), known_good_dumps
+# (paths the gate write-protects alongside recovery_image).
+# The recovery image is hashed at hook time; a write with no matching,
+# verifying target is RED with a hardware floor.
+#
+# No Limpet target has a captured, hashed recovery image yet, so the list is
+# empty and every write-class hardware action stays RED until one is added
+# here by PR.
+repos:
+  - /home/lumen/projects/limpet
+project: limpet
+hardware_class: spi-flash-writable
+rules:
+  - NEVER write or erase a target's flash without a declared target manifest whose recovery image verifies
+  - NEVER overwrite a known-good dump; take new reads into a new file
+  - phase_gates: [research]
+targets: []

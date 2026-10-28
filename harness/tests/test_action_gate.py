@@ -2,6 +2,7 @@
 Test-to-failure: prove RED blocks, prove AMBER snapshots (and BLOCKS on snapshot
 failure), prove the loop breaker trips (and does NOT trip on a healthy TDD loop),
 prove project rules are additive, prove the hook fails closed."""
+import hashlib
 import json
 import os
 import subprocess
@@ -779,6 +780,23 @@ MIKO_RULES = textwrap.dedent("""\
 """)
 
 
+def _miko_target(tmp_path, sha=None, extra=""):
+    """A complete wq#4751 target manifest whose recovery image verifies."""
+    img = tmp_path / "full_flash.bin"
+    img.write_bytes(b"\x00" * 1024)
+    layout = tmp_path / "layout.txt"
+    layout.write_text("0x0 bootloader\n0x10000 app\n")
+    sha = sha or hashlib.sha256(img.read_bytes()).hexdigest()
+    return textwrap.dedent(f"""\
+        targets:
+          - id: miko3-board
+            datasheet: https://example.invalid/miko3-soc.pdf
+            flash_layout: {layout}
+            recovery_image: {img}
+            recovery_sha256: {sha}
+        """) + extra
+
+
 def compiled(tmp_path, yaml_text=MIKO_RULES):
     proj = tmp_path / "proj"
     proj.mkdir(exist_ok=True)
@@ -827,10 +845,7 @@ def test_backup_required_token_blocks_without_backup(tmp_path):
 
 
 def test_backup_required_token_ambers_with_local_backup(tmp_path):
-    dump = tmp_path / "full_flash.bin"
-    dump.write_bytes(b"\x00" * 1024)
-    yaml_text = MIKO_RULES + f"backups:\n  - {dump}\n"
-    out = compiled(tmp_path, yaml_text)
+    out = compiled(tmp_path, MIKO_RULES + _miko_target(tmp_path))
     # wq#1006: research gate now precedes the flash/backup path — satisfy it so
     # this test keeps proving the backup->AMBER downgrade in isolation.
     research = tmp_path / "proj" / "research"
@@ -885,10 +900,7 @@ def test_flash_class_red_without_backup(tmp_path, cmd):
 
 
 def test_flash_class_ambers_with_local_backup(tmp_path):
-    dump = tmp_path / "full_flash.bin"
-    dump.write_bytes(b"\x00" * 1024)
-    yaml_text = MIKO_RULES + f"backups:\n  - {dump}\n"
-    out = compiled(tmp_path, yaml_text)
+    out = compiled(tmp_path, MIKO_RULES + _miko_target(tmp_path))
     research = tmp_path / "proj" / "research"
     research.mkdir(parents=True, exist_ok=True)
     (research / "PRIOR_ART.md").write_text("## finding\nprior art on file\n")
@@ -897,6 +909,213 @@ def test_flash_class_ambers_with_local_backup(tmp_path):
                      {ag.GATE_RULES_ENV: out, ag.SNAPDIR_ENV: str(snapdir),
                       "FOREMAN_EVENTS_DIR": str(tmp_path)})
     assert rc == 0, "verified local backup should downgrade flasher write to AMBER"
+
+
+# ---------------- wq#4751: per-target hardware evidence manifest ----------------
+# gap-analysis.md §2(b): on a hardware_class project a write-class action needs a
+# declared target whose recovery image hashes to its declared sha256 at hook time;
+# a bare non-empty backup file no longer opens the gate there.
+
+def _hw_env(tmp_path, out):
+    research = tmp_path / "proj" / "research"
+    research.mkdir(parents=True, exist_ok=True)
+    (research / "PRIOR_ART.md").write_text("## finding\nprior art on file\n")
+    return {ag.GATE_RULES_ENV: out, ag.SNAPDIR_ENV: str(tmp_path / "snaps"),
+            ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)}
+
+
+FLASH_CMD = "esptool.py write_flash 0x0 firmware.bin"
+
+
+def test_hw_bare_backup_no_longer_opens_write(tmp_path):
+    dump = tmp_path / "full_flash.bin"
+    dump.write_bytes(b"\x00" * 1024)
+    out = compiled(tmp_path, MIKO_RULES + f"backups:\n  - {dump}\n")
+    rc, err = run_hook(bash_payload(FLASH_CMD), _hw_env(tmp_path, out))
+    assert rc == 2
+    assert "no target manifest is declared" in err
+
+
+def test_hw_recovery_sha_mismatch_blocks(tmp_path):
+    out = compiled(tmp_path, MIKO_RULES + _miko_target(tmp_path, sha="ab" * 32))
+    rc, err = run_hook(bash_payload(FLASH_CMD), _hw_env(tmp_path, out))
+    assert rc == 2
+    assert "does not match declared" in err
+
+
+def test_hw_recovery_image_changed_after_declaration_blocks(tmp_path):
+    out = compiled(tmp_path, MIKO_RULES + _miko_target(tmp_path))
+    (tmp_path / "full_flash.bin").write_bytes(b"\xff" * 1024)   # swapped/corrupted
+    rc, err = run_hook(bash_payload(FLASH_CMD), _hw_env(tmp_path, out))
+    assert rc == 2
+    assert "does not match declared" in err
+
+
+def test_hw_recovery_image_missing_blocks(tmp_path):
+    out = compiled(tmp_path, MIKO_RULES + _miko_target(tmp_path))
+    (tmp_path / "full_flash.bin").unlink()
+    rc, err = run_hook(bash_payload(FLASH_CMD), _hw_env(tmp_path, out))
+    assert rc == 2
+    assert "not a file on local disk" in err
+
+
+def test_hw_incomplete_manifest_blocks(tmp_path):
+    text = _miko_target(tmp_path).replace(
+        "    datasheet: https://example.invalid/miko3-soc.pdf\n", "")
+    out = compiled(tmp_path, MIKO_RULES + text)
+    rc, err = run_hook(bash_payload(FLASH_CMD), _hw_env(tmp_path, out))
+    assert rc == 2
+    assert "missing datasheet" in err
+
+
+def test_hw_flash_layout_path_must_exist(tmp_path):
+    out = compiled(tmp_path, MIKO_RULES + _miko_target(tmp_path))
+    (tmp_path / "layout.txt").unlink()
+    rc, err = run_hook(bash_payload(FLASH_CMD), _hw_env(tmp_path, out))
+    assert rc == 2
+    assert "flash_layout" in err
+
+
+def test_hw_backup_required_token_needs_manifest(tmp_path):
+    out = compiled(tmp_path)
+    rc, err = run_hook(bash_payload("adb push /system/framework.jar /system/"),
+                       _hw_env(tmp_path, out))
+    assert rc == 2
+    assert "target evidence" in err
+
+
+def test_hw_multi_target_match_selects(tmp_path):
+    other = tmp_path / "esp.bin"
+    other.write_bytes(b"esp")
+    extra = ("  - id: esp32-devkit\n"
+             "    match: ['--port /dev/ttyUSB1']\n"
+             "    datasheet: https://example.invalid/esp32.pdf\n"
+             "    flash_layout: https://example.invalid/partitions.csv\n"
+             f"    recovery_image: {other}\n"
+             f"    recovery_sha256: {hashlib.sha256(b'esp').hexdigest()}\n")
+    text = _miko_target(tmp_path, extra=extra).replace(
+        "  - id: miko3-board\n", "  - id: miko3-board\n    match: ['--port /dev/ttyUSB0']\n")
+    out = compiled(tmp_path, MIKO_RULES + text)
+    env = _hw_env(tmp_path, out)
+    rc, _ = run_hook(bash_payload("esptool.py --port /dev/ttyUSB1 write_flash 0x0 a.bin"), env)
+    assert rc == 0
+    rc, err = run_hook(bash_payload("esptool.py --port /dev/ttyUSB7 write_flash 0x0 a.bin"), env)
+    assert rc == 2
+    assert "names none of the declared targets" in err
+
+
+def test_non_hw_backup_sha256_entry_verified(tmp_path):
+    dump = tmp_path / "dump.bin"
+    dump.write_bytes(b"dump")
+    good = hashlib.sha256(b"dump").hexdigest()
+    env = {ag.SNAPDIR_ENV: str(tmp_path / "snaps"), ag.HANDOFF_ENV: str(tmp_path),
+           "FOREMAN_EVENTS_DIR": str(tmp_path)}
+    out = compiled(tmp_path, f"project: plain\nbackups:\n  - path: {dump}\n    sha256: {good}\n")
+    rc, _ = run_hook(bash_payload(FLASH_CMD), dict(env, **{ag.GATE_RULES_ENV: out}))
+    assert rc == 0
+    out = compiled(tmp_path, f"project: plain\nbackups:\n  - path: {dump}\n    sha256: {'0' * 64}\n")
+    rc, _ = run_hook(bash_payload(FLASH_CMD), dict(env, **{ag.GATE_RULES_ENV: out}))
+    assert rc == 2
+
+
+PROTECTED_RED = [
+    "rm full_flash.bin",
+    "rm -f {d}/full_flash.bin",
+    "mv full_flash.bin old.bin",
+    "cp new.bin full_flash.bin",
+    "echo x > full_flash.bin",
+    "truncate -s 0 {d}/full_flash.bin",
+    "sed -i s/a/b/ full_flash.bin",
+    "esptool.py read_flash 0 0x400000 full_flash.bin",
+    "flashrom -p ch341a_spi -r {d}/full_flash.bin",
+    "avrdude -c usbasp -p m328p -U flash:r:full_flash.bin:r",
+    "rm -rf {d}/dumps",
+    "cp new.bin {d}/dumps/known.bin",
+]
+
+PROTECTED_GREEN = [
+    "sha256sum full_flash.bin",
+    "xxd full_flash.bin | head",
+    "cp full_flash.bin /tmp/copy.bin",
+    "esptool.py read_flash 0 0x400000 fresh-read.bin",
+]
+
+
+def _protected_rules(tmp_path):
+    (tmp_path / "dumps").mkdir(exist_ok=True)
+    return compiled(tmp_path, MIKO_RULES + _miko_target(
+        tmp_path, extra=f"    known_good_dumps: [{tmp_path / 'dumps'}]\n"))
+
+
+@pytest.mark.parametrize("cmd", PROTECTED_RED)
+def test_known_good_dump_write_protected(tmp_path, cmd):
+    out = _protected_rules(tmp_path)
+    rc, err = run_hook(bash_payload(cmd.format(d=tmp_path), cwd=str(tmp_path)),
+                       _hw_env(tmp_path, out))
+    assert rc == 2, cmd
+    assert "write-protected" in err
+
+
+@pytest.mark.parametrize("cmd", PROTECTED_GREEN)
+def test_known_good_dump_reads_pass(tmp_path, cmd):
+    out = _protected_rules(tmp_path)
+    rules = json.load(open(out))
+    assert ag._protected_mutation(cmd, rules, str(tmp_path)) is None, cmd
+
+
+def test_flash_from_recovery_image_allowed(tmp_path):
+    out = _protected_rules(tmp_path)
+    rc, err = run_hook(bash_payload("esptool.py write_flash 0x0 full_flash.bin",
+                                    cwd=str(tmp_path)), _hw_env(tmp_path, out))
+    assert rc == 0, err
+
+
+def test_known_good_dump_file_tool_protected(tmp_path):
+    out = _protected_rules(tmp_path)
+    env = _hw_env(tmp_path, out)
+    for path in (tmp_path / "full_flash.bin", tmp_path / "dumps" / "x.bin"):
+        rc, err = run_hook({"tool_name": "Write", "tool_input": {"file_path": str(path)}}, env)
+        assert rc == 2 and "write-protected" in err
+    rc, _ = run_hook({"tool_name": "Write",
+                      "tool_input": {"file_path": str(tmp_path / "notes.md")}}, env)
+    assert rc == 0
+
+
+def test_hw_registry_applies_by_repo_root(tmp_path, monkeypatch):
+    reg = tmp_path / "hw_rules"
+    reg.mkdir()
+    repo = tmp_path / "re"
+    (repo / "esp32").mkdir(parents=True)
+    (reg / "re.yaml").write_text(f"repos: [{repo}]\nproject: re\nhardware_class: x\n"
+                                 "rules:\n  - phase_gates: [research]\n")
+    monkeypatch.setattr(ag, "HW_RULES_DIR", str(reg))
+    out = ag.compile_rules([str(repo / "esp32")], str(tmp_path / "o.json"))
+    data = json.load(open(out))
+    assert data["hardware_class"] == "x"
+    assert str(repo / "esp32" / "research" / "PRIOR_ART.md") in data["prior_art_paths"]
+    other = tmp_path / "rest"
+    other.mkdir()
+    assert ag.compile_rules([str(other)], str(tmp_path / "o2.json")) is None
+
+
+@pytest.mark.parametrize("repo,project", [
+    ("/home/lumen/projects/limpet", "limpet"),
+    ("/home/lumen/re/esp32-sandbox", "re"),
+    ("/home/lumen/re", "re"),
+])
+def test_shipped_hw_rules_cover_re_repos(tmp_path, repo, project):
+    """The committed harness/hw_rules files arm the research gate and the
+    manifest requirement for the Limpet/Telpo/ESP32 repos, fail-closed."""
+    data = json.load(open(ag.compile_rules([repo], str(tmp_path / "o.json"))))
+    assert data["project"] == project and data["hardware_class"]
+    assert ag._research_gate_required(data)
+    assert ag._hw_write_evidence(FLASH_CMD, data)[0] is None
+
+
+@pytest.mark.parametrize("repo", ["/home/lumen/foreman", "/home/lumen/projects/limpetx",
+                                  "/home/lumen/reverse"])
+def test_shipped_hw_rules_leave_other_repos_alone(tmp_path, repo):
+    assert ag._hw_registry_sources([repo]) == []
 
 
 def test_builtins_never_weakened_by_project_rules(tmp_path):

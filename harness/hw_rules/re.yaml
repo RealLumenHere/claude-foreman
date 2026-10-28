@@ -1,0 +1,27 @@
+# Hardware rules for the reverse-engineering tree (wq#4751, gap-analysis
+# §2(b)/T3): the Telpo (Rockchip RK3399, rkdeveloptool/upgrade_tool) and ESP32
+# (esptool/espefuse) work lives under /home/lumen/re. Schema and gate behavior:
+# see limpet.yaml in this directory.
+#
+# No target here has a captured, hashed recovery image yet, so `targets` is
+# empty and every write-class hardware action stays RED until a manifest is
+# added by PR. espefuse burn stays unconditional RED whatever is declared.
+#
+# Example target shape (paths are placeholders, not real files; fill from the
+# real board and never invent the hash):
+#   - id: telpo-rk3399
+#     match: ['telpo', 'rk3399']
+#     datasheet: /home/lumen/re/telpo/docs/RK3399-datasheet.pdf
+#     flash_layout: /home/lumen/re/telpo/docs/parameter.txt
+#     recovery_image: /home/lumen/re/telpo/dumps/emmc-full.img
+#     recovery_sha256: <sha256sum of emmc-full.img>
+#     known_good_dumps: [/home/lumen/re/telpo/dumps/]
+repos:
+  - /home/lumen/re
+project: re
+hardware_class: brickable-soc-and-mcu
+rules:
+  - NEVER write or erase a target's flash without a declared target manifest whose recovery image verifies
+  - NEVER overwrite a known-good dump; take new reads into a new file
+  - phase_gates: [research]
+targets: []

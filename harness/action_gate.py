@@ -23,6 +23,7 @@ AMBER snapshot BLOCKS (executing without the snapshot violates the invariant —
 the Miko class is exactly "destructive action with no pre-image on disk").
 """
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -43,6 +44,12 @@ HANDOFF_ENV = "FOREMAN_GATE_HANDOFF_DIR"
 EVENTS_DIR = os.environ.get("FOREMAN_EVENTS_DIR", "/home/lumen/foreman/events")
 WORKER_ID = os.environ.get("FOREMAN_WORKER", "unknown")
 RULES_BASENAME = ".fworker-rules.yaml"
+# wq#4751: fleet-side hardware rules for repos this harness cannot commit a
+# rules file into (Limpet, /home/lumen/re). Each YAML lists the repo roots it
+# covers under `repos:`; read from the harness checkout fworker imports, so a
+# worktree edit takes effect only once it lands.
+HW_RULES_DIR = os.environ.get("FOREMAN_HW_RULES_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "hw_rules")
 SNAP_FILE_CAP = 64 * 1024 * 1024      # per-file copy cap
 # wq#4599: a credential pre-image is registered with an expiry so it cannot outlive the rollback it exists for
 # (secret-backup-sweep shreds it once every value in it is provably dead). Off when a non-default vault is set,
@@ -370,8 +377,47 @@ def _red_rm_rf(target):
     return None
 
 
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+_SHA256_HEX = re.compile(r'^[0-9a-f]{64}$')
+
+
+def _sha256_matches(path, declared):
+    """None when path is a regular file whose sha256 equals declared, else why not.
+    Hashed live on every call, never cached: a cache would sit in a run dir the
+    worker can write, and one forged entry would vouch for a garbage image."""
+    declared = str(declared or "").strip().lower()
+    if not _SHA256_HEX.match(declared):
+        return f"declared sha256 for {path} is not 64 hex chars"
+    try:
+        if not os.path.isfile(path):
+            return f"{path} is not a file on local disk"
+        actual = _sha256_file(path)
+    except OSError as e:
+        return f"{path} unreadable ({e.strerror})"
+    if actual != declared:
+        return f"{path} sha256 {actual[:12]}... does not match declared {declared[:12]}..."
+    return None
+
+
 def _local_backup_ok(rules):
-    for p in rules.get("backups", []):
+    """A declared backup that verifies. {path, sha256} entries must hash to the
+    declared value (wq#4751); bare-string entries keep the legacy non-empty test
+    and are only honored for projects without hardware_class (those go through
+    _hw_write_evidence instead)."""
+    for entry in rules.get("backups", []):
+        if isinstance(entry, dict):
+            p = str(entry.get("path") or "")
+            if p and _sha256_matches(p, entry.get("sha256")) is None:
+                return f"{p} (sha256 verified)"
+            continue
+        p = entry
         try:
             if os.path.isfile(p) and os.path.getsize(p) > 0:
                 return p
@@ -379,6 +425,188 @@ def _local_backup_ok(rules):
                 return p
         except OSError:
             continue
+    return None
+
+
+# --------------------------------------------------------------------------
+# wq#4751 (gap-analysis §2(b), T3) — per-target hardware evidence manifest.
+# On a hardware_class project a write-class action (BUILTIN_FLASH or a
+# backup_required_before token) needs a declared target whose manifest names
+# the datasheet, the flash layout / memory map and a recovery image, and the
+# recovery image must hash to its declared sha256 at hook time. A bare
+# non-empty backup file no longer opens a write there. Declared recovery
+# images and known-good dumps are write-protected (_protected_mutation).
+# --------------------------------------------------------------------------
+
+TARGET_REQUIRED = ("id", "datasheet", "flash_layout", "recovery_image", "recovery_sha256")
+
+
+def _select_target(cmd, rules):
+    """(target, None) or (None, why). A target with `match` regexes claims the
+    commands they hit; a lone target without `match` claims every command."""
+    targets = rules.get("targets") or []
+    hits = [t for t in targets
+            if any(re.search(p, cmd, re.IGNORECASE) for p in t.get("match") or [])]
+    if len(hits) == 1:
+        return hits[0], None
+    if len(hits) > 1:
+        ids = ", ".join(str(t.get("id")) for t in hits)
+        return None, f"command matches more than one declared target ({ids})"
+    if len(targets) == 1 and not targets[0].get("match"):
+        return targets[0], None
+    if not targets:
+        return None, "no target manifest is declared for this project"
+    return None, "command names none of the declared targets (no `match` hit)"
+
+
+def _target_evidence(target):
+    """(summary, None) when the manifest is complete and verifies, else (None, why)."""
+    tid = target.get("id") or "<no id>"
+    missing = [k for k in TARGET_REQUIRED if not str(target.get(k) or "").strip()]
+    if missing:
+        return None, f"target manifest '{tid}' is missing {', '.join(missing)}"
+    for key in ("datasheet", "flash_layout"):
+        ref = str(target[key])
+        if ref.startswith("/"):
+            try:
+                if not (os.path.isfile(ref) and os.path.getsize(ref) > 0):
+                    return None, f"target '{tid}' {key} {ref} is missing or empty"
+            except OSError:
+                return None, f"target '{tid}' {key} {ref} is unreadable"
+    bad = _sha256_matches(str(target["recovery_image"]), target["recovery_sha256"])
+    if bad:
+        return None, f"target '{tid}' recovery image: {bad}"
+    return f"target '{tid}', recovery image {target['recovery_image']} sha256 verified", None
+
+
+def _hw_write_evidence(cmd, rules):
+    target, why = _select_target(cmd, rules)
+    if target is None:
+        return None, why
+    return _target_evidence(target)
+
+
+def _hw_write_reason(label, why):
+    return (f"{label} on hardware_class project without verified target evidence: "
+            f"{why}. Declare the target (id, datasheet, flash_layout, "
+            f"recovery_image, recovery_sha256) in the project's hardware rules "
+            f"(harness/hw_rules/ or .fworker-rules.yaml `targets:`) and keep the "
+            f"recovery image on local disk (wq#4751)")
+
+
+# Write-protection for declared recovery images and known-good dumps. Loose
+# token matching like the rest of the gate: a path argument counts if it
+# resolves to a protected path, sits under a protected dir, or has a protected
+# file's basename. Reads (sha256sum, xxd, cp FROM it, flashing FROM it) pass.
+_PROTECT_DESTROY = frozenset({"rm", "unlink", "shred", "truncate", "touch", "chmod",
+                              "chown", "ln", "mv", "tee", "sponge"})
+_PROTECT_COPY = frozenset({"cp", "install", "rsync"})
+_PROTECT_WRAPPERS = frozenset({"sudo", "env", "nice", "ionice", "nohup", "command", "exec"})
+# Flasher verbs that READ the device INTO a local file: aimed at a protected
+# path they overwrite the known-good dump with whatever the device holds now.
+_READ_INTO_FILE = [
+    r'\besptool(\.py)?\b.*\bread_flash\b',
+    r'\bflashrom\b.*\s(-r|--read)\b',
+    r'\bst-flash\b.*\bread\b',
+    r'\bstm32flash\b.*\s-r\b',
+    r'\bavrdude\b.*-U\s*\S*:r:',
+    r'\bdfu-util\b.*(\s-U\b|--upload\b)',
+    r'\b(rkdeveloptool|upgrade_tool)\b.*\brl\b',
+    r'\b(mtk(\.py)?|edl(\.py)?)\s.*\s(r|rl|rf|rs)\s',
+    r'\b(sunxi-fel|xfel)\b.*\b(read|spiflash-read)\b',
+    r'\bnanddump\b',
+    r'\bmtd_debug\b.*\bread\b',
+    r'\badb\b.*\bpull\b',
+    r'\bopenocd\b.*\bdump_image\b',
+]
+
+
+def _shell_segments(cmd):
+    """[(words, redirect_targets)] per simple command; quote-aware via shlex,
+    whitespace split if the quoting does not parse."""
+    import shlex
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        toks = list(lex)
+    except ValueError:
+        toks = cmd.split()
+    segs, words, redirs, i = [], [], [], 0
+    while i < len(toks):
+        t = toks[i]
+        if t and set(t) <= set(";|&()"):
+            segs.append((words, redirs)); words, redirs = [], []
+        elif t and set(t) <= set("<>&|") and ">" in t:
+            if i + 1 < len(toks):
+                redirs.append(toks[i + 1]); i += 1
+        else:
+            words.append(t)
+        i += 1
+    segs.append((words, redirs))
+    return segs
+
+
+def _path_candidates(word):
+    """A word plus the paths embedded in it (of=X, --out=X, flash:r:X:i)."""
+    out = [word]
+    for sep in ("=", ":"):
+        out += [p for p in word.split(sep) if p and p != word]
+    return out
+
+
+def _protected_hit(word, protected, cwd):
+    for cand in _path_candidates(word):
+        rp = os.path.realpath(os.path.join(cwd, os.path.expanduser(cand)))
+        base = os.path.basename(cand.rstrip("/"))
+        for p in protected:
+            if rp == p or rp.startswith(p.rstrip("/") + "/"):
+                return p
+            if base and not os.path.isdir(p) and base == os.path.basename(p):
+                return p
+    return None
+
+
+def _protected_mutation(cmd, rules, cwd=None):
+    """The protected path a Bash command would overwrite or remove, else None."""
+    protected = [os.path.realpath(p) for p in rules.get("protected_paths") or []]
+    if not protected:
+        return None
+    cwd = cwd or os.getcwd()
+    for words, redirs in _shell_segments(cmd):
+        for r in redirs:
+            hit = _protected_hit(r, protected, cwd)
+            if hit:
+                return hit
+        while words and (words[0] in _PROTECT_WRAPPERS or re.match(r'^\w+=', words[0])):
+            words = words[1:]
+        if not words:
+            continue
+        verb = os.path.basename(words[0])
+        args = [w for w in words[1:] if not w.startswith("-") or "=" in w]
+        if verb == "sed" and not any(w.startswith("-i") or w == "--in-place"
+                                     for w in words[1:]):
+            continue
+        if verb in _PROTECT_DESTROY or verb == "sed":
+            scan = args
+        elif verb in _PROTECT_COPY:
+            scan = args[-1:]
+        elif any(re.search(p, " ".join(words), re.IGNORECASE) for p in _READ_INTO_FILE):
+            scan = words[1:]
+        else:
+            continue
+        for w in scan:
+            hit = _protected_hit(w, protected, cwd)
+            if hit:
+                return hit
+    return None
+
+
+def _protected_file(file_path, rules):
+    rp = os.path.realpath(file_path)
+    for p in rules.get("protected_paths") or []:
+        p = os.path.realpath(p)
+        if rp == p or rp.startswith(p.rstrip("/") + "/"):
+            return p
     return None
 
 
@@ -392,6 +620,28 @@ def _load_yaml(path):
         return yaml.safe_load(f) or {}
 
 
+def _hw_registry_sources(project_dirs, registry=None):
+    """[(registry yaml, matched project dir)] for every HW_RULES_DIR file whose
+    `repos:` holds a root that one of project_dirs is, or sits under."""
+    registry = registry or HW_RULES_DIR
+    try:
+        names = sorted(n for n in os.listdir(registry) if n.endswith((".yaml", ".yml")))
+    except OSError:
+        return []
+    out = []
+    for n in names:
+        p = os.path.join(registry, n)
+        roots = [os.path.realpath(str(r)) for r in (_load_yaml(p).get("repos") or [])]
+        for d in project_dirs:
+            if not d:
+                continue
+            rd = os.path.realpath(d)
+            if any(rd == r or rd.startswith(r.rstrip("/") + "/") for r in roots):
+                out.append((p, d))
+                break
+    return out
+
+
 def compile_rules(project_dirs, out_path):
     """Read .fworker-rules.yaml from each candidate dir (repo root, worktree
     root), merge additively, write compiled JSON to out_path (fworker-owned,
@@ -399,22 +649,28 @@ def compile_rules(project_dirs, out_path):
     (hook then runs builtins-only). Accepts the design doc's schema: `rules`
     may mix prose strings and {backup_required_before: [...]} /
     {phase_gates: [...]} dicts; structured red_patterns/amber_patterns/backups
-    top-level keys are also honored."""
+    top-level keys are also honored. wq#4751: HW_RULES_DIR files whose
+    `repos:` covers a project dir merge in the same way, and `targets:` (the
+    per-target evidence manifest) plus `protected_paths:` are compiled too."""
     compiled = {"project": None, "hardware_class": None, "prose_rules": [],
                 "context": [], "red_patterns": [], "amber_patterns": [],
                 "backup_required_before": [], "backups": [], "source_files": [],
-                "phase_gates": [], "prior_art_paths": []}
+                "phase_gates": [], "prior_art_paths": [], "targets": [],
+                "protected_paths": []}
     seen = set()
+    sources = []          # (rules file, dir whose research/ holds PRIOR_ART.md)
     for d in project_dirs:
-        if not d:
-            continue
-        p = os.path.join(d, RULES_BASENAME)
+        if d:
+            sources.append((os.path.join(d, RULES_BASENAME), d))
+    sources += _hw_registry_sources(project_dirs)
+    for p, d in sources:
         rp = os.path.realpath(p)
         if rp in seen or not os.path.isfile(p):
             continue
         seen.add(rp)
         data = _load_yaml(p)
         compiled["source_files"].append(p)
+        compiled.setdefault("_research_dirs", []).append(d)
         compiled["project"] = compiled["project"] or data.get("project")
         compiled["hardware_class"] = compiled["hardware_class"] or data.get("hardware_class")
         for item in data.get("rules", []) or []:
@@ -442,9 +698,21 @@ def compile_rules(project_dirs, out_path):
                 if entry["pattern"]:
                     re.compile(entry["pattern"])  # fail loudly at compile time, not hook time
                     compiled[key].append(entry)
-        compiled["backups"] += [str(b) for b in (data.get("backups") or [])]
+        compiled["backups"] += [b if isinstance(b, dict) else str(b)
+                                for b in (data.get("backups") or [])]
+        for t in data.get("targets") or []:
+            if not isinstance(t, dict):
+                raise ValueError(f"{p}: targets entries must be mappings, got {t!r}")
+            for pat in t.get("match") or []:
+                re.compile(pat)
+            compiled["targets"].append(t)
+            compiled["protected_paths"] += [str(x) for x in
+                                            [t.get("recovery_image")] + list(t.get("known_good_dumps") or [])
+                                            if x]
+        compiled["protected_paths"] += [str(x) for x in (data.get("protected_paths") or [])]
     if not compiled["source_files"]:
         return None
+    research_dirs = compiled.pop("_research_dirs")
     # wq#1006: candidate PRIOR_ART.md locations, checked LIVE at hook time (so
     # fleet-search run mid-session opens the gate without a recompile).
     # Canonical projects/<name>/research/ first — that is where fleet-search
@@ -453,8 +721,8 @@ def compile_rules(project_dirs, out_path):
     if compiled["project"]:
         pa.append(os.path.join("/home/lumen/projects", str(compiled["project"]),
                                "research", "PRIOR_ART.md"))
-    for src in compiled["source_files"]:
-        pa.append(os.path.join(os.path.dirname(src), "research", "PRIOR_ART.md"))
+    for d in research_dirs:
+        pa.append(os.path.join(d, "research", "PRIOR_ART.md"))
     for p in pa:
         rp = os.path.realpath(p)
         if rp not in pa_seen:
@@ -478,7 +746,7 @@ def load_compiled_rules():
 # Layer 1 — classification
 # --------------------------------------------------------------------------
 
-def classify_bash(cmd, rules):
+def classify_bash(cmd, rules, cwd=None):
     """Returns (verdict, reason, snap, hw_floor). verdict in RED|AMBER|GREEN.
     snap = (kind, cmd) for AMBER. RED checked first; project rules additive.
 
@@ -488,7 +756,9 @@ def classify_bash(cmd, rules):
     tamper), the future hardware write/erase/fuse class (T1, wq#4746 --
     tag any new table entry there the same way once it lands), or a
     hardware_class project rule (red_patterns/backup_required_before on a
-    project whose compiled rules set hardware_class). False for every
+    project whose compiled rules set hardware_class), a write-class action
+    lacking verified target evidence, or a mutation of a declared recovery
+    image / known-good dump (wq#4751). False for every
     other RED, including the general destructive BUILTIN_RED table and
     plain gate-tamper -- those stay judge-eligible as before."""
     targets = (cmd, _norm(cmd))
@@ -510,6 +780,10 @@ def classify_bash(cmd, rules):
         # gate-tamper: any mutation touching a rules file is RED
         if RULES_BASENAME.rsplit(".", 1)[0] in target and _MUTATION_MARKERS.search(target):
             return "RED", "mutation of .fworker-rules.yaml (gate tamper)", None, False
+        prot = _protected_mutation(target, rules, cwd)
+        if prot:
+            return ("RED", f"mutation of declared recovery image / known-good dump "
+                    f"{prot} (write-protected, wq#4751)", None, True)
         for entry in rules.get("red_patterns", []):
             if re.search(entry["pattern"], target, re.IGNORECASE):
                 return "RED", entry["reason"], None, hw_class
@@ -527,12 +801,22 @@ def classify_bash(cmd, rules):
         # flash class: RED unless a declared LOCAL backup verifies
         for pat, reason in BUILTIN_FLASH:
             if re.search(pat, target, re.IGNORECASE):
+                if hw_class:
+                    ok, why = _hw_write_evidence(target, rules)
+                    if ok:
+                        return "AMBER", f"{reason} ({ok})", ("note", cmd), False
+                    return "RED", _hw_write_reason(reason, why), None, True
                 b = _local_backup_ok(rules)
                 if b:
                     return "AMBER", f"{reason} (verified local backup: {b})", ("note", cmd), False
                 return "RED", f"{reason} without a verified local backup on disk", None, True
         for tok in rules.get("backup_required_before", []):
             if re.search(r'(^|[\s;|&/])' + re.escape(tok), target, re.IGNORECASE):
+                if hw_class:
+                    ok, why = _hw_write_evidence(target, rules)
+                    if ok:
+                        return "AMBER", f"'{tok}' ({ok})", ("note", cmd), False
+                    return "RED", _hw_write_reason(f"project rule '{tok}'", why), None, True
                 b = _local_backup_ok(rules)
                 if b:
                     return "AMBER", f"'{tok}' with verified local backup {b}", ("note", cmd), False
@@ -561,6 +845,10 @@ def classify_file_tool(tool_name, file_path, rules):
     if base == "PRIOR_ART.md" and _research_gate_required(rules):
         return ("RED", "write/edit of PRIOR_ART.md (research gate tamper — "
                 "run fleet-search instead)", None, True)
+    prot = _protected_file(file_path, rules)
+    if prot:
+        return ("RED", f"{tool_name} of declared recovery image / known-good dump "
+                f"{prot} (write-protected, wq#4751)", None, True)
     if re.match(r'^/(etc|boot|usr|dev)(/|$)', os.path.realpath(file_path)):
         return "RED", f"{tool_name} into system path {file_path}", None, False
     for entry in rules.get("red_patterns", []):
@@ -1191,7 +1479,7 @@ def hook_main():
             if not cmd:
                 print("action_gate: Bash with no command — fail-closed", file=sys.stderr)
                 return 2
-            verdict, reason, snap, hw_floor = classify_bash(cmd, rules)
+            verdict, reason, snap, hw_floor = classify_bash(cmd, rules, cwd)
             detail = cmd
         elif tool_name in ("Edit", "Write"):
             verdict, reason, snap, hw_floor = classify_file_tool(
