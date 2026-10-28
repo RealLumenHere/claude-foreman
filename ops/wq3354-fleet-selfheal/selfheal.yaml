@@ -148,7 +148,18 @@ nodes:                  # CLASS 6
        bar (meant to be off for good) or sleepers' bar (self-idle nap that must stay reachable
        when up). Leaving this as a live page, not nodes.ignore/sleepers: a second occurrence
        with no Frank RE-session explanation would be the evidence to revisit, same precedent
-       be3600 and maksoor were classified under."
+       be3600 and maksoor were classified under.
+      wq#4775 (2026-10-28, LastSeen 16:00Z): SECOND occurrence -- it was back on the tailnet
+       between the two pages (sh_nodes drops a node's outage state when it reappears, and
+       LastSeen is today), so this is intermittent, not a permanent break. Dark on LAN too,
+       not just tailscale: from lumen, TCP to 192.168.8.204:22/8443 gets EHOSTUNREACH (no
+       ARP reply) while gateway 192.168.8.1:80 answers, so the router is unpowered,
+       unplugged or off the LAN -- not a tailscaled-only fault like be3600's. No smart plug
+       and no fleet-exec grant (DENY grant:grant_missing_env), so nothing remote can fix it.
+       Still not ignore/sleepers: no fact says it is meant to be off and it has no idle
+       timer. The physical check (is it powered, and does Frank power it down between RE
+       sessions?) is queued as wq#4776 [frank-hw]. If Frank says it is a bench device he
+       powers down by hand, it moves to nodes.ignore the way maksoor did."
     sia: "wq#4437: offline on tailscale since 2026-10-20T02:20:00Z (30+ min). lumen_state's
        sia.status='HEALTHY' (docker containers up 12h+, Miniflux news pipeline + PG17) and
        sia.provision_status='COMPLETE' are both dated 2026-07-10/11 -- over 3 months stale,
