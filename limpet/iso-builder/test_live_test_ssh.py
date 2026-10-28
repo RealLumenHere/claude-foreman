@@ -22,6 +22,8 @@ import os, shutil, sys
 st = os.environ["FAKE_STATE"]; a = sys.argv[1:]
 open(os.environ["FAKE_LOG"], "a").write("mount " + " ".join(a) + "\n")
 target = a[-1]
+if a[0].startswith("--make-"):
+    sys.exit(0)
 if os.environ.get("FAKE_MOUNT_FAIL") and "overlay" in a:
     sys.exit(32)
 if "overlay" in a:
@@ -67,6 +69,9 @@ sys.exit(0 if t in lines else 1)
 
 FAKE_CHROOT = '#!/usr/bin/env bash\nshift\nexec "$@"\n'
 
+# wq#4771: the live chroot's /dev is its own tmpfs populated by mknod (non-root: EPERM).
+FAKE_MKNOD = '#!/usr/bin/env bash\necho "mknod $*" >>"$FAKE_LOG"\n: >"$3"\n'
+
 FAKE_APT = r"""#!/usr/bin/env bash
 echo "apt-get $*" >>"$FAKE_LOG"
 [ -n "${FAKE_APT_FAIL:-}" ] && exit 100
@@ -100,7 +105,8 @@ os.symlink("/usr/lib/systemd/system/ssh.service", d + "/ssh.service")
 def _prepare(tmp_path, *, ssh_pubkey="__unset__", extra_env=None, layer="minimal.standard", strip_archive_source=False, **setup_kw):
     bin_dir, fix, casper, changes, work = _setup(tmp_path, base=BASE, live=LIVE, modified=MOD, **setup_kw)
     for name, body in (("mount", FAKE_MOUNT), ("umount", FAKE_UMOUNT), ("mountpoint", FAKE_MOUNTPOINT),
-                       ("chroot", FAKE_CHROOT), ("apt-get", FAKE_APT), ("systemctl", FAKE_SYSTEMCTL)):
+                       ("chroot", FAKE_CHROOT), ("apt-get", FAKE_APT), ("systemctl", FAKE_SYSTEMCTL),
+                       ("mknod", FAKE_MKNOD)):
         _exec(bin_dir / name, body)
     for d in ("proc", "sys", "dev/pts", "run", "usr/sbin"):          # what the real lowers provide
         _write(fix / "minimal.standard.live" / d / ".keep", "")

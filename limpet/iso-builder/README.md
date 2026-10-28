@@ -18,10 +18,24 @@ reads the choice from the yaml; set `LIMPET_ISO_LAYER` to override it.
 
 - `stage1b_assemble_chroot` loop-mounts the parent layers read-only, unsquashes
   the target layer to `layers/upper/`, and mounts an overlayfs of the two at
-  `$CHROOT` (plus proc/sys/dev/dev/pts, a tmpfs `/run` holding the resolver,
-  and a `policy-rc.d`). Every later stage's writes, including purge whiteouts,
+  `$CHROOT` (plus proc/sys, a tmpfs `/run` holding the resolver, and a
+  `policy-rc.d`). Every later stage's writes, including purge whiteouts,
   land in `upper/`. livecd-rootfs `lb_binary_layered` builds the layers the
   same way.
+  The chroot's `/dev` is its own tmpfs with mknod'd null/zero/full/random/
+  urandom/tty and a `newinstance` devpts (`/dev/ptmx -> pts/ptmx`), and the
+  overlay is `--make-private` before any of it is mounted. Nothing from the
+  host's `/dev` is ever bind-mounted (wq#4771): the old `mount --bind /dev`
+  made `$CHROOT/dev` a peer of the host's `/dev` under shared propagation, the
+  teardown's unmount of `$CHROOT/dev/pts` took out the host's `/dev/pts`
+  (no PTYs on Lumen for 3 days), and a chown through `$CHROOT/dev` changed
+  the host's `/dev/ptmx`. Teardown refuses any path not strictly under
+  `WORKDIR`, `WORKDIR` itself can't be `/`, `/dev`, `/proc`, `/sys` or `/run`,
+  and `./build.sh all` re-executes itself under
+  `unshare --mount --propagation private` (root required), so every mount
+  of a full build lives and dies in its own mount namespace. Single stages
+  stay in the host namespace so stage1b's mounts outlive the invocation for
+  the next stage to resume from.
 - `stage11_build_hybrid_iso` regenerates `<layer>.manifest.full`, the delta
   `<layer>.manifest`, `<layer>.size` and the `install-sources.yaml` size the
   same way livecd-rootfs does. It then unmounts, packs `upper/` with the

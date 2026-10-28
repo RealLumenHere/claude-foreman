@@ -27,7 +27,14 @@ HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 LIMPET_ROOT="$(cd "$HERE/.." && pwd)"
 REPO_ROOT="$(cd "$LIMPET_ROOT/.." && pwd)"
 
-WORKDIR="${LIMPET_ISO_WORKDIR:-$HERE/.build}"
+# wq#4771: canonical, so findmnt's (canonical) TARGETs compare against it and the
+# teardown's "only ever under WORKDIR" guard can't be sidestepped by a relative or
+# symlinked override.
+WORKDIR="$(realpath -m -- "${LIMPET_ISO_WORKDIR:-$HERE/.build}")"
+case "$WORKDIR" in
+  / | /dev | /dev/* | /proc | /proc/* | /sys | /sys/* | /run | /run/*)
+    printf 'FAIL: LIMPET_ISO_WORKDIR=%s is a host system path -- the build mounts and unmounts under it (wq#4771)\n' "$WORKDIR" >&2; exit 1 ;;
+esac
 CHROOT="$WORKDIR/chroot"
 ISO_EXTRACT="$WORKDIR/iso-extract"
 # wq#4077: lower/<layer> mountpoints + the unsquashed target layer (upper/)
@@ -82,6 +89,13 @@ workdir_mounts() {
 
 _unmount_retry() {
   local m="$1" tries=0
+  # wq#4771: teardown only ever unmounts strictly below WORKDIR. A path outside it is
+  # a host mount (the 2026-10-25 teardown left Lumen with no /dev/pts for 3 days), so
+  # refuse loudly instead of umount -l'ing it five times.
+  case "$m" in
+    "$WORKDIR"/?*) ;;
+    *) log "teardown: refusing to unmount $m -- not under $WORKDIR (wq#4771)"; return 0 ;;
+  esac
   while mountpoint -q "$m" 2>/dev/null && [ "$tries" -lt 5 ]; do
     umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || true
     tries=$((tries + 1))
@@ -259,6 +273,32 @@ target_layer() {
   iso_layers target-layer --sources "$sources"
 }
 
+# wq#4771: the chroot's /dev is its own tmpfs with the handful of nodes a package
+# install needs, plus its own devpts instance -- never a bind of the host's /dev or
+# /dev/pts. The bind made $CHROOT/dev a peer of the host /dev under systemd's shared
+# propagation, so the teardown's umount of $CHROOT/dev/pts reached the host /dev/pts
+# (Lumen ran 3 days with no PTYs), and anything that chowned through $CHROOT/dev
+# changed the host's real nodes (/dev/ptmx found lumen:lumen). Same node set as
+# debootstrap's setup_devices_simple. $1 is the chroot root, already mounted private.
+populate_chroot_dev() {
+  local dev="$1/dev"
+  mount -t tmpfs -o mode=0755,nosuid tmpfs "$dev"
+  mknod -m 666 "$dev/null" c 1 3
+  mknod -m 666 "$dev/zero" c 1 5
+  mknod -m 666 "$dev/full" c 1 7
+  mknod -m 666 "$dev/random" c 1 8
+  mknod -m 666 "$dev/urandom" c 1 9
+  mknod -m 666 "$dev/tty" c 5 0
+  mkdir -p "$dev/pts" "$dev/shm"
+  chmod 1777 "$dev/shm"
+  mount -t devpts -o newinstance,ptmxmode=0666,mode=0620,gid=5,nosuid,noexec devpts "$dev/pts"
+  ln -sfn pts/ptmx "$dev/ptmx"
+  ln -sfn /proc/self/fd "$dev/fd"
+  ln -sfn /proc/self/fd/0 "$dev/stdin"
+  ln -sfn /proc/self/fd/1 "$dev/stdout"
+  ln -sfn /proc/self/fd/2 "$dev/stderr"
+}
+
 stage1b_assemble_chroot() {
   log "stage1b: assembling layered chroot"
   require_cmd python3
@@ -266,6 +306,7 @@ stage1b_assemble_chroot() {
   require_cmd mount
   require_cmd mountpoint
   require_cmd findmnt
+  require_cmd mknod
   # wq#4456: mount/unsquashfs/the proc+sys+dev bind-mounts below all require root; let
   # a missing sudo fail here with a clear message instead of a confusing mid-stage
   # "Operation not permitted" from whichever mount call happens to run first.
@@ -314,6 +355,9 @@ stage1b_assemble_chroot() {
   mkdir -p "$LAYERS_DIR/work" "$CHROOT"
   mount -t overlay overlay \
     -o "lowerdir=$lowers,upperdir=$LAYERS_DIR/upper,workdir=$LAYERS_DIR/work" "$CHROOT"
+  # wq#4771: private before anything is mounted beneath it, so every submount below is
+  # private too and no mount or unmount under the chroot propagates to any other mount.
+  mount --make-private "$CHROOT"
 
   # API filesystems for dpkg maintainer scripts. /run is a tmpfs so the
   # resolver copy below never enters the layer; the chroot's resolv.conf is
@@ -321,8 +365,7 @@ stage1b_assemble_chroot() {
   # is reachable from the chroot (same network namespace).
   mount -t proc proc "$CHROOT/proc"
   mount -t sysfs sysfs "$CHROOT/sys"
-  mount --bind /dev "$CHROOT/dev"
-  mount --bind /dev/pts "$CHROOT/dev/pts"
+  populate_chroot_dev "$CHROOT"
   mount -t tmpfs tmpfs "$CHROOT/run"
   mkdir -p "$CHROOT/run/systemd/resolve"
   cp -L /etc/resolv.conf "$CHROOT/run/systemd/resolve/stub-resolv.conf"
@@ -873,6 +916,7 @@ install_live_test_ssh() {
   require_cmd mountpoint
   require_cmd chroot
   require_cmd systemctl
+  require_cmd mknod
   local ov="$WORKDIR/live-chroot" work="$WORKDIR/live-work" lowers d rc
   local lower_paths=() ours=() m
   # Regenerable caches and logs that apt/dpkg hooks (man-db, appstream, apt itself) write during an
@@ -900,10 +944,10 @@ install_live_test_ssh() {
       mount -t squashfs -o loop,ro "$casper/$(basename "$d").squashfs" "$d"
     done
     mount -t overlay overlay -o "lowerdir=$LAYERS_DIR/upper:$lowers,upperdir=$lw,workdir=$work" "$ov"
+    mount --make-private "$ov"
     mount -t proc proc "$ov/proc"
     mount -t sysfs sysfs "$ov/sys"
-    mount --bind /dev "$ov/dev"
-    mount --bind /dev/pts "$ov/dev/pts"
+    populate_chroot_dev "$ov"
     mount -t tmpfs tmpfs "$ov/run"
     for m in "${masks[@]}"; do
       mkdir -p "$ov/$m"
@@ -1211,6 +1255,29 @@ Env:
 EOF
 }
 
+# wq#4771: a full build runs in its own mount namespace with private propagation, so
+# no mount or unmount it makes can reach the host's mount table, and the kernel drops
+# every build mount when the namespace's last process exits, whatever killed it.
+# Single stages stay in the host namespace on purpose: stage1b's mounts must outlive
+# the invocation for the next stage to resume from (see _teardown_on_exit).
+# Re-execs at most once: our namespace differing from PID 1's proves the isolation,
+# and LIMPET_ISO_MOUNT_NS breaks the loop if unshare somehow didn't provide it.
+enter_private_mount_ns() {
+  local ours init
+  ours="$(readlink /proc/self/ns/mnt 2>/dev/null || true)"
+  init="$(readlink /proc/1/ns/mnt 2>/dev/null || true)"
+  if [ -n "$ours" ] && [ -n "$init" ] && [ "$ours" != "$init" ]; then
+    log "all: running in private mount namespace $ours (wq#4771)"
+    return 0
+  fi
+  [ -z "${LIMPET_ISO_MOUNT_NS:-}" ] || fail "all: re-executed under unshare but still not in a private mount namespace (self=$ours init=$init)"
+  [ "$(id -u)" -eq 0 ] || fail "'all' must run as root (sudo -E $0 all) -- it re-executes itself under unshare -m so no build mount can reach the host (wq#4771)"
+  require_cmd unshare
+  log "all: re-executing under unshare --mount --propagation private (wq#4771)"
+  trap - EXIT INT TERM
+  exec env LIMPET_ISO_MOUNT_NS=1 unshare --mount --propagation private -- bash "$(readlink -f "${BASH_SOURCE[0]}")" "$@"
+}
+
 main() {
   local target="${1:-}"
   mkdir -p "$WORKDIR"
@@ -1218,6 +1285,7 @@ main() {
     usage; exit 0
   fi
   if [ "$target" = "all" ]; then
+    enter_private_mount_ns "$@"
     for s in "${STAGES[@]}"; do "$s"; done
     return
   fi

@@ -172,6 +172,8 @@ FAKE_MOUNT = r"""#!/usr/bin/env bash
 # upperdir=, so writes through it land in the layer exactly as overlayfs would
 # record them. squashfs: unsquash into the mountpoint. Others: bookkeeping.
 target="${@: -1}"
+echo "$*" >>"$FAKE_MNT.args"
+case "$1" in --make-*) exit 0 ;; esac
 echo "$target" >>"$FAKE_MNT"
 case "$*" in
   *"-t overlay"*)
@@ -188,8 +190,16 @@ FAKE_UMOUNT = r"""#!/usr/bin/env bash
 grep -vxF "$1" "$FAKE_MNT" >"$FAKE_MNT.new" || true
 mv "$FAKE_MNT.new" "$FAKE_MNT"
 if [ -L "$1" ]; then rm "$1"; mkdir "$1"; exit 0; fi
-case "$1" in */run) rm -rf "$1"/systemd ;; esac
+case "$1" in
+  */run) rm -rf "$1"/systemd ;;
+  */dev) rm -rf "$1"/null "$1"/zero "$1"/full "$1"/random "$1"/urandom "$1"/tty "$1"/ptmx \
+           "$1"/fd "$1"/stdin "$1"/stdout "$1"/stderr "$1"/shm ;;
+esac
 """
+
+# wq#4771: stage1b now builds the chroot's /dev itself (tmpfs + mknod) instead of binding
+# the host's; a non-root mknod of a char device is EPERM, so record the node as a file.
+FAKE_MKNOD = '#!/usr/bin/env bash\n# mknod -m MODE PATH TYPE MAJOR MINOR\necho "$*" >>"$FAKE_MNT.args"\n: >"$3"\n'
 
 FAKE_MOUNTPOINT = '#!/usr/bin/env bash\n[ -f "$FAKE_MNT" ] && grep -qxF "$2" "$FAKE_MNT"\n'
 
@@ -334,6 +344,7 @@ def remaster(tmp_path_factory):
     _exe(bin_dir / "umount", FAKE_UMOUNT)
     _exe(bin_dir / "mountpoint", FAKE_MOUNTPOINT)
     _exe(bin_dir / "findmnt", FAKE_FINDMNT)
+    _exe(bin_dir / "mknod", FAKE_MKNOD)
     _exe(bin_dir / "id", FAKE_ID)
     _exe(bin_dir / "chroot", '#!/usr/bin/env bash\nshift\nexec "$@"\n')
 
@@ -465,6 +476,7 @@ def _stage1_env(tmp_path, fake_id):
     _exe(bin_dir / "umount", FAKE_UMOUNT)
     _exe(bin_dir / "mountpoint", FAKE_MOUNTPOINT)
     _exe(bin_dir / "findmnt", FAKE_FINDMNT)
+    _exe(bin_dir / "mknod", FAKE_MKNOD)
     if fake_id:
         _exe(bin_dir / "id", FAKE_ID)
     _exe(bin_dir / "chroot", '#!/usr/bin/env bash\nshift\nexec "$@"\n')
